@@ -10,7 +10,6 @@ import type {
 import {
 	builtinResultIsInt32,
 	DATA_VIEW_ACCESSOR_TYPES,
-	builtinPreservesIntegerInput,
 } from "../shared/builtin-registry.ts";
 import {
 	compilerComparisonInputKindsAvoidObjectCoercion,
@@ -123,11 +122,13 @@ import {
 	NATIVE_COMPARE,
 	MATH_UNARY_NATIVE_CALL,
 	MATH_NUMBER_KERNELS,
-	MATH_VARIADIC_OPERATIONS,
 	MATH_BINARY_OPERATIONS,
 	NUMBER_PREDICATES,
 	boxedNumberPredicateExpression,
 	nativeNumberPredicateExpression,
+	nativeMathUnaryExpr,
+	nativeMathBinaryExpr,
+	nativeNumericBuiltinExpr,
 	nativeBinaryNumberInputs,
 	nativePrimitiveNumberExpression,
 	nativeUnsignedRemainderExpression,
@@ -802,38 +803,6 @@ export interface BackendProfileDecision {
 	details?: Record<string, string | number | boolean>;
 }
 
-function nativeMathUnaryExpr(
-	operation: string,
-	argument: string,
-	range?: CompilerIntegerRange,
-): string | null {
-	if (range !== undefined) {
-		if (builtinPreservesIntegerInput(operation)) return argument;
-		if (operation === "Math.abs") {
-			if (range.minimum >= 0) return argument;
-			if (range.maximum < 0) return `-(${argument})`;
-		}
-		if (operation === "Math.sign") {
-			if (range.minimum > 0) return "1.0";
-			if (range.maximum < 0) return "-1.0";
-			if (range.minimum === 0 && range.maximum === 0) return "0.0";
-		}
-	}
-	const nativeCall = MATH_UNARY_NATIVE_CALL.get(operation);
-	if (nativeCall === undefined) return null;
-	if (nativeCall !== null) return `${nativeCall}(${argument})`;
-	switch (operation) {
-		case "Math.sign":
-			return `mal_number_sign(${argument})`;
-		case "Math.fround":
-			return `(f64) (f32) ${argument}`;
-		case "Math.round":
-			return `mal_number_round(${argument})`;
-		default:
-			return null;
-	}
-}
-
 const NUMBER_FORMAT_KERNELS: Readonly<
 	Record<string, readonly [string, number, number, number]>
 > = {
@@ -885,52 +854,6 @@ const STRING_CHARACTER_KERNELS: Readonly<Record<string, string>> = {
 	"String.prototype.charAt": "CHAR_AT",
 	"String.prototype.codePointAt": "CODE_POINT_AT",
 };
-
-function nativeMathBinaryExpr(
-	operation: string,
-	left: string,
-	right: string,
-	ranges?: ReadonlyArray<CompilerIntegerRange | undefined>,
-): string | null {
-	if (!MATH_BINARY_OPERATIONS.has(operation)) return null;
-	const a = ranges?.[0],
-		b = ranges?.[1];
-	if (a !== undefined && b !== undefined) {
-		if (a.maximum <= b.minimum) return operation === "Math.min" ? left : right;
-		if (b.maximum <= a.minimum) return operation === "Math.min" ? right : left;
-	}
-	return `mal_number_min_max(${left}, ${right}, ${operation === "Math.max"})`;
-}
-
-function nativeNumericBuiltinExpr(
-	operation: string,
-	arguments_: ReadonlyArray<string>,
-	ranges?: ReadonlyArray<CompilerIntegerRange | undefined>,
-): string | null {
-	if (NUMBER_PREDICATES.has(operation))
-		return arguments_.length === 0
-			? "false"
-			: arguments_.length === 1
-				? ranges?.[0] !== undefined
-					? operation === "Number.isNaN"
-						? "false"
-						: "true"
-					: nativeNumberPredicateExpression(operation, arguments_[0]!)
-				: null;
-	if (arguments_.length === 1 && MATH_UNARY_NATIVE_CALL.has(operation))
-		return nativeMathUnaryExpr(operation, arguments_[0]!, ranges?.[0]);
-	if (arguments_.length === 2 && MATH_BINARY_OPERATIONS.has(operation))
-		return nativeMathBinaryExpr(operation, arguments_[0]!, arguments_[1]!, ranges);
-	const kernel = MATH_NUMBER_KERNELS[operation];
-	if (kernel !== undefined && arguments_.length === kernel[1])
-		return `${kernel[0]}(${arguments_.join(", ")})`;
-	if (!MATH_VARIADIC_OPERATIONS.has(operation) || arguments_.length > 64) return null;
-	const values =
-		arguments_.length === 0 ? "nullptr" : `((f64[]){ ${arguments_.join(", ")} })`;
-	return operation === "Math.hypot"
-		? `mal_builtin_math_hypot_numbers(${values}, ${arguments_.length})`
-		: `mal_builtin_math_min_max_numbers(${values}, ${arguments_.length}, ${operation === "Math.max"})`;
-}
 
 interface NativeCallCoverage {
 	readonly emittedInstructions: ReadonlySet<number>;

@@ -252,6 +252,12 @@ The proof survives boxing and suspension, while coercive
 operands and argument evaluation retain their own effects and fallback paths.
 Scalar expressions, fast entries, numeric regions and canonical bodies consume the
 same instruction facts.
+Frameless bodies share the numeric Math kernels, including their interval identities.
+Exact operations and guarded mutable calls admit noncollecting primitive conversions;
+uncertain operands retain Number guards, and a mutable callee retains its callback
+check. Object coercion and throwing inputs restart before observable effects.
+Variadic kernels retain the existing argument bound; effectful Math operations remain
+outside this admission.
 
 Complete script callee sets publish bounds on normal return values independently of
 throwing, collection and user-code effects. Every reachable return and possible

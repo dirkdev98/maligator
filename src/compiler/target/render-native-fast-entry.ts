@@ -33,6 +33,9 @@ import {
 	nativeReflexiveEqualityExpression,
 	nativeEqualityExpression,
 	nativeTypeofComparisonExpression,
+	nativeMathNumberArity,
+	nativeGuardedMathArity,
+	nativeNumericBuiltinExpr,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -890,6 +893,10 @@ function fastInstruction(
 			return fastBinary(op, values);
 		case "UNARY":
 			return fastUnary(op, values);
+		case "MATH_UNARY_NUMBER":
+			return fastMath(op.operation, [op.src], op.dst, values, value);
+		case "MATH_BINARY_NUMBER":
+			return fastMath(op.operation, [op.left, op.right], op.dst, values, value);
 		case "TYPEOF_COMPARE": {
 			const expression = nativeTypeofComparisonExpression(
 				`f${op.src}`,
@@ -921,6 +928,26 @@ function fastInstruction(
 		}
 		case "CALL": {
 			const plan = input.instructions[ip];
+			const operation =
+				plan?.kind === "call" ? plan.guardedBuiltinCall?.operation : undefined;
+			const arity =
+				operation === undefined
+					? undefined
+					: nativeGuardedMathArity(operation, op.argumentCount);
+			if (operation !== undefined && arity !== undefined) {
+				const callee = value(op.callee);
+				const expression = fastMath(
+					operation,
+					op.arguments.slice(0, op.argumentCount),
+					op.dst,
+					values,
+					value,
+				);
+				const kind = arity === 1 ? "unary" : "binary";
+				return callee === undefined || expression === undefined
+					? undefined
+					: `if (!mal_builtin_math_${kind}_callee_matches(MAL_MATH_${kind.toUpperCase()}_${operation.slice("Math.".length).toUpperCase()}, ${callee})) goto __full; ${expression}`;
+			}
 			if (plan?.kind === "call" && plan.guardedBuiltinCall?.operation === "Object.is") {
 				const callee = value(op.callee);
 				const expression = fastSameValue(
@@ -948,12 +975,19 @@ function fastInstruction(
 		}
 		case "CALL_KNOWN": {
 			if (
-				op.operation !== "Object.is" ||
 				op.construct ||
 				op.argumentMode !== undefined ||
 				(op.specialized !== undefined && op.specialized !== op.operation)
 			)
 				return undefined;
+			if (op.operation !== "Object.is")
+				return fastMath(
+					op.operation,
+					op.arguments.slice(0, op.argumentCount),
+					op.dst,
+					values,
+					value,
+				);
 			const expression = fastSameValue(op.arguments, values, value);
 			return expression === undefined
 				? undefined
@@ -962,6 +996,47 @@ function fastInstruction(
 		default:
 			return undefined;
 	}
+}
+
+function fastMath(
+	operation: string,
+	args: ReadonlyArray<number>,
+	dst: number,
+	values: FastNumbers,
+	value: (operand: number) => string | undefined,
+): string | undefined {
+	const arity = nativeMathNumberArity(operation, args.length);
+	if (arity === undefined) return undefined;
+	const numbers: Array<string> = [],
+		guards: Array<string> = [],
+		ranges: Array<CompilerIntegerRange | undefined> = [];
+	for (let index = 0; index < arity; index++) {
+		const argument = args[index];
+		if (argument === undefined) {
+			numbers.push("NAN");
+			ranges.push(undefined);
+			continue;
+		}
+		const boxed = value(argument);
+		if (boxed === undefined) return undefined;
+		const kind = values.kind(argument);
+		let numeric: string;
+		if (compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE))
+			numeric =
+				kind === COMPILER_VALUE_KIND_NUMBER && argument >= 0
+					? number(values, argument)
+					: nativePrimitiveNumberExpression(boxed, kind);
+		else {
+			if ((kind & COMPILER_VALUE_KIND_NUMBER) === 0) return undefined;
+			guards.push(`!mal_ops_is_number(${boxed})`);
+			numeric = `mal_ops_number_as_f64(${boxed})`;
+		}
+		numbers.push(numeric);
+		ranges.push(values.range(argument));
+	}
+	const expression = nativeNumericBuiltinExpr(operation, numbers, ranges);
+	if (expression === null) return undefined;
+	return `${guards.length === 0 ? "" : `if (${guards.join(" || ")}) goto __full; `}${storeNumber(values, dst, expression)}`;
 }
 
 function fastSameValue(

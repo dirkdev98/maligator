@@ -113,6 +113,10 @@ The independent target boundary and current storage contract are recorded in
       bounds. Exact integer result facts reach full, scalar and eligible fast-entry
       kernels; ordinary, generator and async observations preserve scalar storage.
       Carry those integer views into the remaining guarded call/aggregate transport.
+      Integer rounding results now retain their precise intervals through normal
+      returns, selected entries and read-only record fields. Eligible frameless
+      Math operations share full-body kernels and bounds, with independent operand
+      guards and mutable-callee checks before the ordinary fallback.
       Identity observations now use forwarded normal returns through chains and
       phi components, including observation-argument sharing and NaN-aware equality
       emission. Compatible normal-return identities now reach general consumers,

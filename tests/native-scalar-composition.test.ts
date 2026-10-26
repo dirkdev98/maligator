@@ -1336,7 +1336,7 @@ describe("native scalar definition initialization across control flow", () => {
 	});
 });
 
-it("evaluates a selected numeric condition through one truthiness helper", () => {
+it("evaluates a full entry's selected numeric condition through one truthiness helper", () => {
 	const image = compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			`globalThis.test=function(left,right){const a=+left,b=+right; if(Math.round(a%b)) return 1; return 2;};`,
@@ -1349,7 +1349,11 @@ it("evaluates a selected numeric condition through one truthiness helper", () =>
 		(op) => op.opcode === "MATH_UNARY_NUMBER" && op.operation === "Math.round",
 	);
 	expect(native.storage!.expressionIps).toContain(round);
-	const source = emitCompiledFunction(native, 1, "", false)!.source;
+	const emitted = emitCompiledFunction(native, 1, "", false)!;
+	const source =
+		emitted.trySymbol === undefined
+			? emitted.source
+			: emitted.source.split(`bool ${emitted.trySymbol}(`)[0]!;
 	expect(source).toMatch(/if \(mal_number_is_truthy\(r\d+\)\)/);
 	expect(source.match(/mal_number_round\(/g)).toHaveLength(1);
 });

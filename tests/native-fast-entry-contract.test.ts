@@ -57,6 +57,17 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_ops_strict_equal_boxed",
 	"mal_ops_same_value",
 	"mal_builtin_object_is_callee_matches",
+	"mal_builtin_math_unary_callee_matches",
+	"mal_builtin_math_binary_callee_matches",
+	"mal_number_min_max",
+	"mal_number_round",
+	"mal_number_sign",
+	"mal_builtin_math_clz32_number",
+	"mal_builtin_math_f16round_number",
+	"mal_builtin_math_imul_number",
+	"mal_builtin_math_pow_number",
+	"mal_builtin_math_hypot_numbers",
+	"mal_builtin_math_min_max_numbers",
 	"mal_ops_strict_equal_string_constant",
 	"mal_string_equals_constant_length",
 	"mal_value_to_string",
@@ -99,6 +110,321 @@ function body(
 
 const OWN_TRY = "mal_compiled_0_try";
 const LENGTH_STRING_INDEX = 7;
+
+describe("frameless numeric builtin kernels", () => {
+	it.each([false, true])(
+		"preserves bounded rounding without a frame, exported=%s",
+		(exported) => {
+			for (const operation of [
+				"Math.floor",
+				"Math.ceil",
+				"Math.trunc",
+				"Math.round",
+			] as const) {
+				for (const lowered of [false, true]) {
+					const fn = body([
+						lowered
+							? { opcode: "MATH_UNARY_NUMBER", operation, src: 0, dst: 2 }
+							: {
+									opcode: "CALL_KNOWN",
+									operation,
+									thisValue: 1,
+									arguments: [0],
+									argumentCount: 1,
+									dst: 2,
+								},
+						{ opcode: "RETURN", value: 2 },
+					]);
+					const lines = fastEntry(fn, undefined, exported, undefined, [
+						{
+							registers: lowered ? [2, 0] : [2, 1, 0],
+							inputOffset: 1,
+							inputKindMasks: lowered
+								? [COMPILER_VALUE_KIND_NUMBER]
+								: [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_NUMBER],
+							inputIntegerRanges: lowered
+								? [COMPILER_UINT32_RANGE]
+								: [undefined, COMPILER_UINT32_RANGE],
+							resultKindMasks: [COMPILER_VALUE_KIND_NUMBER],
+							resultIntegerRanges: [COMPILER_UINT32_RANGE],
+						},
+					]);
+					expect(lines).toBeDefined();
+					expect(unexpectedHelpers(lines!)).toEqual([]);
+					expect(lines!.join("\n")).not.toMatch(
+						/\b(?:floor|ceil|trunc|mal_number_round)\(/,
+					);
+					expect(lines!.join("\n")).not.toContain("mal_ops_is_number(f0)");
+				}
+			}
+		},
+	);
+	it("guards a mutable Math callee and only its unknown numeric operand", () => {
+		const fn = body([
+			{
+				opcode: "CALL",
+				callee: 4,
+				thisValue: 3,
+				arguments: [0, 1],
+				argumentCount: 2,
+				dst: 2,
+			},
+			{ opcode: "RETURN", value: 2 },
+		]);
+		const lines = fastEntry(
+			fn,
+			undefined,
+			true,
+			undefined,
+			[
+				{
+					registers: [2, 4, 3, 0, 1],
+					inputOffset: 1,
+					inputKindMasks: [
+						COMPILER_VALUE_KIND_TOP,
+						COMPILER_VALUE_KIND_TOP,
+						COMPILER_VALUE_KIND_NUMBER,
+						COMPILER_VALUE_KIND_TOP,
+					],
+					resultKindMasks: [COMPILER_VALUE_KIND_TOP],
+				},
+			],
+			undefined,
+			[
+				{
+					kind: "call",
+					guardedBuiltinCall: {
+						operation: "Math.min",
+						guard: {
+							dependencies: [{ kind: "epoch", family: "watched-methods" }],
+							obligations: ["fallback"],
+						},
+					},
+				},
+			],
+		);
+		expect(lines).toBeDefined();
+		const code = lines!.join("\n");
+		expect(code).toContain(
+			"mal_builtin_math_binary_callee_matches(MAL_MATH_BINARY_MIN, f4)",
+		);
+		expect(code).toContain("!mal_ops_is_number(f1)");
+		expect(code).not.toContain("!mal_ops_is_number(f0)");
+		expect(code).toContain("mal_number_min_max(");
+		expect(unexpectedHelpers(lines!)).toEqual([]);
+	});
+	it.each([
+		["Math.sin", [0], "sin("],
+		["Math.sign", [0], "mal_number_sign("],
+		["Math.round", [0], "mal_number_round("],
+		["Math.fround", [0], "(f32)"],
+		["Math.clz32", [0], "mal_builtin_math_clz32_number("],
+		["Math.f16round", [0], "mal_builtin_math_f16round_number("],
+		["Math.imul", [0, 1], "mal_builtin_math_imul_number("],
+		["Math.pow", [0, 1], "mal_builtin_math_pow_number("],
+		["Math.atan2", [0, 1], "atan2("],
+		["Math.hypot", [0, 1, 0], "mal_builtin_math_hypot_numbers("],
+		["Math.max", [0, 1, 0], "mal_builtin_math_min_max_numbers("],
+		["Math.min", [], "mal_builtin_math_min_max_numbers(nullptr, 0, false)"],
+	] as const)("admits the noncollecting %s kernel", (operation, args, kernel) => {
+		const lines = fastEntry(
+			body([
+				{
+					opcode: "CALL_KNOWN",
+					operation,
+					arguments: [...args],
+					argumentCount: args.length,
+					thisValue: 1,
+					dst: 2,
+				},
+				{ opcode: "RETURN", value: 2 },
+			]),
+		);
+		expect(lines).toBeDefined();
+		expect(lines!.join("\n")).toContain(kernel);
+		expect(unexpectedHelpers(lines!)).toEqual([]);
+	});
+	it.each([
+		COMPILER_VALUE_KIND_OBJECT,
+		COMPILER_VALUE_KIND_BIGINT,
+		COMPILER_VALUE_KIND_SYMBOL,
+	])(
+		"keeps observable or throwing coercion outside the frameless Math body for kind %s",
+		(kind) => {
+			expect(
+				fastEntry(
+					body([
+						{
+							opcode: "CALL_KNOWN",
+							operation: "Math.round",
+							arguments: [0],
+							argumentCount: 1,
+							thisValue: 1,
+							dst: 2,
+						},
+						{ opcode: "RETURN", value: 2 },
+					]),
+					undefined,
+					true,
+					undefined,
+					[
+						{
+							registers: [2, 1, 0],
+							inputOffset: 1,
+							inputKindMasks: [COMPILER_VALUE_KIND_TOP, kind],
+							resultKindMasks: [COMPILER_VALUE_KIND_NUMBER],
+						},
+					],
+				),
+			).toBeUndefined();
+		},
+	);
+	it("converts proved primitive inputs and supplies omitted Number arguments", () => {
+		for (const kind of [
+			COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+			COMPILER_VALUE_KIND_STRING,
+			COMPILER_VALUE_KIND_BOOLEAN,
+			COMPILER_VALUE_KIND_NULL,
+			COMPILER_VALUE_KIND_UNDEFINED,
+		]) {
+			const lines = fastEntry(
+				body([
+					{
+						opcode: "CALL_KNOWN",
+						operation: "Math.pow",
+						arguments: [0],
+						argumentCount: 1,
+						thisValue: 1,
+						dst: 2,
+					},
+					{ opcode: "RETURN", value: 2 },
+				]),
+				undefined,
+				true,
+				undefined,
+				[
+					{
+						registers: [2, 1, 0],
+						inputOffset: 1,
+						inputKindMasks: [COMPILER_VALUE_KIND_TOP, kind],
+						resultKindMasks: [COMPILER_VALUE_KIND_NUMBER],
+					},
+				],
+			);
+			expect(lines).toBeDefined();
+			expect(lines!.join("\n")).toContain(", NAN)");
+			expect(lines!.join("\n")).not.toContain("!mal_ops_is_number(f0)");
+			expect(unexpectedHelpers(lines!)).toEqual([]);
+		}
+	});
+	it("uses disjoint input ranges in lowered binary Math", () => {
+		const lines = fastEntry(
+			body([
+				{
+					opcode: "MATH_BINARY_NUMBER",
+					operation: "Math.max",
+					left: 0,
+					right: 1,
+					dst: 2,
+				},
+				{ opcode: "RETURN", value: 2 },
+			]),
+			undefined,
+			true,
+			undefined,
+			[
+				{
+					registers: [2, 0, 1],
+					inputOffset: 1,
+					inputKindMasks: [COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_NUMBER],
+					inputIntegerRanges: [
+						{ ...COMPILER_INT32_RANGE, maximum: -1 },
+						{ ...COMPILER_INT32_RANGE, minimum: 0 },
+					],
+					resultKindMasks: [COMPILER_VALUE_KIND_NUMBER],
+				},
+			],
+		);
+		expect(lines).toBeDefined();
+		expect(lines!.join("\n")).not.toContain("mal_number_min_max(");
+		expect(unexpectedHelpers(lines!)).toEqual([]);
+	});
+	it.each([
+		{ construct: true as const },
+		{ argumentMode: "array-like" as const },
+		{ specialized: "Object.is" as const },
+	])("rejects constructing, unpacked or mismatched builtin calls %j", (attributes) => {
+		expect(
+			fastEntry(
+				body([
+					{
+						opcode: "CALL_KNOWN",
+						operation: "Math.round",
+						arguments: [0],
+						argumentCount: 1,
+						thisValue: 1,
+						dst: 2,
+						...attributes,
+					},
+					{ opcode: "RETURN", value: 2 },
+				]),
+			),
+		).toBeUndefined();
+	});
+	it.each(["Math.random", "Math.sumPrecise"])(
+		"rejects an effectful %s kernel",
+		(operation) => {
+			expect(
+				fastEntry(
+					body([
+						{
+							opcode: "CALL_KNOWN",
+							operation,
+							arguments: [0],
+							argumentCount: 1,
+							thisValue: 1,
+							dst: 2,
+						},
+						{ opcode: "RETURN", value: 2 },
+					]),
+				),
+			).toBeUndefined();
+		},
+	);
+	it("ignores already evaluated extra arguments without coercing them", () => {
+		const lines = fastEntry(
+			body([
+				{
+					opcode: "CALL_KNOWN",
+					operation: "Math.round",
+					arguments: [0, 1],
+					argumentCount: 2,
+					thisValue: 1,
+					dst: 2,
+				},
+				{ opcode: "RETURN", value: 2 },
+			]),
+			undefined,
+			true,
+			undefined,
+			[
+				{
+					registers: [2, 1, 0, 1],
+					inputOffset: 1,
+					inputKindMasks: [
+						COMPILER_VALUE_KIND_OBJECT,
+						COMPILER_VALUE_KIND_NUMBER,
+						COMPILER_VALUE_KIND_OBJECT,
+					],
+					resultKindMasks: [COMPILER_VALUE_KIND_NUMBER],
+				},
+			],
+		);
+		expect(lines).toBeDefined();
+		expect(lines!.join("\n")).not.toContain("mal_ops_to_number(f1)");
+		expect(unexpectedHelpers(lines!)).toEqual([]);
+	});
+});
 
 it.each([
 	COMPILER_VALUE_KIND_NUMBER,

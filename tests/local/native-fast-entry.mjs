@@ -695,4 +695,93 @@ for (const first of [true, false]) {
 	}
 }
 
+function mathRound(value) {
+	if (value === null) return "nil";
+	return Math.round(value);
+}
+function mathInterval(value) {
+	if (value === null) return "nil";
+	return Math.floor(value & 255) % 10;
+}
+function mathMinimum(value, other) {
+	if (value === null) return "nil";
+	return Math.min(value, other);
+}
+function mathNumbers(value, other) {
+	return Math.imul(value, other) + Math.clz32(value);
+}
+function mathHypot(value, other) {
+	return Math.hypot(value, other, 2);
+}
+function mathPower(value, other) {
+	return Math.pow(value, other);
+}
+function mathThenCoerce(value, other) {
+	return Math.round(value) - other;
+}
+function mathExtraArgument(value, extra) {
+	return Math.round(value, extra());
+}
+function mathMissing() {
+	return Math.pow();
+}
+Object.assign(globalThis, {
+	mathRound,
+	mathInterval,
+	mathMinimum,
+	mathNumbers,
+	mathHypot,
+	mathPower,
+	mathThenCoerce,
+	mathExtraArgument,
+	mathMissing,
+});
+for (const value of [
+	-0,
+	-0.5,
+	0.5,
+	-10,
+	255,
+	2147483648,
+	4294967295,
+	NaN,
+	Infinity,
+	-Infinity,
+	true,
+	"7",
+	"bad",
+	null,
+	undefined,
+	valued,
+	1n,
+	Symbol("Math"),
+]) {
+	for (const name of [
+		"mathRound",
+		"mathInterval",
+		"mathMinimum",
+		"mathNumbers",
+		"mathHypot",
+		"mathPower",
+		"mathThenCoerce",
+	]) {
+		try {
+			const result = globalThis[name](value, -2);
+			log.push(`${name} ${Object.is(result, -0) ? "-0" : result}`);
+		} catch (error) {
+			log.push(`${name} ${error.name}`);
+		}
+	}
+}
+log.push(
+	`math replay ${globalThis.mathThenCoerce(1.5, valued)} ${globalThis.mathThenCoerce(valued, valued)}`,
+);
+log.push(
+	`math extra ${globalThis.mathExtraArgument(1.5, () => {
+		log.push("math extra argument");
+		return valued;
+	})}`,
+);
+log.push(`math missing ${globalThis.mathMissing()}`);
+
 console.log(log.join("\n"));
