@@ -4,11 +4,12 @@ import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { analyzeCoreMemoryVersions } from "../src/compiler/core/core-ir-memory.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
-import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
+import { CORE_NO_EFFECTS, coreInstructionId } from "../src/compiler/core/core-ir.ts";
 import { CoreStaticCellIndex } from "../src/compiler/core/core-static-value-cells.ts";
 import { CoreStaticValueAnalysis } from "../src/compiler/core/core-static-values.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import { COMPILER_VALUE_KIND_NUMBER } from "../src/compiler/shared/compiler-value-kinds.ts";
 
 type Scenario =
 	| "private"
@@ -18,7 +19,7 @@ type Scenario =
 	| "alias-write"
 	| "self"
 	| "early-getter";
-function fixture(scenario: Scenario) {
+function fixture(scenario: Scenario, closed = true) {
 	const program = new CoreProgram(coreOpcodeRegistry, {
 		globalCount: 1,
 		stringConstants: [[120], [121], [115, 101, 108, 102]],
@@ -31,7 +32,7 @@ function fixture(scenario: Scenario) {
 			sourceFiles: [],
 			cjsModuleFunctionIndices: [],
 			hostInstallCandidates: [],
-			singleAssignmentGlobalSlots: [0],
+			singleAssignmentGlobalSlots: closed ? [0] : [],
 			singleAssignmentCapturedSlots: [],
 			retainedHostInstallers: [],
 		},
@@ -116,6 +117,7 @@ function fixture(scenario: Scenario) {
 	const readerFn = program.function(reader.finish(readEntry).function);
 	const index = new CoreStaticCellIndex(program, context);
 	let memoryQueries = 0;
+	let revisionQueries = 0;
 	const writerFacts = new CoreStaticValueAnalysis(
 		program,
 		writerFn,
@@ -134,16 +136,23 @@ function fixture(scenario: Scenario) {
 		undefined,
 		context,
 		undefined,
-		(fn, load, value, consumer, requestedKey) =>
-			index.query(
-				fn,
-				load,
-				value,
-				consumer,
-				(functionId) => (functionId === writerFn.id ? writerFacts : readerFacts),
-				() => buildCoreControlFlow(program, fn.id),
-				requestedKey,
-			),
+		{
+			contains: (fn, load) => index.contains(fn, load),
+			revision: () => {
+				revisionQueries++;
+				return index.revision;
+			},
+			query: (fn, load, value, consumer, requestedKey) =>
+				index.query(
+					fn,
+					load,
+					value,
+					consumer,
+					(functionId) => (functionId === writerFn.id ? writerFacts : readerFacts),
+					() => buildCoreControlFlow(program, fn.id),
+					requestedKey,
+				),
+		},
 	);
 	return {
 		program,
@@ -157,10 +166,100 @@ function fixture(scenario: Scenario) {
 		loaded: loaded!,
 		consumer: coreInstructionId(readerFn.kernel.valueDefinitionOwner(read!)),
 		memoryQueries: () => memoryQueries,
+		revisionQueries: () => revisionQueries,
 	};
 }
 
 describe("demanded private-cell contents", () => {
+	it("retires cell proofs after an effect refinement and proves the contents again", () => {
+		const f = fixture("private");
+		const helper = new CoreFunctionBuilder(f.program);
+		const entry = helper.createBlock();
+		const [one] = helper.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [two] = helper.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		const [sum] = helper.appendInstruction(entry, "binary", [one!, two!], {
+			attributes: { operator: "+" },
+		});
+		const add = helper.bodyInstructionIds(entry).at(-1)!;
+		helper.setTerminator(entry, { kind: "return", value: sum! });
+		const functionId = helper.finish(entry).function;
+		const property = f.readerFacts.queryPropertyAt(f.loaded, "x", f.consumer);
+		if (property === undefined) throw new Error("Expected private field");
+		const revision = f.index.revision;
+		const edit = CoreEditor.open(f.program, functionId);
+		const proof = edit.addFact({
+			kind: "constant-number-addition",
+			value: true,
+			claims: [{ kind: "effect", instruction: add, effects: CORE_NO_EFFECTS }],
+			validity: { kind: "summary", digest: "1+2" },
+			obligations: [],
+			origin: "test",
+		});
+		edit.setInstructionEffectRefinement(add, { effects: CORE_NO_EFFECTS, proof });
+		edit.commit();
+		expect(f.index.revision).not.toBe(revision);
+		expect(() => f.readerFacts.verifyProperty(property, f.consumer)).toThrow("not owned");
+		const after = f.readerFacts.queryPropertyAt(f.loaded, "x", f.consumer);
+		if (after === undefined || after.member.kind !== "constant")
+			throw new Error("Expected revised private field");
+		expect(f.readerFacts.descriptionConstant(after.member.description)).toEqual({
+			kind: "number",
+			value: 7,
+		});
+		f.readerFacts.verifyProperty(after, f.consumer);
+	});
+
+	it("does not construct a private-cell revision for an open binding", () => {
+		const f = fixture("private", false);
+		expect(f.readerFacts.queryPropertyAt(f.loaded, "x", f.consumer)).toBeUndefined();
+		expect(f.revisionQueries()).toBe(0);
+		expect(f.writerFacts.statistics.queries).toBe(0);
+	});
+	it.each(["normal-result", "own-slot hint", "unrelated proof"])(
+		"retains object descriptors and proof ownership across %s publication",
+		(kind) => {
+			const f = fixture("private");
+			const before = f.readerFacts.queryAt(f.loaded, f.consumer);
+			const property = f.readerFacts.queryPropertyAt(f.loaded, "x", f.consumer);
+			if (property === undefined) throw new Error("Expected private field");
+			const queries = f.writerFacts.statistics.queries;
+			const revision = f.program.programFlowRevision;
+			const edit = CoreEditor.open(
+				f.program,
+				kind === "unrelated proof" ? f.writerFn.id : f.readerFn.id,
+			);
+			if (kind === "normal-result")
+				edit.setNormalResultFacts(f.consumer, { mask: COMPILER_VALUE_KIND_NUMBER });
+			else if (kind === "own-slot hint") {
+				const allocation = [...f.writerFn.instructionIds()].find(
+					(instruction) =>
+						f.writerFn.instructionKind(instruction) === "operation" &&
+						f.writerFn.instructionOpcodeName(instruction) === "createObjectShaped",
+				)!;
+				edit.setKnownOwnSlotHint(f.consumer, [
+					{ shapeFunctionIndex: f.writerFn.id, shapeInstruction: allocation, slot: 0 },
+				]);
+			} else
+				edit.addFact({
+					kind: "unrelated",
+					value: true,
+					claims: [],
+					validity: { kind: "summary", digest: "unrelated" },
+					obligations: [],
+					origin: "test",
+				});
+			edit.commit();
+			expect(f.program.programFlowRevision).toBeGreaterThan(revision);
+			expect(() => f.readerFacts.verifyProperty(property, f.consumer)).not.toThrow();
+			expect(f.readerFacts.queryAt(f.loaded, f.consumer)).toBe(before);
+			expect(f.writerFacts.statistics.queries).toBe(queries);
+		},
+	);
+
 	it("skips an unread memory-backed field while retaining full and later field queries", () => {
 		const f = fixture("private");
 		const x = f.readerFacts.queryPropertyAt(f.loaded, "x", f.consumer);

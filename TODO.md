@@ -616,17 +616,14 @@ Shared lifetime and fallback rules are recorded in
       intermediate data. Use the existing feature indexes, summaries, and analysis
       manager to skip irrelevant work and rebuild only invalidated results. Reopen
       a previously optimized subsystem only with fresh residual-cost evidence.
-      On the Node-hosted self-compile (43 s), memory and provenance optimization
-      takes 7.4 of Core's 20 s. Static-value queries now ask for memory versions
-      only when a slot's written value could be described, which kept the output
-      byte-identical and cut `fold-static-property-reads` to 1.1 s and
-      `fold-static-binding-constants` to 0.65 s over about 7,500 runs each. Most of
-      what remains is the exceptional control-flow analysis their joins request
-      after each edit, and the static cell index, which drops every cell's facts
-      whenever any function changes. Without that global drop, unsoundly, the two
-      folds took 0.9 s less before the memory gate. `lower-primitive-operations`
-      spends 1.0 s for 40 changed functions. Verification is another 5.5 s (13%),
-      most of it independent re-derivation at trust boundaries.
+      Static-value queries request memory versions only when a written slot value
+      can be described. Private-cell proofs now follow body, control-flow,
+      exception-flow, effect and data revisions; result facts and guarded lowering
+      hints retain descriptor proofs and their work budgets. Open bindings do not
+      demand cell indexes. Semantic edits still clear the cell proofs; narrowing
+      that invalidation to individual cells needs complete alias and initialization
+      dependencies. Continue measuring residual query, dominance and verification
+      costs before changing those boundaries.
 
 - [ ] Put aggregate work and memory budgets around analysis extensions, including
       rejected candidates and nested queries, not only admitted entries. Reuse

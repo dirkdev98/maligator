@@ -6,6 +6,19 @@ import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreStaticValue, CoreStaticValueAnalysis } from "./core-static-values.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
+import {
+	CORE_PROGRAM_FLOW_BODY,
+	CORE_PROGRAM_FLOW_CFG,
+	CORE_PROGRAM_FLOW_EXCEPTION,
+	CORE_PROGRAM_FLOW_MEMORY,
+} from "./core-store.ts";
+
+// Result bounds and lowering hints cannot change descriptors, aliases, or initialization order.
+const CELL_PROOF_CHANGES =
+	CORE_PROGRAM_FLOW_BODY |
+	CORE_PROGRAM_FLOW_CFG |
+	CORE_PROGRAM_FLOW_EXCEPTION |
+	CORE_PROGRAM_FLOW_MEMORY;
 
 interface CellAccess {
 	readonly function: CoreFunctionId;
@@ -79,6 +92,7 @@ export class CoreStaticCellIndex {
 	readonly #properties = new Map<string, Map<string, CoreStaticValue>>();
 	#precheckWork = 0;
 	#revision = -1;
+	#proofRevision: object = {};
 	#dataVersion = -1;
 	#proofWork = 0;
 	constructor(program: CoreProgram, context: CoreCompilationContext) {
@@ -99,6 +113,14 @@ export class CoreStaticCellIndex {
 			),
 		);
 	}
+	get revision(): object {
+		this.#refresh();
+		return this.#proofRevision;
+	}
+	contains(fn: CoreFunctionStore, load: CoreInstructionId): boolean {
+		const key = cellKey(fn, load);
+		return key !== undefined && this.#closed.has(key);
+	}
 	#refresh(): void {
 		if (
 			this.#revision === this.#program.programFlowRevision &&
@@ -113,14 +135,14 @@ export class CoreStaticCellIndex {
 				revision < this.#program.programFlowRevision;
 				revision++
 			)
-				dirty.add(this.#program.programFlowFunctionAt(revision));
-		if (this.#dataVersion !== this.#program.programVersion("data")) {
-			this.#facts.clear();
-			this.#prechecks.clear();
-			this.#properties.clear();
-			this.#dataVersion = this.#program.programVersion("data");
-		}
-		if (dirty.size === 0) return;
+				if ((this.#program.programFlowDomainMaskAt(revision) & CELL_PROOF_CHANGES) !== 0)
+					dirty.add(this.#program.programFlowFunctionAt(revision));
+		const dataVersion = this.#program.programVersion("data");
+		const dataChanged = this.#dataVersion !== dataVersion;
+		this.#revision = this.#program.programFlowRevision;
+		if (dirty.size === 0 && !dataChanged) return;
+		this.#dataVersion = dataVersion;
+		this.#proofRevision = {};
 		this.#facts.clear();
 		this.#prechecks.clear();
 		this.#properties.clear();
@@ -158,7 +180,6 @@ export class CoreStaticCellIndex {
 				this.#cells.set(key, cell);
 			}
 		}
-		this.#revision = this.#program.programFlowRevision;
 	}
 	query(
 		fn: CoreFunctionStore,

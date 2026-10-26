@@ -385,6 +385,19 @@ function immutableStaticValue(
 	};
 }
 
+export interface CoreStaticCellQueries {
+	readonly contains: (fn: CoreFunctionStore, load: CoreInstructionId) => boolean;
+	// An opaque revision also distinguishes replacement indexes after a program reset.
+	readonly revision: () => object;
+	readonly query: (
+		fn: CoreFunctionStore,
+		load: CoreInstructionId,
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+		requestedKey?: string,
+	) => CoreStaticValue | undefined;
+}
+
 export class CoreStaticValueAnalysis {
 	readonly #program: CoreProgram;
 	readonly #fn: CoreFunctionStore;
@@ -397,16 +410,8 @@ export class CoreStaticValueAnalysis {
 	readonly #observationWidth: number;
 	#memorySources: CoreMemoryValueSources | undefined;
 	readonly #describable = new Map<CoreValueId, boolean>();
-	readonly #cells:
-		| ((
-				fn: CoreFunctionStore,
-				load: CoreInstructionId,
-				value: CoreValueId,
-				consumer: CoreInstructionId,
-				requestedKey?: string,
-		  ) => CoreStaticValue | undefined)
-		| undefined;
-	#cellRevision: number | undefined;
+	readonly #cells: CoreStaticCellQueries | undefined;
+	#cellRevision: object | undefined;
 	readonly #cache = new Map<CoreValueId, CoreStaticValueResult>();
 	readonly #visiting = new Set<CoreValueId>();
 	readonly #observations = new Map<number | string, CoreStaticValueResult>();
@@ -433,13 +438,7 @@ export class CoreStaticValueAnalysis {
 		limit = 65536,
 		context?: CoreCompilationContext,
 		memory?: () => CoreMemoryVersions,
-		cells?: (
-			fn: CoreFunctionStore,
-			load: CoreInstructionId,
-			value: CoreValueId,
-			consumer: CoreInstructionId,
-			requestedKey?: string,
-		) => CoreStaticValue | undefined,
+		cells?: CoreStaticCellQueries,
 	) {
 		this.#program = program;
 		this.#fn = fn;
@@ -467,18 +466,16 @@ export class CoreStaticValueAnalysis {
 	}
 
 	#refreshCells(): void {
-		if (
-			this.#cellRevision !== undefined &&
-			this.#cellRevision !== this.#program.programFlowRevision
-		) {
-			this.#observations.clear();
-			this.#cache.clear();
-			this.#propertyCache.clear();
-			this.#propertyObservations.clear();
-			this.#proofs = new WeakSet();
-			this.#propertyProofs = new WeakMap();
-			this.#cellRevision = this.#program.programFlowRevision;
-		}
+		if (this.#cellRevision === undefined) return;
+		const revision = this.#cells!.revision();
+		if (this.#cellRevision === revision) return;
+		this.#observations.clear();
+		this.#cache.clear();
+		this.#propertyCache.clear();
+		this.#propertyObservations.clear();
+		this.#proofs = new WeakSet();
+		this.#propertyProofs = new WeakMap();
+		this.#cellRevision = revision;
 	}
 
 	#propertyCacheFor(key: string): Map<CoreValueId, CoreStaticValueResult> {
@@ -669,11 +666,13 @@ export class CoreStaticValueAnalysis {
 			if (
 				["loadGlobal", "loadCaptured"].includes(
 					this.#fn.instructionOpcodeName(definition),
-				)
+				) &&
+				this.#cells.contains(this.#fn, definition)
 			) {
-				this.#cellRevision = this.#program.programFlowRevision;
+				this.#cellRevision = this.#cells.revision();
 				return (
-					this.#cells(this.#fn, definition, value, consumer, requestedKey) ?? initial
+					this.#cells.query(this.#fn, definition, value, consumer, requestedKey) ??
+					initial
 				);
 			}
 		}
@@ -1669,9 +1668,20 @@ export class CoreStaticValueAnalysis {
 				if (fact.kind === "known") return { ...fact, value };
 			}
 			// Without a local initializer, a cell proof needs a later consumer's TDZ check.
-			if (maySupply && this.#cells !== undefined && opcode !== "loadLocal") {
-				this.#cellRevision = this.#program.programFlowRevision;
-				const fact = this.#cells(this.#fn, instruction, value, instruction, requestedKey);
+			if (
+				maySupply &&
+				this.#cells !== undefined &&
+				opcode !== "loadLocal" &&
+				this.#cells.contains(this.#fn, instruction)
+			) {
+				this.#cellRevision = this.#cells.revision();
+				const fact = this.#cells.query(
+					this.#fn,
+					instruction,
+					value,
+					instruction,
+					requestedKey,
+				);
 				if (fact !== undefined) return fact;
 			}
 			return { kind: "unknown", reason: "unsupported-producer" };
@@ -2553,6 +2563,7 @@ export const CORE_STATIC_VALUE_ANALYSIS: CoreAnalysisDefinition<CoreStaticValueA
 		compute({ program, context, request, get }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function static-value analysis");
+			const cells = get(CORE_STATIC_CELL_INDEX, { scope: "program" });
 			return new CoreStaticValueAnalysis(
 				program,
 				program.function(request.function),
@@ -2560,24 +2571,28 @@ export const CORE_STATIC_VALUE_ANALYSIS: CoreAnalysisDefinition<CoreStaticValueA
 				65536,
 				context,
 				() => get(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS, request),
-				(fn, load, value, consumer, requestedKey) =>
-					get(CORE_STATIC_CELL_INDEX, { scope: "program" }).query(
-						fn,
-						load,
-						value,
-						consumer,
-						(functionId) =>
-							get(CORE_STATIC_VALUE_ANALYSIS, {
-								scope: "function",
-								function: functionId,
-							}),
-						() =>
-							get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
-								scope: "function",
-								function: fn.id,
-							}).exceptional(),
-						requestedKey,
-					),
+				{
+					contains: (fn, load) => cells.contains(fn, load),
+					revision: () => cells.revision,
+					query: (fn, load, value, consumer, requestedKey) =>
+						cells.query(
+							fn,
+							load,
+							value,
+							consumer,
+							(functionId) =>
+								get(CORE_STATIC_VALUE_ANALYSIS, {
+									scope: "function",
+									function: functionId,
+								}),
+							() =>
+								get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+									scope: "function",
+									function: fn.id,
+								}).exceptional(),
+							requestedKey,
+						),
+				},
 			);
 		},
 	};

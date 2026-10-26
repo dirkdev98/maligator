@@ -843,6 +843,7 @@ it.each(["loadGlobal", "loadCaptured"] as const)(
 		builder.setTerminator(entry, { kind: "return", value: loaded! });
 		const fn = program.function(builder.finish(entry).function);
 		let cellQueries = 0;
+		const revision = {};
 		const analysis = new CoreStaticValueAnalysis(
 			program,
 			fn,
@@ -850,9 +851,13 @@ it.each(["loadGlobal", "loadCaptured"] as const)(
 			65536,
 			context,
 			undefined,
-			() => {
-				cellQueries++;
-				return undefined;
+			{
+				contains: () => true,
+				revision: () => revision,
+				query: () => {
+					cellQueries++;
+					return undefined;
+				},
 			},
 		);
 		expect(analysis.query(loaded!).kind).toBe("unknown");
