@@ -88,16 +88,22 @@ export function joinCoreRecordValueKinds(
 	return Object.freeze(fields);
 }
 
+const MAXIMUM_RECORD_RETURN_ALIAS_WORK = 256;
+
+/** Control-flow aliases suffice for field facts; caller-owned record storage needs direct return uses. */
 export function coreValueOnlyReturned(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
+	allowBlockArguments = false,
 ): boolean {
 	const pending = [value];
 	const seen = new Set<CoreValueId>();
+	let remaining = MAXIMUM_RECORD_RETURN_ALIAS_WORK;
 	while (pending.length > 0) {
 		const current = pending.pop()!;
 		if (seen.has(current)) continue;
 		seen.add(current);
+		if (allowBlockArguments && --remaining < 0) return false;
 		if (fn.kernel.valueHandlerUseCount(current) > 0) return false;
 		for (
 			let use = fn.kernel.valueFirstUse(current);
@@ -105,12 +111,35 @@ export function coreValueOnlyReturned(
 			use = fn.kernel.useNext(use)
 		) {
 			if (fn.kernel.useLive(use) === 0) continue;
+			if (allowBlockArguments && --remaining < 0) return false;
 			const instruction = fn.kernel.useInstruction(use);
 			const kind = fn.instructionKind(instruction);
 			if (kind === "return") continue;
-			if (kind !== "operation") return false;
+			if (kind !== "operation") {
+				if (!allowBlockArguments) return false;
+				const operand =
+					fn.kernel.instructionOperandStart(instruction) + fn.kernel.useOperand(use);
+				const start = fn.kernel.terminatorEdgeStart(instruction);
+				const count = fn.kernel.terminatorEdgeCount(instruction);
+				let forwarded = false;
+				for (let edge = start; edge < start + count; edge++) {
+					if (--remaining < 0) return false;
+					const first = fn.kernel.terminatorEdgeArgumentStart(edge);
+					const index = operand - first;
+					if (index < 0 || index >= fn.kernel.terminatorEdgeArgumentCount(edge)) continue;
+					const block = fn.kernel.terminatorEdgeBlock(edge);
+					const parameter = fn.kernel.blockParameterStart(block) + index;
+					if (fn.kernel.blockParameterRole(parameter) !== 0) return false;
+					pending.push(fn.kernel.blockParameterValue(parameter));
+					forwarded = true;
+					break;
+				}
+				if (!forwarded) return false;
+				continue;
+			}
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode === "rootUse") continue;
+			if (allowBlockArguments && opcode === "throwIfTdz") continue;
 			if (opcode !== "move") return false;
 			pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
 		}
@@ -143,6 +172,7 @@ function recordKeys(
 		return coreValueOnlyReturned(
 			fn,
 			fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+			true,
 		)
 			? EMPTY_RECORD_KEYS
 			: undefined;
@@ -159,6 +189,7 @@ function recordKeys(
 		!coreValueOnlyReturned(
 			fn,
 			fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+			true,
 		)
 	)
 		return undefined;
@@ -193,13 +224,45 @@ export function coreReturnedRecordKinds(
 ): CoreRecordValueKind {
 	if (fn.isAsync || fn.isGenerator) return undefined;
 	let result: CoreRecordValueKind = null;
+	const pending: Array<CoreValueId> = [];
 	for (const block of cfg.reachable) {
 		const terminator = fn.blockTerminator(block);
 		if (fn.instructionKind(terminator) !== "return") continue;
 		const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
 		if (mask(value) === 0) continue;
-		const definition = coreReturnedValueDefinition(fn, value);
-		if (definition === undefined) return undefined;
+		pending.push(value);
+	}
+	const seen = new Set<CoreValueId>();
+	let remaining = MAXIMUM_RECORD_RETURN_ALIAS_WORK;
+	while (pending.length > 0) {
+		const value = pending.pop()!;
+		if (seen.has(value)) continue;
+		seen.add(value);
+		if (--remaining < 0) return undefined;
+		if (fn.kernel.valueDefinitionKind(value) === 0) {
+			const block = fn.kernel.valueDefinitionOwner(value) as CoreBlockId;
+			const index = fn.kernel.valueDefinitionIndex(value);
+			if (
+				fn.kernel.blockParameterRole(fn.kernel.blockParameterStart(block) + index) !== 0
+			)
+				return undefined;
+			const incoming = cfg.predecessors[block] ?? [];
+			if (incoming.length === 0) return undefined;
+			for (const edge of incoming) {
+				if (!cfg.reachable.has(edge.from)) continue;
+				const input = edge.arguments[index];
+				if (--remaining < 0 || edge.kind !== "ordinary" || input === undefined)
+					return undefined;
+				pending.push(input);
+			}
+			continue;
+		}
+		if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		if (fn.instructionOpcodeName(definition) === "move") {
+			pending.push(fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition)));
+			continue;
+		}
 		const keys = recordKeys(fn, definition);
 		const completion = fn.registry.byId(fn.instructionOpcode(definition)).callTransfer
 			?.result;
@@ -228,6 +291,7 @@ export function coreReturnedRecordKinds(
 			coreValueOnlyReturned(
 				fn,
 				fn.kernel.resultAt(fn.kernel.instructionResultStart(definition)),
+				true,
 			)
 		)
 			fields = call(definition);

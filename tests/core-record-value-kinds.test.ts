@@ -89,6 +89,32 @@ describe("normal-return record field kinds", () => {
 			value: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
 		});
 	});
+	it.each([
+		"return flag?{value:1,left:true}:{right:null,value:'text'};",
+		"let result;if(flag)result={value:1,left:true};else result={right:null,value:'text'};return result;",
+		"return flag?leaf(1):leaf('text');",
+		"let result={value:1};while(flag-- > 0){if(flag&1)result={value:'text'};}return result;",
+	])("joins fresh records through control-flow aliases (%s)", (body) => {
+		const out = records(
+			`function leaf(value){return {value};}function make(flag){${body}}globalThis.result=make(globalThis.flag);`,
+		);
+		expect(out.fields("make")).toEqual({
+			value: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		});
+	});
+	it.each([
+		"const value=flag?{n:1}:{n:2};value.n='changed';return value;",
+		"const value=flag?{n:1}:{n:2};globalThis.observe(value);return value;",
+		"return flag?{n:1}:globalThis.value;",
+		"return flag?{n:1}:null;",
+		"let result={n:1};while(flag-- > 0){result=globalThis.value;}return result;",
+		"let result=flag?{n:1}:{n:2};try{globalThis.observe();}finally{globalThis.observe(result);}return result;",
+	])("rejects an escaped or non-record control-flow alternative (%s)", (body) => {
+		const out = records(
+			`function make(flag){${body}}globalThis.result=make(globalThis.flag);`,
+		);
+		expect(out.fields("make")).toBeUndefined();
+	});
 
 	it("propagates changed fields through a long exact forwarding chain", () => {
 		const length = 32;

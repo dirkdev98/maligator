@@ -62,6 +62,11 @@ describe("fresh record field kind observations", () => {
 				}
 				for (const [name, range] of [
 					["readBounded", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					[
+						"readConditionalRecord",
+						{ ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 },
+					],
+					["readLoopRecord", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					["readBeforeFieldWrite", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					["readSiblingWritten", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					[

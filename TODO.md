@@ -142,6 +142,8 @@ The independent target boundary and current storage contract are recorded in
       own-field kind summaries through exact call chains, finite callee sets,
       recursive forwarding, spread/rest and constructor completions. Field-only
       changes wake callers without rebuilding the any-script scalar aggregate.
+      Conditional returns and loop-carried aliases join common own fields through
+      bounded control-flow walks, including initial integer bounds.
       Call results now project initial own fields through that worklist, closing
       parameter/field cycles. Reads retain facts before later writes and escapes;
       known own sibling writes preserve untouched fields. A bounded CFG/use walk

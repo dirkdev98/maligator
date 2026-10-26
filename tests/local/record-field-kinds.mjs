@@ -185,6 +185,34 @@ const makeBoundedRecord = function makeBoundedRecord(value, callback) {
 		label: "bounded",
 	};
 };
+const makeConditionalRecord = function makeConditionalRecord(value, flag, callback) {
+	for (let step = 0; step < 3; step++) callback(step);
+	return flag
+		? { small: value & 15, label: "narrow", left: true }
+		: { right: null, label: "wide", small: value & 255 };
+};
+const makeLoopRecord = function makeLoopRecord(value, steps, callback) {
+	let result = { small: value & 15, label: "initial" };
+	for (let step = 0; step < steps; step++) {
+		callback(step);
+		result = { label: "loop", small: value & 255 };
+	}
+	return result;
+};
+function readConditionalRecord(value, flag, callback) {
+	const record = makeConditionalRecord(value, flag, observe);
+	const small = record.small;
+	const label = record.label;
+	callback(record);
+	return `${label}:${small % 10}`;
+}
+function readLoopRecord(value, steps, callback) {
+	const record = makeLoopRecord(value, steps, observe);
+	const small = record.small;
+	const label = record.label;
+	callback(record);
+	return `${label}:${small % 10}`;
+}
 function readBounded(value, callback) {
 	const record = makeBoundedRecord(value, callback);
 	callback("bounded read");
@@ -280,6 +308,8 @@ async function* boundedAsyncSuspended(value, callback) {
 }
 Object.assign(globalThis, {
 	readBounded,
+	readConditionalRecord,
+	readLoopRecord,
 	readBoundedUnsigned,
 	readBoundedEscaped,
 	readBeforeFieldWrite,
@@ -311,6 +341,26 @@ for (const value of [
 ]) {
 	check(readBounded(value, observe), (value & 255) % 10, "bounded field remainder");
 	check(readBoundedUnsigned(value, observe), value >>> 0, "unsigned field value");
+	for (const flag of [false, true]) {
+		check(
+			readConditionalRecord(value, flag, (record) => {
+				record.small = "changed";
+				record.label = null;
+				observe("conditional record");
+			}),
+			`${flag ? "narrow" : "wide"}:${(value & (flag ? 15 : 255)) % 10}`,
+			"conditional object return retains common fields",
+		);
+		check(
+			readLoopRecord(value, flag ? 2 : 0, (record) => {
+				record.small = "changed";
+				record.label = null;
+				observe("loop record");
+			}),
+			`${flag ? "loop" : "initial"}:${(value & (flag ? 255 : 15)) % 10}`,
+			"loop object return joins entry and backedge fields",
+		);
+	}
 	check(
 		readBeforeFieldWrite(value, (record) => {
 			observe("field write");

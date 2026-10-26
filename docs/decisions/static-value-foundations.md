@@ -789,6 +789,11 @@ Own-field observations publish initial integer bounds through the same
 normal-result contract as calls. One function worklist converges scalar returns
 and fresh-record fields together, keeping an unsolved field distinct from an
 unknown field. A growing recursive field widens independently of bounded siblings.
+Conditional returns and loop-carried aliases join the common own fields of all
+fresh record alternatives. The bounded alias walk admits ordinary block arguments
+and TDZ checks, and rejects mutation, escape, handler transport or a non-record
+alternative. This semantic proof does not extend the caller-owned storage ABI;
+that planner still requires direct returned producers.
 Each read has its own proof: later writes and escapes cannot change a value already
 read, and sibling writes preserve untouched fields only when their keys are own.
 A bounded reverse walk over record uses and predecessor blocks rejects any path

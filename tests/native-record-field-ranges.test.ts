@@ -33,6 +33,16 @@ function inspect(
 		"compute",
 		{ locked: options.locked },
 	);
+	it.each(["-0", "Infinity", "NaN"])(
+		"keeps a conditional %s field outside the bounded integer kernel",
+		(alternative) => {
+			const out = inspectStaticValueFunction(
+				`const make=function make(value,hook){for(let i=0;i<3;i++)hook(i);return value<0?{n:value&255}:{n:${alternative}};};function compute(value,hook){const record=make(value,hook);hook();return record.n%10;}globalThis.compute=compute;globalThis.make=make;`,
+				"compute",
+			);
+			expect(out.c.source).toContain("mal_number_remainder(");
+		},
+	);
 }
 function field(out: ReturnType<typeof inspect>) {
 	const ip = out.native.body.instructions.findIndex(
@@ -46,6 +56,23 @@ function field(out: ReturnType<typeof inspect>) {
 }
 
 describe("normal record field integer ranges", () => {
+	it.each([false, true])(
+		"retains common field facts through a conditional object return (locked=%s)",
+		(locked) => {
+			const out = inspectStaticValueFunction(
+				`const make=function make(value,hook){for(let i=0;i<3;i++)hook(i);return value<0?{n:value&15,label:'negative'}:{n:value&255,label:'positive'};};function compute(value,hook){const record=make(value,hook);const n=record.n;const label=record.label;hook(record);return label+':'+n%10;}globalThis.compute=compute;globalThis.make=make;`,
+				"compute",
+				{ locked },
+			);
+			const { op, facts } = field(out);
+			expect(instructionResultIntegerRange(facts, op.dst)).toEqual(bounded(0, 255));
+			expect(out.c.source).not.toContain("mal_number_remainder(");
+			expect(out.c.source).toContain("mal_vm_concat_strings_known(");
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
 	it.each([false, true])(
 		"consumes a bounded field across opaque calls (locked=%s)",
 		(locked) => {
