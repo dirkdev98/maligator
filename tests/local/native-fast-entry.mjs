@@ -787,7 +787,10 @@ for (const value of [
 	]) {
 		try {
 			const result = globalThis[name](value, -2);
-			log.push(`${name} ${Object.is(result, -0) ? "-0" : result}`);
+			// Hypot permits implementation-approximated finite results.
+			const shown =
+				name === "mathHypot" && Number.isFinite(result) ? result.toPrecision(12) : result;
+			log.push(`${name} ${Object.is(result, -0) ? "-0" : shown}`);
 		} catch (error) {
 			log.push(`${name} ${error.name}`);
 		}
