@@ -36,6 +36,7 @@ import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { scalarBuiltinInvocationEffects } from "../shared/scalar-builtin-effects.ts";
 import {
 	targetRecordStorageFieldsAreValid,
+	targetRecordShapeIndicesFitInt32,
 	targetRecordStorageFieldsEqual,
 } from "./core-target-ir.ts";
 import type {
@@ -1998,6 +1999,7 @@ function validateNativeRecordReturns(
 		throw new RangeError("Invalid native record result");
 	}
 	validateNativeRecordStorage(results.storage, results.keys.length);
+	if (!targetRecordShapeIndicesFitInt32(results.shapes)) fail();
 	const forwardIps = (results.forwards ?? []).map((forward) => forward.callIp);
 	const producers = [...results.allocationIps, ...forwardIps];
 	if (
@@ -2361,6 +2363,7 @@ function validateNativeRecordParameters(
 	const exceptionTargets = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	for (const [position, parameter] of (entry.recordParameters ?? []).entries()) {
 		validateNativeRecordStorage(parameter.storage, parameter.keys.length);
+		if (!targetRecordShapeIndicesFitInt32(parameter.shapes)) fail();
 		if (
 			fn.mappedArguments ||
 			!(parameter.index >= 0 && parameter.index < fn.parameterCount) ||

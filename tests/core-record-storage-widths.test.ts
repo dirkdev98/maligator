@@ -418,10 +418,37 @@ describe("record storage C ABI", () => {
 					image.runtime.stringConstants,
 				)!.directEntries.find((candidate) => candidate.id === entry.id)!;
 				expect(shapedC.recordParameters![0]!.representations).toHaveLength(6);
-				expect(shapedC.source).toContain("mal_value_to_i32((*rp0_3))");
+				expect(shapedC.source).toContain("i32 * rp0_3");
+				expect(shapedC.source).not.toContain("if ((*rp0_3)");
+				expect(shapedC.source).not.toContain("mal_value_to_i32((*rp0_3))");
 				expect(shapedC.source).toContain("mal_vm_materialize_record(vm, (*rp0_5)");
 			}
 		}
+		const decoded = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "decode",
+		)!;
+		const result = decoded.directEntries.find((entry) => entry.resultFields)!;
+		const output = emitCompiledFunction(
+			decoded,
+			decoded.functionIndex,
+			"",
+			false,
+			"static",
+			new Set(),
+			[],
+			entries,
+			false,
+			new Set(),
+			image.runtime.stringConstants,
+		)!.directEntries.find((entry) => entry.id === result.id)!;
+		expect(output.resultFieldRepresentations!.at(-1)).toBe("int32");
+		expect(output.source).toContain(`i32 * rf${result.resultFields!.keys.length}`);
+		expect(output.source).not.toContain(
+			`*rf${result.resultFields!.keys.length} = mal_value_from_i32(`,
+		);
 	});
 
 	it("materializes before a borrowed call whose native entry was not emitted", () => {

@@ -60,8 +60,10 @@ and a union's shape index only when it has record observers; parameters without
 observers still share the object cell so earlier materialization and mutation
 remain visible. Callers retain
 the producer whenever their own observer, an observing callee or an ordinary-call
-fallback needs it. Coroutine callers retain their ordinary object transport and
-existing suspension snapshots.
+fallback needs it. Union shapes use bounded i32 ordinals in output storage and
+observer parameters. C materializers compare those ordinals directly and use the
+last shape as the exhaustive remaining case. Coroutine
+callers retain their ordinary object transport and existing suspension snapshots.
 
 Constants and source resources are finalized jointly over both targets; a
 constant used only by the native body must survive compaction. Captures, profiling

@@ -3,6 +3,7 @@ import {
 	compilerFactIsWorldInvariant,
 	knownBuiltinCallProves,
 } from "../shared/compiler-facts.ts";
+import { COMPILER_INT32_RANGE } from "../shared/integer-range.ts";
 import { provePrimordialAccess } from "../shared/primordial-catalog.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreLocalFactBundle } from "./core-ir-provenance.ts";
@@ -363,6 +364,7 @@ export function coreRecordResultFields(
 	const ordered = [...allocations.keys()].sort((left, right) => left - right);
 	let shapes: ReadonlyArray<ReadonlyArray<number>> | undefined;
 	if (union) {
+		if (ordered.length - 1 > COMPILER_INT32_RANGE.maximum) return undefined;
 		const all: Array<number> = [];
 		for (const allocation of ordered)
 			for (const key of allocations.get(allocation)!)

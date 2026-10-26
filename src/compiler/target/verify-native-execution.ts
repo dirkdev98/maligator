@@ -7,6 +7,7 @@ import type { CoreFunctionStore } from "../core/core-store.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import {
 	targetRecordStorageFieldsAreValid,
+	targetRecordShapeIndicesFitInt32,
 	targetRecordStorageFieldsEqual,
 } from "./core-target-ir.ts";
 import type {
@@ -171,12 +172,14 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 			}
 			if (
 				(entry.resultFields !== undefined &&
-					!targetRecordStorageFieldsAreValid(
-						entry.resultFields.storage,
-						entry.resultFields.keys.length,
-					)) ||
+					(!targetRecordShapeIndicesFitInt32(entry.resultFields.shapes) ||
+						!targetRecordStorageFieldsAreValid(
+							entry.resultFields.storage,
+							entry.resultFields.keys.length,
+						))) ||
 				entry.recordParameters?.some(
 					(parameter) =>
+						!targetRecordShapeIndicesFitInt32(parameter.shapes) ||
 						!targetRecordStorageFieldsAreValid(parameter.storage, parameter.keys.length),
 				)
 			)

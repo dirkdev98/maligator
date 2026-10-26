@@ -17,6 +17,7 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_STRING,
 } from "../shared/compiler-value-kinds.ts";
+import { COMPILER_INT32_RANGE } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 
 export function targetInstructionUsesPropertyCache(
@@ -91,6 +92,12 @@ export type CoreTargetRegisterRepresentation =
 export interface CoreTargetRecordStorageField {
 	readonly kindMask: number;
 	readonly representation: CoreTargetRegisterRepresentation;
+}
+
+export function targetRecordShapeIndicesFitInt32(
+	shapes: ReadonlyArray<ReadonlyArray<number>> | undefined,
+): boolean {
+	return (shapes?.length ?? 0) - 1 <= COMPILER_INT32_RANGE.maximum;
 }
 
 export function targetRecordStorageFieldsAreValid(

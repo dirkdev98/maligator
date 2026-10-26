@@ -4641,7 +4641,7 @@ function recordRepresentations(
 ): Array<VmRegisterRepresentation> {
 	return [
 		...layout.storage.map((field) => field.representation),
-		...(layout.shapes === undefined ? [] : ["boxed" as const]),
+		...(layout.shapes === undefined ? [] : ["int32" as const]),
 	];
 }
 
@@ -4798,7 +4798,7 @@ function renderRecordCallSlots(
 		});
 		const shape =
 			layout.shapes === undefined ? undefined : `${prefix}_${layout.keys.length}`;
-		if (shape !== undefined) locals.push({ name: shape, representation: "boxed" });
+		if (shape !== undefined) locals.push({ name: shape, representation: "int32" });
 		return {
 			slots,
 			keys: layout.keys,
@@ -8915,18 +8915,16 @@ function emitInstruction(
 					`vm->string_constant_atoms[${relocation.stringIndex(site.keys[field]!)}]`;
 				const materialize = (fields: ReadonlyArray<number>) =>
 					`${object} = mal_vm_materialize_record(vm, ${recordProducer(site)}, (MalString *[]){${fields.map(atom).join(", ")}}, (MalValue[]){${fields.map((field) => recordBoxed(site, field)).join(", ")}}, ${fields.length});`;
-				const shapeIndex =
-					site.shapes === undefined
-						? undefined
-						: `mal_value_to_i32(${recordShape(site)})`;
+				const shapeIndex = site.shapes === undefined ? undefined : recordShape(site);
+				// Record allocations are the only writers of this closed shape tag.
 				return [
 					`if (${object} == MAL_VALUE_EMPTY) {`,
 					...(site.shapes === undefined
 						? [`  ${materialize(site.keys.map((_, field) => field))}`]
-						: site.shapes.map(
-								(fields, shape) =>
-									`  ${shape === 0 ? "" : "else "}if (${shapeIndex} == ${shape}) ${materialize(fields)}`,
-							)),
+						: site.shapes.map((fields, shape) => {
+								const last = shape === site.shapes!.length - 1;
+								return `  ${shape === 0 ? "" : "else "}${last ? "" : `if (${shapeIndex} == ${shape}) `}${materialize(fields)}`;
+							})),
 					`  ${throwCheck()}`,
 					`}`,
 					...aliases.map((register) => `r${register} = ${object};`),
@@ -9811,7 +9809,7 @@ function emitInstruction(
 			...Array.from({ length: count }, (_, field) => field)
 				.filter((field) => !fields.includes(field))
 				.map((field) => `*rf${field} = MAL_VALUE_UNDEFINED;`),
-			...(shape === undefined ? [] : [`*rf${count} = mal_value_from_i32(${shape});`]),
+			...(shape === undefined ? [] : [`*rf${count} = ${shape};`]),
 			// The empty value tells the caller its storage holds the record.
 			`r${instruction.dst} = MAL_VALUE_EMPTY;`,
 		];
