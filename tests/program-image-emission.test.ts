@@ -3,6 +3,7 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { directBuiltinOperationIds } from "../src/compiler/shared/builtin-registry.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import { knownOperationIndex } from "../src/compiler/shared/known-operations.ts";
@@ -300,6 +301,43 @@ function withSpecializations(
 }
 
 describe("emit-program-image instruction packing", () => {
+	it("declares later frameless callees before their first use in standalone and batch C", () => {
+		const image = lowerNativeStorage(
+			compileEntrypoint(
+				new URL("./local/frameless-forward-call.js", import.meta.url).pathname,
+				{
+					buildConfig: resolveBuildConfig({
+						engine: { primordials: "locked", eval: false, realms: false },
+					}),
+					coreOptimizationBenchmarkAblation: { family: "inlining-cross-call" },
+				},
+			),
+		);
+		const shared = emitBatchWithSharedPrefix(
+			[image],
+			{ compiled: true },
+			image.runtime.functions.length,
+		);
+		for (const sources of [
+			[emitProgramImage(image, { compiled: true })],
+			[emitBatch([image], { compiled: true })],
+			[shared.body, shared.shared],
+			emitProgramTranslationUnitSources(image, { compiled: true }),
+		]) {
+			let callCount = 0;
+			for (const source of sources) {
+				const calls = [...source.matchAll(/if \(!(mal_compiled_[A-Za-z0-9_]+_try)\(/g)];
+				callCount += calls.length;
+				for (const call of calls) {
+					const declaration = source.indexOf(`bool ${call[1]}(`);
+					expect(declaration).toBeGreaterThanOrEqual(0);
+					expect(declaration).toBeLessThan(call.index);
+				}
+			}
+			expect(callCount).toBeGreaterThan(0);
+		}
+	});
+
 	it.each([false, true])(
 		"reports a renderer bailout only when the function exceeds its C budget, limited=%s",
 		(limited) => {

@@ -1446,6 +1446,8 @@ function emitProgramImageParts(
 				const fn = compiled[index];
 				if (fn !== undefined && fn !== null && directCompiledTargets.has(index)) {
 					lines.push(`static MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`);
+					if (fn.trySymbol !== undefined)
+						lines.push(`static bool ${fn.trySymbol}(${FAST_TRY_PARAMETERS});`);
 				}
 			}
 		}
@@ -1482,6 +1484,8 @@ function emitProgramImageParts(
 		for (const fn of compiled) {
 			if (fn !== null) {
 				if (fn.source.length > 0) lines.push(`MAL_DECLARE_COMPILED(${fn.symbol});`);
+				if (fn.trySymbol !== undefined)
+					lines.push(`bool ${fn.trySymbol}(${FAST_TRY_PARAMETERS});`);
 			}
 		}
 		for (const fn of compiled) {
@@ -2851,6 +2855,9 @@ function emitBatchUnits(
 		const declarations = (fn: CompiledFunction, canonical: boolean): Array<string> => [
 			...(canonical && fn.source.length > 0
 				? [`${storage}MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`]
+				: []),
+			...(canonical && fn.trySymbol !== undefined
+				? [`${storage}bool ${fn.trySymbol}(${FAST_TRY_PARAMETERS});`]
 				: []),
 			...fn.directEntries.flatMap((entry) => [
 				`${storage}${directEntryDeclaration(entry)};`,
