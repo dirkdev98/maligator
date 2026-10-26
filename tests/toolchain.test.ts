@@ -985,57 +985,65 @@ printf '!<arch>\\n' > "$2"
 
 	it("uses one production plan for archive/final LTO and post-link stripping", () => {
 		const fake = createFakeToolchain();
-		const report = inspectToolchain({
-			rootDir: fake.root,
-			rustDir: fake.rustDir,
-			env: fake.env,
-			needsCxx: false,
-			platform: "linux",
-		});
-		expect(report.toolchain).toBeDefined();
-		const toolchain = report.toolchain!;
-		const production = selectNativeBuildPlan(toolchain, true);
-		const context = resolveNativeBuildContext({
-			toolchain,
-			plan: production,
-			cacheDirectory: path.join(fake.root, "cache"),
-			features: {
-				evalEnabled: false,
-				webPlatformEnabled: false,
-				intlFeatures: ["intl-segmenter"],
-			},
-		});
-		writeFileSync(fake.logPath, "");
-		const { binaryPath: binary } = buildLocalBinary({
-			context,
-			name: "production-output",
-			cSource: "int value;",
-			verbose: false,
-			outDir: fake.root,
-		});
+		try {
+			const runtimeDirectory = createMinimalRuntime(fake);
+			const report = inspectToolchain({
+				rootDir: fake.root,
+				rustDir: fake.rustDir,
+				env: fake.env,
+				needsCxx: false,
+				platform: "linux",
+			});
+			expect(report.toolchain).toBeDefined();
+			const toolchain = report.toolchain!;
+			const production = selectNativeBuildPlan(toolchain, true);
+			const context = resolveNativeBuildContext({
+				toolchain,
+				runtimeDirectory,
+				plan: production,
+				cacheDirectory: path.join(fake.root, "cache"),
+				features: {
+					evalEnabled: false,
+					webPlatformEnabled: false,
+					intlFeatures: ["intl-segmenter"],
+				},
+			});
+			writeFileSync(fake.logPath, "");
+			const { binaryPath: binary } = buildLocalBinary({
+				context,
+				name: "production-output",
+				cSource: "int value;",
+				verbose: false,
+				outDir: fake.root,
+			});
 
-		const invocations = readFileSync(fake.logPath, "utf-8");
-		expect(invocations).toMatch(/-O2 -g0 -flto=thin .*runtime\/src\/vm\.c/);
-		expect(invocations).toContain(`-O2 -g0 -flto=thin`);
-		expect(invocations).toContain("-Wl,--thinlto-cache-dir=");
-		expect(invocations).toContain(`strip --strip-all ${binary}`);
-		const compilations = invocations.split("\n").filter((line) => line.includes(" -c "));
-		expect(compilations.length).toBeGreaterThan(0);
-		for (const invocation of compilations) {
-			for (const define of context.features.cDefines) {
-				expect(invocation.split(" ")).toContain(define);
+			const invocations = readFileSync(fake.logPath, "utf-8");
+			expect(invocations).toMatch(/-O2 -g0 -flto=thin .*runtime\/src\/engine\.c/);
+			expect(invocations).toContain(`-O2 -g0 -flto=thin`);
+			expect(invocations).toContain("-Wl,--thinlto-cache-dir=");
+			expect(invocations).toContain(`strip --strip-all ${binary}`);
+			const compilations = invocations
+				.split("\n")
+				.filter((line) => line.includes(" -c "));
+			expect(compilations.length).toBeGreaterThan(0);
+			for (const invocation of compilations) {
+				for (const define of context.features.cDefines) {
+					expect(invocation.split(" ")).toContain(define);
+				}
 			}
-		}
 
-		writeFileSync(fake.logPath, "");
-		buildLocalBinary({
-			context,
-			name: "production-output",
-			cSource: "int value;",
-			verbose: false,
-			outDir: fake.root,
-		});
-		expect(readFileSync(fake.logPath, "utf-8")).toBe("");
+			writeFileSync(fake.logPath, "");
+			buildLocalBinary({
+				context,
+				name: "production-output",
+				cSource: "int value;",
+				verbose: false,
+				outDir: fake.root,
+			});
+			expect(readFileSync(fake.logPath, "utf-8")).toBe("");
+		} finally {
+			rmSync(fake.root, { recursive: true, force: true });
+		}
 	});
 
 	it("keeps the binary but never caches a failed post-link strip", () => {
