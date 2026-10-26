@@ -361,6 +361,33 @@ function floatingResult(value, callback) {
 	collectGarbage();
 	return result ^ 7;
 }
+function integerFlow(value, flag, callback) {
+	const result = flag ? integer(value, callback) : boundedFloating(value, callback);
+	callback();
+	return (result ^ 7) + ":" + result;
+}
+function floatingFlow(value, flag, callback) {
+	const result = flag ? numeric(value, callback) : signedZero(value, callback);
+	callback();
+	return result;
+}
+function caughtFlow(value, flag, callback, gate) {
+	const result = flag ? integer(value, callback) : boundedFloating(value, callback);
+	try {
+		gate();
+		return result ^ 7;
+	} catch (error) {
+		collectGarbage();
+		if (error !== failure) throw error;
+		return result ^ 3;
+	}
+}
+function* suspendedFlow(value, flag, callback) {
+	const result = flag ? integer(value, callback) : boundedFloating(value, callback);
+	yield result;
+	callback();
+	return result ^ 7;
+}
 function zeroResult(value, callback) {
 	const result = signedZero(value, callback);
 	collectGarbage();
@@ -424,6 +451,7 @@ globalThis.byteRemainder = byteRemainder;
 globalThis.positiveRemainder = positiveRemainder;
 globalThis.unsignedRemainder = unsignedRemainder;
 globalThis.floatingResult = floatingResult;
+Object.assign(globalThis, { integerFlow, floatingFlow, caughtFlow, suspendedFlow });
 globalThis.zeroResult = zeroResult;
 globalThis.resumeRange = resumeRange;
 globalThis.byteRelay = byteRelay;
@@ -445,6 +473,11 @@ const inputs = [
 	0,
 	-0,
 	3,
+	-2147483648,
+	2147483647,
+	2147483648,
+	-2147483649,
+	1.75,
 	NaN,
 	Infinity,
 	"7",
@@ -543,6 +576,24 @@ for (const value of inputs) {
 		capture(() => floatingResult(value, hook)),
 		capture(() => zeroResult(value, hook)),
 	);
+	for (const flag of [false, true])
+		console.log(
+			capture(() => integerFlow(value, flag, hook)),
+			capture(() => floatingFlow(value, flag, hook)),
+			capture(() => caughtFlow(value, flag, hook, hook)),
+			capture(() =>
+				caughtFlow(value, flag, hook, () => {
+					collectGarbage();
+					throw failure;
+				}),
+			),
+			capture(() => {
+				const iterator = suspendedFlow(value, flag, hook);
+				const first = iterator.next();
+				collectGarbage();
+				return String(first.value) + "," + iterator.next().value;
+			}),
+		);
 	console.log(
 		capture(() => chainedRemainder(value, hook)),
 		capture(() => recursiveRemainder(3, value, hook)),

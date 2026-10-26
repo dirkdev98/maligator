@@ -447,6 +447,13 @@ function verifyInstructionRows(
 					attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === undefined
 				)
 					fail(`move @${instruction} unboxes to ${destination} without a proof`);
+				if (
+					source !== "boxed" &&
+					source !== destination &&
+					destination !== "boxed" &&
+					!(source === "i32" && destination === "f64")
+				)
+					fail(`move @${instruction} changes ${source} representation to ${destination}`);
 			}
 			// The optional operand is an earlier read of the same field, or empty.
 			if (

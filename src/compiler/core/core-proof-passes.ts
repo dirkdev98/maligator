@@ -1239,9 +1239,13 @@ const materializeFlowScalars: CoreFunctionPass = {
 				)
 			)
 				continue;
-			conversions.push({ values: candidates, representation });
-			conversionCount += candidates.length;
-			// A flow component must change representation atomically.
+			// Identity moves cannot narrow, so exact integer producers follow the boxed web.
+			const converted =
+				representation === "i32"
+					? component.filter((value) => fn.valueRepresentation(value) !== "i32")
+					: candidates;
+			conversions.push({ values: converted, representation });
+			conversionCount += converted.length;
 			if (conversionCount >= context.remainingEdits) break;
 		}
 		if (conversions.length === 0) return undefined;

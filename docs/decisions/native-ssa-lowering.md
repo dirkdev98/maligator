@@ -11,6 +11,12 @@ Each native function owns its lowered body, representations, source positions,
 safepoints, selected regions, and typed entry contracts. Its body currently uses
 the shared terminal instruction vocabulary. Sharing that vocabulary does not
 make its instruction indexes or locals interchangeable with the VM body.
+Core identity moves preserve representation, box a scalar, or widen int32 to f64;
+boxed unboxing requires its explicit exact-scalar proof. When a scalar flow web
+selects int32, its already-floating exact integer producers narrow with the boxed
+members. Wider numeric webs keep existing integer producers and use widening
+moves. Core verifies these boundaries before target allocation, including handler
+arguments, so a later cleanup pass is not needed to repair an invalid move.
 Constants and source resources are finalized jointly over both targets; a
 constant used only by the native body must survive compaction. Captures, profiling
 sites, test batch relocation, and compiler artifacts preserve both bodies.

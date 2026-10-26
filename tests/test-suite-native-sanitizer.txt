@@ -178,6 +178,7 @@ tests/native/operand-truthiness-facts.test.ts
 tests/native/typeof-operand-facts.test.ts
 tests/native/guarded-call-roots.test.ts
 tests/native/operator-completion-effects.test.ts
+tests/native/call-result-kinds.test.ts
 tests/native/proven-string-comparisons.test.ts
 tests/native/guarded-layout-roots.test.ts
 tests/native/number-to-uint32-boundaries.test.ts

@@ -909,7 +909,12 @@ describe("Core control-flow analyses and passes", () => {
 			{ program, context },
 			{ verification: "per-pass" },
 		).compilation.program.function(function_);
-		expect(fn.valueRepresentation(joined)).toBe("i32");
+		const returned = [...fn.blockIds()]
+			.map((block) => inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)))
+			.filter((terminator) => terminator.kind === "return");
+		expect(returned.length).toBeGreaterThan(0);
+		for (const terminator of returned)
+			expect(fn.valueRepresentation(terminator.value)).toBe("i32");
 		expect(
 			[...fn.instructionIds()].some(
 				(instruction) =>

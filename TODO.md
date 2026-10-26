@@ -81,13 +81,11 @@ hot consumer needs a stronger proof. An analysis contract may land before its
 consumer with precision, invalidation, and cost tests; it is not a runtime speedup
 until the consumer admits real sites and measurements establish a benefit.
 
-- [ ] Keep `flow-scalar-representation-selection` from leaving `f64 -> i32` moves. A
-      component whose exact kinds are all int32 becomes i32, but members already in
-      f64 stay f64, and the target verifier rejects the moves between them. In the
-      numeric-join test later passes remove them; nothing guarantees that before
-      lowering. The Core verifier rejects only moves that unbox a boxed value.
-      `loop-scalar-representation-selection` has the same coupling: it picks one
-      representation for every value connected through any arithmetic operand,
+- [ ] Decouple `loop-scalar-representation-selection` storage webs. Flow scalar
+      selection now narrows already-floating exact integer producers with their
+      boxed web; stopped-pass lowering covers ordinary and exception edges, and
+      Core rejects implicit narrowing or reinterpretation moves. Loop selection
+      still picks one representation for every value connected through any arithmetic operand,
       so `s += i` keeps `i` in f64, and one CSE'd `0` joins unrelated loops.
       Choosing per storage web (block parameters and moves) with induction ranges
       made counters i32, but the C renderer then converted back and forth
