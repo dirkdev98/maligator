@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import {
 	buildCoreControlFlow,
@@ -6,6 +7,7 @@ import {
 } from "../src/compiler/core/core-ir-control-flow.ts";
 import { analyzeCoreLoopInductions } from "../src/compiler/core/core-ir-loops.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,
@@ -14,8 +16,11 @@ import type {
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
+import { COMPILER_VALUE_KIND_NUMBER } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	inspectCoreBlockParameters,
 	inspectCoreTerminatorPayload,
@@ -29,6 +34,20 @@ interface BoundedFunction {
 	readonly function: CoreFunctionId;
 	readonly value: CoreValueId;
 	readonly bounded: CoreBlockId;
+}
+
+function primitiveNumberProof(builder: CoreFunctionBuilder) {
+	return builder.addFact({
+		kind: "primitive-operator-effects",
+		value: [COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_NUMBER],
+		claims: [],
+		validity: {
+			kind: "summary",
+			digest: `primitive-operator:binary:${COMPILER_VALUE_KIND_NUMBER},${COMPILER_VALUE_KIND_NUMBER}`,
+		},
+		obligations: [],
+		origin: "bounded-numeric-inputs",
+	});
 }
 
 function boundedInt32(polarity: "consequent" | "alternate"): BoundedFunction {
@@ -93,7 +112,9 @@ function boundedInt32(polarity: "consequent" | "alternate"): BoundedFunction {
 			arguments: [],
 		},
 	});
+	const proof = primitiveNumberProof(builder);
 	const [remainder] = builder.appendInstruction(bounded, "binary", [value!, sixteen!], {
+		effectRefinement: { effects: CORE_NO_EFFECTS, proof },
 		attributes: { operator: "%" },
 		outputRepresentations: ["i32"],
 	});
@@ -118,6 +139,26 @@ function pathRanges(source: BoundedFunction) {
 }
 
 describe("Core path-sensitive numeric ranges", () => {
+	it("retires primitive effect proofs when module constants eliminate a bounded remainder", () => {
+		const config = resolveBuildConfig({});
+		let reduced = 0;
+		compileEntrypoint(
+			new URL("./local/static-binding-constants.mjs", import.meta.url).pathname,
+			{
+				buildConfig: config,
+				stripTypes: stripCompactTypes,
+				coreVerification: "per-pass",
+				coreInstrumentation: "full",
+				afterCoreOptimization(_program, _context, report) {
+					reduced =
+						report.passes.find(({ pass }) => pass === "path-range-strength-reduction")
+							?.changedItems ?? 0;
+				},
+			},
+		);
+		expect(reduced).toBeGreaterThan(0);
+	});
+
 	it.each([false, true])(
 		"folds comparisons from int32 joins with constant inputs: %s",
 		(constants) => {
@@ -175,7 +216,9 @@ describe("Core path-sensitive numeric ranges", () => {
 				attributes: { value: 0x8000_0000 },
 				outputRepresentations: ["f64"],
 			});
+			const proof = primitiveNumberProof(builder);
 			const [comparison] = builder.appendInstruction(join, "binary", [value, limit!], {
+				effectRefinement: { effects: CORE_NO_EFFECTS, proof },
 				attributes: { operator: "<" },
 				outputRepresentations: ["boolean"],
 			});

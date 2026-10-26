@@ -1057,7 +1057,7 @@ const foldPathComparisons: CoreFunctionPass = {
 	},
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
-	changes: CONTROL_FLOW_CHANGES,
+	changes: { ...CONTROL_FLOW_CHANGES, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
@@ -1464,7 +1464,7 @@ const reduceBoundedRemainders: CoreFunctionPass = {
 	},
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
-	changes: { ...CONTROL_FLOW_CHANGES, cfg: false },
+	changes: { ...CONTROL_FLOW_CHANGES, cfg: false, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
