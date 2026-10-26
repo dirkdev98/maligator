@@ -735,6 +735,12 @@ for (const value of [
 	9007199254740991,
 ])
 	verifyWords(value, value === -1);
+recordStoragePulse();
+check(keptWords.length, 1, "one retained integer record");
+check(keptWords[0].signed, 0, "retained signed field after collection");
+check(keptWords[0].unsigned, 4294967295, "retained unsigned field after collection");
+check(keptWords[0].small, 2, "retained bounded field after collection");
+check(keptWords[0].label, "www", "retained heap field after collection");
 let wordCoercions = 0;
 const coercedWords = wordRecord({
 	valueOf() {

@@ -163,9 +163,9 @@ describe("record result entries", () => {
 		// Eleven observed tokens, the returned and the thrown token, three handed-on records,
 		// two observed union records, sixteen records a callee keeps, which its caller then
 		// shares, twenty records pushed in pairs, one rejected context literal, four kept
-		// spans and one position charCodeAt coerces. Returns of other values and records
-		// passed to record parameters never create one.
-		expect(counter("record_materializations")).toBe(60);
+		// spans, one position charCodeAt coerces and one kept integer record. Other values
+		// and records passed to record parameters never create one.
+		expect(counter("record_materializations")).toBe(61);
 	});
 
 	for (const [backend, binary] of [
