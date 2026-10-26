@@ -292,6 +292,11 @@ String-represented registers retain boxed words; a pointer view decodes the word
 at consumption. Planned String lengths also reach delayed expression rendering.
 String-length plans include immediate and joined literal operands of SameValue;
 mutable calls consume them only after the loaded callee matches the builtin.
+Normal-return identity also replaces general call-result uses when the source
+preserves the result's kind, range and representation contract. Scalar boxing and
+integer widening use explicit moves after normal completion; stronger result
+facts and unsupported unboxing boundaries retain their original values. Calls,
+argument effects and exceptional completions remain at their original sites.
 Noncoercing comparisons can be delayed into expressions while their inputs remain
 available; boxed leaves stay materialized before call and field-store preludes.
 Loose equality keeps its coercion semantics and ordinary fallback.

@@ -28,6 +28,76 @@ function forwarded(
 }
 
 describe("Core identity observations", () => {
+	it("reports identity applications independently of kind publication", () => {
+		const out = inspectStaticValueFunction(
+			"const leaf=function leaf(value,hook){try{hook();return value;}catch(error){throw error;}};function compute(input,gate){const result=leaf(input,gate);return result.value;}globalThis.leaf=leaf;globalThis.compute=compute;",
+			"compute",
+			{ counters: true },
+		);
+		expect(out.coreReport!.transforms.callResultIdentities).toBeGreaterThan(0);
+	});
+	it.each([
+		"return result.value;",
+		"return result[other];",
+		"return other(result);",
+		"return result(other);",
+		"return result+other;",
+	])(
+		"forwards a normal result into %s while retaining invocation effects",
+		(consumer) => {
+			const out = forwarded(`const result=leaf(input,gate);gate();${consumer}`);
+			const producer = out.core.find(
+				(op) => op.opcode === "call" && op.inputs.length === 4,
+			)!;
+			expect(producer).toBeDefined();
+			expect(out.core.some((op) => op.inputs.includes(producer.outputs[0]!))).toBe(false);
+			expect(out.core.filter((op) => op.opcode === "call").length).toBeGreaterThanOrEqual(
+				2,
+			);
+		},
+	);
+	it.each(["+input", "input|0", "!!input", "':' + input"])(
+		"preserves representation boundaries while forwarding %s into a call",
+		(expression) => {
+			const out = forwarded(
+				`const value=${expression};const result=leaf(value,gate);gate();return other(result);`,
+			);
+			const producer = out.core.find(
+				(op) => op.opcode === "call" && op.inputs.length === 4,
+			)!;
+			expect(producer).toBeDefined();
+			expect(out.core.some((op) => op.inputs.includes(producer.outputs[0]!))).toBe(false);
+		},
+	);
+	it.each([
+		"const first=leaf(input,gate);const result=leaf(first,gate);return result.value;",
+		"const result=other?leaf(input,gate):leaf(input,gate);return result.value;",
+		"let result=input;for(let i=0;i<2;i++)result=leaf(result,gate);return result.value;",
+		"const result=leaf(input,...other);return result.value;",
+	])("carries normal identities into general uses through %s", (body) => {
+		const out = forwarded(body);
+		for (const call of out.core.filter(
+			(op) => op.opcode === "call" || op.opcode === "callSpreadIterable",
+		))
+			expect(out.core.some((op) => op.inputs.includes(call.outputs[0]!))).toBe(false);
+	});
+	it.each([true, false])(
+		"requires every target to forward one identity for ordinary uses (same=%s)",
+		(same) => {
+			const out = forwarded(
+				`const callee=other?leaf:second;const result=callee(input,${same ? "input" : "other"},gate);return result.value;`,
+				{
+					leaf: "function leaf(value,ignored,hook){try{hook();return value;}catch(error){throw error;}}",
+					preamble:
+						"const second=function second(ignored,value,hook){try{hook();return value;}catch(error){throw error;}};",
+				},
+			);
+			const call = out.core.find((op) => op.opcode === "call" && op.inputs.length === 5)!;
+			const load = out.core.find((op) => op.opcode === "loadPropertyStatic")!;
+			expect(load.inputs[0] === call.outputs[0]).toBe(!same);
+		},
+	);
+
 	it("folds disjoint normal-return intervals without removing the effectful call", () => {
 		const out = forwarded(
 			"const result=leaf(input,gate);return Object.is(result,(other&255)+1024);",

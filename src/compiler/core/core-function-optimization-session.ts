@@ -41,7 +41,7 @@ export type CoreFunctionOptimizationPhaseRunner = <Result>(
 	run: () => Result,
 ) => Result;
 
-export type CoreCrossCallSession = number | "call-result-kinds" | "capture-liveness";
+export type CoreCrossCallSession = number | "call-result-facts" | "capture-liveness";
 
 export interface CoreFunctionOptimizationSessionOptions {
 	readonly verification?: CoreVerificationProfile;

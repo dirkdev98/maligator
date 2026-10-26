@@ -149,6 +149,32 @@ function identityText(value, callback) {
 	collectGarbage();
 	return result.length;
 }
+function forwardedProperty(value, callback) {
+	const result = identity(value, callback);
+	collectGarbage();
+	return result.value;
+}
+function forwardedIndex(value, key, callback) {
+	const result = identity(value, callback);
+	collectGarbage();
+	return result[key];
+}
+function forwardedInvocation(value, callback) {
+	const result = identity(value, callback);
+	collectGarbage();
+	return result("argument");
+}
+function forwardedArgument(value, callback, consume) {
+	const result = identity(value, callback);
+	collectGarbage();
+	return consume(result);
+}
+function* forwardedSuspension(value, callback) {
+	const result = identity(value, callback);
+	yield 0;
+	collectGarbage();
+	return result.value;
+}
 function identityPrefix(value, iterable) {
 	const result = identity((value & 255) + 1, ...iterable);
 	collectGarbage();
@@ -321,6 +347,11 @@ globalThis.identitySame = identitySame;
 globalThis.identityDisjoint = identityDisjoint;
 globalThis.partialEquality = partialEquality;
 globalThis.literalEquality = literalEquality;
+globalThis.forwardedProperty = forwardedProperty;
+globalThis.forwardedIndex = forwardedIndex;
+globalThis.forwardedInvocation = forwardedInvocation;
+globalThis.forwardedArgument = forwardedArgument;
+globalThis.forwardedSuspension = forwardedSuspension;
 globalThis.looseEquality = looseEquality;
 globalThis.identityEquality = identityEquality;
 globalThis.identityStrict = identityStrict;
@@ -480,6 +511,62 @@ for (const text of ["x".repeat(256), "😀é\0".repeat(64)]) {
 	const other = (":" + text + "z").slice(0, -1);
 	console.log(capture(() => partialEquality(text, other)));
 }
+const forwardedObject = { value: "old", extra: "indexed" };
+console.log(
+	capture(() =>
+		forwardedProperty(forwardedObject, () => {
+			forwardedObject.value = "new";
+			collectGarbage();
+		}),
+	),
+);
+console.log(capture(() => forwardedIndex(forwardedObject, "extra", collectGarbage)));
+console.log(
+	capture(() =>
+		forwardedInvocation((value) => {
+			collectGarbage();
+			return "called:" + value;
+		}, collectGarbage),
+	),
+);
+console.log(
+	capture(() =>
+		forwardedArgument({ value: "argument" }, collectGarbage, (value) => {
+			collectGarbage();
+			return value.value;
+		}),
+	),
+);
+console.log(
+	capture(() => {
+		const iterator = forwardedSuspension(forwardedObject, collectGarbage);
+		iterator.next();
+		forwardedObject.value = "resumed";
+		collectGarbage();
+		return iterator.next().value;
+	}),
+);
+console.log(
+	capture(() =>
+		forwardedProperty(
+			{
+				get value() {
+					collectGarbage();
+					throw failure;
+				},
+			},
+			collectGarbage,
+		),
+	),
+);
+console.log(
+	capture(() =>
+		forwardedProperty(null, () => {
+			throw failure;
+		}),
+	),
+);
+console.log(capture(() => forwardedProperty(null, collectGarbage)));
 for (const value of [
 	"ready",
 	"other",

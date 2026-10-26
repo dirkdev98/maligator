@@ -138,6 +138,7 @@ export interface CoreCrossCallTransformStatistics
 	readonly valueKindFunctionEvaluations: number;
 	readonly valueKindFolds: number;
 	readonly callResultKindFacts: number;
+	readonly callResultIdentities: number;
 	readonly wildcardAggregateRecomputations: number;
 	readonly exactReverseCallerVisits: number;
 	readonly wildcardReverseCallerVisits: number;
@@ -4047,6 +4048,7 @@ export function emptyCoreCrossCallTransformResult(
 			valueKindFunctionEvaluations: 0,
 			valueKindFolds: 0,
 			callResultKindFacts: 0,
+			callResultIdentities: 0,
 			wildcardAggregateRecomputations: 0,
 			exactReverseCallerVisits: 0,
 			wildcardReverseCallerVisits: 0,
@@ -4069,17 +4071,14 @@ function forwardedCallResultValue(
 	return undefined;
 }
 
-function discoverProgramValueKindObservations(
+function createProgramValueIdentityQuery(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
 	flow: CoreProgramFlowState,
-	readValueKinds: () => CoreProgramValueKinds,
-): ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreValueKindFold>> {
-	const foldsByCaller = new Map<CoreFunctionId, ReadonlyArray<CoreValueKindFold>>();
-	const pending = new Map<CoreFunctionId, Array<CoreInstructionId>>();
+): (functionId: CoreFunctionId, value: CoreValueId) => CoreValueId {
 	const identities = new Map<CoreFunctionId, ReadonlyMap<CoreValueId, CoreValueId>>();
 	const noIdentities = new Map<CoreValueId, CoreValueId>();
-	const identity = (functionId: CoreFunctionId, value: CoreValueId): CoreValueId => {
+	return (functionId, value) => {
 		const fn = program.function(functionId);
 		if (fn.kernel.valueDefinitionKind(value) === 1) {
 			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
@@ -4130,6 +4129,17 @@ function discoverProgramValueKindObservations(
 		}
 		return roots.get(value) ?? value;
 	};
+}
+
+function discoverProgramValueKindObservations(
+	program: CoreProgram,
+	analyses: CoreAnalysisManager,
+	flow: CoreProgramFlowState,
+	readValueKinds: () => CoreProgramValueKinds,
+): ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreValueKindFold>> {
+	const foldsByCaller = new Map<CoreFunctionId, ReadonlyArray<CoreValueKindFold>>();
+	const pending = new Map<CoreFunctionId, Array<CoreInstructionId>>();
+	const identity = createProgramValueIdentityQuery(program, analyses, flow);
 	const integerRange = (
 		functionId: CoreFunctionId,
 		value: CoreValueId,
@@ -4515,6 +4525,86 @@ function discoverProgramCallResultKinds(
 	return results;
 }
 
+function discoverProgramCallResultIdentities(
+	program: CoreProgram,
+	analyses: CoreAnalysisManager,
+	flow: CoreProgramFlowState,
+	callFacts: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreCallResultFact>>,
+): ReadonlyMap<CoreFunctionId, ReadonlyMap<CoreValueId, CoreValueId>> {
+	const results = new Map<CoreFunctionId, ReadonlyMap<CoreValueId, CoreValueId>>();
+	const identity = createProgramValueIdentityQuery(program, analyses, flow);
+	for (const functionId of flow.reachability.liveFunctions) {
+		const fn = program.function(functionId);
+		const facts = new Map(
+			callFacts.get(functionId)?.map((fact) => [fact.instruction, fact]),
+		);
+		const replacements = new Map<CoreValueId, CoreValueId>();
+		let kind: ReturnType<typeof coreValueKindDemand> | undefined;
+		for (const site of flow.targets.outgoing(functionId)) {
+			const instruction = site.instruction;
+			if (
+				site.transfer.result !== "call-completion" ||
+				fn.kernel.instructionResultCount(instruction) !== 1
+			)
+				continue;
+			const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+			if (fn.valueUseCount(value) === 0 && fn.kernel.valueFirstHandlerUse(value) < 0)
+				continue;
+			const root = identity(functionId, value);
+			const source = fn.valueRepresentation(root);
+			const destination = fn.valueRepresentation(value);
+			if (
+				root === value ||
+				!(
+					source === destination ||
+					(destination === "boxed" &&
+						["i32", "f64", "boolean", "string"].includes(source)) ||
+					(source === "i32" && destination === "f64")
+				)
+			)
+				continue;
+			// Normal completion can refine a forwarded value; its stronger result facts must survive.
+			const fact = facts.get(instruction);
+			const attributes = fn.instructionAttributes(instruction);
+			const mask = fact?.mask ?? attributes[CORE_CALL_RESULT_KIND_ATTRIBUTE];
+			if (typeof mask === "number") {
+				kind ??= coreValueKindDemand(
+					fn,
+					() =>
+						analyses
+							.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+								scope: "function",
+								function: functionId,
+							})
+							.exceptional(),
+					flow.targets,
+					true,
+				);
+				if (!compilerValueKindMaskIsSubset(kind(root) ?? COMPILER_VALUE_KIND_TOP, mask))
+					continue;
+			}
+			const bound =
+				fact === undefined
+					? attributes[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE]
+					: fact.integerRange;
+			if (compilerIntegerRangeIsValid(bound)) {
+				const range = analyses
+					.get(CORE_LOOP_INDUCTION_ANALYSIS, { scope: "function", function: functionId })
+					.range(root, fn.instructionBlock(instruction));
+				if (
+					range === undefined ||
+					range.minimum < bound.minimum ||
+					range.maximum > bound.maximum
+				)
+					continue;
+			}
+			replacements.set(value, root);
+		}
+		if (replacements.size > 0) results.set(functionId, replacements);
+	}
+	return results;
+}
+
 export function runCoreCrossCallTransforms(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
@@ -4570,6 +4660,7 @@ export function runCoreCrossCallTransforms(
 	let programFlowResolves = 1;
 	let valueKindFolds = 0;
 	let callResultKindFacts = 0;
+	let callResultIdentities = 0;
 	const localPlanInputs = new Map<CoreFunctionId, CoreLocalOptimizationPlanInput>();
 	// Clones are new functions rather than growth of their callers, so they draw on a budget of their own.
 	// Each clone is charged to the function it copies; the variant cap bounds that per function.
@@ -4861,12 +4952,23 @@ export function runCoreCrossCallTransforms(
 		flow,
 		readValueKinds,
 	);
-	if (callKindsByCaller.size > 0) {
+	const callIdentitiesByCaller = discoverProgramCallResultIdentities(
+		program,
+		analyses,
+		flow,
+		callKindsByCaller,
+	);
+	if (callKindsByCaller.size > 0 || callIdentitiesByCaller.size > 0) {
 		const finishCallers: Array<() => CoreCrossCallFunctionOptimizationResult> = [];
-		for (const [functionId, calls] of callKindsByCaller) {
+		for (const functionId of new Set([
+			...callKindsByCaller.keys(),
+			...callIdentitiesByCaller.keys(),
+		])) {
 			const fn = program.function(functionId);
 			const editor = CoreEditor.open(program, functionId);
-			for (const { instruction, mask, integerRange } of calls) {
+			for (const { instruction, mask, integerRange } of callKindsByCaller.get(
+				functionId,
+			) ?? []) {
 				if (!fn.isInstructionLive(instruction)) continue;
 				const opcode = fn.instructionOpcodeName(instruction);
 				if (
@@ -4897,9 +4999,35 @@ export function runCoreCrossCallTransforms(
 				);
 				callResultKindFacts++;
 			}
+			const identities = callIdentitiesByCaller.get(functionId);
+			if (identities !== undefined) {
+				const replacements = new Map<CoreValueId, CoreValueId>();
+				for (const [value, root] of identities) {
+					const representation = fn.valueRepresentation(value);
+					let replacement = root;
+					if (fn.valueRepresentation(root) !== representation) {
+						const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+						const next = fn.kernel.instructionNext(instruction);
+						replacement = editor.insertInstruction(
+							fn.instructionBlock(instruction),
+							next < 0 ? undefined : coreInstructionId(next),
+							"move",
+							[root],
+							{
+								outputRepresentations: [representation],
+								sourcePosition: fn.instructionSourcePosition(instruction),
+							},
+						).outputs[0]!;
+						instructionsIntroduced++;
+					}
+					replacements.set(value, replacement);
+				}
+				editor.replaceValueUsesMany(replacements);
+				callResultIdentities += identities.size;
+			}
 			callerEditSessions++;
 			callerLocalOptimizations++;
-			finishCallers.push(prepareCaller("call-result-kinds", functionId, editor));
+			finishCallers.push(prepareCaller("call-result-facts", functionId, editor));
 		}
 		for (const finish of finishCallers) {
 			const optimized = finish();
@@ -4930,6 +5058,7 @@ export function runCoreCrossCallTransforms(
 			valueKindFunctionEvaluations,
 			valueKindFolds,
 			callResultKindFacts,
+			callResultIdentities,
 			wildcardAggregateRecomputations,
 			exactReverseCallerVisits,
 			wildcardReverseCallerVisits,

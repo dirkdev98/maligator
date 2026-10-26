@@ -236,6 +236,7 @@ export interface CoreTransformWorkReport {
 	readonly valueKindFunctionEvaluations: number;
 	readonly valueKindFolds: number;
 	readonly callResultKindFacts: number;
+	readonly callResultIdentities: number;
 	readonly wildcardAggregateRecomputations: number;
 	readonly exactReverseCallerVisits: number;
 	readonly wildcardReverseCallerVisits: number;
@@ -598,6 +599,7 @@ export class CoreOptimizationReportBuilder {
 		valueKindFunctionEvaluations: 0,
 		valueKindFolds: 0,
 		callResultKindFacts: 0,
+		callResultIdentities: 0,
 		wildcardAggregateRecomputations: 0,
 		exactReverseCallerVisits: 0,
 		wildcardReverseCallerVisits: 0,

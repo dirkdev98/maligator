@@ -120,8 +120,12 @@ The independent target boundary and current storage contract are recorded in
       intermediate Number result storage still forces some round trips.
       Identity observations now use forwarded normal returns through chains and
       phi components, including observation-argument sharing and NaN-aware equality
-      emission. Carry identity into other static-value consumers and compatible
-      liveness/storage contracts. Mutable Object.is now consumes operand identity,
+      emission. Compatible normal-return identities now reach general consumers,
+      retaining stronger result facts and explicit scalar boxing/widening boundaries.
+      Carry those identities into remaining storage and liveness contracts: dead
+      call outputs still retain poll publication, and forwarding chains can extend
+      input lifetimes enough to grow native root staging.
+      Mutable Object.is now consumes operand identity,
       kinds and scalar views behind a loaded-callee guard, including frameless hits;
       its miss retains arbitrary results, throwing and root publication.
       SameValue also consumes each operand's interval, preserving only the NaN and
