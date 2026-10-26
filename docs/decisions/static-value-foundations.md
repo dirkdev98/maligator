@@ -301,6 +301,11 @@ Unobserved final call outputs need no native root or post-call publication. Ever
 definition must return its final value before assigning that destination; source
 GC maps remain complete, and borrowed helper storage, rest-call state and reused
 inputs keep their roots. Scheduling barriers alone do not extend result lifetimes.
+Typeof comparisons consume the operand kind independently of effects and use direct
+category predicates. An object comparison on a primitive union can only match
+through null; an Object-or-null union needs only the callability test, while other
+unions without null skip its branch. Arrays and callable proxies retain their
+categories. Full, frameless and resumable bodies share that decision.
 Noncoercing comparisons can be delayed into expressions while their inputs remain
 available; boxed leaves stay materialized before call and field-store preludes.
 Loose equality keeps its coercion semantics and ordinary fallback.

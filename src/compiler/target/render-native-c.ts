@@ -12,7 +12,6 @@ import {
 	DATA_VIEW_ACCESSOR_TYPES,
 } from "../shared/builtin-registry.ts";
 import {
-	compilerTypeofComparison,
 	compilerComparisonInputKindsAvoidObjectCoercion,
 	compilerValueKindTruthiness,
 	COMPILER_VALUE_KIND_NUMBER,
@@ -63,7 +62,6 @@ import { bytecodeLoopInstructions } from "./bytecode-loops.ts";
 import {
 	emitBinaryOperator,
 	emitIntrinsic,
-	emitTypeofResult,
 	emitUnaryOperator,
 } from "./emit-program-image.ts";
 import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
@@ -134,6 +132,7 @@ import {
 	nativeUnsignedRemainderExpression,
 	nativeReflexiveEqualityExpression,
 	nativeEqualityExpression,
+	nativeTypeofComparisonExpression,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -12239,20 +12238,20 @@ function emitInstruction(
 		}
 		case "TYPEOF_COMPARE": {
 			const { dst, src, expected, negated } = instruction;
-			const proven = compilerTypeofComparison(
+			const expression = nativeTypeofComparisonExpression(
+				boxed(src),
 				operandKind(src) ?? COMPILER_VALUE_KIND_TOP,
 				expected,
 			);
-			if (proven !== undefined) {
-				const value = proven !== negated;
+			if (expression === "true" || expression === "false") {
+				const value = (expression === "true") !== negated;
 				return [
 					reps[dst] === "boolean"
 						? `r${dst} = ${value ? "true" : "false"};`
 						: `r${dst} = MAL_VALUE_${value ? "TRUE" : "FALSE"};`,
 				];
 			}
-			const predicate = `mal_vm_typeof_compare(${boxed(src)}, ${emitTypeofResult(expected)})`;
-			const result = negated ? `!(${predicate})` : predicate;
+			const result = negated ? `!(${expression})` : expression;
 			return [
 				reps[dst] === "boolean"
 					? `r${dst} = ${result};`

@@ -135,6 +135,10 @@ The independent target boundary and current storage contract are recorded in
       noncoercing comparisons can form expressions within their root-safe windows.
       Immediate and joined literal lengths also select SameValue String kernels
       across full, delayed, frameless and resumable paths, including guarded hits.
+      Typeof comparisons now share direct category predicates and partial kind
+      consumers in full and frameless bodies: nullable primitive unions need only
+      a null test, nullable Object unions need only a callability test, and other
+      unions without null skip its branch, including after suspension.
 - [ ] Give record entries typed fields. Record entries return fields boxed, so a
       caller's `token.end` stays boxed, `index = token.end + 1` gives the producer a
       boxed parameter, and the scanning loop in `returned-records` runs generic

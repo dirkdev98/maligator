@@ -1,5 +1,4 @@
 import {
-	compilerTypeofComparison,
 	compilerValueKindTruthiness,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_UNDEFINED,
@@ -21,7 +20,7 @@ import {
 	compilerIntegerRangeComparison,
 	compilerIntegerRangeTruthiness,
 } from "../shared/integer-range.ts";
-import { emitIntrinsic, emitTypeofResult } from "./emit-program-image.ts";
+import { emitIntrinsic } from "./emit-program-image.ts";
 import type { NativeControlFlowPlan } from "./native-control-flow.ts";
 import {
 	nativeBinaryNumberInputs,
@@ -29,6 +28,7 @@ import {
 	nativeUnsignedRemainderExpression,
 	nativeReflexiveEqualityExpression,
 	nativeEqualityExpression,
+	nativeTypeofComparisonExpression,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -840,10 +840,14 @@ function fastInstruction(
 		case "UNARY":
 			return fastUnary(op, values);
 		case "TYPEOF_COMPARE": {
-			const result = compilerTypeofComparison(values.kind(op.src), op.expected);
-			if (result !== undefined)
-				return `f${op.dst} = ${result !== op.negated ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
-			return `f${op.dst} = mal_value_new_boolean(${op.negated ? "!" : ""}mal_vm_typeof_compare(f${op.src}, ${emitTypeofResult(op.expected)}));`;
+			const expression = nativeTypeofComparisonExpression(
+				`f${op.src}`,
+				values.kind(op.src),
+				op.expected,
+			);
+			if (expression === "true" || expression === "false")
+				return `f${op.dst} = ${(expression === "true") !== op.negated ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
+			return `f${op.dst} = mal_value_new_boolean(${op.negated ? `!(${expression})` : expression});`;
 		}
 		case "JUMP":
 			return op.targetIp === ip + 1 ? "" : jump(op.targetIp);

@@ -1,3 +1,4 @@
+import type { CompilerTypeofResult } from "../shared/compiler-instruction.ts";
 import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 	COMPILER_VALUE_KIND_NULL,
@@ -5,15 +6,47 @@ import {
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 	COMPILER_NUMERIC_BINARY_OPERATORS,
 	compilerValueKindMaskIsSubset,
 	compilerNumberFastPathInputKind,
+	compilerTypeofComparison,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { compilerIntegerRangeComparison } from "../shared/integer-range.ts";
+
+export function nativeTypeofComparisonExpression(
+	value: string,
+	kind: CompilerValueKindMask,
+	expected: CompilerTypeofResult,
+): string {
+	const constant = compilerTypeofComparison(kind, expected);
+	if (constant !== undefined) return constant ? "true" : "false";
+	if (expected !== "object") {
+		const predicate =
+			expected === "number"
+				? "mal_ops_is_number"
+				: expected === "function"
+					? "mal_value_is_callable"
+					: `mal_value_is_${expected}`;
+		return `${predicate}(${value})`;
+	}
+	if ((kind & COMPILER_VALUE_KIND_OBJECT) === 0) return `mal_value_is_null(${value})`;
+	// Object kinds include callable objects and arrays; null also fails IsCallable.
+	if (
+		compilerValueKindMaskIsSubset(
+			kind,
+			COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_NULL,
+		)
+	)
+		return `!mal_value_is_callable(${value})`;
+	if ((kind & COMPILER_VALUE_KIND_NULL) === 0)
+		return `(mal_value_is_object(${value}) && !mal_value_is_callable(${value}))`;
+	return `mal_vm_typeof_compare(${value}, MAL_TYPEOF_OBJECT)`;
+}
 
 // Scalar views are noncoercing Number/Boolean/String reads; integer pairs exclude negative zero.
 export function nativeEqualityExpression(

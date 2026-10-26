@@ -233,7 +233,7 @@ describe("independent native instruction facts", () => {
 				.map((op) => op.operation),
 		).toEqual(expect.arrayContaining(["String", "Symbol"]));
 		expect(out.c.source).not.toContain("mal_ops_is_number(");
-		expect(out.c.source).toContain("mal_vm_typeof_compare(");
+		expect(out.c.source).toContain("mal_value_is_string(");
 	});
 
 	it("does not treat immediate placeholders as register identities", () => {

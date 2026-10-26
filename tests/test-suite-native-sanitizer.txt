@@ -175,6 +175,7 @@ tests/native/process-memory-usage-fast.test.ts
 tests/native/worker-math-cache.test.ts
 tests/native/guarded-math-number.test.ts
 tests/native/operand-truthiness-facts.test.ts
+tests/native/typeof-operand-facts.test.ts
 tests/native/guarded-call-roots.test.ts
 tests/native/operator-completion-effects.test.ts
 tests/native/proven-string-comparisons.test.ts

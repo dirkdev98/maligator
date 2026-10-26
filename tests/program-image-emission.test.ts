@@ -965,7 +965,7 @@ describe("emit-program-image instruction packing", () => {
 		const output = emitProgramImage(definition);
 		expect(output).toContain("mal_vm_op_create_private_names(vm, env, 0, 2");
 		expect(output).toContain("mal_vm_op_init_private_fields(vm, r6, 2");
-		expect(output).toContain("mal_vm_typeof_compare(r6, MAL_TYPEOF_NUMBER)");
+		expect(output).toContain("mal_ops_is_number(r6)");
 	});
 
 	it("splits compiled functions into bounded external translation units", () => {
@@ -5465,15 +5465,15 @@ describe("native static typeof facts", () => {
 		expect(output).not.toContain("MAL_TYPEOF_BOOLEAN");
 	});
 
-	it("retains generic typeof classification for an unknown boxed value", () => {
+	it("checks the Number category of an unknown boxed value", () => {
 		const output = emit(`
 			"use strict";
 			function classify(value) { return typeof value === "number"; }
 			globalThis.classify = classify;
 		`);
 
-		expect(output).toContain("mal_vm_typeof_compare");
-		expect(output).toContain("MAL_TYPEOF_NUMBER");
+		expect(output).toContain("mal_ops_is_number(");
+		expect(output).not.toContain("mal_vm_typeof_compare");
 	});
 
 	it("keeps source typeof narrowing local without inventing a numeric ABI", () => {
@@ -5487,9 +5487,7 @@ describe("native static typeof facts", () => {
 		`);
 
 		expect(output).toMatch(boxedNativeDefinition(1, "static"));
-		expect(withoutNativeFastEntries(output).match(/mal_vm_typeof_compare/g)).toHaveLength(
-			1,
-		);
+		expect(withoutNativeFastEntries(output)).toContain("mal_ops_is_number(");
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_MUL");
 	});
 });
