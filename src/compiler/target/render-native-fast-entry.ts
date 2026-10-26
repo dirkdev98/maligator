@@ -237,12 +237,13 @@ export function renderNativeFastEntry(
 	if (targets.has(fn.instructions.length)) lines.push(`F${fn.instructions.length}:;`);
 	lines.push(`    ${fastReturn("MAL_VALUE_UNDEFINED", result, exported)}`);
 
+	// Register identifiers share C's namespace with runtime typedefs such as f32 and f64.
 	const locals = [...registers].sort((left, right) => left - right);
 	const fast = [
 		...input.prologue,
 		...(locals.length === 0
 			? []
-			: [`    MalValue ${locals.map((r) => `f${r}`).join(", ")};`]),
+			: [`    MalValue ${locals.map((r) => `__fast_r${r}`).join(", ")};`]),
 		"    if (!mal_vm_leaf_unobserved(vm) || !mal_vm_leaf_stack_available(vm)) goto __full;",
 		...(loadsProperties
 			? [
@@ -253,10 +254,10 @@ export function renderNativeFastEntry(
 		...(loadsCaptures ? input.capturePrologue.map((line) => `    ${line}`) : []),
 		...locals.flatMap((register) =>
 			register < fn.parameterCount
-				? [`    f${register} = ${fastParameter(register, directEntry)};`]
+				? [`    __fast_r${register} = ${fastParameter(register, directEntry)};`]
 				: initialized.has(register)
 					? []
-					: [`    f${register} = MAL_VALUE_UNDEFINED;`],
+					: [`    __fast_r${register} = MAL_VALUE_UNDEFINED;`],
 		),
 		...lines,
 	];
@@ -522,14 +523,14 @@ function numbers(values: FastNumbers, ...registers: ReadonlyArray<number>): stri
 				!values.constants.has(register) &&
 				values.kind(register) !== COMPILER_VALUE_KIND_NUMBER,
 		)
-		.map((register) => `!mal_ops_is_number(f${register})`);
+		.map((register) => `!mal_ops_is_number(__fast_r${register})`);
 	return checks.length === 0 ? "false" : checks.join(" || ");
 }
 
 function number(values: FastNumbers, register: number): string {
 	const constant = values.constants.get(register);
 	return constant === undefined
-		? `mal_ops_number_as_f64(f${register})`
+		? `mal_ops_number_as_f64(__fast_r${register})`
 		: values.literal(constant);
 }
 
@@ -558,7 +559,7 @@ function int32(values: FastNumbers, register: number): string {
 	return constant === undefined
 		? values.isInt32(register)
 			? `((i32) ${number(values, register)})`
-			: `mal_ops_number_value_to_i32(f${register})`
+			: `mal_ops_number_value_to_i32(__fast_r${register})`
 		: `((i32) ${constant | 0})`;
 }
 
@@ -575,7 +576,7 @@ function exactInteger(values: FastNumbers, register: number): string | undefined
 }
 
 function storeNumber(values: FastNumbers, dst: number, expression: string): string {
-	return `f${dst} = ${values.resultIsInt32(dst) ? `mal_value_from_i32((i32) (${expression}))` : `mal_ops_number_value(${expression})`};`;
+	return `__fast_r${dst} = ${values.resultIsInt32(dst) ? `mal_value_from_i32((i32) (${expression}))` : `mal_ops_number_value(${expression})`};`;
 }
 
 const NUMBER_COMPARISONS: ReadonlySet<string> = new Set(["<", "<=", ">", ">="]);
@@ -593,44 +594,44 @@ function fastBinary(
 		values.range(right),
 	);
 	if (compared !== undefined)
-		return `f${dst} = ${compared ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
+		return `__fast_r${dst} = ${compared ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
 	if (left === right) {
 		const expression = nativeReflexiveEqualityExpression(
 			operator,
-			`f${left}`,
+			`__fast_r${left}`,
 			values.kind(left) === COMPILER_VALUE_KIND_NUMBER ? number(values, left) : undefined,
 			values.kind(left),
 			values.isInt32(left) || values.range(left) !== undefined,
 		);
 		if (expression !== undefined)
-			return `f${dst} = mal_value_new_boolean(${expression});`;
+			return `__fast_r${dst} = mal_value_new_boolean(${expression});`;
 	}
 	if (operator === "===" || operator === "!==") {
 		const equal =
 			nativeStringComparisonExpression(
 				values.stringComparison,
 				left,
-				`f${left}`,
-				`f${right}`,
+				`__fast_r${left}`,
+				`__fast_r${right}`,
 			) ??
 			nativeEqualityExpression(
 				"strict",
-				`f${left}`,
-				`f${right}`,
+				`__fast_r${left}`,
+				`__fast_r${right}`,
 				values.kind(left),
 				values.kind(right),
-				equalityScalar(values, left, `f${left}`),
-				equalityScalar(values, right, `f${right}`),
+				equalityScalar(values, left, `__fast_r${left}`),
+				equalityScalar(values, right, `__fast_r${right}`),
 				values.isInt32(left) && values.isInt32(right),
 				values.range(left),
 				values.range(right),
 			);
-		return `f${dst} = mal_value_new_boolean(${operator === "!==" ? `!(${equal})` : equal});`;
+		return `__fast_r${dst} = mal_value_new_boolean(${operator === "!==" ? `!(${equal})` : equal});`;
 	}
 	if (operator === "==" || operator === "!=") {
 		const numberFailure = numbers(values, left, right);
 		const not = operator === "!=" ? "!" : "";
-		const numeric = `f${dst} = mal_value_new_boolean(${not}(${number(values, left)} == ${number(values, right)}));`;
+		const numeric = `__fast_r${dst} = mal_value_new_boolean(${not}(${number(values, left)} == ${number(values, right)}));`;
 		if (numberFailure === "false") return numeric;
 		const nullish =
 			(values.kind(left) | values.kind(right)) & COMPILER_VALUE_KIND_NULLISH;
@@ -638,7 +639,7 @@ function fastBinary(
 		const fallback =
 			nullish === 0
 				? "goto __full;"
-				: `if (mal_value_is_nil(f${left}) || mal_value_is_nil(f${right})) f${dst} = mal_value_new_boolean(${not}(mal_value_is_nil(f${left}) && mal_value_is_nil(f${right}))); else goto __full;`;
+				: `if (mal_value_is_nil(__fast_r${left}) || mal_value_is_nil(__fast_r${right})) __fast_r${dst} = mal_value_new_boolean(${not}(mal_value_is_nil(__fast_r${left}) && mal_value_is_nil(__fast_r${right}))); else goto __full;`;
 		return numberFailure === "true"
 			? fallback
 			: `if (!(${numberFailure})) ${numeric} else ${fallback}`;
@@ -647,8 +648,8 @@ function fastBinary(
 		operator,
 		values.constants.has(left) ? COMPILER_VALUE_KIND_NUMBER : values.kind(left),
 		values.constants.has(right) ? COMPILER_VALUE_KIND_NUMBER : values.kind(right),
-		`f${left}`,
-		`f${right}`,
+		`__fast_r${left}`,
+		`__fast_r${right}`,
 	);
 	if (inputs === undefined) return undefined;
 	const mask = (register: number) => inputs.masks[register === left ? 0 : 1];
@@ -656,7 +657,7 @@ function fastBinary(
 	const numeric = (register: number) =>
 		mask(register) === COMPILER_VALUE_KIND_NUMBER
 			? number(values, register)
-			: nativePrimitiveNumberExpression(`f${register}`, mask(register));
+			: nativePrimitiveNumberExpression(`__fast_r${register}`, mask(register));
 	const integer = (register: number) =>
 		mask(register) === COMPILER_VALUE_KIND_NUMBER
 			? int32(values, register)
@@ -683,15 +684,15 @@ function fastBinary(
 			return `${guard} ${storeNumber(values, dst, expression)}`;
 	}
 	if (NUMBER_COMPARISONS.has(operator))
-		return `${guard} f${dst} = mal_value_new_boolean(${numeric(left)} ${operator} ${numeric(right)});`;
+		return `${guard} __fast_r${dst} = mal_value_new_boolean(${numeric(left)} ${operator} ${numeric(right)});`;
 	if (INT32_OPERATORS.has(operator))
-		return `${guard} f${dst} = mal_value_from_i32(${integer(left)} ${operator} ${integer(right)});`;
+		return `${guard} __fast_r${dst} = mal_value_from_i32(${integer(left)} ${operator} ${integer(right)});`;
 	if (operator === "<<")
-		return `${guard} f${dst} = mal_value_from_i32((i32) ((u32) ${integer(left)} << ((u32) ${integer(right)} & 31u)));`;
+		return `${guard} __fast_r${dst} = mal_value_from_i32((i32) ((u32) ${integer(left)} << ((u32) ${integer(right)} & 31u)));`;
 	if (operator === ">>")
-		return `${guard} f${dst} = mal_value_from_i32(${integer(left)} >> ((u32) ${integer(right)} & 31u));`;
+		return `${guard} __fast_r${dst} = mal_value_from_i32(${integer(left)} >> ((u32) ${integer(right)} & 31u));`;
 	if (operator === ">>>")
-		return `${guard} f${dst} = mal_ops_number_value((f64) ((u32) ${integer(left)} >> ((u32) ${integer(right)} & 31u)));`;
+		return `${guard} __fast_r${dst} = mal_ops_number_value((f64) ((u32) ${integer(left)} >> ((u32) ${integer(right)} & 31u)));`;
 	if (NUMBER_OPERATORS.has(operator))
 		return `${guard} ${storeNumber(values, dst, `${numeric(left)} ${operator} ${numeric(right)}`)}`;
 	if (operator === "%") {
@@ -705,7 +706,7 @@ function fastBinary(
 		return `${guard} ${storeNumber(values, dst, expression)}`;
 	}
 	if (operator === "**")
-		return `${guard} f${dst} = mal_ops_number_value(mal_number_exponentiate(${numeric(left)}, ${numeric(right)}));`;
+		return `${guard} __fast_r${dst} = mal_ops_number_value(mal_number_exponentiate(${numeric(left)}, ${numeric(right)}));`;
 	return undefined;
 }
 
@@ -723,7 +724,7 @@ function fastUnary(
 	const guard = numberFailure === "false" ? "" : `if (${numberFailure}) goto __full;`;
 	const converts = primitive && values.kind(src) !== COMPILER_VALUE_KIND_NUMBER;
 	const numeric = converts
-		? nativePrimitiveNumberExpression(`f${src}`, values.kind(src))
+		? nativePrimitiveNumberExpression(`__fast_r${src}`, values.kind(src))
 		: number(values, src);
 	if (values.resultIsInt32(dst)) {
 		const expression = nativeInt32UnaryExpression(operator, exactInteger(values, src));
@@ -736,18 +737,18 @@ function fastUnary(
 				compilerIntegerRangeTruthiness(values.range(src)) ??
 				compilerValueKindTruthiness(values.kind(src));
 			return constant === undefined
-				? `f${dst} = mal_value_new_boolean(!mal_value_is_truthy(f${src}));`
-				: `f${dst} = ${constant ? "MAL_VALUE_FALSE" : "MAL_VALUE_TRUE"};`;
+				? `__fast_r${dst} = mal_value_new_boolean(!mal_value_is_truthy(__fast_r${src}));`
+				: `__fast_r${dst} = ${constant ? "MAL_VALUE_FALSE" : "MAL_VALUE_TRUE"};`;
 		}
 		case "-":
 			return `${guard} ${storeNumber(values, dst, `-${numeric}`)}`;
 		case "+":
 		case "tonumeric":
 			return converts
-				? `f${dst} = mal_ops_number_value(${numeric});`
-				: `${guard} f${dst} = f${src};`;
+				? `__fast_r${dst} = mal_ops_number_value(${numeric});`
+				: `${guard} __fast_r${dst} = __fast_r${src};`;
 		case "~":
-			return `${guard} f${dst} = mal_value_from_i32(~${converts ? `mal_ops_number_to_i32(${numeric})` : int32(values, src)});`;
+			return `${guard} __fast_r${dst} = mal_value_from_i32(~${converts ? `mal_ops_number_to_i32(${numeric})` : int32(values, src)});`;
 		case "increment":
 			return `${guard} ${storeNumber(values, dst, `${numeric} + 1.0`)}`;
 		case "decrement":
@@ -809,7 +810,7 @@ function fastInstruction(
 		stringComparison,
 	};
 	const value = (operand: number): string | undefined => {
-		if (operand >= 0) return `f${operand}`;
+		if (operand >= 0) return `__fast_r${operand}`;
 		const decoded = decodeVmValueOperand(operand);
 		switch (decoded.kind) {
 			case "undefined":
@@ -834,49 +835,49 @@ function fastInstruction(
 
 	switch (op.opcode) {
 		case "MOVE":
-			return `f${op.dst} = f${op.src};`;
+			return `__fast_r${op.dst} = __fast_r${op.src};`;
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
-			return `f${op.dst} = mal_ops_number_value(${input.f64Literal(op.value)});`;
+			return `__fast_r${op.dst} = mal_ops_number_value(${input.f64Literal(op.value)});`;
 		case "CREATE_BOOLEAN":
-			return `f${op.dst} = ${op.value ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
+			return `__fast_r${op.dst} = ${op.value ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
 		case "CREATE_STRING":
-			return `f${op.dst} = ${input.stringValue(op.stringIndex)};`;
+			return `__fast_r${op.dst} = ${input.stringValue(op.stringIndex)};`;
 		case "CREATE_UNDEFINED":
-			return `f${op.dst} = MAL_VALUE_UNDEFINED;`;
+			return `__fast_r${op.dst} = MAL_VALUE_UNDEFINED;`;
 		case "CREATE_NULL":
-			return `f${op.dst} = MAL_VALUE_NULL;`;
+			return `__fast_r${op.dst} = MAL_VALUE_NULL;`;
 		case "LOAD_GLOBAL":
-			return `f${op.dst} = vm->globals[${input.globalIndex(op.index)}];`;
+			return `__fast_r${op.dst} = vm->globals[${input.globalIndex(op.index)}];`;
 		case "LOAD_GLOBAL_PROPERTY":
-			return `if (!mal_vm_global_data_property_cached(vm, ${input.stringIndex(op.nameStringIndex)}, &f${op.dst})) goto __full;`;
+			return `if (!mal_vm_global_data_property_cached(vm, ${input.stringIndex(op.nameStringIndex)}, &__fast_r${op.dst})) goto __full;`;
 		case "LOAD_INTRINSIC":
-			return `f${op.dst} = vm->intrinsics[${emitIntrinsic(op.intrinsic)}];`;
+			return `__fast_r${op.dst} = vm->intrinsics[${emitIntrinsic(op.intrinsic)}];`;
 		case "LOAD_CAPTURED":
-			return `f${op.dst} = ${input.capturedLoad(op.ownerFunctionIndex, op.index)};`;
+			return `__fast_r${op.dst} = ${input.capturedLoad(op.ownerFunctionIndex, op.index)};`;
 		case "THROW_IF_TDZ":
-			return `if (mal_value_is_empty(f${op.src})) goto __full;`;
+			return `if (mal_value_is_empty(__fast_r${op.src})) goto __full;`;
 		case "REQUIRE_COERCIBLE": {
 			const kind = values.kind(op.src);
 			if ((kind & COMPILER_VALUE_KIND_NULLISH) === 0) return "";
 			return compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_NULLISH)
 				? undefined
-				: `if (mal_value_is_nil(f${op.src})) goto __full;`;
+				: `if (mal_value_is_nil(__fast_r${op.src})) goto __full;`;
 		}
 		case "LOAD_THIS":
 			// A sloppy callee's receiver needs OrdinaryCallBindThis, which can allocate.
-			return input.fn.strict ? `f${op.dst} = this_value;` : undefined;
+			return input.fn.strict ? `__fast_r${op.dst} = this_value;` : undefined;
 		case "LOAD_PROPERTY_STATIC": {
 			const field = fieldLoads.get(ip);
 			if (field !== undefined) {
 				const representation =
 					input.directEntry!.fieldParameters!.representations[field]!;
-				return `f${op.dst} = ${boxed(representation, `fp${field}`)};`;
+				return `__fast_r${op.dst} = ${boxed(representation, `fp${field}`)};`;
 			}
 			const probe = input.lengthProperty(op.stringIndex)
 				? "mal_vm_property_try_load_length_static"
 				: "mal_vm_property_try_load_static";
-			return `if (!${probe}(vm, f${op.object}, &__fast_ic[${op.icIndex}], &f${op.dst})) goto __full;`;
+			return `if (!${probe}(vm, __fast_r${op.object}, &__fast_ic[${op.icIndex}], &__fast_r${op.dst})) goto __full;`;
 		}
 		case "LOAD_PROPERTY": {
 			const failure = numbers(values, op.key);
@@ -887,9 +888,9 @@ function fastInstruction(
 			const bound =
 				integral && (values.range(op.key)?.minimum ?? -1) < 0 ? `${index} < 0 || ` : "";
 			const probe = integral
-				? `mal_vm_array_try_get_proven_index(__array, (u32) ${index}, &f${op.dst})`
-				: `mal_vm_array_try_get_index(__array, ${index}, &f${op.dst})`;
-			return `{ MalArrayObject *const __array = mal_vm_as_array(f${op.object}); if (__array == nullptr || ${guard}${bound}!${probe}) goto __full; }`;
+				? `mal_vm_array_try_get_proven_index(__array, (u32) ${index}, &__fast_r${op.dst})`
+				: `mal_vm_array_try_get_index(__array, ${index}, &__fast_r${op.dst})`;
+			return `{ MalArrayObject *const __array = mal_vm_as_array(__fast_r${op.object}); if (__array == nullptr || ${guard}${bound}!${probe}) goto __full; }`;
 		}
 		case "BINARY":
 			return fastBinary(op, values);
@@ -901,13 +902,13 @@ function fastInstruction(
 			return fastMath(op.operation, [op.left, op.right], op.dst, values, value);
 		case "TYPEOF_COMPARE": {
 			const expression = nativeTypeofComparisonExpression(
-				`f${op.src}`,
+				`__fast_r${op.src}`,
 				values.kind(op.src),
 				op.expected,
 			);
 			if (expression === "true" || expression === "false")
-				return `f${op.dst} = ${(expression === "true") !== op.negated ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
-			return `f${op.dst} = mal_value_new_boolean(${op.negated ? `!(${expression})` : expression});`;
+				return `__fast_r${op.dst} = ${(expression === "true") !== op.negated ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
+			return `__fast_r${op.dst} = mal_value_new_boolean(${op.negated ? `!(${expression})` : expression});`;
 		}
 		case "JUMP":
 			return op.targetIp === ip + 1 ? "" : jump(op.targetIp);
@@ -919,8 +920,8 @@ function fastInstruction(
 				compilerValueKindTruthiness(values.kind(op.cond));
 			if (constant !== undefined) return constant ? target : "";
 			return integers.has(op.cond)
-				? `if (mal_ops_number_value_to_i32(f${op.cond}) != 0) ${target}`
-				: `if (mal_value_is_truthy(f${op.cond})) ${target}`;
+				? `if (mal_ops_number_value_to_i32(__fast_r${op.cond}) != 0) ${target}`
+				: `if (mal_value_is_truthy(__fast_r${op.cond})) ${target}`;
 		}
 		case "RETURN": {
 			const returned = value(op.value);
@@ -973,9 +974,10 @@ function fastInstruction(
 				);
 				return callee === undefined || expression === undefined
 					? undefined
-					: `if (!mal_builtin_object_is_callee_matches(${callee})) goto __full; f${op.dst} = mal_value_new_boolean(${expression});`;
+					: `if (!mal_builtin_object_is_callee_matches(${callee})) goto __full; __fast_r${op.dst} = mal_value_new_boolean(${expression});`;
 			}
-			const callee = op.callee < 0 ? undefined : input.calleeTry(ip, `f${op.callee}`);
+			const callee =
+				op.callee < 0 ? undefined : input.calleeTry(ip, `__fast_r${op.callee}`);
 			const receiver = value(op.thisValue);
 			const args = op.arguments.slice(0, op.argumentCount).map(value);
 			if (
@@ -987,7 +989,7 @@ function fastInstruction(
 				return undefined;
 			const list =
 				args.length === 0 ? "nullptr" : `(const MalValue[]){ ${args.join(", ")} }`;
-			return `if (!${callee.symbol}(vm, ${receiver}, ${list}, ${args.length}, ${callee.environment}, &f${op.dst})) goto __full;`;
+			return `if (!${callee.symbol}(vm, ${receiver}, ${list}, ${args.length}, ${callee.environment}, &__fast_r${op.dst})) goto __full;`;
 		}
 		case "CALL_KNOWN": {
 			if (
@@ -1015,7 +1017,7 @@ function fastInstruction(
 			const expression = fastSameValue(op.arguments, values, value);
 			return expression === undefined
 				? undefined
-				: `f${op.dst} = mal_value_new_boolean(${expression});`;
+				: `__fast_r${op.dst} = mal_value_new_boolean(${expression});`;
 		}
 		default:
 			return undefined;
@@ -1042,7 +1044,7 @@ function fastNumberPredicate(
 			: undefined,
 		input === undefined ? undefined : values.range(input),
 	);
-	return `f${dst} = mal_value_new_boolean(${expression});`;
+	return `__fast_r${dst} = mal_value_new_boolean(${expression});`;
 }
 
 function fastMath(

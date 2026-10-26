@@ -116,6 +116,38 @@ function body(
 const OWN_TRY = "mal_compiled_0_try";
 const LENGTH_STRING_INDEX = 7;
 
+describe("frameless C identifier hygiene", () => {
+	it.each([32, 64])("keeps scalar typedefs visible with register %s", (register) => {
+		const lines = fastEntry(
+			body(
+				[
+					{ opcode: "CREATE_NUMBER", dst: register, value: 1.5 },
+					{
+						opcode: "CALL_KNOWN",
+						operation: "Math.fround",
+						thisValue: 0,
+						arguments: [register],
+						argumentCount: 1,
+						dst: 2,
+					},
+					{ opcode: "RETURN", value: 2 },
+				],
+				{ registerCount: register + 1 },
+			),
+		);
+		expect(lines).toBeDefined();
+		expect(lines!.join("\n")).toContain("(f32)");
+		const declaration = lines!.find((line) => /^\s+MalValue\s+/.test(line))!;
+		expect(declaration).toBeDefined();
+		const identifiers = declaration
+			.replace(/^\s*MalValue\s+|;$/g, "")
+			.split(",")
+			.map((identifier) => identifier.trim());
+		for (const type of ["f32", "f64", "i32", "u32"])
+			expect(identifiers).not.toContain(type);
+	});
+});
+
 describe("frameless noncoercing Number predicates", () => {
 	it.each([
 		"Number.isNaN",
@@ -217,9 +249,9 @@ describe("frameless noncoercing Number predicates", () => {
 		);
 		expect(lines).toBeDefined();
 		expect(lines!.join("\n")).toContain(
-			"if (!mal_builtin_number_predicate_callee_matches(MAL_NUMBER_PREDICATE_IS_INTEGER, f4)) goto __full;",
+			"if (!mal_builtin_number_predicate_callee_matches(MAL_NUMBER_PREDICATE_IS_INTEGER, __fast_r4)) goto __full;",
 		);
-		expect(lines!.join("\n")).toContain("f2 = mal_value_new_boolean(false);");
+		expect(lines!.join("\n")).toContain("__fast_r2 = mal_value_new_boolean(false);");
 		expect(unexpectedHelpers(lines!)).toEqual([]);
 	});
 });
@@ -267,7 +299,7 @@ describe("frameless numeric builtin kernels", () => {
 					expect(lines!.join("\n")).not.toMatch(
 						/\b(?:floor|ceil|trunc|mal_number_round)\(/,
 					);
-					expect(lines!.join("\n")).not.toContain("mal_ops_is_number(f0)");
+					expect(lines!.join("\n")).not.toContain("mal_ops_is_number(__fast_r0)");
 				}
 			}
 		},
@@ -319,10 +351,10 @@ describe("frameless numeric builtin kernels", () => {
 		expect(lines).toBeDefined();
 		const code = lines!.join("\n");
 		expect(code).toContain(
-			"mal_builtin_math_binary_callee_matches(MAL_MATH_BINARY_MIN, f4)",
+			"mal_builtin_math_binary_callee_matches(MAL_MATH_BINARY_MIN, __fast_r4)",
 		);
-		expect(code).toContain("!mal_ops_is_number(f1)");
-		expect(code).not.toContain("!mal_ops_is_number(f0)");
+		expect(code).toContain("!mal_ops_is_number(__fast_r1)");
+		expect(code).not.toContain("!mal_ops_is_number(__fast_r0)");
 		expect(code).toContain("mal_number_min_max(");
 		expect(unexpectedHelpers(lines!)).toEqual([]);
 	});
@@ -426,7 +458,7 @@ describe("frameless numeric builtin kernels", () => {
 			);
 			expect(lines).toBeDefined();
 			expect(lines!.join("\n")).toContain(", NAN)");
-			expect(lines!.join("\n")).not.toContain("!mal_ops_is_number(f0)");
+			expect(lines!.join("\n")).not.toContain("!mal_ops_is_number(__fast_r0)");
 			expect(unexpectedHelpers(lines!)).toEqual([]);
 		}
 	});
@@ -534,7 +566,7 @@ describe("frameless numeric builtin kernels", () => {
 			],
 		);
 		expect(lines).toBeDefined();
-		expect(lines!.join("\n")).not.toContain("mal_ops_to_number(f1)");
+		expect(lines!.join("\n")).not.toContain("mal_ops_to_number(__fast_r1)");
 		expect(unexpectedHelpers(lines!)).toEqual([]);
 	});
 });
@@ -581,8 +613,8 @@ it.each([
 				expect(lines.join("\n")).not.toContain("mal_ops_same_value(");
 				expect(lines.join("\n")).not.toContain("mal_ops_strict_equal_boxed(");
 				if (kind === COMPILER_VALUE_KIND_STRING) {
-					expect(lines.join("\n")).toContain("mal_value_is_string(f1)");
-					expect(lines.join("\n")).not.toContain("mal_value_is_string(f0)");
+					expect(lines.join("\n")).toContain("mal_value_is_string(__fast_r1)");
+					expect(lines.join("\n")).not.toContain("mal_value_is_string(__fast_r0)");
 				}
 			}
 });
@@ -646,9 +678,9 @@ it.each([false, true])(
 		expect(lines).toBeDefined();
 		expect(unexpectedHelpers(lines!)).toEqual([]);
 		expect(lines!.join("\n")).toContain(
-			"if (!mal_builtin_object_is_callee_matches(f1)) goto __full;",
+			"if (!mal_builtin_object_is_callee_matches(__fast_r1)) goto __full;",
 		);
-		expect(lines!.join("\n")).toContain("f2 = mal_value_new_boolean(true);");
+		expect(lines!.join("\n")).toContain("__fast_r2 = mal_value_new_boolean(true);");
 	},
 );
 
@@ -671,7 +703,7 @@ it.each([undefined, "Object.is"] as const)(
 			const lines = fastEntry(fn, undefined, exported)!;
 			expect(lines).toBeDefined();
 			expect(unexpectedHelpers(lines)).toEqual([]);
-			expect(lines.join("\n")).toContain("mal_ops_same_value(f0, f1)");
+			expect(lines.join("\n")).toContain("mal_ops_same_value(__fast_r0, __fast_r1)");
 		}
 	},
 );
@@ -687,8 +719,8 @@ it.each(["===", "!==", "==", "!="] as const)(
 			const lines = fastEntry(fn, undefined, exported)!;
 			expect(lines).toBeDefined();
 			expect(unexpectedHelpers(lines)).toEqual([]);
-			expect(lines.join("\n")).toContain("mal_value_is_nan(f0)");
-			expect(lines.join("\n")).not.toContain("mal_ops_is_number(f0)");
+			expect(lines.join("\n")).toContain("mal_value_is_nan(__fast_r0)");
+			expect(lines.join("\n")).not.toContain("mal_ops_is_number(__fast_r0)");
 		}
 	},
 );
@@ -757,7 +789,7 @@ it("uses Number and nonnegative integer proofs in frameless indexed reads", () =
 		expect(lines).toBeDefined();
 		expect(unexpectedHelpers(lines)).toEqual([]);
 		const c = lines.join("\n");
-		expect(c).not.toContain("mal_ops_is_number(f1)");
+		expect(c).not.toContain("mal_ops_is_number(__fast_r1)");
 		expect(c.includes("mal_vm_array_try_get_proven_index(")).toBe(range !== undefined);
 		expect(c.includes("< 0")).toBe(range !== undefined && range.minimum < 0);
 	}
@@ -782,7 +814,7 @@ it.each([
 	}
 	expect(lines).toBeDefined();
 	expect(unexpectedHelpers(lines!)).toEqual([]);
-	expect(lines!.join("\n").includes("mal_value_is_nil(f0)")).toBe(
+	expect(lines!.join("\n").includes("mal_value_is_nil(__fast_r0)")).toBe(
 		kind === COMPILER_VALUE_KIND_TOP,
 	);
 });
@@ -903,7 +935,7 @@ describe("native fast entries", () => {
 				expect(out.native.gc.safepoints.some((point) => point.instructionIp === ip)).toBe(
 					true,
 				);
-			expect(out.c.source).toContain("mal_value_is_string(f");
+			expect(out.c.source).toContain("mal_value_is_string(__fast_r");
 			if (operator === "<=") expect(out.c.source).toContain("mal_ops_to_number(");
 		}
 	});
@@ -937,9 +969,9 @@ describe("native fast entries", () => {
 		expect(lines).toBeDefined();
 		expect(unexpectedHelpers(lines)).toEqual([]);
 		const c = lines.join("\n");
-		expect(c).toContain("if (mal_value_is_truthy(f0)) goto F5;");
-		expect(c).not.toContain("f200");
-		expect(c).not.toContain("f201");
+		expect(c).toContain("if (mal_value_is_truthy(__fast_r0)) goto F5;");
+		expect(c).not.toContain("__fast_r200");
+		expect(c).not.toContain("__fast_r201");
 		expect(c).not.toContain("__fast_ic");
 		expect(c).toContain(
 			"return read_full(vm, this_value, args, arg_count, new_target, env, callee, entry_state);",
@@ -964,8 +996,8 @@ describe("native fast entries", () => {
 				{ opcode: "RETURN", value: 3 },
 			]),
 		)!.join("\n");
-		expect(c).toContain("f2 = MAL_VALUE_UNDEFINED;");
-		expect(c).toContain("mal_ops_number_as_f64(f2)");
+		expect(c).toContain("__fast_r2 = MAL_VALUE_UNDEFINED;");
+		expect(c).toContain("mal_ops_number_as_f64(__fast_r2)");
 		expect(c).not.toContain("99");
 	});
 
@@ -986,7 +1018,7 @@ describe("native fast entries", () => {
 			},
 		])!.join("\n");
 		expect(c).not.toContain("mal_vm_array_try_get");
-		expect(c).not.toContain("f2");
+		expect(c).not.toContain("__fast_r2");
 		expect(c).toContain("F3:;");
 	});
 
@@ -1031,8 +1063,8 @@ describe("native fast entries", () => {
 			expect(lines).toBeDefined();
 			expect(unexpectedHelpers(lines)).toEqual([]);
 			const c = lines.join("\n");
-			expect(c).toContain("f0 = mal_value_new_boolean(p0);");
-			expect(c).not.toContain("mal_ops_is_number(f0)");
+			expect(c).toContain("__fast_r0 = mal_value_new_boolean(p0);");
+			expect(c).not.toContain("mal_ops_is_number(__fast_r0)");
 			expect(c).toContain("return read_full(vm, this_value, p0, env, callee);");
 		},
 	);
@@ -1072,8 +1104,12 @@ describe("native fast entries", () => {
 					const partial = binaryEntry(operator, masks)!;
 					expect(partial).toBeDefined();
 					expect(unexpectedHelpers(partial)).toEqual([]);
-					expect(partial.join("\n")).not.toContain(`mal_ops_is_number(f${position})`);
-					expect(partial.join("\n")).toContain(`mal_ops_is_number(f${1 - position})`);
+					expect(partial.join("\n")).not.toContain(
+						`mal_ops_is_number(__fast_r${position})`,
+					);
+					expect(partial.join("\n")).toContain(
+						`mal_ops_is_number(__fast_r${1 - position})`,
+					);
 				}
 			}
 		},
@@ -1105,7 +1141,7 @@ describe("native fast entries", () => {
 			])!;
 			expect(mixed).toBeDefined();
 			expect(unexpectedHelpers(mixed)).toEqual([]);
-			expect(mixed.join("\n")).toContain("mal_ops_to_number(f0)");
+			expect(mixed.join("\n")).toContain("mal_ops_to_number(__fast_r0)");
 		},
 	);
 
@@ -1117,8 +1153,8 @@ describe("native fast entries", () => {
 			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
 			COMPILER_VALUE_KIND_BOOLEAN,
 		])!.join("\n");
-		expect(c).toContain("mal_value_is_string(f0)");
-		expect(c).not.toContain("mal_ops_is_number(f0)");
+		expect(c).toContain("mal_value_is_string(__fast_r0)");
+		expect(c).not.toContain("mal_ops_is_number(__fast_r0)");
 		expect(c).not.toContain("mal_ops_to_number(");
 		const booleanOrString = binaryEntry("+", [
 			COMPILER_VALUE_KIND_BOOLEAN | COMPILER_VALUE_KIND_STRING,
@@ -1126,7 +1162,7 @@ describe("native fast entries", () => {
 		])!;
 		expect(booleanOrString).toBeDefined();
 		expect(unexpectedHelpers(booleanOrString)).toEqual([]);
-		expect(booleanOrString.join("\n")).toContain("mal_value_is_string(f0)");
+		expect(booleanOrString.join("\n")).toContain("mal_value_is_string(__fast_r0)");
 		expect(booleanOrString.join("\n")).not.toContain("mal_ops_is_number(");
 	});
 
@@ -1139,8 +1175,8 @@ describe("native fast entries", () => {
 			])!;
 			expect(partial).toBeDefined();
 			expect(unexpectedHelpers(partial)).toEqual([]);
-			expect(partial.join("\n")).toContain("mal_ops_is_number(f1)");
-			expect(partial.join("\n")).toContain("mal_ops_to_number(f0)");
+			expect(partial.join("\n")).toContain("mal_ops_is_number(__fast_r1)");
+			expect(partial.join("\n")).toContain("mal_ops_to_number(__fast_r0)");
 			const pair = binaryEntry(operator, [
 				COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_BOOLEAN,
 				COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_NUMBER,
@@ -1148,7 +1184,7 @@ describe("native fast entries", () => {
 			expect(pair).toBeDefined();
 			expect(unexpectedHelpers(pair)).toEqual([]);
 			expect(pair.join("\n")).toContain(
-				"mal_value_is_string(f0) && mal_value_is_string(f1)",
+				"mal_value_is_string(__fast_r0) && mal_value_is_string(__fast_r1)",
 			);
 			expect(pair.join("\n")).not.toContain("mal_ops_is_number(");
 		},
@@ -1199,7 +1235,7 @@ describe("native fast entries", () => {
 		expect(lines.join("\n")).toContain("goto F4;");
 		expect(lines.join("\n")).toContain("F4:;");
 		expect(lines.join("\n")).not.toContain("mal_value_is_truthy");
-		expect(lines.join("\n")).not.toContain("f0");
+		expect(lines.join("\n")).not.toContain("__fast_r0");
 		expect(unexpectedHelpers(lines)).toEqual([]);
 	});
 
@@ -1224,8 +1260,8 @@ describe("native fast entries", () => {
 			unreachableIps: Array.from({ length: 80 }, (_, i) => i + 2),
 		});
 		expect(reachable).toBeDefined();
-		expect(reachable!.join("\n")).not.toContain("f100");
-		expect(reachable!.join("\n")).not.toContain("f511");
+		expect(reachable!.join("\n")).not.toContain("__fast_r100");
+		expect(reachable!.join("\n")).not.toContain("__fast_r511");
 		expect(
 			fastEntry(
 				body([
@@ -1263,7 +1299,7 @@ describe("native fast entries", () => {
 			branches: [{ instructionIp: 1, targetIp: 4 }],
 			unreachableIps: [2, 3],
 		})!.join("\n");
-		expect(text).toContain("mal_ops_number_as_f64(f0)");
+		expect(text).toContain("mal_ops_number_as_f64(__fast_r0)");
 		expect(text).not.toContain("99");
 	});
 
@@ -1282,7 +1318,7 @@ describe("native fast entries", () => {
 			unreachableIps: [3, 4],
 		})!.join("\n");
 		expect(text).toContain("((i32) 8)");
-		expect(text).not.toContain("mal_ops_is_number(f2)");
+		expect(text).not.toContain("mal_ops_is_number(__fast_r2)");
 	});
 
 	it("requires literal and integer definitions on every path to their reads", () => {
@@ -1294,8 +1330,8 @@ describe("native fast entries", () => {
 				{ opcode: "RETURN", value: 3 },
 			]),
 		)!.join("\n");
-		expect(number).toContain("mal_ops_number_as_f64(f2)");
-		expect(number).toContain("f2 = MAL_VALUE_UNDEFINED;");
+		expect(number).toContain("mal_ops_number_as_f64(__fast_r2)");
+		expect(number).toContain("__fast_r2 = MAL_VALUE_UNDEFINED;");
 		const string = fastEntry(
 			body([
 				{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
@@ -1304,7 +1340,7 @@ describe("native fast entries", () => {
 				{ opcode: "RETURN", value: 3 },
 			]),
 		)!.join("\n");
-		expect(string).toContain("mal_ops_strict_equal_boxed(f2, f1)");
+		expect(string).toContain("mal_ops_strict_equal_boxed(__fast_r2, __fast_r1)");
 		expect(string).not.toContain("mal_ops_strict_equal_string_constant");
 		const integer = fastEntry(
 			body([
@@ -1314,9 +1350,9 @@ describe("native fast entries", () => {
 				{ opcode: "RETURN", value: 1 },
 			]),
 		)!.join("\n");
-		expect(integer).toContain("mal_value_is_truthy(f2)");
-		expect(integer).not.toContain("mal_ops_number_value_to_i32(f2)");
-		expect(integer).toContain("f2 = MAL_VALUE_UNDEFINED;");
+		expect(integer).toContain("mal_value_is_truthy(__fast_r2)");
+		expect(integer).not.toContain("mal_ops_number_value_to_i32(__fast_r2)");
+		expect(integer).toContain("__fast_r2 = MAL_VALUE_UNDEFINED;");
 	});
 
 	it("omits a boxed default when every successful helper path writes before reading", () => {
@@ -1329,8 +1365,8 @@ describe("native fast entries", () => {
 				{ opcode: "RETURN", value: 2 },
 			]),
 		)!.join("\n");
-		expect(source).toContain("&f2");
-		expect(source).not.toContain("f2 = MAL_VALUE_UNDEFINED;");
+		expect(source).toContain("&__fast_r2");
+		expect(source).not.toContain("__fast_r2 = MAL_VALUE_UNDEFINED;");
 		expect(source).toContain("goto __full;");
 	});
 
@@ -1342,13 +1378,13 @@ describe("native fast entries", () => {
 			{ opcode: "LOAD_PROPERTY_STATIC", dst: 2, object: 1, stringIndex: 0, icIndex: 0 },
 			{ opcode: "RETURN", value: 2 },
 		]);
-		expect(fastEntry(fn)!.join("\n")).toContain("f2 = MAL_VALUE_UNDEFINED;");
+		expect(fastEntry(fn)!.join("\n")).toContain("__fast_r2 = MAL_VALUE_UNDEFINED;");
 		const selected = fastEntry(fn, undefined, true, {
 			branches: [{ instructionIp: 0, targetIp: 3 }],
 			unreachableIps: [1, 2],
 		})!.join("\n");
-		expect(selected).toContain("&f2");
-		expect(selected).not.toContain("f2 = MAL_VALUE_UNDEFINED;");
+		expect(selected).toContain("&__fast_r2");
+		expect(selected).not.toContain("__fast_r2 = MAL_VALUE_UNDEFINED;");
 	});
 
 	it("opens a constructible entry with the floating-point pragma before its new.target guard", () => {
@@ -1379,7 +1415,7 @@ describe("native fast entries", () => {
 				{ opcode: "RETURN", value: 1 },
 			]),
 		)!.join("\n");
-		expect(text).toContain("mal_vm_property_try_load_length_static(vm, f0,");
+		expect(text).toContain("mal_vm_property_try_load_length_static(vm, __fast_r0,");
 	});
 
 	it("branch on a bitwise result by testing the integer", () => {
@@ -1391,8 +1427,8 @@ describe("native fast entries", () => {
 				{ opcode: "RETURN", value: 1 },
 			]),
 		)!.join("\n");
-		expect(text).toContain("if (mal_ops_number_value_to_i32(f2) != 0)");
-		expect(text).not.toContain("mal_value_is_truthy(f2)");
+		expect(text).toContain("if (mal_ops_number_value_to_i32(__fast_r2) != 0)");
+		expect(text).not.toContain("mal_value_is_truthy(__fast_r2)");
 	});
 
 	it("read a Number constant's literal instead of converting it per call", () => {
@@ -1407,7 +1443,7 @@ describe("native fast entries", () => {
 		];
 		const text = fastEntry(body(masked))!.join("\n");
 		expect(text).toContain("((i32) 1572864)");
-		expect(text).not.toContain("mal_ops_is_number(f1)");
+		expect(text).not.toContain("mal_ops_is_number(__fast_r1)");
 	});
 
 	it("reach another fast body only through its exported fast path", () => {
