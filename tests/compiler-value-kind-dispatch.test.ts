@@ -26,28 +26,30 @@ const primitives = (kind: number): ReadonlyArray<number> =>
 const toNumeric = (kind: number): number | undefined =>
 	kind === SYMBOL ? undefined : kind === BIGINT ? BIGINT : NUMBER;
 
+const primitiveAlternatives = Array.from({ length: TOP + 1 }, (_, mask) => [
+	...new Set(singleKinds(mask).flatMap(primitives)),
+]);
+
 function specResultKinds(operation: "unary" | "binary" | "add", left: number, right = 0) {
 	let result = 0;
-	for (const leftKind of singleKinds(left))
-		for (const leftPrimitive of primitives(leftKind)) {
-			if (operation === "unary") {
-				result |= toNumeric(leftPrimitive) ?? 0;
+	for (const leftPrimitive of primitiveAlternatives[left]!) {
+		if (operation === "unary") {
+			result |= toNumeric(leftPrimitive) ?? 0;
+			continue;
+		}
+		for (const rightPrimitive of primitiveAlternatives[right]!) {
+			if (
+				operation === "add" &&
+				(leftPrimitive === STRING || rightPrimitive === STRING)
+			) {
+				if (leftPrimitive !== SYMBOL && rightPrimitive !== SYMBOL) result |= STRING;
 				continue;
 			}
-			for (const rightKind of singleKinds(right))
-				for (const rightPrimitive of primitives(rightKind)) {
-					if (
-						operation === "add" &&
-						(leftPrimitive === STRING || rightPrimitive === STRING)
-					) {
-						if (leftPrimitive !== SYMBOL && rightPrimitive !== SYMBOL) result |= STRING;
-						continue;
-					}
-					const leftNumeric = toNumeric(leftPrimitive);
-					if (leftNumeric !== undefined && leftNumeric === toNumeric(rightPrimitive))
-						result |= leftNumeric;
-				}
+			const leftNumeric = toNumeric(leftPrimitive);
+			if (leftNumeric !== undefined && leftNumeric === toNumeric(rightPrimitive))
+				result |= leftNumeric;
 		}
+	}
 	return result;
 }
 
