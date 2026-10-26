@@ -9,14 +9,16 @@ export function preparedNativeEvalConfig({
 	node = false,
 	webPlatform = true,
 	realms = true,
+	primordials = "mutable",
 }: {
 	node?: boolean;
 	webPlatform?: boolean;
 	realms?: boolean;
+	primordials?: "mutable" | "locked";
 } = {}): ResolvedBuildConfig {
 	return resolveBuildConfig({
 		engine: {
-			primordials: "mutable",
+			primordials,
 			eval: true,
 			regexp: true,
 			realms,

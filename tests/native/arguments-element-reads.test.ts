@@ -3,13 +3,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	resolveHarnessExecutionInvocation,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
+import { preparedNativeEvalConfig } from "../helpers/native-eval-config.ts";
 
 const fixture = "tests/local/arguments-element-reads.cjs";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-arguments-element-reads-"));
@@ -40,7 +40,7 @@ describe.each(["mutable", "locked"] as const)(
 				fixture,
 				name: `arguments-element-reads-${primordials}`,
 				outDir,
-				config: resolveBuildConfig({ engine: { primordials, eval: true } }),
+				config: preparedNativeEvalConfig({ primordials }),
 				environment: { ...process.env, MAL_PERF_STATS: "1" },
 			}));
 			expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
