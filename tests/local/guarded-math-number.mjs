@@ -198,4 +198,89 @@ for (const value of [1n, Symbol("rounding")]) {
 		record(error instanceof TypeError);
 	}
 }
+const roundedByte = function roundedByte(input, hook) {
+	try {
+		hook();
+		return Math.round(input & 255);
+	} catch (error) {
+		throw error;
+	}
+};
+function roundedByteRemainder(input, hook) {
+	const value = roundedByte(input, hook);
+	hook();
+	return value % 10;
+}
+const roundedSigned = function roundedSigned(input, hook) {
+	try {
+		hook();
+		return Math.trunc(input | 0);
+	} catch (error) {
+		throw error;
+	}
+};
+function roundedSignedRemainder(input, hook) {
+	const value = roundedSigned(input, hook);
+	hook();
+	return value % 10;
+}
+function roundedUnsigned(input, hook) {
+	const value = Math.ceil(input >>> 0);
+	hook();
+	return value;
+}
+const roundedRecord = function roundedRecord(input, hook) {
+	try {
+		hook();
+		return { value: Math.floor(input & 255) };
+	} catch (error) {
+		throw error;
+	}
+};
+function* roundedFieldAcrossYield(input, hook) {
+	const record = roundedRecord(input, hook);
+	yield record.value;
+	hook();
+	return record.value % 10;
+}
+function roundingPulse() {
+	if (typeof globalThis.gc === "function") globalThis.gc();
+}
+Object.assign(globalThis, {
+	roundedByte,
+	roundedByteRemainder,
+	roundedUnsigned,
+	roundedSigned,
+	roundedSignedRemainder,
+	roundedFieldAcrossYield,
+});
+for (const input of [
+	-0,
+	0,
+	-10,
+	NaN,
+	Infinity,
+	-Infinity,
+	2147483647,
+	2147483648,
+	4294967295,
+	4294967296,
+	9007199254740991,
+]) {
+	record(globalThis.roundedByteRemainder(input, roundingPulse));
+	record(globalThis.roundedUnsigned(input, roundingPulse));
+	record(globalThis.roundedSignedRemainder(input, roundingPulse));
+	const iterator = globalThis.roundedFieldAcrossYield(input, roundingPulse);
+	record(iterator.next().value);
+	roundingPulse();
+	record(iterator.next().value);
+}
+for (const input of [1n, Symbol("rounded return")]) {
+	try {
+		globalThis.roundedByteRemainder(input, roundingPulse);
+		record("missing rounded return error");
+	} catch (error) {
+		record(error instanceof TypeError);
+	}
+}
 console.log(JSON.stringify(results));

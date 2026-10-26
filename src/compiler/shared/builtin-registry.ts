@@ -1153,6 +1153,16 @@ export function builtinPrimitiveResult(
 	return primitiveResults.get(operation);
 }
 
+// Integer payload identity does not remove callee checks, coercion or argument effects.
+export function builtinPreservesIntegerInput(operation: string): boolean {
+	return (
+		operation === "Math.floor" ||
+		operation === "Math.ceil" ||
+		operation === "Math.trunc" ||
+		operation === "Math.round"
+	);
+}
+
 export function builtinResultIsInt32(operation: string): boolean {
 	return operation === "Math.imul" || operation === "Math.clz32";
 }

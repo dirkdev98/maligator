@@ -1,6 +1,7 @@
 import {
 	builtinPrimitiveResult,
 	builtinResultIsInt32,
+	builtinPreservesIntegerInput,
 } from "../shared/builtin-registry.ts";
 import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
 import {
@@ -209,6 +210,28 @@ function recordFieldKind(
 	return typeof mask === "number" && compilerValueKindMaskIsValid(mask)
 		? mask
 		: undefined;
+}
+
+/** The result equals this operand only when that operand is a proved primitive integer. */
+export function coreIntegerRoundingInput(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CoreValueId | undefined {
+	if (fn.instructionKind(instruction) !== "operation") return undefined;
+	const opcode = fn.instructionOpcodeName(instruction);
+	if (opcode !== "mathUnaryNumber" && opcode !== "callKnown") return undefined;
+	const attributes = fn.instructionAttributes(instruction);
+	if (
+		attributes.construct ||
+		attributes.argumentMode !== undefined ||
+		typeof attributes.operation !== "string" ||
+		!builtinPreservesIntegerInput(attributes.operation)
+	)
+		return undefined;
+	const input = opcode === "mathUnaryNumber" ? 0 : 1;
+	return fn.kernel.instructionOperandCount(instruction) <= input
+		? undefined
+		: fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + input);
 }
 
 export function coreInstructionResultIntegerRange(
@@ -1017,6 +1040,10 @@ function solveCoreValueKinds(
 		const opcode = fn.instructionOpcodeName(instruction);
 		const attributes = fn.instructionAttributes(instruction);
 		const operator = attributes.operator;
+		const roundingInput =
+			opcode === "mathUnaryNumber" || opcode === "callKnown"
+				? coreIntegerRoundingInput(fn, instruction)
+				: undefined;
 		if (
 			fn.valueRepresentation(output) === "i32" ||
 			compilerIntegerRangeIsInt32(coreInstructionResultIntegerRange(fn, instruction)) ||
@@ -1028,6 +1055,8 @@ function solveCoreValueKinds(
 				builtinResultIsInt32(attributes.operation))
 		) {
 			integerRecipes[output] = INTEGER_PROOF_EXACT;
+		} else if (roundingInput !== undefined) {
+			integerRecipes[output] = roundingInput + 1;
 		} else if (opcode === "move" && fn.valueRepresentation(output) === "f64") {
 			integerRecipes[output] =
 				fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)) + 1;

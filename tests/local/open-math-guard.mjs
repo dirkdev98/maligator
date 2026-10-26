@@ -86,3 +86,19 @@ console.log(show(round(-1.5)), show(max(1, 2)), show(roundBounded(-7.5)));
 let total = 0;
 for (let index = 0; index < 1000; index++) total += round(index / 3) + max(index, 500.5);
 console.log(total);
+
+Math.round = (value) => ({ rounded: value });
+console.log(roundBounded(7.5).rounded);
+Math.round = originalRound;
+console.log(
+	show(
+		roundBounded({
+			valueOf() {
+				Math.round = () => "replacement";
+				return 7.5;
+			},
+		}),
+	),
+	roundBounded(7.5),
+);
+Math.round = originalRound;

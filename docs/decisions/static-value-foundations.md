@@ -242,6 +242,12 @@ Emission uses ordinary C casts only within int32 bounds, folds Number predicates
 for all safe-integer ranges, and consumes bounds in comparisons, truthiness and
 numeric Math operations. Floor, ceil, trunc and round reuse a proved integer input
 inside the numeric kernel; a mutable callee retains its guard and ordinary miss.
+Their exact builtin operations also preserve the input's integer proof and interval
+in Core, including unsigned values outside int32 storage. These normal-result bounds
+reach selected entries, caller results and read-only returned fields; an ordinary
+call hint or a guarded kernel alone never constrains the miss result.
+Native result tables use the semantic integer proof even when physical storage
+is floating or boxed.
 The proof survives boxing and suspension, while coercive
 operands and argument evaluation retain their own effects and fallback paths.
 Scalar expressions, fast entries, numeric regions and canonical bodies consume the

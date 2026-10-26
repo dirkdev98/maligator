@@ -1,3 +1,4 @@
+import { builtinPreservesIntegerInput } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NUMBER,
@@ -19,6 +20,7 @@ import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
 	corePrimitiveOperatorEffectRefinement,
 	coreInstructionResultIntegerRange,
+	coreIntegerRoundingInput,
 } from "./core-ir-value-kinds.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
@@ -177,7 +179,9 @@ function instructionIntegerRanges(
 			opcode === "callKnown" ||
 			opcode === "mathUnaryNumber" ||
 			opcode === "mathBinaryNumber") &&
-			boundBuiltinConsumers.has(builtinOperation as string));
+			(boundBuiltinConsumers.has(builtinOperation as string) ||
+				(typeof builtinOperation === "string" &&
+					builtinPreservesIntegerInput(builtinOperation))));
 	const integerResult =
 		fn.kernel.instructionResultCount(instruction) === 1 &&
 		fn.valueRepresentation(
@@ -309,7 +313,10 @@ export function coreInstructionFacts(
 	const resultRange =
 		results.length === 1 && results[0] === COMPILER_VALUE_KIND_NUMBER
 			? (coreInstructionResultIntegerRange(fn, instruction) ??
-				(fn.valueRepresentation(kernel.resultAt(output)) === "i32"
+				(coreIntegerRoundingInput(fn, instruction) === undefined
+					? undefined
+					: range?.(kernel.resultAt(output), fn.instructionBlock(instruction))) ??
+				(kinds.exactScalar(kernel.resultAt(output)) === "int32"
 					? COMPILER_INT32_RANGE
 					: undefined))
 			: undefined;

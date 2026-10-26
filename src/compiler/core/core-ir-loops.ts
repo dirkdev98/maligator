@@ -9,6 +9,7 @@ import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	coreInstructionResultIntegerRange,
+	coreIntegerRoundingInput,
 } from "./core-ir-value-kinds.ts";
 import type { CoreExactScalarKind } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
@@ -554,6 +555,10 @@ export function analyzeCoreLoopInductions(
 						resultRange === undefined
 							? coreInstructionResultIntegerRange(fn, definition)
 							: resultRange(definition);
+				if (range === undefined && definition !== undefined) {
+					const input = coreIntegerRoundingInput(fn, definition);
+					if (input !== undefined) range = query(input, block, budget);
+				}
 				if (
 					range === undefined &&
 					definition !== undefined &&

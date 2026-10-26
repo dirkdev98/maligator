@@ -10,6 +10,7 @@ import type {
 import {
 	builtinResultIsInt32,
 	DATA_VIEW_ACCESSOR_TYPES,
+	builtinPreservesIntegerInput,
 } from "../shared/builtin-registry.ts";
 import {
 	compilerComparisonInputKindsAvoidObjectCoercion,
@@ -807,13 +808,7 @@ function nativeMathUnaryExpr(
 	range?: CompilerIntegerRange,
 ): string | null {
 	if (range !== undefined) {
-		if (
-			operation === "Math.floor" ||
-			operation === "Math.ceil" ||
-			operation === "Math.trunc" ||
-			operation === "Math.round"
-		)
-			return argument;
+		if (builtinPreservesIntegerInput(operation)) return argument;
 		if (operation === "Math.abs") {
 			if (range.minimum >= 0) return argument;
 			if (range.maximum < 0) return `-(${argument})`;
