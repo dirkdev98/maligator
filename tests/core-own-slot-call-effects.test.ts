@@ -116,7 +116,256 @@ function appendWriter(program: CoreProgram, receiver = false) {
 	return { fn, store, base, entry };
 }
 
+function appendSlotForwarder(
+	program: CoreProgram,
+	target: number,
+	{ swap = false, receiver = false } = {},
+) {
+	const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+	const entry = builder.createBlock([{}, {}]);
+	const parameters = [0, 1].map((index) => builder.blockParameterValue(entry, index));
+	const [callee] = builder.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: target },
+	});
+	const [unused] = builder.appendInstruction(entry, "createUndefined", []);
+	const [result] = builder.appendInstruction(
+		entry,
+		"call",
+		receiver
+			? [callee!, parameters[0]!, parameters[1]!]
+			: [callee!, unused!, ...(swap ? parameters.toReversed() : parameters)],
+	);
+	const call = builder.bodyInstructionIds(entry).at(-1)!;
+	builder.setTerminator(entry, { kind: "return", value: result! });
+	const fn = program.function(builder.finish(entry).function);
+	return { fn, call, entry };
+}
+
 describe("conditional own-slot call effects", () => {
+	it.each([false, true])(
+		"composes slot effects and retention through forwarded calls (receiver=%s)",
+		(receiver) => {
+			const { program, analyses, summaries } = ownSlotProgram();
+			const writer = appendWriter(program, receiver);
+			const first = appendSlotForwarder(program, writer.fn.id, {
+				receiver,
+				swap: !receiver,
+			});
+			const second = appendSlotForwarder(program, first.fn.id, { swap: !receiver });
+			const caller = appendFieldCaller(program, second.fn.id);
+			expect(summaries().summary(second.fn.id)!.conditionalOwnSlotEffects).toMatchObject({
+				accesses: [
+					{ base: { kind: "parameter", index: 0 }, key: 0, mode: "read" },
+					{ base: { kind: "parameter", index: 0 }, key: 1, mode: "write" },
+				],
+				parameterEscape: ["none", "retained"],
+			});
+			expect(forwardCoreOwnSlotCallLoads(program, analyses)).toContain(caller.fn.id);
+			expect(caller.fn.isInstructionLive(caller.load)).toBe(false);
+			expect(caller.fn.isInstructionLive(caller.writtenLoad)).toBe(true);
+			const aliased = appendFieldCaller(program, second.fn.id, "same value");
+			forwardCoreOwnSlotCallLoads(program, analyses);
+			expect(aliased.fn.isInstructionLive(aliased.load)).toBe(true);
+			verifyCoreProgram(program, { stage: "pre-target" }, programAnalysisContext());
+		},
+	);
+
+	it("refreshes transitive slot effects after same-domain key edits and opaque calls", () => {
+		const { program, analyses, summaries } = ownSlotProgram();
+		const writer = appendWriter(program);
+		const wrapper = appendSlotForwarder(program, writer.fn.id);
+		const first = summaries();
+		const original = appendFieldCaller(program, wrapper.fn.id);
+		forwardCoreOwnSlotCallLoads(program, analyses);
+		expect(original.fn.isInstructionLive(original.load)).toBe(false);
+		const change = CoreEditor.open(program, writer.fn.id);
+		change.replaceInstruction(
+			writer.store,
+			"storePropertyStatic",
+			[writer.base, writer.fn.kernel.functionParameter(1)],
+			{ attributes: { stringIndex: 0 } },
+		);
+		change.commit();
+		const updated = summaries();
+		expect(updated.summary(wrapper.fn.id)!.effects).toEqual(
+			first.summary(wrapper.fn.id)!.effects,
+		);
+		expect(updated.version(wrapper.fn.id)).toBeGreaterThan(first.version(wrapper.fn.id));
+		const next = appendFieldCaller(program, wrapper.fn.id);
+		forwardCoreOwnSlotCallLoads(program, analyses);
+		expect(next.fn.isInstructionLive(next.load)).toBe(true);
+		const escape = CoreEditor.open(program, writer.fn.id);
+		escape.insertInstruction(writer.entry, writer.store, "call", [
+			writer.fn.kernel.functionParameter(1),
+			writer.base,
+		]);
+		escape.commit();
+		expect(summaries().summary(wrapper.fn.id)!.conditionalOwnSlotEffects).toBeUndefined();
+	});
+
+	it("joins every finite callee's projected slot effects", () => {
+		const { program, analyses, summaries } = ownSlotProgram();
+		const first = appendWriter(program),
+			second = appendWriter(program);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 3 });
+		const entry = builder.createBlock([{}, {}, {}]);
+		const left = builder.createBlock(),
+			right = builder.createBlock(),
+			join = builder.createBlock([{}]);
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: builder.blockParameterValue(entry, 2),
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		for (const [block, target] of [
+			[left, first.fn.id],
+			[right, second.fn.id],
+		] as const) {
+			const [callee] = builder.appendInstruction(block, "createFunction", [], {
+				attributes: { functionIndex: target },
+			});
+			builder.setTerminator(block, {
+				kind: "jump",
+				edge: { block: join, arguments: [callee!] },
+			});
+		}
+		const [unused] = builder.appendInstruction(join, "createUndefined", []);
+		const [value] = builder.appendInstruction(join, "call", [
+			builder.blockParameterValue(join, 0),
+			unused!,
+			builder.blockParameterValue(entry, 0),
+			builder.blockParameterValue(entry, 1),
+		]);
+		builder.setTerminator(join, { kind: "return", value: value! });
+		const wrapper = builder.finish(entry).function;
+		expect(
+			summaries().summary(wrapper)!.conditionalOwnSlotEffects?.accesses,
+		).toHaveLength(2);
+		const before = appendFieldCaller(program, wrapper);
+		forwardCoreOwnSlotCallLoads(program, analyses);
+		expect(before.fn.isInstructionLive(before.load)).toBe(false);
+		const edit = CoreEditor.open(program, second.fn.id);
+		edit.replaceInstruction(
+			second.store,
+			"storePropertyStatic",
+			[second.base, second.fn.kernel.functionParameter(1)],
+			{ attributes: { stringIndex: 0 } },
+		);
+		edit.commit();
+		expect(
+			summaries().summary(wrapper)!.conditionalOwnSlotEffects?.accesses,
+		).toHaveLength(3);
+		const after = appendFieldCaller(program, wrapper);
+		forwardCoreOwnSlotCallLoads(program, analyses);
+		expect(after.fn.isInstructionLive(after.load)).toBe(true);
+	});
+
+	it("converges recursive slot effects and withdraws a changed transitive contract", () => {
+		const { program, summaries } = ownSlotProgram();
+		const writer = appendWriter(program);
+		const wrapper = appendSlotForwarder(program, writer.fn.id);
+		const edit = CoreEditor.open(program, writer.fn.id);
+		const [callee] = edit.insertInstruction(
+			writer.entry,
+			writer.store,
+			"createFunction",
+			[],
+			{
+				attributes: { functionIndex: wrapper.fn.id },
+			},
+		).outputs;
+		const [unused] = edit.insertInstruction(
+			writer.entry,
+			writer.store,
+			"createUndefined",
+			[],
+		).outputs;
+		edit.insertInstruction(writer.entry, writer.store, "call", [
+			callee!,
+			unused!,
+			writer.base,
+			writer.fn.kernel.functionParameter(1),
+		]);
+		edit.commit();
+		for (const fn of [writer.fn, wrapper.fn]) {
+			expect(
+				summaries().summary(fn.id)!.conditionalOwnSlotEffects?.accesses,
+			).toHaveLength(2);
+		}
+		const remove = CoreEditor.open(program, writer.fn.id);
+		remove.replaceInstruction(writer.store, "storeProperty", [
+			writer.base,
+			writer.base,
+			writer.base,
+		]);
+		remove.commit();
+		for (const fn of [writer.fn, wrapper.fn])
+			expect(summaries().summary(fn.id)!.conditionalOwnSlotEffects).toBeUndefined();
+	});
+
+	it("bounds recursive access growth when calls rotate formal bases", () => {
+		const { program, summaries } = ownSlotProgram();
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 33 });
+		const entry = builder.createBlock(Array.from({ length: 33 }, () => ({})));
+		const parameters = Array.from({ length: 33 }, (_, index) =>
+			builder.blockParameterValue(entry, index),
+		);
+		const [value] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.appendInstruction(entry, "storePropertyStatic", [parameters[0]!, value!], {
+			attributes: { stringIndex: 1 },
+		});
+		const [callee] = builder.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: builder.functionId },
+		});
+		builder.appendInstruction(entry, "call", [
+			callee!,
+			value!,
+			...parameters.slice(1),
+			parameters[0]!,
+		]);
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const fn = builder.finish(entry).function;
+		expect(summaries().summary(fn)!.conditionalOwnSlotEffects).toBeUndefined();
+	});
+
+	it("declines a retaining call when merged arguments have no single frame identity", () => {
+		const { program, summaries } = ownSlotProgram();
+		const writer = appendWriter(program);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 3 });
+		const entry = builder.createBlock([{}, {}, {}]);
+		const left = builder.createBlock(),
+			right = builder.createBlock(),
+			join = builder.createBlock([{}]);
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: builder.blockParameterValue(entry, 2),
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		for (const [block, index] of [
+			[left, 0],
+			[right, 1],
+		] as const)
+			builder.setTerminator(block, {
+				kind: "jump",
+				edge: { block: join, arguments: [builder.blockParameterValue(entry, index)] },
+			});
+		const [callee] = builder.appendInstruction(join, "createFunction", [], {
+			attributes: { functionIndex: writer.fn.id },
+		});
+		const [unused] = builder.appendInstruction(join, "createUndefined", []);
+		builder.appendInstruction(join, "call", [
+			callee!,
+			unused!,
+			builder.blockParameterValue(entry, 0),
+			builder.blockParameterValue(join, 0),
+		]);
+		builder.setTerminator(join, { kind: "return", value: unused! });
+		const fn = builder.finish(entry).function;
+		expect(summaries().summary(fn)!.conditionalOwnSlotEffects).toBeUndefined();
+	});
+
 	it.each(["value&255", "-value", "value+1", "value<9"])(
 		"forwards an untouched slot across a helper with proved primitive effects (%s)",
 		(expression) => {

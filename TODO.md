@@ -261,7 +261,7 @@ The independent target boundary and current storage contract are recorded in
       backedges; later effects do not withdraw an earlier read. Writer/source
       correlations within the surviving prefix remain conservative.
       Typed producer storage for remaining writes,
-      parameter-relative call effects and coroutine record transport remain. Own-field observations
+      broader parameter-relative call effects and coroutine record transport remain. Own-field observations
       also carry initial integer bounds through the normal-result worklist, including
       finite targets, recursive forwarding and suspension. Growing fields widen
       independently of bounded siblings. The scanner still calls
@@ -635,6 +635,10 @@ Shared lifetime and fallback rules are recorded in
       regions, using bounded summaries and the existing analysis manager rather
       than a general whole-heap points-to analysis. Test invalidation and recursive
       summary convergence as well as the positive optimization.
+      Conditional own-slot effects now compose through finite call sets, reordered
+      parameters, receivers and recursive components. The existing memory consumer
+      preserves untouched slots only after resolving every required access to own
+      data; unknown calls, escaping aliases and unproven bases retain the barrier.
 
 - [ ] Preserve useful value, field, and range facts through joins, selected calls,
       variant-local planning, and target lowering. Distinguish semantic kind facts

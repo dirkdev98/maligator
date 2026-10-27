@@ -30,6 +30,7 @@ describe("conditional own-slot call effects", () => {
 						name: "own-slot-call-effects",
 						mainFile: HOST_MAIN,
 						outDir,
+						nativeStackRoots: "precise",
 						config: resolveBuildConfig({
 							engine: { primordials: "mutable", eval: false, realms: false },
 						}),
@@ -44,7 +45,12 @@ describe("conditional own-slot call effects", () => {
 				if (mode === "separate calls") {
 					const name = (index: number) =>
 						String.fromCharCode(...(programImage.runtime.stringConstants[index] ?? []));
-					for (const callerName of ["untouched", "primitiveUntouched"]) {
+					for (const callerName of [
+						"untouched",
+						"primitiveUntouched",
+						"transitiveUntouched",
+						"recursiveUntouched",
+					]) {
 						const caller = programImage.native.functions.find(
 							(fn) => name(fn.body.nameStringIndex) === callerName,
 						)!;

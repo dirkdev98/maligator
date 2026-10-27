@@ -18,6 +18,7 @@ import {
 	moduleSummaryId,
 	normalizeRootReasons,
 	normalizeRelativeOwnSlotEffects,
+	relativeOwnSlotEffectKey,
 } from "../shared/effect-summary.ts";
 import type {
 	EffectSummary,
@@ -38,7 +39,7 @@ import {
 	analyzeCoreCallGraph,
 	coreCalleeTargetsAreOpen,
 } from "./core-ir-call-targets.ts";
-import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
+import type { CoreCallGraphIndex, CoreIndexedCallSite } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreAttributeValuesEqual } from "./core-ir-equality.ts";
@@ -385,7 +386,7 @@ function noteEscape(
 	}
 }
 
-const OWN_SLOT_LEAF_OPERATIONS = new Set([
+const OWN_SLOT_LOCAL_OPERATIONS = new Set([
 	"move",
 	"rootUse",
 	"loadThis",
@@ -397,6 +398,11 @@ const OWN_SLOT_LEAF_OPERATIONS = new Set([
 	"createNumber",
 	"createString",
 	"createUndefined",
+	"createFunction",
+	"loadCaptured",
+	"loadCallee",
+	"loadGlobal",
+	"loadGlobalIndex",
 	"mathUnaryNumber",
 	"mathBinaryNumber",
 ]);
@@ -463,6 +469,7 @@ function conditionalOwnSlotEffects(
 		}
 	};
 	let residualEffects = NO_EFFECT_SUMMARY;
+	let calls = 0;
 	for (let transfer = 0; transfer < localTransfers.operationCount; transfer++) {
 		const instruction = localTransfers.operationAt(transfer);
 		if (!cfg.reachable.has(fn.instructionBlock(instruction))) continue;
@@ -471,6 +478,22 @@ function conditionalOwnSlotEffects(
 		const effects = coreInstructionEffects(fn, instruction);
 		const start = fn.kernel.instructionOperandStart(instruction);
 		const count = fn.kernel.instructionOperandCount(instruction);
+		const call = fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer;
+		if (call !== undefined) {
+			if (
+				call.invocation !== "call" ||
+				call.arguments.kind !== "positional" ||
+				++calls > 32
+			)
+				return undefined;
+			retain(fn.kernel.operandAt(start + call.calleeOperand), "invoked");
+			residualEffects = joinEffectSummaries(residualEffects, {
+				...NO_EFFECT_SUMMARY,
+				mayThrow: effects.mayThrow,
+				mayGc: effects.mayGc,
+			});
+			continue;
+		}
 		if (opcode === "loadPropertyStatic" || opcode === "storePropertyStatic") {
 			const base = origins[fn.kernel.operandAt(start)] ?? ORIGIN_UNKNOWN;
 			const key = attributes.stringIndex;
@@ -513,7 +536,7 @@ function conditionalOwnSlotEffects(
 			!effects.maySuspend &&
 			effects.writes.length === 0;
 		if (
-			!OWN_SLOT_LEAF_OPERATIONS.has(opcode) &&
+			!OWN_SLOT_LOCAL_OPERATIONS.has(opcode) &&
 			!noncoerciveOperator &&
 			!provedPrimitiveOperator
 		)
@@ -528,7 +551,6 @@ function conditionalOwnSlotEffects(
 			residualEffects = joinEffectSummaries(residualEffects, effects);
 		}
 	}
-	if (accesses.length === 0) return undefined;
 	for (const block of cfg.reachable) {
 		const terminator = fn.blockTerminator(block);
 		const kind = fn.instructionKind(terminator);
@@ -998,6 +1020,78 @@ function sameAnyScriptSummary(
 	);
 }
 
+function deriveConditionalOwnSlotEffects(
+	local: CoreLocalFunctionSummary,
+	calls: ReadonlyArray<CoreIndexedCallSite>,
+	current: ReadonlyMap<CoreFunctionId, FunctionEffectSummary>,
+	includeCalls: boolean,
+): RelativeOwnSlotEffectSummary | undefined {
+	const seed = local.conditionalOwnSlotEffects;
+	// SCC seeds omit calls; consumers see the contract only after every edge converges.
+	if (seed === undefined || calls.length === 0 || !includeCalls) return seed;
+	const accesses = new Map(
+		seed.accesses.map((access) => [relativeOwnSlotEffectKey(access), access]),
+	);
+	const parameterEscape = [...seed.parameterEscape];
+	let receiverEscape = seed.receiverEscape;
+	let residualEffects = seed.residualEffects;
+	const retain = (value: CoreValueId | undefined, escape: ValueEscapeFact): boolean => {
+		if (value === undefined || escape === "none") return true;
+		const origin = local.origins[value] ?? ORIGIN_UNKNOWN;
+		if (origin.kind === "unknown") return false;
+		if (origin.kind === "parameter")
+			parameterEscape[origin.index] = joinValueEscape(
+				parameterEscape[origin.index] ?? "none",
+				escape,
+			);
+		else if (origin.kind === "receiver")
+			receiverEscape = joinValueEscape(receiverEscape, escape);
+		return true;
+	};
+	for (const site of calls) {
+		if (
+			coreCalleeTargetsAreOpen(site.targets) ||
+			site.targets.functions.length === 0 ||
+			site.targets.functions.length > 4 ||
+			site.transfer.invocation !== "call" ||
+			site.arguments === undefined
+		)
+			return undefined;
+		for (const target of site.targets.functions) {
+			const callee = current.get(target);
+			const conditional = callee?.conditionalOwnSlotEffects;
+			if (conditional === undefined) return undefined;
+			residualEffects = joinEffectSummaries(residualEffects, conditional.residualEffects);
+			for (const [index, argument] of site.arguments.entries()) {
+				const escape = conditional.parameterEscape[index] ?? "none";
+				if (!retain(argument, escape)) return undefined;
+			}
+			if (!retain(site.receiver, conditional.receiverEscape)) return undefined;
+			for (const access of conditional.accesses) {
+				const value =
+					access.base.kind === "receiver"
+						? site.receiver
+						: site.arguments[access.base.index];
+				const base = value === undefined ? undefined : local.origins[value];
+				if (
+					(base?.kind !== "parameter" && base?.kind !== "receiver") ||
+					base.identityKinds !== undefined
+				)
+					return undefined;
+				const projected = Object.freeze({ base, key: access.key, mode: access.mode });
+				accesses.set(relativeOwnSlotEffectKey(projected), projected);
+				if (accesses.size > 32) return undefined;
+			}
+		}
+	}
+	return Object.freeze({
+		accesses: Object.freeze(normalizeRelativeOwnSlotEffects([...accesses.values()])),
+		residualEffects,
+		parameterEscape: Object.freeze(parameterEscape),
+		receiverEscape,
+	});
+}
+
 function deriveSummary(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
@@ -1093,16 +1187,19 @@ function deriveSummary(
 		}
 	}
 	const roots = reasons.get(functionId) ?? [];
+	const conditional = deriveConditionalOwnSlotEffects(
+		local,
+		targets.outgoing(functionId),
+		current,
+		includeCalls,
+	);
 	return Object.freeze({
 		id: local.summaryId,
 		readAccessor: local.readAccessor,
 		functionIndex: functionId,
 		module: local.moduleId,
 		effects,
-		...(targets.outgoing(functionId).length === 0 &&
-		local.conditionalOwnSlotEffects !== undefined
-			? { conditionalOwnSlotEffects: local.conditionalOwnSlotEffects }
-			: {}),
+		...(conditional !== undefined ? { conditionalOwnSlotEffects: conditional } : {}),
 		callees: Object.freeze(
 			[
 				...new Set(

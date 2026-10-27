@@ -868,6 +868,12 @@ proofs exclude writes, suspension and user-code reentry. Residual reads, throws
 and collection remain conservative. Every access must resolve to an own data slot
 before a caller uses that summary; removing an operator's effect proof withdraws
 it even when the function body is unchanged.
+These contracts also compose through finite positional call sets and recursive
+components, substituting caller parameters and receivers independently of coarse
+invocation effects. Pure local helpers publish empty access sets with their escape
+facts. The summary worklist converges accesses and retention together; unknown
+callees, unprojectable bases and bounded-access overflow withdraw the contract.
+Memory proofs guard transitive dependencies with the program's function versions.
 
 Own-field observations publish initial integer bounds through the same
 normal-result contract as calls. One function worklist converges scalar returns

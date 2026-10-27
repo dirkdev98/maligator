@@ -139,9 +139,9 @@ export function forwardCoreOwnSlotCallLoads(
 		// Earlier callers may also be later callees; refresh before consuming their summaries.
 		const flow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
 		const calls = new Map<CoreInstructionId, ConditionalCall>();
-		const dependencies = new Map<CoreFunctionStore, CoreFunctionStore["versions"]>([
-			[fn, fn.versions],
-		]);
+		const functionVersions = CORE_FUNCTION_VERSION_DOMAINS.map((domain) =>
+			program.functionVersion(domain),
+		);
 		for (const site of flow.targets.outgoing(functionId)) {
 			if (
 				coreCalleeTargetsAreOpen(site.targets) ||
@@ -154,8 +154,6 @@ export function forwardCoreOwnSlotCallLoads(
 				const summary = flow.summaries.summary(target)?.conditionalOwnSlotEffects;
 				if (summary === undefined) break;
 				summaries.push(summary);
-				const callee = program.function(target);
-				dependencies.set(callee, callee.versions);
 			}
 			if (summaries.length !== site.targets.functions.length) continue;
 			const candidate = conditionalCall(fn, site, summaries);
@@ -208,12 +206,8 @@ export function forwardCoreOwnSlotCallLoads(
 			if (
 				program.generation !== generation ||
 				program.programVersion("data") !== dataVersion ||
-				[...dependencies].some(
-					([dependency, versions]) =>
-						program.function(dependency.id) !== dependency ||
-						CORE_FUNCTION_VERSION_DOMAINS.some(
-							(domain) => dependency.version(domain) !== versions[domain],
-						),
+				CORE_FUNCTION_VERSION_DOMAINS.some(
+					(domain, index) => program.functionVersion(domain) !== functionVersions[index],
 				)
 			)
 				throw new Error("Stale conditional call memory proof");

@@ -249,4 +249,95 @@ for (const failAt of [1, 2]) {
 	check(unionCoercions, failAt);
 	check(unionCallbacks, failAt - 1);
 }
+const nestedWrite = function nestedWrite(object, value) {
+	object.y = value;
+};
+const nestedRelay = function nestedRelay(value, object) {
+	nestedWrite(object, value);
+};
+function transitiveUntouched(payload) {
+	const object = { x: payload, y: 0 };
+	nestedRelay(8, object);
+	if (typeof collect === "function") collect();
+	return [object.x, object.y];
+}
+const recursiveWrite = function recursiveWrite(object, again, value) {
+	if (again) recursiveWrite(object, false, value);
+	else nestedWrite(object, value);
+};
+const recursiveUntouched = function recursiveUntouched(payload, again) {
+	const object = { x: payload, y: 0 };
+	recursiveWrite(object, again, 8);
+	if (typeof collect === "function") collect();
+	return [object.x, object.y];
+};
+for (const payload of [11, "payload".repeat(100), { alive: true }]) {
+	const result = transitiveUntouched(payload);
+	check(result[0], payload);
+	check(result[1], 8);
+	for (const count of [0, 1, 5]) {
+		const recursive = recursiveUntouched(payload, count);
+		check(recursive[0], payload);
+		check(recursive[1], 8);
+	}
+}
+function transitiveAliased() {
+	const object = { x: 11, y: 0 };
+	nestedRelay(object, object);
+	object.y.x = 42;
+	return object.x;
+}
+check(transitiveAliased(), 42);
+function transitiveMissing() {
+	const object = { x: 11 };
+	nestedRelay(8, object);
+	return object.x;
+}
+Object.defineProperty(Object.prototype, "y", {
+	set() {
+		this.x = 99;
+		if (typeof collect === "function") collect();
+	},
+	configurable: true,
+});
+try {
+	check(transitiveMissing(), 99);
+} finally {
+	delete Object.prototype.y;
+}
+function transitiveObserved(object) {
+	nestedRelay(8, object);
+	return object.x;
+}
+check(
+	transitiveObserved(
+		new Proxy(
+			{ x: 11, y: 0 },
+			{
+				set(object, key, value) {
+					object[key] = value;
+					object.x = 77;
+					return true;
+				},
+			},
+		),
+	),
+	77,
+);
+const nestedThrow = function nestedThrow(object, value) {
+	nestedRelay(value, object);
+	throw object;
+};
+function transitiveCaught(payload) {
+	const object = { x: payload, y: 0 };
+	try {
+		nestedThrow(object, 8);
+	} catch (error) {
+		check(error, object);
+		error.x = 99;
+		if (typeof collect === "function") collect();
+	}
+	return object.x;
+}
+check(transitiveCaught(11), 99);
 console.log("own-slot-call-effects PASS");
