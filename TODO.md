@@ -156,6 +156,13 @@ The independent target boundary and current storage contract are recorded in
       iterator paths now consume receiver bounds too. Primitive length loads skip
       Array and TypedArray admission; generic iterator-brand cursors remain because
       a primitive's custom iterator can supply an Array iterator.
+      Conditional kind bounds now follow dominating predicate edges and phi inputs,
+      including duplicate successors, backedges, calls and suspension. Canonical
+      effects and whole-value representations stay independent. Local observation
+      and coercion folds consume those bounds, and exact primitive String lengths
+      bypass property probes in full, frameless and resumable entries. Scoped
+      effect proofs still need availability obligations before code motion can
+      consume branch-only facts.
 - [ ] Give record entries typed fields. Program value-kind flow now carries initial
       own-field kind summaries through exact call chains, finite callee sets,
       recursive forwarding, spread/rest and constructor completions. Field-only

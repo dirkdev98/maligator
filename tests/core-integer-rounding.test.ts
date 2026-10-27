@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { analyzeCoreConditionalValueKinds } from "../src/compiler/core/core-conditional-value-kinds.ts";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
@@ -59,8 +60,16 @@ function rounding(
 		(value) => kinds.exactScalar(value),
 	);
 	const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(result!));
-	const facts = coreInstructionFacts(fn, instruction, kinds, true, (value, block) =>
-		ranges.range(value, block),
+	const conditional = analyzeCoreConditionalValueKinds(program, fn, cfg, (value) =>
+		kinds.kindMask(value),
+	);
+	const facts = coreInstructionFacts(
+		fn,
+		instruction,
+		kinds,
+		conditional,
+		true,
+		(value, block) => ranges.range(value, block),
 	);
 	return {
 		range: ranges.range(result!),

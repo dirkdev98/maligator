@@ -139,6 +139,57 @@ Object.assign(globalThis, {
 	indexedPrimitiveWrite,
 	suspendedPrimitiveWrite,
 });
+function branchStringLength(value) {
+	if (typeof value === "string") return value.length;
+	return -1;
+}
+function branchStringJoin(value, observe) {
+	let text = "fallback";
+	if (typeof value === "string") text = value;
+	observe(text);
+	return text.length;
+}
+function* branchSuspendedLength(value, observe) {
+	if (typeof value !== "string") return -1;
+	yield observe(value);
+	return value.length;
+}
+function branchCoercible(value, observe) {
+	if (value) {
+		observe(value);
+		const {} = value;
+		return 7;
+	}
+	return -1;
+}
+function branchObservation(value, observe) {
+	if (typeof value === "string") {
+		observe(value);
+		return typeof value === "object";
+	}
+	return true;
+}
+function branchObjectProperty(value, observe) {
+	if (typeof value === "object" && value !== null) {
+		observe(value);
+		return value.length;
+	}
+	return -1;
+}
+function branchSymbolProperty(value, key, observe) {
+	if (typeof key !== "symbol") return -1;
+	observe(key);
+	return value[key];
+}
+Object.assign(globalThis, {
+	branchStringLength,
+	branchStringJoin,
+	branchSuspendedLength,
+	branchObjectProperty,
+	branchSymbolProperty,
+	branchCoercible,
+	branchObservation,
+});
 globalThis.requireSymbol = requireSymbol;
 globalThis.checkCoercible = checkCoercible;
 const rows = [];
@@ -536,5 +587,110 @@ try {
 } finally {
 	if (mutable) for (const [prototype, key] of installations) delete prototype[key];
 }
+const conditionalEvents = [];
+const conditionalObserve = (value) => {
+	conditionalEvents.push(typeof value);
+	collectGarbage?.();
+	return value;
+};
+for (const value of ["", "A𝌆Z", null, undefined, 42, { length: 19 }]) {
+	const expected = typeof value === "string" ? value.length : -1;
+	if (globalThis.branchStringLength(value) !== expected)
+		throw new Error("conditional string length");
+	if (
+		globalThis.branchStringJoin(value, conditionalObserve) !==
+		(typeof value === "string" ? value.length : 8)
+	)
+		throw new Error("conditional string join");
+	const iterator = globalThis.branchSuspendedLength(value, conditionalObserve);
+	const first = iterator.next();
+	collectGarbage?.();
+	const result = first.done ? first : iterator.next();
+	if (!result.done || result.value !== expected)
+		throw new Error("conditional suspended length");
+	rows.push(expected);
+}
+for (const value of [
+	null,
+	undefined,
+	false,
+	true,
+	0,
+	42,
+	0n,
+	3n,
+	"",
+	"text",
+	Symbol("key"),
+	{},
+	() => 1,
+]) {
+	if (globalThis.branchCoercible(value, conditionalObserve) !== (value ? 7 : -1))
+		throw new Error("conditional coercibility");
+	if (
+		globalThis.branchObservation(value, conditionalObserve) !==
+		(typeof value !== "string")
+	)
+		throw new Error("conditional observation");
+}
+const conditionalSymbol = Symbol("conditional key");
+const conditionalObject = {
+	get length() {
+		conditionalEvents.push("length");
+		collectGarbage?.();
+		return 23;
+	},
+	get [conditionalSymbol]() {
+		conditionalEvents.push("symbol");
+		collectGarbage?.();
+		return 29;
+	},
+};
+if (
+	globalThis.branchObjectProperty(conditionalObject, conditionalObserve) !== 23 ||
+	globalThis.branchObjectProperty(null, conditionalObserve) !== -1
+)
+	throw new Error("conditional object access");
+if (
+	globalThis.branchSymbolProperty(
+		conditionalObject,
+		conditionalSymbol,
+		conditionalObserve,
+	) !== 29
+)
+	throw new Error("conditional symbol access");
+try {
+	globalThis.branchSymbolProperty(null, conditionalSymbol, conditionalObserve);
+	throw new Error("missing conditional null receiver exception");
+} catch (error) {
+	if (!(error instanceof TypeError)) throw error;
+}
+const conditionalProxy = new Proxy(
+	{},
+	{
+		get(target, key) {
+			conditionalEvents.push(String(key));
+			collectGarbage?.();
+			if (key === "length") return 31;
+			throw thrown;
+		},
+	},
+);
+if (
+	globalThis.branchObjectProperty(conditionalProxy, conditionalObserve) !== 31 ||
+	globalThis.branchObjectProperty(new String("A𝌆"), conditionalObserve) !== 3
+)
+	throw new Error("conditional object brands");
+try {
+	globalThis.branchSymbolProperty(
+		conditionalProxy,
+		conditionalSymbol,
+		conditionalObserve,
+	);
+	throw new Error("missing conditional proxy exception");
+} catch (error) {
+	if (error !== thrown) throw error;
+}
+rows.push(conditionalEvents);
 rows.push(order, inheritedWrites);
 console.log(JSON.stringify(rows));

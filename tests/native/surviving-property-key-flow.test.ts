@@ -166,6 +166,29 @@ it.each(["mutable", "locked"] as const)(
 			expect(requiredVariant.facts?.[requiredIp]?.inputKindMasks).toEqual([
 				primordials === "locked" ? COMPILER_VALUE_KIND_SYMBOL : COMPILER_VALUE_KIND_TOP,
 			]);
+			for (const name of [
+				"branchStringLength",
+				"branchStringJoin",
+				"branchSuspendedLength",
+			]) {
+				const fn = pair.programImage.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+								[]),
+						) === name,
+				)!;
+				expect(fn, name).toBeDefined();
+				const ip = fn.body.instructions.findIndex(
+					(op) => op.opcode === "LOAD_PROPERTY_STATIC",
+				);
+				const load = fn.body.instructions[ip]!;
+				if (load.opcode !== "LOAD_PROPERTY_STATIC")
+					throw new Error("Missing conditional length read");
+				expect(instructionInputKind(fn.facts?.[ip], load.object), name).toBe(
+					COMPILER_VALUE_KIND_STRING,
+				);
+			}
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])
 					expect(

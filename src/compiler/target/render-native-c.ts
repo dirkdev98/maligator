@@ -11098,7 +11098,9 @@ function emitInstruction(
 			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-				nativePlan?.kind === "primitive-string-length"
+				(nativePlan?.kind === "primitive-string-length" ||
+					(operandKind(instruction.object) === COMPILER_VALUE_KIND_STRING &&
+						isLengthPropertyName(context.stringConstants[instruction.stringIndex])))
 			) {
 				const length = `mal_string_length(mal_value_to_string(${boxed(instruction.object)}))`;
 				const direct = `r${instruction.dst} = ${
@@ -11109,7 +11111,7 @@ function emitInstruction(
 							: `mal_value_from_i32((i32) ${length})`
 				};`;
 				const ordinaryLength =
-					reps[instruction.object] === "string"
+					operandKind(instruction.object) === COMPILER_VALUE_KIND_STRING
 						? [direct]
 						: [
 								`if (mal_value_is_string(${boxed(instruction.object)})) {`,

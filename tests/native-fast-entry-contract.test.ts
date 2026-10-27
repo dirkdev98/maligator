@@ -44,6 +44,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_value_to_bigint",
 	"mal_bigint_value",
 	"mal_string_equals",
+	"mal_string_length",
 	"mal_vm_property_try_load_static",
 	"mal_vm_load_known_own_data",
 	"mal_vm_property_try_load_length_static",
@@ -1558,3 +1559,44 @@ describe("native fast entries", () => {
 		expect(fastEntry(body(instructions, overrides))).toBeUndefined();
 	});
 });
+
+it.each([
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_TOP,
+])(
+	"uses an exact primitive String length without a property cache for kinds %i",
+	(kind) => {
+		const lines = fastEntry(
+			body([
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					dst: 2,
+					object: 0,
+					stringIndex: LENGTH_STRING_INDEX,
+					icIndex: 0,
+				},
+				{ opcode: "RETURN", value: 2 },
+			]),
+			undefined,
+			true,
+			undefined,
+			[
+				{
+					registers: [0, 2],
+					inputOffset: 0,
+					inputKindMasks: [kind],
+					resultKindMasks: [COMPILER_VALUE_KIND_TOP],
+				},
+			],
+		);
+		expect(lines).toBeDefined();
+		expect(unexpectedHelpers(lines!)).toEqual([]);
+		const source = lines!.join("\n");
+		expect(source.includes("mal_string_length(")).toBe(
+			kind === COMPILER_VALUE_KIND_STRING,
+		);
+		expect(source.includes("__fast_ic")).toBe(kind !== COMPILER_VALUE_KIND_STRING);
+	},
+);

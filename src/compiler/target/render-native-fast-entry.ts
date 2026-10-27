@@ -223,7 +223,11 @@ export function renderNativeFastEntry(
 		if (
 			op.opcode === "LOAD_PROPERTY_STATIC" &&
 			!fieldLoads.has(ip) &&
-			input.instructions[ip]?.kind !== "known-own-data"
+			input.instructions[ip]?.kind !== "known-own-data" &&
+			!(
+				input.lengthProperty(op.stringIndex) &&
+				instructionInputKind(input.facts?.[ip], op.object) === COMPILER_VALUE_KIND_STRING
+			)
 		)
 			loadsProperties = true;
 		if (op.opcode === "LOAD_CAPTURED") loadsCaptures = true;
@@ -883,6 +887,11 @@ function fastInstruction(
 			if (input.instructions[ip]?.kind === "known-own-data")
 				return `__fast_r${op.dst} = mal_vm_load_known_own_data(__fast_r${op.object}, mal_value_from_string(vm->string_constant_atoms[${input.stringIndex(op.stringIndex)}]), nullptr);`;
 			if (op.opcode !== "LOAD_PROPERTY_STATIC") return undefined;
+			if (
+				input.lengthProperty(op.stringIndex) &&
+				values.kind(op.object) === COMPILER_VALUE_KIND_STRING
+			)
+				return `__fast_r${op.dst} = mal_value_from_i32((i32) mal_string_length(mal_value_to_string(__fast_r${op.object})));`;
 			const probe = input.lengthProperty(op.stringIndex)
 				? "mal_vm_property_try_load_length_static"
 				: "mal_vm_property_try_load_static";

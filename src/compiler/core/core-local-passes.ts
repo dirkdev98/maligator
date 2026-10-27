@@ -31,6 +31,7 @@ import {
 	coreReadsImportedBindingInitialized,
 	coreReadsModuleBindingInitialized,
 } from "./core-compilation.ts";
+import { CORE_CONDITIONAL_VALUE_KIND_ANALYSIS } from "./core-conditional-value-kinds.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
 import { removeCoreInstructions } from "./core-instruction-removal.ts";
@@ -1241,19 +1242,30 @@ const foldValueKindObservations: CoreFunctionPass = {
 	name: "value-kind-observation-folding",
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["unary", "binary", "typeofCompare", "callKnown"],
-	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS, CORE_LOOP_INDUCTION_ANALYSIS],
-	wakesOn: ["body", "cfg", "normalResults", "representations"],
+	requiredAnalyses: [
+		CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
+		CORE_LOCAL_VALUE_KIND_ANALYSIS,
+		CORE_LOOP_INDUCTION_ANALYSIS,
+	],
+	wakesOn: [
+		"body",
+		"cfg",
+		"exceptionFlow",
+		"memoryEffects",
+		"normalResults",
+		"representations",
+	],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		const conditional = context.analysis(CORE_CONDITIONAL_VALUE_KIND_ANALYSIS);
 		const replacements: Array<{
 			readonly instruction: CoreInstructionId;
 			readonly result: boolean;
 		}> = [];
-		const kindMask = (value: CoreValueId) => kinds.kindMask(value);
 		const integerRange = (value: CoreValueId, consumer: CoreInstructionId) =>
 			context
 				.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
@@ -1265,7 +1277,7 @@ const foldValueKindObservations: CoreFunctionPass = {
 				program,
 				fn,
 				instruction,
-				kindMask,
+				(value) => conditional.kindMask(value, fn.instructionBlock(instruction)),
 				integerRange,
 			);
 			if (result !== undefined) replacements.push({ instruction, result });
@@ -1286,16 +1298,23 @@ const foldPrimitiveCoercions: CoreFunctionPass = {
 	name: "primitive-coercion-folding",
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["requireCoercible", "toPropertyKey"],
-	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS, CORE_LOOP_INDUCTION_ANALYSIS],
-	wakesOn: ["body", "cfg", "normalResults", "representations"],
+	requiredAnalyses: [CORE_CONDITIONAL_VALUE_KIND_ANALYSIS, CORE_LOOP_INDUCTION_ANALYSIS],
+	wakesOn: [
+		"body",
+		"cfg",
+		"exceptionFlow",
+		"memoryEffects",
+		"normalResults",
+		"representations",
+	],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
-		const coercible = (value: CoreValueId): boolean => {
-			const mask = kinds.kindMask(value);
+		const kinds = context.analysis(CORE_CONDITIONAL_VALUE_KIND_ANALYSIS);
+		const coercible = (value: CoreValueId, block: CoreBlockId): boolean => {
+			const mask = kinds.kindMask(value, block);
 			return (
 				mask !== 0 &&
 				(mask & (COMPILER_VALUE_KIND_NULL | COMPILER_VALUE_KIND_UNDEFINED)) === 0
@@ -1313,7 +1332,8 @@ const foldPrimitiveCoercions: CoreFunctionPass = {
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode === "requireCoercible") {
 				const value = instructionOperand(fn, instruction, 0);
-				if (value === undefined || !coercible(value)) continue;
+				if (value === undefined || !coercible(value, fn.instructionBlock(instruction)))
+					continue;
 				editor ??= CoreEditor.open(program, item.function);
 				editor.removeInstruction(instruction);
 				continue;
@@ -1333,13 +1353,13 @@ const foldPrimitiveCoercions: CoreFunctionPass = {
 			if (
 				!compactIndex &&
 				!compilerValueKindMaskIsSubset(
-					kinds.kindMask(key),
+					kinds.kindMask(key, fn.instructionBlock(instruction)),
 					COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL,
 				)
 			)
 				continue;
 			editor ??= CoreEditor.open(program, item.function);
-			if (!coercible(base)) {
+			if (!coercible(base, fn.instructionBlock(instruction))) {
 				editor.insertInstruction(
 					fn.instructionBlock(instruction),
 					instruction,

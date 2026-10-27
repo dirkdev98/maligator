@@ -14,6 +14,8 @@ import {
 	compilerIntegerRangesEqual,
 } from "../shared/integer-range.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import { CORE_CONDITIONAL_VALUE_KIND_ANALYSIS } from "./core-conditional-value-kinds.ts";
+import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
@@ -79,6 +81,10 @@ export function coreInstructionFactPlans(
 			function: functionId,
 		});
 		const proof = { fn, versions: fn.versions };
+		const conditional = analyses.get(CORE_CONDITIONAL_VALUE_KIND_ANALYSIS, {
+			scope: "function",
+			function: functionId,
+		});
 		let ranges: CoreLoopInductionAnalysis | undefined;
 		const range: CoreInstructionRangeQuery = (value, block) =>
 			(ranges ??= analyses.get(CORE_LOOP_INDUCTION_ANALYSIS, {
@@ -90,7 +96,7 @@ export function coreInstructionFactPlans(
 		);
 		for (const instruction of fn.instructionIds())
 			instructions[instruction] = Object.freeze(
-				coreInstructionFacts(fn, instruction, kinds, false, range),
+				coreInstructionFacts(fn, instruction, kinds, conditional, false, range),
 			);
 		const plan = Object.freeze({
 			function: functionId,
@@ -238,7 +244,8 @@ function instructionIntegerRanges(
 
 function instructionMasks(
 	fn: CoreFunctionStore,
-	kinds: CoreValueKindAnalysis,
+	kinds: CoreConditionalValueKinds,
+	block: CoreBlockId,
 	start: number,
 	count: number,
 	result: boolean,
@@ -246,7 +253,7 @@ function instructionMasks(
 	if (count === 0) return emptyMasks;
 	const kernel = fn.kernel;
 	const first =
-		kinds.kindMask(result ? kernel.resultAt(start) : kernel.operandAt(start)) ||
+		kinds.kindMask(result ? kernel.resultAt(start) : kernel.operandAt(start), block) ||
 		COMPILER_VALUE_KIND_TOP;
 	if (count === 1) {
 		let masks = singleMasks.get(first);
@@ -257,8 +264,10 @@ function instructionMasks(
 		return masks;
 	}
 	const second =
-		kinds.kindMask(result ? kernel.resultAt(start + 1) : kernel.operandAt(start + 1)) ||
-		COMPILER_VALUE_KIND_TOP;
+		kinds.kindMask(
+			result ? kernel.resultAt(start + 1) : kernel.operandAt(start + 1),
+			block,
+		) || COMPILER_VALUE_KIND_TOP;
 	if (count === 2) {
 		const key = first * 256 + second;
 		let masks = pairMasks.get(key);
@@ -273,6 +282,7 @@ function instructionMasks(
 		values.push(
 			kinds.kindMask(
 				result ? kernel.resultAt(start + index) : kernel.operandAt(start + index),
+				block,
 			) || COMPILER_VALUE_KIND_TOP,
 		);
 	return Object.freeze(values);
@@ -282,15 +292,18 @@ export function coreInstructionFacts(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 	kinds: CoreValueKindAnalysis,
+	conditional: CoreConditionalValueKinds,
 	refineEffects = true,
 	range?: CoreInstructionRangeQuery,
 ): CoreInstructionFacts {
 	const kernel = fn.kernel;
 	const input = kernel.instructionOperandStart(instruction);
 	const output = kernel.instructionResultStart(instruction);
+	const block = fn.instructionBlock(instruction);
 	const masks = instructionMasks(
 		fn,
-		kinds,
+		conditional,
+		block,
 		input,
 		kernel.instructionOperandCount(instruction),
 		false,
@@ -306,6 +319,7 @@ export function coreInstructionFacts(
 	const results = instructionMasks(
 		fn,
 		kinds,
+		block,
 		output,
 		kernel.instructionResultCount(instruction),
 		true,

@@ -4,6 +4,7 @@ import {
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
 } from "../shared/compiler-value-kinds.ts";
+import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
 import { analyzeCoreLoopInductions } from "./core-ir-loops.ts";
@@ -173,12 +174,15 @@ export function analyzeCoreNativeEntry(
 			);
 		}
 	}
+	const conditional = analyzeCoreConditionalValueKinds(program, fn, cfg, (value) =>
+		kinds.kindMask(value),
+	);
 	const inputs = Object.freeze(
 		instructions.flatMap((instruction) => {
 			return [
 				Object.freeze({
 					instruction,
-					...coreInstructionFacts(fn, instruction, kinds, true, range),
+					...coreInstructionFacts(fn, instruction, kinds, conditional, true, range),
 				}),
 			];
 		}),
