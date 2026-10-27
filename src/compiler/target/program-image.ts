@@ -20,7 +20,10 @@ import type {
 	CompilerNumericTypedArrayKind,
 	CompilerNumericSortCallback,
 } from "../shared/compiler-instruction.ts";
-import { compilerValueKindMaskIsValid } from "../shared/compiler-value-kinds.ts";
+import {
+	compilerValueKindMaskIsValid,
+	COMPILER_VALUE_KIND_OBJECT,
+} from "../shared/compiler-value-kinds.ts";
 import { EFFECT_DOMAINS } from "../shared/effect-summary.ts";
 import {
 	INSTRUCTION_MAY_THROW,
@@ -28,7 +31,10 @@ import {
 	INSTRUCTION_CALLS_USER_CODE,
 	INSTRUCTION_MAY_SUSPEND,
 } from "../shared/instruction-facts.ts";
-import { instructionFactsAreValid } from "../shared/instruction-facts.ts";
+import {
+	instructionFactsAreValid,
+	instructionInputKind,
+} from "../shared/instruction-facts.ts";
 import type { InstructionFacts } from "../shared/instruction-facts.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
@@ -1467,11 +1473,11 @@ export function targetCopyEdgeReaches(
 export function validateNativeInstructionFacts(
 	fn: BytecodeFunction,
 	facts: NativeFunctionPlan["facts"],
+	plans: NativeFunctionPlan["instructions"],
 ): void {
-	if (facts === undefined) return;
-	if (facts.length !== fn.instructions.length)
+	if (facts !== undefined && facts.length !== fn.instructions.length)
 		throw new RangeError("Invalid native instruction facts count");
-	for (const [ip, fact] of facts.entries()) {
+	for (const [ip, fact] of facts?.entries() ?? []) {
 		if (fact === undefined) continue;
 		if (!instructionFactsAreValid(fact))
 			throw new RangeError("Invalid native instruction facts");
@@ -1496,6 +1502,38 @@ export function validateNativeInstructionFacts(
 				throw new RangeError("Invalid native input kind count");
 		}
 	}
+	for (const [ip, plan] of plans.entries()) {
+		if (plan?.kind !== "return-completion") continue;
+		const op = fn.instructions[ip];
+		const immediatePrimitive =
+			op?.opcode === "RETURN" &&
+			op.value < 0 &&
+			decodeVmValueOperand(op.value).kind !== "register";
+		const expected =
+			op?.opcode !== "RETURN"
+				? undefined
+				: immediatePrimitive && !fn.isDerivedConstructor
+					? "primitive"
+					: nativeReturnCompletionKind(
+							instructionInputKind(facts?.[ip], op.value),
+							fn.isDerivedConstructor,
+						);
+		if (expected === undefined || plan.result !== expected)
+			throw new RangeError("Invalid native return completion proof");
+	}
+}
+
+function nativeReturnCompletionKind(
+	mask: number | undefined,
+	derived: boolean,
+): "object" | "primitive" | undefined {
+	if (mask === COMPILER_VALUE_KIND_OBJECT) return "object";
+	return !derived &&
+		mask !== undefined &&
+		mask !== 0 &&
+		(mask & COMPILER_VALUE_KIND_OBJECT) === 0
+		? "primitive"
+		: undefined;
 }
 
 export interface NativeFunctionPlan {
@@ -2514,6 +2552,7 @@ export function validateNativeNumericSortCallback(
 }
 
 export type NativeInstructionPlan =
+	| { readonly kind: "return-completion"; readonly result: "object" | "primitive" }
 	| {
 			readonly kind: "call";
 			readonly directFunctionIndex?: number;
@@ -2568,7 +2607,11 @@ export type NativeInstructionPlan =
 export function nativePlanKeepsOrdinaryLowering(
 	plan: NativeInstructionPlan | undefined,
 ): boolean {
-	return plan === undefined || plan.kind === "exact-array-element";
+	return (
+		plan === undefined ||
+		plan.kind === "exact-array-element" ||
+		plan.kind === "return-completion"
+	);
 }
 
 /** These lowerings read operands by value and assign final outputs; their fallbacks may still collect. */
@@ -3149,8 +3192,16 @@ export function lowerVerifiedExecutionToProgramImage(
  */
 function nativeInstructionPlanFromExecution(
 	instruction: CompilerInstruction,
+	fn: ExecutionFunction,
 ): NativeInstructionPlan | undefined {
 	switch (instruction.type) {
+		case "return": {
+			const result = nativeReturnCompletionKind(
+				instructionInputKind(instruction.facts, instruction.registers[0]),
+				fn.isDerivedConstructor,
+			);
+			return result === undefined ? undefined : { kind: "return-completion", result };
+		}
 		case "call": {
 			const guardedBuiltinCall = lowerGuardedBuiltinCall(instruction);
 			const exactCollectionReceiver =
@@ -3323,7 +3374,7 @@ function lowerExecutionFunctionToNativePlan(
 			const ip = instructionIndexByTargetInstruction.get(instruction);
 			if (ip === undefined) continue;
 			facts[ip] = instruction.facts;
-			const nativePlan = nativeInstructionPlanFromExecution(instruction);
+			const nativePlan = nativeInstructionPlanFromExecution(instruction, fn);
 			if (nativePlan !== undefined) setNativeInstructionPlan(ip, nativePlan);
 			compilerSiteIds[ip] = instructionSites?.get(instruction)?.id;
 		}

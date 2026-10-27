@@ -874,6 +874,13 @@ invocation effects. Pure local helpers publish empty access sets with their esca
 facts. The summary worklist converges accesses and retention together; unknown
 callees, unprojectable bases and bounded-access overflow withdraw the contract.
 Memory proofs guard transitive dependencies with the program's function versions.
+Native return completion plans independently consume the returned value's kind.
+Object completions override a base or derived receiver, including before `super()`;
+base primitive completions need only the construction check. Unknown or mixed
+Object bounds keep generic completion, while derived primitive/undefined and
+coroutine completions retain their checked protocols. Artifact decoding validates
+the selected strategy against current operand facts; schema 320 invalidates older
+artifacts. This follows [ECMAScript [[Construct]]](https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ecmascript-function-objects-construct-argumentslist-newtarget).
 
 Own-field observations publish initial integer bounds through the same
 normal-result contract as calls. One function worklist converges scalar returns

@@ -1756,7 +1756,7 @@ export function validateNativeStorage(
 	entries: NativeEntryLookup = new Map(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): void {
-	validateNativeInstructionFacts(native.body, native.facts);
+	validateNativeInstructionFacts(native.body, native.facts, native.instructions);
 	// Recompute body facts at this trust boundary; callers can replace or mutate an image.
 	const body = storageBodyFacts(native);
 	const sameNumbers = (left: ReadonlyArray<number>, right: ReadonlyArray<number>) =>

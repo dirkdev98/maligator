@@ -110,7 +110,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 319;
+export const COMPILER_ARTIFACT_VERSION = 320;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2343,7 +2343,7 @@ function writeCompilerArtifact(
 			}
 		}
 
-		validateNativeInstructionFacts(fn, native.facts);
+		validateNativeInstructionFacts(fn, native.facts, native.instructions);
 		w.u8(native.facts === undefined ? 0 : 1);
 		if (native.facts !== undefined) {
 			const rows = native.facts.flatMap((facts, ip) =>
@@ -2626,6 +2626,9 @@ function writeCompilerArtifact(
 					);
 				}
 				w.u8(11);
+			} else if (plan.kind === "return-completion" && instruction.opcode === "RETURN") {
+				w.u8(27);
+				w.u8(plan.result === "object" ? 0 : 1);
 			} else if (
 				plan.kind === "known-own-data" &&
 				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
@@ -5032,7 +5035,6 @@ function readCompilerArtifact(
 					...(registers === undefined ? {} : { registers, inputOffset }),
 				};
 			}
-			validateNativeInstructionFacts(fn, facts);
 		}
 
 		const nativeInstructions: Array<NativeInstructionPlan | undefined> = Array.from({
@@ -5308,6 +5310,13 @@ function readCompilerArtifact(
 				nativeInstructions[instructionIndex] = {
 					kind: "primitive-string-length",
 				};
+			} else if (tag === 27 && instruction.opcode === "RETURN") {
+				const result = r.u8();
+				if (result > 1) throw new RangeError("Invalid native return completion tag");
+				nativeInstructions[instructionIndex] = {
+					kind: "return-completion",
+					result: result === 0 ? "object" : "primitive",
+				};
 			} else if (
 				tag === 26 &&
 				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
@@ -5353,6 +5362,7 @@ function readCompilerArtifact(
 				);
 			}
 		}
+		validateNativeInstructionFacts(fn, facts, nativeInstructions);
 		const regionCount = r.count(17);
 		const regions: Array<VmRegion> = [];
 		if (regionCount > 0) {

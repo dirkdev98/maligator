@@ -15198,6 +15198,15 @@ function emitInstruction(
 					`return ${coroReturnValue};`,
 				];
 			}
+			const completion =
+				context.nativePlan?.kind === "return-completion"
+					? context.nativePlan.result
+					: undefined;
+			// Object completions also bypass an uninitialized derived receiver before super().
+			if (completion === "object") {
+				if (materialize.length === 0) elideFramePosition();
+				return [...materialize, `${gcUnlink}return ${value};`];
+			}
 			// A derived constructor substitutes the super-bound `this` for a
 			// non-object return, and returning before super() bound it is a
 			// ReferenceError — so route through the checked helper (which can throw).
@@ -15214,6 +15223,11 @@ function emitInstruction(
 			if (!hasPrototype) {
 				return [...materialize, `${gcUnlink}return ${value};`];
 			}
+			if (completion === "primitive")
+				return [
+					...materialize,
+					`${gcUnlink}return mal_value_is_object(${nativeBodyReference(resources, "newTarget")}) ? this_value : ${value};`,
+				];
 			// Route through mal_ops_construct_result so a [[Construct]] invocation
 			// (new_target set) substitutes `this` for a non-object completion; a
 			// plain call passes the value through unchanged.

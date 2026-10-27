@@ -131,6 +131,11 @@ The independent target boundary and current storage contract are recorded in
       results, including ordinary, known, spread, rest, construction and resumable
       paths. Helper state, borrowed outputs and reused input storage remain rooted.
       Carry identities into remaining storage and liveness contracts.
+      Explicit native return plans now use normal-result kinds to pass Object
+      completions through base and derived constructors and to omit the result-kind
+      check for base primitive completions. Unknown and mixed Object bounds retain
+      generic completion; derived primitive/undefined checks and coroutine returns
+      keep their own protocols, independently of invocation effects.
       Builtin alias returns now share independent result projections across kinds,
       integer intervals, return provenance and identity consumers. Known positional
       prefixes survive list transport; boxing and unboxing require input-kind
