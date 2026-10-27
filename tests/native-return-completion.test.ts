@@ -7,7 +7,10 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
-import { validateNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
+import {
+	lowerNativeFunctionStorage,
+	validateNativeStorage,
+} from "../src/compiler/target/lower-native-storage.ts";
 import type { NativeFunctionPlan } from "../src/compiler/target/program-image.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
@@ -16,6 +19,26 @@ function returned(out: ReturnType<typeof inspectStaticValueFunction>) {
 }
 
 describe("native constructor completion plans", () => {
+	it.each(["value ? null : false", "value ? 'text' : undefined", "{value}"])(
+		"preserves storage ownership when selecting the completion for %s",
+		(expression) => {
+			const out = inspectStaticValueFunction(
+				`function probe(value,observe){const result=${expression};observe();return result;}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(out.native.instructions[returned(out)]?.kind).toBe("return-completion");
+			const ordinary = {
+				...out.native,
+				instructions: out.native.instructions.map((plan) =>
+					plan?.kind === "return-completion" ? undefined : plan,
+				),
+			};
+			const lower = (native: NativeFunctionPlan) =>
+				lowerNativeFunctionStorage(native, new Map(), out.image.runtime.stringConstants);
+			expect(lower(out.native).storage).toEqual(lower(ordinary).storage);
+		},
+	);
+
 	it("uses a branch-local Symbol bound through boxed storage and a collecting call", () => {
 		const out = inspectStaticValueFunction(
 			"function probe(value){if(typeof value!=='symbol')throw value;globalThis.collect();return value;}globalThis.probe=probe;",

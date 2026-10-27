@@ -552,7 +552,9 @@ function scalarStorageOwnership(
 				(handlers[ip] !== undefined ||
 					["CATCH", "TRY_BEGIN", "TRY_END"].includes(op.opcode))) ||
 			(plan !== undefined &&
-				!["unsigned-arithmetic", "call", "construct"].includes(plan.kind))
+				!["unsigned-arithmetic", "call", "construct", "return-completion"].includes(
+					plan.kind,
+				))
 		)
 			blocked.add(ip);
 	}
@@ -1376,8 +1378,10 @@ function rootStorage(
 	};
 }
 
-// Calls and operators touch operands only within their own instruction.
-const INSTRUCTION_LOCAL_PLAN_KINDS: ReadonlySet<string> = new Set(["call"]);
+const INSTRUCTION_LOCAL_PLAN_KINDS: ReadonlySet<string> = new Set([
+	"call",
+	"return-completion",
+]);
 
 /** Continuously rooted registers whose emitted storage accesses are their VM reads and writes. */
 function instructionLocalRoots(
