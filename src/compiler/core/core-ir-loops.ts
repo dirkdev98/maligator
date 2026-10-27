@@ -369,6 +369,7 @@ export function analyzeCoreLoopInductions(
 	kindMask?: (value: CoreValueId) => CompilerValueKindMask,
 ): CoreLoopInductionAnalysis {
 	const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+	const lengthKinds = kindMask === undefined ? undefined : { kindMask };
 	const numericRepresentation = (value: CoreValueId): "f64" | "i32" | undefined => {
 		const representation = fn.valueRepresentation(value);
 		if (representation === "i32") return representation;
@@ -560,7 +561,7 @@ export function analyzeCoreLoopInductions(
 							? coreInstructionResultIntegerRange(fn, definition)
 							: resultRange(definition);
 				if (range === undefined && definition !== undefined)
-					range = coreInstructionLengthIntegerRange(program, fn, definition, kindMask);
+					range = coreInstructionLengthIntegerRange(program, fn, definition, lengthKinds);
 				if (range === undefined && definition !== undefined) {
 					const input = coreIntegerRoundingInput(fn, definition);
 					if (input !== undefined) range = query(input, block, budget);
@@ -686,7 +687,7 @@ export function analyzeCoreLoopInductions(
 					fn.instructionAttributes(instruction).operator as string,
 				)) ||
 				(coreInstructionResultIntegerRange(fn, instruction) ??
-					coreInstructionLengthIntegerRange(program, fn, instruction, kindMask)) !==
+					coreInstructionLengthIntegerRange(program, fn, instruction, lengthKinds)) !==
 					undefined),
 	);
 	const result: CoreLoopInductionAnalysis = {

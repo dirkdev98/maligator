@@ -257,7 +257,7 @@ export function coreInstructionLengthIntegerRange(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
-	kindMask?: (value: CoreValueId) => CompilerValueKindMask,
+	kinds?: Pick<CoreValueKindAnalysis, "kindMask">,
 ): CompilerIntegerRange | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
@@ -275,7 +275,7 @@ export function coreInstructionLengthIntegerRange(
 	if (attributes.exactArrayLength === true) return COMPILER_UINT32_RANGE;
 	if (attributes.primitiveStringLength === true) return COMPILER_STRING_LENGTH_RANGE;
 	const receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
-	const mask = kindMask?.(receiver) ?? COMPILER_VALUE_KIND_TOP;
+	const mask = kinds?.kindMask(receiver) ?? COMPILER_VALUE_KIND_TOP;
 	// Nullish receivers throw; only the String alternative contributes normal lengths.
 	return (mask & COMPILER_VALUE_KIND_STRING) !== 0 &&
 		(mask & ~(COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_NULLISH)) === 0

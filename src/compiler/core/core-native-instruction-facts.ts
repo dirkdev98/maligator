@@ -336,9 +336,7 @@ export function coreInstructionFacts(
 	const resultRange =
 		results.length === 1 && results[0] === COMPILER_VALUE_KIND_NUMBER
 			? (coreInstructionResultIntegerRange(fn, instruction) ??
-				coreInstructionLengthIntegerRange(program, fn, instruction, (value) =>
-					kinds.kindMask(value),
-				) ??
+				coreInstructionLengthIntegerRange(program, fn, instruction, kinds) ??
 				(coreIntegerRoundingInput(fn, instruction) === undefined
 					? undefined
 					: range?.(kernel.resultAt(output), fn.instructionBlock(instruction))) ??
