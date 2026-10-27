@@ -414,7 +414,7 @@ export const foldStaticBindingConstants: CoreFunctionPass = {
 export const foldStaticReflections: CoreFunctionPass = {
 	name: "fold-static-reflections",
 	admission: {
-		predicate: "call or typeof observation",
+		predicate: "call, typeof or membership observation",
 		hasOpportunity({ program, function: functionId }) {
 			const fn = program.function(functionId);
 			for (const instruction of fn.instructionIds()) {
@@ -424,6 +424,8 @@ export const foldStaticReflections: CoreFunctionPass = {
 					opcode === "call" ||
 					opcode === "callKnown" ||
 					opcode === "typeofCompare" ||
+					(opcode === "binary" &&
+						fn.instructionAttributes(instruction).operator === "in") ||
 					(opcode === "unary" &&
 						fn.instructionAttributes(instruction).operator === "typeof")
 				)
@@ -433,7 +435,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 		},
 	},
 	stage: "memory",
-	requiredFunctionOpcodesAny: ["call", "callKnown", "unary", "typeofCompare"],
+	requiredFunctionOpcodesAny: ["call", "callKnown", "unary", "typeofCompare", "binary"],
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
 	wakesOn: STATIC_VALUE_WAKES,
 	changes: { cfg: false, calls: true, facts: true, representations: false },
@@ -481,20 +483,22 @@ export const foldStaticReflections: CoreFunctionPass = {
 				edits += 2;
 				continue;
 			}
-			if (opcode !== "call" && opcode !== "callKnown") continue;
+			const membership =
+				opcode === "binary" && fn.instructionAttributes(instruction).operator === "in";
+			if (opcode !== "call" && opcode !== "callKnown" && !membership) continue;
 			if (
 				opcode === "callKnown" &&
 				(fn.instructionAttributes(instruction).construct ||
 					fn.instructionAttributes(instruction).argumentMode !== undefined)
 			)
 				continue;
-			let canonical: string | undefined;
+			let canonical: string | undefined = membership ? "Reflect.has" : undefined;
 			const argument = opcode === "call" ? 2 : 1;
 			if (fn.kernel.instructionOperandCount(instruction) <= argument) continue;
 			if (opcode === "call") {
 				const callee = analysis.query(fn.kernel.operandAt(start));
 				if (callee.kind === "known") canonical = callee.canonical;
-			} else {
+			} else if (opcode === "callKnown") {
 				const known = fn.instructionAttributes(instruction)
 					.knownBuiltinCall as unknown as KnownBuiltinCall | undefined;
 				if (
@@ -533,21 +537,23 @@ export const foldStaticReflections: CoreFunctionPass = {
 				edits++;
 				continue;
 			}
+			const keyInput = membership
+				? fn.kernel.operandAt(start)
+				: fn.kernel.instructionOperandCount(instruction) > argument + 1
+					? fn.kernel.operandAt(start + argument + 1)
+					: undefined;
 			const input =
-				fn.kernel.instructionOperandCount(instruction) > argument + 1
-					? analysis.constant(fn.kernel.operandAt(start + argument + 1))
-					: { kind: "undefined" as const };
+				keyInput === undefined
+					? { kind: "undefined" as const }
+					: analysis.constant(keyInput);
 			let key: PrimordialKey | undefined =
 				input === undefined
 					? undefined
 					: input.kind === "undefined"
 						? "undefined"
 						: String(input.value);
-			if (
-				key === undefined &&
-				fn.kernel.instructionOperandCount(instruction) > argument + 1
-			) {
-				const symbol = analysis.query(fn.kernel.operandAt(start + argument + 1));
+			if (key === undefined && keyInput !== undefined) {
+				const symbol = analysis.query(keyInput);
 				if (
 					symbol.kind === "known" &&
 					symbol.brand === "symbol" &&
@@ -658,6 +664,24 @@ export const foldStaticReflections: CoreFunctionPass = {
 			const description = program.staticDescriptions.description(fact.description);
 			if (description.kind !== "array" && description.kind !== "object") continue;
 			let property = description.properties.find((property) => property.key === key);
+			if (canonical === "Object.hasOwn" || canonical === "Reflect.has") {
+				// An Array keeps its nonconfigurable own length when its contents are unknown.
+				let value =
+					property !== undefined || (description.kind === "array" && key === "length");
+				if (!value && description.ownKeysComplete === false) continue;
+				if (!value && canonical === "Reflect.has") {
+					const inherited = analysis.inherited(fact, key);
+					if (inherited === undefined && fact.prototype.kind !== "null") continue;
+					value = inherited?.kind === "descriptor";
+				}
+				analysis.verify(fact, instruction);
+				plans.push({
+					instruction,
+					operation: { opcode: "createBoolean", inputs: [], attributes: { value } },
+				});
+				edits++;
+				continue;
+			}
 			if (description.kind === "array" && key === "length") {
 				if (description.length === null) continue;
 				property = {
@@ -677,20 +701,6 @@ export const foldStaticReflections: CoreFunctionPass = {
 				};
 			}
 			if (property === undefined && description.ownKeysComplete === false) continue;
-			if (canonical === "Object.hasOwn" || canonical === "Reflect.has") {
-				let value = property !== undefined;
-				if (!value && canonical === "Reflect.has") {
-					const inherited = analysis.inherited(fact, key);
-					if (inherited === undefined && fact.prototype.kind !== "null") continue;
-					value = inherited?.kind === "descriptor";
-				}
-				plans.push({
-					instruction,
-					operation: { opcode: "createBoolean", inputs: [], attributes: { value } },
-				});
-				edits++;
-				continue;
-			}
 			if (property === undefined) {
 				plans.push({ instruction, operation: { opcode: "createUndefined", inputs: [] } });
 				edits++;

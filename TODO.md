@@ -176,6 +176,11 @@ The independent target boundary and current storage contract are recorded in
       Empty primitive-wrapper bounds remove delete dispatch while preserving computed
       key conversion and exceptions; selected native entries also consume those
       bounds, and frameless bodies bail out before object-key coercion.
+      Static membership now shares current property descriptions with reflection:
+      proven own fields fold independently of their values, and genuine Array
+      length remains present after escape or mutation. Inherited results require
+      world proofs; unknown keys, Proxy receivers and escaped ordinary properties
+      retain their effects and fallback, including across suspension.
 - [ ] Give record entries typed fields. Program value-kind flow now carries initial
       own-field kind summaries through exact call chains, finite callee sets,
       recursive forwarding, spread/rest and constructor completions. Field-only
