@@ -378,6 +378,11 @@ shared contract. Identity replacement preserves stronger post-call bounds, inclu
 the Object result of collection mutators with an otherwise unknown receiver.
 An alias does not certify unchanged contents, immutable descriptors or a removable
 invocation; effect and escape analyses retain their separate obligations.
+Normal-return provenance can require input kinds for a parameter or receiver alias.
+Joins intersect those requirements across return alternatives; disjoint requirements
+or different sources widen to unknown. Caller identity, kind and interval consumers
+check the condition before forwarding, including omitted arguments and receiver
+normalization. Such conditional aliases cannot certify relative own-slot effects.
 Unobserved final call outputs need no native root or post-call publication. Every
 definition must return its final value before assigning that destination; source
 GC maps remain complete, and borrowed helper storage, rest-call state and reused

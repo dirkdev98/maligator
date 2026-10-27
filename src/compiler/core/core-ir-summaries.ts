@@ -1,3 +1,4 @@
+import { COMPILER_VALUE_KIND_TOP } from "../shared/compiler-value-kinds.ts";
 import {
 	EVERY_EFFECT_SUMMARY,
 	NO_EFFECT_SUMMARY,
@@ -6,6 +7,7 @@ import {
 	functionSummaryId,
 	joinEffectSummaries,
 	joinReturnProvenance,
+	returnProvenancesEqual,
 	joinReturnRepresentation,
 	joinValueContainment,
 	joinValueEscape,
@@ -58,13 +60,7 @@ import { coreReadAccessorSummary } from "./core-read-accessors.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_CALL_EFFECT_SUMMARY_FACT = "call-effect-summary";
-type ValueOrigin =
-	| { readonly kind: "none" }
-	| { readonly kind: "fresh" }
-	| { readonly kind: "primitive" }
-	| { readonly kind: "parameter"; readonly index: number }
-	| { readonly kind: "receiver" }
-	| { readonly kind: "unknown" };
+type ValueOrigin = ReturnProvenance;
 
 const ORIGIN_NONE: ValueOrigin = Object.freeze({ kind: "none" });
 const ORIGIN_FRESH: ValueOrigin = Object.freeze({ kind: "fresh" });
@@ -159,20 +155,6 @@ const PRIMITIVE_RESULTS = new Set([
 	"unary",
 ]);
 
-function originsEqual(left: ValueOrigin, right: ValueOrigin): boolean {
-	return (
-		left.kind === right.kind &&
-		(left.kind !== "parameter" ||
-			(right.kind === "parameter" && left.index === right.index))
-	);
-}
-
-function joinOrigins(left: ValueOrigin, right: ValueOrigin): ValueOrigin {
-	if (left.kind === "none") return right;
-	if (right.kind === "none") return left;
-	return originsEqual(left, right) ? left : ORIGIN_UNKNOWN;
-}
-
 function returnRepresentation(representation: CoreRepresentation): ReturnRepresentation {
 	switch (representation) {
 		case "i32":
@@ -185,21 +167,11 @@ function returnRepresentation(representation: CoreRepresentation): ReturnReprese
 	}
 }
 
-function returnProvenance(origin: ValueOrigin): ReturnProvenance {
-	switch (origin.kind) {
-		case "none":
-			return RETURN_PROVENANCE_NONE;
-		case "fresh":
-			return { kind: "fresh" };
-		case "primitive":
-			return { kind: "primitive" };
-		case "parameter":
-			return { kind: "parameter", index: origin.index };
-		case "receiver":
-			return { kind: "receiver" };
-		case "unknown":
-			return { kind: "unknown" };
-	}
+function projectOrigin(origin: ValueOrigin, identityKinds: number): ValueOrigin {
+	if (identityKinds === COMPILER_VALUE_KIND_TOP || origin.kind === "none") return origin;
+	if (origin.kind !== "parameter" && origin.kind !== "receiver") return ORIGIN_UNKNOWN;
+	const required = (origin.identityKinds ?? COMPILER_VALUE_KIND_TOP) & identityKinds;
+	return required === 0 ? ORIGIN_UNKNOWN : { ...origin, identityKinds: required };
 }
 
 function raiseOrigin(
@@ -208,8 +180,8 @@ function raiseOrigin(
 	incoming: ValueOrigin,
 ): boolean {
 	const current = origins[value] ?? ORIGIN_NONE;
-	const next = joinOrigins(current, incoming);
-	if (originsEqual(current, next)) return false;
+	const next = joinReturnProvenance(current, incoming);
+	if (returnProvenancesEqual(current, next)) return false;
 	origins[value] = next;
 	return true;
 }
@@ -328,6 +300,7 @@ function conditionalOwnSlotEffects(
 			const key = attributes.stringIndex;
 			if (
 				(base.kind !== "parameter" && base.kind !== "receiver") ||
+				base.identityKinds !== undefined ||
 				typeof key !== "number" ||
 				!Number.isSafeInteger(key) ||
 				key < 0 ||
@@ -421,12 +394,16 @@ function analyzeLocalSummary(
 	const transferInputStarts: Array<number> = [];
 	const transferInputCounts: Array<number> = [];
 	const transferInputs: Array<CoreValueId> = [];
+	const transferIdentityKinds: Array<number | undefined> = [];
 	const addTransfer = (
 		kind: number,
 		output: CoreValueId,
 		inputs: ReadonlyArray<CoreValueId> = [],
+		identityKinds = COMPILER_VALUE_KIND_TOP,
 	): void => {
 		transferKinds.push(kind);
+		if (identityKinds !== COMPILER_VALUE_KIND_TOP)
+			transferIdentityKinds[transferKinds.length - 1] = identityKinds;
 		transferOutputs.push(output);
 		transferInputStarts.push(transferInputs.length);
 		transferInputCounts.push(inputs.length);
@@ -463,9 +440,7 @@ function analyzeLocalSummary(
 		const operand =
 			opcode === "move" && fn.kernel.instructionOperandCount(instruction) > 0
 				? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))
-				: projection?.identityKinds === undefined
-					? projection?.input
-					: undefined;
+				: projection?.input;
 		const kind =
 			operand !== undefined
 				? ORIGIN_TRANSFER_COPY
@@ -481,7 +456,12 @@ function analyzeLocalSummary(
 		const resultCount = fn.kernel.instructionResultCount(instruction);
 		for (let index = 0; index < resultCount; index++) {
 			const output = fn.kernel.resultAt(resultStart + index);
-			addTransfer(kind, output, operand === undefined ? [] : [operand]);
+			addTransfer(
+				kind,
+				output,
+				operand === undefined ? [] : [operand],
+				projection?.identityKinds,
+			);
 		}
 	}
 	const dependents = new Array<Array<number> | undefined>(fn.valueCapacity);
@@ -513,14 +493,22 @@ function analyzeLocalSummary(
 		let incoming = ORIGIN_NONE;
 		if (kind === ORIGIN_TRANSFER_JOIN || kind === ORIGIN_TRANSFER_COPY) {
 			for (let offset = 0; offset < inputCount; offset++) {
-				incoming = joinOrigins(incoming, origins[inputs[inputStart + offset]!]!);
+				incoming = joinReturnProvenance(incoming, origins[inputs[inputStart + offset]!]!);
 			}
 		} else if (kind === ORIGIN_TRANSFER_RECEIVER) incoming = ORIGIN_RECEIVER;
 		else if (kind === ORIGIN_TRANSFER_FRESH) incoming = ORIGIN_FRESH;
 		else if (kind === ORIGIN_TRANSFER_PRIMITIVE) incoming = ORIGIN_PRIMITIVE;
 		else incoming = ORIGIN_UNKNOWN;
 		const output = outputs[index]! as CoreValueId;
-		if (!raiseOrigin(origins, output, incoming)) continue;
+		const identityKinds = transferIdentityKinds[index];
+		if (
+			!raiseOrigin(
+				origins,
+				output,
+				identityKinds === undefined ? incoming : projectOrigin(incoming, identityKinds),
+			)
+		)
+			continue;
 		for (const dependent of dependents[output] ?? []) {
 			if (queued[dependent] !== 0) continue;
 			queued[dependent] = 1;
@@ -596,7 +584,7 @@ function analyzeLocalSummary(
 		if (kind !== "return") continue;
 		const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
 		const origin = origins[value]!;
-		provenance = joinReturnProvenance(provenance, returnProvenance(origin));
+		provenance = joinReturnProvenance(provenance, origin);
 		representation = joinReturnRepresentation(
 			representation,
 			returnRepresentation(fn.valueRepresentation(value)),
@@ -727,17 +715,6 @@ function conditionalOwnSlotEffectsEqual(
 				effectSummariesEqual(left.residualEffects, right.residualEffects) &&
 				stringSlicesEqual(left.parameterEscape, right.parameterEscape) &&
 				left.receiverEscape === right.receiverEscape;
-}
-
-function returnProvenancesEqual(
-	left: ReturnProvenance,
-	right: ReturnProvenance,
-): boolean {
-	return (
-		left.kind === right.kind &&
-		(left.kind !== "parameter" ||
-			(right.kind === "parameter" && left.index === right.index))
-	);
 }
 
 function summariesEqual(

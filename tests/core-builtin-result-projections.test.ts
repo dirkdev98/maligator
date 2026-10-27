@@ -117,6 +117,33 @@ describe("builtin normal-result projections", () => {
 	);
 });
 
+it.each([
+	["Object.assign", 1, COMPILER_VALUE_KIND_OBJECT],
+	["Number.prototype.valueOf", 0, COMPILER_VALUE_KIND_NUMBER],
+] as const)(
+	"publishes the input condition for %s without dropping escapes or effects",
+	(operation, index, identityKinds) => {
+		const out = projectedCall(operation);
+		const summary = out.manager
+			.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" })
+			.summary(out.fn.id)!;
+		expect(summary.returnProvenance).toEqual({ kind: "parameter", index, identityKinds });
+		expect(summary.parameterEscape[index]).toBe("retained");
+		expect(summary.effects.mayThrow).toBe(true);
+		expect(summary.effects.mayGc).toBe(true);
+		const edit = CoreEditor.open(out.program, out.fn.id);
+		edit.replaceInstruction(out.instruction, "callKnown", out.operands, {
+			attributes: { operation: "Object.freeze" },
+		});
+		edit.commit();
+		expect(
+			out.manager
+				.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" })
+				.summary(out.fn.id)!.returnProvenance,
+		).toEqual({ kind: "parameter", index: 1 });
+	},
+);
+
 const bodies = {
 	freeze: "const result=Object.freeze(value);observe();return Object.is(result,value);",
 	prefix:

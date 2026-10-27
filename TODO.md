@@ -135,7 +135,9 @@ The independent target boundary and current storage contract are recorded in
       integer intervals, return provenance and identity consumers. Known positional
       prefixes survive list transport; boxing and unboxing require input-kind
       proof. Invocation effects and stronger post-call bounds remain intact.
-      Conditional aliases still need kind-sensitive program return summaries;
+      Conditional aliases now publish input-kind requirements in program return
+      summaries; identity, kind and interval consumers check them independently.
+      Carry these conditions through remaining script-call return chains;
       projection alone must not certify immutable shapes or unchanged contents.
       Mutable Object.is now consumes operand identity,
       kinds and scalar views behind a loaded-callee guard, including frameless hits;

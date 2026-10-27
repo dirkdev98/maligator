@@ -4110,14 +4110,29 @@ function forwardedCallResultValue(
 	flow: CoreProgramFlowState,
 	target: CoreFunctionId,
 	site: CoreIndexedCallSite,
+	inputKind: (value: CoreValueId) => number | undefined,
 ): CoreValueId | undefined {
 	const fn = program.function(target);
 	if (fn.isAsync || fn.isGenerator) return undefined;
 	const provenance = flow.summaries.summary(target)?.returnProvenance;
-	if (provenance?.kind === "parameter")
-		return (site.arguments ?? site.argumentPrefix)?.[provenance.index];
-	if (provenance?.kind === "receiver" && fn.metadata.strict) return site.receiver;
-	return undefined;
+	if (provenance?.kind !== "parameter" && provenance?.kind !== "receiver")
+		return undefined;
+	const value =
+		provenance.kind === "parameter"
+			? (site.arguments ?? site.argumentPrefix)?.[provenance.index]
+			: site.receiver;
+	if (value === undefined) return undefined;
+	const kind = () => inputKind(value) ?? COMPILER_VALUE_KIND_TOP;
+	if (
+		provenance.kind === "receiver" &&
+		!fn.metadata.strict &&
+		!compilerValueKindMaskIsSubset(kind(), COMPILER_VALUE_KIND_OBJECT)
+	)
+		return undefined;
+	return provenance.identityKinds === undefined ||
+		compilerValueKindMaskIsSubset(kind(), provenance.identityKinds)
+		? value
+		: undefined;
 }
 
 function createProgramValueIdentityQuery(
@@ -4150,6 +4165,8 @@ function createProgramValueIdentityQuery(
 					})
 					.exceptional();
 			let kind: ReturnType<typeof coreValueKindDemand> | undefined;
+			const inputKind = (value: CoreValueId) =>
+				(kind ??= coreValueKindDemand(program, fn, cfg, flow.targets, true))(value);
 			for (const [instruction, projection] of analyses.get(
 				CORE_BUILTIN_RESULT_PROJECTIONS_ANALYSIS,
 				{ scope: "function", function: functionId },
@@ -4177,7 +4194,7 @@ function createProgramValueIdentityQuery(
 					continue;
 				const values: Array<CoreValueId> = [];
 				for (const target of site.targets.functions) {
-					const value = forwardedCallResultValue(program, flow, target, site);
+					const value = forwardedCallResultValue(program, flow, target, site, inputKind);
 					if (value === undefined) {
 						values.length = 0;
 						break;
@@ -4337,6 +4354,30 @@ function discoverProgramNormalResultFacts(
 } {
 	const results = new Map<CoreFunctionId, Array<CoreNormalResultFact>>();
 	const localReturns = new Map<CoreFunctionId, number | undefined>();
+	const inputKindQueries = new Map<
+		CoreFunctionId,
+		ReturnType<typeof coreValueKindDemand>
+	>();
+	const inputKind = (functionId: CoreFunctionId, value: CoreValueId) => {
+		let query = inputKindQueries.get(functionId);
+		if (query === undefined) {
+			query = coreValueKindDemand(
+				program,
+				program.function(functionId),
+				() =>
+					analyses
+						.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+							scope: "function",
+							function: functionId,
+						})
+						.exceptional(),
+				flow.targets,
+				true,
+			);
+			inputKindQueries.set(functionId, query);
+		}
+		return query(value);
+	};
 	const pending = new Map<
 		CoreFunctionId,
 		Array<{ site: CoreIndexedCallSite; mask: number }>
@@ -4391,24 +4432,12 @@ function discoverProgramNormalResultFacts(
 	};
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
-		let localKinds: ReturnType<typeof coreValueKindDemand> | undefined;
 		const projectedMask = (target: CoreFunctionId, site: CoreIndexedCallSite) => {
-			const value = forwardedCallResultValue(program, flow, target, site);
+			const value = forwardedCallResultValue(program, flow, target, site, (value) =>
+				inputKind(functionId, value),
+			);
 			if (value !== undefined) {
-				localKinds ??= coreValueKindDemand(
-					program,
-					fn,
-					() =>
-						analyses
-							.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
-								scope: "function",
-								function: functionId,
-							})
-							.exceptional(),
-					flow.targets,
-					true,
-				);
-				const mask = localKinds(value);
+				const mask = inputKind(functionId, value);
 				if (mask !== undefined && mask !== COMPILER_VALUE_KIND_TOP) return mask;
 			}
 			const callee = program.function(target);
@@ -4417,6 +4446,8 @@ function discoverProgramNormalResultFacts(
 				!callee.isAsync &&
 				!callee.isGenerator &&
 				provenance?.kind === "parameter" &&
+				(provenance.identityKinds === undefined ||
+					(provenance.identityKinds & COMPILER_VALUE_KIND_UNDEFINED) !== 0) &&
 				site.arguments !== undefined &&
 				provenance.index >= site.arguments.length
 			)
@@ -4576,7 +4607,9 @@ function discoverProgramNormalResultFacts(
 		for (const target of site.targets.anyScript
 			? program.functionIds()
 			: site.targets.functions) {
-			const forwarded = forwardedCallResultValue(program, flow, target, site);
+			const forwarded = forwardedCallResultValue(program, flow, target, site, (value) =>
+				inputKind(site.caller, value),
+			);
 			const projected =
 				forwarded === undefined
 					? undefined

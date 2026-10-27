@@ -1,3 +1,6 @@
+import { COMPILER_VALUE_KIND_TOP } from "./compiler-value-kinds.ts";
+import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
+
 /**
  * The single effect vocabulary shared by Core instruction descriptors and by
  * interprocedural summaries, plus the independent escape, return-provenance, and
@@ -339,14 +342,19 @@ export function valueContainmentCovers(
  * Where a function's result comes from. `none` is the bottom — no reachable
  * return was observed — and `unknown` is the top. `parameter` and `receiver`
  * describe this function's own frame, so a caller must substitute its argument
- * before consuming them.
+ * before consuming them. An identityKinds condition must hold for that input;
+ * it does not constrain the result when boxing or unboxing breaks the alias.
  */
 export type ReturnProvenance =
 	| { readonly kind: "none" }
 	| { readonly kind: "fresh" }
 	| { readonly kind: "primitive" }
-	| { readonly kind: "parameter"; readonly index: number }
-	| { readonly kind: "receiver" }
+	| {
+			readonly kind: "parameter";
+			readonly index: number;
+			readonly identityKinds?: CompilerValueKindMask;
+	  }
+	| { readonly kind: "receiver"; readonly identityKinds?: CompilerValueKindMask }
 	| { readonly kind: "unknown" };
 
 export const RETURN_PROVENANCE_NONE: ReturnProvenance = Object.freeze({ kind: "none" });
@@ -355,9 +363,32 @@ export const RETURN_PROVENANCE_UNKNOWN: ReturnProvenance = Object.freeze({
 });
 
 export function returnProvenanceKey(provenance: ReturnProvenance): string {
-	return provenance.kind === "parameter"
-		? `parameter:${provenance.index}`
-		: provenance.kind;
+	const key =
+		provenance.kind === "parameter" ? `parameter:${provenance.index}` : provenance.kind;
+	return (provenance.kind === "parameter" || provenance.kind === "receiver") &&
+		provenance.identityKinds !== undefined &&
+		provenance.identityKinds !== COMPILER_VALUE_KIND_TOP
+		? `${key}:${provenance.identityKinds}`
+		: key;
+}
+
+export function returnProvenancesEqual(
+	left: ReturnProvenance,
+	right: ReturnProvenance,
+): boolean {
+	if (left === right) return true;
+	if (left.kind !== right.kind) return false;
+	if (
+		left.kind === "parameter" &&
+		(right.kind !== "parameter" || left.index !== right.index)
+	)
+		return false;
+	return (
+		(left.kind !== "parameter" && left.kind !== "receiver") ||
+		((right.kind === "parameter" || right.kind === "receiver") &&
+			(left.identityKinds ?? COMPILER_VALUE_KIND_TOP) ===
+				(right.identityKinds ?? COMPILER_VALUE_KIND_TOP))
+	);
 }
 
 export function joinReturnProvenance(
@@ -366,9 +397,19 @@ export function joinReturnProvenance(
 ): ReturnProvenance {
 	if (left.kind === "none") return right;
 	if (right.kind === "none") return left;
-	return returnProvenanceKey(left) === returnProvenanceKey(right)
-		? left
-		: RETURN_PROVENANCE_UNKNOWN;
+	if (returnProvenancesEqual(left, right)) return left;
+	if (
+		(left.kind === "parameter" &&
+			right.kind === "parameter" &&
+			left.index === right.index) ||
+		(left.kind === "receiver" && right.kind === "receiver")
+	) {
+		const identityKinds =
+			(left.identityKinds ?? COMPILER_VALUE_KIND_TOP) &
+			(right.identityKinds ?? COMPILER_VALUE_KIND_TOP);
+		return identityKinds === 0 ? RETURN_PROVENANCE_UNKNOWN : { ...left, identityKinds };
+	}
+	return RETURN_PROVENANCE_UNKNOWN;
 }
 
 /**

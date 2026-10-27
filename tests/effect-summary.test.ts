@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
 	EFFECT_DOMAINS,
 	EVERY_EFFECT_SUMMARY,
 	NO_EFFECT_SUMMARY,
@@ -7,8 +11,67 @@ import {
 	effectSummaryCovers,
 	joinEffectSummaries,
 	normalizeEffectDomains,
+	joinReturnProvenance,
+	returnProvenancesEqual,
+	returnProvenanceKey,
 } from "../src/compiler/shared/effect-summary.ts";
-import type { EffectSummary } from "../src/compiler/shared/effect-summary.ts";
+import type {
+	EffectSummary,
+	ReturnProvenance,
+} from "../src/compiler/shared/effect-summary.ts";
+
+describe("conditional return provenance", () => {
+	const number: ReturnProvenance = {
+		kind: "parameter",
+		index: 0,
+		identityKinds: COMPILER_VALUE_KIND_NUMBER,
+	};
+	const object: ReturnProvenance = {
+		kind: "parameter",
+		index: 0,
+		identityKinds: COMPILER_VALUE_KIND_OBJECT,
+	};
+	const either: ReturnProvenance = {
+		kind: "parameter",
+		index: 0,
+		identityKinds: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_OBJECT,
+	};
+	const unconditional: ReturnProvenance = { kind: "parameter", index: 0 };
+	it("requires the input condition on every return alternative", () => {
+		expect(joinReturnProvenance(unconditional, object)).toEqual(object);
+		expect(joinReturnProvenance(number, either)).toEqual(number);
+		expect(joinReturnProvenance(number, object)).toEqual({ kind: "unknown" });
+		expect(joinReturnProvenance(object, { kind: "parameter", index: 1 })).toEqual({
+			kind: "unknown",
+		});
+		expect(returnProvenancesEqual(unconditional, object)).toBe(false);
+		expect(returnProvenanceKey(unconditional)).not.toBe(returnProvenanceKey(object));
+	});
+	it("preserves join laws across conditional inputs and unknown return sources", () => {
+		const values: ReadonlyArray<ReturnProvenance> = [
+			{ kind: "none" },
+			{ kind: "unknown" },
+			{ kind: "fresh" },
+			{ kind: "primitive" },
+			{ kind: "receiver" },
+			{ kind: "receiver", identityKinds: COMPILER_VALUE_KIND_OBJECT },
+			number,
+			object,
+			either,
+			unconditional,
+		];
+		for (const left of values)
+			for (const right of values) {
+				expect(joinReturnProvenance(left, right)).toEqual(
+					joinReturnProvenance(right, left),
+				);
+				for (const third of values)
+					expect(joinReturnProvenance(joinReturnProvenance(left, right), third)).toEqual(
+						joinReturnProvenance(left, joinReturnProvenance(right, third)),
+					);
+			}
+	});
+});
 
 describe("effect summary normalization", () => {
 	it("deduplicates ordered and unordered domain lists in declaration order", () => {
