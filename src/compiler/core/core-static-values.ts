@@ -1,5 +1,12 @@
 import { verifyBuiltinWorldAssumptions } from "../shared/builtin-assumptions.ts";
-import { builtinPrimitiveResult } from "../shared/builtin-registry.ts";
+import { builtinNormalResultKinds } from "../shared/builtin-registry.ts";
+import {
+	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_SYMBOL,
+} from "../shared/compiler-value-kinds.ts";
 import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
 import { evaluateConstantOperation } from "../shared/constant-evaluator.ts";
 import type { ConstantValue } from "../shared/constant-evaluator.ts";
@@ -57,6 +64,17 @@ export const CORE_STATIC_VALUE_FUNCTION_DEPENDENCIES = [
 export const CORE_STATIC_VALUE_PROGRAM_DEPENDENCIES = [
 	"data",
 ] as const satisfies ReadonlyArray<CoreProgramChangeDomain>;
+
+const primitiveResultBrands = new Map<
+	number,
+	"number" | "string" | "boolean" | "bigint" | "symbol"
+>([
+	[COMPILER_VALUE_KIND_NUMBER, "number"],
+	[COMPILER_VALUE_KIND_STRING, "string"],
+	[COMPILER_VALUE_KIND_BOOLEAN, "boolean"],
+	[COMPILER_VALUE_KIND_BIGINT, "bigint"],
+	[COMPILER_VALUE_KIND_SYMBOL, "symbol"],
+]);
 
 function coreStringConstantIs(
 	program: CoreProgram,
@@ -2201,14 +2219,10 @@ export class CoreStaticValueAnalysis {
 								operands.slice(2),
 							);
 				if (stringResult !== undefined) return stringResult;
-				const primitiveBrand = builtinPrimitiveResult(canonical);
-				if (
-					primitiveBrand === "number" ||
-					primitiveBrand === "string" ||
-					primitiveBrand === "boolean" ||
-					primitiveBrand === "bigint" ||
-					primitiveBrand === "symbol"
-				)
+				const primitiveBrand = primitiveResultBrands.get(
+					builtinNormalResultKinds(canonical) ?? 0,
+				);
+				if (primitiveBrand !== undefined)
 					return immutableStaticValue(
 						value,
 						intern.intern({

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	deserializeCompilerArtifact,
@@ -198,4 +203,77 @@ it.each([
 	);
 	expect(ip).toBeGreaterThanOrEqual(0);
 	expect(out.native.facts?.[ip]?.resultKindMasks).toEqual([COMPILER_VALUE_KIND_BOOLEAN]);
+});
+
+const objectResultBounds = [
+	["Object.keys", "Object.keys(value)", COMPILER_VALUE_KIND_OBJECT, true],
+	[
+		"Object.getOwnPropertyDescriptor",
+		"Object.getOwnPropertyDescriptor(value,key)",
+		COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_UNDEFINED,
+		true,
+	],
+	[
+		"Object.getPrototypeOf",
+		"Object.getPrototypeOf(value)",
+		COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_NULL,
+		true,
+	],
+	[
+		"WeakRef.prototype.deref",
+		"WeakRef.prototype.deref.call(value)",
+		COMPILER_VALUE_KIND_OBJECT |
+			COMPILER_VALUE_KIND_SYMBOL |
+			COMPILER_VALUE_KIND_UNDEFINED,
+		true,
+	],
+	[
+		"Map.prototype.clear",
+		"Map.prototype.clear.call(value)",
+		COMPILER_VALUE_KIND_UNDEFINED,
+		false,
+	],
+] as const;
+
+it.each(objectResultBounds)(
+	"uses %s bounds without losing invocation or live heap results",
+	(operation, expression, mask, rooted) => {
+		for (const compare of [false, true]) {
+			const out = inspectStaticValueFunction(
+				`function probe(value,key,observe){const result=${expression};observe();return result${compare ? "===false" : ""};}globalThis.probe=probe;`,
+				"probe",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "CALL_KNOWN" && op.operation === operation,
+			);
+			const call = out.native.body.instructions[ip]!;
+			if (call?.opcode !== "CALL_KNOWN") throw new Error("Missing exact builtin call");
+			expect(out.native.facts?.[ip]?.resultKindMasks).toEqual([mask]);
+			expect(out.native.storage!.rootRegisters.includes(call.dst)).toBe(
+				rooted && !compare,
+			);
+			expect(out.structure.genericCalls).toBe(1);
+			if (compare) expect(out.core.some((op) => op.opcode === "binary")).toBe(false);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		}
+	},
+);
+
+it.each([
+	["String.prototype.split", "String.prototype.split.call(value,key)"],
+	["Array.prototype.toString", "Array.prototype.toString.call(value)"],
+	["Promise.prototype.catch", "Promise.prototype.catch.call(value,key)"],
+])("keeps arbitrary protocol results of %s", (operation, expression) => {
+	const out = inspectStaticValueFunction(
+		`function probe(value,key,observe){const result=${expression};observe();return result===false;}globalThis.probe=probe;`,
+		"probe",
+	);
+	const ip = out.native.body.instructions.findIndex(
+		(op) => op.opcode === "CALL_KNOWN" && op.operation === operation,
+	);
+	expect(ip).toBeGreaterThanOrEqual(0);
+	expect(out.native.facts?.[ip]?.resultKindMasks).toEqual([COMPILER_VALUE_KIND_TOP]);
+	expect(out.core.some((op) => op.opcode === "binary")).toBe(true);
 });

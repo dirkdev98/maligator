@@ -1,5 +1,16 @@
 import { builtinInvocationSummary } from "./builtin-semantics.ts";
 import type { EffectKind } from "./compiler-facts.ts";
+import {
+	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_UNDEFINED,
+} from "./compiler-value-kinds.ts";
+import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
 import { literalPrimordialBindings } from "./primordial-catalog-data.ts";
 
 export { builtinInvocationSummary } from "./builtin-semantics.ts";
@@ -988,18 +999,27 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 	...mathBinaryOperations,
 ];
 
-export type BuiltinPrimitiveResult =
-	| "number"
-	| "string"
-	| "boolean"
-	| "bigint"
-	| "symbol"
-	| "boolean-or-undefined"
-	| "number-or-bigint"
-	| "number-or-undefined"
-	| "string-or-undefined";
+const normalResultKindMasks = {
+	number: COMPILER_VALUE_KIND_NUMBER,
+	string: COMPILER_VALUE_KIND_STRING,
+	boolean: COMPILER_VALUE_KIND_BOOLEAN,
+	bigint: COMPILER_VALUE_KIND_BIGINT,
+	symbol: COMPILER_VALUE_KIND_SYMBOL,
+	undefined: COMPILER_VALUE_KIND_UNDEFINED,
+	object: COMPILER_VALUE_KIND_OBJECT,
+	"boolean-or-undefined": COMPILER_VALUE_KIND_BOOLEAN | COMPILER_VALUE_KIND_UNDEFINED,
+	"number-or-bigint": COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BIGINT,
+	"number-or-undefined": COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED,
+	"string-or-undefined": COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_UNDEFINED,
+	"object-or-null": COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_NULL,
+	"object-or-undefined": COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_UNDEFINED,
+	"weak-value-or-undefined":
+		COMPILER_VALUE_KIND_OBJECT |
+		COMPILER_VALUE_KIND_SYMBOL |
+		COMPILER_VALUE_KIND_UNDEFINED,
+};
 
-const primitiveResults = new Map<string, BuiltinPrimitiveResult>();
+const normalResultKinds = new Map<string, CompilerValueKindMask>();
 for (const [owner, result, methods] of [
 	["", "number", ["Number", "parseInt", "parseFloat"]],
 	["", "boolean", ["Boolean", "isNaN", "isFinite"]],
@@ -1266,15 +1286,161 @@ for (const [owner, result, methods] of [
 		"number-or-bigint",
 		["add", "and", "compareExchange", "exchange", "load", "or", "store", "sub", "xor"],
 	],
+	[
+		"",
+		"object",
+		[
+			"Object",
+			"Array",
+			"Function",
+			"RegExp",
+			"Error",
+			"EvalError",
+			"RangeError",
+			"ReferenceError",
+			"SyntaxError",
+			"TypeError",
+			"URIError",
+			"AggregateError",
+		],
+	],
+	[
+		"Object",
+		"object",
+		[
+			"assign",
+			"create",
+			"defineProperty",
+			"defineProperties",
+			"entries",
+			"keys",
+			"values",
+			"fromEntries",
+			"getOwnPropertyDescriptors",
+			"getOwnPropertyNames",
+			"getOwnPropertySymbols",
+			"groupBy",
+		],
+	],
+	["Object", "object-or-null", ["getPrototypeOf"]],
+	["Object", "object-or-undefined", ["getOwnPropertyDescriptor"]],
+	["Object.prototype", "object", ["valueOf"]],
+	["Reflect", "object", ["construct", "ownKeys"]],
+	["Reflect", "object-or-null", ["getPrototypeOf"]],
+	["Reflect", "object-or-undefined", ["getOwnPropertyDescriptor"]],
+	["Array", "object", ["from", "fromAsync", "of"]],
+	[
+		"Array.prototype",
+		"object",
+		[
+			"concat",
+			"copyWithin",
+			"entries",
+			"fill",
+			"filter",
+			"flat",
+			"flatMap",
+			"keys",
+			"map",
+			"reverse",
+			"slice",
+			"sort",
+			"splice",
+			"toReversed",
+			"toSorted",
+			"toSpliced",
+			"values",
+			"with",
+		],
+	],
+	["String.prototype", "object", ["[%Symbol.iterator%]"]],
+	[
+		"Int8Array.prototype.[[Prototype]]",
+		"object",
+		[
+			"buffer<get>",
+			"copyWithin",
+			"entries",
+			"fill",
+			"filter",
+			"keys",
+			"map",
+			"reverse",
+			"slice",
+			"sort",
+			"subarray",
+			"toReversed",
+			"toSorted",
+			"values",
+			"with",
+		],
+	],
+	["Int8Array.prototype.[[Prototype]]", "undefined", ["forEach", "set"]],
+	["TypedArray.prototype", "object", ["map", "filter"]],
+	["ArrayOrTypedArray.prototype", "object", ["map", "filter"]],
+	["ArrayBuffer.prototype", "object", ["slice", "transfer", "transferToFixedLength"]],
+	["ArrayBuffer.prototype", "undefined", ["resize"]],
+	["SharedArrayBuffer.prototype", "object", ["slice"]],
+	["SharedArrayBuffer.prototype", "undefined", ["grow"]],
+	["DataView.prototype", "object", ["buffer<get>"]],
+	["DataView.prototype", "number", ["getFloat16"]],
+	["DataView.prototype", "bigint", ["getBigInt64", "getBigUint64"]],
+	[
+		"DataView.prototype",
+		"undefined",
+		[
+			"setInt8",
+			"setUint8",
+			"setInt16",
+			"setUint16",
+			"setInt32",
+			"setUint32",
+			"setFloat16",
+			"setFloat32",
+			"setFloat64",
+			"setBigInt64",
+			"setBigUint64",
+		],
+	],
+	["Map", "object", ["groupBy"]],
+	["Map.prototype", "object", ["set", "entries", "keys", "values"]],
+	["Map.prototype", "undefined", ["clear", "forEach"]],
+	["Set.prototype", "object", ["add", "entries", "values", "keys"]],
+	["Set.prototype", "undefined", ["clear", "forEach"]],
+	["WeakMap.prototype", "object", ["set"]],
+	["WeakSet.prototype", "object", ["add"]],
+	["WeakRef.prototype", "weak-value-or-undefined", ["deref"]],
+	["FinalizationRegistry.prototype", "undefined", ["register"]],
+	["Iterator", "object", ["from"]],
+	[
+		"Iterator.prototype",
+		"object",
+		["drop", "filter", "flatMap", "map", "take", "toArray"],
+	],
+	["Iterator.prototype", "undefined", ["forEach"]],
+	["RegExp.prototype", "object-or-null", ["exec", "[%Symbol.match%]"]],
+	["RegExp.prototype", "object", ["[%Symbol.matchAll%]", "[%Symbol.split%]"]],
+	["RegExp.prototype", "string", ["[%Symbol.replace%]"]],
+	["Function.prototype", "object", ["bind"]],
+	[
+		"Promise",
+		"object",
+		["all", "allSettled", "any", "race", "reject", "resolve", "try", "withResolvers"],
+	],
+	["Promise.prototype", "object", ["then"]],
+	["Atomics", "undefined", ["pause"]],
 ] as const) {
 	for (const method of methods)
-		primitiveResults.set(
+		normalResultKinds.set(
 			owner === "" ? method : `${owner}${method.startsWith("[") ? "" : "."}${method}`,
-			result,
+			normalResultKindMasks[result],
 		);
 }
 
-primitiveResults.set("Symbol.prototype[%Symbol.toPrimitive%]", "symbol");
+normalResultKinds.set(
+	"Symbol.prototype[%Symbol.toPrimitive%]",
+	COMPILER_VALUE_KIND_SYMBOL,
+);
 
 for (const descriptor of builtinOperations) {
 	const result = descriptor.result;
@@ -1283,16 +1449,17 @@ for (const descriptor of builtinOperations) {
 		result === "boolean" ||
 		result === "string" ||
 		result === "bigint" ||
-		result === "symbol"
+		result === "symbol" ||
+		result === "undefined"
 	)
-		primitiveResults.set(descriptor.id, result);
+		normalResultKinds.set(descriptor.id, normalResultKindMasks[result]);
 }
 
 // Normal-completion facts do not license removing coercion, protocol calls, or throws.
-export function builtinPrimitiveResult(
+export function builtinNormalResultKinds(
 	operation: string,
-): BuiltinPrimitiveResult | undefined {
-	return primitiveResults.get(operation);
+): CompilerValueKindMask | undefined {
+	return normalResultKinds.get(operation);
 }
 
 // Integer payload identity does not remove callee checks, coercion or argument effects.

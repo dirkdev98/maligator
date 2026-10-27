@@ -1,9 +1,8 @@
 import {
-	builtinPrimitiveResult,
+	builtinNormalResultKinds,
 	builtinResultIsInt32,
 	builtinPreservesIntegerInput,
 } from "../shared/builtin-registry.ts";
-import type { BuiltinPrimitiveResult } from "../shared/builtin-registry.ts";
 import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_BIGINT,
@@ -90,18 +89,6 @@ import {
 } from "./core-record-value-kinds.ts";
 import { coreExactArrayFromCallResult } from "./core-static-values.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
-
-const BUILTIN_RESULT_KIND_MASKS = {
-	number: COMPILER_VALUE_KIND_NUMBER,
-	string: COMPILER_VALUE_KIND_STRING,
-	boolean: COMPILER_VALUE_KIND_BOOLEAN,
-	bigint: COMPILER_VALUE_KIND_BIGINT,
-	symbol: COMPILER_VALUE_KIND_SYMBOL,
-	"boolean-or-undefined": COMPILER_VALUE_KIND_BOOLEAN | COMPILER_VALUE_KIND_UNDEFINED,
-	"number-or-bigint": COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BIGINT,
-	"number-or-undefined": COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED,
-	"string-or-undefined": COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_UNDEFINED,
-} satisfies Record<BuiltinPrimitiveResult, CompilerValueKindMask>;
 
 export const CORE_PRIMITIVE_OPERATOR_EFFECT_FACT = "primitive-operator-effects";
 
@@ -868,11 +855,10 @@ function addOperationTransfer(
 	}
 	if (opcode === "callKnown") {
 		const attributes = fn.instructionAttributes(instruction);
-		const result =
+		const mask =
 			!attributes.construct && typeof attributes.operation === "string"
-				? builtinPrimitiveResult(attributes.operation)
+				? builtinNormalResultKinds(attributes.operation)
 				: undefined;
-		const mask = result === undefined ? undefined : BUILTIN_RESULT_KIND_MASKS[result];
 		if (mask !== undefined) {
 			masks[output] = masks[output]! | mask;
 			return;

@@ -1,4 +1,11 @@
-import { builtinPrimitiveResult } from "../shared/builtin-registry.ts";
+import { builtinNormalResultKinds } from "../shared/builtin-registry.ts";
+import {
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_UNDEFINED,
+	compilerValueKindMaskIsSubset,
+} from "../shared/compiler-value-kinds.ts";
 import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
 import { PORTABLE_CONSTANT_TARGET } from "../shared/constant-evaluator.ts";
 import type { ConstantEvaluationTarget } from "../shared/constant-evaluator.ts";
@@ -170,18 +177,29 @@ function candidate(operation: string): boolean {
 		return (
 			operation !== "Math.random" &&
 			operation !== "Math.sumPrecise" &&
-			builtinPrimitiveResult(operation) === "number"
+			builtinNormalResultKinds(operation) === COMPILER_VALUE_KIND_NUMBER
 		);
+	if (
+		!operation.startsWith("String.prototype.") ||
+		(operation.includes("toLocale") && !localeCaseOperations.has(operation)) ||
+		operation.endsWith("localeCompare")
+	)
+		return false;
+	const result = builtinNormalResultKinds(operation);
 	return (
-		operation.startsWith("String.prototype.") &&
-		(!operation.includes("toLocale") || localeCaseOperations.has(operation)) &&
-		!operation.endsWith("localeCompare") &&
-		(builtinPrimitiveResult(operation) !== undefined ||
-			[
-				"String.prototype.replace",
-				"String.prototype.replaceAll",
-				"String.prototype.split",
-			].includes(operation))
+		(result !== COMPILER_VALUE_KIND_UNDEFINED &&
+			compilerValueKindMaskIsSubset(
+				result ?? 0,
+				COMPILER_VALUE_KIND_BOOLEAN |
+					COMPILER_VALUE_KIND_NUMBER |
+					COMPILER_VALUE_KIND_STRING |
+					COMPILER_VALUE_KIND_UNDEFINED,
+			)) ||
+		[
+			"String.prototype.replace",
+			"String.prototype.replaceAll",
+			"String.prototype.split",
+		].includes(operation)
 	);
 }
 

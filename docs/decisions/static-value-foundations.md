@@ -66,11 +66,16 @@ Object integrity predicates and Boolean Reflect operations publish the same
 normal-result bounds, including through argument-list adapters and suspension.
 These bounds do not admit object-state queries or mutations to primitive call
 reuse; Proxy traps, descriptor getters and failed mutations retain their calls.
-The primitive result catalog also covers standard collection, Date, RegExp,
+The normal-result catalog also covers standard collection, Date, RegExp,
 buffer and serialization operations. `Boolean | undefined` and `Number | BigInt`
 results remain unions through Core and native storage. Primitive call reuse
 admits only families with receiver, argument and repeatability rules; expanding the
 result catalog does not admit a new family to common-call elimination.
+The catalog publishes value-kind masks directly, including Object, undefined and
+nullable Object/weak-value unions. Object bounds do not promise a fresh allocation,
+an Array brand or a noncallable value. Protocol-delegating methods keep arbitrary
+results unless the full invocation contract bounds their completion; conditional
+specialization descriptors do not establish unconditional result kinds.
 
 Known-call specialization reuses existing target/effect summaries and candidate
 budgets. A non-inlined helper can consume a complete private array/object description

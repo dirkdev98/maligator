@@ -14,6 +14,11 @@ import {
 
 const fixtures = [
 	{
+		name: "object normal results",
+		fixture: "tests/local/object-normal-results.mjs",
+		optimized: [],
+	},
+	{
 		name: "builtin result bounds",
 		fixture: "tests/local/builtin-result-bounds.mjs",
 		optimized: [],

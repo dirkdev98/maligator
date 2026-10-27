@@ -1,7 +1,7 @@
 import {
 	builtinOperations,
 	builtinOperationDescriptor,
-	builtinPrimitiveResult,
+	builtinNormalResultKinds,
 	exactBuiltinCallDescriptor,
 	mathUnaryOperationKeys,
 } from "../shared/builtin-registry.ts";
@@ -846,7 +846,7 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 					(fn.instructionOpcodeName(definition) === "callKnown" &&
 						!fn.instructionAttributes(definition).construct &&
 						typeof operation === "string" &&
-						builtinPrimitiveResult(operation) === "number"))
+						builtinNormalResultKinds(operation) === COMPILER_VALUE_KIND_NUMBER))
 			);
 		};
 		for (const instruction of calls) {
@@ -856,7 +856,7 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				if (attributes.construct || attributes.argumentMode !== undefined) continue;
 				const operation = attributes.operation;
 				if (typeof operation !== "string") continue;
-				if (builtinPrimitiveResult(operation) === "string") {
+				if (builtinNormalResultKinds(operation) === COMPILER_VALUE_KIND_STRING) {
 					const result = fn.kernel.resultAt(
 						fn.kernel.instructionResultStart(instruction),
 					);

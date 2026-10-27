@@ -1,5 +1,6 @@
-import { builtinPrimitiveResult } from "../shared/builtin-registry.ts";
+import { builtinNormalResultKinds } from "../shared/builtin-registry.ts";
 import {
+	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../shared/compiler-value-kinds.ts";
@@ -813,7 +814,9 @@ function scalarProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): 
 			!attributes.construct &&
 			attributes.argumentMode === undefined &&
 			typeof attributes.operation === "string" &&
-			["number", "boolean"].includes(builtinPrimitiveResult(attributes.operation) ?? "")
+			[COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_BOOLEAN].includes(
+				builtinNormalResultKinds(attributes.operation) ?? 0,
+			)
 		);
 	}
 	return (

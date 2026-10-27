@@ -1,4 +1,4 @@
-import { builtinPrimitiveResult } from "../shared/builtin-registry.ts";
+import { builtinNormalResultKinds } from "../shared/builtin-registry.ts";
 import {
 	instructionInputKind,
 	instructionResultKind,
@@ -1192,7 +1192,9 @@ function untracedValueRegisters(
 				(op.opcode === "CALL_KNOWN" &&
 					!op.construct &&
 					op.argumentMode === undefined &&
-					["number", "boolean"].includes(builtinPrimitiveResult(op.operation) ?? "")) ||
+					[COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_BOOLEAN].includes(
+						builtinNormalResultKinds(op.operation) ?? 0,
+					)) ||
 				((op.opcode === "UNARY" || op.opcode === "BINARY") &&
 					immediateOperatorResult(
 						op,
