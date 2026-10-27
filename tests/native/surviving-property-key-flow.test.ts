@@ -7,8 +7,13 @@ import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	COMPILER_VALUE_KIND_SYMBOL,
 	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_NUMBER,
 } from "../../src/compiler/shared/compiler-value-kinds.ts";
-import { instructionResultKind } from "../../src/compiler/shared/instruction-facts.ts";
+import {
+	instructionInputKind,
+	instructionResultKind,
+} from "../../src/compiler/shared/instruction-facts.ts";
 import { nativeVariantContract } from "../../src/compiler/target/lower-native-storage.ts";
 import {
 	buildBackendPairFromOneProgramImage,
@@ -18,7 +23,7 @@ import {
 } from "../../src/test-harness.ts";
 
 it.each(["mutable", "locked"] as const)(
-	"preserves constant and coercing property keys under %s primordials",
+	"preserves property keys and primitive receiver effects under %s primordials",
 	(primordials) => {
 		const directory = mkdtempSync(join(tmpdir(), "mal-surviving-key-"));
 		try {
@@ -38,6 +43,40 @@ it.each(["mutable", "locked"] as const)(
 				}),
 				nativeStackRoots: "precise",
 			});
+			for (const [name, opcode] of [
+				["namedPrimitiveWrite", "STORE_PROPERTY_STATIC"],
+				["indexedPrimitiveRead", "LOAD_PROPERTY"],
+				["primitiveMembership", "BINARY"],
+				["indexedPrimitiveWrite", "STORE_PROPERTY"],
+				["suspendedPrimitiveWrite", "STORE_PROPERTY"],
+			]) {
+				const fn = pair.programImage.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+								[]),
+						) === name,
+				);
+				expect(fn, name).toBeDefined();
+				if (fn === undefined) throw new Error(`Missing function ${name}`);
+				const ip = fn.body.instructions.findIndex(
+					(instruction) =>
+						instruction.opcode === opcode &&
+						(instruction.opcode !== "BINARY" || instruction.operator === "in"),
+				);
+				expect(ip, name).toBeGreaterThanOrEqual(0);
+				const instruction = fn.body.instructions[ip]!;
+				const receiver =
+					"object" in instruction
+						? instruction.object
+						: instruction.opcode === "BINARY" && instruction.operator === "in"
+							? instruction.right
+							: undefined;
+				if (receiver === undefined) throw new Error(`Missing property access in ${name}`);
+				expect(instructionInputKind(fn.facts?.[ip], receiver)).toBe(
+					COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+				);
+			}
 			for (const name of ["conditionalKey", "conditionalProtoKey", "liveInitializer"]) {
 				const fn = pair.programImage.native.functions.find(
 					(fn) =>

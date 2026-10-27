@@ -15,6 +15,7 @@ import {
 	compilerComparisonInputKindsAvoidObjectCoercion,
 	compilerValueKindTruthiness,
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_STRING,
@@ -10158,11 +10159,13 @@ function emitInstruction(
 		}
 		case "DEFINE_PROPERTY": {
 			const stringIndex = context.staticDefineStringIndexByIp.get(ip);
+			const objectPossible =
+				((operandKind(instruction.object) ?? COMPILER_VALUE_KIND_TOP) &
+					COMPILER_VALUE_KIND_OBJECT) !==
+				0;
 			if (stringIndex !== undefined) {
 				const cache = `&__dpc_${ip}`;
-				return [
-					`static MAL_ISOLATE_LOCAL MalDefinePropertyCache __dpc_${ip};`,
-					`if (!mal_vm_try_define_property_static_cached(vm, ${cache}, ${boxed(instruction.object)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable})) {`,
+				const slowDefine = [
 					...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 					...(context.staticPropertyWriteInactiveRootMask === undefined
 						? []
@@ -10171,7 +10174,16 @@ function emitInstruction(
 							]),
 					`  mal_vm_op_define_property_static_cached(vm, ${cache}, ${boxed(instruction.object)}, ${relocation.stringIndex(stringIndex)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`,
 					`  ${throwCheck()}`,
-					`}`,
+				];
+				return [
+					`static MAL_ISOLATE_LOCAL MalDefinePropertyCache __dpc_${ip};`,
+					...(objectPossible
+						? [
+								`if (!mal_vm_try_define_property_static_cached(vm, ${cache}, ${boxed(instruction.object)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable})) {`,
+								...slowDefine,
+								`}`,
+							]
+						: slowDefine),
 				];
 			}
 			const define = `mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`;
@@ -10179,6 +10191,7 @@ function emitInstruction(
 			const keyKind = operandKind(instruction.key) ?? COMPILER_VALUE_KIND_TOP;
 			const numericKey = keyKind === COMPILER_VALUE_KIND_NUMBER;
 			if (
+				objectPossible &&
 				(numericKey ||
 					(keyRepresentation === "boxed" &&
 						(keyKind & COMPILER_VALUE_KIND_NUMBER) !== 0)) &&
@@ -10829,9 +10842,12 @@ function emitInstruction(
 				];
 				const ordinary = (position: ReadonlyArray<string> = []): Array<string> => {
 					if (
+						((operandKind(instruction.object) ?? COMPILER_VALUE_KIND_TOP) &
+							COMPILER_VALUE_KIND_OBJECT) ===
+							0 ||
 						((operandKind(instruction.key) ?? COMPILER_VALUE_KIND_TOP) &
 							COMPILER_VALUE_KIND_NUMBER) ===
-						0
+							0
 					)
 						return fallback(position);
 					return [
@@ -11206,9 +11222,12 @@ function emitInstruction(
 				];
 				const ordinary = (position: ReadonlyArray<string> = []): Array<string> => {
 					if (
+						((operandKind(instruction.object) ?? COMPILER_VALUE_KIND_TOP) &
+							COMPILER_VALUE_KIND_OBJECT) ===
+							0 ||
 						((operandKind(instruction.key) ?? COMPILER_VALUE_KIND_TOP) &
 							COMPILER_VALUE_KIND_NUMBER) ===
-						0
+							0
 					)
 						return fallback(position);
 					return [
@@ -11251,8 +11270,7 @@ function emitInstruction(
 			}
 			const probe = (): string =>
 				`${receiverName} && mal_vm_object_try_store_static(${receiverName}, ${boxed(instruction.value)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`;
-			const inlineCacheStore = [
-				`if (!(${probe()})) {`,
+			const slowStore = [
 				...slowPathFramePosition(),
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 				...(context.staticPropertyWriteInactiveRootMask === undefined
@@ -11262,8 +11280,14 @@ function emitInstruction(
 						]),
 				`  ${profileCall("property", `mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 				`  ${throwCheck()}`,
-				`}`,
 			];
+			if (
+				((operandKind(instruction.object) ?? COMPILER_VALUE_KIND_TOP) &
+					COMPILER_VALUE_KIND_OBJECT) ===
+				0
+			)
+				return slowStore;
+			const inlineCacheStore = [`if (!(${probe()})) {`, ...slowStore, `}`];
 			const classLayout =
 				context.nativePlan?.kind === "class-layout" &&
 				context.nativePlan.site.kind === "slot" &&
@@ -11751,7 +11775,11 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			if (operator === "in") {
+			if (
+				operator === "in" &&
+				((operandKind(right) ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_OBJECT) !==
+					0
+			) {
 				const membership = `__array_has_${ip}`;
 				const fastMembership = `mal_vm_array_try_has(mal_vm_as_array(${boxed(right)}), ${leftIsNum ? typedNumber(left) : `mal_ops_number_as_f64(${boxed(left)})`})`;
 				const ownKey = `mal_vm_shape_has_own_key(vm, ${boxed(right)}, ${boxed(left)}) ? 1 : -1`;

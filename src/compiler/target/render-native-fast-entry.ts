@@ -1,6 +1,7 @@
 import {
 	compilerValueKindTruthiness,
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_UNDEFINED,
 	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_BOOLEAN,
@@ -888,6 +889,7 @@ function fastInstruction(
 			return `if (!${probe}(vm, __fast_r${op.object}, &__fast_ic[${op.icIndex}], &__fast_r${op.dst})) goto __full;`;
 		}
 		case "LOAD_PROPERTY": {
+			if ((values.kind(op.object) & COMPILER_VALUE_KIND_OBJECT) === 0) return undefined;
 			const failure = numbers(values, op.key);
 			if (failure === "true") return undefined;
 			const guard = failure === "false" ? "" : `${failure} || `;

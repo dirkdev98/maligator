@@ -8,6 +8,8 @@ import {
 	COMPILER_VALUE_KIND_NULLISH,
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_UNDEFINED,
+	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import type { InstructionFacts } from "../src/compiler/shared/instruction-facts.ts";
@@ -18,6 +20,10 @@ import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts"
 import type {
 	BytecodeFunction,
 	BytecodeInstruction,
+} from "../src/compiler/target/runtime-image.ts";
+import {
+	vmInstructionReadRegisters,
+	vmInstructionWriteRegisters,
 } from "../src/compiler/target/runtime-image.ts";
 import { inputFactsFixture } from "./helpers/native-input-facts.ts";
 
@@ -79,6 +85,122 @@ function emitInputContract(
 }
 
 describe("local native input admission", () => {
+	it.each([
+		"LOAD_PROPERTY",
+		"STORE_PROPERTY",
+		"STORE_PROPERTY_STATIC",
+		"DEFINE_PROPERTY",
+		"in",
+	] as const)(
+		"uses independent receiver bounds for %s with conservative effects",
+		(opcode) => {
+			for (const [mask, probe] of [
+				[COMPILER_VALUE_KIND_NUMBER, false],
+				[COMPILER_VALUE_KIND_STRING, false],
+				[COMPILER_VALUE_KIND_BOOLEAN, false],
+				[COMPILER_VALUE_KIND_BIGINT, false],
+				[COMPILER_VALUE_KIND_SYMBOL, false],
+				[COMPILER_VALUE_KIND_NULL, false],
+				[COMPILER_VALUE_KIND_UNDEFINED, false],
+				[COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_NUMBER, false],
+				[COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_OBJECT, false],
+				[COMPILER_VALUE_KIND_OBJECT, true],
+				[COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_STRING, true],
+				[COMPILER_VALUE_KIND_TOP, true],
+				[undefined, true],
+			] as const)
+				for (const isGenerator of [false, true])
+					for (const strict of [false, true]) {
+						const instructions: Array<BytecodeInstruction> = isGenerator
+							? [
+									{ opcode: "GENERATOR_START" },
+									{ opcode: "YIELD", yieldedSrc: 0, valueDst: 4, modeDst: 5 },
+								]
+							: [];
+						const ip = instructions.length;
+						const operations = {
+							LOAD_PROPERTY: {
+								opcode: "LOAD_PROPERTY",
+								dst: 3,
+								object: 0,
+								key: 1,
+								icIndex: 0,
+							},
+							STORE_PROPERTY: {
+								opcode: "STORE_PROPERTY",
+								object: 0,
+								key: 1,
+								value: 2,
+								icIndex: 0,
+							},
+							STORE_PROPERTY_STATIC: {
+								opcode: "STORE_PROPERTY_STATIC",
+								object: 0,
+								stringIndex: 0,
+								value: 2,
+								icIndex: 0,
+							},
+							DEFINE_PROPERTY: {
+								opcode: "DEFINE_PROPERTY",
+								object: 0,
+								key: 1,
+								value: 2,
+								enumerable: true,
+								writable: true,
+								configurable: true,
+							},
+							in: { opcode: "BINARY", dst: 3, left: 1, right: 0, operator: "in" },
+						} satisfies Record<string, BytecodeInstruction>;
+						const operation = operations[opcode];
+						instructions.push(operation, {
+							opcode: "RETURN",
+							value: "dst" in operation ? operation.dst : 2,
+						});
+						const facts = new Array<InstructionFacts | undefined>(instructions.length);
+						if (mask !== undefined) {
+							const inputs = vmInstructionReadRegisters(operation);
+							const outputs = vmInstructionWriteRegisters(operation);
+							facts[ip] = {
+								registers: [...outputs, ...inputs],
+								inputOffset: outputs.length,
+								inputKindMasks: inputs.map((register) =>
+									register === 0
+										? mask
+										: register === 1
+											? COMPILER_VALUE_KIND_NUMBER |
+												(opcode === "in" ? COMPILER_VALUE_KIND_STRING : 0)
+											: COMPILER_VALUE_KIND_TOP,
+								),
+							};
+						}
+						const source = emitInputContract(
+							instructions,
+							["boxed", "boxed", "boxed", "boxed", "boxed", "boxed"],
+							{ isGenerator, strict, parameterCount: 3, propertyIcCount: 1 },
+							facts,
+						);
+						const guard =
+							opcode === "STORE_PROPERTY_STATIC"
+								? "mal_vm_as_object("
+								: "mal_vm_as_array(";
+						expect(source.includes(guard), `${mask}:${isGenerator}:${strict}`).toBe(
+							probe,
+						);
+						if (opcode === "in")
+							expect(source.includes("mal_vm_shape_has_own_key(")).toBe(probe);
+						expect(source).toContain(
+							{
+								LOAD_PROPERTY: "mal_vm_indexed_fast_load",
+								STORE_PROPERTY: "mal_vm_indexed_fast_store",
+								STORE_PROPERTY_STATIC: "mal_vm_op_store_property_ic(",
+								DEFINE_PROPERTY: "mal_vm_op_define_property(",
+								in: "mal_vm_binary_op(",
+							}[opcode],
+						);
+					}
+		},
+	);
+
 	it.each([
 		"+",
 		"-",

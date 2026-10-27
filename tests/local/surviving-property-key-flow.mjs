@@ -33,6 +33,38 @@ function checkCoercible(value) {
 	const {} = value;
 	return 7;
 }
+const primitivePropertyReceiver = function primitivePropertyReceiver(flag, observe) {
+	const suffix = observe(new.target);
+	return flag ? "A𝌆" + suffix + "Z" : 42;
+};
+function namedPrimitiveWrite(flag, makeValue, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	return (receiver.__mal_receiver_probe = makeValue());
+}
+function indexedPrimitiveRead(flag, key, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	return receiver[key];
+}
+function primitiveMembership(flag, key, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	return key in receiver;
+}
+function indexedPrimitiveWrite(flag, key, makeValue, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	return (receiver[key] = makeValue());
+}
+function* suspendedPrimitiveWrite(flag, key, makeValue, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	yield receiver;
+	return (receiver[key] = makeValue());
+}
+Object.assign(globalThis, {
+	namedPrimitiveWrite,
+	indexedPrimitiveRead,
+	primitiveMembership,
+	indexedPrimitiveWrite,
+	suspendedPrimitiveWrite,
+});
 globalThis.requireSymbol = requireSymbol;
 globalThis.checkCoercible = checkCoercible;
 const rows = [];
@@ -212,6 +244,134 @@ if (mutable) {
 	} finally {
 		Symbol.for = original;
 	}
+}
+const propertyEvents = [];
+let propertyTick = 0;
+let receivedValue;
+let throwAccessor = false;
+function observeProperty() {
+	collectGarbage?.();
+	return ++propertyTick;
+}
+function makePropertyValue() {
+	propertyEvents.push("rhs");
+	collectGarbage?.();
+	return { keep: [++propertyTick, "retained"] };
+}
+function getPrimitiveProperty() {
+	propertyEvents.push(`get:${typeof this}`);
+	collectGarbage?.();
+	if (throwAccessor) throw thrown;
+	return this;
+}
+function setPrimitiveProperty(value) {
+	propertyEvents.push(`set:${typeof this}`);
+	collectGarbage?.();
+	if (throwAccessor) throw thrown;
+	if (typeof this !== "number" || this !== 42 || value.keep[1] !== "retained")
+		throw new Error("primitive setter receiver or value root");
+	receivedValue = value;
+}
+const receiverKey = Symbol("primitive receiver key");
+const installations = [
+	[
+		Number.prototype,
+		"__mal_receiver_probe",
+		{ get: getPrimitiveProperty, set: setPrimitiveProperty },
+	],
+	[Number.prototype, "0", { get: getPrimitiveProperty, set: setPrimitiveProperty }],
+	[
+		Number.prototype,
+		receiverKey,
+		{ get: getPrimitiveProperty, set: setPrimitiveProperty },
+	],
+	[String.prototype, "__mal_receiver_probe", { get: getPrimitiveProperty }],
+];
+if (mutable)
+	for (const [prototype, key, descriptor] of installations)
+		Object.defineProperty(prototype, key, { configurable: true, ...descriptor });
+try {
+	for (const flag of [false, true]) {
+		propertyEvents.length = 0;
+		const indexed = globalThis.indexedPrimitiveRead(flag, 0, observeProperty);
+		if (indexed !== (flag ? "A" : mutable ? 42 : undefined))
+			throw new Error("primitive indexed read");
+		if (flag && globalThis.indexedPrimitiveRead(flag, 1, observeProperty) !== "\ud834")
+			throw new Error("primitive UTF-16 index");
+		const coercingKey = {
+			[Symbol.toPrimitive](hint) {
+				propertyEvents.push(`key:${hint}`);
+				collectGarbage?.();
+				return receiverKey;
+			},
+		};
+		for (const key of [0, receiverKey, coercingKey]) {
+			const eventCount = propertyEvents.length;
+			try {
+				globalThis.primitiveMembership(flag, key, observeProperty);
+				throw new Error("missing primitive membership error");
+			} catch (error) {
+				if (!(error instanceof TypeError)) throw error;
+				if (propertyEvents.length !== eventCount)
+					throw new Error("primitive membership coerced its key");
+				propertyEvents.push("in:TypeError");
+			}
+		}
+		for (const write of [
+			() => globalThis.namedPrimitiveWrite(flag, makePropertyValue, observeProperty),
+			() => globalThis.indexedPrimitiveWrite(flag, 0, makePropertyValue, observeProperty),
+			() =>
+				globalThis.indexedPrimitiveWrite(
+					flag,
+					coercingKey,
+					makePropertyValue,
+					observeProperty,
+				),
+			() => {
+				const iterator = globalThis.suspendedPrimitiveWrite(
+					flag,
+					coercingKey,
+					makePropertyValue,
+					observeProperty,
+				);
+				const first = iterator.next();
+				if (first.done || typeof first.value !== (flag ? "string" : "number"))
+					throw new Error("primitive receiver suspension");
+				collectGarbage?.();
+				const last = iterator.next();
+				if (!last.done) throw new Error("primitive receiver completion");
+				return last.value;
+			},
+		]) {
+			try {
+				const value = write();
+				if (!mutable || flag) throw new Error("missing primitive store error");
+				collectGarbage?.();
+				if (value !== receivedValue || value.keep[1] !== "retained")
+					throw new Error("primitive assignment result root");
+			} catch (error) {
+				if ((mutable && !flag) || !(error instanceof TypeError)) throw error;
+				propertyEvents.push("TypeError");
+			}
+		}
+		rows.push(propertyEvents.join("|"));
+	}
+	if (mutable) {
+		throwAccessor = true;
+		for (const access of [
+			() => globalThis.indexedPrimitiveRead(false, 0, observeProperty),
+			() => globalThis.namedPrimitiveWrite(false, makePropertyValue, observeProperty),
+		]) {
+			try {
+				access();
+				throw new Error("missing primitive accessor exception");
+			} catch (error) {
+				if (error !== thrown) throw error;
+			}
+		}
+	}
+} finally {
+	if (mutable) for (const [prototype, key] of installations) delete prototype[key];
 }
 rows.push(order, inheritedWrites);
 console.log(JSON.stringify(rows));

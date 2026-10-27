@@ -144,6 +144,11 @@ The independent target boundary and current storage contract are recorded in
       consumers in full and frameless bodies: nullable primitive unions need only
       a null test, nullable Object unions need only a callability test, and other
       unions without null skip its branch, including after suspension.
+      Primitive-only receiver bounds now remove impossible Array and plain-object
+      probes from property reads, writes, definitions and membership in full and
+      resumable bodies. Frameless admission also rejects Array-only reads that
+      cannot hit. Generic helpers retain key coercion, prototype accessors,
+      strict-write errors and GC publication independently of receiver bounds.
 - [ ] Give record entries typed fields. Program value-kind flow now carries initial
       own-field kind summaries through exact call chains, finite callee sets,
       recursive forwarding, spread/rest and constructor completions. Field-only
