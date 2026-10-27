@@ -44,6 +44,22 @@ it("retains separate clock reads even when their Number results match or are unu
 	expect(calls(result, "Date.now")).toHaveLength(3);
 });
 
+it.each([
+	["Object.isFrozen", "Object.isFrozen(x)"],
+	["Reflect.set", "Reflect.set(x,'present',z)"],
+	["Reflect.defineProperty", "Reflect.defineProperty(x,'present',z)"],
+])(
+	"keeps %s observations and mutations despite Boolean result bounds",
+	(operation, expression) => {
+		const result = inspect(
+			`const first=${expression};y(x);const second=${expression};return[first,second];`,
+		);
+		expect(calls(result, operation)).toHaveLength(2);
+		const unused = inspect(`${expression};${expression};return 0;`);
+		expect(calls(unused, operation)).toHaveLength(2);
+	},
+);
+
 it("keys both Object.is operands when reusing primitive comparisons", () => {
 	const result = inspect(
 		"const number=+x;const a=Object.is(number,0);const b=Object.is(number,1);const again=Object.is(number,0);return[a,b,again];",

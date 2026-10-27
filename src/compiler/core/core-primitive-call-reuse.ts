@@ -133,7 +133,10 @@ function candidate(operation: string): boolean {
 		operation.startsWith("Set.prototype.") ||
 		operation.startsWith("Array.prototype.") ||
 		operation.startsWith("DataView.prototype.") ||
-		operation === "Object.hasOwn"
+		operation.startsWith("Reflect.") ||
+		(operation.startsWith("Object.") &&
+			!operation.startsWith("Object.prototype.") &&
+			operation !== "Object.is")
 	)
 		return false;
 	return (

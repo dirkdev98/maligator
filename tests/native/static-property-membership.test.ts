@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { COMPILER_VALUE_KIND_BOOLEAN } from "../../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
@@ -12,6 +13,18 @@ import {
 } from "../../src/test-harness.ts";
 
 const fixtures = [
+	{
+		name: "object predicate results",
+		fixture: "tests/local/object-predicate-results.mjs",
+		optimized: [],
+		scalarResults: [
+			["objectFrozen", "Object.isFrozen"],
+			["reflectDefine", "Reflect.defineProperty"],
+			["reflectSet", "Reflect.set"],
+			["reflectList", "Reflect.has"],
+			["reflectSpread", "Reflect.has"],
+		] as const,
+	},
 	{
 		name: "membership",
 		fixture: "tests/local/static-property-membership.mjs",
@@ -58,7 +71,8 @@ it.each(
 	),
 )(
 	"preserves $name with $primordials primordials",
-	({ fixture, name, optimized, primordials }) => {
+	(testCase) => {
+		const { fixture, name, optimized, primordials } = testCase;
 		const environment = { MAL_PRIMORDIALS: primordials };
 		const expected = execFileSync(process.execPath, ["--expose-gc", fixture], {
 			encoding: "utf8",
@@ -78,6 +92,30 @@ it.each(
 				nativeStackRoots: "precise",
 			});
 			if (primordials === "locked") {
+				if ("scalarResults" in testCase && testCase.scalarResults !== undefined) {
+					for (const [functionName, operation] of testCase.scalarResults) {
+						const index = pair.programImage.runtime.functions.findIndex(
+							(fn) =>
+								String.fromCharCode(
+									...(pair.programImage.runtime.stringConstants[fn.nameStringIndex] ??
+										[]),
+								) === functionName,
+						);
+						expect(index).toBeGreaterThanOrEqual(0);
+						const fn = pair.programImage.native.functions[index]!;
+						const ip = fn.body.instructions.findIndex(
+							(op) => op.opcode === "CALL_KNOWN" && op.operation === operation,
+						);
+						expect(ip, functionName).toBeGreaterThanOrEqual(0);
+						const call = fn.body.instructions[ip]!;
+						if (call.opcode !== "CALL_KNOWN")
+							throw new Error("Expected exact builtin invocation");
+						expect(fn.facts?.[ip]?.resultKindMasks).toEqual([
+							COMPILER_VALUE_KIND_BOOLEAN,
+						]);
+						expect(fn.storage!.rootRegisters).not.toContain(call.dst);
+					}
+				}
 				for (const { functionName, forbidden } of optimized) {
 					const index = pair.programImage.runtime.functions.findIndex(
 						(fn) =>

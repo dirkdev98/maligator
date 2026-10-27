@@ -62,6 +62,10 @@ coercion remains at the observation, including its exceptions and mutation effec
 Exact Object prototype predicates also publish Boolean normal results, and exact
 `toString` publishes String, independently of Proxy traps and tag getters. Native
 storage consumes these kinds while preserving completion checks and String roots.
+Object integrity predicates and Boolean Reflect operations publish the same
+normal-result bounds, including through argument-list adapters and suspension.
+These bounds do not admit object-state queries or mutations to primitive call
+reuse; Proxy traps, descriptor getters and failed mutations retain their calls.
 
 Known-call specialization reuses existing target/effect summaries and candidate
 budgets. A non-inlined helper can consume a complete private array/object description

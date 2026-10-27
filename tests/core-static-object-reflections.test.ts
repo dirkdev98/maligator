@@ -122,3 +122,80 @@ describe("normal-result facts of Object prototype methods", () => {
 		).toBe(!locked);
 	});
 });
+
+const objectPredicates = [
+	["Object.isFrozen", "value"],
+	["Reflect.defineProperty", "value,key,other"],
+	["Reflect.set", "value,key,other"],
+] as const;
+
+describe.each(["precise", "conservative"] as const)(
+	"Object/Reflect results with %s roots",
+	(stackRoots) => {
+		it.each(
+			staticValueCases(
+				objectPredicates,
+				([operation, args], name) =>
+					`function ${name}(value,key,other,observe){const result=${operation}(${args});observe();return result;}globalThis.${name}=${name};`,
+				{ stackRoots },
+			),
+		)(
+			"stores %s as Boolean without weakening its invocation",
+			(_label, [operation], inspect) => {
+				const out = inspect();
+				const ip = out.native.body.instructions.findIndex(
+					(op) => op.opcode === "CALL_KNOWN" && op.operation === operation,
+				);
+				expect(ip).toBeGreaterThanOrEqual(0);
+				const call = out.native.body.instructions[ip]!;
+				if (call.opcode !== "CALL_KNOWN")
+					throw new Error("Expected exact builtin invocation");
+				expect(out.native.facts?.[ip]?.resultKindMasks).toEqual([
+					COMPILER_VALUE_KIND_BOOLEAN,
+				]);
+				expect(out.native.registerRepresentations[call.dst]).toBe("boolean");
+				if (stackRoots === "precise")
+					expect(out.native.storage!.rootRegisters).not.toContain(call.dst);
+				expect(out.structure.genericCalls).toBe(1);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+					out.image,
+				);
+			},
+		);
+	},
+);
+
+it.each(objectPredicates)("retains arbitrary mutable %s results", (operation, args) => {
+	const out = inspectStaticValueFunction(
+		`function probe(value,key,other,observe){const result=${operation}(${args});observe();return result;}globalThis.probe=probe;`,
+		"probe",
+		{ locked: false },
+	);
+	expect(
+		out.native.body.instructions.some(
+			(op) => op.opcode === "CALL_KNOWN" && op.operation === operation,
+		),
+	).toBe(false);
+	expect(
+		out.native.body.instructions.some(
+			(op) => op.opcode === "CALL" && out.native.storage!.rootRegisters.includes(op.dst),
+		),
+	).toBe(true);
+});
+
+it.each([
+	"Reflect.has.call(null,value,key)",
+	"Reflect.has.apply(null,other)",
+	"Reflect.apply(Reflect.has,null,other)",
+	"Reflect.has(...other)",
+])("carries Boolean bounds through %s argument effects", (expression) => {
+	const out = inspectStaticValueFunction(
+		`function probe(value,key,other,observe){const result=${expression};observe();return result;}globalThis.probe=probe;`,
+		"probe",
+	);
+	const ip = out.native.body.instructions.findIndex(
+		(op) => op.opcode === "CALL_KNOWN" && op.operation === "Reflect.has",
+	);
+	expect(ip).toBeGreaterThanOrEqual(0);
+	expect(out.native.facts?.[ip]?.resultKindMasks).toEqual([COMPILER_VALUE_KIND_BOOLEAN]);
+});

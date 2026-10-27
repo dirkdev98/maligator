@@ -1084,6 +1084,20 @@ for (const [owner, result, methods] of [
 		["hasOwnProperty", "propertyIsEnumerable", "isPrototypeOf"],
 	],
 	["Object.prototype", "string", ["toString"]],
+	["Object", "boolean", ["isExtensible", "isFrozen", "isSealed"]],
+	[
+		"Reflect",
+		"boolean",
+		[
+			"defineProperty",
+			"deleteProperty",
+			"has",
+			"isExtensible",
+			"preventExtensions",
+			"set",
+			"setPrototypeOf",
+		],
+	],
 	["String", "string", ["fromCharCode", "fromCodePoint", "raw"]],
 	[
 		"String.prototype",
