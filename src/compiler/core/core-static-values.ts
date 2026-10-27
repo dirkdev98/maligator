@@ -640,7 +640,7 @@ export class CoreStaticValueAnalysis {
 			const property =
 				typeof key === "string"
 					? description.properties.find((property) => property.key === key)
-					: this.ownSymbolProperty(fact, key);
+					: this.ownSymbolProperty(fact, key, consumer);
 			if (property !== undefined) {
 				if (property.descriptor.kind === "data") member = property.descriptor.value;
 			} else if (
@@ -667,9 +667,10 @@ export class CoreStaticValueAnalysis {
 	ownSymbolProperty(
 		value: CoreStaticValue,
 		key: CoreValueId,
+		consumer: CoreInstructionId,
 	): StaticPropertyDescription | undefined {
 		this.verify(value);
-		const symbol = this.query(key);
+		const symbol = this.#keyFact(key, consumer);
 		if (symbol.kind !== "known" || symbol.brand !== "symbol") return undefined;
 		const description = this.#program.staticDescriptions.description(value.description);
 		if (description.kind !== "array" && description.kind !== "object") return undefined;
@@ -679,7 +680,7 @@ export class CoreStaticValueAnalysis {
 			if ("symbolOperand" in property.key) {
 				const operand = value.operands[property.key.symbolOperand]!;
 				if (operand === key) return true;
-				const bound = this.query(operand);
+				const bound = this.#keyFact(operand, consumer);
 				if (bound.kind !== "known" || bound.brand !== "symbol") return false;
 				if (
 					(bound.discriminator ?? bound.value) === (symbol.discriminator ?? symbol.value)
@@ -838,10 +839,11 @@ export class CoreStaticValueAnalysis {
 				: bind(input, requestedKey !== undefined);
 		const propertyKey = (
 			input: CoreValueId,
+			consumer: CoreInstructionId,
 		): StaticPropertyDescription["key"] | undefined => {
-			const key = this.propertyKey(input);
+			const key = this.propertyKey(input, consumer);
 			if (key === undefined || typeof key === "string") return key;
-			const fact = this.query(key);
+			const fact = this.#keyFact(key, consumer);
 			if (fact.kind !== "known") return undefined;
 			const identity = fact.identity;
 			const canonical = fact.discriminator ?? fact.value;
@@ -978,7 +980,7 @@ export class CoreStaticValueAnalysis {
 				) {
 					const key = opcode.endsWith("Static")
 						? this.string(attributes.stringIndex as number)
-						: propertyKey(args[1]!);
+						: propertyKey(args[1]!, instruction);
 					if (key === undefined) {
 						invalidate();
 						continue;
@@ -1699,12 +1701,13 @@ export class CoreStaticValueAnalysis {
 				"number",
 			);
 		if (opcode === "move" || opcode === "toPropertyKey") {
-			const input = this.#query(
-				fn.kernel.operandAt(
-					fn.kernel.instructionOperandStart(instruction) + (opcode === "move" ? 0 : 1),
-				),
-				requestedKey,
+			const operand = fn.kernel.operandAt(
+				fn.kernel.instructionOperandStart(instruction) + (opcode === "move" ? 0 : 1),
 			);
+			const input =
+				opcode === "toPropertyKey"
+					? this.#keyFact(operand, instruction)
+					: this.#query(operand, requestedKey);
 			// The base can still throw; a normal String/Symbol key preserves its identity.
 			if (
 				opcode === "toPropertyKey" &&
@@ -1905,10 +1908,10 @@ export class CoreStaticValueAnalysis {
 				if (opcode === "loadPropertyStatic")
 					key = this.string(attributes.stringIndex as number);
 				else {
-					const propertyKey = this.propertyKey(operands[1]!);
+					const propertyKey = this.propertyKey(operands[1]!, instruction);
 					if (typeof propertyKey === "string") key = propertyKey;
 					else if (propertyKey !== undefined) {
-						const symbol = this.query(propertyKey);
+						const symbol = this.#keyFact(propertyKey, instruction);
 						if (
 							symbol.kind === "known" &&
 							symbol.brand === "symbol" &&
@@ -2584,8 +2587,11 @@ export class CoreStaticValueAnalysis {
 	}
 
 	// Constant primitive keys become text; Symbols retain the SSA value binding their identity.
-	propertyKey(value: CoreValueId): string | CoreValueId | undefined {
-		const fact = this.query(value);
+	propertyKey(
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+	): string | CoreValueId | undefined {
+		const fact = this.#keyFact(value, consumer);
 		if (fact.kind !== "known") return undefined;
 		if (fact.brand === "symbol") return value;
 		if (fact.brand === "null" || fact.brand === "undefined") return fact.brand;
@@ -2595,6 +2601,11 @@ export class CoreStaticValueAnalysis {
 			: constant.kind === "undefined"
 				? "undefined"
 				: String(constant.value);
+	}
+
+	#keyFact(value: CoreValueId, consumer: CoreInstructionId): CoreStaticValueResult {
+		const initial = this.query(value);
+		return initial.kind === "unknown" ? this.queryAt(value, consumer) : initial;
 	}
 
 	constant(value: CoreValueId, consumer?: CoreInstructionId): ConstantValue | undefined {

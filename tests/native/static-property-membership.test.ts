@@ -34,18 +34,25 @@ it.each(["mutable", "locked"] as const)(
 				nativeStackRoots: "precise",
 			});
 			if (primordials === "locked") {
-				const index = pair.programImage.runtime.functions.findIndex(
-					(fn) =>
-						String.fromCharCode(
-							...(pair.programImage.runtime.stringConstants[fn.nameStringIndex] ?? []),
-						) === "symbolRead",
-				);
-				expect(index).toBeGreaterThanOrEqual(0);
-				expect(
-					pair.programImage.runtime.functions[index]!.instructions.some(
-						(instruction) => instruction.opcode === "LOAD_PROPERTY",
-					),
-				).toBe(false);
+				for (const name of [
+					"symbolRead",
+					"cellSymbolRead",
+					"registryCellRead",
+					"capturedCellRead",
+				]) {
+					const index = pair.programImage.runtime.functions.findIndex(
+						(fn) =>
+							String.fromCharCode(
+								...(pair.programImage.runtime.stringConstants[fn.nameStringIndex] ?? []),
+							) === name,
+					);
+					expect(index).toBeGreaterThanOrEqual(0);
+					expect(
+						pair.programImage.runtime.functions[index]!.instructions.some(
+							(instruction) => instruction.opcode === "LOAD_PROPERTY",
+						),
+					).toBe(false);
+				}
 			}
 			for (const binary of [pair.compiled, pair.interpreted]) {
 				expect(runToStdout(binary, { env: environment })).toBe(expected);

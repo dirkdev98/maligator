@@ -293,7 +293,7 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 			const key =
 				opcode === loadPropertyStaticOpcode
 					? analysis.string(fn.instructionAttributes(instruction).stringIndex as number)
-					: analysis.propertyKey(fn.kernel.operandAt(start + 1));
+					: analysis.propertyKey(fn.kernel.operandAt(start + 1), instruction);
 			if (key === undefined) continue;
 			const property = analysis.queryPropertyAt(receiver, key, instruction);
 			if (property === undefined) continue;
@@ -535,12 +535,14 @@ export const foldStaticReflections: CoreFunctionPass = {
 					? fn.kernel.operandAt(start + argument + 1)
 					: undefined;
 			const propertyKey =
-				keyInput === undefined ? "undefined" : analysis.propertyKey(keyInput);
+				keyInput === undefined
+					? "undefined"
+					: analysis.propertyKey(keyInput, instruction);
 			if (propertyKey === undefined) continue;
 			let key: PrimordialKey | undefined =
 				typeof propertyKey === "string" ? propertyKey : undefined;
 			if (typeof propertyKey !== "string") {
-				const symbol = analysis.query(propertyKey);
+				const symbol = analysis.queryAt(propertyKey, instruction);
 				if (
 					symbol.kind === "known" &&
 					symbol.brand === "symbol" &&
@@ -652,7 +654,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 			let property =
 				typeof propertyKey === "string"
 					? description.properties.find((property) => property.key === propertyKey)
-					: analysis.ownSymbolProperty(fact, propertyKey);
+					: analysis.ownSymbolProperty(fact, propertyKey, instruction);
 			// An unmatched Symbol can alias another stored key; it does not prove absence.
 			if (typeof propertyKey !== "string" && property === undefined) continue;
 			if (canonical === "Object.hasOwn" || canonical === "Reflect.has") {

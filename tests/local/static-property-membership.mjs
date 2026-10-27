@@ -389,4 +389,140 @@ assert(
 	cellAndLocalSymbol(marker) === undefined,
 	"cell Symbol and local Symbol remain distinct",
 );
+
+function cellSymbolRead(value, observe) {
+	const record = { [storedSymbol]: value };
+	observe();
+	return record[storedSymbol];
+}
+
+function cellSymbolPresence(value, observe) {
+	const record = { [storedSymbol]: value };
+	observe();
+	return (
+		storedSymbol in record &&
+		Object.hasOwn(record, storedSymbol) &&
+		Reflect.has(record, storedSymbol)
+	);
+}
+
+function cellSymbolDescriptor(value, observe) {
+	const record = { [storedSymbol]: value };
+	observe();
+	return Object.getOwnPropertyDescriptor(record, storedSymbol).value;
+}
+
+function symbolCellFactory(condition) {
+	const captured = condition ? Symbol("one") : Symbol("two");
+	function capturedCellRead(value, observe) {
+		const record = { [captured]: value };
+		observe();
+		return record[captured];
+	}
+	return capturedCellRead;
+}
+
+let cellDescriptions = 0;
+const registryCell = Symbol.for({
+	toString() {
+		cellDescriptions++;
+		return "shared-cell-key";
+	},
+});
+const aliasCell = Symbol.for({
+	toString() {
+		return "shared-cell-key";
+	},
+});
+
+function registryCellRead(value, observe) {
+	const record = { [registryCell]: value };
+	observe();
+	return record[registryCell];
+}
+
+function aliasedCellRead(value, observe) {
+	const record = { [registryCell]: value };
+	observe();
+	return record[aliasCell];
+}
+
+let changingCell = Symbol("before");
+function mutableCellRead(value, observe) {
+	const record = { [changingCell]: value };
+	observe();
+	return record[changingCell];
+}
+
+let cellConversions = 0;
+const coercingCell = {
+	toString() {
+		return `cell-key-${cellConversions++}`;
+	},
+};
+function coercingCellRead(value, observe) {
+	const record = { [coercingCell]: value };
+	observe();
+	return record[coercingCell];
+}
+
+Object.assign(globalThis.membershipProbes, {
+	cellSymbolRead,
+	cellSymbolPresence,
+	cellSymbolDescriptor,
+	symbolCellFactory,
+	registryCellRead,
+	aliasedCellRead,
+	mutableCellRead,
+	coercingCellRead,
+});
+const collect = () => globalThis.gc?.();
+assert(cellSymbolRead(marker, collect) === marker, "joined cell Symbol field");
+assert(cellSymbolPresence(marker, collect), "joined cell Symbol presence");
+assert(cellSymbolDescriptor(marker, collect) === marker, "joined cell Symbol descriptor");
+for (const condition of [false, true])
+	assert(
+		symbolCellFactory(condition)(marker, collect) === marker,
+		"captured Symbol cell identity stays within each closure instance",
+	);
+assert(registryCellRead(marker, collect) === marker, "unknown registry cell field");
+assert(cellDescriptions === 1, "registry cell retains initialization coercion");
+assert(
+	aliasedCellRead(marker, collect) === marker,
+	"distinct cells can hold the same Symbol",
+);
+assert(
+	mutableCellRead(marker, () => {
+		changingCell = Symbol("after");
+	}) === undefined,
+	"mutable cell changes invalidate key identity",
+);
+assert(
+	coercingCellRead(marker, collect) === undefined,
+	"Object cell keys retain conversion",
+);
+assert(cellConversions === 2, "Object cell converts at each key use");
+try {
+	cellSymbolRead(marker, () => {
+		throw marker;
+	});
+	assert(false, "callback exception was removed");
+} catch (error) {
+	assert(error === marker, "forwarded field preserves callback exception identity");
+}
+let earlyCellCallbacks = 0;
+function earlyCellRead(value) {
+	const record = { [lateCell]: value };
+	earlyCellCallbacks++;
+	return record[lateCell];
+}
+try {
+	earlyCellRead(marker);
+	assert(false, "uninitialized cell key was accepted");
+} catch (error) {
+	assert(error instanceof ReferenceError, "cell key retains its TDZ exception");
+}
+const lateCell = Symbol("late");
+assert(earlyCellCallbacks === 0, "TDZ check precedes the callback");
+assert(earlyCellRead(marker) === marker, "initialized cell key reads normally");
 console.log("static property membership semantics passed");

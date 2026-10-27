@@ -43,13 +43,16 @@ function immutablePrimitive(fact: CoreStaticValue): boolean {
 function cellKey(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
+	opcode = fn.instructionOpcodeName(instruction),
 ): string | undefined {
-	const opcode = fn.instructionOpcodeName(instruction),
-		attributes = fn.instructionAttributes(instruction);
-	if (opcode === "loadGlobal" || opcode === "storeGlobal")
+	if (opcode === "loadGlobal" || opcode === "storeGlobal") {
+		const attributes = fn.instructionAttributes(instruction);
 		return `global:${attributes.index as number}`;
-	if (opcode === "loadCaptured" || opcode === "storeCaptured")
+	}
+	if (opcode === "loadCaptured" || opcode === "storeCaptured") {
+		const attributes = fn.instructionAttributes(instruction);
 		return `captured:${attributes.functionIndex as number}:${attributes.index as number}`;
+	}
 	return undefined;
 }
 
@@ -83,6 +86,7 @@ export class CoreStaticCellIndex {
 	readonly #initializedReads: ReadonlySet<string>;
 	readonly #context: CoreCompilationContext;
 	readonly #functions = new Map<CoreFunctionId, Map<string, Array<CellAccess>>>();
+	readonly #reboundScopes = new Map<CoreFunctionId, ReadonlySet<number>>();
 	readonly #cells = new Map<string, Map<CoreFunctionId, Array<CellAccess>>>();
 	readonly #facts = new Map<
 		string,
@@ -150,14 +154,21 @@ export class CoreStaticCellIndex {
 			for (const key of this.#functions.get(functionId)?.keys() ?? [])
 				this.#cells.get(key)?.delete(functionId);
 			this.#functions.delete(functionId);
+			this.#reboundScopes.delete(functionId);
 			if (!this.#program.hasFunction(functionId)) continue;
 			const fn = this.#program.function(functionId),
 				found = new Map<string, Array<CellAccess>>();
+			let reboundScopes: Set<number> | undefined;
 			for (const instruction of fn.instructionIds()) {
 				if (fn.instructionKind(instruction) !== "operation") continue;
-				const key = cellKey(fn, instruction);
+				const opcode = fn.instructionOpcodeName(instruction);
+				if (opcode === "envPush" || opcode === "envCopy")
+					(reboundScopes ??= new Set()).add(
+						fn.instructionAttributes(instruction).scopeId as number,
+					);
+				const key = cellKey(fn, instruction, opcode);
 				if (key === undefined || !this.#closed.has(key)) continue;
-				const write = fn.instructionOpcodeName(instruction).startsWith("store");
+				const write = opcode.startsWith("store");
 				const value = write
 					? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))
 					: fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
@@ -173,6 +184,7 @@ export class CoreStaticCellIndex {
 				accesses.push({ function: functionId, instruction, value, write });
 				found.set(key, accesses);
 			}
+			if (reboundScopes !== undefined) this.#reboundScopes.set(functionId, reboundScopes);
 			this.#functions.set(functionId, found);
 			for (const [key, accesses] of found) {
 				const cell = this.#cells.get(key) ?? new Map<CoreFunctionId, Array<CellAccess>>();
@@ -216,7 +228,7 @@ export class CoreStaticCellIndex {
 			checkedInitialization = initializedBeforeRead();
 			if (checkedInitialization) {
 				const property = this.#property(key, requestedKey, getAnalysis);
-				if (property !== undefined) return this.#stored(property, fn, value, key);
+				if (property !== undefined) return this.#stored(property, fn, load, value, key);
 			}
 		}
 		if (!this.#facts.has(key)) {
@@ -263,27 +275,32 @@ export class CoreStaticCellIndex {
 		}
 		if (!initialized) initialized = checkedInitialization ?? initializedBeforeRead();
 		if (!initialized) return undefined;
-		return this.#stored(source, fn, value, key);
+		return this.#stored(source, fn, load, value, key);
 	}
 	#stored(
 		source: CoreStaticValue,
 		fn: CoreFunctionStore,
+		load: CoreInstructionId,
 		value: CoreValueId,
 		key: string,
 	): CoreStaticValue {
+		const owner = fn.instructionAttributes(load).functionIndex;
+		// A loop can replace its captured environment within the reader's activation.
+		const stableCell =
+			typeof owner !== "number" || !this.#reboundScopes.get(fn.id)?.has(owner);
 		return {
 			...source,
 			value,
 			// A producer's SSA discriminator has no meaning in the reader's function.
 			discriminator: undefined,
 			identity:
-				source.identity === undefined
-					? undefined
-					: source.brand === "symbol" &&
-						  (source.identity.kind === "intrinsic" ||
-								source.identity.kind === "symbol-registry")
-						? source.identity
-						: { kind: "private-cell", function: fn.id, key },
+				source.brand === "symbol" &&
+				(source.identity?.kind === "intrinsic" ||
+					source.identity?.kind === "symbol-registry")
+					? source.identity
+					: stableCell && (source.identity !== undefined || source.brand === "symbol")
+						? { kind: "private-cell", function: fn.id, key }
+						: undefined,
 			state: source.state === "immutable-value" ? "immutable-value" : "stored-instance",
 			construction: undefined,
 			privateUntilObservation: false,

@@ -145,6 +145,93 @@ describe.each([false, true])("static membership with locked primordials %s", (lo
 });
 
 describe("Symbol property identity", () => {
+	it.each([false, true])(
+		"uses initialized Symbol cell keys with locked primordials %s",
+		(locked) => {
+			const cases = [
+				["read", "return record[key];"],
+				["presence", "return key in record;"],
+				["hasOwn", "return Object.hasOwn(record,key);"],
+				["reflectHas", "return Reflect.has(record,key);"],
+				["descriptor", "return Object.getOwnPropertyDescriptor(record,key).value;"],
+			] as const;
+			for (const [, body] of cases) {
+				const result = inspectStaticValueFunction(
+					`const key=globalThis.chooseKey?Symbol('one'):Symbol('two');function probe(value,observe){const record={[key]:value};observe();${body}}globalThis.probe=probe;`,
+					"probe",
+					{ locked },
+				);
+				expect(result.core.some((operation) => operation.opcode === "call")).toBe(true);
+				expect(
+					result.core.some(
+						(operation) =>
+							operation.opcode === "loadGlobal" || operation.opcode === "throwIfTdz",
+					),
+				).toBe(true);
+				expect(
+					result.core.some(
+						(operation) =>
+							operation.opcode === "createObject" ||
+							operation.opcode === "loadProperty" ||
+							operation.opcode === "callKnown" ||
+							(operation.opcode === "binary" && operation.attributes.operator === "in"),
+					),
+				).toBe(!locked);
+			}
+		},
+	);
+	it.each([
+		["module registry cell", "const key=Symbol.for(globalThis.dynamicKey);", ""],
+		[
+			"captured registry cell",
+			"function factory(description){const key=Symbol.for(description);",
+			"return probe;}globalThis.factory=factory;",
+		],
+		[
+			"captured joined cell",
+			"function factory(condition){const key=condition?Symbol('one'):Symbol('two');",
+			"return probe;}globalThis.factory=factory;",
+		],
+	] as const)("forwards private fields keyed by a %s", (_label, prefix, suffix) => {
+		const result = inspectStaticValueFunction(
+			`${prefix}function probe(value,observe){const record={[key]:value};observe();return record[key];}globalThis.probe=probe;${suffix}`,
+			"probe",
+		);
+		expect(result.core.some((operation) => operation.opcode === "loadProperty")).toBe(
+			false,
+		);
+		expect(result.core.some((operation) => operation.opcode === "call")).toBe(true);
+	});
+	it.each([
+		[
+			"different cells that may alias",
+			"const key=Symbol.for(globalThis.first),other=Symbol.for(globalThis.second);",
+			"observe();return record[other];",
+		],
+		[
+			"mutable cell",
+			"let key=Symbol('one');globalThis.replace=()=>{key=Symbol('two')};",
+			"observe();return record[key];",
+		],
+		[
+			"escaped field",
+			"const key=Symbol.for(globalThis.first);",
+			"observe(record,key);return record[key];",
+		],
+		[
+			"coercing Object cell",
+			"const key={toString(){return globalThis.nextKey()}};",
+			"observe();return record[key];",
+		],
+	] as const)("retains the property fallback for %s", (_label, prefix, tail) => {
+		const result = inspectStaticValueFunction(
+			`${prefix}function probe(value,observe){const record={[key]:value};${tail}}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(result.core.some((operation) => operation.opcode === "loadProperty")).toBe(
+			true,
+		);
+	});
 	const fields = [
 		[
 			"fresh Symbol read",
