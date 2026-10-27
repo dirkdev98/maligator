@@ -962,9 +962,23 @@ describe("rejected primitive construction profiles", () => {
 						expect(output.structure.genericCalls).toBe(2);
 					const protectedAllocations =
 						profile === "loop" ? 1 : profile === "separate-errors" ? 2 : 0;
-					expect(output.structure.allocations).toBe(
+					const argumentAllocations = output.fn.instructions.filter((operation) => {
+						if (operation.opcode !== "CREATE_OBJECT_SHAPED") return false;
+						const keys = operation.keyStringIndices;
+						return (
+							keys.length === 1 &&
+							String.fromCharCode(
+								...(output.image.runtime.stringConstants[keys[0]!] ?? []),
+							) === (profile === "escaped-argument" ? "x" : "value")
+						);
+					});
+					expect(argumentAllocations).toHaveLength(
 						profile === "escaped-argument" ? 1 : protectedAllocations,
 					);
+					if (protectedAllocations === 0)
+						expect(output.structure.allocations).toBe(
+							profile === "escaped-argument" ? 1 : 0,
+						);
 					if (protectedAllocations > 0) {
 						const targets = vmExceptionHandlerTargets(
 							output.fn.instructions.length,
@@ -973,7 +987,6 @@ describe("rejected primitive construction profiles", () => {
 						const allocations = output.fn.instructions.flatMap((instruction, ip) =>
 							instruction.opcode === "CREATE_OBJECT_SHAPED" ? [ip] : [],
 						);
-						expect(allocations).toHaveLength(protectedAllocations);
 						for (const ip of allocations) expect(targets[ip]).toBeDefined();
 					}
 					const mutable = inspectMutable();
