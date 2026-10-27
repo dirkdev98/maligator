@@ -1462,6 +1462,76 @@ export function builtinNormalResultKinds(
 	return normalResultKinds.get(operation);
 }
 
+export type BuiltinNormalResultProjection = (
+	| { readonly kind: "receiver" }
+	| { readonly kind: "argument"; readonly index: number }
+) & {
+	// Boxing and unboxing preserve identity only for these input kinds.
+	readonly identityKinds?: CompilerValueKindMask;
+};
+
+const firstArgumentResult = { kind: "argument", index: 0 } as const;
+const receiverResult = { kind: "receiver" } as const;
+const objectReceiverResult = {
+	...receiverResult,
+	identityKinds: COMPILER_VALUE_KIND_OBJECT,
+};
+const objectArgumentResult = {
+	...firstArgumentResult,
+	identityKinds: COMPILER_VALUE_KIND_OBJECT,
+};
+const normalResultProjections: ReadonlyMap<string, BuiltinNormalResultProjection> =
+	new Map<string, BuiltinNormalResultProjection>([
+		...[
+			"Object.freeze",
+			"Object.seal",
+			"Object.preventExtensions",
+			"Object.setPrototypeOf",
+			"Object.defineProperty",
+			"Object.defineProperties",
+		].map((operation) => [operation, firstArgumentResult] as const),
+		...[
+			"Map.prototype.set",
+			"Set.prototype.add",
+			"WeakMap.prototype.set",
+			"WeakSet.prototype.add",
+			"Int8Array.prototype.[[Prototype]].copyWithin",
+			"Int8Array.prototype.[[Prototype]].fill",
+			"Int8Array.prototype.[[Prototype]].reverse",
+			"Int8Array.prototype.[[Prototype]].sort",
+		].map((operation) => [operation, receiverResult] as const),
+		...[
+			"Object.prototype.valueOf",
+			"Array.prototype.copyWithin",
+			"Array.prototype.fill",
+			"Array.prototype.reverse",
+			"Array.prototype.sort",
+		].map((operation) => [operation, objectReceiverResult] as const),
+		...["Object", "Object.assign"].map(
+			(operation) => [operation, objectArgumentResult] as const,
+		),
+		...(
+			[
+				["Number.prototype.valueOf", COMPILER_VALUE_KIND_NUMBER],
+				["Boolean.prototype.valueOf", COMPILER_VALUE_KIND_BOOLEAN],
+				["String.prototype.valueOf", COMPILER_VALUE_KIND_STRING],
+				["String.prototype.toString", COMPILER_VALUE_KIND_STRING],
+				["BigInt.prototype.valueOf", COMPILER_VALUE_KIND_BIGINT],
+				["Symbol.prototype.valueOf", COMPILER_VALUE_KIND_SYMBOL],
+				["Symbol.prototype[%Symbol.toPrimitive%]", COMPILER_VALUE_KIND_SYMBOL],
+			] as const
+		).map(
+			([operation, identityKinds]) =>
+				[operation, { ...receiverResult, identityKinds }] as const,
+		),
+	]);
+
+export function builtinNormalResultProjection(
+	operation: string,
+): BuiltinNormalResultProjection | undefined {
+	return normalResultProjections.get(operation);
+}
+
 // Integer payload identity does not remove callee checks, coercion or argument effects.
 export function builtinPreservesIntegerInput(operation: string): boolean {
 	return (

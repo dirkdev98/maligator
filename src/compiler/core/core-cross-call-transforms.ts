@@ -1,3 +1,4 @@
+import { builtinNormalResultKinds } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_OBJECT,
@@ -16,6 +17,7 @@ import {
 	coreArrayIterationCall,
 	expandCoreArrayIterationCall,
 } from "./core-array-iteration.ts";
+import { CORE_BUILTIN_RESULT_PROJECTIONS_ANALYSIS } from "./core-builtin-result-projections.ts";
 import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreNormalResultFacts } from "./core-editor.ts";
@@ -4131,6 +4133,7 @@ function createProgramValueIdentityQuery(
 			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 			if (
 				fn.instructionOpcodeName(definition) !== "move" &&
+				fn.instructionOpcodeName(definition) !== "callKnown" &&
 				fn.registry.byId(fn.instructionOpcode(definition)).callTransfer?.result !==
 					"call-completion"
 			)
@@ -4139,6 +4142,31 @@ function createProgramValueIdentityQuery(
 		let roots = identities.get(functionId);
 		if (roots === undefined) {
 			const inputs = new Map<CoreInstructionId, ReadonlyArray<CoreValueId>>();
+			const cfg = () =>
+				analyses
+					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+						scope: "function",
+						function: functionId,
+					})
+					.exceptional();
+			let kind: ReturnType<typeof coreValueKindDemand> | undefined;
+			for (const [instruction, projection] of analyses.get(
+				CORE_BUILTIN_RESULT_PROJECTIONS_ANALYSIS,
+				{ scope: "function", function: functionId },
+			)) {
+				if (projection.input === undefined) continue;
+				if (projection.identityKinds !== undefined) {
+					kind ??= coreValueKindDemand(program, fn, cfg, flow.targets, true);
+					if (
+						!compilerValueKindMaskIsSubset(
+							kind(projection.input) ?? COMPILER_VALUE_KIND_TOP,
+							projection.identityKinds,
+						)
+					)
+						continue;
+				}
+				inputs.set(instruction, [projection.input]);
+			}
 			for (const site of flow.targets.outgoing(functionId)) {
 				if (
 					site.transfer.result !== "call-completion" ||
@@ -4161,16 +4189,8 @@ function createProgramValueIdentityQuery(
 			roots =
 				inputs.size === 0
 					? noIdentities
-					: coreCanonicalValueRoots(
-							fn,
-							analyses
-								.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
-									scope: "function",
-									function: functionId,
-								})
-								.exceptional(),
-							undefined,
-							(instruction) => inputs.get(instruction),
+					: coreCanonicalValueRoots(fn, cfg(), undefined, (instruction) =>
+							inputs.get(instruction),
 						);
 			identities.set(functionId, roots);
 		}
@@ -4826,13 +4846,31 @@ function discoverProgramCallResultIdentities(
 		);
 		const replacements = new Map<CoreValueId, CoreValueId>();
 		let kind: ReturnType<typeof coreValueKindDemand> | undefined;
-		for (const site of flow.targets.outgoing(functionId)) {
-			const instruction = site.instruction;
-			if (
-				site.transfer.result !== "call-completion" ||
-				fn.kernel.instructionResultCount(instruction) !== 1
-			)
-				continue;
+		const kindMask = (value: CoreValueId) => {
+			kind ??= coreValueKindDemand(
+				program,
+				fn,
+				() =>
+					analyses
+						.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+							scope: "function",
+							function: functionId,
+						})
+						.exceptional(),
+				flow.targets,
+				true,
+			);
+			return kind(value) ?? COMPILER_VALUE_KIND_TOP;
+		};
+		const projections = analyses.get(CORE_BUILTIN_RESULT_PROJECTIONS_ANALYSIS, {
+			scope: "function",
+			function: functionId,
+		});
+		const candidates = new Set(projections.keys());
+		for (const site of flow.targets.outgoing(functionId))
+			if (site.transfer.result === "call-completion") candidates.add(site.instruction);
+		for (const instruction of candidates) {
+			if (fn.kernel.instructionResultCount(instruction) !== 1) continue;
 			const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 			if (fn.valueUseCount(value) === 0 && fn.kernel.valueFirstHandlerUse(value) < 0)
 				continue;
@@ -4852,28 +4890,31 @@ function discoverProgramCallResultIdentities(
 			// Normal completion can refine a forwarded value; its stronger result facts must survive.
 			const fact = facts.get(instruction);
 			const attributes = fn.instructionAttributes(instruction);
-			const mask = fact?.mask ?? attributes[CORE_CALL_RESULT_KIND_ATTRIBUTE];
-			if (typeof mask === "number") {
-				kind ??= coreValueKindDemand(
-					program,
-					fn,
-					() =>
-						analyses
-							.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+			const mask =
+				fact?.mask ??
+				attributes[CORE_CALL_RESULT_KIND_ATTRIBUTE] ??
+				(fn.instructionOpcodeName(instruction) === "callKnown" &&
+				typeof attributes.operation === "string"
+					? builtinNormalResultKinds(attributes.operation)
+					: undefined) ??
+				(projections.has(instruction) ? kindMask(value) : undefined);
+			if (
+				typeof mask === "number" &&
+				!compilerValueKindMaskIsSubset(kindMask(root), mask)
+			)
+				continue;
+			const bound =
+				(fact === undefined
+					? attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE]
+					: fact.integerRange) ??
+				(projections.has(instruction) && mask === COMPILER_VALUE_KIND_NUMBER
+					? analyses
+							.get(CORE_LOOP_INDUCTION_ANALYSIS, {
 								scope: "function",
 								function: functionId,
 							})
-							.exceptional(),
-					flow.targets,
-					true,
-				);
-				if (!compilerValueKindMaskIsSubset(kind(root) ?? COMPILER_VALUE_KIND_TOP, mask))
-					continue;
-			}
-			const bound =
-				fact === undefined
-					? attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE]
-					: fact.integerRange;
+							.range(value, fn.instructionBlock(instruction))
+					: undefined);
 			if (compilerIntegerRangeIsValid(bound)) {
 				const range = analyses
 					.get(CORE_LOOP_INDUCTION_ANALYSIS, { scope: "function", function: functionId })

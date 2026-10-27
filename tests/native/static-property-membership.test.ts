@@ -14,6 +14,11 @@ import {
 
 const fixtures = [
 	{
+		name: "builtin alias results",
+		fixture: "tests/local/builtin-alias-results.mjs",
+		optimized: [],
+	},
+	{
 		name: "object normal results",
 		fixture: "tests/local/object-normal-results.mjs",
 		optimized: [],

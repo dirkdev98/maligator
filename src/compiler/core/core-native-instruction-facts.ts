@@ -23,7 +23,7 @@ import {
 	corePrimitiveOperatorEffectRefinement,
 	coreInstructionResultIntegerRange,
 	coreInstructionLengthIntegerRange,
-	coreIntegerRoundingInput,
+	coreIntegerPreservedResultInput,
 } from "./core-ir-value-kinds.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
@@ -184,6 +184,7 @@ function instructionIntegerRanges(
 			? (attributes.knownBuiltinCall as { operation?: string } | undefined)?.operation
 			: attributes.operation;
 	const bounds =
+		coreIntegerPreservedResultInput(fn, instruction) !== undefined ||
 		fn.instructionKind(instruction) === "branch" ||
 		fn.instructionKind(instruction) === "guard" ||
 		fn.instructionKind(instruction) === "switch" ||
@@ -337,7 +338,7 @@ export function coreInstructionFacts(
 		results.length === 1 && results[0] === COMPILER_VALUE_KIND_NUMBER
 			? (coreInstructionResultIntegerRange(fn, instruction) ??
 				coreInstructionLengthIntegerRange(program, fn, instruction, kinds) ??
-				(coreIntegerRoundingInput(fn, instruction) === undefined
+				(coreIntegerPreservedResultInput(fn, instruction) === undefined
 					? undefined
 					: range?.(kernel.resultAt(output), fn.instructionBlock(instruction))) ??
 				(kinds.exactScalar(kernel.resultAt(output)) === "int32"

@@ -11,7 +11,7 @@ import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	coreInstructionResultIntegerRange,
 	coreInstructionLengthIntegerRange,
-	coreIntegerRoundingInput,
+	coreIntegerPreservedResultInput,
 } from "./core-ir-value-kinds.ts";
 import type { CoreExactScalarKind } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
@@ -563,7 +563,7 @@ export function analyzeCoreLoopInductions(
 				if (range === undefined && definition !== undefined)
 					range = coreInstructionLengthIntegerRange(program, fn, definition, lengthKinds);
 				if (range === undefined && definition !== undefined) {
-					const input = coreIntegerRoundingInput(fn, definition);
+					const input = coreIntegerPreservedResultInput(fn, definition);
 					if (input !== undefined) range = query(input, block, budget);
 				}
 				if (

@@ -370,6 +370,14 @@ preserves the result's kind, range and representation contract. Scalar boxing an
 integer widening use explicit moves after normal completion; stronger result
 facts and unsupported unboxing boundaries retain their original values. Calls,
 argument effects and exceptional completions remain at their original sites.
+Builtin normal-result projections independently identify a receiver or positional
+argument returned on successful completion. Boxing and unboxing projections require
+the appropriate input kind; list transport exposes only its known positional prefix.
+Kinds, integer intervals, return provenance and identity observations consume this
+shared contract. Identity replacement preserves stronger post-call bounds, including
+the Object result of collection mutators with an otherwise unknown receiver.
+An alias does not certify unchanged contents, immutable descriptors or a removable
+invocation; effect and escape analyses retain their separate obligations.
 Unobserved final call outputs need no native root or post-call publication. Every
 definition must return its final value before assigning that destination; source
 GC maps remain complete, and borrowed helper storage, rest-call state and reused

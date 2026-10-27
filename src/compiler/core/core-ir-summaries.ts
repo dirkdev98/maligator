@@ -26,6 +26,7 @@ import type {
 	ValueContainmentFact,
 	ValueEscapeFact,
 } from "../shared/effect-summary.ts";
+import { coreBuiltinResultProjection } from "./core-builtin-result-projections.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	analyzeCoreCallGraph,
@@ -458,10 +459,13 @@ function analyzeLocalSummary(
 		const instruction = localTransfers.operationAt(transfer);
 		if (reachableBlocks[fn.instructionBlock(instruction)] === 0) continue;
 		const opcode = fn.instructionOpcodeName(instruction);
+		const projection = coreBuiltinResultProjection(fn, instruction);
 		const operand =
 			opcode === "move" && fn.kernel.instructionOperandCount(instruction) > 0
 				? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))
-				: undefined;
+				: projection?.identityKinds === undefined
+					? projection?.input
+					: undefined;
 		const kind =
 			operand !== undefined
 				? ORIGIN_TRANSFER_COPY
@@ -469,7 +473,8 @@ function analyzeLocalSummary(
 					? ORIGIN_TRANSFER_RECEIVER
 					: FRESH_RESULTS.has(opcode)
 						? ORIGIN_TRANSFER_FRESH
-						: PRIMITIVE_RESULTS.has(opcode)
+						: PRIMITIVE_RESULTS.has(opcode) ||
+							  (projection !== undefined && projection.identityKinds === undefined)
 							? ORIGIN_TRANSFER_PRIMITIVE
 							: ORIGIN_TRANSFER_UNKNOWN;
 		const resultStart = fn.kernel.instructionResultStart(instruction);

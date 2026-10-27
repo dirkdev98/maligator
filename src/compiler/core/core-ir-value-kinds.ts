@@ -45,6 +45,7 @@ import {
 	compilerIntegerRangeComparison,
 } from "../shared/integer-range.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import { coreBuiltinResultProjection } from "./core-builtin-result-projections.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
@@ -211,7 +212,7 @@ function recordFieldKind(
 }
 
 /** The result equals this operand only when that operand is a proved primitive integer. */
-export function coreIntegerRoundingInput(
+export function coreIntegerPreservedResultInput(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): CoreValueId | undefined {
@@ -219,6 +220,17 @@ export function coreIntegerRoundingInput(
 	const opcode = fn.instructionOpcodeName(instruction);
 	if (opcode !== "mathUnaryNumber" && opcode !== "callKnown") return undefined;
 	const attributes = fn.instructionAttributes(instruction);
+	if (opcode === "callKnown") {
+		const projection = coreBuiltinResultProjection(fn, instruction);
+		if (projection !== undefined) {
+			const resultKinds = builtinNormalResultKinds(attributes.operation as string);
+			return (projection.identityKinds === undefined ||
+				(projection.identityKinds & COMPILER_VALUE_KIND_NUMBER) !== 0) &&
+				(resultKinds === undefined || (resultKinds & COMPILER_VALUE_KIND_NUMBER) !== 0)
+				? projection.input
+				: undefined;
+		}
+	}
 	if (
 		attributes.construct ||
 		attributes.argumentMode !== undefined ||
@@ -863,6 +875,13 @@ function addOperationTransfer(
 			masks[output] = masks[output]! | mask;
 			return;
 		}
+		const projection = coreBuiltinResultProjection(fn, instruction);
+		if (projection !== undefined && projection.identityKinds === undefined) {
+			if (projection.input === undefined)
+				masks[output] = masks[output]! | COMPILER_VALUE_KIND_UNDEFINED;
+			else addKindTransfer(buffer, KIND_TRANSFER_COPY, output, 0, [projection.input]);
+			return;
+		}
 	}
 	const forwarded = inputs?.operationResultValue?.(instruction, output);
 	if (forwarded !== undefined) {
@@ -1109,9 +1128,9 @@ function solveCoreValueKinds(
 		const opcode = fn.instructionOpcodeName(instruction);
 		const attributes = fn.instructionAttributes(instruction);
 		const operator = attributes.operator;
-		const roundingInput =
+		const preservedInput =
 			opcode === "mathUnaryNumber" || opcode === "callKnown"
-				? coreIntegerRoundingInput(fn, instruction)
+				? coreIntegerPreservedResultInput(fn, instruction)
 				: undefined;
 		if (
 			fn.valueRepresentation(output) === "i32" ||
@@ -1124,8 +1143,8 @@ function solveCoreValueKinds(
 				builtinResultIsInt32(attributes.operation))
 		) {
 			integerRecipes[output] = INTEGER_PROOF_EXACT;
-		} else if (roundingInput !== undefined) {
-			integerRecipes[output] = roundingInput + 1;
+		} else if (preservedInput !== undefined) {
+			integerRecipes[output] = preservedInput + 1;
 		} else if (opcode === "move" && fn.valueRepresentation(output) === "f64") {
 			integerRecipes[output] =
 				fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)) + 1;

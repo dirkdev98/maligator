@@ -131,9 +131,12 @@ The independent target boundary and current storage contract are recorded in
       results, including ordinary, known, spread, rest, construction and resumable
       paths. Helper state, borrowed outputs and reused input storage remain rooted.
       Carry identities into remaining storage and liveness contracts.
-      Builtin alias returns, including Object.freeze and Map.set, still need
-      independent result projections that retain invocation effects and stronger
-      post-call kind and range facts.
+      Builtin alias returns now share independent result projections across kinds,
+      integer intervals, return provenance and identity consumers. Known positional
+      prefixes survive list transport; boxing and unboxing require input-kind
+      proof. Invocation effects and stronger post-call bounds remain intact.
+      Conditional aliases still need kind-sensitive program return summaries;
+      projection alone must not certify immutable shapes or unchanged contents.
       Mutable Object.is now consumes operand identity,
       kinds and scalar views behind a loaded-callee guard, including frameless hits;
       its miss retains arbitrary results, throwing and root publication.
