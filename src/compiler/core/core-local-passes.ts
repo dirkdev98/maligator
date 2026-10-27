@@ -3270,11 +3270,34 @@ export const CORE_CONSTRUCTION_NORMALIZATION_PASSES: ReadonlyArray<CoreFunctionP
 	removeUnreachableBlocks,
 ];
 
-// Late body edits rarely leave blocks to merge or parameters to fold; removed edges do.
+// General parameter folding and block merging need changed edges; dead parameters also follow body edits.
 // Forwarding elimination stays out: it would undo the preheaders that loop analyses need.
 function afterLateCfgEdits(pass: CoreFunctionPass): CoreFunctionPass {
 	return { ...pass, wakesOn: ["cfg"] };
 }
+
+const eliminateUnusedBlockParameters: CoreFunctionPass = {
+	...simplifyBlockParameters,
+	name: "unused-block-parameter-elimination",
+	admission: {
+		predicate: "unused ordinary block parameter",
+		hasOpportunity({ program, function: functionId }) {
+			const fn = program.function(functionId);
+			for (const block of fn.blockIds()) {
+				if (block === fn.entry) continue;
+				const count = fn.kernel.blockParameterCount(block);
+				if (count === 0) continue;
+				const start = fn.kernel.blockParameterStart(block);
+				if (fn.kernel.blockParameterRole(start) === 1) continue;
+				for (let index = 0; index < count; index++) {
+					if (!valueHasUses(fn, fn.kernel.blockParameterValue(start + index)))
+						return true;
+				}
+			}
+			return false;
+		},
+	},
+};
 
 export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	forwardRestArguments,
@@ -3282,6 +3305,7 @@ export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> 
 	foldPrimitiveCoercions,
 	afterLateCfgEdits(canonicalizeBlockParameters),
 	afterLateCfgEdits(simplifyBlockParameters),
+	eliminateUnusedBlockParameters,
 	afterLateCfgEdits(mergeLinearBlocks),
 	foldValueKindObservations,
 	foldRedundantTdzChecks,

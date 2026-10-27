@@ -64,6 +64,7 @@ function wakesForChanges(pass: CoreFunctionPass, changes: CoreChangeSet): boolea
 function passOwner(pass: CoreFunctionPass): CoreOptimizationOwnerId {
 	switch (pass.name) {
 		case "block-parameter-simplification":
+		case "unused-block-parameter-elimination":
 		case "canonical-block-parameter-elimination":
 			return CORE_OPTIMIZATION_OWNER.blockParameterSimplification;
 		case "forwarding-block-elimination":

@@ -18,11 +18,13 @@ import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
 	coreArity,
+	coreInstructionId,
 } from "../src/compiler/core/core-ir.ts";
 import {
 	CORE_LOCAL_CANONICALIZATION_PASSES,
 	CORE_CONSTRUCTION_ANNOTATION_PASSES,
 	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
+	CORE_LATE_CANONICALIZATION_PASSES,
 } from "../src/compiler/core/core-local-passes.ts";
 import {
 	CORE_MEMORY_PASSES,
@@ -693,6 +695,78 @@ describe("Core optimizer infrastructure", () => {
 				.finish(program, { directEntries: [], specializations: [] })
 				.analyses.find(({ analysis }) => analysis === "structural-control-flow"),
 		).toBeUndefined();
+	});
+
+	it("admits late parameter cleanup only after a join loses its last observation", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const flag = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{ representation: "boxed" }]);
+		const parameter = inspectCoreBlockParameters(builder, join)[0]!.value;
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: flag,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		for (const block of [left, right]) {
+			const [value] = builder.appendInstruction(block, "createObject", []);
+			builder.setTerminator(block, {
+				kind: "jump",
+				edge: { block: join, arguments: [value!] },
+			});
+		}
+		const [observed] = builder.appendInstruction(join, "unary", [parameter], {
+			attributes: { operator: "!" },
+		});
+		builder.setTerminator(join, { kind: "return", value: observed! });
+		const fn = program.function(builder.finish(entry).function);
+		const { analyses, report } = analysisHarness(program);
+		const pass = CORE_LATE_CANONICALIZATION_PASSES.find(
+			({ name }) => name === "unused-block-parameter-elimination",
+		)!;
+		const scheduler = new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			fn.id,
+			{ localOptimization: true },
+		);
+		scheduler.runComponent("canonicalize", [pass]);
+		expect(
+			pass.admission!.hasOpportunity({
+				program,
+				compilationContext: context(),
+				function: fn.id,
+			}),
+		).toBe(false);
+		expect(
+			report.finish(program, { directEntries: [], specializations: [] }).analyses,
+		).not.toContainEqual(
+			expect.objectContaining({ analysis: "structural-control-flow" }),
+		);
+		const editor = CoreEditor.open(program, fn.id);
+		editor.replaceInstruction(
+			coreInstructionId(fn.kernel.valueDefinitionOwner(observed!)),
+			"createBoolean",
+			[],
+			{
+				attributes: { value: false },
+			},
+		);
+		scheduler.runComponent("canonicalize", [pass], [editor.commit()]);
+		expect(fn.kernel.blockParameterCount(join)).toBe(0);
+		expect(
+			[...fn.instructionIds()].some(
+				(instruction) =>
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionOpcodeName(instruction) === "createObject",
+			),
+		).toBe(false);
 	});
 
 	it("skips function passes without a matching candidate opcode", () => {

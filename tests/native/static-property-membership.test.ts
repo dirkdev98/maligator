@@ -25,10 +25,16 @@ const fixtures = [
 	{
 		name: "joined key bounds",
 		fixture: "tests/local/joined-object-key-bounds.mjs",
-		optimized: ["joinedMissing", "joinedDescriptor"].map((functionName) => ({
-			functionName,
-			forbidden: ["CALL", "CALL_KNOWN"],
-		})),
+		optimized: [
+			...["joinedMissing", "joinedDescriptor"].map((functionName) => ({
+				functionName,
+				forbidden: ["CALL", "CALL_KNOWN", "CREATE_OBJECT", "CREATE_OBJECT_SHAPED"],
+			})),
+			{
+				functionName: "joinedEffects",
+				forbidden: ["CREATE_OBJECT", "CREATE_OBJECT_SHAPED"],
+			},
+		],
 	},
 ];
 it.each(

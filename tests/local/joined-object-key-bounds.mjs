@@ -9,6 +9,19 @@ function joinedDescriptor(value, flag) {
 	const record = flag ? { left: value } : { right: value };
 	return Object.getOwnPropertyDescriptor(record, "missing");
 }
+function joinedEffects(flag, callback) {
+	const record = flag ? { left: callback("left") } : { right: callback("right") };
+	return Object.hasOwn(record, "missing");
+}
+function joinedHandler(value, flag, callback) {
+	const record = flag ? { left: value } : { right: value };
+	try {
+		callback();
+	} catch {
+		return record;
+	}
+	return undefined;
+}
 function joinedRead(value, flag) {
 	const record = flag ? { left: value } : { right: value };
 	return record.missing;
@@ -95,6 +108,8 @@ Object.assign(globalThis, {
 	joinedKeyProbes: {
 		joinedMissing,
 		joinedDescriptor,
+		joinedEffects,
+		joinedHandler,
 		joinedRead,
 		joinedDelete,
 		possibleNamed,
@@ -121,6 +136,32 @@ const description = {
 	},
 };
 for (const flag of [false, true]) {
+	const effects = [];
+	assert(
+		!joinedEffects(flag, (branch) => {
+			effects.push(branch);
+			globalThis.gc?.();
+			return marker;
+		}),
+		"effectful joined fields retain the folded result",
+	);
+	assert(
+		effects.join(":") === (flag ? "left" : "right"),
+		"only the selected field executes",
+	);
+	try {
+		joinedEffects(flag, () => {
+			throw marker;
+		});
+		assert(false, "field exception was removed");
+	} catch (error) {
+		assert(error === marker, "field exception identity");
+	}
+	const handled = joinedHandler(marker, flag, () => {
+		globalThis.gc?.();
+		throw marker;
+	});
+	assert(handled[flag ? "left" : "right"] === marker, "handler-observed join stays live");
 	assert(!joinedMissing(marker, flag), "unlisted String stays absent");
 	assert(
 		joinedDescriptor(marker, flag) === undefined,

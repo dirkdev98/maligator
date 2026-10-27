@@ -64,6 +64,13 @@ callback's `caller` are excluded. A resolved property or call does not by itself
 eliminate an object; consumer demands and current virtual state determine whether
 its representation can disappear.
 
+When the final observation of a joined allocation folds, late canonicalization
+removes unused ordinary block parameters and their incoming arguments. Admission
+checks use counts before requesting control flow. Dead-code elimination can then
+discard fresh object/Array allocations whose identities have no remaining uses.
+Operand evaluation stays separate, and surviving allocations retain their GC and
+exception effects; discardability does not make allocations reusable expressions.
+
 Helper search variants retain sparse source indexes and distinguish strict equality
 from SameValueZero. Index searches branch to the first match in their search order;
 holes are skipped only after inherited indexed properties are proved absent. The

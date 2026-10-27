@@ -145,6 +145,26 @@ describe.each([false, true])("static membership with locked primordials %s", (lo
 });
 
 describe("joined own-key bounds", () => {
+	it.each([
+		"return Object.hasOwn(record, 'missing');",
+		"return Object.getOwnPropertyDescriptor(record, 'missing');",
+		"return record.missing;",
+		"return delete record.missing;",
+	])(
+		"removes branch allocations after their final observation folds: %s",
+		(observation) => {
+			const result = inspectStaticValueFunction(
+				`function probe(flag, callback) {
+				const record = flag ? {left: callback('left')} : {right: callback('right')};
+				${observation}
+			} globalThis.probe = probe;`,
+				"probe",
+			);
+			expect(result.structure.allocations).toBe(0);
+			expect(result.core.filter((op) => op.opcode === "call")).toHaveLength(2);
+		},
+	);
+
 	const folded = [
 		[
 			"unrelated String",
