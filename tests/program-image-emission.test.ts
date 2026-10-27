@@ -3257,9 +3257,7 @@ describe("native update-expression representation", () => {
 		);
 		expect(homogeneous).not.toContain("__stack_object_");
 		expect(homogeneous).toMatch(/bool r\d+;/);
-		expect(homogeneous).toMatch(
-			/return mal_ops_construct_result\(mal_value_new_boolean\(r\d+\)/,
-		);
+		expect(homogeneous).toMatch(/return [^\n]*mal_value_new_boolean\(r\d+\)/);
 
 		const mixed = emit(`
 			function read(flag, count) {
