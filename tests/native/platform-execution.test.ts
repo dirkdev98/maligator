@@ -84,8 +84,20 @@ describe("prepared platform execution data", () => {
 		const result = spawnSync(deadBinary, [], { encoding: "utf8", timeout: 30_000 });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 		expect(result.stdout).toContain("DEAD_IMPORT_OK");
-		const symbols = spawnSync("nm", [deadBinary], { encoding: "utf8", timeout: 30_000 });
+		const symbols = spawnSync(
+			"nm",
+			[
+				"--no-sort",
+				"--extern-only",
+				"--defined-only",
+				"--format=just-symbols",
+				deadBinary,
+			],
+			{ encoding: "utf8", timeout: 30_000 },
+		);
+		expect(symbols.error, symbols.stderr).toBeUndefined();
 		expect(symbols.status, symbols.stderr).toBe(0);
+		expect(symbols.stdout).toMatch(/^_?main$/m);
 		expect(symbols.stdout).not.toContain("mal_host_install_maligator_process");
 	});
 	it.each([false, true])(

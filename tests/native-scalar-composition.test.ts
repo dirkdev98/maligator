@@ -529,7 +529,12 @@ describe("existing-proof scalar expression consumers", () => {
 			"probe",
 		);
 		const instructions = [...out.native.body.instructions];
-		const native = { ...out.native, body: { ...out.native.body, instructions } };
+		const native = {
+			...out.native,
+			instructions: [...out.native.instructions],
+			facts: out.native.facts?.slice(),
+			body: { ...out.native.body, instructions },
+		};
 		validateNativeStorage(native);
 		const subtraction = instructions.find(
 			(op, ip) =>
@@ -540,6 +545,8 @@ describe("existing-proof scalar expression consumers", () => {
 		if (subtraction.opcode !== "BINARY") throw new Error("Missing expression");
 		const returnIp = instructions.findIndex((op) => op.opcode === "RETURN");
 		instructions[returnIp] = { opcode: "RETURN", value: subtraction.dst };
+		native.instructions[returnIp] = undefined;
+		if (native.facts !== undefined) native.facts[returnIp] = undefined;
 		expect(() => validateNativeStorage(native)).toThrow(/invalid or stale storage plan/);
 	});
 
