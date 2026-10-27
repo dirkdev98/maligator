@@ -1261,10 +1261,11 @@ const foldValueKindObservations: CoreFunctionPass = {
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		let kinds: CoreValueKindAnalysis | undefined;
+		const valueKinds = () => (kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS));
 		let conditional: CoreConditionalValueKinds | undefined;
 		const kindMask = (value: CoreValueId, block: CoreBlockId) => {
-			const mask = kinds.kindMask(value);
+			const mask = valueKinds().kindMask(value);
 			if ((mask & (mask - 1)) === 0) return mask;
 			return (conditional ??= context.analysis(
 				CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
@@ -1278,7 +1279,7 @@ const foldValueKindObservations: CoreFunctionPass = {
 			context
 				.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
 				.range(value, fn.instructionBlock(consumer)) ??
-			(kinds.exactScalar(value) === "int32" ? COMPILER_INT32_RANGE : undefined);
+			(valueKinds().exactScalar(value) === "int32" ? COMPILER_INT32_RANGE : undefined);
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const result = coreValueKindObservation(

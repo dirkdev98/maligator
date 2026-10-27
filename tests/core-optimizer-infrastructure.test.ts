@@ -20,6 +20,7 @@ import {
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
 import {
+	CORE_LOCAL_CANONICALIZATION_PASSES,
 	CORE_CONSTRUCTION_ANNOTATION_PASSES,
 	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
 } from "../src/compiler/core/core-local-passes.ts";
@@ -1022,3 +1023,36 @@ describe("Core optimizer infrastructure", () => {
 		});
 	});
 });
+
+it.each([
+	["binary", "+"],
+	["unary", "-"],
+	["callKnown", "Math.abs"],
+])(
+	"does not request value-kind analyses for unconsumed %s %s observations",
+	(opcode, operation) => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = builder.createBlock([{}, {}]);
+		const left = builder.blockParameterValue(entry, 0),
+			right = builder.blockParameterValue(entry, 1);
+		const [value] = builder.appendInstruction(
+			entry,
+			opcode,
+			opcode === "unary" ? [left] : [left, right],
+			{ attributes: opcode === "callKnown" ? { operation } : { operator: operation } },
+		);
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const id = builder.finish(entry).function;
+		const { analyses, report } = analysisHarness(program);
+		const queries = vi.spyOn(analyses, "get");
+		const pass = CORE_LOCAL_CANONICALIZATION_PASSES.find(
+			(pass) => pass.name === "value-kind-observation-folding",
+		)!;
+		new CoreFunctionPassScheduler(program, context(), analyses, report, id).runComponent(
+			"canonicalize",
+			[pass],
+		);
+		expect(queries).not.toHaveBeenCalled();
+	},
+);
