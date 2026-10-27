@@ -5559,7 +5559,7 @@ describe("native static typeof facts", () => {
 		expect(output).not.toContain("mal_vm_typeof_compare");
 	});
 
-	it("keeps source typeof narrowing local without inventing a numeric ABI", () => {
+	it("uses a local typeof bound for multiplication while retaining the boxed ABI", () => {
 		const output = emit(`
 			"use strict";
 			function square(value) {
@@ -5570,7 +5570,19 @@ describe("native static typeof facts", () => {
 		`);
 
 		expect(output).toMatch(boxedNativeDefinition(1, "static"));
-		expect(withoutNativeFastEntries(output)).toContain("mal_ops_is_number(");
-		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_MUL");
+		const full = withoutNativeFastEntries(output);
+		expect(full).toContain("mal_ops_is_number(");
+		expect(full).toMatch(
+			/mal_ops_number_as_f64\(r\d+\) \* mal_ops_number_as_f64\(r\d+\)/,
+		);
+		expect(full).not.toContain("mal_vm_binary_op(vm, MAL_BIN_MUL");
+		const unknown = emit(`
+			"use strict";
+			function square(value) { return value * value; }
+			globalThis.square = square;
+		`);
+		expect(withoutNativeFastEntries(unknown)).toContain(
+			"mal_vm_binary_op(vm, MAL_BIN_MUL",
+		);
 	});
 });
