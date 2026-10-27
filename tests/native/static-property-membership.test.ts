@@ -34,6 +34,10 @@ const fixtures = [
 				functionName: "joinedEffects",
 				forbidden: ["CREATE_OBJECT", "CREATE_OBJECT_SHAPED"],
 			},
+			{
+				functionName: "joinedPrimitiveEffects",
+				forbidden: ["CREATE_OBJECT", "CREATE_OBJECT_SHAPED"],
+			},
 		],
 	},
 ];

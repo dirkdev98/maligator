@@ -1942,29 +1942,82 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		).toBe(true);
 	});
 
+	it.each([false, true])(
+		"cleans unused aggregate joins with primitive occupants=%s",
+		(primitive) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core, { parameterCount: 2 });
+			const entry = builder.createBlock([
+				{ representation: "boxed" },
+				{ representation: "boxed" },
+			]);
+			const flag = builder.blockParameterValue(entry, 0);
+			const held = builder.blockParameterValue(entry, 1);
+			const left = builder.createBlock();
+			const right = builder.createBlock();
+			const join = builder.createBlock([{ representation: "boxed" }]);
+			builder.setTerminator(entry, {
+				kind: "branch",
+				condition: flag,
+				consequent: { block: left, arguments: [] },
+				alternate: { block: right, arguments: [] },
+			});
+			for (const block of [left, right]) {
+				const value = primitive
+					? builder.appendInstruction(block, "createNumber", [], {
+							attributes: { value: 42 },
+						})[0]!
+					: held;
+				const [object] = builder.appendInstruction(block, "createObjectShaped", [value], {
+					attributes: { keyStringIndices: [0] },
+				});
+				builder.setTerminator(block, {
+					kind: "jump",
+					edge: { block: join, arguments: [object!] },
+				});
+			}
+			const [result] = builder.appendInstruction(join, "createBoolean", [], {
+				attributes: { value: false },
+			});
+			builder.setTerminator(join, { kind: "return", value: result! });
+			const finished = builder.finish(entry);
+			const optimized = optimizeCore({ program: core, context });
+			const fn = optimized.compilation.program.function(finished.function);
+			expect(
+				[...fn.instructionIds()].filter(
+					(instruction) =>
+						fn.instructionKind(instruction) === "operation" &&
+						fn.instructionOpcodeName(instruction) === "createObjectShaped",
+				),
+			).toHaveLength(primitive ? 0 : 2);
+		},
+	);
+
 	it.each([
 		["Symbol.prototype", "description", "get"],
 		["Math", "abs", "value"],
 		["globalThis", "Number", "value"],
 	])(
-		"removes private descriptors of rooted %s.%s identities across loop handlers",
+		"removes private descriptors of rooted %s.%s only when allocation failure is unhandled",
 		(owner, key, field) => {
-			const source = (escape: boolean) => `function probe(consume, count) {
+			for (const handled of [false, true]) {
+				const source = (escape: boolean) => `function probe(consume, count) {
 			let result = 0;
 			for (let i = 0; i < count; i++) {
-				try {
+				${handled ? "try {" : ""}
 					const descriptor = Object.getOwnPropertyDescriptor(${owner}, '${key}');
 					result += consume(${escape ? "descriptor" : `descriptor.${field}`});
-				} catch (error) { result--; }
+				${handled ? "} catch (error) { result--; }" : ""}
 			}
 			return result;
 		} globalThis.probe = probe;`;
-			const contained = inspectStaticValueFunction(source(false), "probe");
-			expect(contained.structure.allocations).toBe(0);
-			expect(contained.structure.genericCalls).toBe(1);
-			const escaped = inspectStaticValueFunction(source(true), "probe");
-			expect(escaped.structure.allocations).toBe(1);
-			expect(escaped.structure.genericCalls).toBe(1);
+				const contained = inspectStaticValueFunction(source(false), "probe");
+				expect(contained.structure.allocations).toBe(handled ? 1 : 0);
+				expect(contained.structure.genericCalls).toBe(1);
+				const escaped = inspectStaticValueFunction(source(true), "probe");
+				expect(escaped.structure.allocations).toBe(1);
+				expect(escaped.structure.genericCalls).toBe(1);
+			}
 		},
 	);
 

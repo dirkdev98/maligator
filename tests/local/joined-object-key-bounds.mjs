@@ -13,6 +13,10 @@ function joinedEffects(flag, callback) {
 	const record = flag ? { left: callback("left") } : { right: callback("right") };
 	return Object.hasOwn(record, "missing");
 }
+function joinedPrimitiveEffects(flag, callback) {
+	const record = flag ? { left: +callback("left") } : { right: +callback("right") };
+	return Object.hasOwn(record, "missing");
+}
 function joinedHandler(value, flag, callback) {
 	const record = flag ? { left: value } : { right: value };
 	try {
@@ -109,6 +113,7 @@ Object.assign(globalThis, {
 		joinedMissing,
 		joinedDescriptor,
 		joinedEffects,
+		joinedPrimitiveEffects,
 		joinedHandler,
 		joinedRead,
 		joinedDelete,
@@ -148,6 +153,25 @@ for (const flag of [false, true]) {
 	assert(
 		effects.join(":") === (flag ? "left" : "right"),
 		"only the selected field executes",
+	);
+	const primitiveEffects = [];
+	assert(
+		!joinedPrimitiveEffects(flag, (branch) => {
+			primitiveEffects.push(branch);
+			globalThis.gc?.();
+			return {
+				valueOf() {
+					primitiveEffects.push("number");
+					globalThis.gc?.();
+					return 42;
+				},
+			};
+		}),
+		"primitive fields retain callback and coercion effects",
+	);
+	assert(
+		primitiveEffects.join(":") === (flag ? "left:number" : "right:number"),
+		"only the selected primitive field executes and coerces",
 	);
 	try {
 		joinedEffects(flag, () => {

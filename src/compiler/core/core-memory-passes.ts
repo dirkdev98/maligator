@@ -77,6 +77,7 @@ import { coreInstructionId } from "./core-ir.ts";
 import { lowerKnownOperationResults } from "./core-known-operation-results.ts";
 import { resolveKnownOperations } from "./core-known-operations.ts";
 import { reuseLiteralConstants } from "./core-literal-constants.ts";
+import { eliminateUnusedBlockParameters } from "./core-local-passes.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import { reusePrimitiveCallResults } from "./core-primitive-call-reuse.ts";
@@ -2538,6 +2539,11 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 		for (const allocation of allocations) {
 			const layout = provenance().layout(allocation);
 			if (layout === undefined) continue;
+			if (
+				fn.kernel.blockHandlerBlock(fn.instructionBlock(allocation)) !== undefined &&
+				coreInstructionEffects(fn, allocation).mayThrow
+			)
+				continue;
 			if (provenance().escape(layout.instruction) !== "contained") continue;
 			const initialValues = layout.kind === "named-slots" ? layout.initialValues : [];
 			if (initialValues.some((value) => !lifetimeIndependent(value))) continue;
@@ -2670,6 +2676,13 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 	},
 };
 
+const eliminateUnusedMemoryBlockParameters: CoreFunctionPass = {
+	...eliminateUnusedBlockParameters,
+	stage: "memory",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
+	budget: PROVENANCE_BUDGET,
+};
+
 export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldStaticPropertyReads,
 	foldStaticBindingConstants,
@@ -2694,6 +2707,7 @@ export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	refineStackObjectCellRepresentations,
 	scalarizeRootedContainedObjects,
 	scalarReplaceContainedAggregates,
+	eliminateUnusedMemoryBlockParameters,
 	sinkConditionalObjectAllocations,
 ];
 
@@ -2726,6 +2740,7 @@ export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	refineStackObjectCellRepresentations,
 	scalarizeRootedContainedObjects,
 	scalarReplaceContainedAggregates,
+	eliminateUnusedMemoryBlockParameters,
 	sinkConditionalObjectAllocations,
 ];
 import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";

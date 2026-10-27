@@ -46,7 +46,9 @@ describe("recoverable allocation failure", () => {
 						runToStdout(binary, {
 							env: { ...stress, MAL_ALLOC_FAIL_TEST: "1", MAL_GC_AT_EXIT: "1" },
 						}),
-					).toBe("true Out of memory\n42\ntrue Out of memory\n");
+					).toBe(
+						"true Out of memory\n42\ntrue Out of memory\ntrue Out of memory\ntrue\n",
+					);
 				}
 			}
 		} finally {

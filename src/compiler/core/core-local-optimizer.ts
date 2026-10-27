@@ -327,6 +327,7 @@ export class CoreLocalRuleRegistry {
 		for (const descriptor of program.registry.entries()) {
 			if (
 				descriptor.discardable ||
+				descriptor.allocation !== undefined ||
 				descriptor.opcode === "unary" ||
 				descriptor.opcode === "callKnown"
 			) {
@@ -922,7 +923,10 @@ export class CoreLocalOptimizer {
 			this.#fn.instructionOpcode(instruction),
 		);
 		if (!descriptor.discardable) {
-			if (descriptor.opcode === "callKnown") {
+			if (descriptor.allocation !== undefined) {
+				// Payload lifetimes need the memory pass's weak-reference proof.
+				if (this.#fn.kernel.instructionOperandCount(instruction) !== 0) return false;
+			} else if (descriptor.opcode === "callKnown") {
 				const effects = coreInstructionEffects(this.#fn, instruction);
 				if (
 					effects.reads.length > 0 ||
@@ -948,7 +952,7 @@ export class CoreLocalOptimizer {
 		}
 		// Discardability cannot remove an observable exceptional continuation.
 		if (
-			descriptor.discardable &&
+			(descriptor.discardable || descriptor.allocation !== undefined) &&
 			this.#fn.kernel.blockHandlerBlock(this.#fn.instructionBlock(instruction)) !==
 				undefined &&
 			coreInstructionEffects(this.#fn, instruction).mayThrow

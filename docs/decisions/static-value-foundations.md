@@ -64,12 +64,15 @@ callback's `caller` are excluded. A resolved property or call does not by itself
 eliminate an object; consumer demands and current virtual state determine whether
 its representation can disappear.
 
-When the final observation of a joined allocation folds, late canonicalization
-removes unused ordinary block parameters and their incoming arguments. Admission
-checks use counts before requesting control flow. Dead-code elimination can then
-discard fresh object/Array allocations whose identities have no remaining uses.
+When the final observation of a joined allocation folds, memory optimization and
+late canonicalization remove unused ordinary block parameters and their incoming
+arguments. Admission checks use counts before requesting control flow. Memory
+optimization can then remove allocations with lifetime-independent occupants,
+including primitive kind unions and independently rooted primordial identities.
+Local dead-code elimination removes only empty aggregates; populated aggregates
+require the memory pass's lifetime proof even when their results are unused.
 Operand evaluation stays separate, and surviving allocations retain their GC and
-exception effects; discardability does not make allocations reusable expressions.
+exception effects.
 Protected instructions keep any possible exceptional transfer even when their
 results have no remaining uses.
 Stack-object planning also preserves protected, fallible allocations instead of

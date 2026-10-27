@@ -308,10 +308,6 @@ const DISCARDABLE = new Set<CoreOpcode>([
 	"readServiceEpoch",
 	"probeRead",
 	"baseConstructResult",
-	// Unobserved fresh aggregates cannot expose their identity; operand effects are separate.
-	"createArray",
-	"createObject",
-	"createObjectShaped",
 	"createBigint",
 	"createBoolean",
 	"createEmpty",

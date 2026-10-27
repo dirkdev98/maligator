@@ -3276,7 +3276,7 @@ function afterLateCfgEdits(pass: CoreFunctionPass): CoreFunctionPass {
 	return { ...pass, wakesOn: ["cfg"] };
 }
 
-const eliminateUnusedBlockParameters: CoreFunctionPass = {
+export const eliminateUnusedBlockParameters: CoreFunctionPass = {
 	...simplifyBlockParameters,
 	name: "unused-block-parameter-elimination",
 	admission: {

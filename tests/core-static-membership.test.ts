@@ -151,17 +151,19 @@ describe("joined own-key bounds", () => {
 		"return record.missing;",
 		"return delete record.missing;",
 	])(
-		"removes branch allocations after their final observation folds: %s",
+		"preserves callback and coercion effects after the joined observation folds: %s",
 		(observation) => {
-			const result = inspectStaticValueFunction(
-				`function probe(flag, callback) {
-				const record = flag ? {left: callback('left')} : {right: callback('right')};
+			for (const primitive of [false, true]) {
+				const result = inspectStaticValueFunction(
+					`function probe(flag, callback) {
+				const record = flag ? {left: ${primitive ? "+" : ""}callback('left')} : {right: ${primitive ? "+" : ""}callback('right')};
 				${observation}
 			} globalThis.probe = probe;`,
-				"probe",
-			);
-			expect(result.structure.allocations).toBe(0);
-			expect(result.core.filter((op) => op.opcode === "call")).toHaveLength(2);
+					"probe",
+				);
+				expect(result.structure.allocations).toBe(0);
+				expect(result.core.filter((op) => op.opcode === "call")).toHaveLength(2);
+			}
 		},
 	);
 

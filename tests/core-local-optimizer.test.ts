@@ -82,27 +82,22 @@ describe("CoreLocalOptimizer", () => {
 	);
 
 	it.each(["createObject", "createObjectShaped", "createArray"] as const)(
-		"removes an unobserved %s without weakening its allocation effects",
+		"removes an empty unobserved %s without weakening its allocation effects",
 		(opcode) => {
 			const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
 			const builder = new CoreFunctionBuilder(program);
 			const entry = builder.createBlock([{ representation: "boxed" }]);
 			const callback = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
-			const [value] = builder.appendInstruction(entry, "call", [callback, receiver!]);
-			builder.appendInstruction(
-				entry,
-				opcode,
-				opcode === "createObjectShaped" ? [value!] : [],
-				{
-					attributes:
-						opcode === "createObjectShaped"
-							? { keyStringIndices: [0] }
-							: opcode === "createArray"
-								? { length: 0 }
-								: {},
-				},
-			);
+			builder.appendInstruction(entry, "call", [callback, receiver!]);
+			builder.appendInstruction(entry, opcode, [], {
+				attributes:
+					opcode === "createObjectShaped"
+						? { keyStringIndices: [] }
+						: opcode === "createArray"
+							? { length: 0 }
+							: {},
+			});
 			builder.setTerminator(entry, { kind: "return", value: receiver! });
 			const fn = program.function(builder.finish(entry).function);
 			new CoreLocalOptimizer(program, fn.id).run();
@@ -114,6 +109,28 @@ describe("CoreLocalOptimizer", () => {
 			expect(coreOpcodeRegistry.require(opcode).effects.mayGc).toBe(true);
 		},
 	);
+
+	it("leaves aggregate payload lifetimes to memory analysis", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const callback = builder.blockParameterValue(entry, 0);
+		const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+		const [value] = builder.appendInstruction(entry, "call", [callback, receiver!]);
+		builder.appendInstruction(entry, "createObjectShaped", [value!], {
+			attributes: { keyStringIndices: [0] },
+		});
+		builder.setTerminator(entry, { kind: "return", value: receiver! });
+		const fn = program.function(builder.finish(entry).function);
+		new CoreLocalOptimizer(program, fn.id).run();
+		const operations = [...fn.bodyInstructionIds(entry)].map((instruction) =>
+			fn.instructionOpcodeName(instruction),
+		);
+		expect(operations.filter((opcode) => opcode === "createObjectShaped")).toHaveLength(
+			1,
+		);
+		expect(operations.filter((opcode) => opcode === "call")).toHaveLength(1);
+	});
 
 	it("folds a changed branch from incremental edits", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
