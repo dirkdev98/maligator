@@ -32,6 +32,7 @@ import {
 	coreReadsModuleBindingInitialized,
 } from "./core-compilation.ts";
 import { CORE_CONDITIONAL_VALUE_KIND_ANALYSIS } from "./core-conditional-value-kinds.ts";
+import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
 import { removeCoreInstructions } from "./core-instruction-removal.ts";
@@ -1261,7 +1262,14 @@ const foldValueKindObservations: CoreFunctionPass = {
 		const { program, item } = context;
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
-		const conditional = context.analysis(CORE_CONDITIONAL_VALUE_KIND_ANALYSIS);
+		let conditional: CoreConditionalValueKinds | undefined;
+		const kindMask = (value: CoreValueId, block: CoreBlockId) => {
+			const mask = kinds.kindMask(value);
+			if ((mask & (mask - 1)) === 0) return mask;
+			return (conditional ??= context.analysis(
+				CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
+			)).kindMask(value, block);
+		};
 		const replacements: Array<{
 			readonly instruction: CoreInstructionId;
 			readonly result: boolean;
@@ -1277,7 +1285,7 @@ const foldValueKindObservations: CoreFunctionPass = {
 				program,
 				fn,
 				instruction,
-				(value) => conditional.kindMask(value, fn.instructionBlock(instruction)),
+				(value) => kindMask(value, fn.instructionBlock(instruction)),
 				integerRange,
 			);
 			if (result !== undefined) replacements.push({ instruction, result });
@@ -1298,7 +1306,11 @@ const foldPrimitiveCoercions: CoreFunctionPass = {
 	name: "primitive-coercion-folding",
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["requireCoercible", "toPropertyKey"],
-	requiredAnalyses: [CORE_CONDITIONAL_VALUE_KIND_ANALYSIS, CORE_LOOP_INDUCTION_ANALYSIS],
+	requiredAnalyses: [
+		CORE_LOCAL_VALUE_KIND_ANALYSIS,
+		CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
+		CORE_LOOP_INDUCTION_ANALYSIS,
+	],
 	wakesOn: [
 		"body",
 		"cfg",
@@ -1312,9 +1324,17 @@ const foldPrimitiveCoercions: CoreFunctionPass = {
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		const kinds = context.analysis(CORE_CONDITIONAL_VALUE_KIND_ANALYSIS);
+		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		let conditional: CoreConditionalValueKinds | undefined;
+		const kindMask = (value: CoreValueId, block: CoreBlockId) => {
+			const mask = kinds.kindMask(value);
+			if ((mask & (mask - 1)) === 0) return mask;
+			return (conditional ??= context.analysis(
+				CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
+			)).kindMask(value, block);
+		};
 		const coercible = (value: CoreValueId, block: CoreBlockId): boolean => {
-			const mask = kinds.kindMask(value, block);
+			const mask = kindMask(value, block);
 			return (
 				mask !== 0 &&
 				(mask & (COMPILER_VALUE_KIND_NULL | COMPILER_VALUE_KIND_UNDEFINED)) === 0
@@ -1353,7 +1373,7 @@ const foldPrimitiveCoercions: CoreFunctionPass = {
 			if (
 				!compactIndex &&
 				!compilerValueKindMaskIsSubset(
-					kinds.kindMask(key, fn.instructionBlock(instruction)),
+					kindMask(key, fn.instructionBlock(instruction)),
 					COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL,
 				)
 			)

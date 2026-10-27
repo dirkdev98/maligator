@@ -81,10 +81,17 @@ export function coreInstructionFactPlans(
 			function: functionId,
 		});
 		const proof = { fn, versions: fn.versions };
-		const conditional = analyses.get(CORE_CONDITIONAL_VALUE_KIND_ANALYSIS, {
-			scope: "function",
-			function: functionId,
-		});
+		let conditional: CoreConditionalValueKinds | undefined;
+		const inputKinds: CoreConditionalValueKinds = {
+			kindMask(value, block) {
+				const mask = kinds.kindMask(value);
+				if ((mask & (mask - 1)) === 0) return mask;
+				return (conditional ??= analyses.get(CORE_CONDITIONAL_VALUE_KIND_ANALYSIS, {
+					scope: "function",
+					function: functionId,
+				})).kindMask(value, block);
+			},
+		};
 		let ranges: CoreLoopInductionAnalysis | undefined;
 		const range: CoreInstructionRangeQuery = (value, block) =>
 			(ranges ??= analyses.get(CORE_LOOP_INDUCTION_ANALYSIS, {
@@ -96,7 +103,7 @@ export function coreInstructionFactPlans(
 		);
 		for (const instruction of fn.instructionIds())
 			instructions[instruction] = Object.freeze(
-				coreInstructionFacts(fn, instruction, kinds, conditional, false, range),
+				coreInstructionFacts(fn, instruction, kinds, inputKinds, false, range),
 			);
 		const plan = Object.freeze({
 			function: functionId,

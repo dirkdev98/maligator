@@ -5,6 +5,7 @@ import {
 	COMPILER_VALUE_KIND_TOP,
 } from "../shared/compiler-value-kinds.ts";
 import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
+import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
 import { analyzeCoreLoopInductions } from "./core-ir-loops.ts";
@@ -174,15 +175,25 @@ export function analyzeCoreNativeEntry(
 			);
 		}
 	}
-	const conditional = analyzeCoreConditionalValueKinds(program, fn, cfg, (value) =>
-		kinds.kindMask(value),
-	);
+	let conditional: CoreConditionalValueKinds | undefined;
+	const inputKinds: CoreConditionalValueKinds = {
+		kindMask(value, block) {
+			const mask = kinds.kindMask(value);
+			if ((mask & (mask - 1)) === 0) return mask;
+			return (conditional ??= analyzeCoreConditionalValueKinds(
+				program,
+				fn,
+				cfg,
+				(value) => kinds.kindMask(value),
+			)).kindMask(value, block);
+		},
+	};
 	const inputs = Object.freeze(
 		instructions.flatMap((instruction) => {
 			return [
 				Object.freeze({
 					instruction,
-					...coreInstructionFacts(fn, instruction, kinds, conditional, true, range),
+					...coreInstructionFacts(fn, instruction, kinds, inputKinds, true, range),
 				}),
 			];
 		}),

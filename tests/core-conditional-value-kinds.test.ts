@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
-import { CORE_CONDITIONAL_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-conditional-value-kinds.ts";
+import {
+	CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
+	analyzeCoreConditionalValueKinds,
+} from "../src/compiler/core/core-conditional-value-kinds.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-ir-value-kinds.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import {
@@ -320,3 +324,33 @@ it.each(["move", "!"])(
 		expect(kinds.kindMask(value, entry)).toBe(COMPILER_VALUE_KIND_TOP);
 	},
 );
+
+it("retains independent base bounds when a conditional intersection is unreachable", () => {
+	const program = analysisProgram();
+	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+	const entry = builder.createBlock([{}]),
+		yes = builder.createBlock(),
+		no = builder.createBlock();
+	const value = builder.blockParameterValue(entry, 0);
+	const [condition] = builder.appendInstruction(entry, "typeofCompare", [value], {
+		attributes: { expected: "string", negated: false },
+	});
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition: condition!,
+		consequent: { block: yes, arguments: [] },
+		alternate: { block: no, arguments: [] },
+	});
+	builder.setTerminator(yes, { kind: "return", value });
+	builder.setTerminator(no, { kind: "return", value });
+	const id = builder.finish(entry).function;
+	const mask = COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_SYMBOL;
+	const kinds = analyzeCoreConditionalValueKinds(
+		program,
+		program.function(id),
+		buildCoreControlFlow(program, id, { exceptions: true }),
+		(input) => (input === value ? mask : COMPILER_VALUE_KIND_BOOLEAN),
+	);
+	expect(kinds.kindMask(value, yes)).toBe(mask);
+	expect(kinds.kindMask(value, no)).toBe(mask);
+});

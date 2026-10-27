@@ -322,11 +322,13 @@ export function analyzeCoreConditionalValueKinds(
 	}
 	return Object.freeze({
 		kindMask(value: CoreValueId, block: CoreBlockId) {
+			const mask = base(value);
+			if ((mask & (mask - 1)) === 0) return mask || COMPILER_VALUE_KIND_TOP;
 			const phi = phiIndex[value] ?? -1;
 			return (
-				base(value) &
-					(phi < 0 ? COMPILER_VALUE_KIND_TOP : masks[phi]!) &
-					at(value, block) || COMPILER_VALUE_KIND_TOP
+				mask & (phi < 0 ? COMPILER_VALUE_KIND_TOP : masks[phi]!) & at(value, block) ||
+				mask ||
+				COMPILER_VALUE_KIND_TOP
 			);
 		},
 	});
