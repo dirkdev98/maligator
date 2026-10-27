@@ -26,6 +26,7 @@ import {
 	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 	COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE,
 	compilerValueKindMaskIsSubset,
+	compilerValueKindsHaveEmptyPrimitiveWrappers,
 	COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED,
 	COMPILER_VALUE_KIND_NULLISH,
 	COMPILER_VALUE_KIND_UNDEFINED,
@@ -10242,12 +10243,28 @@ function emitInstruction(
 				`mal_vm_op_merge_data_properties(vm, ${boxed(instruction.target)}, ${boxed(instruction.src)});`,
 				throwCheck(),
 			];
-		case "DELETE_PROPERTY":
-			// `delete object[key]`; a strict-mode failed delete throws.
-			return [
-				`r${instruction.dst} = mal_vm_op_delete_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${strict});`,
-				throwCheck(),
-			];
+		case "DELETE_PROPERTY": {
+			if (
+				compilerValueKindsHaveEmptyPrimitiveWrappers(
+					operandKind(instruction.object) ?? COMPILER_VALUE_KIND_TOP,
+				)
+			) {
+				const coercion =
+					((operandKind(instruction.key) ?? COMPILER_VALUE_KIND_TOP) &
+						COMPILER_VALUE_KIND_OBJECT) ===
+					0
+						? []
+						: [
+								`mal_vm_op_to_property_key(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
+								throwCheck(),
+							];
+				return [...coercion, storeBoolean(instruction.dst, "true")];
+			}
+			return boxedLoad(
+				instruction.dst,
+				`mal_vm_op_delete_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${strict})`,
+			);
+		}
 		case "LOAD_THIS":
 			// A derived constructor's `this` is in a TDZ until super() binds it, so a
 			// read before then is a ReferenceError; an ordinary function's `this` is

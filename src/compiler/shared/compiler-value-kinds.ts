@@ -338,6 +338,18 @@ export function compilerValueKindMaskIsSubset(
 	return value !== 0 && (value & ~allowed) === 0;
 }
 
+export function compilerValueKindsHaveEmptyPrimitiveWrappers(
+	mask: CompilerValueKindMask,
+): boolean {
+	return compilerValueKindMaskIsSubset(
+		mask,
+		COMPILER_VALUE_KIND_BOOLEAN |
+			COMPILER_VALUE_KIND_NUMBER |
+			COMPILER_VALUE_KIND_BIGINT |
+			COMPILER_VALUE_KIND_SYMBOL,
+	);
+}
+
 // A kind mask cannot distinguish registered Symbols from weakly holdable Symbols.
 export function compilerValueKindCannotBeHeldWeakly(
 	mask: CompilerValueKindMask,

@@ -27,6 +27,7 @@ import {
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_UNDEFINED,
 	compilerValueKindMaskIsSubset,
+	compilerValueKindsHaveEmptyPrimitiveWrappers,
 	compilerValueKindMaskIsValid,
 	compilerTypeofComparison,
 } from "../shared/compiler-value-kinds.ts";
@@ -34,6 +35,7 @@ import type {
 	CompilerOperatorInputKindMasks,
 	CompilerValueKindMask,
 } from "../shared/compiler-value-kinds.ts";
+import { NO_EFFECT_SUMMARY } from "../shared/effect-summary.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import {
 	COMPILER_STRING_LENGTH_RANGE,
@@ -319,6 +321,7 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 		case "createTemplateObject":
 		case "instantiateLiteralTemplate":
 			return COMPILER_VALUE_KIND_OBJECT;
+		case "deleteProperty":
 		case "forInHas":
 		case "guardBaseConstructorLayout":
 		case "isEmpty":
@@ -1997,6 +2000,16 @@ export function corePrimitiveOperatorEffectRefinement(
 	masks: ReadonlyArray<CompilerValueKindMask>,
 ): CoreInstructionEffects | undefined {
 	const opcode = fn.instructionOpcodeName(instruction);
+	if (
+		opcode === "deleteProperty" &&
+		masks.length === 2 &&
+		compilerValueKindsHaveEmptyPrimitiveWrappers(masks[0]!) &&
+		compilerValueKindMaskIsSubset(
+			masks[1]!,
+			COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_OBJECT,
+		)
+	)
+		return NO_EFFECT_SUMMARY;
 	const operator = fn.instructionAttributes(instruction).operator;
 	let primitive = false;
 	let gcFree = false;

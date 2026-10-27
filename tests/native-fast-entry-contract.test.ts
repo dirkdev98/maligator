@@ -37,6 +37,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_vm_leaf_unobserved",
 	"mal_vm_leaf_stack_available",
 	"mal_value_is_undefined",
+	"mal_value_is_object",
 	"mal_value_is_null",
 	"mal_value_is_boolean",
 	"mal_value_is_string",
@@ -1600,3 +1601,74 @@ it.each([
 		expect(source.includes("__fast_ic")).toBe(kind !== COMPILER_VALUE_KIND_STRING);
 	},
 );
+
+describe("frameless primitive deletion", () => {
+	it.each([
+		COMPILER_VALUE_KIND_NUMBER,
+		COMPILER_VALUE_KIND_BOOLEAN,
+		COMPILER_VALUE_KIND_BIGINT,
+		COMPILER_VALUE_KIND_SYMBOL,
+		COMPILER_VALUE_KIND_NUMBER |
+			COMPILER_VALUE_KIND_BOOLEAN |
+			COMPILER_VALUE_KIND_BIGINT |
+			COMPILER_VALUE_KIND_SYMBOL,
+	])(
+		"uses empty-wrapper bounds %i and bails out before object key coercion",
+		(receiver) => {
+			for (const key of [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_TOP]) {
+				const lines = fastEntry(
+					body([
+						{ opcode: "DELETE_PROPERTY", dst: 2, object: 0, key: 1 },
+						{ opcode: "RETURN", value: 2 },
+					]),
+					undefined,
+					true,
+					undefined,
+					[
+						{
+							registers: [2, 0, 1],
+							inputOffset: 1,
+							inputKindMasks: [receiver, key],
+							resultKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+						},
+					],
+				);
+				expect(lines).toBeDefined();
+				expect(unexpectedHelpers(lines!)).toEqual([]);
+				const c = lines!.join("\n");
+				expect(c).toContain("__fast_r2 = MAL_VALUE_TRUE;");
+				expect(c.includes("mal_value_is_object(__fast_r1)")).toBe(
+					key === COMPILER_VALUE_KIND_TOP,
+				);
+				expect(c).not.toContain("mal_vm_op_delete_property");
+			}
+		},
+	);
+	it.each([
+		COMPILER_VALUE_KIND_STRING,
+		COMPILER_VALUE_KIND_NULLISH,
+		COMPILER_VALUE_KIND_OBJECT,
+		COMPILER_VALUE_KIND_TOP,
+		COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_NULL,
+	])("retains full semantics for receiver bounds %i", (receiver) => {
+		expect(
+			fastEntry(
+				body([
+					{ opcode: "DELETE_PROPERTY", dst: 2, object: 0, key: 1 },
+					{ opcode: "RETURN", value: 2 },
+				]),
+				undefined,
+				true,
+				undefined,
+				[
+					{
+						registers: [2, 0, 1],
+						inputOffset: 1,
+						inputKindMasks: [receiver, COMPILER_VALUE_KIND_STRING],
+						resultKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+					},
+				],
+			),
+		).toBeUndefined();
+	});
+});

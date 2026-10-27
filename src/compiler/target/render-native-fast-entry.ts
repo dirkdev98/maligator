@@ -10,6 +10,7 @@ import {
 	COMPILER_VALUE_KIND_NULLISH,
 	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 	compilerValueKindMaskIsSubset,
+	compilerValueKindsHaveEmptyPrimitiveWrappers,
 } from "../shared/compiler-value-kinds.ts";
 import {
 	instructionInputIsInt32,
@@ -866,6 +867,20 @@ function fastInstruction(
 			return `__fast_r${op.dst} = ${input.capturedLoad(op.ownerFunctionIndex, op.index)};`;
 		case "THROW_IF_TDZ":
 			return `if (mal_value_is_empty(__fast_r${op.src})) goto __full;`;
+		case "DELETE_PROPERTY": {
+			if (!compilerValueKindsHaveEmptyPrimitiveWrappers(values.kind(op.object)))
+				return undefined;
+			const key = values.kind(op.key);
+			if (key === COMPILER_VALUE_KIND_OBJECT) return undefined;
+			const boxedKey = value(op.key);
+			if ((key & COMPILER_VALUE_KIND_OBJECT) !== 0 && boxedKey === undefined)
+				return undefined;
+			const guard =
+				(key & COMPILER_VALUE_KIND_OBJECT) === 0
+					? ""
+					: `if (mal_value_is_object(${boxedKey})) goto __full; `;
+			return `${guard}__fast_r${op.dst} = MAL_VALUE_TRUE;`;
+		}
 		case "REQUIRE_COERCIBLE": {
 			const kind = values.kind(op.src);
 			if ((kind & COMPILER_VALUE_KIND_NULLISH) === 0) return "";

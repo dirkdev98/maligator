@@ -172,6 +172,10 @@ The independent target boundary and current storage contract are recorded in
       range queries carry those bounds through phi joins, normal returns and private
       record fields into predicate folds and native entries; escaped fields and
       unknown Object/Proxy reads retain their general results and effects.
+      Deletes now publish Boolean normal results independently of receiver effects.
+      Empty primitive-wrapper bounds remove delete dispatch while preserving computed
+      key conversion and exceptions; selected native entries also consume those
+      bounds, and frameless bodies bail out before object-key coercion.
 - [ ] Give record entries typed fields. Program value-kind flow now carries initial
       own-field kind summaries through exact call chains, finite callee sets,
       recursive forwarding, spread/rest and constructor completions. Field-only

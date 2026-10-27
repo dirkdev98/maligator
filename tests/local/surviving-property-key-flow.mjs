@@ -139,6 +139,66 @@ Object.assign(globalThis, {
 	indexedPrimitiveWrite,
 	suspendedPrimitiveWrite,
 });
+function emptyPrimitiveDelete(value, key, observe) {
+	if (
+		value === null ||
+		value === undefined ||
+		typeof value === "object" ||
+		typeof value === "function" ||
+		typeof value === "string"
+	)
+		return false;
+	observe(value);
+	return delete value[key];
+}
+function numberPrimitiveDelete(value, key, observe) {
+	const target = +value;
+	observe(target);
+	return delete target[key];
+}
+function caughtPrimitiveDelete(value, key, observe) {
+	const target = +value;
+	try {
+		return delete target[key];
+	} catch (error) {
+		return observe(error);
+	}
+}
+function* suspendedPrimitiveDelete(value, key, observe) {
+	const target = +value;
+	yield observe(target);
+	return delete target[key];
+}
+async function asyncPrimitiveDelete(value, key, observe) {
+	const target = +value;
+	await observe(target);
+	return delete target[key];
+}
+async function* asyncGeneratorPrimitiveDelete(value, key, observe) {
+	const target = +value;
+	yield observe(target);
+	return delete target[key];
+}
+const entryDelete = function entryDelete(value, key) {
+	return delete value[key];
+};
+function numberEntryDelete(value, key) {
+	return entryDelete(+value, key);
+}
+function arbitraryDelete(value, key) {
+	return delete value[key];
+}
+Object.assign(globalThis, {
+	emptyPrimitiveDelete,
+	numberPrimitiveDelete,
+	caughtPrimitiveDelete,
+	suspendedPrimitiveDelete,
+	asyncPrimitiveDelete,
+	asyncGeneratorPrimitiveDelete,
+	arbitraryDelete,
+	entryDelete,
+	numberEntryDelete,
+});
 const nullableLengthSource = function nullableLengthSource(flag, observe) {
 	observe(new.target);
 	return flag === undefined ? undefined : flag ? "A𝌆Z" + observe("") : null;
@@ -918,4 +978,139 @@ if (mutable) {
 	}
 }
 
+const deleteEvents = [];
+const deleteKey = {
+	[Symbol.toPrimitive](hint) {
+		deleteEvents.push(hint);
+		collectGarbage?.();
+		return "__mal_receiver_probe";
+	},
+};
+const deleteObserve = (value) => {
+	collectGarbage?.();
+	return value;
+};
+for (const value of [false, true, 0, -0, NaN, Infinity, 1n, Symbol.iterator]) {
+	for (const key of ["__mal_receiver_probe", 0, -0, 1n, Symbol.iterator, deleteKey]) {
+		deleteEvents.length = 0;
+		if (globalThis.emptyPrimitiveDelete(value, key, deleteObserve) !== true)
+			throw new Error("empty primitive delete");
+		if (deleteEvents.join(",") !== (key === deleteKey ? "string" : ""))
+			throw new Error("delete key conversion count");
+	}
+}
+if (globalThis.numberPrimitiveDelete(1, deleteKey, deleteObserve) !== true)
+	throw new Error("number primitive delete");
+for (const key of ["field", Symbol.iterator, deleteKey])
+	if (globalThis.numberEntryDelete(1, key) !== true)
+		throw new Error("selected deletion entry");
+const throwingDeleteKey = {
+	[Symbol.toPrimitive](hint) {
+		if (hint !== "string") throw new Error("delete key hint");
+		collectGarbage?.();
+		throw thrown;
+	},
+};
+if (globalThis.caughtPrimitiveDelete(1, throwingDeleteKey, deleteObserve) !== thrown)
+	throw new Error("caught delete key identity");
+const badDeleteKey = {
+	[Symbol.toPrimitive]() {
+		collectGarbage?.();
+		return {};
+	},
+};
+try {
+	globalThis.numberEntryDelete(1, throwingDeleteKey);
+	throw new Error("missing selected delete key throw");
+} catch (error) {
+	if (error !== thrown) throw error;
+}
+for (const key of [throwingDeleteKey, badDeleteKey]) {
+	try {
+		globalThis.numberPrimitiveDelete(1, key, deleteObserve);
+		throw new Error("missing delete key throw");
+	} catch (error) {
+		if (key === throwingDeleteKey ? error !== thrown : !(error instanceof TypeError))
+			throw error;
+	}
+}
+for (const key of [deleteKey, throwingDeleteKey]) {
+	const it = globalThis.suspendedPrimitiveDelete(1, key, deleteObserve);
+	if (it.next().done) throw new Error("missing deletion suspension");
+	collectGarbage?.();
+	try {
+		const r = it.next();
+		if (key === throwingDeleteKey || !r.done || r.value !== true)
+			throw new Error("resumed delete");
+	} catch (error) {
+		if (key !== throwingDeleteKey || error !== thrown) throw error;
+	}
+	try {
+		const result = await globalThis.asyncPrimitiveDelete(1, key, deleteObserve);
+		if (key === throwingDeleteKey || result !== true) throw new Error("async delete");
+	} catch (error) {
+		if (key !== throwingDeleteKey || error !== thrown) throw error;
+	}
+	const asyncIt = globalThis.asyncGeneratorPrimitiveDelete(1, key, deleteObserve);
+	if ((await asyncIt.next()).done) throw new Error("missing async deletion suspension");
+	collectGarbage?.();
+	try {
+		const r = await asyncIt.next();
+		if (key === throwingDeleteKey || !r.done || r.value !== true)
+			throw new Error("async resumed delete");
+	} catch (error) {
+		if (key !== throwingDeleteKey || error !== thrown) throw error;
+	}
+}
+for (const value of [null, undefined]) {
+	deleteEvents.length = 0;
+	try {
+		globalThis.arbitraryDelete(value, deleteKey);
+		throw new Error("missing nullish delete throw");
+	} catch (error) {
+		if (!(error instanceof TypeError) || deleteEvents.length !== 0) throw error;
+	}
+}
+for (const key of ["length", "0"]) {
+	try {
+		globalThis.arbitraryDelete("abc", key);
+		throw new Error("missing String delete throw");
+	} catch (error) {
+		if (!(error instanceof TypeError)) throw error;
+	}
+}
+const deleteTarget = { field: 1 };
+Object.defineProperty(deleteTarget, "fixed", { value: 2, configurable: false });
+if (
+	!globalThis.arbitraryDelete(deleteTarget, "field") ||
+	Object.hasOwn(deleteTarget, "field")
+)
+	throw new Error("object deletion");
+try {
+	globalThis.arbitraryDelete(deleteTarget, "fixed");
+	throw new Error("missing object delete throw");
+} catch (error) {
+	if (!(error instanceof TypeError)) throw error;
+}
+const deleteProxy = new Proxy(
+	{},
+	{
+		deleteProperty(target, key) {
+			collectGarbage?.();
+			if (key === "throws") throw thrown;
+			return key !== "fails";
+		},
+	},
+);
+if (!globalThis.arbitraryDelete(deleteProxy, "works"))
+	throw new Error("Proxy delete result");
+for (const key of ["throws", "fails"]) {
+	try {
+		globalThis.arbitraryDelete(deleteProxy, key);
+		throw new Error("missing Proxy delete throw");
+	} catch (error) {
+		if (key === "throws" ? error !== thrown : !(error instanceof TypeError)) throw error;
+	}
+}
+rows.push("primitive deletions verified");
 console.log(JSON.stringify(rows));

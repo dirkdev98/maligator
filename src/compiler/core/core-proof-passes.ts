@@ -767,6 +767,7 @@ function scalarRepresentation(kind: CoreExactScalarKind): CoreRepresentation {
 }
 
 const SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
+	"deleteProperty",
 	"stringConcatLength",
 	"concatStrings",
 	"createNumber",

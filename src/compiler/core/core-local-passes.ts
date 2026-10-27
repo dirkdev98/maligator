@@ -13,6 +13,8 @@ import {
 import type { KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_OBJECT,
+	compilerValueKindsHaveEmptyPrimitiveWrappers,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_SYMBOL,
@@ -1306,7 +1308,7 @@ const foldValueKindObservations: CoreFunctionPass = {
 const foldPrimitiveCoercions: CoreFunctionPass = {
 	name: "primitive-coercion-folding",
 	stage: "canonicalize",
-	requiredFunctionOpcodesAny: ["requireCoercible", "toPropertyKey"],
+	requiredFunctionOpcodesAny: ["requireCoercible", "toPropertyKey", "deleteProperty"],
 	requiredAnalyses: [
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 		CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
@@ -1357,6 +1359,23 @@ const foldPrimitiveCoercions: CoreFunctionPass = {
 					continue;
 				editor ??= CoreEditor.open(program, item.function);
 				editor.removeInstruction(instruction);
+				continue;
+			}
+			if (opcode === "deleteProperty") {
+				const base = instructionOperand(fn, instruction, 0)!;
+				const key = instructionOperand(fn, instruction, 1)!;
+				const block = fn.instructionBlock(instruction);
+				if (!compilerValueKindsHaveEmptyPrimitiveWrappers(kindMask(base, block)))
+					continue;
+				editor ??= CoreEditor.open(program, item.function);
+				if ((kindMask(key, block) & COMPILER_VALUE_KIND_OBJECT) !== 0)
+					editor.insertInstruction(block, instruction, "toPropertyKey", [base, key], {
+						sourcePosition: fn.instructionSourcePosition(instruction),
+					});
+				editor.replaceInstruction(instruction, "createBoolean", [], {
+					attributes: { value: true },
+					sourcePosition: fn.instructionSourcePosition(instruction),
+				});
 				continue;
 			}
 			if (opcode !== "toPropertyKey") continue;
