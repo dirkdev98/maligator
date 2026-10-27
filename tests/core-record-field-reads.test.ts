@@ -54,6 +54,91 @@ function readKind(producer: string, reader = "return value.n;", call = "make(inp
 }
 
 describe("fresh record field observations", () => {
+	it("keeps private records through a wide fallthrough switch", () => {
+		const cases = Array.from(
+			{ length: 20 },
+			(_, index) => `case ${index}:alias.n=alias.n+1;`,
+		).join("");
+		expect(
+			readKind(
+				"return {n:+input};",
+				`const second=make(input);let alias=value;switch(input){case -1:alias=second;${cases}default:break;}return alias.n;`,
+			),
+		).toBe(COMPILER_VALUE_KIND_NUMBER);
+	});
+	it.each([
+		["return alias.n;", COMPILER_VALUE_KIND_NUMBER],
+		[
+			"if(input)alias.n='changed';return alias.n;",
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		],
+	])("joins private producer aliases and every own writer (%s)", (reader, expected) => {
+		expect(
+			readKind(
+				"return {n:+input};",
+				`const second=make(input);const alias=input?value:second;${reader}`,
+			),
+		).toBe(expected);
+	});
+	it.each([
+		"const alias=input?value:input;return alias.n;",
+		"const second=make(input);observe(value);const alias=input?value:second;return alias.n;",
+		"const second=make(input);const alias=input?value:second;delete alias.n;return alias.n;",
+	])("keeps unsafe merged sources outside the field contract (%s)", (reader) => {
+		expect(readKind("return {n:1};", reader)).toBe(COMPILER_VALUE_KIND_TOP);
+	});
+	it("closes a recursive producer's field feedback through merged aliases", () => {
+		const out = flow(
+			`function make(input,depth){if(depth>0){const left=make(input,depth-1);const right=make(input,depth-2);const alias=input?left:right;alias.n=alias.n+1;return alias;}return {n:input|0,stable:input&15};}function read(input,depth){return make(input,depth).n;}globalThis.result=read(globalThis.input,globalThis.depth);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_NUMBER,
+		);
+		expect(
+			out
+				.read()
+				.summary(out.named("make").id)
+				.returnRecord?.map(({ mask }) => mask),
+		).toEqual([COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_NUMBER]);
+	});
+	it("does not seed a merged recursive contract from its writes alone", () => {
+		const out = flow(
+			`function make(input){const left=make(input);const right=make(input);const alias=input?left:right;alias.n=1;return alias;}globalThis.result=make(globalThis.input);`,
+		);
+		expect(out.read().summary(out.named("make").id).returnRecord ?? null).toBeNull();
+	});
+	it("withdraws a merged read when one source loses an own key", () => {
+		const out = flow(
+			`function left(){return {n:1};}function right(){return {n:2};}function read(flag){const a=left();const b=right();const alias=flag?a:b;return alias.n;}globalThis.result=read(globalThis.flag);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_NUMBER,
+		);
+		const right = out.named("right");
+		const allocation = coreOperations(right).find(
+			({ opcode }) => opcode === "createObjectShaped",
+		)!;
+		const editor = CoreEditor.open(out.program, right.id);
+		const key = editor.appendStringConstants([[111, 116, 104, 101, 114]]);
+		editor.replaceInstruction(allocation.id, allocation.opcode, allocation.inputs, {
+			attributes: { ...allocation.attributes, keyStringIndices: [key] },
+		});
+		editor.commit();
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_TOP,
+		);
+		const fresh = new CoreAnalysisManager(
+			out.program,
+			out.context,
+			new CoreOptimizationReportBuilder(out.program),
+		);
+		expect(
+			fresh
+				.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" })
+				.kinds.summary(out.named("read").id).returnKind,
+		).toBe(COMPILER_VALUE_KIND_TOP);
+	});
+
 	it("keeps repeated reads of one private field independent of CFG construction", () => {
 		const out = flow(
 			"function make(){return {n:1};}function read(){const r=make();return r.n+r.n;}globalThis.result=read();",

@@ -498,11 +498,23 @@ export function coreReturnedRecordKinds(
 }
 
 export interface CoreRecordFieldRead {
-	readonly producer: CoreInstructionId;
+	readonly producers: ReadonlyArray<CoreInstructionId>;
 	readonly key: number;
 	/** Preceding accesses must be own, so getters and setters cannot expose the record. */
 	readonly requiredKeys: ReadonlyArray<number>;
 	readonly writes?: ReadonlyArray<CoreRecordFieldWrite>;
+}
+
+export function coreRecordReadInitialFields(
+	read: CoreRecordFieldRead,
+	source: (producer: CoreInstructionId) => CoreRecordValueKind,
+): CoreRecordValueKind {
+	let result: CoreRecordValueKind = null;
+	for (const producer of read.producers) {
+		result = joinCoreRecordValueKinds(result, source(producer));
+		if (result === undefined) break;
+	}
+	return result;
 }
 
 export function coreRecordFieldInitialKind(
@@ -555,6 +567,222 @@ interface CoreRecordFieldReadIndex {
 const recordFieldReadIndices = new WeakMap<CoreFunctionStore, CoreRecordFieldReadIndex>();
 const MAXIMUM_RECORD_READ_PREFIX_WORK = 256;
 
+function recordAliasParameter(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	operand: number,
+): CoreValueId | null | undefined {
+	const at = fn.kernel.instructionOperandStart(instruction) + operand;
+	const start = fn.kernel.terminatorEdgeStart(instruction);
+	const count = fn.kernel.terminatorEdgeCount(instruction);
+	let lower = start;
+	let upper = start + count;
+	// Edge argument ranges share the terminator's operand span, in edge order, including empty ranges.
+	while (lower < upper) {
+		const middle = lower + ((upper - lower) >>> 1);
+		if (fn.kernel.terminatorEdgeArgumentStart(middle) <= at) lower = middle + 1;
+		else upper = middle;
+	}
+	const edge = lower - 1;
+	if (edge < start) return undefined;
+	const index = at - fn.kernel.terminatorEdgeArgumentStart(edge);
+	if (index >= fn.kernel.terminatorEdgeArgumentCount(edge)) return undefined;
+	const block = fn.kernel.terminatorEdgeBlock(edge);
+	const parameter = fn.kernel.blockParameterStart(block) + index;
+	return fn.kernel.blockParameterRole(parameter) === 0
+		? fn.kernel.blockParameterValue(parameter)
+		: null;
+}
+
+function mergedRecordFieldReads(
+	fn: CoreFunctionStore,
+	parameters: ReadonlySet<CoreValueId>,
+	control: () => CoreControlFlow,
+	result: Map<CoreInstructionId, CoreRecordFieldRead>,
+): void {
+	const candidates = new Set<CoreValueId>();
+	const forwarded = new Set<CoreValueId>();
+	for (const parameter of parameters) {
+		const pending = [parameter];
+		let remaining = MAXIMUM_RECORD_RETURN_ALIAS_WORK;
+		while (pending.length > 0 && remaining > 0) {
+			const value = pending.pop()!;
+			if (forwarded.has(value)) continue;
+			forwarded.add(value);
+			remaining--;
+			for (
+				let use = fn.kernel.valueFirstUse(value);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				if (fn.kernel.useLive(use) === 0) continue;
+				if (--remaining < 0) break;
+				const instruction = fn.kernel.useInstruction(use);
+				if (fn.instructionKind(instruction) !== "operation") {
+					const target = recordAliasParameter(fn, instruction, fn.kernel.useOperand(use));
+					if (target !== undefined && target !== null) pending.push(target);
+					continue;
+				}
+				const opcode = fn.instructionOpcodeName(instruction);
+				if (opcode === "move")
+					pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
+				else if (
+					(opcode === "loadPropertyStatic" || opcode === "loadProperty") &&
+					fn.kernel.useOperand(use) === 0 &&
+					!result.has(instruction)
+				)
+					candidates.add(value);
+			}
+		}
+	}
+	if (candidates.size === 0) return;
+	const cfg = control();
+	const processed = new Set<CoreValueId>();
+	for (const candidate of candidates) {
+		if (processed.has(candidate)) continue;
+		const pending = [candidate];
+		const seen = new Set<CoreValueId>();
+		const producers = new Set<CoreInstructionId>();
+		const reads = new Map<CoreInstructionId, number>();
+		const writes = new Map<number, Array<CoreRecordFieldWrite>>();
+		const requiredKeys = new Set<number>();
+		let remaining = MAXIMUM_RECORD_RETURN_ALIAS_WORK;
+		let valid = true;
+		while (pending.length > 0 && valid) {
+			const value = pending.pop()!;
+			if (seen.has(value)) continue;
+			seen.add(value);
+			processed.add(value);
+			if (--remaining < 0 || fn.kernel.valueHandlerUseCount(value) > 0) {
+				valid = false;
+				break;
+			}
+			const owner = fn.kernel.valueDefinitionOwner(value);
+			if (fn.kernel.valueDefinitionKind(value) === 0) {
+				const block = owner as CoreBlockId;
+				const index = fn.kernel.valueDefinitionIndex(value);
+				const incoming = cfg.predecessors[block] ?? [];
+				if (
+					incoming.length === 0 ||
+					fn.kernel.blockParameterRole(fn.kernel.blockParameterStart(block) + index) !== 0
+				) {
+					valid = false;
+					break;
+				}
+				for (const edge of incoming) {
+					if (!cfg.reachable.has(edge.from)) continue;
+					const argument = edge.arguments[index];
+					if (--remaining < 0 || edge.kind !== "ordinary" || argument === undefined) {
+						valid = false;
+						break;
+					}
+					pending.push(argument);
+				}
+			} else if (fn.kernel.valueDefinitionKind(value) === 1) {
+				const instruction = coreInstructionId(owner);
+				if (fn.instructionOpcodeName(instruction) === "move")
+					pending.push(
+						fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
+					);
+				else {
+					const completion = fn.registry.byId(fn.instructionOpcode(instruction))
+						.callTransfer?.result;
+					if (
+						(completion !== "call-completion" && completion !== "construct-completion") ||
+						fn.kernel.instructionResultCount(instruction) !== 1
+					) {
+						valid = false;
+						break;
+					}
+					producers.add(instruction);
+				}
+			} else {
+				valid = false;
+				break;
+			}
+			for (
+				let use = fn.kernel.valueFirstUse(value);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				if (fn.kernel.useLive(use) === 0) continue;
+				if (--remaining < 0) {
+					valid = false;
+					break;
+				}
+				const instruction = fn.kernel.useInstruction(use);
+				const kind = fn.instructionKind(instruction);
+				if (kind !== "operation") {
+					if (kind === "return") continue;
+					const target = recordAliasParameter(fn, instruction, fn.kernel.useOperand(use));
+					if (target !== undefined && target !== null) pending.push(target);
+					else if (target === null || !["branch", "guard", "switch"].includes(kind)) {
+						valid = false;
+						break;
+					}
+					continue;
+				}
+				const opcode = fn.instructionOpcodeName(instruction);
+				const operator = fn.instructionAttributes(instruction).operator;
+				if (
+					[
+						"rootUse",
+						"throwIfTdz",
+						"requireCoercible",
+						"typeofCompare",
+						"isEmpty",
+					].includes(opcode) ||
+					(opcode === "unary" && (operator === "!" || operator === "typeof")) ||
+					(opcode === "binary" && (operator === "===" || operator === "!=="))
+				)
+					continue;
+				if (opcode === "move") {
+					pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
+					continue;
+				}
+				const key = recordPropertyKey(fn, instruction);
+				if (fn.kernel.useOperand(use) !== 0 || key === undefined) {
+					valid = false;
+					break;
+				}
+				requiredKeys.add(key);
+				if (opcode === "loadPropertyStatic" || opcode === "loadProperty")
+					reads.set(instruction, key);
+				else if (opcode === "storePropertyStatic" || opcode === "storeProperty") {
+					const row = writes.get(key) ?? [];
+					row.push({
+						instruction,
+						value: fn.kernel.operandAt(
+							fn.kernel.instructionOperandStart(instruction) +
+								(opcode === "storePropertyStatic" ? 1 : 2),
+						),
+					});
+					writes.set(key, row);
+				} else {
+					valid = false;
+					break;
+				}
+			}
+		}
+		if (!valid || producers.size === 0) continue;
+		const sources = Object.freeze([...producers]);
+		const keys = Object.freeze([...requiredKeys]);
+		// This alias component does not retain edge/source correlations, so every writer joins the initial fields.
+		for (const [instruction, key] of reads) {
+			if (result.has(instruction)) continue;
+			result.set(
+				instruction,
+				Object.freeze({
+					producers: sources,
+					key,
+					requiredKeys: keys,
+					...(writes.has(key) ? { writes: Object.freeze(writes.get(key)!) } : {}),
+				}),
+			);
+		}
+	}
+}
+
 export function coreRecordFieldReads(
 	fn: CoreFunctionStore,
 	control: () => CoreControlFlow,
@@ -570,6 +798,7 @@ export function coreRecordFieldReads(
 	)
 		return cached.reads;
 	const result = new Map<CoreInstructionId, CoreRecordFieldRead>();
+	const mergedParameters = new Set<CoreValueId>();
 	let cfg: CoreControlFlow | undefined;
 	let positions: Map<CoreInstructionId, number> | undefined;
 	const position = (instruction: CoreInstructionId): number => {
@@ -615,6 +844,13 @@ export function coreRecordFieldReads(
 				if (fn.kernel.useLive(use) === 0) continue;
 				const instruction = fn.kernel.useInstruction(use);
 				if (fn.instructionKind(instruction) !== "operation") {
+					const parameter = recordAliasParameter(
+						fn,
+						instruction,
+						fn.kernel.useOperand(use),
+					);
+					if (parameter !== undefined && parameter !== null)
+						mergedParameters.add(parameter);
 					barriers.add(instruction);
 					continue;
 				}
@@ -647,11 +883,12 @@ export function coreRecordFieldReads(
 			}
 		}
 		if (!valid || reads.size === 0) continue;
+		const producers = Object.freeze([producer]);
 		const keys = new Set(reads.values());
 		if (barriers.size === 0 && writes.size === 0 && keys.size === 1) {
 			const requiredKeys = Object.freeze([...keys]);
 			for (const [instruction, key] of reads)
-				result.set(instruction, Object.freeze({ producer, key, requiredKeys }));
+				result.set(instruction, Object.freeze({ producers, key, requiredKeys }));
 			continue;
 		}
 		cfg ??= control();
@@ -719,7 +956,7 @@ export function coreRecordFieldReads(
 			result.set(
 				instruction,
 				Object.freeze({
-					producer,
+					producers,
 					key,
 					requiredKeys: Object.freeze([...requiredKeys]),
 					...(fieldWrites === undefined ? {} : { writes: fieldWrites }),
@@ -727,6 +964,7 @@ export function coreRecordFieldReads(
 			);
 		}
 	}
+	mergedRecordFieldReads(fn, mergedParameters, () => (cfg ??= control()), result);
 	if (featureVersion !== undefined)
 		recordFieldReadIndices.set(fn, {
 			featureVersion,

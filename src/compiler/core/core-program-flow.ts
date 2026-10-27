@@ -15,6 +15,7 @@ import {
 	sameCoreRecordValueKind,
 	joinCoreRecordValueKinds,
 	coreRecordFieldInitialKind,
+	coreRecordReadInitialFields,
 } from "./core-record-value-kinds.ts";
 import type {
 	CoreRecordValueKind,
@@ -2425,7 +2426,7 @@ export class CoreProgramFlowEngine {
 						const read = recordReads.get(instruction)!;
 						const initialKind = coreRecordFieldInitialKind(
 							read,
-							recordResult(read.producer),
+							coreRecordReadInitialFields(read, recordResult),
 							semantics.top,
 						);
 						if (initialKind === 0 || initialKind === semantics.top) continue;
@@ -2484,7 +2485,7 @@ export class CoreProgramFlowEngine {
 								if (read === undefined) return undefined;
 								return coreRecordFieldInitialKind(
 									read,
-									recordResult(read.producer),
+									coreRecordReadInitialFields(read, recordResult),
 									semantics.top,
 								);
 							}

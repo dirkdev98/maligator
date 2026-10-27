@@ -874,6 +874,163 @@ const asyncSteps = asyncIterator
 		check(result.done, true, "async generator completion");
 		check(result.value, true, "async generator field observation");
 	});
+const mergedRecursive = function mergedRecursive(value, depth, callback) {
+	if (depth > 0) {
+		const left = mergedRecursive(value, depth - 1, callback);
+		const right = mergedRecursive(value, depth - 2, callback);
+		const record = value ? left : right;
+		record.n = record.n + 1;
+		return record;
+	}
+	for (let i = 0; i < 3; i++) callback(i);
+	return { n: value | 0, stable: value & 15 };
+};
+function readMergedRecursive(value, callback) {
+	const record = mergedRecursive(value, 4, callback);
+	callback("merged recursive");
+	return typeof record.n === "number";
+}
+function readMergedNumber(value, flag, callback) {
+	const left = makeRecord(value, callback);
+	const right = makeRecord(value, callback);
+	const record = flag ? left : right;
+	if (flag) record.n = +value;
+	callback("merged number");
+	return typeof record.n === "number";
+}
+function readMergedString(value, flag, callback) {
+	const left = makeRecord(value, callback);
+	const right = makeString(value, callback);
+	const record = flag ? left : right;
+	callback("merged string");
+	return record.label + ":";
+}
+function readMergedEscaped(value, flag, callback) {
+	const left = makeRecord(value, observe);
+	const right = makeRecord(value, observe);
+	callback(left);
+	const record = flag ? left : right;
+	return typeof record.n;
+}
+function readMergedUnknown(value, flag) {
+	const left = makeRecord(1, observe);
+	const record = flag ? left : value;
+	return record.n;
+}
+const makeMergedMissing = function makeMergedMissing(callback) {
+	for (let i = 0; i < 3; i++) callback(i);
+	return { __proto__: mergedPrototype, other: 1 };
+};
+function readMergedInherited(value, flag, callback) {
+	const left = makeRecord(value, callback);
+	const right = makeMergedMissing(callback);
+	const record = flag ? left : right;
+	record.n = value;
+	callback("merged inherited");
+	return typeof record.n;
+}
+function readMergedHeap(value, flag, callback) {
+	const left = makeUnknownRecord(value, flag, callback);
+	const right = makeUnknownRecord(value, !flag, callback);
+	const record = flag ? left : right;
+	const saved = record.value;
+	callback("merged heap");
+	return Object.is(saved, value);
+}
+function* readMergedSuspended(value, flag, callback) {
+	const left = makeRecord(value, callback);
+	const right = makeRecord(value, callback);
+	const record = flag ? left : right;
+	yield record.label;
+	callback("merged resume");
+	return record.n;
+}
+Object.assign(globalThis, {
+	readMergedNumber,
+	readMergedRecursive,
+	readMergedString,
+	readMergedEscaped,
+	readMergedUnknown,
+	readMergedInherited,
+	readMergedHeap,
+	readMergedSuspended,
+});
+for (const flag of [false, true]) {
+	check(
+		readMergedHeap({ marker: "heap".repeat(100) }, flag, observe),
+		true,
+		"unknown merged payload stays rooted",
+	);
+	check(readMergedNumber(7, flag, observe), true, "merged Number normal field");
+	check(readMergedRecursive(7, observe), true, "recursive merged field stays Number");
+	check(readMergedString(7, flag, observe), "xx:", "merged String concatenation");
+	check(
+		readMergedEscaped(7, flag, (record) => {
+			record.n = "changed";
+			observe("merged escape");
+		}),
+		flag ? "string" : "number",
+		"merged escape invalidates field facts",
+	);
+	const iterator = readMergedSuspended(7, flag, observe);
+	check(iterator.next().value, "xx", "merged field before yield");
+	observe("merged suspended");
+	check(iterator.next().value, 7, "merged field after resume");
+}
+let mergedGets = 0;
+const mergedExotic = new Proxy(
+	{},
+	{
+		get(target, key) {
+			mergedGets++;
+			observe("merged trap");
+			return key === "n" ? "exotic" : undefined;
+		},
+	},
+);
+check(
+	readMergedUnknown(mergedExotic, false),
+	"exotic",
+	"unknown merged source retains proxy get",
+);
+check(mergedGets, 1, "merged proxy getter executes exactly once");
+check(
+	readMergedUnknown(mergedExotic, true),
+	1,
+	"private branch of unknown merged source",
+);
+let mergedSetters = 0;
+let mergedSetterTarget;
+const mergedPrototype = {
+	get n() {
+		observe("merged inherited get");
+		return "inherited";
+	},
+	set n(value) {
+		mergedSetters++;
+		mergedSetterTarget = this;
+		observe(value);
+	},
+};
+{
+	check(
+		readMergedInherited(7, true, observe),
+		"number",
+		"merged own write bypasses an inherited setter",
+	);
+	check(mergedSetters, 0, "own branch does not invoke setter");
+	check(
+		readMergedInherited(7, false, observe),
+		"string",
+		"missing merged key retains inherited access",
+	);
+	check(mergedSetters, 1, "missing branch invokes setter once");
+	check(
+		mergedSetterTarget.other,
+		1,
+		"inherited setter receives the actual merged source",
+	);
+}
 Promise.all([
 	producerAwaited(255, false, observe).then((value) =>
 		check(value, 5, "producer awaited field"),

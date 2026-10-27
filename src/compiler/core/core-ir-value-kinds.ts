@@ -1653,13 +1653,25 @@ export function coreValueKindDemand(
 						demand = !externallyReachable;
 						return COMPILER_VALUE_KIND_TOP;
 					}
-					const producer =
+					const read =
 						fn.instructionOpcodeName(instruction) === "loadPropertyStatic" ||
 						fn.instructionOpcodeName(instruction) === "loadProperty"
 							? (recordReads ??= coreRecordFieldReads(fn, control)).get(instruction)
-									?.producer
 							: undefined;
-					const site = targets.site(fn.id, producer ?? instruction);
+					if (read !== undefined) {
+						demand = read.producers.every((producer) => {
+							const site = targets.site(fn.id, producer);
+							return (
+								site !== undefined &&
+								!site.targets.opaque &&
+								(site.targets.anyScript
+									? targets.sourceClosed
+									: site.targets.functions.length > 0)
+							);
+						});
+						return COMPILER_VALUE_KIND_TOP;
+					}
+					const site = targets.site(fn.id, instruction);
 					if (site === undefined) return undefined;
 					demand =
 						!site.targets.opaque &&

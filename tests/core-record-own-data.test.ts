@@ -40,6 +40,20 @@ function reads(out: ReturnType<typeof inspect>) {
 }
 
 describe("returned record own-data presence", () => {
+	it("keeps merged own presence independent of an unknown payload kind", () => {
+		const out = inspect(
+			"return {value};",
+			"const second=make(value,flag,hook);const alias=flag?record:second;const saved=alias.value;hook();return saved;",
+		);
+		expect(reads(out)).toHaveLength(1);
+		for (const { ip } of reads(out)) {
+			expect(out.native.instructions[ip]).toEqual({ kind: "known-own-data" });
+			expect(out.native.facts![ip]!.effectMask! & observableEffects).toBe(0);
+		}
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
 	it.each(["value", "value&255"])(
 		"licenses a noncollecting own read independently of the %s value kind",
 		(value) => {

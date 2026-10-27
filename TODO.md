@@ -251,8 +251,13 @@ The independent target boundary and current storage contract are recorded in
       revalidate required keys against current callee summaries; unknown sources
       and empty recursive cycles cannot acquire a field contract from a write.
       Wide numeric and heap-bearing unions retain their storage and root needs.
-      Reads through merged record aliases still lose field precision in recursive
-      producer updates. Typed producer storage for remaining writes,
+      Finite groups of private call and constructor results now retain common own
+      fields through merged aliases and recursive producer updates. Every source
+      must retain the required own keys; all component writers join initial kinds
+      and ranges. Earlier single-source read proofs keep their point-specific
+      precision; point-specific barriers and writer/source correlations across
+      merges remain.
+      Typed producer storage for remaining writes,
       parameter-relative call effects and coroutine record transport remain. Own-field observations
       also carry initial integer bounds through the normal-result worklist, including
       finite targets, recursive forwarding and suspension. Growing fields widen

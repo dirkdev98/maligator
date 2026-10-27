@@ -56,6 +56,24 @@ function field(out: ReturnType<typeof inspect>) {
 }
 
 describe("normal record field integer ranges", () => {
+	it.each(["function", "function*", "async function", "async function*"])(
+		"carries a merged field interval through a %s entry",
+		(declaration) => {
+			const suspension =
+				(declaration.includes("*") ? "yield 0;" : "") +
+				(declaration.startsWith("async") ? "await 0;" : "");
+			const out = inspectStaticValueFunction(
+				`const make=function make(value,hook){for(let i=0;i<3;i++)hook();return {n:value&255};};${declaration} compute(value,hook){const left=make(value,hook);const right=make(value+1,hook);const record=value?left:right;${suspension}if(value)record.n=value&15;hook();return record.n%10;}globalThis.compute=compute;`,
+				"compute",
+			);
+			const { op, facts } = field(out);
+			expect(instructionResultIntegerRange(facts, op.dst)).toEqual(bounded(0, 255));
+			expect(out.native.registerRepresentations[op.dst]).toBe("int32");
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
 	it.each([false, true])(
 		"retains common field facts through a conditional object return (locked=%s)",
 		(locked) => {

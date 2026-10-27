@@ -114,6 +114,7 @@ import {
 import type { CoreReadAccessorWork } from "./core-read-accessor-expansion.ts";
 import {
 	coreRecordFieldReads,
+	coreRecordReadInitialFields,
 	coreRecordFieldInitialKind,
 	coreRecordFieldIsOwnData,
 	coreRecordFieldReadIntegerRange,
@@ -4536,9 +4537,11 @@ function discoverProgramNormalResultFacts(
 		return record;
 	};
 	const demandRead = (functionId: CoreFunctionId, read: CoreRecordFieldRead) => {
-		const site = flow.targets.site(functionId, read.producer);
-		if (site === undefined || site.targets.opaque || site.targets.anyScript) return;
-		for (const target of site.targets.functions) demandRecord(target);
+		for (const producer of read.producers) {
+			const site = flow.targets.site(functionId, producer);
+			if (site === undefined || site.targets.opaque || site.targets.anyScript) continue;
+			for (const target of site.targets.functions) demandRecord(target);
+		}
 	};
 	for (const functionId of flow.reachability.liveFunctions)
 		for (const read of readsFor(functionId).values()) demandRead(functionId, read);
@@ -4640,7 +4643,9 @@ function discoverProgramNormalResultFacts(
 				? coreInstructionResultIntegerRange(fn, instruction)
 				: coreRecordFieldReadIntegerRange(
 						read,
-						recordResult(flow.targets.site(functionId, read.producer)),
+						coreRecordReadInitialFields(read, (producer) =>
+							recordResult(flow.targets.site(functionId, producer)),
+						),
 						(value, consumer) => query(value, fn.instructionBlock(consumer)),
 					);
 		});
@@ -4786,19 +4791,15 @@ function discoverProgramNormalResultFacts(
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
 		const records = new Map<CoreInstructionId, CoreRecordValueKind>();
+		const initialFields = (producer: CoreInstructionId): CoreRecordValueKind => {
+			if (!records.has(producer))
+				records.set(producer, recordResult(flow.targets.site(functionId, producer)));
+			return records.get(producer);
+		};
 		const discovered = new Map<CoreInstructionId, CoreRecordReadFact>();
 		let query: CoreIntegerRangeQuery | undefined;
 		for (const [instruction, read] of readsFor(functionId)) {
-			const producer = flow.targets.site(functionId, read.producer);
-			if (
-				producer === undefined ||
-				producer.targets.opaque ||
-				producer.targets.anyScript ||
-				producer.targets.functions.length === 0
-			)
-				continue;
-			if (!records.has(read.producer)) records.set(read.producer, recordResult(producer));
-			const record = records.get(read.producer);
+			const record = coreRecordReadInitialFields(read, initialFields);
 			if (!coreRecordFieldIsOwnData(read, record)) continue;
 			const initialKind = coreRecordFieldInitialKind(
 				read,

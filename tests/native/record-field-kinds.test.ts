@@ -30,6 +30,7 @@ describe("fresh record field kind observations", () => {
 					name: `record-field-kinds-${primordials}`,
 					mainFile: HOST_MAIN,
 					outDir,
+					nativeStackRoots: "precise",
 					config: resolveBuildConfig({
 						engine: { primordials, eval: false, realms: true },
 					}),
@@ -43,7 +44,12 @@ describe("fresh record field kind observations", () => {
 								] ?? []),
 							) === name,
 					)!;
-				for (const name of ["readStable", "readUnion"]) {
+				for (const name of [
+					"readStable",
+					"readUnion",
+					"readMergedNumber",
+					"readMergedRecursive",
+				]) {
 					expect(named(name)).toBeDefined();
 					expect(
 						named(name).body.instructions.some(
@@ -56,12 +62,18 @@ describe("fresh record field kind observations", () => {
 				expect(unknown.instructions.some((plan) => plan?.kind === "known-own-data")).toBe(
 					true,
 				);
+				expect(
+					named("readMergedHeap").instructions.some(
+						(plan) => plan?.kind === "known-own-data",
+					),
+				).toBe(true);
 				for (const name of [
 					"readEscaped",
 					"readGetterMutated",
 					"readPublic",
 					"readAfterInheritedWrite",
 					"readProducerMissing",
+					"readMergedInherited",
 				]) {
 					expect(named(name)).toBeDefined();
 					expect(
