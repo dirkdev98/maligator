@@ -1,9 +1,7 @@
 import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
-import {
-	knownBuiltinCallProves,
-	compilerFactIsWorldInvariant,
-} from "../shared/compiler-facts.ts";
+import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
 import type { KnownBuiltinCall } from "../shared/compiler-facts.ts";
+import { knownOperationCallProves } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { PrimordialValue } from "../shared/primordial-catalog-types.ts";
 import {
@@ -505,20 +503,16 @@ export const foldStaticReflections: CoreFunctionPass = {
 				const callee = analysis.query(fn.kernel.operandAt(start));
 				if (callee.kind === "known") canonical = callee.canonical;
 			} else if (opcode === "callKnown") {
-				const known = fn.instructionAttributes(instruction)
-					.knownBuiltinCall as unknown as KnownBuiltinCall | undefined;
-				if (
-					known !== undefined &&
-					knownBuiltinCallProves(known, known.operation) &&
-					compilerFactIsWorldInvariant(known.identity)
-				)
-					canonical = known.operation;
+				const operation = fn.instructionAttributes(instruction).operation;
+				if (typeof operation === "string") canonical = operation;
 			}
 			if (
 				canonical === undefined ||
 				![
 					"Array.isArray",
 					"Object.hasOwn",
+					"Object.prototype.hasOwnProperty",
+					"Object.prototype.propertyIsEnumerable",
 					"Reflect.has",
 					"Reflect.deleteProperty",
 					"Object.getOwnPropertyDescriptor",
@@ -526,7 +520,25 @@ export const foldStaticReflections: CoreFunctionPass = {
 				].includes(canonical)
 			)
 				continue;
-			const receiver = fn.kernel.operandAt(start + argument);
+			if (opcode === "callKnown") {
+				const known = fn.instructionAttributes(instruction)
+					.knownBuiltinCall as unknown as KnownBuiltinCall | undefined;
+				if (
+					!knownOperationCallProves(known, canonical) ||
+					!compilerFactIsWorldInvariant(known?.identity)
+				)
+					continue;
+			}
+			const enumerable = canonical === "Object.prototype.propertyIsEnumerable";
+			const ownPresence =
+				canonical === "Object.hasOwn" || canonical === "Object.prototype.hasOwnProperty";
+			const receiverArgument =
+				canonical === "Object.prototype.hasOwnProperty" || enumerable
+					? opcode === "call"
+						? 1
+						: 0
+					: argument;
+			const receiver = fn.kernel.operandAt(start + receiverArgument);
 			const initial =
 				canonical === "Array.isArray" ? analysis.query(receiver) : undefined;
 			const fact =
@@ -546,8 +558,8 @@ export const foldStaticReflections: CoreFunctionPass = {
 			}
 			const keyInput = membership
 				? fn.kernel.operandAt(start)
-				: fn.kernel.instructionOperandCount(instruction) > argument + 1
-					? fn.kernel.operandAt(start + argument + 1)
+				: fn.kernel.instructionOperandCount(instruction) > receiverArgument + 1
+					? fn.kernel.operandAt(start + receiverArgument + 1)
 					: undefined;
 			const propertyKey =
 				keyInput === undefined
@@ -594,13 +606,15 @@ export const foldStaticReflections: CoreFunctionPass = {
 					inputs: [],
 					attributes: { value },
 				});
-				if (canonical === "Object.hasOwn" || canonical === "Reflect.has") {
+				if (ownPresence || enumerable || canonical === "Reflect.has") {
 					plans.push({
 						instruction,
 						operation: boolean(
-							canonical === "Object.hasOwn"
-								? resolution !== undefined
-								: proof.kind === "descriptor",
+							enumerable
+								? resolution !== undefined && (resolution.descriptor[1] & 2) !== 0
+								: ownPresence
+									? resolution !== undefined
+									: proof.kind === "descriptor",
 						),
 					});
 					edits++;
@@ -678,11 +692,13 @@ export const foldStaticReflections: CoreFunctionPass = {
 			if (description.kind !== "array" && description.kind !== "object") continue;
 			const own = analysis.ownProperty(fact, propertyKey, instruction);
 			let property = own === "absent" ? undefined : own;
-			if (canonical === "Object.hasOwn" || canonical === "Reflect.has") {
+			if (ownPresence || enumerable || canonical === "Reflect.has") {
 				// An Array keeps its nonconfigurable own length when its contents are unknown.
-				let value =
-					property !== undefined || (description.kind === "array" && key === "length");
-				if (!value && own !== "absent") continue;
+				const arrayLength = description.kind === "array" && key === "length";
+				if (property === undefined && !arrayLength && own !== "absent") continue;
+				let value = enumerable
+					? property?.enumerable === true
+					: property !== undefined || arrayLength;
 				if (!value && canonical === "Reflect.has") {
 					const inherited = key === undefined ? undefined : analysis.inherited(fact, key);
 					if (inherited === undefined && fact.prototype.kind !== "null") continue;

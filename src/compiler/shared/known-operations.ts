@@ -1,6 +1,6 @@
 import { builtinOperationDescriptor } from "./builtin-registry.ts";
 import { builtinInvocationSummary } from "./builtin-semantics.ts";
-import { knownFact } from "./compiler-facts.ts";
+import { knownBuiltinCallProves, knownFact } from "./compiler-facts.ts";
 import type { FactProof, KnownBuiltinCall } from "./compiler-facts.ts";
 import { getPrimordialCatalog } from "./primordial-catalog-data.ts";
 import type { PrimordialNode } from "./primordial-catalog-types.ts";
@@ -43,6 +43,46 @@ export function knownOperationIndex(id: string): number | undefined {
 	return indices.get(id);
 }
 
+function knownOperationCallSemantics(operation: KnownOperation) {
+	return {
+		effects: [
+			"coerce",
+			"property-access",
+			"call-user-code",
+			"allocate",
+			"throw",
+			"safepoint",
+		] as const,
+		result:
+			builtinOperationDescriptor(operation.id)?.result ?? operation.semantics.result,
+		lowerings: ["generic-known-operation"],
+	};
+}
+
+// Availability and world-policy validity remain the consumer's proof obligations.
+export function knownOperationCallProves(
+	call: KnownBuiltinCall | undefined,
+	id: string,
+): boolean {
+	if (knownBuiltinCallProves(call, id)) return true;
+	if (
+		call?.operation !== id ||
+		call.identity.kind !== "known" ||
+		call.identity.value !== id ||
+		call.semantics.kind !== "known"
+	)
+		return false;
+	const operation = knownOperations()[knownOperationIndex(id) ?? -1];
+	if (operation === undefined) return false;
+	const expected = knownOperationCallSemantics(operation);
+	const actual = call.semantics.value;
+	return (
+		actual.result === expected.result &&
+		actual.effects.join("\0") === expected.effects.join("\0") &&
+		actual.lowerings.join("\0") === expected.lowerings.join("\0")
+	);
+}
+
 export function knownOperationCall(id: string, functionId: number): KnownBuiltinCall {
 	const operation = knownOperations()[knownOperationIndex(id) ?? -1];
 	if (operation === undefined) throw new Error(`Unknown semantic operation ${id}`);
@@ -58,21 +98,7 @@ export function knownOperationCall(id: string, functionId: number): KnownBuiltin
 	return {
 		operation: id,
 		identity: knownFact(id, proof),
-		semantics: knownFact(
-			{
-				effects: [
-					"coerce",
-					"property-access",
-					"call-user-code",
-					"allocate",
-					"throw",
-					"safepoint",
-				],
-				result: builtinOperationDescriptor(id)?.result ?? operation.semantics.result,
-				lowerings: ["generic-known-operation"],
-			},
-			proof,
-		),
+		semantics: knownFact(knownOperationCallSemantics(operation), proof),
 	};
 }
 

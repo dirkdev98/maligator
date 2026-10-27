@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { directBuiltinOperationIds } from "../src/compiler/shared/builtin-registry.ts";
 import {
 	knownOperationIndex,
+	knownOperationCall,
+	knownOperationCallProves,
 	knownOperations,
 	primordialBindings,
 } from "../src/compiler/shared/known-operations.ts";
@@ -18,6 +20,39 @@ import {
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("known-operation dispatch", () => {
+	it("validates captured operation identities and semantic contracts independently", () => {
+		const operation = "Object.prototype.propertyIsEnumerable";
+		const call = knownOperationCall(operation, 17);
+		expect(knownOperationCallProves(call, operation)).toBe(true);
+		expect(knownOperationCallProves(call, "Object.prototype.hasOwnProperty")).toBe(false);
+		if (call.identity.kind !== "known" || call.semantics.kind !== "known")
+			throw new Error("Expected captured operation proof");
+		expect(
+			knownOperationCallProves(
+				{
+					...call,
+					identity: { ...call.identity, value: "Object.prototype.hasOwnProperty" },
+				},
+				operation,
+			),
+		).toBe(false);
+		for (const value of [
+			{ ...call.semantics.value, result: "unknown" },
+			{ ...call.semantics.value, effects: [] },
+			{ ...call.semantics.value, lowerings: [] },
+		]) {
+			expect(
+				knownOperationCallProves(
+					{
+						...call,
+						semantics: { ...call.semantics, value },
+					},
+					operation,
+				),
+			).toBe(false);
+		}
+	});
+
 	it("keeps runtime primordial routes aligned with compiler catalog indices", () => {
 		const source = readFileSync("runtime/src/generated/known_primordials.inc", "utf8");
 		const routes = new Map<number, PrimordialBinding>();

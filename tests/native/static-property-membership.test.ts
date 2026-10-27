@@ -23,6 +23,17 @@ const fixtures = [
 		].map((functionName) => ({ functionName, forbidden: ["LOAD_PROPERTY"] })),
 	},
 	{
+		name: "enumerability",
+		fixture: "tests/local/own-enumerability.mjs",
+		optimized: [
+			{
+				functionName: "enumerableData",
+				forbidden: ["CALL", "CALL_KNOWN", "CREATE_OBJECT", "CREATE_OBJECT_SHAPED"],
+			},
+			{ functionName: "joinedEnumerable", forbidden: ["CALL", "CALL_KNOWN"] },
+		],
+	},
+	{
 		name: "joined key bounds",
 		fixture: "tests/local/joined-object-key-bounds.mjs",
 		optimized: [

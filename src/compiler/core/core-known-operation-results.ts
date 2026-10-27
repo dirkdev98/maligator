@@ -116,6 +116,7 @@ export const lowerKnownOperationResults: CoreFunctionPass = {
 						"Array.prototype.lastIndexOf",
 						"Array.prototype.join",
 						"Object.prototype.hasOwnProperty",
+						"Object.prototype.propertyIsEnumerable",
 						"Object.hasOwn",
 					].includes(attributes.operation as string) &&
 					!attributes.construct &&

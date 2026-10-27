@@ -1078,6 +1078,12 @@ for (const [owner, result, methods] of [
 			"trunc",
 		],
 	],
+	[
+		"Object.prototype",
+		"boolean",
+		["hasOwnProperty", "propertyIsEnumerable", "isPrototypeOf"],
+	],
+	["Object.prototype", "string", ["toString"]],
 	["String", "string", ["fromCharCode", "fromCodePoint", "raw"]],
 	[
 		"String.prototype",

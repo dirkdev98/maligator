@@ -53,6 +53,15 @@ Ordinary property consumers fold own data, lengths, presence, descriptors and br
 queries. Bounded dynamic keys use one `ToPropertyKey` followed by known-key selection
 and the original fallback lookup. Prototype-dependent results require the shared
 primordial proof; missing methods still evaluate arguments before throwing.
+Prototype `hasOwnProperty` and `propertyIsEnumerable` share those descriptor proofs.
+Captured operation proofs are checked against the canonical dispatch catalog as well
+as specialized builtin contracts before reflection folds consume them.
+Private enumerable String keys use the existing static key-query representation;
+Array length stays nonenumerable, and accessor values need no invocation. Key
+coercion remains at the observation, including its exceptions and mutation effects.
+Exact Object prototype predicates also publish Boolean normal results, and exact
+`toString` publishes String, independently of Proxy traps and tag getters. Native
+storage consumes these kinds while preserving completion checks and String roots.
 
 Known-call specialization reuses existing target/effect summaries and candidate
 budgets. A non-inlined helper can consume a complete private array/object description

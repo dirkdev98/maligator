@@ -17,7 +17,9 @@ export function coreStaticDataQueryPlan(
 		return undefined;
 	const attributes = fn.instructionAttributes(instruction);
 	if (attributes.construct || attributes.argumentMode !== undefined) return undefined;
+	const enumerable = attributes.operation === "Object.prototype.propertyIsEnumerable";
 	const own =
+		enumerable ||
 		attributes.operation === "Object.prototype.hasOwnProperty" ||
 		attributes.operation === "Object.hasOwn";
 	const queryKind = own
@@ -54,8 +56,11 @@ export function coreStaticDataQueryPlan(
 			description.properties.some(({ key }) => typeof key !== "string")
 		)
 			return undefined;
-		const keys = description.properties.map(({ key }) => key as string);
-		if (description.kind === "array" && !keys.includes("length")) keys.push("length");
+		const keys = description.properties
+			.filter((property) => !enumerable || property.enumerable)
+			.map(({ key }) => key as string);
+		if (!enumerable && description.kind === "array" && !keys.includes("length"))
+			keys.push("length");
 		return { queryKind: "has-own" as const, args, fact, keys };
 	}
 	if (
