@@ -14,6 +14,7 @@ import {
 	CORE_LOOP_INDUCTION_ANALYSIS,
 } from "./core-ir-loops.ts";
 import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
+import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { coreTargetSupportsNumericFusionOperator } from "./core-ir-region-strategies.ts";
 import {
 	CORE_STRING_SPAN_METHODS,
@@ -1266,11 +1267,15 @@ function stackObjectCandidate(
 	index: CoreLocalFactIndex,
 	controlUses: () => CoreStackObjectControlUses,
 ): CoreStackObjectCandidate | undefined {
+	const allocationBlock = fn.instructionBlock(layout.instruction);
+	// Changing storage cannot retire an allocation's observable exceptional continuation.
 	if (
 		fn.isAsync ||
 		fn.isGenerator ||
 		fn.instructionOpcodeName(layout.instruction) !== "createObjectShaped" ||
-		!control.reachable.has(fn.instructionBlock(layout.instruction))
+		!control.reachable.has(allocationBlock) ||
+		(fn.kernel.blockHandlerBlock(allocationBlock) !== undefined &&
+			coreInstructionEffects(fn, layout.instruction).mayThrow)
 	)
 		return undefined;
 	const allocationRoot = roots.get(layout.result) ?? layout.result;

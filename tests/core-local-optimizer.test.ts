@@ -49,6 +49,38 @@ it("reports an eligible two-edit merge that cannot fit the remaining budget", ()
 });
 
 describe("CoreLocalOptimizer", () => {
+	it.each(["createObject", "createObjectShaped"] as const)(
+		"retains an unobserved %s whose allocation failure is handled",
+		(opcode) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const handler = builder.createBlock([{ role: "exception" }]);
+			const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
+			builder.appendInstruction(
+				entry,
+				opcode,
+				opcode === "createObjectShaped" ? [parameter] : [],
+				{
+					attributes: opcode === "createObjectShaped" ? { keyStringIndices: [0] } : {},
+				},
+			);
+			builder.setHandler(entry, handler);
+			builder.setTerminator(entry, { kind: "return", value: parameter });
+			builder.setTerminator(handler, {
+				kind: "return",
+				value: inspectCoreBlockParameters(builder, handler)[0]!.value,
+			});
+			const fn = program.function(builder.finish(entry).function);
+			new CoreLocalOptimizer(program, fn.id).run();
+			expect(
+				[...fn.bodyInstructionIds(entry)].map((instruction) =>
+					fn.instructionOpcodeName(instruction),
+				),
+			).toContain(opcode);
+		},
+	);
+
 	it.each(["createObject", "createObjectShaped", "createArray"] as const)(
 		"removes an unobserved %s without weakening its allocation effects",
 		(opcode) => {
@@ -183,9 +215,13 @@ describe("CoreLocalOptimizer", () => {
 		).toHaveLength(2);
 	});
 
-	it.each(["!", "typeof", "+", "-", "~"])(
-		"removes only noncoercing dead %s operators while retaining their producer",
-		(operator) => {
+	it.each(
+		["!", "typeof", "+", "-", "~"].flatMap((operator) =>
+			[false, true].map((hasHandler) => ({ operator, hasHandler })),
+		),
+	)(
+		"removes only noncoercing dead $operator operators with handler=$hasHandler",
+		({ operator, hasHandler }) => {
 			const program = new CoreProgram(coreOpcodeRegistry);
 			const builder = new CoreFunctionBuilder(program);
 			const entry = builder.createBlock([{ representation: "boxed" }]);
@@ -193,6 +229,11 @@ describe("CoreLocalOptimizer", () => {
 			const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
 			const [value] = builder.appendInstruction(entry, "call", [callback, receiver!]);
 			builder.appendInstruction(entry, "unary", [value!], { attributes: { operator } });
+			if (hasHandler) {
+				const handler = builder.createBlock([{ role: "exception" }]);
+				builder.setHandler(entry, handler);
+				builder.setTerminator(handler, { kind: "return", value: receiver! });
+			}
 			builder.setTerminator(entry, { kind: "return", value: receiver! });
 			const fn = program.function(builder.finish(entry).function);
 			new CoreLocalOptimizer(program, fn.id).run();

@@ -482,11 +482,21 @@ describe("Core memory and escape parity", () => {
 		});
 		const finished = builder.finish(entry);
 
-		const fn = optimize(program).function(finished.function);
+		const compilation = optimizeCore({
+			program,
+			context: programAnalysisContext(false),
+		}).compilation;
+		const fn = compilation.program.function(finished.function);
 		const allocations = coreOperations(fn).filter(
 			(instruction) => instruction.opcode === "createObjectShaped",
 		);
 		expect(allocations).toHaveLength(1);
+		expect(
+			projectCoreSpecializationRecipes(compilation.plan.recipes).some(
+				(selection) =>
+					selection.function === fn.id && selection.kind === "stack-object-plan",
+			),
+		).toBe(false);
 		const retainedHandler = inspectCoreBlockHandler(fn, allocations[0]!.block);
 		expect(retainedHandler).toBeDefined();
 		expect(retainedHandler!.block).toBe(handler);

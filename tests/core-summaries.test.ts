@@ -15,6 +15,42 @@ import {
 } from "./helpers/core-program-analysis.ts";
 
 describe("incremental Core program summaries", () => {
+	it.each(["caught", "carried"] as const)(
+		"tracks %s values returned from an exception handler",
+		(kind) => {
+			const program = analysisProgram();
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+			const entry = builder.createBlock([{}, {}]);
+			const parameter = builder.blockParameterValue(entry, 0);
+			const callee = builder.blockParameterValue(entry, 1);
+			const handler = builder.createBlock([{ role: "exception" }, {}]);
+			builder.appendInstruction(entry, "call", [callee, parameter]);
+			builder.setHandler(entry, handler, [parameter]);
+			builder.setTerminator(
+				entry,
+				kind === "caught"
+					? { kind: "return", value: parameter }
+					: { kind: "throw", value: callee },
+			);
+			builder.setTerminator(handler, {
+				kind: "return",
+				value: builder.blockParameterValue(handler, kind === "caught" ? 0 : 1),
+			});
+			const functionId = builder.finish(entry).function;
+			const manager = new CoreAnalysisManager(
+				program,
+				programAnalysisContext(),
+				new CoreOptimizationReportBuilder(program),
+			);
+			const summaries = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+				scope: "program",
+			});
+			expect(summaries.summary(functionId)?.returnProvenance).toEqual(
+				kind === "caught" ? { kind: "unknown" } : { kind: "parameter", index: 0 },
+			);
+		},
+	);
+
 	it("retains later callee escapes and module members after effects reach top", () => {
 		const program = analysisProgram();
 		const caller = new CoreFunctionBuilder(program, {

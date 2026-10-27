@@ -70,6 +70,13 @@ checks use counts before requesting control flow. Dead-code elimination can then
 discard fresh object/Array allocations whose identities have no remaining uses.
 Operand evaluation stays separate, and surviving allocations retain their GC and
 exception effects; discardability does not make allocations reusable expressions.
+Protected instructions keep any possible exceptional transfer even when their
+results have no remaining uses.
+Stack-object planning also preserves protected, fallible allocations instead of
+replacing them with a non-failing scalar or activation-local representation.
+Caught values contribute unknown provenance to normal returns. Other values carried
+into handlers retain their argument provenance at the exceptional-edge offset;
+catch returns cannot disappear from identity, kind, or range bounds at call sites.
 
 Helper search variants retain sparse source indexes and distinguish strict equality
 from SameValueZero. Index searches branch to the first match in their search order;

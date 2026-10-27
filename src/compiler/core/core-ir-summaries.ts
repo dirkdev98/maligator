@@ -437,11 +437,17 @@ function analyzeLocalSummary(
 		const parameterStart = fn.kernel.blockParameterStart(block);
 		const parameterCount = fn.kernel.blockParameterCount(block);
 		for (let index = 0; index < parameterCount; index++) {
-			const parameter = fn.kernel.blockParameterValue(parameterStart + index);
+			const row = parameterStart + index;
+			const parameter = fn.kernel.blockParameterValue(row);
+			if (fn.kernel.blockParameterRole(row) === 1) {
+				// A caught completion is a value, not an unreachable return alternative.
+				origins[parameter] = ORIGIN_UNKNOWN;
+				continue;
+			}
 			const incoming: Array<CoreValueId> = [];
 			for (const edge of cfg.predecessors[block] ?? []) {
-				if (edge.kind !== "ordinary") continue;
-				const argument = edge.arguments[index];
+				if (!cfg.reachable.has(edge.from)) continue;
+				const argument = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
 				if (argument !== undefined) incoming.push(argument);
 			}
 			if (incoming.length === 0) continue;

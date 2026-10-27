@@ -946,6 +946,14 @@ export class CoreLocalOptimizer {
 				return false;
 			}
 		}
+		// Discardability cannot remove an observable exceptional continuation.
+		if (
+			descriptor.discardable &&
+			this.#fn.kernel.blockHandlerBlock(this.#fn.instructionBlock(instruction)) !==
+				undefined &&
+			coreInstructionEffects(this.#fn, instruction).mayThrow
+		)
+			return false;
 		const operandStart = this.#fn.kernel.instructionOperandStart(instruction);
 		const operandCount = this.#fn.kernel.instructionOperandCount(instruction);
 		for (let index = 0; index < operandCount; index++) {
