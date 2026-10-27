@@ -266,7 +266,12 @@ The independent target boundary and current storage contract are recorded in
       backedges; later effects do not withdraw an earlier read. Writer/source
       correlations within the surviving prefix remain conservative.
       Typed producer storage for remaining writes,
-      broader parameter-relative call effects and coroutine record transport remain. Own-field observations
+      broader parameter-relative call effects and coroutine record transport remain.
+      Activation-local field storage now joins per-instruction kinds and integer
+      bounds from all initializers and certified writers, including branch-local
+      proofs through boxed registers. Scalar fields omit shadow slots; String and
+      unknown unions retain roots and materialized accesses keep their fallback.
+      Own-field observations
       also carry initial integer bounds through the normal-result worklist, including
       finite targets, recursive forwarding and suspension. Growing fields widen
       independently of bounded siblings. The scanner still calls

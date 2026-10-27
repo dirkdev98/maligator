@@ -494,8 +494,12 @@ Direct activation-local stack objects with existing certificates
 can store several fields in independent number, int32, and boolean locals. Stable
 boxed and string fields occupy dedicated shadow slots initialized before frame
 publication and active throughout the invocation. Each slot joins its initializer
-and certified stores: mixed int32/number values use number storage, and other
-mixtures use boxed storage. Certified loads and stores must admit the corresponding
+and certified stores using each instruction's input kinds and integer bounds,
+independently of the source register's joined representation. Boxed writers can
+feed Number, Boolean or String fields when every write proves that kind. Integer
+storage requires every writer to fit int32 and exclude negative zero; wider Number
+values use number storage, and other mixtures use boxed storage.
+Certified loads and stores must admit the corresponding
 conversion. A site needs at least one scalar field to use this split layout;
 all-boxed sites retain the existing contiguous layout. Inherited and uncertified
 accesses keep whole-object boxed storage.

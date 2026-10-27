@@ -1,3 +1,12 @@
+import {
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
+} from "../shared/compiler-value-kinds.ts";
+import {
+	instructionInputIsInt32,
+	instructionInputKind,
+} from "../shared/instruction-facts.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import { vmExceptionHandlerTargets } from "./runtime-image.ts";
@@ -12,6 +21,26 @@ export type NativeStackFieldRepresentation =
 export interface NativeStackObjectStoragePlan {
 	readonly allocationIp: number;
 	readonly slotRepresentations: ReadonlyArray<NativeStackFieldRepresentation>;
+}
+
+function fieldInputRepresentation(
+	native: NativeFunctionPlan,
+	ip: number,
+	register: number,
+): NativeStackFieldRepresentation | undefined {
+	const representation = native.registerRepresentations[register];
+	if (representation !== "boxed" && representation !== "number") return representation;
+	const facts = native.facts?.[ip];
+	switch (instructionInputKind(facts, register)) {
+		case COMPILER_VALUE_KIND_NUMBER:
+			return instructionInputIsInt32(facts, register) ? "int32" : "number";
+		case COMPILER_VALUE_KIND_BOOLEAN:
+			return representation === "boxed" ? "boolean" : representation;
+		case COMPILER_VALUE_KIND_STRING:
+			return representation === "boxed" ? "string" : representation;
+		default:
+			return representation;
+	}
 }
 
 export function selectNativeDirectHeapObjects(
@@ -87,8 +116,8 @@ export function selectNativeStackObjectStorage(
 				continue;
 			const allocation = native.body.instructions[site.allocationIp];
 			if (allocation?.opcode !== "CREATE_OBJECT_SHAPED") continue;
-			const reps = allocation.valueRegisters.map(
-				(register) => native.registerRepresentations[register],
+			const reps = allocation.valueRegisters.map((register) =>
+				fieldInputRepresentation(native, site.allocationIp, register),
 			);
 			if (
 				reps.length !== site.slotCount ||
@@ -114,7 +143,7 @@ export function selectNativeStackObjectStorage(
 					op?.opcode === "STORE_PROPERTY_STATIC" ||
 					op?.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
 				) {
-					const source = native.registerRepresentations[op.value];
+					const source = fieldInputRepresentation(native, access.ip, op.value);
 					const current = reps[access.slot]!;
 					if (source === undefined) {
 						valid = false;

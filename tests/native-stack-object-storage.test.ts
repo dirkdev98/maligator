@@ -2,13 +2,20 @@ import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
+	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_NUMBER,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { selectNativeDirectHeapObjects } from "../src/compiler/target/lower-native-objects.ts";
 import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { validateNativeStackObject } from "../src/compiler/target/native-stack-object.ts";
-import { vmRegionActions } from "../src/compiler/target/program-image.ts";
+import {
+	createConservativeNativePlan,
+	vmRegionActions,
+} from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
 function compile(body: string, preamble = "") {
@@ -21,6 +28,95 @@ function compile(body: string, preamble = "") {
 }
 
 describe("native typed stack fields", () => {
+	it.each([
+		["number", "1.5", "number"],
+		["boolean", "true", "boolean"],
+		["string", '"old"', "string"],
+	] as const)(
+		"uses a branch-local %s proof for writes from boxed input",
+		(type, initial, representation) => {
+			const image = compile(
+				`const o={x:${initial},keep:2};if(typeof input==="${type}")o.x=input;return o===globalThis.other?input:o.x;`,
+			);
+			const native = image.native.functions[1]!;
+			expect(native.registerRepresentations[0]).toBe("boxed");
+			expect(native.storage!.stackObjects[0]!.slotRepresentations).toEqual([
+				representation,
+				"int32",
+			]);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
+
+	it("uses initializer and writer proofs independently of boxed register storage", () => {
+		const image = compile(
+			"const o={x:1.5,y:2,flag:true};if(input){o.x=-0;o.y=3;o.flag=false;}return o===input?input:[o.x,o.y,o.flag];",
+		);
+		const original = image.native.functions[1]!;
+		const boxed = createConservativeNativePlan(
+			image.native.functions.map((fn) => fn.body),
+			image.runtime.stringConstants,
+		).functions[1]!;
+		const native = lowerNativeFunctionStorage({
+			...original,
+			gc: boxed.gc,
+			registerRepresentations: boxed.registerRepresentations,
+		});
+		expect(native.storage!.stackObjects[0]!.slotRepresentations).toEqual([
+			"number",
+			"int32",
+			"boolean",
+		]);
+		expect(emitCompiledFunction(native, native.functionIndex, "", false)).not.toBeNull();
+		const widened = {
+			...image,
+			native: { ...image.native, functions: image.native.functions.with(1, native) },
+		};
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(widened))).toEqual(
+			widened,
+		);
+	});
+
+	it("withdraws scalar field storage when a boxed writer loses its Number bound", () => {
+		const image = compile(
+			'const o={x:1.5,keep:2};if(typeof input==="number")o.x=input;return o===globalThis.other?input:o.x;',
+		);
+		const original = image.native.functions[1]!;
+		const ip = original.body.instructions.findIndex(
+			(op) =>
+				(op.opcode === "STORE_PROPERTY_STATIC" ||
+					op.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT") &&
+				op.value === 0,
+		);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		const native = {
+			...original,
+			facts: original.facts!.map((facts, index) =>
+				index === ip
+					? {
+							...facts!,
+							inputKindMasks: facts!.inputKindMasks!.map((kind) =>
+								kind === COMPILER_VALUE_KIND_NUMBER
+									? kind | COMPILER_VALUE_KIND_BIGINT
+									: kind,
+							),
+						}
+					: facts,
+			),
+		};
+		expect(() =>
+			serializeCompilerArtifact({
+				...image,
+				native: { ...image.native, functions: image.native.functions.with(1, native) },
+			}),
+		).toThrow(/invalid or stale storage plan/);
+		expect(
+			lowerNativeFunctionStorage(native).storage!.stackObjects[0]!.slotRepresentations,
+		).toEqual(["boxed", "int32"]);
+	});
+
 	it("validates returned objects created on exceptional control-flow", () => {
 		const image = compile(
 			"try { globalThis.observe(input); return {status: 0, signal: null}; } catch (error) { return {status: error.status, signal: error.signal}; }",
