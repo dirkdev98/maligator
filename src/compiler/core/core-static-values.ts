@@ -17,6 +17,7 @@ import type {
 	StaticMember,
 	StaticPropertyDescription,
 	StaticPrototype,
+	StaticUnknownOwnKeys,
 } from "../shared/static-values.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
@@ -315,9 +316,10 @@ function mayHaveUnlistedOwnKey(
 	return (
 		description.ownKeysComplete === false &&
 		(unknown === undefined ||
-			(typeof key === "string" &&
-				(unknown.named.includes(key) ||
-					(unknown.numeric && (key === "-0" || String(Number(key)) === key)))))
+			(typeof key === "string"
+				? unknown.named.includes(key) ||
+					(unknown.numeric && (key === "-0" || String(Number(key)) === key))
+				: unknown.symbols))
 	);
 }
 
@@ -656,13 +658,7 @@ export class CoreStaticValueAnalysis {
 			if (property !== undefined && property !== "absent") {
 				if (property.descriptor.kind === "data") member = property.descriptor.value;
 			} else if (property === "absent") {
-				const symbol = typeof key === "string" ? undefined : this.#keyFact(key, consumer);
-				const inheritedKey: PrimordialKey | undefined =
-					typeof key === "string"
-						? key
-						: symbol?.kind === "known" && symbol.canonical !== undefined
-							? { symbol: symbol.canonical }
-							: undefined;
+				const inheritedKey = this.#primordialKey(key, consumer);
 				if (
 					fact.prototype.kind === "null" ||
 					(inheritedKey !== undefined &&
@@ -780,8 +776,10 @@ export class CoreStaticValueAnalysis {
 		const intern = this.#program.staticDescriptions;
 		const description = intern.description(initial.description);
 		if (description.kind !== "array" && description.kind !== "object") return initial;
+		let environmentDependencies = initial.environmentDependencies;
 		const unknownContents = (): CoreStaticValue => ({
 			...initial,
+			environmentDependencies,
 			description: intern.intern({
 				...description,
 				properties: [],
@@ -944,6 +942,7 @@ export class CoreStaticValueAnalysis {
 					return {
 						...initial,
 						prototype,
+						environmentDependencies,
 						operands: bindings,
 						privateUntilObservation: !escaped,
 						description: intern.intern({
@@ -1235,6 +1234,45 @@ export class CoreStaticValueAnalysis {
 						continue;
 					}
 				}
+				if (
+					escaped &&
+					!receiver &&
+					this.#context !== undefined &&
+					this.#context.facts.world.primordialPolicy === "locked" &&
+					!this.#context.facts.world.realms &&
+					(opcode === "loadProperty" || opcode === "loadPropertyStatic")
+				) {
+					const base = this.query(args[0]!);
+					const key =
+						opcode === "loadPropertyStatic"
+							? this.string(attributes.stringIndex as number)
+							: this.propertyKey(args[1]!, instruction);
+					const primordialKey =
+						key === undefined ? undefined : this.#primordialKey(key, instruction);
+					if (
+						base.kind === "known" &&
+						base.canonical !== undefined &&
+						["object", "array", "function"].includes(base.brand) &&
+						primordialKey !== undefined
+					) {
+						const proof = provePrimordialAccess(
+							this.#context.facts.world,
+							{ kind: "intrinsic", id: base.canonical, realm: "current" },
+							primordialKey,
+						);
+						// A data/absence proof excludes callbacks independently of the read's result.
+						if (
+							proof?.kind === "absent" ||
+							(proof?.resolution !== undefined &&
+								(proof.resolution.descriptor[1] & 8) === 0)
+						) {
+							environmentDependencies = [
+								...new Set([...environmentDependencies, ...proof.dependencies]),
+							];
+							continue;
+						}
+					}
+				}
 				const descriptor = this.#fn.registry.byId(
 					this.#fn.instructionOpcode(instruction),
 				);
@@ -1319,6 +1357,15 @@ export class CoreStaticValueAnalysis {
 		const first = facts[0];
 		if (first === undefined || facts.some((fact) => fact.brand !== first.brand))
 			return { kind: "unknown", reason: "conflicting-join" };
+		const environmentDependencies = facts.every((fact) =>
+			sameStaticList(
+				fact.environmentDependencies,
+				first.environmentDependencies,
+				(a, b) => a === b,
+			),
+		)
+			? first.environmentDependencies
+			: [...new Set(facts.flatMap((fact) => fact.environmentDependencies))];
 		const exactBrand = facts.every((fact) => fact.exactBrand === first.exactBrand)
 			? first.exactBrand
 			: undefined;
@@ -1359,6 +1406,7 @@ export class CoreStaticValueAnalysis {
 				...first,
 				value,
 				discriminator: value,
+				environmentDependencies,
 				identity,
 				construction,
 				exactBrand,
@@ -1378,9 +1426,7 @@ export class CoreStaticValueAnalysis {
 				prototype: { kind: "unknown" },
 				state: "immutable-value",
 				operands: [],
-				environmentDependencies: [
-					...new Set(facts.flatMap((fact) => fact.environmentDependencies)),
-				],
+				environmentDependencies,
 				description: this.#program.staticDescriptions.intern({
 					kind: "engine-payload",
 					format: "dynamic-result",
@@ -1491,10 +1537,52 @@ export class CoreStaticValueAnalysis {
 			) && first.prototype.kind !== "operand"
 				? first.prototype
 				: ({ kind: "unknown" } as const);
+		const ownKeysComplete = descriptions.every(
+			(other) =>
+				(other.kind === "array" || other.kind === "object") &&
+				other.ownKeysComplete !== false &&
+				other.properties.length === properties.length,
+		);
+		let unknownOwnKeys: StaticUnknownOwnKeys | undefined;
+		if (
+			!ownKeysComplete &&
+			descriptions.every(
+				(other): other is Extract<StaticDescription, { kind: "array" | "object" }> =>
+					(other.kind === "array" || other.kind === "object") &&
+					(other.ownKeysComplete !== false || other.unknownOwnKeys !== undefined),
+			)
+		) {
+			const visits = descriptions.reduce(
+				(sum, other) =>
+					sum + other.properties.length + (other.unknownOwnKeys?.named.length ?? 0),
+				0,
+			);
+			if (this.statistics.visits + visits <= this.#limit) {
+				this.statistics.visits += visits;
+				const retained = new Set(properties.map((property) => property.key));
+				const named = new Set<string>();
+				let numeric = false;
+				let symbols = false;
+				for (const other of descriptions) {
+					if (other.ownKeysComplete === false) {
+						numeric ||= other.unknownOwnKeys!.numeric;
+						symbols ||= other.unknownOwnKeys!.symbols;
+						for (const key of other.unknownOwnKeys!.named)
+							if (!retained.has(key)) named.add(key);
+					}
+					for (const property of other.properties) {
+						if (typeof property.key !== "string") symbols = true;
+						else if (!retained.has(property.key)) named.add(property.key);
+					}
+				}
+				unknownOwnKeys = { numeric, named: [...named].sort(), symbols };
+			} else this.statistics.budgetBailouts++;
+		}
 		return {
 			...first,
 			value,
 			discriminator: value,
+			environmentDependencies,
 			identity,
 			construction,
 			exactBrand,
@@ -1505,13 +1593,8 @@ export class CoreStaticValueAnalysis {
 				...description,
 				prototype,
 				properties,
-				unknownOwnKeys: undefined,
-				ownKeysComplete: descriptions.every(
-					(other) =>
-						(other.kind === "array" || other.kind === "object") &&
-						other.ownKeysComplete !== false &&
-						other.properties.length === properties.length,
-				),
+				unknownOwnKeys,
+				ownKeysComplete,
 				...(description.kind === "array"
 					? {
 							length: descriptions.every(
@@ -1943,16 +2026,8 @@ export class CoreStaticValueAnalysis {
 					key = this.string(attributes.stringIndex as number);
 				else {
 					const propertyKey = this.propertyKey(operands[1]!, instruction);
-					if (typeof propertyKey === "string") key = propertyKey;
-					else if (propertyKey !== undefined) {
-						const symbol = this.#keyFact(propertyKey, instruction);
-						if (
-							symbol.kind === "known" &&
-							symbol.brand === "symbol" &&
-							symbol.canonical !== undefined
-						)
-							key = { symbol: symbol.canonical };
-					}
+					if (propertyKey !== undefined)
+						key = this.#primordialKey(propertyKey, instruction);
 				}
 				if (key !== undefined) {
 					const base = this.queryAt(operands[0]!, instruction);
@@ -2036,7 +2111,11 @@ export class CoreStaticValueAnalysis {
 									prototype,
 									properties: [],
 									ownKeysComplete: false,
-									unknownOwnKeys: { numeric: false, named: ["length", "name"] },
+									unknownOwnKeys: {
+										numeric: false,
+										named: ["length", "name"],
+										symbols: false,
+									},
 								}),
 								identity: { kind: "fresh-per-evaluation", function: fn.id, value },
 								state: "initial-allocation",
@@ -2257,7 +2336,7 @@ export class CoreStaticValueAnalysis {
 								ownKeysComplete: argument.brand !== "string",
 								unknownOwnKeys:
 									argument.brand === "string"
-										? { numeric: true, named: ["length"] }
+										? { numeric: true, named: ["length"], symbols: false }
 										: undefined,
 							}),
 							brand: "object",
@@ -2320,7 +2399,9 @@ export class CoreStaticValueAnalysis {
 						length,
 						ownKeysComplete: length !== null,
 						unknownOwnKeys:
-							length === null ? { numeric: true, named: ["length"] } : undefined,
+							length === null
+								? { numeric: true, named: ["length"], symbols: false }
+								: undefined,
 						properties: elements.map((input, index) => {
 							bindings.push(input);
 							return {
@@ -2346,14 +2427,15 @@ export class CoreStaticValueAnalysis {
 							!canonical.endsWith("Error"),
 						unknownOwnKeys:
 							canonical === "String"
-								? { numeric: true, named: ["length"] }
+								? { numeric: true, named: ["length"], symbols: false }
 								: canonical === "RegExp"
-									? { numeric: false, named: ["lastIndex"] }
+									? { numeric: false, named: ["lastIndex"], symbols: false }
 									: canonical.endsWith("Array")
-										? { numeric: true, named: [] }
+										? { numeric: true, named: [], symbols: false }
 										: canonical.endsWith("Error")
 											? {
 													numeric: false,
+													symbols: false,
 													named: [
 														"message",
 														"cause",
@@ -2637,6 +2719,19 @@ export class CoreStaticValueAnalysis {
 	#keyFact(value: CoreValueId, consumer: CoreInstructionId): CoreStaticValueResult {
 		const initial = this.query(value);
 		return initial.kind === "unknown" ? this.queryAt(value, consumer) : initial;
+	}
+
+	#primordialKey(
+		key: string | CoreValueId,
+		consumer: CoreInstructionId,
+	): PrimordialKey | undefined {
+		if (typeof key === "string") return key;
+		const symbol = this.#keyFact(key, consumer);
+		return symbol.kind === "known" &&
+			symbol.brand === "symbol" &&
+			symbol.canonical !== undefined
+			? { symbol: symbol.canonical }
+			: undefined;
 	}
 
 	constant(value: CoreValueId, consumer?: CoreInstructionId): ConstantValue | undefined {

@@ -144,6 +144,99 @@ describe.each([false, true])("static membership with locked primordials %s", (lo
 	});
 });
 
+describe("joined own-key bounds", () => {
+	const folded = [
+		[
+			"unrelated String",
+			"const record=flag?{left:value}:{right:value};return Object.hasOwn(record,'missing');",
+		],
+		[
+			"unlisted Symbol",
+			"const record=flag?{left:value}:{right:value};return Object.hasOwn(record,Symbol.iterator);",
+		],
+		["read", "const record=flag?{left:value}:{right:value};return record.missing;"],
+		[
+			"delete",
+			"const record=flag?{left:value}:{right:value};return delete record.missing;",
+		],
+		[
+			"descriptor",
+			"const record=flag?{left:value}:{right:value};return Object.getOwnPropertyDescriptor(record,'missing');",
+		],
+		[
+			"sparse Array",
+			"const record=flag?[value]:[,value];return Object.hasOwn(record,Symbol.iterator);",
+		],
+		[
+			"unlisted String despite Symbol fields",
+			"const record=flag?{[Symbol.iterator]:value}:{[Symbol.toStringTag]:value};return Object.hasOwn(record,'missing');",
+		],
+		[
+			"nested join",
+			"const record=flag?{left:value}:other?{center:value}:{right:value};return Object.hasOwn(record,'missing');",
+		],
+		[
+			"constructor domains",
+			"const record=flag?new RegExp(value):new String(value);return Object.hasOwn(record,Symbol.iterator);",
+		],
+	] as const;
+	it.each(
+		staticValueCases(
+			folded,
+			([, body], name) =>
+				`function ${name}(value,flag,other){${body}}globalThis.${name}=${name};`,
+		),
+	)("folds %s", (_label, _entry, inspect) => {
+		expect(
+			inspect().core.some(
+				(op) =>
+					op.opcode === "loadPropertyStatic" ||
+					op.opcode === "deleteProperty" ||
+					(op.opcode === "callKnown" &&
+						["Object.hasOwn", "Object.getOwnPropertyDescriptor"].includes(
+							op.attributes.operation as string,
+						)),
+			),
+		).toBe(false);
+	});
+	it.each([
+		[
+			"possible String",
+			"const record=flag?{left:value}:{right:value};return Object.hasOwn(record,'left');",
+		],
+		[
+			"possible Symbol",
+			"const record=flag?{[Symbol.iterator]:value}:{[Symbol.toStringTag]:value};return Object.hasOwn(record,Symbol.iterator);",
+		],
+		[
+			"escape",
+			"const record=flag?{left:value}:{right:value};observe(record);return Object.hasOwn(record,'missing');",
+		],
+		[
+			"unknown input",
+			"const record=flag?value:{right:value};return Object.hasOwn(record,Symbol.iterator);",
+		],
+		[
+			"getter barrier",
+			"const record=flag?{left:value}:{right:value};const reader={get effect(){observe(record)}};reader.effect;return Object.getOwnPropertyDescriptor(record,'missing');",
+		],
+	] as const)("retains %s uncertainty", (_label, body) => {
+		const result = inspectStaticValueFunction(
+			`function probe(value,flag,observe){${body}}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(
+			result.core.some(
+				(op) =>
+					op.opcode === "callKnown" &&
+					["Object.hasOwn", "Object.getOwnPropertyDescriptor"].includes(
+						op.attributes.operation as string,
+					),
+			),
+		).toBe(true);
+	});
+});
+
 describe("own-key absence", () => {
 	const absent = [
 		[

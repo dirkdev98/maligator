@@ -33,6 +33,12 @@ export interface StaticPropertyDescription {
 		  };
 }
 
+export interface StaticUnknownOwnKeys {
+	readonly numeric: boolean;
+	readonly named: ReadonlyArray<string>;
+	readonly symbols: boolean;
+}
+
 export type StaticDescription =
 	| { readonly kind: "undefined" | "null" }
 	| { readonly kind: "boolean"; readonly value: boolean }
@@ -60,18 +66,12 @@ export type StaticDescription =
 			readonly length: number | null;
 			readonly properties: ReadonlyArray<StaticPropertyDescription>;
 			readonly ownKeysComplete?: boolean;
-			readonly unknownOwnKeys?: {
-				readonly numeric: boolean;
-				readonly named: ReadonlyArray<string>;
-			};
+			readonly unknownOwnKeys?: StaticUnknownOwnKeys;
 	  }
 	| {
 			readonly kind: "object";
 			readonly ownKeysComplete?: boolean;
-			readonly unknownOwnKeys?: {
-				readonly numeric: boolean;
-				readonly named: ReadonlyArray<string>;
-			};
+			readonly unknownOwnKeys?: StaticUnknownOwnKeys;
 			readonly prototype: StaticPrototype;
 			readonly properties: ReadonlyArray<StaticPropertyDescription>;
 	  }

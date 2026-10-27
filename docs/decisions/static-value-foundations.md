@@ -27,6 +27,17 @@ edges. Nested data shares descriptions while retaining separate allocation bindi
 `queryAt` replays relevant private initialization and writes up to an observation.
 Unknown writes, escapes, exceptional edges and loops widen contents conservatively.
 SSA joins keep common fields, with a phi discriminator for alternative allocations.
+Incomplete own-key descriptions bound the remaining possibilities by canonical
+numeric Strings, explicit String names, and Symbols. Joins union those bounds and
+retain common descriptors. An omitted bound leaves every unlisted key possible;
+budget exhaustion widens the bound while retaining already proved common fields.
+Key absence, descriptor contents, and allocation identity remain independent facts.
+Joins also retain the union of their inputs' environment dependencies.
+
+Observation walks use primordial data/absence proofs to exclude callbacks from a
+read independently of its result facts. Getters, open Realms, and unproved reads
+retain their effect barriers. The resulting fact records the proof's dependencies.
+
 Private global and captured cells use the existing single-assignment and memory
 analyses. Cross-function forwarding requires a dominating TDZ check, one initializer,
 and an audit of every read for mutations or escapes. The program owns the cell index across function sessions. It refreshes changed

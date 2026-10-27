@@ -21,7 +21,192 @@ import {
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
+function joinedFields({
+	symbol = false,
+	lookup,
+	rightWrapper = false,
+}: { symbol?: boolean; lookup?: string; rightWrapper?: boolean } = {}) {
+	const program = new CoreProgram(coreOpcodeRegistry, {
+		stringConstants: ["shared", "left", "right", "key", lookup ?? ""].map((text) =>
+			[...text].map((c) => c.charCodeAt(0)),
+		),
+	});
+	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+	const entry = builder.createBlock([{}]);
+	const left = builder.createBlock(),
+		right = builder.createBlock(),
+		merge = builder.createBlock([{}]);
+	const [seven] = builder.appendInstruction(entry, "createNumber", [], {
+		attributes: { value: 7 },
+	});
+	const [nil] = builder.appendInstruction(entry, "createUndefined", []);
+	const [text] = builder.appendInstruction(entry, "createString", [], {
+		attributes: { stringIndex: 3 },
+	});
+	const [key] = builder.appendInstruction(entry, "callKnown", [nil!, text!], {
+		attributes: { operation: "Symbol" },
+	});
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition: builder.blockParameterValue(entry, 0),
+		consequent: { block: left, arguments: [] },
+		alternate: { block: right, arguments: [] },
+	});
+	for (const block of [left, right]) {
+		if (rightWrapper && block === right) {
+			const [callee] = builder.appendInstruction(block, "loadIntrinsic", [], {
+				attributes: { intrinsic: "String" },
+			});
+			const [record] = builder.appendInstruction(block, "callKnown", [callee!, text!], {
+				attributes: { operation: "String", construct: true },
+			});
+			builder.setTerminator(block, {
+				kind: "jump",
+				edge: { block: merge, arguments: [record!] },
+			});
+			continue;
+		}
+		const symbolic = symbol && block === left;
+		const [record] = builder.appendInstruction(
+			block,
+			"createObjectShaped",
+			symbolic ? [seven!] : [seven!, seven!],
+			{ attributes: { keyStringIndices: symbolic ? [0] : [0, block === left ? 1 : 2] } },
+		);
+		if (symbolic)
+			builder.appendInstruction(block, "defineProperty", [record!, key!, seven!], {
+				attributes: { enumerable: true },
+			});
+		builder.setTerminator(block, {
+			kind: "jump",
+			edge: { block: merge, arguments: [record!] },
+		});
+	}
+	if (lookup !== undefined) {
+		const [object] = builder.appendInstruction(merge, "loadIntrinsic", [], {
+			attributes: { intrinsic: "Object" },
+		});
+		builder.appendInstruction(merge, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex: 4 },
+		});
+	}
+	const load = builder.bodyInstructionIds(merge).at(-1);
+	const value = builder.blockParameterValue(merge, 0);
+	builder.setTerminator(merge, { kind: "return", value });
+	const fn = program.function(builder.finish(entry).function);
+	const context = programAnalysisContext(false);
+	return {
+		program,
+		fn,
+		value,
+		key: key!,
+		load,
+		consumer: fn.blockTerminator(merge),
+		analysis: (locked = true, limit = 65536, realms = false) =>
+			new CoreStaticValueAnalysis(
+				program,
+				fn,
+				() => buildCoreControlFlow(program, fn.id),
+				limit,
+				{
+					...context,
+					facts: {
+						...context.facts,
+						world: {
+							...context.facts.world,
+							primordialPolicy: locked ? "locked" : "mutable",
+							realms,
+						},
+					},
+				},
+			),
+	};
+}
+
 describe("static descriptions and allocation identities", () => {
+	it.each([false, true])(
+		"keeps possible key domains and common values across a join with Symbols %s",
+		(symbol) => {
+			const f = joinedFields({ symbol }),
+				a = f.analysis(),
+				fact = a.queryAt(f.value, f.consumer);
+			if (fact.kind !== "known") throw new Error("Expected a joined record");
+			expect(fact.identity).toBeUndefined();
+			expect(f.program.staticDescriptions.description(fact.description)).toMatchObject({
+				unknownOwnKeys: {
+					numeric: false,
+					named: symbol ? ["right"] : ["left", "right"],
+					symbols: symbol,
+				},
+			});
+			expect(a.ownProperty(fact, "missing", f.consumer)).toBe("absent");
+			expect(a.ownProperty(fact, "right", f.consumer)).toBeUndefined();
+			expect(a.ownProperty(fact, f.key, f.consumer)).toBe(symbol ? undefined : "absent");
+			const shared = a.queryPropertyAt(f.value, "shared", f.consumer)!;
+			if (shared.member.kind !== "constant")
+				throw new Error("Expected a common constant");
+			expect(a.descriptionConstant(shared.member.description)).toEqual({
+				kind: "number",
+				value: 7,
+			});
+			a.verifyProperty(shared, f.consumer);
+		},
+	);
+	it.each([2, 8, 16, 32, 128])(
+		"never invents key absence when join analysis reaches budget %i",
+		(limit) => {
+			const f = joinedFields(),
+				a = f.analysis(true, limit),
+				fact = a.queryAt(f.value, f.consumer);
+			if (fact.kind === "known")
+				expect(a.ownProperty(fact, "left", f.consumer)).not.toBe("absent");
+			else expect(fact.reason).toBe("work-limit");
+		},
+	);
+	it.each([
+		[true, "getOwnPropertyDescriptor", true],
+		[true, "missing", true],
+		[true, "__proto__", false],
+		[false, "getOwnPropertyDescriptor", false],
+	] as const)(
+		"uses an independent data-read effect proof with locked=%s key=%s",
+		(locked, key, preserved) => {
+			const f = joinedFields({ lookup: key }),
+				a = f.analysis(locked),
+				fact = a.queryAt(f.value, f.consumer);
+			if (fact.kind !== "known") throw new Error("Expected a joined record");
+			expect(a.ownProperty(fact, "missing", f.consumer) === "absent").toBe(preserved);
+			if (preserved) expect(fact.environmentDependencies).toContain("primordials.locked");
+			expect(f.fn.instructionEffectRefinement(f.load!)).toBeUndefined();
+			expect(
+				f.fn.registry.byId(f.fn.instructionOpcode(f.load!)).effects.callsUserCode,
+			).toBe(true);
+		},
+	);
+	it("does not borrow a current-realm read proof when Realm identity is open", () => {
+		const f = joinedFields({ lookup: "getOwnPropertyDescriptor" }),
+			a = f.analysis(true, 65536, true),
+			fact = a.queryAt(f.value, f.consumer);
+		if (fact.kind !== "known") throw new Error("Expected the receiver brand");
+		expect(a.ownProperty(fact, "missing", f.consumer)).toBeUndefined();
+	});
+	it("keeps constructor dependencies when joining them with an independent literal", () => {
+		const f = joinedFields({ rightWrapper: true }),
+			a = f.analysis(),
+			fact = a.queryAt(f.value, f.consumer);
+		if (fact.kind !== "known") throw new Error("Expected a joined record");
+		expect(fact.environmentDependencies).toEqual(
+			expect.arrayContaining(["current-realm", "primordials.locked", "realm.current"]),
+		);
+		expect(f.program.staticDescriptions.description(fact.description)).toMatchObject({
+			unknownOwnKeys: {
+				numeric: true,
+				named: ["left", "length", "shared"],
+				symbols: false,
+			},
+		});
+		expect(a.ownProperty(fact, "missing", f.consumer)).toBe("absent");
+	});
 	it("retains object descriptions across metadata facts and invalidates them for effects and body edits", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });

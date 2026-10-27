@@ -11,10 +11,33 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-it.each(["mutable", "locked"] as const)(
-	"preserves static membership and fallback effects with %s primordials",
-	(primordials) => {
-		const fixture = "tests/local/static-property-membership.mjs";
+const fixtures = [
+	{
+		name: "membership",
+		fixture: "tests/local/static-property-membership.mjs",
+		optimized: [
+			"symbolRead",
+			"cellSymbolRead",
+			"registryCellRead",
+			"capturedCellRead",
+		].map((functionName) => ({ functionName, forbidden: ["LOAD_PROPERTY"] })),
+	},
+	{
+		name: "joined key bounds",
+		fixture: "tests/local/joined-object-key-bounds.mjs",
+		optimized: ["joinedMissing", "joinedDescriptor"].map((functionName) => ({
+			functionName,
+			forbidden: ["CALL", "CALL_KNOWN"],
+		})),
+	},
+];
+it.each(
+	fixtures.flatMap((fixture) =>
+		(["mutable", "locked"] as const).map((primordials) => ({ ...fixture, primordials })),
+	),
+)(
+	"preserves $name with $primordials primordials",
+	({ fixture, name, optimized, primordials }) => {
 		const environment = { MAL_PRIMORDIALS: primordials };
 		const expected = execFileSync(process.execPath, ["--expose-gc", fixture], {
 			encoding: "utf8",
@@ -24,7 +47,7 @@ it.each(["mutable", "locked"] as const)(
 		try {
 			const pair = buildBackendPairFromOneProgramImage({
 				fixture,
-				name: "membership",
+				name,
 				mainFile: HOST_MAIN,
 				outDir: directory,
 				config: resolveBuildConfig({
@@ -34,22 +57,17 @@ it.each(["mutable", "locked"] as const)(
 				nativeStackRoots: "precise",
 			});
 			if (primordials === "locked") {
-				for (const name of [
-					"symbolRead",
-					"cellSymbolRead",
-					"registryCellRead",
-					"capturedCellRead",
-				]) {
+				for (const { functionName, forbidden } of optimized) {
 					const index = pair.programImage.runtime.functions.findIndex(
 						(fn) =>
 							String.fromCharCode(
 								...(pair.programImage.runtime.stringConstants[fn.nameStringIndex] ?? []),
-							) === name,
+							) === functionName,
 					);
 					expect(index).toBeGreaterThanOrEqual(0);
 					expect(
-						pair.programImage.runtime.functions[index]!.instructions.some(
-							(instruction) => instruction.opcode === "LOAD_PROPERTY",
+						pair.programImage.runtime.functions[index]!.instructions.some((instruction) =>
+							forbidden.includes(instruction.opcode),
 						),
 					).toBe(false);
 				}
