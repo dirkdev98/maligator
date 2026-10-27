@@ -117,6 +117,7 @@
 				"src/compiler/core/core-call-graph.ts",
 				"src/compiler/core/core-class-layouts.ts",
 				"src/compiler/core/core-compilation.ts",
+				"src/compiler/core/core-conditional-value-kinds.ts",
 				"src/compiler/core/core-constructor-layout.ts",
 				"src/compiler/core/core-control-flow-passes.ts",
 				"src/compiler/core/core-cross-call-transforms.ts",
