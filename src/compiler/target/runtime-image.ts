@@ -1896,9 +1896,18 @@ export function validateVmSafepointRootMaps(definition: RuntimeImage): void {
 				previousRegister = register;
 			}
 			previousRegister = -1;
-			const roots = new Set(safepoint.rootRegisters);
+			let rootIndex = 0;
 			for (const register of safepoint.clearRegisters ?? []) {
-				if (!roots.has(register) || register <= previousRegister) {
+				while (
+					rootIndex < safepoint.rootRegisters.length &&
+					safepoint.rootRegisters[rootIndex]! < register
+				)
+					rootIndex++;
+				if (
+					rootIndex === safepoint.rootRegisters.length ||
+					safepoint.rootRegisters[rootIndex] !== register ||
+					register <= previousRegister
+				) {
 					throw new RangeError("invalid VM safepoint clear register");
 				}
 				previousRegister = register;

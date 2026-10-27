@@ -862,6 +862,8 @@ function verifyGcRoots(
 	const recordedBackedges = new Set<CompilerInstruction>();
 	const recordedOrigins = new Set<number>();
 	const covered = new Set<number>();
+	const rootStamps = new Uint32Array(fn.registerCount);
+	let rootStamp = 0;
 	for (const safepoint of fn.gc.safepoints) {
 		const { instruction, rootRegisters } = safepoint;
 		const site = model.sites.get(instruction);
@@ -877,7 +879,7 @@ function verifyGcRoots(
 			});
 		}
 		safepoints.add(instruction);
-		const unique = new Set<number>();
+		rootStamp++;
 		const context = (register: number): ExecutionVerificationContext => ({
 			functionIndex,
 			block: site.block,
@@ -899,9 +901,9 @@ function verifyGcRoots(
 			if (!isRooted(fn, register)) {
 				fail("GC root register must carry a traced value", context(register));
 			}
-			if (unique.has(register))
+			if (rootStamps[register] === rootStamp)
 				fail("GC root register is listed twice", context(register));
-			unique.add(register);
+			rootStamps[register] = rootStamp;
 		}
 		if (safepoint.kind === "loop-backedge") {
 			if (!expectedBackedges.has(instruction)) {

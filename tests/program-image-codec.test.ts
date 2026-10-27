@@ -910,8 +910,8 @@ describe("program-image-codec", () => {
 			{
 				...mainFn,
 				gcSafepoints: [
-					{ instructionIp: 0, rootRegisters: [0, 3] },
-					{ instructionIp: 27, rootRegisters: [5, 10, 11] },
+					{ instructionIp: 0, rootRegisters: [0, 3], clearRegisters: [3] },
+					{ instructionIp: 27, rootRegisters: [5, 10, 11], clearRegisters: [5, 11] },
 				],
 			},
 		]);
@@ -931,6 +931,32 @@ describe("program-image-codec", () => {
 			"invalid VM safepoint root register",
 		);
 	});
+
+	it.each([
+		{ roots: [3, 5, 10], cleared: [0] },
+		{ roots: [3, 5, 10], cleared: [4] },
+		{ roots: [3, 5, 10], cleared: [11] },
+		{ roots: [3, 5, 10], cleared: [3, 3] },
+		{ roots: [3, 5, 10], cleared: [10, 5] },
+		{ roots: [3, 5, 10], cleared: [NaN] },
+		{ roots: [3, 5, 10], cleared: [3.5] },
+		{ roots: [], cleared: [3] },
+	])(
+		"rejects portable cleared roots $cleared outside the sorted root subset $roots",
+		({ roots, cleared }) => {
+			const malformed = withBytecodeFunctions(definition, [
+				{
+					...mainFn,
+					gcSafepoints: [
+						{ instructionIp: 0, rootRegisters: roots, clearRegisters: cleared },
+					],
+				},
+			]);
+			expect(() => serializeCompilerArtifact(malformed)).toThrow(
+				"invalid VM safepoint clear register",
+			);
+		},
+	);
 
 	it("round-trips and validates tagged direct-builtin operands", () => {
 		const call: BytecodeInstruction = {
