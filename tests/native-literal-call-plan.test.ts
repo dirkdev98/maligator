@@ -11,6 +11,7 @@ import {
 } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
+import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function mathImage() {
 	return compileSemanticProgramToProgramImage(
@@ -65,6 +66,40 @@ function propertyImage(key: string) {
 }
 
 describe("persisted literal and Math call choices", () => {
+	it.each([
+		"console.log(value)",
+		"globalThis.console.log(value)",
+		"(()=>{const target=console;return target.log(value)})()",
+		"JSON.log(value)",
+	])("declines unrelated namespace guesses for %s", (expression) => {
+		for (const locked of [false, true]) {
+			const out = inspectStaticValueFunction(
+				`function probe(value){return ${expression};}globalThis.probe=probe;`,
+				"probe",
+				{ locked },
+			);
+			expect(out.native.storage!.mathCalls).toEqual([]);
+			expect(out.native.body.instructions.some((op) => op.opcode === "CALL")).toBe(true);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		}
+	});
+
+	it.each(["Math.log(value)", "target.log(value)"])(
+		"keeps a loaded-callee guard when %s remains a useful candidate",
+		(expression) => {
+			const out = inspectStaticValueFunction(
+				`function probe(value,target){return ${expression};}globalThis.probe=probe;`,
+				"probe",
+				{ locked: false },
+			);
+			expect(out.native.storage!.mathCalls.map((plan) => plan.operation)).toEqual([
+				"Math.log",
+			]);
+		},
+	);
+
 	it.each(["field", "", "01", "4294967295"])(
 		"round-trips and rebases non-index key %s",
 		(key) => {

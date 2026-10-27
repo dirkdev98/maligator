@@ -10,7 +10,7 @@ import {
 	CORE_NO_EFFECTS,
 	CORE_SUPER_THIS_STATE_KEY,
 } from "../src/compiler/core/core-ir.ts";
-import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
+import type { CoreAttributeValue, CoreValueId } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
@@ -18,8 +18,10 @@ import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
+import { builtinOperationDescriptor } from "../src/compiler/shared/builtin-registry.ts";
 import {
 	compilerProgramFactsFromConfig,
+	knownFact,
 	conservativeCompilerProgramFacts,
 	programClosureCertificate,
 	withProgramClosure,
@@ -93,6 +95,64 @@ function optimizedClosedModule(source: string, sourcePath: string): CoreProgram 
 }
 
 describe("Core local canonicalization", () => {
+	it("withdraws an inherited Math guess after the receiver resolves to another namespace", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: ["console", "log"].map((text) =>
+				[...text].map((unit) => unit.charCodeAt(0)),
+			),
+		});
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const value = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const [receiver] = builder.appendInstruction(entry, "loadGlobalProperty", [], {
+			attributes: { nameStringIndex: 0 },
+		});
+		const [callee] = builder.appendInstruction(entry, "loadPropertyStatic", [receiver!], {
+			attributes: { stringIndex: 1 },
+		});
+		const descriptor = builtinOperationDescriptor("Math.log")!;
+		const proof = {
+			scope: { kind: "function", id: builder.functionId },
+			dependencies: [{ kind: "world", fact: "primordials.locked" }],
+			obligations: [
+				{ kind: "fallback", id: "inherited-math-guess", cause: "loaded-callee" },
+			],
+			origin: "guarded-builtin-site-analysis",
+		} as const;
+		const [result] = builder.appendInstruction(
+			entry,
+			"call",
+			[callee!, receiver!, value],
+			{
+				attributes: {
+					knownBuiltinCall: {
+						operation: descriptor.id,
+						identity: knownFact(descriptor.id, proof),
+						semantics: knownFact(
+							{
+								effects: descriptor.effects,
+								result: descriptor.result,
+								lowerings: descriptor.lowerings,
+							},
+							proof,
+						),
+					} as unknown as CoreAttributeValue,
+				},
+			},
+		);
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const id = builder.finish(entry).function;
+		const fn = optimizeCore(
+			{ program, context: lockedMathContext },
+			{ verification: "per-pass" },
+		).compilation.program.function(id);
+		const call = [...fn.instructionIds()].find(
+			(instruction) => fn.instructionOpcodeName(instruction) === "call",
+		);
+		expect(call).toBeDefined();
+		expect(fn.instructionAttributes(call!).knownBuiltinCall).toBeUndefined();
+	});
+
 	for (const representation of ["boolean", "string", "i32", "f64", "boxed"] as const) {
 		it.each(["===", "!==", "==", "!="])(
 			`folds ${representation} self-comparison %s only when NaN is excluded`,

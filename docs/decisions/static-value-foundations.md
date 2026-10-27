@@ -76,6 +76,10 @@ nullable Object/weak-value unions. Object bounds do not promise a fresh allocati
 an Array brand or a noncallable value. Protocol-delegating methods keep arbitrary
 results unless the full invocation contract bounds their completion; conditional
 specialization descriptors do not establish unconditional result kinds.
+Guarded builtin admission uses namespace provenance to decline unrelated static
+method guesses, such as proposing Math for a console method. This is a cost hint,
+not an immutable-callee proof: property loads, getters, replacements and generic
+dispatch remain observable. Rewritten receivers withdraw incompatible prior guesses.
 
 Known-call specialization reuses existing target/effect summaries and candidate
 budgets. A non-inlined helper can consume a complete private array/object description

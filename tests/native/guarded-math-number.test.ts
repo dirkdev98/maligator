@@ -65,6 +65,44 @@ it("runs patched and unpatched mutable Math callees through the callee guard", (
 	}
 }, 300_000);
 
+it.each(["locked", "mutable"] as const)(
+	"keeps console dispatch mutable without a Math guess with %s primordials",
+	(primordials) => {
+		const fixture = "tests/local/console-callee-collision.mjs";
+		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-console-callee-"));
+		try {
+			const expected = execFileSync(process.execPath, ["--expose-gc", fixture], {
+				encoding: "utf8",
+			});
+			const { compiled, interpreted, programImage } = buildBackendPairFromOneProgramImage(
+				{
+					fixture,
+					name: `console-callee-${primordials}`,
+					outDir,
+					config: resolveBuildConfig({ engine: { primordials } }),
+				},
+			);
+			for (const name of ["write", "writeGlobal", "writeArgument"]) {
+				const index = programImage.runtime.functions.findIndex(
+					(fn) =>
+						String.fromCharCode(
+							...(programImage.runtime.stringConstants[fn.nameStringIndex] ?? []),
+						) === name,
+				);
+				expect(index).toBeGreaterThanOrEqual(0);
+				expect(programImage.native.functions[index]!.storage!.mathCalls).toEqual([]);
+			}
+			for (const binary of [compiled, interpreted]) {
+				expect(runToStdout(binary)).toBe(expected);
+				expect(runToStdout(binary, { env: STRESS_ENV })).toBe(expected);
+			}
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	},
+	300_000,
+);
+
 it("preserves generic observations when a restored integer fusion takes either fallback", () => {
 	const fixture = "tests/local/truncating-integer-fallback.mjs";
 	const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-integer-fallback-"));

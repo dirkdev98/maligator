@@ -4,6 +4,7 @@ import {
 	builtinNormalResultKinds,
 	exactBuiltinCallDescriptor,
 	mathUnaryOperationKeys,
+	primordialNode,
 } from "../shared/builtin-registry.ts";
 import {
 	compilerFactIsWorldInvariant,
@@ -740,6 +741,39 @@ function decodeString(program: CoreProgram, index: number): string | undefined {
 		: program.stringConstantText(index);
 }
 
+// Namespace names rank guesses; they do not certify mutable property values.
+function builtinNamespaceHint(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	root: (value: CoreValueId) => CoreValueId,
+	budget = 4,
+): string | undefined {
+	if (budget === 0) return undefined;
+	const definition = definingInstruction(fn, root(value));
+	if (definition === undefined) return undefined;
+	const opcode = fn.instructionOpcodeName(definition);
+	const attributes = fn.instructionAttributes(definition);
+	if (opcode === "loadIntrinsic")
+		return typeof attributes.intrinsic === "string" ? attributes.intrinsic : undefined;
+	let index: unknown;
+	if (opcode === "loadGlobalProperty") index = attributes.nameStringIndex;
+	else if (opcode === "loadPropertyStatic") {
+		const base = instructionOperand(fn, definition, 0);
+		if (
+			base === undefined ||
+			builtinNamespaceHint(program, fn, base, root, budget - 1) !== "globalThis"
+		)
+			return undefined;
+		index = attributes.stringIndex;
+	}
+	if (typeof index !== "number") return undefined;
+	const name = decodeString(program, index);
+	return name === undefined
+		? undefined
+		: (primordialNode(name) ?? primordialNode(`globalThis.${name}`))?.[0];
+}
+
 function builtinSourceSite(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
@@ -1002,7 +1036,7 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				if (edgeUses[result] === 0) editor.setValueRepresentation(result, "f64");
 				continue;
 			}
-			const existingKnownBuiltinCall =
+			let existingKnownBuiltinCall =
 				fn.instructionAttributes(instruction).knownBuiltinCall;
 			const previousBuiltinOperation = (
 				existingKnownBuiltinCall as { readonly operation?: unknown } | undefined
@@ -1030,12 +1064,39 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				];
 			if (typeof stringIndex !== "number") continue;
 			const key = decodeString(program, stringIndex);
-			const candidates =
+			const namedCandidates =
 				key === undefined
 					? []
 					: (BUILTIN_OPERATIONS_BY_KEY.get(key) ?? []).filter(
 							(candidate) => !globalCall || candidate.owner === "globalThis",
 						);
+			const namespace =
+				!globalCall && namedCandidates.some((candidate) => candidate.receiver === "none")
+					? builtinNamespaceHint(program, fn, receiverRoot, root)
+					: undefined;
+			const namespaceCompatible = (candidate: (typeof builtinOperations)[number]) =>
+				namespace === undefined ||
+				candidate.receiver !== "none" ||
+				candidate.owner === namespace;
+			const candidates = namedCandidates.filter(namespaceCompatible);
+			const previousDescriptor =
+				typeof previousBuiltinOperation === "string"
+					? builtinOperationDescriptor(previousBuiltinOperation)
+					: undefined;
+			if (
+				previousDescriptor !== undefined &&
+				(!namespaceCompatible(previousDescriptor) || previousDescriptor.key !== key)
+			) {
+				const attributes = { ...fn.instructionAttributes(instruction) };
+				delete attributes.knownBuiltinCall;
+				editor ??= CoreEditor.open(program, item.function);
+				editor.replaceInstruction(instruction, "call", inputs, {
+					attributes,
+					sourcePosition: fn.instructionSourcePosition(instruction),
+					effectRefinement: fn.instructionEffectRefinement(instruction),
+				});
+				existingKnownBuiltinCall = undefined;
+			}
 			const booleanReceiver = () =>
 				(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).scalarKind(
 					receiverRoot,
