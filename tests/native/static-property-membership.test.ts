@@ -14,6 +14,11 @@ import {
 
 const fixtures = [
 	{
+		name: "builtin result bounds",
+		fixture: "tests/local/builtin-result-bounds.mjs",
+		optimized: [],
+	},
+	{
 		name: "object predicate results",
 		fixture: "tests/local/object-predicate-results.mjs",
 		optimized: [],

@@ -47,6 +47,40 @@ const predicates = new Set([
 	"Number.isInteger",
 	"Number.isSafeInteger",
 ]);
+const deterministicPrimitiveOperations = new Set([
+	...predicates,
+	"Number",
+	"Boolean",
+	"String",
+	"BigInt",
+	"parseInt",
+	"parseFloat",
+	"isNaN",
+	"isFinite",
+	"encodeURI",
+	"encodeURIComponent",
+	"decodeURI",
+	"decodeURIComponent",
+	"escape",
+	"unescape",
+	"globalThis.escape",
+	"globalThis.unescape",
+	"Number.parseInt",
+	"Number.parseFloat",
+	"BigInt.asIntN",
+	"BigInt.asUintN",
+	"String.fromCharCode",
+	"String.fromCodePoint",
+	"Symbol.keyFor",
+	// A successful registry lookup fixes this primitive key's Symbol identity permanently.
+	"Symbol.for",
+	"Object.is",
+	"Object.prototype.hasOwnProperty",
+	"Object.prototype.propertyIsEnumerable",
+	"Object.prototype.isPrototypeOf",
+	"Object.prototype.toString",
+	"Array.isArray",
+]);
 const variadic = new Set([
 	"Math.min",
 	"Math.max",
@@ -126,37 +160,27 @@ const nonthrowingStrings = new Set([
 ]);
 
 function candidate(operation: string): boolean {
-	// Result kinds alone do not prove stable host reads or immutable collection state.
+	// Only these families have argument, receiver and repeatability rules below.
 	if (
-		operation.startsWith("Date.") ||
-		operation.startsWith("Map.prototype.") ||
-		operation.startsWith("Set.prototype.") ||
-		operation.startsWith("Array.prototype.") ||
-		operation.startsWith("DataView.prototype.") ||
-		operation.startsWith("Reflect.") ||
-		(operation.startsWith("Object.") &&
-			!operation.startsWith("Object.prototype.") &&
-			operation !== "Object.is")
+		immutableReceiverMethods.has(operation) ||
+		deterministicPrimitiveOperations.has(operation)
 	)
-		return false;
+		return true;
+	if (operation.startsWith("Math."))
+		return (
+			operation !== "Math.random" &&
+			operation !== "Math.sumPrecise" &&
+			builtinPrimitiveResult(operation) === "number"
+		);
 	return (
-		operation !== "Date" &&
-		operation !== "Math.random" &&
-		operation !== "Math.sumPrecise" &&
-		operation !== "String.raw" &&
+		operation.startsWith("String.prototype.") &&
 		(!operation.includes("toLocale") || localeCaseOperations.has(operation)) &&
 		!operation.endsWith("localeCompare") &&
-		(immutableReceiverMethods.has(operation) ||
-			// A successful registry lookup fixes this primitive key's Symbol identity permanently.
-			operation === "Symbol.for" ||
-			(builtinPrimitiveResult(operation) !== undefined &&
-				builtinPrimitiveResult(operation) !== "symbol") ||
+		(builtinPrimitiveResult(operation) !== undefined ||
 			[
 				"String.prototype.replace",
 				"String.prototype.replaceAll",
 				"String.prototype.split",
-				"globalThis.escape",
-				"globalThis.unescape",
 			].includes(operation))
 	);
 }

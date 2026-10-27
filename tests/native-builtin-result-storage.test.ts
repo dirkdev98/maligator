@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { COMPILER_INT32_RANGE } from "../src/compiler/shared/integer-range.ts";
 import {
@@ -83,6 +86,47 @@ describe("SameValue hit and fallback contracts", () => {
 });
 
 describe("catalogued primitive builtin result storage", () => {
+	it.each([
+		[
+			"RegExp.prototype.global<get>",
+			'Object.getOwnPropertyDescriptor(RegExp.prototype,"global").get.call(input)',
+			COMPILER_VALUE_KIND_BOOLEAN | COMPILER_VALUE_KIND_UNDEFINED,
+			false,
+		],
+		[
+			"JSON.stringify",
+			"JSON.stringify(input,other)",
+			COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_UNDEFINED,
+			true,
+		],
+		[
+			"Atomics.load",
+			"Atomics.load(input,other)",
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BIGINT,
+			true,
+		],
+	] as const)(
+		"preserves %s result unions and their heap requirements",
+		(operation, expression, mask, rooted) => {
+			const out = inspectStaticValueFunction(
+				`function compute(input,other,observe){const result=${expression};observe();return result;}globalThis.compute=compute;`,
+				"compute",
+				{ stackRoots: "precise" },
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "CALL_KNOWN" && op.operation === operation,
+			);
+			const call = out.native.body.instructions[ip]!;
+			if (call?.opcode !== "CALL_KNOWN") throw new Error("Missing exact builtin call");
+			expect(out.native.facts?.[ip]?.resultKindMasks).toEqual([mask]);
+			expect(out.native.registerRepresentations[call.dst]).toBe("boxed");
+			expect(out.native.storage!.rootRegisters.includes(call.dst)).toBe(rooted);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
 	it("selects predicates independently for boxed canonical and typed Number entries", () => {
 		const out = inspectStaticValueFunction(
 			"function compute(input){return Number.isFinite(input);}globalThis.compute=compute;",

@@ -3,6 +3,7 @@ import {
 	builtinResultIsInt32,
 	builtinPreservesIntegerInput,
 } from "../shared/builtin-registry.ts";
+import type { BuiltinPrimitiveResult } from "../shared/builtin-registry.ts";
 import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_BIGINT,
@@ -96,9 +97,11 @@ const BUILTIN_RESULT_KIND_MASKS = {
 	boolean: COMPILER_VALUE_KIND_BOOLEAN,
 	bigint: COMPILER_VALUE_KIND_BIGINT,
 	symbol: COMPILER_VALUE_KIND_SYMBOL,
+	"boolean-or-undefined": COMPILER_VALUE_KIND_BOOLEAN | COMPILER_VALUE_KIND_UNDEFINED,
+	"number-or-bigint": COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BIGINT,
 	"number-or-undefined": COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED,
 	"string-or-undefined": COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_UNDEFINED,
-};
+} satisfies Record<BuiltinPrimitiveResult, CompilerValueKindMask>;
 
 export const CORE_PRIMITIVE_OPERATOR_EFFECT_FACT = "primitive-operator-effects";
 

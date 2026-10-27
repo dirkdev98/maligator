@@ -994,6 +994,8 @@ export type BuiltinPrimitiveResult =
 	| "boolean"
 	| "bigint"
 	| "symbol"
+	| "boolean-or-undefined"
+	| "number-or-bigint"
 	| "number-or-undefined"
 	| "string-or-undefined";
 
@@ -1085,6 +1087,9 @@ for (const [owner, result, methods] of [
 	],
 	["Object.prototype", "string", ["toString"]],
 	["Object", "boolean", ["isExtensible", "isFrozen", "isSealed"]],
+	["Function.prototype", "string", ["toString"]],
+	["Function.prototype", "boolean", ["[%Symbol.hasInstance%]"]],
+	["Error.prototype", "string", ["toString"]],
 	[
 		"Reflect",
 		"boolean",
@@ -1147,9 +1152,126 @@ for (const [owner, result, methods] of [
 	["String.prototype", "boolean", ["includes", "startsWith", "endsWith", "isWellFormed"]],
 	["String.prototype", "string-or-undefined", ["at"]],
 	["String.prototype", "number-or-undefined", ["codePointAt"]],
+	["Array.prototype", "boolean", ["includes"]],
+	["Array.prototype", "number", ["indexOf", "lastIndexOf", "push", "unshift"]],
+	["Array.prototype", "string", ["join", "toLocaleString"]],
+	["ArrayBuffer", "boolean", ["isView"]],
+	["ArrayBuffer.prototype", "number", ["byteLength<get>", "maxByteLength<get>"]],
+	["ArrayBuffer.prototype", "boolean", ["detached<get>", "resizable<get>"]],
+	["SharedArrayBuffer.prototype", "number", ["byteLength<get>", "maxByteLength<get>"]],
+	["SharedArrayBuffer.prototype", "boolean", ["growable<get>"]],
+	["DataView.prototype", "number", ["byteLength<get>", "byteOffset<get>"]],
+	// The captured shared TypedArray prototype is first reached through Int8Array.
+	["Int8Array.prototype.[[Prototype]]", "boolean", ["every", "some", "includes"]],
+	[
+		"Int8Array.prototype.[[Prototype]]",
+		"number",
+		[
+			"byteLength<get>",
+			"byteOffset<get>",
+			"length<get>",
+			"indexOf",
+			"lastIndexOf",
+			"findIndex",
+			"findLastIndex",
+		],
+	],
+	["Int8Array.prototype.[[Prototype]]", "string", ["join", "toLocaleString"]],
+	["Map.prototype", "number", ["size<get>"]],
+	["Set.prototype", "number", ["size<get>"]],
+	["WeakMap.prototype", "boolean", ["has", "delete"]],
+	["WeakSet.prototype", "boolean", ["has", "delete"]],
+	["FinalizationRegistry.prototype", "boolean", ["unregister"]],
+	["Iterator.prototype", "boolean", ["every", "some"]],
+	[
+		"Date.prototype",
+		"number",
+		[
+			"valueOf",
+			"getTime",
+			"getFullYear",
+			"getUTCFullYear",
+			"getMonth",
+			"getUTCMonth",
+			"getDate",
+			"getUTCDate",
+			"getDay",
+			"getUTCDay",
+			"getHours",
+			"getUTCHours",
+			"getMinutes",
+			"getUTCMinutes",
+			"getSeconds",
+			"getUTCSeconds",
+			"getMilliseconds",
+			"getUTCMilliseconds",
+			"getTimezoneOffset",
+			"getYear",
+			"setTime",
+			"setMilliseconds",
+			"setUTCMilliseconds",
+			"setSeconds",
+			"setUTCSeconds",
+			"setMinutes",
+			"setUTCMinutes",
+			"setHours",
+			"setUTCHours",
+			"setDate",
+			"setUTCDate",
+			"setMonth",
+			"setUTCMonth",
+			"setFullYear",
+			"setUTCFullYear",
+			"setYear",
+		],
+	],
+	[
+		"Date.prototype",
+		"string",
+		[
+			"toString",
+			"toDateString",
+			"toTimeString",
+			"toUTCString",
+			"toGMTString",
+			"toISOString",
+			"toLocaleString",
+			"toLocaleDateString",
+			"toLocaleTimeString",
+		],
+	],
+	["RegExp.prototype", "boolean", ["test"]],
+	["RegExp.prototype", "string", ["toString", "flags<get>", "source<get>"]],
+	[
+		"RegExp.prototype",
+		"boolean-or-undefined",
+		[
+			"dotAll<get>",
+			"global<get>",
+			"hasIndices<get>",
+			"ignoreCase<get>",
+			"multiline<get>",
+			"sticky<get>",
+			"unicode<get>",
+			"unicodeSets<get>",
+		],
+	],
+	["JSON", "string-or-undefined", ["stringify"]],
+	["JSON", "boolean", ["isRawJSON"]],
+	["Atomics", "boolean", ["isLockFree"]],
+	["Atomics", "number", ["notify"]],
+	["Atomics", "string", ["wait"]],
+	[
+		"Atomics",
+		"number-or-bigint",
+		["add", "and", "compareExchange", "exchange", "load", "or", "store", "sub", "xor"],
+	],
 ] as const) {
 	for (const method of methods)
-		primitiveResults.set(owner === "" ? method : `${owner}.${method}`, result);
+		primitiveResults.set(
+			owner === "" ? method : `${owner}${method.startsWith("[") ? "" : "."}${method}`,
+			result,
+		);
 }
 
 primitiveResults.set("Symbol.prototype[%Symbol.toPrimitive%]", "symbol");

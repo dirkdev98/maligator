@@ -2203,9 +2203,11 @@ export class CoreStaticValueAnalysis {
 				if (stringResult !== undefined) return stringResult;
 				const primitiveBrand = builtinPrimitiveResult(canonical);
 				if (
-					primitiveBrand !== undefined &&
-					primitiveBrand !== "number-or-undefined" &&
-					primitiveBrand !== "string-or-undefined"
+					primitiveBrand === "number" ||
+					primitiveBrand === "string" ||
+					primitiveBrand === "boolean" ||
+					primitiveBrand === "bigint" ||
+					primitiveBrand === "symbol"
 				)
 					return immutableStaticValue(
 						value,

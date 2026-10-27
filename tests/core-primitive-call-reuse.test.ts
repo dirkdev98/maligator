@@ -79,6 +79,13 @@ it("retains hasOwn checks around mutation despite their Boolean results", () => 
 	expect(calls(result, "Object.hasOwn")).toHaveLength(2);
 });
 
+it("retains JSON replacer invocations when their primitive inputs match", () => {
+	const result = inspect(
+		"const first=JSON.stringify(17,y);const second=JSON.stringify(17,z);return[first,second];",
+	);
+	expect(calls(result, "JSON.stringify")).toHaveLength(2);
+});
+
 for (const [operation, method, args] of methods) {
 	describe(operation, () => {
 		it("reuses an immutable receiver slot across an effectful call", () => {
