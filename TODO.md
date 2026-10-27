@@ -149,6 +149,9 @@ The independent target boundary and current storage contract are recorded in
       resumable bodies. Frameless admission also rejects Array-only reads that
       cannot hit. Generic helpers retain key coercion, prototype accessors,
       strict-write errors and GC publication independently of receiver bounds.
+      Grouped own-slot read pairs, read regions, numeric projections, updates and
+      number-record regions also reject receivers whose bounds exclude Object;
+      unknown and Object-containing bounds retain their guarded admission.
 - [ ] Give record entries typed fields. Program value-kind flow now carries initial
       own-field kind summaries through exact call chains, finite callee sets,
       recursive forwarding, spread/rest and constructor completions. Field-only

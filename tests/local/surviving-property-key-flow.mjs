@@ -49,6 +49,37 @@ function primitiveMembership(flag, key, observe) {
 	const receiver = primitivePropertyReceiver(flag, observe);
 	return key in receiver;
 }
+function primitivePropertyPair(flag, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	const a = receiver.__mal_receiver_probe;
+	const b = receiver.__mal_receiver_probe;
+	return [a, b];
+}
+function primitivePropertyRegion(flag, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	const a = receiver.__mal_receiver_probe;
+	const b = receiver.__mal_receiver_probe;
+	const c = receiver.__mal_receiver_probe;
+	return [a, b, c];
+}
+function primitivePropertyProjection(flag, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	return receiver.__mal_receiver_probe + receiver.__mal_receiver_probe;
+}
+function primitiveNumberRecord(flag, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	return (
+		receiver.__mal_receiver_probe +
+		receiver.__mal_receiver_probe +
+		receiver.__mal_receiver_probe +
+		receiver.__mal_receiver_probe +
+		receiver.__mal_receiver_probe
+	);
+}
+function primitiveNumericUpdate(flag, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	return receiver.__mal_receiver_numeric++;
+}
 function indexedPrimitiveWrite(flag, key, makeValue, observe) {
 	const receiver = primitivePropertyReceiver(flag, observe);
 	return (receiver[key] = makeValue());
@@ -62,6 +93,11 @@ Object.assign(globalThis, {
 	namedPrimitiveWrite,
 	indexedPrimitiveRead,
 	primitiveMembership,
+	primitivePropertyPair,
+	primitivePropertyRegion,
+	primitivePropertyProjection,
+	primitiveNumberRecord,
+	primitiveNumericUpdate,
 	indexedPrimitiveWrite,
 	suspendedPrimitiveWrite,
 });
@@ -272,6 +308,12 @@ function setPrimitiveProperty(value) {
 		throw new Error("primitive setter receiver or value root");
 	receivedValue = value;
 }
+function setPrimitiveNumericProperty(value) {
+	propertyEvents.push(`numeric:${typeof this}:${value}`);
+	collectGarbage?.();
+	if (typeof this !== "number" || this !== 42 || value !== 43)
+		throw new Error("primitive numeric update receiver or value");
+}
 const receiverKey = Symbol("primitive receiver key");
 const installations = [
 	[
@@ -286,6 +328,12 @@ const installations = [
 		{ get: getPrimitiveProperty, set: setPrimitiveProperty },
 	],
 	[String.prototype, "__mal_receiver_probe", { get: getPrimitiveProperty }],
+	[
+		Number.prototype,
+		"__mal_receiver_numeric",
+		{ get: getPrimitiveProperty, set: setPrimitiveNumericProperty },
+	],
+	[String.prototype, "__mal_receiver_numeric", { get: getPrimitiveProperty }],
 ];
 if (mutable)
 	for (const [prototype, key, descriptor] of installations)
@@ -316,6 +364,30 @@ try {
 					throw new Error("primitive membership coerced its key");
 				propertyEvents.push("in:TypeError");
 			}
+		}
+		for (const read of [
+			globalThis.primitivePropertyPair,
+			globalThis.primitivePropertyRegion,
+		]) {
+			const values = read(flag, observeProperty);
+			collectGarbage?.();
+			if (
+				!values.every((value) => value === values[0]) ||
+				typeof values[0] !== (mutable ? (flag ? "string" : "number") : "undefined")
+			)
+				throw new Error("primitive grouped property reads");
+			rows.push(values);
+		}
+		rows.push(globalThis.primitivePropertyProjection(flag, observeProperty));
+		rows.push(globalThis.primitiveNumberRecord(flag, observeProperty));
+		try {
+			const previous = globalThis.primitiveNumericUpdate(flag, observeProperty);
+			if (!mutable || flag || previous !== 42)
+				throw new Error("primitive numeric update");
+			rows.push(previous);
+		} catch (error) {
+			if ((mutable && !flag) || !(error instanceof TypeError)) throw error;
+			propertyEvents.push("update:TypeError");
 		}
 		for (const write of [
 			() => globalThis.namedPrimitiveWrite(flag, makePropertyValue, observeProperty),

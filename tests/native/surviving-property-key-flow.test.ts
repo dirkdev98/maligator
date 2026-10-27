@@ -47,6 +47,11 @@ it.each(["mutable", "locked"] as const)(
 				["namedPrimitiveWrite", "STORE_PROPERTY_STATIC"],
 				["indexedPrimitiveRead", "LOAD_PROPERTY"],
 				["primitiveMembership", "BINARY"],
+				["primitivePropertyPair", "LOAD_PROPERTY_STATIC"],
+				["primitivePropertyRegion", "LOAD_PROPERTY_STATIC"],
+				["primitivePropertyProjection", "LOAD_PROPERTY_STATIC"],
+				["primitiveNumberRecord", "LOAD_PROPERTY_STATIC"],
+				["primitiveNumericUpdate", "LOAD_PROPERTY_STATIC"],
 				["indexedPrimitiveWrite", "STORE_PROPERTY"],
 				["suspendedPrimitiveWrite", "STORE_PROPERTY"],
 			]) {
@@ -76,6 +81,14 @@ it.each(["mutable", "locked"] as const)(
 				expect(instructionInputKind(fn.facts?.[ip], receiver)).toBe(
 					COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
 				);
+				for (const plans of [
+					fn.storage!.propertyReadPairs,
+					fn.storage!.propertyReadRegions,
+					fn.storage!.propertyProjections,
+					fn.storage!.propertyNumericUpdates,
+					fn.storage!.numberRecordRegions,
+				])
+					expect(plans, name).toEqual([]);
 			}
 			for (const name of ["conditionalKey", "conditionalProtoKey", "liveInitializer"]) {
 				const fn = pair.programImage.native.functions.find(

@@ -1,9 +1,11 @@
 import { ARRAY_INITIALIZATION_LIMITS } from "../shared/array-initialization.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_TOP,
 	compilerBuiltinInputKindsAreValid,
 } from "../shared/compiler-value-kinds.ts";
+import { instructionInputKind } from "../shared/instruction-facts.ts";
 import { bytecodeLoopInstructions } from "./bytecode-loops.ts";
 import { selectNativeStringTransform } from "./lower-native-string-transforms.ts";
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
@@ -2944,6 +2946,7 @@ export function lowerNativeFastPaths(
 	selectUpdates = true,
 	body?: NativeBodyFacts,
 	numberInputsPossible: (ip: number) => boolean = () => true,
+	ownSlotReceiverPossible: (ip: number) => boolean = () => true,
 ): NativeFastPathLowering {
 	let propertyLoadIps: ReadonlyArray<number> = [];
 	if (selection.kind === "select") {
@@ -3004,6 +3007,7 @@ export function lowerNativeFastPaths(
 				(candidate) =>
 					conflicts(candidate) ||
 					!numberInputsPossible(candidate) ||
+					!ownSlotReceiverPossible(candidate) ||
 					pairedArrayLoopActions.has(candidate) ||
 					propertyNumericUpdateActions.has(candidate),
 				transparentJumpTargets,
@@ -3039,6 +3043,7 @@ export function lowerNativeFastPaths(
 			(candidate) =>
 				conflicts(candidate) ||
 				!numberInputsPossible(candidate) ||
+				!ownSlotReceiverPossible(candidate) ||
 				pairedArrayLoopActions.has(candidate) ||
 				propertyNumericUpdateActions.has(candidate) ||
 				propertyProjectionActions.has(candidate),
@@ -3085,6 +3090,7 @@ export function lowerNativeFastPaths(
 				jumpTargets,
 				(candidate) =>
 					conflicts(candidate) ||
+					!ownSlotReceiverPossible(candidate) ||
 					terminalFusion(candidate) !== undefined ||
 					pairedArrayLoopActions.has(candidate) ||
 					propertyNumericUpdateActions.has(candidate) ||
@@ -3126,6 +3132,7 @@ export function lowerNativeFastPaths(
 				[ip, ip + 1].some(
 					(candidate) =>
 						conflicts(candidate) ||
+						!ownSlotReceiverPossible(candidate) ||
 						pairedArrayLoopActions.has(candidate) ||
 						propertyNumericUpdateActions.has(candidate) ||
 						propertyProjectionActions.has(candidate) ||
@@ -3559,6 +3566,15 @@ export function analyzeNativeFastPaths(
 			masks.every((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) !== 0)
 		);
 	};
+	const ownSlotReceiverPossible = (ip: number): boolean => {
+		const op = fn.instructions[ip];
+		return (
+			(op?.opcode !== "LOAD_PROPERTY_STATIC" && op?.opcode !== "STORE_PROPERTY_STATIC") ||
+			((instructionInputKind(native.facts?.[ip], op.object) ?? COMPILER_VALUE_KIND_TOP) &
+				COMPILER_VALUE_KIND_OBJECT) !==
+				0
+		);
+	};
 	for (const site of native.fieldCalls ?? [])
 		for (let ip = site.allocationIp; ip <= site.callIp; ip++) blocked.add(ip);
 	for (const site of native.literalSwitches ?? [])
@@ -3723,6 +3739,7 @@ export function analyzeNativeFastPaths(
 					return (
 						unavailable(candidate) ||
 						!numberInputsPossible(candidate) ||
+						!ownSlotReceiverPossible(candidate) ||
 						!nativePlanKeepsOrdinaryLowering(native.instructions[candidate])
 					);
 				},
@@ -3848,6 +3865,7 @@ export function analyzeNativeFastPaths(
 		!native.specializations.some((region) => region.kind === "numeric-fusion"),
 		body,
 		numberInputsPossible,
+		ownSlotReceiverPossible,
 	);
 	const plans: NativeFastPathPlans = {
 		literalPropertyDefinitions,
