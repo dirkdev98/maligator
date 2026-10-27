@@ -177,6 +177,22 @@ describe("primitive String length normal results", () => {
 		},
 	);
 
+	it("folds the normal typeof result while retaining the nullable read's effects", () => {
+		const out = inspectStaticValueFunction(
+			`globalThis.compute=function compute(value,observe){const text=value===null?null:value+':';observe(text);return typeof text.length==='number';};`,
+			"compute",
+			{ locked: false },
+		);
+		expect(out.core.some((op) => op.opcode === "typeofCompare")).toBe(false);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "LOAD_PROPERTY_STATIC",
+		);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		const effects =
+			INSTRUCTION_CALLS_USER_CODE | INSTRUCTION_MAY_GC | INSTRUCTION_MAY_THROW;
+		expect((out.native.facts?.[ip]?.effectMask ?? 0) & effects).toBe(effects);
+	});
+
 	it("carries length bounds through normal returns and caller arithmetic", () => {
 		const all = inspectStaticValueFunctions(
 			`const leaf=function leaf(value,observe){observe(new.target);const text=value===null?null:value+':';observe(text);return text.length;};const forward=function forward(value,observe){observe(new.target);return leaf(value,observe);};const compute=function compute(value,observe){return forward(value,observe)*2;};globalThis.keep=[leaf,forward,compute];`,

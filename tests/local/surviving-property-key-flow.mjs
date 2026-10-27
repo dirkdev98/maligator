@@ -148,6 +148,11 @@ function nullableStringLength(flag, observe) {
 	observe(text);
 	return text.length * 2;
 }
+function nullableLengthObservation(flag, observe) {
+	const text = nullableLengthSource(flag, observe);
+	observe(text);
+	return typeof text.length === "number";
+}
 function nullableLengthForward(flag, observe) {
 	return nullableStringLength(flag, observe);
 }
@@ -166,6 +171,7 @@ function mixedStringLength(flag, observe) {
 Object.assign(globalThis, {
 	nullableStringLength,
 	nullableLengthForward,
+	nullableLengthObservation,
 	nullableSuspendedLength,
 	mixedStringLength,
 });
@@ -722,13 +728,14 @@ try {
 	if (error !== thrown) throw error;
 }
 for (const flag of [true, false, undefined]) {
-	for (const read of [
-		globalThis.nullableStringLength,
-		globalThis.nullableLengthForward,
+	for (const [read, expected] of [
+		[globalThis.nullableStringLength, 8],
+		[globalThis.nullableLengthForward, 8],
+		[globalThis.nullableLengthObservation, true],
 	]) {
 		try {
 			const result = read(flag, conditionalObserve);
-			if (!flag || result !== 8) throw new Error("nullable length result");
+			if (!flag || result !== expected) throw new Error("nullable length result");
 			rows.push(result);
 		} catch (error) {
 			if (flag || !(error instanceof TypeError)) throw error;
