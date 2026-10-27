@@ -6375,8 +6375,14 @@ function emitBody(
 	// an entry-pair outer step steps a deferred loop cursor itself.
 	const deferredIteratorCursors = new Set<number>();
 	for (const { cursor, role } of nativeIteratorCursorActionByIp.values()) {
+		const initialize = fn.instructions[cursor.initializeIp];
 		if (
 			role !== "initialize" ||
+			initialize?.opcode !== "GET_ITERATOR" ||
+			((instructionInputKind(nativeFacts?.[cursor.initializeIp], initialize.source) ??
+				COMPILER_VALUE_KIND_TOP) &
+				COMPILER_VALUE_KIND_OBJECT) ===
+				0 ||
 			cursor.kind !== "array-values-iterator-cursor" ||
 			cursor.stateSynchronization !== "materialize-before-observation" ||
 			[cursor.initializeIp, ...cursor.stepIps, ...cursor.closeIps].some(
@@ -9306,6 +9312,12 @@ function emitInstruction(
 		const ordinary = emitGenericInstruction();
 		if (ordinary === null) return null;
 		const id = indexedLengthLoopAction.loadIp;
+		if (
+			((operandKind(instruction.object) ?? COMPILER_VALUE_KIND_TOP) &
+				COMPILER_VALUE_KIND_OBJECT) ===
+			0
+		)
+			return [`__indexed_length_${id}_kind = 0;`, ...ordinary];
 		const reverse = indexedLengthLoopAction.site.reverseInduction !== undefined;
 		const pairedAdmission =
 			pairedArrayLoopAction?.role === "admit"

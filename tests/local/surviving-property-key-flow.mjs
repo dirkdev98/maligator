@@ -80,6 +80,40 @@ function primitiveNumericUpdate(flag, observe) {
 	const receiver = primitivePropertyReceiver(flag, observe);
 	return receiver.__mal_receiver_numeric++;
 }
+function primitiveArrayPresence(flag, expected, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	for (let i = 0; i < receiver.length; i++) {
+		observe(i);
+		if (i in receiver) {
+			const same = receiver[i] === expected[i];
+			if (!same) return false;
+		}
+	}
+	return true;
+}
+function primitivePairedPrimary(flag, expected, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	for (let i = 0; i < receiver.length; i++) {
+		observe(i);
+		const same = receiver[i] === expected[i];
+		if (!same) return false;
+	}
+	return true;
+}
+function primitivePairedSecondary(flag, expected, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	for (let i = 0; i < expected.length; i++) {
+		observe(i);
+		const same = expected[i] === receiver[i];
+		if (!same) return false;
+	}
+	return true;
+}
+function primitiveArrayDestructure(flag, observe) {
+	const receiver = primitivePropertyReceiver(flag, observe);
+	const [first, second] = receiver;
+	return [first, second];
+}
 function indexedPrimitiveWrite(flag, key, makeValue, observe) {
 	const receiver = primitivePropertyReceiver(flag, observe);
 	return (receiver[key] = makeValue());
@@ -98,6 +132,10 @@ Object.assign(globalThis, {
 	primitivePropertyProjection,
 	primitiveNumberRecord,
 	primitiveNumericUpdate,
+	primitiveArrayPresence,
+	primitivePairedPrimary,
+	primitivePairedSecondary,
+	primitiveArrayDestructure,
 	indexedPrimitiveWrite,
 	suspendedPrimitiveWrite,
 });
@@ -314,6 +352,23 @@ function setPrimitiveNumericProperty(value) {
 	if (typeof this !== "number" || this !== 42 || value !== 43)
 		throw new Error("primitive numeric update receiver or value");
 }
+function primitiveIterator() {
+	if (this !== 42) throw new Error("primitive iterator receiver");
+	collectGarbage?.();
+	const iterator = [makePropertyValue(), "second", "unused"].values();
+	iterator.return = function () {
+		propertyEvents.push("iterator:return");
+		collectGarbage?.();
+		return {};
+	};
+	return iterator;
+}
+function getPrimitiveIterator() {
+	propertyEvents.push("iterator:get");
+	collectGarbage?.();
+	if (throwAccessor) throw thrown;
+	return primitiveIterator;
+}
 const receiverKey = Symbol("primitive receiver key");
 const installations = [
 	[
@@ -334,6 +389,17 @@ const installations = [
 		{ get: getPrimitiveProperty, set: setPrimitiveNumericProperty },
 	],
 	[String.prototype, "__mal_receiver_numeric", { get: getPrimitiveProperty }],
+	[
+		Number.prototype,
+		"length",
+		{
+			get() {
+				collectGarbage?.();
+				return 2;
+			},
+		},
+	],
+	[Number.prototype, Symbol.iterator, { get: getPrimitiveIterator }],
 ];
 if (mutable)
 	for (const [prototype, key, descriptor] of installations)
@@ -380,6 +446,30 @@ try {
 		}
 		rows.push(globalThis.primitivePropertyProjection(flag, observeProperty));
 		rows.push(globalThis.primitiveNumberRecord(flag, observeProperty));
+		const expected = ["A", "\ud834", "\udf06"];
+		rows.push(globalThis.primitivePairedPrimary(flag, expected, observeProperty));
+		rows.push(globalThis.primitivePairedSecondary(flag, expected, observeProperty));
+		try {
+			const result = globalThis.primitiveArrayPresence(flag, expected, observeProperty);
+			if (mutable || flag || result !== true) throw new Error("primitive presence loop");
+			rows.push(result);
+		} catch (error) {
+			if ((!mutable && !flag) || !(error instanceof TypeError)) throw error;
+			propertyEvents.push("presence:TypeError");
+		}
+		try {
+			const pair = globalThis.primitiveArrayDestructure(flag, observeProperty);
+			collectGarbage?.();
+			if (flag) {
+				if (pair[0] !== "A" || pair[1] !== "𝌆")
+					throw new Error("String iteration code points");
+			} else if (!mutable || pair[0].keep[1] !== "retained" || pair[1] !== "second")
+				throw new Error("primitive custom Array iterator");
+			rows.push(pair);
+		} catch (error) {
+			if (mutable || flag || !(error instanceof TypeError)) throw error;
+			propertyEvents.push("iterator:TypeError");
+		}
 		try {
 			const previous = globalThis.primitiveNumericUpdate(flag, observeProperty);
 			if (!mutable || flag || previous !== 42)
@@ -433,6 +523,7 @@ try {
 		for (const access of [
 			() => globalThis.indexedPrimitiveRead(false, 0, observeProperty),
 			() => globalThis.namedPrimitiveWrite(false, makePropertyValue, observeProperty),
+			() => globalThis.primitiveArrayDestructure(false, observeProperty),
 		]) {
 			try {
 				access();

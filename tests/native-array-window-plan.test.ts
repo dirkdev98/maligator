@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_TOP,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
@@ -29,6 +35,62 @@ function compile(kind: "presence" | "pair") {
 }
 
 describe("persisted array ownership windows", () => {
+	it.each(["presence", "pair"] as const)(
+		"retains %s admission only when its receiver may be an Object",
+		(kind) => {
+			const image = compile(kind),
+				native = image.native.functions[1]!;
+			const plan =
+				kind === "presence"
+					? native.storage!.arrayPresence[0]!
+					: native.storage!.arrayPairDestructure[0]!;
+			const anchor =
+				native.body.instructions[
+					"membershipIp" in plan ? plan.membershipIp : plan.initializeIp
+				]!;
+			const receiver =
+				anchor.opcode === "BINARY"
+					? anchor.right
+					: anchor.opcode === "GET_ITERATOR"
+						? anchor.source
+						: undefined;
+			if (receiver === undefined) throw new Error("Missing window receiver");
+			for (const [mask, admitted] of [
+				[COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING, false],
+				[COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_OBJECT, false],
+				[COMPILER_VALUE_KIND_OBJECT, true],
+				[COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_STRING, true],
+				[COMPILER_VALUE_KIND_TOP, true],
+			] as const) {
+				const facts = native.facts!.map((facts) =>
+					facts?.inputKindMasks === undefined
+						? facts
+						: {
+								...facts,
+								inputKindMasks: facts.inputKindMasks.map((kind, index) =>
+									facts.registers![facts.inputOffset! + index] === receiver ? mask : kind,
+								),
+							},
+				);
+				const lowered = lowerNativeFunctionStorage({ ...native, facts });
+				expect(
+					kind === "presence"
+						? lowered.storage!.arrayPresence.length
+						: lowered.storage!.arrayPairDestructure.length,
+					String(mask),
+				).toBe(admitted ? 1 : 0);
+				if (!admitted)
+					expect(() => validateNativeStorage({ ...native, facts })).toThrow(
+						/invalid or stale storage plan/,
+					);
+			}
+			const unknown = analyzeNativeFastPaths({ ...native, facts: undefined }).plans;
+			expect(
+				kind === "presence" ? unknown.arrayPresence : unknown.arrayPairDestructure,
+			).toHaveLength(1);
+		},
+	);
+
 	it.each(["presence", "pair"] as const)(
 		"round-trips and validates %s claims before rendering",
 		(kind) => {

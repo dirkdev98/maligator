@@ -90,6 +90,27 @@ it.each(["mutable", "locked"] as const)(
 				])
 					expect(plans, name).toEqual([]);
 			}
+			for (const name of [
+				"primitiveArrayPresence",
+				"primitivePairedPrimary",
+				"primitivePairedSecondary",
+				"primitiveArrayDestructure",
+			]) {
+				const fn = pair.programImage.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+								[]),
+						) === name,
+				);
+				expect(fn, name).toBeDefined();
+				for (const plans of [
+					fn!.storage!.pairedArrayLoops,
+					fn!.storage!.arrayPresence,
+					fn!.storage!.arrayPairDestructure,
+				])
+					expect(plans, name).toEqual([]);
+			}
 			for (const name of ["conditionalKey", "conditionalProtoKey", "liveInitializer"]) {
 				const fn = pair.programImage.native.functions.find(
 					(fn) =>

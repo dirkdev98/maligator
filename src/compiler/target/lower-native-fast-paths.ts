@@ -2840,6 +2840,7 @@ function lowerPairedArrayLoops(
 	indexedLoops: ReadonlyArray<NativeIndexedLoopElement>,
 	jumpTargets: ReadonlySet<number>,
 	conflicts: (ip: number) => boolean,
+	receiverObjectPossible: (ip: number) => boolean,
 ): ReadonlyArray<NativePairedArrayLoopPlan> {
 	const plans: Array<NativePairedArrayLoopPlan> = [];
 	for (const indexed of indexedLoops) {
@@ -2847,6 +2848,8 @@ function lowerPairedArrayLoops(
 		const primary = fn.instructions[indexed.elementLoadIp];
 		if (
 			primary?.opcode !== "LOAD_PROPERTY" ||
+			!receiverObjectPossible(indexed.lengthLoadIp) ||
+			!receiverObjectPossible(indexed.elementLoadIp) ||
 			primary.object !== indexed.object ||
 			primary.key !== indexed.key ||
 			primary.dst !== indexed.result
@@ -2866,6 +2869,7 @@ function lowerPairedArrayLoops(
 				instruction.opcode === "LOAD_PROPERTY" &&
 				instruction.key === indexed.key &&
 				instruction.object !== indexed.object &&
+				receiverObjectPossible(ip) &&
 				!conflicts(ip)
 			) {
 				secondary = { ip, instruction };
@@ -2946,7 +2950,7 @@ export function lowerNativeFastPaths(
 	selectUpdates = true,
 	body?: NativeBodyFacts,
 	numberInputsPossible: (ip: number) => boolean = () => true,
-	ownSlotReceiverPossible: (ip: number) => boolean = () => true,
+	receiverObjectPossible: (ip: number) => boolean = () => true,
 ): NativeFastPathLowering {
 	let propertyLoadIps: ReadonlyArray<number> = [];
 	if (selection.kind === "select") {
@@ -2968,7 +2972,13 @@ export function lowerNativeFastPaths(
 	const pairedArrayLoops =
 		selection.kind === "render"
 			? selection.plans.pairedArrayLoops
-			: lowerPairedArrayLoops(fn, indexedLoops, jumpTargets, conflicts);
+			: lowerPairedArrayLoops(
+					fn,
+					indexedLoops,
+					jumpTargets,
+					conflicts,
+					receiverObjectPossible,
+				);
 	const pairedArrayLoopActions = new Map<number, NativePairedArrayLoopAction>();
 	for (const plan of pairedArrayLoops) {
 		pairedArrayLoopActions.set(plan.lengthLoadIp, { role: "admit", plan });
@@ -3007,7 +3017,7 @@ export function lowerNativeFastPaths(
 				(candidate) =>
 					conflicts(candidate) ||
 					!numberInputsPossible(candidate) ||
-					!ownSlotReceiverPossible(candidate) ||
+					!receiverObjectPossible(candidate) ||
 					pairedArrayLoopActions.has(candidate) ||
 					propertyNumericUpdateActions.has(candidate),
 				transparentJumpTargets,
@@ -3043,7 +3053,7 @@ export function lowerNativeFastPaths(
 			(candidate) =>
 				conflicts(candidate) ||
 				!numberInputsPossible(candidate) ||
-				!ownSlotReceiverPossible(candidate) ||
+				!receiverObjectPossible(candidate) ||
 				pairedArrayLoopActions.has(candidate) ||
 				propertyNumericUpdateActions.has(candidate) ||
 				propertyProjectionActions.has(candidate),
@@ -3090,7 +3100,7 @@ export function lowerNativeFastPaths(
 				jumpTargets,
 				(candidate) =>
 					conflicts(candidate) ||
-					!ownSlotReceiverPossible(candidate) ||
+					!receiverObjectPossible(candidate) ||
 					terminalFusion(candidate) !== undefined ||
 					pairedArrayLoopActions.has(candidate) ||
 					propertyNumericUpdateActions.has(candidate) ||
@@ -3132,7 +3142,7 @@ export function lowerNativeFastPaths(
 				[ip, ip + 1].some(
 					(candidate) =>
 						conflicts(candidate) ||
-						!ownSlotReceiverPossible(candidate) ||
+						!receiverObjectPossible(candidate) ||
 						pairedArrayLoopActions.has(candidate) ||
 						propertyNumericUpdateActions.has(candidate) ||
 						propertyProjectionActions.has(candidate) ||
@@ -3239,6 +3249,7 @@ function selectArrayWindows(
 	reserved: ReadonlySet<number>,
 	pairedArrayLoops: ReadonlyArray<NativePairedArrayLoopPlan>,
 	body: NativeBodyFacts,
+	receiverObjectPossible: (ip: number) => boolean,
 ): Pick<NativeFastPathPlans, "arrayPresence" | "arrayPairDestructure"> {
 	const fn = native.body;
 	const entries = body.externalEntries;
@@ -3314,6 +3325,7 @@ function selectArrayWindows(
 					if (
 						membership?.opcode !== "BINARY" ||
 						membership.operator !== "in" ||
+						!receiverObjectPossible(membershipIp) ||
 						branch?.opcode !== "JUMP_IF" ||
 						branch.cond !== membership.dst ||
 						branch.targetIp !== loadIp ||
@@ -3355,7 +3367,8 @@ function selectArrayWindows(
 		) {
 			const initializeIp = region.initializeIp,
 				[firstStepIp, secondStepIp] = region.stepIps as [number, number];
-			const first = fn.instructions[firstStepIp],
+			const initialize = fn.instructions[initializeIp],
+				first = fn.instructions[firstStepIp],
 				second = fn.instructions[secondStepIp],
 				branch = fn.instructions[secondStepIp + 1],
 				closeJump = fn.instructions[secondStepIp + 2],
@@ -3366,6 +3379,8 @@ function selectArrayWindows(
 			if (
 				fn.isAsync ||
 				fn.isGenerator ||
+				initialize?.opcode !== "GET_ITERATOR" ||
+				!receiverObjectPossible(initializeIp) ||
 				firstStepIp !== initializeIp + 1 ||
 				secondStepIp !== firstStepIp + 1 ||
 				first?.opcode !== "ITERATOR_STEP" ||
@@ -3566,13 +3581,23 @@ export function analyzeNativeFastPaths(
 			masks.every((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) !== 0)
 		);
 	};
-	const ownSlotReceiverPossible = (ip: number): boolean => {
+	const receiverObjectPossible = (ip: number): boolean => {
 		const op = fn.instructions[ip];
+		let receiver: number;
+		if (op?.opcode === "GET_ITERATOR") receiver = op.source;
+		else if (op?.opcode === "BINARY" && op.operator === "in") receiver = op.right;
+		else if (
+			op?.opcode === "LOAD_PROPERTY_STATIC" ||
+			op?.opcode === "STORE_PROPERTY_STATIC" ||
+			op?.opcode === "LOAD_PROPERTY" ||
+			op?.opcode === "STORE_PROPERTY"
+		)
+			receiver = op.object;
+		else return true;
 		return (
-			(op?.opcode !== "LOAD_PROPERTY_STATIC" && op?.opcode !== "STORE_PROPERTY_STATIC") ||
-			((instructionInputKind(native.facts?.[ip], op.object) ?? COMPILER_VALUE_KIND_TOP) &
+			((instructionInputKind(native.facts?.[ip], receiver) ?? COMPILER_VALUE_KIND_TOP) &
 				COMPILER_VALUE_KIND_OBJECT) !==
-				0
+			0
 		);
 	};
 	for (const site of native.fieldCalls ?? [])
@@ -3739,7 +3764,7 @@ export function analyzeNativeFastPaths(
 					return (
 						unavailable(candidate) ||
 						!numberInputsPossible(candidate) ||
-						!ownSlotReceiverPossible(candidate) ||
+						!receiverObjectPossible(candidate) ||
 						!nativePlanKeepsOrdinaryLowering(native.instructions[candidate])
 					);
 				},
@@ -3769,6 +3794,7 @@ export function analyzeNativeFastPaths(
 			jumpTargets,
 			(ip) =>
 				unavailable(ip) || !nativePlanKeepsOrdinaryLowering(native.instructions[ip]),
+			receiverObjectPossible,
 		))
 			for (const ip of plan.claimedIps) numericLoopBlocked.add(ip);
 		// World facts alone make these the builtin on any primitive string, so a region
@@ -3865,7 +3891,7 @@ export function analyzeNativeFastPaths(
 		!native.specializations.some((region) => region.kind === "numeric-fusion"),
 		body,
 		numberInputsPossible,
-		ownSlotReceiverPossible,
+		receiverObjectPossible,
 	);
 	const plans: NativeFastPathPlans = {
 		literalPropertyDefinitions,
@@ -3914,6 +3940,7 @@ export function analyzeNativeFastPaths(
 			]),
 			selected.pairedArrayLoops,
 			body,
+			receiverObjectPossible,
 		),
 		propertyProjections: selected.propertyProjections,
 		propertyNumericUpdates: selected.propertyNumericUpdates,
