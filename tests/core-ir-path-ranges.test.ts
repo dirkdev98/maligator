@@ -135,7 +135,12 @@ function binaryOperators(fn: CoreFunctionStore): ReadonlyArray<unknown> {
 function pathRanges(source: BoundedFunction) {
 	const fn = source.program.function(source.function);
 	const cfg = buildCoreControlFlow(source.program, source.function);
-	return analyzeCoreLoopInductions(fn, cfg, coreCanonicalValueRoots(fn, cfg));
+	return analyzeCoreLoopInductions(
+		source.program,
+		fn,
+		cfg,
+		coreCanonicalValueRoots(fn, cfg),
+	);
 }
 
 describe("Core path-sensitive numeric ranges", () => {

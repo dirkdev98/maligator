@@ -167,6 +167,11 @@ The independent target boundary and current storage contract are recorded in
       nullish-only inputs have no normal result. Those bounds reach return summaries,
       selected entries and scalar property-result storage while preserving getter
       effects and ordinary object/prototype fallbacks.
+      Intrinsic String/nullish length reads now publish nonnegative safe-integer
+      ranges, and proven genuine Array length reads publish uint32 ranges. Shared
+      range queries carry those bounds through phi joins, normal returns and private
+      record fields into predicate folds and native entries; escaped fields and
+      unknown Object/Proxy reads retain their general results and effects.
 - [ ] Give record entries typed fields. Program value-kind flow now carries initial
       own-field kind summaries through exact call chains, finite callee sets,
       recursive forwarding, spread/rest and constructor completions. Field-only

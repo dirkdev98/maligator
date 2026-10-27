@@ -54,6 +54,7 @@ function rounding(
 		cfg = buildCoreControlFlow(program, id);
 	const kinds = analyzeCoreValueKinds(program, fn, cfg);
 	const ranges = analyzeCoreLoopInductions(
+		program,
 		fn,
 		cfg,
 		coreCanonicalValueRoots(fn, cfg),
@@ -64,6 +65,7 @@ function rounding(
 		kinds.kindMask(value),
 	);
 	const facts = coreInstructionFacts(
+		program,
 		fn,
 		instruction,
 		kinds,

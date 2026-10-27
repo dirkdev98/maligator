@@ -22,6 +22,7 @@ import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
 	corePrimitiveOperatorEffectRefinement,
 	coreInstructionResultIntegerRange,
+	coreInstructionLengthIntegerRange,
 	coreIntegerRoundingInput,
 } from "./core-ir-value-kinds.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
@@ -103,7 +104,7 @@ export function coreInstructionFactPlans(
 		);
 		for (const instruction of fn.instructionIds())
 			instructions[instruction] = Object.freeze(
-				coreInstructionFacts(fn, instruction, kinds, inputKinds, false, range),
+				coreInstructionFacts(program, fn, instruction, kinds, inputKinds, false, range),
 			);
 		const plan = Object.freeze({
 			function: functionId,
@@ -296,6 +297,7 @@ function instructionMasks(
 }
 
 export function coreInstructionFacts(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 	kinds: CoreValueKindAnalysis,
@@ -334,6 +336,9 @@ export function coreInstructionFacts(
 	const resultRange =
 		results.length === 1 && results[0] === COMPILER_VALUE_KIND_NUMBER
 			? (coreInstructionResultIntegerRange(fn, instruction) ??
+				coreInstructionLengthIntegerRange(program, fn, instruction, (value) =>
+					kinds.kindMask(value),
+				) ??
 				(coreIntegerRoundingInput(fn, instruction) === undefined
 					? undefined
 					: range?.(kernel.resultAt(output), fn.instructionBlock(instruction))) ??

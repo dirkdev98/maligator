@@ -19,6 +19,13 @@ export const COMPILER_UINT32_RANGE: CompilerIntegerRange = Object.freeze({
 	excludesNegativeZero: true,
 });
 
+export const COMPILER_STRING_LENGTH_RANGE: CompilerIntegerRange = Object.freeze({
+	minimum: 0,
+	maximum: Number.MAX_SAFE_INTEGER,
+	exactSafeIntegers: true,
+	excludesNegativeZero: true,
+});
+
 export function compilerIntegerRangeIsValid(
 	range: unknown,
 ): range is CompilerIntegerRange {

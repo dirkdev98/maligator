@@ -2952,7 +2952,7 @@ function reverseIndexedLengthLoopCandidates(
 	);
 	if (loads.length === 0 || control.loops.length === 0) return candidates;
 	const lengthRoots = new Set(loads.map((load) => root(instructionResult(fn, load, 0)!)));
-	const reverseLoops = analyzeCoreLoopInductions(fn, control, roots, (value) =>
+	const reverseLoops = analyzeCoreLoopInductions(program, fn, control, roots, (value) =>
 		lengthRoots.has(root(value)) ? "number" : undefined,
 	);
 	const inductionsByInitialRoot = new Map<
@@ -4780,8 +4780,13 @@ export function discoverCoreLocalSpecializationCandidates(
 		control,
 		() => {
 			if (loops !== undefined) return loops;
-			return (loops = analyzeCoreLoopInductions(fn, control, roots, (value) =>
-				getValueKinds().exactScalar(value),
+			return (loops = analyzeCoreLoopInductions(
+				program,
+				fn,
+				control,
+				roots,
+				(value) => getValueKinds().exactScalar(value),
+				(value) => getValueKinds().kindMask(value),
 			));
 		},
 		roots,

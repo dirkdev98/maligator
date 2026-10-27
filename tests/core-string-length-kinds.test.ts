@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
-import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
+import {
+	buildCoreControlFlow,
+	coreCanonicalValueRoots,
+} from "../src/compiler/core/core-ir-control-flow.ts";
+import {
+	analyzeCoreLoopInductions,
+	CORE_LOOP_INDUCTION_ANALYSIS,
+} from "../src/compiler/core/core-ir-loops.ts";
 import { coreInstructionEffects } from "../src/compiler/core/core-ir-opcodes.ts";
 import {
 	analyzeCoreValueKinds,
@@ -23,10 +30,15 @@ import {
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	instructionResultKind,
+	instructionResultIntegerRange,
 	INSTRUCTION_CALLS_USER_CODE,
 	INSTRUCTION_MAY_GC,
 	INSTRUCTION_MAY_THROW,
 } from "../src/compiler/shared/instruction-facts.ts";
+import {
+	COMPILER_STRING_LENGTH_RANGE,
+	COMPILER_UINT32_RANGE,
+} from "../src/compiler/shared/integer-range.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -40,7 +52,7 @@ import {
 	inspectStaticValueFunctions,
 } from "./helpers/static-values.ts";
 
-function lengthProgram() {
+function lengthProgram(attributes: Readonly<Record<string, unknown>> = {}) {
 	const program = analysisProgram();
 	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 	const block = builder.createBlock([{}]);
@@ -51,7 +63,7 @@ function lengthProgram() {
 		block,
 		"loadPropertyStatic",
 		[builder.blockParameterValue(block, 0)],
-		{ attributes: { stringIndex: key } },
+		{ attributes: { stringIndex: key, ...attributes } },
 	);
 	builder.setTerminator(block, { kind: "return", value: result! });
 	const fn = program.function(builder.finish(block).function);
@@ -91,12 +103,43 @@ describe("primitive String length normal results", () => {
 		);
 		expect(kinds.latticeMask(result)).toBe(expected);
 		expect(kinds.exactScalar(result)).toBe(expected === NUMBER ? "number" : undefined);
+		const cfg = buildCoreControlFlow(program, fn.id);
+		const ranges = analyzeCoreLoopInductions(
+			program,
+			fn,
+			cfg,
+			coreCanonicalValueRoots(fn, cfg),
+			(value) => kinds.exactScalar(value),
+			(value) => kinds.kindMask(value),
+		);
+		const expectedRange = expected === NUMBER ? COMPILER_STRING_LENGTH_RANGE : undefined;
+		expect(ranges.range(result)).toEqual(expectedRange);
+		expect(ranges.rangeQuery(() => undefined)(result) ?? undefined).toEqual(
+			expectedRange,
+		);
 		const effects = coreInstructionEffects(fn, load);
 		expect([effects.mayThrow, effects.mayGc, effects.callsUserCode]).toEqual([
 			true,
 			true,
 			true,
 		]);
+	});
+
+	it("bounds a proven genuine Array length without narrowing it to int32", () => {
+		const { program, fn, result } = lengthProgram({ exactArrayLength: true });
+		const cfg = buildCoreControlFlow(program, fn.id);
+		const kinds = analyzeCoreValueKinds(program, fn, cfg);
+		const ranges = analyzeCoreLoopInductions(
+			program,
+			fn,
+			cfg,
+			coreCanonicalValueRoots(fn, cfg),
+			(value) => kinds.exactScalar(value),
+			(value) => kinds.kindMask(value),
+		);
+		expect(ranges.hasNumericRanges).toBe(true);
+		expect(ranges.range(result)).toEqual(COMPILER_UINT32_RANGE);
+		expect(kinds.exactScalar(result)).toBe("number");
 	});
 
 	it.each([NUMBER, SYMBOL, NUMBER | STRING])(
@@ -125,6 +168,8 @@ describe("primitive String length normal results", () => {
 		specialize.commit();
 		const request = { scope: "function" as const, function: fn.id };
 		const before = manager.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request);
+		const beforeRanges = manager.get(CORE_LOOP_INDUCTION_ANALYSIS, request);
+		expect(beforeRanges.range(result)).toEqual(COMPILER_STRING_LENGTH_RANGE);
 		const edit = CoreEditor.open(program, fn.id);
 		const custom = edit.appendStringConstants([
 			[..."custom"].map((x) => x.charCodeAt(0)),
@@ -140,6 +185,10 @@ describe("primitive String length normal results", () => {
 			TOP,
 		);
 		expect(before.kindMask(result)).toBe(NUMBER);
+		expect(
+			manager.get(CORE_LOOP_INDUCTION_ANALYSIS, request).range(result),
+		).toBeUndefined();
+		expect(beforeRanges.range(result)).toEqual(COMPILER_STRING_LENGTH_RANGE);
 	});
 
 	it.each(
@@ -170,6 +219,9 @@ describe("primitive String length normal results", () => {
 				const op = fn.body.instructions[ip]!;
 				if (op.opcode !== "LOAD_PROPERTY_STATIC") throw new Error("Missing length read");
 				expect(instructionResultKind(fn.facts?.[ip], op.dst)).toBe(NUMBER);
+				expect(instructionResultIntegerRange(fn.facts?.[ip], op.dst)).toEqual(
+					COMPILER_STRING_LENGTH_RANGE,
+				);
 				const effects =
 					INSTRUCTION_CALLS_USER_CODE | INSTRUCTION_MAY_GC | INSTRUCTION_MAY_THROW;
 				expect((fn.facts?.[ip]?.effectMask ?? 0) & effects).toBe(effects);
@@ -209,6 +261,94 @@ describe("primitive String length normal results", () => {
 			const op = fn.body.instructions[ip]!;
 			if (op.opcode !== "CALL") throw new Error("Missing forwarded call");
 			expect(instructionResultKind(fn.facts?.[ip], op.dst)).toBe(NUMBER);
+			expect(instructionResultIntegerRange(fn.facts?.[ip], op.dst)).toEqual(
+				COMPILER_STRING_LENGTH_RANGE,
+			);
 		}
+	});
+});
+
+describe("intrinsic length range consumers", () => {
+	it.each([
+		"Number.isNaN",
+		"Number.isFinite",
+		"Number.isInteger",
+		"Number.isSafeInteger",
+	])("folds %s while retaining a nullable read", (operation) => {
+		const out = inspectStaticValueFunction(
+			`globalThis.compute=function compute(value,observe){const text=value===null?null:value+':';observe(text);return ${operation}(text.length);};`,
+			"compute",
+			{ locked: true },
+		);
+		expect(
+			out.core.some(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === operation,
+			),
+		).toBe(false);
+		expect(out.core.some((op) => op.opcode === "loadPropertyStatic")).toBe(true);
+	});
+	it("joins lengths with integers through a phi before folding a predicate", () => {
+		const out = inspectStaticValueFunction(
+			`globalThis.compute=function compute(value,flag,observe){const text=value+':';observe(text);const n=flag?text.length:0;return Number.isSafeInteger(n);};`,
+			"compute",
+			{ locked: true },
+		);
+		expect(
+			out.core.some(
+				(op) =>
+					op.opcode === "callKnown" && op.attributes.operation === "Number.isSafeInteger",
+			),
+		).toBe(false);
+	});
+	it("uses a genuine Array length proof after indexed writes", () => {
+		const out = inspectStaticValueFunction(
+			`globalThis.compute=function compute(value,observe){const values=[];let ok=true;for(let i=0;i<(value|0);i++){values[i]=i;observe(i);ok=ok&&Number.isSafeInteger(values.length);}return ok;};`,
+			"compute",
+			{ locked: true },
+		);
+		expect(
+			out.core.some(
+				(op) =>
+					op.opcode === "loadPropertyStatic" && op.attributes.exactArrayLength === true,
+			),
+		).toBe(true);
+		expect(
+			out.core.some(
+				(op) =>
+					op.opcode === "callKnown" && op.attributes.operation === "Number.isSafeInteger",
+			),
+		).toBe(false);
+	});
+	it("does not retain an escaped record field range", () => {
+		const all = inspectStaticValueFunctions(
+			`const leaf=function leaf(value,observe){observe(new.target);const text=value===null?null:value+':';observe(text);return {size:text.length};};const compute=function compute(value,observe){const record=leaf(value,observe);observe(record);return Number.isSafeInteger(record.size);};globalThis.keep=[leaf,compute];`,
+			["leaf", "compute"],
+			{ locked: true },
+		);
+		expect(
+			all
+				.get("compute")!
+				.core.some(
+					(op) =>
+						op.opcode === "callKnown" &&
+						op.attributes.operation === "Number.isSafeInteger",
+				),
+		).toBe(true);
+	});
+	it("publishes length ranges through private record returns", () => {
+		const all = inspectStaticValueFunctions(
+			`const leaf=function leaf(value,observe){observe(new.target);const text=value===null?null:value+':';observe(text);return {size:text.length};};const compute=function compute(value,observe){const record=leaf(value,observe);observe(value);return Number.isSafeInteger(record.size);};globalThis.keep=[leaf,compute];`,
+			["leaf", "compute"],
+			{ locked: true },
+		);
+		const fn = all.get("compute")!.native;
+		const read = fn.body.instructions.findIndex(
+			(op) => op.opcode === "LOAD_PROPERTY_STATIC",
+		);
+		const op = fn.body.instructions[read]!;
+		if (op.opcode !== "LOAD_PROPERTY_STATIC") throw new Error("Missing record read");
+		expect(instructionResultIntegerRange(fn.facts?.[read], op.dst)).toEqual(
+			COMPILER_STRING_LENGTH_RANGE,
+		);
 	});
 });

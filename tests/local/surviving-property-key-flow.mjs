@@ -153,6 +153,45 @@ function nullableLengthObservation(flag, observe) {
 	observe(text);
 	return typeof text.length === "number";
 }
+function nullableLengthPredicates(flag, observe) {
+	const text = nullableLengthSource(flag, observe);
+	observe(text);
+	const n = text.length;
+	return [
+		Number.isNaN(n),
+		Number.isFinite(n),
+		Number.isInteger(n),
+		Number.isSafeInteger(n),
+		n < 0,
+		Math.abs(n),
+	];
+}
+function privateArrayLengthPredicates(value, observe) {
+	const values = [];
+	let ok = true;
+	for (let i = 0; i < (value | 0); i++) {
+		values[i] = i;
+		observe(i);
+		ok = ok && Number.isSafeInteger(values.length);
+	}
+	return ok;
+}
+function objectLengthPredicates(value, observe) {
+	observe(value);
+	const n = value.length;
+	return [
+		Number.isNaN(n),
+		Number.isFinite(n),
+		Number.isInteger(n),
+		Number.isSafeInteger(n),
+		n < 0,
+		Math.abs(n),
+	];
+}
+function lengthPredicateOrder(value) {
+	const text = value === null ? null : value + ":";
+	return Number.isInteger(text.length);
+}
 function nullableLengthForward(flag, observe) {
 	return nullableStringLength(flag, observe);
 }
@@ -172,6 +211,10 @@ Object.assign(globalThis, {
 	nullableStringLength,
 	nullableLengthForward,
 	nullableLengthObservation,
+	nullableLengthPredicates,
+	privateArrayLengthPredicates,
+	objectLengthPredicates,
+	lengthPredicateOrder,
 	nullableSuspendedLength,
 	mixedStringLength,
 });
@@ -742,6 +785,15 @@ for (const flag of [true, false, undefined]) {
 			rows.push("null length throws");
 		}
 	}
+	try {
+		const result = globalThis.nullableLengthPredicates(flag, conditionalObserve);
+		if (!flag || result.join(",") !== "false,true,true,true,false,4")
+			throw new Error("length range predicates");
+		rows.push(result);
+	} catch (error) {
+		if (flag || !(error instanceof TypeError)) throw error;
+		rows.push("predicate null length throws");
+	}
 	const iterator = globalThis.nullableSuspendedLength(flag, conditionalObserve);
 	const first = iterator.next();
 	if (first.done) throw new Error("missing nullable suspension");
@@ -799,4 +851,71 @@ if (
 	throw new Error("mixed object length result");
 rows.push(conditionalEvents);
 rows.push(order, inheritedWrites);
+
+if (!globalThis.privateArrayLengthPredicates(5, conditionalObserve))
+	throw new Error("private Array length predicate");
+for (const n of [0.5, -1, NaN, Infinity, -0]) {
+	const expected = [
+		Number.isNaN(n),
+		Number.isFinite(n),
+		Number.isInteger(n),
+		Number.isSafeInteger(n),
+		n < 0,
+		Math.abs(n),
+	].join(",");
+	for (const value of [
+		{
+			get length() {
+				collectGarbage?.();
+				return n;
+			},
+		},
+		new Proxy([], {
+			get(target, key) {
+				collectGarbage?.();
+				return key === "length" ? n : Reflect.get(target, key);
+			},
+		}),
+	]) {
+		if (
+			globalThis.objectLengthPredicates(value, conditionalObserve).join(",") !== expected
+		)
+			throw new Error("object or Proxy length narrowed");
+	}
+}
+
+if (mutable) {
+	const descriptor = Object.getOwnPropertyDescriptor(Number, "isInteger");
+	const predicateEvents = [];
+	try {
+		Object.defineProperty(Number, "isInteger", {
+			configurable: true,
+			get() {
+				predicateEvents.push("get");
+				collectGarbage?.();
+				return function (n) {
+					predicateEvents.push("call");
+					collectGarbage?.();
+					return n + 0.5;
+				};
+			},
+		});
+		if (
+			globalThis.lengthPredicateOrder("abc") !== 4.5 ||
+			predicateEvents.join(",") !== "get,call"
+		)
+			throw new Error("mutable predicate fallback");
+		predicateEvents.length = 0;
+		try {
+			globalThis.lengthPredicateOrder(null);
+			throw new Error("missing predicate argument throw");
+		} catch (error) {
+			if (!(error instanceof TypeError) || predicateEvents.join(",") !== "get")
+				throw error;
+		}
+	} finally {
+		Object.defineProperty(Number, "isInteger", descriptor);
+	}
+}
+
 console.log(JSON.stringify(rows));

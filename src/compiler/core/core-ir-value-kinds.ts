@@ -36,6 +36,8 @@ import type {
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import {
+	COMPILER_STRING_LENGTH_RANGE,
+	COMPILER_UINT32_RANGE,
 	compilerIntegerRangeIsInt32,
 	compilerIntegerRangeIsValid,
 	compilerIntegerRangeComparison,
@@ -248,6 +250,36 @@ export function coreInstructionResultIntegerRange(
 		(callResultKind(fn, instruction) ?? recordFieldKind(fn, instruction)) ===
 			COMPILER_VALUE_KIND_NUMBER
 		? range
+		: undefined;
+}
+
+export function coreInstructionLengthIntegerRange(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	kindMask?: (value: CoreValueId) => CompilerValueKindMask,
+): CompilerIntegerRange | undefined {
+	if (
+		fn.instructionKind(instruction) !== "operation" ||
+		fn.instructionOpcodeName(instruction) !== "loadPropertyStatic"
+	)
+		return undefined;
+	const attributes = fn.instructionAttributes(instruction);
+	const key = attributes.stringIndex;
+	if (
+		typeof key !== "number" ||
+		program.stringConstants[key]?.length !== 6 ||
+		program.stringConstantText(key) !== "length"
+	)
+		return undefined;
+	if (attributes.exactArrayLength === true) return COMPILER_UINT32_RANGE;
+	if (attributes.primitiveStringLength === true) return COMPILER_STRING_LENGTH_RANGE;
+	const receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+	const mask = kindMask?.(receiver) ?? COMPILER_VALUE_KIND_TOP;
+	// Nullish receivers throw; only the String alternative contributes normal lengths.
+	return (mask & COMPILER_VALUE_KIND_STRING) !== 0 &&
+		(mask & ~(COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_NULLISH)) === 0
+		? COMPILER_STRING_LENGTH_RANGE
 		: undefined;
 }
 

@@ -105,10 +105,12 @@ export function analyzeCoreNativeEntry(
 	let controlFlow: CoreNativeEntryControlFlow | undefined;
 	const range: CoreInstructionRangeQuery = (value, block) =>
 		(ranges ??= analyzeCoreLoopInductions(
+			program,
 			fn,
 			cfg,
 			coreCanonicalValueRoots(fn, cfg, controlFlow?.edges),
 			(value) => kinds.exactScalar(value),
+			(value) => kinds.kindMask(value),
 		)).range(value, block);
 	let constants =
 		arguments_ === undefined
@@ -193,7 +195,15 @@ export function analyzeCoreNativeEntry(
 			return [
 				Object.freeze({
 					instruction,
-					...coreInstructionFacts(fn, instruction, kinds, inputKinds, true, range),
+					...coreInstructionFacts(
+						program,
+						fn,
+						instruction,
+						kinds,
+						inputKinds,
+						true,
+						range,
+					),
 				}),
 			];
 		}),

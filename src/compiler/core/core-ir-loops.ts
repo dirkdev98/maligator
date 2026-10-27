@@ -1,3 +1,4 @@
+import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import { COMPILER_INT32_RANGE } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
@@ -9,12 +10,13 @@ import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	coreInstructionResultIntegerRange,
+	coreInstructionLengthIntegerRange,
 	coreIntegerRoundingInput,
 } from "./core-ir-value-kinds.ts";
 import type { CoreExactScalarKind } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
-import type { CoreFunctionStore } from "./core-store.ts";
+import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export type CoreLoopComparison = "<" | "<=" | ">" | ">=";
 
@@ -359,10 +361,12 @@ function branchRange(
 }
 
 export function analyzeCoreLoopInductions(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	canonical: ReadonlyMap<CoreValueId, CoreValueId>,
 	exactScalar?: (value: CoreValueId) => CoreExactScalarKind | undefined,
+	kindMask?: (value: CoreValueId) => CompilerValueKindMask,
 ): CoreLoopInductionAnalysis {
 	const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 	const numericRepresentation = (value: CoreValueId): "f64" | "i32" | undefined => {
@@ -555,6 +559,8 @@ export function analyzeCoreLoopInductions(
 						resultRange === undefined
 							? coreInstructionResultIntegerRange(fn, definition)
 							: resultRange(definition);
+				if (range === undefined && definition !== undefined)
+					range = coreInstructionLengthIntegerRange(program, fn, definition, kindMask);
 				if (range === undefined && definition !== undefined) {
 					const input = coreIntegerRoundingInput(fn, definition);
 					if (input !== undefined) range = query(input, block, budget);
@@ -679,7 +685,9 @@ export function analyzeCoreLoopInductions(
 				["&", ">>>"].includes(
 					fn.instructionAttributes(instruction).operator as string,
 				)) ||
-				coreInstructionResultIntegerRange(fn, instruction) !== undefined),
+				(coreInstructionResultIntegerRange(fn, instruction) ??
+					coreInstructionLengthIntegerRange(program, fn, instruction, kindMask)) !==
+					undefined),
 	);
 	const result: CoreLoopInductionAnalysis = {
 		inductions: Object.freeze(inductions),
@@ -713,10 +721,12 @@ export const CORE_LOOP_INDUCTION_ANALYSIS: CoreAnalysisDefinition<CoreLoopInduct
 			const fn = program.function(request.function);
 			const kinds = get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request);
 			return analyzeCoreLoopInductions(
+				program,
 				fn,
 				get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
 				get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request),
 				(value) => kinds.exactScalar(value),
+				(value) => kinds.kindMask(value),
 			);
 		},
 	};

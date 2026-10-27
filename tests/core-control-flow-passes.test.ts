@@ -582,7 +582,12 @@ describe("Core control-flow analyses and passes", () => {
 		expect(cfg.loops).toMatchObject([
 			{ header, preheader: entry, depth: 1, canonical: true },
 		]);
-		const loops = analyzeCoreLoopInductions(fn, cfg, coreCanonicalValueRoots(fn, cfg));
+		const loops = analyzeCoreLoopInductions(
+			program,
+			fn,
+			cfg,
+			coreCanonicalValueRoots(fn, cfg),
+		);
 		expect(loops.induction(counter)).toMatchObject({
 			step: 1,
 			range: { first: 0, last: 9, finalUpdate: 10 },
@@ -625,7 +630,12 @@ describe("Core control-flow analyses and passes", () => {
 		const id = builder.finish(block).function;
 		const fn = program.function(id);
 		const cfg = buildCoreControlFlow(program, id);
-		const ranges = analyzeCoreLoopInductions(fn, cfg, coreCanonicalValueRoots(fn, cfg));
+		const ranges = analyzeCoreLoopInductions(
+			program,
+			fn,
+			cfg,
+			coreCanonicalValueRoots(fn, cfg),
+		);
 		expect(ranges.hasNumericRanges).toBe(true);
 		expect(ranges.range(mask, block)).toMatchObject({ minimum: 0, maximum: 15 });
 		expect(ranges.range(product, block)).toMatchObject({ minimum: 0, maximum: 705 });
@@ -749,6 +759,7 @@ describe("Core control-flow analyses and passes", () => {
 		const negativeZeroCfg = buildCoreControlFlow(program, negativeZero.function);
 		expect(
 			analyzeCoreLoopInductions(
+				program,
 				negativeZeroFunction,
 				negativeZeroCfg,
 				coreCanonicalValueRoots(negativeZeroFunction, negativeZeroCfg),
@@ -759,6 +770,7 @@ describe("Core control-flow analyses and passes", () => {
 		const int32Cfg = buildCoreControlFlow(program, int32.function);
 		expect(
 			analyzeCoreLoopInductions(
+				program,
 				int32Function,
 				int32Cfg,
 				coreCanonicalValueRoots(int32Function, int32Cfg),
