@@ -137,8 +137,11 @@ The independent target boundary and current storage contract are recorded in
       proof. Invocation effects and stronger post-call bounds remain intact.
       Conditional aliases now publish input-kind requirements in program return
       summaries; identity, kind and interval consumers check them independently.
-      Carry these conditions through remaining script-call return chains;
-      projection alone must not certify immutable shapes or unchanged contents.
+      Finite script-call chains now substitute conditional parameter and receiver
+      projections through joined returns and recursive components. Known prefixes
+      survive iterable transport; unknown list contents and sloppy receiver boxing
+      retain their conditions. Callee edits withdraw stale projections. Escape
+      effects and own-field proofs remain independent of the alias projection.
       Mutable Object.is now consumes operand identity,
       kinds and scalar views behind a loaded-callee guard, including frameless hits;
       its miss retains arbitrary results, throwing and root publication.

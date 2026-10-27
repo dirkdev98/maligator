@@ -5,6 +5,7 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
+import { COMPILER_VALUE_KIND_OBJECT } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { EVERY_EFFECT_SUMMARY } from "../src/compiler/shared/effect-summary.ts";
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 import {
@@ -15,6 +16,169 @@ import {
 } from "./helpers/core-program-analysis.ts";
 
 describe("incremental Core program summaries", () => {
+	it.each([false, true])(
+		"carries receiver normalization into caller conditions (strict=%s)",
+		(strict) => {
+			const program = analysisProgram();
+			const leaf = new CoreFunctionBuilder(program, {
+				metadata: { strict, sourcePath: "/entry.js" },
+			});
+			const leafEntry = leaf.createBlock();
+			const [receiver] = leaf.appendInstruction(leafEntry, "loadThis", []);
+			leaf.setTerminator(leafEntry, { kind: "return", value: receiver! });
+			const leafId = leaf.finish(leafEntry).function;
+			const caller = new CoreFunctionBuilder(program, {
+				parameterCount: 1,
+				metadata: { strict: true, sourcePath: "/entry.js" },
+			});
+			const entry = caller.createBlock([{}]);
+			const [callee] = caller.appendInstruction(entry, "createFunction", [], {
+				attributes: { functionIndex: leafId },
+			});
+			const [result] = caller.appendInstruction(entry, "call", [
+				callee!,
+				caller.blockParameterValue(entry, 0),
+			]);
+			caller.setTerminator(entry, { kind: "return", value: result! });
+			const callerId = caller.finish(entry).function;
+			const manager = new CoreAnalysisManager(
+				program,
+				programAnalysisContext(),
+				new CoreOptimizationReportBuilder(program),
+			);
+			const summaries = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+				scope: "program",
+			});
+			expect(summaries.summary(callerId)?.returnProvenance).toEqual({
+				kind: "parameter",
+				index: 0,
+				...(strict ? {} : { identityKinds: COMPILER_VALUE_KIND_OBJECT }),
+			});
+		},
+	);
+
+	it.each([false, true])(
+		"requires a grounded normal return in recursive projections (grounded=%s)",
+		(grounded) => {
+			const program = analysisProgram();
+			const builder = new CoreFunctionBuilder(program, {
+				parameterCount: 2,
+				metadata: { strict: true, sourcePath: "/entry.js" },
+			});
+			const entry = builder.createBlock([{}, {}]);
+			const recursive = builder.createBlock();
+			const value = builder.blockParameterValue(entry, 0);
+			const flag = builder.blockParameterValue(entry, 1);
+			if (grounded) {
+				const base = builder.createBlock();
+				builder.setTerminator(entry, {
+					kind: "branch",
+					condition: flag,
+					consequent: { block: base, arguments: [] },
+					alternate: { block: recursive, arguments: [] },
+				});
+				const [receiver] = builder.appendInstruction(base, "createUndefined", []);
+				const [result] = builder.appendInstruction(
+					base,
+					"callKnown",
+					[receiver!, value],
+					{
+						attributes: { operation: "Object.assign" },
+					},
+				);
+				builder.setTerminator(base, { kind: "return", value: result! });
+			} else
+				builder.setTerminator(entry, {
+					kind: "jump",
+					edge: { block: recursive, arguments: [] },
+				});
+			const [callee] = builder.appendInstruction(recursive, "createFunction", [], {
+				attributes: { functionIndex: 0 },
+			});
+			const [receiver] = builder.appendInstruction(recursive, "createUndefined", []);
+			const [result] = builder.appendInstruction(recursive, "call", [
+				callee!,
+				receiver!,
+				value,
+				flag,
+			]);
+			builder.setTerminator(recursive, { kind: "return", value: result! });
+			const functionId = builder.finish(entry).function;
+			const manager = new CoreAnalysisManager(
+				program,
+				programAnalysisContext(),
+				new CoreOptimizationReportBuilder(program),
+			);
+			const summaries = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+				scope: "program",
+			});
+			expect(summaries.summary(functionId)?.returnProvenance).toEqual(
+				grounded
+					? { kind: "parameter", index: 0, identityKinds: COMPILER_VALUE_KIND_OBJECT }
+					: { kind: "none" },
+			);
+		},
+	);
+
+	it("projects conditional returns through call chains and withdraws them after callee edits", () => {
+		const program = analysisProgram();
+		const leaf = new CoreFunctionBuilder(program, {
+			parameterCount: 1,
+			metadata: { strict: true, sourcePath: "/entry.js" },
+		});
+		const leafEntry = leaf.createBlock([{}]);
+		const [receiver] = leaf.appendInstruction(leafEntry, "createUndefined", []);
+		const [result] = leaf.appendInstruction(
+			leafEntry,
+			"callKnown",
+			[receiver!, leaf.blockParameterValue(leafEntry, 0)],
+			{ attributes: { operation: "Object.assign" } },
+		);
+		leaf.setTerminator(leafEntry, { kind: "return", value: result! });
+		const leafId = leaf.finish(leafEntry).function;
+		let target = leafId;
+		for (let index = 0; index < 3; index++) {
+			const builder = new CoreFunctionBuilder(program, {
+				parameterCount: 1,
+				metadata: { strict: true, sourcePath: "/entry.js" },
+			});
+			const entry = builder.createBlock([{}]);
+			const [callee] = builder.appendInstruction(entry, "createFunction", [], {
+				attributes: { functionIndex: target },
+			});
+			const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+			const [result] = builder.appendInstruction(entry, "call", [
+				callee!,
+				receiver!,
+				builder.blockParameterValue(entry, 0),
+			]);
+			builder.setTerminator(entry, { kind: "return", value: result! });
+			target = builder.finish(entry).function;
+		}
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" });
+		expect(first.summary(target)?.returnProvenance).toEqual({
+			kind: "parameter",
+			index: 0,
+			identityKinds: COMPILER_VALUE_KIND_OBJECT,
+		});
+		expect(first.summary(target)?.effects.mayThrow).toBe(true);
+		expect(first.summary(target)?.effects.callsUserCode).toBe(true);
+		const editor = CoreEditor.open(program, leafId);
+		const replacement = editor.appendInstruction(leafEntry, "createObject", []);
+		editor.replaceTerminator(leafEntry, {
+			kind: "return",
+			value: replacement.outputs[0]!,
+		});
+		editor.commit();
+		const second = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" });
+		expect(second.summary(target)?.returnProvenance).toEqual({ kind: "fresh" });
+	});
+
 	it.each(["caught", "carried"] as const)(
 		"tracks %s values returned from an exception handler",
 		(kind) => {

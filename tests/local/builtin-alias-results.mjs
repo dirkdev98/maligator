@@ -83,6 +83,47 @@ const mixedForward = function mixedForward(value, flag, observe) {
 	for (let i = 0; i < 3; i++) observe();
 	return result;
 };
+const assignMiddle = function assignMiddle(other, observe, value) {
+	const result = assignForward(value, other, observe);
+	for (let i = 0; i < 3; i++) observe();
+	return result;
+};
+const assignOuter = function assignOuter(value, other, observe) {
+	const result = assignMiddle(other, observe, value);
+	for (let i = 0; i < 3; i++) observe();
+	return result;
+};
+const recursiveForward = function recursiveForward(value, count, observe) {
+	if (count > 0) return recursiveForward(value, count - 1, observe);
+	const result = assignOuter(value, {}, observe);
+	for (let i = 0; i < 3; i++) observe();
+	return result;
+};
+function chainedIdentity(value, flag, observe) {
+	const result = flag ? recursiveForward(value, 3, observe) : value;
+	observe();
+	return Object.is(result, value);
+}
+function chainedRange(value, observe) {
+	const result = conditionalUnbox(value >>> 0, observe);
+	for (let i = 0; i < 3; i++) observe();
+	return result;
+}
+function chainedNumberIdentity(value, observe) {
+	const result = conditionalUnbox(value, observe);
+	for (let i = 0; i < 3; i++) observe();
+	return Object.is(result, value);
+}
+function chainedPrefix(value, args, observe) {
+	const result = assignOuter(value, {}, observe, ...args);
+	for (let i = 0; i < 3; i++) observe();
+	return Object.is(result, value);
+}
+function chainedList(value, args, observe) {
+	const result = assignOuter(...args);
+	for (let i = 0; i < 3; i++) observe();
+	return Object.is(result, value);
+}
 function conditionalObject(flag, other, observe) {
 	const target = flag ? {} : [];
 	const result = assignForward(target, other, observe);
@@ -107,6 +148,14 @@ function* conditionalSuspended(flag, other, observe) {
 	return Object.is(result, target);
 }
 Object.assign(globalThis, {
+	assignMiddle,
+	assignOuter,
+	recursiveForward,
+	chainedIdentity,
+	chainedRange,
+	chainedNumberIdentity,
+	chainedPrefix,
+	chainedList,
 	conditionalObject,
 	conditionalUnbox,
 	conditionalMixed,
@@ -145,6 +194,17 @@ check(
 
 const map = new Map();
 const marker = { payload: "retained".repeat(100) };
+check(chainedRange(-1, collect), 4294967295, "integer bounds survive chained calls");
+for (const value of [{}, [], 7, -0, "a", new Number(3)]) {
+	check(chainedIdentity(value, false, collect), true, "direct branch keeps its value");
+	check(
+		chainedIdentity(value, true, collect),
+		typeof value === "object",
+		"recursive aliases require an Object input",
+	);
+	const result = assignOuter(value, { marker }, collect);
+	check(result.marker, marker, "chained assignment preserves mutation and roots");
+}
 for (const flag of [false, true]) {
 	const conditional = conditionalObject(flag, { marker }, collect);
 	check(conditional[0], true, "conditional alias with an Object input");
@@ -160,6 +220,11 @@ for (const flag of [false, true]) {
 	check(suspended.next().value, true, "conditional alias survives resume");
 }
 for (const value of [NaN, -0, 4294967295, new Number(7)]) {
+	check(
+		chainedNumberIdentity(value, collect),
+		typeof value === "number",
+		"chained numeric identity preserves NaN and signed zero",
+	);
 	check(
 		conditionalUnbox(value, collect),
 		Number.prototype.valueOf.call(value),
@@ -254,6 +319,11 @@ check(
 );
 check(reads, 1, "array-like getter is evaluated");
 check(Object.isFrozen(listed), true, "array-like contents reach the builtin");
+check(
+	chainedList(marker, [listed, {}, collect], collect),
+	false,
+	"chained list contents do not alias another argument",
+);
 const spread = {
 	*[Symbol.iterator]() {
 		events.push("spread");
@@ -267,6 +337,11 @@ check(
 	"known prefix survives iterable transport",
 );
 check(events[events.length - 1], "spread", "iterable effects remain");
+check(
+	chainedPrefix(marker, spread, collect),
+	true,
+	"chained alias retains its known prefix",
+);
 const failingSpread = {
 	[Symbol.iterator]() {
 		throw failure;
@@ -281,6 +356,14 @@ try {
 	check(error, failure, "iterator exception identity");
 }
 check(observed, false, "iterator failure bypasses post-call observers");
+try {
+	chainedPrefix(marker, failingSpread, () => {
+		observed = true;
+	});
+} catch (error) {
+	check(error, failure, "chained iterator exception identity");
+}
+check(observed, false, "chained iterator failure bypasses observers");
 
 if (process.env.MAL_PRIMORDIALS === "mutable") {
 	const original = Object.freeze;
@@ -298,6 +381,11 @@ if (process.env.MAL_PRIMORDIALS === "mutable") {
 	const originalAssign = Object.assign;
 	try {
 		Object.assign = () => marker;
+		check(
+			chainedIdentity({}, true, collect),
+			false,
+			"mutable callee replacement invalidates chained aliases",
+		);
 		check(
 			conditionalMixed({}, false, collect),
 			false,

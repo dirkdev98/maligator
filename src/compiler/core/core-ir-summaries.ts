@@ -1,4 +1,8 @@
-import { COMPILER_VALUE_KIND_TOP } from "../shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_UNDEFINED,
+} from "../shared/compiler-value-kinds.ts";
 import {
 	EVERY_EFFECT_SUMMARY,
 	NO_EFFECT_SUMMARY,
@@ -47,6 +51,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import type { CoreAttributeValue } from "./core-ir.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
 	CoreProgramFlowLocalTransfers,
@@ -75,6 +80,19 @@ const ORIGIN_TRANSFER_FRESH = 3;
 const ORIGIN_TRANSFER_PRIMITIVE = 4;
 const ORIGIN_TRANSFER_UNKNOWN = 5;
 
+interface ReturnOriginNode {
+	readonly value: CoreValueId;
+	readonly inputs: ReadonlyArray<CoreValueId>;
+	readonly call?: CoreInstructionId;
+	readonly identityKinds?: number;
+}
+
+interface ReturnOriginPlan {
+	readonly returns: ReadonlyArray<CoreValueId>;
+	readonly nodes: ReadonlyArray<ReturnOriginNode>;
+	readonly dependents: ReadonlyMap<CoreValueId, ReadonlyArray<number>>;
+}
+
 export interface CoreLocalFunctionSummary {
 	readonly readAccessor?: ReadAccessorSummary;
 	readonly function: CoreFunctionId;
@@ -96,6 +114,7 @@ export interface CoreLocalFunctionSummary {
 	readonly returnProvenance: ReturnProvenance;
 	readonly returnRepresentation: ReturnRepresentation;
 	readonly origins: ReadonlyArray<ValueOrigin>;
+	readonly returnOrigins?: ReturnOriginPlan;
 }
 
 export type CorePublishedFunctionSummary = CoreProgramFlowPublishedFunctionSummary;
@@ -172,6 +191,163 @@ function projectOrigin(origin: ValueOrigin, identityKinds: number): ValueOrigin 
 	if (origin.kind !== "parameter" && origin.kind !== "receiver") return ORIGIN_UNKNOWN;
 	const required = (origin.identityKinds ?? COMPILER_VALUE_KIND_TOP) & identityKinds;
 	return required === 0 ? ORIGIN_UNKNOWN : { ...origin, identityKinds: required };
+}
+
+function returnOriginPlan(
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	origins: ReadonlyArray<ValueOrigin>,
+	returns: ReadonlyArray<CoreValueId>,
+): ReturnOriginPlan | undefined {
+	if (fn.isAsync || fn.isGenerator) return undefined;
+	const nodes: Array<ReturnOriginNode> = [];
+	const visited = new Set<CoreValueId>();
+	const pending = [...returns];
+	let calls = 0;
+	for (let cursor = 0; cursor < pending.length; cursor++) {
+		const value = pending[cursor]!;
+		if (visited.has(value) || origins[value]?.kind !== "unknown") continue;
+		visited.add(value);
+		let node: ReturnOriginNode | undefined;
+		const owner = fn.kernel.valueDefinitionOwner(value);
+		if (fn.kernel.valueDefinitionKind(value) === 0) {
+			const block = owner as CoreBlockId;
+			const index = fn.kernel.valueDefinitionIndex(value);
+			if (
+				fn.kernel.blockParameterRole(fn.kernel.blockParameterStart(block) + index) === 1
+			)
+				continue;
+			const inputs: Array<CoreValueId> = [];
+			for (const edge of cfg.predecessors[block] ?? []) {
+				if (!cfg.reachable.has(edge.from)) continue;
+				const input = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				if (input !== undefined) inputs.push(input);
+			}
+			if (inputs.length > 0) node = { value, inputs };
+		} else if (fn.kernel.valueDefinitionKind(value) === 1) {
+			const instruction = coreInstructionId(owner);
+			const opcode = fn.instructionOpcodeName(instruction);
+			const projection = coreBuiltinResultProjection(fn, instruction);
+			const input =
+				opcode === "move"
+					? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))
+					: projection?.input;
+			if (input !== undefined) {
+				node = { value, inputs: [input], identityKinds: projection?.identityKinds };
+			} else {
+				const transfer = fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer;
+				if (
+					transfer?.result !== "call-completion" ||
+					fn.kernel.instructionResultCount(instruction) !== 1
+				)
+					continue;
+				const start = fn.kernel.instructionOperandStart(instruction);
+				const count = fn.kernel.instructionOperandCount(instruction);
+				const inputs: Array<CoreValueId> = [];
+				if (transfer.receiverOperand !== undefined && transfer.receiverOperand < count)
+					inputs.push(fn.kernel.operandAt(start + transfer.receiverOperand));
+				const first =
+					transfer.arguments.kind === "positional"
+						? transfer.arguments.firstOperand
+						: transfer.arguments.kind === "aggregate"
+							? transfer.arguments.prefixFirstOperand
+							: undefined;
+				if (first !== undefined) {
+					for (let index = first; index < count; index++)
+						inputs.push(fn.kernel.operandAt(start + index));
+				}
+				node = { value, call: instruction, inputs };
+				calls++;
+			}
+		}
+		if (node === undefined) continue;
+		nodes.push(node);
+		for (const input of node.inputs) pending.push(input);
+	}
+	if (calls === 0) return undefined;
+	const dependents = new Map<CoreValueId, Array<number>>();
+	for (let index = 0; index < nodes.length; index++) {
+		for (const value of nodes[index]!.inputs) {
+			const users = dependents.get(value) ?? [];
+			users.push(index);
+			dependents.set(value, users);
+		}
+	}
+	return { returns, nodes, dependents };
+}
+
+function projectedReturnOrigin(
+	program: CoreProgram,
+	local: CoreLocalFunctionSummary,
+	targets: CoreCallGraphIndex,
+	current: ReadonlyMap<CoreFunctionId, FunctionEffectSummary>,
+	includeCalls: boolean,
+): ValueOrigin {
+	const plan = local.returnOrigins;
+	if (plan === undefined) return local.returnProvenance;
+	const values = new Map(plan.nodes.map(({ value }) => [value, ORIGIN_NONE]));
+	const origin = (value: CoreValueId) =>
+		values.get(value) ?? local.origins[value] ?? ORIGIN_UNKNOWN;
+	const callOrigin = (instruction: CoreInstructionId): ValueOrigin => {
+		const site = targets.site(local.function, instruction);
+		if (site === undefined || site.targets.opaque || site.targets.anyScript)
+			return ORIGIN_UNKNOWN;
+		// SCCs start at bottom so a recursive call cannot certify itself from an old summary.
+		if (!includeCalls) return ORIGIN_NONE;
+		let result = ORIGIN_NONE;
+		for (const target of site.targets.functions) {
+			const callee = program.function(target);
+			const provenance = current.get(target)?.returnProvenance ?? ORIGIN_UNKNOWN;
+			let projected = provenance;
+			if (callee.isAsync || callee.isGenerator) projected = ORIGIN_UNKNOWN;
+			else if (provenance.kind === "parameter" || provenance.kind === "receiver") {
+				const input =
+					provenance.kind === "parameter"
+						? (site.arguments ?? site.argumentPrefix)?.[provenance.index]
+						: site.receiver;
+				let required = provenance.identityKinds ?? COMPILER_VALUE_KIND_TOP;
+				if (provenance.kind === "receiver" && !callee.metadata.strict)
+					required &= COMPILER_VALUE_KIND_OBJECT;
+				projected =
+					input !== undefined
+						? projectOrigin(origin(input), required)
+						: provenance.kind === "parameter" &&
+							  site.arguments !== undefined &&
+							  provenance.index >= site.arguments.length &&
+							  (required & COMPILER_VALUE_KIND_UNDEFINED) !== 0
+							? ORIGIN_PRIMITIVE
+							: ORIGIN_UNKNOWN;
+			}
+			result = joinReturnProvenance(result, projected);
+		}
+		return result;
+	};
+	const queue = plan.nodes.map((_, index) => index);
+	const queued = new Uint8Array(queue.length).fill(1);
+	for (let cursor = 0; cursor < queue.length; cursor++) {
+		const index = queue[cursor]!;
+		queued[index] = 0;
+		const node = plan.nodes[index]!;
+		let next = ORIGIN_NONE;
+		if (node.call !== undefined) next = callOrigin(node.call);
+		else {
+			for (const input of node.inputs) next = joinReturnProvenance(next, origin(input));
+			if (node.identityKinds !== undefined)
+				next = projectOrigin(next, node.identityKinds);
+		}
+		const previous = values.get(node.value)!;
+		next = joinReturnProvenance(previous, next);
+		if (returnProvenancesEqual(previous, next)) continue;
+		values.set(node.value, next);
+		for (const user of plan.dependents.get(node.value) ?? []) {
+			if (queued[user] !== 0) continue;
+			queued[user] = 1;
+			queue.push(user);
+		}
+	}
+	let result = ORIGIN_NONE;
+	for (const value of plan.returns) result = joinReturnProvenance(result, origin(value));
+	return result;
 }
 
 function raiseOrigin(
@@ -572,6 +748,7 @@ function analyzeLocalSummary(
 
 	let provenance: ReturnProvenance = RETURN_PROVENANCE_NONE;
 	let representation: ReturnRepresentation = "none";
+	const returnedValues: Array<CoreValueId> = [];
 	for (const block of cfg.reachable) {
 		const terminator = fn.blockTerminator(block);
 		const kind = fn.instructionKind(terminator);
@@ -583,6 +760,7 @@ function analyzeLocalSummary(
 		}
 		if (kind !== "return") continue;
 		const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
+		returnedValues.push(value);
 		const origin = origins[value]!;
 		provenance = joinReturnProvenance(provenance, origin);
 		representation = joinReturnRepresentation(
@@ -624,6 +802,10 @@ function analyzeLocalSummary(
 		returnProvenance: provenance,
 		returnRepresentation: representation,
 		origins: Object.freeze(origins),
+		returnOrigins:
+			provenance.kind === "unknown"
+				? returnOriginPlan(fn, cfg, origins, returnedValues)
+				: undefined,
 	});
 }
 
@@ -944,7 +1126,13 @@ function deriveSummary(
 		parameterContainment: Object.freeze(parameterContainment),
 		restParameterContainment: "unknown",
 		receiverContainment: receiver.containment,
-		returnProvenance: local.returnProvenance,
+		returnProvenance: projectedReturnOrigin(
+			program,
+			local,
+			targets,
+			current,
+			includeCalls,
+		),
 		returnRepresentation: local.returnRepresentation,
 	});
 }
