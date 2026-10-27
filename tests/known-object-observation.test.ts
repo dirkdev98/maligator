@@ -111,9 +111,13 @@ describe("known builtin object observation", () => {
 		);
 		const materialize = output.indexOf("mal_vm_materialize_stack_object", heldResult);
 		expect(materialize).toBeGreaterThan(heldResult);
-		expect(output.slice(heldResult, materialize)).toMatch(
-			new RegExp(`\\n    __gc_slots\\[\\d+\\] = r${held.dst};\\n`),
-		);
+		const storedInRootSlot = new RegExp(
+			String.raw`#define r${held.dst} \(__gc_slots\[\d+\]\)`,
+		).test(output.slice(0, heldResult));
+		const publishedBeforeMaterialization = new RegExp(
+			String.raw`\n    __gc_slots\[\d+\] = r${held.dst};\n`,
+		).test(output.slice(heldResult, materialize));
+		expect(storedInRootSlot || publishedBeforeMaterialization).toBe(true);
 		expect(output.slice(materialize)).toContain("mal_vm_op_load_property_ic");
 	});
 
