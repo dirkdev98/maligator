@@ -69,6 +69,7 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import { INSTRUCTION_MAY_THROW } from "../shared/instruction-facts.ts";
 import { encodeInstructionEffects } from "../shared/instruction-facts.ts";
+import type { InstructionFacts } from "../shared/instruction-facts.ts";
 import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
@@ -1610,6 +1611,26 @@ interface CoreFieldCall {
 	readonly entries: Array<{ readonly functionIndex: number; readonly entryId: number }>;
 }
 
+const EMPTY_FACT_REGISTERS: ReadonlyArray<number> = Object.freeze([]);
+
+function lowerInstructionFacts(
+	kinds: CoreInstructionFacts | undefined,
+	registers: ReadonlyArray<number>,
+	inputOffset: number,
+	effectMask: number,
+): InstructionFacts {
+	if (kinds === undefined) return { effectMask };
+	return {
+		inputKindMasks: kinds.masks,
+		resultKindMasks: kinds.results,
+		inputIntegerRanges: kinds.inputIntegerRanges,
+		resultIntegerRanges: kinds.resultIntegerRanges,
+		registers,
+		inputOffset,
+		effectMask,
+	};
+}
+
 function lowerFunctionToTarget(
 	coreFunction: CoreFunctionStore,
 	executionFunction: number,
@@ -2272,30 +2293,19 @@ function lowerFunctionToTarget(
 				lowered = { ...lowered, virtualPackedRest: true };
 			}
 			const kinds = instructionFacts[instruction];
-			const loweredRegisters = "registers" in lowered ? lowered.registers : [];
+			const loweredRegisters =
+				"registers" in lowered ? lowered.registers : EMPTY_FACT_REGISTERS;
 			const inputCount = kernel.instructionOperandCount(instruction);
 			const resultCount = kernel.instructionResultCount(instruction);
 			const inputOffset = loweredRegisters.length - inputCount;
 			Object.assign(lowered, {
-				facts: {
-					...(kinds === undefined
-						? {}
-						: {
-								inputKindMasks: kinds.masks,
-								resultKindMasks: kinds.results,
-								...(kinds.inputIntegerRanges === undefined
-									? {}
-									: { inputIntegerRanges: kinds.inputIntegerRanges }),
-								...(kinds.resultIntegerRanges === undefined
-									? {}
-									: { resultIntegerRanges: kinds.resultIntegerRanges }),
-								registers: loweredRegisters,
-								inputOffset,
-							}),
-					effectMask:
-						kinds?.effectMask ??
+				facts: lowerInstructionFacts(
+					kinds,
+					loweredRegisters,
+					inputOffset,
+					kinds?.effectMask ??
 						encodeInstructionEffects(coreInstructionEffects(coreFunction, instruction)),
-				},
+				),
 			});
 			loweredInstructions.set(instruction, lowered);
 			if (siteFacts.size > 0) {
@@ -2375,6 +2385,7 @@ function lowerFunctionToTarget(
 		const terminatorId = coreFunction.blockTerminator(blockId);
 		const terminatorKind = coreFunction.instructionKind(terminatorId);
 		const terminatorOperandStart = kernel.instructionOperandStart(terminatorId);
+		const terminatorOperandCount = kernel.instructionOperandCount(terminatorId);
 		const terminatorEdgeStart = kernel.terminatorEdgeStart(terminatorId);
 		const terminatorEdgeCount = kernel.terminatorEdgeCount(terminatorId);
 		const terminatorPosition = coreFunction.instructionSourcePosition(terminatorId);
@@ -2384,29 +2395,17 @@ function lowerFunctionToTarget(
 			edgeSourcePosition;
 		instructions.push(...sourcePositionMarker(terminatorPosition));
 		const terminatorKinds = instructionFacts[terminatorId];
-		const terminatorFacts = {
-			...(terminatorKinds === undefined
-				? {}
-				: {
-						inputKindMasks: terminatorKinds.masks,
-						resultKindMasks: terminatorKinds.results,
-						...(terminatorKinds.inputIntegerRanges === undefined
-							? {}
-							: { inputIntegerRanges: terminatorKinds.inputIntegerRanges }),
-						...(terminatorKinds.resultIntegerRanges === undefined
-							? {}
-							: { resultIntegerRanges: terminatorKinds.resultIntegerRanges }),
-						registers: Array.from(
-							{ length: kernel.instructionOperandCount(terminatorId) },
-							(_, index) =>
-								registerForValue(kernel.operandAt(terminatorOperandStart + index)),
-						),
-						inputOffset: 0,
-					}),
-			effectMask:
-				terminatorKinds?.effectMask ??
+		const terminatorFacts = lowerInstructionFacts(
+			terminatorKinds,
+			terminatorKinds === undefined || terminatorOperandCount === 0
+				? EMPTY_FACT_REGISTERS
+				: Array.from({ length: terminatorOperandCount }, (_, index) =>
+						registerForValue(kernel.operandAt(terminatorOperandStart + index)),
+					),
+			0,
+			terminatorKinds?.effectMask ??
 				(terminatorKind === "throw" ? INSTRUCTION_MAY_THROW : 0),
-		};
+		);
 		switch (terminatorKind) {
 			case "jump": {
 				const lowered: Extract<CompilerInstruction, { type: "jump" }> = {
