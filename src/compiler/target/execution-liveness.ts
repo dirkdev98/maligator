@@ -88,11 +88,19 @@ export function executionSafepointRoots(
 ): ReadonlyMap<CompilerInstruction, ExecutionSafepointRoots> {
 	if (safepoints.size === 0) return new Map();
 	const wordCount = Math.ceil(fn.registerCount / 32);
-	const add = (registers: Uint32Array, register: number): void => {
-		registers[register >>> 5]! |= 1 << (register & 31);
+	const add = (registers: Uint32Array, register: number): boolean => {
+		const word = register >>> 5;
+		const previous = registers[word]!;
+		const next = (previous | (1 << (register & 31))) >>> 0;
+		registers[word] = next;
+		return previous !== next;
 	};
-	const remove = (registers: Uint32Array, register: number): void => {
-		registers[register >>> 5]! &= ~(1 << (register & 31));
+	const remove = (registers: Uint32Array, register: number): boolean => {
+		const word = register >>> 5;
+		const previous = registers[word]!;
+		const next = (previous & ~(1 << (register & 31))) >>> 0;
+		registers[word] = next;
+		return previous !== next;
 	};
 	const unionInto = (target: Uint32Array, source: Uint32Array): void => {
 		for (let word = 0; word < wordCount; word++) target[word]! |= source[word]!;
@@ -186,9 +194,6 @@ export function executionSafepointRoots(
 	}
 
 	const roots = new Map<CompilerInstruction, ExecutionSafepointRoots>();
-	const incoming = new Uint32Array(wordCount);
-	const outgoing = new Uint32Array(wordCount);
-	const combined = new Uint32Array(wordCount);
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		const firstSafepoint = firstSafepoints[block]!;
 		if (firstSafepoint < 0) continue;
@@ -196,25 +201,33 @@ export function executionSafepointRoots(
 		for (const successor of successors[block]!) {
 			unionInto(live, liveIn[successor]!);
 		}
+		let materialized: ReadonlyArray<number> | undefined;
+		const snapshot = () => (materialized ??= rootRegisters(live));
 		for (let index = instructions.length - 1; index >= firstSafepoint; index--) {
 			const instruction = instructions[index]!;
 			const instructionOperands = operands[block]![index]!;
+			let outgoingRootRegisters: ReadonlyArray<number> | undefined;
+			let allRootRegisters: ReadonlyArray<number> | undefined;
 			if (safepoints.has(instruction)) {
-				incoming.set(live);
-				for (const register of instructionOperands.writes) remove(incoming, register);
-				for (const register of instructionOperands.reads) add(incoming, register);
-				outgoing.set(live);
-				for (const register of instructionOperands.writes) add(outgoing, register);
-				combined.set(incoming);
-				unionInto(combined, outgoing);
+				for (const register of instructionOperands.writes)
+					if (add(live, register)) materialized = undefined;
+				outgoingRootRegisters = snapshot();
+				for (const register of instructionOperands.reads)
+					if (add(live, register)) materialized = undefined;
+				allRootRegisters = snapshot();
+			}
+			// Killing writes also removes the outputs added for the outgoing/combined snapshots.
+			for (const register of instructionOperands.writes)
+				if (remove(live, register)) materialized = undefined;
+			for (const register of instructionOperands.reads)
+				if (add(live, register)) materialized = undefined;
+			if (allRootRegisters !== undefined && outgoingRootRegisters !== undefined) {
 				roots.set(instruction, {
-					rootRegisters: rootRegisters(combined),
-					incomingRootRegisters: rootRegisters(incoming),
-					outgoingRootRegisters: rootRegisters(outgoing),
+					rootRegisters: allRootRegisters,
+					incomingRootRegisters: snapshot(),
+					outgoingRootRegisters,
 				});
 			}
-			for (const register of instructionOperands.writes) remove(live, register);
-			for (const register of instructionOperands.reads) add(live, register);
 		}
 	}
 	return roots;

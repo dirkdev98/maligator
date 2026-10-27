@@ -103,8 +103,11 @@ function reference(
 	return result;
 }
 
-function check(blocks: Array<Array<Operation>>, representations: Array<string>): void {
-	const safepoints = new Set(blocks.flat());
+function check(
+	blocks: Array<Array<Operation>>,
+	representations: Array<string>,
+	safepoints = new Set(blocks.flat()),
+): void {
 	const fn = {
 		registerCount: representations.length,
 		registerRepresentations: representations,
@@ -146,6 +149,25 @@ describe("Execution liveness block-transfer summaries", () => {
 		check([[], []], []);
 	});
 
+	it("preserves earlier snapshots across sparse safepoints and changing root words", () => {
+		const instructions = [
+			op("rootUse", [31, 32]),
+			op("move", [31, 63]),
+			op("rootUse", [31, 32]),
+			op("move", [63, 63]),
+			op("createUndefined", [31]),
+			op("rootUse", [31, 63]),
+			op("return", [32]),
+		];
+		const representations = Array<string>(65).fill("boxed");
+		check([instructions], representations);
+		check(
+			[instructions],
+			representations,
+			new Set(instructions.filter(({ type }) => type === "rootUse")),
+		);
+	});
+
 	it("matches an independent set-based solver on 400 deterministic graphs", () => {
 		let seed = 711;
 		const random = (limit: number) => {
@@ -177,6 +199,11 @@ describe("Execution liveness block-transfer summaries", () => {
 				return instructions;
 			});
 			check(blocks, representations);
+			check(
+				blocks,
+				representations,
+				new Set(blocks.flat().filter(() => random(3) === 0)),
+			);
 		}
 	});
 });
