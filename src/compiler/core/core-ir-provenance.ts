@@ -4767,7 +4767,8 @@ export function discoverCoreLocalSpecializationCandidates(
 	let provenance: CoreProvenance | undefined;
 	let loops: CoreLoopInductionAnalysis | undefined;
 	let valueKinds: CoreValueKindAnalysis | undefined;
-	const getValueKinds = () => (valueKinds ??= analyzeCoreValueKinds(fn, control));
+	const getValueKinds = () =>
+		(valueKinds ??= analyzeCoreValueKinds(program, fn, control));
 	return discoverCandidates(
 		program,
 		functionId,

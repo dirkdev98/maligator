@@ -306,6 +306,7 @@ const KIND_TRANSFER_ELEMENT = 6;
 const KIND_TRANSFER_TYPED_ELEMENT = 7;
 const KIND_TRANSFER_PROPERTY_KEY = 8;
 const KIND_TRANSFER_NORMAL_RESULT_JOIN = 9;
+const KIND_TRANSFER_STRING_LENGTH = 10;
 
 // A non-number key on an Array whose holders are all known reads its length, a
 // prototype member or nothing, since no one gave it other named properties.
@@ -329,6 +330,14 @@ function transferredKind(
 	}
 	const left = mask(inputs[start]! as CoreValueId);
 	if (kind === KIND_TRANSFER_COPY) return left;
+	if (kind === KIND_TRANSFER_STRING_LENGTH) {
+		// Nullish receivers throw before producing a result; primitive String length is immutable.
+		if ((left & ~(COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_NULLISH)) !== 0)
+			return constant;
+		return (left & COMPILER_VALUE_KIND_STRING) !== 0
+			? constant & COMPILER_VALUE_KIND_NUMBER
+			: 0;
+	}
 	// Compact index keys retain Number storage; only existing Strings and Symbols preserve their kind.
 	if (kind === KIND_TRANSFER_PROPERTY_KEY)
 		return (left & ~(COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL)) === 0
@@ -716,6 +725,7 @@ function addOperationKindTransfer(
 }
 
 function addOperationTransfer(
+	program: CoreProgram,
 	buffer: KindTransferBuffer,
 	masks: Uint16Array,
 	fn: CoreFunctionStore,
@@ -783,6 +793,23 @@ function addOperationTransfer(
 			: contextual === undefined
 				? callMask
 				: callMask & contextual;
+	if (opcode === "loadPropertyStatic") {
+		const index = fn.instructionAttributes(instruction).stringIndex;
+		if (
+			typeof index === "number" &&
+			program.stringConstants[index]?.length === 6 &&
+			program.stringConstantText(index) === "length"
+		) {
+			addKindTransfer(
+				buffer,
+				KIND_TRANSFER_STRING_LENGTH,
+				output,
+				supplied ?? COMPILER_VALUE_KIND_TOP,
+				[fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))],
+			);
+			return;
+		}
+	}
 	if (supplied !== undefined) {
 		masks[output] = masks[output]! | supplied;
 		return;
@@ -967,6 +994,7 @@ function valueKindSnapshot(
 }
 
 function solveCoreValueKinds(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	inputs?: CoreValueKindInputs,
@@ -1052,7 +1080,7 @@ function solveCoreValueKinds(
 		addKindTransfer(transfers, KIND_TRANSFER_JOIN, parameter, 0, incomingValues);
 	};
 	const addOutput = (instruction: CoreInstructionId, output: CoreValueId): void => {
-		addOperationTransfer(transfers, masks, fn, instruction, output, inputs);
+		addOperationTransfer(program, transfers, masks, fn, instruction, output, inputs);
 		if (demandedValues !== undefined) return;
 		const opcode = fn.instructionOpcodeName(instruction);
 		const attributes = fn.instructionAttributes(instruction);
@@ -1227,11 +1255,17 @@ function solveCoreValueKinds(
 }
 
 export function analyzeCoreValueKinds(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	inputs?: CoreValueKindInputs,
 ): CoreValueKindAnalysis {
-	const { masks, integerRecipes, joinInputs } = solveCoreValueKinds(fn, cfg, inputs);
+	const { masks, integerRecipes, joinInputs } = solveCoreValueKinds(
+		program,
+		fn,
+		cfg,
+		inputs,
+	);
 	return valueKindSnapshot(
 		masks,
 		integerRecipes,
@@ -1295,7 +1329,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 					: undefined;
 			};
 			if (context.data.singleAssignmentGlobalSlots.length === 0) {
-				return analyzeCoreValueKinds(fn, cfg, {
+				return analyzeCoreValueKinds(program, fn, cfg, {
 					operationResultMask,
 					elementLoadMask,
 					typedElementLoadMask,
@@ -1392,7 +1426,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 						: cfg.instructionDominatesBlock(storeBlock, loadBlock);
 				return dominates ? store.value : undefined;
 			};
-			return analyzeCoreValueKinds(fn, cfg, {
+			return analyzeCoreValueKinds(program, fn, cfg, {
 				operationResultMask,
 				elementLoadMask,
 				typedElementLoadMask,
@@ -1435,6 +1469,7 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 		) {
 			const fields = corePrivateFieldFacts(program);
 			const { masks, computed } = solveCoreValueKinds(
+				program,
 				fn,
 				cfg,
 				fields === undefined
@@ -1507,6 +1542,7 @@ export function solveCoreProgramValueKinds(
 
 // Undefined requests propagation; a fixed TOP means propagation cannot refine the value.
 export function coreValueKindDemand(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: () => CoreControlFlow,
 	targets: CoreCallGraphIndex,
@@ -1565,7 +1601,7 @@ export function coreValueKindDemand(
 		} else if (definitionKind === 1) {
 			const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 			let demand = false;
-			addOperationTransfer(transfers, masks, fn, instruction, value, {
+			addOperationTransfer(program, transfers, masks, fn, instruction, value, {
 				operationResultMask(instruction) {
 					const callKind =
 						callResultKind(fn, instruction) ?? recordFieldKind(fn, instruction);

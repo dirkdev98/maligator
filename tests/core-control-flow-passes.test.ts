@@ -1341,9 +1341,9 @@ describe("Core control-flow analyses and passes", () => {
 		);
 		const { fn, load } = sourceLengthLoad(compilation.program, "arrayLength");
 		const cfg = buildCoreControlFlow(compilation.program, fn.id);
-		expect(analyzeCoreValueKinds(fn, cfg).kindMask(load.outputs[0]!)).toBe(
-			COMPILER_VALUE_KIND_NUMBER,
-		);
+		expect(
+			analyzeCoreValueKinds(compilation.program, fn, cfg).kindMask(load.outputs[0]!),
+		).toBe(COMPILER_VALUE_KIND_NUMBER);
 		const image = lowerExecutionToProgramImage(
 			lowerCoreCompilationToExecution(compilation),
 		);

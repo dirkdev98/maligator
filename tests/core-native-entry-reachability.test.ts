@@ -65,7 +65,7 @@ it.each(["negation", "comparison"])(
 		const id = builder.finish(entry).function;
 		const fn = program.function(id),
 			cfg = buildCoreControlFlow(program, id);
-		const kinds = analyzeCoreValueKinds(fn, cfg, {
+		const kinds = analyzeCoreValueKinds(program, fn, cfg, {
 			parameterMasks: [COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_BOOLEAN],
 		});
 		const reachable = analyzeCoreNativeEntryControlFlow(

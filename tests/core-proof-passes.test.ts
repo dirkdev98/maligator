@@ -453,6 +453,7 @@ describe("Core local proofs and representations", () => {
 					builder.setTerminator(exit, { kind: "return", value: scaled! });
 					const finished = builder.finish(entry);
 					const kinds = analyzeCoreValueKinds(
+						program,
 						program.function(finished.function),
 						buildCoreControlFlow(program, finished.function),
 					);
@@ -586,6 +587,7 @@ describe("Core local proofs and representations", () => {
 		const finished = builder.finish(entry);
 		const fn = program.function(finished.function);
 		const kinds = analyzeCoreValueKinds(
+			program,
 			fn,
 			buildCoreControlFlow(program, finished.function),
 		);
@@ -613,6 +615,7 @@ describe("Core local proofs and representations", () => {
 		const finished = builder.finish(entry);
 		const fn = program.function(finished.function);
 		const kinds = analyzeCoreValueKinds(
+			program,
 			fn,
 			buildCoreControlFlow(program, finished.function),
 		);

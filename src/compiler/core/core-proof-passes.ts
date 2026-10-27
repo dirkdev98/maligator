@@ -6,7 +6,6 @@ import {
 import { effectSummariesEqual } from "../shared/effect-summary.ts";
 import { scalarBuiltinInvocationEffects } from "../shared/scalar-builtin-effects.ts";
 import { CoreEditor } from "./core-editor.ts";
-import { CORE_RECORD_FIELD_KIND_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	coreValueControlFlowUseMask,
@@ -787,6 +786,8 @@ const SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
 	"mathBinaryNumber",
 	// Field facts give a private read the exact kind every write of its field stores.
 	"loadPrivate",
+	"loadProperty",
+	"loadPropertyStatic",
 ]);
 
 const SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
@@ -816,16 +817,7 @@ function scalarProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): 
 	}
 	return (
 		fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
-			"call-completion" ||
-		SCALAR_PRODUCERS.has(opcode) ||
-		((opcode === "loadProperty" || opcode === "loadPropertyStatic") &&
-			fn.instructionAttributes(instruction)[CORE_RECORD_FIELD_KIND_ATTRIBUTE] !==
-				undefined) ||
-		(opcode === "loadProperty" &&
-			fn.instructionAttributes(instruction).containedFixedTypedArrayInBounds === true) ||
-		(opcode === "loadPropertyStatic" &&
-			(fn.instructionAttributes(instruction).exactArrayLength === true ||
-				fn.instructionAttributes(instruction).primitiveStringLength === true))
+			"call-completion" || SCALAR_PRODUCERS.has(opcode)
 	);
 }
 

@@ -96,7 +96,7 @@ export function analyzeCoreNativeEntry(
 			return undefined;
 		},
 	};
-	let kinds = analyzeCoreValueKinds(fn, cfg, kindInputs);
+	let kinds = analyzeCoreValueKinds(program, fn, cfg, kindInputs);
 	const instructions = cfg.reversePostorder.flatMap((block) => [
 		...fn.bodyInstructionIds(block),
 		fn.blockTerminator(block),
@@ -155,7 +155,7 @@ export function analyzeCoreNativeEntry(
 		while (controlFlow.edges.size < previousSize && remaining >= cost) {
 			remaining -= cost;
 			previousSize = controlFlow.edges.size;
-			kinds = analyzeCoreValueKinds(fn, cfg, {
+			kinds = analyzeCoreValueKinds(program, fn, cfg, {
 				...kindInputs,
 				controlEdges: controlFlow.edges,
 			});

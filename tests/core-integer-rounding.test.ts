@@ -52,7 +52,7 @@ function rounding(
 	const id = builder.finish(block).function,
 		fn = program.function(id),
 		cfg = buildCoreControlFlow(program, id);
-	const kinds = analyzeCoreValueKinds(fn, cfg);
+	const kinds = analyzeCoreValueKinds(program, fn, cfg);
 	const ranges = analyzeCoreLoopInductions(
 		fn,
 		cfg,

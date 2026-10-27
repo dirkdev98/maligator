@@ -139,6 +139,36 @@ Object.assign(globalThis, {
 	indexedPrimitiveWrite,
 	suspendedPrimitiveWrite,
 });
+const nullableLengthSource = function nullableLengthSource(flag, observe) {
+	observe(new.target);
+	return flag === undefined ? undefined : flag ? "A𝌆Z" + observe("") : null;
+};
+function nullableStringLength(flag, observe) {
+	const text = nullableLengthSource(flag, observe);
+	observe(text);
+	return text.length * 2;
+}
+function nullableLengthForward(flag, observe) {
+	return nullableStringLength(flag, observe);
+}
+function* nullableSuspendedLength(flag, observe) {
+	const text = nullableLengthSource(flag, observe);
+	yield observe(text);
+	return text.length * 2;
+}
+const mixedLengthSource = function mixedLengthSource(flag, observe) {
+	observe(new.target);
+	return flag ? "fixed" : observe();
+};
+function mixedStringLength(flag, observe) {
+	return mixedLengthSource(flag, observe).length;
+}
+Object.assign(globalThis, {
+	nullableStringLength,
+	nullableLengthForward,
+	nullableSuspendedLength,
+	mixedStringLength,
+});
 function branchStringLength(value) {
 	if (typeof value === "string") return value.length;
 	return -1;
@@ -691,6 +721,75 @@ try {
 } catch (error) {
 	if (error !== thrown) throw error;
 }
+for (const flag of [true, false, undefined]) {
+	for (const read of [
+		globalThis.nullableStringLength,
+		globalThis.nullableLengthForward,
+	]) {
+		try {
+			const result = read(flag, conditionalObserve);
+			if (!flag || result !== 8) throw new Error("nullable length result");
+			rows.push(result);
+		} catch (error) {
+			if (flag || !(error instanceof TypeError)) throw error;
+			rows.push("null length throws");
+		}
+	}
+	const iterator = globalThis.nullableSuspendedLength(flag, conditionalObserve);
+	const first = iterator.next();
+	if (first.done) throw new Error("missing nullable suspension");
+	collectGarbage?.();
+	try {
+		const result = iterator.next();
+		if (!flag || !result.done || result.value !== 8)
+			throw new Error("nullable resumed length");
+		rows.push(result.value);
+	} catch (error) {
+		if (flag || !(error instanceof TypeError)) throw error;
+		rows.push("resumed null length throws");
+	}
+}
+const lengthSuffix = {
+	[Symbol.toPrimitive](hint) {
+		conditionalEvents.push(hint);
+		collectGarbage?.();
+		return "xy";
+	},
+};
+if (
+	globalThis.nullableStringLength(true, (value) =>
+		value === "" ? lengthSuffix : value,
+	) !== 12
+)
+	throw new Error("length input coercion");
+for (const suffix of [
+	Symbol("throws"),
+	{
+		[Symbol.toPrimitive]() {
+			collectGarbage?.();
+			throw thrown;
+		},
+	},
+]) {
+	try {
+		globalThis.nullableStringLength(true, (value) => (value === "" ? suffix : value));
+		throw new Error("missing length input coercion exception");
+	} catch (error) {
+		if (typeof suffix === "symbol" ? !(error instanceof TypeError) : error !== thrown)
+			throw error;
+	}
+}
+const mixedLengthObserver = () => ({
+	get length() {
+		collectGarbage?.();
+		return "kept";
+	},
+});
+if (
+	globalThis.mixedStringLength(false, mixedLengthObserver) !== "kept" ||
+	globalThis.mixedStringLength(true, conditionalObserve) !== 5
+)
+	throw new Error("mixed object length result");
 rows.push(conditionalEvents);
 rows.push(order, inheritedWrites);
 console.log(JSON.stringify(rows));

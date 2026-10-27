@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
+	COMPILER_VALUE_KIND_UNDEFINED,
+	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_SYMBOL,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_STRING,
@@ -187,6 +189,30 @@ it.each(["mutable", "locked"] as const)(
 					throw new Error("Missing conditional length read");
 				expect(instructionInputKind(fn.facts?.[ip], load.object), name).toBe(
 					COMPILER_VALUE_KIND_STRING,
+				);
+			}
+			for (const name of ["nullableStringLength", "nullableSuspendedLength"]) {
+				const fn = pair.programImage.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+								[]),
+						) === name,
+				)!;
+				expect(fn, name).toBeDefined();
+				const ip = fn.body.instructions.findIndex(
+					(op) => op.opcode === "LOAD_PROPERTY_STATIC",
+				);
+				const load = fn.body.instructions[ip]!;
+				if (load.opcode !== "LOAD_PROPERTY_STATIC")
+					throw new Error("Missing nullable length read");
+				expect(instructionInputKind(fn.facts?.[ip], load.object), name).toBe(
+					COMPILER_VALUE_KIND_STRING |
+						COMPILER_VALUE_KIND_NULL |
+						COMPILER_VALUE_KIND_UNDEFINED,
+				);
+				expect(instructionResultKind(fn.facts?.[ip], load.dst), name).toBe(
+					COMPILER_VALUE_KIND_NUMBER,
 				);
 			}
 			for (const binary of [pair.compiled, pair.interpreted])

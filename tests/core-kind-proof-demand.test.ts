@@ -69,9 +69,10 @@ describe("integer proof demand", () => {
 			const fn = program.function(builder.finish(entry).function);
 			const cfg = buildCoreControlFlow(program, fn.id);
 			const expected = reachable ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_NUMBER;
-			expect(analyzeCoreValueKinds(fn, cfg).kindMask(joined)).toBe(expected);
+			expect(analyzeCoreValueKinds(program, fn, cfg).kindMask(joined)).toBe(expected);
 			expect(
 				coreValueKindDemand(
+					program,
 					fn,
 					() => cfg,
 					analyzeCoreCalleeTargets(program),
@@ -98,7 +99,11 @@ describe("integer proof demand", () => {
 			second = chain();
 		builder.setTerminator(entry, { kind: "return", value: first });
 		const fn = program.function(builder.finish(entry).function);
-		const kinds = analyzeCoreValueKinds(fn, buildCoreControlFlow(program, fn.id));
+		const kinds = analyzeCoreValueKinds(
+			program,
+			fn,
+			buildCoreControlFlow(program, fn.id),
+		);
 		expect(kinds.kindMask(first)).toBe(COMPILER_VALUE_KIND_NUMBER);
 		expect(kinds.latticeMask(second)).toBe(COMPILER_VALUE_KIND_NUMBER);
 		expect(kinds.scalarKind(first)).toBe("number");
@@ -119,7 +124,11 @@ describe("integer proof demand", () => {
 		expect(kinds.statistics.integerValues).toBe(10000);
 		editor.commit();
 		expect(
-			analyzeCoreValueKinds(fn, buildCoreControlFlow(program, fn.id)).exactScalar(first),
+			analyzeCoreValueKinds(
+				program,
+				fn,
+				buildCoreControlFlow(program, fn.id),
+			).exactScalar(first),
 		).toBe("number");
 	});
 
@@ -135,7 +144,11 @@ describe("integer proof demand", () => {
 			const [copy] = builder.appendInstruction(entry, "move", [number!]);
 			builder.setTerminator(entry, { kind: "return", value: copy! });
 			const fn = program.function(builder.finish(entry).function);
-			const kinds = analyzeCoreValueKinds(fn, buildCoreControlFlow(program, fn.id));
+			const kinds = analyzeCoreValueKinds(
+				program,
+				fn,
+				buildCoreControlFlow(program, fn.id),
+			);
 			expect(kinds.scalarKind(copy!)).toBe("number");
 			expect(kinds.exactScalar(copy!)).toBe(
 				[0, -2147483648, 2147483647].includes(value) && !Object.is(value, -0)
@@ -192,10 +205,15 @@ describe("integer proof demand", () => {
 				);
 				const fn = program.function(builder.finish(entry).function);
 				for (const reverse of [false, true]) {
-					const kinds = analyzeCoreValueKinds(fn, buildCoreControlFlow(program, fn.id), {
-						operationResultMask: (_instruction, output) =>
-							shape === "bottom-bitwise" && output === bitwise ? 0 : undefined,
-					});
+					const kinds = analyzeCoreValueKinds(
+						program,
+						fn,
+						buildCoreControlFlow(program, fn.id),
+						{
+							operationResultMask: (_instruction, output) =>
+								shape === "bottom-bitwise" && output === bitwise ? 0 : undefined,
+						},
+					);
 					for (const value of reverse ? [alias!, joined] : [joined, alias!])
 						expect(kinds.exactScalar(value)).toBe(
 							shape === "integer" ? "int32" : "number",
@@ -225,12 +243,17 @@ describe("integer proof demand", () => {
 		});
 		builder.setTerminator(entry, { kind: "return", value: overridden! });
 		const fn = program.function(builder.finish(entry).function);
-		const kinds = analyzeCoreValueKinds(fn, buildCoreControlFlow(program, fn.id), {
-			operationResultValue: (_instruction, output) =>
-				output === overridden || output === global ? one : undefined,
-			operationResultMask: (_instruction, output) =>
-				output === masked ? COMPILER_VALUE_KIND_NUMBER : undefined,
-		});
+		const kinds = analyzeCoreValueKinds(
+			program,
+			fn,
+			buildCoreControlFlow(program, fn.id),
+			{
+				operationResultValue: (_instruction, output) =>
+					output === overridden || output === global ? one : undefined,
+				operationResultMask: (_instruction, output) =>
+					output === masked ? COMPILER_VALUE_KIND_NUMBER : undefined,
+			},
+		);
 		expect(kinds.exactScalar(overridden!)).toBe("int32");
 		expect(kinds.exactScalar(represented!)).toBe("int32");
 		for (const value of [masked!, global!])

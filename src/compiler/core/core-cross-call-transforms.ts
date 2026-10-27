@@ -4202,6 +4202,7 @@ function discoverProgramValueKindObservations(
 		let demand = false;
 		const kindMask = (value: CoreValueId) => {
 			fixedKind ??= coreValueKindDemand(
+				program,
 				fn,
 				() =>
 					analyses
@@ -4343,7 +4344,7 @@ function discoverProgramNormalResultFacts(
 						function: target,
 					})
 					.exceptional();
-			const fixed = coreValueKindDemand(fn, control, flow.targets, true);
+			const fixed = coreValueKindDemand(program, fn, control, flow.targets, true);
 			let mask: number | undefined = 0;
 			if (fn.isAsync || fn.isGenerator) mask = COMPILER_VALUE_KIND_OBJECT;
 			else
@@ -4375,6 +4376,7 @@ function discoverProgramNormalResultFacts(
 			const value = forwardedCallResultValue(program, flow, target, site);
 			if (value !== undefined) {
 				localKinds ??= coreValueKindDemand(
+					program,
 					fn,
 					() =>
 						analyses
@@ -4853,6 +4855,7 @@ function discoverProgramCallResultIdentities(
 			const mask = fact?.mask ?? attributes[CORE_CALL_RESULT_KIND_ATTRIBUTE];
 			if (typeof mask === "number") {
 				kind ??= coreValueKindDemand(
+					program,
 					fn,
 					() =>
 						analyses

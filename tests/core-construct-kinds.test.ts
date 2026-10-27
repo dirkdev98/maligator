@@ -27,7 +27,11 @@ function constructionKinds(): Array<number> {
 	const masks: Array<number> = [];
 	for (const id of core.program.functionIds()) {
 		const fn = core.program.function(id);
-		const kinds = analyzeCoreValueKinds(fn, buildCoreControlFlow(core.program, id));
+		const kinds = analyzeCoreValueKinds(
+			core.program,
+			fn,
+			buildCoreControlFlow(core.program, id),
+		);
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction);

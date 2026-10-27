@@ -162,7 +162,11 @@ The independent target boundary and current storage contract are recorded in
       and coercion folds consume those bounds, and exact primitive String lengths
       bypass property probes in full, frameless and resumable entries. Scoped
       effect proofs still need availability obligations before code motion can
-      consume branch-only facts.
+      consume branch-only facts. Static length reads now infer Number normal results
+      from primitive String/nullish receiver bounds before operation lowering;
+      nullish-only inputs have no normal result. Those bounds reach return summaries,
+      selected entries and scalar property-result storage while preserving getter
+      effects and ordinary object/prototype fallbacks.
 - [ ] Give record entries typed fields. Program value-kind flow now carries initial
       own-field kind summaries through exact call chains, finite callee sets,
       recursive forwarding, spread/rest and constructor completions. Field-only
