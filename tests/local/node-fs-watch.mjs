@@ -125,7 +125,12 @@ async function statPolling() {
 		};
 		const watcher = fs.watchFile(file, { interval: 20 }, listener);
 		console.log("stat watcher", typeof watcher.ref, typeof watcher.unref);
-		setTimeout(() => fs.writeFileSync(file, "abcd"), 60);
+		setTimeout(() => {
+			// A poll can sample writeFileSync's truncation; publish the completed file atomically.
+			const replacement = path.join(root, "polled-next.txt");
+			fs.writeFileSync(replacement, "abcd");
+			fs.renameSync(replacement, file);
+		}, 60);
 	});
 	fs.writeFileSync(file, "abcdefgh");
 	await new Promise((resolve) => setTimeout(resolve, 120));
