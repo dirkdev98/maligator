@@ -284,6 +284,20 @@ function sameStaticIdentity(
 	}
 }
 
+function sameStableSymbolIdentity(
+	left: StaticAllocationIdentity | undefined,
+	right: StaticAllocationIdentity | undefined,
+): boolean {
+	// A fresh allocation site can repeat on a backedge; only its SSA aliases prove the same value.
+	return (
+		left !== undefined &&
+		(left.kind === "intrinsic" ||
+			left.kind === "symbol-registry" ||
+			left.kind === "private-cell") &&
+		sameStaticIdentity(left, right)
+	);
+}
+
 function staticPropertyKey(key: StaticPropertyDescription["key"]): string {
 	return typeof key === "string"
 		? `string:${key}`
@@ -382,6 +396,16 @@ function immutableStaticValue(
 		state: "immutable-value",
 		operands: [],
 		environmentDependencies: [],
+	};
+}
+
+function aliasedStaticValue(value: CoreValueId, input: CoreStaticValue): CoreStaticValue {
+	return {
+		...input,
+		value,
+		...(input.brand === "symbol"
+			? { discriminator: input.discriminator ?? input.value }
+			: {}),
 	};
 }
 
@@ -594,10 +618,14 @@ export class CoreStaticValueAnalysis {
 
 	queryPropertyAt(
 		value: CoreValueId,
-		key: string,
+		key: string | CoreValueId,
 		consumer: CoreInstructionId,
 	): CoreStaticProperty | undefined {
-		const fact = this.#queryAt(value, consumer, key);
+		const fact = this.#queryAt(
+			value,
+			consumer,
+			typeof key === "string" ? key : undefined,
+		);
 		if (fact.kind === "unknown") return undefined;
 		const intern = this.#program.staticDescriptions;
 		const description = intern.description(fact.description);
@@ -609,10 +637,14 @@ export class CoreStaticValueAnalysis {
 				description: intern.intern(staticNumberDescription(description.length)),
 			};
 		else {
-			const property = description.properties.find((property) => property.key === key);
+			const property =
+				typeof key === "string"
+					? description.properties.find((property) => property.key === key)
+					: this.ownSymbolProperty(fact, key);
 			if (property !== undefined) {
 				if (property.descriptor.kind === "data") member = property.descriptor.value;
 			} else if (
+				typeof key === "string" &&
 				description.ownKeysComplete !== false &&
 				(fact.prototype.kind === "null" || this.inherited(fact, key)?.kind === "absent")
 			)
@@ -630,6 +662,33 @@ export class CoreStaticValueAnalysis {
 		const result = { member, operands };
 		this.#propertyProofs.set(result, consumer);
 		return result;
+	}
+
+	ownSymbolProperty(
+		value: CoreStaticValue,
+		key: CoreValueId,
+	): StaticPropertyDescription | undefined {
+		this.verify(value);
+		const symbol = this.query(key);
+		if (symbol.kind !== "known" || symbol.brand !== "symbol") return undefined;
+		const description = this.#program.staticDescriptions.description(value.description);
+		if (description.kind !== "array" && description.kind !== "object") return undefined;
+		return description.properties.find((property) => {
+			if (typeof property.key === "string") return false;
+			let identity: StaticAllocationIdentity | undefined;
+			if ("symbolOperand" in property.key) {
+				const operand = value.operands[property.key.symbolOperand]!;
+				if (operand === key) return true;
+				const bound = this.query(operand);
+				if (bound.kind !== "known" || bound.brand !== "symbol") return false;
+				if (
+					(bound.discriminator ?? bound.value) === (symbol.discriminator ?? symbol.value)
+				)
+					return true;
+				identity = bound.identity;
+			} else identity = value.allocationIdentities?.[property.key.symbolIdentitySlot];
+			return sameStableSymbolIdentity(symbol.identity, identity);
+		});
 	}
 
 	verifyProperty(value: CoreStaticProperty, consumer: CoreInstructionId): void {
@@ -748,7 +807,8 @@ export class CoreStaticValueAnalysis {
 		const aliases = new Set<CoreValueId>([root]);
 		const bindingIndices = new Map(bindings.map((input, index) => [input, index]));
 		const symbolKeys: Array<{
-			identity: StaticAllocationIdentity;
+			identity: StaticAllocationIdentity | undefined;
+			value: CoreValueId;
 			index: number;
 		}> = [];
 		const bind = (input: CoreValueId, deferred = false): StaticMember => {
@@ -779,23 +839,22 @@ export class CoreStaticValueAnalysis {
 		const propertyKey = (
 			input: CoreValueId,
 		): StaticPropertyDescription["key"] | undefined => {
-			const constant = this.constant(input);
-			if (constant !== undefined)
-				return constant.kind === "undefined" ? "undefined" : String(constant.value);
-			const fact = this.query(input);
-			if (fact.kind === "known" && fact.brand === "null") return "null";
-			if (fact.kind !== "known" || fact.brand !== "symbol") return undefined;
+			const key = this.propertyKey(input);
+			if (key === undefined || typeof key === "string") return key;
+			const fact = this.query(key);
+			if (fact.kind !== "known") return undefined;
 			const identity = fact.identity;
+			const canonical = fact.discriminator ?? fact.value;
 			this.statistics.visits += symbolKeys.length;
 			if (this.statistics.visits > this.#limit) return undefined;
-			const prior =
-				identity === undefined
-					? undefined
-					: symbolKeys.find((entry) => sameStaticIdentity(entry.identity, identity));
+			const prior = symbolKeys.find(
+				(entry) =>
+					entry.value === canonical || sameStableSymbolIdentity(entry.identity, identity),
+			);
 			if (prior !== undefined) return { symbolOperand: prior.index };
 			const member = bind(input);
 			if (member.kind !== "operand") return undefined;
-			if (identity !== undefined) symbolKeys.push({ identity, index: member.index });
+			symbolKeys.push({ identity, value: canonical, index: member.index });
 			return { symbolOperand: member.index };
 		};
 		const invalidate = () => {
@@ -1469,6 +1528,8 @@ export class CoreStaticValueAnalysis {
 		switch (opcode) {
 			case "callKnown":
 				return attributes.argumentMode === undefined;
+			case "toPropertyKey":
+				return this.#mayDescribe(operand(1), visiting);
 			// Calls need a described callee and primordial property reads a described base.
 			case "call":
 			case "construct":
@@ -1637,12 +1698,22 @@ export class CoreStaticValueAnalysis {
 				),
 				"number",
 			);
-		if (opcode === "move") {
+		if (opcode === "move" || opcode === "toPropertyKey") {
 			const input = this.#query(
-				fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
+				fn.kernel.operandAt(
+					fn.kernel.instructionOperandStart(instruction) + (opcode === "move" ? 0 : 1),
+				),
 				requestedKey,
 			);
-			return input.kind === "known" ? { ...input, value } : input;
+			// The base can still throw; a normal String/Symbol key preserves its identity.
+			if (
+				opcode === "toPropertyKey" &&
+				input.kind === "known" &&
+				input.brand !== "string" &&
+				input.brand !== "symbol"
+			)
+				return { kind: "unknown", reason: "unsupported-producer" };
+			return input.kind === "known" ? aliasedStaticValue(value, input) : input;
 		}
 		if (["loadLocal", "loadGlobal", "loadCaptured"].includes(opcode)) {
 			const location: CoreExactMemoryLocation =
@@ -1665,7 +1736,7 @@ export class CoreStaticValueAnalysis {
 				: undefined;
 			if (input !== undefined && input !== value) {
 				const fact = this.#query(input, requestedKey);
-				if (fact.kind === "known") return { ...fact, value };
+				if (fact.kind === "known") return aliasedStaticValue(value, fact);
 			}
 			// Without a local initializer, a cell proof needs a later consumer's TDZ check.
 			if (
@@ -1834,11 +1905,10 @@ export class CoreStaticValueAnalysis {
 				if (opcode === "loadPropertyStatic")
 					key = this.string(attributes.stringIndex as number);
 				else {
-					const constant = this.constant(operands[1]!);
-					if (constant !== undefined)
-						key = constant.kind === "undefined" ? "undefined" : String(constant.value);
-					else {
-						const symbol = this.query(operands[1]!);
+					const propertyKey = this.propertyKey(operands[1]!);
+					if (typeof propertyKey === "string") key = propertyKey;
+					else if (propertyKey !== undefined) {
+						const symbol = this.query(propertyKey);
 						if (
 							symbol.kind === "known" &&
 							symbol.brand === "symbol" &&
@@ -2511,6 +2581,20 @@ export class CoreStaticValueAnalysis {
 
 	string(index: number): string {
 		return this.#program.stringConstantText(index);
+	}
+
+	// Constant primitive keys become text; Symbols retain the SSA value binding their identity.
+	propertyKey(value: CoreValueId): string | CoreValueId | undefined {
+		const fact = this.query(value);
+		if (fact.kind !== "known") return undefined;
+		if (fact.brand === "symbol") return value;
+		if (fact.brand === "null" || fact.brand === "undefined") return fact.brand;
+		const constant = this.descriptionConstant(fact.description);
+		return constant === undefined
+			? undefined
+			: constant.kind === "undefined"
+				? "undefined"
+				: String(constant.value);
 	}
 
 	constant(value: CoreValueId, consumer?: CoreInstructionId): ConstantValue | undefined {

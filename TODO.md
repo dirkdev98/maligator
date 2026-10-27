@@ -181,6 +181,11 @@ The independent target boundary and current storage contract are recorded in
       length remains present after escape or mutation. Inherited results require
       world proofs; unknown keys, Proxy receivers and escaped ordinary properties
       retain their effects and fallback, including across suspension.
+      String/Symbol key conversions now retain normal-result facts independently
+      of base exceptions. Static reads, membership and descriptors match Symbol
+      SSA aliases and stable identities; repeated fresh allocation sites and
+      uncertain registry keys retain their fallbacks. Cell transport clears
+      producer-local SSA discriminators before rebinding the proof in its reader.
 - [ ] Give record entries typed fields. Program value-kind flow now carries initial
       own-field kind summaries through exact call chains, finite callee sets,
       recursive forwarding, spread/rest and constructor completions. Field-only

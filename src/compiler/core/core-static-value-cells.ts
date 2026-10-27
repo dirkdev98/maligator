@@ -274,6 +274,8 @@ export class CoreStaticCellIndex {
 		return {
 			...source,
 			value,
+			// A producer's SSA discriminator has no meaning in the reader's function.
+			discriminator: undefined,
 			identity:
 				source.identity === undefined
 					? undefined

@@ -1,4 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
+import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { CoreStaticValueAnalysis } from "../src/compiler/core/core-static-values.ts";
+import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 import { inspectStaticValueFunction, staticValueCases } from "./helpers/static-values.ts";
 
 const present = [
@@ -136,4 +142,186 @@ describe.each([false, true])("static membership with locked primordials %s", (lo
 			).toBe(!locked);
 		}
 	});
+});
+
+describe("Symbol property identity", () => {
+	const fields = [
+		[
+			"fresh Symbol read",
+			"const key=Symbol('key');const record={[key]:value};return record[key];",
+		],
+		[
+			"effectful Symbol description",
+			"const key=Symbol(value);const record={[key]:value};return record[key];",
+		],
+		[
+			"unknown registry key",
+			"const key=Symbol.for(value);const record={[key]:value};return record[key];",
+		],
+		[
+			"joined Symbol key",
+			"const key=value?Symbol.iterator:Symbol.toStringTag;const record={[key]:value};return record[key];",
+		],
+		[
+			"stable registry identity",
+			"const record={[Symbol.for('key')]:value};return record[Symbol.for('key')];",
+		],
+		[
+			"private Symbol write",
+			"const key=Symbol('key');const record={[key]:0};record[key]=value;return record[key];",
+		],
+		[
+			"Symbol descriptor",
+			"const key=Symbol('key');const record={[key]:value};return Object.getOwnPropertyDescriptor(record,key).value;",
+		],
+	] as const;
+	it.each(
+		staticValueCases(
+			fields,
+			([, body], name) => `function ${name}(value){${body}}globalThis.${name}=${name};`,
+		),
+	)("forwards %s through the shared static property query", (_label, _entry, inspect) => {
+		expect(inspect().core.some((operation) => operation.opcode === "loadProperty")).toBe(
+			false,
+		);
+	});
+	it.each(["key in record", "Object.hasOwn(record,key)", "Reflect.has(record,key)"])(
+		"folds own Symbol presence in %s",
+		(expression) => {
+			const result = inspectStaticValueFunction(
+				`function probe(value){const key=Symbol(value);const record={[key]:value};return ${expression};}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(
+				result.core.some(
+					(operation) =>
+						operation.opcode === "binary" && operation.attributes.operator === "in",
+				),
+			).toBe(false);
+			expect(
+				result.core.some(
+					(operation) =>
+						operation.opcode === "callKnown" &&
+						(operation.attributes.operation === "Object.hasOwn" ||
+							operation.attributes.operation === "Reflect.has"),
+				),
+			).toBe(false);
+			expect(
+				result.core.some(
+					(operation) =>
+						operation.opcode === "callKnown" &&
+						operation.attributes.operation === "Symbol",
+				),
+			).toBe(true);
+		},
+	);
+	it.each([
+		[
+			"distinct Symbols with the same description",
+			"const key=Symbol('key'),other=Symbol('key');const record={[key]:value};return record[other];",
+		],
+		[
+			"uncertain registry aliases",
+			"const key=Symbol.for(value),other=Symbol.for(value);const record={[key]:value};return record[other];",
+		],
+		[
+			"Symbol accessor read",
+			"const key=Symbol('key');const record={get [key](){throw value}};return record[key];",
+		],
+		[
+			"escaped Symbol property",
+			"const key=Symbol('key');const record={[key]:value};observe(record,key);return record[key];",
+		],
+		[
+			"deleted Symbol property",
+			"const key=Symbol('key');const record={[key]:value};delete record[key];return record[key];",
+		],
+	] as const)("retains %s", (_label, body) => {
+		const result = inspectStaticValueFunction(
+			`function probe(value,observe){${body}}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(result.core.some((operation) => operation.opcode === "loadProperty")).toBe(
+			true,
+		);
+	});
+	it.each(["function*", "async function", "async function*"])(
+		"forwards a private Symbol field across suspension in %s",
+		(prefix) => {
+			const suspension = prefix === "async function" ? "await 1" : "yield 1";
+			const result = inspectStaticValueFunction(
+				`${prefix} probe(value){const key=Symbol('key');const record={[key]:value};${suspension};return record[key];}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(result.core.some((operation) => operation.opcode === "loadProperty")).toBe(
+				false,
+			);
+		},
+	);
+	it.each(["string", "symbol", "number"] as const)(
+		"keeps %s conversion facts independent of base exceptions and compact index storage",
+		(kind) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[107]] });
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 2 }),
+				entry = builder.createBlock([{}, {}]);
+			const [text] = builder.appendInstruction(entry, "createString", [], {
+				attributes: { stringIndex: 0 },
+			});
+			const [nil] = builder.appendInstruction(entry, "createUndefined", []);
+			const [key] =
+				kind === "string"
+					? [text!]
+					: kind === "number"
+						? builder.appendInstruction(entry, "createNumber", [], {
+								attributes: { value: 1 },
+							})
+						: builder.appendInstruction(entry, "callKnown", [nil!, text!], {
+								attributes: { operation: "Symbol" },
+							});
+			const [converted] = builder.appendInstruction(entry, "toPropertyKey", [
+				builder.blockParameterValue(entry, 0),
+				key!,
+			]);
+			const conversion = builder.bodyInstructionIds(entry).at(-1)!;
+			const [record] = builder.appendInstruction(entry, "createObject", []);
+			const payload = builder.blockParameterValue(entry, 1);
+			builder.appendInstruction(entry, "defineProperty", [record!, converted!, payload], {
+				attributes: { enumerable: true },
+			});
+			const [result] = builder.appendInstruction(entry, "loadProperty", [record!, key!]);
+			const read = builder.bodyInstructionIds(entry).at(-1)!;
+			builder.setTerminator(entry, { kind: "return", value: result! });
+			const fn = program.function(builder.finish(entry).function),
+				context = programAnalysisContext();
+			const analysis = new CoreStaticValueAnalysis(
+				program,
+				fn,
+				() => buildCoreControlFlow(program, fn.id),
+				65536,
+				{
+					...context,
+					facts: {
+						...context.facts,
+						world: { ...context.facts.world, primordialPolicy: "locked" },
+					},
+				},
+			);
+			const fact = analysis.query(converted!);
+			if (kind === "number") expect(fact.kind).toBe("unknown");
+			else {
+				expect(fact).toMatchObject({ kind: "known", brand: kind });
+				const property = analysis.queryPropertyAt(
+					record!,
+					kind === "symbol" ? key! : "k",
+					read,
+				)!;
+				expect(property.operands).toEqual([payload]);
+				analysis.verifyProperty(property, read);
+			}
+			expect(fn.instructionEffectRefinement(conversion)).toBeUndefined();
+			expect(fn.registry.byId(fn.instructionOpcode(conversion)).effects.mayThrow).toBe(
+				true,
+			);
+		},
+	);
 });

@@ -290,18 +290,10 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 			if (opcode !== loadPropertyOpcode && opcode !== loadPropertyStaticOpcode) continue;
 			const start = fn.kernel.instructionOperandStart(instruction),
 				receiver = fn.kernel.operandAt(start);
-			const keyConstant =
-				opcode === loadPropertyOpcode
-					? analysis.constant(fn.kernel.operandAt(start + 1))
-					: undefined;
 			const key =
 				opcode === loadPropertyStaticOpcode
 					? analysis.string(fn.instructionAttributes(instruction).stringIndex as number)
-					: keyConstant === undefined
-						? undefined
-						: keyConstant.kind === "undefined"
-							? "undefined"
-							: String(keyConstant.value);
+					: analysis.propertyKey(fn.kernel.operandAt(start + 1));
 			if (key === undefined) continue;
 			const property = analysis.queryPropertyAt(receiver, key, instruction);
 			if (property === undefined) continue;
@@ -542,18 +534,13 @@ export const foldStaticReflections: CoreFunctionPass = {
 				: fn.kernel.instructionOperandCount(instruction) > argument + 1
 					? fn.kernel.operandAt(start + argument + 1)
 					: undefined;
-			const input =
-				keyInput === undefined
-					? { kind: "undefined" as const }
-					: analysis.constant(keyInput);
+			const propertyKey =
+				keyInput === undefined ? "undefined" : analysis.propertyKey(keyInput);
+			if (propertyKey === undefined) continue;
 			let key: PrimordialKey | undefined =
-				input === undefined
-					? undefined
-					: input.kind === "undefined"
-						? "undefined"
-						: String(input.value);
-			if (key === undefined && keyInput !== undefined) {
-				const symbol = analysis.query(keyInput);
+				typeof propertyKey === "string" ? propertyKey : undefined;
+			if (typeof propertyKey !== "string") {
+				const symbol = analysis.query(propertyKey);
 				if (
 					symbol.kind === "known" &&
 					symbol.brand === "symbol" &&
@@ -561,8 +548,8 @@ export const foldStaticReflections: CoreFunctionPass = {
 				)
 					key = { symbol: symbol.canonical };
 			}
-			if (key === undefined) continue;
 			if (
+				key !== undefined &&
 				fact.canonical !== undefined &&
 				["object", "array", "function"].includes(fact.brand)
 			) {
@@ -660,17 +647,22 @@ export const foldStaticReflections: CoreFunctionPass = {
 				edits += 6;
 				continue;
 			}
-			if (typeof key !== "string") continue;
 			const description = program.staticDescriptions.description(fact.description);
 			if (description.kind !== "array" && description.kind !== "object") continue;
-			let property = description.properties.find((property) => property.key === key);
+			let property =
+				typeof propertyKey === "string"
+					? description.properties.find((property) => property.key === propertyKey)
+					: analysis.ownSymbolProperty(fact, propertyKey);
+			// An unmatched Symbol can alias another stored key; it does not prove absence.
+			if (typeof propertyKey !== "string" && property === undefined) continue;
 			if (canonical === "Object.hasOwn" || canonical === "Reflect.has") {
 				// An Array keeps its nonconfigurable own length when its contents are unknown.
 				let value =
 					property !== undefined || (description.kind === "array" && key === "length");
 				if (!value && description.ownKeysComplete === false) continue;
 				if (!value && canonical === "Reflect.has") {
-					const inherited = analysis.inherited(fact, key);
+					if (typeof propertyKey !== "string") continue;
+					const inherited = analysis.inherited(fact, propertyKey);
 					if (inherited === undefined && fact.prototype.kind !== "null") continue;
 					value = inherited?.kind === "descriptor";
 				}

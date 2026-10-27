@@ -10,6 +10,7 @@ import { CoreStaticValueAnalysis } from "../src/compiler/core/core-static-values
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
 import { COMPILER_VALUE_KIND_NUMBER } from "../src/compiler/shared/compiler-value-kinds.ts";
+import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 type Scenario =
 	| "private"
@@ -171,6 +172,71 @@ function fixture(scenario: Scenario, closed = true) {
 }
 
 describe("demanded private-cell contents", () => {
+	it("rebinds a Symbol cell without exporting its producer's SSA discriminator", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			globalCount: 1,
+			stringConstants: [[107]],
+		});
+		const base = programAnalysisContext(false);
+		const context = {
+			...base,
+			facts: {
+				...base.facts,
+				world: { ...base.facts.world, primordialPolicy: "locked" as const },
+			},
+			data: { ...base.data, singleAssignmentGlobalSlots: [0] },
+		};
+		const writer = new CoreFunctionBuilder(program),
+			entry = writer.createBlock();
+		const [nil] = writer.appendInstruction(entry, "createUndefined", []);
+		const [text] = writer.appendInstruction(entry, "createString", [], {
+			attributes: { stringIndex: 0 },
+		});
+		const [symbol] = writer.appendInstruction(entry, "callKnown", [nil!, text!], {
+			attributes: { operation: "Symbol" },
+		});
+		const [alias] = writer.appendInstruction(entry, "move", [symbol!]);
+		writer.appendInstruction(entry, "storeGlobal", [alias!], {
+			attributes: { index: 0 },
+		});
+		writer.setTerminator(entry, { kind: "return", value: nil! });
+		const producer = program.function(writer.finish(entry).function);
+		const reader = new CoreFunctionBuilder(program),
+			readEntry = reader.createBlock();
+		const [loaded] = reader.appendInstruction(readEntry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const load = reader.bodyInstructionIds(readEntry).at(-1)!;
+		reader.appendInstruction(readEntry, "throwIfTdz", [loaded!]);
+		reader.setTerminator(readEntry, { kind: "return", value: loaded! });
+		const consumer = program.function(reader.finish(readEntry).function);
+		const analysis = new CoreStaticValueAnalysis(
+			program,
+			producer,
+			() => buildCoreControlFlow(program, producer.id),
+			65536,
+			context,
+		);
+		expect(analysis.query(alias!)).toMatchObject({
+			kind: "known",
+			discriminator: symbol,
+		});
+		const index = new CoreStaticCellIndex(program, context);
+		const stored = index.query(
+			consumer,
+			load,
+			loaded!,
+			consumer.blockTerminator(readEntry),
+			() => analysis,
+			() => buildCoreControlFlow(program, consumer.id),
+		);
+		expect(stored).toMatchObject({
+			kind: "known",
+			brand: "symbol",
+			identity: { kind: "private-cell", function: consumer.id },
+		});
+		expect(stored?.discriminator).toBeUndefined();
+	});
 	it("retires cell proofs after an effect refinement and proves the contents again", () => {
 		const f = fixture("private");
 		const helper = new CoreFunctionBuilder(f.program);

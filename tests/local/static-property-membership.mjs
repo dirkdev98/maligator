@@ -217,4 +217,176 @@ const asyncEscaping = escapingAsyncGenerator(marker);
 delete (await asyncEscaping.next()).value.present;
 globalThis.gc?.();
 assert((await asyncEscaping.next()).value === false, "async yielded record mutation");
+
+function symbolRead(value, description) {
+	const key = Symbol(description);
+	const record = { [key]: value };
+	return record[key];
+}
+
+function symbolPresence(value, description) {
+	const key = Symbol(description);
+	const record = { [key]: value };
+	return key in record;
+}
+
+function symbolDescriptor(value, description) {
+	const key = Symbol(description);
+	const record = { [key]: value };
+	return Object.getOwnPropertyDescriptor(record, key).value;
+}
+
+function unknownRegistryKeys(description, value) {
+	const key = Symbol.for(description),
+		other = Symbol.for(description);
+	const record = { [key]: value };
+	return record[other];
+}
+
+function shadowedSymbol(Symbol, value) {
+	const key = Symbol();
+	const record = { [key]: value };
+	return record[key];
+}
+
+function symbolLoop(value, limit) {
+	let previous;
+	let result = "";
+	for (let i = 0; i < limit; i++) {
+		const key = Symbol("same");
+		const record = previous ?? { [key]: value };
+		result += key in record ? "1" : "0";
+		previous = record;
+	}
+	return result;
+}
+
+function* privateSymbolGenerator(value) {
+	const key = Symbol("key");
+	const record = { [key]: value };
+	yield 1;
+	return record[key];
+}
+
+async function* escapingSymbolGenerator(value) {
+	const key = Symbol("key");
+	const record = { [key]: value };
+	yield { record, key };
+	return record[key];
+}
+
+Object.assign(globalThis.membershipProbes, {
+	symbolRead,
+	symbolPresence,
+	symbolDescriptor,
+	unknownRegistryKeys,
+	shadowedSymbol,
+	symbolLoop,
+	privateSymbolGenerator,
+	escapingSymbolGenerator,
+});
+
+let descriptions = 0;
+const description = {
+	[Symbol.toPrimitive](hint) {
+		assert(hint === "string", "Symbol description hint");
+		descriptions++;
+		globalThis.gc?.();
+		return "key";
+	},
+};
+assert(symbolRead(marker, description) === marker, "Symbol data read");
+assert(symbolPresence(marker, description), "Symbol own presence");
+assert(symbolDescriptor(marker, description) === marker, "Symbol descriptor value");
+assert(descriptions === 3, "Symbol construction retains description effects");
+const accessorKey = Symbol("accessor");
+const symbolAccessor = {
+	get [accessorKey]() {
+		throw marker;
+	},
+};
+assert(
+	accessorKey in symbolAccessor,
+	"Symbol accessor presence does not invoke the getter",
+);
+assert(
+	typeof Object.getOwnPropertyDescriptor(symbolAccessor, accessorKey).get === "function",
+	"Symbol accessor descriptor",
+);
+try {
+	symbolAccessor[accessorKey];
+	assert(false, "Symbol getter did not run");
+} catch (error) {
+	assert(error === marker, "Symbol getter exception identity");
+}
+try {
+	symbolRead(marker, {
+		toString() {
+			throw marker;
+		},
+	});
+	assert(false, "throwing description accepted");
+} catch (error) {
+	assert(error === marker, "description exception identity");
+}
+let registryDescriptions = 0;
+assert(
+	unknownRegistryKeys(
+		{
+			toString() {
+				return `registry-${registryDescriptions++}`;
+			},
+		},
+		marker,
+	) === undefined,
+	"registry calls can have distinct keys",
+);
+assert(registryDescriptions === 2, "registry description conversions");
+let shadowedConversions = 0;
+assert(
+	shadowedSymbol(
+		() => ({
+			[Symbol.toPrimitive]() {
+				return `shadowed-${shadowedConversions++}`;
+			},
+		}),
+		marker,
+	) === undefined,
+	"shadowed Symbol may return a coercing Object",
+);
+assert(shadowedConversions === 2, "shadowed Symbol key conversions");
+assert(
+	symbolLoop(marker, 3) === "100",
+	"a Symbol allocation site creates a new identity on every iteration",
+);
+for (const value of [false, marker]) {
+	const key = value ? Symbol.iterator : Symbol.toStringTag;
+	const record = { [key]: value };
+	globalThis.gc?.();
+	assert(record[key] === value, "joined Symbol keys retain their own fields");
+}
+const symbolGenerator = privateSymbolGenerator(marker);
+assert(symbolGenerator.next().value === 1, "private Symbol generator yields");
+globalThis.gc?.();
+assert(symbolGenerator.next().value === marker, "Symbol field survives suspension");
+const symbolEscaping = escapingSymbolGenerator(marker);
+const yieldedSymbolRecord = (await symbolEscaping.next()).value;
+delete yieldedSymbolRecord.record[yieldedSymbolRecord.key];
+globalThis.gc?.();
+assert(
+	(await symbolEscaping.next()).value === undefined,
+	"escaped Symbol field mutation",
+);
+
+const storedSymbol = globalThis.chooseSymbol ? Symbol.iterator : Symbol.toStringTag;
+function cellAndLocalSymbol(value) {
+	const local = Symbol("local");
+	const record = { [storedSymbol]: value };
+	return record[local];
+}
+globalThis.membershipProbes.cellAndLocalSymbol = cellAndLocalSymbol;
+assert(
+	cellAndLocalSymbol(marker) === undefined,
+	"cell Symbol and local Symbol remain distinct",
+);
 console.log("static property membership semantics passed");
