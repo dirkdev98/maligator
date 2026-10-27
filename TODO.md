@@ -255,8 +255,11 @@ The independent target boundary and current storage contract are recorded in
       fields through merged aliases and recursive producer updates. Every source
       must retain the required own keys; all component writers join initial kinds
       and ranges. Earlier single-source read proofs keep their point-specific
-      precision; point-specific barriers and writer/source correlations across
-      merges remain.
+      precision. Merged reads now follow selected values backward through phi edges,
+      joining only preceding writes and rejecting preceding escapes or possible
+      accessors. A producer resets only its own allocation lifetime, including on
+      backedges; later effects do not withdraw an earlier read. Writer/source
+      correlations within the surviving prefix remain conservative.
       Typed producer storage for remaining writes,
       parameter-relative call effects and coroutine record transport remain. Own-field observations
       also carry initial integer bounds through the normal-result worklist, including

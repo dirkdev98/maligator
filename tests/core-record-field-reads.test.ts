@@ -54,6 +54,39 @@ function readKind(producer: string, reader = "return value.n;", call = "make(inp
 }
 
 describe("fresh record field observations", () => {
+	it.each([
+		"const n=alias.n;observe(alias);return n;",
+		"const n=alias.n;alias.n='changed';return n;",
+		"const n=alias.n;alias.missing;return n;",
+		"if(input){observe(alias);return 0;}return alias.n;",
+	])("keeps a merged field proof before later effects (%s)", (reader) => {
+		expect(
+			readKind("return {n:1};", `const alias=input?value:make(input);${reader}`),
+		).toBe(COMPILER_VALUE_KIND_NUMBER);
+	});
+	it("starts a new merged record lifetime on each loop iteration", () => {
+		expect(
+			readKind(
+				"return {n:1};",
+				"let saved=0;for(let i=0;i<3;i++){const alias=input?make(i):make(i+1);saved=alias.n;observe(alias);}return saved;",
+			),
+		).toBe(COMPILER_VALUE_KIND_NUMBER);
+	});
+	it("joins a later own write only when a backedge reaches the same allocation", () => {
+		expect(
+			readKind(
+				"return {n:1};",
+				"const alias=input?value:make(input);let saved=0;for(let i=0;i<3;i++){saved=alias.n;alias.n='changed';}return saved;",
+			),
+		).toBe(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING);
+	});
+	it.each([
+		"observe(value);const second=make(input);const alias=input?value:second;return alias.n;",
+		"const alias=input?value:make(input);let saved;for(let i=0;i<3;i++){saved=alias.n;observe(alias);}return saved;",
+		"const alias=input?value:make(input);alias.missing;return alias.n;",
+	])("retains merged barriers within the observed lifetime (%s)", (reader) => {
+		expect(readKind("return {n:1};", reader)).toBe(COMPILER_VALUE_KIND_TOP);
+	});
 	it("keeps private records through a wide fallthrough switch", () => {
 		const cases = Array.from(
 			{ length: 20 },
@@ -412,43 +445,49 @@ describe("fresh record field observations", () => {
 		expect(before.summary(reader.id).returnKind).toBe(COMPILER_VALUE_KIND_NUMBER);
 	});
 
-	it("withdraws and restores the read proof during open and committed edits", () => {
-		const out = flow(
-			`function make(){return {n:1};}function read(){const value=make();return value.n;}globalThis.result=read();`,
-		);
-		const fn = out.named("read");
-		const before = coreRecordFieldReads(fn, () =>
-			buildCoreControlFlow(out.program, fn.id),
-		);
-		expect(before.size).toBe(1);
-		const read = [...before.keys()][0]!;
-		const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(read));
-		const editor = CoreEditor.open(out.program, fn.id);
-		const coercion = editor.insertInstruction(
-			fn.instructionBlock(read),
-			read,
-			"unary",
-			[value],
-			{ attributes: { operator: "+" } },
-		);
-		expect(
-			coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
-		).toBe(0);
-		editor.commit();
-		expect(
-			coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
-		).toBe(0);
-		expect(before.size).toBe(1);
-		const restore = CoreEditor.open(out.program, fn.id);
-		restore.removeInstruction(coercion.instruction);
-		expect(
-			coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
-		).toBe(1);
-		restore.commit();
-		expect(
-			coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
-		).toBe(1);
-	});
+	it.each([
+		"const value=make();return value.n;",
+		"const value=globalThis.flag?make():make();const n=value.n;globalThis.observe(value);return n;",
+	])(
+		"withdraws and restores scoped reads during open and committed edits (%s)",
+		(body) => {
+			const out = flow(
+				`function make(){return {n:1};}function read(){${body}}globalThis.result=read();`,
+			);
+			const fn = out.named("read");
+			const before = coreRecordFieldReads(fn, () =>
+				buildCoreControlFlow(out.program, fn.id),
+			);
+			expect(before.size).toBe(1);
+			const read = [...before.keys()][0]!;
+			const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(read));
+			const editor = CoreEditor.open(out.program, fn.id);
+			const coercion = editor.insertInstruction(
+				fn.instructionBlock(read),
+				read,
+				"unary",
+				[value],
+				{ attributes: { operator: "+" } },
+			);
+			expect(
+				coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
+			).toBe(0);
+			editor.commit();
+			expect(
+				coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
+			).toBe(0);
+			expect(before.size).toBe(1);
+			const restore = CoreEditor.open(out.program, fn.id);
+			restore.removeInstruction(coercion.instruction);
+			expect(
+				coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
+			).toBe(1);
+			restore.commit();
+			expect(
+				coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
+			).toBe(1);
+		},
+	);
 
 	it("publishes a String field kind independently of opaque effects for concatenation", () => {
 		const out = inspectStaticValueFunction(

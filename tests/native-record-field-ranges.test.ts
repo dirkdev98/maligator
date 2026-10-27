@@ -56,6 +56,23 @@ function field(out: ReturnType<typeof inspect>) {
 }
 
 describe("normal record field integer ranges", () => {
+	it.each([false, true])(
+		"keeps a merged field interval before a future write and escape (locked=%s)",
+		(locked) => {
+			const out = inspect("value&255", {
+				locked,
+				reader:
+					"const alias=value?record:make(value+1,hook);const n=alias.n;alias.n='changed';hook(alias);return n%10;",
+			});
+			const { op, facts } = field(out);
+			expect(instructionResultIntegerRange(facts, op.dst)).toEqual(bounded(0, 255));
+			expect(out.native.registerRepresentations[op.dst]).toBe("int32");
+			expect(out.c.source).not.toContain("mal_number_remainder(");
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
 	it.each(["function", "function*", "async function", "async function*"])(
 		"carries a merged field interval through a %s entry",
 		(declaration) => {

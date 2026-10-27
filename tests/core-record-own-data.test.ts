@@ -40,6 +40,27 @@ function reads(out: ReturnType<typeof inspect>) {
 }
 
 describe("returned record own-data presence", () => {
+	it.each(["function", "function*", "async function", "async function*"])(
+		"keeps a %s merged read noncollecting before a later escape",
+		(declaration) => {
+			const suspend =
+				(declaration.includes("*") ? "yield 0;" : "") +
+				(declaration.startsWith("async") ? "await 0;" : "");
+			const out = inspect(
+				"return {value};",
+				`const alias=flag?record:make(value,flag,hook);const saved=alias.value;${suspend}hook(alias);return saved;`,
+				declaration,
+			);
+			expect(reads(out)).toHaveLength(1);
+			for (const { ip } of reads(out)) {
+				expect(out.native.instructions[ip]).toEqual({ kind: "known-own-data" });
+				expect(out.native.facts![ip]!.effectMask! & observableEffects).toBe(0);
+			}
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
 	it("keeps merged own presence independent of an unknown payload kind", () => {
 		const out = inspect(
 			"return {value};",

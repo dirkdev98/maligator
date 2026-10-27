@@ -594,10 +594,140 @@ function recordAliasParameter(
 		: null;
 }
 
+interface RecordFieldAccesses {
+	readonly reads: ReadonlyMap<CoreInstructionId, number>;
+	readonly writes: ReadonlyMap<CoreInstructionId, number>;
+	readonly barriers: ReadonlySet<CoreInstructionId>;
+}
+
+function recordReadPrefixes(
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	position: (instruction: CoreInstructionId) => number,
+	accesses: RecordFieldAccesses,
+	result: Map<CoreInstructionId, CoreRecordFieldRead>,
+): void {
+	const { reads, writes, barriers } = accesses;
+	const events = new Map<CoreBlockId, Array<CoreInstructionId>>();
+	for (const instruction of new Set([...reads.keys(), ...writes.keys(), ...barriers])) {
+		const block = fn.instructionBlock(instruction);
+		let row = events.get(block);
+		if (row === undefined) events.set(block, (row = []));
+		row.push(instruction);
+	}
+	for (const row of events.values()) row.sort((a, b) => position(b) - position(a));
+	for (const [instruction, key] of reads) {
+		if (result.has(instruction)) continue;
+		const block = fn.instructionBlock(instruction);
+		if (!cfg.reachable.has(block)) continue;
+		const requiredKeys = new Set([key]);
+		const reachingWrites = new Set<CoreInstructionId>();
+		const producers = new Set<CoreInstructionId>();
+		const pending = [
+			{
+				block,
+				limit: position(instruction),
+				value: fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
+			},
+		];
+		// Backedges rescan the earlier iteration beyond this read, for each selected value.
+		const fullBlocks = new Map<CoreBlockId, Set<CoreValueId>>();
+		let remaining = MAXIMUM_RECORD_READ_PREFIX_WORK;
+		let valid = true;
+		while (pending.length > 0 && valid) {
+			const { block, limit, value: input } = pending.pop()!;
+			if (--remaining < 0) {
+				valid = false;
+				break;
+			}
+			let value = input;
+			let definition: CoreInstructionId | undefined;
+			while (fn.kernel.valueDefinitionKind(value) === 1) {
+				definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+				if (fn.instructionOpcodeName(definition) !== "move") break;
+				if (--remaining < 0) break;
+				value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition));
+				definition = undefined;
+			}
+			if (remaining < 0) {
+				valid = false;
+				break;
+			}
+			const sourceBlock =
+				definition === undefined
+					? (fn.kernel.valueDefinitionOwner(value) as CoreBlockId)
+					: fn.instructionBlock(definition);
+			const sourcePosition = definition === undefined ? -1 : position(definition);
+			for (const event of events.get(block) ?? []) {
+				const at = position(event);
+				if (at >= limit) continue;
+				if (block === sourceBlock && at <= sourcePosition) break;
+				if (--remaining < 0 || barriers.has(event)) {
+					valid = false;
+					break;
+				}
+				const priorKey = reads.get(event) ?? writes.get(event);
+				if (priorKey !== undefined) requiredKeys.add(priorKey);
+				if (writes.get(event) === key) reachingWrites.add(event);
+			}
+			if (!valid) break;
+			// Another producer on this path cannot reset the selected object's lifetime.
+			if (block === sourceBlock && definition !== undefined) {
+				producers.add(definition);
+				continue;
+			}
+			for (const edge of cfg.predecessors[block] ?? []) {
+				if (!cfg.reachable.has(edge.from)) continue;
+				let argument = value;
+				if (block === sourceBlock) {
+					const index = fn.kernel.valueDefinitionIndex(value);
+					const incoming = edge.arguments[index];
+					if (edge.kind !== "ordinary" || incoming === undefined) {
+						valid = false;
+						break;
+					}
+					argument = incoming;
+				}
+				let values = fullBlocks.get(edge.from);
+				if (values === undefined) fullBlocks.set(edge.from, (values = new Set()));
+				if (values.has(argument)) continue;
+				values.add(argument);
+				pending.push({ block: edge.from, limit: Infinity, value: argument });
+			}
+		}
+		if (!valid || producers.size === 0) continue;
+		const fieldWrites =
+			reachingWrites.size === 0
+				? undefined
+				: Object.freeze(
+						[...reachingWrites].map((instruction) => {
+							const valueIndex =
+								fn.instructionOpcodeName(instruction) === "storePropertyStatic" ? 1 : 2;
+							return Object.freeze({
+								instruction,
+								value: fn.kernel.operandAt(
+									fn.kernel.instructionOperandStart(instruction) + valueIndex,
+								),
+							});
+						}),
+					);
+		result.set(
+			instruction,
+			Object.freeze({
+				producers: Object.freeze([...producers]),
+				key,
+				requiredKeys: Object.freeze([...requiredKeys]),
+				...(fieldWrites === undefined ? {} : { writes: fieldWrites }),
+			}),
+		);
+	}
+}
+
 function mergedRecordFieldReads(
 	fn: CoreFunctionStore,
 	parameters: ReadonlySet<CoreValueId>,
 	control: () => CoreControlFlow,
+	position: (instruction: CoreInstructionId) => number,
 	result: Map<CoreInstructionId, CoreRecordFieldRead>,
 ): void {
 	const candidates = new Set<CoreValueId>();
@@ -644,7 +774,8 @@ function mergedRecordFieldReads(
 		const seen = new Set<CoreValueId>();
 		const producers = new Set<CoreInstructionId>();
 		const reads = new Map<CoreInstructionId, number>();
-		const writes = new Map<number, Array<CoreRecordFieldWrite>>();
+		const writes = new Map<CoreInstructionId, number>();
+		const barriers = new Set<CoreInstructionId>();
 		const requiredKeys = new Set<number>();
 		let remaining = MAXIMUM_RECORD_RETURN_ALIAS_WORK;
 		let valid = true;
@@ -717,8 +848,7 @@ function mergedRecordFieldReads(
 					const target = recordAliasParameter(fn, instruction, fn.kernel.useOperand(use));
 					if (target !== undefined && target !== null) pending.push(target);
 					else if (target === null || !["branch", "guard", "switch"].includes(kind)) {
-						valid = false;
-						break;
+						barriers.add(instruction);
 					}
 					continue;
 				}
@@ -742,32 +872,26 @@ function mergedRecordFieldReads(
 				}
 				const key = recordPropertyKey(fn, instruction);
 				if (fn.kernel.useOperand(use) !== 0 || key === undefined) {
-					valid = false;
-					break;
+					barriers.add(instruction);
+					continue;
 				}
 				requiredKeys.add(key);
 				if (opcode === "loadPropertyStatic" || opcode === "loadProperty")
 					reads.set(instruction, key);
 				else if (opcode === "storePropertyStatic" || opcode === "storeProperty") {
-					const row = writes.get(key) ?? [];
-					row.push({
-						instruction,
-						value: fn.kernel.operandAt(
-							fn.kernel.instructionOperandStart(instruction) +
-								(opcode === "storePropertyStatic" ? 1 : 2),
-						),
-					});
-					writes.set(key, row);
+					writes.set(instruction, key);
 				} else {
-					valid = false;
-					break;
+					barriers.add(instruction);
 				}
 			}
 		}
 		if (!valid || producers.size === 0) continue;
+		if (barriers.size > 0 || writes.size > 0 || requiredKeys.size > 1) {
+			recordReadPrefixes(fn, cfg, position, { reads, writes, barriers }, result);
+			continue;
+		}
 		const sources = Object.freeze([...producers]);
 		const keys = Object.freeze([...requiredKeys]);
-		// This alias component does not retain edge/source correlations, so every writer joins the initial fields.
 		for (const [instruction, key] of reads) {
 			if (result.has(instruction)) continue;
 			result.set(
@@ -776,7 +900,6 @@ function mergedRecordFieldReads(
 					producers: sources,
 					key,
 					requiredKeys: keys,
-					...(writes.has(key) ? { writes: Object.freeze(writes.get(key)!) } : {}),
 				}),
 			);
 		}
@@ -892,79 +1015,15 @@ export function coreRecordFieldReads(
 			continue;
 		}
 		cfg ??= control();
-		const producerBlock = fn.instructionBlock(producer);
-		const producerPosition = position(producer);
-		const events = new Map<CoreBlockId, Array<CoreInstructionId>>();
-		for (const instruction of new Set([...reads.keys(), ...writes.keys(), ...barriers])) {
-			const block = fn.instructionBlock(instruction);
-			let row = events.get(block);
-			if (row === undefined) events.set(block, (row = []));
-			row.push(instruction);
-		}
-		for (const row of events.values()) row.sort((a, b) => position(b) - position(a));
-		for (const [instruction, key] of reads) {
-			const block = fn.instructionBlock(instruction);
-			if (!cfg.reachable.has(block) || !cfg.dominates(producerBlock, block)) continue;
-			const requiredKeys = new Set([key]);
-			const reachingWrites = new Set<CoreInstructionId>();
-			const pending = [{ block, limit: position(instruction) }];
-			const fullBlocks = new Set<CoreBlockId>();
-			let remaining = MAXIMUM_RECORD_READ_PREFIX_WORK;
-			let valid = true;
-			// Reexecuting the producer starts a fresh object lifetime, including on a backedge.
-			while (pending.length > 0 && valid) {
-				const { block, limit } = pending.pop()!;
-				if (--remaining < 0) {
-					valid = false;
-					break;
-				}
-				for (const event of events.get(block) ?? []) {
-					const at = position(event);
-					if (at >= limit) continue;
-					if (block === producerBlock && at <= producerPosition) break;
-					if (--remaining < 0 || barriers.has(event)) {
-						valid = false;
-						break;
-					}
-					const priorKey = reads.get(event) ?? writes.get(event);
-					if (priorKey !== undefined) requiredKeys.add(priorKey);
-					if (writes.get(event) === key) reachingWrites.add(event);
-				}
-				if (!valid || block === producerBlock) continue;
-				for (const edge of cfg.predecessors[block] ?? []) {
-					if (!cfg.reachable.has(edge.from) || fullBlocks.has(edge.from)) continue;
-					fullBlocks.add(edge.from);
-					pending.push({ block: edge.from, limit: Infinity });
-				}
-			}
-			if (!valid) continue;
-			const fieldWrites =
-				reachingWrites.size === 0
-					? undefined
-					: Object.freeze(
-							[...reachingWrites].map((instruction) => {
-								const valueIndex =
-									fn.instructionOpcodeName(instruction) === "storePropertyStatic" ? 1 : 2;
-								return Object.freeze({
-									instruction,
-									value: fn.kernel.operandAt(
-										fn.kernel.instructionOperandStart(instruction) + valueIndex,
-									),
-								});
-							}),
-						);
-			result.set(
-				instruction,
-				Object.freeze({
-					producers,
-					key,
-					requiredKeys: Object.freeze([...requiredKeys]),
-					...(fieldWrites === undefined ? {} : { writes: fieldWrites }),
-				}),
-			);
-		}
+		recordReadPrefixes(fn, cfg, position, { reads, writes, barriers }, result);
 	}
-	mergedRecordFieldReads(fn, mergedParameters, () => (cfg ??= control()), result);
+	mergedRecordFieldReads(
+		fn,
+		mergedParameters,
+		() => (cfg ??= control()),
+		position,
+		result,
+	);
 	if (featureVersion !== undefined)
 		recordFieldReadIndices.set(fn, {
 			featureVersion,
