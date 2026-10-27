@@ -144,6 +144,113 @@ describe.each([false, true])("static membership with locked primordials %s", (lo
 	});
 });
 
+describe("own-key absence", () => {
+	const absent = [
+		[
+			"Symbol on a String-keyed record",
+			"return Object.hasOwn({known:value},Symbol(value));",
+		],
+		[
+			"absent Symbol descriptor",
+			"return Object.getOwnPropertyDescriptor({known:value},Symbol(value));",
+		],
+		[
+			"null-prototype Symbol read",
+			"const key=Symbol(value);return ({__proto__:null,known:value})[key];",
+		],
+		[
+			"null-prototype Symbol membership",
+			"const key=Symbol(value);return key in {__proto__:null,known:value};",
+		],
+		["inherited Symbol absence", "return Symbol.iterator in {known:value};"],
+		["inherited Symbol presence", "return Symbol.iterator in [value];"],
+		["String wrapper Symbol", "return Object.hasOwn(new String(value),Symbol.iterator);"],
+		["RegExp unrelated name", "return Object.hasOwn(new RegExp(value),'missing');"],
+		[
+			"unknown Array indexes and a Symbol",
+			"return Object.hasOwn(Array(value),Symbol.iterator);",
+		],
+		[
+			"unknown Array indexes and an unrelated name",
+			"return Object.hasOwn(Array(value),'missing');",
+		],
+		["Symbol delete", "return delete ({known:value})[Symbol(value)];"],
+		["Array named delete", "return delete Array(value).missing;"],
+		["Reflect delete", "return Reflect.deleteProperty(Array(value),'missing');"],
+	] as const;
+	it.each(
+		staticValueCases(
+			absent,
+			([, body], name) => `function ${name}(value){${body}}globalThis.${name}=${name};`,
+		),
+	)("folds %s through the shared own-property query", (_label, _entry, inspect) => {
+		const result = inspect();
+		expect(
+			result.core.some(
+				(operation) =>
+					operation.opcode === "loadProperty" ||
+					operation.opcode === "queryStaticData" ||
+					operation.opcode === "deleteProperty" ||
+					(operation.opcode === "binary" && operation.attributes.operator === "in") ||
+					(operation.opcode === "callKnown" &&
+						[
+							"Object.hasOwn",
+							"Reflect.has",
+							"Reflect.deleteProperty",
+							"Object.getOwnPropertyDescriptor",
+						].includes(operation.attributes.operation as string)),
+			),
+		).toBe(false);
+	});
+	it.each(["function*", "async function", "async function*"])(
+		"keeps private absence across suspension in %s",
+		(prefix) => {
+			const suspension = prefix === "async function" ? "await observe()" : "yield 1";
+			const result = inspectStaticValueFunction(
+				`${prefix} probe(value,observe){const key=Symbol(value),record={known:value};${suspension};return Object.getOwnPropertyDescriptor(record,key);}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(
+				result.core.some(
+					(operation) =>
+						operation.opcode === "callKnown" &&
+						operation.attributes.operation === "Object.getOwnPropertyDescriptor",
+				),
+			).toBe(false);
+		},
+	);
+	it.each([
+		["possible own numeric index", "return Object.hasOwn(Array(value),'0');"],
+		[
+			"Array length descriptor",
+			"return Object.getOwnPropertyDescriptor(Array(value),'length');",
+		],
+		["RegExp lastIndex", "return Object.hasOwn(new RegExp(value),'lastIndex');"],
+		[
+			"escaped Symbol write",
+			"const record={known:value};observe(record);return Object.hasOwn(record,Symbol.iterator);",
+		],
+		[
+			"uncertain Symbol alias",
+			"const key=Symbol.for(value),other=Symbol.for(value);return Object.hasOwn({[key]:value},other);",
+		],
+	] as const)("retains %s", (_label, body) => {
+		const result = inspectStaticValueFunction(
+			`function probe(value,observe){${body}}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(
+			result.core.some(
+				(operation) =>
+					operation.opcode === "callKnown" &&
+					["Object.hasOwn", "Object.getOwnPropertyDescriptor"].includes(
+						operation.attributes.operation as string,
+					),
+			),
+		).toBe(true);
+	});
+});
+
 describe("Symbol property identity", () => {
 	it.each([false, true])(
 		"uses initialized Symbol cell keys with locked primordials %s",

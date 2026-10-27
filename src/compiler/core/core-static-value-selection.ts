@@ -406,7 +406,7 @@ export const foldStaticBindingConstants: CoreFunctionPass = {
 export const foldStaticReflections: CoreFunctionPass = {
 	name: "fold-static-reflections",
 	admission: {
-		predicate: "call, typeof or membership observation",
+		predicate: "call, typeof, membership or delete observation",
 		hasOpportunity({ program, function: functionId }) {
 			const fn = program.function(functionId);
 			for (const instruction of fn.instructionIds()) {
@@ -415,6 +415,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 				if (
 					opcode === "call" ||
 					opcode === "callKnown" ||
+					opcode === "deleteProperty" ||
 					opcode === "typeofCompare" ||
 					(opcode === "binary" &&
 						fn.instructionAttributes(instruction).operator === "in") ||
@@ -427,7 +428,14 @@ export const foldStaticReflections: CoreFunctionPass = {
 		},
 	},
 	stage: "memory",
-	requiredFunctionOpcodesAny: ["call", "callKnown", "unary", "typeofCompare", "binary"],
+	requiredFunctionOpcodesAny: [
+		"call",
+		"callKnown",
+		"unary",
+		"typeofCompare",
+		"binary",
+		"deleteProperty",
+	],
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
 	wakesOn: STATIC_VALUE_WAKES,
 	changes: { cfg: false, calls: true, facts: true, representations: false },
@@ -477,15 +485,21 @@ export const foldStaticReflections: CoreFunctionPass = {
 			}
 			const membership =
 				opcode === "binary" && fn.instructionAttributes(instruction).operator === "in";
-			if (opcode !== "call" && opcode !== "callKnown" && !membership) continue;
+			const deletion = opcode === "deleteProperty";
+			if (opcode !== "call" && opcode !== "callKnown" && !membership && !deletion)
+				continue;
 			if (
 				opcode === "callKnown" &&
 				(fn.instructionAttributes(instruction).construct ||
 					fn.instructionAttributes(instruction).argumentMode !== undefined)
 			)
 				continue;
-			let canonical: string | undefined = membership ? "Reflect.has" : undefined;
-			const argument = opcode === "call" ? 2 : 1;
+			let canonical: string | undefined = membership
+				? "Reflect.has"
+				: deletion
+					? "Reflect.deleteProperty"
+					: undefined;
+			const argument = opcode === "call" ? 2 : deletion ? 0 : 1;
 			if (fn.kernel.instructionOperandCount(instruction) <= argument) continue;
 			if (opcode === "call") {
 				const callee = analysis.query(fn.kernel.operandAt(start));
@@ -506,6 +520,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 					"Array.isArray",
 					"Object.hasOwn",
 					"Reflect.has",
+					"Reflect.deleteProperty",
 					"Object.getOwnPropertyDescriptor",
 					"Reflect.getOwnPropertyDescriptor",
 				].includes(canonical)
@@ -539,6 +554,16 @@ export const foldStaticReflections: CoreFunctionPass = {
 					? "undefined"
 					: analysis.propertyKey(keyInput, instruction);
 			if (propertyKey === undefined) continue;
+			if (canonical === "Reflect.deleteProperty") {
+				if (analysis.ownProperty(fact, propertyKey, instruction) !== "absent") continue;
+				analysis.verify(fact, instruction);
+				plans.push({
+					instruction,
+					operation: { opcode: "createBoolean", inputs: [], attributes: { value: true } },
+				});
+				edits++;
+				continue;
+			}
 			let key: PrimordialKey | undefined =
 				typeof propertyKey === "string" ? propertyKey : undefined;
 			if (typeof propertyKey !== "string") {
@@ -651,20 +676,15 @@ export const foldStaticReflections: CoreFunctionPass = {
 			}
 			const description = program.staticDescriptions.description(fact.description);
 			if (description.kind !== "array" && description.kind !== "object") continue;
-			let property =
-				typeof propertyKey === "string"
-					? description.properties.find((property) => property.key === propertyKey)
-					: analysis.ownSymbolProperty(fact, propertyKey, instruction);
-			// An unmatched Symbol can alias another stored key; it does not prove absence.
-			if (typeof propertyKey !== "string" && property === undefined) continue;
+			const own = analysis.ownProperty(fact, propertyKey, instruction);
+			let property = own === "absent" ? undefined : own;
 			if (canonical === "Object.hasOwn" || canonical === "Reflect.has") {
 				// An Array keeps its nonconfigurable own length when its contents are unknown.
 				let value =
 					property !== undefined || (description.kind === "array" && key === "length");
-				if (!value && description.ownKeysComplete === false) continue;
+				if (!value && own !== "absent") continue;
 				if (!value && canonical === "Reflect.has") {
-					if (typeof propertyKey !== "string") continue;
-					const inherited = analysis.inherited(fact, propertyKey);
+					const inherited = key === undefined ? undefined : analysis.inherited(fact, key);
 					if (inherited === undefined && fact.prototype.kind !== "null") continue;
 					value = inherited?.kind === "descriptor";
 				}
@@ -694,7 +714,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 					},
 				};
 			}
-			if (property === undefined && description.ownKeysComplete === false) continue;
+			if (property === undefined && own !== "absent") continue;
 			if (property === undefined) {
 				plans.push({ instruction, operation: { opcode: "createUndefined", inputs: [] } });
 				edits++;

@@ -12,6 +12,7 @@ import {
 } from "../shared/primordial-catalog.ts";
 import { staticNumberDescription } from "../shared/static-values.ts";
 import type {
+	StaticDescription,
 	StaticDescriptionId,
 	StaticMember,
 	StaticPropertyDescription,
@@ -304,6 +305,20 @@ function staticPropertyKey(key: StaticPropertyDescription["key"]): string {
 		: "symbolOperand" in key
 			? `operand:${key.symbolOperand}`
 			: `identity:${key.symbolIdentitySlot}`;
+}
+
+function mayHaveUnlistedOwnKey(
+	description: Extract<StaticDescription, { kind: "array" | "object" }>,
+	key: PrimordialKey | CoreValueId,
+): boolean {
+	const unknown = description.unknownOwnKeys;
+	return (
+		description.ownKeysComplete === false &&
+		(unknown === undefined ||
+			(typeof key === "string" &&
+				(unknown.named.includes(key) ||
+					(unknown.numeric && (key === "-0" || String(Number(key)) === key)))))
+	);
 }
 
 function sameStaticList<T>(
@@ -637,21 +652,27 @@ export class CoreStaticValueAnalysis {
 				description: intern.intern(staticNumberDescription(description.length)),
 			};
 		else {
-			const property =
-				typeof key === "string"
-					? description.properties.find((property) => property.key === key)
-					: this.ownSymbolProperty(fact, key, consumer);
-			if (property !== undefined) {
+			const property = this.ownProperty(fact, key, consumer);
+			if (property !== undefined && property !== "absent") {
 				if (property.descriptor.kind === "data") member = property.descriptor.value;
-			} else if (
-				typeof key === "string" &&
-				description.ownKeysComplete !== false &&
-				(fact.prototype.kind === "null" || this.inherited(fact, key)?.kind === "absent")
-			)
-				member = {
-					kind: "constant",
-					description: intern.intern({ kind: "undefined" }),
-				};
+			} else if (property === "absent") {
+				const symbol = typeof key === "string" ? undefined : this.#keyFact(key, consumer);
+				const inheritedKey: PrimordialKey | undefined =
+					typeof key === "string"
+						? key
+						: symbol?.kind === "known" && symbol.canonical !== undefined
+							? { symbol: symbol.canonical }
+							: undefined;
+				if (
+					fact.prototype.kind === "null" ||
+					(inheritedKey !== undefined &&
+						this.inherited(fact, inheritedKey)?.kind === "absent")
+				)
+					member = {
+						kind: "constant",
+						description: intern.intern({ kind: "undefined" }),
+					};
+			}
 		}
 		if (member?.kind !== "constant" && member?.kind !== "operand") return undefined;
 		const operands: Array<CoreValueId> = [];
@@ -664,18 +685,26 @@ export class CoreStaticValueAnalysis {
 		return result;
 	}
 
-	ownSymbolProperty(
+	ownProperty(
 		value: CoreStaticValue,
-		key: CoreValueId,
+		key: string | CoreValueId,
 		consumer: CoreInstructionId,
-	): StaticPropertyDescription | undefined {
+	): StaticPropertyDescription | "absent" | undefined {
 		this.verify(value);
-		const symbol = this.#keyFact(key, consumer);
-		if (symbol.kind !== "known" || symbol.brand !== "symbol") return undefined;
 		const description = this.#program.staticDescriptions.description(value.description);
 		if (description.kind !== "array" && description.kind !== "object") return undefined;
-		return description.properties.find((property) => {
+		if (typeof key === "string") {
+			const property = description.properties.find((property) => property.key === key);
+			if (property !== undefined) return property;
+			if (description.kind === "array" && key === "length") return undefined;
+			return mayHaveUnlistedOwnKey(description, key) ? undefined : "absent";
+		}
+		const symbol = this.#keyFact(key, consumer);
+		if (symbol.kind !== "known" || symbol.brand !== "symbol") return undefined;
+		let hasSymbolKeys = false;
+		const property = description.properties.find((property) => {
 			if (typeof property.key === "string") return false;
+			hasSymbolKeys = true;
 			let identity: StaticAllocationIdentity | undefined;
 			if ("symbolOperand" in property.key) {
 				const operand = value.operands[property.key.symbolOperand]!;
@@ -690,6 +719,11 @@ export class CoreStaticValueAnalysis {
 			} else identity = value.allocationIdentities?.[property.key.symbolIdentitySlot];
 			return sameStableSymbolIdentity(symbol.identity, identity);
 		});
+		if (property !== undefined) return property;
+		// An unmatched Symbol can alias a listed Symbol key.
+		return hasSymbolKeys || mayHaveUnlistedOwnKey(description, key)
+			? undefined
+			: "absent";
 	}
 
 	verifyProperty(value: CoreStaticProperty, consumer: CoreInstructionId): void {
@@ -2285,6 +2319,8 @@ export class CoreStaticValueAnalysis {
 						prototype,
 						length,
 						ownKeysComplete: length !== null,
+						unknownOwnKeys:
+							length === null ? { numeric: true, named: ["length"] } : undefined,
 						properties: elements.map((input, index) => {
 							bindings.push(input);
 							return {
@@ -2557,12 +2593,7 @@ export class CoreStaticValueAnalysis {
 		const description = this.#program.staticDescriptions.description(value.description);
 		if (
 			(description.kind !== "array" && description.kind !== "object") ||
-			(description.ownKeysComplete === false &&
-				(description.unknownOwnKeys === undefined ||
-					(typeof key === "string" &&
-						(description.unknownOwnKeys.named.includes(key) ||
-							(description.unknownOwnKeys.numeric &&
-								(key === "-0" || String(Number(key)) === key)))))) ||
+			mayHaveUnlistedOwnKey(description, key) ||
 			description.properties.some((property) =>
 				typeof key === "string" ? property.key === key : typeof property.key !== "string",
 			)

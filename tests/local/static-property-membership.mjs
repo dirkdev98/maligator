@@ -525,4 +525,182 @@ try {
 const lateCell = Symbol("late");
 assert(earlyCellCallbacks === 0, "TDZ check precedes the callback");
 assert(earlyCellRead(marker) === marker, "initialized cell key reads normally");
+
+function absentSymbolDescriptor(value, description) {
+	return Object.getOwnPropertyDescriptor({ known: value }, Symbol(description));
+}
+function absentSymbolOwn(value, description) {
+	return Object.hasOwn({ known: value }, Symbol(description));
+}
+function absentSymbolRead(value, description) {
+	const key = Symbol(description);
+	return { __proto__: null, known: value }[key];
+}
+function absentSymbolDelete(value, description) {
+	return delete { known: value }[Symbol(description)];
+}
+function absentArrayProperties(value) {
+	const array = Array(value);
+	return [
+		Object.hasOwn(array, Symbol.iterator),
+		Object.hasOwn(array, "missing"),
+		Object.getOwnPropertyDescriptor(array, "missing"),
+		delete array.missing,
+		Reflect.deleteProperty(array, "missing"),
+		Object.hasOwn(array, "0"),
+		Object.hasOwn(array, "length"),
+		Object.getOwnPropertyDescriptor(array, "length").value,
+		Symbol.iterator in array,
+	];
+}
+function absentWrapperSymbol(value) {
+	return Object.hasOwn(new String(value), Symbol.iterator);
+}
+function absentRegExpName(value) {
+	return Object.hasOwn(new RegExp(value), "missing");
+}
+Object.assign(globalThis.membershipProbes, {
+	absentSymbolDescriptor,
+	absentSymbolOwn,
+	absentSymbolRead,
+	absentSymbolDelete,
+	absentArrayProperties,
+	absentWrapperSymbol,
+	absentRegExpName,
+});
+let absenceCoercions = 0;
+const absentDescription = {
+	toString() {
+		absenceCoercions++;
+		globalThis.gc?.();
+		return "absent";
+	},
+};
+assert(
+	absentSymbolDescriptor(marker, absentDescription) === undefined,
+	"absent Symbol descriptor",
+);
+assert(!absentSymbolOwn(marker, absentDescription), "absent own Symbol");
+assert(
+	absentSymbolRead(marker, absentDescription) === undefined,
+	"null-prototype absent Symbol",
+);
+assert(absentSymbolDelete(marker, absentDescription), "absent Symbol delete");
+assert(!absentWrapperSymbol(absentDescription), "String wrapper has no own Symbol");
+assert(!absentRegExpName(absentDescription), "RegExp unrelated name is absent");
+assert(
+	absenceCoercions === 6,
+	"absence folds preserve all description and constructor coercions",
+);
+for (const value of [0, 3, "element", marker, null, undefined, Symbol.iterator]) {
+	const result = absentArrayProperties(value);
+	assert(
+		result[0] === false && result[1] === false && result[2] === undefined,
+		"Array own-key bounds",
+	);
+	assert(result[3] && result[4], "Array unrelated deletes succeed");
+	assert(
+		result[5] === (typeof value !== "number"),
+		"Array index presence depends on its argument",
+	);
+	assert(
+		result[6] && result[7] === (typeof value === "number" ? value : 1),
+		"Array length stays own",
+	);
+	assert(result[8], "Array inherits Symbol.iterator");
+}
+for (const [run, expected] of [
+	[
+		() =>
+			absentSymbolDescriptor(marker, {
+				toString() {
+					throw marker;
+				},
+			}),
+		marker,
+	],
+	[() => absentSymbolOwn(marker, Symbol.iterator), TypeError],
+	[
+		() =>
+			absentSymbolDelete(marker, {
+				toString() {
+					throw marker;
+				},
+			}),
+		marker,
+	],
+	[
+		() =>
+			absentWrapperSymbol({
+				toString() {
+					throw marker;
+				},
+			}),
+		marker,
+	],
+	[
+		() =>
+			absentRegExpName({
+				toString() {
+					throw marker;
+				},
+			}),
+		marker,
+	],
+	[() => absentArrayProperties(-1), RangeError],
+]) {
+	try {
+		run();
+		assert(false, "absence fold removed a required exception");
+	} catch (error) {
+		assert(
+			expected === marker ? error === marker : error instanceof expected,
+			"absence exception identity and class",
+		);
+	}
+}
+let inheritedTraps = 0;
+const symbolPrototype = new Proxy(
+	{},
+	{
+		has(_target, key) {
+			assert(key === Symbol.iterator, "prototype has key");
+			inheritedTraps++;
+			return true;
+		},
+		get(_target, key) {
+			assert(key === Symbol.iterator, "prototype read key");
+			inheritedTraps++;
+			return marker;
+		},
+	},
+);
+const symbolInherited = { __proto__: symbolPrototype, known: marker };
+assert(
+	!Object.hasOwn(symbolInherited, Symbol.iterator),
+	"own absence ignores prototype traps",
+);
+assert(
+	Object.getOwnPropertyDescriptor(symbolInherited, Symbol.iterator) === undefined,
+	"own descriptor ignores prototype traps",
+);
+assert(inheritedTraps === 0, "own queries do not access the prototype");
+assert(Symbol.iterator in symbolInherited, "inherited Symbol has trap");
+assert(symbolInherited[Symbol.iterator] === marker, "inherited Symbol read trap");
+assert(inheritedTraps === 2, "inherited observations preserve Proxy traps");
+let absentDeleteTraps = 0;
+const deleteProxy = new Proxy(
+	{},
+	{
+		deleteProperty() {
+			absentDeleteTraps++;
+			return false;
+		},
+	},
+);
+assert(
+	!Reflect.deleteProperty(deleteProxy, "missing"),
+	"Proxy delete result remains observable",
+);
+assert(absentDeleteTraps === 1, "Proxy delete trap remains observable");
 console.log("static property membership semantics passed");
