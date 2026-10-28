@@ -5829,7 +5829,7 @@ void mal_vm_store_known_own_data_miss(MalObject *object, MalValue key_value, Mal
     mal_object_note_prototype_mutation(object);
     own.desc.value = value;
     mal_property_write_entry(mal_object_overflow(object), own.entry, &own.desc);
-    mal_gc_card_desc(&object->header, &own.desc);
+    mal_gc_card(&object->header, value);
 }
 
 bool mal_vm_load_known_own_slot_miss(
