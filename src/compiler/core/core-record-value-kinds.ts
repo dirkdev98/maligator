@@ -1,6 +1,11 @@
-import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
+} from "../shared/compiler-value-kinds.ts";
 import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import { joinCoreHeapBrands } from "./core-heap-brands.ts";
+import type { CoreHeapBrandState } from "./core-heap-brands.ts";
 import type { CoreControlEdge, CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
@@ -10,6 +15,7 @@ import type { CoreFunctionStore } from "./core-store.ts";
 export interface CoreRecordFieldKind {
 	// Null keeps an unsolved field separate from an unknown field during range convergence.
 	readonly integerRange?: CompilerIntegerRange | null;
+	readonly heapBrand?: CoreHeapBrandState;
 	readonly key: number;
 	readonly mask: number;
 }
@@ -47,6 +53,7 @@ export function sameCoreRecordValueKind(
 				(field, index) =>
 					field.key === right[index]!.key &&
 					field.mask === right[index]!.mask &&
+					field.heapBrand === right[index]!.heapBrand &&
 					(field.integerRange === right[index]!.integerRange ||
 						(field.integerRange !== null &&
 							right[index]!.integerRange !== null &&
@@ -82,11 +89,16 @@ export function joinCoreRecordValueKinds(
 			mask !== COMPILER_VALUE_KIND_NUMBER
 				? undefined
 				: joinFieldIntegerRanges(field.integerRange, other.integerRange);
+		const heapBrand =
+			mask === COMPILER_VALUE_KIND_OBJECT
+				? joinCoreHeapBrands(field.heapBrand, other.heapBrand)
+				: undefined;
 		fields.push(
 			Object.freeze({
 				key: field.key,
 				mask,
 				...(integerRange === undefined ? {} : { integerRange }),
+				...(heapBrand === undefined ? {} : { heapBrand }),
 			}),
 		);
 	}
@@ -472,21 +484,30 @@ function recordReturnWrites(
 	return result;
 }
 
+export interface CoreRecordValueQueries {
+	readonly mask: (
+		value: CoreValueId,
+		consumer?: CoreInstructionId,
+		edge?: CoreControlEdge,
+	) => number;
+	readonly integerRange?: (
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+		edge?: CoreControlEdge,
+	) => CompilerIntegerRange | null | undefined;
+	readonly heapBrand?: (
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+		edge?: CoreControlEdge,
+	) => CoreHeapBrandState;
+}
+
 /** Own data fields on normal return; callers still need a separate mutation/escape proof. */
 export function coreReturnedRecordKinds(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
-	mask: (
-		value: CoreValueId,
-		consumer?: CoreInstructionId,
-		edge?: CoreControlEdge,
-	) => number,
+	queries: CoreRecordValueQueries,
 	call: (instruction: CoreInstructionId) => CoreRecordValueKind,
-	range?: (
-		value: CoreValueId,
-		consumer: CoreInstructionId,
-		edge?: CoreControlEdge,
-	) => CompilerIntegerRange | null | undefined,
 ): CoreRecordValueKind {
 	if (fn.isAsync || fn.isGenerator) return undefined;
 	const returnedFields = recordReturnIndex(fn).fields;
@@ -496,7 +517,7 @@ export function coreReturnedRecordKinds(
 		const terminator = fn.blockTerminator(block);
 		if (fn.instructionKind(terminator) !== "return") continue;
 		const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
-		if (mask(value) === 0) continue;
+		if (queries.mask(value) === 0) continue;
 		pending.push(value);
 	}
 	const seen = new Set<CoreValueId>();
@@ -539,15 +560,20 @@ export function coreReturnedRecordKinds(
 				initial.literalKeys
 					.map((key, index) => {
 						const value = fn.kernel.operandAt(start + index);
-						const kind = mask(value, definition);
+						const kind = queries.mask(value, definition);
 						const integerRange =
 							kind === COMPILER_VALUE_KIND_NUMBER
-								? range?.(value, definition)
+								? queries.integerRange?.(value, definition)
+								: undefined;
+						const heapBrand =
+							kind === COMPILER_VALUE_KIND_OBJECT
+								? queries.heapBrand?.(value, definition)
 								: undefined;
 						return Object.freeze({
 							key,
 							mask: kind,
 							...(integerRange === undefined ? {} : { integerRange }),
+							...(heapBrand === undefined ? {} : { heapBrand }),
 						});
 					})
 					.sort((left, right) => left.key - right.key),
@@ -578,26 +604,40 @@ export function coreReturnedRecordKinds(
 					);
 					let kind = 0;
 					let integerRange: CompilerIntegerRange | null | undefined = null;
+					let heapBrand: CoreHeapBrandState = null;
 					for (const alternative of alternatives ?? [undefined]) {
 						const initialSurvives =
 							alternative?.initialProducers === undefined ||
 							alternative.initialProducers.includes(definition);
 						let partKind = initialSurvives ? field.mask : 0;
 						let partRange = initialSurvives ? field.integerRange : null;
+						let partBrand = initialSurvives ? field.heapBrand : null;
 						for (const write of alternative === undefined
 							? writes
 							: (alternative.writes ?? [])) {
 							if (!cfg.reachable.has(fn.instructionBlock(write.instruction))) continue;
-							const written = mask(write.value, write.instruction, write.edge);
+							const written = queries.mask(write.value, write.instruction, write.edge);
 							partKind |= written;
-							if (written !== 0)
+							if (written !== 0) {
 								partRange =
 									partKind === COMPILER_VALUE_KIND_NUMBER
 										? joinFieldIntegerRanges(
 												partRange,
-												range?.(write.value, write.instruction, write.edge),
+												queries.integerRange?.(
+													write.value,
+													write.instruction,
+													write.edge,
+												),
 											)
 										: undefined;
+								partBrand =
+									partKind === COMPILER_VALUE_KIND_OBJECT
+										? joinCoreHeapBrands(
+												partBrand,
+												queries.heapBrand?.(write.value, write.instruction, write.edge),
+											)
+										: undefined;
+							}
 						}
 						if (partKind !== 0) {
 							kind |= partKind;
@@ -605,12 +645,17 @@ export function coreReturnedRecordKinds(
 								kind === COMPILER_VALUE_KIND_NUMBER
 									? joinFieldIntegerRanges(integerRange, partRange)
 									: undefined;
+							heapBrand =
+								kind === COMPILER_VALUE_KIND_OBJECT
+									? joinCoreHeapBrands(heapBrand, partBrand)
+									: undefined;
 						}
 					}
 					return Object.freeze({
 						key: field.key,
 						mask: kind,
 						...(integerRange === undefined ? {} : { integerRange }),
+						...(heapBrand === undefined ? {} : { heapBrand }),
 					});
 				}),
 			);
@@ -669,6 +714,18 @@ export function coreRecordFieldInitialKind(
 	return coreRecordFieldIsOwnData(read, record)
 		? record!.find((field) => field.key === read.key)!.mask
 		: top;
+}
+
+export function coreRecordFieldInitialHeapBrand(
+	read: CoreRecordFieldAccess,
+	record: CoreRecordValueKind,
+): CoreHeapBrandState {
+	const mask = coreRecordFieldInitialKind(read, record, -1);
+	return mask === 0
+		? null
+		: mask === COMPILER_VALUE_KIND_OBJECT
+			? record!.find((field) => field.key === read.key)!.heapBrand
+			: undefined;
 }
 
 export function coreRecordFieldIsOwnData(

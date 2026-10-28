@@ -345,6 +345,12 @@ carry the receiver brand separately from the decision to retain a callee guard.
 Core selects and verifies both decisions; target lowering, artifact transport and
 C emission preserve them. A shadowed method keeps its ordinary call and completion
 path even when the builtin branch can omit receiver validation.
+Returned-record field summaries join heap brands alongside kinds and intervals,
+including producer writes and caller overwrites. Their alternatives use the same
+finite brand dependency graph, so recursive forwarding and self-writes converge
+without a separate program solver. Field presence, own-data effects and record
+escape remain separate obligations; publishing the payload does not publish its
+container. Refreshing property facts cannot withdraw a call's normal-result facts.
 Normal return provenance also seeds a separate identity query over call results,
 moves and phi components. Every possible callee must forward a caller operand;
 async, generator, constructor and opaque completions do not qualify. Identity

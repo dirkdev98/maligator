@@ -1785,6 +1785,112 @@ try {
 } catch (error) {
 	check(error, payloadFailure, "correlated payload producer exception identity");
 }
+const makeCollectionRecord = function makeCollectionRecord(visit, key, value) {
+	for (let index = 0; index < 3; index++) visit();
+	return { map: new Map([[key, value]]), set: new Set([key]), array: [value] };
+};
+function readCollectionPayload(visit, key, value) {
+	const record = makeCollectionRecord(() => observe("collection producer"), key, value);
+	const map = record.map;
+	visit(map);
+	return [
+		Map.prototype.get.call(map, key),
+		Set.prototype.has.call(record.set, key),
+		Array.isArray(record.array),
+		map.get(key),
+	];
+}
+function readChangedCollectionRecord(visit, key, value) {
+	const record = makeCollectionRecord(() => {}, key, value);
+	visit(record);
+	return Map.prototype.get.call(record.map, key);
+}
+function* suspendedCollectionPayload(key, value) {
+	const record = makeCollectionRecord(() => {}, key, value);
+	yield record.map;
+	return record.map.get(key);
+}
+Object.assign(globalThis, {
+	readCollectionPayload,
+	readChangedCollectionRecord,
+	suspendedCollectionPayload,
+});
+const collectionKey = {
+	[Symbol.toPrimitive]() {
+		throw new Error("record collection key was coerced");
+	},
+};
+const originalCollectionValue = { value: 1 };
+const replacementCollectionValue = { value: 2 };
+const collectionValues = readCollectionPayload(
+	(map) => {
+		map.set(collectionKey, replacementCollectionValue);
+		map.get = () => "shadowed";
+		observe("collection payload mutation");
+	},
+	collectionKey,
+	originalCollectionValue,
+);
+check(
+	collectionValues[0],
+	replacementCollectionValue,
+	"record payload observes Map mutation",
+);
+check(collectionValues[1], true, "record Set payload retains membership");
+check(collectionValues[2], true, "record Array payload keeps its class");
+check(collectionValues[3], "shadowed", "record Map payload keeps its callee guard");
+try {
+	readChangedCollectionRecord(
+		(record) => {
+			record.map = new Set();
+		},
+		collectionKey,
+		originalCollectionValue,
+	);
+	throw new Error("missing record collection receiver error");
+} catch (error) {
+	check(error instanceof TypeError, true, "escaped record loses its payload brand");
+}
+const collectionGetterError = {};
+try {
+	readChangedCollectionRecord(
+		(record) => {
+			Object.defineProperty(record, "map", {
+				get() {
+					throw collectionGetterError;
+				},
+			});
+		},
+		collectionKey,
+		originalCollectionValue,
+	);
+	throw new Error("missing record collection getter error");
+} catch (error) {
+	check(error, collectionGetterError, "escaped record keeps getter exception identity");
+}
+const collectionIterator = suspendedCollectionPayload(
+	collectionKey,
+	originalCollectionValue,
+);
+collectionIterator.next().value.set(collectionKey, replacementCollectionValue);
+observe("collection payload suspended");
+check(
+	collectionIterator.next().value,
+	replacementCollectionValue,
+	"record Map payload after yield",
+);
+const shadowedCollectionIterator = suspendedCollectionPayload(
+	collectionKey,
+	originalCollectionValue,
+);
+shadowedCollectionIterator.next().value.get = () => "shadowed after yield";
+observe("collection callee suspended");
+check(
+	shadowedCollectionIterator.next().value,
+	"shadowed after yield",
+	"record Map callee after yield",
+);
+
 Promise.all([
 	awaitedPayload(false, buildUnreadPayload, payloadObserve).then((value) =>
 		check(value, 7, "correlated payload after await"),

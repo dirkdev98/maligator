@@ -231,6 +231,31 @@ function optimizedProgram(source: string, file: string): CoreProgram {
 }
 
 describe("bounded Core cross-call transforms", () => {
+	it("retains call result brands when record facts are refreshed", () => {
+		const program = analysisProgram();
+		const caller = appendCaller(program, 1);
+		const reader = program.function(caller.function);
+		const make = new CoreFunctionBuilder(program);
+		const entry = make.createBlock();
+		const [array] = make.appendInstruction(entry, "createArray", []);
+		make.appendInstruction(entry, "storeGlobal", [array!], {
+			attributes: { index: 0 },
+			outputCount: 0,
+		});
+		make.setTerminator(entry, { kind: "return", value: array! });
+		make.finish(entry);
+		for (let pass = 0; pass < 2; pass++) {
+			runTransforms(program, TINY_CODE_BUDGET);
+			expect(
+				coreOperations(reader).some(
+					(op) => op.opcode === "call" && op.attributes.normalResultHeapBrand === "Array",
+				),
+				`pass ${pass}`,
+			).toBe(true);
+		}
+		verifyCoreProgram(program, { stage: "pre-target" });
+	});
+
 	it.each([false, true])(
 		"reproves own-data reads after inlining a reader (conditional=%s)",
 		(conditional) => {

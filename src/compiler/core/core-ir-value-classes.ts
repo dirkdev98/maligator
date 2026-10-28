@@ -32,6 +32,7 @@ import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts";
 import { corePrivateFieldFacts } from "./core-private-field-facts.ts";
+import type { CoreValueAlternatives } from "./core-program-flow.ts";
 import { coreExactArrayFromCallResult } from "./core-static-values.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
@@ -181,7 +182,13 @@ export function analyzeCoreValueClasses(
 		readonly runOwner?: CoreOptimizationOwnerRunner;
 		readonly onContainment?: () => void;
 		readonly controlFlow?: CoreControlFlow;
-		readonly callResultBrand?: (instruction: CoreInstructionId) => CoreHeapBrandState;
+		readonly operationResultBrand?: (
+			instruction: CoreInstructionId,
+		) => CoreHeapBrandState;
+		readonly operationResultAlternatives?: (
+			instruction: CoreInstructionId,
+			result: CoreValueId,
+		) => CoreValueAlternatives | undefined;
 	} = {},
 ): CoreValueClassAnalysis {
 	const fn = program.function(functionId);
@@ -295,7 +302,7 @@ export function analyzeCoreValueClasses(
 		brands.set(roots.get(output) ?? output, brand);
 		seeded++;
 	}
-	if (options.callResultBrand === undefined) {
+	if (options.operationResultBrand === undefined) {
 		for (const instruction of operations) {
 			const brand = coreExactHeapBrand(
 				fn.instructionAttributes(instruction)[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE],
@@ -317,7 +324,7 @@ export function analyzeCoreValueClasses(
 			continue;
 		const receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
 		const receiverRoot = roots.get(receiver) ?? receiver;
-		if (options.callResultBrand !== undefined) continue;
+		if (options.operationResultBrand !== undefined) continue;
 		if (
 			fn.kernel.valueDefinitionKind(receiver) === 0 &&
 			fn.kernel.valueDefinitionOwner(receiver) === fn.entry
@@ -458,7 +465,7 @@ export function analyzeCoreValueClasses(
 		const declared = brands.get(start);
 		if (declared !== undefined) return declared;
 		if (
-			options.callResultBrand === undefined &&
+			options.operationResultBrand === undefined &&
 			fn.kernel.valueDefinitionKind(start) === 1 &&
 			fn.instructionOpcodeName(
 				coreInstructionId(fn.kernel.valueDefinitionOwner(start)),
@@ -466,6 +473,7 @@ export function analyzeCoreValueClasses(
 		)
 			return undefined;
 		const dependencies = new Map<CoreValueId, ReadonlyArray<CoreValueId>>();
+		let initialBrands: Map<CoreValueId, CoreHeapBrandState> | undefined;
 		const users = new Map<CoreValueId, Array<CoreValueId>>();
 		const pending = [start];
 		while (pending.length > 0) {
@@ -502,15 +510,26 @@ export function analyzeCoreValueClasses(
 					inputs = [
 						root(fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))),
 					];
-				else if (
-					options.callResultBrand !== undefined &&
-					["call-completion", "construct-completion"].includes(
-						fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ??
-							"",
-					)
-				) {
-					states.set(current, options.callResultBrand(instruction));
-					continue;
+				else if (options.operationResultBrand !== undefined) {
+					const alternatives = options.operationResultAlternatives?.(
+						instruction,
+						current,
+					);
+					if (alternatives?.hasNormalResult === false) {
+						states.set(current, null);
+						continue;
+					}
+					const initial = options.operationResultBrand(instruction);
+					if (
+						initial === undefined ||
+						alternatives === undefined ||
+						alternatives.values.length === 0
+					) {
+						states.set(current, initial);
+						continue;
+					}
+					inputs = alternatives.values.map(({ value }) => root(value));
+					(initialBrands ??= new Map()).set(current, initial);
 				}
 			}
 			if (inputs === undefined) {
@@ -531,7 +550,8 @@ export function analyzeCoreValueClasses(
 		for (let cursor = 0; cursor < queue.length; cursor++) {
 			const current = queue[cursor]!;
 			queued.delete(current);
-			let next: CoreHeapBrandState = null;
+			let next: CoreHeapBrandState =
+				initialBrands?.has(current) === true ? initialBrands.get(current) : null;
 			for (const input of dependencies.get(current)!)
 				next = joinCoreHeapBrands(next, states.get(input));
 			if (next === states.get(current)) continue;

@@ -44,8 +44,82 @@ function records(source: string) {
 					result.map(({ key, mask }) => [program.stringConstantText(key), mask]),
 				);
 	};
-	return { program, context, manager, read, named, fields };
+	const brands = (name: string, state = read()) => {
+		const result = state.summary(named(name).id).returnRecord;
+		return result === undefined || result === null
+			? result
+			: Object.fromEntries(
+					result.map(({ key, heapBrand }) => [
+						program.stringConstantText(key),
+						heapBrand,
+					]),
+				);
+	};
+	return { program, context, manager, read, named, fields, brands };
 }
+
+describe("normal-return record payload brands", () => {
+	it.each([
+		["const record={payload:{}};record.payload=[];return record;", "Array"],
+		["const record={payload:[]};if(flag)record.payload=[];return record;", "Array"],
+		["const record={payload:[]};if(flag)record.payload={};return record;", undefined],
+		["return {payload:new Proxy([],{})};", undefined],
+	] as const)("joins producer writes in %s", (body, expected) => {
+		const out = records(
+			`function make(flag){${body}}function read(flag){return make(flag).payload;}globalThis.result=read(globalThis.flag);`,
+		);
+		expect(out.fields("make")).toEqual({ payload: COMPILER_VALUE_KIND_OBJECT });
+		expect(out.brands("make")).toEqual({ payload: expected });
+		expect(out.read().summary(out.named("read").id).returnHeapBrand).toBe(expected);
+	});
+
+	it("converges recursive record forwarding and repacked payload calls", () => {
+		const out =
+			records(`function make(count){if(count>0)return make(count-1);return {payload:[]};}
+		function payload(count){return make(count).payload;}
+		function repack(count){return {payload:payload(count)};}
+		function read(count){return repack(count).payload;}
+		globalThis.result=read(globalThis.count);`);
+		expect(out.brands("make")).toEqual({ payload: "Array" });
+		expect(out.brands("repack")).toEqual({ payload: "Array" });
+		expect(out.read().summary(out.named("read").id).returnHeapBrand).toBe("Array");
+	});
+
+	it("solves caller self-writes through the same finite brand dependency graph", () => {
+		const out = records(`function make(){return {payload:[]};}
+		function read(again){const record=make();while(again())record.payload=record.payload;return record.payload;}
+		globalThis.result=read(globalThis.again);`);
+		expect(out.read().summary(out.named("read").id).returnHeapBrand).toBe("Array");
+	});
+
+	it.each([
+		["record.payload=[];", "Array"],
+		["if(flag)record.payload=[];", undefined],
+	] as const)("projects definite caller overwrites from %s", (write, expected) => {
+		const out = records(
+			`function make(value){return {payload:value};}function read(value,flag){const record=make(value);${write}return record.payload;}globalThis.result=read(globalThis.value,globalThis.flag);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnHeapBrand).toBe(expected);
+	});
+
+	it("revisits callers when a field brand changes inside an unchanged Object kind", () => {
+		const out = records(
+			"function make(){return {payload:[]};}function read(){return make().payload;}globalThis.result=read();",
+		);
+		const before = out.read();
+		expect(out.brands("make", before)).toEqual({ payload: "Array" });
+		const fn = out.named("make");
+		const allocation = coreOperations(fn).find((op) => op.opcode === "createArray")!;
+		const edit = CoreEditor.open(out.program, fn.id);
+		edit.replaceInstruction(allocation.id, "createObject", []);
+		edit.commit();
+		const after = out.read();
+		expect(out.fields("make", after)).toEqual({ payload: COMPILER_VALUE_KIND_OBJECT });
+		expect(out.brands("make", after)).toEqual({ payload: undefined });
+		expect(after.summary(out.named("read").id).returnHeapBrand).toBeUndefined();
+		expect(out.brands("make", before)).toEqual({ payload: "Array" });
+	});
+});
 
 describe("normal-return record field kinds", () => {
 	it.each([

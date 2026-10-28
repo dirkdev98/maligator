@@ -17,6 +17,7 @@ import {
 	sameCoreRecordValueKind,
 	joinCoreRecordValueKinds,
 	coreRecordFieldInitialKind,
+	coreRecordFieldInitialHeapBrand,
 	coreRecordAccessInitialFields,
 	coreRecordAccessProducerFields,
 } from "./core-record-value-kinds.ts";
@@ -149,16 +150,16 @@ export interface CoreProgramFlowValueKindState<
 	readonly anyScriptAggregate: CoreProgramFlowValueKindAggregate | undefined;
 }
 
-export interface CoreValueKindAlternative {
+export interface CoreValueAlternative {
 	readonly value: CoreValueId;
 	readonly instruction: CoreInstructionId;
 	/** Carries predecessor-local facts without moving the originating operation. */
 	readonly edge?: CoreControlEdge;
 }
 
-export interface CoreValueKindAlternatives {
-	readonly values: ReadonlyArray<CoreValueKindAlternative>;
-	/** A definite overwrite can remove every initial kind without making the producer empty. */
+export interface CoreValueAlternatives {
+	readonly values: ReadonlyArray<CoreValueAlternative>;
+	/** A definite overwrite can remove every initial value without making the producer empty. */
 	readonly hasNormalResult: boolean;
 }
 
@@ -177,7 +178,7 @@ export interface CoreProgramFlowValueKindInputs {
 	readonly operationResultAlternatives?: (
 		instruction: CoreInstructionId,
 		result: CoreValueId,
-	) => CoreValueKindAlternatives | undefined;
+	) => CoreValueAlternatives | undefined;
 	readonly elementLoadMask?: (instruction: CoreInstructionId) => number | undefined;
 }
 
@@ -2254,9 +2255,9 @@ export class CoreProgramFlowEngine {
 		>();
 		const recordAlternativeIndices = new Map<
 			CoreFunctionId,
-			Map<CoreInstructionId, ReadonlyArray<CoreValueKindAlternative>>
+			Map<CoreInstructionId, ReadonlyArray<CoreValueAlternative>>
 		>();
-		const noRecordAlternatives: ReadonlyArray<CoreValueKindAlternative> = [];
+		const noRecordAlternatives: ReadonlyArray<CoreValueAlternative> = [];
 		let aggregateRecomputations = 0;
 		let exactReverseCallerVisits = 0;
 		let wildcardReverseCallerVisits = 0;
@@ -2421,7 +2422,7 @@ export class CoreProgramFlowEngine {
 						recordReads = semantics.recordReads(fn, () => controlFlow(functionId));
 						recordReadIndices.set(functionId, recordReads);
 						let alternatives:
-							| Map<CoreInstructionId, ReadonlyArray<CoreValueKindAlternative>>
+							| Map<CoreInstructionId, ReadonlyArray<CoreValueAlternative>>
 							| undefined;
 						for (const [instruction, read] of recordReads) {
 							if (read.writes === undefined) continue;
@@ -2514,8 +2515,16 @@ export class CoreProgramFlowEngine {
 								fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer
 									?.result === "construct-completion";
 							const site = byInstruction.get(instruction);
+							if (site === undefined) {
+								const read = recordReads.get(instruction);
+								if (read === undefined) return undefined;
+								const record = coreRecordAccessProducerFields(read, recordResult);
+								return coreRecordFieldInitialHeapBrand(
+									read,
+									coreRecordAccessInitialFields(read, record, recordResult),
+								);
+							}
 							if (
-								site === undefined ||
 								site.targets.opaque ||
 								(site.targets.anyScript && !targets.sourceClosed)
 							)

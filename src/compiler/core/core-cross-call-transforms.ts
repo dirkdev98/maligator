@@ -4573,13 +4573,16 @@ function discoverProgramNormalResultFacts(
 					function: functionId,
 				})
 				.exceptional(),
-			(value, consumer, edge) =>
-				kinds!
-					.values(functionId)
-					.latticeMask(
-						value,
-						edge ?? (consumer === undefined ? undefined : fn.instructionBlock(consumer)),
-					),
+			{
+				mask: (value, consumer, edge) =>
+					kinds!
+						.values(functionId)
+						.latticeMask(
+							value,
+							edge ??
+								(consumer === undefined ? undefined : fn.instructionBlock(consumer)),
+						),
+			},
 			(instruction) => {
 				const site = flow.targets.site(functionId, instruction);
 				if (site !== undefined && !site.targets.opaque && !site.targets.anyScript)
@@ -4702,7 +4705,13 @@ function discoverProgramNormalResultFacts(
 					fieldExpansions.set(functionId, (counts = new Map<number, number>()));
 				const count = (counts.get(field.key) ?? 0) + 1;
 				counts.set(field.key, count);
-				return count < 8 ? field : Object.freeze({ key: field.key, mask: field.mask });
+				return count < 8
+					? field
+					: Object.freeze({
+							key: field.key,
+							mask: field.mask,
+							...(field.heapBrand === undefined ? {} : { heapBrand: field.heapBrand }),
+						});
 			}),
 		);
 	};
@@ -4761,17 +4770,22 @@ function discoverProgramNormalResultFacts(
 					coreReturnedRecordKinds(
 						fn,
 						cfg,
-						(value, consumer, edge) =>
-							kinds!
-								.values(functionId)
-								.latticeMask(
-									value,
-									edge ??
-										(consumer === undefined ? undefined : fn.instructionBlock(consumer)),
-								),
+						{
+							mask: (value, consumer, edge) =>
+								kinds!
+									.values(functionId)
+									.latticeMask(
+										value,
+										edge ??
+											(consumer === undefined
+												? undefined
+												: fn.instructionBlock(consumer)),
+									),
+							integerRange: (value, consumer, edge) =>
+								query!(value, edge ?? fn.instructionBlock(consumer)),
+							heapBrand: (value) => kinds!.values(functionId).heapBrand(value),
+						},
 						(instruction) => recordResult(flow.targets.site(functionId, instruction)),
-						(value, consumer, edge) =>
-							query!(value, edge ?? fn.instructionBlock(consumer)),
 					),
 				);
 				if (!sameCoreRecordValueKind(prior, next)) {
@@ -4887,11 +4901,23 @@ function discoverProgramNormalResultFacts(
 									edge ?? fn.instructionBlock(consumer),
 								),
 						) ?? undefined);
+			const heapBrand =
+				mask === COMPILER_VALUE_KIND_OBJECT
+					? ((kinds ??= readValueKinds())
+							.values(functionId)
+							.heapBrand(
+								fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+							) ?? undefined)
+					: undefined;
 			discovered.set(instruction, {
 				instruction,
 				ownDataKey: read.key,
 				result: compilerValueKindMaskIsValid(mask)
-					? { mask, ...(integerRange === undefined ? {} : { integerRange }) }
+					? {
+							mask,
+							...(integerRange === undefined ? {} : { integerRange }),
+							...(heapBrand === undefined ? {} : { heapBrand }),
+						}
 					: undefined,
 			});
 		}
@@ -4913,11 +4939,20 @@ function discoverProgramNormalResultFacts(
 		}
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (
+				opcode !== "loadProperty" &&
+				opcode !== "loadPropertyStatic" &&
+				opcode !== "storeProperty" &&
+				opcode !== "storePropertyStatic"
+			)
+				continue;
 			const attributes = fn.instructionAttributes(instruction);
 			const fact = discovered.get(instruction);
 			if (
 				fact === undefined &&
 				attributes[CORE_RECORD_FIELD_KIND_ATTRIBUTE] === undefined &&
+				attributes[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE] === undefined &&
 				attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE] === undefined
 			)
 				continue;
@@ -4926,6 +4961,7 @@ function discoverProgramNormalResultFacts(
 			const effects = refinement?.effects;
 			if (
 				attributes[CORE_RECORD_FIELD_KIND_ATTRIBUTE] === fact?.result?.mask &&
+				attributes[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE] === fact?.result?.heapBrand &&
 				compilerIntegerRangesEqual(
 					compilerIntegerRangeIsValid(currentRange) ? currentRange : undefined,
 					fact?.result?.integerRange,

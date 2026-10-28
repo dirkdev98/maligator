@@ -104,13 +104,16 @@ coercion and exception order, publication and GC obligations in every entry mode
 Keep the sub-60-second AC self-compile target; leave broad acceptance to CI.
 Arithmetic work should support these paths or fix correctness defects.
 
-- [ ] Extend stable brands through returned record payloads, then cover remaining
-      object and builtin receiver classes.
+- [ ] Cover remaining object and builtin receiver classes, then extend
+      receiver/argument-sensitive function-call effects and dispatch.
       Keep brands independent of publication, containment and mutable heap contents.
       Reuse the bounded normal-result worklist and retain loaded-callee guards.
       Ordinary and spread calls, constructors with receiver substitution, recursive
       returns and compatible phi alternatives now have normal-result brand transport;
       immutable global slots and private fields also carry collection brands.
+      Returned record fields now carry brands through producer and caller writes,
+      recursive forwarding and suspension, with own-data and escape proofs kept
+      separate. Record refresh preserves independently published call facts.
       Guarded collection calls consume receiver brands independently of callee
       identity, preserving shadowed-method and cross-brand fallbacks.
       Broad native, sanitizer and self-hosted acceptance remains on CI.

@@ -177,6 +177,17 @@ describe("fresh record field kind observations", () => {
 						name,
 					).toBe(true);
 				}
+				if (primordials === "locked")
+					for (const name of ["readCollectionPayload", "suspendedCollectionPayload"])
+						expect(
+							named(name).instructions.some(
+								(plan) =>
+									plan?.kind === "call" &&
+									plan.exactCollectionReceiver === "Map" &&
+									plan.guardedBuiltinCall?.operation === "Map.prototype.get",
+							),
+							name,
+						).toBe(true);
 				for (const binary of [pair.compiled, pair.interpreted])
 					for (const env of [{}, { ...STRESS_ENV, MAL_HOST_GC: "1" }])
 						assertExactLines(runToStdout(binary, { env }), ["record-field-kinds PASS"]);

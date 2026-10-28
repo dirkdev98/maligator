@@ -86,7 +86,7 @@ import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts"
 import { corePrivateFieldFacts } from "./core-private-field-facts.ts";
 import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
-	CoreValueKindAlternatives,
+	CoreValueAlternatives,
 	CoreProgramFlowValueKinds,
 	CoreProgramFlowValueKindSemantics,
 	CoreProgramFlowValueKindInputs,
@@ -144,7 +144,7 @@ export interface CoreValueKindInputs {
 	readonly operationResultAlternatives?: (
 		instruction: CoreInstructionId,
 		result: CoreValueId,
-	) => CoreValueKindAlternatives | undefined;
+	) => CoreValueAlternatives | undefined;
 	/** What a keyed read returns when its key is a number, if the receiver's elements are known. */
 	readonly elementLoadMask?: (
 		instruction: CoreInstructionId,
@@ -1620,7 +1620,8 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 						undefined,
 						{
 							controlFlow: cfg,
-							callResultBrand: inputs.operationResultHeapBrand,
+							operationResultBrand: inputs.operationResultHeapBrand,
+							operationResultAlternatives: inputs.operationResultAlternatives,
 						},
 					)).heapBrandState(value);
 				},
@@ -1657,11 +1658,15 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 			return coreReturnedRecordKinds(
 				fn,
 				control,
-				(value, consumer, edge) =>
-					analysis.latticeMask(
-						value,
-						edge ?? (consumer === undefined ? undefined : fn.instructionBlock(consumer)),
-					),
+				{
+					mask: (value, consumer, edge) =>
+						analysis.latticeMask(
+							value,
+							edge ??
+								(consumer === undefined ? undefined : fn.instructionBlock(consumer)),
+						),
+					heapBrand: (value) => analysis.heapBrand(value),
+				},
 				call,
 			);
 		},
