@@ -128,8 +128,10 @@ Arithmetic work should support these paths or fix correctness defects.
       Symbol registration now survives the shared kind worklist through calls,
       phis, returned records, unboxing and suspension. Weak normal completions and
       Symbol.keyFor use these bounds; typeof still treats both subkinds as Symbol.
-      Next, consume the valid-key bounds in weak mutator validation and effects,
-      keeping key errors and their realm and GC obligations. Extend the same
+      Holdable Object/unregistered-Symbol bounds now select nonthrowing weak
+      mutation entries in known, guarded and resumable native calls. Exact receiver
+      proofs remove only the key throw effect; mutation, GC publication and polls
+      remain. Effect proofs refresh when key bounds widen or narrow. Extend the same
       independent operand, callee and completion contracts to more object builtins
       and callback-aware function calls; keep the bounded shared worklists.
       Broad native, sanitizer and self-hosted acceptance remains on CI.

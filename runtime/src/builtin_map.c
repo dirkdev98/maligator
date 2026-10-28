@@ -918,13 +918,17 @@ bool mal_builtin_weak_map_delete_key(MalValue receiver, MalValue key) {
     return mal_weak_map_object_delete(mal_value_to_weak_map_object(receiver), key);
 }
 
+MalValue mal_builtin_weak_map_set_holdable_key_value(MalValue receiver, MalValue key, MalValue value) {
+    mal_weak_map_object_set(mal_value_to_weak_map_object(receiver), key, value);
+    return receiver;
+}
+
 MalValue mal_builtin_weak_map_set_key_value(MalVm *vm, MalValue receiver, MalValue key, MalValue value) {
     if (!mal_weak_key_can_be_held(key)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid value used as weak map key");
         return mal_value_new_undefined();
     }
-    mal_weak_map_object_set(mal_value_to_weak_map_object(receiver), key, value);
-    return receiver;
+    return mal_builtin_weak_map_set_holdable_key_value(receiver, key, value);
 }
 
 static MalValue mal_builtin_weak_map_prototype_get(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

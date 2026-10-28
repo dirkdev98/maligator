@@ -677,6 +677,28 @@ const registeredWeakRecord = function registeredWeakRecord(input, visit) {
 	for (let i = 0; i < 3; i++) visit();
 	return { key: Symbol.for(input) };
 };
+const holdableWeakRecord = function holdableWeakRecord(input, useObject, visit) {
+	for (let i = 0; i < 3; i++) visit();
+	return { key: useObject ? {} : Symbol(input) };
+};
+function holdableWeakRoundTrip(input, useObject, visit) {
+	const map = new WeakMap();
+	const set = new WeakSet();
+	const { key } = holdableWeakRecord(input, useObject, visit);
+	visit(map, set);
+	const mapAlias = WeakMap.prototype.set.call(map, key, input) === map;
+	const setAlias = set.add(key) === set;
+	visit(map, set);
+	return mapAlias && setAlias && map.get(key) === input && set.has(key);
+}
+globalThis.holdableWeakRoundTrip = holdableWeakRoundTrip;
+for (const useObject of [false, true])
+	assert(
+		holdableWeakRoundTrip({ marker: "retained weak payload" }, useObject, () => {
+			if (typeof collect === "function") collect();
+		}),
+		"holdable key returned in a record retains aliases and payload through GC",
+	);
 function registeredWeakRead(receiver, input, visit) {
 	const { key } = registeredWeakRecord(input, visit);
 	const value = WeakMap.prototype.get.call(receiver, key);

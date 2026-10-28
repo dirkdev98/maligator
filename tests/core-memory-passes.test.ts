@@ -138,6 +138,64 @@ function rewriteFreshArrayBuiltins(core: CoreProgram, fn: CoreFunctionStore): vo
 }
 
 describe("Core local memory, provenance, and escape optimization", () => {
+	it("refreshes a weak mutator's own effect proof after the key kind changes", () => {
+		const core = program();
+		const builder = new CoreFunctionBuilder(core);
+		const entry = builder.createBlock();
+		const constructor = builder.appendInstruction(entry, "loadIntrinsic", [], {
+			attributes: { intrinsic: "WeakMap" },
+		})[0]!;
+		const receiver = builder.appendInstruction(entry, "construct", [constructor])[0]!;
+		const key = builder.appendInstruction(entry, "createObject", [])[0]!;
+		const keyInstruction = builder.bodyInstructionIds(entry).at(-1)!;
+		const value = builder.appendInstruction(entry, "createUndefined", [])[0]!;
+		const result = builder.appendInstruction(entry, "callKnown", [receiver, key, value], {
+			attributes: {
+				operation: "WeakMap.prototype.set",
+				worldAssumptions: {
+					...builtinWorldAssumptions("WeakMap.prototype.set", "literal-allocation"),
+				},
+				knownBuiltinCall: knownOperationCall(
+					"WeakMap.prototype.set",
+					builder.functionId,
+				) as unknown as CoreAttributeValue,
+			},
+		})[0]!;
+		const call = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.setTerminator(entry, { kind: "return", value: result });
+		const fn = core.function(builder.finish(entry).function);
+		const report = new CoreOptimizationReportBuilder(core);
+		const analyses = new CoreAnalysisManager(core, lockedContext, report);
+		const pass = CORE_MEMORY_PASSES.find(
+			({ name }) => name === "refine-exact-collection-accesses",
+		)!;
+		const refine = () =>
+			new CoreFunctionPassScheduler(core, lockedContext, analyses, report, fn.id, {
+				optionalMaxRunsPerWorkItem: 1,
+				verification: "per-pass",
+			}).runComponent("memory", [pass]);
+		refine();
+		let proof = fn.instructionEffectRefinement(call)!;
+		expect(proof.effects).toMatchObject({
+			mayThrow: false,
+			mayGc: true,
+			callsUserCode: false,
+		});
+		for (const [opcode, mayThrow] of [
+			["createUndefined", true],
+			["createObject", false],
+		] as const) {
+			const edit = CoreEditor.open(core, fn.id);
+			edit.replaceInstruction(keyInstruction, opcode, []);
+			edit.commit();
+			refine();
+			const next = fn.instructionEffectRefinement(call)!;
+			expect(next.effects).toMatchObject({ mayThrow, mayGc: true, callsUserCode: false });
+			expect(fn.isFactLive(proof.proof)).toBe(false);
+			proof = next;
+		}
+	});
+
 	it.each(["store-alias", "handler", "mixed-join", "push-argument"] as const)(
 		"keeps fresh-array containment separate across candidates: %s",
 		(escape) => {

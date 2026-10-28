@@ -365,6 +365,11 @@ Symbols are invalid weak keys. Symbol.keyFor has a String normal result for regi
 Symbols and an undefined normal result for unregistered Symbols. Identity-preserving
 primitive unboxing keeps these refinements, while boxed receivers retain their
 general Symbol bound. Compiler artifacts store kind masks as unsigned 16-bit values.
+Holdable key bounds select nonthrowing weak mutation entries independently of the
+receiver and loaded-callee checks. Known calls refine their throw effect only with
+an exact receiver too; guarded arms keep their ordinary fallback. All entry modes
+retain mutation, root publication and GC polls because storage allocation can
+request collection. Key-bound changes replace prior owned effect proofs.
 Known positional prefixes remain distinct from unknown argument-list elements.
 A captured Function.prototype.call with a fixed positional receiver can unwrap
 around an iterable tail without dropping its evaluation or iteration effects.

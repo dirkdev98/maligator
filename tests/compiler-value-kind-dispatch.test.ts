@@ -13,6 +13,8 @@ import {
 	compilerOperatorInputKindsHaveExactNativeSemantics as exactNativeKinds,
 	compilerTypeofComparison,
 	compilerValueKindTruthiness,
+	compilerValueKindCanBeHeldWeakly,
+	compilerValueKindCannotBeHeldWeakly,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 
 const singleKinds = (mask: number): ReadonlyArray<number> =>
@@ -221,6 +223,43 @@ describe("Compiler value-kind operator dispatch", () => {
 			}
 		}
 	});
+});
+
+it("matches weak key admission for every kind union", () => {
+	const values: ReadonlyArray<ReadonlyArray<unknown>> = [
+		[undefined],
+		[null],
+		[false, true],
+		[0, NaN],
+		["", "x"],
+		[0n, 1n],
+		[Symbol("local"), Symbol.iterator],
+		[{}, [], () => {}, new Proxy({}, {})],
+		[Symbol.for("registered")],
+	];
+	const outcomesByKind = values.map((representatives) =>
+		representatives.map((value) => {
+			try {
+				new WeakSet().add(value as WeakKey);
+				return true;
+			} catch (error) {
+				if (!(error instanceof TypeError)) throw error;
+				return false;
+			}
+		}),
+	);
+	for (let mask = 1; mask <= TOP; mask++) {
+		const outcomes = outcomesByKind.flatMap((outcomes, bit) =>
+			(mask & (1 << bit)) !== 0 ? outcomes : [],
+		);
+		equal(compilerValueKindCanBeHeldWeakly(mask), outcomes.every(Boolean));
+		equal(
+			compilerValueKindCannotBeHeldWeakly(mask),
+			outcomes.every((value) => !value),
+		);
+	}
+	equal(compilerValueKindCanBeHeldWeakly(0), false);
+	equal(compilerValueKindCannotBeHeldWeakly(0), false);
 });
 
 it("matches JavaScript Boolean observations for every kind union", () => {

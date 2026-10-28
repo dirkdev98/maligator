@@ -399,13 +399,17 @@ bool mal_builtin_weak_set_delete_key(MalValue receiver, MalValue key) {
     return mal_weak_set_object_delete(mal_value_to_weak_set_object(receiver), key);
 }
 
+MalValue mal_builtin_weak_set_add_holdable_key(MalValue receiver, MalValue key) {
+    mal_weak_set_object_add(mal_value_to_weak_set_object(receiver), key);
+    return receiver;
+}
+
 MalValue mal_builtin_weak_set_add_key(MalVm *vm, MalValue receiver, MalValue key) {
     if (!mal_weak_key_can_be_held(key)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid value used in weak set");
         return mal_value_new_undefined();
     }
-    mal_weak_set_object_add(mal_value_to_weak_set_object(receiver), key);
-    return receiver;
+    return mal_builtin_weak_set_add_holdable_key(receiver, key);
 }
 
 static MalValue mal_builtin_weak_set_prototype_add(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

@@ -56,6 +56,7 @@ export function coreExactCollectionBuiltinEffects(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 	provenBrand?: CoreExactCollectionBrand,
+	keyCanBeHeldWeakly = false,
 ): CoreInstructionEffects | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
@@ -94,7 +95,7 @@ export function coreExactCollectionBuiltinEffects(
 	const effects: CoreInstructionEffects = {
 		reads: Object.freeze(["object-property"]),
 		writes: Object.freeze(writes ? ["object-property"] : []),
-		mayThrow: weakMutation,
+		mayThrow: weakMutation && !keyCanBeHeldWeakly,
 		maySuspend: false,
 		mayGc,
 		callsUserCode: false,

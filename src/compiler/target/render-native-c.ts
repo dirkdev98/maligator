@@ -14,6 +14,7 @@ import {
 import {
 	compilerComparisonInputKindsAvoidObjectCoercion,
 	compilerValueKindTruthiness,
+	compilerValueKindCanBeHeldWeakly,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_TOP,
@@ -8630,6 +8631,19 @@ class NativeInstructionEmission {
 			case "WeakSet.prototype.add": {
 				const boxedKey =
 					args[0] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[0]);
+				if (
+					args[0] !== undefined &&
+					compilerValueKindCanBeHeldWeakly(
+						this.operandKind(args[0]) ?? COMPILER_VALUE_KIND_TOP,
+					)
+				)
+					return {
+						call:
+							operation === "WeakMap.prototype.set"
+								? `mal_builtin_weak_map_set_holdable_key_value(${receiver}, ${boxedKey}, ${value})`
+								: `mal_builtin_weak_set_add_holdable_key(${receiver}, ${boxedKey})`,
+						boolean: false,
+					};
 				return {
 					call:
 						operation === "WeakMap.prototype.set"

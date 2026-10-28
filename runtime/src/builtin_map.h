@@ -75,6 +75,8 @@ bool mal_builtin_map_delete_key(MalVm *vm, MalValue this_value, MalValue key);
 MalValue mal_builtin_weak_map_get_key(MalValue receiver, MalValue key);
 // Throwing entries require the captured builtin's realm to be current.
 MalValue mal_builtin_weak_map_set_key_value(MalVm *vm, MalValue receiver, MalValue key, MalValue value);
+// Holdable entries additionally require an Object or unregistered Symbol key.
+MalValue mal_builtin_weak_map_set_holdable_key_value(MalValue receiver, MalValue key, MalValue value);
 bool mal_builtin_weak_map_has_key(MalValue receiver, MalValue key);
 bool mal_builtin_weak_map_delete_key(MalValue receiver, MalValue key);
 // Number-key variants for keys the compiler already holds unboxed.

@@ -353,6 +353,13 @@ export function compilerValueKindsHaveEmptyPrimitiveWrappers(
 	);
 }
 
+export function compilerValueKindCanBeHeldWeakly(mask: CompilerValueKindMask): boolean {
+	return compilerValueKindMaskIsSubset(
+		mask,
+		COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL,
+	);
+}
+
 export function compilerValueKindCannotBeHeldWeakly(
 	mask: CompilerValueKindMask,
 ): boolean {

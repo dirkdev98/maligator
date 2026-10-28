@@ -36,6 +36,91 @@ function storedReceiver(brand: string, storage: string, use: string) {
 
 describe("weak collection receiver facts", () => {
 	it.each(
+		(
+			[
+				["WeakMap", "set"],
+				["WeakSet", "add"],
+			] as const
+		).flatMap(([brand, method]) =>
+			(
+				[
+					["{}", true],
+					["Symbol(input)", true],
+					["flag?{}:Symbol(input)", true],
+					["Symbol.for(input)", false],
+					["flag?{}:Symbol.for(input)", false],
+					["input", false],
+				] as const
+			).map(([key, valid]) => ({ brand, method, key, valid })),
+		),
+	)(
+		"uses holdable key bounds for $brand $method($key)",
+		({ brand, method, key, valid }) => {
+			const operation = `${brand}.prototype.${method}`;
+			const out = inspectStaticValueFunction(
+				`const receiver=new ${brand}();function compute(visit,input,flag){visit(receiver);return ${operation}.call(receiver,${key},input);}globalThis.compute=compute;`,
+				"compute",
+				{ realms: false },
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "CALL_KNOWN" && op.operation === operation,
+			);
+			expect(ip).toBeGreaterThanOrEqual(0);
+			expect(decodeInstructionEffects(out.native.facts![ip]!.effectMask!)).toMatchObject({
+				mayThrow: !valid,
+				mayGc: true,
+				callsUserCode: false,
+				writes: ["object-property"],
+			});
+			const helper =
+				brand === "WeakMap"
+					? "mal_builtin_weak_map_set_holdable_key_value"
+					: "mal_builtin_weak_set_add_holdable_key";
+			expect(out.c.source.includes(helper)).toBe(valid);
+			if (valid)
+				expect(out.c.source).not.toMatch(
+					/mal_builtin_weak_(?:map_set_holdable_key_value|set_add_holdable_key)\([^;\n]*\);\s*if \(MAL_THREW\(\)\)/,
+				);
+		},
+	);
+	it.each(["function", "function*", "async function", "async function*"])(
+		"uses holdable keys in guarded and isolated %s entries",
+		(declaration) => {
+			for (const isolated of [false, true]) {
+				const suspend =
+					(declaration.includes("*") ? "yield key;" : "") +
+					(declaration.startsWith("async") ? "await 0;" : "");
+				const out = inspectStaticValueFunction(
+					`${isolated ? "" : "const receiver=new WeakMap();"}${declaration} compute(input){${isolated ? "const receiver=new WeakMap();" : ""}const key=Symbol(input);${suspend}return receiver.set(key,input);}globalThis.compute=compute;`,
+					"compute",
+					{ realms: false },
+				);
+				expect(out.c.source).toContain("mal_builtin_weak_map_set_holdable_key_value");
+				expect(out.c.source).not.toContain("mal_builtin_weak_map_set_key_value");
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+					out.image,
+				);
+			}
+		},
+	);
+
+	it("uses an Object branch bound without weakening the opposite branch", () => {
+		const out = inspectStaticValueFunction(
+			"const receiver=new WeakMap();function compute(input){if(typeof input==='object'&&input!==null)return WeakMap.prototype.set.call(receiver,input,1);return WeakMap.prototype.set.call(receiver,input,2);}globalThis.compute=compute;",
+			"compute",
+			{ realms: false },
+		);
+		const effects = out.native.body.instructions.flatMap((op, ip) =>
+			op.opcode === "CALL_KNOWN" && op.operation === "WeakMap.prototype.set"
+				? [decodeInstructionEffects(out.native.facts![ip]!.effectMask!).mayThrow]
+				: [],
+		);
+		expect(effects.sort()).toEqual([false, true]);
+		expect(out.c.source).toContain("mal_builtin_weak_map_set_holdable_key_value");
+		expect(out.c.source).toContain("mal_builtin_weak_map_set_key_value");
+	});
+
+	it.each(
 		operations.flatMap(([brand, method]) =>
 			["local", "global", "private", "call", "record"].map(
 				(storage) => [brand, method, storage] as const,

@@ -1,8 +1,14 @@
-import { compilerValueKindCannotBeHeldWeakly } from "../shared/compiler-value-kinds.ts";
+import {
+	compilerValueKindCanBeHeldWeakly,
+	compilerValueKindCannotBeHeldWeakly,
+} from "../shared/compiler-value-kinds.ts";
+import { encodeInstructionEffects } from "../shared/instruction-facts.ts";
 import {
 	foldLiteralArrayLengths,
 	prepareFreshArrayValues,
 } from "./core-array-initialization.ts";
+import { CORE_CONDITIONAL_VALUE_KIND_ANALYSIS } from "./core-conditional-value-kinds.ts";
+import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { CoreEditor } from "./core-editor.ts";
 import {
 	removeInstructionAndOwnedProof,
@@ -1139,14 +1145,19 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 			return hasExactCollectionEffectConsumer(program.function(functionId));
 		},
 	},
-	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
+	requiredAnalyses: [
+		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
+		CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
+	],
 	wakesOn: ["body", "memoryEffects", "facts", "normalResults"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		const classes = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).valueClasses;
+		const facts = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
+		const classes = facts.valueClasses;
+		let conditional: CoreConditionalValueKinds | undefined;
 		const withdrawn: Array<CoreInstructionId> = [];
 		const plans: Array<{
 			instruction: CoreInstructionId;
@@ -1181,9 +1192,29 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 				if (prior !== undefined) withdrawn.push(instruction);
 				continue;
 			}
-			const effects = coreExactCollectionBuiltinEffects(fn, instruction, exact);
+			const weakMutation =
+				operation === "WeakMap.prototype.set" || operation === "WeakSet.prototype.add";
+			const key = weakMutation ? instructionOperandAt(fn, instruction, 1) : undefined;
+			const keyCanBeHeld =
+				key !== undefined &&
+				(compilerValueKindCanBeHeldWeakly(facts.valueKinds.kindMask(key)) ||
+					compilerValueKindCanBeHeldWeakly(
+						(conditional ??= context.analysis(
+							CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
+						)).kindMask(key, fn.instructionBlock(instruction)),
+					));
+			const effects = coreExactCollectionBuiltinEffects(
+				fn,
+				instruction,
+				exact,
+				keyCanBeHeld,
+			);
 			if (effects === undefined) continue;
-			if (prior !== undefined) continue;
+			if (
+				prior !== undefined &&
+				encodeInstructionEffects(prior.effects) === encodeInstructionEffects(effects)
+			)
+				continue;
 			plans.push({ instruction, operation, exact, effects });
 		}
 		if (plans.length === 0 && withdrawn.length === 0) return undefined;
@@ -1206,6 +1237,11 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 			);
 		}
 		for (const { instruction, operation, exact, effects } of plans) {
+			const prior = fn.instructionEffectRefinement(instruction);
+			if (prior !== undefined) {
+				editor.clearInstructionEffectRefinement(instruction);
+				removeUnsharedProof(editor, fn, prior.proof);
+			}
 			const proof = editor.addFact({
 				kind: CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
 				value: operation,
