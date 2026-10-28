@@ -393,8 +393,9 @@ Arithmetic work should support these paths or fix correctness defects.
       margin for in-process native builds of the compiler.
       Keep the representative Node.js self-compile below 60 seconds on AC power;
       stable acceptance remains unverified. The latest clean uninstrumented sample
-      at `f7c57918` took 58.32 seconds on verified AC power. That single
-      cold sample meets the budget provisionally; repeated acceptance remains open.
+      at `aa0964ac` took 63.21 seconds on verified AC power, after a 58.32-second
+      sample at `f7c57918`. Recover the budget before extending the analysis further;
+      these single cold samples do not establish the cause or repeated acceptance.
       Analysis extensions must stay bounded and reuse existing worklists. Leave
       long checks to CI and keep local verification to the affected units and
       quality checks. Transitive range queries share the existing 32-step budget.
