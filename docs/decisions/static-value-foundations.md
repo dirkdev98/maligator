@@ -890,6 +890,10 @@ Own-field observations publish initial integer bounds through the same
 normal-result contract as calls. One function worklist converges scalar returns
 and fresh-record fields together, keeping an unsolved field distinct from an
 unknown field. A growing recursive field widens independently of bounded siblings.
+Returned field initializers and private writers query kinds at their own blocks,
+retaining dominating branch bounds through forwarding calls. Conditional analysis
+is lazy for union kinds; exact and unsolved values bypass it so a branch cannot
+seed an empty recursive result. Undemanded predicate inputs remain unknown.
 Conditional returns and loop-carried aliases join the common own fields of all
 fresh record alternatives. The bounded alias walk admits ordinary block arguments
 and TDZ checks, and rejects mutation, escape, handler transport or a non-record

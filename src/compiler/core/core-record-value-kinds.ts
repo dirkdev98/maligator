@@ -381,7 +381,7 @@ export function coreRecordReturnKindInputs(
 export function coreReturnedRecordKinds(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
-	mask: (value: CoreValueId) => number,
+	mask: (value: CoreValueId, consumer?: CoreInstructionId) => number,
 	call: (instruction: CoreInstructionId) => CoreRecordValueKind,
 	range?: (
 		value: CoreValueId,
@@ -439,7 +439,7 @@ export function coreReturnedRecordKinds(
 				initial.literalKeys
 					.map((key, index) => {
 						const value = fn.kernel.operandAt(start + index);
-						const kind = mask(value);
+						const kind = mask(value, definition);
 						const integerRange =
 							kind === COMPILER_VALUE_KIND_NUMBER
 								? range?.(value, definition)
@@ -473,7 +473,7 @@ export function coreReturnedRecordKinds(
 					let integerRange = field.integerRange;
 					for (const write of writes) {
 						if (!cfg.reachable.has(fn.instructionBlock(write.instruction))) continue;
-						const written = mask(write.value);
+						const written = mask(write.value, write.instruction);
 						kind |= written;
 						if (written !== 0)
 							integerRange =

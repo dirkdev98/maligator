@@ -245,6 +245,8 @@ The independent target boundary and current storage contract are recorded in
       writes, joining every writer with the initial kind and integer bounds before
       forwarding the result. Structural input plans survive metadata changes;
       values and ranges are solved afresh. Non-returned locals add no field demands.
+      Returned field initializers and private writers also retain dominating
+      branch kind bounds through call chains; later unguarded writes widen them.
       Independent own-data presence now licenses noncollecting named reads even
       when the field kind is unknown. Native full, resumable and frameless bodies
       consume that proof after virtual-field handling; misses resolve the physical

@@ -3,10 +3,39 @@ function check(actual, expected, label) {
 		throw new Error(`${label}: ${String(actual)} != ${String(expected)}`);
 }
 const events = [];
+const makeGuardedRecord = function makeGuardedRecord(input, callback) {
+	for (let step = 0; step < 3; step++) callback(step);
+	const record = { value: 0 };
+	if (typeof input === "number") record.value = input;
+	return record;
+};
+function readGuardedRecord(input, callback) {
+	const record = makeGuardedRecord(input, callback);
+	callback("guarded read");
+	return record.value + 1;
+}
+const makeGuardedUnion = function makeGuardedUnion(input, callback) {
+	for (let step = 0; step < 3; step++) callback(step);
+	if (typeof input === "string") return { value: input };
+	return { value: 0 };
+};
+function readGuardedUnion(input, callback) {
+	const record = makeGuardedUnion(input, callback);
+	callback("guarded union");
+	return record.value + 1;
+}
+Object.assign(globalThis, { readGuardedRecord, readGuardedUnion });
 function observe(value) {
 	events.push(value);
 	if (typeof globalThis.gc === "function") globalThis.gc();
 }
+for (const input of [-0, 0, NaN, Infinity, -Infinity, 2147483648])
+	check(readGuardedRecord(input, observe), input + 1, "guarded Number field");
+for (const input of [undefined, null, false, "text", 1n, Symbol("input"), {}])
+	check(readGuardedRecord(input, observe), 1, "guard rejects non-Number field");
+check(readGuardedUnion("text", observe), "text1", "guarded String field");
+check(readGuardedUnion(2, observe), 1, "guarded union default");
+events.length = 0;
 const makeRecord = function makeRecord(value, callback) {
 	let label = "";
 	for (let index = 0; index < 2; index++) {

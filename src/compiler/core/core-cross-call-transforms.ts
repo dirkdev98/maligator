@@ -4557,7 +4557,13 @@ function discoverProgramNormalResultFacts(
 					function: functionId,
 				})
 				.exceptional(),
-			(value) => kinds!.values(functionId).latticeMask(value),
+			(value, consumer) =>
+				kinds!
+					.values(functionId)
+					.latticeMask(
+						value,
+						consumer === undefined ? undefined : fn.instructionBlock(consumer),
+					),
 			(instruction) => {
 				const site = flow.targets.site(functionId, instruction);
 				if (site !== undefined && !site.targets.opaque && !site.targets.anyScript)
@@ -4738,7 +4744,13 @@ function discoverProgramNormalResultFacts(
 					coreReturnedRecordKinds(
 						fn,
 						cfg,
-						(value) => kinds!.values(functionId).latticeMask(value),
+						(value, consumer) =>
+							kinds!
+								.values(functionId)
+								.latticeMask(
+									value,
+									consumer === undefined ? undefined : fn.instructionBlock(consumer),
+								),
 						(instruction) => recordResult(flow.targets.site(functionId, instruction)),
 						(value, consumer) => query!(value, fn.instructionBlock(consumer)),
 					),

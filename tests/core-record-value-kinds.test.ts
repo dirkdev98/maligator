@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import { coreRecordReturnKindInputs } from "../src/compiler/core/core-record-value-kinds.ts";
@@ -42,6 +43,68 @@ function records(source: string) {
 }
 
 describe("normal-return record field kinds", () => {
+	it.each([
+		[
+			"const record={value:0};if(typeof input==='number')record.value=input;return record;",
+			COMPILER_VALUE_KIND_NUMBER,
+		],
+		[
+			"if(typeof input==='number')return {value:input};return {value:0};",
+			COMPILER_VALUE_KIND_NUMBER,
+		],
+		[
+			"const record={value:0};if(typeof input==='string')record.value=input;return record;",
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		],
+		[
+			"const record={value:0};if(typeof input==='number')record.value=input;record.value=input;return record;",
+			COMPILER_VALUE_KIND_TOP,
+		],
+	] as const)("uses each field writer's branch bounds (%s)", (body, mask) => {
+		const out = records(
+			`function make(input){${body}}function forward(input){return make(input);}function read(input){return forward(input).value;}globalThis.result=read(globalThis.input);`,
+		);
+		for (const name of ["make", "forward"])
+			expect(out.fields(name)).toEqual({ value: mask });
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(mask);
+	});
+
+	it("withdraws a field writer's branch proof when its predicate changes", () => {
+		const out = records(
+			`function make(input){const record={value:0};if(typeof input==='number')record.value=input;return record;}function read(input){return make(input).value;}globalThis.result=read(globalThis.input);`,
+		);
+		const before = out.read();
+		expect(out.fields("make", before)).toEqual({ value: COMPILER_VALUE_KIND_NUMBER });
+		const fn = out.named("make");
+		const block = [...fn.blockIds()].find(
+			(block) => fn.instructionKind(fn.blockTerminator(block)) === "branch",
+		)!;
+		const condition = fn.kernel.operandAt(
+			fn.kernel.instructionOperandStart(fn.blockTerminator(block)),
+		);
+		const editor = CoreEditor.open(out.program, fn.id);
+		editor.replaceInstruction(
+			coreInstructionId(fn.kernel.valueDefinitionOwner(condition)),
+			"createBoolean",
+			[],
+			{ attributes: { value: true } },
+		);
+		editor.commit();
+		expect(out.fields("make")).toEqual({ value: COMPILER_VALUE_KIND_TOP });
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_TOP,
+		);
+		expect(out.fields("make", before)).toEqual({ value: COMPILER_VALUE_KIND_NUMBER });
+	});
+
+	it("keeps an unsolved field input empty behind a kind guard", () => {
+		const out = records(
+			`function never(){return never();}function make(){const input=never();if(typeof input==='number')return {value:input};return never();}function read(){return make().value;}globalThis.result=read();`,
+		);
+		expect(out.fields("make")).toEqual({ value: 0 });
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(0);
+	});
+
 	it("revalidates forwarded own-key requirements when the callee changes", () => {
 		const out = records(
 			`function leaf(){return {value:1};}function forward(){const record=leaf();record.value=2;return record;}function read(){return forward().value;}globalThis.result=read();`,

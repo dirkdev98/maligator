@@ -48,6 +48,8 @@ import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { coreBuiltinResultProjection } from "./core-builtin-result-projections.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
+import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
@@ -1482,10 +1484,12 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 
 export type CoreProgramValueKindSummary = CoreProgramFlowValueKindSummary;
 export type CoreProgramValueKindStatistics = CoreProgramFlowValueKindStatistics;
-export type CoreProgramFunctionValueKinds = Pick<
+export interface CoreProgramFunctionValueKinds extends Pick<
 	CoreValueKindAnalysis,
-	"kindMask" | "latticeMask"
->;
+	"kindMask"
+> {
+	latticeMask(this: void, value: CoreValueId, block?: CoreBlockId): CompilerValueKindMask;
+}
 export type CoreProgramValueKinds =
 	CoreProgramFlowValueKinds<CoreProgramFunctionValueKinds>;
 export type CoreProgramValueKindState = CoreProgramFlowValueKindState<
@@ -1533,9 +1537,20 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 					throw new Error(`Unrequested program value kind ${value}`);
 				return masks[value]!;
 			};
+			let conditional: CoreConditionalValueKinds | undefined;
 			return Object.freeze({
 				kindMask: (value: CoreValueId) => mask(value) || COMPILER_VALUE_KIND_TOP,
-				latticeMask: mask,
+				latticeMask(value: CoreValueId, block?: CoreBlockId) {
+					const kind = mask(value);
+					// An unsolved value cannot acquire a normal result from a branch restriction.
+					if (block === undefined || (kind & (kind - 1)) === 0) return kind;
+					return (conditional ??= analyzeCoreConditionalValueKinds(
+						program,
+						fn,
+						cfg,
+						(value) => (computed![value] === 1 ? masks[value]! : COMPILER_VALUE_KIND_TOP),
+					)).kindMask(value, block);
+				},
 			});
 		},
 		latticeMask(analysis: CoreProgramFunctionValueKinds, value: CoreValueId) {
@@ -1554,7 +1569,11 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 			return coreReturnedRecordKinds(
 				fn,
 				control,
-				(value) => analysis.latticeMask(value),
+				(value, consumer) =>
+					analysis.latticeMask(
+						value,
+						consumer === undefined ? undefined : fn.instructionBlock(consumer),
+					),
 				call,
 			);
 		},

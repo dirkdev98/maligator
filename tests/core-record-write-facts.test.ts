@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_TOP,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	deserializeCompilerArtifact,
@@ -27,6 +28,26 @@ function fieldRead(out: ReturnType<typeof inspectStaticValueFunction>) {
 }
 
 describe("normal field facts after own writes", () => {
+	it.each([
+		["number", "", COMPILER_VALUE_KIND_NUMBER, "number"],
+		["string", "", COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING, "boxed"],
+		["number", "record.value=value;", COMPILER_VALUE_KIND_TOP, "boxed"],
+	] as const)(
+		"publishes the %s writer guard through calls without narrowing later writes (%s)",
+		(kind, overwrite, mask, representation) => {
+			const out = inspectStaticValueFunction(
+				`const make=function make(value,hook){for(let i=0;i<3;i++)hook(i);const record={value:0};if(typeof value==='${kind}')record.value=value;${overwrite}return record;};function compute(value,hook){const record=make(value,hook);hook();return record.value+1;}globalThis.make=make;globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const { ip, op } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultKindMasks).toEqual([mask]);
+			expect(out.native.registerRepresentations[op.dst]).toBe(representation);
+			if (representation === "number") expect(out.c.source).not.toContain("MAL_BIN_ADD");
+			else expect(out.c.source).toContain("MAL_BIN_ADD");
+		},
+	);
+
 	it.each([
 		[
 			"value>>>0",
