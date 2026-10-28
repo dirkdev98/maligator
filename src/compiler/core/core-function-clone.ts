@@ -1,3 +1,7 @@
+import {
+	CORE_KNOWN_BUILTIN_EFFECT_FACT,
+	coreKnownBuiltinInvocationEffects,
+} from "./core-builtin-effects.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { coreUnscopedInstructionAttributes } from "./core-internal-attributes.ts";
 import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
@@ -13,7 +17,7 @@ import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 /**
  * Whether `cloneCoreFunction` can copy `fn`. Facts belong to their function, so
- * only primitive and record-access effects, which the clone's passes reprove, may be
+ * only primitive, known-builtin and record-access effects, which the clone's passes reprove, may be
  * dropped; guards and every other refinement keep the original unique.
  */
 export function coreFunctionIsCloneable(fn: CoreFunctionStore): boolean {
@@ -30,7 +34,9 @@ export function coreFunctionIsCloneable(fn: CoreFunctionStore): boolean {
 			(["unary", "binary", "queryStaticData"].includes(opcode) &&
 				fact.kind === CORE_PRIMITIVE_EFFECT_FACT) ||
 			(["loadPropertyStatic", "storePropertyStatic"].includes(opcode) &&
-				fact.kind === CORE_RECORD_OWN_DATA_EFFECT_FACT);
+				fact.kind === CORE_RECORD_OWN_DATA_EFFECT_FACT) ||
+			(fact.kind === CORE_KNOWN_BUILTIN_EFFECT_FACT &&
+				coreKnownBuiltinInvocationEffects(fn, instruction) !== undefined);
 		if (!reprovable || fact.obligations.length !== 0) return false;
 	}
 	return true;

@@ -18,6 +18,10 @@ import {
 	coreArrayIterationCall,
 	expandCoreArrayIterationCall,
 } from "./core-array-iteration.ts";
+import {
+	CORE_KNOWN_BUILTIN_EFFECT_FACT,
+	coreKnownBuiltinInvocationEffects,
+} from "./core-builtin-effects.ts";
 import { CORE_BUILTIN_RESULT_PROJECTIONS_ANALYSIS } from "./core-builtin-result-projections.ts";
 import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
@@ -771,7 +775,9 @@ function inlineTarget(
 							opcode === "queryStaticData") &&
 							fact.kind === CORE_PRIMITIVE_EFFECT_FACT) ||
 						((opcode === "loadPropertyStatic" || opcode === "storePropertyStatic") &&
-							fact.kind === CORE_RECORD_OWN_DATA_EFFECT_FACT)
+							fact.kind === CORE_RECORD_OWN_DATA_EFFECT_FACT) ||
+						(fact.kind === CORE_KNOWN_BUILTIN_EFFECT_FACT &&
+							coreKnownBuiltinInvocationEffects(fn, instruction) !== undefined)
 					)
 				)
 					return false;

@@ -1,4 +1,3 @@
-import { knownBuiltinInvocationEffects } from "../shared/builtin-invocation-effects.ts";
 import { builtinNormalResultKinds } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN,
@@ -6,6 +5,10 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../shared/compiler-value-kinds.ts";
 import { effectSummariesEqual } from "../shared/effect-summary.ts";
+import {
+	CORE_KNOWN_BUILTIN_EFFECT_FACT,
+	coreKnownBuiltinInvocationEffects,
+} from "./core-builtin-effects.ts";
 import { CoreEditor } from "./core-editor.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
@@ -48,7 +51,6 @@ import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 const PROOF_BUDGET = CORE_O2_PASS_BUDGETS["proof-value-kind-representation"];
-const KNOWN_BUILTIN_EFFECT_FACT = "known-builtin-effects";
 
 const CORE_REPROVED_FACT_KINDS: ReadonlySet<string> = new Set([
 	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
@@ -57,7 +59,7 @@ const CORE_REPROVED_FACT_KINDS: ReadonlySet<string> = new Set([
 	CORE_PRIMITIVE_EFFECT_FACT,
 	CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT,
 	CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
-	KNOWN_BUILTIN_EFFECT_FACT,
+	CORE_KNOWN_BUILTIN_EFFECT_FACT,
 ]);
 
 function materializeInstructionOperands(
@@ -613,14 +615,11 @@ const refineKnownBuiltinEffects: CoreFunctionPass = {
 			const operation = attributes.operation;
 			if (typeof operation !== "string") continue;
 			const existing = fn.instructionEffectRefinement(instruction);
-			const effects =
-				!attributes.construct && attributes.argumentMode === undefined
-					? knownBuiltinInvocationEffects(operation)
-					: undefined;
+			const effects = coreKnownBuiltinInvocationEffects(fn, instruction);
 			if (effects === undefined) {
 				if (
 					existing !== undefined &&
-					fn.fact(existing.proof).kind === KNOWN_BUILTIN_EFFECT_FACT
+					fn.fact(existing.proof).kind === CORE_KNOWN_BUILTIN_EFFECT_FACT
 				) {
 					editor ??= CoreEditor.open(program, item.function);
 					editor.clearInstructionEffectRefinement(instruction);
@@ -630,7 +629,7 @@ const refineKnownBuiltinEffects: CoreFunctionPass = {
 			}
 			if (existing !== undefined) {
 				const fact = fn.fact(existing.proof);
-				if (fact.kind !== KNOWN_BUILTIN_EFFECT_FACT) continue;
+				if (fact.kind !== CORE_KNOWN_BUILTIN_EFFECT_FACT) continue;
 				if (fact.value === operation && effectSummariesEqual(existing.effects, effects))
 					continue;
 				editor ??= CoreEditor.open(program, item.function);
@@ -639,7 +638,7 @@ const refineKnownBuiltinEffects: CoreFunctionPass = {
 			}
 			editor ??= CoreEditor.open(program, item.function);
 			const proof = editor.addFact({
-				kind: KNOWN_BUILTIN_EFFECT_FACT,
+				kind: CORE_KNOWN_BUILTIN_EFFECT_FACT,
 				value: operation,
 				claims: [{ kind: "effect", instruction, effects }],
 				validity: { kind: "summary", digest: `known-builtin:${operation}` },
