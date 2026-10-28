@@ -626,12 +626,28 @@ export interface CoreRecordFieldAccess {
 	readonly initialProducers?: ReadonlyArray<CoreInstructionId>;
 }
 
-export function coreRecordAccessInitialFields(
+export function coreRecordAccessProducerFields(
 	read: CoreRecordFieldAccess,
 	source: (producer: CoreInstructionId) => CoreRecordValueKind,
 ): CoreRecordValueKind {
 	let result: CoreRecordValueKind = null;
 	for (const producer of read.producers) {
+		result = joinCoreRecordValueKinds(result, source(producer));
+		if (result === undefined) break;
+	}
+	return result;
+}
+
+export function coreRecordAccessInitialFields(
+	read: CoreRecordFieldAccess,
+	producers: CoreRecordValueKind,
+	source: (producer: CoreInstructionId) => CoreRecordValueKind,
+): CoreRecordValueKind {
+	// Payload projection cannot license a key missing from another producer.
+	if (read.initialProducers === undefined || !coreRecordFieldIsOwnData(read, producers))
+		return producers;
+	let result: CoreRecordValueKind = null;
+	for (const producer of read.initialProducers) {
 		result = joinCoreRecordValueKinds(result, source(producer));
 		if (result === undefined) break;
 	}
@@ -663,21 +679,21 @@ export function coreRecordFieldIsOwnData(
 export function coreRecordFieldReadIntegerRange(
 	read: CoreRecordFieldAccess,
 	record: CoreRecordValueKind,
+	initial: CoreRecordValueKind,
 	range: (
 		value: CoreValueId,
 		consumer: CoreInstructionId,
 	) => CompilerIntegerRange | null | undefined,
 ): CompilerIntegerRange | null | undefined {
 	if (record === null) return null;
-	const initialKind = coreRecordFieldInitialKind(read, record, -1);
-	if (initialKind === 0) return null;
-	if (read.initialProducers?.length !== 0 && initialKind !== COMPILER_VALUE_KIND_NUMBER)
-		return undefined;
+	if (coreRecordFieldInitialKind(read, record, -1) === 0) return null;
 	if (!coreRecordFieldIsOwnData(read, record)) return undefined;
+	const initialKind = coreRecordFieldInitialKind(read, initial, -1);
+	if (initialKind !== 0 && initialKind !== COMPILER_VALUE_KIND_NUMBER) return undefined;
 	let result =
-		read.initialProducers?.length === 0
+		initialKind === 0
 			? null
-			: record!.find((field) => field.key === read.key)!.integerRange;
+			: initial!.find((field) => field.key === read.key)!.integerRange;
 	for (const write of read.writes ?? []) {
 		result = joinFieldIntegerRanges(result, range(write.value, write.instruction));
 		if (result === undefined) break;

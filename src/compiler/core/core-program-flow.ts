@@ -17,6 +17,7 @@ import {
 	coreRecordFieldInitialKind,
 	coreRecordFieldIsOwnData,
 	coreRecordAccessInitialFields,
+	coreRecordAccessProducerFields,
 } from "./core-record-value-kinds.ts";
 import type {
 	CoreRecordValueKind,
@@ -2437,15 +2438,12 @@ export class CoreProgramFlowEngine {
 					for (const [instruction, values] of alternatives ?? []) {
 						if (values.length !== 0) continue;
 						const read = recordReads.get(instruction)!;
-						const record = coreRecordAccessInitialFields(read, recordResult);
-						const initialKind = coreRecordFieldInitialKind(read, record, semantics.top);
+						const record = coreRecordAccessProducerFields(read, recordResult);
+						const initial = coreRecordAccessInitialFields(read, record, recordResult);
 						if (
-							initialKind === 0 ||
-							(initialKind === semantics.top &&
-								!(
-									read.initialProducers?.length === 0 &&
-									coreRecordFieldIsOwnData(read, record)
-								))
+							!coreRecordFieldIsOwnData(read, record) ||
+							coreRecordFieldInitialKind(read, record, semantics.top) === 0 ||
+							coreRecordFieldInitialKind(read, initial, semantics.top) === semantics.top
 						)
 							continue;
 						alternatives!.set(instruction, read.writes!);
@@ -2501,7 +2499,7 @@ export class CoreProgramFlowEngine {
 											hasNormalResult:
 												coreRecordFieldInitialKind(
 													read,
-													coreRecordAccessInitialFields(read, recordResult),
+													coreRecordAccessProducerFields(read, recordResult),
 													semantics.top,
 												) !== 0,
 										};
@@ -2511,11 +2509,14 @@ export class CoreProgramFlowEngine {
 							if (site === undefined) {
 								const read = recordReads.get(instruction);
 								if (read === undefined) return undefined;
-								const record = coreRecordAccessInitialFields(read, recordResult);
-								return read.initialProducers?.length === 0 &&
-									coreRecordFieldIsOwnData(read, record)
-									? 0
-									: coreRecordFieldInitialKind(read, record, semantics.top);
+								const record = coreRecordAccessProducerFields(read, recordResult);
+								if (coreRecordFieldInitialKind(read, record, semantics.top) === 0)
+									return 0;
+								return coreRecordFieldInitialKind(
+									read,
+									coreRecordAccessInitialFields(read, record, recordResult),
+									semantics.top,
+								);
 							}
 							if (
 								site.targets.opaque ||

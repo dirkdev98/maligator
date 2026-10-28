@@ -61,6 +61,38 @@ function readKind(producer: string, reader = "return value.n;", call = "make(inp
 }
 
 describe("fresh record field observations", () => {
+	it.each(["right.n='changed';", "if(input)right.n='first';else right.n='second';"])(
+		"projects surviving initializer sources through a merged read (%s)",
+		(write) => {
+			const out = flow(
+				`function known(){return {n:'initial'};}function unknown(n){return {n};}function read(input){const left=known();const right=unknown(input);${write}const selected=input?left:right;return selected.n;}globalThis.result=read(globalThis.input);`,
+			);
+			expect(out.read().summary(out.named("read").id).returnKind).toBe(
+				COMPILER_VALUE_KIND_STRING,
+			);
+		},
+	);
+	it("withdraws a projected initializer bound when the other source's writer is removed", () => {
+		const out = flow(
+			`function known(){return {n:1};}function unknown(n){return {n};}function read(n){const left=known();const right=unknown(n);right.n=2;return(n?left:right).n;}globalThis.result=read(globalThis.input);`,
+		);
+		const fn = out.named("read");
+		const before = out.read();
+		expect(before.summary(fn.id).returnKind).toBe(COMPILER_VALUE_KIND_NUMBER);
+		const edit = CoreEditor.open(out.program, fn.id);
+		edit.removeInstruction(
+			coreOperations(fn).find((op) => op.opcode === "storeProperty")!.id,
+		);
+		edit.commit();
+		expect(out.read().summary(fn.id).returnKind).toBe(COMPILER_VALUE_KIND_TOP);
+		expect(before.summary(fn.id).returnKind).toBe(COMPILER_VALUE_KIND_NUMBER);
+	});
+	it("keeps projected recursive producer cycles empty", () => {
+		const out = flow(
+			`function make(){return make();}function read(flag){const left=make();const right=make();right.n=1;return(flag?left:right).n;}globalThis.result=read(globalThis.input);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(0);
+	});
 	it("withdraws a published definite-write kind when the writer is removed", () => {
 		const out = flow(
 			`function make(n){return {n};}function read(n){const value=make(n);value.n='changed';return value.n;}globalThis.result=read(globalThis.input);`,

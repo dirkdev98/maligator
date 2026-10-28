@@ -118,6 +118,7 @@ import {
 	coreRecordFieldReads,
 	coreRecordFieldStores,
 	coreRecordAccessInitialFields,
+	coreRecordAccessProducerFields,
 	coreRecordFieldInitialKind,
 	coreRecordFieldIsOwnData,
 	coreRecordFieldReadIntegerRange,
@@ -4647,15 +4648,16 @@ function discoverProgramNormalResultFacts(
 			const site = sites?.get(instruction);
 			if (site !== undefined) return callRange(site, query);
 			const read = reads.get(instruction);
-			return read === undefined
-				? coreInstructionResultIntegerRange(fn, instruction)
-				: coreRecordFieldReadIntegerRange(
-						read,
-						coreRecordAccessInitialFields(read, (producer) =>
-							recordResult(flow.targets.site(functionId, producer)),
-						),
-						(value, consumer) => query(value, fn.instructionBlock(consumer)),
-					);
+			if (read === undefined) return coreInstructionResultIntegerRange(fn, instruction);
+			const source = (producer: CoreInstructionId) =>
+				recordResult(flow.targets.site(functionId, producer));
+			const record = coreRecordAccessProducerFields(read, source);
+			return coreRecordFieldReadIntegerRange(
+				read,
+				record,
+				coreRecordAccessInitialFields(read, record, source),
+				(value, consumer) => query(value, fn.instructionBlock(consumer)),
+			);
 		});
 		return query;
 	};
@@ -4813,18 +4815,26 @@ function discoverProgramNormalResultFacts(
 		const discovered = new Map<CoreInstructionId, CoreRecordAccessFact>();
 		let query: CoreIntegerRangeQuery | undefined;
 		for (const [instruction, read] of readsFor(functionId)) {
-			const record = coreRecordAccessInitialFields(read, initialFields);
+			const record = coreRecordAccessProducerFields(read, initialFields);
 			if (!coreRecordFieldIsOwnData(read, record)) continue;
-			const initialKind = coreRecordFieldInitialKind(
+			const normalKind = coreRecordFieldInitialKind(
 				read,
 				record,
 				COMPILER_VALUE_KIND_TOP,
 			);
+			const initial = coreRecordAccessInitialFields(read, record, initialFields);
+			const initialKind = coreRecordFieldInitialKind(
+				read,
+				initial,
+				COMPILER_VALUE_KIND_TOP,
+			);
 			const mask =
 				read.writes === undefined ||
-				initialKind === 0 ||
-				(initialKind === COMPILER_VALUE_KIND_TOP && read.initialProducers?.length !== 0)
-					? initialKind
+				normalKind === 0 ||
+				initialKind === COMPILER_VALUE_KIND_TOP
+					? normalKind === 0
+						? 0
+						: initialKind
 					: (kinds ??= readValueKinds())
 							.values(functionId)
 							.latticeMask(
@@ -4833,7 +4843,7 @@ function discoverProgramNormalResultFacts(
 			const integerRange =
 				mask !== COMPILER_VALUE_KIND_NUMBER
 					? undefined
-					: (coreRecordFieldReadIntegerRange(read, record, (value, consumer) =>
+					: (coreRecordFieldReadIntegerRange(read, record, initial, (value, consumer) =>
 							(query ??= queryFunction(functionId))(value, fn.instructionBlock(consumer)),
 						) ?? undefined);
 			discovered.set(instruction, {
@@ -4852,7 +4862,7 @@ function discoverProgramNormalResultFacts(
 				})
 				.exceptional(),
 		)) {
-			const record = coreRecordAccessInitialFields(store, initialFields);
+			const record = coreRecordAccessProducerFields(store, initialFields);
 			if (coreRecordFieldIsOwnData(store, record))
 				discovered.set(instruction, {
 					instruction,

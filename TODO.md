@@ -297,6 +297,10 @@ The independent target boundary and current storage contract are recorded in
       Exceptional predecessors now retain prefixes at each throwing instruction,
       so a caught RHS failure cannot make a later, unexecuted store kill an
       earlier payload. Writes completed before a later throw remain eligible.
+      Caller joins now project the surviving initial sources independently of
+      all-source own presence and normal completion. A killed unknown initializer
+      cannot widen another source's numeric kind or range; conditional writes,
+      caught failures and escapes retain their conservative alternatives.
       Constant relational writer bounds already propagate through these queries.
       Remaining object work includes nonconstant relational bounds, writer/source
       correlations beyond these selected sources, typed producer storage for

@@ -946,6 +946,10 @@ the producer has a normal result, while empty recursive producers remain empty.
 Published field bounds cannot seed the flow that revalidates them after edits.
 The same reaching-writer set supplies integer bounds at each writer's control point;
 overwritten unknown payloads do not prevent scalar storage for the final value.
+Merged caller reads project initial kinds and ranges from only the sources whose
+initial payload can reach that read. All producers still supply the own-key and
+normal-completion gates, including sources with overwritten unknown payloads.
+This projection does not narrow the lifetime storage of either producer.
 
 The same prefix proof licenses named overwrites of existing writable own data
 fields. It establishes presence and writability independently of payload kinds or

@@ -30,6 +30,72 @@ function fieldRead(out: ReturnType<typeof inspectStaticValueFunction>) {
 }
 
 describe("normal field facts after own writes", () => {
+	it.each(["function", "function*", "async function", "async function*"])(
+		"projects surviving source kinds and ranges in a %s caller",
+		(declaration) => {
+			const suspend =
+				(declaration.includes("*") ? "yield 0;" : "") +
+				(declaration.startsWith("async") ? "await 0;" : "");
+			const out = inspectStaticValueFunction(
+				`const known=function known(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input&15};};const unknown=function unknown(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input};};${declaration} compute(input,flag,hook){const left=known(input,hook);const right=unknown(input,hook);right.value=input&255;const record=flag?left:right;${suspend}hook();return record.value%10;}globalThis.known=known;globalThis.unknown=unknown;globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const { ip, op } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultKindMasks).toEqual([
+				COMPILER_VALUE_KIND_NUMBER,
+			]);
+			expect(out.native.facts![ip]!.resultIntegerRanges?.[0]).toMatchObject({
+				minimum: 0,
+				maximum: 255,
+			});
+			expect(out.native.registerRepresentations[op.dst]).toBe("int32");
+			expect(out.c.source).not.toContain("mal_number_remainder(");
+		},
+	);
+	it.each([
+		"if(flag)right.value=input&255;",
+		"try{right.value=input&255;}catch(error){hook('caught');}",
+		"right.value=input&255;hook(right);",
+	])("retains unknown alternatives outside a definite private write (%s)", (write) => {
+		const out = inspectStaticValueFunction(
+			`const known=function known(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input&15};};const unknown=function unknown(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input};};function compute(input,flag,hook){const left=known(input,hook);const right=unknown(input,hook);${write}const record=flag?left:right;hook();return record.value%10;}globalThis.known=known;globalThis.unknown=unknown;globalThis.compute=compute;`,
+			"compute",
+			{ locked: false },
+		);
+		const { ip, op } = fieldRead(out);
+		expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+		expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+	});
+	it.each(["{other:input}", "{get value(){return input;}}"])(
+		"requires own data on an overwritten source with %s",
+		(record) => {
+			const out = inspectStaticValueFunction(
+				`const known=function known(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input&15};};const unknown=function unknown(input,hook){for(let i=0;i<3;i++)hook(i);return ${record};};function compute(input,flag,hook){const left=known(input,hook);const right=unknown(input,hook);right.value=input&255;const record=flag?left:right;hook();return record.value%10;}globalThis.known=known;globalThis.unknown=unknown;globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const { ip, op } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+			expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+		},
+	);
+	it.each(["-0", "+input"])(
+		"retains unbounded Number storage after projecting a %s overwrite",
+		(value) => {
+			const out = inspectStaticValueFunction(
+				`const known=function known(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input&15};};const unknown=function unknown(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input};};function compute(input,flag,hook){const left=known(input,hook);const right=unknown(input,hook);right.value=${value};const record=flag?left:right;hook();return record.value%10;}globalThis.known=known;globalThis.unknown=unknown;globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const { ip, op } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultKindMasks).toEqual([
+				COMPILER_VALUE_KIND_NUMBER,
+			]);
+			expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+			expect(out.native.registerRepresentations[op.dst]).toBe("number");
+		},
+	);
 	it.each([
 		["function*", "yield 0;"],
 		["async function", "await hook();"],

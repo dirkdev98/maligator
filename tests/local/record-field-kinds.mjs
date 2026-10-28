@@ -1170,6 +1170,39 @@ function readDefiniteRecord(input, flag, callback) {
 	callback("definite overwrite");
 	return record.value % 10;
 }
+const makeSelectedBounded = function makeSelectedBounded(callback) {
+	for (let step = 0; step < 3; step++) callback(step);
+	return { value: 7 };
+};
+function readSelectedInitial(input, flag, callback) {
+	const left = makeSelectedBounded(callback);
+	const right = makeOverwriteRecord(input, callback);
+	right.value = input & 255;
+	const record = flag ? left : right;
+	callback("selected initializer");
+	return record.value % 10;
+}
+function* selectedInitialSuspended(input, flag, callback) {
+	const left = makeSelectedBounded(callback);
+	const right = makeOverwriteRecord(input, callback);
+	right.value = input & 255;
+	const record = flag ? left : right;
+	yield record.value;
+	callback("selected resume");
+	return record.value % 10;
+}
+function readSelectedCaught(input, flag, callback) {
+	const left = makeSelectedBounded(callback);
+	const right = makeOverwriteRecord(input, callback);
+	try {
+		right.value = input & 255;
+	} catch (error) {
+		callback("caught selected overwrite");
+	}
+	const record = flag ? left : right;
+	callback("selected caught read");
+	return record.value % 10;
+}
 function readDefiniteCoercion(input, callback) {
 	const record = makeOverwriteRecord(input, observe);
 	record.value = { valueOf: callback };
@@ -1364,6 +1397,53 @@ for (const flag of [false, true]) {
 		);
 }
 let overwriteCoercions = 0;
+for (const flag of [false, true]) {
+	for (const input of [-0, NaN, Infinity, -1, 0, 255, 256, 4294967295]) {
+		const expected = flag ? 7 : input & 255;
+		check(
+			readSelectedInitial(input, flag, observe),
+			expected % 10,
+			"selected initial source",
+		);
+		const suspended = selectedInitialSuspended(input, flag, observe);
+		check(suspended.next().value, expected, "selected field before suspension");
+		observe("selected suspended");
+		check(suspended.next().value, expected % 10, "selected field after suspension");
+	}
+}
+let selectedCoercions = 0;
+const selectedInput = {
+	valueOf() {
+		selectedCoercions++;
+		observe("selected coercion");
+		return 511;
+	},
+};
+check(readSelectedInitial(selectedInput, false, observe), 5, "selected input coercion");
+check(selectedCoercions, 1, "selected overwrite coerces once");
+let selectedCaughtCoercions = 0;
+const selectedCaughtInput = {
+	valueOf() {
+		selectedCaughtCoercions++;
+		observe("selected caught coercion");
+		if (selectedCaughtCoercions === 1) throw new Error("selected RHS");
+		return 9;
+	},
+};
+check(
+	readSelectedCaught(selectedCaughtInput, false, observe),
+	9,
+	"caught selected heap payload",
+);
+check(selectedCaughtCoercions, 2, "caught overwrite retains earlier payload");
+for (const input of [Symbol("selected"), 1n]) {
+	try {
+		readSelectedInitial(input, false, observe);
+		throw new Error("missing selected overwrite error");
+	} catch (error) {
+		check(error instanceof TypeError, true, "selected overwrite preserves type error");
+	}
+}
 check(
 	readDefiniteRecord(
 		{
