@@ -1246,10 +1246,12 @@ export function nativeInstructionEffects(
 	facts?: InstructionFacts,
 ): NativeEdgeEffects {
 	const mask = facts?.effectMask;
-	// Operator helpers implement these semantic effects directly; call and allocation helpers have additional runtime obligations.
+	// Call and allocation helpers have runtime obligations beyond their semantic effects.
 	if (
 		mask !== undefined &&
-		(instruction.opcode === "UNARY" || instruction.opcode === "BINARY")
+		(instruction.opcode === "UNARY" ||
+			instruction.opcode === "BINARY" ||
+			instruction.opcode === "LOAD_PRIMORDIAL")
 	) {
 		return {
 			allocation: (mask & INSTRUCTION_MAY_GC) !== 0,

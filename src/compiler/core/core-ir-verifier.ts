@@ -15,6 +15,7 @@ import { isKnownBuiltinError } from "../shared/known-builtin-errors.ts";
 import { knownArgumentModes } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import { primordialNodeAvailable } from "../shared/primordial-catalog.ts";
 import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
@@ -504,12 +505,18 @@ function verifyInstructionRows(
 				)
 					fail("Invalid template quasi length");
 			} else if (descriptor.opcode === "loadPrimordial") {
-				const node = getPrimordialCatalog().nodes[attributes.nodeIndex as number];
+				const index = attributes.nodeIndex;
+				const node =
+					typeof index === "number" && Number.isSafeInteger(index) && index >= 0
+						? getPrimordialCatalog().nodes[index]
+						: undefined;
 				if (node === undefined || (node[2] & 9) === 0)
 					fail(
 						`Invalid primordial identity ${typeof attributes.nodeIndex === "number" ? attributes.nodeIndex : "non-number"} at ${fn.metadata.sourcePath} @${instruction}`,
 					);
 				verifyBuiltinWorldAssumptions(attributes.worldAssumptions, node[0], world);
+				if (world !== undefined && !primordialNodeAvailable(world, node[0]))
+					fail(`Unavailable primordial identity ${node[0]}`);
 			} else if (descriptor.opcode === "builtinError") {
 				if (!isKnownBuiltinError(attributes.error))
 					fail("Invalid builtin error identity");

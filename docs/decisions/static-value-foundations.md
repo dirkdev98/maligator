@@ -473,6 +473,10 @@ arguments, invocation mode and world dependencies. `loadPrimordial` preserves a
 captured identity when it is also used as a value. Resolution requires the locked
 primordial and realm contract, including the receiver's actual prototype chain and
 own descriptor. A brand alone does not authorize bypassing a property lookup.
+Verified primordial references are nonthrowing: the catalog route must exist in
+the configured world, and resolving its data/getter/setter identity invokes no
+accessor. Live references retain their GC effects. Unused references can therefore
+be discarded inside handlers without weakening fallible allocation or call effects.
 
 Canonical `call`, `apply`, `bind` and Reflect adapters use the same operation.
 Argument-list modes distinguish nullable Function `apply`, strict array-like lists,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
@@ -21,11 +22,81 @@ import {
 import { CORE_NO_EFFECTS, coreFactId } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-data.ts";
 import {
 	inspectCoreBlockParameters,
 	inspectCoreInstructionResults,
 } from "./helpers/core-inspection.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
+
+describe("primordial reference availability", () => {
+	function reference(operation: string, index?: number | string) {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "loadPrimordial", [], {
+			attributes: {
+				nodeIndex:
+					index ??
+					getPrimordialCatalog().nodes.findIndex((node) => node[0] === operation),
+				worldAssumptions: {
+					...builtinWorldAssumptions(operation, "exact-builtin-proof", true),
+				},
+			},
+		});
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		builder.finish(entry);
+		return program;
+	}
+
+	it.each([-1, 0.5, "1"])("rejects a malformed primordial index %s", (index) => {
+		expect(() => verifyCoreProgram(reference("Math.round", index))).toThrow(
+			/Invalid primordial identity/,
+		);
+	});
+
+	it.each([
+		"Intl.Collator",
+		"%MAL_INTRINSIC_INTL_SEGMENT_ITERATOR_PROTOTYPE%.next",
+		"%MAL_INTRINSIC_REGEXP_STRING_ITERATOR_PROTOTYPE%.next",
+	])("requires %s to be installed in the configured world", (operation) => {
+		const program = reference(operation);
+		for (const enabled of [false, true]) {
+			const context = {
+				...programAnalysisContext(),
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { regexp: enabled, intl: { enabled } } }),
+				),
+			};
+			const verify = () => verifyCoreProgram(program, undefined, context);
+			if (enabled) expect(verify).not.toThrow();
+			else expect(verify).toThrow(/Unavailable primordial identity/);
+		}
+	});
+
+	it("gates internal Intl prototypes on their owning service", () => {
+		const context = {
+			...programAnalysisContext(),
+			facts: compilerProgramFactsFromConfig(
+				resolveBuildConfig({
+					engine: { intl: { enabled: true, features: ["collator"] } },
+				}),
+			),
+		};
+		expect(() =>
+			verifyCoreProgram(reference("Intl.Collator"), undefined, context),
+		).not.toThrow();
+		expect(() =>
+			verifyCoreProgram(
+				reference("%MAL_INTRINSIC_INTL_SEGMENT_ITERATOR_PROTOTYPE%.next"),
+				undefined,
+				context,
+			),
+		).toThrow(/Unavailable primordial identity/);
+	});
+});
 
 describe("record field kind metadata", () => {
 	it.each([0, 255, 256, -1, NaN, "number"])(

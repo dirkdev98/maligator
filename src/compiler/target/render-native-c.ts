@@ -13764,12 +13764,14 @@ class NativeInstructionEmission {
 					`}`,
 				];
 			}
-			case "LOAD_PRIMORDIAL":
+			case "LOAD_PRIMORDIAL": {
+				const effects = nativeInstructionEffects(instruction, this.context.facts);
 				return [
 					`r${instruction.dst} = mal_vm_load_primordial(vm, ${instruction.nodeIndex});`,
-					this.throwCheck(),
+					...(effects.throwing || effects.reentry ? [this.throwCheck()] : []),
 					this.poll(),
 				];
+			}
 			case "LOAD_INTRINSIC":
 				return [
 					`r${instruction.dst} = vm->intrinsics[${emitIntrinsic(instruction.intrinsic)}];`,

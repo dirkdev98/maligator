@@ -230,6 +230,8 @@ const GC_FREE = new Set<CoreOpcode>([
 
 const NO_THROW = new Set<CoreOpcode>([
 	...GC_FREE,
+	// Verified references resolve available locked descriptors without invoking accessors.
+	"loadPrimordial",
 	// The async prologue allocates its hidden state and result promise but keeps
 	// executing synchronously and cannot surface a JavaScript throw.
 	"asyncStart",

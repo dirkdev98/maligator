@@ -405,4 +405,51 @@ assert(
 		constructedBoundScript.observedTarget === ScriptRecord,
 	"flattened construction resolves a bound target",
 );
+function roundPoints(points) {
+	let total = 0;
+	for (const point of points) {
+		point.y += point.vy;
+		total += Math.round(point.x - point.y);
+	}
+	return total;
+}
+const points = [
+	{ x: 2.5, y: 1, vy: 0.5 },
+	{ x: -3, y: 0, vy: 0.5 },
+];
+assert(roundPoints(points) === -2, "numeric fields and rounding share a region");
+let pointIteratorCloses = 0;
+const pointFailure = { marker: "point getter" };
+const throwingPoint = {
+	y: 1,
+	vy: 2,
+	get x() {
+		throw pointFailure;
+	},
+};
+const throwingPoints = {
+	[Symbol.iterator]() {
+		return {
+			next() {
+				return { value: throwingPoint, done: false };
+			},
+			return() {
+				pointIteratorCloses++;
+				return { done: true };
+			},
+		};
+	},
+};
+let caughtPointFailure;
+try {
+	roundPoints(throwingPoints);
+} catch (error) {
+	caughtPointFailure = error;
+}
+assert(
+	caughtPointFailure === pointFailure &&
+		pointIteratorCloses === 1 &&
+		throwingPoint.y === 3,
+	"field updates and iterator close precede a caught getter failure",
+);
 console.log("known operations passed");

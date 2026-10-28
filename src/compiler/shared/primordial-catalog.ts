@@ -172,7 +172,8 @@ export function primordialNodeAvailable(world: WorldFacts, id: string): boolean 
 	if (resolved === undefined) return false;
 	if (resolved.startsWith("Temporal") || resolved === "Date.prototype.toTemporalInstant")
 		return world.ecmaFeatures.temporal;
-	if (resolved.startsWith("RegExp")) return world.ecmaFeatures.regexp;
+	if (resolved.startsWith("RegExp") || resolved.startsWith("%MAL_INTRINSIC_REGEXP_"))
+		return world.ecmaFeatures.regexp;
 	if (resolved.startsWith("Realm") || resolved.startsWith("ShadowRealm"))
 		return world.realms;
 	if (
@@ -180,9 +181,10 @@ export function primordialNodeAvailable(world: WorldFacts, id: string): boolean 
 		resolved.startsWith("Error.stackTraceLimit<")
 	)
 		return world.nodeSurface;
-	if (!resolved.startsWith("Intl")) return true;
+	const segmenterPrototype = resolved.startsWith("%MAL_INTRINSIC_INTL_SEGMENT");
+	if (!resolved.startsWith("Intl") && !segmenterPrototype) return true;
 	if (!world.ecmaFeatures.intl) return false;
-	const name = resolved.split(".")[1];
+	const name = segmenterPrototype ? "Segmenter" : resolved.split(".")[1];
 	if (
 		name === undefined ||
 		name === "Locale" ||

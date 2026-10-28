@@ -2,6 +2,10 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { directBuiltinOperationIds } from "../src/compiler/shared/builtin-registry.ts";
 import {
+	INSTRUCTION_MAY_GC,
+	INSTRUCTION_MAY_THROW,
+} from "../src/compiler/shared/instruction-facts.ts";
+import {
 	knownOperationIndex,
 	knownOperationCall,
 	knownOperationCallProves,
@@ -20,6 +24,48 @@ import {
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("known-operation dispatch", () => {
+	it("discards an unused primordial lookup inside an iterator-close handler", () => {
+		const output = inspectStaticValueFunction(
+			`function probe(records) {
+				let checksum = 0;
+				for (const point of records) {
+					point.y += point.vy;
+					checksum += Math.round(point.x - point.y);
+				}
+				return checksum;
+			} globalThis.probe = probe;`,
+			"probe",
+		);
+		expect(output.fn.instructions.some((op) => op.opcode === "LOAD_PRIMORDIAL")).toBe(
+			false,
+		);
+		expect(
+			output.fn.instructions.some(
+				(op) => op.opcode === "CALL_KNOWN" && op.operation === "Math.round",
+			),
+		).toBe(true);
+	});
+
+	it("keeps an observed primordial reference and its GC effect", () => {
+		const output = inspectStaticValueFunction(
+			`function probe(observe) {
+				try { return observe(Math.round); } catch (error) { return error; }
+			} globalThis.probe = probe;`,
+			"probe",
+		);
+		const ip = output.native.body.instructions.findIndex(
+			(op) => op.opcode === "LOAD_PRIMORDIAL",
+		);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		const effects = output.native.facts?.[ip]?.effectMask;
+		expect(effects).toBeDefined();
+		expect(effects! & INSTRUCTION_MAY_THROW).toBe(0);
+		expect(effects! & INSTRUCTION_MAY_GC).not.toBe(0);
+		expect(output.c.source).not.toMatch(
+			/mal_vm_load_primordial\([^\n]*\);\n\s*if \(MAL_THREW\(\)\)/,
+		);
+	});
+
 	it("validates captured operation identities and semantic contracts independently", () => {
 		const operation = "Object.prototype.propertyIsEnumerable";
 		const call = knownOperationCall(operation, 17);
