@@ -2740,8 +2740,8 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                 i32 guarded_tag = data[3 + target_count + argument_count];
                 if ((guarded_tag > 0 &&
                      ((guarded_tag <= MAL_MATH_UNARY_ROUND && argument_count != 1) ||
-                      guarded_tag > MAL_MATH_UNARY_ROUND + 1 +
-                          MAL_GUARDED_BUILTIN_ARRAY_UNSHIFT ||
+                      guarded_tag > MAL_MATH_UNARY_ROUND +
+                          (i32) countof(wire_guarded_builtin_call_ops) ||
                       (guarded_tag == MAL_MATH_UNARY_ROUND + 1 +
                           MAL_GUARDED_BUILTIN_ARRAY_PUSH && argument_count > 4))) ||
                     (guarded_tag < 0 &&

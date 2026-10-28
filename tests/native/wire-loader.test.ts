@@ -1302,6 +1302,47 @@ describe("wire loader side-data validation", () => {
 		rejectsWire("guarded-array-push-invalid-arity", invalidArrayPushArity);
 	});
 
+	it("accepts every guarded builtin call tag in an uninvoked function", () => {
+		acceptsWire(
+			"all-guarded-builtin-tags",
+			serializeRuntimeImage(
+				{
+					...definition,
+					functionCount: 2,
+					functions: [
+						{
+							...fn,
+							literalShapeCount: 0,
+							instructions: [
+								{ opcode: "CREATE_UNDEFINED", dst: 0 },
+								{ opcode: "RETURN", value: 0 },
+							],
+						},
+						{
+							...fn,
+							literalShapeCount: 0,
+							instructions: [
+								...VM_GUARDED_BUILTIN_CALL_OPERATIONS.map(
+									(operation): BytecodeInstruction => ({
+										opcode: "CALL",
+										dst: 0,
+										callee: 0,
+										thisValue: 0,
+										arguments: [0],
+										argumentCount: 1,
+										guardedBuiltinCall: { operation },
+									}),
+								),
+								{ opcode: "RETURN", value: 0 },
+							],
+						},
+					],
+				},
+				{ debugInfo: false },
+			),
+		);
+	});
+
 	it("rejects malformed varints and trailing data", () => {
 		const wire = serializeRuntimeImage(definition, { debugInfo: false });
 		const replaceFlags = (bytes: Array<number>): Uint8Array =>
