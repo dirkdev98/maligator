@@ -370,12 +370,13 @@ The independent target boundary and current storage contract are recorded in
       native, and image forms coexist; Node 24's default 2 GB heap leaves little
       margin for in-process native builds of the compiler.
       Keep the representative Node.js self-compile below 60 seconds on AC power;
-      stable acceptance remains unverified; the uninstrumented AC sample at
-      `298c89f9` took 59.14 seconds. Analysis extensions must stay bounded
+      stable acceptance remains unverified. The latest clean uninstrumented sample
+      at `a6458958` took 60.52 seconds with conflicting AC/battery power readings,
+      so it cannot establish the AC budget. Analysis extensions must stay bounded
       and reuse existing worklists. Leave long checks to CI and keep local
       verification to the affected units and quality checks. The variable and
-      transitive relational-range extensions still need an AC sample; development
-      probes ran on battery. Transitive queries share the existing 32-step budget.
+      transitive relational-range extensions still need a qualifying AC sample.
+      Transitive queries share the existing 32-step budget.
 
 - [ ] Spread one split native function over several translation units. Outlining
       functions past 256 Ki into 128 Ki parts cut the self-compile `-O2` unit wall time
