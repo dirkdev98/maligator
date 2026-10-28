@@ -881,6 +881,8 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
 #include "generated/known_primordials.inc"
 #undef MAL_KNOWN_SPECIALIZATION
             };
+            static_assert(countof(specialization_operations) == countof(wire_direct_builtin_ops),
+                "known specialization routes must match the direct builtin registry");
             if (specialization != 0 && (specialization > countof(specialization_operations) || specialization_operations[specialization - 1] != (i32) operation)) r->ok = false;
             o->as.call_known.operation = ((i32) operation << 4) | flags;
             return;

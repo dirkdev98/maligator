@@ -407,8 +407,8 @@ Arithmetic work should support these paths or fix correctness defects.
       Keep the representative Node.js self-compile below 60 seconds on AC power;
       stable acceptance remains unverified. Alternating frozen-input controls at
       `0ce7ac8f` took 58.42 and 58.51 seconds on AC, after earlier unmatched samples
-      exceeded the budget. The clean `8319d1d7` record-payload slice took 58.74
-      seconds in one AC budget sample, emitting 172,767,450 C code units across
+      exceeded the budget. The clean `2edb537e` weak-collection slice took 56.72
+      seconds in one AC budget sample, emitting 174,011,708 C code units across
       145 units; this establishes neither a speedup nor timing stability.
       Preserve matched source and workload identities before
       attributing such variation to new facts. Check each completed semantic slice
