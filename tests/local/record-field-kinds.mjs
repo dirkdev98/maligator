@@ -1185,8 +1185,9 @@ function readSelectedInitial(input, flag, callback) {
 function* selectedInitialSuspended(input, flag, callback) {
 	const left = makeSelectedBounded(callback);
 	const right = makeOverwriteRecord(input, callback);
-	right.value = input & 255;
 	const record = flag ? left : right;
+	right.value = "older";
+	right.value = input & 255;
 	yield record.value;
 	callback("selected resume");
 	return record.value % 10;
@@ -1194,14 +1195,51 @@ function* selectedInitialSuspended(input, flag, callback) {
 function readSelectedCaught(input, flag, callback) {
 	const left = makeSelectedBounded(callback);
 	const right = makeOverwriteRecord(input, callback);
+	const record = flag ? left : right;
 	try {
 		right.value = input & 255;
 	} catch (error) {
 		callback("caught selected overwrite");
 	}
-	const record = flag ? left : right;
 	callback("selected caught read");
 	return record.value % 10;
+}
+function readCorrelatedAfter(input, flag, callback) {
+	const left = makeSelectedBounded(callback);
+	const right = makeOverwriteRecord(input, callback);
+	const record = flag ? left : right;
+	right.value = "older";
+	right.value = input & 255;
+	callback("correlated after merge");
+	return record.value % 10;
+}
+function readCorrelatedOpposite(payload, flag, callback) {
+	const left = makeSelectedBounded(callback);
+	const right = makeSelectedBounded(callback);
+	let record;
+	let other;
+	if (flag) {
+		record = left;
+		other = right;
+	} else {
+		record = right;
+		other = left;
+	}
+	other.value = payload;
+	const result = record.value % 10;
+	callback(other.value);
+	return result;
+}
+function readCorrelatedLoop(callback) {
+	let record = makeSelectedBounded(callback);
+	let result = 0;
+	for (let i = 0; i < 3; i++) {
+		const next = makeSelectedBounded(callback);
+		next.value = "new";
+		result = record.value % 10;
+		record = next;
+	}
+	return result;
 }
 function readDefiniteCoercion(input, callback) {
 	const record = makeOverwriteRecord(input, observe);
@@ -1405,12 +1443,36 @@ for (const flag of [false, true]) {
 			expected % 10,
 			"selected initial source",
 		);
+		check(
+			readCorrelatedAfter(input, flag, observe),
+			expected % 10,
+			"source-specific store after receiver merge",
+		);
 		const suspended = selectedInitialSuspended(input, flag, observe);
 		check(suspended.next().value, expected, "selected field before suspension");
 		observe("selected suspended");
 		check(suspended.next().value, expected % 10, "selected field after suspension");
 	}
+	const payload = { marker: "opposite record payload" };
+	let observedPayload = false;
+	check(
+		readCorrelatedOpposite(payload, flag, (value) => {
+			observe(value);
+			if (value === payload) {
+				observedPayload = true;
+				check(
+					value.marker,
+					"opposite record payload",
+					"disjoint store survives collection",
+				);
+			}
+		}),
+		7,
+		"opposite receiver does not overwrite the selected record",
+	);
+	check(observedPayload, true, "excluded writer remains observable");
 }
+check(readCorrelatedLoop(observe), NaN, "earlier loop allocation retains String payload");
 let selectedCoercions = 0;
 const selectedInput = {
 	valueOf() {

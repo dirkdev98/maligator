@@ -114,6 +114,7 @@ describe("fresh record field kind observations", () => {
 					],
 					["readDefiniteRecord", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					["readSelectedInitial", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					["readCorrelatedAfter", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					[
 						"selectedInitialSuspended",
 						{ ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 },

@@ -30,6 +30,59 @@ function fieldRead(out: ReturnType<typeof inspectStaticValueFunction>) {
 }
 
 describe("normal field facts after own writes", () => {
+	it.each([
+		["function*", "yield 0;"],
+		["async function", "await hook();"],
+		["async function*", "yield 0;await hook();"],
+	])(
+		"retains pre-write source alternatives after abrupt %s resumption",
+		(declaration, suspend) => {
+			const out = inspectStaticValueFunction(
+				`const make=function make(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input};};${declaration} compute(input,flag,hook){const left=make(7,hook);const right=make(input,hook);const record=flag?left:right;try{${suspend}right.value=input&255;}catch(error){hook('caught');}return record.value%10;}globalThis.make=make;globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const { ip, op } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+			expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+		},
+	);
+	it.each(["function", "function*", "async function", "async function*"])(
+		"retains source-specific overwrite bounds after a merge in a %s caller",
+		(declaration) => {
+			const suspend =
+				(declaration.includes("*") ? "yield 0;" : "") +
+				(declaration.startsWith("async") ? "await 0;" : "");
+			const out = inspectStaticValueFunction(
+				`const known=function known(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input&15};};const unknown=function unknown(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input};};${declaration} compute(input,flag,hook){const left=known(input,hook);const right=unknown(input,hook);const record=flag?left:right;right.value='older';right.value=input&255;${suspend}hook();return record.value%10;}globalThis.known=known;globalThis.unknown=unknown;globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const { ip, op } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultKindMasks).toEqual([
+				COMPILER_VALUE_KIND_NUMBER,
+			]);
+			expect(out.native.facts![ip]!.resultIntegerRanges?.[0]).toMatchObject({
+				minimum: 0,
+				maximum: 255,
+			});
+			expect(out.native.registerRepresentations[op.dst]).toBe("int32");
+			expect(out.c.source).not.toContain("mal_number_remainder(");
+		},
+	);
+	it.each([false, true])(
+		"retains exceptional alternatives after selecting a receiver (locked=%s)",
+		(locked) => {
+			const out = inspectStaticValueFunction(
+				`const make=function make(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input};};function compute(input,flag,hook){const left=make(7,hook);const right=make(input,hook);const record=flag?left:right;try{right.value=input&255;}catch(error){hook('caught');}return record.value%10;}globalThis.make=make;globalThis.compute=compute;`,
+				"compute",
+				{ locked },
+			);
+			const { ip, op } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+			expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+		},
+	);
 	it.each(["function", "function*", "async function", "async function*"])(
 		"projects surviving source kinds and ranges in a %s caller",
 		(declaration) => {

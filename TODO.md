@@ -301,9 +301,13 @@ The independent target boundary and current storage contract are recorded in
       all-source own presence and normal completion. A killed unknown initializer
       cannot widen another source's numeric kind or range; conditional writes,
       caught failures and escapes retain their conservative alternatives.
+      Predecessor-specific receiver identities now separate writes to disjoint
+      fresh record sources and recognize definite writes through correlated
+      phis. Earlier allocation executions on loop backedges retain their payloads;
+      every source used to exclude a writer still needs the returned-record proof.
       Constant relational writer bounds already propagate through these queries.
-      Remaining object work includes nonconstant relational bounds, writer/source
-      correlations beyond these selected sources, typed producer storage for
+      Remaining object work includes nonconstant relational bounds, payload/source
+      correlations across separate merges, typed producer storage for
       remaining writes, indexed producer summaries, broader parameter-relative
       call effects and coroutine record transport. Record-call admission and
       profitability are owned by the following tasks.

@@ -1,7 +1,7 @@
 import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
 import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
-import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreControlEdge, CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
@@ -14,7 +14,7 @@ export interface CoreRecordFieldKind {
 	readonly mask: number;
 }
 
-// Null is the empty normal-result set; undefined includes non-records and escaped objects.
+// Field arrays describe fresh private records; null has no normal result, undefined admits escapes and non-records.
 export type CoreRecordValueKind = ReadonlyArray<CoreRecordFieldKind> | null | undefined;
 
 function joinFieldIntegerRanges(
@@ -748,6 +748,11 @@ interface RecordFieldAccesses {
 	readonly barriers: ReadonlySet<CoreInstructionId>;
 }
 
+interface RecordPrefixMemo {
+	readonly fullBlocks: Map<CoreBlockId, Map<CoreValueId, number>>;
+	partialBlocks?: Map<CoreBlockId, Map<number, Map<CoreValueId, number>>>;
+}
+
 function recordAccessPrefixes(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
@@ -788,6 +793,9 @@ function recordAccessPrefixes(
 		row.push(instruction);
 	}
 	for (const row of events.values()) row.sort((a, b) => position(b) - position(a));
+	let sourceSets:
+		| Map<CoreValueId, ReadonlySet<CoreInstructionId> | undefined>
+		| undefined;
 	for (const [instruction, key] of stores === undefined ? reads : [...reads, ...writes]) {
 		const target = reads.has(instruction) ? result : stores;
 		if (target === undefined || target.has(instruction)) continue;
@@ -800,7 +808,13 @@ function recordAccessPrefixes(
 		const producers = new Set<CoreInstructionId>();
 		const initialProducers =
 			reachingWrites === undefined ? undefined : new Set<CoreInstructionId>();
-		const pending = [
+		const pending: Array<{
+			block: CoreBlockId;
+			limit: number;
+			value: CoreValueId;
+			overwritten: boolean;
+			incoming?: CoreControlEdge;
+		}> = [
 			{
 				block,
 				limit: position(instruction),
@@ -809,28 +823,70 @@ function recordAccessPrefixes(
 			},
 		];
 		// A backedge can expose writers later than the observation in the previous iteration.
-		const fullBlocks = new Map<CoreBlockId, Map<CoreValueId, number>>();
-		let partialBlocks:
-			| Map<CoreBlockId, Map<number, Map<CoreValueId, number>>>
-			| undefined;
+		const ordinaryMemo: RecordPrefixMemo = { fullBlocks: new Map() };
+		let incomingMemos: Map<CoreControlEdge, RecordPrefixMemo> | undefined;
 		let remaining = MAXIMUM_RECORD_PREFIX_WORK;
 		let valid = true;
+		let ignoredWrites: Map<CoreInstructionId, Set<CoreInstructionId>> | undefined;
+		const moveRoot = (value: CoreValueId): CoreValueId => {
+			while (fn.kernel.valueDefinitionKind(value) === 1) {
+				const owner = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+				if (fn.instructionOpcodeName(owner) !== "move" || --remaining < 0) break;
+				value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(owner));
+			}
+			return value;
+		};
+		const sources = (value: CoreValueId): ReadonlySet<CoreInstructionId> | undefined => {
+			if (sourceSets?.has(value)) return sourceSets.get(value);
+			const pending = [value];
+			const seen = new Set<CoreValueId>();
+			const definitions = new Set<CoreInstructionId>();
+			while (pending.length > 0) {
+				const value = moveRoot(pending.pop()!);
+				if (seen.has(value)) continue;
+				seen.add(value);
+				if (--remaining < 0) return undefined;
+				if (fn.kernel.valueDefinitionKind(value) === 1) {
+					definitions.add(coreInstructionId(fn.kernel.valueDefinitionOwner(value)));
+					continue;
+				}
+				if (fn.kernel.valueDefinitionKind(value) !== 0) return undefined;
+				const block = fn.kernel.valueDefinitionOwner(value) as CoreBlockId;
+				const index = fn.kernel.valueDefinitionIndex(value);
+				if (
+					fn.kernel.blockParameterRole(fn.kernel.blockParameterStart(block) + index) !== 0
+				)
+					return undefined;
+				for (const edge of cfg.predecessors[block] ?? []) {
+					if (!cfg.reachable.has(edge.from)) continue;
+					const argument = edge.arguments[index];
+					if (--remaining < 0 || edge.kind !== "ordinary" || argument === undefined)
+						return undefined;
+					pending.push(argument);
+				}
+			}
+			const result = definitions.size === 0 ? undefined : definitions;
+			(sourceSets ??= new Map()).set(value, result);
+			return result;
+		};
 		while (pending.length > 0 && valid) {
-			const { block, limit, value: input, overwritten: priorOverwrite } = pending.pop()!;
+			const {
+				block,
+				limit,
+				value: input,
+				overwritten: priorOverwrite,
+				incoming,
+			} = pending.pop()!;
 			if (--remaining < 0) {
 				valid = false;
 				break;
 			}
-			let value = input;
+			const value = moveRoot(input);
 			let overwritten = priorOverwrite;
-			let definition: CoreInstructionId | undefined;
-			while (fn.kernel.valueDefinitionKind(value) === 1) {
-				definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-				if (fn.instructionOpcodeName(definition) !== "move") break;
-				if (--remaining < 0) break;
-				value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition));
-				definition = undefined;
-			}
+			const definition =
+				fn.kernel.valueDefinitionKind(value) === 1
+					? coreInstructionId(fn.kernel.valueDefinitionOwner(value))
+					: undefined;
 			if (remaining < 0) {
 				valid = false;
 				break;
@@ -842,6 +898,42 @@ function recordAccessPrefixes(
 			const sourcePosition = definition === undefined ? -1 : position(definition);
 			if (block === sourceBlock && definition !== undefined && sourcePosition >= limit)
 				continue;
+			if (
+				reachingWrites !== undefined &&
+				writes.size !== 0 &&
+				definition === undefined &&
+				fn.kernel.valueDefinitionKind(value) === 0 &&
+				incoming === undefined
+			) {
+				if (
+					fn.kernel.blockParameterRole(
+						fn.kernel.blockParameterStart(sourceBlock) +
+							fn.kernel.valueDefinitionIndex(value),
+					) !== 0
+				) {
+					valid = false;
+					break;
+				}
+				for (const edge of cfg.predecessors[sourceBlock] ?? []) {
+					if (!cfg.reachable.has(edge.from)) continue;
+					if (--remaining < 0 || edge.kind !== "ordinary") {
+						valid = false;
+						break;
+					}
+					pending.push({ block, limit, value, overwritten, incoming: edge });
+				}
+				continue;
+			}
+			const selectedIncoming = incoming !== undefined && sourceBlock === incoming.to;
+			let selected = value;
+			if (selectedIncoming) {
+				const argument = incoming.arguments[fn.kernel.valueDefinitionIndex(value)];
+				if (argument === undefined) {
+					valid = false;
+					break;
+				}
+				selected = moveRoot(argument);
+			}
 			for (const event of events.get(block) ?? []) {
 				const at = position(event);
 				if (at >= limit) continue;
@@ -853,19 +945,55 @@ function recordAccessPrefixes(
 				const priorKey = reads.get(event) ?? writes.get(event);
 				if (priorKey !== undefined) requiredKeys.add(priorKey);
 				if (writes.get(event) === key && reachingWrites !== undefined && !overwritten) {
-					reachingWrites.add(event);
-					let receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(event));
-					while (receiver !== value && fn.kernel.valueDefinitionKind(receiver) === 1) {
-						const owner = coreInstructionId(fn.kernel.valueDefinitionOwner(receiver));
-						if (fn.instructionOpcodeName(owner) !== "move" || --remaining < 0) break;
-						receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(owner));
+					let receiver = moveRoot(
+						fn.kernel.operandAt(fn.kernel.instructionOperandStart(event)),
+					);
+					const receiverIncoming =
+						incoming !== undefined &&
+						fn.kernel.valueDefinitionKind(receiver) === 0 &&
+						fn.kernel.valueDefinitionOwner(receiver) === incoming.to;
+					if (receiverIncoming) {
+						const argument = incoming.arguments[fn.kernel.valueDefinitionIndex(receiver)];
+						if (argument === undefined) {
+							valid = false;
+							break;
+						}
+						// Backedge arguments refer to an earlier execution; project each phi once.
+						receiver = moveRoot(argument);
+					}
+					const owner = fn.kernel.valueDefinitionOwner(selected);
+					const selectedBlock =
+						fn.kernel.valueDefinitionKind(selected) === 1
+							? fn.instructionBlock(coreInstructionId(owner))
+							: (owner as CoreBlockId);
+					// A direct value shares a backedge argument's execution only when it precedes the phi.
+					overwritten =
+						receiver === selected &&
+						(selectedIncoming === receiverIncoming ||
+							(selectedBlock !== incoming!.to &&
+								cfg.dominates(selectedBlock, incoming!.to)));
+					let disjoint = false;
+					if (!overwritten && receiver !== selected) {
+						const selectedSources = sources(selected);
+						const receiverSources = sources(receiver);
+						if (
+							selectedSources !== undefined &&
+							receiverSources !== undefined &&
+							![...selectedSources].some((source) => receiverSources.has(source))
+						) {
+							disjoint = true;
+							let dependencies = ignoredWrites?.get(event);
+							if (dependencies === undefined)
+								(ignoredWrites ??= new Map()).set(event, (dependencies = new Set()));
+							for (const source of selectedSources) dependencies.add(source);
+							for (const source of receiverSources) dependencies.add(source);
+						}
 					}
 					if (remaining < 0) {
 						valid = false;
 						break;
 					}
-					// A write to another member of the alias component cannot kill this value.
-					overwritten = receiver === value;
+					if (!disjoint) reachingWrites.add(event);
 				}
 			}
 			if (!valid) break;
@@ -876,16 +1004,18 @@ function recordAccessPrefixes(
 				continue;
 			}
 			for (const edge of cfg.predecessors[block] ?? []) {
+				if (incoming !== undefined && block === incoming.to && edge !== incoming)
+					continue;
 				if (!cfg.reachable.has(edge.from)) continue;
 				let argument = value;
 				if (block === sourceBlock) {
 					const index = fn.kernel.valueDefinitionIndex(value);
-					const incoming = edge.arguments[index];
-					if (edge.kind !== "ordinary" || incoming === undefined) {
+					const argumentValue = edge.arguments[index];
+					if (edge.kind !== "ordinary" || argumentValue === undefined) {
 						valid = false;
 						break;
 					}
-					argument = incoming;
+					argument = argumentValue;
 				}
 				const limits =
 					edge.kind === "exceptional"
@@ -895,6 +1025,17 @@ function recordAccessPrefixes(
 					valid = false;
 					break;
 				}
+				const nextIncoming = block === incoming?.to ? undefined : incoming;
+				let memo = ordinaryMemo;
+				if (nextIncoming !== undefined) {
+					let selectedMemo = incomingMemos?.get(nextIncoming);
+					if (selectedMemo === undefined)
+						(incomingMemos ??= new Map()).set(
+							nextIncoming,
+							(selectedMemo = { fullBlocks: new Map() }),
+						);
+					memo = selectedMemo;
+				}
 				for (const limit of limits) {
 					if (edge.kind === "exceptional" && --remaining < 0) {
 						valid = false;
@@ -902,17 +1043,17 @@ function recordAccessPrefixes(
 					}
 					let values: Map<CoreValueId, number> | undefined;
 					if (limit === Infinity) {
-						values = fullBlocks.get(edge.from);
+						values = memo.fullBlocks.get(edge.from);
 						if (values === undefined)
-							fullBlocks.set(edge.from, (values = new Map<CoreValueId, number>()));
+							memo.fullBlocks.set(edge.from, (values = new Map<CoreValueId, number>()));
 					} else {
-						partialBlocks ??= new Map<
+						memo.partialBlocks ??= new Map<
 							CoreBlockId,
 							Map<number, Map<CoreValueId, number>>
 						>();
-						let prefixes = partialBlocks.get(edge.from);
+						let prefixes = memo.partialBlocks.get(edge.from);
 						if (prefixes === undefined)
-							partialBlocks.set(
+							memo.partialBlocks.set(
 								edge.from,
 								(prefixes = new Map<number, Map<CoreValueId, number>>()),
 							);
@@ -924,12 +1065,23 @@ function recordAccessPrefixes(
 					const seen = values.get(argument) ?? 0;
 					if ((seen & state) !== 0) continue;
 					values.set(argument, seen | state);
-					pending.push({ block: edge.from, limit, value: argument, overwritten });
+					pending.push({
+						block: edge.from,
+						limit,
+						value: argument,
+						overwritten,
+						incoming: nextIncoming,
+					});
 				}
 				if (!valid) break;
 			}
 		}
 		if (!valid || producers.size === 0) continue;
+		for (const [write, dependencies] of ignoredWrites ?? []) {
+			// Only sources covered by the fresh returned-record contract prove disjointness.
+			if ([...dependencies].some((source) => !producers.has(source)))
+				reachingWrites!.add(write);
+		}
 		const fieldWrites =
 			reachingWrites === undefined || reachingWrites.size === 0
 				? undefined

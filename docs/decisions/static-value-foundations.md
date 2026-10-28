@@ -950,6 +950,14 @@ Merged caller reads project initial kinds and ranges from only the sources whose
 initial payload can reach that read. All producers still supply the own-key and
 normal-completion gates, including sources with overwritten unknown payloads.
 This projection does not narrow the lifetime storage of either producer.
+Receiver identities also follow each ordinary incoming edge before scanning a
+merged block's writes. Correlated receiver phis use that same edge. One edge
+projects each phi once: a backedge argument can name an earlier allocation
+execution, which cannot be equated with the current block's new object.
+Disjoint source sets can exclude a writer only when all identity dependencies
+belong to the read's producer set and therefore share its fresh private record
+contract. Overlapping or unproven sources retain the writer. This uses the existing
+prefix budget, and cached source sets depend only on the current structural CFG.
 
 The same prefix proof licenses named overwrites of existing writable own data
 fields. It establishes presence and writability independently of payload kinds or

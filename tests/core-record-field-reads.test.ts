@@ -61,6 +61,68 @@ function readKind(producer: string, reader = "return value.n;", call = "make(inp
 }
 
 describe("fresh record field observations", () => {
+	it.each([
+		"right.n=1;right.n='changed';const selected=input?left:right;",
+		"const selected=input?left:right;right.n=1;right.n='changed';",
+	])("keeps only the selected source's reaching writes (%s)", (body) => {
+		const out = flow(
+			`function known(){return {n:'initial'};}function unknown(n){return {n};}function read(input){const left=known();const right=unknown(input);${body}return selected.n;}globalThis.result=read(globalThis.input);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_STRING,
+		);
+	});
+	it.each([
+		["right", "left", COMPILER_VALUE_KIND_NUMBER],
+		["left", "right", COMPILER_VALUE_KIND_STRING],
+	] as const)(
+		"correlates receiver phis through the same incoming edge (%s, %s)",
+		(first, second, expected) => {
+			const out = flow(
+				`function make(){return {n:1};}function read(flag){const left=make();const right=make();let selected,other;if(flag){selected=left;other=${first};}else{selected=right;other=${second};}other.n='changed';return selected.n;}globalThis.result=read(globalThis.input);`,
+			);
+			expect(out.read().summary(out.named("read").id).returnKind).toBe(expected);
+		},
+	);
+	it("withdraws a published correlated writer bound when its final writer disappears", () => {
+		const out = flow(
+			`function known(){return {n:1};}function unknown(n){return {n};}function read(n){const left=known();const right=unknown(n);const selected=n?left:right;right.n='older';right.n=2;return selected.n;}globalThis.result=read(globalThis.input);`,
+		);
+		const fn = out.named("read");
+		const [read] = coreRecordFieldReads(fn, () =>
+			buildCoreControlFlow(out.program, fn.id),
+		).keys();
+		if (read === undefined) throw new Error("Missing record field read");
+		const publish = CoreEditor.open(out.program, fn.id);
+		publish.setNormalResultFacts(read, { mask: COMPILER_VALUE_KIND_NUMBER });
+		publish.commit();
+		const before = out.read();
+		expect(before.summary(fn.id).returnKind).toBe(COMPILER_VALUE_KIND_NUMBER);
+		const edit = CoreEditor.open(out.program, fn.id);
+		edit.removeInstruction(
+			coreOperations(fn)
+				.filter((op) => op.opcode === "storeProperty")
+				.at(-1)!.id,
+		);
+		edit.commit();
+		expect(out.read().summary(fn.id).returnKind).toBe(
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		);
+	});
+	it("keeps values from earlier allocation executions on a loop backedge", () => {
+		const out = flow(
+			`function make(){return {n:1};}function read(){let record=make();let result;for(let i=0;i<3;i++){const next=make();next.n='new';result=record.n;record=next;}return result;}globalThis.result=read();`,
+		);
+		const fn = out.named("read");
+		const [read] = coreRecordFieldReads(fn, () =>
+			buildCoreControlFlow(out.program, fn.id),
+		).keys();
+		if (read === undefined) throw new Error("Missing loop field read");
+		const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(read));
+		expect(out.read().values(fn.id).latticeMask(result)).toBe(
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		);
+	});
 	it.each(["right.n='changed';", "if(input)right.n='first';else right.n='second';"])(
 		"projects surviving initializer sources through a merged read (%s)",
 		(write) => {
