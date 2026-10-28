@@ -928,6 +928,15 @@ invocation effects. Pure local helpers publish empty access sets with their esca
 facts. The summary worklist converges accesses and retention together; unknown
 callees, unprojectable bases and bounded-access overflow withdraw the contract.
 Memory proofs guard transitive dependencies with the program's function versions.
+The existing callee-target lattice also supplies immutable callability independently
+of invocation effects. Finite and widened script-function sets fold typeof and
+truthiness observations without removing factory calls, their errors or GC work.
+Empty, opaque and mixed callable/noncallable sets retain dynamic checks. Class
+constructors still have the function category even though ordinary calls throw.
+Function-identity and constructor-layout guards produce Boolean results; their
+callee operands retain separate target facts. Async and generator invocations
+return noncallable wrappers while their body-return targets remain available for
+reachability and later completion consumers.
 Native return completion plans independently consume the returned value's kind.
 Object completions override a base or derived receiver, including before `super()`;
 base primitive completions need only the construction check. Unknown or mixed

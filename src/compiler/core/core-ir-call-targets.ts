@@ -72,6 +72,12 @@ export interface CoreCalleeTargets {
 	readonly nonCallable: boolean;
 }
 
+type CoreReturnTargetDependency = readonly [
+	body: number,
+	cfg: number,
+	targets: CoreCalleeTargets | undefined,
+];
+
 export const CORE_CALLEE_TARGETS_BOTTOM: CoreCalleeTargets = Object.freeze({
 	functions: Object.freeze([]),
 	anyScript: false,
@@ -123,6 +129,17 @@ export function coreCalleeTargetsIsBottom(targets: CoreCalleeTargets): boolean {
 		!targets.opaque &&
 		!targets.nonCallable
 	);
+}
+
+// Class constructors remain callable even though ordinary invocation throws.
+export function coreCalleeTargetsCallability(
+	targets: CoreCalleeTargets,
+): boolean | undefined {
+	if (targets.opaque) return undefined;
+	const callable = targets.anyScript || targets.functions.length > 0;
+	if (callable && !targets.nonCallable) return true;
+	if (!callable && targets.nonCallable) return false;
+	return undefined;
 }
 
 export function coreCalleeTargetsAreOpen(targets: CoreCalleeTargets): boolean {
@@ -219,7 +236,7 @@ interface CoreLocalCallTargets {
 	readonly globalWrites: ReadonlyMap<number, CoreCalleeTargets>;
 	readonly returnTargetDependencies: ReadonlyMap<
 		CoreFunctionId,
-		readonly [body: number, cfg: number]
+		CoreReturnTargetDependency
 	>;
 }
 
@@ -256,16 +273,26 @@ function localTargetsAreCurrent(
 		(fn.handlerBlockCount === 0 ||
 			local.memoryEffectsVersion === fn.version("memoryEffects")) &&
 		local.callsVersion === fn.version("calls") &&
-		[...local.returnTargetDependencies].every(([functionId, [body, cfg]]) => {
+		[...local.returnTargetDependencies].every(([functionId, [body, cfg, expected]]) => {
 			const target = program.function(functionId);
-			return target.version("body") === body && target.version("cfg") === cfg;
+			if (target.version("body") === body && target.version("cfg") === cfg) return true;
+			const current = directReturnedValueTargets(program, functionId);
+			return (
+				current === expected ||
+				(current !== undefined &&
+					expected !== undefined &&
+					coreCalleeTargetsEqual(current, expected))
+			);
 		})
 	);
 }
 
 const DEFINITELY_NON_CALLABLE_RESULTS = new Set([
+	"guardFunctionIndex",
+	"guardBaseConstructorLayout",
 	"createArgumentsObject",
 	"createArray",
+	"createArrayFromIterable",
 	"createBigint",
 	"createBoolean",
 	"createF64",
@@ -280,6 +307,7 @@ const DEFINITELY_NON_CALLABLE_RESULTS = new Set([
 	"createString",
 	"createTemplateObject",
 	"createUndefined",
+	"instantiateLiteralTemplate",
 ]);
 
 function globalCellId(identities: CoreGraphIdentityTable, index: number): CoreCellId {
@@ -398,11 +426,13 @@ export function coreDirectBuiltinCallbackTarget(
 	return callback === undefined ? undefined : coreDirectCreatedFunction(fn, callback);
 }
 
-function directReturnedFunctionTargets(
+function directReturnedValueTargets(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
 ): CoreCalleeTargets | undefined {
 	const fn = program.function(functionId);
+	// Suspending invocations wrap body returns in a Promise or iterator.
+	if (fn.isAsync || fn.isGenerator) return CORE_CALLEE_TARGETS_NON_CALLABLE;
 	let targets = CORE_CALLEE_TARGETS_BOTTOM;
 	let returns = 0;
 	for (const block of fn.blockIds()) {
@@ -411,8 +441,18 @@ function directReturnedFunctionTargets(
 		returns++;
 		const returned = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
 		const target = coreDirectCreatedFunction(fn, returned);
-		if (target === undefined || target >= program.functionCapacity) return undefined;
-		targets = joinCoreCalleeTargets(targets, coreCalleeTargetsFunction(target));
+		if (target !== undefined && target < program.functionCapacity) {
+			targets = joinCoreCalleeTargets(targets, coreCalleeTargetsFunction(target));
+			continue;
+		}
+		if (fn.kernel.valueDefinitionKind(returned) !== 1) return undefined;
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(returned));
+		if (
+			fn.instructionKind(definition) !== "operation" ||
+			!DEFINITELY_NON_CALLABLE_RESULTS.has(fn.instructionOpcodeName(definition))
+		)
+			return undefined;
+		targets = joinCoreCalleeTargets(targets, CORE_CALLEE_TARGETS_NON_CALLABLE);
 	}
 	return returns === 0 || coreCalleeTargetsIsBottom(targets) ? undefined : targets;
 }
@@ -865,10 +905,7 @@ function analyzeFunctionTargets(
 	const queue: Array<CoreBlockId> = [];
 	const queued = new Uint8Array(fn.blockCapacity);
 	let activeBlock: CoreBlockId | undefined;
-	const returnTargetDependencies = new Map<
-		CoreFunctionId,
-		readonly [body: number, cfg: number]
-	>();
+	const returnTargetDependencies = new Map<CoreFunctionId, CoreReturnTargetDependency>();
 	const enqueue = (block: CoreBlockId, needsTransfer = true): void => {
 		if (queued[block] === 2) return;
 		// Clean revisits retain their queue position for later phi or handler wakeups.
@@ -945,11 +982,7 @@ function analyzeFunctionTargets(
 			const resultCount = fn.kernel.instructionResultCount(instruction);
 			if (resultCount === 0) continue;
 			let resultTargets = CORE_CALLEE_TARGETS_OPEN;
-			if (
-				opcode === "createFunction" ||
-				opcode === "guardFunctionIndex" ||
-				opcode === "guardBaseConstructorLayout"
-			) {
+			if (opcode === "createFunction") {
 				const target = fn.instructionAttributes(instruction).functionIndex;
 				resultTargets =
 					typeof target === "number" &&
@@ -1016,30 +1049,31 @@ function analyzeFunctionTargets(
 					let returned = CORE_CALLEE_TARGETS_BOTTOM;
 					let hasUnknownReturn = coreCalleeTargetsAreOpen(callees);
 					const dependencies: Array<
-						readonly [CoreFunctionId, readonly [body: number, cfg: number]]
+						readonly [CoreFunctionId, CoreReturnTargetDependency]
 					> = [];
 					for (const target of callees.functions) {
 						const targetFunction = program.function(target);
+						const targetReturns = directReturnedValueTargets(program, target);
 						dependencies.push(
 							Object.freeze([
 								target,
 								Object.freeze([
 									targetFunction.version("body"),
 									targetFunction.version("cfg"),
+									targetReturns,
 								] as const),
 							] as const),
 						);
-						const targetReturns = directReturnedFunctionTargets(program, target);
 						if (targetReturns === undefined) {
 							hasUnknownReturn = true;
 							continue;
 						}
 						returned = joinCoreCalleeTargets(returned, targetReturns);
 					}
+					for (const [target, versions] of dependencies) {
+						returnTargetDependencies.set(target, versions);
+					}
 					if (!coreCalleeTargetsIsBottom(returned)) {
-						for (const [target, versions] of dependencies) {
-							returnTargetDependencies.set(target, versions);
-						}
 						resultTargets = hasUnknownReturn
 							? Object.freeze({
 									functions: returned.functions,

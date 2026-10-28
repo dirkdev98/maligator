@@ -131,7 +131,11 @@ Arithmetic work should support these paths or fix correctness defects.
       Holdable Object/unregistered-Symbol bounds now select nonthrowing weak
       mutation entries in known, guarded and resumable native calls. Exact receiver
       proofs remove only the key throw effect; mutation, GC publication and polls
-      remain. Effect proofs refresh when key bounds widen or narrow. Extend the same
+      remain. Effect proofs refresh when key bounds widen or narrow.
+      Existing callee-target facts now fold function typeof and truthiness
+      observations, including widened script identity sets, while retaining factory
+      calls and their effects. Guard results remain Boolean targets; async/generator
+      invocation wrappers stay separate from callable body returns. Extend the same
       independent operand, callee and completion contracts to more object builtins
       and callback-aware function calls; keep the bounded shared worklists.
       Broad native, sanitizer and self-hosted acceptance remains on CI.

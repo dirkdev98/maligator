@@ -62,6 +62,7 @@ import {
 import {
 	coreDirectCreatedFunction,
 	coreCalleeTargetsAreOpen,
+	coreCalleeTargetsCallability,
 	coreCalleeTargetsSingleFunction,
 	coreValueIsLoadedGlobalProperty,
 } from "./core-ir-call-targets.ts";
@@ -4043,6 +4044,7 @@ function applyCandidate(
 
 type CoreValueKindFold =
 	| { readonly instruction: CoreInstructionId; readonly result: boolean }
+	| { readonly instruction: CoreInstructionId; readonly typeofResult: "function" }
 	| {
 			readonly instruction: CoreInstructionId;
 			readonly normal: CoreWeakCollectionNormalConstant;
@@ -4277,11 +4279,24 @@ function discoverProgramValueKindObservations(
 		const range = (value: CoreValueId, consumer: CoreInstructionId) =>
 			integerRange(functionId, value, consumer);
 		const root = (value: CoreValueId) => identity(functionId, value);
+		const callability = (value: CoreValueId) =>
+			coreCalleeTargetsCallability(flow.targets.targets(functionId, value));
 		for (let index = 0; index < fn.instructionCapacity; index++) {
 			const instruction = index as CoreInstructionId;
 			if (fn.kernel.instructionLive(instruction) === 0) continue;
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			demand = false;
+			if (
+				fn.instructionOpcodeName(instruction) === "unary" &&
+				fn.instructionAttributes(instruction).operator === "typeof" &&
+				fn.kernel.instructionOperandCount(instruction) === 1 &&
+				callability(
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
+				) === true
+			) {
+				folds.push({ instruction, typeofResult: "function" });
+				continue;
+			}
 			const normal =
 				fn.instructionOpcodeName(instruction) === "callKnown" &&
 				fn.kernel.instructionResultCount(instruction) === 1 &&
@@ -4305,6 +4320,8 @@ function discoverProgramValueKindObservations(
 				kindMask,
 				range,
 				root,
+				undefined,
+				callability,
 			);
 			if (result !== undefined) {
 				folds.push({ instruction, result });
@@ -4360,6 +4377,8 @@ function discoverProgramValueKindObservations(
 			const range = (value: CoreValueId, consumer: CoreInstructionId) =>
 				integerRange(functionId, value, consumer);
 			const root = (value: CoreValueId) => identity(functionId, value);
+			const callability = (value: CoreValueId) =>
+				coreCalleeTargetsCallability(flow.targets.targets(functionId, value));
 			const folds = [...(foldsByCaller.get(functionId) ?? [])];
 			for (const instruction of instructions) {
 				const normal = coreWeakCollectionNormalConstant(fn, instruction, kindMask);
@@ -4374,6 +4393,8 @@ function discoverProgramValueKindObservations(
 					kindMask,
 					range,
 					root,
+					undefined,
+					callability,
 				);
 				if (result !== undefined) folds.push({ instruction, result });
 			}
@@ -5399,6 +5420,17 @@ export function runCoreCrossCallTransforms(
 						},
 					);
 					editor.replaceValueUses(output, constant.outputs[0]!);
+					valueKindFolds++;
+				} else if ("typeofResult" in fold) {
+					const stringIndex =
+						program.stringConstantSlot(fold.typeofResult, "first") ??
+						editor.appendStringConstants([
+							Array.from(fold.typeofResult, (unit) => unit.charCodeAt(0)),
+						]);
+					editor.replaceInstruction(instruction, "createString", [], {
+						attributes: { stringIndex },
+						sourcePosition: fn.instructionSourcePosition(instruction),
+					});
 					valueKindFolds++;
 				} else if ("result" in fold) {
 					editor.replaceInstruction(instruction, "createBoolean", [], {

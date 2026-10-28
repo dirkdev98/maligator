@@ -8,6 +8,7 @@ import {
 	CORE_CALLEE_TARGETS_OPAQUE,
 	CORE_CALLEE_TARGET_CAP,
 	coreCalleeTargetsAreOpen,
+	coreCalleeTargetsCallability,
 	coreCalleeTargetsEqual,
 	coreCalleeTargetsFunction,
 	coreCalleeTargetsIsBottom,
@@ -31,6 +32,27 @@ import {
 } from "./helpers/core-program-analysis.ts";
 
 describe("Core callee-target lattice", () => {
+	it("preserves callability after widening identities and withholds it for mixed or empty targets", () => {
+		expect(coreCalleeTargetsCallability(CORE_CALLEE_TARGETS_BOTTOM)).toBeUndefined();
+		expect(coreCalleeTargetsCallability(CORE_CALLEE_TARGETS_OPAQUE)).toBeUndefined();
+		expect(coreCalleeTargetsCallability(CORE_CALLEE_TARGETS_ANY_SCRIPT)).toBe(true);
+		expect(coreCalleeTargetsCallability(coreCalleeTargetsFunction(0))).toBe(true);
+		expect(
+			coreCalleeTargetsCallability({ ...CORE_CALLEE_TARGETS_BOTTOM, nonCallable: true }),
+		).toBe(false);
+		expect(
+			coreCalleeTargetsCallability({
+				...CORE_CALLEE_TARGETS_ANY_SCRIPT,
+				nonCallable: true,
+			}),
+		).toBeUndefined();
+		expect(
+			coreCalleeTargetsCallability({
+				...coreCalleeTargetsFunction(0),
+				nonCallable: true,
+			}),
+		).toBeUndefined();
+	});
 	it("keeps finite targets deterministic and widens at the cap", () => {
 		let targets = CORE_CALLEE_TARGETS_BOTTOM;
 		for (let index = CORE_CALLEE_TARGET_CAP - 1; index >= 0; index--) {
@@ -111,6 +133,109 @@ describe("Core callee-target lattice", () => {
 });
 
 describe("incremental Core call graph", () => {
+	it("withdraws and rediscovers invocation targets after an unknown return", () => {
+		const program = analysisProgram(),
+			factory = appendLeaf(program),
+			caller = appendCaller(program, factory.function),
+			callback = appendLeaf(program);
+		const fn = program.function(caller.function),
+			result = fn.kernel.resultAt(
+				fn.kernel.instructionResultStart(caller.callInstruction),
+			);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const read = () =>
+			manager
+				.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" })
+				.targets(caller.function, result);
+		expect(coreCalleeTargetsCallability(read())).toBe(false);
+		const unknown = CoreEditor.open(program, factory.function);
+		unknown.replaceInstruction(factory.valueInstruction, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		unknown.commit();
+		expect(coreCalleeTargetsCallability(read())).toBeUndefined();
+		const known = CoreEditor.open(program, factory.function);
+		known.replaceInstruction(factory.valueInstruction, "createFunction", [], {
+			attributes: { functionIndex: callback.function },
+		});
+		known.commit();
+		expect(read().functions).toEqual([callback.function]);
+		expect(coreCalleeTargetsCallability(read())).toBe(true);
+	});
+
+	it.each(["guardFunctionIndex", "guardBaseConstructorLayout"])(
+		"classifies %s's Boolean result independently of its callee operand",
+		(opcode) => {
+			const program = analysisProgram(),
+				leaf = appendLeaf(program);
+			const builder = new CoreFunctionBuilder(program),
+				entry = builder.createBlock();
+			const callee = builder.appendInstruction(entry, "createFunction", [], {
+				attributes: { functionIndex: leaf.function },
+			})[0]!;
+			const guard = builder.appendInstruction(entry, opcode, [callee], {
+				attributes: { functionIndex: leaf.function, keyStringIndices: [] },
+				outputRepresentations: ["boolean"],
+			})[0]!;
+			builder.setTerminator(entry, { kind: "return", value: guard });
+			const fn = builder.finish(entry).function;
+			const manager = new CoreAnalysisManager(
+				program,
+				programAnalysisContext(),
+				new CoreOptimizationReportBuilder(program),
+			);
+			const targets = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+			expect(targets.targets(fn, guard)).toMatchObject({
+				functions: [],
+				anyScript: false,
+				opaque: false,
+				nonCallable: true,
+			});
+		},
+	);
+
+	it.each([
+		[false, false],
+		[true, false],
+		[false, true],
+		[true, true],
+	] as const)(
+		"keeps body return targets separate from the invocation result (async=%s, generator=%s)",
+		(isAsync, isGenerator) => {
+			const program = analysisProgram(),
+				leaf = appendLeaf(program);
+			const builder = new CoreFunctionBuilder(program, { isAsync, isGenerator }),
+				entry = builder.createBlock();
+			const returned = builder.appendInstruction(entry, "createFunction", [], {
+				attributes: { functionIndex: leaf.function },
+			})[0]!;
+			builder.setTerminator(entry, { kind: "return", value: returned });
+			const factory = builder.finish(entry).function;
+			const caller = appendCaller(program, factory),
+				fn = program.function(caller.function);
+			const result = fn.kernel.resultAt(
+				fn.kernel.instructionResultStart(caller.callInstruction),
+			);
+			const manager = new CoreAnalysisManager(
+				program,
+				programAnalysisContext(),
+				new CoreOptimizationReportBuilder(program),
+			);
+			const targets = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+			expect(targets.returnTargets(factory).functions).toEqual([leaf.function]);
+			expect(targets.targets(caller.function, result)).toMatchObject({
+				functions: isAsync || isGenerator ? [] : [leaf.function],
+				anyScript: false,
+				opaque: false,
+				nonCallable: isAsync || isGenerator,
+			});
+		},
+	);
+
 	it("rebuilds only the edited caller and updates its reverse edge", () => {
 		const program = analysisProgram();
 		const caller = appendCaller(program, 1);

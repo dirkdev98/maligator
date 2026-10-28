@@ -354,6 +354,7 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 		case "deleteProperty":
 		case "forInHas":
 		case "guardBaseConstructorLayout":
+		case "guardFunctionIndex":
 		case "isEmpty":
 		case "typeofCompare":
 			return COMPILER_VALUE_KIND_BOOLEAN;
@@ -1973,6 +1974,28 @@ function coreStringConstant(
 	return units === undefined ? undefined : program.stringConstantText(stringIndex);
 }
 
+function observedTypeofComparison(
+	input: CoreValueId,
+	expected: string,
+	kindMask: (value: CoreValueId) => CompilerValueKindMask,
+	callability?: (value: CoreValueId) => boolean | undefined,
+): boolean | undefined {
+	const callable = callability?.(input);
+	if (callable === true) return expected === "function";
+	if (callable === false && expected === "function") return false;
+	const mask = kindMask(input);
+	if (
+		callable === false &&
+		expected === "object" &&
+		compilerValueKindMaskIsSubset(
+			mask,
+			COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_NULL,
+		)
+	)
+		return true;
+	return coreTypeofComparison(mask, expected);
+}
+
 export function coreValueKindObservation(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
@@ -1984,6 +2007,7 @@ export function coreValueKindObservation(
 	) => CompilerIntegerRange | undefined,
 	identity?: (value: CoreValueId) => CoreValueId,
 	heapBrand?: (value: CoreValueId) => CoreExactHeapBrand | undefined,
+	callability?: (value: CoreValueId) => boolean | undefined,
 ): boolean | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
@@ -1999,7 +2023,7 @@ export function coreValueKindObservation(
 		const input = operand(0);
 		const expected = fn.instructionAttributes(instruction).expected;
 		if (input === undefined || typeof expected !== "string") return undefined;
-		const equal = coreTypeofComparison(kindMask(input), expected);
+		const equal = observedTypeofComparison(input, expected, kindMask, callability);
 		return equal === undefined
 			? undefined
 			: fn.instructionAttributes(instruction).negated === true
@@ -2009,6 +2033,7 @@ export function coreValueKindObservation(
 	if (opcode === "unary" && fn.instructionAttributes(instruction).operator === "!") {
 		const input = operand(0);
 		if (input === undefined) return undefined;
+		if (callability?.(input) === true) return false;
 		const mask = kindMask(input);
 		return compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NULLISH)
 			? true
@@ -2164,7 +2189,7 @@ export function coreValueKindObservation(
 				: fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition));
 		const expected = coreStringConstant(program, fn, other);
 		if (input === undefined || expected === undefined) return undefined;
-		return coreTypeofComparison(kindMask(input), expected);
+		return observedTypeofComparison(input, expected, kindMask, callability);
 	};
 	const leftKind = kindMask(left);
 	const singleton = (mask: number) =>
