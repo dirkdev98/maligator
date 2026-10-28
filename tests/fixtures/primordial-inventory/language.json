@@ -11878,7 +11878,7 @@
 				["length", 0, ["bits", "fff8000000000001"], -1, -1],
 				["name", 0, ["string", "delete"], -1, -1]
 			],
-			["WeakMap.prototype.delete"]
+			["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_DELETE", "WeakMap.prototype.delete"]
 		],
 		[
 			"WeakMap.prototype.get",
@@ -11889,7 +11889,7 @@
 				["length", 0, ["bits", "fff8000000000001"], -1, -1],
 				["name", 0, ["string", "get"], -1, -1]
 			],
-			["WeakMap.prototype.get"]
+			["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_GET", "WeakMap.prototype.get"]
 		],
 		[
 			"WeakMap.prototype.getOrInsert",
@@ -11922,7 +11922,7 @@
 				["length", 0, ["bits", "fff8000000000001"], -1, -1],
 				["name", 0, ["string", "has"], -1, -1]
 			],
-			["WeakMap.prototype.has"]
+			["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_HAS", "WeakMap.prototype.has"]
 		],
 		[
 			"WeakMap.prototype.set",
@@ -12024,7 +12024,7 @@
 				["length", 0, ["bits", "fff8000000000001"], -1, -1],
 				["name", 0, ["string", "delete"], -1, -1]
 			],
-			["WeakSet.prototype.delete"]
+			["MAL_INTRINSIC_WEAK_SET_PROTOTYPE_DELETE", "WeakSet.prototype.delete"]
 		],
 		[
 			"WeakSet.prototype.has",
@@ -12035,7 +12035,7 @@
 				["length", 0, ["bits", "fff8000000000001"], -1, -1],
 				["name", 0, ["string", "has"], -1, -1]
 			],
-			["WeakSet.prototype.has"]
+			["MAL_INTRINSIC_WEAK_SET_PROTOTYPE_HAS", "WeakSet.prototype.has"]
 		],
 		[
 			"decodeURI",
@@ -12855,10 +12855,15 @@
 		["MAL_INTRINSIC_URL_SEARCH_PARAMS_PROTOTYPE", ["bits", "fff9000000000003"]],
 		["MAL_INTRINSIC_WEAK_MAP_CONSTRUCTOR", 968],
 		["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE", 969],
+		["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_DELETE", 970],
+		["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_GET", 971],
+		["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_HAS", 974],
 		["MAL_INTRINSIC_WEAK_REF_CONSTRUCTOR", 976],
 		["MAL_INTRINSIC_WEAK_REF_PROTOTYPE", 977],
 		["MAL_INTRINSIC_WEAK_SET_CONSTRUCTOR", 979],
 		["MAL_INTRINSIC_WEAK_SET_PROTOTYPE", 980],
+		["MAL_INTRINSIC_WEAK_SET_PROTOTYPE_DELETE", 982],
+		["MAL_INTRINSIC_WEAK_SET_PROTOTYPE_HAS", 983],
 		["MAL_INTRINSIC_WRITABLE_STREAM_CONSTRUCTOR", ["bits", "fff9000000000003"]],
 		[
 			"MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR",
