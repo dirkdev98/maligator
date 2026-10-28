@@ -49,6 +49,78 @@ function records(source: string) {
 
 describe("normal-return record field kinds", () => {
 	it.each([
+		"record.value=1;record.value='last';return record;",
+		"if(flag)record.value=1;record.value='last';return record;",
+		"if(flag){record.value='left';return record;}record.value='right';return record;",
+		"while(flag-- > 0)record.value=1;record.value='last';return record;",
+	])(
+		"keeps only reaching producer payloads despite an unknown initializer (%s)",
+		(body) => {
+			const out = records(
+				`function make(input,flag){const record={value:input,stable:1};${body}}globalThis.result=make(globalThis.input,globalThis.flag);`,
+			);
+			expect(out.fields("make")).toEqual({
+				value: COMPILER_VALUE_KIND_STRING,
+				stable: COMPILER_VALUE_KIND_NUMBER,
+			});
+		},
+	);
+	it("joins distinct final writers at multiple returns without restoring the initializer", () => {
+		const out = records(
+			`function make(input,flag){const record={value:input};if(flag){record.value='early';return record;}record.value=false;return record;}globalThis.result=make(globalThis.input,globalThis.flag);`,
+		);
+		expect(out.fields("make")).toEqual({
+			value: COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_BOOLEAN,
+		});
+	});
+	it("keeps the initializer only on the source that can return it", () => {
+		const out = records(
+			`function make(input,flag){let record={value:1};while(flag-->0){record={value:input};record.value=!!input;}return record;}globalThis.result=make(globalThis.input,globalThis.flag);`,
+		);
+		expect(out.fields("make")).toEqual({
+			value: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
+		});
+	});
+	it("retains an early-return initializer before a later overwrite", () => {
+		const out = records(
+			`function make(flag){const record={value:1};if(flag)return record;record.value='late';return record;}globalThis.result=make(globalThis.flag);`,
+		);
+		expect(out.fields("make")).toEqual({
+			value: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		});
+	});
+	it("joins initial and written payloads across an exceptional return", () => {
+		const out = records(
+			`function make(input){const record={value:'initial'};try{record.value=input&255;}catch(error){return record;}return record;}globalThis.result=make(globalThis.input);`,
+		);
+		expect(out.fields("make")).toEqual({
+			value: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		});
+	});
+	it("retains a completed overwrite before a later exceptional exit", () => {
+		const out = records(
+			`function make(input,hook){const record={value:input};record.value=input&255;try{hook();}catch(error){}return record;}globalThis.result=make(globalThis.input,globalThis.hook);`,
+		);
+		expect(out.fields("make")).toEqual({ value: COMPILER_VALUE_KIND_NUMBER });
+	});
+	it("withdraws a producer overwrite fact after removing its final writer", () => {
+		const out = records(
+			`function make(input){const record={value:input};record.value='last';return record;}function read(input){return make(input).value;}globalThis.result=read(globalThis.input);`,
+		);
+		const fn = out.named("make");
+		const before = out.read();
+		expect(out.fields("make", before)).toEqual({ value: COMPILER_VALUE_KIND_STRING });
+		const store = coreOperations(fn).find((op) => op.opcode === "storeProperty")!;
+		const edit = CoreEditor.open(out.program, fn.id);
+		edit.removeInstruction(store.id);
+		edit.commit();
+		expect(out.fields("make")).toEqual({ value: COMPILER_VALUE_KIND_TOP });
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_TOP,
+		);
+		expect(out.fields("make", before)).toEqual({ value: COMPILER_VALUE_KIND_STRING });
+	});
+	it.each([
 		["undefined", COMPILER_VALUE_KIND_UNDEFINED],
 		["boolean", COMPILER_VALUE_KIND_BOOLEAN],
 		["number", COMPILER_VALUE_KIND_NUMBER],
@@ -239,8 +311,9 @@ describe("normal-return record field kinds", () => {
 			"if(flag)record.value='changed';",
 			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
 		],
+		["record['value']=!!input;", COMPILER_VALUE_KIND_BOOLEAN],
 		[
-			"record['value']=!!input;",
+			"if(flag)record['value']=!!input;",
 			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
 		],
 		["for(let step=0;step<3;step++)record.value=step&255;", COMPILER_VALUE_KIND_NUMBER],
@@ -295,13 +368,13 @@ describe("normal-return record field kinds", () => {
 		}
 	});
 
-	it("joins forwarded writes with a recursive literal base", () => {
+	it("retains a definite overwrite through a recursive literal base", () => {
 		const out = records(
 			`function first(n){const record=n>0?second(n-1):{value:1,stable:'ok'};record.value='changed';return record;}function second(n){return first(n);}globalThis.result=first(globalThis.input);`,
 		);
 		for (const name of ["first", "second"])
 			expect(out.fields(name)).toEqual({
-				value: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+				value: COMPILER_VALUE_KIND_STRING,
 				stable: COMPILER_VALUE_KIND_STRING,
 			});
 	});
@@ -312,8 +385,9 @@ describe("normal-return record field kinds", () => {
 			"if(flag)record.value='changed';",
 			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
 		],
+		["record['value']=!!input;", COMPILER_VALUE_KIND_BOOLEAN],
 		[
-			"record['value']=!!input;",
+			"if(flag)record['value']=!!input;",
 			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
 		],
 		["for(let n=0;n<3;n++)record.value=n&255;", COMPILER_VALUE_KIND_NUMBER],
@@ -422,12 +496,12 @@ describe("normal-return record field kinds", () => {
 		expect(before.length).toBeGreaterThan(0);
 	});
 
-	it("joins producer writes through a conditional record alias", () => {
+	it("replaces initial values through a conditional record alias", () => {
 		const out = records(
 			`function make(flag){const value=flag?{n:1}:{n:2};value.n='changed';return value;}globalThis.result=make(globalThis.flag);`,
 		);
 		expect(out.fields("make")).toEqual({
-			n: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+			n: COMPILER_VALUE_KIND_STRING,
 		});
 	});
 

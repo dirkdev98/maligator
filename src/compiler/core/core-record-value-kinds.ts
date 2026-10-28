@@ -2,6 +2,7 @@ import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
 import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
@@ -377,6 +378,99 @@ export function coreRecordReturnKindInputs(
 	return recordReturnIndex(fn).inputs;
 }
 
+interface CoreRecordReturnWriteIndex {
+	readonly fields: ReadonlyMap<CoreInstructionId, CoreRecordReturnFields>;
+	readonly cfg: CoreControlFlow;
+	readonly memoryEffectVersion: number | undefined;
+	readonly returns: ReadonlyArray<CoreInstructionId>;
+	readonly position: (instruction: CoreInstructionId) => number;
+	readonly producers: Map<
+		CoreInstructionId,
+		{
+			readonly writes: ReadonlyMap<CoreInstructionId, number>;
+			readonly keys: Map<number, ReadonlyArray<CoreRecordFieldAccess> | undefined>;
+		}
+	>;
+}
+
+const recordReturnWriteIndices = new WeakMap<
+	CoreFunctionStore,
+	CoreRecordReturnWriteIndex
+>();
+const NO_RECORD_BARRIERS: ReadonlySet<CoreInstructionId> = new Set();
+
+function recordReturnWrites(
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	fields: ReadonlyMap<CoreInstructionId, CoreRecordReturnFields>,
+	producer: CoreInstructionId,
+	key: number,
+): ReadonlyArray<CoreRecordFieldAccess> | undefined {
+	const memoryEffectVersion =
+		fn.handlerBlockCount === 0 ? undefined : fn.version("memoryEffects");
+	let index = recordReturnWriteIndices.get(fn);
+	if (
+		index?.fields !== fields ||
+		index.cfg !== cfg ||
+		index.memoryEffectVersion !== memoryEffectVersion
+	) {
+		const positions = new Map<CoreInstructionId, number>();
+		const returns: Array<CoreInstructionId> = [];
+		let order = 0;
+		for (const block of fn.blockIds()) {
+			for (const instruction of fn.bodyInstructionIds(block))
+				positions.set(instruction, order++);
+			const terminator = fn.blockTerminator(block);
+			positions.set(terminator, order++);
+			if (cfg.reachable.has(block) && fn.instructionKind(terminator) === "return")
+				returns.push(terminator);
+		}
+		index = {
+			fields,
+			cfg,
+			memoryEffectVersion,
+			returns,
+			position: (instruction) => positions.get(instruction)!,
+			producers: new Map(),
+		};
+		if (!fn.hasActiveEditor) recordReturnWriteIndices.set(fn, index);
+	}
+	let plan = index.producers.get(producer);
+	if (plan === undefined) {
+		const writes = new Map<CoreInstructionId, number>();
+		for (const [key, row] of fields.get(producer)!.writes!)
+			for (const write of row) writes.set(write.instruction, key);
+		plan = { writes, keys: new Map() };
+		index.producers.set(producer, plan);
+	}
+	if (plan.keys.has(key)) return plan.keys.get(key);
+	const reads = new Map<CoreInstructionId, CoreRecordFieldAccess>();
+	// The return-use index admits only private own-data accesses.
+	recordAccessPrefixes(
+		fn,
+		cfg,
+		index.position,
+		{
+			reads: new Map(index.returns.map((consumer) => [consumer, key])),
+			writes: plan.writes,
+			barriers: NO_RECORD_BARRIERS,
+		},
+		reads,
+	);
+	const alternatives: Array<CoreRecordFieldAccess> = [];
+	for (const consumer of index.returns) {
+		const read = reads.get(consumer);
+		if (read === undefined) {
+			plan.keys.set(key, undefined);
+			return undefined;
+		}
+		if (read.producers.includes(producer)) alternatives.push(read);
+	}
+	const result = alternatives.length === 0 ? undefined : Object.freeze(alternatives);
+	plan.keys.set(key, result);
+	return result;
+}
+
 /** Own data fields on normal return; callers still need a separate mutation/escape proof. */
 export function coreReturnedRecordKinds(
 	fn: CoreFunctionStore,
@@ -469,20 +563,43 @@ export function coreReturnedRecordKinds(
 					const writes = writesByKey.get(field.key);
 					// An own write cannot create a normal return before its initial value completes.
 					if (writes === undefined || field.mask === 0) return field;
-					let kind = field.mask;
-					let integerRange = field.integerRange;
-					for (const write of writes) {
-						if (!cfg.reachable.has(fn.instructionBlock(write.instruction))) continue;
-						const written = mask(write.value, write.instruction);
-						kind |= written;
-						if (written !== 0)
+					const alternatives = recordReturnWrites(
+						fn,
+						cfg,
+						returnedFields,
+						definition,
+						field.key,
+					);
+					let kind = 0;
+					let integerRange: CompilerIntegerRange | null | undefined = null;
+					for (const alternative of alternatives ?? [undefined]) {
+						const initialSurvives =
+							alternative?.initialProducers === undefined ||
+							alternative.initialProducers.includes(definition);
+						let partKind = initialSurvives ? field.mask : 0;
+						let partRange = initialSurvives ? field.integerRange : null;
+						for (const write of alternative === undefined
+							? writes
+							: (alternative.writes ?? [])) {
+							if (!cfg.reachable.has(fn.instructionBlock(write.instruction))) continue;
+							const written = mask(write.value, write.instruction);
+							partKind |= written;
+							if (written !== 0)
+								partRange =
+									partKind === COMPILER_VALUE_KIND_NUMBER
+										? joinFieldIntegerRanges(
+												partRange,
+												range?.(write.value, write.instruction),
+											)
+										: undefined;
+						}
+						if (partKind !== 0) {
+							kind |= partKind;
 							integerRange =
 								kind === COMPILER_VALUE_KIND_NUMBER
-									? joinFieldIntegerRanges(
-											integerRange,
-											range?.(write.value, write.instruction),
-										)
+									? joinFieldIntegerRanges(integerRange, partRange)
 									: undefined;
+						}
 					}
 					return Object.freeze({
 						key: field.key,
@@ -505,7 +622,8 @@ export interface CoreRecordFieldAccess {
 	/** Preceding accesses must be own, so getters and setters cannot expose the record. */
 	readonly requiredKeys: ReadonlyArray<number>;
 	readonly writes?: ReadonlyArray<CoreRecordFieldWrite>;
-	readonly initialValueOverwritten?: true;
+	/** Omitted means every producer's initial value can reach this observation. */
+	readonly initialProducers?: ReadonlyArray<CoreInstructionId>;
 }
 
 export function coreRecordAccessInitialFields(
@@ -553,12 +671,13 @@ export function coreRecordFieldReadIntegerRange(
 	if (record === null) return null;
 	const initialKind = coreRecordFieldInitialKind(read, record, -1);
 	if (initialKind === 0) return null;
-	if (read.initialValueOverwritten !== true && initialKind !== COMPILER_VALUE_KIND_NUMBER)
+	if (read.initialProducers?.length !== 0 && initialKind !== COMPILER_VALUE_KIND_NUMBER)
 		return undefined;
 	if (!coreRecordFieldIsOwnData(read, record)) return undefined;
-	let result = read.initialValueOverwritten
-		? null
-		: record!.find((field) => field.key === read.key)!.integerRange;
+	let result =
+		read.initialProducers?.length === 0
+			? null
+			: record!.find((field) => field.key === read.key)!.integerRange;
 	for (const write of read.writes ?? []) {
 		result = joinFieldIntegerRanges(result, range(write.value, write.instruction));
 		if (result === undefined) break;
@@ -577,7 +696,8 @@ const recordFieldAccessIndices = new WeakMap<
 	CoreFunctionStore,
 	CoreRecordFieldAccessIndex
 >();
-const MAXIMUM_RECORD_READ_PREFIX_WORK = 256;
+const MAXIMUM_RECORD_PREFIX_WORK = 256;
+const COMPLETE_RECORD_PREFIX = [Infinity] as const;
 
 function recordAliasParameter(
 	fn: CoreFunctionStore,
@@ -618,9 +738,32 @@ function recordAccessPrefixes(
 	position: (instruction: CoreInstructionId) => number,
 	accesses: RecordFieldAccesses,
 	result: Map<CoreInstructionId, CoreRecordFieldAccess>,
-	stores: Map<CoreInstructionId, CoreRecordFieldAccess>,
+	stores?: Map<CoreInstructionId, CoreRecordFieldAccess>,
 ): void {
 	const { reads, writes, barriers } = accesses;
+	let exceptionalLimits: Map<CoreBlockId, ReadonlyArray<number> | undefined> | undefined;
+	const exceptionalPrefixes = (block: CoreBlockId): ReadonlyArray<number> | undefined => {
+		const cached = exceptionalLimits?.get(block);
+		if (exceptionalLimits?.has(block)) return cached;
+		const limits = new Set<number>();
+		let remaining = MAXIMUM_RECORD_PREFIX_WORK;
+		for (const instruction of fn.bodyInstructionIds(block)) {
+			if (--remaining < 0) {
+				(exceptionalLimits ??= new Map()).set(block, undefined);
+				return undefined;
+			}
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			if (!coreInstructionEffects(fn, instruction).mayThrow) continue;
+			const at = position(instruction);
+			// A throwing operation can expose effects both before and after a field overwrite.
+			limits.add(at);
+			limits.add(at + 1);
+		}
+		if (fn.instructionKind(fn.blockTerminator(block)) === "throw") limits.add(Infinity);
+		const result = Object.freeze([...limits]);
+		(exceptionalLimits ??= new Map()).set(block, result);
+		return result;
+	};
 	const events = new Map<CoreBlockId, Array<CoreInstructionId>>();
 	for (const instruction of new Set([...reads.keys(), ...writes.keys(), ...barriers])) {
 		const block = fn.instructionBlock(instruction);
@@ -629,9 +772,9 @@ function recordAccessPrefixes(
 		row.push(instruction);
 	}
 	for (const row of events.values()) row.sort((a, b) => position(b) - position(a));
-	for (const [instruction, key] of [...reads, ...writes]) {
+	for (const [instruction, key] of stores === undefined ? reads : [...reads, ...writes]) {
 		const target = reads.has(instruction) ? result : stores;
-		if (target.has(instruction)) continue;
+		if (target === undefined || target.has(instruction)) continue;
 		const block = fn.instructionBlock(instruction);
 		if (!cfg.reachable.has(block)) continue;
 		const requiredKeys = new Set([key]);
@@ -639,7 +782,8 @@ function recordAccessPrefixes(
 			? new Set<CoreInstructionId>()
 			: undefined;
 		const producers = new Set<CoreInstructionId>();
-		let initialValueReaches = false;
+		const initialProducers =
+			reachingWrites === undefined ? undefined : new Set<CoreInstructionId>();
 		const pending = [
 			{
 				block,
@@ -648,9 +792,12 @@ function recordAccessPrefixes(
 				overwritten: false,
 			},
 		];
-		// Backedges rescan the earlier iteration beyond this read, for each selected value.
+		// A backedge can expose writers later than the observation in the previous iteration.
 		const fullBlocks = new Map<CoreBlockId, Map<CoreValueId, number>>();
-		let remaining = MAXIMUM_RECORD_READ_PREFIX_WORK;
+		let partialBlocks:
+			| Map<CoreBlockId, Map<number, Map<CoreValueId, number>>>
+			| undefined;
+		let remaining = MAXIMUM_RECORD_PREFIX_WORK;
 		let valid = true;
 		while (pending.length > 0 && valid) {
 			const { block, limit, value: input, overwritten: priorOverwrite } = pending.pop()!;
@@ -677,6 +824,8 @@ function recordAccessPrefixes(
 					? (fn.kernel.valueDefinitionOwner(value) as CoreBlockId)
 					: fn.instructionBlock(definition);
 			const sourcePosition = definition === undefined ? -1 : position(definition);
+			if (block === sourceBlock && definition !== undefined && sourcePosition >= limit)
+				continue;
 			for (const event of events.get(block) ?? []) {
 				const at = position(event);
 				if (at >= limit) continue;
@@ -707,7 +856,7 @@ function recordAccessPrefixes(
 			// Another producer on this path cannot reset the selected object's lifetime.
 			if (block === sourceBlock && definition !== undefined) {
 				producers.add(definition);
-				initialValueReaches ||= !overwritten;
+				if (!overwritten) initialProducers?.add(definition);
 				continue;
 			}
 			for (const edge of cfg.predecessors[block] ?? []) {
@@ -722,14 +871,46 @@ function recordAccessPrefixes(
 					}
 					argument = incoming;
 				}
-				let values = fullBlocks.get(edge.from);
-				if (values === undefined)
-					fullBlocks.set(edge.from, (values = new Map<CoreValueId, number>()));
-				const state = overwritten ? 2 : 1;
-				const seen = values.get(argument) ?? 0;
-				if ((seen & state) !== 0) continue;
-				values.set(argument, seen | state);
-				pending.push({ block: edge.from, limit: Infinity, value: argument, overwritten });
+				const limits =
+					edge.kind === "exceptional"
+						? exceptionalPrefixes(edge.from)
+						: COMPLETE_RECORD_PREFIX;
+				if (limits === undefined) {
+					valid = false;
+					break;
+				}
+				for (const limit of limits) {
+					if (edge.kind === "exceptional" && --remaining < 0) {
+						valid = false;
+						break;
+					}
+					let values: Map<CoreValueId, number> | undefined;
+					if (limit === Infinity) {
+						values = fullBlocks.get(edge.from);
+						if (values === undefined)
+							fullBlocks.set(edge.from, (values = new Map<CoreValueId, number>()));
+					} else {
+						partialBlocks ??= new Map<
+							CoreBlockId,
+							Map<number, Map<CoreValueId, number>>
+						>();
+						let prefixes = partialBlocks.get(edge.from);
+						if (prefixes === undefined)
+							partialBlocks.set(
+								edge.from,
+								(prefixes = new Map<number, Map<CoreValueId, number>>()),
+							);
+						values = prefixes.get(limit);
+						if (values === undefined)
+							prefixes.set(limit, (values = new Map<CoreValueId, number>()));
+					}
+					const state = overwritten ? 2 : 1;
+					const seen = values.get(argument) ?? 0;
+					if ((seen & state) !== 0) continue;
+					values.set(argument, seen | state);
+					pending.push({ block: edge.from, limit, value: argument, overwritten });
+				}
+				if (!valid) break;
 			}
 		}
 		if (!valid || producers.size === 0) continue;
@@ -755,8 +936,8 @@ function recordAccessPrefixes(
 				key,
 				requiredKeys: Object.freeze([...requiredKeys]),
 				...(fieldWrites === undefined ? {} : { writes: fieldWrites }),
-				...(reachingWrites !== undefined && !initialValueReaches
-					? { initialValueOverwritten: true as const }
+				...(initialProducers !== undefined && initialProducers.size !== producers.size
+					? { initialProducers: Object.freeze([...initialProducers]) }
 					: {}),
 			}),
 		);

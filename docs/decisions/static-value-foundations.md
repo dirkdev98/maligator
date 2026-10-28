@@ -905,11 +905,24 @@ Caller-side field alternatives also retain the writer's instruction. The kind
 worklist intersects each growing value mask with fixed structural branch bounds
 at that point; those bounds never depend on a previous field result or an unsolved
 mask. This preserves convergence through field cycles without another value-kind
-solve. Initial fields and all admitted writers still join conservatively, and
-stored alternatives cannot contribute before their producer has a normal result.
+solve. Stored alternatives cannot contribute before their producer has a normal
+result, including when every initial payload has been overwritten.
+Producer summaries use the same bounded prefix walk at each normal return. They
+join only reaching writers and the initial values of selected sources that can
+still reach that return. Earlier returns preserve their own alternatives; a
+definite overwrite cannot revive an initializer with no normal completion.
+Cached return plans depend on structural uses and exceptional control flow;
+current kind and range queries supply the payload facts afresh.
+Final-value bounds do not narrow producer cells that held earlier payloads;
+mutable producer admission remains with the storage planner.
+Exceptional predecessors use instruction-specific prefixes before and after each
+potentially throwing operation. A block edge does not prove that its later stores
+executed. These partial prefixes participate in memoization separately from full
+blocks, preserving both old and completed field values on caught paths. Effect
+refinements determine the throw points; their changes invalidate exceptional plans.
 Conditional returns and loop-carried aliases join the common own fields of all
 fresh record alternatives. The bounded alias walk admits ordinary block arguments
-and TDZ checks, and rejects mutation, escape, handler transport or a non-record
+and TDZ checks, and rejects unproven accesses, escape, handler transport or a non-record
 alternative. This semantic proof does not extend the caller-owned storage ABI;
 that planner still requires direct returned producers.
 Each read has its own proof: later writes and escapes cannot change a value already

@@ -4823,7 +4823,7 @@ function discoverProgramNormalResultFacts(
 			const mask =
 				read.writes === undefined ||
 				initialKind === 0 ||
-				(initialKind === COMPILER_VALUE_KIND_TOP && !read.initialValueOverwritten)
+				(initialKind === COMPILER_VALUE_KIND_TOP && read.initialProducers?.length !== 0)
 					? initialKind
 					: (kinds ??= readValueKinds())
 							.values(functionId)

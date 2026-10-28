@@ -30,6 +30,68 @@ function fieldRead(out: ReturnType<typeof inspectStaticValueFunction>) {
 }
 
 describe("normal field facts after own writes", () => {
+	it.each([
+		["function*", "yield 0;"],
+		["async function", "await hook();"],
+		["async function*", "yield 0;await hook();"],
+	])("retains the initial payload after abrupt %s resumption", (declaration, suspend) => {
+		const out = inspectStaticValueFunction(
+			`const make=function make(hook){for(let i=0;i<3;i++)hook(i);return {value:'initial'};};${declaration} compute(input,hook){const record=make(hook);try{${suspend}record.value=input&255;}catch(error){hook('caught');}return record.value%10;}globalThis.make=make;globalThis.compute=compute;`,
+			"compute",
+			{ locked: false },
+		);
+		const { ip, op } = fieldRead(out);
+		expect(
+			(out.native.facts![ip]!.resultKindMasks?.[0] ?? COMPILER_VALUE_KIND_TOP) &
+				COMPILER_VALUE_KIND_STRING,
+		).not.toBe(0);
+		expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+		expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+	});
+	it.each([false, true])(
+		"keeps pre-write values on exceptional exits (producer=%s)",
+		(producer) => {
+			const write = "try{record.value=input&255;}catch(error){hook('caught');}";
+			const out = inspectStaticValueFunction(
+				`const make=function make(input,hook){for(let i=0;i<3;i++)hook(i);const record={value:'initial'};${producer ? write : ""}return record;};function compute(input,hook){const record=make(input,hook);${producer ? "" : write}hook();return record.value%10;}globalThis.make=make;globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const { ip, op } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultKindMasks).toEqual([
+				COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+			]);
+			expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+			expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+			expect(out.c.source).toContain("mal_number_remainder(");
+		},
+	);
+	it.each(["function", "function*", "async function", "async function*"])(
+		"carries a producer's final writer bounds through a %s caller",
+		(declaration) => {
+			const suspend =
+				(declaration.includes("*") ? "yield 0;" : "") +
+				(declaration.startsWith("async") ? "await 0;" : "");
+			const out = inspectStaticValueFunction(
+				`const make=function make(input,flag,hook){for(let i=0;i<3;i++)hook(i);const record={value:input};record.value='older';if(flag)record.value=input&15;else record.value=input&255;return record;};${declaration} compute(input,flag,hook){const record=make(input,flag,hook);${suspend}hook();return record.value%10;}globalThis.make=make;globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const { ip, op } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultKindMasks).toEqual([
+				COMPILER_VALUE_KIND_NUMBER,
+			]);
+			expect(out.native.facts![ip]!.resultIntegerRanges?.[0]).toMatchObject({
+				minimum: 0,
+				maximum: 255,
+			});
+			expect(out.native.registerRepresentations[op.dst]).toBe("int32");
+			expect(out.c.source).not.toContain("mal_number_remainder(");
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
 	it.each(["function", "function*", "async function", "async function*"])(
 		"replaces unknown initial fields and older writes in a %s body",
 		(declaration) => {

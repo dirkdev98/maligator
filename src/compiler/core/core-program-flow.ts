@@ -2442,7 +2442,10 @@ export class CoreProgramFlowEngine {
 						if (
 							initialKind === 0 ||
 							(initialKind === semantics.top &&
-								!(read.initialValueOverwritten && coreRecordFieldIsOwnData(read, record)))
+								!(
+									read.initialProducers?.length === 0 &&
+									coreRecordFieldIsOwnData(read, record)
+								))
 						)
 							continue;
 						alternatives!.set(instruction, read.writes!);
@@ -2509,7 +2512,7 @@ export class CoreProgramFlowEngine {
 								const read = recordReads.get(instruction);
 								if (read === undefined) return undefined;
 								const record = coreRecordAccessInitialFields(read, recordResult);
-								return read.initialValueOverwritten &&
+								return read.initialProducers?.length === 0 &&
 									coreRecordFieldIsOwnData(read, record)
 									? 0
 									: coreRecordFieldInitialKind(read, record, semantics.top);

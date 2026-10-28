@@ -1089,6 +1089,78 @@ const makeOverwriteRecord = function makeOverwriteRecord(value, callback) {
 	for (let step = 0; step < 3; step++) callback(step);
 	return { value };
 };
+const makeProducerOverwrite = function makeProducerOverwrite(input, flag, callback) {
+	for (let step = 0; step < 3; step++) callback(step);
+	const record = { value: callback("producer initializer"), stable: "stable" };
+	record.value = "older";
+	if (flag) record.value = input & 15;
+	else record.value = input & 255;
+	return record;
+};
+const forwardProducerOverwrite = function forwardProducerOverwrite(input, callback) {
+	for (let step = 0; step < 3; step++) callback(step);
+	const record = makeOverwriteRecord(input, callback);
+	record.value = "older";
+	record.value = input & 255;
+	return record;
+};
+function readProducerOverwrite(input, flag, callback) {
+	const record = makeProducerOverwrite(input, flag, callback);
+	callback("producer read");
+	return record.value % 10;
+}
+function readProducerForwardOverwrite(input, callback) {
+	const record = forwardProducerOverwrite(input, callback);
+	callback("forward producer read");
+	return record.value % 10;
+}
+const makeProducerEarly = function makeProducerEarly(input, flag, callback) {
+	for (let step = 0; step < 3; step++) callback(step);
+	const record = { value: input };
+	if (flag) return record;
+	record.value = input & 255;
+	return record;
+};
+function readProducerEarly(input, flag, callback) {
+	const record = makeProducerEarly(input, flag, callback);
+	callback("early producer read");
+	return record.value % 10;
+}
+const makeProducerCaught = function makeProducerCaught(input, callback) {
+	for (let step = 0; step < 3; step++) callback(step);
+	const record = { value: "initial" };
+	try {
+		record.value = input & 255;
+	} catch (error) {
+		callback("caught producer write");
+	}
+	return record;
+};
+function readProducerCaught(input, callback) {
+	const record = makeProducerCaught(input, callback);
+	callback("caught producer read");
+	return record.value % 10;
+}
+function readCallerCaught(input, callback) {
+	const record = makeOverwriteRecord("initial", callback);
+	try {
+		record.value = input & 255;
+	} catch (error) {
+		callback("caught caller write");
+	}
+	callback("caught caller read");
+	return record.value % 10;
+}
+function* readSuspendedCaught(input, callback) {
+	const record = makeOverwriteRecord("initial", callback);
+	try {
+		yield 0;
+		record.value = input & 255;
+	} catch (error) {
+		callback("caught suspended write");
+	}
+	return record.value % 10;
+}
 function readDefiniteRecord(input, flag, callback) {
 	const record = flag
 		? makeOverwriteRecord(input, callback)
@@ -1152,6 +1224,12 @@ function writeUnknownReturned(factory, value) {
 Object.assign(globalThis, {
 	readDefiniteRecord,
 	readDefiniteCoercion,
+	readProducerOverwrite,
+	readProducerForwardOverwrite,
+	readProducerEarly,
+	readProducerCaught,
+	readCallerCaught,
+	readSuspendedCaught,
 	writeOwnRecord,
 	writeOwnSuspended,
 	writeOwnAwaited,
@@ -1161,6 +1239,112 @@ Object.assign(globalThis, {
 	writeUnknownReturned,
 });
 const storedHeap = { label: "stored heap value", nested: { live: true } };
+for (const input of [
+	-0,
+	NaN,
+	Infinity,
+	-Infinity,
+	-1,
+	255,
+	256,
+	2147483648,
+	4294967295,
+]) {
+	for (const flag of [false, true])
+		check(
+			readProducerOverwrite(input, flag, observe),
+			(input & (flag ? 15 : 255)) % 10,
+			"producer final field overwrite",
+		);
+	check(
+		readProducerForwardOverwrite(input, observe),
+		(input & 255) % 10,
+		"forwarded final field overwrite",
+	);
+}
+const producerSequence = [];
+let finalProducerCoercions = 0;
+const producerInput = {
+	valueOf() {
+		finalProducerCoercions++;
+		producerSequence.push("coerce");
+		observe("producer coerce");
+		return 511;
+	},
+};
+check(
+	readProducerOverwrite(producerInput, true, (stage) => {
+		producerSequence.push(stage);
+		observe(stage);
+		return {};
+	}),
+	5,
+	"producer input coerced after initialization",
+);
+check(
+	JSON.stringify(producerSequence),
+	'[0,1,2,"producer initializer","coerce","producer read"]',
+	"producer initializer and writer order",
+);
+check(finalProducerCoercions, 1, "producer input coerced once");
+const finalProducerFailure = { marker: "producer initializer failure" };
+try {
+	readProducerOverwrite(producerInput, true, (stage) => {
+		observe(stage);
+		if (stage === "producer initializer") throw finalProducerFailure;
+	});
+	throw new Error("missing producer initializer exception");
+} catch (error) {
+	check(error, finalProducerFailure, "producer initializer exception identity");
+}
+check(finalProducerCoercions, 1, "abrupt initializer prevents writer coercion");
+let earlyCoercions = 0;
+check(
+	readProducerEarly(
+		{
+			valueOf() {
+				earlyCoercions++;
+				observe("early producer coerce");
+				return -0;
+			},
+		},
+		true,
+		observe,
+	),
+	-0,
+	"early return retains original payload",
+);
+check(earlyCoercions, 1, "early-return payload coerced once");
+check(readProducerCaught(255, observe), 5, "normal producer write reaches return");
+check(readCallerCaught(255, observe), 5, "normal caller write reaches read");
+const abruptStoreIterator = readSuspendedCaught(255, observe);
+check(abruptStoreIterator.next().value, 0, "suspend before caller store");
+observe("suspended exception");
+const abruptStoreResult = abruptStoreIterator.throw({ marker: "injected throw" });
+check(abruptStoreResult.done, true, "injected throw completes caught generator");
+check(abruptStoreResult.value, NaN, "abrupt resume retains the initial payload");
+const normalStoreIterator = readSuspendedCaught(255, observe);
+normalStoreIterator.next();
+check(normalStoreIterator.next().value, 5, "normal resume observes the completed store");
+for (const input of [1n, Symbol("producer overwrite")]) {
+	check(
+		readProducerCaught(input, observe),
+		NaN,
+		"caught write retains the initial payload",
+	);
+	check(
+		readCallerCaught(input, observe),
+		NaN,
+		"caught caller write retains the initial payload",
+	);
+	let failure;
+	try {
+		readProducerOverwrite(input, true, observe);
+	} catch (error) {
+		failure = error;
+	}
+	check(failure instanceof TypeError, true, "producer writer coercion error");
+}
 for (const flag of [false, true]) {
 	for (const input of [
 		-0,

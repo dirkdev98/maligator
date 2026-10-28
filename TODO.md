@@ -288,9 +288,18 @@ The independent target boundary and current storage contract are recorded in
       completion gates remain independent of the empty initial value contribution;
       empty recursive producers cannot bootstrap from later writes. Removing a
       writer withdraws its value bound even after publication.
+      Producer summaries now apply the same bounded prefix walk at each normal
+      return, retaining only reaching writers and the initial values of selected
+      sources that can still contribute. Early returns retain earlier values;
+      definite overwrites remove unknown payloads through literal allocations,
+      forwarding calls, merged aliases, loops and recursive producer chains.
+      Initializer completion and the own-data contract remain independent gates.
+      Exceptional predecessors now retain prefixes at each throwing instruction,
+      so a caught RHS failure cannot make a later, unexecuted store kill an
+      earlier payload. Writes completed before a later throw remain eligible.
       Constant relational writer bounds already propagate through these queries.
       Remaining object work includes nonconstant relational bounds, writer/source
-      correlations and producer definite-overwrite precision, typed producer storage for
+      correlations beyond these selected sources, typed producer storage for
       remaining writes, indexed producer summaries, broader parameter-relative
       call effects and coroutine record transport. Record-call admission and
       profitability are owned by the following tasks.
