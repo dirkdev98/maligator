@@ -349,7 +349,8 @@ The independent target boundary and current storage contract are recorded in
       native, and image forms coexist; Node 24's default 2 GB heap leaves little
       margin for in-process native builds of the compiler.
       Keep the representative Node.js self-compile below 60 seconds on AC power;
-      stable acceptance remains unverified. Analysis extensions must stay bounded
+      stable acceptance remains unverified; one uninstrumented AC sample at
+      `906818a8` took 60.96 seconds. Analysis extensions must stay bounded
       and reuse existing worklists. Leave long checks to CI and keep local
       verification to the affected units and quality checks.
 

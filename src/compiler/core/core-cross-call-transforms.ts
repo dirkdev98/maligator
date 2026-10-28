@@ -4823,11 +4823,10 @@ function discoverProgramNormalResultFacts(
 				COMPILER_VALUE_KIND_TOP,
 			);
 			const initial = coreRecordAccessInitialFields(read, record, initialFields);
-			const initialKind = coreRecordFieldInitialKind(
-				read,
-				initial,
-				COMPILER_VALUE_KIND_TOP,
-			);
+			const initialKind =
+				initial === record
+					? normalKind
+					: coreRecordFieldInitialKind(read, initial, COMPILER_VALUE_KIND_TOP);
 			const mask =
 				read.writes === undefined ||
 				normalKind === 0 ||

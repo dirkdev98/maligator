@@ -15,7 +15,6 @@ import {
 	sameCoreRecordValueKind,
 	joinCoreRecordValueKinds,
 	coreRecordFieldInitialKind,
-	coreRecordFieldIsOwnData,
 	coreRecordAccessInitialFields,
 	coreRecordAccessProducerFields,
 } from "./core-record-value-kinds.ts";
@@ -2439,11 +2438,14 @@ export class CoreProgramFlowEngine {
 						if (values.length !== 0) continue;
 						const read = recordReads.get(instruction)!;
 						const record = coreRecordAccessProducerFields(read, recordResult);
+						const producerKind = coreRecordFieldInitialKind(read, record, semantics.top);
+						if (producerKind === 0) continue;
 						const initial = coreRecordAccessInitialFields(read, record, recordResult);
 						if (
-							!coreRecordFieldIsOwnData(read, record) ||
-							coreRecordFieldInitialKind(read, record, semantics.top) === 0 ||
-							coreRecordFieldInitialKind(read, initial, semantics.top) === semantics.top
+							(initial === record
+								? producerKind
+								: coreRecordFieldInitialKind(read, initial, semantics.top)) ===
+							semantics.top
 						)
 							continue;
 						alternatives!.set(instruction, read.writes!);
@@ -2510,13 +2512,17 @@ export class CoreProgramFlowEngine {
 								const read = recordReads.get(instruction);
 								if (read === undefined) return undefined;
 								const record = coreRecordAccessProducerFields(read, recordResult);
-								if (coreRecordFieldInitialKind(read, record, semantics.top) === 0)
-									return 0;
-								return coreRecordFieldInitialKind(
+								const producerKind = coreRecordFieldInitialKind(
 									read,
-									coreRecordAccessInitialFields(read, record, recordResult),
+									record,
 									semantics.top,
 								);
+								if (producerKind === 0 || read.initialProducers === undefined)
+									return producerKind;
+								const initial = coreRecordAccessInitialFields(read, record, recordResult);
+								return initial === record
+									? producerKind
+									: coreRecordFieldInitialKind(read, initial, semantics.top);
 							}
 							if (
 								site.targets.opaque ||
