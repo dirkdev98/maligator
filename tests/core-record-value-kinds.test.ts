@@ -451,6 +451,10 @@ describe("normal-return record field kinds", () => {
 		],
 		[
 			"record['value']=!!replacement;",
+			COMPILER_VALUE_KIND_BOOLEAN,
+		],
+		[
+			"if(flag)record['value']=!!replacement;",
 			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
 		],
 		["while(flag-- > 0)record.value=record.value+1;", COMPILER_VALUE_KIND_NUMBER],
