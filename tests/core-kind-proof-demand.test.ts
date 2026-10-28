@@ -24,6 +24,7 @@ import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_TOP,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
@@ -310,6 +311,37 @@ function typedArrayProgram() {
 }
 
 describe("heap containment demand", () => {
+	it.each(["call", "construct"])(
+		"does not infer containment from a normal %s result brand",
+		(opcode) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = builder.createBlock([{}]);
+			const callee = builder.blockParameterValue(entry, 0);
+			const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+			const [collection] = builder.appendInstruction(
+				entry,
+				opcode,
+				opcode === "call" ? [callee, receiver!] : [callee],
+			);
+			const source = builder.bodyInstructionIds(entry).at(-1)!;
+			const [has] = builder.appendInstruction(entry, "callKnown", [collection!], {
+				attributes: { operation: "Map.prototype.has" },
+			});
+			builder.setTerminator(entry, { kind: "return", value: has! });
+			const fn = program.function(builder.finish(entry).function);
+			const edit = CoreEditor.open(program, fn.id);
+			edit.setNormalResultFacts(source, {
+				mask: COMPILER_VALUE_KIND_OBJECT,
+				heapBrand: "Map",
+			});
+			edit.commit();
+			const classes = analyzeCoreValueClasses(program, fn.id, lockedContext());
+			expect(classes.exactHeapBrand(collection!)).toBe("Map");
+			expect(classes.containedCollection(collection!)).toBeUndefined();
+			expect(classes.statistics.containmentChecks).toBe(0);
+		},
+	);
 	it("keeps external-buffer TypedArrays branded without attempting fixed-storage containment", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });

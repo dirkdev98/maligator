@@ -207,7 +207,7 @@ export function analyzeCoreValueClasses(
 		);
 	const brands = new Map<CoreValueId, CoreExactHeapBrand>();
 	const entryBrands = new Map<CoreValueId, CoreExactHeapBrand>();
-	const typedArrayConstructs = new Map<CoreValueId, CoreInstructionId>();
+	const localConstructs = new Map<CoreValueId, CoreInstructionId>();
 	const operations = [...fn.instructionIds()].filter(
 		(instruction) => fn.instructionKind(instruction) === "operation",
 	);
@@ -255,8 +255,7 @@ export function analyzeCoreValueClasses(
 			if (brand !== undefined) {
 				const outputRoot = roots.get(output) ?? output;
 				brands.set(outputRoot, brand);
-				if (coreNumericTypedArrayKind(brand) !== undefined)
-					typedArrayConstructs.set(outputRoot, instruction);
+				localConstructs.set(outputRoot, instruction);
 				seeded++;
 			}
 		}
@@ -329,8 +328,9 @@ export function analyzeCoreValueClasses(
 		if (fn.kernel.valueDefinitionKind(receiverRoot) === 0) continue;
 		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(receiverRoot));
 		if (
-			fn.registry.byId(fn.instructionOpcode(definition)).callTransfer?.result ===
-			"call-completion"
+			["call-completion", "construct-completion"].includes(
+				fn.registry.byId(fn.instructionOpcode(definition)).callTransfer?.result ?? "",
+			)
 		)
 			continue;
 		brands.set(receiverRoot, brand);
@@ -404,7 +404,7 @@ export function analyzeCoreValueClasses(
 		return false;
 	};
 	const isContained = (valueRoot: CoreValueId, brand: CoreExactHeapBrand): boolean => {
-		if (!brands.has(valueRoot)) return false;
+		if (!localConstructs.has(valueRoot)) return false;
 		const cached = containment.get(valueRoot);
 		if (cached !== undefined) return cached;
 		const compute = () => {
@@ -581,7 +581,7 @@ export function analyzeCoreValueClasses(
 		containedFixedNumericTypedArray(value) {
 			const brand = coreNumericTypedArrayKind(exactHeapBrand(value));
 			const root = roots.get(value) ?? value;
-			const construct = typedArrayConstructs.get(root);
+			const construct = localConstructs.get(root);
 			return brand !== undefined &&
 				construct !== undefined &&
 				constructOwnsFixedTypedArrayStorage(fn, construct, roots) &&

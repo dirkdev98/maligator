@@ -59,46 +59,53 @@ function observedResult(kind: "call" | "field") {
 const bounded = { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 };
 
 describe("normal-result fact publication", () => {
-	it("withdraws receiver dispatch when a normal-result brand is withdrawn", () => {
-		const { program, fn, manager, report, instruction, value } = observedResult("call");
-		const block = fn.instructionBlock(instruction);
-		const edit = CoreEditor.open(program, fn.id);
-		edit.setNormalResultFacts(instruction, {
-			mask: COMPILER_VALUE_KIND_OBJECT,
-			heapBrand: "Map",
-		});
-		const has = edit.insertInstruction(
-			block,
-			fn.blockTerminator(block),
-			"callKnown",
-			[value],
-			{ attributes: { operation: "Map.prototype.has" } },
-		);
-		edit.replaceTerminator(block, { kind: "return", value: has.outputs[0]! });
-		edit.commit();
-		const scheduler = new CoreFunctionPassScheduler(
-			program,
-			programAnalysisContext(false),
-			manager,
-			report,
-			fn.id,
-		);
-		const passes = CORE_MEMORY_PASSES.filter(
-			(pass) => pass.name === "refine-exact-collection-accesses",
-		);
-		scheduler.runComponent("memory", passes);
-		expect(fn.instructionAttributes(has.instruction).specialized).toBe(
-			"Map.prototype.has",
-		);
-		const clear = CoreEditor.open(program, fn.id);
-		clear.setNormalResultFacts(instruction, { mask: COMPILER_VALUE_KIND_OBJECT });
-		scheduler.runComponent("memory", passes, [clear.commit()]);
-		expect(fn.instructionAttributes(has.instruction).specialized).toBeUndefined();
-		expect(
-			fn.instructionAttributes(has.instruction).exactCollectionReceiver,
-		).toBeUndefined();
-		expect(fn.instructionEffectRefinement(has.instruction)).toBeUndefined();
-	});
+	it.each(["call", "construct"])(
+		"withdraws receiver dispatch when a %s result brand is withdrawn",
+		(completion) => {
+			const { program, fn, manager, report, instruction, value } = observedResult("call");
+			const block = fn.instructionBlock(instruction);
+			const edit = CoreEditor.open(program, fn.id);
+			if (completion === "construct")
+				edit.replaceInstruction(instruction, "construct", [
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
+				]);
+			edit.setNormalResultFacts(instruction, {
+				mask: COMPILER_VALUE_KIND_OBJECT,
+				heapBrand: "Map",
+			});
+			const has = edit.insertInstruction(
+				block,
+				fn.blockTerminator(block),
+				"callKnown",
+				[value],
+				{ attributes: { operation: "Map.prototype.has" } },
+			);
+			edit.replaceTerminator(block, { kind: "return", value: has.outputs[0]! });
+			edit.commit();
+			const scheduler = new CoreFunctionPassScheduler(
+				program,
+				programAnalysisContext(false),
+				manager,
+				report,
+				fn.id,
+			);
+			const passes = CORE_MEMORY_PASSES.filter(
+				(pass) => pass.name === "refine-exact-collection-accesses",
+			);
+			scheduler.runComponent("memory", passes);
+			expect(fn.instructionAttributes(has.instruction).specialized).toBe(
+				"Map.prototype.has",
+			);
+			const clear = CoreEditor.open(program, fn.id);
+			clear.setNormalResultFacts(instruction, { mask: COMPILER_VALUE_KIND_OBJECT });
+			scheduler.runComponent("memory", passes, [clear.commit()]);
+			expect(fn.instructionAttributes(has.instruction).specialized).toBeUndefined();
+			expect(
+				fn.instructionAttributes(has.instruction).exactCollectionReceiver,
+			).toBeUndefined();
+			expect(fn.instructionEffectRefinement(has.instruction)).toBeUndefined();
+		},
+	);
 
 	it("keeps brand publication independent of effect proofs and validates its kind", () => {
 		const { program, fn, instruction } = observedResult("call");
