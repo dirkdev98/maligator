@@ -588,6 +588,13 @@ export type CoreRepresentation =
 	| "dense-elements"
 	| "scalarized-object";
 
+export function coreRepresentationCanWiden(
+	from: CoreRepresentation,
+	to: CoreRepresentation,
+): boolean {
+	return from === to || to === "boxed" || (from === "i32" && to === "f64");
+}
+
 export type CoreFactValidity =
 	| { readonly kind: "world"; readonly fact: string }
 	| { readonly kind: "epoch"; readonly family: string }

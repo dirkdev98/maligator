@@ -43,7 +43,13 @@ import type {
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreBlockId, coreFactId, coreInstructionId, coreValueId } from "./core-ir.ts";
+import {
+	coreBlockId,
+	coreFactId,
+	coreInstructionId,
+	coreRepresentationCanWiden,
+	coreValueId,
+} from "./core-ir.ts";
 import type { CoreOptimizationStage } from "./core-pass.ts";
 import { coreModulePrivateNames } from "./core-private-names.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -460,12 +466,7 @@ function verifyInstructionRows(
 					attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === undefined
 				)
 					fail(`move @${instruction} unboxes to ${destination} without a proof`);
-				if (
-					source !== "boxed" &&
-					source !== destination &&
-					destination !== "boxed" &&
-					!(source === "i32" && destination === "f64")
-				)
+				if (source !== "boxed" && !coreRepresentationCanWiden(source, destination))
 					fail(`move @${instruction} changes ${source} representation to ${destination}`);
 			}
 			// The optional operand is an earlier read of the same field, or empty.

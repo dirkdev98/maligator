@@ -21,7 +21,7 @@ import {
 } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
-import { coreBlockId, coreInstructionId } from "./core-ir.ts";
+import { coreBlockId, coreInstructionId, coreRepresentationCanWiden } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
@@ -320,7 +320,7 @@ function movesWithoutNarrowing(
 ): boolean {
 	const from = fn.valueRepresentation(value);
 	const to = fn.valueRepresentation(instructionResult(fn, instruction));
-	return from === to || to === "boxed" || (from === "i32" && to === "f64");
+	return coreRepresentationCanWiden(from, to);
 }
 
 export const lowerPrimitiveOperations: CoreFunctionPass = {

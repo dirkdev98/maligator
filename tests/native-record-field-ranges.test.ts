@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
 import {
 	instructionResultIntegerRange,
+	instructionInputIntegerRange,
 	INSTRUCTION_CALLS_USER_CODE,
 } from "../src/compiler/shared/instruction-facts.ts";
 import {
@@ -46,6 +47,72 @@ function field(out: ReturnType<typeof inspect>) {
 }
 
 describe("normal record field integer ranges", () => {
+	it.each(
+		["literal", "producer-write", "caller-write"].flatMap((mode) =>
+			(
+				[
+					["function", "n<middle", "middle<16", "n", 14],
+					["function", "n<middle", "middle<bound&&bound<16", "n", 13],
+					["function", "n<=middle", "middle<=n&&middle<16", "n", 15],
+					["function", "n<middle", "middle<16", "n+1", 15],
+					["function*", "n<middle", "middle<16", "n", 14],
+					["async function", "n<middle", "middle<16", "n", 14],
+					["async function*", "n<middle", "middle<16", "n", 14],
+				] as const
+			).map(([declaration, first, later, payload, maximum]) => ({
+				mode,
+				declaration,
+				first,
+				later,
+				payload,
+				maximum,
+			})),
+		),
+	)(
+		"carries transitive $mode bounds through $declaration ($first, $later, $payload)",
+		({ mode, declaration, first, later, payload, maximum }) => {
+			const values = "const n=value>>>0;const middle=limit>>>0;const bound=other&255;";
+			const suspension =
+				(declaration.includes("*") ? "yield 0;" : "") +
+				(declaration.startsWith("async") ? "await 0;" : "");
+			const produce =
+				mode === "literal"
+					? `${values}if(${first}&&${later})return {n:${payload}};return {n:0};`
+					: mode === "producer-write"
+						? `${values}const record={n:0};if(${first}&&${later})record.n=${payload};hook();return record;`
+						: "return {n:0};";
+			const read =
+				mode === "caller-write"
+					? `${values}if(${first}){${suspension}if(${later})record.n=${payload};}`
+					: suspension;
+			const out = inspectStaticValueFunction(
+				`const make=function make(value,limit,other,hook){for(let i=0;i<3;i++)hook(i);${produce}};${declaration} compute(value,limit,other,hook){const record=make(value,limit,other,hook);${read}hook();return record.n%16;}globalThis.make=make;globalThis.compute=compute;`,
+				"compute",
+				{ locked: false, realms: true },
+			);
+			const { op, facts } = field(out);
+			expect(instructionResultIntegerRange(facts, op.dst)).toEqual(bounded(0, maximum));
+			expect(out.native.registerRepresentations[op.dst]).toBe("int32");
+			expect(
+				out.native.body.instructions.some(
+					(op) => op.opcode === "BINARY" && op.operator === "%",
+				),
+			).toBe(false);
+		},
+	);
+	it("retains a wide earlier callback operand before a later field guard", () => {
+		const out = inspectStaticValueFunction(
+			`function make(value,limit,hook){const n=value>>>0;const bound=limit>>>0;if(n<bound){hook(n);if(bound<16)return {n};}return {n:0};}globalThis.make=make;`,
+			"make",
+			{ locked: false, realms: true },
+		);
+		const arguments_ = out.native.body.instructions.flatMap((op, ip) =>
+			op.opcode === "CALL" && op.arguments.length === 1
+				? [instructionInputIntegerRange(out.native.facts?.[ip], op.arguments[0]!)]
+				: [],
+		);
+		expect(arguments_).toContainEqual(bounded(0, 0xffff_fffe));
+	});
 	it.each(
 		["literal", "producer-write", "caller-write"].flatMap((mode) =>
 			["limit&255", "boundedLimit(limit,hook)", "limits(limit,hook).n"].map((bound) => [

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
@@ -13,6 +14,7 @@ import type {
 	CoreBlockId,
 	CoreFunctionId,
 	CoreValueId,
+	CoreRepresentation,
 } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
@@ -51,7 +53,12 @@ function primitiveNumberProof(builder: CoreFunctionBuilder) {
 	});
 }
 
-function boundedInt32(polarity: "consequent" | "alternate"): BoundedFunction {
+function boundedInt32(
+	polarity: "consequent" | "alternate",
+	resultRepresentation: CoreRepresentation = "i32",
+	divisor = 16,
+	dividendRepresentation: CoreRepresentation = "i32",
+): BoundedFunction {
 	const program = new CoreProgram(coreOpcodeRegistry);
 	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 	const entry = builder.createBlock([{}]);
@@ -59,13 +66,13 @@ function boundedInt32(polarity: "consequent" | "alternate"): BoundedFunction {
 	const bounded = builder.createBlock();
 	const rejected = builder.createBlock();
 	const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
-	const [value] = builder.appendInstruction(entry, "unary", [parameter], {
-		attributes: { operator: "~" },
-		outputRepresentations: ["i32"],
-	});
 	const [zero] = builder.appendInstruction(entry, "createF64", [], {
 		attributes: { value: 0 },
 		outputRepresentations: ["i32"],
+	});
+	const [value] = builder.appendInstruction(entry, "binary", [parameter, zero!], {
+		attributes: { operator: "|" },
+		outputRepresentations: [dividendRepresentation],
 	});
 	const [sixteen] = builder.appendInstruction(entry, "createF64", [], {
 		attributes: { value: 16 },
@@ -114,10 +121,17 @@ function boundedInt32(polarity: "consequent" | "alternate"): BoundedFunction {
 		},
 	});
 	const proof = primitiveNumberProof(builder);
-	const [remainder] = builder.appendInstruction(bounded, "binary", [value!, sixteen!], {
+	const modulus =
+		divisor === 16
+			? sixteen!
+			: builder.appendInstruction(bounded, "createF64", [], {
+					attributes: { value: divisor },
+					outputRepresentations: ["f64"],
+				})[0]!;
+	const [remainder] = builder.appendInstruction(bounded, "binary", [value!, modulus], {
 		effectRefinement: { effects: CORE_NO_EFFECTS, proof },
 		attributes: { operator: "%" },
-		outputRepresentations: ["i32"],
+		outputRepresentations: [resultRepresentation],
 	});
 	builder.setTerminator(bounded, { kind: "return", value: remainder! });
 	builder.setTerminator(rejected, { kind: "return", value: zero! });
@@ -150,6 +164,7 @@ function relationalInt32(
 		swapped?: boolean;
 		guard?: boolean;
 		boundRepresentation?: "f64" | "boxed";
+		lateLimit?: number;
 	} = {},
 ) {
 	const program = new CoreProgram(coreOpcodeRegistry);
@@ -158,6 +173,7 @@ function relationalInt32(
 	const bounded = builder.createBlock();
 	const alternate = builder.createBlock();
 	const join = builder.createBlock();
+	const compared = options.lateLimit === undefined ? bounded : builder.createBlock();
 	const [input, limit] = inspectCoreBlockParameters(builder, entry);
 	const [value] = builder.appendInstruction(entry, "unary", [input!.value], {
 		attributes: { operator: "~" },
@@ -185,7 +201,7 @@ function relationalInt32(
 		options.swapped ? [bound, value!] : [value!, bound],
 		{ attributes: { operator }, outputRepresentations: ["boolean"] },
 	);
-	const yes = { block: bounded, arguments: [] };
+	const yes = { block: compared, arguments: [] };
 	const no = { block: alternate, arguments: [] };
 	builder.setTerminator(
 		entry,
@@ -199,6 +215,33 @@ function relationalInt32(
 				}
 			: { kind: "branch", condition: condition!, consequent: yes, alternate: no },
 	);
+	if (options.lateLimit !== undefined) {
+		const [limit] = builder.appendInstruction(compared, "createF64", [], {
+			attributes: { value: options.lateLimit },
+			outputRepresentations: ["i32"],
+		});
+		const [condition] = builder.appendInstruction(compared, "binary", [bound, limit!], {
+			attributes: { operator: "<" },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(
+			compared,
+			options.guard
+				? {
+						kind: "guard",
+						condition: condition!,
+						fact: primitiveNumberProof(builder),
+						success: { block: bounded, arguments: [] },
+						fallback: no,
+					}
+				: {
+						kind: "branch",
+						condition: condition!,
+						consequent: { block: bounded, arguments: [] },
+						alternate: no,
+					},
+		);
+	}
 	for (const block of [bounded, alternate])
 		builder.setTerminator(block, {
 			kind: "jump",
@@ -214,10 +257,36 @@ function relationalInt32(
 		join,
 		entry,
 		bound,
+		compared,
 	};
 }
 
 describe("Core path-sensitive numeric ranges", () => {
+	it.each([
+		[-16, true],
+		[15.5, true],
+		[-15.5, true],
+		[Infinity, true],
+		[-Infinity, true],
+		[15, false],
+		[0, false],
+		[-0, false],
+		[NaN, false],
+	] as const)(
+		"uses the magnitude of constant divisor %s for identity=%s",
+		(divisor, identity) => {
+			const source = boundedInt32("consequent", "f64", divisor);
+			const outcome = optimizeCore(
+				{ program: source.program, context: programAnalysisContext() },
+				{ verification: "per-pass" },
+			);
+			expect(
+				binaryOperators(outcome.compilation.program.function(source.function)).includes(
+					"%",
+				),
+			).toBe(!identity);
+		},
+	);
 	it.each([false, true])(
 		"does not use an entry backedge to prove its own comparison with variable=%s",
 		(variable) => {
@@ -265,6 +334,130 @@ describe("Core path-sensitive numeric ranges", () => {
 				minimum: -0x8000_0000,
 				maximum: 0x7fff_ffff,
 			});
+		},
+	);
+	it.each([false, true])(
+		"keeps earlier observations separate from later guard bounds with guard=%s",
+		(guard) => {
+			const source = relationalInt32("<", { guard, lateLimit: 8 });
+			const analysis = pathRanges(source);
+			expect(analysis.range(source.value, source.bounded)).toMatchObject({ maximum: 6 });
+			expect(analysis.range(source.value, source.compared)).toMatchObject({
+				maximum: 14,
+			});
+			expect(analysis.range(source.value, source.join)).toMatchObject({
+				minimum: -0x8000_0000,
+				maximum: 0x7fff_ffff,
+			});
+		},
+	);
+	it.each([
+		["n<bound&&bound<16", "n", 0, 14],
+		["n<middle&&middle<bound&&bound<16", "n", 0, 13],
+		["n>middle&&middle>bound&&bound>16", "n", 19, 0xffff_ffff],
+		["n<=bound&&bound<=n&&bound<16", "n", 0, 15],
+		["n<=middle&&middle<=bound&&bound<=n&&bound<16", "n", 0, 15],
+		["n<=middle&&middle<=bound&&bound<=n&&bound<16", "n+1", 1, 16],
+		["n<bound&&bound<16", "n+1", 1, 15],
+	] as const)(
+		"propagates %s through %s independently of query order",
+		(condition, result, minimum, maximum) => {
+			const { program } = lowerSemanticProgramToCore(
+				analyzeSourceAndRunSemanticAnalysis(
+					`function probe(value,limit,other){const n=value>>>0;const middle=limit>>>0;const bound=other&255;if(${condition})return ${result};throw 0;}globalThis.probe=probe;`,
+					"/transitive-bounds.mjs",
+				),
+				{ facts: programAnalysisContext().facts },
+			);
+			const fn = coreFunctionNamed(program, "probe")!;
+			const block = [...fn.blockIds()].find(
+				(block) => fn.instructionKind(fn.blockTerminator(block)) === "return",
+			)!;
+			const returned = inspectCoreTerminatorPayload(fn, fn.blockTerminator(block));
+			if (returned.kind !== "return") throw new Error("Missing probe return");
+			for (const reverse of [false, true]) {
+				const analysis = pathRanges({
+					program,
+					function: fn.id,
+					value: returned.value,
+					bounded: block,
+				});
+				const values = [...fn.valueIds()];
+				if (reverse) values.reverse();
+				for (const value of values) analysis.range(value, block);
+				expect(analysis.range(returned.value, block)).toEqual({
+					minimum,
+					maximum,
+					exactSafeIntegers: true,
+					excludesNegativeZero: true,
+				});
+			}
+		},
+	);
+	it("bounds analysis work for a long relational chain without excluding valid values", () => {
+		const count = 96;
+		const declarations = Array.from(
+			{ length: count },
+			(_, index) => `const v${index}=input[${index}]>>>0;`,
+		).join("");
+		const comparisons = Array.from(
+			{ length: count - 1 },
+			(_, index) => `v${index}<v${index + 1}`,
+		);
+		comparisons.push(`v${count - 1}<256`);
+		const { program } = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function probe(input){${declarations}if(${comparisons.join("&&")})return v0;throw 0;}globalThis.probe=probe;`,
+				"/bounded-relational-work.mjs",
+			),
+			{ facts: programAnalysisContext().facts },
+		);
+		const fn = coreFunctionNamed(program, "probe")!;
+		const cfg = buildCoreControlFlow(program, fn.id);
+		const analysis = analyzeCoreLoopInductions(
+			program,
+			fn,
+			cfg,
+			coreCanonicalValueRoots(fn, cfg),
+		);
+		const block = [...fn.blockIds()].find(
+			(block) => fn.instructionKind(fn.blockTerminator(block)) === "return",
+		)!;
+		const returned = inspectCoreTerminatorPayload(fn, fn.blockTerminator(block));
+		if (returned.kind !== "return") throw new Error("Missing probe return");
+		let producerQueries = 0;
+		const query = analysis.rangeQuery(() => {
+			producerQueries++;
+			return undefined;
+		});
+		const range = query(returned.value, block);
+		expect(producerQueries).toBeLessThanOrEqual(32);
+		expect(range).toBeDefined();
+		if (range === undefined || range === null) throw new Error("Missing integer basis");
+		expect(range.minimum).toBeLessThanOrEqual(0);
+		expect(range.maximum).toBeGreaterThanOrEqual(160);
+	});
+	it.each([
+		["i32", "f64"],
+		["i32", "boxed"],
+		["boxed", "f64"],
+		["f64", "i32"],
+	] as const)(
+		"eliminates an identity remainder while preserving %s to %s transport",
+		(from, to) => {
+			const source = boundedInt32("consequent", to, 16, from);
+			const outcome = optimizeCore(
+				{ program: source.program, context: programAnalysisContext() },
+				{ verification: "per-pass", instrumentation: "full" },
+			);
+			expect(
+				binaryOperators(outcome.compilation.program.function(source.function)),
+			).not.toContain("%");
+			expect(
+				outcome.report.passes.find(
+					({ pass }) => pass === "path-range-strength-reduction",
+				),
+			).toMatchObject({ changedItems: 1 });
 		},
 	);
 	describe.each([false, true])("bounded variable comparisons with guard=%s", (guard) => {

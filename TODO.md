@@ -317,8 +317,14 @@ The independent target boundary and current storage contract are recorded in
       other record fields. Unsolved comparison operands keep their edges empty
       during range convergence; unknown or noninteger operands retain wide storage.
       Per-subject indexing reuses the bounded range query without another solve.
-      Remaining object work includes transitive relational bounds, payload/source
-      correlations across separate merges, producer storage outside private
+      Later integer guards now tighten earlier relations at the consumer, including
+      transitive chains, nonstrict cycles and arithmetic payloads. The same bounds
+      reach private producer writes, caller writes, result entries and resumable
+      field reads. One-hop queries avoid the bounded closure worklist. Identity
+      remainders consume these facts across boxed, double and int32 storage, using
+      an explicit conversion whenever a move cannot preserve the representation.
+      Remaining object work includes relational bounds without an integer basis,
+      payload/source correlations across separate merges, producer storage outside private
       single-layout SSA promotion, indexed producer summaries, broader parameter-relative
       call effects and coroutine record transport. Record-call admission and
       profitability are owned by the following tasks.
@@ -367,8 +373,9 @@ The independent target boundary and current storage contract are recorded in
       stable acceptance remains unverified; the uninstrumented AC sample at
       `298c89f9` took 59.14 seconds. Analysis extensions must stay bounded
       and reuse existing worklists. Leave long checks to CI and keep local
-      verification to the affected units and quality checks. The relational-range
-      extension still needs an AC sample; its development probe ran on battery.
+      verification to the affected units and quality checks. The variable and
+      transitive relational-range extensions still need an AC sample; development
+      probes ran on battery. Transitive queries share the existing 32-step budget.
 
 - [ ] Spread one split native function over several translation units. Outlining
       functions past 256 Ki into 128 Ki parts cut the self-compile `-O2` unit wall time

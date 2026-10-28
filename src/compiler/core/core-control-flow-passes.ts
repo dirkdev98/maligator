@@ -41,6 +41,7 @@ import {
 	CORE_MEMORY_FAMILY_DOMAINS,
 	coreBlockId,
 	coreInstructionId,
+	coreRepresentationCanWiden,
 } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
@@ -1537,23 +1538,44 @@ const reduceBoundedRemainders: CoreFunctionPass = {
 				const dividendRepresentation = numericRepresentation(dividendValue);
 				if (
 					dividendRepresentation === undefined ||
-					numericRepresentation(divisorValue) === undefined ||
-					numericRepresentation(output) !== dividendRepresentation
+					numericRepresentation(divisorValue) === undefined
 				)
 					continue;
 				const dividend = ranges.range(dividendValue, block);
-				const divisor = ranges.range(divisorValue, block);
+				if (dividend === undefined) continue;
+				let fixedDivisor = numberConstant(fn, divisorValue);
+				if (fixedDivisor === undefined) {
+					const divisor = ranges.range(divisorValue, block);
+					if (divisor === undefined || divisor.minimum !== divisor.maximum) continue;
+					fixedDivisor = divisor.minimum;
+				}
+				const magnitude = Math.abs(fixedDivisor);
 				if (
-					dividend === undefined ||
-					divisor === undefined ||
-					divisor.minimum !== divisor.maximum ||
-					!Number.isSafeInteger(divisor.minimum) ||
-					divisor.minimum <= dividend.maximum ||
-					dividend.minimum < 0
+					!(magnitude > 0) ||
+					dividend.minimum <= -magnitude ||
+					dividend.maximum >= magnitude
 				)
 					continue;
+				const from = fn.valueRepresentation(dividendValue);
+				const to = fn.valueRepresentation(output);
+				let conversion: "+" | "toint32" | undefined;
+				if (!coreRepresentationCanWiden(from, to)) {
+					if (to === "f64" && from === "boxed") conversion = "+";
+					else if (
+						to === "i32" &&
+						(from === "boxed" || from === "f64") &&
+						compilerIntegerRangeIsInt32(dividend)
+					)
+						conversion = "toint32";
+					else continue;
+				}
 				editor ??= CoreEditor.open(program, item.function);
-				editor.replaceInstruction(instruction, "move", [dividendValue]);
+				editor.replaceInstruction(
+					instruction,
+					conversion === undefined ? "move" : "unary",
+					[dividendValue],
+					conversion === undefined ? {} : { attributes: { operator: conversion } },
+				);
 			}
 		}
 		return editor?.commit();

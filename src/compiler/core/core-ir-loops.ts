@@ -338,14 +338,17 @@ function loopComparison(
 	};
 }
 
-type PathRefinement =
-	| { readonly block: CoreBlockId; readonly range: CompilerIntegerRange }
-	| {
-			readonly block: CoreBlockId;
-			readonly comparison: CoreBlockId;
-			readonly bound: CoreValueId;
-			readonly operator: CoreLoopComparison;
-	  };
+interface PathRefinement {
+	readonly block: CoreBlockId;
+	readonly range: CompilerIntegerRange;
+}
+
+interface RelationalRefinement {
+	readonly block: CoreBlockId;
+	readonly comparison: CoreBlockId;
+	readonly bound: CoreValueId;
+	readonly operator: CoreLoopComparison;
+}
 
 function branchRange(
 	operator: CoreLoopComparison,
@@ -456,7 +459,7 @@ export function analyzeCoreLoopInductions(
 		inductions.map((induction) => [root(induction.update), induction]),
 	);
 	const refinements = new Map<CoreValueId, Array<PathRefinement>>();
-	let hasConstantRefinement = false;
+	const relations = new Map<CoreValueId, Array<RelationalRefinement>>();
 	for (const block of fn.blockIds()) {
 		const terminator = fn.blockTerminator(block);
 		const kind = fn.instructionKind(terminator);
@@ -497,14 +500,15 @@ export function analyzeCoreLoopInductions(
 				const range =
 					constant === undefined ? undefined : branchRange(operator, constant);
 				if (constant !== undefined && range === undefined) continue;
-				if (range !== undefined) hasConstantRefinement = true;
-				const list = refinements.get(subject) ?? [];
-				list.push(
-					range === undefined
-						? { block: target, comparison: block, bound, operator }
-						: { block: target, range },
-				);
-				refinements.set(subject, list);
+				if (range === undefined) {
+					const list = relations.get(subject) ?? [];
+					list.push({ block: target, comparison: block, bound, operator });
+					relations.set(subject, list);
+				} else {
+					const list = refinements.get(subject) ?? [];
+					list.push({ block: target, range });
+					refinements.set(subject, list);
+				}
 			}
 		}
 	}
@@ -516,6 +520,20 @@ export function analyzeCoreLoopInductions(
 			Math.max(left.minimum, right.minimum),
 			Math.min(left.maximum, right.maximum),
 		);
+	const constantBounds = (
+		value: CoreValueId,
+		block: CoreBlockId,
+		initial: CompilerIntegerRange,
+	): CompilerIntegerRange | undefined => {
+		let range = initial;
+		for (const refinement of refinements.get(value) ?? []) {
+			if (!cfg.dominates(refinement.block, block)) continue;
+			const next = intersect(range, refinement.range);
+			if (next === undefined) return undefined;
+			range = next;
+		}
+		return range;
+	};
 	let hasI32 = false;
 	for (const value of fn.valueIds()) {
 		if (numericRepresentation(value) === "i32") {
@@ -530,7 +548,7 @@ export function analyzeCoreLoopInductions(
 			CoreBlockId | undefined,
 			Map<CoreValueId, CoreIntegerRangeState>
 		>();
-		const query = (
+		const baseRange = (
 			value: CoreValueId,
 			block: CoreBlockId | undefined,
 			budget: { remaining: number },
@@ -674,31 +692,185 @@ export function analyzeCoreLoopInductions(
 				if (range === undefined && numericRepresentation(resolved) === "i32")
 					range = COMPILER_INT32_RANGE;
 			}
-			if (range !== undefined && range !== null && block !== undefined) {
-				for (const refinement of refinements.get(resolved) ?? []) {
-					if (!cfg.dominates(refinement.block, block)) continue;
-					let constraint: CompilerIntegerRange | undefined;
-					if ("range" in refinement) constraint = refinement.range;
-					else {
-						// An edge cannot establish the integer bound of its own comparison operand.
-						const bound = query(refinement.bound, refinement.comparison, budget);
-						if (bound === null) {
-							range = null;
-							break;
-						}
-						if (bound === undefined) continue;
-						constraint = branchRange(
-							refinement.operator,
-							refinement.operator === "<" || refinement.operator === "<="
-								? bound.maximum
-								: bound.minimum,
-						);
-					}
-					if (constraint === undefined) continue;
-					range = intersect(range, constraint);
-					if (range === undefined) break;
+			if (range !== undefined && range !== null && block !== undefined)
+				range = constantBounds(resolved, block, range);
+			cache.set(resolved, range);
+			return range;
+		};
+		const pointRange = (
+			value: CoreValueId,
+			block: CoreBlockId,
+			premise: CompilerIntegerRange,
+			budget: { remaining: number },
+		): CoreIntegerRangeState => {
+			const base = baseRange(value, block, budget);
+			return base === null
+				? null
+				: base === undefined
+					? constantBounds(value, block, premise)
+					: intersect(base, premise);
+		};
+		const needsClosure = (value: CoreValueId, block: CoreBlockId): boolean => {
+			let remaining = 32;
+			for (const relation of relations.get(value) ?? []) {
+				if (!cfg.dominates(relation.block, block)) continue;
+				for (const next of relations.get(relation.bound) ?? []) {
+					if (remaining-- <= 0) return true;
+					if (
+						next.bound !== value &&
+						next.operator[0] === relation.operator[0] &&
+						cfg.dominates(next.block, block)
+					)
+						return true;
 				}
 			}
+			return false;
+		};
+		const directRange = (
+			value: CoreValueId,
+			block: CoreBlockId,
+			initial: CompilerIntegerRange,
+			budget: { remaining: number },
+		): CoreIntegerRangeState => {
+			let range = initial;
+			for (const refinement of relations.get(value) ?? []) {
+				if (!cfg.dominates(refinement.block, block)) continue;
+				if (budget.remaining-- <= 0) break;
+				const premise = baseRange(refinement.bound, refinement.comparison, budget);
+				if (premise === null) return null;
+				if (premise === undefined) continue;
+				const bound = pointRange(refinement.bound, block, premise, budget);
+				if (bound === undefined || bound === null) return bound;
+				const constraint = branchRange(
+					refinement.operator,
+					refinement.operator === "<" || refinement.operator === "<="
+						? bound.maximum
+						: bound.minimum,
+				);
+				if (constraint === undefined) continue;
+				const next = intersect(range, constraint);
+				if (next === undefined) return undefined;
+				range = next;
+			}
+			return range;
+		};
+		const relationalRange = (
+			value: CoreValueId,
+			block: CoreBlockId,
+			initial: CompilerIntegerRange,
+			budget: { remaining: number },
+		): CoreIntegerRangeState => {
+			interface Node {
+				readonly value: CoreValueId;
+				range: CompilerIntegerRange;
+				readonly dependents: Set<Node>;
+				readonly edges: Array<{ bound: Node; operator: CoreLoopComparison }>;
+				queued: boolean;
+				scanned: boolean;
+			}
+			const nodes = new Map<CoreValueId, Node>();
+			const pending: Array<Node> = [];
+			const enqueue = (node: Node) => {
+				if (node.queued) return;
+				node.queued = true;
+				pending.push(node);
+			};
+			const narrow = (node: Node, range: CompilerIntegerRange) => {
+				if (node.range.minimum === range.minimum && node.range.maximum === range.maximum)
+					return;
+				node.range = range;
+				for (const dependent of node.dependents) enqueue(dependent);
+			};
+			const nodeAt = (
+				value: CoreValueId,
+				premise: CompilerIntegerRange,
+			): Node | null | undefined => {
+				const existing = nodes.get(value);
+				const range =
+					existing === undefined
+						? pointRange(value, block, premise, budget)
+						: intersect(existing.range, premise);
+				if (range === undefined || range === null) return range;
+				if (existing !== undefined) {
+					narrow(existing, range);
+					return existing;
+				}
+				const node: Node = {
+					value,
+					range,
+					dependents: new Set(),
+					edges: [],
+					queued: false,
+					scanned: false,
+				};
+				nodes.set(value, node);
+				enqueue(node);
+				return node;
+			};
+			const root = nodeAt(value, initial);
+			if (root === undefined || root === null) return root;
+			while (pending.length > 0 && budget.remaining-- > 0) {
+				const node = pending.pop()!;
+				node.queued = false;
+				if (!node.scanned) {
+					node.scanned = true;
+					for (const refinement of relations.get(node.value) ?? []) {
+						if (!cfg.dominates(refinement.block, block)) continue;
+						if (budget.remaining-- <= 0) break;
+						// Consumer bounds tighten an integer premise established before this edge.
+						const premise = baseRange(refinement.bound, refinement.comparison, budget);
+						if (premise === null) return null;
+						if (premise === undefined) continue;
+						const bound = nodeAt(refinement.bound, premise);
+						if (bound === undefined || bound === null) return bound;
+						node.edges.push({ bound, operator: refinement.operator });
+						bound.dependents.add(node);
+					}
+				}
+				for (const { bound, operator } of node.edges) {
+					const constraint = branchRange(
+						operator,
+						operator === "<" || operator === "<="
+							? bound.range.maximum
+							: bound.range.minimum,
+					);
+					if (constraint === undefined) continue;
+					const range = intersect(node.range, constraint);
+					if (range === undefined) return undefined;
+					narrow(node, range);
+				}
+			}
+			return root.range;
+		};
+		let relationalMemo:
+			| Map<CoreBlockId, Map<CoreValueId, CoreIntegerRangeState>>
+			| undefined;
+		const query = (
+			value: CoreValueId,
+			block: CoreBlockId | undefined,
+			budget: { remaining: number },
+		): CoreIntegerRangeState => {
+			const resolved = root(value);
+			const refinements = relations.get(resolved);
+			if (block === undefined || refinements === undefined)
+				return baseRange(resolved, block, budget);
+			let cache = relationalMemo?.get(block);
+			if (cache?.has(resolved)) return cache.get(resolved);
+			const base = baseRange(resolved, block, budget);
+			if (
+				base === undefined ||
+				base === null ||
+				!refinements.some((refinement) => cfg.dominates(refinement.block, block))
+			)
+				return base;
+			if (cache === undefined) {
+				cache = new Map();
+				(relationalMemo ??= new Map()).set(block, cache);
+			}
+			cache.set(resolved, undefined);
+			const range = needsClosure(resolved, block)
+				? relationalRange(resolved, block, base, budget)
+				: directRange(resolved, block, base, budget);
 			cache.set(resolved, range);
 			return range;
 		};
@@ -719,7 +891,7 @@ export function analyzeCoreLoopInductions(
 	const result: CoreLoopInductionAnalysis = {
 		inductions: Object.freeze(inductions),
 		hasNumericRanges:
-			inductions.length > 0 || hasConstantRefinement || hasI32 || hasBoundedProducer,
+			inductions.length > 0 || refinements.size > 0 || hasI32 || hasBoundedProducer,
 		induction(value) {
 			return byRoot.get(root(value));
 		},

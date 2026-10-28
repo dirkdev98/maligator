@@ -934,6 +934,23 @@ empty until its normal result converges; an unknown bound cannot narrow storage.
 Comparisons cannot establish their own integer premises. Per-subject refinement
 indexes reuse the existing bounded range query, and relational-only floating
 comparisons do not admit an integer optimization pass.
+The integer premise remains local to the comparison, while interval constraints
+use all edges dominating the consumer. Thus `n < bound` followed by `bound < 16`
+can narrow an integer `n` to at most 14 at the later observation without narrowing
+an earlier callback argument. One-hop queries read these bounds directly; longer
+chains use a local dependency worklist, including nonstrict cycles. Both share the
+existing 32-step range budget, and an unfinished query retains conservative bounds.
+Arithmetic and record-field payloads consume the same query through ordinary and
+resumable lowering. An entry backedge cannot establish a fact before the initial
+function call has traversed an edge.
+Bounded identity remainders preserve the original output representation. Legal
+widening uses a move; boxed-to-double and proven int32 narrowing use explicit Core
+numeric conversions. The verifier and primitive lowering share the same widening
+contract. The identity requires a finite integer dividend strictly between the
+negative and positive divisor magnitudes, with a nonzero, non-NaN Number divisor;
+exact negative, fractional and infinite divisors follow the same
+[Number remainder semantics](https://tc39.es/ecma262/multipage/ecmascript-data-types-and-values.html#sec-numeric-types-number-remainder).
+Operand producers retain their effects even when the remainder disappears.
 Exceptional predecessors use instruction-specific prefixes before and after each
 potentially throwing operation. A block edge does not prove that its later stores
 executed. These partial prefixes participate in memoization separately from full
