@@ -7,7 +7,7 @@ import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 	COMPILER_VALUE_KIND_NULL,
-	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_REGISTERED_SYMBOL,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_NUMBER,
@@ -146,7 +146,9 @@ it.each(["mutable", "locked"] as const)(
 			if (conversion.opcode !== "TO_PROPERTY_KEY")
 				throw new Error("Missing Symbol key conversion");
 			expect(instructionResultKind(variant.facts?.[keyIp], conversion.dst)).toBe(
-				primordials === "locked" ? COMPILER_VALUE_KIND_SYMBOL : COMPILER_VALUE_KIND_TOP,
+				primordials === "locked"
+					? COMPILER_VALUE_KIND_REGISTERED_SYMBOL
+					: COMPILER_VALUE_KIND_TOP,
 			);
 			const required = pair.programImage.native.functions.find(
 				(fn) =>
@@ -166,7 +168,9 @@ it.each(["mutable", "locked"] as const)(
 			if (guard.opcode !== "REQUIRE_COERCIBLE")
 				throw new Error("Missing coercibility guard");
 			expect(requiredVariant.facts?.[requiredIp]?.inputKindMasks).toEqual([
-				primordials === "locked" ? COMPILER_VALUE_KIND_SYMBOL : COMPILER_VALUE_KIND_TOP,
+				primordials === "locked"
+					? COMPILER_VALUE_KIND_REGISTERED_SYMBOL
+					: COMPILER_VALUE_KIND_TOP,
 			]);
 			for (const name of [
 				"branchStringLength",
