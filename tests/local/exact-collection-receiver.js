@@ -381,6 +381,7 @@ function readDetachedWeakValue() {
 	const registry = new WeakRegistry();
 	const value = registry.read(weakKey);
 	registry.remove(weakKey);
+	globalThis.weakAllocationFence = {};
 	if (typeof collect === "function") collect();
 	return value.marker;
 }
