@@ -113,7 +113,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 345;
+export const COMPILER_ARTIFACT_VERSION = 346;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2330,9 +2330,9 @@ function writeCompilerArtifact(
 			} of entry.instructionFacts ?? []) {
 				w.u32(instructionIp);
 				w.u32(masks.length);
-				for (const mask of masks) w.u8(mask);
+				for (const mask of masks) w.u16(mask);
 				w.u32(results.length);
-				for (const mask of results) w.u8(mask);
+				for (const mask of results) w.u16(mask);
 				writeIntegerRanges(w, inputIntegerRanges);
 				writeIntegerRanges(w, resultIntegerRanges);
 				w.u32(effectMask);
@@ -2386,7 +2386,7 @@ function writeCompilerArtifact(
 					w.u8(masks === undefined ? 0 : 1);
 					if (masks !== undefined) {
 						w.u32(masks.length);
-						for (const mask of masks) w.u8(mask);
+						for (const mask of masks) w.u16(mask);
 					}
 				}
 				writeIntegerRanges(w, facts.inputIntegerRanges);
@@ -4940,8 +4940,8 @@ function readCompilerArtifact(
 			});
 			const instructionFacts = Array.from({ length: r.count(24) }, () => {
 				const instructionIp = r.u32();
-				const masks = Array.from({ length: r.count(1) }, () => r.u8());
-				const results = Array.from({ length: r.count(1) }, () => r.u8());
+				const masks = Array.from({ length: r.count(2) }, () => r.u16());
+				const results = Array.from({ length: r.count(2) }, () => r.u16());
 				const inputIntegerRanges = readIntegerRanges(r);
 				const resultIntegerRanges = readIntegerRanges(r);
 				return {
@@ -5055,10 +5055,10 @@ function readCompilerArtifact(
 					return tag === 0 ? undefined : read();
 				};
 				const inputKindMasks = readOptional(() =>
-					Array.from({ length: r.count(1) }, () => r.u8()),
+					Array.from({ length: r.count(2) }, () => r.u16()),
 				);
 				const resultKindMasks = readOptional(() =>
-					Array.from({ length: r.count(1) }, () => r.u8()),
+					Array.from({ length: r.count(2) }, () => r.u16()),
 				);
 				const inputIntegerRanges = readIntegerRanges(r);
 				const resultIntegerRanges = readIntegerRanges(r);

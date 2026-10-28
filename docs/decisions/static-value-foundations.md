@@ -354,10 +354,17 @@ fixed-arity native entries and guarded call arms keep a completion check and GC
 publication. The interpreter's direct-call leaf admits only holdable keys; failures
 use synchronized ordinary dispatch before allocating the callee-realm error.
 Weak-key argument kinds constrain normal completions independently of the receiver:
-non-Object, non-Symbol keys imply undefined for get, false for has/delete and no
+keys excluding Objects and unregistered Symbols imply undefined for get, false for has/delete and no
 normal result for set/add. The existing local and program worklists propagate
 these bounds through complete caller sets. Constant result uses replace only the
 uses, retaining the invocation and its receiver, argument, realm and GC effects.
+Registered and unregistered Symbols are distinct atoms in the same kind lattice;
+their union retains the JavaScript Symbol type. Calls, phis, returned records and
+suspension preserve the distinction without a separate program solver. Registry
+Symbols are invalid weak keys. Symbol.keyFor has a String normal result for registry
+Symbols and an undefined normal result for unregistered Symbols. Identity-preserving
+primitive unboxing keeps these refinements, while boxed receivers retain their
+general Symbol bound. Compiler artifacts store kind masks as unsigned 16-bit values.
 Known positional prefixes remain distinct from unknown argument-list elements.
 A captured Function.prototype.call with a fixed positional receiver can unwrap
 around an iterable tail without dropping its evaluation or iteration effects.
@@ -419,11 +426,11 @@ definition must return its final value before assigning that destination; source
 GC maps remain complete, and borrowed helper storage, rest-call state and reused
 inputs keep their roots. Scheduling barriers alone do not extend result lifetimes.
 Private-container lifetime checks consume the full value-kind union: excluding
-Object and Symbol proves that a field cannot be held weakly. This admits nullable
+Object and unregistered Symbol proves that a field cannot be held weakly. This admits nullable
 and optional primitive fields to own-slot write refinement, scalar replacement and
 allocation sinking, and omits `rootUse` for overwritten primitive occupants.
-Objects and all Symbol alternatives retain their lifetime barriers; the kind mask
-does not distinguish registered Symbols. This follows
+Objects and unregistered Symbols retain their lifetime barriers. Registered Symbols
+cannot enter a weak collection. This follows
 [CanBeHeldWeakly](https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-canbeheldweakly)
 and leaves ordinary GC roots for values that remain live through later reads.
 Typeof comparisons consume the operand kind independently of effects and use direct

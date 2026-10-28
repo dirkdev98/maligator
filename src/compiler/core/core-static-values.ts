@@ -6,6 +6,8 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_REGISTERED_SYMBOL,
+	COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL,
 } from "../shared/compiler-value-kinds.ts";
 import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
 import { evaluateConstantOperation } from "../shared/constant-evaluator.ts";
@@ -74,6 +76,8 @@ const primitiveResultBrands = new Map<
 	[COMPILER_VALUE_KIND_BOOLEAN, "boolean"],
 	[COMPILER_VALUE_KIND_BIGINT, "bigint"],
 	[COMPILER_VALUE_KIND_SYMBOL, "symbol"],
+	[COMPILER_VALUE_KIND_REGISTERED_SYMBOL, "symbol"],
+	[COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL, "symbol"],
 ]);
 
 function coreStringConstantIs(

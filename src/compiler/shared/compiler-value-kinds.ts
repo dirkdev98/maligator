@@ -13,8 +13,11 @@ export const COMPILER_VALUE_KIND_BOOLEAN = 1 << 2;
 export const COMPILER_VALUE_KIND_NUMBER = 1 << 3;
 export const COMPILER_VALUE_KIND_STRING = 1 << 4;
 export const COMPILER_VALUE_KIND_BIGINT = 1 << 5;
-export const COMPILER_VALUE_KIND_SYMBOL = 1 << 6;
+export const COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL = 1 << 6;
 export const COMPILER_VALUE_KIND_OBJECT = 1 << 7;
+export const COMPILER_VALUE_KIND_REGISTERED_SYMBOL = 1 << 8;
+export const COMPILER_VALUE_KIND_SYMBOL =
+	COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL | COMPILER_VALUE_KIND_REGISTERED_SYMBOL;
 
 export const COMPILER_VALUE_KIND_TOP =
 	COMPILER_VALUE_KIND_UNDEFINED |
@@ -350,13 +353,13 @@ export function compilerValueKindsHaveEmptyPrimitiveWrappers(
 	);
 }
 
-// A kind mask cannot distinguish registered Symbols from weakly holdable Symbols.
 export function compilerValueKindCannotBeHeldWeakly(
 	mask: CompilerValueKindMask,
 ): boolean {
 	return compilerValueKindMaskIsSubset(
 		mask,
-		COMPILER_VALUE_KIND_TOP & ~(COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_SYMBOL),
+		COMPILER_VALUE_KIND_TOP &
+			~(COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL),
 	);
 }
 

@@ -24,6 +24,8 @@ import {
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL,
+	COMPILER_VALUE_KIND_REGISTERED_SYMBOL,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_UNDEFINED,
 	compilerValueKindMaskIsSubset,
@@ -47,7 +49,10 @@ import {
 import { validateStaticQueryTemplate } from "../shared/literal-template-data.ts";
 import { STATIC_DATA_QUERY_POLL_INTERVAL } from "../shared/static-data-query.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
-import { coreBuiltinResultProjection } from "./core-builtin-result-projections.ts";
+import {
+	coreBuiltinCallInput,
+	coreBuiltinResultProjection,
+} from "./core-builtin-result-projections.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
@@ -334,7 +339,7 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 			return COMPILER_VALUE_KIND_BIGINT;
 		case "createPrivateName":
 		case "createPrivateNames":
-			return COMPILER_VALUE_KIND_SYMBOL;
+			return COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL;
 		case "createFunction":
 		case "createArray":
 		case "createArrayFromIterable":
@@ -386,6 +391,8 @@ const KIND_TRANSFER_STRING_LENGTH = 10;
 const KIND_TRANSFER_WEAK_GET = 11;
 const KIND_TRANSFER_WEAK_PREDICATE = 12;
 const KIND_TRANSFER_WEAK_MUTATOR = 13;
+const KIND_TRANSFER_NORMAL_PROJECTION = 14;
+const KIND_TRANSFER_SYMBOL_KEY_FOR = 15;
 
 // A non-number key on an Array whose holders are all known reads its length, a
 // prototype member or nothing, since no one gave it other named properties.
@@ -413,7 +420,23 @@ function transferredKind(
 	}
 	const left = mask(inputs[start]! as CoreValueId);
 	if (kind === KIND_TRANSFER_COPY) return left;
-	if (kind >= KIND_TRANSFER_WEAK_GET)
+	if (kind === KIND_TRANSFER_NORMAL_PROJECTION)
+		return left === 0
+			? 0
+			: compilerValueKindMaskIsSubset(left, constant)
+				? left
+				: constant;
+	if (kind === KIND_TRANSFER_SYMBOL_KEY_FOR)
+		return (
+			constant &
+			(((left & COMPILER_VALUE_KIND_REGISTERED_SYMBOL) !== 0
+				? COMPILER_VALUE_KIND_STRING
+				: 0) |
+				((left & COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL) !== 0
+					? COMPILER_VALUE_KIND_UNDEFINED
+					: 0))
+		);
+	if (kind >= KIND_TRANSFER_WEAK_GET && kind <= KIND_TRANSFER_WEAK_MUTATOR)
 		return (
 			constant &
 			coreWeakKeyNormalResultKinds(
@@ -915,6 +938,24 @@ function addOperationTransfer(
 	}
 	const weakKey =
 		opcode === "callKnown" ? coreWeakCollectionKey(fn, instruction) : undefined;
+	if (
+		opcode === "callKnown" &&
+		!fn.instructionAttributes(instruction).construct &&
+		fn.instructionAttributes(instruction).operation === "Symbol.keyFor"
+	) {
+		const key = coreBuiltinCallInput(fn, instruction, 1);
+		if (key !== undefined) {
+			if (key.input !== undefined)
+				addKindTransfer(
+					buffer,
+					KIND_TRANSFER_SYMBOL_KEY_FOR,
+					output,
+					supplied ?? COMPILER_VALUE_KIND_TOP,
+					[key.input],
+				);
+			return;
+		}
+	}
 	if (weakKey !== undefined) {
 		if (weakKey.input === undefined)
 			masks[output] =
@@ -959,11 +1000,21 @@ function addOperationTransfer(
 			!attributes.construct && typeof attributes.operation === "string"
 				? builtinNormalResultKinds(attributes.operation)
 				: undefined;
+		const projection = coreBuiltinResultProjection(fn, instruction);
+		if (
+			mask !== undefined &&
+			projection?.input !== undefined &&
+			projection.identityKinds === mask
+		) {
+			addKindTransfer(buffer, KIND_TRANSFER_NORMAL_PROJECTION, output, mask, [
+				projection.input,
+			]);
+			return;
+		}
 		if (mask !== undefined) {
 			masks[output] = masks[output]! | mask;
 			return;
 		}
-		const projection = coreBuiltinResultProjection(fn, instruction);
 		if (projection !== undefined && projection.identityKinds === undefined) {
 			if (projection.input === undefined)
 				masks[output] = masks[output]! | COMPILER_VALUE_KIND_UNDEFINED;

@@ -673,6 +673,52 @@ try {
 	assert(error instanceof TypeError, "weak mutator without a normal result still throws");
 }
 
+const registeredWeakRecord = function registeredWeakRecord(input, visit) {
+	for (let i = 0; i < 3; i++) visit();
+	return { key: Symbol.for(input) };
+};
+function registeredWeakRead(receiver, input, visit) {
+	const { key } = registeredWeakRecord(input, visit);
+	const value = WeakMap.prototype.get.call(receiver, key);
+	return typeof value === "undefined" ? 17 : 11;
+}
+function registeredKeyLength(input, visit) {
+	return Symbol.keyFor(registeredWeakRecord(input, visit).key).length;
+}
+function symbolCategory(key) {
+	return typeof key === "symbol" && !!key;
+}
+Object.assign(globalThis, { registeredWeakRead, registeredKeyLength, symbolCategory });
+const registrationOrder = [];
+const registryInput = {
+	toString() {
+		registrationOrder.push("key");
+		return "registered weak key";
+	},
+};
+const visitRegistration = () => registrationOrder.push("visit");
+assert(
+	registeredWeakRead(new WeakMap(), registryInput, visitRegistration) === 17,
+	"registered Symbol returned in a record cannot hit a weak lookup",
+);
+assert(
+	registrationOrder.join(",") === "visit,visit,visit,key",
+	"registered Symbol fact retains factory and coercion effects",
+);
+assert(
+	registeredKeyLength("registered weak key", visitRegistration) === 19,
+	"registry key returned by a call has a String length",
+);
+for (const key of [Symbol("local"), Symbol.for("registered")])
+	assert(symbolCategory(key), "both Symbol subkinds remain truthy Symbols");
+assert(!symbolCategory({}), "Object remains outside the Symbol category");
+try {
+	registeredWeakRead(new Proxy(new WeakMap(), {}), "registered", visitRegistration);
+	throw new Error("missing registered weak receiver error");
+} catch (error) {
+	assert(error instanceof TypeError, "impossible weak hit retains receiver validation");
+}
+
 if (typeof $262 === "object") {
 	const foreign = $262.createRealm().global;
 	for (const [receiver, method, ErrorClass] of [

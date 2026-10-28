@@ -16,7 +16,9 @@ import {
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 
 const singleKinds = (mask: number): ReadonlyArray<number> =>
-	Array.from({ length: 8 }, (_, bit) => 1 << bit).filter((kind) => mask & kind);
+	Array.from({ length: Math.floor(Math.log2(TOP)) + 1 }, (_, bit) => 1 << bit).filter(
+		(kind) => mask & kind,
+	);
 
 // ToPrimitive on an object can return any primitive through user code.
 const primitives = (kind: number): ReadonlyArray<number> =>
@@ -24,7 +26,7 @@ const primitives = (kind: number): ReadonlyArray<number> =>
 
 // ToNumeric of one primitive kind; undefined means it throws.
 const toNumeric = (kind: number): number | undefined =>
-	kind === SYMBOL ? undefined : kind === BIGINT ? BIGINT : NUMBER;
+	(kind & SYMBOL) !== 0 ? undefined : kind === BIGINT ? BIGINT : NUMBER;
 
 const primitiveAlternatives = Array.from({ length: TOP + 1 }, (_, mask) => [
 	...new Set(singleKinds(mask).flatMap(primitives)),
@@ -42,7 +44,7 @@ function specResultKinds(operation: "unary" | "binary" | "add", left: number, ri
 				operation === "add" &&
 				(leftPrimitive === STRING || rightPrimitive === STRING)
 			) {
-				if (leftPrimitive !== SYMBOL && rightPrimitive !== SYMBOL) result |= STRING;
+				if (((leftPrimitive | rightPrimitive) & SYMBOL) === 0) result |= STRING;
 				continue;
 			}
 			const leftNumeric = toNumeric(leftPrimitive);
@@ -54,7 +56,7 @@ function specResultKinds(operation: "unary" | "binary" | "add", left: number, ri
 }
 
 describe("Compiler value-kind operator dispatch", () => {
-	it("preserves the numeric and equality domains across every eight-bit mask", () => {
+	it("preserves the numeric and equality domains across every kind mask", () => {
 		const unary = ["-", "+", "~", "increment", "decrement", "tonumeric"];
 		const arithmetic = [
 			"+",
@@ -75,7 +77,7 @@ describe("Compiler value-kind operator dispatch", () => {
 			">=",
 		];
 		const equality = ["==", "!=", "===", "!=="];
-		for (let mask = 0; mask <= 256; mask++) {
+		for (let mask = 0; mask <= TOP + 1; mask++) {
 			const numeric = mask > 0 && (mask & ~15) === 0;
 			const toNumber = mask > 0 && (mask & ~31) === 0;
 			const comparable = mask > 0 && ((mask & ~9) === 0 || (mask & ~3) === 0);
@@ -111,10 +113,10 @@ describe("Compiler value-kind operator dispatch", () => {
 			);
 			equal(
 				compilerPrimitiveConversionOperator("String", mask),
-				kinds.every((kind) => kind !== SYMBOL) ? "tostring" : undefined,
+				kinds.every((kind) => (kind & SYMBOL) === 0) ? "tostring" : undefined,
 			);
 		}
-		for (const invalid of [0, 256, -1, NaN, 1.5]) {
+		for (const invalid of [0, TOP + 1, -1, NaN, 1.5]) {
 			equal(compilerPrimitiveConversionOperator("Number", invalid), undefined);
 			equal(compilerPrimitiveConversionOperator("String", invalid), undefined);
 		}
@@ -145,18 +147,18 @@ describe("Compiler value-kind operator dispatch", () => {
 
 	it("admits equality against a proven nullish operand whatever the other operand", () => {
 		for (const operator of ["==", "!=", "===", "!=="]) {
-			for (let mask = 1; mask <= 255; mask++) {
+			for (let mask = 1; mask <= TOP; mask++) {
 				for (const nullish of [1, 2, 3]) {
 					equal(exactNativeKinds("binary", operator, [mask, nullish]), true);
 					equal(exactNativeKinds("binary", operator, [nullish, mask]), true);
 				}
 			}
-			equal(exactNativeKinds("binary", operator, [255, 255]), false);
-			equal(exactNativeKinds("binary", operator, [255, 8]), false);
+			equal(exactNativeKinds("binary", operator, [TOP, TOP]), false);
+			equal(exactNativeKinds("binary", operator, [TOP, 8]), false);
 			equal(exactNativeKinds("binary", operator, [0, 2]), false);
 		}
 		for (const operator of ["<", "+", "in"]) {
-			equal(exactNativeKinds("binary", operator, [255, 2]), false);
+			equal(exactNativeKinds("binary", operator, [TOP, 2]), false);
 		}
 	});
 
@@ -164,7 +166,7 @@ describe("Compiler value-kind operator dispatch", () => {
 		for (const operator of ["in", "instanceof", "&&", "||", "??", "constructor"]) {
 			equal(exactNativeKinds("binary", operator, [8, 8]), false);
 		}
-		for (const mask of [-1, NaN, Infinity, 0.5, 255]) {
+		for (const mask of [-1, NaN, Infinity, 0.5, TOP]) {
 			equal(exactNativeKinds("unary", "+", [mask]), false);
 		}
 		equal(exactNativeKinds("other", "+", [8]), false);
@@ -174,10 +176,10 @@ describe("Compiler value-kind operator dispatch", () => {
 	});
 
 	it("preserves every builtin kind union independently of kernel arity limits", () => {
-		for (let mask = 0; mask <= 256; mask++) {
-			equal(compilerBuiltinInputKindsAreValid([mask], 1), mask > 0 && mask < 256);
+		for (let mask = 0; mask <= TOP + 1; mask++) {
+			equal(compilerBuiltinInputKindsAreValid([mask], 1), mask > 0 && mask <= TOP);
 		}
-		equal(compilerBuiltinInputKindsAreValid([4, 8, 16, 255], 4), true);
+		equal(compilerBuiltinInputKindsAreValid([4, 8, 16, TOP], 4), true);
 		equal(compilerBuiltinInputKindsAreValid(new Array<number>(17).fill(8), 17), true);
 		equal(compilerBuiltinInputKindsAreValid(new Array<number>(18).fill(8), 18), true);
 		equal(compilerBuiltinInputKindsAreValid([], 0), false);
@@ -194,6 +196,7 @@ describe("Compiler value-kind operator dispatch", () => {
 			[1n],
 			[Symbol("x")],
 			[{}, [], () => {}],
+			[Symbol.for("x")],
 		];
 		const results = [
 			"undefined",
@@ -230,6 +233,7 @@ it("matches JavaScript Boolean observations for every kind union", () => {
 		[0n, 1n],
 		[Symbol("x")],
 		[{}, [], () => {}],
+		[Symbol.for("x")],
 	];
 	for (let mask = 1; mask <= TOP; mask++) {
 		const outcomes = new Set<boolean>();

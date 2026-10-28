@@ -125,7 +125,10 @@ Arithmetic work should support these paths or fix correctness defects.
       Weak mutators now have fixed-arity entries across known and guarded calls,
       preserving key errors, completion checks and GC publication. Interpreter
       direct hits validate keys before entering the unsynchronized leaf path.
-      Next, consume valid-key and symbol-registration facts in weak mutators,
+      Symbol registration now survives the shared kind worklist through calls,
+      phis, returned records, unboxing and suspension. Weak normal completions and
+      Symbol.keyFor use these bounds; typeof still treats both subkinds as Symbol.
+      Next, consume the valid-key bounds in weak mutator validation and effects,
       keeping key errors and their realm and GC obligations. Extend the same
       independent operand, callee and completion contracts to more object builtins
       and callback-aware function calls; keep the bounded shared worklists.

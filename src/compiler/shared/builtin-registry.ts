@@ -8,6 +8,8 @@ import {
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL,
+	COMPILER_VALUE_KIND_REGISTERED_SYMBOL,
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "./compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
@@ -1104,6 +1106,8 @@ const normalResultKindMasks = {
 	boolean: COMPILER_VALUE_KIND_BOOLEAN,
 	bigint: COMPILER_VALUE_KIND_BIGINT,
 	symbol: COMPILER_VALUE_KIND_SYMBOL,
+	"unregistered-symbol": COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL,
+	"registered-symbol": COMPILER_VALUE_KIND_REGISTERED_SYMBOL,
 	undefined: COMPILER_VALUE_KIND_UNDEFINED,
 	object: COMPILER_VALUE_KIND_OBJECT,
 	"boolean-or-undefined": COMPILER_VALUE_KIND_BOOLEAN | COMPILER_VALUE_KIND_UNDEFINED,
@@ -1114,7 +1118,7 @@ const normalResultKindMasks = {
 	"object-or-undefined": COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_UNDEFINED,
 	"weak-value-or-undefined":
 		COMPILER_VALUE_KIND_OBJECT |
-		COMPILER_VALUE_KIND_SYMBOL |
+		COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL |
 		COMPILER_VALUE_KIND_UNDEFINED,
 };
 
@@ -1137,7 +1141,7 @@ for (const [owner, result, methods] of [
 		],
 	],
 	["", "bigint", ["BigInt"]],
-	["", "symbol", ["Symbol"]],
+	["", "unregistered-symbol", ["Symbol"]],
 	["Number", "number", ["parseInt", "parseFloat"]],
 	["Number", "boolean", ["isNaN", "isFinite", "isInteger", "isSafeInteger"]],
 	["Number.prototype", "number", ["valueOf"]],
@@ -1151,7 +1155,7 @@ for (const [owner, result, methods] of [
 	["BigInt", "bigint", ["asIntN", "asUintN"]],
 	["BigInt.prototype", "bigint", ["valueOf"]],
 	["BigInt.prototype", "string", ["toString", "toLocaleString"]],
-	["Symbol", "symbol", ["for"]],
+	["Symbol", "registered-symbol", ["for"]],
 	["Symbol", "string-or-undefined", ["keyFor"]],
 	["Symbol.prototype", "symbol", ["valueOf"]],
 	["Symbol.prototype", "string", ["toString"]],

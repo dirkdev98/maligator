@@ -1,7 +1,6 @@
 import {
 	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_NULLISH,
-	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_UNDEFINED,
 	compilerTypeofComparison,
@@ -41,7 +40,7 @@ function alternatives(
 ): readonly [number, number] {
 	let yes = 0,
 		no = 0;
-	for (let kind = 1; kind <= COMPILER_VALUE_KIND_OBJECT; kind <<= 1) {
+	for (let kind = 1; kind <= COMPILER_VALUE_KIND_TOP; kind <<= 1) {
 		const result = test(kind);
 		if (result !== false) yes |= kind;
 		if (result !== true) no |= kind;

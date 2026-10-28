@@ -4,7 +4,7 @@ import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
-	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL,
 	COMPILER_VALUE_KIND_TOP,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
@@ -313,7 +313,7 @@ describe("independent native instruction facts", () => {
 		);
 		const facts = out.native.facts?.[ip];
 		expect(facts?.inputKindMasks?.[1]).toBe(
-			COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL,
+			COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL,
 		);
 		expect(facts?.resultKindMasks).toEqual([COMPILER_VALUE_KIND_NUMBER]);
 		expect(decodeInstructionEffects(facts!.effectMask!).mayThrow).toBe(true);
