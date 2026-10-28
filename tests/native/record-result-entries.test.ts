@@ -58,11 +58,30 @@ describe("record result entries", () => {
 			"depth",
 			"terminator",
 			"maybeShared",
+			"updatedBundle",
+			"updatedPair",
+			"updatedFromInitializer",
 		])
 			expect(
 				functionNamed(producer).directEntries.some((entry) => entry.resultFields),
 				producer,
 			).toBe(true);
+		const updated = functionNamed("updatedBundle").directEntries.find(
+			(entry) => entry.resultFields,
+		)!.resultFields!;
+		expect(updated.storage.map((field) => field.representation)).toEqual([
+			"int32",
+			"boolean",
+			"string",
+		]);
+		expect(
+			functionNamed("updatedPair").directEntries.find((entry) => entry.resultFields)!
+				.resultFields!.allocationIps,
+		).toHaveLength(2);
+		for (const name of ["observedUpdated", "protectedUpdated"])
+			expect(functionNamed(name).directEntries.some((entry) => entry.resultFields)).toBe(
+				false,
+			);
 		const words = functionNamed("wordRecord").directEntries.find(
 			(entry) => entry.resultFields,
 		)!.resultFields!;

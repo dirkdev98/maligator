@@ -305,10 +305,17 @@ The independent target boundary and current storage contract are recorded in
       fresh record sources and recognize definite writes through correlated
       phis. Earlier allocation executions on loop backedges retain their payloads;
       every source used to exclude a writer still needs the returned-record proof.
+      Private producer writes now flow through the existing Core field SSA and
+      materialize at each eligible return. Initializer and overwritten payload
+      lifetimes remain explicit at their original aggregate uses. Named virtual
+      objects retain shaped materialization, so Boolean, String and numeric fields
+      reach the same typed result entries. Concurrent producer records keep separate
+      SSA state; caller writes still widen the shared ABI storage. Escapes,
+      descriptor changes and unsupported protected accesses retain physical objects.
       Constant relational writer bounds already propagate through these queries.
       Remaining object work includes nonconstant relational bounds, payload/source
-      correlations across separate merges, typed producer storage for
-      remaining writes, indexed producer summaries, broader parameter-relative
+      correlations across separate merges, producer storage outside private
+      single-layout SSA promotion, indexed producer summaries, broader parameter-relative
       call effects and coroutine record transport. Record-call admission and
       profitability are owned by the following tasks.
       Activation-local field storage now joins per-instruction kinds and integer
@@ -353,8 +360,8 @@ The independent target boundary and current storage contract are recorded in
       native, and image forms coexist; Node 24's default 2 GB heap leaves little
       margin for in-process native builds of the compiler.
       Keep the representative Node.js self-compile below 60 seconds on AC power;
-      stable acceptance remains unverified; one uninstrumented AC sample at
-      `906818a8` took 60.96 seconds. Analysis extensions must stay bounded
+      stable acceptance remains unverified; the uninstrumented AC sample at
+      `74c309b1` took 57.79 seconds. Analysis extensions must stay bounded
       and reuse existing worklists. Leave long checks to CI and keep local
       verification to the affected units and quality checks.
 

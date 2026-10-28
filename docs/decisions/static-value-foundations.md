@@ -915,6 +915,17 @@ Cached return plans depend on structural uses and exceptional control flow;
 current kind and range queries supply the payload facts afresh.
 Final-value bounds do not narrow producer cells that held earlier payloads;
 mutable producer admission remains with the storage planner.
+Private producer field SSA can rebuild an ordinary shaped record at each eligible
+return, leaving the existing result-entry planner a literal with final field values.
+Earlier values occupy separate SSA lifetimes, so their kinds need not widen result
+storage after a definite overwrite. Initializers and both sides of an overwritten
+cell remain rooted at their original uses; moving the final materialization cannot
+shorten those lifetimes through RHS callbacks or GC. Concurrent records retain
+independent state, and caller/borrowed writes still widen their shared storage.
+Escaped identities, descriptor mutations and unsupported protected accesses keep
+their materialized form. Virtual-state materialization preserves ordinary named
+data shapes; canonical array-index keys keep overflow-table storage. The frontend
+and materializer share that key classification.
 Exceptional predecessors use instruction-specific prefixes before and after each
 potentially throwing operation. A block edge does not prove that its later stores
 executed. These partial prefixes participate in memoization separately from full

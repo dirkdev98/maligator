@@ -74,6 +74,7 @@ import {
 	NATIVE_STRING_SWITCH_CASE_LIMIT,
 	NATIVE_STRING_SWITCH_CODE_UNIT_LIMIT,
 } from "../shared/native-string-switch.ts";
+import { compilerPropertyKeyIsArrayIndex } from "../shared/property-key.ts";
 import { coreProgramDataFromSemantic } from "./core-compilation.ts";
 import type {
 	CoreCapturedSlotRef,
@@ -12277,14 +12278,6 @@ const LITERAL_TEMPLATE_KEY = 10;
 const MIN_LITERAL_TEMPLATE_WORDS = 32;
 const literalNumberBits = new DataView(new ArrayBuffer(8));
 
-function isArrayIndexName(name: string): boolean {
-	if (!/^(?:0|[1-9][0-9]*)$/.test(name)) {
-		return false;
-	}
-	const index = Number(name);
-	return index <= 0xffff_fffe;
-}
-
 function isRegexLiteral(literal: ESTree.Literal): boolean {
 	return "regex" in literal && literal.regex !== undefined && literal.regex !== null;
 }
@@ -12331,7 +12324,7 @@ function isStaticLiteralTemplate(
 				if (
 					name === undefined ||
 					name === "__proto__" ||
-					isArrayIndexName(name) ||
+					compilerPropertyKeyIsArrayIndex(name) ||
 					seen.has(name)
 				) {
 					return false;
@@ -12503,7 +12496,7 @@ function staticObjectShape(
 			return null;
 		}
 		// Canonical array indices live in the overflow table, not a shape slot.
-		if (isArrayIndexName(name)) {
+		if (compilerPropertyKeyIsArrayIndex(name)) {
 			return null;
 		}
 		seen.add(name);

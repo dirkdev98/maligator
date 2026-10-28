@@ -1218,6 +1218,21 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		expect(opcodes).not.toContain("createObjectShaped");
 		expect(opcodes).not.toContain("storePropertyStatic");
 	});
+	it.each([
+		["function*", "yield 0;"],
+		["async function", "await hook();"],
+		["async function*", "yield 0;await hook();"],
+	])(
+		"materializes private returned fields after %s suspension",
+		(declaration, suspend) => {
+			const out = inspectStaticValueFunction(
+				`${declaration} compute(value,hook){const record={n:value};${suspend}record.n=value&255;hook();return record;}globalThis.compute=compute;`,
+				"compute",
+			);
+			expect(out.core.some(({ opcode }) => opcode === "storePropertyStatic")).toBe(false);
+			expect(out.core.some(({ opcode }) => opcode === "createObjectShaped")).toBe(true);
+		},
+	);
 	it.each(["0", "-0", "0x80000000", "Infinity", "NaN"])(
 		"joins integer and floating virtual field writers with initial %s",
 		(initial) => {

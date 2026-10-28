@@ -192,23 +192,45 @@ describe("virtual local state", () => {
 			),
 		).toBe(false);
 	});
-	it.each([
-		"source.kind = limit;",
-		"sink(source);",
-		"const alias = source; alias.flags = limit;",
-	])("retains a spread when its source is not private and stable: %s", (effect) => {
-		const inspected = inspectStaticValueFunction(
-			`function probe(limit, sink) {
+	it.each(["source.kind = limit;", "const alias = source; alias.flags = limit;"])(
+		"folds a spread after private source updates: %s",
+		(effect) => {
+			const inspected = inspectStaticValueFunction(
+				`function probe(limit, sink) {
 				const source = {kind: 3, flags: 5};
 				${effect}
 				const copy = {...source, value: limit};
 				return copy.kind + copy.value;
 			} globalThis.probe = probe;`,
+				"probe",
+			);
+			expect(
+				inspected.core.some((operation) => operation.opcode === "mergeDataProperties"),
+			).toBe(false);
+		},
+	);
+	it("retains a spread after its source escapes", () => {
+		const inspected = inspectStaticValueFunction(
+			`function probe(limit,sink){const source={kind:3,flags:5};sink(source);const copy={...source,value:limit};return copy.kind+copy.value;}globalThis.probe=probe;`,
 			"probe",
 		);
 		expect(
 			inspected.core.some((operation) => operation.opcode === "mergeDataProperties"),
 		).toBe(true);
+	});
+	it.each([
+		["0", false],
+		["4294967294", false],
+		["4294967295", true],
+		["01", true],
+	] as const)("materializes key %s with a named shape=%s", (key, shaped) => {
+		const inspected = inspectStaticValueFunction(
+			`function probe(value,sink){const record={tag:1};record['${key}']=value;sink(record);return record;}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(
+			inspected.core.some((operation) => operation.opcode === "createObjectShaped"),
+		).toBe(shaped);
 	});
 	it("retains enumerable getter behavior during spread", () => {
 		const inspected = inspectStaticValueFunction(

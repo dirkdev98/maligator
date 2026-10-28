@@ -115,6 +115,66 @@ const integerRun = (body: string) =>
 	`${integerProducer}function run(value,flag){let total=0;for(let i=0;i<4;i++){const record=word(value+i);${body}}return total;}console.log(run(globalThis.input,globalThis.flag));`;
 
 describe("record storage widths", () => {
+	it.each([
+		["value", "record.n=value&255;", "i32"],
+		["value", "record.n=!!value;", "boolean"],
+		["value", "record.n='final';", "string"],
+		["'initial'", "if(flag)record.n=value&255;else record.n=value&15;", "i32"],
+		["'initial'", "if(flag)record.n=value&255;", "boxed"],
+		["value|0", "for(let i=0;i<3;i++)record.n=(record.n+1)|0;", "i32"],
+	] as const)(
+		"promotes producer fields from %s through %s into %s return storage",
+		(initial, writes, representation) => {
+			const out = compile(
+				`function make(value,flag){for(let i=0;i<3;i++)globalThis.gate(i);const record={n:${initial}};${writes}globalThis.gate();return record;}function run(value,flag){let sum=0;for(let i=0;i<4;i++){const record=make(value+i,flag);sum+=record.n;}return sum;}console.log(run(globalThis.input,globalThis.flag));`,
+			);
+			expect(out.resultWidths("make")).toEqual({ n: representation });
+			const fn = out.named("make");
+			expect(
+				[...fn.instructionIds()].some(
+					(instruction) =>
+						fn.instructionKind(instruction) === "operation" &&
+						fn.instructionOpcodeName(instruction) === "storePropertyStatic",
+				),
+			).toBe(false);
+		},
+	);
+	it("keeps simultaneously live producer records separate until their returns", () => {
+		const out = compile(
+			`function make(value,flag){for(let i=0;i<3;i++)globalThis.gate(i);const left={n:value&15};const right={n:value&255};left.n=left.n+1;right.n=right.n+2;globalThis.gate();if(flag)return left;return right;}function run(value,flag){let sum=0;for(let i=0;i<4;i++){const record=make(value+i,flag);sum+=record.n;}return sum;}console.log(run(globalThis.input,globalThis.flag));`,
+		);
+		const entry = out.result("make");
+		expect(entry.resultFields!.allocations).toHaveLength(2);
+		expect(out.widths.result(entry)![0]).toMatchObject({
+			representation: "i32",
+			integerRange: { minimum: 1, maximum: 257 },
+		});
+	});
+	it("joins caller writes after promoting a producer's final Boolean field", () => {
+		const out = compile(
+			`function make(value){for(let i=0;i<3;i++)globalThis.gate(i);const record={n:value};record.n=!!value;globalThis.gate();return record;}function run(value,flag){let sum=0;for(let i=0;i<4;i++){const record=make(value);if(flag)record.n=value&255;sum+=record.n;}return sum;}console.log(run(globalThis.input,globalThis.flag));`,
+		);
+		expect(out.widths.result(out.result("make"))![0]).toMatchObject({
+			kindMask: COMPILER_VALUE_KIND_BOOLEAN | COMPILER_VALUE_KIND_NUMBER,
+			representation: "boxed",
+		});
+		expect(
+			out.readValueKinds().summary(out.named("make").id).returnRecord![0]!.mask,
+		).toBe(COMPILER_VALUE_KIND_BOOLEAN);
+	});
+	it.each([
+		"globalThis.observe(record);",
+		"Object.defineProperty(record,'n',{get(){return value;}});",
+		"try{record.n=globalThis.replacement();}catch(error){globalThis.gate(error);}",
+	])(
+		"keeps producer observations and protected writes outside SSA promotion (%s)",
+		(observe) => {
+			const out = compile(
+				`function make(value){for(let i=0;i<3;i++)globalThis.gate(i);const record={n:value};record.n=1;${observe}return record;}function run(value){let sum=0;for(let i=0;i<4;i++)sum+=make(value).n;return sum;}console.log(run(globalThis.input));`,
+			);
+			expect(out.result("make")).toBeUndefined();
+		},
+	);
 	it("keeps numeric, Boolean and String fields independent of producer effects", () => {
 		const out = compile(run("total+=record.n+record.s.length+(record.b?1:0);"));
 		expect(out.resultWidths("make")).toEqual({ n: "f64", s: "string", b: "boolean" });
@@ -386,6 +446,39 @@ function nativeImage(source: string) {
 }
 
 describe("record storage C ABI", () => {
+	it.each([
+		[
+			"initializer",
+			"const record={n:held,extra:hook()};record.n=1;",
+			"incomingRootRegisters",
+		],
+		[
+			"RHS",
+			"const record={n:0};record.n=(hook(),held);record.n=1;",
+			"incomingRootRegisters",
+		],
+		[
+			"old occupant",
+			"const record={n:0};record.n=held;record.n=(hook(held),1);",
+			"outgoingRootRegisters",
+		],
+	] as const)(
+		"retains the %s lifetime at a removed aggregate use",
+		(_name, body, roots) => {
+			const { named } = nativeImage(
+				`function make(held,hook){${body}return record;}globalThis.make=make;console.log(make(globalThis.held,globalThis.hook).n);`,
+			);
+			const fn = named("make");
+			const callIp = fn.body.instructions.findIndex((op) => op.opcode === "CALL");
+			expect(callIp).toBeGreaterThanOrEqual(0);
+			expect(
+				fn.body.instructions.some((op) => op.opcode === "STORE_PROPERTY_STATIC"),
+			).toBe(false);
+			expect(
+				fn.gc.safepoints.find((point) => point.instructionIp === callIp)![roots],
+			).toContain(0);
+		},
+	);
 	const borrowed = `${producer}function edit(record,flag){for(let i=0;i<3;i++)if(flag)record.n=+globalThis.input;return record.n+record.s.length+(record.b?1:0);}function run(flag){let total=0;for(let i=0;i<4;i++){const record=make(i,flag);total+=edit(record,flag);total+=record.n;}return total;}console.log(run(globalThis.flag));`;
 
 	it("uses matching typed pointers for results, borrows and scalar field reads", () => {

@@ -23,6 +23,35 @@ function repeatedDataSpread(limit) {
 	}
 	return total;
 }
+function privateUpdatedSpread(value) {
+	const source = { kind: 3, flags: 5 };
+	source.kind = value;
+	const alias = source;
+	alias.flags = value + 1;
+	const copy = { ...source, value };
+	return copy.kind + copy.flags + copy.value;
+}
+function updatedSpreadSnapshot(value) {
+	const source = { kind: 3, flags: 5 };
+	source.kind = value;
+	const copy = { ...source, value };
+	source.kind = -1;
+	return copy.kind + copy.value;
+}
+function indexedUpdatedSpread(value) {
+	const source = { kind: 3 };
+	source[0] = value;
+	const copy = { ...source };
+	return Object.keys(copy).join(",") + ":" + copy[0];
+}
+for (const value of [0, 3, 8]) {
+	if (privateUpdatedSpread(value) !== value * 3 + 1)
+		throw new Error("private updated spread lost a current field");
+	if (updatedSpreadSnapshot(value) !== value * 2)
+		throw new Error("spread did not preserve its snapshot");
+	if (indexedUpdatedSpread(value) !== "0,kind:" + value)
+		throw new Error("indexed materialization used a named shape slot");
+}
 for (let i = 0; i < 3; i++) console.log(privateArray(i));
 console.log(repeatedDataSpread(4));
 let observed;

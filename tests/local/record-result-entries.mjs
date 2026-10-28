@@ -761,4 +761,146 @@ for (const value of [1n, Symbol("word")]) {
 	}
 	check(error instanceof TypeError, true, "integer field abrupt coercion");
 }
+function updatedBundle(value) {
+	for (let step = 0; step < 3; step++) recordStoragePulse();
+	const record = { number: value, flag: false, label: "initial" };
+	record.number = value & 255;
+	record.flag = !!value;
+	record.label = "updated";
+	recordStoragePulse();
+	return record;
+}
+function readUpdatedBundle(value) {
+	let sum = 0;
+	for (let i = 0; i < 4; i++) {
+		const record = updatedBundle(value);
+		recordStoragePulse();
+		check(record.flag, !!value, "promoted Boolean field");
+		check(record.label, "updated", "promoted String field");
+		sum += record.number;
+	}
+	return sum;
+}
+function updatedPair(value, flag) {
+	for (let step = 0; step < 3; step++) recordStoragePulse();
+	const left = { number: value & 15, label: "left" };
+	const right = { number: value & 255, label: "right" };
+	left.number = left.number + 1;
+	right.number = right.number + 2;
+	recordStoragePulse();
+	if (flag) return left;
+	return right;
+}
+function readUpdatedPair(value, flag) {
+	let sum = 0;
+	for (let i = 0; i < 4; i++) {
+		const record = updatedPair(value + i, flag);
+		recordStoragePulse();
+		check(record.label, flag ? "left" : "right", "overlapping producer record");
+		sum += record.number;
+	}
+	return sum;
+}
+function updatedFromInitializer(value, initialize) {
+	for (let step = 0; step < 3; step++) recordStoragePulse();
+	const record = { number: initialize() };
+	record.number = value & 255;
+	recordStoragePulse();
+	return record;
+}
+function readUpdatedInitializer(value, initialize) {
+	let sum = 0;
+	for (let i = 0; i < 4; i++) sum += updatedFromInitializer(value, initialize).number;
+	return sum;
+}
+function observedUpdated(value, observe) {
+	for (let step = 0; step < 3; step++) recordStoragePulse();
+	const record = { number: 0 };
+	record.number = value | 0;
+	observe(record);
+	return record;
+}
+function protectedUpdated(value) {
+	for (let step = 0; step < 3; step++) recordStoragePulse();
+	const record = { number: "initial" };
+	try {
+		record.number = value & 255;
+	} catch (error) {
+		recordStoragePulse();
+	}
+	return record;
+}
+function* updatedSuspended(value) {
+	const record = { number: value };
+	yield 0;
+	record.number = value & 255;
+	recordStoragePulse();
+	return record;
+}
+for (const value of [-0, 0, NaN, Infinity, -Infinity, -1, 255, 256, 4294967295]) {
+	check(readUpdatedBundle(value), (value & 255) * 4, "updated producer fields");
+	for (const flag of [false, true]) {
+		let expected = 0;
+		for (let i = 0; i < 4; i++)
+			expected += flag ? ((value + i) & 15) + 1 : ((value + i) & 255) + 2;
+		check(readUpdatedPair(value, flag), expected, "independent promoted records");
+	}
+}
+let updatedCoercions = 0;
+const updatedInput = {
+	valueOf() {
+		updatedCoercions++;
+		recordStoragePulse();
+		return 511;
+	},
+};
+check(readUpdatedBundle(updatedInput), 1020, "updated producer coercion");
+check(updatedCoercions, 4, "updated producer coerces once per invocation");
+const updatedIterator = updatedSuspended(updatedInput);
+check(updatedIterator.next().value, 0, "private producer before suspension");
+recordStoragePulse();
+const updatedResumed = updatedIterator.next();
+check(updatedResumed.done, true, "suspended producer completes");
+check(updatedResumed.value.number, 255, "materialized return after suspension");
+check(updatedCoercions, 5, "suspended producer coerces once after resumption");
+let updatedInitializers = 0;
+check(
+	readUpdatedInitializer(updatedInput, () => {
+		updatedInitializers++;
+		recordStoragePulse();
+		return {
+			valueOf() {
+				throw new Error("unused initial payload coerced");
+			},
+		};
+	}),
+	1020,
+	"initializers execute before promoted overwrites",
+);
+check(updatedInitializers, 4, "each initializer executes once");
+check(updatedCoercions, 9, "only the store RHS is coerced");
+const updatedFailure = { tag: "initialization failure" };
+try {
+	updatedFromInitializer(updatedInput, () => {
+		throw updatedFailure;
+	});
+	throw new Error("missing initialization failure");
+} catch (error) {
+	check(error, updatedFailure, "initializer exception identity");
+}
+check(updatedCoercions, 9, "initializer failure precedes RHS coercion");
+for (const value of [1n, Symbol("updated producer")]) {
+	try {
+		updatedBundle(value);
+		throw new Error("missing updated producer type error");
+	} catch (error) {
+		check(error instanceof TypeError, true, "promoted RHS preserves type errors");
+	}
+	check(protectedUpdated(value).number, "initial", "caught write retains old payload");
+}
+const observedResult = observedUpdated(7, (record) => {
+	recordStoragePulse();
+	record.number = "observed";
+});
+check(observedResult.number, "observed", "escaped producer retains identity");
 console.log("record-result-entries PASS");

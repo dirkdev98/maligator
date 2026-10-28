@@ -1,4 +1,5 @@
 import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
+import { compilerPropertyKeyIsArrayIndex } from "../shared/property-key.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -367,6 +368,15 @@ export const materializeVirtualState: CoreFunctionPass = {
 				return editor.commit();
 			}
 			const cells = new Map(producedCells);
+			let retained: Map<CoreInstructionId, ReadonlyArray<CoreValueId>> | undefined;
+			const retainAt = (
+				instruction: CoreInstructionId,
+				values: ReadonlyArray<CoreValueId>,
+			) => {
+				if (array || wrapper) return;
+				const roots = [...new Set(values)].filter((value) => !primitiveValue(value));
+				if (roots.length > 0) (retained ??= new Map()).set(instruction, roots);
+			};
 			if (opcode === "createObjectShaped") {
 				const keys = attributes.keyStringIndices as ReadonlyArray<number>,
 					args = argsOf(root);
@@ -798,6 +808,8 @@ export const materializeVirtualState: CoreFunctionPass = {
 						boundary = instruction;
 						break;
 					}
+					const previous = cells.get(key);
+					retainAt(instruction, previous?.opcode === "move" ? previous.inputs : []);
 					cells.delete(key);
 					replacements.set(instruction, {
 						opcode: "createBoolean",
@@ -854,6 +866,11 @@ export const materializeVirtualState: CoreFunctionPass = {
 						}
 						length = Math.max(length, index + 1);
 					}
+					const previous = cells.get(key);
+					retainAt(instruction, [
+						...(previous?.opcode === "move" ? previous.inputs : []),
+						input,
+					]);
 					cells.set(key, valueCell(input));
 				}
 				removals.add(instruction);
@@ -863,6 +880,8 @@ export const materializeVirtualState: CoreFunctionPass = {
 				boundary === root ||
 				removals.size +
 					replacements.size +
+					(retained?.size ?? 0) +
+					Number(!array && !wrapper) +
 					cells.size * 3 +
 					4 +
 					Number(conversion !== undefined) >
@@ -890,8 +909,15 @@ export const materializeVirtualState: CoreFunctionPass = {
 				return false;
 			});
 			if (transitions === 0 && escapes && !arrayResult) continue;
+			if (!array && !wrapper) retainAt(root, argsOf(root));
 			analysis.verify(fact);
 			const editor = CoreEditor.open(program, fn.id);
+			// Moving materialization must retain the operands at their original aggregate uses.
+			for (const [instruction, values] of retained ?? [])
+				editor.insertInstruction(block, instruction, "rootUse", values, {
+					outputCount: 0,
+					sourcePosition: fn.instructionSourcePosition(instruction),
+				});
 			// Coercion belongs to construction even when the private shell moves or disappears.
 			const converted =
 				conversion === undefined
@@ -908,20 +934,31 @@ export const materializeVirtualState: CoreFunctionPass = {
 				if (alias !== value) editor.replaceValueUses(alias, value);
 			for (const instruction of removals) editor.removeInstruction(instruction);
 			if (escapes) {
+				const description = program.staticDescriptions.description(fact.description);
+				const shaped =
+					!array &&
+					!wrapper &&
+					cells.size > 0 &&
+					description.kind === "object" &&
+					description.prototype.kind === "intrinsic" &&
+					description.prototype.id === "Object.prototype" &&
+					![...cells.keys()].some(compilerPropertyKeyIsArrayIndex);
 				if (wrapper) {
 					const inputs = argsOf(root);
 					if (converted !== undefined) inputs[1] = converted;
 					editor.replaceInstruction(root, "callKnown", inputs, {
 						attributes: { ...attributes, [MATERIALIZED]: true },
 					});
-				} else
+				} else if (!shaped)
 					editor.replaceInstruction(root, array ? "createArray" : "createObject", [], {
 						attributes: {
 							...(array ? { length } : {}),
 							[MATERIALIZED]: true,
 						},
 					});
-				editor.moveInstruction(root, block, boundary);
+				if (!shaped) editor.moveInstruction(root, block, boundary);
+				const shapeKeys: Array<number> = [];
+				const shapeValues: Array<CoreValueId> = [];
 				for (const [key, cell] of cells) {
 					const keyIndex = program.stringConstantSlot(key, "first") ?? -1;
 					const stringIndex =
@@ -930,15 +967,20 @@ export const materializeVirtualState: CoreFunctionPass = {
 							: editor.appendStringConstants([
 									Array.from({ length: key.length }, (_, index) => key.charCodeAt(index)),
 								]);
-					const keyValue = editor.insertInstruction(block, boundary, "createString", [], {
-						attributes: { stringIndex },
-					}).outputs[0]!;
 					const cellValue =
 						cell.opcode === "move"
 							? cell.inputs[0]!
 							: editor.insertInstruction(block, boundary, cell.opcode, cell.inputs, {
 									attributes: cell.attributes,
 								}).outputs[0]!;
+					if (shaped) {
+						shapeKeys.push(stringIndex);
+						shapeValues.push(cellValue);
+						continue;
+					}
+					const keyValue = editor.insertInstruction(block, boundary, "createString", [], {
+						attributes: { stringIndex },
+					}).outputs[0]!;
 					editor.insertInstruction(
 						block,
 						boundary,
@@ -946,6 +988,12 @@ export const materializeVirtualState: CoreFunctionPass = {
 						[value, keyValue, cellValue],
 						{ attributes: { enumerable: true } },
 					);
+				}
+				if (shaped) {
+					editor.replaceInstruction(root, "createObjectShaped", shapeValues, {
+						attributes: { keyStringIndices: shapeKeys, [MATERIALIZED]: true },
+					});
+					editor.moveInstruction(root, block, boundary);
 				}
 			} else editor.removeInstruction(root);
 			return editor.commit();

@@ -1620,13 +1620,22 @@ function scalarizeRootedLayout(
 	if (allocationIndex < 0) return undefined;
 	const stores: Array<RootedScalarAccess> = [];
 	const loads: Array<RootedScalarAccess> = [];
+	const returns = new Map<CoreBlockId, CoreInstructionId>();
 	let valid = true;
 	for (const block of control.reachable) {
 		const terminator = fn.blockTerminator(block);
 		const observed = controlValue(fn, terminator);
 		if (observed !== undefined && aliases.has(observed)) {
-			valid = false;
-			break;
+			if (
+				fn.instructionKind(terminator) !== "return" ||
+				fn.kernel.blockHandlerBlock(block) !== undefined ||
+				(block !== allocationBlock &&
+					!control.instructionDominatesBlock(allocationBlock, block))
+			) {
+				valid = false;
+				break;
+			}
+			returns.set(block, terminator);
 		}
 		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
 		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
@@ -1722,6 +1731,7 @@ function scalarizeRootedLayout(
 		return undefined;
 
 	const blocks = new Set<CoreBlockId>([...stores, ...loads].map(({ block }) => block));
+	for (const block of returns.keys()) blocks.add(block);
 	const worklist = [...blocks];
 	while (worklist.length > 0 && valid) {
 		const block = worklist.pop()!;
@@ -1771,7 +1781,7 @@ function scalarizeRootedLayout(
 		...layout.initialValues,
 		...stores.map(({ value }) => value),
 	].some((value) => !cannotBeHeldWeakly(value));
-	if (hasWeaklyHoldableOccupant) {
+	if (hasWeaklyHoldableOccupant && returns.size === 0) {
 		const accesses = new Set([
 			...stores.map(({ instruction }) => instruction),
 			...loads.map(({ instruction }) => instruction),
@@ -1779,11 +1789,13 @@ function scalarizeRootedLayout(
 		const hasRelevantSafepoint = [...blocks].some((block) => {
 			const instructions = [...fn.bodyInstructionIds(block)];
 			const start = block === allocationBlock ? allocationIndex + 1 : 0;
-			const lastAccess = Math.max(
-				-1,
-				...stores.filter((store) => store.block === block).map(({ index }) => index),
-				...loads.filter((load) => load.block === block).map(({ index }) => index),
-			);
+			const lastAccess = returns.has(block)
+				? instructions.length
+				: Math.max(
+						-1,
+						...stores.filter((store) => store.block === block).map(({ index }) => index),
+						...loads.filter((load) => load.block === block).map(({ index }) => index),
+					);
 			const liveIntoSuccessor = (control.successors[block] ?? []).some(({ to }) =>
 				blocks.has(to),
 			);
@@ -1845,7 +1857,18 @@ function scalarizeRootedLayout(
 	};
 	const entryFields = new Map<CoreBlockId, Map<number, CoreValueId>>();
 	const exitFields = new Map<CoreBlockId, Map<number, CoreValueId>>();
+	const rootsBefore = new Map<CoreInstructionId, ReadonlyArray<CoreValueId>>();
 	const rootsAfter = new Map<CoreInstructionId, ReadonlyArray<CoreValueId>>();
+	const retainBefore = (
+		instruction: CoreInstructionId,
+		values: ReadonlyArray<CoreValueId>,
+	): void => {
+		const roots = [...new Set(values.map(resolve))].filter(
+			(value) => !cannotBeHeldWeakly(value),
+		);
+		if (roots.length > 0) rootsBefore.set(instruction, roots);
+	};
+	retainBefore(layout.instruction, layout.initialValues);
 	for (const block of control.reversePostorder) {
 		if (!blocks.has(block)) continue;
 		const parameters = fieldParameters.get(block);
@@ -1860,11 +1883,13 @@ function scalarizeRootedLayout(
 		entryFields.set(block, new Map(current));
 		const instructions = [...fn.bodyInstructionIds(block)];
 		const start = block === allocationBlock ? allocationIndex + 1 : 0;
-		const lastAccess = Math.max(
-			-1,
-			...stores.filter((store) => store.block === block).map(({ index }) => index),
-			...loads.filter((load) => load.block === block).map(({ index }) => index),
-		);
+		const lastAccess = returns.has(block)
+			? instructions.length
+			: Math.max(
+					-1,
+					...stores.filter((store) => store.block === block).map(({ index }) => index),
+					...loads.filter((load) => load.block === block).map(({ index }) => index),
+				);
 		const liveIntoSuccessor = (control.successors[block] ?? []).some(({ to }) =>
 			blocks.has(to),
 		);
@@ -1872,6 +1897,8 @@ function scalarizeRootedLayout(
 			const instruction = instructions[index]!;
 			const store = storesByInstruction.get(instruction);
 			if (store !== undefined) {
+				// An elided store still holds its old occupant and RHS through RHS evaluation.
+				retainBefore(instruction, [current.get(store.key)!, store.value]);
 				current.set(store.key, resolve(store.value));
 				continue;
 			}
@@ -1962,6 +1989,14 @@ function scalarizeRootedLayout(
 		}
 	}
 
+	for (const [instruction, values] of rootsBefore)
+		editor.insertInstruction(
+			fn.instructionBlock(instruction),
+			instruction,
+			"rootUse",
+			values.map(resolve),
+			{ outputCount: 0 },
+		);
 	for (const [instruction, values] of rootsAfter) {
 		editor.insertInstruction(
 			fn.instructionBlock(instruction),
@@ -1986,6 +2021,19 @@ function scalarizeRootedLayout(
 	}
 	for (const store of stores)
 		removeInstructionAndOwnedProof(editor, fn, store.instruction);
+	for (const [block, terminator] of returns) {
+		const current = exitFields.get(block)!;
+		const materialized = editor.appendInstruction(
+			block,
+			"createObjectShaped",
+			layout.keys.map((key) => resolve(current.get(key)!)),
+			{
+				attributes: fn.instructionAttributes(layout.instruction),
+				sourcePosition: fn.instructionSourcePosition(terminator),
+			},
+		).outputs[0]!;
+		editor.replaceTerminator(block, { kind: "return", value: materialized });
+	}
 	editor.replaceInstruction(layout.instruction, "createUndefined", [], {
 		sourcePosition: fn.instructionSourcePosition(layout.instruction),
 	});
