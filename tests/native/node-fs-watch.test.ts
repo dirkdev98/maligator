@@ -23,6 +23,7 @@ describe("node:fs watchers", () => {
 	beforeAll(() => {
 		expected = execFileSync(process.execPath, ["--no-deprecation", fixture], {
 			encoding: "utf8",
+			timeout: 60_000,
 		});
 		compiled = buildNativeBinary({
 			fixture,

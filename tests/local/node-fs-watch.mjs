@@ -154,11 +154,12 @@ async function promisesWatch() {
 	fs.mkdirSync(dir);
 	const controller = new AbortController();
 	const iterator = fsp.watch(dir, { signal: controller.signal });
-	let count = 0;
-	const timer = setInterval(
-		() => fs.writeFileSync(path.join(dir, `f${count++}.txt`), "x"),
-		50,
-	);
+	// Repeat the expected rename so losing the first event cannot strand the iterator.
+	const timer = setInterval(() => {
+		const replacement = path.join(dir, "next.txt");
+		fs.writeFileSync(replacement, "x");
+		fs.renameSync(replacement, path.join(dir, "f0.txt"));
+	}, 50);
 	try {
 		for await (const event of iterator) {
 			if (event.eventType === "rename" && event.filename === "f0.txt") {
