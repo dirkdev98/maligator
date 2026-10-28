@@ -98,7 +98,12 @@ describe("partial operator input kinds", () => {
 		expect(compilerOperatorInputKindsHaveExactNativeSemantics("binary", "+", masks)).toBe(
 			false,
 		);
-		for (const invalid of [[0, 16], [256, 16], [16], [16, 16, 16]])
+		for (const invalid of [
+			[0, 16],
+			[COMPILER_VALUE_KIND_TOP + 1, 16],
+			[16],
+			[16, 16, 16],
+		])
 			expect(compilerOperatorInputKindMasksAreValid("binary", invalid)).toBe(false);
 	});
 

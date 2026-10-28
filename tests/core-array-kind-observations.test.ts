@@ -51,7 +51,8 @@ describe("Array.isArray kind observations", () => {
 			expect(observe(mask), `kind mask ${mask}`).toBe(
 				mask & COMPILER_VALUE_KIND_OBJECT ? undefined : false,
 			);
-		for (const mask of [0, -1, 256]) expect(observe(mask)).toBeUndefined();
+		for (const mask of [0, -1, COMPILER_VALUE_KIND_TOP + 1])
+			expect(observe(mask)).toBeUndefined();
 	});
 
 	it("treats an omitted argument as undefined", () => {

@@ -69,7 +69,8 @@ describe("Number predicate observations in Core", () => {
 			expect(observe(mask), `${method}: kind ${mask}`).toBe(
 				mask & COMPILER_VALUE_KIND_NUMBER ? undefined : false,
 			);
-		for (const mask of [0, -1, 256]) expect(observe(mask)).toBeUndefined();
+		for (const mask of [0, -1, COMPILER_VALUE_KIND_TOP + 1])
+			expect(observe(mask)).toBeUndefined();
 		expect(observation(method, {}, true)(COMPILER_VALUE_KIND_TOP)).toBe(false);
 		for (const attributes of [{ construct: true }, { argumentMode: "iterable" }])
 			expect(observation(method, attributes)(1)).toBeUndefined();

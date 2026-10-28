@@ -24,6 +24,7 @@ import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimiz
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import { COMPILER_VALUE_KIND_TOP } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-data.ts";
 import {
 	inspectCoreBlockParameters,
@@ -99,7 +100,7 @@ describe("primordial reference availability", () => {
 });
 
 describe("record field kind metadata", () => {
-	it.each([0, 255, 256, -1, NaN, "number"])(
+	it.each([0, COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_TOP + 1, -1, NaN, "number"])(
 		"rejects invalid record field mask %s",
 		(mask) => {
 			const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[110]] });
@@ -223,7 +224,7 @@ describe("Core verification", () => {
 		);
 	});
 
-	it.each([0, 255, 256, NaN])(
+	it.each([0, COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_TOP + 1, NaN])(
 		"rejects an invalid normal call result bound %s",
 		(mask) => {
 			const program = new CoreProgram(coreOpcodeRegistry);
