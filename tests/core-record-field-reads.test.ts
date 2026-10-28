@@ -3,11 +3,18 @@ import { runtimeGapBuildConfig } from "../scripts/runtime-gap-build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import { cloneCoreFunction } from "../src/compiler/core/core-function-clone.ts";
 import { CORE_RECORD_FIELD_KIND_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
+import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
+import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
-import { coreRecordFieldReads } from "../src/compiler/core/core-record-value-kinds.ts";
+import {
+	CORE_RECORD_OWN_DATA_EFFECT_FACT,
+	coreRecordFieldReads,
+	coreRecordFieldStores,
+} from "../src/compiler/core/core-record-value-kinds.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -54,6 +61,99 @@ function readKind(producer: string, reader = "return value.n;", call = "make(inp
 }
 
 describe("fresh record field observations", () => {
+	it("indexes write-only merged stores at their escape boundary", () => {
+		const out = flow(
+			`function make(input){return {n:input};}function write(input,flag,observe){const value=flag?make(input):make(input);value.n=input;observe(value);value.n=flag;return value;}globalThis.write=write;`,
+		);
+		const fn = out.named("write");
+		const stores = coreOperations(fn).filter(({ opcode }) => opcode === "storeProperty");
+		expect(stores).toHaveLength(2);
+		const indexed = coreRecordFieldStores(fn, () =>
+			buildCoreControlFlow(out.program, fn.id),
+		);
+		expect(indexed.has(stores[0]!.id)).toBe(true);
+		expect(indexed.has(stores[1]!.id)).toBe(false);
+		expect(
+			coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
+		).toBe(0);
+	});
+
+	it("withdraws cached store prefixes during open edits", () => {
+		const out = flow(
+			`function make(){return {n:1};}function write(input){const value=make();value.n=input;return value;}globalThis.write=write;`,
+		);
+		const fn = out.named("write");
+		const read = () =>
+			coreRecordFieldStores(fn, () => buildCoreControlFlow(out.program, fn.id));
+		const [store] = read().keys();
+		if (store === undefined) throw new Error("Missing private record store");
+		const receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(store));
+		const editor = CoreEditor.open(out.program, fn.id);
+		const coercion = editor.insertInstruction(
+			fn.instructionBlock(store),
+			store,
+			"unary",
+			[receiver],
+			{
+				attributes: { operator: "+" },
+			},
+		);
+		expect(read().size).toBe(0);
+		editor.commit();
+		expect(read().size).toBe(0);
+		const restore = CoreEditor.open(out.program, fn.id);
+		restore.removeInstruction(coercion.instruction);
+		expect(read().size).toBe(1);
+		restore.commit();
+		expect(read().size).toBe(1);
+	});
+
+	it("drops scoped store proofs when cloning and rejects lost write effects", () => {
+		const out = flow(
+			`function make(){return {n:1};}function write(input){const value=make();value.n=input;return value;}globalThis.write=write;`,
+		);
+		const fn = out.named("write");
+		const store = coreOperations(fn).find(({ opcode }) => opcode === "storeProperty")!;
+		const access = coreRecordFieldStores(fn, () =>
+			buildCoreControlFlow(out.program, fn.id),
+		).get(store.id)!;
+		const effects = { ...CORE_NO_EFFECTS, writes: ["object-property"] as const };
+		const editor = CoreEditor.open(out.program, fn.id);
+		editor.replaceInstruction(
+			store.id,
+			"storePropertyStatic",
+			[store.inputs[0]!, store.inputs[2]!],
+			{
+				attributes: { stringIndex: access.key },
+			},
+		);
+		const proof = editor.addFact({
+			kind: CORE_RECORD_OWN_DATA_EFFECT_FACT,
+			value: access.key,
+			claims: [{ kind: "effect", instruction: store.id, effects }],
+			validity: { kind: "summary", digest: "own-store" },
+			obligations: [],
+			origin: "test",
+		});
+		editor.setInstructionEffectRefinement(store.id, { effects, proof });
+		editor.setKnownOwnDataHint(store.id, true);
+		editor.commit();
+		verifyCoreProgram(out.program, undefined, programAnalysisContext());
+		const cloned = out.program.function(cloneCoreFunction(out.program, fn));
+		const copy = coreOperations(cloned).find(
+			({ opcode }) => opcode === "storePropertyStatic",
+		)!;
+		expect(copy.attributes.knownOwnData).toBeUndefined();
+		expect(cloned.instructionEffectRefinement(copy.id)).toBeUndefined();
+		verifyCoreProgram(out.program, undefined, programAnalysisContext());
+		const invalid = CoreEditor.open(out.program, fn.id);
+		invalid.setInstructionEffectRefinement(store.id, { effects: CORE_NO_EFFECTS, proof });
+		invalid.commit();
+		expect(() =>
+			verifyCoreProgram(out.program, undefined, programAnalysisContext()),
+		).toThrow(/Invalid known own-data access proof/);
+	});
+
 	it.each([
 		"const n=alias.n;observe(alias);return n;",
 		"const n=alias.n;alias.n='changed';return n;",

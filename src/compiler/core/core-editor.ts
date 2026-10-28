@@ -624,8 +624,12 @@ export class CoreEditor {
 	setKnownOwnDataHint(instruction: CoreInstructionId, present: boolean): void {
 		this.#assertActive();
 		const fn = this.function;
-		if (fn.instructionOpcodeName(instruction) !== "loadPropertyStatic")
-			throw new Error("Own-data hints require a static property read");
+		if (
+			!["loadPropertyStatic", "storePropertyStatic"].includes(
+				fn.instructionOpcodeName(instruction),
+			)
+		)
+			throw new Error("Own-data hints require a static property access");
 		const current = fn.instructionAttributes(instruction);
 		if (current[CORE_KNOWN_OWN_DATA_ATTRIBUTE] === (present ? true : undefined)) return;
 		const attributes = { ...current };

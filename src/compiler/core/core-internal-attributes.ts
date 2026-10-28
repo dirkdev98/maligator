@@ -1,3 +1,5 @@
+import type { CoreInstructionAttributes } from "./core-ir.ts";
+
 export const CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE = "guardedInlineFallback";
 export const CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE =
 	"containedDenseArrayElementRead";
@@ -19,3 +21,13 @@ export const CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE = "normalResultIntegerRa
 export const CORE_RECORD_FIELD_KIND_ATTRIBUTE = "recordFieldKindMask";
 export const CORE_KNOWN_OWN_DATA_ATTRIBUTE = "knownOwnData";
 export const CORE_KNOWN_OWN_SLOT_ATTRIBUTE = "knownOwnSlot";
+
+// Function-scoped effect proofs must be re-established after cloning or inlining.
+export function coreUnscopedInstructionAttributes(
+	attributes: CoreInstructionAttributes,
+): CoreInstructionAttributes {
+	if (attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE] === undefined) return attributes;
+	const result = { ...attributes };
+	delete result[CORE_KNOWN_OWN_DATA_ATTRIBUTE];
+	return result;
+}

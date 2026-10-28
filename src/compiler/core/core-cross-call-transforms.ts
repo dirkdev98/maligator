@@ -7,6 +7,7 @@ import {
 	compilerValueKindMaskIsValid,
 	compilerValueKindMaskIsSubset,
 } from "../shared/compiler-value-kinds.ts";
+import { effectSummariesEqual } from "../shared/effect-summary.ts";
 import {
 	compilerIntegerRangesEqual,
 	compilerIntegerRangeIsValid,
@@ -49,6 +50,7 @@ import {
 	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
 	CORE_KNOWN_OWN_DATA_ATTRIBUTE,
+	coreUnscopedInstructionAttributes,
 } from "./core-internal-attributes.ts";
 import {
 	coreDirectCreatedFunction,
@@ -88,7 +90,6 @@ import type {
 	CoreFunctionId,
 	CoreInstructionId,
 	CoreInstructionEffects,
-	CoreInstructionAttributes,
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
@@ -113,8 +114,10 @@ import {
 } from "./core-read-accessor-expansion.ts";
 import type { CoreReadAccessorWork } from "./core-read-accessor-expansion.ts";
 import {
+	CORE_RECORD_OWN_DATA_EFFECT_FACT,
 	coreRecordFieldReads,
-	coreRecordReadInitialFields,
+	coreRecordFieldStores,
+	coreRecordAccessInitialFields,
 	coreRecordFieldInitialKind,
 	coreRecordFieldIsOwnData,
 	coreRecordFieldReadIntegerRange,
@@ -124,7 +127,7 @@ import {
 } from "./core-record-value-kinds.ts";
 import type {
 	CoreRecordValueKind,
-	CoreRecordFieldRead,
+	CoreRecordFieldAccess,
 } from "./core-record-value-kinds.ts";
 import { specializeCoreStaticArguments } from "./core-static-value-calls.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -766,8 +769,8 @@ function inlineTarget(
 							opcode === "binary" ||
 							opcode === "queryStaticData") &&
 							fact.kind === CORE_PRIMITIVE_EFFECT_FACT) ||
-						(opcode === "loadPropertyStatic" &&
-							fact.kind === RETURNED_RECORD_OWN_DATA_FACT)
+						((opcode === "loadPropertyStatic" || opcode === "storePropertyStatic") &&
+							fact.kind === CORE_RECORD_OWN_DATA_EFFECT_FACT)
 					)
 				)
 					return false;
@@ -2869,18 +2872,6 @@ export function discoverCoreCrossCallCandidates(
 	}
 }
 
-function inlineInstructionAttributes(
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-): CoreInstructionAttributes {
-	const current = fn.instructionAttributes(instruction);
-	if (current[CORE_KNOWN_OWN_DATA_ATTRIBUTE] === undefined) return current;
-	// Inlining drops function-scoped effect proofs; re-discovery must license their native hints.
-	const attributes = { ...current };
-	delete attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE];
-	return attributes;
-}
-
 function applyLinearInline(
 	program: CoreProgram,
 	candidate: CoreTransformCandidate,
@@ -3137,7 +3128,9 @@ function applyLinearInline(
 					outputRepresentations: outputs.map((value) =>
 						inline.function.valueRepresentation(value),
 					),
-					attributes: inlineInstructionAttributes(inline.function, instruction),
+					attributes: coreUnscopedInstructionAttributes(
+						inline.function.instructionAttributes(instruction),
+					),
 					sourcePosition: sourcePositions.get(instruction),
 				},
 			);
@@ -3697,7 +3690,9 @@ function applyGuardedInline(
 					outputRepresentations: outputs.map((value) =>
 						inline.function.valueRepresentation(value),
 					),
-					attributes: inlineInstructionAttributes(inline.function, instruction),
+					attributes: coreUnscopedInstructionAttributes(
+						inline.function.instructionAttributes(instruction),
+					),
 					sourcePosition: sourcePositions.get(instruction),
 				},
 			);
@@ -4047,13 +4042,12 @@ interface CoreNormalResultFact extends CoreNormalResultFacts {
 	readonly instruction: CoreInstructionId;
 }
 
-interface CoreRecordReadFact {
+interface CoreRecordAccessFact {
 	readonly instruction: CoreInstructionId;
 	readonly result: CoreNormalResultFacts | undefined;
 	readonly ownDataKey: number | undefined;
 }
 
-const RETURNED_RECORD_OWN_DATA_FACT = "returned-record-own-data";
 const RETURNED_RECORD_READ_EFFECTS: CoreInstructionEffects = Object.freeze({
 	reads: Object.freeze(["object-property"] as const),
 	writes: Object.freeze([]),
@@ -4061,6 +4055,12 @@ const RETURNED_RECORD_READ_EFFECTS: CoreInstructionEffects = Object.freeze({
 	maySuspend: false,
 	mayGc: false,
 	callsUserCode: false,
+});
+
+const RETURNED_RECORD_WRITE_EFFECTS: CoreInstructionEffects = Object.freeze({
+	...RETURNED_RECORD_READ_EFFECTS,
+	reads: Object.freeze([]),
+	writes: Object.freeze(["object-property"] as const),
 });
 
 export type CoreCrossCallCallerPreparation = (
@@ -4353,7 +4353,7 @@ function discoverProgramNormalResultFacts(
 	readValueKinds: () => CoreProgramValueKindState,
 ): {
 	readonly calls: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreNormalResultFact>>;
-	readonly fields: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreRecordReadFact>>;
+	readonly fields: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreRecordAccessFact>>;
 } {
 	const results = new Map<CoreFunctionId, Array<CoreNormalResultFact>>();
 	const localReturns = new Map<CoreFunctionId, number | undefined>();
@@ -4481,7 +4481,7 @@ function discoverProgramNormalResultFacts(
 	}
 	const recordReads = new Map<
 		CoreFunctionId,
-		ReadonlyMap<CoreInstructionId, CoreRecordFieldRead>
+		ReadonlyMap<CoreInstructionId, CoreRecordFieldAccess>
 	>();
 	const readsFor = (functionId: CoreFunctionId) => {
 		let reads = recordReads.get(functionId);
@@ -4538,7 +4538,7 @@ function discoverProgramNormalResultFacts(
 		}
 		return record;
 	};
-	const demandRead = (functionId: CoreFunctionId, read: CoreRecordFieldRead) => {
+	const demandRead = (functionId: CoreFunctionId, read: CoreRecordFieldAccess) => {
 		for (const producer of read.producers) {
 			const site = flow.targets.site(functionId, producer);
 			if (site === undefined || site.targets.opaque || site.targets.anyScript) continue;
@@ -4651,7 +4651,7 @@ function discoverProgramNormalResultFacts(
 				? coreInstructionResultIntegerRange(fn, instruction)
 				: coreRecordFieldReadIntegerRange(
 						read,
-						coreRecordReadInitialFields(read, (producer) =>
+						coreRecordAccessInitialFields(read, (producer) =>
 							recordResult(flow.targets.site(functionId, producer)),
 						),
 						(value, consumer) => query(value, fn.instructionBlock(consumer)),
@@ -4801,7 +4801,7 @@ function discoverProgramNormalResultFacts(
 			});
 		}
 	}
-	const fieldResults = new Map<CoreFunctionId, Array<CoreRecordReadFact>>();
+	const fieldResults = new Map<CoreFunctionId, Array<CoreRecordAccessFact>>();
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
 		const records = new Map<CoreInstructionId, CoreRecordValueKind>();
@@ -4810,10 +4810,10 @@ function discoverProgramNormalResultFacts(
 				records.set(producer, recordResult(flow.targets.site(functionId, producer)));
 			return records.get(producer);
 		};
-		const discovered = new Map<CoreInstructionId, CoreRecordReadFact>();
+		const discovered = new Map<CoreInstructionId, CoreRecordAccessFact>();
 		let query: CoreIntegerRangeQuery | undefined;
 		for (const [instruction, read] of readsFor(functionId)) {
-			const record = coreRecordReadInitialFields(read, initialFields);
+			const record = coreRecordAccessInitialFields(read, initialFields);
 			if (!coreRecordFieldIsOwnData(read, record)) continue;
 			const initialKind = coreRecordFieldInitialKind(
 				read,
@@ -4841,6 +4841,22 @@ function discoverProgramNormalResultFacts(
 					? { mask, ...(integerRange === undefined ? {} : { integerRange }) }
 					: undefined,
 			});
+		}
+		for (const [instruction, store] of coreRecordFieldStores(fn, () =>
+			analyses
+				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+					scope: "function",
+					function: functionId,
+				})
+				.exceptional(),
+		)) {
+			const record = coreRecordAccessInitialFields(store, initialFields);
+			if (coreRecordFieldIsOwnData(store, record))
+				discovered.set(instruction, {
+					instruction,
+					ownDataKey: store.key,
+					result: undefined,
+				});
 		}
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
@@ -5357,37 +5373,39 @@ export function runCoreCrossCallTransforms(
 			for (const fact of recordKindsByCaller.get(functionId) ?? []) {
 				const { instruction, ownDataKey } = fact;
 				if (!fn.isInstructionLive(instruction)) continue;
+				const opcode = fn.instructionOpcodeName(instruction);
+				const store = opcode === "storeProperty" || opcode === "storePropertyStatic";
 				if (
 					ownDataKey !== undefined &&
-					fn.instructionOpcodeName(instruction) === "loadProperty"
+					(opcode === "loadProperty" || opcode === "storeProperty")
 				) {
 					editor.replaceInstruction(
 						instruction,
-						"loadPropertyStatic",
-						[fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))],
+						store ? "storePropertyStatic" : "loadPropertyStatic",
+						store
+							? [
+									fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
+									fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 2),
+								]
+							: [fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))],
 						{
 							attributes: { stringIndex: ownDataKey },
 							sourcePosition: fn.instructionSourcePosition(instruction),
 						},
 					);
 				}
-				editor.setNormalResultFacts(instruction, fact.result);
+				if (!store) editor.setNormalResultFacts(instruction, fact.result);
+				const ownEffects = store
+					? RETURNED_RECORD_WRITE_EFFECTS
+					: RETURNED_RECORD_READ_EFFECTS;
 				const refinement = fn.instructionEffectRefinement(instruction);
 				if (ownDataKey !== undefined) {
 					const effects = refinement?.effects;
-					if (
-						effects === undefined ||
-						effects.mayThrow ||
-						effects.mayGc ||
-						effects.maySuspend ||
-						effects.callsUserCode
-					) {
+					if (effects === undefined || !effectSummariesEqual(effects, ownEffects)) {
 						const proof = editor.addFact({
-							kind: RETURNED_RECORD_OWN_DATA_FACT,
+							kind: CORE_RECORD_OWN_DATA_EFFECT_FACT,
 							value: ownDataKey,
-							claims: [
-								{ kind: "effect", instruction, effects: RETURNED_RECORD_READ_EFFECTS },
-							],
+							claims: [{ kind: "effect", instruction, effects: ownEffects }],
 							validity: {
 								kind: "summary",
 								digest: `returned-record-own-data:${ownDataKey}`,
@@ -5396,17 +5414,21 @@ export function runCoreCrossCallTransforms(
 							origin: "program-record-flow",
 						});
 						editor.setInstructionEffectRefinement(instruction, {
-							effects: RETURNED_RECORD_READ_EFFECTS,
+							effects: ownEffects,
 							proof,
 						});
 					}
 					editor.setKnownOwnDataHint(instruction, true);
 				} else {
-					if (fn.instructionOpcodeName(instruction) === "loadPropertyStatic")
+					if (
+						["loadPropertyStatic", "storePropertyStatic"].includes(
+							fn.instructionOpcodeName(instruction),
+						)
+					)
 						editor.setKnownOwnDataHint(instruction, false);
 					if (
 						refinement !== undefined &&
-						fn.fact(refinement.proof).kind === RETURNED_RECORD_OWN_DATA_FACT
+						fn.fact(refinement.proof).kind === CORE_RECORD_OWN_DATA_EFFECT_FACT
 					)
 						editor.clearInstructionEffectRefinement(instruction);
 				}

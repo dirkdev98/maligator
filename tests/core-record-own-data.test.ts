@@ -4,11 +4,13 @@ import {
 	INSTRUCTION_MAY_GC,
 	INSTRUCTION_MAY_SUSPEND,
 	INSTRUCTION_MAY_THROW,
+	decodeInstructionEffects,
 } from "../src/compiler/shared/instruction-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { nativeInstructionEffects } from "../src/compiler/target/program-image.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 const observableEffects =
@@ -39,7 +41,95 @@ function reads(out: ReturnType<typeof inspect>) {
 	);
 }
 
+function stores(out: ReturnType<typeof inspect>, key = "value") {
+	return out.native.body.instructions.flatMap((op, ip) =>
+		(op.opcode === "STORE_PROPERTY_STATIC" ||
+			op.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT") &&
+		String.fromCharCode(...out.image.runtime.stringConstants[op.stringIndex]!) === key
+			? [{ op, ip }]
+			: [],
+	);
+}
+
 describe("returned record own-data presence", () => {
+	it.each(["function", "function*", "async function", "async function*"])(
+		"keeps %s writes observable without generic completion or collection",
+		(declaration) => {
+			const suspend =
+				(declaration.includes("*") ? "yield 0;" : "") +
+				(declaration.startsWith("async") ? "await 0;" : "");
+			const out = inspect(
+				"return flag?{value,tag:0}:{tag:1,value};",
+				`${suspend}record['value']=value;hook();return record;`,
+				declaration,
+			);
+			expect(stores(out)).toHaveLength(1);
+			for (const { op, ip } of stores(out)) {
+				expect(out.native.instructions[ip]).toEqual({ kind: "known-own-data" });
+				expect(decodeInstructionEffects(out.native.facts![ip]!.effectMask!)).toEqual({
+					reads: [],
+					writes: ["object-property"],
+					mayThrow: false,
+					mayGc: false,
+					maySuspend: false,
+					callsUserCode: false,
+				});
+				expect(nativeInstructionEffects(op, out.native.facts![ip])).toEqual({
+					allocation: false,
+					collection: false,
+					throwing: false,
+					reentry: false,
+					invalidation: true,
+				});
+				expect(nativeInstructionEffects(op).collection).toBe(true);
+			}
+			expect(out.c.source).toContain("mal_vm_store_known_own_data(");
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
+	it("keeps merged stores before escape and withdraws stores after escape", () => {
+		const out = inspect(
+			"return flag?{value,tag:0}:{tag:1,value};",
+			"const alias=flag?record:make(value,flag,hook);alias.value=value;hook(alias);alias.value=flag;return alias;",
+		);
+		const writes = stores(out);
+		expect(writes).toHaveLength(2);
+		expect(out.native.instructions[writes[0]!.ip]).toEqual({ kind: "known-own-data" });
+		expect(out.native.instructions[writes[1]!.ip]?.kind).not.toBe("known-own-data");
+	});
+
+	it("retains generic stores for indexed producers outside shaped record summaries", () => {
+		const out = inspect("return {'0':value};", "record['0']=flag;hook();return record;");
+		expect(stores(out, "0")).toHaveLength(1);
+		for (const { ip } of stores(out, "0"))
+			expect(out.native.instructions[ip]?.kind).not.toBe("known-own-data");
+	});
+
+	it.each([
+		["a missing field", "return flag?{value}:{other:value};", ""],
+		["an accessor", "return {set value(next){hook(next);}};", ""],
+		["a frozen record", "return Object.freeze({value});", ""],
+		["a Proxy", "return new Proxy({value},{});", ""],
+		["an escape", "return {value};", "hook(record);"],
+		[
+			"a descriptor replacement",
+			"return {value};",
+			"Object.defineProperty(record,'value',{writable:false});",
+		],
+		["a deleted key", "return {value};", "delete record.value;"],
+	])("retains generic store effects after %s", (_name, producer, prefix) => {
+		const out = inspect(producer, `${prefix}record.value=flag;return record;`);
+		expect(stores(out)).toHaveLength(1);
+		for (const { op, ip } of stores(out)) {
+			expect(out.native.instructions[ip]?.kind).not.toBe("known-own-data");
+			expect(out.native.facts![ip]!.effectMask! & observableEffects).not.toBe(0);
+			expect(nativeInstructionEffects(op, out.native.facts![ip]).throwing).toBe(true);
+		}
+	});
+
 	it.each(["function", "function*", "async function", "async function*"])(
 		"keeps a %s merged read noncollecting before a later escape",
 		(declaration) => {

@@ -1251,7 +1251,9 @@ export function nativeInstructionEffects(
 		mask !== undefined &&
 		(instruction.opcode === "UNARY" ||
 			instruction.opcode === "BINARY" ||
-			instruction.opcode === "LOAD_PRIMORDIAL")
+			instruction.opcode === "LOAD_PRIMORDIAL" ||
+			instruction.opcode === "STORE_PROPERTY_STATIC" ||
+			instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT")
 	) {
 		return {
 			allocation: (mask & INSTRUCTION_MAY_GC) !== 0,
@@ -2657,7 +2659,9 @@ export function nativePlanHasFinalValueStorage(
 		case "known-own-data":
 			return (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" ||
-				instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+				instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+				instruction.opcode === "STORE_PROPERTY_STATIC" ||
+				instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
 			);
 		case "exact-own-slot":
 			return (
@@ -3339,6 +3343,8 @@ function nativeInstructionPlanFromExecution(
 						? { kind: "exact-array-element" }
 						: undefined;
 		case "storePropertyStatic":
+			if (instruction.knownOwnData === true && instruction.exactOwnSlot === undefined)
+				return { kind: "known-own-data" };
 			return instruction.exactOwnSlot !== undefined
 				? { kind: "exact-own-slot", slot: instruction.exactOwnSlot }
 				: instruction.classLayout === undefined || instruction.knownOwnSlot !== undefined

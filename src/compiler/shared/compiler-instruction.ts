@@ -709,6 +709,8 @@ type CompilerOperation =
 			classLayout?: CompilerClassLayoutSite;
 			/** COMPILE-ONLY counterpart of the exact contained-slot load fact. */
 			exactOwnSlot?: number;
+			/** Core proved this unexposed ordinary receiver owns a writable data field. */
+			knownOwnData?: true;
 	  }
 	| {
 			type: "toPropertyKey";

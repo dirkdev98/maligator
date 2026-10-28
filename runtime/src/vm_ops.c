@@ -5805,6 +5805,33 @@ MalValue mal_vm_load_known_own_data_miss(MalObject *object, MalValue key_value, 
     return own.desc.value;
 }
 
+void mal_vm_store_known_own_data_miss(MalObject *object, MalValue key_value, MalValue value, MalInlineCache *ic) {
+    assert(object->header.type == MAL_HEAP_OBJECT);
+    assert(mal_value_is_string(key_value));
+    MalKey key = mal_key_from_value(key_value);
+    u32 index;
+    if (mal_vm_string_to_array_index(mal_value_to_string(key_value), &index)) {
+        key = mal_key_index(index);
+    }
+    if (key.kind == MAL_KEY_STRING) {
+        i32 found = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_SET_OWN);
+        if (found >= 0) {
+            const MalShapeProp *prop = &object->shape->props[found];
+            assert(!(prop->attrs & MAL_PROPERTY_ACCESSOR) && (prop->attrs & MAL_PROPERTY_WRITABLE));
+            mal_vm_object_slot_store(object, prop->slot, value);
+            if (ic != nullptr) mal_vm_record_own_slot(ic, object->shape, key_value, prop->slot);
+            return;
+        }
+    }
+    MalPropertyLookup own = mal_object_get_own(object, key);
+    assert(own.present && own.entry != nullptr && !(own.desc.flags & MAL_PROPERTY_ACCESSOR) &&
+           (own.desc.flags & MAL_PROPERTY_WRITABLE));
+    mal_object_note_prototype_mutation(object);
+    own.desc.value = value;
+    mal_property_write_entry(mal_object_overflow(object), own.entry, &own.desc);
+    mal_gc_card_desc(&object->header, &own.desc);
+}
+
 bool mal_vm_load_known_own_slot_miss(
     MalVm *vm, MalObject *object, MalInlineCache *ic,
     i32 candidate_count, const i32 *candidates, MalValue *out

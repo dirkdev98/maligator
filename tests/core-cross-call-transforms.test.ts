@@ -333,6 +333,10 @@ describe("bounded Core cross-call transforms", () => {
 				attributes: { stringIndex: key },
 			});
 			const read = root.bodyInstructionIds(entry).at(-1)!;
+			root.appendInstruction(entry, "storePropertyStatic", [record!, input!], {
+				attributes: { stringIndex: key },
+			});
+			const store = root.bodyInstructionIds(entry).at(-1)!;
 			root.setTerminator(entry, { kind: "return", value: result! });
 			const caller = program.function(root.finish(entry).function);
 			const make = new CoreFunctionBuilder(program, { parameterCount: 1 });
@@ -356,6 +360,14 @@ describe("bounded Core cross-call transforms", () => {
 				programCompilerWork: 10_000,
 			};
 			runTransforms(program, limits);
+			expect(caller.instructionAttributes(store)[CORE_KNOWN_OWN_DATA_ATTRIBUTE]).toBe(
+				true,
+			);
+			expect(caller.instructionEffectRefinement(store)?.effects).toMatchObject({
+				writes: ["object-property"],
+				mayGc: false,
+				mayThrow: false,
+			});
 			expect(caller.instructionAttributes(read)[CORE_KNOWN_OWN_DATA_ATTRIBUTE]).toBe(
 				true,
 			);
@@ -381,11 +393,18 @@ describe("bounded Core cross-call transforms", () => {
 					true,
 				);
 				expect(caller.instructionEffectRefinement(read)?.effects.mayGc).toBe(false);
+				expect(caller.instructionAttributes(store)[CORE_KNOWN_OWN_DATA_ATTRIBUTE]).toBe(
+					true,
+				);
 			} else {
 				expect(
 					caller.instructionAttributes(read)[CORE_KNOWN_OWN_DATA_ATTRIBUTE],
 				).toBeUndefined();
 				expect(caller.instructionEffectRefinement(read)).toBeUndefined();
+				expect(
+					caller.instructionAttributes(store)[CORE_KNOWN_OWN_DATA_ATTRIBUTE],
+				).toBeUndefined();
+				expect(caller.instructionEffectRefinement(store)).toBeUndefined();
 			}
 			verifyCoreProgram(program, { stage: "pre-target" });
 		},

@@ -2425,17 +2425,21 @@ static inline bool mal_vm_property_try_store_static(MalValue receiver, MalValue 
     return object != nullptr && mal_vm_object_try_store_static(object, value, ic);
 }
 
-/**
- * Barriered overwrite of a known data slot — the fast store in a consolidated object
- * region, where the region's shape guard has already established that `slot` is a
- * writable data slot on this object's shape (so this runs no user code).
- */
 /** A store to a slot that Core or a matched class layout proves within the shape. */
 static inline void mal_vm_object_slot_store(MalObject *object, u32 slot, MalValue value) {
     if (mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_define_invalidations);
     }
     mal_object_field_store_shaped(object, slot, value);
+}
+
+void mal_vm_store_known_own_data_miss(MalObject *object, MalValue key, MalValue value, MalInlineCache *ic);
+
+// Core proves writability and own presence; cache misses only resolve the physical slot.
+static inline void mal_vm_store_known_own_data(MalValue receiver, MalValue key, MalValue value, MalInlineCache *ic) {
+    MalObject *object = mal_value_to_object(receiver);
+    if (ic != nullptr && ic->mode == MAL_IC_MODE_SHAPE && mal_vm_object_try_store_static(object, value, ic)) return;
+    mal_vm_store_known_own_data_miss(object, key, value, ic);
 }
 
 static inline bool mal_vm_constructor_try_begin_initialization(

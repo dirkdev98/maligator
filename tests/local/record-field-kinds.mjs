@@ -1081,7 +1081,180 @@ const mergedPrototype = {
 		"inherited setter receives the actual merged source",
 	);
 }
+const makeWritableRecord = function makeWritableRecord(flag, callback) {
+	for (let step = 0; step < 3; step++) callback(step);
+	return flag ? { value: undefined, tag: 0 } : { tag: 1, value: undefined };
+};
+function writeOwnRecord(value, flag, callback) {
+	const first = makeWritableRecord(flag, callback);
+	const record = flag ? first : makeWritableRecord(flag, callback);
+	record.value = value;
+	callback("stored");
+	return record;
+}
+function* writeOwnSuspended(value, callback) {
+	const record = makeWritableRecord(true, callback);
+	yield 0;
+	record.value = value;
+	callback("stored after yield");
+	return record;
+}
+async function writeOwnAwaited(value, callback) {
+	const record = makeWritableRecord(false, callback);
+	await 0;
+	record.value = value;
+	callback("stored after await");
+	return record;
+}
+async function* writeOwnAsyncSuspended(value, callback) {
+	const record = makeWritableRecord(true, callback);
+	yield 0;
+	await 0;
+	record.value = value;
+	callback("stored after async yield");
+	return record;
+}
+function writeEscapedRecord(value, callback) {
+	const record = makeWritableRecord(true, observe);
+	record.value = 1;
+	callback(record);
+	record.value = value;
+	return record;
+}
+function writeComputedRecord(key, value, callback) {
+	const record = makeWritableRecord(true, callback);
+	record[key] = value;
+	return record;
+}
+function writeUnknownReturned(factory, value) {
+	const record = factory();
+	record.value = value;
+	return record;
+}
+Object.assign(globalThis, {
+	writeOwnRecord,
+	writeOwnSuspended,
+	writeOwnAwaited,
+	writeOwnAsyncSuspended,
+	writeEscapedRecord,
+	writeComputedRecord,
+	writeUnknownReturned,
+});
+const storedHeap = { label: "stored heap value", nested: { live: true } };
+for (let round = 0; round < 3; round++) {
+	for (const input of [
+		undefined,
+		null,
+		false,
+		-0,
+		NaN,
+		1n,
+		Symbol("stored"),
+		"stored",
+		storedHeap,
+	]) {
+		const record = writeOwnRecord(input, (round & 1) === 0, observe);
+		observe("returned store");
+		check(record.value, input, "own overwrite preserves payload identity");
+	}
+}
+const ownIterator = writeOwnSuspended(storedHeap, observe);
+check(ownIterator.next().value, 0, "own store yield");
+observe("suspended own store");
+const ownCompleted = ownIterator.next();
+check(ownCompleted.done, true, "own store generator completion");
+check(ownCompleted.value.value, storedHeap, "own store after yield");
+const ownAsyncIterator = writeOwnAsyncSuspended(storedHeap, observe);
+const ownAsyncSteps = ownAsyncIterator.next().then((step) => {
+	check(step.value, 0, "own store async yield");
+	observe("async suspended own store");
+	return ownAsyncIterator.next().then((result) => {
+		check(result.done, true, "own store async completion");
+		check(result.value.value, storedHeap, "own store after async yield");
+	});
+});
+for (const mutate of [
+	(record) => Object.freeze(record),
+	(record) => Object.defineProperty(record, "value", { writable: false }),
+]) {
+	let caught;
+	try {
+		writeEscapedRecord(2, mutate);
+	} catch (error) {
+		caught = error;
+	}
+	check(caught instanceof TypeError, true, "escaped nonwritable store throws");
+}
+const storeFailure = { marker: "store failure" };
+let setterCalls = 0;
+try {
+	writeEscapedRecord(2, (record) => {
+		Object.defineProperty(record, "value", {
+			set(value) {
+				setterCalls++;
+				check(value, 2, "escaped setter value");
+				throw storeFailure;
+			},
+		});
+	});
+	throw new Error("missing setter exception");
+} catch (error) {
+	check(error, storeFailure, "escaped setter exception identity");
+}
+check(setterCalls, 1, "escaped setter called once");
+let storeKeyCoercions = 0;
+check(
+	writeComputedRecord(
+		{
+			toString() {
+				storeKeyCoercions++;
+				observe("store key");
+				return "value";
+			},
+		},
+		storedHeap,
+		observe,
+	).value,
+	storedHeap,
+	"computed store value",
+);
+check(storeKeyCoercions, 1, "store key coerced once");
+check(
+	writeComputedRecord(0, storedHeap, observe)[0],
+	storedHeap,
+	"indexed store fallback",
+);
+let storeTraps = 0;
+const storeProxy = new Proxy(
+	{},
+	{
+		set(target, key, value) {
+			storeTraps++;
+			observe("store trap");
+			if (value === storeFailure) throw storeFailure;
+			target[key] = value;
+			return true;
+		},
+	},
+);
+check(
+	writeUnknownReturned(() => storeProxy, storedHeap),
+	storeProxy,
+	"Proxy store receiver",
+);
+check(storeProxy.value, storedHeap, "Proxy store payload");
+try {
+	writeUnknownReturned(() => storeProxy, storeFailure);
+	throw new Error("missing Proxy store exception");
+} catch (error) {
+	check(error, storeFailure, "Proxy store exception identity");
+}
+check(storeTraps, 2, "Proxy set traps called once per store");
 Promise.all([
+	writeOwnAwaited(storedHeap, observe).then((record) =>
+		check(record.value, storedHeap, "own store after await"),
+	),
+	ownAsyncSteps,
 	producerAwaited(255, false, observe).then((value) =>
 		check(value, 5, "producer awaited field"),
 	),

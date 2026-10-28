@@ -1,4 +1,5 @@
 import { CoreEditor } from "./core-editor.ts";
+import { coreUnscopedInstructionAttributes } from "./core-internal-attributes.ts";
 import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
 import { CORE_PRIMITIVE_EFFECT_FACT } from "./core-ir-value-kinds.ts";
 import type {
@@ -7,11 +8,12 @@ import type {
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
+import { CORE_RECORD_OWN_DATA_EFFECT_FACT } from "./core-record-value-kinds.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 /**
  * Whether `cloneCoreFunction` can copy `fn`. Facts belong to their function, so
- * only primitive effects, which the clone's own passes reprove, may be
+ * only primitive and record-access effects, which the clone's passes reprove, may be
  * dropped; guards and every other refinement keep the original unique.
  */
 export function coreFunctionIsCloneable(fn: CoreFunctionStore): boolean {
@@ -24,12 +26,12 @@ export function coreFunctionIsCloneable(fn: CoreFunctionStore): boolean {
 		if (refinement === undefined) continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		const fact = fn.fact(refinement.proof);
-		if (
-			(opcode !== "unary" && opcode !== "binary" && opcode !== "queryStaticData") ||
-			fact.kind !== CORE_PRIMITIVE_EFFECT_FACT ||
-			fact.obligations.length !== 0
-		)
-			return false;
+		const reprovable =
+			(["unary", "binary", "queryStaticData"].includes(opcode) &&
+				fact.kind === CORE_PRIMITIVE_EFFECT_FACT) ||
+			(["loadPropertyStatic", "storePropertyStatic"].includes(opcode) &&
+				fact.kind === CORE_RECORD_OWN_DATA_EFFECT_FACT);
+		if (!reprovable || fact.obligations.length !== 0) return false;
 	}
 	return true;
 }
@@ -91,7 +93,9 @@ export function cloneCoreFunction(
 				fn.instructionOpcodeName(instruction),
 				operands.map(map),
 				{
-					attributes: fn.instructionAttributes(instruction),
+					attributes: coreUnscopedInstructionAttributes(
+						fn.instructionAttributes(instruction),
+					),
 					sourcePosition: fn.instructionSourcePosition(instruction),
 					outputCount: resultCount,
 					outputRepresentations: Array.from({ length: resultCount }, (_, index) =>

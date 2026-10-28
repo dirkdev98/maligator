@@ -497,7 +497,9 @@ export function coreReturnedRecordKinds(
 	return result;
 }
 
-export interface CoreRecordFieldRead {
+export const CORE_RECORD_OWN_DATA_EFFECT_FACT = "returned-record-own-data";
+
+export interface CoreRecordFieldAccess {
 	readonly producers: ReadonlyArray<CoreInstructionId>;
 	readonly key: number;
 	/** Preceding accesses must be own, so getters and setters cannot expose the record. */
@@ -505,8 +507,8 @@ export interface CoreRecordFieldRead {
 	readonly writes?: ReadonlyArray<CoreRecordFieldWrite>;
 }
 
-export function coreRecordReadInitialFields(
-	read: CoreRecordFieldRead,
+export function coreRecordAccessInitialFields(
+	read: CoreRecordFieldAccess,
 	source: (producer: CoreInstructionId) => CoreRecordValueKind,
 ): CoreRecordValueKind {
 	let result: CoreRecordValueKind = null;
@@ -518,7 +520,7 @@ export function coreRecordReadInitialFields(
 }
 
 export function coreRecordFieldInitialKind(
-	read: CoreRecordFieldRead,
+	read: CoreRecordFieldAccess,
 	record: CoreRecordValueKind,
 	top: number,
 ): number {
@@ -529,7 +531,7 @@ export function coreRecordFieldInitialKind(
 }
 
 export function coreRecordFieldIsOwnData(
-	read: CoreRecordFieldRead,
+	read: CoreRecordFieldAccess,
 	record: CoreRecordValueKind,
 ): boolean {
 	return (
@@ -540,7 +542,7 @@ export function coreRecordFieldIsOwnData(
 }
 
 export function coreRecordFieldReadIntegerRange(
-	read: CoreRecordFieldRead,
+	read: CoreRecordFieldAccess,
 	record: CoreRecordValueKind,
 	range: (
 		value: CoreValueId,
@@ -558,13 +560,17 @@ export function coreRecordFieldReadIntegerRange(
 	return result;
 }
 
-interface CoreRecordFieldReadIndex {
-	readonly featureVersion: number;
+interface CoreRecordFieldAccessIndex {
+	readonly featureVersion?: number;
 	readonly memoryEffectVersion?: number;
-	readonly reads: ReadonlyMap<CoreInstructionId, CoreRecordFieldRead>;
+	readonly reads: ReadonlyMap<CoreInstructionId, CoreRecordFieldAccess>;
+	readonly stores: ReadonlyMap<CoreInstructionId, CoreRecordFieldAccess>;
 }
 
-const recordFieldReadIndices = new WeakMap<CoreFunctionStore, CoreRecordFieldReadIndex>();
+const recordFieldAccessIndices = new WeakMap<
+	CoreFunctionStore,
+	CoreRecordFieldAccessIndex
+>();
 const MAXIMUM_RECORD_READ_PREFIX_WORK = 256;
 
 function recordAliasParameter(
@@ -600,12 +606,13 @@ interface RecordFieldAccesses {
 	readonly barriers: ReadonlySet<CoreInstructionId>;
 }
 
-function recordReadPrefixes(
+function recordAccessPrefixes(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	position: (instruction: CoreInstructionId) => number,
 	accesses: RecordFieldAccesses,
-	result: Map<CoreInstructionId, CoreRecordFieldRead>,
+	result: Map<CoreInstructionId, CoreRecordFieldAccess>,
+	stores: Map<CoreInstructionId, CoreRecordFieldAccess>,
 ): void {
 	const { reads, writes, barriers } = accesses;
 	const events = new Map<CoreBlockId, Array<CoreInstructionId>>();
@@ -616,12 +623,15 @@ function recordReadPrefixes(
 		row.push(instruction);
 	}
 	for (const row of events.values()) row.sort((a, b) => position(b) - position(a));
-	for (const [instruction, key] of reads) {
-		if (result.has(instruction)) continue;
+	for (const [instruction, key] of [...reads, ...writes]) {
+		const target = reads.has(instruction) ? result : stores;
+		if (target.has(instruction)) continue;
 		const block = fn.instructionBlock(instruction);
 		if (!cfg.reachable.has(block)) continue;
 		const requiredKeys = new Set([key]);
-		const reachingWrites = new Set<CoreInstructionId>();
+		const reachingWrites = reads.has(instruction)
+			? new Set<CoreInstructionId>()
+			: undefined;
 		const producers = new Set<CoreInstructionId>();
 		const pending = [
 			{
@@ -668,7 +678,7 @@ function recordReadPrefixes(
 				}
 				const priorKey = reads.get(event) ?? writes.get(event);
 				if (priorKey !== undefined) requiredKeys.add(priorKey);
-				if (writes.get(event) === key) reachingWrites.add(event);
+				if (writes.get(event) === key) reachingWrites?.add(event);
 			}
 			if (!valid) break;
 			// Another producer on this path cannot reset the selected object's lifetime.
@@ -697,7 +707,7 @@ function recordReadPrefixes(
 		}
 		if (!valid || producers.size === 0) continue;
 		const fieldWrites =
-			reachingWrites.size === 0
+			reachingWrites === undefined || reachingWrites.size === 0
 				? undefined
 				: Object.freeze(
 						[...reachingWrites].map((instruction) => {
@@ -711,7 +721,7 @@ function recordReadPrefixes(
 							});
 						}),
 					);
-		result.set(
+		target.set(
 			instruction,
 			Object.freeze({
 				producers: Object.freeze([...producers]),
@@ -723,12 +733,13 @@ function recordReadPrefixes(
 	}
 }
 
-function mergedRecordFieldReads(
+function mergedRecordFieldAccesses(
 	fn: CoreFunctionStore,
 	parameters: ReadonlySet<CoreValueId>,
 	control: () => CoreControlFlow,
 	position: (instruction: CoreInstructionId) => number,
-	result: Map<CoreInstructionId, CoreRecordFieldRead>,
+	result: Map<CoreInstructionId, CoreRecordFieldAccess>,
+	stores: Map<CoreInstructionId, CoreRecordFieldAccess>,
 ): void {
 	const candidates = new Set<CoreValueId>();
 	const forwarded = new Set<CoreValueId>();
@@ -757,9 +768,13 @@ function mergedRecordFieldReads(
 				if (opcode === "move")
 					pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
 				else if (
-					(opcode === "loadPropertyStatic" || opcode === "loadProperty") &&
+					(opcode === "loadPropertyStatic" ||
+						opcode === "loadProperty" ||
+						opcode === "storePropertyStatic" ||
+						opcode === "storeProperty") &&
 					fn.kernel.useOperand(use) === 0 &&
-					!result.has(instruction)
+					!result.has(instruction) &&
+					!stores.has(instruction)
 				)
 					candidates.add(value);
 			}
@@ -887,7 +902,14 @@ function mergedRecordFieldReads(
 		}
 		if (!valid || producers.size === 0) continue;
 		if (barriers.size > 0 || writes.size > 0 || requiredKeys.size > 1) {
-			recordReadPrefixes(fn, cfg, position, { reads, writes, barriers }, result);
+			recordAccessPrefixes(
+				fn,
+				cfg,
+				position,
+				{ reads, writes, barriers },
+				result,
+				stores,
+			);
 			continue;
 		}
 		const sources = Object.freeze([...producers]);
@@ -906,21 +928,22 @@ function mergedRecordFieldReads(
 	}
 }
 
-export function coreRecordFieldReads(
+function recordFieldAccesses(
 	fn: CoreFunctionStore,
 	control: () => CoreControlFlow,
-): ReadonlyMap<CoreInstructionId, CoreRecordFieldRead> {
+): CoreRecordFieldAccessIndex {
 	// Edits are visible before their body/control-flow versions advance at commit.
 	const featureVersion = fn.hasActiveEditor ? undefined : fn.featureVersion;
-	const cached = recordFieldReadIndices.get(fn);
+	const cached = recordFieldAccessIndices.get(fn);
 	if (
 		featureVersion !== undefined &&
 		cached?.featureVersion === featureVersion &&
 		(cached.memoryEffectVersion === undefined ||
 			cached.memoryEffectVersion === fn.version("memoryEffects"))
 	)
-		return cached.reads;
-	const result = new Map<CoreInstructionId, CoreRecordFieldRead>();
+		return cached;
+	const result = new Map<CoreInstructionId, CoreRecordFieldAccess>();
+	const stores = new Map<CoreInstructionId, CoreRecordFieldAccess>();
 	const mergedParameters = new Set<CoreValueId>();
 	let cfg: CoreControlFlow | undefined;
 	let positions: Map<CoreInstructionId, number> | undefined;
@@ -1005,9 +1028,15 @@ export function coreRecordFieldReads(
 				else reads.set(instruction, key);
 			}
 		}
-		if (!valid || reads.size === 0) continue;
+		if (!valid || (reads.size === 0 && writes.size === 0)) continue;
 		const producers = Object.freeze([producer]);
-		const keys = new Set(reads.values());
+		const keys = new Set([...reads.values(), ...writes.values()]);
+		if (barriers.size === 0 && keys.size === 1) {
+			const requiredKeys = Object.freeze([...keys]);
+			for (const [instruction, key] of writes)
+				stores.set(instruction, Object.freeze({ producers, key, requiredKeys }));
+			if (reads.size === 0) continue;
+		}
 		if (barriers.size === 0 && writes.size === 0 && keys.size === 1) {
 			const requiredKeys = Object.freeze([...keys]);
 			for (const [instruction, key] of reads)
@@ -1015,20 +1044,35 @@ export function coreRecordFieldReads(
 			continue;
 		}
 		cfg ??= control();
-		recordReadPrefixes(fn, cfg, position, { reads, writes, barriers }, result);
+		recordAccessPrefixes(fn, cfg, position, { reads, writes, barriers }, result, stores);
 	}
-	mergedRecordFieldReads(
+	mergedRecordFieldAccesses(
 		fn,
 		mergedParameters,
 		() => (cfg ??= control()),
 		position,
 		result,
+		stores,
 	);
-	if (featureVersion !== undefined)
-		recordFieldReadIndices.set(fn, {
-			featureVersion,
-			...(cfg === undefined ? {} : { memoryEffectVersion: fn.version("memoryEffects") }),
-			reads: result,
-		});
-	return result;
+	const index = Object.freeze({
+		featureVersion,
+		...(cfg === undefined ? {} : { memoryEffectVersion: fn.version("memoryEffects") }),
+		reads: result,
+		stores,
+	});
+	if (featureVersion !== undefined) recordFieldAccessIndices.set(fn, index);
+	return index;
+}
+
+export function coreRecordFieldReads(
+	fn: CoreFunctionStore,
+	control: () => CoreControlFlow,
+): ReadonlyMap<CoreInstructionId, CoreRecordFieldAccess> {
+	return recordFieldAccesses(fn, control).reads;
+}
+export function coreRecordFieldStores(
+	fn: CoreFunctionStore,
+	control: () => CoreControlFlow,
+): ReadonlyMap<CoreInstructionId, CoreRecordFieldAccess> {
+	return recordFieldAccesses(fn, control).stores;
 }

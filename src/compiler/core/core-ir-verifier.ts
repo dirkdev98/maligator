@@ -607,14 +607,16 @@ function verifyInstructionRows(
 				const effects = refinement?.effects;
 				if (
 					attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE] !== true ||
-					descriptor.opcode !== "loadPropertyStatic" ||
+					!["loadPropertyStatic", "storePropertyStatic"].includes(descriptor.opcode) ||
 					effects === undefined ||
+					(descriptor.opcode === "storePropertyStatic" &&
+						!effects.writes.includes("object-property")) ||
 					effects.mayThrow ||
 					effects.maySuspend ||
 					effects.mayGc ||
 					effects.callsUserCode
 				)
-					fail("Invalid known own-data read proof");
+					fail("Invalid known own-data access proof");
 			}
 		} else fn.instructionKind(instruction);
 		for (let operand = 0; operand < operandCount; operand++) {

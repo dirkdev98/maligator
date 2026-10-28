@@ -15,11 +15,11 @@ import {
 	sameCoreRecordValueKind,
 	joinCoreRecordValueKinds,
 	coreRecordFieldInitialKind,
-	coreRecordReadInitialFields,
+	coreRecordAccessInitialFields,
 } from "./core-record-value-kinds.ts";
 import type {
 	CoreRecordValueKind,
-	CoreRecordFieldRead,
+	CoreRecordFieldAccess,
 } from "./core-record-value-kinds.ts";
 import {
 	CORE_PROGRAM_FLOW_BODY,
@@ -180,7 +180,7 @@ export interface CoreProgramFlowValueKindSemantics<Analysis> {
 	recordReads(
 		fn: CoreFunctionStore,
 		control: () => CoreControlFlow,
-	): ReadonlyMap<CoreInstructionId, CoreRecordFieldRead>;
+	): ReadonlyMap<CoreInstructionId, CoreRecordFieldAccess>;
 	returnRecord(
 		program: CoreProgram,
 		fn: CoreFunctionStore,
@@ -2230,7 +2230,7 @@ export class CoreProgramFlowEngine {
 		>();
 		const recordReadIndices = new Map<
 			CoreFunctionId,
-			ReadonlyMap<CoreInstructionId, CoreRecordFieldRead>
+			ReadonlyMap<CoreInstructionId, CoreRecordFieldAccess>
 		>();
 		const recordAlternativeIndices = new Map<
 			CoreFunctionId,
@@ -2432,7 +2432,7 @@ export class CoreProgramFlowEngine {
 						const read = recordReads.get(instruction)!;
 						const initialKind = coreRecordFieldInitialKind(
 							read,
-							coreRecordReadInitialFields(read, recordResult),
+							coreRecordAccessInitialFields(read, recordResult),
 							semantics.top,
 						);
 						if (initialKind === 0 || initialKind === semantics.top) continue;
@@ -2488,7 +2488,7 @@ export class CoreProgramFlowEngine {
 								if (read === undefined) return undefined;
 								return coreRecordFieldInitialKind(
 									read,
-									coreRecordReadInitialFields(read, recordResult),
+									coreRecordAccessInitialFields(read, recordResult),
 									semantics.top,
 								);
 							}

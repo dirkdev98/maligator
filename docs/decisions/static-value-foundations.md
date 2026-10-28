@@ -923,6 +923,17 @@ Producer effects remain independent; generators and async functions retain their
 suspension, exception and root obligations. Loaded String values keep their roots
 even after the record no longer contains them.
 
+The same prefix proof licenses named overwrites of existing writable own data
+fields. It establishes presence and writability independently of payload kinds or
+physical slots; every fresh ordinary producer alternative must contain the key.
+Full and resumable native bodies use a noncollecting cache probe whose miss only
+resolves the existing slot. The overwrite retains its object-property write effect,
+prototype invalidation and SATB/card barriers. Escapes, descriptor changes, missing
+keys, accessors and opaque producers retain generic dispatch and completion checks.
+Cloning or inlining discards both scoped access hints and their effect refinements
+so the destination flow must prove them again. Mutating stores remain outside
+frameless replay admission. Indexed producers still require separate summaries.
+
 Function-scoped fact tables carry one versioned proof and use dense instruction
 indices. Register facts reference the existing operand list, with an explicit
 input offset so constrained input/output aliases remain distinct.

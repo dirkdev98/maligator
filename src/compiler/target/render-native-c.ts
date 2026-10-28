@@ -7868,7 +7868,10 @@ function profileDecisionsForInstruction(
 			source.includes("mal_object_field_load_shaped(mal_value_to_object(")
 		) {
 			decisions.push(decision("property.exact-own-slot", "applied"));
-		} else if (source.includes("mal_vm_load_known_own_data(")) {
+		} else if (
+			source.includes("mal_vm_load_known_own_data(") ||
+			source.includes("mal_vm_store_known_own_data(")
+		) {
 			decisions.push(decision("property.known-own-data", "applied"));
 		} else if (source.includes("mal_vm_try_load_known_own_slots(")) {
 			decisions.push(
@@ -15807,15 +15810,22 @@ function emitInstruction(
 					: `r${instruction.dst} = fp${context.fieldLoad.field};`,
 		];
 
-	if (
-		nativePlan?.kind === "known-own-data" &&
-		stackObjectAccess === undefined &&
-		(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
-			instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT")
-	)
-		return [
-			`r${instruction.dst} = ${emission.callValue(instruction.dst, `mal_vm_load_known_own_data(${emission.boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
-		];
+	if (nativePlan?.kind === "known-own-data" && stackObjectAccess === undefined) {
+		if (
+			instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+			instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+		)
+			return [
+				`r${instruction.dst} = ${emission.callValue(instruction.dst, `mal_vm_load_known_own_data(${emission.boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+			];
+		if (
+			instruction.opcode === "STORE_PROPERTY_STATIC" ||
+			instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+		)
+			return [
+				`mal_vm_store_known_own_data(${emission.boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), ${emission.boxed(instruction.value)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+			];
+	}
 
 	if (
 		context.fieldAllocation !== undefined &&

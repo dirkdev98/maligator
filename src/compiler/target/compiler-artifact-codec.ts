@@ -110,7 +110,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 325;
+export const COMPILER_ARTIFACT_VERSION = 326;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2632,7 +2632,9 @@ function writeCompilerArtifact(
 			} else if (
 				plan.kind === "known-own-data" &&
 				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
-					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT")
+					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+					instruction.opcode === "STORE_PROPERTY_STATIC" ||
+					instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT")
 			) {
 				w.u8(26);
 			} else if (
@@ -5320,7 +5322,9 @@ function readCompilerArtifact(
 			} else if (
 				tag === 26 &&
 				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
-					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT")
+					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+					instruction.opcode === "STORE_PROPERTY_STATIC" ||
+					instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT")
 			) {
 				nativeInstructions[instructionIndex] = { kind: "known-own-data" };
 			} else if (

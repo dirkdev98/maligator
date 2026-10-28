@@ -45,6 +45,24 @@ describe("fresh record field kind observations", () => {
 							) === name,
 					)!;
 				for (const name of [
+					"writeOwnRecord",
+					"writeOwnSuspended",
+					"writeOwnAwaited",
+					"writeOwnAsyncSuspended",
+				]) {
+					const fn = named(name);
+					expect(fn, name).toBeDefined();
+					expect(
+						fn.body.instructions.some(
+							(op, ip) =>
+								(op.opcode === "STORE_PROPERTY_STATIC" ||
+									op.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT") &&
+								fn.instructions[ip]?.kind === "known-own-data",
+						),
+						name,
+					).toBe(true);
+				}
+				for (const name of [
 					"readStable",
 					"readUnion",
 					"readMergedNumber",

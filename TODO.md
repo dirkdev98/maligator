@@ -262,6 +262,12 @@ The independent target boundary and current storage contract are recorded in
       own slot without invoking getters or prototypes. Inlining discards the scoped
       proof and republishes it from the cloned flow. Withdrawn presence removes its
       hint and effect refinement independently of normal-result kinds and bounds.
+      Writable own-data presence now also licenses materialized named overwrites
+      in full and resumable bodies. These stores retain their mutation effect and
+      GC write barriers while omitting generic completion, collection and reentry
+      branches. Different producer layouts resolve their existing physical slots
+      through the same property cache; preceding escapes or descriptor changes
+      retain the generic store. Cloning drops scoped access hints and proofs.
       Forwarded call and constructor results now retain those summaries across
       private writes to proven existing own fields. Cached structural plans
       revalidate required keys against current callee summaries; unknown sources
@@ -277,9 +283,8 @@ The independent target boundary and current storage contract are recorded in
       backedges; later effects do not withdraw an earlier read. Writer/source
       correlations within the surviving prefix remain conservative.
       Remaining object work includes relational writer bounds, writer/source
-      correlations and definite
-      overwrite precision, typed producer storage for remaining writes,
-      writable own-data proofs for materialized stores, broader parameter-relative
+      correlations and definite overwrite precision, typed producer storage for
+      remaining writes, indexed producer summaries, broader parameter-relative
       call effects and coroutine record transport. Record-call admission and
       profitability are owned by the following tasks.
       Activation-local field storage now joins per-instruction kinds and integer
