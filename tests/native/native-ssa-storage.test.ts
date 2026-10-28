@@ -697,13 +697,25 @@ describe("independent native SSA storage", () => {
 			throw new Error("Return fixture lacks a stack certificate");
 		expect(returnRegion.license.materialization).toBe("on-demand");
 		expect(returnRegion.sites[0]!.materializations.length).toBeGreaterThan(0);
-		const returnedEntry = returned.directEntries.find((entry) => entry.resultFields)!;
+		const returnedEntry = returned.directEntries.find(
+			(entry) =>
+				entry.resultFields === undefined &&
+				entry.parameterRepresentations.every((rep) => rep === "boolean"),
+		)!;
 		expect(returnedEntry).toBeDefined();
 		expect(returnedEntry.resultRepresentation).toBe("boxed");
-		expect(returnedEntry.resultFields!.escapes).toBe(true);
+		const returnedAllocationIp = returned.body.instructions.findIndex(
+			(op) => op.opcode === "CREATE_OBJECT_SHAPED",
+		);
+		const returnedAllocation = returned.body.instructions[returnedAllocationIp]!;
+		if (returnedAllocation.opcode !== "CREATE_OBJECT_SHAPED")
+			throw new Error("Return fixture lacks its final allocation");
 		expect(
-			returnedEntry.resultFields!.storage.map((field) => field.representation),
+			returnedAllocation.valueRegisters.map(
+				(register) => returnedEntry.registerRepresentations[register],
+			),
 		).toEqual(["number", "int32", "boolean", "boxed", "boxed"]);
+		expect(returnedEntry.storage!.directHeapObjectIps).toContain(returnedAllocationIp);
 		const emittedReturn = emitCompiledFunction(
 			returned,
 			returned.functionIndex,
@@ -713,9 +725,7 @@ describe("independent native SSA storage", () => {
 		const emittedRecord = emittedReturn.directEntries.find(
 			(entry) => entry.id === returnedEntry.id && !entry.leaf,
 		)!.source;
-		expect(emittedRecord).toMatch(/double \*\s*rf0/);
-		expect(emittedRecord).toMatch(/i32 \*\s*rf1/);
-		expect(emittedRecord).toMatch(/bool \*\s*rf2/);
+		expect(emittedRecord).toContain("mal_vm_create_object_shaped(vm,");
 		expect(
 			image.native.functions.some((fn) =>
 				fn.instructions.some(

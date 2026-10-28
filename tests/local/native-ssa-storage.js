@@ -2781,7 +2781,8 @@ if (returnedAgain.integer !== 3)
 if (typeof globalThis.__mal_fail_next_cell_allocation === "function") {
 	let caught = false;
 	try {
-		typedReturnedFields(true, true);
+		// An escaping result keeps this probe at the fallible materialization boundary.
+		globalThis.materializedTypedFailure = typedReturnedFields(true, true);
 	} catch (error) {
 		caught = error instanceof Error;
 	}
