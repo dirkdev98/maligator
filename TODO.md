@@ -117,6 +117,9 @@ Arithmetic work should support these paths or fix correctness defects.
       Guarded collection calls consume receiver brands independently of callee
       identity, preserving shadowed-method and cross-brand fallbacks.
       Broad native, sanitizer and self-hosted acceptance remains on CI.
+      Follow up the conservative interpreted profiling GC failure from native
+      remainder run `40752877684`; that fixture's wire and emitted C are identical
+      at `0ce7ac8f`, `d9f0b92e` and `8319d1d7`, so these slices do not explain it.
 
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
@@ -400,7 +403,10 @@ Arithmetic work should support these paths or fix correctness defects.
       Keep the representative Node.js self-compile below 60 seconds on AC power;
       stable acceptance remains unverified. Alternating frozen-input controls at
       `0ce7ac8f` took 58.42 and 58.51 seconds on AC, after earlier unmatched samples
-      exceeded the budget. Preserve matched source and workload identities before
+      exceeded the budget. The clean `8319d1d7` record-payload slice took 58.74
+      seconds in one AC budget sample, emitting 172,767,450 C code units across
+      145 units; this establishes neither a speedup nor timing stability.
+      Preserve matched source and workload identities before
       attributing such variation to new facts. Check each completed semantic slice
       against the budget without expanding into speculative micro-optimizations.
       Analysis extensions must stay bounded and reuse existing worklists. Leave
