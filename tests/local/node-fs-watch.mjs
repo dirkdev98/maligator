@@ -6,11 +6,17 @@ import * as path from "node:path";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mal-fs-watch-"));
 
 function untilEvent(watcher, predicate, poke) {
-	return new Promise((resolve) => {
+	return new Promise((resolve, reject) => {
+		const deadline = setTimeout(() => {
+			clearInterval(timer);
+			watcher.close();
+			reject(new Error("Timed out waiting for fs.watch notification"));
+		}, 10_000);
 		const timer = setInterval(poke, 50);
 		watcher.on("change", (eventType, filename) => {
 			if (!predicate(eventType, filename)) return;
 			clearInterval(timer);
+			clearTimeout(deadline);
 			resolve([eventType, filename]);
 		});
 		poke();
@@ -36,12 +42,16 @@ async function watchDirectory() {
 	);
 	console.log("dir event", type, name);
 	let appended = 0;
-	const [changeType, changed] = await untilEvent(
+	const [, changed] = await untilEvent(
 		watcher,
-		(eventType, filename) => eventType === "change" && filename === "created.txt",
+		// Coalesced creation and modification can retain the platform's rename classification.
+		(eventType, filename) =>
+			(eventType === "change" || eventType === "rename") &&
+			filename === "created.txt" &&
+			fs.readFileSync(path.join(dir, filename), "utf8").includes("+"),
 		() => fs.appendFileSync(path.join(dir, "created.txt"), `+${appended++}`),
 	);
-	console.log("dir event", changeType, changed);
+	console.log("dir modification", changed);
 	const closed = new Promise((resolve) => watcher.on("close", () => resolve("closed")));
 	console.log("close returns", watcher.close());
 	console.log("dir", await closed);
