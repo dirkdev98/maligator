@@ -57,6 +57,7 @@ import {
 import {
 	CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
 	coreCollectionReceiverBrandForOperation,
+	coreExactCollectionBrand,
 	coreExactCollectionBuiltinEffects,
 } from "./core-ir-value-classes.ts";
 import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
@@ -1164,7 +1165,7 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 			const exact =
 				receiver === undefined
 					? undefined
-					: classes.containedCollection(receiver, instruction);
+					: coreExactCollectionBrand(classes.exactHeapBrand(receiver, instruction));
 			if (exact === undefined || exact !== expected) continue;
 			const effects = coreExactCollectionBuiltinEffects(fn, instruction, exact);
 			if (effects === undefined) continue;

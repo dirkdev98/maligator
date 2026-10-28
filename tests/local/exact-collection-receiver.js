@@ -108,9 +108,64 @@ assert(
 );
 
 const collect = globalThis.__mal_collect_garbage;
+
+function escapedCollectionOps(visit, key, replacement) {
+	const map = new Map();
+	const set = new Set();
+	visit(map, set);
+	const first = Map.prototype.get.call(map, key);
+	visit(map, set);
+	const second = Map.prototype.get.call(map, key);
+	const present = Map.prototype.has.call(map, key) && Set.prototype.has.call(set, key);
+	const removed =
+		Map.prototype.delete.call(map, key) && Set.prototype.delete.call(set, key);
+	const mapAlias = Map.prototype.set.call(map, key, replacement) === map;
+	const setAlias = Set.prototype.add.call(set, key) === set;
+	return { first, second, present, removed, mapAlias, setAlias, shadowed: map.get(key) };
+}
+globalThis.__mal_escaped_collection_ops = escapedCollectionOps;
+const escapedKey = {
+	[Symbol.toPrimitive]() {
+		throw new Error("collection key was coerced");
+	},
+};
+const firstPayload = { value: 1 };
+const secondPayload = { value: 2 };
+let publicationCount = 0;
+const escaped = escapedCollectionOps(
+	(map, set) => {
+		map.set(escapedKey, publicationCount++ === 0 ? firstPayload : secondPayload);
+		set.add(escapedKey);
+		map.get = () => "shadow";
+		set.has = () => false;
+		if (typeof collect === "function") collect();
+	},
+	escapedKey,
+	{ value: 3 },
+);
+assert(
+	escaped.first === firstPayload && escaped.second === secondPayload,
+	"published collection reads observe intervening callbacks",
+);
+assert(
+	escaped.present && escaped.removed,
+	"published collection membership and deletion retain effects",
+);
+assert(
+	escaped.mapAlias && escaped.setAlias,
+	"published mutators retain receiver identity",
+);
+assert(
+	escaped.shadowed === "shadow",
+	"raw collection brand does not authorize a shadowed method",
+);
 if (typeof collect === "function") {
 	collect();
 	assert(registry.read("answer").value === 42, "private collection values stay rooted");
+	assert(
+		escaped.first.value === 1 && escaped.second.value === 2,
+		"published collection results stay rooted",
+	);
 }
 
 console.log("exact-collection-receiver PASS");

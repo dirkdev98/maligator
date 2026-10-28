@@ -104,6 +104,13 @@ coercion and exception order, publication and GC obligations in every entry mode
 Keep the sub-60-second AC self-compile target; leave broad acceptance to CI.
 Arithmetic work should support these paths or fix correctness defects.
 
+- [ ] Carry stable heap brands across normal returns from complete script callee
+      sets and compatible phi alternatives. Keep brand identity independent of
+      publication and containment; preserve mutable method/callee guards and heap
+      contents invalidation across callbacks. Reuse bounded interprocedural worklists
+      rather than adding a second whole-program solve. Then consume these brands in
+      receiver-sensitive builtin effects, direct calls and result storage.
+
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before
@@ -385,12 +392,11 @@ Arithmetic work should support these paths or fix correctness defects.
       margin for in-process native builds of the compiler.
       Keep the representative Node.js self-compile below 60 seconds on AC power;
       stable acceptance remains unverified. The latest clean uninstrumented sample
-      at `a6458958` took 60.52 seconds with conflicting AC/battery power readings,
-      so it cannot establish the AC budget. Analysis extensions must stay bounded
-      and reuse existing worklists. Leave long checks to CI and keep local
-      verification to the affected units and quality checks. The variable and
-      transitive relational-range extensions still need a qualifying AC sample.
-      Transitive queries share the existing 32-step budget.
+      at `6d840479` took 55.61 seconds on verified AC charging power. That single
+      cold sample meets the budget provisionally; repeated acceptance remains open.
+      Analysis extensions must stay bounded and reuse existing worklists. Leave
+      long checks to CI and keep local verification to the affected units and
+      quality checks. Transitive range queries share the existing 32-step budget.
 
 - [ ] Spread one split native function over several translation units. Outlining
       functions past 256 Ki into 128 Ki parts cut the self-compile `-O2` unit wall time
