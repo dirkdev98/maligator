@@ -175,6 +175,13 @@ jobs:
       - name: Check the runner environment
         run: npm run env:check -- --json
 
+      - name: Prepare the compiled Test262 runtime
+        env:
+          MAL_INTERP: "0"
+          T262_WIRE: "0"
+          T262_OBJCACHE: "1"
+        run: node scripts/prewarm-test262-runtime.ts
+
       - name: Run slow unit integration tests
         shell: bash
         run: npm run test:unit:full-only -- $(grep -vE '^[[:space:]]*(#|$)' tests/test-suite-unit-full-only.txt)

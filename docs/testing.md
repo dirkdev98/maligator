@@ -258,8 +258,10 @@ the Linux shards of both dimensions start a PostgreSQL 17 container and set the
 `MAL_POSTGRES_*LIVE` opt-ins, which canonical runners keep, so the live postgres.js
 suites run there (the large-types suite under the sanitizers); macOS shards skip them.
 
-Extended CI also runs on pushes to `main` and manual dispatch. Independent Linux
-jobs exercise the full-only unit manifest, Wasm build and parity, the self-hosted
+Extended CI also runs on pushes to `main` and manual dispatch. Its slow-unit job
+prepares the compiled Test262 runtime before Vitest, keeping cold native compiler
+builds outside the execution-contract hook budget. The contract still exercises
+compiled, interpreted and wire backends. Independent Linux jobs exercise the full-only unit manifest, Wasm build and parity, the self-hosted
 native-build and CLI checks, the self-hosted compiler differential, and compiled WPT. One job runs the
 short checks in sequence: the self-hosted frontend, strip and wire differentials,
 Rust runtime tests, and the focused Test262 and WPT GC dimensions. The slow-unit and
