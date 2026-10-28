@@ -773,7 +773,9 @@ function buildFromStructural(
 		const fromEdges = uniqueEntryEdges.get(from);
 		const cached = fromEdges?.get(to);
 		if (cached !== undefined) return cached;
+		// A function call enters its entry block without traversing a Core edge.
 		const unique =
+			to !== entry &&
 			reachable.has(from) &&
 			(successors[from] ?? []).filter((edge) => edge.to === to).length === 1 &&
 			(predecessors[to] ?? []).every(

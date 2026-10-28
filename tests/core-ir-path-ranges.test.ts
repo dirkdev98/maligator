@@ -218,6 +218,55 @@ function relationalInt32(
 }
 
 describe("Core path-sensitive numeric ranges", () => {
+	it.each([false, true])(
+		"does not use an entry backedge to prove its own comparison with variable=%s",
+		(variable) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+			const entry = builder.createBlock([{}, {}]);
+			const exit = builder.createBlock();
+			const inputs = inspectCoreBlockParameters(builder, entry).map(({ value }) => value);
+			const [value] = builder.appendInstruction(entry, "unary", [inputs[0]!], {
+				attributes: { operator: "~" },
+				outputRepresentations: ["i32"],
+			});
+			const [constant] = builder.appendInstruction(entry, "createF64", [], {
+				attributes: { value: 15 },
+				outputRepresentations: ["i32"],
+			});
+			const bound = variable
+				? builder.appendInstruction(entry, "binary", [inputs[1]!, constant!], {
+						attributes: { operator: "&" },
+						outputRepresentations: ["i32"],
+					})[0]!
+				: constant!;
+			const [condition] = builder.appendInstruction(entry, "binary", [value!, bound], {
+				attributes: { operator: "<" },
+				outputRepresentations: ["boolean"],
+			});
+			builder.setTerminator(entry, {
+				kind: "branch",
+				condition: condition!,
+				consequent: { block: entry, arguments: inputs },
+				alternate: { block: exit, arguments: [] },
+			});
+			builder.setTerminator(exit, { kind: "return", value: value! });
+			const functionId = builder.finish(entry).function;
+			const cfg = buildCoreControlFlow(program, functionId);
+			expect(cfg.dominatesEdge(entry, entry, entry)).toBe(false);
+			expect(
+				pathRanges({
+					program,
+					function: functionId,
+					value: value!,
+					bounded: entry,
+				}).range(value!, entry),
+			).toMatchObject({
+				minimum: -0x8000_0000,
+				maximum: 0x7fff_ffff,
+			});
+		},
+	);
 	describe.each([false, true])("bounded variable comparisons with guard=%s", (guard) => {
 		it.each([
 			["<", false, -0x8000_0000, 14, 0, 0x7fff_ffff],
