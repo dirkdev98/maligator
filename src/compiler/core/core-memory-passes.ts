@@ -1194,15 +1194,18 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 			}
 			const weakMutation =
 				operation === "WeakMap.prototype.set" || operation === "WeakSet.prototype.add";
+			if (prior !== undefined && !weakMutation) continue;
 			const key = weakMutation ? instructionOperandAt(fn, instruction, 1) : undefined;
+			const keyKind = key === undefined ? 0 : facts.valueKinds.kindMask(key);
 			const keyCanBeHeld =
 				key !== undefined &&
-				(compilerValueKindCanBeHeldWeakly(facts.valueKinds.kindMask(key)) ||
-					compilerValueKindCanBeHeldWeakly(
-						(conditional ??= context.analysis(
-							CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
-						)).kindMask(key, fn.instructionBlock(instruction)),
-					));
+				(compilerValueKindCanBeHeldWeakly(keyKind) ||
+					(!compilerValueKindCannotBeHeldWeakly(keyKind) &&
+						compilerValueKindCanBeHeldWeakly(
+							(conditional ??= context.analysis(
+								CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
+							)).kindMask(key, fn.instructionBlock(instruction)),
+						)));
 			const effects = coreExactCollectionBuiltinEffects(
 				fn,
 				instruction,
