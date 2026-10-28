@@ -116426,7 +116426,7 @@
 		{
 			"id": "[\"WeakMap.prototype.set\",\"length\"]",
 			"owner": "WeakMap.prototype.set",
-			"ownerPaths": ["WeakMap.prototype.set"],
+			"ownerPaths": ["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET", "WeakMap.prototype.set"],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -116436,7 +116436,7 @@
 		{
 			"id": "[\"WeakMap.prototype.set\",\"name\"]",
 			"owner": "WeakMap.prototype.set",
-			"ownerPaths": ["WeakMap.prototype.set"],
+			"ownerPaths": ["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET", "WeakMap.prototype.set"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -116636,7 +116636,7 @@
 		{
 			"id": "[\"WeakSet.prototype.add\",\"length\"]",
 			"owner": "WeakSet.prototype.add",
-			"ownerPaths": ["WeakSet.prototype.add"],
+			"ownerPaths": ["MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD", "WeakSet.prototype.add"],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -116646,7 +116646,7 @@
 		{
 			"id": "[\"WeakSet.prototype.add\",\"name\"]",
 			"owner": "WeakSet.prototype.add",
-			"ownerPaths": ["WeakSet.prototype.add"],
+			"ownerPaths": ["MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD", "WeakSet.prototype.add"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -268654,7 +268654,7 @@
 		{
 			"id": "[\"WeakMap.prototype.set\",\"<call>\"]",
 			"owner": "WeakMap.prototype.set",
-			"ownerPaths": ["WeakMap.prototype.set"],
+			"ownerPaths": ["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET", "WeakMap.prototype.set"],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["WeakMap.prototype.set"],
@@ -268664,7 +268664,7 @@
 		{
 			"id": "[\"WeakMap.prototype.set\",\"<construct>\"]",
 			"owner": "WeakMap.prototype.set",
-			"ownerPaths": ["WeakMap.prototype.set"],
+			"ownerPaths": ["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET", "WeakMap.prototype.set"],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["WeakMap.prototype.set"],
@@ -268754,7 +268754,7 @@
 		{
 			"id": "[\"WeakSet.prototype.add\",\"<call>\"]",
 			"owner": "WeakSet.prototype.add",
-			"ownerPaths": ["WeakSet.prototype.add"],
+			"ownerPaths": ["MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD", "WeakSet.prototype.add"],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["WeakSet.prototype.add"],
@@ -268764,7 +268764,7 @@
 		{
 			"id": "[\"WeakSet.prototype.add\",\"<construct>\"]",
 			"owner": "WeakSet.prototype.add",
-			"ownerPaths": ["WeakSet.prototype.add"],
+			"ownerPaths": ["MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD", "WeakSet.prototype.add"],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["WeakSet.prototype.add"],
@@ -291176,6 +291176,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET",
+			"kind": "binding",
+			"operations": ["WeakMap.prototype.set"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WEAK_REF_CONSTRUCTOR\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -291212,6 +291222,16 @@
 			"key": "MAL_INTRINSIC_WEAK_SET_PROTOTYPE",
 			"kind": "binding",
 			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD",
+			"kind": "binding",
+			"operations": ["WeakSet.prototype.add"],
 			"task": "N-06",
 			"decisions": []
 		},

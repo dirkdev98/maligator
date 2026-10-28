@@ -11933,7 +11933,7 @@
 				["length", 0, ["bits", "fff8000000000002"], -1, -1],
 				["name", 0, ["string", "set"], -1, -1]
 			],
-			["WeakMap.prototype.set"]
+			["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET", "WeakMap.prototype.set"]
 		],
 		[
 			"WeakRef",
@@ -12013,7 +12013,7 @@
 				["length", 0, ["bits", "fff8000000000001"], -1, -1],
 				["name", 0, ["string", "add"], -1, -1]
 			],
-			["WeakSet.prototype.add"]
+			["MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD", "WeakSet.prototype.add"]
 		],
 		[
 			"WeakSet.prototype.delete",
@@ -12858,10 +12858,12 @@
 		["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_DELETE", 970],
 		["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_GET", 971],
 		["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_HAS", 974],
+		["MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET", 975],
 		["MAL_INTRINSIC_WEAK_REF_CONSTRUCTOR", 976],
 		["MAL_INTRINSIC_WEAK_REF_PROTOTYPE", 977],
 		["MAL_INTRINSIC_WEAK_SET_CONSTRUCTOR", 979],
 		["MAL_INTRINSIC_WEAK_SET_PROTOTYPE", 980],
+		["MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD", 981],
 		["MAL_INTRINSIC_WEAK_SET_PROTOTYPE_DELETE", 982],
 		["MAL_INTRINSIC_WEAK_SET_PROTOTYPE_HAS", 983],
 		["MAL_INTRINSIC_WRITABLE_STREAM_CONSTRUCTOR", ["bits", "fff9000000000003"]],
