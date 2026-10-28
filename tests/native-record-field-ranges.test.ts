@@ -46,6 +46,64 @@ function field(out: ReturnType<typeof inspect>) {
 }
 
 describe("normal record field integer ranges", () => {
+	it.each(
+		["literal", "producer-write", "caller-write"].flatMap((mode) =>
+			["limit&255", "boundedLimit(limit,hook)", "limits(limit,hook).n"].map((bound) => [
+				mode,
+				bound,
+			]),
+		),
+	)("carries %s fields bounded by %s through the record result ABI", (mode, bound) => {
+		const branch = `const n=value>>>0;const bound=${bound};`;
+		const producer =
+			mode === "literal"
+				? `${branch}if(n<bound){hook();return {n};}hook();return {n:0};`
+				: mode === "producer-write"
+					? `${branch}const record={n:0};if(n<bound)record.n=n;hook();return record;`
+					: "return {n:0};";
+		const reader =
+			mode === "caller-write"
+				? `${branch}if(n<bound)record.n=n;hook();return record.n|0;`
+				: "hook();return record.n|0;";
+		const out = inspectStaticValueFunction(
+			`const boundedLimit=function boundedLimit(value,hook){try{hook();return value&255;}catch(error){throw error;}};const limits=function limits(value,hook){try{hook();return {n:value&255};}catch(error){throw error;}};const make=function make(value,limit,hook){for(let i=0;i<3;i++)hook(i);${producer}};function compute(value,limit,hook){const record=make(value,limit,hook);${reader}}globalThis.make=make;globalThis.compute=compute;`,
+			"compute",
+			{ locked: false, realms: true },
+		);
+		const fields = out.native.body.instructions.flatMap((op, ip) =>
+			op.opcode.startsWith("LOAD_PROPERTY") && "dst" in op
+				? [
+						{
+							range: instructionResultIntegerRange(out.native.facts?.[ip], op.dst),
+							representation: out.native.registerRepresentations[op.dst],
+						},
+					]
+				: [],
+		);
+		expect(fields).toContainEqual({ range: bounded(0, 254), representation: "int32" });
+		const make = out.image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(out.image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "make",
+		)!;
+		expect(
+			make.directEntries.find((entry) => entry.resultFields)!.resultFields!.storage[0]!
+				.representation,
+		).toBe("int32");
+	});
+	it.each(["limit", "+limit", "limit?-0:Infinity"])(
+		"keeps a wide field when the comparison operand is %s",
+		(bound) => {
+			const out = inspectStaticValueFunction(
+				`const make=function make(value,limit,hook){for(let i=0;i<3;i++)hook();const n=value>>>0;const bound=${bound};if(n<bound)return {n};return {n:0};};function compute(value,limit,hook){const record=make(value,limit,hook);hook();return record.n|0;}globalThis.make=make;globalThis.compute=compute;`,
+				"compute",
+			);
+			const { op, facts } = field(out);
+			expect(instructionResultIntegerRange(facts, op.dst)).toEqual(COMPILER_UINT32_RANGE);
+			expect(out.native.registerRepresentations[op.dst]).toBe("number");
+		},
+	);
 	it.each(["-0", "Infinity", "NaN"])(
 		"keeps a conditional %s field outside the bounded integer kernel",
 		(alternative) => {

@@ -1,8 +1,5 @@
-let checks = 0;
-
 function check(name, condition) {
 	if (!condition) throw new Error(`FAIL ${name}`);
-	checks++;
 }
 
 function consequentBounds(value) {
@@ -64,5 +61,100 @@ const coercive = {
 };
 check("boxed comparisons remain coercive", coerciveBounds(coercive) === 7.5);
 check("boxed coercion count", coercions === 3);
-check("checks ran", checks === 16);
+
+function relationalRecord(value, limit, hook) {
+	const number = value >>> 0;
+	const bound = limit & 255;
+	const record = { number: 0 };
+	if (number < bound) record.number = number;
+	hook();
+	return record;
+}
+
+function readRelationalRecord(value, limit, hook) {
+	const record = relationalRecord(value, limit, hook);
+	hook();
+	return record.number | 0;
+}
+
+function opaqueRelationalRecord(value, bound) {
+	const number = value >>> 0;
+	if (number < bound) return { number };
+	return { number: 0 };
+}
+
+for (const value of [-0, 0, 1, 254, 255, 256, -1, 4294967295, NaN, Infinity]) {
+	for (const limit of [-0, 0, 1, 15, 255, 256, -1, NaN]) {
+		const number = value >>> 0;
+		const expected = number < (limit & 255) ? number : 0;
+		let calls = 0;
+		check(
+			"variable-bound record field",
+			readRelationalRecord(value, limit, () => calls++) === expected,
+		);
+		check("variable-bound callbacks execute", calls === 2);
+	}
+}
+const events = [];
+check(
+	"variable-bound record coercion result",
+	readRelationalRecord(
+		{
+			valueOf() {
+				events.push("value");
+				return 7;
+			},
+		},
+		{
+			valueOf() {
+				events.push("bound");
+				return 15;
+			},
+		},
+		() => events.push("hook"),
+	) === 7,
+);
+check("variable-bound coercion order", events.join(",") === "value,bound,hook,hook");
+for (const bound of [Infinity, 4294967296n, { valueOf: () => Infinity }])
+	check(
+		"opaque bound retains a wide integer field",
+		opaqueRelationalRecord(4294967295, bound).number === 4294967295,
+	);
+for (const bound of [NaN, -0, -Infinity])
+	check(
+		"opaque non-comparable and lower bounds",
+		opaqueRelationalRecord(1, bound).number === 0,
+	);
+const failure = {};
+try {
+	readRelationalRecord(
+		{
+			valueOf() {
+				throw failure;
+			},
+		},
+		{
+			valueOf() {
+				throw new Error("bound coerced after subject failure");
+			},
+		},
+		() => {
+			throw new Error("callback ran after subject failure");
+		},
+	);
+	throw new Error("missing subject failure");
+} catch (error) {
+	check("subject exception identity", error === failure);
+}
+for (const bound of [Symbol("limit"), 1n]) {
+	let error;
+	try {
+		readRelationalRecord(1, bound, () => {
+			throw new Error("callback ran after bound failure");
+		});
+	} catch (caught) {
+		error = caught;
+	}
+	check("bound coercion remains abrupt", error instanceof TypeError);
+}
 console.log("numeric-branch-ranges PASS");

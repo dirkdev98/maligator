@@ -926,6 +926,14 @@ Escaped identities, descriptor mutations and unsupported protected accesses keep
 their materialized form. Virtual-state materialization preserves ordinary named
 data shapes; canonical array-index keys keep overflow-table storage. The frontend
 and materializer share that key classification.
+Relational path queries constrain both operands of branches and guards using
+integer bounds established at the comparison. These bounds can come from numeric
+calls or other own record fields, and flow through initializers, private writers,
+caller storage and the result-entry ABI. An unsolved bound leaves the edge's range
+empty until its normal result converges; an unknown bound cannot narrow storage.
+Comparisons cannot establish their own integer premises. Per-subject refinement
+indexes reuse the existing bounded range query, and relational-only floating
+comparisons do not admit an integer optimization pass.
 Exceptional predecessors use instruction-specific prefixes before and after each
 potentially throwing operation. A block edge does not prove that its later stores
 executed. These partial prefixes participate in memoization separately from full

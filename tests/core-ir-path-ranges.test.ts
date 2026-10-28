@@ -5,6 +5,7 @@ import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
 } from "../src/compiler/core/core-ir-control-flow.ts";
+import type { CoreLoopComparison } from "../src/compiler/core/core-ir-loops.ts";
 import { analyzeCoreLoopInductions } from "../src/compiler/core/core-ir-loops.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
@@ -143,7 +144,171 @@ function pathRanges(source: BoundedFunction) {
 	);
 }
 
+function relationalInt32(
+	operator: CoreLoopComparison,
+	options: {
+		swapped?: boolean;
+		guard?: boolean;
+		boundRepresentation?: "f64" | "boxed";
+	} = {},
+) {
+	const program = new CoreProgram(coreOpcodeRegistry);
+	const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+	const entry = builder.createBlock([{}, {}]);
+	const bounded = builder.createBlock();
+	const alternate = builder.createBlock();
+	const join = builder.createBlock();
+	const [input, limit] = inspectCoreBlockParameters(builder, entry);
+	const [value] = builder.appendInstruction(entry, "unary", [input!.value], {
+		attributes: { operator: "~" },
+		outputRepresentations: ["i32"],
+	});
+	let bound = limit!.value;
+	if (options.boundRepresentation === "f64")
+		bound = builder.appendInstruction(entry, "unary", [bound], {
+			attributes: { operator: "+" },
+			outputRepresentations: ["f64"],
+		})[0]!;
+	else if (options.boundRepresentation === undefined) {
+		const [mask] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 15 },
+			outputRepresentations: ["i32"],
+		});
+		bound = builder.appendInstruction(entry, "binary", [bound, mask!], {
+			attributes: { operator: "&" },
+			outputRepresentations: ["i32"],
+		})[0]!;
+	}
+	const [condition] = builder.appendInstruction(
+		entry,
+		"binary",
+		options.swapped ? [bound, value!] : [value!, bound],
+		{ attributes: { operator }, outputRepresentations: ["boolean"] },
+	);
+	const yes = { block: bounded, arguments: [] };
+	const no = { block: alternate, arguments: [] };
+	builder.setTerminator(
+		entry,
+		options.guard
+			? {
+					kind: "guard",
+					condition: condition!,
+					fact: primitiveNumberProof(builder),
+					success: yes,
+					fallback: no,
+				}
+			: { kind: "branch", condition: condition!, consequent: yes, alternate: no },
+	);
+	for (const block of [bounded, alternate])
+		builder.setTerminator(block, {
+			kind: "jump",
+			edge: { block: join, arguments: [] },
+		});
+	builder.setTerminator(join, { kind: "return", value: value! });
+	return {
+		program,
+		function: builder.finish(entry).function,
+		value: value!,
+		bounded,
+		alternate,
+		join,
+		entry,
+		bound,
+	};
+}
+
 describe("Core path-sensitive numeric ranges", () => {
+	describe.each([false, true])("bounded variable comparisons with guard=%s", (guard) => {
+		it.each([
+			["<", false, -0x8000_0000, 14, 0, 0x7fff_ffff],
+			["<=", false, -0x8000_0000, 15, 1, 0x7fff_ffff],
+			[">", false, 1, 0x7fff_ffff, -0x8000_0000, 15],
+			[">=", false, 0, 0x7fff_ffff, -0x8000_0000, 14],
+			[">", true, -0x8000_0000, 14, 0, 0x7fff_ffff],
+			[">=", true, -0x8000_0000, 15, 1, 0x7fff_ffff],
+			["<", true, 1, 0x7fff_ffff, -0x8000_0000, 15],
+			["<=", true, 0, 0x7fff_ffff, -0x8000_0000, 14],
+		] as const)(
+			"narrows %s on both edges with swapped operands=%s",
+			(operator, swapped, yesMin, yesMax, noMin, noMax) => {
+				const source = relationalInt32(operator, { swapped, guard });
+				const analysis = pathRanges(source);
+				expect(analysis.range(source.value, source.bounded)).toMatchObject({
+					minimum: yesMin,
+					maximum: yesMax,
+				});
+				expect(analysis.range(source.value, source.alternate)).toMatchObject({
+					minimum: noMin,
+					maximum: noMax,
+				});
+				for (const block of [source.entry, source.join])
+					expect(analysis.range(source.value, block)).toMatchObject({
+						minimum: -0x8000_0000,
+						maximum: 0x7fff_ffff,
+					});
+			},
+		);
+	});
+	it("waits for the comparison operand's normal result before seeding either edge", () => {
+		const source = relationalInt32("<");
+		const fn = source.program.function(source.function);
+		const bound = fn.kernel.valueDefinitionOwner(source.bound);
+		const query = pathRanges(source).rangeQuery((instruction) =>
+			instruction === bound ? null : undefined,
+		);
+		expect(query(source.value, source.bounded)).toBeNull();
+		expect(query(source.value, source.alternate)).toBeNull();
+		expect(query(source.value, source.entry)).toMatchObject({
+			minimum: -0x8000_0000,
+			maximum: 0x7fff_ffff,
+		});
+	});
+	it.each(["f64", "boxed"] as const)(
+		"does not use an unbounded %s comparison operand as an integer bound",
+		(boundRepresentation) => {
+			const source = relationalInt32("<", { boundRepresentation });
+			const analysis = pathRanges(source);
+			for (const block of [source.bounded, source.alternate])
+				expect(analysis.range(source.value, block)).toMatchObject({
+					minimum: -0x8000_0000,
+					maximum: 0x7fff_ffff,
+				});
+		},
+	);
+	it("does not admit relational-only floating inputs as integer opportunities", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = builder.createBlock([{}, {}]);
+		const bounded = builder.createBlock();
+		const alternate = builder.createBlock();
+		const [left, right] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) =>
+				builder.appendInstruction(entry, "unary", [value], {
+					attributes: { operator: "+" },
+					outputRepresentations: ["f64"],
+				})[0]!,
+		);
+		const [condition] = builder.appendInstruction(entry, "binary", [left!, right!], {
+			attributes: { operator: "<" },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: bounded, arguments: [] },
+			alternate: { block: alternate, arguments: [] },
+		});
+		for (const block of [bounded, alternate])
+			builder.setTerminator(block, { kind: "return", value: left! });
+		const analysis = pathRanges({
+			program,
+			function: builder.finish(entry).function,
+			value: left!,
+			bounded,
+		});
+		expect(analysis.hasNumericRanges).toBe(false);
+		expect(analysis.range(left!, bounded)).toBeUndefined();
+	});
 	it("retires primitive effect proofs when module constants eliminate a bounded remainder", () => {
 		const config = resolveBuildConfig({});
 		let reduced = 0;
@@ -454,50 +619,68 @@ describe("Core path-sensitive numeric ranges", () => {
 		},
 	);
 
-	it("does not carry a successful edge through an exceptional predecessor", () => {
-		const program = new CoreProgram(coreOpcodeRegistry);
-		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
-		const entry = builder.createBlock([{}]);
-		const compare = builder.createBlock([{ representation: "i32" }]);
-		const handler = builder.createBlock([{ role: "exception" }]);
-		const bounded = builder.createBlock();
-		const rejected = builder.createBlock();
-		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
-		const [converted] = builder.appendInstruction(entry, "unary", [parameter], {
-			attributes: { operator: "~" },
-			outputRepresentations: ["i32"],
-		});
-		builder.setTerminator(entry, {
-			kind: "jump",
-			edge: { block: compare, arguments: [converted!] },
-		});
-		const value = inspectCoreBlockParameters(builder, compare)[0]!.value;
-		const [zero] = builder.appendInstruction(compare, "createF64", [], {
-			attributes: { value: 0 },
-			outputRepresentations: ["i32"],
-		});
-		const [condition] = builder.appendInstruction(compare, "binary", [value, zero!], {
-			attributes: { operator: ">=" },
-			outputRepresentations: ["boolean"],
-		});
-		builder.setHandler(compare, handler);
-		builder.setTerminator(compare, {
-			kind: "branch",
-			condition: condition!,
-			consequent: { block: bounded, arguments: [] },
-			alternate: { block: rejected, arguments: [] },
-		});
-		builder.setTerminator(handler, {
-			kind: "jump",
-			edge: { block: bounded, arguments: [] },
-		});
-		builder.setTerminator(bounded, { kind: "return", value });
-		builder.setTerminator(rejected, { kind: "return", value: zero! });
-		const finished = builder.finish(entry);
-		const source = { program, function: finished.function, value, bounded };
-		expect(pathRanges(source).range(value, bounded)).toMatchObject({
-			minimum: -0x8000_0000,
-			maximum: 0x7fff_ffff,
-		});
-	});
+	it.each([false, true])(
+		"does not carry an edge through an exceptional predecessor with variable bound=%s",
+		(variable) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+			const entry = builder.createBlock([{}, {}]);
+			const compare = builder.createBlock([{ representation: "i32" }]);
+			const handler = builder.createBlock([{ role: "exception" }]);
+			const bounded = builder.createBlock();
+			const rejected = builder.createBlock();
+			const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
+			const [converted] = builder.appendInstruction(entry, "unary", [parameter], {
+				attributes: { operator: "~" },
+				outputRepresentations: ["i32"],
+			});
+			const [mask] = builder.appendInstruction(entry, "createF64", [], {
+				attributes: { value: 15 },
+				outputRepresentations: ["i32"],
+			});
+			const [bound] = builder.appendInstruction(
+				entry,
+				"binary",
+				[inspectCoreBlockParameters(builder, entry)[1]!.value, mask!],
+				{ attributes: { operator: "&" }, outputRepresentations: ["i32"] },
+			);
+			builder.setTerminator(entry, {
+				kind: "jump",
+				edge: { block: compare, arguments: [converted!] },
+			});
+			const value = inspectCoreBlockParameters(builder, compare)[0]!.value;
+			const [zero] = builder.appendInstruction(compare, "createF64", [], {
+				attributes: { value: 0 },
+				outputRepresentations: ["i32"],
+			});
+			const [condition] = builder.appendInstruction(
+				compare,
+				"binary",
+				[value, variable ? bound! : zero!],
+				{
+					attributes: { operator: variable ? "<" : ">=" },
+					outputRepresentations: ["boolean"],
+				},
+			);
+			builder.setHandler(compare, handler);
+			builder.setTerminator(compare, {
+				kind: "branch",
+				condition: condition!,
+				consequent: { block: bounded, arguments: [] },
+				alternate: { block: rejected, arguments: [] },
+			});
+			builder.setTerminator(handler, {
+				kind: "jump",
+				edge: { block: bounded, arguments: [] },
+			});
+			builder.setTerminator(bounded, { kind: "return", value });
+			builder.setTerminator(rejected, { kind: "return", value: zero! });
+			const finished = builder.finish(entry);
+			const source = { program, function: finished.function, value, bounded };
+			expect(pathRanges(source).range(value, bounded)).toMatchObject({
+				minimum: -0x8000_0000,
+				maximum: 0x7fff_ffff,
+			});
+		},
+	);
 });

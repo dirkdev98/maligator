@@ -338,11 +338,14 @@ function loopComparison(
 	};
 }
 
-interface PathRefinement {
-	readonly block: CoreBlockId;
-	readonly subject: CoreValueId;
-	readonly range: CompilerIntegerRange;
-}
+type PathRefinement =
+	| { readonly block: CoreBlockId; readonly range: CompilerIntegerRange }
+	| {
+			readonly block: CoreBlockId;
+			readonly comparison: CoreBlockId;
+			readonly bound: CoreValueId;
+			readonly operator: CoreLoopComparison;
+	  };
 
 function branchRange(
 	operator: CoreLoopComparison,
@@ -452,10 +455,12 @@ export function analyzeCoreLoopInductions(
 	const byUpdate = new Map(
 		inductions.map((induction) => [root(induction.update), induction]),
 	);
-	const refinements: Array<PathRefinement> = [];
+	const refinements = new Map<CoreValueId, Array<PathRefinement>>();
+	let hasConstantRefinement = false;
 	for (const block of fn.blockIds()) {
 		const terminator = fn.blockTerminator(block);
-		if (fn.instructionKind(terminator) !== "branch") continue;
+		const kind = fn.instructionKind(terminator);
+		if (kind !== "branch" && kind !== "guard") continue;
 		const conditionValue = fn.kernel.operandAt(
 			fn.kernel.instructionOperandStart(terminator),
 		);
@@ -469,7 +474,7 @@ export function analyzeCoreLoopInductions(
 		const inputCount = fn.kernel.instructionOperandCount(definition);
 		const first = operand(fn, definition, 0);
 		const second = operand(fn, definition, 1);
-		let operator = comparison(fn.instructionAttributes(definition).operator);
+		const operator = comparison(fn.instructionAttributes(definition).operator);
 		if (
 			operator === undefined ||
 			inputCount !== 2 ||
@@ -477,22 +482,30 @@ export function analyzeCoreLoopInductions(
 			second === undefined
 		)
 			continue;
-		let subject = first;
-		let bound = exactNumber(fn, second, root);
-		if (bound === undefined) {
-			bound = exactNumber(fn, first, root);
-			subject = second;
-			operator = flip(operator);
-		}
-		if (bound === undefined || exactNumber(fn, subject, root) !== undefined) continue;
 		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
-		for (const [target, relation] of [
-			[fn.kernel.terminatorEdgeBlock(edgeStart), operator],
-			[fn.kernel.terminatorEdgeBlock(edgeStart + 1), negate(operator)],
+		for (const [subject, bound, relation] of [
+			[root(first), root(second), operator],
+			[root(second), root(first), flip(operator)],
 		] as const) {
-			const range = branchRange(relation, bound);
-			if (range !== undefined && cfg.dominatesEdge(block, target, target))
-				refinements.push({ block: target, subject: root(subject), range });
+			if (subject === bound || exactNumber(fn, subject, root) !== undefined) continue;
+			const constant = exactNumber(fn, bound, root);
+			for (const [target, operator] of [
+				[fn.kernel.terminatorEdgeBlock(edgeStart), relation],
+				[fn.kernel.terminatorEdgeBlock(edgeStart + 1), negate(relation)],
+			] as const) {
+				if (!cfg.dominatesEdge(block, target, target)) continue;
+				const range =
+					constant === undefined ? undefined : branchRange(operator, constant);
+				if (constant !== undefined && range === undefined) continue;
+				if (range !== undefined) hasConstantRefinement = true;
+				const list = refinements.get(subject) ?? [];
+				list.push(
+					range === undefined
+						? { block: target, comparison: block, bound, operator }
+						: { block: target, range },
+				);
+				refinements.set(subject, list);
+			}
 		}
 	}
 	const intersect = (
@@ -662,15 +675,28 @@ export function analyzeCoreLoopInductions(
 					range = COMPILER_INT32_RANGE;
 			}
 			if (range !== undefined && range !== null && block !== undefined) {
-				let current: CoreBlockId | null = block;
-				while (current !== null) {
-					for (const refinement of refinements) {
-						if (refinement.block !== current || refinement.subject !== resolved) continue;
-						range = intersect(range, refinement.range);
-						if (range === undefined) break;
+				for (const refinement of refinements.get(resolved) ?? []) {
+					if (!cfg.dominates(refinement.block, block)) continue;
+					let constraint: CompilerIntegerRange | undefined;
+					if ("range" in refinement) constraint = refinement.range;
+					else {
+						// An edge cannot establish the integer bound of its own comparison operand.
+						const bound = query(refinement.bound, refinement.comparison, budget);
+						if (bound === null) {
+							range = null;
+							break;
+						}
+						if (bound === undefined) continue;
+						constraint = branchRange(
+							refinement.operator,
+							refinement.operator === "<" || refinement.operator === "<="
+								? bound.maximum
+								: bound.minimum,
+						);
 					}
+					if (constraint === undefined) continue;
+					range = intersect(range, constraint);
 					if (range === undefined) break;
-					current = cfg.immediateDominators[current] ?? null;
 				}
 			}
 			cache.set(resolved, range);
@@ -693,7 +719,7 @@ export function analyzeCoreLoopInductions(
 	const result: CoreLoopInductionAnalysis = {
 		inductions: Object.freeze(inductions),
 		hasNumericRanges:
-			inductions.length > 0 || refinements.length > 0 || hasI32 || hasBoundedProducer,
+			inductions.length > 0 || hasConstantRefinement || hasI32 || hasBoundedProducer,
 		induction(value) {
 			return byRoot.get(root(value));
 		},

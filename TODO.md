@@ -312,8 +312,12 @@ The independent target boundary and current storage contract are recorded in
       reach the same typed result entries. Concurrent producer records keep separate
       SSA state; caller writes still widen the shared ABI storage. Escapes,
       descriptor changes and unsupported protected accesses retain physical objects.
-      Constant relational writer bounds already propagate through these queries.
-      Remaining object work includes nonconstant relational bounds, payload/source
+      Relational writer bounds now use comparison-local integer facts for both
+      operands of branches and guards, including bounds from numeric calls and
+      other record fields. Unsolved comparison operands keep their edges empty
+      during range convergence; unknown or noninteger operands retain wide storage.
+      Per-subject indexing reuses the bounded range query without another solve.
+      Remaining object work includes transitive relational bounds, payload/source
       correlations across separate merges, producer storage outside private
       single-layout SSA promotion, indexed producer summaries, broader parameter-relative
       call effects and coroutine record transport. Record-call admission and
@@ -363,7 +367,8 @@ The independent target boundary and current storage contract are recorded in
       stable acceptance remains unverified; the uninstrumented AC sample at
       `298c89f9` took 59.14 seconds. Analysis extensions must stay bounded
       and reuse existing worklists. Leave long checks to CI and keep local
-      verification to the affected units and quality checks.
+      verification to the affected units and quality checks. The relational-range
+      extension still needs an AC sample; its development probe ran on battery.
 
 - [ ] Spread one split native function over several translation units. Outlining
       functions past 256 Ki into 128 Ki parts cut the self-compile `-O2` unit wall time
