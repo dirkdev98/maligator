@@ -428,6 +428,25 @@ export const NUMBER_PREDICATES: ReadonlyMap<string, string> = new Map([
 	["Number.isSafeInteger", "MAL_NUMBER_PREDICATE_IS_SAFE_INTEGER"],
 ]);
 
+export const OBJECT_BRAND_PREDICATES: ReadonlySet<string> = new Set([
+	"ArrayBuffer.isView",
+	"JSON.isRawJSON",
+]);
+
+export function nativeObjectBrandPredicateExpression(
+	operation: string,
+	value: string,
+): string | undefined {
+	switch (operation) {
+		case "ArrayBuffer.isView":
+			return `(mal_value_is_typed_array_object(${value}) || mal_value_is_data_view_object(${value}))`;
+		case "JSON.isRawJSON":
+			return `(mal_value_is_object(${value}) && mal_value_to_object(${value})->is_raw_json)`;
+		default:
+			return undefined;
+	}
+}
+
 export function nativeNumberPredicateExpression(
 	operation: string,
 	value: string,

@@ -7,6 +7,21 @@ const HOST_READ_EFFECTS: EffectSummary = Object.freeze({
 	reads: Object.freeze(["host"] as const),
 });
 
+const ARRAY_BRAND_EFFECTS: EffectSummary = Object.freeze({
+	...NO_EFFECT_SUMMARY,
+	reads: Object.freeze(["object-property"] as const),
+	mayThrow: true,
+	mayGc: true,
+});
+
+export function knownBuiltinInvocationEffects(
+	operation: string,
+): EffectSummary | undefined {
+	return operation === "Array.isArray"
+		? ARRAY_BRAND_EFFECTS
+		: scalarBuiltinInvocationEffects(operation);
+}
+
 // The exact scalar kernels bypass call-bridge polling; receiver brand checks require separate proofs.
 export function scalarBuiltinInvocationEffects(
 	operation: string,

@@ -127,6 +127,8 @@ import {
 	MATH_BINARY_OPERATIONS,
 	NUMBER_PREDICATES,
 	boxedNumberPredicateExpression,
+	OBJECT_BRAND_PREDICATES,
+	nativeObjectBrandPredicateExpression,
 	nativeNumberPredicateExpression,
 	nativeNumberPredicateInputExpression,
 	nativeMathUnaryExpr,
@@ -10670,6 +10672,18 @@ class NativeInstructionEmission {
 					this.callPoll(),
 				];
 			}
+		}
+		if (
+			!instruction.construct &&
+			instruction.argumentMode === undefined &&
+			OBJECT_BRAND_PREDICATES.has(instruction.operation)
+		) {
+			const argument = instruction.arguments[0];
+			const predicate = nativeObjectBrandPredicateExpression(
+				instruction.operation,
+				argument === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(argument),
+			);
+			if (predicate !== undefined) return [this.storeBoolean(instruction.dst, predicate)];
 		}
 		if (
 			instruction.specialized === undefined &&

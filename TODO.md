@@ -96,6 +96,14 @@ until the consumer admits real sites and measurements establish a benefit.
 The independent target boundary and current storage contract are recorded in
 [native SSA lowering](docs/decisions/native-ssa-lowering.md).
 
+Current facts/effects goal priority: objects, builtins and function calls. Prefer
+normal-result identity and heap-brand facts, receiver/argument-sensitive call
+effects, builtin dispatch and completion checks, and the resulting storage/root
+work over further arithmetic specialization. Preserve mutable-callee fallbacks,
+coercion and exception order, publication and GC obligations in every entry mode.
+Keep the sub-60-second AC self-compile target; leave broad acceptance to CI.
+Arithmetic work should support these paths or fix correctness defects.
+
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before

@@ -58,7 +58,18 @@ export function builtinInvocationSummary(
 	) => steps.push({ kind, subject, when, exposes });
 	let result: BuiltinInvocationSummary["result"] = "unknown";
 	let complete = true;
-	if (owner === "Array.prototype") {
+	let mayThrow = true;
+	let mayGC = true;
+	if (
+		(owner === "Array" && key === "isArray") ||
+		(owner === "ArrayBuffer" && key === "isView") ||
+		(owner === "JSON" && key === "isRawJSON")
+	) {
+		step("check", `argument[0]:${key}`);
+		result = "primitive";
+		// IsArray unwraps proxies and throws for a revoked proxy without invoking traps.
+		mayThrow = mayGC = owner === "Array";
+	} else if (owner === "Array.prototype") {
 		step("coerce", "receiver:ToObject", "object-receiver");
 		if (!["keys", "values", "entries", "Symbol.iterator", "toString"].includes(key))
 			step("read", "receiver.length");
@@ -249,8 +260,8 @@ export function builtinInvocationSummary(
 		argumentEvaluation: "receiver-key-arguments-before-invocation",
 		steps,
 		result,
-		mayThrow: true,
-		mayGC: true,
+		mayThrow,
+		mayGC,
 		maySuspend: !complete || mayInvokeUserCode,
 		mayEnqueueJob: !complete || mayInvokeUserCode,
 		complete,

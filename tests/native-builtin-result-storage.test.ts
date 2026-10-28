@@ -266,6 +266,9 @@ describe("catalogued primitive builtin result storage", () => {
 		["Object.hasOwn", "Object.hasOwn(input, other)"],
 		["Object.is", "Object.is(input, other)"],
 		["Map.prototype.has", "Map.prototype.has.call(input, other)"],
+		["Array.isArray", "Array.isArray(input, other)"],
+		["ArrayBuffer.isView", "ArrayBuffer.isView(input, other)"],
+		["JSON.isRawJSON", "JSON.isRawJSON(input, other)"],
 	] as const)(
 		"omits the root for a boxed immediate %s result",
 		(operation, expression) => {
@@ -291,6 +294,31 @@ describe("catalogued primitive builtin result storage", () => {
 			);
 		},
 	);
+
+	it("carries an IsArray result through a non-inlined function call", () => {
+		const out = inspectStaticValueFunction(
+			`const classify = function classify(value, observe) {
+				for(let i=0;i<3;i++) observe();
+				return Array.isArray(value);
+			};
+			function compute(value,observe){
+				const result=classify(value,observe);
+				observe();
+				return typeof result==='boolean';
+			}
+			globalThis.compute=compute;`,
+			"compute",
+			{ realms: false },
+		);
+		const call = out.core.find(
+			(op) => op.opcode === "call" && op.attributes.callResultKindMask !== undefined,
+		);
+		expect(call?.attributes.callResultKindMask).toBe(COMPILER_VALUE_KIND_BOOLEAN);
+		expect(
+			out.native.body.instructions.some((op) => op.opcode === "TYPEOF_COMPARE"),
+		).toBe(false);
+		expect(out.c.source).not.toContain("mal_value_is_boolean");
+	});
 
 	it.each([
 		"synthetic",

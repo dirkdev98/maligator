@@ -14,6 +14,8 @@ const operations = [
 	"Number.isNaN",
 	"Number.isSafeInteger",
 	"Object.is",
+	"ArrayBuffer.isView",
+	"JSON.isRawJSON",
 ];
 
 describe("exact scalar builtin effects", () => {
@@ -79,6 +81,9 @@ describe("exact scalar builtin effects", () => {
 		"Number.isFinite(...input)",
 		"Number.isFinite.apply(null,input)",
 		"Number.prototype.valueOf.call(input)",
+		"new ArrayBuffer.isView(input)",
+		"ArrayBuffer.isView(...input)",
+		"JSON.isRawJSON.apply(null,input)",
 	])("keeps invocation effects for %s", (expression) => {
 		const out = inspectStaticValueFunction(
 			`function compute(input){return ${expression};}globalThis.compute=compute;`,
@@ -89,13 +94,55 @@ describe("exact scalar builtin effects", () => {
 		for (const call of calls) expect(nativeInstructionEffects(call).throwing).toBe(true);
 	});
 
-	it("retains mutable primordial lookups and call effects", () => {
+	it.each(["ArrayBuffer.isView", "JSON.isRawJSON"])(
+		"emits the %s brand test without a call bridge",
+		(operation) => {
+			const out = inspectStaticValueFunction(
+				`function compute(input){return ${operation}(input);}globalThis.compute=compute;`,
+				"compute",
+			);
+			expect(out.c.source).not.toContain("mal_vm_call_known_native");
+			expect(out.c.source).toContain(
+				operation === "ArrayBuffer.isView"
+					? "mal_value_is_typed_array_object"
+					: "->is_raw_json",
+			);
+		},
+	);
+
+	it.each(["Number.isFinite", "Array.isArray", "ArrayBuffer.isView", "JSON.isRawJSON"])(
+		"retains mutable %s lookup and call effects",
+		(operation) => {
+			const out = inspectStaticValueFunction(
+				`function compute(input){${operation}(input);return 7;}globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			expect(out.native.body.instructions.some((op) => op.opcode === "CALL")).toBe(true);
+			expect(out.native.gc.safepoints.length).toBeGreaterThan(0);
+		},
+	);
+
+	it("preserves local fields across IsArray without removing its exception path", () => {
 		const out = inspectStaticValueFunction(
-			"function compute(input){Number.isFinite(input);return 7;}globalThis.compute=compute;",
+			"function compute(input){const record={field:42};Array.isArray(input);return record.field;}globalThis.compute=compute;",
 			"compute",
-			{ locked: false },
 		);
-		expect(out.native.body.instructions.some((op) => op.opcode === "CALL")).toBe(true);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "CALL_KNOWN" && op.operation === "Array.isArray",
+		);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		expect(decodeInstructionEffects(out.native.facts![ip]!.effectMask!)).toEqual({
+			...NO_EFFECT_SUMMARY,
+			reads: ["object-property"],
+			mayThrow: true,
+			mayGc: true,
+		});
+		expect(
+			out.native.body.instructions.some((op) => op.opcode.startsWith("LOAD_PROPERTY")),
+		).toBe(false);
 		expect(out.native.gc.safepoints.length).toBeGreaterThan(0);
+		expect(out.c.source).toContain("mal_vm_call_known_native");
+		expect(out.c.source).toContain("MAL_THREW()");
 	});
 });

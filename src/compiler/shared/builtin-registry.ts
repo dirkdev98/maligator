@@ -273,6 +273,16 @@ export const exactBuiltinCallDescriptors = {
 		forwardedArgumentLimit: 7,
 		cOperation: "MAL_DIRECT_BUILTIN_DATE_UTC",
 	},
+	"ArrayBuffer.isView": {
+		receiverProof: "intrinsic-object",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_ARRAY_BUFFER_IS_VIEW",
+	},
+	"JSON.isRawJSON": {
+		receiverProof: "intrinsic-object",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_JSON_IS_RAW_JSON",
+	},
 } as const satisfies Record<string, ExactBuiltinCallDescriptor>;
 
 export type DirectBuiltinOperationId = keyof typeof exactBuiltinCallDescriptors;
@@ -541,6 +551,37 @@ export const DATA_VIEW_ACCESSOR_TYPES = [
 ] as const;
 
 export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
+	{
+		id: "Array.isArray",
+		owner: "Array",
+		key: "isArray",
+		receiver: "none",
+		arity: { minimum: 0, maximum: 1 },
+		evaluationOrder: "arguments-left-to-right",
+		coercionOrder: [],
+		effects: ["property-access", "throw", "safepoint"],
+		result: "boolean",
+		realm: "realm-object-identity",
+		lowerings: ["generic"],
+	},
+	...(
+		[
+			["ArrayBuffer", "isView"],
+			["JSON", "isRawJSON"],
+		] as const
+	).map(([owner, key]): BuiltinOperationDescriptor => ({
+		id: `${owner}.${key}`,
+		owner,
+		key,
+		receiver: "none",
+		arity: { minimum: 0, maximum: 1 },
+		evaluationOrder: "arguments-left-to-right",
+		coercionOrder: [],
+		effects: [],
+		result: "boolean",
+		realm: "semantic-identity",
+		lowerings: ["generic", "exact-builtin-call"],
+	})),
 	{
 		id: "Object.is",
 		owner: "Object",
@@ -1175,7 +1216,6 @@ for (const [owner, result, methods] of [
 	["Array.prototype", "boolean", ["includes"]],
 	["Array.prototype", "number", ["indexOf", "lastIndexOf", "push", "unshift"]],
 	["Array.prototype", "string", ["join", "toLocaleString"]],
-	["ArrayBuffer", "boolean", ["isView"]],
 	["ArrayBuffer.prototype", "number", ["byteLength<get>", "maxByteLength<get>"]],
 	["ArrayBuffer.prototype", "boolean", ["detached<get>", "resizable<get>"]],
 	["SharedArrayBuffer.prototype", "number", ["byteLength<get>", "maxByteLength<get>"]],
@@ -1277,7 +1317,6 @@ for (const [owner, result, methods] of [
 		],
 	],
 	["JSON", "string-or-undefined", ["stringify"]],
-	["JSON", "boolean", ["isRawJSON"]],
 	["Atomics", "boolean", ["isLockFree"]],
 	["Atomics", "number", ["notify"]],
 	["Atomics", "string", ["wait"]],

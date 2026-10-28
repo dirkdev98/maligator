@@ -9,6 +9,7 @@ import type {
 	SourceFunctionOrigin,
 	SourceCallSite,
 } from "../frontend/source-function-origins.ts";
+import { scalarBuiltinInvocationEffects } from "../shared/builtin-invocation-effects.ts";
 import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
 import type { CompilerFactFlowReport } from "../shared/compiler-diagnostics.ts";
 import { compilerGuardPlan, knownBuiltinCallProves } from "../shared/compiler-facts.ts";
@@ -39,7 +40,6 @@ import type { InstructionFacts } from "../shared/instruction-facts.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
-import { scalarBuiltinInvocationEffects } from "../shared/scalar-builtin-effects.ts";
 import {
 	targetRecordStorageFieldsAreValid,
 	targetRecordShapeIndicesFitInt32,

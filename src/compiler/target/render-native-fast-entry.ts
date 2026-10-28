@@ -40,6 +40,8 @@ import {
 	nativeNumericBuiltinExpr,
 	NUMBER_PREDICATES,
 	nativeNumberPredicateInputExpression,
+	nativeObjectBrandPredicateExpression,
+	OBJECT_BRAND_PREDICATES,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -1032,6 +1034,17 @@ function fastInstruction(
 				(op.specialized !== undefined && op.specialized !== op.operation)
 			)
 				return undefined;
+			if (OBJECT_BRAND_PREDICATES.has(op.operation)) {
+				const argument = op.arguments[0];
+				const boxed = argument === undefined ? "MAL_VALUE_UNDEFINED" : value(argument);
+				const predicate =
+					boxed === undefined
+						? undefined
+						: nativeObjectBrandPredicateExpression(op.operation, boxed);
+				return predicate === undefined
+					? undefined
+					: `__fast_r${op.dst} = mal_value_new_boolean(${predicate});`;
+			}
 			if (NUMBER_PREDICATES.has(op.operation))
 				return fastNumberPredicate(
 					op.operation,

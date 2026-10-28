@@ -553,4 +553,23 @@ describe("shared primordial catalog and coverage obligations", () => {
 			),
 		).toBe(true);
 	});
+	it.each([
+		["Array", "isArray", true],
+		["ArrayBuffer", "isView", false],
+		["JSON", "isRawJSON", false],
+	] as const)(
+		"models %s.%s as a noncoercing, nonretaining predicate",
+		(owner, key, mayThrow) => {
+			const summary = builtinInvocationSummary(owner, key);
+			expect(summary.complete).toBe(true);
+			expect(summary.result).toBe("primitive");
+			expect(summary.mayThrow).toBe(mayThrow);
+			expect(summary.mayGC).toBe(mayThrow);
+			expect(summary.maySuspend).toBe(false);
+			expect(summary.mayEnqueueJob).toBe(false);
+			expect(
+				summary.steps.every((step) => step.kind === "check" && step.exposes === "none"),
+			).toBe(true);
+		},
+	);
 });

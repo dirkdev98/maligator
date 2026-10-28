@@ -1914,7 +1914,11 @@ export function coreValueKindObservation(
 					: undefined;
 			}
 		}
-		if (attributes.operation === "Array.isArray") {
+		if (
+			attributes.operation === "Array.isArray" ||
+			attributes.operation === "ArrayBuffer.isView" ||
+			attributes.operation === "JSON.isRawJSON"
+		) {
 			const input = operand(1);
 			const mask = input === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(input);
 			return compilerValueKindMaskIsSubset(
