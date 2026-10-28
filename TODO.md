@@ -393,7 +393,7 @@ Arithmetic work should support these paths or fix correctness defects.
       margin for in-process native builds of the compiler.
       Keep the representative Node.js self-compile below 60 seconds on AC power;
       stable acceptance remains unverified. The latest clean uninstrumented sample
-      at `6d840479` took 55.61 seconds on verified AC charging power. That single
+      at `f7c57918` took 58.32 seconds on verified AC power. That single
       cold sample meets the budget provisionally; repeated acceptance remains open.
       Analysis extensions must stay bounded and reuse existing worklists. Leave
       long checks to CI and keep local verification to the affected units and
