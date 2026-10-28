@@ -5482,6 +5482,11 @@ function nativeBuiltinCollectionOperation(
 		"Set.prototype.add": "MAL_GUARDED_BUILTIN_SET_ADD",
 		"Set.prototype.has": "MAL_GUARDED_BUILTIN_SET_HAS",
 		"Set.prototype.delete": "MAL_GUARDED_BUILTIN_SET_DELETE",
+		"WeakMap.prototype.get": "MAL_GUARDED_BUILTIN_WEAK_MAP_GET",
+		"WeakMap.prototype.has": "MAL_GUARDED_BUILTIN_WEAK_MAP_HAS",
+		"WeakMap.prototype.delete": "MAL_GUARDED_BUILTIN_WEAK_MAP_DELETE",
+		"WeakSet.prototype.has": "MAL_GUARDED_BUILTIN_WEAK_SET_HAS",
+		"WeakSet.prototype.delete": "MAL_GUARDED_BUILTIN_WEAK_SET_DELETE",
 	}[operation];
 }
 
@@ -8603,6 +8608,20 @@ class NativeInstructionEmission {
 					call: `${entry("mal_builtin_set_delete_value", "mal_builtin_set_delete_number")})`,
 					boolean: true,
 				};
+			case "WeakMap.prototype.get":
+			case "WeakMap.prototype.has":
+			case "WeakMap.prototype.delete":
+			case "WeakSet.prototype.has":
+			case "WeakSet.prototype.delete": {
+				const [brand, , method] = operation.split(".");
+				const stem = brand === "WeakMap" ? "weak_map" : "weak_set";
+				const boxedKey =
+					args[0] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[0]);
+				return {
+					call: `mal_builtin_${stem}_${method}_key(${receiver}, ${boxedKey})`,
+					boolean: method !== "get",
+				};
+			}
 			default:
 				return undefined;
 		}
@@ -11280,7 +11299,7 @@ class NativeInstructionEmission {
 			instruction.thisValue,
 			instruction.arguments,
 		);
-		// Exact Map and Set kernels never complete abruptly.
+		// Exact collection kernels never complete abruptly.
 		if (collectionCall !== null) return [collectionCall, this.callPoll()];
 		if (NUMBER_PREDICATES.has(instruction.operation)) {
 			const input = instruction.arguments[0];
@@ -12072,7 +12091,12 @@ class NativeInstructionEmission {
 			guardedBuiltinOperation === "Map.prototype.delete" ||
 			guardedBuiltinOperation === "Set.prototype.add" ||
 			guardedBuiltinOperation === "Set.prototype.has" ||
-			guardedBuiltinOperation === "Set.prototype.delete"
+			guardedBuiltinOperation === "Set.prototype.delete" ||
+			guardedBuiltinOperation === "WeakMap.prototype.get" ||
+			guardedBuiltinOperation === "WeakMap.prototype.has" ||
+			guardedBuiltinOperation === "WeakMap.prototype.delete" ||
+			guardedBuiltinOperation === "WeakSet.prototype.has" ||
+			guardedBuiltinOperation === "WeakSet.prototype.delete"
 		) {
 			const operation = nativeBuiltinCollectionOperation(guardedBuiltinOperation);
 			const exactReceiver = callPlan?.exactCollectionReceiver;
@@ -12081,14 +12105,18 @@ class NativeInstructionEmission {
 					? "MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_MAP"
 					: exactReceiver === "Set"
 						? "MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_SET"
-						: "MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN";
+						: exactReceiver === "WeakMap"
+							? "MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_WEAK_MAP"
+							: exactReceiver === "WeakSet"
+								? "MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_WEAK_SET"
+								: "MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN";
 			const callee = this.boxedOperand(instruction.callee);
 			const receiver = this.boxedOperand(instruction.thisValue);
-			// The runtime dispatcher accepts has/delete from either brand, so the arms do too.
+			// A method-name hint can refer to any collection brand at runtime.
 			const method = guardedBuiltinOperation.slice(
 				guardedBuiltinOperation.lastIndexOf(".") + 1,
 			);
-			const arms = (["Map", "Set"] as const).flatMap((brand) => {
+			const arms = (["Map", "Set", "WeakMap", "WeakSet"] as const).flatMap((brand) => {
 				const builtin = this.collectionBuiltinCall(
 					`${brand}.prototype.${method}`,
 					receiver,
@@ -12102,15 +12130,19 @@ class NativeInstructionEmission {
 				const body = builtin.boolean
 					? `mal_value_new_boolean(${builtin.call})`
 					: builtin.call;
-				const intrinsic = `MAL_INTRINSIC_${brand.toUpperCase()}_PROTOTYPE_${method.toUpperCase()}`;
+				const stem =
+					brand === "WeakMap"
+						? "weak_map"
+						: brand === "WeakSet"
+							? "weak_set"
+							: brand.toLowerCase();
+				const intrinsic = `MAL_INTRINSIC_${stem.toUpperCase()}_PROTOTYPE_${method.toUpperCase()}`;
 				const brandCheck =
-					exactReceiver === brand
-						? ""
-						: ` && mal_value_is_${brand.toLowerCase()}_object(${receiver})`;
+					exactReceiver === brand ? "" : ` && mal_value_is_${stem}_object(${receiver})`;
 				// Arms keep the dispatcher's direct-hit counters, so either route reports the same hits.
 				const counters = [
 					...(exactReceiver === brand ? ["collection_exact_receiver_hits"] : []),
-					`collection_direct_${brand.toLowerCase()}_${method}_hits`,
+					`collection_direct_${stem}_${method}_hits`,
 				];
 				return [
 					{

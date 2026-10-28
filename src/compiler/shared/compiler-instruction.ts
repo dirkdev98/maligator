@@ -23,7 +23,7 @@ export type CompilerNumericTypedArrayKind =
 	| "Float32Array"
 	| "Float64Array";
 
-export type CompilerExactCollectionBrand = "Map" | "Set";
+export type CompilerExactCollectionBrand = "Map" | "Set" | "WeakMap" | "WeakSet";
 
 /**
  * Non-observable read probes, in wire order. Named, getter, and setter probes name

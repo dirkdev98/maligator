@@ -1,3 +1,4 @@
+import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { coreGlobalSlotBrands } from "./core-global-slot-facts.ts";
@@ -46,6 +47,8 @@ export function coreCollectionReceiverBrandForOperation(
 	if (typeof operation !== "string") return undefined;
 	if (operation.startsWith("Map.prototype.")) return "Map";
 	if (operation.startsWith("Set.prototype.")) return "Set";
+	if (operation.startsWith("WeakMap.prototype.")) return "WeakMap";
+	if (operation.startsWith("WeakSet.prototype.")) return "WeakSet";
 	return undefined;
 }
 
@@ -62,6 +65,11 @@ export function coreExactCollectionBuiltinEffects(
 	)
 		return undefined;
 	const operation = fn.instructionAttributes(instruction).operation;
+	if (
+		typeof operation !== "string" ||
+		exactBuiltinCallDescriptor(operation) === undefined
+	)
+		return undefined;
 	const expected = coreCollectionReceiverBrandForOperation(operation);
 	const exact =
 		provenBrand ??
@@ -73,7 +81,9 @@ export function coreExactCollectionBuiltinEffects(
 		operation === "Map.prototype.set" ||
 		operation === "Map.prototype.delete" ||
 		operation === "Set.prototype.add" ||
-		operation === "Set.prototype.delete";
+		operation === "Set.prototype.delete" ||
+		operation === "WeakMap.prototype.delete" ||
+		operation === "WeakSet.prototype.delete";
 	const mayGc = operation === "Map.prototype.set" || operation === "Set.prototype.add";
 	const effects: CoreInstructionEffects = {
 		reads: Object.freeze(["object-property"]),
@@ -400,7 +410,10 @@ export function analyzeCoreValueClasses(
 					}
 				}
 				if (
-					(operation === "Map.prototype.set" || operation === "Set.prototype.add") &&
+					(operation === "Map.prototype.set" ||
+						operation === "Set.prototype.add" ||
+						operation === "WeakMap.prototype.set" ||
+						operation === "WeakSet.prototype.add") &&
 					retainedResult
 				) {
 					return false;

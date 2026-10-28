@@ -113,6 +113,11 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Set.prototype.add",
 	"Set.prototype.has",
 	"Set.prototype.delete",
+	"WeakMap.prototype.get",
+	"WeakMap.prototype.has",
+	"WeakMap.prototype.delete",
+	"WeakSet.prototype.has",
+	"WeakSet.prototype.delete",
 	"Math.abs",
 	"Math.floor",
 	"Math.ceil",
@@ -5162,8 +5167,7 @@ function lowerExecutionFunctionToNativePlan(
 							guard.dependencies.length !== 1 ||
 							guard.dependencies[0]?.kind !== "world" ||
 							guard.dependencies[0].fact !== "primordials.locked" ||
-							callPlan?.exactCollectionReceiver !==
-								(region.operation.startsWith("Map.") ? "Map" : "Set"))) ||
+							callPlan?.exactCollectionReceiver !== region.operation.split(".")[0])) ||
 					region.evaluationOrder !== "capture-property-before-arguments" ||
 					propertyIp === undefined ||
 					callIp === undefined ||

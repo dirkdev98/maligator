@@ -116,6 +116,10 @@ Arithmetic work should support these paths or fix correctness defects.
       separate. Record refresh preserves independently published call facts.
       Guarded collection calls consume receiver brands independently of callee
       identity, preserving shadowed-method and cross-brand fallbacks.
+      WeakMap and WeakSet now use the same brand transport and noncollecting
+      get/has/delete kernels, including independent callee guards and wire tags.
+      Next, consume weak-key argument facts and cover weak mutators without
+      dropping invalid-key errors or their realm and GC obligations.
       Broad native, sanitizer and self-hosted acceptance remains on CI.
       Follow up the conservative interpreted profiling GC failure from native
       remainder run `40752877684`; that fixture's wire and emitted C are identical

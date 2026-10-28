@@ -3549,6 +3549,26 @@ bool mal_op_call_guarded_builtin(
             expected = MAL_INTRINSIC_SET_PROTOTYPE_DELETE;
             receiver_matches = mal_value_is_set_object(receiver);
             break;
+        case MAL_GUARDED_BUILTIN_WEAK_MAP_GET:
+            expected = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_GET;
+            receiver_matches = mal_value_is_weak_map_object(receiver);
+            break;
+        case MAL_GUARDED_BUILTIN_WEAK_MAP_HAS:
+            expected = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_HAS;
+            receiver_matches = mal_value_is_weak_map_object(receiver);
+            break;
+        case MAL_GUARDED_BUILTIN_WEAK_MAP_DELETE:
+            expected = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_DELETE;
+            receiver_matches = mal_value_is_weak_map_object(receiver);
+            break;
+        case MAL_GUARDED_BUILTIN_WEAK_SET_HAS:
+            expected = MAL_INTRINSIC_WEAK_SET_PROTOTYPE_HAS;
+            receiver_matches = mal_value_is_weak_set_object(receiver);
+            break;
+        case MAL_GUARDED_BUILTIN_WEAK_SET_DELETE:
+            expected = MAL_INTRINSIC_WEAK_SET_PROTOTYPE_DELETE;
+            receiver_matches = mal_value_is_weak_set_object(receiver);
+            break;
         default:
             return false;
     }
@@ -3584,6 +3604,21 @@ bool mal_op_call_guarded_builtin(
             break;
         case MAL_GUARDED_BUILTIN_SET_DELETE:
             result = mal_builtin_set_delete_known(vm, receiver, arguments, argument_count);
+            break;
+        case MAL_GUARDED_BUILTIN_WEAK_MAP_GET:
+            result = mal_builtin_weak_map_get_key(receiver, arguments[0]);
+            break;
+        case MAL_GUARDED_BUILTIN_WEAK_MAP_HAS:
+            result = mal_value_new_boolean(mal_builtin_weak_map_has_key(receiver, arguments[0]));
+            break;
+        case MAL_GUARDED_BUILTIN_WEAK_MAP_DELETE:
+            result = mal_value_new_boolean(mal_builtin_weak_map_delete_key(receiver, arguments[0]));
+            break;
+        case MAL_GUARDED_BUILTIN_WEAK_SET_HAS:
+            result = mal_value_new_boolean(mal_builtin_weak_set_has_key(receiver, arguments[0]));
+            break;
+        case MAL_GUARDED_BUILTIN_WEAK_SET_DELETE:
+            result = mal_value_new_boolean(mal_builtin_weak_set_delete_key(receiver, arguments[0]));
             break;
         default:
             abort();

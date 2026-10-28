@@ -5,6 +5,10 @@
 
 typedef struct MalVm MalVm;
 
+// Weak entries require a genuine WeakSet receiver; keys are never coerced.
+bool mal_builtin_weak_set_has_key(MalValue receiver, MalValue key);
+bool mal_builtin_weak_set_delete_key(MalValue receiver, MalValue key);
+
 /**
  * Install the Set and WeakSet constructors and prototypes. Requires the
  * well-known symbols and iterator prototypes.

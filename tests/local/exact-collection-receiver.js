@@ -301,4 +301,149 @@ assert(
 	"global collection reads retain mutation and method lookup effects",
 );
 
+const weakKey = {
+	[Symbol.toPrimitive]() {
+		throw new Error("weak key was coerced");
+	},
+};
+function freshWeakRead(key) {
+	const map = new WeakMap([[key, { marker: "fresh weak value" }]]);
+	return map.get(key);
+}
+function freshWeakHas(key) {
+	const set = new WeakSet();
+	return set.has(key);
+}
+Object.assign(globalThis, { freshWeakRead, freshWeakHas });
+assert(freshWeakRead(weakKey).marker === "fresh weak value", "fresh weak read");
+assert(!freshWeakHas(weakKey), "fresh weak membership");
+class WeakRegistry {
+	#map = new WeakMap([[weakKey, { marker: "weak value" }]]);
+	#set = new WeakSet([weakKey]);
+
+	read(key) {
+		return this.#map.get(key);
+	}
+
+	has(key) {
+		return this.#map.has(key) && this.#set.has(key);
+	}
+
+	remove(key) {
+		return this.#map.delete(key) && this.#set.delete(key);
+	}
+
+	crossBrand() {
+		this.#map.has = Map.prototype.has;
+		try {
+			this.#map.has(weakKey);
+			return false;
+		} catch (error) {
+			return error instanceof TypeError;
+		}
+	}
+
+	shadowedHas(value) {
+		this.#set.has = () => value;
+		return this.#set.has(weakKey);
+	}
+
+	shadowedDelete(value) {
+		this.#map.delete = () => value;
+		return this.#map.delete(weakKey);
+	}
+
+	captured(visit, key) {
+		const map = this.#map;
+		visit(map);
+		return [WeakMap.prototype.get.call(map, key), map.get(key)];
+	}
+}
+const weakRegistry = new WeakRegistry();
+assert(weakRegistry.read(weakKey).marker === "weak value", "weak private value");
+assert(weakRegistry.has(weakKey), "weak private membership");
+if (typeof collect === "function") collect();
+assert(
+	weakRegistry.read(weakKey).marker === "weak value",
+	"weak value survives with its live key",
+);
+assert(new WeakRegistry().crossBrand(), "weak receiver keeps cross-brand callee errors");
+const weakCalleeResult = { marker: "weak fallback result" };
+assert(
+	new WeakRegistry().shadowedHas(weakCalleeResult) === weakCalleeResult,
+	"weak membership fallback keeps arbitrary results",
+);
+assert(
+	new WeakRegistry().shadowedDelete(weakCalleeResult) === weakCalleeResult,
+	"weak deletion fallback keeps arbitrary results",
+);
+function readDetachedWeakValue() {
+	const registry = new WeakRegistry();
+	const value = registry.read(weakKey);
+	registry.remove(weakKey);
+	if (typeof collect === "function") collect();
+	return value.marker;
+}
+assert(
+	readDetachedWeakValue() === "weak value",
+	"weak read result stays rooted after deletion",
+);
+for (const key of [undefined, null, 1, "key", 1n, Symbol.for("registered weak key")]) {
+	assert(weakRegistry.read(key) === undefined, "invalid weak read is empty");
+	assert(!weakRegistry.has(key), "invalid weak membership is false");
+	assert(!weakRegistry.remove(key), "invalid weak deletion is false");
+}
+const weakReplacement = { marker: "replacement weak value" };
+const weakRead = weakRegistry.captured((map) => {
+	map.set(weakKey, weakReplacement);
+	map.get = () => "shadowed weak method";
+	if (typeof collect === "function") collect();
+}, weakKey);
+assert(weakRead[0] === weakReplacement, "weak captured read observes content writes");
+assert(weakRead[1] === "shadowed weak method", "weak loaded callee retains shadowing");
+assert(weakRegistry.remove(weakKey), "weak deletion mutates membership");
+assert(!weakRegistry.has(weakKey), "weak deletion remains observable");
+
+function guardedWeakRead(map, key, visit) {
+	const method = map.get;
+	visit(map);
+	return method.call(map, key);
+}
+const capturedWeakValue = { marker: "captured weak value" };
+const changingWeakMap = new WeakMap([[weakKey, capturedWeakValue]]);
+assert(
+	guardedWeakRead(changingWeakMap, weakKey, (map) => {
+		map.get = () => "later method";
+	}) === capturedWeakValue,
+	"weak method capture precedes argument effects",
+);
+for (const [receiver, method] of [
+	[new Proxy(new WeakMap(), {}), WeakMap.prototype.get],
+	[new Map(), WeakMap.prototype.get],
+	[new WeakSet(), WeakMap.prototype.get],
+	[new WeakMap(), WeakSet.prototype.has],
+	[new Set(), WeakSet.prototype.has],
+]) {
+	try {
+		method.call(receiver, weakKey);
+		throw new Error("missing weak receiver error");
+	} catch (error) {
+		assert(error instanceof TypeError, "weak receiver errors retain their class");
+	}
+}
+function* suspendedWeakRead(map, key) {
+	yield map;
+	return map.get(key);
+}
+const weakIterator = suspendedWeakRead(
+	new WeakMap([[weakKey, { marker: "yielded weak value" }]]),
+	weakKey,
+);
+weakIterator.next().value.get = () => "resumed weak method";
+if (typeof collect === "function") collect();
+assert(
+	weakIterator.next().value === "resumed weak method",
+	"weak callee changes across yield",
+);
+
 console.log("exact-collection-receiver PASS");

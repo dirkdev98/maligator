@@ -37,6 +37,16 @@ describe("exact collection receiver brands", () => {
 						: [],
 			);
 		expect(directCollectionCalls).toContain("Map.prototype.get");
+		expect(directCollectionCalls).toContain("WeakMap.prototype.get");
+		expect(directCollectionCalls).toContain("WeakSet.prototype.has");
+		for (const brand of ["WeakMap", "WeakSet"])
+			expect(
+				pair.programImage.native.functions.some((fn) =>
+					fn.instructions.some(
+						(plan) => plan?.kind === "call" && plan.exactCollectionReceiver === brand,
+					),
+				),
+			).toBe(true);
 		compiled = pair.compiled;
 		interpreted = pair.interpreted;
 
@@ -46,8 +56,18 @@ describe("exact collection receiver brands", () => {
 			compiled: false,
 			entryGoal: "script",
 			outDir,
-			config: resolveBuildConfig({ engine: { primordials: "locked" } }),
+			config: resolveBuildConfig({ engine: { primordials: "locked", realms: true } }),
 		});
+		for (const operation of ["WeakMap.prototype.get", "WeakSet.prototype.has"])
+			expect(
+				trusted.programImage.runtime.functions.some((fn) =>
+					fn.instructions.some(
+						(instruction) =>
+							instruction.opcode === "CALL" &&
+							instruction.guardedBuiltinCall?.operation === operation,
+					),
+				),
+			).toBe(true);
 		const trustedCollectionSites = trusted.programImage.runtime.functions.flatMap((fn) =>
 			vmSafepointRootMapsAreTrusted(fn)
 				? fn.instructions.flatMap((instruction, instructionIp) =>

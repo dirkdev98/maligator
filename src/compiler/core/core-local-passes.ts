@@ -834,6 +834,8 @@ function exactBuiltinReceiver(
 		case "fresh-array":
 		case "fresh-map":
 		case "fresh-set":
+		case "fresh-weak-map":
+		case "fresh-weak-set":
 			return false;
 	}
 	return false;
@@ -1120,10 +1122,10 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				(candidate) => candidate.guardedCallees !== undefined,
 			);
 			const compatibleCollectionCollision =
-				candidates.length === 2 &&
-				(key === "has" || key === "delete") &&
-				candidates.some(({ owner }) => owner === "Map.prototype") &&
-				candidates.some(({ owner }) => owner === "Set.prototype");
+				candidates.length > 1 &&
+				candidates.every((candidate) =>
+					candidate.lowerings.includes("guarded-native-collection"),
+				);
 			const descriptor =
 				candidates.length === 1
 					? candidates[0]
@@ -1514,7 +1516,17 @@ function constructedCollectionReceiver(
 			fn.instructionOpcodeName(construction) === "createArray"
 		);
 	}
-	if (receiver !== "map" && receiver !== "set") return false;
+	const expected =
+		receiver === "map"
+			? "Map"
+			: receiver === "set"
+				? "Set"
+				: receiver === "weak-map"
+					? "WeakMap"
+					: receiver === "weak-set"
+						? "WeakSet"
+						: undefined;
+	if (expected === undefined) return false;
 	const construction = definingInstruction(fn, value);
 	if (construction === undefined) return false;
 	if (fn.instructionOpcodeName(construction) !== "construct") return false;
@@ -1524,8 +1536,7 @@ function constructedCollectionReceiver(
 	if (constructorDefinition === undefined) return false;
 	return (
 		fn.instructionOpcodeName(constructorDefinition) === "loadIntrinsic" &&
-		fn.instructionAttributes(constructorDefinition).intrinsic ===
-			(receiver === "map" ? "Map" : "Set")
+		fn.instructionAttributes(constructorDefinition).intrinsic === expected
 	);
 }
 

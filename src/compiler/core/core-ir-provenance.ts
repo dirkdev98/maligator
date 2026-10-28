@@ -2583,6 +2583,11 @@ const COLLECTION_CALL_CHAIN_OPERATIONS: ReadonlySet<string> = new Set([
 	"Set.prototype.add",
 	"Set.prototype.has",
 	"Set.prototype.delete",
+	"WeakMap.prototype.get",
+	"WeakMap.prototype.has",
+	"WeakMap.prototype.delete",
+	"WeakSet.prototype.has",
+	"WeakSet.prototype.delete",
 ]);
 
 function exactFreshCollectionReceiver(
@@ -2597,7 +2602,11 @@ function exactFreshCollectionReceiver(
 		? "Map"
 		: operation.startsWith("Set.prototype.")
 			? "Set"
-			: undefined;
+			: operation.startsWith("WeakMap.prototype.")
+				? "WeakMap"
+				: operation.startsWith("WeakSet.prototype.")
+					? "WeakSet"
+					: undefined;
 	const receiver = instructionOperand(fn, call, 1);
 	if (expected === undefined || receiver === undefined) return undefined;
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;

@@ -360,6 +360,11 @@ typedef struct MalPerfStats {
     u64 collection_direct_set_add_hits;
     u64 collection_direct_set_has_hits;
     u64 collection_direct_set_delete_hits;
+    u64 collection_direct_weak_map_get_hits;
+    u64 collection_direct_weak_map_has_hits;
+    u64 collection_direct_weak_map_delete_hits;
+    u64 collection_direct_weak_set_has_hits;
+    u64 collection_direct_weak_set_delete_hits;
     u64 collection_direct_fallbacks;
     u64 iterator_entry_pair_hits;
     u64 iterator_entry_pair_fallbacks;

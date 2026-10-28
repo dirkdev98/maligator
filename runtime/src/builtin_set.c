@@ -391,6 +391,14 @@ static MalValue mal_builtin_set_prototype_entries(MalVm *vm, MalValue this_value
     return mal_builtin_set_prototype_iterator(vm, this_value, MAL_ITERATOR_SET_ENTRIES);
 }
 
+bool mal_builtin_weak_set_has_key(MalValue receiver, MalValue key) {
+    return mal_weak_set_object_has(mal_value_to_weak_set_object(receiver), key);
+}
+
+bool mal_builtin_weak_set_delete_key(MalValue receiver, MalValue key) {
+    return mal_weak_set_object_delete(mal_value_to_weak_set_object(receiver), key);
+}
+
 static MalValue mal_builtin_weak_set_prototype_add(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalWeakSetObject *set = mal_builtin_weak_set_this(vm, this_value);
     if (set == nullptr) {
@@ -1344,8 +1352,10 @@ void mal_builtin_set_install(MalVm *vm) {
     );
 
     mal_intrinsic_define_method_n(vm, weak_prototype, "add", 1, mal_builtin_weak_set_prototype_add);
-    mal_intrinsic_define_method_n(vm, weak_prototype, "has", 1, mal_builtin_weak_set_prototype_has);
-    mal_intrinsic_define_method_n(vm, weak_prototype, "delete", 1, mal_builtin_weak_set_prototype_delete);
+    vm->intrinsics[MAL_INTRINSIC_WEAK_SET_PROTOTYPE_HAS] =
+        mal_intrinsic_define_method_n(vm, weak_prototype, "has", 1, mal_builtin_weak_set_prototype_has);
+    vm->intrinsics[MAL_INTRINSIC_WEAK_SET_PROTOTYPE_DELETE] =
+        mal_intrinsic_define_method_n(vm, weak_prototype, "delete", 1, mal_builtin_weak_set_prototype_delete);
 }
 
 #include "generated/known_native_builtin_set_c.inc"

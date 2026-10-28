@@ -1,7 +1,7 @@
 import type { CompilerNumericTypedArrayKind } from "../shared/compiler-instruction.ts";
 
 export type CoreNumericTypedArrayKind = CompilerNumericTypedArrayKind;
-export type CoreExactCollectionBrand = "Map" | "Set";
+export type CoreExactCollectionBrand = "Map" | "Set" | "WeakMap" | "WeakSet";
 export type CoreExactHeapBrand =
 	| CoreNumericTypedArrayKind
 	| CoreExactCollectionBrand
@@ -33,7 +33,9 @@ export function coreNumericTypedArrayKind(
 export function coreExactCollectionBrand(
 	value: unknown,
 ): CoreExactCollectionBrand | undefined {
-	return value === "Map" || value === "Set" ? value : undefined;
+	return value === "Map" || value === "Set" || value === "WeakMap" || value === "WeakSet"
+		? value
+		: undefined;
 }
 
 export function coreExactHeapBrand(value: unknown): CoreExactHeapBrand | undefined {

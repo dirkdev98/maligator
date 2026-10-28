@@ -112,7 +112,9 @@ export interface BuiltinOperationDescriptor {
 		| "string"
 		| "regexp"
 		| "map"
-		| "set";
+		| "set"
+		| "weak-map"
+		| "weak-set";
 	readonly arity: { readonly minimum: number; readonly maximum?: number };
 	readonly evaluationOrder: "receiver-then-arguments" | "arguments-left-to-right";
 	readonly coercionOrder: ReadonlyArray<string>;
@@ -134,6 +136,8 @@ export type ExactBuiltinReceiverProof =
 	| "fresh-array"
 	| "fresh-map"
 	| "fresh-set"
+	| "fresh-weak-map"
+	| "fresh-weak-set"
 	| "intrinsic-object"
 	| "primitive-boolean"
 	| "primitive-number"
@@ -217,6 +221,31 @@ export const exactBuiltinCallDescriptors = {
 		receiverProof: "fresh-set",
 		forwardedArgumentLimit: 1,
 		cOperation: "MAL_DIRECT_BUILTIN_SET_DELETE",
+	},
+	"WeakMap.prototype.get": {
+		receiverProof: "fresh-weak-map",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_WEAK_MAP_GET",
+	},
+	"WeakMap.prototype.has": {
+		receiverProof: "fresh-weak-map",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_WEAK_MAP_HAS",
+	},
+	"WeakMap.prototype.delete": {
+		receiverProof: "fresh-weak-map",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_WEAK_MAP_DELETE",
+	},
+	"WeakSet.prototype.has": {
+		receiverProof: "fresh-weak-set",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_WEAK_SET_HAS",
+	},
+	"WeakSet.prototype.delete": {
+		receiverProof: "fresh-weak-set",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_WEAK_SET_DELETE",
 	},
 	"Object.keys": {
 		receiverProof: "intrinsic-object",
@@ -912,6 +941,23 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		realm: "semantic-identity",
 		lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
 	})),
+	...(["WeakMap", "WeakSet"] as const).flatMap((collection) =>
+		(collection === "WeakMap" ? ["get", "has", "delete"] : ["has", "delete"]).map(
+			(key): BuiltinOperationDescriptor => ({
+				id: `${collection}.prototype.${key}`,
+				owner: `${collection}.prototype`,
+				key,
+				receiver: collection === "WeakMap" ? "weak-map" : "weak-set",
+				arity: { minimum: 1, maximum: 1 },
+				evaluationOrder: "receiver-then-arguments",
+				coercionOrder: [],
+				effects: ["throw", "safepoint"],
+				result: key === "get" ? "any" : "boolean",
+				realm: "semantic-identity",
+				lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
+			}),
+		),
+	),
 	...DATA_VIEW_ACCESSOR_TYPES.flatMap((type): Array<BuiltinOperationDescriptor> => [
 		{
 			id: `DataView.prototype.get${type}`,

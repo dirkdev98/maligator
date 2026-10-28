@@ -955,7 +955,12 @@ export type CoreCollectionBuiltinOperation =
 	| "Map.prototype.delete"
 	| "Set.prototype.add"
 	| "Set.prototype.has"
-	| "Set.prototype.delete";
+	| "Set.prototype.delete"
+	| "WeakMap.prototype.get"
+	| "WeakMap.prototype.has"
+	| "WeakMap.prototype.delete"
+	| "WeakSet.prototype.has"
+	| "WeakSet.prototype.delete";
 
 export function coreCollectionCalleeGuard(
 	guard: CompilerGuardPlan,

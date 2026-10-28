@@ -697,6 +697,12 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-enumeration-observed-stats] values=%llu entries=%llu\n",
         (unsigned long long) mal_perf_stats.object_values_snapshot_observed,
         (unsigned long long) mal_perf_stats.object_entries_snapshot_observed);
+    fprintf(stderr, "[perf-weak-collection-stats] map_get=%llu map_has=%llu map_delete=%llu set_has=%llu set_delete=%llu\n",
+        (unsigned long long) mal_perf_stats.collection_direct_weak_map_get_hits,
+        (unsigned long long) mal_perf_stats.collection_direct_weak_map_has_hits,
+        (unsigned long long) mal_perf_stats.collection_direct_weak_map_delete_hits,
+        (unsigned long long) mal_perf_stats.collection_direct_weak_set_has_hits,
+        (unsigned long long) mal_perf_stats.collection_direct_weak_set_delete_hits);
     fprintf(stderr, "[perf-reflect-own-keys-stats] counts=%llu snapshots=%llu materializations=%llu\n",
         (unsigned long long) mal_perf_stats.object_own_keys_count_admissions,
         (unsigned long long) mal_perf_stats.object_own_keys_snapshot_admissions,

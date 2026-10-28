@@ -8,6 +8,7 @@
 #include "heap_symbol.h"
 #include "map_object.h"
 #include "set_object.h"
+#include "weak_collection.h"
 #include "object_ops.h"
 #include "perf_stats.h"
 #include "scalar_bits.h"
@@ -143,6 +144,7 @@ static inline bool mal_vm_try_capture_collection_method(
         prototype_intrinsic = MAL_INTRINSIC_MAP_PROTOTYPE;
         switch (operation) {
             case MAL_GUARDED_BUILTIN_MAP_GET:
+            case MAL_GUARDED_BUILTIN_WEAK_MAP_GET:
                 method_intrinsic = MAL_INTRINSIC_MAP_PROTOTYPE_GET;
                 method_name = "get";
                 break;
@@ -152,11 +154,15 @@ static inline bool mal_vm_try_capture_collection_method(
                 break;
             case MAL_GUARDED_BUILTIN_MAP_HAS:
             case MAL_GUARDED_BUILTIN_SET_HAS:
+            case MAL_GUARDED_BUILTIN_WEAK_MAP_HAS:
+            case MAL_GUARDED_BUILTIN_WEAK_SET_HAS:
                 method_intrinsic = MAL_INTRINSIC_MAP_PROTOTYPE_HAS;
                 method_name = "has";
                 break;
             case MAL_GUARDED_BUILTIN_MAP_DELETE:
             case MAL_GUARDED_BUILTIN_SET_DELETE:
+            case MAL_GUARDED_BUILTIN_WEAK_MAP_DELETE:
+            case MAL_GUARDED_BUILTIN_WEAK_SET_DELETE:
                 method_intrinsic = MAL_INTRINSIC_MAP_PROTOTYPE_DELETE;
                 method_name = "delete";
                 break;
@@ -174,12 +180,65 @@ static inline bool mal_vm_try_capture_collection_method(
                 break;
             case MAL_GUARDED_BUILTIN_MAP_HAS:
             case MAL_GUARDED_BUILTIN_SET_HAS:
+            case MAL_GUARDED_BUILTIN_WEAK_MAP_HAS:
+            case MAL_GUARDED_BUILTIN_WEAK_SET_HAS:
                 method_intrinsic = MAL_INTRINSIC_SET_PROTOTYPE_HAS;
                 method_name = "has";
                 break;
             case MAL_GUARDED_BUILTIN_MAP_DELETE:
             case MAL_GUARDED_BUILTIN_SET_DELETE:
+            case MAL_GUARDED_BUILTIN_WEAK_MAP_DELETE:
+            case MAL_GUARDED_BUILTIN_WEAK_SET_DELETE:
                 method_intrinsic = MAL_INTRINSIC_SET_PROTOTYPE_DELETE;
+                method_name = "delete";
+                break;
+            default:
+                return false;
+        }
+    } else if (mal_value_is_weak_map_object(receiver)) {
+        MalWeakMapObject *weak = mal_value_to_weak_map_object(receiver);
+        collection = &weak->object;
+        prototype_intrinsic = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE;
+        switch (operation) {
+            case MAL_GUARDED_BUILTIN_MAP_GET:
+            case MAL_GUARDED_BUILTIN_WEAK_MAP_GET:
+                method_intrinsic = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_GET;
+                method_name = "get";
+                break;
+            case MAL_GUARDED_BUILTIN_MAP_HAS:
+            case MAL_GUARDED_BUILTIN_SET_HAS:
+            case MAL_GUARDED_BUILTIN_WEAK_MAP_HAS:
+            case MAL_GUARDED_BUILTIN_WEAK_SET_HAS:
+                method_intrinsic = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_HAS;
+                method_name = "has";
+                break;
+            case MAL_GUARDED_BUILTIN_MAP_DELETE:
+            case MAL_GUARDED_BUILTIN_SET_DELETE:
+            case MAL_GUARDED_BUILTIN_WEAK_MAP_DELETE:
+            case MAL_GUARDED_BUILTIN_WEAK_SET_DELETE:
+                method_intrinsic = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_DELETE;
+                method_name = "delete";
+                break;
+            default:
+                return false;
+        }
+    } else if (mal_value_is_weak_set_object(receiver)) {
+        MalWeakSetObject *weak = mal_value_to_weak_set_object(receiver);
+        collection = &weak->object;
+        prototype_intrinsic = MAL_INTRINSIC_WEAK_SET_PROTOTYPE;
+        switch (operation) {
+            case MAL_GUARDED_BUILTIN_MAP_HAS:
+            case MAL_GUARDED_BUILTIN_SET_HAS:
+            case MAL_GUARDED_BUILTIN_WEAK_MAP_HAS:
+            case MAL_GUARDED_BUILTIN_WEAK_SET_HAS:
+                method_intrinsic = MAL_INTRINSIC_WEAK_SET_PROTOTYPE_HAS;
+                method_name = "has";
+                break;
+            case MAL_GUARDED_BUILTIN_MAP_DELETE:
+            case MAL_GUARDED_BUILTIN_SET_DELETE:
+            case MAL_GUARDED_BUILTIN_WEAK_MAP_DELETE:
+            case MAL_GUARDED_BUILTIN_WEAK_SET_DELETE:
+                method_intrinsic = MAL_INTRINSIC_WEAK_SET_PROTOTYPE_DELETE;
                 method_name = "delete";
                 break;
             default:

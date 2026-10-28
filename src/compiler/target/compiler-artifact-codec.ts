@@ -113,7 +113,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 342;
+export const COMPILER_ARTIFACT_VERSION = 343;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -205,6 +205,11 @@ const MAX_REGION_CLAIMS = 96;
 const MAX_REGION_ORDINARY_BLOCKS = 64;
 const MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS = 64;
 const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
+	"WeakMap.prototype.get",
+	"WeakMap.prototype.has",
+	"WeakMap.prototype.delete",
+	"WeakSet.prototype.has",
+	"WeakSet.prototype.delete",
 	"Map.prototype.get",
 	"Map.prototype.set",
 	"Set.prototype.add",
@@ -342,7 +347,15 @@ function taggedGuardedBuiltinOperation(operation: string | undefined): number {
 function collectionReceiverFromTag(
 	tag: number,
 ): CompilerExactCollectionBrand | undefined {
-	return tag === 1 ? "Map" : tag === 2 ? "Set" : undefined;
+	return tag === 1
+		? "Map"
+		: tag === 2
+			? "Set"
+			: tag === 3
+				? "WeakMap"
+				: tag === 4
+					? "WeakSet"
+					: undefined;
 }
 
 function isCollectionOperation(
@@ -355,7 +368,12 @@ function isCollectionOperation(
 		operation === "Map.prototype.delete" ||
 		operation === "Set.prototype.add" ||
 		operation === "Set.prototype.has" ||
-		operation === "Set.prototype.delete"
+		operation === "Set.prototype.delete" ||
+		operation === "WeakMap.prototype.get" ||
+		operation === "WeakMap.prototype.has" ||
+		operation === "WeakMap.prototype.delete" ||
+		operation === "WeakSet.prototype.has" ||
+		operation === "WeakSet.prototype.delete"
 	);
 }
 
@@ -2397,7 +2415,11 @@ function writeCompilerArtifact(
 						? 1
 						: plan.exactCollectionReceiver === "Set"
 							? 2
-							: 0;
+							: plan.exactCollectionReceiver === "WeakMap"
+								? 3
+								: plan.exactCollectionReceiver === "WeakSet"
+									? 4
+									: 0;
 				const validCollectionReceiver =
 					plan.exactCollectionReceiver === undefined ||
 					(receiverBrandTag !== 0 && isCollectionOperation(guardedOperation));
@@ -3690,8 +3712,7 @@ function validateBuiltinCollectionCallChainRegion(
 		(region.calleeGuard !== "required" &&
 			(region.calleeGuard !== "elided" ||
 				dependencyMask !== 1 ||
-				callPlan?.exactCollectionReceiver !==
-					(region.operation.startsWith("Map.") ? "Map" : "Set"))) ||
+				callPlan?.exactCollectionReceiver !== region.operation.split(".")[0])) ||
 		region.evaluationOrder !== "capture-property-before-arguments" ||
 		region.callee !== call.callee ||
 		region.receiver !== call.thisValue ||

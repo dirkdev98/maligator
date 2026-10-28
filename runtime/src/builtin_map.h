@@ -7,6 +7,8 @@ typedef enum MalBuiltinCollectionReceiverFact {
     MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN,
     MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_MAP,
     MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_SET,
+    MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_WEAK_MAP,
+    MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_WEAK_SET,
 } MalBuiltinCollectionReceiverFact;
 
 /**
@@ -20,7 +22,7 @@ MalValue mal_builtin_map_prototype_for_each(
     MalValue new_target, MalValue callee
 );
 
-/** Exact locked Map.prototype.get after private-fresh receiver proof. */
+// Known entries require a genuine Map receiver and the captured builtin identity.
 MalValue mal_builtin_map_get_known(
     MalVm *vm,
     MalValue this_value,
@@ -28,7 +30,6 @@ MalValue mal_builtin_map_get_known(
     i32 arg_count
 );
 
-/** Exact locked Map.prototype.set after private-fresh receiver proof. */
 MalValue mal_builtin_map_set_known(
     MalVm *vm,
     MalValue this_value,
@@ -70,6 +71,10 @@ MalValue mal_builtin_map_get_key(MalVm *vm, MalValue this_value, MalValue key);
 MalValue mal_builtin_map_set_key_value(MalVm *vm, MalValue this_value, MalValue key, MalValue value);
 bool mal_builtin_map_has_key(MalVm *vm, MalValue this_value, MalValue key);
 bool mal_builtin_map_delete_key(MalVm *vm, MalValue this_value, MalValue key);
+// Weak entries require a genuine WeakMap receiver; keys are never coerced.
+MalValue mal_builtin_weak_map_get_key(MalValue receiver, MalValue key);
+bool mal_builtin_weak_map_has_key(MalValue receiver, MalValue key);
+bool mal_builtin_weak_map_delete_key(MalValue receiver, MalValue key);
 // Number-key variants for keys the compiler already holds unboxed.
 MalValue mal_builtin_map_get_number(MalVm *vm, MalValue this_value, f64 key);
 MalValue mal_builtin_map_set_number(MalVm *vm, MalValue this_value, f64 key, MalValue value);

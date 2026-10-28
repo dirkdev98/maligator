@@ -274,6 +274,11 @@ export const VM_GUARDED_BUILTIN_CALL_OPERATIONS = [
 	"Array.prototype.pop",
 	"Array.prototype.shift",
 	"Array.prototype.unshift",
+	"WeakMap.prototype.get",
+	"WeakMap.prototype.has",
+	"WeakMap.prototype.delete",
+	"WeakSet.prototype.has",
+	"WeakSet.prototype.delete",
 ] as const;
 
 export interface VmKnownOwnSlotCandidate {

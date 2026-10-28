@@ -345,6 +345,11 @@ carry the receiver brand separately from the decision to retain a callee guard.
 Core selects and verifies both decisions; target lowering, artifact transport and
 C emission preserve them. A shadowed method keeps its ordinary call and completion
 path even when the builtin branch can omit receiver validation.
+WeakMap and WeakSet use this same brand transport. Their get/has/delete kernels
+consume arbitrary keys without coercion or collection, and deletion retains its
+heap write. Guarded dispatch checks the actual callee and receiver independently
+across strong and weak collections. Weak mutators retain their key validation and
+error-realm obligations; a receiver brand alone cannot remove those checks.
 Returned-record field summaries join heap brands alongside kinds and intervals,
 including producer writes and caller overwrites. Their alternatives use the same
 finite brand dependency graph, so recursive forwarding and self-writes converge
