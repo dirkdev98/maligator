@@ -28,6 +28,26 @@ function fieldRead(out: ReturnType<typeof inspectStaticValueFunction>) {
 }
 
 describe("normal field facts after own writes", () => {
+	it.each(["function", "function*", "async function", "async function*"])(
+		"carries a guarded caller write through merged aliases in a %s body",
+		(declaration) => {
+			const suspension =
+				(declaration.includes("*") ? "yield 0;" : "") +
+				(declaration.startsWith("async") ? "await 0;" : "");
+			const out = inspectStaticValueFunction(
+				`const make=function make(hook){for(let i=0;i<3;i++)hook(i);return {value:0};};${declaration} compute(value,flag,hook){const first=make(hook);const record=flag?first:make(hook);if(typeof value==='number')record.value=value;${suspension}hook();return record.value+1;}globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const { ip, op } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultKindMasks).toEqual([
+				COMPILER_VALUE_KIND_NUMBER,
+			]);
+			expect(out.native.registerRepresentations[op.dst]).toBe("number");
+			expect(out.c.source).not.toContain("MAL_BIN_ADD");
+		},
+	);
+
 	it.each([
 		["number", "", COMPILER_VALUE_KIND_NUMBER, "number"],
 		["string", "", COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING, "boxed"],

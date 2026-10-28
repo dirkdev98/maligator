@@ -14,6 +14,13 @@ function readGuardedRecord(input, callback) {
 	callback("guarded read");
 	return record.value + 1;
 }
+function readCallerGuardedRecord(input, flag, callback) {
+	const first = makeGuardedRecord(0, callback);
+	const record = flag ? first : makeGuardedRecord(0, callback);
+	if (typeof input === "number") record.value = input;
+	callback("caller guarded read");
+	return record.value + 1;
+}
 const makeGuardedUnion = function makeGuardedUnion(input, callback) {
 	for (let step = 0; step < 3; step++) callback(step);
 	if (typeof input === "string") return { value: input };
@@ -24,7 +31,11 @@ function readGuardedUnion(input, callback) {
 	callback("guarded union");
 	return record.value + 1;
 }
-Object.assign(globalThis, { readGuardedRecord, readGuardedUnion });
+Object.assign(globalThis, {
+	readGuardedRecord,
+	readGuardedUnion,
+	readCallerGuardedRecord,
+});
 function observe(value) {
 	events.push(value);
 	if (typeof globalThis.gc === "function") globalThis.gc();
@@ -35,6 +46,16 @@ for (const input of [undefined, null, false, "text", 1n, Symbol("input"), {}])
 	check(readGuardedRecord(input, observe), 1, "guard rejects non-Number field");
 check(readGuardedUnion("text", observe), "text1", "guarded String field");
 check(readGuardedUnion(2, observe), 1, "guarded union default");
+for (const flag of [false, true]) {
+	for (const input of [-0, NaN, Infinity, -Infinity, 2147483648])
+		check(
+			readCallerGuardedRecord(input, flag, observe),
+			input + 1,
+			"guarded caller Number",
+		);
+	for (const input of [undefined, null, false, "text", 1n, Symbol("input"), {}])
+		check(readCallerGuardedRecord(input, flag, observe), 1, "guarded caller default");
+}
 events.length = 0;
 const makeRecord = function makeRecord(value, callback) {
 	let label = "";

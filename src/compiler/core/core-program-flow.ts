@@ -144,6 +144,12 @@ export interface CoreProgramFlowValueKindState<
 	readonly anyScriptAggregate: CoreProgramFlowValueKindAggregate | undefined;
 }
 
+export interface CoreValueKindAlternative {
+	readonly value: CoreValueId;
+	/** Control facts at this instruction bound the alternative's value. */
+	readonly instruction: CoreInstructionId;
+}
+
 export interface CoreProgramFlowValueKindInputs {
 	readonly demandedValues: ReadonlyArray<CoreValueId>;
 	readonly parameterMasks?: ReadonlyArray<number>;
@@ -155,7 +161,7 @@ export interface CoreProgramFlowValueKindInputs {
 	readonly operationResultAlternatives?: (
 		instruction: CoreInstructionId,
 		result: CoreValueId,
-	) => ReadonlyArray<CoreValueId> | undefined;
+	) => ReadonlyArray<CoreValueKindAlternative> | undefined;
 	readonly elementLoadMask?: (instruction: CoreInstructionId) => number | undefined;
 }
 
@@ -2228,9 +2234,9 @@ export class CoreProgramFlowEngine {
 		>();
 		const recordAlternativeIndices = new Map<
 			CoreFunctionId,
-			Map<CoreInstructionId, ReadonlyArray<CoreValueId>>
+			Map<CoreInstructionId, ReadonlyArray<CoreValueKindAlternative>>
 		>();
-		const noRecordAlternatives: ReadonlyArray<CoreValueId> = [];
+		const noRecordAlternatives: ReadonlyArray<CoreValueKindAlternative> = [];
 		let aggregateRecomputations = 0;
 		let exactReverseCallerVisits = 0;
 		let wildcardReverseCallerVisits = 0;
@@ -2386,7 +2392,7 @@ export class CoreProgramFlowEngine {
 						recordReads = semantics.recordReads(fn, () => controlFlow(functionId));
 						recordReadIndices.set(functionId, recordReads);
 						let alternatives:
-							| Map<CoreInstructionId, ReadonlyArray<CoreValueId>>
+							| Map<CoreInstructionId, ReadonlyArray<CoreValueKindAlternative>>
 							| undefined;
 						for (const [instruction, read] of recordReads) {
 							if (read.writes === undefined) continue;
@@ -2430,10 +2436,7 @@ export class CoreProgramFlowEngine {
 							semantics.top,
 						);
 						if (initialKind === 0 || initialKind === semantics.top) continue;
-						alternatives!.set(
-							instruction,
-							read.writes!.map(({ value }) => value),
-						);
+						alternatives!.set(instruction, read.writes!);
 						// Producer contracts can emerge after the caller's first demand set was solved.
 						demands.delete(functionId);
 					}

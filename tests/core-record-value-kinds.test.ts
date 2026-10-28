@@ -13,6 +13,11 @@ import {
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NULLISH,
+	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_UNDEFINED,
 	COMPILER_VALUE_KIND_TOP,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
@@ -43,6 +48,94 @@ function records(source: string) {
 }
 
 describe("normal-return record field kinds", () => {
+	it.each([
+		["undefined", COMPILER_VALUE_KIND_UNDEFINED],
+		["boolean", COMPILER_VALUE_KIND_BOOLEAN],
+		["number", COMPILER_VALUE_KIND_NUMBER],
+		["bigint", COMPILER_VALUE_KIND_BIGINT],
+		["string", COMPILER_VALUE_KIND_STRING],
+		["symbol", COMPILER_VALUE_KIND_SYMBOL],
+		["object", COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_NULL],
+		["function", COMPILER_VALUE_KIND_OBJECT],
+	] as const)(
+		"bounds a caller-side %s writer independently of the initial field",
+		(kind, mask) => {
+			const out = records(
+				`function make(){return {value:0};}function read(input){const record=make();if(typeof input==='${kind}')record.value=input;return record.value;}globalThis.result=read(globalThis.input);`,
+			);
+			expect(out.read().summary(out.named("read").id).returnKind).toBe(
+				COMPILER_VALUE_KIND_NUMBER | mask,
+			);
+		},
+	);
+
+	it.each([
+		["if(typeof input==='number')record.value=input;", COMPILER_VALUE_KIND_NUMBER],
+		[
+			"if(typeof input==='string')record.value=input;",
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		],
+		[
+			"if(typeof input==='number')record.value=input;record.value=input;",
+			COMPILER_VALUE_KIND_TOP,
+		],
+	] as const)("retains caller-side writer bounds (%s)", (writes, mask) => {
+		const out = records(
+			`function make(){return {value:0};}function read(input){const record=make();${writes}return record.value;}globalThis.result=read(globalThis.input);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(mask);
+	});
+
+	it("combines nullable phi bounds with the caller's field writer guard", () => {
+		const out = records(
+			`function make(){return {value:'initial'};}function read(flag){const record=make();const input=flag?'changed':null;if(input!==null)record.value=input;return record.value;}globalThis.result=read(globalThis.flag);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_STRING,
+		);
+	});
+
+	it("joins guarded loop-carried caller writes without retaining earlier non-Number alternatives", () => {
+		const out = records(
+			`function make(){return {value:0};}function read(flag){const record=make();let input=true;for(let step=0;step<3;step++){if(typeof input==='number')record.value=input;input=flag?2:false;}return record.value;}globalThis.result=read(globalThis.flag);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_NUMBER,
+		);
+	});
+
+	it("does not seed a guarded caller write before its recursive producer returns", () => {
+		const out = records(
+			`function make(){return make();}function read(input){const record=make();if(typeof input==='number')record.value=input;return record.value;}globalThis.result=read(globalThis.input);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(0);
+	});
+
+	it("withdraws a caller field bound after its writer predicate changes", () => {
+		const out = records(
+			`function make(){return {value:0};}function read(input){const record=make();if(typeof input==='number')record.value=input;return record.value;}globalThis.result=read(globalThis.input);`,
+		);
+		const before = out.read();
+		const fn = out.named("read");
+		expect(before.summary(fn.id).returnKind).toBe(COMPILER_VALUE_KIND_NUMBER);
+		const block = [...fn.blockIds()].find(
+			(block) => fn.instructionKind(fn.blockTerminator(block)) === "branch",
+		)!;
+		const predicate = fn.kernel.operandAt(
+			fn.kernel.instructionOperandStart(fn.blockTerminator(block)),
+		);
+		const editor = CoreEditor.open(out.program, fn.id);
+		editor.replaceInstruction(
+			coreInstructionId(fn.kernel.valueDefinitionOwner(predicate)),
+			"createBoolean",
+			[],
+			{ attributes: { value: true } },
+		);
+		editor.commit();
+		expect(out.read().summary(fn.id).returnKind).toBe(COMPILER_VALUE_KIND_TOP);
+		expect(before.summary(fn.id).returnKind).toBe(COMPILER_VALUE_KIND_NUMBER);
+	});
+
 	it.each([
 		[
 			"const record={value:0};if(typeof input==='number')record.value=input;return record;",

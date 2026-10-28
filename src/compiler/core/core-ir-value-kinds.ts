@@ -79,6 +79,7 @@ import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts"
 import { corePrivateFieldFacts } from "./core-private-field-facts.ts";
 import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
+	CoreValueKindAlternative,
 	CoreProgramFlowValueKinds,
 	CoreProgramFlowValueKindSemantics,
 	CoreProgramFlowValueKindInputs,
@@ -88,6 +89,7 @@ import type {
 } from "./core-program-flow.ts";
 import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
 import {
+	coreReturnedValueDefinition,
 	coreRecordReturnKindInputs,
 	coreRecordFieldReads,
 	coreReturnedRecordKinds,
@@ -135,7 +137,7 @@ export interface CoreValueKindInputs {
 	readonly operationResultAlternatives?: (
 		instruction: CoreInstructionId,
 		result: CoreValueId,
-	) => ReadonlyArray<CoreValueId> | undefined;
+	) => ReadonlyArray<CoreValueKindAlternative> | undefined;
 	/** What a keyed read returns when its key is a number, if the receiver's elements are known. */
 	readonly elementLoadMask?: (
 		instruction: CoreInstructionId,
@@ -344,6 +346,22 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 	}
 }
 
+function declaredValueKind(fn: CoreFunctionStore, value: CoreValueId): number {
+	const representation = representationKind(fn, value);
+	if (representation !== undefined) return representation;
+	const definition = coreReturnedValueDefinition(fn, value);
+	if (definition === undefined) return COMPILER_VALUE_KIND_TOP;
+	const opcode = fn.instructionOpcodeName(definition);
+	const operator = fn.instructionAttributes(definition).operator;
+	return (
+		staticOpcodeKind(opcode) ??
+		((opcode === "unary" || opcode === "binary") && typeof operator === "string"
+			? compilerOperatorFixedResultKind(opcode, operator)
+			: undefined) ??
+		COMPILER_VALUE_KIND_TOP
+	);
+}
+
 const KIND_TRANSFER_JOIN = 1;
 const KIND_TRANSFER_COPY = 2;
 const KIND_TRANSFER_NUMERIC_UNARY = 3;
@@ -366,13 +384,19 @@ function transferredKind(
 	inputs: ArrayLike<number>,
 	start: number,
 	count: number,
-	mask: (value: CoreValueId) => number,
+	mask: (value: CoreValueId, block?: CoreBlockId) => number,
+	inputBlocks?: ReadonlyArray<CoreBlockId | undefined>,
 ): number {
 	// Stored alternatives cannot execute before the record producer completes.
 	if (kind === KIND_TRANSFER_NORMAL_RESULT_JOIN && constant === 0) return 0;
 	if (kind === KIND_TRANSFER_JOIN || kind === KIND_TRANSFER_NORMAL_RESULT_JOIN) {
 		for (let index = 0; index < count; index++)
-			constant |= mask(inputs[start + index]! as CoreValueId);
+			constant |= mask(
+				inputs[start + index]! as CoreValueId,
+				kind === KIND_TRANSFER_NORMAL_RESULT_JOIN
+					? inputBlocks?.[start + index]
+					: undefined,
+			);
 		return constant;
 	}
 	const left = mask(inputs[start]! as CoreValueId);
@@ -727,6 +751,7 @@ export function corePrivatePackedRestArrays(
 }
 
 interface KindTransferBuffer {
+	inputBlocks?: Array<CoreBlockId | undefined>;
 	readonly kinds: Array<number>;
 	readonly outputs: Array<CoreValueId>;
 	readonly constants: Array<CompilerValueKindMask>;
@@ -825,13 +850,15 @@ function addOperationTransfer(
 	const alternatives = inputs?.operationResultAlternatives?.(instruction, output);
 	if (contextual !== undefined && alternatives !== undefined) {
 		// Recompute the complete flow before publishing a new normal-result bound.
-		addKindTransfer(
-			buffer,
-			KIND_TRANSFER_NORMAL_RESULT_JOIN,
-			output,
-			contextual,
-			alternatives,
-		);
+		const index = buffer.kinds.length;
+		addKindTransfer(buffer, KIND_TRANSFER_NORMAL_RESULT_JOIN, output, contextual);
+		buffer.inputCounts[index] = alternatives.length;
+		for (const alternative of alternatives) {
+			(buffer.inputBlocks ??= [])[buffer.inputs.length] = fn.instructionBlock(
+				alternative.instruction,
+			);
+			buffer.inputs.push(alternative.value);
+		}
 		return;
 	}
 	const supplied =
@@ -1227,7 +1254,21 @@ function solveCoreValueKinds(
 	const transferInputStarts = Uint32Array.from(transfers.inputStarts);
 	const transferInputCounts = Uint32Array.from(transfers.inputCounts);
 	const transferInputs = Uint32Array.from(transfers.inputs);
-	const mask = (value: CoreValueId): number => masks[value] ?? 0;
+	let conditional: CoreConditionalValueKinds | undefined;
+
+	const mask = (value: CoreValueId, block?: CoreBlockId): number => {
+		const kind = masks[value] ?? 0;
+		if (block === undefined || kind === 0) return kind;
+		const declared = declaredValueKind(fn, value);
+		if ((declared & (declared - 1)) === 0) return kind;
+		// Structural bounds stay fixed while the value lattice grows, including through recursive fields.
+		return (
+			kind &
+			(conditional ??= analyzeCoreConditionalValueKinds(program, fn, cfg, (value) =>
+				declaredValueKind(fn, value),
+			)).kindMask(value, block)
+		);
+	};
 	const wakeDependents = (
 		value: CoreValueId,
 		queued: Uint8Array,
@@ -1258,6 +1299,7 @@ function solveCoreValueKinds(
 			transferInputStarts[index]!,
 			transferInputCounts[index]!,
 			mask,
+			transfers.inputBlocks,
 		);
 		const next = masks[output]! | incoming;
 		if (next === masks[output]) continue;

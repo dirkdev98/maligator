@@ -901,6 +901,12 @@ Returned field initializers and private writers query kinds at their own blocks,
 retaining dominating branch bounds through forwarding calls. Conditional analysis
 is lazy for union kinds; exact and unsolved values bypass it so a branch cannot
 seed an empty recursive result. Undemanded predicate inputs remain unknown.
+Caller-side field alternatives also retain the writer's instruction. The kind
+worklist intersects each growing value mask with fixed structural branch bounds
+at that point; those bounds never depend on a previous field result or an unsolved
+mask. This preserves convergence through field cycles without another value-kind
+solve. Initial fields and all admitted writers still join conservatively, and
+stored alternatives cannot contribute before their producer has a normal result.
 Conditional returns and loop-carried aliases join the common own fields of all
 fresh record alternatives. The bounded alias walk admits ordinary block arguments
 and TDZ checks, and rejects mutation, escape, handler transport or a non-record

@@ -252,6 +252,10 @@ The independent target boundary and current storage contract are recorded in
       values and ranges are solved afresh. Non-returned locals add no field demands.
       Returned field initializers and private writers also retain dominating
       branch kind bounds through call chains; later unguarded writes widen them.
+      Caller-side field joins retain each writer's control location too. Fixed
+      structural kind bounds constrain growing value masks in the existing
+      worklist, including nullable joins, loops, merged records and suspension;
+      empty producer cycles remain empty and predicate edits withdraw old bounds.
       Independent own-data presence now licenses noncollecting named reads even
       when the field kind is unknown. Native full, resumable and frameless bodies
       consume that proof after virtual-field handling; misses resolve the physical
@@ -272,8 +276,9 @@ The independent target boundary and current storage contract are recorded in
       accessors. A producer resets only its own allocation lifetime, including on
       backedges; later effects do not withdraw an earlier read. Writer/source
       correlations within the surviving prefix remain conservative.
-      Remaining object work includes caller-side writer branch bounds and
-      writer/source correlations, typed producer storage for remaining writes,
+      Remaining object work includes relational writer bounds, writer/source
+      correlations and definite
+      overwrite precision, typed producer storage for remaining writes,
       writable own-data proofs for materialized stores, broader parameter-relative
       call effects and coroutine record transport. Record-call admission and
       profitability are owned by the following tasks.
