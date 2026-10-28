@@ -27,6 +27,7 @@ import type {
 	CoreRecordUses,
 	VerifiedCoreOptimizationPlan,
 } from "./core-ir-regions.ts";
+import { coreCollectionCalleeGuard } from "./core-ir-regions.ts";
 import type {
 	CoreBlockId,
 	CoreEffectDomain,
@@ -398,6 +399,7 @@ type CoreLocalCandidateCache = Map<
 	CoreFunctionId,
 	{
 		readonly kinds: Set<CoreLocalSpecializationCandidate["kind"]>;
+		readonly context?: CoreCompilationContext;
 		candidates?: ReadonlyMap<number, ReadonlyArray<CoreLocalSpecializationCandidate>>;
 	}
 >;
@@ -416,6 +418,7 @@ function localCandidate(
 			program,
 			functionId,
 			requested.kinds,
+			requested.context,
 		).candidates) {
 			const hash = numericStringHash(candidate.key);
 			const bucket = indexed.get(hash) ?? [];
@@ -1751,7 +1754,9 @@ function verifySpecialization(
 			chain.property !== candidate.property ||
 			chain.call !== candidate.call ||
 			chain.operation !== candidate.operation ||
-			chain.exactReceiver !== candidate.exactReceiver ||
+			chain.receiverBrand !== candidate.receiverBrand ||
+			chain.calleeGuard !==
+				coreCollectionCalleeGuard(chain.guard, candidate.calleeGuardCanBeElided) ||
 			!sameNumbers(selection.claimedInstructions, candidate.instructions) ||
 			!sameNumbers(selection.ordinaryBlocks, expectedBlocks) ||
 			!sameNumbers(selection.exceptionalBlocks, candidate.exceptionalBlocks) ||
@@ -1905,6 +1910,7 @@ export function verifyCoreOptimizationPlan(
 		if (selection.kind === "guarded-direct-call") continue;
 		const requested = localCandidates.get(selection.function) ?? {
 			kinds: new Set<CoreLocalSpecializationCandidate["kind"]>(),
+			context,
 		};
 		requested.kinds.add(
 			selection.kind === "stack-object-plan"

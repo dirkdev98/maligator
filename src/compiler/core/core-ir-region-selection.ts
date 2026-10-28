@@ -55,6 +55,7 @@ import type {
 	CoreRecordObject,
 	CoreRecordUses,
 } from "./core-ir-regions.ts";
+import { coreCollectionCalleeGuard } from "./core-ir-regions.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -1024,10 +1025,14 @@ function pendingLocalCandidate(
 																					property: candidate.property,
 																					call: candidate.call,
 																					operation: candidate.operation,
-																					...(candidate.exactReceiver === undefined
+																					calleeGuard: coreCollectionCalleeGuard(
+																						builtin!.guard,
+																						candidate.calleeGuardCanBeElided,
+																					),
+																					...(candidate.receiverBrand === undefined
 																						? {}
 																						: {
-																								exactReceiver: candidate.exactReceiver,
+																								receiverBrand: candidate.receiverBrand,
 																							}),
 																				}),
 																			},

@@ -5,7 +5,7 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
+import type { CoreExactHeapBrand } from "./core-heap-brands.ts";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
@@ -27,7 +27,6 @@ import {
 	corePrivateFieldKeys,
 } from "./core-private-field-facts.ts";
 import type {
-	CorePrivateFieldBrand,
 	CorePrivateFieldFact,
 	CorePrivateFieldKeys,
 	CorePrivateFieldWrite,
@@ -205,9 +204,9 @@ function fieldReadMask(
 
 // Null marks a field whose values do not share one class.
 function joinBrand(
-	previous: CorePrivateFieldBrand | null | undefined,
-	next: CorePrivateFieldBrand | null,
-): CorePrivateFieldBrand | null {
+	previous: CoreExactHeapBrand | null | undefined,
+	next: CoreExactHeapBrand | null,
+): CoreExactHeapBrand | null {
 	return previous === undefined || previous === next ? next : null;
 }
 
@@ -267,11 +266,11 @@ export function analyzeCorePrivateFields(
 				(construction.get(write.key) ?? true) &&
 					storesOwnAddition(fn, control, writes, write),
 			);
-	const brands = new Map<string, CorePrivateFieldBrand | null>();
+	const brands = new Map<string, CoreExactHeapBrand | null>();
 	const valueBrand = (
 		{ fn, classes }: FieldWriter,
 		value: CoreValueId,
-	): CorePrivateFieldBrand | null | undefined => {
+	): CoreExactHeapBrand | null | undefined => {
 		const source = valueDefinition(fn, value);
 		if (source !== undefined && fn.instructionOpcodeName(source) === "loadPrivate") {
 			const key = keys.key(
@@ -280,8 +279,7 @@ export function analyzeCorePrivateFields(
 			);
 			return key === undefined ? null : brands.get(key);
 		}
-		const brand = classes.exactHeapBrand(value);
-		return brand === "Array" ? brand : (coreNumericTypedArrayKind(brand) ?? null);
+		return classes.exactHeapBrand(value) ?? null;
 	};
 	let brandsConverged = false;
 	for (let round = 0; round < FIELD_KIND_ROUNDS && !brandsConverged; round++) {

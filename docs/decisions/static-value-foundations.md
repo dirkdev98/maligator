@@ -336,6 +336,15 @@ sets differ from unknown ranges, so bounded base cases can seed recursive joins.
 Growing intervals widen to unknown after bounded expansion rather than exporting
 an unproved integer contract. Calls retain their throwing, collection and user-code
 effects throughout this propagation.
+Stable heap brands use the same bounded normal-return worklist across calls and
+constructors; primitive constructor returns still substitute the receiver. Brands
+also follow closed immutable global slots and private fields whose writes agree.
+Array, numeric TypedArray, Map and Set brands survive publication, but do not
+certify containment, unchanged contents or an immutable method. Collection plans
+carry the receiver brand separately from the decision to retain a callee guard.
+Core selects and verifies both decisions; target lowering, artifact transport and
+C emission preserve them. A shadowed method keeps its ordinary call and completion
+path even when the builtin branch can omit receiver validation.
 Normal return provenance also seeds a separate identity query over call results,
 moves and phi components. Every possible callee must forward a caller operand;
 async, generator, constructor and opaque completions do not qualify. Identity

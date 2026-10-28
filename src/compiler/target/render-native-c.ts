@@ -11921,20 +11921,7 @@ class NativeInstructionEmission {
 		}
 		if (
 			this.context.nativeBuiltinCollectionCallChainAction?.role === "call" &&
-			this.context.nativeBuiltinCollectionCallChainAction.chain.license.guard.dependencies
-				.length === 1 &&
-			this.context.nativeBuiltinCollectionCallChainAction.chain.license.guard
-				.dependencies[0]?.kind === "world" &&
-			this.context.nativeBuiltinCollectionCallChainAction.chain.license.guard
-				.dependencies[0].fact === "primordials.locked" &&
-			((this.context.nativeBuiltinCollectionCallChainAction.chain.operation.startsWith(
-				"Map.",
-			) &&
-				callPlan?.exactCollectionReceiver === "Map") ||
-				(this.context.nativeBuiltinCollectionCallChainAction.chain.operation.startsWith(
-					"Set.",
-				) &&
-					callPlan?.exactCollectionReceiver === "Set"))
+			this.context.nativeBuiltinCollectionCallChainAction.chain.calleeGuard === "elided"
 		) {
 			const operation =
 				this.context.nativeBuiltinCollectionCallChainAction.chain.operation;

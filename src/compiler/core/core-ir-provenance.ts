@@ -2,6 +2,8 @@ import { compilerNumberFastPathInputKind } from "../shared/compiler-value-kinds.
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import type { CoreCompilationContext } from "./core-compilation.ts";
+import { coreExactCollectionBrand } from "./core-heap-brands.ts";
 import type { CoreExactCollectionBrand } from "./core-heap-brands.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
@@ -1070,7 +1072,8 @@ export interface CoreBuiltinCollectionCallCandidate extends CoreLocalSpecializat
 	readonly property: CoreInstructionId;
 	readonly call: CoreInstructionId;
 	readonly operation: CoreCollectionBuiltinOperation;
-	readonly exactReceiver?: CoreExactCollectionBrand;
+	readonly receiverBrand?: CoreExactCollectionBrand;
+	readonly calleeGuardCanBeElided: boolean;
 	readonly exceptionalBlocks: ReadonlyArray<CoreBlockId>;
 }
 
@@ -2630,6 +2633,7 @@ function builtinCollectionCallCandidates(
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
+	valueClasses: () => CoreValueClassAnalysis,
 ): ReadonlyArray<CoreBuiltinCollectionCallCandidate> {
 	const candidates: Array<CoreBuiltinCollectionCallCandidate> = [];
 	for (const call of indexedOpcodeInstructions(fn, index, "call")) {
@@ -2648,9 +2652,17 @@ function builtinCollectionCallCandidates(
 			operation.split(".").at(-1)!,
 		);
 		if (matched === undefined) continue;
-		const getExactReceiver = lazySpecializationDetail(program, fn, () =>
+		const getFreshReceiver = lazySpecializationDetail(program, fn, () =>
 			exactFreshCollectionReceiver(fn, roots, index, matched.property, call, operation),
 		);
+		const getReceiverBrand = lazySpecializationDetail(program, fn, () => {
+			const fresh = getFreshReceiver();
+			if (fresh !== undefined) return fresh;
+			const receiver = instructionOperand(fn, call, 1);
+			return receiver === undefined
+				? undefined
+				: coreExactCollectionBrand(valueClasses().exactHeapBrand(receiver, call));
+		});
 		const instructions = Object.freeze([matched.property, call]);
 		const key = `builtin-collection-call-chain:${fn.id}:${call}:${operation}`;
 		candidates.push(
@@ -2662,8 +2674,11 @@ function builtinCollectionCallCandidates(
 				property: matched.property,
 				call,
 				operation: operation as CoreCollectionBuiltinOperation,
-				get exactReceiver() {
-					return getExactReceiver();
+				get receiverBrand() {
+					return getReceiverBrand();
+				},
+				get calleeGuardCanBeElided() {
+					return getFreshReceiver() !== undefined;
 				},
 				exceptionalBlocks: matched.exceptionalBlocks,
 				instructions,
@@ -4523,6 +4538,7 @@ function discoverCandidates(
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
 	valueKinds: () => CoreValueKindAnalysis,
+	valueClasses: () => CoreValueClassAnalysis,
 	kinds?: ReadonlySet<CoreLocalSpecializationCandidate["kind"]>,
 ): CoreLocalSpecializationCandidates {
 	const fn = program.function(functionId);
@@ -4644,7 +4660,7 @@ function discoverCandidates(
 			? stringSplitCursorCandidates(program, fn, control, loops, roots, index)
 			: []),
 		...(requested("builtin-collection-call-chain")
-			? builtinCollectionCallCandidates(program, fn, control, roots, index)
+			? builtinCollectionCallCandidates(program, fn, control, roots, index, valueClasses)
 			: []),
 		...(requested("string-split-projection")
 			? stringSplitProjectionCandidates(program, fn, control, roots, index)
@@ -4762,6 +4778,7 @@ export function discoverCoreLocalSpecializationCandidates(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
 	kinds?: ReadonlySet<CoreLocalSpecializationCandidate["kind"]>,
+	context?: CoreCompilationContext,
 ): CoreLocalSpecializationCandidates {
 	const fn = program.function(functionId);
 	const control = buildCoreControlFlow(program, functionId, { exceptions: true });
@@ -4770,6 +4787,7 @@ export function discoverCoreLocalSpecializationCandidates(
 	let provenance: CoreProvenance | undefined;
 	let loops: CoreLoopInductionAnalysis | undefined;
 	let valueKinds: CoreValueKindAnalysis | undefined;
+	let valueClasses: CoreValueClassAnalysis | undefined;
 	const getValueKinds = () =>
 		(valueKinds ??= analyzeCoreValueKinds(program, fn, control));
 	return discoverCandidates(
@@ -4795,6 +4813,14 @@ export function discoverCoreLocalSpecializationCandidates(
 		roots,
 		index,
 		getValueKinds,
+		() =>
+			(valueClasses ??= analyzeCoreValueClasses(
+				program,
+				functionId,
+				context,
+				roots,
+				() => index,
+			)),
 		kinds,
 	);
 }
@@ -4805,6 +4831,7 @@ export const CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS: CoreAnalysisDefiniti
 		scope: "function",
 		functionDependencies: SPECIALIZATION_FUNCTION_DEPENDENCIES,
 		programDependencies: ["data"],
+		contextIdentity: (context) => context.facts.world.primordialPolicy,
 		compute({ program, request, get }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function analysis request");
@@ -4818,6 +4845,7 @@ export const CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS: CoreAnalysisDefiniti
 				bundle.roots,
 				bundle.index,
 				() => get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request),
+				() => bundle.valueClasses,
 			);
 		},
 	};

@@ -151,6 +151,29 @@ function lower(compilation: CoreCompilation): ProgramImage {
 	return lowerExecutionToProgramImage(lowerCoreCompilationToExecution(compilation));
 }
 
+it("does not let a stable receiver brand discharge a loaded-callee guard", () => {
+	const compilation = compileSource(
+		"const receiver=new Map();globalThis.read=function read(visit,key){visit(receiver);return receiver.get(key);};",
+		"locked",
+	);
+	const selections = projectCoreSpecializationRecipes(compilation.plan.recipes);
+	const index = selections.findIndex(
+		(selection) => selection.kind === "builtin-collection-call-chain",
+	);
+	const selection = selections[index];
+	if (selection?.kind !== "builtin-collection-call-chain")
+		throw new Error("Missing guarded collection plan");
+	const chain = selection.builtinCollectionCall;
+	expect(chain).toMatchObject({ receiverBrand: "Map", calleeGuard: "required" });
+	const invalid = withSelection(compilation, index, {
+		...selection,
+		builtinCollectionCall: { ...chain, calleeGuard: "elided" },
+	});
+	expect(() =>
+		verifyCoreOptimizationPlan(compilation.program, invalid, compilation.context),
+	).toThrow(/invalid collection-call certificate/);
+});
+
 function withVmRegion(
 	definition: ProgramImage,
 	functionIndex: number,

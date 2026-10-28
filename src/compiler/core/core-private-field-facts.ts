@@ -1,20 +1,17 @@
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import type { CoreNumericTypedArrayKind } from "./core-heap-brands.ts";
+import type { CoreExactHeapBrand } from "./core-heap-brands.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreModulePrivateNames } from "./core-private-names.ts";
 import type { CoreModulePrivateNameIndex } from "./core-private-names.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
-/** A class of heap object whose element accesses do not depend on who else holds it. */
-export type CorePrivateFieldBrand = "Array" | CoreNumericTypedArrayKind;
-
 /** What every write of one class-private field can store, and where those writes run. */
 export interface CorePrivateFieldFact {
 	readonly kinds: CompilerValueKindMask;
 	/** The class every value a read can return belongs to, when there is one. */
-	readonly brand: CorePrivateFieldBrand | undefined;
+	readonly brand: CoreExactHeapBrand | undefined;
 	/**
 	 * Only the activation that added the field to an object stores into it, so the
 	 * field keeps one value while any other non-suspending activation runs.

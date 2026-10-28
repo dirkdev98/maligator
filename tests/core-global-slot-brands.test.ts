@@ -12,15 +12,19 @@ const source = `
 	const FLAGS = new Uint8Array(256);
 	const LIST = [1, 2];
 	const SEEN = new Set();
+	const INDEX = new Map();
+	const WRAPPED = new Proxy(new Map(), {});
 	const EITHER = globalThis.pick ? [] : new Int32Array(2);
 	let REPLACED = [];
 	REPLACED = new Float64Array(1);
 	function flags() { return FLAGS; }
 	function list() { return LIST; }
 	function seen() { return SEEN; }
+	function index() { return INDEX; }
+	function wrapped() { return WRAPPED; }
 	function either() { return EITHER; }
 	function replaced() { return REPLACED; }
-	globalThis.readers = [flags, list, seen, either, replaced];`;
+	globalThis.readers = [flags, list, seen, index, wrapped, either, replaced];`;
 
 function functionName(
 	program: ReturnType<typeof constructSemanticProgramCore>["program"],
@@ -30,7 +34,6 @@ function functionName(
 	return units === undefined ? undefined : String.fromCharCode(...units);
 }
 
-// Each reader's single global load names the binding it returns.
 function loadedBrands(
 	evalMode: "disabled" | "runtime",
 ): Map<string, CoreExactHeapBrand | undefined> {
@@ -69,16 +72,18 @@ function loadedBrands(
 }
 
 describe("global slot brands", () => {
-	it("give reads of a const its Array or TypedArray class", () => {
+	it("give reads of a const its stable heap brand", () => {
 		const brands = loadedBrands("disabled");
 		expect(brands.get("flags")).toBe("Uint8Array");
 		expect(brands.get("list")).toBe("Array");
+		expect(brands.get("seen")).toBe("Set");
+		expect(brands.get("index")).toBe("Map");
 	});
 
-	it("leave collections, unknown classes and reassigned bindings unbranded", () => {
+	it("leave Proxy wrappers, mixed classes and reassigned bindings unbranded", () => {
 		const brands = loadedBrands("disabled");
-		expect(brands.has("seen")).toBe(true);
-		expect(brands.get("seen")).toBeUndefined();
+		expect(brands.has("wrapped")).toBe(true);
+		expect(brands.get("wrapped")).toBeUndefined();
 		expect(brands.get("either")).toBeUndefined();
 		expect(brands.get("replaced")).toBeUndefined();
 	});
@@ -87,5 +92,7 @@ describe("global slot brands", () => {
 		const brands = loadedBrands("runtime");
 		expect(brands.get("flags")).toBeUndefined();
 		expect(brands.get("list")).toBeUndefined();
+		expect(brands.get("seen")).toBeUndefined();
+		expect(brands.get("index")).toBeUndefined();
 	});
 });

@@ -110,7 +110,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 339;
+export const COMPILER_ARTIFACT_VERSION = 340;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2988,6 +2988,7 @@ function writeCompilerArtifact(
 					w.i32(region.callIp);
 					w.u8(taggedGuardedBuiltinOperation(region.operation));
 					w.u8(region.runtimeGuard === "exact-collection-method" ? 1 : 0);
+					w.u8(region.calleeGuard === "elided" ? 1 : 0);
 					w.u8(region.evaluationOrder === "capture-property-before-arguments" ? 1 : 0);
 					w.i32(region.propertyIcIndex);
 					w.i32(region.callee);
@@ -3651,7 +3652,7 @@ function validateBuiltinCollectionCallChainRegion(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 ): void {
-	builtinCollectionCallChainGuardMasks(region.license);
+	const { dependencyMask } = builtinCollectionCallChainGuardMasks(region.license);
 	const property = fn.instructions[region.propertyIp];
 	const call = fn.instructions[region.callIp];
 	const callPlan = nativeCallPlanAt(nativeInstructions, region.callIp);
@@ -3681,6 +3682,11 @@ function validateBuiltinCollectionCallChainRegion(
 		property.object !== call.thisValue ||
 		region.propertyIp >= region.callIp ||
 		region.runtimeGuard !== "exact-collection-method" ||
+		(region.calleeGuard !== "required" &&
+			(region.calleeGuard !== "elided" ||
+				dependencyMask !== 1 ||
+				callPlan?.exactCollectionReceiver !==
+					(region.operation.startsWith("Map.") ? "Map" : "Set"))) ||
 		region.evaluationOrder !== "capture-property-before-arguments" ||
 		region.callee !== call.callee ||
 		region.receiver !== call.thisValue ||
@@ -6342,12 +6348,13 @@ function readCompilerArtifact(
 					const callIp = r.i32();
 					const operation = collectionOperationFromTag(r.u8());
 					const runtimeGuardTag = r.u8();
+					const calleeGuardTag = r.u8();
 					const evaluationOrderTag = r.u8();
 					const propertyIcIndex = r.i32();
 					const callee = r.i32();
 					const receiver = r.i32();
 					const result = r.i32();
-					if (runtimeGuardTag !== 1 || evaluationOrderTag !== 1) {
+					if (runtimeGuardTag !== 1 || calleeGuardTag > 1 || evaluationOrderTag !== 1) {
 						throw new RangeError(
 							"program-image-codec: invalid builtin collection chain header",
 						);
@@ -6375,6 +6382,7 @@ function readCompilerArtifact(
 						callIp,
 						operation,
 						runtimeGuard: "exact-collection-method",
+						calleeGuard: calleeGuardTag === 1 ? "elided" : "required",
 						evaluationOrder: "capture-property-before-arguments",
 						propertyIcIndex,
 						callee,

@@ -637,6 +637,7 @@ export type VmBuiltinCollectionCallChainRegion = VmRegionEnvelope<
 	readonly callIp: number;
 	readonly operation: CoreCollectionBuiltinOperation;
 	readonly runtimeGuard: "exact-collection-method";
+	readonly calleeGuard: "elided" | "required";
 	readonly evaluationOrder: "capture-property-before-arguments";
 	readonly propertyIcIndex: number;
 	readonly callee: number;
@@ -5156,6 +5157,13 @@ function lowerExecutionFunctionToNativePlan(
 					region.license.materialization !== "none" ||
 					region.license.admission.mode !== "capture" ||
 					region.runtimeGuard !== "exact-collection-method" ||
+					(region.calleeGuard !== "required" &&
+						(region.calleeGuard !== "elided" ||
+							guard.dependencies.length !== 1 ||
+							guard.dependencies[0]?.kind !== "world" ||
+							guard.dependencies[0].fact !== "primordials.locked" ||
+							callPlan?.exactCollectionReceiver !==
+								(region.operation.startsWith("Map.") ? "Map" : "Set"))) ||
 					region.evaluationOrder !== "capture-property-before-arguments" ||
 					propertyIp === undefined ||
 					callIp === undefined ||
@@ -5199,6 +5207,7 @@ function lowerExecutionFunctionToNativePlan(
 					callIp,
 					operation: region.operation,
 					runtimeGuard: "exact-collection-method",
+					calleeGuard: region.calleeGuard,
 					evaluationOrder: "capture-property-before-arguments",
 					propertyIcIndex,
 					callee: call.callee,

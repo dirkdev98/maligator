@@ -136,7 +136,6 @@ function fieldFacts(evalMode: "disabled" | "runtime", program = source) {
 	);
 	const facts = analyzeCorePrivateFields(core.program, core.context);
 	if (facts === undefined) return undefined;
-	// Each accessor method's single private read names the field it is called after.
 	const byMethod = new Map<string, CorePrivateFieldFact | undefined>();
 	for (const id of core.program.functionIds()) {
 		const fn = core.program.function(id);
@@ -210,6 +209,33 @@ describe("private field facts", () => {
 		expect(fields.get("mark")?.constructionOnly).toBe(false);
 		expect(fields.get("tag")?.constructionOnly).toBe(true);
 		expect(fields.get("shared")?.constructionOnly).toBe(false);
+	});
+
+	it("retains collection brands across publication and replacement with the same class", () => {
+		const fields = fieldFacts(
+			"disabled",
+			`
+			class Collections {
+				#map = new Map();
+				#set = new Set();
+				#copy;
+				#wrapped = new Proxy(new Map(), {});
+				#mixed = new Map();
+				constructor(visit) { this.#copy = this.#map; visit(this.#map, this.#set); }
+				reset() { this.#map = new Map(); this.#mixed = new Set(); }
+				map() { return this.#map; }
+				set() { return this.#set; }
+				copy() { return this.#copy; }
+				wrapped() { return this.#wrapped; }
+				mixed() { return this.#mixed; }
+			}
+			globalThis.Collections = Collections;`,
+		)!;
+		expect(fields.get("map")).toMatchObject({ brand: "Map", constructionOnly: false });
+		expect(fields.get("set")?.brand).toBe("Set");
+		expect(fields.get("copy")?.brand).toBe("Map");
+		expect(fields.get("wrapped")?.brand).toBeUndefined();
+		expect(fields.get("mixed")?.brand).toBeUndefined();
 	});
 
 	it("join the kinds of every element stored into arrays that only private fields hold", () => {

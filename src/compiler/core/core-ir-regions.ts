@@ -394,7 +394,8 @@ export interface CorePlanBuiltinCollectionCallSpecialization extends CorePlanSpe
 		readonly property: CoreInstructionId;
 		readonly call: CoreInstructionId;
 		readonly operation: CoreCollectionBuiltinOperation;
-		readonly exactReceiver?: CoreExactCollectionBrand;
+		readonly receiverBrand?: CoreExactCollectionBrand;
+		readonly calleeGuard: "elided" | "required";
 	};
 }
 
@@ -956,6 +957,19 @@ export type CoreCollectionBuiltinOperation =
 	| "Set.prototype.has"
 	| "Set.prototype.delete";
 
+export function coreCollectionCalleeGuard(
+	guard: CompilerGuardPlan,
+	unmodifiedReceiver: boolean,
+): "elided" | "required" {
+	const dependency = guard.dependencies[0];
+	return unmodifiedReceiver &&
+		guard.dependencies.length === 1 &&
+		dependency?.kind === "world" &&
+		dependency.fact === "primordials.locked"
+		? "elided"
+		: "required";
+}
+
 export interface CoreAllocatedBuiltinCollectionCallChainRegion extends CoreAllocatedRegionEnvelope<
 	"builtin-collection-call-chain",
 	"captured-collection-method",
@@ -969,6 +983,7 @@ export interface CoreAllocatedBuiltinCollectionCallChainRegion extends CoreAlloc
 	readonly call: Extract<CompilerInstruction, { type: "call" }>;
 	readonly operation: CoreCollectionBuiltinOperation;
 	readonly runtimeGuard: "exact-collection-method";
+	readonly calleeGuard: "elided" | "required";
 	readonly evaluationOrder: "capture-property-before-arguments";
 }
 

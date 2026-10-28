@@ -1477,6 +1477,7 @@ function lowerCoreSpecializations(
 				call,
 				operation: chain.operation,
 				runtimeGuard: "exact-collection-method",
+				calleeGuard: chain.calleeGuard,
 				evaluationOrder: "capture-property-before-arguments",
 			});
 			continue;
@@ -1833,8 +1834,8 @@ function lowerFunctionToTarget(
 				chain.call,
 				chain.builtinCall as unknown as CoreAttributeValue,
 			);
-			if (chain.exactReceiver !== undefined) {
-				plannedExactCollectionReceivers.set(chain.call, chain.exactReceiver);
+			if (chain.receiverBrand !== undefined) {
+				plannedExactCollectionReceivers.set(chain.call, chain.receiverBrand);
 			}
 		}
 		if (kind === "fresh-array-length") {

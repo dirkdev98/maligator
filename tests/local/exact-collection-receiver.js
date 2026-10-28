@@ -18,6 +18,16 @@ class Registry {
 		return this.#map.get(key);
 	}
 
+	readCaptured(visit, key) {
+		const first = Map.prototype.get.call(this.#map, key);
+		visit();
+		return [first, Map.prototype.get.call(this.#map, key)];
+	}
+
+	replaceMap() {
+		this.#map = new Map([["answer", { value: 84 }]]);
+	}
+
 	write(key, value) {
 		return this.#map.set(key, value) === this.#map;
 	}
@@ -262,5 +272,33 @@ try {
 		"primitive constructor return substitutes its ordinary receiver",
 	);
 }
+
+const replacedRegistry = new Registry();
+const replacementRead = replacedRegistry.readCaptured(() => {
+	replacedRegistry.replaceMap();
+	if (typeof collect === "function") collect();
+}, "answer");
+assert(
+	replacementRead[0].value === 42 && replacementRead[1].value === 84,
+	"private collection reads observe replacement while their brand stays stable",
+);
+
+function readGlobalCaptured(visit, key) {
+	const first = Map.prototype.get.call(globalMap, key);
+	visit(globalMap);
+	return [first, Map.prototype.get.call(globalMap, key), globalMap.get(key)];
+}
+const globalReplacement = { value: "replaced" };
+const globalRead = readGlobalCaptured((map) => {
+	map.set("global", globalReplacement);
+	map.get = () => "shadowed";
+	if (typeof collect === "function") collect();
+}, "global");
+assert(
+	globalRead[0] === 9 &&
+		globalRead[1] === globalReplacement &&
+		globalRead[2] === "shadowed",
+	"global collection reads retain mutation and method lookup effects",
+);
 
 console.log("exact-collection-receiver PASS");
