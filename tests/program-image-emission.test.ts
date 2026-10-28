@@ -3274,7 +3274,7 @@ describe("native update-expression representation", () => {
 		expect(mixed).toMatch(/r\d+ = mal_value_new_boolean\(r\d+\);/);
 		expect(mixed).toMatch(/r\d+ = mal_value_from_i32\(r\d+\);/);
 
-		const materialized = emit(`
+		const materializedDefinition = lower(`
 			function read(flag) {
 				const object = { value: true };
 				if (flag) object.value = false;
@@ -3282,8 +3282,22 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.result = read(globalThis.flag);
 		`);
-		expect(materialized).toMatch(/bool __stack_object_\d+_slot_0;/);
-		expect(materialized).toContain("mal_vm_materialize_stack_object_fields(");
+		const materializedFunction =
+			materializedDefinition.native.functions[
+				namedFunctionIndex(materializedDefinition, "read")
+			]!;
+		expect(
+			materializedFunction.body.instructions.flatMap((instruction) =>
+				instruction.opcode === "CREATE_OBJECT_SHAPED"
+					? instruction.valueRegisters.map(
+							(register) => materializedFunction.registerRepresentations[register],
+						)
+					: [],
+			),
+		).toEqual(["boolean"]);
+		expect(emitProgramImage(materializedDefinition, { compiled: true })).toMatch(
+			/mal_vm_create_object_shaped\([^\n]*mal_value_new_boolean\(r\d+\)/,
+		);
 	});
 
 	it("proves numeric induction variables during direct Core construction", () => {

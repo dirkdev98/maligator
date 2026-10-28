@@ -697,22 +697,25 @@ describe("independent native SSA storage", () => {
 			throw new Error("Return fixture lacks a stack certificate");
 		expect(returnRegion.license.materialization).toBe("on-demand");
 		expect(returnRegion.sites[0]!.materializations.length).toBeGreaterThan(0);
-		const returnedEntry = returned.directEntries.find(
-			(entry) => entry.storage!.stackObjects.length > 0,
-		)!;
+		const returnedEntry = returned.directEntries.find((entry) => entry.resultFields)!;
 		expect(returnedEntry).toBeDefined();
 		expect(returnedEntry.resultRepresentation).toBe("boxed");
+		expect(returnedEntry.resultFields!.escapes).toBe(true);
+		expect(
+			returnedEntry.resultFields!.storage.map((field) => field.representation),
+		).toEqual(["number", "int32", "boolean", "boxed", "boxed"]);
 		const emittedReturn = emitCompiledFunction(
 			returned,
 			returned.functionIndex,
 			"",
 			false,
 		)!;
-		expect(
-			emittedReturn.directEntries.find(
-				(entry) => entry.id === returnedEntry.id && !entry.leaf,
-			)!.source,
-		).toContain("mal_vm_materialize_stack_object_fields(vm,");
+		const emittedRecord = emittedReturn.directEntries.find(
+			(entry) => entry.id === returnedEntry.id && !entry.leaf,
+		)!.source;
+		expect(emittedRecord).toMatch(/double \*\s*rf0/);
+		expect(emittedRecord).toMatch(/i32 \*\s*rf1/);
+		expect(emittedRecord).toMatch(/bool \*\s*rf2/);
 		expect(
 			image.native.functions.some((fn) =>
 				fn.instructions.some(

@@ -361,7 +361,7 @@ The independent target boundary and current storage contract are recorded in
       margin for in-process native builds of the compiler.
       Keep the representative Node.js self-compile below 60 seconds on AC power;
       stable acceptance remains unverified; the uninstrumented AC sample at
-      `74c309b1` took 57.79 seconds. Analysis extensions must stay bounded
+      `298c89f9` took 59.14 seconds. Analysis extensions must stay bounded
       and reuse existing worklists. Leave long checks to CI and keep local
       verification to the affected units and quality checks.
 
