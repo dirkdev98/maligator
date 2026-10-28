@@ -61,6 +61,53 @@ function readKind(producer: string, reader = "return value.n;", call = "make(inp
 }
 
 describe("fresh record field observations", () => {
+	it("withdraws a published definite-write kind when the writer is removed", () => {
+		const out = flow(
+			`function make(n){return {n};}function read(n){const value=make(n);value.n='changed';return value.n;}globalThis.result=read(globalThis.input);`,
+		);
+		const fn = out.named("read");
+		const [read] = coreRecordFieldReads(fn, () =>
+			buildCoreControlFlow(out.program, fn.id),
+		).keys();
+		if (read === undefined) throw new Error("Missing record field read");
+		const store = coreOperations(fn).find((op) => op.opcode === "storeProperty")!;
+		const publish = CoreEditor.open(out.program, fn.id);
+		publish.setNormalResultFacts(read, { mask: COMPILER_VALUE_KIND_STRING });
+		publish.commit();
+		const before = out.read();
+		expect(before.summary(fn.id).returnKind).toBe(COMPILER_VALUE_KIND_STRING);
+		const edit = CoreEditor.open(out.program, fn.id);
+		edit.removeInstruction(store.id);
+		edit.commit();
+		expect(out.read().summary(fn.id).returnKind).toBe(COMPILER_VALUE_KIND_TOP);
+		expect(before.summary(fn.id).returnKind).toBe(COMPILER_VALUE_KIND_STRING);
+	});
+	it.each([
+		"value.n='changed';return value.n;",
+		"value.n=1;value.n='changed';return value.n;",
+		"if(input)value.n='left';else value.n='right';return value.n;",
+		"const alias=input?value:make(input);alias.n='changed';return alias.n;",
+		"let n='fallback';for(let i=0;i<3;i++){const local=make(input);local.n='changed';n=local.n;observe(local);}return n;",
+	])("uses only reaching values after definite own writes (%s)", (reader) => {
+		expect(readKind("return {n:input};", reader)).toBe(COMPILER_VALUE_KIND_STRING);
+	});
+	it("does not kill a selected record's initializer with another alias's write", () => {
+		expect(
+			readKind(
+				"return {n:1};",
+				"const other=make(input);const alias=input?value:other;value.n='changed';return alias.n;",
+			),
+		).toBe(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING);
+	});
+	it.each(["return never();", "return {n:never()};"])(
+		"does not seed a definite overwrite before its producer completes (%s)",
+		(producer) => {
+			const out = flow(
+				`function never(){return never();}function make(){${producer}}function read(){const record=make();record.n=1;return record.n;}globalThis.result=read();`,
+			);
+			expect(out.read().summary(out.named("read").id).returnKind).toBe(0);
+		},
+	);
 	it("indexes write-only merged stores at their escape boundary", () => {
 		const out = flow(
 			`function make(input){return {n:input};}function write(input,flag,observe){const value=flag?make(input):make(input);value.n=input;observe(value);value.n=flag;return value;}globalThis.write=write;`,
@@ -320,14 +367,18 @@ describe("fresh record field observations", () => {
 		},
 	);
 	it.each([
-		"if(input)value.n='changed';return value.n;",
-		'value.n="changed";return value.n;',
-		'const alias=value;alias.n="changed";return value.n;',
-	])("joins compatible own writes without inventing other kinds (%s)", (reader) => {
-		expect(readKind("return {n:1};", reader)).toBe(
+		[
+			"if(input)value.n='changed';return value.n;",
 			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
-		);
-	});
+		],
+		['value.n="changed";return value.n;', COMPILER_VALUE_KIND_STRING],
+		['const alias=value;alias.n="changed";return value.n;', COMPILER_VALUE_KIND_STRING],
+	] as const)(
+		"joins reaching own writes without inventing other kinds (%s)",
+		(reader, expected) => {
+			expect(readKind("return {n:1};", reader)).toBe(expected);
+		},
+	);
 
 	it.each([
 		"make(...[input])",
@@ -484,7 +535,6 @@ describe("fresh record field observations", () => {
 	it.each([
 		"return globalThis.input;",
 		"return {other:1};",
-		"return {n:globalThis.input};",
 		"return {get n(){return 1;}};",
 		"return {n:never()};",
 	])("does not demand unused written fields without a finite contract (%s)", (body) => {
@@ -502,20 +552,23 @@ describe("fresh record field observations", () => {
 		);
 	});
 
-	it("admits unused written fields when parameter flow establishes their contract", () => {
-		const out = flow(
-			`function make(n){return {n};}function read(n){const value=make(n);value.n="changed";value.n;return 1;}globalThis.result=read(1);`,
-		);
-		const fn = out.named("read");
-		const [read] = coreRecordFieldReads(fn, () =>
-			buildCoreControlFlow(out.program, fn.id),
-		).keys();
-		expect(read).toBeDefined();
-		const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(read!));
-		expect(out.read().values(fn.id).latticeMask(value)).toBe(
-			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
-		);
-	});
+	it.each(["n", "globalThis.input"])(
+		"admits definite writes over an unknown %s initializer",
+		(initial) => {
+			const out = flow(
+				`function make(n){return {n:${initial}};}function read(n){const value=make(n);value.n="changed";value.n;return 1;}globalThis.result=read(globalThis.input);`,
+			);
+			const fn = out.named("read");
+			const [read] = coreRecordFieldReads(fn, () =>
+				buildCoreControlFlow(out.program, fn.id),
+			).keys();
+			expect(read).toBeDefined();
+			const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(read!));
+			expect(out.read().values(fn.id).latticeMask(value)).toBe(
+				COMPILER_VALUE_KIND_STRING,
+			);
+		},
+	);
 
 	it("withdraws a published write-backed field bound when its own key disappears", () => {
 		const out = flow(

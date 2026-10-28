@@ -915,13 +915,24 @@ that planner still requires direct returned producers.
 Each read has its own proof: later writes and escapes cannot change a value already
 read, and sibling writes preserve untouched fields only when their keys are own.
 A bounded reverse walk over record uses and predecessor blocks rejects any path
-with an earlier escape, write to the observed field, or possible getter/setter.
+with an earlier escape or possible getter/setter. It collects reaching writers;
+a write to the selected receiver kills earlier payload contributions on that path,
+including the initializer when every path overwrites it. Writes to other members
+of a merged alias group cannot kill the selected value. Earlier property accesses
+still need own-data proofs even after their payload values stop contributing.
 Loop backedges participate; reexecuting the producer starts a fresh lifetime.
 Repeated private reads of one field need no CFG. Handler transport remains outside
 this proof, and cached CFG-dependent reads track effect changes to exceptional paths.
 Producer effects remain independent; generators and async functions retain their
 suspension, exception and root obligations. Loaded String values keep their roots
 even after the record no longer contains them.
+
+Normal-result kind joins carry producer completion independently of their initial
+kind contribution. A definite overwrite may start from an empty contribution after
+the producer has a normal result, while empty recursive producers remain empty.
+Published field bounds cannot seed the flow that revalidates them after edits.
+The same reaching-writer set supplies integer bounds at each writer's control point;
+overwritten unknown payloads do not prevent scalar storage for the final value.
 
 The same prefix proof licenses named overwrites of existing writable own data
 fields. It establishes presence and writability independently of payload kinds or

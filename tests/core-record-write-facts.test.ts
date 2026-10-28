@@ -3,7 +3,9 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_OBJECT,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
+import { INSTRUCTION_CALLS_USER_CODE } from "../src/compiler/shared/instruction-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -28,6 +30,70 @@ function fieldRead(out: ReturnType<typeof inspectStaticValueFunction>) {
 }
 
 describe("normal field facts after own writes", () => {
+	it.each(["function", "function*", "async function", "async function*"])(
+		"replaces unknown initial fields and older writes in a %s body",
+		(declaration) => {
+			const suspension =
+				(declaration.includes("*") ? "yield 0;" : "") +
+				(declaration.startsWith("async") ? "await 0;" : "");
+			const out = inspectStaticValueFunction(
+				`const make=function make(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input};};${declaration} compute(input,flag,hook){const record=flag?make(input,hook):make(flag,hook);record.value='older';record.value=input&255;${suspension}hook();return record.value%10;}globalThis.make=make;globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const { ip, op } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultKindMasks).toEqual([
+				COMPILER_VALUE_KIND_NUMBER,
+			]);
+			expect(out.native.facts![ip]!.resultIntegerRanges?.[0]).toMatchObject({
+				minimum: 0,
+				maximum: 255,
+			});
+			expect(out.native.registerRepresentations[op.dst]).toBe("int32");
+			expect(out.c.source).not.toContain("mal_number_remainder(");
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+	it("keeps an unknown initializer when an overwrite is conditional", () => {
+		const out = inspectStaticValueFunction(
+			`const make=function make(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input};};function compute(input,flag,hook){const record=make(input,hook);if(flag)record.value=input&255;hook();return record.value%10;}globalThis.make=make;globalThis.compute=compute;`,
+			"compute",
+			{ locked: false },
+		);
+		const { ip, op } = fieldRead(out);
+		expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+		expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+	});
+	it.each(["-0", "+input"])(
+		"does not invent integer bounds for a definite %s write",
+		(expression) => {
+			const out = inspectStaticValueFunction(
+				`const make=function make(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input};};function compute(input,hook){const record=make(input,hook);record.value=${expression};hook();return record.value%10;}globalThis.make=make;globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const { ip } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+			expect(out.c.source).toContain("mal_number_remainder(");
+		},
+	);
+	it("retains user coercion effects after storing an object over an unknown initializer", () => {
+		const out = inspectStaticValueFunction(
+			`const make=function make(input,hook){for(let i=0;i<3;i++)hook(i);return {value:input};};function compute(input,hook){const record=make(input,hook);record.value={valueOf:hook};return record.value%10;}globalThis.make=make;globalThis.compute=compute;`,
+			"compute",
+			{ locked: false },
+		);
+		const { ip } = fieldRead(out);
+		expect(out.native.facts![ip]!.resultKindMasks).toEqual([COMPILER_VALUE_KIND_OBJECT]);
+		const arithmetic = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "%",
+		);
+		expect(
+			out.native.facts![arithmetic]!.effectMask! & INSTRUCTION_CALLS_USER_CODE,
+		).not.toBe(0);
+	});
 	it.each(["function", "function*", "async function", "async function*"])(
 		"carries a guarded caller write through merged aliases in a %s body",
 		(declaration) => {

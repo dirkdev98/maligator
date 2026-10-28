@@ -79,7 +79,7 @@ import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts"
 import { corePrivateFieldFacts } from "./core-private-field-facts.ts";
 import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
-	CoreValueKindAlternative,
+	CoreValueKindAlternatives,
 	CoreProgramFlowValueKinds,
 	CoreProgramFlowValueKindSemantics,
 	CoreProgramFlowValueKindInputs,
@@ -137,7 +137,7 @@ export interface CoreValueKindInputs {
 	readonly operationResultAlternatives?: (
 		instruction: CoreInstructionId,
 		result: CoreValueId,
-	) => ReadonlyArray<CoreValueKindAlternative> | undefined;
+	) => CoreValueKindAlternatives | undefined;
 	/** What a keyed read returns when its key is a number, if the receiver's elements are known. */
 	readonly elementLoadMask?: (
 		instruction: CoreInstructionId,
@@ -387,8 +387,6 @@ function transferredKind(
 	mask: (value: CoreValueId, block?: CoreBlockId) => number,
 	inputBlocks?: ReadonlyArray<CoreBlockId | undefined>,
 ): number {
-	// Stored alternatives cannot execute before the record producer completes.
-	if (kind === KIND_TRANSFER_NORMAL_RESULT_JOIN && constant === 0) return 0;
 	if (kind === KIND_TRANSFER_JOIN || kind === KIND_TRANSFER_NORMAL_RESULT_JOIN) {
 		for (let index = 0; index < count; index++)
 			constant |= mask(
@@ -849,11 +847,13 @@ function addOperationTransfer(
 	const contextual = inputs?.operationResultMask?.(instruction, output);
 	const alternatives = inputs?.operationResultAlternatives?.(instruction, output);
 	if (contextual !== undefined && alternatives !== undefined) {
+		// Stored alternatives cannot execute before the record producer completes.
+		if (!alternatives.hasNormalResult) return;
 		// Recompute the complete flow before publishing a new normal-result bound.
 		const index = buffer.kinds.length;
 		addKindTransfer(buffer, KIND_TRANSFER_NORMAL_RESULT_JOIN, output, contextual);
-		buffer.inputCounts[index] = alternatives.length;
-		for (const alternative of alternatives) {
+		buffer.inputCounts[index] = alternatives.values.length;
+		for (const alternative of alternatives.values) {
 			(buffer.inputBlocks ??= [])[buffer.inputs.length] = fn.instructionBlock(
 				alternative.instruction,
 			);
@@ -861,12 +861,16 @@ function addOperationTransfer(
 		}
 		return;
 	}
+	// Published field bounds are outputs of this flow and cannot seed it after edits.
 	const supplied =
-		callMask === undefined
+		contextual !== undefined &&
+		(opcode === "loadProperty" || opcode === "loadPropertyStatic")
 			? contextual
-			: contextual === undefined
-				? callMask
-				: callMask & contextual;
+			: callMask === undefined
+				? contextual
+				: contextual === undefined
+					? callMask
+					: callMask & contextual;
 	if (opcode === "loadPropertyStatic") {
 		const index = fn.instructionAttributes(instruction).stringIndex;
 		if (

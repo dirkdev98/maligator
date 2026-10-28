@@ -1085,6 +1085,24 @@ const makeWritableRecord = function makeWritableRecord(flag, callback) {
 	for (let step = 0; step < 3; step++) callback(step);
 	return flag ? { value: undefined, tag: 0 } : { tag: 1, value: undefined };
 };
+const makeOverwriteRecord = function makeOverwriteRecord(value, callback) {
+	for (let step = 0; step < 3; step++) callback(step);
+	return { value };
+};
+function readDefiniteRecord(input, flag, callback) {
+	const record = flag
+		? makeOverwriteRecord(input, callback)
+		: makeOverwriteRecord(flag, callback);
+	record.value = "older";
+	record.value = input & 255;
+	callback("definite overwrite");
+	return record.value % 10;
+}
+function readDefiniteCoercion(input, callback) {
+	const record = makeOverwriteRecord(input, observe);
+	record.value = { valueOf: callback };
+	return record.value % 10;
+}
 function writeOwnRecord(value, flag, callback) {
 	const first = makeWritableRecord(flag, callback);
 	const record = flag ? first : makeWritableRecord(flag, callback);
@@ -1132,6 +1150,8 @@ function writeUnknownReturned(factory, value) {
 	return record;
 }
 Object.assign(globalThis, {
+	readDefiniteRecord,
+	readDefiniteCoercion,
 	writeOwnRecord,
 	writeOwnSuspended,
 	writeOwnAwaited,
@@ -1141,6 +1161,70 @@ Object.assign(globalThis, {
 	writeUnknownReturned,
 });
 const storedHeap = { label: "stored heap value", nested: { live: true } };
+for (const flag of [false, true]) {
+	for (const input of [
+		-0,
+		NaN,
+		Infinity,
+		-Infinity,
+		-1,
+		255,
+		256,
+		2147483648,
+		4294967295,
+	])
+		check(
+			readDefiniteRecord(input, flag, observe),
+			(input & 255) % 10,
+			"definite masked overwrite",
+		);
+}
+let overwriteCoercions = 0;
+check(
+	readDefiniteRecord(
+		{
+			valueOf() {
+				overwriteCoercions++;
+				observe("overwrite input");
+				return 511;
+			},
+		},
+		true,
+		observe,
+	),
+	5,
+	"definite write input coercion",
+);
+check(overwriteCoercions, 1, "definite write coerces input once");
+check(
+	readDefiniteCoercion(storedHeap, () => {
+		overwriteCoercions++;
+		observe("stored coercion");
+		return -0;
+	}),
+	-0,
+	"stored object retains negative-zero coercion",
+);
+check(overwriteCoercions, 2, "stored object coerced once");
+const overwriteFailure = { marker: "overwrite coercion failure" };
+try {
+	readDefiniteCoercion(storedHeap, () => {
+		observe("stored throw");
+		throw overwriteFailure;
+	});
+	throw new Error("missing stored coercion exception");
+} catch (error) {
+	check(error, overwriteFailure, "stored coercion exception identity");
+}
+for (const input of [1n, Symbol("overwrite")]) {
+	let failure;
+	try {
+		readDefiniteRecord(input, true, observe);
+	} catch (error) {
+		failure = error;
+	}
+	check(failure instanceof TypeError, true, "definite input coercion error");
+}
 for (let round = 0; round < 3; round++) {
 	for (const input of [
 		undefined,

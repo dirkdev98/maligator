@@ -15,6 +15,7 @@ import {
 	sameCoreRecordValueKind,
 	joinCoreRecordValueKinds,
 	coreRecordFieldInitialKind,
+	coreRecordFieldIsOwnData,
 	coreRecordAccessInitialFields,
 } from "./core-record-value-kinds.ts";
 import type {
@@ -150,6 +151,12 @@ export interface CoreValueKindAlternative {
 	readonly instruction: CoreInstructionId;
 }
 
+export interface CoreValueKindAlternatives {
+	readonly values: ReadonlyArray<CoreValueKindAlternative>;
+	/** A definite overwrite can remove every initial kind without making the producer empty. */
+	readonly hasNormalResult: boolean;
+}
+
 export interface CoreProgramFlowValueKindInputs {
 	readonly demandedValues: ReadonlyArray<CoreValueId>;
 	readonly parameterMasks?: ReadonlyArray<number>;
@@ -161,7 +168,7 @@ export interface CoreProgramFlowValueKindInputs {
 	readonly operationResultAlternatives?: (
 		instruction: CoreInstructionId,
 		result: CoreValueId,
-	) => ReadonlyArray<CoreValueKindAlternative> | undefined;
+	) => CoreValueKindAlternatives | undefined;
 	readonly elementLoadMask?: (instruction: CoreInstructionId) => number | undefined;
 }
 
@@ -2430,12 +2437,14 @@ export class CoreProgramFlowEngine {
 					for (const [instruction, values] of alternatives ?? []) {
 						if (values.length !== 0) continue;
 						const read = recordReads.get(instruction)!;
-						const initialKind = coreRecordFieldInitialKind(
-							read,
-							coreRecordAccessInitialFields(read, recordResult),
-							semantics.top,
-						);
-						if (initialKind === 0 || initialKind === semantics.top) continue;
+						const record = coreRecordAccessInitialFields(read, recordResult);
+						const initialKind = coreRecordFieldInitialKind(read, record, semantics.top);
+						if (
+							initialKind === 0 ||
+							(initialKind === semantics.top &&
+								!(read.initialValueOverwritten && coreRecordFieldIsOwnData(read, record)))
+						)
+							continue;
 						alternatives!.set(instruction, read.writes!);
 						// Producer contracts can emerge after the caller's first demand set was solved.
 						demands.delete(functionId);
@@ -2480,17 +2489,30 @@ export class CoreProgramFlowEngine {
 						operationResultAlternatives:
 							alternatives === undefined
 								? undefined
-								: (instruction) => alternatives.get(instruction),
+								: (instruction) => {
+										const values = alternatives.get(instruction);
+										if (values === undefined) return undefined;
+										const read = recordReads.get(instruction)!;
+										return {
+											values,
+											hasNormalResult:
+												coreRecordFieldInitialKind(
+													read,
+													coreRecordAccessInitialFields(read, recordResult),
+													semantics.top,
+												) !== 0,
+										};
+									},
 						operationResultMask(instruction) {
 							const site = byInstruction.get(instruction);
 							if (site === undefined) {
 								const read = recordReads.get(instruction);
 								if (read === undefined) return undefined;
-								return coreRecordFieldInitialKind(
-									read,
-									coreRecordAccessInitialFields(read, recordResult),
-									semantics.top,
-								);
+								const record = coreRecordAccessInitialFields(read, recordResult);
+								return read.initialValueOverwritten &&
+									coreRecordFieldIsOwnData(read, record)
+									? 0
+									: coreRecordFieldInitialKind(read, record, semantics.top);
 							}
 							if (
 								site.targets.opaque ||

@@ -282,8 +282,15 @@ The independent target boundary and current storage contract are recorded in
       accessors. A producer resets only its own allocation lifetime, including on
       backedges; later effects do not withdraw an earlier read. Writer/source
       correlations within the surviving prefix remain conservative.
-      Remaining object work includes relational writer bounds, writer/source
-      correlations and definite overwrite precision, typed producer storage for
+      Caller reads now retain only reaching writer values. A definite overwrite
+      through the selected receiver removes initial and earlier payload kinds
+      and bounds while retaining the initial own-property contract. Producer
+      completion gates remain independent of the empty initial value contribution;
+      empty recursive producers cannot bootstrap from later writes. Removing a
+      writer withdraws its value bound even after publication.
+      Constant relational writer bounds already propagate through these queries.
+      Remaining object work includes nonconstant relational bounds, writer/source
+      correlations and producer definite-overwrite precision, typed producer storage for
       remaining writes, indexed producer summaries, broader parameter-relative
       call effects and coroutine record transport. Record-call admission and
       profitability are owned by the following tasks.

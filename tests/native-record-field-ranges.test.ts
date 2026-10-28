@@ -33,16 +33,6 @@ function inspect(
 		"compute",
 		{ locked: options.locked },
 	);
-	it.each(["-0", "Infinity", "NaN"])(
-		"keeps a conditional %s field outside the bounded integer kernel",
-		(alternative) => {
-			const out = inspectStaticValueFunction(
-				`const make=function make(value,hook){for(let i=0;i<3;i++)hook(i);return value<0?{n:value&255}:{n:${alternative}};};function compute(value,hook){const record=make(value,hook);hook();return record.n%10;}globalThis.compute=compute;globalThis.make=make;`,
-				"compute",
-			);
-			expect(out.c.source).toContain("mal_number_remainder(");
-		},
-	);
 }
 function field(out: ReturnType<typeof inspect>) {
 	const ip = out.native.body.instructions.findIndex(
@@ -56,6 +46,16 @@ function field(out: ReturnType<typeof inspect>) {
 }
 
 describe("normal record field integer ranges", () => {
+	it.each(["-0", "Infinity", "NaN"])(
+		"keeps a conditional %s field outside the bounded integer kernel",
+		(alternative) => {
+			const out = inspectStaticValueFunction(
+				`const make=function make(value,hook){for(let i=0;i<3;i++)hook(i);return value<0?{n:value&255}:{n:${alternative}};};function compute(value,hook){const record=make(value,hook);hook();return record.n%10;}globalThis.compute=compute;globalThis.make=make;`,
+				"compute",
+			);
+			expect(out.c.source).toContain("mal_number_remainder(");
+		},
+	);
 	it.each([false, true])(
 		"keeps a merged field interval before a future write and escape (locked=%s)",
 		(locked) => {

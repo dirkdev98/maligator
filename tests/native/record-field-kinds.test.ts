@@ -112,6 +112,7 @@ describe("fresh record field kind observations", () => {
 						"readForwardedWritten",
 						{ ...COMPILER_INT32_RANGE, minimum: 0, maximum: 1023 },
 					],
+					["readDefiniteRecord", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					["readBounded", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					[
 						"readConditionalRecord",
