@@ -180,10 +180,17 @@ describe("weak key normal completions", () => {
 		},
 	);
 
-	it.each([false, true])(
-		"requires complete caller bounds for a non-inlined key (closed=%s)",
-		(closed) => {
-			const source = `function lookup(visit,receiver,key){for(let i=0;i<3;i++)visit();return WeakMap.prototype.get.call(receiver,key)===undefined?17:11;}function compute(visit,receiver,input){return lookup(visit,receiver,+input);}globalThis.compute=compute;`;
+	it.each(
+		[
+			"WeakMap.prototype.get",
+			"WeakMap.prototype.has",
+			"WeakSet.prototype.delete",
+		].flatMap((operation) => [false, true].map((closed) => [operation, closed] as const)),
+	)(
+		"requires complete caller bounds for a non-inlined %s key (closed=%s)",
+		(operation, closed) => {
+			const expression = `${operation}.call(receiver,key)${operation.endsWith("get") ? "===undefined?17:11" : "?11:17"}`;
+			const source = `function lookup(visit,receiver,key){for(let i=0;i<3;i++)visit();return ${expression};}function compute(visit,receiver,input){return lookup(visit,receiver,+input);}globalThis.compute=compute;`;
 			const sourcePath = "weak-key-caller.mjs";
 			const facts = compilerProgramFactsFromConfig(
 				resolveBuildConfig({
@@ -211,9 +218,7 @@ describe("weak key normal completions", () => {
 			);
 			expect(
 				operations.some(
-					(op) =>
-						op.opcode === "callKnown" &&
-						op.attributes.operation === "WeakMap.prototype.get",
+					(op) => op.opcode === "callKnown" && op.attributes.operation === operation,
 				),
 			).toBe(true);
 			expect(

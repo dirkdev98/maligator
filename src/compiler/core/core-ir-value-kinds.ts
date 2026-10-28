@@ -1607,11 +1607,14 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 	Object.freeze({
 		observationValues(program: CoreProgram, fn: CoreFunctionStore) {
 			const values = new Set<CoreValueId>(coreRecordReturnKindInputs(fn));
-			for (const instruction of fn.instructionIds())
+			for (const instruction of fn.instructionIds()) {
+				const key = coreWeakCollectionKey(fn, instruction)?.input;
+				if (key !== undefined) values.add(key);
 				coreValueKindObservation(program, fn, instruction, (value) => {
 					values.add(value);
 					return COMPILER_VALUE_KIND_TOP;
 				});
+			}
 			return [...values];
 		},
 		analyze(

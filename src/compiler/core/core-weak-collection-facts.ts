@@ -24,7 +24,11 @@ export function coreWeakCollectionKey(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): CoreWeakCollectionKey | undefined {
-	if (fn.instructionOpcodeName(instruction) !== "callKnown") return undefined;
+	if (
+		fn.instructionKind(instruction) !== "operation" ||
+		fn.instructionOpcodeName(instruction) !== "callKnown"
+	)
+		return undefined;
 	const attributes = fn.instructionAttributes(instruction);
 	if (attributes.construct) return undefined;
 	let result: CoreWeakCollectionResult;
