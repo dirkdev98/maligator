@@ -91,4 +91,35 @@ try {
 	bigintThrew = error instanceof TypeError;
 }
 if (!bigintThrew) throw new Error("Math BigInt fallback");
+const originalWeakSet = WeakMap.prototype.set;
+const weakMap = new WeakMap();
+const weakKey = {};
+function replaceWeakSetDuringArgumentEvaluation() {
+	WeakMap.prototype.set = () => 74;
+	return weakKey;
+}
+function callWeakSetWithMutation() {
+	return weakMap.set(replaceWeakSetDuringArgumentEvaluation(), 75);
+}
+try {
+	if (callWeakSetWithMutation() !== weakMap || weakMap.get(weakKey) !== 75)
+		throw new Error("loaded weak mutator was not retained");
+	if (callWeakSetWithMutation() !== 74)
+		throw new Error("replacement weak mutator was not observed");
+	let weakProxyCalls = 0;
+	WeakMap.prototype.set = new Proxy(originalWeakSet, {
+		apply(target, receiver, args) {
+			weakProxyCalls++;
+			return Reflect.apply(target, receiver, args);
+		},
+	});
+	if (
+		weakMap.set(weakKey, 76) !== weakMap ||
+		weakProxyCalls !== 1 ||
+		weakMap.get(weakKey) !== 76
+	)
+		throw new Error("weak mutator proxy fallback");
+} finally {
+	WeakMap.prototype.set = originalWeakSet;
+}
 console.log("watched-intrinsic-cache-monkey-patch PASS");

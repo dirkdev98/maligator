@@ -77,18 +77,24 @@ export function coreExactCollectionBuiltinEffects(
 			fn.instructionAttributes(instruction)[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE],
 		);
 	if (expected === undefined || exact !== expected) return undefined;
+	const weakMutation =
+		operation === "WeakMap.prototype.set" || operation === "WeakSet.prototype.add";
 	const writes =
+		weakMutation ||
 		operation === "Map.prototype.set" ||
 		operation === "Map.prototype.delete" ||
 		operation === "Set.prototype.add" ||
 		operation === "Set.prototype.delete" ||
 		operation === "WeakMap.prototype.delete" ||
 		operation === "WeakSet.prototype.delete";
-	const mayGc = operation === "Map.prototype.set" || operation === "Set.prototype.add";
+	const mayGc =
+		weakMutation ||
+		operation === "Map.prototype.set" ||
+		operation === "Set.prototype.add";
 	const effects: CoreInstructionEffects = {
 		reads: Object.freeze(["object-property"]),
 		writes: Object.freeze(writes ? ["object-property"] : []),
-		mayThrow: false,
+		mayThrow: weakMutation,
 		maySuspend: false,
 		mayGc,
 		callsUserCode: false,

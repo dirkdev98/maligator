@@ -8,9 +8,11 @@ import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 const operations = [
 	["WeakMap", "get"],
+	["WeakMap", "set"],
 	["WeakMap", "has"],
 	["WeakMap", "delete"],
 	["WeakSet", "has"],
+	["WeakSet", "add"],
 	["WeakSet", "delete"],
 ] as const;
 
@@ -41,6 +43,7 @@ describe("weak collection receiver facts", () => {
 		),
 	)("refines %s.%s through %s storage", (brand, method, storage) => {
 		const operation = `${brand}.prototype.${method}`;
+		const weakMutation = method === "set" || method === "add";
 		const out = inspectStaticValueFunction(
 			storedReceiver(brand, storage, `${operation}.call(receiver,key)`),
 			"compute",
@@ -52,15 +55,19 @@ describe("weak collection receiver facts", () => {
 		expect(out.native.body.instructions[ip]).toMatchObject({ specialized: operation });
 		expect(decodeInstructionEffects(out.native.facts![ip]!.effectMask!)).toEqual({
 			reads: ["object-property"],
-			writes: method === "delete" ? ["object-property"] : [],
-			mayThrow: false,
-			mayGc: false,
+			writes: method === "delete" || weakMutation ? ["object-property"] : [],
+			mayThrow: weakMutation,
+			mayGc: weakMutation,
 			maySuspend: false,
 			callsUserCode: false,
 		});
 		expect(out.core.some((op) => op.attributes.exactCollectionReceiver === brand)).toBe(
 			true,
 		);
+		if (weakMutation)
+			expect(out.c.source).toMatch(
+				/mal_builtin_weak_(?:map_set_key_value|set_add_key)\([^;\n]*\);\s*if \(MAL_THREW\(\)\)/,
+			);
 	});
 
 	it.each(operations)(

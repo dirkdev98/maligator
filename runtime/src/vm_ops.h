@@ -149,6 +149,7 @@ static inline bool mal_vm_try_capture_collection_method(
                 method_name = "get";
                 break;
             case MAL_GUARDED_BUILTIN_MAP_SET:
+            case MAL_GUARDED_BUILTIN_WEAK_MAP_SET:
                 method_intrinsic = MAL_INTRINSIC_MAP_PROTOTYPE_SET;
                 method_name = "set";
                 break;
@@ -175,6 +176,7 @@ static inline bool mal_vm_try_capture_collection_method(
         prototype_intrinsic = MAL_INTRINSIC_SET_PROTOTYPE;
         switch (operation) {
             case MAL_GUARDED_BUILTIN_SET_ADD:
+            case MAL_GUARDED_BUILTIN_WEAK_SET_ADD:
                 method_intrinsic = MAL_INTRINSIC_SET_PROTOTYPE_ADD;
                 method_name = "add";
                 break;
@@ -200,6 +202,11 @@ static inline bool mal_vm_try_capture_collection_method(
         collection = &weak->object;
         prototype_intrinsic = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE;
         switch (operation) {
+            case MAL_GUARDED_BUILTIN_MAP_SET:
+            case MAL_GUARDED_BUILTIN_WEAK_MAP_SET:
+                method_intrinsic = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET;
+                method_name = "set";
+                break;
             case MAL_GUARDED_BUILTIN_MAP_GET:
             case MAL_GUARDED_BUILTIN_WEAK_MAP_GET:
                 method_intrinsic = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_GET;
@@ -227,6 +234,11 @@ static inline bool mal_vm_try_capture_collection_method(
         collection = &weak->object;
         prototype_intrinsic = MAL_INTRINSIC_WEAK_SET_PROTOTYPE;
         switch (operation) {
+            case MAL_GUARDED_BUILTIN_SET_ADD:
+            case MAL_GUARDED_BUILTIN_WEAK_SET_ADD:
+                method_intrinsic = MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD;
+                method_name = "add";
+                break;
             case MAL_GUARDED_BUILTIN_MAP_HAS:
             case MAL_GUARDED_BUILTIN_SET_HAS:
             case MAL_GUARDED_BUILTIN_WEAK_MAP_HAS:

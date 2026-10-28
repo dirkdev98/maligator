@@ -399,21 +399,23 @@ bool mal_builtin_weak_set_delete_key(MalValue receiver, MalValue key) {
     return mal_weak_set_object_delete(mal_value_to_weak_set_object(receiver), key);
 }
 
+MalValue mal_builtin_weak_set_add_key(MalVm *vm, MalValue receiver, MalValue key) {
+    if (!mal_weak_key_can_be_held(key)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid value used in weak set");
+        return mal_value_new_undefined();
+    }
+    mal_weak_set_object_add(mal_value_to_weak_set_object(receiver), key);
+    return receiver;
+}
+
 static MalValue mal_builtin_weak_set_prototype_add(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalWeakSetObject *set = mal_builtin_weak_set_this(vm, this_value);
     if (set == nullptr) {
         return mal_value_new_undefined();
     }
 
-    MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    if (!mal_weak_key_can_be_held(value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid value used in weak set");
-        return mal_value_new_undefined();
-    }
-
-    mal_weak_set_object_add(set, value);
-
-    return this_value;
+    return mal_builtin_weak_set_add_key(
+        vm, this_value, arg_count >= 1 ? args[0] : MAL_VALUE_UNDEFINED);
 }
 
 static MalValue mal_builtin_weak_set_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1351,7 +1353,8 @@ void mal_builtin_set_install(MalVm *vm) {
         "WeakSet"
     );
 
-    mal_intrinsic_define_method_n(vm, weak_prototype, "add", 1, mal_builtin_weak_set_prototype_add);
+    vm->intrinsics[MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD] =
+        mal_intrinsic_define_method_n(vm, weak_prototype, "add", 1, mal_builtin_weak_set_prototype_add);
     vm->intrinsics[MAL_INTRINSIC_WEAK_SET_PROTOTYPE_HAS] =
         mal_intrinsic_define_method_n(vm, weak_prototype, "has", 1, mal_builtin_weak_set_prototype_has);
     vm->intrinsics[MAL_INTRINSIC_WEAK_SET_PROTOTYPE_DELETE] =

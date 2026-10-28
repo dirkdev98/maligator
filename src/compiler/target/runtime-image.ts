@@ -279,6 +279,8 @@ export const VM_GUARDED_BUILTIN_CALL_OPERATIONS = [
 	"WeakMap.prototype.delete",
 	"WeakSet.prototype.has",
 	"WeakSet.prototype.delete",
+	"WeakMap.prototype.set",
+	"WeakSet.prototype.add",
 ] as const;
 
 export interface VmKnownOwnSlotCandidate {

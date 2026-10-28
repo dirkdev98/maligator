@@ -46,6 +46,7 @@
 #include "shape.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
+#include "weak_collection.h"
 
 MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 
@@ -3518,6 +3519,22 @@ bool mal_op_call_guarded_builtin(
         callable->registers[instruction->as.call.dst] = result;
         return true;
     }
+    MalValue callee = mal_op_value_operand(callable, instruction->as.call.callee);
+    if (operation == MAL_GUARDED_BUILTIN_MAP_SET ||
+        operation == MAL_GUARDED_BUILTIN_WEAK_MAP_SET) {
+        if (callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_SET]) {
+            operation = MAL_GUARDED_BUILTIN_MAP_SET;
+        } else if (callee == vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET]) {
+            operation = MAL_GUARDED_BUILTIN_WEAK_MAP_SET;
+        }
+    } else if (operation == MAL_GUARDED_BUILTIN_SET_ADD ||
+               operation == MAL_GUARDED_BUILTIN_WEAK_SET_ADD) {
+        if (callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_ADD]) {
+            operation = MAL_GUARDED_BUILTIN_SET_ADD;
+        } else if (callee == vm->intrinsics[MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD]) {
+            operation = MAL_GUARDED_BUILTIN_WEAK_SET_ADD;
+        }
+    }
     MalIntrinsic expected;
     bool receiver_matches;
     switch ((MalGuardedBuiltinCallOp) operation) {
@@ -3553,6 +3570,10 @@ bool mal_op_call_guarded_builtin(
             expected = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_GET;
             receiver_matches = mal_value_is_weak_map_object(receiver);
             break;
+        case MAL_GUARDED_BUILTIN_WEAK_MAP_SET:
+            expected = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET;
+            receiver_matches = mal_value_is_weak_map_object(receiver);
+            break;
         case MAL_GUARDED_BUILTIN_WEAK_MAP_HAS:
             expected = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_HAS;
             receiver_matches = mal_value_is_weak_map_object(receiver);
@@ -3565,6 +3586,10 @@ bool mal_op_call_guarded_builtin(
             expected = MAL_INTRINSIC_WEAK_SET_PROTOTYPE_HAS;
             receiver_matches = mal_value_is_weak_set_object(receiver);
             break;
+        case MAL_GUARDED_BUILTIN_WEAK_SET_ADD:
+            expected = MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD;
+            receiver_matches = mal_value_is_weak_set_object(receiver);
+            break;
         case MAL_GUARDED_BUILTIN_WEAK_SET_DELETE:
             expected = MAL_INTRINSIC_WEAK_SET_PROTOTYPE_DELETE;
             receiver_matches = mal_value_is_weak_set_object(receiver);
@@ -3572,7 +3597,6 @@ bool mal_op_call_guarded_builtin(
         default:
             return false;
     }
-    MalValue callee = mal_op_value_operand(callable, instruction->as.call.callee);
     if (!receiver_matches || callee != vm->intrinsics[expected]) return false;
 
     MalValue arguments[2] = {
@@ -3582,6 +3606,10 @@ bool mal_op_call_guarded_builtin(
     for (i32 i = 0; i < argument_count && i < 2; i++) {
         arguments[i] = mal_op_value_operand(callable, argument_operands[i]);
     }
+    // Interpreter direct hits cannot throw or collect before their caller state is synchronized.
+    if ((operation == MAL_GUARDED_BUILTIN_WEAK_MAP_SET ||
+         operation == MAL_GUARDED_BUILTIN_WEAK_SET_ADD) &&
+        !mal_weak_key_can_be_held(arguments[0])) return false;
     MalValue result;
     switch ((MalGuardedBuiltinCallOp) operation) {
         case MAL_GUARDED_BUILTIN_MAP_GET:
@@ -3608,6 +3636,9 @@ bool mal_op_call_guarded_builtin(
         case MAL_GUARDED_BUILTIN_WEAK_MAP_GET:
             result = mal_builtin_weak_map_get_key(receiver, arguments[0]);
             break;
+        case MAL_GUARDED_BUILTIN_WEAK_MAP_SET:
+            result = mal_builtin_weak_map_set_key_value(vm, receiver, arguments[0], arguments[1]);
+            break;
         case MAL_GUARDED_BUILTIN_WEAK_MAP_HAS:
             result = mal_value_new_boolean(mal_builtin_weak_map_has_key(receiver, arguments[0]));
             break;
@@ -3616,6 +3647,9 @@ bool mal_op_call_guarded_builtin(
             break;
         case MAL_GUARDED_BUILTIN_WEAK_SET_HAS:
             result = mal_value_new_boolean(mal_builtin_weak_set_has_key(receiver, arguments[0]));
+            break;
+        case MAL_GUARDED_BUILTIN_WEAK_SET_ADD:
+            result = mal_builtin_weak_set_add_key(vm, receiver, arguments[0]);
             break;
         case MAL_GUARDED_BUILTIN_WEAK_SET_DELETE:
             result = mal_value_new_boolean(mal_builtin_weak_set_delete_key(receiver, arguments[0]));

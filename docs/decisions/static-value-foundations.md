@@ -349,7 +349,10 @@ WeakMap and WeakSet use this same brand transport. Their get/has/delete kernels
 consume arbitrary keys without coercion or collection, and deletion retains its
 heap write. Guarded dispatch checks the actual callee and receiver independently
 across strong and weak collections. Weak mutators retain their key validation and
-error-realm obligations; a receiver brand alone cannot remove those checks.
+error-realm obligations; a receiver brand alone cannot remove those checks. Their
+fixed-arity native entries and guarded call arms keep a completion check and GC
+publication. The interpreter's direct-call leaf admits only holdable keys; failures
+use synchronized ordinary dispatch before allocating the callee-realm error.
 Weak-key argument kinds constrain normal completions independently of the receiver:
 non-Object, non-Symbol keys imply undefined for get, false for has/delete and no
 normal result for set/add. The existing local and program worklists propagate

@@ -7,7 +7,6 @@ import { vmSafepointRootMapsAreTrusted } from "../../src/compiler/target/runtime
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
-	buildNativeBinaryResult,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -18,6 +17,7 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-exact-collection-receiver
 describe("exact collection receiver brands", () => {
 	let compiled: string;
 	let interpreted: string;
+	let trustedCompiled: string;
 	let trustedInterpreted: string;
 
 	beforeAll(() => {
@@ -50,11 +50,11 @@ describe("exact collection receiver brands", () => {
 		compiled = pair.compiled;
 		interpreted = pair.interpreted;
 
-		const trusted = buildNativeBinaryResult({
+		const trusted = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "exact-collection-receiver-trusted-interpreted",
-			compiled: false,
 			entryGoal: "script",
+			mainFile: "runtime/test262_main.c",
 			outDir,
 			config: resolveBuildConfig({ engine: { primordials: "locked", realms: true } }),
 		});
@@ -101,20 +101,37 @@ describe("exact collection receiver brands", () => {
 				expect(safepoint.clearRegisters?.includes(instruction.dst)).toBe(true);
 			}
 		}
-		trustedInterpreted = trusted.binaryPath;
+		trustedCompiled = trusted.compiled;
+		trustedInterpreted = trusted.interpreted;
 	}, 600_000);
 
 	it("preserves private, global, shadowed, and cross-brand behavior", () => {
-		for (const binary of [compiled, interpreted, trustedInterpreted]) {
-			assertExactLines(runToStdout(binary), ["exact-collection-receiver PASS"]);
+		for (const [binary, realmApi] of [
+			[compiled, false],
+			[interpreted, false],
+			[trustedCompiled, true],
+			[trustedInterpreted, true],
+		] as const) {
+			assertExactLines(
+				runToStdout(binary, { env: realmApi ? { MAL_TEST262: "1" } : {} }),
+				["exact-collection-receiver PASS"],
+			);
 		}
 	});
 
 	it("keeps collection contents alive under GC stress", () => {
-		for (const binary of [compiled, interpreted, trustedInterpreted]) {
-			assertExactLines(runToStdout(binary, { env: STRESS_ENV }), [
-				"exact-collection-receiver PASS",
-			]);
+		for (const [binary, realmApi] of [
+			[compiled, false],
+			[interpreted, false],
+			[trustedCompiled, true],
+			[trustedInterpreted, true],
+		] as const) {
+			assertExactLines(
+				runToStdout(binary, {
+					env: { ...STRESS_ENV, ...(realmApi ? { MAL_TEST262: "1" } : {}) },
+				}),
+				["exact-collection-receiver PASS"],
+			);
 		}
 	});
 });

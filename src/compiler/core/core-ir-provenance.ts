@@ -2584,9 +2584,11 @@ const COLLECTION_CALL_CHAIN_OPERATIONS: ReadonlySet<string> = new Set([
 	"Set.prototype.has",
 	"Set.prototype.delete",
 	"WeakMap.prototype.get",
+	"WeakMap.prototype.set",
 	"WeakMap.prototype.has",
 	"WeakMap.prototype.delete",
 	"WeakSet.prototype.has",
+	"WeakSet.prototype.add",
 	"WeakSet.prototype.delete",
 ]);
 

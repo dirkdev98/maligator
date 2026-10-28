@@ -227,6 +227,11 @@ export const exactBuiltinCallDescriptors = {
 		forwardedArgumentLimit: 1,
 		cOperation: "MAL_DIRECT_BUILTIN_WEAK_MAP_GET",
 	},
+	"WeakMap.prototype.set": {
+		receiverProof: "fresh-weak-map",
+		forwardedArgumentLimit: 2,
+		cOperation: "MAL_DIRECT_BUILTIN_WEAK_MAP_SET",
+	},
 	"WeakMap.prototype.has": {
 		receiverProof: "fresh-weak-map",
 		forwardedArgumentLimit: 1,
@@ -241,6 +246,11 @@ export const exactBuiltinCallDescriptors = {
 		receiverProof: "fresh-weak-set",
 		forwardedArgumentLimit: 1,
 		cOperation: "MAL_DIRECT_BUILTIN_WEAK_SET_HAS",
+	},
+	"WeakSet.prototype.add": {
+		receiverProof: "fresh-weak-set",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_WEAK_SET_ADD",
 	},
 	"WeakSet.prototype.delete": {
 		receiverProof: "fresh-weak-set",
@@ -942,21 +952,23 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
 	})),
 	...(["WeakMap", "WeakSet"] as const).flatMap((collection) =>
-		(collection === "WeakMap" ? ["get", "has", "delete"] : ["has", "delete"]).map(
-			(key): BuiltinOperationDescriptor => ({
-				id: `${collection}.prototype.${key}`,
-				owner: `${collection}.prototype`,
-				key,
-				receiver: collection === "WeakMap" ? "weak-map" : "weak-set",
-				arity: { minimum: 1, maximum: 1 },
-				evaluationOrder: "receiver-then-arguments",
-				coercionOrder: [],
-				effects: ["throw", "safepoint"],
-				result: key === "get" ? "any" : "boolean",
-				realm: "semantic-identity",
-				lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
-			}),
-		),
+		(collection === "WeakMap"
+			? ["get", "set", "has", "delete"]
+			: ["add", "has", "delete"]
+		).map((key): BuiltinOperationDescriptor => ({
+			id: `${collection}.prototype.${key}`,
+			owner: `${collection}.prototype`,
+			key,
+			receiver: collection === "WeakMap" ? "weak-map" : "weak-set",
+			arity: { minimum: key === "set" ? 2 : 1, maximum: key === "set" ? 2 : 1 },
+			evaluationOrder: "receiver-then-arguments",
+			coercionOrder: [],
+			effects: ["throw", "safepoint"],
+			result:
+				key === "get" ? "any" : key === "set" || key === "add" ? "receiver" : "boolean",
+			realm: "semantic-identity",
+			lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
+		})),
 	),
 	...DATA_VIEW_ACCESSOR_TYPES.flatMap((type): Array<BuiltinOperationDescriptor> => [
 		{

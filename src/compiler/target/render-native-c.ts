@@ -5483,9 +5483,11 @@ function nativeBuiltinCollectionOperation(
 		"Set.prototype.has": "MAL_GUARDED_BUILTIN_SET_HAS",
 		"Set.prototype.delete": "MAL_GUARDED_BUILTIN_SET_DELETE",
 		"WeakMap.prototype.get": "MAL_GUARDED_BUILTIN_WEAK_MAP_GET",
+		"WeakMap.prototype.set": "MAL_GUARDED_BUILTIN_WEAK_MAP_SET",
 		"WeakMap.prototype.has": "MAL_GUARDED_BUILTIN_WEAK_MAP_HAS",
 		"WeakMap.prototype.delete": "MAL_GUARDED_BUILTIN_WEAK_MAP_DELETE",
 		"WeakSet.prototype.has": "MAL_GUARDED_BUILTIN_WEAK_SET_HAS",
+		"WeakSet.prototype.add": "MAL_GUARDED_BUILTIN_WEAK_SET_ADD",
 		"WeakSet.prototype.delete": "MAL_GUARDED_BUILTIN_WEAK_SET_DELETE",
 	}[operation];
 }
@@ -8548,7 +8550,9 @@ class NativeInstructionEmission {
 		operation: string,
 		receiver: string,
 		args: ReadonlyArray<number>,
-	): { readonly call: string; readonly boolean: boolean } | undefined {
+	):
+		| { readonly call: string; readonly boolean: boolean; readonly mayThrow?: true }
+		| undefined {
 		const numberKey = args[0] === undefined ? null : this.nativeNumberOperand(args[0]);
 		const key =
 			numberKey ??
@@ -8622,6 +8626,19 @@ class NativeInstructionEmission {
 					boolean: method !== "get",
 				};
 			}
+			case "WeakMap.prototype.set":
+			case "WeakSet.prototype.add": {
+				const boxedKey =
+					args[0] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[0]);
+				return {
+					call:
+						operation === "WeakMap.prototype.set"
+							? `mal_builtin_weak_map_set_key_value(vm, ${receiver}, ${boxedKey}, ${value})`
+							: `mal_builtin_weak_set_add_key(vm, ${receiver}, ${boxedKey})`,
+					boolean: false,
+					mayThrow: true,
+				};
+			}
 			default:
 				return undefined;
 		}
@@ -8635,7 +8652,10 @@ class NativeInstructionEmission {
 	): string | null {
 		const body = this.collectionBuiltinCall(operation, this.boxedOperand(receiver), args);
 		if (body === undefined) return null;
-		return body.boolean ? this.storeBoolean(dst, body.call) : `r${dst} = ${body.call};`;
+		const store = body.boolean
+			? this.storeBoolean(dst, body.call)
+			: `r${dst} = ${body.call};`;
+		return body.mayThrow ? `${store}\n${this.throwCheck()}` : store;
 	}
 
 	operandKind(operand: number): CompilerValueKindMask | undefined {
@@ -11299,7 +11319,6 @@ class NativeInstructionEmission {
 			instruction.thisValue,
 			instruction.arguments,
 		);
-		// Exact collection kernels never complete abruptly.
 		if (collectionCall !== null) return [collectionCall, this.callPoll()];
 		if (NUMBER_PREDICATES.has(instruction.operation)) {
 			const input = instruction.arguments[0];
@@ -11951,7 +11970,10 @@ class NativeInstructionEmission {
 					instruction.thisValue,
 					args,
 				)!,
-				...(operation === "Map.prototype.set" || operation === "Set.prototype.add"
+				...(operation === "Map.prototype.set" ||
+				operation === "Set.prototype.add" ||
+				operation === "WeakMap.prototype.set" ||
+				operation === "WeakSet.prototype.add"
 					? [this.callPoll()]
 					: []),
 			];
@@ -12093,9 +12115,11 @@ class NativeInstructionEmission {
 			guardedBuiltinOperation === "Set.prototype.has" ||
 			guardedBuiltinOperation === "Set.prototype.delete" ||
 			guardedBuiltinOperation === "WeakMap.prototype.get" ||
+			guardedBuiltinOperation === "WeakMap.prototype.set" ||
 			guardedBuiltinOperation === "WeakMap.prototype.has" ||
 			guardedBuiltinOperation === "WeakMap.prototype.delete" ||
 			guardedBuiltinOperation === "WeakSet.prototype.has" ||
+			guardedBuiltinOperation === "WeakSet.prototype.add" ||
 			guardedBuiltinOperation === "WeakSet.prototype.delete"
 		) {
 			const operation = nativeBuiltinCollectionOperation(guardedBuiltinOperation);
@@ -12148,17 +12172,17 @@ class NativeInstructionEmission {
 					{
 						guard: `${callee} == vm->intrinsics[${intrinsic}]${brandCheck}`,
 						body,
+						mayThrow: builtin.mayThrow === true,
 						counters,
 					},
 				];
 			});
-			// An intrinsic callee on its own brand runs the builtin body without a call frame;
-			// those bodies never complete abruptly, so only the dispatcher needs a throw check.
 			return [
 				...arms.flatMap((arm, index) => [
 					`${index === 0 ? "if" : "} else if"} (${arm.guard}) {`,
 					...arm.counters.map((counter) => `  MAL_PERF_COUNT(${counter});`),
 					`  r${instruction.dst} = ${callResult(arm.body)};`,
+					...(arm.mayThrow ? [this.throwCheck()] : []),
 				]),
 				...(arms.length === 0 ? ["{"] : ["} else {"]),
 				`  MalCompletion ${tmp} = mal_builtin_collection_direct(vm, ${operation}, ${receiverFact}, ${callee}, ${receiver}, ${argsExpr}, ${args.length});`,

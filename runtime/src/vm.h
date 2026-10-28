@@ -75,6 +75,8 @@ typedef enum MalGuardedBuiltinCallOp {
     MAL_GUARDED_BUILTIN_WEAK_MAP_DELETE,
     MAL_GUARDED_BUILTIN_WEAK_SET_HAS,
     MAL_GUARDED_BUILTIN_WEAK_SET_DELETE,
+    MAL_GUARDED_BUILTIN_WEAK_MAP_SET,
+    MAL_GUARDED_BUILTIN_WEAK_SET_ADD,
 } MalGuardedBuiltinCallOp;
 
 /** Packed literal-template tags; mirrored by src/compiler/core/semantic-lowering.ts. */

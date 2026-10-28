@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 83u
+#define WIRE_VERSION 84u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -105,6 +105,8 @@ static const MalGuardedBuiltinCallOp wire_guarded_builtin_call_ops[] = {
     MAL_GUARDED_BUILTIN_WEAK_MAP_DELETE,
     MAL_GUARDED_BUILTIN_WEAK_SET_HAS,
     MAL_GUARDED_BUILTIN_WEAK_SET_DELETE,
+    MAL_GUARDED_BUILTIN_WEAK_MAP_SET,
+    MAL_GUARDED_BUILTIN_WEAK_SET_ADD,
 };
 
 static_assert(
@@ -117,7 +119,7 @@ static_assert(
 );
 static_assert(
     MAL_GUARDED_BUILTIN_MAP_GET == 0 &&
-        MAL_GUARDED_BUILTIN_WEAK_SET_DELETE + 1 ==
+        MAL_GUARDED_BUILTIN_WEAK_SET_ADD + 1 ==
             countof(wire_guarded_builtin_call_ops),
     "guarded builtin call side tags must stay contiguous"
 );

@@ -314,7 +314,20 @@ function freshWeakHas(key) {
 	const set = new WeakSet();
 	return set.has(key);
 }
-Object.assign(globalThis, { freshWeakRead, freshWeakHas });
+let weakMutationCompletions = 0;
+function freshWeakWrite(key, value) {
+	const map = new WeakMap();
+	const result = map.set(key, value);
+	weakMutationCompletions++;
+	return result;
+}
+function freshWeakAdd(key) {
+	const set = new WeakSet();
+	const result = set.add(key);
+	weakMutationCompletions++;
+	return result;
+}
+Object.assign(globalThis, { freshWeakRead, freshWeakHas, freshWeakWrite, freshWeakAdd });
 assert(freshWeakRead(weakKey).marker === "fresh weak value", "fresh weak read");
 assert(!freshWeakHas(weakKey), "fresh weak membership");
 class WeakRegistry {
@@ -327,6 +340,28 @@ class WeakRegistry {
 
 	has(key) {
 		return this.#map.has(key) && this.#set.has(key);
+	}
+
+	write(key, value) {
+		const result = this.#map.set(key, value);
+		weakMutationCompletions++;
+		return result === this.#map;
+	}
+
+	add(key) {
+		const result = this.#set.add(key);
+		weakMutationCompletions++;
+		return result === this.#set;
+	}
+
+	shadowedWrite(result) {
+		this.#map.set = () => result;
+		return this.#map.set(weakKey, {});
+	}
+
+	crossBrandWrite() {
+		this.#map.set = Map.prototype.set;
+		return this.#map.set(weakKey, {});
 	}
 
 	remove(key) {
@@ -360,6 +395,64 @@ class WeakRegistry {
 	}
 }
 const weakRegistry = new WeakRegistry();
+const insertedWeakKey = {};
+const insertedWeakValue = { marker: "inserted weak value" };
+assert(
+	weakRegistry.write(insertedWeakKey, insertedWeakValue),
+	"weak set returns its receiver",
+);
+assert(weakRegistry.add(insertedWeakKey), "weak add returns its receiver");
+assert(weakRegistry.has(insertedWeakKey), "weak insertion changes membership");
+assert(
+	weakRegistry.read(insertedWeakKey) === insertedWeakValue,
+	"weak set retains its value",
+);
+assert(
+	freshWeakWrite(weakKey, insertedWeakValue).get(weakKey) === insertedWeakValue,
+	"fresh weak set",
+);
+assert(freshWeakAdd(weakKey).has(weakKey), "fresh weak add");
+const weakDefaultValue = freshWeakWrite(weakKey);
+assert(
+	weakDefaultValue.has(weakKey) && weakDefaultValue.get(weakKey) === undefined,
+	"weak set defaults an omitted value to undefined",
+);
+const weakSymbol = Symbol("local weak key");
+assert(
+	weakRegistry.write(weakSymbol, insertedWeakValue),
+	"weak set accepts an unregistered Symbol",
+);
+assert(weakRegistry.add(weakSymbol), "weak add accepts an unregistered Symbol");
+for (const invalidKey of [1, undefined, Symbol.for("registered mutator key")]) {
+	for (const mutate of [
+		() => weakRegistry.write(invalidKey, insertedWeakValue),
+		() => weakRegistry.add(invalidKey),
+		() => freshWeakWrite(invalidKey, insertedWeakValue),
+		() => freshWeakAdd(invalidKey),
+	]) {
+		const completed = weakMutationCompletions;
+		try {
+			mutate();
+			throw new Error("missing weak mutator key error");
+		} catch (error) {
+			assert(error instanceof TypeError, "weak mutator retains its key error");
+		}
+		assert(
+			weakMutationCompletions === completed,
+			"throwing weak mutator skips its continuation",
+		);
+	}
+}
+assert(
+	new WeakRegistry().shadowedWrite(insertedWeakValue) === insertedWeakValue,
+	"weak mutator keeps a shadowed callee result",
+);
+try {
+	new WeakRegistry().crossBrandWrite();
+	throw new Error("missing weak mutator cross-brand error");
+} catch (error) {
+	assert(error instanceof TypeError, "weak mutator retains cross-brand errors");
+}
 assert(weakRegistry.read(weakKey).marker === "weak value", "weak private value");
 assert(weakRegistry.has(weakKey), "weak private membership");
 if (typeof collect === "function") collect();
@@ -420,6 +513,8 @@ assert(
 );
 for (const [receiver, method] of [
 	[new Proxy(new WeakMap(), {}), WeakMap.prototype.get],
+	[new Proxy(new WeakMap(), {}), WeakMap.prototype.set],
+	[new Proxy(new WeakSet(), {}), WeakSet.prototype.add],
 	[new Map(), WeakMap.prototype.get],
 	[new WeakSet(), WeakMap.prototype.get],
 	[new WeakMap(), WeakSet.prototype.has],
@@ -576,6 +671,26 @@ try {
 	throw new Error("missing weak primitive mutator error");
 } catch (error) {
 	assert(error instanceof TypeError, "weak mutator without a normal result still throws");
+}
+
+if (typeof $262 === "object") {
+	const foreign = $262.createRealm().global;
+	for (const [receiver, method, ErrorClass] of [
+		[new WeakMap(), foreign.WeakMap.prototype.set, foreign.TypeError],
+		[new WeakSet(), foreign.WeakSet.prototype.add, foreign.TypeError],
+		[new foreign.WeakMap(), WeakMap.prototype.set, TypeError],
+		[new foreign.WeakSet(), WeakSet.prototype.add, TypeError],
+	]) {
+		try {
+			method.call(receiver, 1, insertedWeakValue);
+			throw new Error("missing borrowed weak mutator error");
+		} catch (error) {
+			assert(
+				Object.getPrototypeOf(error) === ErrorClass.prototype,
+				"weak key error belongs to the callee realm",
+			);
+		}
+	}
 }
 
 console.log("exact-collection-receiver PASS");

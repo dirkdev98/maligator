@@ -957,9 +957,11 @@ export type CoreCollectionBuiltinOperation =
 	| "Set.prototype.has"
 	| "Set.prototype.delete"
 	| "WeakMap.prototype.get"
+	| "WeakMap.prototype.set"
 	| "WeakMap.prototype.has"
 	| "WeakMap.prototype.delete"
 	| "WeakSet.prototype.has"
+	| "WeakSet.prototype.add"
 	| "WeakSet.prototype.delete";
 
 export function coreCollectionCalleeGuard(

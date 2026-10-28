@@ -452,6 +452,9 @@ MalCompletion mal_builtin_collection_direct(
         case MAL_GUARDED_BUILTIN_WEAK_MAP_GET:
             expected = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_GET;
             break;
+        case MAL_GUARDED_BUILTIN_WEAK_MAP_SET:
+            expected = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET;
+            break;
         case MAL_GUARDED_BUILTIN_WEAK_MAP_HAS:
             expected = MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_HAS;
             break;
@@ -460,6 +463,9 @@ MalCompletion mal_builtin_collection_direct(
             break;
         case MAL_GUARDED_BUILTIN_WEAK_SET_HAS:
             expected = MAL_INTRINSIC_WEAK_SET_PROTOTYPE_HAS;
+            break;
+        case MAL_GUARDED_BUILTIN_WEAK_SET_ADD:
+            expected = MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD;
             break;
         case MAL_GUARDED_BUILTIN_WEAK_SET_DELETE:
             expected = MAL_INTRINSIC_WEAK_SET_PROTOTYPE_DELETE;
@@ -471,6 +477,12 @@ MalCompletion mal_builtin_collection_direct(
     const bool get_operation =
         operation == MAL_GUARDED_BUILTIN_MAP_GET ||
         operation == MAL_GUARDED_BUILTIN_WEAK_MAP_GET;
+    const bool set_operation =
+        operation == MAL_GUARDED_BUILTIN_MAP_SET ||
+        operation == MAL_GUARDED_BUILTIN_WEAK_MAP_SET;
+    const bool add_operation =
+        operation == MAL_GUARDED_BUILTIN_SET_ADD ||
+        operation == MAL_GUARDED_BUILTIN_WEAK_SET_ADD;
     const bool has_operation =
         operation == MAL_GUARDED_BUILTIN_MAP_HAS ||
         operation == MAL_GUARDED_BUILTIN_SET_HAS ||
@@ -493,6 +505,12 @@ MalCompletion mal_builtin_collection_direct(
         receiver_fact == MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN;
     const bool callee_matches =
         callee == vm->intrinsics[expected] ||
+        (set_operation &&
+         (callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_SET] ||
+          callee == vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET])) ||
+        (add_operation &&
+         (callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_ADD] ||
+          callee == vm->intrinsics[MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD])) ||
         (get_operation &&
          (callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_GET] ||
           callee == vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_GET])) ||
@@ -509,6 +527,25 @@ MalCompletion mal_builtin_collection_direct(
 
     if (arg_count >= 0 && callee_matches &&
         mal_value_is_native_function_object(callee)) {
+        if ((set_operation && callee == vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET] &&
+             (exact_weak_map || (unknown_receiver && mal_value_is_weak_map_object(this_value)))) ||
+            (add_operation && callee == vm->intrinsics[MAL_INTRINSIC_WEAK_SET_PROTOTYPE_ADD] &&
+             (exact_weak_set || (unknown_receiver && mal_value_is_weak_set_object(this_value))))) {
+            MalValue key = arg_count >= 1 ? args[0] : MAL_VALUE_UNDEFINED;
+            MalValue result;
+            if (set_operation) {
+                if (exact_weak_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
+                MAL_PERF_COUNT(collection_direct_weak_map_set_hits);
+                result = mal_builtin_weak_map_set_key_value(
+                    vm, this_value, key, arg_count >= 2 ? args[1] : MAL_VALUE_UNDEFINED);
+            } else {
+                if (exact_weak_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
+                MAL_PERF_COUNT(collection_direct_weak_set_add_hits);
+                result = mal_builtin_weak_set_add_key(vm, this_value, key);
+            }
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return vm->completion;
+            return (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = result };
+        }
         if (get_operation &&
             callee == vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_GET] &&
             (exact_weak_map ||
@@ -576,7 +613,7 @@ MalCompletion mal_builtin_collection_direct(
                     vm, this_value, map,
                     arg_count >= 1 ? args[0] : mal_value_new_undefined()),
             };
-        } else if (operation == MAL_GUARDED_BUILTIN_MAP_SET &&
+        } else if (set_operation && callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_SET] &&
                    (exact_map ||
                     (unknown_receiver && mal_value_is_map_object(this_value)))) {
             MalMapObject *map = mal_value_to_map_object(this_value);
@@ -614,7 +651,7 @@ MalCompletion mal_builtin_collection_direct(
                 .value = mal_value_new_boolean(mal_map_object_delete(
                     map, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
             };
-        } else if (operation == MAL_GUARDED_BUILTIN_SET_ADD &&
+        } else if (add_operation && callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_ADD] &&
                    (exact_set ||
                     (unknown_receiver && mal_value_is_set_object(this_value)))) {
             MalSetObject *set = mal_value_to_set_object(this_value);
@@ -881,6 +918,15 @@ bool mal_builtin_weak_map_delete_key(MalValue receiver, MalValue key) {
     return mal_weak_map_object_delete(mal_value_to_weak_map_object(receiver), key);
 }
 
+MalValue mal_builtin_weak_map_set_key_value(MalVm *vm, MalValue receiver, MalValue key, MalValue value) {
+    if (!mal_weak_key_can_be_held(key)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid value used as weak map key");
+        return mal_value_new_undefined();
+    }
+    mal_weak_map_object_set(mal_value_to_weak_map_object(receiver), key, value);
+    return receiver;
+}
+
 static MalValue mal_builtin_weak_map_prototype_get(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalWeakMapObject *map = mal_builtin_weak_map_this(vm, this_value);
     if (map == nullptr) {
@@ -896,15 +942,9 @@ static MalValue mal_builtin_weak_map_prototype_set(MalVm *vm, MalValue this_valu
         return mal_value_new_undefined();
     }
 
-    MalValue key = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    if (!mal_weak_key_can_be_held(key)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid value used as weak map key");
-        return mal_value_new_undefined();
-    }
-
-    mal_weak_map_object_set(map, key, arg_count >= 2 ? args[1] : mal_value_new_undefined());
-
-    return this_value;
+    return mal_builtin_weak_map_set_key_value(
+        vm, this_value, arg_count >= 1 ? args[0] : MAL_VALUE_UNDEFINED,
+        arg_count >= 2 ? args[1] : MAL_VALUE_UNDEFINED);
 }
 
 static MalValue mal_builtin_weak_map_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1071,7 +1111,8 @@ void mal_builtin_map_install(MalVm *vm) {
         mal_intrinsic_define_method_n(vm, weak_prototype, "get", 1, mal_builtin_weak_map_prototype_get);
     mal_intrinsic_define_method_n(vm, weak_prototype, "getOrInsert", 2, mal_builtin_weak_map_prototype_get_or_insert);
     mal_intrinsic_define_method_n(vm, weak_prototype, "getOrInsertComputed", 2, mal_builtin_weak_map_prototype_get_or_insert_computed);
-    mal_intrinsic_define_method_n(vm, weak_prototype, "set", 2, mal_builtin_weak_map_prototype_set);
+    vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET] =
+        mal_intrinsic_define_method_n(vm, weak_prototype, "set", 2, mal_builtin_weak_map_prototype_set);
     vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_HAS] =
         mal_intrinsic_define_method_n(vm, weak_prototype, "has", 1, mal_builtin_weak_map_prototype_has);
     vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_DELETE] =

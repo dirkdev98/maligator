@@ -113,7 +113,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 344;
+export const COMPILER_ARTIFACT_VERSION = 345;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -210,6 +210,8 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 	"WeakMap.prototype.delete",
 	"WeakSet.prototype.has",
 	"WeakSet.prototype.delete",
+	"WeakMap.prototype.set",
+	"WeakSet.prototype.add",
 	"Map.prototype.get",
 	"Map.prototype.set",
 	"Set.prototype.add",
@@ -373,7 +375,9 @@ function isCollectionOperation(
 		operation === "WeakMap.prototype.has" ||
 		operation === "WeakMap.prototype.delete" ||
 		operation === "WeakSet.prototype.has" ||
-		operation === "WeakSet.prototype.delete"
+		operation === "WeakSet.prototype.delete" ||
+		operation === "WeakMap.prototype.set" ||
+		operation === "WeakSet.prototype.add"
 	);
 }
 
