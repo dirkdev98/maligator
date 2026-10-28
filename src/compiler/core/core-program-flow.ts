@@ -6,7 +6,7 @@ import type {
 import { CORE_ANY_SCRIPT_AGGREGATE, updateCoreCallGraph } from "./core-call-graph.ts";
 import type { CoreCallGraph, CoreCallGraphNode } from "./core-call-graph.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreControlEdge, CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
@@ -147,8 +147,9 @@ export interface CoreProgramFlowValueKindState<
 
 export interface CoreValueKindAlternative {
 	readonly value: CoreValueId;
-	/** Control facts at this instruction bound the alternative's value. */
 	readonly instruction: CoreInstructionId;
+	/** Carries predecessor-local facts without moving the originating operation. */
+	readonly edge?: CoreControlEdge;
 }
 
 export interface CoreValueKindAlternatives {

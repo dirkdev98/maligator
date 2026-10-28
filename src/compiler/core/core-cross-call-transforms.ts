@@ -4560,12 +4560,12 @@ function discoverProgramNormalResultFacts(
 					function: functionId,
 				})
 				.exceptional(),
-			(value, consumer) =>
+			(value, consumer, edge) =>
 				kinds!
 					.values(functionId)
 					.latticeMask(
 						value,
-						consumer === undefined ? undefined : fn.instructionBlock(consumer),
+						edge ?? (consumer === undefined ? undefined : fn.instructionBlock(consumer)),
 					),
 			(instruction) => {
 				const site = flow.targets.site(functionId, instruction);
@@ -4656,7 +4656,7 @@ function discoverProgramNormalResultFacts(
 				read,
 				record,
 				coreRecordAccessInitialFields(read, record, source),
-				(value, consumer) => query(value, fn.instructionBlock(consumer)),
+				(value, consumer, edge) => query(value, edge ?? fn.instructionBlock(consumer)),
 			);
 		});
 		return query;
@@ -4748,15 +4748,17 @@ function discoverProgramNormalResultFacts(
 					coreReturnedRecordKinds(
 						fn,
 						cfg,
-						(value, consumer) =>
+						(value, consumer, edge) =>
 							kinds!
 								.values(functionId)
 								.latticeMask(
 									value,
-									consumer === undefined ? undefined : fn.instructionBlock(consumer),
+									edge ??
+										(consumer === undefined ? undefined : fn.instructionBlock(consumer)),
 								),
 						(instruction) => recordResult(flow.targets.site(functionId, instruction)),
-						(value, consumer) => query!(value, fn.instructionBlock(consumer)),
+						(value, consumer, edge) =>
+							query!(value, edge ?? fn.instructionBlock(consumer)),
 					),
 				);
 				if (!sameCoreRecordValueKind(prior, next)) {
@@ -4842,8 +4844,15 @@ function discoverProgramNormalResultFacts(
 			const integerRange =
 				mask !== COMPILER_VALUE_KIND_NUMBER
 					? undefined
-					: (coreRecordFieldReadIntegerRange(read, record, initial, (value, consumer) =>
-							(query ??= queryFunction(functionId))(value, fn.instructionBlock(consumer)),
+					: (coreRecordFieldReadIntegerRange(
+							read,
+							record,
+							initial,
+							(value, consumer, edge) =>
+								(query ??= queryFunction(functionId))(
+									value,
+									edge ?? fn.instructionBlock(consumer),
+								),
 						) ?? undefined);
 			discovered.set(instruction, {
 				instruction,

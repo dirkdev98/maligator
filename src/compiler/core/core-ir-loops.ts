@@ -6,7 +6,12 @@ import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 } from "./core-ir-control-flow.ts";
-import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts";
+import type {
+	CoreControlEdge,
+	CoreControlFlow,
+	CoreControlPoint,
+	CoreNaturalLoop,
+} from "./core-ir-control-flow.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	coreInstructionResultIntegerRange,
@@ -51,7 +56,7 @@ export interface CoreLoopInductionAnalysis {
 	readonly inductions: ReadonlyArray<CoreInductionVariable>;
 	readonly hasNumericRanges: boolean;
 	induction(value: CoreValueId): CoreInductionVariable | undefined;
-	range(value: CoreValueId, block?: CoreBlockId): CompilerIntegerRange | undefined;
+	range(value: CoreValueId, point?: CoreControlPoint): CompilerIntegerRange | undefined;
 	rangeQuery(
 		resultRange: (instruction: CoreInstructionId) => CoreIntegerRangeState,
 	): CoreIntegerRangeQuery;
@@ -61,7 +66,7 @@ export interface CoreLoopInductionAnalysis {
 export type CoreIntegerRangeState = CompilerIntegerRange | null | undefined;
 export type CoreIntegerRangeQuery = (
 	value: CoreValueId,
-	block?: CoreBlockId,
+	point?: CoreControlPoint,
 ) => CoreIntegerRangeState;
 
 const SAFE_MINIMUM = -Number.MAX_SAFE_INTEGER;
@@ -874,7 +879,59 @@ export function analyzeCoreLoopInductions(
 			cache.set(resolved, range);
 			return range;
 		};
-		return (value, block) => query(value, block, { remaining: 32 });
+		const onEdge = (
+			value: CoreValueId,
+			edge: CoreControlEdge,
+			budget: { remaining: number },
+		): CoreIntegerRangeState => {
+			if (edge.kind !== "ordinary") return undefined;
+			const initial = query(value, edge.from, budget);
+			if (initial === undefined || initial === null || budget.remaining-- <= 0)
+				return initial;
+			const terminator = fn.blockTerminator(edge.from);
+			const kind = fn.instructionKind(terminator);
+			if (kind !== "branch" && kind !== "guard") return initial;
+			const edges = cfg.successors[edge.from]!.filter((edge) => edge.kind === "ordinary");
+			const yes = edges[0]!;
+			const no = edges[1]!;
+			const exclusive = yes.to !== no.to;
+			const yesTaken = edge === yes || (exclusive && edge.to === yes.to);
+			const noTaken = edge === no || (exclusive && edge.to === no.to);
+			if (yesTaken === noTaken) return initial;
+			const condition = operand(fn, terminator, 0)!;
+			const definition = definitionInstruction(fn, root(condition));
+			if (definition === undefined || fn.instructionOpcodeName(definition) !== "binary")
+				return initial;
+			let operator = comparison(fn.instructionAttributes(definition).operator);
+			const left = operand(fn, definition, 0);
+			const right = operand(fn, definition, 1);
+			if (operator === undefined || left === undefined || right === undefined)
+				return initial;
+			const subject = root(value);
+			let boundValue: CoreValueId;
+			if (root(left) === subject) boundValue = right;
+			else if (root(right) === subject) {
+				boundValue = left;
+				operator = flip(operator);
+			} else return initial;
+			if (noTaken) operator = negate(operator);
+			const constant = exactNumber(fn, boundValue, root);
+			let bound = constant;
+			if (bound === undefined) {
+				const range = query(boundValue, edge.from, budget);
+				if (range === null) return null;
+				if (range === undefined) return initial;
+				bound = operator === "<" || operator === "<=" ? range.maximum : range.minimum;
+			}
+			const constraint = branchRange(operator, bound);
+			return constraint === undefined ? initial : intersect(initial, constraint);
+		};
+		return (value, point) => {
+			const budget = { remaining: 32 };
+			return point !== undefined && typeof point !== "number"
+				? onEdge(value, point, budget)
+				: query(value, point, budget);
+		};
 	};
 	const query = rangeQuery();
 	const hasBoundedProducer = [...fn.instructionIds()].some(
@@ -895,8 +952,8 @@ export function analyzeCoreLoopInductions(
 		induction(value) {
 			return byRoot.get(root(value));
 		},
-		range(value, block) {
-			return query(value, block) ?? undefined;
+		range(value, point) {
+			return query(value, point) ?? undefined;
 		},
 		rangeQuery,
 	};

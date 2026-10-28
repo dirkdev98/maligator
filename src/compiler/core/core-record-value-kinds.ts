@@ -98,6 +98,7 @@ const MAXIMUM_RECORD_RETURN_ALIAS_WORK = 256;
 interface CoreRecordFieldWrite {
 	readonly instruction: CoreInstructionId;
 	readonly value: CoreValueId;
+	readonly edge?: CoreControlEdge;
 }
 
 function returnedValueUseCount(
@@ -475,11 +476,16 @@ function recordReturnWrites(
 export function coreReturnedRecordKinds(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
-	mask: (value: CoreValueId, consumer?: CoreInstructionId) => number,
+	mask: (
+		value: CoreValueId,
+		consumer?: CoreInstructionId,
+		edge?: CoreControlEdge,
+	) => number,
 	call: (instruction: CoreInstructionId) => CoreRecordValueKind,
 	range?: (
 		value: CoreValueId,
 		consumer: CoreInstructionId,
+		edge?: CoreControlEdge,
 	) => CompilerIntegerRange | null | undefined,
 ): CoreRecordValueKind {
 	if (fn.isAsync || fn.isGenerator) return undefined;
@@ -582,14 +588,14 @@ export function coreReturnedRecordKinds(
 							? writes
 							: (alternative.writes ?? [])) {
 							if (!cfg.reachable.has(fn.instructionBlock(write.instruction))) continue;
-							const written = mask(write.value, write.instruction);
+							const written = mask(write.value, write.instruction, write.edge);
 							partKind |= written;
 							if (written !== 0)
 								partRange =
 									partKind === COMPILER_VALUE_KIND_NUMBER
 										? joinFieldIntegerRanges(
 												partRange,
-												range?.(write.value, write.instruction),
+												range?.(write.value, write.instruction, write.edge),
 											)
 										: undefined;
 						}
@@ -683,6 +689,7 @@ export function coreRecordFieldReadIntegerRange(
 	range: (
 		value: CoreValueId,
 		consumer: CoreInstructionId,
+		edge?: CoreControlEdge,
 	) => CompilerIntegerRange | null | undefined,
 ): CompilerIntegerRange | null | undefined {
 	if (record === null) return null;
@@ -695,7 +702,10 @@ export function coreRecordFieldReadIntegerRange(
 			? null
 			: initial!.find((field) => field.key === read.key)!.integerRange;
 	for (const write of read.writes ?? []) {
-		result = joinFieldIntegerRanges(result, range(write.value, write.instruction));
+		result = joinFieldIntegerRanges(
+			result,
+			range(write.value, write.instruction, write.edge),
+		);
 		if (result === undefined) break;
 	}
 	return result;
@@ -828,6 +838,9 @@ function recordAccessPrefixes(
 		let remaining = MAXIMUM_RECORD_PREFIX_WORK;
 		let valid = true;
 		let ignoredWrites: Map<CoreInstructionId, Set<CoreInstructionId>> | undefined;
+		let writeAlternatives:
+			| Map<CoreInstructionId, Map<CoreControlEdge | undefined, CoreValueId>>
+			| undefined;
 		const moveRoot = (value: CoreValueId): CoreValueId => {
 			while (fn.kernel.valueDefinitionKind(value) === 1) {
 				const owner = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
@@ -993,7 +1006,46 @@ function recordAccessPrefixes(
 						valid = false;
 						break;
 					}
-					if (!disjoint) reachingWrites.add(event);
+					if (!disjoint) {
+						const valueIndex =
+							fn.instructionOpcodeName(event) === "storePropertyStatic" ? 1 : 2;
+						const original = fn.kernel.operandAt(
+							fn.kernel.instructionOperandStart(event) + valueIndex,
+						);
+						let written = original;
+						let edge: CoreControlEdge | undefined;
+						if (incoming !== undefined) {
+							const value = moveRoot(original);
+							// A cyclic phi's argument can belong to an earlier execution of the writer.
+							if (
+								fn.kernel.valueDefinitionKind(value) === 0 &&
+								fn.kernel.valueDefinitionOwner(value) === incoming.to &&
+								!cfg.loops.some((loop) => loop.blocks.has(incoming.to)) &&
+								!cfg.irreducibleCycles.some((cycle) => cycle.blocks.has(incoming.to))
+							) {
+								const argument =
+									incoming.arguments[fn.kernel.valueDefinitionIndex(value)];
+								if (argument === undefined) {
+									valid = false;
+									break;
+								}
+								written = argument;
+								edge = incoming;
+							}
+							if (remaining < 0) {
+								valid = false;
+								break;
+							}
+						}
+						let alternatives = writeAlternatives?.get(event);
+						if (alternatives === undefined && edge !== undefined) {
+							alternatives = new Map<CoreControlEdge | undefined, CoreValueId>();
+							if (reachingWrites.has(event)) alternatives.set(undefined, original);
+							(writeAlternatives ??= new Map()).set(event, alternatives);
+						}
+						alternatives?.set(edge, written);
+						reachingWrites.add(event);
+					}
 				}
 			}
 			if (!valid) break;
@@ -1079,24 +1131,39 @@ function recordAccessPrefixes(
 		if (!valid || producers.size === 0) continue;
 		for (const [write, dependencies] of ignoredWrites ?? []) {
 			// Only sources covered by the fresh returned-record contract prove disjointness.
-			if ([...dependencies].some((source) => !producers.has(source)))
+			if ([...dependencies].some((source) => !producers.has(source))) {
 				reachingWrites!.add(write);
+				writeAlternatives?.delete(write);
+			}
 		}
-		const fieldWrites =
-			reachingWrites === undefined || reachingWrites.size === 0
-				? undefined
-				: Object.freeze(
-						[...reachingWrites].map((instruction) => {
-							const valueIndex =
-								fn.instructionOpcodeName(instruction) === "storePropertyStatic" ? 1 : 2;
-							return Object.freeze({
-								instruction,
-								value: fn.kernel.operandAt(
-									fn.kernel.instructionOperandStart(instruction) + valueIndex,
-								),
-							});
+		let fieldWrites: ReadonlyArray<CoreRecordFieldWrite> | undefined;
+		if (reachingWrites !== undefined && reachingWrites.size > 0) {
+			const rows: Array<CoreRecordFieldWrite> = [];
+			for (const instruction of reachingWrites) {
+				const alternatives = writeAlternatives?.get(instruction);
+				if (alternatives === undefined) {
+					const valueIndex =
+						fn.instructionOpcodeName(instruction) === "storePropertyStatic" ? 1 : 2;
+					rows.push(
+						Object.freeze({
+							instruction,
+							value: fn.kernel.operandAt(
+								fn.kernel.instructionOperandStart(instruction) + valueIndex,
+							),
 						}),
 					);
+				} else
+					for (const [edge, value] of alternatives)
+						rows.push(
+							Object.freeze({
+								instruction,
+								value,
+								...(edge === undefined ? {} : { edge }),
+							}),
+						);
+			}
+			fieldWrites = Object.freeze(rows);
+		}
 		target.set(
 			instruction,
 			Object.freeze({

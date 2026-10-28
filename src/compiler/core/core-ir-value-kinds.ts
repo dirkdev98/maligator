@@ -64,7 +64,11 @@ import {
 	coreCanonicalValueRoots,
 	coreTerminatorInput,
 } from "./core-ir-control-flow.ts";
-import type { CoreControlFlow, CoreControlEdge } from "./core-ir-control-flow.ts";
+import type {
+	CoreControlFlow,
+	CoreControlEdge,
+	CoreControlPoint,
+} from "./core-ir-control-flow.ts";
 import { coreNumericTypedArrayKind } from "./core-ir-value-classes.ts";
 import type {
 	CoreFunctionId,
@@ -384,15 +388,15 @@ function transferredKind(
 	inputs: ArrayLike<number>,
 	start: number,
 	count: number,
-	mask: (value: CoreValueId, block?: CoreBlockId) => number,
-	inputBlocks?: ReadonlyArray<CoreBlockId | undefined>,
+	mask: (value: CoreValueId, point?: CoreControlPoint) => number,
+	inputPoints?: ReadonlyArray<CoreControlPoint | undefined>,
 ): number {
 	if (kind === KIND_TRANSFER_JOIN || kind === KIND_TRANSFER_NORMAL_RESULT_JOIN) {
 		for (let index = 0; index < count; index++)
 			constant |= mask(
 				inputs[start + index]! as CoreValueId,
 				kind === KIND_TRANSFER_NORMAL_RESULT_JOIN
-					? inputBlocks?.[start + index]
+					? inputPoints?.[start + index]
 					: undefined,
 			);
 		return constant;
@@ -749,7 +753,7 @@ export function corePrivatePackedRestArrays(
 }
 
 interface KindTransferBuffer {
-	inputBlocks?: Array<CoreBlockId | undefined>;
+	inputPoints?: Array<CoreControlPoint | undefined>;
 	readonly kinds: Array<number>;
 	readonly outputs: Array<CoreValueId>;
 	readonly constants: Array<CompilerValueKindMask>;
@@ -854,9 +858,8 @@ function addOperationTransfer(
 		addKindTransfer(buffer, KIND_TRANSFER_NORMAL_RESULT_JOIN, output, contextual);
 		buffer.inputCounts[index] = alternatives.values.length;
 		for (const alternative of alternatives.values) {
-			(buffer.inputBlocks ??= [])[buffer.inputs.length] = fn.instructionBlock(
-				alternative.instruction,
-			);
+			(buffer.inputPoints ??= [])[buffer.inputs.length] =
+				alternative.edge ?? fn.instructionBlock(alternative.instruction);
 			buffer.inputs.push(alternative.value);
 		}
 		return;
@@ -1260,9 +1263,9 @@ function solveCoreValueKinds(
 	const transferInputs = Uint32Array.from(transfers.inputs);
 	let conditional: CoreConditionalValueKinds | undefined;
 
-	const mask = (value: CoreValueId, block?: CoreBlockId): number => {
+	const mask = (value: CoreValueId, point?: CoreControlPoint): number => {
 		const kind = masks[value] ?? 0;
-		if (block === undefined || kind === 0) return kind;
+		if (point === undefined || kind === 0) return kind;
 		const declared = declaredValueKind(fn, value);
 		if ((declared & (declared - 1)) === 0) return kind;
 		// Structural bounds stay fixed while the value lattice grows, including through recursive fields.
@@ -1270,7 +1273,7 @@ function solveCoreValueKinds(
 			kind &
 			(conditional ??= analyzeCoreConditionalValueKinds(program, fn, cfg, (value) =>
 				declaredValueKind(fn, value),
-			)).kindMask(value, block)
+			)).kindMask(value, point)
 		);
 	};
 	const wakeDependents = (
@@ -1303,7 +1306,7 @@ function solveCoreValueKinds(
 			transferInputStarts[index]!,
 			transferInputCounts[index]!,
 			mask,
-			transfers.inputBlocks,
+			transfers.inputPoints,
 		);
 		const next = masks[output]! | incoming;
 		if (next === masks[output]) continue;
@@ -1542,7 +1545,11 @@ export interface CoreProgramFunctionValueKinds extends Pick<
 	CoreValueKindAnalysis,
 	"kindMask"
 > {
-	latticeMask(this: void, value: CoreValueId, block?: CoreBlockId): CompilerValueKindMask;
+	latticeMask(
+		this: void,
+		value: CoreValueId,
+		point?: CoreControlPoint,
+	): CompilerValueKindMask;
 }
 export type CoreProgramValueKinds =
 	CoreProgramFlowValueKinds<CoreProgramFunctionValueKinds>;
@@ -1594,16 +1601,16 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 			let conditional: CoreConditionalValueKinds | undefined;
 			return Object.freeze({
 				kindMask: (value: CoreValueId) => mask(value) || COMPILER_VALUE_KIND_TOP,
-				latticeMask(value: CoreValueId, block?: CoreBlockId) {
+				latticeMask(value: CoreValueId, point?: CoreControlPoint) {
 					const kind = mask(value);
 					// An unsolved value cannot acquire a normal result from a branch restriction.
-					if (block === undefined || (kind & (kind - 1)) === 0) return kind;
+					if (point === undefined || (kind & (kind - 1)) === 0) return kind;
 					return (conditional ??= analyzeCoreConditionalValueKinds(
 						program,
 						fn,
 						cfg,
 						(value) => (computed![value] === 1 ? masks[value]! : COMPILER_VALUE_KIND_TOP),
-					)).kindMask(value, block);
+					)).kindMask(value, point);
 				},
 			});
 		},
@@ -1623,10 +1630,10 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 			return coreReturnedRecordKinds(
 				fn,
 				control,
-				(value, consumer) =>
+				(value, consumer, edge) =>
 					analysis.latticeMask(
 						value,
-						consumer === undefined ? undefined : fn.instructionBlock(consumer),
+						edge ?? (consumer === undefined ? undefined : fn.instructionBlock(consumer)),
 					),
 				call,
 			);

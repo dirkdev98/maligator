@@ -1660,7 +1660,135 @@ try {
 	check(error, storeFailure, "Proxy store exception identity");
 }
 check(storeTraps, 2, "Proxy set traps called once per store");
+const makePayloadBase = function makePayloadBase(observe) {
+	for (let i = 0; i < 3; i++) observe();
+	return { n: 1 };
+};
+function correlatedPayloadRecord(flag, buildPayload, observe) {
+	const left = makePayloadBase(observe);
+	const right = makePayloadBase(observe);
+	let selected, other, value;
+	if (flag) {
+		selected = left;
+		other = right;
+		value = buildPayload();
+	} else {
+		selected = right;
+		other = right;
+		value = 7;
+	}
+	other.n = value;
+	return selected;
+}
+function readCorrelatedPayload(flag, buildPayload, observe) {
+	return correlatedPayloadRecord(flag, buildPayload, observe).n + 1;
+}
+function guardedPayload(flag, input, payload, observe) {
+	const n = input >>> 0;
+	const left = makePayloadBase(observe);
+	const right = makePayloadBase(observe);
+	let selected, other, value;
+	if (flag) {
+		selected = left;
+		other = right;
+		value = payload;
+	} else {
+		if (n >= 16) return -1;
+		selected = right;
+		other = right;
+		value = n;
+	}
+	other.n = value;
+	return selected.n % 16;
+}
+function* suspendedPayload(flag, buildPayload, observe) {
+	const record = correlatedPayloadRecord(flag, buildPayload, observe);
+	yield 0;
+	return record.n % 16;
+}
+async function awaitedPayload(flag, buildPayload, observe) {
+	const record = correlatedPayloadRecord(flag, buildPayload, observe);
+	await 0;
+	return record.n % 16;
+}
+function loopPayload(count, payload, observe) {
+	let selected = makePayloadBase(observe);
+	let other = makePayloadBase(observe);
+	let value = payload;
+	for (let i = 0; i < count; i++) {
+		other.n = value;
+		const previous = selected;
+		selected = other;
+		other = previous;
+		value = 7;
+	}
+	return selected.n;
+}
+let payloadCalls = 0;
+const unreadPayload = {
+	[Symbol.toPrimitive]() {
+		throw new Error("coerced a payload stored only in the other record");
+	},
+};
+const buildUnreadPayload = () => {
+	payloadCalls++;
+	return unreadPayload;
+};
+const payloadObserve = () => {};
+for (const input of [0, 1, 15, 16, -1, 4294967295]) {
+	check(
+		guardedPayload(true, input, unreadPayload, payloadObserve),
+		1,
+		"guarded excluded payload",
+	);
+	check(
+		guardedPayload(false, input, unreadPayload, payloadObserve),
+		input < 16 && input >= 0 ? input : -1,
+		"guarded selected payload endpoints",
+	);
+}
+check(
+	readCorrelatedPayload(true, buildUnreadPayload, payloadObserve),
+	2,
+	"excluded payload kind",
+);
+check(payloadCalls, 1, "excluded payload producer still executes");
+check(
+	readCorrelatedPayload(false, buildUnreadPayload, payloadObserve),
+	8,
+	"selected payload kind",
+);
+check(payloadCalls, 1, "unselected branch producer stays unexecuted");
+check(
+	loopPayload(1, unreadPayload, payloadObserve),
+	unreadPayload,
+	"earlier iteration heap payload",
+);
+check(
+	loopPayload(2, unreadPayload, payloadObserve),
+	7,
+	"later iteration numeric payload",
+);
+const payloadIterator = suspendedPayload(true, buildUnreadPayload, payloadObserve);
+check(payloadIterator.next().value, 0, "correlated payload suspension");
+check(payloadIterator.next().value, 1, "correlated payload after suspension");
+const payloadFailure = {};
+try {
+	readCorrelatedPayload(
+		true,
+		() => {
+			throw payloadFailure;
+		},
+		payloadObserve,
+	);
+	throw new Error("missing correlated payload producer exception");
+} catch (error) {
+	check(error, payloadFailure, "correlated payload producer exception identity");
+}
 Promise.all([
+	awaitedPayload(false, buildUnreadPayload, payloadObserve).then((value) =>
+		check(value, 7, "correlated payload after await"),
+	),
 	writeOwnAwaited(storedHeap, observe).then((record) =>
 		check(record.value, storedHeap, "own store after await"),
 	),

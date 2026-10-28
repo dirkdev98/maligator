@@ -969,6 +969,13 @@ a write to the selected receiver kills earlier payload contributions on that pat
 including the initializer when every path overwrites it. Writes to other members
 of a merged alias group cannot kill the selected value. Earlier property accesses
 still need own-data proofs even after their payload values stop contributing.
+Writer payloads follow the same selected merge edge as receiver phis. Normal-result
+alternatives retain both the actual store and its incoming edge, so kind and range
+queries can use the branch outcome even on a critical edge. Ordinary block queries
+retain their dominance requirements; an edge proof cannot narrow unrelated paths.
+If disjointness loses its fresh-source proof, the unprojected payload returns to the
+join. Cyclic payload phis retain their ordinary joins because an incoming argument
+can belong to an earlier execution of the writer.
 Loop backedges participate; reexecuting the producer starts a fresh lifetime.
 Repeated private reads of one field need no CFG. Handler transport remains outside
 this proof, and cached CFG-dependent reads track effect changes to exceptional paths.

@@ -305,6 +305,11 @@ The independent target boundary and current storage contract are recorded in
       fresh record sources and recognize definite writes through correlated
       phis. Earlier allocation executions on loop backedges retain their payloads;
       every source used to exclude a writer still needs the returned-record proof.
+      Writer payload phis now follow the same selected edge. Kind and integer-range
+      queries retain the edge's branch outcome even when block merging creates a
+      critical edge. Normal-result joins, producer summaries and resumable reads
+      consume these alternatives independently of the original store's effects.
+      Cyclic payload phis retain their conservative joins.
       Private producer writes now flow through the existing Core field SSA and
       materialize at each eligible return. Initializer and overwritten payload
       lifetimes remain explicit at their original aggregate uses. Named virtual
@@ -324,7 +329,8 @@ The independent target boundary and current storage contract are recorded in
       remainders consume these facts across boxed, double and int32 storage, using
       an explicit conversion whenever a move cannot preserve the representation.
       Remaining object work includes relational bounds without an integer basis,
-      payload/source correlations across separate merges, producer storage outside private
+      composition of edge-local bounds with earlier relational chains,
+      payload/source correlations across separate merges and cyclic phis, producer storage outside private
       single-layout SSA promotion, indexed producer summaries, broader parameter-relative
       call effects and coroutine record transport. Record-call admission and
       profitability are owned by the following tasks.

@@ -9,7 +9,11 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
-import type { CoreControlEdge, CoreControlFlow } from "./core-ir-control-flow.ts";
+import type {
+	CoreControlEdge,
+	CoreControlFlow,
+	CoreControlPoint,
+} from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreBlockId, CoreValueId } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -17,7 +21,7 @@ import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export interface CoreConditionalValueKinds {
-	kindMask(value: CoreValueId, block: CoreBlockId): number;
+	kindMask(value: CoreValueId, point: CoreControlPoint): number;
 }
 
 interface Restriction {
@@ -239,7 +243,13 @@ export function analyzeCoreConditionalValueKinds(
 		let mask = at(value, edge.from);
 		if (edge.kind === "ordinary")
 			for (const restriction of bounds.get(value) ?? [])
-				if (restriction.edge === edge) mask &= restriction.mask;
+				if (
+					restriction.edge === edge ||
+					(restriction.exclusive &&
+						restriction.edge.from === edge.from &&
+						restriction.edge.to === edge.to)
+				)
+					mask &= restriction.mask;
 		return mask;
 	};
 	const phiIndex = new Int32Array(fn.valueCapacity);
@@ -321,12 +331,14 @@ export function analyzeCoreConditionalValueKinds(
 		}
 	}
 	return Object.freeze({
-		kindMask(value: CoreValueId, block: CoreBlockId) {
+		kindMask(value: CoreValueId, point: CoreControlPoint) {
 			const mask = base(value);
 			if ((mask & (mask - 1)) === 0) return mask || COMPILER_VALUE_KIND_TOP;
 			const phi = phiIndex[value] ?? -1;
 			return (
-				mask & (phi < 0 ? COMPILER_VALUE_KIND_TOP : masks[phi]!) & at(value, block) ||
+				mask &
+					(phi < 0 ? COMPILER_VALUE_KIND_TOP : masks[phi]!) &
+					(typeof point === "number" ? at(value, point) : onEdge(value, point)) ||
 				mask ||
 				COMPILER_VALUE_KIND_TOP
 			);

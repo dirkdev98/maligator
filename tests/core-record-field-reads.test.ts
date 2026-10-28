@@ -61,6 +61,70 @@ function readKind(producer: string, reader = "return value.n;", call = "make(inp
 }
 
 describe("fresh record field observations", () => {
+	it("carries edge-local Number proofs through block folding and native facts", () => {
+		const out = inspectStaticValueFunction(
+			`const make=function make(hook){for(let i=0;i<3;i++)hook();return {n:1};};function compute(flag,excluded,payload,hook){const left=make(hook);const right=make(hook);let selected,other,value;if(flag){selected=left;other=right;value=excluded;}else{if(typeof payload!=='number')throw 0;selected=right;other=right;value=payload;}other.n=value;return selected.n+1;}globalThis.compute=compute;`,
+			"compute",
+			{ locked: false, realms: true },
+		);
+		const ip = out.native.body.instructions.findIndex((op) =>
+			op.opcode.startsWith("LOAD_PROPERTY"),
+		);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		expect(out.native.facts?.[ip]?.resultKindMasks).toEqual([COMPILER_VALUE_KIND_NUMBER]);
+	});
+	it("retains the selected payload's predecessor-local kind proof", () => {
+		const out = flow(
+			`function make(){return {n:1};}function read(flag,excluded,payload){const left=make();const right=make();let selected,other,value;if(flag){selected=left;other=right;value=excluded;}else{if(typeof payload!=='number')throw 0;selected=right;other=right;value=payload;}other.n=value;return selected.n;}globalThis.result=read(globalThis.flag,globalThis.excluded,globalThis.payload);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_NUMBER,
+		);
+	});
+	it("publishes correlated final payloads through a returned-record summary", () => {
+		const out = flow(
+			`function make(){return {n:1};}function choose(flag,payload){const left=make();const right=make();let selected,other,value;if(flag){selected=left;other=right;value=payload;}else{selected=right;other=right;value=7;}other.n=value;return selected;}function read(flag,payload){return choose(flag,payload).n;}globalThis.result=read(globalThis.flag,globalThis.payload);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_NUMBER,
+		);
+	});
+	it("does not correlate payload phis from an independent merge", () => {
+		const out = flow(
+			`function make(){return {n:1};}function read(flag,separate,payload){const left=make();const right=make();const selected=flag?left:right;const value=separate?payload:7;right.n=value;return selected.n;}globalThis.result=read(globalThis.flag,globalThis.separate,globalThis.payload);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_TOP,
+		);
+	});
+	it("retains a payload that reaches the selected record on another branch", () => {
+		const out = flow(
+			`function make(){return {n:1};}function read(flag,payload){const left=make();const right=make();let selected,other,value;if(flag){selected=left;other=right;value=7;}else{selected=right;other=right;value=payload;}other.n=value;return selected.n;}globalThis.result=read(globalThis.flag,globalThis.payload);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_TOP,
+		);
+	});
+	it("retains stored payloads across cyclic receiver and value phis", () => {
+		const out = flow(
+			`function make(){return {n:1};}function read(count,payload){let selected=make(),other=make(),value=payload;for(let i=0;i<count;i++){other.n=value;const previous=selected;selected=other;other=previous;value=7;}return selected.n;}globalThis.result=read(globalThis.count,globalThis.payload);`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(
+			COMPILER_VALUE_KIND_TOP,
+		);
+	});
+	it.each([
+		["1", "7", COMPILER_VALUE_KIND_NUMBER],
+		["'initial'", "'chosen'", COMPILER_VALUE_KIND_STRING],
+	] as const)(
+		"correlates writer payloads with the selected receiver (%s, %s)",
+		(initial, final, expected) => {
+			const out = flow(
+				`function make(){return {n:${initial}};}function read(flag,payload){const left=make();const right=make();let selected,other,value;if(flag){selected=left;other=right;value=payload;}else{selected=right;other=right;value=${final};}other.n=value;return selected.n;}globalThis.result=read(globalThis.flag,globalThis.payload);`,
+			);
+			expect(out.read().summary(out.named("read").id).returnKind).toBe(expected);
+		},
+	);
 	it.each([
 		"right.n=1;right.n='changed';const selected=input?left:right;",
 		"const selected=input?left:right;right.n=1;right.n='changed';",

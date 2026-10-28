@@ -23,6 +23,9 @@ export interface CoreControlEdge {
 	readonly arguments: ReadonlyArray<CoreValueId>;
 }
 
+/** Edge points refine predecessor values after the branch outcome is known. */
+export type CoreControlPoint = CoreBlockId | CoreControlEdge;
+
 export interface CoreNaturalLoop {
 	readonly header: CoreBlockId;
 	readonly latches: ReadonlySet<CoreBlockId>;

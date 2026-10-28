@@ -47,6 +47,26 @@ function field(out: ReturnType<typeof inspect>) {
 }
 
 describe("normal record field integer ranges", () => {
+	it.each(["function", "function*", "async function", "async function*"])(
+		"carries correlated writer payload ranges through %s lowering",
+		(declaration) => {
+			const suspension =
+				(declaration.includes("*") ? "yield 0;" : "") +
+				(declaration.startsWith("async") ? "await 0;" : "");
+			const out = inspectStaticValueFunction(
+				`const make=function make(hook){for(let i=0;i<3;i++)hook();return {n:1};};${declaration} compute(flag,payload,input,hook){const n=input>>>0;const left=make(hook);const right=make(hook);let selected,other,value;if(flag){selected=left;other=right;value=payload;}else{if(n>=16)throw 0;selected=right;other=right;value=n;}${suspension}other.n=value;return selected.n%16;}globalThis.compute=compute;`,
+				"compute",
+				{ locked: false, realms: true },
+			);
+			const { op, facts } = field(out);
+			expect(instructionResultIntegerRange(facts, op.dst)).toEqual(bounded(0, 15));
+			expect(
+				out.native.body.instructions.some(
+					(op) => op.opcode === "BINARY" && op.operator === "%",
+				),
+			).toBe(false);
+		},
+	);
 	it.each(
 		["literal", "producer-write", "caller-write"].flatMap((mode) =>
 			(

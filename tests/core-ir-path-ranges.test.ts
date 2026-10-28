@@ -262,6 +262,47 @@ function relationalInt32(
 }
 
 describe("Core path-sensitive numeric ranges", () => {
+	it("keeps distinct edge facts when both outcomes enter the same block", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const join = builder.createBlock();
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const [value] = builder.appendInstruction(entry, "unary", [parameter], {
+			attributes: { operator: "~" },
+			outputRepresentations: ["i32"],
+		});
+		const [sixteen] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 16 },
+			outputRepresentations: ["i32"],
+		});
+		const [condition] = builder.appendInstruction(entry, "binary", [value!, sixteen!], {
+			attributes: { operator: "<" },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: join, arguments: [] },
+			alternate: { block: join, arguments: [] },
+		});
+		builder.setTerminator(join, { kind: "return", value: value! });
+		const fn = program.function(builder.finish(entry).function);
+		const cfg = buildCoreControlFlow(program, fn.id);
+		const analysis = analyzeCoreLoopInductions(
+			program,
+			fn,
+			cfg,
+			coreCanonicalValueRoots(fn, cfg),
+		);
+		const [yes, no] = cfg.successors[entry]!;
+		expect(analysis.range(value!, yes)).toMatchObject({ maximum: 15 });
+		expect(analysis.range(value!, no)).toMatchObject({ minimum: 16 });
+		expect(analysis.range(value!, join)).toMatchObject({
+			minimum: -0x8000_0000,
+			maximum: 0x7fff_ffff,
+		});
+	});
 	it.each([
 		[-16, true],
 		[15.5, true],
