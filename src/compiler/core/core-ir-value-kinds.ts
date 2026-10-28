@@ -103,6 +103,10 @@ import {
 } from "./core-record-value-kinds.ts";
 import { coreExactArrayFromCallResult } from "./core-static-values.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
+import {
+	coreWeakCollectionKey,
+	coreWeakKeyNormalResultKinds,
+} from "./core-weak-collection-facts.ts";
 
 export const CORE_PRIMITIVE_EFFECT_FACT = "primitive-effects";
 
@@ -379,6 +383,9 @@ const KIND_TRANSFER_TYPED_ELEMENT = 7;
 const KIND_TRANSFER_PROPERTY_KEY = 8;
 const KIND_TRANSFER_NORMAL_RESULT_JOIN = 9;
 const KIND_TRANSFER_STRING_LENGTH = 10;
+const KIND_TRANSFER_WEAK_GET = 11;
+const KIND_TRANSFER_WEAK_PREDICATE = 12;
+const KIND_TRANSFER_WEAK_MUTATOR = 13;
 
 // A non-number key on an Array whose holders are all known reads its length, a
 // prototype member or nothing, since no one gave it other named properties.
@@ -406,6 +413,18 @@ function transferredKind(
 	}
 	const left = mask(inputs[start]! as CoreValueId);
 	if (kind === KIND_TRANSFER_COPY) return left;
+	if (kind >= KIND_TRANSFER_WEAK_GET)
+		return (
+			constant &
+			coreWeakKeyNormalResultKinds(
+				kind === KIND_TRANSFER_WEAK_GET
+					? "get"
+					: kind === KIND_TRANSFER_WEAK_PREDICATE
+						? "predicate"
+						: "mutator",
+				left,
+			)
+		);
 	if (kind === KIND_TRANSFER_STRING_LENGTH) {
 		// Nullish receivers throw before producing a result; primitive String length is immutable.
 		if ((left & ~(COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_NULLISH)) !== 0)
@@ -893,6 +912,28 @@ function addOperationTransfer(
 			);
 			return;
 		}
+	}
+	const weakKey =
+		opcode === "callKnown" ? coreWeakCollectionKey(fn, instruction) : undefined;
+	if (weakKey !== undefined) {
+		if (weakKey.input === undefined)
+			masks[output] =
+				masks[output]! |
+				((supplied ?? COMPILER_VALUE_KIND_TOP) &
+					coreWeakKeyNormalResultKinds(weakKey.result, COMPILER_VALUE_KIND_UNDEFINED));
+		else
+			addKindTransfer(
+				buffer,
+				weakKey.result === "get"
+					? KIND_TRANSFER_WEAK_GET
+					: weakKey.result === "predicate"
+						? KIND_TRANSFER_WEAK_PREDICATE
+						: KIND_TRANSFER_WEAK_MUTATOR,
+				output,
+				supplied ?? COMPILER_VALUE_KIND_TOP,
+				[weakKey.input],
+			);
+		return;
 	}
 	if (supplied !== undefined) {
 		masks[output] = masks[output]! | supplied;

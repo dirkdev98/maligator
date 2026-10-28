@@ -350,6 +350,14 @@ consume arbitrary keys without coercion or collection, and deletion retains its
 heap write. Guarded dispatch checks the actual callee and receiver independently
 across strong and weak collections. Weak mutators retain their key validation and
 error-realm obligations; a receiver brand alone cannot remove those checks.
+Weak-key argument kinds constrain normal completions independently of the receiver:
+non-Object, non-Symbol keys imply undefined for get, false for has/delete and no
+normal result for set/add. The existing local and program worklists propagate
+these bounds through complete caller sets. Constant result uses replace only the
+uses, retaining the invocation and its receiver, argument, realm and GC effects.
+Known positional prefixes remain distinct from unknown argument-list elements.
+A captured Function.prototype.call with a fixed positional receiver can unwrap
+around an iterable tail without dropping its evaluation or iteration effects.
 Returned-record field summaries join heap brands alongside kinds and intervals,
 including producer writes and caller overwrites. Their alternatives use the same
 finite brand dependency graph, so recursive forwarding and self-writes converge

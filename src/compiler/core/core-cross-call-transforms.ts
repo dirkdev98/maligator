@@ -151,6 +151,8 @@ import type {
 	CoreTransformCandidate,
 } from "./core-transform-candidates.ts";
 import { virtualizeGuardedCallbackEnvironment } from "./core-virtual-captures.ts";
+import { coreWeakCollectionNormalConstant } from "./core-weak-collection-facts.ts";
+import type { CoreWeakCollectionNormalConstant } from "./core-weak-collection-facts.ts";
 
 export interface CoreCrossCallTransformStatistics
 	extends CoreTransformBudgetStatistics, Readonly<CoreReadAccessorWork> {
@@ -4043,6 +4045,10 @@ type CoreValueKindFold =
 	| { readonly instruction: CoreInstructionId; readonly result: boolean }
 	| {
 			readonly instruction: CoreInstructionId;
+			readonly normal: CoreWeakCollectionNormalConstant;
+	  }
+	| {
+			readonly instruction: CoreInstructionId;
 			readonly opcode: string;
 			readonly firstOperand: number;
 			readonly preferred: number;
@@ -4276,6 +4282,22 @@ function discoverProgramValueKindObservations(
 			if (fn.kernel.instructionLive(instruction) === 0) continue;
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			demand = false;
+			const normal =
+				fn.instructionOpcodeName(instruction) === "callKnown" &&
+				fn.kernel.instructionResultCount(instruction) === 1 &&
+				fn.valueUseCount(
+					fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+				) +
+					fn.kernel.valueHandlerUseCount(
+						fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+					) >
+					0
+					? coreWeakCollectionNormalConstant(fn, instruction, kindMask)
+					: undefined;
+			if (normal !== undefined) {
+				folds.push({ instruction, normal });
+				continue;
+			}
 			const result = coreValueKindObservation(
 				program,
 				fn,
@@ -4340,6 +4362,11 @@ function discoverProgramValueKindObservations(
 			const root = (value: CoreValueId) => identity(functionId, value);
 			const folds = [...(foldsByCaller.get(functionId) ?? [])];
 			for (const instruction of instructions) {
+				const normal = coreWeakCollectionNormalConstant(fn, instruction, kindMask);
+				if (normal !== undefined) {
+					folds.push({ instruction, normal });
+					continue;
+				}
 				const result = coreValueKindObservation(
 					program,
 					fn,
@@ -5351,7 +5378,29 @@ export function runCoreCrossCallTransforms(
 			for (const fold of folds) {
 				const { instruction } = fold;
 				if (!fn.isInstructionLive(instruction)) continue;
-				if ("result" in fold) {
+				if ("normal" in fold) {
+					if (
+						fn.instructionOpcodeName(instruction) !== "callKnown" ||
+						fn.kernel.instructionResultCount(instruction) !== 1
+					)
+						continue;
+					const normal = fold.normal;
+					const output = fn.kernel.resultAt(
+						fn.kernel.instructionResultStart(instruction),
+					);
+					const constant = editor.insertInstruction(
+						fn.instructionBlock(instruction),
+						instruction,
+						normal.kind === "undefined" ? "createUndefined" : "createBoolean",
+						[],
+						{
+							attributes: normal.kind === "boolean" ? { value: normal.value } : {},
+							sourcePosition: fn.instructionSourcePosition(instruction),
+						},
+					);
+					editor.replaceValueUses(output, constant.outputs[0]!);
+					valueKindFolds++;
+				} else if ("result" in fold) {
 					editor.replaceInstruction(instruction, "createBoolean", [], {
 						attributes: { value: fold.result },
 						sourcePosition: fn.instructionSourcePosition(instruction),

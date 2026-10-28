@@ -118,8 +118,14 @@ Arithmetic work should support these paths or fix correctness defects.
       identity, preserving shadowed-method and cross-brand fallbacks.
       WeakMap and WeakSet now use the same brand transport and noncollecting
       get/has/delete kernels, including independent callee guards and wire tags.
-      Next, consume weak-key argument facts and cover weak mutators without
-      dropping invalid-key errors or their realm and GC obligations.
+      Primitive and omitted weak keys now constrain normal results through local
+      and complete caller bounds: undefined reads, false predicates and no normal
+      mutator result. Result folding retains receiver and argument effects;
+      invocation normalization preserves fixed keys before iterable tails.
+      Next, consume valid-key and symbol-registration facts in weak mutators,
+      keeping key errors and their realm and GC obligations. Extend the same
+      independent operand, callee and completion contracts to more object builtins
+      and callback-aware function calls; keep the bounded shared worklists.
       Broad native, sanitizer and self-hosted acceptance remains on CI.
       Follow up the conservative interpreted profiling GC failure from native
       remainder run `40752877684`; that fixture's wire and emitted C are identical

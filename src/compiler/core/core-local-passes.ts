@@ -74,6 +74,8 @@ import type {
 	CorePassBudget,
 } from "./core-pass.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
+import { coreWeakCollectionNormalConstant } from "./core-weak-collection-facts.ts";
+import type { CoreWeakCollectionNormalConstant } from "./core-weak-collection-facts.ts";
 
 const LOCAL_BUDGET: CorePassBudget = Object.freeze({
 	maxWorkItems: 2_000_000,
@@ -1338,10 +1340,13 @@ const foldValueKindObservations: CoreFunctionPass = {
 				CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
 			)).kindMask(value, block);
 		};
-		const replacements: Array<{
-			readonly instruction: CoreInstructionId;
-			readonly result: boolean;
-		}> = [];
+		const replacements: Array<
+			| { readonly instruction: CoreInstructionId; readonly result: boolean }
+			| {
+					readonly instruction: CoreInstructionId;
+					readonly normal: CoreWeakCollectionNormalConstant;
+			  }
+		> = [];
 		const integerRange = (value: CoreValueId, consumer: CoreInstructionId) =>
 			context
 				.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
@@ -1349,6 +1354,22 @@ const foldValueKindObservations: CoreFunctionPass = {
 			(valueKinds().exactScalar(value) === "int32" ? COMPILER_INT32_RANGE : undefined);
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
+			if (
+				fn.instructionOpcodeName(instruction) === "callKnown" &&
+				fn.kernel.instructionResultCount(instruction) === 1
+			) {
+				const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+				const normal =
+					fn.valueUseCount(output) + fn.kernel.valueHandlerUseCount(output) === 0
+						? undefined
+						: coreWeakCollectionNormalConstant(fn, instruction, (value) =>
+								kindMask(value, fn.instructionBlock(instruction)),
+							);
+				if (normal !== undefined) {
+					replacements.push({ instruction, normal });
+					continue;
+				}
+			}
 			const result = coreValueKindObservation(
 				program,
 				fn,
@@ -1365,9 +1386,26 @@ const foldValueKindObservations: CoreFunctionPass = {
 		}
 		if (replacements.length === 0) return undefined;
 		const editor = CoreEditor.open(program, item.function);
-		for (const { instruction, result } of replacements) {
+		for (const replacement of replacements) {
+			const { instruction } = replacement;
+			if ("normal" in replacement) {
+				const normal = replacement.normal;
+				const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+				const constant = editor.insertInstruction(
+					fn.instructionBlock(instruction),
+					instruction,
+					normal.kind === "undefined" ? "createUndefined" : "createBoolean",
+					[],
+					{
+						attributes: normal.kind === "boolean" ? { value: normal.value } : {},
+						sourcePosition: fn.instructionSourcePosition(instruction),
+					},
+				);
+				editor.replaceValueUses(output, constant.outputs[0]!);
+				continue;
+			}
 			editor.replaceInstruction(instruction, "createBoolean", [], {
-				attributes: { value: result },
+				attributes: { value: replacement.result },
 				sourcePosition: fn.instructionSourcePosition(instruction),
 			});
 		}

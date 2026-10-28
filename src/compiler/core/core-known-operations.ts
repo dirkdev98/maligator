@@ -282,9 +282,12 @@ export const resolveKnownOperations: CoreFunctionPass = {
 			const knownAdapter =
 				attributes !== undefined &&
 				attributes.construct !== true &&
-				attributes.argumentMode === undefined &&
 				typeof attributes.operation === "string" &&
-				invocationAdapters.has(attributes.operation)
+				invocationAdapters.has(attributes.operation) &&
+				(attributes.argumentMode === undefined ||
+					(attributes.operation === "Function.prototype.call" &&
+						attributes.argumentMode === "iterable" &&
+						args.length > 2))
 					? attributes.operation
 					: undefined;
 			if (
@@ -308,19 +311,28 @@ export const resolveKnownOperations: CoreFunctionPass = {
 					: opcode === "callSpreadIterable"
 						? [...args.slice(3), args[2]!]
 						: invocation.slice(1);
-				const directCall = opcode === "call" || knownAdapter !== undefined;
 				let argumentMode: KnownArgumentMode | undefined =
-					opcode === "callSpreadIterable"
+					opcode === "callSpreadIterable" ||
+					(knownAdapter !== undefined && attributes?.argumentMode === "iterable")
 						? "iterable"
 						: opcode.endsWith("Spread")
 							? "array"
 							: undefined;
-				if (directCall && target.operation === "Function.prototype.call") {
+				const directCall =
+					argumentMode === undefined && (opcode === "call" || knownAdapter !== undefined);
+				if (
+					target.operation === "Function.prototype.call" &&
+					(directCall ||
+						(argumentMode === "iterable" &&
+							arguments_.length > 1 &&
+							target.receiver === undefined &&
+							target.leading.length === 0))
+				) {
 					const invoked = invocationTarget(analysis, fn, invocation[0]!);
 					if (invoked !== undefined) {
 						target = invoked;
-						receiver = invocation[1] ?? undefinedArgument;
-						arguments_ = invocation.slice(2);
+						receiver = arguments_[0] ?? undefinedArgument;
+						arguments_ = arguments_.slice(1);
 					}
 				} else if (directCall && invocationAdapters.has(target.operation)) {
 					const reflect = target.operation.startsWith("Reflect.");

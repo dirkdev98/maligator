@@ -24,6 +24,33 @@ import {
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("known-operation dispatch", () => {
+	it.each(["Math.abs", "String.prototype.includes", "WeakMap.prototype.get"])(
+		"preserves a fixed receiver and an iterable tail when unwrapping %s.call",
+		(operation) => {
+			const output = inspectStaticValueFunction(
+				`function probe(receiver,key,tail){return ${operation}.call(receiver,key,...tail);}globalThis.probe=probe;`,
+				"probe",
+				{ realms: false },
+			);
+			expect(
+				output.fn.instructions.find(
+					(op) => op.opcode === "CALL_KNOWN" && op.operation === operation,
+				),
+			).toMatchObject({ argumentMode: "iterable", argumentCount: 2 });
+		},
+	);
+
+	it("keeps the call adapter when its receiver comes from the iterable", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(tail){return WeakMap.prototype.get.call(...tail);}globalThis.probe=probe;",
+			"probe",
+			{ realms: false },
+		);
+		expect(output.fn.instructions.find((op) => op.opcode === "CALL_KNOWN")).toMatchObject(
+			{ operation: "Function.prototype.call", argumentMode: "iterable" },
+		);
+	});
+
 	it("discards an unused primordial lookup inside an iterator-close handler", () => {
 		const output = inspectStaticValueFunction(
 			`function probe(records) {

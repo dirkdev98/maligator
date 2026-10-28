@@ -447,4 +447,135 @@ assert(
 	"weak callee changes across yield",
 );
 
+function weakPrimitiveGet(receiver, key, visit) {
+	const value = WeakMap.prototype.get.call(receiver, +key, visit());
+	return typeof value === "undefined" ? 17 : 11;
+}
+function weakPrimitivePredicates(map, set, input) {
+	const key = +input;
+	return WeakMap.prototype.has.call(map, key) ||
+		WeakMap.prototype.delete.call(map, key) ||
+		WeakSet.prototype.has.call(set, key) ||
+		WeakSet.prototype.delete.call(set, key)
+		? 11
+		: 17;
+}
+function weakSpreadGet(receiver, input, tail) {
+	return WeakMap.prototype.get.call(receiver, +input, ...tail) === undefined ? 17 : 11;
+}
+function weakOpaqueSpreadGet(tail) {
+	return WeakMap.prototype.get.call(...tail);
+}
+function weakListGet(receiver, list) {
+	return WeakMap.prototype.get.apply(receiver, list);
+}
+function weakPrimitiveSet(receiver, input) {
+	return WeakMap.prototype.set.call(receiver, +input, {}) === receiver;
+}
+Object.assign(globalThis, {
+	weakPrimitiveGet,
+	weakPrimitivePredicates,
+	weakSpreadGet,
+	weakOpaqueSpreadGet,
+	weakListGet,
+	weakPrimitiveSet,
+});
+const weakCallOrder = [];
+const primitiveWeakKey = {
+	valueOf() {
+		weakCallOrder.push("key");
+		return 1;
+	},
+};
+const visitWeakPrimitive = () => weakCallOrder.push("extra");
+assert(
+	weakPrimitiveGet(new WeakMap(), primitiveWeakKey, visitWeakPrimitive) === 17,
+	"weak primitive read has an undefined normal result",
+);
+assert(weakCallOrder.join(",") === "key,extra", "weak read retains argument effects");
+assert(
+	weakPrimitivePredicates(new WeakMap(), new WeakSet(), "1") === 17,
+	"weak primitive predicates have false normal results",
+);
+weakCallOrder.length = 0;
+try {
+	weakPrimitiveGet({}, primitiveWeakKey, visitWeakPrimitive);
+	throw new Error("missing weak primitive receiver error");
+} catch (error) {
+	assert(error instanceof TypeError, "weak primitive result retains receiver validation");
+}
+assert(
+	weakCallOrder.join(",") === "key,extra",
+	"weak receiver failure follows argument effects",
+);
+const weakArgumentError = {};
+let weakExtraCalls = 0;
+try {
+	weakPrimitiveGet(
+		{},
+		{
+			valueOf() {
+				throw weakArgumentError;
+			},
+		},
+		() => weakExtraCalls++,
+	);
+	throw new Error("missing weak key coercion error");
+} catch (error) {
+	assert(
+		error === weakArgumentError,
+		"weak key coercion error precedes receiver failure",
+	);
+}
+assert(weakExtraCalls === 0, "weak key failure skips later arguments");
+try {
+	weakPrimitiveGet({}, 1, () => {
+		throw weakArgumentError;
+	});
+	throw new Error("missing weak extra argument error");
+} catch (error) {
+	assert(
+		error === weakArgumentError,
+		"weak extra argument error precedes receiver failure",
+	);
+}
+
+const weakTail = {
+	*[Symbol.iterator]() {
+		weakCallOrder.push("tail");
+		yield 2;
+	},
+};
+weakCallOrder.length = 0;
+assert(
+	weakSpreadGet(new WeakMap(), primitiveWeakKey, weakTail) === 17,
+	"weak spread retains a fixed primitive key",
+);
+assert(weakCallOrder.join(",") === "key,tail", "weak spread consumes ignored arguments");
+try {
+	weakSpreadGet({}, 1, {
+		[Symbol.iterator]() {
+			throw weakArgumentError;
+		},
+	});
+	throw new Error("missing weak iterable argument error");
+} catch (error) {
+	assert(error === weakArgumentError, "weak iterable error precedes receiver failure");
+}
+const listWeakMap = new WeakMap([[weakKey, capturedWeakValue]]);
+assert(
+	weakOpaqueSpreadGet([listWeakMap, weakKey]) === capturedWeakValue,
+	"weak spread with an unknown receiver retains list elements",
+);
+assert(
+	weakListGet(listWeakMap, [weakKey]) === capturedWeakValue,
+	"weak array-like key retains a possible hit",
+);
+try {
+	weakPrimitiveSet(new WeakMap(), 1);
+	throw new Error("missing weak primitive mutator error");
+} catch (error) {
+	assert(error instanceof TypeError, "weak mutator without a normal result still throws");
+}
+
 console.log("exact-collection-receiver PASS");
