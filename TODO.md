@@ -104,8 +104,9 @@ coercion and exception order, publication and GC obligations in every entry mode
 Keep the sub-60-second AC self-compile target; leave broad acceptance to CI.
 Arithmetic work should support these paths or fix correctness defects.
 
-- [ ] Extend stable brands through returned record payloads and immutable global
-      collection slots, then cover remaining object and builtin receiver classes.
+- [ ] Extend stable brands through returned record payloads, immutable global
+      collection slots and private collection fields, then cover remaining object
+      and builtin receiver classes.
       Keep brands independent of publication, containment and mutable heap contents.
       Reuse the bounded normal-result worklist and retain loaded-callee guards.
       Ordinary and spread calls, constructors with receiver substitution, recursive
@@ -393,9 +394,11 @@ Arithmetic work should support these paths or fix correctness defects.
       margin for in-process native builds of the compiler.
       Keep the representative Node.js self-compile below 60 seconds on AC power;
       stable acceptance remains unverified. The latest clean uninstrumented sample
-      at `aa0964ac` took 63.21 seconds on verified AC power, after a 58.32-second
-      sample at `f7c57918`. Recover the budget before extending the analysis further;
-      these single cold samples do not establish the cause or repeated acceptance.
+      at `6dd2d4de` took 70.10 seconds on verified AC power, after 63.21 seconds
+      at `aa0964ac` and 58.32 seconds at `f7c57918`. Recover the budget before
+      extending the analysis further; these single cold samples do not establish
+      the cause or repeated acceptance. A diagnostic profile put return-brand
+      queries at about 0.25 seconds, so they do not explain the multi-second drift.
       Analysis extensions must stay bounded and reuse existing worklists. Leave
       long checks to CI and keep local verification to the affected units and
       quality checks. Transitive range queries share the existing 32-step budget.
