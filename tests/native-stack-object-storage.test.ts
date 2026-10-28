@@ -270,20 +270,30 @@ describe("native typed stack fields", () => {
 		},
 	);
 
-	it("keeps stable fields typed until a certified partial return materializes them", () => {
+	it("keeps final fields typed until immediate heap materialization", () => {
 		const image = compile(
 			"const o={x:-0,y:2,flag:true}; if(input){o.x=0/0;o.y=3;o.flag=false;} if(input)return o;return 0;",
 		);
 		const native = image.native.functions[1]!;
-		const entry = native.directEntries.find(
-			(candidate) => candidate.storage!.stackObjects.length > 0,
+		const allocation = native.body.instructions.find(
+			(op) => op.opcode === "CREATE_OBJECT_SHAPED",
 		)!;
+		if (allocation.opcode !== "CREATE_OBJECT_SHAPED")
+			throw new Error("Missing final shaped allocation");
+		const entry = native.directEntries.find(
+			(candidate) => candidate.storage!.directHeapObjectIps.length > 0,
+		)!;
+		expect(entry).toBeDefined();
 		expect(entry.resultRepresentation).toBe("boxed");
-		expect(entry.storage!.stackObjects[0]!.slotRepresentations).toEqual([
-			"number",
-			"int32",
-			"boolean",
-		]);
+		for (const representations of [
+			native.registerRepresentations,
+			entry.registerRepresentations,
+		])
+			expect(allocation.valueRegisters.map((value) => representations[value])).toEqual([
+				"number",
+				"int32",
+				"boolean",
+			]);
 		const region = native.specializations.find(
 			(candidate) => candidate.kind === "stack-object-plan",
 		)!;
@@ -295,10 +305,7 @@ describe("native typed stack fields", () => {
 		const output = emitted.directEntries.find(
 			(candidate) => candidate.id === entry.id && !candidate.leaf,
 		)!.source;
-		expect(output).toContain("mal_vm_materialize_stack_object_fields(vm,");
-		expect(output).toMatch(
-			/MalValue __stack_return_values_\d+\[3\] = \{ mal_ops_number_value\([^)]*\), mal_value_from_i32\(/,
-		);
+		expect(output).toContain("mal_vm_create_object_shaped(vm,");
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 	});
 
@@ -370,48 +377,55 @@ describe("native typed stack fields", () => {
 		},
 	);
 
-	it("allocates an immediately returned certificate directly on the heap in every native entry", () => {
-		const image = compile("return {numeric:input+1.5,payload:input,label:'ready'};");
-		const native = image.native.functions[1]!;
-		expect(native.directEntries.length).toBeGreaterThan(0);
-		const allocationIp = native.body.instructions.findIndex(
-			(op) => op.opcode === "CREATE_OBJECT_SHAPED",
-		);
-		expect(allocationIp).toBeGreaterThanOrEqual(0);
-		const allocation = native.body.instructions[allocationIp]!;
-		if (allocation.opcode !== "CREATE_OBJECT_SHAPED")
-			throw new Error("Missing shaped allocation");
-		for (const storage of [
-			native.storage!,
-			...native.directEntries.map((entry) => entry.storage!),
-		]) {
-			expect(storage.directHeapObjectIps).toEqual([allocationIp]);
-			expect(storage.stackObjects).toEqual([]);
-		}
-		const point = native.gc.safepoints.find(
-			(point) => point.instructionIp === allocationIp,
-		)!;
-		for (const register of allocation.valueRegisters)
-			if (["boxed", "string"].includes(native.registerRepresentations[register]!))
-				expect(point.incomingRootRegisters).toContain(register);
-		expect(point.outgoingRootRegisters).toContain(allocation.dst);
-		const emitted = emitCompiledFunction(native, native.functionIndex, "", false)!;
-		expect(emitted.directEntries.length).toBeGreaterThan(0);
-		for (const source of [
-			emitted.source,
-			...emitted.directEntries.map((entry) => entry.source),
-		]) {
-			expect(source).toContain("mal_vm_create_object_shaped(vm,");
-			expect(source).not.toContain("mal_object_init_embedded_stack(");
-			expect(source).not.toContain("mal_vm_materialize_stack_object");
-		}
-		expect(native.storage!.stackRoots).toBe("conservative");
-		expect(emitted.source).not.toContain("MalFrameDescriptor __gc_desc");
-		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
-	});
+	it.each([
+		"return {numeric:input+1.5,payload:input,label:'ready'};",
+		"const o={numeric:1.5,payload:input}; if(input)o.numeric=2; return o;",
+	])(
+		"allocates final return fields directly on the heap in every native entry: %s",
+		(body) => {
+			const image = compile(body);
+			const native = image.native.functions[1]!;
+			expect(native.directEntries.length).toBeGreaterThan(0);
+			const allocationIp = native.body.instructions.findIndex(
+				(op) => op.opcode === "CREATE_OBJECT_SHAPED",
+			);
+			expect(allocationIp).toBeGreaterThanOrEqual(0);
+			const allocation = native.body.instructions[allocationIp]!;
+			if (allocation.opcode !== "CREATE_OBJECT_SHAPED")
+				throw new Error("Missing shaped allocation");
+			for (const storage of [
+				native.storage!,
+				...native.directEntries.map((entry) => entry.storage!),
+			]) {
+				expect(storage.directHeapObjectIps).toEqual([allocationIp]);
+				expect(storage.stackObjects).toEqual([]);
+			}
+			const point = native.gc.safepoints.find(
+				(point) => point.instructionIp === allocationIp,
+			)!;
+			for (const register of allocation.valueRegisters)
+				if (["boxed", "string"].includes(native.registerRepresentations[register]!))
+					expect(point.incomingRootRegisters).toContain(register);
+			expect(point.outgoingRootRegisters).toContain(allocation.dst);
+			const emitted = emitCompiledFunction(native, native.functionIndex, "", false)!;
+			expect(emitted.directEntries.length).toBeGreaterThan(0);
+			for (const source of [
+				emitted.source,
+				...emitted.directEntries.map((entry) => entry.source),
+			]) {
+				expect(source).toContain("mal_vm_create_object_shaped(vm,");
+				expect(source).not.toContain("mal_object_init_embedded_stack(");
+				expect(source).not.toContain("mal_vm_materialize_stack_object");
+			}
+			expect(native.storage!.stackRoots).toBe("conservative");
+			expect(emitted.source).not.toContain("MalFrameDescriptor __gc_desc");
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
 
 	it.each([
-		"const o={numeric:1.5,payload:input}; if(input)o.numeric=2; return o;",
 		"const o={numeric:1.5,payload:input}; globalThis.consume(input); return o;",
 		"try {return {numeric:1.5,payload:input};} catch(error){return error;}",
 	])(
