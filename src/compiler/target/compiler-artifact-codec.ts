@@ -1,6 +1,9 @@
 import { coreRegionStrategy } from "../core/core-ir-region-strategies.ts";
 import { CORE_STRING_SPAN_RANGE_METHODS } from "../core/core-ir-regions.ts";
-import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
+import type {
+	CoreCollectionBuiltinOperation,
+	CorePropertyPlacement,
+} from "../core/core-ir-regions.ts";
 import type {
 	CompilerClassLayoutSite,
 	CompilerExactCollectionBrand,
@@ -110,7 +113,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 340;
+export const COMPILER_ARTIFACT_VERSION = 341;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -336,28 +339,31 @@ function taggedGuardedBuiltinOperation(operation: string | undefined): number {
 	return index + 1;
 }
 
-function guardedBuiltinCallBrandTag(
+function collectionReceiverFromTag(
 	tag: number,
 ): CompilerExactCollectionBrand | undefined {
-	const operation = TAGGED_GUARDED_BUILTIN_OPERATIONS[tag - 1];
-	if (operation?.startsWith("Map.prototype.")) return "Map";
-	if (operation?.startsWith("Set.prototype.")) return "Set";
-	return undefined;
+	return tag === 1 ? "Map" : tag === 2 ? "Set" : undefined;
+}
+
+function isCollectionOperation(
+	operation: unknown,
+): operation is CoreCollectionBuiltinOperation {
+	return (
+		operation === "Map.prototype.get" ||
+		operation === "Map.prototype.set" ||
+		operation === "Map.prototype.has" ||
+		operation === "Map.prototype.delete" ||
+		operation === "Set.prototype.add" ||
+		operation === "Set.prototype.has" ||
+		operation === "Set.prototype.delete"
+	);
 }
 
 function collectionOperationFromTag(
 	tag: number,
 ): Extract<VmRegion, { kind: "builtin-collection-call-chain" }>["operation"] {
 	const operation = TAGGED_GUARDED_BUILTIN_OPERATIONS[tag - 1];
-	if (
-		operation !== "Map.prototype.get" &&
-		operation !== "Map.prototype.set" &&
-		operation !== "Map.prototype.has" &&
-		operation !== "Map.prototype.delete" &&
-		operation !== "Set.prototype.add" &&
-		operation !== "Set.prototype.has" &&
-		operation !== "Set.prototype.delete"
-	) {
+	if (!isCollectionOperation(operation)) {
 		throw new RangeError("program-image-codec: invalid collection operation tag");
 	}
 	return operation;
@@ -2386,19 +2392,17 @@ function writeCompilerArtifact(
 				const guardedBuiltin = plan.guardedBuiltinCall;
 				const guardedOperation = guardedBuiltin?.operation;
 				const guardedDependency = guardedBuiltin?.guard.dependencies[0];
-				const exactCollectionOperation =
+				const receiverBrandTag =
 					plan.exactCollectionReceiver === "Map"
-						? guardedOperation === "Map.prototype.get" ||
-							guardedOperation === "Map.prototype.set" ||
-							guardedOperation === "Map.prototype.has" ||
-							guardedOperation === "Map.prototype.delete"
+						? 1
 						: plan.exactCollectionReceiver === "Set"
-							? guardedOperation === "Set.prototype.add" ||
-								guardedOperation === "Set.prototype.has" ||
-								guardedOperation === "Set.prototype.delete"
-							: true;
+							? 2
+							: 0;
+				const validCollectionReceiver =
+					plan.exactCollectionReceiver === undefined ||
+					(receiverBrandTag !== 0 && isCollectionOperation(guardedOperation));
 				if (
-					!exactCollectionOperation ||
+					!validCollectionReceiver ||
 					plan.directFunctionIndex !== instruction.exactFunctionIndex ||
 					!sameOptionalFunctionTargets(
 						guardedFunctionIndices,
@@ -2497,6 +2501,7 @@ function writeCompilerArtifact(
 						(plan.exactCollectionReceiver === undefined ? 0 : 128),
 				);
 				w.u8(taggedGuardedBuiltinOperation(guardedOperation));
+				if (receiverBrandTag !== 0) w.u8(receiverBrandTag);
 			} else if (plan.kind === "construct" && instruction.opcode === "CONSTRUCT") {
 				if (
 					!Number.isInteger(plan.directFunctionIndex) ||
@@ -5093,11 +5098,12 @@ function readCompilerArtifact(
 							};
 
 				const flags = r.u8();
-				const collectionTag = r.u8();
+				const operationTag = r.u8();
+				const receiverBrandTag = (flags & 128) === 0 ? 0 : r.u8();
 				const guardedBuiltinCount =
 					((flags & 2) !== 0 ? 1 : 0) +
 					((flags & 4) !== 0 ? 1 : 0) +
-					(collectionTag !== 0 ? 1 : 0);
+					(operationTag !== 0 ? 1 : 0);
 				if (
 					directFunctionIndex < -1 ||
 					directFunctionIndex >= functions.length ||
@@ -5123,12 +5129,15 @@ function readCompilerArtifact(
 					(flags & 24) !== 0 ||
 					((flags & 32) !== 0 && (flags & 4) === 0) ||
 					(directCallTargetFunctionIndex >= 0 && (flags & 1) === 0) ||
-					collectionTag > TAGGED_GUARDED_BUILTIN_OPERATIONS.length ||
+					operationTag > TAGGED_GUARDED_BUILTIN_OPERATIONS.length ||
 					guardedBuiltinCount > 1 ||
 					((flags & 64) !== 0 && guardedBuiltinCount !== 1) ||
 					((flags & 128) !== 0 &&
 						(guardedBuiltinCount !== 1 ||
-							guardedBuiltinCallBrandTag(collectionTag) === undefined)) ||
+							collectionReceiverFromTag(receiverBrandTag) === undefined ||
+							!isCollectionOperation(
+								TAGGED_GUARDED_BUILTIN_OPERATIONS[operationTag - 1],
+							))) ||
 					(directFunctionIndex < 0 ? undefined : directFunctionIndex) !==
 						instruction.exactFunctionIndex ||
 					!sameOptionalFunctionTargets(
@@ -5145,7 +5154,7 @@ function readCompilerArtifact(
 							? "Array.prototype.push"
 							: (flags & 4) !== 0
 								? "String.prototype.charCodeAt"
-								: TAGGED_GUARDED_BUILTIN_OPERATIONS[collectionTag - 1]!;
+								: TAGGED_GUARDED_BUILTIN_OPERATIONS[operationTag - 1]!;
 					guardedBuiltinCall = {
 						operation,
 						guard: {
@@ -5179,7 +5188,7 @@ function readCompilerArtifact(
 					...((flags & 128) === 0
 						? {}
 						: {
-								exactCollectionReceiver: guardedBuiltinCallBrandTag(collectionTag)!,
+								exactCollectionReceiver: collectionReceiverFromTag(receiverBrandTag)!,
 							}),
 					...(guardedBuiltinCall === undefined ? {} : { guardedBuiltinCall }),
 				};

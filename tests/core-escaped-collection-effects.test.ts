@@ -78,14 +78,19 @@ function storedReceiver(storage: "global" | "private", value: string, body: stri
 }
 
 describe("stored collection brands", () => {
-	it.each(["global", "private"] as const)(
-		"retains an independent callee guard for a %s Map through artifact transport",
-		(storage) => {
+	it.each([
+		["global", "Map", "get"],
+		["private", "Map", "get"],
+		["global", "Set", "has"],
+		["private", "Set", "has"],
+	] as const)(
+		"retains independent brand and callee facts for a %s %s.%s through artifact transport",
+		(storage, brand, method) => {
 			const out = inspectStaticValueFunction(
 				storedReceiver(
 					storage,
-					"new Map()",
-					"observe(collection);return collection.get(key);",
+					`new ${brand}()`,
+					`observe(collection);return collection.${method}(key);`,
 				),
 				"compute",
 				{ realms: false },
@@ -103,9 +108,9 @@ describe("stored collection brands", () => {
 					fn.instructions.find(
 						(plan) =>
 							plan?.kind === "call" &&
-							plan.guardedBuiltinCall?.operation === "Map.prototype.get",
+							plan.guardedBuiltinCall?.operation.endsWith(`.${method}`),
 					),
-				).toMatchObject({ kind: "call", exactCollectionReceiver: "Map" });
+				).toMatchObject({ kind: "call", exactCollectionReceiver: brand });
 			}
 		},
 	);
