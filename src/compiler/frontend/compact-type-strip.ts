@@ -14,7 +14,7 @@
  * can produce different output for source that already stripped successfully;
  * frontend, fragment, and test image caches key their stripped input on it.
  */
-export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v6";
+export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v7";
 
 /**
  * Erase types in place: every type span becomes spaces, so the result has the
@@ -1214,7 +1214,7 @@ function findArrowAfterParameters(
 		const char = source[i]!;
 		const topLevel = parentheses === 0 && brackets === 0 && braces === 0 && angles === 0;
 		if (topLevel && char === "=" && source[i + 1] === ">") return i;
-		if (topLevel && char === ";") return -1;
+		if (topLevel && ";,)}]".includes(char)) return -1;
 		if (char === "(") parentheses++;
 		else if (char === ")" && parentheses > 0) parentheses--;
 		else if (char === "[") brackets++;

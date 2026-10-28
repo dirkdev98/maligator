@@ -42,6 +42,18 @@ function strip(source: string, filePath = "fixture.ts"): string {
 }
 
 describe("stripCompactTypes", () => {
+	test.each([false, true])(
+		"keeps a method's return annotation separate from a following arrow with freeze=%s",
+		(freeze) => {
+			const members = `{ method(value: number): number { return value + 1; },
+			arrow: (value: number): { value: number } => ({ value }) }`;
+			const source = `const object=${freeze ? `Object.freeze(${members})` : members};
+			globalThis.stripResult=[object.method(2),object.arrow(4).value];`;
+			const stripped = strip(source);
+			expect(() => parseModule(stripped)).not.toThrow();
+			expect(runInNewContext(stripped)).toEqual([3, 4]);
+		},
+	);
 	test.each([
 		["function", "function choose", "{ return value + offset; }", "choose"],
 		[
