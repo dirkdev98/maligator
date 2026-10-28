@@ -13,6 +13,8 @@ import {
 	CORE_FUNCTION_HAS_BRANCHES,
 	CORE_FUNCTION_HAS_MEMORY_ACCESSES,
 } from "./core-function-features.ts";
+import { coreExactCollectionBrand } from "./core-heap-brands.ts";
+import type { CoreExactCollectionBrand } from "./core-heap-brands.ts";
 import {
 	CORE_CONTAINED_FIXED_TYPED_ARRAY_KIND_ATTRIBUTE,
 	CORE_CONTAINED_FIXED_TYPED_ARRAY_LENGTH_ATTRIBUTE,
@@ -57,10 +59,8 @@ import {
 import {
 	CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
 	coreCollectionReceiverBrandForOperation,
-	coreExactCollectionBrand,
 	coreExactCollectionBuiltinEffects,
 } from "./core-ir-value-classes.ts";
-import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import type {
@@ -444,8 +444,13 @@ function hasExactCollectionEffectConsumer(fn: CoreFunctionStore): boolean {
 			fn.instructionKind(instruction) !== "operation" ||
 			fn.instructionOpcodeName(instruction) !== "callKnown" ||
 			fn.instructionAttributes(instruction).construct ||
-			fn.instructionAttributes(instruction).argumentMode !== undefined ||
-			fn.instructionEffectRefinement(instruction) !== undefined
+			fn.instructionAttributes(instruction).argumentMode !== undefined
+		)
+			continue;
+		const refinement = fn.instructionEffectRefinement(instruction);
+		if (
+			refinement !== undefined &&
+			fn.fact(refinement.proof).kind !== CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT
 		)
 			continue;
 		const operation = fn.instructionAttributes(instruction).operation;
@@ -1129,19 +1134,20 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["callKnown"],
 	admission: {
-		predicate: "unrefined builtin call with a supported collection receiver brand",
+		predicate: "builtin call with a supported collection receiver brand",
 		hasOpportunity({ program, function: functionId }) {
 			return hasExactCollectionEffectConsumer(program.function(functionId));
 		},
 	},
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
-	wakesOn: ["body", "memoryEffects", "facts"],
+	wakesOn: ["body", "memoryEffects", "facts", "normalResults"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
 		const classes = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).valueClasses;
+		const withdrawn: Array<CoreInstructionId> = [];
 		const plans: Array<{
 			instruction: CoreInstructionId;
 			operation: string;
@@ -1151,10 +1157,15 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 		for (const instruction of fn.instructionIds()) {
 			if (
 				fn.instructionKind(instruction) !== "operation" ||
-				fn.instructionEffectRefinement(instruction) !== undefined ||
 				fn.instructionOpcodeName(instruction) !== "callKnown" ||
 				fn.instructionAttributes(instruction).construct ||
 				fn.instructionAttributes(instruction).argumentMode !== undefined
+			)
+				continue;
+			const prior = fn.instructionEffectRefinement(instruction);
+			if (
+				prior !== undefined &&
+				fn.fact(prior.proof).kind !== CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT
 			)
 				continue;
 			const operation = fn.instructionAttributes(instruction).operation;
@@ -1166,13 +1177,34 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 				receiver === undefined
 					? undefined
 					: coreExactCollectionBrand(classes.exactHeapBrand(receiver, instruction));
-			if (exact === undefined || exact !== expected) continue;
+			if (exact === undefined || exact !== expected) {
+				if (prior !== undefined) withdrawn.push(instruction);
+				continue;
+			}
 			const effects = coreExactCollectionBuiltinEffects(fn, instruction, exact);
 			if (effects === undefined) continue;
+			if (prior !== undefined) continue;
 			plans.push({ instruction, operation, exact, effects });
 		}
-		if (plans.length === 0) return undefined;
+		if (plans.length === 0 && withdrawn.length === 0) return undefined;
 		const editor = CoreEditor.open(program, item.function);
+		for (const instruction of withdrawn) {
+			const prior = fn.instructionEffectRefinement(instruction)!;
+			const attributes = { ...fn.instructionAttributes(instruction) };
+			delete attributes.specialized;
+			delete attributes[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE];
+			editor.clearInstructionEffectRefinement(instruction);
+			removeUnsharedProof(editor, fn, prior.proof);
+			editor.replaceInstruction(
+				instruction,
+				"callKnown",
+				materializeInstructionOperands(fn, instruction),
+				{
+					attributes,
+					sourcePosition: fn.instructionSourcePosition(instruction),
+				},
+			);
+		}
 		for (const { instruction, operation, exact, effects } of plans) {
 			const proof = editor.addFact({
 				kind: CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,

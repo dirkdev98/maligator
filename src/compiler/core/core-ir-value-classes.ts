@@ -1,12 +1,25 @@
-import type { CompilerNumericTypedArrayKind } from "../shared/compiler-instruction.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { coreGlobalSlotBrands } from "./core-global-slot-facts.ts";
 import {
+	coreExactHeapBrand,
+	coreNumericTypedArrayKind,
+	coreExactCollectionBrand,
+	joinCoreHeapBrands,
+} from "./core-heap-brands.ts";
+import type {
+	CoreExactHeapBrand,
+	CoreNumericTypedArrayKind,
+	CoreExactCollectionBrand,
+	CoreHeapBrandState,
+} from "./core-heap-brands.ts";
+import {
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
+	CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import { buildCoreControlFlow, coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import type { CoreLocalFactIndex } from "./core-ir-provenance.ts";
 import type {
@@ -25,39 +38,6 @@ import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 
 export const CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT =
 	"exact-collection-builtin-effects";
-
-export type CoreNumericTypedArrayKind = CompilerNumericTypedArrayKind;
-export type CoreExactCollectionBrand = "Map" | "Set";
-export type CoreExactHeapBrand =
-	| CoreNumericTypedArrayKind
-	| CoreExactCollectionBrand
-	| "Array";
-
-const NUMERIC_TYPED_ARRAY_KINDS: ReadonlySet<string> = new Set([
-	"Int8Array",
-	"Uint8Array",
-	"Uint8ClampedArray",
-	"Int16Array",
-	"Uint16Array",
-	"Int32Array",
-	"Uint32Array",
-	"Float32Array",
-	"Float64Array",
-]);
-
-export function coreNumericTypedArrayKind(
-	value: unknown,
-): CoreNumericTypedArrayKind | undefined {
-	return typeof value === "string" && NUMERIC_TYPED_ARRAY_KINDS.has(value)
-		? (value as CoreNumericTypedArrayKind)
-		: undefined;
-}
-
-export function coreExactCollectionBrand(
-	value: unknown,
-): CoreExactCollectionBrand | undefined {
-	return value === "Map" || value === "Set" ? value : undefined;
-}
 
 export function coreCollectionReceiverBrandForOperation(
 	operation: unknown,
@@ -113,6 +93,7 @@ export interface CoreValueClassAnalysis {
 		readonly containmentChecks: number;
 		readonly useVisits: number;
 	};
+	heapBrandState(value: CoreValueId): CoreHeapBrandState;
 	exactHeapBrand(
 		value: CoreValueId,
 		at?: CoreInstructionId,
@@ -199,6 +180,8 @@ export function analyzeCoreValueClasses(
 	options: {
 		readonly runOwner?: CoreOptimizationOwnerRunner;
 		readonly onContainment?: () => void;
+		readonly controlFlow?: CoreControlFlow;
+		readonly callResultBrand?: (instruction: CoreInstructionId) => CoreHeapBrandState;
 	} = {},
 ): CoreValueClassAnalysis {
 	const fn = program.function(functionId);
@@ -218,8 +201,12 @@ export function analyzeCoreValueClasses(
 	assertCurrent();
 	const roots =
 		canonicalRoots ??
-		coreCanonicalValueRoots(fn, buildCoreControlFlow(program, functionId));
+		coreCanonicalValueRoots(
+			fn,
+			options.controlFlow ?? buildCoreControlFlow(program, functionId),
+		);
 	const brands = new Map<CoreValueId, CoreExactHeapBrand>();
+	const entryBrands = new Map<CoreValueId, CoreExactHeapBrand>();
 	const typedArrayConstructs = new Map<CoreValueId, CoreInstructionId>();
 	const operations = [...fn.instructionIds()].filter(
 		(instruction) => fn.instructionKind(instruction) === "operation",
@@ -309,6 +296,18 @@ export function analyzeCoreValueClasses(
 		brands.set(roots.get(output) ?? output, brand);
 		seeded++;
 	}
+	if (options.callResultBrand === undefined) {
+		for (const instruction of operations) {
+			const brand = coreExactHeapBrand(
+				fn.instructionAttributes(instruction)[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE],
+			);
+			if (brand === undefined || fn.kernel.instructionResultCount(instruction) !== 1)
+				continue;
+			const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+			brands.set(roots.get(output) ?? output, brand);
+			seeded++;
+		}
+	}
 	// These attributes record a proven receiver brand; an element or call result is unrelated.
 	for (const instruction of operations) {
 		const attributes = fn.instructionAttributes(instruction);
@@ -318,7 +317,23 @@ export function analyzeCoreValueClasses(
 		if (brand === undefined || fn.kernel.instructionOperandCount(instruction) === 0)
 			continue;
 		const receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
-		brands.set(roots.get(receiver) ?? receiver, brand);
+		const receiverRoot = roots.get(receiver) ?? receiver;
+		if (options.callResultBrand !== undefined) continue;
+		if (
+			fn.kernel.valueDefinitionKind(receiver) === 0 &&
+			fn.kernel.valueDefinitionOwner(receiver) === fn.entry
+		) {
+			entryBrands.set(receiver, brand);
+			continue;
+		}
+		if (fn.kernel.valueDefinitionKind(receiverRoot) === 0) continue;
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(receiverRoot));
+		if (
+			fn.registry.byId(fn.instructionOpcode(definition)).callTransfer?.result ===
+			"call-completion"
+		)
+			continue;
+		brands.set(receiverRoot, brand);
 		seeded++;
 	}
 	let propagated: number | undefined;
@@ -389,6 +404,7 @@ export function analyzeCoreValueClasses(
 		return false;
 	};
 	const isContained = (valueRoot: CoreValueId, brand: CoreExactHeapBrand): boolean => {
+		if (!brands.has(valueRoot)) return false;
 		const cached = containment.get(valueRoot);
 		if (cached !== undefined) return cached;
 		const compute = () => {
@@ -423,10 +439,113 @@ export function analyzeCoreValueClasses(
 		containment.set(valueRoot, result);
 		return result;
 	};
-	const exactHeapBrand = (value: CoreValueId): CoreExactHeapBrand | undefined => {
+	let controlFlow = options.controlFlow;
+	const states = new Map<CoreValueId, CoreHeapBrandState>();
+	const heapBrandState = (value: CoreValueId): CoreHeapBrandState => {
 		assertCurrent();
-		return brands.get(roots.get(value) ?? value);
+		const root = (input: CoreValueId): CoreValueId =>
+			fn.kernel.valueDefinitionKind(input) === 0 &&
+			fn.kernel.valueDefinitionOwner(input) === fn.entry
+				? input
+				: (roots.get(input) ?? input);
+		const start = root(value);
+		if (states.has(start)) return states.get(start);
+		if (
+			fn.kernel.valueDefinitionKind(start) === 0 &&
+			fn.kernel.valueDefinitionOwner(start) === fn.entry
+		)
+			return entryBrands.get(start);
+		const declared = brands.get(start);
+		if (declared !== undefined) return declared;
+		if (
+			options.callResultBrand === undefined &&
+			fn.kernel.valueDefinitionKind(start) === 1 &&
+			fn.instructionOpcodeName(
+				coreInstructionId(fn.kernel.valueDefinitionOwner(start)),
+			) !== "move"
+		)
+			return undefined;
+		const dependencies = new Map<CoreValueId, ReadonlyArray<CoreValueId>>();
+		const users = new Map<CoreValueId, Array<CoreValueId>>();
+		const pending = [start];
+		while (pending.length > 0) {
+			const current = pending.pop()!;
+			if (states.has(current)) continue;
+			const kind = fn.kernel.valueDefinitionKind(current);
+			if (kind === 0 && fn.kernel.valueDefinitionOwner(current) === fn.entry) {
+				states.set(current, entryBrands.get(current));
+				continue;
+			}
+			const brand = brands.get(current);
+			if (brand !== undefined) {
+				states.set(current, brand);
+				continue;
+			}
+			let inputs: ReadonlyArray<CoreValueId> | undefined;
+			if (kind === 0) {
+				controlFlow ??= buildCoreControlFlow(program, functionId);
+				const block = coreBlockId(fn.kernel.valueDefinitionOwner(current));
+				const position = fn.kernel.valueDefinitionIndex(current);
+				const incoming = (controlFlow.predecessors[block] ?? []).filter((edge) =>
+					controlFlow!.reachable.has(edge.from),
+				);
+				if (
+					incoming.length > 0 &&
+					incoming.every(
+						(edge) => edge.kind === "ordinary" && edge.arguments[position] !== undefined,
+					)
+				)
+					inputs = incoming.map((edge) => root(edge.arguments[position]!));
+			} else if (kind === 1) {
+				const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(current));
+				if (fn.instructionOpcodeName(instruction) === "move")
+					inputs = [
+						root(fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))),
+					];
+				else if (
+					options.callResultBrand !== undefined &&
+					["call-completion", "construct-completion"].includes(
+						fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ??
+							"",
+					)
+				) {
+					states.set(current, options.callResultBrand(instruction));
+					continue;
+				}
+			}
+			if (inputs === undefined) {
+				states.set(current, undefined);
+				continue;
+			}
+			states.set(current, null);
+			dependencies.set(current, inputs);
+			for (const input of inputs) {
+				const uses = users.get(input) ?? [];
+				uses.push(current);
+				users.set(input, uses);
+				pending.push(input);
+			}
+		}
+		const queue = [...dependencies.keys()];
+		const queued = new Set(queue);
+		for (let cursor = 0; cursor < queue.length; cursor++) {
+			const current = queue[cursor]!;
+			queued.delete(current);
+			let next: CoreHeapBrandState = null;
+			for (const input of dependencies.get(current)!)
+				next = joinCoreHeapBrands(next, states.get(input));
+			if (next === states.get(current)) continue;
+			states.set(current, next);
+			for (const user of users.get(current) ?? []) {
+				if (queued.has(user)) continue;
+				queued.add(user);
+				queue.push(user);
+			}
+		}
+		return states.get(start);
 	};
+	const exactHeapBrand = (value: CoreValueId): CoreExactHeapBrand | undefined =>
+		heapBrandState(value) ?? undefined;
 	const result: CoreValueClassAnalysis = {
 		function: functionId,
 		statistics: Object.freeze({
@@ -449,6 +568,7 @@ export function analyzeCoreValueClasses(
 				return useVisits;
 			},
 		}),
+		heapBrandState,
 		exactHeapBrand,
 		exactNumericTypedArray(value) {
 			return coreNumericTypedArrayKind(exactHeapBrand(value));

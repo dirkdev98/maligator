@@ -1,7 +1,7 @@
 import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
-import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
+import type { CoreExactCollectionBrand } from "./core-heap-brands.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,

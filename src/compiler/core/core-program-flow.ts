@@ -6,6 +6,8 @@ import type {
 import { CORE_ANY_SCRIPT_AGGREGATE, updateCoreCallGraph } from "./core-call-graph.ts";
 import type { CoreCallGraph, CoreCallGraphNode } from "./core-call-graph.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { joinCoreHeapBrands } from "./core-heap-brands.ts";
+import type { CoreHeapBrandState } from "./core-heap-brands.ts";
 import type { CoreControlEdge, CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
@@ -102,6 +104,7 @@ export interface CoreProgramFlowValueKindSummary {
 	readonly receiverKind: number;
 	readonly returnKind: number;
 	readonly returnRecord?: CoreRecordValueKind;
+	readonly returnHeapBrand?: CoreHeapBrandState;
 }
 
 export interface CoreProgramFlowValueKindStatistics {
@@ -131,6 +134,7 @@ export interface CoreProgramFlowValueKinds<Analysis> {
  */
 export interface CoreProgramFlowValueKindAggregate {
 	readonly returnKind: number;
+	readonly returnHeapBrand?: CoreHeapBrandState;
 }
 
 export interface CoreProgramFlowValueKindState<
@@ -159,6 +163,10 @@ export interface CoreValueKindAlternatives {
 }
 
 export interface CoreProgramFlowValueKindInputs {
+	readonly context?: CoreCompilationContext;
+	readonly operationResultHeapBrand?: (
+		instruction: CoreInstructionId,
+	) => CoreHeapBrandState;
 	readonly demandedValues: ReadonlyArray<CoreValueId>;
 	readonly parameterMasks?: ReadonlyArray<number>;
 	readonly receiverMask?: number;
@@ -185,6 +193,7 @@ export interface CoreProgramFlowValueKindSemantics<Analysis> {
 		inputs: CoreProgramFlowValueKindInputs,
 	): Analysis;
 	latticeMask(analysis: Analysis, value: CoreValueId): number;
+	heapBrand(analysis: Analysis, value: CoreValueId): CoreHeapBrandState;
 	recordReads(
 		fn: CoreFunctionStore,
 		control: () => CoreControlFlow,
@@ -2148,6 +2157,7 @@ export class CoreProgramFlowEngine {
 		previous?: CoreProgramFlowValueKindState<Analysis, Targets>,
 		dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
 		externallyChangedFunctions?: ReadonlySet<CoreFunctionId>,
+		context?: CoreCompilationContext,
 	): CoreProgramFlowValueKindState<Analysis, Targets> {
 		const sameMasks = (
 			left: ReadonlyArray<number>,
@@ -2162,6 +2172,7 @@ export class CoreProgramFlowEngine {
 				parameterKinds: Object.freeze([...summary.parameterKinds]),
 				receiverKind: summary.receiverKind,
 				returnKind: summary.returnKind,
+				returnHeapBrand: summary.returnHeapBrand,
 				...(summary.returnRecord === undefined
 					? {}
 					: { returnRecord: summary.returnRecord }),
@@ -2211,6 +2222,7 @@ export class CoreProgramFlowEngine {
 				).fill(seed),
 				receiverKind: seed,
 				returnKind: 0,
+				returnHeapBrand: null,
 			};
 		};
 		const summaries = new Map<CoreFunctionId, CoreProgramFlowValueKindSummary>();
@@ -2371,14 +2383,23 @@ export class CoreProgramFlowEngine {
 					queued.delete(node);
 					if (node === CORE_ANY_SCRIPT_AGGREGATE) {
 						let returnKind = 0;
+						let returnHeapBrand: CoreHeapBrandState = null;
 						for (const summary of summaries.values()) {
 							aggregateFunctionVisits++;
 							returnKind |= summary.returnKind;
+							if (summary.returnKind !== 0)
+								returnHeapBrand = joinCoreHeapBrands(
+									returnHeapBrand,
+									summary.returnHeapBrand,
+								);
 						}
 						const prior = anyScriptAggregate;
 						aggregateRecomputations++;
-						anyScriptAggregate = Object.freeze({ returnKind });
-						if (prior?.returnKind !== returnKind) {
+						anyScriptAggregate = Object.freeze({ returnKind, returnHeapBrand });
+						if (
+							prior?.returnKind !== returnKind ||
+							prior?.returnHeapBrand !== returnHeapBrand
+						) {
 							for (const caller of targets.graph.wildcardCallers) {
 								wildcardReverseCallerVisits++;
 								enqueueNode(caller, true);
@@ -2487,6 +2508,36 @@ export class CoreProgramFlowEngine {
 						demands.set(functionId, demandedValues);
 					}
 					const values = semantics.analyze(this.#program, fn, cfg, {
+						context,
+						operationResultHeapBrand(instruction) {
+							const construct =
+								fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer
+									?.result === "construct-completion";
+							const site = byInstruction.get(instruction);
+							if (
+								site === undefined ||
+								site.targets.opaque ||
+								(site.targets.anyScript && !targets.sourceClosed)
+							)
+								return undefined;
+							if (site.targets.anyScript)
+								return anyScriptAggregate === undefined
+									? null
+									: anyScriptAggregate.returnHeapBrand;
+							if (site.targets.functions.length === 0) return undefined;
+							let brand: CoreHeapBrandState = null;
+							for (const callee of site.targets.functions) {
+								const returned = summaries.get(callee)!;
+								if (returned.returnKind !== 0)
+									brand = joinCoreHeapBrands(
+										brand,
+										construct && returned.returnKind !== semantics.object
+											? undefined
+											: returned.returnHeapBrand,
+									);
+							}
+							return brand;
+						},
 						demandedValues,
 						parameterMasks: summary.parameterKinds,
 						receiverMask: summary.receiverKind,
@@ -2545,6 +2596,7 @@ export class CoreProgramFlowEngine {
 					valueAnalyses.set(functionId, values);
 					functionsEvaluated++;
 					let returnKind = 0;
+					let returnHeapBrand: CoreHeapBrandState = null;
 					// A call to an async function or a generator returns its promise or iterator;
 					// the body's return value only settles or completes that object.
 					if (fn.isAsync || fn.isGenerator) returnKind = semantics.object;
@@ -2552,26 +2604,48 @@ export class CoreProgramFlowEngine {
 						for (const block of cfg.reachable) {
 							const terminator = fn.blockTerminator(block);
 							if (fn.instructionKind(terminator) === "return") {
+								const returned = fn.kernel.operandAt(
+									fn.kernel.instructionOperandStart(terminator),
+								);
+								const mask = semantics.latticeMask(values, returned);
+								if (mask !== 0)
+									returnHeapBrand = joinCoreHeapBrands(
+										returnHeapBrand,
+										mask === semantics.object
+											? semantics.heapBrand(values, returned)
+											: undefined,
+									);
 								returnKind |= semantics.latticeMask(
 									values,
 									fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
 								);
 							}
 						}
+					if (fn.isAsync || fn.isGenerator) returnHeapBrand = undefined;
 					const returnRecord =
 						returnKind === 0
 							? undefined
 							: semantics.returnRecord(this.#program, fn, cfg, values, recordResult);
 					if (
 						returnKind !== summary.returnKind ||
+						returnHeapBrand !== summary.returnHeapBrand ||
 						!sameCoreRecordValueKind(returnRecord, summary.returnRecord)
 					) {
-						summaries.set(functionId, { ...summary, returnKind, returnRecord });
+						summaries.set(functionId, {
+							...summary,
+							returnKind,
+							returnRecord,
+							returnHeapBrand,
+						});
 						for (const caller of targets.graph.exactCallers(functionId)) {
 							exactReverseCallerVisits++;
 							enqueueNode(caller, true);
 						}
-						if (returnKind !== summary.returnKind && targets.graph.hasAggregate()) {
+						if (
+							(returnKind !== summary.returnKind ||
+								returnHeapBrand !== summary.returnHeapBrand) &&
+							targets.graph.hasAggregate()
+						) {
 							enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, true);
 						}
 					}

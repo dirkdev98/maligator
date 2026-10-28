@@ -44,6 +44,33 @@ import {
 
 const OBSERVATION_OPERATORS = new Set(["typeof", "!", "===", "!=="]);
 
+it("revisits callers when a return brand changes without changing the Object kind", () => {
+	const program = analysisProgram();
+	const builder = new CoreFunctionBuilder(program);
+	const entry = builder.createBlock();
+	const [value] = builder.appendInstruction(entry, "createArray", []);
+	const instruction = builder.bodyInstructionIds(entry)[0]!;
+	builder.setTerminator(entry, { kind: "return", value: value! });
+	const leaf = builder.finish(entry).function;
+	const caller = appendCaller(program, leaf);
+	const manager = new CoreAnalysisManager(
+		program,
+		programAnalysisContext(),
+		new CoreOptimizationReportBuilder(program),
+	);
+	const before = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+		scope: "program",
+	}).kinds;
+	expect(before.summary(caller.function).returnHeapBrand).toBe("Array");
+	const edit = CoreEditor.open(program, leaf);
+	edit.replaceInstruction(instruction, "createObject", []);
+	edit.commit();
+	const after = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+	expect(after.summary(caller.function).returnKind).toBe(COMPILER_VALUE_KIND_OBJECT);
+	expect(after.summary(caller.function).returnHeapBrand).toBeUndefined();
+	expect(before.summary(caller.function).returnHeapBrand).toBe("Array");
+});
+
 it("solves newly consumed values without changing an older partial snapshot", () => {
 	const program = analysisProgram();
 	const builder = new CoreFunctionBuilder(program);

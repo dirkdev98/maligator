@@ -1,10 +1,8 @@
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import {
-	analyzeCoreValueClasses,
-	coreNumericTypedArrayKind,
-} from "./core-ir-value-classes.ts";
-import type { CoreExactHeapBrand } from "./core-ir-value-classes.ts";
+import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
+import type { CoreExactHeapBrand } from "./core-heap-brands.ts";
+import { analyzeCoreValueClasses } from "./core-ir-value-classes.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";

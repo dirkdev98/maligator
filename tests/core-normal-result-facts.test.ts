@@ -13,6 +13,7 @@ import { CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS } from "../src/compiler/core/core-i
 import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "../src/compiler/core/core-ir-provenance.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-ir-value-kinds.ts";
 import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
+import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
 import {
@@ -21,6 +22,7 @@ import {
 } from "../src/compiler/core/core-program-flow-analysis.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_TOP,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { COMPILER_INT32_RANGE } from "../src/compiler/shared/integer-range.ts";
@@ -57,6 +59,73 @@ function observedResult(kind: "call" | "field") {
 const bounded = { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 };
 
 describe("normal-result fact publication", () => {
+	it("withdraws receiver dispatch when a normal-result brand is withdrawn", () => {
+		const { program, fn, manager, report, instruction, value } = observedResult("call");
+		const block = fn.instructionBlock(instruction);
+		const edit = CoreEditor.open(program, fn.id);
+		edit.setNormalResultFacts(instruction, {
+			mask: COMPILER_VALUE_KIND_OBJECT,
+			heapBrand: "Map",
+		});
+		const has = edit.insertInstruction(
+			block,
+			fn.blockTerminator(block),
+			"callKnown",
+			[value],
+			{ attributes: { operation: "Map.prototype.has" } },
+		);
+		edit.replaceTerminator(block, { kind: "return", value: has.outputs[0]! });
+		edit.commit();
+		const scheduler = new CoreFunctionPassScheduler(
+			program,
+			programAnalysisContext(false),
+			manager,
+			report,
+			fn.id,
+		);
+		const passes = CORE_MEMORY_PASSES.filter(
+			(pass) => pass.name === "refine-exact-collection-accesses",
+		);
+		scheduler.runComponent("memory", passes);
+		expect(fn.instructionAttributes(has.instruction).specialized).toBe(
+			"Map.prototype.has",
+		);
+		const clear = CoreEditor.open(program, fn.id);
+		clear.setNormalResultFacts(instruction, { mask: COMPILER_VALUE_KIND_OBJECT });
+		scheduler.runComponent("memory", passes, [clear.commit()]);
+		expect(fn.instructionAttributes(has.instruction).specialized).toBeUndefined();
+		expect(
+			fn.instructionAttributes(has.instruction).exactCollectionReceiver,
+		).toBeUndefined();
+		expect(fn.instructionEffectRefinement(has.instruction)).toBeUndefined();
+	});
+
+	it("keeps brand publication independent of effect proofs and validates its kind", () => {
+		const { program, fn, instruction } = observedResult("call");
+		const edit = CoreEditor.open(program, fn.id);
+		expect(() =>
+			edit.setNormalResultFacts(instruction, {
+				mask: COMPILER_VALUE_KIND_NUMBER,
+				heapBrand: "Map",
+			}),
+		).toThrow("Invalid normal-result facts");
+		const proof = edit.addFact({
+			kind: "effect-only",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "effect-only" },
+			obligations: [],
+			origin: "test",
+		});
+		edit.setInstructionEffectRefinement(instruction, { effects: CORE_NO_EFFECTS, proof });
+		edit.setNormalResultFacts(instruction, {
+			mask: COMPILER_VALUE_KIND_OBJECT,
+			heapBrand: "Map",
+		});
+		edit.commit();
+		expect(fn.instructionEffectRefinement(instruction)?.proof).toBe(proof);
+	});
+
 	it("keeps an existing effect proof when publishing field bounds", () => {
 		const { program, fn, instruction } = observedResult("field");
 		const prove = CoreEditor.open(program, fn.id);

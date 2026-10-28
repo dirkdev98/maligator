@@ -104,12 +104,13 @@ coercion and exception order, publication and GC obligations in every entry mode
 Keep the sub-60-second AC self-compile target; leave broad acceptance to CI.
 Arithmetic work should support these paths or fix correctness defects.
 
-- [ ] Carry stable heap brands across normal returns from complete script callee
-      sets and compatible phi alternatives. Keep brand identity independent of
-      publication and containment; preserve mutable method/callee guards and heap
-      contents invalidation across callbacks. Reuse bounded interprocedural worklists
-      rather than adding a second whole-program solve. Then consume these brands in
-      receiver-sensitive builtin effects, direct calls and result storage.
+- [ ] Extend stable brands through returned record payloads and immutable global
+      collection slots, then cover remaining object and builtin receiver classes.
+      Keep brands independent of publication, containment and mutable heap contents.
+      Reuse the bounded normal-result worklist and retain loaded-callee guards.
+      Ordinary and spread calls, constructors with receiver substitution, recursive
+      returns and compatible phi alternatives now have normal-result brand transport;
+      broad native, sanitizer and self-hosted acceptance remains on CI.
 
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.

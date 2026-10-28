@@ -2,6 +2,7 @@ import { compilerNumberFastPathInputKind } from "../shared/compiler-value-kinds.
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import type { CoreExactCollectionBrand } from "./core-heap-brands.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
@@ -33,10 +34,7 @@ import type {
 	CorePlanIteratorCursorProtocol,
 } from "./core-ir-regions.ts";
 import { analyzeCoreValueClasses } from "./core-ir-value-classes.ts";
-import type {
-	CoreExactCollectionBrand,
-	CoreValueClassAnalysis,
-} from "./core-ir-value-classes.ts";
+import type { CoreValueClassAnalysis } from "./core-ir-value-classes.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	analyzeCoreValueKinds,

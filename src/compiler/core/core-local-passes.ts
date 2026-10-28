@@ -47,6 +47,7 @@ import {
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
+import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	coreValueKindObservation,
@@ -1310,6 +1311,7 @@ const foldValueKindObservations: CoreFunctionPass = {
 		CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 		CORE_LOOP_INDUCTION_ANALYSIS,
+		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 	],
 	wakesOn: [
 		"body",
@@ -1351,6 +1353,11 @@ const foldValueKindObservations: CoreFunctionPass = {
 				instruction,
 				(value) => kindMask(value, fn.instructionBlock(instruction)),
 				integerRange,
+				undefined,
+				(value) =>
+					context
+						.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS)
+						.valueClasses.exactHeapBrand(value),
 			);
 			if (result !== undefined) replacements.push({ instruction, result });
 		}

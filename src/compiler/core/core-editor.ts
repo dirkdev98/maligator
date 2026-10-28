@@ -1,15 +1,19 @@
 import {
 	compilerValueKindMaskIsValid,
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
 } from "../shared/compiler-value-kinds.ts";
 import {
 	compilerIntegerRangeIsValid,
 	compilerIntegerRangesEqual,
 } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import { coreExactHeapBrand } from "./core-heap-brands.ts";
+import type { CoreExactHeapBrand } from "./core-heap-brands.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
 	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
+	CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_KNOWN_OWN_DATA_ATTRIBUTE,
@@ -57,6 +61,7 @@ export interface CoreInsertedInstruction {
 export interface CoreNormalResultFacts {
 	readonly mask: number;
 	readonly integerRange?: CompilerIntegerRange;
+	readonly heapBrand?: CoreExactHeapBrand;
 }
 
 function arityAccepts(
@@ -659,8 +664,10 @@ export class CoreEditor {
 		if (opcode === "loadProperty" || opcode === "loadPropertyStatic")
 			key = CORE_RECORD_FIELD_KIND_ATTRIBUTE;
 		else if (
-			this.program.registry.byId(fn.instructionOpcode(instruction)).callTransfer
-				?.result === "call-completion"
+			["call-completion", "construct-completion"].includes(
+				this.program.registry.byId(fn.instructionOpcode(instruction)).callTransfer
+					?.result ?? "",
+			)
 		)
 			key = CORE_CALL_RESULT_KIND_ATTRIBUTE;
 		if (key === undefined)
@@ -670,13 +677,17 @@ export class CoreEditor {
 			(!compilerValueKindMaskIsValid(facts.mask) ||
 				(facts.integerRange !== undefined &&
 					(facts.mask !== COMPILER_VALUE_KIND_NUMBER ||
-						!compilerIntegerRangeIsValid(facts.integerRange))))
+						!compilerIntegerRangeIsValid(facts.integerRange))) ||
+				(facts.heapBrand !== undefined &&
+					(facts.mask !== COMPILER_VALUE_KIND_OBJECT ||
+						coreExactHeapBrand(facts.heapBrand) !== facts.heapBrand)))
 		)
 			throw new Error("Invalid normal-result facts");
 		const current = fn.instructionAttributes(instruction);
 		const range = current[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 		if (
 			current[key] === facts?.mask &&
+			current[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE] === facts?.heapBrand &&
 			(range === undefined || compilerIntegerRangeIsValid(range)) &&
 			compilerIntegerRangesEqual(range, facts?.integerRange)
 		)
@@ -684,6 +695,9 @@ export class CoreEditor {
 		const attributes: Record<string, CoreInstructionAttributes[string]> = { ...current };
 		if (facts === undefined) delete attributes[key];
 		else attributes[key] = facts.mask;
+		if (facts?.heapBrand === undefined)
+			delete attributes[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE];
+		else attributes[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE] = facts.heapBrand;
 		if (facts?.integerRange === undefined)
 			delete attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 		else

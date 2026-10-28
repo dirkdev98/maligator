@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeCoreGlobalSlotBrands } from "../src/compiler/core/core-global-slot-analysis.ts";
 import { installCoreGlobalSlotBrands } from "../src/compiler/core/core-global-slot-facts.ts";
-import type { CoreExactHeapBrand } from "../src/compiler/core/core-ir-value-classes.ts";
+import type { CoreExactHeapBrand } from "../src/compiler/core/core-heap-brands.ts";
 import { analyzeCoreValueClasses } from "../src/compiler/core/core-ir-value-classes.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { constructSemanticProgramCore } from "../src/compiler/pipeline/compile-core-common.ts";

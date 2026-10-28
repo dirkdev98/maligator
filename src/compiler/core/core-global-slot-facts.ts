@@ -1,4 +1,4 @@
-import type { CoreExactHeapBrand } from "./core-ir-value-classes.ts";
+import type { CoreExactHeapBrand } from "./core-heap-brands.ts";
 import type { CoreProgram } from "./core-store.ts";
 
 const installed = new WeakMap<CoreProgram, ReadonlyMap<number, CoreExactHeapBrand>>();

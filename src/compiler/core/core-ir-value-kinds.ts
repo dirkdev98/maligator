@@ -52,6 +52,8 @@ import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
+import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
+import type { CoreHeapBrandState, CoreExactHeapBrand } from "./core-heap-brands.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
@@ -69,7 +71,8 @@ import type {
 	CoreControlEdge,
 	CoreControlPoint,
 } from "./core-ir-control-flow.ts";
-import { coreNumericTypedArrayKind } from "./core-ir-value-classes.ts";
+import { analyzeCoreValueClasses } from "./core-ir-value-classes.ts";
+import type { CoreValueClassAnalysis } from "./core-ir-value-classes.ts";
 import type {
 	CoreFunctionId,
 	CoreBlockId,
@@ -1545,6 +1548,7 @@ export interface CoreProgramFunctionValueKinds extends Pick<
 	CoreValueKindAnalysis,
 	"kindMask"
 > {
+	heapBrand(value: CoreValueId): CoreHeapBrandState;
 	latticeMask(
 		this: void,
 		value: CoreValueId,
@@ -1599,7 +1603,27 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 				return masks[value]!;
 			};
 			let conditional: CoreConditionalValueKinds | undefined;
+			let classes: CoreValueClassAnalysis | undefined;
 			return Object.freeze({
+				heapBrand(value: CoreValueId): CoreHeapBrandState {
+					if (fn.kernel.valueDefinitionKind(value) === 1) {
+						const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+						const opcode = fn.instructionOpcodeName(instruction);
+						if (opcode.startsWith("create") && opcode !== "createArray") return undefined;
+					}
+					return (classes ??= analyzeCoreValueClasses(
+						program,
+						fn.id,
+						inputs.context,
+						undefined,
+						undefined,
+						undefined,
+						{
+							controlFlow: cfg,
+							callResultBrand: inputs.operationResultHeapBrand,
+						},
+					)).heapBrandState(value);
+				},
 				kindMask: (value: CoreValueId) => mask(value) || COMPILER_VALUE_KIND_TOP,
 				latticeMask(value: CoreValueId, point?: CoreControlPoint) {
 					const kind = mask(value);
@@ -1616,6 +1640,9 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 		},
 		latticeMask(analysis: CoreProgramFunctionValueKinds, value: CoreValueId) {
 			return analysis.latticeMask(value);
+		},
+		heapBrand(analysis: CoreProgramFunctionValueKinds, value: CoreValueId) {
+			return analysis.heapBrand(value);
 		},
 		recordReads(fn: CoreFunctionStore, control: () => CoreControlFlow) {
 			return coreRecordFieldReads(fn, control);
@@ -1856,6 +1883,7 @@ export function coreValueKindObservation(
 		consumer: CoreInstructionId,
 	) => CompilerIntegerRange | undefined,
 	identity?: (value: CoreValueId) => CoreValueId,
+	heapBrand?: (value: CoreValueId) => CoreExactHeapBrand | undefined,
 ): boolean | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
@@ -1920,6 +1948,13 @@ export function coreValueKindObservation(
 			attributes.operation === "JSON.isRawJSON"
 		) {
 			const input = operand(1);
+			const brand = input === undefined ? undefined : heapBrand?.(input);
+			if (brand !== undefined) {
+				if (attributes.operation === "Array.isArray") return brand === "Array";
+				if (attributes.operation === "ArrayBuffer.isView")
+					return coreNumericTypedArrayKind(brand) !== undefined;
+				return false;
+			}
 			const mask = input === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(input);
 			return compilerValueKindMaskIsSubset(
 				mask,

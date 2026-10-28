@@ -8,7 +8,10 @@ import {
 } from "../shared/compiler-instruction.ts";
 import type { ProbeReadKind } from "../shared/compiler-instruction.ts";
 import { compilerValueKindMaskIsValid } from "../shared/compiler-value-kinds.ts";
-import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
+} from "../shared/compiler-value-kinds.ts";
 import { effectSummaryCovers } from "../shared/effect-summary.ts";
 import { compilerIntegerRangeIsValid } from "../shared/integer-range.ts";
 import { isKnownBuiltinError } from "../shared/known-builtin-errors.ts";
@@ -18,10 +21,12 @@ import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { primordialNodeAvailable } from "../shared/primordial-catalog.ts";
 import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { coreExactHeapBrand } from "./core-heap-brands.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
+	CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE,
 	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
 	CORE_KNOWN_OWN_DATA_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
@@ -415,7 +420,9 @@ function verifyInstructionRows(
 			const callKind = attributes[CORE_CALL_RESULT_KIND_ATTRIBUTE];
 			if (
 				callKind !== undefined &&
-				(descriptor.callTransfer?.result !== "call-completion" ||
+				(!["call-completion", "construct-completion"].includes(
+					descriptor.callTransfer?.result ?? "",
+				) ||
 					resultCount !== 1 ||
 					typeof callKind !== "number" ||
 					!compilerValueKindMaskIsValid(callKind))
@@ -432,6 +439,13 @@ function verifyInstructionRows(
 			)
 				fail("Invalid record field kind proof");
 			const resultRange = attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
+			const resultBrand = attributes[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE];
+			if (
+				resultBrand !== undefined &&
+				((callKind ?? fieldKind) !== COMPILER_VALUE_KIND_OBJECT ||
+					coreExactHeapBrand(resultBrand) !== resultBrand)
+			)
+				fail("Invalid normal result heap brand proof");
 			if (
 				resultRange !== undefined &&
 				((callKind ?? fieldKind) !== COMPILER_VALUE_KIND_NUMBER ||

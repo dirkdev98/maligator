@@ -168,4 +168,99 @@ if (typeof collect === "function") {
 	);
 }
 
+const makeReturnedMap = function makeReturnedMap(visit, choose) {
+	for (let i = 0; i < 3; i++) visit();
+	return choose ? new Map() : new Map();
+};
+const makeReturnedArray = function makeReturnedArray(visit, choose) {
+	for (let i = 0; i < 3; i++) visit();
+	return choose ? [] : [];
+};
+function readReturnedMap(visit, key, choose) {
+	const value = choose
+		? makeReturnedMap(visit, choose)
+		: makeReturnedMap(...[visit, choose]);
+	visit(value);
+	return Map.prototype.get.call(value, key);
+}
+function checkReturnedArray(visit, choose) {
+	const value = makeReturnedArray(visit, choose);
+	visit(value);
+	return Array.isArray(value);
+}
+function* suspendedReturnedMap(visit, key) {
+	const value = makeReturnedMap(visit, true);
+	yield value;
+	return Map.prototype.get.call(value, key);
+}
+Object.assign(globalThis, { readReturnedMap, checkReturnedArray, suspendedReturnedMap });
+const returnedPayload = { value: "factory" };
+const constructedReturnedMap = new makeReturnedMap(() => {}, true);
+assert(
+	Map.prototype.has.call(constructedReturnedMap, escapedKey) === false,
+	"constructor preserves an explicit normal Map return",
+);
+const publishReturned = (value) => {
+	if (value === undefined) return;
+	Object.setPrototypeOf(value, null);
+	Map.prototype.set.call(value, escapedKey, returnedPayload);
+	value.get = () => "shadow";
+	if (typeof collect === "function") collect();
+};
+for (const choose of [false, true]) {
+	assert(
+		readReturnedMap(publishReturned, escapedKey, choose) === returnedPayload,
+		"normal Map returns retain brand after publication",
+	);
+	assert(
+		checkReturnedArray((value) => {
+			if (value !== undefined) Object.setPrototypeOf(value, null);
+			if (typeof collect === "function") collect();
+		}, choose),
+		"normal Array return keeps brand after prototype mutation",
+	);
+}
+const suspended = suspendedReturnedMap(() => {}, escapedKey);
+const suspendedMap = suspended.next().value;
+Map.prototype.set.call(suspendedMap, escapedKey, returnedPayload);
+if (typeof collect === "function") collect();
+assert(
+	suspended.next().value === returnedPayload,
+	"normal Map return retains brand and observes mutations across suspension",
+);
+try {
+	readReturnedMap(
+		() => {
+			throw returnedPayload;
+		},
+		escapedKey,
+		true,
+	);
+	throw new Error("factory callback exception was lost");
+} catch (error) {
+	assert(error === returnedPayload, "normal brand does not suppress factory exceptions");
+}
+const ReturnedConstructor = function ReturnedConstructor(visit, choose) {
+	for (let i = 0; i < 3; i++) visit();
+	return choose ? new Map() : 7;
+};
+function constructReturned(visit, choose) {
+	const value = new ReturnedConstructor(visit, choose);
+	return Map.prototype.has.call(value, escapedKey);
+}
+globalThis.__mal_construct_returned = constructReturned;
+assert(
+	constructReturned(() => {}, true) === false,
+	"constructor returns its explicit Map",
+);
+try {
+	constructReturned(() => {}, false);
+	throw new Error("constructor substitution lost receiver validation");
+} catch (error) {
+	assert(
+		error instanceof TypeError,
+		"primitive constructor return substitutes its ordinary receiver",
+	);
+}
+
 console.log("exact-collection-receiver PASS");

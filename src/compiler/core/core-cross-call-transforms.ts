@@ -42,6 +42,8 @@ import {
 	expandCoreFunctionIndexCall,
 	expandCoreFunctionPrototypeCall,
 } from "./core-function-prototype-call.ts";
+import { joinCoreHeapBrands } from "./core-heap-brands.ts";
+import type { CoreHeapBrandState } from "./core-heap-brands.ts";
 import {
 	coreInstanceMethodHint,
 	coreInstanceMethodHints,
@@ -52,6 +54,7 @@ import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
+	CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE,
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
 	CORE_KNOWN_OWN_DATA_ATTRIBUTE,
 	coreUnscopedInstructionAttributes,
@@ -4466,20 +4469,24 @@ function discoverProgramNormalResultFacts(
 		};
 		for (const site of flow.targets.outgoing(functionId)) {
 			const { instruction, targets } = site;
+			const completion = fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer
+				?.result;
 			if (
-				fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result !==
-					"call-completion" ||
+				(completion !== "call-completion" && completion !== "construct-completion") ||
 				targets.opaque ||
 				(targets.anyScript && !flow.targets.sourceClosed) ||
 				fn.kernel.instructionResultCount(instruction) !== 1
 			)
 				continue;
-			const mask = targets.anyScript
-				? (readValueKinds().anyScriptAggregate?.returnKind ?? 0)
-				: targets.functions.reduce(
-						(mask, target) => mask | projectedMask(target, site),
-						0,
-					);
+			const mask =
+				completion === "construct-completion"
+					? COMPILER_VALUE_KIND_OBJECT
+					: targets.anyScript
+						? (readValueKinds().anyScriptAggregate?.returnKind ?? 0)
+						: targets.functions.reduce(
+								(mask, target) => mask | projectedMask(target, site),
+								0,
+							);
 			if (!compilerValueKindMaskIsValid(mask)) continue;
 			let sites = pending.get(functionId);
 			if (sites === undefined) pending.set(functionId, (sites = []));
@@ -4786,6 +4793,23 @@ function discoverProgramNormalResultFacts(
 		let query: CoreIntegerRangeQuery | undefined;
 		for (const { site, mask } of calls) {
 			const instruction = site.instruction;
+			let heapBrand: CoreHeapBrandState = null;
+			if (mask === COMPILER_VALUE_KIND_OBJECT && site.targets.anyScript)
+				heapBrand = readValueKinds().anyScriptAggregate?.returnHeapBrand;
+			else if (mask === COMPILER_VALUE_KIND_OBJECT) {
+				for (const target of site.targets.functions) {
+					const returned = readValueKinds().summary(target);
+					if (returned.returnKind !== 0)
+						heapBrand = joinCoreHeapBrands(
+							heapBrand,
+							fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
+								"construct-completion" &&
+								returned.returnKind !== COMPILER_VALUE_KIND_OBJECT
+								? undefined
+								: returned.returnHeapBrand,
+						);
+				}
+			}
 			const integerRange =
 				mask === COMPILER_VALUE_KIND_NUMBER
 					? (callRange(site, (query ??= queryFunction(functionId))) ?? undefined)
@@ -4794,6 +4818,8 @@ function discoverProgramNormalResultFacts(
 				fn.instructionAttributes(instruction)[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 			if (
 				fn.instructionAttributes(instruction)[CORE_CALL_RESULT_KIND_ATTRIBUTE] === mask &&
+				fn.instructionAttributes(instruction)[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE] ===
+					(heapBrand ?? undefined) &&
 				compilerIntegerRangesEqual(
 					compilerIntegerRangeIsValid(currentRange) ? currentRange : undefined,
 					integerRange,
@@ -4805,6 +4831,7 @@ function discoverProgramNormalResultFacts(
 			calls.push({
 				instruction,
 				mask,
+				...(heapBrand === null || heapBrand === undefined ? {} : { heapBrand }),
 				...(integerRange === undefined
 					? {}
 					: { integerRange: Object.freeze(integerRange) }),
@@ -5005,6 +5032,18 @@ function discoverProgramCallResultIdentities(
 							})
 							.range(value, fn.instructionBlock(instruction))
 					: undefined);
+			const heapBrand =
+				fact?.heapBrand ?? attributes[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE];
+			if (
+				heapBrand !== undefined &&
+				analyses
+					.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, {
+						scope: "function",
+						function: functionId,
+					})
+					.valueClasses.exactHeapBrand(root) !== heapBrand
+			)
+				continue;
 			if (compilerIntegerRangeIsValid(bound)) {
 				const range = analyses
 					.get(CORE_LOOP_INDUCTION_ANALYSIS, { scope: "function", function: functionId })
@@ -5389,8 +5428,10 @@ export function runCoreCrossCallTransforms(
 				const { instruction } = fact;
 				if (!fn.isInstructionLive(instruction)) continue;
 				if (
-					fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result !==
-					"call-completion"
+					!["call-completion", "construct-completion"].includes(
+						fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ??
+							"",
+					)
 				)
 					continue;
 				editor.setNormalResultFacts(instruction, fact);

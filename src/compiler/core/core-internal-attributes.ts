@@ -18,6 +18,7 @@ export const CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE = "exactScalarAfterTdz";
 export const CORE_STATIC_SELECTION_FALLBACK_ATTRIBUTE = "staticSelectionFallback";
 export const CORE_CALL_RESULT_KIND_ATTRIBUTE = "callResultKindMask";
 export const CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE = "normalResultIntegerRange";
+export const CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE = "normalResultHeapBrand";
 export const CORE_RECORD_FIELD_KIND_ATTRIBUTE = "recordFieldKindMask";
 export const CORE_KNOWN_OWN_DATA_ATTRIBUTE = "knownOwnData";
 export const CORE_KNOWN_OWN_SLOT_ATTRIBUTE = "knownOwnSlot";

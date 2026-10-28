@@ -1,6 +1,6 @@
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import type { CoreNumericTypedArrayKind } from "./core-ir-value-classes.ts";
+import type { CoreNumericTypedArrayKind } from "./core-heap-brands.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreModulePrivateNames } from "./core-private-names.ts";

@@ -5,16 +5,14 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
 	coreTerminatorInput,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
-import {
-	analyzeCoreValueClasses,
-	coreNumericTypedArrayKind,
-} from "./core-ir-value-classes.ts";
+import { analyzeCoreValueClasses } from "./core-ir-value-classes.ts";
 import type { CoreValueClassAnalysis } from "./core-ir-value-classes.ts";
 import { CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS } from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";

@@ -152,7 +152,7 @@ export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgra
 		functionDependencies: CORE_PROGRAM_FLOW_ANALYSIS.functionDependencies,
 		programDependencies: CORE_PROGRAM_FLOW_ANALYSIS.programDependencies,
 		contextIdentity: CORE_PROGRAM_FLOW_ANALYSIS.contextIdentity,
-		compute({ program, request, previous, get, programFlow }) {
+		compute({ program, context, request, previous, get, programFlow }) {
 			const prior = previous as CoreProgramValueKindAnalysis | undefined;
 			const { targets, summaries, flowRevision } = get(
 				CORE_PROGRAM_FLOW_ANALYSIS,
@@ -197,6 +197,7 @@ export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgra
 							prior?.kinds,
 							unjournaledInvalidation ? undefined : [...dirty],
 							externallyChanged,
+							context,
 						);
 			return Object.freeze({ flowRevision, kinds });
 		},
