@@ -449,10 +449,7 @@ describe("normal-return record field kinds", () => {
 			"if(flag)record.value=2;else record.value='text';",
 			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
 		],
-		[
-			"record['value']=!!replacement;",
-			COMPILER_VALUE_KIND_BOOLEAN,
-		],
+		["record['value']=!!replacement;", COMPILER_VALUE_KIND_BOOLEAN],
 		[
 			"if(flag)record['value']=!!replacement;",
 			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
