@@ -44,6 +44,8 @@ import {
 	compilerIntegerRangeIsValid,
 	compilerIntegerRangeComparison,
 } from "../shared/integer-range.ts";
+import { validateStaticQueryTemplate } from "../shared/literal-template-data.ts";
+import { STATIC_DATA_QUERY_POLL_INTERVAL } from "../shared/static-data-query.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { coreBuiltinResultProjection } from "./core-builtin-result-projections.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
@@ -93,7 +95,13 @@ import {
 import { coreExactArrayFromCallResult } from "./core-static-values.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
-export const CORE_PRIMITIVE_OPERATOR_EFFECT_FACT = "primitive-operator-effects";
+export const CORE_PRIMITIVE_EFFECT_FACT = "primitive-effects";
+
+// Static queries can poll internally even when their key conversion cannot throw or reenter.
+const STATIC_OWN_KEY_EFFECTS: CoreInstructionEffects = Object.freeze({
+	...NO_EFFECT_SUMMARY,
+	mayGc: true,
+});
 
 export type CoreExactScalarKind = "int32" | "number" | "boolean" | "string";
 export type CoreExactCallArgumentRepresentation = "boxed" | CoreExactScalarKind;
@@ -2021,7 +2029,7 @@ export function coreExactOperatorInputKindMasks(
 	if (refinement === undefined) return undefined;
 	const fact = fn.fact(refinement.proof);
 	const masks = fact.value;
-	return fact.kind === CORE_PRIMITIVE_OPERATOR_EFFECT_FACT &&
+	return fact.kind === CORE_PRIMITIVE_EFFECT_FACT &&
 		Array.isArray(masks) &&
 		masks.every((mask) => compilerValueKindMaskIsValid(mask, { allowTop: true })) &&
 		compilerOperatorInputKindsHaveExactNativeSemantics(
@@ -2033,12 +2041,42 @@ export function coreExactOperatorInputKindMasks(
 		: undefined;
 }
 
-export function corePrimitiveOperatorEffectRefinement(
+export function corePrimitiveEffectRefinement(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 	masks: ReadonlyArray<CompilerValueKindMask>,
 ): CoreInstructionEffects | undefined {
 	const opcode = fn.instructionOpcodeName(instruction);
+	if (
+		opcode === "queryStaticData" &&
+		fn.instructionAttributes(instruction).queryKind === "has-own" &&
+		masks.length === 2 &&
+		compilerValueKindMaskIsSubset(
+			masks[0]!,
+			COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL,
+		)
+	) {
+		const offset = fn.instructionAttributes(instruction).templateOffset;
+		if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0)
+			return undefined;
+		const count = program.literalTemplateData[offset + 1];
+		if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)
+			return undefined;
+		if (count >= STATIC_DATA_QUERY_POLL_INTERVAL) return STATIC_OWN_KEY_EFFECTS;
+		const template = validateStaticQueryTemplate(
+			program.literalTemplateData,
+			offset,
+			"has-own",
+		);
+		if (
+			template.stringReferences.some(
+				({ index }) => index >= program.stringConstants.length,
+			)
+		)
+			return undefined;
+		return NO_EFFECT_SUMMARY;
+	}
 	if (
 		opcode === "deleteProperty" &&
 		masks.length === 2 &&

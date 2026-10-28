@@ -1264,6 +1264,22 @@ export function nativeInstructionEffects(
 		};
 	}
 	switch (instruction.opcode) {
+		case "QUERY_STATIC_DATA":
+			// Long queries retain the helper's internal poll and its completion check.
+			return mask === undefined
+				? nativeStaticPropertyEffects.miss
+				: {
+						...nativeStaticPropertyEffects.miss,
+						allocation: (mask & INSTRUCTION_MAY_GC) !== 0,
+						collection: (mask & INSTRUCTION_MAY_GC) !== 0,
+						throwing: (mask & (INSTRUCTION_MAY_THROW | INSTRUCTION_MAY_GC)) !== 0,
+						reentry:
+							(mask & (INSTRUCTION_CALLS_USER_CODE | INSTRUCTION_MAY_SUSPEND)) !== 0,
+						invalidation:
+							(mask & INSTRUCTION_CALLS_USER_CODE) !== 0 ||
+							((mask >>> EFFECT_DOMAINS.length) & ((1 << EFFECT_DOMAINS.length) - 1)) !==
+								0,
+					};
 		case "CALL_KNOWN":
 			return !instruction.construct &&
 				instruction.argumentMode === undefined &&

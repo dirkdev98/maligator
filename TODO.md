@@ -202,6 +202,11 @@ The independent target boundary and current storage contract are recorded in
       SSA aliases and stable identities; repeated fresh allocation sites and
       uncertain registry keys retain their fallbacks. Cell transport clears
       producer-local SSA discriminators before rebinding the proof in its reader.
+      Static own-key tables now refine String/Symbol key effects independently
+      of collection: validated short tables omit GC and throw work, while tables
+      reaching the runtime polling interval retain rooted completion checks.
+      Unused short queries disappear without dropping key evaluation. Coercing
+      keys keep user-code, mutation, throw and collection effects.
 - [ ] Give record entries typed fields. Program value-kind flow now carries initial
       own-field kind summaries through exact call chains, finite callee sets,
       recursive forwarding, spread/rest and constructor completions. Field-only
@@ -267,8 +272,11 @@ The independent target boundary and current storage contract are recorded in
       accessors. A producer resets only its own allocation lifetime, including on
       backedges; later effects do not withdraw an earlier read. Writer/source
       correlations within the surviving prefix remain conservative.
-      Typed producer storage for remaining writes,
-      broader parameter-relative call effects and coroutine record transport remain.
+      Remaining object work includes caller-side writer branch bounds and
+      writer/source correlations, typed producer storage for remaining writes,
+      writable own-data proofs for materialized stores, broader parameter-relative
+      call effects and coroutine record transport. Record-call admission and
+      profitability are owned by the following tasks.
       Activation-local field storage now joins per-instruction kinds and integer
       bounds from all initializers and certified writers, including branch-local
       proofs through boxed registers. Scalar fields omit shadow slots; String and
@@ -310,6 +318,10 @@ The independent target boundary and current storage contract are recorded in
       the compiler itself peaks near 1.6 GB of live heap while its Core, execution,
       native, and image forms coexist; Node 24's default 2 GB heap leaves little
       margin for in-process native builds of the compiler.
+      Keep the representative Node.js self-compile below 60 seconds on AC power;
+      stable acceptance remains unverified. Analysis extensions must stay bounded
+      and reuse existing worklists. Leave long checks to CI and keep local
+      verification to the affected units and quality checks.
 
 - [ ] Spread one split native function over several translation units. Outlining
       functions past 256 Ki into 128 Ki parts cut the self-compile `-O2` unit wall time

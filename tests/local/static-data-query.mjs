@@ -23,6 +23,49 @@ function includes(value, from) {
 function own(key) {
 	return { 0: 1, a: [1, { b: false }], undefined: 2 }.hasOwnProperty(key);
 }
+function preparedOwnKey(input, observe) {
+	const key = observe(input) + ":";
+	({ "a:": 1, "b:": 2 }).hasOwnProperty(key);
+	return { "a:": 1, "b:": 2 }.propertyIsEnumerable(key);
+}
+let preparedCalls = 0;
+const preparedValue = {
+	toString() {
+		preparedCalls++;
+		return "a";
+	},
+};
+if (!preparedOwnKey(preparedValue, (value) => value) || preparedCalls !== 1)
+	throw new Error("prepared own-key evaluation changed");
+const preparedFailure = {};
+let preparedClosed = 0;
+let preparedCaught = false;
+function* preparedInputs() {
+	try {
+		yield 0;
+	} finally {
+		preparedClosed++;
+	}
+}
+try {
+	for (const input of preparedInputs())
+		preparedOwnKey(input, () => {
+			throw preparedFailure;
+		});
+} catch (error) {
+	if (error !== preparedFailure) throw error;
+	preparedCaught = true;
+}
+if (!preparedCaught || preparedClosed !== 1)
+	throw new Error("prepared own-key throw lost iterator close");
+function* suspendedOwnKey(input) {
+	const key = input + ":";
+	yield key;
+	return { "a:": 1 }.hasOwnProperty(key);
+}
+const suspendedKey = suspendedOwnKey("a");
+if (suspendedKey.next().value !== "a:" || suspendedKey.next().value !== true)
+	throw new Error("suspended own-key query changed");
 for (const value of ["foo", "missing", undefined, NaN, 0, 5n, {}, Symbol()]) {
 	for (const from of [undefined, -Infinity, Infinity, -4, -0, 2.9, "1", null])
 		console.log(includes(value, from));

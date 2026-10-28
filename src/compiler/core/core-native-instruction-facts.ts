@@ -20,7 +20,7 @@ import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
-	corePrimitiveOperatorEffectRefinement,
+	corePrimitiveEffectRefinement,
 	coreInstructionResultIntegerRange,
 	coreInstructionLengthIntegerRange,
 	coreIntegerPreservedResultInput,
@@ -55,7 +55,7 @@ export interface CoreInstructionFactPlan {
 
 const kindProofs = new WeakMap<
 	CoreInstructionFactPlan,
-	{ fn: CoreFunctionStore; versions: CoreFunctionVersions }
+	{ fn: CoreFunctionStore; versions: CoreFunctionVersions; dataVersion: number }
 >();
 
 export function coreInstructionFactProofIsCurrent(
@@ -65,6 +65,7 @@ export function coreInstructionFactProofIsCurrent(
 	const proof = kindProofs.get(plan);
 	return (
 		proof?.fn === program.function(plan.function) &&
+		proof.dataVersion === program.versions.data &&
 		coreFunctionVersionsAreCurrent(proof.fn, proof.versions)
 	);
 }
@@ -81,7 +82,7 @@ export function coreInstructionFactPlans(
 			scope: "function",
 			function: functionId,
 		});
-		const proof = { fn, versions: fn.versions };
+		const proof = { fn, versions: fn.versions, dataVersion: program.versions.data };
 		let conditional: CoreConditionalValueKinds | undefined;
 		const inputKinds: CoreConditionalValueKinds = {
 			kindMask(value, block) {
@@ -359,7 +360,7 @@ export function coreInstructionFacts(
 			fn.instructionKind(instruction) === "operation"
 				? encodeInstructionEffects(
 						(refineEffects
-							? corePrimitiveOperatorEffectRefinement(fn, instruction, masks)
+							? corePrimitiveEffectRefinement(program, fn, instruction, masks)
 							: undefined) ?? coreInstructionEffects(fn, instruction),
 					)
 				: fn.instructionKind(instruction) === "throw"

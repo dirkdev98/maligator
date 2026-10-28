@@ -19,6 +19,10 @@ import {
 	analyzeCoreValueKinds,
 } from "../src/compiler/core/core-ir-value-kinds.ts";
 import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
+import {
+	coreInstructionFactPlans,
+	coreInstructionFactProofIsCurrent,
+} from "../src/compiler/core/core-native-instruction-facts.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
 import { CORE_PROOF_PASSES } from "../src/compiler/core/core-proof-passes.ts";
@@ -58,6 +62,68 @@ const context: CoreCompilationContext = {
 };
 
 describe("Core local proofs and representations", () => {
+	it("revalidates static-query effects when its table or prepared key changes", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [[97]],
+			literalTemplateData: [8, 1, 5, 0],
+		});
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [key] = builder.appendInstruction(entry, "createString", [], {
+			attributes: { stringIndex: 0 },
+		});
+		const [from] = builder.appendInstruction(entry, "createUndefined", []);
+		const [result] = builder.appendInstruction(entry, "queryStaticData", [key!, from!], {
+			attributes: { templateOffset: 0, queryKind: "has-own" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const fn = program.function(builder.finish(entry).function);
+		const query = inspectCoreValueDefinition(fn, result!);
+		const prepared = inspectCoreValueDefinition(fn, key!);
+		if (query.kind !== "instruction" || prepared.kind !== "instruction")
+			throw new Error("Missing query inputs");
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, context, report);
+		const run = () =>
+			new CoreFunctionPassScheduler(
+				program,
+				context,
+				analyses,
+				report,
+				fn.id,
+			).runComponent(
+				"proofs",
+				CORE_PROOF_PASSES.filter(({ name }) => name === "primitive-effect-refinement"),
+			);
+		run();
+		const refinement = fn.instructionEffectRefinement(query.instruction);
+		expect(refinement?.effects).toEqual(CORE_NO_EFFECTS);
+		const [plan] = coreInstructionFactPlans(program, analyses, [fn.id]);
+		expect(coreInstructionFactProofIsCurrent(program, plan!)).toBe(true);
+		CoreEditor.configureProgram(program, {
+			stringConstants: [[97]],
+			literalTemplateData: [
+				8,
+				1024,
+				...Array.from({ length: 1024 }, () => [5, 0]).flat(),
+			],
+		});
+		expect(coreInstructionFactProofIsCurrent(program, plan!)).toBe(false);
+		run();
+		expect(fn.instructionEffectRefinement(query.instruction)?.effects).toEqual({
+			...CORE_NO_EFFECTS,
+			mayGc: true,
+		});
+		const editor = CoreEditor.open(program, fn.id);
+		editor.replaceInstruction(prepared.instruction, "loadArgument", [], {
+			attributes: { index: 0 },
+		});
+		editor.commit();
+		run();
+		expect(fn.instructionEffectRefinement(query.instruction)).toBeUndefined();
+		expect(fn.isFactLive(refinement!.proof)).toBe(false);
+	});
+
 	it("keeps numeric loop proofs stable when their catch predecessor becomes unreachable", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
@@ -694,7 +760,7 @@ describe("Core local proofs and representations", () => {
 		expect(refinement).toBeDefined();
 		expect(fn.fact(refinement!.proof)).toMatchObject({
 			id: refinement!.proof,
-			kind: "primitive-operator-effects",
+			kind: "primitive-effects",
 			claims: [{ kind: "effect", instruction: sumDefinition.instruction }],
 		});
 		expect(fn.valueRepresentation(one!)).toBe("i32");
@@ -930,12 +996,12 @@ describe("Core local proofs and representations", () => {
 			{ attributes: { operator: "===" }, outputRepresentations: ["boolean"] },
 		);
 		const proof = builder.addFact({
-			kind: "primitive-operator-effects",
+			kind: "primitive-effects",
 			value: [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_TOP],
 			claims: [],
 			validity: {
 				kind: "summary",
-				digest: `primitive-operator:binary:${COMPILER_VALUE_KIND_TOP},${COMPILER_VALUE_KIND_TOP}`,
+				digest: `primitive:binary:${COMPILER_VALUE_KIND_TOP},${COMPILER_VALUE_KIND_TOP}`,
 			},
 			obligations: [],
 			origin: "test-primitive-kinds",
@@ -966,7 +1032,7 @@ describe("Core local proofs and representations", () => {
 		).runComponent("proofs", CORE_PROOF_PASSES);
 		expect(fn.instructionEffectRefinement(definition.instruction)?.proof).toBe(proof);
 		expect(fn.fact(proof)).toMatchObject({
-			kind: "primitive-operator-effects",
+			kind: "primitive-effects",
 			value: [COMPILER_VALUE_KIND_BOOLEAN, COMPILER_VALUE_KIND_TOP],
 			claims: [{ kind: "effect", instruction: definition.instruction }],
 		});
@@ -1077,9 +1143,7 @@ describe("Core local proofs and representations", () => {
 			),
 		).toHaveLength(1);
 		expect(
-			[...fn.factIds()].some(
-				(fact) => fn.fact(fact).kind === "primitive-operator-effects",
-			),
+			[...fn.factIds()].some((fact) => fn.fact(fact).kind === "primitive-effects"),
 		).toBe(true);
 	});
 

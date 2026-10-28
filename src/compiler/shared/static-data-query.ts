@@ -1,3 +1,6 @@
+// Must match MAL_STATIC_DATA_QUERY_POLL_INTERVAL in runtime/src/vm_ops.h.
+export const STATIC_DATA_QUERY_POLL_INTERVAL = 1024;
+
 export const staticDataQueryKinds = [
 	"includes",
 	"has-own",

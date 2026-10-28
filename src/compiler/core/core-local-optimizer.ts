@@ -329,7 +329,8 @@ export class CoreLocalRuleRegistry {
 				descriptor.discardable ||
 				descriptor.allocation !== undefined ||
 				descriptor.opcode === "unary" ||
-				descriptor.opcode === "callKnown"
+				descriptor.opcode === "callKnown" ||
+				descriptor.opcode === "queryStaticData"
 			) {
 				this.dispatch[descriptor.id] =
 					(this.dispatch[descriptor.id] ?? 0) | DEAD_CODE_RULE;
@@ -926,7 +927,10 @@ export class CoreLocalOptimizer {
 			if (descriptor.allocation !== undefined) {
 				// Payload lifetimes need the memory pass's weak-reference proof.
 				if (this.#fn.kernel.instructionOperandCount(instruction) !== 0) return false;
-			} else if (descriptor.opcode === "callKnown") {
+			} else if (
+				descriptor.opcode === "callKnown" ||
+				descriptor.opcode === "queryStaticData"
+			) {
 				const effects = coreInstructionEffects(this.#fn, instruction);
 				if (
 					effects.reads.length > 0 ||

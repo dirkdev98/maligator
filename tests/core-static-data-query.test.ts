@@ -1,16 +1,27 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { corePrimitiveEffectRefinement } from "../src/compiler/core/core-ir-value-kinds.ts";
 import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
 import { coreStaticDataQueryPlan } from "../src/compiler/core/core-static-data-query.ts";
 import { CoreStaticValueAnalysis } from "../src/compiler/core/core-static-values.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import {
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_UNDEFINED,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import { NO_EFFECT_SUMMARY } from "../src/compiler/shared/effect-summary.ts";
+import { decodeInstructionEffects } from "../src/compiler/shared/instruction-facts.ts";
+import { STATIC_DATA_QUERY_POLL_INTERVAL } from "../src/compiler/shared/static-data-query.ts";
+import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { nativeInstructionEffects } from "../src/compiler/target/program-image.ts";
 import { validateRuntimeImageMetadata } from "../src/compiler/target/runtime-image.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
@@ -23,6 +34,108 @@ function inspect(body: string) {
 }
 
 describe("static-data query representation", () => {
+	it("keeps the compiler's query poll bound aligned with the runtime ABI", () => {
+		const header = readFileSync(
+			new URL("../runtime/src/vm_ops.h", import.meta.url),
+			"utf8",
+		);
+		expect(header).toMatch(
+			new RegExp(
+				`#define MAL_STATIC_DATA_QUERY_POLL_INTERVAL ${STATIC_DATA_QUERY_POLL_INTERVAL}u`,
+			),
+		);
+	});
+
+	it.each([STATIC_DATA_QUERY_POLL_INTERVAL - 1, STATIC_DATA_QUERY_POLL_INTERVAL])(
+		"retains collection only when a %s-key table can reach an internal poll",
+		(count) => {
+			const program = new CoreProgram(coreOpcodeRegistry, {
+				stringConstants: [[120]],
+				literalTemplateData: [
+					8,
+					count,
+					...Array.from({ length: count }, () => [5, 0]).flat(),
+				],
+			});
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock([{}]);
+			const key = builder.blockParameterValue(entry, 0);
+			const [from] = builder.appendInstruction(entry, "createUndefined", []);
+			const [result] = builder.appendInstruction(entry, "queryStaticData", [key, from!], {
+				attributes: { templateOffset: 0, queryKind: "has-own" },
+			});
+			builder.setTerminator(entry, { kind: "return", value: result! });
+			const fn = program.function(builder.finish(entry).function);
+			const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(result!));
+			for (const keyKind of [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_SYMBOL])
+				expect(
+					corePrimitiveEffectRefinement(program, fn, instruction, [
+						keyKind,
+						COMPILER_VALUE_KIND_UNDEFINED,
+					]),
+				).toEqual({
+					...NO_EFFECT_SUMMARY,
+					mayGc: count >= STATIC_DATA_QUERY_POLL_INTERVAL,
+				});
+		},
+	);
+
+	it.each(["function", "function*", "async function", "async function*"])(
+		"removes unused noncoercing own-key queries from a %s body while preserving key evaluation",
+		(declaration) => {
+			const out = inspectStaticValueFunction(
+				`${declaration} probe(input,observe){const key=observe(input)+':';({a:1,b:2}).hasOwnProperty(key);return key;}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(
+				out.fn.instructions.some(({ opcode }) => opcode === "QUERY_STATIC_DATA"),
+			).toBe(false);
+			expect(out.fn.instructions.filter(({ opcode }) => opcode === "CALL")).toHaveLength(
+				1,
+			);
+		},
+	);
+
+	it("carries a live short String-key query's effects into C and artifact round trips", () => {
+		const out = inspect("return ({a:1,b:2}).hasOwnProperty(x+':');");
+		const ip = out.fn.instructions.findIndex(
+			({ opcode }) => opcode === "QUERY_STATIC_DATA",
+		);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		expect(decodeInstructionEffects(out.native.facts![ip]!.effectMask!)).toEqual(
+			NO_EFFECT_SUMMARY,
+		);
+		expect(
+			nativeInstructionEffects(out.fn.instructions[ip]!, out.native.facts![ip]),
+		).toEqual({
+			allocation: false,
+			collection: false,
+			throwing: false,
+			reentry: false,
+			invalidation: false,
+		});
+		expect(out.c.source).not.toMatch(/mal_vm_query_static_data[^\n]*\n\s*if \(MAL_THREW/);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it("retains unused own-key queries whose key can invoke user coercion", () => {
+		const out = inspect("({a:1}).hasOwnProperty(x);return 7;");
+		const ip = out.fn.instructions.findIndex(
+			({ opcode }) => opcode === "QUERY_STATIC_DATA",
+		);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		expect(
+			nativeInstructionEffects(out.fn.instructions[ip]!, out.native.facts![ip]),
+		).toMatchObject({
+			collection: true,
+			throwing: true,
+			reentry: true,
+			invalidation: true,
+		});
+	});
+
 	it.each(["indexOf", "lastIndexOf"])(
 		"compares dynamic elements directly for a short %s receiver",
 		(method) => {

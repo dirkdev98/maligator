@@ -73,7 +73,7 @@ import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import {
-	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
+	CORE_PRIMITIVE_EFFECT_FACT,
 	coreValueKindDemand,
 	coreInstructionResultIntegerRange,
 	coreValueKindObservation,
@@ -758,12 +758,14 @@ function inlineTarget(
 			const refinement = fn.instructionEffectRefinement(instruction);
 			if (refinement !== undefined) {
 				const fact = fn.fact(refinement.proof);
-				// Generic operators remain valid while the caller reproves their effects.
+				// Primitive operations remain valid while the caller reproves their effects.
 				if (
 					fact.obligations.length !== 0 ||
 					!(
-						((opcode === "unary" || opcode === "binary") &&
-							fact.kind === CORE_PRIMITIVE_OPERATOR_EFFECT_FACT) ||
+						((opcode === "unary" ||
+							opcode === "binary" ||
+							opcode === "queryStaticData") &&
+							fact.kind === CORE_PRIMITIVE_EFFECT_FACT) ||
 						(opcode === "loadPropertyStatic" &&
 							fact.kind === RETURNED_RECORD_OWN_DATA_FACT)
 					)

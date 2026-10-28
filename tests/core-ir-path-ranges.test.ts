@@ -38,12 +38,12 @@ interface BoundedFunction {
 
 function primitiveNumberProof(builder: CoreFunctionBuilder) {
 	return builder.addFact({
-		kind: "primitive-operator-effects",
+		kind: "primitive-effects",
 		value: [COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_NUMBER],
 		claims: [],
 		validity: {
 			kind: "summary",
-			digest: `primitive-operator:binary:${COMPILER_VALUE_KIND_NUMBER},${COMPILER_VALUE_KIND_NUMBER}`,
+			digest: `primitive:binary:${COMPILER_VALUE_KIND_NUMBER},${COMPILER_VALUE_KIND_NUMBER}`,
 		},
 		obligations: [],
 		origin: "bounded-numeric-inputs",

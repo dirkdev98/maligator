@@ -1,6 +1,6 @@
 import { CoreEditor } from "./core-editor.ts";
 import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
-import { CORE_PRIMITIVE_OPERATOR_EFFECT_FACT } from "./core-ir-value-kinds.ts";
+import { CORE_PRIMITIVE_EFFECT_FACT } from "./core-ir-value-kinds.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,
@@ -11,7 +11,7 @@ import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 /**
  * Whether `cloneCoreFunction` can copy `fn`. Facts belong to their function, so
- * only primitive operator effects, which the clone's own passes reprove, may be
+ * only primitive effects, which the clone's own passes reprove, may be
  * dropped; guards and every other refinement keep the original unique.
  */
 export function coreFunctionIsCloneable(fn: CoreFunctionStore): boolean {
@@ -25,8 +25,8 @@ export function coreFunctionIsCloneable(fn: CoreFunctionStore): boolean {
 		const opcode = fn.instructionOpcodeName(instruction);
 		const fact = fn.fact(refinement.proof);
 		if (
-			(opcode !== "unary" && opcode !== "binary") ||
-			fact.kind !== CORE_PRIMITIVE_OPERATOR_EFFECT_FACT ||
+			(opcode !== "unary" && opcode !== "binary" && opcode !== "queryStaticData") ||
+			fact.kind !== CORE_PRIMITIVE_EFFECT_FACT ||
 			fact.obligations.length !== 0
 		)
 			return false;

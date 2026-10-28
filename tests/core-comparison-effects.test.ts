@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
-import { corePrimitiveOperatorEffectRefinement } from "../src/compiler/core/core-ir-value-kinds.ts";
+import { corePrimitiveEffectRefinement } from "../src/compiler/core/core-ir-value-kinds.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import {
 	COMPILER_VALUE_KIND_BIGINT as BIGINT,
@@ -53,7 +53,7 @@ it.each([
 		const fn = program.function(builder.finish(entry).function);
 		const definition = inspectCoreValueDefinition(fn, result!);
 		if (definition.kind !== "instruction") throw new Error("Missing comparison");
-		const effects = corePrimitiveOperatorEffectRefinement(fn, definition.instruction, [
+		const effects = corePrimitiveEffectRefinement(program, fn, definition.instruction, [
 			leftKind,
 			rightKind,
 		]);

@@ -25,8 +25,8 @@ import { CORE_CALL_EFFECT_SUMMARY_FACT } from "./core-ir-summaries.ts";
 import { CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT } from "./core-ir-value-classes.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
-	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
-	corePrimitiveOperatorEffectRefinement,
+	CORE_PRIMITIVE_EFFECT_FACT,
+	corePrimitiveEffectRefinement,
 	coreExactOperatorInputKindMasks,
 } from "./core-ir-value-kinds.ts";
 import type {
@@ -54,7 +54,7 @@ const CORE_REPROVED_FACT_KINDS: ReadonlySet<string> = new Set([
 	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
 	CORE_OWN_DATA_CELL_FACT,
 	CORE_CALL_EFFECT_SUMMARY_FACT,
-	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
+	CORE_PRIMITIVE_EFFECT_FACT,
 	CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT,
 	CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
 	SCALAR_BUILTIN_EFFECT_FACT,
@@ -655,21 +655,22 @@ const refineScalarBuiltinEffects: CoreFunctionPass = {
 const refinePrimitiveEffects: CoreFunctionPass = {
 	name: "primitive-effect-refinement",
 	stage: "proofs",
-	requiredFunctionOpcodesAny: ["unary", "binary"],
+	requiredFunctionOpcodesAny: ["unary", "binary", "queryStaticData"],
 	admission: {
-		predicate: "unary or binary operation whose primitive kinds can refine effects",
+		predicate: "operator or static query whose primitive kinds can refine effects",
 		hasOpportunity({ program, function: functionId }) {
 			const fn = program.function(functionId);
 			for (const instruction of fn.instructionIds()) {
 				if (fn.instructionKind(instruction) !== "operation") continue;
 				const opcode = fn.instructionOpcodeName(instruction);
-				if (opcode === "unary" || opcode === "binary") return true;
+				if (opcode === "unary" || opcode === "binary" || opcode === "queryStaticData")
+					return true;
 			}
 			return false;
 		},
 	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "facts", "representations"],
+	wakesOn: ["body", "facts", "representations", "data"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: PROOF_BUDGET,
 	run(context) {
@@ -686,19 +687,20 @@ const refinePrimitiveEffects: CoreFunctionPass = {
 			)
 				continue;
 			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode !== "unary" && opcode !== "binary") continue;
+			if (opcode !== "unary" && opcode !== "binary" && opcode !== "queryStaticData")
+				continue;
 			const operandStart = fn.kernel.instructionOperandStart(instruction);
 			const operandCount = fn.kernel.instructionOperandCount(instruction);
 			const masks: Array<number> = [];
 			for (let index = 0; index < operandCount; index++)
 				masks.push(kinds.kindMask(fn.kernel.operandAt(operandStart + index)));
-			const effects = corePrimitiveOperatorEffectRefinement(fn, instruction, masks);
+			const effects = corePrimitiveEffectRefinement(program, fn, instruction, masks);
 			const baseline = fn.registry.byId(fn.instructionOpcode(instruction)).effects;
 			const existing = fn.instructionEffectRefinement(instruction);
 			if (effects === undefined || effectSummariesEqual(effects, baseline)) {
 				if (
 					existing === undefined ||
-					fn.fact(existing.proof).kind !== CORE_PRIMITIVE_OPERATOR_EFFECT_FACT
+					fn.fact(existing.proof).kind !== CORE_PRIMITIVE_EFFECT_FACT
 				)
 					continue;
 				editor ??= CoreEditor.open(program, item.function);
@@ -714,10 +716,10 @@ const refinePrimitiveEffects: CoreFunctionPass = {
 				editor.removeFact(existing.proof);
 				continue;
 			}
-			const digest = `primitive-operator:${opcode}:${masks.join(",")}`;
+			const digest = `primitive:${opcode}:${masks.join(",")}`;
 			if (existing !== undefined) {
 				const fact = fn.fact(existing.proof);
-				if (fact.kind !== CORE_PRIMITIVE_OPERATOR_EFFECT_FACT) continue;
+				if (fact.kind !== CORE_PRIMITIVE_EFFECT_FACT) continue;
 				if (
 					fact.validity.kind === "summary" &&
 					fact.validity.digest === digest &&
@@ -726,7 +728,7 @@ const refinePrimitiveEffects: CoreFunctionPass = {
 					continue;
 				editor ??= CoreEditor.open(program, item.function);
 				editor.replaceFact(existing.proof, {
-					kind: CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
+					kind: CORE_PRIMITIVE_EFFECT_FACT,
 					value: Object.freeze([...masks]),
 					claims: [{ kind: "effect", instruction, effects }],
 					validity: { kind: "summary", digest },
@@ -741,7 +743,7 @@ const refinePrimitiveEffects: CoreFunctionPass = {
 			}
 			editor ??= CoreEditor.open(program, item.function);
 			const proof = editor.addFact({
-				kind: CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
+				kind: CORE_PRIMITIVE_EFFECT_FACT,
 				value: Object.freeze([...masks]),
 				claims: [{ kind: "effect", instruction, effects }],
 				validity: { kind: "summary", digest },

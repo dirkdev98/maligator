@@ -478,6 +478,13 @@ the configured world, and resolving its data/getter/setter identity invokes no
 accessor. Live references retain their GC effects. Unused references can therefore
 be discarded inside handlers without weakening fallible allocation or call effects.
 
+Static own-key queries consume String/Symbol key bounds independently of their
+runtime polling obligation. A validated table shorter than the polling interval
+has no observable effects; unused queries can disappear while key evaluation stays.
+Long tables retain GC and completion handling even when key conversion cannot
+throw or call user code. Unknown and coercing keys retain the ordinary effects.
+Primitive-effect proofs are discarded and reproved after cloning or inlining.
+
 Canonical `call`, `apply`, `bind` and Reflect adapters use the same operation.
 Argument-list modes distinguish nullable Function `apply`, strict array-like lists,
 array spread and iterable spread. Normalization preserves argument evaluation,

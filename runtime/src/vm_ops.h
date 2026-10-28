@@ -3456,6 +3456,7 @@ MalValue mal_vm_create_object_shaped(MalVm *vm, struct MalShape *shape, const Ma
 
 MalValue mal_vm_op_create_array(MalVm *vm, i32 length);
 MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32 cache_slot);
+#define MAL_STATIC_DATA_QUERY_POLL_INTERVAL 1024u
 MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind, MalValue needle, MalValue from_index);
 
 MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env);

@@ -13253,9 +13253,10 @@ class NativeInstructionEmission {
 			}
 			case "QUERY_STATIC_DATA": {
 				const result = `static_query_result_${this.ip}`;
+				const effects = nativeInstructionEffects(instruction, this.context.facts);
 				return [
 					`MalValue ${result} = ${this.profileCall(instruction.queryKind === "has-own" ? "property" : "call", `mal_vm_query_static_data(vm, ${this.context.relocation.templateOffset(instruction.templateOffset)}, ${staticDataQueryTag(instruction.queryKind)}, ${this.boxed(instruction.needle)}, ${this.boxed(instruction.fromIndex)})`)};`,
-					this.throwCheck(),
+					...(effects.throwing || effects.reentry ? [this.throwCheck()] : []),
 					`r${instruction.dst} = ${this.callValue(instruction.dst, result)};`,
 				];
 			}
