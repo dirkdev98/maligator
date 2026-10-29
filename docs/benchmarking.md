@@ -273,6 +273,35 @@ artifacts remain under normal cache management.
 compares the normal compiler with a candidate that skips guarded direct-call
 emission after plan selection. Discovery, admission, and budget charges stay fixed.
 
+## Short compiler macro-benchmarks
+
+On battery, extract a few seconds of compiler work without running a full
+self-compile. The baseline can be a Git revision or an existing source checkout:
+
+```sh
+npm run bench:compiler-macros -- --baseline HEAD --plan=json
+npm run bench:compiler-macros -- --baseline HEAD --seconds 2 --pairs 3 --output .cache/compiler-macros
+```
+
+The runner exports both sources into temporary directories, overlays identical
+benchmark fixtures, and removes the exports in `finally`. `roots` replays the 24
+largest execution graphs captured by compiling the baseline accessor fixture;
+`backedges` runs native backedge discovery on those same graphs. `accessors` walks
+real Core storage, kernel columns, and opcode registry entries. `optimizer` runs
+the Node compiler on the frozen baseline accessor graph, through runtime-image
+serialization. The other three cases run on Node and compiled native binaries.
+Use `--cases roots,backedges` or `--hosts node` to narrow the selection.
+
+Calibration runs only on the baseline and fixes the iteration count for both
+revisions. One warmup per revision precedes alternating pairs. Timed regions
+exclude startup and input parsing; native checks also match the Node checksum.
+The executable macros require the same checksum across revisions; optimizer
+output must remain deterministic within each revision because code-generation
+decisions can change runtime-image bytes. The report records source and fixture
+hashes, power state, raw samples, and output checksums. Preparation counts against `--budget-seconds` (default 600).
+These slices diagnose mechanisms; full self-compile and CI acceptance remain
+separate. No saved benchmark baseline is replaced.
+
 ## Focused compiler execution experiments
 
 For a small compiler or runtime execution experiment, preserve a compiler before
