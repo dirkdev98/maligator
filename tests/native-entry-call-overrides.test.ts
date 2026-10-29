@@ -64,7 +64,7 @@ function emit(
 	targetResult: VmRegisterRepresentation = "number",
 	fast: {
 		canonicalTarget?: boolean;
-		availableTargets?: ReadonlySet<number>;
+		availableTargets?: Parameters<typeof emitCompiledFunction>[16];
 	} = {},
 ) {
 	const selectedTarget = { ...targetEntry, resultRepresentation: targetResult };
@@ -150,17 +150,19 @@ describe("native entry call overrides", () => {
 	it("selects a frameless callee from an exact typed override absent from the canonical plan", () => {
 		const emitted = emit(true, false, "number", "number", {
 			canonicalTarget: false,
-			availableTargets: new Set([1]),
+			availableTargets: new Map([[1, undefined]]),
 		});
 		expect(emitted.directEntries[0]!.source).toContain("mal_compiled_1_try(vm,");
 		expect(emitted.source).not.toContain("mal_compiled_1_try(vm,");
 	});
 
-	it("does not borrow the canonical exact target for a guarded typed override", () => {
+	it("guards the loaded target before entering the frameless callee of a guarded override", () => {
 		const source = emit(true, true, "number", "number", {
-			availableTargets: new Set([1]),
+			availableTargets: new Map([[1, undefined]]),
 		}).directEntries[0]!.source;
-		expect(source).not.toContain("mal_compiled_1_try(vm,");
+		expect(source).toContain(
+			"!(mal_vm_callee_has_index(vm, __fast_r0, 1)) || !mal_compiled_1_try(vm,",
+		);
 		expect(source).toContain("if (__guarded_index_0 == 1)");
 		expect(source).toContain("mal_vm_call_cached(vm,");
 	});
@@ -168,7 +170,7 @@ describe("native entry call overrides", () => {
 	it("keeps the typed full body when its frameless callee is unavailable", () => {
 		const source = emit(true, false, "number", "number", {
 			canonicalTarget: false,
-			availableTargets: new Set(),
+			availableTargets: new Map(),
 		}).directEntries[0]!.source;
 		expect(source).not.toContain("mal_compiled_1_try(vm,");
 		expect(source).toContain("mal_direct_1_0(vm,");

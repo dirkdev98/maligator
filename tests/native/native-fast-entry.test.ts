@@ -34,6 +34,7 @@ describe("frameless fast entries", () => {
 			mainFile: HOST_MAIN,
 			outDir,
 			nodeEnabled: true,
+			evalEnabled: false,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
@@ -41,6 +42,7 @@ describe("frameless fast entries", () => {
 			mainFile: HOST_MAIN,
 			outDir,
 			nodeEnabled: true,
+			evalEnabled: false,
 			compiled: false,
 		});
 	});

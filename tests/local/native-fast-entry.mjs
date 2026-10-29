@@ -286,6 +286,52 @@ Array.prototype[5] = "inherited";
 log.push(`at inherited ${at([1], 5)}`);
 delete Array.prototype[5];
 
+function columnMath(values, index) {
+	const value = values[index];
+	return value * 2 + value / 3;
+}
+globalThis.columnMath = columnMath;
+for (const values of [
+	[6],
+	[1.5],
+	[-0],
+	[NaN],
+	[Infinity],
+	["6"],
+	[undefined],
+	holey,
+	indexed,
+	proxied,
+])
+	log.push(`column ${columnMath(values, values.length > 1 ? 1 : 0)}`);
+const growingColumn = [3];
+log.push(`column grow ${columnMath(growingColumn, 0)}`);
+growingColumn.push(7.5);
+growingColumn[0] = "9";
+log.push(
+	`column widened ${columnMath(growingColumn, 0)} ${columnMath(growingColumn, 1)} ${columnMath(growingColumn, 9)}`,
+);
+Array.prototype[5] = 12;
+log.push(`column inherited ${columnMath([1], 5)}`);
+delete Array.prototype[5];
+
+function indexedSign(values, index) {
+	const value = values[index];
+	return value === undefined ? false : Object.is(index, -0);
+}
+globalThis.indexedSign = indexedSign;
+log.push(`column signs ${indexedSign([3], 0)} ${indexedSign([3], -0)}`);
+const fractionalColumn = [2];
+Object.defineProperty(fractionalColumn, "1.5", {
+	get() {
+		log.push("fractional column getter");
+		return 7;
+	},
+});
+log.push(
+	`column keys ${columnMath(fractionalColumn, 1.5)} ${columnMath([3], "0")} ${columnMath({ 2147483648: 9 }, 2147483648)}`,
+);
+
 function branchEffect(flag, node, callback) {
 	const first = node.value;
 	if (flag) return first + 1;

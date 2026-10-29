@@ -24,6 +24,7 @@ import {
 	compilerIntegerRangeComparison,
 	compilerIntegerRangeIsInt32,
 	compilerIntegerRangeTruthiness,
+	COMPILER_INT32_RANGE,
 } from "../shared/integer-range.ts";
 import { emitIntrinsic } from "./emit-program-image.ts";
 import type { NativeControlFlowPlan } from "./native-control-flow.ts";
@@ -65,8 +66,25 @@ import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
 const MAXIMUM_FAST_ENTRY_INSTRUCTIONS = 64;
 
+export type NativeFastTryParameters = ReadonlyArray<"i32" | "boxed">;
+
+export function nativeFastTryParameterList(parameters?: NativeFastTryParameters): string {
+	return parameters === undefined
+		? FAST_TRY_PARAMETERS
+		: [
+				"MalVm *vm",
+				"MalValue this_value",
+				...parameters.map(
+					(kind, index) => `${kind === "i32" ? "i32" : "MalValue"} __fast_p${index}`,
+				),
+				"MalEnv *env",
+				"MalValue *out",
+			].join(", ");
+}
+
 export interface NativeFastEntryInput {
 	readonly onSourceMap?: (ranges: ReadonlyArray<NativeSourceRange>) => void;
+	readonly onTryParameters?: (parameters: NativeFastTryParameters | undefined) => void;
 	readonly fn: BytecodeFunction;
 	readonly facts: NativeFunctionPlan["facts"];
 	readonly instructions: NativeFunctionPlan["instructions"];
@@ -99,7 +117,12 @@ export interface NativeFastEntryInput {
 		ip: number,
 		callee: string,
 	) =>
-		| { readonly symbol: string; readonly environment: string; readonly guard?: string }
+		| {
+				readonly symbol: string;
+				readonly environment: string;
+				readonly guard?: string;
+				readonly parameters?: NativeFastTryParameters;
+		  }
 		| undefined;
 	readonly f64Literal: (value: number) => string;
 }
@@ -176,6 +199,7 @@ export function renderNativeFastEntry(
 				new Map(),
 				stringComparisons.get(ip),
 				new Set(),
+				undefined,
 			) === undefined
 		)
 			rejected.add(ip);
@@ -221,6 +245,9 @@ export function renderNativeFastEntry(
 	const constants = numberConstantRegisters(instructions, registers);
 	const integers = int32ResultRegisters(instructions, fn.parameterCount, registers);
 	const initialized = initializedFastRegisters(graph, accesses, registers);
+	const tryParameters = exported
+		? scalarTryParameters(fn, graph, accesses, rejected)
+		: undefined;
 	for (const register of constants.keys())
 		if (!initialized.has(register)) constants.delete(register);
 	for (const register of integers)
@@ -249,6 +276,7 @@ export function renderNativeFastEntry(
 						constants,
 						stringComparisons.get(ip),
 						integers,
+						tryParameters,
 					);
 		if (line === undefined) return undefined;
 		if (
@@ -295,7 +323,9 @@ export function renderNativeFastEntry(
 		...(loadsCaptures ? input.capturePrologue.map((line) => `    ${line}`) : []),
 		...locals.flatMap((register) =>
 			register < fn.parameterCount
-				? [`    __fast_r${register} = ${fastParameter(register, directEntry)};`]
+				? [
+						`    __fast_r${register} = ${fastParameter(register, directEntry, tryParameters)};`,
+					]
 				: initialized.has(register)
 					? []
 					: [`    __fast_r${register} = MAL_VALUE_UNDEFINED;`],
@@ -306,6 +336,7 @@ export function renderNativeFastEntry(
 	// C admits the pragma only before the body's first statement.
 	const pragma = "#pragma STDC FP_CONTRACT OFF";
 	const emit = (output: ReadonlyArray<string>): ReadonlyArray<string> => {
+		if (exported) input.onTryParameters?.(tryParameters);
 		// The fast body follows its prologue; suffix text is deliberately unmapped.
 		const fastStart = exported
 			? 2
@@ -346,8 +377,25 @@ export function renderNativeFastEntry(
 			"}",
 		]);
 	const linkage = input.signature.startsWith("static ") ? "static " : "";
+	// Int32 tags exclude negative zero, fractional keys and values needing coercion.
+	const entryGuards =
+		tryParameters?.flatMap((kind, index) =>
+			kind === "i32"
+				? [`arg_count > ${index}`, `mal_value_is_int32(args[${index}])`]
+				: [],
+		) ?? [];
+	const arguments_ =
+		tryParameters === undefined
+			? "args, arg_count"
+			: tryParameters
+					.map((kind, index) =>
+						kind === "i32"
+							? `mal_value_to_i32(args[${index}])`
+							: `(arg_count > ${index} ? args[${index}] : MAL_VALUE_UNDEFINED)`,
+					)
+					.join(", ");
 	return emit([
-		`${linkage}__attribute__((no_stack_protector)) __attribute__((aligned(64))) bool ${input.trySymbol}(${FAST_TRY_PARAMETERS}) {`,
+		`${linkage}__attribute__((no_stack_protector)) __attribute__((aligned(64))) bool ${input.trySymbol}(${nativeFastTryParameterList(tryParameters)}) {`,
 		pragma,
 		...fast,
 		"__full:",
@@ -355,7 +403,7 @@ export function renderNativeFastEntry(
 		"}",
 		input.signature,
 		"    MalValue __fast_result;",
-		`    if (${fn.hasPrototype ? "mal_value_is_undefined(new_target) && " : ""}${input.trySymbol}(vm, this_value, args, arg_count, env, &__fast_result)) return __fast_result;`,
+		`    if (${fn.hasPrototype ? "mal_value_is_undefined(new_target) && " : ""}${entryGuards.length === 0 ? "" : `${entryGuards.join(" && ")} && `}${input.trySymbol}(vm, this_value, ${arguments_}, env, &__fast_result)) return __fast_result;`,
 		full,
 		"}",
 	]);
@@ -442,6 +490,53 @@ function initializedFastRegisters(
 	return initialized;
 }
 
+function scalarTryParameters(
+	fn: BytecodeFunction,
+	graph: ReadonlyMap<number, ReadonlyArray<number>>,
+	accesses: ReadonlyMap<
+		number,
+		{ readonly reads: ReadonlyArray<number>; readonly writes: ReadonlyArray<number> }
+	>,
+	rejected: ReadonlySet<number>,
+): NativeFastTryParameters | undefined {
+	if (fn.parameterCount === 0 || fn.parameterCount > 4) return undefined;
+	const parameters = Array.from(
+		{ length: fn.parameterCount },
+		(): "i32" | "boxed" => "boxed",
+	);
+	for (let parameter = 0; parameter < parameters.length; parameter++) {
+		if ([...accesses.values()].some((access) => access.writes.includes(parameter)))
+			continue;
+		// The stricter ABI must not penalize successful paths that bypass the index.
+		const pending = [0],
+			visited = new Set<number>();
+		let indexed = false,
+			required = true;
+		while (pending.length > 0) {
+			const ip = pending.pop()!;
+			if (visited.has(ip) || rejected.has(ip)) continue;
+			visited.add(ip);
+			const op = fn.instructions[ip];
+			if (op === undefined || op.opcode === "RETURN") {
+				required = false;
+				break;
+			}
+			if (!graph.has(ip)) continue;
+			if (
+				op.opcode === "LOAD_PROPERTY" &&
+				op.key === parameter &&
+				accesses.get(ip)?.reads.includes(parameter)
+			) {
+				indexed = true;
+				continue;
+			}
+			pending.push(...graph.get(ip)!);
+		}
+		if (required && indexed) parameters[parameter] = "i32";
+	}
+	return parameters.includes("i32") ? parameters : undefined;
+}
+
 function boxed(representation: VmRegisterRepresentation, value: string): string {
 	switch (representation) {
 		case "number":
@@ -459,7 +554,12 @@ function boxed(representation: VmRegisterRepresentation, value: string): string 
 function fastParameter(
 	index: number,
 	directEntry: NativeDirectEntryPlan | undefined,
+	tryParameters?: NativeFastTryParameters,
 ): string {
+	if (tryParameters !== undefined)
+		return tryParameters[index] === "i32"
+			? `mal_value_from_i32(__fast_p${index})`
+			: `__fast_p${index}`;
 	if (directEntry === undefined)
 		return `arg_count > ${index} ? args[${index}] : MAL_VALUE_UNDEFINED`;
 	const representations =
@@ -542,6 +642,7 @@ function int32ResultRegisters(
 }
 
 interface FastNumbers {
+	readonly parameters: NativeFastTryParameters | undefined;
 	readonly kind: (register: number) => number;
 	readonly isInt32: (register: number) => boolean;
 	readonly resultIsInt32: (register: number) => boolean;
@@ -569,6 +670,7 @@ function numbers(values: FastNumbers, ...registers: ReadonlyArray<number>): stri
 }
 
 function number(values: FastNumbers, register: number): string {
+	if (values.parameters?.[register] === "i32") return `((f64) __fast_p${register})`;
 	const constant = values.constants.get(register);
 	return constant === undefined
 		? `mal_ops_number_as_f64(__fast_r${register})`
@@ -596,6 +698,7 @@ function equalityScalar(
 }
 
 function int32(values: FastNumbers, register: number): string {
+	if (values.parameters?.[register] === "i32") return `__fast_p${register}`;
 	const constant = values.constants.get(register);
 	return constant === undefined
 		? values.isInt32(register)
@@ -809,16 +912,24 @@ function fastInstruction(
 	constants: ReadonlyMap<number, number>,
 	stringComparison: NativeStringComparisonPlan | undefined,
 	integers: ReadonlySet<number>,
+	tryParameters: NativeFastTryParameters | undefined,
 ): string | undefined {
 	const masks = input.facts?.[ip]?.inputKindMasks;
 	const values: FastNumbers = {
+		parameters: tryParameters,
 		resultIsInt32: (register) =>
 			compilerIntegerRangeIsInt32(
 				instructionResultIntegerRange(input.facts?.[ip], register),
 			),
-		range: (register) => instructionInputIntegerRange(input.facts?.[ip], register),
-		isInt32: (register) => instructionInputIsInt32(input.facts?.[ip], register),
+		range: (register) =>
+			tryParameters?.[register] === "i32"
+				? COMPILER_INT32_RANGE
+				: instructionInputIntegerRange(input.facts?.[ip], register),
+		isInt32: (register) =>
+			tryParameters?.[register] === "i32" ||
+			instructionInputIsInt32(input.facts?.[ip], register),
 		kind(register) {
+			if (tryParameters?.[register] === "i32") return COMPILER_VALUE_KIND_NUMBER;
 			if (constants.has(register)) return COMPILER_VALUE_KIND_NUMBER;
 			if (register < 0) {
 				const decoded = decodeVmValueOperand(register);
@@ -1066,7 +1177,25 @@ function fastInstruction(
 				return undefined;
 			const list =
 				args.length === 0 ? "nullptr" : `(const MalValue[]){ ${args.join(", ")} }`;
-			return `if (${callee.guard === undefined ? "" : `!(${callee.guard}) || `}!${callee.symbol}(vm, ${receiver}, ${list}, ${args.length}, ${callee.environment}, &__fast_r${op.dst})) goto __full;`;
+			const guards = callee.guard === undefined ? [] : [`!(${callee.guard})`];
+			const arguments_ =
+				callee.parameters === undefined
+					? `${list}, ${args.length}`
+					: callee.parameters
+							.map((kind, index) => {
+								const boxed = args[index] ?? "MAL_VALUE_UNDEFINED";
+								if (kind === "boxed") return boxed;
+								const register = op.arguments[index];
+								const scalar =
+									register === undefined || index >= op.argumentCount
+										? undefined
+										: exactInteger(values, register);
+								if (scalar !== undefined) return scalar;
+								guards.push(`!mal_value_is_int32(${boxed})`);
+								return `mal_value_to_i32(${boxed})`;
+							})
+							.join(", ");
+			return `if (${guards.length === 0 ? "" : `${guards.join(" || ")} || `}!${callee.symbol}(vm, ${receiver}, ${arguments_}, ${callee.environment}, &__fast_r${op.dst})) goto __full;`;
 		}
 		case "CALL_KNOWN": {
 			if (

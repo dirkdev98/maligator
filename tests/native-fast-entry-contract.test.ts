@@ -83,6 +83,8 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_string_equals_constant_length",
 	"mal_value_to_string",
 	"mal_value_from_i32",
+	"mal_value_is_int32",
+	"mal_value_to_i32",
 	"mal_value_from_string",
 	"mal_value_new_boolean",
 	"mal_value_to_boolean",
@@ -853,7 +855,7 @@ it("uses Number and nonnegative integer proofs in frameless indexed reads", () =
 		COMPILER_INT32_RANGE,
 		{ ...COMPILER_INT32_RANGE, minimum: 0 },
 	]) {
-		const lines = fastEntry(fn, () => undefined, true, undefined, [
+		const lines = fastEntry(fn, () => undefined, false, undefined, [
 			{
 				registers: [2, 0, 1],
 				inputOffset: 1,
@@ -869,6 +871,44 @@ it("uses Number and nonnegative integer proofs in frameless indexed reads", () =
 		expect(c.includes("mal_vm_array_try_get_proven_index(")).toBe(range !== undefined);
 		expect(c.includes("< 0")).toBe(range !== undefined && range.minimum < 0);
 	}
+});
+
+it("transports an index as an Int32 only after guarding the canonical arguments", () => {
+	const lines = fastEntry(
+		body([
+			{ opcode: "LOAD_PROPERTY", object: 0, key: 1, dst: 2, icIndex: 0 },
+			{ opcode: "RETURN", value: 2 },
+		]),
+	)!;
+	const source = lines.join("\n");
+	expect(source).toContain("i32 __fast_p1");
+	expect(source).toContain("arg_count > 1 && mal_value_is_int32(args[1])");
+	expect(source).toContain("mal_value_to_i32(args[1])");
+	expect(source).toContain("mal_vm_array_try_get_proven_index");
+	expect(unexpectedHelpers(lines)).toEqual([]);
+});
+
+it("keeps the argument vector when an index parameter is overwritten", () => {
+	const lines = fastEntry(
+		body([
+			{ opcode: "MOVE", src: 0, dst: 1 },
+			{ opcode: "LOAD_PROPERTY", object: 0, key: 1, dst: 2, icIndex: 0 },
+			{ opcode: "RETURN", value: 2 },
+		]),
+	)!;
+	expect(lines.join("\n")).not.toContain("i32 __fast_p1");
+});
+
+it("keeps the argument vector when a successful path bypasses the index", () => {
+	const lines = fastEntry(
+		body([
+			{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
+			{ opcode: "RETURN", value: 1 },
+			{ opcode: "LOAD_PROPERTY", object: 0, key: 1, dst: 2, icIndex: 0 },
+			{ opcode: "RETURN", value: 2 },
+		]),
+	)!;
+	expect(lines.join("\n")).not.toContain("i32 __fast_p1");
 });
 
 it.each([
@@ -907,7 +947,12 @@ function unexpectedHelpers(lines: ReadonlyArray<string>): ReadonlyArray<string> 
 
 function fastEntry(
 	fn: BytecodeFunction,
-	calleeTry: (ip: number) => string | undefined = () => undefined,
+	calleeTry: (
+		ip: number,
+	) =>
+		| string
+		| { readonly symbol: string; readonly parameters: ReadonlyArray<"i32" | "boxed"> }
+		| undefined = () => undefined,
 	exported = true,
 	controlFlow?: NativeControlFlowPlan,
 	facts: ReadonlyArray<InstructionFacts | undefined> = [],
@@ -930,11 +975,11 @@ function fastEntry(
 		specialized: false,
 		trySymbol: exported ? OWN_TRY : undefined,
 		calleeTry: (ip, callee) => {
-			const symbol = calleeTry(ip);
-			return symbol === undefined
+			const entry = calleeTry(ip);
+			return entry === undefined
 				? undefined
 				: {
-						symbol,
+						...(typeof entry === "string" ? { symbol: entry } : entry),
 						environment: `mal_value_to_function_object(${callee})->creation_env`,
 					};
 		},
@@ -1542,6 +1587,32 @@ describe("native fast entries", () => {
 			"mal_compiled_7_try",
 			"mal_value_to_function_object",
 		]);
+	});
+
+	it("carries a guarded index into another typed fast body without an argument vector", () => {
+		const lines = fastEntry(
+			body(
+				[
+					{ opcode: "LOAD_PROPERTY", object: 0, key: 1, dst: 3, icIndex: 0 },
+					{
+						opcode: "CALL",
+						dst: 4,
+						callee: 2,
+						thisValue: -1,
+						argumentCount: 1,
+						arguments: [1],
+					},
+					{ opcode: "RETURN", value: 4 },
+				],
+				{ parameterCount: 3 },
+			),
+			() => ({ symbol: "mal_compiled_7_try", parameters: ["i32"] }),
+		)!;
+		const source = lines.join("\n");
+		expect(source).toContain("i32 __fast_p1");
+		expect(source).toContain("mal_compiled_7_try(vm, MAL_VALUE_UNDEFINED, __fast_p1,");
+		expect(source).not.toContain("(const MalValue[])");
+		expect(source).not.toContain("mal_value_is_int32(__fast_r1)");
 	});
 
 	it("accept a backward jump to a merge block that does not loop", () => {

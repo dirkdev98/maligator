@@ -187,6 +187,7 @@ import type {
 	VmSemanticDependency,
 	VmSemanticProtectorFact,
 } from "./program-image.ts";
+import type { NativeFastTryParameters } from "./render-native-fast-entry.ts";
 import { renderNativeFastEntry } from "./render-native-fast-entry.ts";
 import {
 	computeArgumentRetentionLimit,
@@ -921,6 +922,7 @@ export interface CompiledFunction extends NativeCallCoverage {
 	link?: ReadonlyArray<NativeLinkSlot>;
 	/** The canonical body's exported frameless fast path, which other fast paths call. */
 	trySymbol?: string;
+	tryParameters?: NativeFastTryParameters;
 	/** Additional native-only ordinary-call symbols emitted beside the canonical body. */
 	directEntries: Array<{
 		readonly declarationSymbols: ReadonlySet<string>;
@@ -2595,7 +2597,7 @@ function emitCompiledVariant(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	maxCodeUnits = Infinity,
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
-	fastTryTargets: ReadonlySet<number> = new Set(),
+	fastTryTargets: ReadonlyMap<number, NativeFastTryParameters | undefined> = new Map(),
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 	onFastTryLookup?: (target: number) => void,
 ): CompiledFunction | null {
@@ -3487,12 +3489,16 @@ function emitCompiledVariant(
 	);
 	const fullSymbol = `${symbol}_full`;
 	let fastSourceMap: ReadonlyArray<NativeSourceRange> = [];
+	let tryParameters: NativeFastTryParameters | undefined;
 	const fastEntry =
 		split === undefined &&
 		directEntry?.resultFields === undefined &&
 		directEntry?.recordParameters === undefined
 			? renderNativeFastEntry({
 					fn,
+					onTryParameters: (parameters) => {
+						tryParameters = parameters;
+					},
 					onSourceMap:
 						debug !== false && debug.captureSourceMap
 							? (ranges) => {
@@ -3524,6 +3530,7 @@ function emitCompiledVariant(
 						return target !== undefined && fastTryTargets.has(target)
 							? {
 									symbol: `mal_compiled_${relocation.stem(target)}${suffix}_try`,
+									parameters: fastTryTargets.get(target),
 									...(plan?.kind === "call" && plan.directFunctionIndex === undefined
 										? {
 												guard: `mal_vm_callee_has_index(vm, ${callee}, ${relocation.functionIndex(target)})`,
@@ -3685,7 +3692,10 @@ function emitCompiledVariant(
 		...(fastEntry !== undefined &&
 		directEntry === undefined &&
 		native.specializedOnly !== true
-			? { trySymbol: `${symbol}_try` }
+			? {
+					trySymbol: `${symbol}_try`,
+					...(tryParameters === undefined ? {} : { tryParameters }),
+				}
 			: {}),
 		profileDecisions,
 		emittedInstructions: body.emittedInstructions,
@@ -4201,7 +4211,7 @@ export function emitCompiledFunction(
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	sortKernelEntries: ReadonlySet<string> = new Set(),
 	reductionEntries: ReadonlySet<string> = new Set(),
-	fastTryTargets: ReadonlySet<number> = new Set(),
+	fastTryTargets: ReadonlyMap<number, NativeFastTryParameters | undefined> = new Map(),
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 ): CompiledFunction | null {
 	if (native.storage === undefined)
@@ -4259,7 +4269,7 @@ export function createNativeFunctionRenderer(
 		splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 		sortKernelEntries: ReadonlySet<string> = new Set(),
 		reductionEntries: ReadonlySet<string> = new Set(),
-		fastTryTargets: ReadonlySet<number> = new Set(),
+		fastTryTargets: ReadonlyMap<number, NativeFastTryParameters | undefined> = new Map(),
 		directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 	): CompiledFunction | null => {
 		if (native.storage === undefined)
@@ -4320,7 +4330,7 @@ function renderCompiledFunction(
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	sortKernelEntries: ReadonlySet<string> = new Set(),
 	reductionEntries: ReadonlySet<string> = new Set(),
-	fastTryTargets: ReadonlySet<number> = new Set(),
+	fastTryTargets: ReadonlyMap<number, NativeFastTryParameters | undefined> = new Map(),
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 	onFastTryLookup?: (target: number) => void,
 ): CompiledFunction | null {
