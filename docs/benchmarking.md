@@ -276,7 +276,8 @@ emission after plan selection. Discovery, admission, and budget charges stay fix
 ## Short compiler macro-benchmarks
 
 On battery, extract a few seconds of compiler work without running a full
-self-compile. The baseline can be a Git revision or an existing source checkout:
+self-compile. Both `--baseline` and optional `--candidate` accept a Git revision or an existing
+source checkout; the candidate defaults to the current working tree:
 
 ```sh
 npm run bench:compiler-macros -- --baseline HEAD --plan=json
@@ -289,7 +290,7 @@ largest execution graphs captured by compiling the baseline accessor fixture;
 `backedges` runs native backedge discovery on those same graphs. `accessors` walks
 real Core storage, kernel columns, and opcode registry entries. `optimizer` runs
 the Node compiler on the frozen baseline accessor graph, through runtime-image
-serialization. `flow` replays six analysis engines over unchanged Core functions,
+serialization. `flow` replays six analysis engines and four consumers per engine over unchanged Core functions,
 starting each replay with cold transfer state. `constants` compacts a captured
 compiler image with an unused trailing constant; `emission` renders that image.
 Every case except `optimizer` runs on Node and compiled native binaries.

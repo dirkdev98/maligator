@@ -41,6 +41,7 @@ const value = (flag: string, fallback: string): string => {
 };
 const flags = new Set([
 	"--baseline",
+	"--candidate",
 	"--seconds",
 	"--pairs",
 	"--cases",
@@ -55,6 +56,7 @@ for (let index = 0; index < args.length; index++) {
 	if (!args[++index] || args[index]!.startsWith("--")) throw new Error(`missing ${flag}`);
 }
 const baseline = value("--baseline", "HEAD");
+const candidateSelection = value("--candidate", root);
 const seconds = Number(value("--seconds", "2"));
 const pairs = Number(value("--pairs", "3"));
 const cases = value("--cases", "roots,backedges,accessors,optimizer").split(
@@ -67,7 +69,7 @@ const output = path.resolve(
 const budgetSeconds = Number(value("--budget-seconds", "600"));
 if (args.includes("--help")) {
 	console.log(
-		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--cases roots,backedges,accessors,optimizer,flow,constants,emission] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Optimizer compiles that frozen workload on Node, including construction and target lowering. Flow replays six local-transfer consumers per source epoch. Constants and emission replay a captured compiler image. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
+		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--candidate REF|CHECKOUT] [--cases roots,backedges,accessors,optimizer,flow,constants,emission] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Optimizer compiles that frozen workload on Node, including construction and target lowering. Flow replays six local-transfer consumers per source epoch. Constants and emission replay a captured compiler image. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
 	);
 	process.exit(0);
 }
@@ -98,7 +100,7 @@ if (
 	throw new Error("invalid macro benchmark selection or budget");
 const plan = {
 	baseline,
-	candidate: root,
+	candidate: candidateSelection,
 	cases,
 	hosts,
 	seconds,
@@ -194,12 +196,29 @@ try {
 	])
 		.split("\0")
 		.filter(Boolean);
-	for (const file of files) {
-		const input = path.join(root, file);
-		if (!existsSync(input)) continue;
-		const destination = path.join(candidate, file);
-		mkdirSync(path.dirname(destination), { recursive: true });
-		copyFileSync(input, destination);
+	if (path.resolve(candidateSelection) === root) {
+		for (const file of files) {
+			const input = path.join(root, file);
+			if (!existsSync(input)) continue;
+			const destination = path.join(candidate, file);
+			mkdirSync(path.dirname(destination), { recursive: true });
+			copyFileSync(input, destination);
+		}
+		report.candidateCommit = run("git", ["rev-parse", "HEAD"]).trim();
+		report.candidateDiff = hash(run("git", ["diff", "HEAD"]));
+	} else if (existsSync(path.resolve(candidateSelection))) {
+		cpSync(path.resolve(candidateSelection), candidate, {
+			recursive: true,
+			filter: (file) => !["node_modules", ".git", ".cache"].includes(path.basename(file)),
+		});
+	} else {
+		const archive = path.join(scratch, "candidate.tar");
+		run("git", ["archive", "--format=tar", `--output=${archive}`, candidateSelection]);
+		run("tar", ["-xf", archive, "-C", candidate]);
+		report.candidateCommit = run("git", [
+			"rev-parse",
+			`${candidateSelection}^{commit}`,
+		]).trim();
 	}
 	for (const directory of [base, candidate]) {
 		symlinkSync(
@@ -213,8 +232,6 @@ try {
 			{ recursive: true },
 		);
 	}
-	report.candidateCommit = run("git", ["rev-parse", "HEAD"]).trim();
-	report.candidateDiff = hash(run("git", ["diff", "HEAD"]));
 	report.sourceHashes = {
 		baseline: treeHash(base),
 		candidate: treeHash(candidate),
@@ -236,6 +253,7 @@ try {
 		);
 		report.imageHash = hash(readFileSync(imageFile));
 	}
+	const nativeCommands = new Map<string, { executable: string; args: Array<string> }>();
 	const samples: Array<unknown> = [];
 	report.samples = samples;
 	for (const name of cases)
@@ -248,11 +266,24 @@ try {
 					console.log(
 						`Preparing ${name}/${host}/${index === 0 ? "baseline" : "candidate"}`,
 					);
-					const buildOutput = path.join(output, `${name}-${index}`);
-					const built = json<{ binary: string }>(
-						run(process.execPath, [worker, "build", source, fixture, buildOutput]),
-					);
-					commands.push({ executable: built.binary, args: [] });
+					const bundled = name === "flow" || name === "constants" || name === "emission";
+					const key = `${bundled ? "work" : name}-${index}`;
+					let command = nativeCommands.get(key);
+					if (command === undefined) {
+						const buildOutput = path.join(output, key);
+						const built = json<{ binary: string }>(
+							run(process.execPath, [
+								worker,
+								"build",
+								source,
+								bundled ? path.join(source, "bench/compiler-macros/work.mts") : fixture,
+								buildOutput,
+							]),
+						);
+						command = { executable: built.binary, args: [] };
+						nativeCommands.set(key, command);
+					}
+					commands.push(command);
 				} else if (name === "optimizer")
 					commands.push({
 						executable: process.execPath,
@@ -266,11 +297,14 @@ try {
 					run(command.executable, [
 						...command.args,
 						String(iterations),
-						...(name === "roots" || name === "backedges"
-							? [rootsFile]
-							: name === "constants" || name === "emission"
-								? [imageFile]
-								: []),
+						...(host === "native" &&
+						(name === "flow" || name === "constants" || name === "emission")
+							? [imageFile, name]
+							: name === "roots" || name === "backedges"
+								? [rootsFile]
+								: name === "constants" || name === "emission"
+									? [imageFile]
+									: []),
 					]),
 				);
 			};
