@@ -21,6 +21,7 @@ import {
 	emitRelocatableNativeOverlayTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
 import type { GeneratedTranslationUnit } from "../src/compiler/target/emit-program-image.ts";
+import { generatedDeclarationSymbols } from "../src/compiler/target/generated-declaration-references.ts";
 import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { nativeInactiveRootMasks } from "../src/compiler/target/native-root-masks.ts";
 import {
@@ -1673,6 +1674,42 @@ describe("emit-program-image instruction packing", () => {
 		expect(rejected).not.toContain("mal_compiled_1");
 		expect(rejected).not.toContain("mal_direct_1_0");
 		expect(rejected).toContain("mal_vm_call_direct(vm,");
+	});
+
+	it("publishes the generated symbol dependencies of canonical and typed entries", () => {
+		const image = nativeEntryBudgetImage();
+		const targets = new Set(image.native.functions.map((fn) => fn.functionIndex));
+		const entries = new Map(
+			image.native.functions.flatMap((fn) =>
+				fn.directEntries.map(
+					(entry) => [directCompiledEntryKey(fn.functionIndex, entry.id), entry] as const,
+				),
+			),
+		);
+		const rendered = image.native.functions
+			.map((fn) =>
+				emitCompiledFunction(
+					fn,
+					fn.functionIndex,
+					"",
+					false,
+					"external",
+					targets,
+					image.native.semanticProtectors,
+					entries,
+				),
+			)
+			.filter((fn) => fn !== null);
+		const parts = rendered.flatMap((fn) => [fn, ...fn.directEntries]);
+		const declarations = new Set(parts.map((part) => part.symbol));
+		for (const part of parts)
+			expect(
+				[...generatedDeclarationSymbols(part.source)]
+					.filter((symbol) => declarations.has(symbol))
+					.sort(),
+			).toEqual(
+				[...part.declarationSymbols].filter((symbol) => declarations.has(symbol)).sort(),
+			);
 	});
 
 	it("withdraws compiled .call callbacks when the target exceeds the emission budget", () => {

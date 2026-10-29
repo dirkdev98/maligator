@@ -4,7 +4,10 @@ import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
 import type { CoreTargetClassLayout } from "./core-target-ir.ts";
-import { generatedDeclarationReferences } from "./generated-declaration-references.ts";
+import {
+	generatedDeclarationIndices,
+	generatedDeclarationReferences,
+} from "./generated-declaration-references.ts";
 import { GENERATED_PRELUDE_END } from "./generated-prelude.ts";
 import { validateNativeProgramStorage } from "./lower-native-storage.ts";
 import { shiftNativeSourceRanges } from "./native-source-map.ts";
@@ -718,6 +721,7 @@ interface TranslationUnitPart {
 	partitionHashes: Array<number | undefined>;
 	source: string;
 	declarationIndices: Array<number>;
+	declarationSymbols: ReadonlySet<string> | undefined;
 }
 
 interface TranslationUnitPartition {
@@ -1934,21 +1938,19 @@ function oversizedCodeDefinitions(
 	for (const declaration of generatedDeclarations)
 		allDeclarationCodeUnits += declaration.source.length;
 	const oversized: Array<string> = [];
-	const check = (symbol: string, source: string) => {
+	const check = (symbol: string, source: string, symbols: ReadonlySet<string>) => {
 		if (source.length + headerCodeUnits + allDeclarationCodeUnits < hardMaximumCodeUnits)
 			return;
 		let unitCodeUnits = headerCodeUnits + source.length + 1;
-		for (const index of generatedDeclarationReferences(
-			source,
-			declarationIndicesBySymbol,
-		))
+		for (const index of generatedDeclarationIndices(symbols, declarationIndicesBySymbol))
 			unitCodeUnits += generatedDeclarations[index]!.source.length + 1;
 		if (unitCodeUnits > hardMaximumCodeUnits) oversized.push(symbol);
 	};
 	for (const fn of emitted.compiled) {
 		if (fn === null) continue;
-		if (fn.source.length > 0) check(fn.symbol, fn.source);
-		for (const entry of fn.directEntries) check(entry.symbol, entry.source);
+		if (fn.source.length > 0) check(fn.symbol, fn.source, fn.declarationSymbols);
+		for (const entry of fn.directEntries)
+			check(entry.symbol, entry.source, entry.declarationSymbols);
 	}
 	return oversized;
 }
@@ -2031,10 +2033,13 @@ export function emitProgramTranslationUnits(
 		return {
 			...part,
 			partitionHashes: [],
-			declarationIndices: generatedDeclarationReferences(
-				part.source,
-				declarationIndicesBySymbol,
-			),
+			declarationIndices:
+				part.declarationSymbols === undefined
+					? generatedDeclarationReferences(part.source, declarationIndicesBySymbol)
+					: generatedDeclarationIndices(
+							part.declarationSymbols,
+							declarationIndicesBySymbol,
+						),
 		};
 	};
 	const preparePartition = (
@@ -2172,6 +2177,7 @@ export function emitProgramTranslationUnits(
 		symbol: data.symbol,
 		partitionKey: data.source,
 		source: data.source,
+		declarationSymbols: undefined,
 	}));
 	const dependencyCode: Array<
 		Omit<TranslationUnitPart, "declarationIndices" | "partitionHashes">
@@ -2191,6 +2197,7 @@ export function emitProgramTranslationUnits(
 				symbol: fn.symbol,
 				partitionKey: `${functionPartitionKeys[functionIndex]}\0canonical`,
 				source: fn.source,
+				declarationSymbols: fn.declarationSymbols,
 			});
 		for (const entry of fn.directEntries) {
 			codeParts.push({
@@ -2198,6 +2205,7 @@ export function emitProgramTranslationUnits(
 				symbol: entry.symbol,
 				partitionKey: `${functionPartitionKeys[functionIndex]}\0direct\0${String(entry.id)}`,
 				source: entry.source,
+				declarationSymbols: entry.declarationSymbols,
 			});
 		}
 	}
@@ -2212,6 +2220,7 @@ export function emitProgramTranslationUnits(
 									kind: "data array" as const,
 									symbol: `${part.symbol}_link`,
 									partitionKey: functionPartitionKeys[functionIndex]!,
+									declarationSymbols: undefined,
 									source: `const i32 ${part.symbol}_link[] = { ${part.link.map((slot) => slot.index).join(", ")} };`,
 								},
 							],
@@ -2477,8 +2486,11 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		);
 		if (sourceCodeUnits <= targetCodeUnits || functions.length === 1) {
 			const bodiesSource = functions.map(({ source }) => source);
-			const referenced = generatedDeclarationReferences(
-				bodiesSource.join("\n"),
+			const referenced = generatedDeclarationIndices(
+				functions.flatMap(({ fn }) => [
+					...fn.declarationSymbols,
+					...fn.directEntries.flatMap((entry) => [...entry.declarationSymbols]),
+				]),
 				overlayDeclarationIndices,
 			).sort((left, right) => left - right);
 			const source = [

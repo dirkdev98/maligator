@@ -67,6 +67,7 @@ import {
 	emitIntrinsic,
 	emitUnaryOperator,
 } from "./emit-program-image.ts";
+import { generatedDeclarationSymbols } from "./generated-declaration-references.ts";
 import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
 import type {
 	NativeCallTargetTransport,
@@ -908,6 +909,7 @@ export function nativeCallbackSymbol(
 }
 
 export interface CompiledFunction extends NativeCallCoverage {
+	readonly declarationSymbols: ReadonlySet<string>;
 	sourceMap?: ReadonlyArray<NativeSourceRange>;
 	/** The C symbol to install as MalFunction.compiled. */
 	symbol: string;
@@ -921,6 +923,7 @@ export interface CompiledFunction extends NativeCallCoverage {
 	trySymbol?: string;
 	/** Additional native-only ordinary-call symbols emitted beside the canonical body. */
 	directEntries: Array<{
+		readonly declarationSymbols: ReadonlySet<string>;
 		sourceMap?: ReadonlyArray<NativeSourceRange>;
 		emittedInstructions: ReadonlySet<number>;
 		directEntryCalls: ReadonlyMap<number, ReadonlySet<number>>;
@@ -986,6 +989,8 @@ export interface NativeRelocatableEmission {
 }
 
 interface NativeRelocationExpressions {
+	readonly declarationSymbols: Set<string>;
+	reference(symbol: string): string;
 	readonly enabled: boolean;
 	/** Offsets every index by its overlay's base, so foreign images can share scope chains. */
 	readonly relative: boolean;
@@ -1028,7 +1033,14 @@ function nativeRelocationExpressions(
 			: `${linkSymbol}[${slot}]`;
 	};
 	const enabled = linkSymbol !== undefined;
+	const declarationSymbols = new Set<string>();
+	const reference = (symbol: string) => {
+		declarationSymbols.add(symbol);
+		return symbol;
+	};
 	return {
+		declarationSymbols,
+		reference,
 		enabled,
 		relative: enabled && relative,
 		stem: (index) => {
@@ -1057,7 +1069,7 @@ function nativeRelocationExpressions(
 		bigintValue: (index, suffix) =>
 			enabled
 				? `mal_value_from_bigint(&vm->runtime_image->bigint_constants[${indexed("bigint_base", index)}])`
-				: `mal_value_from_bigint(&mal_bigints${suffix}[${index}])`,
+				: `mal_value_from_bigint(&${reference(`mal_bigints${suffix}`)}[${index}])`,
 	};
 }
 
@@ -3663,6 +3675,11 @@ function emitCompiledVariant(
 	return {
 		...(sourceMap === undefined ? {} : { sourceMap }),
 		symbol,
+		declarationSymbols: new Set([
+			symbol,
+			...relocation.declarationSymbols,
+			...generatedDeclarationSymbols((fastEntry ?? []).join("\n")),
+		]),
 		source: source.join("\n"),
 		...(relocation.enabled ? { link: relocation.link } : {}),
 		...(fastEntry !== undefined &&
@@ -4429,6 +4446,19 @@ function renderCompiledFunction(
 			...(leaf === undefined ? {} : { leaf }),
 			...(sortSymbol === undefined ? {} : { sortSymbol }),
 			...(emitted.sourceMap === undefined ? {} : { sourceMap: emitted.sourceMap }),
+			declarationSymbols: new Set([
+				...emitted.declarationSymbols,
+				...(callbackEntries.has(directCompiledEntryKey(index, entry.id))
+					? [
+							nativeCallbackSymbol(name, entry.id, suffix),
+							`mal_compiled_${name}${suffix}`,
+						]
+					: []),
+				...(reductionEntries.has(directCompiledEntryKey(index, entry.id))
+					? [`${nativeCallbackSymbol(name, entry.id, suffix)}_reduce`]
+					: []),
+				...(sortSymbol === undefined ? [] : [sortSymbol]),
+			]),
 			emittedInstructions: emitted.emittedInstructions,
 			directEntryCalls: emitted.directEntryCalls,
 			id: entry.id,
@@ -5264,6 +5294,7 @@ function emitResumableFunction(
 
 	return {
 		symbol,
+		declarationSymbols: new Set([symbol, ...relocation.declarationSymbols]),
 		source: lines.join("\n"),
 		...(body.sourceMap === undefined
 			? {}
@@ -11759,9 +11790,11 @@ class NativeInstructionEmission {
 				directCompiledEntryKey(numericCallback.functionIndex, numericCallback.entryId),
 			);
 			if (entry !== undefined && numericSortKernelEntry(entry)) {
-				const comparator = `mal_direct_${this.context.relocation.stem(numericCallback.functionIndex)}_${numericCallback.entryId}${this.suffix}`;
+				const comparator = this.context.relocation.reference(
+					`mal_direct_${this.context.relocation.stem(numericCallback.functionIndex)}_${numericCallback.entryId}${this.suffix}`,
+				);
 				return [
-					`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${this.context.relocation.functionIndex(numericCallback.functionIndex)}, ${comparator}, ${entry.leaf ? `${comparator}_sort` : "nullptr"}, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${this.context.relocation.functionIndex(numericCallback.functionIndex)}, ${comparator}, ${entry.leaf ? this.context.relocation.reference(`${comparator}_sort`) : "nullptr"}, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					this.callPoll(),
@@ -12109,12 +12142,16 @@ class NativeInstructionEmission {
 						this.context.directCompiledEntries.has(
 							directCompiledEntryKey(callbackTarget, callbackEntry.entryId),
 						)
-						? nativeCallbackSymbol(
-								this.context.relocation.stem(callbackTarget),
-								callbackEntry.entryId,
-								this.suffix,
+						? this.context.relocation.reference(
+								nativeCallbackSymbol(
+									this.context.relocation.stem(callbackTarget),
+									callbackEntry.entryId,
+									this.suffix,
+								),
 							)
-						: `mal_compiled_${this.context.relocation.stem(callbackTarget)}${this.suffix}`
+						: this.context.relocation.reference(
+								`mal_compiled_${this.context.relocation.stem(callbackTarget)}${this.suffix}`,
+							)
 					: "nullptr";
 			const numericReduction =
 				callbackEntry?.numericReduction === true &&
@@ -12127,7 +12164,7 @@ class NativeInstructionEmission {
 				? "mal_builtin_array_numeric_reduce_direct"
 				: "mal_builtin_array_iteration_direct";
 			return [
-				`MalCompletion ${tmp} = ${helper}(vm, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex === undefined ? -1 : this.context.relocation.functionIndex(callPlan.directCallbackFunctionIndex)}, ${callbackSymbol}, ${numericReduction ? `${callbackSymbol}_reduce, ` : ""}${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+				`MalCompletion ${tmp} = ${helper}(vm, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex === undefined ? -1 : this.context.relocation.functionIndex(callPlan.directCallbackFunctionIndex)}, ${callbackSymbol}, ${numericReduction ? `${this.context.relocation.reference(`${callbackSymbol}_reduce`)}, ` : ""}${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
 				`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 				this.callPoll(),
@@ -12305,7 +12342,7 @@ class NativeInstructionEmission {
 			const compiled =
 				target !== undefined && this.context.directCompiledTargets.has(target);
 			return [
-				`MalCompletion ${tmp} = mal_vm_call_function_call_direct${compiled ? "_compiled" : ""}(vm, ${target === undefined ? -1 : this.context.relocation.functionIndex(target)}, ${compiled ? `mal_compiled_${this.context.relocation.stem(target)}${this.suffix}, ` : ""}${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+				`MalCompletion ${tmp} = mal_vm_call_function_call_direct${compiled ? "_compiled" : ""}(vm, ${target === undefined ? -1 : this.context.relocation.functionIndex(target)}, ${compiled ? `${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}, ` : ""}${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
 				`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 				this.callPoll(),
@@ -12378,7 +12415,7 @@ class NativeInstructionEmission {
 						`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${this.context.relocation.functionIndex(target)}) {`,
 						`  MAL_CALLEE_REALM_ENTER(${guardedCallee});`,
 						"  MAL_PERF_COUNT(direct_entry_hits);",
-						`  ${cTypeOf(transport.resultRepresentation)} ${value} = mal_direct_${this.context.relocation.stem(target)}_${entry.id}${this.suffix}(vm, ${receiver}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee});`,
+						`  ${cTypeOf(transport.resultRepresentation)} ${value} = ${this.context.relocation.reference(`mal_direct_${this.context.relocation.stem(target)}_${entry.id}${this.suffix}`)}(vm, ${receiver}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee});`,
 						"  MAL_CALLEE_REALM_LEAVE();",
 						`  ${this.throwCheck()}`,
 						`  r${instruction.dst} = ${this.callValue(instruction.dst, value, transport.result)};`,
@@ -12394,7 +12431,7 @@ class NativeInstructionEmission {
 					return [
 						`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${this.context.relocation.functionIndex(target)}) {`,
 						`  MAL_CALLEE_REALM_ENTER(${guardedCallee});`,
-						`  MalValue ${value} = mal_compiled_${this.context.relocation.stem(target)}${this.suffix}(vm, ${receiver}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee}, nullptr);`,
+						`  MalValue ${value} = ${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}(vm, ${receiver}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee}, nullptr);`,
 						"  MAL_CALLEE_REALM_LEAVE();",
 						`  ${this.throwCheck()}`,
 						`  r${instruction.dst} = ${callResult(value)};`,
@@ -12507,7 +12544,7 @@ class NativeInstructionEmission {
 					`MalValue ${directCallee} = ${this.boxedOperand(instruction.callee)};`,
 					`MAL_PERF_COUNT(direct_entry_hits);`,
 					...functionDeclaration,
-					`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${this.context.relocation.stem(target)}_${directEntry.id}${this.suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, ${directEnvironment}, ${directCallee});`,
+					`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = ${this.context.relocation.reference(`mal_direct_${this.context.relocation.stem(target)}_${directEntry.id}${this.suffix}`)}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, ${directEnvironment}, ${directCallee});`,
 					`if (MAL_THREW()) ${this.onThrow()}`,
 					`r${instruction.dst} = ${directResult};`,
 					...(this.context.recordCall?.object === undefined
@@ -12535,7 +12572,7 @@ class NativeInstructionEmission {
 				return [
 					`MalValue ${directCallee} = ${this.boxedOperand(instruction.callee)};`,
 					...functionDeclaration,
-					`MalValue ${directValue} = mal_compiled_${this.context.relocation.stem(target)}${this.suffix}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, ${directEnvironment}, ${directCallee}, nullptr);`,
+					`MalValue ${directValue} = ${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, ${directEnvironment}, ${directCallee}, nullptr);`,
 					`if (MAL_THREW()) ${this.onThrow()}`,
 					`r${instruction.dst} = ${callResult(directValue)};`,
 					this.callPoll(),
