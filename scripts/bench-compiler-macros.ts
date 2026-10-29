@@ -21,6 +21,7 @@ type Case =
 	| "accessors"
 	| "headers"
 	| "versions"
+	| "errors"
 	| "optimizer"
 	| "lowering"
 	| "backedges"
@@ -73,7 +74,7 @@ const output = path.resolve(
 const budgetSeconds = Number(value("--budget-seconds", "600"));
 if (args.includes("--help")) {
 	console.log(
-		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--candidate REF|CHECKOUT] [--cases roots,backedges,accessors,headers,versions,optimizer,lowering,flow,flow-membership,constants,emission] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Headers reads kind, descriptor and payload through the revision's available checked API. Versions reads fixed change domains from real mutable Core stores. Optimizer compiles that frozen workload on Node, including construction and target lowering. Lowering replays both backend realizations from sealed optimized Core. Flow replays six analysis engines with four consumers per source epoch. Flow-membership appends unrelated functions between warm transfer queries. Constants and emission replay a captured compiler image. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
+		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--candidate REF|CHECKOUT] [--cases roots,backedges,accessors,headers,versions,errors,optimizer,lowering,flow,flow-membership,constants,emission] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Headers reads kind, descriptor and payload through the revision's available checked API. Versions reads fixed change domains from real mutable Core stores. Errors alternates valid instruction reads and caught invalid-ID failures. Optimizer compiles that frozen workload on Node, including construction and target lowering. Lowering replays both backend realizations from sealed optimized Core. Flow replays six analysis engines with four consumers per source epoch. Flow-membership appends unrelated functions between warm transfer queries. Constants and emission replay a captured compiler image. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
 	);
 	process.exit(0);
 }
@@ -95,6 +96,7 @@ if (
 				"accessors",
 				"headers",
 				"versions",
+				"errors",
 				"optimizer",
 				"lowering",
 				"flow",
