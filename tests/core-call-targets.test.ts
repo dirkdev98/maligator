@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
-import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import {
 	CORE_CALLEE_TARGETS_ANY_SCRIPT,
 	CORE_CALLEE_TARGETS_BOTTOM,
@@ -14,8 +13,9 @@ import {
 	coreCalleeTargetsIsBottom,
 	coreCalleeTargetsSingleFunction,
 	joinCoreCalleeTargets,
-} from "../src/compiler/core/core-ir-call-targets.ts";
-import type { CoreCalleeTargets } from "../src/compiler/core/core-ir-call-targets.ts";
+} from "../src/compiler/core/core-callee-targets.ts";
+import type { CoreCalleeTargets } from "../src/compiler/core/core-callee-targets.ts";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import { coreFunctionId } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";

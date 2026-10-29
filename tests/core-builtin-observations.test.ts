@@ -6,8 +6,8 @@ import {
 	coreKnownBuiltinInvocationEffects,
 	coreKnownBuiltinOnlyObservesOperands,
 } from "../src/compiler/core/core-builtin-effects.ts";
+import { coreCalleeTargetsCallability } from "../src/compiler/core/core-callee-targets.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
-import { coreCalleeTargetsCallability } from "../src/compiler/core/core-ir-call-targets.ts";
 import { coreInstructionEffects } from "../src/compiler/core/core-ir-opcodes.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import {

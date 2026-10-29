@@ -156,8 +156,11 @@ Arithmetic work should support these paths or fix correctness defects.
       Invocation targets and callable certainty now converge through forwarding,
       spread and recursive normal returns. Return dependencies wake their callers;
       edited and newly formed recursive components restart without stale bounds.
-      Extend this target transport through returned object fields, then cover
-      opaque script sets, callback retention, Array/species and protocol
+      Returned own-data fields now carry callable certainty and finite invocation
+      identities through producer/caller writes, recursive forwarding and suspension.
+      Field-only changes wake return consumers; memory alternatives wake earlier
+      loop reads. Escapes, accessors, unknown keys and wrappers retain fallbacks.
+      Cover opaque script sets, callback retention, Array/species and protocol
       effects, and receiver-sensitive builtin errors. Callable status alone remains
       insufficient for effect refinement.
       Broad native, sanitizer and self-hosted acceptance remains on CI.

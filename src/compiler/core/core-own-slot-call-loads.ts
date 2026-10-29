@@ -1,12 +1,12 @@
 import { NO_EFFECT_SUMMARY, joinEffectSummaries } from "../shared/effect-summary.ts";
 import type { RelativeOwnSlotEffectSummary } from "../shared/effect-summary.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import { coreCalleeTargetsAreOpen } from "./core-callee-targets.ts";
 import { CoreEditor } from "./core-editor.ts";
 import {
 	removeInstructionAndOwnedProof,
 	removeUnsharedProof,
 } from "./core-effect-proof-edits.ts";
-import { coreCalleeTargetsAreOpen } from "./core-ir-call-targets.ts";
 import type { CoreIndexedCallSite } from "./core-ir-call-targets.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,

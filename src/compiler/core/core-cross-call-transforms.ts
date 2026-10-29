@@ -25,6 +25,11 @@ import {
 	coreKnownBuiltinInvocationEffects,
 } from "./core-builtin-effects.ts";
 import { CORE_BUILTIN_RESULT_PROJECTIONS_ANALYSIS } from "./core-builtin-result-projections.ts";
+import {
+	coreCalleeTargetsAreOpen,
+	coreCalleeTargetsCallability,
+	coreCalleeTargetsSingleFunction,
+} from "./core-callee-targets.ts";
 import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreNormalResultFacts } from "./core-editor.ts";
@@ -63,9 +68,6 @@ import {
 } from "./core-internal-attributes.ts";
 import {
 	coreDirectCreatedFunction,
-	coreCalleeTargetsAreOpen,
-	coreCalleeTargetsCallability,
-	coreCalleeTargetsSingleFunction,
 	coreValueIsLoadedGlobalProperty,
 } from "./core-ir-call-targets.ts";
 import type { CoreIndexedCallSite } from "./core-ir-call-targets.ts";

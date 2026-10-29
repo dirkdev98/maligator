@@ -1,8 +1,8 @@
 import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
 import type { StaticMember } from "../shared/static-values.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import { coreCalleeTargetsAreOpen } from "./core-callee-targets.ts";
 import { CoreEditor } from "./core-editor.ts";
-import { coreCalleeTargetsAreOpen } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import type {

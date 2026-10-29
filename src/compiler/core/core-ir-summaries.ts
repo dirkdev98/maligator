@@ -40,11 +40,9 @@ import {
 } from "./core-builtin-effects.ts";
 import type { CoreBuiltinCallbackInvocation } from "./core-builtin-effects.ts";
 import { coreBuiltinResultProjection } from "./core-builtin-result-projections.ts";
+import { coreCalleeTargetsAreOpen } from "./core-callee-targets.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import {
-	analyzeCoreCallGraph,
-	coreCalleeTargetsAreOpen,
-} from "./core-ir-call-targets.ts";
+import { analyzeCoreCallGraph } from "./core-ir-call-targets.ts";
 import type { CoreCallGraphIndex, CoreIndexedCallSite } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";

@@ -955,6 +955,14 @@ old return bounds cannot certify the new cycle. Unknown and mixed returns remain
 open, and Promise/iterator wrappers remain separate from body completions. Caller
 observations and dispatch consume the resulting targets through the usual Core
 passes, native plans and artifact encoding.
+
+Returned own-data fields carry the same target lattice independently of kind,
+range, brand and effect facts. Producer and caller writes join their reaching
+targets through the existing record alias and escape proofs. Return dependencies
+also observe field-only changes, and memory-value dependencies revisit reads when
+a later writer can reach them through a loop. Recursive resets withdraw both the
+outer result and field facts. Accessors, escaped records, missing own keys and
+async/generator wrappers retain their ordinary lookup and dispatch behavior.
 Known predicate invocation effects also constrain operand escape independently of
 their normal result. Nonthrowing primitive-result kernels without writes, reentry
 or suspension cannot expose an operand identity. Array.isArray separately follows

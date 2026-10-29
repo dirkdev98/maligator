@@ -1,7 +1,5 @@
-import {
-	coreDirectCreatedFunction,
-	coreCalleeTargetsAreOpen,
-} from "./core-ir-call-targets.ts";
+import { coreCalleeTargetsAreOpen } from "./core-callee-targets.ts";
+import { coreDirectCreatedFunction } from "./core-ir-call-targets.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";

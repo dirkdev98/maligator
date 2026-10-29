@@ -240,6 +240,7 @@ export interface CoreProgramFlowLocalCallTargets<
 	readonly function: CoreFunctionId;
 	readonly values: ReadonlyArray<Targets>;
 	readonly returnTargets: Targets;
+	readonly returnRecord?: CoreRecordValueKind;
 	readonly returnInputs: ReadonlyMap<CoreFunctionId, Targets>;
 	readonly sites: ReadonlyArray<Site>;
 	readonly invocationDependencies: ReadonlyArray<Targets>;
@@ -344,7 +345,11 @@ export interface CoreProgramFlowCallTargetSemantics<
 		properties: ReadonlyMap<number, Targets>,
 		transfers: CoreProgramFlowLocalTransfers,
 		identities: Identities,
-		returnTargets: (functionId: CoreFunctionId) => Targets,
+		returnSummary: (
+			functionId: CoreFunctionId,
+		) =>
+			| { readonly returnTargets: Targets; readonly returnRecord?: CoreRecordValueKind }
+			| undefined,
 	): Local;
 	callSiteEqual(left: Site, right: Site): boolean;
 	join(left: Targets, right: Targets): Targets;
@@ -1683,7 +1688,7 @@ export class CoreProgramFlowEngine {
 				knownFunctionProperties,
 				this.local(functionId),
 				identities,
-				(target) => local.get(target)?.returnTargets ?? semantics.bottom,
+				(target) => local.get(target),
 			);
 			const next =
 				repeated && currentLocal !== undefined
@@ -1731,7 +1736,8 @@ export class CoreProgramFlowEngine {
 				mutableReturnReaders(target).add(functionId);
 			if (
 				previousLocal === undefined ||
-				!semantics.equal(previousLocal.returnTargets, next.returnTargets)
+				!semantics.equal(previousLocal.returnTargets, next.returnTargets) ||
+				!sameCoreRecordValueKind(previousLocal.returnRecord, next.returnRecord)
 			) {
 				for (const reader of returnReaders.get(functionId) ??
 					previous?.returnGraph.exactCallers(functionId) ??
@@ -1783,7 +1789,11 @@ export class CoreProgramFlowEngine {
 					continue;
 				resetReturnComponents.add(component.id);
 				for (const member of component.functions) {
-					local.set(member, { ...local.get(member)!, returnTargets: semantics.bottom });
+					local.set(member, {
+						...local.get(member)!,
+						returnTargets: semantics.bottom,
+						returnRecord: null,
+					});
 					restart.add(member);
 				}
 			}

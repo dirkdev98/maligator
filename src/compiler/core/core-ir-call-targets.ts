@@ -3,7 +3,10 @@ import {
 	builtinNormalResultCallability,
 	builtinNormalResultProjection,
 } from "../shared/builtin-registry.ts";
-import { COMPILER_VALUE_KIND_OBJECT } from "../shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_TOP,
+} from "../shared/compiler-value-kinds.ts";
 import {
 	coreBuiltinCallbackInvocation,
 	coreDirectPrimordial,
@@ -12,6 +15,23 @@ import {
 } from "./core-builtin-effects.ts";
 import { coreBuiltinCallInput } from "./core-builtin-result-projections.ts";
 import type { CoreCallGraph } from "./core-call-graph.ts";
+import {
+	CORE_CALLEE_TARGET_CAP,
+	CORE_CALLEE_TARGETS_BOTTOM,
+	CORE_CALLEE_TARGETS_NON_CALLABLE,
+	CORE_CALLEE_TARGETS_ANY_SCRIPT,
+	CORE_CALLEE_TARGETS_OPAQUE,
+	CORE_CALLEE_TARGETS_OPEN,
+	CORE_CALLEE_TARGETS_CALLABLE,
+	CORE_CALLEE_TARGETS_NATIVE_CALLABLE,
+	coreCalleeTargetsFunction,
+	coreCalleeTargetsIsBottom,
+	coreCalleeTargetsCallability,
+	coreCalleeTargetsAreOpen,
+	coreCalleeTargetsEqual,
+	joinCoreCalleeTargets,
+} from "./core-callee-targets.ts";
+import type { CoreCalleeTargets } from "./core-callee-targets.ts";
 import { coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
@@ -36,9 +56,16 @@ import type {
 	CoreProgramFlowCallTargetStatistics,
 	CoreProgramFlowLocalTransfers,
 } from "./core-program-flow.ts";
+import {
+	coreRecordFieldReads,
+	coreReturnedRecordKinds,
+	coreRecordAccessProducerFields,
+	coreRecordAccessInitialFields,
+	coreRecordFieldReadCalleeTargets,
+	joinCoreRecordValueKinds,
+} from "./core-record-value-kinds.ts";
+import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
-
-export const CORE_CALLEE_TARGET_CAP = 4;
 
 type CoreCellId = number;
 type CoreFunctionPropertyId = number;
@@ -76,159 +103,6 @@ class CoreGraphIdentityTable {
 	}
 }
 
-export interface CoreCalleeTargets {
-	// Finite provenance remains sorted and unique even when anyScript is set.
-	readonly functions: ReadonlyArray<CoreFunctionId>;
-	readonly anyScript: boolean;
-	readonly opaque: boolean;
-	readonly nonCallable: boolean;
-}
-
-export const CORE_CALLEE_TARGETS_BOTTOM: CoreCalleeTargets = Object.freeze({
-	functions: Object.freeze([]),
-	anyScript: false,
-	opaque: false,
-	nonCallable: false,
-});
-
-const CORE_CALLEE_TARGETS_NON_CALLABLE: CoreCalleeTargets = Object.freeze({
-	functions: Object.freeze([]),
-	anyScript: false,
-	opaque: false,
-	nonCallable: true,
-});
-
-export const CORE_CALLEE_TARGETS_ANY_SCRIPT: CoreCalleeTargets = Object.freeze({
-	functions: Object.freeze([]),
-	anyScript: true,
-	opaque: false,
-	nonCallable: false,
-});
-
-export const CORE_CALLEE_TARGETS_OPAQUE: CoreCalleeTargets = Object.freeze({
-	functions: Object.freeze([]),
-	anyScript: false,
-	opaque: true,
-	nonCallable: true,
-});
-
-const CORE_CALLEE_TARGETS_OPEN: CoreCalleeTargets = Object.freeze({
-	functions: Object.freeze([]),
-	anyScript: true,
-	opaque: true,
-	nonCallable: true,
-});
-
-const CORE_CALLEE_TARGETS_CALLABLE: CoreCalleeTargets = Object.freeze({
-	...CORE_CALLEE_TARGETS_OPEN,
-	nonCallable: false,
-});
-
-const CORE_CALLEE_TARGETS_NATIVE_CALLABLE: CoreCalleeTargets = Object.freeze({
-	...CORE_CALLEE_TARGETS_OPAQUE,
-	nonCallable: false,
-});
-
-export function coreCalleeTargetsFunction(functionId: number): CoreCalleeTargets {
-	return Object.freeze({
-		functions: Object.freeze([functionId as CoreFunctionId]),
-		anyScript: false,
-		opaque: false,
-		nonCallable: false,
-	});
-}
-
-export function coreCalleeTargetsIsBottom(targets: CoreCalleeTargets): boolean {
-	return (
-		targets.functions.length === 0 &&
-		!targets.anyScript &&
-		!targets.opaque &&
-		!targets.nonCallable
-	);
-}
-
-// Class constructors remain callable even though ordinary invocation throws.
-export function coreCalleeTargetsCallability(
-	targets: CoreCalleeTargets,
-): boolean | undefined {
-	const callable = targets.opaque || targets.anyScript || targets.functions.length > 0;
-	if (callable && !targets.nonCallable) return true;
-	if (!callable && targets.nonCallable) return false;
-	return undefined;
-}
-
-export function coreCalleeTargetsAreOpen(targets: CoreCalleeTargets): boolean {
-	return targets.anyScript || targets.opaque || targets.nonCallable;
-}
-
-export function coreCalleeTargetsSingleFunction(
-	targets: CoreCalleeTargets,
-): CoreFunctionId | undefined {
-	return targets.functions.length === 1 && !coreCalleeTargetsAreOpen(targets)
-		? targets.functions[0]
-		: undefined;
-}
-
-export const coreCalleeTargetsClosedFunction = coreCalleeTargetsSingleFunction;
-
-export function coreCalleeTargetsEqual(
-	left: CoreCalleeTargets,
-	right: CoreCalleeTargets,
-): boolean {
-	if (left === right) return true;
-	if (
-		left.anyScript !== right.anyScript ||
-		left.opaque !== right.opaque ||
-		left.nonCallable !== right.nonCallable ||
-		left.functions.length !== right.functions.length
-	)
-		return false;
-	for (let index = 0; index < left.functions.length; index++)
-		if (left.functions[index] !== right.functions[index]) return false;
-	return true;
-}
-
-export function joinCoreCalleeTargets(
-	left: CoreCalleeTargets,
-	right: CoreCalleeTargets,
-): CoreCalleeTargets {
-	if (left === right || coreCalleeTargetsEqual(left, right)) return left;
-	if (coreCalleeTargetsIsBottom(left)) return right;
-	if (coreCalleeTargetsIsBottom(right)) return left;
-	const functions: Array<CoreFunctionId> = [];
-	let anyScript = left.anyScript || right.anyScript;
-	if (!anyScript) {
-		let leftIndex = 0,
-			rightIndex = 0;
-		while (leftIndex < left.functions.length || rightIndex < right.functions.length) {
-			const leftFunction = left.functions[leftIndex];
-			const rightFunction = right.functions[rightIndex];
-			if (
-				rightFunction === undefined ||
-				(leftFunction !== undefined && leftFunction < rightFunction)
-			) {
-				functions.push(leftFunction!);
-				leftIndex++;
-			} else {
-				functions.push(rightFunction);
-				rightIndex++;
-				if (leftFunction === rightFunction) leftIndex++;
-			}
-			if (functions.length > CORE_CALLEE_TARGET_CAP) {
-				anyScript = true;
-				functions.length = 0;
-				break;
-			}
-		}
-	}
-	return Object.freeze({
-		functions: Object.freeze(functions),
-		anyScript,
-		opaque: left.opaque || right.opaque,
-		nonCallable: left.nonCallable || right.nonCallable,
-	});
-}
-
 export interface CoreIndexedCallSite extends CoreLocalCallSite {
 	readonly targets: CoreCalleeTargets;
 	readonly open: boolean;
@@ -243,6 +117,7 @@ interface CoreLocalCallTargets {
 	readonly callsVersion: number;
 	readonly values: ReadonlyArray<CoreCalleeTargets>;
 	readonly returnTargets: CoreCalleeTargets;
+	readonly returnRecord?: CoreRecordValueKind;
 	readonly returnInputs: ReadonlyMap<CoreFunctionId, CoreCalleeTargets>;
 	readonly sites: ReadonlyArray<CoreIndexedCallSite>;
 	readonly invocationDependencies: ReadonlyArray<CoreCalleeTargets>;
@@ -916,7 +791,12 @@ function analyzeFunctionTargets(
 	knownFunctionProperties: ReadonlyMap<CoreFunctionPropertyId, CoreCalleeTargets>,
 	localTransfers: CoreProgramFlowLocalTransfers,
 	identities: CoreGraphIdentityTable,
-	returnTargetsOf: (functionId: CoreFunctionId) => CoreCalleeTargets,
+	returnSummary: (functionId: CoreFunctionId) =>
+		| {
+				readonly returnTargets: CoreCalleeTargets;
+				readonly returnRecord?: CoreRecordValueKind;
+		  }
+		| undefined,
 ): CoreLocalCallTargets {
 	const values = Array<CoreCalleeTargets>(fn.valueCapacity).fill(
 		CORE_CALLEE_TARGETS_BOTTOM,
@@ -931,6 +811,50 @@ function analyzeFunctionTargets(
 	const queued = new Uint8Array(fn.blockCapacity);
 	let activeBlock: CoreBlockId | undefined;
 	const returnInputs = new Map<CoreFunctionId, CoreCalleeTargets>();
+	const recordReads = coreRecordFieldReads(fn, () => cfg);
+	const recordObservers = new Map<CoreValueId, Set<CoreBlockId>>();
+	for (const [instruction, read] of recordReads) {
+		const block = fn.instructionBlock(instruction);
+		const inputs = (read.writes ?? []).map((write) => write.value);
+		for (const producer of read.producers) {
+			const transfer = fn.registry.byId(fn.instructionOpcode(producer)).callTransfer;
+			const input =
+				transfer === undefined
+					? undefined
+					: instructionOperand(fn, producer, transfer.calleeOperand);
+			if (input !== undefined) inputs.push(input);
+		}
+		for (const value of inputs) {
+			let observers = recordObservers.get(value);
+			if (observers === undefined) recordObservers.set(value, (observers = new Set()));
+			observers.add(block);
+		}
+	}
+	const readReturnSummary = (target: CoreFunctionId) => {
+		const summary = returnSummary(target);
+		returnInputs.set(target, summary?.returnTargets ?? CORE_CALLEE_TARGETS_BOTTOM);
+		return summary;
+	};
+	const recordResult = (instruction: CoreInstructionId): CoreRecordValueKind => {
+		const transfer = fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer;
+		if (transfer === undefined) return undefined;
+		const callee = instructionOperand(fn, instruction, transfer.calleeOperand);
+		if (callee === undefined) return undefined;
+		const targets = values[callee]!;
+		if (coreCalleeTargetsIsBottom(targets)) return null;
+		if (targets.opaque || targets.anyScript || targets.functions.length === 0)
+			return undefined;
+		let result: CoreRecordValueKind = null;
+		for (const target of targets.functions) {
+			const summary = readReturnSummary(target);
+			result = joinCoreRecordValueKinds(
+				result,
+				summary === undefined ? null : summary.returnRecord,
+			);
+			if (result === undefined) break;
+		}
+		return result;
+	};
 	const enqueue = (block: CoreBlockId, needsTransfer = true): void => {
 		if (queued[block] === 2) return;
 		// Clean revisits retain their queue position for later phi or handler wakeups.
@@ -942,6 +866,8 @@ function analyzeFunctionTargets(
 		const joined = joinCoreCalleeTargets(current, incoming);
 		if (coreCalleeTargetsEqual(current, joined)) return false;
 		values[value] = joined;
+		// Memory alternatives can flow backwards across a loop within this block.
+		for (const block of recordObservers.get(value) ?? []) enqueue(block);
 		for (
 			let use = fn.kernel.valueFirstUse(value);
 			use >= 0;
@@ -1049,7 +975,7 @@ function analyzeFunctionTargets(
 						: (cells.get(key) ?? CORE_CALLEE_TARGETS_BOTTOM);
 			} else if (opcode === "loadProperty" && privateArrayLoads.has(instruction)) {
 				resultTargets = privateArrayLoads.get(instruction)!;
-			} else if (opcode === "loadPropertyStatic") {
+			} else if (opcode === "loadPropertyStatic" || opcode === "loadProperty") {
 				const receiver = instructionOperand(fn, instruction, 0);
 				const stringIndex = fn.instructionAttributes(instruction).stringIndex;
 				let knownTargets = CORE_CALLEE_TARGETS_BOTTOM;
@@ -1076,6 +1002,18 @@ function analyzeFunctionTargets(
 							);
 					}
 				}
+				const read = recordReads.get(instruction);
+				if (read !== undefined) {
+					const record = coreRecordAccessProducerFields(read, recordResult);
+					const initial = coreRecordAccessInitialFields(read, record, recordResult);
+					resultTargets =
+						coreRecordFieldReadCalleeTargets(
+							read,
+							record,
+							initial,
+							(value) => values[value],
+						) ?? resultTargets;
+				}
 			} else if (
 				fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
 				"call-completion"
@@ -1095,9 +1033,8 @@ function analyzeFunctionTargets(
 						const targetReturns =
 							targetFunction.isAsync || targetFunction.isGenerator
 								? CORE_CALLEE_TARGETS_NON_CALLABLE
-								: returnTargetsOf(target);
-						if (!targetFunction.isAsync && !targetFunction.isGenerator)
-							returnInputs.set(target, targetReturns);
+								: (readReturnSummary(target)?.returnTargets ??
+									CORE_CALLEE_TARGETS_BOTTOM);
 						returned = joinCoreCalleeTargets(returned, targetReturns);
 					}
 					resultTargets =
@@ -1140,6 +1077,16 @@ function analyzeFunctionTargets(
 			);
 		}
 	}
+	const returnRecord = coreReturnedRecordKinds(
+		fn,
+		cfg,
+		{
+			mask: (value) =>
+				coreCalleeTargetsIsBottom(values[value]!) ? 0 : COMPILER_VALUE_KIND_TOP,
+			calleeTargets: (value) => values[value],
+		},
+		recordResult,
+	);
 	const flow = analyzeCoreInterproceduralValueFlow(fn, localTransfers);
 	const sites = flow.calls.map((call) => {
 		const targets = coreCalleeTargetsIsBottom(values[call.callee]!)
@@ -1337,6 +1284,7 @@ function analyzeFunctionTargets(
 		callsVersion: fn.version("calls"),
 		values: Object.freeze(values),
 		returnTargets,
+		returnRecord,
 		returnInputs,
 		sites: Object.freeze(sites),
 		invocationDependencies: Object.freeze(invocationDependencies),

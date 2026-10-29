@@ -4,6 +4,12 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import {
+	CORE_CALLEE_TARGETS_BOTTOM,
+	coreCalleeTargetsEqual,
+	joinCoreCalleeTargets,
+} from "./core-callee-targets.ts";
+import type { CoreCalleeTargets } from "./core-callee-targets.ts";
 import { joinCoreHeapBrands } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState } from "./core-heap-brands.ts";
 import type { CoreControlEdge, CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -16,6 +22,7 @@ export interface CoreRecordFieldKind {
 	// Null keeps an unsolved field separate from an unknown field during range convergence.
 	readonly integerRange?: CompilerIntegerRange | null;
 	readonly heapBrand?: CoreHeapBrandState;
+	readonly calleeTargets?: CoreCalleeTargets;
 	readonly key: number;
 	readonly mask: number;
 }
@@ -38,6 +45,15 @@ function joinFieldIntegerRanges(
 	});
 }
 
+function joinFieldCalleeTargets(
+	left: CoreCalleeTargets | undefined,
+	right: CoreCalleeTargets | undefined,
+): CoreCalleeTargets | undefined {
+	return left === undefined || right === undefined
+		? undefined
+		: joinCoreCalleeTargets(left, right);
+}
+
 export function sameCoreRecordValueKind(
 	left: CoreRecordValueKind,
 	right: CoreRecordValueKind,
@@ -54,6 +70,13 @@ export function sameCoreRecordValueKind(
 					field.key === right[index]!.key &&
 					field.mask === right[index]!.mask &&
 					field.heapBrand === right[index]!.heapBrand &&
+					(field.calleeTargets === right[index]!.calleeTargets ||
+						(field.calleeTargets !== undefined &&
+							right[index]!.calleeTargets !== undefined &&
+							coreCalleeTargetsEqual(
+								field.calleeTargets,
+								right[index]!.calleeTargets,
+							))) &&
 					(field.integerRange === right[index]!.integerRange ||
 						(field.integerRange !== null &&
 							right[index]!.integerRange !== null &&
@@ -93,12 +116,17 @@ export function joinCoreRecordValueKinds(
 			mask === COMPILER_VALUE_KIND_OBJECT
 				? joinCoreHeapBrands(field.heapBrand, other.heapBrand)
 				: undefined;
+		const calleeTargets = joinFieldCalleeTargets(
+			field.calleeTargets,
+			other.calleeTargets,
+		);
 		fields.push(
 			Object.freeze({
 				key: field.key,
 				mask,
 				...(integerRange === undefined ? {} : { integerRange }),
 				...(heapBrand === undefined ? {} : { heapBrand }),
+				...(calleeTargets === undefined ? {} : { calleeTargets }),
 			}),
 		);
 	}
@@ -500,6 +528,11 @@ export interface CoreRecordValueQueries {
 		consumer: CoreInstructionId,
 		edge?: CoreControlEdge,
 	) => CoreHeapBrandState;
+	readonly calleeTargets?: (
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+		edge?: CoreControlEdge,
+	) => CoreCalleeTargets | undefined;
 }
 
 /** Own data fields on normal return; callers still need a separate mutation/escape proof. */
@@ -569,11 +602,13 @@ export function coreReturnedRecordKinds(
 							kind === COMPILER_VALUE_KIND_OBJECT
 								? queries.heapBrand?.(value, definition)
 								: undefined;
+						const calleeTargets = queries.calleeTargets?.(value, definition);
 						return Object.freeze({
 							key,
 							mask: kind,
 							...(integerRange === undefined ? {} : { integerRange }),
 							...(heapBrand === undefined ? {} : { heapBrand }),
+							...(calleeTargets === undefined ? {} : { calleeTargets }),
 						});
 					})
 					.sort((left, right) => left.key - right.key),
@@ -605,6 +640,10 @@ export function coreReturnedRecordKinds(
 					let kind = 0;
 					let integerRange: CompilerIntegerRange | null | undefined = null;
 					let heapBrand: CoreHeapBrandState = null;
+					let calleeTargets: CoreCalleeTargets | undefined =
+						queries.calleeTargets === undefined && field.calleeTargets === undefined
+							? undefined
+							: CORE_CALLEE_TARGETS_BOTTOM;
 					for (const alternative of alternatives ?? [undefined]) {
 						const initialSurvives =
 							alternative?.initialProducers === undefined ||
@@ -612,6 +651,9 @@ export function coreReturnedRecordKinds(
 						let partKind = initialSurvives ? field.mask : 0;
 						let partRange = initialSurvives ? field.integerRange : null;
 						let partBrand = initialSurvives ? field.heapBrand : null;
+						let partTargets = initialSurvives
+							? field.calleeTargets
+							: CORE_CALLEE_TARGETS_BOTTOM;
 						for (const write of alternative === undefined
 							? writes
 							: (alternative.writes ?? [])) {
@@ -619,6 +661,10 @@ export function coreReturnedRecordKinds(
 							const written = queries.mask(write.value, write.instruction, write.edge);
 							partKind |= written;
 							if (written !== 0) {
+								partTargets = joinFieldCalleeTargets(
+									partTargets,
+									queries.calleeTargets?.(write.value, write.instruction, write.edge),
+								);
 								partRange =
 									partKind === COMPILER_VALUE_KIND_NUMBER
 										? joinFieldIntegerRanges(
@@ -640,6 +686,7 @@ export function coreReturnedRecordKinds(
 							}
 						}
 						if (partKind !== 0) {
+							calleeTargets = joinFieldCalleeTargets(calleeTargets, partTargets);
 							kind |= partKind;
 							integerRange =
 								kind === COMPILER_VALUE_KIND_NUMBER
@@ -656,6 +703,7 @@ export function coreReturnedRecordKinds(
 						mask: kind,
 						...(integerRange === undefined ? {} : { integerRange }),
 						...(heapBrand === undefined ? {} : { heapBrand }),
+						...(calleeTargets === undefined ? {} : { calleeTargets }),
 					});
 				}),
 			);
@@ -762,6 +810,31 @@ export function coreRecordFieldReadIntegerRange(
 		result = joinFieldIntegerRanges(
 			result,
 			range(write.value, write.instruction, write.edge),
+		);
+		if (result === undefined) break;
+	}
+	return result;
+}
+
+export function coreRecordFieldReadCalleeTargets(
+	read: CoreRecordFieldAccess,
+	record: CoreRecordValueKind,
+	initial: CoreRecordValueKind,
+	targets: NonNullable<CoreRecordValueQueries["calleeTargets"]>,
+): CoreCalleeTargets | undefined {
+	if (record === null || coreRecordFieldInitialKind(read, record, -1) === 0)
+		return CORE_CALLEE_TARGETS_BOTTOM;
+	if (!coreRecordFieldIsOwnData(read, record)) return undefined;
+	let result =
+		initial === null
+			? CORE_CALLEE_TARGETS_BOTTOM
+			: coreRecordFieldIsOwnData(read, initial)
+				? initial!.find((field) => field.key === read.key)!.calleeTargets
+				: undefined;
+	for (const write of read.writes ?? []) {
+		result = joinFieldCalleeTargets(
+			result,
+			targets(write.value, write.instruction, write.edge),
 		);
 		if (result === undefined) break;
 	}
