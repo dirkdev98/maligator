@@ -160,8 +160,9 @@ export class CoreStaticCellIndex {
 				found = new Map<string, Array<CellAccess>>();
 			let reboundScopes: Set<number> | undefined;
 			for (const instruction of fn.instructionIds()) {
-				if (fn.instructionKind(instruction) !== "operation") continue;
-				const opcode = fn.instructionOpcodeName(instruction);
+				const header = fn.instructionHeader(instruction);
+				if (typeof header === "string") continue;
+				const opcode = header.opcode;
 				if (opcode === "envPush" || opcode === "envCopy")
 					(reboundScopes ??= new Set()).add(
 						fn.instructionAttributes(instruction).scopeId as number,

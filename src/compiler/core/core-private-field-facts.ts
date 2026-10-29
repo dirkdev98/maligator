@@ -94,8 +94,9 @@ export class CorePrivateFieldKeys {
 	writes(fn: CoreFunctionStore): ReadonlyArray<CorePrivateFieldWrite> | undefined {
 		const writes: Array<CorePrivateFieldWrite> = [];
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (opcode === "definePrivate" || opcode === "storePrivate") {
 				const key = this.key(fn, operand(fn, instruction, 1));
 				if (key === undefined) return undefined;
@@ -135,9 +136,10 @@ export function corePrivateFieldKeys(
 	for (const id of program.functionIds()) {
 		const fn = program.function(id);
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
-			const attributes = fn.instructionAttributes(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
+			const attributes = fn.kernel.instructionAttributes(instruction);
 			if (opcode === "createPrivateNames" && Array.isArray(attributes.capturedIndices)) {
 				for (const index of attributes.capturedIndices) {
 					const key = capturedSlotKey(attributes.functionIndex, index);

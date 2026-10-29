@@ -84,8 +84,9 @@ export const materializeVirtualState: CoreFunctionPass = {
 					return true;
 				if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
 				const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-				if (fn.instructionKind(definition) !== "operation") return false;
-				const opcode = fn.instructionOpcodeName(definition);
+				const header = fn.instructionHeader(definition);
+				if (typeof header === "string") return false;
+				const opcode = header.opcode;
 				if (CONSTANTS.has(opcode)) return true;
 				if (opcode !== "move") return false;
 				value = argsOf(definition)[0]!;

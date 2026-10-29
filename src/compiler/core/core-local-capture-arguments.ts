@@ -473,8 +473,9 @@ export function liftLocalCaptureArguments(
 		for (const index of fn.metadata.mappedArgumentSlots)
 			mappedArguments.add(key({ owner: id, index }));
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (opcode.startsWith("with")) return 0;
 			if (opcode === "createFunction") {
 				const target = fn.instructionAttributes(instruction).functionIndex;

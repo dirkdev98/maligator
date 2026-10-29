@@ -141,8 +141,9 @@ export function deferCapturedRestMaterialization(
 	for (const id of program.functionIds()) {
 		const fn = program.function(id);
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			const own = candidates.get(id);
 			if (
 				opcode === "createRestArguments" &&

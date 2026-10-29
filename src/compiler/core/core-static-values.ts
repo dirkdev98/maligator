@@ -1661,9 +1661,10 @@ export class CoreStaticValueAnalysis {
 			});
 		}
 		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-		if (fn.instructionKind(instruction) !== "operation") return false;
-		const opcode = fn.instructionOpcodeName(instruction);
-		const attributes = fn.instructionAttributes(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") return false;
+		const opcode = header.opcode;
+		const attributes = fn.kernel.instructionAttributes(instruction);
 		const operand = (index: number) =>
 			fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + index);
 		switch (opcode) {

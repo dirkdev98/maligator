@@ -244,8 +244,9 @@ export function coreIntegerPreservedResultInput(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): CoreValueId | undefined {
-	if (fn.instructionKind(instruction) !== "operation") return undefined;
-	const opcode = fn.instructionOpcodeName(instruction);
+	const header = fn.instructionHeader(instruction);
+	if (typeof header === "string") return undefined;
+	const opcode = header.opcode;
 	if (opcode !== "mathUnaryNumber" && opcode !== "callKnown") return undefined;
 	const attributes = fn.instructionAttributes(instruction);
 	if (opcode === "callKnown") {
@@ -598,8 +599,9 @@ function privateArrayUses(
 		if (candidates.has(valueRoot)) reject.add(valueRoot);
 	}
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		const operandStart = fn.kernel.instructionOperandStart(instruction);
 		const operandCount = fn.kernel.instructionOperandCount(instruction);
 		for (let position = 0; position < operandCount; position++) {
@@ -703,8 +705,9 @@ function privateArrayFromSeeds(
 	const seeds: Array<CorePrivateArraySeed> = [];
 	let roots: ReadonlyMap<CoreValueId, CoreValueId> | undefined;
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (
 			opcode !== "call" &&
 			(opcode !== "callKnown" ||

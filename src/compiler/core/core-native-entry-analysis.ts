@@ -523,8 +523,9 @@ export function coreArgumentObservation(fn: CoreFunctionStore): CoreArgumentObse
 	const indices = new Set<number>();
 	const restStarts = new Set<number>();
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (opcode === "createArgumentsObject" || opcode === "callRestArguments")
 			return { kind: "general" };
 		if (opcode === "createRestArguments") {

@@ -335,8 +335,9 @@ export class CorePrivateFieldElements {
 		const allocations: Array<CoreInstructionId> = [];
 		const fieldWrites: Array<readonly [CoreInstructionId, string]> = [];
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (opcode === "loadPrivate") {
 				const key = this.#keys.key(fn, operand(fn, instruction, 1));
 				if (key !== undefined && this.#arrayKeys.has(key))

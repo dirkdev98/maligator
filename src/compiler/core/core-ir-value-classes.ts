@@ -385,8 +385,9 @@ export function analyzeCoreValueClasses(
 		operand: number,
 	): boolean => {
 		useVisits++;
-		if (fn.instructionKind(instruction) !== "operation") return false;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") return false;
+		const opcode = header.opcode;
 		if (opcode === "move" || opcode === "rootUse" || opcode === "requireCoercible")
 			return true;
 		if (

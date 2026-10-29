@@ -517,10 +517,13 @@ function rebuildOperation(
 	directCallTargetFunctionIndex: CoreAttributeValue | undefined,
 	allowImmediateOperands: boolean,
 ): CompilerInstruction {
-	const opcode = fn.instructionOpcodeName(instruction);
+	const header = fn.instructionHeader(instruction);
+	if (typeof header === "string")
+		throw new Error(`Core instruction ${instruction} is not an operation`);
+	const opcode = header.opcode;
 	const contract = requireCoreTargetOperationContract(opcode);
 	const selectedAttributes: Record<string, CoreAttributeValue> = Object.fromEntries(
-		Object.entries(fn.instructionAttributes(instruction)).filter(
+		Object.entries(fn.kernel.instructionAttributes(instruction)).filter(
 			([key]) => !CORE_INTERNAL_ATTRIBUTES.has(key),
 		),
 	);

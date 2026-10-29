@@ -164,8 +164,9 @@ function definesMembers(definition: ClassDefinition): boolean {
 	) {
 		if (fn.kernel.useOperand(use) !== 0) continue;
 		const instruction = fn.kernel.useInstruction(use);
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (opcode === "defineProperty" || opcode === "defineAccessor") return true;
 	}
 	return false;
@@ -193,8 +194,9 @@ function findClassDefinitions(
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (opcode === "defineProperty") {
 				const [owner, key, value] = operands(fn, instruction);
 				if (owner === undefined || key === undefined || value === undefined) continue;
@@ -238,8 +240,9 @@ function prototypeMembers(definition: ClassDefinition): OwnMembers {
 	const accessors = new Set<number>();
 	const methodFunctions: Array<CoreFunctionId> = [];
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (opcode !== "defineProperty" && opcode !== "defineAccessor") continue;
 		const [owner, key, value] = operands(fn, instruction);
 		if (owner !== prototype || key === undefined || value === undefined) continue;
@@ -323,9 +326,10 @@ function ordinaryDataKeys(program: CoreProgram): Set<number> {
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
-			const attributes = fn.instructionAttributes(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
+			const attributes = fn.kernel.instructionAttributes(instruction);
 			if (opcode === "createObjectShaped" && Array.isArray(attributes.keyStringIndices)) {
 				for (const key of attributes.keyStringIndices)
 					if (typeof key === "number") keys.add(key);

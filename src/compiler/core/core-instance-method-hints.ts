@@ -232,9 +232,10 @@ export function coreAccessorHints(program: CoreProgram): CoreAccessorHints {
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
-			const attributes = fn.instructionAttributes(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
+			const attributes = fn.kernel.instructionAttributes(instruction);
 			if (
 				opcode === "storePropertyStatic" &&
 				typeof attributes.stringIndex === "number"

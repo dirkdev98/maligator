@@ -258,8 +258,9 @@ export const foldLiteralArrayLengths: CoreFunctionPass = {
 			if (observed !== undefined) rejected.add(root(observed));
 		}
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			const count = fn.kernel.instructionOperandCount(instruction);
 			for (let position = 0; position < count; position++) {
 				const value = root(operand(fn, instruction, position));

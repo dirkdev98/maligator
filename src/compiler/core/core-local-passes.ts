@@ -1790,9 +1790,10 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 			if (ownCells !== undefined) return ownCells;
 			ownCells = new Map();
 			for (const instruction of fn.instructionIds()) {
-				if (fn.instructionKind(instruction) !== "operation") continue;
-				const opcode = fn.instructionOpcodeName(instruction);
-				const attributes = fn.instructionAttributes(instruction);
+				const header = fn.instructionHeader(instruction);
+				if (typeof header === "string") continue;
+				const opcode = header.opcode;
+				const attributes = fn.kernel.instructionAttributes(instruction);
 				if (opcode === "envPush" && typeof attributes.scopeId === "number") {
 					const pushes = scopePushes.get(attributes.scopeId) ?? [];
 					pushes.push(instruction);

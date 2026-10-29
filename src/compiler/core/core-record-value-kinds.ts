@@ -253,8 +253,9 @@ function recordKeys(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): ReadonlyArray<number> | undefined {
-	if (fn.instructionKind(instruction) !== "operation") return undefined;
-	const opcode = fn.instructionOpcodeName(instruction);
+	const header = fn.instructionHeader(instruction);
+	if (typeof header === "string") return undefined;
+	const opcode = header.opcode;
 	if (opcode === "createObject" && fn.kernel.instructionOperandCount(instruction) === 0)
 		return EMPTY_RECORD_KEYS;
 	if (opcode !== "createObjectShaped") return undefined;

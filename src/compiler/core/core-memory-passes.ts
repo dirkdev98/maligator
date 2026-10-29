@@ -158,8 +158,9 @@ function isReusableMemoryRead(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): boolean {
-	if (fn.instructionKind(instruction) !== "operation") return false;
-	const opcode = fn.instructionOpcodeName(instruction);
+	const header = fn.instructionHeader(instruction);
+	if (typeof header === "string") return false;
+	const opcode = header.opcode;
 	// Private accessors lower to separate calls; a successful raw load proves its brand check.
 	if (opcode === "loadPrivate") return true;
 	if (
@@ -350,8 +351,9 @@ function hasExactAllocationObservationOpportunity(fn: CoreFunctionStore): boolea
 		return true;
 	};
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		const operator = fn.instructionAttributes(instruction).operator;
 		if (opcode === "unary" && (operator === "typeof" || operator === "!")) {
 			const operand = instructionOperandAt(fn, instruction, 0);
@@ -375,8 +377,9 @@ function hasShapedObjectLoadOpportunity(fn: CoreFunctionStore): boolean {
 	let hasShapedObject = false;
 	let hasStaticLoad = false;
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (opcode === "createObjectShaped") hasShapedObject = true;
 		else if (opcode === "loadPropertyStatic") hasStaticLoad = true;
 		if (hasShapedObject && hasStaticLoad) return true;
@@ -494,8 +497,9 @@ function hasStackCellRepresentationConsumer(fn: CoreFunctionStore): boolean {
 	let shapedAllocation = false;
 	let scalarCell = false;
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (opcode === "createObjectShaped") shapedAllocation = true;
 		if (opcode === "storePropertyStatic") {
 			const value = instructionOperandAt(fn, instruction, 1);
@@ -569,8 +573,9 @@ const foldExactAllocationObservations: CoreFunctionPass = {
 		const objectStringIndex = program.stringConstantSlot("object", "first") ?? -1;
 		let editor: CoreEditor | undefined;
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			const operator = fn.instructionAttributes(instruction).operator;
 			const leftOperand = instructionOperandAt(fn, instruction, 0);
 			const rightOperand = instructionOperandAt(fn, instruction, 1);
@@ -723,8 +728,9 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 		const shapes = context.analysis(CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS);
 		let editor: CoreEditor | undefined;
 		for (const instruction of context.instructions()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (opcode !== "loadPropertyStatic" && opcode !== "storePropertyStatic") continue;
 			const attributes = fn.instructionAttributes(instruction);
 			const stringIndex = attributes.stringIndex;
@@ -1290,8 +1296,9 @@ const refineExactTypedArrayAccesses: CoreFunctionPass = {
 			inBounds: boolean;
 		}> = [];
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (
 				opcode !== "loadProperty" &&
 				opcode !== "storeProperty" &&
@@ -1615,8 +1622,9 @@ function hasShapedObjectStoreOpportunity(fn: CoreFunctionStore): boolean {
 	let hasShapedObject = false;
 	let hasStaticStore = false;
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (opcode === "createObjectShaped") hasShapedObject = true;
 		else if (opcode === "storePropertyStatic") hasStaticStore = true;
 		if (hasShapedObject && hasStaticStore) return true;
@@ -2576,8 +2584,9 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 			const root = facts().roots.get(value) ?? value;
 			if (fn.kernel.valueDefinitionKind(root) !== 1) return false;
 			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(root));
-			if (fn.instructionKind(definition) !== "operation") return false;
-			const opcode = fn.instructionOpcodeName(definition);
+			const header = fn.instructionHeader(definition);
+			if (typeof header === "string") return false;
+			const opcode = header.opcode;
 			// Locked primordial edges root these identities independently of private containers.
 			return opcode === "loadPrimordial";
 		};

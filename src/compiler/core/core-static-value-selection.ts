@@ -118,8 +118,9 @@ export const selectStaticPropertyReads: CoreFunctionPass = {
 		hasOpportunity({ program, function: functionId }) {
 			const fn = program.function(functionId);
 			for (const instruction of fn.instructionIds()) {
-				if (fn.instructionKind(instruction) !== "operation") continue;
-				const opcode = fn.instructionOpcodeName(instruction);
+				const header = fn.instructionHeader(instruction);
+				if (typeof header === "string") continue;
+				const opcode = header.opcode;
 				if (
 					opcode === "loadProperty" &&
 					!fn.instructionAttributes(instruction)[CORE_STATIC_SELECTION_FALLBACK_ATTRIBUTE]
@@ -412,8 +413,9 @@ export const foldStaticReflections: CoreFunctionPass = {
 		hasOpportunity({ program, function: functionId }) {
 			const fn = program.function(functionId);
 			for (const instruction of fn.instructionIds()) {
-				if (fn.instructionKind(instruction) !== "operation") continue;
-				const opcode = fn.instructionOpcodeName(instruction);
+				const header = fn.instructionHeader(instruction);
+				if (typeof header === "string") continue;
+				const opcode = header.opcode;
 				if (
 					opcode === "call" ||
 					opcode === "callKnown" ||

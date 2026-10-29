@@ -1113,8 +1113,9 @@ export function buildCoreLocalOptimizationPlanInput(
 		}
 		for (const instruction of fn.instructionIds()) {
 			operationCount++;
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			const benefit =
 				opcode === "iteratorStep" || opcode === "getIterator"
 					? 24

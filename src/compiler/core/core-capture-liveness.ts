@@ -87,8 +87,9 @@ function forwardOwnCapturedLoads(
 		{ loads: Array<CoreInstructionId>; stores: Array<CoreInstructionId> }
 	>();
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (opcode !== "loadCaptured" && opcode !== "storeCaptured") continue;
 		const { functionIndex, index } = fn.instructionAttributes(instruction);
 		if (
@@ -281,8 +282,9 @@ function onlyCalled(fn: CoreFunctionStore, value: CoreValueId): boolean {
 	if (fn.kernel.valueHandlerUseCount(value) !== 0) return false;
 	for (let use = fn.kernel.valueFirstUse(value); use >= 0; use = fn.kernel.useNext(use)) {
 		const instruction = coreInstructionId(fn.kernel.useInstruction(use));
-		if (fn.instructionKind(instruction) !== "operation") return false;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") return false;
+		const opcode = header.opcode;
 		if (opcode === "throwIfTdz") continue;
 		if (opcode !== "call") return false;
 		const start = fn.kernel.instructionOperandStart(instruction);
@@ -337,8 +339,9 @@ function scanCapturedSlots(
 			if (index >= 0) implicitReads.add(key(id, index));
 		}
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (opcode.startsWith("with")) return undefined;
 			const attributes = fn.instructionAttributes(instruction);
 			if (opcode === "storeCaptured") {
@@ -471,8 +474,9 @@ export function pruneCoreCaptureLiveness(
 			const fn = program.function(id);
 			const closures: Array<CoreInstructionId> = [];
 			for (const instruction of fn.instructionIds()) {
-				if (fn.instructionKind(instruction) !== "operation") continue;
-				const opcode = fn.instructionOpcodeName(instruction);
+				const header = fn.instructionHeader(instruction);
+				if (typeof header === "string") continue;
+				const opcode = header.opcode;
 				if (opcode === "createFunction") closures.push(instruction);
 				if (opcode !== "storeCaptured") continue;
 				const { functionIndex, index } = fn.instructionAttributes(instruction);

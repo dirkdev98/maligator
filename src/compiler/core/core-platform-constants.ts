@@ -92,8 +92,9 @@ class PlatformValues {
 		for (const functionId of this.#program.functionIds()) {
 			const fn = this.#program.function(functionId);
 			for (const instruction of fn.instructionIds()) {
-				if (fn.instructionKind(instruction) !== "operation") continue;
-				const opcode = fn.instructionOpcodeName(instruction);
+				const header = fn.instructionHeader(instruction);
+				if (typeof header === "string") continue;
+				const opcode = header.opcode;
 				if (opcode !== "storeGlobal" && opcode !== "storeCaptured") continue;
 				const attributes = fn.instructionAttributes(instruction);
 				const key = cellKey(opcode, attributes);
@@ -315,8 +316,9 @@ export function specializeCorePlatformConstants(
 			initializedGlobals.set(index, stores);
 		}
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (opcode === "throwIfTdz") {
 				const input = operand(fn, instruction, 0);
 				if (fn.kernel.valueDefinitionKind(input) === 1) {
@@ -425,8 +427,9 @@ export function pruneUnusedPlatformAliases(
 		const fn = program.function(id);
 		const instructions: Array<CoreInstructionId> = [];
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (
 				opcode !== "loadGlobal" &&
 				opcode !== "loadProperty" &&

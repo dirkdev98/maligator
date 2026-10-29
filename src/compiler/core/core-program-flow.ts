@@ -690,9 +690,9 @@ export function extractCoreProgramFlowLocalTransfers(
 		instructionVisits++;
 		const sourcePosition = fn.kernel.instructionSourcePosition(instruction);
 		if (sourcePosition >= 0) addSourceTargets(structural, program, sourcePosition);
-		if (fn.kernel.instructionOpcode(instruction) < 0) continue;
+		const descriptor = fn.instructionHeader(instruction);
+		if (typeof descriptor === "string") continue;
 		operations.push(instruction);
-		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
 		if (descriptor.callTransfer !== undefined) calls.push(instruction);
 		const opcode = descriptor.opcode;
 		if (
@@ -708,7 +708,7 @@ export function extractCoreProgramFlowLocalTransfers(
 		if (opcode === "defineProperty" || opcode === "storePropertyStatic") {
 			propertyDefinitions.push(instruction);
 		}
-		const attributes = fn.instructionAttributes(instruction);
+		const attributes = fn.kernel.instructionAttributes(instruction);
 		for (const key of FUNCTION_INDEX_ATTRIBUTES) {
 			addStructuralTarget(
 				structural,

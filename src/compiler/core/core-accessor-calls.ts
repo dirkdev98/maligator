@@ -27,8 +27,9 @@ function accessorSites(
 	const sites: Array<AccessorSite> = [];
 	let loopBlocks: Set<CoreBlockId> | undefined;
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (opcode !== "loadPropertyStatic" && opcode !== "storePropertyStatic") continue;
 		// Outside loops an accessor call costs less than the code its probe adds.
 		loopBlocks ??= new Set(

@@ -91,8 +91,9 @@ function packedRestKeyIsNumber(
 	if (kinds.kindMask(value) === COMPILER_VALUE_KIND_NUMBER) return true;
 	if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
 	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-	if (fn.instructionKind(definition) !== "operation") return false;
-	const opcode = fn.instructionOpcodeName(definition);
+	const header = fn.instructionHeader(definition);
+	if (typeof header === "string") return false;
+	const opcode = header.opcode;
 	const operator = fn.instructionAttributes(definition).operator;
 	if (opcode === "unary") return operator === "+";
 	if (

@@ -128,8 +128,9 @@ export const cacheStablePrivateReads: CoreFunctionPass = {
 		let thisWriters = false;
 		const reads: Array<CoreInstructionId> = [];
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (opcode === "storePrivate") {
 				const field = facts.keys.key(fn, operand(fn, instruction, 1));
 				if (field === undefined) return undefined;

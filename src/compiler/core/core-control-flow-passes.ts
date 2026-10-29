@@ -333,8 +333,9 @@ function hasLoopScalarRepresentationConsumer(fn: CoreFunctionStore): boolean {
 	}
 	if (!numericParameter) return false;
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		const operator = fn.instructionAttributes(instruction).operator;
 		if (
 			(opcode === "binary" && (operator === "+" || operator === "-")) ||
@@ -1275,8 +1276,9 @@ const selectLoopScalarRepresentations: CoreFunctionPass = {
 		};
 		edges((argument, target) => connect(argument, target, true));
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (!LOOP_SCALAR_OPERATIONS.has(opcode)) continue;
 			const operandStart = fn.kernel.instructionOperandStart(instruction);
 			const operandCount = fn.kernel.instructionOperandCount(instruction);
@@ -1328,8 +1330,9 @@ const selectLoopScalarRepresentations: CoreFunctionPass = {
 				use = fn.kernel.useNext(use)
 			) {
 				const instruction = fn.kernel.useInstruction(use);
-				if (fn.instructionKind(instruction) !== "operation") continue;
-				const opcode = fn.instructionOpcodeName(instruction);
+				const header = fn.instructionHeader(instruction);
+				if (typeof header === "string") continue;
+				const opcode = header.opcode;
 				const operand = fn.kernel.useOperand(use);
 				const callArgument =
 					(opcode === "call" && operand >= 2) || (opcode === "callKnown" && operand >= 1);

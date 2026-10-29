@@ -2,6 +2,7 @@ import type {
 	CoreBlockId,
 	CoreFactId,
 	CoreImmediate,
+	CoreInstructionAttributes,
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
@@ -20,6 +21,7 @@ export interface CoreFunctionKernelColumns {
 	readonly handlerArguments: ReadonlyArray<CoreValueId>;
 	readonly instructionLive: ReadonlyArray<number>;
 	readonly instructionOpcode: ReadonlyArray<number>;
+	readonly instructionPayload: ReadonlyArray<CoreInstructionAttributes | undefined>;
 	readonly instructionBlock: ReadonlyArray<number>;
 	readonly instructionPrevious: ReadonlyArray<number>;
 	readonly instructionNext: ReadonlyArray<number>;
@@ -59,6 +61,8 @@ export interface CoreFunctionKernelColumns {
 	readonly handlerArgumentPreviousUse: ReadonlyArray<number>;
 	readonly handlerArgumentNextUse: ReadonlyArray<number>;
 }
+
+const EMPTY_ATTRIBUTES: CoreInstructionAttributes = Object.freeze({});
 
 export class CoreFunctionKernel {
 	#columns: CoreFunctionKernelColumns;
@@ -124,6 +128,10 @@ export class CoreFunctionKernel {
 
 	instructionLive(instruction: CoreInstructionId): number {
 		return this.#columns.instructionLive[instruction] ?? 0;
+	}
+
+	instructionAttributes(instruction: CoreInstructionId): CoreInstructionAttributes {
+		return this.#columns.instructionPayload[instruction] ?? EMPTY_ATTRIBUTES;
 	}
 
 	instructionOpcode(instruction: CoreInstructionId): number {

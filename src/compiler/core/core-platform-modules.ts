@@ -121,9 +121,10 @@ export function pruneUnusedPlatformModuleInitializers(
 		for (const instruction of [...buildCoreControlFlow(program, id).reachable].flatMap(
 			(block) => [...fn.bodyInstructionIds(block)],
 		)) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
-			const attributes = fn.instructionAttributes(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
+			const attributes = fn.kernel.instructionAttributes(instruction);
 			if (eagerInitializer(fn, instruction) !== undefined) continue;
 			if (unusedModuleDeclaration(fn, instruction)) continue;
 			if (opcode === "loadGlobal" && typeof attributes.index === "number")

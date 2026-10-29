@@ -3557,8 +3557,9 @@ function stringSplitProjectionCandidates(
 		...indexedOpcodeInstructions(fn, index, "call"),
 		...indexedOpcodeInstructions(fn, index, "callKnown"),
 	]) {
-		if (fn.instructionKind(call) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(call);
+		const header = fn.instructionHeader(call);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		const direct = opcode === "callKnown";
 		if (
 			direct &&

@@ -295,8 +295,9 @@ function capturedSlotsOf(fn: CoreFunctionStore): ReadonlyArray<CoreCapturedSlotR
 		return cached.slots;
 	const slots: Array<CoreCapturedSlotRef> = [];
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (opcode !== "loadCaptured" && opcode !== "storeCaptured") continue;
 		const attributes = fn.instructionAttributes(instruction);
 		const owner = attributes.functionIndex;

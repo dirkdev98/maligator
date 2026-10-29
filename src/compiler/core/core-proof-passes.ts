@@ -660,8 +660,9 @@ const refinePrimitiveEffects: CoreFunctionPass = {
 		hasOpportunity({ program, function: functionId }) {
 			const fn = program.function(functionId);
 			for (const instruction of fn.instructionIds()) {
-				if (fn.instructionKind(instruction) !== "operation") continue;
-				const opcode = fn.instructionOpcodeName(instruction);
+				const header = fn.instructionHeader(instruction);
+				if (typeof header === "string") continue;
+				const opcode = header.opcode;
 				if (opcode === "unary" || opcode === "binary" || opcode === "queryStaticData")
 					return true;
 			}

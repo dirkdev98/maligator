@@ -71,8 +71,9 @@ function staticSearchStart(
 	for (let depth = 0; depth < 32; depth++) {
 		if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
 		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-		if (fn.instructionKind(instruction) !== "operation") return undefined;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") return undefined;
+		const opcode = header.opcode;
 		if (opcode === "move") {
 			value = inputs(fn, instruction)[0]!;
 			continue;

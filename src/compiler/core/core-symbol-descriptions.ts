@@ -62,8 +62,9 @@ function forwardOptionalSymbolDescription(
 		) {
 			if (++inspectedUses > 256) return undefined;
 			const consumer = fn.kernel.useInstruction(use);
-			if (fn.instructionKind(consumer) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(consumer);
+			const header = fn.instructionHeader(consumer);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (opcode === "move") {
 				pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(consumer)));
 				if (pending.length + visited.size > 64) return undefined;
@@ -278,8 +279,9 @@ export function eliminateSymbolDescription(
 			use = fn.kernel.useNext(use)
 		) {
 			const consumer = fn.kernel.useInstruction(use);
-			if (fn.instructionKind(consumer) !== "operation") return undefined;
-			const opcode = fn.instructionOpcodeName(consumer);
+			const header = fn.instructionHeader(consumer);
+			if (typeof header === "string") return undefined;
+			const opcode = header.opcode;
 			if (opcode === "move") {
 				pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(consumer)));
 				if (pending.length + visited.size > 64) return undefined;

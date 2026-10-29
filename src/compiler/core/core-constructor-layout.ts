@@ -28,8 +28,9 @@ export function coreConstructorSlotReserve(fn: CoreFunctionStore): number {
 	// Private elements share the instance's shape slots; each install names a distinct element.
 	let privateElements = 0;
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (
 			opcode !== "storePropertyStatic" &&
 			opcode !== "defineProperty" &&

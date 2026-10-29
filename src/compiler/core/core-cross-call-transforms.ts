@@ -414,9 +414,10 @@ function capturedCellWrites(
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
-			const attributes = fn.instructionAttributes(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
+			const attributes = fn.kernel.instructionAttributes(instruction);
 			const write = { function: functionId, instruction };
 			if (opcode === "storeCaptured")
 				record(attributes.functionIndex, attributes.index, write);
@@ -2096,8 +2097,9 @@ function callbackSpecializationScope(
 		return "unsupported";
 	let scope: "scoped" | "independent" = "independent";
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (CALLBACK_SPECIALIZATION_EXCLUDED_OPCODES.has(opcode)) return "unsupported";
 		if (CALLBACK_SPECIALIZATION_SCOPED_OPCODES.has(opcode)) scope = "scoped";
 	}
@@ -2433,8 +2435,9 @@ function closureFactoryMembers(
 	const members = new Set<CoreFunctionId>();
 	const ownsEveryAccess = (fn: CoreFunctionStore, creates: boolean): boolean => {
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (CALLBACK_SPECIALIZATION_EXCLUDED_OPCODES.has(opcode)) return false;
 			if (CAPTURE_ENVIRONMENT_REBINDS.has(opcode) || opcode === "createPrivateNames")
 				return false;
@@ -2497,8 +2500,9 @@ function closureFactoryInvokedSlots(
 			) {
 				if (fn.kernel.useLive(use) === 0) continue;
 				const consumer = coreInstructionId(fn.kernel.useInstruction(use));
-				if (fn.instructionKind(consumer) !== "operation") continue;
-				const opcode = fn.instructionOpcodeName(consumer);
+				const header = fn.instructionHeader(consumer);
+				if (typeof header === "string") continue;
+				const opcode = header.opcode;
 				const first =
 					fn.kernel.operandAt(fn.kernel.instructionOperandStart(consumer)) === value;
 				const name =
@@ -2550,8 +2554,9 @@ function retargetCapturedOwner(
 	const fn = program.function(functionId);
 	const editor = CoreEditor.open(program, functionId);
 	for (const instruction of [...fn.instructionIds()]) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (!CLOSURE_FACTORY_OPCODES.has(opcode)) continue;
 		const attributes = fn.instructionAttributes(instruction);
 		const target = attributes.functionIndex as CoreFunctionId;
@@ -4992,8 +4997,9 @@ function discoverProgramNormalResultFacts(
 				});
 		}
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
+			const header = fn.instructionHeader(instruction);
+			if (typeof header === "string") continue;
+			const opcode = header.opcode;
 			if (
 				opcode !== "loadProperty" &&
 				opcode !== "loadPropertyStatic" &&

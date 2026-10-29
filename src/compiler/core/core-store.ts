@@ -30,6 +30,7 @@ import type {
 	CoreInstructionAttributes,
 	CoreInstructionEffects,
 	CoreInstructionId,
+	CoreOpcodeDescriptor,
 	CoreOpcodeId,
 	CoreOpcodeRegistry,
 	CoreRepresentation,
@@ -274,6 +275,10 @@ export type CoreInstructionKind =
 	| "return"
 	| "throw"
 	| "unreachable";
+
+export type CoreInstructionHeader =
+	| Exclude<CoreInstructionKind, "operation">
+	| CoreOpcodeDescriptor;
 
 const REPRESENTATIONS = [
 	"boxed",
@@ -829,6 +834,7 @@ export class CoreFunctionStore {
 				handlerArgumentNextUse: this.#handlerArgumentNextUse,
 				instructionLive: this.#instructionLive,
 				instructionOpcode: this.#instructionOpcode,
+				instructionPayload: this.#instructionPayload,
 				instructionBlock: this.#instructionBlock,
 				instructionPrevious: this.#instructionPrevious,
 				instructionNext: this.#instructionNext,
@@ -1140,6 +1146,15 @@ export class CoreFunctionStore {
 			throw new Error(`Core block ${id} has no terminator`);
 		}
 		return coreInstructionId(last);
+	}
+
+	instructionHeader(id: CoreInstructionId): CoreInstructionHeader {
+		this.#requireInstruction(id);
+		const opcode = this.#instructionOpcode[id]!;
+		if (opcode >= 0) return this.registry.byId(opcode as CoreOpcodeId);
+		const kind = TERMINATOR_KINDS.get(opcode);
+		if (kind === undefined) throw new Error(`Unknown Core structural opcode ${opcode}`);
+		return kind;
 	}
 
 	instructionKind(id: CoreInstructionId): CoreInstructionKind {

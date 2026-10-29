@@ -122,8 +122,9 @@ function coreCaptureScan(fn: CoreFunctionStore): CoreCaptureScan {
 	const owners = new Set<number>();
 	let createsFunctions = false;
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
 		if (opcode === "createFunction") createsFunctions = true;
 		if (opcode !== "loadCaptured" && opcode !== "storeCaptured") continue;
 		const owner = fn.instructionAttributes(instruction).functionIndex;

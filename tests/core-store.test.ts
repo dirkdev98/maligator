@@ -413,6 +413,11 @@ describe("Core store", () => {
 				error: `Unknown Core instruction ${unknownInstruction}`,
 			},
 			{
+				live: () => fn.isInstructionLive(unknownInstruction),
+				read: () => fn.instructionHeader(unknownInstruction),
+				error: `Unknown Core instruction ${unknownInstruction}`,
+			},
+			{
 				live: () => fn.isValueLive(unknownValue),
 				read: () => fn.valueRepresentation(unknownValue),
 				error: `Unknown Core value ${unknownValue}`,
@@ -427,6 +432,8 @@ describe("Core store", () => {
 			...unknownReads.flatMap(({ live, read }) => [live, read]),
 			() => fn.blockTerminator(entry),
 			() => fn.instructionKind(instruction),
+			() => fn.instructionHeader(instruction),
+			() => fn.kernel.instructionAttributes(instruction),
 			() => fn.valueRepresentation(parameter),
 			() => fn.blockIds(),
 			() => fn.instructionIds(),
@@ -435,6 +442,25 @@ describe("Core store", () => {
 			() => [...fn.factIds()],
 		];
 		for (const read of retiredReads) expect(read).toThrow("retired generation 0");
+	});
+
+	it("reads current headers and payloads through replacement and deletion with a custom registry", () => {
+		const { program, fn, entry, parameter, copied } = oneFunction();
+		const operation = coreInstructionId(fn.kernel.valueDefinitionOwner(copied));
+		expect(fn.instructionHeader(operation)).toBe(program.registry.require("identity"));
+		expect(fn.instructionHeader(fn.blockTerminator(entry))).toBe("return");
+		const editor = CoreEditor.open(program, fn.id);
+		editor.replaceInstruction(operation, "constant", [], { attributes: { value: 7 } });
+		expect(fn.instructionHeader(operation)).toBe(program.registry.require("constant"));
+		expect(fn.kernel.instructionAttributes(operation)).toEqual({ value: 7 });
+		const removed = editor.appendInstruction(entry, "sink", [parameter]).instruction;
+		expect(fn.instructionHeader(removed)).toBe(program.registry.require("sink"));
+		editor.removeInstruction(removed);
+		expect(() => fn.instructionHeader(removed)).toThrow(
+			`Unknown Core instruction ${removed}`,
+		);
+		editor.commit();
+		verifyCoreProgram(program);
 	});
 
 	it("observes empty block bodies during construction and after edits", () => {

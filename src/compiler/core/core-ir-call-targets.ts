@@ -272,9 +272,10 @@ export function coreBuiltinCallbackOperation(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): string | undefined {
-	if (fn.instructionKind(instruction) !== "operation") return undefined;
-	const opcode = fn.instructionOpcodeName(instruction);
-	const attributes = fn.instructionAttributes(instruction);
+	const header = fn.instructionHeader(instruction);
+	if (typeof header === "string") return undefined;
+	const opcode = header.opcode;
+	const attributes = fn.kernel.instructionAttributes(instruction);
 	const known = attributes.knownBuiltinCall as
 		| { readonly operation?: unknown }
 		| undefined;
