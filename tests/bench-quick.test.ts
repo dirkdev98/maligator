@@ -114,7 +114,20 @@ export function compileEntrypoint(input) {
 	mkdirSync(tools);
 	for (const tool of ["cc", "rustc"]) {
 		const executable = path.join(tools, tool);
-		writeFileSync(executable, `#!/bin/sh\necho ${tool} fixture\n`);
+		writeFileSync(
+			executable,
+			tool === "cc"
+				? `#!/bin/sh
+if [ "$1" = "--version" ]; then echo cc fixture; exit 0; fi
+if [ "$1" = "-dumpmachine" ]; then echo fixture-target; exit 0; fi
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then shift; printf 'fixture output' > "$1"; exit 0; fi
+  shift
+done
+exit 1
+`
+				: `#!/bin/sh\necho ${tool} fixture\n`,
+		);
 		chmodSync(executable, 0o755);
 	}
 	const output = path.join(root, "result");
