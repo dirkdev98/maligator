@@ -289,7 +289,8 @@ benchmark fixtures, and removes the exports in `finally`. `roots` replays the 24
 largest execution graphs captured by compiling the baseline accessor fixture;
 `backedges` runs native backedge discovery on those same graphs. `accessors` walks
 real Core storage, kernel columns, and opcode registry entries. `headers` compares
-checked kind/descriptor/payload reads with the revision's header API when available. `optimizer` runs
+checked kind/descriptor/payload reads with the revision's header API when available.
+`versions` queries fixed change domains on real Core stores between body edits. `optimizer` runs
 the Node compiler on the frozen baseline accessor graph, through runtime-image
 serialization. `lowering` replays both backend realizations from sealed optimized Core;
 its timer includes shared preparation and backend verification, with C and wire

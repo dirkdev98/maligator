@@ -247,4 +247,87 @@ typedKernel.replace({ starts: detached });
 check(typedKernel.start(0) === 31, "column before detach");
 detached.buffer.transfer();
 check(typedKernel.start(0) === 0, "detached column");
+class Domains {
+	#values;
+	constructor(values) {
+		this.#values = values;
+	}
+	version(domain) {
+		return this.#values[domain];
+	}
+	replace(values) {
+		this.#values = values;
+	}
+}
+function literalPair(receiver) {
+	return [receiver.version("body"), receiver.version("body")];
+}
+function literalZero(receiver) {
+	return receiver.version("0");
+}
+function literalScan(receiver, mutate) {
+	let total = 0;
+	for (let index = 0; index < 4; index++) {
+		total += receiver.version("body");
+		mutate(index);
+	}
+	return total;
+}
+const domains = new Domains({ body: 3 });
+check(literalPair(domains).join() === "3,3", "literal domain");
+const versions = { body: 1 };
+domains.replace(versions);
+check(
+	literalScan(domains, () => {
+		versions.body++;
+	}) === 10,
+	"terminal values are read every iteration",
+);
+let literalReads = 0;
+domains.replace({
+	get body() {
+		return ++literalReads;
+	},
+});
+check(literalPair(domains).join() === "1,2", "literal getter order");
+domains.replace(
+	new Proxy(
+		{},
+		{
+			get(target, key) {
+				return key === "body" ? ++literalReads : 0;
+			},
+		},
+	),
+);
+check(literalPair(domains).join() === "3,4", "literal proxy order");
+domains.replace({
+	get body() {
+		throw new Error("literal read");
+	},
+});
+let literalThrew = false;
+try {
+	literalPair(domains);
+} catch (error) {
+	literalThrew = error.message === "literal read";
+}
+check(literalThrew, "literal getter exception");
+domains.replace([-0]);
+check(Object.is(literalZero(domains), -0), "numeric string key preserves negative zero");
+domains.version = () => 23;
+check(literalPair(domains).join() === "23,23", "literal method replacement");
+delete domains.version;
+const proxyDomains = new Proxy(domains, {
+	get(target, key) {
+		return target[key];
+	},
+});
+let literalBrandThrew = false;
+try {
+	literalPair(proxyDomains);
+} catch (error) {
+	literalBrandThrew = error instanceof TypeError;
+}
+check(literalBrandThrew, "literal wrong private receiver");
 console.log("read-accessor-regions PASS");

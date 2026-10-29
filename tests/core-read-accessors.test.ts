@@ -98,7 +98,7 @@ describe("class read-accessor lowering", () => {
 		).toBe(false);
 	});
 
-	it.each(['"value"', "-1", "1.5", "4294967295", "undefined", "null", "true"])(
+	it.each(["-1", "1.5", "4294967295", "undefined", "null", "true"])(
 		"retains the ordinary path for an indexed argument that cannot admit: %s",
 		(key) => {
 			const input = lowerSemanticProgramToCore(
@@ -116,6 +116,39 @@ describe("class read-accessor lowering", () => {
 			).toBe(false);
 		},
 	);
+
+	it("shares a literal-key helper while preserving the original dynamic method and guarded fallback", () => {
+		const input = lowerSemanticProgramToCore(
+			semantic(source.replaceAll("receiver.read(index)", 'receiver.read("value")')),
+		);
+		optimizeCore(input, { verification: "per-pass" });
+		const accessors = [...input.program.functionIds()]
+			.map((id) => input.program.function(id))
+			.filter(
+				(fn) => input.program.stringConstantText(fn.metadata.nameStringIndex) === "read",
+			);
+		expect(
+			accessors.filter((fn) =>
+				coreOperations(fn).some(
+					({ opcode, attributes }) =>
+						opcode === "loadPropertyStatic" &&
+						input.program.stringConstantText(attributes.stringIndex as number) ===
+							"value",
+				),
+			),
+		).toHaveLength(1);
+		expect(
+			coreOperations(accessors[0]!).some(({ opcode }) => opcode === "loadProperty"),
+		).toBe(true);
+		const calls = coreOperations(coreFunctionNamed(input.program, "pair")!);
+		expect(calls.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(true);
+		expect(
+			calls.some(
+				({ opcode, attributes }) =>
+					opcode === "call" && attributes.guardedInlineFallback === true,
+			),
+		).toBe(true);
+	});
 
 	it.each(["0", "-0"])("admits a supported constant array index: %s", (key) => {
 		const input = lowerSemanticProgramToCore(
