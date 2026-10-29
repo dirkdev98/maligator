@@ -114,6 +114,11 @@ if (mode === "capture") {
 			config,
 			production: true,
 		});
+		const entries = image.native.functions.flatMap((fn) => fn.directEntries);
+		const specializations: Record<string, number> = {};
+		for (const fn of image.native.functions)
+			for (const region of fn.specializations)
+				specializations[region.kind] = (specializations[region.kind] ?? 0) + 1;
 		const mechanisms = {
 			toolchain: {
 				tools: result.context.toolchain.tools,
@@ -135,6 +140,17 @@ if (mode === "capture") {
 				(sum, fn) => sum + fn.storage!.callbackTransports.length,
 				0,
 			),
+			recordTransports: {
+				resultEntries: entries.filter((entry) => entry.resultFields !== undefined).length,
+				parameterEntries: entries.filter(
+					(entry) => (entry.recordParameters?.length ?? 0) > 0,
+				).length,
+				resultAllocationSites: entries.reduce(
+					(sum, entry) => sum + (entry.resultFields?.allocationIps.length ?? 0),
+					0,
+				),
+			},
+			specializations,
 		};
 		writeFileSync(
 			path.join(output, "binary.json"),
