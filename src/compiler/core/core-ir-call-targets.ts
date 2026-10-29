@@ -1,4 +1,13 @@
-import { builtinCallbackInvocation } from "../shared/builtin-registry.ts";
+import {
+	builtinCallbackInvocation,
+	builtinNormalResultCallability,
+	builtinNormalResultProjection,
+} from "../shared/builtin-registry.ts";
+import { COMPILER_VALUE_KIND_OBJECT } from "../shared/compiler-value-kinds.ts";
+import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import type { PrimordialNode } from "../shared/primordial-catalog-types.ts";
+import { primordialNode } from "../shared/primordial-catalog.ts";
+import { coreBuiltinCallInput } from "./core-builtin-result-projections.ts";
 import type { CoreCallGraph } from "./core-call-graph.ts";
 import { coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
@@ -113,6 +122,16 @@ const CORE_CALLEE_TARGETS_OPEN: CoreCalleeTargets = Object.freeze({
 	nonCallable: true,
 });
 
+const CORE_CALLEE_TARGETS_CALLABLE: CoreCalleeTargets = Object.freeze({
+	...CORE_CALLEE_TARGETS_OPEN,
+	nonCallable: false,
+});
+
+const CORE_CALLEE_TARGETS_NATIVE_CALLABLE: CoreCalleeTargets = Object.freeze({
+	...CORE_CALLEE_TARGETS_OPAQUE,
+	nonCallable: false,
+});
+
 export function coreCalleeTargetsFunction(functionId: number): CoreCalleeTargets {
 	return Object.freeze({
 		functions: Object.freeze([functionId as CoreFunctionId]),
@@ -135,8 +154,7 @@ export function coreCalleeTargetsIsBottom(targets: CoreCalleeTargets): boolean {
 export function coreCalleeTargetsCallability(
 	targets: CoreCalleeTargets,
 ): boolean | undefined {
-	if (targets.opaque) return undefined;
-	const callable = targets.anyScript || targets.functions.length > 0;
+	const callable = targets.opaque || targets.anyScript || targets.functions.length > 0;
 	if (callable && !targets.nonCallable) return true;
 	if (!callable && targets.nonCallable) return false;
 	return undefined;
@@ -426,6 +444,124 @@ export function coreDirectBuiltinCallbackTarget(
 	return callback === undefined ? undefined : coreDirectCreatedFunction(fn, callback);
 }
 
+function instructionPrimordial(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): PrimordialNode | undefined {
+	const opcode = fn.instructionOpcodeName(instruction);
+	const attributes = fn.instructionAttributes(instruction);
+	if (opcode === "loadPrimordial" && typeof attributes.nodeIndex === "number")
+		return getPrimordialCatalog().nodes[attributes.nodeIndex];
+	if (opcode === "loadIntrinsic" && typeof attributes.intrinsic === "string")
+		return primordialNode(attributes.intrinsic);
+	return undefined;
+}
+
+function directPrimordial(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	seen = new Set<CoreValueId>(),
+): PrimordialNode | undefined {
+	if (seen.has(value) || fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+	seen.add(value);
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	if (fn.instructionOpcodeName(definition) !== "move")
+		return instructionPrimordial(fn, definition);
+	const input = instructionOperand(fn, definition, 0);
+	return input === undefined ? undefined : directPrimordial(fn, input, seen);
+}
+
+function builtinResultTargets(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	inputTargets: (input: CoreValueId) => CoreCalleeTargets | undefined,
+): CoreCalleeTargets | undefined {
+	const opcode = fn.instructionOpcodeName(instruction);
+	const attributes = fn.instructionAttributes(instruction);
+	const transfer = fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer;
+	let operation: string | undefined;
+	if (opcode === "callKnown" && typeof attributes.operation === "string")
+		operation = attributes.operation;
+	else if (transfer !== undefined) {
+		const callee = instructionOperand(fn, instruction, transfer.calleeOperand);
+		if (callee !== undefined) operation = directPrimordial(fn, callee)?.[0];
+	}
+	if (operation === undefined) return undefined;
+	const construct = attributes.construct || transfer?.invocation === "construct";
+	if (construct && operation !== "Function" && operation !== "Proxy") return undefined;
+	const callability = builtinNormalResultCallability(operation);
+	if (callability !== undefined)
+		return callability ? CORE_CALLEE_TARGETS_CALLABLE : CORE_CALLEE_TARGETS_NON_CALLABLE;
+	if (opcode !== "callKnown" && opcode !== "call" && opcode !== "construct")
+		return undefined;
+	const offset = opcode === "call" ? 1 : 0;
+	if (construct && operation === "Proxy") {
+		const input = coreBuiltinCallInput(fn, instruction, 1 + offset);
+		if (input?.input === undefined) return undefined;
+		const targets = inputTargets(input.input);
+		if (targets === undefined || coreCalleeTargetsIsBottom(targets)) return targets;
+		const callable = coreCalleeTargetsCallability(targets);
+		// Traps and revocation prevent forwarding the target's invocation identity.
+		return callable === undefined
+			? undefined
+			: callable
+				? CORE_CALLEE_TARGETS_CALLABLE
+				: CORE_CALLEE_TARGETS_NON_CALLABLE;
+	}
+	if (construct) return undefined;
+	const projection = builtinNormalResultProjection(operation);
+	if (projection === undefined) return undefined;
+	const index = projection.kind === "receiver" ? 0 : projection.index + 1;
+	const input = coreBuiltinCallInput(fn, instruction, index + offset);
+	if (input === undefined) return undefined;
+	if (input.input === undefined) return CORE_CALLEE_TARGETS_NON_CALLABLE;
+	const targets = inputTargets(input.input);
+	if (
+		targets !== undefined &&
+		projection.identityKinds !== undefined &&
+		(projection.identityKinds & COMPILER_VALUE_KIND_OBJECT) === 0
+	)
+		return CORE_CALLEE_TARGETS_NON_CALLABLE;
+	return targets;
+}
+
+function directValueTargets(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	seen = new Set<CoreValueId>(),
+): CoreCalleeTargets | undefined {
+	if (seen.has(value) || fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+	seen.add(value);
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	if (fn.instructionKind(definition) !== "operation") return undefined;
+	const opcode = fn.instructionOpcodeName(definition);
+	if (opcode === "createFunction") {
+		const target = fn.instructionAttributes(definition).functionIndex;
+		return typeof target === "number" &&
+			Number.isSafeInteger(target) &&
+			target >= 0 &&
+			target < program.functionCapacity
+			? coreCalleeTargetsFunction(target)
+			: undefined;
+	}
+	if (opcode === "loadCallee") return coreCalleeTargetsFunction(fn.id);
+	if (opcode === "move") {
+		const input = instructionOperand(fn, definition, 0);
+		return input === undefined ? undefined : directValueTargets(program, fn, input, seen);
+	}
+	const primordial = instructionPrimordial(fn, definition);
+	if (primordial !== undefined)
+		return (primordial[2] & 2) !== 0
+			? CORE_CALLEE_TARGETS_CALLABLE
+			: CORE_CALLEE_TARGETS_NON_CALLABLE;
+	if (DEFINITELY_NON_CALLABLE_RESULTS.has(opcode))
+		return CORE_CALLEE_TARGETS_NON_CALLABLE;
+	return builtinResultTargets(fn, definition, (input) =>
+		directValueTargets(program, fn, input, seen),
+	);
+}
+
 function directReturnedValueTargets(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
@@ -440,19 +576,9 @@ function directReturnedValueTargets(
 		if (fn.instructionKind(terminator) !== "return") continue;
 		returns++;
 		const returned = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
-		const target = coreDirectCreatedFunction(fn, returned);
-		if (target !== undefined && target < program.functionCapacity) {
-			targets = joinCoreCalleeTargets(targets, coreCalleeTargetsFunction(target));
-			continue;
-		}
-		if (fn.kernel.valueDefinitionKind(returned) !== 1) return undefined;
-		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(returned));
-		if (
-			fn.instructionKind(definition) !== "operation" ||
-			!DEFINITELY_NON_CALLABLE_RESULTS.has(fn.instructionOpcodeName(definition))
-		)
-			return undefined;
-		targets = joinCoreCalleeTargets(targets, CORE_CALLEE_TARGETS_NON_CALLABLE);
+		const returnedTargets = directValueTargets(program, fn, returned);
+		if (returnedTargets === undefined) return undefined;
+		targets = joinCoreCalleeTargets(targets, returnedTargets);
 	}
 	return returns === 0 || coreCalleeTargetsIsBottom(targets) ? undefined : targets;
 }
@@ -951,9 +1077,12 @@ function analyzeFunctionTargets(
 		// An opaque contribution means unknown callers; keep their finite hints out of dispatch.
 		raise(
 			fn.kernel.functionParameter(index),
-			incoming.opaque ? CORE_CALLEE_TARGETS_OPAQUE : incoming,
+			incoming.opaque && incoming.functions.length > 0
+				? { ...incoming, functions: [] }
+				: incoming,
 		);
 	}
+	const inputTargets = (input: CoreValueId) => values[input];
 	for (const block of cfg.reversePostorder) enqueue(block);
 	for (let cursor = 0; cursor < queue.length; cursor++) {
 		const block = queue[cursor]!;
@@ -993,12 +1122,18 @@ function analyzeFunctionTargets(
 						: CORE_CALLEE_TARGETS_OPEN;
 			} else if (opcode === "loadCallee") {
 				resultTargets = coreCalleeTargetsFunction(fn.id);
-			} else if (
-				opcode === "loadIntrinsic" &&
-				fn.instructionAttributes(instruction).intrinsic === "__evaluateModuleSync"
-			) {
-				// The evaluator is native; its slot arguments are never arguments to arbitrary JS functions.
-				resultTargets = CORE_CALLEE_TARGETS_OPAQUE;
+			} else if (opcode === "loadIntrinsic" || opcode === "loadPrimordial") {
+				if (fn.instructionAttributes(instruction).intrinsic === "__evaluateModuleSync") {
+					// The evaluator is native; its slot arguments are never arguments to arbitrary JS functions.
+					resultTargets = CORE_CALLEE_TARGETS_NATIVE_CALLABLE;
+				} else {
+					const primordial = instructionPrimordial(fn, instruction);
+					if (primordial !== undefined)
+						resultTargets =
+							(primordial[2] & 2) !== 0
+								? CORE_CALLEE_TARGETS_CALLABLE
+								: CORE_CALLEE_TARGETS_NON_CALLABLE;
+				}
 			} else if (opcode === "move") {
 				const operand = instructionOperand(fn, instruction, 0);
 				resultTargets =
@@ -1084,6 +1219,14 @@ function analyzeFunctionTargets(
 							: returned;
 					}
 				}
+				resultTargets =
+					builtinResultTargets(fn, instruction, inputTargets) ?? resultTargets;
+			} else if (
+				fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer !== undefined ||
+				opcode === "callKnown"
+			) {
+				resultTargets =
+					builtinResultTargets(fn, instruction, inputTargets) ?? resultTargets;
 			} else if (opcode === "createEmpty") {
 				// TDZ sentinels are rejected by throwIfTdz before an observable use.
 				resultTargets = CORE_CALLEE_TARGETS_BOTTOM;

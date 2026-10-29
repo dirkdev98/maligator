@@ -115,4 +115,127 @@ try {
 const revoked = Proxy.revocable(() => 1, {});
 revoked.revoke();
 ok("revocation preserves callability", typeof revoked.proxy === "function");
+
+const makeBuiltin = function makeBuiltin(visit) {
+	for (let i = 0; i < 3; i++) visit();
+	return Math.abs;
+};
+const makeBound = function makeBound(visit) {
+	for (let i = 0; i < 3; i++) visit();
+	return Math.abs.bind(null, -42);
+};
+function opaqueCallability(visit) {
+	const builtin = makeBuiltin(visit);
+	const bound = makeBound(visit);
+	return typeof builtin === "function" && typeof bound === "function" && bound() === 42;
+}
+globalThis.opaqueCallability = opaqueCallability;
+visits = 0;
+ok(
+	"builtin and bound normal results",
+	opaqueCallability(() => {
+		visits++;
+		if (typeof gc === "function") gc();
+	}),
+);
+ok("opaque callable facts retain factory effects", visits === 6);
+
+const makeCallableProxy = function makeCallableProxy(visit, handler) {
+	for (let i = 0; i < 3; i++) visit();
+	return new Proxy(function target() {
+		return 11;
+	}, handler);
+};
+function invokeCallableProxy(visit, handler) {
+	const proxy = makeCallableProxy(visit, handler);
+	return typeof proxy === "function" ? proxy() : 11;
+}
+globalThis.invokeCallableProxy = invokeCallableProxy;
+ok(
+	"callable Proxy does not inherit its target's dispatch identity",
+	invokeCallableProxy(() => {}, {
+		apply() {
+			if (typeof gc === "function") gc();
+			return 42;
+		},
+	}) === 42,
+);
+try {
+	invokeCallableProxy(() => {}, {
+		apply() {
+			throw observationError;
+		},
+	});
+	throw new Error("missing Proxy apply error");
+} catch (error) {
+	ok("opaque callable invocation retains trap errors", error === observationError);
+}
+const objectProxy = new Proxy({}, { apply: () => 42 });
+ok("apply trap does not make an object Proxy callable", typeof objectProxy === "object");
+try {
+	objectProxy();
+	throw new Error("missing object Proxy invocation error");
+} catch (error) {
+	ok("noncallable Proxy invocation still throws", error instanceof TypeError);
+}
+
+function descriptorCallability(input) {
+	const descriptor = Object.getOwnPropertyDescriptor(input, "key");
+	return typeof descriptor === "function";
+}
+globalThis.descriptorCallability = descriptorCallability;
+let descriptorReads = 0;
+ok(
+	"descriptor result has independent noncallable status",
+	descriptorCallability(
+		new Proxy(
+			{},
+			{
+				getOwnPropertyDescriptor() {
+					descriptorReads++;
+					if (typeof gc === "function") gc();
+					return { configurable: true, value: first };
+				},
+			},
+		),
+	) === false,
+);
+ok("descriptor observation retains Proxy effects", descriptorReads === 1);
+try {
+	descriptorCallability(
+		new Proxy(
+			{},
+			{
+				getOwnPropertyDescriptor() {
+					throw observationError;
+				},
+			},
+		),
+	);
+	throw new Error("missing descriptor trap error");
+} catch (error) {
+	ok("descriptor observation retains Proxy errors", error === observationError);
+}
+
+function shadowedBind(input) {
+	return typeof input.bind(null);
+}
+globalThis.shadowedBind = shadowedBind;
+function shadowed() {}
+shadowed.bind = () => ({});
+ok("own bind replacement retains its result", shadowedBind(shadowed) === "object");
+const sourceArray = [1];
+sourceArray.constructor = {
+	[Symbol.species]: function Species() {
+		return first;
+	},
+};
+function mappedCallability(input) {
+	return typeof input.map((value) => value);
+}
+globalThis.mappedCallability = mappedCallability;
+ok(
+	"array species may return a callable object",
+	mappedCallability(sourceArray) === "function",
+);
 console.log("finite-call-target-dispatch PASS");

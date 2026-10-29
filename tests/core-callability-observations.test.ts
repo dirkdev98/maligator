@@ -125,4 +125,92 @@ describe("callee-target callability observations", () => {
 			out.fn.instructions.filter((op) => op.opcode === "CALL").length,
 		).toBeGreaterThanOrEqual(2);
 	});
+
+	it.each([
+		"Math.abs",
+		"Math.abs.bind(null)",
+		"Function(input)",
+		"new Function(input)",
+		"new Proxy(function target(){},input)",
+		"Object.freeze(function target(){})",
+		"Object(function target(){})",
+	])("carries callable normal returns from %s without removing the factory", (value) => {
+		const out = inspect(
+			"typeof value==='function'?17:11",
+			`const make=function make(visit,input){for(let i=0;i<3;i++)visit();return ${value};};`,
+		);
+		expect(keepsAlternative(out)).toBe(false);
+		expect(out.fn.instructions.some((op) => op.opcode === "CALL")).toBe(true);
+	});
+
+	it.each([
+		"new Proxy({},input)",
+		"Object.getOwnPropertyDescriptor(input,'key')",
+		"Reflect.ownKeys(input)",
+		"Proxy.revocable(input,{})",
+	])("carries noncallable normal returns from %s", (value) => {
+		const out = inspect(
+			"typeof value==='function'?11:17",
+			`const make=function make(visit,input){for(let i=0;i<3;i++)visit();return ${value};};`,
+		);
+		expect(keepsAlternative(out)).toBe(false);
+		expect(out.fn.instructions.some((op) => op.opcode === "CALL")).toBe(true);
+	});
+
+	it.each([
+		"input.bind(null)",
+		"new Proxy(input,{})",
+		"Array.from.call(input,[])",
+		"input.map(value=>value)",
+		"Promise.resolve.call(input,0)",
+		"RegExp(input)",
+		"Object.freeze(...input)",
+	])("retains unknown callability from %s", (value) => {
+		const out = inspect(
+			"typeof value==='function'?17:11",
+			`const make=function make(visit,input){for(let i=0;i<3;i++)visit();return ${value};};`,
+		);
+		expect(keepsAlternative(out)).toBe(true);
+	});
+
+	it("projects a fixed callable argument before an unknown iterable tail", () => {
+		const out = inspect(
+			"typeof value==='function'?17:11",
+			"const make=function make(visit,input){for(let i=0;i<3;i++)visit();return Object.freeze(function target(){},...input);};",
+		);
+		expect(keepsAlternative(out)).toBe(false);
+	});
+
+	it("keeps callable certainty when a phi joins builtin and script functions", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(flag){const value=flag?Math.abs:function target(){};return typeof value==='function'?17:11;}globalThis.compute=compute;",
+			"compute",
+			{ realms: false },
+		);
+		expect(keepsAlternative(out)).toBe(false);
+	});
+
+	it("does not treat a mutable builtin property read as its captured primordial", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(visit){visit();const value=Math.abs;return typeof value==='function'?17:11;}globalThis.compute=compute;",
+			"compute",
+			{ locked: false, realms: false },
+		);
+		expect(keepsAlternative(out)).toBe(true);
+	});
+
+	it.each(["function*", "async function", "async function*"])(
+		"preserves opaque callable certainty across %s suspension",
+		(declaration) => {
+			const out = inspect(
+				"typeof value==='function'?17:11",
+				"const make=function make(visit){for(let i=0;i<3;i++)visit();return Math.abs.bind(null);};",
+				declaration,
+			);
+			expect(keepsAlternative(out)).toBe(false);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
 });

@@ -1123,7 +1123,8 @@ const normalResultKindMasks = {
 };
 
 const normalResultKinds = new Map<string, CompilerValueKindMask>();
-for (const [owner, result, methods] of [
+const normalResultCallabilities = new Map<string, boolean>();
+for (const [owner, result, methods, callability] of [
 	["", "number", ["Number", "parseInt", "parseFloat"]],
 	["", "boolean", ["Boolean", "isNaN", "isFinite"]],
 	[
@@ -1391,10 +1392,7 @@ for (const [owner, result, methods] of [
 		"",
 		"object",
 		[
-			"Object",
 			"Array",
-			"Function",
-			"RegExp",
 			"Error",
 			"EvalError",
 			"RangeError",
@@ -1404,15 +1402,16 @@ for (const [owner, result, methods] of [
 			"URIError",
 			"AggregateError",
 		],
+		false,
 	],
+	["", "object", ["Object", "RegExp"]],
+	["", "object", ["Function"], true],
+	["Object", "object", ["assign", "defineProperty", "defineProperties"]],
 	[
 		"Object",
 		"object",
 		[
-			"assign",
 			"create",
-			"defineProperty",
-			"defineProperties",
 			"entries",
 			"keys",
 			"values",
@@ -1422,13 +1421,15 @@ for (const [owner, result, methods] of [
 			"getOwnPropertySymbols",
 			"groupBy",
 		],
+		false,
 	],
 	["Object", "object-or-null", ["getPrototypeOf"]],
-	["Object", "object-or-undefined", ["getOwnPropertyDescriptor"]],
+	["Object", "object-or-undefined", ["getOwnPropertyDescriptor"], false],
 	["Object.prototype", "object", ["valueOf"]],
-	["Reflect", "object", ["construct", "ownKeys"]],
+	["Reflect", "object", ["construct"]],
+	["Reflect", "object", ["ownKeys"], false],
 	["Reflect", "object-or-null", ["getPrototypeOf"]],
-	["Reflect", "object-or-undefined", ["getOwnPropertyDescriptor"]],
+	["Reflect", "object-or-undefined", ["getOwnPropertyDescriptor"], false],
 	["Array", "object", ["from", "fromAsync", "of"]],
 	[
 		"Array.prototype",
@@ -1436,25 +1437,24 @@ for (const [owner, result, methods] of [
 		[
 			"concat",
 			"copyWithin",
-			"entries",
 			"fill",
 			"filter",
 			"flat",
 			"flatMap",
-			"keys",
 			"map",
 			"reverse",
 			"slice",
 			"sort",
 			"splice",
-			"toReversed",
-			"toSorted",
-			"toSpliced",
-			"values",
-			"with",
 		],
 	],
-	["String.prototype", "object", ["[%Symbol.iterator%]"]],
+	[
+		"Array.prototype",
+		"object",
+		["entries", "keys", "values", "toReversed", "toSorted", "toSpliced", "with"],
+		false,
+	],
+	["String.prototype", "object", ["[%Symbol.iterator%]"], false],
 	[
 		"Int8Array.prototype.[[Prototype]]",
 		"object",
@@ -1475,15 +1475,21 @@ for (const [owner, result, methods] of [
 			"values",
 			"with",
 		],
+		false,
 	],
 	["Int8Array.prototype.[[Prototype]]", "undefined", ["forEach", "set"]],
-	["TypedArray.prototype", "object", ["map", "filter"]],
+	["TypedArray.prototype", "object", ["map", "filter"], false],
 	["ArrayOrTypedArray.prototype", "object", ["map", "filter"]],
-	["ArrayBuffer.prototype", "object", ["slice", "transfer", "transferToFixedLength"]],
+	[
+		"ArrayBuffer.prototype",
+		"object",
+		["slice", "transfer", "transferToFixedLength"],
+		false,
+	],
 	["ArrayBuffer.prototype", "undefined", ["resize"]],
-	["SharedArrayBuffer.prototype", "object", ["slice"]],
+	["SharedArrayBuffer.prototype", "object", ["slice"], false],
 	["SharedArrayBuffer.prototype", "undefined", ["grow"]],
-	["DataView.prototype", "object", ["buffer<get>"]],
+	["DataView.prototype", "object", ["buffer<get>"], false],
 	["DataView.prototype", "number", ["getFloat16"]],
 	["DataView.prototype", "bigint", ["getBigInt64", "getBigUint64"]],
 	[
@@ -1503,13 +1509,13 @@ for (const [owner, result, methods] of [
 			"setBigUint64",
 		],
 	],
-	["Map", "object", ["groupBy"]],
-	["Map.prototype", "object", ["set", "entries", "keys", "values"]],
+	["Map", "object", ["groupBy"], false],
+	["Map.prototype", "object", ["set", "entries", "keys", "values"], false],
 	["Map.prototype", "undefined", ["clear", "forEach"]],
-	["Set.prototype", "object", ["add", "entries", "values", "keys"]],
+	["Set.prototype", "object", ["add", "entries", "values", "keys"], false],
 	["Set.prototype", "undefined", ["clear", "forEach"]],
-	["WeakMap.prototype", "object", ["set"]],
-	["WeakSet.prototype", "object", ["add"]],
+	["WeakMap.prototype", "object", ["set"], false],
+	["WeakSet.prototype", "object", ["add"], false],
 	["WeakRef.prototype", "weak-value-or-undefined", ["deref"]],
 	["FinalizationRegistry.prototype", "undefined", ["register"]],
 	["Iterator", "object", ["from"]],
@@ -1517,25 +1523,26 @@ for (const [owner, result, methods] of [
 		"Iterator.prototype",
 		"object",
 		["drop", "filter", "flatMap", "map", "take", "toArray"],
+		false,
 	],
 	["Iterator.prototype", "undefined", ["forEach"]],
-	["RegExp.prototype", "object-or-null", ["exec", "[%Symbol.match%]"]],
-	["RegExp.prototype", "object", ["[%Symbol.matchAll%]", "[%Symbol.split%]"]],
+	["RegExp.prototype", "object-or-null", ["exec"], false],
+	["RegExp.prototype", "object-or-null", ["[%Symbol.match%]"]],
+	["RegExp.prototype", "object", ["[%Symbol.matchAll%]", "[%Symbol.split%]"], false],
 	["RegExp.prototype", "string", ["[%Symbol.replace%]"]],
-	["Function.prototype", "object", ["bind"]],
-	[
-		"Promise",
-		"object",
-		["all", "allSettled", "any", "race", "reject", "resolve", "try", "withResolvers"],
-	],
+	["Function.prototype", "object", ["bind"], true],
+	["Promise", "object", ["all", "allSettled", "any", "race", "reject", "resolve", "try"]],
+	["Promise", "object", ["withResolvers"], false],
+	["Proxy", "object", ["revocable"], false],
 	["Promise.prototype", "object", ["then"]],
 	["Atomics", "undefined", ["pause"]],
 ] as const) {
-	for (const method of methods)
-		normalResultKinds.set(
-			owner === "" ? method : `${owner}${method.startsWith("[") ? "" : "."}${method}`,
-			normalResultKindMasks[result],
-		);
+	for (const method of methods) {
+		const operation =
+			owner === "" ? method : `${owner}${method.startsWith("[") ? "" : "."}${method}`;
+		normalResultKinds.set(operation, normalResultKindMasks[result]);
+		if (callability !== undefined) normalResultCallabilities.set(operation, callability);
+	}
 }
 
 normalResultKinds.set(
@@ -1561,6 +1568,16 @@ export function builtinNormalResultKinds(
 	operation: string,
 ): CompilerValueKindMask | undefined {
 	return normalResultKinds.get(operation);
+}
+
+// IsCallable of the returned value says nothing about invocation errors or reentry.
+export function builtinNormalResultCallability(operation: string): boolean | undefined {
+	const callability = normalResultCallabilities.get(operation);
+	if (callability !== undefined) return callability;
+	const kinds = normalResultKinds.get(operation);
+	return kinds !== undefined && (kinds & COMPILER_VALUE_KIND_OBJECT) === 0
+		? false
+		: undefined;
 }
 
 export type BuiltinNormalResultProjection = (

@@ -931,7 +931,15 @@ Memory proofs guard transitive dependencies with the program's function versions
 The existing callee-target lattice also supplies immutable callability independently
 of invocation effects. Finite and widened script-function sets fold typeof and
 truthiness observations without removing factory calls, their errors or GC work.
-Empty, opaque and mixed callable/noncallable sets retain dynamic checks. Class
+Opaque dispatch and callable certainty are independent: captured builtin functions,
+successful bound-function creation and callable Proxy construction can fold category
+observations while retaining open dispatch, invocation errors and collection.
+Proxy results never inherit their target's exact function identity. Normal-result
+callability shares the builtin result registry; descriptors, key lists and certified
+allocations exclude callable values, while species and protocol-dependent returns
+stay open. Identity-returning operations preserve input targets, including fixed
+arguments before iterable tails. Guarded method hints alone establish none of these
+contracts. Empty and mixed callable/noncallable sets retain dynamic checks. Class
 constructors still have the function category even though ordinary calls throw.
 Function-identity and constructor-layout guards produce Boolean results; their
 callee operands retain separate target facts. Async and generator invocations

@@ -35,6 +35,10 @@ describe("Core callee-target lattice", () => {
 	it("preserves callability after widening identities and withholds it for mixed or empty targets", () => {
 		expect(coreCalleeTargetsCallability(CORE_CALLEE_TARGETS_BOTTOM)).toBeUndefined();
 		expect(coreCalleeTargetsCallability(CORE_CALLEE_TARGETS_OPAQUE)).toBeUndefined();
+		const opaqueCallable = { ...CORE_CALLEE_TARGETS_OPAQUE, nonCallable: false };
+		expect(coreCalleeTargetsCallability(opaqueCallable)).toBe(true);
+		expect(coreCalleeTargetsAreOpen(opaqueCallable)).toBe(true);
+		expect(coreCalleeTargetsSingleFunction(opaqueCallable)).toBeUndefined();
 		expect(coreCalleeTargetsCallability(CORE_CALLEE_TARGETS_ANY_SCRIPT)).toBe(true);
 		expect(coreCalleeTargetsCallability(coreCalleeTargetsFunction(0))).toBe(true);
 		expect(
@@ -133,6 +137,50 @@ describe("Core callee-target lattice", () => {
 });
 
 describe("incremental Core call graph", () => {
+	it("transports opaque callable arguments through complete caller bounds without certifying dispatch", () => {
+		const program = analysisProgram();
+		const root = new CoreFunctionBuilder(program);
+		const entry = root.createBlock();
+		const [helper] = root.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [receiver] = root.appendInstruction(entry, "createUndefined", []);
+		const [builtin] = root.appendInstruction(entry, "loadIntrinsic", [], {
+			attributes: { intrinsic: "Function" },
+		});
+		const [result] = root.appendInstruction(entry, "call", [
+			helper!,
+			receiver!,
+			builtin!,
+		]);
+		root.setTerminator(entry, { kind: "return", value: result! });
+		root.finish(entry);
+
+		const callee = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const calleeEntry = callee.createBlock([{}]);
+		const parameter = callee.blockParameterValue(calleeEntry, 0);
+		const [thisValue] = callee.appendInstruction(calleeEntry, "createUndefined", []);
+		const [called] = callee.appendInstruction(calleeEntry, "call", [
+			parameter,
+			thisValue!,
+		]);
+		const call = callee.bodyInstructionIds(calleeEntry).at(-1)!;
+		callee.setTerminator(calleeEntry, { kind: "return", value: called! });
+		const fn = callee.finish(calleeEntry).function;
+		verifyCoreProgram(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const graph = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(coreCalleeTargetsCallability(graph.targets(fn, parameter))).toBe(true);
+		expect(graph.site(fn, call)?.open).toBe(true);
+		expect(
+			coreCalleeTargetsSingleFunction(graph.site(fn, call)!.targets),
+		).toBeUndefined();
+	});
+
 	it("withdraws and rediscovers invocation targets after an unknown return", () => {
 		const program = analysisProgram(),
 			factory = appendLeaf(program),

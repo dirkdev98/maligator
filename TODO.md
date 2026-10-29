@@ -101,6 +101,8 @@ normal-result identity and heap-brand facts, receiver/argument-sensitive call
 effects, builtin dispatch and completion checks, and the resulting storage/root
 work over further arithmetic specialization. Preserve mutable-callee fallbacks,
 coercion and exception order, publication and GC obligations in every entry mode.
+Prioritize callable certainty independently of finite invocation identities, then
+callback and receiver-sensitive call effects and returned object-field transport.
 Keep the sub-60-second AC self-compile target; leave broad acceptance to CI.
 Arithmetic work should support these paths or fix correctness defects.
 
@@ -138,6 +140,14 @@ Arithmetic work should support these paths or fix correctness defects.
       invocation wrappers stay separate from callable body returns. Extend the same
       independent operand, callee and completion contracts to more object builtins
       and callback-aware function calls; keep the bounded shared worklists.
+      Opaque builtin and bound functions now retain callable certainty, and Proxy
+      construction follows its target's callability without forwarding dispatch
+      identity. Builtin descriptors, key lists and certified allocation results
+      carry noncallable normal returns; species, protocol and mutable-method
+      alternatives stay open. Identity-returning builtins preserve operand targets.
+      Extend these facts through more recursive returns and returned object fields,
+      then refine callback invocation/retention effects and receiver-sensitive
+      builtin errors without treating callable status as an effect proof.
       Broad native, sanitizer and self-hosted acceptance remains on CI.
       Follow up the conservative interpreted profiling GC failure from native
       remainder run `40752877684`; that fixture's wire and emitted C are identical
