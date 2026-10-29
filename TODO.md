@@ -158,9 +158,10 @@ Arithmetic work should support these paths or fix correctness defects.
       effects, and receiver-sensitive builtin errors. Callable status alone remains
       insufficient for effect refinement.
       Broad native, sanitizer and self-hosted acceptance remains on CI.
-      Follow up the conservative interpreted profiling GC failure from native
-      remainder run `40752877684`; that fixture's wire and emitted C are identical
-      at `0ce7ac8f`, `d9f0b92e` and `8319d1d7`, so these slices do not explain it.
+      Interpreter call-return polls now require a trusted safepoint map when the
+      image provides exact roots. Noncollecting call effects can omit those maps
+      without exposing stale registers to an all-register fallback scan. Profiling
+      artifact restoration covers both interpreted root modes under GC stress.
 
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.

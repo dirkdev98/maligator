@@ -954,6 +954,12 @@ obligations remain unchanged. Conditional own-slot summaries admit these observe
 and intrinsic loads without treating mutable method hints, aggregate argument
 preparation or constructors as equivalent contracts.
 
+Portable interpreter call-return polls consume the same collecting-site contract.
+When trusted root maps omit a noncollecting call, its return cannot introduce a GC
+poll: dead register slots may already contain reclaimed values from an earlier exact
+scan. Calls with a map retain the poll and its roots, including guarded builtin hits.
+Images without trusted maps retain conservative register scanning throughout.
+
 Exact Map/Set `forEach` calls separate validation and internal iteration from the
 callback's effects. The shared callback descriptor supplies those residual effects;
 finite script targets join through the summary worklist, including recursive

@@ -2287,13 +2287,14 @@ static bool mal_vm_interpreter_activation_is_current(
         ;
 }
 
-static void mal_vm_prepare_interpreter_safepoint_except(
+// Exact maps omit noncollecting operations, whose stale registers cannot be scanned.
+static bool mal_vm_prepare_interpreter_safepoint_except(
     MalVmFrame *frame,
     i32 instruction_ip,
     i32 preserved_register
 ) {
     const MalFunction *function = frame->function;
-    if (!function->gc_safepoints_trusted) return;
+    if (!function->gc_safepoints_trusted) return true;
     const i32 *row = function->gc_safepoints;
     for (i32 index = 0; index < function->gc_safepoint_count; index++) {
         i32 row_ip = *row++;
@@ -2306,15 +2307,16 @@ static void mal_vm_prepare_interpreter_safepoint_except(
                     frame->registers[row[clear]] = mal_value_new_undefined();
                 }
             }
-            return;
+            return true;
         }
         row += clear_count;
-        if (row_ip > instruction_ip) return;
+        if (row_ip > instruction_ip) break;
     }
+    return false;
 }
 
-static void mal_vm_prepare_interpreter_safepoint(MalVmFrame *frame, i32 instruction_ip) {
-    mal_vm_prepare_interpreter_safepoint_except(frame, instruction_ip, -1);
+static bool mal_vm_prepare_interpreter_safepoint(MalVmFrame *frame, i32 instruction_ip) {
+    return mal_vm_prepare_interpreter_safepoint_except(frame, instruction_ip, -1);
 }
 
 // Direct leaves write through the frame's published register buffer, so only the
@@ -2380,13 +2382,13 @@ static void mal_vm_prepare_interpreter_safepoint(MalVmFrame *frame, i32 instruct
 #define MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(call) \
     do { \
         MalVmInterpreterActivation activation = mal_vm_interpreter_activation(vm, frame); \
-        mal_vm_prepare_interpreter_safepoint(frame, instruction_pointer - 1); \
+        bool can_poll = mal_vm_prepare_interpreter_safepoint(frame, instruction_pointer - 1); \
         frame->instruction_pointer = instruction_pointer; \
         frame->gc_safepoint_ip = instruction_pointer - 1; \
         MAL_PERF_COUNT(interpreter_state_syncs); \
         MAL_PERF_COUNT(interpreter_boundary_dispatches); \
         call; \
-        if (mal_vm_interpreter_activation_is_current(vm, activation) && mal_gc_poll_requested()) { \
+        if (can_poll && mal_vm_interpreter_activation_is_current(vm, activation) && mal_gc_poll_requested()) { \
             mal_gc_safepoint(vm); \
         } \
         if (mal_vm_interpreter_activation_is_current(vm, activation)) { \
@@ -3336,10 +3338,10 @@ static void mal_vm_run_until_frame_count(
                     if (!mal_gc_poll_requested()) continue;
                     MalVmInterpreterActivation activation =
                         mal_vm_interpreter_activation(vm, frame);
-                    mal_vm_prepare_interpreter_safepoint_except(
+                    if (!mal_vm_prepare_interpreter_safepoint_except(
                         frame,
                         instruction_pointer - 1,
-                        instruction->as.call.dst);
+                        instruction->as.call.dst)) continue;
                     frame->instruction_pointer = instruction_pointer;
                     frame->gc_safepoint_ip = instruction_pointer - 1;
                     MAL_PERF_COUNT(interpreter_state_syncs);

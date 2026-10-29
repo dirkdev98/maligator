@@ -23,6 +23,7 @@ import {
 it.each([
 	{ roots: "precise", compiled: true, primordials: "mutable" },
 	{ roots: "conservative", compiled: false, primordials: "locked" },
+	{ roots: "precise", compiled: false, primordials: "locked" },
 ] as const)(
 	"restores $roots profiling and counter identities with compiled=$compiled",
 	({ roots, compiled, primordials }) => {
@@ -50,6 +51,17 @@ it.each([
 				roots,
 			);
 			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(original));
+			if (!compiled)
+				expect(
+					original.runtime.functions.some((fn) =>
+						fn.instructions.some(
+							(op, ip) =>
+								op.opcode === "CALL_KNOWN" &&
+								op.operation === "Object.is" &&
+								!fn.gcSafepoints?.some((point) => point.instructionIp === ip),
+						),
+					),
+				).toBe(true);
 			const captures = [];
 			for (const [index, image] of [original, restored].entries()) {
 				const binary = buildNativeProgramImage(image, {
