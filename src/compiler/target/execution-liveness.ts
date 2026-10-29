@@ -72,11 +72,6 @@ function blockSuccessors(fn: ExecutionFunction): ReadonlyArray<ReadonlyArray<num
 	});
 }
 
-interface BoxedOperands {
-	readonly reads: ReadonlyArray<number>;
-	readonly writes: ReadonlyArray<number>;
-}
-
 /**
  * Exact boxed physical-register obligations at selected execution instructions.
  * Incoming and outgoing sets separate values present before the operation from
@@ -124,41 +119,50 @@ export function executionSafepointRoots(
 		return roots;
 	};
 	const firstSafepoints = new Int32Array(fn.blocks.length).fill(-1);
-	const operands: Array<Array<BoxedOperands>> = fn.blocks.map(({ instructions }, block) =>
-		instructions.map((instruction, index) => {
-			if (firstSafepoints[block] === -1 && safepoints.has(instruction)) {
+	// Each instruction's packed span starts with its boxed write count, followed by writes and reads.
+	const operands: Array<number> = [];
+	const operandStarts = fn.blocks.map(({ instructions }, block) => {
+		const starts = new Uint32Array(instructions.length + 1);
+		for (let index = 0; index < instructions.length; index++) {
+			const instruction = instructions[index]!;
+			if (firstSafepoints[block] === -1 && safepoints.has(instruction))
 				firstSafepoints[block] = index;
-			}
 			const registers = instructionRegisters(instruction);
 			const outputCount = writeCount(instruction);
-			const reads: Array<number> = [];
-			const writes: Array<number> = [];
+			const start = operands.length;
+			starts[index] = start;
+			operands.push(0);
 			for (let operand = 0; operand < registers.length; operand++) {
 				const register = registers[operand]!;
 				if (!(register >= 0)) continue;
 				const representation = fn.registerRepresentations[register];
-				if (representation === "boxed" || representation === "string") {
-					if (operand < outputCount) writes.push(register);
-					else reads.push(register);
-				}
+				if (representation !== "boxed" && representation !== "string") continue;
+				operands.push(register);
+				if (operand < outputCount) operands[start]!++;
 			}
-			return { reads, writes };
-		}),
-	);
+		}
+		starts[instructions.length] = operands.length;
+		return starts;
+	});
 	const successors = blockSuccessors(fn);
 	const predecessors: Array<Array<number>> = fn.blocks.map(() => []);
 	for (const [block, targets] of successors.entries()) {
 		for (const target of targets) predecessors[target]!.push(block);
 	}
-	const transfers = operands.map((instructions) => {
+	const transfers = operandStarts.map((starts) => {
 		const generated = new Uint32Array(wordCount);
 		const killed = new Uint32Array(wordCount);
-		for (let index = instructions.length - 1; index >= 0; index--) {
-			for (const register of instructions[index]!.writes) {
+		for (let index = starts.length - 2; index >= 0; index--) {
+			const start = starts[index]!;
+			const writeEnd = start + 1 + operands[start]!;
+			const end = starts[index + 1]!;
+			for (let operand = start + 1; operand < writeEnd; operand++) {
+				const register = operands[operand]!;
 				remove(generated, register);
 				add(killed, register);
 			}
-			for (const register of instructions[index]!.reads) add(generated, register);
+			for (let operand = writeEnd; operand < end; operand++)
+				add(generated, operands[operand]!);
 		}
 		return { generated, killed };
 	});
@@ -205,22 +209,28 @@ export function executionSafepointRoots(
 		const snapshot = () => (materialized ??= rootRegisters(live));
 		for (let index = instructions.length - 1; index >= firstSafepoint; index--) {
 			const instruction = instructions[index]!;
-			const instructionOperands = operands[block]![index]!;
+			const start = operandStarts[block]![index]!;
+			const writeEnd = start + 1 + operands[start]!;
+			const end = operandStarts[block]![index + 1]!;
 			let outgoingRootRegisters: ReadonlyArray<number> | undefined;
 			let allRootRegisters: ReadonlyArray<number> | undefined;
 			if (safepoints.has(instruction)) {
-				for (const register of instructionOperands.writes)
-					if (add(live, register)) materialized = undefined;
+				for (let operand = start + 1; operand < writeEnd; operand++) {
+					if (add(live, operands[operand]!)) materialized = undefined;
+				}
 				outgoingRootRegisters = snapshot();
-				for (const register of instructionOperands.reads)
-					if (add(live, register)) materialized = undefined;
+				for (let operand = writeEnd; operand < end; operand++) {
+					if (add(live, operands[operand]!)) materialized = undefined;
+				}
 				allRootRegisters = snapshot();
 			}
 			// Killing writes also removes the outputs added for the outgoing/combined snapshots.
-			for (const register of instructionOperands.writes)
-				if (remove(live, register)) materialized = undefined;
-			for (const register of instructionOperands.reads)
-				if (add(live, register)) materialized = undefined;
+			for (let operand = start + 1; operand < writeEnd; operand++) {
+				if (remove(live, operands[operand]!)) materialized = undefined;
+			}
+			for (let operand = writeEnd; operand < end; operand++) {
+				if (add(live, operands[operand]!)) materialized = undefined;
+			}
 			if (allRootRegisters !== undefined && outgoingRootRegisters !== undefined) {
 				roots.set(instruction, {
 					rootRegisters: allRootRegisters,
