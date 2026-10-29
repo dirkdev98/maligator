@@ -330,6 +330,48 @@ describe("native builtin callback transport", () => {
 		).toEqual([expect.objectContaining({ argumentCount: 3 })]);
 	});
 
+	it.each([false, true])(
+		"requires a useful input specialization for a fresh callback, indexed=%s",
+		(indexed) => {
+			const entrypoint = "/predicate-callback.js";
+			const image = compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`globalThis.run = values => values.some(function predicate(value${indexed ? ", index" : ""}) { return value.kind === "operation"${indexed ? " && index >= value.start" : ""}; });`,
+					entrypoint,
+				),
+				{
+					facts: withProgramClosure(
+						compilerProgramFactsFromConfig(
+							resolveBuildConfig({ engine: { eval: false, realms: false } }),
+						),
+						programClosureCertificate(
+							{ kind: "whole-program", entry: entrypoint },
+							[],
+							[],
+						),
+					),
+				},
+			);
+			const transports = image.native.functions.flatMap(
+				(fn) => fn.storage!.callbackTransports,
+			);
+			expect(transports).toEqual(
+				indexed
+					? [
+							expect.objectContaining({
+								parameters: ["boxed", "number"],
+								resultRepresentation: "boolean",
+							}),
+						]
+					: [],
+			);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+			expect(
+				restored.native.functions.flatMap((fn) => fn.storage!.callbackTransports),
+			).toEqual(transports);
+		},
+	);
+
 	it("does not manufacture callback signatures or consume field-entry arguments", () => {
 		const fresh = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(

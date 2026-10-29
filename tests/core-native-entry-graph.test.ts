@@ -135,7 +135,6 @@ function graph(
 		analyses,
 		new Set(program.functionIds()),
 		initial,
-		[],
 		() => admitted++ < entryBudget,
 		() => {
 			analysesRun++;
@@ -222,7 +221,6 @@ describe("connected native entry contracts", () => {
 				analyses,
 				new Set(program.functionIds()),
 				[initial],
-				[],
 				() => true,
 				() => true,
 			);

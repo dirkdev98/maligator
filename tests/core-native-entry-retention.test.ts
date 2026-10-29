@@ -149,7 +149,6 @@ function refinedGraph(
 		analyses,
 		new Set(program.functionIds()),
 		seeds,
-		[],
 		() => true,
 		() => true,
 	);
@@ -368,7 +367,6 @@ describe("retained native entry graph", () => {
 			analyses,
 			new Set(program.functionIds()),
 			[seed],
-			[],
 			() => true,
 			() => true,
 		);

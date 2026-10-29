@@ -993,7 +993,7 @@ interface NativeRelocationExpressions {
 	stem(index: number): string;
 	/** Slots in first-use order, referenced as `<link symbol>[slot]`. */
 	readonly link: ReadonlyArray<NativeLinkSlot>;
-	functionIndex(index: number): string;
+	readonly functionIndex: (index: number) => string;
 	ownerFunctionIndex(index: number): string;
 	globalIndex(index: number): string;
 	stringIndex(index: number): string;
@@ -3489,6 +3489,7 @@ function emitCompiledVariant(
 							: undefined,
 					facts: nativeContract.facts,
 					instructions: nativeContract.instructions,
+					classLayouts: !relocation.relative,
 					directEntry,
 					controlFlow: storage.controlFlow,
 					elidedPureIps: storage.elidedPureIps,
@@ -3500,11 +3501,22 @@ function emitCompiledVariant(
 							: undefined,
 					calleeTry: (ip, callee) => {
 						const plan = nativeContract.instructions[ip];
-						const target = plan?.kind === "call" ? plan.directFunctionIndex : undefined;
+						const target =
+							plan?.kind === "call"
+								? (plan.directFunctionIndex ??
+									(plan.guardedFunctionIndices?.length === 1
+										? plan.guardedFunctionIndices[0]
+										: undefined))
+								: undefined;
 						if (target !== undefined) onFastTryLookup?.(target);
 						return target !== undefined && fastTryTargets.has(target)
 							? {
 									symbol: `mal_compiled_${relocation.stem(target)}${suffix}_try`,
+									...(plan?.kind === "call" && plan.directFunctionIndex === undefined
+										? {
+												guard: `mal_vm_callee_has_index(vm, ${callee}, ${relocation.functionIndex(target)})`,
+											}
+										: {}),
 									environment:
 										directClosureEnvironment(
 											plan,
@@ -3561,6 +3573,7 @@ function emitCompiledVariant(
 								]
 							: [],
 					functionIndex: relocation.functionIndex(index),
+					functionTargetIndex: relocation.functionIndex,
 					globalIndex: (global) => relocation.globalIndex(global),
 					stringIndex: (string) => relocation.stringIndex(string),
 					stringValue: (string) => relocation.stringValue(string),

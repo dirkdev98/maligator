@@ -1,22 +1,12 @@
 import {
-	builtinCallbackInvocation,
-	builtinCallbackNumberArgumentCandidates,
-} from "../shared/builtin-registry.ts";
-import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
-	compilerOperatorInputKindsHaveExactNativeSemantics,
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
-import { coreBuiltinCallbackOperation } from "./core-ir-call-targets.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
-import type {
-	CoreDirectBuiltinCallbackPlan,
-	CoreDirectEntryPlan,
-	CorePlanRepresentation,
-} from "./core-ir-regions.ts";
+import type { CoreDirectEntryPlan, CorePlanRepresentation } from "./core-ir-regions.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import {
@@ -68,7 +58,6 @@ export function connectCoreNativeEntries(
 	analyses: CoreAnalysisManager,
 	live: ReadonlySet<CoreFunctionId>,
 	initial: ReadonlyArray<CoreDirectEntryPlan>,
-	callbacks: ReadonlyArray<CoreDirectBuiltinCallbackPlan>,
 	admit: (
 		target: CoreFunctionId,
 		instruction: CoreInstructionId,
@@ -239,177 +228,6 @@ export function connectCoreNativeEntries(
 			}),
 		);
 	};
-	const callbackSeeds = new Map<
-		string,
-		{
-			target: CoreFunctionId;
-			representations: ReadonlyArray<CorePlanRepresentation>;
-			exactArity: boolean;
-			calls: Array<CoreDirectEntryPlan["callSites"][number]>;
-		}
-	>();
-	for (const callback of callbacks) {
-		const caller = program.function(callback.caller);
-		const operation = coreBuiltinCallbackOperation(caller, callback.instruction);
-		const invocation =
-			operation === undefined ? undefined : builtinCallbackInvocation(operation);
-		if (invocation === undefined || operation === undefined) continue;
-		const fn = program.function(callback.target);
-		const observation = observationFor(callback.target);
-		if (observation.kind === "general") continue;
-		const exactArity =
-			observation.readsCount ||
-			observation.indices.length > 0 ||
-			observation.restStarts.length > 0;
-		const argumentCount = invocation.argumentKinds.length;
-		const numberArguments = builtinCallbackNumberArgumentCandidates(operation);
-		const guardedNumbers = numberArguments.some(
-			(index) => invocation.argumentKinds[index] !== "number",
-		);
-		if (
-			(nodes.get(callback.target) ?? []).some(
-				({ entry }) =>
-					plain(entry) &&
-					entry.parameterRepresentations.some(
-						(rep, index) => rep !== "boxed" && index < invocation.argumentKinds.length,
-					),
-			)
-		)
-			continue;
-		// Builtin invocation arity is independent of the callback's declared formals.
-		const representations = Array.from(
-			{ length: exactArity ? argumentCount : fn.parameterCount },
-			(_, index): CorePlanRepresentation =>
-				numberArguments.includes(index) ? "f64" : "boxed",
-		);
-		if (
-			!exactArity &&
-			!invocation.argumentKinds.some(
-				(kind, index) =>
-					index < fn.parameterCount &&
-					kind !== "object" &&
-					fn.valueUseCount(fn.kernel.functionParameter(index)) > 0,
-			)
-		)
-			continue;
-		const key = `${callback.target}:${exactArity}:${signatureKey(representations)}`;
-		const seed = callbackSeeds.get(key) ?? {
-			target: callback.target,
-			representations,
-			exactArity,
-			calls: [],
-		};
-		seed.calls.push(
-			Object.freeze({
-				caller: callback.caller,
-				instruction: callback.instruction,
-				guarded: true,
-				builtinCallbackOperation: operation,
-				...(guardedNumbers ? { builtinCallbackNumbers: true as const } : {}),
-			}),
-		);
-		callbackSeeds.set(key, seed);
-	}
-	const nominatedTargets = new Set<CoreFunctionId>();
-	for (const seed of callbackSeeds.values()) {
-		if ((nodes.get(seed.target)?.length ?? 0) >= 4) continue;
-		const cost = candidateCost(
-			seed.target,
-			seed.exactArity ? seed.representations.length : undefined,
-		);
-		if (cost === undefined) continue;
-		const fn = program.function(seed.target);
-		const invocation = builtinCallbackInvocation(
-			seed.calls[0]!.builtinCallbackOperation!,
-		)!;
-		const observation = observationFor(seed.target);
-		const nominated = seed.representations.map((rep, index) =>
-			!nominatedTargets.has(seed.target) &&
-			invocation.argumentKinds[index] === "any" &&
-			((index < fn.parameterCount &&
-				fn.valueUseCount(fn.kernel.functionParameter(index)) > 0) ||
-				(observation.kind !== "general" &&
-					(observation.indices.includes(index) ||
-						observation.restStarts.some((start) => index >= start))))
-				? ("f64" as const)
-				: rep,
-		);
-		const triesNumbers = nominated.some(
-			(rep, index) => rep !== seed.representations[index],
-		);
-		if (triesNumbers) nominatedTargets.add(seed.target);
-		if (
-			!admitAnalysis(
-				seed.target,
-				cost.compilerWork * (triesNumbers ? 2 : 1) + seed.calls.length,
-			)
-		)
-			continue;
-		const control = cfg(seed.target);
-		const calls = Object.freeze(seed.calls);
-		const parametersFor = (representations: ReadonlyArray<CorePlanRepresentation>) =>
-			Array.from(
-				{ length: fn.parameterCount },
-				(_, index) => representations[index] ?? "boxed",
-			);
-		const baseline = analyzeCoreNativeEntry(
-			program,
-			control,
-			parametersFor(seed.representations),
-			seed.exactArity ? seed.representations : undefined,
-			calls,
-		);
-		let representations = seed.representations,
-			callSites = calls,
-			variant = baseline;
-		if (triesNumbers) {
-			const guardedCalls = Object.freeze(
-				calls.map((site) =>
-					Object.freeze({ ...site, builtinCallbackNumbers: true as const }),
-				),
-			);
-			const candidate = analyzeCoreNativeEntry(
-				program,
-				control,
-				parametersFor(nominated),
-				seed.exactArity ? nominated : undefined,
-				guardedCalls,
-			);
-			const baselineNumbers = new Set(
-				(baseline.instructionFacts ?? [])
-					.filter((site) =>
-						site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER),
-					)
-					.map((site) => site.instruction),
-			);
-			const gain = (candidate.instructionFacts ?? []).some(
-				(site) =>
-					fn.instructionKind(site.instruction) === "operation" &&
-					!baselineNumbers.has(site.instruction) &&
-					site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER) &&
-					compilerOperatorInputKindsHaveExactNativeSemantics(
-						fn.instructionOpcodeName(site.instruction),
-						fn.instructionAttributes(site.instruction).operator,
-						site.masks,
-					),
-			);
-			if (gain) {
-				representations = nominated;
-				callSites = guardedCalls;
-				variant = candidate;
-			}
-		}
-		if (representations.every((rep) => rep === "boxed")) continue;
-		const seeded = request(
-			seed.target,
-			calls[0]!.instruction,
-			parametersFor(representations),
-			callSites,
-			variant,
-			seed.exactArity ? representations : undefined,
-		);
-		if (seeded !== undefined) roots.add(seeded);
-	}
 	for (let cursor = 0; cursor < pending.length; cursor++) {
 		const node = pending[cursor]!;
 		queued.delete(node);

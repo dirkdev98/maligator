@@ -1,3 +1,4 @@
+import type { CompilerClassLayoutSite } from "../shared/compiler-instruction.ts";
 import {
 	compilerValueKindTruthiness,
 	COMPILER_VALUE_KIND_NUMBER,
@@ -69,6 +70,7 @@ export interface NativeFastEntryInput {
 	readonly fn: BytecodeFunction;
 	readonly facts: NativeFunctionPlan["facts"];
 	readonly instructions: NativeFunctionPlan["instructions"];
+	readonly classLayouts: boolean;
 	readonly directEntry: NativeDirectEntryPlan | undefined;
 	readonly controlFlow: NativeControlFlowPlan | undefined;
 	readonly elidedPureIps: ReadonlyArray<number>;
@@ -84,6 +86,7 @@ export interface NativeFastEntryInput {
 	readonly prologue: ReadonlyArray<string>;
 	/** C expression for this function's property-cache row. */
 	readonly functionIndex: string;
+	readonly functionTargetIndex: (index: number) => string;
 	readonly globalIndex: (index: number) => string;
 	readonly stringIndex: (index: number) => string;
 	readonly stringValue: (index: number) => string;
@@ -95,8 +98,33 @@ export interface NativeFastEntryInput {
 	readonly calleeTry: (
 		ip: number,
 		callee: string,
-	) => { readonly symbol: string; readonly environment: string } | undefined;
+	) =>
+		| { readonly symbol: string; readonly environment: string; readonly guard?: string }
+		| undefined;
 	readonly f64Literal: (value: number) => string;
+}
+
+function fastClassSite(
+	input: NativeFastEntryInput,
+	ip: number,
+): CompilerClassLayoutSite | undefined {
+	const plan = input.instructions[ip];
+	return input.classLayouts &&
+		plan?.kind === "class-layout" &&
+		plan.site.candidates.length > 0
+		? plan.site
+		: undefined;
+}
+
+function fastClassRead(
+	site: CompilerClassLayoutSite,
+	ip: number,
+	receiver: number,
+	destination: number,
+): string {
+	const object = `__fast_object_${ip}`;
+	const guard = site.kind === "method" ? "MAL_CLASS_METHOD" : "MAL_CLASS_SLOT";
+	return `{ MalObject *const ${object} = mal_vm_as_object(__fast_r${receiver}); ${site.candidates.map(({ layout, index }, position) => `${position === 0 ? "if" : "else if"} (${guard}(${object}, ${layout})) __fast_r${destination} = ${site.kind === "method" ? `vm->class_cells[${layout}].methods[${index}]` : `mal_object_field_load_shaped(${object}, ${index})`};`).join(" ")} else goto __full; }`;
 }
 
 /** A fast path may restart only before JavaScript effects or allocation, using the original arguments. */
@@ -227,6 +255,7 @@ export function renderNativeFastEntry(
 			op.opcode === "LOAD_PROPERTY_STATIC" &&
 			!fieldLoads.has(ip) &&
 			input.instructions[ip]?.kind !== "known-own-data" &&
+			fastClassSite(input, ip) === undefined &&
 			!(
 				input.lengthProperty(op.stringIndex) &&
 				instructionInputKind(input.facts?.[ip], op.object) === COMPILER_VALUE_KIND_STRING
@@ -893,6 +922,16 @@ function fastInstruction(
 		case "LOAD_THIS":
 			// A sloppy callee's receiver needs OrdinaryCallBindThis, which can allocate.
 			return input.fn.strict ? `__fast_r${op.dst} = this_value;` : undefined;
+		case "GUARD_FUNCTION_INDEX":
+			return `__fast_r${op.dst} = mal_value_new_boolean(mal_vm_callee_has_index(vm, __fast_r${op.callee}, ${input.functionTargetIndex(op.functionIndex)}));`;
+		case "LOAD_PRIVATE": {
+			const site = fastClassSite(input, ip);
+			if (site?.kind !== "slot") return undefined;
+			const probe = fastClassRead(site, ip, op.object, op.dst);
+			return op.cached === undefined
+				? probe
+				: `if (!mal_value_is_empty(__fast_r${op.cached})) __fast_r${op.dst} = __fast_r${op.cached}; else { ${probe} }`;
+		}
 		case "LOAD_PROPERTY_STATIC":
 		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
 			const field = fieldLoads.get(ip);
@@ -903,6 +942,8 @@ function fastInstruction(
 			}
 			if (input.instructions[ip]?.kind === "known-own-data")
 				return `__fast_r${op.dst} = mal_vm_load_known_own_data(__fast_r${op.object}, mal_value_from_string(vm->string_constant_atoms[${input.stringIndex(op.stringIndex)}]), nullptr);`;
+			const classSite = fastClassSite(input, ip);
+			if (classSite !== undefined) return fastClassRead(classSite, ip, op.object, op.dst);
 			if (op.opcode !== "LOAD_PROPERTY_STATIC") return undefined;
 			if (
 				input.lengthProperty(op.stringIndex) &&
@@ -1025,7 +1066,7 @@ function fastInstruction(
 				return undefined;
 			const list =
 				args.length === 0 ? "nullptr" : `(const MalValue[]){ ${args.join(", ")} }`;
-			return `if (!${callee.symbol}(vm, ${receiver}, ${list}, ${args.length}, ${callee.environment}, &__fast_r${op.dst})) goto __full;`;
+			return `if (${callee.guard === undefined ? "" : `!(${callee.guard}) || `}!${callee.symbol}(vm, ${receiver}, ${list}, ${args.length}, ${callee.environment}, &__fast_r${op.dst})) goto __full;`;
 		}
 		case "CALL_KNOWN": {
 			if (

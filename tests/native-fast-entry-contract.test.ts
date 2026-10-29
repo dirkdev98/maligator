@@ -35,6 +35,9 @@ import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 // Helpers that read without collecting, calling JavaScript, or throwing.
 const NONCOLLECTING_HELPERS = new Set([
 	"mal_vm_leaf_unobserved",
+	"mal_vm_as_object",
+	"mal_vm_callee_has_index",
+	"mal_object_field_load_shaped",
 	"mal_vm_leaf_stack_available",
 	"mal_value_is_undefined",
 	"mal_value_is_object",
@@ -149,6 +152,44 @@ describe("frameless own-data reads", () => {
 			expect(unexpectedHelpers(lines!)).toEqual([]);
 		},
 	);
+});
+
+it.each([false, true])(
+	"admits a noncollecting private data read with cached=%s",
+	(cached) => {
+		const fn = body([
+			{
+				opcode: "LOAD_PRIVATE",
+				dst: 2,
+				object: 0,
+				key: 1,
+				...(cached ? { cached: 3 } : {}),
+			},
+			{ opcode: "RETURN", value: 2 },
+		]);
+		const lines = fastEntry(fn, undefined, true, undefined, [], undefined, [
+			{
+				kind: "class-layout",
+				site: { kind: "slot", candidates: [{ layout: 0, index: 1 }] },
+			},
+		])!;
+		expect(lines).toBeDefined();
+		expect(unexpectedHelpers(lines)).toEqual([]);
+		expect(lines.join("\n")).toContain("MAL_CLASS_SLOT(");
+		expect(lines.join("\n")).not.toContain("mal_vm_op_load_private(");
+	},
+);
+
+it("keeps function identity guards noncollecting inside a fast entry", () => {
+	const lines = fastEntry(
+		body([
+			{ opcode: "GUARD_FUNCTION_INDEX", dst: 2, callee: 0, functionIndex: 7 },
+			{ opcode: "RETURN", value: 2 },
+		]),
+	)!;
+	expect(lines).toBeDefined();
+	expect(unexpectedHelpers(lines)).toEqual([]);
+	expect(lines.join("\n")).toContain("mal_vm_callee_has_index(vm, __fast_r0, 7)");
 });
 
 describe("frameless C identifier hygiene", () => {
@@ -875,6 +916,7 @@ function fastEntry(
 ): ReadonlyArray<string> | undefined {
 	return renderNativeFastEntry({
 		controlFlow,
+		classLayouts: true,
 		elidedPureIps: [],
 		stringComparisons: selectNativeStringComparisons(
 			createConservativeNativePlan([fn], []).functions[0]!,
@@ -914,6 +956,7 @@ function fastEntry(
 				],
 		prologue: [],
 		functionIndex: "0",
+		functionTargetIndex: String,
 		globalIndex: (index) => String(index),
 		stringIndex: (index) => String(index),
 		stringValue: (index) => `string_${index}`,

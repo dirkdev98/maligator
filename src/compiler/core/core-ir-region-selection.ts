@@ -67,6 +67,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreSpecializedOnlyFunctions } from "./core-native-body-reachability.ts";
+import { coreNativeCallbackEntryOpportunities } from "./core-native-callback-entries.ts";
 import {
 	coreArgumentObservation,
 	analyzeCoreNativeEntry,
@@ -1206,6 +1207,12 @@ function guardedCallOpportunities(
 				fn.isInstructionLive(site.instruction) &&
 				reachable.has(fn.instructionBlock(site.instruction)),
 		);
+		const smallMethod =
+			!fn.metadata.hasPrototype &&
+			fn.metadata.nameStringIndex !== 0 &&
+			fn.instructionCapacity <= 64 &&
+			!fn.isGenerator &&
+			!fn.isAsync;
 		const globalTargetUses = new Map<CoreFunctionId, number>();
 		for (const site of outgoing) {
 			const target =
@@ -1220,9 +1227,10 @@ function guardedCallOpportunities(
 				site.targets.functions.length === 0 && site.open
 					? coreInstanceMethodTargets(fn, site.callee, site.receiver, instanceMethodHints)
 					: undefined;
-			// A method that calls its own name repeats like a loop body, once per visited object.
+			// Small methods can inherit repetition from callers without containing a loop themselves.
 			const hintedTargets =
 				loopBlocks.has(fn.instructionBlock(site.instruction)) ||
+				smallMethod ||
 				candidateHints?.includes(caller) === true
 					? candidateHints
 					: undefined;
@@ -2444,6 +2452,25 @@ export function buildCoreOptimizationPlan(
 					);
 		resolvedLocalInputs.push(input);
 	}
+	const directBuiltinCallbacks = Object.freeze(
+		resolvedLocalInputs.flatMap((input) => {
+			const fn = program.function(input.function);
+			return input.blocks.flatMap((block) =>
+				[...fn.bodyInstructionIds(block)].flatMap((instruction) => {
+					const target = coreDirectBuiltinCallbackTarget(fn, instruction);
+					return target === undefined || !live.has(target)
+						? []
+						: [
+								Object.freeze({
+									caller: input.function,
+									instruction,
+									target,
+								}),
+							];
+				}),
+			);
+		}),
+	);
 	const provenLocal = new Map<
 		CoreFunctionId,
 		ReadonlyArray<CorePendingOptimizationCandidate>
@@ -2520,6 +2547,44 @@ export function buildCoreOptimizationPlan(
 				records,
 			),
 		);
+		if (options.context?.facts.closure.sourceClosure.kind === "known") {
+			for (const opportunity of coreNativeCallbackEntryOpportunities(
+				program,
+				analyses,
+				directBuiltinCallbacks,
+			)) {
+				opportunities.push({
+					kind: "direct-entry",
+					caller: opportunity.function,
+					priorityScore: -opportunity.runtimeBenefit,
+					generatedCodeCost: opportunity.generatedCode,
+					compilerWorkCost: opportunity.compilerWork,
+					resolve() {
+						const candidate = opportunity.resolve();
+						return candidate === undefined
+							? []
+							: [
+									{
+										...candidate,
+										runtimeBenefit: opportunity.runtimeBenefit,
+										budget: {
+											kind: "direct-entry",
+											caller: opportunity.function,
+											site: opportunity.instruction,
+											revision: opportunity.revision,
+											priorityClass: 2,
+											priorityScore: -opportunity.runtimeBenefit,
+											targets: Object.freeze([opportunity.function]),
+											generatedCodeCost: opportunity.generatedCode,
+											compilerWorkCost: opportunity.compilerWork,
+											expansive: true,
+										},
+									},
+								];
+					},
+				});
+			}
+		}
 	}
 	opportunities.sort((left, right) => {
 		return (
@@ -2713,25 +2778,6 @@ export function buildCoreOptimizationPlan(
 			}
 		}
 	}
-	const directBuiltinCallbacks = Object.freeze(
-		resolvedLocalInputs.flatMap((input) => {
-			const fn = program.function(input.function);
-			return input.blocks.flatMap((block) =>
-				[...fn.bodyInstructionIds(block)].flatMap((instruction) => {
-					const target = coreDirectBuiltinCallbackTarget(fn, instruction);
-					return target === undefined || !live.has(target)
-						? []
-						: [
-								Object.freeze({
-									caller: input.function,
-									instruction,
-									target,
-								}),
-							];
-				}),
-			);
-		}),
-	);
 	const initialDirectEntries = keepSuppliedRecordParameters(
 		program,
 		analyses,
@@ -2752,7 +2798,6 @@ export function buildCoreOptimizationPlan(
 					analyses,
 					live,
 					initialDirectEntries,
-					directBuiltinCallbacks,
 					(target, instruction, generatedCode, compilerWork, entryId) => {
 						const budget: CoreTransformCandidate = {
 							kind: "direct-entry",
