@@ -4,6 +4,7 @@ import {
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
 } from "../shared/compiler-value-kinds.ts";
+import { CORE_BUILTIN_CALLBACK_EFFECT_FACT } from "./core-builtin-effects.ts";
 import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -34,6 +35,8 @@ const representationProofs = new WeakMap<
 	ReadonlyArray<CorePlanRepresentation>,
 	{
 		readonly fn: CoreFunctionStore;
+		readonly program: CoreProgram;
+		readonly programFlowRevision: number | undefined;
 		readonly versions: CoreFunctionVersions;
 		readonly resultRepresentation: CorePlanRepresentation;
 		readonly controlFlow: CoreNativeEntryControlFlow | undefined;
@@ -190,8 +193,15 @@ export function analyzeCoreNativeEntry(
 			)).kindMask(value, block);
 		},
 	};
+	let callbackEffectRevision: number | undefined;
 	const inputs = Object.freeze(
 		instructions.flatMap((instruction) => {
+			const refinement = fn.instructionEffectRefinement(instruction);
+			if (
+				refinement !== undefined &&
+				fn.fact(refinement.proof).kind === CORE_BUILTIN_CALLBACK_EFFECT_FACT
+			)
+				callbackEffectRevision = program.programFlowRevision;
 			return [
 				Object.freeze({
 					instruction,
@@ -234,6 +244,8 @@ export function analyzeCoreNativeEntry(
 			: "boxed";
 	representationProofs.set(valueRepresentations, {
 		fn,
+		program,
+		programFlowRevision: callbackEffectRevision,
 		versions: fn.versions,
 		resultRepresentation,
 		controlFlow,
@@ -352,6 +364,8 @@ export function coreNativeEntryProofIsCurrent(
 				left.every((value, i) => value === right[i]);
 	return (
 		proof?.fn === fn &&
+		(proof.programFlowRevision === undefined ||
+			proof.programFlowRevision === proof.program.programFlowRevision) &&
 		coreFunctionVersionsAreCurrent(fn, proof.versions) &&
 		proof.resultRepresentation === entry.resultRepresentation &&
 		same(proof.parameters, entry.parameterRepresentations) &&

@@ -1,5 +1,7 @@
 import {
 	CORE_KNOWN_BUILTIN_EFFECT_FACT,
+	CORE_BUILTIN_CALLBACK_EFFECT_FACT,
+	coreBuiltinCallbackInvocation,
 	coreKnownBuiltinInvocationEffects,
 } from "./core-builtin-effects.ts";
 import { CoreEditor } from "./core-editor.ts";
@@ -15,11 +17,7 @@ import type {
 import { CORE_RECORD_OWN_DATA_EFFECT_FACT } from "./core-record-value-kinds.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
-/**
- * Whether `cloneCoreFunction` can copy `fn`. Facts belong to their function, so
- * only primitive, known-builtin and record-access effects, which the clone's passes reprove, may be
- * dropped; guards and every other refinement keep the original unique.
- */
+// Guarded refinements belong to one activation; only reprovable effects can be dropped in a clone.
 export function coreFunctionIsCloneable(fn: CoreFunctionStore): boolean {
 	if (fn.isGenerator || fn.isAsync || fn.handlerBlockCount > 0) return false;
 	for (const block of fn.blockIds())
@@ -36,7 +34,9 @@ export function coreFunctionIsCloneable(fn: CoreFunctionStore): boolean {
 			(["loadPropertyStatic", "storePropertyStatic"].includes(opcode) &&
 				fact.kind === CORE_RECORD_OWN_DATA_EFFECT_FACT) ||
 			(fact.kind === CORE_KNOWN_BUILTIN_EFFECT_FACT &&
-				coreKnownBuiltinInvocationEffects(fn, instruction) !== undefined);
+				coreKnownBuiltinInvocationEffects(fn, instruction) !== undefined) ||
+			(fact.kind === CORE_BUILTIN_CALLBACK_EFFECT_FACT &&
+				coreBuiltinCallbackInvocation(fn, instruction) !== undefined);
 		if (!reprovable || fact.obligations.length !== 0) return false;
 	}
 	return true;

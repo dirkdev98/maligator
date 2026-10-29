@@ -13,6 +13,8 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "./compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
+import { NO_EFFECT_SUMMARY } from "./effect-summary.ts";
+import type { EffectSummary } from "./effect-summary.ts";
 import { literalPrimordialBindings } from "./primordial-catalog-data.ts";
 
 export { builtinInvocationSummary } from "./builtin-semantics.ts";
@@ -131,6 +133,7 @@ export interface BuiltinOperationDescriptor {
 		readonly kind?: "reduction";
 		readonly argumentIndex: number;
 		readonly argumentKinds: ReadonlyArray<"any" | "number" | "object">;
+		readonly residualEffects?: EffectSummary;
 	};
 }
 
@@ -591,6 +594,13 @@ export const DATA_VIEW_ACCESSOR_TYPES = [
 	"Float64",
 ] as const;
 
+const collectionIterationEffects: EffectSummary = Object.freeze({
+	...NO_EFFECT_SUMMARY,
+	reads: Object.freeze(["object-property"] as const),
+	mayThrow: true,
+	mayGc: true,
+});
+
 export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 	{
 		id: "Array.isArray",
@@ -938,7 +948,11 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		result: "undefined",
 		realm: "semantic-identity",
 		lowerings: ["generic"],
-		callback: { argumentIndex: 0, argumentKinds: ["any", "any", "object"] },
+		callback: {
+			argumentIndex: 0,
+			argumentKinds: ["any", "any", "object"],
+			residualEffects: collectionIterationEffects,
+		},
 	})),
 	...(["add", "has", "delete"] as const).map((key): BuiltinOperationDescriptor => ({
 		id: `Set.prototype.${key}`,

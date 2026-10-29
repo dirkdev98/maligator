@@ -14,6 +14,7 @@ import {
 	compilerIntegerRangesEqual,
 } from "../shared/integer-range.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import { CORE_BUILTIN_CALLBACK_EFFECT_FACT } from "./core-builtin-effects.ts";
 import { CORE_CONDITIONAL_VALUE_KIND_ANALYSIS } from "./core-conditional-value-kinds.ts";
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
@@ -53,10 +54,14 @@ export interface CoreInstructionFactPlan {
 	readonly instructions: ReadonlyArray<CoreInstructionFacts | undefined>;
 }
 
-const kindProofs = new WeakMap<
-	CoreInstructionFactPlan,
-	{ fn: CoreFunctionStore; versions: CoreFunctionVersions; dataVersion: number }
->();
+interface CoreInstructionFactProof {
+	readonly fn: CoreFunctionStore;
+	readonly versions: CoreFunctionVersions;
+	readonly dataVersion: number;
+	programFlowRevision?: number;
+}
+
+const kindProofs = new WeakMap<CoreInstructionFactPlan, CoreInstructionFactProof>();
 
 export function coreInstructionFactProofIsCurrent(
 	program: CoreProgram,
@@ -66,6 +71,8 @@ export function coreInstructionFactProofIsCurrent(
 	return (
 		proof?.fn === program.function(plan.function) &&
 		proof.dataVersion === program.versions.data &&
+		(proof.programFlowRevision === undefined ||
+			proof.programFlowRevision === program.programFlowRevision) &&
 		coreFunctionVersionsAreCurrent(proof.fn, proof.versions)
 	);
 }
@@ -82,7 +89,11 @@ export function coreInstructionFactPlans(
 			scope: "function",
 			function: functionId,
 		});
-		const proof = { fn, versions: fn.versions, dataVersion: program.versions.data };
+		const proof: CoreInstructionFactProof = {
+			fn,
+			versions: fn.versions,
+			dataVersion: program.versions.data,
+		};
 		let conditional: CoreConditionalValueKinds | undefined;
 		const inputKinds: CoreConditionalValueKinds = {
 			kindMask(value, block) {
@@ -103,10 +114,19 @@ export function coreInstructionFactPlans(
 		const instructions = new Array<CoreInstructionFacts | undefined>(
 			fn.instructionCapacity,
 		);
-		for (const instruction of fn.instructionIds())
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) === "operation") {
+				const refinement = fn.instructionEffectRefinement(instruction);
+				if (
+					refinement !== undefined &&
+					fn.fact(refinement.proof).kind === CORE_BUILTIN_CALLBACK_EFFECT_FACT
+				)
+					proof.programFlowRevision = program.programFlowRevision;
+			}
 			instructions[instruction] = Object.freeze(
 				coreInstructionFacts(program, fn, instruction, kinds, inputKinds, false, range),
 			);
+		}
 		const plan = Object.freeze({
 			function: functionId,
 			instructions: Object.freeze(instructions),

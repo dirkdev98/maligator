@@ -78,7 +78,7 @@ describe("native entries from builtin callback invocation facts", () => {
 					: []),
 			]);
 			for (const callee of family.guardedCallees!)
-				expect(builtinCallbackInvocation(callee)).toEqual({
+				expect(builtinCallbackInvocation(callee)).toMatchObject({
 					argumentIndex: 0,
 					argumentKinds: [
 						"any",

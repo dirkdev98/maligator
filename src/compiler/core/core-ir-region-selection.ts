@@ -87,7 +87,10 @@ import {
 } from "./core-native-field-analysis.ts";
 import type { CoreRecordPassTarget } from "./core-native-field-analysis.ts";
 import type { CoreInstructionFactPlan } from "./core-native-instruction-facts.ts";
-import { coreInstructionFactPlans } from "./core-native-instruction-facts.ts";
+import {
+	coreInstructionFactPlans,
+	coreInstructionFactProofIsCurrent,
+} from "./core-native-instruction-facts.ts";
 import {
 	corePrivateNumericArrayElementPlans,
 	corePrivatePackedRestArrayElementPlans,
@@ -1168,6 +1171,9 @@ function localOptimizationPlanInputIsCurrent(
 	context: CoreCompilationContext | undefined,
 ): boolean {
 	return (
+		input.instructionFacts.every((plan) =>
+			coreInstructionFactProofIsCurrent(program, plan),
+		) &&
 		input.context === context &&
 		program.programVersion("data") === input.dataVersion &&
 		coreFunctionVersionsAreCurrent(program.function(input.function), input.versions)

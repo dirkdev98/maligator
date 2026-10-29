@@ -4,10 +4,12 @@ import {
 	builtinNormalResultProjection,
 } from "../shared/builtin-registry.ts";
 import { COMPILER_VALUE_KIND_OBJECT } from "../shared/compiler-value-kinds.ts";
-import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
-import type { PrimordialNode } from "../shared/primordial-catalog-types.ts";
-import { primordialNode } from "../shared/primordial-catalog.ts";
-import { coreKnownBuiltinOnlyObservesOperands } from "./core-builtin-effects.ts";
+import {
+	coreBuiltinCallbackInvocation,
+	coreDirectPrimordial,
+	coreInstructionPrimordial,
+	coreKnownBuiltinOnlyObservesOperands,
+} from "./core-builtin-effects.ts";
 import { coreBuiltinCallInput } from "./core-builtin-result-projections.ts";
 import type { CoreCallGraph } from "./core-call-graph.ts";
 import { coreClosedCapturedValueSlots } from "./core-compilation.ts";
@@ -248,6 +250,7 @@ interface CoreLocalCallTargets {
 	readonly values: ReadonlyArray<CoreCalleeTargets>;
 	readonly returnTargets: CoreCalleeTargets;
 	readonly sites: ReadonlyArray<CoreIndexedCallSite>;
+	readonly invocationDependencies: ReadonlyArray<CoreCalleeTargets>;
 	readonly publishedFunctions: ReadonlyArray<CoreFunctionId>;
 	readonly cellInputs: ReadonlyMap<CoreCellId, CoreCalleeTargets>;
 	readonly cellWrites: ReadonlyMap<CoreCellId, CoreCalleeTargets>;
@@ -445,33 +448,6 @@ export function coreDirectBuiltinCallbackTarget(
 	return callback === undefined ? undefined : coreDirectCreatedFunction(fn, callback);
 }
 
-function instructionPrimordial(
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-): PrimordialNode | undefined {
-	const opcode = fn.instructionOpcodeName(instruction);
-	const attributes = fn.instructionAttributes(instruction);
-	if (opcode === "loadPrimordial" && typeof attributes.nodeIndex === "number")
-		return getPrimordialCatalog().nodes[attributes.nodeIndex];
-	if (opcode === "loadIntrinsic" && typeof attributes.intrinsic === "string")
-		return primordialNode(attributes.intrinsic);
-	return undefined;
-}
-
-function directPrimordial(
-	fn: CoreFunctionStore,
-	value: CoreValueId,
-	seen = new Set<CoreValueId>(),
-): PrimordialNode | undefined {
-	if (seen.has(value) || fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
-	seen.add(value);
-	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-	if (fn.instructionOpcodeName(definition) !== "move")
-		return instructionPrimordial(fn, definition);
-	const input = instructionOperand(fn, definition, 0);
-	return input === undefined ? undefined : directPrimordial(fn, input, seen);
-}
-
 function builtinResultTargets(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -485,7 +461,7 @@ function builtinResultTargets(
 		operation = attributes.operation;
 	else if (transfer !== undefined) {
 		const callee = instructionOperand(fn, instruction, transfer.calleeOperand);
-		if (callee !== undefined) operation = directPrimordial(fn, callee)?.[0];
+		if (callee !== undefined) operation = coreDirectPrimordial(fn, callee)?.[0];
 	}
 	if (operation === undefined) return undefined;
 	const construct = attributes.construct || transfer?.invocation === "construct";
@@ -551,7 +527,7 @@ function directValueTargets(
 		const input = instructionOperand(fn, definition, 0);
 		return input === undefined ? undefined : directValueTargets(program, fn, input, seen);
 	}
-	const primordial = instructionPrimordial(fn, definition);
+	const primordial = coreInstructionPrimordial(fn, definition);
 	if (primordial !== undefined)
 		return (primordial[2] & 2) !== 0
 			? CORE_CALLEE_TARGETS_CALLABLE
@@ -1128,7 +1104,7 @@ function analyzeFunctionTargets(
 					// The evaluator is native; its slot arguments are never arguments to arbitrary JS functions.
 					resultTargets = CORE_CALLEE_TARGETS_NATIVE_CALLABLE;
 				} else {
-					const primordial = instructionPrimordial(fn, instruction);
+					const primordial = coreInstructionPrimordial(fn, instruction);
 					if (primordial !== undefined)
 						resultTargets =
 							(primordial[2] & 2) !== 0
@@ -1299,6 +1275,7 @@ function analyzeFunctionTargets(
 			});
 	}
 	const propertyInputs = new Map<CoreFunctionPropertyId, CoreCalleeTargets>();
+	const invocationDependencies: Array<CoreCalleeTargets> = [];
 	const globalWrites = new Map<number, CoreCalleeTargets>();
 	const publishedFunctions = new Set<CoreFunctionId>();
 	const publishedValues = new Uint8Array(fn.valueCapacity);
@@ -1315,6 +1292,15 @@ function analyzeFunctionTargets(
 		const instruction = localTransfers.operationAt(index);
 		if (!cfg.reachable.has(fn.instructionBlock(instruction))) continue;
 		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode === "callKnown") {
+			const invocation = coreBuiltinCallbackInvocation(fn, instruction);
+			if (invocation !== undefined)
+				invocationDependencies.push(
+					invocation.callback === undefined
+						? CORE_CALLEE_TARGETS_NON_CALLABLE
+						: values[invocation.callback]!,
+				);
+		}
 		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
 		const operator = fn.instructionAttributes(instruction).operator;
 		const observesIdentity =
@@ -1438,6 +1424,7 @@ function analyzeFunctionTargets(
 		values: Object.freeze(values),
 		returnTargets,
 		sites: Object.freeze(sites),
+		invocationDependencies: Object.freeze(invocationDependencies),
 		publishedFunctions: Object.freeze([...publishedFunctions]),
 		cellInputs,
 		cellWrites,

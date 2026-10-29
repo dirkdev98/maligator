@@ -149,9 +149,14 @@ Arithmetic work should support these paths or fix correctness defects.
       containment and function caller bounds independently of invocation effects.
       Their contracts compose through own-slot call summaries; coercing, aggregate,
       constructor and mutable-method alternatives remain conservative.
+      Exact Map/Set forEach calls now compose finite script callback summaries and
+      captured scalar builtin effects. Recursive callback dependencies invalidate
+      callers and native proofs; known read-only callbacks preserve caller fields
+      while receiver/callback validation, GC publication and polls remain.
       Extend these facts through more recursive returns and returned object fields,
-      then refine callback invocation/retention effects and receiver-sensitive
-      builtin errors without treating callable status as an effect proof.
+      then cover opaque script sets, callback retention, Array/species and protocol
+      effects, and receiver-sensitive builtin errors. Callable status alone remains
+      insufficient for effect refinement.
       Broad native, sanitizer and self-hosted acceptance remains on CI.
       Follow up the conservative interpreted profiling GC failure from native
       remainder run `40752877684`; that fixture's wire and emitted C are identical
@@ -774,6 +779,10 @@ Shared lifetime and fallback rules are recorded in
       invocation. A sort comparator must receive numeric facts only when element
       facts justify them. Preserve canonical identity and mutation requirements;
       builtin names or source closure alone do not prove callback behavior.
+      Map/Set forEach now separates its validation/internal-iteration effects from
+      finite callback bodies in the shared registry and call graph. Unknown callback
+      identities and mutable method alternatives retain the broad barrier; extend
+      receiver and argument effects before relaxing retention or Array protocols.
 
 ## P1: selective effects, aliases, and field facts
 

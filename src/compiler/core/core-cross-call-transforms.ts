@@ -20,6 +20,8 @@ import {
 } from "./core-array-iteration.ts";
 import {
 	CORE_KNOWN_BUILTIN_EFFECT_FACT,
+	CORE_BUILTIN_CALLBACK_EFFECT_FACT,
+	coreBuiltinCallbackInvocation,
 	coreKnownBuiltinInvocationEffects,
 } from "./core-builtin-effects.ts";
 import { CORE_BUILTIN_RESULT_PROJECTIONS_ANALYSIS } from "./core-builtin-result-projections.ts";
@@ -783,7 +785,9 @@ function inlineTarget(
 						((opcode === "loadPropertyStatic" || opcode === "storePropertyStatic") &&
 							fact.kind === CORE_RECORD_OWN_DATA_EFFECT_FACT) ||
 						(fact.kind === CORE_KNOWN_BUILTIN_EFFECT_FACT &&
-							coreKnownBuiltinInvocationEffects(fn, instruction) !== undefined)
+							coreKnownBuiltinInvocationEffects(fn, instruction) !== undefined) ||
+						(fact.kind === CORE_BUILTIN_CALLBACK_EFFECT_FACT &&
+							coreBuiltinCallbackInvocation(fn, instruction) !== undefined)
 					)
 				)
 					return false;

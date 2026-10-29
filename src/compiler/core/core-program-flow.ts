@@ -241,6 +241,7 @@ export interface CoreProgramFlowLocalCallTargets<
 	readonly values: ReadonlyArray<Targets>;
 	readonly returnTargets: Targets;
 	readonly sites: ReadonlyArray<Site>;
+	readonly invocationDependencies: ReadonlyArray<Targets>;
 	readonly publishedFunctions: ReadonlyArray<CoreFunctionId>;
 	readonly cellWrites: ReadonlyMap<number, Targets>;
 	readonly propertyInputs: ReadonlyMap<number, Targets>;
@@ -1727,6 +1728,16 @@ export class CoreProgramFlowEngine {
 			const priorOutgoing = previous?.outgoingIndex.get(functionId) ?? [];
 			const priorSites = previous?.sites.get(functionId);
 			const nextRaw = local.get(functionId)?.sites ?? [];
+			const priorInvocations =
+				previous?.local.get(functionId)?.invocationDependencies ?? [];
+			const nextInvocations = local.get(functionId)!.invocationDependencies;
+			if (
+				priorInvocations.length !== nextInvocations.length ||
+				priorInvocations.some(
+					(target, index) => !semantics.equal(target, nextInvocations[index]!),
+				)
+			)
+				changedCallers.add(functionId);
 			const nextOutgoing = nextRaw.map((site) => {
 				const prior = priorSites?.get(site.instruction);
 				return prior !== undefined && semantics.callSiteEqual(prior, site) ? prior : site;
@@ -1755,10 +1766,16 @@ export class CoreProgramFlowEngine {
 			if (nextByInstruction.size === 0) sites.delete(functionId);
 			else sites.set(functionId, nextByInstruction);
 			const priorExact = [
-				...new Set(priorOutgoing.flatMap((site) => site.targets.functions)),
+				...new Set([
+					...priorOutgoing.flatMap((site) => site.targets.functions),
+					...priorInvocations.flatMap((target) => target.functions),
+				]),
 			].sort((left, right) => left - right);
 			const nextExact = [
-				...new Set(nextOutgoing.flatMap((site) => site.targets.functions)),
+				...new Set([
+					...nextOutgoing.flatMap((site) => site.targets.functions),
+					...nextInvocations.flatMap((target) => target.functions),
+				]),
 			].sort((left, right) => left - right);
 			if (
 				priorExact.length !== nextExact.length ||
@@ -1787,7 +1804,12 @@ export class CoreProgramFlowEngine {
 			functionIds,
 			[...outgoing].map(([caller, callSites]) => ({
 				caller,
-				exactTargets: callSites.flatMap((site) => site.targets.functions),
+				exactTargets: [
+					...callSites.flatMap((site) => site.targets.functions),
+					...local
+						.get(caller)!
+						.invocationDependencies.flatMap((target) => target.functions),
+				],
 				wildcard: callSites.some((site) => site.targets.anyScript),
 			})),
 		);

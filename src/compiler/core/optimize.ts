@@ -1,5 +1,6 @@
 import { exposeCoreAccessorCalls } from "./core-accessor-calls.ts";
 import { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import { refineCoreBuiltinCallbackEffects } from "./core-builtin-effects.ts";
 import {
 	forwardCoreOwnCapturedLoads,
 	pruneCoreCaptureLiveness,
@@ -402,14 +403,49 @@ export function optimizeCore(
 				change,
 			])().localPlanInput,
 	);
-	const memoryCallers = measurePhase(
+	const { callbackInputs, memoryCallers, finalCallbackChanges } = measurePhase(
 		"cross-call-memory-forwarding",
-		() =>
-			ablatedFamily === "memory-ssa-load-store" ||
-			ablatedFamily === "provenance-escape-scalar-replacement" ||
-			ablatedFamily === "program-flow"
-				? []
-				: forwardCoreOwnSlotCallLoads(compilation.program, analyses),
+		() => {
+			const callbackChanges =
+				ablatedFamily === "program-flow"
+					? []
+					: refineCoreBuiltinCallbackEffects(
+							compilation.program,
+							analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }).summaries,
+						);
+			const callbackInputs = callbackChanges.map(
+				(change) =>
+					new CoreFunctionOptimizationSession(
+						compilation.program,
+						compilation.context,
+						reportBuilder,
+						functionResources,
+						change.function,
+						{
+							verification: options.verification,
+							optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+							benchmarkAblation: ablatedPassFamily,
+							crossCallSession: "builtin-callback-effects",
+						},
+					).prepareCrossCall(CoreEditor.open(compilation.program, change.function), [
+						change,
+					])().localPlanInput,
+			);
+			const memoryCallers =
+				ablatedFamily === "memory-ssa-load-store" ||
+				ablatedFamily === "provenance-escape-scalar-replacement" ||
+				ablatedFamily === "program-flow"
+					? []
+					: forwardCoreOwnSlotCallLoads(compilation.program, analyses);
+			const finalCallbackChanges =
+				ablatedFamily === "program-flow"
+					? []
+					: refineCoreBuiltinCallbackEffects(
+							compilation.program,
+							analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }).summaries,
+						);
+			return { callbackInputs, memoryCallers, finalCallbackChanges };
+		},
 		CORE_OPTIMIZATION_OWNER.memoryVersions,
 	);
 	const finalFlow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
@@ -429,7 +465,11 @@ export function optimizeCore(
 		finalLocalPlanInputs.set(input.function, input);
 	}
 	for (const input of captureInputs) finalLocalPlanInputs.set(input.function, input);
-	for (const functionId of memoryCallers) {
+	for (const input of callbackInputs) finalLocalPlanInputs.set(input.function, input);
+	for (const functionId of new Set([
+		...memoryCallers,
+		...finalCallbackChanges.map((change) => change.function),
+	])) {
 		finalLocalPlanInputs.set(
 			functionId,
 			buildCoreLocalOptimizationPlanInput(

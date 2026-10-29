@@ -33,7 +33,12 @@ import type {
 	ValueContainmentFact,
 	ValueEscapeFact,
 } from "../shared/effect-summary.ts";
-import { coreKnownBuiltinOnlyObservesOperands } from "./core-builtin-effects.ts";
+import {
+	coreBuiltinCallbackEffects,
+	coreBuiltinCallbackInvocation,
+	coreKnownBuiltinOnlyObservesOperands,
+} from "./core-builtin-effects.ts";
+import type { CoreBuiltinCallbackInvocation } from "./core-builtin-effects.ts";
 import { coreBuiltinResultProjection } from "./core-builtin-result-projections.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
@@ -108,6 +113,7 @@ export interface CoreLocalFunctionSummary {
 	readonly summaryId: string;
 	readonly moduleId: string;
 	readonly effects: EffectSummary;
+	readonly builtinCallbacks: ReadonlyArray<CoreBuiltinCallbackInvocation>;
 	readonly conditionalOwnSlotEffects?: RelativeOwnSlotEffectSummary;
 	readonly parameterEscape: ReadonlyArray<ValueEscapeFact>;
 	readonly receiverEscape: ValueEscapeFact;
@@ -722,6 +728,7 @@ function analyzeLocalSummary(
 	}
 
 	let effects = NO_EFFECT_SUMMARY;
+	const builtinCallbacks: Array<CoreBuiltinCallbackInvocation> = [];
 	const parameterEscape = Array<ValueEscapeFact>(fn.parameterCount).fill("none");
 	const parameterContainment = Array<ValueContainmentFact>(fn.parameterCount).fill(
 		"preserved",
@@ -735,16 +742,23 @@ function analyzeLocalSummary(
 		if (reachableBlocks[fn.instructionBlock(instruction)] === 0) continue;
 		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
 		const instructionEffects = coreInstructionEffects(fn, instruction);
+		const callback =
+			descriptor.opcode === "callKnown"
+				? coreBuiltinCallbackInvocation(fn, instruction)
+				: undefined;
+		if (callback !== undefined) builtinCallbacks.push(callback);
 		effects = joinEffectSummaries(
 			effects,
-			descriptor.callTransfer === undefined
-				? instructionEffects
-				: {
-						...instructionEffects,
-						reads: instructionEffects.reads.filter((domain) => domain !== "host"),
-						writes: instructionEffects.writes.filter((domain) => domain !== "host"),
-						callsUserCode: false,
-					},
+			callback !== undefined
+				? callback.residualEffects
+				: descriptor.callTransfer === undefined
+					? instructionEffects
+					: {
+							...instructionEffects,
+							reads: instructionEffects.reads.filter((domain) => domain !== "host"),
+							writes: instructionEffects.writes.filter((domain) => domain !== "host"),
+							callsUserCode: false,
+						},
 		);
 		const operandStart = fn.kernel.instructionOperandStart(instruction);
 		const operandCount = fn.kernel.instructionOperandCount(instruction);
@@ -823,6 +837,7 @@ function analyzeLocalSummary(
 		summaryId: functionSummaryId(fn.metadata.sourcePath, fn.id),
 		moduleId: moduleSummaryId(fn.metadata.sourcePath),
 		effects,
+		builtinCallbacks: Object.freeze(builtinCallbacks),
 		conditionalOwnSlotEffects: conditionalOwnSlotEffects(
 			fn,
 			cfg,
@@ -1138,6 +1153,19 @@ function deriveSummary(
 		);
 	};
 	const callSites = includeCalls ? targets.outgoing(functionId) : [];
+	if (includeCalls) {
+		const callbackEffects = (target: CoreFunctionId) => current.get(target)?.effects;
+		for (const callback of local.builtinCallbacks)
+			effects = joinEffectSummaries(
+				effects,
+				coreBuiltinCallbackEffects(
+					program.function(functionId),
+					callback,
+					targets,
+					callbackEffects,
+				) ?? EVERY_EFFECT_SUMMARY,
+			);
+	}
 	for (const site of callSites) {
 		if (site.targets.opaque || (!targets.sourceClosed && site.targets.anyScript)) {
 			effects = EVERY_EFFECT_SUMMARY;

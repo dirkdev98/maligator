@@ -953,6 +953,24 @@ preserve containment and complete function caller bounds; their throw and GC
 obligations remain unchanged. Conditional own-slot summaries admit these observers
 and intrinsic loads without treating mutable method hints, aggregate argument
 preparation or constructors as equivalent contracts.
+
+Exact Map/Set `forEach` calls separate validation and internal iteration from the
+callback's effects. The shared callback descriptor supplies those residual effects;
+finite script targets join through the summary worklist, including recursive
+components, and captured scalar builtins reuse their invocation contracts. A callee's
+local frame is separate from the caller's, while captured, global and heap effects
+remain visible. Callback edges participate in dependency invalidation without
+inventing ordinary argument/return transfers. Published instruction refinements do
+not seed callback summaries, and canonical/native entry proofs depend on the current
+program flow revision. Cloning drops these function-scoped proofs for rediscovery.
+Read-only callbacks can therefore preserve caller field values across iteration;
+the call, receiver/callback checks, exception destination and GC polls remain.
+Unknown targets, mutable method lookup and argument preparation retain broad effects.
+Callback retention and Array species/protocol effects require separate contracts.
+The residual contract follows [Map forEach](https://tc39.es/ecma262/multipage/keyed-collections.html#sec-map.prototype.foreach)
+and [Set forEach](https://tc39.es/ecma262/multipage/keyed-collections.html#sec-set.prototype.foreach),
+whose external calls occur only at the callback invocation.
+
 Native return completion plans independently consume the returned value's kind.
 Object completions override a base or derived receiver, including before `super()`;
 base primitive completions need only the construction check. Unknown or mixed
