@@ -541,7 +541,7 @@ export interface HarnessExecutionInvocation {
 
 const registeredWireExecutions = new Map<string, HarnessExecutionInvocation>();
 
-function registerWireExecution(
+function registerInterpretedExecution(
 	options: BuildOptions,
 	config: ResolvedBuildConfig,
 	image: ProgramImage,
@@ -552,9 +552,8 @@ function registerWireExecution(
 		options.mainFile !== undefined &&
 		path.resolve(options.mainFile) !== path.resolve(HOST_MAIN)
 	) {
-		throw new Error(
-			"serialized interpreter pairs require the standard or ordinary host driver",
-		);
+		const linked = linkProgramImage(options, config, image, false, name, workerImages);
+		return { target: linked.binaryPath, context: linked.context };
 	}
 	const { context, cacheSuffix } = resolveHarnessNativeContext(options, config, name);
 	const runner = buildDevelopmentRunner(context, false, cacheSuffix);
@@ -587,9 +586,9 @@ export interface BackendPairResult {
 
 /**
  * Compile one optimized program image, link the native backend, and execute the
- * interpreted backend through the reusable MALW development runner. A difference
- * can therefore only come after the shared frontend/optimizer boundary, while the
- * interpreted half avoids a per-fixture generated object and native link.
+ * interpreted backend through the reusable MALW development runner. Custom main
+ * files require a separate interpreted link to preserve their host initialization.
+ * Both backends share the frontend/optimizer boundary.
  */
 export function buildBackendPairFromOneProgramImage(
 	options: Omit<BuildOptions, "compiled">,
@@ -609,7 +608,7 @@ export function buildBackendPairFromOneProgramImage(
 		`${options.name}-compiled`,
 		workerImages,
 	);
-	const interpreted = registerWireExecution(
+	const interpreted = registerInterpretedExecution(
 		options,
 		config,
 		image,
