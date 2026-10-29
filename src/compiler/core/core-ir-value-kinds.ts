@@ -1996,6 +1996,37 @@ function observedTypeofComparison(
 	return coreTypeofComparison(mask, expected);
 }
 
+export function coreValueKindObservationCandidate(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	opcode: string,
+): boolean {
+	if (fn.kernel.instructionResultCount(instruction) !== 1) return false;
+	const attributes = fn.instructionAttributes(instruction);
+	if (opcode === "typeofCompare") return true;
+	if (opcode === "unary") return attributes.operator === "!";
+	if (opcode === "binary")
+		return (
+			attributes.operator === "==" ||
+			attributes.operator === "!=" ||
+			attributes.operator === "===" ||
+			attributes.operator === "!=="
+		);
+	return (
+		opcode === "callKnown" &&
+		!attributes.construct &&
+		attributes.argumentMode === undefined &&
+		(attributes.operation === "Number.isNaN" ||
+			attributes.operation === "Number.isFinite" ||
+			attributes.operation === "Number.isInteger" ||
+			attributes.operation === "Number.isSafeInteger" ||
+			attributes.operation === "Array.isArray" ||
+			attributes.operation === "ArrayBuffer.isView" ||
+			attributes.operation === "JSON.isRawJSON" ||
+			attributes.operation === "Object.is")
+	);
+}
+
 export function coreValueKindObservation(
 	program: CoreProgram,
 	fn: CoreFunctionStore,

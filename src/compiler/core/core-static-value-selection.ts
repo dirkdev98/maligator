@@ -266,6 +266,10 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 	name: "fold-static-property-reads",
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["loadProperty", "loadPropertyStatic"],
+	candidates: {
+		dependencies: ["body"],
+		opcodes: ["loadProperty", "loadPropertyStatic"],
+	},
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
 	wakesOn: STATIC_VALUE_WAKES,
 	changes: { cfg: false, calls: false, facts: true, representations: false },
@@ -282,7 +286,7 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 			inputs: ReadonlyArray<CoreValueId>;
 			attributes?: Readonly<Record<string, CoreAttributeValue>>;
 		}> = [];
-		for (const instruction of fn.instructionIds()) {
+		for (const instruction of context.instructions()) {
 			if (replacements.length >= context.remainingEdits) continue;
 			const opcode = fn.kernel.instructionOpcode(instruction);
 			if (opcode !== loadPropertyOpcode && opcode !== loadPropertyStaticOpcode) continue;

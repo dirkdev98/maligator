@@ -416,32 +416,18 @@ const CONTAINED_PROPERTY_ACCESS_OPCODES = new Set([
 	"defineProperty",
 ]);
 
-function hasStaticOwnSlotConsumer(fn: CoreFunctionStore): boolean {
-	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
-		if (opcode !== "loadPropertyStatic" && opcode !== "storePropertyStatic") continue;
-		if (typeof fn.instructionAttributes(instruction).stringIndex === "number")
-			return true;
-	}
-	return false;
+function staticOwnSlotConsumer(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): boolean {
+	return typeof fn.instructionAttributes(instruction).stringIndex === "number";
 }
 
-function hasUnrefinedContainedPropertyConsumer(fn: CoreFunctionStore): boolean {
-	let allocation = false;
-	let property = false;
-	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
-		if (descriptor.allocation !== undefined) allocation = true;
-		if (
-			CONTAINED_PROPERTY_ACCESS_OPCODES.has(fn.instructionOpcodeName(instruction)) &&
-			fn.instructionEffectRefinement(instruction) === undefined
-		)
-			property = true;
-		if (allocation && property) return true;
-	}
-	return false;
+function unrefinedContainedPropertyConsumer(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): boolean {
+	return fn.instructionEffectRefinement(instruction) === undefined;
 }
 
 function hasExactCollectionEffectConsumer(fn: CoreFunctionStore): boolean {
@@ -722,11 +708,10 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 	name: "annotate-known-own-slots",
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["loadPropertyStatic", "storePropertyStatic"],
-	admission: {
-		predicate: "static property access with a named slot key",
-		hasOpportunity({ program, function: functionId }) {
-			return hasStaticOwnSlotConsumer(program.function(functionId));
-		},
+	candidates: {
+		dependencies: ["body"],
+		opcodes: ["loadPropertyStatic", "storePropertyStatic"],
+		matches: staticOwnSlotConsumer,
 	},
 	requiredAnalyses: [CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects"],
@@ -737,7 +722,7 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 		const fn = program.function(item.function);
 		const shapes = context.analysis(CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS);
 		let editor: CoreEditor | undefined;
-		for (const instruction of fn.instructionIds()) {
+		for (const instruction of context.instructions()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode !== "loadPropertyStatic" && opcode !== "storePropertyStatic") continue;
@@ -792,11 +777,10 @@ const refineContainedOwnSlotAccesses: CoreFunctionPass = {
 		"storePropertyStatic",
 		"defineProperty",
 	],
-	admission: {
-		predicate: "fresh allocation and unrefined property-access consumer",
-		hasOpportunity({ program, function: functionId }) {
-			return hasUnrefinedContainedPropertyConsumer(program.function(functionId));
-		},
+	candidates: {
+		dependencies: ["body", "memoryEffects"],
+		opcodes: [...CONTAINED_PROPERTY_ACCESS_OPCODES],
+		matches: unrefinedContainedPropertyConsumer,
 	},
 	requiredAnalyses: [
 		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
@@ -821,7 +805,7 @@ const refineContainedOwnSlotAccesses: CoreFunctionPass = {
 			readonly named: boolean;
 			readonly effects: CoreInstructionEffects;
 		}> = [];
-		for (const instruction of fn.instructionIds()) {
+		for (const instruction of context.instructions()) {
 			if (
 				fn.instructionKind(instruction) !== "operation" ||
 				fn.instructionEffectRefinement(instruction) !== undefined

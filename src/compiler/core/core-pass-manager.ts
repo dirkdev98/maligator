@@ -182,6 +182,8 @@ export class CoreFunctionPassScheduler {
 				!pass.admission.hasOpportunity(this.#admissionContext)
 			)
 				return;
+			if (pass.candidates !== undefined && !this.#passContext(pass).hasCandidates())
+				return;
 			queued[passIndex] = 1;
 			queue.push(passIndex);
 			this.#report.recordQueuePush(queue.length - queueIndex);
@@ -279,17 +281,8 @@ export class CoreFunctionPassScheduler {
 				continue;
 			}
 			const passStartedAt = this.#report.collectsDetails ? Date.now() : 0;
-			let passContext = this.#passContexts.get(pass);
-			if (passContext === undefined) {
-				passContext = new CoreFunctionPassContextDriver(
-					this.#program,
-					this.#context,
-					this.#analyses,
-					pass,
-					this.#functionId,
-				);
-				this.#passContexts.set(pass, passContext);
-			}
+			const passContext = this.#passContext(pass);
+			if (pass.candidates !== undefined && !passContext.hasCandidates()) continue;
 			const remainingEdits = pass.budget.maxEdits - used.edits;
 			const owner = passOwner(pass);
 			const changes = this.#report.collectsDetails
@@ -343,6 +336,9 @@ export class CoreFunctionPassScheduler {
 		if (pass.admission !== undefined && pass.admission.predicate.length === 0) {
 			throw new Error(`Core pass ${pass.name} has an unnamed admission predicate`);
 		}
+		if (pass.candidates !== undefined && !pass.candidates.dependencies.includes("body")) {
+			throw new Error(`Core pass ${pass.name} candidates must depend on the body`);
+		}
 		if (pass.requiredAnalyses.some((analysis) => analysis.scope !== "function")) {
 			throw new Error(`Core function pass ${pass.name} requires a non-function analysis`);
 		}
@@ -365,6 +361,21 @@ export class CoreFunctionPassScheduler {
 		});
 		this.#passOpcodeIds.set(pass, ids);
 		return ids;
+	}
+
+	#passContext(pass: CoreFunctionPass): CoreFunctionPassContextDriver {
+		let context = this.#passContexts.get(pass);
+		if (context === undefined) {
+			context = new CoreFunctionPassContextDriver(
+				this.#program,
+				this.#context,
+				this.#analyses,
+				pass,
+				this.#functionId,
+			);
+			this.#passContexts.set(pass, context);
+		}
+		return context;
 	}
 
 	#validateChanges(pass: CoreFunctionPass, changes: CoreChangeSet): void {

@@ -51,6 +51,7 @@ import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	coreValueKindObservation,
+	coreValueKindObservationCandidate,
 } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import {
@@ -74,7 +75,10 @@ import type {
 	CorePassBudget,
 } from "./core-pass.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
-import { coreWeakCollectionNormalConstant } from "./core-weak-collection-facts.ts";
+import {
+	coreWeakCollectionKey,
+	coreWeakCollectionNormalConstant,
+} from "./core-weak-collection-facts.ts";
 import type { CoreWeakCollectionNormalConstant } from "./core-weak-collection-facts.ts";
 
 const LOCAL_BUDGET: CorePassBudget = Object.freeze({
@@ -1311,6 +1315,15 @@ const foldValueKindObservations: CoreFunctionPass = {
 	name: "value-kind-observation-folding",
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["unary", "binary", "typeofCompare", "callKnown"],
+	candidates: {
+		dependencies: ["body"],
+		opcodes: ["unary", "binary", "typeofCompare", "callKnown"],
+		matches(fn, instruction, opcode) {
+			if (coreValueKindObservationCandidate(fn, instruction, opcode)) return true;
+			const key = coreWeakCollectionKey(fn, instruction);
+			return key !== undefined && key.result !== "mutator";
+		},
+	},
 	requiredAnalyses: [
 		CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
@@ -1352,8 +1365,7 @@ const foldValueKindObservations: CoreFunctionPass = {
 				.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
 				.range(value, fn.instructionBlock(consumer)) ??
 			(valueKinds().exactScalar(value) === "int32" ? COMPILER_INT32_RANGE : undefined);
-		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
+		for (const instruction of context.instructions()) {
 			if (
 				fn.instructionOpcodeName(instruction) === "callKnown" &&
 				fn.kernel.instructionResultCount(instruction) === 1

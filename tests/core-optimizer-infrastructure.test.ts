@@ -769,6 +769,65 @@ describe("Core optimizer infrastructure", () => {
 		).toBe(false);
 	});
 
+	it("reuses syntax candidates across fact wakes and reopens them after body edits", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const fn = program.function(functions[0]!.id);
+		const { analyses, report } = analysisHarness(program);
+		let scans = 0;
+		const visits: Array<Array<number>> = [];
+		const pass: CoreFunctionPass = {
+			name: "syntax-candidates",
+			stage: "canonicalize",
+			candidates: {
+				dependencies: ["body"],
+				opcodes: ["rewritten-identity"],
+				matches() {
+					scans++;
+					return true;
+				},
+			},
+			requiredAnalyses: [],
+			wakesOn: ["body", "facts"],
+			changes: { cfg: false, calls: false, facts: false, representations: false },
+			budget: { maxWorkItems: 10, maxEdits: 1, exhaustion: "error" },
+			run(context) {
+				visits.push([...context.instructions()]);
+				return undefined;
+			},
+		};
+		const scheduler = new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			fn.id,
+		);
+		scheduler.runComponent("canonicalize", [pass]);
+		expect(visits).toEqual([]);
+		const editor = CoreEditor.open(program, fn.id);
+		const instruction = coreInstructionId(
+			fn.kernel.valueDefinitionOwner(functions[0]!.value),
+		);
+		editor.replaceInstruction(instruction, "rewritten-identity", [
+			fn.kernel.functionParameter(0),
+		]);
+		scheduler.runComponent("canonicalize", [pass], [editor.commit()]);
+		expect(visits).toEqual([[instruction]]);
+		const scanned = scans;
+		const facts = CoreEditor.open(program, fn.id);
+		facts.addFact({
+			kind: "unrelated-metadata",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "metadata" },
+			obligations: [],
+			origin: "test",
+		});
+		scheduler.runComponent("canonicalize", [pass], [facts.commit()]);
+		expect(visits).toEqual([[instruction], [instruction]]);
+		expect(scans).toBe(scanned);
+	});
+
 	it("skips function passes without a matching candidate opcode", () => {
 		const run = (requiredFunctionOpcodesAny: ReadonlyArray<string>) => {
 			const { program } = programWithTwoFunctions();
