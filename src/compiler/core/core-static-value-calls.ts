@@ -3,11 +3,6 @@ import type { StaticMember } from "../shared/static-values.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { coreCalleeTargetsAreOpen } from "./core-callee-targets.ts";
 import { CoreEditor } from "./core-editor.ts";
-import {
-	coreInstanceMethodHint,
-	coreInstanceMethodHints,
-} from "./core-instance-method-hints.ts";
-import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import type {
@@ -18,7 +13,6 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import { coreReadAccessorSummary } from "./core-read-accessors.ts";
 import { coreStaticMemberOperation } from "./core-static-value-selection.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
@@ -42,7 +36,6 @@ interface StaticSearchPlan {
 }
 
 interface StaticParameterPlan {
-	readonly kind: "collection" | "literal-key";
 	readonly parameter: number;
 	readonly replacements: ReadonlyMap<CoreInstructionId, CoreStaticMemberOperation>;
 	readonly searches: ReadonlyMap<CoreInstructionId, StaticSearchPlan>;
@@ -139,40 +132,6 @@ function staticParameterPlan(
 	)
 		return undefined;
 	const description = program.staticDescriptions.description(fact.description);
-	if (description.kind === "string") {
-		const stringIndex = program.stringConstantSlot(description.codeUnits, "first");
-		if (stringIndex === undefined) return undefined;
-		const control = buildCoreControlFlow(program, fn.id);
-		const summary = coreReadAccessorSummary(fn, control);
-		if (
-			!summary?.reads.some(
-				(read) => read.kind === "indexed" && read.argument === parameter,
-			)
-		)
-			return undefined;
-		const key = fn.kernel.functionParameter(parameter);
-		const replacements = new Map<CoreInstructionId, CoreStaticMemberOperation>();
-		for (const block of control.reversePostorder) {
-			for (const instruction of fn.bodyInstructionIds(block)) {
-				const args = inputs(fn, instruction);
-				if (fn.instructionOpcodeName(instruction) === "loadProperty" && args[1] === key) {
-					replacements.set(instruction, {
-						opcode: "loadPropertyStatic",
-						inputs: [args[0]!],
-						attributes: { stringIndex },
-					});
-				} else if (args.includes(key)) return undefined;
-			}
-		}
-		return {
-			kind: "literal-key",
-			parameter,
-			replacements,
-			searches: new Map(),
-			blocks: control.reversePostorder,
-			cost: fn.liveStorageCounts().instructions,
-		};
-	}
 	if (
 		(description.kind !== "array" && description.kind !== "object") ||
 		description.ownKeysComplete === false ||
@@ -336,14 +295,7 @@ function staticParameterPlan(
 			return undefined;
 	}
 	if (replacements.size === 0) return undefined;
-	return {
-		kind: "collection",
-		parameter,
-		replacements,
-		searches,
-		blocks: control.reversePostorder,
-		cost,
-	};
+	return { parameter, replacements, searches, blocks: control.reversePostorder, cost };
 }
 
 function cloneWithStaticParameter(
@@ -397,7 +349,7 @@ function cloneWithStaticParameter(
 			if (replacement !== undefined) {
 				values.set(
 					result(target, instruction),
-					append(replacement.opcode, replacement.inputs.map(map), replacement.attributes),
+					append(replacement.opcode, replacement.inputs, replacement.attributes),
 				);
 				continue;
 			}
@@ -518,87 +470,6 @@ function cloneWithStaticParameter(
 	return editor.function.id;
 }
 
-function guardStaticAccessorCall(
-	program: CoreProgram,
-	caller: CoreFunctionId,
-	site: CoreInstructionId,
-	target: CoreFunctionId,
-	variant: CoreFunctionId,
-	parameter: number,
-): void {
-	const fn = program.function(caller),
-		editor = CoreEditor.open(program, caller);
-	const block = fn.instructionBlock(site),
-		terminator = fn.blockTerminator(block);
-	const position = fn.instructionSourcePosition(site),
-		args = inputs(fn, site);
-	const output = result(fn, site),
-		representation = fn.valueRepresentation(output);
-	const fast = editor.createBlock(),
-		fallback = editor.createBlock();
-	const join = editor.createBlock([{ representation }]);
-	const joined = fn.kernel.blockParameterValue(fn.kernel.blockParameterStart(join));
-	const tail: Array<CoreInstructionId> = [];
-	for (
-		let next = fn.instructionNext(site);
-		next !== undefined && next !== terminator;
-		next = fn.instructionNext(next)
-	)
-		tail.push(next);
-	for (const instruction of tail) editor.moveInstruction(instruction, join);
-	editor.replaceValueUses(output, joined);
-	editor.setTerminator(join, coreTerminatorInput(fn, terminator));
-	editor.moveInstruction(site, fallback);
-	editor.replaceInstruction(site, "call", args, {
-		attributes: {
-			...fn.instructionAttributes(site),
-			[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]: true,
-		},
-		sourcePosition: position,
-		effectRefinement: fn.instructionEffectRefinement(site),
-	});
-	const specialized = [...args];
-	specialized[0] = editor.appendInstruction(fast, "createFunction", [], {
-		attributes: { functionIndex: variant },
-		sourcePosition: position,
-	}).outputs[0]!;
-	specialized[parameter + 2] = editor.appendInstruction(fast, "createUndefined", [], {
-		sourcePosition: position,
-	}).outputs[0]!;
-	const value = editor.appendInstruction(fast, "call", specialized, {
-		outputRepresentations: [representation],
-		sourcePosition: position,
-	}).outputs[0]!;
-	editor.setTerminator(fast, { kind: "jump", edge: { block: join, arguments: [value] } });
-	editor.setTerminator(fallback, {
-		kind: "jump",
-		edge: { block: join, arguments: [output] },
-	});
-	const guard = editor.appendInstruction(block, "guardFunctionIndex", [args[0]!], {
-		attributes: { functionIndex: target },
-		outputRepresentations: ["boolean"],
-		sourcePosition: position,
-	}).outputs[0]!;
-	editor.replaceTerminator(block, {
-		kind: "branch",
-		condition: guard,
-		consequent: { block: fast, arguments: [] },
-		alternate: { block: fallback, arguments: [] },
-		sourcePosition: position,
-	});
-	const handler = fn.kernel.blockHandlerBlock(block);
-	if (handler !== undefined) {
-		const start = fn.kernel.blockHandlerArgumentStart(block);
-		const arguments_ = Array.from(
-			{ length: fn.kernel.blockHandlerArgumentCount(block) },
-			(_, index) => fn.kernel.handlerArgumentAt(start + index),
-		);
-		for (const created of [fast, fallback, join])
-			editor.setHandler(created, handler, arguments_);
-	}
-	editor.commit();
-}
-
 export function specializeCoreStaticArguments(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
@@ -608,14 +479,8 @@ export function specializeCoreStaticArguments(
 ): ReadonlyArray<CoreFunctionId> {
 	const plans = new Map<
 		string,
-		{
-			candidate: CoreTransformCandidate;
-			plan: StaticParameterPlan;
-			signature: string;
-			guarded: boolean;
-		}
+		{ candidate: CoreTransformCandidate; plan: StaticParameterPlan; signature: string }
 	>();
-	const hints = coreInstanceMethodHints(program);
 	let visits = 0;
 	for (const caller of program.functionIds()) {
 		const fn = program.function(caller);
@@ -623,28 +488,15 @@ export function specializeCoreStaticArguments(
 		for (const site of summaries.targets.outgoing(caller)) {
 			if (++visits > limits.programCompilerWork) break;
 			if (
-				fn.instructionOpcodeName(site.instruction) !== "call" ||
-				fn.instructionAttributes(site.instruction)[
-					CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE
-				] === true
+				site.targets.functions.length !== 1 ||
+				coreCalleeTargetsAreOpen(site.targets) ||
+				fn.instructionOpcodeName(site.instruction) !== "call"
 			)
 				continue;
-			const guarded =
-				coreCalleeTargetsAreOpen(site.targets) || site.targets.functions.length !== 1;
-			const target = !guarded
-				? site.targets.functions[0]
-				: coreInstanceMethodHint(fn, site.callee, site.receiver, hints);
-			if (target === undefined || target === caller) continue;
+			const target = site.targets.functions[0]!;
+			if (target === caller) continue;
 			const targetFn = program.function(target),
 				args = inputs(fn, site.instruction);
-			if (
-				guarded &&
-				(summaries.summary(target)?.readAccessor === undefined ||
-					fn.instructionKind(
-						fn.blockTerminator(fn.instructionBlock(site.instruction)),
-					) === "guard")
-			)
-				continue;
 			for (
 				let parameter = 0;
 				parameter < targetFn.parameterCount && parameter + 2 < args.length;
@@ -657,7 +509,7 @@ export function specializeCoreStaticArguments(
 				const fact = analysis.queryAt(args[parameter + 2]!, site.instruction);
 				if (fact.kind !== "known") continue;
 				const plan = staticParameterPlan(program, targetFn, parameter, fact, analysis);
-				if (plan === undefined || (guarded && plan.kind !== "literal-key")) continue;
+				if (plan === undefined) continue;
 				analysis.verify(fact, site.instruction);
 				const candidate: CoreTransformCandidate = {
 					kind: "static-argument-specialization",
@@ -676,7 +528,6 @@ export function specializeCoreStaticArguments(
 						candidate,
 						plan,
 						signature: `${target}:${parameter}:${fact.description}`,
-						guarded,
 					});
 				break;
 			}
@@ -692,45 +543,22 @@ export function specializeCoreStaticArguments(
 	) {
 		const entry = plans.get(`${candidate.caller}:${candidate.site}`);
 		if (entry === undefined) throw Error("Unexpected static-argument candidate");
-		const target = candidate.targets[0]!;
-		let variant = variants.get(entry.signature);
-		if (variant === undefined && (variantsPerTarget.get(target) ?? 0) >= 4) {
-			service.recordDeclined("expansion-limit");
-			continue;
-		}
-		if (entry.plan.kind === "literal-key")
-			candidate = {
-				...candidate,
-				generatedCodeCost:
-					(variant === undefined ? entry.plan.cost : 0) + (entry.guarded ? 7 : 2),
-				compilerWorkCost:
-					(variant === undefined
-						? program.function(target).valueCapacity + entry.plan.cost
-						: 0) + 12,
-			};
 		const decline = service.admit(candidate, limits);
 		if (decline !== undefined) {
 			service.recordDeclined(decline);
 			continue;
 		}
+		const target = candidate.targets[0]!;
+		let variant = variants.get(entry.signature);
 		if (variant === undefined) {
+			if ((variantsPerTarget.get(target) ?? 0) >= 4) {
+				service.recordDeclined("expansion-limit");
+				continue;
+			}
 			variant = cloneWithStaticParameter(program, program.function(target), entry.plan);
 			variants.set(entry.signature, variant);
 			variantsPerTarget.set(target, (variantsPerTarget.get(target) ?? 0) + 1);
 			changed.add(variant);
-		}
-		if (entry.guarded) {
-			guardStaticAccessorCall(
-				program,
-				candidate.caller,
-				candidate.site,
-				target,
-				variant,
-				entry.plan.parameter,
-			);
-			changed.add(candidate.caller);
-			service.recordApplied(candidate);
-			continue;
 		}
 		const fn = program.function(candidate.caller),
 			editor = CoreEditor.open(program, candidate.caller),
