@@ -22,6 +22,7 @@ type Case =
 	| "optimizer"
 	| "backedges"
 	| "flow"
+	| "flow-membership"
 	| "constants"
 	| "emission";
 type Host = "node" | "native";
@@ -69,7 +70,7 @@ const output = path.resolve(
 const budgetSeconds = Number(value("--budget-seconds", "600"));
 if (args.includes("--help")) {
 	console.log(
-		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--candidate REF|CHECKOUT] [--cases roots,backedges,accessors,optimizer,flow,constants,emission] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Optimizer compiles that frozen workload on Node, including construction and target lowering. Flow replays six local-transfer consumers per source epoch. Constants and emission replay a captured compiler image. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
+		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--candidate REF|CHECKOUT] [--cases roots,backedges,accessors,optimizer,flow,flow-membership,constants,emission] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Optimizer compiles that frozen workload on Node, including construction and target lowering. Flow replays six analysis engines with four consumers per source epoch. Flow-membership appends unrelated functions between warm transfer queries. Constants and emission replay a captured compiler image. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
 	);
 	process.exit(0);
 }
@@ -91,6 +92,7 @@ if (
 				"accessors",
 				"optimizer",
 				"flow",
+				"flow-membership",
 				"constants",
 				"emission",
 			].includes(c),

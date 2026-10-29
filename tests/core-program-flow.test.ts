@@ -13,6 +13,7 @@ import {
 import {
 	CORE_PROGRAM_FLOW_ALL_DIMENSIONS,
 	CORE_PROGRAM_FLOW_EFFECTS,
+	CORE_PROGRAM_FLOW_INLINE_SOURCE,
 	CORE_PROGRAM_FLOW_RETURN_KIND,
 	CORE_PROGRAM_FLOW_RUNTIME_IDENTITY,
 	CoreProgramFlowEngine,
@@ -384,6 +385,51 @@ describe("Core program flow", () => {
 		});
 		expect(engine.local(id).structuralTargetAt(0)).toBe(second.function);
 		expect(old.structuralTargetAt(0)).toBe(first.function);
+	});
+
+	it("keeps local transfers when unrelated functions append", () => {
+		const program = analysisProgram();
+		const target = appendLeaf(program);
+		const caller = appendCaller(program, target.function);
+		const engine = new CoreProgramFlowEngine(program);
+		const before = engine.local(caller.function);
+		appendLeaf(program);
+		expect(engine.local(caller.function)).toBe(before);
+		expect(new CoreProgramFlowEngine(program).local(caller.function)).toBe(before);
+		expect(before.structuralTargetAt(0)).toBe(target.function);
+	});
+
+	it("reopens unresolved attribute and inline-frame targets as their IDs become live", () => {
+		const program = analysisProgram();
+		CoreEditor.configureProgram(program, {
+			sourcePositions: [{ line: 1, column: 1, inlinedFunctionIndex: 4 }],
+		});
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 2 },
+			sourcePosition: 0,
+		});
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const id = builder.finish(entry).function;
+		const engine = new CoreProgramFlowEngine(program);
+		const first = engine.local(id);
+		expect(first.structuralTargetCount).toBe(0);
+		appendLeaf(program);
+		expect(engine.local(id)).toBe(first);
+		const target = appendLeaf(program);
+		const second = engine.local(id);
+		expect(second).not.toBe(first);
+		expect(second.structuralTargetCount).toBe(1);
+		expect(second.structuralTargetAt(0)).toBe(target.function);
+		expect(second.structuralReasonMaskAt(0)).toBe(CORE_PROGRAM_FLOW_RUNTIME_IDENTITY);
+		appendLeaf(program);
+		expect(engine.local(id)).toBe(second);
+		const inlined = appendLeaf(program);
+		const third = engine.local(id);
+		expect(third.structuralTargetCount).toBe(2);
+		expect(third.structuralTargetAt(1)).toBe(inlined.function);
+		expect(third.structuralReasonMaskAt(1)).toBe(CORE_PROGRAM_FLOW_INLINE_SOURCE);
 	});
 
 	it("extracts local transfers from live instructions only", () => {

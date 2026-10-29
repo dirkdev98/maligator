@@ -538,6 +538,8 @@ export const CORE_PROGRAM_FLOW_ALL_DIMENSIONS =
 
 export class CoreProgramFlowLocalTransfers {
 	readonly instructionVisits: number;
+	// IDs only append within a generation; Infinity means every structural target exists.
+	readonly nextUnresolvedFunction: number;
 	readonly #operations: Uint32Array;
 	readonly #calls: Uint32Array;
 	readonly #cellAccesses: Uint32Array;
@@ -553,8 +555,10 @@ export class CoreProgramFlowLocalTransfers {
 		propertyDefinitions: ReadonlyArray<CoreInstructionId>,
 		structuralTargets: ReadonlyArray<CoreFunctionId>,
 		structuralReasons: ReadonlyArray<number>,
+		nextUnresolvedFunction: number,
 	) {
 		this.instructionVisits = instructionVisits;
+		this.nextUnresolvedFunction = nextUnresolvedFunction;
 		this.#operations = Uint32Array.from(operations);
 		this.#calls = Uint32Array.from(calls);
 		this.#cellAccesses = Uint32Array.from(cellAccesses);
@@ -638,15 +642,13 @@ function addStructuralTarget(
 	candidate: unknown,
 	reason: number,
 ): void {
-	if (
-		typeof candidate !== "number" ||
-		!Number.isSafeInteger(candidate) ||
-		candidate < 0 ||
-		candidate >= program.functionCapacity
-	)
+	if (typeof candidate !== "number" || !Number.isSafeInteger(candidate) || candidate < 0)
 		return;
 	const target = candidate as CoreFunctionId;
-	if (!program.hasFunction(target)) return;
+	if (!program.hasFunction(target)) {
+		targets.set(target, 0);
+		return;
+	}
 	targets.set(target, (targets.get(target) ?? 0) | reason);
 }
 
@@ -726,7 +728,14 @@ export function extractCoreProgramFlowLocalTransfers(
 			);
 		}
 	}
-	const structuralTargets = [...structural.keys()].sort((left, right) => left - right);
+	const structuralTargets: Array<CoreFunctionId> = [];
+	let nextUnresolvedFunction = Infinity;
+	for (const target of structural.keys()) {
+		if (structural.get(target) === 0)
+			nextUnresolvedFunction = Math.min(nextUnresolvedFunction, target);
+		else structuralTargets.push(target);
+	}
+	structuralTargets.sort((left, right) => left - right);
 	return new CoreProgramFlowLocalTransfers(
 		instructionVisits,
 		operations,
@@ -735,6 +744,7 @@ export function extractCoreProgramFlowLocalTransfers(
 		propertyDefinitions,
 		structuralTargets,
 		structuralTargets.map((target) => structural.get(target)!),
+		nextUnresolvedFunction,
 	);
 }
 
@@ -1322,7 +1332,6 @@ function mutableCallTargetReaders(
 interface LocalTransferEntry {
 	readonly body: number;
 	readonly calls: number;
-	readonly membership: number;
 	readonly transfers: CoreProgramFlowLocalTransfers;
 }
 
@@ -1400,14 +1409,13 @@ export class CoreProgramFlowEngine {
 		}
 		const fn = this.#program.function(functionId);
 		const body = fn.version("body"),
-			calls = fn.version("calls"),
-			membership = this.#program.programVersion("functions");
+			calls = fn.version("calls");
 		const current = store.entries.get(fn);
 		if (
 			current !== undefined &&
 			current.body === body &&
 			current.calls === calls &&
-			current.membership === membership
+			this.#program.functionCapacity <= current.transfers.nextUnresolvedFunction
 		) {
 			this.#report?.increment("programFlowTransferReuses");
 			return current.transfers;
@@ -1428,7 +1436,7 @@ export class CoreProgramFlowEngine {
 			CORE_OPTIMIZATION_OWNER.programFlowLocalExtraction,
 			next.instructionVisits,
 		);
-		store.entries.set(fn, { body, calls, membership, transfers: next });
+		store.entries.set(fn, { body, calls, transfers: next });
 		this.#report?.increment("programFlowLocalScans");
 		this.#report?.increment("programFlowLocalInstructionVisits", next.instructionVisits);
 		this.#report?.increment("programFlowTransferRecords", next.recordCount);
