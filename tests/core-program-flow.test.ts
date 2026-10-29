@@ -339,6 +339,53 @@ describe("Core program flow", () => {
 		});
 	});
 
+	it("shares immutable transfers across engines without rebuilding for appended constants or frames", () => {
+		const program = analysisProgram();
+		const target = appendLeaf(program);
+		const caller = appendCaller(program, target.function);
+		const first = new CoreProgramFlowEngine(program).local(caller.function);
+		const next = new CoreProgramFlowEngine(program);
+		expect(next.local(caller.function)).toBe(first);
+		const editor = CoreEditor.open(program, caller.function);
+		editor.appendStringConstants([[110, 101, 119]]);
+		editor.appendSourcePositions([
+			{ line: 1, column: 1, inlinedFunctionIndex: target.function },
+		]);
+		editor.commit();
+		expect(next.local(caller.function)).toBe(first);
+		const edit = CoreEditor.open(program, caller.function);
+		edit.replaceInstruction(caller.createFunctionInstruction, "createUndefined", []);
+		edit.commit();
+		const changed = next.local(caller.function);
+		expect(changed).not.toBe(first);
+		expect(changed.structuralTargetCount).toBe(0);
+		expect(first.structuralTargetAt(0)).toBe(target.function);
+	});
+
+	it("rebuilds structural transfers when existing inline frames are replaced", () => {
+		const program = analysisProgram();
+		const first = appendLeaf(program);
+		const second = appendLeaf(program);
+		CoreEditor.configureProgram(program, {
+			sourcePositions: [{ line: 1, column: 1, inlinedFunctionIndex: first.function }],
+		});
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "createUndefined", [], {
+			sourcePosition: 0,
+		});
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const id = builder.finish(entry).function;
+		const engine = new CoreProgramFlowEngine(program);
+		const old = engine.local(id);
+		expect(old.structuralTargetAt(0)).toBe(first.function);
+		CoreEditor.configureProgram(program, {
+			sourcePositions: [{ line: 1, column: 1, inlinedFunctionIndex: second.function }],
+		});
+		expect(engine.local(id).structuralTargetAt(0)).toBe(second.function);
+		expect(old.structuralTargetAt(0)).toBe(first.function);
+	});
+
 	it("extracts local transfers from live instructions only", () => {
 		const program = analysisProgram();
 		const builder = new CoreFunctionBuilder(program, {

@@ -120,6 +120,10 @@ export interface CoreCompilerWorkCounters {
 	readonly programFlowLocalInstructionVisits: number;
 	readonly programFlowTransferRecords: number;
 	readonly programFlowTransferReuses: number;
+	readonly programFlowTransferBodyRebuilds: number;
+	readonly programFlowTransferCallRebuilds: number;
+	readonly programFlowTransferMembershipRebuilds: number;
+	readonly programFlowTransferEpochResets: number;
 	readonly programFlowTargetWakeups: number;
 	readonly programFlowSummaryWakeups: number;
 	readonly programFlowValueKindWakeups: number;
@@ -302,6 +306,10 @@ const COUNTER_KEYS = [
 	"programFlowLocalInstructionVisits",
 	"programFlowTransferRecords",
 	"programFlowTransferReuses",
+	"programFlowTransferBodyRebuilds",
+	"programFlowTransferCallRebuilds",
+	"programFlowTransferMembershipRebuilds",
+	"programFlowTransferEpochResets",
 	"programFlowTargetWakeups",
 	"programFlowSummaryWakeups",
 	"programFlowValueKindWakeups",

@@ -1319,22 +1319,44 @@ function mutableCallTargetReaders(
 	return owned;
 }
 
+interface LocalTransferEntry {
+	readonly body: number;
+	readonly calls: number;
+	readonly membership: number;
+	readonly transfers: CoreProgramFlowLocalTransfers;
+}
+
+interface LocalTransferStore {
+	generation: number;
+	sourcePositionEpoch: number;
+	entries: WeakMap<CoreFunctionStore, LocalTransferEntry>;
+}
+
+const localTransferStores = new WeakMap<CoreProgram, LocalTransferStore>();
+
 export class CoreProgramFlowEngine {
 	readonly #program: CoreProgram;
 	readonly #report: CoreOptimizationReportBuilder | undefined;
 	readonly #epoch = new CoreProgramFlowEpoch();
-	readonly #localTransfers: Array<CoreProgramFlowLocalTransfers | undefined> = [];
+	readonly #localTransfers: LocalTransferStore;
 	readonly #functionWorklist = new CoreProgramFlowFunctionWorklist();
 	readonly #sccWorklist = new CoreProgramFlowSccWorklist();
 	#topology: CoreProgramFlowTopology | undefined;
 	#reportedRevision = 0;
-	#localRevision = 0;
-	#localDataVersion = 0;
-	#localSourcePositionsVersion = 0;
 
 	constructor(program: CoreProgram, report?: CoreOptimizationReportBuilder) {
 		this.#program = program;
 		this.#report = report;
+		let store = localTransferStores.get(program);
+		if (store === undefined) {
+			store = {
+				generation: program.generation,
+				sourcePositionEpoch: program.sourcePositionEpoch,
+				entries: new WeakMap(),
+			};
+			localTransferStores.set(program, store);
+		}
+		this.#localTransfers = store;
 	}
 
 	refresh(dimensions: CoreProgramFlowDimensionMask): CoreProgramFlowEpoch {
@@ -1366,28 +1388,47 @@ export class CoreProgramFlowEngine {
 	}
 
 	local(functionId: CoreFunctionId): CoreProgramFlowLocalTransfers {
-		this.#invalidateLocalTransfers();
-		const current = this.#localTransfers[functionId];
-		if (current !== undefined) {
-			this.#report?.increment("programFlowTransferReuses");
-			return current;
+		const store = this.#localTransfers;
+		if (
+			store.generation !== this.#program.generation ||
+			store.sourcePositionEpoch !== this.#program.sourcePositionEpoch
+		) {
+			store.entries = new WeakMap();
+			store.generation = this.#program.generation;
+			store.sourcePositionEpoch = this.#program.sourcePositionEpoch;
+			this.#report?.increment("programFlowTransferEpochResets");
 		}
+		const fn = this.#program.function(functionId);
+		const body = fn.version("body"),
+			calls = fn.version("calls"),
+			membership = this.#program.programVersion("functions");
+		const current = store.entries.get(fn);
+		if (
+			current !== undefined &&
+			current.body === body &&
+			current.calls === calls &&
+			current.membership === membership
+		) {
+			this.#report?.increment("programFlowTransferReuses");
+			return current.transfers;
+		}
+		if (current !== undefined)
+			this.#report?.increment(
+				current.body !== body
+					? "programFlowTransferBodyRebuilds"
+					: current.calls !== calls
+						? "programFlowTransferCallRebuilds"
+						: "programFlowTransferMembershipRebuilds",
+			);
 		const next =
 			this.#report?.measureOwner(CORE_OPTIMIZATION_OWNER.programFlowLocalExtraction, () =>
-				extractCoreProgramFlowLocalTransfers(
-					this.#program,
-					this.#program.function(functionId),
-				),
-			) ??
-			extractCoreProgramFlowLocalTransfers(
-				this.#program,
-				this.#program.function(functionId),
-			);
+				extractCoreProgramFlowLocalTransfers(this.#program, fn),
+			) ?? extractCoreProgramFlowLocalTransfers(this.#program, fn);
 		this.#report?.recordOwnerWork(
 			CORE_OPTIMIZATION_OWNER.programFlowLocalExtraction,
 			next.instructionVisits,
 		);
-		this.#localTransfers[functionId] = next;
+		store.entries.set(fn, { body, calls, membership, transfers: next });
 		this.#report?.increment("programFlowLocalScans");
 		this.#report?.increment("programFlowLocalInstructionVisits", next.instructionVisits);
 		this.#report?.increment("programFlowTransferRecords", next.recordCount);
@@ -3177,29 +3218,5 @@ export class CoreProgramFlowEngine {
 				deadFunctions: dead.size,
 			}),
 		});
-	}
-
-	#invalidateLocalTransfers(): void {
-		const dataVersion = this.#program.programVersion("data");
-		const sourcePositionsVersion = this.#program.programVersion("sourcePositions");
-		if (
-			dataVersion !== this.#localDataVersion ||
-			sourcePositionsVersion !== this.#localSourcePositionsVersion
-		) {
-			this.#localTransfers.length = 0;
-			this.#localDataVersion = dataVersion;
-			this.#localSourcePositionsVersion = sourcePositionsVersion;
-		}
-		const revision = this.#program.programFlowRevision;
-		for (let cursor = this.#localRevision; cursor < revision; cursor++) {
-			if (
-				(this.#program.programFlowDomainMaskAt(cursor) &
-					(CORE_PROGRAM_FLOW_BODY | CORE_PROGRAM_FLOW_CALLS)) ===
-				0
-			)
-				continue;
-			this.#localTransfers[this.#program.programFlowFunctionAt(cursor)] = undefined;
-		}
-		this.#localRevision = revision;
 	}
 }
