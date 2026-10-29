@@ -138,5 +138,22 @@ const asyncFactory = async function asyncFactory() {
 	return callable;
 };
 check(typeof passAgain(asyncFactory), "object");
+const classFactory = function classFactory() {
+	for (let i = 0; i < 3; i++) visit();
+	return class ForwardedClass {};
+};
+const forwardClass = function forwardClass() {
+	for (let i = 0; i < 3; i++) visit();
+	return classFactory();
+};
+const Constructor = forwardClass();
+check(typeof Constructor, "function");
+check(new Constructor() instanceof Constructor, true);
+try {
+	Constructor();
+	throw new Error("missing class invocation error");
+} catch (error) {
+	check(error instanceof TypeError, true);
+}
 Object.assign(globalThis, { invokeReturned, invokeSpread, suspendedReturn });
 console.log("forwarded-call-targets PASS");
