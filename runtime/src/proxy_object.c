@@ -1226,7 +1226,7 @@ static MalValue mal_proxy_args_array(MalVm *vm, const MalValue *args, i32 arg_co
 
 MalCompletion mal_proxy_apply(MalVm *vm, MalProxyObject *proxy, MalValue this_value, const MalValue *args, i32 arg_count) {
     if (!proxy->callable) {
-        mal_vm_throw_type_error(vm, "Value is not callable");
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not callable");
         return vm->completion;
     }
     if (mal_proxy_check_revoked(vm, proxy)) {
@@ -1246,7 +1246,7 @@ MalCompletion mal_proxy_apply(MalVm *vm, MalProxyObject *proxy, MalValue this_va
 
 MalCompletion mal_proxy_construct(MalVm *vm, MalProxyObject *proxy, const MalValue *args, i32 arg_count, MalValue new_target) {
     if (!proxy->constructor) {
-        mal_vm_throw_type_error(vm, "Value is not a constructor");
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
         return vm->completion;
     }
     if (mal_proxy_check_revoked(vm, proxy)) {
