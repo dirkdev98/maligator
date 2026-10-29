@@ -5,7 +5,8 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
-	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_REGISTERED_SYMBOL,
+	COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL,
 	COMPILER_VALUE_KIND_BIGINT,
 	compilerNumberFastPathInputKind,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
@@ -116,7 +117,8 @@ describe("primitive numeric fusion facts", () => {
 
 	it.each([
 		["BigInt", COMPILER_VALUE_KIND_BIGINT],
-		["Symbol", COMPILER_VALUE_KIND_SYMBOL],
+		["Symbol", COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL],
+		["Symbol.for", COMPILER_VALUE_KIND_REGISTERED_SYMBOL],
 	] as const)(
 		"retains managed %s alternatives while admitting the Number arm",
 		(operation, kind) => {
