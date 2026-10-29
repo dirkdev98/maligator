@@ -1,5 +1,6 @@
 import type { ConstructedCoreCompilation } from "../core/core-compilation.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
+import { prepareCoreCompilationToTargets } from "../target/lower-core-target.ts";
 import { lowerCoreCompilationToExecution } from "../target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../target/lower-native-program-image.ts";
 import { lowerCoreCompilationToNativeProgram } from "../target/lower-native.ts";
@@ -38,17 +39,25 @@ function lowerOptimizedCoreToProgramImage(
 	options: CompileCoreOptions,
 	runPhase: <T>(phase: CompileCorePhase, run: () => T) => T,
 ): ProgramImage {
-	const lowered = runPhase("core to execution", () =>
-		lowerCoreCompilationToExecution(optimized, {
-			reuseRegisters: options.optimization !== "development",
-			excludeGuardedDirectCalls:
-				options.coreOptimizationBenchmarkAblation?.family === "guarded-direct-call",
-		}),
-	);
+	const excludeGuardedDirectCalls =
+		options.coreOptimizationBenchmarkAblation?.family === "guarded-direct-call";
+	const [preparation, lowered] = runPhase("core to execution", () => {
+		const preparation = prepareCoreCompilationToTargets(optimized, {
+			excludeGuardedDirectCalls,
+		});
+		return [
+			preparation,
+			lowerCoreCompilationToExecution(optimized, {
+				preparation,
+				reuseRegisters: options.optimization !== "development",
+				excludeGuardedDirectCalls,
+			}),
+		] as const;
+	});
 	const native = runPhase("core to native", () =>
 		lowerCoreCompilationToNativeProgram(optimized, {
-			excludeGuardedDirectCalls:
-				options.coreOptimizationBenchmarkAblation?.family === "guarded-direct-call",
+			preparation,
+			excludeGuardedDirectCalls,
 		}),
 	);
 	const image = runPhase("execution to image", () =>

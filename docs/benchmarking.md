@@ -290,12 +290,14 @@ largest execution graphs captured by compiling the baseline accessor fixture;
 `backedges` runs native backedge discovery on those same graphs. `accessors` walks
 real Core storage, kernel columns, and opcode registry entries. `optimizer` runs
 the Node compiler on the frozen baseline accessor graph, through runtime-image
-serialization. `flow` replays six analysis engines and four consumers per engine over unchanged Core functions,
+serialization. `lowering` replays both backend realizations from sealed optimized Core;
+its timer includes shared preparation and backend verification, with C and wire
+checksums computed outside the timer. `flow` replays six analysis engines and four consumers per engine over unchanged Core functions,
 starting each replay with cold transfer state. `flow-membership` warms stable
 transfers, then appends unrelated functions between repeated consumer queries.
 `constants` compacts a captured
 compiler image with an unused trailing constant; `emission` renders that image.
-Every case except `optimizer` runs on Node and compiled native binaries.
+Every case except `optimizer` and `lowering` runs on Node and compiled native binaries.
 Use `--cases roots,backedges` or `--hosts node` to narrow the selection.
 
 Calibration runs only on the baseline and fixes the iteration count for both

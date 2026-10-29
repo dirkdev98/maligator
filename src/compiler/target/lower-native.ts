@@ -3,7 +3,10 @@ import type { CoreBlockId, CoreRepresentation, CoreValueId } from "../core/core-
 import type { CoreFunctionStore } from "../core/core-store.ts";
 import { nativeLoopBackedgeInstructions } from "./execution-liveness.ts";
 import { lowerCoreCompilationToTargetProgram } from "./lower-core-target.ts";
-import type { CoreStorageAssignment } from "./lower-core-target.ts";
+import type {
+	CoreStorageAssignment,
+	CoreTargetPreparation,
+} from "./lower-core-target.ts";
 import { layoutNativeBlocks } from "./lower-native-control-flow.ts";
 import { createNativeParallelCopyLowerer } from "./lower-native-copies.ts";
 import type { NativeProgram } from "./native-ir.ts";
@@ -55,7 +58,10 @@ function nativeValueStorage(
 
 export function lowerCoreCompilationToNativeProgram(
 	compilation: CoreCompilation,
-	options: { readonly excludeGuardedDirectCalls?: boolean } = {},
+	options: {
+		readonly excludeGuardedDirectCalls?: boolean;
+		readonly preparation?: CoreTargetPreparation;
+	} = {},
 ): NativeProgram {
 	const target = lowerCoreCompilationToTargetProgram(compilation, {
 		...options,

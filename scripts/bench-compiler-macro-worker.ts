@@ -8,7 +8,11 @@ import type * as Core from "../src/compiler/pipeline/compile-core-common.ts";
 import type * as Analysis from "../src/compiler/pipeline/compile-program-common.ts";
 import type * as Pipeline from "../src/compiler/pipeline/compile-program.ts";
 import type * as Artifact from "../src/compiler/target/compiler-artifact-codec.ts";
+import type * as Emission from "../src/compiler/target/emit-program-image.ts";
+import type * as Target from "../src/compiler/target/lower-core-target.ts";
 import type * as Execution from "../src/compiler/target/lower-native-execution.ts";
+import type * as Image from "../src/compiler/target/lower-native-program-image.ts";
+import type * as Native from "../src/compiler/target/lower-native.ts";
 import type * as Wire from "../src/compiler/target/program-image-codec.ts";
 import type * as Harness from "../src/test-harness.ts";
 
@@ -85,6 +89,57 @@ if (mode === "capture") {
 			),
 		}),
 	);
+} else if (mode === "lowering") {
+	const { analyzeEntrypoint } = (await load(
+		"src/compiler/pipeline/compile-program-common.ts",
+	)) as typeof Analysis;
+	const { optimizeSemanticProgramToCore } = (await load(
+		"src/compiler/pipeline/compile-core-common.ts",
+	)) as typeof Core;
+	const target = (await load(
+		"src/compiler/target/lower-core-target.ts",
+	)) as typeof Target;
+	const { lowerCoreCompilationToExecution } = (await load(
+		"src/compiler/target/lower-native-execution.ts",
+	)) as typeof Execution;
+	const { lowerCoreCompilationToNativeProgram } = (await load(
+		"src/compiler/target/lower-native.ts",
+	)) as typeof Native;
+	const { lowerExecutionToProgramImage } = (await load(
+		"src/compiler/target/lower-native-program-image.ts",
+	)) as typeof Image;
+	const { serializeRuntimeImage } = (await load(
+		"src/compiler/target/program-image-codec.ts",
+	)) as typeof Wire;
+	const { emitProgramTranslationUnits } = (await load(
+		"src/compiler/target/emit-program-image.ts",
+	)) as typeof Emission;
+	const phase = <T>(_name: string, run: () => T) => run();
+	const analysis = analyzeEntrypoint(input, options, phase);
+	const optimized = optimizeSemanticProgramToCore(
+		analysis.semantic,
+		{ facts: analysis.facts, coreInstrumentation: "off" },
+		phase,
+	);
+	const iterations = Number(count);
+	let milliseconds = 0;
+	let checksum = "";
+	for (let iteration = 0; iteration < iterations; iteration++) {
+		const start = performance.now();
+		const preparation = target.prepareCoreCompilationToTargets?.(optimized);
+		const execution = lowerCoreCompilationToExecution(optimized, { preparation });
+		const native = lowerCoreCompilationToNativeProgram(optimized, { preparation });
+		milliseconds += performance.now() - start;
+		const image = lowerExecutionToProgramImage(execution, native);
+		const digest = createHash("sha256").update(serializeRuntimeImage(image.runtime));
+		for (const unit of emitProgramTranslationUnits(image))
+			digest.update(unit.id).update(unit.source);
+		const next = digest.digest("hex");
+		if (checksum && checksum !== next)
+			throw new Error("lowered C or runtime wire changed between iterations");
+		checksum = next;
+	}
+	console.log(JSON.stringify({ iterations, checksum, milliseconds }));
 } else {
 	const { compileEntrypoint } = (await load(
 		"src/compiler/pipeline/compile-program.ts",

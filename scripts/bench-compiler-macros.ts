@@ -20,6 +20,7 @@ type Case =
 	| "roots"
 	| "accessors"
 	| "optimizer"
+	| "lowering"
 	| "backedges"
 	| "flow"
 	| "flow-membership"
@@ -70,7 +71,7 @@ const output = path.resolve(
 const budgetSeconds = Number(value("--budget-seconds", "600"));
 if (args.includes("--help")) {
 	console.log(
-		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--candidate REF|CHECKOUT] [--cases roots,backedges,accessors,optimizer,flow,flow-membership,constants,emission] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Optimizer compiles that frozen workload on Node, including construction and target lowering. Flow replays six analysis engines with four consumers per source epoch. Flow-membership appends unrelated functions between warm transfer queries. Constants and emission replay a captured compiler image. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
+		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--candidate REF|CHECKOUT] [--cases roots,backedges,accessors,optimizer,lowering,flow,flow-membership,constants,emission] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Optimizer compiles that frozen workload on Node, including construction and target lowering. Lowering replays both backend realizations from sealed optimized Core. Flow replays six analysis engines with four consumers per source epoch. Flow-membership appends unrelated functions between warm transfer queries. Constants and emission replay a captured compiler image. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
 	);
 	process.exit(0);
 }
@@ -91,6 +92,7 @@ if (
 				"backedges",
 				"accessors",
 				"optimizer",
+				"lowering",
 				"flow",
 				"flow-membership",
 				"constants",
@@ -260,7 +262,7 @@ try {
 	report.samples = samples;
 	for (const name of cases)
 		for (const host of hosts) {
-			if (name === "optimizer" && host === "native") continue;
+			if ((name === "optimizer" || name === "lowering") && host === "native") continue;
 			const commands: Array<{ executable: string; args: Array<string> }> = [];
 			for (const [index, source] of [base, candidate].entries()) {
 				const fixture = path.join(source, `bench/compiler-macros/${name}.mts`);
@@ -286,10 +288,10 @@ try {
 						nativeCommands.set(key, command);
 					}
 					commands.push(command);
-				} else if (name === "optimizer")
+				} else if (name === "optimizer" || name === "lowering")
 					commands.push({
 						executable: process.execPath,
-						args: [worker, "optimizer", source, input, output],
+						args: [worker, name, source, input, output],
 					});
 				else commands.push({ executable: process.execPath, args: [fixture] });
 			}

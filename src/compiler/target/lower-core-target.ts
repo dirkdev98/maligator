@@ -115,7 +115,10 @@ export type {
 	CoreTargetSafepoint,
 } from "./core-target-ir.ts";
 
+export type CoreTargetPreparation = ReturnType<typeof prepareCoreCompilationToTargets>;
+
 export interface LowerCoreToCoreTargetOptions {
+	readonly preparation?: CoreTargetPreparation;
 	readonly assignStorage: CoreStorageAssigner;
 	readonly createParallelCopyLowerer?: (
 		nextRegister: { value: number },
@@ -1632,7 +1635,7 @@ function lowerInstructionFacts(
 	};
 }
 
-function lowerFunctionToTarget(
+function prepareFunctionForTargets(
 	coreFunction: CoreFunctionStore,
 	executionFunction: number,
 	functionMap: CoreTargetFunctionMap,
@@ -1656,15 +1659,9 @@ function lowerFunctionToTarget(
 	blockOrder: ReadonlyArray<CoreBlockId>,
 	siteFacts: ReadonlyMap<string, CompilerSiteFacts>,
 	instructionSites: WeakMap<object, CompilerSiteFacts>,
-	assignStorage: CoreStorageAssigner,
-	loopBackedgeInstructions: typeof executionLoopBackedgeInstructions,
-	layoutBlocks: LowerCoreToCoreTargetOptions["layoutBlocks"],
-	createParallelCopyLowerer: LowerCoreToCoreTargetOptions["createParallelCopyLowerer"],
-	preserveResumableRepresentations: boolean,
-	directClosures: CoreDirectClosurePlan | undefined,
 	classLayoutSites: ReadonlyMap<CoreInstructionId, CompilerClassLayoutSite> | undefined,
 	exactArrayAccesses: ReadonlyMap<CoreInstructionId, CoreExactArrayAccess>,
-): CoreTargetFunction {
+) {
 	const privatePackedRestElements = new Map(
 		privatePackedRestArrayElements.map((plan) => [plan.instruction, plan]),
 	);
@@ -1683,21 +1680,6 @@ function lowerFunctionToTarget(
 		coreFunction,
 		protectedInstructions,
 	);
-	const loweredBlockForCore = new Map<CoreBlockId, number>(
-		blockOrder.map((block, index) => [block, index]),
-	);
-	let blocks: Array<{
-		instructions: Array<CompilerInstruction>;
-		sourcePosition?: number;
-	}> = blockOrder.map(() => ({ instructions: [] }));
-	const literalSwitches: Array<
-		NonNullable<CoreTargetFunction["literalSwitches"]>[number]
-	> = [];
-	const loweredInstructions = new Map<CoreInstructionId, CompilerInstruction>();
-	const loweredSwitchComparisons = new Map<
-		CoreInstructionId,
-		Array<CompilerInstruction>
-	>();
 	const guardedTargets = new Map<CoreInstructionId, ReadonlyArray<CoreFunctionId>>();
 	const exactCallTargets = new Set<CoreInstructionId>();
 	for (const row of recipeRows) {
@@ -1867,24 +1849,6 @@ function lowerFunctionToTarget(
 			reservedAbiColors.add(index);
 		}
 	}
-	const allocation = assignStorage(
-		coreFunction,
-		blockOrder,
-		reservedAbiColors,
-		directEntryPlans.flatMap((entry) =>
-			entry.valueRepresentations === undefined ? [] : [entry.valueRepresentations],
-		),
-	);
-	const registerRepresentations = new Map(allocation.registerRepresentations);
-	const allocatedRegisterCount = Math.max(-1, ...allocation.registers.values()) + 1;
-	const nextRegister = { value: allocatedRegisterCount };
-	const registerForValue = (value: CoreValueId): number => {
-		const register = allocation.registers.get(allocation.roots.get(value) ?? value);
-		if (register === undefined)
-			throw new Error(`Core value %${value} has no execution register`);
-		return register;
-	};
-
 	const selectedInBoundsPackedRestElements = new Set<CoreInstructionId>();
 	for (const row of recipeRows) {
 		if (coreSpecializationRecipeKindAt(recipeTable, row) !== "indexed-length-loop")
@@ -1904,6 +1868,139 @@ function lowerFunctionToTarget(
 				selectedInBoundsPackedRestElements.add(element.instruction);
 		}
 	}
+	// Register fields hold SSA IDs until each backend clones and assigns its own storage.
+	const operations = new Map<CoreInstructionId, CompilerInstruction>();
+	for (const block of blockOrder) {
+		for (const instruction of coreFunction.bodyInstructionIds(block)) {
+			if (omittedInstructions.has(instruction)) continue;
+			const operation = rebuildOperation(
+				coreFunction,
+				instruction,
+				(value) => value,
+				functionMap,
+				directEntryIds.get(instruction),
+				guardedTargets.get(instruction),
+				exactCallTargets.has(instruction),
+				plannedBuiltinCalls.get(instruction),
+				plannedExactCollectionReceivers.get(instruction),
+				plannedExactArrayLengths.get(instruction),
+				plannedDirectStringCharCodeAtPositions.get(instruction),
+				plannedPrimitiveStringLengths.get(instruction),
+				plannedDirectFunctionCalls.get(instruction),
+				plannedDirectCallTargets.get(instruction),
+				!protectedInstructions.has(instruction),
+			);
+			operations.set(instruction, operation);
+		}
+	}
+
+	return {
+		coreFunction,
+		executionFunction,
+		functionMap,
+		numericSortCallbacks,
+		directEntryPlans,
+		directBuiltinCallbacks,
+		fieldCallPlans,
+		recordCalls,
+		recordStorageWidths,
+		unsignedArithmetic,
+		privateNumericArrayElements,
+		instructionFacts,
+		recipeTable,
+		recipeRows,
+		blockOrder,
+		siteFacts,
+		instructionSites,
+		classLayoutSites,
+		exactArrayAccesses,
+		privatePackedRestElements,
+		privatePackedRestAllocations,
+		privatePackedRestLengths,
+		omittedInstructions,
+		denseReserveLengths,
+		reservedAbiColors,
+		selectedInBoundsPackedRestElements,
+		operations,
+	};
+}
+
+type CoreTargetFunctionPreparation = ReturnType<typeof prepareFunctionForTargets>;
+
+function lowerFunctionToTarget(
+	prepared: CoreTargetFunctionPreparation,
+	options: LowerCoreToCoreTargetOptions,
+	directClosures: CoreDirectClosurePlan | undefined,
+): CoreTargetFunction {
+	const {
+		coreFunction,
+		executionFunction,
+		functionMap,
+		numericSortCallbacks,
+		directEntryPlans,
+		directBuiltinCallbacks,
+		fieldCallPlans,
+		recordCalls,
+		recordStorageWidths,
+		unsignedArithmetic,
+		privateNumericArrayElements,
+		instructionFacts,
+		recipeTable,
+		recipeRows,
+		blockOrder,
+		siteFacts,
+		instructionSites,
+		classLayoutSites,
+		exactArrayAccesses,
+		privatePackedRestElements,
+		privatePackedRestAllocations,
+		privatePackedRestLengths,
+		omittedInstructions,
+		denseReserveLengths,
+		reservedAbiColors,
+		selectedInBoundsPackedRestElements,
+		operations,
+	} = prepared;
+	const {
+		assignStorage,
+		layoutBlocks,
+		createParallelCopyLowerer,
+		loopBackedgeInstructions = executionLoopBackedgeInstructions,
+		preserveResumableRepresentations = false,
+	} = options;
+	const loweredBlockForCore = new Map<CoreBlockId, number>(
+		blockOrder.map((block, index) => [block, index]),
+	);
+	let blocks: Array<{
+		instructions: Array<CompilerInstruction>;
+		sourcePosition?: number;
+	}> = blockOrder.map(() => ({ instructions: [] }));
+	const literalSwitches: Array<
+		NonNullable<CoreTargetFunction["literalSwitches"]>[number]
+	> = [];
+	const loweredInstructions = new Map<CoreInstructionId, CompilerInstruction>();
+	const loweredSwitchComparisons = new Map<
+		CoreInstructionId,
+		Array<CompilerInstruction>
+	>();
+	const allocation = assignStorage(
+		coreFunction,
+		blockOrder,
+		reservedAbiColors,
+		directEntryPlans.flatMap((entry) =>
+			entry.valueRepresentations === undefined ? [] : [entry.valueRepresentations],
+		),
+	);
+	const registerRepresentations = new Map(allocation.registerRepresentations);
+	const allocatedRegisterCount = Math.max(-1, ...allocation.registers.values()) + 1;
+	const nextRegister = { value: allocatedRegisterCount };
+	const registerForValue = (value: CoreValueId): number => {
+		const register = allocation.registers.get(allocation.roots.get(value) ?? value);
+		if (register === undefined)
+			throw new Error(`Core value %${value} has no execution register`);
+		return register;
+	};
+
 	const canonicalRegisterRepresentations = new Map(
 		Array.from(
 			{ length: allocatedRegisterCount },
@@ -2116,23 +2213,17 @@ function lowerFunctionToTarget(
 			instructions.push(
 				...sourcePositionMarker(coreFunction.instructionSourcePosition(instruction)),
 			);
-			let rebuilt = rebuildOperation(
-				coreFunction,
-				instruction,
-				registerForValue,
-				functionMap,
-				directEntryIds.get(instruction),
-				guardedTargets.get(instruction),
-				exactCallTargets.has(instruction),
-				plannedBuiltinCalls.get(instruction),
-				plannedExactCollectionReceivers.get(instruction),
-				plannedExactArrayLengths.get(instruction),
-				plannedDirectStringCharCodeAtPositions.get(instruction),
-				plannedPrimitiveStringLengths.get(instruction),
-				plannedDirectFunctionCalls.get(instruction),
-				plannedDirectCallTargets.get(instruction),
-				!protectedInstructions.has(instruction),
-			);
+			const operation = operations.get(instruction)!;
+			let rebuilt = {
+				...operation,
+				...("registers" in operation
+					? {
+							registers: operation.registers.map((value) =>
+								value < 0 ? value : registerForValue(value as CoreValueId),
+							),
+						}
+					: {}),
+			} as CompilerInstruction;
 			const numericCallback = numericSortCallbacks.get(instruction);
 			if (numericCallback !== undefined && rebuilt.type === "call")
 				rebuilt.numericSortCallback = numericCallback;
@@ -3091,10 +3182,10 @@ function exactCoreCallTargets(
 	return exact;
 }
 
-export function lowerCoreCompilationToTargetProgram(
+export function prepareCoreCompilationToTargets(
 	compilation: CoreCompilation,
-	options: LowerCoreToCoreTargetOptions,
-): CoreTargetProgram {
+	options: { readonly excludeGuardedDirectCalls?: boolean } = {},
+) {
 	assertCoreOptimizationPlanCertificate(compilation.program, compilation.plan);
 	const functionMap = createCoreTargetFunctionMap(compilation);
 	const directEntryPlans = new Map<number, Array<CoreDirectEntryPlan>>();
@@ -3244,19 +3335,9 @@ export function lowerCoreCompilationToTargetProgram(
 		]),
 	);
 	const specializedOnly = new Set(compilation.plan.specializedOnlyFunctions ?? []);
-	const directClosures =
-		options.planDirectClosures === true
-			? planCoreDirectClosures(
-					compilation.program,
-					compilation.context,
-					functionMap.executionToCore,
-					exactCoreCallTargets(compilation, specializationRows, directEntryTargets),
-				)
-			: undefined;
 	const classLayouts = planCoreClassLayouts(compilation, functionMap);
-	const functions = functionMap.executionToCore.map((core, execution) => ({
-		...(specializedOnly.has(core) ? { specializedOnly: true as const } : {}),
-		...lowerFunctionToTarget(
+	const functions = functionMap.executionToCore.map((core, execution) =>
+		prepareFunctionForTargets(
 			compilation.program.function(core),
 			execution,
 			functionMap,
@@ -3277,15 +3358,55 @@ export function lowerCoreCompilationToTargetProgram(
 			blockOrders.get(core)!,
 			compilation.context.facts.sites,
 			compilation.context.facts.instructionSites,
-			options.assignStorage,
-			options.loopBackedgeInstructions ?? executionLoopBackedgeInstructions,
-			options.layoutBlocks,
-			options.createParallelCopyLowerer,
-			options.preserveResumableRepresentations === true,
-			directClosures?.get(core),
 			classLayouts.sites.get(core),
 			planCoreExactArrayAccesses(compilation, core),
 		),
+	);
+	return Object.freeze({
+		compilation,
+		excludeGuardedDirectCalls: options.excludeGuardedDirectCalls === true,
+		functionMap,
+		functions,
+		classLayouts,
+		specializedOnly,
+		specializationRows,
+		directEntryTargets,
+	});
+}
+
+export function lowerCoreCompilationToTargetProgram(
+	compilation: CoreCompilation,
+	options: LowerCoreToCoreTargetOptions,
+): CoreTargetProgram {
+	assertCoreOptimizationPlanCertificate(compilation.program, compilation.plan);
+	const prepared =
+		options.preparation ?? prepareCoreCompilationToTargets(compilation, options);
+	if (
+		prepared.compilation !== compilation ||
+		prepared.excludeGuardedDirectCalls !== (options.excludeGuardedDirectCalls === true)
+	)
+		throw new Error(
+			"Core target preparation belongs to a different compilation or recipe selection",
+		);
+	const { functionMap, classLayouts } = prepared;
+	const directClosures =
+		options.planDirectClosures === true
+			? planCoreDirectClosures(
+					compilation.program,
+					compilation.context,
+					functionMap.executionToCore,
+					exactCoreCallTargets(
+						compilation,
+						prepared.specializationRows,
+						prepared.directEntryTargets,
+					),
+				)
+			: undefined;
+	const functions = prepared.functions.map((fn) => ({
+		...(prepared.specializedOnly.has(fn.coreFunction.id)
+			? { specializedOnly: true as const }
+			: {}),
+		...lowerFunctionToTarget(fn, options, directClosures?.get(fn.coreFunction.id)),
 	}));
 	return Object.freeze({
 		core: compilation.program,

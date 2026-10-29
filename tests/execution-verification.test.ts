@@ -5,11 +5,13 @@ import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import type { CompilerInstruction } from "../src/compiler/shared/compiler-instruction.ts";
 import { executionSafepointRoots } from "../src/compiler/target/execution-liveness.ts";
+import { prepareCoreCompilationToTargets } from "../src/compiler/target/lower-core-target.ts";
 import type {
 	ExecutionFunction,
 	ExecutionProgram,
 } from "../src/compiler/target/lower-execution.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
+import { lowerCoreCompilationToNativeProgram } from "../src/compiler/target/lower-native.ts";
 import { nativeInactiveRootMasks } from "../src/compiler/target/native-root-masks.ts";
 import {
 	ExecutionVerificationError,
@@ -221,6 +223,43 @@ function registerOf(instruction: CompilerInstruction, position: number): number 
 }
 
 describe("Core target construction", () => {
+	it("isolates backend storage and layout when semantic preparation is shared", () => {
+		const core = optimizedCore(
+			`${LOOP_SOURCE}\n${HANDLER_SOURCE}\n${ARGUMENT_ENTRY_SOURCE}\n
+			function* sequence(value) { yield value + 1; return value + 2; }
+			globalThis.sequence = sequence;`,
+			"shared-targets.js",
+		);
+		const expectedExecution = lowerCoreCompilationToExecution(core);
+		const expectedNative = lowerCoreCompilationToNativeProgram(core);
+		const preparation = prepareCoreCompilationToTargets(core);
+		const native = lowerCoreCompilationToNativeProgram(core, { preparation });
+		const execution = lowerCoreCompilationToExecution(core, { preparation });
+		expect(native.functions).toEqual(expectedNative.functions);
+		expect(execution.functions).toEqual(expectedExecution.functions);
+		expect(lowerCoreCompilationToNativeProgram(core, { preparation }).functions).toEqual(
+			expectedNative.functions,
+		);
+		expect(lowerCoreCompilationToExecution(core, { preparation }).functions).toEqual(
+			expectedExecution.functions,
+		);
+	});
+
+	it("rejects preparation from another compilation or recipe selection", () => {
+		const core = optimizedCore(LOOP_SOURCE, "prepared-target.js");
+		const other = optimizedCore(LOOP_SOURCE, "other-target.js");
+		const preparation = prepareCoreCompilationToTargets(core);
+		expect(() => lowerCoreCompilationToExecution(other, { preparation })).toThrow(
+			"different compilation or recipe selection",
+		);
+		expect(() =>
+			lowerCoreCompilationToNativeProgram(core, {
+				preparation,
+				excludeGuardedDirectCalls: true,
+			}),
+		).toThrow("different compilation or recipe selection");
+	});
+
 	it("verifies representative lowered source through every target contract", () => {
 		for (const [name, source] of [
 			["branches", BRANCH_SOURCE],

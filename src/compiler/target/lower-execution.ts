@@ -3,7 +3,10 @@ import type { CorePlanRepresentation } from "../core/core-ir-regions.ts";
 import type { CoreBlockId, CoreRepresentation, CoreValueId } from "../core/core-ir.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
 import type { ExecutionProgram } from "./execution-ir.ts";
-import type { CoreStorageAssignment } from "./lower-core-target.ts";
+import type {
+	CoreStorageAssignment,
+	CoreTargetPreparation,
+} from "./lower-core-target.ts";
 import { lowerCoreCompilationToTargetProgram } from "./lower-core-target.ts";
 import { verifyExecutionProgram } from "./verify-execution.ts";
 
@@ -16,6 +19,7 @@ export type {
 	ExecutionSafepoint,
 } from "./execution-ir.ts";
 export interface LowerCoreToExecutionOptions {
+	readonly preparation?: CoreTargetPreparation;
 	readonly reuseRegisters?: boolean;
 	readonly excludeGuardedDirectCalls?: boolean;
 }
