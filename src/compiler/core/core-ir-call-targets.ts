@@ -7,6 +7,7 @@ import { COMPILER_VALUE_KIND_OBJECT } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { PrimordialNode } from "../shared/primordial-catalog-types.ts";
 import { primordialNode } from "../shared/primordial-catalog.ts";
+import { coreKnownBuiltinOnlyObservesOperands } from "./core-builtin-effects.ts";
 import { coreBuiltinCallInput } from "./core-builtin-result-projections.ts";
 import type { CoreCallGraph } from "./core-call-graph.ts";
 import { coreClosedCapturedValueSlots } from "./core-compilation.ts";
@@ -1318,6 +1319,7 @@ function analyzeFunctionTargets(
 		const operator = fn.instructionAttributes(instruction).operator;
 		const observesIdentity =
 			descriptor.observesOperands ||
+			(opcode === "callKnown" && coreKnownBuiltinOnlyObservesOperands(fn, instruction)) ||
 			opcode === "guardFunctionIndex" ||
 			opcode === "guardBaseConstructorLayout" ||
 			(opcode === "unary" && (operator === "typeof" || operator === "!")) ||

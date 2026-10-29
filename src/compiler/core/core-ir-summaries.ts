@@ -33,6 +33,7 @@ import type {
 	ValueContainmentFact,
 	ValueEscapeFact,
 } from "../shared/effect-summary.ts";
+import { coreKnownBuiltinOnlyObservesOperands } from "./core-builtin-effects.ts";
 import { coreBuiltinResultProjection } from "./core-builtin-result-projections.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
@@ -403,6 +404,8 @@ const OWN_SLOT_LOCAL_OPERATIONS = new Set([
 	"loadCallee",
 	"loadGlobal",
 	"loadGlobalIndex",
+	"loadIntrinsic",
+	"loadPrimordial",
 	"mathUnaryNumber",
 	"mathBinaryNumber",
 ]);
@@ -479,6 +482,10 @@ function conditionalOwnSlotEffects(
 		const start = fn.kernel.instructionOperandStart(instruction);
 		const count = fn.kernel.instructionOperandCount(instruction);
 		const call = fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer;
+		if (opcode === "callKnown" && coreKnownBuiltinOnlyObservesOperands(fn, instruction)) {
+			residualEffects = joinEffectSummaries(residualEffects, effects);
+			continue;
+		}
 		if (call !== undefined) {
 			if (
 				call.invocation !== "call" ||
@@ -741,10 +748,15 @@ function analyzeLocalSummary(
 		);
 		const operandStart = fn.kernel.instructionOperandStart(instruction);
 		const operandCount = fn.kernel.instructionOperandCount(instruction);
+		const observesOperands =
+			descriptor.observesOperands ||
+			descriptor.opcode === "move" ||
+			(descriptor.opcode === "callKnown" &&
+				coreKnownBuiltinOnlyObservesOperands(fn, instruction));
 		for (let operandIndex = 0; operandIndex < operandCount; operandIndex++) {
 			const value = fn.kernel.operandAt(operandStart + operandIndex);
 			const origin = origins[value]!;
-			if (descriptor.observesOperands || descriptor.opcode === "move") continue;
+			if (observesOperands) continue;
 			if (descriptor.callTransfer?.calleeOperand === operandIndex) {
 				noteEscape(
 					origin,

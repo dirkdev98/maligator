@@ -945,6 +945,14 @@ Function-identity and constructor-layout guards produce Boolean results; their
 callee operands retain separate target facts. Async and generator invocations
 return noncallable wrappers while their body-return targets remain available for
 reachability and later completion consumers.
+Known predicate invocation effects also constrain operand escape independently of
+their normal result. Nonthrowing primitive-result kernels without writes, reentry
+or suspension cannot expose an operand identity. Array.isArray separately follows
+internal Proxy targets and throws a fresh TypeError for revocation. These calls
+preserve containment and complete function caller bounds; their throw and GC
+obligations remain unchanged. Conditional own-slot summaries admit these observers
+and intrinsic loads without treating mutable method hints, aggregate argument
+preparation or constructors as equivalent contracts.
 Native return completion plans independently consume the returned value's kind.
 Object completions override a base or derived receiver, including before `super()`;
 base primitive completions need only the construction check. Unknown or mixed

@@ -145,6 +145,10 @@ Arithmetic work should support these paths or fix correctness defects.
       identity. Builtin descriptors, key lists and certified allocation results
       carry noncallable normal returns; species, protocol and mutable-method
       alternatives stay open. Identity-returning builtins preserve operand targets.
+      Exact noncoercing scalar predicates and Array.isArray now preserve operand
+      containment and function caller bounds independently of invocation effects.
+      Their contracts compose through own-slot call summaries; coercing, aggregate,
+      constructor and mutable-method alternatives remain conservative.
       Extend these facts through more recursive returns and returned object fields,
       then refine callback invocation/retention effects and receiver-sensitive
       builtin errors without treating callable status as an effect proof.
