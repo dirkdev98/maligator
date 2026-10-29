@@ -1015,6 +1015,7 @@ function nativeRelocationExpressions(
 	symbolStems?: ReadonlyArray<string>,
 	relative = false,
 	importedGlobals?: ReadonlyMap<number, number>,
+	trackDeclarations = true,
 ): NativeRelocationExpressions {
 	const link: Array<NativeLinkSlot> = [];
 	const slots = new Map<string, number>();
@@ -1037,7 +1038,7 @@ function nativeRelocationExpressions(
 	const enabled = linkSymbol !== undefined;
 	const declarationSymbols = new Set<string>();
 	const reference = (symbol: string) => {
-		declarationSymbols.add(symbol);
+		if (trackDeclarations) declarationSymbols.add(symbol);
 		return symbol;
 	};
 	return {
@@ -1079,7 +1080,14 @@ export function directCompiledEntryKey(functionIndex: number, entryId: number): 
 	return `${functionIndex}:${entryId}`;
 }
 
-const UNRELOCATED_NATIVE_EXPRESSIONS = nativeRelocationExpressions(undefined);
+// Shared fallback expressions must not retain symbols from unrelated emissions.
+const UNRELOCATED_NATIVE_EXPRESSIONS = nativeRelocationExpressions(
+	undefined,
+	undefined,
+	false,
+	undefined,
+	false,
+);
 
 /**
  * Debug emission publishes a frame's source position as the matching entry of the
