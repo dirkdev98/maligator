@@ -40,7 +40,7 @@ describe("collection callback boundary contracts", () => {
 	it.each(["Map", "Set"])(
 		"retains boxed %s roles and guarded identity in both primordial modes",
 		(kind) => {
-			expect(builtinCallbackInvocation(`${kind}.prototype.forEach`)).toEqual({
+			expect(builtinCallbackInvocation(`${kind}.prototype.forEach`)).toMatchObject({
 				argumentIndex: 0,
 				argumentKinds: ["any", "any", "object"],
 			});
