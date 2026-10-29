@@ -44,6 +44,7 @@ describe("typed builtin callback transport", () => {
 			["runReceiver", "receiver", {}],
 			["runReduce", "reducer", { argumentCount: 4 }],
 			["runSigned", "signed", { resultRepresentation: "number" }],
+			["runCollectionIndices", "indexOnly", { parameters: ["boxed", "number"] }],
 		] as const) {
 			const owner = image.native.functions.find(
 				(fn) => name(fn.functionIndex) === caller,

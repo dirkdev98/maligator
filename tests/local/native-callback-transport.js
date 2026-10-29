@@ -69,6 +69,15 @@ function runSigned(values) {
 		.map((value) => (Object.is(value, -0) ? "-0" : String(value)));
 }
 
+function runCollectionIndices(values) {
+	const result = [];
+	values.forEach(function indexOnly(value, index) {
+		collect();
+		result.push(value.score + index * 3);
+	});
+	return result;
+}
+
 observations.push(
 	runNumeric([
 		1,
@@ -90,6 +99,29 @@ observations.push(runSnapshots([2, 4]));
 observations.push(runReceiver([2, 4]));
 observations.push(runReduce([2, 4]));
 observations.push(runSigned([0, -0, NaN, Infinity, -Infinity]));
+observations.push(
+	runCollectionIndices([
+		{ score: 4 },
+		{
+			get score() {
+				collect();
+				return 7;
+			},
+		},
+	]),
+	runCollectionIndices(
+		new Map([
+			[1, { score: 4 }],
+			["key", { score: 5 }],
+		]),
+	),
+	runCollectionIndices(new Set([{ score: 9 }])),
+);
+try {
+	runCollectionIndices(new Map([[Symbol("index"), { score: 4 }]]));
+} catch (error) {
+	observations.push(error.name);
+}
 
 const accessorValues = [1, 2];
 Object.defineProperty(accessorValues, 0, {

@@ -143,8 +143,13 @@ export function coreNativeCallbackEntryOpportunities(
 		const revision = (revisions.get(seed.target) ?? 0) + 1;
 		revisions.set(seed.target, revision);
 		const generatedCode = Math.max(8, instructionCount);
+		const numberNominations = nominated.filter(
+			(rep, index) => rep !== seed.representations[index],
+		).length;
 		const compilerWork =
-			(generatedCode + fn.valueCapacity) * (triesNumbers ? 2 : 1) + seed.calls.length;
+			(generatedCode + fn.valueCapacity) *
+				(triesNumbers ? 2 + (numberNominations > 1 ? numberNominations : 0) : 1) +
+			seed.calls.length;
 		// Each builtin call invokes its callback repeatedly even outside a source loop.
 		const runtimeBenefit =
 			seed.calls.reduce((sum, site) => sum + callWeight(site), 0) * 32;
@@ -187,7 +192,7 @@ export function coreNativeCallbackEntryOpportunities(
 								Object.freeze({ ...site, builtinCallbackNumbers: true as const }),
 							),
 						);
-						const candidate = analyzeCoreNativeEntry(
+						let candidate = analyzeCoreNativeEntry(
 							program,
 							cfg,
 							parametersFor(nominated),
@@ -201,19 +206,48 @@ export function coreNativeCallbackEntryOpportunities(
 								)
 								.map((site) => site.instruction),
 						);
-						const gain = (candidate.instructionFacts ?? []).some(
-							(site) =>
-								fn.instructionKind(site.instruction) === "operation" &&
-								!baselineNumbers.has(site.instruction) &&
-								site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER) &&
-								compilerOperatorInputKindsHaveExactNativeSemantics(
-									fn.instructionOpcodeName(site.instruction),
-									fn.instructionAttributes(site.instruction).operator,
-									site.masks,
-								),
-						);
-						if (gain) {
-							representations = nominated;
+						const numericGains = (entry: typeof candidate) =>
+							new Set(
+								(entry.instructionFacts ?? [])
+									.filter(
+										(site) =>
+											fn.instructionKind(site.instruction) === "operation" &&
+											!baselineNumbers.has(site.instruction) &&
+											site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER) &&
+											compilerOperatorInputKindsHaveExactNativeSemantics(
+												fn.instructionOpcodeName(site.instruction),
+												fn.instructionAttributes(site.instruction).operator,
+												site.masks,
+											),
+									)
+									.map((site) => site.instruction),
+							);
+						const gains = numericGains(candidate);
+						if (gains.size > 0) {
+							let selected = nominated;
+							// A numeric index must not unnecessarily exclude boxed collection values.
+							for (let index = 0; index < selected.length; index++) {
+								if (selected[index] === seed.representations[index]) continue;
+								const relaxed = [...selected];
+								relaxed[index] = seed.representations[index]!;
+								const relaxedEntry = relaxed.every(
+									(rep, index) => rep === seed.representations[index],
+								)
+									? baseline
+									: analyzeCoreNativeEntry(
+											program,
+											cfg,
+											parametersFor(relaxed),
+											seed.exactArity ? relaxed : undefined,
+											guardedCalls,
+										);
+								const retained = numericGains(relaxedEntry);
+								if ([...gains].some((instruction) => !retained.has(instruction)))
+									continue;
+								selected = relaxed;
+								candidate = relaxedEntry;
+							}
+							representations = selected;
 							callSites = guardedCalls;
 							variant = candidate;
 						}

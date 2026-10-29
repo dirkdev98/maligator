@@ -61,7 +61,7 @@ describe("native entries from builtin callback invocation facts", () => {
 		"findLast",
 		"findLastIndex",
 	])(
-		"carries the %s family argument roles through bounded rest observations",
+		"carries the %s family argument roles while observing the rest receiver",
 		(method) => {
 			const family = builtinOperationDescriptor(
 				method === "forEach"
@@ -91,9 +91,9 @@ describe("native entries from builtin callback invocation facts", () => {
 				const image = compileSemanticProgramToProgramImage(
 					analyzeSourceAndRunSemanticAnalysis(
 						`globalThis.run=function(values) {
-					return values.${method}(function(value, ...tail) {
-						for(let i=0;i<2;i++) value += tail[0];
-						return value + tail.length + tail[1].length;
+					return values.${method}(function(value, index, ...tail) {
+						for(let i=0;i<2;i++) value += index;
+						return value + tail.length + tail[0].length;
 					});
 				}`,
 						"/builtin-callback-entry.js",
