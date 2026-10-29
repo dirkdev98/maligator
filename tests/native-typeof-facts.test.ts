@@ -23,7 +23,7 @@ describe("partial typeof operand facts", () => {
 			"mal_value_is_null(",
 		],
 		[
-			"flag?null:{}",
+			"flag?null:function(){}",
 			COMPILER_VALUE_KIND_NULL | COMPILER_VALUE_KIND_OBJECT,
 			"!mal_value_is_callable(",
 		],
@@ -55,6 +55,32 @@ describe("partial typeof operand facts", () => {
 				);
 				expect(restored.native.functions[out.native.functionIndex]).toEqual(out.native);
 			}
+		},
+	);
+
+	it.each(["plain", "generator", "async", "profile"] as const)(
+		"folds a nullable noncallable object comparison across %s effects",
+		(mode) => {
+			const out = inspectStaticValueFunction(
+				`${mode === "async" ? "async " : ""}function${mode === "generator" ? "*" : ""} compute(flag,gate){const value=flag?null:{};${mode === "generator" ? "yield value;" : mode === "async" ? "await gate(value);" : "gate(value);"}return typeof value === 'object';}globalThis.compute=compute;`,
+				"compute",
+				{ profile: mode === "profile" },
+			);
+			expect(
+				out.native.body.instructions.some((op) => op.opcode === "TYPEOF_COMPARE"),
+			).toBe(false);
+			expect(
+				out.core.some(
+					(op) => op.opcode === "createBoolean" && op.attributes.value === true,
+				),
+			).toBe(true);
+			expect(
+				out.native.body.instructions.some(
+					(op) => op.opcode === (mode === "generator" ? "YIELD" : "CALL"),
+				),
+			).toBe(true);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
+			expect(restored.native.functions[out.native.functionIndex]).toEqual(out.native);
 		},
 	);
 
