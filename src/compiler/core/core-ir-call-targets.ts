@@ -84,12 +84,6 @@ export interface CoreCalleeTargets {
 	readonly nonCallable: boolean;
 }
 
-type CoreReturnTargetDependency = readonly [
-	body: number,
-	cfg: number,
-	targets: CoreCalleeTargets | undefined,
-];
-
 export const CORE_CALLEE_TARGETS_BOTTOM: CoreCalleeTargets = Object.freeze({
 	functions: Object.freeze([]),
 	anyScript: false,
@@ -249,6 +243,7 @@ interface CoreLocalCallTargets {
 	readonly callsVersion: number;
 	readonly values: ReadonlyArray<CoreCalleeTargets>;
 	readonly returnTargets: CoreCalleeTargets;
+	readonly returnInputs: ReadonlyMap<CoreFunctionId, CoreCalleeTargets>;
 	readonly sites: ReadonlyArray<CoreIndexedCallSite>;
 	readonly invocationDependencies: ReadonlyArray<CoreCalleeTargets>;
 	readonly publishedFunctions: ReadonlyArray<CoreFunctionId>;
@@ -256,10 +251,6 @@ interface CoreLocalCallTargets {
 	readonly cellWrites: ReadonlyMap<CoreCellId, CoreCalleeTargets>;
 	readonly propertyInputs: ReadonlyMap<CoreFunctionPropertyId, CoreCalleeTargets>;
 	readonly globalWrites: ReadonlyMap<number, CoreCalleeTargets>;
-	readonly returnTargetDependencies: ReadonlyMap<
-		CoreFunctionId,
-		CoreReturnTargetDependency
-	>;
 }
 
 export type CoreCallGraphStatistics = CoreProgramFlowCallTargetStatistics;
@@ -285,7 +276,6 @@ export interface CoreCallGraphIndex {
 function localTargetsAreCurrent(
 	local: CoreLocalCallTargets | undefined,
 	fn: CoreFunctionStore,
-	program: CoreProgram,
 ): boolean {
 	return (
 		local !== undefined &&
@@ -294,18 +284,7 @@ function localTargetsAreCurrent(
 		local.exceptionFlowVersion === fn.version("exceptionFlow") &&
 		(fn.handlerBlockCount === 0 ||
 			local.memoryEffectsVersion === fn.version("memoryEffects")) &&
-		local.callsVersion === fn.version("calls") &&
-		[...local.returnTargetDependencies].every(([functionId, [body, cfg, expected]]) => {
-			const target = program.function(functionId);
-			if (target.version("body") === body && target.version("cfg") === cfg) return true;
-			const current = directReturnedValueTargets(program, functionId);
-			return (
-				current === expected ||
-				(current !== undefined &&
-					expected !== undefined &&
-					coreCalleeTargetsEqual(current, expected))
-			);
-		})
+		local.callsVersion === fn.version("calls")
 	);
 }
 
@@ -500,64 +479,6 @@ function builtinResultTargets(
 	)
 		return CORE_CALLEE_TARGETS_NON_CALLABLE;
 	return targets;
-}
-
-function directValueTargets(
-	program: CoreProgram,
-	fn: CoreFunctionStore,
-	value: CoreValueId,
-	seen = new Set<CoreValueId>(),
-): CoreCalleeTargets | undefined {
-	if (seen.has(value) || fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
-	seen.add(value);
-	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-	if (fn.instructionKind(definition) !== "operation") return undefined;
-	const opcode = fn.instructionOpcodeName(definition);
-	if (opcode === "createFunction") {
-		const target = fn.instructionAttributes(definition).functionIndex;
-		return typeof target === "number" &&
-			Number.isSafeInteger(target) &&
-			target >= 0 &&
-			target < program.functionCapacity
-			? coreCalleeTargetsFunction(target)
-			: undefined;
-	}
-	if (opcode === "loadCallee") return coreCalleeTargetsFunction(fn.id);
-	if (opcode === "move") {
-		const input = instructionOperand(fn, definition, 0);
-		return input === undefined ? undefined : directValueTargets(program, fn, input, seen);
-	}
-	const primordial = coreInstructionPrimordial(fn, definition);
-	if (primordial !== undefined)
-		return (primordial[2] & 2) !== 0
-			? CORE_CALLEE_TARGETS_CALLABLE
-			: CORE_CALLEE_TARGETS_NON_CALLABLE;
-	if (DEFINITELY_NON_CALLABLE_RESULTS.has(opcode))
-		return CORE_CALLEE_TARGETS_NON_CALLABLE;
-	return builtinResultTargets(fn, definition, (input) =>
-		directValueTargets(program, fn, input, seen),
-	);
-}
-
-function directReturnedValueTargets(
-	program: CoreProgram,
-	functionId: CoreFunctionId,
-): CoreCalleeTargets | undefined {
-	const fn = program.function(functionId);
-	// Suspending invocations wrap body returns in a Promise or iterator.
-	if (fn.isAsync || fn.isGenerator) return CORE_CALLEE_TARGETS_NON_CALLABLE;
-	let targets = CORE_CALLEE_TARGETS_BOTTOM;
-	let returns = 0;
-	for (const block of fn.blockIds()) {
-		const terminator = fn.blockTerminator(block);
-		if (fn.instructionKind(terminator) !== "return") continue;
-		returns++;
-		const returned = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
-		const returnedTargets = directValueTargets(program, fn, returned);
-		if (returnedTargets === undefined) return undefined;
-		targets = joinCoreCalleeTargets(targets, returnedTargets);
-	}
-	return returns === 0 || coreCalleeTargetsIsBottom(targets) ? undefined : targets;
 }
 
 function directStringIndex(
@@ -995,6 +916,7 @@ function analyzeFunctionTargets(
 	knownFunctionProperties: ReadonlyMap<CoreFunctionPropertyId, CoreCalleeTargets>,
 	localTransfers: CoreProgramFlowLocalTransfers,
 	identities: CoreGraphIdentityTable,
+	returnTargetsOf: (functionId: CoreFunctionId) => CoreCalleeTargets,
 ): CoreLocalCallTargets {
 	const values = Array<CoreCalleeTargets>(fn.valueCapacity).fill(
 		CORE_CALLEE_TARGETS_BOTTOM,
@@ -1008,7 +930,7 @@ function analyzeFunctionTargets(
 	const queue: Array<CoreBlockId> = [];
 	const queued = new Uint8Array(fn.blockCapacity);
 	let activeBlock: CoreBlockId | undefined;
-	const returnTargetDependencies = new Map<CoreFunctionId, CoreReturnTargetDependency>();
+	const returnInputs = new Map<CoreFunctionId, CoreCalleeTargets>();
 	const enqueue = (block: CoreBlockId, needsTransfer = true): void => {
 		if (queued[block] === 2) return;
 		// Clean revisits retain their queue position for later phi or handler wakeups.
@@ -1154,39 +1076,32 @@ function analyzeFunctionTargets(
 							);
 					}
 				}
-			} else if (opcode === "call") {
-				const callee = instructionOperand(fn, instruction, 0);
+			} else if (
+				fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
+				"call-completion"
+			) {
+				const transfer = fn.registry.byId(
+					fn.instructionOpcode(instruction),
+				).callTransfer!;
+				const callee = instructionOperand(fn, instruction, transfer.calleeOperand);
 				const callees = callee === undefined ? CORE_CALLEE_TARGETS_OPEN : values[callee]!;
+				if (coreCalleeTargetsIsBottom(callees))
+					resultTargets = CORE_CALLEE_TARGETS_BOTTOM;
 				if (callees.functions.length > 0) {
 					let returned = CORE_CALLEE_TARGETS_BOTTOM;
-					let hasUnknownReturn = coreCalleeTargetsAreOpen(callees);
-					const dependencies: Array<
-						readonly [CoreFunctionId, CoreReturnTargetDependency]
-					> = [];
 					for (const target of callees.functions) {
 						const targetFunction = program.function(target);
-						const targetReturns = directReturnedValueTargets(program, target);
-						dependencies.push(
-							Object.freeze([
-								target,
-								Object.freeze([
-									targetFunction.version("body"),
-									targetFunction.version("cfg"),
-									targetReturns,
-								] as const),
-							] as const),
-						);
-						if (targetReturns === undefined) {
-							hasUnknownReturn = true;
-							continue;
-						}
+						// Promise and iterator invocations wrap the body's completion value.
+						const targetReturns =
+							targetFunction.isAsync || targetFunction.isGenerator
+								? CORE_CALLEE_TARGETS_NON_CALLABLE
+								: returnTargetsOf(target);
+						if (!targetFunction.isAsync && !targetFunction.isGenerator)
+							returnInputs.set(target, targetReturns);
 						returned = joinCoreCalleeTargets(returned, targetReturns);
 					}
-					for (const [target, versions] of dependencies) {
-						returnTargetDependencies.set(target, versions);
-					}
-					if (!coreCalleeTargetsIsBottom(returned)) {
-						resultTargets = hasUnknownReturn
+					resultTargets =
+						callees.opaque || callees.anyScript
 							? Object.freeze({
 									functions: returned.functions,
 									anyScript: true,
@@ -1194,7 +1109,6 @@ function analyzeFunctionTargets(
 									nonCallable: true,
 								})
 							: returned;
-					}
 				}
 				resultTargets =
 					builtinResultTargets(fn, instruction, inputTargets) ?? resultTargets;
@@ -1423,6 +1337,7 @@ function analyzeFunctionTargets(
 		callsVersion: fn.version("calls"),
 		values: Object.freeze(values),
 		returnTargets,
+		returnInputs,
 		sites: Object.freeze(sites),
 		invocationDependencies: Object.freeze(invocationDependencies),
 		publishedFunctions: Object.freeze([...publishedFunctions]),
@@ -1430,7 +1345,6 @@ function analyzeFunctionTargets(
 		cellWrites,
 		propertyInputs,
 		globalWrites,
-		returnTargetDependencies,
 	});
 }
 

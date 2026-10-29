@@ -32,6 +32,122 @@ import {
 } from "./helpers/core-program-analysis.ts";
 
 describe("Core callee-target lattice", () => {
+	it.each(["call", "callSpread", "callSpreadIterable"])(
+		"carries a factory's finite identities through forwarding %s completions",
+		(opcode) => {
+			const program = analysisProgram();
+			const leaf = appendLeaf(program),
+				factory = appendLeaf(program);
+			const edit = CoreEditor.open(program, factory.function);
+			edit.replaceInstruction(factory.valueInstruction, "createFunction", [], {
+				attributes: { functionIndex: leaf.function },
+			});
+			edit.commit();
+			const middle = appendCaller(program, factory.function);
+			const outer = appendCaller(program, middle.function);
+			if (opcode !== "call") {
+				const caller = program.function(outer.function);
+				const instruction = outer.callInstruction;
+				const start = caller.kernel.instructionOperandStart(instruction);
+				const edit = CoreEditor.open(program, outer.function);
+				const list = edit.insertInstruction(
+					caller.instructionBlock(instruction),
+					instruction,
+					"createArray",
+					[],
+					{ attributes: { length: 0 } },
+				).outputs[0]!;
+				edit.replaceInstruction(instruction, opcode, [
+					caller.kernel.operandAt(start),
+					caller.kernel.operandAt(start + 1),
+					list,
+				]);
+				edit.commit();
+			}
+			const manager = new CoreAnalysisManager(
+				program,
+				programAnalysisContext(),
+				new CoreOptimizationReportBuilder(program),
+			);
+			const graph = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+			const fn = program.function(outer.function);
+			const result = fn.kernel.resultAt(
+				fn.kernel.instructionResultStart(outer.callInstruction),
+			);
+			expect(graph.targets(outer.function, result)).toEqual(
+				coreCalleeTargetsFunction(leaf.function),
+			);
+		},
+	);
+
+	it("withdraws and rediscovers mutually recursive return facts without keeping a prior cycle alive", () => {
+		const program = analysisProgram();
+		const first = appendLeaf(program),
+			second = appendLeaf(program);
+		const forward = appendCaller(program, program.functionCapacity + 1);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock(),
+			base = builder.createBlock(),
+			recursive = builder.createBlock();
+		const [condition] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: base, arguments: [] },
+			alternate: { block: recursive, arguments: [] },
+		});
+		const [value] = builder.appendInstruction(base, "createFunction", [], {
+			attributes: { functionIndex: first.function },
+		});
+		const baseInstruction = builder.bodyInstructionIds(base)[0]!;
+		builder.setTerminator(base, { kind: "return", value: value! });
+		const [callee] = builder.appendInstruction(recursive, "loadGlobal", [], {
+			attributes: { index: 2 },
+		});
+		const recursiveCallee = builder.bodyInstructionIds(recursive)[0]!;
+		const [receiver] = builder.appendInstruction(recursive, "createUndefined", []);
+		const [result] = builder.appendInstruction(recursive, "call", [callee!, receiver!]);
+		builder.setTerminator(recursive, { kind: "return", value: result! });
+		const factory = builder.finish(entry).function;
+		const outer = appendCaller(program, forward.function);
+		const fn = program.function(outer.function);
+		const output = fn.kernel.resultAt(
+			fn.kernel.instructionResultStart(outer.callInstruction),
+		);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const targets = () =>
+			manager
+				.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" })
+				.targets(outer.function, output);
+		expect(coreCalleeTargetsCallability(targets())).toBeUndefined();
+		const closeCycle = CoreEditor.open(program, factory);
+		closeCycle.replaceInstruction(recursiveCallee, "createFunction", [], {
+			attributes: { functionIndex: forward.function },
+		});
+		closeCycle.commit();
+		expect(targets()).toEqual(coreCalleeTargetsFunction(first.function));
+		const unknown = CoreEditor.open(program, factory);
+		unknown.replaceInstruction(baseInstruction, "loadGlobal", [], {
+			attributes: { index: 1 },
+		});
+		unknown.commit();
+		expect(coreCalleeTargetsCallability(targets())).toBeUndefined();
+		const known = CoreEditor.open(program, factory);
+		known.replaceInstruction(baseInstruction, "createFunction", [], {
+			attributes: { functionIndex: second.function },
+		});
+		known.commit();
+		expect(targets()).toEqual(coreCalleeTargetsFunction(second.function));
+		const unchanged = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" })).toBe(unchanged);
+	});
+
 	it("preserves callability after widening identities and withholds it for mixed or empty targets", () => {
 		expect(coreCalleeTargetsCallability(CORE_CALLEE_TARGETS_BOTTOM)).toBeUndefined();
 		expect(coreCalleeTargetsCallability(CORE_CALLEE_TARGETS_OPAQUE)).toBeUndefined();

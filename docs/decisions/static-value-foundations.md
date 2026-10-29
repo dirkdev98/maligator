@@ -945,6 +945,16 @@ Function-identity and constructor-layout guards produce Boolean results; their
 callee operands retain separate target facts. Async and generator invocations
 return noncallable wrappers while their body-return targets remain available for
 reachability and later completion consumers.
+
+Normal call results read the callee-target worklist's returned targets rather than
+rescanning literal return syntax. Ordinary and spread calls share this transfer;
+invalid noncallable alternatives still throw before a normal result exists. Return
+dependencies have their own graph so changes wake consumers without broadening the
+physical call graph. Edited or newly formed recursive components restart at bottom;
+old return bounds cannot certify the new cycle. Unknown and mixed returns remain
+open, and Promise/iterator wrappers remain separate from body completions. Caller
+observations and dispatch consume the resulting targets through the usual Core
+passes, native plans and artifact encoding.
 Known predicate invocation effects also constrain operand escape independently of
 their normal result. Nonthrowing primitive-result kernels without writes, reentry
 or suspension cannot expose an operand identity. Array.isArray separately follows

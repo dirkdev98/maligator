@@ -240,6 +240,7 @@ export interface CoreProgramFlowLocalCallTargets<
 	readonly function: CoreFunctionId;
 	readonly values: ReadonlyArray<Targets>;
 	readonly returnTargets: Targets;
+	readonly returnInputs: ReadonlyMap<CoreFunctionId, Targets>;
 	readonly sites: ReadonlyArray<Site>;
 	readonly invocationDependencies: ReadonlyArray<Targets>;
 	readonly publishedFunctions: ReadonlyArray<CoreFunctionId>;
@@ -290,6 +291,8 @@ export interface CoreProgramFlowCallTargetState<
 	readonly globalStores: ReadonlyMap<number, Targets>;
 	readonly sites: ReadonlyMap<CoreFunctionId, ReadonlyMap<CoreInstructionId, Site>>;
 	readonly outgoingIndex: ReadonlyMap<CoreFunctionId, ReadonlyArray<Site>>;
+	readonly returnGraph: CoreCallGraph;
+	readonly returnTopology: CoreProgramFlowTopology;
 	targets(functionId: CoreFunctionId, value: CoreValueId): Targets;
 	returnTargets(functionId: CoreFunctionId): Targets;
 	globalStoreTargets(slot: number): Targets;
@@ -341,6 +344,7 @@ export interface CoreProgramFlowCallTargetSemantics<
 		properties: ReadonlyMap<number, Targets>,
 		transfers: CoreProgramFlowLocalTransfers,
 		identities: Identities,
+		returnTargets: (functionId: CoreFunctionId) => Targets,
 	): Local;
 	callSiteEqual(left: Site, right: Site): boolean;
 	join(left: Targets, right: Targets): Targets;
@@ -1555,6 +1559,31 @@ export class CoreProgramFlowEngine {
 		// of a changed writer reran nearly the whole program once parameter cells linked
 		// each caller to its callees, while any reached state is already a post-fixpoint.
 		const affectedFunctions = new Set(changedFunctions);
+		const resetReturnComponents = new Set<string>();
+		if (previous !== undefined) {
+			for (const functionId of changedFunctions) {
+				const owner = previous.returnTopology.owner.get(functionId);
+				if (owner === undefined) continue;
+				const component = previous.returnTopology.sccs[owner]!;
+				if (
+					component.functions.length === 1 &&
+					!previous.returnGraph.exactOutgoing(functionId).includes(functionId)
+				)
+					continue;
+				// Recursive returns restart at bottom so an old bound cannot certify itself.
+				for (const member of component.functions) affectedFunctions.add(member);
+				resetReturnComponents.add(component.id);
+			}
+		}
+		const returnReaders = new Map<CoreFunctionId, Set<CoreFunctionId>>();
+		const mutableReturnReaders = (target: CoreFunctionId): Set<CoreFunctionId> => {
+			let readers = returnReaders.get(target);
+			if (readers === undefined) {
+				readers = new Set(previous?.returnGraph.exactCallers(target));
+				returnReaders.set(target, readers);
+			}
+			return readers;
+		};
 
 		const cellWriters = new Map(previous?.cellWriters ?? []);
 		const globalStoreWriters = new Map(previous?.globalStoreWriters ?? []);
@@ -1567,6 +1596,8 @@ export class CoreProgramFlowEngine {
 			entry: Local | undefined,
 		): void => {
 			if (entry === undefined) return;
+			for (const target of entry.returnInputs.keys())
+				mutableReturnReaders(target).delete(functionId);
 			for (const key of entry.cellWrites.keys()) {
 				cellKeys.add(key);
 				const writers = mutableCallTargetWriters(cellWriters, previous?.cellWriters, key);
@@ -1634,87 +1665,131 @@ export class CoreProgramFlowEngine {
 		for (const slot of globalSlots) recomputeGlobalStore(slot);
 
 		const analyzed = new Set<CoreFunctionId>();
-		this.solveFunctions(
-			[...affectedFunctions].sort((left, right) => left - right),
-			(functionId, enqueue) => {
-				const currentLocal = local.get(functionId);
-				const repeated = analyzed.has(functionId);
-				const previousLocal =
-					currentLocal ?? (repeated ? undefined : previous?.local.get(functionId));
-				// A rerun only adds to the writes it made earlier in this solve. Replacing
-				// them let a function that writes each of two cells from the other, as a
-				// recursive call with permuted arguments does, swap their values forever.
-				if (!repeated) removeLocalContributions(functionId, currentLocal);
-				const analyzedLocal = semantics.analyzeLocal(
-					this.#program,
-					this.#program.function(functionId),
-					controlFlow(functionId),
-					cells,
-					trackedCells,
-					knownFunctionProperties,
-					this.local(functionId),
-					identities,
+		const transferFunction: CoreProgramFlowFunctionTransfer = (functionId, enqueue) => {
+			const currentLocal = local.get(functionId);
+			const repeated = analyzed.has(functionId);
+			const previousLocal =
+				currentLocal ?? (repeated ? undefined : previous?.local.get(functionId));
+			// A rerun only adds to the writes it made earlier in this solve. Replacing
+			// them let a function that writes each of two cells from the other, as a
+			// recursive call with permuted arguments does, swap their values forever.
+			if (!repeated) removeLocalContributions(functionId, currentLocal);
+			const analyzedLocal = semantics.analyzeLocal(
+				this.#program,
+				this.#program.function(functionId),
+				controlFlow(functionId),
+				cells,
+				trackedCells,
+				knownFunctionProperties,
+				this.local(functionId),
+				identities,
+				(target) => local.get(target)?.returnTargets ?? semantics.bottom,
+			);
+			const next =
+				repeated && currentLocal !== undefined
+					? {
+							...analyzedLocal,
+							cellWrites: joinCallTargetWrites(
+								currentLocal.cellWrites,
+								analyzedLocal.cellWrites,
+								(left, right) => semantics.join(left, right),
+							),
+							globalWrites: joinCallTargetWrites(
+								currentLocal.globalWrites,
+								analyzedLocal.globalWrites,
+								(left, right) => semantics.join(left, right),
+							),
+						}
+					: analyzedLocal;
+			for (const [key, targets] of next.cellWrites) {
+				cellKeys.add(key);
+				const writers = mutableCallTargetWriters(cellWriters, previous?.cellWriters, key);
+				writers.set(functionId, targets);
+			}
+			for (const [slot, targets] of next.globalWrites) {
+				globalSlots.add(slot);
+				const writers = mutableCallTargetWriters(
+					globalStoreWriters,
+					previous?.globalStoreWriters,
+					slot,
 				);
-				const next =
-					repeated && currentLocal !== undefined
-						? {
-								...analyzedLocal,
-								cellWrites: joinCallTargetWrites(
-									currentLocal.cellWrites,
-									analyzedLocal.cellWrites,
-									(left, right) => semantics.join(left, right),
-								),
-								globalWrites: joinCallTargetWrites(
-									currentLocal.globalWrites,
-									analyzedLocal.globalWrites,
-									(left, right) => semantics.join(left, right),
-								),
-							}
-						: analyzedLocal;
-				for (const [key, targets] of next.cellWrites) {
-					cellKeys.add(key);
-					const writers = mutableCallTargetWriters(
-						cellWriters,
-						previous?.cellWriters,
-						key,
-					);
-					writers.set(functionId, targets);
+				writers.set(functionId, targets);
+			}
+			for (const key of next.propertyInputs.keys()) {
+				const readers = mutableCallTargetReaders(
+					propertyReaders,
+					previous?.propertyReaders,
+					key,
+				);
+				readers.add(functionId);
+			}
+			local.set(functionId, next);
+			for (const target of previousLocal?.returnInputs.keys() ?? [])
+				if (!next.returnInputs.has(target))
+					mutableReturnReaders(target).delete(functionId);
+			for (const target of next.returnInputs.keys())
+				mutableReturnReaders(target).add(functionId);
+			if (
+				previousLocal === undefined ||
+				!semantics.equal(previousLocal.returnTargets, next.returnTargets)
+			) {
+				for (const reader of returnReaders.get(functionId) ??
+					previous?.returnGraph.exactCallers(functionId) ??
+					[])
+					if (functionSet.has(reader)) enqueue(reader);
+			}
+			analyzed.add(functionId);
+			const writeKeys = new Set([
+				...(previousLocal?.cellWrites.keys() ?? []),
+				...next.cellWrites.keys(),
+			]);
+			for (const key of writeKeys) {
+				if (!recomputeCell(key)) continue;
+				for (const reader of cellReaders.get(key) ?? []) enqueue(reader);
+			}
+			for (const slot of new Set([
+				...(previousLocal?.globalWrites.keys() ?? []),
+				...next.globalWrites.keys(),
+			])) {
+				recomputeGlobalStore(slot);
+			}
+		};
+		let returnGraph = previous?.returnGraph;
+		let returnTopology = previous?.returnTopology;
+		let seeds = [...affectedFunctions].sort((left, right) => left - right);
+		for (;;) {
+			this.solveFunctions(seeds, transferFunction);
+			returnGraph = updateCoreCallGraph(
+				returnGraph,
+				functionIds,
+				[...local].map(([caller, entry]) => ({
+					caller,
+					exactTargets: [...entry.returnInputs.keys()],
+					wildcard: false,
+				})),
+			);
+			returnTopology = buildCoreProgramFlowTopology(returnGraph, returnTopology);
+			if (previous === undefined) break;
+			const restart = new Set<CoreFunctionId>();
+			for (const component of returnTopology.sccs) {
+				if (
+					resetReturnComponents.has(component.id) ||
+					!component.functions.some((member) => analyzed.has(member)) ||
+					(component.functions.length === 1 &&
+						!returnGraph
+							.exactOutgoing(component.functions[0]!)
+							.includes(component.functions[0]!))
+				)
+					continue;
+				resetReturnComponents.add(component.id);
+				for (const member of component.functions) {
+					local.set(member, { ...local.get(member)!, returnTargets: semantics.bottom });
+					restart.add(member);
 				}
-				for (const [slot, targets] of next.globalWrites) {
-					globalSlots.add(slot);
-					const writers = mutableCallTargetWriters(
-						globalStoreWriters,
-						previous?.globalStoreWriters,
-						slot,
-					);
-					writers.set(functionId, targets);
-				}
-				for (const key of next.propertyInputs.keys()) {
-					const readers = mutableCallTargetReaders(
-						propertyReaders,
-						previous?.propertyReaders,
-						key,
-					);
-					readers.add(functionId);
-				}
-				local.set(functionId, next);
-				analyzed.add(functionId);
-				const writeKeys = new Set([
-					...(previousLocal?.cellWrites.keys() ?? []),
-					...next.cellWrites.keys(),
-				]);
-				for (const key of writeKeys) {
-					if (!recomputeCell(key)) continue;
-					for (const reader of cellReaders.get(key) ?? []) enqueue(reader);
-				}
-				for (const slot of new Set([
-					...(previousLocal?.globalWrites.keys() ?? []),
-					...next.globalWrites.keys(),
-				])) {
-					recomputeGlobalStore(slot);
-				}
-			},
-		);
+			}
+			if (restart.size === 0) break;
+			seeds = [...restart];
+		}
 		const functionsAnalyzed = analyzed.size;
 		const functionsReused = local.size - functionsAnalyzed;
 		const sites = new Map(previous?.sites ?? []);
@@ -1856,6 +1931,8 @@ export class CoreProgramFlowEngine {
 			globalStores,
 			sites,
 			outgoingIndex: outgoing,
+			returnGraph,
+			returnTopology,
 			targets(functionId: CoreFunctionId, value: CoreValueId) {
 				return local.get(functionId)?.values[value] ?? semantics.open;
 			},

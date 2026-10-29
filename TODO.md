@@ -153,8 +153,11 @@ Arithmetic work should support these paths or fix correctness defects.
       captured scalar builtin effects. Recursive callback dependencies invalidate
       callers and native proofs; known read-only callbacks preserve caller fields
       while receiver/callback validation, GC publication and polls remain.
-      Extend these facts through more recursive returns and returned object fields,
-      then cover opaque script sets, callback retention, Array/species and protocol
+      Invocation targets and callable certainty now converge through forwarding,
+      spread and recursive normal returns. Return dependencies wake their callers;
+      edited and newly formed recursive components restart without stale bounds.
+      Extend this target transport through returned object fields, then cover
+      opaque script sets, callback retention, Array/species and protocol
       effects, and receiver-sensitive builtin errors. Callable status alone remains
       insufficient for effect refinement.
       Broad native, sanitizer and self-hosted acceptance remains on CI.
