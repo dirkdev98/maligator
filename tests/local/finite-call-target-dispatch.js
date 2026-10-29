@@ -178,6 +178,32 @@ try {
 } catch (error) {
 	ok("noncallable Proxy invocation still throws", error instanceof TypeError);
 }
+let invalidTrapReads = 0;
+const invalidHandler = {
+	get apply() {
+		invalidTrapReads++;
+		return () => 42;
+	},
+	get construct() {
+		invalidTrapReads++;
+		return () => ({});
+	},
+};
+const invalidCall = new Proxy(new Proxy({}, invalidHandler), invalidHandler);
+const invalidConstruct = new Proxy(() => 42, invalidHandler);
+for (const action of [
+	() => invalidCall(),
+	() => Reflect.apply(invalidCall, null, []),
+	() => new invalidConstruct(),
+]) {
+	try {
+		action();
+		throw new Error("missing Proxy capability error");
+	} catch (error) {
+		ok("Proxy capability rejects before handler access", error instanceof TypeError);
+	}
+}
+ok("unavailable Proxy internal methods never read traps", invalidTrapReads === 0);
 
 function descriptorCallability(input) {
 	const descriptor = Object.getOwnPropertyDescriptor(input, "key");

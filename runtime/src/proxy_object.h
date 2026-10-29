@@ -16,8 +16,7 @@ typedef struct MalVm MalVm;
  * The base object's prototype/extensible/property-table fields are unused: a
  * proxy never resolves ordinary own properties; all of its meta-object-protocol
  * goes through the handler traps (or falls back to the target). Callability and
- * constructability are decided by the target at use sites (mal_value_is_callable
- * / the call/construct dispatchers).
+ * constructability are fixed from the target when the proxy is created.
  */
 typedef struct MalProxyObject {
     MalObject object;
