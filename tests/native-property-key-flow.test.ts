@@ -8,7 +8,7 @@ import {
 	programClosureCertificate,
 	withProgramClosure,
 } from "../src/compiler/shared/compiler-facts.ts";
-import { COMPILER_VALUE_KIND_SYMBOL } from "../src/compiler/shared/compiler-value-kinds.ts";
+import { COMPILER_VALUE_KIND_REGISTERED_SYMBOL } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	INSTRUCTION_MAY_THROW,
 	instructionInputKind,
@@ -80,10 +80,10 @@ describe("literal property keys on surviving entry flow", () => {
 				throw new Error("Missing key conversion");
 			expect(variant.registerRepresentations[instruction.key]).toBe("boxed");
 			expect(instructionInputKind(variant.facts?.[ip], instruction.key)).toBe(
-				COMPILER_VALUE_KIND_SYMBOL,
+				COMPILER_VALUE_KIND_REGISTERED_SYMBOL,
 			);
 			expect(instructionResultKind(variant.facts?.[ip], instruction.dst)).toBe(
-				COMPILER_VALUE_KIND_SYMBOL,
+				COMPILER_VALUE_KIND_REGISTERED_SYMBOL,
 			);
 			expect(variant.facts![ip]!.effectMask! & INSTRUCTION_MAY_THROW).not.toBe(0);
 			expect(() => emitProgramImage(image)).not.toThrow();
