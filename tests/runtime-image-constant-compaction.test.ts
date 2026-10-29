@@ -250,7 +250,7 @@ describe("RuntimeImage constant compaction", () => {
 		},
 	);
 
-	it("diagnoses constants introduced by a later caller-owned native body read", () => {
+	it("compacts the captured native body without rereading caller-owned accessors", () => {
 		const image = testProgramImage(runtimeFixture());
 		const native = image.native.functions[0]!;
 		const original = native.body;
@@ -261,17 +261,20 @@ describe("RuntimeImage constant compaction", () => {
 				...original.instructions.slice(1),
 			],
 		};
-		let captured = false;
+		let reads = 0;
 		Object.defineProperty(native, "body", {
 			enumerable: true,
 			get() {
-				const body = captured ? changed : original;
-				captured = true;
-				return body;
+				return reads++ === 0 ? original : changed;
 			},
 		});
-		expect(() => compactProgramImageConstants(image)).toThrow(
-			"RuntimeImage removed constant 0 still named by stringIndex",
+		const compacted = compactProgramImageConstants(image);
+		expect(reads).toBe(1);
+		const load = compacted.definition.native.functions[0]!.body.instructions.find(
+			(instruction) => instruction.opcode === "CREATE_STRING",
+		)!;
+		expect(compacted.definition.runtime.stringConstants[load.stringIndex]).toEqual(
+			units("function"),
 		);
 	});
 

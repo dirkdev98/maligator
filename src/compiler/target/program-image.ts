@@ -2991,9 +2991,13 @@ export function compactProgramImageConstants(
 	definition: ProgramImage,
 ): ProgramImageConstantCompactionResult {
 	const vmCount = definition.runtime.functions.length;
+	const native = {
+		...definition.native,
+		functions: definition.native.functions.map((fn) => ({ ...fn })),
+	};
 	const functions = [
 		...definition.runtime.functions,
-		...definition.native.functions.map((fn) => fn.body),
+		...native.functions.map((fn) => fn.body),
 	];
 	const compacted = compactRuntimeImageConstants({
 		...definition.runtime,
@@ -3011,8 +3015,10 @@ export function compactProgramImageConstants(
 				functionCount: vmCount,
 				functions: compacted.runtime.functions.slice(0, vmCount),
 			},
-			native: remapNativeConstants(definition.native, compacted, (fn) =>
-				remapRuntimeFunctionConstants(fn.body, compacted),
+			native: remapNativeConstants(
+				native,
+				compacted,
+				(_fn, index) => compacted.runtime.functions[vmCount + index]!,
 			),
 		},
 		changed: true,
