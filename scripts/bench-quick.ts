@@ -20,11 +20,13 @@ import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { MaligatorBuildConfig } from "../src/build-config.ts";
 import { createCacheLease } from "../src/cache-management.ts";
+import { requireToolchain } from "../src/toolchain.ts";
 import { parseGcStats } from "./runtime-gap.ts";
 import { prepareSelfCompileSource } from "./self-compile-workload.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
+import { verificationSourceDigest } from "./verification-source.ts";
 
-type Workload = "compiler-app" | "app-batch" | "self-compile";
+type Workload = "compiler-app" | "app-batch" | "self-compile" | "self-compile-node";
 type Revision = "baseline" | "candidate";
 interface Options {
 	baseline: string;
@@ -77,10 +79,10 @@ const SELF_COMPILE_BUILD_CONFIG = {
 	engine: { eval: false, realms: false, regexp: true, intl: { enabled: false } },
 	surface: { webPlatform: false, node: true, maligator: true },
 } satisfies MaligatorBuildConfig;
-const HELP = `Usage: npm run bench:quick -- --baseline CHECKOUT [options]
+const HELP = `Usage: npm run bench:quick -- --baseline REF|CHECKOUT [options]
 
-  --candidate CHECKOUT       candidate source (default: current repository)
-  --workload compiler-app|app-batch|self-compile (default: compiler-app)
+  --candidate REF|CHECKOUT   candidate source (default: current repository)
+  --workload compiler-app|app-batch|self-compile|self-compile-node (default: compiler-app)
   --pairs N                  fixed alternating pairs, 1..15 (default: 3)
   --budget-seconds N         includes preparation, oracles, warmups, samples, and diagnostics (default: 300)
   --output DIRECTORY         new evidence directory (default: .cache/bench-quick/<timestamp>)
@@ -97,7 +99,9 @@ one Node reference; self-compile matches each native compiler to its revision's 
 output. Compiler output may change between revisions, while compiler-app must remain
 deterministic within each revision. Fresh processes are timed end to end; warmups warm
 caches, not a persistent JavaScript process. No cold-start, calibration, profiling,
-or adaptive extra pairs run. app-batch saves ordinary timing before two separate
+or adaptive extra pairs run. self-compile-node measures the same full compiler
+workload on Node without building a native compiler. Git revisions are exported
+as immutable sources without registering worktrees. app-batch saves ordinary timing before two separate
 GC resource samples per revision at 200 and 2000 iterations, using a second Node
 oracle for the longer run. Instrumented runs are excluded from performance pairs.
 Exit 2 means failed or incomplete. Standalone runs provide family evidence; only the
@@ -131,13 +135,18 @@ function options(args: Array<string>): Options | undefined {
 		}
 		const next = args.shift();
 		if (next === undefined || next.startsWith("--")) throw new Error(HELP);
-		if (argument === "--baseline") value.baseline = path.resolve(next);
-		else if (argument === "--candidate") value.candidate = path.resolve(next);
+		if (argument === "--baseline")
+			value.baseline = existsSync(next) ? path.resolve(next) : next;
+		else if (argument === "--candidate")
+			value.candidate = existsSync(next) ? path.resolve(next) : next;
 		else if (argument === "--output") value.output = path.resolve(next);
 		else if (argument === "--prepared") value.prepared = path.resolve(next);
 		else if (
 			argument === "--workload" &&
-			(next === "compiler-app" || next === "app-batch" || next === "self-compile")
+			(next === "compiler-app" ||
+				next === "app-batch" ||
+				next === "self-compile" ||
+				next === "self-compile-node")
 		)
 			value.workload = next;
 		else if (argument === "--pairs") value.pairs = Number(next);
@@ -182,7 +191,40 @@ function command(executable: string, args: Array<string>, cwd?: string): string 
 		throw new Error(`${executable} ${args.join(" ")}: ${result.stderr}`);
 	return result.stdout.trim();
 }
+const exportedSources = new Map<string, { commit: string; files: Array<string> }>();
+
+function exportSource(ref: string, destination: string): string {
+	const commit = command("git", ["rev-parse", `${ref}^{commit}`], root).trim();
+	mkdirSync(destination, { recursive: true });
+	const archive = `${destination}.tar`;
+	command("git", ["archive", "--format=tar", `--output=${archive}`, commit], root);
+	command("tar", ["-xf", archive, "-C", destination]);
+	const entries = command("git", ["ls-tree", "-r", "--name-only", "-z", commit], root)
+		.split("\0")
+		.filter(Boolean)
+		.sort();
+	if (
+		digest(readFileSync(path.join(destination, "package-lock.json"))) !==
+		digest(readFileSync(path.join(root, "package-lock.json")))
+	)
+		throw new Error("exported dependency lockfile differs from installed dependencies");
+	symlinkSync(
+		path.join(root, "node_modules"),
+		path.join(destination, "node_modules"),
+		"dir",
+	);
+	exportedSources.set(destination, { commit, files: entries });
+	return destination;
+}
+
 function sourceIdentity(directory: string) {
+	const exported = exportedSources.get(directory);
+	if (exported !== undefined)
+		return {
+			commit: exported.commit,
+			digest: verificationSourceDigest(directory, exported.files),
+			lockfile: digest(readFileSync(path.join(directory, "package-lock.json"))),
+		};
 	const git = (...args: Array<string>) => command("git", args, directory);
 	const commit = git("rev-parse", "HEAD");
 	const hash = createHash("sha256").update(git("rev-parse", "HEAD^{tree}"));
@@ -226,11 +268,15 @@ function files(directory: string): Record<string, string> {
 function identity(value: Options) {
 	const baseline = sourceIdentity(value.baseline);
 	const candidate = sourceIdentity(value.candidate);
+	const toolchain =
+		value.workload === "app-batch" || value.workload === "self-compile"
+			? requireToolchain({ rootDir: root })
+			: undefined;
 	if (baseline.lockfile !== candidate.lockfile)
 		throw new Error("baseline and candidate dependency lockfiles differ");
 	return {
 		workload: value.workload,
-		version: 2,
+		version: 3,
 		baseline,
 		candidate,
 		harness: digest(readFileSync(import.meta.filename)),
@@ -238,7 +284,7 @@ function identity(value: Options) {
 			readFileSync(
 				value.workload === "app-batch"
 					? batchFixture
-					: value.workload === "self-compile"
+					: value.workload.startsWith("self-compile")
 						? path.join(root, "bench/self-compile.mts")
 						: compilerWorker,
 			),
@@ -249,14 +295,12 @@ function identity(value: Options) {
 			node: process.version,
 			cpu: os.cpus()[0]?.model,
 			parallelism: os.availableParallelism(),
-			compiler:
-				value.workload !== "compiler-app"
-					? command(process.env.CC ?? "cc", ["--version"])
-					: null,
-			rust: value.workload !== "compiler-app" ? command("rustc", ["--version"]) : null,
+			compiler: toolchain?.tools.cc ?? null,
+			rust: toolchain?.tools.rustc ?? null,
+			toolchain: toolchain?.fingerprint ?? null,
 		},
 		build:
-			value.workload === "compiler-app"
+			value.workload === "compiler-app" || value.workload === "self-compile-node"
 				? "Node-hosted JS-to-C; instrumentation off; no native build"
 				: "production",
 		work:
@@ -266,7 +310,7 @@ function identity(value: Options) {
 						iterations: ITERATIONS,
 						gcResourceIterations: [ITERATIONS, GC_LONG_ITERATIONS],
 					}
-				: value.workload === "self-compile"
+				: value.workload.startsWith("self-compile")
 					? { entry: "bench/self-compile.mts", input: "frozen baseline source graph" }
 					: { entry: "tests/fixtures/express-5/app.js" },
 	};
@@ -482,6 +526,16 @@ async function run(value: Options): Promise<void> {
 		if (process.platform !== "linux" && process.platform !== "darwin")
 			throw new Error("quick resource measurements require Linux or macOS");
 		lease = createCacheLease("bench-quick");
+		if (!existsSync(value.baseline))
+			value.baseline = exportSource(
+				value.baseline,
+				path.join(value.output, "baseline-source"),
+			);
+		if (!existsSync(value.candidate))
+			value.candidate = exportSource(
+				value.candidate,
+				path.join(value.output, "candidate-source"),
+			);
 		runIdentity = identity(value);
 		checkBudget();
 		const preparation = value.prepared ?? path.join(value.output, "prepared");
@@ -543,6 +597,7 @@ async function run(value: Options): Promise<void> {
 						);
 					}
 					for (const revision of ["baseline", "candidate"] as const) {
+						if (value.workload === "self-compile-node") continue;
 						const artifact = path.join(preparation, revision);
 						await execute(
 							`build-${revision}`,
@@ -601,13 +656,21 @@ async function run(value: Options): Promise<void> {
 								preparation,
 								true,
 							)
-						: await execute(
-								label,
-								path.join(preparation, binaries[revision]),
-								[target, output],
-								preparation,
-								true,
-							);
+						: value.workload === "self-compile-node"
+							? await execute(
+									label,
+									process.execPath,
+									[path.join(value[revision], "bench/self-compile.mts"), target, output],
+									value[revision],
+									true,
+								)
+							: await execute(
+									label,
+									path.join(preparation, binaries[revision]),
+									[target, output],
+									preparation,
+									true,
+								);
 			return {
 				label,
 				revision,
@@ -660,7 +723,7 @@ async function run(value: Options): Promise<void> {
 		};
 		await inPhase("oracle", async () => {
 			if (oracle !== undefined) return;
-			if (value.workload === "self-compile") {
+			if (value.workload.startsWith("self-compile")) {
 				revisionOracles.baseline = await nodeSelfCompileOracle("baseline");
 				revisionOracles.candidate = await nodeSelfCompileOracle("candidate");
 				oracle = digest(JSON.stringify(revisionOracles));
@@ -826,11 +889,13 @@ if (import.meta.main) {
 							value.prepared === undefined
 								? value.workload === "compiler-app"
 									? "freeze one Express graph; no native compiler build"
-									: value.workload === "app-batch"
-										? "freeze dataset and build two production binaries once"
-										: "freeze the baseline compiler graph and build two self-hosted compilers once"
+									: value.workload === "self-compile-node"
+										? "freeze the baseline compiler graph; Node-hosted compilation only"
+										: value.workload === "app-batch"
+											? "freeze dataset and build two production binaries once"
+											: "freeze the baseline compiler graph and build two self-hosted compilers once"
 								: "verify matching prepared artifacts",
-							value.workload === "self-compile"
+							value.workload.startsWith("self-compile")
 								? "revision-specific Node output oracles"
 								: "output oracle",
 							...(value.prepareOnly

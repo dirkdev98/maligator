@@ -7,6 +7,7 @@ import type * as Frontend from "../src/compiler/frontend/compact-type-strip.ts";
 import type * as Core from "../src/compiler/pipeline/compile-core-common.ts";
 import type * as Analysis from "../src/compiler/pipeline/compile-program-common.ts";
 import type * as Pipeline from "../src/compiler/pipeline/compile-program.ts";
+import type * as Artifact from "../src/compiler/target/compiler-artifact-codec.ts";
 import type * as Execution from "../src/compiler/target/lower-native-execution.ts";
 import type * as Wire from "../src/compiler/target/program-image-codec.ts";
 import type * as Harness from "../src/test-harness.ts";
@@ -88,7 +89,21 @@ if (mode === "capture") {
 	const { compileEntrypoint } = (await load(
 		"src/compiler/pipeline/compile-program.ts",
 	)) as typeof Pipeline;
-	if (mode === "build") {
+	if (mode === "capture-image") {
+		const { serializeCompilerArtifact } = (await load(
+			"src/compiler/target/compiler-artifact-codec.ts",
+		)) as typeof Artifact;
+		const compiled = compileEntrypoint(input, options);
+		const image = {
+			...compiled,
+			runtime: {
+				...compiled.runtime,
+				stringConstants: [...compiled.runtime.stringConstants, [0, 65535, 0]],
+			},
+		};
+		writeFileSync(path.join(output, "image.malbc"), serializeCompilerArtifact(image));
+		console.log(JSON.stringify({ functions: image.runtime.functions.length }));
+	} else if (mode === "build") {
 		const { buildNativeProgramImageResult } = (await load(
 			"src/test-harness.ts",
 		)) as typeof Harness;

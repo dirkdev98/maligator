@@ -16,7 +16,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
-type Case = "roots" | "accessors" | "optimizer" | "backedges";
+type Case =
+	| "roots"
+	| "accessors"
+	| "optimizer"
+	| "backedges"
+	| "flow"
+	| "constants"
+	| "emission";
 type Host = "node" | "native";
 interface Sample {
 	iterations: number;
@@ -60,7 +67,7 @@ const output = path.resolve(
 const budgetSeconds = Number(value("--budget-seconds", "600"));
 if (args.includes("--help")) {
 	console.log(
-		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--cases roots,backedges,accessors,optimizer] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Optimizer compiles that frozen workload on Node, including construction and target lowering. Native roots/accessors compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
+		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--cases roots,backedges,accessors,optimizer,flow,constants,emission] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Optimizer compiles that frozen workload on Node, including construction and target lowering. Flow replays six local-transfer consumers per source epoch. Constants and emission replay a captured compiler image. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
 	);
 	process.exit(0);
 }
@@ -74,7 +81,18 @@ if (
 	!Number.isFinite(budgetSeconds) ||
 	budgetSeconds < 1 ||
 	budgetSeconds > 3600 ||
-	cases.some((c) => !["roots", "backedges", "accessors", "optimizer"].includes(c)) ||
+	cases.some(
+		(c) =>
+			![
+				"roots",
+				"backedges",
+				"accessors",
+				"optimizer",
+				"flow",
+				"constants",
+				"emission",
+			].includes(c),
+	) ||
 	hosts.some((h) => !["node", "native"].includes(h))
 )
 	throw new Error("invalid macro benchmark selection or budget");
@@ -211,6 +229,13 @@ try {
 		);
 	const rootsFile = path.join(output, "roots.json");
 	if (existsSync(rootsFile)) report.rootsHash = hash(readFileSync(rootsFile));
+	const imageFile = path.join(output, "image.malbc");
+	if (cases.includes("constants") || cases.includes("emission")) {
+		report.imageCapture = json(
+			run(process.execPath, [worker, "capture-image", base, input, output]),
+		);
+		report.imageHash = hash(readFileSync(imageFile));
+	}
 	const samples: Array<unknown> = [];
 	report.samples = samples;
 	for (const name of cases)
@@ -241,7 +266,11 @@ try {
 					run(command.executable, [
 						...command.args,
 						String(iterations),
-						...(name === "roots" || name === "backedges" ? [rootsFile] : []),
+						...(name === "roots" || name === "backedges"
+							? [rootsFile]
+							: name === "constants" || name === "emission"
+								? [imageFile]
+								: []),
 					]),
 				);
 			};
@@ -261,7 +290,11 @@ try {
 					run(process.execPath, [
 						path.join(base, `bench/compiler-macros/${name}.mts`),
 						String(iterations),
-						...(name === "roots" || name === "backedges" ? [rootsFile] : []),
+						...(name === "roots" || name === "backedges"
+							? [rootsFile]
+							: name === "constants" || name === "emission"
+								? [imageFile]
+								: []),
 					]),
 				);
 				if (oracle.checksum !== warmups[0]!.checksum)

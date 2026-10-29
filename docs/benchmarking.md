@@ -289,7 +289,10 @@ largest execution graphs captured by compiling the baseline accessor fixture;
 `backedges` runs native backedge discovery on those same graphs. `accessors` walks
 real Core storage, kernel columns, and opcode registry entries. `optimizer` runs
 the Node compiler on the frozen baseline accessor graph, through runtime-image
-serialization. The other three cases run on Node and compiled native binaries.
+serialization. `flow` replays six analysis engines over unchanged Core functions,
+starting each replay with cold transfer state. `constants` compacts a captured
+compiler image with an unused trailing constant; `emission` renders that image.
+Every case except `optimizer` runs on Node and compiled native binaries.
 Use `--cases roots,backedges` or `--hosts node` to narrow the selection.
 
 Calibration runs only on the baseline and fixes the iteration count for both
@@ -301,6 +304,21 @@ decisions can change runtime-image bytes. The report records source and fixture
 hashes, power state, raw samples, and output checksums. Preparation counts against `--budget-seconds` (default 600).
 These slices diagnose mechanisms; full self-compile and CI acceptance remain
 separate. No saved benchmark baseline is replaced.
+
+For ordinary full self-compilation without the comparison workflow's diagnostic
+passes, use `scripts/bench-quick.ts`. It accepts immutable Git revisions or existing
+checkouts and records each revision's Node output oracle before native timing:
+
+```sh
+node scripts/bench-quick.ts --baseline REF --candidate HEAD --workload self-compile-node --pairs 3 --budget-seconds 900 --output .cache/self-node --plan=json
+node scripts/bench-quick.ts --baseline REF --candidate HEAD --workload self-compile --pairs 3 --budget-seconds 1800 --output .cache/self-native
+```
+
+`self-compile-node` needs no native toolchain. Both modes freeze the same baseline
+input, alternate fresh processes, and check every output against its revision's
+oracle. The native mode builds production compilers once. Git exports retain their
+exact source identity without creating worktrees. Preparation, oracles and warmups
+count against the budget; reports and exports remain under the requested output.
 
 ## Focused compiler execution experiments
 
