@@ -307,6 +307,12 @@ compiler image with an unused trailing constant; `emission` renders that image.
 `emission-io` also encodes UTF-8, hashes the complete output, and writes each unit;
 its checksum must match across revisions. Revisions predating chunked sources
 receive the shared writer as a fixture dependency and use their flat-source path.
+`target-lowering` replays both backend realizations on either host from a frozen
+source extraction of the baseline's execution-liveness module. Imports become unknown
+global bindings and its three exported functions remain reachable; this measures the
+backend on representative compiler control flow, rather than executing that module.
+Setup and emitted-C/runtime-wire digest checks sit outside the lowering timer.
+
 Every case except `optimizer` and `lowering` runs on Node and compiled native binaries.
 Use `--cases roots,backedges` or `--hosts node` to narrow the selection.
 

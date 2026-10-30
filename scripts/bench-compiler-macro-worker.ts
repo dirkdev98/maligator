@@ -34,7 +34,23 @@ const options: Pipeline.CompileEntrypointOptions = {
 	coreInstrumentation: "off",
 };
 mkdirSync(output, { recursive: true });
-if (mode === "capture") {
+if (mode === "capture-target") {
+	const relative = "src/compiler/target/execution-liveness.ts";
+	const original = readFileSync(path.join(source, relative), "utf8");
+	const stripped = stripCompactTypes(original, relative)
+		.replace(/^import[\s\S]*?from "[^"]+";\n/gm, "")
+		.replace(/^export /gm, "");
+	const text = `${stripped}\nglobalThis.keep = [executionSafepointRoots, executionLoopBackedgeInstructions, nativeLoopBackedgeInstructions];\n`;
+	writeFileSync(path.join(output, "target-lowering.js"), text);
+	console.log(
+		JSON.stringify({
+			source: relative,
+			originalSha256: createHash("sha256").update(original).digest("hex"),
+			imports: "unknown global bindings",
+			exports: 3,
+		}),
+	);
+} else if (mode === "capture") {
 	const { analyzeEntrypoint } = (await load(
 		"src/compiler/pipeline/compile-program-common.ts",
 	)) as typeof Analysis;

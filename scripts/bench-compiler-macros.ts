@@ -26,6 +26,7 @@ type Case =
 	| "errors"
 	| "optimizer"
 	| "lowering"
+	| "target-lowering"
 	| "backedges"
 	| "flow"
 	| "flow-membership"
@@ -77,7 +78,7 @@ const output = path.resolve(
 const budgetSeconds = Number(value("--budget-seconds", "600"));
 if (args.includes("--help")) {
 	console.log(
-		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--candidate REF|CHECKOUT] [--cases roots,backedges,accessors,headers,versions,versions-module,value-kinds,errors,optimizer,lowering,flow,flow-membership,constants,emission,emission-io] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Headers reads kind, descriptor and payload through the revision's available checked API. Versions queries fixed change domains from a parameterized Core traversal between body edits. Versions-module preserves the module-scope traversal as a holdout. Value-kinds alternates number/string seeds in a fixed Core dependency chain and consumes masks and integer proofs. Errors alternates valid instruction reads and caught invalid-ID failures. Optimizer compiles that frozen workload on Node, including construction and target lowering. Lowering replays both backend realizations from sealed optimized Core. Flow replays six analysis engines with four consumers per source epoch. Flow-membership appends unrelated functions between warm transfer queries. Constants and emission replay a captured compiler image. Emission-io includes emission, UTF-8 encoding, SHA-256 and file output; old revisions receive the same chunk-writer fixture dependency but use their flat-source path. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
+		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--candidate REF|CHECKOUT] [--cases roots,backedges,accessors,headers,versions,versions-module,value-kinds,errors,optimizer,lowering,target-lowering,flow,flow-membership,constants,emission,emission-io] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Headers reads kind, descriptor and payload through the revision's available checked API. Versions queries fixed change domains from a parameterized Core traversal between body edits. Versions-module preserves the module-scope traversal as a holdout. Value-kinds alternates number/string seeds in a fixed Core dependency chain and consumes masks and integer proofs. Errors alternates valid instruction reads and caught invalid-ID failures. Optimizer compiles that frozen workload on Node, including construction and target lowering. Lowering replays both backend realizations from sealed optimized Core on Node. Target-lowering replays both targets on either host from a frozen execution-liveness source extraction; imports become unknown global bindings and all three exports remain reachable. Flow replays six analysis engines with four consumers per source epoch. Flow-membership appends unrelated functions between warm transfer queries. Constants and emission replay a captured compiler image. Emission-io includes emission, UTF-8 encoding, SHA-256 and file output; old revisions receive the same chunk-writer fixture dependency but use their flat-source path. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
 	);
 	process.exit(0);
 }
@@ -104,6 +105,7 @@ if (
 				"errors",
 				"optimizer",
 				"lowering",
+				"target-lowering",
 				"flow",
 				"flow-membership",
 				"constants",
@@ -291,6 +293,13 @@ try {
 		);
 		report.imageHash = hash(readFileSync(imageFile));
 	}
+	const targetSource = path.join(output, "target-lowering.js");
+	if (cases.includes("target-lowering")) {
+		report.targetCapture = json(
+			run(process.execPath, [worker, "capture-target", base, input, output]),
+		);
+		report.targetSourceHash = hash(readFileSync(targetSource));
+	}
 	const nativeCommands = new Map<string, { executable: string; args: Array<string> }>();
 	const samples: Array<unknown> = [];
 	report.samples = samples;
@@ -345,11 +354,13 @@ try {
 							name === "emission" ||
 							name === "emission-io")
 							? [imageFile, name]
-							: name === "roots" || name === "backedges"
-								? [rootsFile]
-								: name === "constants" || name === "emission" || name === "emission-io"
-									? [imageFile]
-									: []),
+							: name === "target-lowering"
+								? [targetSource]
+								: name === "roots" || name === "backedges"
+									? [rootsFile]
+									: name === "constants" || name === "emission" || name === "emission-io"
+										? [imageFile]
+										: []),
 					]),
 				);
 			};
@@ -369,11 +380,13 @@ try {
 					run(process.execPath, [
 						path.join(base, `bench/compiler-macros/${name}.mts`),
 						String(iterations),
-						...(name === "roots" || name === "backedges"
-							? [rootsFile]
-							: name === "constants" || name === "emission" || name === "emission-io"
-								? [imageFile]
-								: []),
+						...(name === "target-lowering"
+							? [targetSource]
+							: name === "roots" || name === "backedges"
+								? [rootsFile]
+								: name === "constants" || name === "emission" || name === "emission-io"
+									? [imageFile]
+									: []),
 					]),
 				);
 				if (oracle.checksum !== warmups[0]!.checksum)
