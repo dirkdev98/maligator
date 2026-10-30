@@ -110,5 +110,46 @@ overridden[Symbol.iterator] = function* () {
 check(collect(3, ...overridden), [3, 7, 8], "custom array iterator");
 const sparse = [, 2];
 check(collect(3, ...sparse), [3, undefined, 2], "array holes");
+const labelled = [1, 2];
+labelled.label = "own data";
+check(collect(0, ...labelled), [0, 1, 2], "array with other own properties");
+class Pair extends Array {
+	*[Symbol.iterator]() {
+		yield "subclass";
+	}
+}
+check(collect(0, ...Pair.from([1, 2])), [0, "subclass"], "array subclass iterator");
+
+// After spreads took the intact protocol, a patch must reach later spreads wherever the
+// intrinsics are mutable, and leave them intact where they are locked.
+const originalIterator = Array.prototype[Symbol.iterator];
+const replacementIterator = function* () {
+	yield "patched";
+};
+try {
+	Array.prototype[Symbol.iterator] = replacementIterator;
+} catch {}
+check(
+	collect(0, ...[1, 2]),
+	Array.prototype[Symbol.iterator] === replacementIterator ? [0, "patched"] : [0, 1, 2],
+	"patched Array.prototype iterator",
+);
+try {
+	Array.prototype[Symbol.iterator] = originalIterator;
+} catch {}
+const arrayIteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]());
+const originalNext = arrayIteratorPrototype.next;
+const replacementNext = () => ({ done: true, value: undefined });
+try {
+	arrayIteratorPrototype.next = replacementNext;
+} catch {}
+check(
+	collect(0, ...[1, 2]),
+	arrayIteratorPrototype.next === replacementNext ? [0] : [0, 1, 2],
+	"patched ArrayIterator next",
+);
+try {
+	arrayIteratorPrototype.next = originalNext;
+} catch {}
 
 console.log(`trailing-spread-calls PASS ${passed}`);

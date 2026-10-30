@@ -3240,8 +3240,33 @@ static bool mal_vm_try_marshal_dense_array(
     return true;
 }
 
+/*
+ * An Array with the intrinsic prototype and no own @@iterator spreads through the
+ * intact ArrayIterator protocol, which the primitive-methods protector covers; its
+ * dense walk observes nothing, so the generic @@iterator lookup can be skipped.
+ */
+static bool mal_vm_try_marshal_intrinsic_array(
+    MalVm *vm, MalValue iterable, i32 *count_out) {
+    if (!mal_vm_primitive_methods_intact(vm) || !mal_value_is_array_object(iterable)) {
+        return false;
+    }
+    MalArrayObject *array = mal_value_to_array_object(iterable);
+    MalObject *object = &array->object;
+    // An empty own-property layout cannot hold an @@iterator override.
+    if (mal_object_prototype(object) !=
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]) ||
+        ((object->shape->inline_count != 0 || mal_object_overflow(object) != nullptr) &&
+         mal_object_get_own(
+             object, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR)).present)) {
+        return false;
+    }
+    return mal_vm_try_marshal_dense_array(vm, array, nullptr, count_out);
+}
+
 static i32 mal_vm_marshal_spread_iterable(
     MalVm *vm, MalValue iterable) {
+    i32 marshalled;
+    if (mal_vm_try_marshal_intrinsic_array(vm, iterable, &marshalled)) return marshalled;
     MalValue method;
     if (!mal_vm_get_property(
             vm, iterable,
