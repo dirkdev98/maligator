@@ -475,7 +475,7 @@ static void stream_enqueue_task(
         mal_native_function_object_new_with_slots(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "streamTask"),
+            mal_intrinsic_static_ascii(vm, (const byte *) "streamTask"),
             stream_run_task, roots, 7));
     mal_vm_enqueue_reaction_job(
         vm, roots[7], false, mal_value_new_undefined(),
@@ -570,7 +570,7 @@ static u32 stream_remove_blocked_pipe(
                     roots[5] = stream_own(vm, roots[4], "listener");
                     MalValue remove_args[] = {
                         mal_value_from_string(
-                            mal_intrinsic_ascii(vm, (const byte *) "drain")),
+                            mal_intrinsic_static_ascii(vm, (const byte *) "drain")),
                         roots[5],
                     };
                     stream_call_method(
@@ -658,7 +658,7 @@ static bool stream_pipe_chunk(MalVm *vm, MalValue source, MalValue chunk) {
                 mal_native_function_object_new_with_slots(
                     &vm->heap,
                     mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-                    mal_intrinsic_ascii(vm, (const byte *) "onDrain"),
+                    mal_intrinsic_static_ascii(vm, (const byte *) "onDrain"),
                     stream_drain_resume, slots, countof(slots)));
             MalValue record = mal_value_from_object(mal_intrinsic_new_object(vm));
             MalRootSpan record_root;
@@ -673,7 +673,7 @@ static bool stream_pipe_chunk(MalVm *vm, MalValue source, MalValue chunk) {
             mal_gc_unroot(&record_root);
             MalValue drain_args[] = {
                 mal_value_from_string(
-                    mal_intrinsic_ascii(vm, (const byte *) "drain")),
+                    mal_intrinsic_static_ascii(vm, (const byte *) "drain")),
                 roots[4],
             };
             stream_call_method(vm, roots[3], "once", drain_args, 2);
@@ -981,8 +981,8 @@ static MalValue stream_on(
     if (added.kind != MAL_COMPLETION_THROW && argc > 0
         && mal_value_is_string(args[0])) {
         MalString *event = mal_value_to_string(args[0]);
-        MalString *data = mal_intrinsic_ascii(vm, (const byte *) "data");
-        MalString *readable = mal_intrinsic_ascii(vm, (const byte *) "readable");
+        MalString *data = mal_intrinsic_static_ascii(vm, (const byte *) "data");
+        MalString *readable = mal_intrinsic_static_ascii(vm, (const byte *) "readable");
         MalValue state = stream_own(vm, receiver, "_readableState");
         if (mal_string_equals(event, data) && stream_is_readable(vm, receiver)) {
             // Node resumes on 'data' unless flowing was set false by pause() or a 'readable' listener.
@@ -1152,7 +1152,7 @@ static MalValue stream_destroy(
     MalValue done_slots[] = {roots[0], roots[1], mal_value_new_boolean(false)};
     roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, "destroyDone"), 1, stream_destroy_done, done_slots, countof(done_slots)));
+        mal_intrinsic_static_ascii(vm, (const byte *) "destroyDone"), 1, stream_destroy_done, done_slots, countof(done_slots)));
     if (!stream_get(vm, roots[0], "_destroy", &roots[3])) goto finished;
     if (mal_value_is_callable(roots[3])) {
         MalValue destroy_args[] = {roots[1], roots[2]};
@@ -1428,7 +1428,7 @@ static MalValue stream_new_done(
         mal_native_function_object_new_with_slots(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "done"),
+            mal_intrinsic_static_ascii(vm, (const byte *) "done"),
             stream_transform_done, slots, countof(slots)));
 }
 
@@ -1448,7 +1448,7 @@ static void stream_start_write(
     if (mal_value_is_int32(kind) && mal_value_to_i32(kind) == STREAM_TRANSFORM) {
         transform = true;
         roots[2] = mal_value_from_string(
-            mal_intrinsic_ascii(vm, (const byte *) "buffer"));
+            mal_intrinsic_static_ascii(vm, (const byte *) "buffer"));
         stream_get(vm, roots[0], "_transform", &roots[5]);
     } else {
         stream_get(vm, roots[0], "_write", &roots[5]);
@@ -1574,7 +1574,7 @@ static bool stream_decode_write_chunk(
     roots[5] = completion.value;
     *chunk = roots[5];
     *encoding = mal_value_from_string(
-        mal_intrinsic_ascii(vm, (const byte *) "buffer"));
+        mal_intrinsic_static_ascii(vm, (const byte *) "buffer"));
     mal_gc_unroot(&root);
     return true;
 }
@@ -2295,7 +2295,7 @@ static void stream_schedule_completion(
         mal_native_function_object_new_with_slots(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "streamCompletion"),
+            mal_intrinsic_static_ascii(vm, (const byte *) "streamCompletion"),
             stream_completion_task, roots, 1));
     mal_vm_enqueue_reaction_job(
         vm, roots[2], false, mal_value_new_undefined(),
@@ -2323,7 +2323,7 @@ static bool stream_register_lifecycle_listener(
         mal_native_function_object_new_with_slots(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "streamLifecycle"),
+            mal_intrinsic_static_ascii(vm, (const byte *) "streamLifecycle"),
             stream_lifecycle_listener, slots, countof(slots)));
     MalValue on_args[] = {roots[2], roots[3]};
     stream_call_method(vm, roots[1], "on", on_args, 2);
@@ -2453,7 +2453,7 @@ static bool stream_finished_common(
                 &vm->heap,
                 mal_value_to_object(
                     vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-                mal_intrinsic_ascii(vm, (const byte *) "cleanup"), 0,
+                mal_intrinsic_static_ascii(vm, (const byte *) "cleanup"), 0,
                 stream_cleanup_finished, &slot, 1));
         if (cleanup_out != nullptr) *cleanup_out = roots[5];
         bool done = stream_truthy_own(vm, roots[3], "readableDone")
@@ -3042,7 +3042,7 @@ static MalValue pl_pump_result(MalVm *vm, MalValue self, const MalValue *args, i
         mal_vm_enqueue_reaction_job(vm, roots[3], false, mal_value_new_undefined(), mal_value_new_undefined(),
             mal_value_new_undefined());
     } else {
-        MalValue once_args[] = {mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "drain")), roots[3]};
+        MalValue once_args[] = {mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "drain")), roots[3]};
         stream_call_method(vm, writable, "once", once_args, 2);
     }
 done:
@@ -3461,7 +3461,7 @@ static MalValue stream_new_promise_callback(
         mal_native_function_object_new_with_slots(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "callback"),
+            mal_intrinsic_static_ascii(vm, (const byte *) "callback"),
             stream_promise_callback, roots, 1));
     *promise_out = roots[0];
     MalValue callback = roots[1];
@@ -3720,7 +3720,7 @@ static MalValue stream_iterator_return(MalVm *vm, MalValue self, const MalValue 
     stream_destroy(vm, roots[1], nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined());
     roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, "iteratorClosed"), 0, stream_iterator_closed, roots + 2, 1));
+        mal_intrinsic_static_ascii(vm, (const byte *) "iteratorClosed"), 0, stream_iterator_closed, roots + 2, 1));
     MalCompletion completion = stream_call_method(vm, roots[3], "then", roots + 4, 1);
     MalValue result = completion.value;
     mal_gc_unroot(&root);
@@ -3746,11 +3746,11 @@ static MalValue stream_async_iterator(MalVm *vm, MalValue self, const MalValue *
     stream_set(vm, roots[1], "stream", roots[0]);
     roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, "next"), 0, stream_iterator_next, roots + 1, 1));
+        mal_intrinsic_static_ascii(vm, (const byte *) "next"), 0, stream_iterator_next, roots + 1, 1));
     stream_set(vm, roots[1], "next", roots[2]);
     roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, "return"), 1, stream_iterator_return, roots + 1, 1));
+        mal_intrinsic_static_ascii(vm, (const byte *) "return"), 1, stream_iterator_return, roots + 1, 1));
     stream_set(vm, roots[1], "return", roots[2]);
     roots[2] = stream_function(vm, "[Symbol.asyncIterator]", 0, stream_iterator_self);
     MalPropertyDesc descriptor = mal_intrinsic_data_desc(roots[2], STREAM_METHOD);
@@ -3758,7 +3758,7 @@ static MalValue stream_async_iterator(MalVm *vm, MalValue self, const MalValue *
     if (!stream_truthy_own(vm, roots[0], "_malAsyncErrorHandled")) {
         stream_set(vm, roots[0], "_malAsyncErrorHandled", mal_value_new_boolean(true));
         roots[2] = stream_function(vm, "onIteratorError", 1, stream_iterator_noop);
-        MalValue listener_args[] = {mal_value_from_string(mal_intrinsic_ascii(vm, "error")), roots[2]};
+        MalValue listener_args[] = {mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "error")), roots[2]};
         stream_call_method(vm, roots[0], "on", listener_args, 2);
     }
     MalValue result = roots[1];
@@ -3826,10 +3826,10 @@ static void stream_from_await(MalVm *vm, MalValue stream, MalValue value, i32 mo
         MalValue slots[] = {roots[0], mal_value_from_i32(mode)};
         roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, "sourceResolved"), 1, stream_from_fulfilled, slots, countof(slots)));
+            mal_intrinsic_static_ascii(vm, (const byte *) "sourceResolved"), 1, stream_from_fulfilled, slots, countof(slots)));
         roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, "sourceRejected"), 1, stream_from_rejected, slots, countof(slots)));
+            mal_intrinsic_static_ascii(vm, (const byte *) "sourceRejected"), 1, stream_from_rejected, slots, countof(slots)));
         stream_call_method(vm, roots[2], "then", roots + 3, 2);
     }
     mal_gc_unroot(&root);
@@ -4051,13 +4051,13 @@ static MalValue stream_abort_error(MalVm *vm, MalValue signal) {
     MalObject *error = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_PROTOTYPE]));
     roots[1] = mal_value_from_object(error);
     mal_intrinsic_define_data(vm, error, (const byte *) "message",
-        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "The operation was aborted")),
+        mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "The operation was aborted")),
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, error, (const byte *) "name",
-        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "AbortError")),
+        mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "AbortError")),
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, error, (const byte *) "code",
-        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "ABORT_ERR")), STREAM_VISIBLE);
+        mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "ABORT_ERR")), STREAM_VISIBLE);
     MalValue reason;
     if (stream_probe(vm, roots[0], "reason", &reason)) {
         mal_intrinsic_define_data(vm, error, (const byte *) "cause", reason,
@@ -4110,8 +4110,8 @@ static MalValue stream_add_abort_signal(MalVm *vm, MalValue self, const MalValue
         MalValue slots[2] = {roots[1], roots[0]};
         roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "onAbort"), 0, stream_abort_listener, slots, 2));
-        MalValue listen[2] = {mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "abort")), roots[2]};
+            mal_intrinsic_static_ascii(vm, (const byte *) "onAbort"), 0, stream_abort_listener, slots, 2));
+        MalValue listen[2] = {mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "abort")), roots[2]};
         stream_call_method(vm, roots[0], "addEventListener", listen, 2);
     }
     mal_gc_unroot(&root);
@@ -5001,7 +5001,7 @@ static MalValue stream_wrap_method(MalVm *vm, MalValue self, const MalValue *arg
     // Copy the source's own function properties that the wrapper lacks, bound to the source.
     roots[3] = mal_value_new_undefined();
     if (mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_OBJECT_CONSTRUCTOR],
-            mal_intrinsic_string_key(vm, (const byte *) "keys"), &roots[3])) {
+            mal_intrinsic_static_string_key(vm, (const byte *) "keys"), &roots[3])) {
         MalCompletion keys = mal_vm_call_value(vm, roots[3], vm->intrinsics[MAL_INTRINSIC_OBJECT_CONSTRUCTOR], &roots[1], 1);
         if (keys.kind == MAL_COMPLETION_THROW) goto done;
         roots[3] = keys.value;
@@ -5855,7 +5855,7 @@ void mal_host_install_node_stream(
         MalNativeFunctionObject *on = mal_native_function_object_new_with_slots_arity(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "on"), 2, stream_on, &slot, 1);
+            mal_intrinsic_static_ascii(vm, (const byte *) "on"), 2, stream_on, &slot, 1);
         roots[12] = mal_value_from_native_function_object(on);
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[3]),
                                   (const byte *) "on", roots[12], STREAM_METHOD);

@@ -98,8 +98,9 @@ static MalKey sd_state_key(MalValue callee) {
     return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = marker};
 }
 
+/* name is static storage; the atom cache trusts its address. */
 static MalKey sd_name_key(MalVm *vm, const char *name) {
-    return mal_intrinsic_string_key(vm, (const byte *) name);
+    return mal_intrinsic_static_string_key(vm, (const byte *) name);
 }
 
 static bool sd_read_state(
@@ -470,7 +471,7 @@ static MalValue sd_constructor(
 
     MalValue roots[] = {
         mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) canonical)),
+        mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) canonical)),
         mal_native_function_object_get_slot(
             mal_value_to_native_function_object(callee), 0),
     };

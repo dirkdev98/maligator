@@ -152,7 +152,7 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     // (spec step: targetHasLength = HasOwnProperty(Target, "length")); otherwise
     // L is 0. Infinity and values beyond int32 are preserved. Materialized as a
     // real { writable: false, enumerable: false, configurable: true } own property.
-    MalKey length_key = mal_intrinsic_string_key(vm, "length");
+    MalKey length_key = mal_intrinsic_static_string_key(vm, (const byte *) "length");
     bool has_own_length;
     MalPropertyLookup own_length = {0};
     if (mal_value_is_proxy_object(this_value)) {
@@ -191,7 +191,7 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
         }
     }
     // SetFunctionName: "bound " ++ (target.name if a string, else "").
-    MalKey name_key = mal_intrinsic_string_key(vm, "name");
+    MalKey name_key = mal_intrinsic_static_string_key(vm, (const byte *) "name");
     bool read_name = false;
     if (!mal_value_is_proxy_object(this_value)) {
         MalPropertyLookup own_name =
@@ -209,7 +209,7 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
         mal_gc_unroot(&bound_root);
         return mal_value_new_undefined();
     }
-    MalString *prefix = mal_intrinsic_ascii(vm, "bound ");
+    MalString *prefix = mal_intrinsic_static_ascii(vm, (const byte *) "bound ");
     MalValue name_value = mal_value_from_string(prefix);
     if (mal_value_is_string(bound_roots[1]) &&
         mal_value_to_string(bound_roots[1])->length != 0) {

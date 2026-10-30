@@ -393,19 +393,21 @@ MalKey mal_intrinsic_string_key(MalVm *vm, const byte *name) {
     return (MalKey) {.kind = MAL_KEY_STRING, .value = mal_value_from_string(mal_intrinsic_ascii(vm, name))};
 }
 
-MalKey mal_intrinsic_static_string_key(MalVm *vm, const byte *name) {
+MalString *mal_intrinsic_static_ascii(MalVm *vm, const byte *name) {
     MalAsciiAtomCacheEntry *cache = &vm->ascii_atom_cache[mal_ascii_atom_cache_slot(name)];
-    MalString *atom;
-    if (cache->name == name) {
-        atom = cache->atom;
-        MAL_PERF_COUNT(intrinsic_ascii_calls);
-        MAL_PERF_ADD(intrinsic_ascii_bytes, atom->length);
-        mal_perf_intrinsic_name(name, atom->length);
-        MAL_PERF_COUNT(intrinsic_ascii_cache_hits);
-    } else {
-        atom = mal_intrinsic_ascii(vm, name);
-    }
-    return (MalKey) {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
+    if (cache->name != name) return mal_intrinsic_ascii(vm, name);
+    MAL_PERF_COUNT(intrinsic_ascii_calls);
+    MAL_PERF_ADD(intrinsic_ascii_bytes, cache->atom->length);
+    mal_perf_intrinsic_name(name, cache->atom->length);
+    MAL_PERF_COUNT(intrinsic_ascii_cache_hits);
+    return cache->atom;
+}
+
+MalKey mal_intrinsic_static_string_key(MalVm *vm, const byte *name) {
+    return (MalKey) {
+        .kind = MAL_KEY_STRING,
+        .value = mal_value_from_string(mal_intrinsic_static_ascii(vm, name)),
+    };
 }
 
 MalPropertyLookup mal_object_get_own_static_resolve(

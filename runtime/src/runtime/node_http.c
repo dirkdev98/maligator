@@ -728,19 +728,19 @@ static MalValue http_incoming_destroy(
         && !state->request_transport_complete) {
         mal_object_set(
             mal_value_to_object(receiver),
-            mal_intrinsic_string_key(vm, (const byte *) "destroyed"),
+            mal_intrinsic_static_string_key(vm, (const byte *) "destroyed"),
             mal_value_new_boolean(true));
         mal_object_set(
             mal_value_to_object(receiver),
-            mal_intrinsic_string_key(vm, (const byte *) "readable"),
+            mal_intrinsic_static_string_key(vm, (const byte *) "readable"),
             mal_value_new_boolean(false));
         MalPropertyLookup readable_state = mal_object_get_own(
             mal_value_to_object(receiver),
-            mal_intrinsic_string_key(vm, (const byte *) "_readableState"));
+            mal_intrinsic_static_string_key(vm, (const byte *) "_readableState"));
         if (readable_state.present && mal_value_is_object(readable_state.desc.value)) {
             mal_object_set(
                 mal_value_to_object(readable_state.desc.value),
-                mal_intrinsic_string_key(vm, (const byte *) "destroyed"),
+                mal_intrinsic_static_string_key(vm, (const byte *) "destroyed"),
                 mal_value_new_boolean(true));
         }
         state->request_destroy_error = argc > 0
@@ -755,20 +755,20 @@ static MalValue http_incoming_destroy(
             ? args[0] : mal_value_new_undefined();
         mal_object_set(
             mal_value_to_object(receiver),
-            mal_intrinsic_string_key(vm, (const byte *) "destroyed"),
+            mal_intrinsic_static_string_key(vm, (const byte *) "destroyed"),
             mal_value_new_boolean(true));
         mal_object_set(
             mal_value_to_object(receiver),
-            mal_intrinsic_string_key(vm, (const byte *) "readable"),
+            mal_intrinsic_static_string_key(vm, (const byte *) "readable"),
             mal_value_new_boolean(false));
         MalPropertyLookup readable_state = mal_object_get_own(
             mal_value_to_object(receiver),
-            mal_intrinsic_string_key(vm, (const byte *) "_readableState"));
+            mal_intrinsic_static_string_key(vm, (const byte *) "_readableState"));
         if (readable_state.present
             && mal_value_is_object(readable_state.desc.value)) {
             mal_object_set(
                 mal_value_to_object(readable_state.desc.value),
-                mal_intrinsic_string_key(vm, (const byte *) "destroyed"),
+                mal_intrinsic_static_string_key(vm, (const byte *) "destroyed"),
                 mal_value_new_boolean(true));
         }
         http_client_cancel(
@@ -786,7 +786,7 @@ static MalValue http_incoming_destroy(
     MalObject *prototype = mal_value_to_object(
         vm->intrinsics[MAL_INTRINSIC_NODE_READABLE_PROTOTYPE]);
     MalPropertyLookup destroy = mal_object_get_own(
-        prototype, mal_intrinsic_string_key(vm, (const byte *) "destroy"));
+        prototype, mal_intrinsic_static_string_key(vm, (const byte *) "destroy"));
     if (!destroy.present || !mal_value_is_callable(destroy.desc.value)) {
         return receiver;
     }
@@ -949,7 +949,7 @@ static bool http_emit(MalVm *vm, MalValue receiver, const char *event) {
 
 static bool http_emit_error(MalVm *vm, MalValue receiver, MalValue error) {
     MalValue args[] = {
-        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "error")), error,
+        mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "error")), error,
     };
     MalRootSpan root;
     mal_gc_root(&root, args, countof(args));
@@ -958,10 +958,11 @@ static bool http_emit_error(MalVm *vm, MalValue receiver, MalValue error) {
     return ok;
 }
 
+// `event` is static storage: the atom cache trusts its address.
 static bool http_once(
     MalVm *vm, MalValue receiver, const char *event, MalValue callback) {
     MalValue args[] = {
-        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) event)), callback,
+        mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) event)), callback,
     };
     MalRootSpan root;
     mal_gc_root(&root, args, countof(args));
@@ -976,11 +977,12 @@ static void http_native_close_complete(void *data) {
     state->close_ready = true;
 }
 
+// `name` here and in http_define_own is static storage: the atom cache trusts its address.
 static void http_define(
     MalVm *vm, MalValue receiver, const char *name, MalValue value) {
     mal_object_set(
         mal_value_to_object(receiver),
-        mal_intrinsic_string_key(vm, (const byte *) name), value);
+        mal_intrinsic_static_string_key(vm, (const byte *) name), value);
 }
 
 static void http_define_own(
@@ -993,7 +995,7 @@ static void http_define_own(
     };
     mal_object_define_own(
         mal_value_to_object(receiver),
-        mal_intrinsic_string_key(vm, (const byte *) name), &desc);
+        mal_intrinsic_static_string_key(vm, (const byte *) name), &desc);
 }
 
 static MalValue http_ascii_value(MalVm *vm, const char *bytes, usize length) {
@@ -1059,7 +1061,7 @@ static void http_incoming_header_names(
     bool wire_lowercase = false;
     const char *common = http_common_header_name(bytes, length, &wire_lowercase);
     MalValue atom = common == nullptr ? mal_value_new_undefined()
-        : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) common));
+        : mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) common));
     if (lower_out != nullptr) {
         *lower_out = common != nullptr ? atom
             : mal_value_from_string(mal_headers_new_lowercase_name(vm, bytes, length));
@@ -1126,7 +1128,7 @@ static MalValue http_endpoint_family(MalVm *vm, MalNetAddressFamily family) {
         ? "IPv4" : family == MAL_NET_ADDRESS_IPV6 ? "IPv6" : nullptr;
     return name == nullptr
         ? mal_value_new_undefined()
-        : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) name));
+        : mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) name));
 }
 
 static void http_socket_unqueue_secure(MalNodeHttpSocketState *state) {
@@ -1216,7 +1218,7 @@ static MalValue http_server_socket_facade(MalVm *vm, MalHttpConn *conn) {
         mal_native_function_object_new_with_slots(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "address"),
+            mal_intrinsic_static_ascii(vm, (const byte *) "address"),
             http_socket_address, address_slots, countof(address_slots)));
     if (vm->node_http_socket_append_plan.source == nullptr) {
         static const char *names[] = {
@@ -1834,7 +1836,7 @@ static MalValue http_is_valid_header_value(
         MalValue validation = mal_value_new_undefined();
         MalRootSpan root;
         mal_gc_root(&root, &validation, 1);
-        bool ok = mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "httpValidation"), &validation);
+        bool ok = mal_vm_get_property(vm, options, mal_intrinsic_static_string_key(vm, (const byte *) "httpValidation"), &validation);
         if (ok && mal_value_is_string(validation) && mal_string_equals_ascii(mal_value_to_string(validation), "relaxed")) {
             lenient = true;
         } else if (ok && !mal_value_is_undefined(validation)
@@ -2304,7 +2306,7 @@ static MalValue http_response_write(
         MalValue destroyed;
         if (!mal_vm_get_property(
                 vm, receiver,
-                mal_intrinsic_string_key(vm, (const byte *) "destroyed"),
+                mal_intrinsic_static_string_key(vm, (const byte *) "destroyed"),
                 &destroyed)) {
             return mal_value_new_undefined();
         }
@@ -3303,7 +3305,7 @@ static bool http_response_start_commit(
     i64 automatic_length, bool streaming) {
     MalValue status_value;
     if (!mal_vm_get_property(
-            vm, receiver, mal_intrinsic_string_key(vm, (const byte *) "statusCode"),
+            vm, receiver, mal_intrinsic_static_string_key(vm, (const byte *) "statusCode"),
             &status_value)) {
         return false;
     }
@@ -3342,7 +3344,7 @@ static bool http_response_start_commit(
     MalValue status_message_value;
     if (!mal_vm_get_property(
             vm, receiver,
-            mal_intrinsic_string_key(vm, (const byte *) "statusMessage"),
+            mal_intrinsic_static_string_key(vm, (const byte *) "statusMessage"),
             &status_message_value)) {
         return false;
     }
@@ -3351,7 +3353,7 @@ static bool http_response_start_commit(
     if (mal_value_is_nil(status_message_value)) {
         // Node's writeHead, which commits its implicit heads too, records the default.
         http_define(vm, receiver, "statusMessage", mal_value_from_string(
-            mal_intrinsic_ascii(vm, (const byte *) reason)));
+            mal_intrinsic_static_ascii(vm, (const byte *) reason)));
     } else {
         usize status_message_length;
         if (!http_header_value_bytes(
@@ -3601,7 +3603,7 @@ static MalValue http_response_write_head(
         ok = mal_vm_get_static(vm, roots[0], (const byte *) "statusMessage", &roots[4]);
         if (ok && !mal_value_is_truthy(roots[4])) {
             http_define(vm, roots[0], "statusMessage", mal_value_from_string(
-                mal_intrinsic_ascii(vm, (const byte *) http_status_reason(status))));
+                mal_intrinsic_static_ascii(vm, (const byte *) http_status_reason(status))));
         }
         if (mal_value_is_nil(roots[3])) roots[3] = roots[2];
     }
@@ -3812,7 +3814,7 @@ static void http_response_dispatch_write(
     mal_gc_unroot(&root);
 }
 
-static void http_request_dispatch_read(
+static void http_request_deliver_read(
     MalVm *vm, MalNodeHttpRequestState *state) {
     bool has_request = !mal_value_is_undefined(state->request);
     MalNodeHttpRequestBody *body = state->body_head;
@@ -3853,7 +3855,7 @@ static void http_request_dispatch_read(
                 && !mal_value_is_nil(state->request_destroy_error)) {
                 MalValue args[] = {
                     mal_value_from_string(
-                        mal_intrinsic_ascii(vm, (const byte *) "error")),
+                        mal_intrinsic_static_ascii(vm, (const byte *) "error")),
                     state->request_destroy_error,
                 };
                 MalRootSpan root;
@@ -3871,6 +3873,26 @@ static void http_request_dispatch_read(
         if (state->response_transport_complete) state->conn = nullptr;
         http_request_maybe_complete(state);
     }
+}
+
+static bool http_request_arrived_whole(const MalNodeHttpRequestState *state) {
+    return state->request_transport_complete && state->request_end_success
+        && !state->request_terminal_delivered;
+}
+
+/*
+ * A request that has fully arrived pushes its remaining chunks and its end in one
+ * turn, as Node's parser does within one execute; the Readable still emits 'end'
+ * on a later tick. A body still streaming in, or an aborted one, keeps a turn per
+ * step so an abort's events stay behind the handler's reaction to the last chunk.
+ */
+static void http_request_dispatch_read(
+    MalVm *vm, MalNodeHttpRequestState *state) {
+    bool whole = http_request_arrived_whole(state);
+    do {
+        http_request_deliver_read(vm, state);
+    } while (whole && vm->completion.kind != MAL_COMPLETION_THROW
+             && !state->request_terminal_delivered);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         http_request_schedule_write(state);
         http_request_schedule_read(state);
@@ -3952,7 +3974,7 @@ static MalValue http_response_end(
         MalValue destroyed;
         if (!mal_vm_get_property(
                 vm, receiver,
-                mal_intrinsic_string_key(vm, (const byte *) "destroyed"),
+                mal_intrinsic_static_string_key(vm, (const byte *) "destroyed"),
                 &destroyed)) {
             return mal_value_new_undefined();
         }
@@ -4307,7 +4329,7 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
     request_values[1] = http_ascii_value(vm, state->target, state->target_len);
     request_values[2] = roots[2];
     request_values[3] = roots[3];
-    request_values[4] = mal_value_from_string(mal_intrinsic_ascii(
+    request_values[4] = mal_value_from_string(mal_intrinsic_static_ascii(
         vm, (const byte *) (state->minor_version == 0 ? "1.0" : "1.1")));
     request_values[5] = mal_value_from_i32(1);
     request_values[6] = mal_value_from_i32(state->minor_version);
@@ -4367,7 +4389,7 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
 
     MalValue emit_args[] = {
         mal_value_from_string(
-            mal_intrinsic_ascii(vm, (const byte *) "request")),
+            mal_intrinsic_static_ascii(vm, (const byte *) "request")),
         roots[0], roots[1],
     };
     if (!http_call_method(vm, state->server_receiver, "emit", emit_args, 3)) {
@@ -4659,7 +4681,7 @@ static void http_client_dispatch_head(
     state->response_head_seen = true;
     MalValue emit_args[] = {
         mal_value_from_string(
-            mal_intrinsic_ascii(vm, (const byte *) "response")),
+            mal_intrinsic_static_ascii(vm, (const byte *) "response")),
         roots[0],
     };
     (void) http_call_method(vm, state->request, "emit", emit_args, 2);
@@ -5015,6 +5037,19 @@ bool mal_node_http_drain(MalVm *vm) {
                     request, HTTP_REQUEST_READY_COMPLETION);
             } else {
                 http_request_dispatch(vm, request);
+                // Node's parser emits 'request' and pushes whatever of the body,
+                // and its end, arrived with the head within the same execute.
+                if (vm->completion.kind != MAL_COMPLETION_THROW
+                    && http_request_arrived_whole(request)) {
+#if MAL_REALMS
+                    MalRealm *saved_realm = vm->current_realm;
+                    mal_realm_switch(vm, request->realm);
+#endif
+                    http_request_dispatch_read(vm, request);
+#if MAL_REALMS
+                    mal_realm_switch(vm, saved_realm);
+#endif
+                }
                 if (vm->completion.kind != MAL_COMPLETION_THROW) {
                     http_request_schedule_write(request);
                     http_request_schedule_response(request);
@@ -5317,7 +5352,7 @@ static void http_sni_fail(
     MalVm *vm, MalNodeHttpSocketState *state, MalValue socket, MalValue server, MalValue error) {
     state->hello_pending = false;
     MalValue emitted[] = {
-        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "tlsClientError")), error, socket};
+        mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "tlsClientError")), error, socket};
     MalRootSpan root;
     mal_gc_root(&root, emitted, countof(emitted));
     // The error is reported here, so the close that follows must not report a hang-up too.
@@ -5366,7 +5401,7 @@ static bool http_server_drain_hello(MalVm *vm, MalNodeHttpServerState *server) {
     mal_async_context_scope_enter(vm, &scope, server->async_context);
     MalHttpConn *conn = state->conn;
     if (state->hello_name == nullptr
-        || !mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "_malSNICallback"), &roots[1])) {
+        || !mal_vm_get_property(vm, roots[0], mal_intrinsic_static_string_key(vm, (const byte *) "_malSNICallback"), &roots[1])) {
         state->hello_pending = false;
         (void) mal_http_conn_tls_select(conn, nullptr);
     } else if (mal_value_is_callable(roots[1])) {
@@ -5376,7 +5411,7 @@ static bool http_server_drain_hello(MalVm *vm, MalNodeHttpServerState *server) {
         MalValue slots[] = {roots[2], roots[0]};
         roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) ""), 2, http_sni_callback, slots, 2));
+            mal_intrinsic_static_ascii(vm, (const byte *) ""), 2, http_sni_callback, slots, 2));
         MalValue call_args[] = {roots[3], roots[4]};
         MalCompletion called = mal_vm_call_value(vm, roots[1], roots[0], call_args, 2);
         // Node catches an SNICallback that throws and fails the connection with that error;
@@ -5445,7 +5480,7 @@ static bool http_server_drain_tls(MalVm *vm, MalNodeHttpServerState *state) {
         MalNodeHttpSocketState *socket = state->secure_head;
         http_socket_unqueue_secure(socket);
         roots[1] = http_server_socket_facade(vm, socket->conn);
-        roots[0] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "secureConnection"));
+        roots[0] = mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "secureConnection"));
     } else {
         MalNodeHttpTlsError *entry = state->tls_errors;
         state->tls_errors = entry->next;
@@ -5456,7 +5491,7 @@ static bool http_server_drain_tls(MalVm *vm, MalNodeHttpServerState *state) {
         free(entry);
         roots[1] = http_tls_client_error(vm, error, failure);
         if (vm->completion.kind != MAL_COMPLETION_THROW) roots[2] = http_server_socket_facade(vm, nullptr);
-        roots[0] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "tlsClientError"));
+        roots[0] = mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "tlsClientError"));
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         (void) http_call_method(vm, state->receiver, "emit", roots,
@@ -5817,11 +5852,11 @@ static MalValue http_server_constructor(
     if (vm->completion.kind != MAL_COMPLETION_THROW
         && !mal_value_is_undefined(roots[2])) {
         roots[5] = mal_value_from_string(
-            mal_intrinsic_ascii(vm, (const byte *) "request"));
+            mal_intrinsic_static_ascii(vm, (const byte *) "request"));
         MalPropertyLookup on = mal_object_get_own(
             mal_value_to_object(
                 vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE]),
-            mal_intrinsic_string_key(vm, (const byte *) "on"));
+            mal_intrinsic_static_string_key(vm, (const byte *) "on"));
         MalValue on_args[] = {roots[5], roots[2]};
         mal_vm_call_value(vm, on.desc.value, roots[4], on_args, 2);
     }
@@ -6103,7 +6138,7 @@ static MalValue http_request_common(
     MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_MODULE];
     MalPropertyLookup constructor = mal_object_get_own(
         mal_value_to_object(module),
-        mal_intrinsic_string_key(vm, (const byte *) "ClientRequest"));
+        mal_intrinsic_static_string_key(vm, (const byte *) "ClientRequest"));
     if (!constructor.present) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                            "ClientRequest is not installed");
@@ -6238,7 +6273,7 @@ static MalValue http_agent_constructor(
     if (ok) {
         http_define_own(vm, roots[0], "defaultPort", roots[2]);
         ok = http_agent_option(vm, roots[1], "protocol", mal_value_from_string(
-            mal_intrinsic_ascii(vm, (const byte *) "http:")), &roots[2]);
+            mal_intrinsic_static_ascii(vm, (const byte *) "http:")), &roots[2]);
     }
     if (ok) {
         http_define_own(vm, roots[0], "protocol", roots[2]);
@@ -6275,7 +6310,7 @@ static MalValue http_agent_constructor(
     if (ok) {
         http_define_own(vm, roots[0], "maxFreeSockets", roots[2]);
         ok = http_agent_option(vm, roots[1], "scheduling", mal_value_from_string(
-            mal_intrinsic_ascii(vm, (const byte *) "lifo")), &roots[2]);
+            mal_intrinsic_static_ascii(vm, (const byte *) "lifo")), &roots[2]);
     }
     if (ok) {
         http_define_own(vm, roots[0], "scheduling", roots[2]);
@@ -6489,7 +6524,7 @@ void mal_host_install_node_http(
         mal_native_function_object_new_arity(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "createServer"), 2,
+            mal_intrinsic_static_ascii(vm, (const byte *) "createServer"), 2,
             http_create_server));
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
                               (const byte *) "createServer", roots[7], HTTP_VISIBLE);
@@ -6519,7 +6554,7 @@ void mal_host_install_node_http(
         mal_native_function_object_new_arity(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "request"), 3,
+            mal_intrinsic_static_ascii(vm, (const byte *) "request"), 3,
             http_request));
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
                               (const byte *) "request", roots[11], HTTP_VISIBLE);
@@ -6527,7 +6562,7 @@ void mal_host_install_node_http(
         mal_native_function_object_new_arity(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "get"), 3,
+            mal_intrinsic_static_ascii(vm, (const byte *) "get"), 3,
             http_get));
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
                               (const byte *) "get", roots[12], HTTP_VISIBLE);
@@ -6536,7 +6571,7 @@ void mal_host_install_node_http(
         mal_native_function_object_new_arity(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "validateHeaderName"), 1,
+            mal_intrinsic_static_ascii(vm, (const byte *) "validateHeaderName"), 1,
             http_validate_header_name));
     mal_intrinsic_define_data(
         vm, mal_value_to_object(roots[0]), (const byte *) "validateHeaderName",
@@ -6545,7 +6580,7 @@ void mal_host_install_node_http(
         mal_native_function_object_new_arity(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "validateHeaderValue"), 2,
+            mal_intrinsic_static_ascii(vm, (const byte *) "validateHeaderValue"), 2,
             http_validate_header_value));
     mal_intrinsic_define_data(
         vm, mal_value_to_object(roots[0]), (const byte *) "validateHeaderValue",
@@ -6571,7 +6606,7 @@ void mal_host_install_node_http(
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[18]), (const byte *) "keepAlive",
         mal_value_new_boolean(true), HTTP_VISIBLE);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[18]), (const byte *) "scheduling",
-        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "lifo")), HTTP_VISIBLE);
+        mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "lifo")), HTTP_VISIBLE);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[18]), (const byte *) "timeout",
         mal_value_from_i32(5000), HTTP_VISIBLE);
     roots[18] = http_agent_constructor(vm, mal_value_new_undefined(), &roots[18], 1,

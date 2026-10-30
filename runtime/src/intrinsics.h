@@ -558,6 +558,12 @@ MalString *mal_property_query_string(MalVm *vm, MalString *string);
 /** Return a one-code-unit string, interning Latin-1 values in a VM-local cache. */
 MalString *mal_intrinsic_code_unit(MalVm *vm, c16 code_unit);
 
+/**
+ * mal_intrinsic_ascii for immutable, NUL-terminated ASCII storage that outlives this
+ * VM: a cache hit trusts the pointer and skips re-reading the name.
+ */
+MalString *mal_intrinsic_static_ascii(MalVm *vm, const byte *name);
+
 /** Return a measured hot atom directly by its compile-time identifier. */
 MalString *mal_intrinsic_hot_ascii(MalVm *vm, MalHotIntrinsicKey key);
 

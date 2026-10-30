@@ -197,10 +197,11 @@ static MalValue ee_copy_listener_array(
     return result;
 }
 
+/* name is static storage; the atom cache trusts its address. */
 static bool ee_event_is(MalVm *vm, MalKey key, const char *name) {
     return key.kind == MAL_KEY_STRING
         && mal_string_equals(mal_value_to_string(key.value),
-                             mal_intrinsic_ascii(vm, (const byte *) name));
+                             mal_intrinsic_static_ascii(vm, (const byte *) name));
 }
 
 static bool ee_emit_key(
@@ -309,7 +310,7 @@ static MalValue ee_add(
         MalNativeFunctionObject *wrapper = mal_native_function_object_new_with_slots(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "bound onceWrapper"), ee_once_wrapper,
+            mal_intrinsic_static_ascii(vm, (const byte *) "bound onceWrapper"), ee_once_wrapper,
             slots, countof(slots));
         roots[3] = mal_value_from_native_function_object(wrapper);
         mal_intrinsic_define_data(vm, (MalObject *) wrapper, (const byte *) "listener",
@@ -813,7 +814,7 @@ static MalValue ee_resource_constructor(
         mal_value_new_undefined(), mal_value_new_undefined(), argc > 0 ? args[0] : mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "EventEmitterAsyncResource"));
+    roots[1] = mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "EventEmitterAsyncResource"));
     if (mal_value_is_object(roots[3])) {
         MalValue name;
         if (!mal_vm_get_property(vm, roots[3], ee_name_key(vm, "name"), &name)) goto done;
@@ -943,11 +944,11 @@ static MalValue ee_static_once(
     mal_promise_new_direct_capability(vm, &roots[2], &resolve, &reject);
     roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
     const char *names[] = {"emitter", "event", "promise", "error", "errorListener", "listener", "done"};
-    MalValue values[] = {roots[0], roots[1], roots[2], mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "error")), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_boolean(false)};
+    MalValue values[] = {roots[0], roots[1], roots[2], mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "error")), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_boolean(false)};
     for (usize index = 0; index < countof(names); index++) mal_object_set(mal_value_to_object(roots[3]), ee_name_key(vm, names[index]), values[index]);
     MalValue slots[] = {roots[3], mal_value_new_boolean(false)};
     roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]), mal_intrinsic_ascii(vm, (const byte *) "eventOnce"), 0, ee_once_settle, slots, 2));
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]), mal_intrinsic_static_ascii(vm, (const byte *) "eventOnce"), 0, ee_once_settle, slots, 2));
     mal_object_set(mal_value_to_object(roots[3]), ee_name_key(vm, "listener"), roots[4]);
     if (!mal_vm_get_property(vm, roots[0], ee_name_key(vm, "once"), &roots[5])) goto failure;
     if (!mal_value_is_callable(roots[5])) {
@@ -960,7 +961,7 @@ static MalValue ee_static_once(
     if (!ee_string_is(roots[1], "error")) {
         slots[1] = mal_value_new_boolean(true);
         roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]), mal_intrinsic_ascii(vm, (const byte *) "eventOnceError"), 1, ee_once_settle, slots, 2));
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]), mal_intrinsic_static_ascii(vm, (const byte *) "eventOnceError"), 1, ee_once_settle, slots, 2));
         mal_object_set(mal_value_to_object(roots[3]), ee_name_key(vm, "errorListener"), roots[4]);
         MalValue error_args[] = {ee_once_property(vm, roots[3], "error"), roots[4]};
         mal_vm_call_value(vm, roots[5], roots[0], error_args, 2);
@@ -1138,7 +1139,7 @@ static MalValue ee_abort_listener_dispose(
     MalValue signal = mal_native_function_object_get_slot(self, 0);
     if (mal_value_is_undefined(signal)) return mal_value_new_undefined();
     MalValue remove_args[] = {
-        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "abort")),
+        mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "abort")),
         mal_native_function_object_get_slot(self, 1),
     };
     MalRootSpan root;
@@ -1180,7 +1181,7 @@ static MalValue ee_add_abort_listener(
         mal_object_set(mal_value_to_object(roots[3]), ee_name_key(vm, "once"),
             mal_value_new_boolean(true));
         MalValue add_args[] = {
-            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "abort")),
+            mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "abort")),
             roots[1], roots[3],
         };
         if (!ee_call_method(vm, roots[0], "addEventListener", add_args, 3, nullptr)) goto done;
@@ -1189,7 +1190,7 @@ static MalValue ee_add_abort_listener(
     roots[3] = mal_value_from_native_function_object(
         mal_native_function_object_new_with_slots_arity(&vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "[Symbol.dispose]"), 0,
+            mal_intrinsic_static_ascii(vm, (const byte *) "[Symbol.dispose]"), 0,
             ee_abort_listener_dispose, dispose_slots, 2));
     roots[4] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
     mal_object_set(mal_value_to_object(roots[4]),
@@ -1268,7 +1269,7 @@ static void ee_on_close(MalVm *vm, MalNativeFunctionObject *hub) {
         mal_native_function_object_get_slot(hub, EE_ON_EMITTER),
         mal_native_function_object_get_slot(hub, EE_ON_EVENT),
         mal_native_function_object_get_slot(hub, EE_ON_LISTENER),
-        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "error")),
+        mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "error")),
         mal_native_function_object_get_slot(hub, EE_ON_ERROR_LISTENER),
         mal_native_function_object_get_slot(hub, EE_ON_SIGNAL),
         mal_native_function_object_get_slot(hub, EE_ON_ABORT_LISTENER),
@@ -1285,7 +1286,7 @@ static void ee_on_close(MalVm *vm, MalNativeFunctionObject *hub) {
     }
     if (!mal_value_is_undefined(roots[5])) {
         MalValue abort_args[] = {
-            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "abort")), roots[6],
+            mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "abort")), roots[6],
         };
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
         ee_call_method(vm, roots[5], "removeEventListener", abort_args, 2, nullptr);
@@ -1462,12 +1463,12 @@ static MalValue ee_static_on(
     hub_slots[EE_ON_PENDING] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
-        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, (const byte *) "on"), 0,
+        &vm->heap, function_prototype, mal_intrinsic_static_ascii(vm, (const byte *) "on"), 0,
         ee_on_iterator_self, hub_slots, EE_ON_SLOT_COUNT));
     MalNativeFunctionObject *hub = mal_value_to_native_function_object(roots[2]);
     MalValue hub_ref[] = {roots[2]};
     roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
-        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, (const byte *) "eventHandler"), 0,
+        &vm->heap, function_prototype, mal_intrinsic_static_ascii(vm, (const byte *) "eventHandler"), 0,
         ee_on_listener, hub_ref, 1));
     mal_native_function_object_set_slot(hub, EE_ON_LISTENER, roots[3]);
     MalValue add_args[] = {event, roots[3]};
@@ -1479,21 +1480,21 @@ static MalValue ee_static_on(
     }
     if (!ee_string_is(event, "error")) {
         roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
-            &vm->heap, function_prototype, mal_intrinsic_ascii(vm, (const byte *) "errorHandler"), 1,
+            &vm->heap, function_prototype, mal_intrinsic_static_ascii(vm, (const byte *) "errorHandler"), 1,
             ee_on_error_listener, hub_ref, 1));
         mal_native_function_object_set_slot(hub, EE_ON_ERROR_LISTENER, roots[3]);
-        MalValue error_args[] = {mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "error")), roots[3]};
+        MalValue error_args[] = {mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "error")), roots[3]};
         if (!ee_call_method(vm, emitter, "on", error_args, 2, nullptr)) goto failure;
     }
     if (!mal_value_is_undefined(hub_slots[EE_ON_SIGNAL])) {
         roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
-            &vm->heap, function_prototype, mal_intrinsic_ascii(vm, (const byte *) "abortListener"), 0,
+            &vm->heap, function_prototype, mal_intrinsic_static_ascii(vm, (const byte *) "abortListener"), 0,
             ee_on_abort_listener, hub_ref, 1));
         mal_native_function_object_set_slot(hub, EE_ON_ABORT_LISTENER, roots[3]);
         roots[4] = mal_value_from_object(mal_intrinsic_new_object(vm));
         mal_object_set(mal_value_to_object(roots[4]), ee_name_key(vm, "once"), mal_value_new_boolean(true));
         MalValue abort_args[] = {
-            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "abort")), roots[3], roots[4],
+            mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "abort")), roots[3], roots[4],
         };
         if (!ee_call_method(vm, hub_slots[EE_ON_SIGNAL], "addEventListener", abort_args, 3, nullptr))
             goto failure;
@@ -1564,7 +1565,7 @@ void mal_host_install_node_events(
     roots[0] = mal_value_from_object(prototype);
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, (const byte *) "EventEmitter"), 1, ee_constructor);
+        mal_intrinsic_static_ascii(vm, (const byte *) "EventEmitter"), 1, ee_constructor);
     mal_native_function_object_set_constructor(constructor);
     roots[1] = mal_value_from_native_function_object(constructor);
     vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR] = roots[1];
@@ -1602,7 +1603,7 @@ void mal_host_install_node_events(
     mal_intrinsic_define_data(vm, (MalObject *) constructor,
                               (const byte *) "EventEmitter", roots[1], EE_WEC);
     roots[4] = mal_value_from_symbol(mal_symbol_new(
-        &vm->heap, mal_intrinsic_ascii(vm, (const byte *) "events.errorMonitor")));
+        &vm->heap, mal_intrinsic_static_ascii(vm, (const byte *) "events.errorMonitor")));
     mal_intrinsic_define_data(vm, (MalObject *) constructor,
                               (const byte *) "errorMonitor", roots[4], EE_WEC);
     mal_gc_unroot(&static_root);
@@ -1611,17 +1612,17 @@ void mal_host_install_node_events(
     MalValue async_module = mal_node_module_get_cached(vm, "node:async_hooks");
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalPropertyLookup async_constructor = mal_object_get_own(mal_value_to_object(async_module), ee_name_key(vm, "AsyncResource"));
-    roots[5] = mal_value_from_symbol(mal_symbol_new(&vm->heap, mal_intrinsic_ascii(vm, (const byte *) "events.asyncResource")));
+    roots[5] = mal_value_from_symbol(mal_symbol_new(&vm->heap, mal_intrinsic_static_ascii(vm, (const byte *) "events.asyncResource")));
     roots[6] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
     MalValue resource_slots[] = {roots[5], async_constructor.desc.value};
     MalNativeFunctionObject *resource_constructor = mal_native_function_object_new_with_slots_arity(&vm->heap,
-        function_prototype, mal_intrinsic_ascii(vm, (const byte *) "EventEmitterAsyncResource"), 1, ee_resource_constructor, resource_slots, 2);
+        function_prototype, mal_intrinsic_static_ascii(vm, (const byte *) "EventEmitterAsyncResource"), 1, ee_resource_constructor, resource_slots, 2);
     mal_native_function_object_set_constructor(resource_constructor);
     roots[7] = mal_value_from_native_function_object(resource_constructor);
     mal_intrinsic_define_data(vm, (MalObject *) resource_constructor, (const byte *) "prototype", roots[6], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[6]), (const byte *) "constructor", roots[7], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     roots[8] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
-        function_prototype, mal_intrinsic_ascii(vm, (const byte *) "emit"), 1, ee_resource_emit, resource_slots, 1));
+        function_prototype, mal_intrinsic_static_ascii(vm, (const byte *) "emit"), 1, ee_resource_emit, resource_slots, 1));
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[6]), (const byte *) "emit", roots[8], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     const char *resource_names[] = {"asyncResource", "asyncId", "triggerAsyncId", "emitDestroy"};
     for (usize index = 0; index < countof(resource_names); index++) {
@@ -1650,7 +1651,7 @@ void mal_host_install_node_events(
         mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) statics[i].name,
             roots[8], EE_WEC);
     }
-    MalString *rejection_name = mal_intrinsic_ascii(vm, (const byte *) "nodejs.rejection");
+    MalString *rejection_name = mal_intrinsic_static_ascii(vm, (const byte *) "nodejs.rejection");
     MalSymbol *rejection = mal_symbol_registry_find(&vm->symbol_registry, rejection_name);
     if (rejection == nullptr) {
         rejection = mal_symbol_registry_insert(
