@@ -552,6 +552,25 @@ static bool mal_headers_fill_from_sequence(
  * conversion still completes before the first header is validated or appended.
  * Typical inits fit the stack buffer; malloc/free would cost what the arrays did. */
 #define MAL_HEADERS_RECORD_STACK_PAIRS 8
+
+/* An ordinary object whose own properties are all enumerable shaped string values,
+ * such as `{ "content-type": "text/plain" }`. Converting strings runs no user code,
+ * so its shape order is the key snapshot and every read sees the same property. */
+static const MalObject *mal_headers_plain_string_record(MalValue input) {
+    if (!mal_value_is_heap_type(input, MAL_HEAP_OBJECT)) return nullptr;
+    const MalObject *object = mal_value_to_object(input);
+    if (object->is_arguments || mal_object_overflow(object) != nullptr) return nullptr;
+    const MalShape *shape = object->shape;
+    for (u32 i = 0; i < shape->inline_count; i++) {
+        const MalShapeProp *prop = &shape->props[i];
+        if (!mal_value_is_string(prop->key) || !(prop->attrs & MAL_PROPERTY_ENUMERABLE) ||
+            !mal_value_is_string(mal_object_field_load(object, prop->slot))) {
+            return nullptr;
+        }
+    }
+    return object;
+}
+
 static bool mal_headers_fill_from_record(MalVm *vm, MalHeadersObject *h, MalValue input) {
     MalValue roots[3] = {
         mal_value_from_headers_object(h),
@@ -560,13 +579,19 @@ static bool mal_headers_fill_from_record(MalVm *vm, MalHeadersObject *h, MalValu
     };
     MalRootSpan roots_span;
     mal_gc_root(&roots_span, roots, 3);
-    if (!mal_vm_own_property_keys(vm, input, &roots[1])) {
-        mal_gc_unroot(&roots_span);
-        return false;
+    const MalObject *plain = mal_headers_plain_string_record(input);
+    MalArrayObject *keys = nullptr;
+    u32 key_count;
+    if (plain != nullptr) {
+        key_count = plain->shape->inline_count;
+    } else {
+        if (!mal_vm_own_property_keys(vm, input, &roots[1])) {
+            mal_gc_unroot(&roots_span);
+            return false;
+        }
+        keys = mal_value_to_array_object(roots[1]);
+        key_count = mal_array_object_length(keys);
     }
-
-    MalArrayObject *keys = mal_value_to_array_object(roots[1]);
-    u32 key_count = mal_array_object_length(keys);
     MalValue stack_staged[MAL_HEADERS_RECORD_STACK_PAIRS * 2];
     usize capacity = key_count == 0 ? 1 : (usize) key_count * 2;
     MalValue *staged = capacity <= MAL_HEADERS_RECORD_STACK_PAIRS * 2
@@ -584,6 +609,18 @@ static bool mal_headers_fill_from_record(MalVm *vm, MalHeadersObject *h, MalValu
     usize staged_count = 0;
     bool ok = true;
     for (u32 i = 0; i < key_count; i++) {
+        if (plain != nullptr) {
+            const MalShapeProp *prop = &plain->shape->props[i];
+            MalValue *pair = &staged[staged_count * 2];
+            if (!mal_headers_to_byte_string(vm, prop->key, &pair[0]) ||
+                !mal_headers_to_byte_string(
+                    vm, mal_object_field_load(plain, prop->slot), &pair[1])) {
+                ok = false;
+                break;
+            }
+            staged_count++;
+            continue;
+        }
         mal_array_object_dense_get(keys, i, &roots[2]);
         MalKey key;
         if (!mal_vm_value_to_property_key(vm, roots[2], &key)) {
@@ -626,6 +663,14 @@ static bool mal_headers_fill_from_init(MalVm *vm, MalHeadersObject *h, MalValue 
     if (!mal_value_is_object(init)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Headers init must be an object");
         return false;
+    }
+    // A plain record has no own symbols and inherits straight from an unmodified
+    // %Object.prototype%, which has no @@iterator, so GetMethod can only find undefined.
+    const MalObject *plain = mal_headers_plain_string_record(init);
+    if (plain != nullptr && mal_vm_primitive_methods_intact(vm) &&
+        mal_object_prototype(plain) ==
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])) {
+        return mal_headers_fill_from_record(vm, h, init);
     }
 
     MalValue method;
