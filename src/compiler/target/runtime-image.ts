@@ -2527,69 +2527,54 @@ function remapRuntimeInstructionConstants(
 	bigintOldToNew: ReadonlyMap<number, number>,
 	templateOldToNew: ReadonlyMap<number, number>,
 ): BytecodeInstruction {
-	const remapped = remapRuntimeConstantReferences(
-		instruction,
-		stringOldToNew,
-		bigintOldToNew,
-		templateOldToNew,
-	) as BytecodeInstruction;
+	const remapped = { ...instruction };
+	const row = remapped as unknown as Record<string, unknown>;
+	const fields = RUNTIME_INSTRUCTION_REMAP_FIELDS.get(instruction.opcode);
+	if (fields !== undefined) {
+		for (const field of fields) {
+			if (!Object.hasOwn(row, field.key)) continue;
+			const value = row[field.key];
+			if (value === undefined || value === null) continue;
+			row[field.key] =
+				field.kind === "operands"
+					? (value as ReadonlyArray<number>).map((operand, index) =>
+							remapVmValueOperandConstants(
+								operand,
+								stringOldToNew,
+								`${instruction.opcode}.${field.key}[${index}]`,
+							),
+						)
+					: field.kind === "copy-list"
+						? (value as ReadonlyArray<number>).slice()
+						: remapRuntimeConstantReferences(
+								value,
+								stringOldToNew,
+								bigintOldToNew,
+								templateOldToNew,
+								field.key,
+							);
+		}
+	}
 	switch (remapped.opcode) {
 		case "CALL":
-			return {
-				...remapped,
-				callee: remapVmValueOperandConstants(
-					remapped.callee,
-					stringOldToNew,
-					"CALL.callee",
-				),
-				thisValue: remapVmValueOperandConstants(
-					remapped.thisValue,
-					stringOldToNew,
-					"CALL.thisValue",
-				),
-				arguments: remapped.arguments.map((operand, index) =>
-					remapVmValueOperandConstants(
-						operand,
-						stringOldToNew,
-						`CALL.arguments[${index}]`,
-					),
-				),
-			};
-		case "CALL_KNOWN":
-			return {
-				...remapped,
-				thisValue: remapVmValueOperandConstants(
-					remapped.thisValue,
-					stringOldToNew,
-					"CALL_KNOWN.thisValue",
-				),
-				arguments: remapped.arguments.map((operand, index) =>
-					remapVmValueOperandConstants(
-						operand,
-						stringOldToNew,
-						`CALL_KNOWN.arguments[${index}]`,
-					),
-				),
-			};
 		case "CONSTRUCT":
-			return {
-				...remapped,
-				callee: remapVmValueOperandConstants(
-					remapped.callee,
-					stringOldToNew,
-					"CONSTRUCT.callee",
-				),
-				arguments: remapped.arguments.map((operand, index) =>
-					remapVmValueOperandConstants(
-						operand,
-						stringOldToNew,
-						`CONSTRUCT.arguments[${index}]`,
-					),
-				),
-			};
-		default:
-			return remapped;
+			remapped.callee = remapVmValueOperandConstants(
+				remapped.callee,
+				stringOldToNew,
+				`${remapped.opcode}.callee`,
+			);
+			break;
 	}
+	switch (remapped.opcode) {
+		case "CALL":
+		case "CALL_KNOWN":
+			remapped.thisValue = remapVmValueOperandConstants(
+				remapped.thisValue,
+				stringOldToNew,
+				`${remapped.opcode}.thisValue`,
+			);
+	}
+	return remapped;
 }
 
 export function remapRuntimeFunctionConstants(
@@ -2837,6 +2822,69 @@ const RUNTIME_INSTRUCTION_CONSTANT_FIELDS = new Map<
 			[opcode, Object.entries(fields).map(([key, kind]) => ({ key, kind }))] as const,
 	),
 );
+
+type RuntimeInstructionCopyFields<Instruction> = Exclude<
+	{
+		[Key in keyof Instruction]-?: NonNullable<Instruction[Key]> extends object
+			? Key
+			: never;
+	}[keyof Instruction],
+	RuntimeConstantReferenceFields<Instruction>
+>;
+type RuntimeInstructionCopySchema = {
+	[
+		Instruction in BytecodeInstruction as RuntimeInstructionCopyFields<Instruction> extends never
+			? never
+			: Instruction["opcode"]
+	]: {
+		[Key in RuntimeInstructionCopyFields<Instruction>]-?: Key extends "arguments"
+			? Instruction["opcode"] extends "CALL" | "CALL_KNOWN" | "CONSTRUCT"
+				? "operands"
+				: "copy-list"
+			: NonNullable<Instruction[Key]> extends ReadonlyArray<number>
+				? "copy-list"
+				: "nested";
+	};
+};
+
+// Compacted instructions retain independent mutable payloads, including fields without constants.
+const RUNTIME_INSTRUCTION_COPY_SCHEMA = {
+	CREATE_OBJECT_SHAPED: { valueRegisters: "copy-list" },
+	CREATE_MODULE_NAMESPACE: { slots: "copy-list" },
+	CALL: {
+		guardedFunctionIndices: "copy-list",
+		guardedMathCall: "nested",
+		guardedBuiltinCall: "nested",
+		arguments: "operands",
+	},
+	PRECISE_NUMBER_SUM: { arguments: "copy-list" },
+	CONCAT_STRINGS: { arguments: "copy-list" },
+	CALL_KNOWN: { arguments: "operands" },
+	CONSTRUCT: { arguments: "operands" },
+	LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT: { candidates: "nested" },
+	STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT: { candidates: "nested" },
+	SELECT_SHAPE_CASE: { candidates: "nested" },
+	LOAD_PROPERTY_STATIC_SHAPE_CASE: { slots: "copy-list" },
+	CALL_REST_ARGUMENTS: { prefixArguments: "copy-list" },
+	CALL_SPREAD_ITERABLE: { prefixArguments: "copy-list" },
+	CREATE_PRIVATE_NAMES: { capturedIndices: "copy-list" },
+	INIT_PRIVATE_FIELDS: { keyRegisters: "copy-list" },
+	COPY_DATA_PROPERTIES: { excluded: "copy-list" },
+} as const satisfies RuntimeInstructionCopySchema;
+
+const RUNTIME_INSTRUCTION_REMAP_FIELDS = new Map<
+	string,
+	ReadonlyArray<{
+		readonly key: string;
+		readonly kind: RuntimeConstantFieldPlan["kind"] | "copy-list" | "operands";
+	}>
+>(RUNTIME_INSTRUCTION_CONSTANT_FIELDS);
+for (const [opcode, fields] of Object.entries(RUNTIME_INSTRUCTION_COPY_SCHEMA)) {
+	RUNTIME_INSTRUCTION_REMAP_FIELDS.set(opcode, [
+		...(RUNTIME_INSTRUCTION_REMAP_FIELDS.get(opcode) ?? []),
+		...Object.entries(fields).map(([key, kind]) => ({ key, kind })),
+	]);
+}
 
 function visitRuntimeInstructionConstantIndices(
 	instruction: BytecodeInstruction,
