@@ -18,11 +18,12 @@ design documents, and old reports provide context, not proof about the current t
 - Complete the requested semantic slice, including relevant verification. Report
   separate discoveries with evidence rather than expanding into unrelated work.
 - Inspect the working tree first and preserve unrelated edits. Work in the assigned
-  checkout; creating, removing, pruning, relocating, or switching worktrees requires
-  an explicit request.
-- Commit only when requested, using unsigned local commits. Push, publish, deploy,
-  and remote execution require explicit authorization. Existing authorization for
-  the same action and scope persists; do not ask for it again.
+  checkout; creating, relocating, or switching worktrees requires an explicit request.
+  Remove a worktree you created once its branch is merged.
+- Commit and push only when requested, unless the ignored `AGENTS.local.md` sets
+  otherwise. Commits are unsigned. Publish, deploy, and other remote execution always
+  require explicit authorization. Existing authorization for the same action and scope
+  persists; do not ask for it again.
 - For an authorized push, check the ignored `AGENTS.local.md` for host-specific
   authentication. Never print or persist credentials.
 
@@ -50,7 +51,7 @@ design documents, and old reports provide context, not proof about the current t
 ## Comments
 
 - Explain an invariant, constraint, non-obvious choice, or deliberate hazard. Do not
-  narrate the code or the edit. One line is the default; length follows the surprise.
+  narrate the code or the edit. Length follows the surprise.
 - Refactor confusing code you are changing. Remove stale and redundant comments in
   the edited region; no banner comments or blanket JSDoc.
 - Document exports where names and types do not express the contract, especially at
@@ -68,7 +69,9 @@ of these capabilities. Network access and Git writes are separate permissions.
 If the probe confirms an `EPERM` or `EACCES` capability failure, correct the sandbox
 and rerun the exact command before diagnosing product code. Before heavy work,
 inspect CPU activity and `node ./src/index.ts cache status`. Defer conflicting builds,
-tests, and benchmarks; never kill another task or introduce a global performance lock.
+tests, and benchmarks; never kill another session's task or introduce a global
+performance lock. A process from before today that no running session owns is stale,
+and stopping it is fine.
 
 ## Verification
 
@@ -139,8 +142,9 @@ Use matched workloads, output parity, source/toolchain identity, and repeated
 interleaved pairs for performance conclusions. Keep local measurements to the
 comparison a decision needs; complete benchmark families and baseline refreshes run
 in their CI workflows. Inspect `--plan=json` before costly work; a single pair or zero
-exit code does not establish acceptance. Use the
-[benchmark reference](docs/benchmarking.md) for commands, budgets, and resume rules.
+exit code does not establish acceptance. A quick check is one run without warmups,
+reported as indicative. Use the [benchmark reference](docs/benchmarking.md) for
+commands, budgets, and resume rules.
 
 Report what was exercised, failed, and left unverified. Retain the evidence needed
 to review the current change; historical timings and old passes are not current
@@ -165,7 +169,7 @@ environment; changed source or incomplete coverage cannot establish acceptance.
   Retain only evidence supporting the result or an unresolved failure, and report
   its location. Never force-add `.cache/` contents or delete another task's artifacts.
 
-## Cleanup and delegation
+## Cleanup
 
 Audit ownership and activity before deleting artifacts. Remove only explicitly
 identified inactive scratch or superseded generated data; preserve source, baselines,
@@ -173,10 +177,3 @@ useful failure evidence, and unrelated drafts. The user cache trims itself in th
 background; prune it by hand only when asked, previewing with `cache prune --dry-run`
 first. Pruning manages the user cache, not repository reports; see
 [cache ownership](docs/testing.md#cache-ownership). Never reuse an old deletion list.
-
-Delegate only when requested. Use the requested available external harness, give each
-assignment a complete scope and a 30-minute wall-clock limit, and capture its output.
-Run independent assignments in parallel only with non-overlapping edits. Treat a
-timeout as incomplete; inspect outputs and processes, review edits, and verify them
-before acceptance. Do not inherit old model pins or unrestricted-permission recipes
-from saved task history.
