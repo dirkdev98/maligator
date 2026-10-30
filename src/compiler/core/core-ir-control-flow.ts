@@ -261,22 +261,26 @@ function traversal(
 } {
 	const reachable = new Set<CoreBlockId>([entry]);
 	const postorder: Array<CoreBlockId> = [];
-	const pending: Array<{ readonly block: CoreBlockId; next: number }> = [
-		{ block: entry, next: 0 },
-	];
-	while (pending.length > 0) {
-		const frame = pending.at(-1)!;
-		const outgoing = successors[frame.block] ?? [];
-		if (frame.next < outgoing.length) {
-			const target = outgoing[frame.next++]!.to;
+	const pending: Array<CoreBlockId> = [entry];
+	const cursors = [0];
+	let depth = 1;
+	while (depth > 0) {
+		const frame = depth - 1;
+		const block = pending[frame]!;
+		const outgoing = successors[block] ?? [];
+		const next = cursors[frame]!;
+		if (next < outgoing.length) {
+			const target = outgoing[next]!.to;
+			cursors[frame] = next + 1;
 			if (!reachable.has(target)) {
 				reachable.add(target);
-				pending.push({ block: target, next: 0 });
+				pending[depth] = target;
+				cursors[depth++] = 0;
 			}
 			continue;
 		}
-		postorder.push(frame.block);
-		pending.pop();
+		postorder.push(block);
+		depth--;
 	}
 	return { reachable, reversePostorder: postorder.reverse() };
 }
@@ -438,21 +442,25 @@ function dominatorPredicate(
 	entries.fill(-1);
 	exits.fill(-1);
 	let clock = 0;
-	const pending: Array<{ readonly block: CoreBlockId; next: number }> = [
-		{ block: entry, next: 0 },
-	];
+	const pending: Array<CoreBlockId> = [entry];
+	const cursors = [0];
+	let depth = 1;
 	entries[entry] = clock++;
-	while (pending.length > 0) {
-		const frame = pending.at(-1)!;
-		const descendants = children[frame.block] ?? [];
-		if (frame.next < descendants.length) {
-			const child = descendants[frame.next++]!;
+	while (depth > 0) {
+		const frame = depth - 1;
+		const block = pending[frame]!;
+		const descendants = children[block] ?? [];
+		const next = cursors[frame]!;
+		if (next < descendants.length) {
+			const child = descendants[next]!;
+			cursors[frame] = next + 1;
 			entries[child] = clock++;
-			pending.push({ block: child, next: 0 });
+			pending[depth] = child;
+			cursors[depth++] = 0;
 			continue;
 		}
-		exits[frame.block] = clock++;
-		pending.pop();
+		exits[block] = clock++;
+		depth--;
 	}
 	return (dominator, block) =>
 		entries[dominator]! >= 0 &&
@@ -467,40 +475,46 @@ function cyclicComponents(
 ): Array<ReadonlySet<CoreBlockId>> {
 	const visited = new Uint8Array(successors.length);
 	const postorder: Array<CoreBlockId> = [];
+	const pending: Array<CoreBlockId> = [];
+	const cursors: Array<number> = [];
 	for (const start of allowed) {
 		if (visited[start] !== 0) continue;
 		visited[start] = 1;
-		const pending: Array<{ readonly block: CoreBlockId; next: number }> = [
-			{ block: start, next: 0 },
-		];
-		while (pending.length > 0) {
-			const frame = pending.at(-1)!;
-			const outgoing = successors[frame.block] ?? [];
+		pending[0] = start;
+		cursors[0] = 0;
+		let depth = 1;
+		while (depth > 0) {
+			const frame = depth - 1;
+			const block = pending[frame]!;
+			const outgoing = successors[block] ?? [];
 			let advanced = false;
-			while (frame.next < outgoing.length) {
-				const edge = outgoing[frame.next++]!;
+			while (cursors[frame]! < outgoing.length) {
+				const edge = outgoing[cursors[frame]!]!;
+				cursors[frame]!++;
 				if (edge.kind !== "ordinary" || !allowed.has(edge.to) || visited[edge.to] !== 0)
 					continue;
 				visited[edge.to] = 1;
-				pending.push({ block: edge.to, next: 0 });
+				pending[depth] = edge.to;
+				cursors[depth++] = 0;
 				advanced = true;
 				break;
 			}
 			if (advanced) continue;
-			postorder.push(frame.block);
-			pending.pop();
+			postorder.push(block);
+			depth--;
 		}
 	}
 	const assigned = new Uint8Array(successors.length);
 	const components: Array<ReadonlySet<CoreBlockId>> = [];
+	const componentPending: Array<CoreBlockId> = [];
 	for (let index = postorder.length - 1; index >= 0; index--) {
 		const start = postorder[index]!;
 		if (assigned[start] !== 0) continue;
 		assigned[start] = 1;
 		const blocks = new Set<CoreBlockId>();
-		const pending = [start];
-		while (pending.length > 0) {
-			const block = pending.pop()!;
+		componentPending.push(start);
+		while (componentPending.length > 0) {
+			const block = componentPending.pop()!;
 			blocks.add(block);
 			for (const edge of predecessors[block] ?? []) {
 				if (
@@ -510,7 +524,7 @@ function cyclicComponents(
 				)
 					continue;
 				assigned[edge.from] = 1;
-				pending.push(edge.from);
+				componentPending.push(edge.from);
 			}
 		}
 		components.push(blocks);
@@ -1011,31 +1025,37 @@ export function coreCanonicalValueRoots(
 	}
 	const visited = new Uint8Array(fn.valueCapacity);
 	const postorder: Array<CoreValueId> = [];
+	const pendingValues: Array<CoreValueId> = [];
+	const pendingEdges: Array<number> = [];
 	for (const start of nodes) {
 		if (visited[start] !== 0) continue;
 		visited[start] = 1;
-		const pending: Array<{ readonly value: CoreValueId; next: number }> = [
-			{ value: start, next: 0 },
-		];
-		while (pending.length > 0) {
-			const frame = pending.at(-1)!;
-			const outgoing = dependencies[frame.value]!;
+		pendingValues[0] = start;
+		pendingEdges[0] = 0;
+		let depth = 1;
+		while (depth > 0) {
+			const frame = depth - 1;
+			const value = pendingValues[frame]!;
+			const outgoing = dependencies[value]!;
 			let advanced = false;
-			while (frame.next < outgoing.length) {
-				const dependency = outgoing[frame.next++]!;
+			while (pendingEdges[frame]! < outgoing.length) {
+				const dependency = outgoing[pendingEdges[frame]!]!;
+				pendingEdges[frame]!++;
 				if (dependencies[dependency] === undefined || visited[dependency] !== 0) continue;
 				visited[dependency] = 1;
-				pending.push({ value: dependency, next: 0 });
+				pendingValues[depth] = dependency;
+				pendingEdges[depth++] = 0;
 				advanced = true;
 				break;
 			}
 			if (advanced) continue;
-			postorder.push(frame.value);
-			pending.pop();
+			postorder.push(value);
+			depth--;
 		}
 	}
 	const componentOf = new Int32Array(fn.valueCapacity);
 	const components: Array<Array<CoreValueId>> = [];
+	const componentPending: Array<CoreValueId> = [];
 	for (let index = postorder.length - 1; index >= 0; index--) {
 		const start = postorder[index]!;
 		if (componentOf[start] !== 0) continue;
@@ -1043,14 +1063,14 @@ export function coreCanonicalValueRoots(
 		const members: Array<CoreValueId> = [];
 		components.push(members);
 		componentOf[start] = component + 1;
-		const pending = [start];
-		while (pending.length > 0) {
-			const value = pending.pop()!;
+		componentPending.push(start);
+		while (componentPending.length > 0) {
+			const value = componentPending.pop()!;
 			members.push(value);
 			for (const user of reverse[value] ?? []) {
 				if (componentOf[user] !== 0) continue;
 				componentOf[user] = component + 1;
-				pending.push(user);
+				componentPending.push(user);
 			}
 		}
 	}
