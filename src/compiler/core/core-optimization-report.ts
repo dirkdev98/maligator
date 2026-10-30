@@ -211,7 +211,6 @@ export interface CoreTransformWorkReport {
 		prefixes: ReadonlyArray<string>;
 		retainedPrefixes: ReadonlyArray<string>;
 		numericGuards: ReadonlyArray<number>;
-		numericReads: ReadonlyArray<number>;
 		invalidations: ReadonlyArray<number>;
 	}>;
 	readonly accessorApplications?: ReadonlyArray<{

@@ -7,14 +7,6 @@ import type { CoreFunctionStore } from "./core-store.ts";
 
 type Read = ReadAccessorSummary["reads"][number];
 
-// Retention keeps owners, never a terminal value or an indexed result.
-export function coreAccessorTerminalReadIndex(
-	reads: ReadAccessorSummary["reads"],
-): number {
-	const indexed = reads.findIndex((read) => read.kind === "indexed");
-	return indexed < 0 ? reads.length - 1 : indexed;
-}
-
 export function coreReadAccessorSummary(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,

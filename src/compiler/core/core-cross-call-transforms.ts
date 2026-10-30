@@ -2000,9 +2000,7 @@ function offerFunctionCandidates(
 				site: site.instruction,
 				revision: summaries.version(target),
 				priorityClass:
-					synchronousCallback?.created === true ||
-					cloneSpecialization ||
-					(regionCost?.loopPrefixCount ?? 0) > 0
+					synchronousCallback?.created === true || cloneSpecialization
 						? 1
 						: hintedTarget !== undefined
 							? 3

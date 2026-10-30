@@ -20,7 +20,6 @@ import {
 	invalidateCoreReadAccessorLoopAnalysis,
 } from "./core-read-accessor-loops.ts";
 import type { CoreReadAccessorLoopPlan } from "./core-read-accessor-loops.ts";
-import { coreAccessorTerminalReadIndex } from "./core-read-accessors.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import type { CoreTransformCandidate } from "./core-transform-candidates.ts";
 
@@ -49,7 +48,6 @@ function results(
 interface AccessorCall {
 	readonly target: CoreFunctionId;
 	readonly summary: ReadAccessorSummary;
-	readonly reads: ReadAccessorSummary["reads"];
 }
 
 export interface ReadRegion {
@@ -84,7 +82,6 @@ export interface CoreReadAccessorWork {
 		prefixes: ReadonlyArray<string>;
 		retainedPrefixes: ReadonlyArray<string>;
 		numericGuards: ReadonlyArray<number>;
-		numericReads: ReadonlyArray<number>;
 		invalidations: ReadonlyArray<number>;
 	}>;
 	accessorApplications?: Array<{ caller: number; name: string; site: number }>;
@@ -106,17 +103,15 @@ type ReadAccessorAnchor = Pick<
 	"caller" | "site" | "targets" | "readAccessorRegion" | "readAccessorLoopEligible"
 >;
 
-function bindAccessorReads(
+function accessorArgumentsMayAdmit(
 	fn: CoreFunctionStore,
 	inputs: ReadonlyArray<CoreValueId>,
 	summary: ReadAccessorSummary,
-): ReadAccessorSummary["reads"] | undefined {
-	let bound: Array<ReadAccessorSummary["reads"][number]> | undefined;
-	for (let index = 0; index < summary.reads.length; index++) {
-		const read = summary.reads[index]!;
+): boolean {
+	for (const read of summary.reads) {
 		if (read.kind !== "indexed") continue;
 		let value = inputs[read.argument + 2];
-		if (value === undefined) return undefined;
+		if (value === undefined) return false;
 		for (let depth = 0; depth < 16; depth++) {
 			if (fn.kernel.valueDefinitionKind(value) !== 1) break;
 			const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
@@ -135,29 +130,20 @@ function bindAccessorReads(
 						number < 0 ||
 						number >= 0xffff_ffff
 					)
-						return undefined;
+						return false;
 					break;
 				}
-				case "createString": {
-					const stringIndex = fn.instructionAttributes(instruction).stringIndex;
-					if (typeof stringIndex !== "number") return undefined;
-					bound ??= [...summary.reads];
-					bound[index] = {
-						kind: "named",
-						stringIndex,
-					};
-					break;
-				}
+				case "createString":
 				case "createBoolean":
 				case "createNull":
 				case "createUndefined":
 				case "createBigint":
-					return undefined;
+					return false;
 			}
 			break;
 		}
 	}
-	return bound ?? summary.reads;
+	return true;
 }
 
 function regionInstruction(
@@ -254,14 +240,12 @@ function readRegion(
 		const summary =
 			target === undefined ? undefined : summaries.summary(target)?.readAccessor;
 		const output = results(fn, instruction);
-		const reads =
-			summary === undefined ? undefined : bindAccessorReads(fn, inputs, summary);
 		return target !== undefined &&
 			summary !== undefined &&
-			reads !== undefined &&
+			accessorArgumentsMayAdmit(fn, inputs, summary) &&
 			output.length === 1 &&
 			fn.valueRepresentation(output[0]!) === "boxed"
-			? { target, summary, reads }
+			? { target, summary }
 			: undefined;
 	};
 	const anchor = accessorCall(candidate.site);
@@ -325,8 +309,8 @@ export function coreReadAccessorRegionCost(
 	const fn = program.function(candidate.caller);
 	const conditional =
 		candidate.readAccessorLoopEligible === true &&
-		[...region.calls.values()].some(
-			({ reads }) => coreAccessorTerminalReadIndex(reads) > 0,
+		[...region.calls.values()].some(({ summary }) =>
+			summary.reads.some((read) => read.kind === "indexed"),
 		)
 			? readRegion(program, summaries, candidate, hints, false, work, true)
 			: undefined;
@@ -340,19 +324,21 @@ export function coreReadAccessorRegionCost(
 				});
 	if (loop !== undefined) region = conditional!;
 	// A single field read has no sharing benefit and retains the ordinary inline fast path.
-	if (region.calls.size === 1 && region.calls.values().next().value!.reads.length === 1)
+	if (
+		region.calls.size === 1 &&
+		region.calls.values().next().value!.summary.reads.length === 1
+	)
 		return undefined;
 	const completeTerminalRead =
 		loop === undefined &&
 		region.calls.size === 1 &&
-		region.calls.values().next().value!.reads.at(-1)?.kind === "indexed";
+		region.calls.values().next().value!.summary.reads.at(-1)?.kind === "indexed";
 	const loopCost =
 		loop === undefined
 			? 0
 			: region.instructions.length +
 				loop.prefixes.length * 6 +
 				loop.numericGuards.length * 3 +
-				loop.numericReads.size * 6 +
 				loop.loop.blocks.size * (loop.retainedPrefixes.length + 2) * 2 +
 				12;
 	const generatedCode =
@@ -360,8 +346,11 @@ export function coreReadAccessorRegionCost(
 		loopCost +
 		region.instructions.length * 2 +
 		[...region.calls.values()].reduce(
-			(cost, { summary, reads }) =>
-				cost + 2 + reads.length * 3 + (summary.defaultValue === undefined ? 0 : 5),
+			(cost, { summary }) =>
+				cost +
+				2 +
+				summary.reads.length * 3 +
+				(summary.defaultValue === undefined ? 0 : 5),
 			0,
 		);
 	return {
@@ -414,8 +403,10 @@ export function expandCoreReadAccessorRegion(
 		loop = planned?.loop;
 	if (
 		region === undefined ||
-		[...region.calls.values()].some(({ reads }) =>
-			reads.some((read) => read.kind === "private" && !names.validSlot(read.slot)),
+		[...region.calls.values()].some(({ summary }) =>
+			summary.reads.some(
+				(read) => read.kind === "private" && !names.validSlot(read.slot),
+			),
 		)
 	)
 		return undefined;
@@ -629,10 +620,10 @@ export function expandCoreReadAccessorRegion(
 					guarded.add(guard);
 				}
 				let value = receiver;
-				let reads = call.reads;
+				let reads = call.summary.reads;
 				if (reuse !== undefined) {
-					// Terminal values remain fresh even when their admitted owners are retained.
-					const indexed = coreAccessorTerminalReadIndex(reads);
+					// The retained prefix ends at the indexed read; it and later reads run per iteration.
+					const indexed = reads.findIndex((read) => read.kind === "indexed");
 					let prefix = loop!.paths.get(operation.inputs[1]!)!;
 					for (const read of reads.slice(0, indexed)) {
 						if (read.kind === "indexed") throw new Error("Unexpected indexed prefix");
@@ -714,13 +705,6 @@ export function expandCoreReadAccessorRegion(
 					});
 					fast = done;
 					value = fn.kernel.blockParameterValue(fn.kernel.blockParameterStart(done));
-				}
-				if (loop?.numericReads.has(operation.instruction)) {
-					check(
-						append("typeofCompare", [value], { expected: "number", negated: false }, [
-							"boolean",
-						])[0]!,
-					);
 				}
 				values.set(operation.outputs[0]!, value);
 			} else if (
@@ -933,7 +917,6 @@ export function expandCoreReadAccessorRegion(
 				prefixes: loop.prefixes,
 				retainedPrefixes: loop.retainedPrefixes,
 				numericGuards: loop.numericGuards,
-				numericReads: [...loop.numericReads],
 				invalidations: [...loop.invalidators],
 			});
 		}
