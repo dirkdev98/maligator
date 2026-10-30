@@ -7,7 +7,8 @@ The analysis runs after function reachability and physical capture-slot compacti
 Runtime eval, host splicing, relocatable images, and dynamic scope keep the chain
 representation. The portable wire loader does not trust native capture metadata.
 
-A captured binding remains an atomic slot in its activation or iteration owner.
+Mutable and unproved captured bindings remain atomic slots in their activation or
+iteration owner.
 Siblings refer to the same owner and slot, while `ENV_COPY` supplies a new owner.
 This groups shared cells without allocating a separate heap object per binding.
 A closure with no external requirements retains no environment. A single owner
@@ -45,14 +46,21 @@ An eligible immutable leaf instead coallocates captured values with its function
 The proof runs on sealed Core before slot compaction and checks the complete live
 write set, mapped aliases, and exception-aware dominance of every closure creation.
 Each binding has one non-TDZ initializer outside cycles; any initial TDZ stores
-precede it at entry. The first slice accepts at most 16 slots from one creator in
-strict ordinary leaves without nested closures, captured writes, private names,
-local environment operations, or owned capture storage. Object values preserve
-their identity; immutability applies to the binding, not the object's properties.
-Unproved captures continue using owner cells. Proven immutable captures also keep
-owner storage when copying would not reduce retained storage: the first runtime
-policy requires the original owner to have more than one extra slot beyond the
-copied selection. Native entries still cache those immutable owner values once.
+precede it at entry. The same writer proof applies to parameters and local bindings.
+The bounded selection covers strict ordinary leaf closures whose only lexical
+operations read initialized bindings from one creator. Object values preserve their
+identity; immutability applies to the binding, not the object's properties.
+
+Native activations can keep captured bindings in rooted frame slots and copy them
+directly into eligible closures. A closure requiring shared lexical storage instead
+materializes the owner environment, including the current frame-held values. Later
+reads and writes use that shared environment. Direct closure entries that borrow the
+owner retain their environment requirement. This removes an owner allocation when
+all escaping closures can snapshot their bindings.
+
+When an incoming owner already has heap storage, ordinary closure construction
+copies only a sparse selection that reduces retained storage. Other closures keep
+the owner, and native entries cache its proven immutable values once per invocation.
 
 Shared value descriptors identify owner/slot pairs. Owner and value metadata share
 a cold layout record, preserving the hot function record's size and dispatch offsets.

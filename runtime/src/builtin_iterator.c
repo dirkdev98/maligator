@@ -1181,6 +1181,20 @@ static bool mal_vm_iterator_try_step_in_place(
     }
 }
 
+static bool mal_vm_iterator_result_get(
+    MalVm *vm, MalValue result, const byte *name, MalHotIntrinsicKey key, MalValue *out
+) {
+    MalObject *object = mal_value_to_object(result);
+    if (object->header.type == MAL_HEAP_OBJECT) {
+        MalPropertyLookup own = mal_object_get_own_static(vm, object, name);
+        if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+            *out = own.desc.value;
+            return true;
+        }
+    }
+    return mal_vm_get_property(vm, result, mal_intrinsic_hot_string_key(vm, key), out);
+}
+
 bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out) {
     *value_out = mal_value_new_undefined();
     *done_out = false;
@@ -1236,7 +1250,7 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
     mal_gc_root(&result_span, &result, 1);
 
     MalValue done;
-    if (!mal_vm_get_property(vm, result, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_DONE), &done)) {
+    if (!mal_vm_iterator_result_get(vm, result, (const byte *) "done", MAL_HOT_KEY_DONE, &done)) {
         mal_gc_unroot(&result_span);
         return false;
     }
@@ -1247,8 +1261,8 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
         return true;
     }
 
-    bool ok = mal_vm_get_property(
-        vm, result, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_VALUE), value_out);
+    bool ok = mal_vm_iterator_result_get(
+        vm, result, (const byte *) "value", MAL_HOT_KEY_VALUE, value_out);
     mal_gc_unroot(&result_span);
     return ok;
 }

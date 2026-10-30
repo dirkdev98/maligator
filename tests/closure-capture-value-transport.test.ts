@@ -14,6 +14,7 @@ import {
 import type { NativeCaptureAccessPlan } from "../src/compiler/target/lower-native-captures.ts";
 import {
 	lowerNativeStorage,
+	validateNativeProgramStorage,
 	validateNativeStorage,
 } from "../src/compiler/target/lower-native-storage.ts";
 import {
@@ -30,7 +31,7 @@ import type {
 } from "../src/compiler/target/runtime-image.ts";
 import { testProgramImage } from "./helpers/program-image.ts";
 
-function captureImage(copied = true) {
+function captureImage(copied = true, createsClosure = false) {
 	const child: BytecodeFunction = {
 		nameStringIndex: -1,
 		isGenerator: false,
@@ -72,7 +73,9 @@ function captureImage(copied = true) {
 		closureCaptureOwners: [],
 		closureCaptureValues: undefined,
 		instructions: [
-			{ opcode: "CREATE_UNDEFINED", dst: 0 },
+			createsClosure
+				? { opcode: "CREATE_FUNCTION", dst: 0, functionIndex: 0 }
+				: { opcode: "CREATE_UNDEFINED", dst: 0 },
 			{ opcode: "RETURN", value: 0 },
 		],
 		positions: [0, 0],
@@ -318,6 +321,36 @@ describe("immutable closure capture artifact transport", () => {
 });
 
 describe("persisted native capture access contract", () => {
+	it("round-trips closure creation from frame-held captures", () => {
+		const image = lowerNativeStorage(captureImage(true, true));
+		const owner = image.native.functions[1]!;
+		expect(owner.storage!.captures.copiedClosureIps).toEqual(
+			owner.body.instructions.flatMap((op, ip) =>
+				op.opcode === "CREATE_FUNCTION" ? [ip] : [],
+			),
+		);
+		expect(owner.storage!.captures.copiedClosureIps.length).toBeGreaterThan(0);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.native.functions[1]!.storage!.captures).toEqual(
+			owner.storage!.captures,
+		);
+	});
+
+	it("withdraws frame-copy admission when a child loses its immutable capture proof", () => {
+		const image = lowerNativeStorage(captureImage(true, true));
+		const child = image.native.functions[0]!;
+		const changed = {
+			...image.native,
+			functions: [
+				{ ...child, body: { ...child.body, closureCaptureValues: undefined } },
+				...image.native.functions.slice(1),
+			],
+		};
+		expect(() =>
+			validateNativeProgramStorage(changed, image.runtime.stringConstants),
+		).toThrow(/invalid or stale storage plan/);
+	});
+
 	it("round-trips canonical and typed entry choices while preserving copied display order", () => {
 		const image = captureImage();
 		const fn = image.native.functions[0]!;

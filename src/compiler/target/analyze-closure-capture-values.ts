@@ -47,13 +47,8 @@ export function analyzeClosureCaptureValues(
 	program: Pick<ExecutionProgram, "core" | "context" | "functionMap">,
 ): ProgramImage {
 	const { core, context, functionMap } = program;
-	if (
-		context.facts.closure.sourceClosure.kind !== "known" ||
-		context.data.singleAssignmentCapturedSlots.length === 0
-	)
-		return image;
+	if (context.facts.closure.sourceClosure.kind !== "known") return image;
 	const live = functionMap.executionToCore;
-	const immutable = new Set(context.data.singleAssignmentCapturedSlots.map(captureKey));
 	const creations = new Map<number, Array<Site>>();
 	const stores = new Map<string, Array<Site>>();
 	const aliases = new Set<string>();
@@ -184,7 +179,7 @@ export function analyzeClosureCaptureValues(
 		const known = initializers.get(key);
 		if (known !== undefined) return known ?? undefined;
 		initializers.set(key, null);
-		if (!immutable.has(key) || aliases.has(key)) return undefined;
+		if (aliases.has(key)) return undefined;
 		const owner = core.function(slot.owner as CoreFunctionId);
 		if (owner.isAsync || owner.isGenerator) return undefined;
 		let initialized: CoreInstructionId | undefined;

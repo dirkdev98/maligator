@@ -3602,6 +3602,8 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32
 MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind, MalValue needle, MalValue from_index);
 
 MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env);
+/** Copy certified immutable captures from rooted activation slots into the closure cell. */
+MalValue mal_vm_create_function_from_frame(MalVm *vm, i32 function_index, const MalValue *values);
 
 /**
  * Whether the scope chain from `creation_env` starts with every capture owner of

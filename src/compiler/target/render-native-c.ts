@@ -6393,6 +6393,7 @@ function emitBody(
 	stringComparisons: ReadonlyArray<NativeStringComparisonPlan> = [],
 ): EmittedBody | null {
 	const elided = new Set(elidedPureIps);
+	const copiedClosures = new Set(analysis.captures.copiedClosureIps);
 	const unreachable = new Set(controlFlow?.unreachableIps);
 	const branchTargets = new Map(
 		controlFlow?.branches.map(({ instructionIp, targetIp }) => [instructionIp, targetIp]),
@@ -7088,6 +7089,7 @@ function emitBody(
 		functionIndex,
 		directClosures,
 		captureShadow,
+		copiedClosure: undefined,
 		fixedCaptureOwners: stableCaptureOwners,
 		requiredCaptureOwners,
 		copiedCaptures,
@@ -7633,6 +7635,7 @@ function emitBody(
 		emittedInstructions.add(ip);
 		let operatorMaskEmitted = false;
 		instructionContext.nativePlan = nativeInstructions[ip];
+		instructionContext.copiedClosure = copiedClosures.has(ip);
 		instructionContext.facts = nativeFacts?.[ip];
 		instructionContext.profileSiteId = fn.profileSiteIds?.[ip];
 		instructionContext.profile = instructionProfile;
@@ -8185,6 +8188,7 @@ interface NativeInstructionContext {
 	/** The activation's memo of each chain test, by creation ip; equal layouts share one. */
 	readonly closureChainTests?: ReadonlyMap<number, string>;
 	readonly captureShadow?: NativeCaptureShadow;
+	readonly copiedClosure?: boolean;
 	readonly fixedCaptureOwners?: ReadonlySet<number>;
 	readonly requiredCaptureOwners?: ReadonlySet<number>;
 	readonly copiedCaptures?: ReadonlyMap<string, number>;
@@ -8493,6 +8497,7 @@ class NativeInstructionEmission {
 			functionIndex: this.context.functionIndex,
 			directClosures: this.context.directClosures,
 			captureShadow: this.context.captureShadow,
+			copiedClosure: this.context.copiedClosure,
 			fixedCaptureOwners: this.context.fixedCaptureOwners,
 			requiredCaptureOwners: this.context.requiredCaptureOwners,
 			copiedCaptures: this.context.copiedCaptures,
@@ -13485,6 +13490,18 @@ class NativeInstructionEmission {
 			}
 			case "CREATE_FUNCTION": {
 				const create = `mal_vm_op_create_function(vm, ${this.context.relocation.functionIndex(instruction.functionIndex)}, env)`;
+				const shadow = this.context.captureShadow;
+				const state = shadow?.plan.states[this.ip] ?? ENVIRONMENT_PRESENT;
+				if (
+					this.context.copiedClosure &&
+					shadow !== undefined &&
+					state & ENVIRONMENT_ABSENT
+				) {
+					const copy = `mal_vm_create_function_from_frame(vm, ${this.context.relocation.functionIndex(instruction.functionIndex)}, &__gc_slots[${shadow.base}])`;
+					return [
+						`r${instruction.dst} = ${state === ENVIRONMENT_ABSENT ? copy : `__capture_env_ready ? ${create} : ${copy}`};`,
+					];
+				}
 				const closure =
 					this.context.nativePlan?.kind === "direct-closure"
 						? this.context.directClosures?.get(

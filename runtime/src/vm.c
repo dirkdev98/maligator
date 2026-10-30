@@ -4897,6 +4897,17 @@ __attribute__((noinline)) static MalValue mal_vm_call_cached_value_fallback(
     // The bound call's probe stands for its target's dispatch.
     if (mal_value_is_bound_function_object(callee)) {
         MalValue inline_args[MAL_BOUND_INLINE_ARGS];
+        MalBoundFunctionObject *bound = mal_value_to_bound_function_object(callee);
+        if (!mal_value_is_bound_function_object(bound->target) &&
+            bound->bound_count <= (i32) countof(inline_args) - arg_count) {
+            if (bound->bound_count == 0)
+                return mal_vm_dispatch_cached_value(
+                    vm, bound->target, bound->bound_this, args, arg_count);
+            for (i32 i = 0; i < bound->bound_count; i++) inline_args[i] = bound->bound_args[i];
+            for (i32 i = 0; i < arg_count; i++) inline_args[bound->bound_count + i] = args[i];
+            return mal_vm_dispatch_cached_value(
+                vm, bound->target, bound->bound_this, inline_args, bound->bound_count + arg_count);
+        }
         MalBoundResolution resolution = mal_bound_function_object_resolve(
             callee, this_value, args, arg_count, true, inline_args, countof(inline_args));
         MalValue value = mal_vm_dispatch_cached_value(

@@ -238,11 +238,16 @@ describe("persistent immutable closure capture proof", () => {
 		).toBeUndefined();
 	});
 
-	it.each([{ closed: false }, { fact: false }])(
-		"requires source closure and a source immutability fact: %j",
-		(options) => {
-			const { image, execution } = proof("valid", options);
-			expect(analyzeClosureCaptureValues(image, execution)).toBe(image);
-		},
-	);
+	it("proves a single initialized writer without a source const declaration", () => {
+		const { image, execution, leafIndex } = proof("valid", { fact: false });
+		expect(
+			analyzeClosureCaptureValues(image, execution).runtime.functions[leafIndex]!
+				.closureCaptureValues,
+		).toBeDefined();
+	});
+
+	it("requires source closure before excluding unknown writers", () => {
+		const { image, execution } = proof("valid", { closed: false });
+		expect(analyzeClosureCaptureValues(image, execution)).toBe(image);
+	});
 });

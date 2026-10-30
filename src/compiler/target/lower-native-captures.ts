@@ -1,3 +1,4 @@
+import type { NativeFunctionPlan } from "./program-image.ts";
 import { vmExceptionHandlerTargets } from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
@@ -8,15 +9,17 @@ export interface NativeCaptureAccessPlan {
 		readonly lookupIndex: number;
 	}>;
 	readonly copiedValues: NonNullable<BytecodeFunction["closureCaptureValues"]>;
+	readonly copiedClosureIps: ReadonlyArray<number>;
 	readonly initialization: "lookup" | "complete-layout";
 	readonly layout: ReadonlyArray<number>;
 	readonly fallback: "owner-lookup";
 }
 
 export function selectNativeCaptureAccess(
-	fn: BytecodeFunction,
-	functionIndex: number,
+	native: Pick<NativeFunctionPlan, "body" | "functionIndex" | "instructions">,
+	functions: ReadonlyArray<BytecodeFunction> = [],
 ): NativeCaptureAccessPlan {
+	const { body: fn, functionIndex } = native;
 	const copiedValues =
 		fn.strict && !fn.isGenerator && !fn.isAsync && fn.capturedCount === 0
 			? (fn.closureCaptureValues ?? [])
@@ -55,6 +58,28 @@ export function selectNativeCaptureAccess(
 		[...owners].every((owner) => layout.includes(owner));
 	return {
 		ownsEnvironment,
+		copiedClosureIps:
+			ownsEnvironment &&
+			fn.capturedCount <= 16 &&
+			!fn.isGenerator &&
+			!fn.isAsync &&
+			!fn.mappedArguments
+				? fn.instructions.flatMap((instruction, ip) => {
+						if (
+							instruction.opcode !== "CREATE_FUNCTION" ||
+							native.instructions[ip]?.kind === "direct-closure"
+						)
+							return [];
+						const target = functions[instruction.functionIndex];
+						const values = target?.closureCaptureValues;
+						return values !== undefined &&
+							values.length > 0 &&
+							values.length <= 16 &&
+							values.every((value) => value.ownerFunctionIndex === functionIndex)
+							? [ip]
+							: [];
+					})
+				: [],
 		owners: [...owners]
 			.sort((a, b) => a - b)
 			.map((ownerFunctionIndex) => ({
@@ -75,6 +100,10 @@ export function nativeCaptureAccessPlansMatch(
 	return (
 		stored !== undefined &&
 		stored.ownsEnvironment === selected.ownsEnvironment &&
+		stored.copiedClosureIps.length === selected.copiedClosureIps.length &&
+		stored.copiedClosureIps.every(
+			(ip, index) => ip === selected.copiedClosureIps[index],
+		) &&
 		stored.initialization === selected.initialization &&
 		stored.fallback === selected.fallback &&
 		stored.layout.length === selected.layout.length &&
@@ -99,9 +128,8 @@ export function nativeCaptureAccessPlansMatch(
 }
 
 /**
- * Where an activation that owns its capture environment may run before creating it.
- * Until an instruction needs the environment object, captured slots live in rooted
- * frame slots, so calls that return before creating a closure allocate nothing.
+ * Until a closure needs shared storage, captured bindings live in rooted frame
+ * slots. Certified immutable closures can copy those values without a heap owner.
  */
 export interface NativeLazyCaptureEnvironment {
 	/** Per instruction: ENVIRONMENT_ABSENT and/or ENVIRONMENT_PRESENT on arrival. */
@@ -133,6 +161,9 @@ export function planLazyCaptureEnvironment(
 	)
 		return undefined;
 	const count = fn.instructions.length;
+	const copies = new Set(captures.copiedClosureIps);
+	const needsEnvironment = (ip: number) =>
+		!copies.has(ip) && needsCaptureEnvironmentObject(fn.instructions[ip]!);
 	const handlers =
 		fn.handlers.length === 0 ? [] : vmExceptionHandlerTargets(count, fn.handlers);
 	const successors = (ip: number): Array<number> => {
@@ -158,7 +189,7 @@ export function planLazyCaptureEnvironment(
 			const ip = pending.pop()!;
 			if (ip < 0 || ip >= count || (states[ip]! & state) !== 0) continue;
 			states[ip]! |= state;
-			if (stopAtCreation && needsCaptureEnvironmentObject(fn.instructions[ip]!)) continue;
+			if (stopAtCreation && needsEnvironment(ip)) continue;
 			pending.push(...successors(ip));
 		}
 	};
@@ -169,11 +200,8 @@ export function planLazyCaptureEnvironment(
 	);
 	if (!returnsWithout) return undefined;
 	const created: Array<number> = [];
-	for (const [ip, instruction] of fn.instructions.entries())
-		if (
-			(states[ip]! & ENVIRONMENT_ABSENT) !== 0 &&
-			needsCaptureEnvironmentObject(instruction)
-		)
+	for (const [ip] of fn.instructions.entries())
+		if ((states[ip]! & ENVIRONMENT_ABSENT) !== 0 && needsEnvironment(ip))
 			created.push(...successors(ip));
 	walk(created, ENVIRONMENT_PRESENT, false);
 	return {

@@ -9,7 +9,7 @@ function invoke(target, args) {
 		case 3:
 			return target(args[0], args[1], args[2]);
 		default:
-			throw new Error("unsupported arity");
+			return target(...args);
 	}
 }
 
@@ -19,6 +19,22 @@ function strictTarget() {
 }
 
 const first = strictTarget.bind({ label: "first" }, { id: 1 }, { id: 2 });
+console.log(JSON.stringify(invoke(first, [{ id: 3 }])));
+console.log(
+	JSON.stringify(
+		invoke(
+			first,
+			Array.from({ length: 20 }, (_, id) => ({ id })),
+		),
+	),
+);
+for (const count of [13, 14]) {
+	const boundary = strictTarget.bind(
+		{ label: `prefix${count}` },
+		...Array.from({ length: count }, (_, id) => ({ id })),
+	);
+	console.log(JSON.stringify(invoke(boundary, [{ id: 31 }, { id: 32 }, { id: 33 }])));
+}
 const nested = first.bind({ label: "ignored" }, { id: 3 }, { id: 4 });
 console.log(JSON.stringify(invoke(nested, [{ id: 5 }, { id: 6 }, { id: 7 }])));
 const wide = nested.bind(

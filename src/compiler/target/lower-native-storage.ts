@@ -92,7 +92,7 @@ import {
 	vmInstructionReadRegisters,
 	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
-import type { BytecodeInstruction } from "./runtime-image.ts";
+import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
 export interface NativeScalarStoragePlan {
 	readonly expressionIps: ReadonlyArray<number>;
@@ -425,7 +425,7 @@ function storageControlFlow(
 function storageBodyFacts(
 	native: NativeFunctionPlan,
 	facts = analyzeNativeBodyFacts(native.body),
-	captures = selectNativeCaptureAccess(native.body, native.functionIndex),
+	captures = selectNativeCaptureAccess(native),
 ): NativeStorageBodyFacts {
 	const fn = native.body;
 	const { reads, writes, jumpTargets, projection } = facts;
@@ -1678,8 +1678,13 @@ export function lowerNativeFunctionStorage(
 	entries: NativeEntryLookup = new Map(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	stackRoots: NativeStackRoots = "precise",
+	functions: ReadonlyArray<BytecodeFunction> = [],
 ): NativeFunctionPlan {
-	const body = storageBodyFacts(native);
+	const body = storageBodyFacts(
+		native,
+		undefined,
+		selectNativeCaptureAccess(native, functions),
+	);
 	return {
 		...native,
 		storage: lowerStorage(
@@ -1737,6 +1742,7 @@ export function lowerNativeStorage(
 				entries,
 				image.runtime.stringConstants,
 				stackRoots,
+				image.runtime.functions,
 			),
 		),
 	};
@@ -1751,7 +1757,9 @@ export function validateNativeProgramStorage(
 ): void {
 	if (certifiedNativeStorage.get(native) === stringConstants) return;
 	const entries = nativeEntryLookup(native.functions);
-	for (const fn of native.functions) validateNativeStorage(fn, entries, stringConstants);
+	const functions = native.functions.map((fn) => fn.body);
+	for (const fn of native.functions)
+		validateNativeStorage(fn, entries, stringConstants, functions);
 	certifyNativeStorage(native, stringConstants);
 }
 
@@ -1759,10 +1767,15 @@ export function validateNativeStorage(
 	native: NativeFunctionPlan,
 	entries: NativeEntryLookup = new Map(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	functions: ReadonlyArray<BytecodeFunction> = [],
 ): void {
 	validateNativeInstructionFacts(native.body, native.facts, native.instructions);
 	// Recompute body facts at this trust boundary; callers can replace or mutate an image.
-	const body = storageBodyFacts(native);
+	const body = storageBodyFacts(
+		native,
+		undefined,
+		selectNativeCaptureAccess(native, functions),
+	);
 	const sameNumbers = (left: ReadonlyArray<number>, right: ReadonlyArray<number>) =>
 		left.length === right.length && left.every((value, index) => value === right[index]);
 	const sameProjections = (
