@@ -5,7 +5,9 @@
 #include <string.h>
 
 #include "gc.h"
+#include "heap.h"
 #include "perf_stats.h"
+#include "profile.h"
 
 // Diagnostic counters describe the isolate on the current mutator thread.
 
@@ -431,6 +433,14 @@ MalObject *mal_object_try_new_shaped(
     return object;
 }
 
+// Owned slot arrays are raw heap cells like dictionary entries: growing a record one
+// property at a time otherwise paid a libc malloc, realloc and free per step.
+static MalValue *mal_object_slots_alloc(u32 capacity) {
+    return mal_heap_alloc_raw_profiled(
+        mal_gc_current_heap(), sizeof(MalValue) * capacity,
+        MAL_PROFILE_ALLOCATION_FAMILY_OBJECT);
+}
+
 void mal_object_set_shaped_values(
     MalObject *object, MalShape *shape, const MalValue *values, u32 count
 ) {
@@ -445,8 +455,7 @@ void mal_object_set_shaped_values(
         object->shape = shape;
         return;
     }
-    MalValue *slots = malloc(sizeof(MalValue) * count);
-    if (slots == nullptr) abort();
+    MalValue *slots = mal_object_slots_alloc(count);
     memcpy(slots, values, sizeof(MalValue) * count);
     mal_object_set_fields_pointer(object, slots);
     object->shape = shape;
@@ -470,15 +479,15 @@ void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
     }
     // Spare slots stay invisible until callers initialize them and publish the shape.
     if (object->slots_owned) {
-        MalValue *slots = realloc(mal_object_fields(object), sizeof(MalValue) * capacity);
-        if (slots == nullptr) abort();
+        MalValue *slots = gc_realloc_raw_profiled(
+            mal_gc_current_heap(), mal_object_fields(object), sizeof(MalValue) * capacity,
+            MAL_PROFILE_ALLOCATION_FAMILY_OBJECT);
         mal_object_set_fields_pointer(object, slots);
         object->slot_capacity = (u8) capacity;
         return;
     }
 
-    MalValue *slots = malloc(sizeof(MalValue) * capacity);
-    if (slots == nullptr) abort();
+    MalValue *slots = mal_object_slots_alloc(capacity);
     MalValue *old_slots = mal_object_fields(object);
     for (u32 i = 0; i < old_count; ++i) {
         slots[i] = old_slots[i];
@@ -500,7 +509,7 @@ void mal_object_record_slot_dictionary_migration(MalObject *object) {
 
 void mal_object_release_slots(MalObject *object) {
     if (object->slots_owned) {
-        free(mal_object_fields(object));
+        gc_free_raw(mal_gc_current_heap(), mal_object_fields(object));
     }
     if (object->storage_kind != MAL_OBJECT_COMPACT) {
         mal_object_storage(object)->fields = nullptr;
