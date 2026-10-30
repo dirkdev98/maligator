@@ -98,7 +98,7 @@ describe("class read-accessor lowering", () => {
 		).toBe(false);
 	});
 
-	it.each(['"value"', "-1", "1.5", "4294967295", "undefined", "null", "true"])(
+	it.each(["-1", "1.5", "4294967295", "undefined", "null", "true"])(
 		"retains the ordinary path for an indexed argument that cannot admit: %s",
 		(key) => {
 			const input = lowerSemanticProgramToCore(
@@ -117,6 +117,42 @@ describe("class read-accessor lowering", () => {
 		},
 	);
 
+	it.each(["value", "0", "-0", "__proto__"])(
+		"binds the literal string argument %s to a named read with the original fallback",
+		(key) => {
+			const input = lowerSemanticProgramToCore(
+				semantic(
+					source.replaceAll(
+						"receiver.read(index)",
+						`receiver.read(${JSON.stringify(key)})`,
+					),
+				),
+			);
+			optimizeCore(input, { verification: "per-pass" });
+			const operations = coreOperations(coreFunctionNamed(input.program, "pair")!);
+			expect(
+				operations.some(
+					({ opcode, attributes }) =>
+						opcode === "probeRead" &&
+						attributes.readKind === "named" &&
+						input.program.stringConstantText(attributes.stringIndex as number) === key,
+				),
+			).toBe(true);
+			expect(
+				operations.some(
+					({ opcode, attributes }) =>
+						opcode === "probeRead" && attributes.readKind === "indexed",
+				),
+			).toBe(false);
+			expect(
+				operations.some(
+					({ opcode, attributes }) =>
+						opcode === "call" && attributes.guardedInlineFallback === true,
+				),
+			).toBe(true);
+		},
+	);
+
 	it.each(["0", "-0"])("admits a supported constant array index: %s", (key) => {
 		const input = lowerSemanticProgramToCore(
 			semantic(source.replaceAll("receiver.read(index)", `receiver.read(${key})`)),
@@ -128,6 +164,33 @@ describe("class read-accessor lowering", () => {
 					opcode === "probeRead" && attributes.readKind === "indexed",
 			),
 		).toBe(true);
+	});
+
+	it("retains named-read owners while checking numeric terminal values on each visit", () => {
+		const input = lowerSemanticProgramToCore(
+			semantic(`class Domains {
+			#values;
+			constructor(values) { this.#values = values; }
+			version(key) { return this.#values[key]; }
+		}
+		function sum(receiver, length) {
+			let total = 0;
+			for (let index = 0; index < length; index++) total = (total + receiver.version("body")) | 0;
+			return total;
+		}
+		globalThis.sum = sum;`),
+		);
+		const { report } = optimizeCore(input, {
+			verification: "per-pass",
+			instrumentation: "counters",
+		});
+		const loops =
+			report.transforms.accessorLoopApplications?.filter((site) => site.name === "sum") ??
+			[];
+		expect(loops).toHaveLength(1);
+		expect(loops[0]!.retainedPrefixes.length).toBeGreaterThan(0);
+		expect(loops[0]!.numericReads.length).toBeGreaterThan(0);
+		verifyCoreProgram(input.program, undefined, input.context);
 	});
 
 	it("preserves dominance when earlier candidates change a planned caller in the same batch", () => {

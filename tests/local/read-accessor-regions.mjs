@@ -330,4 +330,80 @@ try {
 	literalBrandThrew = error instanceof TypeError;
 }
 check(literalBrandThrew, "literal wrong private receiver");
+function sumDomains(receiver, length) {
+	let total = 0;
+	for (let index = 0; index < length; index++)
+		total = (total + receiver.version("body")) | 0;
+	return total;
+}
+function countDomainMatches(receiver, length) {
+	let total = 0;
+	for (let index = 0; index < length; index++)
+		if (receiver.version("body") === 7) total++;
+	return total;
+}
+const loopDomains = new Domains({ body: 7 });
+check(sumDomains(loopDomains, 4) === 28, "named terminal numeric loop");
+loopDomains.replace({ body: "2" });
+check(
+	sumDomains(loopDomains, 4) === 2222,
+	"string arithmetic takes original coercion path",
+);
+let coercions = 0;
+loopDomains.replace({
+	body: {
+		[Symbol.toPrimitive]() {
+			coercions++;
+			return 7;
+		},
+	},
+});
+check(
+	sumDomains(loopDomains, 4) === 28 && coercions === 4,
+	"read-result coercion happens once per iteration",
+);
+check(
+	countDomainMatches(loopDomains, 4) === 0 && coercions === 4,
+	"strict comparison does not coerce",
+);
+let loopGets = 0;
+loopDomains.replace({
+	get body() {
+		return ++loopGets;
+	},
+});
+check(
+	sumDomains(loopDomains, 4) === 10 && loopGets === 4,
+	"terminal getters run every iteration",
+);
+let loopTraps = 0;
+loopDomains.replace(
+	new Proxy(
+		{},
+		{
+			get() {
+				return ++loopTraps;
+			},
+		},
+	),
+);
+check(
+	sumDomains(loopDomains, 4) === 10 && loopTraps === 4,
+	"terminal proxy reads are not replayed",
+);
+loopDomains.replace({
+	body: {
+		[Symbol.toPrimitive]() {
+			throw new Error("coercion");
+		},
+	},
+});
+let coercionThrew = false;
+try {
+	sumDomains(loopDomains, 4);
+} catch (error) {
+	coercionThrew = error.message === "coercion";
+}
+check(coercionThrew, "terminal coercion exception reaches caller");
+check(sumDomains(null, 0) === 0, "empty named-read loop leaves receiver untouched");
 console.log("read-accessor-regions PASS");

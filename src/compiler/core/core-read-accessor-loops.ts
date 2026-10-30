@@ -4,6 +4,7 @@ import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { ReadRegion } from "./core-read-accessor-expansion.ts";
+import { coreAccessorTerminalReadIndex } from "./core-read-accessors.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export interface CoreReadAccessorLoopPlan {
@@ -12,6 +13,7 @@ export interface CoreReadAccessorLoopPlan {
 	readonly prefixes: ReadonlyArray<string>;
 	readonly retainedPrefixes: ReadonlyArray<string>;
 	readonly numericGuards: ReadonlyArray<CoreValueId>;
+	readonly numericReads: ReadonlySet<CoreInstructionId>;
 	readonly invalidators: ReadonlySet<CoreInstructionId>;
 	readonly arrayWrites: ReadonlyArray<{
 		readonly instruction: CoreInstructionId;
@@ -62,8 +64,8 @@ export function coreReadAccessorLoopPlan(
 	charge: (work: number) => void,
 ): CoreReadAccessorLoopPlan | undefined {
 	if (
-		![...region.calls.values()].some(({ summary }) =>
-			summary.reads.some((read) => read.kind === "indexed"),
+		![...region.calls.values()].some(
+			({ reads }) => coreAccessorTerminalReadIndex(reads) > 0,
 		)
 	)
 		return undefined;
@@ -172,8 +174,11 @@ export function coreReadAccessorLoopPlan(
 			if (call === undefined || path(args[0]!) === undefined) return undefined;
 			let parent = path(args[1]!);
 			if (parent === undefined) return undefined;
-			for (const read of call.summary.reads) {
-				if (read.kind === "indexed") break;
+			const terminal = coreAccessorTerminalReadIndex(call.reads);
+			if (terminal < 1) return undefined;
+			for (const read of call.reads.slice(0, terminal)) {
+				if (read.kind === "indexed")
+					throw new Error("Unexpected indexed accessor prefix");
 				parent = accessorPrefixKey(
 					parent,
 					read.kind,
@@ -181,7 +186,6 @@ export function coreReadAccessorLoopPlan(
 				);
 				prefixes.add(parent);
 			}
-			if (!call.summary.reads.some((read) => read.kind === "indexed")) return undefined;
 			retainedPrefixes.add(parent);
 		} else if (opcode === "loadPrivate") return undefined;
 	}
@@ -209,6 +213,7 @@ export function coreReadAccessorLoopPlan(
 		if (needed) retainedPrefixes.add(paths.get(value)!);
 	}
 	const numericGuards = new Set<CoreValueId>();
+	const numericReads = new Set<CoreInstructionId>();
 	const checked = new Map<CoreValueId, boolean>();
 	const numeric = (value: CoreValueId, remaining = 32): boolean => {
 		charge(1);
@@ -224,6 +229,12 @@ export function coreReadAccessorLoopPlan(
 		if (fn.kernel.valueDefinitionKind(resolved) === 1) {
 			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(resolved));
 			const opcode = fn.instructionOpcodeName(definition);
+			if (opcode === "call" && region.calls.has(definition)) {
+				// A read can change type while its admitted owner stays the same.
+				numericReads.add(definition);
+				checked.set(resolved, true);
+				return true;
+			}
 			const okay =
 				(opcode === "binary" ||
 					(opcode === "unary" &&
@@ -286,6 +297,11 @@ export function coreReadAccessorLoopPlan(
 				}
 			}
 			if (
+				opcode === "binary" &&
+				["===", "!=="].includes(fn.instructionAttributes(instruction).operator as string)
+			)
+				continue;
+			if (
 				(opcode === "binary" ||
 					(opcode === "unary" &&
 						["+", "-", "~", "increment", "decrement"].includes(
@@ -299,13 +315,14 @@ export function coreReadAccessorLoopPlan(
 				invalidators.add(instruction);
 		}
 	}
-	if (numericGuards.size > 8) return undefined;
+	if (numericGuards.size + numericReads.size > 8) return undefined;
 	return {
 		loop,
 		paths,
 		prefixes: [...prefixes],
 		retainedPrefixes: [...retainedPrefixes],
 		numericGuards: [...numericGuards],
+		numericReads,
 		invalidators,
 		arrayWrites,
 	};
