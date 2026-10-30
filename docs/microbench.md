@@ -23,7 +23,7 @@ duplicates, unknown IDs, extra prose, and multiple command lines are rejected.
 Cases added by the PR are available because its catalog and fixtures supply the
 workloads for both compilers.
 
-A bare `/microbench` runs the existing 13 call, record, allocation, and property
+A bare `/microbench` runs the default call, record, allocation, and property
 controls. It does not select every catalog entry. Comments use seven pairs and a
 40-minute comparison budget including builds. New comments trigger runs; editing
 an existing comment does not. A push to the PR does not automatically rerun this
@@ -44,7 +44,7 @@ branch on `main`; choose the candidate with exactly one of these inputs:
 | ---------------- | ------------------------------------------------------------------------------------------- |
 | `pr`             | An open PR number, including a fork PR                                                      |
 | `ref`            | A branch, tag, or full commit SHA in this repository                                        |
-| `cases`          | Comma-separated case IDs; empty uses the 13 default controls                                |
+| `cases`          | Comma-separated case IDs; empty uses the runner's default controls                          |
 | `pairs`          | Alternating pairs per case, from 3 to 21; default 7                                         |
 | `budget_seconds` | Build and measurement budget, from 60 to 3000; default 2400                                 |
 | `diagnostics`    | Keep production ELF, symbol companions, assembly, and optional perf counters; default false |

@@ -81,16 +81,6 @@ hot consumer needs a stronger proof. An analysis contract may land before its
 consumer with precision, invalidation, and cost tests; it is not a runtime speedup
 until the consumer admits real sites and measurements establish a benefit.
 
-- [x] Decouple `loop-scalar-representation-selection` storage webs. Phi arguments
-      and identity moves share width decisions; arithmetic discovery does not force
-      a floating accumulator and its counter into the same representation. Whole-value
-      induction ranges include the final update. Shared constants keep their original
-      storage and are rematerialized at typed boundaries, including exception arguments.
-      Signed arithmetic and updates retain integer views in full bodies, scalar
-      expressions and eligible fast entries; floating operands and unsafe signed
-      remainder/division retain Number semantics. Suspension boundaries box scalar
-      observations. Loops with exceptional control remain outside induction admission.
-
 ## Native SSA storage
 
 The independent target boundary and current storage contract are recorded in
@@ -611,12 +601,6 @@ Arithmetic work should support these paths or fix correctness defects.
       relational primitives, shifts and Number exponentiation use noncollecting
       helpers. String alternatives in addition and lexical String pairs retain
       fallback while mixed numeric paths survive those same operand unions.
-- [x] Normalize primitive conversion calls from semantic kind unions. Eligible
-      `Number` and `String` calls use unary conversions, carrying kind and effect
-      proofs into native storage, full entries and frameless numeric paths.
-      Primitive conversions avoid builtin and unary dispatch while retaining String
-      allocation polls, extra argument effects and distinct Symbol, BigInt,
-      omitted-argument, construction and spread semantics.
 - [ ] Shrink the largest inline expansions in generated code. Uniform tagged
       field slots and the one-compare Number decode cut the self-compiler's text
       from 55.0 to 49.9 MB; the inline static load probe is now about 19
@@ -971,11 +955,6 @@ iterator cursor is not, by itself, permission to delete its language object.
       fields 75); a per-site shape row would make the private probe a single
       compare.
 
-- [x] Let integer loop regions hold a numeric fusion whose ends are both inside.
-      Guard failure and polling restore the saved iteration and resume at its
-      header, where the original fusion starts again. Compiler artifacts preserve
-      profile sites and instruction-site maps, so restoration keeps the same
-      admission boundary for profiled and unprofiled bodies.
 - [ ] Widen numeric loop regions beyond plain Array element and record sums.
       Index and for-of loops over Arrays now keep their sums in f64 locals,
       including fields of record elements (`sx += p.x` 5.7 to 1.7 ns per element,
@@ -1073,6 +1052,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       code-size tradeoffs as separate acceptance dimensions.
 
 ## Compiler infrastructure
+
+- [ ] Complete local scheduler consolidation by moving instruction-local
+      canonicalization, proof, and memory rules into dirty opcode/block queues where
+      their dependencies permit. Keep function CFG, loop, and memory transforms
+      with the phase manager, and program flow, cross-call selection, and late
+      recipes with their program owners.
 
 - [ ] Extend the shared bytecode-operation and builtin descriptors to generate operand
       schemas, lowering completeness, effects, representation constraints, safepoint

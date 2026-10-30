@@ -25,8 +25,9 @@ build configurations and verifies the current inputs before running Node as a
 semantic oracle. It removes ambient `MAL_*` overrides and fixes the process GC
 budget for both sides.
 
-The default plan contains 29 cases. `--cases` accepts comma-separated case names
-from the plan. One warmup pair precedes alternating measured pairs; `--runs 1` is
+The plan lists the available cases and default selection. `--cases` accepts
+comma-separated case names from it. One warmup pair precedes alternating measured
+pairs; `--runs 1` is
 a diagnostic screen, while repeated pairs support a performance conclusion.
 `report.json` and `samples.json` retain checksums, measured windows, startup and
 teardown, wall and CPU time, maximum RSS, identities and completeness. A failed or

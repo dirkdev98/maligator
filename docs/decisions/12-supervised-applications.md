@@ -17,40 +17,6 @@ unchanged full optimizer, then join before ordered publication. Cache hits and
 graphs without worker roots admit no helpers. Native-function rendering stays
 serial: that finer seam did not earn its startup and program-cloning costs.
 
-Three interleaved Node CLI pairs per workload on October 5, 2026, on an M3 Pro
-measured mean whole build wall time of 19.87 to 14.89 seconds for a dependency-heavy
-Express worker application and 112.53 to 66.51 seconds for the compiler holdout,
-reductions of 25.0% and 40.9%. Median compiler time was 112.83 to 59.46 seconds;
-the first parallel sample's longer cached native-binary phase remains included in
-the mean. All 88 application and 400 compiler translation units, native binaries
-and executed output matched. These were forced frontend compilations with seeded
-warm native runtime, object and binary caches behind identical lexical paths,
-not cold native builds or ordinary frontend cache hits.
-
-Mean whole-command CPU increased 48.5% for the application and 16.5% for the
-compiler. Application mean Node peak RSS increased 9.5%; compiler median Node
-peak RSS increased 32%. Node process peak RSS includes helper threads and excludes
-external native compiler children. It is separate from whole-command CPU and is
-not an aggregate process-tree memory peak. Ordinary unchanged builds reused the
-frontend cache and admitted no helpers; that path has no demonstrated root-overlap
-gain. Default and explicit-budget-one controls retained serial timing.
-
-Three interleaved pairs using the rebuilt native CLI on the worker application
-measured mean whole build wall time of 107.87 to 69.65 seconds with budgets one
-and three, a 35.4% reduction. Mean CPU increased 15.4% and Darwin maximum RSS
-increased 2.9%. All 89 generated translation units, eight compiler/runtime images,
-native binaries, ordered worker roots, diagnostics and executed output matched.
-These runs also forced the full frontend with identical seeded warm native caches;
-they compare budgets within the same current binary. Darwin maximum RSS is a
-command resource statistic, not a simultaneous aggregate process-tree peak.
-
-The rebuilt package passes the full build/run/dev/test command checks, including
-production root parity and cache reuse, actual profiling captures, thread/process
-selection, served development revisions and test-watch cancellation. Native
-transport lifetime and large-message checks also pass Linux ASan/UBSan. Adding the
-root compiler entry increased the packaged executable from 261.1 to 317.4 MB
-(21.5%); the budget comparison does not measure this package-size cost.
-
 Root overlap applies to eligible production builds. Non-production builds
 prepare in a background compiler; run joins preparation before a fresh application;
 dev overlaps compilation with its last good application and responsive watcher.

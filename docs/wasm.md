@@ -105,8 +105,8 @@ remain active. The tests exercise errors, recovery, limits and actual collection
 
 `npm run site:build` builds the compiler reactor, bundles the browser UI and worker,
 and embeds their assets into the standalone website binary. It requires the pinned
-Wasm toolchain described above. The compiler's 35.5 MB Wasm module is embedded only
-as its roughly 4 MB Brotli representation. Asset URLs include content hashes and
+Wasm toolchain described above. The compiler's Wasm module is embedded only
+as its Brotli representation. Asset URLs include content hashes and
 use immutable caching, strong validators, and `application/wasm` with
 `Content-Encoding: br`. The native server only serves assets named in its embedded
 manifest. The browser needs HTTPS or localhost and Brotli support.
@@ -114,7 +114,7 @@ manifest. The browser needs HTTPS or localhost and Brotli support.
 Run the binary path printed by the build with `SITE_HOST=127.0.0.1 PORT=3000`, then
 open `http://127.0.0.1:3000/explorer`. Compilation uses the same compiler pipeline as
 `npm run explore:outputs`; snippets are neither executed nor sent to the server.
-All eleven examples use the editable-source path. The worker exposes no filesystem
+Examples use the editable-source path. The worker exposes no filesystem
 preopens, network callbacks, or host runtime surfaces. Enabling a snippet's build
 settings changes compiler policy and generated output; it does not enable imports
 or those features in the compiler's own runtime.

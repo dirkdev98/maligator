@@ -1000,7 +1000,7 @@ Object completions override a base or derived receiver, including before `super(
 base primitive completions need only the construction check. Unknown or mixed
 Object bounds keep generic completion, while derived primitive/undefined and
 coroutine completions retain their checked protocols. Artifact decoding validates
-the selected strategy against current operand facts; schema 320 invalidates older
+the selected strategy against current operand facts. Contract changes invalidate older
 artifacts. This follows [ECMAScript [[Construct]]](https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ecmascript-function-objects-construct-argumentslist-newtarget).
 
 Own-field observations publish initial integer bounds through the same

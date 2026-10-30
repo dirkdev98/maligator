@@ -1,7 +1,5 @@
 # Platform catalog and execution context
 
-Status: accepted. Initial implementation: `execution` from `maligator:process`.
-
 ## Public contract
 
 Maligator APIs are ordinary JavaScript APIs first. Adopt established JavaScript and
@@ -74,10 +72,8 @@ opaque code retain their ordinary behavior rather than inheriting platform purit
 
 ## Asset boundary
 
-This change prepares reachability for statically declared assets; it does not add
-asset producers, frontend process management, `maligator:http`, or a replacement
-asset API. Future asset collection consumes the specialized program, so an
-unreachable declaration does not require its source files to exist.
+The [asset guide](../../website/docs/guides/assets.md) describes configured file
+inclusion and the `mal.assets` runtime API.
 
 ## Verification
 

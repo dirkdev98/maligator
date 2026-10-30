@@ -1,9 +1,7 @@
 # Core storage and optimizer
 
-- Status: accepted
 - Scope: canonical Core storage, mutation, analysis, optimization scheduling,
   specialization planning, target consumption, and compiler-work measurement
-- Historical reference: `81cc4d33928630573e10633fa87ed090ac64630b`
 
 ## Context
 
@@ -24,17 +22,10 @@ SemanticProgram
     -> ProgramImage
 ```
 
-The historical implementation represents functions as readonly aggregate object
-graphs. Transforms clone blocks, instructions, inputs, outputs, values, facts, and
-regions, then replace whole functions and increment one `mutationEpoch`. Analyses
-are cached by object identity and explicitly inherited across replacements. A large
-optimizer drives nested fixed-point rounds, and target lowering can still consult
-Core analyses or rediscover policy.
-
-That model makes a local edit allocate and invalidate far beyond the semantic change.
-It also obscures whether work is caused by Core optimization or by lowering Core into
-execution state. The replacement is an in-place hard cutover to stable identities,
-program-owned mutable storage, precise invalidation, and worklist scheduling.
+Stable identities, program-owned mutable storage, precise invalidation, and
+worklist scheduling keep local edits from allocating or invalidating unrelated
+functions. Separate phase measurements distinguish optimization from lowering
+Core into execution state.
 
 ## Decision
 
@@ -255,6 +246,11 @@ introduced by expansion cannot increase it. Per-site and per-function limits rem
 fixed, and development-mode budgets remain fixed. Discovery is admitted before
 expensive proofs and charged even when no usable candidate is found.
 
+Discovery and candidate selection use caller round-robin order while preserving
+priority within each caller. Global, per-caller, and per-site budgets still bound
+work. The `priority-scheduling` benchmark ablation restores global priority order
+for matched policy comparisons.
+
 Cross-call inline candidates rank estimated dispatch savings, minus added guards,
 times capped loop frequency, divided by generated-code growth. Known exact and
 guarded targets compete in the same priority class; method hints remain lower
@@ -272,9 +268,8 @@ exact and its callback calls direct or inlined. Clones run before inline discove
 in up to three rounds so a forwarding helper's clone exposes its callee; each round
 reconsiders every candidate under its share of a budget the size of the cross-call
 one, at most 16 variants per helper, and ranks clones that complete such a chain
-first. Without profiles every clone counts the same, so a smaller budget let cold
-sites take the variants hot ones needed: in TypeScript, losing the containsType
-chain alone cost about 4% more instructions.
+first. Every clone counts equally under static scheduling, so reducing the budget
+can discard useful forwarding chains.
 
 Candidate claim headers and exact costs participate in ranking and admission before
 target payloads are materialized. Rejected candidates do not receive target blocks,
@@ -317,54 +312,11 @@ result, and concise complete `--verbose` output. It is not serialized into
 `ProgramImage` or compiler artifacts unless a distinct explicit profile-report
 format is requested.
 
-### Hard cutover and broken window
+### Internal format changes
 
-This replacement does not introduce `Core2`, `LegacyCore`, old/new modes, conversion
-adapters, compatibility wrappers, feature flags, or dual optimizer paths. The
-existing Core names become the new contracts immediately. Internal cache and artifact
-identities are invalidated when their producers change; old readers are not retained.
-
-The cutover deliberately permits a broken repository between the representation
-replacement and consumer migration:
-
-1. Replacing Core storage removes the old aggregate types before frontend, optimizer,
-   verifier, and target consumers compile.
-2. Semantic construction and verification migrate directly to the store while the
-   optimizer and target remain disconnected.
-3. End-to-end compilation returns with the final optimizer entrypoint and an empty
-   registered optimization pipeline.
-4. Local, control-flow, proof, memory, interprocedural, inlining, and specialization
-   capabilities then return as worklist-based passes and analyses.
-5. Diagnostics and all normal repository gates are restored only after every active
-   old consumer has been removed.
-
-Intermediate failures in that window are recorded by subsystem. They are not hidden
-by changing VM/runtime semantics, weakening verification, adding fixture-specific
-behavior, preserving the old graph, or teaching tests to accept missing behavior.
-
-## Historical performance reference
-
-The hard-cutover reference is commit
-`81cc4d33928630573e10633fa87ed090ac64630b`, whose committed
-`bench/baseline.json` has schema 3. The closed-world self-compile entry records five
-runs, 11 generated units, Darwin arm64, and Node v26.7.0.
-
-| Measurement         | Maligator (ms) |    Node (ms) |
-| ------------------- | -------------: | -----------: |
-| Wall                |  421745.646917 | 56373.195333 |
-| Graph               |            769 |          191 |
-| Semantic            |           1761 |          241 |
-| Lower semantic      |          19842 |         3585 |
-| Optimize            |         380515 |        48495 |
-| Register allocation |              0 |            0 |
-| Lower               |           4455 |          998 |
-| Emit                |          12886 |         1919 |
-| Write               |            693 |          792 |
-
-Both runs generated 79,151,552 code units. The historical `optimizeMs` field combines
-Core optimization and Core-to-execution lowering. Those components cannot be
-recovered from this baseline and must not be presented as if they were separately
-measured; the new phase schema starts with the replacement pipeline.
+Storage and schema changes migrate producers and consumers together. Invalidate
+internal cache and artifact identities rather than retaining parallel optimizer
+representations, conversion adapters, or compatibility readers.
 
 ## Consequences
 
@@ -373,7 +325,5 @@ cache reuse, diagnostics, and target mappings. Append-only ranges can retain dea
 space until sealing, so reports and later profiling must expose abandoned-range and
 tombstone traversal costs rather than hiding them.
 
-Passes and analyses become smaller modules with declared scope and invalidation
-contracts. The migration is intentionally disruptive, but the completed architecture
-has one canonical Core, one optimizer scheduler, one late specialization plan, and no
-target-side policy discovery.
+Passes and analyses declare their scope and invalidation contracts. Canonical Core
+and its selected specialization plan keep optimization policy above target lowering.

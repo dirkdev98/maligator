@@ -69,7 +69,8 @@ If publishing fails after an immutable release is created, repair and push `main
 then retry that same release without replacing its tag or assets:
 
 ```shell
-gh workflow run npm-release.yml --ref main -f release_tag=v0.1.0-alpha.8
+release_tag="v$(node -p 'require("./package.json").version')"
+gh workflow run npm-release.yml --ref main -f release_tag="$release_tag"
 ```
 
 The retry path accepts only the exact version in `package.json`, checks that the

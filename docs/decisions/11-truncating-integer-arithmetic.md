@@ -1,6 +1,5 @@
 # Numeric call results and truncating integer arithmetic
 
-- Status: accepted
 - Scope: Core normal-result facts, scalar selection and native numeric fusion
 
 Known Math calls may produce scalar results while retaining their coercing inputs,

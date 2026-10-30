@@ -85,9 +85,7 @@ The specialized benchmark commands remain available for their owning diagnostics
 the performance entrypoint supersedes them as the normal experiment and acceptance
 workflow. None of these commands updates `bench/baseline.json`.
 
-For authorized queue runs, use `mjq perf.performance`. Queue options select
-`mode=gap`, `mode=experiment`, or `mode=portfolio`; the selected mode's budget bounds
-the complete driver. Smoke and quick reports are screening evidence, not acceptance.
+Smoke and quick reports are screening evidence, not acceptance.
 Headline timing excludes diagnostics. RSS is process-wide; Maligator allocation and
 collection deltas cover the measured window, while its GC pause and peak-live values
 cover the separate resource process. Node allocation is sampled and is not directly

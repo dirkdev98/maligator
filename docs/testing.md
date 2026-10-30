@@ -290,14 +290,14 @@ CI caches npm downloads, the pinned Test262 corpus, and the content-addressed na
 actions a job built: Rust runtime libraries, eval-compiler overlay objects, runtime C
 objects and the archives linked from them, generated C objects, the Wasm runtime's Rust library, objects, archive
 and link, and the Test262 input index. Eval-compiler bakes travel with them: a bake
-is keyed by its compiler sources and costs about a minute per job to redo, so a
-commit that leaves the compiler alone reuses it. The ThinLTO cache rides along after
-them, newest entries first, because a production link otherwise recompiles every
+is keyed by its compiler sources, so a commit that leaves the compiler alone reuses
+it. The ThinLTO cache rides along after them, newest entries first, because a
+production link otherwise recompiles every
 module. The Rust sources rarely change
 while every native job otherwise rebuilds each Cargo feature set with fat LTO. The
-overlay is quite large (about 370 translation units), but each unit only holds its own
-functions: image indices live in separate link-table units, so a compiler edit
-recompiles the units it touches. Test fixtures emit the same C until the compiler
+overlay partitions functions into translation units: image indices live in separate
+link-table units, so a compiler edit recompiles the units it touches. Test fixtures
+emit the same C until the compiler
 changes what they compile to, so their objects survive most commits as well.
 `scripts/ci-native-cache.ts` moves only those entries. The Rust libraries, runtime
 objects and archives, overlay objects and bakes are the same for every job of a lane,
@@ -309,9 +309,9 @@ what the shared snapshot lacks: fixture objects, Wasm stages, ThinLTO entries, a
 the library variants peculiar to that job. On `main`, a job saves its line when the
 set changed, within 3 GiB, keeping the bakes and then what the job itself read first,
 then ThinLTO entries, then older entries, each in the order Rust, overlay, runtime,
-fixture objects; the export log breaks the bytes down. Snapshots compress about 3.5
-times, and the newest snapshot of every line and lane has to fit the repository's 10 GB
-allowance: when it does not, GitHub evicts whole lines and their jobs start cold.
+fixture objects; the export log breaks the bytes down. The newest compressed
+snapshot of every line and lane has to fit the repository's cache allowance: when
+it does not, GitHub evicts whole lines and their jobs start cold.
 After saving, a job deletes the snapshot it restored: GitHub evicts the least recently
 used entries, and that superseded snapshot counts as just used, so keeping it would
 evict the newest snapshot of a line that runs less often. Cancelled runs save nothing.

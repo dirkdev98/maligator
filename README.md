@@ -59,7 +59,8 @@ What works today:
 - A runtime shaped per build: eval, Realms, RegExp, Temporal, Intl, Web APIs, and a
   curated Node.js surface are each opt-in or opt-out.
 - Isolated workers with shared memory, transferable ports, and task pools.
-- More than fifty thousand Test262 tests pass in the compiled baseline.
+- The [Compatibility page](https://maligator.ddv.tools/compatibility) reports Test262
+  coverage from the committed baseline.
 
 What does not, yet:
 
