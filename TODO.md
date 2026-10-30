@@ -823,12 +823,17 @@ Shared lifetime and fallback rules are recorded in
 
 ## P1: compiler throughput and analysis scalability
 
-- [ ] Bring the Node-hosted self-compile toward 40 s. It takes 46.3 s in the
-      1cf304da baseline: Core optimization 23.8 s, execution to image 5.2 s, Core to
-      execution 3.2 s and Core construction 2.3 s. fold-static-property-reads
-      spends 1.7 s in static-value queries, pass admission checks about 1.2 s, and
-      verification about 4 s. 6ce7d318 still triples plan candidates by planning
-      every exact call outside the budget.
+- [ ] Bring the Node-hosted self-compile toward 40 s. A fresh-process full run takes
+      about 54 s on AC. In a CPU-profiled run Core optimization took 33 s (cross-call
+      transforms 8.9 s, memory and provenance 5.4 s, program flow 2.8 s plus its
+      refreshes, structural CFG 2.6 s, verification 2.3 s), execution to image 7.6 s,
+      emission 5.6 s and Core to execution 4.2 s. Scavenges take about 5 s: iterator
+      results are still 14 GB of the run's 87 GB sampled allocation, from the
+      store's ID generators (`instructionIds()` returns an array without an active
+      editor and a generator with one, so its loops stay polymorphic), `x?.values()
+      ?? []` loops in program flow, and `new Map(previous)` copies in reachability.
+      6ce7d318 still triples plan candidates by planning every exact call outside
+      the budget.
 - [ ] Invalidate warm frontend caches when module-resolution topology changes.
       The original serial cache can retain a resolved `.mjs` target after a preferred
       extensionless file appears, or retain a package target after a nearer package

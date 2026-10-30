@@ -708,6 +708,10 @@ export class CoreFunctionStore {
 
 	readonly #facts: Array<CoreFact | undefined> = [];
 	readonly #effectRefinements: Array<CoreEffectRefinement | undefined> = [];
+	// ID snapshots stay unfrozen because V8 does not inline iteration over frozen
+	// arrays: every for-of step over one allocates an iterator result, and these are
+	// the compiler's most iterated arrays. Their readonly types keep callers from
+	// mutating the shared snapshot.
 	#sealedBlocks: ReadonlyArray<CoreBlockId> | undefined;
 	#sealedInstructions: ReadonlyArray<CoreInstructionId> | undefined;
 	#blockSnapshot: ReadonlyArray<CoreBlockId> | undefined;
@@ -990,7 +994,7 @@ export class CoreFunctionStore {
 				for (let id = 0; id < this.#blockLive.length; id++) {
 					if (this.#blockLive[id] === 1) blocks.push(coreBlockId(id));
 				}
-				this.#blockSnapshot = Object.freeze(blocks);
+				this.#blockSnapshot = blocks;
 			}
 			return this.#blockSnapshot;
 		}
@@ -1014,7 +1018,7 @@ export class CoreFunctionStore {
 				for (let id = 0; id < this.#instructionLive.length; id++) {
 					if (this.#instructionLive[id] === 1) instructions.push(coreInstructionId(id));
 				}
-				this.#instructionSnapshot = Object.freeze(instructions);
+				this.#instructionSnapshot = instructions;
 			}
 			return this.#instructionSnapshot;
 		}
@@ -2321,8 +2325,8 @@ export class CoreFunctionStore {
 		this.#requireMutation(mutation);
 		if (this.#activeEditor)
 			throw new Error(`Core function ${this.id} has an active editor`);
-		this.#sealedBlocks = Object.freeze([...this.blockIds()]);
-		this.#sealedInstructions = Object.freeze([...this.instructionIds()]);
+		this.#sealedBlocks = [...this.blockIds()];
+		this.#sealedInstructions = [...this.instructionIds()];
 		this.#sealed = true;
 	}
 

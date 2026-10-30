@@ -83,7 +83,10 @@ export interface BuildCoreControlFlowOptions {
 }
 
 const runWithoutOwner: CoreOptimizationOwnerRunner = (_owner, run) => run();
-const emptyEdgeArguments: ReadonlyArray<CoreValueId> = Object.freeze([]);
+// CFG arrays stay unfrozen because V8 does not inline iteration or indexed reads on
+// frozen arrays: each for-of step would allocate an iterator result, and every Core
+// analysis walks these arrays. Their readonly types keep consumers from mutating them.
+const emptyEdgeArguments: ReadonlyArray<CoreValueId> = [];
 
 // A shared getter avoids accessor closures per edge while body edits refresh lazy operands.
 class ArgumentControlEdge implements CoreControlEdge {
@@ -207,7 +210,7 @@ function buildEdges(fn: CoreFunctionStore): {
 } {
 	const successors = new Array<Array<CoreControlEdge>>(fn.blockCapacity);
 	const predecessors = new Array<Array<CoreControlEdge>>(fn.blockCapacity);
-	const empty = Object.freeze([]) as unknown as Array<CoreControlEdge>;
+	const empty: Array<CoreControlEdge> = [];
 	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
 		const block = coreBlockId(blockIndex);
 		if (fn.kernel.blockLive(block) === 0) continue;
@@ -301,10 +304,10 @@ function buildStructural(
 		function: fn.id,
 		cfgVersion: fn.version("cfg"),
 		exceptionFlowVersion: 0,
-		successors: Object.freeze(successors.map((edges) => Object.freeze(edges))),
-		predecessors: Object.freeze(predecessors.map((edges) => Object.freeze(edges))),
+		successors,
+		predecessors,
 		reachable: Object.freeze(reachable),
-		reversePostorder: Object.freeze(reversePostorder),
+		reversePostorder,
 	});
 }
 
@@ -356,10 +359,10 @@ function buildExceptionalStructural(
 		function: fn.id,
 		cfgVersion: fn.version("cfg"),
 		exceptionFlowVersion: fn.version("exceptionFlow"),
-		successors: Object.freeze(successors.map((edges) => Object.freeze(edges))),
-		predecessors: Object.freeze(predecessors.map((edges) => Object.freeze(edges))),
+		successors,
+		predecessors,
 		reachable: Object.freeze(reachable),
-		reversePostorder: Object.freeze(reversePostorder),
+		reversePostorder,
 	});
 }
 
@@ -381,7 +384,8 @@ function immediateDominators(
 	const queued = queuedLease.values;
 	try {
 		order.fill(-1, 0, length);
-		for (const [index, block] of reversePostorder.entries()) order[block] = index;
+		for (let index = 0; index < reversePostorder.length; index++)
+			order[reversePostorder[index]!] = index;
 		dominators.fill(-1, 0, length);
 		dominators[entry] = entry;
 		// Parent links contain reachable block indices; IDs are checked when publishing the result.
@@ -589,7 +593,8 @@ function naturalLoops(
 } {
 	const reverseIndex = new Int32Array(fn.blockCapacity);
 	reverseIndex.fill(-1);
-	for (const [index, block] of reversePostorder.entries()) reverseIndex[block] = index;
+	for (let index = 0; index < reversePostorder.length; index++)
+		reverseIndex[reversePostorder[index]!] = index;
 	const jumpsTo = (source: CoreBlockId, target: CoreBlockId): boolean => {
 		const terminator = fn.blockTerminator(source);
 		if (fn.instructionKind(terminator) !== "jump") return false;
@@ -726,10 +731,8 @@ function buildFromStructural(
 	const entry = fn.entry;
 	let parents: ReadonlyArray<CoreBlockId | null> | undefined;
 	const getParents = () =>
-		(parents ??= Object.freeze(
-			runOwner(CORE_OPTIMIZATION_OWNER.immediateDominators, () =>
-				immediateDominators(entry, reversePostorder, predecessors, successors, scratch),
-			),
+		(parents ??= runOwner(CORE_OPTIMIZATION_OWNER.immediateDominators, () =>
+			immediateDominators(entry, reversePostorder, predecessors, successors, scratch),
 		));
 	let predicate: ReturnType<typeof dominatorPredicate> | undefined;
 	const dominates = (dominator: CoreBlockId, block: CoreBlockId): boolean =>
@@ -846,7 +849,7 @@ function buildFromStructural(
 		successors,
 		predecessors,
 		reachable: Object.freeze(reachable),
-		reversePostorder: Object.freeze(reversePostorder),
+		reversePostorder,
 		get immediateDominators() {
 			return getParents();
 		},
