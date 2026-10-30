@@ -45,8 +45,10 @@ describe("Wasm source cache identity", () => {
 		expect(second.sourceIdentity).toBe(first.sourceIdentity);
 		expect(second.compilerHash).toBe(first.compilerHash);
 		expect(second.producer).toBe(first.producer);
-		expect(second.compile(() => {}).map((unit) => artifactDigest(unit.source))).toEqual(
-			first.compile(() => {}).map((unit) => artifactDigest(unit.source)),
+		expect(
+			second.compile(() => {}).map((unit) => artifactDigest(unit.sourceChunks.join(""))),
+		).toEqual(
+			first.compile(() => {}).map((unit) => artifactDigest(unit.sourceChunks.join(""))),
 		);
 	});
 
@@ -68,8 +70,10 @@ describe("Wasm source cache identity", () => {
 		const second = secondProject.prepare();
 		expect(second.sourceIdentity).not.toBe(first.sourceIdentity);
 		expect(
-			second.compile(() => {}).map((unit) => artifactDigest(unit.source)),
-		).not.toEqual(first.compile(() => {}).map((unit) => artifactDigest(unit.source)));
+			second.compile(() => {}).map((unit) => artifactDigest(unit.sourceChunks.join(""))),
+		).not.toEqual(
+			first.compile(() => {}).map((unit) => artifactDigest(unit.sourceChunks.join(""))),
+		);
 	});
 
 	it("refreshes package goals for unchanged source text between builds", () => {

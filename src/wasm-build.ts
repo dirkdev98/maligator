@@ -29,6 +29,7 @@ import {
 	NATIVE_C_HEADER_LINES,
 } from "./compiler/target/emit-program-image.ts";
 import { hashDirectoryTrees } from "./file-tree.ts";
+import { writeSourceChunks } from "./generated-source.ts";
 import { normalizeRuntimeBuildArgument } from "./native-cache-identity.ts";
 import { nativeBuildJobs } from "./native-command.ts";
 import { generatedHeaderDependencyHash } from "./runtime-build.ts";
@@ -252,7 +253,7 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 				return units.map((unit) => {
 					const name = `unit-${unit.id}.c`;
 					const file = path.join(directory, name);
-					writeFileSync(file, unit.source);
+					writeSourceChunks(file, unit.sourceChunks);
 					return { name, file };
 				});
 			},

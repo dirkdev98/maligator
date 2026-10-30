@@ -511,7 +511,9 @@ describe("record storage C ABI", () => {
 		expect(source).toContain("MalValue *rp0_3");
 		expect(source).not.toContain("MalValue *rp0_4");
 		const split = emitProgramTranslationUnits(image, { compiled: true });
-		expect(split.map((unit) => unit.source).join("\n")).toContain("double *rp0_0");
+		expect(split.map((unit) => unit.sourceChunks.join("")).join("\n")).toContain(
+			"double *rp0_0",
+		);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image)).native).toEqual(
 			image.native,
 		);

@@ -132,8 +132,12 @@ if (mode === "capture") {
 		milliseconds += performance.now() - start;
 		const image = lowerExecutionToProgramImage(execution, native);
 		const digest = createHash("sha256").update(serializeRuntimeImage(image.runtime));
-		for (const unit of emitProgramTranslationUnits(image))
-			digest.update(unit.id).update(unit.source);
+		for (const unit of emitProgramTranslationUnits(image)) {
+			const compatible: { source?: string; sourceChunks?: ReadonlyArray<string> } = unit;
+			digest.update(unit.id);
+			for (const chunk of compatible.sourceChunks ?? [compatible.source!])
+				digest.update(chunk);
+		}
 		const next = digest.digest("hex");
 		if (checksum && checksum !== next)
 			throw new Error("lowered C or runtime wire changed between iterations");

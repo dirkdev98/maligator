@@ -23,6 +23,7 @@ import type {
 	GeneratedTranslationUnit,
 	TranslationUnitPolicy,
 } from "../src/compiler/target/emit-program-image.ts";
+import { writeSourceChunks } from "../src/generated-source.ts";
 import { generatedCCompileArguments } from "../src/local-build.ts";
 import type {
 	GeneratedObjectMeasurement,
@@ -389,7 +390,7 @@ function emissionInvariants(
 			.map((definition) => `${definition.symbol}:${String(definition.sourceCodeUnits)}`)
 			.sort(),
 		runtimeImageDigest: sha256(
-			units.find((unit) => unit.kind === "runtime-image")!.source,
+			units.find((unit) => unit.kind === "runtime-image")!.sourceChunks.join(""),
 		),
 	};
 }
@@ -1029,7 +1030,7 @@ function runGiantFunctionExperiment(options: {
 	const baseArguments = generatedCCompileArguments(options.context);
 	const results = candidates.map(({ unit, definition, isolated }) => {
 		const sourcePath = path.join(options.temporaryDirectory, `giant-${unit.id}.c`);
-		writeFileSync(sourcePath, isolated.source);
+		writeSourceChunks(sourcePath, isolated.sourceChunks);
 		const levels = (["-O2", "-O1"] as const).map((level) => {
 			const samples = [];
 			for (let sample = 0; sample < 3; sample++) {

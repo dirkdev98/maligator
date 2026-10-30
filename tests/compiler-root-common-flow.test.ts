@@ -141,7 +141,7 @@ test("workers compiled from another directory emit the same code units", () => {
 			{ partitionRoot: path.dirname(options.entrypoint) },
 		)
 			.filter((unit) => unit.kind === "code")
-			.map((unit) => ({ id: unit.id, source: unit.source }));
+			.map((unit) => ({ id: unit.id, source: unit.sourceChunks.join("") }));
 
 	const first = codeUnits(fixture());
 	assert.ok(first.length > 0);

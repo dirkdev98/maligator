@@ -97,7 +97,7 @@ export function resolveSplitUnits(
 ): Array<GeneratedTranslationUnit> {
 	const sources = resolveSplitUnitLinks(
 		image,
-		units.map((unit) => unit.source),
+		units.map((unit) => unit.sourceChunks.join("")),
 	);
 	const [named = ""] = resolveSplitUnitLinks(image, [
 		units.flatMap((unit) => unit.definitions.map((item) => item.symbol)).join("\n"),
@@ -106,7 +106,8 @@ export function resolveSplitUnits(
 	let next = 0;
 	return units.map((unit, index) => ({
 		...unit,
-		source: sources[index]!,
+		sourceChunks: [sources[index]!],
+		sourceCodeUnits: sources[index]!.length,
 		definitions: unit.definitions.map((item) => ({ ...item, symbol: symbols[next++]! })),
 	}));
 }

@@ -803,7 +803,10 @@ async function compileSample(
 		});
 	}
 	const normalizedUnits = units.map((unit) =>
-		unit.source.split(benchmarkCase.sourceRoot).join("<compiler-scale-source>"),
+		unit.sourceChunks
+			.join("")
+			.split(benchmarkCase.sourceRoot)
+			.join("<compiler-scale-source>"),
 	);
 	const codeUnits = normalizedUnits.reduce((total, source) => total + source.length, 0);
 	return {

@@ -260,9 +260,19 @@ export interface GeneratedTranslationUnitDefinition {
 export interface GeneratedTranslationUnit {
 	readonly id: string;
 	readonly kind: GeneratedTranslationUnitKind;
-	readonly source: string;
+	readonly sourceChunks: ReadonlyArray<string>;
+	readonly sourceCodeUnits: number;
 	readonly headerFiles: ReadonlyArray<string>;
 	readonly definitions: ReadonlyArray<GeneratedTranslationUnitDefinition>;
+}
+
+function separatedSourceChunks(parts: ReadonlyArray<string>): Array<string> {
+	const chunks: Array<string> = [];
+	for (const part of parts) {
+		if (chunks.length > 0) chunks.push("\n");
+		chunks.push(part);
+	}
+	return chunks;
 }
 
 export interface TranslationUnitPolicy {
@@ -2089,15 +2099,15 @@ export function emitProgramTranslationUnits(
 	const unitSource = (
 		headerLines: ReadonlyArray<string>,
 		partition: TranslationUnitPartition,
-	): string => {
-		return [
+	): Array<string> => {
+		return separatedSourceChunks([
 			...headerLines,
 			...partition.declarationIndices.map(
 				(index) => generatedDeclarations[index]!.source,
 			),
 			"",
 			...partition.parts.map((part) => part.source),
-		].join("\n");
+		]);
 	};
 	const partition = (
 		kind: "data" | "code",
@@ -2123,19 +2133,20 @@ export function emitProgramTranslationUnits(
 				current,
 			);
 			if (sourceCodeUnits <= targetCodeUnits || parts.length === 1) {
-				const source = unitSource(headerLines, current);
-				if (source.length > hardMaximumCodeUnits) {
+				const sourceChunks = unitSource(headerLines, current);
+				if (sourceCodeUnits > hardMaximumCodeUnits) {
 					const part = parts[0]!;
 					throw new RangeError(
 						`generated ${part.kind} '${part.symbol}' has ${part.source.length} code units ` +
-							`and requires ${source.length} including its declarations; ` +
+							`and requires ${sourceCodeUnits} including its declarations; ` +
 							`translation-unit maximum is ${hardMaximumCodeUnits}`,
 					);
 				}
 				units.push({
 					id: `${kind}-${group}${prefix || "root"}`,
 					kind,
-					source,
+					sourceChunks,
+					sourceCodeUnits,
 					headerFiles: generatedHeaderFiles(headerLines),
 					definitions: parts.map((part) => ({
 						kind: part.kind,
@@ -2239,7 +2250,8 @@ export function emitProgramTranslationUnits(
 		{
 			id: "runtime-image",
 			kind: "runtime-image",
-			source: runtimeSource,
+			sourceChunks: [runtimeSource],
+			sourceCodeUnits: runtimeSource.length,
 			headerFiles: generatedHeaderFiles(GENERATED_DATA_C_HEADER_LINES),
 			definitions: [],
 		},
@@ -2419,7 +2431,8 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		{
 			id: `${unitPrefix}native-overlay-table`,
 			kind: "code",
-			source: table,
+			sourceChunks: [table],
+			sourceCodeUnits: table.length,
 			headerFiles,
 			definitions: [],
 		},
@@ -2433,7 +2446,8 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		units.push({
 			id: `${unitPrefix}native-overlay-links-${String(units.length)}`,
 			kind: "data",
-			source: [linkHeader, ...links].join("\n"),
+			sourceChunks: separatedSourceChunks([linkHeader, ...links]),
+			sourceCodeUnits: linkCodeUnits,
 			headerFiles: generatedHeaderFiles(linkHeaderLines),
 			definitions: [],
 		});
@@ -2457,7 +2471,8 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	flushLinks();
 	type NativeOverlayFunction = {
 		fn: CompiledFunction;
-		source: string;
+		sourceChunks: ReadonlyArray<string>;
+		sourceCodeUnits: number;
 		partitionKey: string;
 		partitionHashes: Array<number | undefined>;
 	};
@@ -2469,20 +2484,23 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 			...(overlayDeclarationIndices.get(declaration.symbol) ?? []),
 			index,
 		]);
-	const bodies: Array<NativeOverlayFunction> = compiled.flatMap((fn, index) =>
-		fn === null
-			? []
-			: [
-					{
-						fn,
-						source: [fn.source, ...fn.directEntries.map((entry) => entry.source)]
-							.filter((part) => part.length > 0)
-							.join("\n"),
-						partitionKey: functionPartitionKeys[index]!,
-						partitionHashes: [],
-					},
-				],
-	);
+	const bodies: Array<NativeOverlayFunction> = compiled.flatMap((fn, index) => {
+		if (fn === null) return [];
+		const parts = [fn.source, ...fn.directEntries.map((entry) => entry.source)].filter(
+			(part) => part.length > 0,
+		);
+		return [
+			{
+				fn,
+				sourceChunks: separatedSourceChunks(parts),
+				sourceCodeUnits:
+					parts.reduce((total, part) => total + part.length, 0) +
+					Math.max(0, parts.length - 1),
+				partitionKey: functionPartitionKeys[index]!,
+				partitionHashes: [],
+			},
+		];
+	});
 	const visit = (
 		functions: Array<NativeOverlayFunction>,
 		prefix: string,
@@ -2490,11 +2508,10 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	): void => {
 		if (functions.length === 0) return;
 		const sourceCodeUnits = functions.reduce(
-			(total, { source }) => total + 1 + source.length,
+			(total, fn) => total + 1 + fn.sourceCodeUnits,
 			header.length,
 		);
 		if (sourceCodeUnits <= targetCodeUnits || functions.length === 1) {
-			const bodiesSource = functions.map(({ source }) => source);
 			const referenced = generatedDeclarationIndices(
 				functions.flatMap(({ fn }) => [
 					...fn.declarationSymbols,
@@ -2502,20 +2519,25 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 				]),
 				overlayDeclarationIndices,
 			).sort((left, right) => left - right);
-			const source = [
+			const sourceChunks = separatedSourceChunks([
 				header,
 				...referenced.map((index) => overlayDeclarations[index]!.source),
-				...bodiesSource,
-			].join("\n");
-			if (source.length > maxCodeUnits) {
+			]);
+			for (const fn of functions) sourceChunks.push("\n", ...fn.sourceChunks);
+			const completeCodeUnits = sourceChunks.reduce(
+				(total, chunk) => total + chunk.length,
+				0,
+			);
+			if (completeCodeUnits > maxCodeUnits) {
 				throw new RangeError(
-					`generated compiled function '${functions[0]!.fn.symbol}' requires ${source.length} code units; translation-unit maximum is ${maxCodeUnits}`,
+					`generated compiled function '${functions[0]!.fn.symbol}' requires ${completeCodeUnits} code units; translation-unit maximum is ${maxCodeUnits}`,
 				);
 			}
 			units.push({
 				id: `${unitPrefix}native-overlay-code-${prefix || "root"}`,
 				kind: "code",
-				source,
+				sourceChunks,
+				sourceCodeUnits: completeCodeUnits,
 				headerFiles,
 				definitions: functions.flatMap(({ fn }) =>
 					[...(fn.source.length === 0 ? [] : [fn]), ...fn.directEntries].map((part) => ({

@@ -1,4 +1,5 @@
 import { runConstantsMacro } from "./constants.mts";
+import { runEmissionIoMacro } from "./emission-io.mts";
 import { runEmissionMacro } from "./emission.mts";
 import { runFlowMacro } from "./flow.mts";
 
@@ -12,6 +13,9 @@ const result =
 			? runConstantsMacro(iterations, image)
 			: mode === "emission"
 				? runEmissionMacro(iterations, image)
-				: undefined;
-if (result === undefined) throw new Error("expected flow, constants, or emission");
+				: mode === "emission-io"
+					? runEmissionIoMacro(iterations, image)
+					: undefined;
+if (result === undefined)
+	throw new Error("expected flow, constants, emission, or emission-io");
 console.log(JSON.stringify(result));

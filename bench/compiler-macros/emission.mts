@@ -7,8 +7,11 @@ export function runEmissionMacro(iterations: number, imagePath: string) {
 	let checksum = 0;
 	const start = performance.now();
 	for (let iteration = 0; iteration < iterations; iteration++) {
-		for (const unit of emitProgramTranslationUnits(image))
-			checksum = (checksum + unit.source.length) | 0;
+		for (const unit of emitProgramTranslationUnits(image)) {
+			const compatible: { source?: string; sourceCodeUnits?: number } = unit;
+			checksum =
+				(checksum + (compatible.sourceCodeUnits ?? compatible.source!.length)) | 0;
+		}
 	}
 	return { iterations, checksum, milliseconds: performance.now() - start };
 }

@@ -84,7 +84,11 @@ function emittedPartitionProjection(image: ProgramImage) {
 			targetCodeUnits: 16_000,
 			hardMaximumCodeUnits: 200_000,
 		},
-	).map(({ id, definitions, source }) => ({ id, definitions, source }));
+	).map(({ id, definitions, sourceChunks }) => ({
+		id,
+		definitions,
+		source: sourceChunks.join(""),
+	}));
 }
 
 describe("compiler scale normalization", () => {

@@ -30,7 +30,8 @@ type Case =
 	| "flow"
 	| "flow-membership"
 	| "constants"
-	| "emission";
+	| "emission"
+	| "emission-io";
 type Host = "node" | "native";
 interface Sample {
 	iterations: number;
@@ -76,7 +77,7 @@ const output = path.resolve(
 const budgetSeconds = Number(value("--budget-seconds", "600"));
 if (args.includes("--help")) {
 	console.log(
-		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--candidate REF|CHECKOUT] [--cases roots,backedges,accessors,headers,versions,versions-module,value-kinds,errors,optimizer,lowering,flow,flow-membership,constants,emission] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Headers reads kind, descriptor and payload through the revision's available checked API. Versions queries fixed change domains from a parameterized Core traversal between body edits. Versions-module preserves the module-scope traversal as a holdout. Value-kinds alternates number/string seeds in a fixed Core dependency chain and consumes masks and integer proofs. Errors alternates valid instruction reads and caught invalid-ID failures. Optimizer compiles that frozen workload on Node, including construction and target lowering. Lowering replays both backend realizations from sealed optimized Core. Flow replays six analysis engines with four consumers per source epoch. Flow-membership appends unrelated functions between warm transfer queries. Constants and emission replay a captured compiler image. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
+		"Usage: npm run bench:compiler-macros -- --baseline REF|CHECKOUT [--candidate REF|CHECKOUT] [--cases roots,backedges,accessors,headers,versions,versions-module,value-kinds,errors,optimizer,lowering,flow,flow-membership,constants,emission,emission-io] [--hosts node,native] [--seconds 2] [--pairs 3] [--output DIRECTORY] [--budget-seconds 600] [--plan=json]\n\nRoots replays the 24 largest execution graphs captured from the baseline compiler accessor workload. Accessors traverses real Core storage and opcode registry methods. Headers reads kind, descriptor and payload through the revision's available checked API. Versions queries fixed change domains from a parameterized Core traversal between body edits. Versions-module preserves the module-scope traversal as a holdout. Value-kinds alternates number/string seeds in a fixed Core dependency chain and consumes masks and integer proofs. Errors alternates valid instruction reads and caught invalid-ID failures. Optimizer compiles that frozen workload on Node, including construction and target lowering. Lowering replays both backend realizations from sealed optimized Core. Flow replays six analysis engines with four consumers per source epoch. Flow-membership appends unrelated functions between warm transfer queries. Constants and emission replay a captured compiler image. Emission-io includes emission, UTF-8 encoding, SHA-256 and file output; old revisions receive the same chunk-writer fixture dependency but use their flat-source path. Native cases compile only their dependency cones. Calibration chooses fixed iteration counts on the baseline, reused by both revisions. One warmup and alternating pairs follow. Timings exclude process startup and input loading; preparation is included in the wall-clock budget. These slices do not establish full self-compile acceptance.",
 	);
 	process.exit(0);
 }
@@ -107,6 +108,7 @@ if (
 				"flow-membership",
 				"constants",
 				"emission",
+				"emission-io",
 			].includes(c),
 	) ||
 	hosts.some((h) => !["node", "native"].includes(h))
@@ -246,6 +248,24 @@ try {
 			{ recursive: true },
 		);
 	}
+	if (
+		cases.some((name) => ["flow", "constants", "emission", "emission-io"].includes(name))
+	) {
+		const support = path.join(root, "src/generated-source.ts");
+		const overlays: Array<string> = [];
+		for (const directory of [base, candidate]) {
+			const destination = path.join(directory, "src/generated-source.ts");
+			if (!existsSync(destination)) {
+				copyFileSync(support, destination);
+				overlays.push(path.basename(directory));
+			}
+		}
+		report.fixtureSupport = {
+			file: "src/generated-source.ts",
+			hash: hash(readFileSync(support)),
+			overlays,
+		};
+	}
 	report.sourceHashes = {
 		baseline: treeHash(base),
 		candidate: treeHash(candidate),
@@ -261,7 +281,11 @@ try {
 	const rootsFile = path.join(output, "roots.json");
 	if (existsSync(rootsFile)) report.rootsHash = hash(readFileSync(rootsFile));
 	const imageFile = path.join(output, "image.malbc");
-	if (cases.includes("constants") || cases.includes("emission")) {
+	if (
+		cases.includes("constants") ||
+		cases.includes("emission") ||
+		cases.includes("emission-io")
+	) {
 		report.imageCapture = json(
 			run(process.execPath, [worker, "capture-image", base, input, output]),
 		);
@@ -280,7 +304,11 @@ try {
 					console.log(
 						`Preparing ${name}/${host}/${index === 0 ? "baseline" : "candidate"}`,
 					);
-					const bundled = name === "flow" || name === "constants" || name === "emission";
+					const bundled =
+						name === "flow" ||
+						name === "constants" ||
+						name === "emission" ||
+						name === "emission-io";
 					const key = `${bundled ? "work" : name}-${index}`;
 					let command = nativeCommands.get(key);
 					if (command === undefined) {
@@ -312,11 +340,14 @@ try {
 						...command.args,
 						String(iterations),
 						...(host === "native" &&
-						(name === "flow" || name === "constants" || name === "emission")
+						(name === "flow" ||
+							name === "constants" ||
+							name === "emission" ||
+							name === "emission-io")
 							? [imageFile, name]
 							: name === "roots" || name === "backedges"
 								? [rootsFile]
-								: name === "constants" || name === "emission"
+								: name === "constants" || name === "emission" || name === "emission-io"
 									? [imageFile]
 									: []),
 					]),
@@ -340,7 +371,7 @@ try {
 						String(iterations),
 						...(name === "roots" || name === "backedges"
 							? [rootsFile]
-							: name === "constants" || name === "emission"
+							: name === "constants" || name === "emission" || name === "emission-io"
 								? [imageFile]
 								: []),
 					]),

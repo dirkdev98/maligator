@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
 import { buildDerivationFromConfig } from "./build-config.ts";
 import { compileEntrypoint } from "./compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
+import { writeSourceChunks } from "./generated-source.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import {
@@ -46,8 +47,8 @@ const translationUnits = emitProgramTranslationUnits(
 );
 if (evidenceDirectory !== undefined) {
 	mkdirSync(evidenceDirectory, { recursive: true });
-	for (const { name, bytes } of selfhostNativeEvidence(definition, translationUnits))
-		writeFileSync(path.join(evidenceDirectory, name), bytes);
+	for (const { name, chunks } of selfhostNativeEvidence(definition, translationUnits))
+		writeSourceChunks(path.join(evidenceDirectory, name), chunks);
 }
 const context = resolveNativeBuildContext({
 	features: derivation.features,

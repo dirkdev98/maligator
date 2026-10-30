@@ -103,7 +103,9 @@ describe("native builtin callback transport", () => {
 			const symbol = `mal_callback_${transport.functionIndex}_${transport.entryId}_reduce`;
 			expect(emitProgramImage(restored)).toContain(`f64 ${symbol}(`);
 			const units = emitResolvedTranslationUnits(restored);
-			expect(units.some((unit) => unit.source.includes(`f64 ${symbol}(`))).toBe(true);
+			expect(
+				units.some((unit) => unit.sourceChunks.join("").includes(`f64 ${symbol}(`)),
+			).toBe(true);
 			const forged = {
 				...caller,
 				storage: {
@@ -194,7 +196,9 @@ describe("native builtin callback transport", () => {
 			);
 		const symbol = `mal_callback_${transport.functionIndex}_${transport.entryId}`;
 		const unbounded = emit(20_000);
-		expect(unbounded.some((unit) => unit.source.includes(symbol))).toBe(true);
+		expect(unbounded.some((unit) => unit.sourceChunks.join("").includes(symbol))).toBe(
+			true,
+		);
 		const typed = unbounded
 			.flatMap((unit) => unit.definitions)
 			.find(
@@ -205,7 +209,9 @@ describe("native builtin callback transport", () => {
 		expect(typed).toBeDefined();
 		const maximum = typed.sourceCodeUnits + NATIVE_C_HEADER_LINES.join("\n").length;
 		const bounded = emit(maximum);
-		expect(bounded.every((unit) => unit.source.length <= maximum)).toBe(true);
+		expect(bounded.every((unit) => unit.sourceChunks.join("").length <= maximum)).toBe(
+			true,
+		);
 		expect(
 			bounded
 				.flatMap((unit) => unit.definitions)
@@ -213,7 +219,7 @@ describe("native builtin callback transport", () => {
 					(definition) => definition.symbol === `mal_compiled_${transport.functionIndex}`,
 				),
 		).toBe(true);
-		const output = bounded.map((unit) => unit.source).join("\n");
+		const output = bounded.map((unit) => unit.sourceChunks.join("")).join("\n");
 		expect(output).not.toContain(symbol);
 		expect(output).not.toContain(
 			`mal_direct_${transport.functionIndex}_${transport.entryId}`,
@@ -242,7 +248,7 @@ describe("native builtin callback transport", () => {
 		for (const output of [
 			emitProgramImage(specialized),
 			emitResolvedTranslationUnits(specialized)
-				.map((unit) => unit.source)
+				.map((unit) => unit.sourceChunks.join(""))
 				.join("\n"),
 		]) {
 			expect(output).toMatch(
@@ -261,15 +267,19 @@ describe("native builtin callback transport", () => {
 		const units = emitResolvedTranslationUnits(image, { compiled: true });
 		const callback = `mal_callback_${transport.functionIndex}_${transport.entryId}`;
 		const unit = units.find((unit) =>
-			unit.source.includes(
-				`MAL_BUILTIN_ARRAY_ITERATION_MAP, ${transport.functionIndex}, ${callback}`,
-			),
+			unit.sourceChunks
+				.join("")
+				.includes(
+					`MAL_BUILTIN_ARRAY_ITERATION_MAP, ${transport.functionIndex}, ${callback}`,
+				),
 		)!;
 		expect(unit).toBeDefined();
-		expect(unit.source).toContain(`MalValue ${callback}(`);
+		expect(unit.sourceChunks.join("")).toContain(`MalValue ${callback}(`);
 		expect(
 			units.some((unit) =>
-				unit.source.includes(`return mal_compiled_${transport.functionIndex}(`),
+				unit.sourceChunks
+					.join("")
+					.includes(`return mal_compiled_${transport.functionIndex}(`),
 			),
 		).toBe(true);
 	});
@@ -454,7 +464,7 @@ describe("resumable callers of selected native entries", () => {
 			);
 			expect(
 				emitResolvedTranslationUnits(restored, { compiled: true })
-					.map((unit) => unit.source)
+					.map((unit) => unit.sourceChunks.join(""))
 					.join("\n"),
 			).toContain(`mal_callback_${callback.functionIndex}_${callback.entryId}`);
 		},

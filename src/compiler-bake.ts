@@ -1,8 +1,11 @@
 import { createHash, hash } from "node:crypto";
 import {
+	closeSync,
 	mkdirSync,
 	mkdtempSync,
+	openSync,
 	readFileSync,
+	readSync,
 	renameSync,
 	rmSync,
 	statSync,
@@ -16,6 +19,7 @@ import { emitRelocatableNativeOverlayTranslationUnits } from "./compiler/target/
 import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { hashDirectoryTrees } from "./file-tree.ts";
+import { writeSourceChunks } from "./generated-source.ts";
 import { relativeImportCone } from "./source-import-cone.ts";
 
 const COMPILER_WIRE_CACHE = path.join(maligatorCacheDirectory(), "compiler-wire");
@@ -238,13 +242,23 @@ function sourceManifest(root: string, sourceKey: string): SourceManifest | undef
 }
 
 // Every eval-enabled build revalidates the overlay; hashing bytes avoids decoding ~100 MB.
-function nativeArtifactDigest(sources: ReadonlyArray<Uint8Array>): string {
+function nativeArtifactDigest(files: ReadonlyArray<string>): string {
 	const digest = createHash("sha256");
-	for (const source of sources)
-		digest
-			.update(`${String(source.byteLength)}\0`)
-			.update(source)
-			.update("\0");
+	const buffer = Buffer.allocUnsafe(256 * 1024);
+	for (const file of files) {
+		digest.update(`${String(statSync(file).size)}\0`);
+		const descriptor = openSync(file, "r");
+		try {
+			for (;;) {
+				const bytes = readSync(descriptor, buffer, 0, buffer.length, null);
+				if (bytes === 0) break;
+				digest.update(buffer.subarray(0, bytes));
+			}
+		} finally {
+			closeSync(descriptor);
+		}
+		digest.update("\0");
+	}
 	return digest.digest("hex");
 }
 
@@ -263,8 +277,11 @@ function validNativeSources(
 		const identity = JSON.stringify(stats.map(fileIdentity));
 		if (hashedNativeSources.get(memo) === identity) return true;
 		const hashedAt = Date.now();
-		const sources = native.files.map((name) => readFileSync(path.join(directory, name)));
-		if (nativeArtifactDigest(sources) !== native.digest) return false;
+		if (
+			nativeArtifactDigest(native.files.map((name) => path.join(directory, name))) !==
+			native.digest
+		)
+			return false;
 		if (stats.every((entry) => settledFileIdentity(entry, hashedAt)))
 			hashedNativeSources.set(memo, identity);
 		return true;
@@ -273,12 +290,18 @@ function validNativeSources(
 	}
 }
 
-function publishFile(directory: string, name: string, bytes: Uint8Array | string): void {
+function publishFile(
+	directory: string,
+	name: string,
+	bytes: Uint8Array | string | ReadonlyArray<string>,
+): void {
 	mkdirSync(directory, { recursive: true });
 	const temporaryDirectory = mkdtempSync(path.join(directory, ".publish-"));
 	try {
 		const temporaryPath = path.join(temporaryDirectory, name);
-		writeFileSync(temporaryPath, bytes);
+		if (typeof bytes === "string" || bytes instanceof Uint8Array)
+			writeFileSync(temporaryPath, bytes);
+		else writeSourceChunks(temporaryPath, bytes);
 		renameSync(temporaryPath, path.join(directory, name));
 	} finally {
 		rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -359,11 +382,14 @@ function ensureSourceArtifacts(
 			COMPILER_NATIVE_TRANSLATION_UNIT_TARGET_CODE_UNITS,
 		);
 		const files = units.map((unit) => `compiler-${unit.id}.c`);
-		const sources = units.map((unit) => Buffer.from(unit.source));
-		for (const [index, source] of sources.entries()) {
-			publishFile(directory, files[index]!, source);
+		for (const [index, unit] of units.entries()) {
+			publishFile(directory, files[index]!, unit.sourceChunks);
 		}
-		native = { key: nativeKey, digest: nativeArtifactDigest(sources), files };
+		native = {
+			key: nativeKey,
+			digest: nativeArtifactDigest(files.map((name) => path.join(directory, name))),
+			files,
+		};
 	}
 	requireNonemptyWire(bytes);
 	const outputDigest = hash("sha256", bytes, "hex");

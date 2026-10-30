@@ -21,6 +21,7 @@ import type {
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
 import { serializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
+import { writeSourceChunks } from "../src/generated-source.ts";
 
 const inputPath = process.argv[2];
 const outputDirectory = process.argv[3];
@@ -137,7 +138,10 @@ measure("writeMs", () => {
 	writeFileSync(path.join(outputDirectory, "self-compile.malw"), wire);
 	for (let index = 0; index < units.length; index++) {
 		const unit = units[index]!;
-		writeFileSync(path.join(outputDirectory, `self-compile-${unit.id}.c`), unit.source);
+		writeSourceChunks(
+			path.join(outputDirectory, `self-compile-${unit.id}.c`),
+			unit.sourceChunks,
+		);
 	}
 });
 
@@ -145,7 +149,7 @@ console.log(
 	JSON.stringify({
 		units: units.length,
 		wireBytes,
-		codeUnits: units.reduce((total, unit) => total + unit.source.length, 0),
+		codeUnits: units.reduce((total, unit) => total + unit.sourceCodeUnits, 0),
 		phases,
 		optimizer: optimizationReport,
 		owners: completeCompilerOptimizationOwners(
@@ -154,7 +158,10 @@ console.log(
 			{
 				inputInstructions: optimizationReport.input.instructions,
 				outputInstructions: optimizationReport.output.instructions,
-				generatedCodeUnits: units.reduce((total, unit) => total + unit.source.length, 0),
+				generatedCodeUnits: units.reduce(
+					(total, unit) => total + unit.sourceCodeUnits,
+					0,
+				),
 			},
 			runtimePhases as CompilerOptimizationOwnerRuntimePhases,
 		),

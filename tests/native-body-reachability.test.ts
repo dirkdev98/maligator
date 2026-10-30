@@ -51,7 +51,7 @@ describe("native body reachability", () => {
 			for (const source of [
 				emitProgramImage(image),
 				emitResolvedTranslationUnits(image)
-					.map((unit) => unit.source)
+					.map((unit) => unit.sourceChunks.join(""))
 					.join("\n"),
 			]) {
 				expect(source).toContain(`mal_direct_${index}_0(`);

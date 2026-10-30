@@ -56,10 +56,12 @@ export function emitWorkerRegistryTranslationUnit(
 		"}",
 		"",
 	);
+	const source = lines.join("\n");
 	return {
 		id: "worker-registry",
 		kind: "data",
-		source: lines.join("\n"),
+		sourceChunks: [source],
+		sourceCodeUnits: source.length,
 		headerFiles: ["workers.h"],
 		definitions: [],
 	};

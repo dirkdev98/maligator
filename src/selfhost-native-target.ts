@@ -43,15 +43,24 @@ function nativePlanJson(definition: ProgramImage): string {
 export function selfhostNativeEvidence(
 	definition: ProgramImage,
 	translationUnits: ReadonlyArray<GeneratedTranslationUnit>,
-): ReadonlyArray<{ readonly name: string; readonly bytes: string }> {
+): ReadonlyArray<{ readonly name: string; readonly chunks: ReadonlyArray<string> }> {
 	return [
-		{ name: "native-plans.json", bytes: `${nativePlanJson(definition)}\n` },
+		{ name: "native-plans.json", chunks: [`${nativePlanJson(definition)}\n`] },
 		{
 			name: "units.json",
-			bytes: `${JSON.stringify(
-				translationUnits.map(({ id, kind, headerFiles }) => ({ id, kind, headerFiles })),
-			)}\n`,
+			chunks: [
+				`${JSON.stringify(
+					translationUnits.map(({ id, kind, headerFiles }) => ({
+						id,
+						kind,
+						headerFiles,
+					})),
+				)}\n`,
+			],
 		},
-		...translationUnits.map((unit) => ({ name: `${unit.id}.c`, bytes: unit.source })),
+		...translationUnits.map((unit) => ({
+			name: `${unit.id}.c`,
+			chunks: unit.sourceChunks,
+		})),
 	];
 }

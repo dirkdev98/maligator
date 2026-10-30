@@ -299,10 +299,10 @@ describe("normal build frontend cache", () => {
 			fn.specializations.filter((region) => region.kind === "string-split-projection"),
 		);
 		const coldC = emitProgramTranslationUnits(cold.programImage)
-			.map((unit) => unit.source)
+			.map((unit) => unit.sourceChunks.join(""))
 			.join("\n");
 		const warmC = emitProgramTranslationUnits(warm.programImage)
-			.map((unit) => unit.source)
+			.map((unit) => unit.sourceChunks.join(""))
 			.join("\n");
 
 		expect(cold.cache).toBe("miss");
@@ -377,10 +377,10 @@ describe("normal build frontend cache", () => {
 			fn.specializations.filter((region) => region.kind === "regexp-exec-projection"),
 		);
 		const coldC = emitProgramTranslationUnits(cold.programImage)
-			.map((unit) => unit.source)
+			.map((unit) => unit.sourceChunks.join(""))
 			.join("\n");
 		const warmC = emitProgramTranslationUnits(warm.programImage)
-			.map((unit) => unit.source)
+			.map((unit) => unit.sourceChunks.join(""))
 			.join("\n");
 
 		expect(cold.cache).toBe("miss");
@@ -411,10 +411,10 @@ describe("normal build frontend cache", () => {
 			fn.specializations.filter((region) => region.kind === "string-span"),
 		);
 		const coldC = emitProgramTranslationUnits(cold.programImage)
-			.map((unit) => unit.source)
+			.map((unit) => unit.sourceChunks.join(""))
 			.join("\n");
 		const warmC = emitProgramTranslationUnits(warm.programImage)
-			.map((unit) => unit.source)
+			.map((unit) => unit.sourceChunks.join(""))
 			.join("\n");
 
 		expect(cold.cache).toBe("miss");
@@ -449,10 +449,10 @@ describe("normal build frontend cache", () => {
 			fn.specializations.filter((region) => region.kind === "regexp-iterator-projection"),
 		);
 		const coldC = emitProgramTranslationUnits(cold.programImage)
-			.map((unit) => unit.source)
+			.map((unit) => unit.sourceChunks.join(""))
 			.join("\n");
 		const warmC = emitProgramTranslationUnits(warm.programImage)
-			.map((unit) => unit.source)
+			.map((unit) => unit.sourceChunks.join(""))
 			.join("\n");
 
 		expect(cold.cache).toBe("miss");
@@ -477,10 +477,10 @@ describe("normal build frontend cache", () => {
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
 		const coldC = emitProgramTranslationUnits(cold.programImage)
-			.map((unit) => unit.source)
+			.map((unit) => unit.sourceChunks.join(""))
 			.join("\n");
 		const warmC = emitProgramTranslationUnits(warm.programImage)
-			.map((unit) => unit.source)
+			.map((unit) => unit.sourceChunks.join(""))
 			.join("\n");
 
 		expect(cold.cache).toBe("miss");

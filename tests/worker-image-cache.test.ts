@@ -37,7 +37,7 @@ test("worker roots survive a frontend cache hit independently of parent runtime 
 		const registry = emitWorkerImageTranslationUnits(restored.workerImages).find(
 			(unit) => unit.id === "worker-registry",
 		)!;
-		expect(registry.source).toContain(
+		expect(registry.sourceChunks.join("")).toContain(
 			`mal_runtime_image_worker_${restored.workerImages[0]!.id}`,
 		);
 		writeFileSync(worker, "globalThis.workerResult = 43;");

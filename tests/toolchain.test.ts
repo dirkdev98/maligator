@@ -934,7 +934,8 @@ printf '!<arch>\\n' > "$2"
 					{
 						id: "data-010",
 						kind: "data",
-						source: "int data_value;",
+						sourceChunks: ["int data_value;"],
+						sourceCodeUnits: "int data_value;".length,
 						headerFiles: ["vm.h"],
 						definitions: [
 							{ kind: "data array", symbol: "data_value", sourceCodeUnits: 15 },
@@ -943,7 +944,8 @@ printf '!<arch>\\n' > "$2"
 					{
 						id: "code-101",
 						kind: "code",
-						source: codeSource,
+						sourceChunks: [codeSource],
+						sourceCodeUnits: codeSource.length,
 						headerFiles: ["vm.h", "code-only.h"],
 						definitions: [
 							{ kind: "compiled function", symbol: "code_value", sourceCodeUnits: 15 },

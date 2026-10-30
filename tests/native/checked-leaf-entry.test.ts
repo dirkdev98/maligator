@@ -28,7 +28,7 @@ function mixedLeafUnits(image: ProgramImage) {
 			if (error instanceof RangeError) continue;
 			throw error;
 		}
-		const text = units.map((unit) => unit.source).join("\n");
+		const text = units.map((unit) => unit.sourceChunks.join("")).join("\n");
 		if (
 			/mal_function_\d+_instructions\b/.test(text) &&
 			text.includes("mal_vm_leaf_stack_available")

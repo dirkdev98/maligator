@@ -152,7 +152,7 @@ describe("native direct closures", () => {
 				image,
 				{},
 				{ targetCodeUnits: 20_000, hardMaximumCodeUnits: 20_000 },
-			).map((unit) => unit.source),
+			).map((unit) => unit.sourceChunks.join("")),
 		).join("\n");
 		expect(output).not.toMatch(
 			new RegExp(`\\bMalValue mal_compiled_${target}(?:_full)?\\(`),

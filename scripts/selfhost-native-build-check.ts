@@ -168,7 +168,11 @@ for (const input of [fixture, storageFixture]) {
 			`${name}: self-hosted evidence files ${JSON.stringify(actualNames)} != Node ${JSON.stringify(expectedNames)}`,
 		);
 	for (const file of expectedFiles) {
-		if (!readFileSync(path.join(evidence, file.name)).equals(Buffer.from(file.bytes)))
+		if (
+			!readFileSync(path.join(evidence, file.name)).equals(
+				Buffer.from(file.chunks.join("")),
+			)
+		)
 			throw new Error(
 				`${name}: self-hosted ${file.name} differs from the Node-hosted compiler`,
 			);

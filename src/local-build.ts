@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	constants,
 	copyFileSync,
@@ -35,6 +35,7 @@ import type {
 	GeneratedTranslationUnitDefinition,
 	GeneratedTranslationUnitKind,
 } from "./compiler/target/emit-program-image.ts";
+import { writeSourceChunks } from "./generated-source.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { normalizeRuntimeBuildArgument } from "./native-cache-identity.ts";
@@ -178,7 +179,8 @@ function thinLtoCacheArguments(
 interface GeneratedObjectInput {
 	sourcePath: string;
 	unitId: string;
-	source: string;
+	sourceDigest: string;
+	sourceBytes: number;
 	role: GeneratedObjectMeasurement["role"];
 	generatedKind?: GeneratedTranslationUnitKind;
 	headerFiles?: ReadonlyArray<string>;
@@ -207,7 +209,7 @@ function generatedUnitDigests(
 	const memoKeys = inputs.map((input) =>
 		artifactActionKey(GENERATED_UNIT_SLICE_PRODUCER, {
 			logicalSourcePath: logicalSourcePath(input),
-			source: artifactDigest(input.source),
+			source: input.sourceDigest,
 			compileArguments: normalizedCompileArguments,
 			headerDependencies: headerHash(input),
 			environment: context.environmentFingerprint,
@@ -375,7 +377,7 @@ function ensureGeneratedObjects(
 						: { generatedKind: input.generatedKind }),
 					...(input.definitions === undefined ? {} : { definitions: input.definitions }),
 					cache: "hit",
-					sourceBytes: Buffer.byteLength(input.source),
+					sourceBytes: input.sourceBytes,
 					objectBytes: statSync(output.path).size,
 					compileDurationMs: null,
 					userCpuMs: null,
@@ -385,7 +387,7 @@ function ensureGeneratedObjects(
 			};
 			continue;
 		}
-		const sourceBytes = Buffer.byteLength(input.source);
+		const sourceBytes = input.sourceBytes;
 		let scheduledCompileDurationMs: number | undefined;
 		const cachedCost = readArtifactAction(
 			context.cacheDirectory,
@@ -589,7 +591,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	}
 	const units: Array<{
 		id: string;
-		source: string;
+		sourceChunks: ReadonlyArray<string>;
 		generatedKind?: GeneratedTranslationUnitKind;
 		headerFiles?: ReadonlyArray<string>;
 		definitions?: ReadonlyArray<GeneratedTranslationUnitDefinition>;
@@ -597,11 +599,11 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		typeof input === "string"
 			? {
 					id: `source-${artifactDigest(input).slice(0, 16)}`,
-					source: input,
+					sourceChunks: [input],
 				}
 			: {
 					id: input.id,
-					source: input.source,
+					sourceChunks: input.sourceChunks,
 					generatedKind: input.kind,
 					headerFiles: input.headerFiles,
 					definitions: input.definitions,
@@ -618,30 +620,35 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		unitIds.add(unit.id);
 	}
 	let phaseStartedAt = performance.now();
+	const sourceMeasurements: Array<{ digest: string; bytes: number }> = [];
 	const cPaths = units.map((unit, index) => {
 		const sourcePath =
 			index === 0 ? cPath : path.join(outputDirectory, `${artifactName}.${unit.id}.c`);
-		writeFileSync(sourcePath, unit.source);
+		const digest = createHash("sha256");
+		const bytes = writeSourceChunks(sourcePath, unit.sourceChunks, digest);
+		sourceMeasurements.push({ digest: digest.digest("hex"), bytes });
 		return sourcePath;
 	});
 	context.onBuildPhase?.({
 		phase: "write generated C",
 		durationMs: performance.now() - phaseStartedAt,
 		units: units.length,
-		bytes: units.reduce((total, unit) => total + Buffer.byteLength(unit.source), 0),
+		bytes: sourceMeasurements.reduce((total, source) => total + source.bytes, 0),
 	});
 	const compileArguments = generatedCCompileArguments(context);
 	const thinLtoCache = thinLtoCacheArguments(context);
 	phaseStartedAt = performance.now();
 	const mainFile =
 		options.mainFile ?? path.join(context.runtimeDirectory, "test262_main.c");
+	const mainSource = readFileSync(mainFile);
 	const generatedObjects = ensureGeneratedObjects(
 		context,
 		[
 			...cPaths.map((sourcePath, index) => ({
 				sourcePath,
 				unitId: units[index]!.id,
-				source: units[index]!.source,
+				sourceDigest: sourceMeasurements[index]!.digest,
+				sourceBytes: sourceMeasurements[index]!.bytes,
 				role: "generated" as const,
 				...(units[index]!.generatedKind === undefined
 					? {}
@@ -656,7 +663,8 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			{
 				sourcePath: mainFile,
 				unitId: normalizeRuntimeBuildArgument(context.runtimeDirectory, mainFile),
-				source: readFileSync(mainFile, "utf-8"),
+				sourceDigest: artifactDigest(mainSource),
+				sourceBytes: mainSource.length,
 				role: "driver" as const,
 			},
 		],

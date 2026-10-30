@@ -70,12 +70,12 @@ describe("polling numeric C workers", () => {
 			});
 			const emitted = resolveSplitUnitLinks(
 				built.programImage,
-				source.map((unit) => unit.source),
+				source.map((unit) => unit.sourceChunks.join("")),
 			).join("\n");
 			const observed = resolveSplitUnitLinks(
 				built.programImage,
-				emitProgramTranslationUnits(built.programImage, { compiled: true }).map(
-					(unit) => unit.source,
+				emitProgramTranslationUnits(built.programImage, { compiled: true }).map((unit) =>
+					unit.sourceChunks.join(""),
 				),
 			).join("\n");
 			expect(observed).not.toMatch(/mal_direct_\d+_\d+_worker\(/);

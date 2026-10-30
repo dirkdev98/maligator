@@ -5,6 +5,7 @@ import type * as LoadedModule3 from "../src/build-config.ts";
 import type * as LoadedModule4 from "../src/compiler/frontend/compact-type-strip.ts";
 import type * as LoadedModule1 from "../src/compiler/pipeline/compile-program.ts";
 import type * as LoadedModule2 from "../src/compiler/target/emit-program-image.ts";
+import { writeSourceChunks } from "../src/generated-source.ts";
 
 const [source, input, output] = process.argv.slice(2);
 if (source === undefined || input === undefined || output === undefined) {
@@ -33,12 +34,21 @@ const image = compileEntrypoint(input, {
 });
 const units = emitProgramTranslationUnits(image, { maligatorSurface: true });
 mkdirSync(output, { recursive: true });
+let codeUnits = 0;
 for (const unit of units) {
-	writeFileSync(path.join(output, `unit-${unit.id}.c`), unit.source);
+	const compatible: {
+		source?: string;
+		sourceChunks?: ReadonlyArray<string>;
+		sourceCodeUnits?: number;
+	} = unit;
+	const file = path.join(output, `unit-${unit.id}.c`);
+	if (compatible.sourceChunks === undefined) writeFileSync(file, compatible.source!);
+	else writeSourceChunks(file, compatible.sourceChunks);
+	codeUnits += compatible.sourceCodeUnits ?? compatible.source!.length;
 }
 console.log(
 	JSON.stringify({
 		units: units.length,
-		codeUnits: units.reduce((sum, unit) => sum + unit.source.length, 0),
+		codeUnits,
 	}),
 );

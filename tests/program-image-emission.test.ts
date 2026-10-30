@@ -70,7 +70,7 @@ function emitProgramTranslationUnitSources(
 			maximum === undefined
 				? undefined
 				: { targetCodeUnits: maximum, hardMaximumCodeUnits: maximum },
-		).map((unit) => unit.source),
+		).map((unit) => unit.sourceChunks.join("")),
 	);
 }
 
@@ -1117,8 +1117,10 @@ describe("emit-program-image instruction packing", () => {
 			);
 		const small = emit(12_000);
 		const large = emit(80_000);
+		for (const unit of [...small, ...large])
+			expect(unit.sourceCodeUnits).toBe(unit.sourceChunks.join("").length);
 		const behavior = (units: ReturnType<typeof emit>) => ({
-			runtime: units.find((unit) => unit.kind === "runtime-image")!.source,
+			runtime: units.find((unit) => unit.kind === "runtime-image")!.sourceChunks.join(""),
 			definitions: units
 				.flatMap((unit) => unit.definitions)
 				.map((item) => `${item.kind}:${item.symbol}:${item.sourceCodeUnits}`)
@@ -1167,13 +1169,13 @@ describe("emit-program-image instruction packing", () => {
 			unit.definitions.some((item) => splitSymbolFunctionIndex(image, item.symbol) === 0),
 		)!;
 
-		expect(compiledUnit.source.length).toBeGreaterThan(20_000);
+		expect(compiledUnit.sourceChunks.join("").length).toBeGreaterThan(20_000);
 		expect(compiledUnit.definitions).toHaveLength(1);
 		expect(compiledUnit.kind).toBe("code");
 		expect(
 			resolveSplitUnitLinks(
 				image,
-				units.map((unit) => unit.source),
+				units.map((unit) => unit.sourceChunks.join("")),
 			).join("\n"),
 		).toMatch(boxedNativeDefinition(0, "external"));
 	});
@@ -1208,15 +1210,19 @@ describe("emit-program-image instruction packing", () => {
 					(item) => splitSymbolFunctionIndex(image, item.symbol) === 0,
 				),
 			);
-		const unitCodeUnits = compiledUnit(emit(8 * 1024 * 1024))!.source.length;
+		const unitCodeUnits = compiledUnit(emit(8 * 1024 * 1024))!.sourceChunks.join(
+			"",
+		).length;
 
-		expect(compiledUnit(emit(unitCodeUnits))?.source.length).toBe(unitCodeUnits);
+		expect(compiledUnit(emit(unitCodeUnits))?.sourceChunks.join("").length).toBe(
+			unitCodeUnits,
+		);
 		const interpreted = emit(unitCodeUnits - 1);
 		expect(compiledUnit(interpreted)).toBeUndefined();
 		expect(
 			resolveSplitUnitLinks(
 				image,
-				interpreted.map((unit) => unit.source),
+				interpreted.map((unit) => unit.sourceChunks.join("")),
 			).join("\n"),
 		).not.toContain("mal_compiled_0");
 	});
@@ -1319,9 +1325,11 @@ describe("emit-program-image instruction packing", () => {
 			(splitSymbolFunctionIndex(imageWith(functions), symbol) ?? 1) % files.length === 0;
 		const before = codeUnits(imageWith(functions));
 		const after = new Map(
-			codeUnits(imageWith(grown)).map((unit) => [unit.id, unit.source]),
+			codeUnits(imageWith(grown)).map((unit) => [unit.id, unit.sourceChunks.join("")]),
 		);
-		const changed = before.filter((unit) => after.get(unit.id) !== unit.source);
+		const changed = before.filter(
+			(unit) => after.get(unit.id) !== unit.sourceChunks.join(""),
+		);
 
 		expect(changed.length).toBeGreaterThan(0);
 		for (const unit of changed)
@@ -1429,7 +1437,7 @@ describe("emit-program-image instruction packing", () => {
 		const codeUnits = (image: ProgramImage) =>
 			emitProgramTranslationUnits(image, {}, policy)
 				.filter((unit) => unit.kind === "code")
-				.map((unit) => [unit.id, unit.source]);
+				.map((unit) => [unit.id, unit.sourceChunks.join("")]);
 
 		const first = codeUnits(at("/tmp/run-a1b2"));
 
@@ -1455,7 +1463,9 @@ describe("emit-program-image instruction packing", () => {
 
 		expect(dataUnits.length).toBeGreaterThan(1);
 		expect(dataUnits.every((unit) => unit.id.length < 128)).toBe(true);
-		expect(dataUnits.every((unit) => unit.source.length <= 500_000)).toBe(true);
+		expect(dataUnits.every((unit) => unit.sourceChunks.join("").length <= 500_000)).toBe(
+			true,
+		);
 	});
 
 	it("charges split units only for declarations they reference", () => {
@@ -1853,8 +1863,8 @@ describe("emit-program-image instruction packing", () => {
 		};
 		const digest = "a".repeat(64);
 		const output = resolveOverlayUnitLinks(
-			emitRelocatableNativeOverlayTranslationUnits(relocatable, digest).map(
-				(unit) => unit.source,
+			emitRelocatableNativeOverlayTranslationUnits(relocatable, digest).map((unit) =>
+				unit.sourceChunks.join(""),
 			),
 		);
 
@@ -2025,12 +2035,13 @@ describe("emit-program-image instruction packing", () => {
 		const previous = new Set(symbols(before));
 		const inserted = symbols(after).filter((symbol) => !previous.has(symbol));
 		expect(inserted).toHaveLength(1);
-		const sources = new Map(before.map((unit) => [unit.id, unit.source]));
+		const sources = new Map(before.map((unit) => [unit.id, unit.sourceChunks.join("")]));
 		const untouched = after.filter((unit) =>
 			unit.definitions.every(({ symbol }) => symbol !== inserted[0]),
 		);
 		for (const unit of untouched)
-			if (sources.has(unit.id)) expect(unit.source).toBe(sources.get(unit.id));
+			if (sources.has(unit.id))
+				expect(unit.sourceChunks.join("")).toBe(sources.get(unit.id));
 		const kept = symbols(untouched.filter((unit) => sources.has(unit.id)));
 
 		expect(kept.length).toBeGreaterThan((names.length * 3) / 4);

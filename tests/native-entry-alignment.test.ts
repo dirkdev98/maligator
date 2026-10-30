@@ -67,7 +67,7 @@ describe("native entry alignment contract", () => {
 		for (const debugInfo of [false, true]) {
 			alignedDefinitions(emitProgramImage(image, { compiled: true, debugInfo }));
 			const units = emitProgramTranslationUnits(image, { compiled: true, debugInfo });
-			alignedDefinitions(units.map((unit) => unit.source).join("\n"));
+			alignedDefinitions(units.map((unit) => unit.sourceChunks.join("")).join("\n"));
 		}
 	});
 });

@@ -304,6 +304,9 @@ starting each replay with cold transfer state. `flow-membership` warms stable
 transfers, then appends unrelated functions between repeated consumer queries.
 `constants` compacts a captured
 compiler image with an unused trailing constant; `emission` renders that image.
+`emission-io` also encodes UTF-8, hashes the complete output, and writes each unit;
+its checksum must match across revisions. Revisions predating chunked sources
+receive the shared writer as a fixture dependency and use their flat-source path.
 Every case except `optimizer` and `lowering` runs on Node and compiled native binaries.
 Use `--cases roots,backedges` or `--hosts node` to narrow the selection.
 

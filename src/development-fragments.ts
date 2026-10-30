@@ -77,7 +77,7 @@ export function developmentFragmentUnits(
 		throw new Error("development fragments must have distinct images");
 	const producer = artifactProducer(
 		FRAGMENT_UNITS_STAGE,
-		2,
+		3,
 		compilerImplementationDigest(),
 	);
 	const overlays = artifacts.flatMap((artifact, index) => {
@@ -151,14 +151,16 @@ export function developmentFragmentUnits(
 		{
 			id: "development-fragment-images",
 			kind: "data",
-			source: table,
+			sourceChunks: [table],
+			sourceCodeUnits: table.length,
 			headerFiles: ["compiler_native.h", "dev_runner.h"],
 			definitions: [],
 		},
 		{
 			id: "development-fragment-assets",
 			kind: "data",
-			source: assetTable,
+			sourceChunks: [assetTable],
+			sourceCodeUnits: assetTable.length,
 			headerFiles: ["vm.h"],
 			definitions: [],
 		},
