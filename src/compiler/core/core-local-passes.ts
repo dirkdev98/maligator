@@ -2870,6 +2870,138 @@ const forwardRestArguments: CoreFunctionPass = {
 	},
 };
 
+// Larger literals keep one allocation rather than widening the call.
+const SPREAD_LITERAL_ELEMENT_LIMIT = 16;
+
+/**
+ * Under locked primordials, spreading an Array literal that nothing else observes passes
+ * exactly its defined elements: the intrinsic iterator and its `next` cannot change, and
+ * every index below the literal's length is an own data property.
+ */
+const spreadArrayLiteralArguments: CoreFunctionPass = {
+	name: "spread-array-literal-arguments",
+	stage: "canonicalize",
+	requiredFunctionOpcodesAny: ["callSpreadIterable"],
+	requiredAnalyses: [],
+	wakesOn: ["body", "cfg"],
+	changes: LOCAL_CHANGES,
+	budget: LOCAL_BUDGET,
+	run(context) {
+		const { program, compilationContext, item } = context;
+		if (compilationContext.facts.world.primordialPolicy !== "locked") return undefined;
+		const fn = program.function(item.function);
+		let editor: CoreEditor | undefined;
+		// Rewrites remove instructions, so candidates come from a snapshot.
+		const literals = [...fn.instructionIds()].filter(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "createArray",
+		);
+		for (const producer of literals) {
+			const length = fn.instructionAttributes(producer).length;
+			const array = instructionResult(fn, producer, 0);
+			if (
+				typeof length !== "number" ||
+				!Number.isInteger(length) ||
+				length < 0 ||
+				length > SPREAD_LITERAL_ELEMENT_LIMIT ||
+				array === undefined ||
+				fn.kernel.valueHandlerUseCount(array) !== 0
+			)
+				continue;
+			const elements = new Array<CoreValueId | undefined>(length).fill(undefined);
+			const definitions = new Set<CoreInstructionId>();
+			const calls: Array<{
+				instruction: CoreInstructionId;
+				operands: Array<CoreValueId>;
+			}> = [];
+			let valid = true;
+			for (
+				let use = fn.kernel.valueFirstUse(array);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				if (fn.kernel.useLive(use) === 0) continue;
+				const consumer = coreInstructionId(fn.kernel.useInstruction(use));
+				const operands =
+					fn.instructionKind(consumer) === "operation"
+						? copyInstructionOperands(fn, consumer)
+						: [];
+				const opcode =
+					fn.instructionKind(consumer) === "operation"
+						? fn.instructionOpcodeName(consumer)
+						: undefined;
+				if (
+					opcode === "callSpreadIterable" &&
+					operands[2] === array &&
+					operands.filter((operand) => operand === array).length === 1
+				) {
+					calls.push({ instruction: consumer, operands });
+					continue;
+				}
+				const attributes =
+					opcode === "defineProperty" ? fn.instructionAttributes(consumer) : undefined;
+				const key =
+					operands[1] === undefined ? undefined : constantForValue(fn, operands[1]);
+				const index =
+					key?.kind === "number" && Number.isInteger(key.value) ? key.value : -1;
+				if (
+					attributes === undefined ||
+					operands[0] !== array ||
+					operands[2] === array ||
+					attributes.enumerable !== true ||
+					attributes.writable === false ||
+					attributes.configurable === false ||
+					fn.instructionBlock(consumer) !== fn.instructionBlock(producer) ||
+					index < 0 ||
+					index >= length ||
+					elements[index] !== undefined
+				) {
+					valid = false;
+					break;
+				}
+				elements[index] = operands[2];
+				definitions.add(consumer);
+			}
+			if (!valid || calls.length === 0 || elements.includes(undefined)) continue;
+			// SSA already places other blocks' calls after the literal's whole block; within
+			// it, a call must still follow every definition.
+			const pending = new Set(definitions);
+			for (
+				let next = fn.instructionNext(producer);
+				next !== undefined && valid;
+				next = fn.instructionNext(next)
+			) {
+				pending.delete(next);
+				if (calls.some(({ instruction }) => instruction === next) && pending.size > 0)
+					valid = false;
+			}
+			if (!valid) continue;
+			editor ??= CoreEditor.open(program, item.function);
+			for (const { instruction, operands } of calls) {
+				const sourceCall = fn.instructionAttributes(instruction).sourceCall;
+				editor.replaceInstruction(
+					instruction,
+					"call",
+					[
+						operands[0]!,
+						operands[1]!,
+						...operands.slice(3),
+						...(elements as Array<CoreValueId>),
+					],
+					{
+						...(typeof sourceCall === "number" ? { attributes: { sourceCall } } : {}),
+						sourcePosition: fn.instructionSourcePosition(instruction),
+					},
+				);
+			}
+			for (const definition of definitions) editor.removeInstruction(definition);
+			editor.removeInstruction(producer);
+		}
+		return editor?.commit();
+	},
+};
+
 function canonicalRestElementIndex(key: string | number): number | undefined {
 	const index = typeof key === "number" ? key : Number(key);
 	if (
@@ -3369,6 +3501,7 @@ const scalarizeBoundedRestReads: CoreFunctionPass = {
 export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
 	forwardRestArguments,
+	spreadArrayLiteralArguments,
 	scalarizeRestArgumentReads,
 	scalarizeBoundedRestReads,
 	rewriteExactBuiltinCalls,
@@ -3431,6 +3564,7 @@ export const eliminateUnusedBlockParameters: CoreFunctionPass = {
 
 export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	forwardRestArguments,
+	spreadArrayLiteralArguments,
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
 	afterLateCfgEdits(canonicalizeBlockParameters),

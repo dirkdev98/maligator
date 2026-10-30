@@ -2797,7 +2797,7 @@ describe("primitive operation results", () => {
 	it.each([
 		"const wrapper = new Number(x); globalThis.wrapper = wrapper; return Math.abs(wrapper);",
 		"const wrapper = new Number(x); wrapper[Symbol.toPrimitive] = () => 9; return Math.abs(wrapper);",
-		"return Math.min(...[new Number(x)]);",
+		"return Math.min(...[new Number(x)].values());",
 		"return Math.sumPrecise(new Number(x));",
 	])(
 		"retains wrapper materialization outside the numeric consumer proof in %s",
@@ -2846,18 +2846,18 @@ describe("primitive operation results", () => {
 		).toBe(false);
 	});
 
-	it.each(["Symbol.keyFor(Object(Symbol.for(x)))", "parseInt(...[new String(x)])"])(
-		"retains identity-sensitive or spread wrapper inputs in %s",
-		(expression) => {
-			const output = inspect(expression);
-			expect(
-				output.core.some(
-					(operation) =>
-						operation.attributes.construct || operation.attributes.operation === "Object",
-				),
-			).toBe(true);
-		},
-	);
+	it.each([
+		"Symbol.keyFor(Object(Symbol.for(x)))",
+		"parseInt(...[new String(x)].values())",
+	])("retains identity-sensitive or spread wrapper inputs in %s", (expression) => {
+		const output = inspect(expression);
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.attributes.construct || operation.attributes.operation === "Object",
+			),
+		).toBe(true);
+	});
 
 	it.each([
 		"parseInt(new String(x),10)",
@@ -2943,7 +2943,7 @@ describe("primitive operation results", () => {
 		'String.raw(new String(x),"z")',
 		'"abc".localeCompare("def",new String(x))',
 		'"abc".toLocaleLowerCase(new String(x))',
-		"String.fromCharCode(...[new Number(x)])",
+		"String.fromCharCode(...[new Number(x)].values())",
 	])(
 		"retains protocol, template, locale or spread wrapper inputs in %s",
 		(expression) => {

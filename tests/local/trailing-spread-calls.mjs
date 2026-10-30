@@ -110,6 +110,18 @@ overridden[Symbol.iterator] = function* () {
 check(collect(3, ...overridden), [3, 7, 8], "custom array iterator");
 const sparse = [, 2];
 check(collect(3, ...sparse), [3, undefined, 2], "array holes");
+let elementReads = 0;
+const counted = {
+	get value() {
+		return ++elementReads;
+	},
+};
+const sharedLiteral = [counted.value, 2];
+check(
+	[collect(...sharedLiteral), collect(0, ...sharedLiteral), elementReads],
+	[[1, 2], [0, 1, 2], 1],
+	"literal shared by two spreads",
+);
 const labelled = [1, 2];
 labelled.label = "own data";
 check(collect(0, ...labelled), [0, 1, 2], "array with other own properties");
