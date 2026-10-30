@@ -416,6 +416,37 @@ describe("fixed TypedArray loop storage", () => {
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 	});
 
+	it("consumes per-access element kinds inside mixed storage regions", () => {
+		const image = compile(
+			"const values=new Uint32Array(64);const weights=new Float32Array(64);for(let i=0;i<values.length;i++){values[i]=i*7919.5;weights[i]=values[i]*0.25;}let sum=0;for(let i=0;i<values.length;i++)sum+=values[i]+weights[i];return sum;",
+			undefined,
+			"locked",
+		);
+		const native = image.native.functions[1]!;
+		const claimed = new Set(
+			native.storage!.numericLoopRegions.flatMap((plan) =>
+				plan.kind === "fixed-numeric" ? plan.claimedIps : [],
+			),
+		);
+		const kinds = new Set(
+			[...claimed].flatMap((ip) => {
+				const access = native.instructions[ip];
+				return access?.kind === "exact-typed-array-element" ||
+					access?.kind === "contained-fixed-typed-array-element"
+					? [access.elementKind]
+					: [];
+			}),
+		);
+		expect(kinds).toEqual(new Set(["Uint32Array", "Float32Array"]));
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		for (const plan of [native, restored.native.functions[1]!]) {
+			const emitted = emitCompiledFunction(plan, 1, "", false);
+			expect(emitted).not.toBeNull();
+			expect(emitted!.source).not.toContain("mal_vm_fixed_numeric_load(");
+			expect(emitted!.source).not.toContain("mal_vm_fixed_numeric_store(");
+		}
+	});
+
 	const dataViewKernel =
 		"for(let i=0;i<left.length;i++){output.setUint32(i*4+1,left[i],(i&1)===0);}return output;";
 	const dataViewRegions = (source: string) =>

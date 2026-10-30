@@ -1481,6 +1481,7 @@ function emitNumericLoopRegion(
 	// The C statement that performs the binding load at an instruction.
 	bindingLoad: (ip: number) => string,
 	facts: NativeFunctionPlan["facts"],
+	nativeInstructions: NativeFunctionPlan["instructions"],
 ): ReadonlyArray<string> {
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
 	const order = numericLoopOrder(fn, plan.id, members, true);
@@ -1969,6 +1970,23 @@ function emitNumericLoopRegion(
 					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_e); }`;
 				if (mode === "f64")
 					return `{ ${bound}${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8)); }`;
+				const access = nativeInstructions[ip];
+				if (
+					access?.kind === "exact-typed-array-element" ||
+					access?.kind === "contained-fixed-typed-array-element"
+				) {
+					const width = nativeTypedArrayElementSize(access.elementKind);
+					const bits = `mal_scalar_load_native_u${width * 8}(${id}_v${op.object}.data + (usize)(u32) ${key} * ${width})`;
+					const value =
+						access.elementKind === "Float64Array"
+							? `mal_scalar_f64_from_bits(${bits})`
+							: access.elementKind === "Float32Array"
+								? `mal_scalar_f32_from_bits(${bits})`
+								: access.elementKind.startsWith("Int")
+									? `mal_scalar_i${width * 8}_from_bits(${bits})`
+									: bits;
+					return `{ ${bound}${local(op.dst)} = (${integral.has(op.dst) ? "i64" : "f64"}) (${value}); }`;
+				}
 				if (mode === "integer" && integral.has(op.dst))
 					return `{ ${bound}${local(op.dst)} = mal_vm_fixed_integer_load(&${id}_v${op.object}, (u32) ${key}); }`;
 				return `{ ${bound}${local(op.dst)} = ${integral.has(op.dst) ? "(i64) " : ""}mal_vm_fixed_numeric_load(&${id}_v${op.object}, (u32) ${key}); }`;
@@ -1976,6 +1994,23 @@ function emitNumericLoopRegion(
 			case "STORE_PROPERTY": {
 				if (mode === "array") throw new Error("Invalid dense Array loop store");
 				const key = integral.has(op.key) ? local(op.key) : num(op.key);
+				const access = nativeInstructions[ip];
+				if (
+					mode !== "f64" &&
+					(access?.kind === "exact-typed-array-element" ||
+						access?.kind === "contained-fixed-typed-array-element")
+				) {
+					const width = nativeTypedArrayElementSize(access.elementKind);
+					const bits =
+						access.elementKind === "Float64Array"
+							? `mal_scalar_f64_to_bits(${num(op.value)})`
+							: access.elementKind === "Float32Array"
+								? `mal_scalar_f32_to_bits((f32) ${num(op.value)})`
+								: access.elementKind === "Uint8ClampedArray"
+									? `mal_typed_array_to_uint8_clamp(${num(op.value)})`
+									: `(u${width * 8}) mal_ops_number_to_uint32(${num(op.value)})`;
+					return `mal_scalar_store_native_u${width * 8}(${id}_v${op.object}.data + (usize)(u32) ${key} * ${width}, ${bits});`;
+				}
 				return mode === "f64"
 					? `mal_scalar_store_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8, mal_scalar_f64_to_bits(${num(op.value)}));`
 					: `mal_vm_fixed_numeric_store(&${id}_v${op.object}, (u32) ${key}, ${num(op.value)});`;
@@ -7349,6 +7384,7 @@ function emitBody(
 					throw new Error("Invalid numeric loop binding load");
 				},
 				nativeFacts,
+				nativeInstructions,
 			))
 				lines.push(`    ${line}`);
 		const numberRecord = numberRecordRegionById.get(ip);

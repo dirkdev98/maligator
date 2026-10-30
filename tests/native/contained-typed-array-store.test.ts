@@ -150,9 +150,12 @@ describe("contained numeric TypedArrays in fixed storage regions", () => {
 				let sum = 0;
 				for (let index = 0; index < values.length; index++)
 					sum += values[index] + Math.trunc(weights[index]);
-				return sum;
+				return [sum,
+					Object.is(values[0], -0) ? "-0" : String(values[0]),
+					Object.is(weights[0], -0) ? "-0" : String(weights[0])].join(":");
 			}
 			console.log("${kind}", region${kind}(255.5), region${kind}(-1e12), region${kind}(4294967296.5));
+			console.log("${kind}-rounding", region${kind}(1 + 2 ** -24), region${kind}(3 * 2 ** -150), region${kind}(-0), region${kind}(NaN), region${kind}(Infinity));
 		`,
 				)
 				.join("\n"),
