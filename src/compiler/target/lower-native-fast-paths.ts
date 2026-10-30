@@ -1,4 +1,5 @@
 import { ARRAY_INITIALIZATION_LIMITS } from "../shared/array-initialization.ts";
+import { DATA_VIEW_ACCESSOR_TYPES } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_OBJECT,
@@ -227,9 +228,52 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 					readonly checked?: true;
 					/** A primitive string read through a world-licensed `charCodeAt`. */
 					readonly text?: true;
+					/**
+					 * A DataView, accessed through its intrinsic accessors at bytes `byteScale`
+					 * times the index plus an offset, with `minOffset` and `maxOffset` bounding
+					 * every byte an access covers.
+					 */
+					readonly byteScale?: number;
 				}>;
+				/** The DataView accessor calls the region performs on its byte views. */
+				readonly dataViewCalls?: ReadonlyArray<NativeDataViewCall>;
 		  }
 	);
+
+export type NativeDataViewAccessorType = (typeof DATA_VIEW_ACCESSOR_TYPES)[number];
+
+/** An accessor call of `DataView.prototype` at `ip`. */
+export interface NativeDataViewCall {
+	readonly ip: number;
+	readonly set: boolean;
+	readonly type: NativeDataViewAccessorType;
+}
+
+export const DATA_VIEW_ELEMENT_SIZES: Readonly<
+	Record<NativeDataViewAccessorType, number>
+> = {
+	Int8: 1,
+	Uint8: 1,
+	Int16: 2,
+	Uint16: 2,
+	Int32: 4,
+	Uint32: 4,
+	Float32: 4,
+	Float64: 8,
+};
+
+/** The accessor a `DataView.prototype` method name selects, if compiled code performs it inline. */
+export function nativeDataViewAccessor(
+	method: string,
+): Omit<NativeDataViewCall, "ip"> | undefined {
+	const kind = method.slice(0, 3);
+	const type = DATA_VIEW_ACCESSOR_TYPES.find(
+		(candidate) => method.slice(3) === candidate,
+	);
+	return (kind === "get" || kind === "set") && type !== undefined
+		? { set: kind === "set", type }
+		: undefined;
+}
 
 export interface NativePropertyReadPairPlan {
 	readonly id: number;
@@ -1123,14 +1167,18 @@ export function numberRecordDataflow(
 	codeUnitReads?: ReadonlySet<number>,
 	// Loop regions load the bindings they read at entry; record regions do not.
 	bindingLoads = indexed,
+	// DataView accessor calls a loop region performs on its byte views.
+	dataViewCalls: ReadonlyMap<number, NativeDataViewCall> = new Map(),
 ): NativeNumberRecordDataflow | undefined {
 	const kinds = new Map<number, NativeNumberRecordKind>();
 	const inputs = new Set<number>();
 	const written = new Set<number>();
-	const methods =
-		codeUnitReads === undefined
-			? new Set<number>()
-			: numericLoopCodeUnitMethods(fn, order, codeUnitReads);
+	const methods = numericLoopCallMethods(
+		fn,
+		order,
+		codeUnitReads ?? new Set(),
+		dataViewCalls,
+	);
 	const numericReads = new Set<number>();
 	const intrinsics = new Set<number>();
 	const bindings = new Set<number>();
@@ -1171,7 +1219,23 @@ export function numberRecordDataflow(
 			codeUnitReads === undefined
 				? undefined
 				: numericLoopCodeUnitRead(fn, ip, codeUnitReads);
-		if (codeUnit !== undefined) {
+		const data = dataViewCalls.get(ip);
+		if (data !== undefined && instruction.opcode === "CALL") {
+			const [key, value] = instruction.arguments;
+			const littleEndian = instruction.arguments[data.set ? 2 : 1];
+			// Like a code unit read's, the callee is the method the entry proved.
+			admitted =
+				intrinsics.has(instruction.callee) &&
+				before.has(instruction.callee) &&
+				read(key!, "number") &&
+				(!data.set ||
+					decodeVmValueOperand(value!).kind !== "register" ||
+					read(value!, "number")) &&
+				(littleEndian === undefined ||
+					decodeVmValueOperand(littleEndian).kind !== "register" ||
+					read(littleEndian)) &&
+				(data.set || write(instruction.dst, "number"));
+		} else if (codeUnit !== undefined) {
 			// Every write of the callee loads the method from this receiver, so one this
 			// iteration made it the builtin.
 			admitted =
@@ -1735,10 +1799,13 @@ export function numericLoopInnerBodies(
 	return bodies;
 }
 
-type NumericLoopIndexFact = {
-	readonly base: "constant" | "index";
-	readonly offset: number;
-};
+/** A register's value as `scale * index + offset`, or the constant `offset`. */
+type NumericLoopIndexFact =
+	| { readonly base: "constant"; readonly offset: number }
+	| { readonly base: "index"; readonly scale: number; readonly offset: number };
+
+/** A DataView key's bytes per index step; the bound keeps every byte key an exact double. */
+const NUMERIC_LOOP_BYTE_SCALE_LIMIT = 0x10000;
 
 function numericLoopOffset(value: number): boolean {
 	return Number.isInteger(value) && value >= -0x80000000 && value <= 0x7fffffff;
@@ -1776,7 +1843,72 @@ function numericLoopEntryConstants(
 		}
 		cursor = ip;
 	}
+	// A constant hoisted past an enclosing loop's header is still the register's only
+	// write, and the function's entry chain runs it before anything else.
+	for (const ip of shape.order)
+		for (const register of vmInstructionReadRegisters(fn.instructions[ip]!)) {
+			if (seen.has(register)) continue;
+			seen.add(register);
+			const writerIp = singleWriters(body).get(register);
+			const writer = writerIp === undefined ? undefined : fn.instructions[writerIp];
+			if (
+				register >= fn.parameterCount &&
+				(writer?.opcode === "CREATE_NUMBER" || writer?.opcode === "CREATE_F64") &&
+				numericLoopOffset(writer.value) &&
+				functionEntryChain(fn, body).has(writerIp!)
+			)
+				constants.set(register, writer.value);
+		}
 	return constants;
+}
+
+const singleWriterCache = new WeakMap<NativeBodyFacts, ReadonlyMap<number, number>>();
+
+/** Each register written by exactly one instruction, with that instruction. */
+function singleWriters(body: NativeBodyFacts): ReadonlyMap<number, number> {
+	const cached = singleWriterCache.get(body);
+	if (cached !== undefined) return cached;
+	const writers = new Map<number, number>();
+	const repeated = new Set<number>();
+	for (const [ip, written] of body.writes.entries())
+		for (const register of written) {
+			if (writers.has(register)) repeated.add(register);
+			writers.set(register, ip);
+		}
+	for (const register of repeated) writers.delete(register);
+	singleWriterCache.set(body, writers);
+	return writers;
+}
+
+const entryChainCache = new WeakMap<NativeBodyFacts, ReadonlySet<number>>();
+
+/**
+ * The instructions every execution runs first, in order: from the only entry, each has
+ * a single predecessor, no handler, and no branch until the chain ends.
+ */
+function functionEntryChain(
+	fn: BytecodeFunction,
+	body: NativeBodyFacts,
+): ReadonlySet<number> {
+	const cached = entryChainCache.get(body);
+	if (cached !== undefined) return cached;
+	const chain = new Set<number>();
+	if ([...body.externalEntries].every((ip) => ip === 0))
+		for (let ip = 0; ip < fn.instructions.length && !chain.has(ip);) {
+			if (
+				body.handlerTargets[ip] !== undefined ||
+				bytecodePredecessors(fn, body, ip).length !== (ip === 0 ? 0 : 1)
+			)
+				break;
+			chain.add(ip);
+			const op = fn.instructions[ip]!;
+			if (op.opcode === "JUMP") ip = op.targetIp;
+			else if (op.opcode === "JUMP_IF" || op.opcode === "RETURN" || op.opcode === "THROW")
+				break;
+			else ip++;
+		}
+	entryChainCache.set(body, chain);
+	return chain;
 }
 
 /** A write of `src` plus a constant, as `+`, `-`, increment or decrement. */
@@ -1807,7 +1939,13 @@ function numericLoopIndexFacts(
 	index: number,
 	keys: ReadonlyMap<number, number>,
 ): {
+	/** Keys at the index plus an offset. */
 	readonly offsets: ReadonlyMap<number, number>;
+	/** Keys at any positive multiple of the index plus an offset. */
+	readonly windows: ReadonlyMap<
+		number,
+		{ readonly scale: number; readonly offset: number }
+	>;
 	readonly increments: ReadonlyMap<number, number>;
 } {
 	const initial = new Map<number, NumericLoopIndexFact>([
@@ -1817,12 +1955,13 @@ function numericLoopIndexFacts(
 				{ base: "constant", offset },
 			],
 		),
-		[index, { base: "index", offset: 0 }],
+		[index, { base: "index", scale: 1, offset: 0 }],
 	]);
 	const before = new Map<number, Map<number, NumericLoopIndexFact>>([
 		[shape.order[0]!, initial],
 	]);
 	const offsets = new Map<number, number>();
+	const windows = new Map<number, { scale: number; offset: number }>();
 	const increments = new Map<number, number>();
 	for (const ip of shape.order) {
 		const facts = new Map(before.get(ip));
@@ -1834,7 +1973,10 @@ function numericLoopIndexFacts(
 		const keyRegister = keys.get(ip);
 		if (keyRegister !== undefined) {
 			const key = facts.get(keyRegister);
-			if (key?.base === "index") offsets.set(ip, key.offset);
+			if (key?.base === "index") {
+				windows.set(ip, { scale: key.scale, offset: key.offset });
+				if (key.scale === 1) offsets.set(ip, key.offset);
+			}
 		}
 		let result: NumericLoopIndexFact | undefined;
 		if (
@@ -1854,7 +1996,7 @@ function numericLoopIndexFacts(
 			const source = facts.get(op.src);
 			const step = op.operator === "increment" ? 1 : -1;
 			if (source !== undefined && numericLoopOffset(source.offset + step))
-				result = { base: source.base, offset: source.offset + step };
+				result = { ...source, offset: source.offset + step };
 		} else if (op.opcode === "BINARY" && (op.operator === "+" || op.operator === "-")) {
 			const left = facts.get(op.left),
 				right = facts.get(op.right);
@@ -1865,15 +2007,37 @@ function numericLoopIndexFacts(
 			) {
 				const offset =
 					op.operator === "+" ? left.offset + right.offset : left.offset - right.offset;
+				const indexed =
+					left.base === "index" ? left : right.base === "index" ? right : undefined;
 				if (numericLoopOffset(offset))
-					result = {
-						base: left.base === "index" || right.base === "index" ? "index" : "constant",
-						offset,
-					};
+					result =
+						indexed === undefined
+							? { base: "constant", offset }
+							: { base: "index", scale: indexed.scale, offset };
 			}
+		} else if (op.opcode === "BINARY" && op.operator === "*") {
+			const left = facts.get(op.left),
+				right = facts.get(op.right);
+			const factor =
+				right?.base === "constant" ? right : left?.base === "constant" ? left : undefined;
+			const scaled = factor === right ? left : right;
+			const offset = (scaled?.offset ?? 0) * (factor?.offset ?? 0);
+			if (
+				factor !== undefined &&
+				scaled !== undefined &&
+				factor.offset > 0 &&
+				numericLoopOffset(offset)
+			)
+				result =
+					scaled.base === "constant"
+						? { base: "constant", offset }
+						: scaled.scale * factor.offset <= NUMERIC_LOOP_BYTE_SCALE_LIMIT
+							? { base: "index", scale: scaled.scale * factor.offset, offset }
+							: undefined;
 		}
 		if (
 			result?.base === "index" &&
+			result.scale === 1 &&
 			result.offset !== 0 &&
 			(op.opcode === "BINARY" ||
 				(op.opcode === "UNARY" &&
@@ -1889,12 +2053,18 @@ function numericLoopIndexFacts(
 			else
 				for (const [register, fact] of incoming) {
 					const other = facts.get(register);
-					if (other?.base !== fact.base || other.offset !== fact.offset)
+					if (
+						other?.base !== fact.base ||
+						other.offset !== fact.offset ||
+						(other.base === "index" &&
+							fact.base === "index" &&
+							other.scale !== fact.scale)
+					)
 						incoming.delete(register);
 				}
 		}
 	}
-	return { offsets, increments };
+	return { offsets, windows, increments };
 }
 
 /** Only proven builtin identities whose numeric bodies cannot call user code or collect. */
@@ -2042,6 +2212,10 @@ function fixedNumericLoopCounter(
 	| {
 			readonly counter: NativeNumericLoopCounter;
 			readonly offsets: ReadonlyMap<number, number>;
+			readonly windows: ReadonlyMap<
+				number,
+				{ readonly scale: number; readonly offset: number }
+			>;
 			readonly lengthLoad?: {
 				readonly ip: number;
 				readonly object: number;
@@ -2121,7 +2295,7 @@ function fixedNumericLoopCounter(
 		shape.members.has(comparisonIp + 2)
 	)
 		return undefined;
-	const { offsets, increments } = numericLoopIndexFacts(
+	const { offsets, windows, increments } = numericLoopIndexFacts(
 		fn,
 		body,
 		shape,
@@ -2197,6 +2371,7 @@ function fixedNumericLoopCounter(
 			stride,
 		},
 		offsets,
+		windows,
 		...(lengthLoad === undefined ? {} : { lengthLoad }),
 	};
 }
@@ -2210,8 +2385,75 @@ interface NumericLoopAccess {
 				readonly object: number;
 				readonly key: number;
 				readonly dst: number;
+		  }
+		| {
+				readonly opcode: "STORE_PROPERTY";
+				readonly object: number;
+				readonly key: number;
+				readonly value: number;
 		  };
 	readonly text?: true;
+	readonly data?: NativeDataViewCall;
+}
+
+/**
+ * Calls whose callee every write loads from the call's receiver by a DataView accessor's
+ * name; a region's entry proves that name selects the intrinsic.
+ */
+function numericLoopDataViewCalls(
+	fn: BytecodeFunction,
+	body: NativeBodyFacts,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	callPlan: (ip: number) => NativeInstructionPlan | undefined,
+): ReadonlyMap<number, NativeDataViewCall> {
+	const writers = new Map<number, Array<BytecodeInstruction>>();
+	for (const op of fn.instructions)
+		for (const register of vmInstructionWriteRegisters(op)) {
+			const registerWriters = writers.get(register);
+			if (registerWriters === undefined) writers.set(register, [op]);
+			else registerWriters.push(op);
+		}
+	const calls = new Map<number, NativeDataViewCall>();
+	for (const [ip, call] of fn.instructions.entries()) {
+		if (call.opcode !== "CALL" || call.callee === call.thisValue) continue;
+		const names = new Set(
+			(writers.get(call.callee) ?? []).map((writer) =>
+				writer.opcode === "LOAD_PROPERTY_STATIC" && writer.object === call.thisValue
+					? String.fromCharCode(...(stringConstants[writer.stringIndex] ?? []))
+					: undefined,
+			),
+		);
+		const [method] = names;
+		const accessor =
+			names.size === 1 && method !== undefined
+				? nativeDataViewAccessor(method)
+				: undefined;
+		const plan = callPlan(ip);
+		const [key, value] = call.arguments;
+		const littleEndian = call.arguments[accessor?.set === true ? 2 : 1];
+		if (
+			accessor === undefined ||
+			(plan !== undefined &&
+				(plan.kind !== "call" ||
+					plan.guardedBuiltinCall?.operation !== `DataView.prototype.${method}`)) ||
+			call.arguments.length < (accessor.set ? 2 : 1) ||
+			call.arguments.length > (accessor.set ? 3 : 2) ||
+			// Keys are counted registers; a stored value is a Number, and the region folds a
+			// constant byte order, which no string spells.
+			key === undefined ||
+			decodeVmValueOperand(key).kind !== "register" ||
+			(accessor.set &&
+				decodeVmValueOperand(value!).kind !== "register" &&
+				decodeVmValueOperand(value!).kind !== "number") ||
+			(littleEndian !== undefined &&
+				decodeVmValueOperand(littleEndian).kind === "string") ||
+			// A setter's result is undefined, which no region register holds.
+			(accessor.set && registersLiveAt(fn, body, ip + 1, new Set([call.dst])).length > 0)
+		)
+			continue;
+		calls.set(ip, { ip, ...accessor });
+	}
+	return calls;
 }
 
 /** The `charCodeAt` call at `ip` as a read of its receiver's code unit. */
@@ -2238,14 +2480,20 @@ function numericLoopCodeUnitRead(
 		: undefined;
 }
 
-/** The loads whose only use is as the callee of a code unit read, which a region skips. */
-export function numericLoopCodeUnitMethods(
+/**
+ * The loads whose only use is as the callee of a code unit read or DataView accessor
+ * call, which a region skips.
+ */
+export function numericLoopCallMethods(
 	fn: BytecodeFunction,
 	order: ReadonlyArray<number>,
 	codeUnitReads: ReadonlySet<number>,
+	dataViewCalls: ReadonlyMap<number, NativeDataViewCall> = new Map(),
 ): ReadonlySet<number> {
 	const callees = new Set(
 		order.flatMap((ip) => {
+			const call = fn.instructions[ip];
+			if (dataViewCalls.has(ip) && call?.opcode === "CALL") return [call.callee];
 			const read = numericLoopCodeUnitRead(fn, ip, codeUnitReads);
 			return read === undefined ? [] : [read.callee];
 		}),
@@ -2300,26 +2548,47 @@ function fixedNumericLoopStorage(
 	body: NativeBodyFacts,
 	lengthLoads: ReadonlySet<number>,
 	codeUnitReads: ReadonlySet<number>,
+	dataViewCalls: ReadonlyMap<number, NativeDataViewCall>,
 ):
 	| Pick<
 			Extract<NativeNumericLoopRegionPlan, { kind: "fixed-numeric" }>,
-			"counter" | "records" | "views"
+			"counter" | "records" | "views" | "dataViewCalls"
 	  >
 	| undefined {
 	const memory = shape.order.flatMap((ip): Array<NumericLoopAccess> => {
 		const op = fn.instructions[ip]!;
 		if (op.opcode === "LOAD_PROPERTY" || op.opcode === "STORE_PROPERTY")
 			return [{ ip, op }];
+		const data = dataViewCalls.get(ip);
+		if (data !== undefined && op.opcode === "CALL") {
+			const [key, value] = op.arguments;
+			return [
+				{
+					ip,
+					op: data.set
+						? { opcode: "STORE_PROPERTY", object: op.thisValue, key: key!, value: value! }
+						: { opcode: "LOAD_PROPERTY", object: op.thisValue, key: key!, dst: op.dst },
+					data,
+				},
+			];
+		}
 		const read = numericLoopCodeUnitRead(fn, ip, codeUnitReads);
 		return read === undefined
 			? []
 			: [{ ip, op: { opcode: "LOAD_PROPERTY", ...read }, text: true }];
 	});
-	const methodLoads = numericLoopCodeUnitMethods(fn, shape.order, codeUnitReads);
+	const methodLoads = numericLoopCallMethods(
+		fn,
+		shape.order,
+		codeUnitReads,
+		dataViewCalls,
+	);
 	if (memory.length === 0 || memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT)
 		return undefined;
 	const counted = fixedNumericLoopCounter(fn, shape, body, lengthLoads, memory);
 	const offsets = counted?.offsets ?? new Map<number, number>();
+	const windows =
+		counted?.windows ?? new Map<number, { scale: number; offset: number }>();
 	const lengthLoad = counted?.lengthLoad;
 	const bound = counted?.counter.bound;
 	const views = new Map<
@@ -2330,14 +2599,37 @@ function fixedNumericLoopStorage(
 			maxOffset: number;
 			checked?: true;
 			text?: true;
+			byteScale?: number;
 		}
 	>();
-	for (const { ip, op, text } of memory) {
+	for (const { ip, op, text, data } of memory) {
 		const offset = offsets.get(ip);
 		const previous = views.get(op.object);
-		// One admission decides whether a view is a string or an element view.
-		if (previous !== undefined && (previous.text === true) !== (text === true))
+		// One admission decides whether a view is a string, a DataView or an element view.
+		if (
+			previous !== undefined &&
+			((previous.text === true) !== (text === true) ||
+				(previous.byteScale !== undefined) !== (data !== undefined))
+		)
 			return undefined;
+		if (data !== undefined) {
+			// Entry guards prove every byte in range, so a DataView key needs a counted window.
+			const window = windows.get(ip);
+			if (
+				window === undefined ||
+				(previous?.byteScale !== undefined && previous.byteScale !== window.scale)
+			)
+				return undefined;
+			const last = window.offset + DATA_VIEW_ELEMENT_SIZES[data.type] - 1;
+			if (!numericLoopOffset(last)) return undefined;
+			views.set(op.object, {
+				writable: previous?.writable === true || data.set,
+				minOffset: Math.min(previous?.minOffset ?? window.offset, window.offset),
+				maxOffset: Math.max(previous?.maxOffset ?? last, last),
+				byteScale: window.scale,
+			});
+			continue;
+		}
 		// Without a counter, every access is a read that checks its own key. Stores stay
 		// at counted keys, whose range the entry guards prove even in a checked view.
 		if (offset === undefined) {
@@ -2363,7 +2655,9 @@ function fixedNumericLoopStorage(
 	// repeat any store the iteration already made.
 	const afterStores = new Set<number>();
 	const pending = memory.flatMap(({ ip, op }) =>
-		op.opcode === "STORE_PROPERTY" ? numberRecordSuccessors(op, ip) : [],
+		op.opcode === "STORE_PROPERTY"
+			? numberRecordSuccessors(fn.instructions[ip]!, ip)
+			: [],
 	);
 	while (pending.length > 0) {
 		const ip = pending.pop()!;
@@ -2371,10 +2665,14 @@ function fixedNumericLoopStorage(
 		afterStores.add(ip);
 		pending.push(...numberRecordSuccessors(fn.instructions[ip]!, ip));
 	}
+	// Counted DataView reads never restart; entry guards proved their bytes.
 	if (
 		memory.some(
-			({ ip, op }) =>
-				op.opcode === "LOAD_PROPERTY" && !offsets.has(ip) && afterStores.has(ip),
+			({ ip, op, data }) =>
+				op.opcode === "LOAD_PROPERTY" &&
+				data === undefined &&
+				!offsets.has(ip) &&
+				afterStores.has(ip),
 		)
 	)
 		return undefined;
@@ -2394,12 +2692,26 @@ function fixedNumericLoopStorage(
 	const records = numericLoopRecords(
 		fn,
 		shape,
-		memory.flatMap(({ op, text }) =>
-			op.opcode === "LOAD_PROPERTY" && text !== true ? [op.dst] : [],
+		memory.flatMap(({ op, text, data }) =>
+			op.opcode === "LOAD_PROPERTY" && text !== true && data === undefined
+				? [op.dst]
+				: [],
 		),
 	);
-	// Record regions admit Array views only, never string spans.
-	if (records === undefined || (records.size > 0 && textual.has(true))) return undefined;
+	const dataViews = [...views.values()].some((view) => view.byteScale !== undefined);
+	// Record regions admit Array views only, never string spans; DataViews admit with
+	// element views, never alongside strings or Arrays.
+	if (
+		records === undefined ||
+		(records.size > 0 && (textual.has(true) || dataViews)) ||
+		(dataViews &&
+			(textual.has(true) ||
+				fn.instructions[lengthLoad?.ip ?? -1]?.opcode ===
+					"LOAD_PROPERTY_STATIC_ARRAY_LENGTH")) ||
+		// A DataView has no `length` the region could bound by.
+		(lengthLoad !== undefined && views.get(lengthLoad.object)?.byteScale !== undefined)
+	)
+		return undefined;
 	// Stores admit only TypedArray views, whose length no store changes; records and
 	// a known Array length need Array views, which stay read-only so stores keep their kinds.
 	if (
@@ -2414,18 +2726,29 @@ function fixedNumericLoopStorage(
 		(counted !== undefined && (views.has(counted.counter.index) || views.has(bound!)))
 	)
 		return undefined;
-	const codeUnitCalls = new Set(
-		memory.flatMap((access) => (access.text === true ? [access.ip] : [])),
+	const viewCalls = new Set(
+		memory.flatMap((access) =>
+			access.text === true || access.data !== undefined ? [access.ip] : [],
+		),
 	);
 	for (const ip of shape.order) {
-		if (ip === lengthLoad?.ip || codeUnitCalls.has(ip)) continue;
+		if (ip === lengthLoad?.ip) continue;
 		const op = fn.instructions[ip]!;
-		// Only code unit reads use the method, so the region need not produce it.
+		if (viewCalls.has(ip)) {
+			if (
+				vmInstructionWriteRegisters(op).some(
+					(register) => register === bound || views.has(register),
+				)
+			)
+				return undefined;
+			continue;
+		}
+		// Only the view calls use the method, so the region need not produce it.
 		if (methodLoads.has(ip) && op.opcode === "LOAD_PROPERTY_STATIC") {
 			if (
 				shape.order.some(
 					(other) =>
-						!codeUnitCalls.has(other) &&
+						!viewCalls.has(other) &&
 						vmInstructionReadRegisters(fn.instructions[other]!).includes(op.dst),
 				)
 			)
@@ -2457,10 +2780,12 @@ function fixedNumericLoopStorage(
 		)
 			return undefined;
 	}
+	const calls = memory.flatMap(({ data }) => (data === undefined ? [] : [data]));
 	return {
 		...(counted === undefined ? {} : { counter: counted.counter }),
 		...(records.size === 0 ? {} : { records: [...records].sort((a, b) => a - b) }),
 		views: [...views].map(([object, window]) => ({ object, ...window })),
+		...(calls.length === 0 ? {} : { dataViewCalls: calls }),
 	};
 }
 
@@ -2572,6 +2897,7 @@ function lowerNumericLoopRegion(
 	lengthLoads: ReadonlySet<number>,
 	cursorSteps: ReadonlyMap<number, { initializeIp: number; iterator: number }>,
 	codeUnitReads: ReadonlySet<number>,
+	dataViewCalls: ReadonlyMap<number, NativeDataViewCall>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const first = fn.instructions[header];
 	const cursor = first?.opcode === "ITERATOR_STEP" ? cursorSteps.get(header) : undefined;
@@ -2596,7 +2922,14 @@ function lowerNumericLoopRegion(
 	const shape = numericLoopShape(fn, body, header, true);
 	if (shape === undefined || conflicts(shape.entryIp) || shape.order.some(conflicts))
 		return undefined;
-	const storage = fixedNumericLoopStorage(fn, shape, body, lengthLoads, codeUnitReads);
+	const storage = fixedNumericLoopStorage(
+		fn,
+		shape,
+		body,
+		lengthLoads,
+		codeUnitReads,
+		dataViewCalls,
+	);
 	if (storage === undefined && !integerLoopInstruction(first)) return undefined;
 	const bindings =
 		storage === undefined ? numericLoopBindings(fn, shape, body) : new Set<number>();
@@ -2632,6 +2965,7 @@ function lowerNumericLoopRegion(
 			? codeUnitReads
 			: undefined,
 		true,
+		new Map(storage?.dataViewCalls?.map((call) => [call.ip, call])),
 	);
 	if (flow === undefined) return undefined;
 	const inputs = new Set(flow.inputs);
@@ -3836,6 +4170,12 @@ export function analyzeNativeFastPaths(
 					: [];
 			}),
 		);
+		const dataViewCalls = numericLoopDataViewCalls(
+			fn,
+			body,
+			stringConstants,
+			(ip) => native.instructions[ip],
+		);
 		for (const header of [...body.jumpTargets].sort((a, b) => a - b)) {
 			if (numericLoopBlocked.has(header)) continue;
 			const plan = lowerNumericLoopRegion(
@@ -3854,13 +4194,17 @@ export function analyzeNativeFastPaths(
 							kind !== "unsigned-arithmetic" &&
 							!typedArrayElementPlan(kind) &&
 							kind !== "contained-fixed-typed-array-length" &&
-							!(kind === "call" && codeUnitReads.has(candidate)) &&
+							!(
+								kind === "call" &&
+								(codeUnitReads.has(candidate) || dataViewCalls.has(candidate))
+							) &&
 							kind !== "primitive-string-length")
 					);
 				},
 				lengthLoads,
 				cursorSteps,
 				codeUnitReads,
+				dataViewCalls,
 			);
 			if (plan === undefined) continue;
 			// Without a counter the trip count is unknown, and proven element accesses are

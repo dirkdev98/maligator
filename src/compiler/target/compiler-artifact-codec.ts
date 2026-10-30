@@ -4,6 +4,7 @@ import type {
 	CoreCollectionBuiltinOperation,
 	CorePropertyPlacement,
 } from "../core/core-ir-regions.ts";
+import { DATA_VIEW_ACCESSOR_TYPES } from "../shared/builtin-registry.ts";
 import type {
 	CompilerClassLayoutSite,
 	CompilerExactCollectionBrand,
@@ -113,7 +114,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 353;
+export const COMPILER_ARTIFACT_VERSION = 354;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -939,6 +940,13 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 				w.i32(view.maxOffset);
 				w.u8(view.checked === true ? 1 : 0);
 				w.u8(view.text === true ? 1 : 0);
+				w.i32(view.byteScale ?? 0);
+			}
+			w.u32(plan.dataViewCalls?.length ?? 0);
+			for (const call of plan.dataViewCalls ?? []) {
+				w.i32(call.ip);
+				w.u8(call.set ? 1 : 0);
+				w.u8(DATA_VIEW_ACCESSOR_TYPES.indexOf(call.type));
 			}
 		}
 		w.i32(plan.id);
@@ -1529,19 +1537,20 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 											};
 										})();
 							const records = r.i32Array();
-							return {
+							const storage = {
 								kind: "fixed-numeric" as const,
 								...(counter === undefined ? {} : { counter }),
 								...(records.length === 0 ? {} : { records }),
-								views: Array.from({ length: r.count(13) }, () => {
+								views: Array.from({ length: r.count(7) }, () => {
 									const object = r.i32(),
 										writable = r.u8();
 									if (writable > 1) throw new RangeError("Invalid numeric loop view");
 									const minOffset = r.i32(),
 										maxOffset = r.i32(),
 										checked = r.u8(),
-										text = r.u8();
-									if (checked > 1 || text > 1)
+										text = r.u8(),
+										byteScale = r.i32();
+									if (checked > 1 || text > 1 || byteScale < 0)
 										throw new RangeError("Invalid numeric loop view");
 									return {
 										object,
@@ -1550,9 +1559,19 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 										maxOffset,
 										...(checked === 1 ? { checked: true as const } : {}),
 										...(text === 1 ? { text: true as const } : {}),
+										...(byteScale === 0 ? {} : { byteScale }),
 									};
 								}),
 							};
+							const dataViewCalls = Array.from({ length: r.count(3) }, () => {
+								const ip = r.i32(),
+									set = r.u8(),
+									type = DATA_VIEW_ACCESSOR_TYPES[r.u8()];
+								if (set > 1 || type === undefined)
+									throw new RangeError("Invalid numeric loop DataView call");
+								return { ip, set: set === 1, type };
+							});
+							return dataViewCalls.length === 0 ? storage : { ...storage, dataViewCalls };
 						})();
 		const id = r.i32(),
 			entryIp = r.i32(),

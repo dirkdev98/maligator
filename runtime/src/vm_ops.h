@@ -1811,6 +1811,30 @@ static inline bool mal_vm_admit_data_view_byte_length(
     return true;
 }
 
+typedef struct MalDataViewSpan {
+    byte *data;
+    u32 length;
+} MalDataViewSpan;
+
+/**
+ * A fixed DataView's bytes, borrowed like typed-array bytes until a poll. The same
+ * conditions that make `byteLength` the intrinsic getter make every accessor the
+ * intrinsic method, and a numeric region runs no code that could change either.
+ */
+static inline bool mal_vm_fixed_data_view_storage(
+    const MalVm *vm, MalValue receiver, bool writable, MalDataViewSpan *span
+) {
+    u32 length;
+    if (!mal_vm_admit_data_view_byte_length(vm, receiver, &length)) return false;
+    const MalDataViewObject *view = (const MalDataViewObject *) mal_value_to_heap(receiver);
+    if ((writable && view->buffer->immutable) || view->buffer->data == nullptr) return false;
+    *span = (MalDataViewSpan) {
+        .data = view->buffer->data + view->byte_offset,
+        .length = length,
+    };
+    return true;
+}
+
 /**
  * A Map or Set whose `size` resolves to the intact intrinsic getter: the watched
  * prototype protector holds, the receiver uses its intrinsic prototype, and an

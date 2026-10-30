@@ -1048,6 +1048,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.dense_array_number_region_admissions);
     fprintf(stderr, "[perf-typed-array-stride-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.fixed_typed_array_stride_regions);
+    fprintf(stderr, "[perf-data-view-region-stats] views=%llu\n",
+        (unsigned long long) mal_perf_stats.fixed_data_view_region_views);
     fprintf(
         stderr,
         "[perf-allocation-stats] empty_objects=%llu shaped_objects=%llu "

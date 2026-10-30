@@ -123,6 +123,16 @@ store. Collecting initializers retain the owner as an ordinary rooted value and
 use per-store barriers; no backing pointer survives their calls. A handler that
 could observe partially changed Array length prevents that admission.
 
+DataView accessor calls join fixed storage regions as byte views. Admission uses the
+conditions that make `byteLength` the intrinsic getter: the watched-prototype
+protector, the intrinsic prototype, an empty own layout, and a fixed view over an
+attached, unshared buffer that covers it. Those conditions also make every accessor
+the intrinsic method until the next poll; stores additionally need a mutable buffer.
+Each access's byte key is a counted multiple of the index plus an offset, and
+admission guards every byte of the visited window, so a loop whose access would
+throw runs its original instructions. Stored values and byte orders are Numbers,
+or constants folded through ToBoolean.
+
 Numeric record regions carry guarded field values through the same certified
 numeric builtin bodies as fixed storage loops. Every consumed dynamic operand is
 a Number before execution; admitted bodies neither allocate nor invoke user code.

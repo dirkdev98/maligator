@@ -416,6 +416,98 @@ describe("fixed TypedArray loop storage", () => {
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 	});
 
+	const dataViewKernel =
+		"for(let i=0;i<left.length;i++){output.setUint32(i*4+1,left[i],(i&1)===0);}return output;";
+	const dataViewRegions = (source: string) =>
+		compile(
+			source,
+			undefined,
+			"locked",
+		).native.functions[1]!.storage!.numericLoopRegions.filter(
+			(plan) =>
+				plan.kind === "fixed-numeric" &&
+				plan.views.some((view) => view.byteScale !== undefined),
+		);
+
+	it("addresses DataView accessor calls at scaled byte windows", () => {
+		const image = compile(dataViewKernel, undefined, "locked");
+		const native = image.native.functions[1]!;
+		const [plan] = native.storage!.numericLoopRegions;
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing fixed-numeric region");
+		const call = native.body.instructions.findIndex((op) => op.opcode === "CALL");
+		expect(plan.dataViewCalls).toEqual([{ ip: call, set: true, type: "Uint32" }]);
+		expect(plan.views.find((view) => view.byteScale !== undefined)).toMatchObject({
+			byteScale: 4,
+			minOffset: 1,
+			maxOffset: 4,
+			writable: true,
+		});
+		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+
+	it("rejects a stored DataView window or accessor that planning did not prove", () => {
+		const image = compile(dataViewKernel, undefined, "locked");
+		const native = image.native.functions[1]!;
+		const [plan] = native.storage!.numericLoopRegions;
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing fixed-numeric region");
+		const data = plan.views.findIndex((view) => view.byteScale !== undefined);
+		for (const forged of [
+			{ ...plan, views: plan.views.with(data, { ...plan.views[data]!, byteScale: 1 }) },
+			{
+				...plan,
+				dataViewCalls: [{ ...plan.dataViewCalls![0]!, type: "Uint8" as const }],
+			},
+		])
+			expect(() =>
+				serializeCompilerArtifact({
+					...image,
+					native: {
+						...image.native,
+						functions: image.native.functions.with(1, {
+							...native,
+							storage: { ...native.storage!, numericLoopRegions: [forged] },
+						}),
+					},
+				}),
+			).toThrow(/invalid or stale storage plan/);
+	});
+
+	it("declines a DataView key that no counted window bounds", () => {
+		expect(
+			dataViewRegions(
+				"for(let i=0;i<left.length;i++){output.setUint32(left[i],i);}return output;",
+			),
+		).toEqual([]);
+	});
+
+	it("declines a DataView as the loop's length bound", () => {
+		const image = compile(
+			"for(let i=0;i<output.length;i++){output.setUint8(i,i);}return output;",
+			undefined,
+			"locked",
+		);
+		const native = image.native.functions[1]!;
+		expect(native.storage!.numericLoopRegions).toEqual([]);
+		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+	});
+
+	it("proves a byte stride hoisted past an enclosing loop", () => {
+		expect(
+			dataViewRegions(
+				"for(let r=0;r<count;r++){for(let i=0;i<left.length;i++){output.setUint32(i*4+1,left[i],true);}}return output;",
+			),
+		).toHaveLength(1);
+	});
+
+	it("declines a byte stride that another path reassigns", () => {
+		expect(
+			dataViewRegions(
+				"let stride=4;if(hook)stride=8;for(let i=0;i<left.length;i++){output.setUint32(i*stride,left[i]);}return output;",
+			),
+		).toEqual([]);
+	});
+
 	it("kills a hoisted constant overwritten by a memory result in the loop", () => {
 		const image = compile("for(let i=0;i<count;i++){output[i+1]=left[i]+right[i];}");
 		const native = image.native.functions[1]!;

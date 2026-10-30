@@ -7,10 +7,7 @@ import type {
 	CorePropertyPlacement,
 	CoreStringSpanRangeOperation,
 } from "../core/core-ir-regions.ts";
-import {
-	builtinResultIsInt32,
-	DATA_VIEW_ACCESSOR_TYPES,
-} from "../shared/builtin-registry.ts";
+import { builtinResultIsInt32 } from "../shared/builtin-registry.ts";
 import {
 	compilerComparisonInputKindsAvoidObjectCoercion,
 	compilerValueKindTruthiness,
@@ -83,7 +80,9 @@ import type {
 	NativeLazyCaptureEnvironment,
 } from "./lower-native-captures.ts";
 import {
-	numericLoopCodeUnitMethods,
+	DATA_VIEW_ELEMENT_SIZES,
+	nativeDataViewAccessor,
+	numericLoopCallMethods,
 	numericLoopOrder,
 	nativeNumericBuiltinInstruction,
 	lowerNativeFastPaths,
@@ -93,6 +92,7 @@ import {
 } from "./lower-native-fast-paths.ts";
 import type {
 	NativeConstructorInitializationAction,
+	NativeDataViewCall,
 	NativeFastPathPlans,
 	NativeNumericLoopRegionPlan,
 	NativeMathCallPlan,
@@ -1308,6 +1308,18 @@ const UINT32_RANGE: IntegerRange = { low: 0, high: 2 ** 32 - 1 };
 const ADMITTED_INPUT_RANGE: IntegerRange = { low: -(2 ** 31), high: 2 ** 32 - 1 };
 // A range still growing after this many rounds is an accumulator with no bound.
 const INTEGER_RANGE_ROUNDS = 8;
+const DATA_VIEW_INTEGER_RANGES: Readonly<
+	Record<NativeDataViewCall["type"], IntegerRange | undefined>
+> = {
+	Int8: { low: -128, high: 127 },
+	Uint8: { low: 0, high: 255 },
+	Int16: { low: -32768, high: 32767 },
+	Uint16: { low: 0, high: 65535 },
+	Int32: INT32_RANGE,
+	Uint32: UINT32_RANGE,
+	Float32: undefined,
+	Float64: undefined,
+};
 
 /**
  * Registers whose every write in the region yields a safe integer, never -0. Doubles
@@ -1324,6 +1336,8 @@ function integralLoopRegisters(
 	elementLoads?: IntegerRange,
 	// Registers that stay doubles, as inputs whose entry admits fractions do.
 	doubles: ReadonlySet<number> = new Set(),
+	// Results of DataView getters; any other call reads a code unit.
+	callRanges: ReadonlyMap<BytecodeInstruction, IntegerRange | undefined> = new Map(),
 ): Set<number> {
 	const writers = new Map<number, Array<BytecodeInstruction>>();
 	for (const ip of order) {
@@ -1407,9 +1421,8 @@ function integralLoopRegisters(
 				return rangeOf(op.src);
 			case "LOAD_PROPERTY":
 				return elementLoads;
-			// A region admits a call only as a string's code unit read.
 			case "CALL":
-				return { low: 0, high: 0xffff };
+				return callRanges.has(op) ? callRanges.get(op) : { low: 0, high: 0xffff };
 			default: {
 				const builtin = nativeNumericBuiltinInstruction(op);
 				return builtin?.operation === "Math.imul"
@@ -1471,9 +1484,16 @@ function emitNumericLoopRegion(
 ): ReadonlyArray<string> {
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
 	const order = numericLoopOrder(fn, plan.id, members, true);
-	// A region admits a call only as a string's code unit read.
+	const dataViewCalls = new Map(
+		plan.kind === "fixed-numeric"
+			? (plan.dataViewCalls ?? []).map((call) => [call.ip, call])
+			: [],
+	);
+	// A region admits any other call only as a string's code unit read.
 	const codeUnitReads = new Set(
-		[...members].filter((ip) => fn.instructions[ip]?.opcode === "CALL"),
+		[...members].filter(
+			(ip) => fn.instructions[ip]?.opcode === "CALL" && !dataViewCalls.has(ip),
+		),
 	);
 	const flow =
 		order === undefined
@@ -1486,11 +1506,21 @@ function emitNumericLoopRegion(
 					plan.kind !== "integer",
 					codeUnitReads.size === 0 ? undefined : codeUnitReads,
 					true,
+					dataViewCalls,
 				);
-	const codeUnitMethods =
+	const callMethods =
 		order === undefined
 			? new Set<number>()
-			: numericLoopCodeUnitMethods(fn, order, codeUnitReads);
+			: numericLoopCallMethods(fn, order, codeUnitReads, dataViewCalls);
+	// A getter's result range, or none for a fractional one; other calls read code units.
+	const callRanges = new Map(
+		[...dataViewCalls.values()].map(
+			(call): [BytecodeInstruction, IntegerRange | undefined] => [
+				fn.instructions[call.ip]!,
+				DATA_VIEW_INTEGER_RANGES[call.type],
+			],
+		),
+	);
 	if (order === undefined || flow === undefined)
 		throw new Error("Invalid native integer loop region");
 	const floating = plan.kind !== "integer";
@@ -1516,7 +1546,16 @@ function emitNumericLoopRegion(
 	}
 	// Integer locals spare the double round trip that each ToInt32 would otherwise take.
 	const baseIntegral = floating
-		? integralLoopRegisters(fn, order, flow, plan.inputs, pinned)
+		? integralLoopRegisters(
+				fn,
+				order,
+				flow,
+				plan.inputs,
+				pinned,
+				undefined,
+				undefined,
+				callRanges,
+			)
 		: new Set<number>();
 	// Over views of integer kinds, element loads are integers too. Inputs keep the
 	// representation their shared entry admits.
@@ -1530,6 +1569,7 @@ function emitNumericLoopRegion(
 					pinned,
 					ADMITTED_INPUT_RANGE,
 					new Set(plan.inputs.filter((register) => !baseIntegral.has(register))),
+					callRanges,
 				)
 			: baseIntegral;
 	const integerOnly = [...integerIntegral].filter(
@@ -1602,8 +1642,10 @@ function emitNumericLoopRegion(
 			);
 		else guards.push(`mal_safe_integer_admit(${value}, &${local(register)})`);
 	}
+	// Only element views have a dense Array alternative, and only while nothing stores.
 	const readOnly =
-		plan.kind === "fixed-numeric" && plan.views.every((view) => !view.writable);
+		plan.kind === "fixed-numeric" &&
+		plan.views.every((view) => !view.writable && view.byteScale === undefined);
 	const records = new Set(plan.kind !== "integer" ? (plan.records ?? []) : []);
 	const checkedViews = new Set(
 		plan.kind === "fixed-numeric"
@@ -1614,7 +1656,10 @@ function emitNumericLoopRegion(
 	const arrayOnly = plan.kind === "fixed-numeric" && records.size > 0;
 	const views = plan.kind === "fixed-numeric" ? plan.views : [];
 	const textViews = views.filter((view) => view.text === true);
-	const elementViews = views.filter((view) => view.text !== true);
+	const elementViews = views.filter(
+		(view) => view.text !== true && view.byteScale === undefined,
+	);
+	const dataViews = views.filter((view) => view.byteScale !== undefined);
 	const textObjects = new Set(textViews.map((view) => view.object));
 	// A region reading only strings has one body; element views pick theirs by kind.
 	const textual = textViews.length > 0 && elementViews.length === 0;
@@ -1669,6 +1714,11 @@ function emitNumericLoopRegion(
 						...elementViews.map(
 							(view) =>
 								`mal_vm_fixed_numeric_storage(r${view.object}, 0, ${view.writable}, &${id}_v${view.object})`,
+						),
+						// Admission proves the accessors intrinsic, which nothing inside can change.
+						...dataViews.map(
+							(view) =>
+								`mal_vm_fixed_data_view_storage(vm, r${view.object}, ${view.writable}, &${id}_d${view.object})`,
 						),
 						...(lengthLoad?.opcode === "LOAD_PROPERTY_STATIC" && !textBound
 							? [
@@ -1725,10 +1775,19 @@ function emitNumericLoopRegion(
 		guards.push(range);
 		for (const view of views) {
 			if (view.checked === true && !view.writable) continue;
-			const low = `(${ascending ? index : last} + ${cF64Literal(view.minOffset)})`;
-			const high = `(${ascending ? last : index} + ${cF64Literal(view.maxOffset + 1)})`;
+			// A byte scale stays small enough that each bound is an exact double.
+			const scaled = (value: string) =>
+				view.byteScale === undefined
+					? value
+					: `${cF64Literal(view.byteScale)} * ${value}`;
+			const low = `(${scaled(ascending ? index : last)} + ${cF64Literal(view.minOffset)})`;
+			const high = `(${scaled(ascending ? last : index)} + ${cF64Literal(view.maxOffset + 1)})`;
 			if (view.minOffset !== 0) guards.push(`${low} >= 0.0`);
 			guards.push(`${high} <= UINT32_MAX`);
+			if (view.byteScale !== undefined) {
+				typedViewGuards.push(`(u32) ${high} <= ${id}_d${view.object}.length`);
+				continue;
+			}
 			if (view.text === true) {
 				typedViewGuards.push(`(u32) ${high} <= ${id}_s${view.object}.length`);
 				arrayViewGuards.push(`(u32) ${high} <= ${id}_s${view.object}.length`);
@@ -1848,7 +1907,7 @@ function emitNumericLoopRegion(
 			case "LOAD_PROPERTY_STATIC":
 			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 				// Admission already proved the method its code unit read ignores.
-				if (codeUnitMethods.has(ip)) return "";
+				if (callMethods.has(ip)) return "";
 				if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object))
 					// The site's own-slot row proves the field; any other row ends the iteration.
 					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); if (__builtin_expect(${id}_o->shape != ${id}_shape${op.icIndex}, 0)) ${restart} MalValue ${id}_f = ((const MalValue *) mal_object_fields_nonempty(${id}_o))[${id}_slot${op.icIndex}]; if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
@@ -1856,6 +1915,32 @@ function emitNumericLoopRegion(
 					throw new Error("Invalid numeric loop length load");
 				return `${local(op.dst)} = (f64) ${id}_${textObjects.has(op.object) ? "s" : mode === "array" ? "a" : "v"}${op.object}.length;`;
 			case "CALL": {
+				const data = dataViewCalls.get(ip);
+				if (data !== undefined) {
+					const [keyRegister, value] = op.arguments;
+					const key = integral.has(keyRegister!)
+						? local(keyRegister!)
+						: num(keyRegister!);
+					// Entry guards proved every byte of the access inside the view.
+					const at = `${id}_d${op.thisValue}.data + (u32) ${key}`;
+					const stored = value === undefined ? undefined : decodeVmValueOperand(value);
+					const number =
+						stored?.kind === "number" ? cF64Literal(stored.value) : num(value!);
+					const endian = op.arguments[data.set ? 2 : 1];
+					const order = endian === undefined ? undefined : decodeVmValueOperand(endian);
+					// ToBoolean of a constant the planner admitted: never a string.
+					const littleEndian =
+						order?.kind === "register"
+							? truthy(order.register, ip)
+							: order?.kind === "boolean"
+								? String(order.value)
+								: order?.kind === "number"
+									? String(order.value !== 0)
+									: "false";
+					return data.set
+						? `mal_data_view_write(${at}, ${dataViewAccessorName(data)}, ${number}, ${littleEndian});`
+						: `${local(op.dst)} = ${integral.has(op.dst) ? "(i64) " : ""}mal_data_view_read(${at}, ${dataViewAccessorName(data)}, ${littleEndian});`;
+				}
 				const argument = op.arguments[0];
 				if (!textObjects.has(op.thisValue) || argument === undefined)
 					throw new Error("Invalid numeric loop code unit read");
@@ -2134,19 +2219,25 @@ function emitNumericLoopRegion(
 						(view) =>
 							`    MAL_PERF_COUNT(fixed_typed_array_region_views[${id}_v${view.object}.kind]);`,
 					),
-					// One bounded specialization keeps kind dispatch out of the established Float64 loop.
-					`    if (${elementViews.map((view) => `${id}_v${view.object}.kind == MAL_TA_FLOAT64`).join(" && ")}) {`,
-					"      MAL_PERF_COUNT(fixed_typed_array_region_f64_admissions);",
-					...loopBody("f64").map((line) => `  ${line}`),
-					...(!integerBody
-						? []
+					...dataViews.map(() => "    MAL_PERF_COUNT(fixed_data_view_region_views);"),
+					// DataView accesses name their own element types, so only element views select a body.
+					...(elementViews.length === 0
+						? loopBody("typed")
 						: [
-								`    } else if (${elementViews.map((view) => `${id}_v${view.object}.kind < MAL_TA_FLOAT32`).join(" && ")}) {`,
-								...loopBody("integer").map((line) => `  ${line}`),
+								// One bounded specialization keeps kind dispatch out of the established Float64 loop.
+								`    if (${elementViews.map((view) => `${id}_v${view.object}.kind == MAL_TA_FLOAT64`).join(" && ")}) {`,
+								"      MAL_PERF_COUNT(fixed_typed_array_region_f64_admissions);",
+								...loopBody("f64").map((line) => `  ${line}`),
+								...(!integerBody
+									? []
+									: [
+											`    } else if (${elementViews.map((view) => `${id}_v${view.object}.kind < MAL_TA_FLOAT32`).join(" && ")}) {`,
+											...loopBody("integer").map((line) => `  ${line}`),
+										]),
+								"    } else {",
+								...loopBody("typed").map((line) => `  ${line}`),
+								"    }",
 							]),
-					"    } else {",
-					...loopBody("typed").map((line) => `  ${line}`),
-					"    }",
 				]
 			: loopBody("typed");
 	const arrayBody = (): ReadonlyArray<string> => [
@@ -2176,6 +2267,7 @@ function emitNumericLoopRegion(
 			...(lengthBound ? [] : [`  MalTypedArraySpan ${id}_v${view.object} = {0};`]),
 			...(readOnly ? [`  MalDenseNumberSpan ${id}_a${view.object} = {0};`] : []),
 		]),
+		...dataViews.map((view) => `  MalDataViewSpan ${id}_d${view.object} = {0};`),
 		...[...flow.kinds].map(([register, kind]) =>
 			records.has(register)
 				? `  MalValue ${local(register)} = MAL_VALUE_UNDEFINED;`
@@ -5500,18 +5592,9 @@ interface NativeBuiltinCollectionCallChainAction {
 	readonly role: "property" | "call";
 }
 
-const DATA_VIEW_ELEMENT_SIZES: Readonly<
-	Record<(typeof DATA_VIEW_ACCESSOR_TYPES)[number], number>
-> = {
-	Int8: 1,
-	Uint8: 1,
-	Int16: 2,
-	Uint16: 2,
-	Int32: 4,
-	Uint32: 4,
-	Float32: 4,
-	Float64: 8,
-};
+function dataViewAccessorName(call: Omit<NativeDataViewCall, "ip">): string {
+	return `MAL_DATA_VIEW_${call.set ? "SET" : "GET"}_${call.type.toUpperCase()}`;
+}
 
 /** The inline DataView access a guarded accessor call performs, if it is one. */
 function dataViewAccessor(
@@ -5520,18 +5603,16 @@ function dataViewAccessor(
 	| { readonly accessor: string; readonly size: number; readonly set: boolean }
 	| undefined {
 	const prefix = "DataView.prototype.";
-	if (!operation.startsWith(prefix)) return undefined;
-	const method = operation.slice(prefix.length);
-	const kind = method.slice(0, 3);
-	const type = DATA_VIEW_ACCESSOR_TYPES.find(
-		(candidate) => method.slice(3) === candidate,
-	);
-	if ((kind !== "get" && kind !== "set") || type === undefined) return undefined;
-	return {
-		accessor: `MAL_DATA_VIEW_${kind.toUpperCase()}_${type.toUpperCase()}`,
-		size: DATA_VIEW_ELEMENT_SIZES[type],
-		set: kind === "set",
-	};
+	const call = operation.startsWith(prefix)
+		? nativeDataViewAccessor(operation.slice(prefix.length))
+		: undefined;
+	return call === undefined
+		? undefined
+		: {
+				accessor: dataViewAccessorName(call),
+				size: DATA_VIEW_ELEMENT_SIZES[call.type],
+				set: call.set,
+			};
 }
 
 function nativeBuiltinCollectionOperation(
