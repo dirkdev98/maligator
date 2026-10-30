@@ -1789,8 +1789,17 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 - [ ] node:stream: a native `push` delivers straight to 'data' listeners while the
       stream flows, where Node buffers until the first `_read` because
       `ReadableState.sync` starts true. A synchronous handler therefore sees 'data'
-      before its own `nextTick`. Fixing this also lets node:http grant body read
-      credit with the head and save a turn per POST.
+      before its own `nextTick`. Granting node:http body read credit with the head,
+      so a small POST body arrives in the request's own turn, made Express form
+      7.3% and json 0.9% slower in alternating closed-build screens; the extra
+      time spread over Express's JavaScript, not GC, and its cause is unknown.
+- [ ] Bring node:stream construction and events to Node's cost. A `new Readable`
+      takes 570 to 800 ns against Node's 42, flowing a body 1.8 to 2.2 us against
+      0.5, and a listener add/remove 54 ns against 12; raw-body and `qs.parse`
+      run 3 to 4x Node. Node 26 also pre-fills a stream's `_events` with `close`,
+      `error`, `data`, `end` and `readable` and sets removed keys to undefined;
+      Maligator deletes them, and the shape churn in `ee_remove_one` costs about
+      1.6% of the Express JSON route.
 
 - [ ] node:stream: a pipeline stage that pumps into a web TransformStream rejects with
       "Value is not a function" (Readable → TransformStream → Writable), although the
