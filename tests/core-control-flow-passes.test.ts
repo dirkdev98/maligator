@@ -163,6 +163,16 @@ describe("Core control-flow analyses and passes", () => {
 
 	it.each([
 		{
+			name: "single nonzero entry beside disconnected cycles",
+			entry: 2,
+			edges: [[0], [3], [], [1]],
+		},
+		{
+			name: "single self-looping entry beside disconnected cycles",
+			entry: 2,
+			edges: [[0], [3], [2], [1]],
+		},
+		{
 			name: "successive diamonds",
 			entry: 0,
 			edges: [[1, 2], [3], [3], [4, 5], [6], [6], [7, 8], [9], [9], []],

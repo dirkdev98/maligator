@@ -294,6 +294,8 @@ checked kind/descriptor/payload reads with the revision's header API when availa
 body edits; `versions-module` retains the module-scope traversal as a holdout.
 `value-kinds` alternates number and string seeds in a fixed Core dependency chain,
 consuming both kind masks and integer proofs.
+`dominance` builds fresh CFG and dominator products for a fixed mix of single-block
+and branched functions, consuming both parent links and dominance queries.
 `errors` alternates valid instruction reads with caught invalid-ID failures, checking
 the actual diagnostic text. `optimizer` runs
 the Node compiler on the frozen baseline accessor graph, through runtime-image

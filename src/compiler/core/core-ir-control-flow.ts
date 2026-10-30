@@ -367,6 +367,8 @@ function immediateDominators(
 	scratch: CoreAnalysisScratchPool,
 ): Array<CoreBlockId | null> {
 	const length = predecessors.length;
+	if (reversePostorder.length === 1)
+		return new Array<CoreBlockId | null>(length).fill(null);
 	const orderLease = scratch.leaseInt32(length);
 	const dominatorLease = scratch.leaseInt32(length);
 	const queuedLease = scratch.leaseUint8(length);
@@ -424,6 +426,8 @@ function dominatorPredicate(
 	reachable: ReadonlySet<CoreBlockId>,
 	parents: ReadonlyArray<CoreBlockId | null>,
 ): (dominator: CoreBlockId, block: CoreBlockId) => boolean {
+	if (reachable.size === 1)
+		return (dominator, block) => dominator === entry && block === entry;
 	const children = parents.map(() => new Array<CoreBlockId>());
 	for (const block of reachable) {
 		const parent = parents[block];
