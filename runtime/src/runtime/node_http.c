@@ -1001,6 +1001,86 @@ static MalValue http_ascii_value(MalVm *vm, const char *bytes, usize length) {
         mal_string_new_ascii(&vm->heap, (const byte *) bytes, length));
 }
 
+typedef struct HttpCommonName {
+    const char *name;
+    u8 length;
+} HttpCommonName;
+
+#define HTTP_COMMON_NAME(literal) {literal, sizeof(literal) - 1}
+
+/* Header names most peers send. Matching the wire bytes reuses one cached atom per name
+ * instead of allocating a lowercase copy that property-key conversion then atomizes. */
+static const HttpCommonName http_common_header_names[] = {
+    HTTP_COMMON_NAME("host"), HTTP_COMMON_NAME("user-agent"), HTTP_COMMON_NAME("accept"),
+    HTTP_COMMON_NAME("accept-encoding"), HTTP_COMMON_NAME("accept-language"),
+    HTTP_COMMON_NAME("connection"), HTTP_COMMON_NAME("keep-alive"),
+    HTTP_COMMON_NAME("content-type"), HTTP_COMMON_NAME("content-length"),
+    HTTP_COMMON_NAME("content-encoding"), HTTP_COMMON_NAME("transfer-encoding"),
+    HTTP_COMMON_NAME("cookie"), HTTP_COMMON_NAME("set-cookie"),
+    HTTP_COMMON_NAME("cache-control"), HTTP_COMMON_NAME("origin"),
+    HTTP_COMMON_NAME("referer"), HTTP_COMMON_NAME("authorization"),
+    HTTP_COMMON_NAME("if-none-match"), HTTP_COMMON_NAME("if-modified-since"),
+    HTTP_COMMON_NAME("date"), HTTP_COMMON_NAME("server"), HTTP_COMMON_NAME("etag"),
+    HTTP_COMMON_NAME("last-modified"), HTTP_COMMON_NAME("location"),
+    HTTP_COMMON_NAME("vary"), HTTP_COMMON_NAME("x-forwarded-for"),
+};
+
+static const HttpCommonName http_common_methods[] = {
+    HTTP_COMMON_NAME("GET"), HTTP_COMMON_NAME("POST"), HTTP_COMMON_NAME("PUT"),
+    HTTP_COMMON_NAME("DELETE"), HTTP_COMMON_NAME("HEAD"), HTTP_COMMON_NAME("PATCH"),
+    HTTP_COMMON_NAME("OPTIONS"),
+};
+
+/** The lowercase common name equal to `bytes` ignoring ASCII case, or nullptr. */
+static const char *http_common_header_name(
+    const char *bytes, usize length, bool *wire_lowercase) {
+    for (usize i = 0; i < countof(http_common_header_names); i++) {
+        const HttpCommonName *candidate = &http_common_header_names[i];
+        if (candidate->length != length) continue;
+        bool lowercase = true;
+        usize j = 0;
+        for (; j < length; j++) {
+            char unit = bytes[j];
+            if (unit == candidate->name[j]) continue;
+            if ((char) mal_ascii_to_lower((u8) unit) != candidate->name[j]) break;
+            lowercase = false;
+        }
+        if (j == length) {
+            *wire_lowercase = lowercase;
+            return candidate->name;
+        }
+    }
+    return nullptr;
+}
+
+/** Atomized lowercase and raw-case names for one incoming header field. */
+static void http_incoming_header_names(
+    MalVm *vm, const char *bytes, usize length, MalValue *lower_out, MalValue *raw_out) {
+    bool wire_lowercase = false;
+    const char *common = http_common_header_name(bytes, length, &wire_lowercase);
+    MalValue atom = common == nullptr ? mal_value_new_undefined()
+        : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) common));
+    if (lower_out != nullptr) {
+        *lower_out = common != nullptr ? atom
+            : mal_value_from_string(mal_headers_new_lowercase_name(vm, bytes, length));
+    }
+    if (raw_out != nullptr) {
+        *raw_out = common != nullptr && wire_lowercase ? atom
+            : http_ascii_value(vm, bytes, length);
+    }
+}
+
+static MalValue http_method_value(MalVm *vm, const char *bytes, usize length) {
+    for (usize i = 0; i < countof(http_common_methods); i++) {
+        if (http_common_methods[i].length == length &&
+            memcmp(http_common_methods[i].name, bytes, length) == 0) {
+            return mal_value_from_string(
+                mal_intrinsic_ascii(vm, (const byte *) http_common_methods[i].name));
+        }
+    }
+    return http_ascii_value(vm, bytes, length);
+}
+
 static bool http_native_is(MalValue value, MalNativeFunctionCallback callback) {
     return mal_value_is_native_function_object(value)
         && mal_value_to_native_function_object(value)->callback == callback;
@@ -1603,22 +1683,40 @@ static bool http_response_name_view(
     return true;
 }
 
+static bool http_header_value_segment_scan(const MalStringSegment *segment, byte **bytes) {
+    if (segment->latin1) {
+        const u8 *units = segment->latin1_units;
+        for (usize i = 0; i < segment->length; i++) {
+            if (units[i] != '\t' && (units[i] < 0x20 || units[i] == 0x7f)) return false;
+        }
+        if (*bytes != nullptr && segment->length > 0) {
+            memcpy(*bytes, units, segment->length);
+            *bytes += segment->length;
+        }
+        return true;
+    }
+    for (usize i = 0; i < segment->length; i++) {
+        c16 unit = segment->utf16_units[i];
+        if (unit != '\t' && (unit < 0x20 || unit == 0x7f || unit > 0xff)) return false;
+        if (*bytes != nullptr) *(*bytes)++ = (byte) unit;
+    }
+    return true;
+}
+
 /* Checks a header value segment by segment, copying its bytes when `bytes` is
- * non-null, so neither a concatenation is flattened nor Latin-1 widened. */
+ * non-null, so neither a concatenation is flattened nor Latin-1 widened. A flat
+ * value, nearly every one, is a single segment and needs no iterator. */
 static bool http_header_value_scan(const MalString *string, byte *bytes) {
-    MalStringIterator iterator;
     MalStringSegment segment;
-    mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
+    usize length = mal_string_length(string);
+    if (mal_string_try_get_segment(string, 0, length, &segment)) {
+        return http_header_value_segment_scan(&segment, &bytes);
+    }
+    MalStringIterator iterator;
+    mal_string_iterator_init(&iterator, string, 0, length);
     bool valid = true;
     while (valid && mal_string_iterator_next(&iterator, &segment)) {
-        for (usize i = 0; i < segment.length; i++) {
-            c16 unit = mal_string_segment_code_unit_at(&segment, i);
-            if (unit != '\t' && (unit < 0x20 || unit == 0x7f || unit > 0xff)) {
-                valid = false;
-                break;
-            }
-            if (bytes != nullptr) *bytes++ = (byte) unit;
-        }
+        valid = http_header_value_segment_scan(&segment, &bytes);
     }
     mal_string_iterator_dispose(&iterator);
     return valid;
@@ -4082,7 +4180,7 @@ static bool http_request_headers(
     MalValue roots[] = {
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -4110,10 +4208,10 @@ static bool http_request_headers(
                 break;
             }
         }
-        roots[2] = canonical == i
-            ? mal_value_from_string(mal_headers_new_lowercase_name(
-                  vm, header->name, header->name_len))
-            : canonical_names[canonical];
+        http_incoming_header_names(
+            vm, header->name, header->name_len,
+            canonical == i ? &roots[2] : nullptr, &roots[5]);
+        if (canonical != i) roots[2] = canonical_names[canonical];
         canonical_names[i] = roots[2];
         roots[3] = http_ascii_value(vm, header->value, header->value_len);
         if (!http_incoming_header_add(
@@ -4122,7 +4220,7 @@ static bool http_request_headers(
             mal_gc_unroot(&root);
             return false;
         }
-        roots[4] = http_ascii_value(vm, header->name, header->name_len);
+        roots[4] = roots[5];
         mal_array_object_store(
             raw,
             mal_key_index((i32) (i * 2)),
@@ -4205,12 +4303,12 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
     roots[5] = mal_value_from_object(mal_intrinsic_new_object(vm));
     roots[6] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
 
-    request_values[0] = http_ascii_value(vm, state->method, state->method_len);
+    request_values[0] = http_method_value(vm, state->method, state->method_len);
     request_values[1] = http_ascii_value(vm, state->target, state->target_len);
     request_values[2] = roots[2];
     request_values[3] = roots[3];
-    request_values[4] = http_ascii_value(
-        vm, state->minor_version == 0 ? "1.0" : "1.1", 3);
+    request_values[4] = mal_value_from_string(mal_intrinsic_ascii(
+        vm, (const byte *) (state->minor_version == 0 ? "1.0" : "1.1")));
     request_values[5] = mal_value_from_i32(1);
     request_values[6] = mal_value_from_i32(state->minor_version);
     request_values[7] = mal_value_new_boolean(
@@ -4382,7 +4480,7 @@ static bool http_client_response_headers(
     MalValue roots[] = {
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -4411,10 +4509,10 @@ static bool http_client_response_headers(
                 break;
             }
         }
-        roots[2] = canonical == i
-            ? mal_value_from_string(mal_headers_new_lowercase_name(
-                  vm, name, field->name_length))
-            : canonical_names[canonical];
+        http_incoming_header_names(
+            vm, name, field->name_length,
+            canonical == i ? &roots[2] : nullptr, &roots[5]);
+        if (canonical != i) roots[2] = canonical_names[canonical];
         canonical_names[i] = roots[2];
         roots[3] = http_ascii_value(vm, value, field->value_length);
         if (!http_incoming_header_add(
@@ -4423,7 +4521,7 @@ static bool http_client_response_headers(
             mal_gc_unroot(&root);
             return false;
         }
-        roots[4] = http_ascii_value(vm, name, field->name_length);
+        roots[4] = roots[5];
         mal_array_object_store(
             raw,
             mal_key_index((i32) (i * 2)),
