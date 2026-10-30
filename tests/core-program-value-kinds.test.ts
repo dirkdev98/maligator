@@ -222,7 +222,6 @@ it("uses program-flow dirtiness without serialized version or target keys", () =
 		/interface KindTransfer\s*\{|readonly evaluate|evaluate:\s*\(/,
 	);
 	expect(source).not.toMatch(/Array\.from\(\{ length: operandCount/);
-	expect(source).toMatch(/Uint8Array\.from\(transfers\.kinds\)/);
 });
 
 function observations(fn: CoreFunctionStore) {

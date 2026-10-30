@@ -1354,12 +1354,12 @@ function solveCoreValueKinds(
 			dependentHeads[input] = dependentCount++;
 		}
 	}
-	const transferKinds = Uint8Array.from(transfers.kinds);
-	const transferOutputs = Uint32Array.from(transfers.outputs);
-	const transferConstants = Uint16Array.from(transfers.constants);
-	const transferInputStarts = Uint32Array.from(transfers.inputStarts);
-	const transferInputCounts = Uint32Array.from(transfers.inputCounts);
-	const transferInputs = Uint32Array.from(transfers.inputs);
+	const transferKinds = transfers.kinds;
+	const transferOutputs = transfers.outputs;
+	const transferConstants = transfers.constants;
+	const transferInputStarts = transfers.inputStarts;
+	const transferInputCounts = transfers.inputCounts;
+	const transferInputs = transfers.inputs;
 	let conditional: CoreConditionalValueKinds | undefined;
 
 	const mask = (value: CoreValueId, point?: CoreControlPoint): number => {
@@ -1396,7 +1396,7 @@ function solveCoreValueKinds(
 	while (cursor < queue.length) {
 		const index = queue[cursor++]!;
 		queued[index] = 0;
-		const output = transferOutputs[index]! as CoreValueId;
+		const output = transferOutputs[index]!;
 		if (masks[output] === COMPILER_VALUE_KIND_TOP) continue;
 		const incoming = transferredKind(
 			transferKinds[index]!,
@@ -1420,7 +1420,7 @@ function solveCoreValueKinds(
 		demandedValues === undefined && index < transferOutputs.length;
 		index++
 	) {
-		const output = transferOutputs[index]! as CoreValueId;
+		const output = transferOutputs[index]!;
 		const kind = transferKinds[index]!;
 		if (
 			masks[output] !== COMPILER_VALUE_KIND_NUMBER ||
