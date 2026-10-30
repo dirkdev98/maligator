@@ -7,8 +7,9 @@ matched workloads, output parity, source/toolchain identity, and repeated interl
 pairs. A single pair or a zero exit code does not establish performance acceptance.
 Replacing `bench/baseline.json` requires an explicitly authorized `--update`.
 
-The `npm run bench` families are `javascript`, `http`, and `self-compile`. Default
-runs select the first two; `--full` selects all three. Keep source-hosted DX
+The `npm run bench` families are `javascript`, `javascript-v2`, `http`, and
+`self-compile`. Default runs select `javascript` and `http`; `--full` selects all four.
+Keep source-hosted DX
 measurements (`npm run bench:dx -- --source`) separate from AOT self-compilation.
 For application profiling, use [profiling.md](profiling.md).
 
@@ -101,6 +102,25 @@ against the committed snapshot:
 npm run bench -- javascript --compare HEAD --runs 5
 npm run bench -- --changed --compare HEAD
 ```
+
+`javascript` retains the original `javascript-v1` workload used on the website.
+`javascript-v2` runs a separate single ES module, `bench/javascript-v2.mjs`, through
+the same closed/open x compiled/interpreted matrix, with Node as its reference:
+
+```sh
+npm run bench -- javascript-v2 --runs 5 --plan=json
+npm run bench -- javascript-v2 --mode closed-compiled --runs 5 --json-out .cache/bench-v2/snapshot.json
+```
+
+V2 reports total process wall time, including startup and shutdown, and twelve
+individually timed, checksum-validated phases: records, dynamic objects, calls,
+arrays, Maps/Sets, text, JSON, numbers/dates, binary data, iteration, async, and
+allocation. Its final time is the measured script runtime, without phase weighting.
+Fixed repetition counts determine the workload mix and must match across engines
+and revisions. Both versions retain their measured samples in `samples`; snapshots
+store v1 under `javascript` and v2 under `javascriptV2`. Default runs, the performance
+portfolio, and website publication continue using v1. V2 comparisons require a
+baseline revision containing the v2 runner and workload.
 
 The runner exports the requested Git revision to a temporary directory, shares
 dependencies when the lockfiles match, and otherwise installs the baseline with

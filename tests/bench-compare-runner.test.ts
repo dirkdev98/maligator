@@ -235,22 +235,26 @@ if (!base) {
 	expect(existsSync(path.join(path.dirname(result.reportPath), "head"))).toBe(false);
 });
 
-test("a workload mismatch is retained as failed evidence rather than a speedup", async () => {
-	const fixture = comparisonFixture();
-	fixture.control({ checksumMismatch: true });
-	const result = await runBenchmarkComparison({
-		...fixture.options,
-		pairs: 1,
-		maxPairs: 1,
-	});
-	expect(result.exitCode).toBe(2);
-	expect(JSON.parse(readFileSync(result.reportPath, "utf8"))).toMatchObject({
-		status: "failed",
-		completedPairs: 0,
-		error: "base/head JavaScript workload or checksums differ",
-	});
-	expect(result.metrics).toEqual([]);
-});
+test.each(["javascript", "javascript-v2"])(
+	"a %s workload mismatch is retained as failed evidence rather than a speedup",
+	async (lane) => {
+		const fixture = comparisonFixture();
+		fixture.control({ checksumMismatch: true });
+		const result = await runBenchmarkComparison({
+			...fixture.options,
+			lanes: [lane],
+			pairs: 1,
+			maxPairs: 1,
+		});
+		expect(result.exitCode).toBe(2);
+		expect(JSON.parse(readFileSync(result.reportPath, "utf8"))).toMatchObject({
+			status: "failed",
+			completedPairs: 0,
+			error: "base/head JavaScript workload or checksums differ",
+		});
+		expect(result.metrics).toEqual([]);
+	},
+);
 
 test("historical comparisons install each revision's locked dependencies", async () => {
 	const fixture = comparisonFixture();

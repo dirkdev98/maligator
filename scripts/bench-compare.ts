@@ -39,7 +39,7 @@ export const BENCHMARK_LANE_RULES: ReadonlyArray<{
 	{ pattern: /^(scripts\/bench|bench\/)/, lanes: ["*"] },
 	{
 		pattern: /^src\/compiler\//,
-		lanes: ["javascript", "http", "self-compile"],
+		lanes: ["javascript", "javascript-v2", "http", "self-compile"],
 	},
 	{
 		pattern: /^runtime\/src\/runtime\/(node_http|web_)|^runtime\/src\/host\//,
@@ -47,11 +47,11 @@ export const BENCHMARK_LANE_RULES: ReadonlyArray<{
 	},
 	{
 		pattern: /^runtime\//,
-		lanes: ["javascript", "http"],
+		lanes: ["javascript", "javascript-v2", "http"],
 	},
 	{
 		pattern: /^src\//,
-		lanes: ["javascript", "http", "self-compile"],
+		lanes: ["javascript", "javascript-v2", "http", "self-compile"],
 	},
 ];
 
@@ -159,6 +159,7 @@ function metricPolicy(
 ):
 	| { direction: "higher" | "lower"; thresholdPercent: number; minimumAbsolute?: number }
 	| undefined {
+	if (/(^|\.)samples\./.test(metricPath)) return undefined;
 	if (/(^|\.)node(?:\.|[A-Z])/.test(metricPath)) return undefined;
 	if (/(^|\.)mal(?:Completed)?Rps$/.test(metricPath))
 		return { direction: "higher", thresholdPercent: 0 };
@@ -616,6 +617,7 @@ function comparisonMetrics(
 function assertComparableSnapshots(base: unknown, head: unknown): void {
 	const left = base as {
 		javascript?: { workload: string; phaseChecksums: unknown };
+		javascriptV2?: { workload: string; phaseChecksums: unknown };
 		http?: { oracleDigest: string };
 	};
 	const right = head as typeof left;
@@ -624,13 +626,11 @@ function assertComparableSnapshots(base: unknown, head: unknown): void {
 			throw new Error("base/head HTTP response oracle differs");
 		}
 	}
-	if (left.javascript !== undefined || right.javascript !== undefined) {
+	for (const key of ["javascript", "javascriptV2"] as const) {
+		if (left[key] === undefined && right[key] === undefined) continue;
 		if (
-			left.javascript?.workload !== right.javascript?.workload ||
-			!isDeepStrictEqual(
-				left.javascript?.phaseChecksums,
-				right.javascript?.phaseChecksums,
-			)
+			left[key]?.workload !== right[key]?.workload ||
+			!isDeepStrictEqual(left[key]?.phaseChecksums, right[key]?.phaseChecksums)
 		) {
 			throw new Error("base/head JavaScript workload or checksums differ");
 		}

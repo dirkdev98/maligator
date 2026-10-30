@@ -1,15 +1,3 @@
-/**
- * Maligator's benchmark contract has three deliberately different families:
- *
- * - javascript: one balanced core-language ES module under the production native
- *   plan across the complete closed/open x compiled/interpreted matrix, plus Node.
- * - http: the closed compiled bare and Express flagship servers versus Node.
- * - self-compile: the closed compiled Maligator compiler versus its Node host.
- *
- * The committed snapshot contains only stable outcome metrics. Mechanism-specific
- * counters and historical microbenchmarks are diagnostics, not baseline lanes.
- */
-
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
@@ -50,6 +38,7 @@ import {
 	runBenchmarkComparison,
 	selectChangedBenchmarkLanes,
 	selfCompileStages,
+	performanceSourceIdentity,
 } from "./bench-compare.ts";
 import {
 	formatOhaDuration,
@@ -76,7 +65,11 @@ import type { EmittedCSummary } from "./self-compile-workload.ts";
 
 const BASELINE_FILE = "bench/baseline.json";
 type CoreOptimizationAblation = CoreOptimizationBenchmarkAblation["family"];
-const JAVASCRIPT_FIXTURE = "bench/javascript.mjs";
+const JAVASCRIPT_WORKLOADS = {
+	javascript: { fixture: "bench/javascript.mjs", id: "javascript-v1" },
+	"javascript-v2": { fixture: "bench/javascript-v2.mjs", id: "javascript-v2" },
+} as const;
+type JavascriptLane = keyof typeof JAVASCRIPT_WORKLOADS;
 const BENCHMARK_SCHEMA = 3;
 const JAVASCRIPT_MODES = [
 	"closed-compiled",
@@ -129,7 +122,7 @@ interface JavascriptModeMetrics extends JavascriptReferenceMetrics {
 		realms: boolean;
 	};
 	ratio: number;
-	balancedRatio: number;
+	balancedRatio?: number;
 	binaryBytes: number;
 	nativeBuild: NativeOutputBuildMetrics;
 	collections: number;
@@ -142,6 +135,7 @@ interface JavascriptModeMetrics extends JavascriptReferenceMetrics {
 interface JavascriptMetrics {
 	workload: string;
 	runs: number;
+	samples: Record<string, ReadonlyArray<JavascriptSample>>;
 	nativeBuild: {
 		mode: "production";
 		optimizationFlags: ReadonlyArray<string>;
@@ -316,6 +310,7 @@ interface BenchmarkSnapshot {
 		readonly recorder?: "github-actions";
 	};
 	javascript?: JavascriptMetrics;
+	javascriptV2?: JavascriptMetrics;
 	http?: HttpMetrics;
 	selfCompile?: SelfCompileMetrics;
 }
@@ -352,20 +347,20 @@ function benchmarkSource(): NonNullable<BenchmarkSnapshot["source"]> {
 	) {
 		throw new Error("invalid archived benchmark source dirty flag");
 	}
-	const commit =
-		archivedCommit ??
-		execFileSync("git", ["rev-parse", "HEAD"], {
-			encoding: "utf8",
-		}).trim();
-	const dirtyPatch =
-		archivedCommit === undefined
-			? execFileSync("git", ["diff", "--binary", "HEAD"], {
-					encoding: "utf8",
-					maxBuffer: 32 * 1024 * 1024,
-				})
-			: "";
+	if (
+		archivedCommit !== undefined &&
+		(archivedDigest === undefined || archivedDirty === undefined)
+	) {
+		throw new Error(
+			"archived benchmark source requires commit, digest and dirty identity",
+		);
+	}
+	const identity =
+		archivedCommit === undefined ? performanceSourceIdentity(process.cwd()) : undefined;
+	const commit = archivedCommit ?? identity!.commit;
 	const benchmarkFiles = [
 		"bench/javascript.mjs",
+		"bench/javascript-v2.mjs",
 		"bench/http/express-server.cjs",
 		"bench/http/server_mal.js",
 		"bench/http/server_node.js",
@@ -382,8 +377,8 @@ function benchmarkSource(): NonNullable<BenchmarkSnapshot["source"]> {
 	}
 	return Object.freeze({
 		commit,
-		dirty: archivedDirty === undefined ? dirtyPatch.length > 0 : archivedDirty === "true",
-		digest: archivedDigest ?? hashBytes(`${commit}\0${dirtyPatch}`),
+		dirty: archivedDirty === undefined ? identity!.dirty : archivedDirty === "true",
+		digest: archivedDigest ?? identity!.digest,
 		benchmarkDigest: benchmarkDigest.digest("hex"),
 		configurationDigest: hashBytes(
 			JSON.stringify({
@@ -492,7 +487,11 @@ function parsePeakRssBytes(stderr: string): number | undefined {
 	return linux === null ? undefined : Number(linux[1]) * 1024;
 }
 
-function parseJavascriptOutput(stdout: string, label: string): JavascriptOutput {
+function parseJavascriptOutput(
+	stdout: string,
+	label: string,
+	workload: string,
+): JavascriptOutput {
 	const line = stdout.trim().split("\n").filter(Boolean).at(-1);
 	if (line === undefined) throw new Error(`${label} produced no workload report`);
 	let parsed: unknown;
@@ -504,7 +503,7 @@ function parseJavascriptOutput(stdout: string, label: string): JavascriptOutput 
 	if (
 		typeof parsed !== "object" ||
 		parsed === null ||
-		(parsed as { workload?: unknown }).workload !== "javascript-v1" ||
+		(parsed as { workload?: unknown }).workload !== workload ||
 		typeof (parsed as { phases?: unknown }).phases !== "object" ||
 		(parsed as { phases?: unknown }).phases === null
 	) {
@@ -529,6 +528,7 @@ function runJavascriptSample(
 	command: string,
 	args: ReadonlyArray<string>,
 	label: string,
+	workload: string,
 ): JavascriptSample {
 	const startedAt = process.hrtime.bigint();
 	const invocation = resolveHarnessExecutionInvocation(command);
@@ -543,7 +543,7 @@ function runJavascriptSample(
 			`${label} failed (${result.status}):\n${result.stdout}\n${result.stderr}`,
 		);
 	}
-	const output = parseJavascriptOutput(result.stdout, label);
+	const output = parseJavascriptOutput(result.stdout, label, workload);
 	return {
 		wallMs,
 		phases: Object.fromEntries(
@@ -586,6 +586,7 @@ function modeParts(mode: JavascriptMode): {
 function javascriptGcMetrics(
 	binary: string,
 	label: string,
+	workload: string,
 ): Pick<
 	JavascriptModeMetrics,
 	"collections" | "allocatedMb" | "peakLiveKb" | "maxPauseMs"
@@ -600,7 +601,7 @@ function javascriptGcMetrics(
 	if (result.status !== 0) {
 		throw new Error(`${label} GC probe failed (${result.status}):\n${result.stderr}`);
 	}
-	parseJavascriptOutput(result.stdout, `${label} GC probe`);
+	parseJavascriptOutput(result.stdout, `${label} GC probe`, workload);
 	return {
 		collections: parseGcStat(result.stderr, "collections"),
 		allocatedMb: parseGcStat(result.stderr, "allocated_bytes") / (1024 * 1024),
@@ -627,11 +628,14 @@ function javascriptRssMb(binary: string): number | undefined {
 }
 
 function benchJavascript(
+	lane: JavascriptLane,
 	runs: number,
 	selectedModes: ReadonlyArray<JavascriptMode>,
 	nativeCacheDirectory?: string,
 	coreOptimizationAblation?: CoreOptimizationAblation,
 ): JavascriptMetrics {
+	const workload = JAVASCRIPT_WORKLOADS[lane];
+	const subjectName = lane === "javascript" ? "bench-javascript" : "bench-javascript-v2";
 	const nativeBuild = nativeBuildRecorder();
 	const binaries: Partial<Record<JavascriptMode, string>> = {};
 	let nativeBuildContext:
@@ -639,8 +643,8 @@ function benchJavascript(
 		| undefined;
 	if (selectedModes.some((mode) => mode.startsWith("closed-"))) {
 		const closed = buildBackendPairFromOneProgramImage({
-			fixture: JAVASCRIPT_FIXTURE,
-			name: "bench-javascript-closed",
+			fixture: workload.fixture,
+			name: `${subjectName}-closed`,
 			config: CLOSED_CONFIG,
 			production: true,
 			cacheDirectory: nativeCacheDirectory,
@@ -658,8 +662,8 @@ function benchJavascript(
 	}
 	if (selectedModes.some((mode) => mode.startsWith("open-"))) {
 		const open = buildBackendPairFromOneProgramImage({
-			fixture: JAVASCRIPT_FIXTURE,
-			name: "bench-javascript-open",
+			fixture: workload.fixture,
+			name: `${subjectName}-open`,
 			config: OPEN_CONFIG,
 			production: true,
 			cacheDirectory: nativeCacheDirectory,
@@ -687,7 +691,7 @@ function benchJavascript(
 		return binary;
 	};
 	const subjects = [
-		{ label: "node", command: process.execPath, args: [JAVASCRIPT_FIXTURE] },
+		{ label: "node", command: process.execPath, args: [workload.fixture] },
 		...selectedModes.map((mode) => ({ label: mode, command: binaryFor(mode), args: [] })),
 	];
 	const samples = new Map<string, Array<JavascriptSample>>(
@@ -697,11 +701,12 @@ function benchJavascript(
 	progress.detail("javascript warmup");
 	const warmReference = runJavascriptSample(
 		process.execPath,
-		[JAVASCRIPT_FIXTURE],
+		[workload.fixture],
 		"node warmup",
+		workload.id,
 	);
 	for (const mode of selectedModes) {
-		const warm = runJavascriptSample(binaryFor(mode), [], `${mode} warmup`);
+		const warm = runJavascriptSample(binaryFor(mode), [], `${mode} warmup`, workload.id);
 		assertSameChecksums(warmReference.checksums, warm.checksums, `${mode} warmup`);
 	}
 
@@ -710,7 +715,12 @@ function benchJavascript(
 		const order = [...subjects.slice(offset), ...subjects.slice(0, offset)];
 		for (const subject of order) {
 			progress.detail(`javascript sample ${sample + 1}/${runs}: ${subject.label}`);
-			const result = runJavascriptSample(subject.command, subject.args, subject.label);
+			const result = runJavascriptSample(
+				subject.command,
+				subject.args,
+				subject.label,
+				workload.id,
+			);
 			assertSameChecksums(warmReference.checksums, result.checksums, subject.label);
 			samples.get(subject.label)!.push(result);
 		}
@@ -739,18 +749,23 @@ function benchJavascript(
 			backend,
 			config: worldConfig(config),
 			ratio: summary.wallMs / node.wallMs,
-			balancedRatio: geometricMean(
-				phaseNames.map((name) => summary.phaseMs[name]! / node.phaseMs[name]!),
-			),
+			...(lane === "javascript"
+				? {
+						balancedRatio: geometricMean(
+							phaseNames.map((name) => summary.phaseMs[name]! / node.phaseMs[name]!),
+						),
+					}
+				: {}),
 			binaryBytes: fileBytes(executable),
-			nativeBuild: nativeBuild.metrics(`bench-javascript-${world}-${backend}`),
-			...javascriptGcMetrics(binary, mode),
+			nativeBuild: nativeBuild.metrics(`${subjectName}-${world}-${backend}`),
+			...javascriptGcMetrics(binary, mode, workload.id),
 			...(rssMb === undefined ? {} : { rssMb }),
 		};
 	}
 	return {
-		workload: "javascript-v1",
+		workload: workload.id,
 		runs,
+		samples: Object.fromEntries(samples),
 		nativeBuild: {
 			mode: "production",
 			optimizationFlags: ["-O2", "-g0", ...nativeBuildContext.plan.ltoFlags],
@@ -1805,14 +1820,14 @@ function reportJavascript(
 	current: JavascriptMetrics,
 	previous: JavascriptMetrics | undefined,
 ): void {
-	console.log("javascript (balanced core-language matrix):");
+	console.log(`${current.workload} (core-language matrix):`);
 	console.log(`  node               ${current.node.wallMs.toFixed(1)}ms`);
 	for (const mode of JAVASCRIPT_MODES) {
 		const value = current.modes[mode];
 		if (value === undefined) continue;
 		const prior = previous?.modes[mode];
 		console.log(
-			`  ${mode.padEnd(19)} ${value.wallMs.toFixed(1)}ms${delta(value.wallMs, prior?.wallMs)}  ${value.ratio.toFixed(2)}x Node  balanced ${value.balancedRatio.toFixed(2)}x`,
+			`  ${mode.padEnd(19)} ${value.wallMs.toFixed(1)}ms${delta(value.wallMs, prior?.wallMs)}  ${value.ratio.toFixed(2)}x Node${value.balancedRatio === undefined ? "" : `  balanced ${value.balancedRatio.toFixed(2)}x`}`,
 		);
 		console.log(
 			`    ${value.collections} collections, ${value.allocatedMb.toFixed(1)}MB allocated, ${value.peakLiveKb.toFixed(1)}KB peak live, ${value.maxPauseMs.toFixed(3)}ms max pause, ${humanBytes(value.binaryBytes)} binary${value.rssMb === undefined ? "" : `, ${value.rssMb.toFixed(1)}MB RSS`}`,
@@ -1863,21 +1878,25 @@ function report(
 	if (current.javascript !== undefined) {
 		reportJavascript(current.javascript, previous?.javascript);
 	}
+	if (current.javascriptV2 !== undefined) {
+		reportJavascript(current.javascriptV2, previous?.javascriptV2);
+	}
 	if (current.http !== undefined) reportHttp(current.http, previous?.http);
 	if (current.selfCompile !== undefined) {
 		reportSelfCompile(current.selfCompile, previous?.selfCompile);
 	}
 }
 
-const HELP = `Usage: node scripts/bench.ts [javascript|http|self-compile] [options]
+const HELP = `Usage: node scripts/bench.ts [javascript|javascript-v2|http|self-compile] [options]
 
 Benchmark families:
   javascript    One balanced ES-module workload under the production native plan
                 across closed/open x compiled/interpreted, plus a Node reference.
+  javascript-v2 Broader twelve-phase ES-module workload under the same four modes.
   http          Fully closed compiled bare HTTP and Express versus Node.
   self-compile  Fully closed compiled Maligator compiler versus its Node host.
 
-Default: javascript and http. --full adds self-compile.
+Default: javascript and http. --full adds javascript-v2 and self-compile.
 
 Options:
   --full              Run all three benchmark families
@@ -2038,7 +2057,7 @@ if (options.coreOptimizationAblation === undefined) {
 	process.env.MAL_CORE_BENCHMARK_ABLATION = options.coreOptimizationAblation;
 }
 
-const allLanes = ["javascript", "http", "self-compile"];
+const allLanes = ["javascript", "javascript-v2", "http", "self-compile"];
 const changedSelection = options.changed
 	? selectChangedBenchmarkLanes(options.compareRef ?? "HEAD", allLanes)
 	: undefined;
@@ -2053,8 +2072,11 @@ const requestedLanes =
 const unknown = requestedLanes.filter((lane) => !allLanes.includes(lane));
 if (unknown.length > 0)
 	throw new Error(`unknown benchmark family: ${unknown.join(", ")}`);
-if (options.mode !== undefined && !requestedLanes.includes("javascript")) {
-	throw new Error("--mode requires the javascript benchmark family");
+if (
+	options.mode !== undefined &&
+	!requestedLanes.some((lane) => lane === "javascript" || lane === "javascript-v2")
+) {
+	throw new Error("--mode requires a javascript benchmark family");
 }
 if (
 	options.checkpointPath !== undefined &&
@@ -2095,6 +2117,14 @@ if (options.plan) {
 					: null,
 				perSnapshot: {
 					runs: snapshotRuns,
+					javascript: requestedLanes
+						.filter((lane): lane is JavascriptLane => lane in JAVASCRIPT_WORKLOADS)
+						.map((lane) => ({
+							...JAVASCRIPT_WORKLOADS[lane],
+							modes: options.mode === undefined ? JAVASCRIPT_MODES : [options.mode],
+							warmupRounds: 1,
+							measuredRounds: snapshotRuns,
+						})),
 					selfCompileStages: requestedLanes.includes("self-compile")
 						? selfCompileStages(snapshotRuns)
 						: [],
@@ -2177,6 +2207,16 @@ let checkpointPending = false;
 const implementations: Record<string, () => void | Promise<void>> = {
 	javascript: () => {
 		entry.javascript = benchJavascript(
+			"javascript",
+			options.runs,
+			options.mode === undefined ? JAVASCRIPT_MODES : [options.mode],
+			options.nativeCacheDirectory,
+			options.coreOptimizationAblation,
+		);
+	},
+	"javascript-v2": () => {
+		entry.javascriptV2 = benchJavascript(
+			"javascript-v2",
 			options.runs,
 			options.mode === undefined ? JAVASCRIPT_MODES : [options.mode],
 			options.nativeCacheDirectory,

@@ -100,6 +100,16 @@ test("JavaScript site metrics accept only the complete production benchmark cont
 	).toBeUndefined();
 });
 
+test("JavaScript v2 snapshots do not replace website v1 metrics", () => {
+	const baseline = javascriptBaseline(1_300);
+	const v2 = { ...baseline.javascript, workload: "javascript-v2" };
+	expect(javascriptMetricsForSite({ schema: 3, javascriptV2: v2 })).toBeUndefined();
+	expect(javascriptMetricsForSite({ ...baseline, javascriptV2: v2 })).toEqual(
+		javascriptMetricsForSite(baseline),
+	);
+	expect(javascriptMetricsForSite({ ...baseline, javascript: v2 })).toBeUndefined();
+});
+
 test("JavaScript history skips unchanged snapshots and appends a changed preview", () => {
 	const first = javascriptBaseline(1_300);
 	const faster = javascriptBaseline(1_100);

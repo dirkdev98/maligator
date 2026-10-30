@@ -57,7 +57,7 @@ writeFileSync(
 			digest: process.env.MAL_INTERNAL_BENCH_SOURCE_DIGEST ?? "fixture",
 			dirty: process.env.MAL_INTERNAL_BENCH_SOURCE_DIRTY === "true",
 		},
-		javascript: {
+		[args.includes("javascript-v2") ? "javascriptV2" : "javascript"]: {
 			workload: "fixture",
 			phaseChecksums: {
 				main: control.checksumMismatch && label.endsWith("head") ? 99 : 42,

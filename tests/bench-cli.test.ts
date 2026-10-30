@@ -4,7 +4,79 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 
+interface JavascriptPlan {
+	lanes: Array<string>;
+	perSnapshot: {
+		javascript: Array<{
+			fixture: string;
+			id: string;
+			modes: Array<string>;
+			warmupRounds: number;
+			measuredRounds: number;
+		}>;
+	};
+	updatesBaseline: boolean;
+}
+
 describe("benchmark CLI", () => {
+	it.each([
+		undefined,
+		"closed-compiled",
+		"open-compiled",
+		"closed-interpreted",
+		"open-interpreted",
+	])("plans JavaScript v2 against Node with mode %s without running it", (mode) => {
+		const result = spawnSync(
+			process.execPath,
+			[
+				"scripts/bench.ts",
+				"javascript-v2",
+				"--runs",
+				"5",
+				"--plan=json",
+				...(mode === undefined ? [] : ["--mode", mode]),
+			],
+			{ encoding: "utf8" },
+		);
+		expect(result.status, result.stderr).toBe(0);
+		const plan = JSON.parse(result.stdout) as JavascriptPlan;
+		expect(plan.lanes).toEqual(["javascript-v2"]);
+		expect(plan.perSnapshot.javascript).toEqual([
+			{
+				fixture: "bench/javascript-v2.mjs",
+				id: "javascript-v2",
+				modes:
+					mode === undefined
+						? [
+								"closed-compiled",
+								"open-compiled",
+								"closed-interpreted",
+								"open-interpreted",
+							]
+						: [mode],
+				warmupRounds: 1,
+				measuredRounds: 5,
+			},
+		]);
+		expect(plan.updatesBaseline).toBe(false);
+		expect(result.stdout).not.toContain("[bench]");
+	});
+
+	it("keeps the default JavaScript workload on v1", () => {
+		const result = spawnSync(process.execPath, ["scripts/bench.ts", "--plan=json"], {
+			encoding: "utf8",
+		});
+		expect(result.status, result.stderr).toBe(0);
+		const plan = JSON.parse(result.stdout) as JavascriptPlan;
+		expect(plan.lanes).toEqual(["javascript", "http"]);
+		expect(plan.perSnapshot.javascript).toMatchObject([
+			{
+				fixture: "bench/javascript.mjs",
+				id: "javascript-v1",
+			},
+		]);
+	});
+
 	it("plans the full cost of a bounded self-compile comparison without running it", () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-bench-plan-"));
 		onTestFinished(() => rmSync(directory, { recursive: true, force: true }));

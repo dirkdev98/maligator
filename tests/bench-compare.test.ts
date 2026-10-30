@@ -15,6 +15,25 @@ test("changed source files select transparent benchmark lanes", () => {
 	expect(lanesForChangedFiles(["README.md"], lanes)).toEqual([]);
 });
 
+test("JavaScript v2 participates in compiler and runtime change selection", () => {
+	const lanes = ["javascript", "javascript-v2", "http", "self-compile"];
+	expect(lanesForChangedFiles(["runtime/src/builtin_string.c"], lanes)).toEqual([
+		"javascript",
+		"javascript-v2",
+		"http",
+	]);
+	expect(lanesForChangedFiles(["src/compiler/core/optimize.ts"], lanes)).toEqual(lanes);
+});
+
+test("raw JavaScript samples do not become separate classified metrics", () => {
+	expect(
+		classifyMetricSamples("javascriptV2.samples.closed-compiled.0.wallMs", [
+			{ base: 10, head: 20 },
+			{ base: 10, head: 20 },
+		]),
+	).toBeUndefined();
+});
+
 test("paired comparison recognizes small consistent slowdowns", () => {
 	const slowdown = Array.from({ length: 7 }, (_, index) => ({
 		base: 100 + index * 0.1,
