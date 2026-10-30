@@ -2346,6 +2346,12 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		);
 	}
 	validateImageForEmission(image);
+	if (
+		image.native.functions.some(
+			(fn) => (fn.storage?.captures.copiedClosureIps.length ?? 0) > 0,
+		)
+	)
+		throw new Error("Native overlays require portable capture storage");
 	const name = target.kind === "fragment" ? `fragment_${target.name}` : "eval_compiler";
 	const suffix = `_${name}`;
 	const unitPrefix = target.kind === "fragment" ? `${name}-` : "";

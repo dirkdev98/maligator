@@ -321,6 +321,13 @@ describe("immutable closure capture artifact transport", () => {
 });
 
 describe("persisted native capture access contract", () => {
+	it("rejects frame-copy creation plans for overlays whose wire omits capture descriptors", () => {
+		const image = lowerNativeStorage(captureImage(true, true));
+		expect(() =>
+			emitRelocatableNativeOverlayTranslationUnits(image, "a".repeat(64)),
+		).toThrow(/Native overlays require portable capture storage/);
+	});
+
 	it("round-trips closure creation from frame-held captures", () => {
 		const image = lowerNativeStorage(captureImage(true, true));
 		const owner = image.native.functions[1]!;

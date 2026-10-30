@@ -71,6 +71,8 @@ The original owner layout remains available for ordinary incoming environments
 and conservative construction fallback. Native entries cache copied values once
 through an ordinal-and-tuple check; generic and relocated entries can still read
 the original lexical storage. The portable wire loader omits the value metadata.
+Wire overlays reject frame-copy creation plans because their runtime images omit
+the required descriptors.
 
 Native canonical and specialized entries resolve nonnegative external owner IDs
 once per entry, using a known vector ordinal for one owner or one traversal for
