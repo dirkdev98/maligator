@@ -176,14 +176,10 @@ MalUnicodeStatus mal_unicode_case(const c16 *source, usize length, bool upper, M
         for (usize mapped = 0; mapped < count; mapped++) {
             u32 value = mapping[mapped];
             usize width = value > 0xffff ? 2 : 1;
-            usize required;
-            if (!mal_checked_size_add(used, width, MAL_STRING_MAX_CODE_UNITS, &required)) {
-                status = MAL_UNICODE_LENGTH_OVERFLOW;
-                goto failed;
-            }
-            if (required > capacity) {
-                usize grown;
-                if (!mal_checked_size_growth(capacity, required, 1,
+            if (capacity - used < width) {
+                usize required, grown;
+                if (!mal_checked_size_add(used, width, MAL_STRING_MAX_CODE_UNITS, &required) ||
+                    !mal_checked_size_growth(capacity, required, 1,
                         MAL_STRING_MAX_CODE_UNITS, &grown) ||
                     !mal_checked_size_multiply(grown, sizeof(c16), SIZE_MAX, &bytes)) {
                     status = MAL_UNICODE_LENGTH_OVERFLOW;
@@ -199,7 +195,7 @@ MalUnicodeStatus mal_unicode_case(const c16 *source, usize length, bool upper, M
             }
             if (width == 2) mal_utf16_emit_pair(value, units + used);
             else units[used] = (c16) value;
-            used = required;
+            used += width;
         }
         index += width;
     }
