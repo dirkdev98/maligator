@@ -4891,6 +4891,15 @@ __attribute__((noinline)) static MalValue mal_vm_call_cached_value_fallback(
     const MalValue *args,
     i32 arg_count
 ) {
+    if (mal_value_is_bound_function_object(callee)) {
+        MalValue inline_args[MAL_BOUND_INLINE_ARGS];
+        MalBoundResolution resolution = mal_bound_function_object_resolve(
+            callee, this_value, args, arg_count, true, inline_args, countof(inline_args));
+        MalValue value = mal_vm_call_cached_value(
+            vm, resolution.callee, resolution.this_value, resolution.args, resolution.arg_count);
+        free(resolution.owned_args);
+        return value;
+    }
     // A plain native is the common miss of the compiled-function probe; only the call and
     // apply builtins, which forward to their receiver, and non-natives go further.
     if (mal_value_is_native_function_object(callee) &&

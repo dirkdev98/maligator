@@ -13,6 +13,7 @@ tests/native/array-destructuring-close.test.ts
 tests/native/array-spread-iterable.test.ts
 tests/native/async-generator-direct-promise.test.ts
 tests/native/async-iterator-close.test.ts
+tests/native/bound-call-dispatch.test.ts
 tests/native/coroutine-pool.test.ts
 tests/native/eval-gc-runtime-compilation-p0.test.ts
 tests/native/exact-callback-lifetime.test.ts
