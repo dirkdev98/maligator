@@ -830,8 +830,9 @@ Shared lifetime and fallback rules are recorded in
       emission 5.6 s and Core to execution 4.2 s. Scavenges take about 5 s: iterator
       results are still 14 GB of the run's 87 GB sampled allocation, from the
       store's ID generators (`instructionIds()` returns an array without an active
-      editor and a generator with one, so its loops stay polymorphic), `x?.values()
-      ?? []` loops in program flow, and `new Map(previous)` copies in reachability.
+      editor and a generator with one, so its loops stay polymorphic), loops over
+      `x?.values() ?? []` in program flow, and `new Map(previous)` copies in
+      reachability.
       6ce7d318 still triples plan candidates by planning every exact call outside
       the budget.
 - [ ] Invalidate warm frontend caches when module-resolution topology changes.
