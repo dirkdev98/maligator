@@ -90,6 +90,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_value_new_boolean",
 	"mal_value_to_boolean",
 	"mal_value_is_truthy",
+	"mal_number_is_truthy",
 	"mal_value_is_nil",
 	"mal_value_is_nan",
 	"mal_value_is_empty",
@@ -1787,4 +1788,79 @@ describe("frameless primitive deletion", () => {
 			),
 		).toBeUndefined();
 	});
+});
+
+describe("successful fast arithmetic Number results", () => {
+	it("tests a guarded subtraction as Number while preserving its full numeric domain", () => {
+		const fn = body([
+			{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator: "-" },
+			{ opcode: "JUMP_IF", cond: 2, targetIp: 4 },
+			{ opcode: "RETURN", value: 0 },
+			{ opcode: "RETURN", value: 1 },
+			{ opcode: "RETURN", value: 2 },
+		]);
+		const lines = fastEntry(fn)!;
+		const text = lines.join("\n");
+		expect(text).toContain("mal_number_is_truthy(__fast_n2)");
+		expect(text).toContain("goto __full");
+		expect(unexpectedHelpers(lines)).toEqual([]);
+	});
+	it("negates a guarded Number with Number truthiness", () => {
+		const text = fastEntry(
+			body([
+				{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator: "-" },
+				{ opcode: "UNARY", dst: 3, src: 2, operator: "!" },
+				{ opcode: "RETURN", value: 3 },
+			]),
+		)!.join("\n");
+		expect(text).toContain("!mal_number_is_truthy(__fast_n2)");
+	});
+	it.each([
+		["unknown", { opcode: "MOVE", dst: 2, src: 1 }],
+		["Boolean", { opcode: "CREATE_BOOLEAN", dst: 2, value: true }],
+		["String", { opcode: "CREATE_STRING", dst: 2, stringIndex: 0 }],
+	] as const)("retains generic truthiness for a Number and %s merge", (_name, writer) => {
+		const text = fastEntry(
+			body([
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+				{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator: "-" },
+				{ opcode: "JUMP", targetIp: 4 },
+				writer,
+				{ opcode: "JUMP_IF", cond: 2, targetIp: 6 },
+				{ opcode: "RETURN", value: 0 },
+				{ opcode: "RETURN", value: 1 },
+			]),
+		)!.join("\n");
+		expect(text).toContain("mal_value_is_truthy(__fast_r2)");
+	});
+
+	it("retains generic truthiness when a branch bypasses the numeric definition", () => {
+		const text = fastEntry(
+			body([
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
+				{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator: "-" },
+				{ opcode: "JUMP_IF", cond: 2, targetIp: 4 },
+				{ opcode: "RETURN", value: 0 },
+				{ opcode: "RETURN", value: 1 },
+			]),
+		)!.join("\n");
+		expect(text).toContain("mal_value_is_truthy(__fast_r2)");
+	});
+});
+
+it("initializes the cached Number on both producing arms", () => {
+	const fn = body([
+		{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+		{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator: "-" },
+		{ opcode: "JUMP", targetIp: 4 },
+		{ opcode: "CREATE_NUMBER", dst: 2, value: 0 },
+		{ opcode: "JUMP_IF", cond: 2, targetIp: 6 },
+		{ opcode: "RETURN", value: 0 },
+		{ opcode: "RETURN", value: 1 },
+	]);
+	const text = fastEntry(fn)!.join("\n");
+	expect(text.match(/__fast_n2 = /g)).toHaveLength(
+		fn.instructions.filter((op) => "dst" in op && op.dst === 2).length,
+	);
+	expect(text).toContain("mal_number_is_truthy(__fast_n2)");
 });

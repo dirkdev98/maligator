@@ -199,6 +199,7 @@ export function renderNativeFastEntry(
 				new Map(),
 				stringComparisons.get(ip),
 				new Set(),
+				new Set(),
 				undefined,
 			) === undefined
 		)
@@ -244,6 +245,11 @@ export function renderNativeFastEntry(
 		.map((ip) => fn.instructions[ip]!);
 	const constants = numberConstantRegisters(instructions, registers);
 	const integers = int32ResultRegisters(instructions, fn.parameterCount, registers);
+	const cachedNumbers = cachedNumberResultRegisters(
+		instructions,
+		fn.parameterCount,
+		registers,
+	);
 	const initialized = initializedFastRegisters(graph, accesses, registers);
 	const tryParameters = exported
 		? scalarTryParameters(fn, graph, accesses, rejected)
@@ -252,6 +258,8 @@ export function renderNativeFastEntry(
 		if (!initialized.has(register)) constants.delete(register);
 	for (const register of integers)
 		if (!initialized.has(register)) integers.delete(register);
+	for (const register of cachedNumbers)
+		if (!initialized.has(register)) cachedNumbers.delete(register);
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (!graph.has(ip)) continue;
 		if (rejected.has(ip)) {
@@ -276,6 +284,7 @@ export function renderNativeFastEntry(
 						constants,
 						stringComparisons.get(ip),
 						integers,
+						cachedNumbers,
 						tryParameters,
 					);
 		if (line === undefined) return undefined;
@@ -313,6 +322,14 @@ export function renderNativeFastEntry(
 		...(locals.length === 0
 			? []
 			: [`    MalValue ${locals.map((r) => `__fast_r${r}`).join(", ")};`]),
+		...(cachedNumbers.size === 0
+			? []
+			: [
+					`    f64 ${[...cachedNumbers]
+						.sort((left, right) => left - right)
+						.map((r) => `__fast_n${r}`)
+						.join(", ")};`,
+				]),
 		"    if (!mal_vm_leaf_unobserved(vm) || !mal_vm_leaf_stack_available(vm)) goto __full;",
 		...(loadsProperties
 			? [
@@ -641,8 +658,44 @@ function int32ResultRegisters(
 	return integers;
 }
 
+/**
+ * Successful fast execution establishes these Number facts. Every admitted writer
+ * updates the double cache alongside the boxed value.
+ */
+function cachedNumberResultRegisters(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+	parameterCount: number,
+	registers: ReadonlySet<number>,
+): Set<number> {
+	const numeric = new Set<number>();
+	const varying = new Set<number>();
+	for (const op of instructions) {
+		if (!("dst" in op) || !registers.has(op.dst)) continue;
+		const number =
+			op.opcode === "CREATE_NUMBER" ||
+			op.opcode === "CREATE_F64" ||
+			(op.opcode === "BINARY" &&
+				(NUMBER_OPERATORS.has(op.operator) ||
+					op.operator === ">>>" ||
+					op.operator === "%" ||
+					op.operator === "**")) ||
+			(op.opcode === "UNARY" &&
+				(op.operator === "-" ||
+					op.operator === "increment" ||
+					op.operator === "decrement"));
+		if (number && op.dst >= parameterCount && !varying.has(op.dst)) {
+			numeric.add(op.dst);
+			continue;
+		}
+		numeric.delete(op.dst);
+		varying.add(op.dst);
+	}
+	return numeric;
+}
+
 interface FastNumbers {
 	readonly parameters: NativeFastTryParameters | undefined;
+	readonly cachedNumbers: ReadonlySet<number>;
 	readonly kind: (register: number) => number;
 	readonly isInt32: (register: number) => boolean;
 	readonly resultIsInt32: (register: number) => boolean;
@@ -673,7 +726,9 @@ function number(values: FastNumbers, register: number): string {
 	if (values.parameters?.[register] === "i32") return `((f64) __fast_p${register})`;
 	const constant = values.constants.get(register);
 	return constant === undefined
-		? `mal_ops_number_as_f64(__fast_r${register})`
+		? values.cachedNumbers.has(register)
+			? `__fast_n${register}`
+			: `mal_ops_number_as_f64(__fast_r${register})`
 		: values.literal(constant);
 }
 
@@ -720,7 +775,12 @@ function exactInteger(values: FastNumbers, register: number): string | undefined
 }
 
 function storeNumber(values: FastNumbers, dst: number, expression: string): string {
-	return `__fast_r${dst} = ${values.resultIsInt32(dst) ? `mal_value_from_i32((i32) (${expression}))` : `mal_ops_number_value(${expression})`};`;
+	const integer = values.resultIsInt32(dst);
+	const computed = integer ? `((i32) (${expression}))` : expression;
+	const stored = values.cachedNumbers.has(dst)
+		? `(__fast_n${dst} = ${computed})`
+		: computed;
+	return `__fast_r${dst} = ${integer ? `mal_value_from_i32((i32) ${stored})` : `mal_ops_number_value(${stored})`};`;
 }
 
 const NUMBER_COMPARISONS: ReadonlySet<string> = new Set(["<", "<=", ">", ">="]);
@@ -836,7 +896,7 @@ function fastBinary(
 	if (operator === ">>")
 		return `${guard} __fast_r${dst} = mal_value_from_i32(${integer(left)} >> ((u32) ${integer(right)} & 31u));`;
 	if (operator === ">>>")
-		return `${guard} __fast_r${dst} = mal_ops_number_value((f64) ((u32) ${integer(left)} >> ((u32) ${integer(right)} & 31u)));`;
+		return `${guard} ${storeNumber(values, dst, `(f64) ((u32) ${integer(left)} >> ((u32) ${integer(right)} & 31u))`)}`;
 	if (NUMBER_OPERATORS.has(operator))
 		return `${guard} ${storeNumber(values, dst, `${numeric(left)} ${operator} ${numeric(right)}`)}`;
 	if (operator === "%") {
@@ -850,7 +910,7 @@ function fastBinary(
 		return `${guard} ${storeNumber(values, dst, expression)}`;
 	}
 	if (operator === "**")
-		return `${guard} __fast_r${dst} = mal_ops_number_value(mal_number_exponentiate(${numeric(left)}, ${numeric(right)}));`;
+		return `${guard} ${storeNumber(values, dst, `mal_number_exponentiate(${numeric(left)}, ${numeric(right)})`)}`;
 	return undefined;
 }
 
@@ -881,7 +941,9 @@ function fastUnary(
 				compilerIntegerRangeTruthiness(values.range(src)) ??
 				compilerValueKindTruthiness(values.kind(src));
 			return constant === undefined
-				? `__fast_r${dst} = mal_value_new_boolean(!mal_value_is_truthy(__fast_r${src}));`
+				? values.kind(src) === COMPILER_VALUE_KIND_NUMBER
+					? `__fast_r${dst} = mal_value_new_boolean(!mal_number_is_truthy(${number(values, src)}));`
+					: `__fast_r${dst} = mal_value_new_boolean(!mal_value_is_truthy(__fast_r${src}));`
 				: `__fast_r${dst} = ${constant ? "MAL_VALUE_FALSE" : "MAL_VALUE_TRUE"};`;
 		}
 		case "-":
@@ -912,11 +974,13 @@ function fastInstruction(
 	constants: ReadonlyMap<number, number>,
 	stringComparison: NativeStringComparisonPlan | undefined,
 	integers: ReadonlySet<number>,
+	cachedNumbers: ReadonlySet<number>,
 	tryParameters: NativeFastTryParameters | undefined,
 ): string | undefined {
 	const masks = input.facts?.[ip]?.inputKindMasks;
 	const values: FastNumbers = {
 		parameters: tryParameters,
+		cachedNumbers,
 		resultIsInt32: (register) =>
 			compilerIntegerRangeIsInt32(
 				instructionResultIntegerRange(input.facts?.[ip], register),
@@ -930,7 +994,12 @@ function fastInstruction(
 			instructionInputIsInt32(input.facts?.[ip], register),
 		kind(register) {
 			if (tryParameters?.[register] === "i32") return COMPILER_VALUE_KIND_NUMBER;
-			if (constants.has(register)) return COMPILER_VALUE_KIND_NUMBER;
+			if (
+				constants.has(register) ||
+				cachedNumbers.has(register) ||
+				integers.has(register)
+			)
+				return COMPILER_VALUE_KIND_NUMBER;
 			if (register < 0) {
 				const decoded = decodeVmValueOperand(register);
 				switch (decoded.kind) {
@@ -990,7 +1059,7 @@ function fastInstruction(
 			return `__fast_r${op.dst} = __fast_r${op.src};`;
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
-			return `__fast_r${op.dst} = mal_ops_number_value(${input.f64Literal(op.value)});`;
+			return storeNumber(values, op.dst, input.f64Literal(op.value));
 		case "CREATE_BOOLEAN":
 			return `__fast_r${op.dst} = ${op.value ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
 		case "CREATE_STRING":
@@ -1109,7 +1178,9 @@ function fastInstruction(
 			if (constant !== undefined) return constant ? target : "";
 			return integers.has(op.cond)
 				? `if (mal_ops_number_value_to_i32(__fast_r${op.cond}) != 0) ${target}`
-				: `if (mal_value_is_truthy(__fast_r${op.cond})) ${target}`;
+				: values.kind(op.cond) === COMPILER_VALUE_KIND_NUMBER
+					? `if (mal_number_is_truthy(${number(values, op.cond)})) ${target}`
+					: `if (mal_value_is_truthy(__fast_r${op.cond})) ${target}`;
 		}
 		case "RETURN": {
 			const returned = value(op.value);

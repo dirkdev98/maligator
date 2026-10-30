@@ -981,5 +981,62 @@ map.get = function () {
 	return 14;
 };
 log.push(`collection overridden ${collectionGet(map, collectionKey)}`);
+function numericOr(a, b) {
+	return a - b || "zero";
+}
+function numericNot(a, b) {
+	return !(a - b);
+}
+function numericProperty(a, b) {
+	return a.value - b.value || "zero";
+}
+function numericReciprocal(a, b) {
+	const value = a - b;
+	return 1 / value;
+}
+globalThis.numericReciprocal = numericReciprocal;
+globalThis.numericOr = numericOr;
+globalThis.numericNot = numericNot;
+globalThis.numericProperty = numericProperty;
+for (const [a, b] of [
+	[NaN, 1],
+	[0, -0],
+	[-0, 0],
+	[Infinity, Infinity],
+	[Infinity, 1],
+	[-Infinity, 1],
+	[Number.MIN_VALUE, 0],
+	[3, 5],
+	[2n, 2n],
+	[3n, 2n],
+	[1n, 1],
+	[1, 1n],
+]) {
+	for (const operation of [numericOr, numericNot, numericReciprocal]) {
+		try {
+			const result = operation(a, b);
+			log.push(`numeric truth ${typeof result}:${String(result)}`);
+		} catch (error) {
+			log.push(`numeric truth ${error.name}`);
+		}
+	}
+}
+const numericCoercion = {
+	valueOf() {
+		log.push("numeric coercion");
+		if (globalThis.gc) globalThis.gc();
+		return 4;
+	},
+};
+log.push(`numeric coercion result ${numericOr(numericCoercion, 4)}`);
+const numericGetter = {
+	get value() {
+		log.push("numeric getter");
+		if (globalThis.gc) globalThis.gc();
+		return numericCoercion;
+	},
+};
+log.push(`numeric getter result ${numericProperty(numericGetter, { value: 3 })}`);
+
 if (globalThis.gc) globalThis.gc();
 console.log(log.join("\n"));
