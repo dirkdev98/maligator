@@ -46,6 +46,25 @@ typedef struct MalHeapCurrentUsage {
 typedef struct MalRealm MalRealm;
 #endif
 
+/** Which dead cells of one heap type a sweep must hand to its finalizer. */
+typedef enum MalHeapDeadCellPolicy {
+    MAL_HEAP_DEAD_CELL_FINALIZE,
+    /** The type never owns anything outside its cell. */
+    MAL_HEAP_DEAD_CELL_RECLAIM,
+    /** An ordinary object, which needs its finalizer only while `mal_object_finalizes`. */
+    MAL_HEAP_DEAD_CELL_OBJECT,
+} MalHeapDeadCellPolicy;
+
+/* Relaxed atomics, like the type hooks the policy summarizes: registration may run
+ * while another isolate sweeps. */
+#if defined(__wasi__)
+typedef u8 MalHeapDeadCellPolicySlot;
+#define mal_heap_dead_cell_policy_load(slot) (slot)
+#else
+typedef _Atomic(u8) MalHeapDeadCellPolicySlot;
+#define mal_heap_dead_cell_policy_load(slot) atomic_load_explicit(&(slot), memory_order_relaxed)
+#endif
+
 /**
  * Block-based, segregated-size-class, non-moving allocator.
  *
@@ -55,6 +74,7 @@ typedef struct MalRealm MalRealm;
  * fresh block is claimed when the current one fills. Large objects bypass blocks
  * into the LOS list. `mal_heap_free` releases everything at shutdown.
  */
+
 typedef struct MalHeap {
     /** All chunks, newest first (allocation source + shutdown release). */
     MalGcChunk *chunks;
@@ -98,6 +118,8 @@ typedef struct MalHeap {
     usize next_gc_at;
     /** Poison reclaimed payloads when verification is enabled. */
     bool poison_on_free;
+    /** Per heap type, which dead cells may skip the sweep's finalizer; null runs it for all. */
+    const MalHeapDeadCellPolicySlot *dead_cell_policy;
     /** Bytes of managed cells that survived the last sweep; sizes the next
      * auto-collection trigger. Zero until the first collection. */
     usize live_bytes;

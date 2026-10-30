@@ -187,9 +187,24 @@ static _Atomic(MalGcTracer) g_type_tracers[MAL_HEAP_TYPE_COUNT];
     atomic_store_explicit(&(slot), (fn), memory_order_relaxed)
 #endif
 
+/* Mirrors the early returns of `mal_gc_finalize_cell` and `mal_gc_finalize_cell_owned`
+ * so sweeps can skip the call; a type that gains owned state there needs FINALIZE here. */
+static MalHeapDeadCellPolicySlot g_dead_cell_policy[MAL_HEAP_TYPE_COUNT] = {
+    [MAL_HEAP_SYMBOL] = MAL_HEAP_DEAD_CELL_RECLAIM,
+    [MAL_HEAP_BIGINT] = MAL_HEAP_DEAD_CELL_RECLAIM,
+    [MAL_HEAP_ENV] = MAL_HEAP_DEAD_CELL_RECLAIM,
+    [MAL_HEAP_ASYNC_CONTEXT] = MAL_HEAP_DEAD_CELL_RECLAIM,
+    [MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE] = MAL_HEAP_DEAD_CELL_RECLAIM,
+    [MAL_HEAP_ASYNC_RESOURCE_STATE] = MAL_HEAP_DEAD_CELL_RECLAIM,
+    [MAL_HEAP_ASYNC_RUN_SCOPE_STATE] = MAL_HEAP_DEAD_CELL_RECLAIM,
+    [MAL_HEAP_OBJECT] = MAL_HEAP_DEAD_CELL_OBJECT,
+    [MAL_HEAP_FUNCTION_OBJECT] = MAL_HEAP_DEAD_CELL_OBJECT,
+};
+
 void mal_gc_register_finalizer(MalHeapType type, MalGcFinalizer fn) {
     if ((usize) type < (usize) MAL_HEAP_TYPE_COUNT) {
         mal_gc_type_hook_store(g_type_finalizers[type], fn);
+        mal_gc_type_hook_store(g_dead_cell_policy[type], (u8) MAL_HEAP_DEAD_CELL_FINALIZE);
     }
 }
 
@@ -1028,6 +1043,7 @@ void mal_gc_configure_heap(MalVm *vm) {
     }
     // Poisoning dead cells makes a missed root fail before the cell is reused.
     vm->heap.poison_on_free = g->verify_enabled;
+    vm->heap.dead_cell_policy = g_dead_cell_policy;
 }
 
 void mal_gc_begin_teardown(MalVm *vm) {
@@ -2403,12 +2419,12 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
 
 static inline bool mal_gc_object_owns_nothing(const MalObject *object) {
     return mal_gc_type_hook_load(g_type_finalizers[object->header.type]) == nullptr &&
-        !object->has_captured_stack && !object->is_prototype && !object->slots_owned &&
-        object->storage_kind != MAL_OBJECT_EXTERNAL && mal_object_overflow(object) == nullptr;
+        !mal_object_finalizes(object);
 }
 
 /* Most dead cells own nothing outside their own allocation; settling that before the
- * full finalizer keeps them off its frame. */
+ * full finalizer keeps them off its frame. `g_dead_cell_policy` lets sweeps settle the
+ * commonest of these cases without the call. */
 static void mal_gc_finalize_cell(MalHeapHeader *cell) {
     switch (cell->type) {
         case MAL_HEAP_SYMBOL:

@@ -169,6 +169,12 @@ static inline bool mal_object_has_public_overflow(const MalObject *object) {
     return mal_object_overflow(object) != nullptr && !object->overflow_private_only;
 }
 
+/** Whether a dead object has finalizer work: outside storage to free or caches to invalidate. */
+static inline bool mal_object_finalizes(const MalObject *object) {
+    return object->has_captured_stack || object->is_prototype || object->slots_owned ||
+        object->storage_kind == MAL_OBJECT_EXTERNAL || mal_object_overflow(object) != nullptr;
+}
+
 static_assert(sizeof(MalObject) == 8 + sizeof(void *),
               "ordinary object identity prefix grew");
 static_assert(sizeof(MalObjectStorage) == 3 * sizeof(void *),

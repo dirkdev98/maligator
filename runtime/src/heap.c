@@ -11,6 +11,7 @@
 
 #include "./gc.h"
 #include "./gc_process.h"
+#include "./object.h"
 #include "./perf_stats.h"
 #include "./profile.h"
 #include "./shape.h"
@@ -411,6 +412,19 @@ static void mal_gc_clear_young_large(MalHeap *heap) {
     }
 }
 
+/* The policy settles most dead cells inline; a sweep's finalizer handles the rest. */
+static inline bool mal_heap_dead_cell_finalizes(const MalHeap *heap, const MalHeapHeader *cell) {
+    if (heap->dead_cell_policy == nullptr) return true;
+    switch (mal_heap_dead_cell_policy_load(heap->dead_cell_policy[cell->type])) {
+        case MAL_HEAP_DEAD_CELL_RECLAIM:
+            return false;
+        case MAL_HEAP_DEAD_CELL_OBJECT:
+            return mal_object_finalizes((const MalObject *) cell);
+        default:
+            return true;
+    }
+}
+
 static void mal_gc_unlink_large(MalGcLarge **head, MalGcLarge *rec) {
     if (rec->prev != nullptr) rec->prev->next = rec->next;
     else *head = rec->next;
@@ -428,7 +442,7 @@ static bool mal_gc_sweep_large(MalHeap *heap, MalGcLarge *rec, MalHeapFinalizeFn
     }
     mal_gc_untrack_young_large(heap, rec);
     mal_gc_unlink_large(&heap->large, rec);
-    finalize(header);
+    if (mal_heap_dead_cell_finalizes(heap, header)) finalize(header);
     if (heap->current_usage.managed_owned_bytes < rec->size ||
         heap->current_usage.managed_large_bytes < rec->size) abort();
     heap->current_usage.managed_owned_bytes -= rec->size;
@@ -636,6 +650,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->current_usage = (MalHeapCurrentUsage) {0};
     heap->next_gc_at = (usize) -1;
     heap->poison_on_free = false;
+    heap->dead_cell_policy = nullptr;
     heap->live_bytes = 0;
     heap->gc_stats = false;
     heap->minor_cells_inspected = 0;
@@ -723,6 +738,7 @@ void mal_heap_free(MalHeap *heap) {
     heap->current_usage = (MalHeapCurrentUsage) {0};
     heap->next_gc_at = (usize) -1;
     heap->poison_on_free = false;
+    heap->dead_cell_policy = nullptr;
     heap->live_bytes = 0;
     heap->gc_stats = false;
     heap->minor_cells_inspected = 0;
@@ -1103,7 +1119,7 @@ static void mal_heap_sweep_block(
         if ((mark & MAL_MARK_FREE) == 0) {
             // Unreached: dead. Finalize (frees its owned side allocations), then
             // tombstone so a later sweep does not finalize it again.
-            finalize(header);
+            if (mal_heap_dead_cell_finalizes(heap, header)) finalize(header);
             if (heap->current_usage.managed_owned_bytes < block->cell_size) abort();
             heap->current_usage.managed_owned_bytes -= block->cell_size;
             mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
@@ -1208,7 +1224,7 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
                 if (mal_heap_mark_is_old(mark)) {
                     block_live++;
                 } else if ((mark & MAL_MARK_FREE) == 0) {
-                    finalize(header);
+                    if (mal_heap_dead_cell_finalizes(heap, header)) finalize(header);
                     freed += cell_size;
                     mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
                     if (poison) mal_gc_poison_cell(cell, cell_size, free_offset);
