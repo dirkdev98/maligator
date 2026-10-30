@@ -9,6 +9,10 @@ typedef struct MalAtomStore {
     MalString **buckets;
     u32 size;
     u32 capacity;
+    // Atoms inserted since the collector last took them, the only ones a minor can find young.
+    MalString **recent;
+    u32 recent_count;
+    u32 recent_capacity;
 } MalAtomStore;
 
 typedef struct MalSymbolRegistry {
@@ -40,6 +44,9 @@ MalString *mal_native_source_cache_insert(MalNativeSourceCache *store, MalString
 
 // Start at cursor zero; insertion invalidates traversal. These scans never pin or allocate.
 MalString *mal_atom_store_next(const MalAtomStore *store, u32 *cursor);
+/* Atoms inserted since the last mal_atom_store_take_recent, then forgets them. Survivors of
+ * the collection that takes them are old, so later minors need not visit them again. */
+MalString *const *mal_atom_store_take_recent(MalAtomStore *store, u32 *count);
 MalSymbol *mal_symbol_registry_next(const MalSymbolRegistry *store, u32 *cursor);
 const MalNativeSourceEntry *mal_native_source_cache_next(const MalNativeSourceCache *store, u32 *cursor);
 

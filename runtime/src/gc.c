@@ -2078,14 +2078,25 @@ static void mal_gc_scan_roots(MalVm *vm) {
 #endif
     mal_gc_mark_values(vm->unhandled_rejections, vm->unhandled_count);
     mal_gc_mark_value(vm->entry_async_promise);
-    u32 intern_cursor = 0;
-    MalString *atom;
-    while ((atom = mal_atom_store_next(&vm->atoms, &intern_cursor)) != nullptr) {
-        mal_gc_mark_string(atom);
+    // Atoms are permanent roots, and a minor reclaims only young cells, so it visits just
+    // the atoms inserted since the previous collection; every older atom survived that
+    // collection as a root and is old. Majors and verification still walk the store.
+    u32 recent_count = 0;
+    MalString *const *recent = g_gc_verifying
+        ? nullptr : mal_atom_store_take_recent(&vm->atoms, &recent_count);
+    if (!g_gc->major_collection && !g_gc_verifying) {
+        for (u32 i = 0; i < recent_count; i++) mal_gc_mark_string(recent[i]);
+        MAL_PERF_ADD(intern_stores[MAL_PERF_INTERN_ATOMS].root_values, recent_count);
+    } else {
+        u32 atom_cursor = 0;
+        MalString *atom;
+        while ((atom = mal_atom_store_next(&vm->atoms, &atom_cursor)) != nullptr) {
+            mal_gc_mark_string(atom);
+        }
+        MAL_PERF_ADD(intern_stores[MAL_PERF_INTERN_ATOMS].root_scan_slots, vm->atoms.capacity);
+        MAL_PERF_ADD(intern_stores[MAL_PERF_INTERN_ATOMS].root_values, vm->atoms.size);
     }
-    MAL_PERF_ADD(intern_stores[MAL_PERF_INTERN_ATOMS].root_scan_slots, vm->atoms.capacity);
-    MAL_PERF_ADD(intern_stores[MAL_PERF_INTERN_ATOMS].root_values, vm->atoms.size);
-    intern_cursor = 0;
+    u32 intern_cursor = 0;
     MalSymbol *registered_symbol;
     while ((registered_symbol = mal_symbol_registry_next(&vm->symbol_registry, &intern_cursor)) != nullptr) {
         mal_gc_mark_value(mal_value_from_symbol(registered_symbol));

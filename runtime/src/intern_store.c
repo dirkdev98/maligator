@@ -107,6 +107,14 @@ MalString *mal_atom_store_intern(MalAtomStore *store, MalString *candidate) {
         mal_atom_store_grow(store);
         slot = mal_hash_controls_empty_slot(mal_atom_store_controls(store), store->capacity, hash);
     }
+    if (store->recent_count == store->recent_capacity) {
+        u32 capacity = mal_intern_grown_capacity(store->recent_capacity);
+        MalString **recent = realloc(store->recent, sizeof(*recent) * capacity);
+        if (recent == nullptr) abort();
+        store->recent = recent;
+        store->recent_capacity = capacity;
+    }
+    store->recent[store->recent_count++] = candidate;
     candidate->property_atom = true;
     store->buckets[slot] = candidate;
     mal_atom_store_controls(store)[slot] = mal_hash_tag(hash);
@@ -125,6 +133,12 @@ MalString *mal_atom_store_next(const MalAtomStore *store, u32 *cursor) {
     return nullptr;
 }
 
+MalString *const *mal_atom_store_take_recent(MalAtomStore *store, u32 *count) {
+    *count = store->recent_count;
+    store->recent_count = 0;
+    return store->recent;
+}
+
 usize mal_atom_store_size(const MalAtomStore *store) {
     return store->size;
 }
@@ -139,6 +153,7 @@ usize mal_atom_store_allocation_bytes(const MalAtomStore *store) {
 
 void mal_atom_store_free(MalAtomStore *store) {
     gc_free_raw(mal_gc_current_heap(), store->buckets);
+    free(store->recent);
     *store = (MalAtomStore) {0};
 }
 
