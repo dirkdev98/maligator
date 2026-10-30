@@ -106,8 +106,8 @@ static bool growing_preserves_fields(MalVm *vm, u32 mode) {
         }
         if (mode == 2 && count != 0) {
             usize payload_bytes = sizeof(MalValue) * count;
-            void *fields = malloc(payload_bytes);
-            if (fields == nullptr) abort();
+            // Owned slot arrays are raw heap cells, as object growth allocates them.
+            void *fields = mal_heap_alloc_raw(&vm->heap, payload_bytes);
             memcpy(fields, mal_object_fields_nonempty(object), payload_bytes);
             mal_object_set_fields_pointer(object, fields);
             object->slots_owned = true;
