@@ -4910,6 +4910,47 @@ __attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
 static inline __attribute__((always_inline)) MalValue mal_vm_dispatch_cached_value(
     MalVm *vm, MalValue callee, MalValue this_value, const MalValue *args, i32 arg_count);
 
+// Clang otherwise turns short variable-length copy loops into library memcpy calls.
+#if defined(__clang__)
+#define MAL_SCALAR_COPIES __attribute__((no_builtin("memcpy"), no_builtin("memmove")))
+#else
+#define MAL_SCALAR_COPIES
+#endif
+
+/**
+ * The bound call's probe stands for its target's dispatch. Bound prefixes and call
+ * arguments are a few values, so they merge with scalar copies: a library memcpy call
+ * per merge costs more than the values it moves.
+ */
+__attribute__((noinline)) MAL_SCALAR_COPIES static MalValue mal_vm_call_bound_value(
+    MalVm *vm,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    MalValue inline_args[MAL_BOUND_INLINE_ARGS];
+    MalBoundFunctionObject *bound = mal_value_to_bound_function_object(callee);
+    i32 bound_count = bound->bound_count;
+    if (!mal_value_is_bound_function_object(bound->target) &&
+        bound_count <= (i32) countof(inline_args) - arg_count) {
+        if (bound_count == 0)
+            return mal_vm_dispatch_cached_value(
+                vm, bound->target, bound->bound_this, args, arg_count);
+        const MalValue *bound_args = bound->bound_args;
+        for (i32 i = 0; i < bound_count; i++) inline_args[i] = bound_args[i];
+        for (i32 i = 0; i < arg_count; i++) inline_args[bound_count + i] = args[i];
+        return mal_vm_dispatch_cached_value(
+            vm, bound->target, bound->bound_this, inline_args, bound_count + arg_count);
+    }
+    MalBoundResolution resolution = mal_bound_function_object_resolve(
+        callee, this_value, args, arg_count, true, inline_args, countof(inline_args));
+    MalValue value = mal_vm_dispatch_cached_value(
+        vm, resolution.callee, resolution.this_value, resolution.args, resolution.arg_count);
+    free(resolution.owned_args);
+    return value;
+}
+
 __attribute__((noinline)) static MalValue mal_vm_call_cached_value_fallback(
     MalVm *vm,
     MalValue callee,
@@ -4917,27 +4958,6 @@ __attribute__((noinline)) static MalValue mal_vm_call_cached_value_fallback(
     const MalValue *args,
     i32 arg_count
 ) {
-    // The bound call's probe stands for its target's dispatch.
-    if (mal_value_is_bound_function_object(callee)) {
-        MalValue inline_args[MAL_BOUND_INLINE_ARGS];
-        MalBoundFunctionObject *bound = mal_value_to_bound_function_object(callee);
-        if (!mal_value_is_bound_function_object(bound->target) &&
-            bound->bound_count <= (i32) countof(inline_args) - arg_count) {
-            if (bound->bound_count == 0)
-                return mal_vm_dispatch_cached_value(
-                    vm, bound->target, bound->bound_this, args, arg_count);
-            for (i32 i = 0; i < bound->bound_count; i++) inline_args[i] = bound->bound_args[i];
-            for (i32 i = 0; i < arg_count; i++) inline_args[bound->bound_count + i] = args[i];
-            return mal_vm_dispatch_cached_value(
-                vm, bound->target, bound->bound_this, inline_args, bound->bound_count + arg_count);
-        }
-        MalBoundResolution resolution = mal_bound_function_object_resolve(
-            callee, this_value, args, arg_count, true, inline_args, countof(inline_args));
-        MalValue value = mal_vm_dispatch_cached_value(
-            vm, resolution.callee, resolution.this_value, resolution.args, resolution.arg_count);
-        free(resolution.owned_args);
-        return value;
-    }
     // A plain native is the common miss of the compiled-function probe; only the call and
     // apply builtins, which forward to their receiver, and non-natives go further.
     if (mal_value_is_native_function_object(callee) &&
@@ -5046,6 +5066,8 @@ static inline __attribute__((always_inline)) MalValue mal_vm_dispatch_cached_val
         }
 #endif
     }
+    if (mal_value_is_bound_function_object(callee))
+        return mal_vm_call_bound_value(vm, callee, this_value, args, arg_count);
     return mal_vm_call_cached_value_fallback(vm, callee, this_value, args, arg_count);
 }
 
