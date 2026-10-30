@@ -1175,6 +1175,25 @@ contracts or investigates costs still visible after the string follow-ups.
       become an inlined base construction with `new.target` as the receiver's
       prototype source and a slot reserve for every class in the chain, behind a
       guard that the constructor's prototype is still the heritage.
+- [ ] Allocate closure environments where a closure first needs them. Router's
+      `processParams` returns early through `done()` for most layers, yet each call
+      allocates its environment and hoisted closures on entry: about 160 bytes per
+      call and 8% of the in-process Express allocation volume. Sinking `envPush`
+      past the early exit needs the captured-slot reads before the sink point to
+      become SSA values.
+- [ ] Call a held getter row straight from the static-load probe. A read such as
+      `debug.enabled` still passes the out-of-line remaining probe, which declines
+      getter rows, and then the static-miss front before the getter runs: about 80
+      instructions per accessor read that a getter-mode dispatch would skip.
+- [ ] Defer rest arrays that are only forwarded past an early return.
+      `deferCapturedRestMaterialization` moves a rest array past the guard only when
+      an inner closure captures it, so a function that forwards `...args` after an
+      early-return guard allocates the array on every call.
+- [ ] Pace collections with Request and Response body bytes. Bodies live in malloc,
+      so cutting managed allocation per request spaces collections out and leaves
+      more dead Responses holding their bodies; each such cut raised the bare HTTP
+      server's RSS by about 0.4 MB. Owning bodies as raw heap cells would charge
+      them to the collector.
 - [ ] Close the closed-compiled JavaScript benchmark's per-call gap. An
       unknown-target call still costs 6.4 ns against Node's 4.3 (a four-closure
       loop, 191 ms against 129) and a five-class method loop 345 ms against 232. The
@@ -1542,6 +1561,11 @@ entropy, cancellation, and reactor completions.
 
 - [ ] Match DNS replies against the question section (2026-10-20 security audit).
 
+- [ ] Stop interning untrusted HTTP header names as VM-lifetime atoms. Incoming names
+      become property keys through `mal_property_atomize_string`, and atoms are
+      permanent roots, so a peer sending distinct names grows the atom table without
+      bound.
+
 - [ ] Align `http.maxHeaderSize` (16 KiB) with the codec's 64 KiB limit and answer
       HPE_HEADER_OVERFLOW with 431, as Node does.
 
@@ -1594,6 +1618,10 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 - [ ] Complete Headers guards, Web IDL record conversion, descriptors, and
       Proxy-sensitive behavior. Expand applicable WPT with outbound fetch.
+
+- [ ] Convert ResponseInit members in Web IDL order (`headers`, `status`,
+      `statusText`). The constructor reads `status` and `statusText` first, so a
+      `valueOf` on `status` that adds `headers` is observed, unlike in Node.
 
 - [ ] Complete URL and URLSearchParams Web IDL behavior and broader WPT, then implement
       URLPattern. Connect object URLs after Blob lifetime and revocation are defined.
@@ -1757,6 +1785,12 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       emitted synchronously from the destroy callback rather than on the next tick.
       Middle generator stages in pipeline receive the previous Readable itself, where
       Node wraps it with fromReadable.
+
+- [ ] node:stream: a native `push` delivers straight to 'data' listeners while the
+      stream flows, where Node buffers until the first `_read` because
+      `ReadableState.sync` starts true. A synchronous handler therefore sees 'data'
+      before its own `nextTick`. Fixing this also lets node:http grant body read
+      credit with the head and save a turn per POST.
 
 - [ ] node:stream: a pipeline stage that pumps into a web TransformStream rejects with
       "Value is not a function" (Readable → TransformStream → Writable), although the
