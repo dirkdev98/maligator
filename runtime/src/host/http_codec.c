@@ -95,8 +95,15 @@ static int codec_message_begin(llhttp_t *parser) {
     if (codec->head != nullptr || codec->event_head != nullptr) {
         return codec_fail(parser, "HTTP head was not consumed");
     }
-    codec->head = malloc(sizeof(*codec->head));
-    if (codec->head == nullptr) return codec_fail(parser, "HTTP head allocation failed");
+    codec->head = codec->spare_head;
+    codec->spare_head = nullptr;
+    if (codec->head == nullptr) {
+        codec->head = malloc(sizeof(*codec->head));
+        if (codec->head == nullptr) {
+            return codec_fail(parser, "HTTP head allocation failed");
+        }
+        MAL_PERF_COUNT(http_codec_head_allocations);
+    }
     // The inline field and arena storage is only read up to its recorded lengths.
     memset(codec->head, 0, offsetof(MalHttpCodecHead, inline_fields));
     codec->head->arena = codec->head->inline_arena;
@@ -104,7 +111,6 @@ static int codec_message_begin(llhttp_t *parser) {
     codec->head->fields = codec->head->inline_fields;
     codec->head->field_capacity = MAL_HTTP_CODEC_INLINE_FIELDS;
     codec->head->content_length = -1;
-    MAL_PERF_COUNT(http_codec_head_allocations);
     codec->skip_header_bytes = false;
     codec->header_name_open = false;
     return 0;
@@ -333,10 +339,23 @@ void mal_http_codec_head_free(MalHttpCodecHead *head) {
     free(head);
 }
 
+void mal_http_codec_release_head(MalHttpCodec *codec, MalHttpCodecHead *head) {
+    if (head == nullptr) return;
+    if (codec->spare_head != nullptr) {
+        mal_http_codec_head_free(head);
+        return;
+    }
+    // Spilled storage is per message; the spare keeps only the inline capacity.
+    if (head->arena != head->inline_arena) free(head->arena);
+    if (head->fields != head->inline_fields) free(head->fields);
+    codec->spare_head = head;
+}
+
 void mal_http_codec_free(MalHttpCodec *codec) {
     if (codec == nullptr) return;
     mal_http_codec_head_free(codec->head);
     mal_http_codec_head_free(codec->event_head);
+    free(codec->spare_head);
     free(codec->event_body);
     memset(codec, 0, sizeof(*codec));
 }

@@ -64,6 +64,8 @@ typedef struct MalHttpCodec {
     llhttp_settings_t settings;
     MalHttpCodecHead *head;
     MalHttpCodecHead *event_head;
+    /* A consumed head kept for the next message on this connection. */
+    MalHttpCodecHead *spare_head;
     byte *event_body;
     usize event_body_length;
     usize event_body_capacity;
@@ -101,3 +103,5 @@ const byte *mal_http_codec_field_name(
 const byte *mal_http_codec_field_value(
     const MalHttpCodecHead *head, const MalHttpCodecField *field);
 void mal_http_codec_head_free(MalHttpCodecHead *head);
+/* Free a taken head or keep it for the codec's next message. */
+void mal_http_codec_release_head(MalHttpCodec *codec, MalHttpCodecHead *head);

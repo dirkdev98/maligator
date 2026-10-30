@@ -214,7 +214,8 @@ static void conn_timeout_cb(void *data) {
 
 static void conn_arm_timeout(
     MalHttpConn *c, MalHttpTimeoutPhase phase, i64 duration_ns) {
-    i64 now = mal_reactor_now_ns();
+    // Second-scale limits tolerate the loop clock's lag of one callback batch.
+    i64 now = mal_reactor_loop_now_ns(conn_reactor(c));
     c->timeout.waker = (MalWaker) {.fn = conn_timeout_cb, .data = c};
     c->timeout_phase = phase;
     mal_reactor_rearm_timer(
@@ -775,7 +776,7 @@ static bool conn_stream_handle_event(MalHttpConn *c) {
         c->server->stream_handler(
             c->server->handler_data, c->vm, c, head);
         c->in_handler = false;
-        mal_http_codec_head_free(head);
+        mal_http_codec_release_head(&c->codec, head);
         if (c->close_pending) {
             conn_close(c);
             return false;

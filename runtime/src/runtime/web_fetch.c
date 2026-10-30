@@ -3328,12 +3328,39 @@ static bool mal_fetch_name_is(const MalString *name, const char *ascii) {
     return mal_string_equals_ascii_ci(name, ascii);
 }
 
+typedef enum MalFetchHeaderRole {
+    MAL_FETCH_HEADER_COPY,
+    MAL_FETCH_HEADER_CONTENT_TYPE,
+    // The host writes its own framing headers.
+    MAL_FETCH_HEADER_FRAMING,
+} MalFetchHeaderRole;
+
+static MalFetchHeaderRole mal_fetch_header_role(const MalString *name) {
+    switch (mal_string_length(name)) {
+    case 10:
+        return mal_fetch_name_is(name, "connection")
+            ? MAL_FETCH_HEADER_FRAMING : MAL_FETCH_HEADER_COPY;
+    case 12:
+        return mal_fetch_name_is(name, "content-type")
+            ? MAL_FETCH_HEADER_CONTENT_TYPE : MAL_FETCH_HEADER_COPY;
+    case 14:
+        return mal_fetch_name_is(name, "content-length")
+            ? MAL_FETCH_HEADER_FRAMING : MAL_FETCH_HEADER_COPY;
+    case 17:
+        return mal_fetch_name_is(name, "transfer-encoding")
+            ? MAL_FETCH_HEADER_FRAMING : MAL_FETCH_HEADER_COPY;
+    default:
+        return MAL_FETCH_HEADER_COPY;
+    }
+}
+
 /* Serialize a Response's Headers into an HTTP header block ("Name: Value\r\n" per
  * line), skipping host-managed framing headers and ensuring a Content-Type. Returns
- * malloc'd bytes + len (caller frees), or null (=> host default) when there is no
+ * the block + len, written to `stack` when it fits and otherwise malloc'd (the caller
+ * frees a result other than `stack`), or null (=> host default) when there is no
  * Headers object. Clears *ok when the block could not be allocated. */
 static char *mal_fetch_serialize_headers(
-    MalResponseObject *r, usize *out_len, bool *ok) {
+    MalResponseObject *r, char *stack, usize stack_capacity, usize *out_len, bool *ok) {
     static const char default_ct[] = "Content-Type: text/plain; charset=utf-8\r\n";
     *ok = true;
     MalHeadersObject *headers[2];
@@ -3355,11 +3382,11 @@ static char *mal_fetch_serialize_headers(
         MalHeadersObject *h = headers[set];
         for (i32 i = 0; i < h->count; i++) {
             const MalString *n = h->entries[i].name;
-            if (mal_fetch_name_is(n, "content-length") || mal_fetch_name_is(n, "connection")
-                || mal_fetch_name_is(n, "transfer-encoding")) {
+            MalFetchHeaderRole role = mal_fetch_header_role(n);
+            if (role == MAL_FETCH_HEADER_FRAMING) {
                 continue;
             }
-            if (mal_fetch_name_is(n, "content-type")) {
+            if (role == MAL_FETCH_HEADER_CONTENT_TYPE) {
                 has_ct = true;
             }
             size += mal_string_length(n) + 2 + mal_string_length(h->entries[i].value) + 2;
@@ -3369,7 +3396,7 @@ static char *mal_fetch_serialize_headers(
         size += strlen(default_ct);
     }
 
-    char *buf = malloc(size == 0 ? 1 : size);
+    char *buf = size <= stack_capacity ? stack : malloc(size);
     if (buf == nullptr) {
         *ok = false;
         *out_len = 0;
@@ -3384,8 +3411,7 @@ static char *mal_fetch_serialize_headers(
         MalHeadersObject *h = headers[set];
         for (i32 i = 0; i < h->count; i++) {
             const MalString *n = h->entries[i].name;
-            if (mal_fetch_name_is(n, "content-length") || mal_fetch_name_is(n, "connection")
-                || mal_fetch_name_is(n, "transfer-encoding")) {
+            if (mal_fetch_header_role(n) == MAL_FETCH_HEADER_FRAMING) {
                 continue;
             }
             const c16 *nu = mal_string_code_units(n);
@@ -3441,7 +3467,9 @@ static void mal_fetch_respond_with(MalFetchRequest *req, MalValue result) {
     }
     usize hlen = 0;
     bool serialized = false;
-    char *block = mal_fetch_serialize_headers(r, &hlen, &serialized);
+    char stack_block[512];
+    char *block = mal_fetch_serialize_headers(
+        r, stack_block, sizeof(stack_block), &hlen, &serialized);
     if (!serialized) {
         mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
         return;
@@ -3478,7 +3506,7 @@ static void mal_fetch_respond_with(MalFetchRequest *req, MalValue result) {
             r->body != nullptr ? r->body : "", r->body_len);
     }
     free(custom_reason);
-    free(block);
+    if (block != stack_block) free(block);
 }
 
 static MalValue mal_fetch_on_fulfilled(

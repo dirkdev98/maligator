@@ -103,6 +103,8 @@ struct MalReactor {
     /* Reactor-owned readiness registrations and deferred backend event tokens. */
     MalReactorFd *fds;
     MalReactorFd *retired_fds;
+    MalReactorFd *free_fds;
+    i32 free_fd_count;
     /* Sparse two-level fd -> state index (256 descriptor slots per leaf). */
     MalReactorFd ***fd_pages;
     usize fd_page_count;
@@ -112,6 +114,9 @@ struct MalReactor {
 
     MalReactorChange changes[MAL_REACTOR_CHANGE_CAPACITY];
     i32 change_count;
+
+    /* The clock as of the start of the current pump or the last backend wait. */
+    i64 loop_now_ns;
 };
 
 void mal_reactor_init(MalReactor *r);
@@ -162,3 +167,8 @@ void mal_reactor_poll(MalReactor *r);
 
 /* CLOCK_MONOTONIC in nanoseconds. */
 i64 mal_reactor_now_ns(void);
+
+/* The clock as last sampled by the reactor loop, libuv's uv_now. It lags the real
+ * clock by the callbacks run since, so it suits only deadlines that tolerate firing
+ * that much early, such as connection inactivity timeouts. */
+i64 mal_reactor_loop_now_ns(const MalReactor *r);

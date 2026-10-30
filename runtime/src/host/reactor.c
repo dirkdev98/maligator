@@ -24,6 +24,10 @@
 #define MAL_REACTOR_MAX_EVENTS 64
 #define MAL_REACTOR_FD_PAGE_SHIFT 8u
 #define MAL_REACTOR_FD_PAGE_SIZE (1u << MAL_REACTOR_FD_PAGE_SHIFT)
+/* Reclaimed fd states kept for reuse. A keep-alive connection retires its state
+ * after every one-shot read and recreates it on re-arm, so the pool absorbs that
+ * churn; the bound keeps a burst of closed connections from pinning memory. */
+#define MAL_REACTOR_FREE_FD_MAX 256
 
 struct MalReactorFd {
     int fd;
@@ -50,6 +54,15 @@ struct MalReactorToken {
 
 i64 mal_reactor_now_ns(void) {
     return (i64) mal_monotonic_now_ns();
+}
+
+i64 mal_reactor_loop_now_ns(const MalReactor *r) {
+    return r->loop_now_ns;
+}
+
+static i64 mal_reactor_update_time(MalReactor *r) {
+    r->loop_now_ns = mal_reactor_now_ns();
+    return r->loop_now_ns;
 }
 
 /* ---------------------------------------------------------------------------
@@ -264,9 +277,16 @@ static MalReactorFd *mal_reactor_get_fd(MalReactor *r, int fd) {
     if (state != nullptr) {
         return state;
     }
-    state = calloc(1, sizeof(MalReactorFd));
-    if (state == nullptr) {
-        return nullptr;
+    if (r->free_fds != nullptr) {
+        state = r->free_fds;
+        r->free_fds = state->retired_next;
+        r->free_fd_count--;
+        memset(state, 0, sizeof(*state));
+    } else {
+        state = calloc(1, sizeof(MalReactorFd));
+        if (state == nullptr) {
+            return nullptr;
+        }
     }
     state->fd = fd;
     if (!mal_reactor_index_fd(r, state)) {
@@ -310,7 +330,21 @@ static void mal_reactor_reclaim_retired_fds(MalReactor *r) {
     while (r->retired_fds != nullptr) {
         MalReactorFd *state = r->retired_fds;
         r->retired_fds = state->retired_next;
+        if (r->free_fd_count < MAL_REACTOR_FREE_FD_MAX) {
+            state->retired_next = r->free_fds;
+            r->free_fds = state;
+            r->free_fd_count++;
+        } else {
+            free(state);
+        }
+    }
+}
+
+static void mal_reactor_free_fd_list(MalReactorFd *state) {
+    while (state != nullptr) {
+        MalReactorFd *next = state->retired_next;
         free(state);
+        state = next;
     }
 }
 
@@ -504,6 +538,7 @@ static void mal_backend_wait(MalReactor *r, i64 timeout_ns) {
     // The kernel applies a change list before it waits, even when the wait is interrupted.
     r->change_count = 0;
     int n = kevent(r->backend_fd, changes, change_count, evs, MAL_REACTOR_MAX_EVENTS, tsp);
+    mal_reactor_update_time(r);
     for (int i = 0; i < n; i++) {
         if (evs[i].udata == r) {
             mal_reactor_dispatch_wake(r);
@@ -528,6 +563,7 @@ static void mal_backend_wait(MalReactor *r, i64 timeout_ns) {
     struct epoll_event evs[MAL_REACTOR_MAX_EVENTS];
     int timeout_ms = timeout_ns < 0 ? -1 : (int) ((timeout_ns + 999999) / 1000000);
     int n = epoll_wait(r->backend_fd, evs, MAL_REACTOR_MAX_EVENTS, timeout_ms);
+    mal_reactor_update_time(r);
     for (int i = 0; i < n; i++) {
         if (evs[i].data.ptr == r) {
             mal_reactor_dispatch_wake(r);
@@ -596,12 +632,15 @@ void mal_reactor_init(MalReactor *r) {
     r->ready_op_count = 0;
     r->fds = nullptr;
     r->retired_fds = nullptr;
+    r->free_fds = nullptr;
+    r->free_fd_count = 0;
     r->fd_pages = nullptr;
     r->fd_page_count = 0;
     r->retired_tokens = nullptr;
     r->free_tokens = nullptr;
     r->next_generation = 0;
     r->change_count = 0;
+    mal_reactor_update_time(r);
     (void) mal_backend_add_wake(r);
 }
 
@@ -653,6 +692,9 @@ void mal_reactor_free(MalReactor *r) {
         free(state);
     }
     mal_reactor_reclaim_retired_fds(r);
+    mal_reactor_free_fd_list(r->free_fds);
+    r->free_fds = nullptr;
+    r->free_fd_count = 0;
     for (usize i = 0; i < r->fd_page_count; i++) {
         free(r->fd_pages[i]);
     }
@@ -852,6 +894,7 @@ bool mal_reactor_cancel_op(MalReactor *r, MalOp *op) {
 }
 
 static void mal_reactor_pump(MalReactor *r, bool blocking) {
+    mal_reactor_update_time(r);
     // A waker may defer itself again; this pump owns only the initial ready batch.
     i32 ready_count = r->ready_op_count;
     for (i32 i = 0; i < ready_count && r->ready_ops != nullptr; i++) {
@@ -873,7 +916,8 @@ static void mal_reactor_pump(MalReactor *r, bool blocking) {
     if (!blocking || ready_count > 0) {
         timeout = 0;
     } else if (r->timer_count > 0) {
-        i64 now = mal_reactor_now_ns();
+        // No callback ran since the pump read the clock.
+        i64 now = r->loop_now_ns;
         i64 deadline = r->timers[0]->deadline_ns;
         timeout = deadline > now ? deadline - now : 0;
     } else if (r->pending_ops > 0 ||
@@ -890,7 +934,8 @@ static void mal_reactor_pump(MalReactor *r, bool blocking) {
         mal_backend_wait(r, timeout);
     }
 
-    i64 now = mal_reactor_now_ns();
+    // Fresh after the wait's callbacks, so a timer that came due during them fires now.
+    i64 now = mal_reactor_update_time(r);
     while (r->timer_count > 0 && r->timers[0]->deadline_ns <= now) {
         MalTimer *t = mal_timer_remove_at(r, 0);
         if (t->postponed_ns > t->deadline_ns) {
