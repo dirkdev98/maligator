@@ -2749,6 +2749,35 @@ static inline bool mal_vm_admit_numeric_typed_array_length(
         !mal_typed_array_is_bigint((*out)->kind);
 }
 
+// The caller checked immutability and completed Number conversion without re-entering JS.
+static inline void mal_vm_numeric_typed_array_store_bits(
+    MalTypedArrayObject *array, u32 index, u64 bits, u32 element_size
+) {
+    MalArrayBufferObject *buffer = array->buffer;
+    if (buffer->detached) return;
+    if (buffer->shared_memory != nullptr) {
+        MalTypedArraySpan span;
+        if (mal_typed_array_object_span(array, &span) && index < span.length)
+            mal_typed_array_span_store_bits(&span, index, bits);
+        return;
+    }
+    u32 length;
+    if (array->length_tracking) {
+        if (array->byte_offset > buffer->byte_length) return;
+        length = (buffer->byte_length - array->byte_offset) / element_size;
+    } else {
+        u64 end = (u64) array->byte_offset + (u64) array->length * element_size;
+        if (end > buffer->byte_length) return;
+        length = array->length;
+    }
+    if (index >= length) return;
+    byte *at = buffer->data + array->byte_offset + (usize) index * element_size;
+    if (element_size == 1) mal_scalar_store_native_u8(at, (u8) bits);
+    else if (element_size == 2) mal_scalar_store_native_u16(at, (u16) bits);
+    else if (element_size == 4) mal_scalar_store_native_u32(at, (u32) bits);
+    else mal_scalar_store_native_u64(at, bits);
+}
+
 static inline void mal_vm_numeric_typed_array_store_known_receiver(
     MalVm *vm, MalTypedArrayObject *array, f64 index, MalValue value, bool strict
 ) {
@@ -2758,6 +2787,20 @@ static inline void mal_vm_numeric_typed_array_store_known_receiver(
                 vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                 "Cannot assign to read only property");
         }
+        return;
+    }
+    if (mal_ops_is_number(value)) {
+        MalTypedArrayKind kind = array->kind;
+        u32 element_size = kind <= MAL_TA_UINT8_CLAMPED ? 1 :
+            kind <= MAL_TA_UINT16 ? 2 : kind == MAL_TA_FLOAT64 ? 8 : 4;
+        f64 number = mal_ops_number_as_f64(value);
+        u64 bits = kind == MAL_TA_FLOAT64 ? mal_scalar_f64_to_bits(number) :
+            kind == MAL_TA_FLOAT32 ? mal_scalar_f32_to_bits((f32) number) :
+            kind == MAL_TA_UINT8_CLAMPED ? mal_typed_array_to_uint8_clamp(number) :
+            mal_value_is_int32(value) ? (u32) mal_value_to_i32(value) :
+            mal_ops_number_to_uint32(number);
+        mal_vm_numeric_typed_array_store_bits(
+            array, mal_vm_typed_array_numeric_index(index), bits, element_size);
         return;
     }
     mal_typed_array_object_set(vm, array, mal_vm_typed_array_numeric_index(index), value);

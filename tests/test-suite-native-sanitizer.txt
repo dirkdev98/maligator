@@ -72,6 +72,7 @@ tests/native/read-accessor-regions.test.ts
 tests/native/native-number-record-regions.test.ts
 tests/native/native-integer-loop-regions.test.ts
 tests/native/typed-array-dynamic-receiver.test.ts
+tests/native/exact-typed-array-store.test.ts
 tests/native/fixed-typed-array-region.test.ts
 tests/native/typed-array-length-bound.test.ts
 tests/native/string-scan-region.test.ts
