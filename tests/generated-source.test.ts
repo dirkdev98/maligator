@@ -10,6 +10,16 @@ it.each([
 	["", ""],
 	["ascii", "\0", "é", "\ud83d", "", "\udc0a", "\ud800", "tail", "\udfff"],
 	["x".repeat(256 * 1024 - 1), "\ud83d", "\udc0a", "y".repeat(300 * 1024), "\ud800"],
+	[
+		"\u0800".repeat(256 * 1024 - 1),
+		"\ud83d",
+		"",
+		"\udc0a",
+		"\u0800".repeat(4),
+		"\ud800",
+		"\ud800",
+		"x",
+	],
 ])("preserves concatenated UTF-8 bytes and digests for fragments %#", (...chunks) => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-generated-source-"));
 	try {

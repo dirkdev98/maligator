@@ -9,6 +9,16 @@ try {
 	for (const chunks of [
 		["ascii", "\0", "é", "\ud83d", "", "\udc0a", "\ud800", "tail", "\udfff"],
 		["x".repeat(256 * 1024 - 1), "\ud83d", "\udc0a", "y".repeat(300 * 1024), "\ud800"],
+		[
+			"\u0800".repeat(256 * 1024 - 1),
+			"\ud83d",
+			"",
+			"\udc0a",
+			"\u0800".repeat(4),
+			"\ud800",
+			"\ud800",
+			"x",
+		],
 	]) {
 		const file = path.join(directory, "unit.c");
 		const digest = createHash("sha256");
