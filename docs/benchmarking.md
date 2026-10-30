@@ -290,7 +290,10 @@ largest execution graphs captured by compiling the baseline accessor fixture;
 `backedges` runs native backedge discovery on those same graphs. `accessors` walks
 real Core storage, kernel columns, and opcode registry entries. `headers` compares
 checked kind/descriptor/payload reads with the revision's header API when available.
-`versions` queries fixed change domains on real Core stores between body edits.
+`versions` queries fixed change domains from a parameterized Core traversal between
+body edits; `versions-module` retains the module-scope traversal as a holdout.
+`value-kinds` alternates number and string seeds in a fixed Core dependency chain,
+consuming both kind masks and integer proofs.
 `errors` alternates valid instruction reads with caught invalid-ID failures, checking
 the actual diagnostic text. `optimizer` runs
 the Node compiler on the frozen baseline accessor graph, through runtime-image
