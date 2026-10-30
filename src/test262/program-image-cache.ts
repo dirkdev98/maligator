@@ -11,12 +11,12 @@ import {
 import * as path from "node:path";
 import { touchCacheEntry } from "../cache-management.ts";
 import { maligatorCacheDirectory } from "../cache-root.ts";
-import { compilerImplementationDigest } from "../compiler-cache-identity.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../compiler/target/compiler-artifact-codec.ts";
 import type { ProgramImage } from "../compiler/target/program-image.ts";
+import { test262CompilerDigest } from "./artifact-cache.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import type { Test262Frontmatter } from "./types.ts";
 
@@ -55,7 +55,7 @@ export function test262ProgramImageCacheKey(
 		"sha256",
 		JSON.stringify({
 			protocol: CACHE_PROTOCOL,
-			compiler: input.compilerDigest ?? compilerImplementationDigest(),
+			compiler: input.compilerDigest ?? test262CompilerDigest(),
 			revision: input.revision ?? TEST262_METADATA.revision,
 			semanticConfig: "test262-full-runtime-v1",
 			variant: input.variant,
@@ -71,7 +71,7 @@ function artifactDirectory(input: Test262ProgramImageCacheInput): string {
 	const key = test262ProgramImageCacheKey(input);
 	const compilerGeneration = hash(
 		"sha256",
-		input.compilerDigest ?? compilerImplementationDigest(),
+		input.compilerDigest ?? test262CompilerDigest(),
 		"hex",
 	);
 	const root = input.cacheDirectory ?? maligatorCacheDirectory();

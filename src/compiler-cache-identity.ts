@@ -7,12 +7,11 @@ import { maligatorCacheDirectory } from "./cache-root.ts";
 import { hashDirectoryTreesCached } from "./file-tree.ts";
 import { relativeImportCone } from "./source-import-cone.ts";
 
-let implementationDigest: string | undefined;
-
 export const COMPILER_PRODUCER_STAGES = [
 	"build-frontend",
 	"build-fragment",
 	"dependency-fragment",
+	"development-fragment-units",
 	"test-frontend",
 	"test-fragment",
 ] as const;
@@ -28,6 +27,7 @@ const PRODUCER_ROOTS: Record<CompilerProducerStage, Array<string>> = {
 	],
 	"build-fragment": ["build-fragment-cache.ts"],
 	"dependency-fragment": ["dependency-fragment-cache.ts"],
+	"development-fragment-units": ["development-fragments.ts"],
 	"test-frontend": ["testing/cache.ts"],
 	"test-fragment": ["testing/test-images.ts"],
 };
@@ -139,16 +139,6 @@ export function compilerImplementationDigestForRoot(
 		].join(""),
 		"hex",
 	);
-}
-
-/** Path-independent digest of the runtime compiler implementation. */
-export function compilerImplementationDigest(): string {
-	if (implementationDigest !== undefined) return implementationDigest;
-	implementationDigest = compilerImplementationDigestForRoot(
-		import.meta.dirname,
-		maligatorCacheDirectory(),
-	);
-	return implementationDigest;
 }
 
 export function compilerProducerIdentity(

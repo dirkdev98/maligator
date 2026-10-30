@@ -4,13 +4,12 @@ import * as path from "node:path";
 import {
 	artifactActionKey,
 	artifactOutput,
-	artifactProducer,
 	publishArtifactAction,
 	readArtifactAction,
 } from "./artifact-store.ts";
 import type { IncludedAsset } from "./assets.ts";
 import type { BuildFrontendArtifact } from "./build-frontend-cache.ts";
-import { compilerImplementationDigest } from "./compiler-cache-identity.ts";
+import { compilerProducerIdentity } from "./compiler-cache-identity.ts";
 import { deserializeCompilerArtifact } from "./compiler/target/compiler-artifact-codec.ts";
 import {
 	assetTableLines,
@@ -75,11 +74,7 @@ export function developmentFragmentUnits(
 	const names = artifacts.map((artifact) => fragmentName(artifact.digest));
 	if (new Set(names).size !== names.length)
 		throw new Error("development fragments must have distinct images");
-	const producer = artifactProducer(
-		FRAGMENT_UNITS_STAGE,
-		3,
-		compilerImplementationDigest(),
-	);
+	const producer = compilerProducerIdentity(FRAGMENT_UNITS_STAGE, 3);
 	const overlays = artifacts.flatMap((artifact, index) => {
 		const compilerArtifact = compilerArtifacts?.[index];
 		const key = artifactActionKey(producer, {

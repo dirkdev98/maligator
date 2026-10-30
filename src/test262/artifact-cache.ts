@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import { maligatorCacheDirectory } from "../cache-root.ts";
-import { compilerImplementationDigest } from "../compiler-cache-identity.ts";
+import { compilerImplementationDigestForRoot } from "../compiler-cache-identity.ts";
 
 /**
  * Content-addressed cache for the expensive build artifact in the test262
@@ -112,6 +112,17 @@ function hashDirectory(
 	}
 }
 
+let compilerDigest: string | undefined;
+
+/** Digest of the compiler sources in this checkout, which Test262 always runs from. */
+export function test262CompilerDigest(): string {
+	compilerDigest ??= compilerImplementationDigestForRoot(
+		path.join(import.meta.dirname, ".."),
+		maligatorCacheDirectory(),
+	);
+	return compilerDigest;
+}
+
 const CACHED_FINGERPRINTS = new Map<string, string>();
 
 /**
@@ -131,7 +142,7 @@ export function buildFingerprint(
 
 	const hash = createHash("sha256");
 	hash.update("v2-separate-test262-scripts\n");
-	hash.update(compilerImplementationDigest());
+	hash.update(test262CompilerDigest());
 	hashDirectory(hash, "src/test262", [".ts"]);
 	hashDirectory(hash, "runtime/src", [".h"]);
 	if (existsSync("package-lock.json")) {
