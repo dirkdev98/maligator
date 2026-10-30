@@ -12,6 +12,7 @@ import type { BuildFrontendArtifact } from "./build-frontend-cache.ts";
 import { compilerProducerIdentity } from "./compiler-cache-identity.ts";
 import { deserializeCompilerArtifact } from "./compiler/target/compiler-artifact-codec.ts";
 import {
+	assetDataTranslationUnits,
 	assetTableLines,
 	DEFAULT_TRANSLATION_UNIT_POLICY,
 	emitRelocatableNativeOverlayTranslationUnits,
@@ -115,20 +116,15 @@ export function developmentFragmentUnits(
 		'#include "compiler_native.h"',
 		'#include "dev_runner.h"',
 		"",
-		...names.map(
-			(name) => `extern const MalNativeOverlay mal_fragment_${name}_native_overlay;`,
-		),
-		"",
-		...artifacts.flatMap((artifact, index) => [
-			`static const u8 mal_fragment_image_${index}[] = {`,
-			`#embed ${JSON.stringify(artifact.path)}`,
-			"};",
+		...names.flatMap((name) => [
+			`extern const MalNativeOverlay mal_fragment_${name}_native_overlay;`,
+			`extern const u8 mal_fragment_${name}_image[];`,
 		]),
 		"",
 		"const MalDevelopmentImage mal_fragment_images[] = {",
 		...artifacts.map(
 			(artifact, index) =>
-				`    { .bytes = mal_fragment_image_${index}, .length = sizeof mal_fragment_image_${index}, .label = ${JSON.stringify(artifact.digest)}, .overlay = &mal_fragment_${names[index]}_native_overlay },`,
+				`    { .bytes = mal_fragment_${names[index]}_image, .length = ${artifact.size}, .label = ${JSON.stringify(artifact.digest)}, .overlay = &mal_fragment_${names[index]}_native_overlay },`,
 		),
 		"};",
 		`const int mal_fragment_image_count = ${artifacts.length};`,
@@ -141,8 +137,33 @@ export function developmentFragmentUnits(
 		`const MalAsset *const mal_fragment_assets = ${assets.length === 0 ? "nullptr" : "mal_assets_fragment"};`,
 		`const i32 mal_fragment_asset_count = ${assets.length};`,
 	].join("\n");
+	// Image bytes get units of their own, keyed by content like asset bytes, so neither
+	// is ever preprocessed into text and an unchanged image never recompiles.
+	const images = artifacts.map((artifact, index) => {
+		const symbol = `mal_fragment_${names[index]}_image`;
+		const source = [
+			`const unsigned char ${symbol}[] = {`,
+			`#embed ${JSON.stringify(artifact.path)}`,
+			"};",
+			`static_assert(sizeof ${symbol} == ${artifact.size}, "development image changed after it was recorded");`,
+		].join("\n");
+		return {
+			id: `development-fragment-image-${names[index]}`,
+			kind: "data" as const,
+			sourceChunks: [source],
+			sourceCodeUnits: source.length,
+			headerFiles: [],
+			definitions: [],
+			embeddedFileDigests: [artifact.digest],
+		};
+	});
 	return [
 		...overlays,
+		...images,
+		...assetDataTranslationUnits(assets, "_fragment").map((unit) => ({
+			...unit,
+			id: `development-fragment-${unit.id}`,
+		})),
 		{
 			id: "development-fragment-images",
 			kind: "data",

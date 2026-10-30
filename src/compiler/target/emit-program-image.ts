@@ -264,6 +264,12 @@ export interface GeneratedTranslationUnit {
 	readonly sourceCodeUnits: number;
 	readonly headerFiles: ReadonlyArray<string>;
 	readonly definitions: ReadonlyArray<GeneratedTranslationUnitDefinition>;
+	/**
+	 * Content digests of the files this unit `#embed`s. A unit that lists them includes
+	 * no header, so its object is keyed by its text and these digests: preprocessing
+	 * would spell every embedded byte out as text.
+	 */
+	readonly embeddedFileDigests?: ReadonlyArray<string>;
 }
 
 function separatedSourceChunks(parts: ReadonlyArray<string>): Array<string> {
@@ -650,9 +656,12 @@ function handlerArrayRows(fn: RuntimeImage["functions"][number]): Array<string> 
  * Emit a C translation unit with the static MalRuntimeImage data.
  */
 export function emitProgramImage(image: ProgramImage, options: EmitOptions = {}) {
-	return emitProgramImageParts(image, options, false)
-		.parts.map((part) => (typeof part === "string" ? part : part.join("\n")))
-		.join("\n");
+	return [
+		...emitProgramImageParts(image, options, false).parts.map((part) =>
+			typeof part === "string" ? part : part.join("\n"),
+		),
+		...inlineAssetData(options),
+	].join("\n");
 }
 
 export interface EmittedCSourceMap {
@@ -673,9 +682,10 @@ export function emitProgramImageWithSourceMap(
 		undefined,
 		true,
 	);
-	const parts = emitted.parts.map((part) =>
-		typeof part === "string" ? part : part.join("\n"),
-	);
+	const parts = [
+		...emitted.parts.map((part) => (typeof part === "string" ? part : part.join("\n"))),
+		...inlineAssetData(options),
+	];
 	const offsets = [0];
 	for (const part of parts) offsets.push(offsets.at(-1)! + part.length + 1);
 	return {
@@ -2260,6 +2270,7 @@ export function emitProgramTranslationUnits(
 		...partition("code", NATIVE_C_HEADER_LINES, dependencyCode),
 		// Separate units keep an application edit from recompiling dependency code.
 		...partition("code", NATIVE_C_HEADER_LINES, applicationCode, "app-"),
+		...assetDataTranslationUnits(options.assets ?? [], options.symbolSuffix ?? ""),
 	];
 }
 
@@ -2593,45 +2604,43 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	return units;
 }
 
-/** Defines `mal_assets<suffix>`, the table a runtime image's `assets` field points at. */
+function assetFileSymbol(assetIndex: number, fileIndex: number, suffix: string): string {
+	return `mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}`;
+}
+
+/**
+ * Defines `mal_assets<suffix>`, the table a runtime image's `assets` field points at.
+ * It only declares the file bytes, which `assetDataTranslationUnits` defines.
+ */
 export function assetTableLines(
 	assets: ReadonlyArray<IncludedAsset>,
 	suffix: string,
 ): Array<string> {
 	const lines: Array<string> = [];
-	const embeddedAssetSymbols = new Set(
-		assets.flatMap((asset) =>
-			asset.files.flatMap((file) =>
-				file.embeddedSymbol === undefined ? [] : [file.embeddedSymbol],
-			),
-		),
-	);
-	for (const symbol of embeddedAssetSymbols) {
-		lines.push(`extern const u8 ${symbol}[];`);
-	}
-	if (embeddedAssetSymbols.size > 0) lines.push("");
-
+	const declared = new Set<string>();
 	for (let assetIndex = 0; assetIndex < assets.length; assetIndex++) {
 		const asset = assets[assetIndex]!;
 		for (let fileIndex = 0; fileIndex < asset.files.length; fileIndex++) {
 			const file = asset.files[fileIndex]!;
-			if (file.embeddedSymbol !== undefined) continue;
-			const symbol = `mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}`;
-			if (file.size === 0) {
+			const symbol =
+				file.embeddedSymbol ?? assetFileSymbol(assetIndex, fileIndex, suffix);
+			if (file.embeddedSymbol === undefined && file.size === 0)
 				lines.push(`static const u8 ${symbol}[] = { 0 };`);
-			} else {
-				lines.push(
-					`static const u8 ${symbol}[] = {`,
-					`#embed "${cEscapeString(file.sourcePath)}"`,
-					"};",
-				);
+			else if (!declared.has(symbol)) {
+				declared.add(symbol);
+				lines.push(`extern const u8 ${symbol}[];`);
 			}
 		}
+	}
+	if (lines.length > 0) lines.push("");
+
+	for (let assetIndex = 0; assetIndex < assets.length; assetIndex++) {
+		const asset = assets[assetIndex]!;
 		lines.push(`static const MalAssetFile mal_asset_${assetIndex}_files${suffix}[] = {`);
 		for (let fileIndex = 0; fileIndex < asset.files.length; fileIndex++) {
 			const file = asset.files[fileIndex]!;
 			const symbol =
-				file.embeddedSymbol ?? `mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}`;
+				file.embeddedSymbol ?? assetFileSymbol(assetIndex, fileIndex, suffix);
 			lines.push(
 				`    { .path = "${cEscapeString(file.path)}", .data = ${symbol}, .source_path = nullptr, .length = ${file.size} },`,
 			);
@@ -2649,6 +2658,51 @@ export function assetTableLines(
 		lines.push("};", "");
 	}
 	return lines;
+}
+
+/**
+ * Units defining the asset bytes `assetTableLines` declares, one per asset. Each is
+ * keyed by its text and its files' digests, so with the CLI's content-addressed
+ * snapshots an asset's object is reused until its bytes change.
+ */
+export function assetDataTranslationUnits(
+	assets: ReadonlyArray<IncludedAsset>,
+	suffix: string,
+): Array<GeneratedTranslationUnit> {
+	return assets.flatMap((asset, assetIndex) => {
+		const files = asset.files.flatMap((file, fileIndex) =>
+			file.embeddedSymbol === undefined && file.size > 0
+				? [{ file, symbol: assetFileSymbol(assetIndex, fileIndex, suffix) }]
+				: [],
+		);
+		if (files.length === 0) return [];
+		const source = files
+			.flatMap(({ file, symbol }) => [
+				`const unsigned char ${symbol}[] = {`,
+				`#embed "${cEscapeString(file.sourcePath)}"`,
+				"};",
+				`static_assert(sizeof ${symbol} == ${file.size}, "asset file changed after it was recorded");`,
+			])
+			.join("\n");
+		return [
+			{
+				id: `asset-${assetIndex}`,
+				kind: "data" as const,
+				sourceChunks: [source],
+				sourceCodeUnits: source.length,
+				headerFiles: [],
+				definitions: [],
+				embeddedFileDigests: files.map(({ file }) => file.digest),
+			},
+		];
+	});
+}
+
+function inlineAssetData(options: EmitOptions): Array<string> {
+	return assetDataTranslationUnits(
+		options.assets ?? [],
+		options.symbolSuffix ?? "",
+	).flatMap((unit) => unit.sourceChunks);
 }
 
 function nativeStackRootsAreConservative(

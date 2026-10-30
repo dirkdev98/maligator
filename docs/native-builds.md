@@ -73,8 +73,8 @@ settled, top-level await included. A dependency edit that keeps its exported nam
 the application image cached. Note that `require` and `import()` across an image boundary
 still compile one whole program. Code does not optimize across images,
 which costs a few percent of throughput against a whole-program development
-binary. Configured assets are embedded in a translation unit of their own, so an asset
-edit and an application edit never recompile each other's objects. A build with
+binary. Configured assets and each image's bytes are embedded in units of their own, so
+an asset edit and an application edit never recompile each other's objects. A build with
 `MALIGATOR_DEVELOPMENT_FRAGMENTS=0` links one whole program instead. Worker roots
 always link their whole-program images behind the compiled worker registry.
 
@@ -122,7 +122,12 @@ reason: eval-enabled feature sets that share a realm layout share one overlay.
 Pragmas, emitted definitions, and anything the slicer cannot classify are always
 part of the key, and builds that emit debug line tables key the whole expansion
 instead. A memo keyed by the raw unit and header contents means a
-warm build never preprocesses its units.
+warm build never preprocesses its units. Embedded bytes (configured assets, and the
+images of a development build) live in header-free units keyed by their text and the
+embedded files' content digests. These units are never preprocessed: an expansion
+spells each byte out as a C literal, and a few megabytes of data would exceed the
+string limit of the engine the product CLI runs on. An asset or image object is
+reused until its bytes change.
 
 Definitions are assigned to deterministic, edit-local hash partitions with a 2 MiB
 soft target and an 8 MiB hard limit for an indivisible definition. A function's

@@ -784,9 +784,15 @@ try {
 		);
 
 		const rootsConfig = "production-roots.build.mts";
+		// Spelled out as C integer literals, these bytes would exceed the engine's string
+		// limit, so the product CLI must never preprocess an embedded asset into text.
+		writeFileSync(
+			path.join(project, "production-large-asset.bin"),
+			"x".repeat(4 * 1024 * 1024),
+		);
 		writeFileSync(
 			path.join(project, rootsConfig),
-			'export default {entry:"production-roots.mts",outputName:"selfhost-production-roots",surface:{node:false,webPlatform:false,maligator:true},engine:{eval:false,regexp:false,intl:{enabled:false}}};\n',
+			'export default {entry:"production-roots.mts",outputName:"selfhost-production-roots",assets:{large:{type:"file",path:"production-large-asset.bin"}},surface:{node:false,webPlatform:false,maligator:true},engine:{eval:false,regexp:false,intl:{enabled:false}}};\n',
 		);
 		for (const [name, increment] of [
 			["first", 38],
@@ -901,7 +907,7 @@ try {
 			`${JSON.stringify({ cacheCondition: "serial and parallel forced frontend compilation; unchanged warm rerun", builds: rootBuilds, warm: { pid: rootWarm.pid, status: rootWarm.status, stdout: rootWarm.stdout, stderr: rootWarm.stderr }, parity: "generated C and native output; binary byte identity not asserted" }, null, 2)}\n`,
 		);
 		console.log(
-			"ok   serial and parallel production roots matched C and native output, then reused frontend cache",
+			"ok   serial and parallel production roots matched C and native output with a 4 MiB asset, then reused frontend cache",
 		);
 	}
 

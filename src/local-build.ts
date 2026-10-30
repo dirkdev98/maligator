@@ -15,6 +15,7 @@ import { performance } from "node:perf_hooks";
 import {
 	artifactActionKey,
 	artifactDigest,
+	artifactIdentity,
 	artifactOutput,
 	artifactProducer,
 	materializeArtifact,
@@ -185,6 +186,7 @@ interface GeneratedObjectInput {
 	generatedKind?: GeneratedTranslationUnitKind;
 	headerFiles?: ReadonlyArray<string>;
 	definitions?: ReadonlyArray<GeneratedTranslationUnitDefinition>;
+	embeddedFileDigests?: ReadonlyArray<string>;
 }
 
 function logicalSourcePath(input: GeneratedObjectInput): string {
@@ -195,7 +197,9 @@ function logicalSourcePath(input: GeneratedObjectInput): string {
  * What each unit's object can depend on: its expanded body plus the prelude
  * declarations that body reaches, so header edits elsewhere keep its object. Digests
  * are memoized under the raw source and header contents; only units whose text or
- * headers changed are preprocessed again.
+ * headers changed are preprocessed again. A unit that embeds files is its text plus
+ * their contents and is never expanded: the expansion spells each byte out as text,
+ * which outgrows the engine's string limit for a few megabytes of data.
  */
 function generatedUnitDigests(
 	context: NativeBuildContext,
@@ -206,8 +210,22 @@ function generatedUnitDigests(
 	directory: string,
 	verbose: boolean,
 ): Array<string> {
-	const memoKeys = inputs.map((input) =>
-		artifactActionKey(GENERATED_UNIT_SLICE_PRODUCER, {
+	const digests = new Array<string | undefined>(inputs.length);
+	const memoKeys = new Array<string | undefined>(inputs.length);
+	const pending: Array<number> = [];
+	for (const [index, input] of inputs.entries()) {
+		if (input.embeddedFileDigests !== undefined) {
+			if (input.headerFiles?.length !== 0)
+				throw new Error(
+					`generated unit ${input.unitId} embeds files and includes headers`,
+				);
+			digests[index] = artifactIdentity({
+				source: input.sourceDigest,
+				embeddedFiles: input.embeddedFileDigests,
+			});
+			continue;
+		}
+		const key = artifactActionKey(GENERATED_UNIT_SLICE_PRODUCER, {
 			logicalSourcePath: logicalSourcePath(input),
 			source: input.sourceDigest,
 			compileArguments: normalizedCompileArguments,
@@ -215,11 +233,8 @@ function generatedUnitDigests(
 			environment: context.environmentFingerprint,
 			toolchain: context.toolchain.fingerprint,
 			target: context.toolchain.target,
-		}),
-	);
-	const digests = new Array<string | undefined>(inputs.length);
-	const pending: Array<number> = [];
-	for (const [index, key] of memoKeys.entries()) {
+		});
+		memoKeys[index] = key;
 		const cached = readArtifactAction(
 			context.cacheDirectory,
 			"generated-unit-slice",
@@ -595,6 +610,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		generatedKind?: GeneratedTranslationUnitKind;
 		headerFiles?: ReadonlyArray<string>;
 		definitions?: ReadonlyArray<GeneratedTranslationUnitDefinition>;
+		embeddedFileDigests?: ReadonlyArray<string>;
 	}> = sourceInputs.map((input) =>
 		typeof input === "string"
 			? {
@@ -607,6 +623,9 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 					generatedKind: input.kind,
 					headerFiles: input.headerFiles,
 					definitions: input.definitions,
+					...(input.embeddedFileDigests === undefined
+						? {}
+						: { embeddedFileDigests: input.embeddedFileDigests }),
 				},
 	);
 	const unitIds = new Set<string>();
@@ -659,6 +678,9 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 				...(units[index]!.definitions === undefined
 					? {}
 					: { definitions: units[index]!.definitions }),
+				...(units[index]!.embeddedFileDigests === undefined
+					? {}
+					: { embeddedFileDigests: units[index]!.embeddedFileDigests }),
 			})),
 			{
 				sourcePath: mainFile,

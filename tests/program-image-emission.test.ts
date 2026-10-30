@@ -2930,6 +2930,37 @@ describe("emit-program-image instruction packing", () => {
 		);
 		expect(output).not.toContain('#embed "/unused/compiler.malw"');
 	});
+
+	it("embeds asset bytes only in header-free units that declare their content", () => {
+		const file = {
+			sourcePath: "/snapshots/catalog.bin",
+			inputPath: "/project/data/catalog.json",
+			size: 4_000_000,
+			digest: "a".repeat(64),
+		};
+		const units = emitProgramTranslationUnits(definition, {
+			compiled: false,
+			assets: [
+				{
+					name: "catalog",
+					type: "file",
+					hash: "hash",
+					version: "1",
+					files: [{ ...file, path: "catalog.json" }],
+				},
+			],
+		});
+		const embedding = units.filter((unit) =>
+			unit.sourceChunks.some((chunk) => chunk.includes("#embed")),
+		);
+		expect(
+			embedding.map(({ headerFiles, embeddedFileDigests }) => ({
+				headerFiles,
+				embeddedFileDigests,
+			})),
+		).toEqual([{ headerFiles: [], embeddedFileDigests: [file.digest] }]);
+		expect(embedding[0]!.sourceChunks.join("")).toContain(`#embed "${file.sourcePath}"`);
+	});
 });
 
 describe("native update-expression representation", () => {

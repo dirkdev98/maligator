@@ -109,7 +109,11 @@ describe("development builds from relocatable fragments", () => {
 		const fragments = new Set(
 			compiled
 				.filter((unit) => unit !== "development-fragment-images")
-				.map((unit) => /^(fragment_f[0-9a-f]+)-/.exec(unit)?.[1]),
+				.map(
+					(unit) =>
+						/^fragment_(f[0-9a-f]+)-/.exec(unit)?.[1] ??
+						/^development-fragment-image-(f[0-9a-f]+)$/.exec(unit)?.[1],
+				),
 		);
 		expect(compiled).toContain("development-fragment-images");
 		expect([...fragments]).toHaveLength(1);
@@ -132,7 +136,7 @@ describe("development builds from relocatable fragments", () => {
 		expect(runBinary(workers, "workers")).toBe("worker-math-cache PASS\n");
 	});
 
-	it("embeds configured assets in a unit an asset edit alone recompiles", () => {
+	it("embeds configured assets in units an asset edit alone recompiles", () => {
 		const assets = path.join(project, "assets");
 		mkdirSync(assets, { recursive: true });
 		const greeting = path.join(assets, "greeting.txt");
@@ -159,11 +163,14 @@ describe("development builds from relocatable fragments", () => {
 		);
 		expect(runWithoutSource()).toBe("hello from an asset\n");
 
-		// Unique text keeps CI's restored object cache from already holding the edited unit.
+		// Unique text keeps CI's restored object cache from already holding the edited units.
 		const edit = `edited asset ${randomUUID()}\n`;
 		writeFileSync(greeting, edit);
 		const edited = build(assets);
-		expect(compiledUnits(edited)).toEqual(["development-fragment-assets"]);
+		expect(compiledUnits(edited).sort()).toEqual([
+			"development-fragment-asset-0",
+			"development-fragment-assets",
+		]);
 		expect(runWithoutSource()).toBe(edit);
 	});
 });
