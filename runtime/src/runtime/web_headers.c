@@ -547,31 +547,46 @@ static bool mal_headers_fill_from_sequence(
     return true;
 }
 
-static bool mal_headers_convert_record(
-    MalVm *vm, MalValue input, MalValue *record_out) {
-    *record_out = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
-    MalValue roots[5] = {
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
+/* A record entry is always a pair, so the converted keys and values are staged
+ * flat in a rooted native buffer instead of an array of two-element arrays. Every
+ * conversion still completes before the first header is validated or appended.
+ * Typical inits fit the stack buffer; malloc/free would cost what the arrays did. */
+#define MAL_HEADERS_RECORD_STACK_PAIRS 8
+static bool mal_headers_fill_from_record(MalVm *vm, MalHeadersObject *h, MalValue input) {
+    MalValue roots[3] = {
+        mal_value_from_headers_object(h),
         mal_value_new_undefined(),
         mal_value_new_undefined(),
     };
     MalRootSpan roots_span;
-    mal_gc_root(&roots_span, roots, 5);
-    if (!mal_vm_own_property_keys(vm, input, &roots[0])) {
+    mal_gc_root(&roots_span, roots, 3);
+    if (!mal_vm_own_property_keys(vm, input, &roots[1])) {
         mal_gc_unroot(&roots_span);
         return false;
     }
 
-    MalArrayObject *keys = mal_value_to_array_object(roots[0]);
+    MalArrayObject *keys = mal_value_to_array_object(roots[1]);
     u32 key_count = mal_array_object_length(keys);
-    u32 output = 0;
+    MalValue stack_staged[MAL_HEADERS_RECORD_STACK_PAIRS * 2];
+    usize capacity = key_count == 0 ? 1 : (usize) key_count * 2;
+    MalValue *staged = capacity <= MAL_HEADERS_RECORD_STACK_PAIRS * 2
+        ? stack_staged
+        : malloc(capacity * sizeof(MalValue));
+    if (staged == nullptr) {
+        mal_gc_unroot(&roots_span);
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    for (usize i = 0; i < capacity; i++) staged[i] = mal_value_new_undefined();
+    MalRootSpan staged_span;
+    mal_gc_root(&staged_span, staged, capacity);
+
+    usize staged_count = 0;
     bool ok = true;
     for (u32 i = 0; i < key_count; i++) {
-        mal_array_object_dense_get(keys, i, &roots[1]);
+        mal_array_object_dense_get(keys, i, &roots[2]);
         MalKey key;
-        if (!mal_vm_value_to_property_key(vm, roots[1], &key)) {
+        if (!mal_vm_value_to_property_key(vm, roots[2], &key)) {
             ok = false;
             break;
         }
@@ -586,20 +601,21 @@ static bool mal_headers_convert_record(
         }
 
         // Web IDL converts the record key before Get(O, key).
-        if (!mal_headers_to_byte_string(vm, roots[1], &roots[2]) ||
-            !mal_vm_get_property(vm, input, key, &roots[3]) ||
-            !mal_headers_to_byte_string(vm, roots[3], &roots[3])) {
+        MalValue *pair = &staged[staged_count * 2];
+        if (!mal_headers_to_byte_string(vm, roots[2], &pair[0]) ||
+            !mal_vm_get_property(vm, input, key, &pair[1]) ||
+            !mal_headers_to_byte_string(vm, pair[1], &pair[1])) {
             ok = false;
             break;
         }
-        roots[4] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
-        MalArrayObject *pair = mal_value_to_array_object(roots[4]);
-        mal_array_object_store(pair, mal_key_index(0), roots[2]);
-        mal_array_object_store(pair, mal_key_index(1), roots[3]);
-        mal_array_object_store(mal_value_to_array_object(*record_out),
-            mal_key_index(output++), roots[4]);
+        staged_count++;
+    }
+    for (usize i = 0; ok && i < staged_count; i++) {
+        ok = mal_headers_append_values(vm, h, staged[i * 2], staged[i * 2 + 1]);
     }
 
+    mal_gc_unroot(&staged_span);
+    if (staged != stack_staged) free(staged);
     mal_gc_unroot(&roots_span);
     return ok;
 }
@@ -631,13 +647,7 @@ static bool mal_headers_fill_from_init(MalVm *vm, MalHeadersObject *h, MalValue 
         mal_gc_unroot(&sequence_span);
         return ok;
     }
-    MalValue record = mal_value_new_undefined();
-    MalRootSpan record_span;
-    mal_gc_root(&record_span, &record, 1);
-    bool ok = mal_headers_convert_record(vm, init, &record)
-        && mal_headers_fill_from_sequence(vm, h, record);
-    mal_gc_unroot(&record_span);
-    return ok;
+    return mal_headers_fill_from_record(vm, h, init);
 }
 
 /* --- prototype methods --- */

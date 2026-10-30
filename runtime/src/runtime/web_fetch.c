@@ -21,6 +21,7 @@
 #include "heap_string.h"
 #include "heap_symbol.h"
 #include "intrinsics.h"
+#include "microtask.h"
 #include "mal_url.h"
 #include "object.h"
 #include "object_ops.h"
@@ -821,35 +822,45 @@ static void mal_response_trace(MalHeapHeader *cell) {
 
 static bool mal_fetch_response_headers(MalVm *vm, MalValue init,
     MalValue *visible_out, MalValue *server_out) {
-    MalValue roots[3] = {mal_value_new_undefined(), init, mal_value_new_undefined()};
+    MalValue roots[2] = {mal_value_new_undefined(), init};
     MalRootSpan rs;
-    mal_gc_root(&rs, roots, 3);
-    MalHeadersObject *raw = mal_headers_from_init(vm, roots[1]);
-    roots[0] = mal_value_from_headers_object(raw);
+    mal_gc_root(&rs, roots, 2);
+    // Fill unguarded so the forbidden names Mal.serve still transmits survive until
+    // they move to the server-only list; the response guard applies afterwards.
+    MalHeadersObject *visible = mal_headers_from_init(vm, roots[1]);
+    roots[0] = mal_value_from_headers_object(visible);
     if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
         mal_gc_unroot(&rs);
         return false;
     }
-    MalHeadersObject *visible = mal_headers_create(vm);
-    visible->guard = MAL_HEADERS_GUARD_RESPONSE;
-    roots[2] = mal_value_from_headers_object(visible);
-    MalHeadersObject *server = mal_headers_create(vm);
-    *server_out = mal_value_from_headers_object(server);
     MalRootSpan server_span;
     mal_gc_root(&server_span, server_out, 1);
-    for (i32 i = 0; i < raw->count; i++) {
-        MalHeaderEntry *entry = &raw->entries[i];
-        MalHeadersObject *target = mal_fetch_name_is(entry->name, "set-cookie")
-                || mal_fetch_name_is(entry->name, "set-cookie2")
-            ? server : visible;
-        if (!mal_headers_append_entry(target, entry->name, entry->value)) {
+    MalHeadersObject *server = nullptr;
+    i32 kept = 0;
+    for (i32 i = 0; i < visible->count; i++) {
+        MalHeaderEntry entry = visible->entries[i];
+        if (!mal_fetch_name_is(entry.name, "set-cookie")
+            && !mal_fetch_name_is(entry.name, "set-cookie2")) {
+            visible->entries[kept++] = entry;
+            continue;
+        }
+        if (server == nullptr) {
+            server = mal_headers_create(vm);
+            *server_out = mal_value_from_headers_object(server);
+        }
+        if (!mal_headers_append_entry(server, entry.name, entry.value)) {
             mal_vm_throw_allocation_error(vm);
             mal_gc_unroot(&server_span);
             mal_gc_unroot(&rs);
             return false;
         }
+        // The moved entry's slot is overwritten or truncated below.
+        mal_gc_write_barrier(mal_value_from_string(entry.name));
+        mal_gc_write_barrier(mal_value_from_string(entry.value));
     }
-    *visible_out = roots[2];
+    visible->count = kept;
+    visible->guard = MAL_HEADERS_GUARD_RESPONSE;
+    *visible_out = roots[0];
     mal_gc_unroot(&server_span);
     mal_gc_unroot(&rs);
     return true;
@@ -3152,15 +3163,15 @@ static MalValue mal_fetch_make_request(MalVm *vm, MalFetchRequest *req) {
     MalValue result = mal_value_from_request_object(r);
     MalRootSpan rs;
     mal_gc_root(&rs, &result, 1);
-    r->referrer = mal_value_from_string(
-        mal_string_new_ascii(&vm->heap, "about:client", 12));
-    r->referrer_policy = mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
-    r->mode = mal_value_from_string(mal_string_new_ascii(&vm->heap, "cors", 4));
-    r->credentials = mal_value_from_string(
-        mal_string_new_ascii(&vm->heap, "same-origin", 11));
-    r->cache = mal_value_from_string(mal_string_new_ascii(&vm->heap, "default", 7));
-    r->redirect = mal_value_from_string(mal_string_new_ascii(&vm->heap, "follow", 6));
-    r->integrity = mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
+    // Every served Request starts from the same defaults; interned atoms avoid
+    // allocating them per request.
+    r->referrer = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "about:client"));
+    r->referrer_policy = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ""));
+    r->mode = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "cors"));
+    r->credentials = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "same-origin"));
+    r->cache = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "default"));
+    r->redirect = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "follow"));
+    r->integrity = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ""));
     if (req->body_len > 0) {
         r->body = malloc(req->body_len);
         if (r->body == nullptr) {
@@ -3462,22 +3473,56 @@ static void mal_fetch_dispatch(MalVm *vm, MalFetchRequest *req) {
         return;
     }
 
-    // Normalize the result to a promise and respond when it settles — covers a
-    // sync Response and an async Promise<Response> through one path.
     roots[1] = c.value;
-    MalValue promise;
-    if (!mal_promise_resolve_value(vm, roots[1], &promise)) {
-        vm->completion =
-            (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-        mal_gc_unroot(&rs);
-        mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
-        return;
-    }
-    roots[1] = promise;
-
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalString *name = mal_intrinsic_ascii(vm, (const byte *) "");
     MalValue request_slot = mal_fetch_box_request(req);
+    if (mal_value_is_response_object(roots[1])) {
+        // Promise.resolve(response).then(onFulfilled, onRejected) runs exactly one
+        // reaction. Perform its single Get(response, "then") here and queue that
+        // reaction where the settled promise would have, so neither the promise nor
+        // the callback that cannot run is allocated. Only a callable `then` needs a
+        // real promise to adopt the thenable.
+        MalValue then;
+        bool read = mal_vm_get_property(
+            vm, roots[1], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_THEN), &then);
+        if (!read || !mal_value_is_callable(then)) {
+            if (!read) {
+                roots[1] = vm->completion.value;
+                vm->completion = (MalCompletion) {
+                    .kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+            }
+            MalNativeFunctionObject *reaction = mal_native_function_object_new_with_slots(
+                &vm->heap, fn_proto, name,
+                read ? mal_fetch_on_fulfilled : mal_fetch_on_rejected, &request_slot, 1);
+            mal_fetch_request_retain(req);
+            mal_vm_enqueue_reaction_job(vm, mal_value_from_native_function_object(reaction),
+                !read, mal_value_new_undefined(), mal_value_new_undefined(), roots[1]);
+            mal_gc_unroot(&rs);
+            return;
+        }
+        roots[0] = then; // the handler has returned; the Request no longer needs a root
+        MalPromiseObject *adopting = mal_promise_object_new(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
+        MalValue thenable = roots[1];
+        roots[1] = mal_value_from_promise_object(adopting);
+        MalValue resolve;
+        MalValue reject;
+        mal_promise_create_resolving(vm, roots[1], &resolve, &reject);
+        mal_vm_enqueue_thenable_job(vm, roots[0], thenable, resolve, reject);
+    } else {
+        // Normalize any other result to a promise and respond when it settles.
+        MalValue promise;
+        if (!mal_promise_resolve_value(vm, roots[1], &promise)) {
+            vm->completion = (MalCompletion) {
+                .kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+            mal_gc_unroot(&rs);
+            mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
+            return;
+        }
+        roots[1] = promise;
+    }
+
     MalNativeFunctionObject *on_fulfilled = mal_native_function_object_new_with_slots(
         &vm->heap, fn_proto, name, mal_fetch_on_fulfilled, &request_slot, 1);
     MalNativeFunctionObject *on_rejected = mal_native_function_object_new_with_slots(

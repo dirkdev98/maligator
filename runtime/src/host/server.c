@@ -371,7 +371,9 @@ static void conn_wire_write_free(MalHttpWireWrite *write) {
     free(write);
 }
 
-bool mal_http_conn_response_start(
+/* A non-null `body` completes the response in the head's own write: one allocation
+ * and one queue entry instead of a head write plus an owned body write. */
+static bool conn_response_start(
     MalHttpConn *c,
     int status,
     const char *reason,
@@ -381,11 +383,14 @@ bool mal_http_conn_response_start(
     i64 expected_body_length,
     bool chunked,
     MalHttpResponseHeadSink head_sink,
-    void *head_data) {
+    void *head_data,
+    const byte *body,
+    usize body_len) {
     static const char default_ct[] = "Content-Type: text/plain; charset=utf-8\r\n";
     if (c == nullptr || reason == nullptr || status < 100 || status > 999
         || c->response_started || c->response_ended
-        || (chunked && (declared_content_length >= 0 || expected_body_length >= 0))) {
+        || (chunked && (declared_content_length >= 0 || expected_body_length >= 0))
+        || (body != nullptr && (chunked || expected_body_length != (i64) body_len))) {
         return false;
     }
     bool keep_alive = c->keep_alive && !c->server->closing;
@@ -454,6 +459,8 @@ bool mal_http_conn_response_start(
         || !conn_size_add(&total, framing_length)) {
         return false;
     }
+    usize head_length = total;
+    if (body != nullptr && !conn_size_add(&total, body_len)) return false;
     if (total > SIZE_MAX - sizeof(MalHttpWireWrite)) return false;
     MalHttpWireWrite *write = calloc(1, sizeof(*write) + total);
     if (write == nullptr) return false;
@@ -471,22 +478,45 @@ bool mal_http_conn_response_start(
         offset += header_length;
     }
     memcpy(write->bytes + offset, framing, framing_length);
+    offset += framing_length;
+    if (body != nullptr && body_len > 0) memcpy(write->bytes + offset, body, body_len);
     write->length = total;
+    // Like an owned body written with the transport limit waived, a complete
+    // response is not counted against the streaming write budget.
+    write->final = body != nullptr;
     // The queue may send and free the write before this returns.
-    if (head_sink != nullptr) head_sink(head_data, write->bytes, total);
+    if (head_sink != nullptr) head_sink(head_data, write->bytes, head_length);
     c->response_started = true;
     c->response_chunked = chunked;
-    c->response_remaining = expected_body_length;
+    c->response_remaining = body != nullptr ? 0 : expected_body_length;
+    c->response_ended = body != nullptr;
     c->awaiting_response = false;
     if (!conn_queue_write(c, write)) {
         c->response_started = false;
         c->response_chunked = false;
         c->response_remaining = 0;
+        c->response_ended = false;
         c->awaiting_response = true;
         conn_wire_write_free(write);
         return false;
     }
     return true;
+}
+
+bool mal_http_conn_response_start(
+    MalHttpConn *c,
+    int status,
+    const char *reason,
+    const char *headers,
+    usize headers_len,
+    i64 declared_content_length,
+    i64 expected_body_length,
+    bool chunked,
+    MalHttpResponseHeadSink head_sink,
+    void *head_data) {
+    return conn_response_start(c, status, reason, headers, headers_len,
+        declared_content_length, expected_body_length, chunked, head_sink, head_data,
+        nullptr, 0);
 }
 
 static bool conn_response_write_owned(
@@ -561,20 +591,10 @@ void mal_http_conn_respond_framed(
     const char *body,
     usize body_len,
     i64 declared_content_length) {
-    if (!mal_http_conn_response_start(
+    if (!conn_response_start(
             c, status, reason, headers, headers_len,
-            declared_content_length, (i64) body_len, false, nullptr, nullptr)) {
-        conn_close(c);
-        return;
-    }
-    byte *owned = malloc(body_len == 0 ? 1 : body_len);
-    if (owned == nullptr) {
-        conn_close(c);
-        return;
-    }
-    if (body_len > 0) memcpy(owned, body, body_len);
-    if (!conn_response_write_owned(c, owned, body_len, 0, true, false)) {
-        free(owned);
+            declared_content_length, (i64) body_len, false, nullptr, nullptr,
+            body != nullptr ? (const byte *) body : (const byte *) "", body_len)) {
         conn_close(c);
     }
 }
