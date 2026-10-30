@@ -3887,7 +3887,37 @@ static bool mal_builtin_array_sort_values(
         // scratch slot while comparators run.
         for (u32 low = 0, high; ok && low < count; low = high) {
             high = count - low < MAL_SORT_INSERTION_BLOCK ? count : low + MAL_SORT_INSERTION_BLOCK;
-            for (u32 index = low + 1; ok && index < high; index++) {
+            u32 sorted = low + 1;
+            if (sorted == high) continue;
+            f64 order;
+            ok = mal_builtin_array_sort_pair_order(
+                vm, comparator, keyed, values[low],
+                keyed ? default_keys[low] : mal_value_new_undefined(), values[sorted],
+                keyed ? default_keys[sorted] : mal_value_new_undefined(), &order);
+            if (!ok) break;
+            bool descending = order > 0;
+            for (sorted++; sorted < high; sorted++) {
+                ok = mal_builtin_array_sort_pair_order(
+                    vm, comparator, keyed, values[sorted - 1],
+                    keyed ? default_keys[sorted - 1] : mal_value_new_undefined(), values[sorted],
+                    keyed ? default_keys[sorted] : mal_value_new_undefined(), &order);
+                if (!ok || (order > 0) != descending) break;
+            }
+            if (!ok) break;
+            // A descending run must be strict so reversing it cannot reorder equal elements.
+            if (descending) {
+                for (u32 left = low, right = sorted - 1; left < right; left++, right--) {
+                    MalValue value = values[left];
+                    values[left] = values[right];
+                    values[right] = value;
+                    if (keyed) {
+                        MalValue key = default_keys[left];
+                        default_keys[left] = default_keys[right];
+                        default_keys[right] = key;
+                    }
+                }
+            }
+            for (u32 index = sorted; ok && index < high; index++) {
                 scratch[index] = values[index];
                 if (keyed) key_scratch[index] = default_keys[index];
                 u32 hole = index;

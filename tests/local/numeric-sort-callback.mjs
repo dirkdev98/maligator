@@ -228,3 +228,62 @@ for (const [name, input] of [
 			.join(" "),
 	);
 }
+
+function recordCompare(left, right) {
+	return left.key - right.key;
+}
+function recordOrder(values) {
+	return values.map((value) => value.id).join(",");
+}
+for (const length of [2, 15, 16, 17, 31, 32, 33, 97]) {
+	for (const direction of [1, -1]) {
+		const records = Array.from({ length }, (_, index) => ({
+			key: Math.floor((direction > 0 ? index : length - index) / 3),
+			id: index,
+		}));
+		console.log(
+			"record-stability",
+			length,
+			direction,
+			recordOrder(records.toSorted(recordCompare)),
+			recordOrder(records.sort(recordCompare)),
+		);
+	}
+}
+const defaultStrings = Array.from({ length: 65 }, (_, index) =>
+	String.fromCharCode(65 + ((64 - index) % 26)),
+);
+console.log(
+	"default-runs",
+	defaultStrings.toSorted().join(""),
+	defaultStrings.sort().join(""),
+);
+const coercingRecords = Array.from({ length: 33 }, (_, index) => ({
+	key: (index * 11) % 7,
+	id: index,
+	toString() {
+		globalThis.garbage = { padding: new Uint8Array(64) };
+		return String(this.key);
+	},
+}));
+console.log("default-object-stability", recordOrder(coercingRecords.sort()));
+console.log(
+	"coerced-comparator-stability",
+	recordOrder(
+		coercingRecords.toReversed().sort((left, right) => ({
+			valueOf() {
+				globalThis.garbage = { values: [left, right], padding: new Uint8Array(64) };
+				return left.key - right.key;
+			},
+		})),
+	),
+);
+let runComparisons = 0;
+try {
+	Array.from({ length: 33 }, (_, index) => 33 - index).sort((left, right) => {
+		if (++runComparisons === 3) throw new Error("run-comparator");
+		return left - right;
+	});
+} catch (error) {
+	console.log("run-throw", error.message, runComparisons);
+}

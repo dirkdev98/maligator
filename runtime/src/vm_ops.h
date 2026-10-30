@@ -4355,7 +4355,25 @@ static inline __attribute__((always_inline)) void mal_numeric_leaf_merge_sort(
     for (u32 index = 0; index < count; index++) keys[index] = mal_ops_number_as_f64(values[index]);
     for (u32 low = 0, high; low < count; low = high) {
         high = count - low < MAL_SORT_INSERTION_BLOCK ? count : low + MAL_SORT_INSERTION_BLOCK;
-        for (u32 index = low + 1; index < high; index++) {
+        u32 sorted = low + 1;
+        if (sorted == high) continue;
+        MAL_PERF_COUNT(numeric_sort_callback_calls);
+        bool descending = compare(keys[low], keys[sorted]) > 0;
+        for (sorted++; sorted < high; sorted++) {
+            MAL_PERF_COUNT(numeric_sort_callback_calls);
+            if ((compare(keys[sorted - 1], keys[sorted]) > 0) != descending) break;
+        }
+        if (descending) {
+            for (u32 left = low, right = sorted - 1; left < right; left++, right--) {
+                MalValue value = values[left];
+                values[left] = values[right];
+                values[right] = value;
+                f64 key = keys[left];
+                keys[left] = keys[right];
+                keys[right] = key;
+            }
+        }
+        for (u32 index = sorted; index < high; index++) {
             MalValue value = values[index];
             f64 key = keys[index];
             u32 hole = index;
