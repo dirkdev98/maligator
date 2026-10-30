@@ -3301,13 +3301,13 @@ static MalValue mal_fetch_make_request(MalVm *vm, MalFetchRequest *req) {
     MalRequestObject *r = mal_request_object_new(&vm->heap, proto);
     // Every served Request starts from the same defaults; interned atoms avoid
     // allocating them per request.
-    r->referrer = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "about:client"));
-    r->referrer_policy = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ""));
-    r->mode = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "cors"));
-    r->credentials = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "same-origin"));
-    r->cache = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "default"));
-    r->redirect = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "follow"));
-    r->integrity = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ""));
+    r->referrer = mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "about:client"));
+    r->referrer_policy = mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) ""));
+    r->mode = mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "cors"));
+    r->credentials = mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "same-origin"));
+    r->cache = mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "default"));
+    r->redirect = mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "follow"));
+    r->integrity = mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) ""));
     // Dispatch runs once the body is complete and nothing reads the buffered body
     // afterwards, so the Request takes it over instead of copying it.
     if (req->body_len > 0) {
@@ -3607,7 +3607,7 @@ static void mal_fetch_dispatch(MalVm *vm, MalFetchRequest *req) {
 
     roots[1] = c.value;
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    MalString *name = mal_intrinsic_ascii(vm, (const byte *) "");
+    MalString *name = mal_intrinsic_static_ascii(vm, (const byte *) "");
     MalValue request_slot = mal_fetch_box_request(req);
     if (mal_value_is_response_object(roots[1])) {
         // Promise.resolve(response).then(onFulfilled, onRejected) runs exactly one
