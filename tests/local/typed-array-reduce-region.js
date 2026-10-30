@@ -64,6 +64,24 @@ function unseeded(values, right = false) {
 	return right ? values.reduceRight(callback) : values.reduce(callback);
 }
 
+function snapshotReduce(values) {
+	return values.reduce(function typedSnapshotReducer(
+		acc,
+		value,
+		index,
+		receiver,
+		missing = 7,
+	) {
+		collect();
+		observations.push([arguments.length, arguments[0], receiver === values, missing]);
+		for (let i = 0; i < 2; i++) acc += value;
+		return +acc + index + arguments.length;
+	}, 0);
+}
+
+globalThis.__mal_snapshot_reduce = snapshotReduce;
+observations.push(snapshotReduce(new Float64Array([1, 2, 3])));
+
 for (const right of [false, true]) {
 	for (const Ctor of [
 		Int8Array,

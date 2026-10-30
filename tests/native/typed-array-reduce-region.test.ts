@@ -65,7 +65,7 @@ describe("TypedArray reduction invocation", () => {
 					fn.storage!.callbackTransports.some((plan) => plan.numericReduction),
 				),
 			).toBe(true);
-			for (const name of ["typedReducer", "typedRestReducer"]) {
+			for (const name of ["typedSnapshotReducer", "typedRestReducer"]) {
 				const callback = pair.programImage.native.functions.find(
 					(fn) =>
 						String.fromCharCode(

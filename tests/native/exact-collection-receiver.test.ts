@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { compileEntrypoint } from "../../src/compiler/pipeline/compile-program.ts";
 import { vmSafepointRootMapsAreTrusted } from "../../src/compiler/target/runtime-image.ts";
 import {
 	assertExactLines,
@@ -68,10 +69,23 @@ describe("exact collection receiver brands", () => {
 					),
 				),
 			).toBe(true);
-		const trustedCollectionSites = trusted.programImage.runtime.functions.flatMap((fn) =>
+		// Frontend cache decoding intentionally discards VM root-map trust.
+		const fresh = compileEntrypoint(path.resolve(fixture), {
+			buildConfig: resolveBuildConfig({ engine: { primordials: "locked" } }),
+		});
+		const trustedCollectionSites = [
+			...fresh.runtime.functions,
+			...trusted.programImage.runtime.functions,
+		].flatMap((fn) =>
 			vmSafepointRootMapsAreTrusted(fn)
 				? fn.instructions.flatMap((instruction, instructionIp) =>
-						instruction.opcode === "CALL_KNOWN" ||
+						(instruction.opcode === "CALL_KNOWN" &&
+							[
+								"Map.prototype.set",
+								"Set.prototype.add",
+								"WeakMap.prototype.set",
+								"WeakSet.prototype.add",
+							].includes(instruction.operation)) ||
 						(instruction.opcode === "CALL" &&
 							instruction.guardedBuiltinCall !== undefined)
 							? [
