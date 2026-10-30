@@ -27,7 +27,7 @@ it.each([
 		const expected = Buffer.from(chunks.join(""));
 		const digest = createHash("sha256");
 		expect(writeSourceChunks(file, chunks, digest)).toBe(expected.length);
-		expect(readFileSync(file)).toEqual(expected);
+		expect(readFileSync(file).equals(expected)).toBe(true);
 		expect(digest.digest("hex")).toBe(
 			createHash("sha256").update(expected).digest("hex"),
 		);
