@@ -169,7 +169,7 @@ environment; changed source or incomplete coverage cannot establish acceptance.
   Retain only evidence supporting the result or an unresolved failure, and report
   its location. Never force-add `.cache/` contents or delete another task's artifacts.
 
-## Cleanup and delegation
+## Cleanup
 
 Audit ownership and activity before deleting artifacts. Remove only explicitly
 identified inactive scratch or superseded generated data; preserve source, baselines,
@@ -177,8 +177,3 @@ useful failure evidence, and unrelated drafts. The user cache trims itself in th
 background; prune it by hand only when asked, previewing with `cache prune --dry-run`
 first. Pruning manages the user cache, not repository reports; see
 [cache ownership](docs/testing.md#cache-ownership). Never reuse an old deletion list.
-
-When you delegate, give each assignment a complete scope and capture its output. Run
-independent assignments in parallel only with non-overlapping edits. Review and verify
-their edits before acceptance. Do not inherit old model pins or unrestricted-permission
-recipes from saved task history.
