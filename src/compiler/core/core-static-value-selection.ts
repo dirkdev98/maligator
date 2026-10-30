@@ -1,6 +1,7 @@
 import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
 import type { KnownBuiltinCall } from "../shared/compiler-facts.ts";
+import { MAX_STRING_CODE_UNITS } from "../shared/compiler-instruction.ts";
 import { knownOperationCallProves } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { PrimordialValue } from "../shared/primordial-catalog-types.ts";
@@ -317,6 +318,62 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 				replacement.inputs,
 				{ attributes: replacement.attributes },
 			);
+		return editor.commit();
+	},
+};
+
+export const foldStaticFunctionNames: CoreFunctionPass = {
+	name: "fold-static-function-names",
+	stage: "memory",
+	requiredFunctionOpcodesAny: ["setFunctionName"],
+	candidates: { dependencies: ["body"], opcodes: ["setFunctionName"] },
+	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
+	wakesOn: STATIC_VALUE_WAKES,
+	changes: { cfg: false, calls: false, facts: true, representations: false },
+	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
+	run(context) {
+		const { program, item } = context;
+		const fn = program.function(item.function);
+		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
+		const plans: Array<{ instruction: CoreInstructionId; name: string }> = [];
+		for (const instruction of context.instructions()) {
+			if ((plans.length + 1) * 2 > context.remainingEdits) break;
+			const start = fn.kernel.instructionOperandStart(instruction);
+			const key = fn.kernel.operandAt(start + 1);
+			const fact = analysis.queryAt(key, instruction);
+			if (fact.kind !== "known") continue;
+			const description = program.staticDescriptions.description(fact.description);
+			if (
+				description.kind !== "symbol" ||
+				description.description === undefined ||
+				(description.description !== null &&
+					description.description.length > MAX_STRING_CODE_UNITS - 2)
+			)
+				continue;
+			analysis.verify(fact, instruction);
+			plans.push({
+				instruction,
+				name: description.description === null ? "" : `[${description.description}]`,
+			});
+		}
+		if (plans.length === 0) return undefined;
+		const editor = CoreEditor.open(program, fn.id);
+		for (const { instruction, name } of plans) {
+			const stringIndex = editor.appendStringConstants([
+				Array.from({ length: name.length }, (_, index) => name.charCodeAt(index)),
+			]);
+			const key = editor.insertInstruction(
+				fn.instructionBlock(instruction),
+				instruction,
+				"createString",
+				[],
+				{ attributes: { stringIndex } },
+			).outputs[0]!;
+			const func = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+			editor.replaceInstruction(instruction, "setFunctionName", [func, key], {
+				attributes: fn.instructionAttributes(instruction),
+			});
+		}
 		return editor.commit();
 	},
 };

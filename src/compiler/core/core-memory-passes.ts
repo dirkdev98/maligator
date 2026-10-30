@@ -97,6 +97,7 @@ import type { CoreModulePrivateNameIndex } from "./core-private-names.ts";
 import {
 	selectStaticPropertyReads,
 	foldStaticBindingConstants,
+	foldStaticFunctionNames,
 	foldStaticReflections,
 	foldStaticPropertyReads,
 } from "./core-static-value-selection.ts";
@@ -2799,6 +2800,7 @@ const eliminateUnusedMemoryBlockParameters: CoreFunctionPass = {
 export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldStaticPropertyReads,
 	foldStaticBindingConstants,
+	foldStaticFunctionNames,
 	selectStaticPropertyReads,
 	foldStaticReflections,
 	resolveKnownOperations,
@@ -2831,6 +2833,7 @@ export const CORE_MEMORY_SSA_PASSES: ReadonlyArray<CoreFunctionPass> = [
 export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldStaticPropertyReads,
 	foldStaticBindingConstants,
+	foldStaticFunctionNames,
 	selectStaticPropertyReads,
 	foldStaticReflections,
 	resolveKnownOperations,
