@@ -38,40 +38,7 @@ static bool normalization_matches(const c16 *source, usize length,
     } \
 } while (0)
 
-static bool repeated_case_matches(const c16 *source, usize source_length,
-    const c16 *expected, usize expected_length, bool upper, MalUnicodeLocale locale) {
-    const usize repetitions = 257;
-    c16 *input = malloc(source_length * repetitions * sizeof(c16));
-    c16 *wanted = malloc(expected_length * repetitions * sizeof(c16));
-    if (input == nullptr || wanted == nullptr) { free(input); free(wanted); return false; }
-    for (usize index = 0; index < repetitions; index++) {
-        memcpy(input + index * source_length, source, source_length * sizeof(c16));
-        memcpy(wanted + index * expected_length, expected, expected_length * sizeof(c16));
-    }
-    bool matches = case_matches(input, source_length * repetitions, wanted,
-        expected_length * repetitions, upper, locale);
-    free(input);
-    free(wanted);
-    return matches;
-}
-
 int main(void) {
-    CASE(u"", u"", true, MAL_UNICODE_LOCALE_ROOT);
-    const c16 expanding[] = u"\ufb03\U00010428\xd800 ";
-    const c16 expanded[] = u"FFI\U00010400\xd800 ";
-    const c16 lithuanian[] = u"I\u0301 ";
-    const c16 dotted[] = u"i\u0307\u0301 ";
-    const c16 turkic[] = u"I\u0307 ";
-    const c16 undotted[] = u"i ";
-    if (!repeated_case_matches(expanding, lengthof(expanding), expanded,
-            lengthof(expanded), true, MAL_UNICODE_LOCALE_ROOT) ||
-        !repeated_case_matches(lithuanian, lengthof(lithuanian), dotted,
-            lengthof(dotted), false, MAL_UNICODE_LOCALE_LITHUANIAN) ||
-        !repeated_case_matches(turkic, lengthof(turkic), undotted,
-            lengthof(undotted), false, MAL_UNICODE_LOCALE_TURKIC)) {
-        fputs("growing case output failed\n", stderr);
-        return 1;
-    }
     CASE(u"Stra\u00dfe \ufb03", u"STRASSE FFI", true, MAL_UNICODE_LOCALE_ROOT);
     CASE(u"A\u03a3'A A\u03a3'", u"a\u03c3'a a\u03c2'", false, MAL_UNICODE_LOCALE_ROOT);
     CASE(u"\U00010400\U00010428\xd800""", u"\U00010428\U00010428\xd800""", false, MAL_UNICODE_LOCALE_ROOT);

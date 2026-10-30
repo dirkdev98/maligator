@@ -126,15 +126,7 @@ static bool unicode_case_context(const c16 *source, usize length, usize index, b
 }
 
 MalUnicodeStatus mal_unicode_case(const c16 *source, usize length, bool upper, MalUnicodeLocale locale, c16 **output, usize *output_length) {
-    usize capacity = length < 32 ? 32 : length;
-    if (capacity > MAL_STRING_MAX_CODE_UNITS) capacity = MAL_STRING_MAX_CODE_UNITS;
-    usize bytes;
-    if (!mal_checked_size_multiply(capacity, sizeof(c16), SIZE_MAX, &bytes))
-        return MAL_UNICODE_LENGTH_OVERFLOW;
-    c16 *units = malloc(bytes);
-    if (units == nullptr) return MAL_UNICODE_ALLOCATION_FAILURE;
-    usize used = 0;
-    MalUnicodeStatus status = MAL_UNICODE_OK;
+    MalUnicodePoints points = {.limit = MAL_STRING_MAX_CODE_UNITS};
     const u32 *table = upper ? mal_unicode_upper : mal_unicode_lower;
     usize table_length = upper ? UNICODE_COUNT(mal_unicode_upper) : UNICODE_COUNT(mal_unicode_lower);
     for (usize index = 0; index < length;) {
@@ -173,38 +165,13 @@ MalUnicodeStatus mal_unicode_case(const c16 *source, usize length, bool upper, M
             if (row < 0) { special[0] = cp; mapping = special; count = 1; }
             else { mapping = mal_unicode_pool + table[row + 1]; count = table[row + 2]; }
         }
-        for (usize mapped = 0; mapped < count; mapped++) {
-            u32 value = mapping[mapped];
-            usize width = value > 0xffff ? 2 : 1;
-            if (capacity - used < width) {
-                usize required, grown;
-                if (!mal_checked_size_add(used, width, MAL_STRING_MAX_CODE_UNITS, &required) ||
-                    !mal_checked_size_growth(capacity, required, 1,
-                        MAL_STRING_MAX_CODE_UNITS, &grown) ||
-                    !mal_checked_size_multiply(grown, sizeof(c16), SIZE_MAX, &bytes)) {
-                    status = MAL_UNICODE_LENGTH_OVERFLOW;
-                    goto failed;
-                }
-                c16 *data = realloc(units, bytes);
-                if (data == nullptr) {
-                    status = MAL_UNICODE_ALLOCATION_FAILURE;
-                    goto failed;
-                }
-                units = data;
-                capacity = grown;
-            }
-            if (width == 2) mal_utf16_emit_pair(value, units + used);
-            else units[used] = (c16) value;
-            used += width;
-        }
+        for (usize mapped = 0; mapped < count; mapped++) if (!unicode_push(&points, mapping[mapped])) goto done;
         index += width;
     }
-    *output = units;
-    *output_length = used;
-    return MAL_UNICODE_OK;
- failed:
-    free(units);
-    return status;
+    points.status = unicode_finish(&points, output, output_length);
+ done:
+    free(points.data);
+    return points.status;
 }
 
 static bool unicode_decompose(MalUnicodePoints *points, u32 cp, bool compatibility) {

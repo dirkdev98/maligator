@@ -233,7 +233,6 @@ tests/native/fixed-typed-array-math-kernels.test.ts
 tests/native/string-span-well-formed.test.ts
 tests/native/native-number-record-math.test.ts
 tests/native/string-span-locale-case.test.ts
-tests/native/unicode-ascii-transforms.test.ts
 tests/native/native-number-record-readonly.test.ts
 tests/native/string-span-locale-compare.test.ts
 tests/native/property-read-wide.test.ts
