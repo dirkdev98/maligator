@@ -11,7 +11,9 @@ use core::fmt::{self, Write as _};
 
 const BIG_BASE: u64 = 1_000_000_000;
 const BIG_LIMBS: usize = 128;
-const EXACT_DIGITS: usize = 1100;
+// Retain a rounding digit beyond every fixed result admitted by its renderer;
+// exponential and precision results fit within the same bound.
+const ROUNDING_DIGITS: usize = 128;
 const RESULT_BYTES: usize = 256;
 // A binary64 rounding interval is at least 2^-54 of its magnitude on either
 // side. After 64 radix digits even base 2 has a grid spacing below 2^-63 of the
@@ -495,38 +497,44 @@ impl BigNat {
         }
     }
 
-    fn decimal_digits(&self, out: &mut [u8; EXACT_DIGITS]) -> Option<usize> {
+    /// Returns the full decimal length while writing only the leading prefix, so
+    /// the decimal point remains independent of the retained precision.
+    fn write_decimal_prefix(&self, out: &mut [u8; ROUNDING_DIGITS]) -> Option<usize> {
         if self.len == 0 {
             out[0] = b'0';
             return Some(1);
         }
 
-        let mut writer = ByteWriter::<EXACT_DIGITS>::new();
-        if !push_u32(&mut writer, self.limbs[self.len - 1]) {
+        let mut leading = ByteWriter::<10>::new();
+        if !push_u32(&mut leading, self.limbs[self.len - 1]) {
             return None;
         }
+        let len = leading.len + 9 * (self.len - 1);
+        out[..leading.len].copy_from_slice(leading.as_bytes());
+        let mut cursor = leading.len;
         for index in (0..self.len - 1).rev() {
             let limb = self.limbs[index];
             let mut divisor = 100_000_000u32;
             while divisor != 0 {
-                if !writer.push(b'0' + ((limb / divisor) % 10) as u8) {
-                    return None;
+                if cursor == out.len() {
+                    return Some(len);
                 }
+                out[cursor] = b'0' + ((limb / divisor) % 10) as u8;
+                cursor += 1;
                 divisor /= 10;
             }
         }
-        out[..writer.len].copy_from_slice(writer.as_bytes());
-        Some(writer.len)
+        Some(len)
     }
 }
 
-struct ExactDecimal {
-    digits: [u8; EXACT_DIGITS],
+struct DecimalPrefix {
+    digits: [u8; ROUNDING_DIGITS],
     len: usize,
     exponent: i32,
 }
 
-impl ExactDecimal {
+impl DecimalPrefix {
     fn from_f64(value: f64) -> Option<Self> {
         if !value.is_finite() || value <= 0.0 {
             return None;
@@ -575,17 +583,17 @@ impl ExactDecimal {
             }
         }
 
-        let mut digits = [0u8; EXACT_DIGITS];
-        let len = integer.decimal_digits(&mut digits)?;
+        let mut digits = [0u8; ROUNDING_DIGITS];
+        let full_len = integer.write_decimal_prefix(&mut digits)?;
         Some(Self {
             digits,
-            len,
-            exponent: len as i32 - decimal_scale - 1,
+            len: full_len.min(ROUNDING_DIGITS),
+            exponent: full_len as i32 - decimal_scale - 1,
         })
     }
 
     fn round_significant(&mut self, keep: usize) -> Option<()> {
-        if keep == 0 || keep >= EXACT_DIGITS {
+        if keep == 0 || keep >= ROUNDING_DIGITS {
             return None;
         }
         if keep >= self.len {
@@ -876,7 +884,7 @@ fn format_fixed(value: f64, fraction_digits: i32) -> Option<ByteWriter<RESULT_BY
     }
 
     let f = fraction_digits as usize;
-    let mut rounded = [0u8; 128];
+    let mut rounded = [0u8; ROUNDING_DIGITS];
     let rounded_len;
     if value == 0.0 || value.abs() < 1e-101 {
         // Even at the maximum accepted 100 fraction digits, every magnitude
@@ -886,7 +894,7 @@ fn format_fixed(value: f64, fraction_digits: i32) -> Option<ByteWriter<RESULT_BY
         rounded[0] = b'0';
         rounded_len = 1;
     } else {
-        let exact = ExactDecimal::from_f64(value.abs())?;
+        let exact = DecimalPrefix::from_f64(value.abs())?;
         let retain = exact.exponent + 1 + fraction_digits;
         if retain < 0 {
             rounded[0] = b'0';
@@ -963,15 +971,15 @@ fn format_exponential(value: f64, fraction_digits: i32) -> Option<ByteWriter<RES
     }
     let keep = fraction_digits as usize + 1;
     let mut exact = if value == 0.0 {
-        let mut zero = ExactDecimal {
-            digits: [0; EXACT_DIGITS],
+        let mut zero = DecimalPrefix {
+            digits: [0; ROUNDING_DIGITS],
             len: keep,
             exponent: 0,
         };
         zero.digits[..keep].fill(b'0');
         zero
     } else {
-        let mut exact = ExactDecimal::from_f64(value.abs())?;
+        let mut exact = DecimalPrefix::from_f64(value.abs())?;
         exact.round_significant(keep)?;
         exact
     };
@@ -999,15 +1007,15 @@ fn format_precision(value: f64, precision: i32) -> Option<ByteWriter<RESULT_BYTE
     }
     let keep = precision as usize;
     let mut exact = if value == 0.0 {
-        let mut zero = ExactDecimal {
-            digits: [0; EXACT_DIGITS],
+        let mut zero = DecimalPrefix {
+            digits: [0; ROUNDING_DIGITS],
             len: keep,
             exponent: 0,
         };
         zero.digits[..keep].fill(b'0');
         zero
     } else {
-        let mut exact = ExactDecimal::from_f64(value.abs())?;
+        let mut exact = DecimalPrefix::from_f64(value.abs())?;
         exact.round_significant(keep)?;
         exact
     };
@@ -1273,6 +1281,46 @@ mod tests {
         assert_eq!(
             text(format_fixed(-f64::from_bits(1), 100).unwrap()),
             format!("-0.{}", "0".repeat(100))
+        );
+    }
+
+    #[test]
+    fn fixed_ffi_preserves_padding_at_its_largest_fractional_output() {
+        let integer = 1u128 << 87;
+        for sign in [1.0, -1.0] {
+            let expected = format!(
+                "{}{}.{}",
+                if sign < 0.0 { "-" } else { "" },
+                integer,
+                "0".repeat(100)
+            );
+            let mut out = [0u8; RESULT_BYTES];
+            let len = unsafe {
+                mal_number_format_fixed(
+                    integer as f64 * sign,
+                    100,
+                    out.as_mut_ptr(),
+                    out.len() as i32,
+                )
+            };
+            assert_eq!(len, expected.len() as i32);
+            assert_eq!(&out[..len as usize], expected.as_bytes());
+        }
+    }
+
+    #[test]
+    fn fixed_ffi_rejects_fractional_output_beyond_its_digit_capacity() {
+        let mut out = [0u8; RESULT_BYTES];
+        assert_eq!(
+            unsafe {
+                mal_number_format_fixed(
+                    (1u128 << 90) as f64,
+                    100,
+                    out.as_mut_ptr(),
+                    out.len() as i32,
+                )
+            },
+            -1
         );
     }
 
