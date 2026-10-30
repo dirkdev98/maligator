@@ -57,6 +57,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_ops_number_as_f64",
 	"mal_ops_to_number",
 	"mal_number_exponentiate",
+	"mal_number_remainder",
 	"mal_ops_number_to_i32",
 	"mal_ops_number_value_to_i32",
 	"mal_ops_number_value",
@@ -840,7 +841,8 @@ it.each([
 			expect(unexpectedHelpers(lines!)).toEqual([]);
 			const c = lines!.join("\n");
 			expect(c.includes("% (u32)")).toBe(direct);
-			expect(c.includes("fmod(")).toBe(!direct);
+			expect(c.includes("mal_number_remainder(")).toBe(!direct);
+			expect(c).not.toContain("fmod(");
 		}
 	},
 );

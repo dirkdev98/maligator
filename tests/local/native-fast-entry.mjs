@@ -33,6 +33,31 @@ function positiveRemainder(input, other) {
 	return (input >>> 0) % ((other & 255) + 1);
 }
 
+function numericRemainder(left, right) {
+	return left % right;
+}
+
+globalThis.numericRemainder = numericRemainder;
+for (const left of [
+	0,
+	-0,
+	6,
+	-6,
+	5.5,
+	-5.5,
+	2 ** 53,
+	-(2 ** 53),
+	Number.MAX_VALUE,
+	NaN,
+	Infinity,
+	-Infinity,
+]) {
+	for (const right of [0, -0, 1, -1, 4, -4, 2.5, NaN, Infinity, -Infinity]) {
+		const result = globalThis.numericRemainder(left, right);
+		log.push(`numeric remainder ${String(result)} ${Object.is(result, -0)}`);
+	}
+}
+
 globalThis.positiveRemainder = positiveRemainder;
 for (const input of [
 	0,

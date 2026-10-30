@@ -846,7 +846,7 @@ function fastBinary(
 				numeric(right),
 				values.range(left),
 				values.range(right),
-			) ?? `fmod(${numeric(left)}, ${numeric(right)})`;
+			) ?? `mal_number_remainder(${numeric(left)}, ${numeric(right)})`;
 		return `${guard} ${storeNumber(values, dst, expression)}`;
 	}
 	if (operator === "**")
