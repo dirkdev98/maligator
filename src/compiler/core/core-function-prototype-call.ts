@@ -50,6 +50,43 @@ export function coreFunctionPrototypeCall(
 	};
 }
 
+/** A two-argument `apply` call whose method is read from its receiver. */
+export function coreFunctionPrototypeApply(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	site: CoreInstructionId,
+):
+	| {
+			readonly method: CoreValueId;
+			readonly target: CoreValueId;
+			readonly thisArgument: CoreValueId;
+			readonly array: CoreValueId;
+	  }
+	| undefined {
+	if (!coreGuardableCall(fn, site) || fn.kernel.instructionOperandCount(site) !== 4)
+		return undefined;
+	const start = fn.kernel.instructionOperandStart(site);
+	const method = fn.kernel.operandAt(start);
+	const target = fn.kernel.operandAt(start + 1);
+	if (fn.kernel.valueDefinitionKind(method) !== 1) return undefined;
+	const lookup = coreInstructionId(fn.kernel.valueDefinitionOwner(method));
+	if (
+		fn.instructionKind(lookup) !== "operation" ||
+		fn.instructionOpcodeName(lookup) !== "loadPropertyStatic" ||
+		fn.kernel.operandAt(fn.kernel.instructionOperandStart(lookup)) !== target
+	)
+		return undefined;
+	const units =
+		program.stringConstants[fn.instructionAttributes(lookup).stringIndex as number];
+	if (units === undefined || String.fromCharCode(...units) !== "apply") return undefined;
+	return {
+		method,
+		target,
+		thisArgument: fn.kernel.operandAt(start + 2),
+		array: fn.kernel.operandAt(start + 3),
+	};
+}
+
 /** An ordinary call whose block can be split around it. */
 export function coreGuardableCall(
 	fn: CoreFunctionStore,
@@ -65,6 +102,7 @@ export function coreGuardableCall(
 }
 
 interface GuardedCallSplit {
+	readonly fallback: CoreBlockId;
 	readonly append: (
 		destination: CoreBlockId,
 		opcode: string,
@@ -149,6 +187,7 @@ function splitGuardedCall(
 	let instructions = 0;
 	let current = block;
 	return {
+		fallback,
 		append: (destination, opcode, inputs, attributes = {}) => {
 			instructions++;
 			return editor.appendInstruction(destination, opcode, inputs, {
@@ -210,6 +249,41 @@ export function expandCoreFunctionPrototypeCall(
 		instructionsIntroduced: split.instructionsIntroduced(),
 		blocksIntroduced: split.blocksIntroduced(),
 	};
+}
+
+/**
+ * Dense private literals supply their own indexed data properties, so canonical
+ * `apply` can pass those values directly without consulting an Array iterator.
+ * Overrides retain the original array and call, after argument evaluation.
+ */
+export function expandCoreFunctionPrototypeApply(
+	fn: CoreFunctionStore,
+	editor: CoreEditor,
+	site: CoreInstructionId,
+	call: NonNullable<ReturnType<typeof coreFunctionPrototypeApply>>,
+	elements: ReadonlyArray<CoreValueId>,
+	construction: ReadonlyArray<CoreInstructionId>,
+): void {
+	const block = fn.instructionBlock(site);
+	const split = splitGuardedCall(fn, editor, site);
+	for (const instruction of construction)
+		editor.moveInstruction(instruction, split.fallback, site);
+	const intrinsic = split.append(block, "loadIntrinsic", [], {
+		intrinsic: "__functionPrototypeApply",
+	});
+	const callable = split.test(
+		split.append(block, "binary", [call.method, intrinsic], { operator: "===" }),
+	);
+	const direct = split.test(
+		split.append(callable, "typeofCompare", [call.target], {
+			expected: "function",
+			negated: false,
+		}),
+	);
+	split.finish(
+		direct,
+		split.append(direct, "call", [call.target, call.thisArgument, ...elements]),
+	);
 }
 
 /**

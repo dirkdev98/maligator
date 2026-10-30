@@ -1355,4 +1355,5 @@ export type CompilerIntrinsic =
 	| "__createImportMetaResolve"
 	// The realm's %Function.prototype.call%, which guarded `f.call(...)` rewrites compare
 	// a loaded `call` against. Not a user-visible global.
-	| "__functionPrototypeCall";
+	| "__functionPrototypeCall"
+	| "__functionPrototypeApply";
