@@ -866,6 +866,25 @@ static bool mal_fetch_response_headers(MalVm *vm, MalValue init,
     return true;
 }
 
+/* Get(dict, name) for a dictionary member name that %Object.prototype% does not define.
+ * A plain dictionary object inheriting straight from an unmodified %Object.prototype%
+ * answers from its own shaped slots; anything else takes the full [[Get]]. */
+static bool mal_fetch_dictionary_member(
+    MalVm *vm, MalValue dict, const char *name, MalValue *out) {
+    if (mal_value_is_heap_type(dict, MAL_HEAP_OBJECT) && mal_vm_primitive_methods_intact(vm)) {
+        const MalObject *object = mal_value_to_object(dict);
+        if (!object->is_arguments && mal_object_overflow(object) == nullptr &&
+            mal_object_prototype(object) ==
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])) {
+            MalPropertyLookup own = mal_object_get_own_static(vm, object, (const byte *) name);
+            *out = own.present ? own.desc.value : mal_value_new_undefined();
+            return true;
+        }
+    }
+    return mal_vm_get_property(
+        vm, dict, mal_intrinsic_static_string_key(vm, (const byte *) name), out);
+}
+
 static MalValue mal_response_constructor(
     MalVm *vm,
     MalValue this_value,
@@ -891,26 +910,21 @@ static MalValue mal_response_constructor(
     const char *content_type = nullptr;
     if (arg_count >= 2 && mal_value_is_object(args[1])) {
         MalValue s;
-        if (!mal_vm_get_property(
-                vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "status"), &s)) {
-            goto response_error;
-        }
+        if (!mal_fetch_dictionary_member(vm, args[1], "status", &s)) goto response_error;
         if (!mal_value_is_undefined(s)) {
             u16 converted;
             if (!mal_fetch_to_uint16(vm, s, &converted)) goto response_error;
             status = converted;
         }
         MalValue status_text;
-        if (!mal_vm_get_property(vm, args[1],
-                mal_intrinsic_string_key(vm, (const byte *) "statusText"), &status_text)) {
+        if (!mal_fetch_dictionary_member(vm, args[1], "statusText", &status_text)) {
             goto response_error;
         }
         if (!mal_value_is_undefined(status_text)
             && !mal_fetch_reason_phrase(vm, status_text, &roots[2])) {
             goto response_error;
         }
-        if (!mal_vm_get_property(vm, args[1],
-                mal_intrinsic_string_key(vm, (const byte *) "headers"), &roots[0])) {
+        if (!mal_fetch_dictionary_member(vm, args[1], "headers", &roots[0])) {
             goto response_error;
         }
     }
