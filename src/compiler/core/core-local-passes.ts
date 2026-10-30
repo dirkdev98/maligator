@@ -38,10 +38,6 @@ import { CORE_CONDITIONAL_VALUE_KIND_ANALYSIS } from "./core-conditional-value-k
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
-import {
-	coreFunctionPrototypeApply,
-	expandCoreFunctionPrototypeApply,
-} from "./core-function-prototype-call.ts";
 import { removeCoreInstructions } from "./core-instruction-removal.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
@@ -3006,122 +3002,6 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 	},
 };
 
-const applyArrayLiteralArguments: CoreFunctionPass = {
-	name: "apply-array-literal-arguments",
-	stage: "canonicalize",
-	requiredFunctionOpcodesAny: ["call"],
-	requiredAnalyses: [],
-	wakesOn: ["body", "cfg"],
-	changes: LOCAL_CHANGES,
-	budget: LOCAL_BUDGET,
-	run({ program, item }) {
-		const fn = program.function(item.function);
-		let editor: CoreEditor | undefined;
-		for (const site of [...fn.instructionIds()].filter(
-			(site) =>
-				fn.instructionKind(site) === "operation" &&
-				fn.instructionOpcodeName(site) === "call",
-		)) {
-			const call = coreFunctionPrototypeApply(program, fn, site);
-			if (
-				call === undefined ||
-				fn.kernel.valueDefinitionKind(call.array) !== 1 ||
-				fn.kernel.valueHandlerUseCount(call.array) !== 0
-			)
-				continue;
-			const producer = coreInstructionId(fn.kernel.valueDefinitionOwner(call.array));
-			const block = fn.instructionBlock(site);
-			if (
-				fn.instructionKind(producer) !== "operation" ||
-				fn.instructionOpcodeName(producer) !== "createArray" ||
-				fn.instructionBlock(producer) !== block
-			)
-				continue;
-			const length = fn.instructionAttributes(producer).length;
-			if (
-				typeof length !== "number" ||
-				!Number.isInteger(length) ||
-				length < 0 ||
-				length > SPREAD_LITERAL_ELEMENT_LIMIT
-			)
-				continue;
-			const elements = new Array<CoreValueId | undefined>(length).fill(undefined);
-			const definitions = new Set<CoreInstructionId>();
-			let valid = true;
-			for (
-				let use = fn.kernel.valueFirstUse(call.array);
-				use >= 0;
-				use = fn.kernel.useNext(use)
-			) {
-				if (fn.kernel.useLive(use) === 0) continue;
-				const consumer = coreInstructionId(fn.kernel.useInstruction(use));
-				const operands =
-					fn.instructionKind(consumer) === "operation"
-						? copyInstructionOperands(fn, consumer)
-						: [];
-				if (
-					consumer === site &&
-					operands.filter((value) => value === call.array).length === 1
-				)
-					continue;
-				const attributes =
-					fn.instructionKind(consumer) === "operation" &&
-					fn.instructionOpcodeName(consumer) === "defineProperty"
-						? fn.instructionAttributes(consumer)
-						: undefined;
-				const key =
-					operands[1] === undefined ? undefined : constantForValue(fn, operands[1]);
-				const index =
-					key?.kind === "number" && Number.isInteger(key.value) ? key.value : -1;
-				if (
-					attributes === undefined ||
-					operands.length !== 3 ||
-					operands[0] !== call.array ||
-					operands[2] === call.array ||
-					attributes.enumerable !== true ||
-					attributes.writable === false ||
-					attributes.configurable === false ||
-					fn.instructionBlock(consumer) !== block ||
-					index < 0 ||
-					index >= length ||
-					elements[index] !== undefined
-				) {
-					valid = false;
-					break;
-				}
-				elements[index] = operands[2];
-				definitions.add(consumer);
-			}
-			if (!valid || elements.includes(undefined)) continue;
-			const construction = [producer];
-			const pending = new Set(definitions);
-			let reached = false;
-			for (
-				let next = fn.instructionNext(producer);
-				next !== undefined;
-				next = fn.instructionNext(next)
-			) {
-				if (next === site) {
-					reached = true;
-					break;
-				}
-				if (pending.delete(next)) construction.push(next);
-			}
-			if (!reached || pending.size !== 0) continue;
-			editor ??= CoreEditor.open(program, item.function);
-			expandCoreFunctionPrototypeApply(
-				fn,
-				editor,
-				site,
-				call,
-				elements as Array<CoreValueId>,
-				construction,
-			);
-		}
-		return editor?.commit();
-	},
-};
-
 function canonicalRestElementIndex(key: string | number): number | undefined {
 	const index = typeof key === "number" ? key : Number(key);
 	if (
@@ -3622,7 +3502,6 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass>
 	annotateTerminalYieldSites,
 	forwardRestArguments,
 	spreadArrayLiteralArguments,
-	applyArrayLiteralArguments,
 	scalarizeRestArgumentReads,
 	scalarizeBoundedRestReads,
 	rewriteExactBuiltinCalls,
@@ -3686,7 +3565,6 @@ export const eliminateUnusedBlockParameters: CoreFunctionPass = {
 export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	forwardRestArguments,
 	spreadArrayLiteralArguments,
-	applyArrayLiteralArguments,
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
 	afterLateCfgEdits(canonicalizeBlockParameters),

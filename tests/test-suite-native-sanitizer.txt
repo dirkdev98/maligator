@@ -29,7 +29,6 @@ tests/native/owned-realm-callback.test.ts
 tests/native/forwarded-json-callback.test.ts
 tests/native/string-span-primitive-positions.test.ts
 tests/native/function-reflect-builtins.test.ts
-tests/native/function-prototype-apply-sites.test.ts
 tests/native/gc.test.ts
 tests/native/gc-cgroup-capacity.test.ts
 tests/native/gc-dense-card-moves.test.ts

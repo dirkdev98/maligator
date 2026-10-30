@@ -44,7 +44,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 85;
+export const WIRE_VERSION = 84;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -287,7 +287,6 @@ export const WIRE_INTRINSICS = [
 	"__attachRequireTable",
 	"__createImportMetaResolve",
 	"__functionPrototypeCall",
-	"__functionPrototypeApply",
 ] as const;
 const INTRINSIC_TAG = new Map<string, number>(
 	WIRE_INTRINSICS.map((name, i) => [name, i]),

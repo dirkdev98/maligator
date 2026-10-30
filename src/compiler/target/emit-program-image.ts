@@ -3630,8 +3630,6 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_ATTACH_REQUIRE_TABLE";
 		case "__createImportMetaResolve":
 			return "MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE";
-		case "__functionPrototypeApply":
-			return "MAL_INTRINSIC_FUNCTION_PROTOTYPE_APPLY";
 		case "__functionPrototypeCall":
 			return "MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL";
 		case "__newDisposeCapability":
