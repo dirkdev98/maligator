@@ -1454,10 +1454,14 @@ static MalValue mal_fetch_body_method_json(
     return result;
 }
 
+static MalValue mal_request_method(MalVm *vm, MalRequestObject *r);
+static MalValue mal_request_url(MalVm *vm, MalRequestObject *r);
+static MalValue mal_request_headers(MalVm *vm, MalRequestObject *r);
+
 static MalString *mal_fetch_body_content_type(MalVm *vm, MalValue self) {
     MalValue headers = mal_value_is_response_object(self)
         ? mal_value_to_response_object(self)->headers
-        : mal_value_to_request_object(self)->headers;
+        : mal_request_headers(vm, mal_value_to_request_object(self));
     if (mal_value_is_headers_object(headers)) {
         MalHeadersObject *object = mal_value_to_headers_object(headers);
         for (i32 i = 0; i < object->count; i++) {
@@ -2363,6 +2367,7 @@ MalRequestObject *mal_request_object_new(MalHeap *heap, MalObject *prototype) {
     r->cache = mal_value_new_undefined();
     r->redirect = mal_value_new_undefined();
     r->integrity = mal_value_new_undefined();
+    r->source = nullptr;
     return r;
 }
 
@@ -2371,6 +2376,10 @@ static void mal_request_finalize(MalHeapHeader *cell) {
     if (r->body != nullptr) {
         free(r->body);
         r->body = nullptr;
+    }
+    if (r->source != nullptr) {
+        gc_free_raw(mal_gc_current_heap(), r->source);
+        r->source = nullptr;
     }
 }
 
@@ -2648,9 +2657,10 @@ static MalValue mal_request_constructor(
     if (argc >= 1 && mal_value_is_request_object(args[0])) {
         MalRequestObject *src = mal_value_to_request_object(args[0]);
         source_request = src;
-        slots[1] = src->method;
-        slots[2] = src->url;
-        slots[3] = src->headers;
+        slots[1] = mal_request_method(vm, src);
+        slots[2] = mal_request_url(vm, src);
+        slots[3] = mal_request_headers(vm, src);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto request_error;
         slots[6] = src->referrer;
         slots[7] = src->referrer_policy;
         slots[8] = src->mode;
@@ -2896,9 +2906,6 @@ static MalRequestObject *mal_request_this_or_throw(MalVm *vm, MalValue self) {
         return request == nullptr ? mal_value_new_undefined() : request->field; \
     }
 
-MAL_REQUEST_FIELD_GETTER(mal_request_get_method, method)
-MAL_REQUEST_FIELD_GETTER(mal_request_get_url, url)
-MAL_REQUEST_FIELD_GETTER(mal_request_get_headers, headers)
 MAL_REQUEST_FIELD_GETTER(mal_request_get_referrer, referrer)
 MAL_REQUEST_FIELD_GETTER(mal_request_get_referrer_policy, referrer_policy)
 MAL_REQUEST_FIELD_GETTER(mal_request_get_mode, mode)
@@ -2908,6 +2915,23 @@ MAL_REQUEST_FIELD_GETTER(mal_request_get_redirect, redirect)
 MAL_REQUEST_FIELD_GETTER(mal_request_get_integrity, integrity)
 
 #undef MAL_REQUEST_FIELD_GETTER
+
+#define MAL_REQUEST_LAZY_GETTER(name, accessor) \
+    static MalValue name(MalVm *vm, MalValue self, const MalValue *args, i32 argc, \
+        MalValue nt, MalValue callee) { \
+        (void) args; \
+        (void) argc; \
+        (void) nt; \
+        (void) callee; \
+        MalRequestObject *request = mal_request_this_or_throw(vm, self); \
+        return request == nullptr ? mal_value_new_undefined() : accessor(vm, request); \
+    }
+
+MAL_REQUEST_LAZY_GETTER(mal_request_get_method, mal_request_method)
+MAL_REQUEST_LAZY_GETTER(mal_request_get_url, mal_request_url)
+MAL_REQUEST_LAZY_GETTER(mal_request_get_headers, mal_request_headers)
+
+#undef MAL_REQUEST_LAZY_GETTER
 
 static MalValue mal_request_constant_getter(
     MalVm *vm, MalValue self, const byte *value) {
@@ -2978,11 +3002,15 @@ static MalValue mal_request_clone(
         if (source->body_len > 0) memcpy(clone->body, source->body, source->body_len);
         clone->body_len = source->body_len;
     }
-    MalHeadersObject *source_headers = mal_value_to_headers_object(source->headers);
-    clone->headers = mal_value_from_headers_object(
-        mal_headers_from_init_guarded(vm, source->headers, source_headers->guard));
-    clone->method = source->method;
-    clone->url = source->url;
+    clone->method = mal_request_method(vm, source);
+    clone->url = mal_request_url(vm, source);
+    MalValue source_headers = mal_request_headers(vm, source);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&rs);
+        return mal_value_new_undefined();
+    }
+    clone->headers = mal_value_from_headers_object(mal_headers_from_init_guarded(
+        vm, source_headers, mal_value_to_headers_object(source_headers)->guard));
     clone->referrer = source->referrer;
     clone->referrer_policy = source->referrer_policy;
     clone->mode = source->mode;
@@ -3030,6 +3058,18 @@ typedef struct MalFetchSnapshotHeader {
     usize value_len;
 } MalFetchSnapshotHeader;
 
+/* The parsed request line and fields. The field array comes first in the
+ * `data_size` bytes it points into, followed by the NUL-terminated field bytes. */
+typedef struct MalFetchHead {
+    const char *method;
+    usize method_len;
+    const char *target;
+    usize target_len;
+    MalFetchSnapshotHeader *headers;
+    usize header_count;
+    usize data_size;
+} MalFetchHead;
+
 /*
  * Per-request host state, packed into one allocation (struct, header array, then
  * NUL-terminated field bytes). It deliberately outlives MalHttpConn: a handler's
@@ -3049,12 +3089,7 @@ typedef struct MalFetchRequest {
     byte *body;
     usize body_len;
     usize body_cap;
-    const char *method;
-    usize method_len;
-    const char *target;
-    usize target_len;
-    MalFetchSnapshotHeader *headers;
-    usize header_count;
+    MalFetchHead head;
 } MalFetchRequest;
 
 static bool mal_fetch_snapshot_add(usize *total, usize length) {
@@ -3073,24 +3108,47 @@ static const char *mal_fetch_snapshot_copy(
 }
 
 static bool mal_fetch_snapshot_header(
-    const MalFetchRequest *req, const char *name, const char **value, usize *value_len) {
+    const MalFetchHead *head, const char *name, const char **value, usize *value_len) {
     usize name_len = strlen(name);
-    for (usize i = 0; i < req->header_count; i++) {
-        if (req->headers[i].name_len != name_len) continue;
+    for (usize i = 0; i < head->header_count; i++) {
+        if (head->headers[i].name_len != name_len) continue;
         bool equal = true;
         for (usize j = 0; j < name_len; j++) {
-            if (mal_ascii_to_lower((u8) req->headers[i].name[j]) != (u8) name[j]) {
+            if (mal_ascii_to_lower((u8) head->headers[i].name[j]) != (u8) name[j]) {
                 equal = false;
                 break;
             }
         }
         if (equal) {
-            *value = req->headers[i].value;
-            *value_len = req->headers[i].value_len;
+            *value = head->headers[i].value;
+            *value_len = head->headers[i].value_len;
             return true;
         }
     }
     return false;
+}
+
+static const char *mal_fetch_head_rebase(
+    const MalFetchHead *from, char *to, const char *pointer) {
+    return to + (pointer - (const char *) from->headers);
+}
+
+/* Copy a head into one raw heap buffer, so the collector paces with it while a
+ * served Request keeps it, and the Request finalizer frees it in one call. */
+static MalFetchHead *mal_fetch_head_copy(MalVm *vm, const MalFetchHead *from) {
+    MalFetchHead *copy = mal_heap_alloc_raw_profiled(&vm->heap,
+        sizeof(MalFetchHead) + from->data_size, MAL_PROFILE_ALLOCATION_FAMILY_HOST);
+    char *data = (char *) (copy + 1);
+    memcpy(data, from->headers, from->data_size);
+    *copy = *from;
+    copy->headers = (MalFetchSnapshotHeader *) data;
+    copy->method = mal_fetch_head_rebase(from, data, from->method);
+    copy->target = mal_fetch_head_rebase(from, data, from->target);
+    for (usize i = 0; i < from->header_count; i++) {
+        copy->headers[i].name = mal_fetch_head_rebase(from, data, from->headers[i].name);
+        copy->headers[i].value = mal_fetch_head_rebase(from, data, from->headers[i].value);
+    }
+    return copy;
 }
 
 static MalFetchRequest *mal_fetch_request_new(
@@ -3114,27 +3172,30 @@ static MalFetchRequest *mal_fetch_request_new(
     req->vm = vm;
     req->conn = conn;
     req->refs = 1; // the transport's reference
-    req->headers = (MalFetchSnapshotHeader *) (req + 1);
-    req->header_count = head->field_count;
-    char *cursor = (char *) &req->headers[head->field_count];
-    req->method_len = head->method_length;
-    req->method = mal_fetch_snapshot_copy(
+    MalFetchHead *snapshot = &req->head;
+    snapshot->headers = (MalFetchSnapshotHeader *) (req + 1);
+    snapshot->header_count = head->field_count;
+    snapshot->data_size = total - sizeof(MalFetchRequest);
+    char *cursor = (char *) &snapshot->headers[head->field_count];
+    snapshot->method_len = head->method_length;
+    snapshot->method = mal_fetch_snapshot_copy(
         &cursor, (const char *) mal_http_codec_head_method(head), head->method_length);
-    req->target_len = head->target_length;
-    req->target = mal_fetch_snapshot_copy(
+    snapshot->target_len = head->target_length;
+    snapshot->target = mal_fetch_snapshot_copy(
         &cursor, (const char *) mal_http_codec_head_target(head), head->target_length);
     for (usize i = 0; i < head->field_count; i++) {
         const MalHttpCodecField *field = &head->fields[i];
-        req->headers[i].name_len = field->name_length;
-        req->headers[i].name = mal_fetch_snapshot_copy(
+        snapshot->headers[i].name_len = field->name_length;
+        snapshot->headers[i].name = mal_fetch_snapshot_copy(
             &cursor, (const char *) mal_http_codec_field_name(head, field),
             field->name_length);
-        req->headers[i].value_len = field->value_length;
-        req->headers[i].value = mal_fetch_snapshot_copy(
+        snapshot->headers[i].value_len = field->value_length;
+        snapshot->headers[i].value = mal_fetch_snapshot_copy(
             &cursor, (const char *) mal_http_codec_field_value(head, field),
             field->value_length);
     }
-    req->head_request = req->method_len == 4 && memcmp(req->method, "HEAD", 4) == 0;
+    req->head_request =
+        snapshot->method_len == 4 && memcmp(snapshot->method, "HEAD", 4) == 0;
     return req;
 }
 
@@ -3157,12 +3218,73 @@ static void mal_fetch_response_complete(void *data, bool success) {
     mal_fetch_request_release(req);
 }
 
+/* A served Request builds its method, url and headers slots on first read: most
+ * handlers never look at them, and the Headers object was the largest per-request
+ * allocation. Each slot is stored once, so `request.headers` keeps its identity. */
+static MalValue mal_request_method(MalVm *vm, MalRequestObject *r) {
+    if (!mal_value_is_undefined(r->method) || r->source == nullptr) return r->method;
+    MalFetchHead *head = r->source;
+    r->method = mal_value_from_string(
+        mal_string_new_ascii(&vm->heap, head->method, head->method_len));
+    mal_gc_card(&r->object.header, r->method);
+    return r->method;
+}
+
+static MalValue mal_request_url(MalVm *vm, MalRequestObject *r) {
+    if (!mal_value_is_undefined(r->url) || r->source == nullptr) return r->url;
+    MalFetchHead *head = r->source;
+    // url = "http://" + Host + request-target (spec wants an absolute URL string).
+    // Sized exactly: snprintf reports the untruncated length, so measuring into a
+    // fixed stack buffer would hand the over-long remainder to the JS string.
+    // mal_fetch_stream_handler refused duplicates, so this first match is the same
+    // field it validated as a URI authority; the fallback covers only HTTP/1.0.
+    const char *host_hdr;
+    usize host_len;
+    if (!mal_fetch_snapshot_header(head, "host", &host_hdr, &host_len)) {
+        host_hdr = "localhost";
+        host_len = 9;
+    }
+    static const char scheme[] = "http://";
+    usize scheme_len = sizeof(scheme) - 1;
+    usize url_len = scheme_len + host_len + head->target_len;
+    char *urlbuf = malloc(url_len == 0 ? 1 : url_len);
+    if (urlbuf == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Request URL allocation failed");
+        return mal_value_new_undefined();
+    }
+    memcpy(urlbuf, scheme, scheme_len);
+    if (host_len > 0) memcpy(urlbuf + scheme_len, host_hdr, host_len);
+    if (head->target_len > 0) {
+        memcpy(urlbuf + scheme_len + host_len, head->target, head->target_len);
+    }
+    MalString *url = mal_string_new_ascii(&vm->heap, (const byte *) urlbuf, url_len);
+    free(urlbuf);
+    r->url = mal_value_from_string(url);
+    mal_gc_card(&r->object.header, r->url);
+    return r->url;
+}
+
+static MalValue mal_request_headers(MalVm *vm, MalRequestObject *r) {
+    if (!mal_value_is_undefined(r->headers) || r->source == nullptr) return r->headers;
+    MalFetchHead *head = r->source;
+    MalValue self = mal_value_from_request_object(r);
+    MalRootSpan rs;
+    mal_gc_root(&rs, &self, 1);
+    MalHeadersObject *headers = mal_headers_create(vm);
+    r->headers = mal_value_from_headers_object(headers);
+    mal_gc_card(&r->object.header, r->headers);
+    for (usize i = 0; i < head->header_count; i++) {
+        mal_headers_append_bytes(vm, headers, head->headers[i].name,
+            head->headers[i].name_len, head->headers[i].value, head->headers[i].value_len);
+    }
+    mal_gc_unroot(&rs);
+    return r->headers;
+}
+
 static MalValue mal_fetch_make_request(MalVm *vm, MalFetchRequest *req) {
     MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REQUEST_PROTOTYPE]);
     MalRequestObject *r = mal_request_object_new(&vm->heap, proto);
-    MalValue result = mal_value_from_request_object(r);
-    MalRootSpan rs;
-    mal_gc_root(&rs, &result, 1);
     // Every served Request starts from the same defaults; interned atoms avoid
     // allocating them per request.
     r->referrer = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "about:client"));
@@ -3172,61 +3294,17 @@ static MalValue mal_fetch_make_request(MalVm *vm, MalFetchRequest *req) {
     r->cache = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "default"));
     r->redirect = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "follow"));
     r->integrity = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ""));
+    // Dispatch runs once the body is complete and nothing reads the buffered body
+    // afterwards, so the Request takes it over instead of copying it.
     if (req->body_len > 0) {
-        r->body = malloc(req->body_len);
-        if (r->body == nullptr) {
-            mal_gc_unroot(&rs);
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                "Request body allocation failed");
-            return mal_value_new_undefined();
-        }
-        memcpy(r->body, req->body, req->body_len);
+        r->body = req->body;
         r->body_len = req->body_len;
+        req->body = nullptr;
+        req->body_len = 0;
+        req->body_cap = 0;
     }
-
-    MalString *method = mal_string_new_ascii(&vm->heap, req->method, req->method_len);
-    r->method = mal_value_from_string(method);
-
-    // url = "http://" + Host + request-target (spec wants an absolute URL string).
-    // Sized exactly: snprintf reports the untruncated length, so measuring into a
-    // fixed stack buffer would hand the over-long remainder to the JS string.
-    // mal_fetch_stream_handler refused duplicates, so this first match is the same
-    // field it validated as a URI authority; the fallback covers only HTTP/1.0.
-    const char *host_hdr;
-    usize host_len;
-    if (!mal_fetch_snapshot_header(req, "host", &host_hdr, &host_len)) {
-        host_hdr = "localhost";
-        host_len = 9;
-    }
-    static const char scheme[] = "http://";
-    usize scheme_len = sizeof(scheme) - 1;
-    usize url_len = scheme_len + host_len + req->target_len;
-    char *urlbuf = malloc(url_len == 0 ? 1 : url_len);
-    if (urlbuf == nullptr) {
-        mal_gc_unroot(&rs);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-            "Request URL allocation failed");
-        return mal_value_new_undefined();
-    }
-    memcpy(urlbuf, scheme, scheme_len);
-    if (host_len > 0) memcpy(urlbuf + scheme_len, host_hdr, host_len);
-    if (req->target_len > 0) {
-        memcpy(urlbuf + scheme_len + host_len, req->target, req->target_len);
-    }
-    MalString *url = mal_string_new_ascii(&vm->heap, (const byte *) urlbuf, url_len);
-    free(urlbuf);
-    r->url = mal_value_from_string(url);
-
-    // request.headers (a Headers instance built from the parsed headers).
-    MalHeadersObject *headers = mal_headers_create(vm);
-    for (usize i = 0; i < req->header_count; i++) {
-        mal_headers_append_bytes(vm, headers, req->headers[i].name,
-            req->headers[i].name_len, req->headers[i].value, req->headers[i].value_len);
-    }
-    r->headers = mal_value_from_headers_object(headers);
-
-    mal_gc_unroot(&rs);
-    return result;
+    r->source = mal_fetch_head_copy(vm, &req->head);
+    return mal_value_from_request_object(r);
 }
 
 /* ---------------------------------------------------------------------------
@@ -3678,7 +3756,7 @@ static void mal_fetch_stream_handler(
     // every version so a proxy and the application can never disagree about which
     // copy wins; 1.1 additionally requires the field. Only a missing 1.0 Host falls
     // back to "localhost", and the first (now: only) field is both what is validated
-    // here and what mal_fetch_make_request composes the URL from. An absolute or
+    // here and what mal_request_url composes the URL from. An absolute or
     // authority-form target is refused too: this adapter cannot normalize it.
     bool host_required = head->major_version > 1 || head->minor_version >= 1;
     const byte *target = mal_http_codec_head_target(head);

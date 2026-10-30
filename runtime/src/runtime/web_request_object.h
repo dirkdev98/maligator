@@ -4,10 +4,14 @@
 #include "object.h"
 #include "value.h"
 
+struct MalFetchHead;
+
 /*
- * WinterTC fetch Request (runtime layer). `method` and `url` are set as own data
- * properties at construction (so a handler reads request.method / request.url
- * directly); an optional owned body buffer backs the lazy Body stream.
+ * WinterTC fetch Request (runtime layer): the internal slots behind the prototype
+ * getters, plus an optional owned body buffer that backs the lazy Body stream.
+ * A Request served by Mal.serve keeps a copy of its parsed request head in `source`
+ * and builds `method`, `url` and `headers` from it on first read, so those slots
+ * are only valid through the accessors in web_fetch.c.
  */
 typedef struct MalRequestObject {
     MalObject object;
@@ -25,6 +29,7 @@ typedef struct MalRequestObject {
     MalValue cache;
     MalValue redirect;
     MalValue integrity;
+    struct MalFetchHead *source; // raw heap buffer, freed by the finalizer
 } MalRequestObject;
 
 MalRequestObject *mal_request_object_new(MalHeap *heap, MalObject *prototype);
