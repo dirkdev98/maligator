@@ -452,6 +452,36 @@ static MalValue sd_decode(
     return mal_value_new_undefined();
 }
 
+#define SD_VISIBLE \
+    (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
+
+// Only the private brand reaches the state object, so its fields take the default
+// attributes that keep it shaped.
+static MalShape *sd_state_shape(MalVm *vm) {
+    if (vm->node_string_decoder_state_shape == nullptr) {
+        MalShape *shape = mal_shape_add_property(
+            mal_shape_root(&vm->heap), sd_name_key(vm, "encoding"), SD_VISIBLE);
+        vm->node_string_decoder_state_shape =
+            mal_shape_add_property(shape, sd_name_key(vm, "pending"), SD_VISIBLE);
+    }
+    return vm->node_string_decoder_state_shape;
+}
+
+// The brand symbol belongs to one module instance; rebuild the layout if another
+// instance's constructor runs. JavaScript cannot reach the brand, and only a
+// writable one stays in the shape.
+static MalShape *sd_decoder_shape(MalVm *vm, MalValue brand) {
+    MalShape *cached = vm->node_string_decoder_shape;
+    if (cached == nullptr || cached->props[0].key != brand) {
+        MalShape *shape = mal_shape_add_property(
+            mal_shape_root(&vm->heap), (MalKey) {.kind = MAL_KEY_SYMBOL, .value = brand},
+            MAL_PROPERTY_WRITABLE);
+        vm->node_string_decoder_shape =
+            mal_shape_add_property(shape, sd_name_key(vm, "encoding"), SD_VISIBLE);
+    }
+    return vm->node_string_decoder_shape;
+}
+
 static MalValue sd_constructor(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee
@@ -484,28 +514,14 @@ static MalValue sd_constructor(
         return mal_value_new_undefined();
     }
     roots[0] = mal_value_from_object(prototype);
-    roots[0] = mal_value_from_object(
-        mal_object_new(&vm->heap, mal_value_to_object(roots[0])));
-    roots[1] = mal_value_from_object(mal_object_new(
-        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])));
-
-    // Only the private brand reaches this state, so its fields take the default
-    // attributes that keep the object shaped.
-    MalObject *state = mal_value_to_object(roots[1]);
-    MalPropertyFlags field_flags =
-        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
-    mal_intrinsic_define_data(vm, state, (const byte *) "encoding",
-                              mal_value_from_i32((i32) encoding), field_flags);
-    mal_intrinsic_define_data(vm, state, (const byte *) "pending",
-                              mal_value_from_i32(0), field_flags);
-    // JavaScript cannot reach a private brand, and only a writable one stays in the shape.
-    MalPropertyDesc state_desc = mal_intrinsic_data_desc(roots[1], MAL_PROPERTY_WRITABLE);
-    mal_object_define_own(
-        mal_value_to_object(roots[0]),
-        (MalKey) {.kind = MAL_KEY_SYMBOL, .value = roots[3]}, &state_desc);
-    mal_intrinsic_define_data(
-        vm, mal_value_to_object(roots[0]), (const byte *) "encoding", roots[2],
-        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    MalValue state_values[] = {mal_value_from_i32((i32) encoding), mal_value_from_i32(0)};
+    roots[1] = mal_value_from_object(mal_object_new_shaped(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+        sd_state_shape(vm), state_values, countof(state_values)));
+    MalValue decoder_values[] = {roots[1], roots[2]};
+    roots[0] = mal_value_from_object(mal_object_new_shaped(
+        &vm->heap, mal_value_to_object(roots[0]), sd_decoder_shape(vm, roots[3]),
+        decoder_values, countof(decoder_values)));
 
     MalValue result = roots[0];
     mal_gc_unroot(&root);

@@ -1806,6 +1806,10 @@ typedef struct MalVm {
 
     struct MalShape *node_url_instance_shape;
 
+    /** StringDecoder `{ encoding, pending }` state and branded decoder layouts. */
+    struct MalShape *node_string_decoder_state_shape;
+    struct MalShape *node_string_decoder_shape;
+
     /** Canonical null-prototype `{ changes, lastInsertRowid }` result layout. */
     struct MalShape *node_sqlite_run_result_shape;
 
