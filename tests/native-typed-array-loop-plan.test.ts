@@ -395,6 +395,27 @@ describe("fixed TypedArray loop storage", () => {
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 	});
 
+	it("replaces contained TypedArray accesses with region views", () => {
+		const image = compile(
+			"const scratch=new Float64Array(64);for(let i=0;i<scratch.length;i++)scratch[i]=left[i]*2;let sum=0;for(let i=0;i<scratch.length;i++)sum+=scratch[i];return sum;",
+			undefined,
+			"locked",
+		);
+		const native = image.native.functions[1]!;
+		const contained = native.body.instructions.flatMap((_, ip) =>
+			native.instructions[ip]?.kind === "contained-fixed-typed-array-element" ? [ip] : [],
+		);
+		const claimed = new Set(
+			native.storage!.numericLoopRegions.flatMap((plan) =>
+				plan.kind === "fixed-numeric" ? plan.claimedIps : [],
+			),
+		);
+		expect(contained).not.toEqual([]);
+		expect(contained.filter((ip) => !claimed.has(ip))).toEqual([]);
+		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+
 	it("kills a hoisted constant overwritten by a memory result in the loop", () => {
 		const image = compile("for(let i=0;i<count;i++){output[i+1]=left[i]+right[i];}");
 		const native = image.native.functions[1]!;

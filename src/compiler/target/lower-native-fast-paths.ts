@@ -29,6 +29,7 @@ import { nativePlanKeepsOrdinaryLowering, nativeRecordCallIps } from "./program-
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
+	NativeInstructionPlan,
 	VmRegisterRepresentation,
 } from "./program-image.ts";
 import {
@@ -1519,6 +1520,17 @@ function lowerNumberRecordRegion(
 
 const NUMERIC_LOOP_INSTRUCTION_LIMIT = 128;
 const FIXED_NUMERIC_LOOP_ACCESS_LIMIT = 32;
+
+/**
+ * Exact and contained TypedArray accesses, which a fixed-numeric region replaces: its
+ * entry admits each view's storage itself, so it needs neither access's proof.
+ */
+function typedArrayElementPlan(kind: NativeInstructionPlan["kind"] | undefined): boolean {
+	return (
+		kind === "exact-typed-array-element" || kind === "contained-fixed-typed-array-element"
+	);
+}
+
 // Their double lowering converts to int32 or divides, which a safe-integer iteration avoids.
 const INTEGER_LOOP_PROFITABLE_OPERATORS = new Set([
 	"/",
@@ -3840,7 +3852,8 @@ export function analyzeNativeFastPaths(
 						// Operand kind proofs refine the double lowering; the region replaces it.
 						(!nativePlanKeepsOrdinaryLowering(native.instructions[candidate]) &&
 							kind !== "unsigned-arithmetic" &&
-							kind !== "exact-typed-array-element" &&
+							!typedArrayElementPlan(kind) &&
+							kind !== "contained-fixed-typed-array-length" &&
 							!(kind === "call" && codeUnitReads.has(candidate)) &&
 							kind !== "primitive-string-length")
 					);
@@ -3850,14 +3863,12 @@ export function analyzeNativeFastPaths(
 				codeUnitReads,
 			);
 			if (plan === undefined) continue;
-			// Without a counter the trip count is unknown, and exact element accesses are
+			// Without a counter the trip count is unknown, and proven element accesses are
 			// already cheaper than admitting a view for a few iterations.
 			if (
 				plan.kind === "fixed-numeric" &&
 				plan.counter === undefined &&
-				plan.claimedIps.some(
-					(ip) => native.instructions[ip]?.kind === "exact-typed-array-element",
-				)
+				plan.claimedIps.some((ip) => typedArrayElementPlan(native.instructions[ip]?.kind))
 			)
 				continue;
 			const members = new Set(plan.claimedIps);

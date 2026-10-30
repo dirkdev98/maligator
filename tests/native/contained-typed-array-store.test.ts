@@ -1,12 +1,13 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
 import {
 	buildBackendPairFromOneProgramImage,
+	resolveHarnessExecutionInvocation,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -24,6 +25,7 @@ const kinds = [
 ];
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-contained-typed-store-"));
 const fixture = path.join(outDir, "stores.js");
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("contained numeric TypedArray stores", () => {
 	let compiled: string;
@@ -110,6 +112,98 @@ describe("contained numeric TypedArray stores", () => {
 
 	it("preserves numeric storage across GC stress", () => {
 		expect(runToStdout(compiled, { env: { MAL_HOST_GC: "1", ...STRESS_ENV } })).toBe(
+			expected,
+		);
+	});
+});
+
+describe("contained numeric TypedArrays in fixed storage regions", () => {
+	const regionFixture = path.join(outDir, "regions.js");
+	// The perf-stats runtime counts admitted region views per element kind.
+	const statsViews: Record<string, string> = {
+		Int8Array: "i8_views",
+		Uint8Array: "u8_views",
+		Uint8ClampedArray: "u8c_views",
+		Int16Array: "i16_views",
+		Uint16Array: "u16_views",
+		Int32Array: "i32_views",
+		Uint32Array: "u32_views",
+		Float32Array: "f32_views",
+		Float64Array: "f64_views",
+	};
+	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
+	let expected: string;
+
+	beforeAll(() => {
+		writeFileSync(
+			regionFixture,
+			kinds
+				.map(
+					(kind) => `
+			function region${kind}(seed) {
+				const values = new ${kind}(64);
+				const weights = new Float64Array(64);
+				for (let index = 0; index < values.length; index++) {
+					values[index] = seed - index * 7.25;
+					weights[index] = values[index] * 0.25 + index;
+				}
+				let sum = 0;
+				for (let index = 0; index < values.length; index++)
+					sum += values[index] + Math.trunc(weights[index]);
+				return sum;
+			}
+			console.log("${kind}", region${kind}(255.5), region${kind}(-1e12), region${kind}(4294967296.5));
+		`,
+				)
+				.join("\n"),
+		);
+		expected = execFileSync(process.execPath, [regionFixture], { encoding: "utf8" });
+		pair = buildBackendPairFromOneProgramImage({
+			fixture: regionFixture,
+			name: "contained-typed-regions",
+			outDir,
+			config: resolveBuildConfig({}),
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
+	});
+
+	it("claims contained accesses of every element kind", () => {
+		const regionKinds = new Set<string>();
+		for (const plan of pair.programImage.native.functions) {
+			const claimed = new Set(
+				plan.storage?.numericLoopRegions.flatMap((region) =>
+					region.kind === "fixed-numeric" ? region.claimedIps : [],
+				),
+			);
+			for (const [ip, access] of plan.instructions.entries())
+				if (access?.kind === "contained-fixed-typed-array-element" && claimed.has(ip))
+					regionKinds.add(access.elementKind);
+		}
+		expect([...regionKinds].sort()).toEqual(kinds.toSorted());
+	});
+
+	it("admits contained views of every element kind", () => {
+		const invocation = resolveHarnessExecutionInvocation(pair.compiled);
+		const run = spawnSync(invocation.executable, invocation.args, {
+			encoding: "utf8",
+			timeout: 60000,
+			env: { ...process.env, MAL_PERF_STATS: "1" },
+		});
+		expect(run.status, run.stderr).toBe(0);
+		const stats = run.stderr.match(/\[perf-typed-array-region-stats\][^\n]*/)?.[0] ?? "";
+		for (const kind of kinds) {
+			const views = stats.match(new RegExp(`\\b${statsViews[kind]}=(\\d+)`))?.[1];
+			expect(Number(views ?? 0), kind).toBeGreaterThan(0);
+		}
+	});
+
+	it("matches Node for every element kind", () => {
+		for (const binary of [pair.compiled, pair.interpreted])
+			expect(runToStdout(binary)).toBe(expected);
+	});
+
+	it("matches Node across GC stress", () => {
+		expect(runToStdout(pair.compiled, { env: { MAL_HOST_GC: "1", ...STRESS_ENV } })).toBe(
 			expected,
 		);
 	});
