@@ -60,6 +60,9 @@ static void mal_atom_store_grow(MalAtomStore *store) {
     MalAtomStore grown = {
         .size = store->size,
         .capacity = mal_intern_grown_capacity(store->capacity),
+        .recent = store->recent,
+        .recent_count = store->recent_count,
+        .recent_capacity = store->recent_capacity,
     };
     grown.buckets = mal_intern_allocate(grown.capacity, sizeof(*grown.buckets), MAL_PERF_INTERN_ATOMS);
     u8 *controls = mal_atom_store_controls(&grown);
