@@ -544,6 +544,11 @@ impl ExactDecimal {
             return None;
         }
 
+        // Removing powers of two avoids manufacturing trailing decimal zeroes;
+        // the explicit-precision formatters pad them when needed.
+        let shift = significand.trailing_zeros();
+        let significand = significand >> shift;
+        let exponent2 = exponent2 + shift as i32;
         let mut integer = BigNat::from_u64(significand);
         let decimal_scale;
         if exponent2 >= 0 {

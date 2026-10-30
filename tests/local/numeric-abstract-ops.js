@@ -161,6 +161,33 @@ check(
 		(-0).toPrecision(5) === "0.0000" &&
 		Number.MIN_VALUE.toPrecision(5) === "4.9407e-324",
 );
+for (const [value, fixed, exponential, precision] of [
+	[0.125, "0.13", "1.3e-1", "0.13"],
+	[-0.125, "-0.13", "-1.3e-1", "-0.13"],
+	[1.25, "1.25", "1.3e+0", "1.3"],
+	[-1.25, "-1.25", "-1.3e+0", "-1.3"],
+	[12.5, "12.50", "1.3e+1", "13"],
+	[40, "40.00", "4.0e+1", "40"],
+	[1024, "1024.00", "1.0e+3", "1.0e+3"],
+	[Number.MIN_VALUE * 2, "0.00", "9.9e-324", "9.9e-324"],
+	[Number.MIN_VALUE * 8, "0.00", "4.0e-323", "4.0e-323"],
+	[Number.MIN_VALUE * 2 ** 51, "0.00", "1.1e-308", "1.1e-308"],
+]) {
+	check("dyadic fixed rounding " + value, value.toFixed(2) === fixed);
+	check("dyadic exponential rounding " + value, value.toExponential(1) === exponential);
+	check("dyadic precision rounding " + value, value.toPrecision(2) === precision);
+}
+for (const numerator of [1, -1]) {
+	const value = numerator / 8;
+	const sign = numerator < 0 ? "-" : "";
+	const padded = sign + "0.125" + "0".repeat(97);
+	check("dyadic fixed padding " + value, value.toFixed(100) === padded);
+	check("dyadic precision padding " + value, value.toPrecision(100) === padded);
+	check(
+		"dyadic exponential padding " + value,
+		value.toExponential(100) === sign + "1.25" + "0".repeat(98) + "e-1",
+	);
+}
 check(
 	"Number locale and safe-integer radix formatting",
 	(1234.5).toLocaleString() === "1,234.5" &&
