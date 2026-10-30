@@ -201,7 +201,8 @@ export function executionSafepointRoots(
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		const firstSafepoint = firstSafepoints[block]!;
 		if (firstSafepoint < 0) continue;
-		const live = new Uint32Array(wordCount);
+		const live = scratch;
+		live.fill(0);
 		for (const successor of successors[block]!) {
 			unionInto(live, liveIn[successor]!);
 		}
