@@ -4884,6 +4884,9 @@ __attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
     return mal_vm_call_value(vm, callee, this_value, args, arg_count);
 }
 
+static inline __attribute__((always_inline)) MalValue mal_vm_dispatch_cached_value(
+    MalVm *vm, MalValue callee, MalValue this_value, const MalValue *args, i32 arg_count);
+
 __attribute__((noinline)) static MalValue mal_vm_call_cached_value_fallback(
     MalVm *vm,
     MalValue callee,
@@ -4891,11 +4894,12 @@ __attribute__((noinline)) static MalValue mal_vm_call_cached_value_fallback(
     const MalValue *args,
     i32 arg_count
 ) {
+    // The bound call's probe stands for its target's dispatch.
     if (mal_value_is_bound_function_object(callee)) {
         MalValue inline_args[MAL_BOUND_INLINE_ARGS];
         MalBoundResolution resolution = mal_bound_function_object_resolve(
             callee, this_value, args, arg_count, true, inline_args, countof(inline_args));
-        MalValue value = mal_vm_call_cached_value(
+        MalValue value = mal_vm_dispatch_cached_value(
             vm, resolution.callee, resolution.this_value, resolution.args, resolution.arg_count);
         free(resolution.owned_args);
         return value;
@@ -4948,7 +4952,16 @@ MalValue mal_vm_call_cached_value(
         return MAL_VALUE_UNDEFINED;
     }
     MAL_PERF_COUNT(call_cache_probes);
+    return mal_vm_dispatch_cached_value(vm, callee, this_value, args, arg_count);
+}
 
+static inline __attribute__((always_inline)) MalValue mal_vm_dispatch_cached_value(
+    MalVm *vm,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
     if (mal_value_is_function_object(callee)) {
         MalFunctionObject *function_object = mal_value_to_function_object(callee);
         i32 function_index = mal_function_object_function_index(function_object);
