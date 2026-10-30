@@ -1211,21 +1211,19 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
         }
     }
 
-    // Each exact step admits only its own iterator type, so generators, the most
-    // common kind left, skip the other probes.
-    if (mal_value_is_generator_object(record->iterator)) {
+    if (mal_value_is_heap_type(record->iterator, MAL_HEAP_GENERATOR_OBJECT)) {
         int generator_step = mal_generator_try_exact_iterator_step(
             vm, record->iterator, record->next_method, value_out, done_out);
         if (generator_step != 0) {
             return generator_step > 0;
         }
-    } else {
+    } else if (mal_value_is_heap_type(record->iterator, MAL_HEAP_ITERATOR_HELPER_OBJECT)) {
         int helper_step = mal_builtin_iterator_helper_try_step(
             vm, record, value_out, done_out);
         if (helper_step != 0) {
             return helper_step > 0;
         }
-
+    } else if (mal_value_is_heap_type(record->iterator, MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT)) {
         int regexp_step = mal_regexp_try_exact_iterator_step(
             vm, record->iterator, record->next_method, value_out, done_out);
         if (regexp_step != 0) {
@@ -1233,19 +1231,18 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
         }
     }
 
-    MalCompletion completion = mal_vm_call_value(vm, record->next_method, record->iterator, nullptr, 0);
-    if (completion.kind != MAL_COMPLETION_NORMAL) {
+    MalValue result = mal_vm_call_cached_value(vm, record->next_method, record->iterator, nullptr, 0);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return false;
     }
 
-    if (!mal_value_is_object(completion.value)) {
+    if (!mal_value_is_object(result)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator result is not an object");
         return false;
     }
 
     // Getting `done` can re-enter user code and collect. Keep the iterator result
     // alive until the subsequent `value` read has finished as well.
-    MalValue result = completion.value;
     MalRootSpan result_span;
     mal_gc_root(&result_span, &result, 1);
 
