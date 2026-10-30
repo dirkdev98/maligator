@@ -4632,16 +4632,22 @@ bool mal_vm_require_ordinary_call_target(
     return false;
 }
 
-MalCompletion mal_vm_call_value(
+static __attribute__((noinline)) MalCompletion mal_vm_call_value_general(
+    MalVm *vm,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+);
+
+// Out of line so link-time inlining does not copy the front into every runtime caller.
+__attribute__((noinline)) MalCompletion mal_vm_call_value(
     MalVm *vm,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
     i32 arg_count
 ) {
-#if MAL_PROFILE && MAL_PERF_STATS
-    i32 saved_profile_site = vm->profile_current_site_id;
-#endif
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         // A pending throw poisons further calls, so iterating natives without
         // explicit bail-outs cannot clobber the original error.
@@ -4650,7 +4656,9 @@ MalCompletion mal_vm_call_value(
 
 #if !(MAL_PROFILE && MAL_PERF_STATS)
     // Accessors and builtin callbacks mostly call plain compiled functions, which
-    // need no bound resolution, realm switch, receiver boxing or frame growth.
+    // need no bound resolution, realm switch, receiver boxing or frame growth. This
+    // front stays apart from the general body so these calls skip its larger frame
+    // and stack-protected argument buffer.
     if (mal_value_is_function_object(callee)) {
         MalFunctionObject *function_object = mal_value_to_function_object(callee);
         i32 function_index = mal_function_object_function_index(function_object);
@@ -4679,7 +4687,19 @@ MalCompletion mal_vm_call_value(
         }
     }
 #endif
+    return mal_vm_call_value_general(vm, callee, this_value, args, arg_count);
+}
 
+static __attribute__((noinline)) MalCompletion mal_vm_call_value_general(
+    MalVm *vm,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+#if MAL_PROFILE && MAL_PERF_STATS
+    i32 saved_profile_site = vm->profile_current_site_id;
+#endif
     // A callable proxy routes [[Call]] through its apply trap.
     if (mal_value_is_proxy_object(callee)) {
         MalCompletion proxy_completion =

@@ -2759,6 +2759,18 @@ mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
     MalInlineCache *ic
 ) {
+    // The inline probe admits only ordinary objects. Functions, classes and builtin
+    // receivers keep named own fields under the same shape proof, and reads such as
+    // a module's `createDebug.namespaces` cost more behind the rows below than the read.
+    if (object == nullptr && ic->mode == MAL_IC_MODE_SHAPE) {
+        const MalObject *own = mal_vm_as_own_slot_object(receiver);
+        MalValue value;
+        if (own != nullptr &&
+            (mal_vm_object_try_load_monomorphic(own, ic->key, ic, &value) ||
+             mal_vm_object_try_load_polymorphic(own, ic->key, ic, &value))) {
+            return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
+        }
+    }
     // Getter rows run user code, which only the rooted miss path may do.
     if (ic->mode == MAL_IC_MODE_INHERITED_GETTER || ic->mode == MAL_IC_MODE_OWN_GETTER) {
         return (MalStaticPropertyProbeResult) { .hit = false };
@@ -2912,12 +2924,6 @@ mal_vm_property_try_load_static_rows(
             mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
     } else {
         const MalObject *own = object != nullptr ? object : mal_vm_as_own_slot_object(receiver);
-        // Named own fields on builtin receivers carry the same immutable shape proof.
-        if (object == nullptr && own != nullptr &&
-            (mal_vm_object_try_load_monomorphic(own, ic->key, ic, &value) ||
-             mal_vm_object_try_load_polymorphic(own, ic->key, ic, &value))) {
-            return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
-        }
         hit = (own != nullptr && ic->mode == MAL_IC_MODE_OWN_TABLE &&
                mal_vm_own_table_try_load(own, ic->key, ic, &value)) ||
             mal_vm_watched_try_load_static(vm, receiver, ic, &value) ||
@@ -7238,7 +7244,30 @@ bool mal_vm_get_static(MalVm *vm, MalValue receiver, const byte *name, MalValue 
     return vm->completion.kind != MAL_COMPLETION_THROW;
 }
 
-MalValue mal_vm_op_load_property_ic_static_miss(
+static __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss_general(
+    MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic
+);
+
+// Out of line so link-time inlining does not copy the front into every generated miss site.
+__attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss(
+    MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic
+) {
+    // Accessor sites such as `debug.enabled` hit here on every read, so their row skips
+    // the general path's frame and its rooted operand buffer. A getter row never holds
+    // for a nullish receiver, whose TypeError the general path raises. A held row has
+    // its key on the receiver's chain, so the key is not missing, and nothing here
+    // reads the receiver once the getter's own frame has rooted it.
+    MalValue result;
+    if (mal_ic_is_getter_row(ic) &&
+        mal_vm_getter_row_try_load(
+            vm, object_value, mal_value_from_string(vm->string_constant_atoms[atom]), ic,
+            &result)) {
+        return result;
+    }
+    return mal_vm_op_load_property_ic_static_miss_general(vm, object_value, atom, ic);
+}
+
+static __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss_general(
     MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic
 ) {
     if (mal_value_is_nil(object_value)) {
@@ -7249,12 +7278,6 @@ MalValue mal_vm_op_load_property_ic_static_miss(
     MalString *name = vm->string_constant_atoms[atom];
     MalValue name_value = mal_value_from_string(name);
     MalValue result;
-    // A held getter row has its key on the receiver's chain, so the key is not missing,
-    // and nothing here reads the receiver once the getter's own frame has rooted it.
-    if (mal_ic_is_getter_row(ic) &&
-        mal_vm_getter_row_try_load(vm, object_value, name_value, ic, &result)) {
-        return result;
-    }
     if (mal_vm_builtin_chain_missing(vm, object_value, name_value)) {
         MAL_PERF_COUNT(ic_load_builtin_missing_hits);
         return MAL_VALUE_UNDEFINED;
