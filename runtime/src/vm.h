@@ -1989,6 +1989,8 @@ typedef struct MalVm {
     } regexp_protocol_methods[5];
     /** Inline caches for mal_vm_get_static, keyed by literal address. */
     struct MalStaticLoadSites *static_load_sites;
+    /** Final shapes of flat object literal templates, owned by vm_ops.c. */
+    struct MalLiteralTemplateShapes *literal_template_shapes;
     /** JSON.parse's keys by source bytes and last record shape, owned by builtin_json.c. */
     struct MalJsonKeyCache *json_key_cache;
     /** JSON.stringify's escaped-key plans by shape, owned by builtin_json.c. */

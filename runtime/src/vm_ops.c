@@ -1260,6 +1260,75 @@ void mal_op_query_static_data(MalCallable *callable, const MalInstruction *instr
         callable->registers[instruction->as.query_static_data.from_index]);
 }
 
+#define MAL_LITERAL_SHAPE_CACHE_COUNT 64
+
+/* A flat object template, one whose values are all constants from the image pools,
+ * always builds the same shape. Later instantiations allocate it directly instead of
+ * decoding the template and defining each property. */
+typedef struct MalLiteralShapeEntry {
+    MalShape *shape;
+    MalValue *values;
+    const MalString *string_pool;
+    const void *bigint_pool;
+    i32 template_offset;
+    u32 count;
+} MalLiteralShapeEntry;
+
+struct MalLiteralTemplateShapes {
+    MalLiteralShapeEntry entries[MAL_LITERAL_SHAPE_CACHE_COUNT];
+};
+
+static void mal_vm_literal_template_shapes_free(MalVm *vm) {
+    struct MalLiteralTemplateShapes *cache = vm->literal_template_shapes;
+    if (cache == nullptr) return;
+    for (usize i = 0; i < countof(cache->entries); i++) free(cache->entries[i].values);
+    free(cache);
+    vm->literal_template_shapes = nullptr;
+}
+
+static MalLiteralShapeEntry *mal_vm_literal_shape_entry(MalVm *vm, i32 template_offset) {
+    struct MalLiteralTemplateShapes *cache = vm->literal_template_shapes;
+    if (cache == nullptr) {
+        cache = calloc(1, sizeof(*cache));
+        if (cache == nullptr || !mal_vm_register_runtime_cleanup(vm, mal_vm_literal_template_shapes_free)) {
+            free(cache);
+            return nullptr;
+        }
+        vm->literal_template_shapes = cache;
+    }
+    return &cache->entries[(u32) template_offset % MAL_LITERAL_SHAPE_CACHE_COUNT];
+}
+
+// Decoded constants point into the image pools, which an adopted image may relocate.
+static bool mal_vm_literal_shape_entry_holds(
+    const MalVm *vm, const MalLiteralShapeEntry *entry, i32 template_offset) {
+    return entry->shape != nullptr && entry->template_offset == template_offset &&
+        entry->string_pool == vm->runtime_image->string_constants &&
+        entry->bigint_pool == (const void *) vm->runtime_image->bigint_constants;
+}
+
+static void mal_vm_literal_shape_record(
+    MalVm *vm, i32 template_offset, const MalObject *object, u32 count) {
+    if (count == 0 || count > MAL_SHAPE_ORDINARY_SLOTS || object->shape->inline_count != count ||
+        mal_object_overflow(object) != nullptr) {
+        return;
+    }
+    MalLiteralShapeEntry *entry = mal_vm_literal_shape_entry(vm, template_offset);
+    if (entry == nullptr) return;
+    MalValue *values = malloc(sizeof(MalValue) * count);
+    if (values == nullptr) return;
+    for (u32 slot = 0; slot < count; slot++) values[slot] = mal_object_field_load(object, slot);
+    free(entry->values);
+    *entry = (MalLiteralShapeEntry) {
+        .shape = object->shape,
+        .values = values,
+        .string_pool = vm->runtime_image->string_constants,
+        .bigint_pool = vm->runtime_image->bigint_constants,
+        .template_offset = template_offset,
+        .count = count,
+    };
+}
+
 MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32 cache_slot) {
     if (cache_slot < -1 || cache_slot >= vm->runtime_image->global_count) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid literal constant slot");
@@ -1267,6 +1336,20 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32
     }
     if (cache_slot >= 0 && !mal_value_is_undefined(vm->globals[cache_slot]))
         return vm->globals[cache_slot];
+    if (cache_slot < 0 && template_offset >= 0 && vm->literal_template_shapes != nullptr) {
+        const MalLiteralShapeEntry *entry = &vm->literal_template_shapes->entries[
+            (u32) template_offset % MAL_LITERAL_SHAPE_CACHE_COUNT];
+        if (mal_vm_literal_shape_entry_holds(vm, entry, template_offset)) {
+            MalObject *object = mal_object_try_new_shaped(
+                &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+                entry->shape, entry->values, entry->count);
+            if (object == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                return MAL_VALUE_UNDEFINED;
+            }
+            return mal_value_from_object(object);
+        }
+    }
     MalValue result = mal_value_new_undefined();
     MalRootSpan result_root;
     mal_gc_root(&result_root, &result, 1);
@@ -1311,6 +1394,7 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32
     }
 
     u32 built = 0;
+    bool flat = true;
     while (ok && depth > 0) {
         MalLiteralBuildFrame *parent = &frames[depth - 1];
         if (parent->remaining == 0) {
@@ -1358,6 +1442,7 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32
         parent->remaining--;
 
         if (child_container) {
+            flat = false;
             if (depth == capacity) {
                 capacity *= 2;
                 MalLiteralBuildFrame *grown_frames = realloc(frames, sizeof(MalLiteralBuildFrame) * capacity);
@@ -1400,6 +1485,8 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32
         if (vm->completion.kind != MAL_COMPLETION_THROW)
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid literal template");
         result = mal_value_new_undefined();
+    } else if (cache_slot < 0 && root_object && flat) {
+        mal_vm_literal_shape_record(vm, template_offset, mal_value_to_object(result), root_children);
     }
     if (ok && cache_slot >= 0 && cursor.pos - (u32) template_offset <= MAL_LITERAL_CACHE_MAX_WORDS) {
         MalLiteralCacheEntry *entry = &vm->literal_cache_entries[vm->literal_cache_cursor];

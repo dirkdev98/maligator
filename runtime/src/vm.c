@@ -894,6 +894,7 @@ static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program
     }
     vm->regexp_templates = nullptr;
     vm->static_load_sites = nullptr;
+    vm->literal_template_shapes = nullptr;
     vm->json_key_cache = nullptr;
     vm->json_plan_cache = nullptr;
     for (u32 i = 0; i < MAL_WATCHED_LOOKUP_CACHE_CAPACITY; i++) {
