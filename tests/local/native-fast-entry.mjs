@@ -866,4 +866,95 @@ if (Object.getOwnPropertyDescriptor(Number, "isInteger").writable) {
 	log.push(`number restored ${globalThis.numberInteger(1)}`);
 }
 
+function collectionGet(collection, key) {
+	return collection.get(key);
+}
+function collectionHas(collection, key) {
+	return collection.has(key);
+}
+function readCollectionThenFallback(collection, key, value) {
+	return collection.get(key) + value;
+}
+globalThis.collectionGet = collectionGet;
+globalThis.collectionHas = collectionHas;
+globalThis.readCollectionThenFallback = readCollectionThenFallback;
+const collectionKey = {
+	toString() {
+		throw new Error("must not coerce map keys");
+	},
+};
+const map = new Map([
+	[collectionKey, 1],
+	[NaN, 2],
+	[-0, 3],
+	["x", 4],
+]);
+const set = new Set([collectionKey, NaN, -0, "x"]);
+const weakMap = new WeakMap([[collectionKey, 5]]);
+const weakSet = new WeakSet([collectionKey]);
+for (const collection of [map, set, weakMap, weakSet]) {
+	for (const key of [collectionKey, {}, NaN, -0, "x", undefined]) {
+		log.push(`collection has ${collectionHas(collection, key)}`);
+		if (collection instanceof Map || collection instanceof WeakMap)
+			log.push(`collection get ${collectionGet(collection, key)}`);
+	}
+}
+map.set(collectionKey, 9);
+log.push(`collection mutation ${collectionGet(map, collectionKey)}`);
+log.push(`collection missing ${collectionGet(map)}`);
+const fallbackCoercion = {
+	[Symbol.toPrimitive]() {
+		log.push("collection coercion");
+		return 7;
+	},
+};
+log.push(
+	`collection fallback ${readCollectionThenFallback(map, collectionKey, fallbackCoercion)}`,
+);
+for (const receiver of [
+	new Proxy(map, {}),
+	{ get: Map.prototype.get, has: Set.prototype.has },
+	{
+		get(key) {
+			log.push(`override get ${key}`);
+			return 12;
+		},
+		has(key) {
+			log.push(`override has ${key}`);
+			return false;
+		},
+	},
+	{
+		get get() {
+			log.push("get getter");
+			return () => 13;
+		},
+		get has() {
+			log.push("has getter");
+			return () => true;
+		},
+	},
+	{
+		get() {
+			throw new Error("collection throw");
+		},
+		has() {
+			throw new Error("collection throw");
+		},
+	},
+]) {
+	for (const operation of [collectionGet, collectionHas]) {
+		try {
+			log.push(`collection seam ${operation(receiver, "x")}`);
+		} catch (error) {
+			log.push(`collection seam ${error.name}`);
+		}
+	}
+}
+map.get = function () {
+	log.push("map override");
+	return 14;
+};
+log.push(`collection overridden ${collectionGet(map, collectionKey)}`);
+if (globalThis.gc) globalThis.gc();
 console.log(log.join("\n"));
