@@ -6,6 +6,9 @@
 typedef struct MalVm MalVm;
 typedef struct MalAsyncContext MalAsyncContext;
 
+/** A runtime continuation run as a microtask, without a JavaScript function object. */
+typedef void (*MalHostJobFn)(MalVm *vm, void *data, MalValue argument, bool is_reject);
+
 /**
  * Promise jobs and typed async continuations enqueued on the microtask queue.
  */
@@ -16,6 +19,7 @@ typedef enum MalJobKind {
     MAL_JOB_ASYNC_GENERATOR_RETURN,
     MAL_JOB_ASYNC_FROM_SYNC,
     MAL_JOB_DISPOSE_RESOURCES,
+    MAL_JOB_HOST_CALLBACK,
 } MalJobKind;
 
 /**
@@ -49,6 +53,12 @@ typedef struct MalJob {
             MalValue resolve_fn;
             MalValue reject_fn;
         } thenable;
+        /** Host continuation; only `argument` is a traced value. */
+        struct {
+            MalHostJobFn fn;
+            void *data;
+            MalValue argument;
+        } host;
     } as;
 } MalJob;
 
@@ -70,6 +80,11 @@ void mal_promise_note_reaction_reuse(void);
 void mal_vm_free_job_pool(MalVm *vm);
 
 /** Append a promise-reaction job to the microtask queue. */
+/** Queue `fn(vm, data, argument, is_reject)` where a promise reaction would run.
+ * `argument` stays reachable until the job runs; `data` is owned by the caller. */
+void mal_vm_enqueue_host_job(
+    MalVm *vm, MalHostJobFn fn, void *data, bool is_reject, MalValue argument);
+
 void mal_vm_enqueue_reaction_job(
     MalVm *vm,
     MalValue handler,

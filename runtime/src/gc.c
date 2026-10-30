@@ -1768,6 +1768,8 @@ static void mal_gc_mark_job(MalJob *job) {
         mal_gc_mark_value(job->as.reaction.cap_resolve);
         mal_gc_mark_value(job->as.reaction.cap_reject);
         mal_gc_mark_value(job->as.reaction.argument);
+    } else if (job->kind == MAL_JOB_HOST_CALLBACK) {
+        mal_gc_mark_value(job->as.host.argument);
     } else {
         mal_gc_mark_value(job->as.thenable.then);
         mal_gc_mark_value(job->as.thenable.thenable);

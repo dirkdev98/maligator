@@ -3539,6 +3539,18 @@ static MalValue mal_fetch_on_rejected(
     return mal_value_new_undefined();
 }
 
+/* The single reaction to a Response the handler returned synchronously. */
+static void mal_fetch_settle_job(MalVm *vm, void *data, MalValue argument, bool is_reject) {
+    (void) vm;
+    MalFetchRequest *req = data;
+    if (is_reject) {
+        mal_fetch_respond_text(req, 500, "Internal Server Error", "handler rejected", 16);
+    } else {
+        mal_fetch_respond_with(req, argument);
+    }
+    mal_fetch_request_release(req);
+}
+
 /* Run the WinterTC handler now that the whole request is buffered. */
 static void mal_fetch_dispatch(MalVm *vm, MalFetchRequest *req) {
     if (req->responded || req->conn == nullptr) return;
@@ -3586,9 +3598,9 @@ static void mal_fetch_dispatch(MalVm *vm, MalFetchRequest *req) {
     if (mal_value_is_response_object(roots[1])) {
         // Promise.resolve(response).then(onFulfilled, onRejected) runs exactly one
         // reaction. Perform its single Get(response, "then") here and queue that
-        // reaction where the settled promise would have, so neither the promise nor
-        // the callback that cannot run is allocated. Only a callable `then` needs a
-        // real promise to adopt the thenable.
+        // reaction as a host job where the settled promise would have, so neither the
+        // promise nor any callback function is allocated. Only a callable `then` needs
+        // a real promise to adopt the thenable.
         MalValue then;
         bool read = mal_vm_get_property(
             vm, roots[1], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_THEN), &then);
@@ -3598,12 +3610,8 @@ static void mal_fetch_dispatch(MalVm *vm, MalFetchRequest *req) {
                 vm->completion = (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
             }
-            MalNativeFunctionObject *reaction = mal_native_function_object_new_with_slots(
-                &vm->heap, fn_proto, name,
-                read ? mal_fetch_on_fulfilled : mal_fetch_on_rejected, &request_slot, 1);
             mal_fetch_request_retain(req);
-            mal_vm_enqueue_reaction_job(vm, mal_value_from_native_function_object(reaction),
-                !read, mal_value_new_undefined(), mal_value_new_undefined(), roots[1]);
+            mal_vm_enqueue_host_job(vm, mal_fetch_settle_job, req, !read, roots[1]);
             mal_gc_unroot(&rs);
             return;
         }

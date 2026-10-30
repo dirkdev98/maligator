@@ -170,6 +170,11 @@ static void mal_job_recycle(MalVm *vm, MalJob *job) {
         job->as.reaction.cap_resolve = mal_value_new_undefined();
         job->as.reaction.cap_reject = mal_value_new_undefined();
         job->as.reaction.argument = mal_value_new_undefined();
+    } else if (job->kind == MAL_JOB_HOST_CALLBACK) {
+        mal_gc_write_barrier(job->as.host.argument);
+        job->as.host.fn = nullptr;
+        job->as.host.data = nullptr;
+        job->as.host.argument = mal_value_new_undefined();
     } else {
         mal_gc_write_barrier(job->as.thenable.then);
         mal_gc_write_barrier(job->as.thenable.thenable);
@@ -359,6 +364,16 @@ static void mal_vm_enqueue_reaction_job_with_context(
     job->as.reaction.cap_resolve = cap_resolve;
     job->as.reaction.cap_reject = cap_reject;
     job->as.reaction.argument = argument;
+    mal_vm_enqueue(vm, job);
+}
+
+void mal_vm_enqueue_host_job(
+    MalVm *vm, MalHostJobFn fn, void *data, bool is_reject, MalValue argument) {
+    MalJob *job = mal_job_new(vm, MAL_JOB_HOST_CALLBACK);
+    job->is_reject = is_reject;
+    job->as.host.fn = fn;
+    job->as.host.data = data;
+    job->as.host.argument = argument;
     mal_vm_enqueue(vm, job);
 }
 
@@ -801,6 +816,9 @@ void mal_vm_drain_microtasks(MalVm *vm) {
                 break;
             case MAL_JOB_DISPOSE_RESOURCES:
                 mal_vm_run_dispose_resources_job(vm, job);
+                break;
+            case MAL_JOB_HOST_CALLBACK:
+                job->as.host.fn(vm, job->as.host.data, job->as.host.argument, job->is_reject);
                 break;
         }
         mal_job_recycle(vm, job);
