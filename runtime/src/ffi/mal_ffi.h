@@ -390,7 +390,7 @@ bool mal_ffi_replace(
     MalFfiCallback **previous);
 /**
  * The callback `site` keeps for `key`, for a trampoline that receives no user data,
- * or null. Aborts when it belongs to a VM on another thread.
+ * or null. Aborts when it belongs to a VM on another thread, unless it is queued.
  */
 MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key);
 /**

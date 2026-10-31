@@ -1159,7 +1159,8 @@ MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key) {
     MalFfiReplacedEntry *entry = ffi_replaced_find(site, key);
     MalFfiKept *kept = entry == nullptr ? nullptr : entry->kept;
     // Checked under the lock: the owning thread may release the context right after.
-    bool foreign = kept != nullptr && kept->callback.vm != nullptr
+    // A queued callback's trampoline queues calls from other threads instead.
+    bool foreign = kept != nullptr && kept->callback.vm != nullptr && !kept->queued
         && !pthread_equal(kept->thread, pthread_self());
     pthread_mutex_unlock(&ffi_replaced_lock);
     if (foreign) ffi_wrong_thread();

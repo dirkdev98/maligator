@@ -331,6 +331,23 @@ static void *watch_thread(void *argument) {
 	return NULL;
 }
 
+static void (*ticker)(int tick);
+
+void shapes_set_ticker(void (*callback)(int tick)) { ticker = callback; }
+
+static void *tick_thread(void *argument) {
+	int count = *(int *)argument;
+	for (int tick = 1; tick <= count; tick++) {
+		if (ticker != NULL) ticker(tick);
+	}
+	return NULL;
+}
+
+void shapes_tick(int count) {
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, tick_thread, &count) == 0) pthread_join(thread, NULL);
+}
+
 void shapes_watch_fire(int count) {
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, watch_thread, &count) == 0) pthread_join(thread, NULL);

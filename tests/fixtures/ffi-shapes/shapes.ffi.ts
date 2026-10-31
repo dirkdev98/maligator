@@ -35,6 +35,9 @@ export default {
 				source: { bytes: { length: "sourceLen" } },
 			},
 		},
+		shapes_set_ticker: {
+			params: { ticker: { callback: { replaced: true, queued: true }, nullable: true } },
+		},
 		shapes_hold: {
 			params: { data: { bytes: { length: "size" } } },
 			async: "shapes_hold_async",

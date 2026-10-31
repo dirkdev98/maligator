@@ -146,6 +146,7 @@ describe("C library bindings", () => {
 			"async hold 26 TypeError,TypeError,TypeError 4",
 			"async rejected shapes_checksum_async: data expects an ArrayBuffer or a view",
 			"queued 0 9:event 9,1:event 1,2:event 2,3:event 3",
+			"ticks 1,2",
 		]);
 	}, 600_000);
 

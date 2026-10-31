@@ -131,6 +131,9 @@ void shapes_unwatch(void);
 // Call the watcher with events 1 to count from a new thread; returns once that ends.
 void shapes_watch_fire(int count);
 void shapes_watch_call(int event);  // Call the watcher on this thread
+// Keep ticker until the next call; shapes_tick calls it with 1 to count from a new thread.
+void shapes_set_ticker(void (*ticker)(int tick));
+void shapes_tick(int count);
 // Sleep for milliseconds while using the canvas and bytes; returns the sum of the bytes.
 int shapes_hold(ShapesCanvas *canvas, const void *data, size_t size, int milliseconds);
 

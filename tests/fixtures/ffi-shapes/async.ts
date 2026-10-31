@@ -7,6 +7,8 @@ import {
 	shapes_describe_async,
 	shapes_hold_async,
 	shapes_parse_async,
+	shapes_set_ticker,
+	shapes_tick,
 	shapes_unwatch,
 	shapes_watch,
 	shapes_watch_call,
@@ -61,5 +63,15 @@ async function runAsync(): Promise<void> {
 	});
 	shapes_unwatch();
 	console.log(`queued ${queued} ${watched.join(",")}`);
+	const ticks: Array<number> = [];
+	shapes_set_ticker((tick) => {
+		ticks.push(tick);
+	});
+	shapes_tick(2);
+	await new Promise((resolve) => {
+		setTimeout(resolve, 20);
+	});
+	shapes_set_ticker(null);
+	console.log(`ticks ${ticks.join(",")}`);
 }
 void runAsync();
