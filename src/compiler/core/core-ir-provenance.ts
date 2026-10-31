@@ -1482,8 +1482,15 @@ function stackObjectCandidate(
 			fn.instructionAttributes(instruction).argumentMode === undefined &&
 			handlerBlock(fn, fn.instructionBlock(instruction)) === undefined
 		) {
+			// A call in a loop the allocation is outside of observes instead: one heap
+			// copy then serves every iteration, which costs less than lending each time.
+			const callBlock = fn.instructionBlock(instruction);
 			const lent =
-				opcode === "call" && lender?.(instruction, position - 2, layout) === true;
+				opcode === "call" &&
+				!control.loops.some(
+					(loop) => loop.blocks.has(callBlock) && !loop.blocks.has(allocationBlock),
+				) &&
+				lender?.(instruction, position - 2, layout) === true;
 			observe(
 				lent ? lends : observations,
 				instruction,
