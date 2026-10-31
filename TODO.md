@@ -1239,6 +1239,20 @@ contracts or investigates costs still visible after the string follow-ups.
       from its class branch needs a fact that nothing reassigns `quote`. The
       `accumulator` closure stays a call as well: the inliner rejects captured
       bindings unless the closure was created in the caller's scope chain.
+- [ ] Keep int32 sums over dense numeric Arrays in integer registers. Elements load as
+      doubles, so `sum = (sum + id) | 0` converts `sum` to a double, adds and
+      truncates back every iteration: 5 ns per element against Node's 0.42, while `sum
+      += id`, counts and maxima already run within 25% of Node. Integer loop bodies
+      that treat dense elements as int32 and re-enter the double body for any other
+      number cut that loop to 0.55 ns, but no javascript-v2 loop qualifies and only 1
+      of the native self-compiler's 21 dense-array loops does, which ran 1.26% slower
+      over 3 pairs. Land it with a consumer that pays.
+- [ ] Stop converting a loop-carried number at every inner-loop region entry and exit.
+      Over empty inner Arrays such a loop costs 4.5 to 5.3 ns per outer element
+      against 3.5 when it carries a Boolean, and with `| 0` over short inner Arrays 12
+      ns against Node's 2.3. Reading `.length` of Array elements is planned as an
+      object field, so that region bails out on its first element on every call: 2.45
+      ns against 0.67.
 - [ ] Run inlined `filter` callbacks over an unknown dense Array without per-element
       dispatch. `values.filter((value) => (value & 7) === (round & 7))` over 1024
       numbers takes 5.0 ns per element against Node's 1.2 (3.9 with a constant in
