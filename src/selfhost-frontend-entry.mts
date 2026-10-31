@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import { resolveBuildConfig } from "./build-config-values.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-runtime-program.ts";
 import { profilePhaseId } from "./profile-phases.ts";
@@ -32,21 +33,7 @@ if (inputPath === undefined || outputPath === undefined) {
 
 const bytes = compileEntrypointToBuffer(inputPath, {
 	stripTypes: stripCompactTypes,
-	buildConfig: {
-		entry: undefined,
-		outputName: undefined,
-		assets: {},
-		modules: { aliases: {} },
-		engine: {
-			primordials: "locked",
-			eval: false,
-			realms: false,
-			regexp: true,
-			temporal: false,
-			intl: { enabled: false, features: [], languages: [] },
-		},
-		surface: { webPlatform: false, node: true, maligator: true },
-	},
+	buildConfig: resolveBuildConfig({ surface: { webPlatform: false, node: true } }),
 	runPhase: runProfilePhase,
 });
 writeFileSync(outputPath, bytes);

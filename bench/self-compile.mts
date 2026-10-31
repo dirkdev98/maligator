@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import type { ResolvedBuildConfig } from "../src/build-config.ts";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import {
 	CORE_OPTIMIZATION_BENCHMARK_ABLATIONS,
 	type CoreOptimizationBenchmarkAblation,
@@ -54,21 +54,7 @@ const coreOptimizationBenchmarkAblation =
 		? undefined
 		: { family: ablationValue as CoreOptimizationBenchmarkAblation["family"] };
 
-const config: ResolvedBuildConfig = {
-	entry: undefined,
-	outputName: undefined,
-	assets: {},
-	modules: { aliases: {} },
-	engine: {
-		primordials: "locked",
-		eval: false,
-		realms: false,
-		regexp: true,
-		temporal: false,
-		intl: { enabled: false, features: [], languages: [] },
-	},
-	surface: { webPlatform: false, node: true, maligator: true },
-};
+const config = resolveBuildConfig({ surface: { webPlatform: false, node: true } });
 
 const phases = {
 	graphMs: 0,
