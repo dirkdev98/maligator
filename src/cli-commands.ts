@@ -83,6 +83,7 @@ import { generateDeclarations } from "./ffi/declarations.ts";
 import { FfiError } from "./ffi/ffi-error.ts";
 import { formatInspection, inspectBindings } from "./ffi/inspect.ts";
 import { nativeLibraryInputs, prepareLibraries, prepareLibrary } from "./ffi/library.ts";
+import type { PreparedLibraries } from "./ffi/library.ts";
 import {
 	cacheFrontendWire,
 	frontendDependencyUnchanged,
@@ -411,6 +412,30 @@ function selectToolchain(
 	}
 }
 
+/** Read the headers of every C library the config declares, or undefined for none. */
+function prepareConfiguredLibraries(
+	config: ResolvedBuildConfig,
+	context: CommandContext,
+	toolchain: Toolchain,
+): PreparedLibraries | undefined {
+	if (Object.keys(config.ffi).length === 0) return undefined;
+	try {
+		return prepareLibraries(config, {
+			projectRoot: process.cwd(),
+			stripTypes: context.stripTypes,
+			compiler: toolchain.tools.cc,
+			environment: { ...process.env, ...toolchain.environmentOverrides },
+			platform: toolchain.platform ?? process.platform,
+			cross: toolchain.cross === true,
+		});
+	} catch (error) {
+		if (error instanceof BuildConfigError || error instanceof FfiError) {
+			commandError(`error: ${error.message}`);
+		}
+		throw error;
+	}
+}
+
 function compatibleDevelopmentRunner(
 	config: ResolvedBuildConfig,
 	context: CommandContext,
@@ -634,25 +659,11 @@ function prepareCommandState(
 	}
 	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
 	const libraries =
-		toolchain === undefined || Object.keys(buildConfig.ffi).length === 0
+		toolchain === undefined
 			? undefined
-			: reporter.phase("Prepare C libraries", () => {
-					try {
-						return prepareLibraries(buildConfig, {
-							projectRoot: process.cwd(),
-							stripTypes: context.stripTypes,
-							compiler: toolchain.tools.cc,
-							environment: { ...process.env, ...toolchain.environmentOverrides },
-							platform: toolchain.platform ?? process.platform,
-							cross: toolchain.cross === true,
-						});
-					} catch (error) {
-						if (error instanceof BuildConfigError || error instanceof FfiError) {
-							commandError(`error: ${error.message}`);
-						}
-						throw error;
-					}
-				});
+			: reporter.phase("Prepare C libraries", () =>
+					prepareConfiguredLibraries(buildConfig, context, toolchain),
+				);
 	// Watched like sources, so editing a contract, header, or library source rebuilds.
 	for (const file of libraries?.dependencies ?? []) frontendSession.snapshot(file);
 	for (const entry of libraries?.libraries ?? []) {
@@ -1944,14 +1955,9 @@ export async function devCommand(
 
 const PROFILED_TEST_RESULT_PREFIX = "__MALIGATOR_TEST_RESULT__";
 
-function buildIsolatedTestRunner(
-	context: CommandContext,
-	config: ResolvedBuildConfig,
-): string {
-	const derivation = buildDerivationFromConfig(config);
-	let toolchain: Toolchain;
+function testToolchain(context: CommandContext, config: ResolvedBuildConfig): Toolchain {
 	try {
-		toolchain = requireToolchain({
+		return requireToolchain({
 			needsCxx: configNeedsCxx(config),
 			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
 		});
@@ -1959,6 +1965,15 @@ function buildIsolatedTestRunner(
 		if (error instanceof ToolchainError) commandError(error.message);
 		throw error;
 	}
+}
+
+function buildIsolatedTestRunner(
+	context: CommandContext,
+	config: ResolvedBuildConfig,
+	libraries: PreparedLibraries | undefined,
+): string {
+	const derivation = buildDerivationFromConfig(config);
+	const toolchain = testToolchain(context, config);
 	const evalCompiler = context.installation.evalCompiler;
 	const compilerBake =
 		evalCompiler.kind === "source"
@@ -1985,7 +2000,14 @@ function buildIsolatedTestRunner(
 		features: derivation.features,
 		compilerBake,
 	});
-	return buildDevelopmentRunner(nativeContext, false, derivation.cacheSuffix).binaryPath;
+	return buildDevelopmentRunner(
+		nativeContext,
+		false,
+		derivation.cacheSuffix,
+		libraries === undefined
+			? undefined
+			: nativeLibraryInputs(libraries, context.installation.runtimeDirectory),
+	).binaryPath;
 }
 
 function executeIsolatedTests(
@@ -1994,9 +2016,17 @@ function executeIsolatedTests(
 	config: ResolvedBuildConfig,
 	packagedRunner?: DevelopmentRunner,
 ): TestCommandSummary {
-	const compiled = prepareIsolatedTestCommand(command, context, config);
+	// A packaged runner cannot contain C library bindings, so these tests build one.
+	const libraries =
+		packagedRunner === undefined
+			? prepareConfiguredLibraries(config, context, testToolchain(context, config))
+			: undefined;
+	const testConfig =
+		libraries === undefined ? config : { ...config, ffiModules: libraries.modules };
+	const compiled = prepareIsolatedTestCommand(command, context, testConfig);
 	const runner =
-		packagedRunner?.executablePath ?? buildIsolatedTestRunner(context, config);
+		packagedRunner?.executablePath ??
+		buildIsolatedTestRunner(context, testConfig, libraries);
 	const wirePaths =
 		"wires" in compiled
 			? compiled.wires.map((wire) => wire.path)
@@ -2068,7 +2098,16 @@ function executeProfiledTests(
 	context: CommandContext,
 	config: ResolvedBuildConfig,
 ): TestCommandSummary {
-	const compiled = prepareProfiledTestCommand(command, context, config);
+	const libraries = prepareConfiguredLibraries(
+		config,
+		context,
+		testToolchain(context, config),
+	);
+	const compiled = prepareProfiledTestCommand(
+		command,
+		context,
+		libraries === undefined ? config : { ...config, ffiModules: libraries.modules },
+	);
 	const baseDerivation = buildDerivationFromConfig(config);
 	const derivation = {
 		features: normalizeNativeFeatures({
@@ -2083,16 +2122,7 @@ function executeProfiledTests(
 			.filter((part) => part !== "")
 			.join("-"),
 	};
-	let toolchain: Toolchain;
-	try {
-		toolchain = requireToolchain({
-			needsCxx: configNeedsCxx(config),
-			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
-		});
-	} catch (error) {
-		if (error instanceof ToolchainError) commandError(error.message);
-		throw error;
-	}
+	const toolchain = testToolchain(context, config);
 	const evalCompiler = context.installation.evalCompiler;
 	const compilerBake =
 		evalCompiler.kind === "source"
@@ -2138,6 +2168,9 @@ function executeProfiledTests(
 		context: nativeContext,
 		name: "maligator-profile-test",
 		cSource: source,
+		...(libraries === undefined
+			? {}
+			: nativeLibraryInputs(libraries, context.installation.runtimeDirectory)),
 		verbose: false,
 		mainFile: applicationDriverPath(
 			context.installation,

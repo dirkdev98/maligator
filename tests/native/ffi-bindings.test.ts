@@ -100,6 +100,11 @@ describe("C library bindings", () => {
 		]);
 	}, 600_000);
 
+	it("runs tests that import the library", () => {
+		const executed = cli(project, ["test", "shapes.test.ts"]);
+		expect(executed.stdout).toContain("2 passed");
+	}, 600_000);
+
 	it("links bindings into a production binary", () => {
 		const built = cli(project, ["build", "--production"]);
 		const binary = outputLines(built.stdout).at(-1)!;

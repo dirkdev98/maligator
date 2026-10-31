@@ -1907,7 +1907,8 @@ Libraries declared under `ffi` bind through their real headers: the generated C
 includes them, so the C compiler owns the ABI. Contracts hold facts only, generated
 functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
-- [ ] Support C libraries in `maligator test` images and the in-process test runner.
+- [ ] Support C libraries in `maligator test --watch`, which needs an in-process
+      application host that links the project's bindings.
 - [ ] Give each C pointer one handle per isolate, so a library returning a pointer
       it already handed out cannot leave a second handle open after the first closes.
 - [ ] Callbacks, blocking functions with async twins, and worker affinity.

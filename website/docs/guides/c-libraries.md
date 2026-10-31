@@ -154,4 +154,4 @@ maligator ffi inspect raylib
 
 The report lists each function that is not exported and the fact it needs. `--json` prints every declaration with its C and TypeScript forms, its header documentation, and the missing facts, for tools that propose facts.
 
-Note that `maligator test` does not support C libraries, and portable wire output rejects them.
+`maligator test` builds a test runtime with the bindings too. Note that `test --watch` does not support C libraries, and portable wire output rejects them.
