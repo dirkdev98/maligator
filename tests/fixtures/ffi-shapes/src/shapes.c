@@ -424,6 +424,12 @@ void shapes_unregister_all(void) {
 	function_count = 0;
 }
 
+int shapes_fold(int count, int (*step)(int acc, int index)) {
+	int acc = 0;
+	for (int index = 0; index < count; index++) acc = step(acc, index);
+	return acc;
+}
+
 int shapes_read(ShapesReader reader, void *data) {
 	static const ShapesPoint points[3] = {{0, 0}, {1, 2}, {3, 4}};
 	static const unsigned char bytes[4] = {9, 8, 7, 6};

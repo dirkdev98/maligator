@@ -128,7 +128,8 @@ export interface MaligatorFfiValueFacts {
 export interface MaligatorFfiCallback {
 	/**
 	 * The `void *` parameter the library passes back to the callback, by C name or
-	 * 1-based position. Optional for a `replaced` callback.
+	 * 1-based position. Without it, a callback the library calls only during the
+	 * function, such as `qsort`'s comparator, still binds, as does a `replaced` one.
 	 */
 	data?: string;
 	/**

@@ -801,6 +801,13 @@ static bool ffi_prepare(MalVm *vm, char *identity, MalValue value) {
 /** The prepared value holding every kept callback's function, one per slot. */
 static const char FFI_KEPT_IDENTITY[] = "maligator:ffi#kept";
 
+void mal_ffi_callback_lost(void) {
+    fputs(
+        "maligator: a C library called a callback outside the call it was passed to, or from another thread\n",
+        stderr);
+    abort();
+}
+
 [[noreturn]] static void ffi_wrong_thread(void) {
     fputs("maligator: a C library called back into JavaScript from another thread\n", stderr);
     abort();

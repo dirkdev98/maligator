@@ -347,6 +347,11 @@ void mal_ffi_release(void *data);
  * library calls back from another thread.
  */
 MalVm *mal_ffi_callback_vm(MalFfiCallback *callback);
+/**
+ * Abort for a callback without user data that arrives outside the call it was passed
+ * to, or on another thread.
+ */
+[[noreturn]] void mal_ffi_callback_lost(void);
 
 typedef void (*MalFfiQueuedRun)(MalVm *vm, MalFfiCallback *callback, void *message);
 typedef void (*MalFfiQueuedFree)(void *message);

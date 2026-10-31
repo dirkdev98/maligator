@@ -240,10 +240,14 @@ function validateValueFacts(value: unknown, at: string): void {
 				validateValueFacts(facts, `${at}.callback.params.${key}`);
 			}
 		}
+		expect(
+			callback.release === undefined || callback.data !== undefined,
+			`${at}.callback.data`,
+			"the parameter whose value the release destructor receives",
+		);
 		for (const key of ["data", "release"] as const) {
 			const reference = callback[key];
-			if (reference === undefined && (key === "release" || callback.replaced === true))
-				continue;
+			if (reference === undefined) continue;
 			expect(
 				typeof reference === "string" &&
 					(C_NAME.test(reference) || /^[1-9]\d*$/.test(reference)),

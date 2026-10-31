@@ -168,7 +168,7 @@ functions: {
 },
 ```
 
-Without `release`, the library may call the function only until the C function returns, as iteration and comparison functions do. An exception in the callback skips its remaining calls and rethrows when the C function returns.
+Without `release`, the library may call the function only until the C function returns, as iteration and comparison functions do. An exception in the callback skips its remaining calls and rethrows when the C function returns. Such a callback binds without `data` too, as `qsort`'s comparator does: `callback: {}`.
 
 `release` names the `void (*)(void *)` parameter that takes the destructor for `data`, for a library that keeps the callback, such as SQLite's `xDestroy`. The library may call the function until it calls the destructor, and an exception rethrows from the library call that triggered it.
 

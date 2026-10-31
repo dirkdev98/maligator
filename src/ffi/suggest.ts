@@ -25,6 +25,28 @@ export interface SuggestedFacts {
 }
 
 const RELEASE_NAME = /unload|free|destroy|delete|release|close|dispose/i;
+/** Words of a function or parameter that calls back only during the call. */
+const SCOPED_WORDS = new Set([
+	"sort",
+	"each",
+	"foreach",
+	"visit",
+	"visitor",
+	"walk",
+	"fold",
+	"step",
+	"map",
+	"iterate",
+	"iter",
+	"traverse",
+	"filter",
+	"reduce",
+	"compare",
+	"comparator",
+	"cmp",
+	"search",
+]);
+
 /** Words of a setter's name; its next call replaces the callback it keeps. */
 const SETTER_WORDS = new Set(["set", "on", "hook", "handler", "callback"]);
 const COUNT_NAME = /(?:count|size|length|len|num)$/i;
@@ -390,11 +412,21 @@ function suggestFunction(
 			const lookup =
 				data.length === 1 && !receivesData ? lookupFunction(model, target) : undefined;
 			const routed = data.length === 1 && (receivesData || lookup !== undefined);
+			// Without user data, only names that say the library calls the function during
+			// the call, as `qsort` does its comparator, make a call-scoped callback: others,
+			// such as libuv's completion callbacks, run later.
+			const scoped =
+				data.length === 0 &&
+				!receivesData &&
+				[
+					...nameWords(declaration.name),
+					...nameWords(declaration.params[index]!.name ?? ""),
+				].some((word) => SCOPED_WORDS.has(word));
 			// A lone destructor for the user data means the library keeps the callback.
 			const release = routed && releases.length === 1 ? releases[0] : undefined;
 			const replaced =
 				release === undefined && (setter || returnsPrevious(index, routed));
-			if (!routed && !replaced) continue;
+			if (!routed && !replaced && !scoped) continue;
 			const counted = callbackParameterFacts(model, target);
 			params[key(index)] = {
 				// Setters conventionally take null to remove the callback.

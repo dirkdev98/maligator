@@ -890,12 +890,16 @@ class BindingWriter {
 		);
 		const keyParam = value.replaced?.keyParam;
 		const lookup = value.lookup;
+		// Without user data, a call-scoped callback is the one its call published.
+		const scoped = data < 0 && lookup === undefined && value.replaced === undefined;
 		const callback =
 			data >= 0
 				? `mal_c${String(data)}`
 				: lookup !== undefined
 					? `(MalFfiCallback *) ${lookup.function}(mal_c${String(lookup.param)})`
-					: `mal_ffi_replaced(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`})`;
+					: scoped
+						? site!
+						: `mal_ffi_replaced(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`})`;
 		// A queued callback's body runs as `_run`, for calls on the VM thread and queued ones.
 		const body = value.queued === true ? `${name}_run` : name;
 		const lines = [
@@ -903,9 +907,11 @@ class BindingWriter {
 			`static ${formatCDeclaration(type.returns, `${body}(${params.length === 0 ? "void" : params.join(", ")})`)} {`,
 			`\tMalFfiCallback *mal_callback = ${callback};`,
 			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
-			...(data < 0
-				? [`\tif (mal_callback == nullptr) return${returns ? " mal_return" : ""};`]
-				: []),
+			...(scoped
+				? ["\tif (mal_callback == nullptr) mal_ffi_callback_lost();"]
+				: data < 0
+					? [`\tif (mal_callback == nullptr) return${returns ? " mal_return" : ""};`]
+					: []),
 			...(value.kept
 				? [
 						"\tMalVm *vm = mal_ffi_callback_vm(mal_callback);",
@@ -1246,11 +1252,25 @@ class BindingWriter {
 					}
 					if (value.kind === "callback") {
 						const trampoline = `mal_ffi_callback_${name}_${String(index)}`;
-						trampolines.push(...this.#trampoline(trampoline, value, name));
+						// Without user data the call publishes its callback in a per-thread
+						// slot, restoring the previous one for calls nested in a callback.
+						const slot = value.params.includes("data")
+							? undefined
+							: `mal_ffi_scoped_${name}_${String(index)}`;
+						if (slot !== undefined)
+							trampolines.push("", `static _Thread_local MalFfiCallback *${slot};`);
+						trampolines.push(...this.#trampoline(trampoline, value, name, slot));
 						locals.push(`MalFfiCallback mal_callback_${String(index)} = { vm, 0 };`);
+						if (slot !== undefined) {
+							locals.push(`MalFfiCallback *mal_scoped_${String(index)} = ${slot};`);
+							cleanup.push(`${slot} = mal_scoped_${String(index)};`);
+						}
 						body.push(
 							`if (!mal_ffi_to_function(vm, ${source}, ${value.nullable}, ${site})) goto mal_done;`,
 							`mal_callback_${String(index)}.function = ${source};`,
+							...(slot === undefined
+								? []
+								: [`${slot} = &mal_callback_${String(index)};`]),
 							`${local} = ${value.nullable ? `(${source}) == mal_ffi_null() ? nullptr : ` : ""}${trampoline};`,
 						);
 						return;

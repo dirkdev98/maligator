@@ -91,6 +91,8 @@ int shapes_each(const ShapesPoint *points, int count,
 // Integrate f over [from, to] with the midpoint rule.
 double shapes_integrate(double (*f)(void *data, double x), void *data, double from, double to,
                         int steps);
+// Fold steps 0 to count - 1 with step, starting from 0; returns the result.
+int shapes_fold(int count, int (*step)(int acc, int index));
 // Format a log line like printf; returns its length.
 int shapes_log(const char *format, ...);
 // Write each byte's index into data, calling visit after each until it returns nonzero.

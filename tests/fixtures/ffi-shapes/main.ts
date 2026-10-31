@@ -35,6 +35,7 @@ import {
 	shapes_emit,
 	shapes_fail,
 	shapes_fill,
+	shapes_fold,
 	shapes_listen,
 	shapes_listeners,
 	shapes_unlisten_all,
@@ -367,6 +368,10 @@ const stopped = shapes_each(
 );
 console.log(`each ${stopped} ${visited.join(",")}`);
 console.log(`integrate ${shapes_integrate((x) => x * x, 0, 3, 3000).toFixed(4)}`);
+// A callback without user data, with a nested call of the same function.
+console.log(
+	`fold ${shapes_fold(4, (acc, index) => acc + index * shapes_fold(2, (inner, step) => inner + step + 1))}`,
+);
 let calls = 0;
 try {
 	shapes_each([origin, origin, origin], () => {

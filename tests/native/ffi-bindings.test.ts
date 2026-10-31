@@ -53,6 +53,7 @@ const EXPECTED_RESULTS = [
 	"allocations 0 canvases 0",
 	"each 2 0:1,1:3",
 	"integrate 9.0000",
+	"fold 18",
 	"callback threw stop here after 1 call",
 ];
 
