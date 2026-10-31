@@ -109,7 +109,7 @@ The user cache lives in `~/Library/Caches/maligator` on macOS and `$XDG_CACHE_HO
 maligator ffi inspect <library> [--json] [--config path] [--target rust-triple]
 ```
 
-Finds a C library declared under `ffi` in the build config, reads its headers with the target's clang, and reports how each declaration maps to JavaScript. Declarations that cannot map list the fact they need, and the report suggests facts that make more of them bind. Requires clang, or Zig with `--target`.
+Finds a C library declared under `ffi` in the build config, reads its headers with the target's clang, and reports how each declaration maps to JavaScript. Declarations that cannot map list the fact they need, and the report suggests facts that make more of them bind, in contract syntax. Requires clang, or Zig with `--target`.
 
 | Flag       | Behavior                                                                                                       |
 | ---------- | -------------------------------------------------------------------------------------------------------------- |

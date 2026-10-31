@@ -119,6 +119,19 @@ const RESERVED = new Set(
 	).split(" "),
 );
 
+function contractKey(key: string): string {
+	return /^(?:[A-Za-z_$][\w$]*|[1-9]\d*)$/.test(key) ? key : JSON.stringify(key);
+}
+
+/** A fact value as a contract spells it: plain keys and one line. */
+function contractValue(value: unknown): string {
+	if (typeof value !== "object" || value === null) return JSON.stringify(value);
+	const entries = Object.entries(value);
+	return entries.length === 0
+		? "{}"
+		: `{ ${entries.map(([key, inner]) => `${contractKey(key)}: ${contractValue(inner)}`).join(", ")} }`;
+}
+
 /** A C parameter name usable as a TypeScript parameter name. */
 export function tsParameterName(name: string): string {
 	return RESERVED.has(name) ? `${name}_` : name;
@@ -385,10 +398,17 @@ export function formatInspection(inspection: FfiInspection): string {
 			"",
 			`Suggested facts that bind ${suggestions.binds.length} more functions; review them before adding them to the contract:`,
 		);
-		for (const [name, facts] of Object.entries(suggestions.types))
-			lines.push(`  types.${name}: ${JSON.stringify(facts)}`);
-		for (const [name, facts] of Object.entries(suggestions.functions))
-			lines.push(`  functions.${name}: ${JSON.stringify(facts)}`);
+		// Contract syntax, so the blocks paste into `defineLibrary`.
+		for (const [key, entries] of [
+			["types", suggestions.types],
+			["functions", suggestions.functions],
+		] as const) {
+			if (Object.keys(entries).length === 0) continue;
+			lines.push(`  ${key}: {`);
+			for (const [name, facts] of Object.entries(entries))
+				lines.push(`    ${contractKey(name)}: ${contractValue(facts)},`);
+			lines.push("  },");
+		}
 	}
 	if (inspection.skippedConstants.length > 0) {
 		lines.push("", "Macros and constants without a mapping:");
