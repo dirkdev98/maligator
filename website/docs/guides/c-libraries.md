@@ -124,7 +124,27 @@ Leaving a `using` scope or calling `[Symbol.dispose]()` releases the resource th
 - `collect: true` releases a handle the program drops once it is garbage collected. Leave it off for resources that must be released on one thread or before the library shuts down, such as raylib's GPU textures.
 - `nullable` on a parameter accepts `null` for a string or handle pointer and passes `NULL`.
 
-Each fact names the C declaration it describes. A fact that names nothing in the headers fails the build.
+## Describe pointers
+
+Other pointers need a fact about what they carry. Facts go on a function's `params`, keyed by C name or by 1-based position, or on its `returns`:
+
+```typescript native/raylib.ffi.ts
+functions: {
+	GetCodepoint: { params: { codepointSize: { out: true } } },
+	UpdateCamera: { params: { camera: { inout: true } } },
+	DrawTriangleStrip: { params: { points: { array: { length: "pointCount" } } } },
+	LoadFileData: { returns: { bytes: { length: "dataSize" }, free: "UnloadFileData" } },
+	LoadFileText: { returns: { string: true, free: "UnloadFileText" } },
+},
+```
+
+- `out` marks a pointer the function writes through, and `inout` also passes the current value in. A function with outputs returns an object with each output and the C result as `result`, so `GetCodepoint("✓")` returns `{ result: 10003, codepointSize: 3 }`. A status code stays in `result`; the binding does not throw for it.
+- `bytes` passes an `ArrayBuffer` or a view without copying, and `array` copies a JavaScript array into C memory for the call. `length` names the parameter that carries the count, which disappears from the JavaScript signature. Shared buffers are rejected.
+- On a result, `bytes` and `array` copy the C memory into a `Uint8Array` or an array. `length` names an integer parameter, or a pointer the function writes the count through.
+- `string` marks a `char *` or `unsigned char *` as UTF-8 text.
+- `free` names the function that releases a string, buffer, or array result after it is copied.
+
+Each fact names the C declaration it describes. A fact that names nothing in the headers, or that does not fit the declaration, fails the build.
 
 ## Find what cannot bind
 

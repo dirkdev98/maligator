@@ -86,6 +86,77 @@ ShapesBitmap shapes_bitmap_shared(void) {
 
 int shapes_bitmaps_live(void) { return bitmaps_live; }
 
+int shapes_canvas_create(const char *title, ShapesCanvas **canvas) {
+	*canvas = shapes_canvas_open(title);
+	return *canvas == NULL ? -1 : 0;
+}
+
+static int allocations;
+
+static void *allocate(size_t size) {
+	void *memory = malloc(size);
+	if (memory != NULL) allocations++;
+	return memory;
+}
+
+void shapes_free(void *memory) {
+	if (memory != NULL) allocations--;
+	free(memory);
+}
+
+int shapes_allocations(void) { return allocations; }
+
+int shapes_parse(const char *text, ShapesPoint *point) {
+	return sscanf(text, "%f,%f", &point->x, &point->y) == 2 ? 0 : -1;
+}
+
+void shapes_scale(ShapesPoint *point, float factor) {
+	point->x *= factor;
+	point->y *= factor;
+}
+
+int shapes_bounds(const ShapesPoint *points, int count, ShapesBox *box) {
+	if (count == 0) return -1;
+	box->min = box->max = points[0];
+	for (int index = 1; index < count; index++) {
+		if (points[index].x < box->min.x) box->min.x = points[index].x;
+		if (points[index].y < box->min.y) box->min.y = points[index].y;
+		if (points[index].x > box->max.x) box->max.x = points[index].x;
+		if (points[index].y > box->max.y) box->max.y = points[index].y;
+	}
+	return 0;
+}
+
+uint32_t shapes_checksum(const void *data, size_t size) {
+	uint32_t sum = 0;
+	for (size_t index = 0; index < size; index++) sum += ((const unsigned char *)data)[index];
+	return sum;
+}
+
+unsigned char *shapes_render(int width, int height, int *size) {
+	*size = width * height;
+	unsigned char *pixels = allocate((size_t)*size);
+	for (int index = 0; pixels != NULL && index < *size; index++) pixels[index] = (unsigned char)index;
+	return pixels;
+}
+
+ShapesPoint *shapes_corners(ShapesBox box, int *count) {
+	ShapesPoint *corners = allocate(4 * sizeof(ShapesPoint));
+	if (corners == NULL) return NULL;
+	corners[0] = box.min;
+	corners[1] = (ShapesPoint){box.max.x, box.min.y};
+	corners[2] = box.max;
+	corners[3] = (ShapesPoint){box.min.x, box.max.y};
+	*count = 4;
+	return corners;
+}
+
+char *shapes_describe(ShapesPoint point) {
+	char *text = allocate(64);
+	if (text != NULL) snprintf(text, 64, "(%g, %g)", point.x, point.y);
+	return text;
+}
+
 int shapes_log(const char *format, ...) {
 	va_list arguments;
 	va_start(arguments, format);

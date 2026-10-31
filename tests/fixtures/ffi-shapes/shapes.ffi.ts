@@ -9,5 +9,15 @@ export default {
 	functions: {
 		shapes_bitmap_shared: { returns: { borrowed: true } },
 		shapes_canvas_title: { params: { canvas: { nullable: true } } },
+		shapes_canvas_create: { params: { canvas: { out: true } } },
+		shapes_parse: { params: { point: { out: true } } },
+		shapes_scale: { params: { point: { inout: true } } },
+		shapes_bounds: {
+			params: { points: { array: { length: "count" } }, box: { out: true } },
+		},
+		shapes_checksum: { params: { data: { bytes: { length: "size" } } } },
+		shapes_render: { returns: { bytes: { length: "size" }, free: "shapes_free" } },
+		shapes_corners: { returns: { array: { length: "count" }, free: "shapes_free" } },
+		shapes_describe: { returns: { string: true, free: "shapes_free" } },
 	},
 };

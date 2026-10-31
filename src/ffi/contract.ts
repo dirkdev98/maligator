@@ -154,11 +154,41 @@ function validateTypeFacts(value: unknown, at: string): void {
 	booleanField(handle, "collect", `${at}.handle`);
 }
 
+function validateCount(value: unknown, at: string): void {
+	expectObject(value, at);
+	expectKeys(value, at, ["length"]);
+	expect(
+		typeof value.length === "string" &&
+			(C_NAME.test(value.length) || /^[1-9]\d*$/.test(value.length)),
+		`${at}.length`,
+		"a parameter name or 1-based position",
+	);
+}
+
 function validateValueFacts(value: unknown, at: string): void {
 	expectObject(value, at);
-	expectKeys(value, at, ["nullable", "borrowed"]);
-	booleanField(value, "nullable", at);
-	booleanField(value, "borrowed", at);
+	expectKeys(value, at, [
+		"nullable",
+		"borrowed",
+		"out",
+		"inout",
+		"string",
+		"bytes",
+		"array",
+		"free",
+	]);
+	for (const key of ["nullable", "borrowed", "out", "inout", "string"]) {
+		booleanField(value, key, at);
+	}
+	if (value.bytes !== undefined) validateCount(value.bytes, `${at}.bytes`);
+	if (value.array !== undefined) validateCount(value.array, `${at}.array`);
+	if (value.free !== undefined) {
+		expect(
+			typeof value.free === "string" && C_NAME.test(value.free),
+			`${at}.free`,
+			"a C function name",
+		);
+	}
 }
 
 function validateFunctionFacts(value: unknown, at: string): void {

@@ -131,6 +131,21 @@ bool mal_ffi_to_string(
     MalVm *vm, MalValue value, const MalFfiSite *site, MalFfiString *out);
 void mal_ffi_string_release(MalFfiString *string);
 
+/**
+ * The memory of an ArrayBuffer or view, which C may read and write until the call
+ * returns. Shared buffers are rejected, and a binding resolves buffers after every
+ * other argument so no JavaScript runs between this and the call.
+ */
+bool mal_ffi_to_bytes(
+    MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site, void **data,
+    size_t *length);
+/** The element count of an array argument; null yields 0 for a nullable site. */
+bool mal_ffi_to_array_length(
+    MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site, int32_t *length);
+/** Check that a buffer or array count fits the C integer parameter that carries it. */
+bool mal_ffi_check_count(
+    MalVm *vm, size_t count, int32_t bits, bool is_signed, const MalFfiSite *site);
+
 /** Read a record field. `name` must have static storage: it keys an inline cache. */
 bool mal_ffi_field(
     MalVm *vm, MalValue record, const char *name, const MalFfiSite *site,
@@ -149,6 +164,8 @@ MalValue mal_ffi_from_int64(MalVm *vm, int64_t value);
 MalValue mal_ffi_from_uint64(MalVm *vm, uint64_t value);
 /** Copy a NUL-terminated UTF-8 string, replacing malformed sequences; NULL yields null. */
 MalValue mal_ffi_from_string(MalVm *vm, const char *value);
+/** Copy `length` bytes into a new Uint8Array. */
+MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length);
 /** An ordinary object for a struct passed by value. */
 MalValue mal_ffi_new_record(MalVm *vm);
 MalValue mal_ffi_new_array(MalVm *vm, int32_t length);
@@ -156,6 +173,8 @@ MalValue mal_ffi_new_array(MalVm *vm, int32_t length);
 bool mal_ffi_set_field(MalVm *vm, MalValue record, const char *name, MalValue value);
 bool mal_ffi_set_element(MalVm *vm, MalValue array, int32_t index, MalValue value);
 bool mal_ffi_threw(MalVm *vm);
+/** Throw the engine's allocation error after a binding's own allocation failed. */
+bool mal_ffi_out_of_memory(MalVm *vm);
 
 /**
  * Keep values reachable while later allocations run. The layout matches the

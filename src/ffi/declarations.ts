@@ -1,6 +1,6 @@
 import type { BindingPlan, MappedConstant } from "./binding-plan.ts";
 import { ffiModuleSpecifier } from "./binding-unit.ts";
-import { formatTsType, tsParameterName } from "./inspect.ts";
+import { formatTsParameters, formatTsResult, formatTsType } from "./inspect.ts";
 
 function docComment(doc: string | undefined, indent: string): Array<string> {
 	if (doc === undefined) return [];
@@ -58,12 +58,9 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string> {
 		lines.push("\t}");
 	}
 	for (const binding of plan.functions) {
-		const params = binding.params
-			.map((param) => `${tsParameterName(param.name)}: ${formatTsType(param.value)}`)
-			.join(", ");
 		lines.push(
 			...docComment(binding.declaration.doc, "\t"),
-			`\texport function ${binding.name}(${params}): ${formatTsType(binding.returns)};`,
+			`\texport function ${binding.name}(${formatTsParameters(binding)}): ${formatTsResult(binding)};`,
 		);
 	}
 	for (const constant of plan.constants) {

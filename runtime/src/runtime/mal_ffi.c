@@ -1,10 +1,13 @@
 #include "../ffi/mal_ffi.h"
 
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "array_buffer_object.h"
+#include "builtin_data_view.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_bigint.h"
@@ -12,6 +15,7 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
+#include "typed_array_object.h"
 #include "utf8.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -136,6 +140,63 @@ void mal_ffi_string_release(MalFfiString *string) {
     *string = (MalFfiString) {0};
 }
 
+bool mal_ffi_to_bytes(
+    MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site, void **data,
+    size_t *length) {
+    if (nullable && mal_value_is_null(value)) {
+        *data = nullptr;
+        *length = 0;
+        return true;
+    }
+    MalBufferSourceSpan span;
+    MalBufferSourceSpanStatus status = mal_buffer_source_span(value, &span);
+    if (status == MAL_BUFFER_SOURCE_SPAN_OK && !span.shared) {
+        *data = span.data;
+        *length = span.length;
+        return true;
+    }
+    const char *expectation = status == MAL_BUFFER_SOURCE_SPAN_NOT_BUFFER_SOURCE
+        ? (nullable ? "an ArrayBuffer, a view, or null" : "an ArrayBuffer or a view")
+        : status == MAL_BUFFER_SOURCE_SPAN_OK ? "a buffer that is not shared"
+                                              : "a buffer that is attached and in bounds";
+    return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, expectation);
+}
+
+bool mal_ffi_to_array_length(
+    MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site, int32_t *length) {
+    if (nullable && mal_value_is_null(value)) {
+        *length = 0;
+        return true;
+    }
+    bool is_array = false;
+    if (mal_value_is_object(value) && !mal_vm_is_array(vm, value, &is_array)) return false;
+    MalValue array_length = mal_value_new_undefined();
+    if (is_array && !mal_vm_get_static(vm, value, (const byte *) "length", &array_length)) {
+        return false;
+    }
+    if (!is_array || !mal_ops_is_number(array_length)) {
+        return ffi_fail(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, nullable ? "an array or null" : "an array");
+    }
+    f64 count = mal_ops_number_as_f64(array_length);
+    if (count > (f64) INT32_MAX) {
+        return ffi_fail(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site, "an array of at most 2147483647 elements");
+    }
+    *length = (int32_t) count;
+    return true;
+}
+
+bool mal_ffi_check_count(
+    MalVm *vm, size_t count, int32_t bits, bool is_signed, const MalFfiSite *site) {
+    u64 maximum = bits >= 64 ? (is_signed ? (u64) INT64_MAX : UINT64_MAX)
+                             : (is_signed ? (UINT64_C(1) << (bits - 1)) - 1 : (UINT64_C(1) << bits) - 1);
+    if ((u64) count <= maximum) return true;
+    char expectation[96];
+    snprintf(expectation, sizeof(expectation), "at most %llu elements", (unsigned long long) maximum);
+    return ffi_fail(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site, expectation);
+}
+
 bool mal_ffi_field(
     MalVm *vm, MalValue record, const char *name, const MalFfiSite *site,
     MalValue *out) {
@@ -201,6 +262,27 @@ MalValue mal_ffi_from_string(MalVm *vm, const char *value) {
     return mal_value_from_string(string);
 }
 
+MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length) {
+    if (length > UINT32_MAX) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, (const byte *) "C buffer is too large");
+        return mal_value_new_undefined();
+    }
+    MalArrayBufferObject *buffer = mal_array_buffer_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+        (u32) length, (u32) length, false, false);
+    if (length > 0) memcpy(buffer->data, data, length);
+    MalValue buffer_value = mal_value_from_array_buffer_object(buffer);
+    MalRootSpan root;
+    mal_gc_root(&root, &buffer_value, 1);
+    MalTypedArrayObject *array = mal_typed_array_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]), buffer,
+        MAL_TA_UINT8, 0, (u32) length, false);
+    mal_gc_unroot(&root);
+    return mal_value_from_typed_array_object(array);
+}
+
 MalValue mal_ffi_new_record(MalVm *vm) {
     return mal_value_from_object(mal_intrinsic_new_object(vm));
 }
@@ -238,6 +320,11 @@ bool mal_ffi_set_element(MalVm *vm, MalValue array, int32_t index, MalValue valu
 
 bool mal_ffi_threw(MalVm *vm) {
     return vm->completion.kind == MAL_COMPLETION_THROW;
+}
+
+bool mal_ffi_out_of_memory(MalVm *vm) {
+    mal_vm_throw_allocation_error(vm);
+    return false;
 }
 
 void mal_ffi_root(MalFfiRoots *roots, MalValue *slots, int32_t count) {

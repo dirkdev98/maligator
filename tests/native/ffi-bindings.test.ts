@@ -22,6 +22,15 @@ const EXPECTED_RESULTS = [
 	"bitmap 3x2 sum 24 live 1",
 	"bitmaps after free 0",
 	"shared after dispose 4",
+	'parse {"result":0,"point":{"x":3,"y":4}} -1',
+	'scale {"point":{"x":3,"y":6}}',
+	'bounds {"result":0,"box":{"min":{"x":-2,"y":3},"max":{"x":1,"y":5}}} -1',
+	"checksum 256 24",
+	"render 8 0,1,2,3,4,5,6,7",
+	'corners [{"x":0,"y":0},{"x":4,"y":0},{"x":4,"y":3},{"x":0,"y":3}]',
+	"describe (1.5, -2)",
+	"created 0 Created",
+	"allocations 0 canvases 0",
 ];
 
 function cli(cwd: string, args: Array<string>) {
@@ -61,6 +70,9 @@ describe("C library bindings", () => {
 		expect(
 			runOutput.filter((line) => line.startsWith("rejected") || line === "accepted"),
 		).toEqual([
+			"rejected TypeError: shapes_checksum: data expects an ArrayBuffer or a view",
+			"rejected TypeError: shapes_checksum: data expects a buffer that is not shared",
+			"rejected TypeError: shapes_bounds: points.y expects a number",
 			"rejected TypeError: shapes_bitmap_sum: bitmap expects an open ShapesBitmap handle",
 			"rejected TypeError: shapes_canvas_title: canvas expects a ShapesCanvas handle or null",
 			"rejected RangeError: shapes_twice: value expects an integer from -2147483648 to 2147483647",

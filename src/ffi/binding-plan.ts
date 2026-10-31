@@ -18,8 +18,21 @@ export type JsValue =
 	| { readonly kind: "float"; readonly bits: number }
 	/** A 64-bit integer, exact in both directions. */
 	| { readonly kind: "bigint"; readonly bits: number; readonly signed: boolean }
-	/** UTF-8, NUL-terminated. Inputs are borrowed for the call; results are copied. */
-	| { readonly kind: "string"; readonly nullable: boolean }
+	/**
+	 * UTF-8, NUL-terminated. Inputs are borrowed for the call; results are copied,
+	 * then released with `free` when the caller owns them.
+	 */
+	| { readonly kind: "string"; readonly nullable: boolean; readonly free?: string }
+	/** Input bytes C uses in place during the call; results copied into a Uint8Array. */
+	| { readonly kind: "bytes"; readonly nullable: boolean; readonly free?: string }
+	/** A C array of `element` values, copied from or into a JavaScript array. */
+	| {
+			readonly kind: "sequence";
+			readonly of: JsValue;
+			readonly element: CType;
+			readonly nullable: boolean;
+			readonly free?: string;
+	  }
 	/** A struct passed by value as a plain object. */
 	| { readonly kind: "record"; readonly name: string }
 	| { readonly kind: "array"; readonly of: JsValue; readonly length: number }
@@ -44,11 +57,39 @@ export interface MappedParameter {
 	readonly value: JsValue;
 }
 
+/** How a binding produces one C argument. */
+export type Argument =
+	/** Converted from JavaScript parameter `param`. */
+	| { readonly kind: "input"; readonly param: number }
+	/** The byte or element count of the buffer or array that argument `of` passes. */
+	| { readonly kind: "count"; readonly of: number }
+	/** The address of a zeroed local the function writes; returned as output `output`. */
+	| { readonly kind: "out"; readonly output: number }
+	/** The address of a local read from parameter `param` and returned as `output`. */
+	| { readonly kind: "inout"; readonly param: number; readonly output: number }
+	/** The address of a local the function writes with the count of its result. */
+	| { readonly kind: "result-count" };
+
+/** A value the function writes through a pointer, returned beside its result. */
+export interface MappedOutput {
+	readonly name: string;
+	/** The pointee type. */
+	readonly type: CType;
+	readonly value: JsValue;
+}
+
 export interface BoundFunction {
 	readonly name: string;
 	readonly declaration: CFunction;
+	/** The JavaScript parameters, in order. */
 	readonly params: ReadonlyArray<MappedParameter>;
+	/** How each C argument is produced, by C parameter position. */
+	readonly arguments: ReadonlyArray<Argument>;
 	readonly returns: JsValue;
+	/** For a buffer or array result: the C parameter that carries its count. */
+	readonly resultCount?: number;
+	/** With outputs, the function returns `{ result, ...outputs }` instead of its result. */
+	readonly outputs: ReadonlyArray<MappedOutput>;
 	/** The parameter whose handle this destroy function releases, closed after the call. */
 	readonly closes?: number;
 }
@@ -348,11 +389,41 @@ class Planner {
 	): Mapping {
 		const target = resolveCType(this.#model, type.to);
 		const spelling = formatCDeclaration(type);
-		if (target.kind === "integer" && target.name === "char" && target.const === true) {
-			if (position === "param") {
-				return { value: { kind: "string", nullable: facts.nullable === true } };
+		const byteSized =
+			target.kind === "integer" && this.#model.target.sizes[target.name] === 1;
+		const free = facts.free === undefined ? {} : { free: facts.free };
+		const nullable = position === "return" || facts.nullable === true;
+		if (facts.bytes !== undefined) {
+			if (!byteSized && target.kind !== "void") {
+				throw new FfiError(`bytes applies to void and byte pointers, not ${spelling}`);
 			}
-			if (position === "return") return { value: { kind: "string", nullable: true } };
+			return { value: { kind: "bytes", nullable, ...free } };
+		}
+		if (facts.array !== undefined) {
+			const element = this.value(type.to, position === "param" ? "param" : "return");
+			if ("gap" in element) return { gap: `array element: ${element.gap}` };
+			if (element.value.kind === "sequence" || element.value.kind === "bytes") {
+				return { gap: "arrays of arrays need a fact" };
+			}
+			return {
+				value: {
+					kind: "sequence",
+					of: element.value,
+					element: type.to,
+					nullable,
+					...free,
+				},
+			};
+		}
+		if (facts.string === true && !byteSized) {
+			throw new FfiError(`string applies to char pointers, not ${spelling}`);
+		}
+		if (
+			facts.string === true ||
+			(target.kind === "integer" && target.name === "char" && target.const === true)
+		) {
+			if (position === "param") return { value: { kind: "string", nullable } };
+			if (position === "return") return { value: { kind: "string", nullable, ...free } };
 		}
 		const handle = target.kind === "record" ? this.#handles.get(target.name) : undefined;
 		if (handle !== undefined && (position === "param" || position === "return")) {
@@ -479,46 +550,213 @@ class Planner {
 		return fields;
 	}
 
+	/**
+	 * Check that a `free` fact releases a copied result and names a function that
+	 * takes the pointer to release.
+	 */
+	#free(name: string | undefined, value: JsValue, at: string): void {
+		if (name === undefined) return;
+		if (value.kind !== "string" && value.kind !== "bytes" && value.kind !== "sequence") {
+			throw new FfiError(`${at}.free: free applies to string, buffer, and array results`);
+		}
+		const declaration = this.#model.functions.find((entry) => entry.name === name);
+		const param = declaration?.params[0];
+		if (
+			declaration === undefined ||
+			declaration.params.length !== 1 ||
+			param === undefined ||
+			resolveCType(this.#model, param.type).kind !== "pointer"
+		) {
+			throw new FfiError(
+				`${at}.free: '${name}' is not a function that takes one pointer`,
+			);
+		}
+	}
+
 	function(
 		declaration: CFunction,
 		facts: FunctionFacts,
 		closes: number | undefined,
 	): BoundFunction | UnboundFunction {
+		const where = (at: string): string => `functions.${declaration.name}.${at}`;
 		const gaps: Array<Gap> = [];
 		if (declaration.variadic) {
 			gaps.push({ at: "arguments", reason: "variadic arguments need a fact per call" });
 		}
-		const params: Array<MappedParameter> = [];
-		declaration.params.forEach((param, index) => {
-			const name = param.name ?? `arg${index + 1}`;
-			const paramFacts = facts.params[index] ?? NO_FACTS;
-			const mapped = this.value(param.type, "param", paramFacts);
-			if ("gap" in mapped) {
-				gaps.push({ at: `param ${index + 1} (${name})`, reason: mapped.gap });
-				return;
-			}
-			if (paramFacts.borrowed === true) {
+		const names = declaration.params.map(
+			(param, index) => param.name ?? `arg${index + 1}`,
+		);
+		const factsAt = (index: number): MaligatorFfiValueFacts =>
+			facts.params[index] ?? NO_FACTS;
+		const parameterIndex = (reference: string, at: string): number => {
+			const index = /^\d+$/.test(reference)
+				? Number(reference) - 1
+				: declaration.params.findIndex((param) => param.name === reference);
+			if (index < 0 || index >= declaration.params.length) {
 				throw new FfiError(
-					`functions.${declaration.name}.params.${name}: borrowed applies to results`,
+					`${where(at)}: ${declaration.name} has no parameter '${reference}'`,
 				);
 			}
+			return index;
+		};
+		const map = (
+			type: CType,
+			position: Position,
+			valueFacts: MaligatorFfiValueFacts,
+			at: string,
+		): Mapping => {
+			const resolved = resolveCType(this.#model, type);
+			for (const fact of ["string", "bytes", "array"] as const) {
+				if (
+					valueFacts[fact] !== undefined &&
+					resolved.kind !== "pointer" &&
+					resolved.kind !== "array"
+				) {
+					throw new FfiError(
+						`${where(at)}: ${fact} applies to pointers, not ${formatCDeclaration(type)}`,
+					);
+				}
+			}
+			try {
+				return this.value(type, position, valueFacts);
+			} catch (error) {
+				if (error instanceof FfiError)
+					throw new FfiError(`${where(at)}: ${error.message}`);
+				throw error;
+			}
+		};
+
+		// The parameters that carry a buffer's or array's count, mapped to that argument.
+		const counts = new Map<number, number>();
+		declaration.params.forEach((_, index) => {
+			const valueFacts = factsAt(index);
+			const fact = valueFacts.bytes !== undefined ? "bytes" : "array";
+			const counted = valueFacts[fact];
+			if (counted === undefined) return;
+			const at = `params.${names[index]}.${fact}.length`;
+			const count = parameterIndex(counted.length, at);
+			if (count === index || counts.has(count)) {
+				throw new FfiError(
+					`${where(at)}: '${counted.length}' already counts another argument`,
+				);
+			}
+			counts.set(count, index);
+		});
+		const resultFact = facts.returns.bytes !== undefined ? "bytes" : "array";
+		const resultCounted = facts.returns[resultFact];
+		const resultCount =
+			resultCounted === undefined
+				? undefined
+				: parameterIndex(resultCounted.length, `returns.${resultFact}.length`);
+
+		const params: Array<MappedParameter> = [];
+		const args: Array<Argument> = [];
+		const outputs: Array<MappedOutput> = [];
+		declaration.params.forEach((param, index) => {
+			const name = names[index]!;
+			const valueFacts = factsAt(index);
+			const at = `params.${name}`;
+			const gap = (reason: string): void => {
+				gaps.push({ at: `param ${index + 1} (${name})`, reason });
+			};
+			if (valueFacts.borrowed === true) {
+				throw new FfiError(`${where(at)}: borrowed applies to results`);
+			}
+			const resolved = resolveCType(this.#model, param.type);
+			const counted = counts.get(index);
+			if (counted !== undefined || resultCount === index) {
+				const pointer = resultCount === index && resolved.kind === "pointer";
+				const countType = pointer ? resolveCType(this.#model, resolved.to) : resolved;
+				if (countType.kind !== "integer" || (counted !== undefined && pointer)) {
+					throw new FfiError(`${where(at)}: a count must be an integer parameter`);
+				}
+				if (counted !== undefined) {
+					args.push({ kind: "count", of: counted });
+					return;
+				}
+				if (pointer) {
+					args.push({ kind: "result-count" });
+					return;
+				}
+				// An integer input that also sizes the result stays a parameter.
+			}
+			if (valueFacts.out === true || valueFacts.inout === true) {
+				const fact = valueFacts.out === true ? "out" : "inout";
+				if (valueFacts.out === true && valueFacts.inout === true) {
+					throw new FfiError(`${where(at)}: a parameter is out or inout, not both`);
+				}
+				if (resolved.kind !== "pointer") {
+					throw new FfiError(`${where(at)}.${fact}: ${name} is not a pointer`);
+				}
+				const written = map(
+					resolved.to,
+					"return",
+					{ ...valueFacts, nullable: undefined },
+					at,
+				);
+				if ("gap" in written) {
+					gap(written.gap);
+					return;
+				}
+				this.#free(valueFacts.free, written.value, where(at));
+				const output = outputs.length;
+				outputs.push({ name, type: resolved.to, value: written.value });
+				if (valueFacts.inout !== true) {
+					args.push({ kind: "out", output });
+					return;
+				}
+				const read = map(resolved.to, "param", NO_FACTS, at);
+				if ("gap" in read) {
+					gap(read.gap);
+					return;
+				}
+				params.push({ name, type: resolved.to, value: read.value });
+				args.push({ kind: "inout", param: params.length - 1, output });
+				return;
+			}
+			if (valueFacts.free !== undefined) {
+				throw new FfiError(
+					`${where(at)}.free: free applies to results and out parameters`,
+				);
+			}
+			const mapped = map(param.type, "param", valueFacts, at);
+			if ("gap" in mapped) {
+				gap(mapped.gap);
+				return;
+			}
 			if (
-				paramFacts.nullable === true &&
+				valueFacts.nullable === true &&
 				!("nullable" in mapped.value && mapped.value.nullable)
 			) {
 				throw new FfiError(
-					`functions.${declaration.name}.params.${name}: nullable applies to string and handle pointers`,
+					`${where(at)}: nullable applies to string, handle, buffer, and array pointers`,
 				);
 			}
 			params.push({ name, type: param.type, value: mapped.value });
+			args.push({ kind: "input", param: params.length - 1 });
 		});
-		const returns = this.value(declaration.returns, "return", facts.returns);
-		if ("gap" in returns) gaps.push({ at: "return", reason: returns.gap });
-		else if (facts.returns.borrowed === true && returns.value.kind !== "handle") {
-			throw new FfiError(
-				`functions.${declaration.name}.returns.borrowed: the result is not a handle`,
-			);
-		}
+
+		const returns = map(declaration.returns, "return", facts.returns, "returns");
+		if ("value" in returns) {
+			if (facts.returns.borrowed === true && returns.value.kind !== "handle") {
+				throw new FfiError(`${where("returns.borrowed")}: the result is not a handle`);
+			}
+			const counted = returns.value.kind === "bytes" || returns.value.kind === "sequence";
+			if (counted !== (resultCount !== undefined)) {
+				throw new FfiError(
+					`${where("returns")}: a buffer or array result needs its length`,
+				);
+			}
+			this.#free(facts.returns.free, returns.value, where("returns"));
+			if (
+				outputs.some((output) => output.name === "result") &&
+				returns.value.kind !== "undefined"
+			) {
+				throw new FfiError(
+					`${where("params.result")}: an output named 'result' hides the result`,
+				);
+			}
+		} else gaps.push({ at: "return", reason: returns.gap });
 		if ("gap" in returns || gaps.length > 0) {
 			return { name: declaration.name, declaration, gaps };
 		}
@@ -526,7 +764,10 @@ class Planner {
 			name: declaration.name,
 			declaration,
 			params,
+			arguments: args,
 			returns: returns.value,
+			...(resultCount === undefined ? {} : { resultCount }),
+			outputs,
 			...(closes === undefined ? {} : { closes }),
 		};
 	}

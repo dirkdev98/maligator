@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { BindingPlan, Gap, JsValue } from "./binding-plan.ts";
+import type { BindingPlan, BoundFunction, Gap, JsValue } from "./binding-plan.ts";
 import type { CFunction, CModel, CTarget } from "./c-model.ts";
 import { formatCDeclaration } from "./c-type.ts";
 import type { LibraryContract } from "./contract.ts";
@@ -56,6 +56,8 @@ export interface FunctionInspection {
 	readonly params: ReadonlyArray<{
 		readonly name: string;
 		readonly c: string;
+		/** How the binding produces the argument: input, out, inout, a count, or result-count. */
+		readonly role?: string;
 		readonly ts?: string;
 		readonly doc?: string;
 	}>;
@@ -117,8 +119,23 @@ export function tsParameterName(name: string): string {
 }
 
 /** The TypeScript type of a mapped value; arrays of up to 16 elements become tuples. */
-export function formatTsType(value: JsValue): string {
+export function formatTsType(
+	value: JsValue,
+	direction: "input" | "output" = "output",
+): string {
+	const nullable = (type: string): string =>
+		"nullable" in value && value.nullable ? `${type} | null` : type;
 	switch (value.kind) {
+		case "bytes":
+			return nullable(
+				direction === "input" ? "ArrayBufferLike | ArrayBufferView" : "Uint8Array",
+			);
+		case "sequence": {
+			const element = formatTsType(value.of, direction);
+			return nullable(
+				direction === "input" ? `ReadonlyArray<${element}>` : `Array<${element}>`,
+			);
+		}
 		case "undefined":
 			return "void";
 		case "boolean":
@@ -129,11 +146,11 @@ export function formatTsType(value: JsValue): string {
 		case "bigint":
 			return "bigint";
 		case "string":
-			return value.nullable ? "string | null" : "string";
+			return nullable("string");
 		case "record":
 			return value.name;
 		case "handle":
-			return value.nullable ? `${value.name} | null` : value.name;
+			return nullable(value.name);
 		case "array": {
 			const element = formatTsType(value.of);
 			return value.length <= 16
@@ -141,6 +158,27 @@ export function formatTsType(value: JsValue): string {
 				: `Array<${element}>`;
 		}
 	}
+}
+
+/** What a bound function returns: its result, or an object with its outputs. */
+export function formatTsResult(binding: BoundFunction): string {
+	if (binding.outputs.length === 0) return formatTsType(binding.returns);
+	const fields = [
+		...(binding.returns.kind === "undefined"
+			? []
+			: [`result: ${formatTsType(binding.returns)}`]),
+		...binding.outputs.map((output) => `${output.name}: ${formatTsType(output.value)}`),
+	];
+	return `{ ${fields.join("; ")} }`;
+}
+
+/** A bound function's TypeScript parameter list. */
+export function formatTsParameters(binding: BoundFunction): string {
+	return binding.params
+		.map(
+			(param) => `${tsParameterName(param.name)}: ${formatTsType(param.value, "input")}`,
+		)
+		.join(", ");
 }
 
 /** A C prototype with parameter names, as a header would declare it. */
@@ -171,11 +209,24 @@ export function inspectBindings(
 		const binding = bound.get(declaration.name);
 		const gaps = unbound.get(declaration.name)?.gaps;
 		const params = declaration.params.map((param, index) => {
-			const mapped = binding?.params[index];
+			const argument = binding?.arguments[index];
+			const role =
+				argument === undefined
+					? undefined
+					: argument.kind === "count"
+						? `count of ${binding!.declaration.params[argument.of]?.name ?? `arg${argument.of + 1}`}`
+						: argument.kind;
+			const ts =
+				argument?.kind === "input" || argument?.kind === "inout"
+					? formatTsType(binding!.params[argument.param]!.value, "input")
+					: argument?.kind === "out"
+						? formatTsType(binding!.outputs[argument.output]!.value)
+						: undefined;
 			return {
 				name: param.name ?? `arg${index + 1}`,
 				c: formatCDeclaration(param.type),
-				...(mapped === undefined ? {} : { ts: formatTsType(mapped.value) }),
+				...(role === undefined ? {} : { role }),
+				...(ts === undefined ? {} : { ts }),
 				...(param.doc === undefined ? {} : { doc: param.doc }),
 			};
 		});
@@ -186,11 +237,7 @@ export function inspectBindings(
 		const signature =
 			binding === undefined
 				? undefined
-				: `(${binding.params
-						.map(
-							(param) => `${tsParameterName(param.name)}: ${formatTsType(param.value)}`,
-						)
-						.join(", ")}) => ${formatTsType(binding.returns)}`;
+				: `(${formatTsParameters(binding)}) => ${formatTsResult(binding)}`;
 		return {
 			name: declaration.name,
 			status: binding === undefined ? "needs-facts" : "bound",

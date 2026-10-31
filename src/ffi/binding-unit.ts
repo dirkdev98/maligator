@@ -80,7 +80,7 @@ class BindingWriter {
 
 	/** Mark the record helpers a value needs, recursively through fields and arrays. */
 	need(value: JsValue, direction: "input" | "output"): void {
-		if (value.kind === "array") {
+		if (value.kind === "array" || value.kind === "sequence") {
 			this.need(value.of, direction);
 			return;
 		}
@@ -197,6 +197,9 @@ class BindingWriter {
 			}
 			case "undefined":
 				throw new Error("void has no input conversion");
+			case "bytes":
+			case "sequence":
+				throw new Error("buffers and arrays convert with the count of their argument");
 		}
 	}
 
@@ -215,6 +218,9 @@ class BindingWriter {
 			}
 			case "undefined":
 				return "mal_ffi_undefined()";
+			case "bytes":
+			case "sequence":
+				throw new Error("buffer and array results convert with their count");
 			case "boolean":
 				return `mal_ffi_from_boolean(${expression})`;
 			case "integer":
@@ -403,44 +409,254 @@ class BindingWriter {
 		return lines;
 	}
 
+	/**
+	 * Statements that store a result or output in `target` and then release the C
+	 * memory when the caller owns it, even after a conversion threw.
+	 */
+	#owned(
+		value: JsValue,
+		expression: string,
+		target: string,
+		count: string | undefined,
+		site: string,
+	): Array<string> {
+		const release =
+			"free" in value && value.free !== undefined
+				? [`if ((${expression}) != nullptr) ${value.free}((void *) (${expression}));`]
+				: [];
+		if (value.kind === "bytes") {
+			return [
+				`if (!mal_ffi_threw(vm)) ${target} = (${expression}) == nullptr ? mal_ffi_null() : mal_ffi_from_bytes(vm, ${expression}, (size_t) (${count}));`,
+				...release,
+			];
+		}
+		if (value.kind === "sequence") {
+			const array = this.#fresh("array");
+			const roots = this.#fresh("roots");
+			const index = this.#fresh("index");
+			return [
+				"if (!mal_ffi_threw(vm)) {",
+				`\tif ((${expression}) == nullptr) ${target} = mal_ffi_null();`,
+				`\telse if (mal_ffi_check_count(vm, (size_t) (${count}), 32, true, ${site})) {`,
+				`\t\tMalValue ${array} = mal_ffi_new_array(vm, (int32_t) (${count}));`,
+				`\t\tMalFfiRoots ${roots};`,
+				`\t\tmal_ffi_root(&${roots}, &${array}, 1);`,
+				`\t\tfor (int32_t ${index} = 0; !mal_ffi_threw(vm) && ${index} < (int32_t) (${count}); ${index}++) {`,
+				`\t\t\tmal_ffi_set_element(vm, ${array}, ${index}, ${this.write(value.of, `(${expression})[${index}]`)});`,
+				"\t\t}",
+				`\t\tmal_ffi_unroot(&${roots});`,
+				`\t\t${target} = ${array};`,
+				"\t}",
+				"}",
+				...release,
+			];
+		}
+		return [
+			`if (!mal_ffi_threw(vm)) ${target} = ${this.write(value, expression)};`,
+			...release,
+		];
+	}
+
 	function(binding: BoundFunction): Array<string> {
 		const name = binding.name;
-		const body: Array<string> = [];
-		const strings: Array<string> = [];
+		const declaration = binding.declaration;
 		const locals: Array<string> = [];
+		const body: Array<string> = [];
+		/** Buffers resolve last: nothing may run JavaScript between them and the call. */
+		const buffers: Array<string> = [];
+		const cleanup: Array<string> = [];
+		const strings: Array<string> = [];
+		const argument = (param: number) =>
+			`mal_argc > ${String(param)} ? mal_args[${String(param)}] : mal_ffi_undefined()`;
 		binding.params.forEach((param, index) => {
-			const local = `mal_argument_${String(index)}`;
-			const site = `mal_site_${String(index)}`;
 			locals.push(
-				`${localDeclaration(param.type, local)};`,
-				`static const MalFfiSite ${site} = { ${cString(name)}, ${cString(param.name)}, nullptr };`,
-			);
-			body.push(
-				...this.read(
-					param.value,
-					param.type,
-					`mal_argc > ${String(index)} ? mal_args[${String(index)}] : mal_ffi_undefined()`,
-					local,
-					`&${site}`,
-					"goto mal_done;",
-					strings,
-				),
+				`static const MalFfiSite mal_site_${String(index)} = { ${cString(name)}, ${cString(param.name)}, nullptr };`,
 			);
 		});
-		const call = `${name}(${binding.params.map((_, index) => `mal_argument_${String(index)}`).join(", ")})`;
+		locals.push(
+			`static const MalFfiSite mal_site_result = { ${cString(name)}, "result", nullptr };`,
+			"(void) mal_site_result;",
+		);
+		const countOf = (counted: number): { index: number; type: CType } | undefined => {
+			const index = binding.arguments.findIndex(
+				(entry) => entry.kind === "count" && entry.of === counted,
+			);
+			return index < 0 ? undefined : { index, type: declaration.params[index]!.type };
+		};
+		const setCount = (
+			counted: number,
+			count: string,
+			site: string,
+			into: Array<string>,
+		) => {
+			const target = countOf(counted);
+			if (target === undefined) return;
+			const integer = resolveCType(this.#model, target.type);
+			const bits =
+				integer.kind === "integer"
+					? (this.#model.target.sizes[integer.name] ?? 4) * 8
+					: 32;
+			const signed = integer.kind === "integer" && !integer.name.startsWith("unsigned");
+			into.push(
+				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${bits}, ${signed}, ${site})) goto mal_done;`,
+				`mal_argument_${String(target.index)} = (${localDeclaration(target.type, "")}) (${count});`,
+			);
+		};
+		binding.arguments.forEach((entry, index) => {
+			const param = declaration.params[index]!;
+			const local = `mal_argument_${String(index)}`;
+			locals.push(`${localDeclaration(param.type, local)};`);
+			const resolved = resolveCType(this.#model, param.type);
+			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
+			switch (entry.kind) {
+				case "count":
+					return;
+				case "result-count":
+					locals.push(`${localDeclaration(pointee, "mal_count")} = {};`);
+					body.push(`${local} = &mal_count;`);
+					return;
+				case "out":
+				case "inout": {
+					const output = `mal_output_${String(entry.output)}`;
+					locals.push(`${localDeclaration(pointee, output)} = {};`);
+					if (entry.kind === "inout") {
+						body.push(
+							...this.read(
+								binding.params[entry.param]!.value,
+								pointee,
+								argument(entry.param),
+								output,
+								`&mal_site_${String(entry.param)}`,
+								"goto mal_done;",
+								strings,
+							),
+						);
+					}
+					body.push(`${local} = &${output};`);
+					return;
+				}
+				case "input": {
+					const value = binding.params[entry.param]!.value;
+					const site = `&mal_site_${String(entry.param)}`;
+					const source = argument(entry.param);
+					if (value.kind === "bytes") {
+						locals.push(
+							`void *mal_bytes_${String(index)};`,
+							`size_t mal_bytes_length_${String(index)};`,
+						);
+						buffers.push(
+							`if (!mal_ffi_to_bytes(vm, ${source}, ${value.nullable}, ${site}, &mal_bytes_${String(index)}, &mal_bytes_length_${String(index)})) goto mal_done;`,
+							`${local} = (${localDeclaration(param.type, "")}) mal_bytes_${String(index)};`,
+						);
+						setCount(index, `mal_bytes_length_${String(index)}`, site, buffers);
+						return;
+					}
+					if (value.kind === "sequence") {
+						const elements = `mal_elements_${String(index)}`;
+						const length = `mal_length_${String(index)}`;
+						const position = this.#fresh("index");
+						const element = this.#fresh("element");
+						locals.push(
+							`${localDeclaration(value.element, `*${elements}`)} = nullptr;`,
+							`int32_t ${length} = 0;`,
+						);
+						cleanup.push(`free(${elements});`);
+						body.push(
+							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &${length})) goto mal_done;`,
+							`if (${length} > 0) {`,
+							`\t${elements} = malloc(sizeof(*${elements}) * (size_t) ${length});`,
+							`\tif (${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
+							"}",
+							`for (int32_t ${position} = 0; ${position} < ${length}; ${position}++) {`,
+							`\tMalValue ${element};`,
+							`\tif (!mal_ffi_element(vm, ${source}, ${position}, ${length}, ${site}, &${element})) goto mal_done;`,
+							...this.read(
+								value.of,
+								value.element,
+								element,
+								`${elements}[${position}]`,
+								site,
+								"goto mal_done;",
+								strings,
+							).map((line) => `\t${line}`),
+							"}",
+							`${local} = (${localDeclaration(param.type, "")}) ${elements};`,
+						);
+						setCount(index, length, site, body);
+						return;
+					}
+					body.push(
+						...this.read(
+							value,
+							param.type,
+							source,
+							local,
+							site,
+							"goto mal_done;",
+							strings,
+						),
+					);
+					return;
+				}
+			}
+		});
+		const call = `${name}(${declaration.params.map((_, index) => `mal_argument_${String(index)}`).join(", ")})`;
 		const closes =
 			binding.closes === undefined
 				? []
-				: [
-						`mal_ffi_close_handle(mal_argc > ${String(binding.closes)} ? mal_args[${String(binding.closes)}] : mal_ffi_undefined());`,
-					];
-		if (binding.returns.kind === "undefined") body.push(`${call};`, ...closes);
-		else {
-			locals.push(`${localDeclaration(binding.declaration.returns, "mal_return")};`);
-			body.push(
+				: [`mal_ffi_close_handle(${argument(binding.closes)});`];
+		const count =
+			binding.resultCount === undefined
+				? undefined
+				: binding.arguments[binding.resultCount]?.kind === "result-count"
+					? "mal_count"
+					: `mal_argument_${String(binding.resultCount)}`;
+		const after: Array<string> = [];
+		if (binding.returns.kind === "undefined") {
+			after.push(`${call};`, ...closes);
+		} else {
+			locals.push(`${localDeclaration(declaration.returns, "mal_return")};`);
+			after.push(
 				`mal_return = ${call};`,
 				...closes,
-				`mal_result = ${this.write(binding.returns, "mal_return")};`,
+				...this.#owned(
+					binding.returns,
+					"mal_return",
+					"mal_result",
+					count,
+					"&mal_site_result",
+				),
+			);
+		}
+		if (binding.outputs.length > 0) {
+			after.push(
+				"MalValue mal_values[2] = { mal_result, mal_ffi_undefined() };",
+				"MalFfiRoots mal_value_roots;",
+				"mal_ffi_root(&mal_value_roots, mal_values, 2);",
+				"if (!mal_ffi_threw(vm)) mal_values[1] = mal_ffi_new_record(vm);",
+				...(binding.returns.kind === "undefined"
+					? []
+					: [
+							`if (!mal_ffi_threw(vm)) mal_ffi_set_field(vm, mal_values[1], "result", mal_values[0]);`,
+						]),
+			);
+			binding.outputs.forEach((output, index) => {
+				const value = this.#fresh("output");
+				after.push(
+					`MalValue ${value} = mal_ffi_undefined();`,
+					...this.#owned(
+						output.value,
+						`mal_output_${String(index)}`,
+						value,
+						undefined,
+						"&mal_site_result",
+					),
+					`if (!mal_ffi_threw(vm)) mal_ffi_set_field(vm, mal_values[1], ${cString(output.name)}, ${value});`,
+				);
+			});
+			after.push(
+				"mal_ffi_unroot(&mal_value_roots);",
+				"mal_result = mal_ffi_threw(vm) ? mal_ffi_undefined() : mal_values[1];",
 			);
 		}
 		return [
@@ -449,15 +665,18 @@ class BindingWriter {
 			"\t(void) mal_this;",
 			"\t(void) mal_new_target;",
 			"\t(void) mal_callee;",
-			...(binding.params.length === 0
-				? ["\t(void) mal_args;", "\t(void) mal_argc;"]
-				: []),
+			"\t(void) mal_args;",
+			"\t(void) mal_argc;",
 			"\tMalValue mal_result = mal_ffi_undefined();",
 			...strings.map((temporary) => `\tMalFfiString ${temporary} = {0};`),
 			...locals.map((line) => `\t${line}`),
 			...body.map((line) => `\t${line}`),
-			...(binding.params.length === 0 && strings.length === 0 ? [] : ["mal_done:"]),
+			...buffers.map((line) => `\t${line}`),
+			...after.map((line) => `\t${line}`),
+			"\tgoto mal_done;",
+			"mal_done:",
 			...strings.map((temporary) => `\tmal_ffi_string_release(&${temporary});`),
+			...cleanup.map((line) => `\t${line}`),
 			"\treturn mal_result;",
 			"}",
 		];
@@ -491,6 +710,7 @@ export function generateBindingUnit(
 	const writer = new BindingWriter(model, plan);
 	for (const binding of plan.functions) {
 		for (const param of binding.params) writer.need(param.value, "input");
+		for (const output of binding.outputs) writer.need(output.value, "output");
 		writer.need(binding.returns, "output");
 	}
 	for (const constant of plan.constants) writer.need(constant.value, "output");
@@ -521,6 +741,7 @@ export function generateBindingUnit(
 	const source = [
 		`// Generated binding for ${specifier}.`,
 		'#include "mal_ffi.h"',
+		"#include <stdlib.h>",
 		...headers.map((header) => `#include "${header}"`),
 		"",
 		// Tentative definitions: helpers refer to these before their initializers.

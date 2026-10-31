@@ -4,6 +4,7 @@ export type {
 	AssetInclusion,
 	MaligatorAssets,
 	MaligatorBuildConfig,
+	MaligatorFfiCount,
 	MaligatorFfiFind,
 	MaligatorFfiFunctionFacts,
 	MaligatorFfiHandle,

@@ -114,6 +114,29 @@ describe("ffi inspect", () => {
 		);
 	});
 
+	it("returns outputs beside the result and hides counts", () => {
+		expect(declaration("shapes_parse").ts).toBe(
+			"(text: string) => { result: number; point: ShapesPoint }",
+		);
+		expect(declaration("shapes_scale").ts).toBe(
+			"(point: ShapesPoint, factor: number) => { point: ShapesPoint }",
+		);
+		expect(declaration("shapes_bounds")).toMatchObject({
+			ts: "(points: ReadonlyArray<ShapesPoint>) => { result: number; box: ShapesBox }",
+			params: [{ role: "input" }, { role: "count of points" }, { role: "out" }],
+		});
+		expect(declaration("shapes_checksum").ts).toBe(
+			"(data: ArrayBufferLike | ArrayBufferView) => number",
+		);
+		expect(declaration("shapes_render")).toMatchObject({
+			ts: "(width: number, height: number) => Uint8Array | null",
+			params: [{ role: "input" }, { role: "input" }, { role: "result-count" }],
+		});
+		expect(declaration("shapes_canvas_create").ts).toBe(
+			"(title: string) => { result: number; canvas: ShapesCanvas | null }",
+		);
+	});
+
 	it("rejects facts that name nothing in the headers", () => {
 		const project = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-facts-"));
 		try {
@@ -146,6 +169,32 @@ describe("ffi inspect", () => {
 			rejects(
 				{ functions: { shapes_area: { returns: { borrowed: true } } } },
 				"functions.shapes_area.returns.borrowed: the result is not a handle",
+			);
+			rejects(
+				{ functions: { shapes_area: { returns: { free: "shapes_free" } } } },
+				"functions.shapes_area.returns.free: free applies to string, buffer, and array results",
+			);
+			rejects(
+				{
+					functions: {
+						shapes_corners: {
+							returns: { array: { length: "count" }, free: "shapes_area" },
+						},
+					},
+				},
+				"functions.shapes_corners.returns.free: 'shapes_area' is not a function that takes one pointer",
+			);
+			rejects(
+				{
+					functions: {
+						shapes_bounds: { params: { points: { bytes: { length: "count" } } } },
+					},
+				},
+				"functions.shapes_bounds.params.points: bytes applies to void and byte pointers, not const ShapesPoint *",
+			);
+			rejects(
+				{ functions: { shapes_sum2: { params: { a: { string: true } } } } },
+				"functions.shapes_sum2.params.a: string applies to pointers, not int",
 			);
 		} finally {
 			rmSync(project, { recursive: true, force: true });

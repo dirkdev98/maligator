@@ -11,13 +11,22 @@ import {
 	shapes_bitmap_free,
 	shapes_bitmap_new,
 	shapes_bitmap_shared,
+	shapes_allocations,
 	shapes_bitmap_sum,
 	shapes_bitmaps_live,
+	shapes_bounds,
+	shapes_canvas_create,
 	shapes_canvas_open,
 	shapes_canvas_title,
 	shapes_canvases_open,
+	shapes_checksum,
 	shapes_contains,
+	shapes_corners,
+	shapes_describe,
 	shapes_mode_name,
+	shapes_parse,
+	shapes_render,
+	shapes_scale,
 	shapes_sum3,
 	shapes_total,
 	shapes_twice,
@@ -55,7 +64,34 @@ const shared = shapes_bitmap_shared();
 shared[Symbol.dispose]();
 console.log(`shared after dispose ${shapes_bitmap_sum(shapes_bitmap_shared())}`);
 
+console.log(
+	`parse ${JSON.stringify(shapes_parse("3,4"))} ${shapes_parse("nope").result}`,
+);
+console.log(`scale ${JSON.stringify(shapes_scale({ x: 1, y: 2 }, 3))}`);
+console.log(
+	`bounds ${JSON.stringify(
+		shapes_bounds([
+			{ x: 1, y: 5 },
+			{ x: -2, y: 3 },
+		]),
+	)} ${shapes_bounds([]).result}`,
+);
+console.log(
+	`checksum ${shapes_checksum(new Uint8Array([1, 2, 3, 250]))} ${shapes_checksum(new Uint8Array([7, 8, 9]).subarray(1).buffer)}`,
+);
+const rendered = shapes_render(4, 2);
+console.log(`render ${rendered?.length} ${rendered?.join(",")}`);
+console.log(`corners ${JSON.stringify(shapes_corners(box))}`);
+console.log(`describe ${shapes_describe({ x: 1.5, y: -2 })}`);
+const created = shapes_canvas_create("Created");
+console.log(`created ${created.result} ${shapes_canvas_title(created.canvas)}`);
+created.canvas?.[Symbol.dispose]();
+console.log(`allocations ${shapes_allocations()} canvases ${shapes_canvases_open()}`);
+
 const rejected = [
+	() => shapes_checksum("bytes" as unknown as Uint8Array),
+	() => shapes_checksum(new SharedArrayBuffer(4)),
+	() => shapes_bounds([{ x: 1 } as unknown as { x: number; y: number }]),
 	() => shapes_bitmap_sum(bitmap),
 	() => shapes_canvas_title({} as unknown as ReturnType<typeof shapes_canvas_open>),
 	() => shapes_twice(1.5),

@@ -30,6 +30,8 @@ declare module "maligator:ffi/shapes" {
 	}
 	/** Add two points. */
 	export function shapes_add(a: ShapesPoint, b: ShapesPoint): ShapesPoint;
+	/** Allocations not yet released */
+	export function shapes_allocations(): number;
 	/** Area of a box */
 	export function shapes_area(box: ShapesBox): number;
 	/** Set every pixel */
@@ -43,14 +45,30 @@ declare module "maligator:ffi/shapes" {
 	export function shapes_bitmap_sum(bitmap: ShapesBitmap): number;
 	/** Bitmaps allocated and not freed */
 	export function shapes_bitmaps_live(): number;
+	/** The bounding box of the points; returns -1 for no points. */
+	export function shapes_bounds(points: ReadonlyArray<ShapesPoint>): { result: number; box: ShapesBox };
 	export function shapes_canvas_close(canvas: ShapesCanvas): void;
+	/** 0 on success */
+	export function shapes_canvas_create(title: string): { result: number; canvas: ShapesCanvas | null };
 	export function shapes_canvas_open(title: string): ShapesCanvas | null;
 	/** NULL for no canvas */
 	export function shapes_canvas_title(canvas: ShapesCanvas | null): string | null;
 	/** Canvases opened and not closed */
 	export function shapes_canvases_open(): number;
+	/** Sum of the bytes */
+	export function shapes_checksum(data: ArrayBufferLike | ArrayBufferView): number;
 	export function shapes_contains(box: ShapesBox, point: ShapesPoint): boolean;
+	/** The box's corners */
+	export function shapes_corners(box: ShapesBox): Array<ShapesPoint> | null;
+	/** "(x, y)" in memory the caller frees */
+	export function shapes_describe(point: ShapesPoint): string | null;
 	export function shapes_mode_name(mode: number): string | null;
+	/** Parse "x,y" into a point; returns 0, or -1 for other text. */
+	export function shapes_parse(text: string): { result: number; point: ShapesPoint };
+	/** A width x height gradient, one byte per pixel; writes its byte count. */
+	export function shapes_render(width: number, height: number): Uint8Array | null;
+	/** Scale in place */
+	export function shapes_scale(point: ShapesPoint, factor: number): { point: ShapesPoint };
 	/** Sum two or three integers. */
 	export function shapes_sum2(a: number, b: number): number;
 	/** Sum two or three integers. */

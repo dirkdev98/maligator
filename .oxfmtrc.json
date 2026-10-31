@@ -9,7 +9,8 @@
 		"runtime/src/generated/node_builtin_*.inc",
 		"runtime/rust/target",
 		"runtime/vendor",
-		"tests/wpt/fixtures"
+		"tests/wpt/fixtures",
+		"tests/fixtures/ffi-shapes/maligator-ffi.d.ts"
 	],
 	"useTabs": true,
 	"printWidth": 90,

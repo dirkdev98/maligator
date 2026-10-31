@@ -83,12 +83,33 @@ export interface MaligatorFfiTypeFacts {
 	handle?: MaligatorFfiHandle;
 }
 
+/** The parameter that carries the size of a buffer or array. */
+export interface MaligatorFfiCount {
+	/**
+	 * The parameter's C name, or its 1-based position. For a result, the count comes
+	 * from an integer parameter or from an integer the function writes through a pointer.
+	 */
+	length: string;
+}
+
 /** Facts about a parameter or a result. */
 export interface MaligatorFfiValueFacts {
 	/** Accept `null` for a pointer parameter and pass `NULL`. */
 	nullable?: boolean;
 	/** A returned handle the library keeps owning; closing it does not release it. */
 	borrowed?: boolean;
+	/** The function writes a value through this pointer; it returns beside the result. */
+	out?: boolean;
+	/** The function reads and updates the value behind this pointer; the new value returns beside the result. */
+	inout?: boolean;
+	/** A `char *` or `unsigned char *` that holds UTF-8 text. */
+	string?: boolean;
+	/** Bytes passed as an `ArrayBuffer` or a view, or returned as a new `Uint8Array`. */
+	bytes?: MaligatorFfiCount;
+	/** Elements passed or returned as an array. */
+	array?: MaligatorFfiCount;
+	/** Release a copied string, buffer, or array result with this function. */
+	free?: string;
 }
 
 /** Facts about one C function, keyed by its name. */
