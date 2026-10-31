@@ -139,6 +139,7 @@
 				"src/compiler/core/core-global-slot-analysis.ts",
 				"src/compiler/core/core-global-slot-facts.ts",
 				"src/compiler/core/core-heap-brands.ts",
+				"src/compiler/core/core-id-cursors.ts",
 				"src/compiler/core/core-instance-method-hints.ts",
 				"src/compiler/core/core-internal-attributes.ts",
 				"src/compiler/core/core-ir-call-targets.ts",
