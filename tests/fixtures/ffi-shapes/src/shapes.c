@@ -208,6 +208,14 @@ int shapes_log(const char *format, ...) {
 
 const char *shapes_log_line(void) { return log_line; }
 
+int shapes_fill(unsigned char *data, size_t size, int (*visit)(void *ctx, int index), void *ctx) {
+	for (size_t index = 0; index < size; index++) {
+		data[index] = (unsigned char)index;
+		if (visit(ctx, (int)index) != 0) return (int)index + 1;
+	}
+	return (int)size;
+}
+
 size_t shapes_path_length(ShapesPath path) { return (size_t)path.count; }
 
 int shapes_sum2(int a, int b) { return a + b; }

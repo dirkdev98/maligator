@@ -722,9 +722,11 @@ class BindingWriter {
 						locals.push(
 							`void *mal_bytes_${String(index)};`,
 							`size_t mal_bytes_length_${String(index)};`,
+							`void *mal_pin_${String(index)} = nullptr;`,
 						);
+						cleanup.push(`mal_ffi_unpin(mal_pin_${String(index)});`);
 						buffers.push(
-							`if (!mal_ffi_to_bytes(vm, ${source}, ${value.nullable}, ${site}, &mal_bytes_${String(index)}, &mal_bytes_length_${String(index)})) goto mal_done;`,
+							`if (!mal_ffi_to_bytes(vm, ${source}, ${value.nullable}, ${site}, &mal_bytes_${String(index)}, &mal_bytes_length_${String(index)}, &mal_pin_${String(index)})) goto mal_done;`,
 							`${local} = (${localDeclaration(param.type, "")}) mal_bytes_${String(index)};`,
 						);
 						setCount(index, `mal_bytes_length_${String(index)}`, site, buffers);

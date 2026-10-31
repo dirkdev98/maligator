@@ -176,7 +176,8 @@ bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, 
 
 bool mal_ffi_to_bytes(
     MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site, void **data,
-    size_t *length) {
+    size_t *length, void **pin) {
+    *pin = nullptr;
     if (nullable && mal_value_is_null(value)) {
         *data = nullptr;
         *length = 0;
@@ -187,6 +188,8 @@ bool mal_ffi_to_bytes(
     if (status == MAL_BUFFER_SOURCE_SPAN_OK && !span.shared) {
         *data = span.data;
         *length = span.length;
+        span.buffer->pins++;
+        *pin = span.buffer;
         return true;
     }
     const char *expectation = status == MAL_BUFFER_SOURCE_SPAN_NOT_BUFFER_SOURCE
@@ -194,6 +197,10 @@ bool mal_ffi_to_bytes(
         : status == MAL_BUFFER_SOURCE_SPAN_OK ? "a buffer that is not shared"
                                               : "a buffer that is attached and in bounds";
     return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, expectation);
+}
+
+void mal_ffi_unpin(void *pin) {
+    if (pin != nullptr) ((MalArrayBufferObject *) pin)->pins--;
 }
 
 bool mal_ffi_to_array_length(

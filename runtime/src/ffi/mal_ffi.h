@@ -197,11 +197,15 @@ bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, 
 /**
  * The memory of an ArrayBuffer or view, which C may read and write until the call
  * returns. Shared buffers are rejected, and a binding resolves buffers after every
- * other argument so no JavaScript runs between this and the call.
+ * other argument so no JavaScript runs between this and the call. The buffer stays
+ * pinned against detaching and transfer, including by JavaScript a callback runs,
+ * until `mal_ffi_unpin` receives `pin`.
  */
 bool mal_ffi_to_bytes(
     MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site, void **data,
-    size_t *length);
+    size_t *length, void **pin);
+/** Release a pin from `mal_ffi_to_bytes`; null is ignored. */
+void mal_ffi_unpin(void *pin);
 /** The element count of an array argument; null yields 0 for a nullable site. */
 bool mal_ffi_to_array_length(
     MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site, int32_t *length);

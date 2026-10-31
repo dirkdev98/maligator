@@ -139,7 +139,7 @@ functions: {
 ```
 
 - `out` marks a pointer the function writes through, and `inout` also passes the current value in. A function with outputs returns an object with each output and the C result as `result`, so `GetCodepoint("✓")` returns `{ result: 10003, codepointSize: 3 }`. A status code stays in `result`; the binding does not throw for it.
-- `bytes` passes an `ArrayBuffer` or a view without copying, and `array` copies a JavaScript array into C memory for the call. `length` names the parameter that carries the count, which disappears from the JavaScript signature. Shared buffers are rejected.
+- `bytes` passes an `ArrayBuffer` or a view without copying, and `array` copies a JavaScript array into C memory for the call. `length` names the parameter that carries the count, which disappears from the JavaScript signature. Shared buffers are rejected, and while C uses a buffer, transferring it, including from a callback, throws a `TypeError`.
 - On a result, `bytes` and `array` copy the C memory into a `Uint8Array` or an array. `length` names an integer parameter, or a pointer the function writes the count through.
 - `string` marks a `char *` or `unsigned char *` as UTF-8 text.
 - `free` names the function that releases a string, buffer, or array result after it is copied.

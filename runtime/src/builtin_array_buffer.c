@@ -420,6 +420,10 @@ static MalValue mal_builtin_array_buffer_transfer_impl(MalVm *vm, MalValue this_
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot transfer a detached ArrayBuffer");
         return mal_value_new_undefined();
     }
+    if (mal_array_buffer_object_is_pinned(buffer)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot transfer an ArrayBuffer a C function is using");
+        return mal_value_new_undefined();
+    }
     if (buffer->immutable) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot transfer an immutable ArrayBuffer");
         return mal_value_new_undefined();
@@ -504,6 +508,10 @@ static MalValue mal_builtin_array_buffer_transfer_to_immutable(MalVm *vm, MalVal
     }
     if (buffer->detached) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot transfer a detached ArrayBuffer");
+        return mal_value_new_undefined();
+    }
+    if (mal_array_buffer_object_is_pinned(buffer)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot transfer an ArrayBuffer a C function is using");
         return mal_value_new_undefined();
     }
     if (buffer->immutable) {

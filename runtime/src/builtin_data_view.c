@@ -93,6 +93,7 @@ MalBufferSourceSpanStatus mal_buffer_source_span(
         return MAL_BUFFER_SOURCE_SPAN_NOT_BUFFER_SOURCE;
     }
 
+    out->buffer = buffer;
     out->data = byte_length == 0 ? nullptr : buffer->data + byte_offset;
     out->length = byte_length;
     out->resizable = buffer->resizable;

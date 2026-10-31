@@ -43,6 +43,10 @@ typedef struct MalArrayBufferObject {
     // Set by the sensitive constructors below; a caller-owned input buffer is
     // never marked, because its bytes remain the user's.
     bool sensitive;
+    // C calls using the bytes in place. A pinned buffer cannot be detached or
+    // transferred, as with a host-defined [[ArrayBufferDetachKey]], so JavaScript
+    // a C library calls back into cannot free memory the library is writing.
+    u32 pins;
 } MalArrayBufferObject;
 
 /**
@@ -115,6 +119,10 @@ u32 mal_array_buffer_object_refresh_shared_length(MalArrayBufferObject *buffer);
 
 u32 mal_array_buffer_object_byte_length(const MalArrayBufferObject *buffer);
 bool mal_array_buffer_object_is_detached(const MalArrayBufferObject *buffer);
+
+static inline bool mal_array_buffer_object_is_pinned(const MalArrayBufferObject *buffer) {
+    return buffer->pins != 0;
+}
 
 /**
  * Release the backing store, scrubbing it first when the buffer is sensitive.

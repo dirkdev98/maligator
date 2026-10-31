@@ -585,7 +585,8 @@ static bool enc_validate_transfers(SerEncoder *enc, MalValue list_value) {
         snap->transfer_resources[i] = UINT32_MAX;
         if (mal_value_is_array_buffer_object(item)) {
             MalArrayBufferObject *buffer = mal_value_to_array_buffer_object(item);
-            if (buffer->detached || buffer->shared || buffer->immutable) {
+            if (buffer->detached || buffer->shared || buffer->immutable ||
+                mal_array_buffer_object_is_pinned(buffer)) {
                 return enc_fail(enc, "ArrayBuffer cannot be transferred");
             }
             snap->transfer_sources[i] = buffer;
@@ -725,7 +726,8 @@ bool mal_serialized_value_validate(MalVm *vm, const MalSerializedValue *snap, co
         // Admission sized the message by the allocation recorded at encode;
         // an attached ordinary store keeps it, so a mismatch is a defect.
         u32 index = snap->transfer_resources[i];
-        if (source->detached || source->immutable || index == UINT32_MAX ||
+        if (source->detached || source->immutable ||
+            mal_array_buffer_object_is_pinned(source) || index == UINT32_MAX ||
             snap->resources[index].capacity != source->allocation_capacity) {
             *out_error = "a transferred ArrayBuffer was detached during serialization";
             return false;

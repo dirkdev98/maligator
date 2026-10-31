@@ -847,11 +847,6 @@ class Planner {
 			args.push({ kind: "input", param: params.length - 1 });
 		});
 
-		if (callbackData.size > 0 && params.some((param) => param.value.kind === "bytes")) {
-			throw new FfiError(
-				`${where("params")}: JavaScript in a callback could detach a buffer C still uses`,
-			);
-		}
 		if (facts.returns.constant !== undefined) {
 			throw new FfiError(`${where("returns.constant")}: constant applies to parameters`);
 		}

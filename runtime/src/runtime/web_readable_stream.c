@@ -185,7 +185,7 @@ static MalValue rs_transfer_byob_view(
     MalArrayBufferObject *source_buffer =
         mal_data_view_object_buffer(source);
     if (source_buffer->detached || source_buffer->shared ||
-        source_buffer->immutable) {
+        source_buffer->immutable || mal_array_buffer_object_is_pinned(source_buffer)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "A byte stream cannot transfer this ArrayBuffer");
         return mal_value_new_undefined();
@@ -226,7 +226,7 @@ static MalValue rs_transfer_typed_array_view(MalVm *vm, MalValue view) {
     MalTypedArrayObject *source = mal_value_to_typed_array_object(view);
     MalArrayBufferObject *source_buffer = source->buffer;
     if (source_buffer->detached || source_buffer->shared ||
-        source_buffer->immutable) {
+        source_buffer->immutable || mal_array_buffer_object_is_pinned(source_buffer)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "A byte stream cannot transfer this ArrayBuffer");
         return mal_value_new_undefined();

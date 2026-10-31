@@ -62,6 +62,7 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
     buffer->shared = shared;
     buffer->immutable = false;
     buffer->sensitive = false;
+    buffer->pins = 0;
 
     return buffer;
 }

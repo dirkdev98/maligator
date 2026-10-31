@@ -25,6 +25,7 @@ import {
 	shapes_corners,
 	shapes_describe,
 	shapes_each,
+	shapes_fill,
 	shapes_integrate,
 	shapes_join,
 	shapes_log_count,
@@ -89,6 +90,20 @@ console.log(
 );
 console.log(
 	`join ${shapes_join(["one", "two", "three"])} ${shapes_join(["ab", "x".repeat(90)])?.length}`,
+);
+const filled = new Uint8Array(4);
+let transferError = "";
+const filledCount = shapes_fill(filled, () => {
+	try {
+		filled.buffer.transfer();
+	} catch (error) {
+		transferError = (error as Error).name;
+	}
+	return 0;
+});
+const moved = filled.buffer.transfer();
+console.log(
+	`fill ${filledCount} ${new Uint8Array(moved).join(",")} ${transferError} ${filled.buffer.detached}`,
 );
 const opened = shapes_canvas_open("Same");
 console.log(`same handle ${opened === shapes_canvas_current()}`);

@@ -47,6 +47,8 @@ typedef enum MalBufferSourceSpanStatus {
 } MalBufferSourceSpanStatus;
 
 typedef struct MalBufferSourceSpan {
+    /** The ArrayBuffer that owns `data`. */
+    MalArrayBufferObject *buffer;
     byte *data;
     usize length;
     bool resizable;

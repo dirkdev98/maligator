@@ -88,6 +88,8 @@ double shapes_integrate(double (*f)(void *data, double x), void *data, double fr
                         int steps);
 // Format a log line like printf; returns its length.
 int shapes_log(const char *format, ...);
+// Write each byte's index into data, calling visit after each until it returns nonzero.
+int shapes_fill(unsigned char *data, size_t size, int (*visit)(void *ctx, int index), void *ctx);
 const char *shapes_log_line(void);  // The last log line
 size_t shapes_path_length(ShapesPath path);
 
@@ -95,13 +97,14 @@ size_t shapes_path_length(ShapesPath path);
 ** Sum two or three integers.
 */
 int shapes_sum2(int a, int b);
-int shapes_mul(int value, int factor);
-uint32_t shapes_unsigned_max(void);  // UINT32_MAX
 int shapes_sum3(
 	int a, /* First term */
 	int b, /* Second term */
 	int c  /* Third term */
 );
+
+int shapes_mul(int value, int factor);
+uint32_t shapes_unsigned_max(void);  // UINT32_MAX
 
 static inline int shapes_twice(int value) { return value * 2; }
 
