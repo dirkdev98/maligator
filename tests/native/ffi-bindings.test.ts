@@ -103,6 +103,8 @@ describe("C library bindings", () => {
 			"rejected TypeError: shapes_text_bytes: text expects a string without NUL characters",
 			"rejected RangeError: shapes_log_count: arg2 expects an integer from -2147483648 to 2147483647",
 			"rejected TypeError: shapes_fill: data expects a buffer that is not immutable",
+			"rejected TypeError: shapes_area: box.y expects a number",
+			"rejected TypeError: shapes_area: box.y expects a number",
 		]);
 	});
 

@@ -351,6 +351,9 @@ const rejected = [
 	() => shapes_text_bytes("a\0b"),
 	() => shapes_log_count("%d", 1.5),
 	() => shapes_fill(new Uint8Array(immutable), () => 0),
+	// The same bad field with and without the box's shape, so both read paths throw.
+	() => shapes_area({ min: { x: 0, y: 0 }, max: { x: 1, y: "1" as unknown as number } }),
+	() => shapes_area({ min: { x: 0, y: 0 }, max: { y: "1" as unknown as number, x: 1 } }),
 ];
 for (const call of rejected) {
 	try {

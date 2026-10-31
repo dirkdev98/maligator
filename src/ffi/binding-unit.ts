@@ -466,6 +466,71 @@ class BindingWriter {
 	 * The helpers that convert an input record: `mal_ffi_fields_<name>` converts field
 	 * values already read, and `mal_ffi_in_<name>` reads them from an object first.
 	 */
+	/** Whether every field is an immediate value or a struct of such fields, at any depth. */
+	#flat(record: MappedRecord): boolean {
+		return record.fields.every(
+			(field) =>
+				IMMEDIATE_KINDS.has(field.value.kind) ||
+				(field.value.kind === "record" && this.#flat(this.#record(field.value.name))),
+		);
+	}
+
+	/** Whether `mal_ffi_record_leaves` can read the record in one call. */
+	#readsLeaves(record: MappedRecord): boolean {
+		return (
+			record.fields.some((field) => field.value.kind === "record") && this.#flat(record)
+		);
+	}
+
+	/** Input records read through `mal_ffi_record_leaves`, and the structs nested in them. */
+	#leafRecords(): Set<string> {
+		const names = new Set<string>();
+		const add = (name: string): void => {
+			if (names.has(name)) return;
+			names.add(name);
+			for (const field of this.#record(name).fields)
+				if (field.value.kind === "record") add(field.value.name);
+		};
+		for (const name of this.#inputs) if (this.#readsLeaves(this.#record(name))) add(name);
+		return names;
+	}
+
+	/**
+	 * Convert a struct's immediate fields from `*mal_leaves`, depth first, advancing it.
+	 * The record had its shape at every level, so field values are exactly what reading
+	 * each level would produce, and conversion errors match.
+	 */
+	#recordLeaves(name: string): Array<string> {
+		const record = this.#record(name);
+		return [
+			"",
+			`static bool mal_ffi_leaves_${name}(MalVm *vm, const MalValue **mal_leaves, const MalFfiSite *mal_site, ${record.spelling} *mal_out) {`,
+			"	MalFfiSite mal_field_site = *mal_site;",
+			...record.fields.flatMap((field) => [
+				`	mal_field_site.field = ${cString(field.name)};`,
+				...(field.value.kind === "record"
+					? [
+							`	if (!mal_ffi_leaves_${field.value.name}(vm, mal_leaves, &mal_field_site, &mal_out->${field.name})) return false;`,
+						]
+					: [
+							...this.read(
+								field.value,
+								field.type,
+								"(*mal_leaves)[0]",
+								`mal_out->${field.name}`,
+								"&mal_field_site",
+								"return false;",
+								[],
+								true,
+							).map((line) => `	${line}`),
+							"	(*mal_leaves)++;",
+						]),
+			]),
+			"	return true;",
+			"}",
+		];
+	}
+
 	#recordInput(name: string): Array<string> {
 		const record = this.#record(name);
 		const count = String(record.fields.length);
@@ -496,6 +561,15 @@ class BindingWriter {
 			"}",
 			"",
 			`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out) {`,
+			...(this.#readsLeaves(record)
+				? [
+						`\tMalValue mal_leaves[${String(this.#leafCount(record))}];`,
+						`\tif (mal_ffi_record_leaves(vm, mal_value, &mal_ffi_record_${name}, mal_leaves)) {`,
+						"\t\tconst MalValue *mal_leaf = mal_leaves;",
+						`\t\treturn mal_ffi_leaves_${name}(vm, &mal_leaf, mal_site, mal_out);`,
+						"\t}",
+					]
+				: []),
 			`\tMalValue mal_fields[${count}] = {};`,
 			...(rootFields
 				? [
@@ -511,10 +585,22 @@ class BindingWriter {
 		return lines;
 	}
 
+	#leafCount(record: MappedRecord): number {
+		return record.fields.reduce(
+			(total, field) =>
+				total +
+				(field.value.kind === "record"
+					? this.#leafCount(this.#record(field.value.name))
+					: 1),
+			0,
+		);
+	}
+
 	recordHelpers(): Array<string> {
 		const lines: Array<string> = [];
 		const inputs = [...this.#inputs].sort(byteOrder);
 		const outputs = [...this.#outputs].sort(byteOrder);
+		const leaves = [...this.#leafRecords()].sort(byteOrder);
 		for (const name of inputs) {
 			const record = this.#record(name);
 			lines.push(
@@ -522,18 +608,36 @@ class BindingWriter {
 				`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out);`,
 			);
 		}
+		for (const name of leaves) {
+			lines.push(
+				`static bool mal_ffi_leaves_${name}(MalVm *vm, const MalValue **mal_leaves, const MalFfiSite *mal_site, ${this.#record(name).spelling} *mal_out);`,
+			);
+		}
 		for (const name of outputs) {
 			lines.push(
 				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${this.#record(name).spelling} mal_value);`,
 			);
 		}
-		for (const name of [...new Set([...inputs, ...outputs])].sort(byteOrder)) {
+		const typed = [...new Set([...inputs, ...outputs])].sort(byteOrder);
+		// Declared first, as nested-record tables point at types defined later.
+		for (const name of typed)
+			lines.push(`static MalFfiRecordType mal_ffi_record_${name};`);
+		for (const name of typed) {
 			const record = this.#record(name);
+			const nested =
+				leaves.includes(name) &&
+				record.fields.some((field) => field.value.kind === "record");
 			lines.push(
 				`static const char *const mal_ffi_record_fields_${name}[] = { ${record.fields.map((field) => cString(field.name)).join(", ")} };`,
-				`static MalFfiRecordType mal_ffi_record_${name} = { mal_ffi_record_fields_${name}, ${String(record.fields.length)}, 0 };`,
+				...(nested
+					? [
+							`static MalFfiRecordType *const mal_ffi_record_nested_${name}[] = { ${record.fields.map((field) => (field.value.kind === "record" ? `&mal_ffi_record_${field.value.name}` : "nullptr")).join(", ")} };`,
+						]
+					: []),
+				`static MalFfiRecordType mal_ffi_record_${name} = { mal_ffi_record_fields_${name}, ${String(record.fields.length)}, 0, ${nested ? `mal_ffi_record_nested_${name}` : "nullptr"} };`,
 			);
 		}
+		for (const name of leaves) lines.push(...this.#recordLeaves(name));
 		for (const name of inputs) lines.push(...this.#recordInput(name));
 		for (const name of outputs) {
 			const record = this.#record(name);
@@ -1170,7 +1274,7 @@ class BindingWriter {
 			const first = fields.length - binding.outputs.length;
 			locals.push(
 				`static const char *const mal_output_fields[] = { ${fields.map(cString).join(", ")} };`,
-				`static MalFfiRecordType mal_output_type = { mal_output_fields, ${String(fields.length)}, 0 };`,
+				`static MalFfiRecordType mal_output_type = { mal_output_fields, ${String(fields.length)}, 0, nullptr };`,
 			);
 			after.push(
 				`MalValue mal_outputs[${String(fields.length)}] = { ${first === 1 ? "mal_result" : "0"} };`,

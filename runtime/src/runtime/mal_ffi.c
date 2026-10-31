@@ -517,26 +517,25 @@ static bool ffi_set_field(MalVm *vm, MalValue record, const char *name, MalValue
 /** The last slot handed to a record type; slots are process-wide and never reused. */
 static _Atomic i32 ffi_record_slots;
 
+/** Slots are plain numbers that publish nothing else, so relaxed ordering suffices. */
 static i32 ffi_record_slot(MalFfiRecordType *type) {
-    i32 slot = atomic_load_explicit(&type->slot, memory_order_acquire);
+    i32 slot = atomic_load_explicit(&type->slot, memory_order_relaxed);
     if (slot != 0) return slot;
     i32 fresh = atomic_fetch_add_explicit(&ffi_record_slots, 1, memory_order_relaxed) + 1;
     // Another VM thread may number the type first; both then use its slot.
     if (atomic_compare_exchange_strong_explicit(
-            &type->slot, &slot, fresh, memory_order_acq_rel, memory_order_acquire)) {
+            &type->slot, &slot, fresh, memory_order_relaxed, memory_order_relaxed)) {
         return fresh;
     }
     return slot;
 }
 
-/** The shape of `type`'s objects; shapes live as long as the heap's transition tree. */
-static MalShape *ffi_record_shape(MalVm *vm, MalFfiRecordType *type) {
-    MalFfiState *state = vm->ffi;
-    i32 slot = ffi_record_slot(type);
-    if (state != nullptr && (usize) slot < state->shape_capacity && state->shapes[slot] != nullptr) {
-        return state->shapes[slot];
-    }
-    state = ffi_state(vm);
+/**
+ * Create the shape of `type`'s objects on a VM's first use. Kept out of line: its
+ * key buffer would give every lookup a large, canary-checked frame.
+ */
+static __attribute__((noinline)) MalShape *ffi_record_shape_create(MalVm *vm, MalFfiRecordType *type, i32 slot) {
+    MalFfiState *state = ffi_state(vm);
     if (state == nullptr) return nullptr;
     if ((usize) slot >= state->shape_capacity) {
         usize capacity = state->shape_capacity == 0 ? 16 : state->shape_capacity;
@@ -555,6 +554,16 @@ static MalShape *ffi_record_shape(MalVm *vm, MalFfiRecordType *type) {
     MalShape *shape = mal_shape_from_string_keys(&vm->heap, keys, (u32) type->field_count);
     state->shapes[slot] = shape;
     return shape;
+}
+
+/** The shape of `type`'s objects; shapes live as long as the heap's transition tree. */
+static inline MalShape *ffi_record_shape(MalVm *vm, MalFfiRecordType *type) {
+    MalFfiState *state = vm->ffi;
+    i32 slot = ffi_record_slot(type);
+    if (state != nullptr && (usize) slot < state->shape_capacity && state->shapes[slot] != nullptr) {
+        return state->shapes[slot];
+    }
+    return ffi_record_shape_create(vm, type, slot);
 }
 
 bool mal_ffi_record_fields(
@@ -579,6 +588,25 @@ bool mal_ffi_record_fields(
         }
     }
     return true;
+}
+
+static bool ffi_record_leaves(
+    MalVm *vm, MalValue record, MalFfiRecordType *type, MalValue **leaves) {
+    if (!mal_value_is_heap_type(record, MAL_HEAP_OBJECT)) return false;
+    MalObject *object = mal_value_to_object(record);
+    MalShape *shape = ffi_record_shape(vm, type);
+    if (shape == nullptr || object->shape != shape) return false;
+    for (i32 index = 0; index < type->field_count; index++) {
+        MalValue field = mal_object_field_load_shaped(object, (u32) index);
+        MalFfiRecordType *nested = type->nested == nullptr ? nullptr : type->nested[index];
+        if (nested == nullptr) *(*leaves)++ = field;
+        else if (!ffi_record_leaves(vm, field, nested, leaves)) return false;
+    }
+    return true;
+}
+
+bool mal_ffi_record_leaves(MalVm *vm, MalValue record, MalFfiRecordType *type, MalValue *leaves) {
+    return ffi_record_leaves(vm, record, type, &leaves);
 }
 
 bool mal_ffi_record_elements(

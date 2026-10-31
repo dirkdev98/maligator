@@ -237,7 +237,20 @@ typedef struct MalFfiRecordType {
     const char *const *fields;
     int32_t field_count;
     _Atomic int32_t slot;
+    /**
+     * Per field, the record type of a nested struct whose fields are all immediate
+     * values, or null for an immediate field. Null for a record without nested ones.
+     */
+    struct MalFfiRecordType *const *nested;
 } MalFfiRecordType;
+
+/**
+ * Read a nested record argument's immediate fields into `leaves`, depth first in
+ * field order, when the record and every nested one is an ordinary object with its
+ * record's shape. Otherwise false, with nothing thrown: the binding then reads each
+ * level with `mal_ffi_record_fields`.
+ */
+bool mal_ffi_record_leaves(MalVm *vm, MalValue record, MalFfiRecordType *type, MalValue *leaves);
 
 /**
  * Read every field of a record argument into `values`, which must stay rooted
