@@ -54,6 +54,7 @@ void shapes_canvas_close(ShapesCanvas *canvas);
 const char *shapes_canvas_title(const ShapesCanvas *canvas);  // NULL for no canvas
 int shapes_canvases_open(void);  // Canvases opened and not closed
 ShapesCanvas *shapes_canvas_current(void);  // The canvas opened last, while it is open
+ShapesCanvas *shapes_get_first_canvas(void);  // The first canvas opened, while it is open
 
 // Allocate a bitmap of zero pixels.
 ShapesBitmap shapes_bitmap_new(int width, int height);

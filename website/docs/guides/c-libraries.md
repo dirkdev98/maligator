@@ -244,7 +244,7 @@ Use `async` only for functions the library allows on another thread while the pr
 maligator ffi inspect raylib
 ```
 
-The report lists each function that is not exported and the fact it needs. It also suggests facts from naming and signature conventions: a count parameter beside a pointer, a pointer the function writes, the `void *` a callback receives or the function that returns it, a setter that replaces its callback, a struct with its own release function or an opaque one nothing releases, a result whose documentation says how to free it. Each suggestion is checked against the headers and listed only when it makes a function bind, but it comes from names rather than the library's documentation, so review it before adding it to the contract.
+The report lists each function that is not exported and the fact it needs. It also suggests facts from naming and signature conventions: a count parameter beside a pointer, a pointer the function writes, the `void *` a callback receives or the function that returns it, a setter that replaces its callback, a struct with its own release function or an opaque one nothing releases, a getter's result as borrowed, a result whose documentation says how to free it. Each suggestion is checked against the headers and listed only when it makes a function bind, but it comes from names rather than the library's documentation, so review it before adding it to the contract.
 
 `--json` prints every declaration with its C and TypeScript forms, its header documentation, the missing facts, and the suggestions in contract shape, for tools that propose facts.
 

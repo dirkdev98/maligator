@@ -463,7 +463,18 @@ describe("ffi contract facts", () => {
 					suggestible(facts.returns ?? {}),
 			);
 
-		expect(suggestions.functions).toEqual(Object.fromEntries(stated));
+		// Getters' results are suggested as borrowed apart from the stated facts.
+		const getters = Object.entries(suggestions.functions).filter(([name]) =>
+			name.includes("_get_"),
+		);
+		expect(Object.fromEntries(getters)).toEqual({
+			shapes_get_first_canvas: { returns: { borrowed: true } },
+		});
+		expect(
+			Object.fromEntries(
+				Object.entries(suggestions.functions).filter(([name]) => !name.includes("_get_")),
+			),
+		).toEqual(Object.fromEntries(stated));
 		expect(
 			Object.fromEntries(
 				Object.entries(suggestions.types).map(([name, facts]) => [

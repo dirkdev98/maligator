@@ -10,6 +10,7 @@ export default {
 	functions: {
 		shapes_bitmap_shared: { returns: { borrowed: true } },
 		shapes_canvas_current: { returns: { borrowed: true } },
+		shapes_get_first_canvas: { returns: { borrowed: true } },
 		shapes_canvas_title: {
 			params: { canvas: { nullable: true } },
 			async: "shapes_canvas_title_async",

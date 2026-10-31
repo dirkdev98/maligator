@@ -44,6 +44,7 @@ bool shapes_contains(ShapesBox box, ShapesPoint point) {
 static int canvases_open;
 static int bitmaps_live;
 static ShapesCanvas *current_canvas;
+static ShapesCanvas *first_canvas;
 
 ShapesCanvas *shapes_canvas_open(const char *title) {
 	ShapesCanvas *canvas = calloc(1, sizeof(*canvas));
@@ -51,16 +52,20 @@ ShapesCanvas *shapes_canvas_open(const char *title) {
 	snprintf(canvas->title, sizeof(canvas->title), "%s", title);
 	canvases_open++;
 	current_canvas = canvas;
+	if (first_canvas == NULL) first_canvas = canvas;
 	return canvas;
 }
 
 void shapes_canvas_close(ShapesCanvas *canvas) {
 	if (canvas == current_canvas) current_canvas = NULL;
+	if (canvas == first_canvas) first_canvas = NULL;
 	free(canvas);
 	canvases_open--;
 }
 
 ShapesCanvas *shapes_canvas_current(void) { return current_canvas; }
+
+ShapesCanvas *shapes_get_first_canvas(void) { return first_canvas; }
 
 const char *shapes_canvas_title(const ShapesCanvas *canvas) {
 	return canvas == NULL ? NULL : canvas->title;
