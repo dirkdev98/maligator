@@ -827,14 +827,12 @@ Shared lifetime and fallback rules are recorded in
       about 54 s on AC. In a CPU-profiled run Core optimization took 33 s (cross-call
       transforms 8.9 s, memory and provenance 5.4 s, program flow 2.8 s plus its
       refreshes, structural CFG 2.6 s, verification 2.3 s), execution to image 7.6 s,
-      emission 5.6 s and Core to execution 4.2 s. Scavenges take about 5 s: iterator
-      results are still 14 GB of the run's 87 GB sampled allocation, from the
-      store's ID generators (`instructionIds()` returns an array without an active
-      editor and a generator with one, so its loops stay polymorphic), loops over
-      `x?.values() ?? []` in program flow, and `new Map(previous)` copies in
-      reachability.
-      6ce7d318 still triples plan candidates by planning every exact call outside
-      the budget.
+      emission 5.6 s and Core to execution 4.2 s. Scavenges take about 5 s. Iterator
+      results are still 13 GB of the run's 84 GB sampled allocation, spread over
+      many polymorphic or unoptimized loops (none above 0.8 GB), and Map/Set table
+      growth adds about 12 GB. Program flow recomputes 6 times at about 0.8 s each,
+      plus 1.6 s for program-flow value kinds. 6ce7d318 still triples plan
+      candidates by planning every exact call outside the budget.
 - [ ] Invalidate warm frontend caches when module-resolution topology changes.
       The original serial cache can retain a resolved `.mjs` target after a preferred
       extensionless file appears, or retain a package target after a nearer package

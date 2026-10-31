@@ -5,6 +5,12 @@ import { CoreEditor } from "./core-editor.ts";
 import type { CoreInsertedInstruction } from "./core-editor.ts";
 import { CoreFunctionKernel } from "./core-function-kernel.ts";
 import {
+	CoreInstructionChainCursor,
+	CoreLiveIdCursor,
+	CoreSlotCursor,
+	CoreValueCursor,
+} from "./core-id-cursors.ts";
+import {
 	coreBlockId,
 	coreFactId,
 	coreFunctionId,
@@ -985,6 +991,9 @@ export class CoreFunctionStore {
 		return this.#sealed;
 	}
 
+	// Without an editor the ID walks return the shared dense snapshot, not a cursor:
+	// V8 lowers array iteration as a builtin, independent of the caller's inlining
+	// budget, and one cursor class for both states measured slower on the self-compile.
 	blockIds(): Iterable<CoreBlockId> {
 		if (this.#retired) this.#throwRetiredGeneration();
 		if (this.#sealedBlocks !== undefined) return this.#sealedBlocks;
@@ -998,14 +1007,7 @@ export class CoreFunctionStore {
 			}
 			return this.#blockSnapshot;
 		}
-		return this.#liveBlockIds();
-	}
-
-	*#liveBlockIds(): Iterable<CoreBlockId> {
-		for (let id = 0; id < this.#blockLive.length; id++) {
-			if (this.#retired) this.#throwRetiredGeneration();
-			if (this.#blockLive[id] === 1) yield coreBlockId(id);
-		}
+		return new CoreLiveIdCursor<CoreBlockId>(this, this.#blockLive);
 	}
 
 	instructionIds(block?: CoreBlockId): Iterable<CoreInstructionId> {
@@ -1022,58 +1024,42 @@ export class CoreFunctionStore {
 			}
 			return this.#instructionSnapshot;
 		}
-		return this.#liveInstructionIds(block);
+		if (block === undefined)
+			return new CoreLiveIdCursor<CoreInstructionId>(this, this.#instructionLive);
+		return this.#instructionChain(block, undefined);
 	}
 
-	*#liveInstructionIds(block?: CoreBlockId): Iterable<CoreInstructionId> {
-		if (block === undefined) {
-			for (let id = 0; id < this.#instructionLive.length; id++) {
-				if (this.#retired) this.#throwRetiredGeneration();
-				if (this.#instructionLive[id] === 1) yield coreInstructionId(id);
-			}
-			return;
-		}
+	valueIds(): Iterable<CoreValueId> {
+		if (this.#retired) this.#throwRetiredGeneration();
+		return new CoreValueCursor(this, {
+			blockLive: this.#blockLive,
+			blockParameterStart: this.#blockParameterStart,
+			blockParameterCount: this.#blockParameterCount,
+			blockParameterValues: this.#blockParameterValues,
+			instructionLive: this.#instructionLive,
+			instructionResultStart: this.#instructionResultStart,
+			instructionResultCount: this.#instructionResultCount,
+			results: this.#results,
+		});
+	}
+
+	/** Instructions of `block` before its terminator, read lazily as the walk advances. */
+	bodyInstructionIds(block: CoreBlockId): Iterable<CoreInstructionId> {
+		return this.#instructionChain(block, this.#instructionOpcode);
+	}
+
+	#instructionChain(
+		block: CoreBlockId,
+		opcode: ReadonlyArray<number> | undefined,
+	): CoreInstructionChainCursor {
 		this.#requireBlock(block);
-		for (
-			let instruction = this.#blockFirstInstruction[block] ?? -1;
-			instruction >= 0;
-			instruction = this.#instructionNext[instruction] ?? -1
-		) {
-			if (this.#retired) this.#throwRetiredGeneration();
-			yield coreInstructionId(instruction);
-		}
-	}
-
-	*valueIds(): Iterable<CoreValueId> {
-		for (const block of this.blockIds()) {
-			const start = this.#blockParameterStart[block]!;
-			const count = this.#blockParameterCount[block]!;
-			for (let index = 0; index < count; index++) {
-				if (this.#retired) this.#throwRetiredGeneration();
-				yield this.#blockParameterValues[start + index]!;
-			}
-		}
-		for (const instruction of this.instructionIds()) {
-			const start = this.#instructionResultStart[instruction]!;
-			const count = this.#instructionResultCount[instruction]!;
-			for (let index = 0; index < count; index++) {
-				if (this.#retired) this.#throwRetiredGeneration();
-				yield this.#results[start + index]!;
-			}
-		}
-	}
-
-	*bodyInstructionIds(block: CoreBlockId): Iterable<CoreInstructionId> {
-		this.#requireBlock(block);
-		for (
-			let instruction = this.#blockFirstInstruction[block] ?? -1;
-			instruction >= 0;
-			instruction = this.#instructionNext[instruction] ?? -1
-		) {
-			if (this.#retired) this.#throwRetiredGeneration();
-			if (this.#instructionOpcode[instruction]! >= 0)
-				yield coreInstructionId(instruction);
-		}
+		return new CoreInstructionChainCursor(
+			this,
+			this.#blockFirstInstruction,
+			this.#instructionNext,
+			opcode,
+			block,
+		);
 	}
 
 	hasBodyInstructions(block: CoreBlockId): boolean {
@@ -1082,12 +1068,13 @@ export class CoreFunctionStore {
 		return first >= 0 && this.#instructionOpcode[first]! >= 0;
 	}
 
-	*factIds(): Iterable<CoreFactId> {
+	factIds(): Iterable<CoreFactId> {
 		if (this.#retired) this.#throwRetiredGeneration();
-		for (let id = 0; id < this.#facts.length; id++) {
-			if (this.#retired) this.#throwRetiredGeneration();
-			if (this.#facts[id] !== undefined) yield coreFactId(id);
-		}
+		return new CoreSlotCursor<CoreFactId>(this, this.#facts);
+	}
+
+	assertCurrentGeneration(): void {
+		if (this.#retired) this.#throwRetiredGeneration();
 	}
 
 	isBlockLive(id: CoreBlockId): boolean {
@@ -2949,10 +2936,8 @@ export class CoreProgram {
 		return Object.freeze({ ...this.#constructionStatistics });
 	}
 
-	*functionIds(): Iterable<CoreFunctionId> {
-		for (let id = 0; id < this.#functions.length; id++) {
-			if (this.#functions[id] !== undefined) yield coreFunctionId(id);
-		}
+	functionIds(): Iterable<CoreFunctionId> {
+		return new CoreSlotCursor<CoreFunctionId>(undefined, this.#functions);
 	}
 
 	hasFunction(id: CoreFunctionId): boolean {
