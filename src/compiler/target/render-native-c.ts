@@ -2960,6 +2960,7 @@ function emitCompiledVariant(
 			stackObjectSites.get(site.allocationIp)!.materializedSlot = nextStackSlot++;
 	}
 	const stackObjectMaterializations = new Map<number, StackObjectMaterialization>();
+	const stackObjectLends = new Map<number, Array<StackObjectMaterialization>>();
 	const stackObjectAccesses = new Map<number, { site: StackObjectSite; slot: number }>();
 	const stackObjectInheritedAccesses = new Map<number, StackObjectSite>();
 	for (const action of topology.actionsByKind.get("stack-object-plan") ?? []) {
@@ -2985,11 +2986,19 @@ function emitCompiledVariant(
 				(materialization.kind === "return"
 					? instruction?.opcode !== "RETURN"
 					: materialization.values === undefined) ||
-				stackObjectMaterializations.has(action.ip)
+				(materialization.kind === "lend"
+					? instruction?.opcode !== "CALL"
+					: stackObjectMaterializations.has(action.ip))
 			) {
 				throw new Error(
 					`Invalid stack-object materialization metadata at instruction ${action.ip}`,
 				);
+			}
+			if (materialization.kind === "lend") {
+				const lends = stackObjectLends.get(action.ip) ?? [];
+				lends.push({ site, values: materialization.values! });
+				stackObjectLends.set(action.ip, lends);
+				continue;
 			}
 			stackObjectMaterializations.set(action.ip, {
 				site,
@@ -3280,6 +3289,7 @@ function emitCompiledVariant(
 		stackObjectSites,
 		stackObjectAccesses,
 		stackObjectMaterializations,
+		stackObjectLends,
 		stackObjectInheritedAccesses,
 		stringSplitProjectionSites,
 		stringSplitCursorSites,
@@ -5197,6 +5207,7 @@ function emitResumableFunction(
 		new Map(),
 		new Map(),
 		new Map(),
+		new Map(),
 		directCompiledTargets,
 		directCompiledEntries,
 		undefined,
@@ -6368,6 +6379,7 @@ function emitBody(
 	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
 	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
 	stackObjectMaterializations: ReadonlyMap<number, StackObjectMaterialization>,
+	stackObjectLends: ReadonlyMap<number, ReadonlyArray<StackObjectMaterialization>>,
 	stackObjectInheritedAccesses: ReadonlyMap<number, StackObjectSite>,
 	stringSplitProjectionSites: ReadonlyMap<number, NativeStringSplitProjectionSite>,
 	stringSplitCursorSites: ReadonlyMap<number, NativeStringSplitCursorSite>,
@@ -7117,6 +7129,7 @@ function emitBody(
 		stackObjectSite: undefined,
 		stackObjectAccess: undefined,
 		stackObjectMaterialization: undefined,
+		stackObjectLends: undefined,
 		stackObjectInheritedAccess: undefined,
 		directCompiledTargets,
 		directCompiledEntries,
@@ -7721,6 +7734,7 @@ function emitBody(
 		instructionContext.stackObjectSite = stackObjectSites.get(ip);
 		instructionContext.stackObjectAccess = stackObjectAccesses.get(ip);
 		instructionContext.stackObjectMaterialization = stackObjectMaterializations.get(ip);
+		instructionContext.stackObjectLends = stackObjectLends.get(ip);
 		instructionContext.stackObjectInheritedAccess = stackObjectInheritedAccesses.get(ip);
 		instructionContext.constantBoolean = directConstantBooleans.get(ip);
 		instructionContext.fieldLoad = fieldLoads.get(ip);
@@ -8258,6 +8272,8 @@ interface NativeInstructionContext {
 	readonly stackObjectSite?: StackObjectSite;
 	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
 	readonly stackObjectMaterialization?: StackObjectMaterialization;
+	/** Stack objects a C library call borrows as arguments, instead of heap copies. */
+	readonly stackObjectLends?: ReadonlyArray<StackObjectMaterialization>;
 	readonly stackObjectInheritedAccess?: StackObjectSite;
 	readonly strictCompiledTargets: ReadonlySet<number>;
 	readonly directCompiledTargets: ReadonlySet<number>;
@@ -8612,6 +8628,56 @@ class NativeInstructionEmission {
 
 	stackSlotRep(site: StackObjectSite, slot: number): RegisterRep {
 		return site.fieldSlots?.[slot]?.representation ?? "boxed";
+	}
+
+	/**
+	 * The arguments a C library call borrows from stack objects: the stack object itself,
+	 * or its heap copy once one exists. Typed field storage is boxed into a buffer the
+	 * object points at for the call only.
+	 */
+	lendStackObjects(): {
+		lent: Map<number, string>;
+		before: Array<string>;
+		after: Array<string>;
+	} {
+		const lent = new Map<number, string>();
+		const before: Array<string> = [];
+		const after: Array<string> = [];
+		for (const { site, values } of this.context.stackObjectLends ?? []) {
+			for (const value of values) {
+				if (lent.has(value)) continue;
+				const name = `__lend_${this.ip}_${value}`;
+				const fields = site.fieldSlots;
+				const borrow =
+					fields === undefined
+						? []
+						: [
+								...fields.map(
+									(field, slot) =>
+										`${name}_fields[${slot}] = ${this.convertedValue(field.representation, "boxed", field.name)};`,
+								),
+								`${site.objectName}.storage.fields = ${name}_fields;`,
+							];
+				before.push(
+					`MalValue ${name} = r${value};`,
+					...(fields === undefined ? [] : [`MalValue ${name}_fields[${fields.length}];`]),
+					`if (r${value} == mal_value_from_object(&${site.objectName}.object)) {`,
+					...(site.materializedSlot === undefined
+						? borrow.map((line) => `  ${line}`)
+						: [
+								`  if (!mal_value_is_undefined(__gc_slots[${site.materializedSlot}])) ${name} = __gc_slots[${site.materializedSlot}];`,
+								...(borrow.length === 0
+									? []
+									: ["  else {", ...borrow.map((line) => `    ${line}`), "  }"]),
+							]),
+					`}`,
+				);
+				if (fields !== undefined)
+					after.push(`${site.objectName}.storage.fields = nullptr;`);
+				lent.set(value, name);
+			}
+		}
+		return { lent, before, after };
 	}
 
 	stackLoad(site: StackObjectSite, slot: number, dst: number): string {
@@ -11628,13 +11694,21 @@ class NativeInstructionEmission {
 			// The callee is a C library import, so call its binding's direct entry with
 			// the arguments; missing ones are undefined and extra ones are dropped, as the
 			// binding's own function object would see them.
-			const values = Array.from({ length: foreign.arity }, (_, index) =>
-				index < args.length ? this.boxedOperand(args[index]!) : "MAL_VALUE_UNDEFINED",
-			);
+			const { lent, before, after } = this.lendStackObjects();
+			const values = Array.from({ length: foreign.arity }, (_, index) => {
+				if (index >= args.length) return "MAL_VALUE_UNDEFINED";
+				const operand = decodeVmValueOperand(args[index]!);
+				return (
+					(operand.kind === "register" ? lent.get(operand.register) : undefined) ??
+					this.boxedOperand(args[index]!)
+				);
+			});
 			const result = `foreign_result_${this.ip}`;
 			return [
 				`extern MalValue ${foreign.symbol}(MalVm *${", MalValue".repeat(foreign.arity)});`,
+				...before,
 				`MalValue ${result} = ${this.profileCall("call", `${foreign.symbol}(vm${values.map((value) => `, ${value}`).join("")})`)};`,
+				...after,
 				this.throwCheck(),
 				`r${instruction.dst} = ${callResult(result)};`,
 				this.callPoll(),

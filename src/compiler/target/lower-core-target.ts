@@ -1528,7 +1528,8 @@ function lowerCoreSpecializations(
 					const lowered = requireInstruction(instruction);
 					if (
 						(kind === "return" && lowered.type !== "return") ||
-						(kind === "observe" && values === undefined)
+						(kind !== "return" && values === undefined) ||
+						(kind === "lend" && lowered.type !== "call")
 					)
 						throw new Error(
 							`Core stack-object plan ${id} has an invalid materialization`,

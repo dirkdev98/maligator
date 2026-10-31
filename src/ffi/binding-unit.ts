@@ -1439,12 +1439,23 @@ export function generateBindingUnit(
 		direct: Object.fromEntries(
 			plan.functions.map((binding) => {
 				const result = directResult(binding);
+				const borrows = binding.params.flatMap(({ value }, argument) =>
+					value.kind === "record"
+						? [
+								{
+									argument,
+									fields: plan.records.get(value.name)!.fields.map((field) => field.name),
+								},
+							]
+						: [],
+				);
 				return [
 					binding.name,
 					{
 						symbol: directSymbol(library, binding.name),
 						arity: binding.params.length,
 						...(result === undefined ? {} : { result }),
+						...(borrows.length === 0 ? {} : { borrows }),
 					},
 				];
 			}),

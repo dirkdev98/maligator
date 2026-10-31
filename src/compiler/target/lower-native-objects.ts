@@ -109,6 +109,7 @@ export function selectNativeStackObjectStorage(
 				!site.materializations.every(
 					(materialization) =>
 						materialization.kind === "observe" ||
+						materialization.kind === "lend" ||
 						(materialization.kind === "return" &&
 							native.body.instructions[materialization.ip]?.opcode === "RETURN"),
 				)

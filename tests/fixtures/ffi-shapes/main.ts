@@ -206,6 +206,18 @@ console.log(`immutable checksum ${shapes_checksum(immutable)}`);
 	}
 	console.log(`lend ${lent[0] === lender} ${shapes_canvas_title(lent[0]!)} ${afterLend}`);
 }
+// Literals that C calls borrow from the stack, before and after one escapes to the heap.
+function lendLiterals(kept: Array<{ x: number; y: number }>): string {
+	const point = { x: 1, y: 2 };
+	const first = shapes_add(point, { x: 10, y: 10 });
+	point.x = 5;
+	const second = shapes_add(point, point);
+	kept.push(point);
+	point.y = 7;
+	const third = shapes_add(point, { x: 0, y: 0 });
+	return `${first.x},${first.y} ${second.x},${second.y} ${third.x},${third.y} ${kept[0]!.y}`;
+}
+console.log(`lend literals ${lendLiterals([])}`);
 const failures: Array<string> = [];
 shapes_set_error_handler((code, message) => {
 	failures.push(`a${code}:${message}`);

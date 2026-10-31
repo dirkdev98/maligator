@@ -93,9 +93,13 @@ interface CorePlanSpecializationBase<Kind extends CorePlanSpecializationKind> {
 	readonly cost: CorePlanCost;
 }
 
+/**
+ * Where a stack object leaves its storage: a return or an observing call copies it to
+ * the heap, while a lending call borrows the stack object itself for its duration.
+ */
 export interface CoreStackObjectMaterialization {
 	readonly instruction: CoreInstructionId;
-	readonly kind: "return" | "observe";
+	readonly kind: "return" | "observe" | "lend";
 	readonly values?: ReadonlyArray<CoreValueId>;
 }
 
@@ -1212,7 +1216,7 @@ export interface CoreAllocatedStackObjectPlanRegion extends CoreAllocatedRegionE
 		>;
 		readonly materializations: ReadonlyArray<{
 			readonly instruction: CompilerInstruction;
-			readonly kind: "return" | "observe";
+			readonly kind: "return" | "observe" | "lend";
 			readonly values?: ReadonlyArray<number>;
 		}>;
 	}>;

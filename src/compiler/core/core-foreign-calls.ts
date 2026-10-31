@@ -12,7 +12,7 @@ import { CoreEditor } from "./core-editor.ts";
 import type { CoreNormalResultFacts } from "./core-editor.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId } from "./core-ir.ts";
-import type { CoreFunctionStore } from "./core-store.ts";
+import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 /** The direct entries of C library imports, by the global slot each import occupies. */
 export function coreForeignSlots(
@@ -54,6 +54,26 @@ export function coreForeignCalls(
 		if (entry !== undefined) calls.set(instruction, entry);
 	}
 	return calls;
+}
+
+/**
+ * Whether a foreign call can borrow a stack object literal with `keys` as argument
+ * `argument`: the binding reads that struct before the C call and keeps nothing, and
+ * the literal has exactly the struct's fields in order, so it has the struct's shape
+ * and reading it runs no getter that could capture the object.
+ */
+export function coreForeignBorrows(
+	program: CoreProgram,
+	entry: FfiDirectEntry,
+	argument: number,
+	keys: ReadonlyArray<number>,
+): boolean {
+	const fields = entry.borrows?.find((borrow) => borrow.argument === argument)?.fields;
+	return (
+		fields !== undefined &&
+		fields.length === keys.length &&
+		fields.every((field, index) => program.stringConstantText(keys[index]!) === field)
+	);
 }
 
 function resultFacts(entry: FfiDirectEntry): CoreNormalResultFacts | undefined {

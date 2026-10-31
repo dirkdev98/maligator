@@ -14,6 +14,16 @@ export interface FfiDirectEntry {
 	readonly arity: number;
 	/** The result every normal completion produces, when it is a primitive. */
 	readonly result?: FfiDirectResult;
+	/**
+	 * Struct arguments, which the binding reads before the C call and never keeps, with
+	 * the struct's field names in order. A caller may lend storage it reuses afterwards.
+	 */
+	readonly borrows?: ReadonlyArray<FfiDirectBorrow>;
+}
+
+export interface FfiDirectBorrow {
+	readonly argument: number;
+	readonly fields: ReadonlyArray<string>;
 }
 
 /** A binding's primitive result; integers come from a C type, so their range is exact. */

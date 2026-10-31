@@ -114,7 +114,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 356;
+export const COMPILER_ARTIFACT_VERSION = 357;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -3125,8 +3125,8 @@ function writeCompilerArtifact(
 						w.u32(site.materializations.length);
 						for (const materialization of site.materializations) {
 							w.i32(materialization.ip);
-							w.u8(materialization.kind === "return" ? 1 : 2);
-							if (materialization.kind === "observe")
+							w.u8({ return: 1, observe: 2, lend: 3 }[materialization.kind]);
+							if (materialization.kind !== "return")
 								w.i32Array([...materialization.values!]);
 						}
 					}
@@ -3603,16 +3603,19 @@ function validateStackObjectPlanRegion(
 		for (const materialization of site.materializations) {
 			materializationCount++;
 			const instruction = fn.instructions[materialization.ip];
+			const lend = materialization.kind === "lend";
 			if (
 				(materialization.kind === "return"
 					? instruction?.opcode !== "RETURN"
 					: materialization.values === undefined ||
-						materialization.values.length === 0) ||
-				payload.has(materialization.ip)
+						materialization.values.length === 0 ||
+						(lend && instruction?.opcode !== "CALL")) ||
+				(!lend && payload.has(materialization.ip))
 			) {
 				valid = false;
 			}
-			payload.add(materialization.ip);
+			// Lends are unclaimed: several plans may lend to one call.
+			if (!lend) payload.add(materialization.ip);
 		}
 	}
 	if (
@@ -6123,15 +6126,16 @@ function readCompilerArtifact(
 						) {
 							const ip = r.i32();
 							const tag = r.u8();
-							if (tag !== 1 && tag !== 2) {
+							const kind = (["return", "observe", "lend"] as const)[tag - 1];
+							if (kind === undefined) {
 								throw new RangeError(
 									"program-image-codec: invalid stack-object materialization",
 								);
 							}
 							materializations.push({
 								ip,
-								kind: tag === 1 ? "return" : "observe",
-								...(tag === 2 ? { values: r.i32Array() } : {}),
+								kind,
+								...(kind === "return" ? {} : { values: r.i32Array() }),
 							});
 						}
 						sites.push({

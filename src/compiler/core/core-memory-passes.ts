@@ -2203,9 +2203,11 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 		const { program, item } = context;
 		const fn = program.function(item.function);
 		const proofs = context.analysis(CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS);
+		// A lend boxes the fields for the call, so it keeps their representations free.
 		const candidates = proofs.proofs.filter(
 			(candidate) =>
-				candidate.mode === "activation-local" && candidate.materializations.length === 0,
+				candidate.mode === "activation-local" &&
+				candidate.materializations.every(({ kind }) => kind === "lend"),
 		);
 		if (candidates.length === 0) return undefined;
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);

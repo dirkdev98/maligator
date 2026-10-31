@@ -48,7 +48,10 @@ export function validateNativeStackObject(
 			if (
 				values === undefined ||
 				values.length === 0 ||
-				values.some((value) => !vmInstructionReadRegisters(instruction).includes(value))
+				values.some(
+					(value) => !vmInstructionReadRegisters(instruction).includes(value),
+				) ||
+				(materialization.kind === "lend" && instruction.opcode !== "CALL")
 			)
 				fail();
 			if (instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN") {
@@ -67,7 +70,8 @@ export function validateNativeStackObject(
 			consumers.set(materialization.ip, values);
 		}
 	}
-	// Identity-only objects retain their stack identity without publishing it to another activation.
+	// Identity-only objects retain their stack identity without publishing it to another
+	// activation. A lend creates no heap alias, so it keeps that property.
 	const identityOnly = !site.materializations.some(
 		(materialization) => materialization.kind === "observe",
 	);

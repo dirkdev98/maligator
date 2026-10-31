@@ -754,11 +754,22 @@ export type VmStackObjectPlanRegion = VmRegionEnvelope<
 		readonly inheritedAccessIp?: number;
 		readonly materializations: ReadonlyArray<{
 			readonly ip: number;
-			readonly kind: "return" | "observe";
+			/** `lend` passes the stack object itself to a C library call for its duration. */
+			readonly kind: "return" | "observe" | "lend";
 			readonly values?: ReadonlyArray<number>;
 		}>;
 	}>;
 };
+
+/**
+ * The materialization ips a stack-object plan claims. Lends stay unclaimed, so several
+ * literals can lend to one call.
+ */
+export function claimedMaterializationIps(
+	materializations: VmStackObjectPlanRegion["sites"][number]["materializations"],
+): Array<number> {
+	return materializations.flatMap(({ ip, kind }) => (kind === "lend" ? [] : [ip]));
+}
 
 export type VmNumericFusionRegion = VmRegionEnvelope<
 	"numeric-fusion",
@@ -4304,7 +4315,9 @@ function lowerExecutionFunctionToNativePlan(
 							(materialization.kind === "return"
 								? instructions[materialization.ip]?.opcode !== "RETURN"
 								: materialization.values === undefined ||
-									materialization.values.length === 0),
+									materialization.values.length === 0 ||
+									(materialization.kind === "lend" &&
+										instructions[materialization.ip]?.opcode !== "CALL")),
 					)
 				) {
 					throw coreRegionError(region.kind, "site instruction metadata");
@@ -4319,7 +4332,7 @@ function lowerExecutionFunctionToNativePlan(
 					allocationIp,
 					...resolvedAccesses.map((access) => access.ip),
 					...(inheritedAccessIp === undefined ? [] : [inheritedAccessIp]),
-					...resolvedMaterializations.map((materialization) => materialization.ip),
+					...claimedMaterializationIps(resolvedMaterializations),
 				];
 				if (new Set(sitePayload).size !== sitePayload.length || sitePayload.length > 64) {
 					throw coreRegionError(region.kind, "site claim set");
@@ -4369,7 +4382,7 @@ function lowerExecutionFunctionToNativePlan(
 					1 +
 					site.accesses.length +
 					(site.inheritedAccessIp === undefined ? 0 : 1) +
-					site.materializations.length;
+					claimedMaterializationIps(site.materializations).length;
 				if (shard.length >= 8 || shardClaimCount + claimCount > 64) {
 					shards.push(shard);
 					shard = [];
@@ -4387,7 +4400,7 @@ function lowerExecutionFunctionToNativePlan(
 					site.allocationIp,
 					...site.accesses.map((access) => access.ip),
 					...(site.inheritedAccessIp === undefined ? [] : [site.inheritedAccessIp]),
-					...site.materializations.map((materialization) => materialization.ip),
+					...claimedMaterializationIps(site.materializations),
 				]);
 				for (const ip of claimedIps) claimedRegionInstructions.add(ip);
 				checkAdmission(region.kind, claimedIps, admission);

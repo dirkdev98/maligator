@@ -3,6 +3,11 @@ import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import {
+	coreForeignBorrows,
+	coreForeignCalls,
+	coreForeignSlots,
+} from "./core-foreign-calls.ts";
 import { coreExactCollectionBrand } from "./core-heap-brands.ts";
 import type { CoreExactCollectionBrand } from "./core-heap-brands.ts";
 import {
@@ -1260,6 +1265,33 @@ function stackObjectControlUses(
 	return { escapingRoots, returns, reachesExceptionTransport };
 }
 
+/**
+ * Whether a call in `fn` borrows a literal with `keys` as argument `argument`: a C
+ * library binding that only reads the struct before its C call.
+ */
+type CoreStackObjectLender = (
+	call: CoreInstructionId,
+	argument: number,
+	keys: ReadonlyArray<number>,
+) => boolean;
+
+function foreignLender(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	context: CoreCompilationContext | undefined,
+): CoreStackObjectLender | undefined {
+	if (context === undefined) return undefined;
+	const calls = coreForeignCalls(
+		fn,
+		coreForeignSlots(context.data.hostInstallCandidates),
+	);
+	if (calls.size === 0) return undefined;
+	return (call, argument, keys) => {
+		const entry = calls.get(call);
+		return entry !== undefined && coreForeignBorrows(program, entry, argument, keys);
+	};
+}
+
 function stackObjectCandidate(
 	fn: CoreFunctionStore,
 	layout: CoreNamedAllocationLayout,
@@ -1267,6 +1299,7 @@ function stackObjectCandidate(
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
 	controlUses: () => CoreStackObjectControlUses,
+	lender?: CoreStackObjectLender,
 ): CoreStackObjectCandidate | undefined {
 	const allocationBlock = fn.instructionBlock(layout.instruction);
 	// Changing storage cannot retire an allocation's observable exceptional continuation.
@@ -1367,6 +1400,8 @@ function stackObjectCandidate(
 	let requiresObjectIdentity = false;
 	const observations = new Map<CoreInstructionId, Set<CoreValueId>>();
 	const identities = new Map<CoreInstructionId, Set<CoreValueId>>();
+	// Calls that borrow the object as is; it stays in its stack storage across them.
+	const lends = new Map<CoreInstructionId, Set<CoreValueId>>();
 	const observe = (
 		map: Map<CoreInstructionId, Set<CoreValueId>>,
 		instruction: CoreInstructionId,
@@ -1416,7 +1451,13 @@ function stackObjectCandidate(
 			fn.instructionAttributes(instruction).argumentMode === undefined &&
 			handlerBlock(fn, fn.instructionBlock(instruction)) === undefined
 		) {
-			observe(observations, instruction, instructionOperand(fn, instruction, position)!);
+			const lent =
+				opcode === "call" && lender?.(instruction, position - 2, layout.keys) === true;
+			observe(
+				lent ? lends : observations,
+				instruction,
+				instructionOperand(fn, instruction, position)!,
+			);
 			continue;
 		}
 		return undefined;
@@ -1439,6 +1480,8 @@ function stackObjectCandidate(
 		return undefined;
 	if (observations.size > 0)
 		for (const [instruction, values] of identities) observations.set(instruction, values);
+	// A call that also observes the object passes the heap copy to every argument.
+	for (const instruction of observations.keys()) lends.delete(instruction);
 	const materializations: Array<CoreStackObjectMaterialization> = [
 		...new Set([...aliases].flatMap((root) => flow.returns.get(root) ?? [])),
 	].map((instruction) => ({
@@ -1451,19 +1494,32 @@ function stackObjectCandidate(
 			kind: "observe",
 			values: Object.freeze([...values]),
 		});
+	for (const [instruction, values] of lends)
+		materializations.push({
+			instruction,
+			kind: "lend",
+			values: Object.freeze([...values]),
+		});
 	const stableAccesses = Object.freeze(
 		[...accesses.values()].sort((left, right) => left.instruction - right.instruction),
 	);
 	const stableMaterializations = Object.freeze(
 		materializations.sort((left, right) => left.instruction - right.instruction),
 	);
+	// A lend changes only which value one argument passes, so other literals the same call
+	// borrows can lend there too: the plan does not claim the call.
 	const instructions = Object.freeze([
 		layout.instruction,
 		...stableAccesses.map(({ instruction }) => instruction),
-		...stableMaterializations.map(({ instruction }) => instruction),
+		...stableMaterializations.flatMap(({ instruction, kind }) =>
+			kind === "lend" ? [] : [instruction],
+		),
 	]);
+	const lent = stableMaterializations.flatMap(({ instruction, kind }) =>
+		kind === "lend" ? [instruction] : [],
+	);
 	return Object.freeze({
-		key: `stack-object:${fn.id}:${layout.instruction}:${instructions.join(",")}`,
+		key: `stack-object:${fn.id}:${layout.instruction}:${instructions.join(",")}${lent.length === 0 ? "" : `:lends:${lent.join(",")}`}`,
 		kind: "stack-object",
 		function: fn.id,
 		root: layout.instruction,
@@ -1509,7 +1565,7 @@ export const CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS: CoreAnalysisDefinition<Cor
 			"representations",
 		],
 		programDependencies: ["data"],
-		compute({ program, request, get }) {
+		compute({ program, context, request, get }) {
 			if (request.scope !== "function") {
 				throw new Error("Expected function analysis request");
 			}
@@ -1522,6 +1578,7 @@ export const CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS: CoreAnalysisDefinition<Cor
 			let controlUses: CoreStackObjectControlUses | undefined;
 			const getControlUses = () =>
 				(controlUses ??= stackObjectControlUses(fn, control, roots));
+			const lender = foreignLender(program, fn, context);
 			const proofs = provenanceAnalysis.layouts.flatMap((layout) => {
 				if (layout.kind !== "named-slots") return [];
 				const candidate = stackObjectCandidate(
@@ -1531,6 +1588,7 @@ export const CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS: CoreAnalysisDefinition<Cor
 					roots,
 					index,
 					getControlUses,
+					lender,
 				);
 				return candidate === undefined
 					? []
@@ -4552,6 +4610,7 @@ function discoverCandidates(
 	valueKinds: () => CoreValueKindAnalysis,
 	valueClasses: () => CoreValueClassAnalysis,
 	kinds?: ReadonlySet<CoreLocalSpecializationCandidate["kind"]>,
+	context?: CoreCompilationContext,
 ): CoreLocalSpecializationCandidates {
 	const fn = program.function(functionId);
 	const requested = (kind: CoreLocalSpecializationCandidate["kind"]): boolean =>
@@ -4596,6 +4655,10 @@ function discoverCandidates(
 		(stackControlUses ??= stackObjectControlUses(fn, control, roots));
 	const layouts =
 		requested("stack-object") || requested("dense-array") ? provenance().layouts : [];
+	const lender =
+		requested("stack-object") && layouts.length > 0
+			? foreignLender(program, fn, context)
+			: undefined;
 	for (const layout of layouts) {
 		if (layout.kind === "named-slots") {
 			if (!requested("stack-object")) continue;
@@ -4606,6 +4669,7 @@ function discoverCandidates(
 				roots,
 				index,
 				getStackControlUses,
+				lender,
 			);
 			if (candidate !== undefined) addCandidate(candidate);
 		} else {
@@ -4834,6 +4898,7 @@ export function discoverCoreLocalSpecializationCandidates(
 				() => index,
 			)),
 		kinds,
+		context,
 	);
 }
 
@@ -4844,7 +4909,7 @@ export const CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS: CoreAnalysisDefiniti
 		functionDependencies: SPECIALIZATION_FUNCTION_DEPENDENCIES,
 		programDependencies: ["data"],
 		contextIdentity: (context) => context.facts.world.primordialPolicy,
-		compute({ program, request, get }) {
+		compute({ program, context, request, get }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function analysis request");
 			const bundle = get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request);
@@ -4858,6 +4923,8 @@ export const CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS: CoreAnalysisDefiniti
 				bundle.index,
 				() => get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request),
 				() => bundle.valueClasses,
+				undefined,
+				context,
 			);
 		},
 	};
