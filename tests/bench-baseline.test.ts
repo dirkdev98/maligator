@@ -96,12 +96,13 @@ test("benchmark baseline writes one unattributed snapshot on update", () => {
 	expect(readFileSync(file, "utf8")).not.toMatch(/"(?:entries|commit|dirty)"/);
 });
 
-test("committed benchmark baseline records the three families and source identity", () => {
+test("committed benchmark baseline records every family and source identity", () => {
 	const baseline = readBenchmarkBaseline<Record<string, unknown>>("bench/baseline.json");
 	expect(baseline).toBeDefined();
 	expect(Object.keys(baseline!).sort()).toEqual([
 		"http",
 		"javascript",
+		"javascriptV2",
 		"schema",
 		"selfCompile",
 		"source",
