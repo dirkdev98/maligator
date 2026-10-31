@@ -310,7 +310,7 @@ MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function);
 /**
  * The destructor a binding hands the library for a kept callback's user data. A
  * release from another thread, or from a destroy function the collector runs, is
- * queued and completes on the VM thread after its next C call that can call back.
+ * queued and completes later on the VM thread.
  */
 void mal_ffi_release(void *data);
 /**
@@ -320,15 +320,10 @@ void mal_ffi_release(void *data);
  */
 MalVm *mal_ffi_callback_vm(MalFfiCallback *callback);
 /**
- * A direct entry that may call back counts as a native frame, as an ordinary call
- * of the binding does, so `mal_ffi_collectable_begin` balances on either path.
- */
-void mal_ffi_native_enter(MalVm *vm);
-void mal_ffi_native_leave(MalVm *vm);
-/**
- * Bracket a C call that may run JavaScript: everything the binding holds is rooted,
- * so the collector may run inside callbacks instead of letting a long-running call
- * grow the heap. The end also completes queued releases.
+ * Bracket a C call that may run JavaScript when the binding runs as an ordinary
+ * native call, which keeps the collector off: everything the binding holds is
+ * rooted, so the collector may run inside callbacks instead of letting a
+ * long-running call grow the heap. The end also completes queued releases.
  */
 void mal_ffi_collectable_begin(MalVm *vm);
 void mal_ffi_collectable_end(MalVm *vm);

@@ -810,14 +810,6 @@ void mal_ffi_release(void *data) {
     ffi_release_now(kept);
 }
 
-void mal_ffi_native_enter(MalVm *vm) {
-    vm->gc_native_frames++;
-}
-
-void mal_ffi_native_leave(MalVm *vm) {
-    vm->gc_native_frames--;
-}
-
 void mal_ffi_collectable_begin(MalVm *vm) {
     mal_gc_native_rooted_begin(vm);
 }

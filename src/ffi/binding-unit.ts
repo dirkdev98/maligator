@@ -102,17 +102,17 @@ function directEntry(
 		{ length: arity },
 		(_, index) => `, MalValue mal_a${String(index)}`,
 	);
+	// Compiled callers are not counted as native frames, so collection already runs
+	// inside callbacks reached this way.
 	const invoke = (args: string) =>
-		`mal_ffi_function_${binding.name}(vm, mal_ffi_undefined(), ${args}, ${String(arity)}, mal_ffi_undefined(), mal_ffi_undefined())`;
+		`mal_ffi_call_${binding.name}(vm, ${args}, ${String(arity)}, false)`;
 	// Pinned handles are read again by cleanup, after the result's allocations.
 	const rooted =
 		arity > 0 &&
-		(callsBack ||
-			binding.closes !== undefined ||
-			binding.params.some((param) => !UNROOTED_INPUTS.has(param.value.kind)));
+		(binding.closes !== undefined ||
+			binding.params.some(({ value }) => !UNROOTED_INPUTS.has(value.kind)) ||
+			(callsBack && binding.params.some(({ value }) => value.kind === "handle")));
 	const args = arity === 0 ? "nullptr" : "mal_direct_args";
-	// A binding that can call back runs as a native frame, as on the ordinary call path.
-	const framed = rooted || callsBack;
 	return [
 		"",
 		`MalValue ${symbol}(MalVm *vm${parameters.join("")}) {`,
@@ -125,14 +125,8 @@ function directEntry(
 			? [
 					"	MalFfiRoots mal_direct_roots;",
 					`	mal_ffi_root(&mal_direct_roots, mal_direct_args, ${String(arity)});`,
-				]
-			: []),
-		...(callsBack ? ["	mal_ffi_native_enter(vm);"] : []),
-		...(framed
-			? [
 					`	MalValue mal_direct_result = ${invoke(args)};`,
-					...(callsBack ? ["	mal_ffi_native_leave(vm);"] : []),
-					...(rooted ? ["	mal_ffi_unroot(&mal_direct_roots);"] : []),
+					"	mal_ffi_unroot(&mal_direct_roots);",
 					"	return mal_direct_result;",
 				]
 			: [`	return ${invoke(args)};`]),
@@ -643,7 +637,9 @@ class BindingWriter {
 			"free" in value && value.free !== undefined
 				? [`if ((${expression}) != nullptr) ${value.free}((void *) (${expression}));`]
 				: [];
-		const unlessThrew = pending ? "if (!mal_ffi_threw(vm)) " : "";
+		// A result that allocates nothing is simply ignored when a throw is pending.
+		const unlessThrew =
+			pending && this.#allocates(value) ? "if (!mal_ffi_threw(vm)) " : "";
 		const handle =
 			value.kind === "handle" && value.owned ? this.#handle(value.name) : undefined;
 		if (pending && handle?.destroy !== undefined) {
@@ -1088,9 +1084,9 @@ class BindingWriter {
 		}
 		const enter = [
 			...(keptIndexes.length > 0 ? ["mal_called = true;"] : []),
-			...(callsBack ? ["mal_ffi_collectable_begin(vm);"] : []),
+			...(callsBack ? ["if (mal_framed) mal_ffi_collectable_begin(vm);"] : []),
 		];
-		const leave = callsBack ? ["mal_ffi_collectable_end(vm);"] : [];
+		const leave = callsBack ? ["if (mal_framed) mal_ffi_collectable_end(vm);"] : [];
 		if (binding.returns.kind === "undefined") {
 			after.push(...enter, `${call};`, ...leave, ...closes);
 		} else {
@@ -1146,13 +1142,13 @@ class BindingWriter {
 		return [
 			...trampolines,
 			"",
-			`static MalValue mal_ffi_function_${name}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
+			// The body, shared by the function object (framed: the call counts as a native
+			// frame, so collection needs lifting around callbacks) and the direct entry.
+			`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed) {`,
 			"\t(void) vm;",
-			"\t(void) mal_this;",
-			"\t(void) mal_new_target;",
-			"\t(void) mal_callee;",
 			"\t(void) mal_args;",
 			"\t(void) mal_argc;",
+			"\t(void) mal_framed;",
 			"\tMalValue mal_result = mal_ffi_undefined();",
 			...strings.flatMap((temporary) => [
 				`\tMalFfiString ${temporary};`,
@@ -1169,6 +1165,13 @@ class BindingWriter {
 			...strings.map((temporary) => `\tmal_ffi_string_release(&${temporary});`),
 			...cleanup.map((line) => `\t${line}`),
 			"\treturn mal_result;",
+			"}",
+			"",
+			`static MalValue mal_ffi_function_${name}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
+			"\t(void) mal_this;",
+			"\t(void) mal_new_target;",
+			"\t(void) mal_callee;",
+			`\treturn mal_ffi_call_${name}(vm, mal_args, mal_argc, true);`,
 			"}",
 		];
 	}
