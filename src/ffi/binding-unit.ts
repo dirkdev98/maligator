@@ -713,7 +713,7 @@ class BindingWriter {
 				}
 			}
 		});
-		const call = `${name}(${declaration.params.map((_, index) => `mal_argument_${String(index)}`).join(", ")})`;
+		const call = `${declaration.name}(${declaration.params.map((_, index) => `mal_argument_${String(index)}`).join(", ")})`;
 		const closes =
 			binding.closes === undefined
 				? []

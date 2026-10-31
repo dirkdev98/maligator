@@ -84,7 +84,9 @@ int shapes_each(const ShapesPoint *points, int count,
 // Integrate f over [from, to] with the midpoint rule.
 double shapes_integrate(double (*f)(void *data, double x), void *data, double from, double to,
                         int steps);
+// Format a log line like printf; returns its length.
 int shapes_log(const char *format, ...);
+const char *shapes_log_line(void);  // The last log line
 size_t shapes_path_length(ShapesPath path);
 
 /*

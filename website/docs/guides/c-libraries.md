@@ -147,6 +147,23 @@ functions: {
 
 Each fact names the C declaration it describes. A fact that names nothing in the headers, or that does not fit the declaration, fails the build.
 
+## Call variadic functions
+
+A variadic function such as `TraceLog(int logLevel, const char *text, ...)` binds through variants. Each variant fixes the C types of the arguments after the fixed ones and becomes its own export, with those arguments named by position:
+
+```typescript native/raylib.ffi.ts
+functions: {
+	TraceLog: {
+		variants: {
+			TraceLogNumber: { args: ["double"] },
+			TraceLogText: { args: ["const char *"] },
+		},
+	},
+},
+```
+
+`TraceLogText(LOG_INFO, "loaded %s", name)` then calls `TraceLog` with a string as its third argument. The C compiler applies the usual argument promotions. A variant's `params` adds facts for its arguments, keyed by `arg<position>` or by position. The variadic function itself is not exported. The function reads the arguments by the types its other arguments announce, such as a format string, so a mismatch is undefined behavior in C. Pass fixed formats from a wrapper rather than text a user controls.
+
 ## Find what cannot bind
 
 ```shell

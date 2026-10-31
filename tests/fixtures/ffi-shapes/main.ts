@@ -26,6 +26,9 @@ import {
 	shapes_describe,
 	shapes_each,
 	shapes_integrate,
+	shapes_log_count,
+	shapes_log_line,
+	shapes_log_pair,
 	shapes_mode_name,
 	shapes_parse,
 	shapes_render,
@@ -74,6 +77,9 @@ console.log(
 console.log(`canvases after using ${shapes_canvases_open()}`);
 console.log(
 	`text bytes ${["Sketch", "Grüße", "🙂", "x".repeat(300)].map((text) => shapes_text_bytes(text)).join(",")}`,
+);
+console.log(
+	`log ${shapes_log_count("%d points", 3)} ${shapes_log_line()} ${shapes_log_pair("%s at %.1f", "origin", 2.5)} ${shapes_log_line()}`,
 );
 const opened = shapes_canvas_open("Same");
 console.log(`same handle ${opened === shapes_canvas_current()}`);
@@ -153,6 +159,7 @@ const rejected = [
 	() => shapes_total(1 as unknown as bigint, 1n),
 	() => shapes_add({ x: 1 } as unknown as { x: number; y: number }, { x: 0, y: 0 }),
 	() => shapes_text_bytes("a\0b"),
+	() => shapes_log_count("%d", 1.5),
 ];
 for (const call of rejected) {
 	try {

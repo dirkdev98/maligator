@@ -50,6 +50,8 @@ export interface FfiInspection {
 
 export interface FunctionInspection {
 	readonly name: string;
+	/** The variadic C function a variant calls; its arguments follow the fixed ones. */
+	readonly variantOf?: string;
 	readonly status: "bound" | "needs-facts";
 	readonly c: string;
 	readonly ts?: string;
@@ -217,9 +219,21 @@ export function inspectBindings(
 ): FfiInspection {
 	const bound = new Map(plan.functions.map((entry) => [entry.name, entry]));
 	const unbound = new Map(plan.unbound.map((entry) => [entry.name, entry]));
-	const functions = model.functions.map((declaration): FunctionInspection => {
-		const binding = bound.get(declaration.name);
-		const gaps = unbound.get(declaration.name)?.gaps;
+	// A variadic function with variants is reported as its variants.
+	const variants = new Map<string, Array<{ name: string; declaration: CFunction }>>();
+	for (const entry of [...plan.functions, ...plan.unbound]) {
+		if (entry.name === entry.declaration.name) continue;
+		const list = variants.get(entry.declaration.name) ?? [];
+		list.push({ name: entry.name, declaration: entry.declaration });
+		variants.set(entry.declaration.name, list);
+	}
+	const entries = model.functions.flatMap(
+		(declaration) =>
+			variants.get(declaration.name) ?? [{ name: declaration.name, declaration }],
+	);
+	const functions = entries.map(({ name, declaration }): FunctionInspection => {
+		const binding = bound.get(name);
+		const gaps = unbound.get(name)?.gaps;
 		const params = declaration.params.map((param, index) => {
 			const argument = binding?.arguments[index];
 			const role =
@@ -251,7 +265,8 @@ export function inspectBindings(
 				? undefined
 				: `(${formatTsParameters(binding)}) => ${formatTsResult(binding)}`;
 		return {
-			name: declaration.name,
+			name,
+			...(name === declaration.name ? {} : { variantOf: declaration.name }),
 			status: binding === undefined ? "needs-facts" : "bound",
 			c: formatCFunction(declaration),
 			...(signature === undefined ? {} : { ts: signature }),
@@ -313,7 +328,7 @@ export function inspectBindings(
 		headers: model.headers,
 		files: model.files,
 		summary: {
-			functions: model.functions.length,
+			functions: functions.length,
 			bound: plan.functions.length,
 			needFacts: plan.unbound.length,
 			types: types.length,

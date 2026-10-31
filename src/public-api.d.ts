@@ -129,6 +129,19 @@ export interface MaligatorFfiFunctionFacts {
 	/** Facts per parameter, keyed by C name or by 1-based position for unnamed ones. */
 	params?: Record<string, MaligatorFfiValueFacts>;
 	returns?: MaligatorFfiValueFacts;
+	/**
+	 * Functions that call a variadic function with fixed argument types, keyed by the
+	 * name each is exported as. The function's own facts apply to every variant.
+	 */
+	variants?: Record<string, MaligatorFfiVariant>;
+}
+
+/** One way to call a variadic function: the C types of the arguments after the fixed ones. */
+export interface MaligatorFfiVariant {
+	/** C type spellings, such as `int` or `const char *`; arguments are named `arg<position>`. */
+	args: Array<string>;
+	/** Facts for the variadic arguments, keyed by `arg<position>` or by 1-based position. */
+	params?: Record<string, MaligatorFfiValueFacts>;
 }
 
 /**

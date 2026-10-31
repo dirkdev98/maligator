@@ -225,6 +225,8 @@ export function suggestFacts(
 	}
 	const functions = new Map<string, MaligatorFfiFunctionFacts>();
 	for (const entry of typed.unbound) {
+		// Variants already carry their own facts.
+		if (entry.name !== entry.declaration.name) continue;
 		const suggested = suggestFunction(model, entry.declaration, entry.gaps);
 		if (suggested !== undefined) functions.set(entry.name, suggested);
 	}

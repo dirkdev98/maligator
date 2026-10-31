@@ -1,7 +1,7 @@
-import type { MaligatorFfiValueFacts } from "../public-api.d.ts";
+import type { MaligatorFfiValueFacts, MaligatorFfiVariant } from "../public-api.d.ts";
 import type { CFunction, CModel, CRecord } from "./c-model.ts";
 import { resolveCType } from "./c-model.ts";
-import { formatCDeclaration } from "./c-type.ts";
+import { formatCDeclaration, parseCType } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import type { LibraryFacts } from "./contract.ts";
 import { FfiError } from "./ffi-error.ts";
@@ -877,6 +877,57 @@ function constantValue(value: bigint, mapping: JsValue): bigint | number {
  * Apply the mapping rules and the contract's facts to every declaration a
  * library's headers provide. Facts that name nothing in the headers throw.
  */
+/**
+ * Bind one variant of a variadic function as a declaration whose variadic arguments
+ * have the variant's types, exported under the variant's name. Calls still go to the
+ * variadic function, so the C compiler applies the default argument promotions.
+ */
+function planVariant(
+	model: CModel,
+	planner: Planner,
+	declaration: CFunction,
+	stated: FunctionFacts | undefined,
+	name: string,
+	variant: MaligatorFfiVariant,
+): BoundFunction | UnboundFunction {
+	const at = `functions.${declaration.name}.variants.${name}`;
+	if (!declaration.variadic) {
+		throw new FfiError(`${at}: ${declaration.name} is not variadic`);
+	}
+	const fixed = declaration.params.length;
+	const params = [
+		...declaration.params,
+		...variant.args.map((spelling, index) => {
+			const type = parseCType(spelling);
+			if (
+				type.kind === "unsupported" ||
+				resolveCType(model, type).kind === "unsupported"
+			) {
+				throw new FfiError(`${at}.args[${index}]: '${spelling}' is not a C type`);
+			}
+			return { name: `arg${fixed + index + 1}`, type };
+		}),
+	];
+	const paramFacts: Array<MaligatorFfiValueFacts | undefined> = params.map(
+		(_, index) => stated?.params[index],
+	);
+	for (const [key, valueFacts] of Object.entries(variant.params ?? {})) {
+		const index = /^\d+$/.test(key)
+			? Number(key) - 1
+			: params.findIndex((param) => param.name === key);
+		if (index < fixed || index >= params.length) {
+			throw new FfiError(`${at}.params.${key}: ${name} has no such variadic argument`);
+		}
+		paramFacts[index] = valueFacts;
+	}
+	const result = planner.function(
+		{ ...declaration, params, variadic: false },
+		{ params: paramFacts, returns: stated?.returns ?? NO_FACTS },
+		undefined,
+	);
+	return { ...result, name };
+}
+
 export function planBindings(
 	model: CModel,
 	facts: LibraryFacts = EMPTY_FACTS,
@@ -890,7 +941,31 @@ export function planBindings(
 	const planner = new Planner(model, handleMap);
 	const functions: Array<BoundFunction> = [];
 	const unbound: Array<UnboundFunction> = [];
+	const declared = new Set(model.functions.map((declaration) => declaration.name));
 	for (const declaration of model.functions) {
+		const variants = Object.entries(facts.functions[declaration.name]?.variants ?? {});
+		if (variants.length > 0) {
+			// A variadic function binds only through its variants.
+			for (const [name, variant] of variants) {
+				if (declared.has(name)) {
+					throw new FfiError(
+						`functions.${declaration.name}.variants.${name}: '${name}' is already a function`,
+					);
+				}
+				declared.add(name);
+				const result = planVariant(
+					model,
+					planner,
+					declaration,
+					factMap.get(declaration.name),
+					name,
+					variant,
+				);
+				if ("gaps" in result) unbound.push(result);
+				else functions.push(result);
+			}
+			continue;
+		}
 		const result = planner.function(
 			declaration,
 			factMap.get(declaration.name) ?? { params: [], returns: NO_FACTS },

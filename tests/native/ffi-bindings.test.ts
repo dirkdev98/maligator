@@ -21,6 +21,7 @@ const EXPECTED_RESULTS = [
 	"canvas Sketch null [object ShapesCanvas] open 1",
 	"canvases after using 0",
 	"text bytes 6,7,4,300",
+	"log 8 3 points 13 origin at 2.5",
 	"same handle true",
 	"closed through either 0 true",
 	"bitmap 3x2 sum 24 live 1",
@@ -88,6 +89,7 @@ describe("C library bindings", () => {
 			"rejected TypeError: shapes_total: a expects a bigint",
 			"rejected TypeError: shapes_add: a.y expects a number",
 			"rejected TypeError: shapes_text_bytes: text expects a string without NUL characters",
+			"rejected RangeError: shapes_log_count: arg2 expects an integer from -2147483648 to 2147483647",
 		]);
 	});
 

@@ -12,6 +12,7 @@ export type {
 	MaligatorFfiLibrary,
 	MaligatorFfiTypeFacts,
 	MaligatorFfiValueFacts,
+	MaligatorFfiVariant,
 	MaligatorIntlFeature,
 	MaligatorLibraryContract,
 	MaligatorMaterializeOptions,

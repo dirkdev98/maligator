@@ -203,21 +203,42 @@ function validateValueFacts(value: unknown, at: string): void {
 	}
 }
 
+function validateParamFacts(value: unknown, at: string): void {
+	expectObject(value, at);
+	for (const [name, facts] of Object.entries(value)) {
+		expect(
+			C_NAME.test(name) || /^[1-9]\d*$/.test(name),
+			`${at}.${name}`,
+			"keyed by a parameter name or 1-based position",
+		);
+		validateValueFacts(facts, `${at}.${name}`);
+	}
+}
+
 function validateFunctionFacts(value: unknown, at: string): void {
 	expectObject(value, at);
-	expectKeys(value, at, ["params", "returns"]);
-	if (value.params !== undefined) {
-		expectObject(value.params, `${at}.params`);
-		for (const [name, facts] of Object.entries(value.params)) {
+	expectKeys(value, at, ["params", "returns", "variants"]);
+	if (value.params !== undefined) validateParamFacts(value.params, `${at}.params`);
+	if (value.returns !== undefined) validateValueFacts(value.returns, `${at}.returns`);
+	if (value.variants !== undefined) {
+		expectObject(value.variants, `${at}.variants`);
+		for (const [name, variant] of Object.entries(value.variants)) {
+			const variantAt = `${at}.variants.${name}`;
+			expect(C_NAME.test(name), variantAt, "keyed by a function name");
+			expectObject(variant, variantAt);
+			expectKeys(variant, variantAt, ["args", "params"]);
 			expect(
-				C_NAME.test(name) || /^[1-9]\d*$/.test(name),
-				`${at}.params.${name}`,
-				"keyed by a parameter name or 1-based position",
+				Array.isArray(variant.args) &&
+					variant.args.length > 0 &&
+					variant.args.every((spelling) => typeof spelling === "string"),
+				`${variantAt}.args`,
+				"a non-empty array of C type spellings",
 			);
-			validateValueFacts(facts, `${at}.params.${name}`);
+			if (variant.params !== undefined) {
+				validateParamFacts(variant.params, `${variantAt}.params`);
+			}
 		}
 	}
-	if (value.returns !== undefined) validateValueFacts(value.returns, `${at}.returns`);
 }
 
 const CONTRACT_SCHEMA: ObjectSchema = {

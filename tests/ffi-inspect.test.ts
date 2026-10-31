@@ -76,16 +76,32 @@ describe("ffi inspect", () => {
 	it("names the missing fact for each declaration that cannot bind", () => {
 		const gaps = (name: string) =>
 			(declaration(name).gaps ?? []).map((gap) => `${gap.at}: ${gap.reason}`);
-		expect(declaration("shapes_log").status).toBe("needs-facts");
-		expect(gaps("shapes_log")).toContain(
-			"arguments: variadic arguments need a fact per call",
-		);
 		expect(gaps("shapes_path_length")).toEqual([
 			"param 1 (path): struct ShapesPath: field 'points': pointer field (ShapesPoint *) needs an ownership fact",
 		]);
 		const text = inspect(shapesProject, ["shapes"]);
 		expect(text.status).toBe(0);
-		expect(text.stdout).toContain("shapes_log arguments: variadic arguments");
+		expect(text.stdout).toContain("shapes_path_length param 1 (path): struct ShapesPath");
+	});
+
+	it("reports a variadic function as the variants the contract declares", () => {
+		expect(
+			shapes.functions
+				.filter((entry) => entry.variantOf === "shapes_log")
+				.map(({ name, status, ts }) => ({ name, status, ts })),
+		).toEqual([
+			{
+				name: "shapes_log_count",
+				status: "bound",
+				ts: "(format: string, arg2: number) => number",
+			},
+			{
+				name: "shapes_log_pair",
+				status: "bound",
+				ts: "(format: string, arg2: string, arg3: number) => number",
+			},
+		]);
+		expect(shapes.functions.map((entry) => entry.name)).not.toContain("shapes_log");
 	});
 
 	it("binds handle types from the contract's facts", () => {
@@ -414,6 +430,31 @@ describe("ffi contract facts", () => {
 		);
 		expect(planBindings(model, contract).functions.map((entry) => entry.name)).toEqual(
 			expect.arrayContaining([...suggestions.binds]),
+		);
+	});
+
+	it("needs a variant fact to bind a variadic function", () => {
+		const log = planBindings(model).unbound.find((entry) => entry.name === "shapes_log");
+		expect(log?.gaps).toContainEqual({
+			at: "arguments",
+			reason: "variadic arguments need a fact per call",
+		});
+	});
+
+	it("rejects variants that do not fit their declaration", () => {
+		rejects(
+			{ functions: { shapes_add: { variants: { shapes_add_more: { args: ["int"] } } } } },
+			"functions.shapes_add.variants.shapes_add_more: shapes_add is not variadic",
+		);
+		rejects(
+			{ functions: { shapes_log: { variants: { shapes_twice: { args: ["int"] } } } } },
+			"functions.shapes_log.variants.shapes_twice: 'shapes_twice' is already a function",
+		);
+		rejects(
+			{
+				functions: { shapes_log: { variants: { shapes_log_odd: { args: ["odd_t"] } } } },
+			},
+			"functions.shapes_log.variants.shapes_log_odd.args[0]: 'odd_t' is not a C type",
 		);
 	});
 

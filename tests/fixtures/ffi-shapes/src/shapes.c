@@ -183,13 +183,17 @@ char *shapes_describe(ShapesPoint point) {
 	return text;
 }
 
+static char log_line[128];
+
 int shapes_log(const char *format, ...) {
 	va_list arguments;
 	va_start(arguments, format);
-	int written = vprintf(format, arguments);
+	int written = vsnprintf(log_line, sizeof(log_line), format, arguments);
 	va_end(arguments);
 	return written;
 }
+
+const char *shapes_log_line(void) { return log_line; }
 
 size_t shapes_path_length(ShapesPath path) { return (size_t)path.count; }
 
