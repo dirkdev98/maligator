@@ -102,6 +102,8 @@ typedef int (*ShapesReader)(void *data, int count, const ShapesPoint *points, in
                             const unsigned char *bytes);
 // Call reader with three points and four bytes; returns its result.
 int shapes_read(ShapesReader reader, void *data);
+// Call visit, then return the length of the canvas title.
+int shapes_canvas_visit(ShapesCanvas *canvas, void (*visit)(void *data), void *data);
 const char *shapes_log_line(void);  // The last log line
 size_t shapes_path_length(ShapesPath path);
 

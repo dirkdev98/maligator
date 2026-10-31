@@ -89,11 +89,16 @@ MalValue mal_ffi_new_handle(
 /**
  * The resource behind an open handle of `type`: the pointer, or the address of
  * the copied struct, which the library may update in place. A nullable site
- * accepts null and yields a null pointer.
+ * accepts null and yields a null pointer. With a non-null `pin`, the handle stays
+ * open until `mal_ffi_unpin_handle` receives `*pin`: JavaScript that runs during
+ * the call, in a getter or a callback, cannot close it while C uses it.
  */
 bool mal_ffi_to_handle(
     MalVm *vm, MalValue value, const MalFfiHandleType *type, bool nullable,
-    const MalFfiSite *site, void **out);
+    const MalFfiSite *site, void **out, void **pin);
+void mal_ffi_unpin_handle(void *pin);
+/** Before a destroy function runs: no other C call may be using the pinned handle. */
+bool mal_ffi_handle_closable(MalVm *vm, void *pin, const MalFfiSite *site);
 /** Close a handle whose resource the library's destroy function just released. */
 void mal_ffi_close_handle(MalValue value);
 

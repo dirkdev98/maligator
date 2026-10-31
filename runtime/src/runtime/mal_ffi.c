@@ -324,6 +324,8 @@ typedef struct MalFfiHandleObject {
     bool owned;
     /** The table that finds this open pointer handle by its pointer, or null. */
     MalFfiState *registry;
+    /** C calls using the handle; it cannot close while any are. */
+    u32 pins;
 } MalFfiHandleObject;
 
 /** A kept callback; trampolines receive a pointer to `callback`, its first member. */
@@ -876,6 +878,12 @@ static MalValue ffi_handle_dispose(
             (const byte *) "[Symbol.dispose] requires a C library handle");
         return mal_value_new_undefined();
     }
+    if (handle->pins > 0) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "Cannot close a C library handle while a C call uses it");
+        return mal_value_new_undefined();
+    }
     if (handle->value != nullptr) {
         void *value = handle->value;
         bool release = handle->owned && handle->type->destroy != nullptr;
@@ -970,6 +978,7 @@ MalValue mal_ffi_new_handle(
     handle->value = stored;
     handle->owned = owned;
     handle->registry = nullptr;
+    handle->pins = 0;
     if (state != nullptr) ffi_handle_register(state, handle);
     mal_gc_unroot(&root);
     return mal_value_from_heap((MalHeapHeader *) handle);
@@ -977,7 +986,8 @@ MalValue mal_ffi_new_handle(
 
 bool mal_ffi_to_handle(
     MalVm *vm, MalValue value, const MalFfiHandleType *type, bool nullable,
-    const MalFfiSite *site, void **out) {
+    const MalFfiSite *site, void **out, void **pin) {
+    if (pin != nullptr) *pin = nullptr;
     if (nullable && mal_value_is_null(value)) {
         *out = nullptr;
         return true;
@@ -987,6 +997,10 @@ bool mal_ffi_to_handle(
     if (handle != nullptr && handle->type == type) {
         if (handle->value != nullptr) {
             *out = handle->value;
+            if (pin != nullptr) {
+                handle->pins++;
+                *pin = handle;
+            }
             return true;
         }
         snprintf(expectation, sizeof(expectation), "an open %s handle", type->name);
@@ -996,6 +1010,16 @@ bool mal_ffi_to_handle(
             nullable ? " or null" : "");
     }
     return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, expectation);
+}
+
+void mal_ffi_unpin_handle(void *pin) {
+    if (pin != nullptr) ((MalFfiHandleObject *) pin)->pins--;
+}
+
+bool mal_ffi_handle_closable(MalVm *vm, void *pin, const MalFfiSite *site) {
+    if (pin == nullptr || ((MalFfiHandleObject *) pin)->pins == 1) return true;
+    return ffi_fail(
+        vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a handle no other C call is using");
 }
 
 void mal_ffi_close_handle(MalValue value) {

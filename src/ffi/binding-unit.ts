@@ -220,7 +220,7 @@ class BindingWriter {
 				const temporary = this.#fresh("handle");
 				return [
 					`void *${temporary};`,
-					`if (!mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${temporary})) ${fail}`,
+					`if (!mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${temporary}, nullptr)) ${fail}`,
 					value.pass === "copy"
 						? `${target} = *(${this.#handle(value.name).spelling} *) ${temporary};`
 						: `${target} = ${cast(temporary)};`,
@@ -583,7 +583,7 @@ class BindingWriter {
 					"\t(void) mal_callee;",
 					`\tstatic const MalFfiSite mal_site = { ${cString(`${name}.${field.name}`)}, "this", nullptr };`,
 					"\tvoid *mal_handle;",
-					`\tif (!mal_ffi_to_handle(vm, mal_this, &mal_ffi_type_${name}, false, &mal_site, &mal_handle)) return mal_ffi_undefined();`,
+					`\tif (!mal_ffi_to_handle(vm, mal_this, &mal_ffi_type_${name}, false, &mal_site, &mal_handle, nullptr)) return mal_ffi_undefined();`,
 					`\t${handle.spelling} *mal_value = mal_handle;`,
 					`\treturn ${this.write(field.value, `mal_value->${field.name}`)};`,
 					"}",
@@ -774,6 +774,12 @@ class BindingWriter {
 		const cleanup: Array<string> = [];
 		const strings: Array<string> = [];
 		const trampolines: Array<string> = [];
+		/** Whether JavaScript can run between converting an argument and the C call returning. */
+		const runsJavaScript =
+			this.#plan.keepsCallbacks ||
+			binding.params.some(({ value }) =>
+				["callback", "record", "sequence", "array"].includes(value.kind),
+			);
 		const argument = (param: number) =>
 			`mal_argc > ${String(param)} ? mal_args[${String(param)}] : mal_ffi_undefined()`;
 		binding.params.forEach((param, index) => {
@@ -1003,6 +1009,27 @@ class BindingWriter {
 							`${local} = (${localDeclaration(param.type, "")}) ${elements};`,
 						);
 						setCount(index, length, site, body);
+						return;
+					}
+					if (
+						value.kind === "handle" &&
+						(runsJavaScript || binding.closes === entry.param)
+					) {
+						// Pinned, so JavaScript that runs during the call cannot close it under C.
+						const handle = this.#handle(value.name);
+						const pointer = `mal_handle_${String(index)}`;
+						const pin = `mal_handle_pin_${String(index)}`;
+						locals.push(`void *${pointer};`, `void *${pin} = nullptr;`);
+						cleanup.push(`mal_ffi_unpin_handle(${pin});`);
+						body.push(
+							`if (!mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${pointer}, &${pin})) goto mal_done;`,
+							...(binding.closes === entry.param
+								? [`if (!mal_ffi_handle_closable(vm, ${pin}, ${site})) goto mal_done;`]
+								: []),
+							value.pass === "copy"
+								? `${local} = *(${handle.spelling} *) ${pointer};`
+								: `${local} = (${localDeclaration(param.type, "")}) ${pointer};`,
+						);
 						return;
 					}
 					body.push(

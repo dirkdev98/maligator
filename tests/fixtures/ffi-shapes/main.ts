@@ -19,6 +19,7 @@ import {
 	shapes_canvas_current,
 	shapes_canvas_open,
 	shapes_canvas_title,
+	shapes_canvas_visit,
 	shapes_canvases_open,
 	shapes_checksum,
 	shapes_contains,
@@ -168,6 +169,18 @@ const immutable = (
 	new Uint8Array([1, 2, 3]).buffer as unknown as { transferToImmutable(): ArrayBuffer }
 ).transferToImmutable();
 console.log(`immutable checksum ${shapes_checksum(immutable)}`);
+{
+	using visited = shapes_canvas_open("Visited")!;
+	let closeError = "";
+	const titleLength = shapes_canvas_visit(visited, () => {
+		try {
+			visited[Symbol.dispose]();
+		} catch (error) {
+			closeError = (error as Error).message;
+		}
+	});
+	console.log(`visit ${titleLength} ${closeError} ${shapes_canvas_title(visited)}`);
+}
 const opened = shapes_canvas_open("Same");
 console.log(`same handle ${opened === shapes_canvas_current()}`);
 shapes_canvas_current()?.[Symbol.dispose]();

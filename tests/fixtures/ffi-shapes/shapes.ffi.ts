@@ -31,6 +31,7 @@ export default {
 		shapes_listen: {
 			params: { listener: { callback: { data: "data", release: "release" } } },
 		},
+		shapes_canvas_visit: { params: { visit: { callback: { data: "data" } } } },
 		shapes_read: {
 			params: {
 				reader: {

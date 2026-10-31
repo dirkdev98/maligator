@@ -241,6 +241,11 @@ void shapes_unlisten_all(void) {
 
 int shapes_listeners(void) { return listener_count; }
 
+int shapes_canvas_visit(ShapesCanvas *canvas, void (*visit)(void *data), void *data) {
+	visit(data);
+	return (int)strlen(canvas->title);
+}
+
 int shapes_read(ShapesReader reader, void *data) {
 	static const ShapesPoint points[3] = {{0, 0}, {1, 2}, {3, 4}};
 	static const unsigned char bytes[4] = {9, 8, 7, 6};

@@ -29,6 +29,7 @@ const EXPECTED_RESULTS = [
 	"listen 1,2,3 listener failed 2 0",
 	'read 3 [{"x":0,"y":0},{"x":1,"y":2},{"x":3,"y":4}] 9,8,7,6',
 	"immutable checksum 6",
+	"visit 7 Cannot close a C library handle while a C call uses it Visited",
 	"same handle true",
 	"closed through either 0 true",
 	"bitmap 3x2 sum 24 live 1",

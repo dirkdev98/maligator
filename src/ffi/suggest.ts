@@ -197,15 +197,22 @@ function suggestFunction(
 	const params: Record<string, MaligatorFfiValueFacts> = {};
 	const taken = new Set<number>();
 	// Destructor parameters, `void (*)(void *)`, which release a callback's user data.
-	const releases = declaration.params.flatMap((param, position) => {
-		const target = pointee(model, param.type);
-		return target?.kind === "function" &&
-			target.params.length === 1 &&
-			isVoidPointer(model, target.params[0]!) &&
-			resolveCType(model, target.returns).kind === "void"
-			? [position]
-			: [];
-	});
+	// A lone function pointer is the callback itself, whatever its signature.
+	const functionPointers = declaration.params.flatMap((param, position) =>
+		pointee(model, param.type)?.kind === "function" ? [position] : [],
+	);
+	const releases =
+		functionPointers.length < 2
+			? []
+			: functionPointers.filter((position) => {
+					const target = pointee(model, declaration.params[position]!.type);
+					return (
+						target?.kind === "function" &&
+						target.params.length === 1 &&
+						isVoidPointer(model, target.params[0]!) &&
+						resolveCType(model, target.returns).kind === "void"
+					);
+				});
 	const returns = gaps.some((gap) => gap.at === "return")
 		? suggestResult(model, declaration)
 		: undefined;
