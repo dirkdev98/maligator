@@ -31,6 +31,16 @@ export default {
 		shapes_listen: {
 			params: { listener: { callback: { data: "data", release: "release" } } },
 		},
+		shapes_read: {
+			params: {
+				reader: {
+					callback: {
+						data: "data",
+						params: { 3: { array: { length: "2" } }, 5: { bytes: { length: "4" } } },
+					},
+				},
+			},
+		},
 		shapes_fill: {
 			params: {
 				data: { bytes: { length: "size" } },

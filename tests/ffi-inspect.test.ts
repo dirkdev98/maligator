@@ -20,6 +20,7 @@ import { declarationsCurrent, generateDeclarations } from "../src/ffi/declaratio
 import type { FfiInspection, FunctionInspection } from "../src/ffi/inspect.ts";
 import { loadCModel } from "../src/ffi/model-cache.ts";
 import { suggestFacts } from "../src/ffi/suggest.ts";
+import type { MaligatorFfiValueFacts } from "../src/public-api.d.ts";
 import shapesContract from "./fixtures/ffi-shapes/shapes.ffi.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -416,8 +417,10 @@ describe("ffi contract facts", () => {
 			"string",
 			"free",
 		]);
-		const suggestible = (facts: object): boolean =>
-			Object.keys(facts).every((kind) => suggestedKinds.has(kind));
+		// Suggestions do not cover facts on a callback's own parameters.
+		const suggestible = (facts: MaligatorFfiValueFacts): boolean =>
+			Object.keys(facts).every((kind) => suggestedKinds.has(kind)) &&
+			facts.callback?.params === undefined;
 		const stated = Object.entries(contract.functions).filter(
 			([, facts]) =>
 				facts.variants === undefined &&
@@ -480,6 +483,22 @@ describe("ffi contract facts", () => {
 		rejects(
 			{ functions: { shapes_mul: { returns: { constant: "0" } } } },
 			"functions.shapes_mul.returns.constant: constant applies to parameters",
+		);
+	});
+
+	it("rejects callback parameter facts that do not fit the callback", () => {
+		const reader = (params: Record<string, MaligatorFfiValueFacts>) => ({
+			functions: {
+				shapes_read: { params: { reader: { callback: { data: "data", params } } } },
+			},
+		});
+		rejects(
+			reader({ 3: { out: true } }),
+			"functions.shapes_read.params.reader.callback.params.3: out does not apply to callback parameters",
+		);
+		rejects(
+			reader({ 3: { array: { length: "3" } } }),
+			"functions.shapes_read.params.reader.callback.params.3: length '3' is not another integer parameter's 1-based position",
 		);
 	});
 

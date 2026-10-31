@@ -138,7 +138,7 @@ export function formatTsType(
 			);
 		case "callback": {
 			const params = value.params
-				.filter((param) => param !== "data")
+				.filter((param): param is JsValue => param !== "data" && param !== "count")
 				.map((param, index) => `arg${index + 1}: ${formatTsType(param)}`);
 			return nullable(
 				`(${params.join(", ")}) => ${formatTsType(value.returns, "input")}`,

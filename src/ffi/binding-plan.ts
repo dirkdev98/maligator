@@ -43,8 +43,13 @@ export type JsValue =
 	| {
 			readonly kind: "callback";
 			readonly type: Extract<CType, { kind: "function" }>;
-			/** Per C parameter of the callback: its value, or the user data it receives. */
-			readonly params: ReadonlyArray<JsValue | "data">;
+			/**
+			 * Per C parameter of the callback: its value, the user data it receives, or the
+			 * count of a buffer or array parameter, which JavaScript does not see.
+			 */
+			readonly params: ReadonlyArray<JsValue | "data" | "count">;
+			/** Per C parameter: the parameter holding its byte or element count. */
+			readonly counts: ReadonlyArray<number | undefined>;
 			readonly returns: JsValue;
 			readonly nullable: boolean;
 			readonly kept: boolean;
@@ -424,7 +429,12 @@ class Planner {
 			return { value: { kind: "bytes", nullable, ...free } };
 		}
 		if (facts.array !== undefined) {
-			const element = this.value(type.to, position === "param" ? "param" : "return");
+			// Elements of a borrowed array, such as a callback's, stay the library's.
+			const element = this.value(
+				type.to,
+				position === "param" ? "param" : "return",
+				facts.borrowed === true ? { borrowed: true } : NO_FACTS,
+			);
 			if ("gap" in element) return { gap: `array element: ${element.gap}` };
 			if (element.value.kind === "sequence" || element.value.kind === "bytes") {
 				return { gap: "arrays of arrays need a fact" };
@@ -584,7 +594,13 @@ class Planner {
 	 * A callback parameter: C passes each argument to the JavaScript function as it
 	 * would a result, except handles, which the library keeps owning.
 	 */
-	#callback(type: CType, nullable: boolean, kept: boolean, at: string): Mapping {
+	#callback(
+		type: CType,
+		nullable: boolean,
+		kept: boolean,
+		facts: Readonly<Record<string, MaligatorFfiValueFacts>>,
+		at: string,
+	): Mapping {
 		const target =
 			type.kind === "pointer" ? resolveCType(this.#model, type.to) : undefined;
 		if (target?.kind !== "function" || target.variadic) {
@@ -592,10 +608,54 @@ class Planner {
 				`${at}.callback: ${formatCDeclaration(type)} is not a function pointer`,
 			);
 		}
-		const params: Array<JsValue | "data"> = [];
-		for (const param of target.params) {
+		const factsAt = (index: number): MaligatorFfiValueFacts | undefined =>
+			facts[String(index + 1)];
+		for (const key of Object.keys(facts)) {
+			const position = Number(key) - 1;
+			const stated = facts[key]!;
+			if (position >= target.params.length) {
+				throw new FfiError(
+					`${at}.callback.params.${key}: the callback has no such parameter`,
+				);
+			}
+			const unsupported = Object.keys(stated).filter(
+				(name) => !["string", "bytes", "array", "nullable"].includes(name),
+			);
+			if (unsupported.length > 0) {
+				throw new FfiError(
+					`${at}.callback.params.${key}: ${unsupported.join(", ")} does not apply to callback parameters`,
+				);
+			}
+		}
+		// The parameters that carry a buffer's or array's count, hidden from JavaScript.
+		const counts = new Array<number | undefined>(target.params.length);
+		const counters = new Set<number>();
+		target.params.forEach((_, index) => {
+			const counted = factsAt(index)?.bytes ?? factsAt(index)?.array;
+			if (counted === undefined) return;
+			const count = /^[1-9]\d*$/.test(counted.length) ? Number(counted.length) - 1 : -1;
+			const countType =
+				count < 0 || count >= target.params.length
+					? undefined
+					: resolveCType(this.#model, target.params[count]!);
+			if (countType?.kind !== "integer" || count === index || counters.has(count)) {
+				throw new FfiError(
+					`${at}.callback.params.${String(index + 1)}: length '${counted.length}' is not another integer parameter's 1-based position`,
+				);
+			}
+			counts[index] = count;
+			counters.add(count);
+		});
+		const params: Array<JsValue | "data" | "count"> = [];
+		for (const [index, param] of target.params.entries()) {
+			if (counters.has(index)) {
+				params.push("count");
+				continue;
+			}
+			const stated = factsAt(index);
 			const resolved = resolveCType(this.#model, param);
 			if (
+				stated === undefined &&
 				resolved.kind === "pointer" &&
 				resolveCType(this.#model, resolved.to).kind === "void" &&
 				!params.includes("data")
@@ -603,7 +663,7 @@ class Planner {
 				params.push("data");
 				continue;
 			}
-			const mapped = this.value(param, "return", { borrowed: true });
+			const mapped = this.value(param, "return", { ...stated, borrowed: true });
 			if ("gap" in mapped) return { gap: `callback parameter: ${mapped.gap}` };
 			params.push(mapped.value);
 		}
@@ -620,7 +680,9 @@ class Planner {
 			}
 			returns = mapped.value;
 		}
-		return { value: { kind: "callback", type: target, params, returns, nullable, kept } };
+		return {
+			value: { kind: "callback", type: target, params, counts, returns, nullable, kept },
+		};
 	}
 
 	/**
@@ -814,6 +876,7 @@ class Planner {
 					resolved,
 					valueFacts.nullable === true,
 					valueFacts.callback.release !== undefined,
+					valueFacts.callback.params ?? {},
 					where(at),
 				);
 				if ("gap" in mapped) gap(mapped.gap);

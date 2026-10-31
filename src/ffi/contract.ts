@@ -187,7 +187,18 @@ function validateValueFacts(value: unknown, at: string): void {
 	if (value.callback !== undefined) {
 		const callback = value.callback;
 		expectObject(callback, `${at}.callback`);
-		expectKeys(callback, `${at}.callback`, ["data", "release"]);
+		expectKeys(callback, `${at}.callback`, ["data", "release", "params"]);
+		if (callback.params !== undefined) {
+			expectObject(callback.params, `${at}.callback.params`);
+			for (const [key, facts] of Object.entries(callback.params)) {
+				expect(
+					/^[1-9]\d*$/.test(key),
+					`${at}.callback.params.${key}`,
+					"keyed by 1-based position",
+				);
+				validateValueFacts(facts, `${at}.callback.params.${key}`);
+			}
+		}
 		for (const key of ["data", "release"] as const) {
 			const reference = callback[key];
 			if (key === "release" && reference === undefined) continue;

@@ -27,6 +27,7 @@ const EXPECTED_RESULTS = [
 	"join one,two,three 93",
 	"fill 4 0,1,2,3 TypeError true",
 	"listen 1,2,3 listener failed 2 0",
+	'read 3 [{"x":0,"y":0},{"x":1,"y":2},{"x":3,"y":4}] 9,8,7,6',
 	"same handle true",
 	"closed through either 0 true",
 	"bitmap 3x2 sum 24 live 1",

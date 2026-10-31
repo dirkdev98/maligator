@@ -133,6 +133,11 @@ export interface MaligatorFfiCallback {
 	 * function returns, until it calls the destructor.
 	 */
 	release?: string;
+	/**
+	 * Facts per callback parameter, keyed by 1-based position: `string`, `bytes`, or
+	 * `array` with a `length` naming another callback parameter, and `nullable`.
+	 */
+	params?: Record<string, MaligatorFfiValueFacts>;
 }
 
 /** Facts about one C function, keyed by its name. */

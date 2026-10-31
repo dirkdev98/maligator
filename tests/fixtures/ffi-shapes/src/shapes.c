@@ -241,6 +241,12 @@ void shapes_unlisten_all(void) {
 
 int shapes_listeners(void) { return listener_count; }
 
+int shapes_read(ShapesReader reader, void *data) {
+	static const ShapesPoint points[3] = {{0, 0}, {1, 2}, {3, 4}};
+	static const unsigned char bytes[4] = {9, 8, 7, 6};
+	return reader(data, 3, points, 4, bytes);
+}
+
 int shapes_fill(unsigned char *data, size_t size, int (*visit)(void *ctx, int index), void *ctx) {
 	for (size_t index = 0; index < size; index++) {
 		data[index] = (unsigned char)index;

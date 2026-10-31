@@ -171,7 +171,8 @@ class BindingWriter {
 		}
 		if (value.kind === "callback") {
 			// A callback converts the other way: C arguments out, its result in.
-			for (const param of value.params) if (param !== "data") this.need(param, "output");
+			for (const param of value.params)
+				if (param !== "data" && param !== "count") this.need(param, "output");
 			this.need(value.returns, "input");
 			return;
 		}
@@ -343,6 +344,43 @@ class BindingWriter {
 			case "array":
 				throw new Error("arrays are written field by field");
 		}
+	}
+
+	/**
+	 * Statements that copy a C buffer or array of `count` elements into `target`, a
+	 * rooted slot: a new Uint8Array or array, or null for a null pointer.
+	 */
+	#produceCounted(
+		value: JsValue,
+		expression: string,
+		count: string,
+		target: string,
+	): Array<string> {
+		const site = this.#fresh("site");
+		const fill = [
+			`static const MalFfiSite ${site} = { "callback", "length", nullptr };`,
+			`if ((${expression}) == nullptr) ${target} = mal_ffi_null();`,
+			`else if (!mal_ffi_check_count(vm, (size_t) (${count}), 32, true, &${site})) goto mal_done;`,
+		];
+		if (value.kind === "bytes") {
+			return [
+				...fill,
+				`else ${target} = mal_ffi_from_bytes(vm, ${expression}, (size_t) (${count}));`,
+				"if (mal_ffi_threw(vm)) goto mal_done;",
+			];
+		}
+		if (value.kind !== "sequence") throw new Error("only buffers and arrays have counts");
+		const index = this.#fresh("index");
+		return [
+			...fill,
+			"else {",
+			`\t${target} = mal_ffi_new_array(vm, (int32_t) (${count}));`,
+			`\tfor (int32_t ${index} = 0; !mal_ffi_threw(vm) && ${index} < (int32_t) (${count}); ${index}++) {`,
+			`\t\tmal_ffi_set_element(vm, ${target}, ${index}, ${this.write(value.of, `(${expression})[${index}]`)});`,
+			"\t}",
+			"}",
+			"if (mal_ffi_threw(vm)) goto mal_done;",
+		];
 	}
 
 	/** Statements that store the C value `expression` into the rooted container. */
@@ -627,7 +665,7 @@ class BindingWriter {
 		);
 		const data = value.params.indexOf("data");
 		const inputs = value.params.flatMap((param, index) =>
-			param === "data" ? [] : [{ value: param, index }],
+			param === "data" || param === "count" ? [] : [{ value: param, index }],
 		);
 		const returns = value.returns.kind !== "undefined";
 		const count = String(inputs.length);
@@ -650,13 +688,23 @@ class BindingWriter {
 			"\tMalFfiRoots mal_roots;",
 			`\tmal_ffi_root(&mal_roots, mal_values, ${count});`,
 			"\tif (mal_ffi_threw(vm)) goto mal_done;",
-			...inputs.flatMap((input, position) =>
-				this.#produce(
-					input.value,
-					`mal_c${String(input.index)}`,
-					`mal_values[${String(position)}]`,
-				).map((line) => `\t${line}`),
-			),
+			...inputs.flatMap((input, position) => {
+				const counted = value.counts[input.index];
+				return (
+					counted === undefined
+						? this.#produce(
+								input.value,
+								`mal_c${String(input.index)}`,
+								`mal_values[${String(position)}]`,
+							)
+						: this.#produceCounted(
+								input.value,
+								`mal_c${String(input.index)}`,
+								`mal_c${String(counted)}`,
+								`mal_values[${String(position)}]`,
+							)
+				).map((line) => `\t${line}`);
+			}),
 			`\tif (!mal_ffi_call(vm, mal_callback->function, mal_values, ${count}, &mal_result)) goto mal_done;`,
 			...(returns
 				? this.read(

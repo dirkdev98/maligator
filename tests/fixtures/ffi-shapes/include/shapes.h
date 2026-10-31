@@ -97,6 +97,11 @@ int shapes_listen(ShapesListener listener, void *data, void (*release)(void *dat
 void shapes_emit(int event);  // Call every listener
 void shapes_unlisten_all(void);
 int shapes_listeners(void);  // Listeners kept
+
+typedef int (*ShapesReader)(void *data, int count, const ShapesPoint *points, int size,
+                            const unsigned char *bytes);
+// Call reader with three points and four bytes; returns its result.
+int shapes_read(ShapesReader reader, void *data);
 const char *shapes_log_line(void);  // The last log line
 size_t shapes_path_length(ShapesPath path);
 

@@ -38,6 +38,7 @@ import {
 	shapes_mode_name,
 	shapes_mul,
 	shapes_parse,
+	shapes_read,
 	shapes_render,
 	shapes_scale,
 	shapes_sum2,
@@ -157,6 +158,12 @@ const listening = shapes_listeners();
 shapes_unlisten_all();
 shapes_emit(4);
 console.log(`listen ${heard.join(",")} ${emitError} ${listening} ${shapes_listeners()}`);
+let readSeen = "";
+const readResult = shapes_read((points, bytes) => {
+	readSeen = `${JSON.stringify(points)} ${Array.from(bytes ?? []).join(",")}`;
+	return points?.length ?? 0;
+});
+console.log(`read ${readResult} ${readSeen}`);
 const opened = shapes_canvas_open("Same");
 console.log(`same handle ${opened === shapes_canvas_current()}`);
 shapes_canvas_current()?.[Symbol.dispose]();
