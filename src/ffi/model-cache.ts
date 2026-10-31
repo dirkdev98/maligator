@@ -16,6 +16,19 @@ import type { CModel } from "./c-model.ts";
 
 const STAGE = "ffi-header-model";
 
+/**
+ * Variables that change which headers clang reads without changing its arguments:
+ * include search paths, and the SDK and deployment target on Apple platforms.
+ */
+const HEADER_ENVIRONMENT = [
+	"CPATH",
+	"C_INCLUDE_PATH",
+	"OBJC_INCLUDE_PATH",
+	"SDKROOT",
+	"DEVELOPER_DIR",
+	"MACOSX_DEPLOYMENT_TARGET",
+] as const;
+
 interface CachedModel {
 	/** Every file the headers read, with its content digest when the model was extracted. */
 	readonly dependencies: ReadonlyArray<{
@@ -73,6 +86,10 @@ export function loadCModel(input: CExtractionInput): CModel {
 		},
 		headers: input.headers,
 		compileArguments: input.compileArguments,
+		environment: HEADER_ENVIRONMENT.map((name) => [
+			name,
+			input.environment[name] ?? null,
+		]),
 	});
 	const root = maligatorCacheDirectory();
 	const cached = readArtifactAction(root, STAGE, producer, key);

@@ -554,7 +554,7 @@ describe("ffi contract facts", () => {
 });
 
 describe("C model cache", () => {
-	it("reads the headers again only after one of them changes", () => {
+	it("reads the headers again only after one of them or the header search changes", () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-model-cache-"));
 		const previousCache = process.env.MALIGATOR_CACHE_DIR;
 		try {
@@ -587,6 +587,10 @@ describe("C model cache", () => {
 			const changed = loadCModel(input);
 			expect(astDumps()).toBeGreaterThan(first);
 			expect(changed.functions.map((entry) => entry.name)).toContain("shapes_extra");
+
+			const edited = astDumps();
+			loadCModel({ ...input, environment: { ...process.env, CPATH: include } });
+			expect(astDumps()).toBeGreaterThan(edited);
 		} finally {
 			if (previousCache === undefined) delete process.env.MALIGATOR_CACHE_DIR;
 			else process.env.MALIGATOR_CACHE_DIR = previousCache;
