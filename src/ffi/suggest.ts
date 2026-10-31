@@ -79,8 +79,14 @@ function suggestHandles(
 				(target?.kind === "record" && model.records.get(target.name) === record)
 			);
 		});
-		if (releases.length === 1) {
-			handles.set(record.name, { handle: { destroy: releases[0]!.name } });
+		// Among several, such as `UnloadSound` and `UnloadSoundAlias`, the one named after the type.
+		const named = releases.filter((declaration) =>
+			declaration.name.toLowerCase().endsWith(record.name.toLowerCase()),
+		);
+		const release =
+			releases.length === 1 ? releases[0] : named.length === 1 ? named[0] : undefined;
+		if (release !== undefined) {
+			handles.set(record.name, { handle: { destroy: release.name } });
 		}
 	}
 	return handles;

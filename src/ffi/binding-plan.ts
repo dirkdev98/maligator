@@ -465,9 +465,8 @@ class Planner {
 			}
 			return { gap: `a pointer into a ${handle.name} handle has no owner` };
 		}
-		if (position === "field") {
-			return { gap: `pointer field (${spelling}) needs an ownership fact` };
-		}
+		// The record that holds the field names the fact it needs.
+		if (position === "field") return { gap: `pointer field (${spelling})` };
 		if (target.kind === "function") {
 			return { gap: `function pointer (${spelling}) needs a callback fact` };
 		}
@@ -520,7 +519,14 @@ class Planner {
 				if (field.bitWidth !== undefined)
 					return gap(`bit-field '${field.name}' needs a fact`);
 				const mapped = this.value(field.type, "field");
-				if ("gap" in mapped) return gap(`field '${field.name}': ${mapped.gap}`);
+				if ("gap" in mapped) {
+					// A struct that holds a pointer owns or borrows memory, so it crosses as a handle.
+					return resolveCType(this.#model, field.type).kind === "pointer"
+						? gap(
+								`field '${field.name}' is a pointer (${formatCDeclaration(field.type)}), so ${name} needs a handle fact`,
+							)
+						: gap(`field '${field.name}': ${mapped.gap}`);
+				}
 				if (mapped.value.kind === "handle") {
 					return gap(
 						`field '${field.name}' holds a ${mapped.value.name} handle, so ${name} needs a handle fact too`,

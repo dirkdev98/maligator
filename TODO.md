@@ -1911,7 +1911,8 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
       application host that links the project's bindings.
 - [ ] Callbacks the library keeps after the call returns, with a release fact, and
       callbacks without a user-data parameter; blocking functions with async twins;
-      worker affinity.
+      worker affinity. A kept callback can run during any later call into the library,
+      so buffers passed in place need pinning against detach and resize first.
 - [ ] Direct calls: Core-visible foreign calls with unboxed representations, and
       scalar replacement of struct arguments and out objects.
 - [ ] `ffi check`: declaration fingerprints, evidence drift, sanitizer probes.

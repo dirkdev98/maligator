@@ -77,7 +77,7 @@ describe("ffi inspect", () => {
 		const gaps = (name: string) =>
 			(declaration(name).gaps ?? []).map((gap) => `${gap.at}: ${gap.reason}`);
 		expect(gaps("shapes_path_length")).toEqual([
-			"param 1 (path): struct ShapesPath: field 'points': pointer field (ShapesPoint *) needs an ownership fact",
+			"param 1 (path): struct ShapesPath: field 'points' is a pointer (ShapesPoint *), so ShapesPath needs a handle fact",
 		]);
 		const text = inspect(shapesProject, ["shapes"]);
 		expect(text.status).toBe(0);
