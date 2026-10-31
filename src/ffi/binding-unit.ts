@@ -594,10 +594,16 @@ class BindingWriter {
 			"",
 			`static ${formatCDeclaration(type.returns, `${name}(${params.length === 0 ? "void" : params.join(", ")})`)} {`,
 			`\tMalFfiCallback *mal_callback = mal_c${String(data)};`,
-			"\tMalVm *vm = mal_callback->vm;",
+			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
+			...(value.kept
+				? [
+						"\tMalVm *vm = mal_ffi_callback_vm(mal_callback);",
+						// A library may call back after the VM is gone; it gets a zero result.
+						`\tif (vm == nullptr) return${returns ? " mal_return" : ""};`,
+					]
+				: ["\tMalVm *vm = mal_callback->vm;"]),
 			`\tstatic const MalFfiSite mal_site = { ${cString(owner)}, "callback result", nullptr };`,
 			"\t(void) mal_site;",
-			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
 			`\tMalValue mal_values[${inputs.length === 0 ? "1" : count}] = {};`,
 			"\tMalValue mal_result = mal_ffi_undefined();",
 			"\tMalFfiRoots mal_roots;",
@@ -636,6 +642,15 @@ class BindingWriter {
 		const body: Array<string> = [];
 		/** Buffers resolve last: nothing may run JavaScript between them and the call. */
 		const buffers: Array<string> = [];
+		/** Kept callbacks, then the arguments that route to them, after the buffers. */
+		const keeps: Array<string> = [];
+		const kept: Array<string> = [];
+		const keptCallback = (index: number): boolean => {
+			const entry = binding.arguments[index];
+			const value =
+				entry?.kind === "input" ? binding.params[entry.param]?.value : undefined;
+			return value?.kind === "callback" && value.kept;
+		};
 		const cleanup: Array<string> = [];
 		const strings: Array<string> = [];
 		const trampolines: Array<string> = [];
@@ -692,7 +707,14 @@ class BindingWriter {
 					body.push(`${local} = ${entry.expression};`);
 					return;
 				case "callback-data":
-					body.push(`${local} = &mal_callback_${String(entry.of)};`);
+					if (keptCallback(entry.of))
+						kept.push(`${local} = mal_kept_${String(entry.of)};`);
+					else body.push(`${local} = &mal_callback_${String(entry.of)};`);
+					return;
+				case "callback-release":
+					kept.push(
+						`${local} = mal_kept_${String(entry.of)} == nullptr ? nullptr : mal_ffi_release;`,
+					);
 					return;
 				case "out":
 				case "inout": {
@@ -730,6 +752,25 @@ class BindingWriter {
 							`${local} = (${localDeclaration(param.type, "")}) mal_bytes_${String(index)};`,
 						);
 						setCount(index, `mal_bytes_length_${String(index)}`, site, buffers);
+						return;
+					}
+					if (value.kind === "callback" && value.kept) {
+						const trampoline = `mal_ffi_callback_${name}_${String(index)}`;
+						const context = `mal_kept_${String(index)}`;
+						trampolines.push(...this.#trampoline(trampoline, value, name));
+						locals.push(`MalFfiCallback *${context} = nullptr;`);
+						body.push(
+							`if (!mal_ffi_to_function(vm, ${source}, ${value.nullable}, ${site})) goto mal_done;`,
+						);
+						// Kept last, after every conversion that can fail, so a failed call
+						// never leaves a function rooted that no library holds.
+						keeps.push(
+							`if ((${source}) != mal_ffi_null()) {`,
+							`\t${context} = mal_ffi_keep(vm, ${source});`,
+							`\tif (${context} == nullptr) goto mal_done;`,
+							"}",
+						);
+						kept.push(`${local} = ${context} == nullptr ? nullptr : ${trampoline};`);
 						return;
 					}
 					if (value.kind === "callback") {
@@ -844,7 +885,8 @@ class BindingWriter {
 					"mal_result",
 					count,
 					"&mal_site_result",
-					binding.params.some((param) => param.value.kind === "callback"),
+					this.#plan.keepsCallbacks ||
+						binding.params.some((param) => param.value.kind === "callback"),
 				),
 			);
 		}
@@ -899,6 +941,8 @@ class BindingWriter {
 			...locals.map((line) => `\t${line}`),
 			...body.map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
+			...keeps.map((line) => `\t${line}`),
+			...kept.map((line) => `\t${line}`),
 			...after.map((line) => `\t${line}`),
 			"\tgoto mal_done;",
 			"mal_done:",

@@ -24,6 +24,7 @@ const EXPECTED_RESULTS = [
 	"log 8 3 points 13 origin at 2.5",
 	"join one,two,three 93",
 	"fill 4 0,1,2,3 TypeError true",
+	"listen 1,2,3 listener failed 2 0",
 	"same handle true",
 	"closed through either 0 true",
 	"bitmap 3x2 sum 24 live 1",

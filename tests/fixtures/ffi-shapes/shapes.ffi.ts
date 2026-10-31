@@ -28,6 +28,9 @@ export default {
 		},
 		shapes_integrate: { params: { f: { callback: { data: "data" } } } },
 		shapes_join: { params: { parts: { array: { length: "count" } } } },
+		shapes_listen: {
+			params: { listener: { callback: { data: "data", release: "release" } } },
+		},
 		shapes_fill: {
 			params: {
 				data: { bytes: { length: "size" } },

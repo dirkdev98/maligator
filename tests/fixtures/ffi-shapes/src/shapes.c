@@ -208,6 +208,39 @@ int shapes_log(const char *format, ...) {
 
 const char *shapes_log_line(void) { return log_line; }
 
+static struct {
+	ShapesListener listener;
+	void *data;
+	void (*release)(void *data);
+} listeners[8];
+static int listener_count;
+
+int shapes_listen(ShapesListener listener, void *data, void (*release)(void *data)) {
+	if (listener_count == 8) {
+		if (release != NULL) release(data);
+		return -1;
+	}
+	listeners[listener_count].listener = listener;
+	listeners[listener_count].data = data;
+	listeners[listener_count].release = release;
+	listener_count++;
+	return 0;
+}
+
+void shapes_emit(int event) {
+	for (int index = 0; index < listener_count; index++)
+		listeners[index].listener(listeners[index].data, event);
+}
+
+void shapes_unlisten_all(void) {
+	int count = listener_count;
+	listener_count = 0;
+	for (int index = 0; index < count; index++)
+		if (listeners[index].release != NULL) listeners[index].release(listeners[index].data);
+}
+
+int shapes_listeners(void) { return listener_count; }
+
 int shapes_fill(unsigned char *data, size_t size, int (*visit)(void *ctx, int index), void *ctx) {
 	for (size_t index = 0; index < size; index++) {
 		data[index] = (unsigned char)index;

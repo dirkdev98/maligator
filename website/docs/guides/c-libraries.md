@@ -143,7 +143,7 @@ functions: {
 - On a result, `bytes` and `array` copy the C memory into a `Uint8Array` or an array. `length` names an integer parameter, or a pointer the function writes the count through.
 - `string` marks a `char *` or `unsigned char *` as UTF-8 text.
 - `free` names the function that releases a string, buffer, or array result after it is copied.
-- `callback` passes a JavaScript function as a function pointer the library calls before it returns, such as an iteration or comparison function. `data` names the `void *` parameter the library hands back to the callback; it disappears from the JavaScript signature. An exception in the callback skips its remaining calls and rethrows when the C function returns.
+- `callback` passes a JavaScript function as a function pointer the library calls before it returns, such as an iteration or comparison function. `data` names the `void *` parameter the library hands back to the callback; it disappears from the JavaScript signature. An exception in the callback skips its remaining calls and rethrows when the C function returns. `release` names the `void (*)(void *)` parameter that takes the destructor for that data, for a library that keeps the callback, such as SQLite's `xDestroy`. The library may then call the function after the call returns, until it calls the destructor, and an exception rethrows from the library call that triggered it. A library that calls back from another thread aborts the program, because JavaScript runs on one thread.
 
 - `constant` passes a C macro, enumerator, or integer for a parameter, such as `SQLITE_TRANSIENT` for a destructor or `0` for a reserved argument. The parameter disappears from the JavaScript signature, and the C compiler checks the value's type.
 

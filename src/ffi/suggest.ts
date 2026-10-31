@@ -196,6 +196,16 @@ function suggestFunction(
 		declaration.params[index]!.name ?? String(index + 1);
 	const params: Record<string, MaligatorFfiValueFacts> = {};
 	const taken = new Set<number>();
+	// Destructor parameters, `void (*)(void *)`, which release a callback's user data.
+	const releases = declaration.params.flatMap((param, position) => {
+		const target = pointee(model, param.type);
+		return target?.kind === "function" &&
+			target.params.length === 1 &&
+			isVoidPointer(model, target.params[0]!) &&
+			resolveCType(model, target.returns).kind === "void"
+			? [position]
+			: [];
+	});
 	const returns = gaps.some((gap) => gap.at === "return")
 		? suggestResult(model, declaration)
 		: undefined;
@@ -208,6 +218,7 @@ function suggestFunction(
 		const target = pointee(model, declaration.params[index]!.type);
 		if (target === undefined || taken.has(index)) continue;
 		if (target.kind === "function") {
+			if (releases.includes(index)) continue;
 			const data = declaration.params.flatMap((param, position) =>
 				position !== index && !taken.has(position) && isVoidPointer(model, param.type)
 					? [position]
@@ -217,8 +228,16 @@ function suggestFunction(
 				data.length === 1 &&
 				target.params.some((param) => isVoidPointer(model, param))
 			) {
-				params[key(index)] = { callback: { data: key(data[0]!) } };
+				// A lone destructor for the user data means the library keeps the callback.
+				const release = releases.length === 1 ? releases[0] : undefined;
+				params[key(index)] = {
+					callback: {
+						data: key(data[0]!),
+						...(release === undefined ? {} : { release: key(release) }),
+					},
+				};
 				taken.add(data[0]!);
+				if (release !== undefined) taken.add(release);
 			}
 			continue;
 		}

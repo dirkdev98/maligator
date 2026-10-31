@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stdatomic.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -321,6 +322,16 @@ typedef struct MalFfiHandleObject {
     MalFfiState *registry;
 } MalFfiHandleObject;
 
+/** A kept callback; trampolines receive a pointer to `callback`, its first member. */
+typedef struct MalFfiKept {
+    MalFfiCallback callback;
+    /** The element of the VM's kept-function array that roots `callback.function`. */
+    u32 slot;
+    pthread_t thread;
+    struct MalFfiKept *previous;
+    struct MalFfiKept *next;
+} MalFfiKept;
+
 typedef struct MalFfiHandleEntry {
     const MalFfiHandleType *type;
     void *pointer;
@@ -341,6 +352,12 @@ struct MalFfiState {
     MalFfiHandleEntry *handles;
     usize handle_count;
     usize handle_capacity;
+    /** Callbacks libraries still hold, and the kept-function array's reusable slots. */
+    MalFfiKept *kept;
+    u32 kept_slots;
+    u32 *free_slots;
+    u32 free_count;
+    u32 free_capacity;
 };
 
 static void ffi_state_free(MalVm *vm) {
@@ -350,6 +367,12 @@ static void ffi_state_free(MalVm *vm) {
     for (usize index = 0; index < state->handle_capacity; index++) {
         if (state->handles[index].handle != nullptr) state->handles[index].handle->registry = nullptr;
     }
+    // Libraries may still hold kept callbacks and release them later: detach instead
+    // of freeing, so a late call finds no VM and a late release frees the context.
+    for (MalFfiKept *kept = state->kept; kept != nullptr; kept = kept->next) {
+        kept->callback.vm = nullptr;
+    }
+    free(state->free_slots);
     free(state->handles);
     free(state->shapes);
     free(state);
@@ -623,6 +646,88 @@ static bool ffi_prepare(MalVm *vm, char *identity, MalValue value) {
     prepared->next = vm->prepared_values;
     vm->prepared_values = prepared;
     return true;
+}
+
+/** The prepared value holding every kept callback's function, one per slot. */
+static const char FFI_KEPT_IDENTITY[] = "maligator:ffi#kept";
+
+[[noreturn]] static void ffi_wrong_thread(void) {
+    fputs("maligator: a C library called back into JavaScript from another thread\n", stderr);
+    abort();
+}
+
+MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function) {
+    MalValue held[2] = {function, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, held, 2);
+    MalFfiState *state = ffi_state(vm);
+    MalFfiKept *kept = calloc(1, sizeof(*kept));
+    bool ready = state != nullptr && kept != nullptr;
+    if (ready && !ffi_prepared(vm, FFI_KEPT_IDENTITY, &held[1])) {
+        held[1] = mal_ffi_new_array(vm, 0);
+        char *identity = strdup(FFI_KEPT_IDENTITY);
+        ready = identity != nullptr && ffi_prepare(vm, identity, held[1]);
+        if (identity == nullptr) mal_vm_throw_allocation_error(vm);
+    }
+    u32 slot = 0;
+    if (ready) {
+        slot = state->free_count > 0 ? state->free_slots[--state->free_count]
+                                     : state->kept_slots++;
+        ready = mal_ffi_set_element(vm, held[1], (int32_t) slot, held[0]);
+    }
+    mal_gc_unroot(&root);
+    if (!ready) {
+        free(kept);
+        if (!mal_ffi_threw(vm)) mal_vm_throw_allocation_error(vm);
+        return nullptr;
+    }
+    kept->callback = (MalFfiCallback) {vm, held[0]};
+    kept->slot = slot;
+    kept->thread = pthread_self();
+    kept->next = state->kept;
+    if (state->kept != nullptr) state->kept->previous = kept;
+    state->kept = kept;
+    return &kept->callback;
+}
+
+void mal_ffi_release(void *data) {
+    if (data == nullptr) return;
+    MalFfiKept *kept = data;
+    MalVm *vm = kept->callback.vm;
+    if (vm != nullptr) {
+        if (!pthread_equal(kept->thread, pthread_self())) ffi_wrong_thread();
+        MalFfiState *state = vm->ffi;
+        MalValue array;
+        if (ffi_prepared(vm, FFI_KEPT_IDENTITY, &array)) {
+            // Overwriting an existing element allocates nothing, so this cannot throw.
+            (void) mal_object_set(
+                mal_value_to_object(array), mal_key_index(kept->slot), mal_value_new_undefined());
+        }
+        if (state->free_count == state->free_capacity) {
+            u32 capacity = state->free_capacity == 0 ? 8 : state->free_capacity * 2;
+            u32 *grown = realloc(state->free_slots, capacity * sizeof(*grown));
+            if (grown != nullptr) {
+                state->free_slots = grown;
+                state->free_capacity = capacity;
+            }
+        }
+        // Without room the slot is simply never reused.
+        if (state->free_count < state->free_capacity) {
+            state->free_slots[state->free_count++] = kept->slot;
+        }
+        if (kept->previous != nullptr) kept->previous->next = kept->next;
+        else state->kept = kept->next;
+        if (kept->next != nullptr) kept->next->previous = kept->previous;
+    }
+    free(kept);
+}
+
+MalVm *mal_ffi_callback_vm(MalFfiCallback *callback) {
+    MalFfiKept *kept = (MalFfiKept *) callback;
+    if (kept->callback.vm != nullptr && !pthread_equal(kept->thread, pthread_self())) {
+        ffi_wrong_thread();
+    }
+    return kept->callback.vm;
 }
 
 /** A malloc'd `<specifier>#<name>` identity, or null after an allocation throw. */

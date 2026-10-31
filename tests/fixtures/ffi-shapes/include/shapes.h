@@ -90,6 +90,13 @@ double shapes_integrate(double (*f)(void *data, double x), void *data, double fr
 int shapes_log(const char *format, ...);
 // Write each byte's index into data, calling visit after each until it returns nonzero.
 int shapes_fill(unsigned char *data, size_t size, int (*visit)(void *ctx, int index), void *ctx);
+
+typedef void (*ShapesListener)(void *data, int event);
+// Keep a listener until shapes_unlisten_all, which calls release(data) for it.
+int shapes_listen(ShapesListener listener, void *data, void (*release)(void *data));
+void shapes_emit(int event);  // Call every listener
+void shapes_unlisten_all(void);
+int shapes_listeners(void);  // Listeners kept
 const char *shapes_log_line(void);  // The last log line
 size_t shapes_path_length(ShapesPath path);
 

@@ -1909,10 +1909,9 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
 - [ ] Support C libraries in `maligator test --watch`, which needs an in-process
       application host that links the project's bindings.
-- [ ] Callbacks the library keeps after the call returns, with a release fact, and
-      callbacks without a user-data parameter; blocking functions with async twins;
-      worker affinity. A kept callback can run during any later call into the library,
-      so buffers passed in place need pinning against detach and resize first.
+- [ ] Callbacks without a user-data parameter, such as global setters that keep one
+      callback until the next call replaces it; blocking functions with async twins;
+      worker affinity.
 - [ ] Foreign call effects and struct values: Core knows a foreign call's result
       kind but still treats the call as running arbitrary code. Give it the
       binding's effects (no user code without callbacks), and scalar-replace struct

@@ -287,6 +287,20 @@ typedef struct MalFfiCallback {
     MalValue function;
 } MalFfiCallback;
 
+/**
+ * A callback context for a library that keeps the callback after the call returns.
+ * It roots `function` until the library passes it to `mal_ffi_release`. Null after
+ * an allocation throw.
+ */
+MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function);
+/** The destructor a binding hands the library for a kept callback's user data. */
+void mal_ffi_release(void *data);
+/**
+ * The VM a kept callback runs in, or null once that VM is gone. Aborts when the
+ * library calls back from another thread, where JavaScript cannot run.
+ */
+MalVm *mal_ffi_callback_vm(MalFfiCallback *callback);
+
 /** Check that a callback argument is callable; null passes for a nullable site. */
 bool mal_ffi_to_function(MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site);
 /**

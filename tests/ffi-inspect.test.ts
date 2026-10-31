@@ -483,6 +483,19 @@ describe("ffi contract facts", () => {
 		);
 	});
 
+	it("rejects a callback release that is not a destructor parameter", () => {
+		rejects(
+			{
+				functions: {
+					shapes_listen: {
+						params: { listener: { callback: { data: "data", release: "data" } } },
+					},
+				},
+			},
+			"functions.shapes_listen.params.listener.callback.release: 'data' is not a free void (*)(void *) parameter",
+		);
+	});
+
 	it("rejects variants that do not fit their declaration", () => {
 		rejects(
 			{ functions: { shapes_add: { variants: { shapes_add_more: { args: ["int"] } } } } },

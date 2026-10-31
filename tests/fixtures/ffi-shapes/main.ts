@@ -25,7 +25,11 @@ import {
 	shapes_corners,
 	shapes_describe,
 	shapes_each,
+	shapes_emit,
 	shapes_fill,
+	shapes_listen,
+	shapes_listeners,
+	shapes_unlisten_all,
 	shapes_integrate,
 	shapes_join,
 	shapes_log_count,
@@ -105,6 +109,25 @@ const moved = filled.buffer.transfer();
 console.log(
 	`fill ${filledCount} ${new Uint8Array(moved).join(",")} ${transferError} ${filled.buffer.detached}`,
 );
+const heard: Array<number> = [];
+shapes_listen((event) => {
+	heard.push(event);
+});
+shapes_listen((event) => {
+	if (event === 3) throw new Error("listener failed");
+});
+shapes_emit(1);
+shapes_emit(2);
+let emitError = "";
+try {
+	shapes_emit(3);
+} catch (error) {
+	emitError = (error as Error).message;
+}
+const listening = shapes_listeners();
+shapes_unlisten_all();
+shapes_emit(4);
+console.log(`listen ${heard.join(",")} ${emitError} ${listening} ${shapes_listeners()}`);
 const opened = shapes_canvas_open("Same");
 console.log(`same handle ${opened === shapes_canvas_current()}`);
 shapes_canvas_current()?.[Symbol.dispose]();

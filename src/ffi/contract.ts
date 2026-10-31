@@ -187,13 +187,17 @@ function validateValueFacts(value: unknown, at: string): void {
 	if (value.callback !== undefined) {
 		const callback = value.callback;
 		expectObject(callback, `${at}.callback`);
-		expectKeys(callback, `${at}.callback`, ["data"]);
-		expect(
-			typeof callback.data === "string" &&
-				(C_NAME.test(callback.data) || /^[1-9]\d*$/.test(callback.data)),
-			`${at}.callback.data`,
-			"a parameter name or 1-based position",
-		);
+		expectKeys(callback, `${at}.callback`, ["data", "release"]);
+		for (const key of ["data", "release"] as const) {
+			const reference = callback[key];
+			if (key === "release" && reference === undefined) continue;
+			expect(
+				typeof reference === "string" &&
+					(C_NAME.test(reference) || /^[1-9]\d*$/.test(reference)),
+				`${at}.callback.${key}`,
+				"a parameter name or 1-based position",
+			);
+		}
 	}
 	if (value.constant !== undefined) {
 		expect(

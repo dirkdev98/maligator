@@ -37,8 +37,8 @@ export type JsValue =
 	| { readonly kind: "record"; readonly name: string }
 	| { readonly kind: "array"; readonly of: JsValue; readonly length: number }
 	/**
-	 * A JavaScript function the library calls during the call through a generated
-	 * trampoline of the C function type `type`.
+	 * A JavaScript function the library calls through a generated trampoline of the C
+	 * function type `type`, during the call or, when kept, until it releases it.
 	 */
 	| {
 			readonly kind: "callback";
@@ -47,6 +47,7 @@ export type JsValue =
 			readonly params: ReadonlyArray<JsValue | "data">;
 			readonly returns: JsValue;
 			readonly nullable: boolean;
+			readonly kept: boolean;
 	  }
 	/**
 	 * A resource handle. C receives the handle's pointer, a copy of its struct, or
@@ -83,6 +84,8 @@ export type Argument =
 	| { readonly kind: "result-count" }
 	/** The user data that routes the callback argument `of` to its JavaScript function. */
 	| { readonly kind: "callback-data"; readonly of: number }
+	/** The destructor the library calls when it drops the kept callback argument `of`. */
+	| { readonly kind: "callback-release"; readonly of: number }
 	/** A C expression the contract fixes, such as a macro name. */
 	| { readonly kind: "constant"; readonly expression: string };
 
@@ -175,6 +178,11 @@ export interface SkippedConstant {
 
 export interface BindingPlan {
 	readonly functions: ReadonlyArray<BoundFunction>;
+	/**
+	 * Whether a function hands the library a callback it keeps. Such a callback can run,
+	 * and throw, during any later call into the library.
+	 */
+	readonly keepsCallbacks: boolean;
 	readonly unbound: ReadonlyArray<UnboundFunction>;
 	readonly records: ReadonlyMap<string, MappedRecord>;
 	readonly handles: ReadonlyMap<string, HandleType>;
@@ -576,7 +584,7 @@ class Planner {
 	 * A callback parameter: C passes each argument to the JavaScript function as it
 	 * would a result, except handles, which the library keeps owning.
 	 */
-	#callback(type: CType, nullable: boolean, at: string): Mapping {
+	#callback(type: CType, nullable: boolean, kept: boolean, at: string): Mapping {
 		const target =
 			type.kind === "pointer" ? resolveCType(this.#model, type.to) : undefined;
 		if (target?.kind !== "function" || target.variadic) {
@@ -612,7 +620,7 @@ class Planner {
 			}
 			returns = mapped.value;
 		}
-		return { value: { kind: "callback", type: target, params, returns, nullable } };
+		return { value: { kind: "callback", type: target, params, returns, nullable, kept } };
 	}
 
 	/**
@@ -727,6 +735,37 @@ class Planner {
 			}
 			callbackData.set(data, index);
 		});
+		// The destructor parameters of kept callbacks, mapped to their callback argument.
+		const callbackReleases = new Map<number, number>();
+		declaration.params.forEach((_, index) => {
+			const release = factsAt(index).callback?.release;
+			if (release === undefined) return;
+			const at = `params.${names[index]}.callback.release`;
+			const position = parameterIndex(release, at);
+			const resolved = resolveCType(this.#model, declaration.params[position]!.type);
+			const target =
+				resolved.kind === "pointer" ? resolveCType(this.#model, resolved.to) : undefined;
+			const first = target?.kind === "function" ? target.params[0] : undefined;
+			const takes = first === undefined ? undefined : resolveCType(this.#model, first);
+			if (
+				target?.kind !== "function" ||
+				target.variadic ||
+				target.params.length !== 1 ||
+				takes === undefined ||
+				resolveCType(this.#model, target.returns).kind !== "void" ||
+				takes.kind !== "pointer" ||
+				resolveCType(this.#model, takes.to).kind !== "void" ||
+				callbackData.has(position) ||
+				callbackReleases.has(position) ||
+				counts.has(position) ||
+				factsAt(position).callback !== undefined
+			) {
+				throw new FfiError(
+					`${where(at)}: '${release}' is not a free void (*)(void *) parameter`,
+				);
+			}
+			callbackReleases.set(position, index);
+		});
 		const resultFact = facts.returns.bytes !== undefined ? "bytes" : "array";
 		const resultCounted = facts.returns[resultFact];
 		const resultCount =
@@ -749,6 +788,11 @@ class Planner {
 			}
 			const resolved = resolveCType(this.#model, param.type);
 			const routed = callbackData.get(index);
+			const released = callbackReleases.get(index);
+			if (released !== undefined) {
+				args.push({ kind: "callback-release", of: released });
+				return;
+			}
 			if (valueFacts.constant !== undefined) {
 				if (
 					Object.keys(valueFacts).length > 1 ||
@@ -766,7 +810,12 @@ class Planner {
 				return;
 			}
 			if (valueFacts.callback !== undefined) {
-				const mapped = this.#callback(resolved, valueFacts.nullable === true, where(at));
+				const mapped = this.#callback(
+					resolved,
+					valueFacts.nullable === true,
+					valueFacts.callback.release !== undefined,
+					where(at),
+				);
 				if ("gap" in mapped) gap(mapped.gap);
 				else {
 					params.push({ name, type: param.type, value: mapped.value });
@@ -1076,6 +1125,9 @@ export function planBindings(
 	);
 	return {
 		functions,
+		keepsCallbacks: functions.some((binding) =>
+			binding.params.some(({ value }) => value.kind === "callback" && value.kept),
+		),
 		unbound,
 		records: planner.records,
 		handles,
