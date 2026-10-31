@@ -771,6 +771,10 @@ function createGitHubRelease(args: Array<string>): void {
 	}
 	assertVersionSynchronized(version);
 	assertCleanWorktree();
+	const notesFile = path.join(repositoryRoot, "docs/releases", `${version}.md`);
+	if (!existsSync(notesFile)) {
+		throw new Error(`write the release notes in docs/releases/${version}.md first`);
+	}
 	const head = execFileSync("git", ["rev-parse", "HEAD"], {
 		cwd: repositoryRoot,
 		encoding: "utf-8",
@@ -806,8 +810,8 @@ function createGitHubRelease(args: Array<string>): void {
 			head,
 			"--title",
 			`Maligator ${tag}`,
-			"--notes",
-			"Prepared npm alpha release assets.",
+			"--notes-file",
+			notesFile,
 		],
 		{ cwd: repositoryRoot, stdio: "inherit" },
 	);

@@ -21,8 +21,9 @@ and checked before building or publishing. Every prerelease is published explici
 under the npm `alpha` dist-tag. The release automation does not attempt to change or
 remove the registry's `latest` tag.
 
-Prepare the next numeric alpha with `npm run version:alpha`, commit the release
-preparation, and push that exact commit to `main` before dispatching the workflow.
+Prepare the next numeric alpha with `npm run version:alpha`, write its release notes in
+`docs/releases/<version>.md`, commit the release preparation, and push that exact commit
+to `main` before dispatching the workflow. The notes become the GitHub release body.
 
 ## Prepare the packages
 
