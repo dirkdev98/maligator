@@ -348,6 +348,25 @@ void mal_ffi_release(void *data);
  */
 MalVm *mal_ffi_callback_vm(MalFfiCallback *callback);
 
+typedef void (*MalFfiQueuedRun)(MalVm *vm, MalFfiCallback *callback, void *message);
+typedef void (*MalFfiQueuedFree)(void *message);
+
+/**
+ * `mal_ffi_keep` for a callback the library may also call from other threads, whose
+ * calls then queue for the VM thread. Needs an event loop, which waits while any such
+ * callback is kept. Null after a throw.
+ */
+MalFfiCallback *mal_ffi_keep_queued(MalVm *vm, MalValue function);
+/** Whether a call of the callback arrives on its VM's thread, or once that VM is gone. */
+bool mal_ffi_callback_here(MalFfiCallback *callback);
+/**
+ * From another thread: queue `run(vm, callback, message)` for the VM thread, which
+ * frees the message with `release` afterwards. False when the call cannot queue,
+ * leaving the message to the caller.
+ */
+bool mal_ffi_callback_queue(
+    MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release);
+
 /**
  * The kept callbacks of one setter parameter whose next call replaces the callback,
  * one per key: null for a setter that configures the whole library, or the pointer

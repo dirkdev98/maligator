@@ -72,6 +72,8 @@ export type JsValue =
 			readonly replaced?: { readonly key?: number; readonly keyParam?: number };
 			/** The C function that returns the user data from callback parameter `param`. */
 			readonly lookup?: { readonly function: string; readonly param: number };
+			/** Calls from other threads queue for the VM thread with copied arguments. */
+			readonly queued?: true;
 	  }
 	/**
 	 * A resource handle. C receives the handle's pointer, a copy of its struct, or
@@ -710,6 +712,25 @@ class Planner {
 			callback.lookup === undefined
 				? undefined
 				: this.#lookup(target, callback.lookup, `${at}.callback.lookup`);
+		if (callback.queued === true) {
+			// A queued call outlives the C caller's arguments, so it gets copies of values.
+			const copyable = params.every(
+				(param) =>
+					typeof param !== "object" ||
+					["boolean", "integer", "float", "bigint", "string", "bytes", "record"].includes(
+						param.kind,
+					),
+			);
+			if (
+				resolveCType(this.#model, target.returns).kind !== "void" ||
+				!copyable ||
+				lookup !== undefined
+			) {
+				throw new FfiError(
+					`${at}.callback.queued: a queued callback returns nothing, takes values, strings, buffers, and structs, and has no lookup`,
+				);
+			}
+		}
 		const returned = resolveCType(this.#model, target.returns);
 		let returns: JsValue = { kind: "undefined" };
 		if (returned.kind !== "void") {
@@ -730,6 +751,7 @@ class Planner {
 				nullable,
 				kept,
 				...(lookup === undefined ? {} : { lookup }),
+				...(callback.queued === true ? { queued: true as const } : {}),
 			},
 		};
 	}

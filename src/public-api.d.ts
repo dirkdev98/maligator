@@ -150,6 +150,14 @@ export interface MaligatorFfiCallback {
 	 */
 	lookup?: { function: string; param: string };
 	/**
+	 * The library may call the kept callback from other threads, as audio and network
+	 * libraries do. Such calls copy their arguments and queue for the program's thread,
+	 * and the C caller continues at once, so the callback returns nothing and takes
+	 * values, strings, buffers, and structs. The program needs an event loop, which
+	 * waits while the callback is kept.
+	 */
+	queued?: boolean;
+	/**
 	 * Facts per callback parameter, keyed by 1-based position: `string`, `bytes`, or
 	 * `array` with a `length` naming another callback parameter, and `nullable`.
 	 */

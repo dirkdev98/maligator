@@ -120,6 +120,13 @@ void shapes_canvas_resize(ShapesCanvas *canvas, int width, int height);  // Call
 // Keep hook for the canvas until the next call; returns the data it replaces.
 void *shapes_canvas_on_draw(ShapesCanvas *canvas, int (*hook)(void *data, int frame), void *data);
 int shapes_canvas_draw(ShapesCanvas *canvas, int frame);  // The hook's result, or -1
+typedef void (*ShapesWatcher)(void *data, int event, const char *label);
+// Keep a watcher the library may call from its own threads, until shapes_unwatch.
+int shapes_watch(ShapesWatcher watcher, void *data, void (*release)(void *data));
+void shapes_unwatch(void);
+// Call the watcher with events 1 to count from a new thread; returns once that ends.
+void shapes_watch_fire(int count);
+void shapes_watch_call(int event);  // Call the watcher on this thread
 // Sleep for milliseconds while using the canvas and bytes; returns the sum of the bytes.
 int shapes_hold(ShapesCanvas *canvas, const void *data, size_t size, int milliseconds);
 

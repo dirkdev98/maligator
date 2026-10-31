@@ -351,6 +351,11 @@ typedef struct MalFfiKept {
     struct MalFfiKept *next;
     /** Link in the VM's queue of releases that arrived where the VM could not run them. */
     struct MalFfiKept *pending;
+    /** The library may call from other threads; those calls queue for the VM thread. */
+    bool queued;
+    /** Released while calls still waited in the queue; the last of them completes it. */
+    bool released;
+    _Atomic u32 waiting;
 } MalFfiKept;
 
 /**
@@ -390,6 +395,12 @@ struct MalFfiState {
     u64 last_invocation;
     /** Whether the runtime cleanup that drops pending async calls is registered. */
     bool async_cleanup;
+    /**
+     * The host operation other threads post queued callback calls to, open while any
+     * kept callback accepts them, so the event loop waits for their calls.
+     */
+    MalHostHandle inbox;
+    u32 inbox_users;
     u32 kept_slots;
     u32 *free_slots;
     u32 free_count;
@@ -808,9 +819,19 @@ MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function) {
     return &kept->callback;
 }
 
+static void ffi_inbox_leave(MalVm *vm);
+
 /** Drop a released context's slot and free it; runs on the VM thread outside collection. */
 static void ffi_release_now(MalFfiKept *kept) {
     MalVm *vm = kept->callback.vm;
+    if (vm != nullptr && kept->queued) {
+        // Queued calls still name this context; the last one to run completes the release.
+        if (atomic_load(&kept->waiting) > 0) {
+            kept->released = true;
+            return;
+        }
+        ffi_inbox_leave(vm);
+    }
     if (vm != nullptr) {
         MalFfiState *state = vm->ffi;
         MalValue array;
@@ -1144,6 +1165,106 @@ static void ffi_replaced_drop(void *key) {
         if (kept == nullptr) return;
         mal_ffi_release(kept);
     }
+}
+
+/** A queued call of a kept callback, posted from another thread. */
+typedef struct MalFfiQueuedCall {
+    MalFfiKept *kept;
+    MalFfiQueuedRun run;
+    MalFfiQueuedFree free;
+    void *message;
+} MalFfiQueuedCall;
+
+static MAL_ISOLATE_LOCAL bool ffi_inbox_installed;
+
+static void ffi_queued_destroy(void *data) {
+    MalFfiQueuedCall *call = data;
+    call->free(call->message);
+    free(call);
+}
+
+static void ffi_inbox_leave(MalVm *vm) {
+    MalFfiState *state = vm->ffi;
+    MalHost *host = mal_host(vm);
+    if (--state->inbox_users > 0 || host == nullptr) return;
+    // The terminal task lets the event loop finish once the drain consumes it.
+    (void) mal_host_operation_complete(&host->tasks, state->inbox, MAL_HOST_TERMINAL_OK, nullptr, nullptr);
+}
+
+static bool ffi_inbox_drain(MalVm *vm) {
+    MalHost *host = mal_host(vm);
+    MalHostTask task;
+    if (host == nullptr || vm->ffi == nullptr || !mal_host_peek_task(&host->tasks, &task)) {
+        return false;
+    }
+    if (mal_host_operation_owner(&host->tasks, task.operation) != vm->ffi) return false;
+    if (!mal_host_next_task(&host->tasks, &task)) return false;
+    if (task.kind == MAL_HOST_TASK_TERMINAL) {
+        mal_host_operation_unbind(&host->tasks, task.operation, vm->ffi);
+        mal_host_task_release(&host->tasks, &task);
+        return true;
+    }
+    MalFfiQueuedCall *call = task.data;
+    MalFfiKept *kept = call->kept;
+    if (kept->callback.vm == vm) call->run(vm, &kept->callback, call->message);
+    u32 left = atomic_fetch_sub(&kept->waiting, 1) - 1;
+    mal_host_task_release(&host->tasks, &task);
+    if (left == 0 && kept->released) ffi_release_now(kept);
+    return true;
+}
+
+MalFfiCallback *mal_ffi_keep_queued(MalVm *vm, MalValue function) {
+    MalHost *host = mal_host(vm);
+    if (host == nullptr) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            (const byte *) "Callbacks a C library calls from other threads need an event loop, such as the web platform surface");
+        return nullptr;
+    }
+    MalFfiCallback *callback = mal_ffi_keep(vm, function);
+    if (callback == nullptr) return nullptr;
+    MalFfiState *state = vm->ffi;
+    if (state->inbox_users == 0) {
+        bool started = mal_host_operation_start(&host->tasks, &state->inbox);
+        if (!started || !mal_host_operation_activate(&host->tasks, state->inbox)
+            || !mal_host_operation_bind(&host->tasks, state->inbox, state)) {
+            if (started) (void) mal_host_operation_cancel(&host->tasks, state->inbox);
+            mal_ffi_release(callback);
+            mal_vm_throw_allocation_error(vm);
+            return nullptr;
+        }
+        if (!ffi_inbox_installed) {
+            mal_host_register_macrotask_drain(ffi_inbox_drain, false);
+            ffi_inbox_installed = true;
+        }
+    }
+    state->inbox_users++;
+    ((MalFfiKept *) callback)->queued = true;
+    return callback;
+}
+
+bool mal_ffi_callback_here(MalFfiCallback *callback) {
+    MalFfiKept *kept = (MalFfiKept *) callback;
+    return kept->callback.vm == nullptr || pthread_equal(kept->thread, pthread_self());
+}
+
+bool mal_ffi_callback_queue(
+    MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release) {
+    MalFfiKept *kept = (MalFfiKept *) callback;
+    MalVm *vm = kept->callback.vm;
+    if (vm == nullptr) return false;
+    if (!kept->queued) ffi_wrong_thread();
+    MalFfiQueuedCall *call = malloc(sizeof(*call));
+    if (call == nullptr) return false;
+    *call = (MalFfiQueuedCall) {kept, run, release, message};
+    // The context stays alive while a call waits: its release defers to the last one.
+    atomic_fetch_add(&kept->waiting, 1);
+    if (!mal_host_post_progress(mal_host(vm), vm->ffi->inbox, call, ffi_queued_destroy)) {
+        atomic_fetch_sub(&kept->waiting, 1);
+        free(call);
+        return false;
+    }
+    return true;
 }
 
 /** A malloc'd `<specifier>#<name>` identity, or null after an allocation throw. */

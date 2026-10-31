@@ -193,6 +193,7 @@ function validateValueFacts(value: unknown, at: string): void {
 			"params",
 			"replaced",
 			"lookup",
+			"queued",
 		]);
 		if (callback.lookup !== undefined) {
 			const lookup = callback.lookup;
@@ -219,6 +220,14 @@ function validateValueFacts(value: unknown, at: string): void {
 			callback.replaced !== true || callback.release === undefined,
 			`${at}.callback.release`,
 			"absent for a replaced callback, which the next call releases",
+		);
+		booleanField(callback, "queued", `${at}.callback`);
+		expect(
+			callback.queued !== true ||
+				callback.release !== undefined ||
+				callback.replaced === true,
+			`${at}.callback.queued`,
+			"on a callback the library keeps, with release or replaced",
 		);
 		if (callback.params !== undefined) {
 			expectObject(callback.params, `${at}.callback.params`);

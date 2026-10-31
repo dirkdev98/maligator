@@ -896,9 +896,11 @@ class BindingWriter {
 				: lookup !== undefined
 					? `(MalFfiCallback *) ${lookup.function}(mal_c${String(lookup.param)})`
 					: `mal_ffi_replaced(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`})`;
-		return [
+		// A queued callback's body runs as `_run`, for calls on the VM thread and queued ones.
+		const body = value.queued === true ? `${name}_run` : name;
+		const lines = [
 			"",
-			`static ${formatCDeclaration(type.returns, `${name}(${params.length === 0 ? "void" : params.join(", ")})`)} {`,
+			`static ${formatCDeclaration(type.returns, `${body}(${params.length === 0 ? "void" : params.join(", ")})`)} {`,
 			`\tMalFfiCallback *mal_callback = ${callback};`,
 			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
 			...(data < 0
@@ -957,6 +959,97 @@ class BindingWriter {
 			...(lends ? ["\tif (mal_lent) mal_ffi_callback_leave(vm);"] : []),
 			"\tmal_ffi_unroot(&mal_roots);",
 			returns ? "\treturn mal_return;" : "\treturn;",
+			"}",
+		];
+		return value.queued === true
+			? [...lines, ...this.#queuedEntry(name, value, callback)]
+			: lines;
+	}
+
+	/**
+	 * The entry of a queued callback: on another thread it copies the arguments into a
+	 * message the VM thread runs later, since the C caller continues at once.
+	 */
+	#queuedEntry(
+		name: string,
+		value: Extract<JsValue, { kind: "callback" }>,
+		callback: string,
+	): Array<string> {
+		const type = value.type;
+		const message = `MalFfiQueued_${name}`;
+		const args = type.params.map((_, index) => `mal_c${String(index)}`);
+		const owned = (index: number): boolean => {
+			const param = value.params[index];
+			return (
+				typeof param === "object" && (param.kind === "string" || param.kind === "bytes")
+			);
+		};
+		const copies = type.params.flatMap((_, index) => {
+			const param = value.params[index];
+			const field = `mal_message->mal_c${String(index)}`;
+			const source = `mal_c${String(index)}`;
+			if (
+				typeof param !== "object" ||
+				(param.kind !== "string" && param.kind !== "bytes")
+			) {
+				return [`${field} = ${source};`];
+			}
+			const size =
+				param.kind === "string"
+					? `__builtin_strlen((const char *) ${source}) + 1`
+					: `(size_t) mal_c${String(value.counts[index]!)}`;
+			const copy = `mal_copy_${String(index)}`;
+			// A zero-length buffer still gets a pointer, so it converts as empty, not null.
+			return [
+				`${field} = nullptr;`,
+				`if (${source} != nullptr) {`,
+				`\tsize_t mal_size_${String(index)} = ${size};`,
+				`\tvoid *${copy} = malloc(mal_size_${String(index)} == 0 ? 1 : mal_size_${String(index)});`,
+				`\tif (${copy} == nullptr) mal_ok = false;`,
+				`\telse __builtin_memcpy(${copy}, ${source}, mal_size_${String(index)});`,
+				`\t${field} = ${copy};`,
+				"}",
+			];
+		});
+		const params = type.params.map((param, index) =>
+			formatCDeclaration(param, `mal_c${String(index)}`),
+		);
+		return [
+			"",
+			`typedef struct ${message} {`,
+			...type.params.map(
+				(param, index) => `\t${formatCDeclaration(param, `mal_c${String(index)}`)};`,
+			),
+			...(type.params.length === 0 ? ["\tchar mal_unused;"] : []),
+			`} ${message};`,
+			"",
+			`static void ${name}_free(void *mal_data) {`,
+			`\t${message} *mal_message = mal_data;`,
+			...type.params.flatMap((_, index) =>
+				owned(index) ? [`\tfree((void *) mal_message->mal_c${String(index)});`] : [],
+			),
+			"\tfree(mal_message);",
+			"}",
+			"",
+			`static void ${name}_queued(MalVm *vm, MalFfiCallback *mal_callback, void *mal_data) {`,
+			"\t(void) vm;",
+			"\t(void) mal_callback;",
+			`\t${message} *mal_message = mal_data;`,
+			"\t(void) mal_message;",
+			`\t${name}_run(${args.map((arg) => `mal_message->${arg}`).join(", ")});`,
+			"}",
+			"",
+			`static void ${name}(${params.length === 0 ? "void" : params.join(", ")}) {`,
+			`\tMalFfiCallback *mal_callback = ${callback};`,
+			"\tif (mal_callback != nullptr && !mal_ffi_callback_here(mal_callback)) {",
+			`\t\t${message} *mal_message = malloc(sizeof(*mal_message));`,
+			"\t\tif (mal_message == nullptr) return;",
+			"\t\tbool mal_ok = true;",
+			...copies.map((line) => `\t\t${line}`),
+			`\t\tif (!mal_ok || !mal_ffi_callback_queue(mal_callback, ${name}_queued, mal_message, ${name}_free)) ${name}_free(mal_message);`,
+			"\t\treturn;",
+			"\t}",
+			`\t${name}_run(${args.join(", ")});`,
 			"}",
 		];
 	}
@@ -1110,7 +1203,7 @@ class BindingWriter {
 						// never leaves a function rooted that no library holds.
 						keeps.push(
 							`if ((${source}) != mal_ffi_null()) {`,
-							`\t${context} = mal_ffi_keep(vm, ${source});`,
+							`\t${context} = ${value.queued === true ? "mal_ffi_keep_queued" : "mal_ffi_keep"}(vm, ${source});`,
 							`\tif (${context} == nullptr) goto mal_done;`,
 							"}",
 						);

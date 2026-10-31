@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <time.h>
 
 struct ShapesCanvas {
@@ -290,6 +291,41 @@ void *shapes_canvas_on_draw(ShapesCanvas *canvas, int (*hook)(void *data, int fr
 
 int shapes_canvas_draw(ShapesCanvas *canvas, int frame) {
 	return canvas->on_draw == NULL ? -1 : canvas->on_draw(canvas->draw_data, frame);
+}
+
+static ShapesWatcher watcher;
+static void *watcher_data;
+static void (*watcher_release)(void *data);
+
+int shapes_watch(ShapesWatcher listener, void *data, void (*release)(void *data)) {
+	shapes_unwatch();
+	watcher = listener;
+	watcher_data = data;
+	watcher_release = release;
+	return 0;
+}
+
+void shapes_unwatch(void) {
+	if (watcher_release != NULL) watcher_release(watcher_data);
+	watcher = NULL;
+	watcher_release = NULL;
+}
+
+void shapes_watch_call(int event) {
+	char label[16];
+	snprintf(label, sizeof(label), "event %d", event);
+	if (watcher != NULL) watcher(watcher_data, event, label);
+}
+
+static void *watch_thread(void *argument) {
+	int count = *(int *)argument;
+	for (int event = 1; event <= count; event++) shapes_watch_call(event);
+	return NULL;
+}
+
+void shapes_watch_fire(int count) {
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, watch_thread, &count) == 0) pthread_join(thread, NULL);
 }
 
 int shapes_hold(ShapesCanvas *canvas, const void *data, size_t size, int milliseconds) {

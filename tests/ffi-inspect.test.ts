@@ -430,9 +430,31 @@ describe("ffi contract facts", () => {
 					suggestedKinds.has(kind) ||
 					(kind === "nullable" && facts.callback?.replaced === true),
 			);
-		// `async` chooses an extra export rather than describing the declaration.
+		// `async` chooses an extra export and `queued` states which threads call back:
+		// neither shows in a declaration.
+		const withoutThreading = (facts: MaligatorFfiValueFacts): MaligatorFfiValueFacts => {
+			if (facts.callback?.queued === undefined) return facts;
+			const { queued: _queued, ...callback } = facts.callback;
+			return { ...facts, callback };
+		};
 		const stated = Object.entries(contract.functions)
-			.map(([name, { async: _async, ...facts }]) => [name, facts] as const)
+			.map(
+				([name, { async: _async, ...facts }]) =>
+					[
+						name,
+						facts.params === undefined
+							? facts
+							: {
+									...facts,
+									params: Object.fromEntries(
+										Object.entries(facts.params).map(([key, value]) => [
+											key,
+											withoutThreading(value),
+										]),
+									),
+								},
+					] as const,
+			)
 			.filter(
 				([, facts]) =>
 					Object.keys(facts).length > 0 &&

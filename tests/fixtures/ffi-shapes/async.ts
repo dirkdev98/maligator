@@ -7,6 +7,10 @@ import {
 	shapes_describe_async,
 	shapes_hold_async,
 	shapes_parse_async,
+	shapes_unwatch,
+	shapes_watch,
+	shapes_watch_call,
+	shapes_watch_fire,
 } from "maligator:ffi/shapes";
 
 // C calls on a worker thread: what they use stays pinned until their promise settles.
@@ -44,5 +48,18 @@ async function runAsync(): Promise<void> {
 	} catch (error) {
 		console.log(`async rejected ${(error as Error).message}`);
 	}
+	// A library thread's calls queue for this thread; calls made here run at once.
+	const watched: Array<string> = [];
+	shapes_watch((event, label) => {
+		watched.push(`${event}:${label}`);
+	});
+	shapes_watch_fire(3);
+	const queued = watched.length;
+	shapes_watch_call(9);
+	await new Promise((resolve) => {
+		setTimeout(resolve, 20);
+	});
+	shapes_unwatch();
+	console.log(`queued ${queued} ${watched.join(",")}`);
 }
 void runAsync();

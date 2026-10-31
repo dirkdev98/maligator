@@ -203,7 +203,9 @@ sqlite3_create_function_v2: {
 
 Handles a callback receives are lent for that call: once it returns they read as closed, unless the program already held a handle for the same resource. A callback's own `params`, keyed by 1-based position, take `string`, `bytes`, `array`, and `nullable` facts. A `length` names another callback parameter, which the function does not receive, so the collation above receives two `Uint8Array` copies.
 
-JavaScript runs on one thread, so a library that calls back from another thread aborts the program. A destructor may run on any thread; the release completes on the program's thread.
+JavaScript runs on one thread, so a library that calls back from another thread aborts the program, unless the callback is `queued`. A destructor may run on any thread; the release completes on the program's thread.
+
+`queued: true` marks a kept callback the library may call from its own threads, as audio and network libraries do. A call from another thread copies its arguments and queues for the program's thread, and the C caller continues at once; a call on the program's thread runs immediately. So the callback returns nothing, and takes values, strings, buffers, and structs. An exception it throws is uncaught, as one in an event handler. The program needs an event loop, such as the web platform surface, and it keeps running while the callback is kept.
 
 ## Call variadic functions
 

@@ -24,6 +24,11 @@ export default {
 			params: { data: { bytes: { length: "size" } } },
 			async: "shapes_checksum_async",
 		},
+		shapes_watch: {
+			params: {
+				watcher: { callback: { data: "data", release: "release", queued: true } },
+			},
+		},
 		shapes_hold: {
 			params: { data: { bytes: { length: "size" } } },
 			async: "shapes_hold_async",
