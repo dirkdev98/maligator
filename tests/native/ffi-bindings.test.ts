@@ -30,6 +30,7 @@ const EXPECTED_RESULTS = [
 	'read 3 [{"x":0,"y":0},{"x":1,"y":2},{"x":3,"y":4}] 9,8,7,6',
 	"immutable checksum 6",
 	"visit 7 Cannot close a C library handle while a C call uses it Visited",
+	"lend true Lender shapes_canvas_title: canvas expects an open ShapesCanvas handle",
 	"same handle true",
 	"closed through either 0 true",
 	"bitmap 3x2 sum 24 live 1",

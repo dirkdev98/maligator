@@ -171,7 +171,7 @@ Without `release`, the library may call the function only until the C function r
 
 `release` names the `void (*)(void *)` parameter that takes the destructor for `data`, for a library that keeps the callback, such as SQLite's `xDestroy`. The library may call the function until it calls the destructor, and an exception rethrows from the library call that triggered it.
 
-A callback's own `params`, keyed by 1-based position, take `string`, `bytes`, `array`, and `nullable` facts. A `length` names another callback parameter, which the function does not receive, so the collation above receives two `Uint8Array` copies.
+Handles a callback receives are lent for that call: once it returns they read as closed, unless the program already held a handle for the same resource. A callback's own `params`, keyed by 1-based position, take `string`, `bytes`, `array`, and `nullable` facts. A `length` names another callback parameter, which the function does not receive, so the collation above receives two `Uint8Array` copies.
 
 JavaScript runs on one thread, so a library that calls back from another thread aborts the program. A destructor may run on any thread; the release completes on the program's thread.
 

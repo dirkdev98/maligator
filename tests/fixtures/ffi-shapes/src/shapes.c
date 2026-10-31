@@ -241,6 +241,14 @@ void shapes_unlisten_all(void) {
 
 int shapes_listeners(void) { return listener_count; }
 
+void shapes_canvas_lend(ShapesCanvas *canvas,
+                        void (*visit)(void *data, ShapesCanvas *held, ShapesCanvas *temporary),
+                        void *data) {
+	ShapesCanvas *temporary = shapes_canvas_open("Temporary");
+	visit(data, canvas, temporary);
+	shapes_canvas_close(temporary);
+}
+
 int shapes_canvas_visit(ShapesCanvas *canvas, void (*visit)(void *data), void *data) {
 	visit(data);
 	return (int)strlen(canvas->title);

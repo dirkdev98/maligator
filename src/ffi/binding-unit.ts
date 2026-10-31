@@ -333,11 +333,14 @@ class BindingWriter {
 	 * An expression that converts the C value `expression` into a JavaScript value.
 	 * A struct handle copies its struct, so `expression` must then be an lvalue.
 	 */
-	write(value: JsValue, expression: string): string {
+	/** `lent`: a callback argument, whose handles close when the callback returns. */
+	write(value: JsValue, expression: string, lent = false): string {
 		switch (value.kind) {
 			case "handle": {
 				const created = (address: string) =>
-					`mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.owned})`;
+					lent
+						? `mal_ffi_new_callback_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address})`
+						: `mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.owned})`;
 				return value.pass === "copy"
 					? created(`&(${expression})`)
 					: `(${expression}) == nullptr ? mal_ffi_null() : ${created(`(void *) (${expression})`)}`;
@@ -400,7 +403,7 @@ class BindingWriter {
 			"else {",
 			`\t${target} = mal_ffi_new_array(vm, (int32_t) (${count}));`,
 			`\tfor (int32_t ${index} = 0; !mal_ffi_threw(vm) && ${index} < (int32_t) (${count}); ${index}++) {`,
-			`\t\tmal_ffi_set_element(vm, ${target}, ${index}, ${this.write(value.of, `(${expression})[${index}]`)});`,
+			`\t\tmal_ffi_set_element(vm, ${target}, ${index}, ${this.write(value.of, `(${expression})[${index}]`, true)});`,
 			"\t}",
 			"}",
 			"if (mal_ffi_threw(vm)) goto mal_done;",
@@ -412,10 +415,15 @@ class BindingWriter {
 	 * Statements that convert the C value `expression` into `target`, a rooted
 	 * slot. Arrays fill a new array element by element.
 	 */
-	#produce(value: JsValue, expression: string, target: string): Array<string> {
+	#produce(
+		value: JsValue,
+		expression: string,
+		target: string,
+		lent = false,
+	): Array<string> {
 		if (value.kind !== "array") {
 			return [
-				`${target} = ${this.write(value, expression)};`,
+				`${target} = ${this.write(value, expression, lent)};`,
 				...(this.#allocates(value) ? ["if (mal_ffi_threw(vm)) goto mal_done;"] : []),
 			];
 		}
@@ -430,7 +438,7 @@ class BindingWriter {
 			`\tMalValue ${element} = mal_ffi_undefined();`,
 			`\tMalFfiRoots ${roots};`,
 			`\tmal_ffi_root(&${roots}, &${element}, 1);`,
-			...this.#produce(value.of, `${expression}[${index}]`, element).map(
+			...this.#produce(value.of, `${expression}[${index}]`, element, lent).map(
 				(line) =>
 					`\t${line.replace("goto mal_done;", `{ mal_ffi_unroot(&${roots}); goto mal_done; }`)}`,
 			),
@@ -711,6 +719,12 @@ class BindingWriter {
 		);
 		const returns = value.returns.kind !== "undefined";
 		const count = String(inputs.length);
+		// Handles the library lends belong to this invocation and close when it returns.
+		const lends = inputs.some(
+			({ value: input }) =>
+				input.kind === "handle" ||
+				(input.kind === "sequence" && input.of.kind === "handle"),
+		);
 		return [
 			"",
 			`static ${formatCDeclaration(type.returns, `${name}(${params.length === 0 ? "void" : params.join(", ")})`)} {`,
@@ -729,7 +743,11 @@ class BindingWriter {
 			"\tMalValue mal_result = mal_ffi_undefined();",
 			"\tMalFfiRoots mal_roots;",
 			`\tmal_ffi_root(&mal_roots, mal_values, ${count});`,
+			...(lends ? ["\tbool mal_lent = false;"] : []),
 			"\tif (mal_ffi_threw(vm)) goto mal_done;",
+			...(lends
+				? ["\tif (!(mal_lent = mal_ffi_callback_enter(vm))) goto mal_done;"]
+				: []),
 			...inputs.flatMap((input, position) => {
 				const counted = value.counts[input.index];
 				return (
@@ -738,6 +756,7 @@ class BindingWriter {
 								input.value,
 								`mal_c${String(input.index)}`,
 								`mal_values[${String(position)}]`,
+								true,
 							)
 						: this.#produceCounted(
 								input.value,
@@ -761,6 +780,7 @@ class BindingWriter {
 					).map((line) => `\t${line}`)
 				: ["\t(void) mal_result;"]),
 			"mal_done:",
+			...(lends ? ["\tif (mal_lent) mal_ffi_callback_leave(vm);"] : []),
 			"\tmal_ffi_unroot(&mal_roots);",
 			returns ? "\treturn mal_return;" : "\treturn;",
 			"}",

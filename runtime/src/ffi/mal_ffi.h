@@ -87,6 +87,15 @@ MalValue mal_ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned);
 /**
+ * A borrowed handle for a callback argument. It reads as closed once the callback
+ * returns, unless the program already held a handle for the same pointer.
+ */
+MalValue mal_ffi_new_callback_handle(
+    MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value);
+/** Bracket a trampoline that lends handles: the callback invocation they belong to. */
+bool mal_ffi_callback_enter(MalVm *vm);
+void mal_ffi_callback_leave(MalVm *vm);
+/**
  * The resource behind an open handle of `type`: the pointer, or the address of
  * the copied struct, which the library may update in place. A nullable site
  * accepts null and yields a null pointer. With a non-null `pin`, the handle stays

@@ -17,6 +17,7 @@ import {
 	shapes_bounds,
 	shapes_canvas_create,
 	shapes_canvas_current,
+	shapes_canvas_lend,
 	shapes_canvas_open,
 	shapes_canvas_title,
 	shapes_canvas_visit,
@@ -180,6 +181,20 @@ console.log(`immutable checksum ${shapes_checksum(immutable)}`);
 		}
 	});
 	console.log(`visit ${titleLength} ${closeError} ${shapes_canvas_title(visited)}`);
+}
+{
+	using lender = shapes_canvas_open("Lender")!;
+	let lent: Array<ReturnType<typeof shapes_canvas_open>> = [];
+	shapes_canvas_lend(lender, (held, temporary) => {
+		lent = [held, temporary];
+	});
+	let afterLend = "";
+	try {
+		shapes_canvas_title(lent[1]!);
+	} catch (error) {
+		afterLend = (error as Error).message;
+	}
+	console.log(`lend ${lent[0] === lender} ${shapes_canvas_title(lent[0]!)} ${afterLend}`);
 }
 const opened = shapes_canvas_open("Same");
 console.log(`same handle ${opened === shapes_canvas_current()}`);
