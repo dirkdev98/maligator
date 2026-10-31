@@ -318,7 +318,7 @@ class BindingWriter {
 			const record = this.#record(name);
 			lines.push(
 				`static const char *const mal_ffi_record_fields_${name}[] = { ${record.fields.map((field) => cString(field.name)).join(", ")} };`,
-				`static const MalFfiRecordType mal_ffi_record_${name} = { mal_ffi_record_fields_${name}, ${String(record.fields.length)} };`,
+				`static MalFfiRecordType mal_ffi_record_${name} = { mal_ffi_record_fields_${name}, ${String(record.fields.length)}, 0 };`,
 			);
 		}
 		for (const name of inputs) {
@@ -750,7 +750,7 @@ class BindingWriter {
 			const first = fields.length - binding.outputs.length;
 			locals.push(
 				`static const char *const mal_output_fields[] = { ${fields.map(cString).join(", ")} };`,
-				`static const MalFfiRecordType mal_output_type = { mal_output_fields, ${String(fields.length)} };`,
+				`static MalFfiRecordType mal_output_type = { mal_output_fields, ${String(fields.length)}, 0 };`,
 			);
 			after.push(
 				`MalValue mal_outputs[${String(fields.length)}] = { ${first === 1 ? "mal_result" : "0"} };`,

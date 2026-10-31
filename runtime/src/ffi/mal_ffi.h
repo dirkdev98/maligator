@@ -205,10 +205,15 @@ bool mal_ffi_to_array_length(
 bool mal_ffi_check_count(
     MalVm *vm, size_t count, int32_t bits, bool is_signed, const MalFfiSite *site);
 
-/** The fields of a struct passed by value, in declaration order. */
+/**
+ * The fields of a struct passed by value, in declaration order. Bindings declare it
+ * mutable and zero `slot`: the runtime numbers each type on first use, so a VM finds
+ * the type's object shape by index.
+ */
 typedef struct MalFfiRecordType {
     const char *const *fields;
     int32_t field_count;
+    _Atomic int32_t slot;
 } MalFfiRecordType;
 
 /**
@@ -218,7 +223,7 @@ typedef struct MalFfiRecordType {
  * each field with [[Get]].
  */
 bool mal_ffi_record_fields(
-    MalVm *vm, MalValue record, const MalFfiRecordType *type, const MalFfiSite *site,
+    MalVm *vm, MalValue record, MalFfiRecordType *type, const MalFfiSite *site,
     MalValue *values);
 
 /** Read element `index` of an array that must have exactly `length` elements. */
@@ -260,7 +265,7 @@ MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length);
  * An ordinary object for a struct passed by value, created with its final shape.
  * `values` holds one value per field and must stay rooted until this returns.
  */
-MalValue mal_ffi_new_record(MalVm *vm, const MalFfiRecordType *type, const MalValue *values);
+MalValue mal_ffi_new_record(MalVm *vm, MalFfiRecordType *type, const MalValue *values);
 MalValue mal_ffi_new_array(MalVm *vm, int32_t length);
 /** Store an element; both values stay rooted for the duration of the call. */
 bool mal_ffi_set_element(MalVm *vm, MalValue array, int32_t index, MalValue value);

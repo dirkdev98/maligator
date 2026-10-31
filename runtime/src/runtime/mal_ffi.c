@@ -1,6 +1,7 @@
 #include "../ffi/mal_ffi.h"
 
 #include <limits.h>
+#include <stdatomic.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -292,16 +293,13 @@ typedef struct MalFfiHandleEntry {
 } MalFfiHandleEntry;
 
 /**
- * Per-VM binding state: the shape each record type's objects share, and the open
- * handle of each pointer, so a library returning a pointer twice yields one handle.
- * Handle entries are weak; a handle leaves the table when it closes or is collected.
+ * Per-VM binding state: the shape each record type's objects share, indexed by the
+ * type's slot, and the open handle of each pointer, so a library returning a pointer
+ * twice yields one handle. Handle entries are weak; a handle leaves the table when
+ * it closes or is collected.
  */
 struct MalFfiState {
-    struct {
-        const MalFfiRecordType *type;
-        MalShape *shape;
-    } *shapes;
-    usize shape_count;
+    MalShape **shapes;
     usize shape_capacity;
     /** Open addressing with linear probing; capacity is zero or a power of two. */
     MalFfiHandleEntry *handles;
@@ -420,17 +418,36 @@ static bool ffi_set_field(MalVm *vm, MalValue record, const char *name, MalValue
     return stored;
 }
 
-/** The shape of `type`'s objects; shapes live as long as the heap's transition tree. */
-static MalShape *ffi_record_shape(MalVm *vm, const MalFfiRecordType *type) {
-    MalFfiState *state = ffi_state(vm);
-    if (state == nullptr) return nullptr;
-    for (usize index = 0; index < state->shape_count; index++) {
-        if (state->shapes[index].type == type) return state->shapes[index].shape;
+/** The last slot handed to a record type; slots are process-wide and never reused. */
+static _Atomic i32 ffi_record_slots;
+
+static i32 ffi_record_slot(MalFfiRecordType *type) {
+    i32 slot = atomic_load_explicit(&type->slot, memory_order_acquire);
+    if (slot != 0) return slot;
+    i32 fresh = atomic_fetch_add_explicit(&ffi_record_slots, 1, memory_order_relaxed) + 1;
+    // Another VM thread may number the type first; both then use its slot.
+    if (atomic_compare_exchange_strong_explicit(
+            &type->slot, &slot, fresh, memory_order_acq_rel, memory_order_acquire)) {
+        return fresh;
     }
-    if (state->shape_count == state->shape_capacity) {
-        usize capacity = state->shape_capacity == 0 ? 8 : state->shape_capacity * 2;
-        void *grown = realloc(state->shapes, capacity * sizeof(*state->shapes));
+    return slot;
+}
+
+/** The shape of `type`'s objects; shapes live as long as the heap's transition tree. */
+static MalShape *ffi_record_shape(MalVm *vm, MalFfiRecordType *type) {
+    MalFfiState *state = vm->ffi;
+    i32 slot = ffi_record_slot(type);
+    if (state != nullptr && (usize) slot < state->shape_capacity && state->shapes[slot] != nullptr) {
+        return state->shapes[slot];
+    }
+    state = ffi_state(vm);
+    if (state == nullptr) return nullptr;
+    if ((usize) slot >= state->shape_capacity) {
+        usize capacity = state->shape_capacity == 0 ? 16 : state->shape_capacity;
+        while (capacity <= (usize) slot) capacity *= 2;
+        MalShape **grown = realloc(state->shapes, capacity * sizeof(*grown));
         if (grown == nullptr) return nullptr;
+        memset(grown + state->shape_capacity, 0, (capacity - state->shape_capacity) * sizeof(*grown));
         state->shapes = grown;
         state->shape_capacity = capacity;
     }
@@ -440,14 +457,12 @@ static MalShape *ffi_record_shape(MalVm *vm, const MalFfiRecordType *type) {
         keys[index] = mal_intrinsic_ascii(vm, (const byte *) type->fields[index]);
     }
     MalShape *shape = mal_shape_from_string_keys(&vm->heap, keys, (u32) type->field_count);
-    state->shapes[state->shape_count].type = type;
-    state->shapes[state->shape_count].shape = shape;
-    state->shape_count++;
+    state->shapes[slot] = shape;
     return shape;
 }
 
 bool mal_ffi_record_fields(
-    MalVm *vm, MalValue record, const MalFfiRecordType *type, const MalFfiSite *site,
+    MalVm *vm, MalValue record, MalFfiRecordType *type, const MalFfiSite *site,
     MalValue *values) {
     if (mal_value_is_heap_type(record, MAL_HEAP_OBJECT)) {
         MalObject *object = mal_value_to_object(record);
@@ -470,7 +485,7 @@ bool mal_ffi_record_fields(
     return true;
 }
 
-MalValue mal_ffi_new_record(MalVm *vm, const MalFfiRecordType *type, const MalValue *values) {
+MalValue mal_ffi_new_record(MalVm *vm, MalFfiRecordType *type, const MalValue *values) {
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     MalShape *shape = ffi_record_shape(vm, type);
     if (shape != nullptr) {
