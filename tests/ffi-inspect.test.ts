@@ -11,6 +11,10 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { planBindings } from "../src/ffi/binding-plan.ts";
+import { extractCModel } from "../src/ffi/c-extract.ts";
+import type { CModel } from "../src/ffi/c-model.ts";
+import type { LibraryFacts } from "../src/ffi/contract.ts";
 import type { FfiInspection, FunctionInspection } from "../src/ffi/inspect.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -137,64 +141,22 @@ describe("ffi inspect", () => {
 		);
 	});
 
-	it("rejects facts that name nothing in the headers", () => {
+	it("names the contract in fact errors", () => {
 		const project = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-facts-"));
 		try {
 			cpSync(shapesProject, project, { recursive: true });
-			const rejects = (facts: object, message: string): void => {
-				writeFileSync(
-					path.join(project, "shapes.ffi.ts"),
-					`export default ${JSON.stringify({
-						headers: ["shapes.h"],
-						find: [{ sources: ["src/shapes.c"], includeDirs: ["include"] }],
-						...facts,
-					})};\n`,
-				);
-				const result = inspect(project, ["shapes"]);
-				expect(result.status).toBe(1);
-				expect(result.stderr).toContain(`shapes.ffi.ts: ${message}`);
-			};
-			rejects(
-				{ functions: { shapes_paint: {} } },
-				"functions.shapes_paint: the headers declare no function 'shapes_paint'",
+			writeFileSync(
+				path.join(project, "shapes.ffi.ts"),
+				`export default ${JSON.stringify({
+					headers: ["shapes.h"],
+					find: [{ sources: ["src/shapes.c"], includeDirs: ["include"] }],
+					functions: { shapes_paint: {} },
+				})};\n`,
 			);
-			rejects(
-				{ functions: { shapes_add: { params: { c: { nullable: true } } } } },
-				"functions.shapes_add.params.c: shapes_add has no such parameter",
-			);
-			rejects(
-				{ types: { ShapesBitmap: { handle: { destroy: "shapes_canvas_close" } } } },
-				"types.ShapesBitmap.handle.destroy: shapes_canvas_close must take only a ShapesBitmap",
-			);
-			rejects(
-				{ functions: { shapes_area: { returns: { borrowed: true } } } },
-				"functions.shapes_area.returns.borrowed: the result is not a handle",
-			);
-			rejects(
-				{ functions: { shapes_area: { returns: { free: "shapes_free" } } } },
-				"functions.shapes_area.returns.free: free applies to string, buffer, and array results",
-			);
-			rejects(
-				{
-					functions: {
-						shapes_corners: {
-							returns: { array: { length: "count" }, free: "shapes_area" },
-						},
-					},
-				},
-				"functions.shapes_corners.returns.free: 'shapes_area' is not a function that takes one pointer",
-			);
-			rejects(
-				{
-					functions: {
-						shapes_bounds: { params: { points: { bytes: { length: "count" } } } },
-					},
-				},
-				"functions.shapes_bounds.params.points: bytes applies to void and byte pointers, not const ShapesPoint *",
-			);
-			rejects(
-				{ functions: { shapes_sum2: { params: { a: { string: true } } } } },
-				"functions.shapes_sum2.params.a: string applies to pointers, not int",
+			const result = inspect(project, ["shapes"]);
+			expect(result.status).toBe(1);
+			expect(result.stderr).toContain(
+				"shapes.ffi.ts: functions.shapes_paint: the headers declare no function 'shapes_paint'",
 			);
 		} finally {
 			rmSync(project, { recursive: true, force: true });
@@ -380,6 +342,79 @@ describe("ffi library discovery", () => {
 		expect(result.stderr).toContain("Package shapes-missing was not found");
 		expect(result.stderr).toContain(
 			`source not found: ${path.join(project, "absent.c")}`,
+		);
+	});
+});
+
+describe("ffi contract facts", () => {
+	let model: CModel;
+
+	beforeAll(() => {
+		const compiler = process.env.CC ?? "cc";
+		const version = spawnSync(compiler, ["--version"], { encoding: "utf-8" }).stdout;
+		model = extractCModel({
+			compiler: { path: compiler, version: version.split("\n")[0] ?? "" },
+			environment: process.env,
+			headers: ["shapes.h"],
+			compileArguments: [`-I${shapesInclude}`],
+		});
+	});
+
+	const rejects = (facts: Partial<LibraryFacts>, message: string): void => {
+		expect(() => planBindings(model, { types: {}, functions: {}, ...facts })).toThrow(
+			message,
+		);
+	};
+
+	it("rejects facts that name nothing in the headers", () => {
+		rejects(
+			{ functions: { shapes_paint: {} } },
+			"functions.shapes_paint: the headers declare no function 'shapes_paint'",
+		);
+		rejects(
+			{ functions: { shapes_add: { params: { c: { nullable: true } } } } },
+			"functions.shapes_add.params.c: shapes_add has no such parameter",
+		);
+		rejects(
+			{ types: { ShapesShadow: { handle: {} } } },
+			"types.ShapesShadow: the headers declare no struct named 'ShapesShadow'",
+		);
+	});
+
+	it("rejects facts that do not fit their declaration", () => {
+		rejects(
+			{ types: { ShapesBitmap: { handle: { destroy: "shapes_canvas_close" } } } },
+			"types.ShapesBitmap.handle.destroy: shapes_canvas_close must take only a ShapesBitmap",
+		);
+		rejects(
+			{ functions: { shapes_area: { returns: { borrowed: true } } } },
+			"functions.shapes_area.returns.borrowed: the result is not a handle",
+		);
+		rejects(
+			{ functions: { shapes_area: { returns: { free: "shapes_free" } } } },
+			"functions.shapes_area.returns.free: free applies to string, buffer, and array results",
+		);
+		rejects(
+			{
+				functions: {
+					shapes_corners: {
+						returns: { array: { length: "count" }, free: "shapes_area" },
+					},
+				},
+			},
+			"functions.shapes_corners.returns.free: 'shapes_area' is not a function that takes one pointer",
+		);
+		rejects(
+			{
+				functions: {
+					shapes_bounds: { params: { points: { bytes: { length: "count" } } } },
+				},
+			},
+			"functions.shapes_bounds.params.points: bytes applies to void and byte pointers, not const ShapesPoint *",
+		);
+		rejects(
+			{ functions: { shapes_sum2: { params: { a: { string: true } } } } },
+			"functions.shapes_sum2.params.a: string applies to pointers, not int",
 		);
 	});
 });
