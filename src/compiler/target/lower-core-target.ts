@@ -2,6 +2,7 @@ import type { FfiDirectEntry } from "../../build-config-values.ts";
 import { coreCompilerSiteId } from "../core/compiler-site-facts.ts";
 import type { CoreCompilation } from "../core/core-compilation.ts";
 import { coreConstructorSlotReserve } from "../core/core-constructor-layout.ts";
+import { coreForeignCalls, coreForeignSlots } from "../core/core-foreign-calls.ts";
 import {
 	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
 	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
@@ -3195,35 +3196,6 @@ function exactCoreCallTargets(
 	return exact;
 }
 
-/**
- * Calls whose callee is read straight from a C library import's slot. The installer
- * fills that slot before any code runs and imports cannot be reassigned, so native
- * code may call the function's direct entry instead.
- */
-function foreignDirectCalls(
-	fn: CoreFunctionStore,
-	slots: ReadonlyMap<number, FfiDirectEntry>,
-): ReadonlyMap<CoreInstructionId, FfiDirectEntry> {
-	const calls = new Map<CoreInstructionId, FfiDirectEntry>();
-	if (slots.size === 0) return calls;
-	const kernel = fn.kernel;
-	for (const instruction of fn.instructionIds()) {
-		if (
-			fn.instructionKind(instruction) !== "operation" ||
-			fn.instructionOpcodeName(instruction) !== "call"
-		)
-			continue;
-		const callee = kernel.operandAt(kernel.instructionOperandStart(instruction));
-		if (kernel.valueDefinitionKind(callee) !== 1) continue;
-		const load = coreInstructionId(kernel.valueDefinitionOwner(callee));
-		if (fn.instructionOpcodeName(load) !== "loadGlobal") continue;
-		const index = fn.instructionAttributes(load).index;
-		const entry = typeof index === "number" ? slots.get(index) : undefined;
-		if (entry !== undefined) calls.set(instruction, entry);
-	}
-	return calls;
-}
-
 export function prepareCoreCompilationToTargets(
 	compilation: CoreCompilation,
 	options: { readonly excludeGuardedDirectCalls?: boolean } = {},
@@ -3378,12 +3350,7 @@ export function prepareCoreCompilationToTargets(
 	);
 	const specializedOnly = new Set(compilation.plan.specializedOnlyFunctions ?? []);
 	const classLayouts = planCoreClassLayouts(compilation, functionMap);
-	const foreignSlots = new Map<number, FfiDirectEntry>();
-	for (const install of compilation.context.data.hostInstallCandidates) {
-		for (const entry of install.exports) {
-			if (entry.direct !== undefined) foreignSlots.set(entry.slot, entry.direct);
-		}
-	}
+	const foreignSlots = coreForeignSlots(compilation.context.data.hostInstallCandidates);
 	const functions = functionMap.executionToCore.map((core, execution) =>
 		prepareFunctionForTargets(
 			compilation.program.function(core),
@@ -3408,7 +3375,7 @@ export function prepareCoreCompilationToTargets(
 			compilation.context.facts.instructionSites,
 			classLayouts.sites.get(core),
 			planCoreExactArrayAccesses(compilation, core),
-			foreignDirectCalls(compilation.program.function(core), foreignSlots),
+			coreForeignCalls(compilation.program.function(core), foreignSlots),
 		),
 	);
 	return Object.freeze({

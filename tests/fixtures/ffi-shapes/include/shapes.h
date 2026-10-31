@@ -96,6 +96,7 @@ size_t shapes_path_length(ShapesPath path);
 */
 int shapes_sum2(int a, int b);
 int shapes_mul(int value, int factor);
+uint32_t shapes_unsigned_max(void);  // UINT32_MAX
 int shapes_sum3(
 	int a, /* First term */
 	int b, /* Second term */

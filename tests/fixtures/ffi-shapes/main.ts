@@ -35,8 +35,10 @@ import {
 	shapes_parse,
 	shapes_render,
 	shapes_scale,
+	shapes_sum2,
 	shapes_sum3,
 	shapes_text_bytes,
+	shapes_unsigned_max,
 	shapes_total,
 	shapes_twice,
 } from "maligator:ffi/shapes";
@@ -66,7 +68,7 @@ console.log(
 console.log(`mode ${shapes_mode_name(SHAPES_BOTH)} ${shapes_mode_name(7)}`);
 console.log(`total ${shapes_total(9007199254740993n, 1n)}`);
 console.log(
-	`sum ${shapes_sum3(1, 2, 3)} twice ${shapes_twice(21)} times max ${shapes_mul(3)}`,
+	`sum ${shapes_sum3(1, 2, 3)} twice ${shapes_twice(21)} times max ${shapes_mul(3)} negative ${shapes_sum2(-5, 2)} unsigned ${shapes_unsigned_max() + 1}`,
 );
 console.log(
 	`constants ${SHAPES_VERSION} ${SHAPES_SCALE} ${SHAPES_BIG} ${JSON.stringify(SHAPES_ORIGIN)}`,

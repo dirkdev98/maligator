@@ -1,4 +1,4 @@
-import type { FfiDirectEntry } from "../build-config-values.ts";
+import type { FfiDirectEntry, FfiDirectResult } from "../build-config-values.ts";
 import type {
 	BindingPlan,
 	BoundFunction,
@@ -36,6 +36,29 @@ export function ffiInstallerSymbol(library: string): string {
 /** The library name's length keeps `a` + `b_c` apart from `a_b` + `c`. */
 function directSymbol(library: string, name: string): string {
 	return `mal_ffi_direct${String(library.length)}_${library}_${name}`;
+}
+
+/** The primitive a binding returns, which lets compiled callers keep it unboxed. */
+function directResult(binding: BoundFunction): FfiDirectResult | undefined {
+	if (binding.outputs.length > 0) return undefined;
+	const value = binding.returns;
+	switch (value.kind) {
+		case "integer":
+			return value.signed
+				? {
+						kind: "integer",
+						minimum: -(2 ** (value.bits - 1)),
+						maximum: 2 ** (value.bits - 1) - 1,
+					}
+				: { kind: "integer", minimum: 0, maximum: 2 ** value.bits - 1 };
+		case "float":
+			return { kind: "number" };
+		case "boolean":
+		case "undefined":
+			return { kind: value.kind };
+		default:
+			return undefined;
+	}
 }
 
 /** Inputs whose conversion cannot run JavaScript, so their values need no roots. */
@@ -980,10 +1003,17 @@ export function generateBindingUnit(
 		installer,
 		exports: exports.map((entry) => entry.name),
 		direct: Object.fromEntries(
-			plan.functions.map((binding) => [
-				binding.name,
-				{ symbol: directSymbol(library, binding.name), arity: binding.params.length },
-			]),
+			plan.functions.map((binding) => {
+				const result = directResult(binding);
+				return [
+					binding.name,
+					{
+						symbol: directSymbol(library, binding.name),
+						arity: binding.params.length,
+						...(result === undefined ? {} : { result }),
+					},
+				];
+			}),
 		),
 		source,
 	};

@@ -11,6 +11,7 @@ import {
 	runCoreCrossCallTransforms,
 } from "./core-cross-call-transforms.ts";
 import { CoreEditor } from "./core-editor.ts";
+import { refineCoreForeignCallResults } from "./core-foreign-calls.ts";
 import {
 	CoreFunctionOptimizationResources,
 	CoreFunctionOptimizationSession,
@@ -103,6 +104,7 @@ export function optimizeCore(
 	options: OptimizeCoreOptions = {},
 ): OptimizedCoreResult {
 	specializeCorePlatformConstants(compilation);
+	refineCoreForeignCallResults(compilation);
 	const instrumentation = options.instrumentation ?? "off";
 	const ablatedFamily = options.benchmarkAblation?.family;
 	const ablatedPassFamily =

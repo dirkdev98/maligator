@@ -12,7 +12,16 @@ import type {
 export interface FfiDirectEntry {
 	readonly symbol: string;
 	readonly arity: number;
+	/** The result every normal completion produces, when it is a primitive. */
+	readonly result?: FfiDirectResult;
 }
+
+/** A binding's primitive result; integers come from a C type, so their range is exact. */
+export type FfiDirectResult =
+	| { readonly kind: "integer"; readonly minimum: number; readonly maximum: number }
+	| { readonly kind: "number" }
+	| { readonly kind: "boolean" }
+	| { readonly kind: "undefined" };
 
 /** The host module a configured C library provides as `maligator:ffi/<name>`. */
 export interface FfiModule {

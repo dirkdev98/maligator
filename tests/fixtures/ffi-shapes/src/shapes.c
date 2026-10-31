@@ -214,4 +214,6 @@ int shapes_sum2(int a, int b) { return a + b; }
 
 int shapes_mul(int value, int factor) { return value * factor; }
 
+uint32_t shapes_unsigned_max(void) { return UINT32_MAX; }
+
 int shapes_sum3(int a, int b, int c) { return a + b + c; }
