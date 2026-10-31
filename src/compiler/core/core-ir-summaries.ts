@@ -997,24 +997,40 @@ function summarizeAnyScriptCallees(
 		Array<ValueContainmentFact>(parameterCount).fill("preserved");
 	let receiverEscape: ValueEscapeFact = "none";
 	let receiverContainment: ValueContainmentFact = "preserved";
+	// Parameters below the top of either lattice. Every field joins to a top that absorbs
+	// later summaries, so a saturated aggregate stops the walk over every function.
+	let openParameters = parameterCount;
 	for (const summary of current.values()) {
 		if (effects !== EVERY_EFFECT_SUMMARY)
 			effects = joinEffectSummaries(effects, summary.effects);
-		for (let index = 0; index < parameterCount; index++) {
-			parameterEscape[index] = joinValueEscape(
-				parameterEscape[index]!,
-				summary.parameterEscape[index] ?? summary.restParameterEscape,
-			);
-			parameterContainment[index] = joinValueContainment(
-				parameterContainment[index]!,
-				summary.parameterContainment[index] ?? summary.restParameterContainment,
-			);
+		if (openParameters !== 0) {
+			openParameters = 0;
+			for (let index = 0; index < parameterCount; index++) {
+				const escape = joinValueEscape(
+					parameterEscape[index]!,
+					summary.parameterEscape[index] ?? summary.restParameterEscape,
+				);
+				const containment = joinValueContainment(
+					parameterContainment[index]!,
+					summary.parameterContainment[index] ?? summary.restParameterContainment,
+				);
+				parameterEscape[index] = escape;
+				parameterContainment[index] = containment;
+				if (escape !== "retained" || containment !== "unknown") openParameters++;
+			}
 		}
 		receiverEscape = joinValueEscape(receiverEscape, summary.receiverEscape);
 		receiverContainment = joinValueContainment(
 			receiverContainment,
 			summary.receiverContainment,
 		);
+		if (
+			effects === EVERY_EFFECT_SUMMARY &&
+			openParameters === 0 &&
+			receiverEscape === "retained" &&
+			receiverContainment === "unknown"
+		)
+			break;
 	}
 	return {
 		effects,

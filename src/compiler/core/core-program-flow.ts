@@ -1645,6 +1645,11 @@ export class CoreProgramFlowEngine {
 		const globalStores = new Map(previous?.globalStores ?? []);
 		const cellKeys = new Set<number>();
 		const globalSlots = new Set<number>();
+		// Keys whose aggregate already joins every current writer contribution. A writer rerun
+		// that leaves its contribution untouched cannot change such an aggregate, so it skips
+		// refolding the contributions of the key's other writers.
+		const syncedCells = new Set<number>();
+		const syncedGlobalSlots = new Set<number>();
 		const removeLocalContributions = (
 			functionId: CoreFunctionId,
 			entry: Local | undefined,
@@ -1656,6 +1661,7 @@ export class CoreProgramFlowEngine {
 				cellKeys.add(key);
 				const writers = mutableCallTargetWriters(cellWriters, previous?.cellWriters, key);
 				writers.delete(functionId);
+				syncedCells.delete(key);
 				if (writers.size === 0) cellWriters.delete(key);
 			}
 			for (const slot of entry.globalWrites.keys()) {
@@ -1666,6 +1672,7 @@ export class CoreProgramFlowEngine {
 					slot,
 				);
 				writers.delete(functionId);
+				syncedGlobalSlots.delete(slot);
 				if (writers.size === 0) globalStoreWriters.delete(slot);
 			}
 			for (const key of entry.propertyInputs.keys()) {
@@ -1701,8 +1708,11 @@ export class CoreProgramFlowEngine {
 				: semantics.opaque;
 			next = semantics.join(next, joinContributions(cellWriters.get(key)));
 			const prior = cells.get(key) ?? semantics.bottom;
-			if (!trackedCells.has(key) || semantics.isBottom(next)) cells.delete(key);
+			const bottom = semantics.isBottom(next);
+			if (!trackedCells.has(key) || bottom) cells.delete(key);
 			else cells.set(key, next);
+			// An untracked key with writes reports a change on every recompute, so it never syncs.
+			if (bottom || trackedCells.has(key)) syncedCells.add(key);
 			return !semantics.equal(prior, next);
 		};
 		for (const key of cellKeys) {
@@ -1715,6 +1725,7 @@ export class CoreProgramFlowEngine {
 			const next = joinContributions(globalStoreWriters.get(slot));
 			if (semantics.isBottom(next)) globalStores.delete(slot);
 			else globalStores.set(slot, next);
+			syncedGlobalSlots.add(slot);
 		};
 		for (const slot of globalSlots) recomputeGlobalStore(slot);
 
@@ -1757,17 +1768,21 @@ export class CoreProgramFlowEngine {
 					: analyzedLocal;
 			for (const [key, targets] of next.cellWrites) {
 				cellKeys.add(key);
+				if (cellWriters.get(key)?.get(functionId) === targets) continue;
 				const writers = mutableCallTargetWriters(cellWriters, previous?.cellWriters, key);
 				writers.set(functionId, targets);
+				syncedCells.delete(key);
 			}
 			for (const [slot, targets] of next.globalWrites) {
 				globalSlots.add(slot);
+				if (globalStoreWriters.get(slot)?.get(functionId) === targets) continue;
 				const writers = mutableCallTargetWriters(
 					globalStoreWriters,
 					previous?.globalStoreWriters,
 					slot,
 				);
 				writers.set(functionId, targets);
+				syncedGlobalSlots.delete(slot);
 			}
 			for (const key of next.propertyInputs.keys()) {
 				const readers = mutableCallTargetReaders(
@@ -1799,14 +1814,14 @@ export class CoreProgramFlowEngine {
 				...next.cellWrites.keys(),
 			]);
 			for (const key of writeKeys) {
-				if (!recomputeCell(key)) continue;
+				if (syncedCells.has(key) || !recomputeCell(key)) continue;
 				for (const reader of cellReaders.get(key) ?? []) enqueue(reader);
 			}
 			for (const slot of new Set([
 				...(previousLocal?.globalWrites.keys() ?? []),
 				...next.globalWrites.keys(),
 			])) {
-				recomputeGlobalStore(slot);
+				if (!syncedGlobalSlots.has(slot)) recomputeGlobalStore(slot);
 			}
 		};
 		let returnGraph = previous?.returnGraph;
