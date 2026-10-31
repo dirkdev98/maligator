@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
+	appendFileSync,
 	chmodSync,
 	cpSync,
 	mkdirSync,
@@ -16,6 +17,7 @@ import { extractCModel } from "../src/ffi/c-extract.ts";
 import type { CModel } from "../src/ffi/c-model.ts";
 import type { LibraryFacts } from "../src/ffi/contract.ts";
 import type { FfiInspection, FunctionInspection } from "../src/ffi/inspect.ts";
+import { loadCModel } from "../src/ffi/model-cache.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliEntry = path.join(repoRoot, "src/index.ts");
@@ -425,5 +427,47 @@ describe("ffi contract facts", () => {
 			{ functions: { shapes_sum2: { params: { a: { string: true } } } } },
 			"functions.shapes_sum2.params.a: string applies to pointers, not int",
 		);
+	});
+});
+
+describe("C model cache", () => {
+	it("reads the headers again only after one of them changes", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-model-cache-"));
+		const previousCache = process.env.MALIGATOR_CACHE_DIR;
+		try {
+			const include = path.join(directory, "include");
+			cpSync(shapesInclude, include, { recursive: true });
+			const log = path.join(directory, "compiler.log");
+			const wrapper = path.join(directory, "cc");
+			const compiler = process.env.CC ?? "cc";
+			writeFileSync(wrapper, `#!/bin/sh\necho "$@" >> '${log}'\nexec ${compiler} "$@"\n`);
+			chmodSync(wrapper, 0o755);
+			process.env.MALIGATOR_CACHE_DIR = path.join(directory, "cache");
+			const version = spawnSync(compiler, ["--version"], { encoding: "utf-8" }).stdout;
+			const input = {
+				compiler: { path: wrapper, version: version.split("\n")[0] ?? "" },
+				environment: process.env,
+				headers: ["shapes.h"],
+				compileArguments: [`-I${include}`],
+			};
+			const astDumps = () =>
+				readFileSync(log, "utf8")
+					.split("\n")
+					.filter((line) => line.includes("-ast-dump")).length;
+
+			loadCModel(input);
+			const first = astDumps();
+			loadCModel(input);
+			expect(astDumps()).toBe(first);
+
+			appendFileSync(path.join(include, "shapes.h"), "int shapes_extra(int value);\n");
+			const changed = loadCModel(input);
+			expect(astDumps()).toBeGreaterThan(first);
+			expect(changed.functions.map((entry) => entry.name)).toContain("shapes_extra");
+		} finally {
+			if (previousCache === undefined) delete process.env.MALIGATOR_CACHE_DIR;
+			else process.env.MALIGATOR_CACHE_DIR = previousCache;
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 });

@@ -10,13 +10,14 @@ import { planBindings } from "./binding-plan.ts";
 import type { BindingPlan } from "./binding-plan.ts";
 import { generateBindingUnit, generateInstallerRegistry } from "./binding-unit.ts";
 import type { BindingUnit } from "./binding-unit.ts";
-import { FFI_C_STANDARD, extractCModel } from "./c-extract.ts";
+import { FFI_C_STANDARD } from "./c-extract.ts";
 import type { CModel } from "./c-model.ts";
 import { loadLibraryContract } from "./contract.ts";
 import type { LibraryContract } from "./contract.ts";
 import { resolveLibrary } from "./discovery.ts";
 import type { LinkInput, ResolvedLibrary } from "./discovery.ts";
 import { FfiError } from "./ffi-error.ts";
+import { loadCModel } from "./model-cache.ts";
 
 /** A configured C library after discovery, header extraction, and mapping. */
 export interface PreparedLibrary {
@@ -59,7 +60,7 @@ export function prepareLibrary(
 		platform: preparation.platform,
 		cross: preparation.cross,
 	});
-	const model = extractCModel({
+	const model = loadCModel({
 		compiler: preparation.compiler,
 		environment: preparation.environment,
 		headers: contract.headers,

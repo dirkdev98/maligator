@@ -1915,8 +1915,8 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 - [ ] Direct calls: Core-visible foreign calls with unboxed representations, and
       scalar replacement of struct arguments and out objects.
 - [ ] `ffi check`: declaration fingerprints, evidence drift, sanitizer probes.
-- [ ] Cache header extraction; headers that pull in large system headers exceed the
-      self-hosted CLI's string limit as one AST dump.
+- [ ] Headers that pull in large system headers exceed the self-hosted CLI's string
+      limit as one AST dump.
 
 # Actors, SMP, and embedding
 
