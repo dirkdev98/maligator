@@ -395,21 +395,29 @@ describe("ffi contract facts", () => {
 		);
 	};
 
-	it("suggests the count, output, callback, and handle facts the fixture contract states", () => {
+	it("suggests the count, output, result, callback, and handle facts the fixture contract states", () => {
 		const suggestions = suggestFacts(
 			model,
 			{ types: {}, functions: {} },
 			planBindings(model),
 		);
 		const contract: LibraryFacts = shapesContract;
-		const suggestedKinds = new Set(["array", "bytes", "out", "inout", "callback"]);
-		const stated = Object.entries(contract.functions).flatMap(([name, facts]) =>
-			facts.params !== undefined &&
-			Object.values(facts.params).every((param) =>
-				Object.keys(param).every((kind) => suggestedKinds.has(kind)),
-			)
-				? [[name, { params: facts.params }] as const]
-				: [],
+		const suggestedKinds = new Set([
+			"array",
+			"bytes",
+			"out",
+			"inout",
+			"callback",
+			"string",
+			"free",
+		]);
+		const suggestible = (facts: object): boolean =>
+			Object.keys(facts).every((kind) => suggestedKinds.has(kind));
+		const stated = Object.entries(contract.functions).filter(
+			([, facts]) =>
+				facts.variants === undefined &&
+				Object.values(facts.params ?? {}).every(suggestible) &&
+				suggestible(facts.returns ?? {}),
 		);
 
 		expect(suggestions.functions).toEqual(Object.fromEntries(stated));

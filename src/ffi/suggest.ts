@@ -123,6 +123,65 @@ function countParameter(
 		: undefined;
 }
 
+/**
+ * The function that releases a pointer `declaration` returns: its `Load`/`Unload`
+ * twin, or else the library's one release function that takes any pointer, when the
+ * declaration's documentation says the caller frees the result. Libraries also
+ * return static buffers through the same types, and freeing one corrupts memory.
+ */
+function releaseFunction(model: CModel, declaration: CFunction): string | undefined {
+	const releases = model.functions.filter((candidate) => {
+		const param = candidate.params[0];
+		return (
+			candidate.params.length === 1 &&
+			param !== undefined &&
+			pointee(model, param.type) !== undefined &&
+			resolveCType(model, candidate.returns).kind === "void" &&
+			RELEASE_NAME.test(candidate.name)
+		);
+	});
+	const twin = declaration.name.replace(/^Load/, "Unload");
+	if (
+		twin !== declaration.name &&
+		releases.some((candidate) => candidate.name === twin)
+	) {
+		return twin;
+	}
+	const generic = releases.filter((candidate) =>
+		isVoidPointer(model, candidate.params[0]!.type),
+	);
+	if (generic.length !== 1) return undefined;
+	const release = generic[0]!.name;
+	const doc = declaration.doc ?? "";
+	return doc.includes(release) || /\bfree(?:s|d)?\b/i.test(doc) ? release : undefined;
+}
+
+/** A copied result: text, or bytes or elements counted through an out parameter. */
+function suggestResult(
+	model: CModel,
+	declaration: CFunction,
+): MaligatorFfiValueFacts | undefined {
+	const target = pointee(model, declaration.returns);
+	if (target === undefined || target.kind === "function") return undefined;
+	const free = releaseFunction(model, declaration);
+	if (free === undefined) return undefined;
+	const bytes = isByteType(target);
+	const countName = bytes ? BYTE_COUNT_NAME : COUNT_NAME;
+	const counts = declaration.params.filter(
+		(param) =>
+			pointee(model, param.type)?.kind === "integer" && countName.test(param.name ?? ""),
+	);
+	const count = counts.length === 1 ? counts[0]!.name : undefined;
+	if (count !== undefined) {
+		return bytes
+			? { bytes: { length: count }, free }
+			: { array: { length: count }, free };
+	}
+	return target.kind === "integer" && target.name === "char"
+		? { string: true, free }
+		: undefined;
+}
+
 function parameterIndex(gap: Gap): number | undefined {
 	const match = /^param (\d+) /.exec(gap.at);
 	return match === null ? undefined : Number(match[1]) - 1;
@@ -137,6 +196,14 @@ function suggestFunction(
 		declaration.params[index]!.name ?? String(index + 1);
 	const params: Record<string, MaligatorFfiValueFacts> = {};
 	const taken = new Set<number>();
+	const returns = gaps.some((gap) => gap.at === "return")
+		? suggestResult(model, declaration)
+		: undefined;
+	if (returns !== undefined) {
+		const counted = returns.bytes?.length ?? returns.array?.length;
+		const index = declaration.params.findIndex((param) => param.name === counted);
+		if (index >= 0) taken.add(index);
+	}
 	for (const index of gaps.flatMap((gap) => parameterIndex(gap) ?? [])) {
 		const target = pointee(model, declaration.params[index]!.type);
 		if (target === undefined || taken.has(index)) continue;
@@ -176,7 +243,9 @@ function suggestFunction(
 		params[key(index)] =
 			index === 0 && target.kind === "record" ? { inout: true } : { out: true };
 	}
-	return Object.keys(params).length === 0 ? undefined : { params };
+	if (Object.keys(params).length === 0)
+		return returns === undefined ? undefined : { returns };
+	return returns === undefined ? { params } : { params, returns };
 }
 
 function mergeFacts(
@@ -190,6 +259,7 @@ function mergeFacts(
 		merged[name] = {
 			...stated,
 			params: { ...stated?.params, ...suggested.params },
+			returns: { ...stated?.returns, ...suggested.returns },
 		};
 	}
 	return { types: { ...facts.types, ...Object.fromEntries(types) }, functions: merged };

@@ -60,7 +60,7 @@ declare module "maligator:ffi/shapes" {
 	/** Sum of the bytes */
 	export function shapes_checksum(data: ArrayBufferLike | ArrayBufferView): number;
 	export function shapes_contains(box: ShapesBox, point: ShapesPoint): boolean;
-	/** The box's corners */
+	/** The box's corners; free them */
 	export function shapes_corners(box: ShapesBox): Array<ShapesPoint> | null;
 	/** "(x, y)" in memory the caller frees */
 	export function shapes_describe(point: ShapesPoint): string | null;
@@ -77,7 +77,10 @@ declare module "maligator:ffi/shapes" {
 	export function shapes_mode_name(mode: number): string | null;
 	/** Parse "x,y" into a point; returns 0, or -1 for other text. */
 	export function shapes_parse(text: string): { result: number; point: ShapesPoint };
-	/** A width x height gradient, one byte per pixel; writes its byte count. */
+	/**
+	 * A width x height gradient, one byte per pixel; writes its byte count. The caller
+	 * frees it with shapes_free.
+	 */
 	export function shapes_render(width: number, height: number): Uint8Array | null;
 	/** Scale in place */
 	export function shapes_scale(point: ShapesPoint, factor: number): { point: ShapesPoint };

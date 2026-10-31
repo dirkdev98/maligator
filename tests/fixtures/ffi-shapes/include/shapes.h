@@ -71,9 +71,10 @@ void shapes_scale(ShapesPoint *point, float factor);  // Scale in place
 // The bounding box of the points; returns -1 for no points.
 int shapes_bounds(const ShapesPoint *points, int count, ShapesBox *box);
 uint32_t shapes_checksum(const void *data, size_t size);  // Sum of the bytes
-// A width x height gradient, one byte per pixel; writes its byte count.
+// A width x height gradient, one byte per pixel; writes its byte count. The caller
+// frees it with shapes_free.
 unsigned char *shapes_render(int width, int height, int *size);
-ShapesPoint *shapes_corners(ShapesBox box, int *count);  // The box's corners
+ShapesPoint *shapes_corners(ShapesBox box, int *count);  // The box's corners; free them
 char *shapes_describe(ShapesPoint point);  // "(x, y)" in memory the caller frees
 void shapes_free(void *memory);  // Release memory the library allocated
 int shapes_allocations(void);  // Allocations not yet released
