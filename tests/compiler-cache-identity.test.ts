@@ -122,6 +122,7 @@ describe("compiler cache identity", () => {
 		});
 		expect([...externalSources].sort()).toEqual([
 			"build-config-error.ts",
+			"build-config-values.ts",
 			"platform/catalog.ts",
 			"platform/execution.ts",
 			"utils.ts",
