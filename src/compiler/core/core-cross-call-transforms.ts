@@ -1,4 +1,5 @@
 import { builtinNormalResultKinds } from "../shared/builtin-registry.ts";
+import type { WorldFacts } from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_OBJECT,
@@ -44,8 +45,11 @@ import type {
 	CoreCrossCallSession,
 } from "./core-function-optimization-session.ts";
 import {
+	coreBoundFunctionCall,
+	coreBoundFunctionCallsAvailable,
 	coreFunctionPrototypeCall,
 	coreGuardableCall,
+	expandCoreBoundFunctionCall,
 	expandCoreFunctionIndexCall,
 	expandCoreFunctionPrototypeCall,
 } from "./core-function-prototype-call.ts";
@@ -2805,13 +2809,18 @@ function specializeCoreClosureFactories(
 	return [...changed];
 }
 
-/** Calls `f` directly from `f.call(...)` sites whose `f` holds known script functions. */
+/**
+ * Calls `f` directly from `f.call(...)` sites and from calls of what `f.bind(...)`
+ * returned, when `f` holds known script functions.
+ */
 function devirtualizeCoreFunctionPrototypeCalls(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	liveFunctions: ReadonlySet<CoreFunctionId>,
+	world: WorldFacts,
 ): { readonly changed: ReadonlyArray<CoreFunctionId>; readonly instructions: number } {
 	const changed: Array<CoreFunctionId> = [];
+	const boundCalls = coreBoundFunctionCallsAvailable(world);
 	let instructions = 0;
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
@@ -2820,17 +2829,21 @@ function devirtualizeCoreFunctionPrototypeCalls(
 		for (const site of [...fn.instructionIds()]) {
 			if (!fn.isInstructionLive(site)) continue;
 			const call = coreFunctionPrototypeCall(program, fn, site);
+			const bound =
+				call === undefined && boundCalls
+					? coreBoundFunctionCall(program, fn, site)
+					: undefined;
+			const rewrite = call ?? bound;
 			if (
-				call === undefined ||
-				summaries.targets.targets(caller, call.target).functions.length === 0
+				rewrite === undefined ||
+				summaries.targets.targets(caller, rewrite.target).functions.length === 0
 			)
 				continue;
 			editor ??= CoreEditor.open(program, caller);
-			instructions += expandCoreFunctionPrototypeCall(
-				fn,
-				editor,
-				site,
-				call,
+			instructions += (
+				bound === undefined
+					? expandCoreFunctionPrototypeCall(fn, editor, site, rewrite)
+					: expandCoreBoundFunctionCall(fn, editor, site, bound)
 			).instructionsIntroduced;
 		}
 		if (editor === undefined) continue;
@@ -5277,6 +5290,7 @@ export function runCoreCrossCallTransforms(
 			program,
 			summaries,
 			new Set(flow.reachability.liveFunctions),
+			analyses.compilationContext.facts.world,
 		);
 		if (devirtualized.changed.length !== 0) {
 			for (const functionId of devirtualized.changed) cloned.add(functionId);

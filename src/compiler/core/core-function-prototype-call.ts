@@ -1,3 +1,7 @@
+import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
+import type { WorldFacts } from "../shared/compiler-facts.ts";
+import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import { primordialNodeAvailable } from "../shared/primordial-catalog.ts";
 import type { CoreEditor } from "./core-editor.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import { coreTerminatorInput } from "./core-ir-control-flow.ts";
@@ -23,7 +27,62 @@ export function coreFunctionPrototypeCall(
 	fn: CoreFunctionStore,
 	site: CoreInstructionId,
 ): CoreFunctionPrototypeCall | undefined {
-	if (!coreGuardableCall(fn, site)) return undefined;
+	return coreGuardableCall(fn, site)
+		? ownMethodCall(program, fn, site, "call")
+		: undefined;
+}
+
+export interface CoreBoundFunctionCall extends CoreFunctionPrototypeCall {
+	/** The `f.bind(...)` call that created the bound function. */
+	readonly creation: CoreInstructionId;
+}
+
+/**
+ * A call of the function a `f.bind(thisArg, ...bound)` call in the same function
+ * returned, whose `bind` is read from `f`. The result describes the call that
+ * bound function makes: `f` with `thisArg`, `bound` and then the site's arguments.
+ */
+export function coreBoundFunctionCall(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	site: CoreInstructionId,
+): CoreBoundFunctionCall | undefined {
+	if (
+		fn.instructionKind(site) !== "operation" ||
+		fn.instructionOpcodeName(site) !== "call"
+	)
+		return undefined;
+	const start = fn.kernel.instructionOperandStart(site);
+	const callee = fn.kernel.operandAt(start);
+	if (fn.kernel.valueDefinitionKind(callee) !== 1) return undefined;
+	const creation = coreInstructionId(fn.kernel.valueDefinitionOwner(callee));
+	if (
+		fn.instructionKind(creation) !== "operation" ||
+		fn.instructionOpcodeName(creation) !== "call" ||
+		fn.kernel.instructionResultCount(creation) !== 1 ||
+		!coreGuardableCall(fn, site)
+	)
+		return undefined;
+	const bind = ownMethodCall(program, fn, creation, "bind");
+	if (bind === undefined) return undefined;
+	return {
+		...bind,
+		creation,
+		arguments: [
+			...bind.arguments,
+			...Array.from({ length: fn.kernel.instructionOperandCount(site) - 2 }, (_, index) =>
+				fn.kernel.operandAt(start + 2 + index),
+			),
+		],
+	};
+}
+
+function ownMethodCall(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	site: CoreInstructionId,
+	name: string,
+): CoreFunctionPrototypeCall | undefined {
 	const count = fn.kernel.instructionOperandCount(site);
 	if (count < 2) return undefined;
 	const start = fn.kernel.instructionOperandStart(site);
@@ -39,7 +98,7 @@ export function coreFunctionPrototypeCall(
 		return undefined;
 	const units =
 		program.stringConstants[fn.instructionAttributes(lookup).stringIndex as number];
-	if (units === undefined || String.fromCharCode(...units) !== "call") return undefined;
+	if (units === undefined || String.fromCharCode(...units) !== name) return undefined;
 	return {
 		method,
 		target,
@@ -208,6 +267,72 @@ export function expandCoreFunctionPrototypeCall(
 	);
 	return {
 		instructionsIntroduced: split.instructionsIntroduced(),
+		blocksIntroduced: split.blocksIntroduced(),
+	};
+}
+
+const FUNCTION_PROTOTYPE_BIND = "Function.prototype.bind";
+
+/** Whether bound-function calls can compare a loaded `bind` with the realm's own. */
+export function coreBoundFunctionCallsAvailable(world: WorldFacts): boolean {
+	return (
+		world.primordialPolicy === "locked" &&
+		primordialNodeAvailable(world, FUNCTION_PROTOTYPE_BIND)
+	);
+}
+
+/*
+ * A bound function's target, `this` and leading arguments are fixed when
+ * %Function.prototype.bind% creates it, and calling it calls the target with them
+ * ahead of its own arguments. When the loaded `bind` was the realm's own and returned,
+ * the target was callable, so the site calls it directly; any other `bind` keeps the
+ * original call. The bound function itself stays as created for every other use.
+ *
+ * The check sits right after the creation rather than at the site, so a bound
+ * function created outside a loop and called inside it tests one boolean per call.
+ */
+export function expandCoreBoundFunctionCall(
+	fn: CoreFunctionStore,
+	editor: CoreEditor,
+	site: CoreInstructionId,
+	call: CoreBoundFunctionCall,
+): { readonly instructionsIntroduced: number; readonly blocksIntroduced: number } {
+	const creationBlock = fn.instructionBlock(call.creation);
+	const afterCreation = fn.instructionNext(call.creation);
+	const sourcePosition = fn.instructionSourcePosition(call.creation);
+	const bind = editor.insertInstruction(
+		creationBlock,
+		afterCreation,
+		"loadPrimordial",
+		[],
+		{
+			attributes: {
+				nodeIndex: getPrimordialCatalog().nodes.findIndex(
+					(node) => node[0] === FUNCTION_PROTOTYPE_BIND,
+				),
+				worldAssumptions: {
+					...builtinWorldAssumptions(FUNCTION_PROTOTYPE_BIND, "exact-builtin-proof"),
+				},
+			},
+			sourcePosition,
+		},
+	).outputs[0]!;
+	const realmBind = editor.insertInstruction(
+		creationBlock,
+		afterCreation,
+		"binary",
+		[call.method, bind],
+		{ attributes: { operator: "===" }, sourcePosition },
+	).outputs[0]!;
+	const split = splitGuardedCall(fn, editor, site);
+	const direct = split.test(realmBind);
+	const thisArgument = call.thisArgument ?? split.append(direct, "createUndefined", []);
+	split.finish(
+		direct,
+		split.append(direct, "call", [call.target, thisArgument, ...call.arguments]),
+	);
+	return {
+		instructionsIntroduced: split.instructionsIntroduced() + 2,
 		blocksIntroduced: split.blocksIntroduced(),
 	};
 }

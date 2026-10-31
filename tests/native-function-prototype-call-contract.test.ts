@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
+import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-data.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 
 function compile(source: string): ProgramImage {
@@ -38,7 +39,21 @@ for (let round = 0; round < 1000; round++) sum += at(values, -1 - (round % 3));
 console.log(sum, upper("text"));
 `;
 
-describe("Function.prototype.call sites", () => {
+const boundSource = `
+function calculate(prefix, value) {
+	return prefix + value + this.offset;
+}
+function sumBoundCalls() {
+	const calculator = { offset: 11, calculate };
+	const bound = calculator.calculate.bind(calculator, 5);
+	let sum = 0;
+	for (let round = 0; round < 1000; round++) sum += bound(round);
+	return sum;
+}
+console.log(sumBoundCalls());
+`;
+
+describe("Function.prototype.call and bind sites", () => {
 	it("inline each factory call's own callback behind a check of the loaded call", () => {
 		const image = compile(shimSource);
 		const shims = image.native.functions.filter((fn) =>
@@ -56,5 +71,23 @@ describe("Function.prototype.call sites", () => {
 		expect(
 			shims.filter((fn) => checks(fn).join() === "false,true").length,
 		).toBeGreaterThan(0);
+	});
+
+	it("inline a bound function's target behind one check of the loaded bind", () => {
+		const bind = getPrimordialCatalog().nodes.findIndex(
+			(node) => node[0] === "Function.prototype.bind",
+		);
+		const callers = compile(boundSource).native.functions.filter((fn) =>
+			fn.body.instructions.some(
+				(instruction) =>
+					instruction.opcode === "LOAD_PRIMORDIAL" && instruction.nodeIndex === bind,
+			),
+		);
+		expect(callers).toHaveLength(1);
+		const opcodes = callers[0]!.body.instructions.map(
+			(instruction) => instruction.opcode,
+		);
+		expect(opcodes.filter((opcode) => opcode === "LOAD_PRIMORDIAL")).toHaveLength(1);
+		expect(opcodes).toContain("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
 	});
 });
