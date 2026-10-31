@@ -784,7 +784,10 @@ class BindingWriter {
 			"\t(void) mal_args;",
 			"\t(void) mal_argc;",
 			"\tMalValue mal_result = mal_ffi_undefined();",
-			...strings.map((temporary) => `\tMalFfiString ${temporary} = {0};`),
+			...strings.flatMap((temporary) => [
+				`\tMalFfiString ${temporary};`,
+				`\t${temporary}.data = nullptr;`,
+			]),
 			...locals.map((line) => `\t${line}`),
 			...body.map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),

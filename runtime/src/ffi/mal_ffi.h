@@ -120,10 +120,19 @@ bool mal_ffi_to_number(
 bool mal_ffi_to_boolean(
     MalVm *vm, MalValue value, const MalFfiSite *site, bool *out);
 
-/** A UTF-8, NUL-terminated copy the binding owns until `mal_ffi_string_release`. */
+/** Encoded strings that fit stay in the binding's frame instead of the heap. */
+#define MAL_FFI_STRING_INLINE 256
+
+/**
+ * A UTF-8, NUL-terminated copy the binding owns until `mal_ffi_string_release`.
+ * Only `data` needs initializing, to null: zeroing the inline buffer would cost
+ * more than the copy. A short string points into the struct, so it must not move
+ * while in use.
+ */
 typedef struct MalFfiString {
     char *data;
     size_t length;
+    char inline_data[MAL_FFI_STRING_INLINE];
 } MalFfiString;
 
 /** Strings with an embedded NUL throw instead of truncating. */

@@ -118,27 +118,51 @@ bool mal_ffi_to_boolean(
 
 bool mal_ffi_to_string(
     MalVm *vm, MalValue value, const MalFfiSite *site, MalFfiString *out) {
-    *out = (MalFfiString) {0};
+    out->data = nullptr;
+    out->length = 0;
     if (!mal_value_is_string(value)) {
         return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a string");
     }
-    switch (mal_string_to_utf8_c_string(mal_value_to_string(value), &out->data, &out->length)) {
-        case MAL_UTF8_C_STRING_OK:
-            return true;
-        case MAL_UTF8_C_STRING_EMBEDDED_NUL:
-            return ffi_fail(
-                vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
-                "a string without NUL characters");
-        case MAL_UTF8_C_STRING_ALLOCATION_FAILED:
-            break;
+    const MalString *string = mal_value_to_string(value);
+    // A UTF-16 code unit encodes to at most three bytes; a pair's four cover two units.
+    usize units = mal_string_length(string);
+    char *data = out->inline_data;
+    usize capacity = sizeof(out->inline_data);
+    if (units > (capacity - 1) / 3) {
+        data = units > (SIZE_MAX - 1) / 3 ? nullptr : malloc(units * 3 + 1);
+        if (data == nullptr) return mal_ffi_out_of_memory(vm);
+        capacity = units * 3 + 1;
     }
-    mal_vm_throw_allocation_error(vm);
-    return false;
+    usize length = 0;
+    bool encoded = false;
+    if (units != 0 && string->latin1 && string->storage < MAL_STRING_STORAGE_DEPENDENT) {
+        // A flat ASCII string is its own UTF-8; copying it skips the general encoder.
+        MalStringSegment segment = mal_string_flat_segment((MalString *) string);
+        u8 high = 0;
+        for (usize index = 0; index < units; index++) high |= segment.latin1_units[index];
+        if (high < 0x80) {
+            memcpy(data, segment.latin1_units, units);
+            length = units;
+            encoded = true;
+        }
+    }
+    if (!encoded) mal_string_utf8_encode_into(string, (byte *) data, capacity, nullptr, &length);
+    data[length] = '\0';
+    out->data = data;
+    out->length = length;
+    // NUL is the only code point whose UTF-8 encoding contains a zero byte.
+    if (memchr(data, 0, length) != nullptr) {
+        mal_ffi_string_release(out);
+        return ffi_fail(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a string without NUL characters");
+    }
+    return true;
 }
 
 void mal_ffi_string_release(MalFfiString *string) {
-    free(string->data);
-    *string = (MalFfiString) {0};
+    if (string->data != string->inline_data) free(string->data);
+    string->data = nullptr;
+    string->length = 0;
 }
 
 bool mal_ffi_to_bytes(

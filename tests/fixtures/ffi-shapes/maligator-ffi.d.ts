@@ -79,6 +79,8 @@ declare module "maligator:ffi/shapes" {
 	export function shapes_sum2(a: number, b: number): number;
 	/** Sum two or three integers. */
 	export function shapes_sum3(a: number, b: number, c: number): number;
+	/** The byte length of UTF-8 text */
+	export function shapes_text_bytes(text: string): number;
 	export function shapes_total(a: bigint, b: bigint): bigint;
 	export function shapes_twice(value: number): number;
 	export const SHAPES_BIG: 4294967296n;

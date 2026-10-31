@@ -31,6 +31,7 @@ import {
 	shapes_render,
 	shapes_scale,
 	shapes_sum3,
+	shapes_text_bytes,
 	shapes_total,
 	shapes_twice,
 } from "maligator:ffi/shapes";
@@ -71,6 +72,9 @@ console.log(
 	);
 }
 console.log(`canvases after using ${shapes_canvases_open()}`);
+console.log(
+	`text bytes ${["Sketch", "Grüße", "🙂", "x".repeat(300)].map((text) => shapes_text_bytes(text)).join(",")}`,
+);
 const opened = shapes_canvas_open("Same");
 console.log(`same handle ${opened === shapes_canvas_current()}`);
 shapes_canvas_current()?.[Symbol.dispose]();
@@ -148,6 +152,7 @@ const rejected = [
 	() => shapes_twice("2" as unknown as number),
 	() => shapes_total(1 as unknown as bigint, 1n),
 	() => shapes_add({ x: 1 } as unknown as { x: number; y: number }, { x: 0, y: 0 }),
+	() => shapes_text_bytes("a\0b"),
 ];
 for (const call of rejected) {
 	try {

@@ -96,6 +96,8 @@ int shapes_canvas_create(const char *title, ShapesCanvas **canvas) {
 	return *canvas == NULL ? -1 : 0;
 }
 
+int shapes_text_bytes(const char *text) { return (int) strlen(text); }
+
 static int allocations;
 
 static void *allocate(size_t size) {

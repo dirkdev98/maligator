@@ -20,6 +20,7 @@ const EXPECTED_RESULTS = [
 	'constants 1.4 2.5 4294967296 {"x":0,"y":0}',
 	"canvas Sketch null [object ShapesCanvas] open 1",
 	"canvases after using 0",
+	"text bytes 6,7,4,300",
 	"same handle true",
 	"closed through either 0 true",
 	"bitmap 3x2 sum 24 live 1",
@@ -86,6 +87,7 @@ describe("C library bindings", () => {
 			"rejected TypeError: shapes_twice: value expects a number",
 			"rejected TypeError: shapes_total: a expects a bigint",
 			"rejected TypeError: shapes_add: a.y expects a number",
+			"rejected TypeError: shapes_text_bytes: text expects a string without NUL characters",
 		]);
 	});
 
