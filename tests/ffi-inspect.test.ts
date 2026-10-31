@@ -16,6 +16,7 @@ import { planBindings } from "../src/ffi/binding-plan.ts";
 import { extractCModel } from "../src/ffi/c-extract.ts";
 import type { CModel } from "../src/ffi/c-model.ts";
 import type { LibraryFacts } from "../src/ffi/contract.ts";
+import { declarationsCurrent, generateDeclarations } from "../src/ffi/declarations.ts";
 import type { FfiInspection, FunctionInspection } from "../src/ffi/inspect.ts";
 import { loadCModel } from "../src/ffi/model-cache.ts";
 import { suggestFacts } from "../src/ffi/suggest.ts";
@@ -451,6 +452,20 @@ describe("ffi contract facts", () => {
 			at: "arguments",
 			reason: "variadic arguments need a fact per call",
 		});
+	});
+
+	it("tells current declarations from stale ones, however they are formatted", () => {
+		const contract: LibraryFacts = shapesContract;
+		const libraries = [{ name: "shapes", plan: planBindings(model, contract) }];
+		const text = generateDeclarations(libraries);
+
+		expect(declarationsCurrent(text, libraries)).toBe(true);
+		expect(
+			declarationsCurrent(text.replaceAll("\t", "  ").replaceAll('"', "'"), libraries),
+		).toBe(true);
+		expect(
+			declarationsCurrent(text, [{ name: "shapes", plan: planBindings(model) }]),
+		).toBe(false);
 	});
 
 	it("rejects a constant combined with another fact or on a result", () => {

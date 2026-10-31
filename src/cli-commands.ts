@@ -79,7 +79,7 @@ import {
 	developmentFragmentUnits,
 } from "./development-fragments.ts";
 import { createDevelopmentSession } from "./development-session.ts";
-import { generateDeclarations } from "./ffi/declarations.ts";
+import { declarationsCurrent, generateDeclarations } from "./ffi/declarations.ts";
 import { FfiError } from "./ffi/ffi-error.ts";
 import { formatInspection, inspectBindings } from "./ffi/inspect.ts";
 import { nativeLibraryInputs, prepareLibraries, prepareLibrary } from "./ffi/library.ts";
@@ -670,6 +670,21 @@ function prepareCommandState(
 		reporter.detail(
 			`C library ${entry.contract.name}`,
 			`${entry.library.method}, ${entry.library.link} link, ${entry.plan.functions.length} functions, ${entry.plan.constants.length} constants`,
+		);
+	}
+	if (
+		libraries !== undefined &&
+		existsSync(FFI_DECLARATIONS_NAME) &&
+		!declarationsCurrent(
+			readFileSync(FFI_DECLARATIONS_NAME, "utf8"),
+			libraries.libraries.map((entry) => ({
+				name: entry.contract.name,
+				plan: entry.plan,
+			})),
+		)
+	) {
+		reporter.warning(
+			`${FFI_DECLARATIONS_NAME} no longer matches the C libraries; run maligator ffi types`,
 		);
 	}
 	const frontendConfig =

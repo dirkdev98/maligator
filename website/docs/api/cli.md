@@ -122,7 +122,7 @@ Finds a C library declared under `ffi` in the build config, reads its headers wi
 maligator ffi types [--out path] [--config path] [--target rust-triple]
 ```
 
-Writes TypeScript declarations for every library under `ffi`: one `declare module "maligator:ffi/<name>"` block each, with the header documentation. The default file is `maligator-ffi.d.ts` in the project root. Run it again after the headers change.
+Writes TypeScript declarations for every library under `ffi`: one `declare module "maligator:ffi/<name>"` block each, with the header documentation. The default file is `maligator-ffi.d.ts` in the project root. Builds warn when that file no longer matches the libraries' headers and facts; run `ffi types` again then. The file records a digest of its declarations, so reformatting it does not trigger the warning.
 
 ## Diagnostic build options {#diagnostic-build-options}
 
