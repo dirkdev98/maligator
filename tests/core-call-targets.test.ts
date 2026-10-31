@@ -1206,6 +1206,42 @@ describe("incremental Core call graph", () => {
 		expect(graph.graph.exactCallers(4 as never)).toEqual([callerFunction]);
 	});
 
+	it("keeps an escaped object literal's initial method as a guarded target", () => {
+		const program = analysisProgram();
+		const caller = new CoreFunctionBuilder(program);
+		const entry = caller.createBlock();
+		const [method] = caller.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [object] = caller.appendInstruction(entry, "createObjectShaped", [method!], {
+			attributes: { keyStringIndices: [7] },
+		});
+		caller.appendInstruction(entry, "storeGlobal", [object!], {
+			outputCount: 0,
+			attributes: { index: 0 },
+		});
+		const [callee] = caller.appendInstruction(entry, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex: 7 },
+		});
+		const [result] = caller.appendInstruction(entry, "call", [callee!, object!]);
+		const call = caller.bodyInstructionIds(entry)[4]!;
+		caller.setTerminator(entry, { kind: "return", value: result! });
+		const callerFunction = caller.finish(entry).function;
+		appendLeaf(program);
+
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const graph = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(graph.site(callerFunction, call)?.targets).toMatchObject({
+			functions: [1],
+			anyScript: false,
+			opaque: true,
+		});
+	});
+
 	it("does not narrow an unknown static property away from script functions", () => {
 		const program = analysisProgram();
 		const caller = new CoreFunctionBuilder(program);

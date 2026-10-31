@@ -221,6 +221,11 @@ constructor result, gets opaque parameters. A closure created and called only by
 known sites therefore sees exactly the closures its callers pass. Entry bodies the
 runtime creates itself keep opaque parameters.
 
+A property read keeps finite targets only as guarded candidates: the functions a
+known function object's property or a same-function object literal's initializer
+put in that slot, joined with opaque. Dispatch guards the loaded callee's function
+index and keeps the generic fallback.
+
 Effect-domain unions use bounded bit masks and interned immutable domain lists.
 Joins reuse an input summary when it already covers the result, and reuse the top
 summary only after both memory dimensions and every independent flag reach top.

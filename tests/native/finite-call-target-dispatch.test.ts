@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -144,4 +145,52 @@ describe("open singleton script call targets", () => {
 			"singleton-call-target PASS",
 		]);
 	});
+});
+
+describe("escaped object literal method calls", () => {
+	const fixture = "tests/local/object-literal-method-guard.js";
+	let interpreted: string;
+	let compiled: string;
+
+	beforeAll(() => {
+		const pair = buildBackendPairFromOneProgramImage({
+			fixture,
+			name: "object-literal-method-guard",
+			outDir,
+		});
+		interpreted = pair.interpreted;
+		compiled = pair.compiled;
+		const { runtime, native } = pair.programImage;
+		const index = runtime.functions.findIndex(
+			(fn) =>
+				String.fromCharCode(...(runtime.stringConstants[fn.nameStringIndex] ?? [])) ===
+				"literalMethodCalls",
+		);
+		expect(index).toBeGreaterThanOrEqual(0);
+		// The initializer's method is a guarded candidate, inlined or called directly.
+		expect(
+			runtime.functions[index]!.instructions.some(
+				(instruction) => instruction.opcode === "GUARD_FUNCTION_INDEX",
+			) ||
+				native.functions[index]!.instructions.some(
+					(instruction) =>
+						instruction?.kind === "call" &&
+						instruction.guardedFunctionIndices?.length === 1,
+				),
+		).toBe(true);
+	});
+
+	it.each([
+		["interpreted", () => interpreted],
+		["compiled", () => compiled],
+	] as const)(
+		"falls back when the escaped field is replaced in %s output",
+		(_, binary) => {
+			const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+			expect(runToStdout(binary(), { env: { MAL_HOST_GC: "1" } })).toBe(expected);
+			expect(runToStdout(binary(), { env: { MAL_HOST_GC: "1", ...STRESS_ENV } })).toBe(
+				expected,
+			);
+		},
+	);
 });

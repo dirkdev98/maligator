@@ -370,6 +370,29 @@ function directStringIndex(
 		: undefined;
 }
 
+/** The initializer of `stringIndex` when `value` is an object literal created in `fn`. */
+function literalFieldInitializer(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	stringIndex: number,
+): CoreValueId | undefined {
+	for (;;) {
+		if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		const opcode = fn.instructionOpcodeName(definition);
+		if (opcode === "move") {
+			const input = instructionOperand(fn, definition, 0);
+			if (input === undefined) return undefined;
+			value = input;
+			continue;
+		}
+		if (opcode !== "createObjectShaped") return undefined;
+		const keys = fn.instructionAttributes(definition).keyStringIndices;
+		const slot = Array.isArray(keys) ? keys.indexOf(stringIndex) : -1;
+		return slot < 0 ? undefined : instructionOperand(fn, definition, slot);
+	}
+}
+
 function directNumberIndex(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
@@ -1001,6 +1024,19 @@ function analyzeFunctionTargets(
 								resultTargets,
 								CORE_CALLEE_TARGETS_ANY_SCRIPT,
 							);
+					}
+					// Any other value of the field was published by the store or escape that
+					// put it there, so the initializer's functions plus opaque cover the read;
+					// dispatch keeps a function-index guard with a generic fallback.
+					const initializer = literalFieldInitializer(fn, receiver, stringIndex);
+					if (initializer !== undefined) {
+						let observers = recordObservers.get(initializer);
+						if (observers === undefined)
+							recordObservers.set(initializer, (observers = new Set()));
+						observers.add(block);
+						const initial = values[initializer]!;
+						if (initial.functions.length > 0 && !initial.anyScript)
+							resultTargets = joinCoreCalleeTargets(initial, CORE_CALLEE_TARGETS_OPAQUE);
 					}
 				}
 				const read = recordReads.get(instruction);
