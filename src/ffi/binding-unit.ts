@@ -450,7 +450,8 @@ class BindingWriter {
 
 	/**
 	 * Statements that store a result or output in `target` and then release the C
-	 * memory when the caller owns it, even after a conversion threw.
+	 * memory when the caller owns it, even after a conversion threw. `pending` says
+	 * whether a callback or an earlier conversion may have left a throw pending.
 	 */
 	#owned(
 		value: JsValue,
@@ -458,14 +459,16 @@ class BindingWriter {
 		target: string,
 		count: string | undefined,
 		site: string,
+		pending: boolean,
 	): Array<string> {
 		const release =
 			"free" in value && value.free !== undefined
 				? [`if ((${expression}) != nullptr) ${value.free}((void *) (${expression}));`]
 				: [];
+		const unlessThrew = pending ? "if (!mal_ffi_threw(vm)) " : "";
 		if (value.kind === "bytes") {
 			return [
-				`if (!mal_ffi_threw(vm)) ${target} = (${expression}) == nullptr ? mal_ffi_null() : mal_ffi_from_bytes(vm, ${expression}, (size_t) (${count}));`,
+				`${unlessThrew}${target} = (${expression}) == nullptr ? mal_ffi_null() : mal_ffi_from_bytes(vm, ${expression}, (size_t) (${count}));`,
 				...release,
 			];
 		}
@@ -490,10 +493,7 @@ class BindingWriter {
 				...release,
 			];
 		}
-		return [
-			`if (!mal_ffi_threw(vm)) ${target} = ${this.write(value, expression)};`,
-			...release,
-		];
+		return [`${unlessThrew}${target} = ${this.write(value, expression)};`, ...release];
 	}
 
 	/**
@@ -738,6 +738,7 @@ class BindingWriter {
 					"mal_result",
 					count,
 					"&mal_site_result",
+					binding.params.some((param) => param.value.kind === "callback"),
 				),
 			);
 		}
@@ -764,6 +765,7 @@ class BindingWriter {
 						`mal_outputs[${String(first + index)}]`,
 						undefined,
 						"&mal_site_result",
+						true,
 					),
 				);
 			});

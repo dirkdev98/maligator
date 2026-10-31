@@ -107,18 +107,68 @@ void mal_ffi_install(
 /** Resolve an installer by symbol name for images loaded from the wire format. */
 MalFfiInstaller mal_ffi_resolve_installer(const char *name, size_t length);
 
-/** An exact integer of at most 32 bits, given as a Number. */
-bool mal_ffi_to_integer(
+/*
+ * The runtime's value encoding, so scalar conversions inline into every binding: a
+ * double is its own bits below the tag base, an int32 sits in the low half under
+ * its class tag, and the singletons are fixed values. mal_ffi.c asserts that these
+ * match the runtime's definitions.
+ */
+#define MAL_FFI_VALUE_TAG_BASE UINT64_C(0xFFF8000000000000)
+#define MAL_FFI_VALUE_CLASS_MASK UINT64_C(0xFFFF000000000000)
+#define MAL_FFI_VALUE_INT32 UINT64_C(0xFFF8000000000000)
+#define MAL_FFI_VALUE_NULL UINT64_C(0xFFF9000000000002)
+#define MAL_FFI_VALUE_UNDEFINED UINT64_C(0xFFF9000000000003)
+#define MAL_FFI_VALUE_TRUE UINT64_C(0xFFF9000000000004)
+#define MAL_FFI_VALUE_FALSE UINT64_C(0xFFF9000000000005)
+#define MAL_FFI_VALUE_NAN UINT64_C(0x7FF8000000000000)
+
+/** Throw a TypeError naming what the site expects; returns false. */
+bool mal_ffi_expected(MalVm *vm, const MalFfiSite *site, const char *expectation);
+/** The general case of `mal_ffi_to_integer`, for any value. */
+bool mal_ffi_number_to_integer(
     MalVm *vm, MalValue value, int32_t bits, bool is_signed, const MalFfiSite *site, int64_t *out);
+
+/** An exact integer of at most 32 bits, given as a Number. */
+static inline bool mal_ffi_to_integer(
+    MalVm *vm, MalValue value, int32_t bits, bool is_signed, const MalFfiSite *site,
+    int64_t *out) {
+    if ((value & MAL_FFI_VALUE_CLASS_MASK) == MAL_FFI_VALUE_INT32) {
+        int64_t integer = (int32_t) (uint32_t) value;
+        int64_t minimum = is_signed ? -(INT64_C(1) << (bits - 1)) : 0;
+        int64_t maximum = is_signed ? (INT64_C(1) << (bits - 1)) - 1 : (INT64_C(1) << bits) - 1;
+        if (integer >= minimum && integer <= maximum) {
+            *out = integer;
+            return true;
+        }
+    }
+    return mal_ffi_number_to_integer(vm, value, bits, is_signed, site, out);
+}
 /** A 64-bit integer, given as a BigInt. */
 bool mal_ffi_to_int64(
     MalVm *vm, MalValue value, const MalFfiSite *site, int64_t *out);
 bool mal_ffi_to_uint64(
     MalVm *vm, MalValue value, const MalFfiSite *site, uint64_t *out);
-bool mal_ffi_to_number(
-    MalVm *vm, MalValue value, const MalFfiSite *site, double *out);
-bool mal_ffi_to_boolean(
-    MalVm *vm, MalValue value, const MalFfiSite *site, bool *out);
+static inline bool mal_ffi_to_number(
+    MalVm *vm, MalValue value, const MalFfiSite *site, double *out) {
+    if (value < MAL_FFI_VALUE_TAG_BASE) {
+        __builtin_memcpy(out, &value, sizeof(*out));
+        return true;
+    }
+    if ((value & MAL_FFI_VALUE_CLASS_MASK) == MAL_FFI_VALUE_INT32) {
+        *out = (int32_t) (uint32_t) value;
+        return true;
+    }
+    return mal_ffi_expected(vm, site, "a number");
+}
+
+static inline bool mal_ffi_to_boolean(
+    MalVm *vm, MalValue value, const MalFfiSite *site, bool *out) {
+    if (value != MAL_FFI_VALUE_TRUE && value != MAL_FFI_VALUE_FALSE) {
+        return mal_ffi_expected(vm, site, "a boolean");
+    }
+    *out = value == MAL_FFI_VALUE_TRUE;
+    return true;
+}
 
 /** Encoded strings that fit stay in the binding's frame instead of the heap. */
 #define MAL_FFI_STRING_INLINE 256
@@ -175,11 +225,30 @@ bool mal_ffi_record_fields(
 bool mal_ffi_element(
     MalVm *vm, MalValue array, int32_t index, int32_t length, const MalFfiSite *site, MalValue *out);
 
-MalValue mal_ffi_undefined(void);
-MalValue mal_ffi_null(void);
-MalValue mal_ffi_from_boolean(bool value);
-MalValue mal_ffi_from_int32(int32_t value);
-MalValue mal_ffi_from_number(double value);
+static inline MalValue mal_ffi_undefined(void) {
+    return MAL_FFI_VALUE_UNDEFINED;
+}
+
+static inline MalValue mal_ffi_null(void) {
+    return MAL_FFI_VALUE_NULL;
+}
+
+static inline MalValue mal_ffi_from_boolean(bool value) {
+    return value ? MAL_FFI_VALUE_TRUE : MAL_FFI_VALUE_FALSE;
+}
+
+static inline MalValue mal_ffi_from_int32(int32_t value) {
+    return MAL_FFI_VALUE_INT32 | (uint32_t) value;
+}
+
+/** Every NaN becomes the canonical one, since other NaN bits would read as tagged values. */
+static inline MalValue mal_ffi_from_number(double value) {
+    if (value != value) return MAL_FFI_VALUE_NAN;
+    MalValue bits;
+    __builtin_memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
 /** BigInt results allocate and may throw an allocation error. */
 MalValue mal_ffi_from_int64(MalVm *vm, int64_t value);
 MalValue mal_ffi_from_uint64(MalVm *vm, uint64_t value);

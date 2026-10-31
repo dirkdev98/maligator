@@ -25,6 +25,14 @@
 static_assert(sizeof(MalFfiRoots) == sizeof(MalRootSpan));
 static_assert(offsetof(MalFfiRoots, slots) == offsetof(MalRootSpan, slots));
 static_assert(offsetof(MalFfiRoots, count) == offsetof(MalRootSpan, count));
+static_assert(MAL_FFI_VALUE_TAG_BASE == MAL_VALUE_TAG_BASE);
+static_assert(MAL_FFI_VALUE_CLASS_MASK == MAL_VALUE_CLASS_MASK);
+static_assert(MAL_FFI_VALUE_INT32 == MAL_VALUE_INT32);
+static_assert(MAL_FFI_VALUE_NULL == MAL_VALUE_NULL);
+static_assert(MAL_FFI_VALUE_UNDEFINED == MAL_VALUE_UNDEFINED);
+static_assert(MAL_FFI_VALUE_TRUE == MAL_VALUE_TRUE);
+static_assert(MAL_FFI_VALUE_FALSE == MAL_VALUE_FALSE);
+static_assert(MAL_FFI_VALUE_NAN == MAL_VALUE_NAN);
 
 static bool ffi_fail(
     MalVm *vm, MalIntrinsic prototype, const MalFfiSite *site, const char *expectation) {
@@ -42,11 +50,13 @@ static bool ffi_fail(
     return false;
 }
 
-bool mal_ffi_to_integer(
+bool mal_ffi_expected(MalVm *vm, const MalFfiSite *site, const char *expectation) {
+    return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, expectation);
+}
+
+bool mal_ffi_number_to_integer(
     MalVm *vm, MalValue value, int32_t bits, bool is_signed, const MalFfiSite *site, int64_t *out) {
-    if (!mal_ops_is_number(value)) {
-        return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a number");
-    }
+    if (!mal_ops_is_number(value)) return mal_ffi_expected(vm, site, "a number");
     i64 minimum = is_signed ? -(INT64_C(1) << (bits - 1)) : 0;
     i64 maximum = is_signed ? (INT64_C(1) << (bits - 1)) - 1 : (INT64_C(1) << bits) - 1;
     f64 number = mal_ops_number_as_f64(value);
@@ -95,24 +105,6 @@ bool mal_ffi_to_uint64(
             "a bigint in the unsigned 64-bit range");
     }
     *out = (u64) integer;
-    return true;
-}
-
-bool mal_ffi_to_number(
-    MalVm *vm, MalValue value, const MalFfiSite *site, double *out) {
-    if (!mal_ops_is_number(value)) {
-        return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a number");
-    }
-    *out = mal_ops_number_as_f64(value);
-    return true;
-}
-
-bool mal_ffi_to_boolean(
-    MalVm *vm, MalValue value, const MalFfiSite *site, bool *out) {
-    if (!mal_value_is_boolean(value)) {
-        return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a boolean");
-    }
-    *out = mal_value_to_boolean(value);
     return true;
 }
 
@@ -238,26 +230,6 @@ bool mal_ffi_element(
             vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, expectation);
     }
     return mal_vm_get_property(vm, array, mal_key_index((u32) index), out);
-}
-
-MalValue mal_ffi_undefined(void) {
-    return mal_value_new_undefined();
-}
-
-MalValue mal_ffi_null(void) {
-    return mal_value_new_null();
-}
-
-MalValue mal_ffi_from_boolean(bool value) {
-    return mal_value_new_boolean(value);
-}
-
-MalValue mal_ffi_from_int32(int32_t value) {
-    return mal_value_from_i32(value);
-}
-
-MalValue mal_ffi_from_number(double value) {
-    return mal_value_from_f64_convert_nan(value);
 }
 
 MalValue mal_ffi_from_int64(MalVm *vm, int64_t value) {
