@@ -144,6 +144,7 @@ describe("C library bindings", () => {
 			"async describe (1.5, -2)",
 			'async parse {"result":0,"point":{"x":3,"y":4}}',
 			'async add {"x":4,"y":6}',
+			'async arrays one,two {"result":0,"box":{"min":{"x":1,"y":0},"max":{"x":3,"y":2}}}',
 			"async title Async null",
 			"async hold 26 TypeError,TypeError,TypeError 4",
 			"async rejected shapes_checksum_async: data expects an ArrayBuffer or a view",

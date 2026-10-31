@@ -1,12 +1,14 @@
 /* oxlint-disable no-console -- The fixture reports its results on standard output. */
 import {
 	shapes_add_async,
+	shapes_bounds_async,
 	shapes_canvas_lend,
 	shapes_canvas_open,
 	shapes_canvas_title_async,
 	shapes_checksum_async,
 	shapes_describe_async,
 	shapes_hold_async,
+	shapes_join_async,
 	shapes_parse_async,
 	shapes_set_ticker,
 	shapes_tick,
@@ -26,6 +28,14 @@ async function runAsync(): Promise<void> {
 	console.log(`async parse ${JSON.stringify(await shapes_parse_async("3,4"))}`);
 	console.log(
 		`async add ${JSON.stringify(await shapes_add_async({ x: 1, y: 2 }, { x: 3, y: 4 }))}`,
+	);
+	console.log(
+		`async arrays ${await shapes_join_async(["one", "two"])} ${JSON.stringify(
+			await shapes_bounds_async([
+				{ x: 1, y: 2 },
+				{ x: 3, y: 0 },
+			]),
+		)}`,
 	);
 	using canvas = shapes_canvas_open("Async")!;
 	console.log(

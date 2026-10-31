@@ -1567,6 +1567,8 @@ class BindingWriter {
 		const buffers: Array<string> = [];
 		const locals: Array<string> = [];
 		const pins: Array<string> = [];
+		/** What the context owns beyond its strings: array copies and their texts. */
+		const frees: Array<string> = [];
 		const strings: Array<string> = [];
 		let kept = 0;
 		const argument = (param: number) =>
@@ -1668,6 +1670,58 @@ class BindingWriter {
 							`${target} = (${localDeclaration(param.type, "")}) mal_bytes_${String(index)};`,
 						);
 						setCount(index, `mal_bytes_length_${String(index)}`, site);
+						return;
+					}
+					if (value.kind === "sequence") {
+						// The context owns a copy of the elements, since the call outlives this frame.
+						const elements = `mal_elements_${String(index)}`;
+						const length = `mal_length_${String(index)}`;
+						const position = this.#fresh("index");
+						const element = this.#fresh("element");
+						const texts = value.of.kind === "string";
+						fields.push(
+							`${localDeclaration(value.element, `*${elements}`)};`,
+							`int32_t ${length};`,
+						);
+						if (texts) {
+							const freed = this.#fresh("index");
+							frees.push(
+								`if (mal_ctx->${elements} != nullptr) for (int32_t ${freed} = 0; ${freed} < mal_ctx->${length}; ${freed}++) free((void *) mal_ctx->${elements}[${freed}]);`,
+							);
+						}
+						frees.push(`free(mal_ctx->${elements});`);
+						body.push(
+							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &mal_ctx->${length})) goto mal_failed;`,
+							`if (mal_ctx->${length} > 0) {`,
+							`\tmal_ctx->${elements} = calloc((size_t) mal_ctx->${length}, sizeof(*mal_ctx->${elements}));`,
+							`\tif (mal_ctx->${elements} == nullptr) {`,
+							"\t\tmal_ffi_out_of_memory(vm);",
+							"\t\tgoto mal_failed;",
+							"\t}",
+							"}",
+							`for (int32_t ${position} = 0; ${position} < mal_ctx->${length}; ${position}++) {`,
+							`\tMalValue ${element};`,
+							`\tif (!mal_ffi_element(vm, ${source}, ${position}, mal_ctx->${length}, ${site}, &${element})) goto mal_failed;`,
+							...(texts
+								? [
+										`\tchar *${element}_text;`,
+										`\tif (!mal_ffi_to_owned_string(vm, ${element}, ${site}, &${element}_text)) goto mal_failed;`,
+										`\tmal_ctx->${elements}[${position}] = ${element}_text;`,
+									]
+								: this.read(
+										value.of,
+										value.element,
+										element,
+										`mal_ctx->${elements}[${position}]`,
+										site,
+										"goto mal_failed;",
+										strings,
+										false,
+									).map((line) => `\t${line}`)),
+							"}",
+							`${target} = (${localDeclaration(param.type, "")}) mal_ctx->${elements};`,
+						);
+						setCount(index, `mal_ctx->${length}`, site);
 						return;
 					}
 					if (value.kind === "handle") {
@@ -1780,6 +1834,7 @@ class BindingWriter {
 			`static void mal_ffi_async_release_${name}(void *mal_data) {`,
 			`\t${context} *mal_ctx = mal_data;`,
 			...strings.map((temporary) => `\tmal_ffi_string_release(&mal_ctx->${temporary});`),
+			...frees.map((line) => `\t${line}`),
 			"\tfree(mal_ctx);",
 			"}",
 			"",

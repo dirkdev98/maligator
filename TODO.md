@@ -1909,8 +1909,8 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
 - [ ] Support C libraries in `maligator test --watch`, which needs an in-process
       application host that links the project's bindings.
-- [ ] Async twins with callbacks or arrays, and queued callbacks that return a
-      result to a waiting library thread.
+- [ ] Async twins with callbacks, and queued callbacks that return a result to a
+      waiting library thread.
 - [ ] Foreign call effects: Core knows a foreign call's result kind but still
       treats the call as running arbitrary code. Give it the binding's effects (no
       user code without callbacks).

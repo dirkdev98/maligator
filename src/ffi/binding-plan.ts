@@ -1325,11 +1325,9 @@ export function planBindings(
 			}
 			if (
 				!("gaps" in result) &&
-				result.params.some(({ value }) =>
-					["callback", "sequence", "array"].includes(value.kind),
-				)
+				result.params.some(({ value }) => value.kind === "callback")
 			) {
-				throw new FfiError(`${at}: an async call takes no callbacks or arrays`);
+				throw new FfiError(`${at}: an async call takes no callbacks`);
 			}
 		}
 		if ("gaps" in result) unbound.push(result);

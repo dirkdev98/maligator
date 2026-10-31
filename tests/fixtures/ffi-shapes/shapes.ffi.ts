@@ -20,6 +20,7 @@ export default {
 		shapes_scale: { params: { point: { inout: true } } },
 		shapes_bounds: {
 			params: { points: { array: { length: "count" } }, box: { out: true } },
+			async: "shapes_bounds_async",
 		},
 		shapes_checksum: {
 			params: { data: { bytes: { length: "size" } } },
@@ -58,7 +59,10 @@ export default {
 		},
 		shapes_integrate: { params: { f: { callback: { data: "data" } } } },
 		shapes_fold: { params: { step: { callback: {} } } },
-		shapes_join: { params: { parts: { array: { length: "count" } } } },
+		shapes_join: {
+			params: { parts: { array: { length: "count" } } },
+			async: "shapes_join_async",
+		},
 		shapes_listen: {
 			params: { listener: { callback: { data: "data", release: "release" } } },
 		},
