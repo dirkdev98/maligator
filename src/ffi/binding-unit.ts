@@ -72,12 +72,18 @@ function immediateRecord(record: MappedRecord): boolean {
 	return record.fields.every((field) => IMMEDIATE_KINDS.has(field.value.kind));
 }
 
-/** Inputs whose conversion cannot run JavaScript, so their values need no roots. */
-const SCALAR_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
+/**
+ * Inputs whose conversion neither runs JavaScript nor allocates, and that nothing
+ * reads after the C call, so a direct entry need not root them. Buffers stay out:
+ * their pin is released after the result's allocations.
+ */
+const UNROOTED_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
 	"boolean",
 	"integer",
 	"float",
 	"bigint",
+	"string",
+	"handle",
 ]);
 
 /**
@@ -98,7 +104,11 @@ function directEntry(
 	);
 	const invoke = (args: string) =>
 		`mal_ffi_function_${binding.name}(vm, mal_ffi_undefined(), ${args}, ${String(arity)}, mal_ffi_undefined(), mal_ffi_undefined())`;
-	const rooted = binding.params.some((param) => !SCALAR_INPUTS.has(param.value.kind));
+	// Pinned handles are read again by cleanup, after the result's allocations.
+	const rooted =
+		callsBack ||
+		binding.closes !== undefined ||
+		binding.params.some((param) => !UNROOTED_INPUTS.has(param.value.kind));
 	const args = arity === 0 ? "nullptr" : "mal_direct_args";
 	// A binding that can call back runs as a native frame, as on the ordinary call path.
 	const framed = rooted || callsBack;
