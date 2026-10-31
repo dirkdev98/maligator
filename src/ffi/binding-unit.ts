@@ -1,3 +1,4 @@
+import type { FfiDirectEntry } from "../build-config-values.ts";
 import type {
 	BindingPlan,
 	BoundFunction,
@@ -19,6 +20,8 @@ export interface BindingUnit {
 	readonly installer: string;
 	/** Export names in byte order, matching the installer's table. */
 	readonly exports: ReadonlyArray<string>;
+	/** The direct entry of each function export, by export name. */
+	readonly direct: Readonly<Record<string, FfiDirectEntry>>;
 	readonly source: string;
 }
 
@@ -28,6 +31,54 @@ export function ffiModuleSpecifier(library: string): string {
 
 export function ffiInstallerSymbol(library: string): string {
 	return `mal_ffi_install_${library}`;
+}
+
+/** The library name's length keeps `a` + `b_c` apart from `a_b` + `c`. */
+function directSymbol(library: string, name: string): string {
+	return `mal_ffi_direct${String(library.length)}_${library}_${name}`;
+}
+
+/** Inputs whose conversion cannot run JavaScript, so their values need no roots. */
+const SCALAR_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
+	"boolean",
+	"integer",
+	"float",
+	"bigint",
+]);
+
+/**
+ * An external entry that native code calls with the arguments themselves, skipping
+ * the function object and argument array of an ordinary call. Arguments a getter or
+ * callback could outlive are rooted for the call, as the call path roots them.
+ */
+function directEntry(library: string, binding: BoundFunction): Array<string> {
+	const arity = binding.params.length;
+	const symbol = directSymbol(library, binding.name);
+	const parameters = Array.from(
+		{ length: arity },
+		(_, index) => `, MalValue mal_a${String(index)}`,
+	);
+	const invoke = (args: string) =>
+		`mal_ffi_function_${binding.name}(vm, mal_ffi_undefined(), ${args}, ${String(arity)}, mal_ffi_undefined(), mal_ffi_undefined())`;
+	if (arity === 0) {
+		return ["", `MalValue ${symbol}(MalVm *vm) {`, `	return ${invoke("nullptr")};`, "}"];
+	}
+	const rooted = binding.params.some((param) => !SCALAR_INPUTS.has(param.value.kind));
+	return [
+		"",
+		`MalValue ${symbol}(MalVm *vm${parameters.join("")}) {`,
+		`	MalValue mal_direct_args[${String(arity)}] = { ${Array.from({ length: arity }, (_, index) => `mal_a${String(index)}`).join(", ")} };`,
+		...(rooted
+			? [
+					"	MalFfiRoots mal_direct_roots;",
+					`	mal_ffi_root(&mal_direct_roots, mal_direct_args, ${String(arity)});`,
+					`	MalValue mal_direct_result = ${invoke("mal_direct_args")};`,
+					"	mal_ffi_unroot(&mal_direct_roots);",
+					"	return mal_direct_result;",
+				]
+			: [`	return ${invoke("mal_direct_args")};`]),
+		"}",
+	];
 }
 
 function byteOrder(left: string, right: string): number {
@@ -872,6 +923,7 @@ export function generateBindingUnit(
 	const functions = plan.functions.flatMap((binding) => [
 		"",
 		...writer.function(binding),
+		...directEntry(library, binding),
 	]);
 	const constants = plan.constants.flatMap((constant) => [
 		"",
@@ -927,6 +979,12 @@ export function generateBindingUnit(
 		specifier,
 		installer,
 		exports: exports.map((entry) => entry.name),
+		direct: Object.fromEntries(
+			plan.functions.map((binding) => [
+				binding.name,
+				{ symbol: directSymbol(library, binding.name), arity: binding.params.length },
+			]),
+		),
 		source,
 	};
 }

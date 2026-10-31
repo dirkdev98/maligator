@@ -1,3 +1,4 @@
+import type { FfiDirectEntry } from "../../build-config-values.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
 import type { ExternalModuleInterface } from "../frontend/module-graph.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
@@ -23,6 +24,8 @@ export interface CoreHostInstallCandidate {
 		readonly name: string;
 		readonly slot: number;
 		readonly constant?: PlatformData;
+		/** A C entry native code may call instead of the installed function. */
+		readonly direct?: FfiDirectEntry;
 	}>;
 }
 

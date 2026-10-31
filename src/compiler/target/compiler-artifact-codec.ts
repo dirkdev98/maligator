@@ -114,7 +114,10 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 355;
+export const COMPILER_ARTIFACT_VERSION = 356;
+
+/** Direct entries of C library bindings, as `binding-unit.ts` names them. */
+const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2539,16 +2542,37 @@ function writeCompilerArtifact(
 					w.i32(numericCallback.entryId);
 				}
 
+				const foreign = plan.foreignCall;
+				if (
+					foreign !== undefined &&
+					(!FOREIGN_CALL_SYMBOL.test(foreign.symbol) ||
+						!Number.isInteger(foreign.arity) ||
+						foreign.arity < 0 ||
+						plan.directFunctionIndex !== undefined ||
+						guardedFunctionIndices !== undefined ||
+						plan.directFunctionCall === true ||
+						guardedBuiltin !== undefined ||
+						numericCallback !== undefined)
+				) {
+					throw new RangeError("program-image-codec: invalid foreign CALL metadata");
+				}
 				w.u8(
 					(plan.directFunctionCall === true ? 1 : 0) |
 						(guardedOperation === "Array.prototype.push" ? 2 : 0) |
 						(guardedOperation === "String.prototype.charCodeAt" ? 4 : 0) |
+						(foreign === undefined ? 0 : 8) |
 						(plan.directStringCharCodeAtPosition === "inBounds" ? 32 : 0) |
 						(guardedDependency?.kind === "world" ? 64 : 0) |
 						(plan.exactCollectionReceiver === undefined ? 0 : 128),
 				);
 				w.u8(taggedGuardedBuiltinOperation(guardedOperation));
 				if (receiverBrandTag !== 0) w.u8(receiverBrandTag);
+				if (foreign !== undefined) {
+					w.u32(foreign.symbol.length);
+					for (let index = 0; index < foreign.symbol.length; index++)
+						w.u8(foreign.symbol.charCodeAt(index));
+					w.i32(foreign.arity);
+				}
 			} else if (plan.kind === "construct" && instruction.opcode === "CONSTRUCT") {
 				if (
 					!Number.isInteger(plan.directFunctionIndex) ||
@@ -5146,6 +5170,14 @@ function readCompilerArtifact(
 				const flags = r.u8();
 				const operationTag = r.u8();
 				const receiverBrandTag = (flags & 128) === 0 ? 0 : r.u8();
+				let foreignCall: { symbol: string; arity: number } | undefined;
+				if ((flags & 8) !== 0) {
+					const length = r.count(1);
+					let symbol = "";
+					for (let index = 0; index < length; index++)
+						symbol += String.fromCharCode(r.u8());
+					foreignCall = { symbol, arity: r.i32() };
+				}
 				const guardedBuiltinCount =
 					((flags & 2) !== 0 ? 1 : 0) +
 					((flags & 4) !== 0 ? 1 : 0) +
@@ -5172,7 +5204,16 @@ function readCompilerArtifact(
 					(directEntryId >= 0 &&
 						((directFunctionIndex < 0 && guardedFunctionIndices.length !== 1) ||
 							directEntryId >= 4)) ||
-					(flags & 24) !== 0 ||
+					(flags & 16) !== 0 ||
+					(foreignCall !== undefined &&
+						(!FOREIGN_CALL_SYMBOL.test(foreignCall.symbol) ||
+							foreignCall.arity < 0 ||
+							directFunctionIndex >= 0 ||
+							guardedFunctionIndices.length !== 0 ||
+							numericSortCallback !== undefined ||
+							(flags & 1) !== 0 ||
+							(flags & 6) !== 0 ||
+							operationTag !== 0)) ||
 					((flags & 32) !== 0 && (flags & 4) === 0) ||
 					(directCallTargetFunctionIndex >= 0 && (flags & 1) === 0) ||
 					operationTag > TAGGED_GUARDED_BUILTIN_OPERATIONS.length ||
@@ -5237,6 +5278,7 @@ function readCompilerArtifact(
 								exactCollectionReceiver: collectionReceiverFromTag(receiverBrandTag)!,
 							}),
 					...(guardedBuiltinCall === undefined ? {} : { guardedBuiltinCall }),
+					...(foreignCall === undefined ? {} : { foreignCall }),
 				};
 			} else if (tag === 2 && instruction.opcode === "CONSTRUCT") {
 				const directFunctionIndex = r.i32();

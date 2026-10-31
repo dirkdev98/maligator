@@ -2594,6 +2594,8 @@ export type NativeInstructionPlan =
 			readonly exactCollectionReceiver?: CompilerExactCollectionBrand;
 			readonly directStringCharCodeAtPosition?: "inBounds";
 			readonly directClosureOwner?: number;
+			/** A C library binding's direct entry, called instead of the function object. */
+			readonly foreignCall?: { readonly symbol: string; readonly arity: number };
 	  }
 	| { readonly kind: "construct"; readonly directFunctionIndex: number }
 	| { readonly kind: "direct-closure" }
@@ -3253,7 +3255,8 @@ function nativeInstructionPlanFromExecution(
 				instruction.directCallTargetFunctionIndex === undefined &&
 				instruction.directCallbackFunctionIndex === undefined &&
 				guardedBuiltinCall === undefined &&
-				instruction.directStringCharCodeAtPosition === undefined
+				instruction.directStringCharCodeAtPosition === undefined &&
+				instruction.foreignCall === undefined
 			)
 				return undefined;
 			return {
@@ -3272,6 +3275,7 @@ function nativeInstructionPlanFromExecution(
 						? undefined
 						: instruction.directStringCharCodeAtPosition,
 				directClosureOwner: instruction.directClosureOwner,
+				foreignCall: instruction.foreignCall,
 			};
 		}
 		case "createFunction":

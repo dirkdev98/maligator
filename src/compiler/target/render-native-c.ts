@@ -11623,6 +11623,23 @@ class NativeInstructionEmission {
 				: `((MalValue[]){ ${args.map(this.boxedOperand.bind(this)).join(", ")} })`;
 		const tmp = `call_result_${this.ip}`;
 		const callResult = (value: string): string => this.callValue(instruction.dst, value);
+		const foreign = callPlan?.foreignCall;
+		if (foreign !== undefined) {
+			// The callee is a C library import, so call its binding's direct entry with
+			// the arguments; missing ones are undefined and extra ones are dropped, as the
+			// binding's own function object would see them.
+			const values = Array.from({ length: foreign.arity }, (_, index) =>
+				index < args.length ? this.boxedOperand(args[index]!) : "MAL_VALUE_UNDEFINED",
+			);
+			const result = `foreign_result_${this.ip}`;
+			return [
+				`extern MalValue ${foreign.symbol}(MalVm *${", MalValue".repeat(foreign.arity)});`,
+				`MalValue ${result} = ${this.profileCall("call", `${foreign.symbol}(vm${values.map((value) => `, ${value}`).join("")})`)};`,
+				this.throwCheck(),
+				`r${instruction.dst} = ${callResult(result)};`,
+				this.callPoll(),
+			];
+		}
 		const calleeOperand = decodeVmValueOperand(instruction.callee);
 		if (
 			calleeOperand.kind === "register" &&

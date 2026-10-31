@@ -438,6 +438,11 @@ type CompilerOperation =
 			/** Native-only ABI sibling selected for this exact direct target. */
 			directEntryId?: number;
 			/**
+			 * COMPILE-ONLY: the callee is a C library import, so native lowering calls the
+			 * binding's direct entry with the arguments instead of the function object.
+			 */
+			foreignCall?: { readonly symbol: string; readonly arity: number };
+			/**
 			 * NATIVE-ONLY: the exact target is a direct closure created by this function's
 			 * activation; an empty callee means its environment comes from that scope.
 			 */

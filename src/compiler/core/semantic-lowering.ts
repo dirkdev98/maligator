@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import type { FfiDirectEntry } from "../../build-config-values.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
 import { debugEnabled, log } from "../../utils.ts";
 import { detectCjsExports, isPureDataCjsModule } from "../frontend/cjs-exports.ts";
@@ -314,6 +315,7 @@ interface CoreFrontendContext {
 			name: string;
 			binding: Binding;
 			constant?: PlatformData;
+			direct?: FfiDirectEntry;
 		}>;
 	}>;
 
@@ -1876,13 +1878,14 @@ function coreHostInstallCandidates(
 	>();
 	for (const hostModule of program.hostModules) {
 		const entries = candidates.get(hostModule.installer) ?? [];
-		for (const { name, binding, constant } of hostModule.exports) {
+		for (const { name, binding, constant, direct } of hostModule.exports) {
 			const location = program.bindingToStorage.get(binding);
 			if (location?.type === "global") {
 				entries.push({
 					name,
 					slot: location.index,
 					...(constant === undefined ? {} : { constant }),
+					...(direct === undefined ? {} : { direct }),
 				});
 				if (constant !== undefined) {
 					const pending = [constant];

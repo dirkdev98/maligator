@@ -1913,8 +1913,10 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
       callbacks without a user-data parameter; blocking functions with async twins;
       worker affinity. A kept callback can run during any later call into the library,
       so buffers passed in place need pinning against detach and resize first.
-- [ ] Direct calls: Core-visible foreign calls with unboxed representations, and
-      scalar replacement of struct arguments and out objects.
+- [ ] Unboxed foreign calls: native code already calls a binding's direct entry
+      with boxed arguments; give Core the result kinds and effects of foreign calls
+      so scalar arguments and results stay unboxed, and scalar-replace struct
+      arguments and out objects.
 - [ ] `ffi check`: declaration fingerprints, evidence drift, sanitizer probes.
 - [ ] Headers that pull in large system headers exceed the self-hosted CLI's string
       limit as one AST dump.

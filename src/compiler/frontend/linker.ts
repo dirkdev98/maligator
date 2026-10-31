@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import type { FfiDirectEntry } from "../../build-config-values.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
 import { detectCjsExports } from "./cjs-exports.ts";
 import type { CjsExportInfo } from "./cjs-exports.ts";
@@ -90,7 +91,12 @@ export interface ModuleLinkage {
 	hostModules: Array<{
 		specifier: string;
 		installer: string;
-		exports: Array<{ name: string; binding: Binding; constant?: PlatformData }>;
+		exports: Array<{
+			name: string;
+			binding: Binding;
+			constant?: PlatformData;
+			direct?: FfiDirectEntry;
+		}>;
 	}>;
 
 	/**
@@ -344,6 +350,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			name: string;
 			binding: Binding;
 			constant?: PlatformData;
+			direct?: FfiDirectEntry;
 		}> = [];
 		const declareHostExport = (name: string) => {
 			const binding: Binding = {
@@ -361,6 +368,9 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 				binding,
 				...(spec.constants !== undefined && Object.hasOwn(spec.constants, name)
 					? { constant: spec.constants[name]! }
+					: {}),
+				...(spec.direct !== undefined && Object.hasOwn(spec.direct, name)
+					? { direct: spec.direct[name]! }
 					: {}),
 			});
 		};

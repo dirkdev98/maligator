@@ -5,11 +5,22 @@ import type {
 	MaligatorFfiLibrary,
 } from "./public-api.d.ts";
 
+/**
+ * An entry native code calls instead of the function object: the C symbol takes the
+ * VM and `arity` boxed arguments and returns the result, leaving a throw pending.
+ */
+export interface FfiDirectEntry {
+	readonly symbol: string;
+	readonly arity: number;
+}
+
 /** The host module a configured C library provides as `maligator:ffi/<name>`. */
 export interface FfiModule {
 	readonly id: string;
 	readonly exports: ReadonlyArray<string>;
 	readonly installer: string;
+	/** Direct entries of the function exports, by export name. */
+	readonly direct: Readonly<Record<string, FfiDirectEntry>>;
 }
 
 export interface ResolvedBuildConfig {

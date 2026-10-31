@@ -135,6 +135,7 @@ export function prepareLibraries(
 			id: entry.unit.specifier,
 			exports: entry.unit.exports,
 			installer: entry.unit.installer,
+			direct: entry.unit.direct,
 		})),
 		dependencies,
 		identity,

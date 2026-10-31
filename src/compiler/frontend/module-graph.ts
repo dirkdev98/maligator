@@ -526,6 +526,7 @@ export function buildModuleGraph(
 					named: library.exports,
 					hasDefault: false,
 					installer: library.installer,
+					direct: library.direct,
 				},
 			]),
 		),

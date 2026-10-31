@@ -1,3 +1,4 @@
+import type { FfiDirectEntry } from "../../build-config-values.ts";
 import { coreCompilerSiteId } from "../core/compiler-site-facts.ts";
 import type { CoreCompilation } from "../core/core-compilation.ts";
 import { coreConstructorSlotReserve } from "../core/core-constructor-layout.ts";
@@ -516,6 +517,7 @@ function rebuildOperation(
 	directFunctionCall: CoreAttributeValue | undefined,
 	directCallTargetFunctionIndex: CoreAttributeValue | undefined,
 	allowImmediateOperands: boolean,
+	foreignCall: FfiDirectEntry | undefined,
 ): CompilerInstruction {
 	const header = fn.instructionHeader(instruction);
 	if (typeof header === "string")
@@ -547,6 +549,12 @@ function rebuildOperation(
 	}
 	if (directCallTargetFunctionIndex !== undefined) {
 		selectedAttributes.directCallTargetFunctionIndex = directCallTargetFunctionIndex;
+	}
+	if (foreignCall !== undefined) {
+		selectedAttributes.foreignCall = {
+			symbol: foreignCall.symbol,
+			arity: foreignCall.arity,
+		};
 	}
 	delete selectedAttributes.directFunctionIndex;
 	delete selectedAttributes.guardedFunctionIndices;
@@ -1664,6 +1672,7 @@ function prepareFunctionForTargets(
 	instructionSites: WeakMap<object, CompilerSiteFacts>,
 	classLayoutSites: ReadonlyMap<CoreInstructionId, CompilerClassLayoutSite> | undefined,
 	exactArrayAccesses: ReadonlyMap<CoreInstructionId, CoreExactArrayAccess>,
+	foreignCalls: ReadonlyMap<CoreInstructionId, FfiDirectEntry>,
 ) {
 	const privatePackedRestElements = new Map(
 		privatePackedRestArrayElements.map((plan) => [plan.instruction, plan]),
@@ -1892,6 +1901,7 @@ function prepareFunctionForTargets(
 				plannedDirectFunctionCalls.get(instruction),
 				plannedDirectCallTargets.get(instruction),
 				!protectedInstructions.has(instruction),
+				foreignCalls.get(instruction),
 			);
 			operations.set(instruction, operation);
 		}
@@ -3185,6 +3195,35 @@ function exactCoreCallTargets(
 	return exact;
 }
 
+/**
+ * Calls whose callee is read straight from a C library import's slot. The installer
+ * fills that slot before any code runs and imports cannot be reassigned, so native
+ * code may call the function's direct entry instead.
+ */
+function foreignDirectCalls(
+	fn: CoreFunctionStore,
+	slots: ReadonlyMap<number, FfiDirectEntry>,
+): ReadonlyMap<CoreInstructionId, FfiDirectEntry> {
+	const calls = new Map<CoreInstructionId, FfiDirectEntry>();
+	if (slots.size === 0) return calls;
+	const kernel = fn.kernel;
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "call"
+		)
+			continue;
+		const callee = kernel.operandAt(kernel.instructionOperandStart(instruction));
+		if (kernel.valueDefinitionKind(callee) !== 1) continue;
+		const load = coreInstructionId(kernel.valueDefinitionOwner(callee));
+		if (fn.instructionOpcodeName(load) !== "loadGlobal") continue;
+		const index = fn.instructionAttributes(load).index;
+		const entry = typeof index === "number" ? slots.get(index) : undefined;
+		if (entry !== undefined) calls.set(instruction, entry);
+	}
+	return calls;
+}
+
 export function prepareCoreCompilationToTargets(
 	compilation: CoreCompilation,
 	options: { readonly excludeGuardedDirectCalls?: boolean } = {},
@@ -3339,6 +3378,12 @@ export function prepareCoreCompilationToTargets(
 	);
 	const specializedOnly = new Set(compilation.plan.specializedOnlyFunctions ?? []);
 	const classLayouts = planCoreClassLayouts(compilation, functionMap);
+	const foreignSlots = new Map<number, FfiDirectEntry>();
+	for (const install of compilation.context.data.hostInstallCandidates) {
+		for (const entry of install.exports) {
+			if (entry.direct !== undefined) foreignSlots.set(entry.slot, entry.direct);
+		}
+	}
 	const functions = functionMap.executionToCore.map((core, execution) =>
 		prepareFunctionForTargets(
 			compilation.program.function(core),
@@ -3363,6 +3408,7 @@ export function prepareCoreCompilationToTargets(
 			compilation.context.facts.instructionSites,
 			classLayouts.sites.get(core),
 			planCoreExactArrayAccesses(compilation, core),
+			foreignDirectCalls(compilation.program.function(core), foreignSlots),
 		),
 	);
 	return Object.freeze({
