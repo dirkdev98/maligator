@@ -106,9 +106,10 @@ function directEntry(
 		`mal_ffi_function_${binding.name}(vm, mal_ffi_undefined(), ${args}, ${String(arity)}, mal_ffi_undefined(), mal_ffi_undefined())`;
 	// Pinned handles are read again by cleanup, after the result's allocations.
 	const rooted =
-		callsBack ||
-		binding.closes !== undefined ||
-		binding.params.some((param) => !UNROOTED_INPUTS.has(param.value.kind));
+		arity > 0 &&
+		(callsBack ||
+			binding.closes !== undefined ||
+			binding.params.some((param) => !UNROOTED_INPUTS.has(param.value.kind)));
 	const args = arity === 0 ? "nullptr" : "mal_direct_args";
 	// A binding that can call back runs as a native frame, as on the ordinary call path.
 	const framed = rooted || callsBack;
