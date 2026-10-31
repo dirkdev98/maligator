@@ -585,12 +585,17 @@ static __attribute__((noinline)) MalShape *ffi_record_shape_create(MalVm *vm, Ma
         state->shapes = grown;
         state->shape_capacity = capacity;
     }
-    MalString *keys[64];
-    if (type->field_count > (i32) countof(keys)) return nullptr;
+    // Wide structs get their keys from the heap, so the shape exists for any of them.
+    MalString *inline_keys[64];
+    MalString **keys = type->field_count <= (i32) countof(inline_keys)
+        ? inline_keys
+        : malloc(sizeof(*keys) * (usize) type->field_count);
+    if (keys == nullptr) return nullptr;
     for (i32 index = 0; index < type->field_count; index++) {
         keys[index] = mal_intrinsic_ascii(vm, (const byte *) type->fields[index]);
     }
     MalShape *shape = mal_shape_from_string_keys(&vm->heap, keys, (u32) type->field_count);
+    if (keys != inline_keys) free(keys);
     state->shapes[slot] = shape;
     return shape;
 }

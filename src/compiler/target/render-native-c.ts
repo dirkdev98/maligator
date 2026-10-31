@@ -8634,35 +8634,47 @@ class NativeInstructionEmission {
 	/**
 	 * The arguments a C library call borrows from stack objects: the stack object itself,
 	 * or its heap copy once one exists. Typed field storage is boxed into a buffer the
-	 * object points at for the call only.
+	 * object points at for the call only. Several literals may reach one register, so
+	 * each register tests every site it may hold.
 	 */
 	lendStackObjects(): {
 		lent: Map<number, string>;
 		before: Array<string>;
 		after: Array<string>;
 	} {
-		const lent = new Map<number, string>();
-		const before: Array<string> = [];
-		const after: Array<string> = [];
+		const sites = new Map<number, Array<StackObjectSite>>();
 		for (const { site, values } of this.context.stackObjectLends ?? []) {
 			for (const value of values) {
-				if (lent.has(value)) continue;
-				const name = `__lend_${this.ip}_${value}`;
+				const held = sites.get(value) ?? [];
+				if (!held.includes(site)) held.push(site);
+				sites.set(value, held);
+			}
+		}
+		const lent = new Map<number, string>();
+		const before: Array<string> = [];
+		const after = new Set<string>();
+		for (const [value, held] of sites) {
+			const name = `__lend_${this.ip}_${value}`;
+			before.push(`MalValue ${name} = r${value};`);
+			held.forEach((site, index) => {
 				const fields = site.fieldSlots;
+				const buffer = `${name}_fields_${index}`;
 				const borrow =
 					fields === undefined
 						? []
 						: [
 								...fields.map(
 									(field, slot) =>
-										`${name}_fields[${slot}] = ${this.convertedValue(field.representation, "boxed", field.name)};`,
+										`${buffer}[${slot}] = ${this.convertedValue(field.representation, "boxed", field.name)};`,
 								),
-								`${site.objectName}.storage.fields = ${name}_fields;`,
+								`${site.objectName}.storage.fields = ${buffer};`,
 							];
+				if (fields !== undefined) {
+					before.push(`MalValue ${buffer}[${fields.length}];`);
+					after.add(`${site.objectName}.storage.fields = nullptr;`);
+				}
 				before.push(
-					`MalValue ${name} = r${value};`,
-					...(fields === undefined ? [] : [`MalValue ${name}_fields[${fields.length}];`]),
-					`if (r${value} == mal_value_from_object(&${site.objectName}.object)) {`,
+					`${index === 0 ? "" : "else "}if (r${value} == mal_value_from_object(&${site.objectName}.object)) {`,
 					...(site.materializedSlot === undefined
 						? borrow.map((line) => `  ${line}`)
 						: [
@@ -8673,12 +8685,10 @@ class NativeInstructionEmission {
 							]),
 					`}`,
 				);
-				if (fields !== undefined)
-					after.push(`${site.objectName}.storage.fields = nullptr;`);
-				lent.set(value, name);
-			}
+			});
+			lent.set(value, name);
 		}
-		return { lent, before, after };
+		return { lent, before, after: [...after] };
 	}
 
 	stackLoad(site: StackObjectSite, slot: number, dst: number): string {

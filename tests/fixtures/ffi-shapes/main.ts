@@ -222,6 +222,25 @@ function lendLiterals(kept: Array<{ x: number; y: number }>): string {
 	return `${first.x},${first.y} ${second.x},${second.y} ${third.x},${third.y} ${kept[0]!.y} ${fourth.x} ${JSON.stringify(kept[1])}`;
 }
 console.log(`lend literals ${lendLiterals([])}`);
+// Two literals that reach one register, each observed on some path, lend to one call.
+function lendEither(first: boolean, observed: boolean, kept: Array<unknown>): number {
+	let point: { x: number; y: number };
+	if (first) {
+		const a = { x: 1, y: 2 };
+		kept.push(a.x);
+		kept.push(a);
+		point = a;
+	} else {
+		const b = { x: 3, y: 4 };
+		kept.push(b.x);
+		if (observed) kept.push(b);
+		point = b;
+	}
+	return shapes_add(point, { x: 0, y: 1 }).y;
+}
+console.log(
+	`lend either ${lendEither(true, false, [])} ${lendEither(false, false, [])} ${lendEither(false, true, [])}`,
+);
 const packed = new Uint8Array(8);
 const packing = shapes_pack(packed, new Uint8Array([4, 5, 6]));
 console.log(

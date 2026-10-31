@@ -319,6 +319,9 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				kind: region.kind,
 				sites: region.sites.map((site) => ({
 					...site,
+					...(site.keys === undefined
+						? {}
+						: { keys: site.keys.map((key) => (key < 0 ? key : key + base.string)) }),
 					accesses: site.accesses.map((access) => ({ ...access })),
 					materializations: site.materializations.map((materialization) => ({
 						...materialization,

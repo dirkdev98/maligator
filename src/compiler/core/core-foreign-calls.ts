@@ -79,6 +79,9 @@ export function coreForeignBorrows(
 	);
 }
 
+/** The most fields a stack object holds: the runtime keeps them inline. */
+const STACK_OBJECT_SLOTS = 255;
+
 /**
  * Foreign calls whose binding can write the object it returns, a struct or its result
  * and outputs, into the caller's stack object, as allocations with that object's keys.
@@ -98,7 +101,7 @@ export function coreForeignRecordResults(
 		const keys = (entry.into?.fields ?? []).map(
 			(field) => program.stringConstantSlot(field, "first") ?? -1,
 		);
-		if (keys.length === 0) return [];
+		if (keys.length === 0 || keys.length > STACK_OBJECT_SLOTS) return [];
 		const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 		return [{ instruction, result, keys }];
 	});
