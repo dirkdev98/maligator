@@ -76,6 +76,13 @@ ShapesPoint *shapes_corners(ShapesBox box, int *count);  // The box's corners
 char *shapes_describe(ShapesPoint point);  // "(x, y)" in memory the caller frees
 void shapes_free(void *memory);  // Release memory the library allocated
 int shapes_allocations(void);  // Allocations not yet released
+
+// Visit each point until visit returns nonzero; returns the points visited.
+int shapes_each(const ShapesPoint *points, int count,
+                int (*visit)(ShapesPoint point, int index, void *data), void *data);
+// Integrate f over [from, to] with the midpoint rule.
+double shapes_integrate(double (*f)(void *data, double x), void *data, double from, double to,
+                        int steps);
 int shapes_log(const char *format, ...);
 size_t shapes_path_length(ShapesPath path);
 

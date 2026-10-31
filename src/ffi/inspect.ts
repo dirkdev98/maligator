@@ -130,6 +130,14 @@ export function formatTsType(
 			return nullable(
 				direction === "input" ? "ArrayBufferLike | ArrayBufferView" : "Uint8Array",
 			);
+		case "callback": {
+			const params = value.params
+				.filter((param) => param !== "data")
+				.map((param, index) => `arg${index + 1}: ${formatTsType(param)}`);
+			return nullable(
+				`(${params.join(", ")}) => ${formatTsType(value.returns, "input")}`,
+			);
+		}
 		case "sequence": {
 			const element = formatTsType(value.of, direction);
 			return nullable(

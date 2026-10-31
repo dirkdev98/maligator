@@ -34,6 +34,9 @@ const EXPECTED_RESULTS = [
 	"describe (1.5, -2)",
 	"created 0 Created",
 	"allocations 0 canvases 0",
+	"each 2 0:1,1:3",
+	"integrate 9.0000",
+	"callback threw stop here after 1 call",
 ];
 
 function cli(cwd: string, args: Array<string>) {
@@ -73,6 +76,7 @@ describe("C library bindings", () => {
 		expect(
 			runOutput.filter((line) => line.startsWith("rejected") || line === "accepted"),
 		).toEqual([
+			"rejected TypeError: shapes_each: visit expects a function",
 			"rejected TypeError: shapes_checksum: data expects an ArrayBuffer or a view",
 			"rejected TypeError: shapes_checksum: data expects a buffer that is not shared",
 			"rejected TypeError: shapes_bounds: points.y expects a number",

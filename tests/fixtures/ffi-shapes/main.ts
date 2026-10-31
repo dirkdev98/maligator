@@ -24,6 +24,8 @@ import {
 	shapes_contains,
 	shapes_corners,
 	shapes_describe,
+	shapes_each,
+	shapes_integrate,
 	shapes_mode_name,
 	shapes_parse,
 	shapes_render,
@@ -111,7 +113,32 @@ console.log(`created ${created.result} ${shapes_canvas_title(created.canvas)}`);
 created.canvas?.[Symbol.dispose]();
 console.log(`allocations ${shapes_allocations()} canvases ${shapes_canvases_open()}`);
 
+const visited: Array<string> = [];
+const stopped = shapes_each(
+	[
+		{ x: 1, y: 2 },
+		{ x: 3, y: 4 },
+		{ x: 5, y: 6 },
+	],
+	(point, index) => {
+		visited.push(`${index}:${point.x}`);
+		return point.x >= 3 ? 1 : 0;
+	},
+);
+console.log(`each ${stopped} ${visited.join(",")}`);
+console.log(`integrate ${shapes_integrate((x) => x * x, 0, 3, 3000).toFixed(4)}`);
+let calls = 0;
+try {
+	shapes_each([origin, origin, origin], () => {
+		calls++;
+		throw new Error("stop here");
+	});
+} catch (error) {
+	console.log(`callback threw ${(error as Error).message} after ${calls} call`);
+}
+
 const rejected = [
+	() => shapes_each([], 5 as unknown as () => number),
 	() => shapes_checksum("bytes" as unknown as Uint8Array),
 	() => shapes_checksum(new SharedArrayBuffer(4)),
 	() => shapes_bounds([{ x: 1 } as unknown as { x: number; y: number }]),

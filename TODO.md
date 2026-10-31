@@ -1909,7 +1909,9 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
 - [ ] Support C libraries in `maligator test --watch`, which needs an in-process
       application host that links the project's bindings.
-- [ ] Callbacks, blocking functions with async twins, and worker affinity.
+- [ ] Callbacks the library keeps after the call returns, with a release fact, and
+      callbacks without a user-data parameter; blocking functions with async twins;
+      worker affinity.
 - [ ] Direct calls: Core-visible foreign calls with unboxed representations, and
       scalar replacement of struct arguments and out objects.
 - [ ] `ffi check`: declaration fingerprints, evidence drift, sanitizer probes.

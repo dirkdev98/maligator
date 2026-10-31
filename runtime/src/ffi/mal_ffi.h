@@ -187,6 +187,23 @@ MalValue mal_ffi_new_array(MalVm *vm, int32_t length);
 /** Store an element; both values stay rooted for the duration of the call. */
 bool mal_ffi_set_element(MalVm *vm, MalValue array, int32_t index, MalValue value);
 bool mal_ffi_threw(MalVm *vm);
+/**
+ * What a callback trampoline receives as its user data: the VM and the JavaScript
+ * function, which the binding keeps rooted for the duration of the call.
+ */
+typedef struct MalFfiCallback {
+    MalVm *vm;
+    MalValue function;
+} MalFfiCallback;
+
+/** Check that a callback argument is callable; null passes for a nullable site. */
+bool mal_ffi_to_function(MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site);
+/**
+ * Call a callback's JavaScript function with `args`, which must stay rooted. Returns
+ * false with a pending throw that later callbacks of the call see through `mal_ffi_threw`.
+ */
+bool mal_ffi_call(
+    MalVm *vm, MalValue function, const MalValue *args, int32_t count, MalValue *result);
 /** Throw the engine's allocation error after a binding's own allocation failed. */
 bool mal_ffi_out_of_memory(MalVm *vm);
 

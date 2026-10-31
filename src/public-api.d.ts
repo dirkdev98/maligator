@@ -110,6 +110,18 @@ export interface MaligatorFfiValueFacts {
 	array?: MaligatorFfiCount;
 	/** Release a copied string, buffer, or array result with this function. */
 	free?: string;
+	/** A function pointer the library calls during the call with a JavaScript function. */
+	callback?: MaligatorFfiCallback;
+}
+
+/**
+ * A callback the library calls before the function returns, such as an iteration or
+ * comparison function. An exception it throws skips its later calls and rethrows when
+ * the C function returns.
+ */
+export interface MaligatorFfiCallback {
+	/** The `void *` parameter the library passes back to the callback, by C name or 1-based position. */
+	data: string;
 }
 
 /** Facts about one C function, keyed by its name. */

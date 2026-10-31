@@ -509,6 +509,24 @@ bool mal_ffi_threw(MalVm *vm) {
     return vm->completion.kind == MAL_COMPLETION_THROW;
 }
 
+bool mal_ffi_to_function(MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site) {
+    if ((nullable && mal_value_is_null(value)) || mal_value_is_callable(value)) return true;
+    return ffi_fail(
+        vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, nullable ? "a function or null" : "a function");
+}
+
+bool mal_ffi_call(
+    MalVm *vm, MalValue function, const MalValue *args, int32_t count, MalValue *result) {
+    MalCompletion completion =
+        mal_vm_call_value(vm, function, mal_value_new_undefined(), args, count);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        vm->completion = completion;
+        return false;
+    }
+    *result = completion.value;
+    return true;
+}
+
 bool mal_ffi_out_of_memory(MalVm *vm) {
     mal_vm_throw_allocation_error(vm);
     return false;

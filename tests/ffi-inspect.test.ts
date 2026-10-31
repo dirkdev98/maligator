@@ -136,6 +136,15 @@ describe("ffi inspect", () => {
 			ts: "(width: number, height: number) => Uint8Array | null",
 			params: [{ role: "input" }, { role: "input" }, { role: "result-count" }],
 		});
+		expect(declaration("shapes_each")).toMatchObject({
+			ts: "(points: ReadonlyArray<ShapesPoint>, visit: (arg1: ShapesPoint, arg2: number) => number) => number",
+			params: [
+				{ role: "input" },
+				{ role: "count of points" },
+				{ role: "input" },
+				{ role: "callback-data" },
+			],
+		});
 		expect(declaration("shapes_canvas_create").ts).toBe(
 			"(title: string) => { result: number; canvas: ShapesCanvas | null }",
 		);

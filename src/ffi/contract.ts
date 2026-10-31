@@ -176,12 +176,24 @@ function validateValueFacts(value: unknown, at: string): void {
 		"bytes",
 		"array",
 		"free",
+		"callback",
 	]);
 	for (const key of ["nullable", "borrowed", "out", "inout", "string"]) {
 		booleanField(value, key, at);
 	}
 	if (value.bytes !== undefined) validateCount(value.bytes, `${at}.bytes`);
 	if (value.array !== undefined) validateCount(value.array, `${at}.array`);
+	if (value.callback !== undefined) {
+		const callback = value.callback;
+		expectObject(callback, `${at}.callback`);
+		expectKeys(callback, `${at}.callback`, ["data"]);
+		expect(
+			typeof callback.data === "string" &&
+				(C_NAME.test(callback.data) || /^[1-9]\d*$/.test(callback.data)),
+			`${at}.callback.data`,
+			"a parameter name or 1-based position",
+		);
+	}
 	if (value.free !== undefined) {
 		expect(
 			typeof value.free === "string" && C_NAME.test(value.free),

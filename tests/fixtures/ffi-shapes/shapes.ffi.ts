@@ -20,5 +20,12 @@ export default {
 		shapes_render: { returns: { bytes: { length: "size" }, free: "shapes_free" } },
 		shapes_corners: { returns: { array: { length: "count" }, free: "shapes_free" } },
 		shapes_describe: { returns: { string: true, free: "shapes_free" } },
+		shapes_each: {
+			params: {
+				points: { array: { length: "count" } },
+				visit: { callback: { data: "data" } },
+			},
+		},
+		shapes_integrate: { params: { f: { callback: { data: "data" } } } },
 	},
 };

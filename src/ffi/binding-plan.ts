@@ -37,6 +37,18 @@ export type JsValue =
 	| { readonly kind: "record"; readonly name: string }
 	| { readonly kind: "array"; readonly of: JsValue; readonly length: number }
 	/**
+	 * A JavaScript function the library calls during the call through a generated
+	 * trampoline of the C function type `type`.
+	 */
+	| {
+			readonly kind: "callback";
+			readonly type: Extract<CType, { kind: "function" }>;
+			/** Per C parameter of the callback: its value, or the user data it receives. */
+			readonly params: ReadonlyArray<JsValue | "data">;
+			readonly returns: JsValue;
+			readonly nullable: boolean;
+	  }
+	/**
 	 * A resource handle. C receives the handle's pointer, a copy of its struct, or
 	 * the struct's address for the library to update in place.
 	 */
@@ -68,7 +80,9 @@ export type Argument =
 	/** The address of a local read from parameter `param` and returned as `output`. */
 	| { readonly kind: "inout"; readonly param: number; readonly output: number }
 	/** The address of a local the function writes with the count of its result. */
-	| { readonly kind: "result-count" };
+	| { readonly kind: "result-count" }
+	/** The user data that routes the callback argument `of` to its JavaScript function. */
+	| { readonly kind: "callback-data"; readonly of: number };
 
 /** A value the function writes through a pointer, returned beside its result. */
 export interface MappedOutput {
@@ -551,6 +565,49 @@ class Planner {
 	}
 
 	/**
+	 * A callback parameter: C passes each argument to the JavaScript function as it
+	 * would a result, except handles, which the library keeps owning.
+	 */
+	#callback(type: CType, nullable: boolean, at: string): Mapping {
+		const target =
+			type.kind === "pointer" ? resolveCType(this.#model, type.to) : undefined;
+		if (target?.kind !== "function" || target.variadic) {
+			throw new FfiError(
+				`${at}.callback: ${formatCDeclaration(type)} is not a function pointer`,
+			);
+		}
+		const params: Array<JsValue | "data"> = [];
+		for (const param of target.params) {
+			const resolved = resolveCType(this.#model, param);
+			if (
+				resolved.kind === "pointer" &&
+				resolveCType(this.#model, resolved.to).kind === "void" &&
+				!params.includes("data")
+			) {
+				params.push("data");
+				continue;
+			}
+			const mapped = this.value(param, "return", { borrowed: true });
+			if ("gap" in mapped) return { gap: `callback parameter: ${mapped.gap}` };
+			params.push(mapped.value);
+		}
+		if (!params.includes("data")) {
+			throw new FfiError(`${at}.callback: the callback takes no void * for its data`);
+		}
+		const returned = resolveCType(this.#model, target.returns);
+		let returns: JsValue = { kind: "undefined" };
+		if (returned.kind !== "void") {
+			const mapped = this.value(target.returns, "param");
+			if ("gap" in mapped) return { gap: `callback result: ${mapped.gap}` };
+			if (mapped.value.kind === "string" || mapped.value.kind === "handle") {
+				return { gap: "a callback that returns a pointer needs a lifetime fact" };
+			}
+			returns = mapped.value;
+		}
+		return { value: { kind: "callback", type: target, params, returns, nullable } };
+	}
+
+	/**
 	 * Check that a `free` fact releases a copied result and names a function that
 	 * takes the pointer to release.
 	 */
@@ -642,6 +699,26 @@ class Planner {
 			}
 			counts.set(count, index);
 		});
+		// The user-data parameters that route callbacks, mapped to their callback argument.
+		const callbackData = new Map<number, number>();
+		declaration.params.forEach((_, index) => {
+			const callback = factsAt(index).callback;
+			if (callback === undefined) return;
+			const at = `params.${names[index]}.callback.data`;
+			const data = parameterIndex(callback.data, at);
+			const resolved = resolveCType(this.#model, declaration.params[data]!.type);
+			if (
+				resolved.kind !== "pointer" ||
+				resolveCType(this.#model, resolved.to).kind !== "void" ||
+				callbackData.has(data) ||
+				counts.has(data)
+			) {
+				throw new FfiError(
+					`${where(at)}: '${callback.data}' is not a free void * parameter`,
+				);
+			}
+			callbackData.set(data, index);
+		});
 		const resultFact = facts.returns.bytes !== undefined ? "bytes" : "array";
 		const resultCounted = facts.returns[resultFact];
 		const resultCount =
@@ -663,6 +740,20 @@ class Planner {
 				throw new FfiError(`${where(at)}: borrowed applies to results`);
 			}
 			const resolved = resolveCType(this.#model, param.type);
+			const routed = callbackData.get(index);
+			if (routed !== undefined) {
+				args.push({ kind: "callback-data", of: routed });
+				return;
+			}
+			if (valueFacts.callback !== undefined) {
+				const mapped = this.#callback(resolved, valueFacts.nullable === true, where(at));
+				if ("gap" in mapped) gap(mapped.gap);
+				else {
+					params.push({ name, type: param.type, value: mapped.value });
+					args.push({ kind: "input", param: params.length - 1 });
+				}
+				return;
+			}
 			const counted = counts.get(index);
 			if (counted !== undefined || resultCount === index) {
 				const pointer = resultCount === index && resolved.kind === "pointer";
@@ -736,6 +827,11 @@ class Planner {
 			args.push({ kind: "input", param: params.length - 1 });
 		});
 
+		if (callbackData.size > 0 && params.some((param) => param.value.kind === "bytes")) {
+			throw new FfiError(
+				`${where("params")}: JavaScript in a callback could detach a buffer C still uses`,
+			);
+		}
 		const returns = map(declaration.returns, "return", facts.returns, "returns");
 		if ("value" in returns) {
 			if (facts.returns.borrowed === true && returns.value.kind !== "handle") {

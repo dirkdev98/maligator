@@ -64,6 +64,10 @@ declare module "maligator:ffi/shapes" {
 	export function shapes_corners(box: ShapesBox): Array<ShapesPoint> | null;
 	/** "(x, y)" in memory the caller frees */
 	export function shapes_describe(point: ShapesPoint): string | null;
+	/** Visit each point until visit returns nonzero; returns the points visited. */
+	export function shapes_each(points: ReadonlyArray<ShapesPoint>, visit: (arg1: ShapesPoint, arg2: number) => number): number;
+	/** Integrate f over [from, to] with the midpoint rule. */
+	export function shapes_integrate(f: (arg1: number) => number, from: number, to: number, steps: number): number;
 	export function shapes_mode_name(mode: number): string | null;
 	/** Parse "x,y" into a point; returns 0, or -1 for other text. */
 	export function shapes_parse(text: string): { result: number; point: ShapesPoint };

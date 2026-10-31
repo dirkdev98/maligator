@@ -156,6 +156,25 @@ ShapesPoint *shapes_corners(ShapesBox box, int *count) {
 	return corners;
 }
 
+int shapes_each(const ShapesPoint *points, int count,
+                int (*visit)(ShapesPoint point, int index, void *data), void *data) {
+	int visited = 0;
+	while (visited < count) {
+		int stop = visit(points[visited], visited, data);
+		visited++;
+		if (stop != 0) break;
+	}
+	return visited;
+}
+
+double shapes_integrate(double (*f)(void *data, double x), void *data, double from, double to,
+                        int steps) {
+	double width = (to - from) / steps;
+	double sum = 0;
+	for (int step = 0; step < steps; step++) sum += f(data, from + (step + 0.5) * width) * width;
+	return sum;
+}
+
 char *shapes_describe(ShapesPoint point) {
 	char *text = allocate(64);
 	if (text != NULL) snprintf(text, 64, "(%g, %g)", point.x, point.y);

@@ -84,6 +84,12 @@ class BindingWriter {
 			this.need(value.of, direction);
 			return;
 		}
+		if (value.kind === "callback") {
+			// A callback converts the other way: C arguments out, its result in.
+			for (const param of value.params) if (param !== "data") this.need(param, "output");
+			this.need(value.returns, "input");
+			return;
+		}
 		if (value.kind !== "record") return;
 		const set = direction === "input" ? this.#inputs : this.#outputs;
 		if (set.has(value.name)) return;
@@ -200,6 +206,8 @@ class BindingWriter {
 			case "bytes":
 			case "sequence":
 				throw new Error("buffers and arrays convert with the count of their argument");
+			case "callback":
+				throw new Error("callbacks convert with their user data");
 		}
 	}
 
@@ -221,6 +229,8 @@ class BindingWriter {
 			case "bytes":
 			case "sequence":
 				throw new Error("buffer and array results convert with their count");
+			case "callback":
+				throw new Error("callbacks are parameters only");
 			case "boolean":
 				return `mal_ffi_from_boolean(${expression})`;
 			case "integer":
@@ -486,6 +496,65 @@ class BindingWriter {
 		];
 	}
 
+	/**
+	 * A C function of the callback's type that converts its arguments, calls the
+	 * JavaScript function its user data names, and converts the result back. After
+	 * an exception, later calls return zero without running JavaScript.
+	 */
+	#trampoline(
+		name: string,
+		value: Extract<JsValue, { kind: "callback" }>,
+		owner: string,
+	): Array<string> {
+		const type = value.type;
+		const params = type.params.map((param, index) =>
+			formatCDeclaration(param, `mal_c${String(index)}`),
+		);
+		const data = value.params.indexOf("data");
+		const inputs = value.params.flatMap((param, index) =>
+			param === "data" ? [] : [{ value: param, index }],
+		);
+		const returns = value.returns.kind !== "undefined";
+		const count = String(inputs.length);
+		return [
+			"",
+			`static ${formatCDeclaration(type.returns, `${name}(${params.length === 0 ? "void" : params.join(", ")})`)} {`,
+			`\tMalFfiCallback *mal_callback = mal_c${String(data)};`,
+			"\tMalVm *vm = mal_callback->vm;",
+			`\tstatic const MalFfiSite mal_site = { ${cString(owner)}, "callback result", nullptr };`,
+			"\t(void) mal_site;",
+			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
+			`\tMalValue mal_values[${inputs.length === 0 ? "1" : count}] = {};`,
+			"\tMalValue mal_result = mal_ffi_undefined();",
+			"\tMalFfiRoots mal_roots;",
+			`\tmal_ffi_root(&mal_roots, mal_values, ${count});`,
+			"\tif (mal_ffi_threw(vm)) goto mal_done;",
+			...inputs.flatMap((input, position) =>
+				this.#produce(
+					input.value,
+					`mal_c${String(input.index)}`,
+					`mal_values[${String(position)}]`,
+				).map((line) => `\t${line}`),
+			),
+			`\tif (!mal_ffi_call(vm, mal_callback->function, mal_values, ${count}, &mal_result)) goto mal_done;`,
+			...(returns
+				? this.read(
+						value.returns,
+						type.returns,
+						"mal_result",
+						"mal_return",
+						"&mal_site",
+						"goto mal_done;",
+						[],
+					).map((line) => `\t${line}`)
+				: ["\t(void) mal_result;"]),
+			"mal_done:",
+			"\tmal_ffi_unroot(&mal_roots);",
+			returns ? "\treturn mal_return;" : "\treturn;",
+			"}",
+		];
+	}
+
 	function(binding: BoundFunction): Array<string> {
 		const name = binding.name;
 		const declaration = binding.declaration;
@@ -495,6 +564,7 @@ class BindingWriter {
 		const buffers: Array<string> = [];
 		const cleanup: Array<string> = [];
 		const strings: Array<string> = [];
+		const trampolines: Array<string> = [];
 		const argument = (param: number) =>
 			`mal_argc > ${String(param)} ? mal_args[${String(param)}] : mal_ffi_undefined()`;
 		binding.params.forEach((param, index) => {
@@ -544,6 +614,9 @@ class BindingWriter {
 					locals.push(`${localDeclaration(pointee, "mal_count")} = {};`);
 					body.push(`${local} = &mal_count;`);
 					return;
+				case "callback-data":
+					body.push(`${local} = &mal_callback_${String(entry.of)};`);
+					return;
 				case "out":
 				case "inout": {
 					const output = `mal_output_${String(entry.output)}`;
@@ -578,6 +651,17 @@ class BindingWriter {
 							`${local} = (${localDeclaration(param.type, "")}) mal_bytes_${String(index)};`,
 						);
 						setCount(index, `mal_bytes_length_${String(index)}`, site, buffers);
+						return;
+					}
+					if (value.kind === "callback") {
+						const trampoline = `mal_ffi_callback_${name}_${String(index)}`;
+						trampolines.push(...this.#trampoline(trampoline, value, name));
+						locals.push(`MalFfiCallback mal_callback_${String(index)} = { vm, 0 };`);
+						body.push(
+							`if (!mal_ffi_to_function(vm, ${source}, ${value.nullable}, ${site})) goto mal_done;`,
+							`mal_callback_${String(index)}.function = ${source};`,
+							`${local} = ${value.nullable ? `(${source}) == mal_ffi_null() ? nullptr : ` : ""}${trampoline};`,
+						);
 						return;
 					}
 					if (value.kind === "sequence") {
@@ -690,6 +774,8 @@ class BindingWriter {
 			);
 		}
 		return [
+			...trampolines,
+			"",
 			`static MalValue mal_ffi_function_${name}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
 			"\t(void) vm;",
 			"\t(void) mal_this;",

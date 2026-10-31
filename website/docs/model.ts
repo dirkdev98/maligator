@@ -333,6 +333,7 @@ function publicReference(
 		"MaligatorFfiLibrary",
 		"MaligatorFfiHandle",
 		"MaligatorFfiCount",
+		"MaligatorFfiCallback",
 		"MaligatorFfiTypeFacts",
 		"MaligatorFfiValueFacts",
 		"MaligatorFfiFunctionFacts",
