@@ -1410,6 +1410,253 @@ class BindingWriter {
 		];
 	}
 
+	/**
+	 * The export that runs a binding's C call on a worker thread: its function converts
+	 * the arguments into a context, then `mal_ffi_async` runs the call and completes the
+	 * returned promise with the converted result on the VM thread. Handles and buffers
+	 * stay pinned, and their objects reachable, until then.
+	 */
+	asyncFunction(binding: BoundFunction, exported: string): Array<string> {
+		const name = binding.name;
+		const declaration = binding.declaration;
+		const context = `MalFfiAsync_${name}`;
+		const fields: Array<string> = [];
+		const body: Array<string> = [];
+		/** Buffers resolve last: nothing may run JavaScript between them and the call. */
+		const buffers: Array<string> = [];
+		const locals: Array<string> = [];
+		const pins: Array<string> = [];
+		const strings: Array<string> = [];
+		let kept = 0;
+		const argument = (param: number) =>
+			`mal_argc > ${String(param)} ? mal_args[${String(param)}] : mal_ffi_undefined()`;
+		// Errors name the export the program called.
+		binding.params.forEach((param, index) => {
+			locals.push(
+				`static const MalFfiSite mal_site_${String(index)} = { ${cString(exported)}, ${cString(param.name)}, nullptr };`,
+			);
+		});
+		const setCount = (counted: number, count: string, site: string): void => {
+			const index = binding.arguments.findIndex(
+				(entry) => entry.kind === "count" && entry.of === counted,
+			);
+			if (index < 0) return;
+			const type = declaration.params[index]!.type;
+			const integer = resolveCType(this.#model, type);
+			const bits =
+				integer.kind === "integer"
+					? (this.#model.target.sizes[integer.name] ?? 4) * 8
+					: 32;
+			const signed = integer.kind === "integer" && !integer.name.startsWith("unsigned");
+			buffers.push(
+				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${bits}, ${signed}, ${site})) goto mal_failed;`,
+				`mal_ctx->mal_argument_${String(index)} = (${localDeclaration(type, "")}) (${count});`,
+			);
+		};
+		binding.arguments.forEach((entry, index) => {
+			const param = declaration.params[index]!;
+			const target = `mal_ctx->mal_argument_${String(index)}`;
+			fields.push(`${localDeclaration(param.type, `mal_argument_${String(index)}`)};`);
+			const resolved = resolveCType(this.#model, param.type);
+			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
+			switch (entry.kind) {
+				case "count":
+					return;
+				case "result-count":
+					fields.push(`${localDeclaration(pointee, "mal_count")};`);
+					body.push(`${target} = &mal_ctx->mal_count;`);
+					return;
+				case "constant":
+					body.push(`${target} = ${entry.expression};`);
+					return;
+				case "callback-data":
+				case "callback-release":
+					throw new Error(`async binding ${name} has a callback`);
+				case "out":
+				case "inout": {
+					const output = `mal_output_${String(entry.output)}`;
+					fields.push(`${localDeclaration(pointee, output)};`);
+					if (entry.kind === "inout") {
+						body.push(
+							...this.read(
+								binding.params[entry.param]!.value,
+								pointee,
+								argument(entry.param),
+								`mal_ctx->${output}`,
+								`&mal_site_${String(entry.param)}`,
+								"goto mal_failed;",
+								strings,
+								true,
+							),
+						);
+					}
+					body.push(`${target} = &mal_ctx->${output};`);
+					return;
+				}
+				case "input": {
+					const value = binding.params[entry.param]!.value;
+					const site = `&mal_site_${String(entry.param)}`;
+					const source = argument(entry.param);
+					if (value.kind === "bytes") {
+						const pin = `mal_pin_${String(index)}`;
+						fields.push(`void *${pin};`);
+						pins.push(`mal_ffi_unpin(mal_ctx->${pin});`);
+						locals.push(
+							`void *mal_bytes_${String(index)};`,
+							`size_t mal_bytes_length_${String(index)};`,
+						);
+						buffers.push(
+							`if (!mal_ffi_to_bytes(vm, ${source}, ${value.nullable}, ${value.writable === true}, ${site}, &mal_bytes_${String(index)}, &mal_bytes_length_${String(index)}, &mal_ctx->${pin})) goto mal_failed;`,
+							`mal_keep[${String(kept++)}] = ${source};`,
+							`${target} = (${localDeclaration(param.type, "")}) mal_bytes_${String(index)};`,
+						);
+						setCount(index, `mal_bytes_length_${String(index)}`, site);
+						return;
+					}
+					if (value.kind === "handle") {
+						const handle = this.#handle(value.name);
+						const pointer = `mal_handle_${String(index)}`;
+						const pin = `mal_handle_pin_${String(index)}`;
+						fields.push(`void *${pin};`);
+						pins.push(`mal_ffi_unpin_handle(mal_ctx->${pin});`);
+						locals.push(`void *${pointer};`);
+						body.push(
+							`if (!mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${pointer}, &mal_ctx->${pin})) goto mal_failed;`,
+							`mal_keep[${String(kept++)}] = ${source};`,
+							value.pass === "copy"
+								? `${target} = *(${handle.spelling} *) ${pointer};`
+								: `${target} = (${localDeclaration(param.type, "")}) ${pointer};`,
+						);
+						return;
+					}
+					body.push(
+						...this.read(
+							value,
+							param.type,
+							source,
+							target,
+							site,
+							"goto mal_failed;",
+							strings,
+							true,
+						),
+					);
+					return;
+				}
+			}
+		});
+		const returns = binding.returns.kind !== "undefined";
+		if (returns) fields.push(`${localDeclaration(declaration.returns, "mal_return")};`);
+		for (const temporary of strings) fields.push(`MalFfiString ${temporary};`);
+		const call = `${declaration.name}(${declaration.params.map((_, index) => `mal_ctx->mal_argument_${String(index)}`).join(", ")})`;
+		const count =
+			binding.resultCount === undefined
+				? undefined
+				: binding.arguments[binding.resultCount]?.kind === "result-count"
+					? "mal_ctx->mal_count"
+					: `mal_ctx->mal_argument_${String(binding.resultCount)}`;
+		const produce: Array<string> = returns
+			? this.#owned(
+					binding.returns,
+					"mal_ctx->mal_return",
+					"mal_result",
+					count,
+					"&mal_site_result",
+					false,
+				)
+			: [];
+		if (binding.outputs.length > 0) {
+			const keys = [
+				...(returns ? ["result"] : []),
+				...binding.outputs.map((output) => output.name),
+			];
+			const first = keys.length - binding.outputs.length;
+			produce.push(
+				`static const char *const mal_output_fields[] = { ${keys.map(cString).join(", ")} };`,
+				`static MalFfiRecordType mal_output_type = { mal_output_fields, ${String(keys.length)}, 0, nullptr };`,
+				`MalValue mal_outputs[${String(keys.length)}] = { ${first === 1 ? "mal_result" : "0"} };`,
+				"MalFfiRoots mal_output_roots;",
+				`mal_ffi_root(&mal_output_roots, mal_outputs, ${String(keys.length)});`,
+				...binding.outputs.flatMap((output, index) =>
+					this.#owned(
+						output.value,
+						`mal_ctx->mal_output_${String(index)}`,
+						`mal_outputs[${String(first + index)}]`,
+						undefined,
+						"&mal_site_result",
+						true,
+					),
+				),
+				"if (!mal_ffi_threw(vm)) mal_result = mal_ffi_new_record(vm, &mal_output_type, mal_outputs);",
+				"mal_ffi_unroot(&mal_output_roots);",
+				"if (mal_ffi_threw(vm)) mal_result = mal_ffi_undefined();",
+			);
+		}
+		const keep = String(Math.max(kept, 1));
+		return [
+			"",
+			`typedef struct ${context} {`,
+			...fields.map((line) => `\t${line}`),
+			...(fields.length === 0 ? ["\tchar mal_unused;"] : []),
+			`} ${context};`,
+			"",
+			`static void mal_ffi_async_run_${name}(void *mal_data) {`,
+			`\t${context} *mal_ctx = mal_data;`,
+			"\t(void) mal_ctx;",
+			`\t${returns ? "mal_ctx->mal_return = " : ""}${call};`,
+			"}",
+			"",
+			`static MalValue mal_ffi_async_complete_${name}(MalVm *vm, void *mal_data, bool mal_ran) {`,
+			`\t${context} *mal_ctx = mal_data;`,
+			`\tstatic const MalFfiSite mal_site_result = { ${cString(exported)}, "result", nullptr };`,
+			"\t(void) mal_site_result;",
+			"\tMalValue mal_result = mal_ffi_undefined();",
+			...pins.map((line) => `\t${line}`),
+			"\tif (!mal_ran) return mal_result;",
+			...produce.map((line) => `\t${line}`),
+			"\tgoto mal_done;",
+			"mal_done:",
+			"\treturn mal_result;",
+			"}",
+			"",
+			`static void mal_ffi_async_release_${name}(void *mal_data) {`,
+			`\t${context} *mal_ctx = mal_data;`,
+			...strings.map((temporary) => `\tmal_ffi_string_release(&mal_ctx->${temporary});`),
+			"\tfree(mal_ctx);",
+			"}",
+			"",
+			// String conversions name their temporaries; these live in the context.
+			...strings.map((temporary) => `#define ${temporary} (mal_ctx->${temporary})`),
+			`static MalValue mal_ffi_function_${exported}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
+			"\t(void) mal_this;",
+			"\t(void) mal_new_target;",
+			"\t(void) mal_callee;",
+			...locals.map((line) => `\t${line}`),
+			`\t${context} *mal_ctx = calloc(1, sizeof(*mal_ctx));`,
+			"\tif (mal_ctx == nullptr) {",
+			"\t\tmal_ffi_out_of_memory(vm);",
+			"\t\treturn mal_ffi_rejected(vm);",
+			"\t}",
+			`\tMalValue mal_keep[${keep}] = {};`,
+			"\tMalFfiRoots mal_keep_roots;",
+			`\tmal_ffi_root(&mal_keep_roots, mal_keep, ${keep});`,
+			"\tMalValue mal_promise = mal_ffi_undefined();",
+			...body.map((line) => `\t${line}`),
+			...buffers.map((line) => `\t${line}`),
+			`\tif (mal_ffi_async(vm, mal_ctx, mal_ffi_async_run_${name}, mal_ffi_async_complete_${name}, mal_ffi_async_release_${name}, mal_keep, ${String(kept)}, &mal_promise)) {`,
+			"\t\tmal_ffi_unroot(&mal_keep_roots);",
+			"\t\treturn mal_promise;",
+			"\t}",
+			"mal_failed:",
+			"\tmal_ffi_unroot(&mal_keep_roots);",
+			...pins.map((line) => `\t${line}`),
+			`\tmal_ffi_async_release_${name}(mal_ctx);`,
+			"\treturn mal_ffi_rejected(vm);",
+			"}",
+			...strings.map((temporary) => `#undef ${temporary}`),
+		];
+	}
+
 	constant(constant: MappedConstant): Array<string> {
 		const value = constant.value;
 		// A struct handle copies from an lvalue.
@@ -1455,16 +1702,21 @@ export function generateBindingUnit(
 			plan.keepsCallbacks ||
 				binding.params.some((param) => param.value.kind === "callback"),
 		),
+		...(binding.async === undefined ? [] : writer.asyncFunction(binding, binding.async)),
 	]);
 	const constants = plan.constants.flatMap((constant) => [
 		"",
 		...writer.constant(constant),
 	]);
 	const exports = [
-		...plan.functions.map((binding) => ({
-			name: binding.name,
-			entry: `{ ${cString(binding.name)}, ${String(binding.params.length)}, mal_ffi_function_${binding.name}, nullptr }`,
-		})),
+		...plan.functions.flatMap((binding) =>
+			[binding.name, ...(binding.async === undefined ? [] : [binding.async])].map(
+				(exported) => ({
+					name: exported,
+					entry: `{ ${cString(exported)}, ${String(binding.params.length)}, mal_ffi_function_${exported}, nullptr }`,
+				}),
+			),
+		),
 		...plan.constants.map((constant) => ({
 			name: constant.name,
 			entry: `{ ${cString(constant.name)}, 0, nullptr, mal_ffi_constant_${constant.name} }`,

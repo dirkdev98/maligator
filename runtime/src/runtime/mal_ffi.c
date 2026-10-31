@@ -10,6 +10,11 @@
 
 #include "array_buffer_object.h"
 #include "array_object.h"
+#include "async_context.h"
+#include "blocking_work.h"
+#include "builtin_promise.h"
+#include "host.h"
+#include "web_host_timer.h"
 #include "builtin_data_view.h"
 #include "function_object.h"
 #include "gc.h"
@@ -383,6 +388,8 @@ struct MalFfiState {
     usize invocation_depth;
     usize invocation_capacity;
     u64 last_invocation;
+    /** Whether the runtime cleanup that drops pending async calls is registered. */
+    bool async_cleanup;
     u32 kept_slots;
     u32 *free_slots;
     u32 free_count;
@@ -859,6 +866,173 @@ void mal_ffi_release(void *data) {
         return;
     }
     ffi_release_now(kept);
+}
+
+/** A C call running on a blocking worker, until its completion settles `promise`. */
+typedef struct MalFfiAsync {
+    struct MalFfiAsync *next;
+    MalVm *vm;
+    MalHostHandle operation;
+    MalValue promise;
+    /** Arguments the call uses in place, such as pinned buffers and handles. */
+    MalValue *keep;
+    i32 keep_count;
+    MalFfiAsyncComplete complete;
+    MalAsyncContext *async_context;
+#if MAL_REALMS
+    MalRealm *realm;
+#endif
+} MalFfiAsync;
+
+static MAL_ISOLATE_LOCAL MalFfiAsync *ffi_async_pending;
+static MAL_ISOLATE_LOCAL bool ffi_async_installed;
+
+static void ffi_async_scan_roots(MalVm *vm, void *data) {
+    (void) data;
+    for (MalFfiAsync *call = ffi_async_pending; call != nullptr; call = call->next) {
+        if (call->vm != vm) continue;
+        mal_gc_mark_value(call->promise);
+        for (i32 index = 0; index < call->keep_count; index++) mal_gc_mark_value(call->keep[index]);
+        mal_gc_mark_value(mal_async_internal_value((MalHeapHeader *) call->async_context));
+    }
+}
+
+static void ffi_async_free(MalVm *vm) {
+    MalFfiAsync **link = &ffi_async_pending;
+    while (*link != nullptr) {
+        MalFfiAsync *call = *link;
+        if (call->vm != vm) {
+            link = &call->next;
+            continue;
+        }
+        *link = call->next;
+        free(call->keep);
+        free(call);
+    }
+}
+
+static bool ffi_async_drain(MalVm *vm) {
+    MalHost *host = mal_host(vm);
+    MalHostTask task;
+    if (host == nullptr || !mal_host_peek_task(&host->tasks, &task)) return false;
+    MalFfiAsync **link = &ffi_async_pending;
+    while (*link != nullptr && ((*link)->vm != vm || (*link)->operation != task.operation)) {
+        link = &(*link)->next;
+    }
+    MalFfiAsync *call = *link;
+    if (call == nullptr || !mal_host_next_task(&host->tasks, &task)) return false;
+    *link = call->next;
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_realm_switch(vm, call->realm);
+#endif
+    MalValue roots[3] = {
+        call->promise, mal_value_new_undefined(),
+        mal_async_internal_value((MalHeapHeader *) call->async_context)};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalAsyncContextScope scope;
+    mal_async_context_scope_enter(vm, &scope, call->async_context);
+    void *data = mal_blocking_work_result_data(task.data);
+    bool ran = data != nullptr && task.result != MAL_HOST_TERMINAL_CANCELLED;
+    // The completion releases what the call held, so it runs even when the work did not.
+    if (data != nullptr) roots[1] = call->complete(vm, data, ran);
+    if (!ran && vm->completion.kind != MAL_COMPLETION_THROW) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) "A C library call did not run");
+    }
+    bool rejected = vm->completion.kind == MAL_COMPLETION_THROW;
+    if (rejected) {
+        roots[1] = vm->completion.value;
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    }
+    mal_promise_settle_direct(
+        vm, roots[0], vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], rejected, roots[1]);
+    mal_async_context_scope_exit(vm, &scope);
+    mal_gc_unroot(&root);
+#if MAL_REALMS
+    mal_realm_switch(vm, saved_realm);
+#endif
+    free(call->keep);
+    free(call);
+    mal_host_task_release(&host->tasks, &task);
+    return true;
+}
+
+bool mal_ffi_async(
+    MalVm *vm, void *data, MalFfiAsyncRun run, MalFfiAsyncComplete complete,
+    MalFfiAsyncRelease release, const MalValue *keep, int32_t keep_count, MalValue *promise) {
+    MalHost *host = mal_host(vm);
+    if (host == nullptr) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            (const byte *) "Async C library calls need an event loop, such as the web platform surface");
+        return false;
+    }
+    MalFfiState *state = ffi_state(vm);
+    if (state == nullptr) return mal_ffi_out_of_memory(vm);
+    if (!state->async_cleanup) {
+        if (!mal_vm_register_runtime_cleanup(vm, ffi_async_free)) return mal_ffi_out_of_memory(vm);
+        state->async_cleanup = true;
+    }
+    if (!ffi_async_installed) {
+        mal_gc_register_root_source(ffi_async_scan_roots, nullptr);
+        mal_host_register_macrotask_drain(ffi_async_drain, false);
+        ffi_async_installed = true;
+    }
+    MalValue resolve;
+    MalValue reject;
+    mal_promise_new_direct_capability(vm, promise, &resolve, &reject);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+    MalFfiAsync *call = calloc(1, sizeof(*call));
+    MalValue *kept = keep_count == 0 ? nullptr : malloc(sizeof(*kept) * (usize) keep_count);
+    if (call == nullptr || (keep_count > 0 && kept == nullptr)) {
+        free(call);
+        free(kept);
+        return mal_ffi_out_of_memory(vm);
+    }
+    if (keep_count > 0) memcpy(kept, keep, sizeof(*kept) * (usize) keep_count);
+    *call = (MalFfiAsync) {
+        .vm = vm,
+        .promise = *promise,
+        .keep = kept,
+        .keep_count = keep_count,
+        .complete = complete,
+        .async_context = mal_async_context_capture(vm),
+#if MAL_REALMS
+        .realm = vm->current_realm,
+#endif
+    };
+    MalBlockingWorkReservation reservation = {0};
+    if (!mal_blocking_work_reserve(host, sizeof(*call), &reservation)
+        || !mal_blocking_work_start(host, run, data, release, &reservation, &call->operation)) {
+        mal_blocking_work_reservation_release(&reservation);
+        free(kept);
+        free(call);
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            (const byte *) "A C library call could not be scheduled");
+        return false;
+    }
+    call->next = ffi_async_pending;
+    ffi_async_pending = call;
+    return true;
+}
+
+MalValue mal_ffi_rejected(MalVm *vm) {
+    MalValue roots[2] = {vm->completion.value, mal_value_new_undefined()};
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    MalValue resolve;
+    MalValue reject;
+    mal_promise_new_direct_capability(vm, &roots[1], &resolve, &reject);
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        mal_promise_settle_direct(
+            vm, roots[1], vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], true, roots[0]);
+    }
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : roots[1];
 }
 
 void mal_ffi_collectable_begin(MalVm *vm) {

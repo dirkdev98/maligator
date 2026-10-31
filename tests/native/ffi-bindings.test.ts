@@ -126,6 +126,27 @@ describe("C library bindings", () => {
 		]);
 	}, 600_000);
 
+	it("runs async twins on a worker thread, keeping what they use pinned", () => {
+		writeFileSync(
+			path.join(project, "async.build.ts"),
+			`export default ${JSON.stringify({
+				entry: "async.ts",
+				surface: { webPlatform: true },
+				ffi: { shapes: { contract: "shapes.ffi.ts" } },
+			})};\n`,
+		);
+		const executed = cli(project, ["run", "--config", "async.build.ts"]);
+		expect(outputLines(executed.stdout)).toEqual([
+			"async checksum 256",
+			"async describe (1.5, -2)",
+			'async parse {"result":0,"point":{"x":3,"y":4}}',
+			'async add {"x":4,"y":6}',
+			"async title Async null",
+			"async hold 26 TypeError,TypeError,TypeError 4",
+			"async rejected shapes_checksum_async: data expects an ArrayBuffer or a view",
+		]);
+	}, 600_000);
+
 	it("runs tests that import the library", () => {
 		const executed = cli(project, ["test", "shapes.test.ts"]);
 		expect(executed.stdout).toContain("2 passed");

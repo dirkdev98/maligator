@@ -120,6 +120,8 @@ void shapes_canvas_resize(ShapesCanvas *canvas, int width, int height);  // Call
 // Keep hook for the canvas until the next call; returns the data it replaces.
 void *shapes_canvas_on_draw(ShapesCanvas *canvas, int (*hook)(void *data, int frame), void *data);
 int shapes_canvas_draw(ShapesCanvas *canvas, int frame);  // The hook's result, or -1
+// Sleep for milliseconds while using the canvas and bytes; returns the sum of the bytes.
+int shapes_hold(ShapesCanvas *canvas, const void *data, size_t size, int milliseconds);
 
 typedef struct ShapesCall ShapesCall;
 void *shapes_call_data(ShapesCall *call);  // The data its function was registered with

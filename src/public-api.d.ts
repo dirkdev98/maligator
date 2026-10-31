@@ -166,6 +166,12 @@ export interface MaligatorFfiFunctionFacts {
 	 * name each is exported as. The function's own facts apply to every variant.
 	 */
 	variants?: Record<string, MaligatorFfiVariant>;
+	/**
+	 * Also export the function under this name as one that runs the C call on a worker
+	 * thread and returns a promise of its result. Only for functions the library allows
+	 * on any thread while other calls run.
+	 */
+	async?: string;
 }
 
 /** One way to call a variadic function: the C types of the arguments after the fixed ones. */

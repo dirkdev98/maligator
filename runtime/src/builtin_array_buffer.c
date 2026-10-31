@@ -396,6 +396,11 @@ static MalValue mal_builtin_array_buffer_resize(MalVm *vm, MalValue this_value, 
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot resize a detached ArrayBuffer");
         return mal_value_new_undefined();
     }
+    // Resizing may move or free the bytes a C function is reading or writing.
+    if (mal_array_buffer_object_is_pinned(buffer)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot resize an ArrayBuffer a C function is using");
+        return mal_value_new_undefined();
+    }
     if (!mal_array_buffer_object_resize(buffer, new_length)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Resize length exceeds maxByteLength");
         return mal_value_new_undefined();

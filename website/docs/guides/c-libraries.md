@@ -222,6 +222,20 @@ functions: {
 
 `TraceLogText(LOG_INFO, "loaded %s", name)` then calls `TraceLog` with a string as its third argument. The C compiler applies the usual argument promotions. A variant's `params` adds facts for its arguments, keyed by `arg<position>` or by position. The variadic function itself is not exported. The function reads the arguments by the types its other arguments announce, such as a format string, so a mismatch is undefined behavior in C. Pass fixed formats from a wrapper rather than text a user controls.
 
+## Run blocking calls on a worker
+
+`async` exports a function a second time, under a new name, as one that runs the C call on a worker thread and returns a promise of its result. A slow call, such as a database query or an image decode, then leaves the event loop free:
+
+```typescript native/sqlite.ffi.ts
+functions: {
+	sqlite3_step: { async: "sqlite3_step_async" },
+},
+```
+
+The arguments convert before the call starts, and a conversion error rejects the promise. Buffers and handles the call uses stay pinned until the promise settles: transferring or resizing such a buffer, or closing such a handle, throws. JavaScript can still write the buffer's bytes in the meantime, so leave them alone until then. An async export takes no callbacks or arrays, and the program needs an event loop, such as the web platform surface.
+
+Use `async` only for functions the library allows on another thread while the program makes other calls, such as SQLite in its default serialized mode.
+
 ## Find what cannot bind
 
 ```shell

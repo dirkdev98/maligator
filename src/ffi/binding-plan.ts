@@ -135,6 +135,8 @@ export interface BoundFunction {
 	readonly outputs: ReadonlyArray<MappedOutput>;
 	/** The parameter whose handle this destroy function releases, closed after the call. */
 	readonly closes?: number;
+	/** An export that runs the C call on a worker thread and returns a promise. */
+	readonly async?: string;
 }
 
 /** A missing fact: where in the declaration it is needed and why. */
@@ -1269,8 +1271,28 @@ export function planBindings(
 			factMap.get(declaration.name) ?? { params: [], returns: NO_FACTS },
 			closers.get(declaration.name),
 		);
+		const asyncName = facts.functions[declaration.name]?.async;
+		if (asyncName !== undefined) {
+			const at = `functions.${declaration.name}.async`;
+			if (declared.has(asyncName)) {
+				throw new FfiError(`${at}: '${asyncName}' is already a function`);
+			}
+			declared.add(asyncName);
+			if (!("gaps" in result) && result.closes !== undefined) {
+				throw new FfiError(`${at}: an async call cannot close a handle`);
+			}
+			if (
+				!("gaps" in result) &&
+				result.params.some(({ value }) =>
+					["callback", "sequence", "array"].includes(value.kind),
+				)
+			) {
+				throw new FfiError(`${at}: an async call takes no callbacks or arrays`);
+			}
+		}
 		if ("gaps" in result) unbound.push(result);
-		else functions.push(result);
+		else
+			functions.push(asyncName === undefined ? result : { ...result, async: asyncName });
 	}
 	const handles = new Map<string, HandleType>();
 	for (const [name, handle] of handleMap) {

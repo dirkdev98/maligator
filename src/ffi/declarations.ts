@@ -63,6 +63,12 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string> {
 			...docComment(binding.declaration.doc, "\t"),
 			`\texport function ${binding.name}(${formatTsParameters(binding)}): ${formatTsResult(binding)};`,
 		);
+		if (binding.async !== undefined) {
+			lines.push(
+				...docComment(`Run ${binding.name} on a worker thread.`, "\t"),
+				`\texport function ${binding.async}(${formatTsParameters(binding)}): Promise<${formatTsResult(binding)}>;`,
+			);
+		}
 	}
 	for (const constant of plan.constants) {
 		lines.push(

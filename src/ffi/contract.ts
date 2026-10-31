@@ -274,8 +274,16 @@ function validateParamFacts(value: unknown, at: string): void {
 
 function validateFunctionFacts(value: unknown, at: string): void {
 	expectObject(value, at);
-	expectKeys(value, at, ["params", "returns", "variants"]);
+	expectKeys(value, at, ["params", "returns", "variants", "async"]);
 	if (value.params !== undefined) validateParamFacts(value.params, `${at}.params`);
+	if (value.async !== undefined) {
+		expect(
+			typeof value.async === "string" && C_NAME.test(value.async),
+			`${at}.async`,
+			"a function name",
+		);
+		expect(value.variants === undefined, `${at}.async`, "absent beside variants");
+	}
 	if (value.returns !== undefined) validateValueFacts(value.returns, `${at}.returns`);
 	if (value.variants !== undefined) {
 		expectObject(value.variants, `${at}.variants`);

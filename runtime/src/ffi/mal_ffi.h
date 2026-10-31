@@ -383,6 +383,23 @@ MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key);
 void mal_ffi_collectable_begin(MalVm *vm);
 void mal_ffi_collectable_end(MalVm *vm);
 
+typedef void (*MalFfiAsyncRun)(void *data);
+typedef MalValue (*MalFfiAsyncComplete)(MalVm *vm, void *data, bool ran);
+typedef void (*MalFfiAsyncRelease)(void *data);
+
+/**
+ * Run `run(data)` on a blocking worker thread, then `complete(vm, data, ran)` on the
+ * VM thread: its value fulfills `*promise`, its throw rejects it. `ran` is false when
+ * the work was cancelled; complete still releases what the call held. `release(data)`
+ * frees the data afterwards, also when the call never completes. `keep` values stay
+ * reachable until completion. False with a pending throw, leaving `data` to the caller.
+ */
+bool mal_ffi_async(
+    MalVm *vm, void *data, MalFfiAsyncRun run, MalFfiAsyncComplete complete,
+    MalFfiAsyncRelease release, const MalValue *keep, int32_t keep_count, MalValue *promise);
+/** A promise rejected with the pending throw, which this clears. */
+MalValue mal_ffi_rejected(MalVm *vm);
+
 /** Check that a callback argument is callable; null passes for a nullable site. */
 bool mal_ffi_to_function(MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site);
 /**

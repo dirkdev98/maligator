@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 struct ShapesCanvas {
 	char title[64];
@@ -289,6 +290,14 @@ void *shapes_canvas_on_draw(ShapesCanvas *canvas, int (*hook)(void *data, int fr
 
 int shapes_canvas_draw(ShapesCanvas *canvas, int frame) {
 	return canvas->on_draw == NULL ? -1 : canvas->on_draw(canvas->draw_data, frame);
+}
+
+int shapes_hold(ShapesCanvas *canvas, const void *data, size_t size, int milliseconds) {
+	struct timespec delay = {milliseconds / 1000, (long)(milliseconds % 1000) * 1000000L};
+	nanosleep(&delay, NULL);
+	int sum = canvas->title[0] == '\0' ? -1 : 0;
+	for (size_t index = 0; index < size; index++) sum += ((const unsigned char *)data)[index];
+	return sum;
 }
 
 struct ShapesCall {

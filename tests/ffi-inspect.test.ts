@@ -430,12 +430,16 @@ describe("ffi contract facts", () => {
 					suggestedKinds.has(kind) ||
 					(kind === "nullable" && facts.callback?.replaced === true),
 			);
-		const stated = Object.entries(contract.functions).filter(
-			([, facts]) =>
-				facts.variants === undefined &&
-				Object.values(facts.params ?? {}).every(suggestible) &&
-				suggestible(facts.returns ?? {}),
-		);
+		// `async` chooses an extra export rather than describing the declaration.
+		const stated = Object.entries(contract.functions)
+			.map(([name, { async: _async, ...facts }]) => [name, facts] as const)
+			.filter(
+				([, facts]) =>
+					Object.keys(facts).length > 0 &&
+					facts.variants === undefined &&
+					Object.values(facts.params ?? {}).every(suggestible) &&
+					suggestible(facts.returns ?? {}),
+			);
 
 		expect(suggestions.functions).toEqual(Object.fromEntries(stated));
 		expect(
