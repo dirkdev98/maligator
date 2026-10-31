@@ -378,6 +378,15 @@ function suggestFunction(
 					: [],
 			);
 			const receivesData = target.params.some((param) => isVoidPointer(model, param));
+			// A `void (*)(void *)` after the data it takes destroys that data, as
+			// `sqlite3_bind_blob`'s does; a callback comes before its user data.
+			const destructor =
+				target.params.length === 1 &&
+				receivesData &&
+				resolveCType(model, target.returns).kind === "void" &&
+				data.length === 1 &&
+				data[0]! < index;
+			if (destructor) continue;
 			const lookup =
 				data.length === 1 && !receivesData ? lookupFunction(model, target) : undefined;
 			const routed = data.length === 1 && (receivesData || lookup !== undefined);
