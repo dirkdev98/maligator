@@ -61,6 +61,13 @@ function directResult(binding: BoundFunction): FfiDirectResult | undefined {
 	}
 }
 
+/** Values held directly in a MalValue, with no heap cell behind them. */
+const IMMEDIATE_KINDS: ReadonlySet<JsValue["kind"]> = new Set([
+	"boolean",
+	"integer",
+	"float",
+]);
+
 /** Inputs whose conversion cannot run JavaScript, so their values need no roots. */
 const SCALAR_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
 	"boolean",
@@ -184,6 +191,8 @@ class BindingWriter {
 		site: string,
 		fail: string,
 		strings: Array<string>,
+		/** Whether `source` is already rooted, as arguments and record fields are. */
+		rooted: boolean,
 	): Array<string> {
 		const cast = (expression: string) =>
 			`(${localDeclaration(type, "")}) (${expression})`;
@@ -240,6 +249,11 @@ class BindingWriter {
 				];
 			}
 			case "record": {
+				if (rooted) {
+					return [
+						`if (!mal_ffi_in_${value.name}(vm, ${source}, ${site}, &${target})) ${fail}`,
+					];
+				}
 				// A getter may return a fresh object that only this frame references.
 				const held = this.#fresh("held");
 				const roots = this.#fresh("roots");
@@ -271,6 +285,7 @@ class BindingWriter {
 						site,
 						fail,
 						strings,
+						false,
 					).map((line) => `\t${line}`),
 					"}",
 				];
@@ -335,7 +350,7 @@ class BindingWriter {
 		if (value.kind !== "array") {
 			return [
 				`${target} = ${this.write(value, expression)};`,
-				"if (mal_ffi_threw(vm)) goto mal_done;",
+				...(this.#allocates(value) ? ["if (mal_ffi_threw(vm)) goto mal_done;"] : []),
 			];
 		}
 		const element = this.#fresh("element");
@@ -398,12 +413,20 @@ class BindingWriter {
 		for (const name of inputs) {
 			const record = this.#record(name);
 			const count = String(record.fields.length);
+			// Immediate field values hold no heap reference a later getter's collection could free.
+			const rootFields = record.fields.some(
+				(field) => !IMMEDIATE_KINDS.has(field.value.kind),
+			);
 			lines.push(
 				"",
 				`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out) {`,
 				`\tMalValue mal_fields[${count}] = {};`,
-				"\tMalFfiRoots mal_roots;",
-				`\tmal_ffi_root(&mal_roots, mal_fields, ${count});`,
+				...(rootFields
+					? [
+							"\tMalFfiRoots mal_roots;",
+							`\tmal_ffi_root(&mal_roots, mal_fields, ${count});`,
+						]
+					: []),
 				`\tbool mal_ok = mal_ffi_record_fields(vm, mal_value, &mal_ffi_record_${name}, mal_site, mal_fields);`,
 				"\tif (!mal_ok) goto mal_done;",
 				"\tMalFfiSite mal_field_site = *mal_site;",
@@ -419,10 +442,16 @@ class BindingWriter {
 						"&mal_field_site",
 						"{ mal_ok = false; goto mal_done; }",
 						[],
+						true,
 					).map((line) => `\t${line}`),
 				);
 			});
-			lines.push("mal_done:", "\tmal_ffi_unroot(&mal_roots);", "\treturn mal_ok;", "}");
+			lines.push(
+				"mal_done:",
+				...(rootFields ? ["\tmal_ffi_unroot(&mal_roots);"] : []),
+				"\treturn mal_ok;",
+				"}",
+			);
 		}
 		for (const name of outputs) {
 			const record = this.#record(name);
@@ -626,6 +655,7 @@ class BindingWriter {
 						"&mal_site",
 						"goto mal_done;",
 						[],
+						false,
 					).map((line) => `\t${line}`)
 				: ["\t(void) mal_result;"]),
 			"mal_done:",
@@ -730,6 +760,7 @@ class BindingWriter {
 								`&mal_site_${String(entry.param)}`,
 								"goto mal_done;",
 								strings,
+								true,
 							),
 						);
 					}
@@ -838,6 +869,7 @@ class BindingWriter {
 										site,
 										"goto mal_done;",
 										strings,
+										false,
 									).map((line) => `\t${line}`)),
 							"}",
 							`${local} = (${localDeclaration(param.type, "")}) ${elements};`,
@@ -854,6 +886,7 @@ class BindingWriter {
 							site,
 							"goto mal_done;",
 							strings,
+							true,
 						),
 					);
 					return;

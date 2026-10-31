@@ -51,6 +51,24 @@ import {
 const box = { min: { x: 0, y: 0 }, max: { x: 4, y: 3 } };
 console.log(`add ${JSON.stringify(shapes_add({ x: 1, y: 2 }, { x: 3, y: 4.5 }))}`);
 console.log(`area ${shapes_area(box)}`);
+// Getters that allocate let a collection run between field reads.
+const lazy = {
+	get x() {
+		return [1, 2, 3].length;
+	},
+	get y() {
+		return { value: 2 }.value;
+	},
+};
+const lazyBox = {
+	get min() {
+		return { x: 0, y: 0 };
+	},
+	max: { x: 2, y: 3 },
+};
+console.log(
+	`getters ${JSON.stringify(shapes_add(lazy, { x: 1, y: 1 }))} ${shapes_area(lazyBox)}`,
+);
 const origin = { x: 0, y: 0 };
 console.log(
 	`other shapes ${JSON.stringify([
