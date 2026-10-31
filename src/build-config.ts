@@ -5,16 +5,28 @@ export type { ResolvedBuildConfig } from "./build-config-values.ts";
 import { hash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
-import type { ESTree } from "meriyah";
 import { BuildConfigError } from "./build-config-error.ts";
 import { INTL_SERVICE_FEATURES, normalizeNativeFeatures } from "./build-flags.ts";
 import type { NativeFeatureSpec } from "./build-flags.ts";
-import { defineBuild as defineBuildIdentity } from "./build.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
-import { parseModule } from "./compiler/frontend/parser.ts";
+import type { BuildConfigTypeStripper, Leaf, ObjectSchema } from "./definition-module.ts";
+import {
+	SchemaViolation,
+	booleanLeaf,
+	evaluateDefinitionModule,
+	expect,
+	expectKeys,
+	expectObject,
+	stringArrayLeaf,
+	stringLeaf,
+	stringRecordLeaf,
+	validateDefinition,
+} from "./definition-module.ts";
+import { ffiLibrariesLeaf } from "./ffi/contract.ts";
 import type { MaligatorBuildConfig } from "./public-api.d.ts";
 
 export type { AssetInclusion, MaligatorBuildConfig } from "./public-api.d.ts";
+export type { BuildConfigTypeStripper } from "./definition-module.ts";
 export { BuildConfigError } from "./build-config-error.ts";
 export {
 	assertEvalPolicy,
@@ -65,29 +77,6 @@ export function intlDisabledDefines(config: ResolvedBuildConfig): Array<string> 
 		.map(([, service]) => `-D${service.define}=0`);
 }
 
-/**
- * A schema node: the allowed keys at this level and, per key, either a leaf value
- * validator or a nested object schema. Any key not listed is a hard error — the
- * whole point of the config is to be small and understandable, so a typo should
- * fail loudly rather than be silently ignored.
- */
-type Leaf = { leaf: (value: unknown, at: string) => void };
-type ObjectSchema = { object: Record<string, Leaf | ObjectSchema> };
-type SchemaNode = Leaf | ObjectSchema;
-
-function isObjectSchema(node: SchemaNode): node is ObjectSchema {
-	return "object" in node;
-}
-
-function expect(condition: boolean, at: string, expected: string): void {
-	if (!condition) {
-		throw new BuildConfigError(`maligator.build.ts: '${at}' must be ${expected}`);
-	}
-}
-
-const booleanLeaf: Leaf = {
-	leaf: (value, at) => expect(typeof value === "boolean", at, "a boolean"),
-};
 const evalLeaf: Leaf = {
 	leaf: (value, at) =>
 		expect(
@@ -100,75 +89,35 @@ const primordialsLeaf: Leaf = {
 	leaf: (value, at) =>
 		expect(value === "locked" || value === "mutable", at, `"locked" or "mutable"`),
 };
-const stringLeaf: Leaf = {
-	leaf: (value, at) => expect(typeof value === "string", at, "a string"),
-};
-const stringArrayLeaf: Leaf = {
-	leaf: (value, at) =>
-		expect(
-			Array.isArray(value) && value.every((item) => typeof item === "string"),
-			at,
-			"an array of strings",
-		),
-};
-const stringRecordLeaf: Leaf = {
-	leaf: (value, at) =>
-		expect(
-			typeof value === "object" &&
-				value !== null &&
-				!Array.isArray(value) &&
-				Object.entries(value).every(
-					([key, entry]) =>
-						key.length > 0 && typeof entry === "string" && entry.length > 0,
-				),
-			at,
-			"a record of non-empty string replacements",
-		),
-};
 const assetsLeaf: Leaf = {
 	leaf: (value, at) => {
-		expect(
-			typeof value === "object" && value !== null && !Array.isArray(value),
-			at,
-			"an object",
-		);
-		for (const [name, entry] of Object.entries(value as Record<string, unknown>)) {
+		expectObject(value, at);
+		for (const [name, entry] of Object.entries(value)) {
 			const entryAt = `${at}.${name}`;
 			expect(name.length > 0 && !name.includes("\0"), entryAt, "a non-empty asset name");
+			expectObject(entry, entryAt);
+			expectKeys(entry, entryAt, ["type", "path", "include"]);
 			expect(
-				typeof entry === "object" && entry !== null && !Array.isArray(entry),
-				entryAt,
-				"an object",
-			);
-			const object = entry as Record<string, unknown>;
-			for (const key of Object.keys(object)) {
-				if (key !== "type" && key !== "path" && key !== "include") {
-					throw new BuildConfigError(
-						`maligator.build.ts: unknown key '${entryAt}.${key}' (allowed: type, path, include)`,
-					);
-				}
-			}
-			expect(
-				object.type === "file" || object.type === "directory",
+				entry.type === "file" || entry.type === "directory",
 				`${entryAt}.type`,
 				`"file" or "directory"`,
 			);
 			expect(
-				typeof object.path === "string" && object.path.length > 0,
+				typeof entry.path === "string" && entry.path.length > 0,
 				`${entryAt}.path`,
 				"a non-empty string",
 			);
-			if (object.type === "directory") {
+			if (entry.type === "directory") {
 				expect(
-					Array.isArray(object.include) &&
-						object.include.length > 0 &&
-						object.include.every((item) => typeof item === "string"),
+					Array.isArray(entry.include) &&
+						entry.include.length > 0 &&
+						entry.include.every((item) => typeof item === "string"),
 					`${entryAt}.include`,
 					"a non-empty array of strings",
 				);
-			} else if (object.include !== undefined) {
-				throw new BuildConfigError(
-					`maligator.build.ts: '${entryAt}.include' is only valid for directory assets`,
+			} else if (entry.include !== undefined) {
+				throw new SchemaViolation(
+					`'${entryAt}.include' is only valid for directory assets`,
 				);
 			}
 		}
@@ -200,260 +149,11 @@ const CONFIG_SCHEMA: ObjectSchema = {
 		surface: {
 			object: { webPlatform: booleanLeaf, node: booleanLeaf, maligator: booleanLeaf },
 		},
+		ffi: ffiLibrariesLeaf,
 	},
 };
 
-/** Validate `value` against `schema`, rejecting unknown keys and wrong types. */
-function validate(value: unknown, schema: SchemaNode, at: string): void {
-	if (isObjectSchema(schema)) {
-		expect(
-			typeof value === "object" && value !== null && !Array.isArray(value),
-			at,
-			"an object",
-		);
-		for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-			const childSchema = schema.object[key];
-			if (!childSchema) {
-				const allowed = Object.keys(schema.object).join(", ");
-				throw new BuildConfigError(
-					`maligator.build.ts: unknown key '${at === "" ? key : `${at}.${key}`}' (allowed: ${allowed})`,
-				);
-			}
-			validate(child, childSchema, at === "" ? key : `${at}.${key}`);
-		}
-	} else {
-		schema.leaf(value, at);
-	}
-}
-
 const DEFAULT_CONFIG_NAME = "maligator.build.ts";
-
-export type BuildConfigTypeStripper = (source: string, filePath: string) => string;
-
-function sourceOffset(
-	source: string,
-	location: { line: number; column: number },
-): number {
-	let line = 1;
-	let offset = 0;
-	while (line < location.line) {
-		const newline = source.indexOf("\n", offset);
-		if (newline < 0) {
-			return source.length;
-		}
-		offset = newline + 1;
-		line++;
-	}
-	return offset + location.column;
-}
-
-function overwritePreservingLines(
-	output: Array<string>,
-	start: number,
-	end: number,
-	replacement = "",
-): void {
-	let replacementIndex = 0;
-	for (let index = start; index < end; index++) {
-		if (output[index] === "\n" || output[index] === "\r") {
-			continue;
-		}
-		output[index] = replacement[replacementIndex++] ?? " ";
-	}
-	if (replacementIndex < replacement.length) {
-		throw new BuildConfigError("maligator.build.ts: unsupported default export layout");
-	}
-}
-
-function configStatementRange(
-	source: string,
-	statement: ESTree.Node,
-): { start: number; end: number } {
-	if (statement.loc === undefined || statement.loc === null) {
-		throw new BuildConfigError("maligator.build.ts: parser omitted source locations");
-	}
-	return {
-		start: sourceOffset(source, statement.loc.start),
-		end: sourceOffset(source, statement.loc.end),
-	};
-}
-
-/**
- * The value of a configuration expression built only from literals, or undefined
- * when evaluating it could run code or depend on bindings.
- */
-function configData(node: ESTree.Node): { value: unknown } | undefined {
-	switch (node.type) {
-		case "Literal":
-			return node.value === null ||
-				typeof node.value === "string" ||
-				typeof node.value === "number" ||
-				typeof node.value === "boolean"
-				? { value: node.value }
-				: undefined;
-		case "TemplateLiteral":
-			return node.expressions.length === 0 && node.quasis[0]?.value.cooked !== undefined
-				? { value: node.quasis[0].value.cooked }
-				: undefined;
-		case "UnaryExpression":
-			return node.operator === "-" &&
-				node.argument.type === "Literal" &&
-				typeof node.argument.value === "number"
-				? { value: -node.argument.value }
-				: undefined;
-		case "ArrayExpression": {
-			const value: Array<unknown> = [];
-			for (const element of node.elements) {
-				const item = element === null ? undefined : configData(element);
-				if (item === undefined) return undefined;
-				value.push(item.value);
-			}
-			return { value };
-		}
-		case "ObjectExpression": {
-			const value: Record<string, unknown> = {};
-			for (const property of node.properties) {
-				if (
-					property.type !== "Property" ||
-					property.kind !== "init" ||
-					property.computed ||
-					property.method ||
-					property.shorthand
-				)
-					return undefined;
-				const key =
-					property.key.type === "Identifier"
-						? property.key.name
-						: property.key.type === "Literal" &&
-							  (typeof property.key.value === "string" ||
-									typeof property.key.value === "number")
-							? String(property.key.value)
-							: undefined;
-				// `__proto__: value` sets the prototype rather than defining a property.
-				if (key === undefined || key === "__proto__") return undefined;
-				const item = configData(property.value);
-				if (item === undefined) return undefined;
-				value[key] = item.value;
-			}
-			return { value };
-		}
-		case "CallExpression": {
-			// meriyah types CallExpression.callee as `any`.
-			const callee = node.callee as ESTree.Node;
-			return callee.type === "Identifier" &&
-				callee.name === "defineBuild" &&
-				node.arguments.length === 1 &&
-				node.arguments[0]!.type !== "SpreadElement"
-				? configData(node.arguments[0]!)
-				: undefined;
-		}
-		default:
-			return undefined;
-	}
-}
-
-function evaluateBuildConfig(
-	source: string,
-	configPath: string,
-	stripTypes: BuildConfigTypeStripper,
-): unknown {
-	let stripped: string;
-	let ast: ESTree.Program;
-	try {
-		stripped = stripTypes(source, configPath);
-		ast = parseModule(stripped).ast;
-	} catch (error) {
-		throw new BuildConfigError(
-			`maligator.build.ts: cannot parse ${configPath}: ${(error as Error).message}`,
-		);
-	}
-
-	if (stripped.includes("$cfg")) {
-		throw new BuildConfigError(
-			"maligator.build.ts: '$cfg' is reserved by the configuration loader",
-		);
-	}
-
-	const output = stripped.split("");
-	let defaultExport: ESTree.ExportDefaultDeclaration | undefined;
-	for (const statement of ast.body) {
-		if (statement.type === "ImportDeclaration") {
-			const validImport =
-				(statement.source.value === "@maligator/cli" ||
-					statement.source.value === "maligator") &&
-				statement.specifiers.length === 1 &&
-				statement.specifiers[0]?.type === "ImportSpecifier" &&
-				statement.specifiers[0].imported.type === "Identifier" &&
-				statement.specifiers[0].imported.name === "defineBuild" &&
-				statement.specifiers[0].local.name === "defineBuild";
-			if (!validImport) {
-				throw new BuildConfigError(
-					'maligator.build.ts: only `import { defineBuild } from "@maligator/cli"` is supported',
-				);
-			}
-			const range = configStatementRange(stripped, statement);
-			overwritePreservingLines(output, range.start, range.end);
-			continue;
-		}
-		if (statement.type === "ExportDefaultDeclaration") {
-			if (defaultExport !== undefined) {
-				throw new BuildConfigError("maligator.build.ts: multiple default exports");
-			}
-			if (
-				statement.declaration.type === "FunctionDeclaration" ||
-				statement.declaration.type === "ClassDeclaration"
-			) {
-				throw new BuildConfigError(
-					"maligator.build.ts: the default export must be a configuration value",
-				);
-			}
-			defaultExport = statement;
-			const statementRange = configStatementRange(stripped, statement);
-			const declarationRange = configStatementRange(stripped, statement.declaration);
-			overwritePreservingLines(
-				output,
-				statementRange.start,
-				declarationRange.start,
-				"$cfg=",
-			);
-			continue;
-		}
-		if (statement.type.startsWith("Export")) {
-			throw new BuildConfigError(
-				"maligator.build.ts: only a default configuration export is supported",
-			);
-		}
-	}
-
-	if (defaultExport === undefined) {
-		throw new BuildConfigError("maligator.build.ts: missing default export");
-	}
-	// Starting the CLI's eval compiler dominates a command whose config is plain data.
-	if (
-		ast.body.every(
-			(statement) =>
-				statement.type === "ImportDeclaration" || statement === defaultExport,
-		)
-	) {
-		const data = configData(defaultExport.declaration);
-		if (data !== undefined) return data.value;
-	}
-
-	let $cfg: unknown;
-	const defineBuild = defineBuildIdentity;
-	void defineBuild;
-	try {
-		// Direct eval gives trusted project configuration ordinary JS control flow and
-		// access to the CLI's host globals without a compile/link subprocess.
-		eval(`${output.join("")}\n//# sourceURL=${configPath}`);
-	} catch (error) {
-		const detail = (error as Error).stack ?? (error as Error).message;
-		throw new BuildConfigError(
-			`maligator.build.ts: evaluation failed in ${configPath}:\n${detail}`,
-		);
-	}
-	return $cfg;
-}
 
 /**
  * Load and resolve the build config. With `configPath`, that file must exist;
@@ -484,12 +184,13 @@ export function loadBuildConfig(
 		return resolveBuildConfig({});
 	}
 
-	const parsed = evaluateBuildConfig(
+	const parsed = evaluateDefinitionModule(
 		readFileSync(resolvedPath, "utf-8"),
 		resolvedPath,
+		{ label: DEFAULT_CONFIG_NAME, helper: "defineBuild", noun: "configuration" },
 		stripTypes,
 	);
-	validate(parsed, CONFIG_SCHEMA, "");
+	validateDefinition(parsed, CONFIG_SCHEMA, DEFAULT_CONFIG_NAME);
 	const config = resolveBuildConfig(parsed as MaligatorBuildConfig);
 
 	// Reject unknown engine.intl.features service names (typo protection).

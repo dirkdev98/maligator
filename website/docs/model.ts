@@ -324,8 +324,12 @@ function publicReference(
 	const buildNames = new Set([
 		"MaligatorIntlFeature",
 		"AssetInclusion",
+		"MaligatorFfiFind",
+		"MaligatorFfiLibrary",
+		"MaligatorLibraryContract",
 		"MaligatorBuildConfig",
 		"defineBuild",
+		"defineLibrary",
 	]);
 	let markdown = readFileSync(`website/docs/api/${kind}.md`, "utf8");
 	for (const node of source.statements) {

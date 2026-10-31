@@ -165,6 +165,43 @@ describe("loadBuildConfig", () => {
 		);
 	});
 
+	it("accepts C libraries with discovery overrides", () => {
+		const dir = tmpdir();
+		const ffi = {
+			raylib: {
+				contract: "native/raylib.ffi.ts",
+				find: { pkgConfig: "raylib", frameworks: ["Cocoa"] },
+				link: "shared",
+			},
+		};
+		writeConfig(dir, JSON.stringify({ ffi }));
+		expect(loadBuildConfig(undefined, dir).ffi).toEqual(ffi);
+	});
+
+	it("rejects C library names, discovery, and link modes it cannot use", () => {
+		const dir = tmpdir();
+		const rejects = (ffi: unknown, message: RegExp): void => {
+			writeConfig(dir, JSON.stringify({ ffi }));
+			expect(() => loadBuildConfig(undefined, dir)).toThrow(message);
+		};
+		rejects(
+			{ "ray-lib": { contract: "a.ts" } },
+			/'ffi\.ray-lib' must be named by lowercase/,
+		);
+		rejects(
+			{ raylib: { contract: "a.ts", find: {} } },
+			/'ffi\.raylib\.find' must name pkgConfig/,
+		);
+		rejects(
+			{ raylib: { contract: "a.ts", find: { pkgConfig: "raylib", static: true } } },
+			/unknown key 'ffi\.raylib\.find\.static'/,
+		);
+		rejects(
+			{ raylib: { contract: "a.ts", link: "dynamic" } },
+			/'ffi\.raylib\.link' must be "static" or "shared"/,
+		);
+	});
+
 	it("requires the Maligator surface when assets are configured", () => {
 		expect(() =>
 			resolveBuildConfig({

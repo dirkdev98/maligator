@@ -53,6 +53,7 @@ import type {
 	BuildCommand,
 	CacheCommand,
 	DevCommand,
+	FfiCommand,
 	RunCommand,
 	TestCommand,
 } from "./cli.ts";
@@ -78,6 +79,9 @@ import {
 	developmentFragmentUnits,
 } from "./development-fragments.ts";
 import { createDevelopmentSession } from "./development-session.ts";
+import { FfiError } from "./ffi/ffi-error.ts";
+import { formatInspection, inspectBindings } from "./ffi/inspect.ts";
+import { prepareLibrary } from "./ffi/library.ts";
 import {
 	cacheFrontendWire,
 	frontendDependencyUnchanged,
@@ -2229,6 +2233,10 @@ export async function runCli(
 			runCacheCommand(command);
 			return;
 		}
+		if (command.kind === "ffi") {
+			runFfiCommand(command, context);
+			return;
+		}
 		if (command.kind === "build") {
 			if (!command.production && context.compiler !== undefined) {
 				await context.compiler.prepare(command);
@@ -2316,6 +2324,48 @@ export async function runCli(
 		}
 		if (exitSignal !== undefined) process.kill(process.pid, exitSignal);
 		if (exitCode !== undefined) process.exit(exitCode);
+	}
+}
+
+function runFfiCommand(command: FfiCommand, context: CommandContext): void {
+	const projectRoot = process.cwd();
+	try {
+		const config = loadBuildConfig(command.configPath, projectRoot, context.stripTypes);
+		const report = inspectToolchain({
+			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
+			target: command.target,
+			needsCxx: false,
+		});
+		const compiler = report.tools.cc;
+		if (compiler === undefined) {
+			commandError(formatToolchainReport(report, report.platform ?? process.platform));
+		}
+		const prepared = prepareLibrary(config, command.library, {
+			projectRoot,
+			stripTypes: context.stripTypes,
+			compiler,
+			environment: { ...process.env, ...report.toolchain?.environmentOverrides },
+			platform: report.platform ?? process.platform,
+			cross: report.cross === true,
+		});
+		const inspection = inspectBindings(
+			prepared.contract,
+			projectRoot,
+			prepared.library,
+			compiler,
+			prepared.model,
+			prepared.plan,
+		);
+		log.info(
+			command.json
+				? JSON.stringify(inspection, null, "\t")
+				: formatInspection(inspection),
+		);
+	} catch (error) {
+		if (error instanceof BuildConfigError || error instanceof FfiError) {
+			commandError(`error: ${error.message}`);
+		}
+		throw error;
 	}
 }
 

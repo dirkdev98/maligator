@@ -52,6 +52,23 @@ function tmpdir(): string {
 }
 
 describe("parseCliArgs", () => {
+	it("parses ffi inspect and rejects incomplete invocations", () => {
+		expect(
+			parseCliArgs(["ffi", "inspect", "raylib", "--json", "--config", "c.ts"]),
+		).toEqual({
+			kind: "ffi",
+			action: "inspect",
+			library: "raylib",
+			json: true,
+			configPath: "c.ts",
+		});
+		expect(() => parseCliArgs(["ffi", "inspect"])).toThrow("requires a library name");
+		expect(() => parseCliArgs(["ffi", "list"])).toThrow("ffi requires 'inspect'");
+		expect(() => parseCliArgs(["ffi", "inspect", "a", "b"])).toThrow(
+			"unexpected argument 'b'",
+		);
+	});
+
 	it("streams dev status and requires explicit test isolation for parallel execution", () => {
 		expect(parseCliArgs(["dev", "--status"])).toMatchObject({
 			kind: "dev",

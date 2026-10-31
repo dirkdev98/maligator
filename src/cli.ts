@@ -74,12 +74,22 @@ export interface CacheCommand {
 	minAgeMs?: number;
 }
 
+export interface FfiCommand {
+	kind: "ffi";
+	action: "inspect";
+	library: string;
+	json: boolean;
+	configPath?: string;
+	target?: string;
+}
+
 export type CliCommand =
 	| { kind: "help" }
 	| { kind: "version" }
 	| { kind: "init" }
 	| { kind: "doctor"; verbose: boolean; target?: string }
 	| CacheCommand
+	| FfiCommand
 	| BuildCommand
 	| RunCommand
 	| DevCommand
@@ -100,6 +110,7 @@ Commands:
   cache status                 Show Maligator-owned cache usage
   cache prune                  Remove stale rebuildable cache entries
   cache clear --all            Remove every rebuildable cache entry
+  ffi inspect <library>        Show a C library's bindings and the facts they need
   build [entry]                Compile an application
   run [entry] [-- args...]     Compile and run an application
   dev [entry] [-- args...]     Watch, rebuild, and restart an application
@@ -107,7 +118,7 @@ Commands:
 
 Options:
   --config <path>              Use an explicit build configuration
-  --target <rust-triple>       Cross-build through Zig (build and doctor)
+  --target <rust-triple>       Cross-build through Zig (build, doctor, ffi inspect)
   --production                 Build with production optimizations
   --core-report <mode>          Show Core phases, counters, or full diagnostics (build only)
   --profile[=compiler]         Sample production code, or add exact compiler counters
@@ -126,6 +137,7 @@ Options:
   --max-gb <number>            Cache prune target in GiB (default: the cache budget's)
   --min-age-days <number>      Youngest cache age eligible for prune (default: 1)
   --dry-run                    Show what cache prune would remove
+  --json                       Print machine-readable output (ffi inspect)
   -h, --help                   Show help
   -V, --version                Show the version`;
 
@@ -409,6 +421,49 @@ function parseCache(args: Array<string>): CliCommand {
 	return command;
 }
 
+function parseFfi(args: Array<string>): CliCommand {
+	const action = args[1];
+	if (action === "--help" || action === "-h") return { kind: "help" };
+	if (action !== "inspect") throw new CliUsageError("ffi requires 'inspect'");
+	let library: string | undefined;
+	let json = false;
+	let configPath: string | undefined;
+	let target: string | undefined;
+	for (let index = 2; index < args.length; index++) {
+		const argument = args[index]!;
+		if (argument === "--help" || argument === "-h") return { kind: "help" };
+		if (argument === "--json") {
+			json = true;
+			continue;
+		}
+		if (argument === "--config") {
+			configPath = optionValue(args, index, argument);
+			index++;
+			continue;
+		}
+		if (argument === "--target") {
+			target = optionValue(args, index, argument);
+			index++;
+			continue;
+		}
+		if (library === undefined && !argument.startsWith("-")) {
+			library = argument;
+			continue;
+		}
+		return unexpectedArgument(`ffi ${action}`, argument);
+	}
+	if (library === undefined)
+		throw new CliUsageError("ffi inspect requires a library name");
+	return {
+		kind: "ffi",
+		action,
+		library,
+		json,
+		...(configPath === undefined ? {} : { configPath }),
+		...(target === undefined ? {} : { target }),
+	};
+}
+
 function parseTest(args: Array<string>): CliCommand {
 	const command: TestCommand = {
 		kind: "test",
@@ -547,11 +602,14 @@ export function parseCliArgs(args: Array<string>): CliCommand {
 	if (command === "cache") {
 		return parseCache(args);
 	}
+	if (command === "ffi") {
+		return parseFfi(args);
+	}
 
 	const suggestion = command.startsWith("-")
 		? `unknown option '${command}'`
 		: `unknown command '${command}'`;
 	throw new CliUsageError(
-		`${suggestion}; expected init, doctor, cache, build, run, dev, or test`,
+		`${suggestion}; expected init, doctor, cache, ffi, build, run, dev, or test`,
 	);
 }

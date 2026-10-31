@@ -24,6 +24,56 @@ export type AssetInclusion =
 	| { type: "file"; path: string }
 	| { type: "directory"; path: string; include: Array<string> };
 
+/**
+ * How the build finds a C library's headers and binaries. Relative paths resolve
+ * against the file that declares them. Name at least `pkgConfig`, `libraries`, or
+ * `sources`; the other fields add to what those provide.
+ * @see https://maligator.ddv.tools/api/build#MaligatorFfiFind
+ */
+export interface MaligatorFfiFind {
+	/** A pkg-config package that supplies include directories and linker inputs. */
+	pkgConfig?: string;
+	/** Header search directories. */
+	includeDirs?: Array<string>;
+	/** Preprocessor definitions for the headers and sources. */
+	defines?: Record<string, string>;
+	/** Directories searched for `libraries`. */
+	libraryDirs?: Array<string>;
+	/** Libraries linked by name, as with `-lname`. */
+	libraries?: Array<string>;
+	/** macOS frameworks to link, such as `Cocoa`. */
+	frameworks?: Array<string>;
+	/** C sources compiled into the program instead of a prebuilt library. */
+	sources?: Array<string>;
+}
+
+/**
+ * A C library the program imports as `maligator:ffi/<name>`.
+ * @see https://maligator.ddv.tools/api/build#MaligatorFfiLibrary
+ */
+export interface MaligatorFfiLibrary {
+	/** Project-root-relative path to the library's contract, a module exporting `defineLibrary(...)`. */
+	contract: string;
+	/** Machine-specific discovery that replaces the contract's `find` alternatives. */
+	find?: MaligatorFfiFind;
+	/** Link the static archive or the shared library. Without a choice, the build links
+	 * statically when every library has an archive. Sources always link statically.
+	 */
+	link?: "static" | "shared";
+}
+
+/**
+ * Facts about a C library that hold wherever it is installed. The binding comes from
+ * the headers plus these facts.
+ * @see https://maligator.ddv.tools/api/build#MaligatorLibraryContract
+ */
+export interface MaligatorLibraryContract {
+	/** Headers to bind, spelled as C code includes them, such as `raylib.h` or `curl/curl.h`. */
+	headers: Array<string>;
+	/** Discovery alternatives, tried in order. A build config `find` replaces them. */
+	find?: Array<MaligatorFfiFind>;
+}
+
 /** Trusted, strictly validated configuration evaluated for each CLI invocation.
  * @see https://maligator.ddv.tools/guides/build-configuration
  */
@@ -90,6 +140,11 @@ export interface MaligatorBuildConfig {
 		 */
 		maligator?: boolean;
 	};
+	/** C libraries keyed by the name the program imports them under (`maligator:ffi/<name>`).
+	 * Names use lowercase letters, digits, and underscores.
+	 * @see https://maligator.ddv.tools/api/cli#ffi-inspect
+	 */
+	ffi?: Record<string, MaligatorFfiLibrary>;
 }
 
 /** Preserve the inferred config type. Validation happens when the CLI loads the config.
@@ -101,6 +156,16 @@ export interface MaligatorBuildConfig {
 export declare function defineBuild<const Config extends MaligatorBuildConfig>(
 	config: Config,
 ): Config;
+
+/** Preserve the inferred contract type. Validation happens when the CLI loads the contract.
+ * @example
+ * import { defineLibrary } from "@maligator/cli";
+ * export default defineLibrary({ headers: ["raylib.h"], find: [{ pkgConfig: "raylib" }] });
+ * @see https://maligator.ddv.tools/api/build#defineLibrary
+ */
+export declare function defineLibrary<const Contract extends MaligatorLibraryContract>(
+	contract: Contract,
+): Contract;
 
 export interface MaligatorMaterializeOptions {
 	/** Parent directory for the content-addressed materialization. Defaults to the OS temporary directory. */

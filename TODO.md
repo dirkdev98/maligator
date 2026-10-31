@@ -1901,6 +1901,26 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       and primary or standby selection against a dedicated topology. Keep
       topology-dependent tests separate from the deterministic local baseline.
 
+# C libraries
+
+Libraries declared under `ffi` bind through their real headers: the generated C
+includes them, so the C compiler owns the ABI. Contracts hold facts only, generated
+functions return status codes, and idiomatic APIs are plain TypeScript on top.
+
+- [ ] Bind `maligator:ffi/<name>`: a generated C unit with thunks and an installer for
+      scalars, strings, by-value structs, and constants; link static archives, shared
+      libraries, and compiled sources with content identity; register the installer
+      for wire-loaded images; generate `.d.ts`; drive raylib from a native fixture.
+- [ ] Facts: pointer handles and resource structs with dispose, finalizers, and
+      generation checks; out parameters next to returned status codes; owned,
+      static, and borrowed returns; buffers, arrays, and nullability.
+- [ ] Callbacks, blocking functions with async twins, and worker affinity.
+- [ ] Direct calls: Core-visible foreign calls with unboxed representations, and
+      scalar replacement of struct arguments and out objects.
+- [ ] `ffi check`: declaration fingerprints, evidence drift, sanitizer probes.
+- [ ] Cache header extraction; headers that pull in large system headers exceed the
+      self-hosted CLI's string limit as one AST dump.
+
 # Actors, SMP, and embedding
 
 ## Actors

@@ -1,5 +1,9 @@
 import { BuildConfigError } from "./build-config-error.ts";
-import type { AssetInclusion, MaligatorBuildConfig } from "./public-api.d.ts";
+import type {
+	AssetInclusion,
+	MaligatorBuildConfig,
+	MaligatorFfiLibrary,
+} from "./public-api.d.ts";
 
 export interface ResolvedBuildConfig {
 	entry: string | undefined;
@@ -15,6 +19,7 @@ export interface ResolvedBuildConfig {
 		intl: { enabled: boolean; features: Array<string>; languages: Array<string> };
 	};
 	surface: { webPlatform: boolean; node: boolean; maligator: boolean };
+	ffi: Record<string, MaligatorFfiLibrary>;
 }
 
 /** Apply defaults over a validated config. Absent fields take the product default. */
@@ -52,5 +57,6 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 			node: config.surface?.node ?? false,
 			maligator: config.surface?.maligator ?? true,
 		},
+		ffi: { ...(config.ffi ?? {}) },
 	};
 }

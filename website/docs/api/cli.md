@@ -103,6 +103,19 @@ The cache keeps itself within a budget: after a command, Maligator trims it in t
 
 The user cache lives in `~/Library/Caches/maligator` on macOS and `$XDG_CACHE_HOME/maligator` (default `~/.cache/maligator`) on Linux. `MALIGATOR_CACHE_DIR` replaces that directory. Project outputs live under `.cache/mal-build` in the project root; removing it keeps the reusable user cache.
 
+## ffi inspect {#ffi-inspect}
+
+```shell
+maligator ffi inspect <library> [--json] [--config path] [--target rust-triple]
+```
+
+Finds a C library declared under `ffi` in the build config, reads its headers with the target's clang, and reports how each declaration maps to JavaScript. Declarations that cannot map yet list the fact they need. Requires clang, or Zig with `--target`.
+
+| Flag       | Behavior                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------- |
+| `--json`   | Print the complete report: discovery, each declaration with its C and TypeScript forms, gaps. |
+| `--target` | Read the headers for a cross-build target through Zig.                                        |
+
 ## Diagnostic build options {#diagnostic-build-options}
 
 `build --serialize <file>` writes a portable program image for toolchain diagnostics. It cannot carry configured filesystem assets. Native builds use the compiled backend by default. `build --no-compiled` selects the interpreted native diagnostic backend. `--render-native-c` (alias `--print`) emits C for inspection, and `--dump-core` adds Core diagnostics. These diagnostics are separate from a deployable production artifact.
