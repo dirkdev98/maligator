@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -115,6 +122,25 @@ describe("ffi inspect", () => {
 			linkInputs: [],
 			sources: [path.join(shapesProject, "src/shapes.c")],
 		});
+	});
+
+	it("keeps the fixture's committed declarations current", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-types-"));
+		try {
+			const outPath = path.join(directory, "maligator-ffi.d.ts");
+			const result = spawnSync(
+				process.execPath,
+				[cliEntry, "ffi", "types", "--out", outPath],
+				{ cwd: shapesProject, encoding: "utf-8" },
+			);
+			expect(result.stderr).toBe("");
+			expect(result.status).toBe(0);
+			expect(readFileSync(outPath, "utf8")).toBe(
+				readFileSync(path.join(shapesProject, "maligator-ffi.d.ts"), "utf8"),
+			);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 
 	it("rejects a library the build config does not declare", () => {

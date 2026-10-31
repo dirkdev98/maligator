@@ -79,9 +79,10 @@ import {
 	developmentFragmentUnits,
 } from "./development-fragments.ts";
 import { createDevelopmentSession } from "./development-session.ts";
+import { generateDeclarations } from "./ffi/declarations.ts";
 import { FfiError } from "./ffi/ffi-error.ts";
 import { formatInspection, inspectBindings } from "./ffi/inspect.ts";
-import { prepareLibrary } from "./ffi/library.ts";
+import { nativeLibraryInputs, prepareLibraries, prepareLibrary } from "./ffi/library.ts";
 import {
 	cacheFrontendWire,
 	frontendDependencyUnchanged,
@@ -414,6 +415,8 @@ function compatibleDevelopmentRunner(
 	config: ResolvedBuildConfig,
 	context: CommandContext,
 ): DevelopmentRunner | undefined {
+	// Prebuilt runners cannot contain a project's C library bindings.
+	if (Object.keys(config.ffi).length > 0) return undefined;
 	return context.installation.developmentRunners?.find(
 		(runner) =>
 			(Object.keys(config.assets).length === 0 || runner.externalAssets) &&
@@ -578,6 +581,13 @@ function prepareCommandState(
 	) {
 		commandError("error: '--artifact' requires '--production'");
 	}
+	if (
+		command.kind === "build" &&
+		command.internal.serializePath !== undefined &&
+		Object.keys(buildConfig.ffi).length > 0
+	) {
+		commandError("error: C libraries are not supported by portable wire output");
+	}
 	const frontendSession = context.frontendSession ?? new FrontendCompilationSession();
 	frontendSession.useCacheDirectory();
 	const assets = reporter.phase("Collect assets", () => {
@@ -623,6 +633,38 @@ function prepareCommandState(
 		reporter.detail("Toolchain cache", toolchain.cacheHit ? "hit" : "miss");
 	}
 	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
+	const libraries =
+		toolchain === undefined || Object.keys(buildConfig.ffi).length === 0
+			? undefined
+			: reporter.phase("Prepare C libraries", () => {
+					try {
+						return prepareLibraries(buildConfig, {
+							projectRoot: process.cwd(),
+							stripTypes: context.stripTypes,
+							compiler: toolchain.tools.cc,
+							environment: { ...process.env, ...toolchain.environmentOverrides },
+							platform: toolchain.platform ?? process.platform,
+							cross: toolchain.cross === true,
+						});
+					} catch (error) {
+						if (error instanceof BuildConfigError || error instanceof FfiError) {
+							commandError(`error: ${error.message}`);
+						}
+						throw error;
+					}
+				});
+	// Watched like sources, so editing a contract, header, or library source rebuilds.
+	for (const file of libraries?.dependencies ?? []) frontendSession.snapshot(file);
+	for (const entry of libraries?.libraries ?? []) {
+		reporter.detail(
+			`C library ${entry.contract.name}`,
+			`${entry.library.method}, ${entry.library.link} link, ${entry.plan.functions.length} functions, ${entry.plan.constants.length} constants`,
+		);
+	}
+	const frontendConfig =
+		libraries === undefined
+			? buildConfig
+			: { ...buildConfig, ffiModules: libraries.modules };
 
 	const compiledNativeOutput = command.kind !== "build" || command.internal.compiled;
 	const developmentFragments =
@@ -651,7 +693,7 @@ function prepareCommandState(
 			context.installation.platformSourceRoot ??
 			path.dirname(context.installation.nodeGlobalsPath),
 		entrypoint: entrypointPath,
-		config: buildConfig,
+		config: frontendConfig,
 		execution,
 		...(buildConfig.surface.node
 			? {
@@ -781,6 +823,7 @@ function prepareCommandState(
 			...new Set([
 				...frontend.dependencies,
 				...assets.flatMap((asset) => asset.files.map((file) => file.inputPath)),
+				...(libraries?.dependencies ?? []),
 			]),
 		].sort();
 		const dependencyIdentities = frontendSession.dependencyIdentities(dependencies);
@@ -926,6 +969,10 @@ function prepareCommandState(
 				? "(none)"
 				: derivation.features.cargoFeatures.join(", "),
 		);
+		const nativeLibraries =
+			libraries === undefined
+				? undefined
+				: nativeLibraryInputs(libraries, context.installation.runtimeDirectory);
 		const nativeEnvironment = compilerProfileBuildEnvironment(command);
 		reporter.detail("Native compile jobs", nativeBuildJobs(nativeEnvironment));
 		const nativeCache = new Map<"runtime" | "rust" | "binary", boolean>();
@@ -978,7 +1025,7 @@ function prepareCommandState(
 			);
 			reporter.detail("Execution backend", "interpreted development image");
 			reporter.detail("Development images", wirePaths.join(", "));
-			const runnerKey = `${toolchain!.fingerprint}:${derivation.cacheSuffix}`;
+			const runnerKey = `${toolchain!.fingerprint}:${derivation.cacheSuffix}:${libraries?.identity ?? ""}`;
 			const retainedRunner = context.developmentCache?.runners.get(runnerKey);
 			const binaryPath = reporter.phase(
 				"Prepare development runtime",
@@ -991,6 +1038,7 @@ function prepareCommandState(
 						nativeContext,
 						verbose,
 						derivation.cacheSuffix,
+						nativeLibraries,
 					).binaryPath;
 					context.developmentCache?.runners.set(runnerKey, built);
 					return built;
@@ -1080,6 +1128,7 @@ function prepareCommandState(
 					context: nativeContext,
 					name,
 					cSource: output,
+					...nativeLibraries,
 					verbose,
 					onWarning: (warning) => reporter.warning(warning),
 					onGeneratedObject: (event) => {
@@ -2327,6 +2376,9 @@ export async function runCli(
 	}
 }
 
+/** Where `ffi types` writes declarations unless `--out` names another file. */
+const FFI_DECLARATIONS_NAME = "maligator-ffi.d.ts";
+
 function runFfiCommand(command: FfiCommand, context: CommandContext): void {
 	const projectRoot = process.cwd();
 	try {
@@ -2340,14 +2392,29 @@ function runFfiCommand(command: FfiCommand, context: CommandContext): void {
 		if (compiler === undefined) {
 			commandError(formatToolchainReport(report, report.platform ?? process.platform));
 		}
-		const prepared = prepareLibrary(config, command.library, {
+		const preparation = {
 			projectRoot,
 			stripTypes: context.stripTypes,
 			compiler,
 			environment: { ...process.env, ...report.toolchain?.environmentOverrides },
 			platform: report.platform ?? process.platform,
 			cross: report.cross === true,
-		});
+		};
+		if (command.action === "types") {
+			const names = Object.keys(config.ffi).sort();
+			if (names.length === 0) {
+				commandError("error: maligator.build.ts declares no ffi libraries");
+			}
+			const outPath = path.resolve(projectRoot, command.outPath ?? FFI_DECLARATIONS_NAME);
+			const libraries = names.map((name) => ({
+				name,
+				plan: prepareLibrary(config, name, preparation).plan,
+			}));
+			writeFileSync(outPath, generateDeclarations(libraries));
+			log.info(`Wrote ${path.relative(projectRoot, outPath)} for ${names.join(", ")}`);
+			return;
+		}
+		const prepared = prepareLibrary(config, command.library, preparation);
 		const inspection = inspectBindings(
 			prepared.contract,
 			projectRoot,

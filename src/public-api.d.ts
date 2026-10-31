@@ -142,7 +142,7 @@ export interface MaligatorBuildConfig {
 	};
 	/** C libraries keyed by the name the program imports them under (`maligator:ffi/<name>`).
 	 * Names use lowercase letters, digits, and underscores.
-	 * @see https://maligator.ddv.tools/api/cli#ffi-inspect
+	 * @see https://maligator.ddv.tools/guides/c-libraries
 	 */
 	ffi?: Record<string, MaligatorFfiLibrary>;
 }

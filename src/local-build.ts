@@ -36,6 +36,7 @@ import type {
 	GeneratedTranslationUnitDefinition,
 	GeneratedTranslationUnitKind,
 } from "./compiler/target/emit-program-image.ts";
+import type { LinkInput } from "./ffi/discovery.ts";
 import { writeSourceChunks } from "./generated-source.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
@@ -76,7 +77,7 @@ export type { BuildCacheEvent } from "./native-build-context.ts";
 
 export interface GeneratedObjectMeasurement {
 	unit: string;
-	role: "generated" | "driver";
+	role: "generated" | "driver" | "library";
 	generatedKind?: GeneratedTranslationUnitKind;
 	definitions?: ReadonlyArray<GeneratedTranslationUnitDefinition>;
 	cache: "hit" | "miss";
@@ -98,6 +99,18 @@ export interface LocalBuildMeasurements {
 	linkCache: "hit" | "miss";
 }
 
+/**
+ * A translation unit compiled with its own arguments after the target's code
+ * generation flags, such as a C library binding or one of the library's sources.
+ */
+export interface ExternalTranslationUnit {
+	/** Unique among a build's units: lowercase letters, digits, `.`, `_`, and `-`. */
+	id: string;
+	/** Source text to write, or an existing file compiled in place. */
+	source: { text: string } | { path: string };
+	compileArguments: ReadonlyArray<string>;
+}
+
 export interface LocalBuildOptions {
 	/** The fully resolved native inputs shared by archive construction and this link. */
 	context: NativeBuildContext;
@@ -117,6 +130,10 @@ export interface LocalBuildOptions {
 	objectCacheVariant?: string;
 	/** Optional measurement namespace for the final-link cache key. */
 	linkCacheVariant?: string;
+	/** Units compiled with their own arguments, such as C library bindings and sources. */
+	externalUnits?: ReadonlyArray<ExternalTranslationUnit>;
+	/** Linked after the program's objects and before the runtime archives. */
+	linkInputs?: ReadonlyArray<LinkInput>;
 	onWarning?: (message: string) => void;
 	onGeneratedObject?: (event: GeneratedObjectMeasurement) => void;
 }
@@ -187,6 +204,11 @@ interface GeneratedObjectInput {
 	headerFiles?: ReadonlyArray<string>;
 	definitions?: ReadonlyArray<GeneratedTranslationUnitDefinition>;
 	embeddedFileDigests?: ReadonlyArray<string>;
+	/**
+	 * Arguments replacing the shared generated-unit arguments. Such a unit reads
+	 * headers outside the runtime, so its identity always comes from preprocessing it.
+	 */
+	compileArguments?: ReadonlyArray<string>;
 }
 
 function logicalSourcePath(input: GeneratedObjectInput): string {
@@ -213,7 +235,12 @@ function generatedUnitDigests(
 	const digests = new Array<string | undefined>(inputs.length);
 	const memoKeys = new Array<string | undefined>(inputs.length);
 	const pending: Array<number> = [];
+	const external: Array<number> = [];
 	for (const [index, input] of inputs.entries()) {
+		if (input.compileArguments !== undefined) {
+			external.push(index);
+			continue;
+		}
 		if (input.embeddedFileDigests !== undefined) {
 			if (input.headerFiles?.length !== 0)
 				throw new Error(
@@ -285,6 +312,27 @@ function generatedUnitDigests(
 			);
 		}
 	}
+	if (external.length > 0) {
+		const expanded = external.map((index) => path.join(directory, `${String(index)}.i`));
+		runNativeCommands(
+			context,
+			external.map((index, position) => ({
+				tool: context.toolchain.tools.cc.path,
+				args: toolArguments(context.toolchain.tools.cc, [
+					...inputs[index]!.compileArguments!,
+					"-E",
+					"-P",
+					inputs[index]!.sourcePath,
+					"-o",
+					expanded[position]!,
+				]),
+			})),
+			{ verbose },
+		);
+		for (const [position, index] of external.entries()) {
+			digests[index] = artifactDigest(new Uint8Array(readFileSync(expanded[position]!)));
+		}
+	}
 	return digests.map((digest) => digest!);
 }
 
@@ -293,6 +341,7 @@ interface PendingGeneratedObject {
 	key: string;
 	costKey: string;
 	temporaryObject: string;
+	compileArguments: ReadonlyArray<string>;
 	sourcePath: string;
 	logicalSourcePath: string;
 	sourceBytes: number;
@@ -323,6 +372,14 @@ function ensureGeneratedObjects(
 	const normalizedCompileArguments = compileArguments.map((argument) =>
 		normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
 	);
+	const argumentsOf = (input: GeneratedObjectInput): ReadonlyArray<string> =>
+		input.compileArguments ?? compileArguments;
+	const normalizedArgumentsOf = (input: GeneratedObjectInput): ReadonlyArray<string> =>
+		input.compileArguments === undefined
+			? normalizedCompileArguments
+			: input.compileArguments.map((argument) =>
+					normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
+				);
 	const headerHashes = new Map<string, string>();
 	const headerHash = (input: GeneratedObjectInput): string => {
 		const identity = input.headerFiles?.join("\0") ?? "<all-runtime-headers>";
@@ -360,14 +417,14 @@ function ensureGeneratedObjects(
 			cacheVariant,
 			unitId: input.unitId,
 			unit: unitDigests[index],
-			compileArguments: normalizedCompileArguments,
+			compileArguments: normalizedArgumentsOf(input),
 			environment: context.environmentFingerprint,
 			toolchain: context.toolchain.fingerprint,
 			target: context.toolchain.target,
 		});
 		const costKey = artifactActionKey(GENERATED_OBJECT_COST_PRODUCER, {
 			unitId: input.unitId,
-			compileArguments: normalizedCompileArguments,
+			compileArguments: normalizedArgumentsOf(input),
 			headerDependencies,
 			environment: context.environmentFingerprint,
 			toolchain: context.toolchain.fingerprint,
@@ -433,6 +490,7 @@ function ensureGeneratedObjects(
 			key,
 			costKey,
 			temporaryObject: path.join(temporaryDirectory, `${String(index)}.o`),
+			compileArguments: argumentsOf(input),
 			sourcePath: input.sourcePath,
 			logicalSourcePath: logicalSourcePath(input),
 			sourceBytes,
@@ -451,7 +509,7 @@ function ensureGeneratedObjects(
 			orderedPending.map((entry) => ({
 				tool: context.toolchain.tools.cc.path,
 				args: toolArguments(context.toolchain.tools.cc, [
-					...compileArguments,
+					...entry.compileArguments,
 					`-ffile-prefix-map=${entry.sourcePath}=${entry.logicalSourcePath}`,
 					"-c",
 					entry.sourcePath,
@@ -565,6 +623,7 @@ export function buildDevelopmentRunner(
 	context: NativeBuildContext,
 	verbose: boolean,
 	cacheSuffix?: string,
+	libraries?: Pick<LocalBuildOptions, "externalUnits" | "linkInputs">,
 ): LocalBuildResult {
 	return buildLocalBinary({
 		context,
@@ -574,6 +633,7 @@ export function buildDevelopmentRunner(
 		mainFile: path.join(context.runtimeDirectory, "dev_main.c"),
 		cacheSuffix,
 		outDir: runnerWorkDirectory(context),
+		...libraries,
 	});
 }
 
@@ -629,7 +689,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 				},
 	);
 	const unitIds = new Set<string>();
-	for (const unit of units) {
+	for (const unit of [...units, ...(options.externalUnits ?? [])]) {
 		if (!/^[a-z0-9][a-z0-9._-]*$/.test(unit.id)) {
 			throw new Error(`generated translation unit has unsafe id '${unit.id}'`);
 		}
@@ -648,6 +708,33 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		sourceMeasurements.push({ digest: digest.digest("hex"), bytes });
 		return sourcePath;
 	});
+	const externalArguments = ccExtraFlags(
+		context.plan,
+		context.environment,
+		context.toolchain.platform ?? process.platform,
+	);
+	const externalInputs = (options.externalUnits ?? []).map(
+		(unit): GeneratedObjectInput => {
+			let sourcePath: string;
+			let source: Buffer;
+			if ("text" in unit.source) {
+				sourcePath = path.join(outputDirectory, `${artifactName}.${unit.id}.c`);
+				writeFileSync(sourcePath, unit.source.text);
+				source = Buffer.from(unit.source.text);
+			} else {
+				sourcePath = unit.source.path;
+				source = readFileSync(sourcePath);
+			}
+			return {
+				sourcePath,
+				unitId: unit.id,
+				sourceDigest: artifactDigest(new Uint8Array(source)),
+				sourceBytes: source.length,
+				role: "library",
+				compileArguments: [...externalArguments, ...unit.compileArguments],
+			};
+		},
+	);
 	context.onBuildPhase?.({
 		phase: "write generated C",
 		durationMs: performance.now() - phaseStartedAt,
@@ -682,6 +769,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 					? {}
 					: { embeddedFileDigests: units[index]!.embeddedFileDigests }),
 			})),
+			...externalInputs,
 			{
 				sourcePath: mainFile,
 				unitId: normalizeRuntimeBuildArgument(context.runtimeDirectory, mainFile),
@@ -745,6 +833,16 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			argument.startsWith("-")
 				? argument
 				: artifactDigest(new Uint8Array(readFileSync(argument))),
+		),
+		linkInputs: (options.linkInputs ?? []).map((input) =>
+			input.kind === "archive"
+				? {
+						kind: input.kind,
+						digest: artifactDigest(new Uint8Array(readFileSync(input.path))),
+					}
+				: input.kind === "shared"
+					? { ...input, digest: artifactDigest(new Uint8Array(readFileSync(input.path))) }
+					: input,
 		),
 		zigStripArgs: zigLinkTimeStrip ? context.toolchain.probes.stripArgs : [],
 		thinLtoCache: context.plan.thinLtoCache,
@@ -833,18 +931,36 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 					return destination;
 				});
 				let archiveIndex = 0;
-				const materializedArtifacts = artifacts.linkArgs.map((argument) => {
-					if (argument.startsWith("-")) return argument;
+				const materializeArchive = (archive: string): string => {
 					const destination = path.join(
 						linkDirectory,
 						`${String(archiveIndex++).padStart(4, "0")}.a`,
 					);
-					copyFileSync(argument, destination, constants.COPYFILE_FICLONE);
+					copyFileSync(archive, destination, constants.COPYFILE_FICLONE);
 					return destination;
+				};
+				const libraryArguments = (options.linkInputs ?? []).flatMap((input) => {
+					switch (input.kind) {
+						case "archive":
+							return [materializeArchive(input.path)];
+						case "shared":
+							// The binary loads it from where it was found, so keep that path.
+							return [input.path, `-Wl,-rpath,${input.directory}`];
+						case "system":
+							return [`-l${input.name}`];
+						case "framework":
+							return ["-framework", input.name];
+						case "flag":
+							return [input.value];
+					}
 				});
+				const materializedArtifacts = artifacts.linkArgs.map((argument) =>
+					argument.startsWith("-") ? argument : materializeArchive(argument),
+				);
 				const materializedLinkArguments = toolArguments(context.toolchain.tools.cc, [
 					...compileArguments,
 					...materializedObjects,
+					...libraryArguments,
 					...materializedArtifacts,
 					...(thinLtoCache?.arguments ?? []),
 					...(zigLinkTimeStrip ? context.toolchain.probes.stripArgs : []),

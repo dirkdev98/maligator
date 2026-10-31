@@ -64,7 +64,7 @@ interface Options {
 
 interface SanitizedObjectMeasurement {
 	readonly unit: string;
-	readonly role: "generated" | "driver";
+	readonly role: GeneratedObjectMeasurement["role"];
 	readonly generatedKind?: "runtime-image" | "data" | "code";
 	readonly definitions?: GeneratedObjectMeasurement["definitions"];
 	readonly cache: "hit" | "miss";

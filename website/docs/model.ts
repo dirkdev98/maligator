@@ -46,6 +46,11 @@ export const guides = [
 		"Write assertions, filter tests, and watch changes.",
 	],
 	[
+		"c-libraries",
+		"Call C libraries",
+		"Bind a C library through its headers and call it.",
+	],
+	[
 		"workers",
 		"Run tasks in workers",
 		"Create a persistent pool with isolated module state.",

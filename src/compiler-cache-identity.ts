@@ -173,5 +173,6 @@ export function compilerConfigurationIdentity(config: ResolvedBuildConfig): unkn
 			},
 		},
 		hostSurface: config.surface,
+		ffiModules: config.ffiModules,
 	};
 }

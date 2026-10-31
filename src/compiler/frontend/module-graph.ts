@@ -452,6 +452,8 @@ function exportConditions(
 interface ResolveContext {
 	conditions: ReadonlySet<string>;
 	nodeEnabled: boolean;
+	/** Host modules of the build's C libraries, keyed by specifier. */
+	ffiModules: ReadonlyMap<string, HostModuleSpec>;
 	// Metadata and derived goals share one graph's lifetime, including cached misses.
 	packageJsonCache: Map<string, PackageJson | null>;
 	packageTypeCache: Map<string, ModuleGoal | undefined>;
@@ -496,6 +498,9 @@ function platformCatalogFiles(sourceRoot: string): {
 	return files;
 }
 
+/** Modules of the build's C libraries; the rest of the name is the configured library. */
+const FFI_SPECIFIER_PREFIX = "maligator:ffi/";
+
 /** Extensions probed when a specifier omits one. */
 const RESOLVE_EXTENSIONS = [".js", ".ts", ".mjs", ".mts", ".cjs", ".cts", ".json"];
 
@@ -510,8 +515,20 @@ export function buildModuleGraph(
 	const modules = new Map<string, ModuleRecord>();
 
 	const nodeEnabled = options.buildConfig?.surface.node ?? false;
+	const ffiModules = options.buildConfig?.ffiModules ?? [];
 	const ctx: ResolveContext = {
 		nodeEnabled,
+		ffiModules: new Map(
+			ffiModules.map((library) => [
+				library.id,
+				{
+					id: library.id,
+					named: library.exports,
+					hasDefault: false,
+					installer: library.installer,
+				},
+			]),
+		),
 		conditions: exportConditions(nodeEnabled, "import"),
 		packageJsonCache: new Map(),
 		packageTypeCache: new Map(),
@@ -531,6 +548,7 @@ export function buildModuleGraph(
 					JSON.stringify({
 						aliases: options.buildConfig?.modules.aliases ?? {},
 						nodeEnabled,
+						ffiModules,
 						sourceRoot,
 						goalOverride: options.goalOverride,
 						dependencyGoalOverride: options.dependencyGoalOverride,
@@ -930,7 +948,7 @@ export function buildModuleGraph(
 			}
 			// A `node:*` host built-in resolves to a virtual record from the catalog —
 			// no disk read, no recursion (it has no dependencies of its own).
-			const host = lookupHostModule(resolvedPath);
+			const host = ctx.ffiModules.get(resolvedPath) ?? lookupHostModule(resolvedPath);
 			if (host) {
 				modules.set(resolvedPath, hostModuleRecord(host, options.execution));
 				continue;
@@ -1427,6 +1445,18 @@ function resolveSpecifier(
 	importerPath: string,
 	ctx: ResolveContext,
 ): ResolveResult {
+	if (specifier.startsWith(FFI_SPECIFIER_PREFIX)) {
+		const host = ctx.ffiModules.get(specifier);
+		const configured = [...ctx.ffiModules.keys()].map((id) =>
+			id.slice(FFI_SPECIFIER_PREFIX.length),
+		);
+		return host === undefined
+			? {
+					error: `unknown C library '${specifier}' (configured: ${configured.join(", ") || "none"})`,
+					hard: true,
+				}
+			: { host };
+	}
 	if (specifier.startsWith("maligator:")) {
 		const host = lookupHostModule(specifier);
 		return host === undefined

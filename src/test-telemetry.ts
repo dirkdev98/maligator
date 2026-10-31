@@ -14,7 +14,7 @@ export interface TestTelemetryEvent {
 	units?: number;
 	config?: string;
 	unit?: string;
-	role?: "generated" | "driver";
+	role?: "generated" | "driver" | "library";
 	generatedKind?: "runtime-image" | "data" | "code";
 	sourceBytes?: number;
 	objectBytes?: number;

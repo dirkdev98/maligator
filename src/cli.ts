@@ -74,14 +74,14 @@ export interface CacheCommand {
 	minAgeMs?: number;
 }
 
-export interface FfiCommand {
+export type FfiCommand = {
 	kind: "ffi";
-	action: "inspect";
-	library: string;
-	json: boolean;
 	configPath?: string;
 	target?: string;
-}
+} & (
+	| { action: "inspect"; library: string; json: boolean }
+	| { action: "types"; outPath?: string }
+);
 
 export type CliCommand =
 	| { kind: "help" }
@@ -111,6 +111,7 @@ Commands:
   cache prune                  Remove stale rebuildable cache entries
   cache clear --all            Remove every rebuildable cache entry
   ffi inspect <library>        Show a C library's bindings and the facts they need
+  ffi types                    Write TypeScript declarations for the C libraries
   build [entry]                Compile an application
   run [entry] [-- args...]     Compile and run an application
   dev [entry] [-- args...]     Watch, rebuild, and restart an application
@@ -138,6 +139,7 @@ Options:
   --min-age-days <number>      Youngest cache age eligible for prune (default: 1)
   --dry-run                    Show what cache prune would remove
   --json                       Print machine-readable output (ffi inspect)
+  --out <path>                 Declaration file for ffi types (default: maligator-ffi.d.ts)
   -h, --help                   Show help
   -V, --version                Show the version`;
 
@@ -424,16 +426,24 @@ function parseCache(args: Array<string>): CliCommand {
 function parseFfi(args: Array<string>): CliCommand {
 	const action = args[1];
 	if (action === "--help" || action === "-h") return { kind: "help" };
-	if (action !== "inspect") throw new CliUsageError("ffi requires 'inspect'");
+	if (action !== "inspect" && action !== "types") {
+		throw new CliUsageError("ffi requires 'inspect' or 'types'");
+	}
 	let library: string | undefined;
 	let json = false;
+	let outPath: string | undefined;
 	let configPath: string | undefined;
 	let target: string | undefined;
 	for (let index = 2; index < args.length; index++) {
 		const argument = args[index]!;
 		if (argument === "--help" || argument === "-h") return { kind: "help" };
-		if (argument === "--json") {
+		if (action === "inspect" && argument === "--json") {
 			json = true;
+			continue;
+		}
+		if (action === "types" && argument === "--out") {
+			outPath = optionValue(args, index, argument);
+			index++;
 			continue;
 		}
 		if (argument === "--config") {
@@ -446,22 +456,23 @@ function parseFfi(args: Array<string>): CliCommand {
 			index++;
 			continue;
 		}
-		if (library === undefined && !argument.startsWith("-")) {
+		if (action === "inspect" && library === undefined && !argument.startsWith("-")) {
 			library = argument;
 			continue;
 		}
 		return unexpectedArgument(`ffi ${action}`, argument);
 	}
-	if (library === undefined)
-		throw new CliUsageError("ffi inspect requires a library name");
-	return {
-		kind: "ffi",
-		action,
-		library,
-		json,
+	const shared = {
+		kind: "ffi" as const,
 		...(configPath === undefined ? {} : { configPath }),
 		...(target === undefined ? {} : { target }),
 	};
+	if (action === "types") {
+		return { ...shared, action, ...(outPath === undefined ? {} : { outPath }) };
+	}
+	if (library === undefined)
+		throw new CliUsageError("ffi inspect requires a library name");
+	return { ...shared, action, library, json };
 }
 
 function parseTest(args: Array<string>): CliCommand {

@@ -109,12 +109,20 @@ The user cache lives in `~/Library/Caches/maligator` on macOS and `$XDG_CACHE_HO
 maligator ffi inspect <library> [--json] [--config path] [--target rust-triple]
 ```
 
-Finds a C library declared under `ffi` in the build config, reads its headers with the target's clang, and reports how each declaration maps to JavaScript. Declarations that cannot map yet list the fact they need. Requires clang, or Zig with `--target`.
+Finds a C library declared under `ffi` in the build config, reads its headers with the target's clang, and reports how each declaration maps to JavaScript. Declarations that cannot map list the fact they need. Requires clang, or Zig with `--target`.
 
 | Flag       | Behavior                                                                                      |
 | ---------- | --------------------------------------------------------------------------------------------- |
 | `--json`   | Print the complete report: discovery, each declaration with its C and TypeScript forms, gaps. |
 | `--target` | Read the headers for a cross-build target through Zig.                                        |
+
+## ffi types {#ffi-types}
+
+```shell
+maligator ffi types [--out path] [--config path] [--target rust-triple]
+```
+
+Writes TypeScript declarations for every library under `ffi`: one `declare module "maligator:ffi/<name>"` block each, with the header documentation. The default file is `maligator-ffi.d.ts` in the project root. Run it again after the headers change.
 
 ## Diagnostic build options {#diagnostic-build-options}
 

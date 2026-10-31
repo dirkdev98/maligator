@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "../ffi/mal_ffi.h"
 #include "mal_assets.h"
 #include "mal_application.h"
 #include "mal_process.h"
@@ -47,6 +48,13 @@
 #include "node_worker_threads.h"
 #include "node_zlib.h"
 #endif
+
+// A program that links C libraries defines the real resolver in its generated registry unit.
+__attribute__((weak)) MalFfiInstaller mal_ffi_resolve_installer(const char *name, size_t length) {
+    (void) name;
+    (void) length;
+    return nullptr;
+}
 
 #define MATCH_INSTALLER(symbol) \
     if (length == sizeof(#symbol) - 1 && memcmp(name, #symbol, length) == 0) return symbol
@@ -109,5 +117,5 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_worker_threads);
     MATCH_INSTALLER(mal_host_install_node_zlib);
 #endif
-    return nullptr;
+    return mal_ffi_resolve_installer(name, length);
 }

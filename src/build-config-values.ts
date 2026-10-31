@@ -5,6 +5,13 @@ import type {
 	MaligatorFfiLibrary,
 } from "./public-api.d.ts";
 
+/** The host module a configured C library provides as `maligator:ffi/<name>`. */
+export interface FfiModule {
+	readonly id: string;
+	readonly exports: ReadonlyArray<string>;
+	readonly installer: string;
+}
+
 export interface ResolvedBuildConfig {
 	entry: string | undefined;
 	outputName: string | undefined;
@@ -20,6 +27,8 @@ export interface ResolvedBuildConfig {
 	};
 	surface: { webPlatform: boolean; node: boolean; maligator: boolean };
 	ffi: Record<string, MaligatorFfiLibrary>;
+	/** Derived from the libraries' headers before compilation; empty until then. */
+	ffiModules: ReadonlyArray<FfiModule>;
 }
 
 /** Apply defaults over a validated config. Absent fields take the product default. */
@@ -58,5 +67,6 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 			maligator: config.surface?.maligator ?? true,
 		},
 		ffi: { ...(config.ffi ?? {}) },
+		ffiModules: [],
 	};
 }

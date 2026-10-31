@@ -1907,10 +1907,7 @@ Libraries declared under `ffi` bind through their real headers: the generated C
 includes them, so the C compiler owns the ABI. Contracts hold facts only, generated
 functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
-- [ ] Bind `maligator:ffi/<name>`: a generated C unit with thunks and an installer for
-      scalars, strings, by-value structs, and constants; link static archives, shared
-      libraries, and compiled sources with content identity; register the installer
-      for wire-loaded images; generate `.d.ts`; drive raylib from a native fixture.
+- [ ] Support C libraries in `maligator test` images and the in-process test runner.
 - [ ] Facts: pointer handles and resource structs with dispose, finalizers, and
       generation checks; out parameters next to returned status codes; owned,
       static, and borrowed returns; buffers, arrays, and nullability.

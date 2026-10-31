@@ -18,6 +18,7 @@ maligator run
 - [Write application tests](/guides/testing) and rerun a selected suite.
 - [Run tasks in workers](/guides/workers) with a bounded pool and explicit cleanup.
 - [Serve HTTP](/guides/http) or [embed files](/guides/assets).
+- [Call C libraries](/guides/c-libraries) through their headers.
 - [Build for production](/guides/production) and [profile a workload](/guides/profiling).
 
 ## Look up a contract

@@ -1,6 +1,7 @@
 #ifndef SHAPES_H
 #define SHAPES_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

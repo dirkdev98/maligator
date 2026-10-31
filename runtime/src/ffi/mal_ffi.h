@@ -1,0 +1,130 @@
+#ifndef MAL_FFI_H
+#define MAL_FFI_H
+
+/*
+ * The interface generated C library bindings compile against. It declares only
+ * `Mal`-prefixed names over standard headers, so a binding unit can include a
+ * library's headers without the runtime's own headers in the same unit. Binding
+ * units compile as C23.
+ *
+ * Conversions never coerce: a value of the wrong type throws a TypeError and an
+ * out-of-range or non-integral number throws a RangeError, each naming its site.
+ * After a conversion returns false, the binding returns any value and the pending
+ * throw propagates.
+ */
+
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct MalVm MalVm;
+typedef struct MalHostInstallSlot MalHostInstallSlot;
+typedef struct MalHostLaunchContext MalHostLaunchContext;
+typedef uint64_t MalValue;
+
+typedef MalValue (*MalFfiFunction)(
+    MalVm *vm, MalValue this_value, const MalValue *args, int32_t arg_count,
+    MalValue new_target, MalValue callee);
+typedef void (*MalFfiInstaller)(
+    MalVm *vm, const MalHostInstallSlot *slots, int32_t count,
+    const MalHostLaunchContext *launch);
+
+/** One module export; exactly one of `function` and `constant` is set. */
+typedef struct MalFfiExport {
+    const char *name;
+    /** The function's `length`. */
+    int32_t length;
+    MalFfiFunction function;
+    /** Evaluates the C constant expression when the export is first installed. */
+    MalValue (*constant)(MalVm *vm);
+} MalFfiExport;
+
+typedef struct MalFfiLibrary {
+    /** The module specifier, such as `maligator:ffi/raylib`. */
+    const char *specifier;
+    /** Sorted by name in byte order. */
+    const MalFfiExport *exports;
+    int32_t export_count;
+} MalFfiLibrary;
+
+/**
+ * Fill each slot with its export. A VM materializes each export once, so every
+ * image that imports the module observes the same function and constant values.
+ */
+void mal_ffi_install(
+    MalVm *vm, const MalFfiLibrary *library, const MalHostInstallSlot *slots, int32_t count);
+
+/** Resolve an installer by symbol name for images loaded from the wire format. */
+MalFfiInstaller mal_ffi_resolve_installer(const char *name, size_t length);
+
+/** Where a conversion happens, for error messages. */
+typedef struct MalFfiSite {
+    const char *function;
+    const char *parameter;
+    /** The struct field being converted, or null for the parameter itself. */
+    const char *field;
+} MalFfiSite;
+
+/** An exact integer of at most 32 bits, given as a Number. */
+bool mal_ffi_to_integer(
+    MalVm *vm, MalValue value, int32_t bits, bool is_signed, const MalFfiSite *site, int64_t *out);
+/** A 64-bit integer, given as a BigInt. */
+bool mal_ffi_to_int64(
+    MalVm *vm, MalValue value, const MalFfiSite *site, int64_t *out);
+bool mal_ffi_to_uint64(
+    MalVm *vm, MalValue value, const MalFfiSite *site, uint64_t *out);
+bool mal_ffi_to_number(
+    MalVm *vm, MalValue value, const MalFfiSite *site, double *out);
+bool mal_ffi_to_boolean(
+    MalVm *vm, MalValue value, const MalFfiSite *site, bool *out);
+
+/** A UTF-8, NUL-terminated copy the binding owns until `mal_ffi_string_release`. */
+typedef struct MalFfiString {
+    char *data;
+    size_t length;
+} MalFfiString;
+
+/** Strings with an embedded NUL throw instead of truncating. */
+bool mal_ffi_to_string(
+    MalVm *vm, MalValue value, const MalFfiSite *site, MalFfiString *out);
+void mal_ffi_string_release(MalFfiString *string);
+
+/** Read a record field. `name` must have static storage: it keys an inline cache. */
+bool mal_ffi_field(
+    MalVm *vm, MalValue record, const char *name, const MalFfiSite *site,
+    MalValue *out);
+/** Read element `index` of an array that must have exactly `length` elements. */
+bool mal_ffi_element(
+    MalVm *vm, MalValue array, int32_t index, int32_t length, const MalFfiSite *site, MalValue *out);
+
+MalValue mal_ffi_undefined(void);
+MalValue mal_ffi_null(void);
+MalValue mal_ffi_from_boolean(bool value);
+MalValue mal_ffi_from_int32(int32_t value);
+MalValue mal_ffi_from_number(double value);
+/** BigInt results allocate and may throw an allocation error. */
+MalValue mal_ffi_from_int64(MalVm *vm, int64_t value);
+MalValue mal_ffi_from_uint64(MalVm *vm, uint64_t value);
+/** Copy a NUL-terminated UTF-8 string, replacing malformed sequences; NULL yields null. */
+MalValue mal_ffi_from_string(MalVm *vm, const char *value);
+/** An ordinary object for a struct passed by value. */
+MalValue mal_ffi_new_record(MalVm *vm);
+MalValue mal_ffi_new_array(MalVm *vm, int32_t length);
+/** Store a field or element; both values stay rooted for the duration of the call. */
+bool mal_ffi_set_field(MalVm *vm, MalValue record, const char *name, MalValue value);
+bool mal_ffi_set_element(MalVm *vm, MalValue array, int32_t index, MalValue value);
+bool mal_ffi_threw(MalVm *vm);
+
+/**
+ * Keep values reachable while later allocations run. The layout matches the
+ * runtime's root span; unroot in reverse order before returning.
+ */
+typedef struct MalFfiRoots {
+    struct MalFfiRoots *prev;
+    MalValue *slots;
+    int32_t count;
+} MalFfiRoots;
+
+void mal_ffi_root(MalFfiRoots *roots, MalValue *slots, int32_t count);
+void mal_ffi_unroot(MalFfiRoots *roots);
+
+#endif
