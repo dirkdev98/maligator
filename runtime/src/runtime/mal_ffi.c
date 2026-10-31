@@ -147,23 +147,34 @@ bool mal_ffi_to_string(
     }
     usize length = 0;
     bool encoded = false;
+    bool nul = false;
     if (units != 0 && string->latin1 && string->storage < MAL_STRING_STORAGE_DEPENDENT) {
-        // A flat ASCII string is its own UTF-8; copying it skips the general encoder.
+        // A flat ASCII string is its own UTF-8: one pass copies it and checks for high
+        // bytes and NULs. Otherwise the general encoder overwrites the copy.
         MalStringSegment segment = mal_string_flat_segment((MalString *) string);
         u8 high = 0;
-        for (usize index = 0; index < units; index++) high |= segment.latin1_units[index];
+        u8 zero = 0;
+        for (usize index = 0; index < units; index++) {
+            u8 unit = segment.latin1_units[index];
+            high |= unit;
+            zero |= unit == 0;
+            data[index] = (char) unit;
+        }
         if (high < 0x80) {
-            memcpy(data, segment.latin1_units, units);
             length = units;
             encoded = true;
+            nul = zero != 0;
         }
     }
-    if (!encoded) mal_string_utf8_encode_into(string, (byte *) data, capacity, nullptr, &length);
+    if (!encoded) {
+        mal_string_utf8_encode_into(string, (byte *) data, capacity, nullptr, &length);
+        // NUL is the only code point whose UTF-8 encoding contains a zero byte.
+        nul = memchr(data, 0, length) != nullptr;
+    }
     data[length] = '\0';
     out->data = data;
     out->length = length;
-    // NUL is the only code point whose UTF-8 encoding contains a zero byte.
-    if (memchr(data, 0, length) != nullptr) {
+    if (nul) {
         mal_ffi_string_release(out);
         return ffi_fail(
             vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a string without NUL characters");
