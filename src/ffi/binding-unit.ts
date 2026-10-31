@@ -674,9 +674,11 @@ class BindingWriter {
 						const element = this.#fresh("element");
 						// Each string element needs its own copy; the frame's string buffers hold one value each.
 						const texts = value.of.kind === "string";
+						const storage = `mal_storage_${String(index)}`;
 						locals.push(
 							`${localDeclaration(value.element, `*${elements}`)} = nullptr;`,
 							`int32_t ${length} = 0;`,
+							`alignas(max_align_t) unsigned char ${storage}[MAL_FFI_ARRAY_INLINE];`,
 						);
 						if (texts) {
 							const freed = this.#fresh("index");
@@ -684,11 +686,21 @@ class BindingWriter {
 								`if (${elements} != nullptr) for (int32_t ${freed} = 0; ${freed} < ${length}; ${freed}++) free((void *) ${elements}[${freed}]);`,
 							);
 						}
-						cleanup.push(`free(${elements});`);
+						cleanup.push(
+							`if ((void *) ${elements} != (void *) ${storage}) free(${elements});`,
+						);
 						const text = this.#fresh("text");
 						body.push(
 							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &${length})) goto mal_done;`,
-							`if (${length} > 0) {`,
+							`if (${length} > 0 && (size_t) ${length} <= sizeof(${storage}) / sizeof(*${elements})) {`,
+							`\t${elements} = (void *) ${storage};`,
+							// String elements must start null, since cleanup frees every slot.
+							...(texts
+								? [
+										`\t__builtin_memset(${storage}, 0, (size_t) ${length} * sizeof(*${elements}));`,
+									]
+								: []),
+							`} else if (${length} > 0) {`,
 							`\t${elements} = calloc((size_t) ${length}, sizeof(*${elements}));`,
 							`\tif (${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 							"}",

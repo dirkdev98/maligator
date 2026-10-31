@@ -172,6 +172,8 @@ static inline bool mal_ffi_to_boolean(
 
 /** Encoded strings that fit stay in the binding's frame instead of the heap. */
 #define MAL_FFI_STRING_INLINE 256
+/** Bytes of C elements an array argument keeps in the binding's frame before using the heap. */
+#define MAL_FFI_ARRAY_INLINE 256
 
 /**
  * A UTF-8, NUL-terminated copy the binding owns until `mal_ffi_string_release`.
