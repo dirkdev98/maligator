@@ -1221,7 +1221,13 @@ contracts or investigates costs still visible after the string follow-ups.
       generic entry still unpacks an argument array, publishes a root frame and
       returns through a completion check. Frame rows are not the cost (a build
       without them ran the self-compile 0.3% faster), and field entries beat
-      inlining the `quote` bodies.
+      inlining the `quote` bodies. Entering strict compiled callees from each call
+      site instead of the shared cached dispatch cut javascript-v2's calls phase
+      2.78% but left its total flat (-0.25% [-0.72, 0.40]). Its
+      `receiver.calculate(...)` reads a proven own slot whose call targets fall back
+      to unknown because the receiver escapes into `.bind`, `.call` and `.apply`;
+      carrying a record field's initial function targets as a guarded candidate set
+      would let guarded direct calls cover `obj.method()`.
 - [ ] Close the rest of the objects phase's order loop. It takes 35.7 ms against
       Node's 19.3, down from 47.9 now that a chain of generic adds keeps its sum
       unboxed. The dispatched `quote` result is still boxed because the fallback call

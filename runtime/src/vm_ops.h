@@ -2501,9 +2501,25 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
     return false;
 }
 
-static inline bool mal_vm_object_try_store_static(MalObject *object, MalValue value,
-                                                  MalInlineCache *ic) {
-    return mal_vm_object_try_store(object, ic->key, value, ic);
+/** The static store probe's polymorphic, transition and prototype-object rows. */
+__attribute__((noinline)) bool mal_vm_object_try_store_static_remaining(
+    MalObject *object, MalValue value, MalInlineCache *ic);
+
+/**
+ * Static-name variant of mal_vm_object_try_store; the site identity supplies the key
+ * guard. Only the monomorphic overwrite of an ordinary object expands at each site:
+ * inlining the transition row's slot growth too made clang outline the whole probe,
+ * so every store paid a call even on a monomorphic hit.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_object_try_store_static(
+    MalObject *object, MalValue value, MalInlineCache *ic
+) {
+    if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && !object->is_prototype) {
+        mal_perf_ic_store_mono_hit();
+        mal_object_field_store_shaped(object, ic->slot, value);
+        return true;
+    }
+    return mal_vm_object_try_store_static_remaining(object, value, ic);
 }
 
 /** Apply only a proven writable-slot overwrite or fresh-property transition. */

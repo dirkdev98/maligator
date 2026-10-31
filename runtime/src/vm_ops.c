@@ -2744,6 +2744,12 @@ bool mal_vm_array_try_get_absent_index(const MalArrayObject *arr, MalValue *out)
     return false;
 }
 
+bool mal_vm_object_try_store_static_remaining(
+    MalObject *object, MalValue value, MalInlineCache *ic
+) {
+    return mal_vm_object_try_store(object, ic->key, value, ic);
+}
+
 MAL_PRESERVE_MOST bool mal_vm_property_try_load_length_static_remaining(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
 ) {
