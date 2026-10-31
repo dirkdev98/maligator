@@ -511,7 +511,8 @@ Arithmetic work should support these paths or fix correctness defects.
       block's freed bytes and free-list links once saves about nine instructions
       per dead cell but no measurable time. Neither did a fixed nursery: capping minors at 1 to 8 MB left a
       retention-churn loop's minor sweep time at 30 to 34 ms, the same as the
-      live-set-proportional trigger, and added majors.
+      live-set-proportional trigger, and added majors. Starting cells on a 128-byte
+      cache line left javascript-v2 flat (total +0.18% [-0.17, 0.70]).
 
 - [ ] Share one invocation-local native analysis context across storage, expression,
       root, and fast-path planning. Native read/write, branch, handler, and lazy
@@ -1182,9 +1183,21 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Allocate closure environments where a closure first needs them. Router's
       `processParams` returns early through `done()` for most layers, yet each call
       allocates its environment and hoisted closures on entry: about 160 bytes per
-      call and 8% of the in-process Express allocation volume. Sinking `envPush`
-      past the early exit needs the captured-slot reads before the sink point to
-      become SSA values.
+      call and 8% of the in-process Express allocation volume. Native code already
+      defers the environment to the first closure creation that needs it, but
+      semantic lowering (`compileStatementsToBlock` with `hoistFunctions`) creates
+      the hoisted `param` and `paramCallback` closures at block entry. Sink a hoisted
+      declaration to the nearest dominator of its binding's reads and of the other
+      closures created in the same activation, unless the function uses direct
+      eval, `with` or mapped arguments.
+- [ ] Keep a script closure's `length` and `name` out of its cell until they are
+      reflected on or redefined. Dropping both from frame-copied closures, as an
+      upper-bound probe that breaks reflection, shrank the cell from 128 to 112
+      bytes and cut javascript-v2's allocation phase 4.35% and total 0.78%, through
+      fewer minor collections (242 to 234). Field writers include `object_ops.c`'s
+      slot-pointer accessor, the shaped stores in `vm_ops.h` and the define and
+      delete paths; a shared-fields design must copy the fields at every shape
+      change and value redefinition.
 - [ ] Call a held getter row straight from the static-load probe. A read such as
       `debug.enabled` still passes the out-of-line remaining probe, which declines
       getter rows, and then the static-miss front before the getter runs: about 80

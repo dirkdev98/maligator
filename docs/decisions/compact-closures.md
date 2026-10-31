@@ -58,6 +58,14 @@ reads and writes use that shared environment. Direct closure entries that borrow
 owner retain their environment requirement. This removes an owner allocation when
 all escaping closures can snapshot their bindings.
 
+Creating a closure is one allocation and its stores. The prototype follows the
+function kind, and the name and length come from the definition. Every script
+closure starts in the same `length`, `name` shape, which the VM resolves once from
+its hot atoms and the heap's root shape. A frame copy has its own entry: the
+compiler emits one only when every capture is an initialized immutable frame value,
+so the cell holds exactly the value display and never reserves the owner-vector
+fallback that ordinary creation keeps for an incomplete copy.
+
 When an incoming owner already has heap storage, ordinary closure construction
 copies only a sparse selection that reduces retained storage. Other closures keep
 the owner, and native entries cache its proven immutable values once per invocation.

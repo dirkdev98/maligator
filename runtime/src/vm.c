@@ -888,6 +888,7 @@ static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program
     for (u32 i = 0; i < MAL_HOT_KEY_COUNT; i++) {
         vm->hot_intrinsic_keys[i] = nullptr;
     }
+    vm->closure_metadata_shape = nullptr;
     for (u32 i = 0; i < MAL_ASCII_ATOM_CACHE_CAPACITY; i++) {
         vm->ascii_atom_cache[i] = (MalAsciiAtomCacheEntry) {0};
     }

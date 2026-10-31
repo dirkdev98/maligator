@@ -122,18 +122,53 @@ void mal_function_object_init(
 );
 
 /**
- * Allocate a script function with coallocated metadata and capture_bytes of tail storage.
+ * The shared shape whose own properties are `length` and, when named, `name`, in
+ * that order. Shapes live as long as their heap, so callers may cache the result
+ * for fixed keys.
  */
-MalFunctionObject *mal_function_object_new(
+MalShape *mal_function_object_metadata_shape(
+    MalHeap *heap, MalKey length_key, MalKey name_key, bool named);
+
+/**
+ * Allocate a script function in one cell: the object, its `length` and `name`
+ * fields in `metadata_shape` (named), then capture_bytes of tail storage.
+ */
+static inline MalFunctionObject *mal_function_object_new(
     MalHeap *heap,
+    MalShape *metadata_shape,
     MalObject *prototype,
     i32 function_index,
     i32 length,
     MalString *name,
-    MalKey length_key,
-    MalKey name_key,
     usize capture_bytes
-);
+) {
+    assert(name != nullptr && metadata_shape->inline_count == 2);
+    MalFunctionObject *function = mal_heap_alloc(
+        heap, sizeof(MalFunctionObject) + 2 * sizeof(MalValue) + capture_bytes,
+        MAL_HEAP_FUNCTION_OBJECT);
+    // Closures are created per call, so the fresh cell is initialized in place rather
+    // than through the generic object and shaped-value constructors.
+    MalValue *fields = (MalValue *) (function + 1);
+    MalHeapHeader header = function->object.header;
+    function->object = (MalObject) {
+        .header = header,
+        .extensible = true,
+        .storage_kind = MAL_OBJECT_EMBEDDED,
+        .slot_capacity = 2,
+        .shape = metadata_shape,
+    };
+    function->object_storage = (MalObjectStorage) {.prototype = prototype, .fields = fields};
+    mal_object_mark_as_prototype(prototype);
+    function->function_index = function_index;
+    function->creation_env = nullptr;
+#if MAL_REALMS
+    function->realm = heap->current_realm;
+#endif
+    fields[0] = mal_value_from_i32(length);
+    fields[1] = mal_value_from_string(name);
+    mal_gc_card(&function->object.header, fields[1]);
+    return function;
+}
 
 /**
  * Read the VM function definition index carried by a script function object.

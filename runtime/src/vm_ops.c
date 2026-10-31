@@ -1954,13 +1954,15 @@ static bool mal_vm_capture_value(MalEnv *env, i32 owner_function_index, i32 inde
     return false;
 }
 
-static MalValue mal_vm_create_function(
-    MalVm *vm, i32 function_index, MalEnv *creation_env, const MalValue *frame_values
+// Allocates the closure cell with its own `length` and `name`; the caller fills
+// capture_bytes of tail storage and sets the creation environment.
+static MalFunctionObject *mal_vm_new_closure(
+    MalVm *vm, i32 function_index, const MalFunction *definition, usize capture_bytes
 ) {
     // Generator/async-generator function objects inherit their respective
     // %GeneratorFunction.prototype% / %AsyncGenerator%.
     MalIntrinsic prototype_slot;
-    switch (vm->runtime_image->functions[function_index].kind) {
+    switch (definition->kind) {
         case MAL_FUNCTION_KIND_GENERATOR:
             prototype_slot = MAL_INTRINSIC_GENERATOR_FUNCTION_PROTOTYPE;
             break;
@@ -1974,13 +1976,32 @@ static MalValue mal_vm_create_function(
             prototype_slot = MAL_INTRINSIC_FUNCTION_PROTOTYPE;
             break;
     }
-
-    const MalFunction *definition = &vm->runtime_image->functions[function_index];
-    const MalClosureCaptureLayout *layout = definition->closure_captures;
     MalString *name = definition->name_string_index >= 0 &&
             definition->name_string_index < vm->runtime_image->string_constant_count
         ? &vm->runtime_image->string_constants[definition->name_string_index]
         : mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
+    MalShape *shape = vm->closure_metadata_shape;
+    if (__builtin_expect(shape == nullptr, 0)) {
+        shape = mal_function_object_metadata_shape(
+            &vm->heap,
+            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH),
+            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME),
+            true);
+        vm->closure_metadata_shape = shape;
+    }
+    return mal_function_object_new(
+        &vm->heap,
+        shape,
+        mal_value_to_object(vm->intrinsics[prototype_slot]),
+        function_index,
+        definition->length,
+        name,
+        capture_bytes);
+}
+
+static MalValue mal_vm_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env) {
+    const MalFunction *definition = &vm->runtime_image->functions[function_index];
+    const MalClosureCaptureLayout *layout = definition->closure_captures;
     i32 capture_count = layout != nullptr
         ? definition->closure_capture_owner_count : -1;
     bool complete_capture_chain = capture_count > 1 && mal_vm_capture_chain_is_complete(
@@ -1989,7 +2010,7 @@ static MalValue mal_vm_create_function(
         ? sizeof(MalEnv) + ((usize) capture_count + 1) * sizeof(void *) : 0;
     i32 value_count = layout != nullptr && layout->values != nullptr &&
             layout->value_count > 0 && layout->value_count <= 16 ? layout->value_count : 0;
-    if (value_count > 0 && frame_values == nullptr) {
+    if (value_count > 0) {
         i32 owner = layout->values[0].owner_function_index;
         // Snapshot only a sparse slice whose owner exceeds the copied display.
         if (owner < 0 || owner >= vm->runtime_image->function_count ||
@@ -2006,16 +2027,7 @@ static MalValue mal_vm_create_function(
     }
     usize value_bytes = value_count > 0 ? sizeof(MalEnv) + ((usize) value_count + 1) * sizeof(MalValue) : 0;
     if (value_bytes > capture_bytes) capture_bytes = value_bytes;
-    MalFunctionObject *function = mal_function_object_new(
-        &vm->heap,
-        mal_value_to_object(vm->intrinsics[prototype_slot]),
-        function_index,
-        definition->length,
-        name,
-        mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH),
-        mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME),
-        capture_bytes
-    );
+    MalFunctionObject *function = mal_vm_new_closure(vm, function_index, definition, capture_bytes);
     function->creation_env = creation_env;
     if (value_count > 0) {
         MalEnv *captures = (MalEnv *) ((MalValue *) (function + 1) + 2);
@@ -2029,11 +2041,9 @@ static MalValue mal_vm_create_function(
         for (i32 i = 0; i < value_count; i++) {
             const MalClosureCaptureValue *capture = &layout->values[i];
             MalValue value;
-            bool found = frame_values != nullptr;
-            if (found) value = frame_values[capture->captured_index];
-            else found = mal_vm_capture_value(
-                creation_env, capture->owner_function_index, capture->captured_index, &value);
-            if (!found || mal_value_is_empty(value)) {
+            if (!mal_vm_capture_value(
+                    creation_env, capture->owner_function_index, capture->captured_index, &value) ||
+                    mal_value_is_empty(value)) {
                 complete = false;
                 break;
             }
@@ -2048,7 +2058,6 @@ static MalValue mal_vm_create_function(
             mal_gc_remember_if_old(&function->object.header);
             return mal_value_from_function_object(function);
         }
-        assert(frame_values == nullptr);
     }
     if (capture_count == 0) {
         function->creation_env = nullptr;
@@ -2073,13 +2082,40 @@ static MalValue mal_vm_create_function(
 }
 
 MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env) {
-    return mal_vm_create_function(vm, function_index, creation_env, nullptr);
+    return mal_vm_create_function(vm, function_index, creation_env);
 }
 
+// The compiler emits a frame copy only for a closure whose every capture is an
+// initialized immutable value in this frame, so the display is always complete
+// and the cell needs no room for an owner vector fallback.
 MalValue mal_vm_create_function_from_frame(MalVm *vm, i32 function_index, const MalValue *values) {
-    assert(vm->runtime_image->functions[function_index].closure_captures != nullptr);
-    assert(vm->runtime_image->functions[function_index].closure_captures->value_count > 0);
-    return mal_vm_create_function(vm, function_index, nullptr, values);
+    const MalFunction *definition = &vm->runtime_image->functions[function_index];
+    const MalClosureCaptureLayout *layout = definition->closure_captures;
+    assert(layout != nullptr && layout->values != nullptr);
+    i32 value_count = layout->value_count;
+    assert(value_count > 0 && value_count <= 16);
+    MalFunctionObject *function = mal_vm_new_closure(
+        vm, function_index, definition,
+        sizeof(MalEnv) + ((usize) value_count + 1) * sizeof(MalValue));
+    MalEnv *captures = (MalEnv *) ((MalValue *) (function + 1) + 2);
+    captures->parent = (MalEnv *) function;
+    captures->function_index = MAL_ENV_CAPTURE_VALUES;
+    captures->slot_count = value_count;
+    captures->compact_parent = false;
+    captures->compact_chain_length = 0;
+    ((const MalClosureCaptureValue **)(void *) captures->slots)[0] = layout->values;
+    for (i32 i = 0; i < value_count; i++) {
+        MalValue value = values[layout->values[i].captured_index];
+        assert(!mal_value_is_empty(value));
+#if defined(__wasi__)
+        captures->slots[i + 1] = value;
+#else
+        atomic_init(&captures->slots[i + 1], value);
+#endif
+    }
+    function->creation_env = captures;
+    mal_gc_remember_if_old(&function->object.header);
+    return mal_value_from_function_object(function);
 }
 
 void mal_op_create_function(MalCallable *callable, const MalInstruction *instruction) {

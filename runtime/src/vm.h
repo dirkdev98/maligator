@@ -1972,6 +1972,13 @@ typedef struct MalVm {
     MalString *hot_intrinsic_keys[MAL_HOT_KEY_COUNT];
 
     /**
+     * The heap's shared shape of a fresh script closure (own `length`, then `name`).
+     * Its keys are this VM's hot atoms and its base is the heap root, neither of
+     * which changes, so closure creation needs no per-call validation.
+     */
+    MalShape *closure_metadata_shape;
+
+    /**
      * Direct-mapped by the address of the caller's name, which is nearly always a
      * literal. Entries are still content-validated because a reused buffer can
      * hold another name; the atom table owns the strings.
