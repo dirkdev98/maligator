@@ -16,6 +16,7 @@ import {
 	shapes_bitmaps_live,
 	shapes_bounds,
 	shapes_canvas_create,
+	shapes_canvas_current,
 	shapes_canvas_open,
 	shapes_canvas_title,
 	shapes_canvases_open,
@@ -68,6 +69,12 @@ console.log(
 	);
 }
 console.log(`canvases after using ${shapes_canvases_open()}`);
+const opened = shapes_canvas_open("Same");
+console.log(`same handle ${opened === shapes_canvas_current()}`);
+shapes_canvas_current()?.[Symbol.dispose]();
+console.log(
+	`closed through either ${shapes_canvases_open()} ${shapes_canvas_current() === null}`,
+);
 
 const bitmap = shapes_bitmap_new(3, 2);
 shapes_bitmap_fill(bitmap, 4);

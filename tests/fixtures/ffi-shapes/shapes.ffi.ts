@@ -8,6 +8,7 @@ export default {
 	},
 	functions: {
 		shapes_bitmap_shared: { returns: { borrowed: true } },
+		shapes_canvas_current: { returns: { borrowed: true } },
 		shapes_canvas_title: { params: { canvas: { nullable: true } } },
 		shapes_canvas_create: { params: { canvas: { out: true } } },
 		shapes_parse: { params: { point: { out: true } } },

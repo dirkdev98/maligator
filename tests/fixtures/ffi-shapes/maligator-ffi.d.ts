@@ -50,6 +50,8 @@ declare module "maligator:ffi/shapes" {
 	export function shapes_canvas_close(canvas: ShapesCanvas): void;
 	/** 0 on success */
 	export function shapes_canvas_create(title: string): { result: number; canvas: ShapesCanvas | null };
+	/** The canvas opened last, while it is open */
+	export function shapes_canvas_current(): ShapesCanvas | null;
 	export function shapes_canvas_open(title: string): ShapesCanvas | null;
 	/** NULL for no canvas */
 	export function shapes_canvas_title(canvas: ShapesCanvas | null): string | null;

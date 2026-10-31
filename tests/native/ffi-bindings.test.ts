@@ -20,6 +20,8 @@ const EXPECTED_RESULTS = [
 	'constants 1.4 2.5 4294967296 {"x":0,"y":0}',
 	"canvas Sketch null [object ShapesCanvas] open 1",
 	"canvases after using 0",
+	"same handle true",
+	"closed through either 0 true",
 	"bitmap 3x2 sum 24 live 1",
 	"bitmaps after free 0",
 	"shared after dispose 4",

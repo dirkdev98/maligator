@@ -275,6 +275,137 @@ MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length) {
     return mal_value_from_typed_array_object(array);
 }
 
+typedef struct MalFfiState MalFfiState;
+
+typedef struct MalFfiHandleObject {
+    MalObject object;
+    MalObjectStorage object_storage;
+    const MalFfiHandleType *type;
+    /** The pointer, or the malloc'd copy of a struct; null once closed. */
+    void *value;
+    bool owned;
+    /** The table that finds this open pointer handle by its pointer, or null. */
+    MalFfiState *registry;
+} MalFfiHandleObject;
+
+typedef struct MalFfiHandleEntry {
+    const MalFfiHandleType *type;
+    void *pointer;
+    /** Null for an empty slot. */
+    MalFfiHandleObject *handle;
+} MalFfiHandleEntry;
+
+/**
+ * Per-VM binding state: the shape each record type's objects share, and the open
+ * handle of each pointer, so a library returning a pointer twice yields one handle.
+ * Handle entries are weak; a handle leaves the table when it closes or is collected.
+ */
+struct MalFfiState {
+    struct {
+        const MalFfiRecordType *type;
+        MalShape *shape;
+    } *shapes;
+    usize shape_count;
+    usize shape_capacity;
+    /** Open addressing with linear probing; capacity is zero or a power of two. */
+    MalFfiHandleEntry *handles;
+    usize handle_count;
+    usize handle_capacity;
+};
+
+static void ffi_state_free(MalVm *vm) {
+    MalFfiState *state = vm->ffi;
+    if (state == nullptr) return;
+    // Teardown finalizers run after this, so the handles must forget the table first.
+    for (usize index = 0; index < state->handle_capacity; index++) {
+        if (state->handles[index].handle != nullptr) state->handles[index].handle->registry = nullptr;
+    }
+    free(state->handles);
+    free(state->shapes);
+    free(state);
+    vm->ffi = nullptr;
+}
+
+static MalFfiState *ffi_state(MalVm *vm) {
+    if (vm->ffi != nullptr) return vm->ffi;
+    MalFfiState *state = calloc(1, sizeof(*state));
+    if (state == nullptr || !mal_vm_register_runtime_cleanup(vm, ffi_state_free)) {
+        free(state);
+        return nullptr;
+    }
+    vm->ffi = state;
+    return state;
+}
+
+static usize ffi_handle_slot(const MalFfiHandleType *type, const void *pointer, usize capacity) {
+    u64 key = (u64) (uptr) pointer ^ ((u64) (uptr) type * UINT64_C(0x9E3779B97F4A7C15));
+    key ^= key >> 29;
+    key *= UINT64_C(0xBF58476D1CE4E5B9);
+    key ^= key >> 32;
+    return (usize) key & (capacity - 1);
+}
+
+static MalFfiHandleObject *ffi_handle_find(
+    MalFfiState *state, const MalFfiHandleType *type, const void *pointer) {
+    if (state->handle_capacity == 0) return nullptr;
+    for (usize slot = ffi_handle_slot(type, pointer, state->handle_capacity);;
+         slot = (slot + 1) & (state->handle_capacity - 1)) {
+        MalFfiHandleEntry *entry = &state->handles[slot];
+        if (entry->handle == nullptr) return nullptr;
+        if (entry->type == type && entry->pointer == pointer) return entry->handle;
+    }
+}
+
+static void ffi_handle_place(MalFfiState *state, MalFfiHandleEntry entry) {
+    usize slot = ffi_handle_slot(entry.type, entry.pointer, state->handle_capacity);
+    while (state->handles[slot].handle != nullptr) slot = (slot + 1) & (state->handle_capacity - 1);
+    state->handles[slot] = entry;
+}
+
+/** Record an open pointer handle; without memory it simply stays unregistered. */
+static void ffi_handle_register(MalFfiState *state, MalFfiHandleObject *handle) {
+    if ((state->handle_count + 1) * 2 > state->handle_capacity) {
+        usize capacity = state->handle_capacity == 0 ? 16 : state->handle_capacity * 2;
+        MalFfiHandleEntry *grown = calloc(capacity, sizeof(*grown));
+        if (grown == nullptr) return;
+        MalFfiHandleEntry *previous = state->handles;
+        usize previous_capacity = state->handle_capacity;
+        state->handles = grown;
+        state->handle_capacity = capacity;
+        for (usize index = 0; index < previous_capacity; index++) {
+            if (previous[index].handle != nullptr) ffi_handle_place(state, previous[index]);
+        }
+        free(previous);
+    }
+    ffi_handle_place(state, (MalFfiHandleEntry) {handle->type, handle->value, handle});
+    state->handle_count++;
+    handle->registry = state;
+}
+
+/** Remove a handle's entry, shifting later probes back so lookups stay correct. */
+static void ffi_handle_unregister(MalFfiHandleObject *handle) {
+    MalFfiState *state = handle->registry;
+    if (state == nullptr) return;
+    handle->registry = nullptr;
+    usize mask = state->handle_capacity - 1;
+    usize slot = ffi_handle_slot(handle->type, handle->value, state->handle_capacity);
+    while (state->handles[slot].handle != handle) slot = (slot + 1) & mask;
+    state->handles[slot] = (MalFfiHandleEntry) {0};
+    state->handle_count--;
+    for (usize next = (slot + 1) & mask; state->handles[next].handle != nullptr;
+         next = (next + 1) & mask) {
+        MalFfiHandleEntry entry = state->handles[next];
+        state->handles[next] = (MalFfiHandleEntry) {0};
+        ffi_handle_place(state, entry);
+    }
+}
+
+static MalFfiHandleObject *ffi_handle(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_FFI_HANDLE_OBJECT)
+        ? (MalFfiHandleObject *) mal_value_to_object(value)
+        : nullptr;
+}
+
 static bool ffi_store(MalVm *vm, MalValue target, MalKey key, MalValue value) {
     if (!mal_object_set(mal_value_to_object(target), key, value)) {
         mal_vm_throw_allocation_error(vm);
@@ -293,34 +424,10 @@ static bool ffi_set_field(MalVm *vm, MalValue record, const char *name, MalValue
     return stored;
 }
 
-/** Per-VM binding state: the shape each record type's objects share. */
-typedef struct MalFfiState {
-    struct {
-        const MalFfiRecordType *type;
-        MalShape *shape;
-    } *shapes;
-    usize shape_count;
-    usize shape_capacity;
-} MalFfiState;
-
-static void ffi_state_free(MalVm *vm) {
-    if (vm->ffi == nullptr) return;
-    free(vm->ffi->shapes);
-    free(vm->ffi);
-    vm->ffi = nullptr;
-}
-
 /** The shape of `type`'s objects; shapes live as long as the heap's transition tree. */
 static MalShape *ffi_record_shape(MalVm *vm, const MalFfiRecordType *type) {
-    MalFfiState *state = vm->ffi;
-    if (state == nullptr) {
-        state = calloc(1, sizeof(*state));
-        if (state == nullptr || !mal_vm_register_runtime_cleanup(vm, ffi_state_free)) {
-            free(state);
-            return nullptr;
-        }
-        vm->ffi = state;
-    }
+    MalFfiState *state = ffi_state(vm);
+    if (state == nullptr) return nullptr;
     for (usize index = 0; index < state->shape_count; index++) {
         if (state->shapes[index].type == type) return state->shapes[index].shape;
     }
@@ -465,23 +572,9 @@ static char *ffi_identity(MalVm *vm, const MalFfiLibrary *library, const char *n
     return identity;
 }
 
-typedef struct MalFfiHandleObject {
-    MalObject object;
-    MalObjectStorage object_storage;
-    const MalFfiHandleType *type;
-    /** The pointer, or the malloc'd copy of a struct; null once closed. */
-    void *value;
-    bool owned;
-} MalFfiHandleObject;
-
-static MalFfiHandleObject *ffi_handle(MalValue value) {
-    return mal_value_is_heap_type(value, MAL_HEAP_FFI_HANDLE_OBJECT)
-        ? (MalFfiHandleObject *) mal_value_to_object(value)
-        : nullptr;
-}
-
 /** Forget the resource without releasing it; the struct copy is freed here. */
 static void ffi_handle_forget(MalFfiHandleObject *handle) {
+    if (handle->registry != nullptr) ffi_handle_unregister(handle);
     if (handle->type->size > 0) free(handle->value);
     handle->value = nullptr;
 }
@@ -512,8 +605,8 @@ static MalValue ffi_handle_dispose(
     if (handle->value != nullptr) {
         void *value = handle->value;
         bool release = handle->owned && handle->type->destroy != nullptr;
-        // Close before releasing: a struct copy is only borrowed by the call.
-        if (handle->type->size == 0) handle->value = nullptr;
+        // Close before releasing: the library may hand out the same pointer again.
+        if (handle->type->size == 0) ffi_handle_forget(handle);
         if (release) handle->type->destroy(value);
         ffi_handle_forget(handle);
     }
@@ -572,6 +665,13 @@ static MalValue ffi_handle_prototype(
 MalValue mal_ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned) {
+    MalFfiState *state = type->size == 0 ? ffi_state(vm) : nullptr;
+    MalFfiHandleObject *open = state == nullptr ? nullptr : ffi_handle_find(state, type, value);
+    if (open != nullptr) {
+        // One pointer, one handle: closing it through any path closes it everywhere.
+        if (owned) open->owned = true;
+        return mal_value_from_heap((MalHeapHeader *) open);
+    }
     void *stored = value;
     if (type->size > 0) {
         stored = malloc(type->size);
@@ -595,6 +695,8 @@ MalValue mal_ffi_new_handle(
     handle->type = type;
     handle->value = stored;
     handle->owned = owned;
+    handle->registry = nullptr;
+    if (state != nullptr) ffi_handle_register(state, handle);
     mal_gc_unroot(&root);
     return mal_value_from_heap((MalHeapHeader *) handle);
 }
