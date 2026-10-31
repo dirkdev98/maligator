@@ -176,8 +176,8 @@ bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, 
 }
 
 bool mal_ffi_to_bytes(
-    MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site, void **data,
-    size_t *length, void **pin) {
+    MalVm *vm, MalValue value, bool nullable, bool writable, const MalFfiSite *site,
+    void **data, size_t *length, void **pin) {
     *pin = nullptr;
     if (nullable && mal_value_is_null(value)) {
         *data = nullptr;
@@ -186,6 +186,10 @@ bool mal_ffi_to_bytes(
     }
     MalBufferSourceSpan span;
     MalBufferSourceSpanStatus status = mal_buffer_source_span(value, &span);
+    if (status == MAL_BUFFER_SOURCE_SPAN_OK && writable && span.buffer->immutable) {
+        return ffi_fail(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a buffer that is not immutable");
+    }
     if (status == MAL_BUFFER_SOURCE_SPAN_OK && !span.shared) {
         *data = span.data;
         *length = span.length;
@@ -325,12 +329,20 @@ typedef struct MalFfiHandleObject {
 /** A kept callback; trampolines receive a pointer to `callback`, its first member. */
 typedef struct MalFfiKept {
     MalFfiCallback callback;
-    /** The element of the VM's kept-function array that roots `callback.function`. */
+    /** The element of the VM's kept-function holder that roots `callback.function`. */
     u32 slot;
     pthread_t thread;
     struct MalFfiKept *previous;
     struct MalFfiKept *next;
+    /** Link in the VM's queue of releases that arrived where the VM could not run them. */
+    struct MalFfiKept *pending;
 } MalFfiKept;
+
+/**
+ * Set while a collected handle's destroy function runs inside the collector, where
+ * a library might call back or release a kept callback but no JavaScript can run.
+ */
+static _Thread_local bool ffi_finalizing;
 
 typedef struct MalFfiHandleEntry {
     const MalFfiHandleType *type;
@@ -352,8 +364,10 @@ struct MalFfiState {
     MalFfiHandleEntry *handles;
     usize handle_count;
     usize handle_capacity;
-    /** Callbacks libraries still hold, and the kept-function array's reusable slots. */
+    /** Callbacks libraries still hold, and the kept-function holder's reusable slots. */
     MalFfiKept *kept;
+    /** Releases from a collection or another thread, run on the VM thread later. */
+    _Atomic(MalFfiKept *) pending_releases;
     u32 kept_slots;
     u32 *free_slots;
     u32 free_count;
@@ -371,6 +385,13 @@ static void ffi_state_free(MalVm *vm) {
     // of freeing, so a late call finds no VM and a late release frees the context.
     for (MalFfiKept *kept = state->kept; kept != nullptr; kept = kept->next) {
         kept->callback.vm = nullptr;
+    }
+    // Contexts the library already released only wait for this VM; nothing holds them.
+    MalFfiKept *pending = atomic_exchange(&state->pending_releases, nullptr);
+    while (pending != nullptr) {
+        MalFfiKept *next = pending->pending;
+        free(pending);
+        pending = next;
     }
     free(state->free_slots);
     free(state->handles);
@@ -688,6 +709,8 @@ static const char FFI_KEPT_IDENTITY[] = "maligator:ffi#kept";
     abort();
 }
 
+static void ffi_run_pending_releases(MalVm *vm);
+
 MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function) {
     MalValue held[2] = {function, mal_value_new_undefined()};
     MalRootSpan root;
@@ -695,17 +718,20 @@ MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function) {
     MalFfiState *state = ffi_state(vm);
     MalFfiKept *kept = calloc(1, sizeof(*kept));
     bool ready = state != nullptr && kept != nullptr;
+    if (ready) ffi_run_pending_releases(vm);
     if (ready && !ffi_prepared(vm, FFI_KEPT_IDENTITY, &held[1])) {
-        held[1] = mal_ffi_new_array(vm, 0);
+        // A holder without a prototype, so no inherited setter can refuse a slot.
+        held[1] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
         char *identity = strdup(FFI_KEPT_IDENTITY);
         ready = identity != nullptr && ffi_prepare(vm, identity, held[1]);
         if (identity == nullptr) mal_vm_throw_allocation_error(vm);
     }
     u32 slot = 0;
     if (ready) {
-        slot = state->free_count > 0 ? state->free_slots[--state->free_count]
-                                     : state->kept_slots++;
+        bool reused = state->free_count > 0;
+        slot = reused ? state->free_slots[--state->free_count] : state->kept_slots++;
         ready = mal_ffi_set_element(vm, held[1], (int32_t) slot, held[0]);
+        if (!ready && reused) state->free_count++;
     }
     mal_gc_unroot(&root);
     if (!ready) {
@@ -722,12 +748,10 @@ MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function) {
     return &kept->callback;
 }
 
-void mal_ffi_release(void *data) {
-    if (data == nullptr) return;
-    MalFfiKept *kept = data;
+/** Drop a released context's slot and free it; runs on the VM thread outside collection. */
+static void ffi_release_now(MalFfiKept *kept) {
     MalVm *vm = kept->callback.vm;
     if (vm != nullptr) {
-        if (!pthread_equal(kept->thread, pthread_self())) ffi_wrong_thread();
         MalFfiState *state = vm->ffi;
         MalValue array;
         if (ffi_prepared(vm, FFI_KEPT_IDENTITY, &array)) {
@@ -754,11 +778,57 @@ void mal_ffi_release(void *data) {
     free(kept);
 }
 
+static void ffi_run_pending_releases(MalVm *vm) {
+    MalFfiState *state = vm->ffi;
+    if (state == nullptr || atomic_load_explicit(&state->pending_releases, memory_order_relaxed) == nullptr) {
+        return;
+    }
+    MalFfiKept *pending = atomic_exchange(&state->pending_releases, nullptr);
+    while (pending != nullptr) {
+        MalFfiKept *next = pending->pending;
+        ffi_release_now(pending);
+        pending = next;
+    }
+}
+
+void mal_ffi_release(void *data) {
+    if (data == nullptr) return;
+    MalFfiKept *kept = data;
+    MalVm *vm = kept->callback.vm;
+    // Inside a collection or on another thread the VM cannot be touched; queue the
+    // context for the VM thread, which runs the queue after its next C call.
+    if (vm != nullptr && (ffi_finalizing || !pthread_equal(kept->thread, pthread_self()))) {
+        MalFfiState *state = vm->ffi;
+        MalFfiKept *head = atomic_load(&state->pending_releases);
+        do {
+            kept->pending = head;
+        } while (!atomic_compare_exchange_weak(&state->pending_releases, &head, kept));
+        return;
+    }
+    ffi_release_now(kept);
+}
+
+void mal_ffi_native_enter(MalVm *vm) {
+    vm->gc_native_frames++;
+}
+
+void mal_ffi_native_leave(MalVm *vm) {
+    vm->gc_native_frames--;
+}
+
+void mal_ffi_collectable_begin(MalVm *vm) {
+    mal_gc_native_rooted_begin(vm);
+}
+
+void mal_ffi_collectable_end(MalVm *vm) {
+    mal_gc_native_rooted_end(vm);
+    ffi_run_pending_releases(vm);
+}
+
 MalVm *mal_ffi_callback_vm(MalFfiCallback *callback) {
     MalFfiKept *kept = (MalFfiKept *) callback;
-    if (kept->callback.vm != nullptr && !pthread_equal(kept->thread, pthread_self())) {
-        ffi_wrong_thread();
-    }
+    if (kept->callback.vm == nullptr || ffi_finalizing) return nullptr;
+    if (!pthread_equal(kept->thread, pthread_self())) ffi_wrong_thread();
     return kept->callback.vm;
 }
 
@@ -785,7 +855,9 @@ static void ffi_handle_finalize(MalHeapHeader *cell) {
     MalFfiHandleObject *handle = (MalFfiHandleObject *) cell;
     if (handle->value != nullptr && handle->owned && handle->type->collect
         && handle->type->destroy != nullptr) {
+        ffi_finalizing = true;
         handle->type->destroy(handle->value);
+        ffi_finalizing = false;
     }
     ffi_handle_forget(handle);
 }

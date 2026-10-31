@@ -164,6 +164,10 @@ const readResult = shapes_read((points, bytes) => {
 	return points?.length ?? 0;
 });
 console.log(`read ${readResult} ${readSeen}`);
+const immutable = (
+	new Uint8Array([1, 2, 3]).buffer as unknown as { transferToImmutable(): ArrayBuffer }
+).transferToImmutable();
+console.log(`immutable checksum ${shapes_checksum(immutable)}`);
 const opened = shapes_canvas_open("Same");
 console.log(`same handle ${opened === shapes_canvas_current()}`);
 shapes_canvas_current()?.[Symbol.dispose]();
@@ -243,6 +247,7 @@ const rejected = [
 	() => shapes_add({ x: 1 } as unknown as { x: number; y: number }, { x: 0, y: 0 }),
 	() => shapes_text_bytes("a\0b"),
 	() => shapes_log_count("%d", 1.5),
+	() => shapes_fill(new Uint8Array(immutable), () => 0),
 ];
 for (const call of rejected) {
 	try {

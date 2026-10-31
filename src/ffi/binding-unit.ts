@@ -85,7 +85,11 @@ const SCALAR_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
  * the function object and argument array of an ordinary call. Arguments a getter or
  * callback could outlive are rooted for the call, as the call path roots them.
  */
-function directEntry(library: string, binding: BoundFunction): Array<string> {
+function directEntry(
+	library: string,
+	binding: BoundFunction,
+	callsBack: boolean,
+): Array<string> {
 	const arity = binding.params.length;
 	const symbol = directSymbol(library, binding.name);
 	const parameters = Array.from(
@@ -94,23 +98,33 @@ function directEntry(library: string, binding: BoundFunction): Array<string> {
 	);
 	const invoke = (args: string) =>
 		`mal_ffi_function_${binding.name}(vm, mal_ffi_undefined(), ${args}, ${String(arity)}, mal_ffi_undefined(), mal_ffi_undefined())`;
-	if (arity === 0) {
-		return ["", `MalValue ${symbol}(MalVm *vm) {`, `	return ${invoke("nullptr")};`, "}"];
-	}
 	const rooted = binding.params.some((param) => !SCALAR_INPUTS.has(param.value.kind));
+	const args = arity === 0 ? "nullptr" : "mal_direct_args";
+	// A binding that can call back runs as a native frame, as on the ordinary call path.
+	const framed = rooted || callsBack;
 	return [
 		"",
 		`MalValue ${symbol}(MalVm *vm${parameters.join("")}) {`,
-		`	MalValue mal_direct_args[${String(arity)}] = { ${Array.from({ length: arity }, (_, index) => `mal_a${String(index)}`).join(", ")} };`,
+		...(arity === 0
+			? []
+			: [
+					`	MalValue mal_direct_args[${String(arity)}] = { ${Array.from({ length: arity }, (_, index) => `mal_a${String(index)}`).join(", ")} };`,
+				]),
 		...(rooted
 			? [
 					"	MalFfiRoots mal_direct_roots;",
 					`	mal_ffi_root(&mal_direct_roots, mal_direct_args, ${String(arity)});`,
-					`	MalValue mal_direct_result = ${invoke("mal_direct_args")};`,
-					"	mal_ffi_unroot(&mal_direct_roots);",
+				]
+			: []),
+		...(callsBack ? ["	mal_ffi_native_enter(vm);"] : []),
+		...(framed
+			? [
+					`	MalValue mal_direct_result = ${invoke(args)};`,
+					...(callsBack ? ["	mal_ffi_native_leave(vm);"] : []),
+					...(rooted ? ["	mal_ffi_unroot(&mal_direct_roots);"] : []),
 					"	return mal_direct_result;",
 				]
-			: [`	return ${invoke("mal_direct_args")};`]),
+			: [`	return ${invoke(args)};`]),
 		"}",
 	];
 }
@@ -619,6 +633,22 @@ class BindingWriter {
 				? [`if ((${expression}) != nullptr) ${value.free}((void *) (${expression}));`]
 				: [];
 		const unlessThrew = pending ? "if (!mal_ffi_threw(vm)) " : "";
+		const handle =
+			value.kind === "handle" && value.owned ? this.#handle(value.name) : undefined;
+		if (pending && handle?.destroy !== undefined) {
+			// A callback threw, so no handle will own the new resource: release it here.
+			const pointer =
+				handle.representation === "struct"
+					? `&(${expression})`
+					: `(void *) (${expression})`;
+			const present =
+				handle.representation === "pointer" ? `(${expression}) != nullptr` : "true";
+			return [
+				`if (!mal_ffi_threw(vm)) ${target} = ${this.write(value, expression)};`,
+				`else if (${present}) mal_ffi_destroy_${handle.name}(${pointer});`,
+				...release,
+			];
+		}
 		if (value.kind === "bytes") {
 			return [
 				`${unlessThrew}${target} = (${expression}) == nullptr ? mal_ffi_null() : mal_ffi_from_bytes(vm, ${expression}, (size_t) (${count}));`,
@@ -839,7 +869,7 @@ class BindingWriter {
 						);
 						cleanup.push(`mal_ffi_unpin(mal_pin_${String(index)});`);
 						buffers.push(
-							`if (!mal_ffi_to_bytes(vm, ${source}, ${value.nullable}, ${site}, &mal_bytes_${String(index)}, &mal_bytes_length_${String(index)}, &mal_pin_${String(index)})) goto mal_done;`,
+							`if (!mal_ffi_to_bytes(vm, ${source}, ${value.nullable}, ${value.writable === true}, ${site}, &mal_bytes_${String(index)}, &mal_bytes_length_${String(index)}, &mal_pin_${String(index)})) goto mal_done;`,
 							`${local} = (${localDeclaration(param.type, "")}) mal_bytes_${String(index)};`,
 						);
 						setCount(index, `mal_bytes_length_${String(index)}`, site, buffers);
@@ -1003,12 +1033,34 @@ class BindingWriter {
 					? "mal_count"
 					: `mal_argument_${String(binding.resultCount)}`;
 		const after: Array<string> = [];
+		const callsBack =
+			this.#plan.keepsCallbacks ||
+			binding.params.some((param) => param.value.kind === "callback");
+		// A kept callback the library never received goes back if the C call never ran.
+		const keptIndexes = binding.arguments.flatMap((_, index) =>
+			keptCallback(index) ? [index] : [],
+		);
+		if (keptIndexes.length > 0) {
+			locals.push("bool mal_called = false;");
+			cleanup.push(
+				...keptIndexes.map(
+					(index) => `if (!mal_called) mal_ffi_release(mal_kept_${String(index)});`,
+				),
+			);
+		}
+		const enter = [
+			...(keptIndexes.length > 0 ? ["mal_called = true;"] : []),
+			...(callsBack ? ["mal_ffi_collectable_begin(vm);"] : []),
+		];
+		const leave = callsBack ? ["mal_ffi_collectable_end(vm);"] : [];
 		if (binding.returns.kind === "undefined") {
-			after.push(`${call};`, ...closes);
+			after.push(...enter, `${call};`, ...leave, ...closes);
 		} else {
 			locals.push(`${localDeclaration(declaration.returns, "mal_return")};`);
 			after.push(
+				...enter,
 				`mal_return = ${call};`,
+				...leave,
 				...closes,
 				...this.#owned(
 					binding.returns,
@@ -1016,8 +1068,7 @@ class BindingWriter {
 					"mal_result",
 					count,
 					"&mal_site_result",
-					this.#plan.keepsCallbacks ||
-						binding.params.some((param) => param.value.kind === "callback"),
+					callsBack,
 				),
 			);
 		}
@@ -1123,7 +1174,12 @@ export function generateBindingUnit(
 	const functions = plan.functions.flatMap((binding) => [
 		"",
 		...writer.function(binding),
-		...directEntry(library, binding),
+		...directEntry(
+			library,
+			binding,
+			plan.keepsCallbacks ||
+				binding.params.some((param) => param.value.kind === "callback"),
+		),
 	]);
 	const constants = plan.constants.flatMap((constant) => [
 		"",

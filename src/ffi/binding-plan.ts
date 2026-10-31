@@ -23,8 +23,16 @@ export type JsValue =
 	 * then released with `free` when the caller owns them.
 	 */
 	| { readonly kind: "string"; readonly nullable: boolean; readonly free?: string }
-	/** Input bytes C uses in place during the call; results copied into a Uint8Array. */
-	| { readonly kind: "bytes"; readonly nullable: boolean; readonly free?: string }
+	/**
+	 * Input bytes C uses in place during the call; results copied into a Uint8Array.
+	 * `writable` inputs reject immutable buffers.
+	 */
+	| {
+			readonly kind: "bytes";
+			readonly nullable: boolean;
+			readonly free?: string;
+			readonly writable?: true;
+	  }
 	/** A C array of `element` values, copied from or into a JavaScript array. */
 	| {
 			readonly kind: "sequence";
@@ -426,7 +434,16 @@ class Planner {
 			if (!byteSized && target.kind !== "void") {
 				throw new FfiError(`bytes applies to void and byte pointers, not ${spelling}`);
 			}
-			return { value: { kind: "bytes", nullable, ...free } };
+			const writable =
+				position === "param" && !("const" in target && target.const === true);
+			return {
+				value: {
+					kind: "bytes",
+					nullable,
+					...free,
+					...(writable ? { writable: true } : {}),
+				},
+			};
 		}
 		if (facts.array !== undefined) {
 			// Elements of a borrowed array, such as a callback's, stay the library's.

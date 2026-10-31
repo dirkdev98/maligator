@@ -199,11 +199,12 @@ bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, 
  * returns. Shared buffers are rejected, and a binding resolves buffers after every
  * other argument so no JavaScript runs between this and the call. The buffer stays
  * pinned against detaching and transfer, including by JavaScript a callback runs,
- * until `mal_ffi_unpin` receives `pin`.
+ * until `mal_ffi_unpin` receives `pin`. A `writable` parameter rejects immutable
+ * buffers, whose contents must never change.
  */
 bool mal_ffi_to_bytes(
-    MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site, void **data,
-    size_t *length, void **pin);
+    MalVm *vm, MalValue value, bool nullable, bool writable, const MalFfiSite *site,
+    void **data, size_t *length, void **pin);
 /** Release a pin from `mal_ffi_to_bytes`; null is ignored. */
 void mal_ffi_unpin(void *pin);
 /** The element count of an array argument; null yields 0 for a nullable site. */
@@ -301,13 +302,31 @@ typedef struct MalFfiCallback {
  * an allocation throw.
  */
 MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function);
-/** The destructor a binding hands the library for a kept callback's user data. */
+/**
+ * The destructor a binding hands the library for a kept callback's user data. A
+ * release from another thread, or from a destroy function the collector runs, is
+ * queued and completes on the VM thread after its next C call that can call back.
+ */
 void mal_ffi_release(void *data);
 /**
- * The VM a kept callback runs in, or null once that VM is gone. Aborts when the
- * library calls back from another thread, where JavaScript cannot run.
+ * The VM a kept callback runs in, or null when JavaScript cannot run: once that VM
+ * is gone, or while the collector runs a handle's destroy function. Aborts when the
+ * library calls back from another thread.
  */
 MalVm *mal_ffi_callback_vm(MalFfiCallback *callback);
+/**
+ * A direct entry that may call back counts as a native frame, as an ordinary call
+ * of the binding does, so `mal_ffi_collectable_begin` balances on either path.
+ */
+void mal_ffi_native_enter(MalVm *vm);
+void mal_ffi_native_leave(MalVm *vm);
+/**
+ * Bracket a C call that may run JavaScript: everything the binding holds is rooted,
+ * so the collector may run inside callbacks instead of letting a long-running call
+ * grow the heap. The end also completes queued releases.
+ */
+void mal_ffi_collectable_begin(MalVm *vm);
+void mal_ffi_collectable_end(MalVm *vm);
 
 /** Check that a callback argument is callable; null passes for a nullable site. */
 bool mal_ffi_to_function(MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site);
