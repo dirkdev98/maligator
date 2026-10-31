@@ -12,6 +12,7 @@ const fixture = path.join(repositoryRoot, "tests/fixtures/ffi-shapes");
 const EXPECTED_RESULTS = [
 	'add {"x":4,"y":6.5}',
 	"area 12",
+	'other shapes [{"x":1,"y":2},{"x":1,"y":2},{"x":5,"y":1}]',
 	"contains true false",
 	"mode both null",
 	"total 9007199254740994",

@@ -1813,6 +1813,9 @@ typedef struct MalVm {
     /** Canonical null-prototype `{ changes, lastInsertRowid }` result layout. */
     struct MalShape *node_sqlite_run_result_shape;
 
+    /** C library binding state, owned by runtime/mal_ffi.c; null until first used. */
+    struct MalFfiState *ffi;
+
     /** Bounded plain interpreted-function call cache; see vm_ops.c. */
     MalInterpCallCacheEntry *interp_call_cache;
 

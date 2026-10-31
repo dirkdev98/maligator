@@ -35,6 +35,22 @@ import {
 const box = { min: { x: 0, y: 0 }, max: { x: 4, y: 3 } };
 console.log(`add ${JSON.stringify(shapes_add({ x: 1, y: 2 }, { x: 3, y: 4.5 }))}`);
 console.log(`area ${shapes_area(box)}`);
+const origin = { x: 0, y: 0 };
+console.log(
+	`other shapes ${JSON.stringify([
+		shapes_add({ y: 2, x: 1 }, origin),
+		shapes_add({ x: 1, y: 2, z: 3 } as { x: number; y: number }, origin),
+		shapes_add(
+			{
+				get x() {
+					return 5;
+				},
+				y: 1,
+			},
+			origin,
+		),
+	])}`,
+);
 console.log(
 	`contains ${shapes_contains(box, { x: 1, y: 1 })} ${shapes_contains(box, { x: 9, y: 1 })}`,
 );

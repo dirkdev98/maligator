@@ -243,38 +243,50 @@ class BindingWriter {
 	}
 
 	/** Statements that store the C value `expression` into the rooted container. */
-	#store(
-		value: JsValue,
-		expression: string,
-		store: (element: string) => string,
-	): Array<string> {
+	/**
+	 * Statements that convert the C value `expression` into `target`, a rooted
+	 * slot. Arrays fill a new array element by element.
+	 */
+	#produce(value: JsValue, expression: string, target: string): Array<string> {
 		if (value.kind !== "array") {
 			return [
-				`mal_element = ${this.write(value, expression)};`,
-				`if (mal_ffi_threw(vm) || !${store("mal_element")}) goto mal_done;`,
+				`${target} = ${this.write(value, expression)};`,
+				"if (mal_ffi_threw(vm)) goto mal_done;",
 			];
 		}
-		const array = this.#fresh("array");
+		const element = this.#fresh("element");
 		const roots = this.#fresh("roots");
 		const index = this.#fresh("index");
+		const stored = this.#fresh("stored");
 		return [
-			`MalValue ${array} = mal_ffi_new_array(vm, ${value.length});`,
-			`if (mal_ffi_threw(vm)) goto mal_done;`,
-			`MalFfiRoots ${roots};`,
-			`mal_ffi_root(&${roots}, &${array}, 1);`,
+			`${target} = mal_ffi_new_array(vm, ${value.length});`,
+			"if (mal_ffi_threw(vm)) goto mal_done;",
 			`for (int32_t ${index} = 0; ${index} < ${value.length}; ${index}++) {`,
-			...this.#store(
-				value.of,
-				`${expression}[${index}]`,
-				(element) => `mal_ffi_set_element(vm, ${array}, ${index}, ${element})`,
-			).map(
+			`\tMalValue ${element} = mal_ffi_undefined();`,
+			`\tMalFfiRoots ${roots};`,
+			`\tmal_ffi_root(&${roots}, &${element}, 1);`,
+			...this.#produce(value.of, `${expression}[${index}]`, element).map(
 				(line) =>
 					`\t${line.replace("goto mal_done;", `{ mal_ffi_unroot(&${roots}); goto mal_done; }`)}`,
 			),
+			`\tbool ${stored} = mal_ffi_set_element(vm, ${target}, ${index}, ${element});`,
+			`\tmal_ffi_unroot(&${roots});`,
+			`\tif (!${stored}) goto mal_done;`,
 			"}",
-			`mal_ffi_unroot(&${roots});`,
-			`if (!${store(array)}) goto mal_done;`,
 		];
+	}
+
+	/** Whether converting a C value allocates, so earlier results need rooting. */
+	#allocates(value: JsValue): boolean {
+		switch (value.kind) {
+			case "integer":
+			case "float":
+			case "boolean":
+			case "undefined":
+				return false;
+			default:
+				return true;
+		}
 	}
 
 	recordHelpers(): Array<string> {
@@ -292,55 +304,72 @@ class BindingWriter {
 				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${this.#record(name).spelling} mal_value);`,
 			);
 		}
+		for (const name of [...new Set([...inputs, ...outputs])].sort(byteOrder)) {
+			const record = this.#record(name);
+			lines.push(
+				`static const char *const mal_ffi_record_fields_${name}[] = { ${record.fields.map((field) => cString(field.name)).join(", ")} };`,
+				`static const MalFfiRecordType mal_ffi_record_${name} = { mal_ffi_record_fields_${name}, ${String(record.fields.length)} };`,
+			);
+		}
 		for (const name of inputs) {
 			const record = this.#record(name);
+			const count = String(record.fields.length);
 			lines.push(
 				"",
 				`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out) {`,
+				`\tMalValue mal_fields[${count}] = {};`,
+				"\tMalFfiRoots mal_roots;",
+				`\tmal_ffi_root(&mal_roots, mal_fields, ${count});`,
+				`\tbool mal_ok = mal_ffi_record_fields(vm, mal_value, &mal_ffi_record_${name}, mal_site, mal_fields);`,
+				"\tif (!mal_ok) goto mal_done;",
 				"\tMalFfiSite mal_field_site = *mal_site;",
-				"\tMalValue mal_field;",
 			);
-			for (const field of record.fields) {
+			record.fields.forEach((field, index) => {
 				lines.push(
 					`\tmal_field_site.field = ${cString(field.name)};`,
-					`\tif (!mal_ffi_field(vm, mal_value, ${cString(field.name)}, mal_site, &mal_field)) return false;`,
 					...this.read(
 						field.value,
 						field.type,
-						"mal_field",
+						`mal_fields[${String(index)}]`,
 						`mal_out->${field.name}`,
 						"&mal_field_site",
-						"return false;",
+						"{ mal_ok = false; goto mal_done; }",
 						[],
 					).map((line) => `\t${line}`),
 				);
-			}
-			lines.push("\treturn true;", "}");
+			});
+			lines.push("mal_done:", "\tmal_ffi_unroot(&mal_roots);", "\treturn mal_ok;", "}");
 		}
 		for (const name of outputs) {
 			const record = this.#record(name);
+			const count = record.fields.length;
+			const rooted = record.fields.some((field) => this.#allocates(field.value));
 			lines.push(
 				"",
 				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${record.spelling} mal_value) {`,
-				"\tMalValue mal_record = mal_ffi_new_record(vm);",
-				"\tif (mal_ffi_threw(vm)) return mal_ffi_undefined();",
-				"\tMalFfiRoots mal_roots;",
-				"\tmal_ffi_root(&mal_roots, &mal_record, 1);",
-				"\tMalValue mal_element;",
+				`\tMalValue mal_values[${String(count)}] = {};`,
+				"\tMalValue mal_record = mal_ffi_undefined();",
+				...(rooted
+					? [
+							"\tMalFfiRoots mal_roots;",
+							`\tmal_ffi_root(&mal_roots, mal_values, ${String(count)});`,
+						]
+					: []),
 			);
-			for (const field of record.fields) {
+			record.fields.forEach((field, index) => {
 				lines.push(
-					...this.#store(
+					...this.#produce(
 						field.value,
 						`mal_value.${field.name}`,
-						(element) =>
-							`mal_ffi_set_field(vm, mal_record, ${cString(field.name)}, ${element})`,
+						`mal_values[${String(index)}]`,
 					).map((line) => `\t${line}`),
 				);
-			}
+			});
 			lines.push(
+				`\tmal_record = mal_ffi_new_record(vm, &mal_ffi_record_${name}, mal_values);`,
+				"\tgoto mal_done;",
 				"mal_done:",
-				"\tmal_ffi_unroot(&mal_roots);",
+				...(rooted ? ["\tmal_ffi_unroot(&mal_roots);"] : []),
 				"\treturn mal_ffi_threw(vm) ? mal_ffi_undefined() : mal_record;",
 				"}",
 			);
@@ -629,34 +658,35 @@ class BindingWriter {
 			);
 		}
 		if (binding.outputs.length > 0) {
+			const fields = [
+				...(binding.returns.kind === "undefined" ? [] : ["result"]),
+				...binding.outputs.map((output) => output.name),
+			];
+			const first = fields.length - binding.outputs.length;
+			locals.push(
+				`static const char *const mal_output_fields[] = { ${fields.map(cString).join(", ")} };`,
+				`static const MalFfiRecordType mal_output_type = { mal_output_fields, ${String(fields.length)} };`,
+			);
 			after.push(
-				"MalValue mal_values[2] = { mal_result, mal_ffi_undefined() };",
-				"MalFfiRoots mal_value_roots;",
-				"mal_ffi_root(&mal_value_roots, mal_values, 2);",
-				"if (!mal_ffi_threw(vm)) mal_values[1] = mal_ffi_new_record(vm);",
-				...(binding.returns.kind === "undefined"
-					? []
-					: [
-							`if (!mal_ffi_threw(vm)) mal_ffi_set_field(vm, mal_values[1], "result", mal_values[0]);`,
-						]),
+				`MalValue mal_outputs[${String(fields.length)}] = { ${first === 1 ? "mal_result" : "0"} };`,
+				"MalFfiRoots mal_output_roots;",
+				`mal_ffi_root(&mal_output_roots, mal_outputs, ${String(fields.length)});`,
 			);
 			binding.outputs.forEach((output, index) => {
-				const value = this.#fresh("output");
 				after.push(
-					`MalValue ${value} = mal_ffi_undefined();`,
 					...this.#owned(
 						output.value,
 						`mal_output_${String(index)}`,
-						value,
+						`mal_outputs[${String(first + index)}]`,
 						undefined,
 						"&mal_site_result",
 					),
-					`if (!mal_ffi_threw(vm)) mal_ffi_set_field(vm, mal_values[1], ${cString(output.name)}, ${value});`,
 				);
 			});
 			after.push(
-				"mal_ffi_unroot(&mal_value_roots);",
-				"mal_result = mal_ffi_threw(vm) ? mal_ffi_undefined() : mal_values[1];",
+				"if (!mal_ffi_threw(vm)) mal_result = mal_ffi_new_record(vm, &mal_output_type, mal_outputs);",
+				"mal_ffi_unroot(&mal_output_roots);",
+				"if (mal_ffi_threw(vm)) mal_result = mal_ffi_undefined();",
 			);
 		}
 		return [

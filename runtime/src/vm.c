@@ -757,6 +757,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->node_string_decoder_state_shape = nullptr;
     vm->node_string_decoder_shape = nullptr;
     vm->node_sqlite_run_result_shape = nullptr;
+    vm->ffi = nullptr;
     vm->interp_call_cache = nullptr;
     vm->global_property_cache = nullptr;
     vm->exact_script_call = nullptr;

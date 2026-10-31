@@ -15,6 +15,7 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
+#include "shape.h"
 #include "typed_array_object.h"
 #include "utf8.h"
 #include "value_ops.h"
@@ -197,15 +198,6 @@ bool mal_ffi_check_count(
     return ffi_fail(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site, expectation);
 }
 
-bool mal_ffi_field(
-    MalVm *vm, MalValue record, const char *name, const MalFfiSite *site,
-    MalValue *out) {
-    if (!mal_value_is_object(record)) {
-        return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "an object");
-    }
-    return mal_vm_get_static(vm, record, (const byte *) name, out);
-}
-
 bool mal_ffi_element(
     MalVm *vm, MalValue array, int32_t index, int32_t length, const MalFfiSite *site, MalValue *out) {
     bool is_array = false;
@@ -283,14 +275,6 @@ MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length) {
     return mal_value_from_typed_array_object(array);
 }
 
-MalValue mal_ffi_new_record(MalVm *vm) {
-    return mal_value_from_object(mal_intrinsic_new_object(vm));
-}
-
-MalValue mal_ffi_new_array(MalVm *vm, int32_t length) {
-    return mal_value_from_array_object(mal_intrinsic_new_array(vm, (u32) length));
-}
-
 static bool ffi_store(MalVm *vm, MalValue target, MalKey key, MalValue value) {
     if (!mal_object_set(mal_value_to_object(target), key, value)) {
         mal_vm_throw_allocation_error(vm);
@@ -299,7 +283,7 @@ static bool ffi_store(MalVm *vm, MalValue target, MalKey key, MalValue value) {
     return true;
 }
 
-bool mal_ffi_set_field(MalVm *vm, MalValue record, const char *name, MalValue value) {
+static bool ffi_set_field(MalVm *vm, MalValue record, const char *name, MalValue value) {
     MalValue held[2] = {record, value};
     MalRootSpan root;
     mal_gc_root(&root, held, 2);
@@ -307,6 +291,102 @@ bool mal_ffi_set_field(MalVm *vm, MalValue record, const char *name, MalValue va
     bool stored = ffi_store(vm, held[0], key, held[1]);
     mal_gc_unroot(&root);
     return stored;
+}
+
+/** Per-VM binding state: the shape each record type's objects share. */
+typedef struct MalFfiState {
+    struct {
+        const MalFfiRecordType *type;
+        MalShape *shape;
+    } *shapes;
+    usize shape_count;
+    usize shape_capacity;
+} MalFfiState;
+
+static void ffi_state_free(MalVm *vm) {
+    if (vm->ffi == nullptr) return;
+    free(vm->ffi->shapes);
+    free(vm->ffi);
+    vm->ffi = nullptr;
+}
+
+/** The shape of `type`'s objects; shapes live as long as the heap's transition tree. */
+static MalShape *ffi_record_shape(MalVm *vm, const MalFfiRecordType *type) {
+    MalFfiState *state = vm->ffi;
+    if (state == nullptr) {
+        state = calloc(1, sizeof(*state));
+        if (state == nullptr || !mal_vm_register_runtime_cleanup(vm, ffi_state_free)) {
+            free(state);
+            return nullptr;
+        }
+        vm->ffi = state;
+    }
+    for (usize index = 0; index < state->shape_count; index++) {
+        if (state->shapes[index].type == type) return state->shapes[index].shape;
+    }
+    if (state->shape_count == state->shape_capacity) {
+        usize capacity = state->shape_capacity == 0 ? 8 : state->shape_capacity * 2;
+        void *grown = realloc(state->shapes, capacity * sizeof(*state->shapes));
+        if (grown == nullptr) return nullptr;
+        state->shapes = grown;
+        state->shape_capacity = capacity;
+    }
+    MalString *keys[64];
+    if (type->field_count > (i32) countof(keys)) return nullptr;
+    for (i32 index = 0; index < type->field_count; index++) {
+        keys[index] = mal_intrinsic_ascii(vm, (const byte *) type->fields[index]);
+    }
+    MalShape *shape = mal_shape_from_string_keys(&vm->heap, keys, (u32) type->field_count);
+    state->shapes[state->shape_count].type = type;
+    state->shapes[state->shape_count].shape = shape;
+    state->shape_count++;
+    return shape;
+}
+
+bool mal_ffi_record_fields(
+    MalVm *vm, MalValue record, const MalFfiRecordType *type, const MalFfiSite *site,
+    MalValue *values) {
+    if (mal_value_is_heap_type(record, MAL_HEAP_OBJECT)) {
+        MalObject *object = mal_value_to_object(record);
+        MalShape *shape = ffi_record_shape(vm, type);
+        if (shape != nullptr && object->shape == shape) {
+            for (i32 index = 0; index < type->field_count; index++) {
+                values[index] = mal_object_field_load_shaped(object, (u32) index);
+            }
+            return true;
+        }
+    }
+    if (!mal_value_is_object(record)) {
+        return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "an object");
+    }
+    for (i32 index = 0; index < type->field_count; index++) {
+        if (!mal_vm_get_static(vm, record, (const byte *) type->fields[index], &values[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+MalValue mal_ffi_new_record(MalVm *vm, const MalFfiRecordType *type, const MalValue *values) {
+    MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    MalShape *shape = ffi_record_shape(vm, type);
+    if (shape != nullptr) {
+        return mal_value_from_object(
+            mal_object_new_shaped(&vm->heap, prototype, shape, values, (u32) type->field_count));
+    }
+    // A struct wider than the shape helper allows still gets an ordinary object.
+    MalValue record = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    MalRootSpan root;
+    mal_gc_root(&root, &record, 1);
+    for (i32 index = 0; index < type->field_count && !mal_ffi_threw(vm); index++) {
+        ffi_set_field(vm, record, type->fields[index], values[index]);
+    }
+    mal_gc_unroot(&root);
+    return record;
+}
+
+MalValue mal_ffi_new_array(MalVm *vm, int32_t length) {
+    return mal_value_from_array_object(mal_intrinsic_new_array(vm, (u32) length));
 }
 
 bool mal_ffi_set_element(MalVm *vm, MalValue array, int32_t index, MalValue value) {
