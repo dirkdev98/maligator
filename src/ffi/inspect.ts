@@ -119,6 +119,16 @@ const RESERVED = new Set(
 	).split(" "),
 );
 
+/** The kind of fact a gap reason asks for. */
+function gapNeed(reason: string): string {
+	if (reason.includes("handle fact")) return "a handle type";
+	if (reason.includes("callback")) return "a callback";
+	if (reason.includes("variadic")) return "variants";
+	if (reason.includes("pointer")) return "a pointer fact";
+	if (reason.includes("char")) return "text or bytes";
+	return "other facts";
+}
+
 function contractKey(key: string): string {
 	return /^(?:[A-Za-z_$][\w$]*|[1-9]\d*)$/.test(key) ? key : JSON.stringify(key);
 }
@@ -386,7 +396,19 @@ export function formatInspection(inspection: FfiInspection): string {
 		(entry) => entry.status === "needs-facts",
 	);
 	if (needFacts.length > 0) {
-		lines.push("", "Functions that need facts:");
+		// What the gaps ask for, so a large library shows which facts unlock the most.
+		const needs = new Map<string, number>();
+		for (const entry of needFacts) {
+			for (const need of new Set((entry.gaps ?? []).map((gap) => gapNeed(gap.reason))))
+				needs.set(need, (needs.get(need) ?? 0) + 1);
+		}
+		lines.push(
+			"",
+			`Functions that need facts, by what they need: ${[...needs]
+				.sort(([, left], [, right]) => right - left)
+				.map(([need, count]) => `${count} ${need}`)
+				.join(", ")}`,
+		);
 		for (const entry of needFacts) {
 			for (const gap of entry.gaps ?? [])
 				lines.push(`  ${entry.name} ${gap.at}: ${gap.reason}`);
