@@ -1275,7 +1275,7 @@ function stackObjectControlUses(
 type CoreStackObjectLender = (
 	call: CoreInstructionId,
 	argument: number,
-	keys: ReadonlyArray<number>,
+	allocation: CoreNamedAllocationLayout,
 ) => boolean;
 
 /**
@@ -1297,9 +1297,17 @@ function foreignStackObjects(
 	);
 	if (calls.size === 0) return { layouts: [] };
 	return {
-		lender: (call, argument, keys) => {
+		lender: (call, argument, allocation) => {
 			const entry = calls.get(call);
-			return entry !== undefined && coreForeignBorrows(program, entry, argument, keys);
+			if (entry === undefined) return false;
+			// A struct result lends by the binding's own field names, which the program
+			// need not spell, as in `DrawRectangleRec(rect, Fade(SKYBLUE, 0.5))`.
+			const names =
+				calls.get(allocation.instruction)?.into?.fields ??
+				allocation.keys.map((key) =>
+					key < 0 ? undefined : program.stringConstantText(key),
+				);
+			return coreForeignBorrows(entry, argument, names);
 		},
 		layouts: coreForeignRecordResults(program, fn, calls).map(
 			({ instruction, result, keys }) => ({
@@ -1475,7 +1483,7 @@ function stackObjectCandidate(
 			handlerBlock(fn, fn.instructionBlock(instruction)) === undefined
 		) {
 			const lent =
-				opcode === "call" && lender?.(instruction, position - 2, layout.keys) === true;
+				opcode === "call" && lender?.(instruction, position - 2, layout) === true;
 			observe(
 				lent ? lends : observations,
 				instruction,
