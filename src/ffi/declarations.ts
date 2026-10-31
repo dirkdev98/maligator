@@ -34,12 +34,25 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string> {
 			`\texport interface ${record.name} {`,
 		);
 		for (const field of record.fields) {
-			const doc = record.record.fields.find(
-				(candidate) => candidate.name === field.name,
-			)?.doc;
 			lines.push(
-				...docComment(doc, "\t\t"),
+				...docComment(field.doc, "\t\t"),
 				`\t\t${field.name}: ${formatTsType(field.value)};`,
+			);
+		}
+		lines.push("\t}");
+	}
+	for (const handle of plan.handles.values()) {
+		lines.push(
+			...docComment(handle.doc, "\t"),
+			`\texport interface ${handle.name} {`,
+			`\t\treadonly [Symbol.toStringTag]: ${JSON.stringify(handle.name)};`,
+			`\t\t/** Close the handle${handle.destroy === undefined ? "" : `, releasing an owned resource with ${handle.destroy.name}`}. */`,
+			"\t\t[Symbol.dispose](): void;",
+		);
+		for (const field of handle.fields) {
+			lines.push(
+				...docComment(field.doc, "\t\t"),
+				`\t\treadonly ${field.name}: ${formatTsType(field.value)};`,
 			);
 		}
 		lines.push("\t}");

@@ -63,6 +63,42 @@ export interface MaligatorFfiLibrary {
 }
 
 /**
+ * A C type whose values are resources the program opens and closes. Its handles
+ * close on `[Symbol.dispose]()` or when passed to `destroy`; a closed handle throws
+ * instead of reaching C.
+ * @see https://maligator.ddv.tools/api/build#MaligatorFfiHandle
+ */
+export interface MaligatorFfiHandle {
+	/** The function that releases the resource, taking it as its first parameter. */
+	destroy?: string;
+	/** Release a handle the program never closed once it is garbage collected. Off unless
+	 * set; leave it off for resources that must be released on one thread or before the
+	 * library shuts down.
+	 */
+	collect?: boolean;
+}
+
+/** Facts about one C type, keyed by its typedef or struct tag. */
+export interface MaligatorFfiTypeFacts {
+	handle?: MaligatorFfiHandle;
+}
+
+/** Facts about a parameter or a result. */
+export interface MaligatorFfiValueFacts {
+	/** Accept `null` for a pointer parameter and pass `NULL`. */
+	nullable?: boolean;
+	/** A returned handle the library keeps owning; closing it does not release it. */
+	borrowed?: boolean;
+}
+
+/** Facts about one C function, keyed by its name. */
+export interface MaligatorFfiFunctionFacts {
+	/** Facts per parameter, keyed by C name or by 1-based position for unnamed ones. */
+	params?: Record<string, MaligatorFfiValueFacts>;
+	returns?: MaligatorFfiValueFacts;
+}
+
+/**
  * Facts about a C library that hold wherever it is installed. The binding comes from
  * the headers plus these facts.
  * @see https://maligator.ddv.tools/api/build#MaligatorLibraryContract
@@ -72,6 +108,10 @@ export interface MaligatorLibraryContract {
 	headers: Array<string>;
 	/** Discovery alternatives, tried in order. A build config `find` replaces them. */
 	find?: Array<MaligatorFfiFind>;
+	/** Facts about types, keyed by typedef or struct tag. */
+	types?: Record<string, MaligatorFfiTypeFacts>;
+	/** Facts about functions, keyed by name. */
+	functions?: Record<string, MaligatorFfiFunctionFacts>;
 }
 
 /** Trusted, strictly validated configuration evaluated for each CLI invocation.

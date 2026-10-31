@@ -30,6 +30,13 @@ typedef struct ShapesPath {
 
 typedef struct ShapesCanvas ShapesCanvas;
 
+/* A grayscale bitmap in memory the library allocates. */
+typedef struct ShapesBitmap {
+	unsigned char *pixels;  // One byte per pixel
+	int width;              // Width in pixels
+	int height;             // Height in pixels
+} ShapesBitmap;
+
 typedef enum {
 	SHAPES_FILL = 1,  // Fill the interior
 	SHAPES_STROKE = 2,
@@ -44,6 +51,16 @@ int64_t shapes_total(int64_t a, int64_t b);
 bool shapes_contains(ShapesBox box, ShapesPoint point);
 ShapesCanvas *shapes_canvas_open(const char *title);
 void shapes_canvas_close(ShapesCanvas *canvas);
+const char *shapes_canvas_title(const ShapesCanvas *canvas);  // NULL for no canvas
+int shapes_canvases_open(void);  // Canvases opened and not closed
+
+// Allocate a bitmap of zero pixels.
+ShapesBitmap shapes_bitmap_new(int width, int height);
+void shapes_bitmap_fill(ShapesBitmap *bitmap, unsigned char value);  // Set every pixel
+int shapes_bitmap_sum(ShapesBitmap bitmap);  // Sum of all pixels
+void shapes_bitmap_free(ShapesBitmap bitmap);
+ShapesBitmap shapes_bitmap_shared(void);  // A bitmap the library keeps
+int shapes_bitmaps_live(void);  // Bitmaps allocated and not freed
 int shapes_log(const char *format, ...);
 size_t shapes_path_length(ShapesPath path);
 

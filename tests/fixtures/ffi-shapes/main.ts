@@ -7,6 +7,15 @@ import {
 	SHAPES_VERSION,
 	shapes_add,
 	shapes_area,
+	shapes_bitmap_fill,
+	shapes_bitmap_free,
+	shapes_bitmap_new,
+	shapes_bitmap_shared,
+	shapes_bitmap_sum,
+	shapes_bitmaps_live,
+	shapes_canvas_open,
+	shapes_canvas_title,
+	shapes_canvases_open,
 	shapes_contains,
 	shapes_mode_name,
 	shapes_sum3,
@@ -27,7 +36,28 @@ console.log(
 	`constants ${SHAPES_VERSION} ${SHAPES_SCALE} ${SHAPES_BIG} ${JSON.stringify(SHAPES_ORIGIN)}`,
 );
 
+{
+	using canvas = shapes_canvas_open("Sketch");
+	console.log(
+		`canvas ${shapes_canvas_title(canvas)} ${shapes_canvas_title(null)} ${Object.prototype.toString.call(canvas)} open ${shapes_canvases_open()}`,
+	);
+}
+console.log(`canvases after using ${shapes_canvases_open()}`);
+
+const bitmap = shapes_bitmap_new(3, 2);
+shapes_bitmap_fill(bitmap, 4);
+console.log(
+	`bitmap ${bitmap.width}x${bitmap.height} sum ${shapes_bitmap_sum(bitmap)} live ${shapes_bitmaps_live()}`,
+);
+shapes_bitmap_free(bitmap);
+console.log(`bitmaps after free ${shapes_bitmaps_live()}`);
+const shared = shapes_bitmap_shared();
+shared[Symbol.dispose]();
+console.log(`shared after dispose ${shapes_bitmap_sum(shapes_bitmap_shared())}`);
+
 const rejected = [
+	() => shapes_bitmap_sum(bitmap),
+	() => shapes_canvas_title({} as unknown as ReturnType<typeof shapes_canvas_open>),
 	() => shapes_twice(1.5),
 	() => shapes_twice("2" as unknown as number),
 	() => shapes_total(1 as unknown as bigint, 1n),

@@ -13,10 +13,42 @@ declare module "maligator:ffi/shapes" {
 		/** Vertical position */
 		y: number;
 	}
+	export interface ShapesCanvas {
+		readonly [Symbol.toStringTag]: "ShapesCanvas";
+		/** Close the handle, releasing an owned resource with shapes_canvas_close. */
+		[Symbol.dispose](): void;
+	}
+	/** A grayscale bitmap in memory the library allocates. */
+	export interface ShapesBitmap {
+		readonly [Symbol.toStringTag]: "ShapesBitmap";
+		/** Close the handle, releasing an owned resource with shapes_bitmap_free. */
+		[Symbol.dispose](): void;
+		/** Width in pixels */
+		readonly width: number;
+		/** Height in pixels */
+		readonly height: number;
+	}
 	/** Add two points. */
 	export function shapes_add(a: ShapesPoint, b: ShapesPoint): ShapesPoint;
 	/** Area of a box */
 	export function shapes_area(box: ShapesBox): number;
+	/** Set every pixel */
+	export function shapes_bitmap_fill(bitmap: ShapesBitmap, value: number): void;
+	export function shapes_bitmap_free(bitmap: ShapesBitmap): void;
+	/** Allocate a bitmap of zero pixels. */
+	export function shapes_bitmap_new(width: number, height: number): ShapesBitmap;
+	/** A bitmap the library keeps */
+	export function shapes_bitmap_shared(): ShapesBitmap;
+	/** Sum of all pixels */
+	export function shapes_bitmap_sum(bitmap: ShapesBitmap): number;
+	/** Bitmaps allocated and not freed */
+	export function shapes_bitmaps_live(): number;
+	export function shapes_canvas_close(canvas: ShapesCanvas): void;
+	export function shapes_canvas_open(title: string): ShapesCanvas | null;
+	/** NULL for no canvas */
+	export function shapes_canvas_title(canvas: ShapesCanvas | null): string | null;
+	/** Canvases opened and not closed */
+	export function shapes_canvases_open(): number;
 	export function shapes_contains(box: ShapesBox, point: ShapesPoint): boolean;
 	export function shapes_mode_name(mode: number): string | null;
 	/** Sum two or three integers. */

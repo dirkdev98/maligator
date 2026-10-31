@@ -36,6 +36,7 @@ export interface FfiInspection {
 	};
 	readonly functions: ReadonlyArray<FunctionInspection>;
 	readonly types: ReadonlyArray<TypeInspection>;
+	readonly handles: ReadonlyArray<HandleInspection>;
 	readonly constants: ReadonlyArray<ConstantInspection>;
 	readonly skippedConstants: ReadonlyArray<{
 		readonly name: string;
@@ -72,6 +73,22 @@ export interface TypeInspection {
 		readonly c: string;
 		readonly ts: string;
 		readonly doc?: string;
+	}>;
+}
+
+export interface HandleInspection {
+	readonly name: string;
+	readonly c: string;
+	/** A copy of a struct the library passes by value, or a pointer it returns. */
+	readonly representation: "struct" | "pointer";
+	readonly destroy?: string;
+	readonly collect: boolean;
+	readonly doc?: string;
+	/** Read-only accessors of a struct handle. */
+	readonly fields: ReadonlyArray<{
+		readonly name: string;
+		readonly c: string;
+		readonly ts: string;
 	}>;
 }
 
@@ -115,6 +132,8 @@ export function formatTsType(value: JsValue): string {
 			return value.nullable ? "string | null" : "string";
 		case "record":
 			return value.name;
+		case "handle":
+			return value.nullable ? `${value.name} | null` : value.name;
 		case "array": {
 			const element = formatTsType(value.of);
 			return value.length <= 16
@@ -196,17 +215,12 @@ export function inspectBindings(
 			c: entry.spelling,
 			ts: `{ ${entry.fields.map((field) => `${field.name}: ${formatTsType(field.value)}`).join("; ")} }`,
 			...(entry.record.doc === undefined ? {} : { doc: entry.record.doc }),
-			fields: entry.fields.map((field) => {
-				const doc = entry.record.fields.find(
-					(candidate) => candidate.name === field.name,
-				)?.doc;
-				return {
-					name: field.name,
-					c: formatCDeclaration(field.type),
-					ts: formatTsType(field.value),
-					...(doc === undefined ? {} : { doc }),
-				};
-			}),
+			fields: entry.fields.map((field) => ({
+				name: field.name,
+				c: formatCDeclaration(field.type),
+				ts: formatTsType(field.value),
+				...(field.doc === undefined ? {} : { doc: field.doc }),
+			})),
 		}));
 	const constants = plan.constants.map((constant): ConstantInspection => ({
 		name: constant.name,
@@ -249,6 +263,19 @@ export function inspectBindings(
 		},
 		functions,
 		types,
+		handles: [...plan.handles.values()].map((handle) => ({
+			name: handle.name,
+			c: handle.spelling,
+			representation: handle.representation,
+			...(handle.destroy === undefined ? {} : { destroy: handle.destroy.name }),
+			collect: handle.collect,
+			...(handle.doc === undefined ? {} : { doc: handle.doc }),
+			fields: handle.fields.map((field) => ({
+				name: field.name,
+				c: formatCDeclaration(field.type),
+				ts: formatTsType(field.value),
+			})),
+		})),
 		constants,
 		skippedConstants: plan.skippedConstants,
 	};

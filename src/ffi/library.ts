@@ -16,6 +16,7 @@ import { loadLibraryContract } from "./contract.ts";
 import type { LibraryContract } from "./contract.ts";
 import { resolveLibrary } from "./discovery.ts";
 import type { LinkInput, ResolvedLibrary } from "./discovery.ts";
+import { FfiError } from "./ffi-error.ts";
 
 /** A configured C library after discovery, header extraction, and mapping. */
 export interface PreparedLibrary {
@@ -64,7 +65,18 @@ export function prepareLibrary(
 		headers: contract.headers,
 		compileArguments: library.compileArguments,
 	});
-	return { contract, library, model, plan: planBindings(model) };
+	let plan: BindingPlan;
+	try {
+		plan = planBindings(model, contract.facts);
+	} catch (error) {
+		if (error instanceof FfiError) {
+			throw new FfiError(
+				`${path.relative(preparation.projectRoot, contract.path)}: ${error.message}`,
+			);
+		}
+		throw error;
+	}
+	return { contract, library, model, plan };
 }
 
 /** Every configured library, prepared for one build. */

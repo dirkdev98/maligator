@@ -1,6 +1,7 @@
 import type {
 	BindingPlan,
 	BoundFunction,
+	HandleType,
 	JsValue,
 	MappedConstant,
 	MappedRecord,
@@ -71,6 +72,12 @@ class BindingWriter {
 		return record;
 	}
 
+	#handle(name: string): HandleType {
+		const handle = this.#plan.handles.get(name);
+		if (handle === undefined) throw new Error(`binding plan has no handle '${name}'`);
+		return handle;
+	}
+
 	/** Mark the record helpers a value needs, recursively through fields and arrays. */
 	need(value: JsValue, direction: "input" | "output"): void {
 		if (value.kind === "array") {
@@ -101,6 +108,16 @@ class BindingWriter {
 		const cast = (expression: string) =>
 			`(${localDeclaration(type, "")}) (${expression})`;
 		switch (value.kind) {
+			case "handle": {
+				const temporary = this.#fresh("handle");
+				return [
+					`void *${temporary};`,
+					`if (!mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${temporary})) ${fail}`,
+					value.pass === "copy"
+						? `${target} = *(${this.#handle(value.name).spelling} *) ${temporary};`
+						: `${target} = ${cast(temporary)};`,
+				];
+			}
 			case "integer": {
 				const temporary = this.#fresh("integer");
 				return [
@@ -183,9 +200,19 @@ class BindingWriter {
 		}
 	}
 
-	/** An expression that converts the C value `expression` into a JavaScript value. */
+	/**
+	 * An expression that converts the C value `expression` into a JavaScript value.
+	 * A struct handle copies its struct, so `expression` must then be an lvalue.
+	 */
 	write(value: JsValue, expression: string): string {
 		switch (value.kind) {
+			case "handle": {
+				const created = (address: string) =>
+					`mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.owned})`;
+				return value.pass === "copy"
+					? created(`&(${expression})`)
+					: `(${expression}) == nullptr ? mal_ffi_null() : ${created(`(void *) (${expression})`)}`;
+			}
 			case "undefined":
 				return "mal_ffi_undefined()";
 			case "boolean":
@@ -315,6 +342,67 @@ class BindingWriter {
 		return lines;
 	}
 
+	/** The descriptor of each handle type: its destroy wrapper and field accessors. */
+	handleTypes(): Array<string> {
+		const lines: Array<string> = [];
+		for (const handle of this.#plan.handles.values()) {
+			const name = handle.name;
+			let destroy = "nullptr";
+			if (handle.destroy !== undefined) {
+				destroy = `mal_ffi_destroy_${name}`;
+				const argument =
+					handle.destroy.takes === "value"
+						? `*(${handle.spelling} *) mal_value`
+						: `(${handle.spelling} *) mal_value`;
+				lines.push(
+					"",
+					`static void ${destroy}(void *mal_value) {`,
+					`\t${handle.destroy.name}(${argument});`,
+					"}",
+				);
+			}
+			for (const field of handle.fields) {
+				lines.push(
+					"",
+					`static MalValue mal_ffi_get_${name}_${field.name}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
+					"\t(void) mal_args;",
+					"\t(void) mal_argc;",
+					"\t(void) mal_new_target;",
+					"\t(void) mal_callee;",
+					`\tstatic const MalFfiSite mal_site = { ${cString(`${name}.${field.name}`)}, "this", nullptr };`,
+					"\tvoid *mal_handle;",
+					`\tif (!mal_ffi_to_handle(vm, mal_this, &mal_ffi_type_${name}, false, &mal_site, &mal_handle)) return mal_ffi_undefined();`,
+					`\t${handle.spelling} *mal_value = mal_handle;`,
+					`\treturn ${this.write(field.value, `mal_value->${field.name}`)};`,
+					"}",
+				);
+			}
+			const fields = handle.fields.length === 0 ? "nullptr" : `mal_ffi_fields_${name}`;
+			if (handle.fields.length > 0) {
+				lines.push(
+					"",
+					`static const MalFfiField ${fields}[] = {`,
+					...handle.fields.map(
+						(field) => `\t{ ${cString(field.name)}, mal_ffi_get_${name}_${field.name} },`,
+					),
+					"};",
+				);
+			}
+			lines.push(
+				"",
+				`static const MalFfiHandleType mal_ffi_type_${name} = {`,
+				`\t${cString(name)},`,
+				`\t${handle.representation === "struct" ? `sizeof(${handle.spelling})` : "0"},`,
+				`\t${destroy},`,
+				`\t${handle.collect},`,
+				`\t${fields},`,
+				`\t${String(handle.fields.length)},`,
+				"};",
+			);
+		}
+		return lines;
+	}
+
 	function(binding: BoundFunction): Array<string> {
 		const name = binding.name;
 		const body: Array<string> = [];
@@ -340,11 +428,18 @@ class BindingWriter {
 			);
 		});
 		const call = `${name}(${binding.params.map((_, index) => `mal_argument_${String(index)}`).join(", ")})`;
-		if (binding.returns.kind === "undefined") body.push(`${call};`);
+		const closes =
+			binding.closes === undefined
+				? []
+				: [
+						`mal_ffi_close_handle(mal_argc > ${String(binding.closes)} ? mal_args[${String(binding.closes)}] : mal_ffi_undefined());`,
+					];
+		if (binding.returns.kind === "undefined") body.push(`${call};`, ...closes);
 		else {
 			locals.push(`${localDeclaration(binding.declaration.returns, "mal_return")};`);
 			body.push(
 				`mal_return = ${call};`,
+				...closes,
 				`mal_result = ${this.write(binding.returns, "mal_return")};`,
 			);
 		}
@@ -369,10 +464,18 @@ class BindingWriter {
 	}
 
 	constant(constant: MappedConstant): Array<string> {
+		const value = constant.value;
+		// A struct handle copies from an lvalue.
+		const copies = value.kind === "handle" && value.pass === "copy";
 		return [
 			`static MalValue mal_ffi_constant_${constant.name}(MalVm *vm) {`,
 			"\t(void) vm;",
-			`\treturn ${this.write(constant.value, `(${constant.name})`)};`,
+			...(copies
+				? [
+						`\t${this.#handle(value.name).spelling} mal_constant = (${constant.name});`,
+						`\treturn ${this.write(value, "mal_constant")};`,
+					]
+				: [`\treturn ${this.write(value, `(${constant.name})`)};`]),
 			"}",
 		];
 	}
@@ -391,6 +494,9 @@ export function generateBindingUnit(
 		writer.need(binding.returns, "output");
 	}
 	for (const constant of plan.constants) writer.need(constant.value, "output");
+	for (const handle of plan.handles.values()) {
+		for (const field of handle.fields) writer.need(field.value, "output");
+	}
 
 	const functions = plan.functions.flatMap((binding) => [
 		"",
@@ -417,7 +523,14 @@ export function generateBindingUnit(
 		'#include "mal_ffi.h"',
 		...headers.map((header) => `#include "${header}"`),
 		"",
+		// Tentative definitions: helpers refer to these before their initializers.
+		"static const MalFfiLibrary mal_ffi_library;",
+		...[...plan.handles.keys()].map(
+			(name) => `static const MalFfiHandleType mal_ffi_type_${name};`,
+		),
+		"",
 		...writer.recordHelpers(),
+		...writer.handleTypes(),
 		...functions,
 		...constants,
 		"",

@@ -1,7 +1,10 @@
+import type { MaligatorFfiValueFacts } from "../public-api.d.ts";
 import type { CFunction, CModel, CRecord } from "./c-model.ts";
 import { resolveCType } from "./c-model.ts";
 import { formatCDeclaration } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
+import type { LibraryFacts } from "./contract.ts";
+import { FfiError } from "./ffi-error.ts";
 
 /**
  * How a C value crosses into JavaScript. Mappings follow fixed rules so the same
@@ -19,7 +22,19 @@ export type JsValue =
 	| { readonly kind: "string"; readonly nullable: boolean }
 	/** A struct passed by value as a plain object. */
 	| { readonly kind: "record"; readonly name: string }
-	| { readonly kind: "array"; readonly of: JsValue; readonly length: number };
+	| { readonly kind: "array"; readonly of: JsValue; readonly length: number }
+	/**
+	 * A resource handle. C receives the handle's pointer, a copy of its struct, or
+	 * the struct's address for the library to update in place.
+	 */
+	| {
+			readonly kind: "handle";
+			readonly name: string;
+			readonly pass: "pointer" | "copy" | "reference";
+			readonly nullable: boolean;
+			/** For results: whether closing the new handle releases the resource. */
+			readonly owned: boolean;
+	  };
 
 type Mapping = { readonly value: JsValue } | { readonly gap: string };
 
@@ -34,6 +49,8 @@ export interface BoundFunction {
 	readonly declaration: CFunction;
 	readonly params: ReadonlyArray<MappedParameter>;
 	readonly returns: JsValue;
+	/** The parameter whose handle this destroy function releases, closed after the call. */
+	readonly closes?: number;
 }
 
 /** A missing fact: where in the declaration it is needed and why. */
@@ -53,6 +70,7 @@ export interface MappedField {
 	readonly name: string;
 	readonly type: CType;
 	readonly value: JsValue;
+	readonly doc?: string;
 }
 
 export interface MappedRecord {
@@ -62,6 +80,25 @@ export interface MappedRecord {
 	readonly spelling: string;
 	readonly record: CRecord;
 	readonly fields: ReadonlyArray<MappedField>;
+}
+
+/** A type whose values are handles, as the contract's facts and the headers define it. */
+export interface HandleType {
+	/** The struct the handle wraps, which also names its JavaScript type. */
+	readonly name: string;
+	/** How C code spells the struct type. */
+	readonly spelling: string;
+	/** A copy of a struct the library passes by value, or a pointer it returns. */
+	readonly representation: "struct" | "pointer";
+	readonly destroy?: {
+		readonly name: string;
+		/** Whether the destroy function takes the struct by value or by address. */
+		readonly takes: "value" | "pointer";
+	};
+	readonly collect: boolean;
+	/** Read-only accessors for a struct handle's value fields. */
+	readonly fields: ReadonlyArray<MappedField>;
+	readonly doc?: string;
 }
 
 export interface MappedConstant {
@@ -83,20 +120,150 @@ export interface BindingPlan {
 	readonly functions: ReadonlyArray<BoundFunction>;
 	readonly unbound: ReadonlyArray<UnboundFunction>;
 	readonly records: ReadonlyMap<string, MappedRecord>;
+	readonly handles: ReadonlyMap<string, HandleType>;
 	readonly constants: ReadonlyArray<MappedConstant>;
 	readonly skippedConstants: ReadonlyArray<SkippedConstant>;
 }
 
 type Position = "param" | "return" | "field" | "constant";
 
+/** How C code spells a struct: `struct tag`, or the typedef that names an unnamed one. */
+function recordSpelling(model: CModel, record: CRecord): string {
+	if (record.named) return `${record.tag} ${record.name}`;
+	const typedef = [...model.typedefs.values()].find(
+		(entry) =>
+			entry.type.kind === "record" &&
+			entry.type.name === record.name &&
+			entry.type.const !== true,
+	);
+	return typedef?.name ?? record.name;
+}
+
+const NO_FACTS: MaligatorFfiValueFacts = {};
+
+/** A function's facts by parameter position. */
+interface FunctionFacts {
+	readonly params: ReadonlyArray<MaligatorFfiValueFacts | undefined>;
+	readonly returns: MaligatorFfiValueFacts;
+}
+
+const EMPTY_FACTS: LibraryFacts = { types: {}, functions: {} };
+
+/** The struct a type fact names: a struct tag, or a typedef of a struct or struct pointer. */
+function factRecord(model: CModel, key: string): CRecord | undefined {
+	const record = model.records.get(key);
+	if (record !== undefined) return record;
+	const typedef = model.typedefs.get(key);
+	if (typedef === undefined) return undefined;
+	let resolved = resolveCType(model, typedef.type);
+	if (resolved.kind === "pointer") resolved = resolveCType(model, resolved.to);
+	return resolved.kind === "record" ? model.records.get(resolved.name) : undefined;
+}
+
+/**
+ * Handle types from the contract's facts. A handle copies the struct when the
+ * library passes it by value, and otherwise holds the pointer the library returns.
+ */
+function handleTypes(
+	model: CModel,
+	facts: LibraryFacts,
+): Map<string, Omit<HandleType, "fields">> {
+	const handles = new Map<string, Omit<HandleType, "fields">>();
+	for (const [key, typeFacts] of Object.entries(facts.types)) {
+		const record = factRecord(model, key);
+		if (record === undefined) {
+			throw new FfiError(`types.${key}: the headers declare no struct named '${key}'`);
+		}
+		const handle = typeFacts.handle;
+		if (handle === undefined) continue;
+		if (handles.has(record.name)) {
+			throw new FfiError(`types.${key}: ${record.name} already has a handle fact`);
+		}
+		const isRecord = (type: CType): boolean => {
+			const resolved = resolveCType(model, type);
+			return resolved.kind === "record" && resolved.name === record.name;
+		};
+		let destroy: HandleType["destroy"];
+		if (handle.destroy !== undefined) {
+			const declaration = model.functions.find((entry) => entry.name === handle.destroy);
+			if (declaration === undefined) {
+				throw new FfiError(
+					`types.${key}.handle.destroy: the headers declare no function '${handle.destroy}'`,
+				);
+			}
+			const param = declaration.params[0];
+			const resolved = param === undefined ? undefined : resolveCType(model, param.type);
+			if (
+				declaration.params.length === 1 &&
+				param !== undefined &&
+				isRecord(param.type)
+			) {
+				destroy = { name: declaration.name, takes: "value" };
+			} else if (
+				declaration.params.length === 1 &&
+				resolved?.kind === "pointer" &&
+				isRecord(resolved.to)
+			) {
+				destroy = { name: declaration.name, takes: "pointer" };
+			} else {
+				throw new FfiError(
+					`types.${key}.handle.destroy: ${declaration.name} must take only a ${record.name}`,
+				);
+			}
+		}
+		const passedByValue = model.functions.some(
+			(declaration) =>
+				isRecord(declaration.returns) ||
+				declaration.params.some((param) => isRecord(param.type)),
+		);
+		handles.set(record.name, {
+			name: record.name,
+			spelling: recordSpelling(model, record),
+			representation: record.complete && passedByValue ? "struct" : "pointer",
+			...(destroy === undefined ? {} : { destroy }),
+			collect: handle.collect === true,
+			...(record.doc === undefined ? {} : { doc: record.doc }),
+		});
+	}
+	return handles;
+}
+
+function functionFacts(model: CModel, facts: LibraryFacts): Map<string, FunctionFacts> {
+	const result = new Map<string, FunctionFacts>();
+	for (const [name, entry] of Object.entries(facts.functions)) {
+		const declaration = model.functions.find((candidate) => candidate.name === name);
+		if (declaration === undefined) {
+			throw new FfiError(`functions.${name}: the headers declare no function '${name}'`);
+		}
+		const params = new Array<MaligatorFfiValueFacts | undefined>(
+			declaration.params.length,
+		);
+		for (const [key, valueFacts] of Object.entries(entry.params ?? {})) {
+			const index = /^\d+$/.test(key)
+				? Number(key) - 1
+				: declaration.params.findIndex((param) => param.name === key);
+			if (index < 0 || index >= declaration.params.length) {
+				throw new FfiError(
+					`functions.${name}.params.${key}: ${name} has no such parameter`,
+				);
+			}
+			params[index] = valueFacts;
+		}
+		result.set(name, { params, returns: entry.returns ?? NO_FACTS });
+	}
+	return result;
+}
+
 class Planner {
 	readonly #model: CModel;
 	readonly records = new Map<string, MappedRecord>();
+	readonly #handles: ReadonlyMap<string, Omit<HandleType, "fields">>;
 	readonly #recordGaps = new Map<string, string>();
 	readonly #pending = new Set<string>();
 
-	constructor(model: CModel) {
+	constructor(model: CModel, handles: ReadonlyMap<string, Omit<HandleType, "fields">>) {
 		this.#model = model;
+		this.#handles = handles;
 	}
 
 	#integer(name: string): Mapping {
@@ -110,7 +277,11 @@ class Planner {
 		return { gap: `${bits}-bit integers have no JavaScript mapping` };
 	}
 
-	value(type: CType, position: Position): Mapping {
+	value(
+		type: CType,
+		position: Position,
+		facts: MaligatorFfiValueFacts = NO_FACTS,
+	): Mapping {
 		const resolved = resolveCType(this.#model, type);
 		switch (resolved.kind) {
 			case "void":
@@ -138,14 +309,30 @@ class Planner {
 					: this.#integer("int");
 			}
 			case "pointer":
-				return this.#pointer(resolved, position);
+				return this.#pointer(resolved, position, facts);
 			case "array":
 				if (position === "param") {
-					return this.#pointer({ kind: "pointer", to: resolved.of }, position);
+					return this.#pointer({ kind: "pointer", to: resolved.of }, position, facts);
 				}
 				return this.#array(resolved, position);
-			case "record":
-				return this.#record(resolved.name, resolved.tag);
+			case "record": {
+				const handle = this.#handles.get(resolved.name);
+				if (handle === undefined) return this.#record(resolved.name, resolved.tag);
+				if (handle.representation === "pointer") {
+					return {
+						gap: `${handle.name} handles are pointers, not structs passed by value`,
+					};
+				}
+				return {
+					value: {
+						kind: "handle",
+						name: handle.name,
+						pass: "copy",
+						nullable: false,
+						owned: position === "return" && facts.borrowed !== true,
+					},
+				};
+			}
 			case "function":
 				return { gap: "function types need a callback fact" };
 			case "typedef":
@@ -154,12 +341,44 @@ class Planner {
 		}
 	}
 
-	#pointer(type: Extract<CType, { kind: "pointer" }>, position: Position): Mapping {
+	#pointer(
+		type: Extract<CType, { kind: "pointer" }>,
+		position: Position,
+		facts: MaligatorFfiValueFacts,
+	): Mapping {
 		const target = resolveCType(this.#model, type.to);
 		const spelling = formatCDeclaration(type);
 		if (target.kind === "integer" && target.name === "char" && target.const === true) {
-			if (position === "param") return { value: { kind: "string", nullable: false } };
+			if (position === "param") {
+				return { value: { kind: "string", nullable: facts.nullable === true } };
+			}
 			if (position === "return") return { value: { kind: "string", nullable: true } };
+		}
+		const handle = target.kind === "record" ? this.#handles.get(target.name) : undefined;
+		if (handle !== undefined && (position === "param" || position === "return")) {
+			if (handle.representation === "pointer") {
+				return {
+					value: {
+						kind: "handle",
+						name: handle.name,
+						pass: "pointer",
+						nullable: position === "return" || facts.nullable === true,
+						owned: position === "return" && facts.borrowed !== true,
+					},
+				};
+			}
+			if (position === "param") {
+				return {
+					value: {
+						kind: "handle",
+						name: handle.name,
+						pass: "reference",
+						nullable: facts.nullable === true,
+						owned: false,
+					},
+				};
+			}
+			return { gap: `a pointer into a ${handle.name} handle has no owner` };
 		}
 		if (position === "field") {
 			return { gap: `pointer field (${spelling}) needs an ownership fact` };
@@ -217,25 +436,54 @@ class Planner {
 					return gap(`bit-field '${field.name}' needs a fact`);
 				const mapped = this.value(field.type, "field");
 				if ("gap" in mapped) return gap(`field '${field.name}': ${mapped.gap}`);
-				fields.push({ name: field.name, type: field.type, value: mapped.value });
+				if (mapped.value.kind === "handle") {
+					return gap(
+						`field '${field.name}' holds a ${mapped.value.name} handle, so ${name} needs a handle fact too`,
+					);
+				}
+				fields.push({
+					name: field.name,
+					type: field.type,
+					value: mapped.value,
+					...(field.doc === undefined ? {} : { doc: field.doc }),
+				});
 			}
 		} finally {
 			this.#pending.delete(name);
 		}
-		const typedefName = [...this.#model.typedefs.values()].find((typedef) => {
-			const target = typedef.type;
-			return target.kind === "record" && target.name === name && target.const !== true;
-		})?.name;
 		this.records.set(name, {
 			name,
-			spelling: record.named ? `${record.tag} ${name}` : (typedefName ?? name),
+			spelling: recordSpelling(this.#model, record),
 			record,
 			fields,
 		});
 		return { value: { kind: "record", name } };
 	}
 
-	function(declaration: CFunction): BoundFunction | UnboundFunction {
+	/** The value fields a struct handle exposes; others stay hidden behind the handle. */
+	handleFields(record: CRecord): Array<MappedField> {
+		const fields: Array<MappedField> = [];
+		for (const field of record.fields) {
+			if (field.name === undefined || field.bitWidth !== undefined) continue;
+			const mapped = this.value(field.type, "field");
+			// Accessors return single values; array fields stay behind the handle.
+			if ("value" in mapped && mapped.value.kind !== "array") {
+				fields.push({
+					name: field.name,
+					type: field.type,
+					value: mapped.value,
+					...(field.doc === undefined ? {} : { doc: field.doc }),
+				});
+			}
+		}
+		return fields;
+	}
+
+	function(
+		declaration: CFunction,
+		facts: FunctionFacts,
+		closes: number | undefined,
+	): BoundFunction | UnboundFunction {
 		const gaps: Array<Gap> = [];
 		if (declaration.variadic) {
 			gaps.push({ at: "arguments", reason: "variadic arguments need a fact per call" });
@@ -243,17 +491,44 @@ class Planner {
 		const params: Array<MappedParameter> = [];
 		declaration.params.forEach((param, index) => {
 			const name = param.name ?? `arg${index + 1}`;
-			const mapped = this.value(param.type, "param");
+			const paramFacts = facts.params[index] ?? NO_FACTS;
+			const mapped = this.value(param.type, "param", paramFacts);
 			if ("gap" in mapped) {
 				gaps.push({ at: `param ${index + 1} (${name})`, reason: mapped.gap });
-			} else params.push({ name, type: param.type, value: mapped.value });
+				return;
+			}
+			if (paramFacts.borrowed === true) {
+				throw new FfiError(
+					`functions.${declaration.name}.params.${name}: borrowed applies to results`,
+				);
+			}
+			if (
+				paramFacts.nullable === true &&
+				!("nullable" in mapped.value && mapped.value.nullable)
+			) {
+				throw new FfiError(
+					`functions.${declaration.name}.params.${name}: nullable applies to string and handle pointers`,
+				);
+			}
+			params.push({ name, type: param.type, value: mapped.value });
 		});
-		const returns = this.value(declaration.returns, "return");
+		const returns = this.value(declaration.returns, "return", facts.returns);
 		if ("gap" in returns) gaps.push({ at: "return", reason: returns.gap });
+		else if (facts.returns.borrowed === true && returns.value.kind !== "handle") {
+			throw new FfiError(
+				`functions.${declaration.name}.returns.borrowed: the result is not a handle`,
+			);
+		}
 		if ("gap" in returns || gaps.length > 0) {
 			return { name: declaration.name, declaration, gaps };
 		}
-		return { name: declaration.name, declaration, params, returns: returns.value };
+		return {
+			name: declaration.name,
+			declaration,
+			params,
+			returns: returns.value,
+			...(closes === undefined ? {} : { closes }),
+		};
 	}
 }
 
@@ -261,15 +536,42 @@ function constantValue(value: bigint, mapping: JsValue): bigint | number {
 	return mapping.kind === "bigint" ? value : Number(value);
 }
 
-/** Apply the mapping rules to every declaration a library's headers provide. */
-export function planBindings(model: CModel): BindingPlan {
-	const planner = new Planner(model);
+/**
+ * Apply the mapping rules and the contract's facts to every declaration a
+ * library's headers provide. Facts that name nothing in the headers throw.
+ */
+export function planBindings(
+	model: CModel,
+	facts: LibraryFacts = EMPTY_FACTS,
+): BindingPlan {
+	const handleMap = handleTypes(model, facts);
+	const factMap = functionFacts(model, facts);
+	const closers = new Map<string, number>();
+	for (const handle of handleMap.values()) {
+		if (handle.destroy !== undefined) closers.set(handle.destroy.name, 0);
+	}
+	const planner = new Planner(model, handleMap);
 	const functions: Array<BoundFunction> = [];
 	const unbound: Array<UnboundFunction> = [];
 	for (const declaration of model.functions) {
-		const result = planner.function(declaration);
+		const result = planner.function(
+			declaration,
+			factMap.get(declaration.name) ?? { params: [], returns: NO_FACTS },
+			closers.get(declaration.name),
+		);
 		if ("gaps" in result) unbound.push(result);
 		else functions.push(result);
+	}
+	const handles = new Map<string, HandleType>();
+	for (const [name, handle] of handleMap) {
+		const record = model.records.get(name);
+		handles.set(name, {
+			...handle,
+			fields:
+				handle.representation === "struct" && record !== undefined
+					? planner.handleFields(record)
+					: [],
+		});
 	}
 
 	const constants: Array<MappedConstant> = [];
@@ -342,5 +644,12 @@ export function planBindings(model: CModel): BindingPlan {
 	constants.sort((left, right) =>
 		left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
 	);
-	return { functions, unbound, records: planner.records, constants, skippedConstants };
+	return {
+		functions,
+		unbound,
+		records: planner.records,
+		handles,
+		constants,
+		skippedConstants,
+	};
 }

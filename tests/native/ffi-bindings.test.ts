@@ -17,6 +17,11 @@ const EXPECTED_RESULTS = [
 	"total 9007199254740994",
 	"sum 6 twice 42",
 	'constants 1.4 2.5 4294967296 {"x":0,"y":0}',
+	"canvas Sketch null [object ShapesCanvas] open 1",
+	"canvases after using 0",
+	"bitmap 3x2 sum 24 live 1",
+	"bitmaps after free 0",
+	"shared after dispose 4",
 ];
 
 function cli(cwd: string, args: Array<string>) {
@@ -56,12 +61,31 @@ describe("C library bindings", () => {
 		expect(
 			runOutput.filter((line) => line.startsWith("rejected") || line === "accepted"),
 		).toEqual([
+			"rejected TypeError: shapes_bitmap_sum: bitmap expects an open ShapesBitmap handle",
+			"rejected TypeError: shapes_canvas_title: canvas expects a ShapesCanvas handle or null",
 			"rejected RangeError: shapes_twice: value expects an integer from -2147483648 to 2147483647",
 			"rejected TypeError: shapes_twice: value expects a number",
 			"rejected TypeError: shapes_total: a expects a bigint",
 			"rejected TypeError: shapes_add: a.y expects a number",
 		]);
 	});
+
+	it("releases a dropped handle with collect when the garbage collector reclaims it", () => {
+		writeFileSync(
+			path.join(project, "collect.build.ts"),
+			`export default ${JSON.stringify({
+				entry: "collect.ts",
+				engine: { eval: true, realms: true },
+				surface: { node: true, webPlatform: true },
+				ffi: { shapes: { contract: "shapes.ffi.ts" } },
+			})};\n`,
+		);
+		const executed = cli(project, ["run", "--config", "collect.build.ts"]);
+		expect(outputLines(executed.stdout)).toEqual([
+			"open before collection 1",
+			"open after collection 0",
+		]);
+	}, 600_000);
 
 	it("links bindings into a production binary", () => {
 		const built = cli(project, ["build", "--production"]);

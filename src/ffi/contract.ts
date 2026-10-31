@@ -16,7 +16,9 @@ import {
 } from "../definition-module.ts";
 import type {
 	MaligatorFfiFind,
+	MaligatorFfiFunctionFacts,
 	MaligatorFfiLibrary,
+	MaligatorFfiTypeFacts,
 	MaligatorLibraryContract,
 } from "../public-api.d.ts";
 
@@ -114,6 +116,68 @@ export const ffiLibrariesLeaf: Leaf = {
 	},
 };
 
+const C_NAME = /^[A-Za-z_]\w*$/;
+
+/** Validate a record keyed by C names, checking each entry with `entry`. */
+function namedRecord(
+	value: unknown,
+	at: string,
+	entry: (value: unknown, at: string) => void,
+): void {
+	expectObject(value, at);
+	for (const [name, item] of Object.entries(value)) {
+		expect(C_NAME.test(name), `${at}.${name}`, "keyed by a C identifier");
+		entry(item, `${at}.${name}`);
+	}
+}
+
+function booleanField(value: Record<string, unknown>, key: string, at: string): void {
+	if (value[key] !== undefined) {
+		expect(typeof value[key] === "boolean", `${at}.${key}`, "a boolean");
+	}
+}
+
+function validateTypeFacts(value: unknown, at: string): void {
+	expectObject(value, at);
+	expectKeys(value, at, ["handle"]);
+	if (value.handle === undefined) return;
+	const handle = value.handle;
+	expectObject(handle, `${at}.handle`);
+	expectKeys(handle, `${at}.handle`, ["destroy", "collect"]);
+	if (handle.destroy !== undefined) {
+		expect(
+			typeof handle.destroy === "string" && C_NAME.test(handle.destroy),
+			`${at}.handle.destroy`,
+			"a C function name",
+		);
+	}
+	booleanField(handle, "collect", `${at}.handle`);
+}
+
+function validateValueFacts(value: unknown, at: string): void {
+	expectObject(value, at);
+	expectKeys(value, at, ["nullable", "borrowed"]);
+	booleanField(value, "nullable", at);
+	booleanField(value, "borrowed", at);
+}
+
+function validateFunctionFacts(value: unknown, at: string): void {
+	expectObject(value, at);
+	expectKeys(value, at, ["params", "returns"]);
+	if (value.params !== undefined) {
+		expectObject(value.params, `${at}.params`);
+		for (const [name, facts] of Object.entries(value.params)) {
+			expect(
+				C_NAME.test(name) || /^[1-9]\d*$/.test(name),
+				`${at}.params.${name}`,
+				"keyed by a parameter name or 1-based position",
+			);
+			validateValueFacts(facts, `${at}.params.${name}`);
+		}
+	}
+	if (value.returns !== undefined) validateValueFacts(value.returns, `${at}.returns`);
+}
+
 const CONTRACT_SCHEMA: ObjectSchema = {
 	object: {
 		headers: {
@@ -137,6 +201,8 @@ const CONTRACT_SCHEMA: ObjectSchema = {
 				);
 			},
 		},
+		types: { leaf: (value, at) => namedRecord(value, at, validateTypeFacts) },
+		functions: { leaf: (value, at) => namedRecord(value, at, validateFunctionFacts) },
 	},
 };
 
@@ -165,10 +231,17 @@ export function resolveFind(find: MaligatorFfiFind, baseDirectory: string): Reso
 	};
 }
 
+/** The facts a contract states, shaped as the contract spells them. */
+export interface LibraryFacts {
+	readonly types: Readonly<Record<string, MaligatorFfiTypeFacts>>;
+	readonly functions: Readonly<Record<string, MaligatorFfiFunctionFacts>>;
+}
+
 export interface LibraryContract {
 	readonly name: string;
 	readonly path: string;
 	readonly headers: ReadonlyArray<string>;
+	readonly facts: LibraryFacts;
 	/** Discovery alternatives in order: the build config's override, else the contract's. */
 	readonly find: ReadonlyArray<ResolvedFind>;
 	readonly link: "static" | "shared" | undefined;
@@ -215,6 +288,7 @@ export function loadLibraryContract(
 		name,
 		path: contractPath,
 		headers: [...contract.headers],
+		facts: { types: { ...contract.types }, functions: { ...contract.functions } },
 		find,
 		link: library.link,
 	};

@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
+	cpSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -67,10 +68,7 @@ describe("ffi inspect", () => {
 	it("names the missing fact for each declaration that cannot bind", () => {
 		const gaps = (name: string) =>
 			(declaration(name).gaps ?? []).map((gap) => `${gap.at}: ${gap.reason}`);
-		expect(declaration("shapes_canvas_open").status).toBe("needs-facts");
-		expect(gaps("shapes_canvas_open")).toEqual([
-			"return: opaque pointer (ShapesCanvas *) needs a handle fact",
-		]);
+		expect(declaration("shapes_log").status).toBe("needs-facts");
 		expect(gaps("shapes_log")).toContain(
 			"arguments: variadic arguments need a fact per call",
 		);
@@ -79,7 +77,79 @@ describe("ffi inspect", () => {
 		]);
 		const text = inspect(shapesProject, ["shapes"]);
 		expect(text.status).toBe(0);
-		expect(text.stdout).toContain("shapes_canvas_open return: opaque pointer");
+		expect(text.stdout).toContain("shapes_log arguments: variadic arguments");
+	});
+
+	it("binds handle types from the contract's facts", () => {
+		expect(shapes.handles).toEqual([
+			{
+				name: "ShapesCanvas",
+				c: "struct ShapesCanvas",
+				representation: "pointer",
+				destroy: "shapes_canvas_close",
+				collect: true,
+				fields: [],
+			},
+			{
+				name: "ShapesBitmap",
+				c: "struct ShapesBitmap",
+				representation: "struct",
+				destroy: "shapes_bitmap_free",
+				collect: false,
+				doc: "A grayscale bitmap in memory the library allocates.",
+				fields: [
+					{ name: "width", c: "int", ts: "number" },
+					{ name: "height", c: "int", ts: "number" },
+				],
+			},
+		]);
+		expect(declaration("shapes_canvas_open").ts).toBe(
+			"(title: string) => ShapesCanvas | null",
+		);
+		expect(declaration("shapes_canvas_title").ts).toBe(
+			"(canvas: ShapesCanvas | null) => string | null",
+		);
+		expect(declaration("shapes_bitmap_fill").ts).toBe(
+			"(bitmap: ShapesBitmap, value: number) => void",
+		);
+	});
+
+	it("rejects facts that name nothing in the headers", () => {
+		const project = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-facts-"));
+		try {
+			cpSync(shapesProject, project, { recursive: true });
+			const rejects = (facts: object, message: string): void => {
+				writeFileSync(
+					path.join(project, "shapes.ffi.ts"),
+					`export default ${JSON.stringify({
+						headers: ["shapes.h"],
+						find: [{ sources: ["src/shapes.c"], includeDirs: ["include"] }],
+						...facts,
+					})};\n`,
+				);
+				const result = inspect(project, ["shapes"]);
+				expect(result.status).toBe(1);
+				expect(result.stderr).toContain(`shapes.ffi.ts: ${message}`);
+			};
+			rejects(
+				{ functions: { shapes_paint: {} } },
+				"functions.shapes_paint: the headers declare no function 'shapes_paint'",
+			);
+			rejects(
+				{ functions: { shapes_add: { params: { c: { nullable: true } } } } },
+				"functions.shapes_add.params.c: shapes_add has no such parameter",
+			);
+			rejects(
+				{ types: { ShapesBitmap: { handle: { destroy: "shapes_canvas_close" } } } },
+				"types.ShapesBitmap.handle.destroy: shapes_canvas_close must take only a ShapesBitmap",
+			);
+			rejects(
+				{ functions: { shapes_area: { returns: { borrowed: true } } } },
+				"functions.shapes_area.returns.borrowed: the result is not a handle",
+			);
+		} finally {
+			rmSync(project, { recursive: true, force: true });
+		}
 	});
 
 	it("evaluates enum and macro constants without running code", () => {

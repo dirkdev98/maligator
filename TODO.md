@@ -1908,9 +1908,11 @@ includes them, so the C compiler owns the ABI. Contracts hold facts only, genera
 functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
 - [ ] Support C libraries in `maligator test` images and the in-process test runner.
-- [ ] Facts: pointer handles and resource structs with dispose, finalizers, and
-      generation checks; out parameters next to returned status codes; owned,
-      static, and borrowed returns; buffers, arrays, and nullability.
+- [ ] Facts for out and in-out parameters, returned in one object next to the status
+      code; owned string and buffer returns released with a named function; byte
+      buffers and arrays whose length another parameter carries.
+- [ ] Give each C pointer one handle per isolate, so a library returning a pointer
+      it already handed out cannot leave a second handle open after the first closes.
 - [ ] Callbacks, blocking functions with async twins, and worker affinity.
 - [ ] Direct calls: Core-visible foreign calls with unboxed representations, and
       scalar replacement of struct arguments and out objects.

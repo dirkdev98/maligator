@@ -82,7 +82,49 @@ Conversions never coerce. A value of the wrong type throws a `TypeError`, and a 
 - A struct whose fields are all values passes as a plain object, copied in each direction.
 - Enum members and macros are constants when their type maps, including struct literals such as raylib's `RAYWHITE`.
 
-A function is exported only when every parameter and its result map. Functions that take or return other pointers, callbacks, or variadic arguments are not exported.
+A function is exported only when every parameter and its result map. Functions that take or return other pointers, callbacks, or variadic arguments are not exported until the contract describes them.
+
+## Describe resources
+
+A pointer the library allocates, or a struct that owns memory, needs to be released. Give its type a `handle` fact that names the function that releases it:
+
+```typescript native/raylib.ffi.ts
+import { defineLibrary } from "@maligator/cli";
+
+export default defineLibrary({
+	headers: ["raylib.h"],
+	find: [{ pkgConfig: "raylib" }],
+	types: {
+		Image: { handle: { destroy: "UnloadImage", collect: true } },
+		Texture: { handle: { destroy: "UnloadTexture" } },
+	},
+	functions: { GetFontDefault: { returns: { borrowed: true } } },
+});
+```
+
+Functions that take or return the type then bind, and its values cross as handles. A handle that wraps a struct exposes the struct's value fields as read-only properties, and a function that takes a pointer to the struct updates the handle in place.
+
+```typescript src/index.ts
+import {
+	BLUE,
+	ExportImage,
+	GenImageColor,
+	ImageDrawRectangle,
+	RAYWHITE,
+} from "maligator:ffi/raylib";
+
+using image = GenImageColor(64, 32, RAYWHITE);
+ImageDrawRectangle(image, 8, 8, 16, 16, BLUE);
+ExportImage(image, `image-${image.width}x${image.height}.png`);
+```
+
+Leaving a `using` scope or calling `[Symbol.dispose]()` releases the resource through `destroy`, and calling the destroy function yourself also closes the handle. A closed handle throws a `TypeError` instead of reaching C.
+
+- `borrowed` marks a result the library keeps owning. Closing it does not release it.
+- `collect: true` releases a handle the program drops once it is garbage collected. Leave it off for resources that must be released on one thread or before the library shuts down, such as raylib's GPU textures.
+- `nullable` on a parameter accepts `null` for a string or handle pointer and passes `NULL`.
+
+Each fact names the C declaration it describes. A fact that names nothing in the headers fails the build.
 
 ## Find what cannot bind
 

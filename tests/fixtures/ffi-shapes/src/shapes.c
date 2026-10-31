@@ -36,13 +36,55 @@ bool shapes_contains(ShapesBox box, ShapesPoint point) {
 	       point.y <= box.max.y;
 }
 
+static int canvases_open;
+static int bitmaps_live;
+
 ShapesCanvas *shapes_canvas_open(const char *title) {
 	ShapesCanvas *canvas = calloc(1, sizeof(*canvas));
-	if (canvas != NULL) snprintf(canvas->title, sizeof(canvas->title), "%s", title);
+	if (canvas == NULL) return NULL;
+	snprintf(canvas->title, sizeof(canvas->title), "%s", title);
+	canvases_open++;
 	return canvas;
 }
 
-void shapes_canvas_close(ShapesCanvas *canvas) { free(canvas); }
+void shapes_canvas_close(ShapesCanvas *canvas) {
+	free(canvas);
+	canvases_open--;
+}
+
+const char *shapes_canvas_title(const ShapesCanvas *canvas) {
+	return canvas == NULL ? NULL : canvas->title;
+}
+
+int shapes_canvases_open(void) { return canvases_open; }
+
+ShapesBitmap shapes_bitmap_new(int width, int height) {
+	ShapesBitmap bitmap = {calloc((size_t)(width * height), 1), width, height};
+	if (bitmap.pixels != NULL) bitmaps_live++;
+	return bitmap;
+}
+
+void shapes_bitmap_fill(ShapesBitmap *bitmap, unsigned char value) {
+	memset(bitmap->pixels, value, (size_t)(bitmap->width * bitmap->height));
+}
+
+int shapes_bitmap_sum(ShapesBitmap bitmap) {
+	int sum = 0;
+	for (int index = 0; index < bitmap.width * bitmap.height; index++) sum += bitmap.pixels[index];
+	return sum;
+}
+
+void shapes_bitmap_free(ShapesBitmap bitmap) {
+	free(bitmap.pixels);
+	bitmaps_live--;
+}
+
+ShapesBitmap shapes_bitmap_shared(void) {
+	static unsigned char pixels[4] = {1, 1, 1, 1};
+	return (ShapesBitmap){pixels, 2, 2};
+}
+
+int shapes_bitmaps_live(void) { return bitmaps_live; }
 
 int shapes_log(const char *format, ...) {
 	va_list arguments;
