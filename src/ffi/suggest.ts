@@ -103,8 +103,9 @@ const WEAK_RELEASE = 100_000;
 /**
  * A struct the library hands out and later releases: the function that takes only
  * the struct or its address and is best named as releasing it. An opaque struct
- * that no function returns or writes out reaches JavaScript only through callbacks,
- * so it is a handle the library keeps owning, such as a context it lends to them.
+ * that no such function releases, or that reaches JavaScript only through callbacks,
+ * is a handle without a destroy function: the library keeps owning it, or the program
+ * releases it through a call of its own, such as libpng's `png_destroy_read_struct`.
  */
 function suggestHandles(
 	model: CModel,
@@ -139,7 +140,7 @@ function suggestHandles(
 				: undefined;
 		if (release !== undefined) {
 			handles.set(record.name, { handle: { destroy: release.name } });
-		} else if (!record.complete && !handedOut(model, record)) {
+		} else if (!record.complete && (releases.length === 0 || !handedOut(model, record))) {
 			handles.set(record.name, { handle: {} });
 		}
 	}
