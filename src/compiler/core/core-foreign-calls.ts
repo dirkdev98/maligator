@@ -72,14 +72,18 @@ export function coreForeignBorrows(
 	return (
 		fields !== undefined &&
 		fields.length === keys.length &&
-		fields.every((field, index) => program.stringConstantText(keys[index]!) === field)
+		fields.every(
+			(field, index) =>
+				keys[index]! >= 0 && program.stringConstantText(keys[index]!) === field,
+		)
 	);
 }
 
 /**
- * Foreign calls whose binding can write a struct result into the caller's stack object,
- * as allocations with the struct's fields as keys. A field name the program never
- * spells has no string constant, so no access could name it; such calls stay out.
+ * Foreign calls whose binding can write the object it returns, a struct or its result
+ * and outputs, into the caller's stack object, as allocations with that object's keys.
+ * A key the program never spells has no string constant and becomes -1: no access can
+ * name it.
  */
 export function coreForeignRecordResults(
 	program: CoreProgram,
@@ -91,12 +95,12 @@ export function coreForeignRecordResults(
 	readonly keys: ReadonlyArray<number>;
 }> {
 	return [...calls].flatMap(([instruction, entry]) => {
-		const keys = (entry.into?.fields ?? []).map((field) =>
-			program.stringConstantSlot(field, "first"),
+		const keys = (entry.into?.fields ?? []).map(
+			(field) => program.stringConstantSlot(field, "first") ?? -1,
 		);
-		if (keys.length === 0 || keys.some((key) => key === undefined)) return [];
+		if (keys.length === 0) return [];
 		const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
-		return [{ instruction, result, keys: keys as ReadonlyArray<number> }];
+		return [{ instruction, result, keys }];
 	});
 }
 

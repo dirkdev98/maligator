@@ -101,6 +101,27 @@ function intoRecord(binding: BoundFunction): string | undefined {
 		: undefined;
 }
 
+/** The keys of the object a binding returns: a struct's fields, or its result and outputs. */
+function intoFields(
+	binding: BoundFunction,
+	records: ReadonlyMap<string, MappedRecord>,
+): ReadonlyArray<string> | undefined {
+	if (binding.outputs.length > 0)
+		return [
+			...(binding.returns.kind === "undefined" ? [] : ["result"]),
+			...binding.outputs.map((output) => output.name),
+		];
+	const record = intoRecord(binding);
+	return record === undefined
+		? undefined
+		: records.get(record)!.fields.map((field) => field.name);
+}
+
+/** Whether compiled callers can take the object a binding returns into a stack object. */
+function hasInto(binding: BoundFunction): boolean {
+	return binding.outputs.length > 0 || intoRecord(binding) !== undefined;
+}
+
 function directEntry(
 	library: string,
 	binding: BoundFunction,
@@ -108,9 +129,7 @@ function directEntry(
 ): Array<string> {
 	return [
 		...directEntryVariant(library, binding, callsBack, false),
-		...(intoRecord(binding) === undefined
-			? []
-			: directEntryVariant(library, binding, callsBack, true)),
+		...(hasInto(binding) ? directEntryVariant(library, binding, callsBack, true) : []),
 	];
 }
 
@@ -132,12 +151,11 @@ function directEntryVariant(
 		...Array.from({ length: arity }, (_, index) => `, MalValue mal_a${String(index)}`),
 		...(into ? [", void *mal_into, MalValue *mal_slots"] : []),
 	];
-	const extra =
-		intoRecord(binding) === undefined
-			? ""
-			: into
-				? ", mal_into, mal_slots"
-				: ", nullptr, nullptr";
+	const extra = !hasInto(binding)
+		? ""
+		: into
+			? ", mal_into, mal_slots"
+			: ", nullptr, nullptr";
 	// Compiled callers are not counted as native frames, so collection already runs
 	// inside callbacks reached this way.
 	const invoke = (args: string) =>
@@ -1344,7 +1362,13 @@ class BindingWriter {
 				);
 			});
 			after.push(
-				"if (!mal_ffi_threw(vm)) mal_result = mal_ffi_new_record(vm, &mal_output_type, mal_outputs);",
+				"if (!mal_ffi_threw(vm)) {",
+				// A compiled caller's stack object takes the fields instead of a new object.
+				"\tif (mal_into != nullptr) {",
+				"\t\t__builtin_memcpy(mal_slots, mal_outputs, sizeof(mal_outputs));",
+				"\t\tmal_ffi_stack_record(vm, &mal_output_type, mal_into, mal_slots);",
+				"\t} else mal_result = mal_ffi_new_record(vm, &mal_output_type, mal_outputs);",
+				"}",
 				"mal_ffi_unroot(&mal_output_roots);",
 				"if (mal_ffi_threw(vm)) mal_result = mal_ffi_undefined();",
 			);
@@ -1354,7 +1378,7 @@ class BindingWriter {
 			"",
 			// The body, shared by the function object (framed: the call counts as a native
 			// frame, so collection needs lifting around callbacks) and the direct entry.
-			`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed${intoRecord(binding) === undefined ? "" : ", void *mal_into, MalValue *mal_slots"}) {`,
+			`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed${hasInto(binding) ? ", void *mal_into, MalValue *mal_slots" : ""}) {`,
 			"\t(void) vm;",
 			"\t(void) mal_args;",
 			"\t(void) mal_argc;",
@@ -1381,7 +1405,7 @@ class BindingWriter {
 			"\t(void) mal_this;",
 			"\t(void) mal_new_target;",
 			"\t(void) mal_callee;",
-			`\treturn mal_ffi_call_${name}(vm, mal_args, mal_argc, true${intoRecord(binding) === undefined ? "" : ", nullptr, nullptr"});`,
+			`\treturn mal_ffi_call_${name}(vm, mal_args, mal_argc, true${hasInto(binding) ? ", nullptr, nullptr" : ""});`,
 			"}",
 		];
 	}
@@ -1499,7 +1523,7 @@ export function generateBindingUnit(
 							]
 						: [],
 				);
-				const record = intoRecord(binding);
+				const fields = intoFields(binding, plan.records);
 				return [
 					binding.name,
 					{
@@ -1507,13 +1531,7 @@ export function generateBindingUnit(
 						arity: binding.params.length,
 						...(result === undefined ? {} : { result }),
 						...(borrows.length === 0 ? {} : { borrows }),
-						...(record === undefined
-							? {}
-							: {
-									into: {
-										fields: plan.records.get(record)!.fields.map((field) => field.name),
-									},
-								}),
+						...(fields === undefined ? {} : { into: { fields } }),
 					},
 				];
 			}),
