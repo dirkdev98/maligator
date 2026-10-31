@@ -1,6 +1,7 @@
 #include "../ffi/mal_ffi.h"
 
 #include <limits.h>
+#include <stdarg.h>
 #include <stdatomic.h>
 #include <math.h>
 #include <pthread.h>
@@ -58,6 +59,20 @@ static bool ffi_fail(
     return false;
 }
 
+/**
+ * `ffi_fail` with a formatted expectation. Kept out of line: its buffer would give
+ * every conversion that can fail a large, canary-checked frame.
+ */
+static __attribute__((noinline, format(printf, 4, 5))) bool ffi_failf(
+    MalVm *vm, MalIntrinsic prototype, const MalFfiSite *site, const char *format, ...) {
+    char expectation[160];
+    va_list arguments;
+    va_start(arguments, format);
+    vsnprintf(expectation, sizeof(expectation), format, arguments);
+    va_end(arguments);
+    return ffi_fail(vm, prototype, site, expectation);
+}
+
 bool mal_ffi_expected(MalVm *vm, const MalFfiSite *site, const char *expectation) {
     return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, expectation);
 }
@@ -70,12 +85,9 @@ bool mal_ffi_number_to_integer(
     f64 number = mal_ops_number_as_f64(value);
     if (!isfinite(number) || trunc(number) != number || number < (f64) minimum
         || number > (f64) maximum) {
-        char expectation[96];
-        snprintf(
-            expectation, sizeof(expectation), "an integer from %lld to %lld",
+        return ffi_failf(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site, "an integer from %lld to %lld",
             (long long) minimum, (long long) maximum);
-        return ffi_fail(
-            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site, expectation);
     }
     *out = (i64) number;
     return true;
@@ -250,9 +262,9 @@ bool mal_ffi_check_count(
     u64 maximum = bits >= 64 ? (is_signed ? (u64) INT64_MAX : UINT64_MAX)
                              : (is_signed ? (UINT64_C(1) << (bits - 1)) - 1 : (UINT64_C(1) << bits) - 1);
     if ((u64) count <= maximum) return true;
-    char expectation[96];
-    snprintf(expectation, sizeof(expectation), "at most %llu elements", (unsigned long long) maximum);
-    return ffi_fail(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site, expectation);
+    return ffi_failf(
+        vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site, "at most %llu elements",
+        (unsigned long long) maximum);
 }
 
 bool mal_ffi_element(
@@ -273,10 +285,8 @@ bool mal_ffi_element(
     }
     if (!is_array || !mal_ops_is_number(array_length)
         || mal_ops_number_as_f64(array_length) != (f64) length) {
-        char expectation[64];
-        snprintf(expectation, sizeof(expectation), "an array of %d elements", (int) length);
-        return ffi_fail(
-            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, expectation);
+        return ffi_failf(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "an array of %d elements", (int) length);
     }
     return mal_vm_get_property(vm, array, mal_key_index((u32) index), out);
 }
@@ -1481,23 +1491,20 @@ bool mal_ffi_to_handle(
         return true;
     }
     MalFfiHandleObject *handle = ffi_handle(value);
-    char expectation[160];
-    if (handle != nullptr && handle->type == type) {
-        if (handle->value != nullptr && ffi_scope_active(vm, handle->scope)) {
-            *out = handle->value;
-            if (pin != nullptr) {
-                handle->pins++;
-                *pin = handle;
-            }
-            return true;
+    bool typed = handle != nullptr && handle->type == type;
+    if (typed && handle->value != nullptr && ffi_scope_active(vm, handle->scope)) {
+        *out = handle->value;
+        if (pin != nullptr) {
+            handle->pins++;
+            *pin = handle;
         }
-        snprintf(expectation, sizeof(expectation), "an open %s handle", type->name);
-    } else {
-        snprintf(
-            expectation, sizeof(expectation), "a %s handle%s", type->name,
-            nullable ? " or null" : "");
+        return true;
     }
-    return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, expectation);
+    return typed ? ffi_failf(
+                       vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "an open %s handle", type->name)
+                 : ffi_failf(
+                       vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a %s handle%s", type->name,
+                       nullable ? " or null" : "");
 }
 
 void mal_ffi_unpin_handle(void *pin) {
