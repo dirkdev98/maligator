@@ -1256,6 +1256,17 @@ contracts or investigates costs still visible after the string follow-ups.
       ns against Node's 2.3. Reading `.length` of Array elements is planned as an
       object field, so that region bails out on its first element on every call: 2.45
       ns against 0.67.
+- [ ] Expose the user-iterator protocol to Core. In the native self-compile
+      `mal_vm_iterator_step` is 3.9% inclusive, almost all of it the compiler's own
+      cursor classes: for-of over one costs 32 ns per step against Node's 2, and array
+      spread and `mal_vm_get_iterator` add another 2.5% in generic `Symbol.iterator`
+      and `next` lookups. Lowering GetIterator and each step into the
+      `Symbol.iterator` call, the `next` load and call and the `done` and `value`
+      loads, guarded by the captured `next` identity, saves about 8 ns alone; the rest
+      needs guarded call targets, inlining and scalar replacement of the result
+      literal to apply to `next`. Map and Set for-of at sites Core cannot type cost
+      about 9 ns per step against Node's 1, but they are 0.13% of the self-compile and
+      about 0.15% of javascript-v2.
 - [ ] Run inlined `filter` callbacks over an unknown dense Array without per-element
       dispatch. `values.filter((value) => (value & 7) === (round & 7))` over 1024
       numbers takes 5.0 ns per element against Node's 1.2 (3.9 with a constant in
