@@ -508,6 +508,28 @@ export function suggestFacts(
 		const suggested = suggestFunction(model, entry.declaration, entry.gaps);
 		if (suggested !== undefined) functions.set(entry.name, suggested);
 	}
+	// A getter returns a resource the library keeps owning, such as the node
+	// `xmlDocGetRootElement` returns, so closing it must not release it; unless its
+	// documentation tells the caller to release it, as `cairo_mesh_pattern_get_path`'s does.
+	const bound = new Set(plan.functions.map((binding) => binding.name));
+	for (const binding of typed.functions) {
+		const result = binding.returns;
+		const destroy =
+			result.kind === "handle"
+				? typed.handles.get(result.name)?.destroy?.name
+				: undefined;
+		const doc = binding.declaration.doc ?? "";
+		if (
+			!bound.has(binding.name) &&
+			result.kind === "handle" &&
+			result.owned &&
+			destroy !== undefined &&
+			!doc.includes(destroy) &&
+			!/\bcaller\b/i.test(doc) &&
+			nameWords(binding.name).includes("get")
+		)
+			functions.set(binding.name, { returns: { borrowed: true } });
+	}
 	for (;;) {
 		let trial: BindingPlan;
 		try {
