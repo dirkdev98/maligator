@@ -74,8 +74,9 @@ function immediateRecord(record: MappedRecord): boolean {
 
 /**
  * Inputs whose conversion neither runs JavaScript nor allocates, and that nothing
- * reads after the C call, so a direct entry need not root them. Buffers stay out:
- * their pin is released after the result's allocations.
+ * reads after the C call, so a direct entry need not root them, unless the binding
+ * can call back: then handles and buffers are pinned, and cleanup releases the pin
+ * after the result's allocations.
  */
 const UNROOTED_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
 	"boolean",
@@ -84,6 +85,7 @@ const UNROOTED_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
 	"bigint",
 	"string",
 	"handle",
+	"bytes",
 ]);
 
 /**
@@ -111,7 +113,10 @@ function directEntry(
 		arity > 0 &&
 		(binding.closes !== undefined ||
 			binding.params.some(({ value }) => !UNROOTED_INPUTS.has(value.kind)) ||
-			(callsBack && binding.params.some(({ value }) => value.kind === "handle")));
+			(callsBack &&
+				binding.params.some(
+					({ value }) => value.kind === "handle" || value.kind === "bytes",
+				)));
 	const args = arity === 0 ? "nullptr" : "mal_direct_args";
 	return [
 		"",
@@ -787,6 +792,10 @@ class BindingWriter {
 			binding.params.some(({ value }) =>
 				["callback", "record", "sequence", "array"].includes(value.kind),
 			);
+		/** Whether JavaScript can run during the C call itself, in a callback. */
+		const callsBack =
+			this.#plan.keepsCallbacks ||
+			binding.params.some((param) => param.value.kind === "callback");
 		const argument = (param: number) =>
 			`mal_argc > ${String(param)} ? mal_args[${String(param)}] : mal_ffi_undefined()`;
 		binding.params.forEach((param, index) => {
@@ -878,11 +887,15 @@ class BindingWriter {
 						locals.push(
 							`void *mal_bytes_${String(index)};`,
 							`size_t mal_bytes_length_${String(index)};`,
-							`void *mal_pin_${String(index)} = nullptr;`,
 						);
-						cleanup.push(`mal_ffi_unpin(mal_pin_${String(index)});`);
+						// Buffers convert after every getter, so only a callback could detach one.
+						const pin = callsBack ? `&mal_pin_${String(index)}` : "nullptr";
+						if (callsBack) {
+							locals.push(`void *mal_pin_${String(index)} = nullptr;`);
+							cleanup.push(`mal_ffi_unpin(mal_pin_${String(index)});`);
+						}
 						buffers.push(
-							`if (!mal_ffi_to_bytes(vm, ${source}, ${value.nullable}, ${value.writable === true}, ${site}, &mal_bytes_${String(index)}, &mal_bytes_length_${String(index)}, &mal_pin_${String(index)})) goto mal_done;`,
+							`if (!mal_ffi_to_bytes(vm, ${source}, ${value.nullable}, ${value.writable === true}, ${site}, &mal_bytes_${String(index)}, &mal_bytes_length_${String(index)}, ${pin})) goto mal_done;`,
 							`${local} = (${localDeclaration(param.type, "")}) mal_bytes_${String(index)};`,
 						);
 						setCount(index, `mal_bytes_length_${String(index)}`, site, buffers);
@@ -1067,9 +1080,6 @@ class BindingWriter {
 					? "mal_count"
 					: `mal_argument_${String(binding.resultCount)}`;
 		const after: Array<string> = [];
-		const callsBack =
-			this.#plan.keepsCallbacks ||
-			binding.params.some((param) => param.value.kind === "callback");
 		// A kept callback the library never received goes back if the C call never ran.
 		const keptIndexes = binding.arguments.flatMap((_, index) =>
 			keptCallback(index) ? [index] : [],

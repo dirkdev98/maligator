@@ -178,7 +178,7 @@ bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, 
 bool mal_ffi_to_bytes(
     MalVm *vm, MalValue value, bool nullable, bool writable, const MalFfiSite *site,
     void **data, size_t *length, void **pin) {
-    *pin = nullptr;
+    if (pin != nullptr) *pin = nullptr;
     if (nullable && mal_value_is_null(value)) {
         *data = nullptr;
         *length = 0;
@@ -193,8 +193,10 @@ bool mal_ffi_to_bytes(
     if (status == MAL_BUFFER_SOURCE_SPAN_OK && !span.shared) {
         *data = span.data;
         *length = span.length;
-        span.buffer->pins++;
-        *pin = span.buffer;
+        if (pin != nullptr) {
+            span.buffer->pins++;
+            *pin = span.buffer;
+        }
         return true;
     }
     const char *expectation = status == MAL_BUFFER_SOURCE_SPAN_NOT_BUFFER_SOURCE

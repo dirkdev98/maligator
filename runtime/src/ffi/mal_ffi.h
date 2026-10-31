@@ -202,9 +202,9 @@ bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, 
 /**
  * The memory of an ArrayBuffer or view, which C may read and write until the call
  * returns. Shared buffers are rejected, and a binding resolves buffers after every
- * other argument so no JavaScript runs between this and the call. The buffer stays
- * pinned against detaching and transfer, including by JavaScript a callback runs,
- * until `mal_ffi_unpin` receives `pin`. A `writable` parameter rejects immutable
+ * other argument so no JavaScript runs between this and the call. With a non-null
+ * `pin`, for a call that can run callbacks, the buffer stays pinned against
+ * detaching and transfer until `mal_ffi_unpin` receives `*pin`. A `writable` parameter rejects immutable
  * buffers, whose contents must never change.
  */
 bool mal_ffi_to_bytes(
