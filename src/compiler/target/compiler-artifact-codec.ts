@@ -76,6 +76,7 @@ import {
 	validateNativeInstructionFacts,
 	nativeFrameRootRegisters,
 	nativeLoopUpdateTransportsValue,
+	stackObjectKeys,
 	targetCopyEdgeReaches,
 	validateNativeBodyAbis,
 	validateNativeDirectEntry,
@@ -114,7 +115,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 357;
+export const COMPILER_ARTIFACT_VERSION = 358;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -3116,6 +3117,8 @@ function writeCompilerArtifact(
 						w.i32(site.allocationIp);
 						w.u8(site.mode === "elided" ? 0 : 1);
 						w.i32(site.slotCount);
+						// Only a call allocation has keys apart from its instruction.
+						w.i32Array([...(site.keys ?? [])]);
 						w.u32(site.accesses.length);
 						for (const access of site.accesses) {
 							w.i32(access.ip);
@@ -3551,6 +3554,7 @@ function validateStackObjectPlanRegion(
 	for (let siteIndex = 0; siteIndex < region.sites.length; siteIndex++) {
 		const site = region.sites[siteIndex]!;
 		const allocation = fn.instructions[site.allocationIp];
+		const keys = allocation === undefined ? undefined : stackObjectKeys(allocation, site);
 		if (
 			allocationIps.has(site.allocationIp) ||
 			(site.mode !== "elided" && site.mode !== "activation-local") ||
@@ -3559,11 +3563,8 @@ function validateStackObjectPlanRegion(
 					site.inheritedAccessIp !== undefined ||
 					site.materializations.length !== 0)) ||
 			region.anchors[siteIndex] !== site.allocationIp ||
-			(allocation?.opcode !== "CREATE_OBJECT" &&
-				allocation?.opcode !== "CREATE_OBJECT_SHAPED") ||
-			(allocation.opcode === "CREATE_OBJECT"
-				? site.slotCount !== 0
-				: allocation.count !== site.slotCount) ||
+			keys === undefined ||
+			keys.length !== site.slotCount ||
 			site.slotCount < 0 ||
 			site.slotCount > 256
 		) {
@@ -3582,8 +3583,7 @@ function validateStackObjectPlanRegion(
 					instruction?.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT") ||
 				access.slot < 0 ||
 				access.slot >= site.slotCount ||
-				allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
-				allocation.keyStringIndices[access.slot] !== instruction.stringIndex ||
+				keys?.[access.slot] !== instruction.stringIndex ||
 				payload.has(access.ip)
 			) {
 				valid = false;
@@ -6106,6 +6106,7 @@ function readCompilerArtifact(
 							throw new RangeError("program-image-codec: invalid stack-object mode");
 						}
 						const slotCount = r.i32();
+						const keys = r.i32Array();
 						const accessCount = r.count(2);
 						const accesses: Array<{ ip: number; slot: number }> = [];
 						for (let access = 0; access < accessCount; access++) {
@@ -6142,6 +6143,7 @@ function readCompilerArtifact(
 							allocationIp,
 							mode: modeTag === 0 ? "elided" : "activation-local",
 							slotCount,
+							...(keys.length === 0 ? {} : { keys }),
 							accesses,
 							...(inheritedAccessIp < 0 ? {} : { inheritedAccessIp }),
 							materializations,

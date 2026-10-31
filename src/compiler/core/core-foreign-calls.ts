@@ -11,7 +11,7 @@ import type {
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreNormalResultFacts } from "./core-editor.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import type { CoreInstructionId } from "./core-ir.ts";
+import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 /** The direct entries of C library imports, by the global slot each import occupies. */
@@ -74,6 +74,30 @@ export function coreForeignBorrows(
 		fields.length === keys.length &&
 		fields.every((field, index) => program.stringConstantText(keys[index]!) === field)
 	);
+}
+
+/**
+ * Foreign calls whose binding can write a struct result into the caller's stack object,
+ * as allocations with the struct's fields as keys. A field name the program never
+ * spells has no string constant, so no access could name it; such calls stay out.
+ */
+export function coreForeignRecordResults(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	calls: ReadonlyMap<CoreInstructionId, FfiDirectEntry>,
+): ReadonlyArray<{
+	readonly instruction: CoreInstructionId;
+	readonly result: CoreValueId;
+	readonly keys: ReadonlyArray<number>;
+}> {
+	return [...calls].flatMap(([instruction, entry]) => {
+		const keys = (entry.into?.fields ?? []).map((field) =>
+			program.stringConstantSlot(field, "first"),
+		);
+		if (keys.length === 0 || keys.some((key) => key === undefined)) return [];
+		const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+		return [{ instruction, result, keys: keys as ReadonlyArray<number> }];
+	});
 }
 
 function resultFacts(entry: FfiDirectEntry): CoreNormalResultFacts | undefined {

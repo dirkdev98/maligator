@@ -6,6 +6,7 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	coreForeignBorrows,
 	coreForeignCalls,
+	coreForeignRecordResults,
 	coreForeignSlots,
 } from "./core-foreign-calls.ts";
 import { coreExactCollectionBrand } from "./core-heap-brands.ts";
@@ -958,6 +959,8 @@ export interface CoreStackObjectCandidate extends CoreLocalSpecializationCandida
 		readonly slot: number;
 	}>;
 	readonly materializations: ReadonlyArray<CoreStackObjectMaterialization>;
+	/** For a call allocation, the string constant of each field's key. */
+	readonly keys?: ReadonlyArray<number>;
 }
 
 export interface CoreContainedDenseArrayCandidate extends CoreLocalSpecializationCandidateBase<"dense-array"> {
@@ -1275,20 +1278,38 @@ type CoreStackObjectLender = (
 	keys: ReadonlyArray<number>,
 ) => boolean;
 
-function foreignLender(
+/**
+ * What C library calls in `fn` offer stack objects: struct arguments they borrow, and
+ * struct results they write into a stack object, as allocations of the struct's keys.
+ */
+function foreignStackObjects(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	context: CoreCompilationContext | undefined,
-): CoreStackObjectLender | undefined {
-	if (context === undefined) return undefined;
+): {
+	readonly lender?: CoreStackObjectLender;
+	readonly layouts: ReadonlyArray<CoreNamedAllocationLayout>;
+} {
+	if (context === undefined) return { layouts: [] };
 	const calls = coreForeignCalls(
 		fn,
 		coreForeignSlots(context.data.hostInstallCandidates),
 	);
-	if (calls.size === 0) return undefined;
-	return (call, argument, keys) => {
-		const entry = calls.get(call);
-		return entry !== undefined && coreForeignBorrows(program, entry, argument, keys);
+	if (calls.size === 0) return { layouts: [] };
+	return {
+		lender: (call, argument, keys) => {
+			const entry = calls.get(call);
+			return entry !== undefined && coreForeignBorrows(program, entry, argument, keys);
+		},
+		layouts: coreForeignRecordResults(program, fn, calls).map(
+			({ instruction, result, keys }) => ({
+				kind: "named-slots" as const,
+				instruction,
+				result,
+				keys,
+				initialValues: [],
+			}),
+		),
 	};
 }
 
@@ -1302,11 +1323,13 @@ function stackObjectCandidate(
 	lender?: CoreStackObjectLender,
 ): CoreStackObjectCandidate | undefined {
 	const allocationBlock = fn.instructionBlock(layout.instruction);
+	// A call allocates when a C library binding writes its struct result into the object.
+	const call = fn.instructionOpcodeName(layout.instruction) === "call";
 	// Changing storage cannot retire an allocation's observable exceptional continuation.
 	if (
 		fn.isAsync ||
 		fn.isGenerator ||
-		fn.instructionOpcodeName(layout.instruction) !== "createObjectShaped" ||
+		(fn.instructionOpcodeName(layout.instruction) !== "createObjectShaped" && !call) ||
 		!control.reachable.has(allocationBlock) ||
 		(fn.kernel.blockHandlerBlock(allocationBlock) !== undefined &&
 			coreInstructionEffects(fn, layout.instruction).mayThrow)
@@ -1535,6 +1558,7 @@ function stackObjectCandidate(
 		slotCount: layout.keys.length,
 		accesses: stableAccesses,
 		materializations: stableMaterializations,
+		...(call ? { keys: layout.keys } : {}),
 	});
 }
 
@@ -1578,7 +1602,7 @@ export const CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS: CoreAnalysisDefinition<Cor
 			let controlUses: CoreStackObjectControlUses | undefined;
 			const getControlUses = () =>
 				(controlUses ??= stackObjectControlUses(fn, control, roots));
-			const lender = foreignLender(program, fn, context);
+			const { lender } = foreignStackObjects(program, fn, context);
 			const proofs = provenanceAnalysis.layouts.flatMap((layout) => {
 				if (layout.kind !== "named-slots") return [];
 				const candidate = stackObjectCandidate(
@@ -4655,11 +4679,11 @@ function discoverCandidates(
 		(stackControlUses ??= stackObjectControlUses(fn, control, roots));
 	const layouts =
 		requested("stack-object") || requested("dense-array") ? provenance().layouts : [];
-	const lender =
-		requested("stack-object") && layouts.length > 0
-			? foreignLender(program, fn, context)
-			: undefined;
-	for (const layout of layouts) {
+	const foreign = requested("stack-object")
+		? foreignStackObjects(program, fn, context)
+		: { layouts: [] };
+	const lender = foreign.lender;
+	for (const layout of [...layouts, ...foreign.layouts]) {
 		if (layout.kind === "named-slots") {
 			if (!requested("stack-object")) continue;
 			const candidate = stackObjectCandidate(

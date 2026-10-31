@@ -310,6 +310,12 @@ MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length);
  * `values` holds one value per field and must stay rooted until this returns.
  */
 MalValue mal_ffi_new_record(MalVm *vm, MalFfiRecordType *type, const MalValue *values);
+/**
+ * Make `object`, a compiled caller's stack object, an ordinary object of `type`'s
+ * shape whose fields are `slots`, which the caller keeps rooted. False after an
+ * allocation throw.
+ */
+bool mal_ffi_stack_record(MalVm *vm, MalFfiRecordType *type, void *object, MalValue *slots);
 MalValue mal_ffi_new_array(MalVm *vm, int32_t length);
 /** Store an element; both values stay rooted for the duration of the call. */
 bool mal_ffi_set_element(MalVm *vm, MalValue array, int32_t index, MalValue value);

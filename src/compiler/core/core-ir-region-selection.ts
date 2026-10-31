@@ -807,6 +807,7 @@ function pendingLocalCandidate(
 												slotCount: candidate.slotCount,
 												accesses: candidate.accesses,
 												materializations: candidate.materializations,
+												...(candidate.keys === undefined ? {} : { keys: candidate.keys }),
 											}),
 										}
 									: candidate.kind === "dense-array"

@@ -31,7 +31,7 @@ const EXPECTED_RESULTS = [
 	"immutable checksum 6",
 	"visit 7 Cannot close a C library handle while a C call uses it Visited",
 	"lend true Lender shapes_canvas_title: canvas expects an open ShapesCanvas handle",
-	"lend literals 11,12 10,4 5,7 7",
+	'lend literals 11,12 10,4 5,7 7 10 {"x":10,"y":14}',
 	"replaced a1:failure 1,b2,b3 handler failed",
 	"per handle true:2x3,Second 4,again 6 10,105,-1",
 	"lookup 5,7,-2,-1 shapes_call_return: call expects an open ShapesCall handle",

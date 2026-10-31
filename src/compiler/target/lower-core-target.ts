@@ -1507,7 +1507,8 @@ function lowerCoreSpecializations(
 			const allocation = requireInstruction(stack.allocation);
 			if (
 				allocation.type !== "createObject" &&
-				allocation.type !== "createObjectShaped"
+				allocation.type !== "createObjectShaped" &&
+				(allocation.type !== "call" || stack.keys === undefined)
 			) {
 				throw new Error(`Core stack-object plan ${id} has no allocation`);
 			}
@@ -1578,6 +1579,7 @@ function lowerCoreSpecializations(
 						slotCount: stack.slotCount,
 						accesses,
 						materializations,
+						...(stack.keys === undefined ? {} : { keys: stack.keys }),
 					},
 				],
 			});

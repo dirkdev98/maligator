@@ -206,7 +206,8 @@ console.log(`immutable checksum ${shapes_checksum(immutable)}`);
 	}
 	console.log(`lend ${lent[0] === lender} ${shapes_canvas_title(lent[0]!)} ${afterLend}`);
 }
-// Literals that C calls borrow from the stack, before and after one escapes to the heap.
+// Literals and struct results that C calls keep on the stack, before and after one
+// escapes to the heap.
 function lendLiterals(kept: Array<{ x: number; y: number }>): string {
 	const point = { x: 1, y: 2 };
 	const first = shapes_add(point, { x: 10, y: 10 });
@@ -215,7 +216,9 @@ function lendLiterals(kept: Array<{ x: number; y: number }>): string {
 	kept.push(point);
 	point.y = 7;
 	const third = shapes_add(point, { x: 0, y: 0 });
-	return `${first.x},${first.y} ${second.x},${second.y} ${third.x},${third.y} ${kept[0]!.y}`;
+	const fourth = shapes_add(third, third);
+	kept.push(fourth);
+	return `${first.x},${first.y} ${second.x},${second.y} ${third.x},${third.y} ${kept[0]!.y} ${fourth.x} ${JSON.stringify(kept[1])}`;
 }
 console.log(`lend literals ${lendLiterals([])}`);
 const failures: Array<string> = [];

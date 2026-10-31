@@ -641,6 +641,15 @@ bool mal_ffi_record_elements(
     return true;
 }
 
+bool mal_ffi_stack_record(MalVm *vm, MalFfiRecordType *type, void *object, MalValue *slots) {
+    MalShape *shape = ffi_record_shape(vm, type);
+    if (shape == nullptr) return mal_ffi_out_of_memory(vm);
+    mal_object_init_embedded_stack(
+        &vm->heap, object, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+        shape, slots);
+    return true;
+}
+
 MalValue mal_ffi_new_record(MalVm *vm, MalFfiRecordType *type, const MalValue *values) {
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     MalShape *shape = ffi_record_shape(vm, type);

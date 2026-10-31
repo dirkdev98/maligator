@@ -1001,6 +1001,7 @@ function verifySpecialization(
 			stack.allocation !== candidate.allocation ||
 			stack.mode !== candidate.mode ||
 			stack.slotCount !== candidate.slotCount ||
+			!sameNumbers(stack.keys ?? [], candidate.keys ?? []) ||
 			!sameNumbers(selection.claimedInstructions, candidate.instructions) ||
 			!sameNumbers(selection.ordinaryBlocks, expectedBlocks) ||
 			selection.exceptionalBlocks.length !== 0 ||

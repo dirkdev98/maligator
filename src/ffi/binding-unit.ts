@@ -1,3 +1,4 @@
+import { ffiIntoSymbol } from "../build-config-values.ts";
 import type { FfiDirectEntry, FfiDirectResult } from "../build-config-values.ts";
 import type {
 	BindingPlan,
@@ -93,21 +94,54 @@ const UNROOTED_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
  * the function object and argument array of an ordinary call. Arguments a getter or
  * callback could outlive are rooted for the call, as the call path roots them.
  */
+/** The struct a binding returns, when compiled callers can take its fields instead. */
+function intoRecord(binding: BoundFunction): string | undefined {
+	return binding.returns.kind === "record" && binding.outputs.length === 0
+		? binding.returns.name
+		: undefined;
+}
+
 function directEntry(
 	library: string,
 	binding: BoundFunction,
 	callsBack: boolean,
 ): Array<string> {
+	return [
+		...directEntryVariant(library, binding, callsBack, false),
+		...(intoRecord(binding) === undefined
+			? []
+			: directEntryVariant(library, binding, callsBack, true)),
+	];
+}
+
+/**
+ * The direct entry, or with `into` the entry that writes a struct result's fields into
+ * a compiled caller's stack object and its slots.
+ */
+function directEntryVariant(
+	library: string,
+	binding: BoundFunction,
+	callsBack: boolean,
+	into: boolean,
+): Array<string> {
 	const arity = binding.params.length;
-	const symbol = directSymbol(library, binding.name);
-	const parameters = Array.from(
-		{ length: arity },
-		(_, index) => `, MalValue mal_a${String(index)}`,
-	);
+	const symbol = into
+		? ffiIntoSymbol(directSymbol(library, binding.name))
+		: directSymbol(library, binding.name);
+	const parameters = [
+		...Array.from({ length: arity }, (_, index) => `, MalValue mal_a${String(index)}`),
+		...(into ? [", void *mal_into, MalValue *mal_slots"] : []),
+	];
+	const extra =
+		intoRecord(binding) === undefined
+			? ""
+			: into
+				? ", mal_into, mal_slots"
+				: ", nullptr, nullptr";
 	// Compiled callers are not counted as native frames, so collection already runs
 	// inside callbacks reached this way.
 	const invoke = (args: string) =>
-		`mal_ffi_call_${binding.name}(vm, ${args}, ${String(arity)}, false)`;
+		`mal_ffi_call_${binding.name}(vm, ${args}, ${String(arity)}, false${extra})`;
 	// Pinned handles are read again by cleanup, after the result's allocations.
 	const rooted =
 		arity > 0 &&
@@ -645,15 +679,8 @@ class BindingWriter {
 			const rooted = record.fields.some((field) => this.#allocates(field.value));
 			lines.push(
 				"",
-				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${record.spelling} mal_value) {`,
-				`\tMalValue mal_values[${String(count)}] = {};`,
-				"\tMalValue mal_record = mal_ffi_undefined();",
-				...(rooted
-					? [
-							"\tMalFfiRoots mal_roots;",
-							`\tmal_ffi_root(&mal_roots, mal_values, ${String(count)});`,
-						]
-					: []),
+				// `mal_values` stays rooted by the caller while nested structs allocate.
+				`static bool mal_ffi_fill_${name}(MalVm *vm, ${record.spelling} mal_value, MalValue *mal_values) {`,
 			);
 			record.fields.forEach((field, index) => {
 				lines.push(
@@ -665,9 +692,21 @@ class BindingWriter {
 				);
 			});
 			lines.push(
-				`\tmal_record = mal_ffi_new_record(vm, &mal_ffi_record_${name}, mal_values);`,
 				"\tgoto mal_done;",
 				"mal_done:",
+				"\treturn !mal_ffi_threw(vm);",
+				"}",
+				"",
+				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${record.spelling} mal_value) {`,
+				`\tMalValue mal_values[${String(count)}] = {};`,
+				"\tMalValue mal_record = mal_ffi_undefined();",
+				...(rooted
+					? [
+							"\tMalFfiRoots mal_roots;",
+							`\tmal_ffi_root(&mal_roots, mal_values, ${String(count)});`,
+						]
+					: []),
+				`\tif (mal_ffi_fill_${name}(vm, mal_value, mal_values)) mal_record = mal_ffi_new_record(vm, &mal_ffi_record_${name}, mal_values);`,
 				...(rooted ? ["\tmal_ffi_unroot(&mal_roots);"] : []),
 				"\treturn mal_ffi_threw(vm) ? mal_ffi_undefined() : mal_record;",
 				"}",
@@ -1251,19 +1290,30 @@ class BindingWriter {
 			after.push(...enter, `${call};`, ...leave, ...closes);
 		} else {
 			locals.push(`${localDeclaration(declaration.returns, "mal_return")};`);
+			const owned = this.#owned(
+				binding.returns,
+				"mal_return",
+				"mal_result",
+				count,
+				"&mal_site_result",
+				callsBack,
+			);
+			const record = intoRecord(binding);
 			after.push(
 				...enter,
 				`mal_return = ${call};`,
 				...leave,
 				...closes,
-				...this.#owned(
-					binding.returns,
-					"mal_return",
-					"mal_result",
-					count,
-					"&mal_site_result",
-					callsBack,
-				),
+				...(record === undefined
+					? owned
+					: [
+							// A compiled caller's stack object takes the fields instead of a new object.
+							"if (mal_into != nullptr) {",
+							`\tif (${callsBack ? "!mal_ffi_threw(vm) && " : ""}mal_ffi_fill_${record}(vm, mal_return, mal_slots)) mal_ffi_stack_record(vm, &mal_ffi_record_${record}, mal_into, mal_slots);`,
+							"} else {",
+							...owned.map((line) => `\t${line}`),
+							"}",
+						]),
 			);
 		}
 		if (binding.outputs.length > 0) {
@@ -1304,7 +1354,7 @@ class BindingWriter {
 			"",
 			// The body, shared by the function object (framed: the call counts as a native
 			// frame, so collection needs lifting around callbacks) and the direct entry.
-			`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed) {`,
+			`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed${intoRecord(binding) === undefined ? "" : ", void *mal_into, MalValue *mal_slots"}) {`,
 			"\t(void) vm;",
 			"\t(void) mal_args;",
 			"\t(void) mal_argc;",
@@ -1331,7 +1381,7 @@ class BindingWriter {
 			"\t(void) mal_this;",
 			"\t(void) mal_new_target;",
 			"\t(void) mal_callee;",
-			`\treturn mal_ffi_call_${name}(vm, mal_args, mal_argc, true);`,
+			`\treturn mal_ffi_call_${name}(vm, mal_args, mal_argc, true${intoRecord(binding) === undefined ? "" : ", nullptr, nullptr"});`,
 			"}",
 		];
 	}
@@ -1449,6 +1499,7 @@ export function generateBindingUnit(
 							]
 						: [],
 				);
+				const record = intoRecord(binding);
 				return [
 					binding.name,
 					{
@@ -1456,6 +1507,13 @@ export function generateBindingUnit(
 						arity: binding.params.length,
 						...(result === undefined ? {} : { result }),
 						...(borrows.length === 0 ? {} : { borrows }),
+						...(record === undefined
+							? {}
+							: {
+									into: {
+										fields: plan.records.get(record)!.fields.map((field) => field.name),
+									},
+								}),
 					},
 				];
 			}),

@@ -1,3 +1,4 @@
+import { ffiIntoSymbol } from "../../build-config-values.ts";
 import {
 	CORE_STRING_SPAN_CHARACTER_METHODS,
 	CORE_STRING_SPAN_METHODS,
@@ -163,6 +164,7 @@ import {
 	nativeGuardedBuiltinEffects,
 	nativeRecordAliases,
 	sameNativeRecordLayout,
+	stackObjectKeys,
 	vmCallProvesBuiltin,
 	validateNativeDirectEntry,
 	validateNativeLiteralSwitches,
@@ -2915,12 +2917,11 @@ function emitCompiledVariant(
 			throw new Error("Invalid stack-object allocation action");
 		}
 		const instruction = fn.instructions[site.allocationIp];
+		const keys =
+			instruction === undefined ? undefined : stackObjectKeys(instruction, site);
 		if (
-			(instruction?.opcode !== "CREATE_OBJECT" &&
-				instruction?.opcode !== "CREATE_OBJECT_SHAPED") ||
-			(instruction.opcode === "CREATE_OBJECT"
-				? site.slotCount !== 0
-				: instruction.count !== site.slotCount) ||
+			keys === undefined ||
+			keys.length !== site.slotCount ||
 			stackObjectSites.has(site.allocationIp)
 		) {
 			throw new Error(
@@ -11694,6 +11695,33 @@ class NativeInstructionEmission {
 			// The callee is a C library import, so call its binding's direct entry with
 			// the arguments; missing ones are undefined and extra ones are dropped, as the
 			// binding's own function object would see them.
+			const into = this.context.stackObjectSite;
+			if (into !== undefined && into.elided !== true) {
+				// The binding writes the struct result's fields into this stack object.
+				const { lent, before, after } = this.lendStackObjects();
+				const values = Array.from({ length: foreign.arity }, (_, index) => {
+					if (index >= args.length) return "MAL_VALUE_UNDEFINED";
+					const operand = decodeVmValueOperand(args[index]!);
+					return (
+						(operand.kind === "register" ? lent.get(operand.register) : undefined) ??
+						this.boxedOperand(args[index]!)
+					);
+				});
+				const symbol = ffiIntoSymbol(foreign.symbol);
+				return [
+					`extern MalValue ${symbol}(MalVm *${", MalValue".repeat(foreign.arity)}, void *, MalValue *);`,
+					...(into.materializedSlot === undefined
+						? []
+						: [`__gc_slots[${into.materializedSlot}] = MAL_VALUE_UNDEFINED;`]),
+					"mal_perf_stack_object_init();",
+					...before,
+					`(void) ${this.profileCall("call", `${symbol}(vm${values.map((value) => `, ${value}`).join("")}, &${into.objectName}, &__gc_slots[${into.slotsOffset!}])`)};`,
+					...after,
+					this.throwCheck(),
+					`r${instruction.dst} = mal_value_from_object(&${into.objectName}.object);`,
+					this.callPoll(),
+				];
+			}
 			const { lent, before, after } = this.lendStackObjects();
 			const values = Array.from({ length: foreign.arity }, (_, index) => {
 				if (index >= args.length) return "MAL_VALUE_UNDEFINED";

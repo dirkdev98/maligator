@@ -19,6 +19,18 @@ export interface FfiDirectEntry {
 	 * the struct's field names in order. A caller may lend storage it reuses afterwards.
 	 */
 	readonly borrows?: ReadonlyArray<FfiDirectBorrow>;
+	/**
+	 * For a struct result, its field names in order: the binding also has an entry, named
+	 * by `ffiIntoSymbol`, that writes the fields into a compiled caller's stack object
+	 * instead of creating the object. It takes the arguments, then the stack object and
+	 * its field slots.
+	 */
+	readonly into?: { readonly fields: ReadonlyArray<string> };
+}
+
+/** The entry of a binding that writes a struct result into a caller's stack object. */
+export function ffiIntoSymbol(directSymbol: string): string {
+	return directSymbol.replace(/^mal_ffi_direct/, "mal_ffi_into");
 }
 
 export interface FfiDirectBorrow {

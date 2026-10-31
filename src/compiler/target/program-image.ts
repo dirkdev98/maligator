@@ -745,8 +745,14 @@ export type VmStackObjectPlanRegion = VmRegionEnvelope<
 > & {
 	readonly sites: ReadonlyArray<{
 		readonly mode: "elided" | "activation-local";
+		/** An object literal, or a C library call that writes its struct result into the object. */
 		readonly allocationIp: number;
 		readonly slotCount: number;
+		/**
+		 * For a call allocation, the string constant of each field's key, or -1 for a key
+		 * the program never spells, which no access can name.
+		 */
+		readonly keys?: ReadonlyArray<number>;
 		readonly accesses: ReadonlyArray<{
 			readonly ip: number;
 			readonly slot: number;
@@ -760,6 +766,27 @@ export type VmStackObjectPlanRegion = VmRegionEnvelope<
 		}>;
 	}>;
 };
+
+/**
+ * The keys of a stack object's slots: an object literal's own, or for a C library call
+ * the site's. Undefined when the allocation cannot hold a stack object or the site's
+ * keys do not fit it.
+ */
+export function stackObjectKeys(
+	allocation: BytecodeInstruction,
+	site: { readonly keys?: ReadonlyArray<number> },
+): ReadonlyArray<number> | undefined {
+	switch (allocation.opcode) {
+		case "CREATE_OBJECT":
+			return site.keys === undefined ? [] : undefined;
+		case "CREATE_OBJECT_SHAPED":
+			return site.keys === undefined ? allocation.keyStringIndices : undefined;
+		case "CALL":
+			return site.keys !== undefined && site.keys.length > 0 ? site.keys : undefined;
+		default:
+			return undefined;
+	}
+}
 
 /**
  * The materialization ips a stack-object plan claims. Lends stay unclaimed, so several
@@ -3135,6 +3162,23 @@ function remapNativeConstants(
 					}),
 		})),
 		specializations: fn.specializations.map((region) => {
+			if (region.kind === "stack-object-plan")
+				return region.sites.every((site) => site.keys === undefined)
+					? region
+					: {
+							...region,
+							sites: region.sites.map((site) =>
+								site.keys === undefined
+									? site
+									: {
+											...site,
+											// Only accessed keys are checked, and accesses keep theirs alive.
+											keys: site.keys.map(
+												(key) => compacted.stringOldToNew.get(key) ?? -1,
+											),
+										},
+							),
+						};
 			if (region.kind !== "string-split-projection") return region;
 			const separatorStringIndex = compacted.stringOldToNew.get(
 				region.separatorStringIndex,
@@ -4285,13 +4329,12 @@ function lowerExecutionFunctionToNativePlan(
 						? {}
 						: { values: materialization.values }),
 				}));
+				const keys =
+					allocation === undefined ? undefined : stackObjectKeys(allocation, site);
 				if (
 					allocationIp === undefined ||
-					(allocation?.opcode !== "CREATE_OBJECT" &&
-						allocation?.opcode !== "CREATE_OBJECT_SHAPED") ||
-					(allocation.opcode === "CREATE_OBJECT"
-						? site.slotCount !== 0
-						: allocation.count !== site.slotCount) ||
+					keys === undefined ||
+					keys.length !== site.slotCount ||
 					accesses.some((access) => {
 						const property = access.instruction;
 						return (
@@ -4302,8 +4345,7 @@ function lowerExecutionFunctionToNativePlan(
 								property?.opcode !== "STORE_PROPERTY_STATIC" &&
 								property?.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
 								property?.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT") ||
-							allocation.opcode !== "CREATE_OBJECT_SHAPED" ||
-							allocation.keyStringIndices[access.slot] !== property.stringIndex
+							keys[access.slot] !== property.stringIndex
 						);
 					}) ||
 					(site.inheritedAccess !== undefined &&
@@ -4342,6 +4384,7 @@ function lowerExecutionFunctionToNativePlan(
 					allocationIp,
 					mode: site.mode,
 					slotCount: site.slotCount,
+					...(site.keys === undefined ? {} : { keys: site.keys }),
 					accesses: resolvedAccesses,
 					...(inheritedAccessIp === undefined ? {} : { inheritedAccessIp }),
 					materializations: resolvedMaterializations,

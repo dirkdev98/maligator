@@ -17,7 +17,8 @@ export function validateNativeStackObject(
 	const allocation = instructions[site.allocationIp];
 	if (
 		allocation?.opcode !== "CREATE_OBJECT_SHAPED" &&
-		allocation?.opcode !== "CREATE_OBJECT"
+		allocation?.opcode !== "CREATE_OBJECT" &&
+		(allocation?.opcode !== "CALL" || site.keys === undefined)
 	)
 		fail();
 	const consumers = new Map<number, ReadonlyArray<number>>();

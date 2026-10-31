@@ -113,6 +113,8 @@ export interface CorePlanStackObjectSpecialization extends CorePlanSpecializatio
 			readonly slot: number;
 		}>;
 		readonly materializations: ReadonlyArray<CoreStackObjectMaterialization>;
+		/** For a call allocation, the string constant of each field's key. */
+		readonly keys?: ReadonlyArray<number>;
 	};
 }
 
@@ -1188,14 +1190,22 @@ export interface CoreAllocatedStackObjectPlanRegion extends CoreAllocatedRegionE
 	"stack-object-plan",
 	"activation-local-fixed-shape-objects",
 	"none" | "on-demand",
-	readonly [Extract<CompilerInstruction, { type: "createObject" | "createObjectShaped" }>]
+	readonly [
+		Extract<
+			CompilerInstruction,
+			{ type: "createObject" | "createObjectShaped" | "call" }
+		>,
+	]
 > {
 	readonly sites: ReadonlyArray<{
 		readonly mode: "elided" | "activation-local";
+		/** An object literal, or a C library call that writes its struct result into the object. */
 		readonly allocation: Extract<
 			CompilerInstruction,
-			{ type: "createObject" | "createObjectShaped" }
+			{ type: "createObject" | "createObjectShaped" | "call" }
 		>;
+		/** For a call allocation, the string constant of each field's key. */
+		readonly keys?: ReadonlyArray<number>;
 		readonly slotCount: number;
 		readonly accesses: ReadonlyArray<{
 			readonly instruction: Extract<
