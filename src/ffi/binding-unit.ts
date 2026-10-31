@@ -901,11 +901,15 @@ class BindingWriter {
 						? site!
 						: `mal_ffi_replaced(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`})`;
 		// A queued callback's body runs as `_run`, for calls on the VM thread and queued ones.
-		const body = value.queued === true ? `${name}_run` : name;
+		// A queued callback's body runs as `_run` with the callback its entry found, for
+		// calls on the VM thread and queued ones, which must not look it up again.
+		const queued = value.queued === true;
+		const body = queued ? `${name}_run` : name;
+		const signature = [...(queued ? ["MalFfiCallback *mal_callback"] : []), ...params];
 		const lines = [
 			"",
-			`static ${formatCDeclaration(type.returns, `${body}(${params.length === 0 ? "void" : params.join(", ")})`)} {`,
-			`\tMalFfiCallback *mal_callback = ${callback};`,
+			`static ${formatCDeclaration(type.returns, `${body}(${signature.length === 0 ? "void" : signature.join(", ")})`)} {`,
+			...(queued ? [] : [`\tMalFfiCallback *mal_callback = ${callback};`]),
 			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
 			...(scoped
 				? ["\tif (mal_callback == nullptr) mal_ffi_callback_lost();"]
@@ -1023,8 +1027,9 @@ class BindingWriter {
 		return [
 			"",
 			`typedef struct ${message} {`,
+			// Locals' declarations drop a top-level `const`, which the copies assign.
 			...type.params.map(
-				(param, index) => `\t${formatCDeclaration(param, `mal_c${String(index)}`)};`,
+				(param, index) => `\t${localDeclaration(param, `mal_c${String(index)}`)};`,
 			),
 			...(type.params.length === 0 ? ["\tchar mal_unused;"] : []),
 			`} ${message};`,
@@ -1039,10 +1044,9 @@ class BindingWriter {
 			"",
 			`static void ${name}_queued(MalVm *vm, MalFfiCallback *mal_callback, void *mal_data) {`,
 			"\t(void) vm;",
-			"\t(void) mal_callback;",
 			`\t${message} *mal_message = mal_data;`,
 			"\t(void) mal_message;",
-			`\t${name}_run(${args.map((arg) => `mal_message->${arg}`).join(", ")});`,
+			`\t${name}_run(${["mal_callback", ...args.map((arg) => `mal_message->${arg}`)].join(", ")});`,
 			"}",
 			"",
 			`static void ${name}(${params.length === 0 ? "void" : params.join(", ")}) {`,
@@ -1064,7 +1068,7 @@ class BindingWriter {
 			`\t\tmal_ffi_callback_queue(mal_callback, ${name}_queued, mal_message, ${name}_free);`,
 			"\t\treturn;",
 			"\t}",
-			`\t${name}_run(${args.join(", ")});`,
+			`\t${name}_run(${["mal_callback", ...args].join(", ")});`,
 			"}",
 		];
 	}
@@ -1675,6 +1679,7 @@ class BindingWriter {
 						locals.push(`void *${pointer};`);
 						body.push(
 							`if (!mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${pointer}, &mal_ctx->${pin})) goto mal_failed;`,
+							`if (!mal_ffi_handle_held(vm, mal_ctx->${pin}, ${site})) goto mal_failed;`,
 							`mal_keep[${String(kept++)}] = ${source};`,
 							value.pass === "copy"
 								? `${target} = *(${handle.spelling} *) ${pointer};`

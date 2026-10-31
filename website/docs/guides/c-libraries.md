@@ -234,7 +234,7 @@ functions: {
 },
 ```
 
-The arguments convert before the call starts, and a conversion error rejects the promise. Buffers and handles the call uses stay pinned until the promise settles: transferring or resizing such a buffer, or closing such a handle, throws. JavaScript can still write the buffer's bytes in the meantime, so leave them alone until then. An async export takes no callbacks or arrays, and the program needs an event loop, such as the web platform surface.
+The arguments convert before the call starts, and a conversion error rejects the promise. Buffers and handles the call uses stay pinned until the promise settles: transferring or resizing such a buffer, or closing such a handle, throws. JavaScript can still write the buffer's bytes in the meantime, so leave them alone until then. A handle a callback lends is refused, since the call outlives the callback. The result converts when the promise settles, so a call that changes what a pointer result points to must wait until then. An async export takes no callbacks or arrays, and the program needs an event loop, such as the web platform surface.
 
 Use `async` only for functions the library allows on another thread while the program makes other calls, such as SQLite in its default serialized mode.
 

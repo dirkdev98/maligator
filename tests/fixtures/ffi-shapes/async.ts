@@ -1,6 +1,7 @@
 /* oxlint-disable no-console -- The fixture reports its results on standard output. */
 import {
 	shapes_add_async,
+	shapes_canvas_lend,
 	shapes_canvas_open,
 	shapes_canvas_title_async,
 	shapes_checksum_async,
@@ -13,6 +14,7 @@ import {
 	shapes_watch,
 	shapes_watch_call,
 	shapes_watch_fire,
+	shapes_watch_later,
 } from "maligator:ffi/shapes";
 
 // C calls on a worker thread: what they use stays pinned until their promise settles.
@@ -73,5 +75,21 @@ async function runAsync(): Promise<void> {
 	});
 	shapes_set_ticker(null);
 	console.log(`ticks ${ticks.join(",")}`);
+	// An async call outlives the callback a handle is lent to, so it refuses it.
+	let lent: Promise<unknown> = Promise.resolve();
+	shapes_canvas_lend(canvas, (_, temporary) => {
+		lent = shapes_canvas_title_async(temporary);
+	});
+	try {
+		await lent;
+	} catch (error) {
+		console.log(`async lent ${(error as Error).message}`);
+	}
+	// The event loop waits for a call a library thread makes later.
+	shapes_watch((event, label) => {
+		console.log(`later ${event}:${label}`);
+		shapes_unwatch();
+	});
+	shapes_watch_later(7, 50);
 }
 void runAsync();

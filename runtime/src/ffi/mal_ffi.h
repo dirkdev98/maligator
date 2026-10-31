@@ -106,6 +106,11 @@ bool mal_ffi_to_handle(
     MalVm *vm, MalValue value, const MalFfiHandleType *type, bool nullable,
     const MalFfiSite *site, void **out, void **pin);
 void mal_ffi_unpin_handle(void *pin);
+/**
+ * For an async call, which outlives any callback: reject a pinned handle a callback
+ * only lends, since the library may release its resource once the callback returns.
+ */
+bool mal_ffi_handle_held(MalVm *vm, void *pin, const MalFfiSite *site);
 /** Before a destroy function runs: no other C call may be using the pinned handle. */
 bool mal_ffi_handle_closable(MalVm *vm, void *pin, const MalFfiSite *site);
 /** Close a handle whose resource the library's destroy function just released. */
@@ -421,9 +426,11 @@ typedef void (*MalFfiAsyncRelease)(void *data);
 /**
  * Run `run(data)` on a blocking worker thread, then `complete(vm, data, ran)` on the
  * VM thread: its value fulfills `*promise`, its throw rejects it. `ran` is false when
- * the work was cancelled; complete still releases what the call held. `release(data)`
- * frees the data afterwards, also when the call never completes. `keep` values stay
- * reachable until completion. False with a pending throw, leaving `data` to the caller.
+ * the work was cancelled before it ran; complete still releases what the call held.
+ * A job the host drops, which happens only when it runs out of memory, rejects
+ * without `complete`, so its pins stay. `release(data)` frees the data afterwards.
+ * `keep` values stay reachable until completion. False with a pending throw, leaving
+ * `data` to the caller.
  */
 bool mal_ffi_async(
     MalVm *vm, void *data, MalFfiAsyncRun run, MalFfiAsyncComplete complete,

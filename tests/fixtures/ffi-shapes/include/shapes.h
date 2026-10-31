@@ -134,6 +134,8 @@ void shapes_unwatch(void);
 // Call the watcher with events 1 to count from a new thread; returns once that ends.
 void shapes_watch_fire(int count);
 void shapes_watch_call(int event);  // Call the watcher on this thread
+// Call the watcher with event from a new thread after milliseconds; returns at once.
+void shapes_watch_later(int event, int milliseconds);
 // Keep ticker until the next call; shapes_tick calls it with 1 to count from a new thread.
 void shapes_set_ticker(void (*ticker)(int tick));
 void shapes_tick(int count);

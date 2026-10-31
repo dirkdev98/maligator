@@ -353,6 +353,30 @@ void shapes_tick(int count) {
 	if (pthread_create(&thread, NULL, tick_thread, &count) == 0) pthread_join(thread, NULL);
 }
 
+typedef struct {
+	int event;
+	int milliseconds;
+} ShapesLater;
+
+static void *watch_later_thread(void *argument) {
+	ShapesLater later = *(ShapesLater *)argument;
+	free(argument);
+	struct timespec delay = {later.milliseconds / 1000, (long)(later.milliseconds % 1000) * 1000000L};
+	nanosleep(&delay, NULL);
+	shapes_watch_call(later.event);
+	return NULL;
+}
+
+void shapes_watch_later(int event, int milliseconds) {
+	ShapesLater *later = malloc(sizeof(*later));
+	if (later == NULL) return;
+	later->event = event;
+	later->milliseconds = milliseconds;
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, watch_later_thread, later) == 0) pthread_detach(thread);
+	else free(later);
+}
+
 void shapes_watch_fire(int count) {
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, watch_thread, &count) == 0) pthread_join(thread, NULL);

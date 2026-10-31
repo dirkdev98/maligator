@@ -428,6 +428,12 @@ struct MalFfiState {
     u32 free_capacity;
 };
 
+/**
+ * Orders other threads' posts to a VM's inbox against its teardown: they post under
+ * the lock while the context still names its VM, and teardown detaches under it.
+ */
+static pthread_mutex_t ffi_queue_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static void ffi_state_free(MalVm *vm) {
     MalFfiState *state = vm->ffi;
     if (state == nullptr) return;
@@ -437,9 +443,11 @@ static void ffi_state_free(MalVm *vm) {
     }
     // Libraries may still hold kept callbacks and release them later: detach instead
     // of freeing, so a late call finds no VM and a late release frees the context.
+    pthread_mutex_lock(&ffi_queue_lock);
     for (MalFfiKept *kept = state->kept; kept != nullptr; kept = kept->next) {
         kept->callback.vm = nullptr;
     }
+    pthread_mutex_unlock(&ffi_queue_lock);
     // Contexts the library already released only wait for this VM; nothing holds them.
     MalFfiKept *pending = atomic_exchange(&state->pending_releases, nullptr);
     while (pending != nullptr) {
@@ -905,10 +913,18 @@ static void ffi_run_pending_releases(MalVm *vm) {
     }
 }
 
+static bool ffi_inbox_post_release(MalFfiKept *kept);
+
 void mal_ffi_release(void *data) {
     if (data == nullptr) return;
     MalFfiKept *kept = data;
     MalVm *vm = kept->callback.vm;
+    // A queued callback's release goes through its inbox, which wakes the event loop
+    // that waits for it.
+    if (vm != nullptr && kept->queued && (ffi_finalizing || !pthread_equal(kept->thread, pthread_self()))
+        && ffi_inbox_post_release(kept)) {
+        return;
+    }
     // Inside a collection or on another thread the VM cannot be touched; queue the
     // context for the VM thread, which runs the queue after its next C call.
     if (vm != nullptr && (ffi_finalizing || !pthread_equal(kept->thread, pthread_self()))) {
@@ -1207,27 +1223,46 @@ static void ffi_replaced_drop(void *key) {
 }
 
 /** A queued call of a kept callback, posted from another thread. */
+/** A queued call of a kept callback from another thread, or with no `run`, its release. */
 typedef struct MalFfiQueuedCall {
     MalFfiKept *kept;
     MalFfiQueuedRun run;
     MalFfiQueuedFree free;
     void *message;
+    bool ran;
 } MalFfiQueuedCall;
 
 static MAL_ISOLATE_LOCAL bool ffi_inbox_installed;
 
 static void ffi_queued_destroy(void *data) {
     MalFfiQueuedCall *call = data;
-    call->free(call->message);
+    // A call the host drops without running gives back its place in the queue.
+    if (call->run != nullptr && !call->ran) atomic_fetch_sub(&call->kept->waiting, 1);
+    if (call->message != nullptr) call->free(call->message);
     free(call);
+}
+
+static bool ffi_inbox_post_release(MalFfiKept *kept) {
+    MalFfiQueuedCall *call = malloc(sizeof(*call));
+    if (call == nullptr) return false;
+    *call = (MalFfiQueuedCall) {kept, nullptr, nullptr, nullptr, false};
+    pthread_mutex_lock(&ffi_queue_lock);
+    MalVm *vm = kept->callback.vm;
+    bool posted = vm != nullptr
+        && mal_host_post_progress(mal_host(vm), vm->ffi->inbox, call, ffi_queued_destroy);
+    pthread_mutex_unlock(&ffi_queue_lock);
+    if (!posted) free(call);
+    return posted;
 }
 
 static void ffi_inbox_leave(MalVm *vm) {
     MalFfiState *state = vm->ffi;
     MalHost *host = mal_host(vm);
     if (--state->inbox_users > 0 || host == nullptr) return;
-    // The terminal task lets the event loop finish once the drain consumes it.
+    // The terminal task retires the inbox once the drain consumes it, and the loop
+    // stops waiting for calls from other threads.
     (void) mal_host_operation_complete(&host->tasks, state->inbox, MAL_HOST_TERMINAL_OK, nullptr, nullptr);
+    mal_reactor_release_work(&host->reactor);
 }
 
 static bool ffi_inbox_drain(MalVm *vm) {
@@ -1245,7 +1280,13 @@ static bool ffi_inbox_drain(MalVm *vm) {
     }
     MalFfiQueuedCall *call = task.data;
     MalFfiKept *kept = call->kept;
+    if (call->run == nullptr) {
+        mal_host_task_release(&host->tasks, &task);
+        ffi_release_now(kept);
+        return true;
+    }
     if (kept->callback.vm == vm) call->run(vm, &kept->callback, call->message);
+    call->ran = true;
     u32 left = atomic_fetch_sub(&kept->waiting, 1) - 1;
     mal_host_task_release(&host->tasks, &task);
     if (left == 0 && kept->released) ffi_release_now(kept);
@@ -1264,10 +1305,14 @@ MalFfiCallback *mal_ffi_keep_queued(MalVm *vm, MalValue function) {
     if (callback == nullptr) return nullptr;
     MalFfiState *state = vm->ffi;
     if (state->inbox_users == 0) {
+        // The inbox keeps the event loop waiting while the library may still call.
         bool started = mal_host_operation_start(&host->tasks, &state->inbox);
-        if (!started || !mal_host_operation_activate(&host->tasks, state->inbox)
-            || !mal_host_operation_bind(&host->tasks, state->inbox, state)) {
-            if (started) (void) mal_host_operation_cancel(&host->tasks, state->inbox);
+        bool bound = started && mal_host_operation_bind(&host->tasks, state->inbox, state);
+        bool retained = bound && mal_reactor_retain_work(&host->reactor);
+        if (!retained || !mal_host_operation_activate(&host->tasks, state->inbox)) {
+            if (retained) mal_reactor_release_work(&host->reactor);
+            if (bound) mal_host_operation_unbind(&host->tasks, state->inbox, state);
+            if (started) (void) mal_host_operation_abort_start(&host->tasks, state->inbox);
             mal_ffi_release(callback);
             mal_vm_throw_allocation_error(vm);
             return nullptr;
@@ -1296,13 +1341,15 @@ void mal_ffi_callback_reserve(MalFfiCallback *callback) {
 bool mal_ffi_callback_queue(
     MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release) {
     MalFfiKept *kept = (MalFfiKept *) callback;
-    MalVm *vm = kept->callback.vm;
-    MalFfiQueuedCall *call = message == nullptr || vm == nullptr ? nullptr : malloc(sizeof(*call));
+    MalFfiQueuedCall *call = message == nullptr ? nullptr : malloc(sizeof(*call));
     if (call != nullptr) {
-        *call = (MalFfiQueuedCall) {kept, run, release, message};
-        if (mal_host_post_progress(mal_host(vm), vm->ffi->inbox, call, ffi_queued_destroy)) {
-            return true;
-        }
+        *call = (MalFfiQueuedCall) {kept, run, release, message, false};
+        pthread_mutex_lock(&ffi_queue_lock);
+        MalVm *vm = kept->callback.vm;
+        bool posted = vm != nullptr
+            && mal_host_post_progress(mal_host(vm), vm->ffi->inbox, call, ffi_queued_destroy);
+        pthread_mutex_unlock(&ffi_queue_lock);
+        if (posted) return true;
         free(call);
     }
     if (message != nullptr) release(message);
@@ -1539,6 +1586,14 @@ bool mal_ffi_to_handle(
                  : ffi_failf(
                        vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a %s handle%s", type->name,
                        nullable ? " or null" : "");
+}
+
+bool mal_ffi_handle_held(MalVm *vm, void *pin, const MalFfiSite *site) {
+    MalFfiHandleObject *handle = pin;
+    if (handle == nullptr || handle->scope == 0) return true;
+    return ffi_fail(
+        vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
+        "a handle the program holds, not one a callback lends");
 }
 
 void mal_ffi_unpin_handle(void *pin) {
