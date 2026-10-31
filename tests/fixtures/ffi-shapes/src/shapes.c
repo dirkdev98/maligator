@@ -7,6 +7,9 @@
 
 struct ShapesCanvas {
 	char title[64];
+	void (*on_resize)(ShapesCanvas *canvas, int width, int height);
+	int (*on_draw)(void *data, int frame);
+	void *draw_data;
 };
 
 ShapesPoint shapes_add(ShapesPoint a, ShapesPoint b) {
@@ -252,6 +255,40 @@ void shapes_canvas_lend(ShapesCanvas *canvas,
 int shapes_canvas_visit(ShapesCanvas *canvas, void (*visit)(void *data), void *data) {
 	visit(data);
 	return (int)strlen(canvas->title);
+}
+
+static ShapesErrorHandler error_handler;
+
+ShapesErrorHandler shapes_set_error_handler(ShapesErrorHandler handler) {
+	ShapesErrorHandler previous = error_handler;
+	error_handler = handler;
+	return previous;
+}
+
+void shapes_fail(int code) {
+	char message[32];
+	snprintf(message, sizeof(message), "failure %d", code);
+	if (error_handler != NULL) error_handler(code, message);
+}
+
+void shapes_canvas_on_resize(ShapesCanvas *canvas,
+                             void (*handler)(ShapesCanvas *canvas, int width, int height)) {
+	canvas->on_resize = handler;
+}
+
+void shapes_canvas_resize(ShapesCanvas *canvas, int width, int height) {
+	if (canvas->on_resize != NULL) canvas->on_resize(canvas, width, height);
+}
+
+void *shapes_canvas_on_draw(ShapesCanvas *canvas, int (*hook)(void *data, int frame), void *data) {
+	void *previous = canvas->draw_data;
+	canvas->on_draw = hook;
+	canvas->draw_data = data;
+	return previous;
+}
+
+int shapes_canvas_draw(ShapesCanvas *canvas, int frame) {
+	return canvas->on_draw == NULL ? -1 : canvas->on_draw(canvas->draw_data, frame);
 }
 
 int shapes_read(ShapesReader reader, void *data) {

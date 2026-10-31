@@ -121,18 +121,28 @@ export interface MaligatorFfiValueFacts {
 
 /**
  * A callback the library calls before the function returns, such as an iteration or
- * comparison function, or until it releases the callback. An exception it throws
- * skips its later calls and rethrows when the C function the library runs in returns.
+ * comparison function, until it releases the callback, or until the next call
+ * replaces it. An exception it throws skips its later calls and rethrows when the C
+ * function the library runs in returns.
  */
 export interface MaligatorFfiCallback {
-	/** The `void *` parameter the library passes back to the callback, by C name or 1-based position. */
-	data: string;
+	/**
+	 * The `void *` parameter the library passes back to the callback, by C name or
+	 * 1-based position. Optional for a `replaced` callback.
+	 */
+	data?: string;
 	/**
 	 * The `void (*)(void *)` parameter that takes the destructor for `data`, by C name or
 	 * 1-based position. The library may then keep calling the callback after the
 	 * function returns, until it calls the destructor.
 	 */
 	release?: string;
+	/**
+	 * The library keeps the callback until the next call of the function replaces it,
+	 * as setters such as `glfwSetErrorCallback` do. When the first parameter is a
+	 * handle, each handle keeps its own callback until its resource is destroyed.
+	 */
+	replaced?: boolean;
 	/**
 	 * Facts per callback parameter, keyed by 1-based position: `string`, `bytes`, or
 	 * `array` with a `length` naming another callback parameter, and `nullable`.

@@ -17,8 +17,12 @@ import {
 	shapes_bounds,
 	shapes_canvas_create,
 	shapes_canvas_current,
+	shapes_canvas_draw,
 	shapes_canvas_lend,
+	shapes_canvas_on_draw,
+	shapes_canvas_on_resize,
 	shapes_canvas_open,
+	shapes_canvas_resize,
 	shapes_canvas_title,
 	shapes_canvas_visit,
 	shapes_canvases_open,
@@ -28,6 +32,7 @@ import {
 	shapes_describe,
 	shapes_each,
 	shapes_emit,
+	shapes_fail,
 	shapes_fill,
 	shapes_listen,
 	shapes_listeners,
@@ -43,6 +48,7 @@ import {
 	shapes_read,
 	shapes_render,
 	shapes_scale,
+	shapes_set_error_handler,
 	shapes_sum2,
 	shapes_sum3,
 	shapes_text_bytes,
@@ -195,6 +201,47 @@ console.log(`immutable checksum ${shapes_checksum(immutable)}`);
 		afterLend = (error as Error).message;
 	}
 	console.log(`lend ${lent[0] === lender} ${shapes_canvas_title(lent[0]!)} ${afterLend}`);
+}
+const failures: Array<string> = [];
+shapes_set_error_handler((code, message) => {
+	failures.push(`a${code}:${message}`);
+});
+shapes_fail(1);
+shapes_set_error_handler((code) => {
+	failures.push(`b${code}`);
+	if (code === 3) throw new Error("handler failed");
+});
+shapes_fail(2);
+let failError = "";
+try {
+	shapes_fail(3);
+} catch (error) {
+	failError = (error as Error).message;
+}
+shapes_set_error_handler(null);
+shapes_fail(4);
+console.log(`replaced ${failures.join(",")} ${failError}`);
+{
+	using first = shapes_canvas_open("First")!;
+	using second = shapes_canvas_open("Second")!;
+	const resized: Array<string> = [];
+	shapes_canvas_on_resize(first, (canvas, width, height) => {
+		resized.push(`${canvas === first}:${width}x${height}`);
+	});
+	shapes_canvas_on_resize(second, (canvas, width) => {
+		resized.push(`${shapes_canvas_title(canvas)} ${width}`);
+	});
+	shapes_canvas_resize(first, 2, 3);
+	shapes_canvas_resize(second, 4, 5);
+	shapes_canvas_on_resize(first, (_, width) => {
+		resized.push(`again ${width}`);
+	});
+	shapes_canvas_resize(first, 6, 7);
+	shapes_canvas_on_draw(first, (frame) => frame * 2);
+	const drawn = [shapes_canvas_draw(first, 5)];
+	shapes_canvas_on_draw(first, (frame) => frame + 100);
+	drawn.push(shapes_canvas_draw(first, 5), shapes_canvas_draw(second, 5));
+	console.log(`per handle ${resized.join(",")} ${drawn.join(",")}`);
 }
 const opened = shapes_canvas_open("Same");
 console.log(`same handle ${opened === shapes_canvas_current()}`);

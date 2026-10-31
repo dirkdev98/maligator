@@ -328,6 +328,33 @@ void mal_ffi_release(void *data);
  * library calls back from another thread.
  */
 MalVm *mal_ffi_callback_vm(MalFfiCallback *callback);
+
+/**
+ * The kept callbacks of one setter parameter whose next call replaces the callback,
+ * one per key: null for a setter that configures the whole library, or the pointer
+ * of the handle it configures. A binding declares one zero-initialized static per
+ * such parameter; the runtime owns the fields.
+ */
+typedef struct MalFfiReplaced {
+    struct MalFfiReplaced *next;
+    void *entries;
+    size_t count;
+    size_t capacity;
+} MalFfiReplaced;
+
+/**
+ * Make `callback` the one `site` keeps for `key`, or forget the key's callback when it
+ * is null. `previous` receives the callback it replaces, for the binding to release
+ * once the library holds the new one. False after an allocation throw.
+ */
+bool mal_ffi_replace(
+    MalVm *vm, MalFfiReplaced *site, void *key, MalFfiCallback *callback,
+    MalFfiCallback **previous);
+/**
+ * The callback `site` keeps for `key`, for a trampoline that receives no user data,
+ * or null. Aborts when it belongs to a VM on another thread.
+ */
+MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key);
 /**
  * Bracket a C call that may run JavaScript when the binding runs as an ordinary
  * native call, which keeps the collector off: everything the binding holds is

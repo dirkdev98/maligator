@@ -171,6 +171,16 @@ Without `release`, the library may call the function only until the C function r
 
 `release` names the `void (*)(void *)` parameter that takes the destructor for `data`, for a library that keeps the callback, such as SQLite's `xDestroy`. The library may call the function until it calls the destructor, and an exception rethrows from the library call that triggered it.
 
+`replaced: true` describes a setter that keeps its callback until its next call replaces it, such as GLFW's `glfwSetKeyCallback` or SQLite's `sqlite3_update_hook`. `data` is then optional:
+
+```typescript native/glfw.ffi.ts
+functions: {
+	glfwSetKeyCallback: { params: { callback: { callback: { replaced: true }, nullable: true } } },
+},
+```
+
+When the setter's first parameter is a handle, each handle keeps its own callback until its resource is destroyed. Without `data`, the callback must receive that handle, as GLFW's window callbacks do. With `nullable`, `null` removes the callback. A result that is the replaced callback, or with `data` its user data, is dropped.
+
 Handles a callback receives are lent for that call: once it returns they read as closed, unless the program already held a handle for the same resource. A callback's own `params`, keyed by 1-based position, take `string`, `bytes`, `array`, and `nullable` facts. A `length` names another callback parameter, which the function does not receive, so the collation above receives two `Uint8Array` copies.
 
 JavaScript runs on one thread, so a library that calls back from another thread aborts the program. A destructor may run on any thread; the release completes on the program's thread.
@@ -198,7 +208,7 @@ functions: {
 maligator ffi inspect raylib
 ```
 
-The report lists each function that is not exported and the fact it needs. It also suggests facts from naming and signature conventions: a count parameter beside a pointer, a pointer the function writes, the `void *` a callback receives, a struct with its own release function, a result whose documentation says how to free it. Each suggestion is checked against the headers and listed only when it makes a function bind, but it comes from names rather than the library's documentation, so review it before adding it to the contract.
+The report lists each function that is not exported and the fact it needs. It also suggests facts from naming and signature conventions: a count parameter beside a pointer, a pointer the function writes, the `void *` a callback receives, a setter that replaces its callback, a struct with its own release function, a result whose documentation says how to free it. Each suggestion is checked against the headers and listed only when it makes a function bind, but it comes from names rather than the library's documentation, so review it before adding it to the contract.
 
 `--json` prints every declaration with its C and TypeScript forms, its header documentation, the missing facts, and the suggestions in contract shape, for tools that propose facts.
 

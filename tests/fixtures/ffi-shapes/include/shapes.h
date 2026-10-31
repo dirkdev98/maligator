@@ -108,6 +108,18 @@ void shapes_canvas_lend(ShapesCanvas *canvas,
                         void *data);
 // Call visit, then return the length of the canvas title.
 int shapes_canvas_visit(ShapesCanvas *canvas, void (*visit)(void *data), void *data);
+
+typedef void (*ShapesErrorHandler)(int code, const char *message);
+// Keep handler until the next call; returns the handler it replaces.
+ShapesErrorHandler shapes_set_error_handler(ShapesErrorHandler handler);
+void shapes_fail(int code);  // Report a failure to the error handler
+// Keep handler for the canvas until the next call or until the canvas closes.
+void shapes_canvas_on_resize(ShapesCanvas *canvas,
+                             void (*handler)(ShapesCanvas *canvas, int width, int height));
+void shapes_canvas_resize(ShapesCanvas *canvas, int width, int height);  // Call its handler
+// Keep hook for the canvas until the next call; returns the data it replaces.
+void *shapes_canvas_on_draw(ShapesCanvas *canvas, int (*hook)(void *data, int frame), void *data);
+int shapes_canvas_draw(ShapesCanvas *canvas, int frame);  // The hook's result, or -1
 const char *shapes_log_line(void);  // The last log line
 size_t shapes_path_length(ShapesPath path);
 

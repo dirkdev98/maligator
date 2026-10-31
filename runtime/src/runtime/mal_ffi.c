@@ -840,6 +840,101 @@ MalVm *mal_ffi_callback_vm(MalFfiCallback *callback) {
     return kept->callback.vm;
 }
 
+typedef struct MalFfiReplacedEntry {
+    void *key;
+    MalFfiKept *kept;
+} MalFfiReplacedEntry;
+
+/**
+ * Replaced callbacks are process-wide, as the libraries' own setter state is, so
+ * worker VMs share them. Only VM threads change entries, but a library may call a
+ * trampoline from any thread, so lookups take the lock too.
+ */
+static pthread_mutex_t ffi_replaced_lock = PTHREAD_MUTEX_INITIALIZER;
+/** Every site that ever held an entry, so destroying a handle finds its callbacks. */
+static MalFfiReplaced *ffi_replaced_sites;
+/** Entries keyed by a handle; destroying a handle skips the scan while there are none. */
+static _Atomic usize ffi_replaced_keyed;
+
+static MalFfiReplacedEntry *ffi_replaced_find(MalFfiReplaced *site, void *key) {
+    MalFfiReplacedEntry *entries = site->entries;
+    for (usize index = 0; index < site->count; index++) {
+        if (entries[index].key == key) return &entries[index];
+    }
+    return nullptr;
+}
+
+static void ffi_replaced_remove(MalFfiReplaced *site, MalFfiReplacedEntry *entry) {
+    MalFfiReplacedEntry *entries = site->entries;
+    if (entry->key != nullptr) ffi_replaced_keyed--;
+    *entry = entries[--site->count];
+}
+
+bool mal_ffi_replace(
+    MalVm *vm, MalFfiReplaced *site, void *key, MalFfiCallback *callback,
+    MalFfiCallback **previous) {
+    pthread_mutex_lock(&ffi_replaced_lock);
+    MalFfiReplacedEntry *entry = ffi_replaced_find(site, key);
+    *previous = entry == nullptr ? nullptr : &entry->kept->callback;
+    if (entry != nullptr && callback == nullptr) ffi_replaced_remove(site, entry);
+    else if (entry != nullptr) entry->kept = (MalFfiKept *) callback;
+    else if (callback != nullptr) {
+        if (site->count == site->capacity) {
+            usize capacity = site->capacity == 0 ? 4 : site->capacity * 2;
+            MalFfiReplacedEntry *grown = realloc(site->entries, capacity * sizeof(*grown));
+            if (grown == nullptr) {
+                pthread_mutex_unlock(&ffi_replaced_lock);
+                return mal_ffi_out_of_memory(vm);
+            }
+            if (site->capacity == 0) {
+                site->next = ffi_replaced_sites;
+                ffi_replaced_sites = site;
+            }
+            site->entries = grown;
+            site->capacity = capacity;
+        }
+        ((MalFfiReplacedEntry *) site->entries)[site->count++] =
+            (MalFfiReplacedEntry) {key, (MalFfiKept *) callback};
+        if (key != nullptr) ffi_replaced_keyed++;
+    }
+    pthread_mutex_unlock(&ffi_replaced_lock);
+    return true;
+}
+
+MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key) {
+    pthread_mutex_lock(&ffi_replaced_lock);
+    MalFfiReplacedEntry *entry = ffi_replaced_find(site, key);
+    MalFfiKept *kept = entry == nullptr ? nullptr : entry->kept;
+    // Checked under the lock: the owning thread may release the context right after.
+    bool foreign = kept != nullptr && kept->callback.vm != nullptr
+        && !pthread_equal(kept->thread, pthread_self());
+    pthread_mutex_unlock(&ffi_replaced_lock);
+    if (foreign) ffi_wrong_thread();
+    return kept == nullptr ? nullptr : &kept->callback;
+}
+
+/** Release the callbacks kept for a handle whose resource was just destroyed. */
+static void ffi_replaced_drop(void *key) {
+    if (key == nullptr || atomic_load_explicit(&ffi_replaced_keyed, memory_order_relaxed) == 0) {
+        return;
+    }
+    for (;;) {
+        MalFfiKept *kept = nullptr;
+        pthread_mutex_lock(&ffi_replaced_lock);
+        for (MalFfiReplaced *site = ffi_replaced_sites; site != nullptr && kept == nullptr;
+             site = site->next) {
+            MalFfiReplacedEntry *entry = ffi_replaced_find(site, key);
+            if (entry == nullptr) continue;
+            kept = entry->kept;
+            ffi_replaced_remove(site, entry);
+        }
+        pthread_mutex_unlock(&ffi_replaced_lock);
+        // Released outside the lock: a release runs on the VM thread or queues for it.
+        if (kept == nullptr) return;
+        mal_ffi_release(kept);
+    }
+}
+
 /** A malloc'd `<specifier>#<name>` identity, or null after an allocation throw. */
 static char *ffi_identity(MalVm *vm, const MalFfiLibrary *library, const char *name) {
     usize length = strlen(library->specifier) + 1 + strlen(name) + 1;
@@ -865,6 +960,7 @@ static void ffi_handle_finalize(MalHeapHeader *cell) {
         && handle->type->destroy != nullptr) {
         ffi_finalizing = true;
         handle->type->destroy(handle->value);
+        ffi_replaced_drop(handle->value);
         ffi_finalizing = false;
     }
     ffi_handle_forget(handle);
@@ -895,7 +991,10 @@ static MalValue ffi_handle_dispose(
         bool release = handle->owned && handle->type->destroy != nullptr;
         // Close before releasing: the library may hand out the same pointer again.
         if (handle->type->size == 0) ffi_handle_forget(handle);
-        if (release) handle->type->destroy(value);
+        if (release) {
+            handle->type->destroy(value);
+            ffi_replaced_drop(value);
+        }
         ffi_handle_forget(handle);
     }
     return mal_value_new_undefined();
@@ -1081,7 +1180,9 @@ bool mal_ffi_handle_closable(MalVm *vm, void *pin, const MalFfiSite *site) {
 
 void mal_ffi_close_handle(MalValue value) {
     MalFfiHandleObject *handle = ffi_handle(value);
-    if (handle != nullptr) ffi_handle_forget(handle);
+    if (handle == nullptr) return;
+    ffi_replaced_drop(handle->value);
+    ffi_handle_forget(handle);
 }
 
 static const MalFfiExport *ffi_find_export(const MalFfiLibrary *library, const char *name) {

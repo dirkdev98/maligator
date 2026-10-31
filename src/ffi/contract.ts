@@ -187,7 +187,13 @@ function validateValueFacts(value: unknown, at: string): void {
 	if (value.callback !== undefined) {
 		const callback = value.callback;
 		expectObject(callback, `${at}.callback`);
-		expectKeys(callback, `${at}.callback`, ["data", "release", "params"]);
+		expectKeys(callback, `${at}.callback`, ["data", "release", "params", "replaced"]);
+		booleanField(callback, "replaced", `${at}.callback`);
+		expect(
+			callback.replaced !== true || callback.release === undefined,
+			`${at}.callback.release`,
+			"absent for a replaced callback, which the next call releases",
+		);
 		if (callback.params !== undefined) {
 			expectObject(callback.params, `${at}.callback.params`);
 			for (const [key, facts] of Object.entries(callback.params)) {
@@ -201,7 +207,8 @@ function validateValueFacts(value: unknown, at: string): void {
 		}
 		for (const key of ["data", "release"] as const) {
 			const reference = callback[key];
-			if (key === "release" && reference === undefined) continue;
+			if (reference === undefined && (key === "release" || callback.replaced === true))
+				continue;
 			expect(
 				typeof reference === "string" &&
 					(C_NAME.test(reference) || /^[1-9]\d*$/.test(reference)),

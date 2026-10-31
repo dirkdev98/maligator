@@ -701,13 +701,15 @@ class BindingWriter {
 
 	/**
 	 * A C function of the callback's type that converts its arguments, calls the
-	 * JavaScript function its user data names, and converts the result back. After
-	 * an exception, later calls return zero without running JavaScript.
+	 * JavaScript function its user data names, or else the one `site` keeps, and
+	 * converts the result back. After an exception, later calls return zero without
+	 * running JavaScript.
 	 */
 	#trampoline(
 		name: string,
 		value: Extract<JsValue, { kind: "callback" }>,
 		owner: string,
+		site?: string,
 	): Array<string> {
 		const type = value.type;
 		const params = type.params.map((param, index) =>
@@ -725,11 +727,19 @@ class BindingWriter {
 				input.kind === "handle" ||
 				(input.kind === "sequence" && input.of.kind === "handle"),
 		);
+		const keyParam = value.replaced?.keyParam;
+		const callback =
+			data >= 0
+				? `mal_c${String(data)}`
+				: `mal_ffi_replaced(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`})`;
 		return [
 			"",
 			`static ${formatCDeclaration(type.returns, `${name}(${params.length === 0 ? "void" : params.join(", ")})`)} {`,
-			`\tMalFfiCallback *mal_callback = mal_c${String(data)};`,
+			`\tMalFfiCallback *mal_callback = ${callback};`,
 			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
+			...(data < 0
+				? [`\tif (mal_callback == nullptr) return${returns ? " mal_return" : ""};`]
+				: []),
 			...(value.kept
 				? [
 						"\tMalVm *vm = mal_ffi_callback_vm(mal_callback);",
@@ -924,7 +934,10 @@ class BindingWriter {
 					if (value.kind === "callback" && value.kept) {
 						const trampoline = `mal_ffi_callback_${name}_${String(index)}`;
 						const context = `mal_kept_${String(index)}`;
-						trampolines.push(...this.#trampoline(trampoline, value, name));
+						const replaced = `mal_ffi_replaced_${name}_${String(index)}`;
+						if (value.replaced !== undefined)
+							trampolines.push("", `static MalFfiReplaced ${replaced};`);
+						trampolines.push(...this.#trampoline(trampoline, value, name, replaced));
 						locals.push(`MalFfiCallback *${context} = nullptr;`);
 						body.push(
 							`if (!mal_ffi_to_function(vm, ${source}, ${value.nullable}, ${site})) goto mal_done;`,
@@ -938,6 +951,16 @@ class BindingWriter {
 							"}",
 						);
 						kept.push(`${local} = ${context} == nullptr ? nullptr : ${trampoline};`);
+						if (value.replaced !== undefined) {
+							// The library drops the previous callback once this call returns.
+							const previous = `mal_previous_${String(index)}`;
+							const key = value.replaced.key;
+							locals.push(`MalFfiCallback *${previous} = nullptr;`);
+							kept.push(
+								`if (!mal_ffi_replace(vm, &${replaced}, ${key === undefined ? "nullptr" : `(void *) mal_argument_${String(key)}`}, ${context}, &${previous})) goto mal_done;`,
+							);
+							cleanup.push(`mal_ffi_release(${previous});`);
+						}
 						return;
 					}
 					if (value.kind === "callback") {

@@ -7,6 +7,7 @@ import { planBindings } from "./binding-plan.ts";
 import type { BindingPlan, BoundFunction, Gap } from "./binding-plan.ts";
 import { resolveCType } from "./c-model.ts";
 import type { CFunction, CModel, CRecord } from "./c-model.ts";
+import { formatCDeclaration } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import type { LibraryFacts } from "./contract.ts";
 import { FfiError } from "./ffi-error.ts";
@@ -24,6 +25,8 @@ export interface SuggestedFacts {
 }
 
 const RELEASE_NAME = /unload|free|destroy|delete|release|close|dispose/i;
+/** Words of a setter's name; its next call replaces the callback it keeps. */
+const SETTER_WORDS = new Set(["set", "on", "hook", "handler", "callback"]);
 const COUNT_NAME = /(?:count|size|length|len|num)$/i;
 /** A count of elements is no byte length, so buffers need a size-like name. */
 const BYTE_COUNT_NAME = /(?:size|length|len|bytes)$/i;
@@ -244,6 +247,16 @@ function suggestFunction(
 						resolveCType(model, target.returns).kind === "void"
 					);
 				});
+	const result = resolveCType(model, declaration.returns);
+	const setter = declaration.name
+		.split(/_|(?<=[a-z\d])(?=[A-Z])/)
+		.some((word) => SETTER_WORDS.has(word.toLowerCase()));
+	// A setter may return the callback it replaces, or that callback's user data.
+	const returnsPrevious = (callback: number, data: boolean): boolean =>
+		result.kind === "pointer" &&
+		((data && isVoidPointer(model, result)) ||
+			formatCDeclaration(result) ===
+				formatCDeclaration(resolveCType(model, declaration.params[callback]!.type)));
 	const returns = gaps.some((gap) => gap.at === "return")
 		? suggestResult(model, declaration)
 		: undefined;
@@ -262,23 +275,26 @@ function suggestFunction(
 					? [position]
 					: [],
 			);
-			if (
-				data.length === 1 &&
-				target.params.some((param) => isVoidPointer(model, param))
-			) {
-				// A lone destructor for the user data means the library keeps the callback.
-				const release = releases.length === 1 ? releases[0] : undefined;
-				const counted = callbackParameterFacts(model, target);
-				params[key(index)] = {
-					callback: {
-						data: key(data[0]!),
-						...(release === undefined ? {} : { release: key(release) }),
-						...(counted === undefined ? {} : { params: counted }),
-					},
-				};
-				taken.add(data[0]!);
-				if (release !== undefined) taken.add(release);
-			}
+			const routed =
+				data.length === 1 && target.params.some((param) => isVoidPointer(model, param));
+			// A lone destructor for the user data means the library keeps the callback.
+			const release = routed && releases.length === 1 ? releases[0] : undefined;
+			const replaced =
+				release === undefined && (setter || returnsPrevious(index, routed));
+			if (!routed && !replaced) continue;
+			const counted = callbackParameterFacts(model, target);
+			params[key(index)] = {
+				// Setters conventionally take null to remove the callback.
+				...(replaced ? { nullable: true } : {}),
+				callback: {
+					...(routed ? { data: key(data[0]!) } : {}),
+					...(release === undefined ? {} : { release: key(release) }),
+					...(replaced ? { replaced: true } : {}),
+					...(counted === undefined ? {} : { params: counted }),
+				},
+			};
+			if (routed) taken.add(data[0]!);
+			if (release !== undefined) taken.add(release);
 			continue;
 		}
 		const bytes = isByteType(target);

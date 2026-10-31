@@ -61,6 +61,11 @@ export type JsValue =
 			readonly returns: JsValue;
 			readonly nullable: boolean;
 			readonly kept: boolean;
+			/**
+			 * For a callback the next call replaces: the C parameter whose handle keys it,
+			 * and, without user data, the callback parameter that passes that handle back.
+			 */
+			readonly replaced?: { readonly key?: number; readonly keyParam?: number };
 	  }
 	/**
 	 * A resource handle. C receives the handle's pointer, a copy of its struct, or
@@ -615,6 +620,7 @@ class Planner {
 		type: CType,
 		nullable: boolean,
 		kept: boolean,
+		routed: boolean,
 		facts: Readonly<Record<string, MaligatorFfiValueFacts>>,
 		at: string,
 	): Mapping {
@@ -672,6 +678,7 @@ class Planner {
 			const stated = factsAt(index);
 			const resolved = resolveCType(this.#model, param);
 			if (
+				routed &&
 				stated === undefined &&
 				resolved.kind === "pointer" &&
 				resolveCType(this.#model, resolved.to).kind === "void" &&
@@ -686,7 +693,7 @@ class Planner {
 			}
 			params.push(mapped.value);
 		}
-		if (!params.includes("data")) {
+		if (routed && !params.includes("data")) {
 			throw new FfiError(`${at}.callback: the callback takes no void * for its data`);
 		}
 		const returned = resolveCType(this.#model, target.returns);
@@ -702,6 +709,73 @@ class Planner {
 		return {
 			value: { kind: "callback", type: target, params, counts, returns, nullable, kept },
 		};
+	}
+
+	/**
+	 * Key a function's replaced callback by the handle its first parameter passes, so
+	 * each handle keeps its own, and without user data find the callback parameter that
+	 * passes the handle back. Returns the callback's C parameter position.
+	 */
+	#replaced(
+		declaration: CFunction,
+		factsAt: (index: number) => MaligatorFfiValueFacts,
+		args: ReadonlyArray<Argument>,
+		params: Array<MappedParameter>,
+		where: (at: string) => string,
+	): number | undefined {
+		const indexes = declaration.params.flatMap((_, index) =>
+			factsAt(index).callback?.replaced === true ? [index] : [],
+		);
+		const index = indexes[0];
+		if (index === undefined) return undefined;
+		const at = where(
+			`params.${declaration.params[index]!.name ?? String(index + 1)}.callback`,
+		);
+		if (indexes.length > 1) {
+			throw new FfiError(`${at}: a function takes at most one replaced callback`);
+		}
+		const entry = args[index];
+		if (entry?.kind !== "input") return index;
+		const param = params[entry.param]!;
+		if (param.value.kind !== "callback") return index;
+		const first = args[0];
+		const handle = first?.kind === "input" ? params[first.param]!.value : undefined;
+		const key =
+			index > 0 && handle?.kind === "handle" && handle.pass === "pointer"
+				? handle
+				: undefined;
+		const keyParam = param.value.params.findIndex(
+			(value) =>
+				typeof value === "object" && value.kind === "handle" && value.name === key?.name,
+		);
+		if (key !== undefined && keyParam < 0 && !param.value.params.includes("data")) {
+			throw new FfiError(
+				`${at}: a replaced callback without data needs a parameter that passes its ${key.name} back`,
+			);
+		}
+		params[entry.param] = {
+			...param,
+			value: {
+				...param.value,
+				replaced:
+					key === undefined ? {} : { key: 0, ...(keyParam < 0 ? {} : { keyParam }) },
+			},
+		};
+		return index;
+	}
+
+	/**
+	 * Whether a setter's result is the callback it replaced, or that callback's user
+	 * data, which only the binding could interpret.
+	 */
+	#returnsPrevious(declaration: CFunction, callback: number, data: boolean): boolean {
+		const result = resolveCType(this.#model, declaration.returns);
+		if (result.kind !== "pointer") return false;
+		if (data && resolveCType(this.#model, result.to).kind === "void") return true;
+		return (
+			formatCDeclaration(result) ===
+			formatCDeclaration(resolveCType(this.#model, declaration.params[callback]!.type))
+		);
 	}
 
 	/**
@@ -800,7 +874,7 @@ class Planner {
 		const callbackData = new Map<number, number>();
 		declaration.params.forEach((_, index) => {
 			const callback = factsAt(index).callback;
-			if (callback === undefined) return;
+			if (callback?.data === undefined) return;
 			const at = `params.${names[index]}.callback.data`;
 			const data = parameterIndex(callback.data, at);
 			const resolved = resolveCType(this.#model, declaration.params[data]!.type);
@@ -894,7 +968,9 @@ class Planner {
 				const mapped = this.#callback(
 					resolved,
 					valueFacts.nullable === true,
-					valueFacts.callback.release !== undefined,
+					valueFacts.callback.release !== undefined ||
+						valueFacts.callback.replaced === true,
+					valueFacts.callback.data !== undefined,
 					valueFacts.callback.params ?? {},
 					where(at),
 				);
@@ -978,10 +1054,23 @@ class Planner {
 			args.push({ kind: "input", param: params.length - 1 });
 		});
 
+		const replaced =
+			gaps.length === 0
+				? this.#replaced(declaration, factsAt, args, params, where)
+				: undefined;
 		if (facts.returns.constant !== undefined) {
 			throw new FfiError(`${where("returns.constant")}: constant applies to parameters`);
 		}
-		const returns = map(declaration.returns, "return", facts.returns, "returns");
+		const returns: Mapping =
+			replaced !== undefined &&
+			Object.keys(facts.returns).length === 0 &&
+			this.#returnsPrevious(
+				declaration,
+				replaced,
+				factsAt(replaced).callback?.data !== undefined,
+			)
+				? { value: { kind: "undefined" } }
+				: map(declaration.returns, "return", facts.returns, "returns");
 		if ("value" in returns) {
 			if (facts.returns.borrowed === true && returns.value.kind !== "handle") {
 				throw new FfiError(`${where("returns.borrowed")}: the result is not a handle`);

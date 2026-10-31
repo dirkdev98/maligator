@@ -418,7 +418,11 @@ describe("ffi contract facts", () => {
 			"free",
 		]);
 		const suggestible = (facts: MaligatorFfiValueFacts): boolean =>
-			Object.keys(facts).every((kind) => suggestedKinds.has(kind));
+			Object.keys(facts).every(
+				(kind) =>
+					suggestedKinds.has(kind) ||
+					(kind === "nullable" && facts.callback?.replaced === true),
+			);
 		const stated = Object.entries(contract.functions).filter(
 			([, facts]) =>
 				facts.variants === undefined &&

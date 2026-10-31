@@ -33,6 +33,15 @@ export default {
 		},
 		shapes_canvas_visit: { params: { visit: { callback: { data: "data" } } } },
 		shapes_canvas_lend: { params: { visit: { callback: { data: "data" } } } },
+		shapes_set_error_handler: {
+			params: { handler: { callback: { replaced: true }, nullable: true } },
+		},
+		shapes_canvas_on_resize: {
+			params: { handler: { callback: { replaced: true }, nullable: true } },
+		},
+		shapes_canvas_on_draw: {
+			params: { hook: { callback: { data: "data", replaced: true }, nullable: true } },
+		},
 		shapes_read: {
 			params: {
 				reader: {

@@ -140,9 +140,8 @@ export function formatTsType(
 			const params = value.params
 				.filter((param): param is JsValue => param !== "data" && param !== "count")
 				.map((param, index) => `arg${index + 1}: ${formatTsType(param)}`);
-			return nullable(
-				`(${params.join(", ")}) => ${formatTsType(value.returns, "input")}`,
-			);
+			const type = `(${params.join(", ")}) => ${formatTsType(value.returns, "input")}`;
+			return value.nullable ? `(${type}) | null` : type;
 		}
 		case "sequence": {
 			const element = formatTsType(value.of, direction);
