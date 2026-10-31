@@ -1909,9 +1909,10 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
 - [ ] Support C libraries in `maligator test --watch`, which needs an in-process
       application host that links the project's bindings.
-- [ ] Callbacks without a user-data parameter, such as global setters that keep one
-      callback until the next call replaces it; blocking functions with async twins;
-      worker affinity.
+- [ ] Callbacks without a user-data parameter, such as global setters and per-handle
+      hooks (SQLite's `update_hook`) that keep one callback until the next call
+      replaces it; user data a callback reaches through an accessor such as
+      `sqlite3_user_data`; blocking functions with async twins; worker affinity.
 - [ ] Foreign call effects and struct values: Core knows a foreign call's result
       kind but still treats the call as running arbitrary code. Give it the
       binding's effects (no user code without callbacks), and scalar-replace struct

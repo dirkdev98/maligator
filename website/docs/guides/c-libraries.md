@@ -118,7 +118,7 @@ ImageDrawRectangle(image, 8, 8, 16, 16, BLUE);
 ExportImage(image, `image-${image.width}x${image.height}.png`);
 ```
 
-Leaving a `using` scope or calling `[Symbol.dispose]()` releases the resource through `destroy`, and calling the destroy function yourself also closes the handle. A closed handle throws a `TypeError` instead of reaching C.
+Leaving a `using` scope or calling `[Symbol.dispose]()` releases the resource through `destroy`, and calling the destroy function yourself also closes the handle. A closed handle throws a `TypeError` instead of reaching C, and closing a handle while a C call uses it, from a callback or a getter, throws one too.
 
 - `borrowed` marks a result the library keeps owning. Closing it does not release it.
 - `collect: true` releases a handle the program drops once it is garbage collected. Leave it off for resources that must be released on one thread or before the library shuts down, such as raylib's GPU textures.
@@ -139,15 +139,41 @@ functions: {
 ```
 
 - `out` marks a pointer the function writes through, and `inout` also passes the current value in. A function with outputs returns an object with each output and the C result as `result`, so `GetCodepoint("✓")` returns `{ result: 10003, codepointSize: 3 }`. A status code stays in `result`; the binding does not throw for it.
-- `bytes` passes an `ArrayBuffer` or a view without copying, and `array` copies a JavaScript array into C memory for the call. `length` names the parameter that carries the count, which disappears from the JavaScript signature. Shared buffers are rejected, and while C uses a buffer, transferring it, including from a callback, throws a `TypeError`.
+- `bytes` passes an `ArrayBuffer` or a view without copying, and `array` copies a JavaScript array into C memory for the call. `length` names the parameter that carries the count, which disappears from the JavaScript signature. Shared buffers are rejected, as are immutable buffers where C may write. While C uses a buffer, transferring it, including from a callback, throws a `TypeError`.
 - On a result, `bytes` and `array` copy the C memory into a `Uint8Array` or an array. `length` names an integer parameter, or a pointer the function writes the count through.
 - `string` marks a `char *` or `unsigned char *` as UTF-8 text.
 - `free` names the function that releases a string, buffer, or array result after it is copied.
-- `callback` passes a JavaScript function as a function pointer the library calls before it returns, such as an iteration or comparison function. `data` names the `void *` parameter the library hands back to the callback; it disappears from the JavaScript signature. An exception in the callback skips its remaining calls and rethrows when the C function returns. `release` names the `void (*)(void *)` parameter that takes the destructor for that data, for a library that keeps the callback, such as SQLite's `xDestroy`. The library may then call the function after the call returns, until it calls the destructor, and an exception rethrows from the library call that triggered it. A library that calls back from another thread aborts the program, because JavaScript runs on one thread; a destructor called from another thread is fine, and the release completes on the program's thread. A callback's own `params`, keyed by 1-based position, take `string`, `bytes`, `array`, and `nullable` facts; a `length` names another callback parameter, which the JavaScript function does not receive. SQLite's collation callback `(void *pArg, int n1, const void *s1, int n2, const void *s2)`, for example, takes `params: { 3: { bytes: { length: "2" } }, 5: { bytes: { length: "4" } } }` and receives two `Uint8Array` copies.
-
 - `constant` passes a C macro, enumerator, or integer for a parameter, such as `SQLITE_TRANSIENT` for a destructor or `0` for a reserved argument. The parameter disappears from the JavaScript signature, and the C compiler checks the value's type.
 
 Each fact names the C declaration it describes. A fact that names nothing in the headers, or that does not fit the declaration, fails the build.
+
+## Pass callbacks
+
+A `callback` fact passes a JavaScript function where the library takes a function pointer. `data` names the `void *` parameter the library hands back to the callback; it disappears from the JavaScript signature:
+
+```typescript native/sqlite.ffi.ts
+functions: {
+	sqlite3_create_collation_v2: {
+		params: {
+			xCompare: {
+				callback: {
+					data: "pArg",
+					release: "xDestroy",
+					params: { 3: { bytes: { length: "2" } }, 5: { bytes: { length: "4" } } },
+				},
+			},
+		},
+	},
+},
+```
+
+Without `release`, the library may call the function only until the C function returns, as iteration and comparison functions do. An exception in the callback skips its remaining calls and rethrows when the C function returns.
+
+`release` names the `void (*)(void *)` parameter that takes the destructor for `data`, for a library that keeps the callback, such as SQLite's `xDestroy`. The library may call the function until it calls the destructor, and an exception rethrows from the library call that triggered it.
+
+A callback's own `params`, keyed by 1-based position, take `string`, `bytes`, `array`, and `nullable` facts. A `length` names another callback parameter, which the function does not receive, so the collation above receives two `Uint8Array` copies.
+
+JavaScript runs on one thread, so a library that calls back from another thread aborts the program. A destructor may run on any thread; the release completes on the program's thread.
 
 ## Call variadic functions
 
