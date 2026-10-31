@@ -50,12 +50,61 @@ function isByteType(type: CType): boolean {
 	return type.kind === "void" || (type.kind === "integer" && type.name.endsWith("char"));
 }
 
+/** Verbs that release a resource, the most common choice first. */
+const RELEASE_VERBS = [
+	"destroy",
+	"free",
+	"delete",
+	"release",
+	"close",
+	"dispose",
+	"unload",
+	"finalize",
+	"finish",
+	"cleanup",
+];
+
+function nameWords(name: string): Array<string> {
+	return name
+		.split(/_|(?<=[a-z\d])(?=[A-Z])/)
+		.filter((word) => word !== "")
+		.map((word) => word.toLowerCase());
+}
+
 /**
- * A struct the library hands out and later releases: one function whose name says
- * it releases, that takes only the struct or its address and returns nothing. An
- * opaque struct that no function returns or writes out reaches JavaScript only
- * through callbacks, so it is a handle the library keeps owning, such as a context
- * it lends to them.
+ * How well a function's name says it releases `record`, lower is better. A release
+ * verb that ends the name, as in `BN_free`, or that only the end of the type's name
+ * follows, as in `UnloadImage` or libxml2's `xmlFreeDoc` for `_xmlDoc`, ranks by the
+ * verb's commonness, then the shortest name, so `BN_free` wins over `BN_clear_free`.
+ * A verb other words follow, as in `cairo_close_path` or raylib's `UnloadMusicStream`,
+ * ranks after all of those. Undefined for a name without a release verb.
+ */
+export function releaseRank(
+	name: string,
+	record: Pick<CRecord, "name">,
+): number | undefined {
+	const words = nameWords(name);
+	const own = nameWords(record.name.replace(/^_+/, ""));
+	const endings = new Set(own.map((_, index) => own.slice(index).join("")));
+	for (let index = words.length - 1; index >= 0; index--) {
+		const verb = RELEASE_VERBS.indexOf(words[index]!);
+		if (verb < 0) continue;
+		const rest = words.slice(index + 1).join("");
+		return (
+			(rest === "" || endings.has(rest) ? 0 : WEAK_RELEASE) + verb * 100 + words.length
+		);
+	}
+	return undefined;
+}
+
+/** Ranks of names whose release verb other words follow. */
+const WEAK_RELEASE = 100_000;
+
+/**
+ * A struct the library hands out and later releases: the function that takes only
+ * the struct or its address and is best named as releasing it. An opaque struct
+ * that no function returns or writes out reaches JavaScript only through callbacks,
+ * so it is a handle the library keeps owning, such as a context it lends to them.
  */
 function suggestHandles(
 	model: CModel,
@@ -70,27 +119,24 @@ function suggestHandles(
 			plan.records.has(record.name)
 		)
 			continue;
-		const releases = model.functions.filter((declaration) => {
+		const releases = model.functions.flatMap((declaration) => {
 			const param = declaration.params[0];
-			if (
-				declaration.params.length !== 1 ||
-				param === undefined ||
-				resolveCType(model, declaration.returns).kind !== "void" ||
-				!RELEASE_NAME.test(declaration.name)
-			)
-				return false;
+			const rank = releaseRank(declaration.name, record);
+			if (declaration.params.length !== 1 || param === undefined || rank === undefined)
+				return [];
 			const target = pointee(model, param.type);
-			return (
-				recordOf(model, param.type) === record ||
+			return recordOf(model, param.type) === record ||
 				(target?.kind === "record" && model.records.get(target.name) === record)
-			);
+				? [{ declaration, rank }]
+				: [];
 		});
-		// Among several, such as `UnloadSound` and `UnloadSoundAlias`, the one named after the type.
-		const named = releases.filter((declaration) =>
-			declaration.name.toLowerCase().endsWith(record.name.toLowerCase()),
-		);
+		const best = Math.min(...releases.map(({ rank }) => rank));
+		const ranked = releases.filter(({ rank }) => rank === best);
+		// Two equally good names, or several weak ones, leave the choice to the author.
 		const release =
-			releases.length === 1 ? releases[0] : named.length === 1 ? named[0] : undefined;
+			ranked.length === 1 && (best < WEAK_RELEASE || releases.length === 1)
+				? ranked[0]!.declaration
+				: undefined;
 		if (release !== undefined) {
 			handles.set(record.name, { handle: { destroy: release.name } });
 		} else if (!record.complete && !handedOut(model, record)) {
@@ -428,11 +474,18 @@ export function suggestFacts(
 	// Handle types change how pointers to them map, so function suggestions start from
 	// the gaps that remain once the types apply.
 	let typed: BindingPlan = plan;
-	try {
-		typed = planBindings(model, mergeFacts(facts, types, new Map()));
-	} catch (error) {
-		if (!(error instanceof FfiError)) throw error;
-		types.clear();
+	for (;;) {
+		try {
+			typed = planBindings(model, mergeFacts(facts, types, new Map()));
+			break;
+		} catch (error) {
+			if (!(error instanceof FfiError)) throw error;
+			// Drop the type suggestion the planner rejected; without a name, all of them.
+			const rejected = /^types\.([^.:]+)/.exec(error.message)?.[1];
+			if (rejected !== undefined && types.delete(rejected)) continue;
+			types.clear();
+			break;
+		}
 	}
 	const functions = new Map<string, MaligatorFfiFunctionFacts>();
 	for (const entry of typed.unbound) {

@@ -19,7 +19,7 @@ import type { LibraryFacts } from "../src/ffi/contract.ts";
 import { declarationsCurrent, generateDeclarations } from "../src/ffi/declarations.ts";
 import type { FfiInspection, FunctionInspection } from "../src/ffi/inspect.ts";
 import { loadCModel } from "../src/ffi/model-cache.ts";
-import { suggestFacts } from "../src/ffi/suggest.ts";
+import { releaseRank, suggestFacts } from "../src/ffi/suggest.ts";
 import type { MaligatorFfiValueFacts } from "../src/public-api.d.ts";
 import shapesContract from "./fixtures/ffi-shapes/shapes.ffi.ts";
 
@@ -482,6 +482,25 @@ describe("ffi contract facts", () => {
 		expect(planBindings(model, contract).functions.map((entry) => entry.name)).toEqual(
 			expect.arrayContaining([...suggestions.binds]),
 		);
+	});
+
+	it("ranks release functions by how their names say they release a type", () => {
+		const rank = (name: string, type: string) => releaseRank(name, { name: type });
+		expect(rank("BN_free", "bignum_st")!).toBeLessThan(
+			rank("BN_clear_free", "bignum_st")!,
+		);
+		expect(rank("cairo_destroy", "_cairo")!).toBeLessThan(
+			rank("cairo_close_path", "_cairo")!,
+		);
+		expect(rank("xmlFreeDoc", "_xmlDoc")!).toBeLessThan(
+			rank("UnloadMusicStream", "Music")!,
+		);
+		expect(rank("UnloadImage", "Image")).toBe(rank("UnloadSound", "Sound"));
+		expect(rank("sqlite3_close", "sqlite3")!).toBeLessThan(
+			rank("sqlite3_close_v2", "sqlite3")!,
+		);
+		expect(rank("BN_CTX_end", "bignum_ctx")).toBeUndefined();
+		expect(rank("uv_unref", "uv_handle_s")).toBeUndefined();
 	});
 
 	it("needs a variant fact to bind a variadic function", () => {
