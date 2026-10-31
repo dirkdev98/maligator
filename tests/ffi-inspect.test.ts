@@ -18,6 +18,8 @@ import type { CModel } from "../src/ffi/c-model.ts";
 import type { LibraryFacts } from "../src/ffi/contract.ts";
 import type { FfiInspection, FunctionInspection } from "../src/ffi/inspect.ts";
 import { loadCModel } from "../src/ffi/model-cache.ts";
+import { suggestFacts } from "../src/ffi/suggest.ts";
+import shapesContract from "./fixtures/ffi-shapes/shapes.ffi.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliEntry = path.join(repoRoot, "src/index.ts");
@@ -376,6 +378,44 @@ describe("ffi contract facts", () => {
 			message,
 		);
 	};
+
+	it("suggests the count, output, callback, and handle facts the fixture contract states", () => {
+		const suggestions = suggestFacts(
+			model,
+			{ types: {}, functions: {} },
+			planBindings(model),
+		);
+		const contract: LibraryFacts = shapesContract;
+		const suggestedKinds = new Set(["array", "bytes", "out", "inout", "callback"]);
+		const stated = Object.entries(contract.functions).flatMap(([name, facts]) =>
+			facts.params !== undefined &&
+			Object.values(facts.params).every((param) =>
+				Object.keys(param).every((kind) => suggestedKinds.has(kind)),
+			)
+				? [[name, { params: facts.params }] as const]
+				: [],
+		);
+
+		expect(suggestions.functions).toEqual(Object.fromEntries(stated));
+		expect(
+			Object.fromEntries(
+				Object.entries(suggestions.types).map(([name, facts]) => [
+					name,
+					facts.handle?.destroy,
+				]),
+			),
+		).toEqual(
+			Object.fromEntries(
+				Object.entries(contract.types).map(([name, facts]) => [
+					name,
+					facts.handle?.destroy,
+				]),
+			),
+		);
+		expect(planBindings(model, contract).functions.map((entry) => entry.name)).toEqual(
+			expect.arrayContaining([...suggestions.binds]),
+		);
+	});
 
 	it("rejects facts that name nothing in the headers", () => {
 		rejects(

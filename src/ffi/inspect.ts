@@ -4,6 +4,8 @@ import type { CFunction, CModel, CTarget } from "./c-model.ts";
 import { formatCDeclaration } from "./c-type.ts";
 import type { LibraryContract } from "./contract.ts";
 import type { LinkInput, ResolvedLibrary } from "./discovery.ts";
+import { suggestFacts } from "./suggest.ts";
+import type { SuggestedFacts } from "./suggest.ts";
 
 /**
  * Everything the build knows about a library, in a stable JSON shape: where it was
@@ -42,6 +44,8 @@ export interface FfiInspection {
 		readonly name: string;
 		readonly reason: string;
 	}>;
+	/** Facts that would bind more functions, in contract shape, to review and merge. */
+	readonly suggestions: SuggestedFacts;
 }
 
 export interface FunctionInspection {
@@ -333,6 +337,7 @@ export function inspectBindings(
 		})),
 		constants,
 		skippedConstants: plan.skippedConstants,
+		suggestions: suggestFacts(model, contract.facts, plan),
 	};
 }
 
@@ -359,6 +364,17 @@ export function formatInspection(inspection: FfiInspection): string {
 			for (const gap of entry.gaps ?? [])
 				lines.push(`  ${entry.name} ${gap.at}: ${gap.reason}`);
 		}
+	}
+	const { suggestions } = inspection;
+	if (suggestions.binds.length > 0) {
+		lines.push(
+			"",
+			`Suggested facts that bind ${suggestions.binds.length} more functions; review them before adding them to the contract:`,
+		);
+		for (const [name, facts] of Object.entries(suggestions.types))
+			lines.push(`  types.${name}: ${JSON.stringify(facts)}`);
+		for (const [name, facts] of Object.entries(suggestions.functions))
+			lines.push(`  functions.${name}: ${JSON.stringify(facts)}`);
 	}
 	if (inspection.skippedConstants.length > 0) {
 		lines.push("", "Macros and constants without a mapping:");

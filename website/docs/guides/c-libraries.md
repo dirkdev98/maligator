@@ -153,6 +153,8 @@ Each fact names the C declaration it describes. A fact that names nothing in the
 maligator ffi inspect raylib
 ```
 
-The report lists each function that is not exported and the fact it needs. `--json` prints every declaration with its C and TypeScript forms, its header documentation, and the missing facts, for tools that propose facts.
+The report lists each function that is not exported and the fact it needs. It also suggests facts from naming and signature conventions: a count parameter beside a pointer, a pointer the function writes, the `void *` a callback receives, a struct with its own release function. Each suggestion is checked against the headers and listed only when it makes a function bind, but it comes from names rather than the library's documentation, so review it before adding it to the contract.
+
+`--json` prints every declaration with its C and TypeScript forms, its header documentation, the missing facts, and the suggestions in contract shape, for tools that propose facts.
 
 `maligator test` builds a test runtime with the bindings too. Note that `test --watch` does not support C libraries, and portable wire output rejects them.
