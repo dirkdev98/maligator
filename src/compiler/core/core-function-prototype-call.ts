@@ -4,7 +4,8 @@ import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { primordialNodeAvailable } from "../shared/primordial-catalog.ts";
 import type { CoreEditor } from "./core-editor.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
-import { coreTerminatorInput } from "./core-ir-control-flow.ts";
+import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
+import type { CoreNaturalLoop } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
@@ -75,6 +76,127 @@ export function coreBoundFunctionCall(
 			),
 		],
 	};
+}
+
+export interface CoreAppliedFunctionCall extends CoreFunctionPrototypeCall {
+	readonly thisArgument: CoreValueId;
+	/** The `apply` lookup, which the check of the loaded method follows. */
+	readonly lookup: CoreInstructionId;
+	/** The array literal's creation and element definitions, in program order. */
+	readonly array: ReadonlyArray<CoreInstructionId>;
+}
+
+/** How far after its creation an array literal's `apply` site may be. */
+const APPLIED_ARRAY_SCAN_LIMIT = 64;
+
+/**
+ * A `f.apply(thisArg, [a, b, ...])` site whose `apply` is read from `f` and whose
+ * array literal has no hole and no other use. The literal is created and filled in
+ * the site's block, so nothing else can see or change it before `apply` reads it
+ * back; the result describes the call `apply` makes: `f` with `thisArg`, `a`, `b`, ...
+ */
+export function coreAppliedFunctionCall(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	site: CoreInstructionId,
+): CoreAppliedFunctionCall | undefined {
+	if (!coreGuardableCall(fn, site) || fn.kernel.instructionOperandCount(site) !== 4)
+		return undefined;
+	const call = ownMethodCall(program, fn, site, "apply");
+	if (call === undefined) return undefined;
+	const thisArgument = call.thisArgument;
+	const array = call.arguments[0];
+	if (
+		thisArgument === undefined ||
+		array === undefined ||
+		fn.kernel.valueDefinitionKind(array) !== 1 ||
+		fn.kernel.valueHandlerUseCount(array) !== 0
+	)
+		return undefined;
+	const creation = coreInstructionId(fn.kernel.valueDefinitionOwner(array));
+	if (
+		fn.instructionKind(creation) !== "operation" ||
+		fn.instructionOpcodeName(creation) !== "createArray" ||
+		fn.instructionBlock(creation) !== fn.instructionBlock(site)
+	)
+		return undefined;
+	const length = fn.instructionAttributes(creation).length;
+	if (
+		typeof length !== "number" ||
+		!Number.isSafeInteger(length) ||
+		length < 0 ||
+		length > APPLIED_ARRAY_SCAN_LIMIT
+	)
+		return undefined;
+	const elements = new Map<number, CoreValueId>();
+	const definitions = new Set<CoreInstructionId>();
+	let siteUses = 0;
+	for (let use = fn.kernel.valueFirstUse(array); use >= 0; use = fn.kernel.useNext(use)) {
+		if (fn.kernel.useLive(use) === 0) continue;
+		const user = coreInstructionId(fn.kernel.useInstruction(use));
+		if (user === site) {
+			if (fn.kernel.useOperand(use) !== 3 || ++siteUses > 1) return undefined;
+			continue;
+		}
+		if (fn.kernel.useOperand(use) !== 0) return undefined;
+		const element = arrayElementDefinition(fn, user);
+		if (element === undefined || element.index >= length || elements.has(element.index))
+			return undefined;
+		elements.set(element.index, element.value);
+		definitions.add(user);
+	}
+	if (siteUses !== 1 || elements.size !== length) return undefined;
+	const ordered = [creation];
+	let next = fn.instructionNext(creation);
+	for (let scanned = 0; next !== site; scanned++) {
+		if (next === undefined || scanned >= APPLIED_ARRAY_SCAN_LIMIT) return undefined;
+		if (definitions.has(next)) ordered.push(next);
+		next = fn.instructionNext(next);
+	}
+	if (ordered.length !== length + 1) return undefined;
+	const lookup = coreInstructionId(fn.kernel.valueDefinitionOwner(call.method));
+	return {
+		...call,
+		thisArgument,
+		lookup,
+		array: ordered,
+		arguments: Array.from({ length }, (_, index) => elements.get(index)!),
+	};
+}
+
+/** The index and value an array literal's `CreateDataPropertyOrThrow` defines. */
+function arrayElementDefinition(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): { readonly index: number; readonly value: CoreValueId } | undefined {
+	if (
+		fn.instructionKind(instruction) !== "operation" ||
+		fn.instructionOpcodeName(instruction) !== "defineProperty" ||
+		fn.kernel.instructionOperandCount(instruction) !== 3
+	)
+		return undefined;
+	const attributes = fn.instructionAttributes(instruction);
+	if (
+		attributes.enumerable !== true ||
+		attributes.writable === false ||
+		attributes.configurable === false
+	)
+		return undefined;
+	const start = fn.kernel.instructionOperandStart(instruction);
+	const key = fn.kernel.operandAt(start + 1);
+	if (fn.kernel.valueDefinitionKind(key) !== 1) return undefined;
+	const keyDefinition = coreInstructionId(fn.kernel.valueDefinitionOwner(key));
+	if (
+		fn.instructionKind(keyDefinition) !== "operation" ||
+		!["createNumber", "createI32", "createF64"].includes(
+			fn.instructionOpcodeName(keyDefinition),
+		)
+	)
+		return undefined;
+	const index = fn.instructionAttributes(keyDefinition).value;
+	return typeof index === "number" && Number.isSafeInteger(index) && index >= 0
+		? { index, value: fn.kernel.operandAt(start + 2) }
+		: undefined;
 }
 
 function ownMethodCall(
@@ -271,6 +393,7 @@ export function expandCoreFunctionPrototypeCall(
 	};
 }
 
+const FUNCTION_PROTOTYPE_APPLY = "Function.prototype.apply";
 const FUNCTION_PROTOTYPE_BIND = "Function.prototype.bind";
 
 /** Whether bound-function calls can compare a loaded `bind` with the realm's own. */
@@ -279,6 +402,63 @@ export function coreBoundFunctionCallsAvailable(world: WorldFacts): boolean {
 		world.primordialPolicy === "locked" &&
 		primordialNodeAvailable(world, FUNCTION_PROTOTYPE_BIND)
 	);
+}
+
+/** Whether `f.apply(...)` sites can compare a loaded `apply` with the realm's own. */
+export function coreAppliedFunctionCallsAvailable(world: WorldFacts): boolean {
+	return (
+		world.primordialPolicy === "locked" &&
+		primordialNodeAvailable(world, FUNCTION_PROTOTYPE_APPLY)
+	);
+}
+
+/*
+ * Compares `method` with the realm's primordial right after `after`. A primordial
+ * load is an out-of-line call that loop-invariant code motion leaves in place, so it
+ * goes to the preheader of the outermost canonical loop around the comparison, if
+ * any; it cannot throw for an available primordial under the locked policy.
+ */
+function insertPrimordialCheck(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	editor: CoreEditor,
+	after: CoreInstructionId,
+	method: CoreValueId,
+	primordial: string,
+): CoreValueId {
+	const block = fn.instructionBlock(after);
+	const before = fn.instructionNext(after);
+	const sourcePosition = fn.instructionSourcePosition(after);
+	let outermost: CoreNaturalLoop | undefined;
+	for (const loop of buildCoreControlFlow(program, fn.id).loops)
+		if (
+			loop.canonical &&
+			loop.blocks.has(block) &&
+			(outermost === undefined || loop.depth < outermost.depth)
+		)
+			outermost = loop;
+	const preheader = outermost?.preheader;
+	const realm = editor.insertInstruction(
+		preheader ?? block,
+		preheader === undefined ? before : fn.blockTerminator(preheader),
+		"loadPrimordial",
+		[],
+		{
+			attributes: {
+				nodeIndex: getPrimordialCatalog().nodes.findIndex(
+					(node) => node[0] === primordial,
+				),
+				worldAssumptions: {
+					...builtinWorldAssumptions(primordial, "exact-builtin-proof"),
+				},
+			},
+			sourcePosition,
+		},
+	).outputs[0]!;
+	return editor.insertInstruction(block, before, "binary", [method, realm], {
+		attributes: { operator: "===" },
+		sourcePosition,
+	}).outputs[0]!;
 }
 
 /*
@@ -292,44 +472,69 @@ export function coreBoundFunctionCallsAvailable(world: WorldFacts): boolean {
  * function created outside a loop and called inside it tests one boolean per call.
  */
 export function expandCoreBoundFunctionCall(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
 	editor: CoreEditor,
 	site: CoreInstructionId,
 	call: CoreBoundFunctionCall,
 ): { readonly instructionsIntroduced: number; readonly blocksIntroduced: number } {
-	const creationBlock = fn.instructionBlock(call.creation);
-	const afterCreation = fn.instructionNext(call.creation);
-	const sourcePosition = fn.instructionSourcePosition(call.creation);
-	const bind = editor.insertInstruction(
-		creationBlock,
-		afterCreation,
-		"loadPrimordial",
-		[],
-		{
-			attributes: {
-				nodeIndex: getPrimordialCatalog().nodes.findIndex(
-					(node) => node[0] === FUNCTION_PROTOTYPE_BIND,
-				),
-				worldAssumptions: {
-					...builtinWorldAssumptions(FUNCTION_PROTOTYPE_BIND, "exact-builtin-proof"),
-				},
-			},
-			sourcePosition,
-		},
-	).outputs[0]!;
-	const realmBind = editor.insertInstruction(
-		creationBlock,
-		afterCreation,
-		"binary",
-		[call.method, bind],
-		{ attributes: { operator: "===" }, sourcePosition },
-	).outputs[0]!;
+	const realmBind = insertPrimordialCheck(
+		program,
+		fn,
+		editor,
+		call.creation,
+		call.method,
+		FUNCTION_PROTOTYPE_BIND,
+	);
 	const split = splitGuardedCall(fn, editor, site);
 	const direct = split.test(realmBind);
 	const thisArgument = call.thisArgument ?? split.append(direct, "createUndefined", []);
 	split.finish(
 		direct,
 		split.append(direct, "call", [call.target, thisArgument, ...call.arguments]),
+	);
+	return {
+		instructionsIntroduced: split.instructionsIntroduced() + 2,
+		blocksIntroduced: split.blocksIntroduced(),
+	};
+}
+
+/*
+ * %Function.prototype.apply% checks that its receiver is callable, reads the array
+ * back into an argument list and calls the receiver with it. When the loaded `apply`
+ * is the realm's own and `f` is a function, the site calls `f` with the literal's
+ * elements, which were evaluated in order before the check. The literal moves into
+ * the original call, which still runs, with its own TypeError, for anything else.
+ */
+export function expandCoreAppliedFunctionCall(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	editor: CoreEditor,
+	site: CoreInstructionId,
+	call: CoreAppliedFunctionCall,
+): { readonly instructionsIntroduced: number; readonly blocksIntroduced: number } {
+	const realmApply = insertPrimordialCheck(
+		program,
+		fn,
+		editor,
+		call.lookup,
+		call.method,
+		FUNCTION_PROTOTYPE_APPLY,
+	);
+	const split = splitGuardedCall(fn, editor, site);
+	const callable = split.test(realmApply);
+	const direct = split.test(
+		split.append(callable, "typeofCompare", [call.target], {
+			expected: "function",
+			negated: false,
+		}),
+	);
+	const fallback = fn.instructionBlock(site);
+	for (const instruction of call.array)
+		editor.moveInstruction(instruction, fallback, site);
+	split.finish(
+		direct,
+		split.append(direct, "call", [call.target, call.thisArgument, ...call.arguments]),
 	);
 	return {
 		instructionsIntroduced: split.instructionsIntroduced() + 2,

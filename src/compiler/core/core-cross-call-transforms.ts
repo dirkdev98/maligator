@@ -45,10 +45,13 @@ import type {
 	CoreCrossCallSession,
 } from "./core-function-optimization-session.ts";
 import {
+	coreAppliedFunctionCall,
+	coreAppliedFunctionCallsAvailable,
 	coreBoundFunctionCall,
 	coreBoundFunctionCallsAvailable,
 	coreFunctionPrototypeCall,
 	coreGuardableCall,
+	expandCoreAppliedFunctionCall,
 	expandCoreBoundFunctionCall,
 	expandCoreFunctionIndexCall,
 	expandCoreFunctionPrototypeCall,
@@ -2810,8 +2813,9 @@ function specializeCoreClosureFactories(
 }
 
 /**
- * Calls `f` directly from `f.call(...)` sites and from calls of what `f.bind(...)`
- * returned, when `f` holds known script functions.
+ * Calls `f` directly from `f.call(...)` sites, from `f.apply(...)` sites with an array
+ * literal and from calls of what `f.bind(...)` returned, when `f` holds known script
+ * functions.
  */
 function devirtualizeCoreFunctionPrototypeCalls(
 	program: CoreProgram,
@@ -2821,6 +2825,7 @@ function devirtualizeCoreFunctionPrototypeCalls(
 ): { readonly changed: ReadonlyArray<CoreFunctionId>; readonly instructions: number } {
 	const changed: Array<CoreFunctionId> = [];
 	const boundCalls = coreBoundFunctionCallsAvailable(world);
+	const appliedCalls = coreAppliedFunctionCallsAvailable(world);
 	let instructions = 0;
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
@@ -2833,7 +2838,11 @@ function devirtualizeCoreFunctionPrototypeCalls(
 				call === undefined && boundCalls
 					? coreBoundFunctionCall(program, fn, site)
 					: undefined;
-			const rewrite = call ?? bound;
+			const applied =
+				call === undefined && bound === undefined && appliedCalls
+					? coreAppliedFunctionCall(program, fn, site)
+					: undefined;
+			const rewrite = call ?? bound ?? applied;
 			if (
 				rewrite === undefined ||
 				summaries.targets.targets(caller, rewrite.target).functions.length === 0
@@ -2841,9 +2850,11 @@ function devirtualizeCoreFunctionPrototypeCalls(
 				continue;
 			editor ??= CoreEditor.open(program, caller);
 			instructions += (
-				bound === undefined
-					? expandCoreFunctionPrototypeCall(fn, editor, site, rewrite)
-					: expandCoreBoundFunctionCall(fn, editor, site, bound)
+				bound !== undefined
+					? expandCoreBoundFunctionCall(program, fn, editor, site, bound)
+					: applied !== undefined
+						? expandCoreAppliedFunctionCall(program, fn, editor, site, applied)
+						: expandCoreFunctionPrototypeCall(fn, editor, site, rewrite)
 			).instructionsIntroduced;
 		}
 		if (editor === undefined) continue;

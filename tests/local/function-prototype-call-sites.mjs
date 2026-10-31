@@ -148,3 +148,90 @@ console.log(
 	escaped[0].length,
 	escaped[0] === escaped[1],
 );
+
+function countArguments() {
+	return `${arguments.length}:${[...arguments].join("|")}`;
+}
+function withOwnApply(value) {
+	return `original ${value}`;
+}
+withOwnApply.apply = (receiver, list) => `own apply ${receiver} ${list.length}`;
+function withReplacedApply(value) {
+	return `original ${value}`;
+}
+Object.setPrototypeOf(withReplacedApply, {
+	apply: (receiver, list) => `prototype apply ${list.join("+")}`,
+});
+function applyWithOrder(target, order) {
+	const argument = (label) => {
+		order.push(label);
+		return label;
+	};
+	try {
+		return target.apply(argument("receiver"), [argument("first"), argument("second")]);
+	} catch (error) {
+		order.push(`${error.constructor.name} ${error instanceof TypeError}`);
+	}
+}
+const retained = [];
+
+function appliedCalls(base) {
+	const calculator = { offset: 13, calculate };
+	let appliedSum = 0;
+	for (let round = 0; round < 1000; round++)
+		appliedSum += calculate.apply(calculator, [base, round]);
+	console.log(appliedSum);
+
+	console.log(
+		countArguments.apply(null, [1, "two", base]),
+		countArguments.apply(null, []),
+	);
+	console.log(countArguments.apply(null, [1, , 3]));
+	console.log(describeThis.apply(undefined, ["applied"]));
+	console.log(withOwnApply.apply(4, [5, 6]), withReplacedApply.apply(null, [7, 8]));
+
+	const order = [];
+	console.log(applyWithOrder(countArguments, order));
+	applyWithOrder({ apply: Function.prototype.apply }, order);
+	console.log(order.join(", "));
+	const maybeCallable = base > 1 ? { apply: Function.prototype.apply } : countArguments;
+	const applyOrder = [];
+	const step = (label) => {
+		applyOrder.push(label);
+		return label;
+	};
+	try {
+		applyOrder.push(
+			maybeCallable.apply(step("receiver"), [step("first"), step("second")]),
+		);
+	} catch (error) {
+		applyOrder.push(`${error.constructor.name} ${error instanceof TypeError}`);
+	}
+	console.log(applyOrder.join(", "));
+
+	const reused = [base, 1];
+	const first = countArguments.apply(null, reused);
+	reused.push(2);
+	console.log(first, countArguments.apply(null, reused));
+	const kept = [base, 2];
+	retained.push(kept);
+	console.log(countArguments.apply(null, kept));
+
+	try {
+		thrower.apply("applied receiver", [base]);
+	} catch (error) {
+		console.log(error instanceof RangeError, error.message);
+	}
+	try {
+		Shape.apply(null, [4]);
+	} catch (error) {
+		console.log("class needs new", error instanceof TypeError);
+	}
+}
+appliedCalls(1);
+appliedCalls(2);
+retained[0].push("later");
+console.log(
+	retained.map((list) => list.join("|")).join(" "),
+	retained[0] === retained[1],
+);

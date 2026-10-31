@@ -1223,17 +1223,13 @@ contracts or investigates costs still visible after the string follow-ups.
       self-compile 0.3% faster), and field entries beat inlining the `quote` bodies.
       Entering strict compiled callees from each call site instead of the shared
       cached dispatch cut javascript-v2's calls phase 2.78% but left its total flat
-      (-0.25% [-0.72, 0.40]). With object-literal methods guarded and same-function
-      bound calls inlined, that phase takes 56 ms against Node's 29: the loop body
-      itself 54% of its samples, `callbacks[i](v)` 17%, the
-      `collectArguments(...spread)` call 11.5%, `.apply` dispatch 8% and its
-      `[7, value]` allocation 4%. `.apply` with a fresh hole-free array literal fits
-      the bound-call pattern: compare the loaded `apply` with the
-      `Function.prototype.apply` primordial, pass the literal's elements, and sink the
-      array's allocation into the fallback when it has no other use. A primordial load
-      is an out-of-line call that is not hoisted out of loops, so check where the
-      method is loaded or load the cached primordial inline. Builds with mutable
-      primordials, such as Test262's, keep bound calls generic.
+      (-0.25% [-0.72, 0.40]). With object-literal methods guarded, same-function bound
+      calls inlined and `f.apply(t, [...])` on fresh array literals calling `f`
+      directly, that phase takes 48 ms against Node's 29. Before the `.apply` rewrite,
+      `callbacks[i](v)` took 17% of its samples and the `collectArguments(...spread)`
+      call 11.5%. Fully static literals such as `[1, 2]` become templates, so
+      `f.apply(t, [1, 2])` still runs generic. Builds with mutable primordials, such
+      as Test262's, keep bound and applied calls generic.
 - [ ] Close the rest of the objects phase's order loop. It takes 35.7 ms against
       Node's 19.3, down from 47.9 now that a chain of generic adds keeps its sum
       unboxed. The dispatched `quote` result is still boxed because the fallback call

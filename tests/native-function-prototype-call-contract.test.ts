@@ -53,7 +53,33 @@ function sumBoundCalls() {
 console.log(sumBoundCalls());
 `;
 
-describe("Function.prototype.call and bind sites", () => {
+const appliedSource = `
+function calculate(prefix, value) {
+	return prefix + value + this.offset;
+}
+function sumAppliedCalls() {
+	const calculator = { offset: 11 };
+	let sum = 0;
+	for (let round = 0; round < 1000; round++) sum += calculate.apply(calculator, [5, round]);
+	return sum;
+}
+console.log(sumAppliedCalls());
+`;
+
+/** The opcodes of each compiled function that loads the named primordial. */
+function primordialCheckCallers(source: string, primordial: string) {
+	const node = getPrimordialCatalog().nodes.findIndex((entry) => entry[0] === primordial);
+	return compile(source)
+		.native.functions.filter((fn) =>
+			fn.body.instructions.some(
+				(instruction) =>
+					instruction.opcode === "LOAD_PRIMORDIAL" && instruction.nodeIndex === node,
+			),
+		)
+		.map((fn) => fn.body.instructions.map((instruction) => instruction.opcode));
+}
+
+describe("Function.prototype.call, apply and bind sites", () => {
 	it("inline each factory call's own callback behind a check of the loaded call", () => {
 		const image = compile(shimSource);
 		const shims = image.native.functions.filter((fn) =>
@@ -74,20 +100,16 @@ describe("Function.prototype.call and bind sites", () => {
 	});
 
 	it("inline a bound function's target behind one check of the loaded bind", () => {
-		const bind = getPrimordialCatalog().nodes.findIndex(
-			(node) => node[0] === "Function.prototype.bind",
-		);
-		const callers = compile(boundSource).native.functions.filter((fn) =>
-			fn.body.instructions.some(
-				(instruction) =>
-					instruction.opcode === "LOAD_PRIMORDIAL" && instruction.nodeIndex === bind,
-			),
-		);
+		const callers = primordialCheckCallers(boundSource, "Function.prototype.bind");
 		expect(callers).toHaveLength(1);
-		const opcodes = callers[0]!.body.instructions.map(
-			(instruction) => instruction.opcode,
-		);
-		expect(opcodes.filter((opcode) => opcode === "LOAD_PRIMORDIAL")).toHaveLength(1);
-		expect(opcodes).toContain("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
+		expect(callers[0]!.filter((opcode) => opcode === "LOAD_PRIMORDIAL")).toHaveLength(1);
+		expect(callers[0]).toContain("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
+	});
+
+	it("inline an applied target with the array literal's elements behind a check of the loaded apply", () => {
+		const callers = primordialCheckCallers(appliedSource, "Function.prototype.apply");
+		expect(callers).toHaveLength(1);
+		expect(callers[0]!.filter((opcode) => opcode === "LOAD_PRIMORDIAL")).toHaveLength(1);
+		expect(callers[0]).toContain("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
 	});
 });

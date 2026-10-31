@@ -15,7 +15,7 @@ afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 const fixture = "tests/local/function-prototype-call-sites.mjs";
 
-describe("calls through Function.prototype.call and bound functions", () => {
+describe("calls through Function.prototype.call, apply and bound functions", () => {
 	let expected: string;
 	let compiled: string;
 	let interpreted: string;
