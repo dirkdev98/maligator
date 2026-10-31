@@ -121,6 +121,7 @@ ExportImage(image, `image-${image.width}x${image.height}.png`);
 Leaving a `using` scope or calling `[Symbol.dispose]()` releases the resource through `destroy`, and calling the destroy function yourself also closes the handle. A closed handle throws a `TypeError` instead of reaching C, and closing a handle while a C call uses it, from a callback or a getter, throws one too.
 
 - `borrowed` marks a result the library keeps owning. Closing it does not release it.
+- A `handle` without `destroy` describes a pointer the library always owns, such as the `sqlite3_context` SQLite lends to callbacks.
 - `collect: true` releases a handle the program drops once it is garbage collected. Leave it off for resources that must be released on one thread or before the library shuts down, such as raylib's GPU textures.
 - `nullable` on a parameter accepts `null` for a string or handle pointer and passes `NULL`.
 
@@ -181,6 +182,25 @@ functions: {
 
 When the setter's first parameter is a handle, each handle keeps its own callback until its resource is destroyed. Without `data`, the callback must receive that handle, as GLFW's window callbacks do. With `nullable`, `null` removes the callback. A result that is the replaced callback, or with `data` its user data, is dropped.
 
+`lookup` names the function that returns `data` for a callback without a `void *` parameter, and the 1-based position of the callback parameter it takes. SQLite's user functions read it with `sqlite3_user_data` from their `sqlite3_context *`:
+
+```typescript native/sqlite.ffi.ts
+sqlite3_create_function_v2: {
+	params: {
+		xFunc: {
+			callback: {
+				data: "pApp",
+				release: "xDestroy",
+				lookup: { function: "sqlite3_user_data", param: "1" },
+				params: { 3: { array: { length: "2" } } },
+			},
+		},
+		xStep: { constant: "0" },
+		xFinal: { constant: "0" },
+	},
+},
+```
+
 Handles a callback receives are lent for that call: once it returns they read as closed, unless the program already held a handle for the same resource. A callback's own `params`, keyed by 1-based position, take `string`, `bytes`, `array`, and `nullable` facts. A `length` names another callback parameter, which the function does not receive, so the collation above receives two `Uint8Array` copies.
 
 JavaScript runs on one thread, so a library that calls back from another thread aborts the program. A destructor may run on any thread; the release completes on the program's thread.
@@ -208,7 +228,7 @@ functions: {
 maligator ffi inspect raylib
 ```
 
-The report lists each function that is not exported and the fact it needs. It also suggests facts from naming and signature conventions: a count parameter beside a pointer, a pointer the function writes, the `void *` a callback receives, a setter that replaces its callback, a struct with its own release function, a result whose documentation says how to free it. Each suggestion is checked against the headers and listed only when it makes a function bind, but it comes from names rather than the library's documentation, so review it before adding it to the contract.
+The report lists each function that is not exported and the fact it needs. It also suggests facts from naming and signature conventions: a count parameter beside a pointer, a pointer the function writes, the `void *` a callback receives or the function that returns it, a setter that replaces its callback, a struct with its own release function or one only callbacks receive, a result whose documentation says how to free it. Each suggestion is checked against the headers and listed only when it makes a function bind, but it comes from names rather than the library's documentation, so review it before adding it to the contract.
 
 `--json` prints every declaration with its C and TypeScript forms, its header documentation, the missing facts, and the suggestions in contract shape, for tools that propose facts.
 

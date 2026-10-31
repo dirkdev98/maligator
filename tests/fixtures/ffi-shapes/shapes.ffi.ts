@@ -5,6 +5,7 @@ export default {
 	types: {
 		ShapesCanvas: { handle: { destroy: "shapes_canvas_close", collect: true } },
 		ShapesBitmap: { handle: { destroy: "shapes_bitmap_free" } },
+		ShapesCall: { handle: {} },
 	},
 	functions: {
 		shapes_bitmap_shared: { returns: { borrowed: true } },
@@ -38,6 +39,18 @@ export default {
 		},
 		shapes_canvas_on_resize: {
 			params: { handler: { callback: { replaced: true }, nullable: true } },
+		},
+		shapes_register: {
+			params: {
+				fn: {
+					callback: {
+						data: "data",
+						release: "destroy",
+						lookup: { function: "shapes_call_data", param: "1" },
+						params: { 3: { array: { length: "2" } } },
+					},
+				},
+			},
 		},
 		shapes_canvas_on_draw: {
 			params: { hook: { callback: { data: "data", replaced: true }, nullable: true } },

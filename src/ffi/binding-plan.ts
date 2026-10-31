@@ -1,4 +1,8 @@
-import type { MaligatorFfiValueFacts, MaligatorFfiVariant } from "../public-api.d.ts";
+import type {
+	MaligatorFfiCallback,
+	MaligatorFfiValueFacts,
+	MaligatorFfiVariant,
+} from "../public-api.d.ts";
 import type { CFunction, CModel, CRecord } from "./c-model.ts";
 import { resolveCType } from "./c-model.ts";
 import { formatCDeclaration, parseCType } from "./c-type.ts";
@@ -66,6 +70,8 @@ export type JsValue =
 			 * and, without user data, the callback parameter that passes that handle back.
 			 */
 			readonly replaced?: { readonly key?: number; readonly keyParam?: number };
+			/** The C function that returns the user data from callback parameter `param`. */
+			readonly lookup?: { readonly function: string; readonly param: number };
 	  }
 	/**
 	 * A resource handle. C receives the handle's pointer, a copy of its struct, or
@@ -619,11 +625,13 @@ class Planner {
 	#callback(
 		type: CType,
 		nullable: boolean,
-		kept: boolean,
-		routed: boolean,
-		facts: Readonly<Record<string, MaligatorFfiValueFacts>>,
+		callback: MaligatorFfiCallback,
 		at: string,
 	): Mapping {
+		const facts = callback.params ?? {};
+		const kept = callback.release !== undefined || callback.replaced === true;
+		// Whether the callback receives its user data as a `void *` parameter.
+		const routed = callback.data !== undefined && callback.lookup === undefined;
 		const target =
 			type.kind === "pointer" ? resolveCType(this.#model, type.to) : undefined;
 		if (target?.kind !== "function" || target.variadic) {
@@ -696,6 +704,10 @@ class Planner {
 		if (routed && !params.includes("data")) {
 			throw new FfiError(`${at}.callback: the callback takes no void * for its data`);
 		}
+		const lookup =
+			callback.lookup === undefined
+				? undefined
+				: this.#lookup(target, callback.lookup, `${at}.callback.lookup`);
 		const returned = resolveCType(this.#model, target.returns);
 		let returns: JsValue = { kind: "undefined" };
 		if (returned.kind !== "void") {
@@ -707,8 +719,54 @@ class Planner {
 			returns = mapped.value;
 		}
 		return {
-			value: { kind: "callback", type: target, params, counts, returns, nullable, kept },
+			value: {
+				kind: "callback",
+				type: target,
+				params,
+				counts,
+				returns,
+				nullable,
+				kept,
+				...(lookup === undefined ? {} : { lookup }),
+			},
 		};
+	}
+
+	/**
+	 * Check that a lookup names a function that takes the callback parameter at
+	 * `param` and returns `void *`.
+	 */
+	#lookup(
+		callback: Extract<CType, { kind: "function" }>,
+		lookup: { readonly function: string; readonly param: string },
+		at: string,
+	): { readonly function: string; readonly param: number } {
+		const declaration = this.#model.functions.find(
+			(entry) => entry.name === lookup.function,
+		);
+		const param = Number(lookup.param) - 1;
+		const takes = declaration?.params[0]?.type;
+		const passed = callback.params[param];
+		const result =
+			declaration === undefined
+				? undefined
+				: resolveCType(this.#model, declaration.returns);
+		// A `const` pointee on either side converts implicitly in C.
+		const spelling = (type: CType): string =>
+			formatCDeclaration(resolveCType(this.#model, type)).replaceAll("const ", "");
+		if (
+			declaration?.params.length !== 1 ||
+			takes === undefined ||
+			passed === undefined ||
+			result?.kind !== "pointer" ||
+			resolveCType(this.#model, result.to).kind !== "void" ||
+			spelling(takes) !== spelling(passed)
+		) {
+			throw new FfiError(
+				`${at}: '${lookup.function}' does not return a void * from callback parameter ${lookup.param}`,
+			);
+		}
+		return { function: lookup.function, param };
 	}
 
 	/**
@@ -748,7 +806,12 @@ class Planner {
 			(value) =>
 				typeof value === "object" && value.kind === "handle" && value.name === key?.name,
 		);
-		if (key !== undefined && keyParam < 0 && !param.value.params.includes("data")) {
+		if (
+			key !== undefined &&
+			keyParam < 0 &&
+			!param.value.params.includes("data") &&
+			param.value.lookup === undefined
+		) {
 			throw new FfiError(
 				`${at}: a replaced callback without data needs a parameter that passes its ${key.name} back`,
 			);
@@ -968,10 +1031,7 @@ class Planner {
 				const mapped = this.#callback(
 					resolved,
 					valueFacts.nullable === true,
-					valueFacts.callback.release !== undefined ||
-						valueFacts.callback.replaced === true,
-					valueFacts.callback.data !== undefined,
-					valueFacts.callback.params ?? {},
+					valueFacts.callback,
 					where(at),
 				);
 				if ("gap" in mapped) gap(mapped.gap);

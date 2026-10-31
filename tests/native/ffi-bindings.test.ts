@@ -33,6 +33,7 @@ const EXPECTED_RESULTS = [
 	"lend true Lender shapes_canvas_title: canvas expects an open ShapesCanvas handle",
 	"replaced a1:failure 1,b2,b3 handler failed",
 	"per handle true:2x3,Second 4,again 6 10,105,-1",
+	"lookup 5,7,-2,-1 shapes_call_return: call expects an open ShapesCall handle",
 	"same handle true",
 	"closed through either 0 true",
 	"bitmap 3x2 sum 24 live 1",

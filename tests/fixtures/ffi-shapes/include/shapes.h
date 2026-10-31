@@ -120,6 +120,16 @@ void shapes_canvas_resize(ShapesCanvas *canvas, int width, int height);  // Call
 // Keep hook for the canvas until the next call; returns the data it replaces.
 void *shapes_canvas_on_draw(ShapesCanvas *canvas, int (*hook)(void *data, int frame), void *data);
 int shapes_canvas_draw(ShapesCanvas *canvas, int frame);  // The hook's result, or -1
+
+typedef struct ShapesCall ShapesCall;
+void *shapes_call_data(ShapesCall *call);  // The data its function was registered with
+void shapes_call_return(ShapesCall *call, double value);  // Set the call's result
+// Register fn under name until shapes_unregister_all, destroying the data of a function
+// it replaces; returns 0, or -1 when full.
+int shapes_register(const char *name, void (*fn)(ShapesCall *call, int count, const double *args),
+                    void *data, void (*destroy)(void *data));
+double shapes_invoke(const char *name, double x, double y);  // -1 for an unknown name
+void shapes_unregister_all(void);  // Destroy every registered function's data
 const char *shapes_log_line(void);  // The last log line
 size_t shapes_path_length(ShapesPath path);
 

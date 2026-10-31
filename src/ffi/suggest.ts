@@ -4,7 +4,7 @@ import type {
 	MaligatorFfiValueFacts,
 } from "../public-api.d.ts";
 import { planBindings } from "./binding-plan.ts";
-import type { BindingPlan, BoundFunction, Gap } from "./binding-plan.ts";
+import type { BindingPlan, BoundFunction, Gap, JsValue } from "./binding-plan.ts";
 import { resolveCType } from "./c-model.ts";
 import type { CFunction, CModel, CRecord } from "./c-model.ts";
 import { formatCDeclaration } from "./c-type.ts";
@@ -52,7 +52,10 @@ function isByteType(type: CType): boolean {
 
 /**
  * A struct the library hands out and later releases: one function whose name says
- * it releases, that takes only the struct or its address and returns nothing.
+ * it releases, that takes only the struct or its address and returns nothing. An
+ * opaque struct that no function returns or writes out reaches JavaScript only
+ * through callbacks, so it is a handle the library keeps owning, such as a context
+ * it lends to them.
  */
 function suggestHandles(
 	model: CModel,
@@ -90,9 +93,27 @@ function suggestHandles(
 			releases.length === 1 ? releases[0] : named.length === 1 ? named[0] : undefined;
 		if (release !== undefined) {
 			handles.set(record.name, { handle: { destroy: release.name } });
+		} else if (!record.complete && !handedOut(model, record)) {
+			handles.set(record.name, { handle: {} });
 		}
 	}
 	return handles;
+}
+
+/** Whether a function returns a pointer to `record` or writes one through a parameter. */
+function handedOut(model: CModel, record: CRecord): boolean {
+	const points = (type: CType): boolean => {
+		const target = pointee(model, type);
+		return target?.kind === "record" && model.records.get(target.name) === record;
+	};
+	return model.functions.some(
+		(declaration) =>
+			points(declaration.returns) ||
+			declaration.params.some((param) => {
+				const target = pointee(model, param.type);
+				return target !== undefined && points(target);
+			}),
+	);
 }
 
 /** The integer parameter that counts the elements or bytes behind pointer parameter `index`. */
@@ -185,6 +206,36 @@ function suggestResult(
 		: undefined;
 }
 
+/** A pointer type's spelling without `const`, which converts implicitly in C. */
+function pointerSpelling(model: CModel, type: CType): string {
+	return formatCDeclaration(resolveCType(model, type)).replaceAll("const ", "");
+}
+
+/**
+ * The one function that returns a callback's user data from one of its parameters,
+ * as `sqlite3_user_data(sqlite3_context *)` does, for callbacks without a `void *`.
+ */
+function lookupFunction(
+	model: CModel,
+	callback: Extract<CType, { kind: "function" }>,
+): { function: string; param: string } | undefined {
+	const found = model.functions.flatMap((declaration) => {
+		const takes = declaration.params[0]?.type;
+		if (
+			declaration.params.length !== 1 ||
+			takes === undefined ||
+			pointee(model, takes) === undefined ||
+			!isVoidPointer(model, declaration.returns)
+		)
+			return [];
+		const param = callback.params.findIndex(
+			(type) => pointerSpelling(model, type) === pointerSpelling(model, takes),
+		);
+		return param < 0 ? [] : [{ function: declaration.name, param: String(param + 1) }];
+	});
+	return found.length === 1 ? found[0] : undefined;
+}
+
 /**
  * Facts for a callback's buffer and array parameters, following the C convention of
  * a count just before the pointer, as in `(int n, const void *bytes)`. The first
@@ -275,8 +326,10 @@ function suggestFunction(
 					? [position]
 					: [],
 			);
-			const routed =
-				data.length === 1 && target.params.some((param) => isVoidPointer(model, param));
+			const receivesData = target.params.some((param) => isVoidPointer(model, param));
+			const lookup =
+				data.length === 1 && !receivesData ? lookupFunction(model, target) : undefined;
+			const routed = data.length === 1 && (receivesData || lookup !== undefined);
 			// A lone destructor for the user data means the library keeps the callback.
 			const release = routed && releases.length === 1 ? releases[0] : undefined;
 			const replaced =
@@ -290,6 +343,7 @@ function suggestFunction(
 					...(routed ? { data: key(data[0]!) } : {}),
 					...(release === undefined ? {} : { release: key(release) }),
 					...(replaced ? { replaced: true } : {}),
+					...(lookup === undefined ? {} : { lookup }),
 					...(counted === undefined ? {} : { params: counted }),
 				},
 			};
@@ -341,11 +395,17 @@ function mergeFacts(
 }
 
 function handleNames(binding: BoundFunction): Array<string> {
+	const names = (value: JsValue | "data" | "count"): Array<string> => {
+		if (typeof value !== "object") return [];
+		if (value.kind === "handle") return [value.name];
+		if (value.kind === "sequence") return names(value.of);
+		return value.kind === "callback" ? value.params.flatMap(names) : [];
+	};
 	return [
 		binding.returns,
 		...binding.params.map((param) => param.value),
 		...binding.outputs.map((output) => output.value),
-	].flatMap((value) => (value.kind === "handle" ? [value.name] : []));
+	].flatMap(names);
 }
 
 function sortedRecord<T>(entries: Iterable<[string, T]>): Record<string, T> {

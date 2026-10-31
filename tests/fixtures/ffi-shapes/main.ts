@@ -15,6 +15,7 @@ import {
 	shapes_bitmap_sum,
 	shapes_bitmaps_live,
 	shapes_bounds,
+	shapes_call_return,
 	shapes_canvas_create,
 	shapes_canvas_current,
 	shapes_canvas_draw,
@@ -37,7 +38,9 @@ import {
 	shapes_listen,
 	shapes_listeners,
 	shapes_unlisten_all,
+	shapes_unregister_all,
 	shapes_integrate,
+	shapes_invoke,
 	shapes_join,
 	shapes_log_count,
 	shapes_log_line,
@@ -46,6 +49,7 @@ import {
 	shapes_mul,
 	shapes_parse,
 	shapes_read,
+	shapes_register,
 	shapes_render,
 	shapes_scale,
 	shapes_set_error_handler,
@@ -243,6 +247,30 @@ console.log(`replaced ${failures.join(",")} ${failError}`);
 	drawn.push(shapes_canvas_draw(first, 5), shapes_canvas_draw(second, 5));
 	console.log(`per handle ${resized.join(",")} ${drawn.join(",")}`);
 }
+shapes_register("hypot", (call, args) => {
+	shapes_call_return(call!, Math.hypot(args![0]!, args![1]!));
+});
+shapes_register("sum", (call, args) => {
+	shapes_call_return(
+		call!,
+		args!.reduce((total, value) => total + value, 0),
+	);
+});
+const invoked = [shapes_invoke("hypot", 3, 4), shapes_invoke("sum", 2, 5)];
+let keptCall: Parameters<typeof shapes_call_return>[0] | null = null;
+shapes_register("sum", (call) => {
+	keptCall = call;
+	shapes_call_return(call!, -2);
+});
+invoked.push(shapes_invoke("sum", 2, 5), shapes_invoke("missing", 0, 0));
+let afterCall = "";
+try {
+	shapes_call_return(keptCall!, 1);
+} catch (error) {
+	afterCall = (error as Error).message;
+}
+shapes_unregister_all();
+console.log(`lookup ${invoked.join(",")} ${afterCall}`);
 const opened = shapes_canvas_open("Same");
 console.log(`same handle ${opened === shapes_canvas_current()}`);
 shapes_canvas_current()?.[Symbol.dispose]();

@@ -291,6 +291,64 @@ int shapes_canvas_draw(ShapesCanvas *canvas, int frame) {
 	return canvas->on_draw == NULL ? -1 : canvas->on_draw(canvas->draw_data, frame);
 }
 
+struct ShapesCall {
+	void *data;
+	double result;
+};
+
+typedef struct {
+	char name[32];
+	void (*fn)(ShapesCall *call, int count, const double *args);
+	void *data;
+	void (*destroy)(void *data);
+} ShapesFunction;
+
+static ShapesFunction functions[8];
+static int function_count;
+
+void *shapes_call_data(ShapesCall *call) { return call->data; }
+
+void shapes_call_return(ShapesCall *call, double value) { call->result = value; }
+
+static ShapesFunction *shapes_find(const char *name) {
+	for (int index = 0; index < function_count; index++) {
+		if (strcmp(functions[index].name, name) == 0) return &functions[index];
+	}
+	return NULL;
+}
+
+int shapes_register(const char *name, void (*fn)(ShapesCall *call, int count, const double *args),
+                    void *data, void (*destroy)(void *data)) {
+	ShapesFunction *function = shapes_find(name);
+	if (function == NULL && function_count == 8) {
+		if (destroy != NULL) destroy(data);
+		return -1;
+	}
+	if (function == NULL) function = &functions[function_count++];
+	else if (function->destroy != NULL) function->destroy(function->data);
+	snprintf(function->name, sizeof(function->name), "%s", name);
+	function->fn = fn;
+	function->data = data;
+	function->destroy = destroy;
+	return 0;
+}
+
+double shapes_invoke(const char *name, double x, double y) {
+	ShapesFunction *function = shapes_find(name);
+	if (function == NULL) return -1;
+	ShapesCall call = {function->data, 0};
+	const double args[2] = {x, y};
+	function->fn(&call, 2, args);
+	return call.result;
+}
+
+void shapes_unregister_all(void) {
+	for (int index = 0; index < function_count; index++) {
+		if (functions[index].destroy != NULL) functions[index].destroy(functions[index].data);
+	}
+	function_count = 0;
+}
+
 int shapes_read(ShapesReader reader, void *data) {
 	static const ShapesPoint points[3] = {{0, 0}, {1, 2}, {3, 4}};
 	static const unsigned char bytes[4] = {9, 8, 7, 6};

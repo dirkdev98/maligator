@@ -1909,8 +1909,7 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
 - [ ] Support C libraries in `maligator test --watch`, which needs an in-process
       application host that links the project's bindings.
-- [ ] User data a callback reaches through an accessor such as `sqlite3_user_data`;
-      blocking functions with async twins; worker affinity. Call-scoped callbacks
+- [ ] Blocking functions with async twins; worker affinity. Call-scoped callbacks
       without user data, such as `qsort`'s comparator, bind only as `replaced`.
 - [ ] Foreign call effects and struct values: Core knows a foreign call's result
       kind but still treats the call as running arbitrary code. Give it the

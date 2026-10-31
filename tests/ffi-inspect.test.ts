@@ -132,6 +132,13 @@ describe("ffi inspect", () => {
 					{ name: "height", c: "int", ts: "number" },
 				],
 			},
+			{
+				name: "ShapesCall",
+				c: "struct ShapesCall",
+				representation: "pointer",
+				collect: false,
+				fields: [],
+			},
 		]);
 		expect(declaration("shapes_canvas_open").ts).toBe(
 			"(title: string) => ShapesCanvas | null",
@@ -514,6 +521,34 @@ describe("ffi contract facts", () => {
 				},
 			},
 			"functions.shapes_listen.params.listener.callback.release: 'data' is not a free void (*)(void *) parameter",
+		);
+	});
+
+	it("rejects a callback lookup that does not return the user data", () => {
+		const lookup = (name: string, param: string): Partial<LibraryFacts> => ({
+			types: { ShapesCall: { handle: {} } },
+			functions: {
+				shapes_register: {
+					params: {
+						fn: {
+							callback: {
+								data: "data",
+								release: "destroy",
+								lookup: { function: name, param },
+								params: { 3: { array: { length: "2" } } },
+							},
+						},
+					},
+				},
+			},
+		});
+		rejects(
+			lookup("shapes_call_return", "1"),
+			"functions.shapes_register.params.fn.callback.lookup: 'shapes_call_return' does not return a void * from callback parameter 1",
+		);
+		rejects(
+			lookup("shapes_call_data", "2"),
+			"functions.shapes_register.params.fn.callback.lookup: 'shapes_call_data' does not return a void * from callback parameter 2",
 		);
 	});
 

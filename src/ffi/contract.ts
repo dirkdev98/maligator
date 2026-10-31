@@ -187,7 +187,33 @@ function validateValueFacts(value: unknown, at: string): void {
 	if (value.callback !== undefined) {
 		const callback = value.callback;
 		expectObject(callback, `${at}.callback`);
-		expectKeys(callback, `${at}.callback`, ["data", "release", "params", "replaced"]);
+		expectKeys(callback, `${at}.callback`, [
+			"data",
+			"release",
+			"params",
+			"replaced",
+			"lookup",
+		]);
+		if (callback.lookup !== undefined) {
+			const lookup = callback.lookup;
+			expectObject(lookup, `${at}.callback.lookup`);
+			expectKeys(lookup, `${at}.callback.lookup`, ["function", "param"]);
+			expect(
+				typeof lookup.function === "string" && C_NAME.test(lookup.function),
+				`${at}.callback.lookup.function`,
+				"a C function name",
+			);
+			expect(
+				typeof lookup.param === "string" && /^[1-9]\d*$/.test(lookup.param),
+				`${at}.callback.lookup.param`,
+				"a 1-based position",
+			);
+			expect(
+				callback.data !== undefined,
+				`${at}.callback.data`,
+				"the parameter whose value the lookup returns",
+			);
+		}
 		booleanField(callback, "replaced", `${at}.callback`);
 		expect(
 			callback.replaced !== true || callback.release === undefined,

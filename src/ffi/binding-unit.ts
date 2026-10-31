@@ -728,10 +728,13 @@ class BindingWriter {
 				(input.kind === "sequence" && input.of.kind === "handle"),
 		);
 		const keyParam = value.replaced?.keyParam;
+		const lookup = value.lookup;
 		const callback =
 			data >= 0
 				? `mal_c${String(data)}`
-				: `mal_ffi_replaced(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`})`;
+				: lookup !== undefined
+					? `(MalFfiCallback *) ${lookup.function}(mal_c${String(lookup.param)})`
+					: `mal_ffi_replaced(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`})`;
 		return [
 			"",
 			`static ${formatCDeclaration(type.returns, `${name}(${params.length === 0 ? "void" : params.join(", ")})`)} {`,

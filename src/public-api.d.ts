@@ -144,6 +144,12 @@ export interface MaligatorFfiCallback {
 	 */
 	replaced?: boolean;
 	/**
+	 * For a callback without a `void *` parameter: the function that returns `data`
+	 * from the callback's parameter at 1-based position `param`, such as
+	 * `sqlite3_user_data` for SQLite's `sqlite3_context *`.
+	 */
+	lookup?: { function: string; param: string };
+	/**
 	 * Facts per callback parameter, keyed by 1-based position: `string`, `bytes`, or
 	 * `array` with a `length` naming another callback parameter, and `nullable`.
 	 */
