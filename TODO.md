@@ -1912,10 +1912,14 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 - [ ] Async twins with callbacks or arrays, and queued callbacks that return a
       result to a waiting library thread. Call-scoped callbacks without user data,
       such as `qsort`'s comparator, bind only as `replaced`.
-- [ ] Foreign call effects and struct values: Core knows a foreign call's result
-      kind but still treats the call as running arbitrary code. Give it the
-      binding's effects (no user code without callbacks), and scalar-replace struct
-      arguments and out objects.
+- [ ] Foreign call effects: Core knows a foreign call's result kind but still
+      treats the call as running arbitrary code. Give it the binding's effects (no
+      user code without callbacks).
+- [ ] Struct results carried around a loop, as in `pos = Vector2Add(pos, vel)`,
+      still allocate: a stack object reached through a block parameter needs
+      identity checks at its accesses even when nothing observes it.
+- [ ] Caller-allocated state structs with pointer fields, such as zlib's
+      `z_stream` and libuv's handles, cannot be created or filled from JavaScript.
 - [ ] `ffi check`: declaration fingerprints, evidence drift, sanitizer probes.
 - [ ] Headers that pull in large system headers exceed the self-hosted CLI's string
       limit as one AST dump.
