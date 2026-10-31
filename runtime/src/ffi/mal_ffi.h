@@ -189,6 +189,8 @@ typedef struct MalFfiString {
 bool mal_ffi_to_string(
     MalVm *vm, MalValue value, const MalFfiSite *site, MalFfiString *out);
 void mal_ffi_string_release(MalFfiString *string);
+/** A heap copy the caller frees, for strings that outlive one conversion such as array elements. */
+bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, char **out);
 
 /**
  * The memory of an ArrayBuffer or view, which C may read and write until the call

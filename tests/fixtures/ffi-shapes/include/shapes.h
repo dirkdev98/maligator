@@ -64,6 +64,7 @@ ShapesBitmap shapes_bitmap_shared(void);  // A bitmap the library keeps
 int shapes_bitmaps_live(void);  // Bitmaps allocated and not freed
 int shapes_canvas_create(const char *title, ShapesCanvas **canvas);  // 0 on success
 int shapes_text_bytes(const char *text);  // The byte length of UTF-8 text
+const char *shapes_join(const char **parts, int count);  // Join parts with commas
 
 // Parse "x,y" into a point; returns 0, or -1 for other text.
 int shapes_parse(const char *text, ShapesPoint *point);

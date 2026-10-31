@@ -68,6 +68,8 @@ declare module "maligator:ffi/shapes" {
 	export function shapes_each(points: ReadonlyArray<ShapesPoint>, visit: (arg1: ShapesPoint, arg2: number) => number): number;
 	/** Integrate f over [from, to] with the midpoint rule. */
 	export function shapes_integrate(f: (arg1: number) => number, from: number, to: number, steps: number): number;
+	/** Join parts with commas */
+	export function shapes_join(parts: ReadonlyArray<string>): string | null;
 	/** Format a log line like printf; returns its length. */
 	export function shapes_log_count(format: string, arg2: number): number;
 	/** Format a log line like printf; returns its length. */

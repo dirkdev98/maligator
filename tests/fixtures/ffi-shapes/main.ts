@@ -26,6 +26,7 @@ import {
 	shapes_describe,
 	shapes_each,
 	shapes_integrate,
+	shapes_join,
 	shapes_log_count,
 	shapes_log_line,
 	shapes_log_pair,
@@ -80,6 +81,9 @@ console.log(
 );
 console.log(
 	`log ${shapes_log_count("%d points", 3)} ${shapes_log_line()} ${shapes_log_pair("%s at %.1f", "origin", 2.5)} ${shapes_log_line()}`,
+);
+console.log(
+	`join ${shapes_join(["one", "two", "three"])} ${shapes_join(["ab", "x".repeat(90)])?.length}`,
 );
 const opened = shapes_canvas_open("Same");
 console.log(`same handle ${opened === shapes_canvas_current()}`);

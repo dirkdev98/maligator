@@ -158,6 +158,21 @@ void mal_ffi_string_release(MalFfiString *string) {
     string->length = 0;
 }
 
+bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, char **out) {
+    *out = nullptr;
+    MalFfiString string;
+    if (!mal_ffi_to_string(vm, value, site, &string)) return false;
+    if (string.data != string.inline_data) {
+        *out = string.data;
+        return true;
+    }
+    char *copy = malloc(string.length + 1);
+    if (copy == nullptr) return mal_ffi_out_of_memory(vm);
+    memcpy(copy, string.data, string.length + 1);
+    *out = copy;
+    return true;
+}
+
 bool mal_ffi_to_bytes(
     MalVm *vm, MalValue value, bool nullable, const MalFfiSite *site, void **data,
     size_t *length) {

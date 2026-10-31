@@ -98,6 +98,19 @@ int shapes_canvas_create(const char *title, ShapesCanvas **canvas) {
 
 int shapes_text_bytes(const char *text) { return (int) strlen(text); }
 
+const char *shapes_join(const char **parts, int count) {
+	static char joined[256];
+	size_t used = 0;
+	joined[0] = '\0';
+	for (int index = 0; index < count; index++) {
+		int written = snprintf(joined + used, sizeof(joined) - used, "%s%s", index == 0 ? "" : ",",
+		                       parts[index]);
+		if (written < 0 || (size_t)written >= sizeof(joined) - used) break;
+		used += (size_t)written;
+	}
+	return joined;
+}
+
 static int allocations;
 
 static void *allocate(size_t size) {

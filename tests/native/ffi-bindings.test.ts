@@ -22,6 +22,7 @@ const EXPECTED_RESULTS = [
 	"canvases after using 0",
 	"text bytes 6,7,4,300",
 	"log 8 3 points 13 origin at 2.5",
+	"join one,two,three 93",
 	"same handle true",
 	"closed through either 0 true",
 	"bitmap 3x2 sum 24 live 1",

@@ -669,29 +669,44 @@ class BindingWriter {
 						const length = `mal_length_${String(index)}`;
 						const position = this.#fresh("index");
 						const element = this.#fresh("element");
+						// Each string element needs its own copy; the frame's string buffers hold one value each.
+						const texts = value.of.kind === "string";
 						locals.push(
 							`${localDeclaration(value.element, `*${elements}`)} = nullptr;`,
 							`int32_t ${length} = 0;`,
 						);
+						if (texts) {
+							const freed = this.#fresh("index");
+							cleanup.push(
+								`if (${elements} != nullptr) for (int32_t ${freed} = 0; ${freed} < ${length}; ${freed}++) free((void *) ${elements}[${freed}]);`,
+							);
+						}
 						cleanup.push(`free(${elements});`);
+						const text = this.#fresh("text");
 						body.push(
 							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &${length})) goto mal_done;`,
 							`if (${length} > 0) {`,
-							`\t${elements} = malloc(sizeof(*${elements}) * (size_t) ${length});`,
+							`\t${elements} = calloc((size_t) ${length}, sizeof(*${elements}));`,
 							`\tif (${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 							"}",
 							`for (int32_t ${position} = 0; ${position} < ${length}; ${position}++) {`,
 							`\tMalValue ${element};`,
 							`\tif (!mal_ffi_element(vm, ${source}, ${position}, ${length}, ${site}, &${element})) goto mal_done;`,
-							...this.read(
-								value.of,
-								value.element,
-								element,
-								`${elements}[${position}]`,
-								site,
-								"goto mal_done;",
-								strings,
-							).map((line) => `\t${line}`),
+							...(texts
+								? [
+										`\tchar *${text};`,
+										`\tif (!mal_ffi_to_owned_string(vm, ${element}, ${site}, &${text})) goto mal_done;`,
+										`\t${elements}[${position}] = ${text};`,
+									]
+								: this.read(
+										value.of,
+										value.element,
+										element,
+										`${elements}[${position}]`,
+										site,
+										"goto mal_done;",
+										strings,
+									).map((line) => `\t${line}`)),
 							"}",
 							`${local} = (${localDeclaration(param.type, "")}) ${elements};`,
 						);
