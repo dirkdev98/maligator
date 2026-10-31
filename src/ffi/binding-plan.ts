@@ -681,7 +681,9 @@ class Planner {
 				continue;
 			}
 			const mapped = this.value(param, "return", { ...stated, borrowed: true });
-			if ("gap" in mapped) return { gap: `callback parameter: ${mapped.gap}` };
+			if ("gap" in mapped) {
+				return { gap: `callback parameter ${String(index + 1)}: ${mapped.gap}` };
+			}
 			params.push(mapped.value);
 		}
 		if (!params.includes("data")) {

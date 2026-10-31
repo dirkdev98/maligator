@@ -417,10 +417,8 @@ describe("ffi contract facts", () => {
 			"string",
 			"free",
 		]);
-		// Suggestions do not cover facts on a callback's own parameters.
 		const suggestible = (facts: MaligatorFfiValueFacts): boolean =>
-			Object.keys(facts).every((kind) => suggestedKinds.has(kind)) &&
-			facts.callback?.params === undefined;
+			Object.keys(facts).every((kind) => suggestedKinds.has(kind));
 		const stated = Object.entries(contract.functions).filter(
 			([, facts]) =>
 				facts.variants === undefined &&

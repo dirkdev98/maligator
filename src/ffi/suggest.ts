@@ -182,6 +182,37 @@ function suggestResult(
 		: undefined;
 }
 
+/**
+ * Facts for a callback's buffer and array parameters, following the C convention of
+ * a count just before the pointer, as in `(int n, const void *bytes)`. The first
+ * `void *` is the user data.
+ */
+function callbackParameterFacts(
+	model: CModel,
+	callback: Extract<CType, { kind: "function" }>,
+): Record<string, MaligatorFfiValueFacts> | undefined {
+	const facts: Record<string, MaligatorFfiValueFacts> = {};
+	let data = false;
+	callback.params.forEach((param, position) => {
+		const target = pointee(model, param);
+		if (target === undefined || target.kind === "function") return;
+		if (target.kind === "void" && !data) {
+			data = true;
+			return;
+		}
+		// Text and handles map without a count.
+		if (target.kind === "integer" && target.name === "char" && target.const === true)
+			return;
+		const count =
+			position > 0 ? resolveCType(model, callback.params[position - 1]!) : undefined;
+		if (count?.kind !== "integer" || facts[String(position)] !== undefined) return;
+		facts[String(position + 1)] = isByteType(target)
+			? { bytes: { length: String(position) } }
+			: { array: { length: String(position) } };
+	});
+	return Object.keys(facts).length === 0 ? undefined : facts;
+}
+
 function parameterIndex(gap: Gap): number | undefined {
 	const match = /^param (\d+) /.exec(gap.at);
 	return match === null ? undefined : Number(match[1]) - 1;
@@ -237,10 +268,12 @@ function suggestFunction(
 			) {
 				// A lone destructor for the user data means the library keeps the callback.
 				const release = releases.length === 1 ? releases[0] : undefined;
+				const counted = callbackParameterFacts(model, target);
 				params[key(index)] = {
 					callback: {
 						data: key(data[0]!),
 						...(release === undefined ? {} : { release: key(release) }),
+						...(counted === undefined ? {} : { params: counted }),
 					},
 				};
 				taken.add(data[0]!);
