@@ -173,20 +173,24 @@ function countParameter(
 	const countName = bytes ? BYTE_COUNT_NAME : COUNT_NAME;
 	const name = (declaration.params[index]!.name ?? "").toLowerCase();
 	const stem = name.replace(/s$/, "");
-	const candidates = declaration.params.flatMap((param, position) =>
-		position !== index &&
-		!taken.has(position) &&
-		resolveCType(model, param.type).kind === "integer"
-			? [{ position, name: (param.name ?? "").toLowerCase() }]
-			: [],
-	);
+	const candidates = declaration.params.flatMap((param, position) => {
+		if (position === index || taken.has(position)) return [];
+		const resolved = resolveCType(model, param.type);
+		// A buffer's size may go through a pointer the function updates, as in `compress`.
+		const updated = bytes && pointee(model, param.type)?.kind === "integer";
+		return resolved.kind === "integer" || updated
+			? [{ position, name: (param.name ?? "").toLowerCase(), updated }]
+			: [];
+	});
 	// A name built on the pointer's, such as `points` and `pointCount`, wins over position.
 	const named = candidates.find(
 		(candidate) =>
 			stem !== "" && candidate.name.startsWith(stem) && countName.test(candidate.name),
 	);
 	if (named !== undefined) return named.position;
-	const next = candidates.find((candidate) => candidate.position === index + 1);
+	const next = candidates.find(
+		(candidate) => candidate.position === index + 1 && !candidate.updated,
+	);
 	return next !== undefined &&
 		(countName.test(next.name) || (!bytes && next.name === "n"))
 		? next.position

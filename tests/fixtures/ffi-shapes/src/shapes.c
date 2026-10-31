@@ -293,6 +293,14 @@ int shapes_canvas_draw(ShapesCanvas *canvas, int frame) {
 	return canvas->on_draw == NULL ? -1 : canvas->on_draw(canvas->draw_data, frame);
 }
 
+int shapes_pack(unsigned char *dest, size_t *destLen, const unsigned char *source,
+                size_t sourceLen) {
+	if (*destLen < sourceLen) return -1;
+	memcpy(dest, source, sourceLen);
+	*destLen = sourceLen;
+	return 0;
+}
+
 static ShapesWatcher watcher;
 static void *watcher_data;
 static void (*watcher_release)(void *data);

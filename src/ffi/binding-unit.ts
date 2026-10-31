@@ -1108,7 +1108,11 @@ class BindingWriter {
 		) => {
 			const target = countOf(counted);
 			if (target === undefined) return;
-			const integer = resolveCType(this.#model, target.type);
+			const entry = binding.arguments[target.index];
+			const output = entry?.kind === "count" ? entry.output : undefined;
+			// A count the function updates lives in an output local it gets the address of.
+			const type = output === undefined ? target.type : binding.outputs[output]!.type;
+			const integer = resolveCType(this.#model, type);
 			const bits =
 				integer.kind === "integer"
 					? (this.#model.target.sizes[integer.name] ?? 4) * 8
@@ -1116,7 +1120,14 @@ class BindingWriter {
 			const signed = integer.kind === "integer" && !integer.name.startsWith("unsigned");
 			into.push(
 				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${bits}, ${signed}, ${site})) goto mal_done;`,
-				`mal_argument_${String(target.index)} = (${localDeclaration(target.type, "")}) (${count});`,
+				...(output === undefined
+					? [
+							`mal_argument_${String(target.index)} = (${localDeclaration(type, "")}) (${count});`,
+						]
+					: [
+							`mal_output_${String(output)} = (${localDeclaration(type, "")}) (${count});`,
+							`mal_argument_${String(target.index)} = &mal_output_${String(output)};`,
+						]),
 			);
 		};
 		binding.arguments.forEach((entry, index) => {
@@ -1127,6 +1138,10 @@ class BindingWriter {
 			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
 			switch (entry.kind) {
 				case "count":
+					if (entry.output !== undefined)
+						locals.push(
+							`${localDeclaration(pointee, `mal_output_${String(entry.output)}`)} = {};`,
+						);
 					return;
 				case "result-count":
 					locals.push(`${localDeclaration(pointee, "mal_count")} = {};`);
@@ -1534,7 +1549,12 @@ class BindingWriter {
 				(entry) => entry.kind === "count" && entry.of === counted,
 			);
 			if (index < 0) return;
-			const type = declaration.params[index]!.type;
+			const entry = binding.arguments[index];
+			const output = entry?.kind === "count" ? entry.output : undefined;
+			const type =
+				output === undefined
+					? declaration.params[index]!.type
+					: binding.outputs[output]!.type;
 			const integer = resolveCType(this.#model, type);
 			const bits =
 				integer.kind === "integer"
@@ -1543,7 +1563,14 @@ class BindingWriter {
 			const signed = integer.kind === "integer" && !integer.name.startsWith("unsigned");
 			buffers.push(
 				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${bits}, ${signed}, ${site})) goto mal_failed;`,
-				`mal_ctx->mal_argument_${String(index)} = (${localDeclaration(type, "")}) (${count});`,
+				...(output === undefined
+					? [
+							`mal_ctx->mal_argument_${String(index)} = (${localDeclaration(type, "")}) (${count});`,
+						]
+					: [
+							`mal_ctx->mal_output_${String(output)} = (${localDeclaration(type, "")}) (${count});`,
+							`mal_ctx->mal_argument_${String(index)} = &mal_ctx->mal_output_${String(output)};`,
+						]),
 			);
 		};
 		binding.arguments.forEach((entry, index) => {
@@ -1554,6 +1581,10 @@ class BindingWriter {
 			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
 			switch (entry.kind) {
 				case "count":
+					if (entry.output !== undefined)
+						fields.push(
+							`${localDeclaration(pointee, `mal_output_${String(entry.output)}`)};`,
+						);
 					return;
 				case "result-count":
 					fields.push(`${localDeclaration(pointee, "mal_count")};`);

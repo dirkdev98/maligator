@@ -100,8 +100,12 @@ export interface MappedParameter {
 export type Argument =
 	/** Converted from JavaScript parameter `param`. */
 	| { readonly kind: "input"; readonly param: number }
-	/** The byte or element count of the buffer or array that argument `of` passes. */
-	| { readonly kind: "count"; readonly of: number }
+	/**
+	 * The byte or element count of the buffer or array that argument `of` passes. With
+	 * `output`, the address of a local holding the buffer's size, which the function
+	 * updates to the count it used and the binding returns as that output.
+	 */
+	| { readonly kind: "count"; readonly of: number; readonly output?: number }
 	/** The address of a zeroed local the function writes; returned as output `output`. */
 	| { readonly kind: "out"; readonly output: number }
 	/** The address of a local read from parameter `param` and returned as `output`. */
@@ -1067,10 +1071,26 @@ class Planner {
 			}
 			const counted = counts.get(index);
 			if (counted !== undefined || resultCount === index) {
-				const pointer = resultCount === index && resolved.kind === "pointer";
+				const pointer = resolved.kind === "pointer";
 				const countType = pointer ? resolveCType(this.#model, resolved.to) : resolved;
-				if (countType.kind !== "integer" || (counted !== undefined && pointer)) {
+				// Only a buffer's size can go through a pointer the function updates.
+				if (
+					countType.kind !== "integer" ||
+					(pointer &&
+						counted !== undefined &&
+						(resultCount === index || factsAt(counted).bytes === undefined))
+				) {
 					throw new FfiError(`${where(at)}: a count must be an integer parameter`);
+				}
+				if (counted !== undefined && pointer) {
+					const written = map(resolved.to, "return", NO_FACTS, at);
+					if ("gap" in written) {
+						gap(written.gap);
+						return;
+					}
+					args.push({ kind: "count", of: counted, output: outputs.length });
+					outputs.push({ name, type: resolved.to, value: written.value });
+					return;
 				}
 				if (counted !== undefined) {
 					args.push({ kind: "count", of: counted });

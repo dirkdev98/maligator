@@ -72,6 +72,10 @@ void shapes_scale(ShapesPoint *point, float factor);  // Scale in place
 // The bounding box of the points; returns -1 for no points.
 int shapes_bounds(const ShapesPoint *points, int count, ShapesBox *box);
 uint32_t shapes_checksum(const void *data, size_t size);  // Sum of the bytes
+// Copy source into dest, which holds destLen bytes, and set destLen to the bytes copied;
+// returns 0, or -1 when dest is too small.
+int shapes_pack(unsigned char *dest, size_t *destLen, const unsigned char *source,
+                size_t sourceLen);
 // A width x height gradient, one byte per pixel; writes its byte count. The caller
 // frees it with shapes_free.
 unsigned char *shapes_render(int width, int height, int *size);

@@ -47,6 +47,7 @@ import {
 	shapes_log_pair,
 	shapes_mode_name,
 	shapes_mul,
+	shapes_pack,
 	shapes_parse,
 	shapes_read,
 	shapes_register,
@@ -221,6 +222,11 @@ function lendLiterals(kept: Array<{ x: number; y: number }>): string {
 	return `${first.x},${first.y} ${second.x},${second.y} ${third.x},${third.y} ${kept[0]!.y} ${fourth.x} ${JSON.stringify(kept[1])}`;
 }
 console.log(`lend literals ${lendLiterals([])}`);
+const packed = new Uint8Array(8);
+const packing = shapes_pack(packed, new Uint8Array([4, 5, 6]));
+console.log(
+	`pack ${packing.result} ${packing.destLen} ${packed.slice(0, Number(packing.destLen)).join(",")} ${shapes_pack(new Uint8Array(2), new Uint8Array(3)).result}`,
+);
 const failures: Array<string> = [];
 shapes_set_error_handler((code, message) => {
 	failures.push(`a${code}:${message}`);

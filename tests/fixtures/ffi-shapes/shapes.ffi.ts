@@ -29,6 +29,12 @@ export default {
 				watcher: { callback: { data: "data", release: "release", queued: true } },
 			},
 		},
+		shapes_pack: {
+			params: {
+				dest: { bytes: { length: "destLen" } },
+				source: { bytes: { length: "sourceLen" } },
+			},
+		},
 		shapes_hold: {
 			params: { data: { bytes: { length: "size" } } },
 			async: "shapes_hold_async",
