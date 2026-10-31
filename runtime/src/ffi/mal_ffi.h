@@ -360,9 +360,15 @@ MalFfiCallback *mal_ffi_keep_queued(MalVm *vm, MalValue function);
 /** Whether a call of the callback arrives on its VM's thread, or once that VM is gone. */
 bool mal_ffi_callback_here(MalFfiCallback *callback);
 /**
+ * Reserve a queued call of a callback with user data, which keeps the context alive
+ * until `mal_ffi_callback_queue` consumes the reservation. `mal_ffi_replaced`
+ * reserves for callbacks without user data, under the lock their setters take.
+ */
+void mal_ffi_callback_reserve(MalFfiCallback *callback);
+/**
  * From another thread: queue `run(vm, callback, message)` for the VM thread, which
- * frees the message with `release` afterwards. False when the call cannot queue,
- * leaving the message to the caller.
+ * frees the message with `release` afterwards. Consumes the reservation and the
+ * message, which may be null when copying it failed; false when the call was dropped.
  */
 bool mal_ffi_callback_queue(
     MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release);
@@ -390,7 +396,8 @@ bool mal_ffi_replace(
     MalFfiCallback **previous);
 /**
  * The callback `site` keeps for `key`, for a trampoline that receives no user data,
- * or null. Aborts when it belongs to a VM on another thread, unless it is queued.
+ * or null. When it belongs to a VM on another thread, a queued callback's call is
+ * reserved, and any other aborts.
  */
 MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key);
 /**

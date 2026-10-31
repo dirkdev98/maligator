@@ -1159,9 +1159,14 @@ MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key) {
     MalFfiReplacedEntry *entry = ffi_replaced_find(site, key);
     MalFfiKept *kept = entry == nullptr ? nullptr : entry->kept;
     // Checked under the lock: the owning thread may release the context right after.
-    // A queued callback's trampoline queues calls from other threads instead.
-    bool foreign = kept != nullptr && kept->callback.vm != nullptr && !kept->queued
+    bool foreign = kept != nullptr && kept->callback.vm != nullptr
         && !pthread_equal(kept->thread, pthread_self());
+    // A queued callback's call from another thread reserves its place in the queue
+    // here, before the lock lets the VM thread replace and release the context.
+    if (foreign && kept->queued) {
+        atomic_fetch_add(&kept->waiting, 1);
+        foreign = false;
+    }
     pthread_mutex_unlock(&ffi_replaced_lock);
     if (foreign) ffi_wrong_thread();
     return kept == nullptr ? nullptr : &kept->callback;
@@ -1270,23 +1275,28 @@ bool mal_ffi_callback_here(MalFfiCallback *callback) {
     return kept->callback.vm == nullptr || pthread_equal(kept->thread, pthread_self());
 }
 
+void mal_ffi_callback_reserve(MalFfiCallback *callback) {
+    MalFfiKept *kept = (MalFfiKept *) callback;
+    if (!kept->queued) ffi_wrong_thread();
+    atomic_fetch_add(&kept->waiting, 1);
+}
+
 bool mal_ffi_callback_queue(
     MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release) {
     MalFfiKept *kept = (MalFfiKept *) callback;
     MalVm *vm = kept->callback.vm;
-    if (vm == nullptr) return false;
-    if (!kept->queued) ffi_wrong_thread();
-    MalFfiQueuedCall *call = malloc(sizeof(*call));
-    if (call == nullptr) return false;
-    *call = (MalFfiQueuedCall) {kept, run, release, message};
-    // The context stays alive while a call waits: its release defers to the last one.
-    atomic_fetch_add(&kept->waiting, 1);
-    if (!mal_host_post_progress(mal_host(vm), vm->ffi->inbox, call, ffi_queued_destroy)) {
-        atomic_fetch_sub(&kept->waiting, 1);
+    MalFfiQueuedCall *call = message == nullptr || vm == nullptr ? nullptr : malloc(sizeof(*call));
+    if (call != nullptr) {
+        *call = (MalFfiQueuedCall) {kept, run, release, message};
+        if (mal_host_post_progress(mal_host(vm), vm->ffi->inbox, call, ffi_queued_destroy)) {
+            return true;
+        }
         free(call);
-        return false;
     }
-    return true;
+    if (message != nullptr) release(message);
+    // A release that waited for this call stays pending: only the VM thread may free it.
+    atomic_fetch_sub(&kept->waiting, 1);
+    return false;
 }
 
 /** A malloc'd `<specifier>#<name>` identity, or null after an allocation throw. */
