@@ -544,6 +544,38 @@ bool mal_ffi_record_fields(
     return true;
 }
 
+bool mal_ffi_record_elements(
+    MalVm *vm, MalValue array, int32_t length, MalFfiRecordType *type,
+    const MalFfiSite *site, MalValue *values) {
+    MalShape *shape = ffi_record_shape(vm, type);
+    i32 count = type->field_count;
+    for (i32 index = 0; index < length; index++) {
+        MalValue *fields = values + (usize) index * (usize) count;
+        MalValue element;
+        // A dense element that already has the record's shape reads without running JavaScript.
+        if (shape != nullptr && mal_value_is_array_object(array)) {
+            MalArrayObject *object = mal_value_to_array_object(array);
+            if (mal_array_object_length(object) == (u32) length &&
+                mal_array_object_dense_get(object, (u32) index, &element) &&
+                mal_value_is_heap_type(element, MAL_HEAP_OBJECT) &&
+                mal_value_to_object(element)->shape == shape) {
+                for (i32 field = 0; field < count; field++) {
+                    fields[field] = mal_object_field_load_shaped(
+                        mal_value_to_object(element), (u32) field);
+                }
+                continue;
+            }
+        }
+        if (!mal_ffi_element(vm, array, index, length, site, &element)) return false;
+        MalRootSpan root;
+        mal_gc_root(&root, &element, 1);
+        bool read = mal_ffi_record_fields(vm, element, type, site, fields);
+        mal_gc_unroot(&root);
+        if (!read) return false;
+    }
+    return true;
+}
+
 MalValue mal_ffi_new_record(MalVm *vm, MalFfiRecordType *type, const MalValue *values) {
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     MalShape *shape = ffi_record_shape(vm, type);

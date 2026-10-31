@@ -234,6 +234,14 @@ bool mal_ffi_record_fields(
     MalVm *vm, MalValue record, MalFfiRecordType *type, const MalFfiSite *site,
     MalValue *values);
 
+/**
+ * Read the fields of every element of an array argument with `length` elements into
+ * `values`, `field_count` per element. Getters may run for elements that are not
+ * plain records, so the caller roots `values` unless every field is an immediate.
+ */
+bool mal_ffi_record_elements(
+    MalVm *vm, MalValue array, int32_t length, MalFfiRecordType *type,
+    const MalFfiSite *site, MalValue *values);
 /** Read element `index` of an array that must have exactly `length` elements. */
 bool mal_ffi_element(
     MalVm *vm, MalValue array, int32_t index, int32_t length, const MalFfiSite *site, MalValue *out);

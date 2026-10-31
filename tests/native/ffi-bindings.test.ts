@@ -13,6 +13,7 @@ const EXPECTED_RESULTS = [
 	'add {"x":4,"y":6.5}',
 	"area 12",
 	'getters {"x":4,"y":3} 6',
+	'mixed {"min":{"x":-2,"y":2},"max":{"x":1,"y":5}}',
 	'other shapes [{"x":1,"y":2},{"x":1,"y":2},{"x":5,"y":1}]',
 	"contains true false",
 	"mode both null",

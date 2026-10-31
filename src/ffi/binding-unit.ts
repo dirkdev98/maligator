@@ -68,6 +68,10 @@ const IMMEDIATE_KINDS: ReadonlySet<JsValue["kind"]> = new Set([
 	"float",
 ]);
 
+function immediateRecord(record: MappedRecord): boolean {
+	return record.fields.every((field) => IMMEDIATE_KINDS.has(field.value.kind));
+}
+
 /** Inputs whose conversion cannot run JavaScript, so their values need no roots. */
 const SCALAR_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
 	"boolean",
@@ -388,6 +392,55 @@ class BindingWriter {
 		}
 	}
 
+	/**
+	 * The helpers that convert an input record: `mal_ffi_fields_<name>` converts field
+	 * values already read, and `mal_ffi_in_<name>` reads them from an object first.
+	 */
+	#recordInput(name: string): Array<string> {
+		const record = this.#record(name);
+		const count = String(record.fields.length);
+		const lines = [
+			"",
+			`static bool mal_ffi_fields_${name}(MalVm *vm, const MalValue *mal_fields, const MalFfiSite *mal_site, ${record.spelling} *mal_out) {`,
+			"\tMalFfiSite mal_field_site = *mal_site;",
+		];
+		record.fields.forEach((field, index) => {
+			lines.push(
+				`\tmal_field_site.field = ${cString(field.name)};`,
+				...this.read(
+					field.value,
+					field.type,
+					`mal_fields[${String(index)}]`,
+					`mal_out->${field.name}`,
+					"&mal_field_site",
+					"return false;",
+					[],
+					true,
+				).map((line) => `\t${line}`),
+			);
+		});
+		// Immediate field values hold no heap reference a later getter's collection could free.
+		const rootFields = !immediateRecord(record);
+		lines.push(
+			"\treturn true;",
+			"}",
+			"",
+			`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out) {`,
+			`\tMalValue mal_fields[${count}] = {};`,
+			...(rootFields
+				? [
+						"\tMalFfiRoots mal_roots;",
+						`\tmal_ffi_root(&mal_roots, mal_fields, ${count});`,
+					]
+				: []),
+			`\tbool mal_ok = mal_ffi_record_fields(vm, mal_value, &mal_ffi_record_${name}, mal_site, mal_fields) && mal_ffi_fields_${name}(vm, mal_fields, mal_site, mal_out);`,
+			...(rootFields ? ["\tmal_ffi_unroot(&mal_roots);"] : []),
+			"\treturn mal_ok;",
+			"}",
+		);
+		return lines;
+	}
+
 	recordHelpers(): Array<string> {
 		const lines: Array<string> = [];
 		const inputs = [...this.#inputs].sort(byteOrder);
@@ -395,6 +448,7 @@ class BindingWriter {
 		for (const name of inputs) {
 			const record = this.#record(name);
 			lines.push(
+				`static bool mal_ffi_fields_${name}(MalVm *vm, const MalValue *mal_fields, const MalFfiSite *mal_site, ${record.spelling} *mal_out);`,
 				`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out);`,
 			);
 		}
@@ -410,49 +464,7 @@ class BindingWriter {
 				`static MalFfiRecordType mal_ffi_record_${name} = { mal_ffi_record_fields_${name}, ${String(record.fields.length)}, 0 };`,
 			);
 		}
-		for (const name of inputs) {
-			const record = this.#record(name);
-			const count = String(record.fields.length);
-			// Immediate field values hold no heap reference a later getter's collection could free.
-			const rootFields = record.fields.some(
-				(field) => !IMMEDIATE_KINDS.has(field.value.kind),
-			);
-			lines.push(
-				"",
-				`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out) {`,
-				`\tMalValue mal_fields[${count}] = {};`,
-				...(rootFields
-					? [
-							"\tMalFfiRoots mal_roots;",
-							`\tmal_ffi_root(&mal_roots, mal_fields, ${count});`,
-						]
-					: []),
-				`\tbool mal_ok = mal_ffi_record_fields(vm, mal_value, &mal_ffi_record_${name}, mal_site, mal_fields);`,
-				"\tif (!mal_ok) goto mal_done;",
-				"\tMalFfiSite mal_field_site = *mal_site;",
-			);
-			record.fields.forEach((field, index) => {
-				lines.push(
-					`\tmal_field_site.field = ${cString(field.name)};`,
-					...this.read(
-						field.value,
-						field.type,
-						`mal_fields[${String(index)}]`,
-						`mal_out->${field.name}`,
-						"&mal_field_site",
-						"{ mal_ok = false; goto mal_done; }",
-						[],
-						true,
-					).map((line) => `\t${line}`),
-				);
-			});
-			lines.push(
-				"mal_done:",
-				...(rootFields ? ["\tmal_ffi_unroot(&mal_roots);"] : []),
-				"\treturn mal_ok;",
-				"}",
-			);
-		}
+		for (const name of inputs) lines.push(...this.#recordInput(name));
 		for (const name of outputs) {
 			const record = this.#record(name);
 			const count = record.fields.length;
@@ -838,6 +850,28 @@ class BindingWriter {
 							`if ((void *) ${elements} != (void *) ${storage}) free(${elements});`,
 						);
 						const text = this.#fresh("text");
+						// Arrays of records with immediate fields read every element in one call.
+						const elementRecord =
+							value.of.kind === "record" ? this.#record(value.of.name) : undefined;
+						const bulk =
+							elementRecord === undefined || !immediateRecord(elementRecord)
+								? undefined
+								: {
+										name: elementRecord.name,
+										fields: String(elementRecord.fields.length),
+										values: `mal_values_${String(index)}`,
+										storage: `mal_value_storage_${String(index)}`,
+										inline: "64",
+									};
+						if (bulk !== undefined) {
+							locals.push(
+								`MalValue ${bulk.storage}[${bulk.inline}];`,
+								`MalValue *${bulk.values} = nullptr;`,
+							);
+							cleanup.push(
+								`if (${bulk.values} != ${bulk.storage}) free(${bulk.values});`,
+							);
+						}
 						body.push(
 							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &${length})) goto mal_done;`,
 							`if (${length} > 0 && (size_t) ${length} <= sizeof(${storage}) / sizeof(*${elements})) {`,
@@ -852,25 +886,41 @@ class BindingWriter {
 							`\t${elements} = calloc((size_t) ${length}, sizeof(*${elements}));`,
 							`\tif (${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 							"}",
+							...(bulk === undefined
+								? []
+								: [
+										`if ((size_t) ${length} * ${bulk.fields} <= ${bulk.inline}) ${bulk.values} = ${bulk.storage};`,
+										`else if (${length} > 0) {`,
+										`\t${bulk.values} = malloc(sizeof(MalValue) * (size_t) ${length} * ${bulk.fields});`,
+										`\tif (${bulk.values} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
+										"}",
+										`if (${length} > 0 && !mal_ffi_record_elements(vm, ${source}, ${length}, &mal_ffi_record_${bulk.name}, ${site}, ${bulk.values})) goto mal_done;`,
+									]),
 							`for (int32_t ${position} = 0; ${position} < ${length}; ${position}++) {`,
-							`\tMalValue ${element};`,
-							`\tif (!mal_ffi_element(vm, ${source}, ${position}, ${length}, ${site}, &${element})) goto mal_done;`,
-							...(texts
+							...(bulk !== undefined
 								? [
-										`\tchar *${text};`,
-										`\tif (!mal_ffi_to_owned_string(vm, ${element}, ${site}, &${text})) goto mal_done;`,
-										`\t${elements}[${position}] = ${text};`,
+										`\tif (!mal_ffi_fields_${bulk.name}(vm, ${bulk.values} + (size_t) ${position} * ${bulk.fields}, ${site}, &${elements}[${position}])) goto mal_done;`,
 									]
-								: this.read(
-										value.of,
-										value.element,
-										element,
-										`${elements}[${position}]`,
-										site,
-										"goto mal_done;",
-										strings,
-										false,
-									).map((line) => `\t${line}`)),
+								: [
+										`\tMalValue ${element};`,
+										`\tif (!mal_ffi_element(vm, ${source}, ${position}, ${length}, ${site}, &${element})) goto mal_done;`,
+										...(texts
+											? [
+													`\tchar *${text};`,
+													`\tif (!mal_ffi_to_owned_string(vm, ${element}, ${site}, &${text})) goto mal_done;`,
+													`\t${elements}[${position}] = ${text};`,
+												]
+											: this.read(
+													value.of,
+													value.element,
+													element,
+													`${elements}[${position}]`,
+													site,
+													"goto mal_done;",
+													strings,
+													false,
+												).map((line) => `\t${line}`)),
+									]),
 							"}",
 							`${local} = (${localDeclaration(param.type, "")}) ${elements};`,
 						);

@@ -69,6 +69,17 @@ const lazyBox = {
 console.log(
 	`getters ${JSON.stringify(shapes_add(lazy, { x: 1, y: 1 }))} ${shapes_area(lazyBox)}`,
 );
+const mixed = [
+	{ x: 1, y: 2 },
+	{ y: 5, x: -2 },
+	{
+		get x() {
+			return [0].length - 1;
+		},
+		y: 3,
+	},
+];
+console.log(`mixed ${JSON.stringify(shapes_bounds(mixed).box)}`);
 const origin = { x: 0, y: 0 };
 console.log(
 	`other shapes ${JSON.stringify([
