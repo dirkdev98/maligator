@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "array_buffer_object.h"
+#include "array_object.h"
 #include "builtin_data_view.h"
 #include "function_object.h"
 #include "gc.h"
@@ -201,6 +202,11 @@ bool mal_ffi_to_array_length(
         *length = 0;
         return true;
     }
+    if (mal_value_is_array_object(value)
+        && mal_array_object_length(mal_value_to_array_object(value)) <= (u32) INT32_MAX) {
+        *length = (int32_t) mal_array_object_length(mal_value_to_array_object(value));
+        return true;
+    }
     bool is_array = false;
     if (mal_value_is_object(value) && !mal_vm_is_array(vm, value, &is_array)) return false;
     MalValue array_length = mal_value_new_undefined();
@@ -232,6 +238,14 @@ bool mal_ffi_check_count(
 
 bool mal_ffi_element(
     MalVm *vm, MalValue array, int32_t index, int32_t length, const MalFfiSite *site, MalValue *out) {
+    // An Array's dense elements are own data properties, so reading one runs no JavaScript.
+    if (mal_value_is_array_object(array)) {
+        MalArrayObject *object = mal_value_to_array_object(array);
+        if (mal_array_object_length(object) == (u32) length
+            && mal_array_object_dense_get(object, (u32) index, out)) {
+            return true;
+        }
+    }
     bool is_array = false;
     if (mal_value_is_object(array) && !mal_vm_is_array(vm, array, &is_array)) return false;
     MalValue array_length = mal_value_new_undefined();
