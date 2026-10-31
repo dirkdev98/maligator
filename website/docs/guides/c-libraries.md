@@ -145,6 +145,8 @@ functions: {
 - `free` names the function that releases a string, buffer, or array result after it is copied.
 - `callback` passes a JavaScript function as a function pointer the library calls before it returns, such as an iteration or comparison function. `data` names the `void *` parameter the library hands back to the callback; it disappears from the JavaScript signature. An exception in the callback skips its remaining calls and rethrows when the C function returns.
 
+- `constant` passes a C macro, enumerator, or integer for a parameter, such as `SQLITE_TRANSIENT` for a destructor or `0` for a reserved argument. The parameter disappears from the JavaScript signature, and the C compiler checks the value's type.
+
 Each fact names the C declaration it describes. A fact that names nothing in the headers, or that does not fit the declaration, fails the build.
 
 ## Call variadic functions

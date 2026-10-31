@@ -28,6 +28,7 @@ export default {
 		},
 		shapes_integrate: { params: { f: { callback: { data: "data" } } } },
 		shapes_join: { params: { parts: { array: { length: "count" } } } },
+		shapes_mul: { params: { factor: { constant: "SHAPES_MAX_POINTS" } } },
 		shapes_log: {
 			variants: {
 				shapes_log_count: { args: ["int"] },

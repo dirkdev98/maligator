@@ -614,6 +614,9 @@ class BindingWriter {
 					locals.push(`${localDeclaration(pointee, "mal_count")} = {};`);
 					body.push(`${local} = &mal_count;`);
 					return;
+				case "constant":
+					body.push(`${local} = ${entry.expression};`);
+					return;
 				case "callback-data":
 					body.push(`${local} = &mal_callback_${String(entry.of)};`);
 					return;

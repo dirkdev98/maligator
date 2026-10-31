@@ -95,6 +95,7 @@ size_t shapes_path_length(ShapesPath path);
 ** Sum two or three integers.
 */
 int shapes_sum2(int a, int b);
+int shapes_mul(int value, int factor);
 int shapes_sum3(
 	int a, /* First term */
 	int b, /* Second term */

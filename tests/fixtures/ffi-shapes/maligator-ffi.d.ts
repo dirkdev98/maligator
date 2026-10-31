@@ -77,6 +77,8 @@ declare module "maligator:ffi/shapes" {
 	/** The last log line */
 	export function shapes_log_line(): string | null;
 	export function shapes_mode_name(mode: number): string | null;
+	/** Sum two or three integers. */
+	export function shapes_mul(value: number): number;
 	/** Parse "x,y" into a point; returns 0, or -1 for other text. */
 	export function shapes_parse(text: string): { result: number; point: ShapesPoint };
 	/**

@@ -177,6 +177,7 @@ function validateValueFacts(value: unknown, at: string): void {
 		"array",
 		"free",
 		"callback",
+		"constant",
 	]);
 	for (const key of ["nullable", "borrowed", "out", "inout", "string"]) {
 		booleanField(value, key, at);
@@ -192,6 +193,14 @@ function validateValueFacts(value: unknown, at: string): void {
 				(C_NAME.test(callback.data) || /^[1-9]\d*$/.test(callback.data)),
 			`${at}.callback.data`,
 			"a parameter name or 1-based position",
+		);
+	}
+	if (value.constant !== undefined) {
+		expect(
+			typeof value.constant === "string" &&
+				/^(?:[A-Za-z_]\w*|-?(?:0[xX][0-9a-fA-F]+|\d+)[uUlL]*)$/.test(value.constant),
+			`${at}.constant`,
+			"a C identifier or integer literal",
 		);
 	}
 	if (value.free !== undefined) {

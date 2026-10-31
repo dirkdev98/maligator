@@ -112,6 +112,11 @@ export interface MaligatorFfiValueFacts {
 	free?: string;
 	/** A function pointer the library calls during the call with a JavaScript function. */
 	callback?: MaligatorFfiCallback;
+	/**
+	 * Pass this C macro, enumerator, or integer, such as `SQLITE_TRANSIENT` or `0`, and
+	 * drop the parameter from the JavaScript signature. The C compiler checks its type.
+	 */
+	constant?: string;
 }
 
 /**

@@ -212,4 +212,6 @@ size_t shapes_path_length(ShapesPath path) { return (size_t)path.count; }
 
 int shapes_sum2(int a, int b) { return a + b; }
 
+int shapes_mul(int value, int factor) { return value * factor; }
+
 int shapes_sum3(int a, int b, int c) { return a + b + c; }

@@ -68,6 +68,10 @@ describe("ffi inspect", () => {
 		);
 		expect(declaration("shapes_mode_name").ts).toBe("(mode: number) => string | null");
 		expect(declaration("shapes_twice")).toMatchObject({ status: "bound", inline: true });
+		expect(declaration("shapes_mul")).toMatchObject({
+			ts: "(value: number) => number",
+			params: [{ name: "value" }, { name: "factor", role: "constant" }],
+		});
 		expect(shapes.types.find((type) => type.name === "ShapesBox")?.ts).toBe(
 			"{ min: ShapesPoint; max: ShapesPoint }",
 		);
@@ -447,6 +451,21 @@ describe("ffi contract facts", () => {
 			at: "arguments",
 			reason: "variadic arguments need a fact per call",
 		});
+	});
+
+	it("rejects a constant combined with another fact or on a result", () => {
+		rejects(
+			{
+				functions: {
+					shapes_mul: { params: { factor: { constant: "0", nullable: true } } },
+				},
+			},
+			"functions.shapes_mul.params.factor: a constant parameter takes no other role",
+		);
+		rejects(
+			{ functions: { shapes_mul: { returns: { constant: "0" } } } },
+			"functions.shapes_mul.returns.constant: constant applies to parameters",
+		);
 	});
 
 	it("rejects variants that do not fit their declaration", () => {

@@ -82,7 +82,9 @@ export type Argument =
 	/** The address of a local the function writes with the count of its result. */
 	| { readonly kind: "result-count" }
 	/** The user data that routes the callback argument `of` to its JavaScript function. */
-	| { readonly kind: "callback-data"; readonly of: number };
+	| { readonly kind: "callback-data"; readonly of: number }
+	/** A C expression the contract fixes, such as a macro name. */
+	| { readonly kind: "constant"; readonly expression: string };
 
 /** A value the function writes through a pointer, returned beside its result. */
 export interface MappedOutput {
@@ -747,6 +749,18 @@ class Planner {
 			}
 			const resolved = resolveCType(this.#model, param.type);
 			const routed = callbackData.get(index);
+			if (valueFacts.constant !== undefined) {
+				if (
+					Object.keys(valueFacts).length > 1 ||
+					routed !== undefined ||
+					counts.has(index) ||
+					resultCount === index
+				) {
+					throw new FfiError(`${where(at)}: a constant parameter takes no other role`);
+				}
+				args.push({ kind: "constant", expression: valueFacts.constant });
+				return;
+			}
 			if (routed !== undefined) {
 				args.push({ kind: "callback-data", of: routed });
 				return;
@@ -837,6 +851,9 @@ class Planner {
 			throw new FfiError(
 				`${where("params")}: JavaScript in a callback could detach a buffer C still uses`,
 			);
+		}
+		if (facts.returns.constant !== undefined) {
+			throw new FfiError(`${where("returns.constant")}: constant applies to parameters`);
 		}
 		const returns = map(declaration.returns, "return", facts.returns, "returns");
 		if ("value" in returns) {

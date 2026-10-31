@@ -16,7 +16,7 @@ const EXPECTED_RESULTS = [
 	"contains true false",
 	"mode both null",
 	"total 9007199254740994",
-	"sum 6 twice 42",
+	"sum 6 twice 42 times max 192",
 	'constants 1.4 2.5 4294967296 {"x":0,"y":0}',
 	"canvas Sketch null [object ShapesCanvas] open 1",
 	"canvases after using 0",

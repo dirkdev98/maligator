@@ -31,6 +31,7 @@ import {
 	shapes_log_line,
 	shapes_log_pair,
 	shapes_mode_name,
+	shapes_mul,
 	shapes_parse,
 	shapes_render,
 	shapes_scale,
@@ -64,7 +65,9 @@ console.log(
 );
 console.log(`mode ${shapes_mode_name(SHAPES_BOTH)} ${shapes_mode_name(7)}`);
 console.log(`total ${shapes_total(9007199254740993n, 1n)}`);
-console.log(`sum ${shapes_sum3(1, 2, 3)} twice ${shapes_twice(21)}`);
+console.log(
+	`sum ${shapes_sum3(1, 2, 3)} twice ${shapes_twice(21)} times max ${shapes_mul(3)}`,
+);
 console.log(
 	`constants ${SHAPES_VERSION} ${SHAPES_SCALE} ${SHAPES_BIG} ${JSON.stringify(SHAPES_ORIGIN)}`,
 );
