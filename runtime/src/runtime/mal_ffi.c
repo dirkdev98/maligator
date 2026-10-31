@@ -625,9 +625,8 @@ bool mal_ffi_record_fields(
         MalObject *object = mal_value_to_object(record);
         MalShape *shape = ffi_record_shape(vm, type);
         if (shape != nullptr && object->shape == shape) {
-            for (i32 index = 0; index < type->field_count; index++) {
-                values[index] = mal_object_field_load_shaped(object, (u32) index);
-            }
+            const MalValue *fields = mal_object_fields_nonempty(object);
+            for (i32 index = 0; index < type->field_count; index++) values[index] = fields[index];
             return true;
         }
     }
@@ -642,23 +641,32 @@ bool mal_ffi_record_fields(
     return true;
 }
 
-static bool ffi_record_leaves(
-    MalVm *vm, MalValue record, MalFfiRecordType *type, MalValue **leaves) {
-    if (!mal_value_is_heap_type(record, MAL_HEAP_OBJECT)) return false;
+/**
+ * Read a record's immediate fields into `leaves`, depth first. Returns the position
+ * after them, or null when some level lacks its record's shape.
+ */
+static MalValue *ffi_record_leaves(
+    MalVm *vm, MalValue record, MalFfiRecordType *type, MalValue *leaves) {
+    if (!mal_value_is_heap_type(record, MAL_HEAP_OBJECT)) return nullptr;
     MalObject *object = mal_value_to_object(record);
     MalShape *shape = ffi_record_shape(vm, type);
-    if (shape == nullptr || object->shape != shape) return false;
-    for (i32 index = 0; index < type->field_count; index++) {
-        MalValue field = mal_object_field_load_shaped(object, (u32) index);
-        MalFfiRecordType *nested = type->nested == nullptr ? nullptr : type->nested[index];
-        if (nested == nullptr) *(*leaves)++ = field;
-        else if (!ffi_record_leaves(vm, field, nested, leaves)) return false;
+    if (shape == nullptr || object->shape != shape) return nullptr;
+    // The shape proves every field is an own slot; a record has at least one.
+    const MalValue *fields = mal_object_fields_nonempty(object);
+    i32 count = type->field_count;
+    MalFfiRecordType *const *nested = type->nested;
+    for (i32 index = 0; index < count; index++) {
+        MalFfiRecordType *inner = nested == nullptr ? nullptr : nested[index];
+        if (inner == nullptr) *leaves++ = fields[index];
+        else if ((leaves = ffi_record_leaves(vm, fields[index], inner, leaves)) == nullptr) {
+            return nullptr;
+        }
     }
-    return true;
+    return leaves;
 }
 
 bool mal_ffi_record_leaves(MalVm *vm, MalValue record, MalFfiRecordType *type, MalValue *leaves) {
-    return ffi_record_leaves(vm, record, type, &leaves);
+    return ffi_record_leaves(vm, record, type, leaves) != nullptr;
 }
 
 bool mal_ffi_record_elements(
@@ -666,22 +674,29 @@ bool mal_ffi_record_elements(
     const MalFfiSite *site, MalValue *values) {
     MalShape *shape = ffi_record_shape(vm, type);
     i32 count = type->field_count;
+    // A dense Array's elements read directly while no getter has run; one that does
+    // could change the array, so later elements check it again.
+    const MalValue *dense = nullptr;
+    if (shape != nullptr && mal_value_is_array_object(array)) {
+        MalArrayObject *object = mal_value_to_array_object(array);
+        if (mal_array_object_length(object) == (u32) length && object->elements != nullptr
+            && object->dense_count >= (u32) length) {
+            dense = object->elements;
+        }
+    }
     for (i32 index = 0; index < length; index++) {
         MalValue *fields = values + (usize) index * (usize) count;
         MalValue element;
-        // A dense element that already has the record's shape reads without running JavaScript.
-        if (shape != nullptr && mal_value_is_array_object(array)) {
-            MalArrayObject *object = mal_value_to_array_object(array);
-            if (mal_array_object_length(object) == (u32) length &&
-                mal_array_object_dense_get(object, (u32) index, &element) &&
-                mal_value_is_heap_type(element, MAL_HEAP_OBJECT) &&
-                mal_value_to_object(element)->shape == shape) {
-                for (i32 field = 0; field < count; field++) {
-                    fields[field] = mal_object_field_load_shaped(
-                        mal_value_to_object(element), (u32) field);
-                }
+        // An element that already has the record's shape reads without running JavaScript.
+        if (dense != nullptr) {
+            element = dense[index];
+            if (!mal_value_is_array_hole(element) && mal_value_is_heap_type(element, MAL_HEAP_OBJECT)
+                && mal_value_to_object(element)->shape == shape) {
+                const MalValue *slots = mal_object_fields_nonempty(mal_value_to_object(element));
+                for (i32 field = 0; field < count; field++) fields[field] = slots[field];
                 continue;
             }
+            dense = nullptr;
         }
         if (!mal_ffi_element(vm, array, index, length, site, &element)) return false;
         MalRootSpan root;
