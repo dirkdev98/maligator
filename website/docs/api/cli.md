@@ -124,6 +124,30 @@ maligator ffi types [--out path] [--config path] [--target rust-triple]
 
 Writes TypeScript declarations for every library under `ffi`: one `declare module "maligator:ffi/<name>"` block each, with the header documentation. The default file is `maligator-ffi.d.ts` in the project root. Builds warn when that file no longer matches the libraries' headers and facts; run `ffi types` again then. The file records a digest of its declarations, so reformatting it does not trigger the warning.
 
+## ffi check {#ffi-check}
+
+```shell
+maligator ffi check [library] [--json] [--update] [--out path]
+  [--config path] [--target rust-triple]
+```
+
+Checks C declarations and accepted facts against `maligator-ffi.lock.json` in the
+project root. A missing snapshot or a change exits with status 1 and reports the
+differences. Without a library name, checks every configured library and reports
+libraries removed from the configuration.
+
+Run `--update` after reviewing the headers and facts to accept the current snapshot.
+Commit the lockfile with the contract. Snapshots are separate for each target; updating
+one target preserves the others. Naming a library updates only that library. `--out`
+selects another lockfile, and `--json` prints the report as JSON.
+
+The snapshot follows the C types used by exports and facts, including typedefs,
+record fields, constants and helper declarations. It catches changes such as `short`
+becoming `int` even when both map to TypeScript `number`. Comments, source locations
+and declarations outside that surface do not affect it. This command does not execute
+C code or check the linked binary's ABI. Run it in your CI alongside the application's
+tests; builds do not run it automatically.
+
 ## Diagnostic build options {#diagnostic-build-options}
 
 `build --serialize <file>` writes a portable program image for toolchain diagnostics. It cannot carry configured filesystem assets. Native builds use the compiled backend by default. `build --no-compiled` selects the interpreted native diagnostic backend. `--render-native-c` (alias `--print`) emits C for inspection, and `--dump-core` adds Core diagnostics. These diagnostics are separate from a deployable production artifact.

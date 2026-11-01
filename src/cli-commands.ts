@@ -79,6 +79,7 @@ import {
 	developmentFragmentUnits,
 } from "./development-fragments.ts";
 import { createDevelopmentSession } from "./development-session.ts";
+import { checkLibraries, formatFfiCheck } from "./ffi/check.ts";
 import { declarationsCurrent, generateDeclarations } from "./ffi/declarations.ts";
 import { FfiError } from "./ffi/ffi-error.ts";
 import { formatInspection, inspectBindings } from "./ffi/inspect.ts";
@@ -2448,6 +2449,29 @@ function runFfiCommand(command: FfiCommand, context: CommandContext): void {
 			platform: report.platform ?? process.platform,
 			cross: report.cross === true,
 		};
+		if (command.action === "check") {
+			const names =
+				command.library === undefined
+					? Object.keys(config.ffi).sort()
+					: [command.library];
+			if (names.length === 0)
+				commandError("error: maligator.build.ts declares no ffi libraries");
+			const checked = checkLibraries(
+				names.map((name) => prepareLibrary(config, name, preparation)),
+				{
+					file: path.resolve(projectRoot, command.outPath ?? "maligator-ffi.lock.json"),
+					target:
+						command.target ?? hostExecutionTarget(process.platform, process.arch).triple,
+					update: command.update,
+					all: command.library === undefined,
+				},
+			);
+			log.info(
+				command.json ? JSON.stringify(checked, null, "\t") : formatFfiCheck(checked),
+			);
+			if (!checked.ok) commandError("error: C declarations or facts need review");
+			return;
+		}
 		if (command.action === "types") {
 			const names = Object.keys(config.ffi).sort();
 			if (names.length === 0) {

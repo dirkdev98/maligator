@@ -69,6 +69,43 @@ describe("parseCliArgs", () => {
 		);
 	});
 
+	it("checks every C library unless one is selected and updates only on request", () => {
+		expect(parseCliArgs(["ffi", "check"])).toEqual({
+			kind: "ffi",
+			action: "check",
+			json: false,
+			update: false,
+		});
+		expect(
+			parseCliArgs([
+				"ffi",
+				"check",
+				"shapes",
+				"--update",
+				"--json",
+				"--out",
+				"native/ffi.json",
+				"--target",
+				"aarch64-apple-darwin",
+			]),
+		).toEqual({
+			kind: "ffi",
+			action: "check",
+			library: "shapes",
+			update: true,
+			json: true,
+			outPath: "native/ffi.json",
+			target: "aarch64-apple-darwin",
+		});
+		expect(() => parseCliArgs(["ffi", "inspect", "shapes", "--update"])).toThrow(
+			"unknown option",
+		);
+		expect(() => parseCliArgs(["ffi", "types", "--update"])).toThrow("unknown option");
+		expect(() => parseCliArgs(["ffi", "check", "shapes", "sketch"])).toThrow(
+			"unexpected argument",
+		);
+	});
+
 	it("streams dev status and requires explicit test isolation for parallel execution", () => {
 		expect(parseCliArgs(["dev", "--status"])).toMatchObject({
 			kind: "dev",

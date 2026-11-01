@@ -1919,7 +1919,7 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
       identity checks at its accesses even when nothing observes it.
 - [ ] Caller-allocated state structs with pointer fields, such as zlib's
       `z_stream` and libuv's handles, cannot be created or filled from JavaScript.
-- [ ] `ffi check`: declaration fingerprints, evidence drift, sanitizer probes.
+- [ ] Extend `ffi check` with documentation evidence drift and sanitizer probes.
 - [ ] Headers that pull in large system headers exceed the self-hosted CLI's string
       limit as one AST dump.
 

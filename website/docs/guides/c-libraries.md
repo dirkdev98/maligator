@@ -248,4 +248,26 @@ The report lists each function that is not exported and the fact it needs. It al
 
 `--json` prints every declaration with its C and TypeScript forms, its header documentation, the missing facts, and the suggestions in contract shape, for tools that propose facts.
 
+## Check a library upgrade
+
+C declarations can change without changing their TypeScript types. For example,
+`short` and `int` both map to `number`, but accept different ranges. Record fields,
+pointer qualifiers and accepted ownership facts can change too.
+
+After reviewing a contract against the installed headers, record its declarations:
+
+```shell
+maligator ffi check --update
+```
+
+Commit `maligator-ffi.lock.json` with the contract. Run `maligator ffi check` in CI
+to report changes before accepting a library upgrade. The command reads the headers
+and facts and exits with status 1 if they differ or have no accepted snapshot. Review
+the changes, update the facts if needed, then run `--update` again.
+
+Use `--target rust-triple` to check or accept headers for a cross-build target. Each
+target has its own snapshots, and `ffi check raylib --update` updates only raylib for
+the selected target. Note that this checks the extracted declarations, not the linked
+binary's ABI or whether a library still follows its documented ownership rules.
+
 `maligator test` builds a test runtime with the bindings too. Note that `test --watch` does not support C libraries, and portable wire output rejects them.

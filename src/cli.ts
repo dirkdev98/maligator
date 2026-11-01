@@ -81,6 +81,13 @@ export type FfiCommand = {
 } & (
 	| { action: "inspect"; library: string; json: boolean }
 	| { action: "types"; outPath?: string }
+	| {
+			action: "check";
+			library?: string;
+			json: boolean;
+			update: boolean;
+			outPath?: string;
+	  }
 );
 
 export type CliCommand =
@@ -112,6 +119,7 @@ Commands:
   cache clear --all            Remove every rebuildable cache entry
   ffi inspect <library>        Show a C library's bindings and the facts they need
   ffi types                    Write TypeScript declarations for the C libraries
+  ffi check [library]          Check accepted C declarations and facts
   build [entry]                Compile an application
   run [entry] [-- args...]     Compile and run an application
   dev [entry] [-- args...]     Watch, rebuild, and restart an application
@@ -119,7 +127,7 @@ Commands:
 
 Options:
   --config <path>              Use an explicit build configuration
-  --target <rust-triple>       Cross-build through Zig (build, doctor, ffi inspect)
+  --target <rust-triple>       Cross-build or read C headers through Zig
   --production                 Build with production optimizations
   --core-report <mode>          Show Core phases, counters, or full diagnostics (build only)
   --profile[=compiler]         Sample production code, or add exact compiler counters
@@ -138,8 +146,9 @@ Options:
   --max-gb <number>            Cache prune target in GiB (default: the cache budget's)
   --min-age-days <number>      Youngest cache age eligible for prune (default: 1)
   --dry-run                    Show what cache prune would remove
-  --json                       Print machine-readable output (ffi inspect)
-  --out <path>                 Declaration file for ffi types (default: maligator-ffi.d.ts)
+  --json                       Print machine-readable output (ffi inspect or check)
+  --out <path>                 Output file for ffi types or check
+  --update                     Accept current declarations and facts (ffi check)
   -h, --help                   Show help
   -V, --version                Show the version`;
 
@@ -426,22 +435,27 @@ function parseCache(args: Array<string>): CliCommand {
 function parseFfi(args: Array<string>): CliCommand {
 	const action = args[1];
 	if (action === "--help" || action === "-h") return { kind: "help" };
-	if (action !== "inspect" && action !== "types") {
-		throw new CliUsageError("ffi requires 'inspect' or 'types'");
+	if (action !== "inspect" && action !== "types" && action !== "check") {
+		throw new CliUsageError("ffi requires 'inspect', 'types', or 'check'");
 	}
 	let library: string | undefined;
 	let json = false;
+	let update = false;
 	let outPath: string | undefined;
 	let configPath: string | undefined;
 	let target: string | undefined;
 	for (let index = 2; index < args.length; index++) {
 		const argument = args[index]!;
 		if (argument === "--help" || argument === "-h") return { kind: "help" };
-		if (action === "inspect" && argument === "--json") {
+		if (action !== "types" && argument === "--json") {
 			json = true;
 			continue;
 		}
-		if (action === "types" && argument === "--out") {
+		if (action === "check" && argument === "--update") {
+			update = true;
+			continue;
+		}
+		if (action !== "inspect" && argument === "--out") {
 			outPath = optionValue(args, index, argument);
 			index++;
 			continue;
@@ -456,7 +470,7 @@ function parseFfi(args: Array<string>): CliCommand {
 			index++;
 			continue;
 		}
-		if (action === "inspect" && library === undefined && !argument.startsWith("-")) {
+		if (action !== "types" && library === undefined && !argument.startsWith("-")) {
 			library = argument;
 			continue;
 		}
@@ -469,6 +483,16 @@ function parseFfi(args: Array<string>): CliCommand {
 	};
 	if (action === "types") {
 		return { ...shared, action, ...(outPath === undefined ? {} : { outPath }) };
+	}
+	if (action === "check") {
+		return {
+			...shared,
+			action,
+			json,
+			update,
+			...(library === undefined ? {} : { library }),
+			...(outPath === undefined ? {} : { outPath }),
+		};
 	}
 	if (library === undefined)
 		throw new CliUsageError("ffi inspect requires a library name");
