@@ -742,8 +742,12 @@ class BindingWriter {
 						: `(${handle.spelling} *) mal_value`;
 				lines.push(
 					"",
-					`static void ${destroy}(void *mal_value) {`,
-					`\t${handle.destroy.name}(${argument});`,
+					`static bool ${destroy}(void *mal_value) {`,
+					...(handle.destroy.success === undefined
+						? [`\t${handle.destroy.name}(${argument});`, "\treturn true;"]
+						: [
+								`\treturn ${handle.destroy.name}(${argument}) == (${handle.destroy.success});`,
+							]),
 					"}",
 				);
 			}
@@ -781,6 +785,8 @@ class BindingWriter {
 				`\t${handle.representation === "struct" ? `sizeof(${handle.spelling})` : "0"},`,
 				`\t${handle.representation === "struct" ? `_Alignof(${handle.spelling})` : "0"},`,
 				`\t${destroy},`,
+				`\t${handle.destroy === undefined ? "nullptr" : cString(handle.destroy.name)},`,
+				`\t${handle.destroy?.success !== undefined},`,
 				`\t${handle.collect},`,
 				`\t${fields},`,
 				`\t${String(handle.fields.length)},`,
@@ -1400,7 +1406,7 @@ class BindingWriter {
 						body.push(
 							`if (!mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${pointer}, &${pin})) goto mal_done;`,
 							...(binding.closes === entry.param
-								? [`if (!mal_ffi_handle_closable(vm, ${pin}, ${site})) goto mal_done;`]
+								? [`if (!mal_ffi_begin_handle_close(vm, ${pin}, ${site})) goto mal_done;`]
 								: []),
 							value.pass === "copy"
 								? `${local} = *(${handle.spelling} *) ${pointer};`
@@ -1425,10 +1431,18 @@ class BindingWriter {
 			}
 		});
 		const call = `${declaration.name}(${declaration.params.map((_, index) => `mal_argument_${String(index)}`).join(", ")})`;
+		const closing =
+			binding.closes === undefined ? undefined : binding.params[binding.closes]!.value;
+		const success =
+			closing?.kind === "handle"
+				? this.#handle(closing.name).destroy?.success
+				: undefined;
 		const closes =
 			binding.closes === undefined
 				? []
-				: [`mal_ffi_close_handle(${argument(binding.closes)});`];
+				: [
+						`mal_ffi_finish_handle_close(${argument(binding.closes)}, ${success === undefined ? "true" : `mal_return == (${success})`});`,
+					];
 		const count =
 			binding.resultCount === undefined
 				? undefined

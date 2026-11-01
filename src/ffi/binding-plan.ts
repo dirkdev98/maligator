@@ -186,6 +186,7 @@ export interface HandleType {
 	readonly allocator?: string;
 	readonly destroy?: {
 		readonly name: string;
+		readonly success?: string;
 		/** Whether the destroy function takes the struct by value or by address. */
 		readonly takes: "value" | "pointer";
 	};
@@ -309,11 +310,42 @@ function handleTypes(
 		};
 		let destroy: HandleType["destroy"];
 		if (handle.destroy !== undefined) {
-			const declaration = model.functions.find((entry) => entry.name === handle.destroy);
+			const name =
+				typeof handle.destroy === "string" ? handle.destroy : handle.destroy.function;
+			const success =
+				typeof handle.destroy === "string" ? undefined : handle.destroy.success;
+			const declaration = model.functions.find((entry) => entry.name === name);
 			if (declaration === undefined) {
 				throw new FfiError(
-					`types.${key}.handle.destroy: the headers declare no function '${handle.destroy}'`,
+					`types.${key}.handle.destroy: the headers declare no function '${name}'`,
 				);
+			}
+			if (success !== undefined) {
+				const result = resolveCType(model, declaration.returns);
+				if (!["integer", "enum", "boolean"].includes(result.kind))
+					throw new FfiError(
+						`types.${key}.handle.destroy.success: ${name} must return an integer or boolean`,
+					);
+				if (handle.collect === true)
+					throw new FfiError(
+						`types.${key}.handle.collect: cleanup that can fail requires explicit disposal`,
+					);
+				if (/^[A-Za-z_]\w*$/.test(success) && success !== "true" && success !== "false") {
+					const macro = model.macros.find((entry) => entry.name === success);
+					const knownMacro =
+						macro !== undefined &&
+						(typeof macro.value === "bigint" ||
+							(typeof macro.value === "number" && Number.isInteger(macro.value)));
+					if (
+						!knownMacro &&
+						![...model.enums.values()].some((entry) =>
+							entry.constants.some((constant) => constant.name === success),
+						)
+					)
+						throw new FfiError(
+							`types.${key}.handle.destroy.success: '${success}' is not a known integer constant`,
+						);
+				}
 			}
 			const param = declaration.params[0];
 			const resolved = param === undefined ? undefined : resolveCType(model, param.type);
@@ -322,13 +354,21 @@ function handleTypes(
 				param !== undefined &&
 				isRecord(param.type)
 			) {
-				destroy = { name: declaration.name, takes: "value" };
+				destroy = {
+					name: declaration.name,
+					takes: "value",
+					...(success === undefined ? {} : { success }),
+				};
 			} else if (
 				declaration.params.length === 1 &&
 				resolved?.kind === "pointer" &&
 				isRecord(resolved.to)
 			) {
-				destroy = { name: declaration.name, takes: "pointer" };
+				destroy = {
+					name: declaration.name,
+					takes: "pointer",
+					...(success === undefined ? {} : { success }),
+				};
 			} else {
 				throw new FfiError(
 					`types.${key}.handle.destroy: ${declaration.name} must take only a ${record.name}`,
@@ -1229,6 +1269,15 @@ class Planner {
 		if ("gap" in returns || gaps.length > 0) {
 			return { name: declaration.name, declaration, gaps };
 		}
+		if (
+			closes !== undefined &&
+			(args[0]?.kind !== "input" ||
+				args[0].param !== closes ||
+				params[closes]?.value.kind !== "handle")
+		)
+			throw new FfiError(
+				`${where("params")}: a destroy function must keep its handle as an input`,
+			);
 		return {
 			name: declaration.name,
 			declaration,

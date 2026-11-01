@@ -117,6 +117,7 @@ export const ffiLibrariesLeaf: Leaf = {
 };
 
 const C_NAME = /^[A-Za-z_]\w*$/;
+const C_INTEGER_CONSTANT = /^(?:[A-Za-z_]\w*|-?(?:0[xX][0-9a-fA-F]+|\d+)[uUlL]*)$/;
 
 /** Validate a record keyed by C names, checking each entry with `entry`. */
 function namedRecord(
@@ -176,11 +177,29 @@ function validateTypeFacts(value: unknown, at: string): void {
 		);
 	}
 	if (handle.destroy !== undefined) {
-		expect(
-			typeof handle.destroy === "string" && C_NAME.test(handle.destroy),
-			`${at}.handle.destroy`,
-			"a C function name",
-		);
+		if (typeof handle.destroy === "string")
+			expect(C_NAME.test(handle.destroy), `${at}.handle.destroy`, "a C function name");
+		else {
+			expectObject(handle.destroy, `${at}.handle.destroy`);
+			expectKeys(handle.destroy, `${at}.handle.destroy`, ["function", "success"]);
+			expect(
+				typeof handle.destroy.function === "string" &&
+					C_NAME.test(handle.destroy.function),
+				`${at}.handle.destroy.function`,
+				"a C function name",
+			);
+			expect(
+				typeof handle.destroy.success === "string" &&
+					C_INTEGER_CONSTANT.test(handle.destroy.success),
+				`${at}.handle.destroy.success`,
+				"a C identifier or integer literal",
+			);
+			expect(
+				handle.collect !== true,
+				`${at}.handle.collect`,
+				"absent or false for cleanup that can fail and must be retried explicitly",
+			);
+		}
 	}
 	booleanField(handle, "collect", `${at}.handle`);
 }
@@ -289,8 +308,7 @@ function validateValueFacts(value: unknown, at: string): void {
 	}
 	if (value.constant !== undefined) {
 		expect(
-			typeof value.constant === "string" &&
-				/^(?:[A-Za-z_]\w*|-?(?:0[xX][0-9a-fA-F]+|\d+)[uUlL]*)$/.test(value.constant),
+			typeof value.constant === "string" && C_INTEGER_CONSTANT.test(value.constant),
 			`${at}.constant`,
 			"a C identifier or integer literal",
 		);

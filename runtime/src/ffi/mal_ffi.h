@@ -72,8 +72,10 @@ typedef struct MalFfiHandleType {
     size_t size;
     /** Alignment of copied structs, or 0 when the handle holds a pointer. */
     size_t alignment;
-    /** Release the resource; receives the pointer or the struct's address. May be null. */
-    void (*destroy)(void *value);
+    /** Release the resource; true means it is closed. May be null. */
+    bool (*destroy)(void *value);
+    const char *destroy_name;
+    bool destroy_can_fail;
     /** Whether collection releases an owned handle the program never closed. */
     bool collect;
     const MalFfiField *fields;
@@ -120,10 +122,10 @@ void mal_ffi_unpin_handle(void *pin);
  * only lends, since the library may release its resource once the callback returns.
  */
 bool mal_ffi_handle_held(MalVm *vm, void *pin, const MalFfiSite *site);
-/** Before a destroy function runs: no other C call may be using the pinned handle. */
-bool mal_ffi_handle_closable(MalVm *vm, void *pin, const MalFfiSite *site);
-/** Close a handle whose resource the library's destroy function just released. */
-void mal_ffi_close_handle(MalValue value);
+/** Begin cleanup with the sole pin, rejecting reentry until its result is known. */
+bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, const MalFfiSite *site);
+/** Finish cleanup, restoring a failed handle or closing a released resource. */
+void mal_ffi_finish_handle_close(MalValue value, bool released);
 
 /**
  * Fill each slot with its export. A VM materializes each export once, so every

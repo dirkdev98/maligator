@@ -352,6 +352,8 @@ typedef struct MalFfiHandleObject {
     bool owned;
     /** Outer storage belongs to this wrapper, independently of C resource ownership. */
     bool owns_storage;
+    /** Cleanup is in progress; callbacks cannot use or close this resource. */
+    bool closing;
     /** The table that finds this open pointer handle by its pointer, or null. */
     MalFfiState *registry;
     /** C calls using the handle; it cannot close while any are. */
@@ -1400,8 +1402,7 @@ static void ffi_handle_finalize(MalHeapHeader *cell) {
     if (handle->value != nullptr && handle->owned && handle->type->collect
         && handle->type->destroy != nullptr) {
         ffi_finalizing = true;
-        handle->type->destroy(handle->value);
-        ffi_replaced_drop(handle->value);
+        if (handle->type->destroy(handle->value)) ffi_replaced_drop(handle->value);
         ffi_finalizing = false;
     }
     ffi_handle_forget(handle);
@@ -1421,7 +1422,7 @@ static MalValue ffi_handle_dispose(
             (const byte *) "[Symbol.dispose] requires a C library handle");
         return mal_value_new_undefined();
     }
-    if (handle->pins > 0) {
+    if (handle->pins > 0 || handle->closing) {
         mal_vm_throw_error(
             vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             (const byte *) "Cannot close a C library handle while a C call uses it");
@@ -1430,13 +1431,26 @@ static MalValue ffi_handle_dispose(
     if (handle->value != nullptr) {
         void *value = handle->value;
         bool release = handle->owned && handle->type->destroy != nullptr;
-        // Close before releasing: the library may hand out the same pointer again.
-        if (handle->type->size == 0) ffi_handle_forget(handle);
+        handle->closing = true;
+        // Unconditional release can hand out the same pointer again. A conditional
+        // release keeps its identity until C confirms it stopped owning the resource.
+        if (handle->type->size == 0 && (!release || !handle->type->destroy_can_fail))
+            ffi_handle_forget(handle);
         if (release) {
-            handle->type->destroy(value);
+            if (!handle->type->destroy(value)) {
+                handle->closing = false;
+                if (vm->completion.kind != MAL_COMPLETION_THROW) {
+                    char message[512];
+                    snprintf(message, sizeof(message), "%s did not release the %s handle",
+                        handle->type->destroy_name, handle->type->name);
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) message);
+                }
+                return mal_value_new_undefined();
+            }
             ffi_replaced_drop(value);
         }
         ffi_handle_forget(handle);
+        handle->closing = false;
     }
     return mal_value_new_undefined();
 }
@@ -1566,6 +1580,7 @@ static MalValue ffi_new_handle(
     handle->value = stored;
     handle->owned = owned;
     handle->owns_storage = owns_storage;
+    handle->closing = false;
     handle->registry = nullptr;
     handle->pins = 0;
     handle->scope = scope;
@@ -1616,7 +1631,7 @@ bool mal_ffi_to_handle(
     }
     MalFfiHandleObject *handle = ffi_handle(value);
     bool typed = handle != nullptr && handle->type == type;
-    if (typed && handle->value != nullptr && ffi_scope_active(vm, handle->scope)) {
+    if (typed && handle->value != nullptr && !handle->closing && ffi_scope_active(vm, handle->scope)) {
         *out = handle->value;
         if (pin != nullptr) {
             handle->pins++;
@@ -1643,17 +1658,24 @@ void mal_ffi_unpin_handle(void *pin) {
     if (pin != nullptr) ((MalFfiHandleObject *) pin)->pins--;
 }
 
-bool mal_ffi_handle_closable(MalVm *vm, void *pin, const MalFfiSite *site) {
-    if (pin == nullptr || ((MalFfiHandleObject *) pin)->pins == 1) return true;
-    return ffi_fail(
-        vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a handle no other C call is using");
+bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, const MalFfiSite *site) {
+    if (pin == nullptr) return true;
+    MalFfiHandleObject *handle = pin;
+    if (handle->pins != 1 || handle->closing)
+        return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
+            "a handle no other C call is using");
+    handle->closing = true;
+    return true;
 }
 
-void mal_ffi_close_handle(MalValue value) {
+void mal_ffi_finish_handle_close(MalValue value, bool released) {
     MalFfiHandleObject *handle = ffi_handle(value);
     if (handle == nullptr) return;
-    ffi_replaced_drop(handle->value);
-    ffi_handle_forget(handle);
+    handle->closing = false;
+    if (released) {
+        ffi_replaced_drop(handle->value);
+        ffi_handle_forget(handle);
+    }
 }
 
 static const MalFfiExport *ffi_find_export(const MalFfiLibrary *library, const char *name) {

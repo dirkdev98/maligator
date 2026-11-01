@@ -207,7 +207,7 @@ function suggestHandles(
 				(best < WEAK_RELEASE ? sole(WEAK_RELEASE) : sole(Number.POSITIVE_INFINITY)))
 				? ranked[0]!.declaration
 				: undefined;
-		if (release !== undefined) {
+		if (release !== undefined && resolveCType(model, release.returns).kind === "void") {
 			handles.set(record.name, { handle: { destroy: release.name } });
 		} else if (!record.complete && (releases.length === 0 || !handedOut(model, record))) {
 			handles.set(record.name, { handle: {} });

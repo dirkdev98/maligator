@@ -47,7 +47,7 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string> {
 			...docComment(handle.doc, "\t"),
 			`\texport interface ${handle.name} {`,
 			`\t\treadonly [Symbol.toStringTag]: ${JSON.stringify(handle.name)};`,
-			`\t\t/** Close the handle${handle.destroy === undefined ? "" : `, releasing an owned resource with ${handle.destroy.name}`}. */`,
+			`\t\t/** Close the handle${handle.destroy === undefined ? "" : `, releasing an owned resource with ${handle.destroy.name}`}.${handle.destroy?.success === undefined ? "" : " Failed C cleanup throws and leaves it open for retry."} */`,
 			"\t\t[Symbol.dispose](): void;",
 		);
 		for (const field of handle.fields) {

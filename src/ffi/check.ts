@@ -274,6 +274,14 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 				`handle ${handle.name}`,
 			);
 		if (handle.destroy !== undefined) helper(handle.destroy.name);
+		const success = handle.destroy?.success;
+		if (success !== undefined) {
+			const enumeration = [...model.enums.values()].find((entry) =>
+				entry.constants.some((constant) => constant.name === success),
+			);
+			if (enumeration !== undefined)
+				type({ kind: "enum", name: enumeration.name }, `cleanup success ${success}`);
+		}
 	}
 	for (const constant of plan.constants) {
 		const macro = macros.get(constant.name);

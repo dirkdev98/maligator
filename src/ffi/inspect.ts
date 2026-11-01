@@ -145,6 +145,7 @@ export interface HandleInspection {
 	readonly representation: "struct" | "pointer";
 	readonly allocator?: string;
 	readonly destroy?: string;
+	readonly destroySuccess?: string;
 	readonly collect: boolean;
 	readonly doc?: string;
 	/** Read-only accessors of a struct handle. */
@@ -422,6 +423,9 @@ export function inspectBindings(
 			representation: handle.representation,
 			...(handle.allocator === undefined ? {} : { allocator: handle.allocator }),
 			...(handle.destroy === undefined ? {} : { destroy: handle.destroy.name }),
+			...(handle.destroy?.success === undefined
+				? {}
+				: { destroySuccess: handle.destroy.success }),
 			collect: handle.collect,
 			...(handle.doc === undefined ? {} : { doc: handle.doc }),
 			fields: handle.fields.map((field) => ({

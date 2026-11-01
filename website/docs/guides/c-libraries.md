@@ -120,6 +120,28 @@ ExportImage(image, `image-${image.width}x${image.height}.png`);
 
 Leaving a `using` scope or calling `[Symbol.dispose]()` releases the resource through `destroy`, and calling the destroy function yourself also closes the handle. A closed handle throws a `TypeError` instead of reaching C, and closing a handle while a C call uses it, from a callback or a getter, throws one too.
 
+A function name in `destroy` asserts that cleanup always releases the resource,
+regardless of its return status. For cleanup that can fail while keeping the resource
+alive, state its successful return code:
+
+```ts
+types: {
+	sqlite3: {
+		handle: { destroy: { function: "sqlite3_close", success: "SQLITE_OK" } },
+	},
+	sqlite3_stmt: { handle: { destroy: "sqlite3_finalize" } },
+}
+```
+
+[`sqlite3_close`](https://www.sqlite.org/c3ref/close.html) leaves a busy database
+open, while [`sqlite3_finalize`](https://www.sqlite.org/c3ref/finalize.html) releases
+a statement even when returning an error. A conditional destroy binding preserves
+the C status and closes the handle only when it equals `success`, a known C integer
+constant or integer literal. Failed `[Symbol.dispose]()` throws an `Error` and leaves
+the handle open for retry. Cleanup callbacks cannot use or recursively close the
+handle while its release is in progress. Conditional cleanup requires explicit
+disposal, so it cannot use `collect: true`.
+
 - `borrowed` marks a result the library keeps owning. Closing it does not release it.
 - A `handle` without `destroy` describes a pointer the library owns, such as the `sqlite3_context` SQLite lends to callbacks, unless `storage: "caller"` provides its outer storage.
 - `collect: true` releases a handle the program drops once it is garbage collected. Leave it off for resources that must be released on one thread or before the library shuts down, such as raylib's GPU textures.

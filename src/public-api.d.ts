@@ -74,11 +74,14 @@ export interface MaligatorFfiHandle {
 	 * remain explicit; disposing the handle frees only this storage.
 	 */
 	storage?: "caller";
-	/** The function that releases the resource, taking it as its first parameter. */
-	destroy?: string;
+	/** The function that releases the resource, taking it as its only parameter.
+	 * A name asserts unconditional release. With `success`, release occurs only when
+	 * its integer or boolean result equals the C identifier or integer literal.
+	 */
+	destroy?: string | { function: string; success: string };
 	/** Release a handle the program never closed once it is garbage collected. Off unless
 	 * set; leave it off for resources that must be released on one thread or before the
-	 * library shuts down.
+	 * library shuts down. Conditional cleanup requires explicit disposal and retry.
 	 */
 	collect?: boolean;
 }

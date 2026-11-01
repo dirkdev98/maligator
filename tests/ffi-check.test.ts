@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
+	appendFileSync,
 	cpSync,
 	existsSync,
 	mkdirSync,
@@ -84,6 +85,34 @@ afterEach(() => {
 });
 
 describe("ffi check", () => {
+	it("watches cleanup success codes from a transitive enum header", () => {
+		const directory = project();
+		writeFileSync(
+			path.join(directory, "include/status.h"),
+			"enum ReleaseStatus { STATUS_OK = 0 };\n",
+		);
+		appendFileSync(
+			path.join(directory, "include/shapes.h"),
+			'#include "status.h"\ntypedef struct BusyResource BusyResource;\nBusyResource *resource_open(void);\nint resource_close(BusyResource *resource);\n',
+		);
+		writeContract(directory, {
+			types: {
+				BusyResource: {
+					handle: { destroy: { function: "resource_close", success: "STATUS_OK" } },
+				},
+			},
+		});
+		accept(directory);
+		writeFileSync(
+			path.join(directory, "include/status.h"),
+			"enum ReleaseStatus { STATUS_OK = 2 };\n",
+		);
+		const report = check(directory, [], 1);
+		expect(report.ok).toBe(false);
+		expect(
+			report.libraries[0]?.changes.some((change) => change.path.includes("STATUS_OK")),
+		).toBe(true);
+	});
 	it("requires an explicit update before accepting a library's declarations", () => {
 		const directory = project();
 		const lock = path.join(directory, "maligator-ffi.lock.json");
