@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <pthread.h>
 
 static _Atomic int live;
 static _Atomic int calls;
@@ -40,8 +41,53 @@ char *text_callback(void (*callback)(void *), void *data, int *length) {
 }
 void text_counted_callback(void (*callback)(const char *, int, void *), void *data, int mode) {
     char text[] = { 'a', 0, (char)0xc3, (char)0xa9 };
-    callback(mode == 1 ? NULL : text, mode == 2 ? -1 : mode == 3 ? INT_MAX : (int)sizeof(text), data);
+    callback(mode == 1 ? NULL : text, mode == 2 ? -1 : mode == 3 ? INT_MAX : mode == 4 ? 0 : (int)sizeof(text), data);
     memset(text, 'x', sizeof(text));
+}
+typedef struct TextNotification {
+    void (*callback)(const char *, int, void *);
+    void *data;
+    void (*release)(void *);
+    int mode;
+} TextNotification;
+static void *notify_text(void *data) {
+    TextNotification *notification = data;
+    text_counted_callback(notification->callback, notification->data, notification->mode);
+    notification->release(notification->data);
+    return NULL;
+}
+void text_notify(void (*callback)(const char *, int, void *), void *data, void (*release)(void *), int mode) {
+    TextNotification notification = {callback, data, release, mode};
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, notify_text, &notification) != 0) abort();
+    if (pthread_join(thread, NULL) != 0) abort();
+}
+void text_wait(void (*callback)(const char *, int, void *), void *data, void (*release)(void *), int mode) {
+    text_notify(callback, data, release, mode);
+}
+typedef struct MixedTextNotification {
+    void (*callback)(const char *, const char *, int, void *);
+    void *data;
+    void (*release)(void *);
+    int mode;
+} MixedTextNotification;
+static void *notify_mixed_text(void *data) {
+    MixedTextNotification *notification = data;
+    char legacy[] = "cold";
+    char text[] = {'a', 0, (char)0xc3, (char)0xa9};
+    notification->callback(legacy, text,
+        notification->mode == 2 ? -1 : notification->mode == 3 ? INT_MAX : (int)sizeof(text),
+        notification->data);
+    memset(legacy, 'x', sizeof(legacy));
+    memset(text, 'x', sizeof(text));
+    notification->release(notification->data);
+    return NULL;
+}
+void text_mixed_notify(void (*callback)(const char *, const char *, int, void *), void *data, void (*release)(void *), int mode) {
+    MixedTextNotification notification = {callback, data, release, mode};
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, notify_mixed_text, &notification) != 0) abort();
+    if (pthread_join(thread, NULL) != 0) abort();
 }
 void text_out(char **text, int *length) {
     static const char source[] = {'a', 0, (char)0xc3, (char)0xa9};

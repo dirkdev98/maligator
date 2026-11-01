@@ -33,6 +33,11 @@ import {
 	text_inout_copy_async,
 	text_inout_fixed,
 	text_inout_fixed_async,
+	text_notify,
+	text_notify_async,
+	text_wait_async,
+	text_mixed_notify,
+	text_mixed_notify_async,
 } from "maligator:ffi/text";
 
 function check(value: boolean, message: string): void {
@@ -240,4 +245,63 @@ try {
 	sameFailure = error === failure;
 }
 check(sameFailure && text_live() === 0, "async callback failure releases out text");
+for (const [mode, expectedText] of [
+	[0, "a\0é"],
+	[1, null],
+	[4, ""],
+] as const) {
+	const notified = await new Promise<string | null>((resolve) => {
+		text_notify(resolve, mode);
+	});
+	check(
+		notified === expectedText,
+		"notifications own an exact UTF-8 copy after C overwrites its source",
+	);
+	let waited: string | null | undefined;
+	await text_wait_async((value) => {
+		waited = value;
+	}, mode);
+	check(
+		waited === expectedText,
+		"waiting callbacks borrow counted text until conversion",
+	);
+}
+for (const deliver of [text_notify_async, text_wait_async]) {
+	for (const mode of [2, 3]) {
+		let rejected = false;
+		let calls = 0;
+		try {
+			await deliver(() => {
+				calls++;
+			}, mode);
+		} catch (error) {
+			rejected = error instanceof RangeError;
+		}
+		check(
+			rejected && calls === 0,
+			"invalid foreign lengths reject before copying or entering JavaScript",
+		);
+	}
+}
+const mixed = await new Promise<readonly [string | null, string | null]>((resolve) => {
+	text_mixed_notify((legacy, counted) => {
+		resolve([legacy, counted]);
+	}, 0);
+});
+check(
+	mixed[0] === "cold" && mixed[1] === "a\0é",
+	"legacy and counted copies have independent ownership",
+);
+for (const mode of [2, 3]) {
+	let rejected = false;
+	let called = false;
+	try {
+		await text_mixed_notify_async(() => {
+			called = true;
+		}, mode);
+	} catch (error) {
+		rejected = error instanceof RangeError;
+	}
+	check(rejected && !called, "a failed counted copy also retires earlier legacy copies");
+}
 console.log("counted strings passed");

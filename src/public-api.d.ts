@@ -144,6 +144,7 @@ export interface MaligatorFfiValueFacts {
 	/** UTF-8 text in a char pointer. `true` uses NUL termination; a length names
 	 * its byte count and permits embedded NUL bytes. Out strings use a count pointer C
 	 * fills. Inout strings borrow an encoding through conversion of the updated value.
+	 * Queued notifications copy the counted bytes; waiting callbacks borrow them.
 	 */
 	string?: boolean | MaligatorFfiCount;
 	/** Bytes passed as an `ArrayBuffer` or a view, or returned as a new `Uint8Array`. */

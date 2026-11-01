@@ -345,6 +345,26 @@ MalValue mal_ffi_from_string_length(MalVm *vm, const char *value, size_t length)
     return mal_value_from_string(string);
 }
 
+MalFfiCopyStatus mal_ffi_copy_callback_bytes(
+    const void *source, uint64_t length, bool text, void **out) {
+    *out = nullptr;
+    if (source == nullptr) return MAL_FFI_COPY_OK;
+    uint64_t limit = text ? 3 * MAL_STRING_MAX_CODE_UNITS : INT32_MAX;
+    if (length > limit || length > SIZE_MAX) return MAL_FFI_COPY_RANGE;
+    void *copy = malloc(length == 0 ? 1 : (size_t) length);
+    if (copy == nullptr) return MAL_FFI_COPY_MEMORY;
+    memcpy(copy, source, (size_t) length);
+    *out = copy;
+    return MAL_FFI_COPY_OK;
+}
+
+void mal_ffi_callback_copy_error(MalVm *vm, MalFfiCopyStatus status) {
+    if (status == MAL_FFI_COPY_RANGE)
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            (const byte *) "C callback byte count is out of range");
+    else if (status == MAL_FFI_COPY_MEMORY) mal_vm_throw_allocation_error(vm);
+}
+
 MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length) {
     if (length > UINT32_MAX) {
         mal_vm_throw_error(

@@ -923,10 +923,6 @@ class Planner {
 		for (const key of Object.keys(facts)) {
 			const position = Number(key) - 1;
 			const stated = facts[key]!;
-			if (typeof stated.string === "object" && queued)
-				throw new FfiError(
-					`${at}.callback.params.${key}: counted queued callback strings are not supported`,
-				);
 			if (position >= target.params.length) {
 				throw new FfiError(
 					`${at}.callback.params.${key}: the callback has no such parameter`,
@@ -952,6 +948,10 @@ class Planner {
 				count < 0 || count >= target.params.length
 					? undefined
 					: resolveCType(this.#model, target.params[count]!);
+			if (countType?.kind === "integer" && "gap" in this.#integer(countType.name))
+				throw new FfiError(
+					`${at}.callback.params.${String(index + 1)}: a callback count needs a supported integer of at most 64 bits`,
+				);
 			if (countType?.kind !== "integer" || count === index || counters.has(count)) {
 				throw new FfiError(
 					`${at}.callback.params.${String(index + 1)}: length '${counted.length}' is not another integer parameter's 1-based position`,
@@ -1483,6 +1483,10 @@ class Planner {
 			if (counted !== undefined || resultCount === index) {
 				const pointer = resolved.kind === "pointer";
 				const countType = pointer ? resolveCType(this.#model, resolved.to) : resolved;
+				if (countType.kind === "integer" && "gap" in this.#integer(countType.name))
+					throw new FfiError(
+						`${where(at)}: a count needs a supported integer of at most 64 bits`,
+					);
 				if (
 					countType.kind !== "integer" ||
 					(pointer &&

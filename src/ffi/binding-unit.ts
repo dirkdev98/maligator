@@ -1210,6 +1210,13 @@ class BindingWriter {
 				(param.kind === "string" || param.kind === "bytes")
 			);
 		};
+		const checkedCopies =
+			!waiting &&
+			value.params.some(
+				(param) =>
+					typeof param === "object" &&
+					(param.kind === "bytes" || (param.kind === "string" && param.counted)),
+			);
 		const copies = type.params.flatMap((_, index) => {
 			const param = value.params[index];
 			const field = `mal_message->mal_c${String(index)}`;
@@ -1221,10 +1228,17 @@ class BindingWriter {
 			) {
 				return [`${field} = ${source};`];
 			}
-			const size =
-				param.kind === "string"
-					? `__builtin_strlen((const char *) ${source}) + 1`
-					: `(size_t) mal_c${String(value.counts[index]!)}`;
+			if (param.kind === "bytes" || param.counted) {
+				const copy = `mal_copy_${String(index)}`;
+				const status = `mal_copy_status_${String(index)}`;
+				return [
+					`void *${copy};`,
+					`MalFfiCopyStatus ${status} = mal_ffi_copy_callback_bytes(${source}, (uint64_t) mal_c${String(value.counts[index]!)}, ${param.kind === "string"}, &${copy});`,
+					`${field} = ${copy};`,
+					`if (mal_message->mal_copy_error == MAL_FFI_COPY_OK) mal_message->mal_copy_error = ${status};`,
+				];
+			}
+			const size = `__builtin_strlen((const char *) ${source}) + 1`;
 			const copy = `mal_copy_${String(index)}`;
 			// A zero-length buffer still gets a pointer, so it converts as empty, not null.
 			return [
@@ -1244,6 +1258,7 @@ class BindingWriter {
 		return [
 			"",
 			`typedef struct ${message} {`,
+			...(checkedCopies ? ["\tMalFfiCopyStatus mal_copy_error;"] : []),
 			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")};`] : []),
 			// Locals' declarations drop a top-level `const`, which the copies assign.
 			...type.params.map(
@@ -1264,6 +1279,14 @@ class BindingWriter {
 			"\t(void) vm;",
 			`\t${message} *mal_message = mal_data;`,
 			"\t(void) mal_message;",
+			...(checkedCopies
+				? [
+						"\tif (mal_message->mal_copy_error != MAL_FFI_COPY_OK) {",
+						"\t\tmal_ffi_callback_copy_error(vm, mal_message->mal_copy_error);",
+						"\t\treturn;",
+						"\t}",
+					]
+				: []),
 			`\t${returns ? "mal_message->mal_return = " : ""}${name}_run(${["mal_callback", ...args.map((arg) => `mal_message->${arg}`)].join(", ")});`,
 			"}",
 			"",
@@ -1277,6 +1300,7 @@ class BindingWriter {
 			`\t\t${message} *mal_message = malloc(sizeof(*mal_message));`,
 			"\t\tif (mal_message != nullptr) {",
 			"\t\t\tbool mal_ok = true;",
+			...(checkedCopies ? ["\t\t\tmal_message->mal_copy_error = MAL_FFI_COPY_OK;"] : []),
 			...copies.map((line) => `\t\t\t${line}`),
 			"\t\t\tif (!mal_ok) {",
 			`\t\t\t\t${name}_free(mal_message);`,

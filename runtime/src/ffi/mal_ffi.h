@@ -351,6 +351,16 @@ MalValue mal_ffi_from_uint64(MalVm *vm, uint64_t value);
 MalValue mal_ffi_from_string(MalVm *vm, const char *value);
 /** Copy exactly length UTF-8 bytes, replacing invalid sequences and preserving NULs. */
 MalValue mal_ffi_from_string_length(MalVm *vm, const char *value, size_t length);
+typedef enum MalFfiCopyStatus {
+    MAL_FFI_COPY_OK,
+    MAL_FFI_COPY_RANGE,
+    MAL_FFI_COPY_MEMORY,
+} MalFfiCopyStatus;
+/** Copy a counted callback argument on its producer thread without touching the VM. */
+MalFfiCopyStatus mal_ffi_copy_callback_bytes(
+    const void *source, uint64_t length, bool text, void **out);
+/** Report a producer's copy failure when its message reaches the VM thread. */
+void mal_ffi_callback_copy_error(MalVm *vm, MalFfiCopyStatus status);
 /** Copy `length` bytes into a new Uint8Array. */
 MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length);
 /**

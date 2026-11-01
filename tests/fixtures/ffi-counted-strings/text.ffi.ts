@@ -5,6 +5,45 @@ export default {
 	headers: ["text.h"],
 	find: [{ includeDirs: ["."], sources: ["text.c"] }],
 	functions: {
+		text_mixed_notify: {
+			async: "text_mixed_notify_async",
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						queued: true,
+						params: { "2": { string: { length: "3" } } },
+					},
+				},
+			},
+		},
+		text_notify: {
+			async: "text_notify_async",
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						queued: true,
+						params: { "1": { string: { length: "2" } } },
+					},
+				},
+			},
+		},
+		text_wait: {
+			async: "text_wait_async",
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						queued: "wait",
+						params: { "1": { string: { length: "2" } } },
+					},
+				},
+			},
+		},
 		text_out: {
 			async: "text_out_async",
 			params: { text: { out: true, string: { length: "length" }, free: "text_free" } },

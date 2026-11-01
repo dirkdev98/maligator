@@ -108,25 +108,62 @@ describe("counted UTF-8 contracts", () => {
 			"export function text_counted_callback(callback: (arg1: string | null) => void, mode: number): void;",
 		);
 	});
-	it("rejects counted queued strings before generating a strlen-based copy", () => {
-		expect(() =>
-			planBindings(model, {
+	it.each([true, "wait"] as const)(
+		"declares counted queued strings with %s delivery",
+		(queued) => {
+			const plan = planBindings(model, {
 				types: {},
 				functions: {
-					text_counted_callback: {
+					text_notify: {
 						params: {
 							callback: {
 								callback: {
 									data: "data",
-									queued: true,
+									release: "release",
+									queued,
 									params: { "1": { string: { length: "2" } } },
 								},
 							},
 						},
 					},
 				},
+			});
+			expect(generateDeclarations([{ name: "text", plan }])).toContain(
+				"export function text_notify(callback: (arg1: string | null) => void, mode: number): void;",
+			);
+		},
+	);
+	it.each([undefined, true, "wait"] as const)(
+		"rejects a wider callback count before narrowing with %s delivery",
+		(queued) => {
+			expect(() =>
+				planBindings(model, {
+					types: {},
+					functions: {
+						text_wide_callback: {
+							params: {
+								callback: {
+									callback: {
+										data: "data",
+										release: "release",
+										queued,
+										params: { "1": { string: { length: "2" } } },
+									},
+								},
+							},
+						},
+					},
+				}),
+			).toThrow("supported integer of at most 64 bits");
+		},
+	);
+	it("rejects a wider result count before narrowing", () => {
+		expect(() =>
+			planBindings(model, {
+				types: {},
+				functions: { text_wide_result: { returns: { string: { length: "length" } } } },
 			}),
-		).toThrow("counted queued callback strings are not supported");
+		).toThrow("supported integer of at most 64 bits");
 	});
 	it.each([
 		{ string: { length: "length" }, bytes: { length: "length" } },
