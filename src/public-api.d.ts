@@ -167,9 +167,9 @@ export interface MaligatorFfiValueFacts {
 
 /**
  * A callback the library calls before the function returns, such as an iteration or
- * comparison function, until it releases the callback, or until the next call
- * replaces it. An exception it throws skips its later calls and rethrows when the C
- * function the library runs in returns.
+ * comparison function, until it releases the callback, until the next call
+ * replaces it, or to complete a handle's close. An exception it throws skips later
+ * calls and rethrows when the C function the library runs in returns.
  */
 export interface MaligatorFfiCallback {
 	/**
@@ -190,6 +190,12 @@ export interface MaligatorFfiCallback {
 	 * handle, each handle keeps its own callback until its resource is destroyed.
 	 */
 	replaced?: boolean;
+	/**
+	 * The input handle whose lifetime ends when this one-shot completion runs, by C
+	 * name or 1-based position. Its storage and retained buffers survive until then.
+	 * The wrapper is closed before JavaScript runs; foreign completions queue for it.
+	 */
+	closes?: string;
 	/**
 	 * For a callback without a `void *` parameter: the function that returns `data`
 	 * from the callback's parameter at 1-based position `param`, such as

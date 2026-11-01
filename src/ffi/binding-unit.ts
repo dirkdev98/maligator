@@ -1046,14 +1046,18 @@ class BindingWriter {
 		// Handles the library lends belong to this invocation and close when it returns.
 		const lends = inputs.some(
 			({ value: input }) =>
-				input.kind === "handle" ||
+				(input.kind === "handle" && value.closes === undefined) ||
 				(input.kind === "sequence" && input.of.kind === "handle"),
 		);
-		const keyParam = value.replaced?.keyParam;
+		const keyParam = value.closes?.keyParam ?? value.replaced?.keyParam;
 		const lookup = value.lookup;
 		// Without user data, a call-scoped callback is the one its call published.
-		const scoped = data < 0 && lookup === undefined && value.replaced === undefined;
-		const callback =
+		const scoped =
+			data < 0 &&
+			lookup === undefined &&
+			value.replaced === undefined &&
+			value.closes === undefined;
+		const routed =
 			data >= 0
 				? `mal_c${String(data)}`
 				: lookup !== undefined
@@ -1061,10 +1065,14 @@ class BindingWriter {
 					: scoped
 						? site!
 						: `mal_ffi_replaced(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`})`;
-		// A queued callback's body runs as `_run`, for calls on the VM thread and queued ones.
+		const callback =
+			value.closes === undefined
+				? routed
+				: `mal_ffi_close_take(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`}, ${data >= 0 || lookup !== undefined ? `(MalFfiCallback *) ${routed}` : "nullptr"})`;
 		// A queued callback's body runs as `_run` with the callback its entry found, for
 		// calls on the VM thread and queued ones, which must not look it up again.
 		const queued = value.queued === true;
+		const keyedLookup = value.replaced !== undefined && data < 0 && lookup === undefined;
 		const body = queued ? `${name}_run` : name;
 		const signature = [...(queued ? ["MalFfiCallback *mal_callback"] : []), ...params];
 		const lines = [
@@ -1074,14 +1082,15 @@ class BindingWriter {
 			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
 			...(scoped
 				? ["\tif (mal_callback == nullptr) mal_ffi_callback_lost();"]
-				: data < 0
+				: data < 0 || value.closes !== undefined
 					? [`\tif (mal_callback == nullptr) return${returns ? " mal_return" : ""};`]
 					: []),
 			...(value.kept
 				? [
+						...(keyedLookup && !queued ? [] : ["\tmal_ffi_callback_hold(mal_callback);"]),
 						"\tMalVm *vm = mal_ffi_callback_vm(mal_callback);",
 						// A library may call back after the VM is gone; it gets a zero result.
-						`\tif (vm == nullptr) return${returns ? " mal_return" : ""};`,
+						`\tif (vm == nullptr) { mal_ffi_callback_drop(mal_callback); return${returns ? " mal_return" : ""}; }`,
 					]
 				: ["\tMalVm *vm = mal_callback->vm;"]),
 			`\tstatic const MalFfiSite mal_site = { ${cString(owner)}, "callback result", nullptr };`,
@@ -1091,11 +1100,25 @@ class BindingWriter {
 			"\tMalFfiRoots mal_roots;",
 			`\tmal_ffi_root(&mal_roots, mal_values, ${count});`,
 			...(lends ? ["\tbool mal_lent = false;"] : []),
+			...(value.closes === undefined
+				? []
+				: [
+						...inputs.flatMap((input, position) =>
+							input.index === value.closes!.keyParam
+								? [
+										`\tmal_values[${String(position)}] = mal_ffi_close_value(mal_callback);`,
+									]
+								: [],
+						),
+						"\tmal_ffi_close_finish(mal_callback);",
+					]),
 			"\tif (mal_ffi_threw(vm)) goto mal_done;",
 			...(lends
 				? ["\tif (!(mal_lent = mal_ffi_callback_enter(vm))) goto mal_done;"]
 				: []),
 			...inputs.flatMap((input, position) => {
+				if (value.closes !== undefined && input.index === value.closes.keyParam)
+					return [];
 				const counted = value.counts[input.index];
 				return (
 					counted === undefined
@@ -1129,6 +1152,7 @@ class BindingWriter {
 			"mal_done:",
 			...(lends ? ["\tif (mal_lent) mal_ffi_callback_leave(vm);"] : []),
 			"\tmal_ffi_unroot(&mal_roots);",
+			...(value.kept ? ["\tmal_ffi_callback_drop(mal_callback);"] : []),
 			returns ? "\treturn mal_return;" : "\treturn;",
 			"}",
 		];
@@ -1148,6 +1172,10 @@ class BindingWriter {
 	): Array<string> {
 		const type = value.type;
 		const message = `MalFfiQueued_${name}`;
+		const keyedLookup =
+			value.replaced !== undefined &&
+			!value.params.includes("data") &&
+			value.lookup === undefined;
 		const args = type.params.map((_, index) => `mal_c${String(index)}`);
 		const owned = (index: number): boolean => {
 			const param = value.params[index];
@@ -1214,7 +1242,7 @@ class BindingWriter {
 			`\tMalFfiCallback *mal_callback = ${callback};`,
 			"\tif (mal_callback != nullptr && !mal_ffi_callback_here(mal_callback)) {",
 			// A lookup without user data already reserved the call under its lock.
-			...(value.params.includes("data")
+			...(value.params.includes("data") || value.closes !== undefined
 				? ["\t\tmal_ffi_callback_reserve(mal_callback);"]
 				: []),
 			`\t\t${message} *mal_message = malloc(sizeof(*mal_message));`,
@@ -1227,9 +1255,15 @@ class BindingWriter {
 			"\t\t\t}",
 			"\t\t}",
 			`\t\tmal_ffi_callback_queue(mal_callback, ${name}_queued, mal_message, ${name}_free);`,
+			...(value.closes === undefined ? [] : ["\t\tmal_ffi_close_return(mal_callback);"]),
+			...(keyedLookup ? ["\t\tmal_ffi_callback_drop(mal_callback);"] : []),
 			"\t\treturn;",
 			"\t}",
 			`\t${name}_run(${["mal_callback", ...args].join(", ")});`,
+			...(value.closes === undefined ? [] : ["\tmal_ffi_close_return(mal_callback);"]),
+			...(keyedLookup
+				? ["\tif (mal_callback != nullptr) mal_ffi_callback_drop(mal_callback);"]
+				: []),
 			"}",
 		];
 	}
@@ -1244,6 +1278,7 @@ class BindingWriter {
 		/** Kept callbacks, then the arguments that route to them, after the buffers. */
 		const keeps: Array<string> = [];
 		const kept: Array<string> = [];
+		const commits: Array<string> = [];
 		const keptCallback = (index: number): boolean => {
 			const entry = binding.arguments[index];
 			const value =
@@ -1411,6 +1446,8 @@ class BindingWriter {
 						const replaced = `mal_ffi_replaced_${name}_${String(index)}`;
 						if (value.replaced !== undefined)
 							trampolines.push("", `static MalFfiReplaced ${replaced};`);
+						else if (value.closes !== undefined)
+							trampolines.push("", `static char ${replaced};`);
 						trampolines.push(...this.#trampoline(trampoline, value, name, replaced));
 						locals.push(`MalFfiCallback *${context} = nullptr;`);
 						body.push(
@@ -1425,6 +1462,14 @@ class BindingWriter {
 							"}",
 						);
 						kept.push(`${local} = ${context} == nullptr ? nullptr : ${trampoline};`);
+						if (value.closes !== undefined) {
+							keeps.push(
+								`if (!mal_ffi_close_prepare(vm, ${context}, ${argument(value.closes.param)}, &${replaced}, ${site})) goto mal_done;`,
+							);
+							commits.push(
+								`mal_ffi_close_commit(${context}, &mal_handle_pin_${String(value.closes.key)});`,
+							);
+						}
 						if (value.replaced !== undefined) {
 							// The library drops the previous callback once this call returns.
 							const previous = `mal_previous_${String(index)}`;
@@ -1748,6 +1793,7 @@ class BindingWriter {
 			...buffers.map((line) => `\t${line}`),
 			...keeps.map((line) => `\t${line}`),
 			...kept.map((line) => `\t${line}`),
+			...commits.map((line) => `\t${line}`),
 			...after.map((line) => `\t${line}`),
 			"\tgoto mal_done;",
 			"mal_done:",

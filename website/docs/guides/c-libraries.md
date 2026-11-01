@@ -316,7 +316,7 @@ functions: {
 },
 ```
 
-Without `release`, the library may call the function only until the C function returns, as iteration and comparison functions do. An exception in the callback skips its remaining calls and rethrows when the C function returns. Such a callback binds without `data` too, as `qsort`'s comparator does: `callback: {}`.
+Without a retention fact, the library may call the function only until the C function returns, as iteration and comparison functions do. An exception in the callback skips its remaining calls and rethrows when the C function returns. Such a callback binds without `data` too, as `qsort`'s comparator does: `callback: {}`.
 
 `release` names the `void (*)(void *)` parameter that takes the destructor for `data`, for a library that keeps the callback, such as SQLite's `xDestroy`. The library may call the function until it calls the destructor, and an exception rethrows from the library call that triggered it.
 
@@ -329,6 +329,24 @@ functions: {
 ```
 
 When the setter's first parameter is a handle, each handle keeps its own callback until its resource is destroyed. Without `data`, the callback must receive that handle, as GLFW's window callbacks do. With `nullable`, `null` removes the callback. A result that is the replaced callback, or with `data` its user data, is dropped.
+
+`closes` names the input handle released by a one-shot completion, such as libuv's
+`uv_close`. Both the registration function and completion return `void`:
+
+```typescript native/uv.ffi.ts
+uv_close: { params: { close_cb: { callback: { closes: "handle" } } } },
+```
+
+The callback and handle are nonnullable. The callback receives the closing handle
+or routes through `data`; other arguments must be safe to copy. Foreign completions
+queue for the program's thread, so the program needs an event loop. Further C calls
+and disposal reject the handle while close is pending. Completion receives the same
+wrapper, already closed, and its retained buffers can then be transferred. Caller
+storage and backing bytes remain alive through the native completion even after VM
+teardown; detached completions release native ownership without running JavaScript.
+The library must invoke completion exactly once and keep the resource valid until
+then. `closes` extends a callback loan through completion and cannot accompany
+`release` or `replaced`.
 
 `lookup` names the function that returns `data` for a callback without a `void *` parameter, and the 1-based position of the callback parameter it takes. SQLite's user functions read it with `sqlite3_user_data` from their `sqlite3_context *`:
 

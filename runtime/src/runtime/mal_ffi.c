@@ -409,6 +409,19 @@ typedef struct MalFfiHandleObject {
     u64 scope;
 } MalFfiHandleObject;
 
+typedef struct MalFfiClose {
+    struct MalFfiClose *next;
+    const void *site;
+    MalFfiCallback *callback;
+    void *key;
+    MalValue handle;
+    void *storage;
+    MalArrayBufferStoreLease **stores;
+    i32 store_count;
+    u64 callback_identity;
+    bool committed;
+} MalFfiClose;
+
 /** A kept callback; trampolines receive a pointer to `callback`, its first member. */
 typedef struct MalFfiKept {
     MalFfiCallback callback;
@@ -426,10 +439,17 @@ typedef struct MalFfiKept {
     _Atomic u32 waiting;
     /** Queued messages can outlive both VM detach and C's final release. */
     _Atomic u32 references;
+    MalFfiClose *close;
 } MalFfiKept;
 
+static void ffi_close_free(MalFfiClose *close);
+static void ffi_close_detach(MalFfiKept *kept);
+
 static void ffi_kept_unref(MalFfiKept *kept) {
-    if (atomic_fetch_sub_explicit(&kept->references, 1, memory_order_acq_rel) == 1) free(kept);
+    if (atomic_fetch_sub_explicit(&kept->references, 1, memory_order_acq_rel) == 1) {
+        ffi_close_free(kept->close);
+        free(kept);
+    }
 }
 
 /**
@@ -486,6 +506,7 @@ struct MalFfiState {
  * the lock while the context still names its VM, and teardown detaches under it.
  */
 static pthread_mutex_t ffi_queue_lock = PTHREAD_MUTEX_INITIALIZER;
+static MalFfiClose *ffi_closes;
 
 static void ffi_state_free(MalVm *vm) {
     MalFfiState *state = vm->ffi;
@@ -497,14 +518,24 @@ static void ffi_state_free(MalVm *vm) {
     // Libraries may still hold kept callbacks and release them later: detach instead
     // of freeing, so a late call finds no VM and a late release frees the context.
     pthread_mutex_lock(&ffi_queue_lock);
+    MalFfiKept *retired = nullptr;
     for (MalFfiKept *kept = state->kept; kept != nullptr;) {
         MalFfiKept *next = kept->next;
+        ffi_close_detach(kept);
         kept->callback.vm = nullptr;
         // A live VM kept this released context rooted until its queued calls retired.
-        if (kept->released) ffi_kept_unref(kept);
+        if (kept->released) {
+            kept->next = retired;
+            retired = kept;
+        }
         kept = next;
     }
     pthread_mutex_unlock(&ffi_queue_lock);
+    while (retired != nullptr) {
+        MalFfiKept *next = retired->next;
+        ffi_kept_unref(retired);
+        retired = next;
+    }
     // Contexts the library already released only wait for this VM; nothing holds them.
     MalFfiKept *pending = atomic_exchange(&state->pending_releases, nullptr);
     while (pending != nullptr) {
@@ -933,6 +964,7 @@ static void ffi_release_now(MalFfiKept *kept) {
         }
         ffi_inbox_leave(vm);
     }
+    ffi_close_detach(kept);
     if (vm != nullptr) {
         MalFfiState *state = vm->ffi;
         MalValue array;
@@ -1226,9 +1258,18 @@ MalVm *mal_ffi_callback_vm(MalFfiCallback *callback) {
     return kept->callback.vm;
 }
 
+void mal_ffi_callback_hold(MalFfiCallback *callback) {
+    atomic_fetch_add_explicit(&((MalFfiKept *) callback)->references, 1, memory_order_relaxed);
+}
+
+void mal_ffi_callback_drop(MalFfiCallback *callback) {
+    ffi_kept_unref((MalFfiKept *) callback);
+}
+
 typedef struct MalFfiReplacedEntry {
     void *key;
     MalFfiKept *kept;
+    u64 identity;
 } MalFfiReplacedEntry;
 
 /**
@@ -1241,6 +1282,8 @@ static pthread_mutex_t ffi_replaced_lock = PTHREAD_MUTEX_INITIALIZER;
 static MalFfiReplaced *ffi_replaced_sites;
 /** Entries keyed by a handle; destroying a handle skips the scan while there are none. */
 static _Atomic usize ffi_replaced_keyed;
+/** Registration order separates callbacks of resources that reuse an address. */
+static u64 ffi_replaced_identity;
 
 static MalFfiReplacedEntry *ffi_replaced_find(MalFfiReplaced *site, void *key) {
     MalFfiReplacedEntry *entries = site->entries;
@@ -1263,7 +1306,10 @@ bool mal_ffi_replace(
     MalFfiReplacedEntry *entry = ffi_replaced_find(site, key);
     *previous = entry == nullptr ? nullptr : &entry->kept->callback;
     if (entry != nullptr && callback == nullptr) ffi_replaced_remove(site, entry);
-    else if (entry != nullptr) entry->kept = (MalFfiKept *) callback;
+    else if (entry != nullptr) {
+        entry->kept = (MalFfiKept *) callback;
+        entry->identity = ++ffi_replaced_identity;
+    }
     else if (callback != nullptr) {
         if (site->count == site->capacity) {
             usize capacity = site->capacity == 0 ? 4 : site->capacity * 2;
@@ -1280,7 +1326,7 @@ bool mal_ffi_replace(
             site->capacity = capacity;
         }
         ((MalFfiReplacedEntry *) site->entries)[site->count++] =
-            (MalFfiReplacedEntry) {key, (MalFfiKept *) callback};
+            (MalFfiReplacedEntry) {key, (MalFfiKept *) callback, ++ffi_replaced_identity};
         if (key != nullptr) ffi_replaced_keyed++;
     }
     pthread_mutex_unlock(&ffi_replaced_lock);
@@ -1291,6 +1337,8 @@ MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key) {
     pthread_mutex_lock(&ffi_replaced_lock);
     MalFfiReplacedEntry *entry = ffi_replaced_find(site, key);
     MalFfiKept *kept = entry == nullptr ? nullptr : entry->kept;
+    if (kept != nullptr)
+        atomic_fetch_add_explicit(&kept->references, 1, memory_order_relaxed);
     // Checked under the lock: the owning thread may release the context right after.
     bool foreign = kept != nullptr && !pthread_equal(kept->thread, pthread_self());
     bool live = kept != nullptr && kept->callback.vm != nullptr;
@@ -1307,7 +1355,7 @@ MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key) {
 }
 
 /** Release the callbacks kept for a handle whose resource was just destroyed. */
-static void ffi_replaced_drop(void *key) {
+static void ffi_replaced_drop_before(void *key, u64 identity) {
     if (key == nullptr || atomic_load_explicit(&ffi_replaced_keyed, memory_order_relaxed) == 0) {
         return;
     }
@@ -1317,7 +1365,7 @@ static void ffi_replaced_drop(void *key) {
         for (MalFfiReplaced *site = ffi_replaced_sites; site != nullptr && kept == nullptr;
              site = site->next) {
             MalFfiReplacedEntry *entry = ffi_replaced_find(site, key);
-            if (entry == nullptr) continue;
+            if (entry == nullptr || entry->identity > identity) continue;
             kept = entry->kept;
             ffi_replaced_remove(site, entry);
         }
@@ -1326,6 +1374,10 @@ static void ffi_replaced_drop(void *key) {
         if (kept == nullptr) return;
         mal_ffi_release(kept);
     }
+}
+
+static void ffi_replaced_drop(void *key) {
+    ffi_replaced_drop_before(key, UINT64_MAX);
 }
 
 /** A queued call of a kept callback from another thread, or with no `run`, its release. */
@@ -1500,6 +1552,132 @@ static void ffi_handle_forget(MalFfiHandleObject *handle) {
         free(handle->value);
     }
     handle->value = nullptr;
+}
+
+static void ffi_close_free(MalFfiClose *close) {
+    if (close == nullptr) return;
+    free(close->storage);
+    for (i32 index = 0; index < close->store_count; index++)
+        mal_array_buffer_store_release(close->stores[index]);
+    free(close->stores);
+    free(close);
+}
+
+/** Retire VM ownership before publishing detachment; native ownership remains. */
+static void ffi_close_detach(MalFfiKept *kept) {
+    MalFfiClose *close = kept->close;
+    if (close == nullptr || !close->committed || mal_value_is_undefined(close->handle)) return;
+    MalFfiHandleObject *handle = ffi_handle(close->handle);
+    if (handle->value == close->key) ffi_handle_forget(handle);
+    else close->key = nullptr;
+    handle->closing = false;
+    handle->operation = nullptr;
+    mal_ffi_unpin_handle(handle);
+    close->handle = mal_value_new_undefined();
+}
+
+bool mal_ffi_close_prepare(
+    MalVm *vm, MalFfiCallback *callback, MalValue value, const void *site,
+    const MalFfiSite *error) {
+    MalFfiHandleObject *handle = ffi_handle(value);
+    if (handle == nullptr || handle->value == nullptr || handle->pins != 1 || handle->closing)
+        return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, error,
+            "a handle no other C call is using");
+    MalFfiClose *close = calloc(1, sizeof(*close));
+    if (close == nullptr) return mal_ffi_out_of_memory(vm);
+    close->site = site;
+    close->callback = callback;
+    close->key = handle->value;
+    close->handle = value;
+    if (handle->retained != nullptr) {
+        close->stores = calloc((usize) handle->type->managed_field_count, sizeof(*close->stores));
+        if (close->stores == nullptr) {
+            ffi_close_free(close);
+            return mal_ffi_out_of_memory(vm);
+        }
+        for (i32 index = 0; index < handle->type->managed_field_count; index++) {
+            MalFfiRetainedField *field = &handle->retained[index];
+            if (field->pin == nullptr) continue;
+            MalArrayBufferStoreLease *lease = mal_array_buffer_object_retain_store(
+                mal_value_to_array_buffer_object(field->buffer));
+            if (lease == nullptr) {
+                ffi_close_free(close);
+                return mal_ffi_out_of_memory(vm);
+            }
+            close->stores[close->store_count++] = lease;
+        }
+    }
+    MalValue roots[3] = {value, callback->function, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    roots[2] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    bool ok = !mal_ffi_threw(vm)
+        && mal_ffi_set_element(vm, roots[2], 0, roots[0])
+        && mal_ffi_set_element(vm, roots[2], 1, roots[1]);
+    MalValue holder;
+    if (ok) ok = ffi_prepared(vm, FFI_KEPT_IDENTITY, &holder)
+        && mal_object_set(mal_value_to_object(holder), mal_key_index(((MalFfiKept *) callback)->slot), roots[2]);
+    mal_gc_unroot(&root);
+    if (!ok) {
+        ffi_close_free(close);
+        return false;
+    }
+    ((MalFfiKept *) callback)->close = close;
+    return true;
+}
+
+void mal_ffi_close_commit(MalFfiCallback *callback, void **pin) {
+    MalFfiClose *close = ((MalFfiKept *) callback)->close;
+    MalFfiHandleObject *handle = *pin;
+    handle->closing = true;
+    handle->scope = 0;
+    handle->operation = nullptr;
+    if (handle->owns_storage) {
+        close->storage = handle->value;
+        handle->owns_storage = false;
+    }
+    *pin = nullptr;
+    close->committed = true;
+    pthread_mutex_lock(&ffi_replaced_lock);
+    close->callback_identity = ffi_replaced_identity;
+    pthread_mutex_unlock(&ffi_replaced_lock);
+    pthread_mutex_lock(&ffi_queue_lock);
+    close->next = ffi_closes;
+    ffi_closes = close;
+    pthread_mutex_unlock(&ffi_queue_lock);
+}
+
+MalFfiCallback *mal_ffi_close_take(const void *site, void *key, MalFfiCallback *data) {
+    pthread_mutex_lock(&ffi_queue_lock);
+    MalFfiClose **entry = &ffi_closes;
+    while (*entry != nullptr && !((*entry)->site == site
+        && (data != nullptr ? (*entry)->callback == data : (*entry)->key == key)))
+        entry = &(*entry)->next;
+    MalFfiClose *close = *entry;
+    MalFfiCallback *callback = nullptr;
+    if (close != nullptr) {
+        *entry = close->next;
+        key = close->key;
+        callback = close->callback;
+        atomic_fetch_add_explicit(&((MalFfiKept *) callback)->references, 1, memory_order_relaxed);
+    }
+    pthread_mutex_unlock(&ffi_queue_lock);
+    if (close != nullptr) ffi_replaced_drop_before(key, close->callback_identity);
+    return callback;
+}
+
+MalValue mal_ffi_close_value(MalFfiCallback *callback) {
+    return ((MalFfiKept *) callback)->close->handle;
+}
+
+void mal_ffi_close_finish(MalFfiCallback *callback) {
+    ffi_close_detach((MalFfiKept *) callback);
+}
+
+void mal_ffi_close_return(MalFfiCallback *callback) {
+    if (callback == nullptr) return;
+    mal_ffi_release(callback);
+    ffi_kept_unref((MalFfiKept *) callback);
 }
 
 static void ffi_handle_trace(MalHeapHeader *cell) {

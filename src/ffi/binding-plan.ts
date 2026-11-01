@@ -77,6 +77,11 @@ export type JsValue =
 			 * and, without user data, the callback parameter that passes that handle back.
 			 */
 			readonly replaced?: { readonly key?: number; readonly keyParam?: number };
+			readonly closes?: {
+				readonly param: number;
+				readonly key: number;
+				readonly keyParam?: number;
+			};
 			/** The C function that returns the user data from callback parameter `param`. */
 			readonly lookup?: { readonly function: string; readonly param: number };
 			/** Calls from other threads queue for the VM thread with copied arguments. */
@@ -894,7 +899,11 @@ class Planner {
 		at: string,
 	): Mapping {
 		const facts = callback.params ?? {};
-		const kept = callback.release !== undefined || callback.replaced === true;
+		const kept =
+			callback.release !== undefined ||
+			callback.replaced === true ||
+			callback.closes !== undefined;
+		const queued = callback.queued === true || callback.closes !== undefined;
 		// Whether the callback receives its user data as a `void *` parameter.
 		const routed = callback.data !== undefined && callback.lookup === undefined;
 		const target =
@@ -909,7 +918,7 @@ class Planner {
 		for (const key of Object.keys(facts)) {
 			const position = Number(key) - 1;
 			const stated = facts[key]!;
-			if (typeof stated.string === "object" && callback.queued === true)
+			if (typeof stated.string === "object" && queued)
 				throw new FfiError(
 					`${at}.callback.params.${key}: counted queued callback strings are not supported`,
 				);
@@ -977,19 +986,26 @@ class Planner {
 			callback.lookup === undefined
 				? undefined
 				: this.#lookup(target, callback.lookup, `${at}.callback.lookup`);
-		if (callback.queued === true) {
+		if (queued) {
 			// A queued call outlives the C caller's arguments, so it gets copies of values.
 			const copyable = params.every(
 				(param) =>
 					typeof param !== "object" ||
-					["boolean", "integer", "float", "bigint", "string", "bytes", "record"].includes(
-						param.kind,
-					),
+					[
+						"boolean",
+						"integer",
+						"float",
+						"bigint",
+						"string",
+						"bytes",
+						"record",
+						...(callback.closes === undefined ? [] : ["handle"]),
+					].includes(param.kind),
 			);
 			if (
 				resolveCType(this.#model, target.returns).kind !== "void" ||
 				!copyable ||
-				lookup !== undefined
+				(lookup !== undefined && callback.closes === undefined)
 			) {
 				throw new FfiError(
 					`${at}.callback.queued: a queued callback returns nothing, takes values, strings, buffers, and structs, and has no lookup`,
@@ -1016,7 +1032,7 @@ class Planner {
 				nullable,
 				kept,
 				...(lookup === undefined ? {} : { lookup }),
-				...(callback.queued === true ? { queued: true as const } : {}),
+				...(queued ? { queued: true as const } : {}),
 			},
 		};
 	}
@@ -1114,6 +1130,94 @@ class Planner {
 			},
 		};
 		return index;
+	}
+
+	#closingCallback(
+		declaration: CFunction,
+		factsAt: (index: number) => MaligatorFfiValueFacts,
+		args: ReadonlyArray<Argument>,
+		params: Array<MappedParameter>,
+		where: (at: string) => string,
+	): void {
+		const indexes = declaration.params.flatMap((_, index) =>
+			factsAt(index).callback?.closes === undefined ? [] : [index],
+		);
+		if (indexes.length === 0) return;
+		if (indexes.length > 1)
+			throw new FfiError(
+				`${where("params")}: a function takes at most one close completion`,
+			);
+		const index = indexes[0]!;
+		const at = where(
+			`params.${declaration.params[index]!.name ?? String(index + 1)}.callback.closes`,
+		);
+		const reference = factsAt(index).callback!.closes!;
+		const key = declaration.params.findIndex(
+			(param, position) => param.name === reference || String(position + 1) === reference,
+		);
+		const input = args[key];
+		const handle = input?.kind === "input" ? params[input.param]!.value : undefined;
+		const entry = args[index];
+		if (entry?.kind !== "input") return;
+		const param = params[entry.param]!;
+		if (param.value.kind !== "callback") return;
+		if (
+			input?.kind !== "input" ||
+			handle?.kind !== "handle" ||
+			handle.pass !== "pointer" ||
+			handle.nullable ||
+			param.value.nullable
+		)
+			throw new FfiError(
+				`${at}: a close completion needs a nonnullable pointer handle input and callback`,
+			);
+		if (resolveCType(this.#model, declaration.returns).kind !== "void")
+			throw new FfiError(`${at}: a close registration returns void`);
+		const handles = param.value.params.flatMap((value, position) =>
+			typeof value === "object" && value.kind === "handle" ? [{ value, position }] : [],
+		);
+		if (
+			handles.length > 1 ||
+			handles.some(
+				({ value }) =>
+					value.pass !== "pointer" ||
+					this.#handles.get(value.name)?.family !==
+						this.#handles.get(handle.name)?.family,
+			)
+		)
+			throw new FfiError(
+				`${at}: only the closing handle may be a completion pointer argument`,
+			);
+		const keyParam = handles[0]?.position;
+		if (
+			keyParam !== undefined &&
+			factsAt(index).callback?.params?.[String(keyParam + 1)]?.nullable === true
+		)
+			throw new FfiError(`${at}: the completion's closing handle is nonnullable`);
+		if (
+			keyParam === undefined &&
+			!param.value.params.includes("data") &&
+			param.value.lookup === undefined
+		)
+			throw new FfiError(
+				`${at}: a close completion needs its handle or user data to route it`,
+			);
+		params[entry.param] = {
+			...param,
+			value: {
+				...param.value,
+				params: param.value.params.map((value, position) =>
+					position === keyParam && typeof value === "object" && value.kind === "handle"
+						? { ...value, nullable: false }
+						: value,
+				),
+				closes: {
+					param: input.param,
+					key,
+					...(keyParam === undefined ? {} : { keyParam }),
+				},
+			},
+		};
 	}
 
 	/**
@@ -1455,6 +1559,8 @@ class Planner {
 			gaps.length === 0
 				? this.#replaced(declaration, factsAt, args, params, where)
 				: undefined;
+		if (gaps.length === 0)
+			this.#closingCallback(declaration, factsAt, args, params, where);
 		if (facts.returns.constant !== undefined) {
 			throw new FfiError(`${where("returns.constant")}: constant applies to parameters`);
 		}

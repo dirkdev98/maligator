@@ -282,6 +282,7 @@ function validateValueFacts(value: unknown, at: string): void {
 			"replaced",
 			"lookup",
 			"queued",
+			"closes",
 		]);
 		if (callback.lookup !== undefined) {
 			const lookup = callback.lookup;
@@ -310,12 +311,25 @@ function validateValueFacts(value: unknown, at: string): void {
 			"absent for a replaced callback, which the next call releases",
 		);
 		booleanField(callback, "queued", `${at}.callback`);
+		if (callback.closes !== undefined) {
+			expect(
+				callback.release === undefined && callback.replaced !== true,
+				`${at}.callback.closes`,
+				"a one-shot callback without release or replaced",
+			);
+			expect(
+				callback.queued !== false,
+				`${at}.callback.queued`,
+				"enabled for a close completion",
+			);
+		}
 		expect(
 			callback.queued !== true ||
 				callback.release !== undefined ||
-				callback.replaced === true,
+				callback.replaced === true ||
+				callback.closes !== undefined,
 			`${at}.callback.queued`,
-			"on a callback the library keeps, with release or replaced",
+			"on a callback the library keeps, with release, replaced, or closes",
 		);
 		if (callback.params !== undefined) {
 			expectObject(callback.params, `${at}.callback.params`);
@@ -333,7 +347,7 @@ function validateValueFacts(value: unknown, at: string): void {
 			`${at}.callback.data`,
 			"the parameter whose value the release destructor receives",
 		);
-		for (const key of ["data", "release"] as const) {
+		for (const key of ["data", "release", "closes"] as const) {
 			const reference = callback[key];
 			if (reference === undefined) continue;
 			expect(

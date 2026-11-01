@@ -383,6 +383,19 @@ typedef struct MalFfiCallback {
  * an allocation throw.
  */
 MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function);
+/** Prepare a one-shot close, rooting its handle and leasing retained backing stores. */
+bool mal_ffi_close_prepare(
+    MalVm *vm, MalFfiCallback *callback, MalValue handle, const void *site,
+    const MalFfiSite *error);
+/** Publish the close immediately before C; adopts the converted handle's pin. */
+void mal_ffi_close_commit(MalFfiCallback *callback, void **pin);
+/** Claim a completion once, retaining its context through the native callback frame. */
+MalFfiCallback *mal_ffi_close_take(const void *site, void *key, MalFfiCallback *data);
+MalValue mal_ffi_close_value(MalFfiCallback *callback);
+/** Invalidate the wrapper and retire VM pins before running completion JavaScript. */
+void mal_ffi_close_finish(MalFfiCallback *callback);
+/** Retire C's ownership and the execution reference acquired by close_take. */
+void mal_ffi_close_return(MalFfiCallback *callback);
 /**
  * The destructor a binding hands the library for a kept callback's user data. A
  * release from another thread, or from a destroy function the collector runs, is
@@ -395,6 +408,9 @@ void mal_ffi_release(void *data);
  * library calls back from another thread.
  */
 MalVm *mal_ffi_callback_vm(MalFfiCallback *callback);
+/** Keep a native invocation alive if completion retires its registry ownership. */
+void mal_ffi_callback_hold(MalFfiCallback *callback);
+void mal_ffi_callback_drop(MalFfiCallback *callback);
 /**
  * Abort for a callback without user data that arrives outside the call it was passed
  * to, or on another thread.
@@ -450,7 +466,9 @@ bool mal_ffi_replace(
 /**
  * The callback `site` keeps for `key`, for a trampoline that receives no user data,
  * or null. When it belongs to a VM on another thread, a queued callback's call is
- * reserved, and any other aborts.
+ * reserved, and any other aborts. A nonnull result owns an execution reference
+ * that the entry wrapper retires with `mal_ffi_callback_drop` after returning or
+ * handing its separate queued reservation to the inbox.
  */
 MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key);
 /**

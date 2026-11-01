@@ -1920,8 +1920,6 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
       user code without callbacks).
 - [ ] Extend struct storage reuse to conditional loop updates and recurrences that
       expose a prior result to opaque calls before replacing it.
-- [ ] Retain caller-owned handle storage through asynchronous C close completion,
-      such as libuv's close callback.
 - [ ] Counted UTF-8 strings in queued callbacks, out/inout parameters, and state struct
       fields need explicit count and lifetime handling.
 - [ ] Import macros referenced by facts from transitive headers outside the declared
