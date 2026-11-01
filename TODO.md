@@ -1920,8 +1920,8 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 - [ ] Caller-allocated state structs with pointer fields, such as zlib's
       `z_stream` and libuv's handles, cannot be created or filled from JavaScript.
 - [ ] Extend `ffi check` with documentation evidence drift and sanitizer probes.
-- [ ] Headers that pull in large system headers exceed the self-hosted CLI's string
-      limit as one AST dump.
+- [ ] Read source comments and cached C models without decoding whole files into
+      strings. Individual clang declarations also still use one string each.
 
 # Actors, SMP, and embedding
 

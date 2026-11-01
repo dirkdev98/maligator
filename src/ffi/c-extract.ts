@@ -1,3 +1,4 @@
+import type { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
@@ -21,6 +22,7 @@ import type {
 import { resolveCType } from "./c-model.ts";
 import { C_FLOAT_NAMES, C_INTEGER_NAMES, parseCType, unnamedTagKey } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
+import { clangProbeDeclarations, visitClangDeclarations } from "./clang-ast.ts";
 import { FfiError } from "./ffi-error.ts";
 
 export interface CExtractionInput {
@@ -60,13 +62,12 @@ function innerNodes(node: JsonObject): Array<JsonObject> {
 function runCompiler(
 	input: CExtractionInput,
 	args: ReadonlyArray<string>,
-): { status: number | null; stdout: string; stderr: string } {
+): { status: number | null; stdout: Buffer; stderr: string } {
 	const result = spawnSync(
 		input.compiler.path,
 		toolArguments(input.compiler, [...args]),
 		{
 			env: input.environment,
-			encoding: "utf-8",
 			maxBuffer: 1 << 30,
 			stdio: ["ignore", "pipe", "pipe"],
 		},
@@ -74,7 +75,11 @@ function runCompiler(
 	if (result.error !== undefined) {
 		throw new FfiError(`cannot run ${input.compiler.path}: ${result.error.message}`);
 	}
-	return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+	return {
+		status: result.status,
+		stdout: result.stdout,
+		stderr: result.stderr.toString("utf8"),
+	};
 }
 
 function assertClang(compiler: ToolExecutable): void {
@@ -137,7 +142,11 @@ function preprocess(
 	const macros = new Map<string, PreprocessedMacro>();
 	let file = "";
 	let line = 0;
-	for (const text of result.stdout.split("\n")) {
+	for (let start = 0; start < result.stdout.length;) {
+		let end = result.stdout.indexOf(10, start);
+		if (end < 0) end = result.stdout.length;
+		const text = result.stdout.toString("utf8", start, end);
+		start = end + 1;
 		const marker = LINE_MARKER.exec(text);
 		if (marker !== null) {
 			const name = unescapeMarkerPath(marker[2]!);
@@ -208,7 +217,7 @@ function libraryFileFilter(
  * written location, in output order across the whole dump. Replaying that order
  * restores both on every location object as `$file` and `$line`.
  */
-function resolveLocations(root: unknown): void {
+function createLocationResolver(): (root: unknown) => void {
 	let file: string | undefined;
 	let line: number | undefined;
 	const bare = (location: unknown): void => {
@@ -245,7 +254,7 @@ function resolveLocations(root: unknown): void {
 			} else if (key !== "includedFrom") visit(value);
 		}
 	};
-	visit(root);
+	return visit;
 }
 
 interface NodeLocation {
@@ -489,12 +498,11 @@ interface Declarations {
 }
 
 function collectDeclarations(
-	ast: JsonObject,
+	topLevel: ReadonlyArray<JsonObject>,
 	cwd: string,
 	isLibraryFile: (file: string) => boolean,
 ): Declarations {
 	const documentation = new Documentation();
-	const topLevel = innerNodes(ast).filter((node) => node.isImplicit !== true);
 
 	// Spans first, so a declaration's documentation can see its later siblings too.
 	for (const node of topLevel) {
@@ -734,22 +742,6 @@ function balancedBody(body: string): boolean {
 	return quote === undefined && stack.length === 0;
 }
 
-/** Split clang's filtered JSON dump: pretty-printed top-level objects back to back. */
-function filteredDumpNodes(text: string): Array<JsonObject> {
-	const nodes: Array<JsonObject> = [];
-	let start = -1;
-	const lines = text.split("\n");
-	for (let index = 0; index < lines.length; index++) {
-		if (lines[index] === "{") start = index;
-		else if (lines[index] === "}" && start >= 0) {
-			const parsed: unknown = JSON.parse(lines.slice(start, index + 1).join("\n"));
-			if (isObject(parsed)) nodes.push(parsed);
-			start = -1;
-		}
-	}
-	return nodes;
-}
-
 function unescapeCString(literal: string): string | undefined {
 	const match = /^"((?:[^"\\]|\\.)*)"$/.exec(literal);
 	if (match === null) return undefined;
@@ -852,7 +844,7 @@ function probe(
 		probePath,
 	]);
 	const nodes = new Map<string, JsonObject>();
-	for (const node of filteredDumpNodes(result.stdout)) {
+	for (const node of clangProbeDeclarations(result.stdout)) {
 		if (typeof node.name === "string") nodes.set(node.name, node);
 	}
 
@@ -937,10 +929,21 @@ export function extractCModel(input: CExtractionInput): CModel {
 		if (dump.status !== 0) {
 			throw new FfiError(`the library headers do not compile:\n${dump.stderr.trim()}`);
 		}
-		const ast: unknown = JSON.parse(dump.stdout);
-		if (!isObject(ast)) throw new FfiError("clang produced an unexpected AST dump");
-		resolveLocations(ast);
-		const declarations = collectDeclarations(ast, cwd, isLibraryFile);
+		const nodes: Array<JsonObject> = [];
+		// Clang compresses locations across declarations, including function bodies we drop.
+		const resolveLocations = createLocationResolver();
+		visitClangDeclarations(dump.stdout, (node) => {
+			resolveLocations(node);
+			if (node.kind === "FunctionDecl") {
+				node.inner = innerNodes(node).filter(
+					(child) =>
+						child.kind === "ParmVarDecl" ||
+						(typeof child.kind === "string" && child.kind.endsWith("Attr")),
+				);
+			}
+			if (node.isImplicit !== true) nodes.push(node);
+		});
+		const declarations = collectDeclarations(nodes, cwd, isLibraryFile);
 
 		const candidates = [...preprocessed.macros.values()].filter(
 			(macro) =>
