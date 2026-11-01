@@ -211,8 +211,8 @@ export interface SkippedConstant {
 export interface BindingPlan {
 	readonly functions: ReadonlyArray<BoundFunction>;
 	/**
-	 * Whether a function hands the library a callback it keeps. Such a callback can run,
-	 * and throw, during any later call into the library.
+	 * Whether calls can reach a kept callback, including through shared C dependencies
+	 * of the configured libraries. It may run and throw during a later C call.
 	 */
 	readonly keepsCallbacks: boolean;
 	readonly unbound: ReadonlyArray<UnboundFunction>;

@@ -211,4 +211,23 @@ describe("C library bindings", () => {
 			EXPECTED_RESULTS,
 		);
 	}, 600_000);
+
+	it("honors kept callbacks reached through another C library", () => {
+		writeFileSync(
+			path.join(project, "cross-library.build.ts"),
+			`export default ${JSON.stringify({
+				entry: "cross-library.ts",
+				ffi: {
+					shapes: { contract: "shapes.ffi.ts" },
+					bridge: { contract: "bridge.ffi.ts" },
+				},
+			})};\n`,
+		);
+		const executed = cli(project, ["run", "--config", "cross-library.build.ts"]);
+		expect(outputLines(executed.stdout)).toEqual([
+			"bridge pin 6 TypeError 3 false",
+			"bridge released 3 0",
+			"bridge threw bridge failed",
+		]);
+	}, 300_000);
 });

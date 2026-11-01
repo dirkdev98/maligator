@@ -95,20 +95,24 @@ export function prepareLibraries(
 	config: ResolvedBuildConfig,
 	preparation: LibraryPreparation,
 ): PreparedLibraries {
-	const libraries = Object.keys(config.ffi)
+	const prepared = Object.keys(config.ffi)
 		.sort()
-		.map((name) => {
-			const prepared = prepareLibrary(config, name, preparation);
-			return {
-				...prepared,
-				unit: generateBindingUnit(
-					name,
-					prepared.contract.headers,
-					prepared.model,
-					prepared.plan,
-				),
-			};
-		});
+		.map((name) => prepareLibrary(config, name, preparation));
+	// A shared C dependency can call a callback registered through another library.
+	const keepsCallbacks = prepared.some((entry) => entry.plan.keepsCallbacks);
+	const libraries = prepared.map((entry) => {
+		const plan = { ...entry.plan, keepsCallbacks };
+		return {
+			...entry,
+			plan,
+			unit: generateBindingUnit(
+				entry.contract.name,
+				entry.contract.headers,
+				entry.model,
+				plan,
+			),
+		};
+	});
 	const dependencies = [
 		...new Set(
 			libraries.flatMap((entry) => [
