@@ -334,11 +334,22 @@ class SourceTexts {
 	lines(file: string): ReadonlyArray<string> {
 		let lines = this.#files.get(file);
 		if (lines === undefined) {
+			let data: Buffer | undefined;
 			try {
-				lines = readFileSync(file, "utf-8").split("\n");
+				data = readFileSync(file);
 			} catch {
-				lines = [];
+				data = undefined;
 			}
+			const decoded: Array<string> = [];
+			if (data !== undefined) {
+				for (let start = 0; start <= data.length;) {
+					let end = data.indexOf(10, start);
+					if (end < 0) end = data.length;
+					decoded.push(data.toString("utf8", start, end));
+					start = end + 1;
+				}
+			}
+			lines = decoded;
 			this.#files.set(file, lines);
 		}
 		return lines;

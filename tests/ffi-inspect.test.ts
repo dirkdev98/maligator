@@ -795,9 +795,9 @@ describe("C model cache", () => {
 					.split("\n")
 					.filter((line) => line.includes("-ast-dump")).length;
 
-			loadCModel(input);
+			const extracted = loadCModel(input);
 			const first = astDumps();
-			loadCModel(input);
+			expect(loadCModel(input)).toEqual(extracted);
 			expect(astDumps()).toBe(first);
 
 			appendFileSync(path.join(include, "shapes.h"), "int shapes_extra(int value);\n");

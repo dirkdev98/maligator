@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import type { Buffer } from "node:buffer";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -10,9 +11,10 @@ import {
 } from "../artifact-store.ts";
 import { maligatorCacheDirectory } from "../cache-root.ts";
 import { compilerProducerIdentity } from "../compiler-cache-identity.ts";
+import { writeSourceChunks } from "../generated-source.ts";
 import { extractCModel } from "./c-extract.ts";
 import type { CExtractionInput } from "./c-extract.ts";
-import type { CModel } from "./c-model.ts";
+import type { CEnum, CModel, CRecord, CTypedef } from "./c-model.ts";
 
 const STAGE = "ffi-header-model";
 
@@ -29,12 +31,14 @@ const HEADER_ENVIRONMENT = [
 	"MACOSX_DEPLOYMENT_TARGET",
 ] as const;
 
+interface Dependency {
+	readonly file: string;
+	readonly digest: string;
+}
+
 interface CachedModel {
 	/** Every file the headers read, with its content digest when the model was extracted. */
-	readonly dependencies: ReadonlyArray<{
-		readonly file: string;
-		readonly digest: string;
-	}>;
+	readonly dependencies: ReadonlyArray<Dependency>;
 	readonly model: CModel;
 }
 
@@ -46,25 +50,113 @@ function fileDigest(file: string): string | undefined {
 	}
 }
 
-/** JSON for a model: maps become entry lists and bigints tagged strings. */
-function encode(model: CModel): string {
-	return JSON.stringify(model, (_key, value: unknown) =>
-		value instanceof Map
-			? { $map: [...(value as Map<unknown, unknown>).entries()] }
-			: typeof value === "bigint"
-				? { $bigint: value.toString() }
-				: value,
-	);
+type CachedRow =
+	| ["target", CModel["target"]]
+	| ["header", CModel["headers"][number]]
+	| ["file", string]
+	| ["dependency", Dependency]
+	| ["function", CModel["functions"][number]]
+	| ["record", CRecord]
+	| ["enum", CEnum]
+	| ["typedef", CTypedef]
+	| ["macro", CModel["macros"][number]]
+	| ["untypedMacro", CModel["untypedMacros"][number]];
+
+/** Each row fits independently; the aggregate model never becomes one engine string. */
+function* encode(
+	model: CModel,
+	dependencies: ReadonlyArray<Dependency>,
+): Generator<string> {
+	for (const [kind, entries] of [
+		["target", [model.target]],
+		["header", model.headers],
+		["file", model.files],
+		["dependency", dependencies],
+		["function", model.functions],
+		["record", model.records.values()],
+		["enum", model.enums.values()],
+		["typedef", model.typedefs.values()],
+		["macro", model.macros],
+		["untypedMacro", model.untypedMacros],
+	] as const) {
+		for (const entry of entries) {
+			yield JSON.stringify([kind, entry], (_key, value: unknown) =>
+				typeof value === "bigint" ? { $bigint: value.toString() } : value,
+			);
+			yield "\n";
+		}
+	}
 }
 
-function decode(text: string): CachedModel {
-	return JSON.parse(text, (_key, value: unknown) => {
-		if (typeof value !== "object" || value === null) return value;
-		if ("$map" in value)
-			return new Map((value as { $map: Array<[unknown, unknown]> }).$map);
-		if ("$bigint" in value) return BigInt((value as { $bigint: string }).$bigint);
-		return value;
-	}) as CachedModel;
+function decode(data: Buffer): CachedModel {
+	let target: CModel["target"] | undefined;
+	const headers: Array<CModel["headers"][number]> = [];
+	const files: Array<string> = [];
+	const dependencies: Array<Dependency> = [];
+	const functions: Array<CModel["functions"][number]> = [];
+	const records = new Map<string, CRecord>();
+	const enums = new Map<string, CEnum>();
+	const typedefs = new Map<string, CTypedef>();
+	const macros: Array<CModel["macros"][number]> = [];
+	const untypedMacros: Array<CModel["untypedMacros"][number]> = [];
+	for (let start = 0; start < data.length;) {
+		let end = data.indexOf(10, start);
+		if (end < 0) end = data.length;
+		const row = JSON.parse(data.toString("utf8", start, end), (_key, value: unknown) => {
+			if (typeof value === "object" && value !== null && "$bigint" in value)
+				return BigInt((value as { $bigint: string }).$bigint);
+			return value;
+		}) as CachedRow;
+		start = end + 1;
+		switch (row[0]) {
+			case "target":
+				target = row[1];
+				break;
+			case "header":
+				headers.push(row[1]);
+				break;
+			case "file":
+				files.push(row[1]);
+				break;
+			case "dependency":
+				dependencies.push(row[1]);
+				break;
+			case "function":
+				functions.push(row[1]);
+				break;
+			case "record":
+				records.set(row[1].name, row[1]);
+				break;
+			case "enum":
+				enums.set(row[1].name, row[1]);
+				break;
+			case "typedef":
+				typedefs.set(row[1].name, row[1]);
+				break;
+			case "macro":
+				macros.push(row[1]);
+				break;
+			case "untypedMacro":
+				untypedMacros.push(row[1]);
+				break;
+		}
+	}
+	if (target === undefined) throw new Error("cached C model has no target");
+	return {
+		dependencies,
+		model: {
+			target,
+			headers,
+			files,
+			dependencies: dependencies.map(({ file }) => file),
+			functions,
+			records,
+			enums,
+			typedefs,
+			macros,
+			untypedMacros,
+		},
+	};
 }
 
 /**
@@ -75,7 +167,7 @@ function decode(text: string): CachedModel {
  */
 export function loadCModel(input: CExtractionInput): CModel {
 	const compiler = statSync(input.compiler.path);
-	const producer = compilerProducerIdentity(STAGE, 1);
+	const producer = compilerProducerIdentity(STAGE, 2);
 	const key = artifactActionKey(producer, {
 		compiler: {
 			path: input.compiler.path,
@@ -94,24 +186,23 @@ export function loadCModel(input: CExtractionInput): CModel {
 	const root = maligatorCacheDirectory();
 	const cached = readArtifactAction(root, STAGE, producer, key);
 	if (cached !== undefined) {
-		const entry = decode(readFileSync(artifactOutput(cached, "model.json").path, "utf8"));
+		const entry = decode(readFileSync(artifactOutput(cached, "model.jsonl").path));
 		if (entry.dependencies.every(({ file, digest }) => fileDigest(file) === digest)) {
 			return entry.model;
 		}
 	}
 	const model = extractCModel(input);
-	const dependencies = model.dependencies.flatMap((file) => {
+	const dependencies: Array<Dependency> = [];
+	for (const file of model.dependencies) {
 		const digest = fileDigest(file);
-		return digest === undefined ? [] : [{ file, digest }];
-	});
+		if (digest === undefined) return model;
+		dependencies.push({ file, digest });
+	}
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-model-"));
 	try {
-		const file = path.join(directory, "model.json");
-		writeFileSync(
-			file,
-			`{"dependencies":${JSON.stringify(dependencies)},"model":${encode(model)}}`,
-		);
-		publishArtifactAction(root, STAGE, producer, key, [{ name: "model.json", file }]);
+		const file = path.join(directory, "model.jsonl");
+		writeSourceChunks(file, encode(model, dependencies));
+		publishArtifactAction(root, STAGE, producer, key, [{ name: "model.jsonl", file }]);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}

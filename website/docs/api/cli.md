@@ -124,8 +124,9 @@ integers that JavaScript numbers cannot represent exactly. Type objects retain t
 transitive system types. The `facts` field carries the accepted contract facts.
 
 Header extraction decodes clang's AST declaration by declaration, so a large included
-system header does not require one large string. Individual declarations, source
-comment files and cached models remain subject to the native runtime's string limit.
+system header does not require one large string. Source files decode by line and
+cached models store declarations separately too. An individual declaration, source
+line or documentation block remains subject to the native runtime's string limit.
 
 ## ffi types {#ffi-types}
 
