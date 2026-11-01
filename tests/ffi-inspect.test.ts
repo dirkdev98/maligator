@@ -90,6 +90,46 @@ describe("ffi inspect", () => {
 		expect(text.stdout).toContain("shapes_path_length param 1 (path): struct ShapesPath");
 	});
 
+	it("exports unresolved declarations and accepted facts for contract authoring", () => {
+		expect(
+			shapes.model.records.find((entry) => entry.name === "ShapesPath"),
+		).toMatchObject({
+			library: true,
+			fields: [
+				{
+					name: "points",
+					type: { kind: "pointer", to: { kind: "typedef", name: "ShapesPoint" } },
+				},
+				{ name: "count", type: { kind: "integer", name: "int" } },
+			],
+		});
+		expect(
+			shapes.model.typedefs.find((entry) => entry.name === "ShapesReader")?.type,
+		).toMatchObject({
+			kind: "pointer",
+			to: { kind: "function", returns: { kind: "integer", name: "int" } },
+		});
+		expect(
+			shapes.model.enums.find((entry) => entry.name === "ShapesMode")?.constants,
+		).toContainEqual(expect.objectContaining({ name: "SHAPES_FILL", value: "1" }));
+		expect(
+			shapes.model.macros.find((entry) => entry.name === "SHAPES_BIG"),
+		).toMatchObject({
+			body: "0x100000000ULL",
+			value: "4294967296",
+		});
+		expect(shapes.facts).toEqual({
+			types: shapesContract.types,
+			functions: shapesContract.functions,
+		});
+		expect(
+			shapes.model.functions.find((entry) => entry.name === "shapes_log")?.variadic,
+		).toBe(true);
+		expect(shapes.model.typedefs.find((entry) => entry.name === "size_t")?.library).toBe(
+			false,
+		);
+	});
+
 	it("reports a variadic function as the variants the contract declares", () => {
 		expect(
 			shapes.functions

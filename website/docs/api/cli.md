@@ -111,10 +111,17 @@ maligator ffi inspect <library> [--json] [--config path] [--target rust-triple]
 
 Finds a C library declared under `ffi` in the build config, reads its headers with the target's clang, and reports how each declaration maps to JavaScript. Declarations that cannot map list the fact they need, and the report suggests facts that make more of them bind, in contract syntax. Requires clang, or Zig with `--target`.
 
-| Flag       | Behavior                                                                                                       |
-| ---------- | -------------------------------------------------------------------------------------------------------------- |
-| `--json`   | Print the complete report: discovery, each declaration with its C and TypeScript forms, gaps, suggested facts. |
-| `--target` | Read the headers for a cross-build target through Zig.                                                         |
+| Flag       | Behavior                                                                                                 |
+| ---------- | -------------------------------------------------------------------------------------------------------- |
+| `--json`   | Print discovery, structured C declarations, accepted facts, mapped signatures, gaps and suggested facts. |
+| `--target` | Read the headers for a cross-build target through Zig.                                                   |
+
+The JSON `model` contains the extracted functions, records, typedefs, enums and macros,
+including types that cannot bind and system types needed to resolve them. Declaration
+tables are arrays. Enum values and integer macro values are decimal strings, preserving
+integers that JavaScript numbers cannot represent exactly. Type objects retain their
+`kind`, pointer qualifiers and typedef names; `library` distinguishes library types from
+transitive system types. The `facts` field carries the accepted contract facts.
 
 ## ffi types {#ffi-types}
 

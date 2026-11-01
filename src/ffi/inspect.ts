@@ -1,8 +1,16 @@
 import * as path from "node:path";
 import type { BindingPlan, BoundFunction, Gap, JsValue } from "./binding-plan.ts";
-import type { CFunction, CModel, CTarget } from "./c-model.ts";
+import type {
+	CEnum,
+	CFunction,
+	CMacro,
+	CModel,
+	CRecord,
+	CTarget,
+	CTypedef,
+} from "./c-model.ts";
 import { formatCDeclaration } from "./c-type.ts";
-import type { LibraryContract } from "./contract.ts";
+import type { LibraryContract, LibraryFacts } from "./contract.ts";
 import type { LinkInput, ResolvedLibrary } from "./discovery.ts";
 import { suggestFacts } from "./suggest.ts";
 import type { SuggestedFacts } from "./suggest.ts";
@@ -28,6 +36,10 @@ export interface FfiInspection {
 	readonly target: CTarget;
 	readonly headers: ReadonlyArray<{ readonly spelling: string; readonly path: string }>;
 	readonly files: ReadonlyArray<string>;
+	/** Structured declarations, including unmapped and transitive system types. */
+	readonly model: CModelInspection;
+	/** Accepted contract facts, before naming and signature suggestions. */
+	readonly facts: LibraryFacts;
 	readonly summary: {
 		readonly functions: number;
 		readonly bound: number;
@@ -46,6 +58,48 @@ export interface FfiInspection {
 	}>;
 	/** Facts that would bind more functions, in contract shape, to review and merge. */
 	readonly suggestions: SuggestedFacts;
+}
+
+/** JSON keeps declaration maps as arrays and exact C integer values as decimal strings. */
+export interface CModelInspection extends Omit<
+	CModel,
+	"records" | "enums" | "typedefs" | "macros"
+> {
+	readonly records: ReadonlyArray<CRecord>;
+	readonly typedefs: ReadonlyArray<CTypedef>;
+	readonly enums: ReadonlyArray<
+		Omit<CEnum, "constants"> & {
+			readonly constants: ReadonlyArray<
+				Omit<CEnum["constants"][number], "value"> & { readonly value: string }
+			>;
+		}
+	>;
+	readonly macros: ReadonlyArray<
+		Omit<CMacro, "value"> & { readonly value?: number | string }
+	>;
+}
+
+function inspectModel(model: CModel): CModelInspection {
+	const byName = (left: { readonly name: string }, right: { readonly name: string }) =>
+		left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+	return {
+		...model,
+		records: [...model.records.values()].sort(byName),
+		typedefs: [...model.typedefs.values()].sort(byName),
+		enums: [...model.enums.values()].sort(byName).map((entry) => ({
+			...entry,
+			constants: entry.constants.map((constant) => ({
+				...constant,
+				value: constant.value.toString(),
+			})),
+		})),
+		macros: model.macros.map(({ value, ...macro }) => ({
+			...macro,
+			...(value === undefined
+				? {}
+				: { value: typeof value === "bigint" ? value.toString() : value }),
+		})),
+	};
 }
 
 export interface FunctionInspection {
@@ -349,6 +403,8 @@ export function inspectBindings(
 		target: model.target,
 		headers: model.headers,
 		files: model.files,
+		model: inspectModel(model),
+		facts: contract.facts,
 		summary: {
 			functions: functions.length,
 			bound: plan.functions.length,
