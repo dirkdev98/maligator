@@ -11,6 +11,17 @@
 extern size_t mal_gc_process_bytes(void);
 
 struct ResultResource { int value; };
+struct ResultManual { int value; };
+static int manuals_freed;
+ResultManual *result_manual_new(void) {
+    ResultManual *manual = malloc(sizeof(*manual));
+    if (manual == NULL) abort();
+    manual->value = 91;
+    return manual;
+}
+void result_manual_free(ResultManual *manual) { manuals_freed++; free(manual); }
+ResultStateBase *result_state_base(ResultState *state) { return &state->base; }
+int result_state_tag(ResultStateBase *state) { return state->tag; }
 static _Atomic int resources_freed;
 ResultResource *result_resource_new(int value) {
     ResultResource *resource = malloc(sizeof(*resource));
@@ -22,6 +33,8 @@ void result_resource_free(ResultResource *resource) {
     atomic_fetch_add(&resources_freed, 1);
     free(resource);
 }
+ResultResource *result_resource_borrow(int value) { return result_resource_new(value); }
+ResultResource *result_resource_own(ResultResource *resource) { return resource; }
 int result_resource_value(ResultResource *resource) { return resource->value; }
 int result_resource_freed(void) { return atomic_load(&resources_freed); }
 ResultResource *result_handle(ResultResource *(*callback)(int, void *), void *data) {
@@ -248,3 +261,98 @@ static void retained_after_vm(void) {
     result_retained_bytes_clear();
 }
 void result_retained_after_vm(void) { if (atexit(retained_after_vm) != 0) abort(); }
+
+static ResultResource *(*kept_resource_callback)(int, void *);
+static void *kept_resource_data;
+static void (*kept_resource_release)(void *);
+static ResultResource *kept_resource;
+void result_keep_resource(ResultResource *(*callback)(int, void *), void *data, void (*release)(void *)) {
+    assert(kept_resource_callback == NULL);
+    kept_resource_callback = callback;
+    kept_resource_data = data;
+    kept_resource_release = release;
+}
+ResultResource *result_kept_resource_call(int index) {
+    kept_resource = kept_resource_callback(index, kept_resource_data);
+    return kept_resource;
+}
+void result_kept_resource_clear(void) {
+    void *data = kept_resource_data;
+    void (*release)(void *) = kept_resource_release;
+    kept_resource = NULL;
+    kept_resource_callback = NULL;
+    kept_resource_data = NULL;
+    kept_resource_release = NULL;
+    if (release != NULL) release(data);
+}
+static ResultState *(*kept_state_callback)(int, void *);
+static void *kept_state_data;
+static void (*kept_state_release)(void *);
+static ResultState *kept_state;
+void result_keep_state(ResultState *(*callback)(int, void *), void *data, void (*release)(void *)) {
+    assert(kept_state_callback == NULL);
+    kept_state_callback = callback;
+    kept_state_data = data;
+    kept_state_release = release;
+}
+ResultState *result_kept_state_call(int index) {
+    kept_state = kept_state_callback(index, kept_state_data);
+    return kept_state;
+}
+void result_kept_state_clear(void) {
+    void *data = kept_state_data;
+    void (*release)(void *) = kept_state_release;
+    kept_state = NULL;
+    kept_state_callback = NULL;
+    kept_state_data = NULL;
+    kept_state_release = NULL;
+    if (release != NULL) release(data);
+}
+static ResultResource *(*replacement_resource_callback)(int);
+void result_replace_resource(ResultResource *(*callback)(int)) { replacement_resource_callback = callback; }
+ResultResource *result_replaced_resource_call(int index) {
+    return replacement_resource_callback(index);
+}
+static void *release_kept_handles(void *unused) {
+    (void) unused;
+    result_kept_resource_clear();
+    result_kept_state_clear();
+    return NULL;
+}
+static ResultManual *(*kept_manual_callback)(void *);
+static void *kept_manual_data;
+static void (*kept_manual_release)(void *);
+static ResultManual *kept_manual;
+void result_keep_manual(ResultManual *(*callback)(void *), void *data, void (*release)(void *)) {
+    kept_manual_callback = callback;
+    kept_manual_data = data;
+    kept_manual_release = release;
+}
+void result_kept_manual_call(void) { kept_manual = kept_manual_callback(kept_manual_data); }
+static void kept_handles_after_vm(void) {
+    assert(atomic_load(&resources_freed) == 0 && kept_resource->value == 77);
+    assert(kept_state->length == 3 && kept_state->bytes[0] == 5 && kept_state->bytes[2] == 7);
+    assert(kept_state->text_length == 5 && memcmp(kept_state->text, "Gr\xc3\xbc\0", 5) == 0);
+    assert(mal_gc_process_bytes() >= 8);
+    assert(kept_resource_callback(0, kept_resource_data) == NULL);
+    assert(kept_state_callback(0, kept_state_data) == NULL);
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, release_kept_handles, NULL) != 0) abort();
+    if (pthread_join(thread, NULL) != 0) abort();
+    assert(atomic_load(&resources_freed) == 1 && mal_gc_process_bytes() == 0);
+    assert(manuals_freed == 0 && kept_manual->value == 91);
+    kept_manual_release(kept_manual_data);
+    assert(manuals_freed == 0 && kept_manual->value == 91);
+    result_manual_free(kept_manual);
+    assert(manuals_freed == 1);
+}
+void result_kept_handles_after_vm(void) { if (atexit(kept_handles_after_vm) != 0) abort(); }
+static ResultResource *owned_key;
+static ResultResource *(*owned_callback)(ResultResource *, void *);
+static void *owned_data;
+void result_replace_owned(ResultResource *owner, ResultResource *(*callback)(ResultResource *, void *), void *data) {
+    owned_key = owner;
+    owned_callback = callback;
+    owned_data = data;
+}
+ResultResource *result_replaced_owned_call(void) { return owned_callback(owned_key, owned_data); }

@@ -1096,7 +1096,7 @@ class BindingWriter {
 			const result = value.returns;
 			resultLocals.push("void *mal_result_handle = nullptr;");
 			resultConversion.push(
-				`if (!mal_ffi_callback_result_handle(vm, mal_callback, mal_result, &mal_ffi_type_${result.name}, ${result.nullable}, &mal_site, &mal_result_handle)) goto mal_done;`,
+				`if (!mal_ffi_callback_result_handle(vm, mal_callback, mal_result, &mal_ffi_type_${result.name}, ${result.nullable}, ${value.returnLifetime === "registration"}, &mal_site, &mal_result_handle)) goto mal_done;`,
 				`mal_return = (${localDeclaration(type.returns, "")}) mal_result_handle;`,
 			);
 		} else if (value.returnLifetime !== undefined) {

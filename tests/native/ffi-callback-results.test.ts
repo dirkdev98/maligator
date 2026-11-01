@@ -23,6 +23,8 @@ describe("native callback result lifetimes", () => {
 			"retained-shutdown.ts",
 			"handles.ts",
 			"handles-shutdown.ts",
+			"handles-retained.ts",
+			"handles-retained-shutdown.ts",
 		]) {
 			it(`retains native callback results through ${entry} with ${backend} calls`, () => {
 				const built = spawnSync(
@@ -53,14 +55,22 @@ describe("native callback result lifetimes", () => {
 					[executed.error?.message, executed.signal, executed.stderr, executed.stdout]
 						.filter(Boolean)
 						.join("\n"),
-				).toBe(["main.ts", "retained.ts", "handles.ts"].includes(entry) ? 0 : 1);
-				if (["main.ts", "retained.ts", "handles.ts"].includes(entry))
+				).toBe(
+					["main.ts", "retained.ts", "handles.ts", "handles-retained.ts"].includes(entry)
+						? 0
+						: 1,
+				);
+				if (
+					["main.ts", "retained.ts", "handles.ts", "handles-retained.ts"].includes(entry)
+				)
 					expect(executed.stdout.trim()).toBe(
 						entry === "main.ts"
 							? "callback results passed"
 							: entry === "retained.ts"
 								? "retained callback results passed"
-								: "handle callback results passed",
+								: entry === "handles.ts"
+									? "handle callback results passed"
+									: "retained handle callback results passed",
 					);
 				else expect(executed.stderr).toContain("pointer shutdown requested");
 				expect(executed.stderr).not.toMatch(

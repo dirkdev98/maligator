@@ -64,6 +64,9 @@ describe("callback pointer result contracts", () => {
 		expect(declarations).toContain(
 			"export function result_handle_async(callback: (arg1: number) => ResultResource | null): Promise<ResultResource | null>;",
 		);
+		expect(declarations).toContain(
+			"export function result_keep_resource_async(callback: (arg1: number) => ResultResource | null): Promise<void>;",
+		);
 	});
 	it("requires an explicit pointer-result lifetime", () => {
 		const plan = planBindings(model, {

@@ -83,7 +83,8 @@ export interface MaligatorFfiHandle {
 	 * its integer or boolean result equals the C identifier or integer literal.
 	 */
 	destroy?: string | { function: string; success: string };
-	/** Release a handle the program never closed once it is garbage collected. Off unless
+	/** Release a collected handle once its native result borrowers finish. The last lease
+	 * may retire on a foreign thread. Off unless
 	 * set; leave it off for resources that must be released on one thread or before the
 	 * library shuts down. Conditional cleanup requires explicit disposal and retry.
 	 */

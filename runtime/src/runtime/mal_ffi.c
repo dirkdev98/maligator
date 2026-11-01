@@ -1070,6 +1070,7 @@ void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue functio
     callback->thread_identity = &ffi_callback_thread;
     callback->results = nullptr;
     callback->results_accepting = true;
+    callback->result_owner = nullptr;
 }
 
 typedef struct MalFfiResultCopy {
@@ -1625,7 +1626,10 @@ bool mal_ffi_replace_prepare(
         .site = site, .key = key, .callback = callback, .lane = entry->lane ^ 1};
     entry->pending = replacement;
     entry->pending_identity = ++ffi_replaced_identity;
-    if (callback != nullptr) mal_ffi_callback_hold(callback);
+    if (callback != nullptr) {
+        callback->result_owner = key;
+        mal_ffi_callback_hold(callback);
+    }
     pthread_mutex_unlock(&ffi_replaced_lock);
     return true;
 }
@@ -2596,9 +2600,11 @@ static bool ffi_state_check(MalVm *vm, MalFfiHandleObject *handle, const MalFfiS
 
 bool mal_ffi_callback_result_handle(
     MalVm *vm, MalFfiCallback *callback, MalValue value, const MalFfiHandleType *type,
-    bool nullable, const MalFfiSite *site, void **out) {
+    bool nullable, bool registration, const MalFfiSite *site, void **out) {
     if (!mal_ffi_to_handle(vm, value, type, nullable, site, out, nullptr)) return false;
     if (*out == nullptr) return true;
+    if (registration && *out == callback->result_owner)
+        return mal_ffi_expected(vm, site, "a result resource independent of its registration owner");
     MalFfiHandleObject *handle = ffi_handle(value);
     if (!mal_ffi_handle_held(vm, handle, site)) return false;
     bool borrowed = ffi_handle_borrowed(handle);
@@ -2644,9 +2650,16 @@ bool mal_ffi_callback_result_handle(
     }
     MalFfiResultCopy *result = malloc(sizeof(*result));
     if (result == nullptr) return mal_ffi_out_of_memory(vm);
+    if (registration) pthread_mutex_lock(&ffi_queue_lock);
+    if (registration && !callback->results_accepting) {
+        pthread_mutex_unlock(&ffi_queue_lock);
+        free(result);
+        return mal_ffi_expected(vm, site, "a live registration for this callback result");
+    }
     atomic_fetch_add_explicit(&native->references, 1, memory_order_relaxed);
     *result = (MalFfiResultCopy) {.next = callback->results, .handle = native};
     callback->results = result;
+    if (registration) pthread_mutex_unlock(&ffi_queue_lock);
     return true;
 }
 

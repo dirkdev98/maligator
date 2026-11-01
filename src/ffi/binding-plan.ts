@@ -1090,10 +1090,6 @@ class Planner {
 			if (mapped.value.kind === "handle") {
 				if (mapped.value.pass !== "pointer")
 					return { gap: "a callback handle result needs a pointer representation" };
-				if (resultFacts?.lifetime === "registration")
-					return {
-						gap: "a registered callback handle result needs a registration resource lease",
-					};
 			}
 			if (
 				(mapped.value.kind === "string" ||

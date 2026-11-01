@@ -16,9 +16,11 @@ export default {
 	headers: ["results.h"],
 	find: [{ includeDirs: ["."], sources: ["results.c"] }],
 	types: {
+		ResultManual: { handle: { destroy: "result_manual_free", collect: false } },
+		ResultStateBase: { handle: {} },
 		ResultResource: { handle: { destroy: "result_resource_free", collect: true } },
 		ResultState: {
-			handle: { storage: "caller" },
+			handle: { storage: "caller", views: ["ResultStateBase"] },
 			fields: {
 				bytes: { bytes: { length: "length" } },
 				text: { string: { length: "text_length" } },
@@ -26,6 +28,85 @@ export default {
 		},
 	},
 	functions: {
+		result_state_base: { returns: { borrowed: true } },
+		result_keep_manual: {
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						returns: { lifetime: "registration" },
+					},
+				},
+			},
+		},
+		result_replace_owned: {
+			params: {
+				callback: {
+					nullable: true,
+					callback: {
+						data: "data",
+						replaced: true,
+						returns: { lifetime: "registration" },
+					},
+				},
+			},
+		},
+		result_replaced_owned_call: { returns: { borrowed: true } },
+		result_resource_borrow: { returns: { borrowed: true } },
+		result_keep_resource: {
+			async: "result_keep_resource_async",
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						queued: "wait",
+						returns: { lifetime: "registration", nullable: true },
+					},
+				},
+			},
+		},
+		result_kept_resource_call: {
+			async: "result_kept_resource_call_async",
+			returns: { borrowed: true },
+		},
+		result_kept_resource_clear: { async: "result_kept_resource_clear_async" },
+		result_keep_state: {
+			async: "result_keep_state_async",
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						queued: "wait",
+						returns: { lifetime: "registration", nullable: true },
+					},
+				},
+			},
+		},
+		result_kept_state_call: {
+			async: "result_kept_state_call_async",
+			returns: { borrowed: true },
+		},
+		result_kept_state_clear: { async: "result_kept_state_clear_async" },
+		result_replace_resource: {
+			async: "result_replace_resource_async",
+			params: {
+				callback: {
+					nullable: true,
+					callback: {
+						replaced: true,
+						queued: "wait",
+						returns: { lifetime: "registration", nullable: true },
+					},
+				},
+			},
+		},
+		result_replaced_resource_call: {
+			async: "result_replaced_resource_call_async",
+			returns: { borrowed: true },
+		},
 		result_handles_shutdown: {
 			async: "result_handles_shutdown_async",
 			params: {
