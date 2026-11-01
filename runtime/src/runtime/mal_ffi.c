@@ -674,41 +674,23 @@ bool mal_ffi_record_leaves(MalVm *vm, MalValue record, MalFfiRecordType *type, M
     return ffi_record_leaves(vm, record, type, leaves) != nullptr;
 }
 
-bool mal_ffi_record_elements(
+bool mal_ffi_try_record_elements(
     MalVm *vm, MalValue array, int32_t length, MalFfiRecordType *type,
-    const MalFfiSite *site, MalValue *values) {
+    MalValue *values) {
     MalShape *shape = ffi_record_shape(vm, type);
+    if (shape == nullptr || !mal_value_is_array_object(array)) return false;
+    MalArrayObject *object = mal_value_to_array_object(array);
+    if (mal_array_object_length(object) != (u32) length || object->elements == nullptr
+        || object->dense_count < (u32) length) return false;
+    const MalValue *dense = object->elements;
     i32 count = type->field_count;
-    // A dense Array's elements read directly while no getter has run; one that does
-    // could change the array, so later elements check it again.
-    const MalValue *dense = nullptr;
-    if (shape != nullptr && mal_value_is_array_object(array)) {
-        MalArrayObject *object = mal_value_to_array_object(array);
-        if (mal_array_object_length(object) == (u32) length && object->elements != nullptr
-            && object->dense_count >= (u32) length) {
-            dense = object->elements;
-        }
-    }
     for (i32 index = 0; index < length; index++) {
+        MalValue element = dense[index];
+        if (mal_value_is_array_hole(element) || !mal_value_is_heap_type(element, MAL_HEAP_OBJECT)
+            || mal_value_to_object(element)->shape != shape) return false;
         MalValue *fields = values + (usize) index * (usize) count;
-        MalValue element;
-        // An element that already has the record's shape reads without running JavaScript.
-        if (dense != nullptr) {
-            element = dense[index];
-            if (!mal_value_is_array_hole(element) && mal_value_is_heap_type(element, MAL_HEAP_OBJECT)
-                && mal_value_to_object(element)->shape == shape) {
-                const MalValue *slots = mal_object_fields_nonempty(mal_value_to_object(element));
-                for (i32 field = 0; field < count; field++) fields[field] = slots[field];
-                continue;
-            }
-            dense = nullptr;
-        }
-        if (!mal_ffi_element(vm, array, index, length, site, &element)) return false;
-        MalRootSpan root;
-        mal_gc_root(&root, &element, 1);
-        bool read = mal_ffi_record_fields(vm, element, type, site, fields);
-        mal_gc_unroot(&root);
-        if (!read) return false;
+        const MalValue *slots = mal_object_fields_nonempty(mal_value_to_object(element));
+        for (i32 field = 0; field < count; field++) fields[field] = slots[field];
     }
     return true;
 }

@@ -194,6 +194,10 @@ functions: {
 - On a result, `bytes` and `array` copy the C memory into a `Uint8Array` or an array. `length` names an integer parameter, or a pointer the function writes the count through.
 - `string` marks a `char *` or `unsigned char *` as UTF-8 text.
 - `free` names the function that releases a string, buffer, or array result after it is copied.
+
+Array inputs convert in index order. A conversion error prevents later elements'
+getters and Proxy traps from running.
+
 - `constant` passes a C macro, enumerator, or integer for a parameter, such as `SQLITE_TRANSIENT` for a destructor or `0` for a reserved argument. The parameter disappears from the JavaScript signature, and the C compiler checks the value's type.
 
 Each fact names the C declaration it describes. A fact that names nothing in the headers, or that does not fit the declaration, fails the build.

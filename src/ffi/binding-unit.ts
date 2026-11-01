@@ -1338,6 +1338,28 @@ class BindingWriter {
 								`if (${bulk.values} != ${bulk.storage}) free(${bulk.values});`,
 							);
 						}
+						const sequential = [
+							`for (int32_t ${position} = 0; ${position} < ${length}; ${position}++) {`,
+							`\tMalValue ${element};`,
+							`\tif (!mal_ffi_element(vm, ${source}, ${position}, ${length}, ${site}, &${element})) goto mal_done;`,
+							...(texts
+								? [
+										`\tchar *${text};`,
+										`\tif (!mal_ffi_to_owned_string(vm, ${element}, ${site}, &${text})) goto mal_done;`,
+										`\t${elements}[${position}] = ${text};`,
+									]
+								: this.read(
+										value.of,
+										value.element,
+										element,
+										`${elements}[${position}]`,
+										site,
+										"goto mal_done;",
+										strings,
+										false,
+									).map((line) => `\t${line}`)),
+							"}",
+						];
 						body.push(
 							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &${length})) goto mal_done;`,
 							`if (${length} > 0 && (size_t) ${length} <= sizeof(${storage}) / sizeof(*${elements})) {`,
@@ -1353,41 +1375,21 @@ class BindingWriter {
 							`\tif (${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 							"}",
 							...(bulk === undefined
-								? []
+								? sequential
 								: [
 										`if ((size_t) ${length} * ${bulk.fields} <= ${bulk.inline}) ${bulk.values} = ${bulk.storage};`,
 										`else if (${length} > 0) {`,
 										`\t${bulk.values} = malloc(sizeof(MalValue) * (size_t) ${length} * ${bulk.fields});`,
 										`\tif (${bulk.values} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 										"}",
-										`if (${length} > 0 && !mal_ffi_record_elements(vm, ${source}, ${length}, &mal_ffi_record_${bulk.name}, ${site}, ${bulk.values})) goto mal_done;`,
+										`if (${length} > 0 && mal_ffi_try_record_elements(vm, ${source}, ${length}, &mal_ffi_record_${bulk.name}, ${bulk.values})) {`,
+										`\tfor (int32_t ${position} = 0; ${position} < ${length}; ${position}++) {`,
+										`\t\tif (!mal_ffi_fields_${bulk.name}(vm, ${bulk.values} + (size_t) ${position} * ${bulk.fields}, ${site}, &${elements}[${position}])) goto mal_done;`,
+										"\t}",
+										"} else {",
+										...sequential.map((line) => `\t${line}`),
+										"}",
 									]),
-							`for (int32_t ${position} = 0; ${position} < ${length}; ${position}++) {`,
-							...(bulk !== undefined
-								? [
-										`\tif (!mal_ffi_fields_${bulk.name}(vm, ${bulk.values} + (size_t) ${position} * ${bulk.fields}, ${site}, &${elements}[${position}])) goto mal_done;`,
-									]
-								: [
-										`\tMalValue ${element};`,
-										`\tif (!mal_ffi_element(vm, ${source}, ${position}, ${length}, ${site}, &${element})) goto mal_done;`,
-										...(texts
-											? [
-													`\tchar *${text};`,
-													`\tif (!mal_ffi_to_owned_string(vm, ${element}, ${site}, &${text})) goto mal_done;`,
-													`\t${elements}[${position}] = ${text};`,
-												]
-											: this.read(
-													value.of,
-													value.element,
-													element,
-													`${elements}[${position}]`,
-													site,
-													"goto mal_done;",
-													strings,
-													false,
-												).map((line) => `\t${line}`)),
-									]),
-							"}",
 							`${local} = (${localDeclaration(param.type, "")}) ${elements};`,
 						);
 						setCount(index, length, site, body);
