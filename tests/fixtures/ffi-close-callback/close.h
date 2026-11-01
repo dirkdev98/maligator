@@ -30,4 +30,8 @@ void close_block(void);
 void close_wait_blocked(void);
 void close_unblock(void);
 void close_view_set(CloseState *handle, void (*callback)(CloseBase *));
+void close_expect_worker(void);
+void close_worker_wait_started(void);
+void close_unblock_later(void);
+void close_worker_after_vm(CloseBase *handle, void (*done)(CloseBase *));
 #endif

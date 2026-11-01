@@ -1300,6 +1300,7 @@ class BindingWriter {
 		const keeps: Array<string> = [];
 		const kept: Array<string> = [];
 		const commits: Array<string> = [];
+		const callbackStarts: Array<string> = [];
 		const replacedIndexes = new Set<number>();
 		const keptCallback = (index: number): boolean => {
 			const entry = binding.arguments[index];
@@ -1511,8 +1512,9 @@ class BindingWriter {
 								`if (!mal_ffi_close_prepare(vm, ${context}, ${argument(value.closes.param)}, &${replaced}, ${site})) goto mal_done;`,
 							);
 							commits.push(
-								`mal_ffi_close_commit(${context}, &mal_handle_pin_${String(value.closes.key)});`,
+								`mal_ffi_close_commit(${context}, &mal_handle_pin_${String(value.closes.key)}, false);`,
 							);
+							callbackStarts.push(`mal_ffi_close_start(${context});`);
 						}
 						if (value.replaced !== undefined) {
 							const key = value.replaced.key;
@@ -1842,6 +1844,7 @@ class BindingWriter {
 			...keeps.map((line) => `\t${line}`),
 			...kept.map((line) => `\t${line}`),
 			...commits.map((line) => `\t${line}`),
+			...callbackStarts.map((line) => `\t${line}`),
 			...after.map((line) => `\t${line}`),
 			"\tgoto mal_done;",
 			"mal_done:",
@@ -1877,6 +1880,7 @@ class BindingWriter {
 			readonly slot?: string;
 			readonly retained: boolean;
 			readonly replacement?: string;
+			readonly closeKey?: number;
 		}> = [];
 		const callbackArguments: Array<string> = [];
 		const trampolines: Array<string> = [];
@@ -2047,12 +2051,14 @@ class BindingWriter {
 						const slot =
 							value.params.includes("data") ||
 							value.lookup !== undefined ||
-							value.replaced !== undefined
+							value.replaced !== undefined ||
+							value.closes !== undefined
 								? undefined
 								: `mal_ffi_async_scoped_${name}_${String(index)}`;
 						callbacks.push({
 							index,
 							retained: value.kept,
+							...(value.closes === undefined ? {} : { closeKey: value.closes.key }),
 							...(value.replaced === undefined
 								? {}
 								: { replacement: `mal_replacement_${String(index)}` }),
@@ -2075,7 +2081,9 @@ class BindingWriter {
 									lanes ? `${trampoline}_${String(lane)}` : trampoline,
 									{ ...value, kept: true, queued: value.queued ?? "wait" },
 									exported,
-									value.replaced === undefined ? slot : replacedSite,
+									value.replaced === undefined && value.closes === undefined
+										? slot
+										: replacedSite,
 									lane,
 								),
 							);
@@ -2089,6 +2097,11 @@ class BindingWriter {
 							"}",
 						);
 						callbackArguments.push(
+							...(value.closes === undefined
+								? []
+								: [
+										`if (!mal_ffi_close_prepare(vm, mal_ctx->${field}, ${argument(value.closes.param)}, &${replacedSite}, ${site})) goto mal_failed;`,
+									]),
 							...(value.replaced === undefined
 								? []
 								: [
@@ -2303,6 +2316,11 @@ class BindingWriter {
 					? []
 					: [`\tmal_ffi_replace_commit(&mal_ctx->${replacement});`],
 			),
+			...callbacks.flatMap(({ index, closeKey }) =>
+				closeKey === undefined
+					? []
+					: [`\tmal_ffi_close_start(mal_ctx->mal_callback_${String(index)});`],
+			),
 			`\t${returns ? "mal_ctx->mal_return = " : ""}${call};`,
 			...callbacks.flatMap(({ index, slot }) =>
 				slot === undefined ? [] : [`\t${slot} = mal_previous_${String(index)};`],
@@ -2385,6 +2403,13 @@ class BindingWriter {
 			...this.#resultGuards(binding, "goto mal_failed;").map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
 			...callbackArguments.map((line) => `\t${line}`),
+			...callbacks.flatMap(({ index, closeKey }) =>
+				closeKey === undefined
+					? []
+					: [
+							`\tmal_ffi_close_commit(mal_ctx->mal_callback_${String(index)}, &mal_ctx->mal_handle_pin_${String(closeKey)}, true);`,
+						],
+			),
 			...(callbacks.length === 0
 				? []
 				: [
@@ -2396,6 +2421,13 @@ class BindingWriter {
 			"\t\treturn mal_promise;",
 			"\t}",
 			"mal_failed:",
+			...callbacks.flatMap(({ index, closeKey }) =>
+				closeKey === undefined
+					? []
+					: [
+							`\tmal_ffi_close_cancel(mal_ctx->mal_callback_${String(index)}, &mal_ctx->mal_handle_pin_${String(closeKey)});`,
+						],
+			),
 			...(compoundInputs
 				? ["\tmal_ffi_inputs_release(vm, &mal_ctx->mal_inputs, &mal_site_result, false);"]
 				: []),

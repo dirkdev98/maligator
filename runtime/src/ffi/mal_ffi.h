@@ -390,8 +390,12 @@ MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function);
 bool mal_ffi_close_prepare(
     MalVm *vm, MalFfiCallback *callback, MalValue handle, const void *site,
     const MalFfiSite *error);
-/** Publish the close immediately before C; adopts the converted handle's pin. */
-void mal_ffi_close_commit(MalFfiCallback *callback, void **pin);
+/** Publish the close before admission; adopts the converted handle's pin. */
+void mal_ffi_close_commit(MalFfiCallback *callback, void **pin, bool worker);
+/** Snapshot registrations after replacement commits, immediately before C runs. */
+void mal_ffi_close_start(MalFfiCallback *callback);
+/** Restore VM ownership only when worker admission failed and C never received the close. */
+void mal_ffi_close_cancel(MalFfiCallback *callback, void **pin);
 /** Claim a completion once, retaining its context through the native callback frame. */
 MalFfiCallback *mal_ffi_close_take(const void *site, void *key, MalFfiCallback *data);
 MalValue mal_ffi_close_value(MalFfiCallback *callback);

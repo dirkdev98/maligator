@@ -1744,14 +1744,6 @@ export function planBindings(
 				throw new FfiError(`${at}: '${asyncName}' is already a function`);
 			}
 			declared.add(asyncName);
-			if (
-				!("gaps" in result) &&
-				result.params.some(
-					({ value }) => value.kind === "callback" && value.closes !== undefined,
-				)
-			) {
-				throw new FfiError(`${at}: async close callbacks are unsupported`);
-			}
 		}
 		if ("gaps" in result) unbound.push(result);
 		else

@@ -195,6 +195,7 @@ export interface MaligatorFfiCallback {
 	 * The input handle whose lifetime ends when this one-shot completion runs, by C
 	 * name or 1-based position. Its storage and retained buffers survive until then.
 	 * The wrapper is closed before JavaScript runs; foreign completions queue for it.
+	 * An async twin settles at C return and requires a handle the program already holds.
 	 */
 	closes?: string;
 	/**

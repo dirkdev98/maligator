@@ -415,6 +415,8 @@ typedef struct MalFfiClose {
     MalFfiCallback *callback;
     void *key;
     MalValue handle;
+    const void *operation;
+    u64 scope;
     void *storage;
     MalArrayBufferStoreLease **stores;
     i32 store_count;
@@ -1922,6 +1924,7 @@ static void ffi_close_detach(MalFfiKept *kept) {
     if (handle->value == close->key) ffi_handle_forget(handle);
     else close->key = nullptr;
     handle->closing = false;
+    handle->worker_closing = false;
     handle->operation = nullptr;
     mal_ffi_unpin_handle(handle);
     close->handle = mal_value_new_undefined();
@@ -1977,10 +1980,13 @@ bool mal_ffi_close_prepare(
     return true;
 }
 
-void mal_ffi_close_commit(MalFfiCallback *callback, void **pin) {
+void mal_ffi_close_commit(MalFfiCallback *callback, void **pin, bool worker) {
     MalFfiClose *close = ((MalFfiKept *) callback)->close;
     MalFfiHandleObject *handle = *pin;
+    close->scope = handle->scope;
+    close->operation = handle->operation;
     handle->closing = true;
+    handle->worker_closing = worker;
     handle->scope = 0;
     handle->operation = nullptr;
     if (handle->owns_storage) {
@@ -1989,13 +1995,46 @@ void mal_ffi_close_commit(MalFfiCallback *callback, void **pin) {
     }
     *pin = nullptr;
     close->committed = true;
-    pthread_mutex_lock(&ffi_replaced_lock);
-    close->callback_identity = ffi_replaced_identity;
-    pthread_mutex_unlock(&ffi_replaced_lock);
     pthread_mutex_lock(&ffi_queue_lock);
     close->next = ffi_closes;
     ffi_closes = close;
     pthread_mutex_unlock(&ffi_queue_lock);
+}
+
+void mal_ffi_close_start(MalFfiCallback *callback) {
+    MalFfiClose *close = ((MalFfiKept *) callback)->close;
+    pthread_mutex_lock(&ffi_replaced_lock);
+    u64 identity = ffi_replaced_identity;
+    pthread_mutex_unlock(&ffi_replaced_lock);
+    pthread_mutex_lock(&ffi_queue_lock);
+    close->callback_identity = identity;
+    pthread_mutex_unlock(&ffi_queue_lock);
+}
+
+void mal_ffi_close_cancel(MalFfiCallback *callback, void **pin) {
+    if (callback == nullptr) return;
+    MalFfiKept *kept = (MalFfiKept *) callback;
+    MalFfiClose *close = kept->close;
+    if (close == nullptr || !close->committed) return;
+    pthread_mutex_lock(&ffi_queue_lock);
+    MalFfiClose **entry = &ffi_closes;
+    while (*entry != nullptr && *entry != close) entry = &(*entry)->next;
+    if (*entry != close) abort();
+    *entry = close->next;
+    pthread_mutex_unlock(&ffi_queue_lock);
+    MalFfiHandleObject *handle = ffi_handle(close->handle);
+    if (*pin != nullptr || handle == nullptr || handle->value != close->key) abort();
+    *pin = handle;
+    handle->closing = false;
+    handle->worker_closing = false;
+    handle->scope = close->scope;
+    handle->operation = close->operation;
+    if (close->storage != nullptr) {
+        handle->owns_storage = true;
+        close->storage = nullptr;
+    }
+    kept->close = nullptr;
+    ffi_close_free(close);
 }
 
 MalFfiCallback *mal_ffi_close_take(const void *site, void *key, MalFfiCallback *data) {

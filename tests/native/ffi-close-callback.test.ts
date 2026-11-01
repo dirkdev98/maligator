@@ -46,8 +46,16 @@ describe("one-shot C close completions", () => {
 			expect(executed.status, executed.stderr || executed.stdout).toBe(0);
 			expect(executed.stdout.trim()).toBe("libuv close passed");
 		}, 300_000);
-		for (const entry of ["main.ts", "combined.ts", "shutdown.ts", "shutdown-keyed.ts"]) {
-			it(`retains close storage through ${entry} with ${backend} calls`, () => {
+		for (const [entry, mode] of [
+			["main.ts", ""],
+			["combined.ts", ""],
+			["async.ts", ""],
+			["shutdown.ts", ""],
+			["shutdown-keyed.ts", ""],
+			["async-shutdown.ts", "running"],
+			["async-shutdown.ts", "queued"],
+		] as const) {
+			it(`retains close storage through ${entry} ${mode} with ${backend} calls`, () => {
 				const built = spawnSync(
 					process.execPath,
 					[
@@ -60,7 +68,7 @@ describe("one-shot C close completions", () => {
 					{ cwd: project, env: process.env, encoding: "utf8", timeout: 240_000 },
 				);
 				expect(built.status, built.stderr || built.stdout).toBe(0);
-				const executed = spawnSync(built.stdout.trim().split("\n").at(-1)!, [], {
+				const executed = spawnSync(built.stdout.trim().split("\n").at(-1)!, [mode], {
 					cwd: project,
 					encoding: "utf8",
 					timeout: 10_000,
@@ -71,15 +79,18 @@ describe("one-shot C close completions", () => {
 						MAL_GC_AT_EXIT: "1",
 					},
 				});
-				const succeeds = entry === "main.ts" || entry === "combined.ts";
+				const succeeds =
+					entry === "main.ts" || entry === "combined.ts" || entry === "async.ts";
 				expect(executed.status, executed.stderr || executed.stdout).toBe(
 					succeeds ? 0 : 1,
 				);
 				if (succeeds)
 					expect(executed.stdout.trim()).toBe(
-						entry === "combined.ts"
-							? "combined close callbacks passed"
-							: "close callbacks passed",
+						entry === "async.ts"
+							? "async close callbacks passed"
+							: entry === "combined.ts"
+								? "combined close callbacks passed"
+								: "close callbacks passed",
 					);
 				else expect(executed.stderr).toContain("close shutdown requested");
 				expect(executed.stderr).not.toMatch(

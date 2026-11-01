@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <sched.h>
+#include <time.h>
 
 static CloseBase *pending;
 static void (*completion)(CloseBase *);
@@ -110,3 +111,37 @@ void close_block(void) {
 void close_wait_blocked(void) { while (atomic_load(&blocked) == 0) sched_yield(); }
 void close_unblock(void) { atomic_store(&unblocked, true); }
 void close_view_set(CloseState *handle, void (*callback)(CloseBase *)) { callback(&handle->base); }
+
+static pthread_t worker_close_owner;
+static _Atomic bool worker_close_started;
+static _Atomic int worker_close_calls;
+static void worker_close_finished(void) {
+    assert(atomic_load(&worker_close_calls) == 1);
+    assert(pending == NULL);
+}
+void close_expect_worker(void) {
+    worker_close_owner = pthread_self();
+    if (atexit(worker_close_finished) != 0) abort();
+}
+void close_worker_wait_started(void) { while (!atomic_load(&worker_close_started)) sched_yield(); }
+static void *unblock_later(void *unused) {
+    (void) unused;
+    struct timespec delay = {.tv_nsec = 50000000};
+    nanosleep(&delay, NULL);
+    close_unblock();
+    return NULL;
+}
+void close_unblock_later(void) {
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, unblock_later, NULL) != 0) abort();
+    if (pthread_detach(thread) != 0) abort();
+}
+void close_worker_after_vm(CloseBase *handle, void (*done)(CloseBase *)) {
+    assert(!pthread_equal(worker_close_owner, pthread_self()));
+    atomic_store(&worker_close_started, true);
+    while (!atomic_load(&unblocked)) sched_yield();
+    CloseState *state = (CloseState *) handle;
+    for (size_t index = 0; index < state->length; index++) assert(state->bytes[index] == 71);
+    atomic_fetch_add(&worker_close_calls, 1);
+    close_after_vm(handle, done);
+}

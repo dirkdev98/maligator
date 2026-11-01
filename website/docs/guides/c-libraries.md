@@ -425,9 +425,14 @@ JavaScript. Exceptions caught inside a callback keep their ordinary behavior.
 
 Callbacks retained through a `release` parameter can also be registered asynchronously.
 They continue to queue and wait after registration settles, until C releases them.
-Explicit `queued: true` callbacks continue without waiting. Replacement setters can
-also have async twins. Register `closes` callbacks synchronously. For a synchronous
-registration, use `queued` if the library calls back from other threads.
+Explicit `queued: true` callbacks continue without waiting. Replacement setters and
+`closes` registrations can also have async twins. A close registration's promise
+settles when its C call returns; a deferred completion remains retained afterward.
+Async registration requires a handle the program holds, rather than a callback loan.
+Failed scheduling leaves the handle open for retry. Once accepted, close registrations
+drain on native workers during teardown, retaining caller storage and managed buffers
+until the C completion arrives. For a synchronous registration, use `queued` if the
+library calls back from other threads.
 
 Use `async` only for functions the library allows on another thread while the program makes other calls, such as SQLite in its default serialized mode.
 
