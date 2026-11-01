@@ -58,6 +58,8 @@ import {
 	shapes_sum2,
 	shapes_sum3,
 	shapes_text_bytes,
+	shapes_text_runes,
+	shapes_greeting,
 	shapes_unsigned_max,
 	shapes_total,
 	shapes_twice,
@@ -132,6 +134,9 @@ console.log(
 console.log(`canvases after using ${shapes_canvases_open()}`);
 console.log(
 	`text bytes ${["Sketch", "Grüße", "🙂", "x".repeat(300)].map((text) => shapes_text_bytes(text)).join(",")}`,
+);
+console.log(
+	`text runes ${["Sketch", "Grüße", "🙂", "x".repeat(300)].map((text) => shapes_text_runes(text)).join(",")} ${shapes_greeting()}`,
 );
 console.log(
 	`log ${shapes_log_count("%d points", 3)} ${shapes_log_line()} ${shapes_log_pair("%s at %.1f", "origin", 2.5)} ${shapes_log_line()}`,

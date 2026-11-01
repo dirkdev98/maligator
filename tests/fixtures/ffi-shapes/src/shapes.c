@@ -108,6 +108,14 @@ int shapes_canvas_create(const char *title, ShapesCanvas **canvas) {
 
 int shapes_text_bytes(const char *text) { return (int) strlen(text); }
 
+int shapes_text_runes(const ShapesChar *text) {
+	int runes = 0;
+	for (; *text != '\0'; text++) runes += (*text & 0xC0) != 0x80;
+	return runes;
+}
+
+const ShapesChar *shapes_greeting(void) { return (const ShapesChar *) "Grüße"; }
+
 const char *shapes_join(const char **parts, int count) {
 	static char joined[256];
 	size_t used = 0;

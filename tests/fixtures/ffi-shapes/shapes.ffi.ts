@@ -44,6 +44,8 @@ export default {
 			params: { data: { bytes: { length: "size" } } },
 			async: "shapes_hold_async",
 		},
+		shapes_text_runes: { params: { text: { string: true } } },
+		shapes_greeting: { returns: { string: true } },
 		shapes_render: { returns: { bytes: { length: "size" }, free: "shapes_free" } },
 		shapes_corners: { returns: { array: { length: "count" }, free: "shapes_free" } },
 		shapes_describe: {

@@ -496,7 +496,7 @@ describe("ffi contract facts", () => {
 	});
 
 	it("ranks release functions by how their names say they release a type", () => {
-		const rank = (name: string, type: string) => releaseRank(name, { name: type });
+		const rank = (name: string, ...types: Array<string>) => releaseRank(name, types);
 		expect(rank("BN_free", "bignum_st")!).toBeLessThan(
 			rank("BN_clear_free", "bignum_st")!,
 		);
@@ -510,8 +510,60 @@ describe("ffi contract facts", () => {
 		expect(rank("sqlite3_close", "sqlite3")!).toBeLessThan(
 			rank("sqlite3_close_v2", "sqlite3")!,
 		);
+		expect(rank("ZSTD_freeCCtx", "ZSTD_CCtx_s")!).toBeLessThan(
+			rank("ZSTD_freeCCtxParams", "ZSTD_CCtx_s")!,
+		);
+		const zstd = ["ZSTD_CCtx_s", "ZSTD_CCtx", "ZSTD_CStream"];
+		expect(rank("ZSTD_freeCCtx", ...zstd)!).toBeLessThan(
+			rank("ZSTD_freeCStream", ...zstd)!,
+		);
+		expect(rank("gzclose", "gzFile_s", "gzFile")!).toBeLessThan(
+			rank("gzclose_r", "gzFile_s", "gzFile")!,
+		);
 		expect(rank("BN_CTX_end", "bignum_ctx")).toBeUndefined();
 		expect(rank("uv_unref", "uv_handle_s")).toBeUndefined();
+	});
+
+	it("leaves competing alias destructors for the contract author to choose", () => {
+		const record = {
+			...model.records.get("ShapesCanvas")!,
+			name: "CanvasState_s",
+		};
+		const pointer = {
+			kind: "pointer",
+			to: { kind: "record", tag: "struct", name: record.name },
+		} as const;
+		const aliases = ["CanvasInput", "CanvasOutput"].map(
+			(name) =>
+				[
+					name,
+					{ name, type: pointer, library: true, location: record.location },
+				] as const,
+		);
+		const destroy = model.functions.find(
+			(entry) => entry.name === "shapes_canvas_close",
+		)!;
+		const suggested = (...names: Array<string>) => {
+			const aliased = {
+				...model,
+				records: new Map([[record.name, record]]),
+				typedefs: new Map(aliases),
+				enums: new Map(),
+				macros: [],
+				functions: names.map((name) => ({
+					...destroy,
+					name,
+					params: [{ name: "canvas", type: pointer }],
+				})),
+			};
+			return suggestFacts(aliased, { types: {}, functions: {} }, planBindings(aliased))
+				.types[record.name]?.handle;
+		};
+		expect(suggested("CanvasFreeInput", "CanvasFreeOutput")).toEqual({});
+		expect(suggested("CanvasFreeInput")).toEqual({ destroy: "CanvasFreeInput" });
+		expect(suggested("CanvasFreeInput", "CanvasFreeOutput", "CanvasFreeState")).toEqual({
+			destroy: "CanvasFreeState",
+		});
 	});
 
 	it("needs a variant fact to bind a variadic function", () => {

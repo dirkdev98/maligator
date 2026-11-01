@@ -23,6 +23,7 @@ const EXPECTED_RESULTS = [
 	"canvas Sketch null [object ShapesCanvas] open 1",
 	"canvases after using 0",
 	"text bytes 6,7,4,300",
+	"text runes 6,5,1,300 Grüße",
 	"log 8 3 points 13 origin at 2.5",
 	"join one,two,three 93",
 	"fill 4 0,1,2,3 TypeError true",

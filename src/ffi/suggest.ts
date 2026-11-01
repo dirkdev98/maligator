@@ -72,6 +72,22 @@ function isByteType(type: CType): boolean {
 	return type.kind === "void" || (type.kind === "integer" && type.name.endsWith("char"));
 }
 
+/** Character typedef names distinguish text from buffers with the same byte type. */
+function isConstText(model: CModel, type: CType): boolean {
+	const resolved = resolveCType(model, type);
+	if (resolved.kind !== "pointer") return false;
+	const target = resolveCType(model, resolved.to);
+	if (target.kind !== "integer" || target.const !== true || !isByteType(target))
+		return false;
+	for (let current = resolved.to; current.kind === "typedef";) {
+		if (/char\d*$/i.test(current.name)) return true;
+		const typedef = model.typedefs.get(current.name);
+		if (typedef === undefined) return false;
+		current = typedef.type;
+	}
+	return false;
+}
+
 /** Verbs that release a resource, the most common choice first. */
 const RELEASE_VERBS = [
 	"destroy",
@@ -93,32 +109,48 @@ function nameWords(name: string): Array<string> {
 		.map((word) => word.toLowerCase());
 }
 
+function typeWords(name: string): Array<string> {
+	return nameWords(name.replace(/^_+/, "").replace(/_(?:s|st|t|tag)$/, ""));
+}
+
 /**
- * How well a function's name says it releases `record`, lower is better. A release
- * verb that ends the name, as in `BN_free`, or that only the end of the type's name
- * follows, as in `UnloadImage` or libxml2's `xmlFreeDoc` for `_xmlDoc`, ranks by the
- * verb's commonness, then the shortest name, so `BN_free` wins over `BN_clear_free`.
- * A verb other words follow, as in `cairo_close_path` or raylib's `UnloadMusicStream`,
- * ranks after all of those. Undefined for a name without a release verb.
+ * Rank release names by verb, length, and whether their suffix names the struct.
+ * `typeNames` starts with the struct tag, followed by aliases. The tag outranks an
+ * alias because aliases may describe resources with different destructors.
  */
 export function releaseRank(
 	name: string,
-	record: Pick<CRecord, "name">,
+	typeNames: ReadonlyArray<string>,
 ): number | undefined {
 	const words = nameWords(name);
-	const own = nameWords(record.name.replace(/^_+/, ""));
-	const endings = new Set(own.map((_, index) => own.slice(index).join("")));
+	const types = typeNames.map(typeWords);
+	const own = types[0]?.join("");
+	const endings = new Map<string, number>();
+	for (const type of types) {
+		const alias = type.join("") === own ? 0 : ALIAS_RELEASE;
+		for (let index = 0; index < type.length; index++) {
+			const ending = type.slice(index).join("");
+			endings.set(ending, Math.min(endings.get(ending) ?? alias, alias));
+		}
+	}
+	const prefixes = new Set(types.flatMap((type) => (type.length > 1 ? [type[0]!] : [])));
 	for (let index = words.length - 1; index >= 0; index--) {
-		const verb = RELEASE_VERBS.indexOf(words[index]!);
+		const word = words[index]!;
+		const verb = RELEASE_VERBS.findIndex(
+			(candidate) =>
+				word === candidate ||
+				(word.endsWith(candidate) && prefixes.has(word.slice(0, -candidate.length))),
+		);
 		if (verb < 0) continue;
 		const rest = words.slice(index + 1).join("");
-		return (
-			(rest === "" || endings.has(rest) ? 0 : WEAK_RELEASE) + verb * 100 + words.length
-		);
+		const ending = rest === "" ? 0 : endings.get(rest);
+		return (ending ?? WEAK_RELEASE) + verb * 1000 + words.length * 10;
 	}
 	return undefined;
 }
 
+/** Ranks of names whose release verb an alias's name follows. */
+const ALIAS_RELEASE = 10_000;
 /** Ranks of names whose release verb other words follow. */
 const WEAK_RELEASE = 100_000;
 
@@ -142,9 +174,18 @@ function suggestHandles(
 			plan.records.has(record.name)
 		)
 			continue;
+		// Typedefs name the struct or its pointer, as zlib's `gzFile` does `gzFile_s`.
+		const typeNames = [
+			record.name,
+			...[...model.typedefs.values()].flatMap((typedef) =>
+				recordOf(model, pointee(model, typedef.type) ?? typedef.type) === record
+					? [typedef.name]
+					: [],
+			),
+		];
 		const releases = model.functions.flatMap((declaration) => {
 			const param = declaration.params[0];
-			const rank = releaseRank(declaration.name, record);
+			const rank = releaseRank(declaration.name, typeNames);
 			if (declaration.params.length !== 1 || param === undefined || rank === undefined)
 				return [];
 			const target = pointee(model, param.type);
@@ -155,9 +196,15 @@ function suggestHandles(
 		});
 		const best = Math.min(...releases.map(({ rank }) => rank));
 		const ranked = releases.filter(({ rank }) => rank === best);
-		// Two equally good names, or several weak ones, leave the choice to the author.
+		// Two equally good names leave the choice to the author, and so does a name for
+		// one of several aliases, such as libxml2's `xmlFreeIDTable` for its shared hash
+		// table, or a weak name with rivals.
+		const sole = (limit: number): boolean =>
+			releases.filter(({ rank }) => rank < limit).length === 1;
 		const release =
-			ranked.length === 1 && (best < WEAK_RELEASE || releases.length === 1)
+			ranked.length === 1 &&
+			(best < ALIAS_RELEASE ||
+				(best < WEAK_RELEASE ? sole(WEAK_RELEASE) : sole(Number.POSITIVE_INFINITY)))
 				? ranked[0]!.declaration
 				: undefined;
 		if (release !== undefined) {
@@ -214,8 +261,10 @@ function countParameter(
 	const next = candidates.find(
 		(candidate) => candidate.position === index + 1 && !candidate.updated,
 	);
+	// A bare `n` counts elements, or bytes behind a `void *`, which has no elements.
+	const untyped = pointee(model, declaration.params[index]!.type)?.kind === "void";
 	return next !== undefined &&
-		(countName.test(next.name) || (!bytes && next.name === "n"))
+		(countName.test(next.name) || (next.name === "n" && (!bytes || untyped)))
 		? next.position
 		: undefined;
 }
@@ -260,6 +309,8 @@ function suggestResult(
 ): MaligatorFfiValueFacts | undefined {
 	const target = pointee(model, declaration.returns);
 	if (target === undefined || target.kind === "function") return undefined;
+	// Constant text stays the library's, so the binding copies it without releasing it.
+	if (isConstText(model, declaration.returns)) return { string: true };
 	const free = releaseFunction(model, declaration);
 	if (free === undefined) return undefined;
 	const bytes = isByteType(target);
@@ -452,8 +503,12 @@ function suggestFunction(
 				: { array: { length: key(count) } };
 			continue;
 		}
-		// Character pointers are text or buffers, and a release function's pointer is
-		// memory it frees, not a value it writes.
+		if (isConstText(model, declaration.params[index]!.type)) {
+			params[key(index)] = { string: true };
+			continue;
+		}
+		// Other character pointers are text or buffers, and a release function's pointer
+		// is memory it frees, not a value it writes.
 		if (
 			bytes ||
 			("const" in target && target.const === true) ||
