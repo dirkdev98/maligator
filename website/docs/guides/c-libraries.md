@@ -345,8 +345,10 @@ After reviewing a contract against the installed headers, record its declaration
 maligator ffi check --update
 ```
 
-Commit `maligator-ffi.lock.json` with the contract. Run `maligator ffi check` in CI
-to report changes before accepting a library upgrade. The command reads the headers
+Commit `maligator-ffi.lock.json` with the contract. Fixed argument and cleanup status
+facts also watch macros and enums in the declared library headers, including macro
+aliases that have no JavaScript export. Run `maligator ffi check` in CI to report changes before accepting
+a library upgrade. The command reads the headers
 and facts and exits with status 1 if they differ or have no accepted snapshot. Review
 the changes, update the facts if needed, then run `--update` again.
 

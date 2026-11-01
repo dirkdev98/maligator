@@ -1026,7 +1026,18 @@ server.listen(0, "127.0.0.1", () => {
 		mkdirSync(ffiDirectory, { recursive: true });
 		writeFileSync(
 			path.join(ffiDirectory, "probe.h"),
-			"typedef struct ProbeState { int value; void *reserved; } ProbeState;\nint probe_state_value(ProbeState *state);\nvoid probe_state_set(ProbeState *state, int value);\nProbeState *probe_state_same(ProbeState *state);\nint probe_add(int a, int b);\nconst char *probe_text(const char *text, unsigned int length);\nint probe_overflow(int value);\nint probe_pause(void);\n",
+			`typedef struct ProbeState { int value; void *reserved; } ProbeState;
+int probe_state_value(ProbeState *state);
+void probe_state_set(ProbeState *state, int value);
+ProbeState *probe_state_same(ProbeState *state);
+int probe_add(int a, int b);
+const char *probe_text(const char *text, unsigned int length);
+#define PROBE_CALLBACK_BASE ((void (*)(void))0)
+#define PROBE_CALLBACK PROBE_CALLBACK_BASE
+int probe_callback(void (*callback)(void));
+int probe_overflow(int value);
+int probe_pause(void);
+`,
 		);
 		writeFileSync(
 			path.join(ffiDirectory, "probe.c"),
@@ -1038,6 +1049,7 @@ void probe_state_set(ProbeState *state, int value) { state->value = value; }
 ProbeState *probe_state_same(ProbeState *state) { return state; }
 int probe_add(int a, int b) { return a + b; }
 const char *probe_text(const char *text, unsigned int length) { (void)length; return text; }
+int probe_callback(void (*callback)(void)) { return callback == NULL; }
 int probe_overflow(int value) { return value + 1; }
 int probe_pause(void) {
   fputs("native wait entered\\n", stderr);
@@ -1050,7 +1062,16 @@ int probe_pause(void) {
 		);
 		writeFileSync(
 			path.join(ffiDirectory, "probe.ffi.mts"),
-			'export default { headers: ["probe.h"], find: [{ includeDirs: ["."], sources: ["probe.c"] }], types: { ProbeState: { handle: { storage: "caller" } } }, functions: { probe_state_same: { returns: { borrowed: true } }, probe_text: { params: { text: { string: { length: "length" } } }, returns: { string: { length: "length" } } } } };\n',
+			`export default {
+ headers: ["probe.h"], find: [{ includeDirs: ["."], sources: ["probe.c"] }],
+ types: { ProbeState: { handle: { storage: "caller" } } },
+ functions: {
+  probe_state_same: { returns: { borrowed: true } },
+  probe_text: { params: { text: { string: { length: "length" } } }, returns: { string: { length: "length" } } },
+  probe_callback: { params: { callback: { constant: "PROBE_CALLBACK" } } },
+ },
+};
+`,
 		);
 		writeFileSync(
 			path.join(project, "ffi.build.mts"),
@@ -1058,7 +1079,24 @@ int probe_pause(void) {
 		);
 		writeFileSync(
 			path.join(ffiDirectory, "pass.test.mts"),
-			'import { test, expect } from "maligator:test";\nimport { ProbeState, probe_state_value, probe_state_set, probe_state_same, probe_add, probe_text } from "maligator:ffi/probe";\ntest("calls the library", () => { using state = ProbeState(); expect(probe_state_value(state)).toBe(0); probe_state_set(state, 7); expect(probe_state_same(state)).toBe(state); expect(probe_state_value(state)).toBe(7); console.log("native probe note"); expect(probe_add(2, 3)).toBe(5); });\ntest("preserves counted UTF-8 through the native CLI", () => { expect(probe_text("Grüße\\0🙂")).toBe("Grüße\\0🙂"); });\n',
+			`import { test, expect } from "maligator:test";
+import { ProbeState, probe_state_value, probe_state_set, probe_state_same, probe_add, probe_text, probe_callback } from "maligator:ffi/probe";
+test("calls the library", () => {
+ using state = ProbeState();
+ expect(probe_state_value(state)).toBe(0);
+ probe_state_set(state, 7);
+ expect(probe_state_same(state)).toBe(state);
+ expect(probe_state_value(state)).toBe(7);
+ console.log("native probe note");
+ expect(probe_add(2, 3)).toBe(5);
+});
+test("preserves counted UTF-8 through the native CLI", () => {
+ expect(probe_text("Grüße\\0🙂")).toBe("Grüße\\0🙂");
+});
+test("passes a pointer-valued constant through a macro alias", () => {
+ expect(probe_callback()).toBe(1);
+});
+`,
 		);
 		writeFileSync(
 			path.join(ffiDirectory, "overflow.test.mts"),
@@ -1093,6 +1131,38 @@ int probe_pause(void) {
 		copyFileSync(acceptedProbe.probe.report, path.join(reports, "ffi-probe-pass.json"));
 		const ffiLock = path.join(ffiDirectory, "probe.lock.json");
 		const acceptedLock = readFileSync(ffiLock, "utf8");
+		const probeHeaderPath = path.join(ffiDirectory, "probe.h");
+		const acceptedHeader = readFileSync(probeHeaderPath, "utf8");
+		try {
+			writeFileSync(
+				probeHeaderPath,
+				acceptedHeader.replace("((void (*)(void))0)", "((void (*)(void))1)"),
+			);
+			const drift = invokeCaptured([
+				"ffi",
+				"check",
+				"--config",
+				"ffi.build.mts",
+				"--out",
+				"ffi-probe/probe.lock.json",
+				"--json",
+			]);
+			const checked = JSON.parse(drift.stdout) as FfiCheckReport;
+			if (
+				drift.status !== 1 ||
+				!checked.libraries.some((library) =>
+					library.changes.some(
+						(change) => change.path === "declarations.macro PROBE_CALLBACK_BASE.body",
+					),
+				) ||
+				readFileSync(ffiLock, "utf8") !== acceptedLock
+			)
+				throw new Error(
+					`native FFI check missed a fixed pointer macro change: ${drift.stdout}`,
+				);
+		} finally {
+			writeFileSync(probeHeaderPath, acceptedHeader);
+		}
 		for (const [file, timeout] of [
 			["overflow", undefined],
 			["wait", "2000"],

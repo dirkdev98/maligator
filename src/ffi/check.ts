@@ -143,6 +143,7 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 	const declarations: Record<string, Json> = {};
 	const functions = new Map(model.functions.map((entry) => [entry.name, entry]));
 	const macros = new Map(model.macros.map((entry) => [entry.name, entry]));
+	const untypedMacros = new Map(model.untypedMacros.map((entry) => [entry.name, entry]));
 	const anonymous = new Map<string, string>();
 	const typeName = (kind: string, name: string, at: string): string => {
 		if (/^[A-Za-z_]\w*$/.test(name)) return `${kind} ${name}`;
@@ -237,6 +238,36 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 		const entry = functions.get(name);
 		if (entry !== undefined) addFunction(entry);
 	};
+	const visitedConstants = new Set<string>();
+	const constant = (name: string): void => {
+		if (visitedConstants.has(name)) return;
+		visitedConstants.add(name);
+		const typed = macros.get(name);
+		const macro = typed ?? untypedMacros.get(name);
+		if (macro !== undefined) {
+			const key = `macro ${name}`;
+			declarations[key] = json({
+				body: macro.body,
+				...(typed === undefined
+					? {}
+					: { type: type(typed.type, key), value: typed.value }),
+			});
+			const expression = macro.body.replace(
+				/(?:u8|[LuU])?"(?:\\.|[^"\\])*"|(?:[LuU])?'(?:\\.|[^'\\])*'/g,
+				" ",
+			);
+			for (const identifier of expression.match(/\b[A-Za-z_]\w*\b/g) ?? [])
+				constant(identifier);
+		}
+		const enumeration = [...model.enums.values()].find((entry) =>
+			entry.constants.some((entry) => entry.name === name),
+		);
+		if (enumeration !== undefined)
+			type({ kind: "enum", name: enumeration.name }, `constant fact ${name}`);
+		if (model.typedefs.has(name))
+			type({ kind: "typedef", name }, `constant fact ${name}`);
+		helper(name);
+	};
 	const mapping = (value: JsValue): void => {
 		if ("free" in value && value.free !== undefined) helper(value.free);
 		if (value.kind === "callback") {
@@ -245,7 +276,18 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 			mapping(value.returns);
 		} else if (value.kind === "array" || value.kind === "sequence") mapping(value.of);
 	};
-	for (const name of Object.keys(contract.facts.functions).sort()) helper(name);
+	const fixedConstants = new Set<string>();
+	for (const name of Object.keys(contract.facts.functions).sort()) {
+		const facts = contract.facts.functions[name]!;
+		helper(name);
+		for (const params of [
+			facts.params,
+			...Object.values(facts.variants ?? {}).map((variant) => variant.params),
+		])
+			for (const value of Object.values(params ?? {}))
+				if (value.constant !== undefined) fixedConstants.add(value.constant);
+	}
+	for (const name of [...fixedConstants].sort()) constant(name);
 	for (const name of Object.keys(contract.facts.types).sort()) {
 		if (model.typedefs.has(name)) type({ kind: "typedef", name }, `type fact ${name}`);
 		else {
@@ -275,13 +317,7 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 			);
 		if (handle.destroy !== undefined) helper(handle.destroy.name);
 		const success = handle.destroy?.success;
-		if (success !== undefined) {
-			const enumeration = [...model.enums.values()].find((entry) =>
-				entry.constants.some((constant) => constant.name === success),
-			);
-			if (enumeration !== undefined)
-				type({ kind: "enum", name: enumeration.name }, `cleanup success ${success}`);
-		}
+		if (success !== undefined) constant(success);
 	}
 	for (const constant of plan.constants) {
 		const macro = macros.get(constant.name);

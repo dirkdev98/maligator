@@ -1915,12 +1915,14 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
       treats the call as running arbitrary code. Give it the binding's effects (no
       user code without callbacks).
 - [ ] Extend struct storage reuse to conditional loop updates and recurrences that
-      observe a prior result before replacing it.
+      expose a prior result to opaque calls before replacing it.
 - [ ] Managed pointer fields for caller-allocated state structs, such as zlib's
       `z_stream`, need retained buffers, checked pointer/count updates, and lifecycle
       rules. Libuv handles also need storage retained through asynchronous close.
 - [ ] Counted UTF-8 strings in queued callbacks, out/inout parameters, and state struct
       fields need explicit count and lifetime handling.
+- [ ] Import macros referenced by facts from transitive headers outside the declared
+      library surface so `ffi check` can follow their definitions too.
 - [ ] Support individual clang declarations and documentation blocks that exceed the
       native runtime's string limit.
 

@@ -85,6 +85,29 @@ afterEach(() => {
 });
 
 describe("ffi check", () => {
+	it("watches pointer-valued macros reached through fixed argument aliases", () => {
+		const directory = project();
+		const headerPath = path.join(directory, "include/shapes.h");
+		const macros = `${header}\n#define SHAPES_CALLBACK_BASE ((void (*)(void))0)\n#define SHAPES_CALLBACK SHAPES_CALLBACK_BASE\nvoid shapes_callback(void (*callback)(void));\n`;
+		writeFileSync(headerPath, macros);
+		writeContract(directory, {
+			functions: {
+				shapes_callback: { params: { callback: { constant: "SHAPES_CALLBACK" } } },
+			},
+		});
+		accept(directory);
+		writeFileSync(
+			headerPath,
+			macros.replace("((void (*)(void))0)", "((void (*)(void))1)"),
+		);
+		expect(check(directory, [], 1).libraries[0]?.changes).toContainEqual({
+			path: "declarations.macro SHAPES_CALLBACK_BASE.body",
+			kind: "changed",
+			before: "((void (*)(void))0)",
+			after: "((void (*)(void))1)",
+		});
+	});
+
 	it("watches cleanup success codes from a transitive enum header", () => {
 		const directory = project();
 		writeFileSync(
