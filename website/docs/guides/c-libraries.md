@@ -287,9 +287,24 @@ declaration. Uncited comments do not affect it. A citation must resolve to extra
 documentation; removing the declaration or its documentation prevents an update.
 Reviewing the text and the library's behavior remains the contract author's job.
 
+Write [Maligator tests](/guides/testing) that exercise the facts, such as releasing
+an owned resource or copying a counted buffer. Run them as a sanitizer probe before
+accepting an upgrade:
+
+```shell
+maligator ffi check raylib --probe tests/raylib.test.ts --update
+```
+
+The probe uses UBSan on macOS and ASan+UBSan elsewhere. Its test output and source
+identities are retained under `.cache/ffi-check/`. A failed or skipped-only probe,
+a changed input or an edited lockfile prevents acceptance. `--probe-timeout` sets the
+child process deadline in milliseconds, including time spent inside C; it defaults
+to 30000. Probes run on the host. Prebuilt libraries need an instrumented build for
+sanitizer coverage inside their code.
+
 Use `--target rust-triple` to check or accept headers for a cross-build target. Each
 target has its own snapshots, and `ffi check raylib --update` updates only raylib for
-the selected target. Note that this checks the extracted declarations, not the linked
-binary's ABI or whether a library still follows its documented ownership rules.
+the selected target. Header snapshots and probes provide evidence for reviewing a
+contract; they do not establish the linked binary's ABI or every ownership rule.
 
 `maligator test` builds a test runtime with the bindings too. Note that `test --watch` does not support C libraries, and portable wire output rejects them.

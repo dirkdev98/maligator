@@ -87,6 +87,7 @@ export type FfiCommand = {
 			json: boolean;
 			update: boolean;
 			outPath?: string;
+			probe?: { path: string; timeoutMs: number };
 	  }
 );
 
@@ -149,6 +150,8 @@ Options:
   --json                       Print machine-readable output (ffi inspect or check)
   --out <path>                 Output file for ffi types or check
   --update                     Accept current declarations and facts (ffi check)
+  --probe <path>               Run native sanitizer tests before accepting an FFI snapshot
+  --probe-timeout <ms>         Bound the probe child process (default: 30000)
   -h, --help                   Show help
   -V, --version                Show the version`;
 
@@ -441,6 +444,8 @@ function parseFfi(args: Array<string>): CliCommand {
 	let library: string | undefined;
 	let json = false;
 	let update = false;
+	let probePath: string | undefined;
+	let probeTimeoutMs: number | undefined;
 	let outPath: string | undefined;
 	let configPath: string | undefined;
 	let target: string | undefined;
@@ -453,6 +458,16 @@ function parseFfi(args: Array<string>): CliCommand {
 		}
 		if (action === "check" && argument === "--update") {
 			update = true;
+			continue;
+		}
+		if (action === "check" && argument === "--probe") {
+			probePath = optionValue(args, index, argument);
+			index++;
+			continue;
+		}
+		if (action === "check" && argument === "--probe-timeout") {
+			probeTimeoutMs = positiveInteger(optionValue(args, index, argument), argument);
+			index++;
 			continue;
 		}
 		if (action !== "inspect" && argument === "--out") {
@@ -485,11 +500,20 @@ function parseFfi(args: Array<string>): CliCommand {
 		return { ...shared, action, ...(outPath === undefined ? {} : { outPath }) };
 	}
 	if (action === "check") {
+		if (probePath === undefined && probeTimeoutMs !== undefined)
+			throw new CliUsageError("--probe-timeout requires --probe");
+		if (probePath !== undefined && target !== undefined)
+			throw new CliUsageError(
+				"FFI probes run on the host; omit --target when using --probe",
+			);
 		return {
 			...shared,
 			action,
 			json,
 			update,
+			...(probePath === undefined
+				? {}
+				: { probe: { path: probePath, timeoutMs: probeTimeoutMs ?? 30_000 } }),
 			...(library === undefined ? {} : { library }),
 			...(outPath === undefined ? {} : { outPath }),
 		};

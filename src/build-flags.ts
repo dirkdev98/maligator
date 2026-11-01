@@ -437,9 +437,30 @@ export function platformLinkArgs(
 
 const GMALLOC_PATH = "/usr/lib/libgmalloc.dylib";
 
+/** Select the native test instruments without inheriting another malloc instrument. */
+export function sanitizerTestEnvironment(
+	platform: NodeJS.Platform,
+	base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+	const inserted = base.DYLD_INSERT_LIBRARIES?.split(":")
+		.filter((file) => file !== GMALLOC_PATH)
+		.join(":");
+	return {
+		...base,
+		MAL_ASAN: platform === "darwin" ? "0" : "1",
+		MAL_UBSAN: platform === "darwin" ? "1" : "0",
+		MAL_TSAN: "0",
+		MAL_GMALLOC: "0",
+		MAL_GC_AT_EXIT: "1",
+		DYLD_INSERT_LIBRARIES: inserted || undefined,
+		ASAN_OPTIONS: "abort_on_error=1:detect_leaks=1:halt_on_error=1",
+		UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1",
+	};
+}
+
 /** True when the binary should be run under Guard Malloc (`MAL_GMALLOC=1`). */
-export function gmallocEnabled(): boolean {
-	return envOn("MAL_GMALLOC");
+export function gmallocEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	return envOn("MAL_GMALLOC", env);
 }
 
 /**
@@ -449,7 +470,7 @@ export function gmallocEnabled(): boolean {
  * Otherwise returns `base` unchanged.
  */
 export function runEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-	if (!gmallocEnabled()) {
+	if (!gmallocEnabled(base)) {
 		return base;
 	}
 	const existing = base.DYLD_INSERT_LIBRARIES;

@@ -140,7 +140,8 @@ Writes TypeScript declarations for every library under `ffi`: one `declare modul
 
 ```shell
 maligator ffi check [library] [--json] [--update] [--out path]
-  [--config path] [--target rust-triple]
+  [--config path] [--target rust-triple] [--probe test-path]
+  [--probe-timeout milliseconds]
 ```
 
 Checks C declarations and accepted facts against `maligator-ffi.lock.json` in the
@@ -163,10 +164,23 @@ members, and shows changes to that text. Citation kinds are `function`, `typedef
 including with `--update`.
 
 Uncited comments, source locations and declarations outside the checked surface do
-not affect the snapshot. Citations identify text to review; the command does not
-decide whether that text supports a fact or whether C obeys it. It does not execute
-C code or check the linked binary's ABI. Run it in your CI alongside the application's
-tests; builds do not run it automatically.
+not affect the snapshot. Citations identify text for the contract author to review.
+The snapshot describes declarations; application tests exercise the library's behavior.
+
+`--probe test-path` runs the project's selected Maligator tests with native sanitizers:
+UBSan on macOS and ASan+UBSan elsewhere. At least one test must pass. With `--update`,
+acceptance waits for the probe to succeed and for its configuration, C inputs,
+compiled test dependencies and existing lockfile to remain unchanged. Probes run on
+the host, so `--target` cannot be combined with `--probe`.
+
+`--probe-timeout` bounds the child process, including a blocking C call; the default
+is 30000 milliseconds. Compilation runs before this deadline. A JSON report under
+`.cache/ffi-check/` retains the selected sanitizer, input and executable identities,
+test summary and captured output. `--json` includes this report and its path.
+
+Header code and configured C sources receive sanitizer flags. Use an instrumented
+build of a prebuilt library to check its internals. Run these checks in CI alongside
+the application's tests; builds do not run them automatically.
 
 ## Diagnostic build options {#diagnostic-build-options}
 

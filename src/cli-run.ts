@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 
 export interface RunOutcome {
 	status?: number;
@@ -29,31 +29,37 @@ export function executeBinary(
 export interface CapturedRunOutcome extends RunOutcome {
 	stdout: string;
 	stderr: string;
+	timedOut?: true;
 }
 
 export function executeBinaryCaptured(
 	binaryPath: string,
 	args: Array<string>,
 	env: NodeJS.ProcessEnv,
+	timeoutMs?: number,
 ): CapturedRunOutcome {
-	try {
-		const stdout = execFileSync(binaryPath, args, { env, encoding: "utf-8" });
-		return { status: 0, stdout, stderr: "" };
-	} catch (error) {
-		const result = error as Error & {
-			status?: number | null;
-			signal?: NodeJS.Signals | null;
-			stdout?: string | null;
-			stderr?: string | null;
-		};
-		const hasStatus = result.status !== undefined && result.status !== null;
-		const hasSignal = result.signal !== undefined && result.signal !== null;
-		if (!hasStatus && !hasSignal) throw error;
-		return {
-			status: result.status ?? undefined,
-			signal: result.signal ?? undefined,
-			stdout: result.stdout ?? "",
-			stderr: result.stderr ?? "",
-		};
-	}
+	const result = spawnSync(binaryPath, args, {
+		env,
+		encoding: "utf8",
+		timeout: timeoutMs,
+		killSignal: timeoutMs === undefined ? undefined : "SIGKILL",
+	});
+	const timedOut =
+		result.error !== undefined &&
+		"code" in result.error &&
+		result.error.code === "ETIMEDOUT";
+	if (
+		result.error !== undefined &&
+		!timedOut &&
+		result.status === null &&
+		result.signal === null
+	)
+		throw result.error;
+	return {
+		status: result.status ?? undefined,
+		signal: result.signal ?? undefined,
+		stdout: result.stdout ?? "",
+		stderr: result.stderr ?? "",
+		...(timedOut ? { timedOut: true } : {}),
+	};
 }

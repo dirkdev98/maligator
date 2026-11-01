@@ -85,6 +85,7 @@ import { FfiError } from "./ffi/ffi-error.ts";
 import { formatInspection, inspectBindings } from "./ffi/inspect.ts";
 import { nativeLibraryInputs, prepareLibraries, prepareLibrary } from "./ffi/library.ts";
 import type { PreparedLibraries } from "./ffi/library.ts";
+import { runFfiProbe } from "./ffi/probe.ts";
 import {
 	cacheFrontendWire,
 	frontendDependencyUnchanged,
@@ -115,7 +116,10 @@ import {
 	reportIsolatedTestResult,
 	reportProfiledTestResult,
 } from "./testing/command.ts";
-import type { TestCommandSummary } from "./testing/command.ts";
+import type {
+	IsolatedTestExecutionOptions,
+	TestCommandSummary,
+} from "./testing/command.ts";
 import type { TestRunResult } from "./testing/protocol.ts";
 import { compileTestRuntimeRequest } from "./testing/test-images.ts";
 import { watchTestCommand } from "./testing/watch.ts";
@@ -418,6 +422,7 @@ function prepareConfiguredLibraries(
 	config: ResolvedBuildConfig,
 	context: CommandContext,
 	toolchain: Toolchain,
+	environment: NodeJS.ProcessEnv = process.env,
 ): PreparedLibraries | undefined {
 	if (Object.keys(config.ffi).length === 0) return undefined;
 	try {
@@ -425,7 +430,7 @@ function prepareConfiguredLibraries(
 			projectRoot: process.cwd(),
 			stripTypes: context.stripTypes,
 			compiler: toolchain.tools.cc,
-			environment: { ...process.env, ...toolchain.environmentOverrides },
+			environment: { ...environment, ...toolchain.environmentOverrides },
 			platform: toolchain.platform ?? process.platform,
 			cross: toolchain.cross === true,
 		});
@@ -1971,9 +1976,14 @@ export async function devCommand(
 
 const PROFILED_TEST_RESULT_PREFIX = "__MALIGATOR_TEST_RESULT__";
 
-function testToolchain(context: CommandContext, config: ResolvedBuildConfig): Toolchain {
+function testToolchain(
+	context: CommandContext,
+	config: ResolvedBuildConfig,
+	environment: NodeJS.ProcessEnv = process.env,
+): Toolchain {
 	try {
 		return requireToolchain({
+			env: environment,
 			needsCxx: configNeedsCxx(config),
 			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
 		});
@@ -1987,9 +1997,10 @@ function buildIsolatedTestRunner(
 	context: CommandContext,
 	config: ResolvedBuildConfig,
 	libraries: PreparedLibraries | undefined,
+	environment: NodeJS.ProcessEnv = process.env,
 ): string {
 	const derivation = buildDerivationFromConfig(config);
-	const toolchain = testToolchain(context, config);
+	const toolchain = testToolchain(context, config, environment);
 	const evalCompiler = context.installation.evalCompiler;
 	const compilerBake =
 		evalCompiler.kind === "source"
@@ -2011,6 +2022,7 @@ function buildIsolatedTestRunner(
 			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
 	const nativeContext = resolveNativeBuildContext({
 		toolchain,
+		environment,
 		plan: selectNativeBuildPlan(toolchain, false),
 		runtimeDirectory: context.installation.runtimeDirectory,
 		features: derivation.features,
@@ -2031,18 +2043,35 @@ function executeIsolatedTests(
 	context: CommandContext,
 	config: ResolvedBuildConfig,
 	packagedRunner?: DevelopmentRunner,
+	options: IsolatedTestExecutionOptions = {},
 ): TestCommandSummary {
+	const environment = options.environment ?? process.env;
+	const stdout =
+		options.stdout ??
+		((text: string) => {
+			process.stdout.write(text);
+		});
+	const stderr =
+		options.stderr ??
+		((text: string) => {
+			process.stderr.write(text);
+		});
 	// A packaged runner cannot contain C library bindings, so these tests build one.
 	const libraries =
 		packagedRunner === undefined
-			? prepareConfiguredLibraries(config, context, testToolchain(context, config))
+			? prepareConfiguredLibraries(
+					config,
+					context,
+					testToolchain(context, config, environment),
+					environment,
+				)
 			: undefined;
 	const testConfig =
 		libraries === undefined ? config : { ...config, ffiModules: libraries.modules };
 	const compiled = prepareIsolatedTestCommand(command, context, testConfig);
 	const runner =
 		packagedRunner?.executablePath ??
-		buildIsolatedTestRunner(context, testConfig, libraries);
+		buildIsolatedTestRunner(context, testConfig, libraries, environment);
 	const wirePaths =
 		"wires" in compiled
 			? compiled.wires.map((wire) => wire.path)
@@ -2066,10 +2095,21 @@ function executeIsolatedTests(
 		entrypoint,
 		...wirePaths,
 	];
+	options.onPrepared?.({
+		dependencies: compiled.inputIdentities,
+		binaryPath: runner,
+		wirePaths,
+	});
 	const executionStartedAt = Date.now();
-	const outcome = executeBinaryCaptured(runner, args, runEnv());
+	const outcome = executeBinaryCaptured(
+		runner,
+		args,
+		runEnv(environment),
+		options.timeoutMs,
+	);
 	const executionMs = Date.now() - executionStartedAt;
-	if (outcome.stderr !== "") process.stderr.write(outcome.stderr);
+	options.onExecution?.(outcome, executionMs);
+	if (outcome.stderr !== "") stderr(outcome.stderr);
 	const outputLines = outcome.stdout.split("\n");
 	const resultLine = outputLines.find((line) =>
 		line.startsWith(ISOLATED_TEST_RESULT_PREFIX),
@@ -2077,13 +2117,15 @@ function executeIsolatedTests(
 	const applicationOutput = outputLines
 		.filter((line) => !line.startsWith(ISOLATED_TEST_RESULT_PREFIX))
 		.join("\n");
-	if (applicationOutput !== "") process.stdout.write(applicationOutput);
-	if (outcome.status !== 0 || resultLine === undefined) {
+	if (applicationOutput !== "") stdout(applicationOutput);
+	if (outcome.timedOut || outcome.status !== 0 || resultLine === undefined) {
 		commandError(
 			`error: isolated test process ${
-				outcome.signal
-					? `received ${outcome.signal}`
-					: `exited with ${outcome.status ?? "unknown"}`
+				outcome.timedOut
+					? `timed out after ${options.timeoutMs}ms`
+					: outcome.signal
+						? `received ${outcome.signal}`
+						: `exited with ${outcome.status ?? "unknown"}`
 			}${resultLine === undefined ? " without publishing a test result" : ""}`,
 		);
 	}
@@ -2097,16 +2139,20 @@ function executeIsolatedTests(
 			`error: isolated test result was invalid: ${error instanceof Error ? error.message : String(error)}`,
 		);
 	}
-	return reportIsolatedTestResult(testResult, {
-		files: compiled.files.length,
-		discoveryMs: compiled.discoveryMs,
-		frontendMs: compiled.frontendMs,
-		executionMs,
-		cacheHits: compiled.cache === "hit" ? 1 : 0,
-		cacheMisses: compiled.cache === "miss" ? 1 : 0,
-		artifactHits: "artifactHits" in compiled ? compiled.artifactHits : 0,
-		artifactMisses: "artifactMisses" in compiled ? compiled.artifactMisses : 0,
-	});
+	return reportIsolatedTestResult(
+		testResult,
+		{
+			files: compiled.files.length,
+			discoveryMs: compiled.discoveryMs,
+			frontendMs: compiled.frontendMs,
+			executionMs,
+			cacheHits: compiled.cache === "hit" ? 1 : 0,
+			cacheMisses: compiled.cache === "miss" ? 1 : 0,
+			artifactHits: "artifactHits" in compiled ? compiled.artifactHits : 0,
+			artifactMisses: "artifactMisses" in compiled ? compiled.artifactMisses : 0,
+		},
+		(message = "") => stdout(`${message}\n`),
+	);
 }
 
 function executeProfiledTests(
@@ -2456,20 +2502,60 @@ function runFfiCommand(command: FfiCommand, context: CommandContext): void {
 					: [command.library];
 			if (names.length === 0)
 				commandError("error: maligator.build.ts declares no ffi libraries");
-			const checked = checkLibraries(
-				names.map((name) => prepareLibrary(config, name, preparation)),
-				{
-					file: path.resolve(projectRoot, command.outPath ?? "maligator-ffi.lock.json"),
-					target:
-						command.target ?? hostExecutionTarget(process.platform, process.arch).triple,
-					update: command.update,
-					all: command.library === undefined,
-				},
+			const libraries = (
+				command.probe === undefined ? names : Object.keys(config.ffi).sort()
+			).map((name) => prepareLibrary(config, name, preparation));
+			const selected = libraries.filter((library) =>
+				names.includes(library.contract.name),
 			);
+			const checkOptions = {
+				file: path.resolve(projectRoot, command.outPath ?? "maligator-ffi.lock.json"),
+				target:
+					command.target ?? hostExecutionTarget(process.platform, process.arch).triple,
+				update: command.probe === undefined && command.update,
+				all: command.library === undefined,
+			};
+			let checked = checkLibraries(selected, checkOptions);
+			if (command.probe !== undefined) {
+				const probePath = path.resolve(projectRoot, command.probe.path);
+				const probeCommand: TestCommand = {
+					kind: "test",
+					paths: [probePath],
+					repeat: 1,
+					bail: false,
+					timeoutMs: command.probe.timeoutMs,
+					compileConcurrency: 1,
+					profile: false,
+				};
+				const probe = runFfiProbe(
+					{
+						path: probePath,
+						projectRoot,
+						configFile: path.resolve(
+							projectRoot,
+							command.configPath ?? BUILD_CONFIG_NAME,
+						),
+						lockfile: checkOptions.file,
+						timeoutMs: command.probe.timeoutMs,
+						environment: preparation.environment,
+						libraries,
+					},
+					(options) =>
+						executeIsolatedTests(probeCommand, context, config, undefined, options),
+				);
+				if (probe.ok && command.update)
+					checked = checkLibraries(selected, { ...checkOptions, update: true });
+				checked = { ...checked, ok: checked.ok && probe.ok, probe };
+			}
 			log.info(
 				command.json ? JSON.stringify(checked, null, "\t") : formatFfiCheck(checked),
 			);
-			if (!checked.ok) commandError("error: C declarations or facts need review");
+			if (!checked.ok)
+				commandError(
+					checked.probe?.ok === false
+						? "error: the FFI probe failed; the snapshot was not accepted"
+						: "error: C declarations or facts need review",
+				);
 			return;
 		}
 		if (command.action === "types") {

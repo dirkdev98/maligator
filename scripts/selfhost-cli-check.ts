@@ -20,6 +20,7 @@ import * as path from "node:path";
 import type { ApplicationResources } from "../src/application-images.ts";
 import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
+import type { FfiCheckReport } from "../src/ffi/check.ts";
 import { buildProductCli } from "../src/product-builder.ts";
 import { parseProfileCapture, profileCaptureIdentity } from "../src/profile-artifact.ts";
 import type { PreparedProfile, ProfileManifest } from "../src/profile-artifact.ts";
@@ -1020,6 +1021,108 @@ server.listen(0, "127.0.0.1", () => {
 			throw new Error(`doctor did not accept the isolated toolchain:\n${doctorOutput}`);
 		}
 		console.log("ok   doctor found the isolated native toolchain");
+
+		const ffiDirectory = path.join(project, "ffi-probe");
+		mkdirSync(ffiDirectory, { recursive: true });
+		writeFileSync(
+			path.join(ffiDirectory, "probe.h"),
+			"int probe_add(int a, int b);\nint probe_overflow(int value);\nint probe_pause(void);\n",
+		);
+		writeFileSync(
+			path.join(ffiDirectory, "probe.c"),
+			`#include "probe.h"
+#include <stdio.h>
+#include <time.h>
+int probe_add(int a, int b) { return a + b; }
+int probe_overflow(int value) { return value + 1; }
+int probe_pause(void) {
+  fputs("native wait entered\\n", stderr);
+  fflush(stderr);
+  struct timespec delay = { 10, 0 };
+  nanosleep(&delay, 0);
+  return 0;
+}
+`,
+		);
+		writeFileSync(
+			path.join(ffiDirectory, "probe.ffi.mts"),
+			'export default { headers: ["probe.h"], find: [{ includeDirs: ["."], sources: ["probe.c"] }] };\n',
+		);
+		writeFileSync(
+			path.join(project, "ffi.build.mts"),
+			'export default { engine: { eval: false, realms: false }, ffi: { probe: { contract: "ffi-probe/probe.ffi.mts" } } };\n',
+		);
+		writeFileSync(
+			path.join(ffiDirectory, "pass.test.mts"),
+			'import { test, expect } from "maligator:test";\nimport { probe_add } from "maligator:ffi/probe";\ntest("calls the library", () => { console.log("native probe note"); expect(probe_add(2, 3)).toBe(5); });\n',
+		);
+		writeFileSync(
+			path.join(ffiDirectory, "overflow.test.mts"),
+			'import { test } from "maligator:test";\nimport { probe_overflow } from "maligator:ffi/probe";\ntest("overflows in C", () => { probe_overflow(2147483647); });\n',
+		);
+		writeFileSync(
+			path.join(ffiDirectory, "wait.test.mts"),
+			'import { test } from "maligator:test";\nimport { probe_pause } from "maligator:ffi/probe";\ntest("waits in C", () => { probe_pause(); });\n',
+		);
+		const ffiArguments = [
+			"ffi",
+			"check",
+			"--config",
+			"ffi.build.mts",
+			"--out",
+			"ffi-probe/probe.lock.json",
+			"--update",
+			"--json",
+		];
+		const acceptedProbe = JSON.parse(
+			invoke([...ffiArguments, "--probe", "ffi-probe/pass.test.mts"]),
+		) as FfiCheckReport;
+		if (
+			!acceptedProbe.ok ||
+			acceptedProbe.probe?.ok !== true ||
+			(acceptedProbe.probe.summary?.passed ?? 0) === 0 ||
+			!acceptedProbe.probe.stdout.includes("native probe note")
+		)
+			throw new Error(
+				`native FFI probe did not accept its passing tests: ${JSON.stringify(acceptedProbe)}`,
+			);
+		copyFileSync(acceptedProbe.probe.report, path.join(reports, "ffi-probe-pass.json"));
+		const ffiLock = path.join(ffiDirectory, "probe.lock.json");
+		const acceptedLock = readFileSync(ffiLock, "utf8");
+		for (const [file, timeout] of [
+			["overflow", undefined],
+			["wait", "2000"],
+		] as const) {
+			const outcome = invokeCaptured([
+				...ffiArguments,
+				"--probe",
+				`ffi-probe/${file}.test.mts`,
+				...(timeout === undefined ? [] : ["--probe-timeout", timeout]),
+			]);
+			const checked = JSON.parse(outcome.stdout) as FfiCheckReport;
+			if (
+				outcome.status !== 1 ||
+				checked.probe?.ok !== false ||
+				readFileSync(ffiLock, "utf8") !== acceptedLock
+			)
+				throw new Error(
+					`native FFI ${file} probe did not preserve its accepted snapshot: ${JSON.stringify(checked)}`,
+				);
+			if (
+				file === "overflow"
+					? !/runtime error.*signed integer overflow/.test(checked.probe.stderr)
+					: checked.probe.execution?.timedOut !== true ||
+						checked.probe.execution.signal !== "SIGKILL" ||
+						!checked.probe.stderr.includes("native wait entered")
+			)
+				throw new Error(
+					`native FFI ${file} probe did not exercise its instrument: ${JSON.stringify(checked)}`,
+				);
+			copyFileSync(checked.probe.report, path.join(reports, `ffi-probe-${file}.json`));
+		}
+		console.log(
+			"ok   native FFI probes checked sanitizer failures and blocking C deadlines without accepting failed snapshots",
+		);
 
 		const buildOutput = invoke(["build", "--verbose"]);
 		if (!buildOutput.includes("selfhost-cli-app") || buildOutput.trim().includes("\n")) {

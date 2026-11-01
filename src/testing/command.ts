@@ -2,8 +2,10 @@ import { readFileSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import type { CommandContext } from "../cli-commands.ts";
+import type { CapturedRunOutcome } from "../cli-run.ts";
 import type { TestCommand } from "../cli.ts";
 import { CommandProgress } from "../command-progress.ts";
+import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
 import { frontendDependencyUnchanged } from "../frontend-cache.ts";
 import { UnsupportedLinkedImagesError } from "../linked-images.ts";
 import { hostExecutionTarget, resolveExecution } from "../platform/execution.ts";
@@ -39,6 +41,20 @@ export interface TestCommandSummary {
 	artifactHits: number;
 	artifactMisses: number;
 	failedFiles?: Array<string>;
+}
+
+/** Reporting and a process deadline for tests whose C calls can block the VM thread. */
+export interface IsolatedTestExecutionOptions {
+	readonly environment?: NodeJS.ProcessEnv;
+	readonly timeoutMs?: number;
+	readonly stdout?: (text: string) => void;
+	readonly stderr?: (text: string) => void;
+	readonly onPrepared?: (input: {
+		readonly dependencies: ReadonlyArray<FrontendDependencyIdentity>;
+		readonly binaryPath: string;
+		readonly wirePaths: ReadonlyArray<string>;
+	}) => void;
+	readonly onExecution?: (outcome: CapturedRunOutcome, durationMs: number) => void;
 }
 
 export const ISOLATED_TEST_RESULT_PREFIX = "__MALIGATOR_ISOLATED_TEST_RESULT__";
@@ -226,6 +242,7 @@ export function prepareIsolatedTestCommand(
 		},
 		runOptions.shuffleSeed ?? null,
 	);
+	const session = new TestCompilationSession();
 	const options = {
 		files,
 		config,
@@ -237,7 +254,7 @@ export function prepareIsolatedTestCommand(
 		platformSourceRoot:
 			context.installation.platformSourceRoot ??
 			path.dirname(context.installation.nodeGlobalsPath),
-		session: new TestCompilationSession(),
+		session,
 		dependencyWorker: context.dependencyWorker,
 	};
 	let compiled: CompiledTestImage | CompiledLinkedTestImage;
@@ -252,6 +269,7 @@ export function prepareIsolatedTestCommand(
 	}
 	return {
 		...compiled,
+		inputIdentities: session.dependencyIdentities(compiled.dependencies),
 		files,
 		discoveryMs,
 		frontendMs: Date.now() - frontendStartedAt,
@@ -271,25 +289,27 @@ function reportTestProcessResult(
 		artifactMisses?: number;
 	},
 	mode: string,
+	write = output,
 ): TestCommandSummary {
 	for (const fileResult of result.files) {
 		const count =
 			fileResult.passed + fileResult.failed + fileResult.skipped + fileResult.todo;
-		output(
+		write(
 			`${fileResult.failed === 0 ? "✓" : "✗"} ${relative(fileResult.file)}       ${plural(count, "test")}   ${fileResult.durationMs}ms   ${mode}`,
 		);
 		reportFailures(
 			fileResult.file,
 			result.events.filter((event) => "file" in event && event.file === fileResult.file),
+			write,
 		);
 	}
-	output();
-	output(
+	write();
+	write(
 		`${result.passed} passed, ${result.failed} failed` +
 			`${result.skipped > 0 ? `, ${result.skipped} skipped` : ""}` +
 			`${result.todo > 0 ? `, ${result.todo} todo` : ""} in ${Math.round(result.durationMs)}ms`,
 	);
-	output(
+	write(
 		`Timing: discovery ${timing.discoveryMs.toFixed(1)}ms, frontend ${timing.frontendMs.toFixed(1)}ms, execution ${timing.executionMs.toFixed(1)}ms`,
 	);
 	return {
@@ -312,8 +332,9 @@ function reportTestProcessResult(
 export function reportIsolatedTestResult(
 	result: TestRunResult,
 	timing: Parameters<typeof reportTestProcessResult>[1],
+	write = output,
 ): TestCommandSummary {
-	return reportTestProcessResult(result, timing, "isolated interpreter");
+	return reportTestProcessResult(result, timing, "isolated interpreter", write);
 }
 
 export function reportProfiledTestResult(

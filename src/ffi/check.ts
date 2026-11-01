@@ -6,6 +6,7 @@ import type { CFunction } from "./c-model.ts";
 import type { CType } from "./c-type.ts";
 import { FfiError } from "./ffi-error.ts";
 import type { PreparedLibrary } from "./library.ts";
+import type { FfiProbeReport } from "./probe.ts";
 
 type Json =
 	| null
@@ -33,6 +34,7 @@ export interface FfiCheckReport {
 	readonly target: string;
 	readonly ok: boolean;
 	readonly libraries: ReadonlyArray<FfiLibraryCheck>;
+	readonly probe?: FfiProbeReport;
 }
 
 export interface FfiLibraryCheck {
@@ -413,10 +415,19 @@ export function formatFfiCheck(report: FfiCheckReport): string {
 					`  ${change.path}: ${JSON.stringify(change.before) ?? "(absent)"} -> ${JSON.stringify(change.after) ?? "(absent)"}`,
 			),
 		]),
-		...(report.ok
+		...(report.probe === undefined
 			? []
 			: [
-					"Review the declarations and facts, then run maligator ffi check --update to accept them.",
+					`Probe ${report.probe.path}: ${report.probe.ok ? "passed" : "failed"} (${report.probe.sanitizer === "asan" ? "ASan+UBSan" : "UBSan"})`,
+					...(report.probe.error === undefined ? [] : [`  ${report.probe.error}`]),
+					`Probe report: ${report.probe.report}`,
 				]),
+		...(report.ok
+			? []
+			: report.probe?.ok === false
+				? ["Fix the probe failure before accepting this snapshot."]
+				: [
+						"Review the declarations and facts, then run maligator ffi check --update to accept them.",
+					]),
 	].join("\n");
 }

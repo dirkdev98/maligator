@@ -11,6 +11,7 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { runEnv } from "../src/build-flags.ts";
 import * as cacheManagement from "../src/cache-management.ts";
 import {
 	applicationDriverPath,
@@ -103,6 +104,27 @@ describe("parseCliArgs", () => {
 		expect(() => parseCliArgs(["ffi", "types", "--update"])).toThrow("unknown option");
 		expect(() => parseCliArgs(["ffi", "check", "shapes", "sketch"])).toThrow(
 			"unexpected argument",
+		);
+	});
+
+	it("opts into host sanitizer probes with a bounded process deadline", () => {
+		expect(
+			parseCliArgs([
+				"ffi",
+				"check",
+				"--probe",
+				"ffi.test.ts",
+				"--probe-timeout",
+				"2000",
+				"--update",
+			]),
+		).toMatchObject({
+			action: "check",
+			update: true,
+			probe: { path: "ffi.test.ts", timeoutMs: 2000 },
+		});
+		expect(() => parseCliArgs(["ffi", "check", "--probe-timeout", "100"])).toThrow(
+			"requires --probe",
 		);
 	});
 
@@ -578,6 +600,34 @@ describe("command shell", () => {
 });
 
 describe("executeBinary", () => {
+	it("captures successful stderr alongside stdout", () => {
+		expect(
+			executeBinaryCaptured(
+				process.execPath,
+				["-e", 'process.stdout.write("out"); process.stderr.write("note");'],
+				process.env,
+			),
+		).toMatchObject({ status: 0, stdout: "out", stderr: "note" });
+	});
+
+	it("stops a child that does not return before its deadline", () => {
+		expect(
+			executeBinaryCaptured(
+				process.execPath,
+				["-e", "setInterval(() => {}, 1000)"],
+				process.env,
+				100,
+			),
+		).toMatchObject({ timedOut: true, signal: "SIGKILL" });
+	});
+
+	it("selects Guard Malloc from the supplied run environment", () => {
+		const plain = { MAL_GMALLOC: "0" };
+		expect(runEnv(plain)).toEqual(plain);
+		expect(runEnv({ MAL_GMALLOC: "1" }).DYLD_INSERT_LIBRARIES).toBe(
+			"/usr/lib/libgmalloc.dylib",
+		);
+	});
 	it("forwards argument boundaries to the child", () => {
 		const script =
 			`if (process.argv[1] !== "two words" || process.argv[2] !== "--flag") ` +

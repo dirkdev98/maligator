@@ -5,10 +5,26 @@ import {
 	isCanonicalTestEnvironmentChild,
 } from "../scripts/test-environment.ts";
 import { sanitizerEnvironment } from "../scripts/test-sanitize.ts";
+import { sanitizerTestEnvironment } from "../src/build-flags.ts";
 import { scaledNativeRunTimeoutMs } from "../src/test-harness.ts";
 import { TEST_TELEMETRY_ENV } from "../src/test-telemetry.ts";
 
 describe("sanitizer runner", () => {
+	it("replaces competing instruments while preserving unrelated injected libraries", () => {
+		const environment = sanitizerTestEnvironment("darwin", {
+			MAL_ASAN: "1",
+			MAL_TSAN: "1",
+			MAL_GMALLOC: "1",
+			DYLD_INSERT_LIBRARIES: "/usr/lib/libgmalloc.dylib:/fictional/helper.dylib",
+		});
+		expect(environment).toMatchObject({
+			MAL_ASAN: "0",
+			MAL_UBSAN: "1",
+			MAL_TSAN: "0",
+			MAL_GMALLOC: "0",
+			DYLD_INSERT_LIBRARIES: "/fictional/helper.dylib",
+		});
+	});
 	it("scales native child deadlines independently for sanitizers and maximal GC stress", () => {
 		expect(scaledNativeRunTimeoutMs(undefined, {})).toBe(20000);
 		expect(scaledNativeRunTimeoutMs(undefined, { MAL_UBSAN: "1" })).toBe(60000);

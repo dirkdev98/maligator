@@ -1918,7 +1918,6 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
       observe a prior result before replacing it.
 - [ ] Caller-allocated state structs with pointer fields, such as zlib's
       `z_stream` and libuv's handles, cannot be created or filled from JavaScript.
-- [ ] Extend `ffi check` with sanitizer probes for accepted facts.
 - [ ] Support individual clang declarations and documentation blocks that exceed the
       native runtime's string limit.
 

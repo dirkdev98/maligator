@@ -1,5 +1,6 @@
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
+import { sanitizerTestEnvironment } from "../src/build-flags.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { TEST_TELEMETRY_ENV } from "../src/test-telemetry.ts";
 import { workerBudget, workerCount, workerEnvironment } from "../src/worker-budget.ts";
@@ -15,7 +16,6 @@ export function sanitizerEnvironment(
 	environment: NodeJS.ProcessEnv = process.env,
 	availableParallelism = os.availableParallelism(),
 ): NodeJS.ProcessEnv {
-	const undefinedBehavior = "halt_on_error=1:print_stacktrace=1";
 	const telemetry = environment[TEST_TELEMETRY_ENV];
 	const budget = workerBudget(environment.MALIGATOR_WORKERS, availableParallelism);
 	const workers = workerCount(
@@ -46,14 +46,10 @@ export function sanitizerEnvironment(
 		MAL_TEST_WORKERS: String(workers),
 		MAL_PREPARATION_BUILD_JOBS: String(preparationBuildJobs),
 	};
-	return platform === "darwin"
-		? { ...shared, MAL_UBSAN: "1", UBSAN_OPTIONS: undefinedBehavior }
-		: {
-				...shared,
-				MAL_ASAN: "1",
-				ASAN_OPTIONS: "abort_on_error=1:detect_leaks=1:halt_on_error=1",
-				UBSAN_OPTIONS: undefinedBehavior,
-			};
+	return sanitizerTestEnvironment(platform, {
+		...shared,
+		DYLD_INSERT_LIBRARIES: environment.DYLD_INSERT_LIBRARIES,
+	});
 }
 
 export async function runSanitizerTests(args = process.argv.slice(2)): Promise<number> {
