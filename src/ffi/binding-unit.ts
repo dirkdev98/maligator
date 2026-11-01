@@ -1092,7 +1092,10 @@ class BindingWriter {
 						// A library may call back after the VM is gone; it gets a zero result.
 						`\tif (vm == nullptr) { mal_ffi_callback_drop(mal_callback); return${returns ? " mal_return" : ""}; }`,
 					]
-				: ["\tMalVm *vm = mal_callback->vm;"]),
+				: [
+						"\tMalVm *vm = mal_ffi_callback_vm(mal_callback);",
+						`\tif (vm == nullptr) return${returns ? " mal_return" : ""};`,
+					]),
 			`\tstatic const MalFfiSite mal_site = { ${cString(owner)}, "callback result", nullptr };`,
 			"\t(void) mal_site;",
 			`\tMalValue mal_values[${inputs.length === 0 ? "1" : count}] = {};`,
@@ -1168,8 +1171,8 @@ class BindingWriter {
 	}
 
 	/**
-	 * Copy foreign-thread arguments into a message; waiting callers receive its native
-	 * result after VM execution, while notification callers continue at once.
+	 * Waiting callers keep pointed-to arguments alive until VM conversion finishes.
+	 * Notification callers continue at once, so their messages own argument copies.
 	 */
 	#queuedEntry(
 		name: string,
@@ -1188,7 +1191,9 @@ class BindingWriter {
 		const owned = (index: number): boolean => {
 			const param = value.params[index];
 			return (
-				typeof param === "object" && (param.kind === "string" || param.kind === "bytes")
+				!waiting &&
+				typeof param === "object" &&
+				(param.kind === "string" || param.kind === "bytes")
 			);
 		};
 		const copies = type.params.flatMap((_, index) => {
@@ -1196,6 +1201,7 @@ class BindingWriter {
 			const field = `mal_message->mal_c${String(index)}`;
 			const source = `mal_c${String(index)}`;
 			if (
+				waiting ||
 				typeof param !== "object" ||
 				(param.kind !== "string" && param.kind !== "bytes")
 			) {
@@ -1253,9 +1259,7 @@ class BindingWriter {
 			`\tMalFfiCallback *mal_callback = ${callback};`,
 			"\tif (mal_callback != nullptr && !mal_ffi_callback_here(mal_callback)) {",
 			// A lookup without user data already reserved the call under its lock.
-			...(value.params.includes("data") || value.closes !== undefined
-				? ["\t\tmal_ffi_callback_reserve(mal_callback);"]
-				: []),
+			...(!keyedLookup ? ["\t\tmal_ffi_callback_reserve(mal_callback);"] : []),
 			`\t\t${message} *mal_message = malloc(sizeof(*mal_message));`,
 			"\t\tif (mal_message != nullptr) {",
 			"\t\t\tbool mal_ok = true;",
@@ -1508,14 +1512,14 @@ class BindingWriter {
 						if (slot !== undefined)
 							trampolines.push("", `static _Thread_local MalFfiCallback *${slot};`);
 						trampolines.push(...this.#trampoline(trampoline, value, name, slot));
-						locals.push(`MalFfiCallback mal_callback_${String(index)} = { vm, 0 };`);
+						locals.push(`MalFfiCallback mal_callback_${String(index)} = {};`);
 						if (slot !== undefined) {
 							locals.push(`MalFfiCallback *mal_scoped_${String(index)} = ${slot};`);
 							cleanup.push(`${slot} = mal_scoped_${String(index)};`);
 						}
 						body.push(
 							`if (!mal_ffi_to_function(vm, ${source}, ${value.nullable}, ${site})) goto mal_done;`,
-							`mal_callback_${String(index)}.function = ${source};`,
+							`mal_ffi_callback_init(&mal_callback_${String(index)}, vm, ${source});`,
 							...(slot === undefined
 								? []
 								: [`${slot} = &mal_callback_${String(index)};`]),
@@ -1840,7 +1844,33 @@ class BindingWriter {
 		const name = binding.name;
 		const declaration = binding.declaration;
 		const context = `MalFfiAsync_${name}`;
+		const callbacks: Array<{ readonly index: number; readonly slot?: string }> = [];
+		const callbackArguments: Array<string> = [];
+		const trampolines: Array<string> = [];
+		const discard = (value: JsValue, expression: string): Array<string> => {
+			if ("free" in value && value.free !== undefined)
+				return [
+					`if ((${expression}) != nullptr) ${value.free}((void *) (${expression}));`,
+				];
+			if (value.kind !== "handle" || !value.owned) return [];
+			const handle = this.#handle(value.name);
+			if (handle.destroy === undefined) return [];
+			return handle.representation === "struct"
+				? [`mal_ffi_destroy_${handle.name}(&(${expression}));`]
+				: [
+						`if ((${expression}) != nullptr) mal_ffi_destroy_${handle.name}((void *) (${expression}));`,
+					];
+		};
+		const nativeDisposals = [
+			...discard(binding.returns, "mal_ctx->mal_return"),
+			...binding.outputs.flatMap((output, index) =>
+				discard(output.value, `mal_ctx->mal_output_${String(index)}`),
+			),
+		];
+		const tracksRun = binding.closes !== undefined || nativeDisposals.length > 0;
 		const fields: Array<string> = [];
+		if (tracksRun) fields.push("bool mal_ran;");
+		if (nativeDisposals.length > 0) fields.push("bool mal_result_observed;");
 		const body: Array<string> = [];
 		/** Buffers resolve last: nothing may run JavaScript between them and the call. */
 		const buffers: Array<string> = [];
@@ -1858,7 +1888,7 @@ class BindingWriter {
 				? this.#handle(closing.name).destroy?.success
 				: undefined;
 		if (binding.closes !== undefined)
-			fields.push("MalValue mal_closing;", "bool mal_close_started;", "bool mal_ran;");
+			fields.push("MalValue mal_closing;", "bool mal_close_started;");
 		if (compoundInputs) fields.push("MalFfiInputs mal_inputs;");
 		const managedHandles = binding.arguments.some((entry) => {
 			if (entry.kind !== "input") return false;
@@ -1937,8 +1967,12 @@ class BindingWriter {
 					body.push(`${target} = ${entry.expression};`);
 					return;
 				case "callback-data":
+					callbackArguments.push(
+						`${target} = mal_ctx->mal_callback_${String(entry.of)};`,
+					);
+					return;
 				case "callback-release":
-					throw new Error(`async binding ${name} has a callback`);
+					throw new Error(`async binding ${name} has a kept callback`);
 				case "out":
 				case "inout": {
 					const output = `mal_output_${String(entry.output)}`;
@@ -1965,6 +1999,39 @@ class BindingWriter {
 					const value = binding.params[entry.param]!.value;
 					const site = `&mal_site_${String(entry.param)}`;
 					const source = argument(entry.param);
+					if (value.kind === "callback") {
+						const trampoline = `mal_ffi_async_callback_${name}_${String(index)}`;
+						const field = `mal_callback_${String(index)}`;
+						const slot =
+							value.params.includes("data") || value.lookup !== undefined
+								? undefined
+								: `mal_ffi_async_scoped_${name}_${String(index)}`;
+						callbacks.push({ index, ...(slot === undefined ? {} : { slot }) });
+						fields.push(`MalFfiCallback *${field};`);
+						if (slot !== undefined)
+							trampolines.push("", `static _Thread_local MalFfiCallback *${slot};`);
+						trampolines.push(
+							...this.#trampoline(
+								trampoline,
+								{ ...value, kept: true, queued: "wait" },
+								exported,
+								slot,
+							),
+						);
+						body.push(
+							`if (!mal_ffi_to_function(vm, ${source}, ${value.nullable}, ${site})) goto mal_failed;`,
+						);
+						buffers.push(
+							`if ((${source}) != mal_ffi_null()) {`,
+							`\tmal_ctx->${field} = mal_ffi_keep_queued(vm, ${source});`,
+							`\tif (mal_ctx->${field} == nullptr) goto mal_failed;`,
+							"}",
+						);
+						callbackArguments.push(
+							`${target} = mal_ctx->${field} == nullptr ? nullptr : ${trampoline};`,
+						);
+						return;
+					}
 					if (value.kind === "string" && value.counted) {
 						const text = this.#fresh("string");
 						strings.push(text);
@@ -2115,7 +2182,7 @@ class BindingWriter {
 					"mal_result",
 					count,
 					"&mal_site_result",
-					false,
+					true,
 				)
 			: [];
 		if (binding.outputs.length > 0) {
@@ -2148,6 +2215,7 @@ class BindingWriter {
 		const keep = String(Math.max(kept, 1));
 		return [
 			"",
+			...trampolines,
 			`typedef struct ${context} {`,
 			...fields.map((line) => `\t${line}`),
 			...(fields.length === 0 ? ["\tchar mal_unused;"] : []),
@@ -2156,8 +2224,19 @@ class BindingWriter {
 			`static void mal_ffi_async_run_${name}(void *mal_data) {`,
 			`\t${context} *mal_ctx = mal_data;`,
 			"\t(void) mal_ctx;",
+			...callbacks.flatMap(({ index, slot }) =>
+				slot === undefined
+					? []
+					: [
+							`\tMalFfiCallback *mal_previous_${String(index)} = ${slot};`,
+							`\t${slot} = mal_ctx->mal_callback_${String(index)};`,
+						],
+			),
 			`\t${returns ? "mal_ctx->mal_return = " : ""}${call};`,
-			...(binding.closes === undefined ? [] : ["\tmal_ctx->mal_ran = true;"]),
+			...callbacks.flatMap(({ index, slot }) =>
+				slot === undefined ? [] : [`\t${slot} = mal_previous_${String(index)};`],
+			),
+			...(tracksRun ? ["\tmal_ctx->mal_ran = true;"] : []),
 			"}",
 			"",
 			`static MalValue mal_ffi_async_complete_${name}(MalVm *vm, void *mal_data, bool mal_ran) {`,
@@ -2180,7 +2259,8 @@ class BindingWriter {
 						"\t\tmal_ctx->mal_close_started = false;",
 						"\t}",
 					]),
-			"\tif (!mal_ran || mal_ffi_threw(vm)) return mal_result;",
+			"\tif (!mal_ran) return mal_result;",
+			...(nativeDisposals.length === 0 ? [] : ["\tmal_ctx->mal_result_observed = true;"]),
 			...produce.map((line) => `\t${line}`),
 			"\tgoto mal_done;",
 			"mal_done:",
@@ -2194,8 +2274,18 @@ class BindingWriter {
 				: [
 						`\tif (mal_ctx->mal_close_started) mal_ffi_finish_handle_close(mal_ctx->mal_closing, mal_ctx->mal_ran${closeSuccess === undefined ? "" : ` && mal_ctx->mal_return == (${closeSuccess})`});`,
 					]),
+			...(nativeDisposals.length === 0
+				? []
+				: [
+						"\tif (mal_ctx->mal_ran && !mal_ctx->mal_result_observed) {",
+						...nativeDisposals.map((line) => `\t\t${line}`),
+						"\t}",
+					]),
 			...strings.map((temporary) => `\tmal_ffi_string_release(&mal_ctx->${temporary});`),
 			...frees.map((line) => `\t${line}`),
+			...callbacks.map(
+				({ index }) => `\tmal_ffi_release(mal_ctx->mal_callback_${String(index)});`,
+			),
 			"\tfree(mal_ctx);",
 			"}",
 			"",
@@ -2221,7 +2311,13 @@ class BindingWriter {
 			...body.map((line) => `\t${line}`),
 			...this.#resultGuards(binding, "goto mal_failed;").map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
-			`\tif (mal_ffi_async(vm, mal_ctx, mal_ffi_async_run_${name}, mal_ffi_async_complete_${name}, mal_ffi_async_release_${name}, mal_keep, ${String(kept)}, ${inputs}, &mal_promise)) {`,
+			...callbackArguments.map((line) => `\t${line}`),
+			...(callbacks.length === 0
+				? []
+				: [
+						`\tMalFfiCallback *mal_callbacks[] = { ${callbacks.map(({ index }) => `mal_ctx->mal_callback_${String(index)}`).join(", ")} };`,
+					]),
+			`\tif (mal_ffi_async(vm, mal_ctx, mal_ffi_async_run_${name}, mal_ffi_async_complete_${name}, mal_ffi_async_release_${name}, mal_keep, ${String(kept)}, ${inputs}, ${callbacks.length === 0 ? "nullptr" : "mal_callbacks"}, ${callbacks.length}, &mal_promise)) {`,
 			...(compoundInputs ? ["\t\tmal_ffi_inputs_unroot(&mal_ctx->mal_inputs);"] : []),
 			"\t\tmal_ffi_unroot(&mal_keep_roots);",
 			"\t\treturn mal_promise;",

@@ -1741,9 +1741,9 @@ export function planBindings(
 			declared.add(asyncName);
 			if (
 				!("gaps" in result) &&
-				result.params.some(({ value }) => value.kind === "callback")
+				result.params.some(({ value }) => value.kind === "callback" && value.kept)
 			) {
-				throw new FfiError(`${at}: an async call takes no callbacks`);
+				throw new FfiError(`${at}: an async call takes only call-scoped callbacks`);
 			}
 		}
 		if ("gaps" in result) unbound.push(result);

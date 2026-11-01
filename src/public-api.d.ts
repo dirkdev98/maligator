@@ -233,8 +233,10 @@ export interface MaligatorFfiFunctionFacts {
 	/**
 	 * Also export the function under this name as one that runs the C call on a worker
 	 * thread and returns a promise of its result. Only for functions the library allows
-	 * on any thread while other calls run. A destroy function keeps its handle closing
-	 * until the worker retires; conditional cleanup failure leaves it open for retry.
+	 * on any thread while other calls run. Call-scoped callbacks run on the program's
+	 * thread while C waits; their unhandled errors reject this promise. A destroy
+	 * function keeps its handle closing until the worker retires; conditional cleanup
+	 * failure leaves it open for retry.
 	 */
 	async?: string;
 }

@@ -375,7 +375,10 @@ bool mal_ffi_threw(MalVm *vm);
 typedef struct MalFfiCallback {
     _Atomic(MalVm *) vm;
     MalValue function;
+    const void *thread_identity;
 } MalFfiCallback;
+/** Record the owning thread before C can call a stack or retained context. */
+void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue function);
 
 /**
  * A callback context for a library that keeps the callback after the call returns.
@@ -403,7 +406,7 @@ void mal_ffi_close_return(MalFfiCallback *callback);
  */
 void mal_ffi_release(void *data);
 /**
- * The VM a kept callback runs in, or null when JavaScript cannot run: once that VM
+ * The VM a callback runs in, or null when JavaScript cannot run: once that VM
  * is gone, or while the collector runs a handle's destroy function. Aborts when the
  * library calls back from another thread.
  */
@@ -506,12 +509,15 @@ typedef void (*MalFfiAsyncRelease)(void *data);
  * the data on the owning VM thread after both sides retire it, including a producer
  * joined during shutdown. `keep` and compound input values stay rooted through
  * result conversion and release; shutdown disables collection until heap teardown.
+ * Callback contexts remain native until the worker retires. Unhandled callback
+ * errors reject this promise; nested JavaScript catches keep their normal behavior.
  * False with a pending throw, leaving `data` to the caller.
  */
 bool mal_ffi_async(
     MalVm *vm, void *data, MalFfiAsyncRun run, MalFfiAsyncComplete complete,
     MalFfiAsyncRelease release, const MalValue *keep, int32_t keep_count,
-    const MalFfiInputs *inputs, MalValue *promise);
+    const MalFfiInputs *inputs, MalFfiCallback *const *callbacks, int32_t callback_count,
+    MalValue *promise);
 /** A promise rejected with the pending throw, which this clears. */
 MalValue mal_ffi_rejected(MalVm *vm);
 

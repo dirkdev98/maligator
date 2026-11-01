@@ -422,6 +422,26 @@ typedef struct MalFfiClose {
     bool committed;
 } MalFfiClose;
 
+typedef struct MalFfiAsyncGroup {
+    _Atomic u32 references;
+    MalVm *vm;
+    MalValue error;
+    MalAsyncContext *async_context;
+#if MAL_REALMS
+    MalRealm *realm;
+#endif
+    bool failed;
+    bool active;
+} MalFfiAsyncGroup;
+
+static MAL_ISOLATE_LOCAL MalFfiAsyncGroup *ffi_worker_group;
+
+static void ffi_group_release(MalFfiAsyncGroup *group) {
+    if (group != nullptr
+        && atomic_fetch_sub_explicit(&group->references, 1, memory_order_acq_rel) == 1)
+        free(group);
+}
+
 /** A kept callback; trampolines receive a pointer to `callback`, its first member. */
 typedef struct MalFfiKept {
     MalFfiCallback callback;
@@ -440,6 +460,8 @@ typedef struct MalFfiKept {
     /** Queued messages can outlive both VM detach and C's final release. */
     _Atomic u32 references;
     MalFfiClose *close;
+    /** Only its VM reads this association; worker posts carry a separate native reference. */
+    MalFfiAsyncGroup *group;
 } MalFfiKept;
 
 static void ffi_close_free(MalFfiClose *close);
@@ -464,6 +486,18 @@ typedef struct MalFfiHandleEntry {
     /** Null for an empty slot. */
     MalFfiHandleObject *handle;
 } MalFfiHandleEntry;
+
+typedef struct MalFfiAsyncPayload {
+    struct MalFfiAsyncPayload *next;
+    _Atomic u32 references;
+    void *data;
+    MalFfiAsyncRun run;
+    MalFfiAsyncRelease release;
+    MalFfiAsyncGroup *group;
+    MalFfiCallback **callbacks;
+    i32 callback_count;
+} MalFfiAsyncPayload;
+static void ffi_async_release(void *data);
 
 /**
  * Per-VM binding state: the shape each record type's objects share, indexed by the
@@ -500,6 +534,7 @@ struct MalFfiState {
     u32 free_count;
     u32 free_capacity;
     bool accepting_waits;
+    MalFfiAsyncPayload *retired_async;
 };
 
 /**
@@ -595,6 +630,12 @@ static void ffi_state_free(MalVm *vm) {
         MalFfiKept *next = pending->pending;
         ffi_kept_unref(pending);
         pending = next;
+    }
+    // Unobserved native results can call destructors; every callback must be detached first.
+    while (state->retired_async != nullptr) {
+        MalFfiAsyncPayload *payload = state->retired_async;
+        state->retired_async = payload->next;
+        ffi_async_release(payload);
     }
     free(state->free_slots);
     free(state->invocations);
@@ -967,6 +1008,14 @@ void mal_ffi_callback_lost(void) {
 
 static void ffi_run_pending_releases(MalVm *vm);
 
+static MAL_ISOLATE_LOCAL byte ffi_callback_thread;
+
+void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue function) {
+    callback->vm = vm;
+    callback->function = function;
+    callback->thread_identity = &ffi_callback_thread;
+}
+
 MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function) {
     MalValue held[2] = {function, mal_value_new_undefined()};
     MalRootSpan root;
@@ -995,7 +1044,7 @@ MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function) {
         if (!mal_ffi_threw(vm)) mal_vm_throw_allocation_error(vm);
         return nullptr;
     }
-    kept->callback = (MalFfiCallback) {vm, held[0]};
+    mal_ffi_callback_init(&kept->callback, vm, held[0]);
     atomic_init(&kept->references, 1);
     kept->slot = slot;
     kept->thread = pthread_self();
@@ -1088,22 +1137,22 @@ void mal_ffi_release(void *data) {
     ffi_release_now(kept);
 }
 
-typedef struct MalFfiAsyncPayload {
-    _Atomic u32 references;
-    void *data;
-    MalFfiAsyncRun run;
-    MalFfiAsyncRelease release;
-} MalFfiAsyncPayload;
-
 static void ffi_async_run(void *data) {
     MalFfiAsyncPayload *payload = data;
+    MalFfiAsyncGroup *previous = ffi_worker_group;
+    ffi_worker_group = payload->group;
     payload->run(payload->data);
+    ffi_worker_group = previous;
 }
 
 static void ffi_async_release(void *data) {
     MalFfiAsyncPayload *payload = data;
     if (atomic_fetch_sub_explicit(&payload->references, 1, memory_order_acq_rel) == 1) {
         payload->release(payload->data);
+        for (i32 index = 0; index < payload->callback_count; index++)
+            if (payload->callbacks[index] != nullptr) mal_ffi_callback_drop(payload->callbacks[index]);
+        free(payload->callbacks);
+        ffi_group_release(payload->group);
         free(payload);
     }
 }
@@ -1129,11 +1178,20 @@ typedef struct MalFfiAsync {
 static MAL_ISOLATE_LOCAL MalFfiAsync *ffi_async_pending;
 static MAL_ISOLATE_LOCAL bool ffi_async_installed;
 
+static void ffi_async_detach(MalFfiAsyncPayload *payload) {
+    payload->group->active = false;
+    for (i32 index = 0; index < payload->callback_count; index++) {
+        MalFfiKept *kept = (MalFfiKept *) payload->callbacks[index];
+        if (kept != nullptr && kept->group == payload->group) kept->group = nullptr;
+    }
+}
+
 static void ffi_async_scan_roots(MalVm *vm, void *data) {
     (void) data;
     for (MalFfiAsync *call = ffi_async_pending; call != nullptr; call = call->next) {
         if (call->vm != vm) continue;
         mal_gc_mark_value(call->promise);
+        mal_gc_mark_value(call->payload->group->error);
         for (i32 index = 0; index < call->keep_count; index++) mal_gc_mark_value(call->keep[index]);
         mal_gc_mark_value(mal_async_internal_value((MalHeapHeader *) call->async_context));
     }
@@ -1150,8 +1208,12 @@ static void ffi_async_free(MalVm *vm) {
         MalRootSpan kept;
         mal_gc_root(&kept, call->keep, call->keep_count);
         *link = call->next;
+        ffi_async_detach(call->payload);
         (void) call->complete(vm, call->payload->data, false);
-        ffi_async_release(call->payload);
+        if (vm->ffi != nullptr) {
+            call->payload->next = vm->ffi->retired_async;
+            vm->ffi->retired_async = call->payload;
+        } else ffi_async_release(call->payload);
         mal_gc_unroot(&kept);
         free(call->keep);
         free(call);
@@ -1175,17 +1237,23 @@ static bool ffi_async_drain(MalVm *vm) {
     MalRealm *saved_realm = vm->current_realm;
     mal_realm_switch(vm, call->realm);
 #endif
-    MalValue roots[3] = {
+    MalValue roots[4] = {
         call->promise, mal_value_new_undefined(),
-        mal_async_internal_value((MalHeapHeader *) call->async_context)};
+        mal_async_internal_value((MalHeapHeader *) call->async_context),
+        call->payload->group->error};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalAsyncContextScope scope;
     mal_async_context_scope_enter(vm, &scope, call->async_context);
     void *data = mal_blocking_work_result_data(task.data);
     bool ran = data != nullptr && task.result != MAL_HOST_TERMINAL_CANCELLED;
+    ffi_async_detach(call->payload);
+    if (call->payload->group->failed)
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = roots[3]};
     // The completion releases what the call held, so it runs even when the work did not.
     roots[1] = call->complete(vm, call->payload->data, ran);
+    if (call->payload->group->failed)
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = roots[3]};
     if (!ran && vm->completion.kind != MAL_COMPLETION_THROW) {
         mal_vm_throw_error(
             vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) "A C library call did not run");
@@ -1213,7 +1281,8 @@ static bool ffi_async_drain(MalVm *vm) {
 bool mal_ffi_async(
     MalVm *vm, void *data, MalFfiAsyncRun run, MalFfiAsyncComplete complete,
     MalFfiAsyncRelease release, const MalValue *keep, int32_t keep_count,
-    const MalFfiInputs *inputs, MalValue *promise) {
+    const MalFfiInputs *inputs, MalFfiCallback *const *callbacks, int32_t callback_count,
+    MalValue *promise) {
     MalHost *host = mal_host(vm);
     if (host == nullptr) {
         mal_vm_throw_error(
@@ -1241,11 +1310,17 @@ bool mal_ffi_async(
     i32 total = keep_count + input_count;
     MalFfiAsync *call = calloc(1, sizeof(*call));
     MalFfiAsyncPayload *payload = calloc(1, sizeof(*payload));
+    MalFfiAsyncGroup *group = calloc(1, sizeof(*group));
+    MalFfiCallback **held_callbacks = callback_count == 0 ? nullptr
+        : malloc(sizeof(*held_callbacks) * (usize) callback_count);
     MalValue *kept = total == 0 ? nullptr : malloc(sizeof(*kept) * (usize) total);
-    if (call == nullptr || payload == nullptr || (total > 0 && kept == nullptr)) {
+    if (call == nullptr || payload == nullptr || group == nullptr
+        || (callback_count > 0 && held_callbacks == nullptr) || (total > 0 && kept == nullptr)) {
         free(call);
         free(payload);
         free(kept);
+        free(group);
+        free(held_callbacks);
         return mal_ffi_out_of_memory(vm);
     }
     if (keep_count > 0) memcpy(kept, keep, sizeof(*kept) * (usize) keep_count);
@@ -1262,13 +1337,33 @@ bool mal_ffi_async(
         .realm = vm->current_realm,
 #endif
     };
-    *payload = (MalFfiAsyncPayload) {.references = 2, .data = data, .run = run, .release = release};
+    *group = (MalFfiAsyncGroup) {
+        .references = 1, .vm = vm, .error = mal_value_new_undefined(), .active = true,
+        .async_context = call->async_context,
+#if MAL_REALMS
+        .realm = call->realm,
+#endif
+    };
+    for (i32 index = 0; index < callback_count; index++) {
+        held_callbacks[index] = callbacks[index];
+        if (callbacks[index] == nullptr) continue;
+        mal_ffi_callback_hold(callbacks[index]);
+        ((MalFfiKept *) callbacks[index])->group = group;
+    }
+    *payload = (MalFfiAsyncPayload) {
+        .references = 2, .data = data, .run = run, .release = release,
+        .group = group, .callbacks = held_callbacks, .callback_count = callback_count};
     MalBlockingWorkReservation reservation = {0};
     if (!mal_blocking_work_reserve(host, sizeof(*call), &reservation)
         || !mal_blocking_work_start(host, ffi_async_run, payload, ffi_async_release, &reservation, &call->operation)) {
         mal_blocking_work_reservation_release(&reservation);
         free(kept);
         free(call);
+        ffi_async_detach(payload);
+        for (i32 index = 0; index < callback_count; index++)
+            if (held_callbacks[index] != nullptr) mal_ffi_callback_drop(held_callbacks[index]);
+        free(held_callbacks);
+        ffi_group_release(group);
         free(payload);
         mal_vm_throw_error(
             vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
@@ -1306,10 +1401,10 @@ void mal_ffi_collectable_end(MalVm *vm) {
 }
 
 MalVm *mal_ffi_callback_vm(MalFfiCallback *callback) {
-    MalFfiKept *kept = (MalFfiKept *) callback;
-    if (kept->callback.vm == nullptr || ffi_finalizing) return nullptr;
-    if (!pthread_equal(kept->thread, pthread_self())) ffi_wrong_thread();
-    return kept->callback.vm;
+    MalVm *vm = callback->vm;
+    if (vm == nullptr || ffi_finalizing) return nullptr;
+    if (callback->thread_identity != &ffi_callback_thread) ffi_wrong_thread();
+    return vm;
 }
 
 void mal_ffi_callback_hold(MalFfiCallback *callback) {
@@ -1442,6 +1537,7 @@ typedef struct MalFfiQueuedCall {
     void *message;
     bool ran;
     MalFfiWait *wait;
+    MalFfiAsyncGroup *group;
 } MalFfiQueuedCall;
 
 static MAL_ISOLATE_LOCAL bool ffi_inbox_installed;
@@ -1459,6 +1555,7 @@ static void ffi_queued_destroy(void *data) {
         ffi_wait_finish(call->wait, false);
         ffi_wait_release(call->wait);
     } else if (call->message != nullptr) call->free(call->message);
+    ffi_group_release(call->group);
     free(call);
 }
 
@@ -1511,11 +1608,35 @@ static bool ffi_inbox_drain(MalVm *vm) {
         pending = !call->wait->done;
         pthread_mutex_unlock(&ffi_queue_lock);
     }
-    bool ran = pending && kept->callback.vm == vm;
+    MalFfiAsyncGroup *group = call->group != nullptr ? call->group : kept->group;
+    bool grouped = group != nullptr && group->active && group->vm == vm;
+    bool ran = pending && kept->callback.vm == vm && !(grouped && group->failed);
+    MalAsyncContextScope scope;
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+#endif
+    if (grouped) {
+#if MAL_REALMS
+        mal_realm_switch(vm, group->realm);
+#endif
+        mal_async_context_scope_enter(vm, &scope, group->async_context);
+    }
     if (ran) call->run(vm, &kept->callback, call->message);
     call->ran = true;
+    bool succeeded = ran && vm->completion.kind != MAL_COMPLETION_THROW;
+    if (grouped && vm->completion.kind == MAL_COMPLETION_THROW) {
+        if (!group->failed) group->error = vm->completion.value;
+        group->failed = true;
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    }
+    if (grouped) {
+        mal_async_context_scope_exit(vm, &scope);
+#if MAL_REALMS
+        mal_realm_switch(vm, saved_realm);
+#endif
+    }
     if (call->wait != nullptr)
-        ffi_wait_finish(call->wait, ran && vm->completion.kind != MAL_COMPLETION_THROW);
+        ffi_wait_finish(call->wait, succeeded);
     u32 left = atomic_fetch_sub(&kept->waiting, 1) - 1;
     mal_host_task_release(&host->tasks, &task);
     if (left == 0 && kept->released) ffi_release_now(kept);
@@ -1577,10 +1698,16 @@ static bool ffi_callback_post_locked(
         *call = (MalFfiQueuedCall) {
             .kept = kept, .run = run, .free = release, .message = message, .wait = wait};
         MalVm *vm = kept->callback.vm;
+        MalFfiAsyncGroup *group = ffi_worker_group;
+        if (group != nullptr && group->vm == vm) {
+            atomic_fetch_add_explicit(&group->references, 1, memory_order_relaxed);
+            call->group = group;
+        }
         bool posted = vm != nullptr
             && (wait == nullptr || vm->ffi->accepting_waits)
             && mal_host_post_progress(mal_host(vm), vm->ffi->inbox, call, ffi_queued_destroy);
         if (posted) return true;
+        ffi_group_release(call->group);
         free(call);
     }
     return false;

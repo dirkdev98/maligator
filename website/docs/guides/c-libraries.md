@@ -409,7 +409,15 @@ functions: {
 },
 ```
 
-The arguments convert before the call starts, and a conversion error rejects the promise. Buffers and handles the call uses stay pinned until the promise settles: transferring or resizing such a buffer, or closing such a handle, throws. JavaScript can still write the buffer's bytes in the meantime, so leave them alone until then. A handle a callback lends is refused, since the call outlives the callback. The result converts when the promise settles, so a call that changes what a pointer result points to must wait until then. An async export takes no callbacks, copies array arguments, and the program needs an event loop, such as the web platform surface.
+The arguments convert before the call starts, and a conversion error rejects the promise. Buffers and handles the call uses stay pinned until the promise settles: transferring or resizing such a buffer, or closing such a handle, throws. JavaScript can still write the buffer's bytes in the meantime, so leave them alone until then. A handle a callback lends is refused, since the call outlives the callback. The result converts when the promise settles, so a call that changes what a pointer result points to must wait until then. An async export copies array arguments, and the program needs an event loop, such as the web platform surface.
+
+Call-scoped callbacks run on the program's thread while the C caller waits, including
+callbacks from threads the library creates. Without user data, the library must invoke
+the C callback on the worker executing that call. An unhandled callback exception rejects
+that call's promise; later callbacks in the same call return zero without running
+JavaScript. Exceptions caught inside a callback keep their ordinary behavior. Register
+retained callbacks synchronously, with `queued` when the library calls them from other
+threads.
 
 Use `async` only for functions the library allows on another thread while the program makes other calls, such as SQLite in its default serialized mode.
 
