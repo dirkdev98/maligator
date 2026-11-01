@@ -210,7 +210,7 @@ bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, 
     return true;
 }
 
-bool mal_ffi_to_bytes(
+__attribute__((always_inline)) bool mal_ffi_to_bytes(
     MalVm *vm, MalValue value, bool nullable, bool writable, const MalFfiSite *site,
     void **data, size_t *length, void **pin) {
     if (pin != nullptr) *pin = nullptr;

@@ -72,11 +72,12 @@ MalBufferSourceSpanStatus mal_buffer_source_span(
         if (buffer == nullptr || buffer->detached) {
             return MAL_BUFFER_SOURCE_SPAN_DETACHED;
         }
-        if (mal_typed_array_object_is_out_of_bounds(array)) {
+        MalTypedArraySpan span;
+        if (!mal_typed_array_object_span(array, &span)) {
             return MAL_BUFFER_SOURCE_SPAN_OUT_OF_BOUNDS;
         }
         byte_offset = array->byte_offset;
-        byte_length = mal_typed_array_object_byte_length(array);
+        byte_length = (usize) span.length * span.element_size;
     } else if (mal_value_is_data_view_object(value)) {
         MalDataViewObject *view = mal_value_to_data_view_object(value);
         buffer = view->buffer;

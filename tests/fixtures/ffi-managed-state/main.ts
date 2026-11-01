@@ -118,6 +118,66 @@ state.next_in = null;
 resizable.resize(4);
 check(resizable.byteLength === 4, "clearing permits resizing");
 
+for (const view of [
+	new Int8Array(3),
+	new Uint16Array(3),
+	new Float32Array(3),
+	new Float64Array(3),
+	new BigInt64Array(3),
+]) {
+	state.next_in = view;
+	check(
+		Number(state.avail_in) === view.byteLength,
+		"typed views pass byte counts rather than element counts",
+	);
+	state.next_in = null;
+}
+const changing = new ArrayBuffer(16, { maxByteLength: 32 });
+const fixedView = new Uint16Array(changing, 4, 3);
+const trackingView = new Uint32Array(changing, 4);
+changing.resize(8);
+refuses(
+	() => {
+		state.next_in = fixedView;
+	},
+	TypeError,
+	"shrunken fixed views are out of bounds",
+);
+state.next_in = trackingView;
+check(Number(state.avail_in) === 4, "tracking views follow current whole elements");
+state.next_in = null;
+changing.resize(3);
+refuses(
+	() => {
+		state.next_in = trackingView;
+	},
+	TypeError,
+	"tracking offsets can become out of bounds",
+);
+changing.resize(4);
+state.next_in = trackingView;
+check(Number(state.avail_in) === 0, "an empty tracking view at the end remains valid");
+state.next_in = null;
+changing.resize(16);
+state.next_in = fixedView;
+check(Number(state.avail_in) === 6, "fixed views regain their extent after growth");
+state.next_in = null;
+changing.transfer();
+refuses(
+	() => {
+		state.next_in = fixedView;
+	},
+	TypeError,
+	"detached typed views are refused",
+);
+refuses(
+	() => {
+		state.next_in = new Uint8Array(new SharedArrayBuffer(8));
+	},
+	TypeError,
+	"shared typed views are refused",
+);
+
 for (const mode of [1, 2, 3]) {
 	state.next_in = new Uint8Array([1, 2, 3]);
 	refuses(
