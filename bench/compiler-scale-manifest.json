@@ -178,6 +178,7 @@
 				"src/compiler/core/core-virtual-state.ts",
 				"src/compiler/core/core-weak-collection-facts.ts",
 				"src/compiler/core/core-memory-passes.ts",
+				"src/compiler/core/core-module-globals.ts",
 				"src/compiler/core/core-native-body-reachability.ts",
 				"src/compiler/core/core-native-callback-entries.ts",
 				"src/compiler/core/core-native-entry-analysis.ts",
