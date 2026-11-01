@@ -347,9 +347,11 @@ typedef struct MalFfiHandleObject {
     MalObject object;
     MalObjectStorage object_storage;
     const MalFfiHandleType *type;
-    /** The pointer, or the malloc'd copy of a struct; null once closed. */
+    /** Stable C storage, or the library's pointer; null once closed. */
     void *value;
     bool owned;
+    /** Outer storage belongs to this wrapper, independently of C resource ownership. */
+    bool owns_storage;
     /** The table that finds this open pointer handle by its pointer, or null. */
     MalFfiState *registry;
     /** C calls using the handle; it cannot close while any are. */
@@ -499,12 +501,12 @@ static void ffi_handle_place(MalFfiState *state, MalFfiHandleEntry entry) {
     state->handles[slot] = entry;
 }
 
-/** Record an open pointer handle; without memory it simply stays unregistered. */
-static void ffi_handle_register(MalFfiState *state, MalFfiHandleObject *handle) {
+/** An open pointer must be registered before C can hand out an alias to it. */
+static bool ffi_handle_register(MalFfiState *state, MalFfiHandleObject *handle) {
     if ((state->handle_count + 1) * 2 > state->handle_capacity) {
         usize capacity = state->handle_capacity == 0 ? 16 : state->handle_capacity * 2;
         MalFfiHandleEntry *grown = calloc(capacity, sizeof(*grown));
-        if (grown == nullptr) return;
+        if (grown == nullptr) return false;
         MalFfiHandleEntry *previous = state->handles;
         usize previous_capacity = state->handle_capacity;
         state->handles = grown;
@@ -517,6 +519,7 @@ static void ffi_handle_register(MalFfiState *state, MalFfiHandleObject *handle) 
     ffi_handle_place(state, (MalFfiHandleEntry) {handle->type, handle->value, handle});
     state->handle_count++;
     handle->registry = state;
+    return true;
 }
 
 /** Remove a handle's entry, shifting later probes back so lookups stay correct. */
@@ -1385,10 +1388,10 @@ static char *ffi_identity(MalVm *vm, const MalFfiLibrary *library, const char *n
     return identity;
 }
 
-/** Forget the resource without releasing it; the struct copy is freed here. */
+/** Forget the resource without its C cleanup, freeing any wrapper-owned storage. */
 static void ffi_handle_forget(MalFfiHandleObject *handle) {
     if (handle->registry != nullptr) ffi_handle_unregister(handle);
-    if (handle->type->size > 0) free(handle->value);
+    if (handle->owns_storage) free(handle->value);
     handle->value = nullptr;
 }
 
@@ -1518,10 +1521,14 @@ void mal_ffi_callback_leave(MalVm *vm) {
     vm->ffi->invocation_depth--;
 }
 
+static void *ffi_allocate_storage(usize size, usize alignment) {
+    return alignment <= _Alignof(max_align_t) ? malloc(size) : aligned_alloc(alignment, size);
+}
+
 /** `scope` 0 makes a handle the program holds; otherwise it lives as long as that invocation. */
 static MalValue ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
-    bool owned, u64 scope) {
+    bool owned, u64 scope, bool owns_storage) {
     MalFfiState *state = type->size == 0 ? ffi_state(vm) : nullptr;
     MalFfiHandleObject *open = state == nullptr ? nullptr : ffi_handle_find(state, type, value);
     if (open != nullptr) {
@@ -1534,39 +1541,60 @@ static MalValue ffi_new_handle(
     }
     void *stored = value;
     if (type->size > 0) {
-        stored = malloc(type->size);
+        stored = ffi_allocate_storage(type->size, type->alignment);
         if (stored != nullptr) memcpy(stored, value, type->size);
+        owns_storage = true;
     }
     MalValue prototype =
         stored == nullptr ? mal_value_new_undefined() : ffi_handle_prototype(vm, library, type);
     if (stored == nullptr || vm->completion.kind == MAL_COMPLETION_THROW) {
         // The resource exists but no handle can own it, so release it now.
         if (owned && type->destroy != nullptr) type->destroy(value);
-        if (type->size > 0) free(stored);
+        if (owns_storage) free(stored);
         if (vm->completion.kind != MAL_COMPLETION_THROW) mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
+    MalValue rooted[2] = {prototype, mal_value_new_undefined()};
     MalRootSpan root;
-    mal_gc_root(&root, &prototype, 1);
+    mal_gc_root(&root, rooted, 2);
     MalFfiHandleObject *handle =
         mal_heap_alloc(&vm->heap, sizeof(MalFfiHandleObject), MAL_HEAP_FFI_HANDLE_OBJECT);
     mal_object_init(
         &vm->heap, &handle->object, MAL_HEAP_FFI_HANDLE_OBJECT, mal_value_to_object(prototype));
+    rooted[1] = mal_value_from_heap((MalHeapHeader *) handle);
     handle->type = type;
     handle->value = stored;
     handle->owned = owned;
+    handle->owns_storage = owns_storage;
     handle->registry = nullptr;
     handle->pins = 0;
     handle->scope = scope;
-    if (state != nullptr) ffi_handle_register(state, handle);
+    if (type->size == 0 && (state == nullptr || !ffi_handle_register(state, handle))) {
+        if (owned && type->destroy != nullptr) type->destroy(stored);
+        ffi_handle_forget(handle);
+        mal_vm_throw_allocation_error(vm);
+    }
     mal_gc_unroot(&root);
-    return mal_value_from_heap((MalHeapHeader *) handle);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
+        : rooted[1];
 }
 
 MalValue mal_ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned) {
-    return ffi_new_handle(vm, library, type, value, owned, 0);
+    return ffi_new_handle(vm, library, type, value, owned, 0, false);
+}
+
+MalValue mal_ffi_allocate_handle(
+    MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
+    size_t size, size_t alignment) {
+    void *storage = ffi_allocate_storage(size, alignment);
+    if (storage == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    memset(storage, 0, size);
+    return ffi_new_handle(vm, library, type, storage, false, 0, true);
 }
 
 MalValue mal_ffi_new_callback_handle(
@@ -1575,7 +1603,7 @@ MalValue mal_ffi_new_callback_handle(
     u64 scope = state == nullptr || state->invocation_depth == 0
         ? 0
         : state->invocations[state->invocation_depth - 1];
-    return ffi_new_handle(vm, library, type, value, false, scope);
+    return ffi_new_handle(vm, library, type, value, false, scope, false);
 }
 
 bool mal_ffi_to_handle(

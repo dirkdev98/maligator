@@ -70,6 +70,8 @@ typedef struct MalFfiHandleType {
     const char *name;
     /** Bytes of the struct a handle copies, or 0 for a handle that holds a pointer. */
     size_t size;
+    /** Alignment of copied structs, or 0 when the handle holds a pointer. */
+    size_t alignment;
     /** Release the resource; receives the pointer or the struct's address. May be null. */
     void (*destroy)(void *value);
     /** Whether collection releases an owned handle the program never closed. */
@@ -86,6 +88,13 @@ typedef struct MalFfiHandleType {
 MalValue mal_ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned);
+/**
+ * Allocate zeroed caller storage and wrap its stable pointer. Disposing or collecting
+ * this handle frees the outer storage; C initialization and cleanup are explicit.
+ */
+MalValue mal_ffi_allocate_handle(
+    MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
+    size_t size, size_t alignment);
 /**
  * A borrowed handle for a callback argument. It reads as closed once the callback
  * returns, unless the program already held a handle for the same pointer.

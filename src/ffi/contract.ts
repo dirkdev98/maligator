@@ -166,7 +166,15 @@ function validateTypeFacts(value: unknown, at: string): void {
 	if (value.handle === undefined) return;
 	const handle = value.handle;
 	expectObject(handle, `${at}.handle`);
-	expectKeys(handle, `${at}.handle`, ["destroy", "collect"]);
+	expectKeys(handle, `${at}.handle`, ["destroy", "collect", "storage"]);
+	if (handle.storage !== undefined) {
+		expect(handle.storage === "caller", `${at}.handle.storage`, '"caller"');
+		expect(
+			handle.destroy === undefined && handle.collect !== true,
+			`${at}.handle`,
+			"explicit C initialization and cleanup for caller storage, without destroy or collect",
+		);
+	}
 	if (handle.destroy !== undefined) {
 		expect(
 			typeof handle.destroy === "string" && C_NAME.test(handle.destroy),

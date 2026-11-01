@@ -182,6 +182,8 @@ export interface HandleType {
 	readonly spelling: string;
 	/** A copy of a struct the library passes by value, or a pointer it returns. */
 	readonly representation: "struct" | "pointer";
+	/** A factory named by the type fact, allocating stable caller-owned storage. */
+	readonly allocator?: string;
 	readonly destroy?: {
 		readonly name: string;
 		/** Whether the destroy function takes the struct by value or by address. */
@@ -280,6 +282,27 @@ function handleTypes(
 		if (handles.has(record.name)) {
 			throw new FfiError(`types.${key}: ${record.name} already has a handle fact`);
 		}
+		if (handle.storage === "caller") {
+			if (!record.complete || record.tag !== "struct")
+				throw new FfiError(
+					`types.${key}.handle.storage: caller storage needs a complete struct`,
+				);
+			if (
+				record.fields.some((field) => {
+					const type = resolveCType(model, field.type);
+					return (
+						type.kind === "array" && (type.length === undefined || type.length === 0)
+					);
+				})
+			)
+				throw new FfiError(
+					`types.${key}.handle.storage: variable-length storage needs an allocation size`,
+				);
+			if (handle.destroy !== undefined || handle.collect === true)
+				throw new FfiError(
+					`types.${key}.handle.storage: C initialization and cleanup must remain explicit`,
+				);
+		}
 		const isRecord = (type: CType): boolean => {
 			const resolved = resolveCType(model, type);
 			return resolved.kind === "record" && resolved.name === record.name;
@@ -320,7 +343,11 @@ function handleTypes(
 		handles.set(record.name, {
 			name: record.name,
 			spelling: recordSpelling(model, record),
-			representation: record.complete && passedByValue ? "struct" : "pointer",
+			representation:
+				handle.storage !== "caller" && record.complete && passedByValue
+					? "struct"
+					: "pointer",
+			...(handle.storage === "caller" ? { allocator: key } : {}),
 			...(destroy === undefined ? {} : { destroy }),
 			collect: handle.collect === true,
 			...(record.doc === undefined ? {} : { doc: record.doc }),
@@ -1420,6 +1447,16 @@ export function planBindings(
 	constants.sort((left, right) =>
 		left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
 	);
+	for (const handle of handles.values()) {
+		if (
+			handle.allocator !== undefined &&
+			(declared.has(handle.allocator) ||
+				constants.some((entry) => entry.name === handle.allocator))
+		)
+			throw new FfiError(
+				`types.${handle.allocator}.handle.storage: '${handle.allocator}' is already an export`,
+			);
+	}
 	return {
 		functions,
 		keepsCallbacks: functions.some((binding) =>

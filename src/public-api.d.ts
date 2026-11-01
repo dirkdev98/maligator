@@ -63,12 +63,17 @@ export interface MaligatorFfiLibrary {
 }
 
 /**
- * A C type whose values are resources the program opens and closes. Its handles
+ * A C resource or caller-owned state struct. Its handles
  * close on `[Symbol.dispose]()` or when passed to `destroy`; a closed handle throws
  * instead of reaching C.
  * @see https://maligator.ddv.tools/api/build#MaligatorFfiHandle
  */
 export interface MaligatorFfiHandle {
+	/** Export a zero-argument factory named by the type fact. It allocates aligned,
+	 * zeroed caller-owned storage for a complete struct. C initialization and cleanup
+	 * remain explicit; disposing the handle frees only this storage.
+	 */
+	storage?: "caller";
 	/** The function that releases the resource, taking it as its first parameter. */
 	destroy?: string;
 	/** Release a handle the program never closed once it is garbage collected. Off unless

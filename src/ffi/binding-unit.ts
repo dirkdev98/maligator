@@ -89,11 +89,6 @@ const UNROOTED_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
 	"bytes",
 ]);
 
-/**
- * An external entry that native code calls with the arguments themselves, skipping
- * the function object and argument array of an ordinary call. Arguments a getter or
- * callback could outlive are rooted for the call, as the call path roots them.
- */
 /** The struct a binding returns, when compiled callers can take its fields instead. */
 function intoRecord(binding: BoundFunction): string | undefined {
 	return binding.returns.kind === "record" && binding.outputs.length === 0
@@ -784,12 +779,25 @@ class BindingWriter {
 				`static const MalFfiHandleType mal_ffi_type_${name} = {`,
 				`\t${cString(name)},`,
 				`\t${handle.representation === "struct" ? `sizeof(${handle.spelling})` : "0"},`,
+				`\t${handle.representation === "struct" ? `_Alignof(${handle.spelling})` : "0"},`,
 				`\t${destroy},`,
 				`\t${handle.collect},`,
 				`\t${fields},`,
 				`\t${String(handle.fields.length)},`,
 				"};",
 			);
+			if (handle.allocator !== undefined)
+				lines.push(
+					"",
+					`static MalValue mal_ffi_allocate_${handle.allocator}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
+					"\t(void) mal_this;",
+					"\t(void) mal_args;",
+					"\t(void) mal_argc;",
+					"\t(void) mal_new_target;",
+					"\t(void) mal_callee;",
+					`\treturn mal_ffi_allocate_handle(vm, &mal_ffi_library, &mal_ffi_type_${name}, sizeof(${handle.spelling}), _Alignof(${handle.spelling}));`,
+					"}",
+				);
 		}
 		return lines;
 	}
@@ -1922,6 +1930,16 @@ export function generateBindingUnit(
 		...writer.constant(constant),
 	]);
 	const exports = [
+		...[...plan.handles.values()].flatMap((handle) =>
+			handle.allocator === undefined
+				? []
+				: [
+						{
+							name: handle.allocator,
+							entry: `{ ${cString(handle.allocator)}, 0, mal_ffi_allocate_${handle.allocator}, nullptr }`,
+						},
+					],
+		),
 		...plan.functions.flatMap((binding) =>
 			[binding.name, ...(binding.async === undefined ? [] : [binding.async])].map(
 				(exported) => ({

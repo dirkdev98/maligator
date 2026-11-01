@@ -121,9 +121,37 @@ ExportImage(image, `image-${image.width}x${image.height}.png`);
 Leaving a `using` scope or calling `[Symbol.dispose]()` releases the resource through `destroy`, and calling the destroy function yourself also closes the handle. A closed handle throws a `TypeError` instead of reaching C, and closing a handle while a C call uses it, from a callback or a getter, throws one too.
 
 - `borrowed` marks a result the library keeps owning. Closing it does not release it.
-- A `handle` without `destroy` describes a pointer the library always owns, such as the `sqlite3_context` SQLite lends to callbacks.
+- A `handle` without `destroy` describes a pointer the library owns, such as the `sqlite3_context` SQLite lends to callbacks, unless `storage: "caller"` provides its outer storage.
 - `collect: true` releases a handle the program drops once it is garbage collected. Leave it off for resources that must be released on one thread or before the library shuts down, such as raylib's GPU textures.
 - `nullable` on a parameter accepts `null` for a string or handle pointer and passes `NULL`.
+
+Some APIs fill a state struct allocated by their caller. For a complete, fixed-size
+struct, `storage: "caller"` exports a zero-argument factory named by the type fact:
+
+```ts
+types: {
+	CodecState: { handle: { storage: "caller" } },
+}
+```
+
+`CodecState()` returns a handle to aligned, zeroed C storage. It passes by pointer
+and keeps its address between calls. Pointer fields remain private to C. Initialization
+and cleanup are separate C calls, with the same preconditions the library documents:
+
+```ts
+using state = CodecState();
+if (codec_init(state) !== 0) throw new Error("Codec initialization failed");
+try {
+	codec_run(state);
+} finally {
+	codec_cleanup(state);
+}
+```
+
+Disposing or collecting the handle frees its outer storage. This does not call C
+cleanup, so `destroy` and `collect: true` cannot accompany caller storage. Retain the
+handle while C retains its pointer, and dispose it only after C stops using it.
+The allocator does not expose writable pointer fields or manage asynchronous close.
 
 ## Describe pointers
 

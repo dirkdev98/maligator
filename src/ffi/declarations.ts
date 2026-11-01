@@ -57,6 +57,11 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string> {
 			);
 		}
 		lines.push("\t}");
+		if (handle.allocator !== undefined)
+			lines.push(
+				"\t/** Allocate zeroed caller storage. C initialization and cleanup remain explicit. */",
+				`\texport function ${handle.allocator}(): ${handle.name};`,
+			);
 	}
 	for (const binding of plan.functions) {
 		lines.push(

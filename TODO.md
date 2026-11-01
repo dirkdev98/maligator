@@ -1916,8 +1916,9 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
       user code without callbacks).
 - [ ] Extend struct storage reuse to conditional loop updates and recurrences that
       observe a prior result before replacing it.
-- [ ] Caller-allocated state structs with pointer fields, such as zlib's
-      `z_stream` and libuv's handles, cannot be created or filled from JavaScript.
+- [ ] Managed pointer fields for caller-allocated state structs, such as zlib's
+      `z_stream`, need retained buffers, checked pointer/count updates, and lifecycle
+      rules. Libuv handles also need storage retained through asynchronous close.
 - [ ] Support individual clang declarations and documentation blocks that exceed the
       native runtime's string limit.
 
