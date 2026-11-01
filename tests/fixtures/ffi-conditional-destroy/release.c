@@ -9,6 +9,7 @@ struct BusyResource {
     void (*release)(void *);
 };
 struct AlwaysResource { int value; };
+struct BooleanResource { int attempts; };
 static int live;
 
 BusyResource *release_open(int value) {
@@ -46,4 +47,16 @@ AlwaysResource *release_always_open(void) {
 }
 int release_always_close(AlwaysResource *resource) { free(resource); live--; return 7; }
 int release_always_read(AlwaysResource *resource) { return resource->value; }
+BooleanResource *release_boolean_open(int attempts) {
+    BooleanResource *resource = malloc(sizeof(*resource));
+    if (resource != NULL) { resource->attempts = attempts; live++; }
+    return resource;
+}
+bool release_boolean_close(BooleanResource *resource) {
+    if (resource->attempts > 0) { resource->attempts--; return false; }
+    free(resource);
+    live--;
+    return true;
+}
+int release_boolean_left(BooleanResource *resource) { return resource->attempts; }
 int release_live(void) { return live; }

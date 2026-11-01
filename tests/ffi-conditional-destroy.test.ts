@@ -44,6 +44,19 @@ describe("conditional cleanup facts", () => {
 			);
 		},
 	);
+	it("accepts a boolean cleanup result with an explicit true success code", () => {
+		const plan = planBindings(model, {
+			types: {
+				BooleanResource: {
+					handle: { destroy: { function: "release_boolean_close", success: "true" } },
+				},
+			},
+			functions: {},
+		});
+		expect(plan.handles.get("BooleanResource")?.destroy).toMatchObject({
+			success: "true",
+		});
+	});
 	it.each([
 		[
 			{ destroy: { function: "release_close", success: "UNDECLARED_STATUS" } },

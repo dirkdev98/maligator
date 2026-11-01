@@ -322,7 +322,7 @@ function handleTypes(
 			}
 			if (success !== undefined) {
 				const result = resolveCType(model, declaration.returns);
-				if (!["integer", "enum", "boolean"].includes(result.kind))
+				if (!["integer", "enum", "bool"].includes(result.kind))
 					throw new FfiError(
 						`types.${key}.handle.destroy.success: ${name} must return an integer or boolean`,
 					);

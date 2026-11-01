@@ -10,6 +10,9 @@ import {
 	release_always_close,
 	release_always_read,
 	release_live,
+	release_boolean_open,
+	release_boolean_close,
+	release_boolean_left,
 	RELEASE_OK,
 	RELEASE_BUSY,
 } from "maligator:ffi/release";
@@ -87,5 +90,18 @@ rejects(() => release_always_read(always), TypeError);
 const alwaysDisposed = release_always_open()!;
 alwaysDisposed[Symbol.dispose]();
 rejects(() => release_always_read(alwaysDisposed), TypeError);
+const booleanDirect = release_boolean_open(1)!;
+check(release_boolean_close(booleanDirect) === false, "boolean cleanup failure");
+check(release_boolean_left(booleanDirect) === 0, "boolean failure retains the handle");
+check(release_boolean_close(booleanDirect) === true, "boolean cleanup succeeds on retry");
+rejects(() => release_boolean_left(booleanDirect), TypeError);
+const booleanDisposed = release_boolean_open(1)!;
+rejects(() => booleanDisposed[Symbol.dispose](), Error, "release_boolean_close");
+check(
+	release_boolean_left(booleanDisposed) === 0,
+	"failed boolean disposal retains the handle",
+);
+booleanDisposed[Symbol.dispose]();
+rejects(() => release_boolean_left(booleanDisposed), TypeError);
 check(release_live() === 0, "all resources released");
 console.log("conditional cleanup passed");

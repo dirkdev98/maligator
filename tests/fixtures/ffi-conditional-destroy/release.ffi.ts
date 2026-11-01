@@ -9,6 +9,9 @@ export default {
 			handle: { destroy: { function: "release_close", success: "RELEASE_OK" } },
 		},
 		AlwaysResource: { handle: { destroy: "release_always_close" } },
+		BooleanResource: {
+			handle: { destroy: { function: "release_boolean_close", success: "true" } },
+		},
 	},
 	functions: {
 		release_same: { returns: { borrowed: true } },

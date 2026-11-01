@@ -4,6 +4,7 @@
 
 typedef struct BusyResource BusyResource;
 typedef struct AlwaysResource AlwaysResource;
+typedef struct BooleanResource BooleanResource;
 enum { RELEASE_OK = 0, RELEASE_BUSY = 1 };
 
 BusyResource *release_open(int value);
@@ -16,6 +17,9 @@ void release_watch(BusyResource *resource, void (*callback)(BusyResource *, void
 AlwaysResource *release_always_open(void);
 int release_always_close(AlwaysResource *resource);
 int release_always_read(AlwaysResource *resource);
+BooleanResource *release_boolean_open(int attempts);
+bool release_boolean_close(BooleanResource *resource);
+int release_boolean_left(BooleanResource *resource);
 int release_live(void);
 
 #endif
