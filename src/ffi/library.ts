@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { artifactDigest, artifactIdentity } from "../artifact-store.ts";
 import { BuildConfigError } from "../build-config-error.ts";
 import type { FfiModule, ResolvedBuildConfig } from "../build-config-values.ts";
+import { platformCcFlags } from "../build-flags.ts";
 import type { BuildConfigTypeStripper } from "../definition-module.ts";
 import type { ExternalTranslationUnit } from "../local-build.ts";
 import type { ToolExecutable } from "../toolchain.ts";
@@ -64,7 +65,10 @@ export function prepareLibrary(
 		compiler: preparation.compiler,
 		environment: preparation.environment,
 		headers: contract.headers,
-		compileArguments: library.compileArguments,
+		compileArguments: [
+			...platformCcFlags(preparation.platform),
+			...library.compileArguments,
+		],
 	});
 	let plan: BindingPlan;
 	try {
