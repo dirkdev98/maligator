@@ -118,8 +118,11 @@ export interface MaligatorFfiValueFacts {
 	out?: boolean;
 	/** The function reads and updates the value behind this pointer; the new value returns beside the result. */
 	inout?: boolean;
-	/** A `char *` or `unsigned char *` that holds UTF-8 text. */
-	string?: boolean;
+	/** UTF-8 text in a char pointer. `true` uses NUL termination; a length names
+	 * its byte count and permits embedded NUL bytes. Counted strings apply to ordinary
+	 * parameters and results, including async twins.
+	 */
+	string?: boolean | MaligatorFfiCount;
 	/** Bytes passed as an `ArrayBuffer` or a view, or returned as a new `Uint8Array`. */
 	bytes?: MaligatorFfiCount;
 	/** Elements passed or returned as an array. */

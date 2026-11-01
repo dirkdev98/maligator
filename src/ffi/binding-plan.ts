@@ -1,5 +1,6 @@
 import type {
 	MaligatorFfiCallback,
+	MaligatorFfiCount,
 	MaligatorFfiValueFacts,
 	MaligatorFfiVariant,
 } from "../public-api.d.ts";
@@ -23,10 +24,15 @@ export type JsValue =
 	/** A 64-bit integer, exact in both directions. */
 	| { readonly kind: "bigint"; readonly bits: number; readonly signed: boolean }
 	/**
-	 * UTF-8, NUL-terminated. Inputs are borrowed for the call; results are copied,
+	 * UTF-8, terminated or byte-counted. Inputs are borrowed for the call; results are copied,
 	 * then released with `free` when the caller owns them.
 	 */
-	| { readonly kind: "string"; readonly nullable: boolean; readonly free?: string }
+	| {
+			readonly kind: "string";
+			readonly nullable: boolean;
+			readonly counted?: true;
+			readonly free?: string;
+	  }
 	/**
 	 * Input bytes C uses in place during the call; results copied into a Uint8Array.
 	 * `writable` inputs reject immutable buffers.
@@ -240,6 +246,15 @@ function recordSpelling(model: CModel, record: CRecord): string {
 }
 
 const NO_FACTS: MaligatorFfiValueFacts = {};
+
+function valueCount(
+	facts: MaligatorFfiValueFacts,
+): { kind: "bytes" | "array" | "string"; count: MaligatorFfiCount } | undefined {
+	if (facts.bytes !== undefined) return { kind: "bytes", count: facts.bytes };
+	if (facts.array !== undefined) return { kind: "array", count: facts.array };
+	if (typeof facts.string === "object") return { kind: "string", count: facts.string };
+	return undefined;
+}
 
 /** A function's facts by parameter position. */
 interface FunctionFacts {
@@ -556,15 +571,24 @@ class Planner {
 				},
 			};
 		}
-		if (facts.string === true && !byteSized) {
+		const countedString = typeof facts.string === "object";
+		if ((facts.string === true || countedString) && !byteSized) {
 			throw new FfiError(`string applies to char pointers, not ${spelling}`);
 		}
 		if (
 			facts.string === true ||
+			countedString ||
 			(target.kind === "integer" && target.name === "char" && target.const === true)
 		) {
-			if (position === "param") return { value: { kind: "string", nullable } };
-			if (position === "return") return { value: { kind: "string", nullable, ...free } };
+			if (position === "param" || position === "return")
+				return {
+					value: {
+						kind: "string",
+						nullable,
+						...(countedString ? { counted: true as const } : {}),
+						...(position === "return" ? free : {}),
+					},
+				};
 		}
 		const handle = target.kind === "record" ? this.#handles.get(target.name) : undefined;
 		if (handle !== undefined && (position === "param" || position === "return")) {
@@ -723,6 +747,10 @@ class Planner {
 		for (const key of Object.keys(facts)) {
 			const position = Number(key) - 1;
 			const stated = facts[key]!;
+			if (typeof stated.string === "object")
+				throw new FfiError(
+					`${at}.callback.params.${key}: counted callback strings are not supported`,
+				);
 			if (position >= target.params.length) {
 				throw new FfiError(
 					`${at}.callback.params.${key}: the callback has no such parameter`,
@@ -1020,14 +1048,20 @@ class Planner {
 		const counts = new Map<number, number>();
 		declaration.params.forEach((_, index) => {
 			const valueFacts = factsAt(index);
-			const fact = valueFacts.bytes !== undefined ? "bytes" : "array";
-			const counted = valueFacts[fact];
+			const counted = valueCount(valueFacts);
 			if (counted === undefined) return;
-			const at = `params.${names[index]}.${fact}.length`;
-			const count = parameterIndex(counted.length, at);
+			if (
+				counted.kind === "string" &&
+				(valueFacts.out === true || valueFacts.inout === true)
+			)
+				throw new FfiError(
+					`${where(`params.${names[index]}.string`)}: counted out and inout strings are not supported`,
+				);
+			const at = `params.${names[index]}.${counted.kind}.length`;
+			const count = parameterIndex(counted.count.length, at);
 			if (count === index || counts.has(count)) {
 				throw new FfiError(
-					`${where(at)}: '${counted.length}' already counts another argument`,
+					`${where(at)}: '${counted.count.length}' already counts another argument`,
 				);
 			}
 			counts.set(count, index);
@@ -1083,12 +1117,14 @@ class Planner {
 			}
 			callbackReleases.set(position, index);
 		});
-		const resultFact = facts.returns.bytes !== undefined ? "bytes" : "array";
-		const resultCounted = facts.returns[resultFact];
+		const resultCounted = valueCount(facts.returns);
 		const resultCount =
 			resultCounted === undefined
 				? undefined
-				: parameterIndex(resultCounted.length, `returns.${resultFact}.length`);
+				: parameterIndex(
+						resultCounted.count.length,
+						`returns.${resultCounted.kind}.length`,
+					);
 
 		const params: Array<MappedParameter> = [];
 		const args: Array<Argument> = [];
@@ -1250,7 +1286,10 @@ class Planner {
 			if (facts.returns.borrowed === true && returns.value.kind !== "handle") {
 				throw new FfiError(`${where("returns.borrowed")}: the result is not a handle`);
 			}
-			const counted = returns.value.kind === "bytes" || returns.value.kind === "sequence";
+			const counted =
+				returns.value.kind === "bytes" ||
+				returns.value.kind === "sequence" ||
+				(returns.value.kind === "string" && returns.value.counted === true);
 			if (counted !== (resultCount !== undefined)) {
 				throw new FfiError(
 					`${where("returns")}: a buffer or array result needs its length`,

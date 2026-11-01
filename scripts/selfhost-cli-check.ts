@@ -1026,7 +1026,7 @@ server.listen(0, "127.0.0.1", () => {
 		mkdirSync(ffiDirectory, { recursive: true });
 		writeFileSync(
 			path.join(ffiDirectory, "probe.h"),
-			"typedef struct ProbeState { int value; void *reserved; } ProbeState;\nint probe_state_value(ProbeState *state);\nvoid probe_state_set(ProbeState *state, int value);\nProbeState *probe_state_same(ProbeState *state);\nint probe_add(int a, int b);\nint probe_overflow(int value);\nint probe_pause(void);\n",
+			"typedef struct ProbeState { int value; void *reserved; } ProbeState;\nint probe_state_value(ProbeState *state);\nvoid probe_state_set(ProbeState *state, int value);\nProbeState *probe_state_same(ProbeState *state);\nint probe_add(int a, int b);\nconst char *probe_text(const char *text, unsigned int length);\nint probe_overflow(int value);\nint probe_pause(void);\n",
 		);
 		writeFileSync(
 			path.join(ffiDirectory, "probe.c"),
@@ -1037,6 +1037,7 @@ int probe_state_value(ProbeState *state) { return state->value; }
 void probe_state_set(ProbeState *state, int value) { state->value = value; }
 ProbeState *probe_state_same(ProbeState *state) { return state; }
 int probe_add(int a, int b) { return a + b; }
+const char *probe_text(const char *text, unsigned int length) { (void)length; return text; }
 int probe_overflow(int value) { return value + 1; }
 int probe_pause(void) {
   fputs("native wait entered\\n", stderr);
@@ -1049,7 +1050,7 @@ int probe_pause(void) {
 		);
 		writeFileSync(
 			path.join(ffiDirectory, "probe.ffi.mts"),
-			'export default { headers: ["probe.h"], find: [{ includeDirs: ["."], sources: ["probe.c"] }], types: { ProbeState: { handle: { storage: "caller" } } }, functions: { probe_state_same: { returns: { borrowed: true } } } };\n',
+			'export default { headers: ["probe.h"], find: [{ includeDirs: ["."], sources: ["probe.c"] }], types: { ProbeState: { handle: { storage: "caller" } } }, functions: { probe_state_same: { returns: { borrowed: true } }, probe_text: { params: { text: { string: { length: "length" } } }, returns: { string: { length: "length" } } } } };\n',
 		);
 		writeFileSync(
 			path.join(project, "ffi.build.mts"),
@@ -1057,7 +1058,7 @@ int probe_pause(void) {
 		);
 		writeFileSync(
 			path.join(ffiDirectory, "pass.test.mts"),
-			'import { test, expect } from "maligator:test";\nimport { ProbeState, probe_state_value, probe_state_set, probe_state_same, probe_add } from "maligator:ffi/probe";\ntest("calls the library", () => { using state = ProbeState(); expect(probe_state_value(state)).toBe(0); probe_state_set(state, 7); expect(probe_state_same(state)).toBe(state); expect(probe_state_value(state)).toBe(7); console.log("native probe note"); expect(probe_add(2, 3)).toBe(5); });\n',
+			'import { test, expect } from "maligator:test";\nimport { ProbeState, probe_state_value, probe_state_set, probe_state_same, probe_add, probe_text } from "maligator:ffi/probe";\ntest("calls the library", () => { using state = ProbeState(); expect(probe_state_value(state)).toBe(0); probe_state_set(state, 7); expect(probe_state_same(state)).toBe(state); expect(probe_state_value(state)).toBe(7); console.log("native probe note"); expect(probe_add(2, 3)).toBe(5); });\ntest("preserves counted UTF-8 through the native CLI", () => { expect(probe_text("Grüße\\0🙂")).toBe("Grüße\\0🙂"); });\n',
 		);
 		writeFileSync(
 			path.join(ffiDirectory, "overflow.test.mts"),

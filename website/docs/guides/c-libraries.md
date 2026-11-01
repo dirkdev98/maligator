@@ -195,6 +195,30 @@ functions: {
 - `string` marks a `char *` or `unsigned char *` as UTF-8 text.
 - `free` names the function that releases a string, buffer, or array result after it is copied.
 
+Use `string: { length: "byteCount" }` for UTF-8 pointer/count pairs. The count
+measures encoded bytes and disappears from input signatures. Counted text permits
+embedded NUL bytes; `string: true` remains NUL-terminated and rejects them on input.
+
+```ts
+functions: {
+	copy_text: {
+		params: { text: { string: { length: "length" } } },
+		returns: { string: { length: "written" }, free: "text_free" },
+	},
+}
+```
+
+A result's length comes from an integer parameter or a count the function writes
+through a pointer. Results copy exactly that many UTF-8 bytes, preserving NULs and
+replacing invalid sequences. Negative or excessive lengths throw before reading
+the buffer; `free` still releases an owned result when conversion fails. The fact
+must describe the C buffer's actual allocation.
+
+Counted text works with ordinary functions and async twins. It cannot accompany
+`bytes` or `array`, and counted callback, out, and inout strings are rejected.
+With `nullable: true`, a null input passes `NULL` and a zero count; an empty string
+passes a non-null pointer and a zero count.
+
 Array inputs convert in index order. A conversion error prevents later elements'
 getters and Proxy traps from running.
 

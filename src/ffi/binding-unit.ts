@@ -320,8 +320,8 @@ class BindingWriter {
 				const temporary = this.#fresh("string");
 				strings.push(temporary);
 				return [
-					`if (!mal_ffi_to_string(vm, ${source}, ${site}, &${temporary})) ${fail}`,
-					`${target} = ${temporary}.data;`,
+					`if (!mal_ffi_to_string(vm, ${source}, ${value.nullable}, ${value.counted === true}, ${site}, &${temporary})) ${fail}`,
+					`${target} = (${localDeclaration(type, "")}) ${temporary}.data;`,
 				];
 			}
 			case "record": {
@@ -412,6 +412,7 @@ class BindingWriter {
 					? `mal_ffi_from_int64(vm, (int64_t) (${expression}))`
 					: `mal_ffi_from_uint64(vm, (uint64_t) (${expression}))`;
 			case "string":
+				if (value.counted) throw new Error("a counted string needs its byte length");
 				return `mal_ffi_from_string(vm, ${expression})`;
 			case "record":
 				return `mal_ffi_out_${value.name}(vm, ${expression})`;
@@ -850,6 +851,12 @@ class BindingWriter {
 				...release,
 			];
 		}
+		if (value.kind === "string" && value.counted) {
+			return [
+				`${unlessThrew}${target} = mal_ffi_from_string_length(vm, (const char *) (${expression}), (size_t) (${count}));`,
+				...release,
+			];
+		}
 		if (value.kind === "sequence") {
 			const array = this.#fresh("array");
 			const roots = this.#fresh("roots");
@@ -1150,7 +1157,11 @@ class BindingWriter {
 				integer.kind === "integer"
 					? (this.#model.target.sizes[integer.name] ?? 4) * 8
 					: 32;
-			const signed = integer.kind === "integer" && !integer.name.startsWith("unsigned");
+			const signed =
+				integer.kind === "integer" &&
+				(integer.name === "char"
+					? this.#model.target.charSigned
+					: !integer.name.startsWith("unsigned"));
 			into.push(
 				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${bits}, ${signed}, ${site})) goto mal_done;`,
 				...(output === undefined
@@ -1218,6 +1229,16 @@ class BindingWriter {
 					const value = binding.params[entry.param]!.value;
 					const site = `&mal_site_${String(entry.param)}`;
 					const source = argument(entry.param);
+					if (value.kind === "string" && value.counted) {
+						const text = this.#fresh("string");
+						strings.push(text);
+						body.push(
+							`if (!mal_ffi_to_string(vm, ${source}, ${value.nullable}, true, ${site}, &${text})) goto mal_done;`,
+							`${local} = (${localDeclaration(param.type, "")}) ${text}.data;`,
+						);
+						setCount(index, `${text}.length`, site, body);
+						return;
+					}
 					if (value.kind === "bytes") {
 						locals.push(
 							`void *mal_bytes_${String(index)};`,
@@ -1619,7 +1640,11 @@ class BindingWriter {
 				integer.kind === "integer"
 					? (this.#model.target.sizes[integer.name] ?? 4) * 8
 					: 32;
-			const signed = integer.kind === "integer" && !integer.name.startsWith("unsigned");
+			const signed =
+				integer.kind === "integer" &&
+				(integer.name === "char"
+					? this.#model.target.charSigned
+					: !integer.name.startsWith("unsigned"));
 			buffers.push(
 				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${bits}, ${signed}, ${site})) goto mal_failed;`,
 				...(output === undefined
@@ -1680,6 +1705,16 @@ class BindingWriter {
 					const value = binding.params[entry.param]!.value;
 					const site = `&mal_site_${String(entry.param)}`;
 					const source = argument(entry.param);
+					if (value.kind === "string" && value.counted) {
+						const text = this.#fresh("string");
+						strings.push(text);
+						body.push(
+							`if (!mal_ffi_to_string(vm, ${source}, ${value.nullable}, true, ${site}, &${text})) goto mal_failed;`,
+							`${target} = (${localDeclaration(param.type, "")}) ${text}.data;`,
+						);
+						setCount(index, `${text}.length`, site);
+						return;
+					}
 					if (value.kind === "bytes") {
 						const pin = `mal_pin_${String(index)}`;
 						fields.push(`void *${pin};`);

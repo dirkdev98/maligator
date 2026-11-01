@@ -217,9 +217,9 @@ typedef struct MalFfiString {
     char inline_data[MAL_FFI_STRING_INLINE];
 } MalFfiString;
 
-/** Strings with an embedded NUL throw instead of truncating. */
+/** Counted strings allow embedded NUL; nullable strings map null to NULL and zero bytes. */
 bool mal_ffi_to_string(
-    MalVm *vm, MalValue value, const MalFfiSite *site, MalFfiString *out);
+    MalVm *vm, MalValue value, bool nullable, bool counted, const MalFfiSite *site, MalFfiString *out);
 void mal_ffi_string_release(MalFfiString *string);
 /** A heap copy the caller frees, for strings that outlive one conversion such as array elements. */
 bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, char **out);
@@ -319,6 +319,8 @@ MalValue mal_ffi_from_int64(MalVm *vm, int64_t value);
 MalValue mal_ffi_from_uint64(MalVm *vm, uint64_t value);
 /** Copy a NUL-terminated UTF-8 string, replacing malformed sequences; NULL yields null. */
 MalValue mal_ffi_from_string(MalVm *vm, const char *value);
+/** Copy exactly length UTF-8 bytes, replacing invalid sequences and preserving NULs. */
+MalValue mal_ffi_from_string_length(MalVm *vm, const char *value, size_t length);
 /** Copy `length` bytes into a new Uint8Array. */
 MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length);
 /**

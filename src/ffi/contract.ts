@@ -229,9 +229,19 @@ function validateValueFacts(value: unknown, at: string): void {
 		"callback",
 		"constant",
 	]);
-	for (const key of ["nullable", "borrowed", "out", "inout", "string"]) {
+	for (const key of ["nullable", "borrowed", "out", "inout"]) {
 		booleanField(value, key, at);
 	}
+	if (value.string !== undefined && typeof value.string !== "boolean")
+		validateCount(value.string, `${at}.string`);
+	expect(
+		Number(value.string !== undefined && value.string !== false) +
+			Number(value.bytes !== undefined) +
+			Number(value.array !== undefined) <=
+			1,
+		at,
+		"one of string, bytes, or array",
+	);
 	if (value.bytes !== undefined) validateCount(value.bytes, `${at}.bytes`);
 	if (value.array !== undefined) validateCount(value.array, `${at}.array`);
 	if (value.callback !== undefined) {

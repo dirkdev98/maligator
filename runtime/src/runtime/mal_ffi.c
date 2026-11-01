@@ -129,11 +129,12 @@ bool mal_ffi_to_uint64(
 }
 
 bool mal_ffi_to_string(
-    MalVm *vm, MalValue value, const MalFfiSite *site, MalFfiString *out) {
+    MalVm *vm, MalValue value, bool nullable, bool counted, const MalFfiSite *site, MalFfiString *out) {
     out->data = nullptr;
     out->length = 0;
+    if (nullable && mal_value_is_null(value)) return true;
     if (!mal_value_is_string(value)) {
-        return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a string");
+        return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, nullable ? "a string or null" : "a string");
     }
     const MalString *string = mal_value_to_string(value);
     // A UTF-16 code unit encodes to at most three bytes; a pair's four cover two units.
@@ -174,7 +175,7 @@ bool mal_ffi_to_string(
     data[length] = '\0';
     out->data = data;
     out->length = length;
-    if (nul) {
+    if (nul && !counted) {
         mal_ffi_string_release(out);
         return ffi_fail(
             vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a string without NUL characters");
@@ -191,7 +192,7 @@ void mal_ffi_string_release(MalFfiString *string) {
 bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, char **out) {
     *out = nullptr;
     MalFfiString string;
-    if (!mal_ffi_to_string(vm, value, site, &string)) return false;
+    if (!mal_ffi_to_string(vm, value, false, false, site, &string)) return false;
     if (string.data != string.inline_data) {
         *out = string.data;
         return true;
@@ -315,6 +316,24 @@ MalValue mal_ffi_from_string(MalVm *vm, const char *value) {
     MalString *string = mal_string_from_utf8(&vm->heap, (const byte *) value, strlen(value));
     if (string == nullptr) {
         mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(string);
+}
+
+MalValue mal_ffi_from_string_length(MalVm *vm, const char *value, size_t length) {
+    if (value == nullptr) return mal_value_new_null();
+    if (length > 3 * MAL_STRING_MAX_CODE_UNITS) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, (const byte *) "C string is too large");
+        return mal_value_new_undefined();
+    }
+    MalUtf8DecodeStatus status;
+    MalString *string = mal_string_from_utf8_report(
+        &vm->heap, (const byte *) value, length, nullptr, &status);
+    if (string == nullptr) {
+        if (status == MAL_UTF8_DECODE_LENGTH_OVERFLOW)
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, (const byte *) "C string is too large");
+        else mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
     return mal_value_from_string(string);
