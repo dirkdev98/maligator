@@ -85,7 +85,7 @@ export type JsValue =
 			/** The C function that returns the user data from callback parameter `param`. */
 			readonly lookup?: { readonly function: string; readonly param: number };
 			/** Calls from other threads queue for the VM thread with copied arguments. */
-			readonly queued?: true;
+			readonly queued?: true | "wait";
 	  }
 	/**
 	 * A resource handle. C receives the handle's pointer, a copy of its struct, or
@@ -903,7 +903,10 @@ class Planner {
 			callback.release !== undefined ||
 			callback.replaced === true ||
 			callback.closes !== undefined;
-		const queued = callback.queued === true || callback.closes !== undefined;
+		const queued =
+			callback.queued === true ||
+			callback.queued === "wait" ||
+			callback.closes !== undefined;
 		// Whether the callback receives its user data as a `void *` parameter.
 		const routed = callback.data !== undefined && callback.lookup === undefined;
 		const target =
@@ -1003,7 +1006,8 @@ class Planner {
 					].includes(param.kind),
 			);
 			if (
-				resolveCType(this.#model, target.returns).kind !== "void" ||
+				(callback.queued !== "wait" &&
+					resolveCType(this.#model, target.returns).kind !== "void") ||
 				!copyable ||
 				(lookup !== undefined && callback.closes === undefined)
 			) {
@@ -1032,7 +1036,9 @@ class Planner {
 				nullable,
 				kept,
 				...(lookup === undefined ? {} : { lookup }),
-				...(queued ? { queued: true as const } : {}),
+				...(queued
+					? { queued: callback.queued === "wait" ? ("wait" as const) : (true as const) }
+					: {}),
 			},
 		};
 	}

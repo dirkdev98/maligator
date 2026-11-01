@@ -1071,7 +1071,7 @@ class BindingWriter {
 				: `mal_ffi_close_take(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`}, ${data >= 0 || lookup !== undefined ? `(MalFfiCallback *) ${routed}` : "nullptr"})`;
 		// A queued callback's body runs as `_run` with the callback its entry found, for
 		// calls on the VM thread and queued ones, which must not look it up again.
-		const queued = value.queued === true;
+		const queued = value.queued !== undefined;
 		const keyedLookup = value.replaced !== undefined && data < 0 && lookup === undefined;
 		const body = queued ? `${name}_run` : name;
 		const signature = [...(queued ? ["MalFfiCallback *mal_callback"] : []), ...params];
@@ -1099,6 +1099,8 @@ class BindingWriter {
 			"\tMalValue mal_result = mal_ffi_undefined();",
 			"\tMalFfiRoots mal_roots;",
 			`\tmal_ffi_root(&mal_roots, mal_values, ${count});`,
+			"\tMalFfiRoots mal_result_roots;",
+			"\tmal_ffi_root(&mal_result_roots, &mal_result, 1);",
 			...(lends ? ["\tbool mal_lent = false;"] : []),
 			...(value.closes === undefined
 				? []
@@ -1150,20 +1152,24 @@ class BindingWriter {
 					).map((line) => `\t${line}`)
 				: ["\t(void) mal_result;"]),
 			"mal_done:",
+			...(returns
+				? [
+						`\tif (mal_ffi_threw(vm)) mal_return = (${localDeclaration(type.returns, "")}) {};`,
+					]
+				: []),
 			...(lends ? ["\tif (mal_lent) mal_ffi_callback_leave(vm);"] : []),
+			"\tmal_ffi_unroot(&mal_result_roots);",
 			"\tmal_ffi_unroot(&mal_roots);",
 			...(value.kept ? ["\tmal_ffi_callback_drop(mal_callback);"] : []),
 			returns ? "\treturn mal_return;" : "\treturn;",
 			"}",
 		];
-		return value.queued === true
-			? [...lines, ...this.#queuedEntry(name, value, callback)]
-			: lines;
+		return queued ? [...lines, ...this.#queuedEntry(name, value, callback)] : lines;
 	}
 
 	/**
-	 * The entry of a queued callback: on another thread it copies the arguments into a
-	 * message the VM thread runs later, since the C caller continues at once.
+	 * Copy foreign-thread arguments into a message; waiting callers receive its native
+	 * result after VM execution, while notification callers continue at once.
 	 */
 	#queuedEntry(
 		name: string,
@@ -1172,6 +1178,8 @@ class BindingWriter {
 	): Array<string> {
 		const type = value.type;
 		const message = `MalFfiQueued_${name}`;
+		const returns = value.returns.kind !== "undefined";
+		const waiting = value.queued === "wait";
 		const keyedLookup =
 			value.replaced !== undefined &&
 			!value.params.includes("data") &&
@@ -1216,6 +1224,7 @@ class BindingWriter {
 		return [
 			"",
 			`typedef struct ${message} {`,
+			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")};`] : []),
 			// Locals' declarations drop a top-level `const`, which the copies assign.
 			...type.params.map(
 				(param, index) => `\t${localDeclaration(param, `mal_c${String(index)}`)};`,
@@ -1235,10 +1244,12 @@ class BindingWriter {
 			"\t(void) vm;",
 			`\t${message} *mal_message = mal_data;`,
 			"\t(void) mal_message;",
-			`\t${name}_run(${["mal_callback", ...args.map((arg) => `mal_message->${arg}`)].join(", ")});`,
+			`\t${returns ? "mal_message->mal_return = " : ""}${name}_run(${["mal_callback", ...args.map((arg) => `mal_message->${arg}`)].join(", ")});`,
 			"}",
 			"",
-			`static void ${name}(${params.length === 0 ? "void" : params.join(", ")}) {`,
+			`static ${formatCDeclaration(type.returns, `${name}(${params.length === 0 ? "void" : params.join(", ")})`)} {`,
+			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
+			...(waiting ? ["\tint mal_cancellation = mal_ffi_callback_wait_enter();"] : []),
 			`\tMalFfiCallback *mal_callback = ${callback};`,
 			"\tif (mal_callback != nullptr && !mal_ffi_callback_here(mal_callback)) {",
 			// A lookup without user data already reserved the call under its lock.
@@ -1254,16 +1265,21 @@ class BindingWriter {
 			"\t\t\t\tmal_message = nullptr;",
 			"\t\t\t}",
 			"\t\t}",
-			`\t\tmal_ffi_callback_queue(mal_callback, ${name}_queued, mal_message, ${name}_free);`,
+			waiting
+				? `\t\tmal_ffi_callback_wait(mal_callback, ${name}_queued, mal_message, ${name}_free, ${returns ? `&mal_return, offsetof(${message}, mal_return), sizeof(mal_return)` : "nullptr, 0, 0"});`
+				: `\t\tmal_ffi_callback_queue(mal_callback, ${name}_queued, mal_message, ${name}_free);`,
 			...(value.closes === undefined ? [] : ["\t\tmal_ffi_close_return(mal_callback);"]),
 			...(keyedLookup ? ["\t\tmal_ffi_callback_drop(mal_callback);"] : []),
-			"\t\treturn;",
+			...(waiting ? ["\t\tmal_ffi_callback_wait_leave(mal_cancellation);"] : []),
+			`\t\treturn${returns ? " mal_return" : ""};`,
 			"\t}",
-			`\t${name}_run(${["mal_callback", ...args].join(", ")});`,
+			`\t${returns ? "mal_return = " : ""}${name}_run(${["mal_callback", ...args].join(", ")});`,
 			...(value.closes === undefined ? [] : ["\tmal_ffi_close_return(mal_callback);"]),
 			...(keyedLookup
 				? ["\tif (mal_callback != nullptr) mal_ffi_callback_drop(mal_callback);"]
 				: []),
+			...(waiting ? ["\tmal_ffi_callback_wait_leave(mal_cancellation);"] : []),
+			...(returns ? ["\treturn mal_return;"] : []),
 			"}",
 		];
 	}
@@ -1457,7 +1473,7 @@ class BindingWriter {
 						// never leaves a function rooted that no library holds.
 						keeps.push(
 							`if ((${source}) != mal_ffi_null()) {`,
-							`\t${context} = ${value.queued === true ? "mal_ffi_keep_queued" : "mal_ffi_keep"}(vm, ${source});`,
+							`\t${context} = ${value.queued !== undefined ? "mal_ffi_keep_queued" : "mal_ffi_keep"}(vm, ${source});`,
 							`\tif (${context} == nullptr) goto mal_done;`,
 							"}",
 						);

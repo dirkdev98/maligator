@@ -1909,8 +1909,7 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
 - [ ] Support C libraries in `maligator test --watch`, which needs an in-process
       application host that links the project's bindings.
-- [ ] Async twins with callbacks, and queued callbacks that return a result to a
-      waiting library thread.
+- [ ] Async twins with callbacks.
 - [ ] Describe pointer-valued callback result lifetimes so their backing resources
       remain valid while C uses them.
 - [ ] Map value unions, bit-fields, and anonymous record members with explicit shape

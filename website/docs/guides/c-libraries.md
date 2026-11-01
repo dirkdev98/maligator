@@ -373,6 +373,15 @@ JavaScript runs on one thread, so a library that calls back from another thread 
 
 `queued: true` marks a kept callback the library may call from its own threads, as audio and network libraries do. A call from another thread copies its arguments and queues for the program's thread, and the C caller continues at once; a call on the program's thread runs immediately. So the callback returns nothing, and takes values, strings, buffers, and structs. An exception it throws is uncaught, as one in an event handler. The program needs an event loop, such as the web platform surface, and it keeps running while the callback is kept.
 
+Use `queued: "wait"` when the C caller needs a scalar or pointer-free struct result.
+The foreign thread waits until JavaScript returns and conversion succeeds. An exception
+returns zero to C and remains uncaught on the program's thread. Shutdown cancels waiting
+calls and rejects new ones with a zero result.
+
+Stop or join callback producers through an async twin so the program's thread remains
+available to run their callbacks. A handle whose destructor joins such a producer also
+needs `collect: false` and asynchronous destruction.
+
 ## Call variadic functions
 
 A variadic function such as `TraceLog(int logLevel, const char *text, ...)` binds through variants. Each variant fixes the C types of the arguments after the fixed ones and becomes its own export, with those arguments named by position:

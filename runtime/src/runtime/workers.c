@@ -1,4 +1,5 @@
 #include "workers.h"
+#include "../ffi/mal_ffi.h"
 
 #include <pthread.h>
 #include <signal.h>
@@ -3978,6 +3979,7 @@ MalValue mal_workers_receive_message_function(MalVm *vm) {
 }
 
 void mal_workers_shutdown(MalVm *vm) {
+    mal_ffi_callbacks_shutdown(vm);
     Isolate *iso = g_isolate;
     if (iso == nullptr || iso->vm != vm) return;
     // Children first: terminate, then join each (their final posts may race the

@@ -499,6 +499,7 @@ struct MalFfiState {
     u32 *free_slots;
     u32 free_count;
     u32 free_capacity;
+    bool accepting_waits;
 };
 
 /**
@@ -508,9 +509,61 @@ struct MalFfiState {
 static pthread_mutex_t ffi_queue_lock = PTHREAD_MUTEX_INITIALIZER;
 static MalFfiClose *ffi_closes;
 
+typedef struct MalFfiWait {
+    struct MalFfiWait *next;
+    /** Comparison key only: the request may outlive both VM and callback context. */
+    MalVm *vm;
+    pthread_cond_t changed;
+    u32 references;
+    bool done;
+    bool succeeded;
+    void *message;
+    MalFfiQueuedFree free;
+} MalFfiWait;
+
+static MalFfiWait *ffi_waiters;
+
+static void ffi_wait_finish(MalFfiWait *wait, bool succeeded) {
+    pthread_mutex_lock(&ffi_queue_lock);
+    if (!wait->done) {
+        wait->done = true;
+        wait->succeeded = succeeded;
+        pthread_cond_signal(&wait->changed);
+    }
+    pthread_mutex_unlock(&ffi_queue_lock);
+}
+
+static void ffi_wait_release(MalFfiWait *wait) {
+    pthread_mutex_lock(&ffi_queue_lock);
+    bool last = --wait->references == 0;
+    if (last) {
+        MalFfiWait **link = &ffi_waiters;
+        while (*link != wait) link = &(*link)->next;
+        *link = wait->next;
+    }
+    pthread_mutex_unlock(&ffi_queue_lock);
+    if (last) {
+        pthread_cond_destroy(&wait->changed);
+        wait->free(wait->message);
+        free(wait);
+    }
+}
+
+void mal_ffi_callbacks_shutdown(MalVm *vm) {
+    pthread_mutex_lock(&ffi_queue_lock);
+    if (vm->ffi != nullptr) vm->ffi->accepting_waits = false;
+    for (MalFfiWait *wait = ffi_waiters; wait != nullptr; wait = wait->next) {
+        if (wait->vm != vm || wait->done) continue;
+        wait->done = true;
+        pthread_cond_signal(&wait->changed);
+    }
+    pthread_mutex_unlock(&ffi_queue_lock);
+}
+
 static void ffi_state_free(MalVm *vm) {
     MalFfiState *state = vm->ffi;
     if (state == nullptr) return;
+    mal_ffi_callbacks_shutdown(vm);
     // Teardown finalizers run after this, so the handles must forget the table first.
     for (usize index = 0; index < state->handle_capacity; index++) {
         if (state->handles[index].handle != nullptr) state->handles[index].handle->registry = nullptr;
@@ -559,6 +612,7 @@ static MalFfiState *ffi_state(MalVm *vm) {
         return nullptr;
     }
     vm->ffi = state;
+    state->accepting_waits = true;
     return state;
 }
 
@@ -1387,6 +1441,7 @@ typedef struct MalFfiQueuedCall {
     MalFfiQueuedFree free;
     void *message;
     bool ran;
+    MalFfiWait *wait;
 } MalFfiQueuedCall;
 
 static MAL_ISOLATE_LOCAL bool ffi_inbox_installed;
@@ -1400,7 +1455,10 @@ static void ffi_queued_destroy(void *data) {
     } else if (!call->ran) {
         ffi_kept_unref(call->kept);
     }
-    if (call->message != nullptr) call->free(call->message);
+    if (call->wait != nullptr) {
+        ffi_wait_finish(call->wait, false);
+        ffi_wait_release(call->wait);
+    } else if (call->message != nullptr) call->free(call->message);
     free(call);
 }
 
@@ -1408,7 +1466,7 @@ static void ffi_queued_destroy(void *data) {
 static bool ffi_inbox_post_release(MalFfiKept *kept) {
     MalFfiQueuedCall *call = malloc(sizeof(*call));
     if (call == nullptr) return false;
-    *call = (MalFfiQueuedCall) {kept, nullptr, nullptr, nullptr, false};
+    *call = (MalFfiQueuedCall) {.kept = kept};
     MalVm *vm = kept->callback.vm;
     bool posted = vm != nullptr
         && mal_host_post_progress(mal_host(vm), vm->ffi->inbox, call, ffi_queued_destroy);
@@ -1447,8 +1505,17 @@ static bool ffi_inbox_drain(MalVm *vm) {
         ffi_release_now(kept);
         return true;
     }
-    if (kept->callback.vm == vm) call->run(vm, &kept->callback, call->message);
+    bool pending = true;
+    if (call->wait != nullptr) {
+        pthread_mutex_lock(&ffi_queue_lock);
+        pending = !call->wait->done;
+        pthread_mutex_unlock(&ffi_queue_lock);
+    }
+    bool ran = pending && kept->callback.vm == vm;
+    if (ran) call->run(vm, &kept->callback, call->message);
     call->ran = true;
+    if (call->wait != nullptr)
+        ffi_wait_finish(call->wait, ran && vm->completion.kind != MAL_COMPLETION_THROW);
     u32 left = atomic_fetch_sub(&kept->waiting, 1) - 1;
     mal_host_task_release(&host->tasks, &task);
     if (left == 0 && kept->released) ffi_release_now(kept);
@@ -1502,25 +1569,82 @@ void mal_ffi_callback_reserve(MalFfiCallback *callback) {
     atomic_fetch_add(&kept->waiting, 1);
 }
 
-bool mal_ffi_callback_queue(
-    MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release) {
-    MalFfiKept *kept = (MalFfiKept *) callback;
+static bool ffi_callback_post_locked(
+    MalFfiKept *kept, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release,
+    MalFfiWait *wait) {
     MalFfiQueuedCall *call = message == nullptr ? nullptr : malloc(sizeof(*call));
     if (call != nullptr) {
-        *call = (MalFfiQueuedCall) {kept, run, release, message, false};
-        pthread_mutex_lock(&ffi_queue_lock);
+        *call = (MalFfiQueuedCall) {
+            .kept = kept, .run = run, .free = release, .message = message, .wait = wait};
         MalVm *vm = kept->callback.vm;
         bool posted = vm != nullptr
+            && (wait == nullptr || vm->ffi->accepting_waits)
             && mal_host_post_progress(mal_host(vm), vm->ffi->inbox, call, ffi_queued_destroy);
-        pthread_mutex_unlock(&ffi_queue_lock);
         if (posted) return true;
         free(call);
     }
+    return false;
+}
+
+bool mal_ffi_callback_queue(
+    MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release) {
+    MalFfiKept *kept = (MalFfiKept *) callback;
+    pthread_mutex_lock(&ffi_queue_lock);
+    bool posted = ffi_callback_post_locked(kept, run, message, release, nullptr);
+    pthread_mutex_unlock(&ffi_queue_lock);
+    if (posted) return true;
     if (message != nullptr) release(message);
     // A release that waited for this call stays pending: only the VM thread may free it.
     atomic_fetch_sub(&kept->waiting, 1);
     ffi_kept_unref(kept);
     return false;
+}
+
+int mal_ffi_callback_wait_enter(void) {
+    // A canceled condition wait reacquires the queue lock. Defer cancellation until
+    // the generated frame has released the request and its keyed or close references.
+    int previous;
+    if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous) != 0) abort();
+    return previous;
+}
+
+void mal_ffi_callback_wait_leave(int cancellation_state) {
+    if (pthread_setcancelstate(cancellation_state, nullptr) != 0) abort();
+    if (cancellation_state == PTHREAD_CANCEL_ENABLE) pthread_testcancel();
+}
+
+bool mal_ffi_callback_wait(
+    MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release,
+    void *result, size_t result_offset, size_t result_size) {
+    MalFfiKept *kept = (MalFfiKept *) callback;
+    MalFfiWait *wait = message == nullptr ? nullptr : calloc(1, sizeof(*wait));
+    if (wait == nullptr || pthread_cond_init(&wait->changed, nullptr) != 0) {
+        free(wait);
+        if (message != nullptr) release(message);
+        atomic_fetch_sub(&kept->waiting, 1);
+        ffi_kept_unref(kept);
+        return false;
+    }
+    wait->references = 1;
+    wait->message = message;
+    wait->free = release;
+    pthread_mutex_lock(&ffi_queue_lock);
+    wait->vm = kept->callback.vm;
+    wait->next = ffi_waiters;
+    ffi_waiters = wait;
+    bool posted = ffi_callback_post_locked(kept, run, message, release, wait);
+    if (posted) wait->references++;
+    while (posted && !wait->done) pthread_cond_wait(&wait->changed, &ffi_queue_lock);
+    bool succeeded = posted && wait->succeeded;
+    if (succeeded && result_size > 0)
+        memcpy(result, (byte *) message + result_offset, result_size);
+    pthread_mutex_unlock(&ffi_queue_lock);
+    ffi_wait_release(wait);
+    if (!posted) {
+        atomic_fetch_sub(&kept->waiting, 1);
+        ffi_kept_unref(kept);
+    }
+    return succeeded;
 }
 
 /** A malloc'd `<specifier>#<name>` identity, or null after an allocation throw. */

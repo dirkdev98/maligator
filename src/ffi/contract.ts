@@ -310,7 +310,13 @@ function validateValueFacts(value: unknown, at: string): void {
 			`${at}.callback.release`,
 			"absent for a replaced callback, which the next call releases",
 		);
-		booleanField(callback, "queued", `${at}.callback`);
+		expect(
+			callback.queued === undefined ||
+				typeof callback.queued === "boolean" ||
+				callback.queued === "wait",
+			`${at}.callback.queued`,
+			"a boolean or 'wait'",
+		);
 		if (callback.closes !== undefined) {
 			expect(
 				callback.release === undefined && callback.replaced !== true,
@@ -324,7 +330,7 @@ function validateValueFacts(value: unknown, at: string): void {
 			);
 		}
 		expect(
-			callback.queued !== true ||
+			(callback.queued !== true && callback.queued !== "wait") ||
 				callback.release !== undefined ||
 				callback.replaced === true ||
 				callback.closes !== undefined,

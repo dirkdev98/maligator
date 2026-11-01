@@ -441,6 +441,19 @@ void mal_ffi_callback_reserve(MalFfiCallback *callback);
  */
 bool mal_ffi_callback_queue(
     MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release);
+/**
+ * Consume a reservation and message, waiting on a foreign thread for successful VM
+ * execution. Copy the native result field before releasing the message; cancellation
+ * leaves `result` untouched. The VM never writes into the producer's stack. The
+ * generated entry disables cancellation until all its native references retire.
+ */
+bool mal_ffi_callback_wait(
+    MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release,
+    void *result, size_t result_offset, size_t result_size);
+int mal_ffi_callback_wait_enter(void);
+void mal_ffi_callback_wait_leave(int cancellation_state);
+/** Cancel waiting callbacks before joining any thread that might be producing one. */
+void mal_ffi_callbacks_shutdown(MalVm *vm);
 
 /**
  * The kept callbacks of one setter parameter whose next call replaces the callback,
