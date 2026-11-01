@@ -12,6 +12,57 @@
 // Any isolate thread may release a store, so the seam is read atomically.
 static _Atomic(MalArrayBufferReleaseObserver) g_release_observer;
 
+struct MalArrayBufferStoreLease {
+    _Atomic u32 references;
+    byte *data;
+    u32 capacity;
+    MalArrayBufferReleaseInfo info;
+};
+
+static void release_store_data(byte *data, u32 capacity, const MalArrayBufferReleaseInfo *info) {
+    if (data == nullptr) return;
+    if (info->sensitive) mal_secure_scrub(data, capacity);
+    MalArrayBufferReleaseObserver observer =
+        atomic_load_explicit(&g_release_observer, memory_order_acquire);
+    if (observer != nullptr) observer(info, data, capacity);
+    free(data);
+    mal_gc_process_release(capacity);
+}
+
+MalArrayBufferStoreLease *mal_array_buffer_object_retain_store(MalArrayBufferObject *buffer) {
+    if (buffer->shared || buffer->detached
+        || (buffer->data == nullptr && buffer->allocation_capacity > 0)) return nullptr;
+    MalArrayBufferStoreLease *lease = buffer->store_lease;
+    if (lease == nullptr) {
+        lease = malloc(sizeof(*lease));
+        if (lease == nullptr) return nullptr;
+        *lease = (MalArrayBufferStoreLease) {
+            .references = 1, .data = buffer->data, .capacity = buffer->allocation_capacity,
+            .info = {(uptr) buffer, buffer->sensitive},
+        };
+        buffer->store_lease = lease;
+    }
+    atomic_fetch_add_explicit(&lease->references, 1, memory_order_relaxed);
+    return lease;
+}
+
+void mal_array_buffer_store_release(MalArrayBufferStoreLease *lease) {
+    if (lease == nullptr) return;
+    if (atomic_fetch_sub_explicit(&lease->references, 1, memory_order_acq_rel) == 1) {
+        release_store_data(lease->data, lease->capacity, &lease->info);
+        free(lease);
+    }
+}
+
+MalArrayBufferStoreLease *mal_array_buffer_object_take_store_lease(MalArrayBufferObject *buffer) {
+    MalArrayBufferStoreLease *lease = buffer->store_lease;
+    if (lease != nullptr) {
+        lease->info = (MalArrayBufferReleaseInfo) {(uptr) buffer, buffer->sensitive};
+        buffer->store_lease = nullptr;
+    }
+    return lease;
+}
+
 struct MalArrayBufferPin {
     MalArrayBufferObject *buffer;
     u32 references;
@@ -92,6 +143,7 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
     buffer->sensitive = false;
     buffer->pins = 0;
     buffer->retained_pin = nullptr;
+    buffer->store_lease = nullptr;
 
     return buffer;
 }
@@ -136,6 +188,7 @@ MalArrayBufferObject *mal_array_buffer_object_move_store(
     MalArrayBufferObject *result = mal_array_buffer_object_new_impl(
         heap, prototype, 0, 0, false, false, false);
     result->data = source->data;
+    result->store_lease = mal_array_buffer_object_take_store_lease(source);
     result->byte_length = byte_length;
     result->max_byte_length = max_byte_length;
     result->allocation_capacity = source->allocation_capacity;
@@ -227,22 +280,13 @@ void mal_array_buffer_object_release_store(MalHeap *heap, MalArrayBufferObject *
         buffer->allocation_capacity = 0;
         return;
     }
-    if (buffer->data == nullptr) {
-        return;
+    MalArrayBufferStoreLease *lease = mal_array_buffer_object_take_store_lease(buffer);
+    if (buffer->data != nullptr) mal_heap_array_buffer_release(heap, buffer->allocation_capacity);
+    if (lease != nullptr) mal_array_buffer_store_release(lease);
+    else {
+        MalArrayBufferReleaseInfo info = {(uptr) buffer, buffer->sensitive};
+        release_store_data(buffer->data, buffer->allocation_capacity, &info);
     }
-    if (buffer->sensitive) {
-        // The whole allocation, not byte_length: a shrunken resizable store
-        // still holds the bytes past its current length.
-        mal_secure_scrub(buffer->data, buffer->allocation_capacity);
-    }
-    MalArrayBufferReleaseObserver observer =
-        atomic_load_explicit(&g_release_observer, memory_order_acquire);
-    if (observer != nullptr) {
-        observer(buffer, buffer->data, buffer->allocation_capacity);
-    }
-    free(buffer->data);
-    mal_gc_process_release(buffer->allocation_capacity);
-    mal_heap_array_buffer_release(heap, buffer->allocation_capacity);
     buffer->data = nullptr;
     buffer->allocation_capacity = 0;
 }

@@ -18,9 +18,9 @@ extern const MalRuntimeImage mal_runtime_image;
 static const byte *watched_store;
 static usize watched_releases;
 
-static void observe_release(const MalArrayBufferObject *buffer, const byte *data, u32 capacity) {
+static void observe_release(const MalArrayBufferReleaseInfo *info, const byte *data, u32 capacity) {
     if (data != watched_store) return;
-    CHECK(buffer->sensitive && capacity == 128);
+    CHECK(info->sensitive && capacity == 128);
     for (u32 i = 0; i < capacity; i++) CHECK(data[i] == 0);
     watched_releases++;
 }
@@ -56,7 +56,14 @@ static MalSerializedValue *snapshot(MalVm *vm, MalValue value, MalValue transfer
     return result;
 }
 
-int main(void) {
+static void retain_then_retire_native_owner(MalArrayBufferObject *buffer, bool leased) {
+    if (!leased) return;
+    MalArrayBufferStoreLease *lease = mal_array_buffer_object_retain_store(buffer);
+    CHECK(lease != nullptr);
+    mal_array_buffer_store_release(lease);
+}
+
+static void check_transfers(bool leased) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     MalValue roots[12];
@@ -69,6 +76,7 @@ int main(void) {
     roots[0] = mal_value_from_array_buffer_object(source);
     memset(source->data, 0xA5, source->allocation_capacity);
     source->sensitive = true;
+    retain_then_retire_native_owner(source, leased);
     watched_store = source->data;
     mal_array_buffer_object_set_release_observer(observe_release);
     roots[1] = array(&vm, roots, 1);
@@ -96,6 +104,7 @@ int main(void) {
     roots[4] = mal_value_from_array_buffer_object(mal_array_buffer_object_new(
         &vm.heap, prototype, 64, 64, false, false));
     MalArrayBufferObject *large = mal_value_to_array_buffer_object(roots[4]);
+    retain_then_retire_native_owner(large, leased);
     roots[5] = mal_value_from_array_buffer_object(mal_array_buffer_object_move_store(
         &vm.heap, prototype, large, 8, 8, false, false));
     byte *physical = mal_value_to_array_buffer_object(roots[5])->data;
@@ -123,6 +132,7 @@ int main(void) {
     roots[4] = mal_value_from_array_buffer_object(mal_array_buffer_object_new(
         &vm.heap, prototype, 16, 64, true, false));
     MalArrayBufferObject *failure_source = mal_value_to_array_buffer_object(roots[4]);
+    retain_then_retire_native_owner(failure_source, leased);
     byte *failure_store = failure_source->data;
     roots[5] = mal_value_from_object(mal_intrinsic_new_object(&vm));
     const MalSerializeHooks hooks = {.data = &roots[5], .encode = encode_failure_marker, .decode = reject_marker};
@@ -137,10 +147,23 @@ int main(void) {
     mal_serialized_value_release(moved);
     CHECK(mal_array_buffer_object_resize(mal_value_to_array_buffer_object(first), 32));
 
+    roots[0] = mal_value_from_array_buffer_object(mal_array_buffer_object_new(
+        &vm.heap, prototype, 32, 32, false, false));
+    retain_then_retire_native_owner(mal_value_to_array_buffer_object(roots[0]), leased);
+    roots[1] = array(&vm, roots, 1);
+    moved = snapshot(&vm, roots[0], roots[1], nullptr);
+    mal_serialized_value_release(moved);
+
     mal_gc_unroot(&span);
     mal_vm_free(&vm);
     CHECK(watched_releases == 1 && mal_gc_process_bytes() == 0);
     mal_array_buffer_object_set_release_observer(nullptr);
+}
+
+int main(void) {
+    check_transfers(false);
+    watched_releases = 0;
+    check_transfers(true);
     puts("clone-take PASS");
     return 0;
 }

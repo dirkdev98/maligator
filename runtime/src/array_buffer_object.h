@@ -5,12 +5,13 @@
 #include "shared_memory.h"
 
 typedef struct MalArrayBufferPin MalArrayBufferPin;
+typedef struct MalArrayBufferStoreLease MalArrayBufferStoreLease;
 
 /**
  * ArrayBuffer / SharedArrayBuffer backing store.
  *
- * No GC: `data` is a plain malloc allocation released only by detach/transfer
- * or the GC sweep, both through mal_array_buffer_object_release_store.
+ * `data` is a native allocation. A store lease can retain its bytes independently
+ * of the GC wrapper; ordinary stores are released by detach or the GC sweep.
  * An ordinary store charges its allocation_capacity to the process budget
  * (gc_process.h) once; the charge moves with the allocation (move_store,
  * structured-clone transfer) and is released only where it is freed. Shared
@@ -50,11 +51,19 @@ typedef struct MalArrayBufferObject {
     // a C library calls back into cannot free memory the library is writing.
     u32 pins;
     MalArrayBufferPin *retained_pin;
+    MalArrayBufferStoreLease *store_lease;
 } MalArrayBufferObject;
 
 /** A VM-thread pin that can be retired after its buffer wrapper has been swept. */
 MalArrayBufferPin *mal_array_buffer_object_retain_pin(MalArrayBufferObject *buffer);
 void mal_array_buffer_object_release_pin(MalArrayBufferPin *pin);
+
+/** Retain ordinary backing bytes independently of their wrapper. Does not pin it. */
+MalArrayBufferStoreLease *mal_array_buffer_object_retain_store(MalArrayBufferObject *buffer);
+/** Retire a native owner on any thread; the last owner scrubs and frees the store. */
+void mal_array_buffer_store_release(MalArrayBufferStoreLease *lease);
+/** Move the lease's wrapper reference alongside a raw store ownership transfer. */
+MalArrayBufferStoreLease *mal_array_buffer_object_take_store_lease(MalArrayBufferObject *buffer);
 
 /**
  * Allocate a new ArrayBuffer whose initial byte range is zero-filled. When
@@ -153,15 +162,20 @@ void mal_array_buffer_object_detach(MalHeap *heap, MalArrayBufferObject *buffer)
 bool mal_array_buffer_object_resize(MalArrayBufferObject *buffer, u32 new_byte_length);
 
 /**
- * Test seam. Invoked from mal_array_buffer_object_release_store with the store
+ * Test seam. Invoked with the store
  * still mapped, after any scrub and immediately before free(), so a driver can
  * prove a sensitive store was cleared on the exact path that released it — an
  * assertion that is impossible to make once the block is back with the
  * allocator. Null (the default) disables it. Process-wide and published
- * atomically, so it runs on whichever isolate thread releases a store and must
- * be thread-safe itself. Shared backings never reach it.
+ * atomically, so it runs on whichever thread releases a store and must be
+ * thread-safe itself. Shared backings never reach it. The wrapper may already
+ * be gone; identity is an opaque token, never an address to dereference.
  */
+typedef struct MalArrayBufferReleaseInfo {
+    uptr identity;
+    bool sensitive;
+} MalArrayBufferReleaseInfo;
 typedef void (*MalArrayBufferReleaseObserver)(
-    const MalArrayBufferObject *buffer, const byte *data, u32 capacity
+    const MalArrayBufferReleaseInfo *info, const byte *data, u32 capacity
 );
 void mal_array_buffer_object_set_release_observer(MalArrayBufferReleaseObserver observer);

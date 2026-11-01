@@ -3,27 +3,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 #include "array_buffer_object.h"
 #include "gc.h"
+#include "gc_process.h"
 #include "intrinsics.h"
 #include "key.h"
 #include "value.h"
 #include "vm_ops.h"
 
 /*
- * Secret-bearing ArrayBuffer backing stores.
- *
- * The property under test — that a sensitive store is zeroed *before* the block
- * goes back to the allocator — is unobservable from JavaScript and unobservable
- * from C after the fact: reading the block after free() is exactly the bug this
- * prevents. So the driver installs the release observer, which runs on both
- * release paths with the store still mapped, after any scrub and immediately
- * before free().
- *
- * Both paths matter, and for different reasons: detach is the explicit one, and
- * the GC sweep is the one every real secret buffer actually takes, because
- * nothing detaches a digest state or a derived tag.
+ * Scrubbing must precede allocator reuse, which JavaScript cannot observe and
+ * C cannot inspect after free. The native observer sees still-mapped bytes just
+ * before release, including when a native owner outlives the VM.
  */
 
 extern const MalRuntimeImage mal_runtime_image;
@@ -34,7 +27,7 @@ extern const MalRuntimeImage mal_runtime_image;
 typedef struct SecretObservation {
     /* Only this buffer is recorded: a sweep releases whatever else the isolate
      * happens to be done with, and those are not what any check here is about. */
-    const MalArrayBufferObject *target;
+    uptr target;
     int releases;
     u32 capacity;
     /* Set when a released store still held a byte of the pattern written into it. */
@@ -45,11 +38,11 @@ typedef struct SecretObservation {
 static SecretObservation g_observed;
 
 static void secret_release_observer(
-    const MalArrayBufferObject *buffer, const byte *data, u32 capacity) {
-    if (buffer != g_observed.target) return;
+    const MalArrayBufferReleaseInfo *info, const byte *data, u32 capacity) {
+    if (info->identity != g_observed.target) return;
     g_observed.releases++;
     g_observed.capacity = capacity;
-    g_observed.sensitive = buffer->sensitive;
+    g_observed.sensitive = info->sensitive;
     for (u32 i = 0; i < capacity; i++) {
         if (data[i] != (byte) SECRET_BYTE) continue;
         g_observed.residue = true;
@@ -70,7 +63,7 @@ static MalArrayBufferObject *secret_buffer_new(MalVm *vm, bool sensitive) {
               &vm->heap, prototype, SECRET_LENGTH, SECRET_LENGTH, false, false);
     if (buffer == nullptr || buffer->data == nullptr) return nullptr;
     memset(buffer->data, SECRET_BYTE, SECRET_LENGTH);
-    g_observed.target = buffer;
+    g_observed.target = (uptr) buffer;
     return buffer;
 }
 
@@ -119,7 +112,7 @@ static bool adopted_stores_carry_the_flag(MalVm *vm) {
     MalArrayBufferObject *buffer = mal_array_buffer_object_adopt(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
         bytes, SECRET_LENGTH, true);
-    g_observed.target = buffer;
+    g_observed.target = (uptr) buffer;
     bool adopted = buffer->data == bytes
         && mal_array_buffer_object_byte_length(buffer) == SECRET_LENGTH;
     mal_gc_collect(vm);
@@ -138,7 +131,7 @@ static bool a_shrunken_store_is_scrubbed_to_its_capacity(MalVm *vm) {
     if (buffer->data == nullptr) return false;
     buffer->sensitive = true;
     memset(buffer->data, SECRET_BYTE, SECRET_LENGTH);
-    g_observed.target = buffer;
+    g_observed.target = (uptr) buffer;
     bool shrunk = mal_array_buffer_object_resize(buffer, 8);
     mal_array_buffer_object_detach(&vm->heap, buffer);
     return shrunk && g_observed.releases == 1 && !g_observed.residue
@@ -182,7 +175,7 @@ static bool a_transferred_store_stays_sensitive(MalVm *vm) {
         && result->allocation_capacity == SECRET_LENGTH
         && mal_array_buffer_object_is_detached(source);
     if (ok) {
-        g_observed.target = result;
+        g_observed.target = (uptr) result;
         mal_array_buffer_object_detach(&vm->heap, result);
     }
     mal_gc_unroot(&root);
@@ -190,6 +183,46 @@ static bool a_transferred_store_stays_sensitive(MalVm *vm) {
     return ok && g_observed.releases == 1 && !g_observed.residue
         && g_observed.capacity == SECRET_LENGTH
         && g_observed.sensitive;
+}
+
+typedef struct NativeStore {
+    MalArrayBufferStoreLease *lease;
+    byte *data;
+    u32 capacity;
+    uptr identity;
+    bool ok;
+} NativeStore;
+
+static void *retire_native_store(void *data) {
+    NativeStore *store = data;
+    secret_observation_reset();
+    g_observed.target = store->identity;
+    bool intact = true;
+    for (u32 index = 0; index < store->capacity; index++)
+        intact = intact && store->data[index] == (byte) SECRET_BYTE;
+    bool empty = store->data == nullptr;
+    usize before = mal_gc_process_bytes();
+    mal_array_buffer_store_release(store->lease);
+    store->ok = intact && mal_gc_process_bytes() == before - store->capacity
+        && g_observed.releases == (empty ? 0 : 1)
+        && !g_observed.residue
+        && (empty || g_observed.sensitive);
+    return nullptr;
+}
+
+static NativeStore native_store(MalVm *vm, bool adopted, u32 length, u32 capacity, bool resizable) {
+    MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
+    MalArrayBufferObject *buffer = adopted
+        ? mal_array_buffer_object_adopt(&vm->heap, prototype, malloc(capacity), capacity, true)
+        : mal_array_buffer_object_new(&vm->heap, prototype, length, capacity, resizable, false);
+    buffer->sensitive = true;
+    if (buffer->data != nullptr) memset(buffer->data, SECRET_BYTE, buffer->allocation_capacity);
+    if (resizable && !mal_array_buffer_object_resize(buffer, 8)) abort();
+    MalArrayBufferStoreLease *lease = mal_array_buffer_object_retain_store(buffer);
+    MalArrayBufferStoreLease *other = mal_array_buffer_object_retain_store(buffer);
+    if (lease == nullptr || other == nullptr) abort();
+    mal_array_buffer_store_release(other);
+    return (NativeStore) {lease, buffer->data, buffer->allocation_capacity, (uptr) buffer, false};
 }
 
 int main(void) {
@@ -215,7 +248,23 @@ int main(void) {
             a_shrunken_store_is_scrubbed_to_its_capacity(&vm)},
         {"transfer() carries the sensitive flag onto the moved store",
             a_transferred_store_stays_sensitive(&vm)},
+        {"native store ownership survives VM teardown and retires on another thread", false},
     };
+    NativeStore stores[] = {
+        native_store(&vm, false, SECRET_LENGTH, SECRET_LENGTH, false),
+        native_store(&vm, true, SECRET_LENGTH, SECRET_LENGTH, false),
+        native_store(&vm, false, 16, SECRET_LENGTH, true),
+        native_store(&vm, false, 0, 0, false),
+    };
+    mal_vm_free(&vm);
+    bool native_ok = true;
+    for (usize index = 0; index < countof(stores); index++) {
+        pthread_t thread;
+        if (pthread_create(&thread, nullptr, retire_native_store, &stores[index]) != 0) abort();
+        if (pthread_join(thread, nullptr) != 0) abort();
+        native_ok = native_ok && stores[index].ok;
+    }
+    checks[countof(checks) - 1].ok = native_ok;
     int total = (int) countof(checks);
     int passed = 0;
     for (int i = 0; i < total; i++) {
@@ -228,6 +277,5 @@ int main(void) {
     printf("secretbuffertest PASS %d/%d\n", passed, total);
 
     mal_array_buffer_object_set_release_observer(nullptr);
-    mal_vm_free(&vm);
     return passed == total ? 0 : 1;
 }

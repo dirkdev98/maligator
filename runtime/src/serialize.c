@@ -92,6 +92,7 @@ typedef struct {
     // process budget (a transfer keeps the sender's charge).
     u32 capacity;
     MalSharedMemory *shared;
+    MalArrayBufferStoreLease *store_lease;
     MalSerializeHostDescriptor host;
 } SerResource;
 
@@ -773,6 +774,7 @@ bool mal_serialize_commit(MalVm *vm, MalSerializedValue *snap) {
         // receiver views were encoded against the resizable/max metadata, and
         // validate proved the capacity unchanged.
         resource->data = source->data;
+        resource->store_lease = mal_array_buffer_object_take_store_lease(source);
         resource->length = source->byte_length;
         resource->sensitive = source->sensitive;
         if (source->data != nullptr) {
@@ -917,6 +919,8 @@ static MalArrayBufferObject *dec_buffer(SerDecoder *dec, SerResource *resource) 
         MalArrayBufferObject *buffer = mal_array_buffer_object_new_uninitialized(
             &vm->heap, prototype, 0, 0, false, false);
         buffer->data = resource->data;
+        buffer->store_lease = resource->store_lease;
+        resource->store_lease = nullptr;
         buffer->byte_length = resource->length;
         buffer->max_byte_length = max_length;
         buffer->allocation_capacity = resource->capacity;
@@ -1293,7 +1297,9 @@ void mal_serialized_value_release(MalSerializedValue *snap) {
         SerResource *resource = &snap->resources[i];
         switch (resource->kind) {
         case SER_RESOURCE_BUFFER:
-            if (resource->data != nullptr) {
+            if (resource->store_lease != nullptr) {
+                mal_array_buffer_store_release(resource->store_lease);
+            } else if (resource->data != nullptr) {
                 if (resource->sensitive) {
                     mal_secure_scrub(resource->data, resource->capacity);
                 }
