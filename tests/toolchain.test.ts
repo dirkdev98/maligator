@@ -1185,6 +1185,48 @@ printf '!<arch>\\n' > "$2"
 		expect(links.some((line) => line.includes("--thinlto-cache-dir="))).toBe(false);
 	});
 
+	it.each(["MAL_ASAN", "MAL_UBSAN", "MAL_TSAN"])(
+		"omits inactive ThinLTO cache flags from production %s links",
+		(sanitizer) => {
+			const fake = createFakeToolchain({ lldThinLtoCache: false });
+			try {
+				const report = inspectToolchain({
+					rootDir: fake.root,
+					rustDir: fake.rustDir,
+					env: fake.env,
+					needsCxx: false,
+					platform: "linux",
+				});
+				const context = resolveNativeBuildContext({
+					toolchain: report.toolchain!,
+					production: true,
+					cacheDirectory: path.join(fake.root, "cache"),
+					features: { evalEnabled: false, webPlatformEnabled: false },
+					environment: { ...fake.env, [sanitizer]: "1" },
+				});
+				writeFileSync(fake.logPath, "");
+				buildLocalBinary({
+					context,
+					name: "sanitizer-output",
+					cSource: "int value;",
+					verbose: false,
+					outDir: fake.root,
+				});
+				const links = readFileSync(fake.logPath, "utf-8")
+					.split("\n")
+					.filter((line) => line.includes("-o") && !line.includes(" -c "));
+				expect(links.some((line) => line.includes("-fsanitize="))).toBe(true);
+				for (const link of links) {
+					expect(link).not.toContain("-flto");
+					expect(link).not.toContain("-Wl,-plugin-opt,cache-dir=");
+					expect(link).not.toContain("--thinlto-cache-dir=");
+				}
+			} finally {
+				rmSync(fake.root, { recursive: true, force: true });
+			}
+		},
+	);
+
 	it("falls back to full LTO when ThinLTO is unavailable", () => {
 		const fake = createFakeToolchain({ thinLto: false });
 		const report = inspectToolchain({

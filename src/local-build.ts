@@ -23,7 +23,7 @@ import {
 	readArtifactAction,
 	withArtifactActionLock,
 } from "./artifact-store.ts";
-import { buildSuffix, ccExtraFlags } from "./build-flags.ts";
+import { buildSuffix, ccExtraFlags, optFlags } from "./build-flags.ts";
 import {
 	compileArgumentsEmitDebugInfo,
 	expandedGeneratedUnitDigest,
@@ -174,7 +174,11 @@ export function generatedCCompileArguments(context: NativeBuildContext): Array<s
 function thinLtoCacheArguments(
 	context: NativeBuildContext,
 ): { directory: string; arguments: Array<string> } | undefined {
-	if (!context.plan.lto || context.plan.thinLtoCache === null) return undefined;
+	if (
+		context.plan.thinLtoCache === null ||
+		!optFlags(context.plan, context.environment).includes("-flto=thin")
+	)
+		return undefined;
 	const directory = path.join(
 		context.cacheDirectory,
 		"thinlto",
@@ -845,7 +849,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 					: input,
 		),
 		zigStripArgs: zigLinkTimeStrip ? context.toolchain.probes.stripArgs : [],
-		thinLtoCache: context.plan.thinLtoCache,
+		thinLtoCache: thinLtoCache === undefined ? null : context.plan.thinLtoCache,
 		strip:
 			context.plan.strip && !zigLinkTimeStrip
 				? {
