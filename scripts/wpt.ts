@@ -221,65 +221,135 @@ for (const entry of tests) {
 		}
 		const entryDimensions = dimensions.get(entry.path) ?? [];
 		for (const backend of new Set(entryDimensions.map((item) => item.backend))) {
-			progress.detail(`${entry.path} · ${variant || "default"} · ${backend} build`);
-			let binary: string;
-			let binaryArguments: Array<string> = [];
+			const backendRoot = path.join(
+				buildRoot,
+				`${manifestIndex}-${variantIndex}-${backend}`,
+			);
+			mkdirSync(backendRoot, { recursive: true });
 			try {
-				if (backend === "wire") {
-					if (wireRunner === undefined) throw new Error("wire runtime was not prepared");
-					const wirePath = path.join(
-						buildRoot,
-						`wpt-${manifestIndex}-${variantIndex}.malw`,
-					);
-					const wireFrontend = compileBuildFrontend({
-						entrypoint: generatedPath,
-						config: wireConfig,
-						stripTypes: stripCompactTypes,
-						stripperIdentity: "wpt-wire-v1",
-						optimization: "development",
-						session: wireSession,
-					});
-					progress.detail(`${entry.path} · wire frontend cache ${wireFrontend.cache}`);
-					writeFileSync(wirePath, wireFrontend.wire);
-					binary = wireRunner;
-					binaryArguments = [wirePath];
-				} else {
-					binary = buildNativeBinary({
-						fixture: generatedPath,
-						name: `wpt-${manifestIndex}-${variantIndex}-${backend}`,
-						mainFile: "runtime/host_main.c",
-						outDir: buildRoot,
-						compiled: backend === "compiled",
-					});
+				progress.detail(`${entry.path} · ${variant || "default"} · ${backend} build`);
+				let binary: string;
+				let binaryArguments: Array<string> = [];
+				try {
+					if (backend === "wire") {
+						if (wireRunner === undefined)
+							throw new Error("wire runtime was not prepared");
+						const wirePath = path.join(
+							backendRoot,
+							`wpt-${manifestIndex}-${variantIndex}.malw`,
+						);
+						const wireFrontend = compileBuildFrontend({
+							entrypoint: generatedPath,
+							config: wireConfig,
+							stripTypes: stripCompactTypes,
+							stripperIdentity: "wpt-wire-v1",
+							optimization: "development",
+							session: wireSession,
+						});
+						progress.detail(`${entry.path} · wire frontend cache ${wireFrontend.cache}`);
+						writeFileSync(wirePath, wireFrontend.wire);
+						binary = wireRunner;
+						binaryArguments = [wirePath];
+					} else {
+						binary = buildNativeBinary({
+							fixture: generatedPath,
+							name: `wpt-${manifestIndex}-${variantIndex}-${backend}`,
+							mainFile: "runtime/host_main.c",
+							outDir: backendRoot,
+							compiled: backend === "compiled",
+						});
+					}
+				} catch (error) {
+					for (const { mode } of entryDimensions.filter(
+						(item) => item.backend === backend,
+					)) {
+						const execution = { path: entry.path, variant, backend, mode };
+						const classified = classifyWptResults(
+							[],
+							executionExpectations(execution, expectations),
+						);
+						const report: ExecutionReport = {
+							...execution,
+							target: "server-main",
+							harness: {
+								path: entry.path,
+								status: "ERROR",
+								total: 0,
+								message: `build failed: ${error instanceof Error ? error.message : String(error)}`,
+							},
+							process: {
+								exitStatus: null,
+								signal: null,
+								timedOut: false,
+								error: error instanceof Error ? error.message : String(error),
+								stdout: "",
+								stderr: "",
+							},
+							results: [],
+							verdicts: [],
+							missingExpectations: classified.missing,
+						};
+						executions.push(report);
+						progress.progress(
+							executions.length,
+							plannedExecutions,
+							`${entry.path} · ${backend}/${mode}`,
+						);
+						if (shouldAbortWptRun(policy, report)) {
+							aborted = true;
+							break;
+						}
+					}
+					if (aborted) break;
+					continue;
 				}
-			} catch (error) {
 				for (const { mode } of entryDimensions.filter(
 					(item) => item.backend === backend,
 				)) {
-					const execution = { path: entry.path, variant, backend, mode };
+					const execution: WptExecutionKey = { path: entry.path, variant, backend, mode };
+					const child = spawnSync(binary, binaryArguments, {
+						encoding: "utf8",
+						env: createWptExecutionEnvironment(process.env, mode),
+						timeout: 120_000,
+					});
+					const timedOut = childErrorCode(child.error) === "ETIMEDOUT";
+					const terminalStatus = timedOut
+						? "TIMEOUT"
+						: child.status === 0
+							? undefined
+							: "CRASH";
+					let parsed: ReturnType<typeof parseWptOutput>;
+					try {
+						parsed = parseWptOutput(child.stdout, execution, terminalStatus);
+					} catch (error) {
+						parsed = {
+							subtests: [],
+							harness: {
+								path: entry.path,
+								status: "ERROR",
+								total: 0,
+								message: `malformed harness transport: ${error instanceof Error ? error.message : String(error)}`,
+							},
+						};
+					}
 					const classified = classifyWptResults(
-						[],
+						parsed.subtests,
 						executionExpectations(execution, expectations),
 					);
 					const report: ExecutionReport = {
 						...execution,
 						target: "server-main",
-						harness: {
-							path: entry.path,
-							status: "ERROR",
-							total: 0,
-							message: `build failed: ${error instanceof Error ? error.message : String(error)}`,
-						},
+						harness: parsed.harness,
 						process: {
-							exitStatus: null,
-							signal: null,
-							timedOut: false,
-							error: error instanceof Error ? error.message : String(error),
-							stdout: "",
-							stderr: "",
+							exitStatus: child.status,
+							signal: child.signal,
+							timedOut,
+							error: child.error?.message ?? null,
+							stdout: child.stdout,
+							stderr: child.stderr,
 						},
-						results: [],
-						verdicts: [],
+						results: parsed.subtests,
+						verdicts: classified.results,
 						missingExpectations: classified.missing,
 					};
 					executions.push(report);
@@ -288,73 +358,15 @@ for (const entry of tests) {
 						plannedExecutions,
 						`${entry.path} · ${backend}/${mode}`,
 					);
-					if (shouldAbortWptRun(policy, report)) {
+					if (shouldAbortWptRun(policy, { ...report, terminalStatus })) {
 						aborted = true;
 						break;
 					}
 				}
 				if (aborted) break;
-				continue;
+			} finally {
+				if (!keepArtifacts) rmSync(backendRoot, { recursive: true, force: true });
 			}
-			for (const { mode } of entryDimensions.filter((item) => item.backend === backend)) {
-				const execution: WptExecutionKey = { path: entry.path, variant, backend, mode };
-				const child = spawnSync(binary, binaryArguments, {
-					encoding: "utf8",
-					env: createWptExecutionEnvironment(process.env, mode),
-					timeout: 120_000,
-				});
-				const timedOut = childErrorCode(child.error) === "ETIMEDOUT";
-				const terminalStatus = timedOut
-					? "TIMEOUT"
-					: child.status === 0
-						? undefined
-						: "CRASH";
-				let parsed: ReturnType<typeof parseWptOutput>;
-				try {
-					parsed = parseWptOutput(child.stdout, execution, terminalStatus);
-				} catch (error) {
-					parsed = {
-						subtests: [],
-						harness: {
-							path: entry.path,
-							status: "ERROR",
-							total: 0,
-							message: `malformed harness transport: ${error instanceof Error ? error.message : String(error)}`,
-						},
-					};
-				}
-				const classified = classifyWptResults(
-					parsed.subtests,
-					executionExpectations(execution, expectations),
-				);
-				const report: ExecutionReport = {
-					...execution,
-					target: "server-main",
-					harness: parsed.harness,
-					process: {
-						exitStatus: child.status,
-						signal: child.signal,
-						timedOut,
-						error: child.error?.message ?? null,
-						stdout: child.stdout,
-						stderr: child.stderr,
-					},
-					results: parsed.subtests,
-					verdicts: classified.results,
-					missingExpectations: classified.missing,
-				};
-				executions.push(report);
-				progress.progress(
-					executions.length,
-					plannedExecutions,
-					`${entry.path} · ${backend}/${mode}`,
-				);
-				if (shouldAbortWptRun(policy, { ...report, terminalStatus })) {
-					aborted = true;
-					break;
-				}
-			}
-			if (aborted) break;
 		}
 		if (aborted) break;
 	}
@@ -391,6 +403,7 @@ const report = {
 };
 writeFileSync(resultsPath, `${JSON.stringify(report, null, 2)}\n`);
 console.log(`WPT report: ${resultsPath}`);
+if (keepArtifacts) console.log(`WPT artifacts: ${buildRoot}`);
 
 console.log(
 	`WPT: ${report.summary.completedExecutions}/${report.summary.plannedExecutions} executions, ${report.summary.subtests} subtests, ${report.summary.unexpected} unexpected, ${report.summary.missingExpectations} stale expectations, ${report.summary.harnessErrors} harness errors${aborted ? " (aborted)" : ""}`,

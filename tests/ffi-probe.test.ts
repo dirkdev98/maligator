@@ -16,7 +16,7 @@ function project(probe: string): string {
 	mkdirSync(path.join(directory, "include"));
 	writeFileSync(
 		path.join(directory, "include/probe.h"),
-		"int probe_add(int a, int b);\nint probe_overflow(int value);\nint probe_pause(void);\n",
+		"int probe_add(int a, int b);\nint probe_overflow(int value);\nint probe_pause(void);\nint probe_change_header(void);\nint probe_touch_helper(void);\nint probe_edit_lock(void);\n",
 	);
 	writeFileSync(
 		path.join(directory, "probe.c"),
@@ -25,6 +25,16 @@ function project(probe: string): string {
 #include <time.h>
 int probe_add(int a, int b) { return a + b; }
 int probe_overflow(int value) { return value + 1; }
+static int write_file(const char *path, const char *mode, const char *text) {
+  FILE *file = fopen(path, mode);
+  if (file == NULL) return -1;
+  int written = fputs(text, file);
+  int closed = fclose(file);
+  return written < 0 || closed != 0 ? -1 : 0;
+}
+int probe_change_header(void) { return write_file("include/probe.h", "a", "\\n// Changed during the probe.\\n"); }
+int probe_touch_helper(void) { return write_file("helper.ts", "a", "\\n"); }
+int probe_edit_lock(void) { return write_file("maligator-ffi.lock.json", "w", "owner edit\\n"); }
 int probe_pause(void) {
   fputs("native wait entered\\n", stderr);
   fflush(stderr);
@@ -40,11 +50,11 @@ int probe_pause(void) {
 	);
 	writeFileSync(
 		path.join(directory, "maligator.build.ts"),
-		'export default { engine: { eval: false, realms: false }, surface: { node: true }, ffi: { probe: { contract: "probe.ffi.ts" } } };\n',
+		'export default { engine: { eval: false, realms: false }, surface: { node: false, webPlatform: false }, ffi: { probe: { contract: "probe.ffi.ts" } } };\n',
 	);
 	writeFileSync(
 		path.join(directory, "probe.test.ts"),
-		`import { test, expect } from "maligator:test";\nimport { probe_add, probe_overflow, probe_pause } from "maligator:ffi/probe";\n${probe}\n`,
+		`import { test, expect } from "maligator:test";\nimport { probe_add, probe_overflow, probe_pause, probe_change_header, probe_edit_lock } from "maligator:ffi/probe";\n${probe}\n`,
 	);
 	return directory;
 }
@@ -72,7 +82,7 @@ function probe(
 	]);
 	if (result.status !== status)
 		throw new Error(
-			`expected exit ${status}, got ${result.status}\n${result.stderr}\n${result.stdout}`,
+			`expected exit ${status}, got ${result.status}: ${result.error?.message ?? result.signal ?? "unknown failure"}\n${result.stderr}\n${result.stdout}`,
 		);
 	return JSON.parse(result.stdout) as FfiCheckReport;
 }
@@ -153,7 +163,7 @@ describe("FFI sanitizer probes", () => {
 
 	it("rejects acceptance when a header changes during the probe", () => {
 		const directory = project(
-			'import { appendFileSync } from "node:fs";\ntest("changes a header", () => { expect(probe_add(2, 3)).toBe(5); appendFileSync("include/probe.h", "\\n// Changed during the probe.\\n"); });',
+			'test("changes a header", () => { expect(probe_add(2, 3)).toBe(5); expect(probe_change_header()).toBe(0); });',
 		);
 		const before = accept(directory);
 		const report = probe(directory, 1);
@@ -171,7 +181,7 @@ describe("FFI sanitizer probes", () => {
 		);
 		writeFileSync(
 			path.join(directory, "helper.ts"),
-			'import { appendFileSync } from "node:fs";\nexport function change() { appendFileSync(import.meta.filename, "\\n"); }\n',
+			'import { probe_touch_helper } from "maligator:ffi/probe";\nexport function change() { if (probe_touch_helper() !== 0) throw new Error("could not change helper"); }\n',
 		);
 		const before = accept(directory);
 		const report = probe(directory, 1);
@@ -183,7 +193,7 @@ describe("FFI sanitizer probes", () => {
 
 	it("preserves a lockfile edited while the probe runs", () => {
 		const directory = project(
-			'import { writeFileSync } from "node:fs";\ntest("edits the snapshot", () => { writeFileSync("maligator-ffi.lock.json", "owner edit\\n"); expect(probe_add(2, 3)).toBe(5); });',
+			'test("edits the snapshot", () => { expect(probe_edit_lock()).toBe(0); expect(probe_add(2, 3)).toBe(5); });',
 		);
 		accept(directory);
 		const report = probe(directory, 1);
