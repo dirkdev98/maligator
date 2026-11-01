@@ -98,7 +98,7 @@ afterEach(() => {
 		rmSync(directory, { recursive: true, force: true });
 });
 
-describe("FFI sanitizer probes", () => {
+describe("FFI sanitizer probes", { timeout: 300_000 }, () => {
 	it("accepts only after passing instrumented tests and retains their output as valid JSON", () => {
 		const directory = project(
 			'test("adds values", () => { console.log("probe note"); expect(probe_add(2, 3)).toBe(5); });',
@@ -121,7 +121,7 @@ describe("FFI sanitizer probes", () => {
 			),
 		).toBe(true);
 		expect(cli(directory, []).status).toBe(0);
-	}, 300_000);
+	});
 
 	it("preserves the accepted snapshot when a probe assertion fails", () => {
 		const directory = project(
