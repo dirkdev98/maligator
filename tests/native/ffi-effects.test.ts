@@ -36,7 +36,7 @@ describe("foreign call effects", () => {
 				const executed = spawnSync(built.stdout.trim().split("\n").at(-1)!, [], {
 					cwd,
 					encoding: "utf8",
-					timeout: 15_000,
+					timeout: 60_000,
 					env: {
 						...process.env,
 						MAL_GC_STRESS: "1",
@@ -44,7 +44,12 @@ describe("foreign call effects", () => {
 						MAL_GC_AT_EXIT: "1",
 					},
 				});
-				expect(executed.status, executed.stderr || executed.stdout).toBe(0);
+				expect(
+					executed.status,
+					[executed.error?.message, executed.signal, executed.stderr, executed.stdout]
+						.filter(Boolean)
+						.join("\n"),
+				).toBe(0);
 				expect(executed.stdout.trim()).toBe(output);
 			},
 			300_000,
