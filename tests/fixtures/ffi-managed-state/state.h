@@ -19,6 +19,22 @@ typedef struct ManagedOpaque ManagedOpaque;
 typedef struct ManagedResource { int *value; } ManagedResource;
 typedef struct ManagedPacket { ManagedResource resources[1]; } ManagedPacket;
 typedef struct ManagedWide { char bytes[512]; } ManagedWide;
+typedef struct ManagedTextBase { int tag; } ManagedTextBase;
+typedef struct ManagedText {
+    ManagedTextBase base;
+    char *text;
+    unsigned int remaining;
+} ManagedText;
+typedef struct ManagedTextNarrow { const char *text; unsigned char remaining; } ManagedTextNarrow;
+typedef struct ManagedTextVoid { void *text; unsigned int remaining; } ManagedTextVoid;
+
+int managed_text_advance(ManagedText *state, unsigned int count);
+void managed_text_write(ManagedText *state, unsigned char value);
+void managed_text_bad(ManagedText *state, int mode);
+int managed_text_empty(ManagedText *state);
+void managed_text_wait(ManagedTextBase *state);
+void managed_text_wait_started(void);
+void managed_text_release(void);
 
 int managed_copy(ManagedState *state);
 int managed_copy_wait(ManagedState *state);

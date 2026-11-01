@@ -51,8 +51,8 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string> {
 			]),
 			...handle.managedFields.flatMap((field) => [
 				...docComment(field.doc, "\t\t"),
-				`\t\tget ${field.name}(): Uint8Array | null;`,
-				`\t\tset ${field.name}(value: ArrayBuffer | ArrayBufferView | null);`,
+				`\t\tget ${field.name}(): ${field.kind === "string" ? "string" : "Uint8Array"} | null;`,
+				`\t\tset ${field.name}(value: ${field.kind === "string" ? "string" : "ArrayBuffer | ArrayBufferView"} | null);`,
 			]),
 		];
 		lines.push(

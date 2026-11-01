@@ -227,6 +227,13 @@ overlapping calls through any view are refused. Keep the factory result for prop
 access: C function signatures expose opaque pointer handles, whose canonical object may
 have originated through another view.
 
+For a UTF-8 field, use `label: { string: { length: "label_length" } }` and assign a
+string or `null`. Assignment retains a private counted encoding, including embedded
+NUL bytes. The getter returns a string snapshot of C's current pointer/count range;
+C writes affect later snapshots without changing the original JavaScript string.
+An empty string has a non-null pointer and a zero count. Text follows the same range,
+operation, and close-lifetime rules as retained byte fields.
+
 Zlib's header exposes `deflateInit_` with version and ABI-size parameters. Fixed facts
 let generated C supply both while JavaScript supplies the stream and compression level:
 

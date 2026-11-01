@@ -2466,7 +2466,7 @@ void mal_ffi_end_handle_use(
     handle->operation = nullptr;
 }
 
-MalValue mal_ffi_state_bytes(
+MalValue mal_ffi_state_value(
     MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t index, const MalFfiSite *site) {
     void *storage;
     if (!mal_ffi_to_handle(vm, value, type, false, site, &storage, nullptr)
@@ -2486,6 +2486,13 @@ MalValue mal_ffi_state_bytes(
     }
     MalFfiRetainedField *range = &handle->retained[index];
     if (range->pin == nullptr || (data == nullptr && range->data != nullptr)) return mal_value_new_null();
+    if (type->managed_fields[index].text) {
+        MalRootSpan root;
+        mal_gc_root(&root, &value, 1);
+        MalValue result = mal_ffi_from_string_length(vm, data, length);
+        mal_gc_unroot(&root);
+        return result;
+    }
     MalArrayBufferObject *buffer = mal_value_to_array_buffer_object(range->buffer);
     u32 offset = data == nullptr ? 0 : (u32) ((uptr) data - (uptr) buffer->data);
     MalRootSpan root;
@@ -2497,8 +2504,8 @@ MalValue mal_ffi_state_bytes(
     return mal_value_from_typed_array_object(array);
 }
 
-bool mal_ffi_set_state_bytes(
-    MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t index, MalValue bytes,
+bool mal_ffi_set_state_value(
+    MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t index, MalValue input,
     const MalFfiSite *site) {
     void *storage;
     if (!mal_ffi_to_handle(vm, value, type, false, site, &storage, nullptr)
@@ -2509,13 +2516,42 @@ bool mal_ffi_set_state_bytes(
         return mal_ffi_expected(vm, site, "the state field's allocating handle");
     const MalFfiManagedField *field = &type->managed_fields[index];
     MalFfiRetainedField next = {.buffer = mal_value_new_undefined()};
-    if (!mal_value_is_null(bytes)) {
+    MalValue roots[] = {value, input, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    MalFfiString text = {.data = nullptr};
+    bool ok = false;
+    if (field->text && !mal_value_is_null(input)) {
+        if (!mal_ffi_to_string(vm, input, false, true, site, &text)
+            || !mal_ffi_check_count(vm, text.length, field->count_bits, field->count_signed, site)) goto mal_done;
+        u32 capacity = text.length == 0 ? 1 : (u32) text.length;
+        MalArrayBufferObject *buffer = mal_array_buffer_object_new(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+            capacity, capacity, false, false);
+        roots[2] = mal_value_from_array_buffer_object(buffer);
+        if (buffer->data == nullptr) {
+            mal_ffi_out_of_memory(vm);
+            goto mal_done;
+        }
+        memcpy(buffer->data, text.data, text.length);
+        next.data = buffer->data;
+        next.length = text.length;
+        next.buffer = roots[2];
+        next.pin = mal_array_buffer_object_retain_pin(buffer);
+        if (next.pin == nullptr) {
+            mal_ffi_out_of_memory(vm);
+            goto mal_done;
+        }
+    } else if (!mal_value_is_null(input)) {
         MalBufferSourceSpan span;
-        if (!mal_ffi_to_bytes(vm, bytes, false, field->writable, site, &next.data, &next.length, nullptr)
-            || !mal_ffi_check_count(vm, next.length, field->count_bits, field->count_signed, site)) return false;
-        if (mal_buffer_source_span(bytes, &span) != MAL_BUFFER_SOURCE_SPAN_OK) return false;
+        if (!mal_ffi_to_bytes(vm, input, false, field->writable, site, &next.data, &next.length, nullptr)
+            || !mal_ffi_check_count(vm, next.length, field->count_bits, field->count_signed, site)) goto mal_done;
+        if (mal_buffer_source_span(input, &span) != MAL_BUFFER_SOURCE_SPAN_OK) goto mal_done;
         next.pin = mal_array_buffer_object_retain_pin(span.buffer);
-        if (next.pin == nullptr) return mal_ffi_out_of_memory(vm);
+        if (next.pin == nullptr) {
+            mal_ffi_out_of_memory(vm);
+            goto mal_done;
+        }
         next.buffer = mal_value_from_array_buffer_object(span.buffer);
     }
     MalFfiRetainedField *range = &handle->retained[index];
@@ -2525,7 +2561,11 @@ bool mal_ffi_set_state_bytes(
     *range = next;
     mal_gc_card(&handle->object.header, next.buffer);
     mal_array_buffer_object_release_pin(previous);
-    return true;
+    ok = true;
+mal_done:
+    mal_ffi_string_release(&text);
+    mal_gc_unroot(&root);
+    return ok;
 }
 
 void mal_ffi_unpin_handle(void *pin) {

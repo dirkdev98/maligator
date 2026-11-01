@@ -1,10 +1,15 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { planBindings } from "../src/ffi/binding-plan.ts";
 import { generateBindingUnit } from "../src/ffi/binding-unit.ts";
 import { extractCModel } from "../src/ffi/c-extract.ts";
 import type { CModel } from "../src/ffi/c-model.ts";
+import { loadLibraryContract } from "../src/ffi/contract.ts";
+import { generateDeclarations } from "../src/ffi/declarations.ts";
 import type {
 	MaligatorFfiTypeFacts,
 	MaligatorFfiValueFacts,
@@ -47,7 +52,63 @@ describe("managed C state contracts", () => {
 			expect.arrayContaining(["avail_in", "avail_out", "total"]),
 		);
 	});
+	it("declares UTF-8 field snapshots and assignments as strings", () => {
+		const plan = planBindings(model, {
+			types: {
+				ManagedText: {
+					handle: { storage: "caller" },
+					fields: { text: { string: { length: "remaining" } } },
+				},
+			},
+			functions: {},
+		});
+		const declarations = generateDeclarations([{ name: "managed", plan }]);
+		expect(declarations).toContain("get text(): string | null;");
+		expect(declarations).toContain("set text(value: string | null);");
+	});
 	it.each([
+		{},
+		{ bytes: { length: "remaining" }, string: { length: "remaining" } },
+		{ string: { length: "remaining", writable: true } },
+	])("rejects ambiguous or unsupported state text facts %j", (field) => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-state-text-facts-"));
+		try {
+			writeFileSync(
+				path.join(directory, "state.ffi.ts"),
+				`export default ${JSON.stringify({ headers: ["state.h"], types: { ManagedText: { handle: { storage: "caller" }, fields: { text: field } } } })};\n`,
+			);
+			expect(() =>
+				loadLibraryContract(
+					"state",
+					{ contract: "state.ffi.ts" },
+					directory,
+					stripCompactTypes,
+				),
+			).toThrow();
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+	it.each([
+		[
+			"ManagedTextVoid",
+			{
+				handle: { storage: "caller" },
+				fields: { text: { string: { length: "remaining" } } },
+			},
+			"byte pointer field",
+		],
+		[
+			"ManagedState",
+			{
+				handle: { storage: "caller" },
+				fields: {
+					next_in: { bytes: { length: "avail_in" } },
+					next_out: { string: { length: "avail_in" } },
+				},
+			},
+			"already counts",
+		],
 		[
 			"ManagedState",
 			{ fields: { next_in: { bytes: { length: "avail_in" } } } },

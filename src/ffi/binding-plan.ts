@@ -185,6 +185,7 @@ export interface MappedField {
 }
 
 export interface ManagedField {
+	readonly kind: "bytes" | "string";
 	readonly name: string;
 	readonly type: CType;
 	readonly count: string;
@@ -812,10 +813,18 @@ class Planner {
 	}
 
 	/** The value fields a struct handle exposes; others stay hidden behind the handle. */
-	handleFields(record: CRecord): Array<MappedField> {
+	handleFields(
+		record: CRecord,
+		managed: ReadonlyArray<ManagedField>,
+	): Array<MappedField> {
 		const fields: Array<MappedField> = [];
 		for (const field of record.fields) {
-			if (field.name === undefined || field.bitWidth !== undefined) continue;
+			if (
+				field.name === undefined ||
+				field.bitWidth !== undefined ||
+				managed.some((entry) => entry.name === field.name)
+			)
+				continue;
 			const mapped = this.value(field.type, "field");
 			// Accessors return single values; array fields stay behind the handle.
 			if ("value" in mapped && mapped.value.kind !== "array") {
@@ -838,8 +847,10 @@ class Planner {
 		const counts = new Set<string>();
 		for (const [name, fact] of Object.entries(facts)) {
 			const at = `types.${record.name}.fields.${name}`;
+			const kind = fact.string === undefined ? "bytes" : "string";
+			const counted = fact.string ?? fact.bytes;
 			const field = record.fields.find((entry) => entry.name === name);
-			const count = record.fields.find((entry) => entry.name === fact.bytes.length);
+			const count = record.fields.find((entry) => entry.name === counted.length);
 			const pointer =
 				field === undefined ? undefined : resolveCType(this.#model, field.type);
 			const integer =
@@ -850,10 +861,12 @@ class Planner {
 				field === undefined ||
 				pointer?.kind !== "pointer" ||
 				pointer.const === true ||
-				(target?.kind !== "void" &&
+				(!(kind === "bytes" && target?.kind === "void") &&
 					!(target?.kind === "integer" && this.#model.target.sizes[target.name] === 1))
 			)
-				throw new FfiError(`${at}: bytes requires a writable byte or void pointer field`);
+				throw new FfiError(
+					`${at}: ${kind} requires a writable ${kind === "bytes" ? "byte or void" : "byte"} pointer field`,
+				);
 			if (
 				count === undefined ||
 				integer?.kind !== "integer" ||
@@ -861,28 +874,29 @@ class Planner {
 				count.bitWidth !== undefined
 			)
 				throw new FfiError(
-					`${at}.bytes.length: '${fact.bytes.length}' must be a writable integer field`,
+					`${at}.${kind}.length: '${counted.length}' must be a writable integer field`,
 				);
-			if (counts.has(fact.bytes.length))
+			if (counts.has(counted.length))
 				throw new FfiError(
-					`${at}.bytes.length: '${fact.bytes.length}' already counts another field`,
+					`${at}.${kind}.length: '${counted.length}' already counts another field`,
 				);
 			const mapped = this.#integer(integer.name);
 			if (
 				!("value" in mapped) ||
 				(mapped.value.kind !== "integer" && mapped.value.kind !== "bigint")
 			)
-				throw new FfiError(`${at}.bytes.length: unsupported integer width`);
-			counts.add(fact.bytes.length);
+				throw new FfiError(`${at}.${kind}.length: unsupported integer width`);
+			counts.add(counted.length);
 			result.push({
+				kind,
 				name,
 				type: field.type,
-				count: fact.bytes.length,
+				count: counted.length,
 				countType: count.type,
 				bits: mapped.value.bits,
 				signed: mapped.value.signed,
 				writable:
-					fact.bytes.writable ??
+					fact.bytes?.writable ??
 					!(target !== undefined && "const" in target && target.const === true),
 				...(field.doc === undefined ? {} : { doc: field.doc }),
 			});
@@ -1785,22 +1799,23 @@ export function planBindings(
 	const handles = new Map<string, HandleType>();
 	for (const [name, handle] of handleMap) {
 		const record = model.records.get(name);
+		const managedFields =
+			record === undefined
+				? []
+				: planner.managedFields(
+						record,
+						handle.allocator === undefined
+							? undefined
+							: facts.types[handle.allocator]?.fields,
+					);
 		handles.set(name, {
 			...handle,
 			fields:
 				(handle.representation === "struct" || handle.allocator !== undefined) &&
 				record !== undefined
-					? planner.handleFields(record)
+					? planner.handleFields(record, managedFields)
 					: [],
-			managedFields:
-				record === undefined
-					? []
-					: planner.managedFields(
-							record,
-							handle.allocator === undefined
-								? undefined
-								: facts.types[handle.allocator]?.fields,
-						),
+			managedFields,
 		});
 	}
 

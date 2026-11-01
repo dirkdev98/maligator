@@ -6,6 +6,7 @@
 #include <stdatomic.h>
 #include <sched.h>
 #include <time.h>
+#include <string.h>
 
 static CloseBase *pending;
 static void (*completion)(CloseBase *);
@@ -38,6 +39,11 @@ extern size_t mal_gc_process_bytes(void);
 static void after_vm(void) {
     CloseState *state = (CloseState *) pending;
     for (size_t index = 0; index < state->length; index++) assert(state->bytes[index] == 71);
+    if (state->label != NULL) {
+        static const unsigned char label[] = {'G','r',0xc3,0xbc,0xc3,0x9f,'e',0,0xf0,0x9f,0x99,0x82};
+        assert(state->label_length == sizeof(label));
+        assert(memcmp(state->label, label, sizeof(label)) == 0);
+    }
     assert(mal_gc_process_bytes() >= state->length);
     pthread_t thread;
     if (pthread_create(&thread, NULL, complete_foreign, NULL) != 0) abort();
@@ -141,6 +147,7 @@ void close_worker_after_vm(CloseBase *handle, void (*done)(CloseBase *)) {
     atomic_store(&worker_close_started, true);
     while (!atomic_load(&unblocked)) sched_yield();
     CloseState *state = (CloseState *) handle;
+    assert(state->label != NULL && state->label_length != 0);
     for (size_t index = 0; index < state->length; index++) assert(state->bytes[index] == 71);
     atomic_fetch_add(&worker_close_calls, 1);
     close_after_vm(handle, done);

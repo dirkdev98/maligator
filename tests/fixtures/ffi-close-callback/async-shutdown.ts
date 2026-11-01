@@ -8,6 +8,7 @@ if (queued) {
 }
 const state = c.CloseState();
 state.bytes = new Uint8Array(73).fill(71);
+state.label = "Grüße\0🙂";
 void c.close_worker_after_vm_async(state, () => {
 	throw new Error("detached completion ran JavaScript");
 });

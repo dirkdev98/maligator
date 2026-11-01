@@ -5,6 +5,15 @@ export default {
 	headers: ["state.h"],
 	find: [{ includeDirs: ["."], sources: ["state.c"] }],
 	types: {
+		ManagedTextBase: { handle: {} },
+		ManagedText: {
+			handle: { storage: "caller", views: ["ManagedTextBase"] },
+			fields: { text: { string: { length: "remaining" } } },
+		},
+		ManagedTextNarrow: {
+			handle: { storage: "caller" },
+			fields: { text: { string: { length: "remaining" } } },
+		},
 		ManagedResource: { handle: { destroy: "managed_resource_free", collect: true } },
 		ManagedBase: { handle: {} },
 		ManagedState: {
@@ -24,6 +33,7 @@ export default {
 		},
 	},
 	functions: {
+		managed_text_wait: { async: "managed_text_wait_async" },
 		managed_lend: { params: { callback: { callback: { data: "data" } } } },
 		managed_many: { params: { states: { array: { length: "count" } } } },
 		managed_many_wait: {

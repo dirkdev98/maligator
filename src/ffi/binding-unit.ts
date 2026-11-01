@@ -882,13 +882,13 @@ class BindingWriter {
 					`static MalValue mal_ffi_get_${name}_${field.name}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
 					"\t(void) mal_args; (void) mal_argc; (void) mal_new_target; (void) mal_callee;",
 					`\tstatic const MalFfiSite mal_site = { ${cString(`${name}.${field.name}`)}, "this", nullptr };`,
-					`\treturn mal_ffi_state_bytes(vm, mal_this, &mal_ffi_type_${name}, ${index}, &mal_site);`,
+					`\treturn mal_ffi_state_value(vm, mal_this, &mal_ffi_type_${name}, ${index}, &mal_site);`,
 					"}",
 					"",
 					`static MalValue mal_ffi_set_${name}_${field.name}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
 					"\t(void) mal_new_target; (void) mal_callee;",
 					`\tstatic const MalFfiSite mal_site = { ${cString(`${name}.${field.name}`)}, "value", nullptr };`,
-					`\tmal_ffi_set_state_bytes(vm, mal_this, &mal_ffi_type_${name}, ${index}, mal_argc > 0 ? mal_args[0] : mal_ffi_undefined(), &mal_site);`,
+					`\tmal_ffi_set_state_value(vm, mal_this, &mal_ffi_type_${name}, ${index}, mal_argc > 0 ? mal_args[0] : mal_ffi_undefined(), &mal_site);`,
 					"\treturn mal_ffi_undefined();",
 					"}",
 				);
@@ -918,7 +918,7 @@ class BindingWriter {
 							`static const MalFfiManagedField mal_ffi_managed_fields_${name}[] = {`,
 							...handle.managedFields.map(
 								(field) =>
-									`\t{ ${cString(field.name)}, mal_ffi_managed_${name}_${field.name}_read, mal_ffi_managed_${name}_${field.name}_write, ${field.bits}, ${field.signed}, ${field.writable} },`,
+									`\t{ ${cString(field.name)}, mal_ffi_managed_${name}_${field.name}_read, mal_ffi_managed_${name}_${field.name}_write, ${field.bits}, ${field.signed}, ${field.writable}, ${field.kind === "string"} },`,
 							),
 							"};",
 						]),

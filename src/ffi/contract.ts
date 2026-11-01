@@ -170,15 +170,26 @@ function validateTypeFacts(value: unknown, at: string): void {
 			const fieldAt = `${at}.fields.${name}`;
 			expect(C_NAME.test(name), fieldAt, "a C field name");
 			expectObject(field, fieldAt);
-			expectKeys(field, fieldAt, ["bytes"]);
-			expectObject(field.bytes, `${fieldAt}.bytes`);
-			expectKeys(field.bytes, `${fieldAt}.bytes`, ["length", "writable"]);
+			expectKeys(field, fieldAt, ["bytes", "string"]);
 			expect(
-				typeof field.bytes.length === "string" && C_NAME.test(field.bytes.length),
-				`${fieldAt}.bytes.length`,
+				(field.bytes !== undefined) !== (field.string !== undefined),
+				fieldAt,
+				"one of bytes or string",
+			);
+			const kind = field.string === undefined ? "bytes" : "string";
+			const counted = field[kind];
+			expectObject(counted, `${fieldAt}.${kind}`);
+			expectKeys(
+				counted,
+				`${fieldAt}.${kind}`,
+				kind === "bytes" ? ["length", "writable"] : ["length"],
+			);
+			expect(
+				typeof counted.length === "string" && C_NAME.test(counted.length),
+				`${fieldAt}.${kind}.length`,
 				"a C field name",
 			);
-			booleanField(field.bytes, "writable", `${fieldAt}.bytes`);
+			if (kind === "bytes") booleanField(counted, "writable", `${fieldAt}.bytes`);
 		}
 	}
 	if (value.handle === undefined) return;

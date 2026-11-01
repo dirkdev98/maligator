@@ -8,7 +8,10 @@ export default {
 		CloseBase: { handle: {} },
 		CloseState: {
 			handle: { storage: "caller", views: ["CloseBase"] },
-			fields: { bytes: { bytes: { length: "length" } } },
+			fields: {
+				bytes: { bytes: { length: "length" } },
+				label: { string: { length: "label_length" } },
+			},
 		},
 	},
 	functions: {

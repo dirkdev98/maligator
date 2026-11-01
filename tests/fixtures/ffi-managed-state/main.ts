@@ -23,6 +23,93 @@ function refuses(
 
 setFlagsFromString("--expose-gc");
 const collectGarbage = runInNewContext("gc") as () => void;
+const textState = c.ManagedText();
+check(textState.text === null, "zeroed text state is null");
+for (const value of ["", "é\0🙂", "é".repeat(300), "\ud800x"]) {
+	textState.text = value;
+	collectGarbage();
+	check(
+		textState.text === (value === "\ud800x" ? "\ufffdx" : value),
+		"state snapshots decode private UTF-8",
+	);
+}
+textState.text = "";
+check(c.managed_text_empty(textState) === 1, "empty state text has a nonnull pointer");
+textState.text = null;
+check(
+	c.managed_text_empty(textState) === 0 && textState.text === null,
+	"null clears pointer and count",
+);
+const originalText = "é\0🙂";
+textState.text = originalText;
+check(
+	c.managed_text_advance(textState, 2) === 5 && textState.text === "\0🙂",
+	"C advances a multibyte cursor",
+);
+c.managed_text_write(textState, 255);
+check(
+	String(textState.text) === "\ufffd🙂" && originalText === "é\0🙂",
+	"C writes affect private text without mutating the JS input",
+);
+c.managed_text_advance(textState, 5);
+check(String(textState.text) === "", "one-past-end counted text remains an empty string");
+for (const mode of [1, 2, 3]) {
+	textState.text = "range";
+	refuses(
+		() => c.managed_text_bad(textState, mode),
+		RangeError,
+		"C must keep text inside its retained range",
+	);
+	refuses(() => textState.text, RangeError, "getters reject an invalid C cursor");
+}
+textState.text = "repair";
+check(textState.text === "repair", "assignment repairs an invalid cursor");
+refuses(
+	() => {
+		textState.text = new Uint8Array(1) as never;
+	},
+	TypeError,
+	"text fields accept strings",
+);
+check(textState.text === "repair", "failed conversion preserves the previous range");
+const narrowText = c.ManagedTextNarrow();
+narrowText.text = "kept";
+refuses(
+	() => {
+		narrowText.text = "é".repeat(128);
+	},
+	RangeError,
+	"UTF-8 length must fit a narrow C count",
+);
+check(narrowText.text === "kept", "count overflow preserves the previous text");
+textState.text = "before";
+const textCall = c.managed_text_wait_async(textState);
+c.managed_text_wait_started();
+try {
+	refuses(() => textState.text, TypeError, "text reads wait for C use through a view");
+	refuses(
+		() => {
+			textState.text = "changed";
+		},
+		TypeError,
+		"text writes wait for C use through a view",
+	);
+	refuses(
+		() => textState[Symbol.dispose](),
+		TypeError,
+		"text ownership lasts through worker use",
+	);
+	collectGarbage();
+} finally {
+	c.managed_text_release();
+}
+await textCall;
+check(
+	String(textState.text) === "Qefore",
+	"worker writes become visible after its operation retires",
+);
+textState[Symbol.dispose]();
+narrowText[Symbol.dispose]();
 const state = c.ManagedState();
 const inputBuffer = new ArrayBuffer(6);
 new Uint8Array(inputBuffer).set([90, 11, 13, 17, 91, 92]);

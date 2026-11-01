@@ -440,8 +440,11 @@ export function inspectBindings(
 				...handle.managedFields.map((field) => ({
 					name: field.name,
 					c: formatCDeclaration(field.type),
-					ts: "Uint8Array | null",
-					set: "ArrayBuffer | ArrayBufferView | null",
+					ts: field.kind === "string" ? "string | null" : "Uint8Array | null",
+					set:
+						field.kind === "string"
+							? "string | null"
+							: "ArrayBuffer | ArrayBufferView | null",
 				})),
 			],
 		})),

@@ -93,7 +93,7 @@ export interface MaligatorFfiHandle {
 /** Facts about one C type, keyed by its typedef or struct tag. */
 export interface MaligatorFfiTypeFacts {
 	handle?: MaligatorFfiHandle;
-	/** Retained byte ranges in caller-owned state. Assignment writes the pointer and
+	/** Retained ranges in caller-owned state. Assignment writes the pointer and
 	 * count together; C may advance them only within the assigned range.
 	 */
 	fields?: Record<string, MaligatorFfiFieldFacts>;
@@ -102,14 +102,21 @@ export interface MaligatorFfiTypeFacts {
 }
 
 /** A pointer/count pair retained by a caller-owned state handle. */
-export interface MaligatorFfiFieldFacts {
-	bytes: {
-		/** The C integer field holding the remaining byte count. */
-		length: string;
-		/** Whether C writes these bytes; defaults to true for a non-const pointee. */
-		writable?: boolean;
-	};
-}
+export type MaligatorFfiFieldFacts =
+	| {
+			bytes: {
+				/** The C integer field holding the remaining byte count. */
+				length: string;
+				/** Whether C writes these bytes; defaults to true for a non-const pointee. */
+				writable?: boolean;
+			};
+			string?: never;
+	  }
+	| {
+			/** UTF-8 text kept in a private encoding, with a C field holding its byte count. */
+			string: MaligatorFfiCount;
+			bytes?: never;
+	  };
 
 /** A declaration whose documentation supports a fact, independent of its source location. */
 export interface MaligatorFfiEvidence {
@@ -117,12 +124,13 @@ export interface MaligatorFfiEvidence {
 	name: string;
 }
 
-/** The parameter that carries the size of a buffer or array. */
+/** The C parameter or state field carrying a byte or element count. */
 export interface MaligatorFfiCount {
 	/**
 	 * The parameter's C name, or its 1-based position. For a result, the count comes
 	 * from an integer parameter or from an integer the function writes through a pointer.
 	 * Callback counts use 1-based positions.
+	 * State counts use C field names.
 	 */
 	length: string;
 }

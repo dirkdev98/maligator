@@ -70,6 +70,7 @@ typedef struct MalFfiManagedField {
     int32_t count_bits;
     bool count_signed;
     bool writable;
+    bool text;
 } MalFfiManagedField;
 
 /**
@@ -143,8 +144,8 @@ void mal_ffi_unpin_handle(void *pin);
 bool mal_ffi_begin_handle_use(MalVm *vm, void *pin, const void *operation, const MalFfiSite *site);
 void mal_ffi_end_handle_use(MalVm *vm, void *pin, const void *operation, const MalFfiSite *site, bool check);
 bool mal_ffi_handle_idle(MalVm *vm, MalValue value, const MalFfiSite *site);
-MalValue mal_ffi_state_bytes(MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t field, const MalFfiSite *site);
-bool mal_ffi_set_state_bytes(MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t field, MalValue bytes, const MalFfiSite *site);
+MalValue mal_ffi_state_value(MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t field, const MalFfiSite *site);
+bool mal_ffi_set_state_value(MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t field, MalValue input, const MalFfiSite *site);
 /**
  * For an async call, which outlives any callback: reject a pinned handle a callback
  * only lends, since the library may release its resource once the callback returns.

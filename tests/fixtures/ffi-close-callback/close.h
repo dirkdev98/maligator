@@ -6,6 +6,8 @@ typedef struct CloseState {
     CloseBase base;
     unsigned char *bytes;
     size_t length;
+    const char *label;
+    size_t label_length;
 } CloseState;
 typedef struct CloseOther { int tag; } CloseOther;
 void close_now(CloseBase *handle, void (*done)(CloseBase *));

@@ -4,6 +4,34 @@
 #include <string.h>
 #include <time.h>
 #include <stdlib.h>
+#include <stdatomic.h>
+#include <sched.h>
+
+int managed_text_advance(ManagedText *state, unsigned int count) {
+    if (count > state->remaining) abort();
+    if (state->text != NULL) state->text += count;
+    state->remaining -= count;
+    return (int) state->remaining;
+}
+void managed_text_write(ManagedText *state, unsigned char value) {
+    if (state->remaining != 0) state->text[0] = (char) value;
+}
+void managed_text_bad(ManagedText *state, int mode) {
+    if (mode == 1) state->remaining++;
+    if (mode == 2) state->text = (char *) ((uintptr_t) state->text - 1);
+    if (mode == 3) { state->text = NULL; state->remaining = 1; }
+}
+int managed_text_empty(ManagedText *state) { return state->text != NULL && state->remaining == 0; }
+static _Atomic int text_started;
+static _Atomic int text_released;
+void managed_text_wait(ManagedTextBase *base) {
+    ManagedText *state = (ManagedText *) base;
+    atomic_store(&text_started, 1);
+    while (!atomic_load(&text_released)) sched_yield();
+    managed_text_write(state, 'Q');
+}
+void managed_text_wait_started(void) { while (!atomic_load(&text_started)) sched_yield(); }
+void managed_text_release(void) { atomic_store(&text_released, 1); }
 
 int managed_copy(ManagedState *state) {
     unsigned int count = state->avail_in < state->avail_out ? state->avail_in : state->avail_out;
