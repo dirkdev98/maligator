@@ -1494,7 +1494,8 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 		key: "local-value-kinds",
 		scope: "function",
 		owner: CORE_OPTIMIZATION_OWNER.localValueKinds,
-		programDependencies: ["functions", "specializationInputs"],
+		programDependencies: ["functions"],
+		programFunctionDependencies: ["body"],
 		functionDependencies: [
 			"body",
 			"cfg",

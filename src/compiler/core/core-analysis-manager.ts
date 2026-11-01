@@ -47,6 +47,8 @@ export interface CoreAnalysisDefinition<Result> {
 	readonly owner?: CoreOptimizationOwnerId;
 	readonly functionDependencies?: ReadonlyArray<CoreChangeDomain>;
 	readonly programDependencies?: ReadonlyArray<CoreProgramChangeDomain>;
+	/** Function domains read across the program, even by a function-scoped analysis. */
+	readonly programFunctionDependencies?: ReadonlyArray<CoreChangeDomain>;
 	readonly contextIdentity?: (context: CoreCompilationContext) => unknown;
 	readonly compute: (input: CoreAnalysisComputation) => Result;
 }
@@ -54,6 +56,7 @@ export interface CoreAnalysisDefinition<Result> {
 interface CachedAnalysis {
 	readonly contextIdentity: unknown;
 	readonly programVersions: ReadonlyArray<number>;
+	readonly programFunctionVersions: ReadonlyArray<number>;
 	readonly functionVersions: ReadonlyArray<number>;
 	readonly value: unknown;
 }
@@ -68,6 +71,7 @@ interface RegisteredAnalysis {
 	readonly scope: CoreAnalysisScope;
 	readonly functionDependencies: ReadonlyArray<CoreChangeDomain>;
 	readonly programDependencies: ReadonlyArray<CoreProgramChangeDomain>;
+	readonly programFunctionDependencies: ReadonlyArray<CoreChangeDomain>;
 }
 
 function sameValues<Value>(
@@ -231,6 +235,7 @@ export class CoreAnalysisManager {
 		if (this.#validatedDefinitions.has(definition)) return;
 		const functionDependencies = definition.functionDependencies ?? [];
 		const programDependencies = definition.programDependencies ?? [];
+		const programFunctionDependencies = definition.programFunctionDependencies ?? [];
 		if (definition.scope === "program" && programDependencies.length === 0) {
 			throw new Error(
 				`Program analysis ${definition.key} must declare an explicit program dependency`,
@@ -241,7 +246,8 @@ export class CoreAnalysisManager {
 			registered !== undefined &&
 			(registered.scope !== definition.scope ||
 				!sameValues(registered.functionDependencies, functionDependencies) ||
-				!sameValues(registered.programDependencies, programDependencies))
+				!sameValues(registered.programDependencies, programDependencies) ||
+				!sameValues(registered.programFunctionDependencies, programFunctionDependencies))
 		) {
 			throw new Error(`Core analysis key ${definition.key} has conflicting dependencies`);
 		}
@@ -249,6 +255,7 @@ export class CoreAnalysisManager {
 			scope: definition.scope,
 			functionDependencies: [...functionDependencies],
 			programDependencies: [...programDependencies],
+			programFunctionDependencies: [...programFunctionDependencies],
 		});
 		this.#validatedDefinitions.add(definition);
 	}
@@ -262,6 +269,9 @@ export class CoreAnalysisManager {
 		const contextIdentity = this.#contextIdentity(definition);
 		const programVersions = programDependencies.map((domain) =>
 			this.#program.programVersion(domain),
+		);
+		const programFunctionVersions = (definition.programFunctionDependencies ?? []).map(
+			(domain) => this.#program.functionVersion(domain),
 		);
 		const functionVersions: Array<number> = [];
 		const captureFunction = (functionId: CoreFunctionId): void => {
@@ -281,7 +291,12 @@ export class CoreAnalysisManager {
 				functionVersions.push(this.#program.functionVersion(domain));
 			}
 		}
-		return { contextIdentity, programVersions, functionVersions };
+		return {
+			contextIdentity,
+			programVersions,
+			programFunctionVersions,
+			functionVersions,
+		};
 	}
 
 	#versionsMatch<Result>(
@@ -296,6 +311,13 @@ export class CoreAnalysisManager {
 		if (programDependencies.length !== cached.programVersions.length) return false;
 		for (const [index, domain] of programDependencies.entries()) {
 			if (this.#program.programVersion(domain) !== cached.programVersions[index])
+				return false;
+		}
+		const programFunctionDependencies = definition.programFunctionDependencies ?? [];
+		if (programFunctionDependencies.length !== cached.programFunctionVersions.length)
+			return false;
+		for (const [index, domain] of programFunctionDependencies.entries()) {
+			if (this.#program.functionVersion(domain) !== cached.programFunctionVersions[index])
 				return false;
 		}
 		const functionDependencies = definition.functionDependencies ?? [];
