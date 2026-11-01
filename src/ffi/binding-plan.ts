@@ -747,9 +747,9 @@ class Planner {
 		for (const key of Object.keys(facts)) {
 			const position = Number(key) - 1;
 			const stated = facts[key]!;
-			if (typeof stated.string === "object")
+			if (typeof stated.string === "object" && callback.queued === true)
 				throw new FfiError(
-					`${at}.callback.params.${key}: counted callback strings are not supported`,
+					`${at}.callback.params.${key}: counted queued callback strings are not supported`,
 				);
 			if (position >= target.params.length) {
 				throw new FfiError(
@@ -765,11 +765,11 @@ class Planner {
 				);
 			}
 		}
-		// The parameters that carry a buffer's or array's count, hidden from JavaScript.
+		// Counts belong to their converted argument and stay hidden from JavaScript.
 		const counts = new Array<number | undefined>(target.params.length);
 		const counters = new Set<number>();
 		target.params.forEach((_, index) => {
-			const counted = factsAt(index)?.bytes ?? factsAt(index)?.array;
+			const counted = valueCount(factsAt(index) ?? NO_FACTS)?.count;
 			if (counted === undefined) return;
 			const count = /^[1-9]\d*$/.test(counted.length) ? Number(counted.length) - 1 : -1;
 			const countType =

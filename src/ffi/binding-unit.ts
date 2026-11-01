@@ -444,6 +444,13 @@ class BindingWriter {
 				"if (mal_ffi_threw(vm)) goto mal_done;",
 			];
 		}
+		if (value.kind === "string" && value.counted) {
+			return [
+				...fill,
+				`else ${target} = mal_ffi_from_string_length(vm, (const char *) (${expression}), (size_t) (${count}));`,
+				"if (mal_ffi_threw(vm)) goto mal_done;",
+			];
+		}
 		if (value.kind !== "sequence") throw new Error("only buffers and arrays have counts");
 		const index = this.#fresh("index");
 		return [

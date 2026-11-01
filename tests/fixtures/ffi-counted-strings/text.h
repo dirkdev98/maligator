@@ -12,7 +12,7 @@ const char *text_view(const char *text, size_t length);
 const char *text_invalid(int *length);
 char *text_bad_count(int mode, int *length);
 char *text_callback(void (*callback)(void *), void *data, int *length);
-void text_counted_callback(void (*callback)(const char *, int, void *), void *data);
+void text_counted_callback(void (*callback)(const char *, int, void *), void *data, int mode);
 void text_out(char **text, int *length);
 void text_free(void *text);
 int text_live(void);

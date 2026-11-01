@@ -87,7 +87,13 @@ describe("counted UTF-8 contracts", () => {
 			).toThrow("counted out and inout strings are not supported");
 		},
 	);
-	it("rejects counted callback strings before generating a strlen-based copy", () => {
+	it("hides callback counts and declares the copied string argument", () => {
+		const plan = planBindings(model, { types: {}, functions: textContract.functions });
+		expect(generateDeclarations([{ name: "text", plan }])).toContain(
+			"export function text_counted_callback(callback: (arg1: string | null) => void, mode: number): void;",
+		);
+	});
+	it("rejects counted queued strings before generating a strlen-based copy", () => {
 		expect(() =>
 			planBindings(model, {
 				types: {},
@@ -95,13 +101,17 @@ describe("counted UTF-8 contracts", () => {
 					text_counted_callback: {
 						params: {
 							callback: {
-								callback: { data: "data", params: { "1": { string: { length: "2" } } } },
+								callback: {
+									data: "data",
+									queued: true,
+									params: { "1": { string: { length: "2" } } },
+								},
 							},
 						},
 					},
 				},
 			}),
-		).toThrow("counted callback strings are not supported");
+		).toThrow("counted queued callback strings are not supported");
 	});
 	it.each([
 		{ string: { length: "length" }, bytes: { length: "length" } },

@@ -214,8 +214,11 @@ replacing invalid sequences. Negative or excessive lengths throw before reading
 the buffer; `free` still releases an owned result when conversion fails. The fact
 must describe the C buffer's actual allocation.
 
-Counted text works with ordinary functions and async twins. It cannot accompany
-`bytes` or `array`, and counted callback, out, and inout strings are rejected.
+Counted text works with ordinary functions, async twins, and callbacks on the VM
+thread. In `callback.params`, `length` names the count's 1-based parameter position.
+Callback text is copied before entering JavaScript, so it remains valid after the
+C callback returns. Counted text cannot accompany `bytes` or `array`; queued
+callbacks, out parameters, and inout parameters reject counted strings.
 With `nullable: true`, a null input passes `NULL` and a zero count; an empty string
 passes a non-null pointer and a zero count.
 

@@ -37,8 +37,10 @@ char *text_callback(void (*callback)(void *), void *data, int *length) {
     callback(data);
     return text;
 }
-void text_counted_callback(void (*callback)(const char *, int, void *), void *data) {
-    callback("x", 1, data);
+void text_counted_callback(void (*callback)(const char *, int, void *), void *data, int mode) {
+    char text[] = { 'a', 0, (char)0xc3, (char)0xa9 };
+    callback(mode == 1 ? NULL : text, mode == 2 ? -1 : mode == 3 ? INT_MAX : (int)sizeof(text), data);
+    memset(text, 'x', sizeof(text));
 }
 void text_out(char **text, int *length) { *text = text_copy("x", 1, length); }
 void text_free(void *text) { if (text != NULL) { free(text); live--; } }

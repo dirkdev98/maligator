@@ -1919,7 +1919,7 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 - [ ] Managed pointer fields for caller-allocated state structs, such as zlib's
       `z_stream`, need retained buffers, checked pointer/count updates, and lifecycle
       rules. Libuv handles also need storage retained through asynchronous close.
-- [ ] Counted UTF-8 strings in callbacks, out/inout parameters, and state struct
+- [ ] Counted UTF-8 strings in queued callbacks, out/inout parameters, and state struct
       fields need explicit count and lifetime handling.
 - [ ] Support individual clang declarations and documentation blocks that exceed the
       native runtime's string limit.

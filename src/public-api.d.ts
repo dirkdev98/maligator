@@ -104,6 +104,7 @@ export interface MaligatorFfiCount {
 	/**
 	 * The parameter's C name, or its 1-based position. For a result, the count comes
 	 * from an integer parameter or from an integer the function writes through a pointer.
+	 * Callback counts use 1-based positions.
 	 */
 	length: string;
 }
@@ -120,7 +121,7 @@ export interface MaligatorFfiValueFacts {
 	inout?: boolean;
 	/** UTF-8 text in a char pointer. `true` uses NUL termination; a length names
 	 * its byte count and permits embedded NUL bytes. Counted strings apply to ordinary
-	 * parameters and results, including async twins.
+	 * parameters and results, including async twins, and callbacks on the VM thread.
 	 */
 	string?: boolean | MaligatorFfiCount;
 	/** Bytes passed as an `ArrayBuffer` or a view, or returned as a new `Uint8Array`. */

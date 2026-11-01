@@ -12,6 +12,7 @@ import {
 	text_invalid,
 	text_bad_count,
 	text_callback,
+	text_counted_callback,
 	text_live,
 	text_calls,
 	text_copy_async,
@@ -83,6 +84,34 @@ check(
 	sameFailure && text_live() === 0,
 	"callback failure releases the unread counted result",
 );
+let callbackText: string | null = "";
+text_counted_callback((text) => {
+	callbackText = text;
+}, 0);
+check(callbackText === "a\0é", "counted callbacks copy unterminated UTF-8 with NUL");
+text_counted_callback((text) => {
+	callbackText = text;
+}, 1);
+check(callbackText === null, "null counted callback text");
+let invalidCalls = 0;
+for (const mode of [2, 3])
+	rejects(
+		() =>
+			text_counted_callback(() => {
+				invalidCalls++;
+			}, mode),
+		RangeError,
+	);
+check(invalidCalls === 0, "invalid callback lengths fail before entering JavaScript");
+sameFailure = false;
+try {
+	text_counted_callback(() => {
+		throw failure;
+	}, 0);
+} catch (error) {
+	sameFailure = error === failure;
+}
+check(sameFailure, "counted callback preserves the thrown exception");
 
 const long = "é\0🙂".repeat(300);
 const pending = [

@@ -32,5 +32,12 @@ export default {
 			params: { callback: { callback: { data: "data" } } },
 			returns: { string: { length: "length" }, free: "text_free" },
 		},
+		text_counted_callback: {
+			params: {
+				callback: {
+					callback: { data: "data", params: { "1": { string: { length: "2" } } } },
+				},
+			},
+		},
 	},
 } satisfies MaligatorLibraryContract;
