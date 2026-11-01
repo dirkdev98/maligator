@@ -89,7 +89,7 @@ export interface PreparedLibraries {
 	readonly libraries: ReadonlyArray<PreparedLibrary & { readonly unit: BindingUnit }>;
 	/** The host modules the frontend resolves `maligator:ffi/<name>` to. */
 	readonly modules: ReadonlyArray<FfiModule>;
-	/** Contracts, headers, and sources; editing one requires preparing again. */
+	/** Contracts, headers, sources and resolved library files that invalidate native hosts. */
 	readonly dependencies: ReadonlyArray<string>;
 	/** Changes whenever a binding, header, source, or linker input changes. */
 	readonly identity: string;
@@ -123,6 +123,9 @@ export function prepareLibraries(
 				entry.contract.path,
 				...entry.model.dependencies,
 				...entry.library.sources,
+				...entry.library.linkInputs.flatMap((input) =>
+					input.kind === "archive" || input.kind === "shared" ? [input.path] : [],
+				),
 			]),
 		),
 	].sort();
