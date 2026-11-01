@@ -269,6 +269,24 @@ to report changes before accepting a library upgrade. The command reads the head
 and facts and exits with status 1 if they differ or have no accepted snapshot. Review
 the changes, update the facts if needed, then run `--update` again.
 
+Ownership rules can change while the C signature stays the same. Cite the header
+documentation that supports a type or function fact so the check watches its text:
+
+```typescript
+functions: {
+  shapes_name: {
+    returns: { free: "shapes_release" },
+    evidence: [{ kind: "function", name: "shapes_release" }],
+  },
+},
+```
+
+The `kind` can be `function`, `typedef`, `struct`, `union`, `enum` or `macro`.
+The check includes documentation on parameters, fields and enumerators of the cited
+declaration. Uncited comments do not affect it. A citation must resolve to extracted
+documentation; removing the declaration or its documentation prevents an update.
+Reviewing the text and the library's behavior remains the contract author's job.
+
 Use `--target rust-triple` to check or accept headers for a cross-build target. Each
 target has its own snapshots, and `ffi check raylib --update` updates only raylib for
 the selected target. Note that this checks the extracted declarations, not the linked

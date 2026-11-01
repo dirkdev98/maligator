@@ -81,6 +81,14 @@ export interface MaligatorFfiHandle {
 /** Facts about one C type, keyed by its typedef or struct tag. */
 export interface MaligatorFfiTypeFacts {
 	handle?: MaligatorFfiHandle;
+	/** Header documentation that `ffi check` watches when reviewing these facts. */
+	evidence?: Array<MaligatorFfiEvidence>;
+}
+
+/** A declaration whose documentation supports a fact, independent of its source location. */
+export interface MaligatorFfiEvidence {
+	kind: "function" | "typedef" | "struct" | "union" | "enum" | "macro";
+	name: string;
 }
 
 /** The parameter that carries the size of a buffer or array. */
@@ -167,6 +175,8 @@ export interface MaligatorFfiCallback {
 
 /** Facts about one C function, keyed by its name. */
 export interface MaligatorFfiFunctionFacts {
+	/** Header documentation that `ffi check` watches when reviewing these facts. */
+	evidence?: Array<MaligatorFfiEvidence>;
 	/** Facts per parameter, keyed by C name or by 1-based position for unnamed ones. */
 	params?: Record<string, MaligatorFfiValueFacts>;
 	returns?: MaligatorFfiValueFacts;

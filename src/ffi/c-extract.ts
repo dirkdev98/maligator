@@ -977,22 +977,31 @@ export function extractCModel(input: CExtractionInput): CModel {
 			file: path.resolve(cwd, macro.file),
 			line: macro.line,
 		});
-		for (const macro of probes.untyped) {
-			untypedMacros.push({
+		const documentedMacro = (macro: PreprocessedMacro): CUntypedMacro => {
+			const location = located(macro);
+			const lines = sources.lines(location.file);
+			const doc =
+				macroComment(lines, location.line) ??
+				commentBlockAbove(lines, location.line)?.text;
+			return {
 				name: macro.name,
 				body: macro.body,
-				location: located(macro),
-			});
+				location,
+				...(doc === undefined ? {} : { doc }),
+			};
+		};
+		for (const macro of probes.untyped) {
+			untypedMacros.push(documentedMacro(macro));
 		}
 		for (const entry of probes.typed) {
-			const location = located(entry.macro);
+			const documented = documentedMacro(entry.macro);
 			const resolved = resolveCType(
 				{ ...base, macros: [], untypedMacros: [] },
 				entry.type,
 			);
 			// A macro that aliases a function or an unsupported type is not a constant.
 			if (resolved.kind === "function" || resolved.kind === "unsupported") {
-				untypedMacros.push({ name: entry.macro.name, body: entry.macro.body, location });
+				untypedMacros.push(documented);
 				continue;
 			}
 			const integral =
@@ -1000,14 +1009,10 @@ export function extractCModel(input: CExtractionInput): CModel {
 				resolved.kind === "bool" ||
 				resolved.kind === "enum";
 			const value = integral ? entry.integer : entry.literal;
-			const doc = macroComment(sources.lines(location.file), location.line);
 			macros.push({
-				name: entry.macro.name,
-				body: entry.macro.body,
+				...documented,
 				type: entry.type,
 				...(value === undefined ? {} : { value }),
-				...(doc === undefined ? {} : { doc }),
-				location,
 			});
 		}
 		return { ...base, macros, untypedMacros };

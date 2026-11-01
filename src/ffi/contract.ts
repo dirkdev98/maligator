@@ -137,9 +137,32 @@ function booleanField(value: Record<string, unknown>, key: string, at: string): 
 	}
 }
 
+function validateEvidence(value: unknown, at: string): void {
+	expect(Array.isArray(value) && value.length > 0, at, "a non-empty array");
+	(value as Array<unknown>).forEach((reference, index) => {
+		const entryAt = `${at}[${index}]`;
+		expectObject(reference, entryAt);
+		expectKeys(reference, entryAt, ["kind", "name"]);
+		expect(
+			typeof reference.kind === "string" &&
+				["function", "typedef", "struct", "union", "enum", "macro"].includes(
+					reference.kind,
+				),
+			`${entryAt}.kind`,
+			"function, typedef, struct, union, enum, or macro",
+		);
+		expect(
+			typeof reference.name === "string" && C_NAME.test(reference.name),
+			`${entryAt}.name`,
+			"a C declaration name",
+		);
+	});
+}
+
 function validateTypeFacts(value: unknown, at: string): void {
 	expectObject(value, at);
-	expectKeys(value, at, ["handle"]);
+	expectKeys(value, at, ["handle", "evidence"]);
+	if (value.evidence !== undefined) validateEvidence(value.evidence, `${at}.evidence`);
 	if (value.handle === undefined) return;
 	const handle = value.handle;
 	expectObject(handle, `${at}.handle`);
@@ -287,7 +310,8 @@ function validateParamFacts(value: unknown, at: string): void {
 
 function validateFunctionFacts(value: unknown, at: string): void {
 	expectObject(value, at);
-	expectKeys(value, at, ["params", "returns", "variants", "async"]);
+	expectKeys(value, at, ["params", "returns", "variants", "async", "evidence"]);
+	if (value.evidence !== undefined) validateEvidence(value.evidence, `${at}.evidence`);
 	if (value.params !== undefined) validateParamFacts(value.params, `${at}.params`);
 	if (value.async !== undefined) {
 		expect(

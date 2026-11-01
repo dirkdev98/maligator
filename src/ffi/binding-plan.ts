@@ -267,12 +267,16 @@ function handleTypes(
 ): Map<string, Omit<HandleType, "fields">> {
 	const handles = new Map<string, Omit<HandleType, "fields">>();
 	for (const [key, typeFacts] of Object.entries(facts.types)) {
+		const handle = typeFacts.handle;
+		if (handle === undefined) {
+			if (!model.typedefs.has(key) && !model.records.has(key) && !model.enums.has(key))
+				throw new FfiError(`types.${key}: the headers declare no type named '${key}'`);
+			continue;
+		}
 		const record = factRecord(model, key);
 		if (record === undefined) {
 			throw new FfiError(`types.${key}: the headers declare no struct named '${key}'`);
 		}
-		const handle = typeFacts.handle;
-		if (handle === undefined) continue;
 		if (handles.has(record.name)) {
 			throw new FfiError(`types.${key}: ${record.name} already has a handle fact`);
 		}

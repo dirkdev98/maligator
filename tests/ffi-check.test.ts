@@ -202,6 +202,180 @@ describe("ffi check", () => {
 		);
 	});
 
+	it("requires review when cited header documentation changes", () => {
+		const directory = project();
+		const headerPath = path.join(directory, "include/shapes.h");
+		const documented = header.replace(
+			"const char *shapes_name",
+			"// Returns a borrowed name that is never NULL.\nconst char *shapes_name",
+		);
+		writeFileSync(headerPath, documented);
+		writeContract(directory, {
+			functions: {
+				shapes_name: {
+					returns: { nullable: false },
+					evidence: [{ kind: "function", name: "shapes_name" }],
+				},
+			},
+		});
+		accept(directory);
+		const lock = path.join(directory, "maligator-ffi.lock.json");
+		const before = readFileSync(lock, "utf8");
+		writeFileSync(headerPath, documented.replace("never NULL", "sometimes NULL"));
+		expect(check(directory, [], 1).libraries[0]?.changes).toContainEqual({
+			path: "evidence.function shapes_name.doc",
+			kind: "changed",
+			before: "Returns a borrowed name that is never NULL.",
+			after: "Returns a borrowed name that is sometimes NULL.",
+		});
+		expect(readFileSync(lock, "utf8")).toBe(before);
+		accept(directory);
+		expect(check(directory).ok).toBe(true);
+	});
+
+	it("ignores citation locations and uncited documentation", () => {
+		const directory = project();
+		const headerPath = path.join(directory, "include/shapes.h");
+		const documented = header.replace(
+			"const char *shapes_name",
+			"// Returns a borrowed name.\nconst char *shapes_name",
+		);
+		writeFileSync(headerPath, documented);
+		writeContract(directory, {
+			functions: {
+				shapes_name: { evidence: [{ kind: "function", name: "shapes_name" }] },
+			},
+		});
+		accept(directory);
+		writeFileSync(
+			headerPath,
+			`\n\n${documented.replace("int shapes_index", "// Accepts an index.\nint shapes_index")}`,
+		);
+		const relocated = project();
+		cpSync(directory, relocated, { recursive: true });
+		expect(check(relocated).ok).toBe(true);
+	});
+
+	it("distinguishes typedef and tag evidence and watches member documentation", () => {
+		const directory = project();
+		const headerPath = path.join(directory, "include/shapes.h");
+		const documented = `${header}
+// A resource layout.
+struct ShapesResource {
+  int state; // Resource state.
+};
+// A resource alias.
+typedef struct ShapesResource ShapesResource;
+// The index range.
+typedef unsigned short ShapesLimit;
+`;
+		writeFileSync(headerPath, documented);
+		writeContract(directory, {
+			types: {
+				ShapesResource: {
+					handle: {},
+					evidence: [
+						{ kind: "struct", name: "ShapesResource" },
+						{ kind: "typedef", name: "ShapesResource" },
+					],
+				},
+				ShapesLimit: { evidence: [{ kind: "typedef", name: "ShapesLimit" }] },
+			},
+		});
+		accept(directory);
+		writeFileSync(
+			headerPath,
+			documented.replace("Resource state.", "Caller-owned resource state."),
+		);
+		expect(check(directory, [], 1).libraries[0]?.changes).toEqual([
+			{
+				path: "evidence.struct ShapesResource.members.state",
+				kind: "changed",
+				before: "Resource state.",
+				after: "Caller-owned resource state.",
+			},
+		]);
+	});
+
+	it("checks documentation on a macro even when its value cannot bind", () => {
+		const directory = project();
+		const headerPath = path.join(directory, "include/shapes.h");
+		const documented = `${header}\n// A borrowed callback expression.\n#define SHAPES_CALLBACK shapes_unavailable_symbol\n`;
+		writeFileSync(headerPath, documented);
+		writeContract(directory, {
+			functions: {
+				shapes_name: { evidence: [{ kind: "macro", name: "SHAPES_CALLBACK" }] },
+			},
+		});
+		accept(directory);
+		writeFileSync(
+			headerPath,
+			documented.replace("borrowed callback", "retained callback"),
+		);
+		expect(check(directory, [], 1).libraries[0]?.changes).toContainEqual({
+			path: "evidence.macro SHAPES_CALLBACK.doc",
+			kind: "changed",
+			before: "A borrowed callback expression.",
+			after: "A retained callback expression.",
+		});
+	});
+
+	it.each(["missing", "undocumented"])(
+		"preserves the accepted snapshot when cited documentation is %s",
+		(condition) => {
+			const directory = project();
+			const headerPath = path.join(directory, "include/shapes.h");
+			writeFileSync(
+				headerPath,
+				`${header}\n// Releases a name.\nvoid shapes_release(void *value);\n`,
+			);
+			writeContract(directory, {
+				functions: {
+					shapes_name: { evidence: [{ kind: "function", name: "shapes_release" }] },
+				},
+			});
+			accept(directory);
+			const lock = path.join(directory, "maligator-ffi.lock.json");
+			const before = readFileSync(lock, "utf8");
+			writeFileSync(
+				headerPath,
+				condition === "missing"
+					? header
+					: `${header}\nvoid shapes_release(void *value);\n`,
+			);
+			for (const args of [[], ["--update"]]) {
+				const result = cli(directory, ["check", ...args]);
+				expect(result.status).toBe(1);
+				expect(result.stderr).toContain("functions.shapes_name.evidence[0]");
+				expect(result.stderr).toContain("function shapes_release");
+				expect(readFileSync(lock, "utf8")).toBe(before);
+			}
+		},
+	);
+
+	it("rejects malformed evidence references before recording a snapshot", () => {
+		const directory = project();
+		writeContract(directory, {
+			functions: {
+				shapes_name: {
+					evidence: [
+						{
+							kind: "function",
+							name: "shapes_name",
+							// @ts-expect-error -- The CLI must reject unsupported citation fields.
+							url: "https://example.invalid",
+						},
+					],
+				},
+			},
+		});
+		const result = cli(directory, ["check", "--update"]);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("evidence[0]");
+		expect(result.stderr).toContain("url");
+		expect(existsSync(path.join(directory, "maligator-ffi.lock.json"))).toBe(false);
+	});
+
 	it("updates only the selected library and preserves other target snapshots", () => {
 		const directory = project(["shapes", "sketch"]);
 		accept(directory);

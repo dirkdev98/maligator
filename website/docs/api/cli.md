@@ -154,8 +154,16 @@ selects another lockfile, and `--json` prints the report as JSON.
 
 The snapshot follows the C types used by exports and facts, including typedefs,
 record fields, constants and helper declarations. It catches changes such as `short`
-becoming `int` even when both map to TypeScript `number`. Comments, source locations
-and declarations outside that surface do not affect it. This command does not execute
+becoming `int` even when both map to TypeScript `number`. A type or function fact can
+cite header documentation with `evidence: [{ kind: "function", name: "release" }]`.
+The check records the cited declaration's cleaned documentation, including documented
+members, and shows changes to that text. Citation kinds are `function`, `typedef`,
+`struct`, `union`, `enum` and `macro`. Missing declarations or documentation are errors,
+including with `--update`.
+
+Uncited comments, source locations and declarations outside the checked surface do
+not affect the snapshot. Citations identify text to review; the command does not
+decide whether that text supports a fact or whether C obeys it. It does not execute
 C code or check the linked binary's ABI. Run it in your CI alongside the application's
 tests; builds do not run it automatically.
 

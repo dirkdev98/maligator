@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { writeFileAtomically } from "../atomic-file.ts";
+import type { MaligatorFfiEvidence } from "../public-api.d.ts";
 import type { JsValue } from "./binding-plan.ts";
 import type { CFunction } from "./c-model.ts";
 import type { CType } from "./c-type.ts";
@@ -60,9 +61,83 @@ function json(value: unknown): Json {
 	throw new FfiError("cannot record an unsupported value in the FFI lockfile");
 }
 
+function documentationEvidence(prepared: PreparedLibrary): Snapshot {
+	const { model, contract } = prepared;
+	const result: Record<string, Json> = {};
+	const children = (
+		entries: ReadonlyArray<{ readonly name?: string; readonly doc?: string }>,
+	): Snapshot =>
+		Object.fromEntries(
+			entries.flatMap((entry, index) =>
+				entry.doc === undefined ? [] : [[entry.name ?? String(index + 1), entry.doc]],
+			),
+		);
+	const cite = (reference: MaligatorFfiEvidence, at: string): void => {
+		const key = `${reference.kind} ${reference.name}`;
+		if (key in result) return;
+		let doc: string | undefined;
+		let members: Snapshot | undefined;
+		let exists = false;
+		switch (reference.kind) {
+			case "function": {
+				const entry = model.functions.find((value) => value.name === reference.name);
+				exists = entry !== undefined;
+				doc = entry?.doc;
+				if (entry !== undefined) members = children(entry.params);
+				break;
+			}
+			case "typedef": {
+				const entry = model.typedefs.get(reference.name);
+				exists = entry !== undefined;
+				doc = entry?.doc;
+				break;
+			}
+			case "struct":
+			case "union": {
+				const entry = model.records.get(reference.name);
+				exists = entry?.named === true && entry.tag === reference.kind;
+				doc = entry?.doc;
+				if (entry !== undefined) members = children(entry.fields);
+				break;
+			}
+			case "enum": {
+				const entry = model.enums.get(reference.name);
+				exists = entry?.named === true;
+				doc = entry?.doc;
+				if (entry !== undefined) members = children(entry.constants);
+				break;
+			}
+			case "macro": {
+				const entry = [...model.macros, ...model.untypedMacros].find(
+					(value) => value.name === reference.name,
+				);
+				exists = entry !== undefined;
+				doc = entry?.doc;
+				break;
+			}
+		}
+		if (!exists)
+			throw new FfiError(`${contract.name}: ${at}: the headers declare no ${key}`);
+		if (doc === undefined && Object.keys(members ?? {}).length === 0)
+			throw new FfiError(
+				`${contract.name}: ${at}: ${key} has no extracted documentation`,
+			);
+		result[key] = json({ doc, members });
+	};
+	for (const category of ["types", "functions"] as const)
+		for (const [name, facts] of Object.entries<{
+			readonly evidence?: ReadonlyArray<MaligatorFfiEvidence>;
+		}>(contract.facts[category]))
+			facts.evidence?.forEach((reference, index) =>
+				cite(reference, `${category}.${name}.evidence[${index}]`),
+			);
+	return result;
+}
+
 /** Snapshot only declarations reachable from exports or accepted facts, without source locations. */
 function snapshot(prepared: PreparedLibrary): Snapshot {
 	const { model, plan, contract } = prepared;
+	const evidence = documentationEvidence(prepared);
 	const declarations: Record<string, Json> = {};
 	const functions = new Map(model.functions.map((entry) => [entry.name, entry]));
 	const macros = new Map(model.macros.map((entry) => [entry.name, entry]));
@@ -175,6 +250,7 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 			const record = model.records.get(name);
 			if (record !== undefined)
 				type({ kind: "record", tag: record.tag, name }, `type fact ${name}`);
+			else if (model.enums.has(name)) type({ kind: "enum", name }, `type fact ${name}`);
 		}
 	}
 	for (const binding of [...plan.functions].sort((a, b) =>
@@ -210,6 +286,7 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 		target: json(model.target),
 		facts: json(contract.facts),
 		declarations: json(declarations),
+		...(Object.keys(evidence).length === 0 ? {} : { evidence: json(evidence) }),
 	};
 }
 

@@ -1919,7 +1919,7 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
       identity checks at its accesses even when nothing observes it.
 - [ ] Caller-allocated state structs with pointer fields, such as zlib's
       `z_stream` and libuv's handles, cannot be created or filled from JavaScript.
-- [ ] Extend `ffi check` with documentation evidence drift and sanitizer probes.
+- [ ] Extend `ffi check` with sanitizer probes for accepted facts.
 - [ ] Read source comments and cached C models without decoding whole files into
       strings. Individual clang declarations also still use one string each.
 

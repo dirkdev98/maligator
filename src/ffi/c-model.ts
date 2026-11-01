@@ -91,6 +91,7 @@ export interface CMacro {
 export interface CUntypedMacro {
 	readonly name: string;
 	readonly body: string;
+	readonly doc?: string;
 	readonly location: CLocation;
 }
 
