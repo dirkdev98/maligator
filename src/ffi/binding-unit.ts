@@ -39,6 +39,19 @@ function directSymbol(library: string, name: string): string {
 	return `mal_ffi_direct${String(library.length)}_${library}_${name}`;
 }
 
+function countValue(
+	binding: BoundFunction,
+	index: number | undefined,
+	context = "",
+): string | undefined {
+	if (index === undefined) return undefined;
+	const entry = binding.arguments[index];
+	if (entry?.kind === "result-count") return `${context}mal_count`;
+	if (entry?.kind === "count" && entry.output !== undefined)
+		return `${context}mal_output_${String(entry.output)}`;
+	return `${context}mal_argument_${String(index)}`;
+}
+
 /** The primitive a binding returns, which lets compiled callers keep it unboxed. */
 function directResult(binding: BoundFunction): FfiDirectResult | undefined {
 	if (binding.outputs.length > 0) return undefined;
@@ -1383,10 +1396,12 @@ class BindingWriter {
 			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
 			switch (entry.kind) {
 				case "count":
-					if (entry.output !== undefined)
+					if (entry.output !== undefined) {
 						locals.push(
 							`${localDeclaration(pointee, `mal_output_${String(entry.output)}`)} = {};`,
 						);
+						body.push(`${local} = &mal_output_${String(entry.output)};`);
+					}
 					return;
 				case "result-count":
 					locals.push(`${localDeclaration(pointee, "mal_count")} = {};`);
@@ -1414,19 +1429,30 @@ class BindingWriter {
 					const output = `mal_output_${String(entry.output)}`;
 					locals.push(`${localDeclaration(pointee, output)} = {};`);
 					if (entry.kind === "inout") {
-						body.push(
-							...this.read(
-								binding.params[entry.param]!.value,
-								pointee,
-								argument(entry.param),
-								output,
-								`&mal_site_${String(entry.param)}`,
-								"goto mal_done;",
-								strings,
-								true,
-								inputs,
-							),
-						);
+						const value = binding.params[entry.param]!.value;
+						if (value.kind === "string" && value.counted) {
+							const text = this.#fresh("string");
+							const site = `&mal_site_${String(entry.param)}`;
+							strings.push(text);
+							body.push(
+								`if (!mal_ffi_to_string(vm, ${argument(entry.param)}, ${value.nullable}, true, ${site}, &${text})) goto mal_done;`,
+								`${output} = (${localDeclaration(pointee, "")}) ${text}.data;`,
+							);
+							setCount(index, `${text}.length`, site, body);
+						} else
+							body.push(
+								...this.read(
+									binding.params[entry.param]!.value,
+									pointee,
+									argument(entry.param),
+									output,
+									`&mal_site_${String(entry.param)}`,
+									"goto mal_done;",
+									strings,
+									true,
+									inputs,
+								),
+							);
 					}
 					body.push(`${local} = &${output};`);
 					return;
@@ -1726,12 +1752,7 @@ class BindingWriter {
 				: [
 						`mal_ffi_finish_handle_close(${argument(binding.closes)}, ${success === undefined ? "true" : `mal_return == (${success})`});`,
 					];
-		const count =
-			binding.resultCount === undefined
-				? undefined
-				: binding.arguments[binding.resultCount]?.kind === "result-count"
-					? "mal_count"
-					: `mal_argument_${String(binding.resultCount)}`;
+		const count = countValue(binding, binding.resultCount);
 		const after: Array<string> = [];
 		// A kept callback the library never received goes back if the C call never ran.
 		const keptIndexes = binding.arguments.flatMap((_, index) =>
@@ -1801,7 +1822,7 @@ class BindingWriter {
 						output.value,
 						`mal_output_${String(index)}`,
 						`mal_outputs[${String(first + index)}]`,
-						undefined,
+						countValue(binding, output.count),
 						"&mal_site_result",
 						true,
 					),
@@ -1990,10 +2011,12 @@ class BindingWriter {
 			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
 			switch (entry.kind) {
 				case "count":
-					if (entry.output !== undefined)
+					if (entry.output !== undefined) {
 						fields.push(
 							`${localDeclaration(pointee, `mal_output_${String(entry.output)}`)};`,
 						);
+						body.push(`${target} = &mal_ctx->mal_output_${String(entry.output)};`);
+					}
 					return;
 				case "result-count":
 					fields.push(`${localDeclaration(pointee, "mal_count")};`);
@@ -2021,19 +2044,30 @@ class BindingWriter {
 					const output = `mal_output_${String(entry.output)}`;
 					fields.push(`${localDeclaration(pointee, output)};`);
 					if (entry.kind === "inout") {
-						body.push(
-							...this.read(
-								binding.params[entry.param]!.value,
-								pointee,
-								argument(entry.param),
-								`mal_ctx->${output}`,
-								`&mal_site_${String(entry.param)}`,
-								"goto mal_failed;",
-								strings,
-								true,
-								inputs,
-							),
-						);
+						const value = binding.params[entry.param]!.value;
+						if (value.kind === "string" && value.counted) {
+							const text = this.#fresh("string");
+							const site = `&mal_site_${String(entry.param)}`;
+							strings.push(text);
+							body.push(
+								`if (!mal_ffi_to_string(vm, ${argument(entry.param)}, ${value.nullable}, true, ${site}, &${text})) goto mal_failed;`,
+								`mal_ctx->${output} = (${localDeclaration(pointee, "")}) ${text}.data;`,
+							);
+							setCount(index, `${text}.length`, site);
+						} else
+							body.push(
+								...this.read(
+									binding.params[entry.param]!.value,
+									pointee,
+									argument(entry.param),
+									`mal_ctx->${output}`,
+									`&mal_site_${String(entry.param)}`,
+									"goto mal_failed;",
+									strings,
+									true,
+									inputs,
+								),
+							);
 					}
 					body.push(`${target} = &mal_ctx->${output};`);
 					return;
@@ -2248,12 +2282,7 @@ class BindingWriter {
 		if (returns) fields.push(`${localDeclaration(declaration.returns, "mal_return")};`);
 		for (const temporary of strings) fields.push(`MalFfiString ${temporary};`);
 		const call = `${declaration.name}(${declaration.params.map((_, index) => `mal_ctx->mal_argument_${String(index)}`).join(", ")})`;
-		const count =
-			binding.resultCount === undefined
-				? undefined
-				: binding.arguments[binding.resultCount]?.kind === "result-count"
-					? "mal_ctx->mal_count"
-					: `mal_ctx->mal_argument_${String(binding.resultCount)}`;
+		const count = countValue(binding, binding.resultCount, "mal_ctx->");
 		const produce: Array<string> = returns
 			? this.#owned(
 					binding.returns,
@@ -2281,7 +2310,7 @@ class BindingWriter {
 						output.value,
 						`mal_ctx->mal_output_${String(index)}`,
 						`mal_outputs[${String(first + index)}]`,
-						undefined,
+						countValue(binding, output.count, "mal_ctx->"),
 						"&mal_site_result",
 						true,
 					),

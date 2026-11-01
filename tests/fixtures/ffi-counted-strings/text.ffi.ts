@@ -5,6 +5,44 @@ export default {
 	headers: ["text.h"],
 	find: [{ includeDirs: ["."], sources: ["text.c"] }],
 	functions: {
+		text_out: {
+			async: "text_out_async",
+			params: { text: { out: true, string: { length: "length" }, free: "text_free" } },
+		},
+		text_out_bad: {
+			async: "text_out_bad_async",
+			params: { text: { out: true, string: { length: "length" }, free: "text_free" } },
+		},
+		text_out_callback: {
+			async: "text_out_callback_async",
+			params: {
+				callback: { callback: { data: "data" } },
+				text: { out: true, string: { length: "length" }, free: "text_free" },
+			},
+		},
+		text_advance: {
+			async: "text_advance_async",
+			params: { text: { inout: true, string: { length: "length" }, nullable: true } },
+		},
+		text_advance_first: {
+			async: "text_advance_first_async",
+			params: { text: { inout: true, string: { length: "length" }, nullable: true } },
+		},
+		text_inout_copy: {
+			async: "text_inout_copy_async",
+			params: {
+				text: {
+					inout: true,
+					string: { length: "length" },
+					nullable: true,
+					free: "text_free",
+				},
+			},
+		},
+		text_inout_fixed: {
+			async: "text_inout_fixed_async",
+			params: { text: { inout: true, string: { length: "length" }, nullable: true } },
+		},
 		text_length: { params: { text: { string: { length: "length" } } } },
 		text_nullable: { params: { text: { string: { length: "length" }, nullable: true } } },
 		text_legacy: { params: { text: { nullable: true } } },

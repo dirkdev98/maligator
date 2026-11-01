@@ -19,6 +19,20 @@ import {
 	text_copy_async,
 	text_view_async,
 	text_bad_count_async,
+	text_out,
+	text_out_async,
+	text_out_bad,
+	text_out_bad_async,
+	text_out_callback,
+	text_out_callback_async,
+	text_advance,
+	text_advance_async,
+	text_advance_first,
+	text_advance_first_async,
+	text_inout_copy,
+	text_inout_copy_async,
+	text_inout_fixed,
+	text_inout_fixed_async,
 } from "maligator:ffi/text";
 
 function check(value: boolean, message: string): void {
@@ -156,4 +170,74 @@ check(
 	asyncRejected && text_live() === 0,
 	"async decoding failure releases C memory and rejects",
 );
+const out = text_out();
+const outAsync = await text_out_async();
+check(out.text === "a\0é" && out.length === 4, "out text uses C's updated byte count");
+check(outAsync.text === out.text && outAsync.length === out.length, "async out parity");
+check(text_live() === 0, "out conversions release owned buffers");
+for (const input of ["é\0🙂", "x".repeat(255), "é".repeat(300), "", null]) {
+	const skip = input === null || input.length === 0 ? 0 : input.startsWith("é") ? 2 : 1;
+	const expected = input === null ? null : input.slice(skip === 2 ? 1 : skip);
+	const advanced = text_advance(input, skip);
+	const asyncAdvanced = await text_advance_async(input, skip);
+	check(
+		advanced.text === expected && asyncAdvanced.text === expected,
+		"inout cursors retain encodings",
+	);
+	check(advanced.length === asyncAdvanced.length, "updated byte counts agree");
+	const copied = text_inout_copy(input);
+	const asyncCopied = await text_inout_copy_async(input);
+	check(
+		copied.text === input && asyncCopied.text === input,
+		"inout results may own a new allocation",
+	);
+	check(text_live() === 0, "new inout allocations are released");
+}
+check(
+	text_inout_fixed("a\0b").text === "z\0b",
+	"by-value counts initialize from the encoding",
+);
+const reversed = text_advance_first("é\0🙂", 2);
+const reversedAsync = await text_advance_first_async("é\0🙂", 2);
+check(
+	reversed.length === 5 &&
+		reversed.text === "\0🙂" &&
+		reversedAsync.length === 5 &&
+		reversedAsync.text === "\0🙂",
+	"a count can precede its text pointer",
+);
+check(
+	(await text_inout_fixed_async("a\0b")).text === "z\0b",
+	"async by-value count parity",
+);
+rejects(() => text_inout_fixed("é".repeat(128)), RangeError);
+rejects(() => text_advance("text", -1), RangeError);
+for (const mode of [0, 1]) {
+	rejects(() => text_out_bad(mode), RangeError);
+	let rejected = false;
+	try {
+		await text_out_bad_async(mode);
+	} catch (error) {
+		rejected = error instanceof RangeError;
+	}
+	check(rejected && text_live() === 0, "failed out conversion releases the allocation");
+}
+sameFailure = false;
+try {
+	text_out_callback(() => {
+		throw failure;
+	});
+} catch (error) {
+	sameFailure = error === failure;
+}
+check(sameFailure && text_live() === 0, "a thrown callback releases unobserved out text");
+sameFailure = false;
+try {
+	await text_out_callback_async(() => {
+		throw failure;
+	});
+} catch (error) {
+	sameFailure = error === failure;
+}
+check(sameFailure && text_live() === 0, "async callback failure releases out text");
 console.log("counted strings passed");

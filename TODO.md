@@ -1915,8 +1915,8 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
       facts where C does not identify the active value.
 - [ ] Extend struct storage reuse to conditional loop updates and recurrences that
       expose a prior result to opaque calls before replacing it.
-- [ ] Counted UTF-8 strings in queued callbacks, out/inout parameters, and state struct
-      fields need explicit count and lifetime handling.
+- [ ] Counted UTF-8 strings in queued callbacks and state struct fields need explicit
+      count and lifetime handling.
 - [ ] Import macros referenced by facts from transitive headers outside the declared
       library surface so `ffi check` can follow their definitions too.
 - [ ] Support individual clang declarations and documentation blocks that exceed the

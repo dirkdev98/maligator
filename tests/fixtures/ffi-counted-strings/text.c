@@ -43,7 +43,28 @@ void text_counted_callback(void (*callback)(const char *, int, void *), void *da
     callback(mode == 1 ? NULL : text, mode == 2 ? -1 : mode == 3 ? INT_MAX : (int)sizeof(text), data);
     memset(text, 'x', sizeof(text));
 }
-void text_out(char **text, int *length) { *text = text_copy("x", 1, length); }
+void text_out(char **text, int *length) {
+    static const char source[] = {'a', 0, (char)0xc3, (char)0xa9};
+    *text = text_copy(source, sizeof(source), length);
+}
+void text_out_bad(char **text, int *length, int mode) { *text = text_bad_count(mode, length); }
+void text_out_callback(void (*callback)(void *), void *data, char **text, int *length) {
+    text_out(text, length);
+    callback(data);
+}
+void text_advance(char **text, int *length, int skip) {
+    calls++;
+    if (skip < 0) { *length = -1; return; }
+    if (skip > *length) abort();
+    if (*text != NULL) *text += skip;
+    *length -= skip;
+}
+void text_inout_copy(char **text, int *length) { *text = text_copy(*text, (size_t)*length, length); }
+void text_advance_first(int *length, char **text, int skip) { text_advance(text, length, skip); }
+void text_inout_fixed(char **text, unsigned char length) {
+    calls++;
+    if (*text != NULL && length != 0) (*text)[0] = 'z';
+}
 void text_free(void *text) { if (text != NULL) { free(text); live--; } }
 int text_live(void) { return live; }
 int text_calls(void) { return calls; }

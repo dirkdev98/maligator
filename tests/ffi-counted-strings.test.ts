@@ -73,20 +73,35 @@ describe("counted UTF-8 contracts", () => {
 		},
 	);
 	it.each(["out", "inout"] as const)(
-		"rejects counted %s strings rather than truncating them",
+		"declares counted %s outputs with their updated byte lengths",
 		(role) => {
-			expect(() =>
-				planBindings(model, {
-					types: {},
-					functions: {
-						text_out: {
-							params: { text: { [role]: true, string: { length: "length" } } },
-						},
+			const plan = planBindings(model, {
+				types: {},
+				functions: {
+					text_out: {
+						params: { text: { [role]: true, string: { length: "length" } } },
 					},
-				}),
-			).toThrow("counted out and inout strings are not supported");
+				},
+			});
+			expect(generateDeclarations([{ name: "text", plan }])).toContain(
+				role === "out"
+					? "export function text_out(): { text: string | null; length: number };"
+					: "export function text_out(text: string): { text: string | null; length: number };",
+			);
 		},
 	);
+	it("requires C to write an out string's length", () => {
+		expect(() =>
+			planBindings(model, {
+				types: {},
+				functions: {
+					text_out_fixed: {
+						params: { text: { out: true, string: { length: "length" } } },
+					},
+				},
+			}),
+		).toThrow("count C writes through a pointer");
+	});
 	it("hides callback counts and declares the copied string argument", () => {
 		const plan = planBindings(model, { types: {}, functions: textContract.functions });
 		expect(generateDeclarations([{ name: "text", plan }])).toContain(

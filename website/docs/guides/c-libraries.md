@@ -284,9 +284,16 @@ Counted text works with ordinary functions, async twins, and callbacks on the VM
 thread. In `callback.params`, `length` names the count's 1-based parameter position.
 Callback text is copied before entering JavaScript, so it remains valid after the
 C callback returns. Counted text cannot accompany `bytes` or `array`; queued
-callbacks, out parameters, and inout parameters reject counted strings.
+callbacks reject counted strings.
 With `nullable: true`, a null input passes `NULL` and a zero count; an empty string
 passes a non-null pointer and a zero count.
+
+An `out` string names an integer count pointer that C fills. The output object contains
+the decoded text and updated count. An `inout` string initializes its count from the
+encoded input and decodes the updated pointer/count pair, so C may advance a cursor
+within that encoding. Both forms support async twins. Input encodings are borrowed:
+C must not free or reallocate them. Use `free` only when the returned pointer owns a
+separate C allocation.
 
 Array inputs convert in index order. A conversion error prevents later elements'
 getters and Proxy traps from running.

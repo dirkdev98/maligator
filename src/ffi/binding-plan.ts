@@ -142,6 +142,8 @@ export interface MappedOutput {
 	/** The pointee type. */
 	readonly type: CType;
 	readonly value: JsValue;
+	/** The C parameter holding this output's byte or element count. */
+	readonly count?: number;
 }
 
 export interface BoundFunction {
@@ -1327,15 +1329,15 @@ class Planner {
 			const valueFacts = factsAt(index);
 			const counted = valueCount(valueFacts);
 			if (counted === undefined) return;
-			if (
-				counted.kind === "string" &&
-				(valueFacts.out === true || valueFacts.inout === true)
-			)
-				throw new FfiError(
-					`${where(`params.${names[index]}.string`)}: counted out and inout strings are not supported`,
-				);
 			const at = `params.${names[index]}.${counted.kind}.length`;
 			const count = parameterIndex(counted.count.length, at);
+			if (
+				valueFacts.out === true &&
+				resolveCType(this.#model, declaration.params[count]!.type).kind !== "pointer"
+			)
+				throw new FfiError(
+					`${where(at)}: an out value needs a count C writes through a pointer`,
+				);
 			if (count === index || counts.has(count)) {
 				throw new FfiError(
 					`${where(at)}: '${counted.count.length}' already counts another argument`,
@@ -1481,12 +1483,16 @@ class Planner {
 			if (counted !== undefined || resultCount === index) {
 				const pointer = resolved.kind === "pointer";
 				const countType = pointer ? resolveCType(this.#model, resolved.to) : resolved;
-				// Only a buffer's size can go through a pointer the function updates.
 				if (
 					countType.kind !== "integer" ||
 					(pointer &&
 						counted !== undefined &&
-						(resultCount === index || factsAt(counted).bytes === undefined))
+						(resultCount === index ||
+							(factsAt(counted).bytes === undefined &&
+								!(
+									typeof factsAt(counted).string === "object" &&
+									(factsAt(counted).out === true || factsAt(counted).inout === true)
+								))))
 				) {
 					throw new FfiError(`${where(at)}: a count must be an integer parameter`);
 				}
@@ -1530,12 +1536,35 @@ class Planner {
 				}
 				this.#free(valueFacts.free, written.value, where(at));
 				const output = outputs.length;
-				outputs.push({ name, type: resolved.to, value: written.value });
+				const countedOutput = valueCount(valueFacts);
+				outputs.push({
+					name,
+					type: resolved.to,
+					value: written.value,
+					...(countedOutput === undefined
+						? {}
+						: {
+								count: parameterIndex(
+									countedOutput.count.length,
+									`${at}.${countedOutput.kind}.length`,
+								),
+							}),
+				});
 				if (valueFacts.inout !== true) {
 					args.push({ kind: "out", output });
 					return;
 				}
-				const read = map(resolved.to, "param", NO_FACTS, at);
+				const read = map(
+					resolved.to,
+					"param",
+					valueFacts.string === undefined
+						? NO_FACTS
+						: {
+								string: valueFacts.string,
+								nullable: valueFacts.nullable,
+							},
+					at,
+				);
 				if ("gap" in read) {
 					gap(read.gap);
 					return;
