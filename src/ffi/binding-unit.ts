@@ -1117,7 +1117,7 @@ class BindingWriter {
 					`if (!mal_ffi_check_count(vm, mal_result_length, ${value.resultCount.bits}, ${value.resultCount.signed}, &mal_site)) goto mal_done;`,
 				);
 			resultConversion.push(
-				`mal_return = mal_result == mal_ffi_null() ? nullptr : (${localDeclaration(type.returns, "")}) mal_ffi_callback_result_copy(vm, mal_callback, mal_result_data, mal_result_length, ${result.kind === "string"});`,
+				`mal_return = mal_result == mal_ffi_null() ? nullptr : (${localDeclaration(type.returns, "")}) mal_ffi_callback_result_copy(vm, mal_callback, mal_result_data, mal_result_length, ${result.kind === "string"}, ${value.returnLifetime === "registration"});`,
 			);
 			if (value.resultCount !== undefined) {
 				const countType = resolveCType(
@@ -1408,6 +1408,7 @@ class BindingWriter {
 		const kept: Array<string> = [];
 		const commits: Array<string> = [];
 		const callbackStarts: Array<string> = [];
+		const callbackReturns: Array<string> = [];
 		const replacedIndexes = new Set<number>();
 		const keptCallback = (index: number): boolean => {
 			const entry = binding.arguments[index];
@@ -1645,6 +1646,8 @@ class BindingWriter {
 							);
 							// Close completion must snapshot this registration in its lifetime cutoff.
 							commits.unshift(`mal_ffi_replace_commit(&${transaction});`);
+							if (value.returnLifetime === "registration")
+								callbackReturns.push(`mal_ffi_replace_return(&${transaction});`);
 							cleanup.push(
 								`if (${transaction}.site == nullptr) mal_ffi_release(${context});`,
 								`mal_ffi_replace_finish(&${transaction});`,
@@ -1870,7 +1873,7 @@ class BindingWriter {
 		];
 		const leave = callsBack ? ["if (mal_framed) mal_ffi_collectable_end(vm);"] : [];
 		if (binding.returns.kind === "undefined") {
-			after.push(...enter, `${call};`, ...leave, ...closes);
+			after.push(...enter, `${call};`, ...callbackReturns, ...leave, ...closes);
 		} else {
 			locals.push(`${localDeclaration(declaration.returns, "mal_return")};`);
 			const owned = this.#owned(
@@ -1885,6 +1888,7 @@ class BindingWriter {
 			after.push(
 				...enter,
 				`mal_return = ${call};`,
+				...callbackReturns,
 				...leave,
 				...closes,
 				...(record === undefined
@@ -2000,6 +2004,7 @@ class BindingWriter {
 			readonly retained: boolean;
 			readonly replacement?: string;
 			readonly closeKey?: number;
+			readonly registrationResult: boolean;
 		}> = [];
 		const callbackArguments: Array<string> = [];
 		const trampolines: Array<string> = [];
@@ -2190,6 +2195,7 @@ class BindingWriter {
 						callbacks.push({
 							index,
 							retained: value.kept,
+							registrationResult: value.returnLifetime === "registration",
 							...(value.closes === undefined ? {} : { closeKey: value.closes.key }),
 							...(value.replaced === undefined
 								? {}
@@ -2449,6 +2455,11 @@ class BindingWriter {
 					: [`\tmal_ffi_close_start(mal_ctx->mal_callback_${String(index)});`],
 			),
 			`\t${returns ? "mal_ctx->mal_return = " : ""}${call};`,
+			...callbacks.flatMap(({ replacement, registrationResult }) =>
+				replacement !== undefined && registrationResult
+					? [`\tmal_ffi_replace_return(&mal_ctx->${replacement});`]
+					: [],
+			),
 			...callbacks.flatMap(({ index, slot }) =>
 				slot === undefined ? [] : [`\t${slot} = mal_previous_${String(index)};`],
 			),

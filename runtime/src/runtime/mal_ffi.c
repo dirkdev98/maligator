@@ -1050,6 +1050,7 @@ void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue functio
     callback->function = function;
     callback->thread_identity = &ffi_callback_thread;
     callback->results = nullptr;
+    callback->results_accepting = true;
 }
 
 typedef struct MalFfiResultCopy {
@@ -1058,7 +1059,8 @@ typedef struct MalFfiResultCopy {
 } MalFfiResultCopy;
 
 void *mal_ffi_callback_result_copy(
-    MalVm *vm, MalFfiCallback *callback, const void *source, size_t length, bool terminated) {
+    MalVm *vm, MalFfiCallback *callback, const void *source, size_t length, bool terminated,
+    bool registration) {
     if (source == nullptr && length > 0) {
         mal_ffi_out_of_memory(vm);
         return nullptr;
@@ -1075,8 +1077,17 @@ void *mal_ffi_callback_result_copy(
     }
     if (length > 0) memcpy(copy->data, source, length);
     if (terminated) copy->data[length] = 0;
+    if (registration) pthread_mutex_lock(&ffi_queue_lock);
+    if (registration && !callback->results_accepting) {
+        pthread_mutex_unlock(&ffi_queue_lock);
+        free(copy);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "A callback result cannot outlive its released registration");
+        return nullptr;
+    }
     copy->next = callback->results;
     callback->results = copy;
+    if (registration) pthread_mutex_unlock(&ffi_queue_lock);
     return copy->data;
 }
 
@@ -1188,6 +1199,7 @@ void mal_ffi_release(void *data) {
     if (data == nullptr) return;
     MalFfiKept *kept = data;
     pthread_mutex_lock(&ffi_queue_lock);
+    kept->callback.results_accepting = false;
     MalVm *vm = kept->callback.vm;
     // A queued callback's release goes through its inbox, which wakes the event loop
     // that waits for it.
@@ -1599,6 +1611,19 @@ void mal_ffi_replace_commit(MalFfiReplacement *replacement) {
     entry->identity[replacement->lane] = ++ffi_replaced_identity;
     entry->lane = replacement->lane;
     replacement->committed = true;
+    pthread_mutex_unlock(&ffi_replaced_lock);
+}
+
+void mal_ffi_replace_return(MalFfiReplacement *replacement) {
+    pthread_mutex_lock(&ffi_replaced_lock);
+    MalFfiReplacedEntry *entry = ffi_replacement_entry(replacement);
+    if (entry == nullptr || !replacement->committed) abort();
+    MalFfiKept *previous = entry->kept[replacement->lane ^ 1];
+    if (previous != nullptr) {
+        pthread_mutex_lock(&ffi_queue_lock);
+        previous->callback.results_accepting = false;
+        pthread_mutex_unlock(&ffi_queue_lock);
+    }
     pthread_mutex_unlock(&ffi_replaced_lock);
 }
 

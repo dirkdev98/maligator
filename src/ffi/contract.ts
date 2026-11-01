@@ -306,7 +306,11 @@ function validateValueFacts(value: unknown, at: string): void {
 				"lifetime",
 			]);
 			const { lifetime, ...facts } = result;
-			expect(lifetime === "call", `${at}.callback.returns.lifetime`, "'call'");
+			expect(
+				lifetime === "call" || lifetime === "registration",
+				`${at}.callback.returns.lifetime`,
+				"'call' or 'registration'",
+			);
 			validateValueFacts(facts, `${at}.callback.returns`);
 		}
 		if (callback.lookup !== undefined) {

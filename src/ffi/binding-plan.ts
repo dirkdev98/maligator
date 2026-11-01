@@ -70,7 +70,7 @@ export type JsValue =
 			/** Per C parameter: the parameter holding its byte or element count. */
 			readonly counts: ReadonlyArray<number | undefined>;
 			readonly returns: JsValue;
-			readonly returnLifetime?: "call";
+			readonly returnLifetime?: "call" | "registration";
 			readonly resultCount?: {
 				readonly param: number;
 				readonly bits: number;
@@ -941,9 +941,17 @@ class Planner {
 		const factsAt = (index: number): MaligatorFfiValueFacts | undefined =>
 			facts[String(index + 1)];
 		const resultFacts = callback.returns;
-		if (resultFacts !== undefined && kept)
+		if (resultFacts !== undefined && callback.closes !== undefined)
+			throw new FfiError(
+				`${at}.callback.returns: a close completion ends its registration before returning a pointer result`,
+			);
+		if (resultFacts?.lifetime === "call" && kept)
 			throw new FfiError(
 				`${at}.callback.returns: call lifetime needs a call-scoped callback`,
+			);
+		if (resultFacts?.lifetime === "registration" && !kept)
+			throw new FfiError(
+				`${at}.callback.returns: registration lifetime needs a retained callback`,
 			);
 		const resultCounted = resultFacts === undefined ? undefined : valueCount(resultFacts);
 		let resultCount: Extract<JsValue, { kind: "callback" }>["resultCount"];

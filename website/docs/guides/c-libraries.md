@@ -392,14 +392,14 @@ JavaScript runs on one thread, so a library that calls back from another thread 
 
 `queued: true` marks a kept callback the library may call from its own threads, as audio and network libraries do. A call from another thread copies its arguments and queues for the program's thread, and the C caller continues at once; a call on the program's thread runs immediately. So the callback returns nothing, and takes values, strings, buffers, and structs. An exception it throws is uncaught, as one in an event handler. The program needs an event loop, such as the web platform surface, and it keeps running while the callback is kept.
 
-Use `queued: "wait"` when the C caller needs a scalar or pointer-free struct result.
+Use `queued: "wait"` when the C caller needs a result.
 The foreign thread waits until JavaScript returns and conversion succeeds. An exception
 returns zero to C and remains uncaught on the program's thread. Shutdown cancels waiting
 calls and rejects new ones with a zero result.
 Waiting callbacks borrow pointed-to arguments while C waits. A handle they receive is
 lent for that callback, unless the program already owns the same resource.
 
-For a call-scoped callback returning text or bytes, describe `callback.returns`:
+For a callback returning text or bytes, describe `callback.returns`:
 
 ```ts
 callback: {
@@ -418,6 +418,17 @@ callbacks, garbage collection, and source-buffer transfer until the enclosing bi
 finishes converting its outputs. C must stop using them before that binding returns.
 Async twins retain the same lifetime through worker execution and completion conversion.
 An exception returns a null pointer and zero count to C.
+
+A retained callback uses `lifetime: "registration"` instead. Its copies survive until
+the library invokes `release`, the next setter replaces the callback, or its owning
+resource closes. C must stop using all returned pointers at that boundary, including
+ones held by pending consumers. All earlier results remain valid when the same callback
+returns again. A callback that releases or replaces itself cannot then publish another
+non-null result; conversion throws a `TypeError` and C receives null and a zero count.
+Native copies can outlive the VM when C still owns the registration; callbacks after
+VM shutdown return null without running JavaScript.
+One-shot `closes` completions cannot return pointers because their registration ends
+as the completion runs.
 
 Stop or join callback producers through an async twin so the program's thread remains
 available to run their callbacks. A handle whose destructor joins such a producer also

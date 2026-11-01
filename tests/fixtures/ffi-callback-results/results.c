@@ -110,3 +110,86 @@ void result_cancel(const char *(*callback)(int *, int, void *), void *data) {
     cancel_checked = true;
 }
 void result_cancel_wait_started(void) { while (!atomic_load(&cancel_started)) sched_yield(); }
+
+static const char *(*retained_callback)(int, void *);
+static void *retained_data;
+static void (*retained_release)(void *);
+static const char *retained_text[2];
+void result_retain(const char *(*callback)(int, void *), void *data, void (*release)(void *)) {
+    assert(retained_callback == NULL);
+    retained_callback = callback;
+    retained_data = data;
+    retained_release = release;
+}
+const char *result_retained_call(int index) {
+    assert(index >= 0 && index < 2 && retained_callback != NULL);
+    const char *result = retained_callback(index, retained_data);
+    retained_text[index] = result;
+    return result;
+}
+int result_retained_matches(const char *first, const char *second) {
+    return retained_text[0] != NULL && retained_text[1] != NULL
+        && strcmp(retained_text[0], first) == 0 && strcmp(retained_text[1], second) == 0;
+}
+void result_retained_clear(void) {
+    void *data = retained_data;
+    void (*release)(void *) = retained_release;
+    retained_callback = NULL;
+    retained_data = NULL;
+    retained_release = NULL;
+    retained_text[0] = retained_text[1] = NULL;
+    if (release != NULL) release(data);
+}
+static const char *(*replacement_callback)(int);
+void result_replace(const char *(*callback)(int)) { replacement_callback = callback; }
+const char *result_replaced_call(int index) {
+    return replacement_callback == NULL ? NULL : replacement_callback(index);
+}
+
+static const unsigned char *(*retained_bytes_callback)(unsigned char *, int, void *);
+static void *retained_bytes_data;
+static void (*retained_bytes_release)(void *);
+static const unsigned char *retained_bytes[2];
+static unsigned char retained_lengths[2];
+void result_retain_bytes(const unsigned char *(*callback)(unsigned char *, int, void *), void *data, void (*release)(void *)) {
+    assert(retained_bytes_callback == NULL);
+    retained_bytes_callback = callback;
+    retained_bytes_data = data;
+    retained_bytes_release = release;
+}
+void result_retained_bytes_call(int index) {
+    assert(index >= 0 && index < 2 && retained_bytes_callback != NULL);
+    unsigned char length = 91;
+    const unsigned char *result = retained_bytes_callback(&length, index, retained_bytes_data);
+    if (result == NULL) assert(length == 0);
+    retained_bytes[index] = result;
+    retained_lengths[index] = length;
+}
+int result_retained_bytes_sum(int index) {
+    assert(index >= 0 && index < 2);
+    int sum = 0;
+    for (int offset = 0; offset < retained_lengths[index]; offset++) sum += retained_bytes[index][offset];
+    return sum;
+}
+void result_retained_bytes_clear(void) {
+    void *data = retained_bytes_data;
+    void (*release)(void *) = retained_bytes_release;
+    retained_bytes_callback = NULL;
+    retained_bytes_data = NULL;
+    retained_bytes_release = NULL;
+    retained_bytes[0] = retained_bytes[1] = NULL;
+    retained_lengths[0] = retained_lengths[1] = 0;
+    if (release != NULL) release(data);
+}
+extern size_t mal_gc_process_bytes(void);
+static void retained_after_vm(void) {
+    assert(result_retained_matches("late-first", "late-second"));
+    assert(result_retained_bytes_sum(0) == 12 && result_retained_bytes_sum(1) == 9);
+    assert(mal_gc_process_bytes() == 0);
+    assert(retained_callback(0, retained_data) == NULL);
+    unsigned char length = 91;
+    assert(retained_bytes_callback(&length, 0, retained_bytes_data) == NULL && length == 0);
+    result_retained_clear();
+    result_retained_bytes_clear();
+}
+void result_retained_after_vm(void) { if (atexit(retained_after_vm) != 0) abort(); }

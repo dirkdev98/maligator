@@ -36,6 +36,21 @@ describe("callback pointer result contracts", () => {
 		expect(declarations).toContain(
 			"export function result_bytes(callback: (arg1: number) => ArrayBufferLike | ArrayBufferView | null): Uint8Array | null;",
 		);
+		expect(declarations).toContain(
+			"export function result_retain(callback: (arg1: number) => string | null): void;",
+		);
+		expect(declarations).toContain(
+			"export function result_retain_bytes_async(callback: (arg1: number) => ArrayBufferLike | ArrayBufferView | null): Promise<void>;",
+		);
+	});
+	it("loads registration result facts through a library contract", () => {
+		const loaded = loadLibraryContract(
+			"results",
+			{ contract: "results.ffi.ts" },
+			path.join(import.meta.dirname, "fixtures/ffi-callback-results"),
+			stripCompactTypes,
+		);
+		expect(loaded).toBeDefined();
 	});
 	it("requires an explicit pointer-result lifetime", () => {
 		const plan = planBindings(model, {
@@ -115,6 +130,46 @@ describe("callback pointer result contracts", () => {
 			}),
 		).toThrow("call-scoped callback");
 	});
+	it("rejects a registration lifetime on a call-scoped callback", () => {
+		expect(() =>
+			planBindings(model, {
+				types: {},
+				functions: {
+					result_text: {
+						params: {
+							callback: {
+								callback: {
+									data: "data",
+									returns: { lifetime: "registration" },
+								},
+							},
+						},
+					},
+				},
+			}),
+		).toThrow("registration lifetime needs a retained callback");
+	});
+	it("rejects pointer results from a completion that ends its registration", () => {
+		expect(() =>
+			planBindings(model, {
+				types: { ResultResource: { handle: {} } },
+				functions: {
+					result_close: {
+						params: {
+							callback: {
+								callback: {
+									data: "data",
+									closes: "resource",
+									queued: "wait",
+									returns: { lifetime: "registration" },
+								},
+							},
+						},
+					},
+				},
+			}),
+		).toThrow("a close completion ends its registration");
+	});
 	it("rejects a pointer lifetime on a scalar result", () => {
 		expect(() =>
 			planBindings(model, {
@@ -130,6 +185,7 @@ describe("callback pointer result contracts", () => {
 	it.each([
 		{ lifetime: "call", free: "free" },
 		{ lifetime: "call", string: true, bytes: { length: "1" } },
+		{ lifetime: "forever", string: true },
 		{ string: true },
 	])("rejects incomplete or conflicting pointer result facts %j", (returns) => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-pointer-result-facts-"));

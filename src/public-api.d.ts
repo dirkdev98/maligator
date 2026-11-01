@@ -181,7 +181,7 @@ export interface MaligatorFfiValueFacts {
  * calls and rethrows when the C function the library runs in returns.
  */
 export interface MaligatorFfiCallback {
-	/** Pointer results are copied for the enclosing call, including its result conversion. */
+	/** Native copies remain valid for the enclosing call or retained registration. */
 	returns?: MaligatorFfiCallbackResult;
 	/**
 	 * The `void *` parameter the library passes back to the callback, by C name or
@@ -219,8 +219,8 @@ export interface MaligatorFfiCallback {
 	 * The library may call the kept callback from other threads. `true` copies arguments
 	 * and queues for the program's thread, letting C continue with a void result.
 	 * `"wait"` borrows pointed-to arguments while blocking C until JavaScript returns
-	 * a scalar or pointer-free struct. Handles are lent only for that callback. The
-	 * program needs an event loop, which waits while the callback is kept. Stop or join the
+	 * a result. Pointer results need an explicit lifetime. Handles are lent only for that
+	 * callback. The program needs an event loop, which waits while the callback is kept. Stop or join the
 	 * producer asynchronously; the program's thread must remain free to run callbacks.
 	 */
 	queued?: boolean | "wait";
@@ -236,8 +236,9 @@ export type MaligatorFfiCallbackResult = Pick<
 	MaligatorFfiValueFacts,
 	"string" | "bytes" | "nullable"
 > & {
-	/** The callback is call-scoped; C stops using its result before the binding returns. */
-	lifetime: "call";
+	/** C stops using every result before the call returns or the registration ends,
+	 * including pointers held by pending consumers. Self-release forbids another non-null result. */
+	lifetime: "call" | "registration";
 };
 
 /** Facts about one C function, keyed by its name. */

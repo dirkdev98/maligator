@@ -16,6 +16,50 @@ export default {
 	headers: ["results.h"],
 	find: [{ includeDirs: ["."], sources: ["results.c"] }],
 	functions: {
+		result_retain: {
+			async: "result_retain_async",
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						queued: "wait",
+						returns: { lifetime: "registration", nullable: true },
+					},
+				},
+			},
+		},
+		result_retained_call: { async: "result_retained_call_async" },
+		result_retained_clear: { async: "result_retained_clear_async" },
+		result_replace: {
+			async: "result_replace_async",
+			params: {
+				callback: {
+					nullable: true,
+					callback: {
+						replaced: true,
+						queued: "wait",
+						returns: { lifetime: "registration", nullable: true },
+					},
+				},
+			},
+		},
+		result_replaced_call: { async: "result_replaced_call_async" },
+		result_retain_bytes: {
+			async: "result_retain_bytes_async",
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						queued: "wait",
+						returns: { lifetime: "registration", bytes: { length: "1" }, nullable: true },
+					},
+				},
+			},
+		},
+		result_retained_bytes_call: { async: "result_retained_bytes_call_async" },
+		result_retained_bytes_clear: { async: "result_retained_bytes_clear_async" },
 		result_cancel: {
 			async: "result_cancel_async",
 			params: { callback: { callback: counted } },

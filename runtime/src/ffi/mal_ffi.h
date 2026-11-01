@@ -389,11 +389,13 @@ typedef struct MalFfiCallback {
     const void *thread_identity;
     /** Native result copies outlive callback frames and the binding's result conversion. */
     void *results;
+    bool results_accepting;
 } MalFfiCallback;
 /** Record the owning thread before C can call a stack or retained context. */
 void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue function);
 void *mal_ffi_callback_result_copy(
-    MalVm *vm, MalFfiCallback *callback, const void *source, size_t length, bool terminated);
+    MalVm *vm, MalFfiCallback *callback, const void *source, size_t length, bool terminated,
+    bool registration);
 /** Retire call-scoped copies after output conversion, or a retained context's final native reference. */
 void mal_ffi_callback_results_free(MalFfiCallback *callback);
 
@@ -511,6 +513,8 @@ bool mal_ffi_replace_prepare(
     MalFfiReplacement *replacement);
 /** Publish the prepared callback immediately before C runs, without touching the VM. */
 void mal_ffi_replace_commit(MalFfiReplacement *replacement);
+/** End previous result publications at C return; native references retire at finish. */
+void mal_ffi_replace_return(MalFfiReplacement *replacement);
 /** Retire the previous callback, or the unsubmitted callback, after C stops using it. */
 void mal_ffi_replace_finish(MalFfiReplacement *replacement);
 /**
