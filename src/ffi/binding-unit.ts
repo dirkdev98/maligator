@@ -1089,11 +1089,70 @@ class BindingWriter {
 		const keyedLookup = value.replaced !== undefined && data < 0 && lookup === undefined;
 		const body = queued ? `${name}_run` : name;
 		const signature = [...(queued ? ["MalFfiCallback *mal_callback"] : []), ...params];
+		const resultLocals: Array<string> = [];
+		const resultConversion: Array<string> = [];
+		const resultCleanup: Array<string> = [];
+		if (value.returnLifetime !== undefined) {
+			const result = value.returns;
+			if (result.kind !== "string" && result.kind !== "bytes")
+				throw new Error("pointer result without a byte representation");
+			resultLocals.push(
+				"void *mal_result_data = nullptr;",
+				"size_t mal_result_length = 0;",
+			);
+			if (result.kind === "string") {
+				resultLocals.push("MalFfiString mal_result_text = {.data = nullptr};");
+				resultConversion.push(
+					`if (!mal_ffi_to_string(vm, mal_result, ${result.nullable}, ${result.counted === true}, &mal_site, &mal_result_text)) goto mal_done;`,
+					"mal_result_data = mal_result_text.data;",
+					"mal_result_length = mal_result_text.length;",
+				);
+				resultCleanup.push("mal_ffi_string_release(&mal_result_text);");
+			} else
+				resultConversion.push(
+					`if (!mal_ffi_to_bytes(vm, mal_result, ${result.nullable}, false, &mal_site, &mal_result_data, &mal_result_length, nullptr)) goto mal_done;`,
+				);
+			if (value.resultCount !== undefined)
+				resultConversion.push(
+					`if (!mal_ffi_check_count(vm, mal_result_length, ${value.resultCount.bits}, ${value.resultCount.signed}, &mal_site)) goto mal_done;`,
+				);
+			resultConversion.push(
+				`mal_return = mal_result == mal_ffi_null() ? nullptr : (${localDeclaration(type.returns, "")}) mal_ffi_callback_result_copy(vm, mal_callback, mal_result_data, mal_result_length, ${result.kind === "string"});`,
+			);
+			if (value.resultCount !== undefined) {
+				const countType = resolveCType(
+					this.#model,
+					type.params[value.resultCount.param]!,
+				);
+				if (countType.kind !== "pointer")
+					throw new Error("callback result count without a pointer");
+				resultConversion.push(
+					`if (!mal_ffi_threw(vm)) *mal_c${String(value.resultCount.param)} = (${localDeclaration(countType.to, "")}) mal_result_length;`,
+				);
+			}
+		} else if (returns)
+			resultConversion.push(
+				...this.read(
+					value.returns,
+					type.returns,
+					"mal_result",
+					"mal_return",
+					"&mal_site",
+					"goto mal_done;",
+					[],
+					false,
+				),
+			);
 		const lines = [
 			"",
 			`static ${formatCDeclaration(type.returns, `${body}(${signature.length === 0 ? "void" : signature.join(", ")})`)} {`,
 			...(queued ? [] : [`\tMalFfiCallback *mal_callback = ${callback};`]),
 			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
+			...(value.resultCount === undefined
+				? []
+				: [
+						`\tif (mal_c${String(value.resultCount.param)} != nullptr) *mal_c${String(value.resultCount.param)} = 0;`,
+					]),
 			...(scoped
 				? ["\tif (mal_callback == nullptr) mal_ffi_callback_lost();"]
 				: data < 0 || value.closes !== undefined
@@ -1119,6 +1178,15 @@ class BindingWriter {
 			"\tMalFfiRoots mal_result_roots;",
 			"\tmal_ffi_root(&mal_result_roots, &mal_result, 1);",
 			...(lends ? ["\tbool mal_lent = false;"] : []),
+			...resultLocals.map((line) => `\t${line}`),
+			...(value.resultCount === undefined
+				? []
+				: [
+						`\tif (mal_c${String(value.resultCount.param)} == nullptr) {`,
+						'\t\tmal_ffi_expected(vm, &mal_site, "a writable callback result count");',
+						"\t\tgoto mal_done;",
+						"\t}",
+					]),
 			...(value.closes === undefined
 				? []
 				: [
@@ -1157,21 +1225,18 @@ class BindingWriter {
 			}),
 			`\tif (!mal_ffi_call(vm, mal_callback->function, mal_values, ${count}, &mal_result)) goto mal_done;`,
 			...(returns
-				? this.read(
-						value.returns,
-						type.returns,
-						"mal_result",
-						"mal_return",
-						"&mal_site",
-						"goto mal_done;",
-						[],
-						false,
-					).map((line) => `\t${line}`)
+				? resultConversion.map((line) => `\t${line}`)
 				: ["\t(void) mal_result;"]),
 			"mal_done:",
+			...resultCleanup.map((line) => `\t${line}`),
 			...(returns
 				? [
 						`\tif (mal_ffi_threw(vm)) mal_return = (${localDeclaration(type.returns, "")}) {};`,
+						...(value.resultCount === undefined
+							? []
+							: [
+									`\tif (mal_ffi_threw(vm) && mal_c${String(value.resultCount.param)} != nullptr) *mal_c${String(value.resultCount.param)} = 0;`,
+								]),
 					]
 				: []),
 			...(lends ? ["\tif (mal_lent) mal_ffi_callback_leave(vm);"] : []),
@@ -1292,6 +1357,11 @@ class BindingWriter {
 			"",
 			`static ${formatCDeclaration(type.returns, `${name}(${params.length === 0 ? "void" : params.join(", ")})`)} {`,
 			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
+			...(value.resultCount === undefined
+				? []
+				: [
+						`\tif (mal_c${String(value.resultCount.param)} != nullptr) *mal_c${String(value.resultCount.param)} = 0;`,
+					]),
 			...(waiting ? ["\tint mal_cancellation = mal_ffi_callback_wait_enter();"] : []),
 			`\tMalFfiCallback *mal_callback = ${callback};`,
 			"\tif (mal_callback != nullptr && !mal_ffi_callback_here(mal_callback)) {",
@@ -1593,6 +1663,10 @@ class BindingWriter {
 							trampolines.push("", `static _Thread_local MalFfiCallback *${slot};`);
 						trampolines.push(...this.#trampoline(trampoline, value, name, slot));
 						locals.push(`MalFfiCallback mal_callback_${String(index)} = {};`);
+						if (value.returnLifetime !== undefined)
+							cleanup.push(
+								`mal_ffi_callback_results_free(&mal_callback_${String(index)});`,
+							);
 						if (slot !== undefined) {
 							locals.push(`MalFfiCallback *mal_scoped_${String(index)} = ${slot};`);
 							cleanup.push(`${slot} = mal_scoped_${String(index)};`);

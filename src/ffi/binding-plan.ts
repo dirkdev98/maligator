@@ -70,6 +70,12 @@ export type JsValue =
 			/** Per C parameter: the parameter holding its byte or element count. */
 			readonly counts: ReadonlyArray<number | undefined>;
 			readonly returns: JsValue;
+			readonly returnLifetime?: "call";
+			readonly resultCount?: {
+				readonly param: number;
+				readonly bits: number;
+				readonly signed: boolean;
+			};
 			readonly nullable: boolean;
 			readonly kept: boolean;
 			/**
@@ -934,6 +940,36 @@ class Planner {
 		}
 		const factsAt = (index: number): MaligatorFfiValueFacts | undefined =>
 			facts[String(index + 1)];
+		const resultFacts = callback.returns;
+		if (resultFacts !== undefined && kept)
+			throw new FfiError(
+				`${at}.callback.returns: call lifetime needs a call-scoped callback`,
+			);
+		const resultCounted = resultFacts === undefined ? undefined : valueCount(resultFacts);
+		let resultCount: Extract<JsValue, { kind: "callback" }>["resultCount"];
+		if (resultCounted !== undefined) {
+			const reference = resultCounted.count.length;
+			const param = /^[1-9]\d*$/.test(reference) ? Number(reference) - 1 : -1;
+			const type =
+				param < 0 || param >= target.params.length
+					? undefined
+					: resolveCType(this.#model, target.params[param]!);
+			const integer =
+				type?.kind === "pointer" ? resolveCType(this.#model, type.to) : undefined;
+			const mapped =
+				integer?.kind === "integer" ? this.#integer(integer.name) : undefined;
+			if (
+				integer?.kind !== "integer" ||
+				integer.const === true ||
+				mapped === undefined ||
+				!("value" in mapped) ||
+				(mapped.value.kind !== "integer" && mapped.value.kind !== "bigint")
+			)
+				throw new FfiError(
+					`${at}.callback.returns: length needs a writable supported integer pointer by 1-based position`,
+				);
+			resultCount = { param, bits: mapped.value.bits, signed: mapped.value.signed };
+		}
 		for (const key of Object.keys(facts)) {
 			const position = Number(key) - 1;
 			const stated = facts[key]!;
@@ -974,9 +1010,13 @@ class Planner {
 			counts[index] = count;
 			counters.add(count);
 		});
+		if (resultCount !== undefined && counters.has(resultCount.param))
+			throw new FfiError(
+				`${at}.callback.returns: the result count already counts an argument`,
+			);
 		const params: Array<JsValue | "data" | "count"> = [];
 		for (const [index, param] of target.params.entries()) {
-			if (counters.has(index)) {
+			if (counters.has(index) || resultCount?.param === index) {
 				params.push("count");
 				continue;
 			}
@@ -1037,13 +1077,25 @@ class Planner {
 		const returned = resolveCType(this.#model, target.returns);
 		let returns: JsValue = { kind: "undefined" };
 		if (returned.kind !== "void") {
-			const mapped = this.value(target.returns, "param");
+			const mapped = this.value(target.returns, "param", resultFacts);
 			if ("gap" in mapped) return { gap: `callback result: ${mapped.gap}` };
-			if (mapped.value.kind === "string" || mapped.value.kind === "handle") {
+			if (mapped.value.kind === "handle")
+				return { gap: "a callback handle result needs a native resource lease" };
+			if (
+				(mapped.value.kind === "string" || mapped.value.kind === "bytes") &&
+				resultFacts === undefined
+			) {
 				return { gap: "a callback that returns a pointer needs a lifetime fact" };
 			}
+			if (
+				resultFacts !== undefined &&
+				mapped.value.kind !== "string" &&
+				mapped.value.kind !== "bytes"
+			)
+				throw new FfiError(`${at}.callback.returns: lifetime applies to pointer results`);
 			returns = mapped.value;
-		}
+		} else if (resultFacts !== undefined)
+			throw new FfiError(`${at}.callback.returns: lifetime applies to pointer results`);
 		return {
 			value: {
 				kind: "callback",
@@ -1051,6 +1103,8 @@ class Planner {
 				params,
 				counts,
 				returns,
+				...(resultFacts === undefined ? {} : { returnLifetime: resultFacts.lifetime }),
+				...(resultCount === undefined ? {} : { resultCount }),
 				nullable,
 				kept,
 				...(lookup === undefined ? {} : { lookup }),

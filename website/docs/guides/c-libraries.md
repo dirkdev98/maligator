@@ -399,6 +399,26 @@ calls and rejects new ones with a zero result.
 Waiting callbacks borrow pointed-to arguments while C waits. A handle they receive is
 lent for that callback, unless the program already owns the same resource.
 
+For a call-scoped callback returning text or bytes, describe `callback.returns`:
+
+```ts
+callback: {
+	data: "data",
+	returns: { string: { length: "1" }, lifetime: "call" },
+},
+```
+
+The length names a writable integer pointer by its callback parameter position. It is
+hidden from JavaScript and receives the returned UTF-8 byte count. Use `string: true`
+for NUL-terminated text, or `bytes: { length: "1" }` for a buffer result. `nullable`
+permits `null`; empty values keep a non-null pointer with a zero count.
+
+Each result gets an independent native copy. All copies survive subsequent and nested
+callbacks, garbage collection, and source-buffer transfer until the enclosing binding
+finishes converting its outputs. C must stop using them before that binding returns.
+Async twins retain the same lifetime through worker execution and completion conversion.
+An exception returns a null pointer and zero count to C.
+
 Stop or join callback producers through an async twin so the program's thread remains
 available to run their callbacks. A handle whose destructor joins such a producer also
 needs `collect: false` and asynchronous destruction.

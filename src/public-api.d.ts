@@ -181,6 +181,8 @@ export interface MaligatorFfiValueFacts {
  * calls and rethrows when the C function the library runs in returns.
  */
 export interface MaligatorFfiCallback {
+	/** Pointer results are copied for the enclosing call, including its result conversion. */
+	returns?: MaligatorFfiCallbackResult;
 	/**
 	 * The `void *` parameter the library passes back to the callback, by C name or
 	 * 1-based position. Without it, a callback the library calls only during the
@@ -228,6 +230,15 @@ export interface MaligatorFfiCallback {
 	 */
 	params?: Record<string, MaligatorFfiValueFacts>;
 }
+
+/** The byte representation and lifetime C requires from a callback result. */
+export type MaligatorFfiCallbackResult = Pick<
+	MaligatorFfiValueFacts,
+	"string" | "bytes" | "nullable"
+> & {
+	/** The callback is call-scoped; C stops using its result before the binding returns. */
+	lifetime: "call";
+};
 
 /** Facts about one C function, keyed by its name. */
 export interface MaligatorFfiFunctionFacts {

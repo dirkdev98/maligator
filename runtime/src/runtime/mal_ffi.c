@@ -491,6 +491,7 @@ static void ffi_close_detach(MalFfiKept *kept);
 
 static void ffi_kept_unref(MalFfiKept *kept) {
     if (atomic_fetch_sub_explicit(&kept->references, 1, memory_order_acq_rel) == 1) {
+        mal_ffi_callback_results_free(&kept->callback);
         ffi_close_free(kept->close);
         free(kept);
     }
@@ -1048,6 +1049,45 @@ void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue functio
     callback->vm = vm;
     callback->function = function;
     callback->thread_identity = &ffi_callback_thread;
+    callback->results = nullptr;
+}
+
+typedef struct MalFfiResultCopy {
+    struct MalFfiResultCopy *next;
+    byte data[];
+} MalFfiResultCopy;
+
+void *mal_ffi_callback_result_copy(
+    MalVm *vm, MalFfiCallback *callback, const void *source, size_t length, bool terminated) {
+    if (source == nullptr && length > 0) {
+        mal_ffi_out_of_memory(vm);
+        return nullptr;
+    }
+    usize capacity = length == 0 ? 1 : length;
+    if (capacity > SIZE_MAX - sizeof(MalFfiResultCopy) - (terminated ? 1 : 0)) {
+        mal_ffi_out_of_memory(vm);
+        return nullptr;
+    }
+    MalFfiResultCopy *copy = malloc(sizeof(*copy) + capacity + (terminated ? 1 : 0));
+    if (copy == nullptr) {
+        mal_ffi_out_of_memory(vm);
+        return nullptr;
+    }
+    if (length > 0) memcpy(copy->data, source, length);
+    if (terminated) copy->data[length] = 0;
+    copy->next = callback->results;
+    callback->results = copy;
+    return copy->data;
+}
+
+void mal_ffi_callback_results_free(MalFfiCallback *callback) {
+    MalFfiResultCopy *copy = callback->results;
+    callback->results = nullptr;
+    while (copy != nullptr) {
+        MalFfiResultCopy *next = copy->next;
+        free(copy);
+        copy = next;
+    }
 }
 
 MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function) {

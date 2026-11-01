@@ -294,7 +294,21 @@ function validateValueFacts(value: unknown, at: string): void {
 			"lookup",
 			"queued",
 			"closes",
+			"returns",
 		]);
+		if (callback.returns !== undefined) {
+			const result = callback.returns;
+			expectObject(result, `${at}.callback.returns`);
+			expectKeys(result, `${at}.callback.returns`, [
+				"string",
+				"bytes",
+				"nullable",
+				"lifetime",
+			]);
+			const { lifetime, ...facts } = result;
+			expect(lifetime === "call", `${at}.callback.returns.lifetime`, "'call'");
+			validateValueFacts(facts, `${at}.callback.returns`);
+		}
 		if (callback.lookup !== undefined) {
 			const lookup = callback.lookup;
 			expectObject(lookup, `${at}.callback.lookup`);

@@ -18,6 +18,7 @@ tests/native/ffi-async-callbacks.test.ts
 tests/native/ffi-conditional-destroy.test.ts
 tests/native/ffi-array-order.test.ts
 tests/native/ffi-counted-strings.test.ts
+tests/native/ffi-callback-results.test.ts
 tests/native/accessor-calls.test.ts
 tests/native/allocation-failure.test.ts
 tests/native/array-destructuring-close.test.ts

@@ -387,9 +387,15 @@ typedef struct MalFfiCallback {
     _Atomic(MalVm *) vm;
     MalValue function;
     const void *thread_identity;
+    /** Native result copies outlive callback frames and the binding's result conversion. */
+    void *results;
 } MalFfiCallback;
 /** Record the owning thread before C can call a stack or retained context. */
 void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue function);
+void *mal_ffi_callback_result_copy(
+    MalVm *vm, MalFfiCallback *callback, const void *source, size_t length, bool terminated);
+/** Retire call-scoped copies after output conversion, or a retained context's final native reference. */
+void mal_ffi_callback_results_free(MalFfiCallback *callback);
 
 /**
  * A callback context for a library that keeps the callback after the call returns.
