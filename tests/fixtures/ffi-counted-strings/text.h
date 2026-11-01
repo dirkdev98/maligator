@@ -4,6 +4,7 @@
 int text_length(const char *text, size_t length);
 int text_nullable(const char *text, size_t length);
 int text_legacy(const char *text);
+int text_many(const char *const *texts, size_t count);
 int text_narrow(const char *text, unsigned char length);
 int text_plain(const char *text, char length);
 int text_plain_max(void);

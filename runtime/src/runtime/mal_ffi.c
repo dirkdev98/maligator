@@ -141,7 +141,8 @@ bool mal_ffi_to_string(
     usize units = mal_string_length(string);
     char *data = out->inline_data;
     usize capacity = sizeof(out->inline_data);
-    if (units > (capacity - 1) / 3) {
+    // ASCII can fit inline even when UTF-8's worst-case expansion would require a heap copy.
+    if (units >= capacity) {
         data = units > (SIZE_MAX - 1) / 3 ? nullptr : malloc(units * 3 + 1);
         if (data == nullptr) return mal_ffi_out_of_memory(vm);
         capacity = units * 3 + 1;
@@ -168,6 +169,11 @@ bool mal_ffi_to_string(
         }
     }
     if (!encoded) {
+        if (units > (capacity - 1) / 3) {
+            data = units > (SIZE_MAX - 1) / 3 ? nullptr : malloc(units * 3 + 1);
+            if (data == nullptr) return mal_ffi_out_of_memory(vm);
+            capacity = units * 3 + 1;
+        }
         mal_string_utf8_encode_into(string, (byte *) data, capacity, nullptr, &length);
         // NUL is the only code point whose UTF-8 encoding contains a zero byte.
         nul = memchr(data, 0, length) != nullptr;

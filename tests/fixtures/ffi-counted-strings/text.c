@@ -9,6 +9,7 @@ static _Atomic int calls;
 int text_length(const char *text, size_t length) { (void)text; calls++; return (int)length; }
 int text_nullable(const char *text, size_t length) { calls++; return text == NULL ? 1 : length == 0 ? 2 : 0; }
 int text_legacy(const char *text) { calls++; return text == NULL ? -1 : (int)strlen(text); }
+int text_many(const char *const *texts, size_t count) { int total = 0; for (size_t i = 0; i < count; i++) total += (int)strlen(texts[i]); return total; }
 int text_narrow(const char *text, unsigned char length) { (void)text; calls++; return length; }
 int text_plain(const char *text, char length) { (void)text; calls++; return length; }
 int text_plain_max(void) { return CHAR_MAX; }

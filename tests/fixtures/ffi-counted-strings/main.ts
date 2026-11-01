@@ -3,6 +3,7 @@ import {
 	text_length,
 	text_nullable,
 	text_legacy,
+	text_many,
 	text_narrow,
 	text_plain,
 	text_plain_max,
@@ -42,6 +43,7 @@ check(
 check(text_legacy(null) === -1 && text_legacy("") === 0, "nullable legacy strings");
 const beforeNul = text_calls();
 rejects(() => text_legacy("a\0b"), TypeError);
+rejects(() => text_legacy(`${"x".repeat(127)}\0`), TypeError);
 check(text_calls() === beforeNul, "legacy NUL rejection precedes C");
 const beforeOverflow = text_calls();
 rejects(() => text_narrow("é".repeat(128)), RangeError);
@@ -56,12 +58,24 @@ check(
 	(await text_plain_async("x".repeat(plainMax))) === plainMax,
 	"async plain char count follows target ABI",
 );
-for (const value of ["", "a\0b", "Grüße🙂", "é".repeat(300), "\ud800x"]) {
+for (const value of [
+	"",
+	"a\0b",
+	"Grüße🙂",
+	"é".repeat(300),
+	"\ud800x",
+	...[85, 86, 255, 256].map((length) => "x".repeat(length)),
+	"é".repeat(128),
+]) {
 	const expected = value === "\ud800x" ? "\ufffdx" : value;
 	check(text_copy(value) === expected, "owned counted result round trip");
 	check(text_live() === 0, "owned counted results are released");
 	check(text_view(value) === expected, "borrowed input and result share one count");
 }
+check(
+	text_many(["x".repeat(128), "x".repeat(255), "é".repeat(128), "x".repeat(256)]) === 895,
+	"array strings retain their owned encodings at inline boundaries",
+);
 check(text_copy(null) === null && text_view(null) === null, "null counted results");
 check(
 	text_invalid() === "f\ufffd\0é",
@@ -119,6 +133,7 @@ const pending = [
 	text_copy_async(long),
 	text_view_async(long),
 	text_copy_async(null),
+	text_view_async("x".repeat(255)),
 ];
 Array.from({ length: 100 }, () => ({ held: new Uint8Array(128) }));
 const results = await Promise.all(pending);
@@ -126,7 +141,8 @@ check(
 	results[0] === "x\0y" &&
 		results[1] === long &&
 		results[2] === long &&
-		results[3] === null,
+		results[3] === null &&
+		results[4] === "x".repeat(255),
 	"async strings retain inline and heap encodings",
 );
 check(text_live() === 0, "async owned strings are released");

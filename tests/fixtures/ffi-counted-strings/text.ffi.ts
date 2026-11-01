@@ -8,6 +8,7 @@ export default {
 		text_length: { params: { text: { string: { length: "length" } } } },
 		text_nullable: { params: { text: { string: { length: "length" }, nullable: true } } },
 		text_legacy: { params: { text: { nullable: true } } },
+		text_many: { params: { texts: { array: { length: "count" } } } },
 		text_narrow: { params: { text: { string: { length: "length" } } } },
 		text_plain: {
 			params: { text: { string: { length: "length" } } },
