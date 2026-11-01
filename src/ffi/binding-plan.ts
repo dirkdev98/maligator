@@ -93,6 +93,7 @@ export type JsValue =
 			readonly nullable: boolean;
 			/** For results: whether closing the new handle releases the resource. */
 			readonly owned: boolean;
+			readonly fresh?: true;
 	  };
 
 type Mapping = { readonly value: JsValue } | { readonly gap: string };
@@ -552,6 +553,20 @@ class Planner {
 		facts: MaligatorFfiValueFacts = NO_FACTS,
 	): Mapping {
 		const resolved = resolveCType(this.#model, type);
+		if (facts.fresh === true) {
+			const target =
+				resolved.kind === "pointer" ? resolveCType(this.#model, resolved.to) : undefined;
+			const handle =
+				target?.kind === "record" ? this.#handles.get(target.name) : undefined;
+			if (
+				position !== "return" ||
+				handle?.representation !== "pointer" ||
+				facts.array !== undefined ||
+				facts.bytes !== undefined ||
+				facts.string !== undefined
+			)
+				throw new FfiError("fresh applies only to pointer handle results");
+		}
 		switch (resolved.kind) {
 			case "void":
 				return position === "return"
@@ -686,6 +701,7 @@ class Planner {
 						pass: "pointer",
 						nullable: position === "return" || facts.nullable === true,
 						owned: position === "return" && facts.borrowed !== true,
+						...(facts.fresh === true ? { fresh: true as const } : {}),
 					},
 				};
 			}
@@ -1611,9 +1627,6 @@ export function planBindings(
 				throw new FfiError(`${at}: '${asyncName}' is already a function`);
 			}
 			declared.add(asyncName);
-			if (!("gaps" in result) && result.closes !== undefined) {
-				throw new FfiError(`${at}: an async call cannot close a handle`);
-			}
 			if (
 				!("gaps" in result) &&
 				result.params.some(({ value }) => value.kind === "callback")

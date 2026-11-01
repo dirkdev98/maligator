@@ -133,6 +133,10 @@ export interface MaligatorFfiValueFacts {
 	nullable?: boolean;
 	/** A returned handle the library keeps owning; closing it does not release it. */
 	borrowed?: boolean;
+	/** A pointer result starts a new resource lifetime, rather than aliasing an
+	 * existing handle. This distinguishes a reused address during worker cleanup.
+	 */
+	fresh?: boolean;
 	/** The function writes a value through this pointer; it returns beside the result. */
 	out?: boolean;
 	/** The function reads and updates the value behind this pointer; the new value returns beside the result. */
@@ -222,7 +226,8 @@ export interface MaligatorFfiFunctionFacts {
 	/**
 	 * Also export the function under this name as one that runs the C call on a worker
 	 * thread and returns a promise of its result. Only for functions the library allows
-	 * on any thread while other calls run.
+	 * on any thread while other calls run. A destroy function keeps its handle closing
+	 * until the worker retires; conditional cleanup failure leaves it open for retry.
 	 */
 	async?: string;
 }

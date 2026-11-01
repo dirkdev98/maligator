@@ -15,6 +15,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
 
 typedef struct MalVm MalVm;
 typedef struct MalFfiInputs MalFfiInputs;
@@ -105,11 +106,12 @@ typedef struct MalFfiHandleType {
 /**
  * Wrap a resource in a new handle: `value` is the pointer, or the address of the
  * struct to copy. Disposing an owned handle releases the resource; a borrowed
- * handle only closes.
+ * handle only closes. `fresh` asserts a new lifetime even when C reuses the
+ * address of a closing handle.
  */
 MalValue mal_ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
-    bool owned);
+    bool owned, bool fresh);
 /**
  * Allocate zeroed caller storage and wrap its stable pointer. Disposing or collecting
  * this handle frees the outer storage; C initialization and cleanup are explicit.
@@ -149,7 +151,9 @@ bool mal_ffi_set_state_bytes(MalVm *vm, MalValue value, const MalFfiHandleType *
  */
 bool mal_ffi_handle_held(MalVm *vm, void *pin, const MalFfiSite *site);
 /** Begin cleanup with the sole pin, rejecting reentry until its result is known. */
-bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, const MalFfiSite *site);
+bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, bool worker, const MalFfiSite *site);
+/** Reject ambiguous pointer results before C can create a resource at a closing address. */
+bool mal_ffi_handle_results_ready(MalVm *vm, const MalFfiHandleType *type, const MalFfiSite *site);
 /** Finish cleanup, restoring a failed handle or closing a released resource. */
 void mal_ffi_finish_handle_close(MalValue value, bool released);
 
@@ -369,7 +373,7 @@ bool mal_ffi_threw(MalVm *vm);
  * function, which the binding keeps rooted for the duration of the call.
  */
 typedef struct MalFfiCallback {
-    MalVm *vm;
+    _Atomic(MalVm *) vm;
     MalValue function;
 } MalFfiCallback;
 
@@ -468,8 +472,10 @@ typedef void (*MalFfiAsyncRelease)(void *data);
  * the work was cancelled before it ran; complete still releases what the call held.
  * Teardown calls `complete` with false to retire pins without reading worker state;
  * producers may still be running until the host joins them. `release(data)` frees
- * the data after both sides retire it. `keep` and compound input values stay rooted
- * through result conversion. False with a pending throw, leaving `data` to the caller.
+ * the data on the owning VM thread after both sides retire it, including a producer
+ * joined during shutdown. `keep` and compound input values stay rooted through
+ * result conversion and release; shutdown disables collection until heap teardown.
+ * False with a pending throw, leaving `data` to the caller.
  */
 bool mal_ffi_async(
     MalVm *vm, void *data, MalFfiAsyncRun run, MalFfiAsyncComplete complete,

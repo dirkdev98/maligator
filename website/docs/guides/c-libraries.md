@@ -386,6 +386,19 @@ The arguments convert before the call starts, and a conversion error rejects the
 
 Use `async` only for functions the library allows on another thread while the program makes other calls, such as SQLite in its default serialized mode.
 
+A handle's destroy function can also have an `async` export. The handle rejects other
+calls and disposal until destruction finishes. A conditional destroy preserves the
+handle when C reports failure, so you can retry. VM teardown joins running destructors
+and reconciles their results even when their promises are discarded; a destroy call
+cancelled before execution leaves the resource open for its normal cleanup policy.
+
+For a constructor that returns a new resource lifetime, set `returns.fresh` to `true`.
+This distinguishes a new allocation from an alias when C reuses the address
+of a resource whose worker destruction has not returned. Without this fact, calls
+that return the same handle family reject before entering C while its worker close
+is pending. Existing aliases keep their shared identity; a fresh resource gets a new
+wrapper and its own callbacks.
+
 ## Find what cannot bind
 
 ```shell

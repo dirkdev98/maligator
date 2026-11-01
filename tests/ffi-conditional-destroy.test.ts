@@ -28,6 +28,27 @@ describe("conditional cleanup facts", () => {
 		types: { BusyResource: { handle } },
 		functions: {},
 	});
+	it("preserves new lifetime facts on pointer results", () => {
+		const plan = planBindings(model, {
+			...facts({}),
+			functions: { release_open: { returns: { fresh: true } } },
+		});
+		expect(
+			plan.functions.find((entry) => entry.name === "release_open")?.returns,
+		).toMatchObject({
+			kind: "handle",
+			pass: "pointer",
+			fresh: true,
+		});
+	});
+	it.each([
+		{ release_value: { returns: { fresh: true } } },
+		{ release_value: { params: { resource: { fresh: true } } } },
+	])("rejects a fresh fact outside pointer results: %j", (functions) => {
+		expect(() => planBindings(model, { ...facts({}), functions })).toThrow(
+			"fresh applies only to pointer handle results",
+		);
+	});
 	it.each(["0", "RELEASE_OK"])(
 		"accepts the explicit successful cleanup code %s",
 		(success) => {

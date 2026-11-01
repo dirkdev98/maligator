@@ -215,6 +215,7 @@ class BindingWriter {
 	readonly #outputs = new Set<string>();
 	readonly #managedFamilies = new Set<string>();
 	readonly #viewFamilies = new Set<string>();
+	readonly #workerCloseFamilies = new Set<string>();
 	#counter = 0;
 
 	constructor(model: CModel, plan: BindingPlan) {
@@ -224,6 +225,30 @@ class BindingWriter {
 			if (handle.managedFields.length > 0) this.#managedFamilies.add(handle.family);
 			if (handle.views.length > 0) this.#viewFamilies.add(handle.family);
 		}
+		for (const binding of plan.functions) {
+			const value =
+				binding.closes === undefined ? undefined : binding.params[binding.closes]?.value;
+			if (binding.async !== undefined && value?.kind === "handle")
+				this.#workerCloseFamilies.add(this.#handle(value.name).family);
+		}
+	}
+
+	#resultGuards(binding: BoundFunction, fail: string): Array<string> {
+		const handles = new Set<string>();
+		const visit = (value: JsValue): void => {
+			if (value.kind === "handle" && value.pass === "pointer" && value.fresh !== true) {
+				if (this.#workerCloseFamilies.has(this.#handle(value.name).family))
+					handles.add(value.name);
+			} else if (value.kind === "sequence" || value.kind === "array") visit(value.of);
+			else if (value.kind === "record")
+				for (const field of this.#record(value.name).fields) visit(field.value);
+		};
+		visit(binding.returns);
+		for (const output of binding.outputs) visit(output.value);
+		return [...handles].map(
+			(name) =>
+				`if (!mal_ffi_handle_results_ready(vm, &mal_ffi_type_${name}, &mal_site_result)) ${fail}`,
+		);
 	}
 
 	#fresh(prefix: string): string {
@@ -423,7 +448,7 @@ class BindingWriter {
 				const created = (address: string) =>
 					lent
 						? `mal_ffi_new_callback_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address})`
-						: `mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.owned})`;
+						: `mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.owned}, ${value.fresh === true})`;
 				return value.pass === "copy"
 					? created(`&(${expression})`)
 					: `(${expression}) == nullptr ? mal_ffi_null() : ${created(`(void *) (${expression})`)}`;
@@ -1566,7 +1591,9 @@ class BindingWriter {
 									]
 								: []),
 							...(binding.closes === entry.param
-								? [`if (!mal_ffi_begin_handle_close(vm, ${pin}, ${site})) goto mal_done;`]
+								? [
+										`if (!mal_ffi_begin_handle_close(vm, ${pin}, false, ${site})) goto mal_done;`,
+									]
 								: []),
 							value.pass === "copy"
 								? `${local} = *(${handle.spelling} *) ${pointer};`
@@ -1717,6 +1744,7 @@ class BindingWriter {
 				? ["\tmal_ffi_inputs_init(&mal_inputs, &mal_result, false);"]
 				: []),
 			...body.map((line) => `\t${line}`),
+			...this.#resultGuards(binding, "goto mal_done;").map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
 			...keeps.map((line) => `\t${line}`),
 			...kept.map((line) => `\t${line}`),
@@ -1761,6 +1789,14 @@ class BindingWriter {
 		const strings: Array<string> = [];
 		const compoundInputs = this.#compoundInputs(binding);
 		const inputs = compoundInputs ? "&mal_ctx->mal_inputs" : "nullptr";
+		const closing =
+			binding.closes === undefined ? undefined : binding.params[binding.closes]!.value;
+		const closeSuccess =
+			closing?.kind === "handle"
+				? this.#handle(closing.name).destroy?.success
+				: undefined;
+		if (binding.closes !== undefined)
+			fields.push("MalValue mal_closing;", "bool mal_close_started;", "bool mal_ran;");
 		if (compoundInputs) fields.push("MalFfiInputs mal_inputs;");
 		const managedHandles = binding.arguments.some((entry) => {
 			if (entry.kind !== "input") return false;
@@ -1768,7 +1804,7 @@ class BindingWriter {
 			return value.kind === "handle" && this.managedFamily(value.name);
 		});
 		if (managedHandles) locals.push("bool mal_validate = false;");
-		if (managedHandles || compoundInputs)
+		if (managedHandles || compoundInputs || this.#resultGuards(binding, "").length > 0)
 			locals.push(
 				`static const MalFfiSite mal_site_result = { ${cString(exported)}, "result", nullptr };`,
 			);
@@ -1974,6 +2010,13 @@ class BindingWriter {
 								? `${target} = *(${handle.spelling} *) ${pointer};`
 								: `${target} = (${localDeclaration(param.type, "")}) ${pointer};`,
 						);
+						if (binding.closes === entry.param) {
+							body.push(`mal_ctx->mal_closing = ${source};`);
+							buffers.push(
+								`if (!mal_ffi_begin_handle_close(vm, mal_ctx->${pin}, true, ${site})) goto mal_failed;`,
+								"mal_ctx->mal_close_started = true;",
+							);
+						}
 						return;
 					}
 					body.push(
@@ -2052,6 +2095,7 @@ class BindingWriter {
 			`\t${context} *mal_ctx = mal_data;`,
 			"\t(void) mal_ctx;",
 			`\t${returns ? "mal_ctx->mal_return = " : ""}${call};`,
+			...(binding.closes === undefined ? [] : ["\tmal_ctx->mal_ran = true;"]),
 			"}",
 			"",
 			`static MalValue mal_ffi_async_complete_${name}(MalVm *vm, void *mal_data, bool mal_ran) {`,
@@ -2066,6 +2110,14 @@ class BindingWriter {
 						"\tmal_ffi_inputs_release(vm, &mal_ctx->mal_inputs, &mal_site_result, mal_ran);",
 					]
 				: []),
+			...(binding.closes === undefined
+				? []
+				: [
+						"\tif (mal_ran && mal_ctx->mal_close_started) {",
+						`\t\tmal_ffi_finish_handle_close(mal_ctx->mal_closing, ${closeSuccess === undefined ? "true" : `mal_ctx->mal_return == (${closeSuccess})`});`,
+						"\t\tmal_ctx->mal_close_started = false;",
+						"\t}",
+					]),
 			"\tif (!mal_ran || mal_ffi_threw(vm)) return mal_result;",
 			...produce.map((line) => `\t${line}`),
 			"\tgoto mal_done;",
@@ -2075,6 +2127,11 @@ class BindingWriter {
 			"",
 			`static void mal_ffi_async_release_${name}(void *mal_data) {`,
 			`\t${context} *mal_ctx = mal_data;`,
+			...(binding.closes === undefined
+				? []
+				: [
+						`\tif (mal_ctx->mal_close_started) mal_ffi_finish_handle_close(mal_ctx->mal_closing, mal_ctx->mal_ran${closeSuccess === undefined ? "" : ` && mal_ctx->mal_return == (${closeSuccess})`});`,
+					]),
 			...strings.map((temporary) => `\tmal_ffi_string_release(&mal_ctx->${temporary});`),
 			...frees.map((line) => `\t${line}`),
 			"\tfree(mal_ctx);",
@@ -2100,6 +2157,7 @@ class BindingWriter {
 				? ["\tmal_ffi_inputs_init(&mal_ctx->mal_inputs, mal_ctx, true);"]
 				: []),
 			...body.map((line) => `\t${line}`),
+			...this.#resultGuards(binding, "goto mal_failed;").map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
 			`\tif (mal_ffi_async(vm, mal_ctx, mal_ffi_async_run_${name}, mal_ffi_async_complete_${name}, mal_ffi_async_release_${name}, mal_keep, ${String(kept)}, ${inputs}, &mal_promise)) {`,
 			...(compoundInputs ? ["\t\tmal_ffi_inputs_unroot(&mal_ctx->mal_inputs);"] : []),
@@ -2110,9 +2168,9 @@ class BindingWriter {
 			...(compoundInputs
 				? ["\tmal_ffi_inputs_release(vm, &mal_ctx->mal_inputs, &mal_site_result, false);"]
 				: []),
-			"\tmal_ffi_unroot(&mal_keep_roots);",
 			...pins.map((line) => `\t${line}`),
 			`\tmal_ffi_async_release_${name}(mal_ctx);`,
+			"\tmal_ffi_unroot(&mal_keep_roots);",
 			"\treturn mal_ffi_rejected(vm);",
 			"}",
 			...strings.map((temporary) => `#undef ${temporary}`),

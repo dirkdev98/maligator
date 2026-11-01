@@ -396,6 +396,7 @@ typedef struct MalFfiHandleObject {
     bool owns_storage;
     /** Cleanup is in progress; callbacks cannot use or close this resource. */
     bool closing;
+    bool worker_closing;
     /** The table that finds this open pointer handle by its pointer, or null. */
     MalFfiState *registry;
     /** C calls using the handle; it cannot close while any are. */
@@ -423,7 +424,13 @@ typedef struct MalFfiKept {
     /** Released while calls still waited in the queue; the last of them completes it. */
     bool released;
     _Atomic u32 waiting;
+    /** Queued messages can outlive both VM detach and C's final release. */
+    _Atomic u32 references;
 } MalFfiKept;
+
+static void ffi_kept_unref(MalFfiKept *kept) {
+    if (atomic_fetch_sub_explicit(&kept->references, 1, memory_order_acq_rel) == 1) free(kept);
+}
 
 /**
  * Collected handles may release callbacks, whose VM roots can change only after
@@ -490,15 +497,19 @@ static void ffi_state_free(MalVm *vm) {
     // Libraries may still hold kept callbacks and release them later: detach instead
     // of freeing, so a late call finds no VM and a late release frees the context.
     pthread_mutex_lock(&ffi_queue_lock);
-    for (MalFfiKept *kept = state->kept; kept != nullptr; kept = kept->next) {
+    for (MalFfiKept *kept = state->kept; kept != nullptr;) {
+        MalFfiKept *next = kept->next;
         kept->callback.vm = nullptr;
+        // A live VM kept this released context rooted until its queued calls retired.
+        if (kept->released) ffi_kept_unref(kept);
+        kept = next;
     }
     pthread_mutex_unlock(&ffi_queue_lock);
     // Contexts the library already released only wait for this VM; nothing holds them.
     MalFfiKept *pending = atomic_exchange(&state->pending_releases, nullptr);
     while (pending != nullptr) {
         MalFfiKept *next = pending->pending;
-        free(pending);
+        ffi_kept_unref(pending);
         pending = next;
     }
     free(state->free_slots);
@@ -900,6 +911,7 @@ MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function) {
         return nullptr;
     }
     kept->callback = (MalFfiCallback) {vm, held[0]};
+    atomic_init(&kept->references, 1);
     kept->slot = slot;
     kept->thread = pthread_self();
     kept->next = state->kept;
@@ -945,7 +957,7 @@ static void ffi_release_now(MalFfiKept *kept) {
         else state->kept = kept->next;
         if (kept->next != nullptr) kept->next->previous = kept->previous;
     }
-    free(kept);
+    ffi_kept_unref(kept);
 }
 
 static void ffi_run_pending_releases(MalVm *vm) {
@@ -966,11 +978,13 @@ static bool ffi_inbox_post_release(MalFfiKept *kept);
 void mal_ffi_release(void *data) {
     if (data == nullptr) return;
     MalFfiKept *kept = data;
+    pthread_mutex_lock(&ffi_queue_lock);
     MalVm *vm = kept->callback.vm;
     // A queued callback's release goes through its inbox, which wakes the event loop
     // that waits for it.
     if (vm != nullptr && kept->queued && (ffi_finalizing || !pthread_equal(kept->thread, pthread_self()))
         && ffi_inbox_post_release(kept)) {
+        pthread_mutex_unlock(&ffi_queue_lock);
         return;
     }
     // Inside a collection or on another thread the VM cannot be touched; queue the
@@ -981,8 +995,10 @@ void mal_ffi_release(void *data) {
         do {
             kept->pending = head;
         } while (!atomic_compare_exchange_weak(&state->pending_releases, &head, kept));
+        pthread_mutex_unlock(&ffi_queue_lock);
         return;
     }
+    pthread_mutex_unlock(&ffi_queue_lock);
     ffi_release_now(kept);
 }
 
@@ -1097,14 +1113,14 @@ static bool ffi_async_drain(MalVm *vm) {
         vm, roots[0], vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], rejected, roots[1]);
     mal_async_context_scope_exit(vm, &scope);
     mal_gc_unroot(&root);
-    mal_gc_unroot(&kept);
 #if MAL_REALMS
     mal_realm_switch(vm, saved_realm);
 #endif
-    free(call->keep);
     ffi_async_release(call->payload);
-    free(call);
     mal_host_task_release(&host->tasks, &task);
+    mal_gc_unroot(&kept);
+    free(call->keep);
+    free(call);
     return true;
 }
 
@@ -1276,16 +1292,17 @@ MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key) {
     MalFfiReplacedEntry *entry = ffi_replaced_find(site, key);
     MalFfiKept *kept = entry == nullptr ? nullptr : entry->kept;
     // Checked under the lock: the owning thread may release the context right after.
-    bool foreign = kept != nullptr && kept->callback.vm != nullptr
-        && !pthread_equal(kept->thread, pthread_self());
+    bool foreign = kept != nullptr && !pthread_equal(kept->thread, pthread_self());
+    bool live = kept != nullptr && kept->callback.vm != nullptr;
     // A queued callback's call from another thread reserves its place in the queue
     // here, before the lock lets the VM thread replace and release the context.
     if (foreign && kept->queued) {
+        atomic_fetch_add_explicit(&kept->references, 1, memory_order_relaxed);
         atomic_fetch_add(&kept->waiting, 1);
         foreign = false;
     }
     pthread_mutex_unlock(&ffi_replaced_lock);
-    if (foreign) ffi_wrong_thread();
+    if (foreign && live) ffi_wrong_thread();
     return kept == nullptr ? nullptr : &kept->callback;
 }
 
@@ -1311,7 +1328,6 @@ static void ffi_replaced_drop(void *key) {
     }
 }
 
-/** A queued call of a kept callback, posted from another thread. */
 /** A queued call of a kept callback from another thread, or with no `run`, its release. */
 typedef struct MalFfiQueuedCall {
     MalFfiKept *kept;
@@ -1326,20 +1342,24 @@ static MAL_ISOLATE_LOCAL bool ffi_inbox_installed;
 static void ffi_queued_destroy(void *data) {
     MalFfiQueuedCall *call = data;
     // A call the host drops without running gives back its place in the queue.
-    if (call->run != nullptr && !call->ran) atomic_fetch_sub(&call->kept->waiting, 1);
+    if (call->run != nullptr) {
+        if (!call->ran) atomic_fetch_sub(&call->kept->waiting, 1);
+        ffi_kept_unref(call->kept);
+    } else if (!call->ran) {
+        ffi_kept_unref(call->kept);
+    }
     if (call->message != nullptr) call->free(call->message);
     free(call);
 }
 
+/** Caller holds the queue lock so VM detach cannot retire the inbox during posting. */
 static bool ffi_inbox_post_release(MalFfiKept *kept) {
     MalFfiQueuedCall *call = malloc(sizeof(*call));
     if (call == nullptr) return false;
     *call = (MalFfiQueuedCall) {kept, nullptr, nullptr, nullptr, false};
-    pthread_mutex_lock(&ffi_queue_lock);
     MalVm *vm = kept->callback.vm;
     bool posted = vm != nullptr
         && mal_host_post_progress(mal_host(vm), vm->ffi->inbox, call, ffi_queued_destroy);
-    pthread_mutex_unlock(&ffi_queue_lock);
     if (!posted) free(call);
     return posted;
 }
@@ -1370,6 +1390,7 @@ static bool ffi_inbox_drain(MalVm *vm) {
     MalFfiQueuedCall *call = task.data;
     MalFfiKept *kept = call->kept;
     if (call->run == nullptr) {
+        call->ran = true;
         mal_host_task_release(&host->tasks, &task);
         ffi_release_now(kept);
         return true;
@@ -1418,12 +1439,14 @@ MalFfiCallback *mal_ffi_keep_queued(MalVm *vm, MalValue function) {
 
 bool mal_ffi_callback_here(MalFfiCallback *callback) {
     MalFfiKept *kept = (MalFfiKept *) callback;
-    return kept->callback.vm == nullptr || pthread_equal(kept->thread, pthread_self());
+    return pthread_equal(kept->thread, pthread_self())
+        || (!kept->queued && kept->callback.vm == nullptr);
 }
 
 void mal_ffi_callback_reserve(MalFfiCallback *callback) {
     MalFfiKept *kept = (MalFfiKept *) callback;
     if (!kept->queued) ffi_wrong_thread();
+    atomic_fetch_add_explicit(&kept->references, 1, memory_order_relaxed);
     atomic_fetch_add(&kept->waiting, 1);
 }
 
@@ -1444,6 +1467,7 @@ bool mal_ffi_callback_queue(
     if (message != nullptr) release(message);
     // A release that waited for this call stays pending: only the VM thread may free it.
     atomic_fetch_sub(&kept->waiting, 1);
+    ffi_kept_unref(kept);
     return false;
 }
 
@@ -1655,9 +1679,14 @@ static __attribute__((noinline)) bool ffi_handle_supports(MalFfiHandleObject *ha
 /** `scope` 0 makes a handle the program holds; otherwise it lives as long as that invocation. */
 static MalValue ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
-    bool owned, u64 scope, bool owns_storage) {
+    bool owned, u64 scope, bool owns_storage, bool fresh) {
     MalFfiState *state = type->size == 0 ? ffi_state(vm) : nullptr;
     MalFfiHandleObject *open = state == nullptr ? nullptr : ffi_handle_find(state, ffi_handle_family(type), value);
+    if (fresh && open != nullptr && open->closing) {
+        ffi_replaced_drop(open->value);
+        ffi_handle_forget(open);
+        open = nullptr;
+    }
     if (open != nullptr && !ffi_scope_active(vm, open->scope)) {
         // C may reuse a callback's stack address for a different resource or type.
         ffi_handle_forget(open);
@@ -1713,6 +1742,7 @@ static MalValue ffi_new_handle(
     handle->owned = owned;
     handle->owns_storage = owns_storage;
     handle->closing = false;
+    handle->worker_closing = false;
     handle->registry = nullptr;
     handle->pins = 0;
     handle->scope = scope;
@@ -1739,8 +1769,8 @@ static MalValue ffi_new_handle(
 
 MalValue mal_ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
-    bool owned) {
-    return ffi_new_handle(vm, library, type, value, owned, 0, false);
+    bool owned, bool fresh) {
+    return ffi_new_handle(vm, library, type, value, owned, 0, false, fresh);
 }
 
 MalValue mal_ffi_allocate_handle(
@@ -1752,7 +1782,7 @@ MalValue mal_ffi_allocate_handle(
         return mal_value_new_undefined();
     }
     memset(storage, 0, size);
-    return ffi_new_handle(vm, library, type, storage, false, 0, true);
+    return ffi_new_handle(vm, library, type, storage, false, 0, true, false);
 }
 
 MalValue mal_ffi_new_callback_handle(
@@ -1761,7 +1791,7 @@ MalValue mal_ffi_new_callback_handle(
     u64 scope = state == nullptr || state->invocation_depth == 0
         ? 0
         : state->invocations[state->invocation_depth - 1];
-    return ffi_new_handle(vm, library, type, value, false, scope, false);
+    return ffi_new_handle(vm, library, type, value, false, scope, false, false);
 }
 
 // ThinLTO must specialize the descriptor and optional pin at each binding site.
@@ -1969,7 +1999,20 @@ void mal_ffi_inputs_release(MalVm *vm, MalFfiInputs *inputs, const MalFfiSite *s
     inputs->capacity = 0;
 }
 
-bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, const MalFfiSite *site) {
+bool mal_ffi_handle_results_ready(MalVm *vm, const MalFfiHandleType *type, const MalFfiSite *site) {
+    MalFfiState *state = vm->ffi;
+    if (state == nullptr) return true;
+    for (usize index = 0; index < state->handle_capacity; index++) {
+        MalFfiHandleObject *handle = state->handles[index].handle;
+        if (handle != nullptr && handle->worker_closing
+            && ffi_handle_family(handle->type) == ffi_handle_family(type))
+            return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
+                "a settled worker close before returning this handle type, or a fresh result fact");
+    }
+    return true;
+}
+
+bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, bool worker, const MalFfiSite *site) {
     if (pin == nullptr) return true;
     MalFfiHandleObject *handle = pin;
     if (handle->owns_storage && handle->type->size == 0)
@@ -1979,6 +2022,7 @@ bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, const MalFfiSite *site) {
         return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
             "a handle no other C call is using");
     handle->closing = true;
+    handle->worker_closing = worker;
     return true;
 }
 
@@ -1986,6 +2030,7 @@ void mal_ffi_finish_handle_close(MalValue value, bool released) {
     MalFfiHandleObject *handle = ffi_handle(value);
     if (handle == nullptr) return;
     handle->closing = false;
+    handle->worker_closing = false;
     if (released) {
         ffi_replaced_drop(handle->value);
         ffi_handle_forget(handle);

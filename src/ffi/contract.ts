@@ -246,6 +246,7 @@ function validateValueFacts(value: unknown, at: string): void {
 	expectKeys(value, at, [
 		"nullable",
 		"borrowed",
+		"fresh",
 		"out",
 		"inout",
 		"string",
@@ -256,7 +257,7 @@ function validateValueFacts(value: unknown, at: string): void {
 		"constant",
 		"sizeof",
 	]);
-	for (const key of ["nullable", "borrowed", "out", "inout"]) {
+	for (const key of ["nullable", "borrowed", "fresh", "out", "inout"]) {
 		booleanField(value, key, at);
 	}
 	if (value.string !== undefined && typeof value.string !== "boolean")
