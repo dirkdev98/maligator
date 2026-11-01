@@ -15,7 +15,52 @@ const counted = {
 export default {
 	headers: ["results.h"],
 	find: [{ includeDirs: ["."], sources: ["results.c"] }],
+	types: {
+		ResultResource: { handle: { destroy: "result_resource_free", collect: true } },
+		ResultState: {
+			handle: { storage: "caller" },
+			fields: {
+				bytes: { bytes: { length: "length" } },
+				text: { string: { length: "text_length" } },
+			},
+		},
+	},
 	functions: {
+		result_handles_shutdown: {
+			async: "result_handles_shutdown_async",
+			params: {
+				resource: { callback: { data: "resource_data", returns: { lifetime: "call" } } },
+				state: { callback: { data: "state_data", returns: { lifetime: "call" } } },
+			},
+		},
+		result_handle: {
+			async: "result_handle_async",
+			params: {
+				callback: {
+					callback: { data: "data", returns: { lifetime: "call", nullable: true } },
+				},
+			},
+			returns: { borrowed: true },
+		},
+		result_state: {
+			async: "result_state_async",
+			params: {
+				callback: {
+					callback: { data: "data", returns: { lifetime: "call", nullable: true } },
+				},
+			},
+			returns: { borrowed: true },
+		},
+		result_lend_handle: {
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						returns: { lifetime: "call" },
+					},
+				},
+			},
+		},
 		result_retain: {
 			async: "result_retain_async",
 			params: {

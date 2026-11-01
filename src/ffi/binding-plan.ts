@@ -1087,10 +1087,18 @@ class Planner {
 		if (returned.kind !== "void") {
 			const mapped = this.value(target.returns, "param", resultFacts);
 			if ("gap" in mapped) return { gap: `callback result: ${mapped.gap}` };
-			if (mapped.value.kind === "handle")
-				return { gap: "a callback handle result needs a native resource lease" };
+			if (mapped.value.kind === "handle") {
+				if (mapped.value.pass !== "pointer")
+					return { gap: "a callback handle result needs a pointer representation" };
+				if (resultFacts?.lifetime === "registration")
+					return {
+						gap: "a registered callback handle result needs a registration resource lease",
+					};
+			}
 			if (
-				(mapped.value.kind === "string" || mapped.value.kind === "bytes") &&
+				(mapped.value.kind === "string" ||
+					mapped.value.kind === "bytes" ||
+					mapped.value.kind === "handle") &&
 				resultFacts === undefined
 			) {
 				return { gap: "a callback that returns a pointer needs a lifetime fact" };
@@ -1098,7 +1106,8 @@ class Planner {
 			if (
 				resultFacts !== undefined &&
 				mapped.value.kind !== "string" &&
-				mapped.value.kind !== "bytes"
+				mapped.value.kind !== "bytes" &&
+				mapped.value.kind !== "handle"
 			)
 				throw new FfiError(`${at}.callback.returns: lifetime applies to pointer results`);
 			returns = mapped.value;

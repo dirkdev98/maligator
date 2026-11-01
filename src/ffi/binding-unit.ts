@@ -1092,7 +1092,14 @@ class BindingWriter {
 		const resultLocals: Array<string> = [];
 		const resultConversion: Array<string> = [];
 		const resultCleanup: Array<string> = [];
-		if (value.returnLifetime !== undefined) {
+		if (value.returnLifetime !== undefined && value.returns.kind === "handle") {
+			const result = value.returns;
+			resultLocals.push("void *mal_result_handle = nullptr;");
+			resultConversion.push(
+				`if (!mal_ffi_callback_result_handle(vm, mal_callback, mal_result, &mal_ffi_type_${result.name}, ${result.nullable}, &mal_site, &mal_result_handle)) goto mal_done;`,
+				`mal_return = (${localDeclaration(type.returns, "")}) mal_result_handle;`,
+			);
+		} else if (value.returnLifetime !== undefined) {
 			const result = value.returns;
 			if (result.kind !== "string" && result.kind !== "bytes")
 				throw new Error("pointer result without a byte representation");

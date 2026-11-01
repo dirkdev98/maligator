@@ -52,6 +52,19 @@ describe("callback pointer result contracts", () => {
 		);
 		expect(loaded).toBeDefined();
 	});
+	it("declares call-scoped native resource results", () => {
+		const plan = planBindings(model, {
+			types: resultContract.types,
+			functions: resultContract.functions,
+		});
+		const declarations = generateDeclarations([{ name: "results", plan }]);
+		expect(declarations).toContain(
+			"export function result_handle(callback: (arg1: number) => ResultResource | null): ResultResource | null;",
+		);
+		expect(declarations).toContain(
+			"export function result_handle_async(callback: (arg1: number) => ResultResource | null): Promise<ResultResource | null>;",
+		);
+	});
 	it("requires an explicit pointer-result lifetime", () => {
 		const plan = planBindings(model, {
 			types: {},

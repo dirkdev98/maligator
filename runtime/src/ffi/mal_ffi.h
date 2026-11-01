@@ -396,6 +396,10 @@ void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue functio
 void *mal_ffi_callback_result_copy(
     MalVm *vm, MalFfiCallback *callback, const void *source, size_t length, bool terminated,
     bool registration);
+/** Lease a program-held resource and its backing stores through the enclosing call. */
+bool mal_ffi_callback_result_handle(
+    MalVm *vm, MalFfiCallback *callback, MalValue value, const MalFfiHandleType *type,
+    bool nullable, const MalFfiSite *site, void **out);
 /** Retire call-scoped copies after output conversion, or a retained context's final native reference. */
 void mal_ffi_callback_results_free(MalFfiCallback *callback);
 

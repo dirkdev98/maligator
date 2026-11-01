@@ -2,6 +2,21 @@
 #define FFI_CALLBACK_RESULTS_H
 #include <stddef.h>
 typedef struct ResultResource ResultResource;
+typedef struct ResultState {
+    const unsigned char *bytes;
+    size_t length;
+    const char *text;
+    size_t text_length;
+} ResultState;
+ResultResource *result_resource_new(int value);
+void result_resource_free(ResultResource *resource);
+int result_resource_value(ResultResource *resource);
+int result_resource_freed(void);
+ResultResource *result_handle(ResultResource *(*callback)(int, void *), void *data);
+ResultState *result_state(ResultState *(*callback)(int, void *), void *data);
+void result_lend_handle(ResultResource *(*callback)(ResultResource *, void *), void *data);
+void result_handles_shutdown(ResultResource *(*resource)(void *), void *resource_data,
+    ResultState *(*state)(void *), void *state_data);
 void result_close(ResultResource *resource, const char *(*callback)(void *), void *data);
 const char *result_text(const char *(*callback)(int, void *), void *data);
 const char *result_required(const char *(*callback)(int, void *), void *data);

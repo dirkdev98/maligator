@@ -181,7 +181,7 @@ export interface MaligatorFfiValueFacts {
  * calls and rethrows when the C function the library runs in returns.
  */
 export interface MaligatorFfiCallback {
-	/** Native copies remain valid for the enclosing call or retained registration. */
+	/** Native copies or resource leases remain valid for the declared lifetime. */
 	returns?: MaligatorFfiCallbackResult;
 	/**
 	 * The `void *` parameter the library passes back to the callback, by C name or
@@ -231,7 +231,7 @@ export interface MaligatorFfiCallback {
 	params?: Record<string, MaligatorFfiValueFacts>;
 }
 
-/** The byte representation and lifetime C requires from a callback result. */
+/** The representation and lifetime C requires from a callback pointer result. */
 export type MaligatorFfiCallbackResult = Pick<
 	MaligatorFfiValueFacts,
 	"string" | "bytes" | "nullable"

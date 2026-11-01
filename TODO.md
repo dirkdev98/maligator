@@ -1909,7 +1909,7 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
 - [ ] Support C libraries in `maligator test --watch`, which needs an in-process
       application host that links the project's bindings.
-- [ ] Lease native handles returned by callbacks until C stops using them.
+- [ ] Lease native handles returned by registered callbacks until C stops using them.
 - [ ] Map value unions, bit-fields, and anonymous record members with explicit shape
       facts where C does not identify the active value.
 - [ ] Extend struct storage reuse to conditional loop updates and recurrences that

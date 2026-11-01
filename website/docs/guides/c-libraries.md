@@ -430,6 +430,16 @@ VM shutdown return null without running JavaScript.
 One-shot `closes` completions cannot return pointers because their registration ends
 as the completion runs.
 
+A call-scoped callback can return a pointer handle with `lifetime: "call"`. C borrows
+the resource; ownership stays with the canonical handle. The handle must belong to the
+program rather than being a callback loan. Disposal and destruction throw while C holds
+a result lease. Managed state also rejects field access and other C operations until
+the call finishes converting its outputs. Repeated results and compatible views share
+the same owner. Collection keeps the wrapper alive while the VM runs; native leases
+preserve storage and retained backing stores during teardown and follow the handle's
+existing `collect` policy when they retire. `collect: false` still requires explicit
+resource cleanup. A handle result requires a call-scoped callback.
+
 Stop or join callback producers through an async twin so the program's thread remains
 available to run their callbacks. A handle whose destructor joins such a producer also
 needs `collect: false` and asynchronous destruction.

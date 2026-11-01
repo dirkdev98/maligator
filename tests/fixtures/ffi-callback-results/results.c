@@ -8,6 +8,43 @@
 #include <string.h>
 #include <time.h>
 #include <sched.h>
+extern size_t mal_gc_process_bytes(void);
+
+struct ResultResource { int value; };
+static _Atomic int resources_freed;
+ResultResource *result_resource_new(int value) {
+    ResultResource *resource = malloc(sizeof(*resource));
+    if (resource == NULL) abort();
+    resource->value = value;
+    return resource;
+}
+void result_resource_free(ResultResource *resource) {
+    atomic_fetch_add(&resources_freed, 1);
+    free(resource);
+}
+int result_resource_value(ResultResource *resource) { return resource->value; }
+int result_resource_freed(void) { return atomic_load(&resources_freed); }
+ResultResource *result_handle(ResultResource *(*callback)(int, void *), void *data) {
+    ResultResource *first = callback(0, data);
+    if (first == NULL) return NULL;
+    ResultResource *second = callback(1, data);
+    if (second == NULL) return NULL;
+    assert(first->value == 77 && second->value == 88);
+    return first;
+}
+ResultState *result_state(ResultState *(*callback)(int, void *), void *data) {
+    ResultState *first = callback(0, data);
+    if (first == NULL) return NULL;
+    ResultState *second = callback(1, data);
+    if (second == NULL) return NULL;
+    assert(first->length == 3 && first->bytes[0] == 5 && first->bytes[1] == 0 && first->bytes[2] == 7);
+    assert(first->text_length == 5 && memcmp(first->text, "Gr\xc3\xbc\0", 5) == 0);
+    return first;
+}
+void result_lend_handle(ResultResource *(*callback)(ResultResource *, void *), void *data) {
+    ResultResource resource = {.value = 77};
+    assert(callback(&resource, data) == NULL);
+}
 
 const char *result_text(const char *(*callback)(int, void *), void *data) {
     const char *first = callback(0, data);
@@ -80,6 +117,25 @@ static void *release_later(void *unused) {
     return NULL;
 }
 static void verify_shutdown(void) { assert(shutdown_checked); }
+static void verify_handle_shutdown(void) {
+    assert(shutdown_checked && atomic_load(&resources_freed) == 1);
+    assert(mal_gc_process_bytes() == 0);
+}
+void result_handles_shutdown(ResultResource *(*resource)(void *), void *resource_data,
+    ResultState *(*state)(void *), void *state_data) {
+    ResultResource *kept_resource = resource(resource_data);
+    ResultState *kept_state = state(state_data);
+    assert(kept_resource != NULL && kept_state != NULL);
+    if (atexit(verify_handle_shutdown) != 0) abort();
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, release_later, NULL) != 0) abort();
+    while (!atomic_load(&released)) sched_yield();
+    assert(atomic_load(&resources_freed) == 0 && kept_resource->value == 77);
+    assert(kept_state->length == 3 && kept_state->bytes[0] == 5 && kept_state->bytes[2] == 7);
+    assert(kept_state->text_length == 5 && memcmp(kept_state->text, "Gr\xc3\xbc\0", 5) == 0);
+    shutdown_checked = true;
+    if (pthread_join(thread, NULL) != 0) abort();
+}
 void result_shutdown(const char *(*callback)(int, void *), void *data) {
     const char *text = callback(0, data);
     assert(text != NULL);
@@ -181,7 +237,6 @@ void result_retained_bytes_clear(void) {
     retained_lengths[0] = retained_lengths[1] = 0;
     if (release != NULL) release(data);
 }
-extern size_t mal_gc_process_bytes(void);
 static void retained_after_vm(void) {
     assert(result_retained_matches("late-first", "late-second"));
     assert(result_retained_bytes_sum(0) == 12 && result_retained_bytes_sum(1) == 9);
