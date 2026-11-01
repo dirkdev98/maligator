@@ -214,13 +214,16 @@ class BindingWriter {
 	readonly #inputs = new Set<string>();
 	readonly #outputs = new Set<string>();
 	readonly #managedFamilies = new Set<string>();
+	readonly #viewFamilies = new Set<string>();
 	#counter = 0;
 
 	constructor(model: CModel, plan: BindingPlan) {
 		this.#model = model;
 		this.#plan = plan;
-		for (const handle of plan.handles.values())
+		for (const handle of plan.handles.values()) {
 			if (handle.managedFields.length > 0) this.#managedFamilies.add(handle.family);
+			if (handle.views.length > 0) this.#viewFamilies.add(handle.family);
+		}
 	}
 
 	#fresh(prefix: string): string {
@@ -898,7 +901,7 @@ class BindingWriter {
 				`\t${handle.collect},`,
 				`\t${fields},`,
 				`\t${String(fieldCount)},`,
-				`\t&mal_ffi_type_${handle.family},`,
+				`\t${this.#viewFamilies.has(handle.family) ? `&mal_ffi_type_${handle.family}` : "nullptr"},`,
 				`\t${handle.views.length === 0 ? "nullptr" : `mal_ffi_views_${name}`},`,
 				`\t${String(handle.views.length)},`,
 				`\t${handle.managedFields.length === 0 ? "nullptr" : `mal_ffi_managed_fields_${name}`},`,

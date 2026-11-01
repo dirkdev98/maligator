@@ -520,6 +520,10 @@ static MalFfiState *ffi_state(MalVm *vm) {
     return state;
 }
 
+static const MalFfiHandleType *ffi_handle_family(const MalFfiHandleType *type) {
+    return type->family == nullptr ? type : type->family;
+}
+
 static usize ffi_handle_slot(const MalFfiHandleType *type, const void *pointer, usize capacity) {
     u64 key = (u64) (uptr) pointer ^ ((u64) (uptr) type * UINT64_C(0x9E3779B97F4A7C15));
     key ^= key >> 29;
@@ -560,7 +564,7 @@ static bool ffi_handle_register(MalFfiState *state, MalFfiHandleObject *handle) 
         }
         free(previous);
     }
-    ffi_handle_place(state, (MalFfiHandleEntry) {handle->type->family, handle->value, handle});
+    ffi_handle_place(state, (MalFfiHandleEntry) {ffi_handle_family(handle->type), handle->value, handle});
     state->handle_count++;
     handle->registry = state;
     return true;
@@ -572,7 +576,7 @@ static void ffi_handle_unregister(MalFfiHandleObject *handle) {
     if (state == nullptr) return;
     handle->registry = nullptr;
     usize mask = state->handle_capacity - 1;
-    usize slot = ffi_handle_slot(handle->type->family, handle->value, state->handle_capacity);
+    usize slot = ffi_handle_slot(ffi_handle_family(handle->type), handle->value, state->handle_capacity);
     while (state->handles[slot].handle != handle) slot = (slot + 1) & mask;
     state->handles[slot] = (MalFfiHandleEntry) {0};
     state->handle_count--;
@@ -1640,7 +1644,7 @@ static bool ffi_type_supports(const MalFfiHandleType *actual, const MalFfiHandle
     return false;
 }
 
-static bool ffi_handle_supports(MalFfiHandleObject *handle, const MalFfiHandleType *type) {
+static __attribute__((noinline)) bool ffi_handle_supports(MalFfiHandleObject *handle, const MalFfiHandleType *type) {
     if (ffi_type_supports(handle->type, type)) return true;
     for (MalFfiHandleView *view = handle->views; view != nullptr; view = view->next) {
         if (ffi_type_supports(view->type, type)) return true;
@@ -1653,7 +1657,7 @@ static MalValue ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned, u64 scope, bool owns_storage) {
     MalFfiState *state = type->size == 0 ? ffi_state(vm) : nullptr;
-    MalFfiHandleObject *open = state == nullptr ? nullptr : ffi_handle_find(state, type->family, value);
+    MalFfiHandleObject *open = state == nullptr ? nullptr : ffi_handle_find(state, ffi_handle_family(type), value);
     if (open != nullptr && !ffi_scope_active(vm, open->scope)) {
         // C may reuse a callback's stack address for a different resource or type.
         ffi_handle_forget(open);
@@ -1664,7 +1668,7 @@ static MalValue ffi_new_handle(
             open->owned = true;
             open->owner_type = type;
         }
-        if (!ffi_handle_supports(open, type)) {
+        if (open->type != type && !ffi_handle_supports(open, type)) {
             MalFfiHandleView *view = malloc(sizeof(*view));
             if (view == nullptr) {
                 mal_vm_throw_allocation_error(vm);
@@ -1760,7 +1764,8 @@ MalValue mal_ffi_new_callback_handle(
     return ffi_new_handle(vm, library, type, value, false, scope, false);
 }
 
-bool mal_ffi_to_handle(
+// ThinLTO must specialize the descriptor and optional pin at each binding site.
+__attribute__((always_inline)) bool mal_ffi_to_handle(
     MalVm *vm, MalValue value, const MalFfiHandleType *type, bool nullable,
     const MalFfiSite *site, void **out, void **pin) {
     if (pin != nullptr) *pin = nullptr;
@@ -1769,7 +1774,8 @@ bool mal_ffi_to_handle(
         return true;
     }
     MalFfiHandleObject *handle = ffi_handle(value);
-    bool typed = handle != nullptr && ffi_handle_supports(handle, type);
+    bool typed = handle != nullptr && (handle->type == type
+        || (type->family != nullptr && ffi_handle_supports(handle, type)));
     if (typed && handle->value != nullptr && !handle->closing && ffi_scope_active(vm, handle->scope)) {
         *out = handle->value;
         if (pin != nullptr) {

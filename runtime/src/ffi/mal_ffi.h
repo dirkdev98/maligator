@@ -91,7 +91,10 @@ typedef struct MalFfiHandleType {
     bool collect;
     const MalFfiField *fields;
     int32_t field_count;
-    /** Shared registry key; compatibility remains directed through views. */
+    /**
+     * Shared registry key; compatibility remains directed through views. Null for
+     * a singleton type, so bindings can eliminate compatible-view lookup.
+     */
     const struct MalFfiHandleType *family;
     const struct MalFfiHandleType *const *views;
     int32_t view_count;
