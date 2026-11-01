@@ -39,6 +39,15 @@ runs:
         echo "CC=clang-21" >> "$GITHUB_ENV"
         echo "CXX=clang++-21" >> "$GITHUB_ENV"
 
+    - name: Set up FFI integration libraries
+      shell: bash
+      run: |
+        if ! command -v pkg-config >/dev/null || ! pkg-config --exists libuv; then
+          sudo apt-get update
+          sudo apt-get install --yes pkg-config libuv1-dev
+        fi
+        pkg-config --modversion libuv
+
     - name: Select the pinned Rust toolchain
       shell: bash
       run: |
