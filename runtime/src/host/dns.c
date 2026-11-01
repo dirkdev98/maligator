@@ -471,7 +471,7 @@ MalDnsStartResult mal_dns_start(
     state->requests = request;
     state->queued++;
     if (!mal_executor_submit(&state->executor, mal_dns_worker,
-            mal_dns_discard, request, sizeof(*request) + strlen(hostname) + 1 + (service == nullptr ? 0 : strlen(service) + 1), 0)) {
+            mal_dns_discard, request, sizeof(*request) + strlen(hostname) + 1 + (service == nullptr ? 0 : strlen(service) + 1), 0, false)) {
         (void) mal_dns_remove_queued(state, request);
         (void) mal_reactor_release_work(&host->reactor);
         (void) mal_host_operation_abort_start(&host->tasks, *operation);

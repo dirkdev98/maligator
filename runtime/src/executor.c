@@ -18,6 +18,7 @@ typedef struct MalExecutorJob {
     void *data;
     usize queued_bytes;
     usize working_bytes;
+    bool must_run;
 } MalExecutorJob;
 
 typedef struct MalExecutorPool MalExecutorPool;
@@ -66,7 +67,8 @@ static void mal_executor_ready_remove(MalExecutorPool *pool, MalExecutorClientSt
 }
 
 static void mal_executor_ready_add(MalExecutorPool *pool, MalExecutorClientState *client) {
-    if (client->ready || client->head == nullptr || !client->accepting) return;
+    if (client->ready || client->head == nullptr
+        || (!client->accepting && !client->head->must_run)) return;
     client->ready = true;
     client->ready_next = nullptr;
     if (pool->ready_tail == nullptr) pool->ready_head = client;
@@ -175,7 +177,7 @@ bool mal_executor_client_init(MalExecutorClient *client, MalExecutorClass kind,
 }
 
 bool mal_executor_submit(MalExecutorClient *client, MalExecutorRun run,
-        MalExecutorDiscard discard, void *data, usize queued_bytes, usize working_bytes) {
+        MalExecutorDiscard discard, void *data, usize queued_bytes, usize working_bytes, bool must_run) {
     if (client == nullptr || client->state == nullptr || run == nullptr || discard == nullptr ||
             working_bytes > MAL_EXECUTOR_WORKING_BYTES) return false;
     MalExecutorJob *job = malloc(sizeof(*job));
@@ -183,6 +185,7 @@ bool mal_executor_submit(MalExecutorClient *client, MalExecutorRun run,
     *job = (MalExecutorJob) {
         .run = run, .discard = discard, .data = data,
         .queued_bytes = queued_bytes, .working_bytes = working_bytes,
+        .must_run = must_run,
     };
     MalExecutorClientState *state = client->state;
     MalExecutorPool *pool = state->pool;
@@ -222,6 +225,7 @@ bool mal_executor_cancel(MalExecutorClient *client, void *data) {
         pool->queued_bytes -= job->queued_bytes;
         if (state->head == nullptr) mal_executor_ready_remove(pool, state);
         free(job);
+        pthread_cond_broadcast(&pool->changed);
         pthread_mutex_unlock(&pool->mutex);
         return true;
     }
@@ -236,13 +240,28 @@ void mal_executor_client_shutdown(MalExecutorClient *client) {
     pthread_mutex_lock(&pool->mutex);
     state->accepting = false;
     mal_executor_ready_remove(pool, state);
-    MalExecutorJob *queued = state->head;
+    MalExecutorJob *pending = state->head;
+    MalExecutorJob *queued = nullptr;
+    MalExecutorJob **discarded_tail = &queued;
     state->head = state->tail = nullptr;
     state->queued = 0;
-    for (MalExecutorJob *job = queued; job != nullptr; job = job->next) {
-        pool->queued--;
-        pool->queued_bytes -= job->queued_bytes;
+    while (pending != nullptr) {
+        MalExecutorJob *job = pending;
+        pending = pending->next;
+        job->next = nullptr;
+        if (job->must_run) {
+            if (state->tail == nullptr) state->head = job;
+            else state->tail->next = job;
+            state->tail = job;
+            state->queued++;
+        } else {
+            *discarded_tail = job;
+            discarded_tail = &job->next;
+            pool->queued--;
+            pool->queued_bytes -= job->queued_bytes;
+        }
     }
+    mal_executor_ready_add(pool, state);
     pthread_cond_broadcast(&pool->changed);
     pthread_mutex_unlock(&pool->mutex);
     while (queued != nullptr) {
@@ -252,7 +271,8 @@ void mal_executor_client_shutdown(MalExecutorClient *client) {
         queued = next;
     }
     pthread_mutex_lock(&pool->mutex);
-    while (state->running != 0) pthread_cond_wait(&pool->changed, &pool->mutex);
+    while (state->running != 0 || state->queued != 0)
+        pthread_cond_wait(&pool->changed, &pool->mutex);
     pthread_mutex_unlock(&pool->mutex);
 }
 
@@ -303,9 +323,10 @@ bool mal_executor_client_init(MalExecutorClient *client, MalExecutorClass kind,
     return false;
 }
 bool mal_executor_submit(MalExecutorClient *client, MalExecutorRun run,
-    MalExecutorDiscard discard, void *data, usize queued_bytes, usize working_bytes) {
+    MalExecutorDiscard discard, void *data, usize queued_bytes, usize working_bytes, bool must_run) {
     (void) client; (void) run; (void) discard; (void) data;
     (void) queued_bytes; (void) working_bytes;
+    (void) must_run;
     return false;
 }
 bool mal_executor_cancel(MalExecutorClient *client, void *data) {

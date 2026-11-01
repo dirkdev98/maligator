@@ -487,9 +487,18 @@ typedef struct MalFfiHandleEntry {
     MalFfiHandleObject *handle;
 } MalFfiHandleEntry;
 
+enum {
+    MAL_FFI_ASYNC_QUEUED,
+    MAL_FFI_ASYNC_RUNNING,
+    MAL_FFI_ASYNC_FINISHED,
+    MAL_FFI_ASYNC_CANCELLED,
+};
+
 typedef struct MalFfiAsyncPayload {
     struct MalFfiAsyncPayload *next;
     _Atomic u32 references;
+    _Atomic int phase;
+    bool must_run;
     void *data;
     MalFfiAsyncRun run;
     MalFfiAsyncRelease release;
@@ -498,6 +507,7 @@ typedef struct MalFfiAsyncPayload {
     i32 callback_count;
 } MalFfiAsyncPayload;
 static void ffi_async_release(void *data);
+static void ffi_async_cancel_queued(MalVm *vm);
 
 /**
  * Per-VM binding state: the shape each record type's objects share, indexed by the
@@ -585,6 +595,8 @@ static void ffi_wait_release(MalFfiWait *wait) {
 }
 
 void mal_ffi_callbacks_shutdown(MalVm *vm) {
+    // Unblocking producers must not let queued calls acquire new C-side ownership.
+    ffi_async_cancel_queued(vm);
     pthread_mutex_lock(&ffi_queue_lock);
     if (vm->ffi != nullptr) vm->ffi->accepting_waits = false;
     for (MalFfiWait *wait = ffi_waiters; wait != nullptr; wait = wait->next) {
@@ -1139,10 +1151,14 @@ void mal_ffi_release(void *data) {
 
 static void ffi_async_run(void *data) {
     MalFfiAsyncPayload *payload = data;
+    int queued = MAL_FFI_ASYNC_QUEUED;
+    if (!atomic_compare_exchange_strong_explicit(&payload->phase, &queued,
+            MAL_FFI_ASYNC_RUNNING, memory_order_acq_rel, memory_order_acquire)) return;
     MalFfiAsyncGroup *previous = ffi_worker_group;
     ffi_worker_group = payload->group;
     payload->run(payload->data);
     ffi_worker_group = previous;
+    atomic_store_explicit(&payload->phase, MAL_FFI_ASYNC_FINISHED, memory_order_release);
 }
 
 static void ffi_async_release(void *data) {
@@ -1178,6 +1194,15 @@ typedef struct MalFfiAsync {
 static MAL_ISOLATE_LOCAL MalFfiAsync *ffi_async_pending;
 static MAL_ISOLATE_LOCAL bool ffi_async_installed;
 
+static void ffi_async_cancel_queued(MalVm *vm) {
+    for (MalFfiAsync *call = ffi_async_pending; call != nullptr; call = call->next) {
+        if (call->vm != vm || call->payload->must_run) continue;
+        int queued = MAL_FFI_ASYNC_QUEUED;
+        (void) atomic_compare_exchange_strong_explicit(&call->payload->phase, &queued,
+            MAL_FFI_ASYNC_CANCELLED, memory_order_acq_rel, memory_order_acquire);
+    }
+}
+
 static void ffi_async_detach(MalFfiAsyncPayload *payload) {
     payload->group->active = false;
     for (i32 index = 0; index < payload->callback_count; index++) {
@@ -1198,6 +1223,7 @@ static void ffi_async_scan_roots(MalVm *vm, void *data) {
 }
 
 static void ffi_async_free(MalVm *vm) {
+    ffi_async_cancel_queued(vm);
     MalFfiAsync **link = &ffi_async_pending;
     while (*link != nullptr) {
         MalFfiAsync *call = *link;
@@ -1246,7 +1272,8 @@ static bool ffi_async_drain(MalVm *vm) {
     MalAsyncContextScope scope;
     mal_async_context_scope_enter(vm, &scope, call->async_context);
     void *data = mal_blocking_work_result_data(task.data);
-    bool ran = data != nullptr && task.result != MAL_HOST_TERMINAL_CANCELLED;
+    bool ran = data != nullptr && task.result != MAL_HOST_TERMINAL_CANCELLED
+        && atomic_load_explicit(&call->payload->phase, memory_order_acquire) == MAL_FFI_ASYNC_FINISHED;
     ffi_async_detach(call->payload);
     if (call->payload->group->failed)
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = roots[3]};
@@ -1282,7 +1309,7 @@ bool mal_ffi_async(
     MalVm *vm, void *data, MalFfiAsyncRun run, MalFfiAsyncComplete complete,
     MalFfiAsyncRelease release, const MalValue *keep, int32_t keep_count,
     const MalFfiInputs *inputs, MalFfiCallback *const *callbacks, int32_t callback_count,
-    MalValue *promise) {
+    MalValue *promise, bool must_run) {
     MalHost *host = mal_host(vm);
     if (host == nullptr) {
         mal_vm_throw_error(
@@ -1351,11 +1378,11 @@ bool mal_ffi_async(
         ((MalFfiKept *) callbacks[index])->group = group;
     }
     *payload = (MalFfiAsyncPayload) {
-        .references = 2, .data = data, .run = run, .release = release,
+        .references = 2, .phase = MAL_FFI_ASYNC_QUEUED, .must_run = must_run, .data = data, .run = run, .release = release,
         .group = group, .callbacks = held_callbacks, .callback_count = callback_count};
     MalBlockingWorkReservation reservation = {0};
     if (!mal_blocking_work_reserve(host, sizeof(*call), &reservation)
-        || !mal_blocking_work_start(host, ffi_async_run, payload, ffi_async_release, &reservation, &call->operation)) {
+        || !mal_blocking_work_start(host, ffi_async_run, payload, ffi_async_release, &reservation, &call->operation, must_run)) {
         mal_blocking_work_reservation_release(&reservation);
         free(kept);
         free(call);
@@ -1417,14 +1444,19 @@ void mal_ffi_callback_drop(MalFfiCallback *callback) {
 
 typedef struct MalFfiReplacedEntry {
     void *key;
-    MalFfiKept *kept;
-    u64 identity;
+    MalFfiKept *kept[2];
+    u64 identity[2];
+    unsigned lane;
+    MalFfiReplacement *pending;
+    u64 pending_identity;
+    bool retired;
 } MalFfiReplacedEntry;
 
 /**
  * Replaced callbacks are process-wide, as the libraries' own setter state is, so
- * worker VMs share them. Only VM threads change entries, but a library may call a
- * trampoline from any thread, so lookups take the lock too.
+ * worker VMs share them. Preparation reserves a key on the VM; workers publish it
+ * immediately before C runs. Both trampoline generations remain routable until
+ * the setter returns, since C can invoke either while replacing its registration.
  */
 static pthread_mutex_t ffi_replaced_lock = PTHREAD_MUTEX_INITIALIZER;
 /** Every site that ever held an entry, so destroying a handle finds its callbacks. */
@@ -1437,7 +1469,16 @@ static u64 ffi_replaced_identity;
 static MalFfiReplacedEntry *ffi_replaced_find(MalFfiReplaced *site, void *key) {
     MalFfiReplacedEntry *entries = site->entries;
     for (usize index = 0; index < site->count; index++) {
-        if (entries[index].key == key) return &entries[index];
+        if (entries[index].key == key && !entries[index].retired) return &entries[index];
+    }
+    return nullptr;
+}
+
+static MalFfiReplacedEntry *ffi_replacement_entry(MalFfiReplacement *replacement) {
+    MalFfiReplaced *site = replacement->site;
+    MalFfiReplacedEntry *entries = site->entries;
+    for (usize index = 0; index < site->count; index++) {
+        if (entries[index].pending == replacement) return &entries[index];
     }
     return nullptr;
 }
@@ -1448,18 +1489,18 @@ static void ffi_replaced_remove(MalFfiReplaced *site, MalFfiReplacedEntry *entry
     *entry = entries[--site->count];
 }
 
-bool mal_ffi_replace(
+bool mal_ffi_replace_prepare(
     MalVm *vm, MalFfiReplaced *site, void *key, MalFfiCallback *callback,
-    MalFfiCallback **previous) {
+    MalFfiReplacement *replacement) {
     pthread_mutex_lock(&ffi_replaced_lock);
     MalFfiReplacedEntry *entry = ffi_replaced_find(site, key);
-    *previous = entry == nullptr ? nullptr : &entry->kept->callback;
-    if (entry != nullptr && callback == nullptr) ffi_replaced_remove(site, entry);
-    else if (entry != nullptr) {
-        entry->kept = (MalFfiKept *) callback;
-        entry->identity = ++ffi_replaced_identity;
+    if (entry != nullptr && entry->pending != nullptr) {
+        pthread_mutex_unlock(&ffi_replaced_lock);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "A C callback replacement is already pending for this key");
+        return false;
     }
-    else if (callback != nullptr) {
+    if (entry == nullptr) {
         if (site->count == site->capacity) {
             usize capacity = site->capacity == 0 ? 4 : site->capacity * 2;
             MalFfiReplacedEntry *grown = realloc(site->entries, capacity * sizeof(*grown));
@@ -1474,23 +1515,65 @@ bool mal_ffi_replace(
             site->entries = grown;
             site->capacity = capacity;
         }
-        ((MalFfiReplacedEntry *) site->entries)[site->count++] =
-            (MalFfiReplacedEntry) {key, (MalFfiKept *) callback, ++ffi_replaced_identity};
+        entry = &((MalFfiReplacedEntry *) site->entries)[site->count++];
+        *entry = (MalFfiReplacedEntry) {.key = key, .lane = 1};
         if (key != nullptr) ffi_replaced_keyed++;
     }
+    *replacement = (MalFfiReplacement) {
+        .site = site, .key = key, .callback = callback, .lane = entry->lane ^ 1};
+    entry->pending = replacement;
+    entry->pending_identity = ++ffi_replaced_identity;
+    if (callback != nullptr) mal_ffi_callback_hold(callback);
     pthread_mutex_unlock(&ffi_replaced_lock);
     return true;
 }
 
-MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key) {
+void mal_ffi_replace_commit(MalFfiReplacement *replacement) {
+    pthread_mutex_lock(&ffi_replaced_lock);
+    MalFfiReplacedEntry *entry = ffi_replacement_entry(replacement);
+    if (entry == nullptr || entry->retired || replacement->committed
+        || entry->kept[replacement->lane] != nullptr) abort();
+    entry->kept[replacement->lane] = (MalFfiKept *) replacement->callback;
+    entry->identity[replacement->lane] = ++ffi_replaced_identity;
+    entry->lane = replacement->lane;
+    replacement->committed = true;
+    pthread_mutex_unlock(&ffi_replaced_lock);
+}
+
+void mal_ffi_replace_finish(MalFfiReplacement *replacement) {
+    if (replacement->site == nullptr) return;
+    pthread_mutex_lock(&ffi_replaced_lock);
+    MalFfiReplacedEntry *entry = ffi_replacement_entry(replacement);
+    if (entry == nullptr || entry->pending != replacement) abort();
+    MalFfiCallback *retired;
+    if (replacement->committed) {
+        unsigned previous = replacement->lane ^ 1;
+        MalFfiKept *kept = entry->kept[previous];
+        retired = kept == nullptr ? nullptr : &kept->callback;
+        entry->kept[previous] = nullptr;
+        entry->identity[previous] = 0;
+    } else retired = replacement->callback;
+    entry->pending = nullptr;
+    entry->pending_identity = 0;
+    if (entry->kept[0] == nullptr && entry->kept[1] == nullptr)
+        ffi_replaced_remove(replacement->site, entry);
+    pthread_mutex_unlock(&ffi_replaced_lock);
+    // Releasing can queue VM work or detach a closing handle; never hold the registry lock.
+    mal_ffi_release(retired);
+    if (replacement->callback != nullptr) mal_ffi_callback_drop(replacement->callback);
+    replacement->site = nullptr;
+}
+
+MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key, unsigned lane) {
+    if (lane > 1) abort();
     pthread_mutex_lock(&ffi_replaced_lock);
     MalFfiReplacedEntry *entry = ffi_replaced_find(site, key);
-    MalFfiKept *kept = entry == nullptr ? nullptr : entry->kept;
+    MalFfiKept *kept = entry == nullptr ? nullptr : entry->kept[lane];
     if (kept != nullptr)
         atomic_fetch_add_explicit(&kept->references, 1, memory_order_relaxed);
     // Checked under the lock: the owning thread may release the context right after.
     bool foreign = kept != nullptr && !pthread_equal(kept->thread, pthread_self());
-    bool live = kept != nullptr && kept->callback.vm != nullptr;
+    bool live = foreign && !kept->queued && kept->callback.vm != nullptr;
     // A queued callback's call from another thread reserves its place in the queue
     // here, before the lock lets the VM thread replace and release the context.
     if (foreign && kept->queued) {
@@ -1513,10 +1596,27 @@ static void ffi_replaced_drop_before(void *key, u64 identity) {
         pthread_mutex_lock(&ffi_replaced_lock);
         for (MalFfiReplaced *site = ffi_replaced_sites; site != nullptr && kept == nullptr;
              site = site->next) {
-            MalFfiReplacedEntry *entry = ffi_replaced_find(site, key);
-            if (entry == nullptr || entry->identity > identity) continue;
-            kept = entry->kept;
-            ffi_replaced_remove(site, entry);
+            MalFfiReplacedEntry *entries = site->entries;
+            for (usize index = 0; index < site->count && kept == nullptr;) {
+                MalFfiReplacedEntry *entry = &entries[index];
+                if (entry->key != key) { index++; continue; }
+                for (unsigned lane = 0; lane < 2; lane++) {
+                    if (entry->kept[lane] == nullptr || entry->identity[lane] > identity) continue;
+                    kept = entry->kept[lane];
+                    entry->kept[lane] = nullptr;
+                    entry->identity[lane] = 0;
+                    break;
+                }
+                if (entry->kept[0] == nullptr && entry->kept[1] == nullptr) {
+                    if (entry->pending == nullptr) {
+                        ffi_replaced_remove(site, entry);
+                        continue;
+                    }
+                    // A close may create a new resource at this address before its setter returns.
+                    if (entry->pending_identity <= identity) entry->retired = true;
+                }
+                index++;
+            }
         }
         pthread_mutex_unlock(&ffi_replaced_lock);
         // Released outside the lock: a release runs on the VM thread or queues for it.

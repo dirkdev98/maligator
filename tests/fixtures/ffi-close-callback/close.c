@@ -92,3 +92,21 @@ void close_with_error(CloseBase *handle, void (*before)(void *), void *data, voi
     before(data);
     done(handle);
 }
+
+void close_and_listen(CloseBase *handle, void (*done)(CloseBase *), void (*listener)(CloseBase *)) {
+    assert(handle == &reused);
+    reused_callback = listener;
+    listener(handle);
+    reused_callback = NULL;
+    done(handle);
+}
+
+static _Atomic int blocked;
+static _Atomic bool unblocked;
+void close_block(void) {
+    atomic_fetch_add(&blocked, 1);
+    while (!atomic_load(&unblocked)) sched_yield();
+}
+void close_wait_blocked(void) { while (atomic_load(&blocked) == 0) sched_yield(); }
+void close_unblock(void) { atomic_store(&unblocked, true); }
+void close_view_set(CloseState *handle, void (*callback)(CloseBase *)) { callback(&handle->base); }

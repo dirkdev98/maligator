@@ -7,6 +7,34 @@ export default {
 	find: [{ includeDirs: ["."], sources: ["async.c"] }],
 	types: { AsyncResource: { handle: { destroy: "async_resource_destroy" } } },
 	functions: {
+		async_replace_data: {
+			async: "async_replace_data_async",
+			params: {
+				callback: {
+					callback: { replaced: true, data: "data", queued: "wait" },
+					nullable: true,
+				},
+			},
+		},
+		async_replaced_data_call: { async: "async_replaced_data_call_async" },
+		async_replace_1: {
+			async: "async_replace_1_async",
+			params: { callback: { callback: {} } },
+		},
+		async_replace: {
+			async: "async_replace_async",
+			params: {
+				callback: { callback: { replaced: true, queued: "wait" }, nullable: true },
+			},
+		},
+		async_replaced_call: { async: "async_replaced_call_async" },
+		async_replace_keyed: {
+			async: "async_replace_keyed_async",
+			params: {
+				callback: { callback: { replaced: true, queued: "wait" }, nullable: true },
+			},
+		},
+		async_replaced_keyed_call: { async: "async_replaced_keyed_call_async" },
 		async_register_lookup: {
 			async: "async_register_lookup_async",
 			params: {

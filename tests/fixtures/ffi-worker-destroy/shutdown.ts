@@ -3,7 +3,17 @@ import * as c from "maligator:ffi/worker";
 
 c.worker_expect_clean_shutdown();
 const mode = process.argv[2];
-if (mode === "queued") {
+if (mode === "mandatory") {
+	c.worker_hold();
+	try {
+		for (let value = 0; value < 64; value++)
+			void c.worker_close_async(c.worker_open(value)!);
+		void c.worker_close_async(c.worker_native_open(91)!);
+		c.worker_wait_started();
+	} finally {
+		c.worker_unblock_later();
+	}
+} else if (mode === "queued") {
 	c.worker_hold();
 	const resources: Array<c.WorkerResource> = [];
 	let failed = false;

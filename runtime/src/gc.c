@@ -2744,7 +2744,7 @@ static void mal_gc_workers_start_batch(MalGcState *g, usize count,
         worker->helper_granted = mal_gc_process_helper_acquire();
         if ((!worker->helper_granted && mal_gc_test_worker_limit_hook == nullptr) ||
             !mal_executor_submit(&g->helpers, mal_gc_helper_run, mal_gc_helper_discard,
-                worker, 0, 0)) {
+                worker, 0, 0, false)) {
             mal_gc_helper_run_inline(worker);
         }
     }

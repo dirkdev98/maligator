@@ -2630,7 +2630,7 @@ static MalValue crypto_kdf_finish(MalVm *vm, CryptoKdfJob *job, MalValue callbac
     if (state == nullptr
         || !mal_blocking_work_reserve(mal_host(vm), sizeof(*job) + job->length, &reservation)
         || !mal_blocking_work_start(mal_host(vm), crypto_kdf_run, job, crypto_kdf_job_free,
-            &reservation, &operation)) {
+            &reservation, &operation, false)) {
         mal_blocking_work_reservation_release(&reservation);
         crypto_kdf_job_free(job);
         free(state);

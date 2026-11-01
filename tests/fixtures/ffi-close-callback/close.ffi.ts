@@ -12,6 +12,14 @@ export default {
 		},
 	},
 	functions: {
+		close_view_set: { params: { callback: { callback: { replaced: true } } } },
+		close_block: { async: "close_block_async" },
+		close_and_listen: {
+			params: {
+				done: { callback: { closes: "handle" } },
+				listener: { callback: { replaced: true, queued: "wait" } },
+			},
+		},
 		close_now: { params: { done: { callback: { closes: "handle" } } } },
 		close_later: { params: { done: { callback: { closes: "handle" } } } },
 		close_foreign: { params: { done: { callback: { closes: "handle" } } } },
@@ -20,7 +28,10 @@ export default {
 		close_visit: { params: { visit: { callback: { data: "data" } } } },
 		close_lend: { params: { visit: { callback: { data: "data" } } } },
 		close_reused_open: { returns: { fresh: true, borrowed: true } },
-		close_reused_set: { params: { callback: { callback: { replaced: true } } } },
+		close_reused_set: {
+			async: "close_reused_set_async",
+			params: { callback: { callback: { replaced: true } } },
+		},
 		close_reused_after_vm: { params: { done: { callback: { closes: "handle" } } } },
 		close_with_error: {
 			params: {

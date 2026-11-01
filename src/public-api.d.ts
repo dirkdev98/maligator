@@ -188,6 +188,7 @@ export interface MaligatorFfiCallback {
 	 * The library keeps the callback until the next call of the function replaces it,
 	 * as setters such as `glfwSetErrorCallback` do. When the first parameter is a
 	 * handle, each handle keeps its own callback until its resource is destroyed.
+	 * Another setter for the same key throws while its setter is pending.
 	 */
 	replaced?: boolean;
 	/**
@@ -203,11 +204,11 @@ export interface MaligatorFfiCallback {
 	 */
 	lookup?: { function: string; param: string };
 	/**
-	 * The library may call the kept callback from other threads, as audio and network
-	 * libraries do. Such calls copy their arguments and queue for the program's thread,
-	 * and `true` lets the C caller continue at once with a void result. `"wait"` blocks
-	 * that thread until JavaScript returns a scalar or pointer-free struct. The program
-	 * needs an event loop, which waits while the callback is kept. Stop or join the
+	 * The library may call the kept callback from other threads. `true` copies arguments
+	 * and queues for the program's thread, letting C continue with a void result.
+	 * `"wait"` borrows pointed-to arguments while blocking C until JavaScript returns
+	 * a scalar or pointer-free struct. Handles are lent only for that callback. The
+	 * program needs an event loop, which waits while the callback is kept. Stop or join the
 	 * producer asynchronously; the program's thread must remain free to run callbacks.
 	 */
 	queued?: boolean | "wait";

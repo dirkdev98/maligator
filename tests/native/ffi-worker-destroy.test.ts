@@ -60,7 +60,7 @@ describe("worker-thread C resource destruction", () => {
 	);
 	it.each(
 		["compiled", "interpreted"].flatMap((backend) =>
-			["running", "completed", "queued"].map((mode) => ({ backend, mode })),
+			["running", "completed", "queued", "mandatory"].map((mode) => ({ backend, mode })),
 		),
 	)(
 		"reconciles discarded $mode destructors during $backend shutdown",

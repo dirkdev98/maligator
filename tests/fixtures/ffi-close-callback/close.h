@@ -25,4 +25,9 @@ void close_reused_set(CloseBase *handle, void (*callback)(CloseBase *));
 void close_reused_emit(void);
 void close_reused_after_vm(CloseBase *handle, void (*done)(CloseBase *));
 void close_with_error(CloseBase *handle, void (*before)(void *), void *data, void (*done)(CloseBase *));
+void close_and_listen(CloseBase *handle, void (*done)(CloseBase *), void (*listener)(CloseBase *));
+void close_block(void);
+void close_wait_blocked(void);
+void close_unblock(void);
+void close_view_set(CloseState *handle, void (*callback)(CloseBase *));
 #endif

@@ -330,6 +330,10 @@ functions: {
 
 When the setter's first parameter is a handle, each handle keeps its own callback until its resource is destroyed. Without `data`, the callback must receive that handle, as GLFW's window callbacks do. With `nullable`, `null` removes the callback. A result that is the replaced callback, or with `data` its user data, is dropped.
 
+A key has one pending setter at a time, including synchronous setters that call back
+before returning. Another setter for that key throws; setters for other keys can run.
+Await an async setter before replacing its registration again.
+
 `closes` names the input handle released by a one-shot completion, such as libuv's
 `uv_close`. Both the registration function and completion return `void`:
 
@@ -377,6 +381,8 @@ Use `queued: "wait"` when the C caller needs a scalar or pointer-free struct res
 The foreign thread waits until JavaScript returns and conversion succeeds. An exception
 returns zero to C and remains uncaught on the program's thread. Shutdown cancels waiting
 calls and rejects new ones with a zero result.
+Waiting callbacks borrow pointed-to arguments while C waits. A handle they receive is
+lent for that callback, unless the program already owns the same resource.
 
 Stop or join callback producers through an async twin so the program's thread remains
 available to run their callbacks. A handle whose destructor joins such a producer also
@@ -419,17 +425,17 @@ JavaScript. Exceptions caught inside a callback keep their ordinary behavior.
 
 Callbacks retained through a `release` parameter can also be registered asynchronously.
 They continue to queue and wait after registration settles, until C releases them.
-Explicit `queued: true` callbacks continue without waiting. Register `replaced` and
-`closes` callbacks synchronously. When registering synchronously, use `queued` if the
-library calls back from other threads.
+Explicit `queued: true` callbacks continue without waiting. Replacement setters can
+also have async twins. Register `closes` callbacks synchronously. For a synchronous
+registration, use `queued` if the library calls back from other threads.
 
 Use `async` only for functions the library allows on another thread while the program makes other calls, such as SQLite in its default serialized mode.
 
 A handle's destroy function can also have an `async` export. The handle rejects other
 calls and disposal until destruction finishes. A conditional destroy preserves the
-handle when C reports failure, so you can retry. VM teardown joins running destructors
-and reconciles their results even when their promises are discarded; a destroy call
-cancelled before execution leaves the resource open for its normal cleanup policy.
+handle when C reports failure, so you can retry. VM teardown drains accepted destructors
+on native workers and reconciles their results even when their promises are discarded.
+A scheduling error leaves the resource open for retry.
 
 For a constructor that returns a new resource lifetime, set `returns.fresh` to `true`.
 This distinguishes a new allocation from an alias when C reuses the address

@@ -1296,7 +1296,7 @@ static bool blocking_work_process_payload_capacity(void) {
     mal_host_shutdown(&second);
     MalHostHandle operation;
     ok = ok && !mal_blocking_work_start(&second, blocking_test_run, nullptr,
-        blocking_test_destroy, &small, &operation) && small.active &&
+        blocking_test_destroy, &small, &operation, false) && small.active &&
         mal_blocking_work_retained_bytes() == baseline + 1 &&
         mal_blocking_work_retained_jobs() == jobs_baseline + 1;
     mal_blocking_work_reservation_release(&small);
@@ -1363,7 +1363,7 @@ static bool blocking_work_concurrency_and_ownership(void) {
         MalBlockingWorkReservation reservation = {0};
         if (!mal_blocking_work_reserve(&host, sizeof(*payload), &reservation) ||
             !mal_blocking_work_start(&host, blocking_test_run, payload,
-                blocking_test_destroy, &reservation, &operation)) {
+                blocking_test_destroy, &reservation, &operation, false)) {
             mal_blocking_work_reservation_release(&reservation);
             free(payload);
             ok = false;
@@ -1418,7 +1418,7 @@ static bool blocking_work_concurrency_and_ownership(void) {
     MalBlockingWorkReservation reservation = {0};
     ok = ok && !mal_blocking_work_reserve(&host, 0, &reservation) &&
         !mal_blocking_work_start(&host, blocking_test_run, nullptr,
-            blocking_test_destroy, &reservation, &rejected);
+            blocking_test_destroy, &reservation, &rejected, false);
     mal_host_free(&host);
     pthread_cond_destroy(&gate.ready);
     pthread_mutex_destroy(&gate.mutex);
@@ -1458,7 +1458,7 @@ static bool blocking_work_shutdown_ownership(bool reject_posts) {
         MalBlockingWorkReservation reservation = {0};
         if (!mal_blocking_work_reserve(&host, sizeof(*payload), &reservation) ||
             !mal_blocking_work_start(&host, blocking_test_run, payload,
-                blocking_test_destroy, &reservation, &operation)) {
+                blocking_test_destroy, &reservation, &operation, false)) {
             mal_blocking_work_reservation_release(&reservation);
             free(payload);
             break;

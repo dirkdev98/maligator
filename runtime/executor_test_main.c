@@ -55,6 +55,21 @@ static void *shutdown_client(void *data) {
     return nullptr;
 }
 
+typedef struct CleanupJob { Gate *gate; pthread_t owner; } CleanupJob;
+static void cleanup_work(void *data) {
+    CleanupJob *job = data;
+    assert(!pthread_equal(job->owner, pthread_self()));
+    gated_work(job->gate);
+}
+static void cleanup_discard(void *data) { discarded_work(((CleanupJob *) data)->gate); }
+typedef struct ShutdownGate { Gate *discarded; Gate *blocked; } ShutdownGate;
+static void *release_for_shutdown(void *data) {
+    ShutdownGate *gate = data;
+    wait_for_count(gate->discarded, &gate->discarded->discarded, 1);
+    open_gate(gate->blocked);
+    return nullptr;
+}
+
 int main(void) {
     Gate blocked = {.mutex = PTHREAD_MUTEX_INITIALIZER, .changed = PTHREAD_COND_INITIALIZER};
     Gate other = {.mutex = PTHREAD_MUTEX_INITIALIZER, .changed = PTHREAD_COND_INITIALIZER};
@@ -62,15 +77,15 @@ int main(void) {
     MalExecutorClient first = {0}, second = {0};
     assert(mal_executor_client_init(&first, MAL_EXECUTOR_IO, 1, 2));
     assert(mal_executor_client_init(&second, MAL_EXECUTOR_IO, 1, 2));
-    assert(mal_executor_submit(&first, gated_work, discarded_work, &blocked, 1, 0));
+    assert(mal_executor_submit(&first, gated_work, discarded_work, &blocked, 1, 0, false));
     wait_for_count(&blocked, &blocked.started, 1);
-    assert(mal_executor_submit(&first, gated_work, discarded_work, &queued, 1, 0));
-    assert(mal_executor_submit(&first, gated_work, discarded_work, &queued, 1, 0));
-    assert(!mal_executor_submit(&first, gated_work, discarded_work, &queued, 1, 0));
+    assert(mal_executor_submit(&first, gated_work, discarded_work, &queued, 1, 0, false));
+    assert(mal_executor_submit(&first, gated_work, discarded_work, &queued, 1, 0, false));
+    assert(!mal_executor_submit(&first, gated_work, discarded_work, &queued, 1, 0, false));
     assert(!mal_executor_cancel(&first, &blocked));
     assert(mal_executor_cancel(&first, &queued));
     assert(mal_executor_client_queued(&first) == 1);
-    assert(mal_executor_submit(&second, gated_work, discarded_work, &other, 1, 0));
+    assert(mal_executor_submit(&second, gated_work, discarded_work, &other, 1, 0, false));
     wait_for_count(&other, &other.started, 1);
     pthread_t shutdown;
     assert(pthread_create(&shutdown, nullptr, shutdown_client, &first) == 0);
@@ -78,18 +93,40 @@ int main(void) {
     open_gate(&blocked);
     pthread_join(shutdown, nullptr);
     assert(blocked.completed == 1 && queued.discarded == 1 && queued.started == 0);
-    assert(!mal_executor_submit(&first, gated_work, discarded_work, &queued, 0, 0));
+    assert(!mal_executor_submit(&first, gated_work, discarded_work, &queued, 0, 0, false));
     mal_executor_client_free(&first);
     open_gate(&other);
     mal_executor_client_shutdown(&second);
     assert(other.completed == 1);
-    assert(!mal_executor_submit(&second, gated_work, discarded_work, &queued, 0, 0));
+    assert(!mal_executor_submit(&second, gated_work, discarded_work, &queued, 0, 0, false));
     mal_executor_client_free(&second);
+    Gate held = {.mutex = PTHREAD_MUTEX_INITIALIZER, .changed = PTHREAD_COND_INITIALIZER};
+    Gate cleanup = {.mutex = PTHREAD_MUTEX_INITIALIZER, .changed = PTHREAD_COND_INITIALIZER, .open = true};
+    Gate discarded = {.mutex = PTHREAD_MUTEX_INITIALIZER, .changed = PTHREAD_COND_INITIALIZER};
+    MalExecutorClient draining = {0};
+    CleanupJob required = {&cleanup, pthread_self()};
+    ShutdownGate release = {&discarded, &held};
+    assert(mal_executor_client_init(&draining, MAL_EXECUTOR_IO, 1, 2));
+    assert(mal_executor_submit(&draining, gated_work, discarded_work, &held, 0, 0, false));
+    wait_for_count(&held, &held.started, 1);
+    assert(mal_executor_submit(&draining, cleanup_work, cleanup_discard, &required, 0, 0, true));
+    assert(mal_executor_submit(&draining, gated_work, discarded_work, &discarded, 0, 0, false));
+    assert(pthread_create(&shutdown, nullptr, release_for_shutdown, &release) == 0);
+    mal_executor_client_shutdown(&draining);
+    pthread_join(shutdown, nullptr);
+    assert(cleanup.completed == 1 && cleanup.discarded == 0 && discarded.started == 0);
+    mal_executor_client_free(&draining);
+    pthread_cond_destroy(&held.changed);
+    pthread_mutex_destroy(&held.mutex);
+    pthread_cond_destroy(&cleanup.changed);
+    pthread_mutex_destroy(&cleanup.mutex);
+    pthread_cond_destroy(&discarded.changed);
+    pthread_mutex_destroy(&discarded.mutex);
     Gate global = {.mutex = PTHREAD_MUTEX_INITIALIZER, .changed = PTHREAD_COND_INITIALIZER};
     MalExecutorClient clients[8] = {0};
     for (usize i = 0; i < countof(clients); i++) {
         assert(mal_executor_client_init(&clients[i], MAL_EXECUTOR_IO, 1, 1));
-        assert(mal_executor_submit(&clients[i], gated_work, discarded_work, &global, 0, 0));
+        assert(mal_executor_submit(&clients[i], gated_work, discarded_work, &global, 0, 0, false));
     }
     wait_for_count(&global, &global.started, 4);
     pthread_mutex_lock(&global.mutex);

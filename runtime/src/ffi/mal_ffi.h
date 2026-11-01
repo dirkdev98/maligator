@@ -471,14 +471,27 @@ typedef struct MalFfiReplaced {
     size_t capacity;
 } MalFfiReplaced;
 
+typedef struct MalFfiReplacement {
+    MalFfiReplaced *site;
+    void *key;
+    MalFfiCallback *callback;
+    unsigned lane;
+    bool committed;
+} MalFfiReplacement;
+
 /**
- * Make `callback` the one `site` keeps for `key`, or forget the key's callback when it
- * is null. `previous` receives the callback it replaces, for the binding to release
- * once the library holds the new one. False after an allocation throw.
+ * Reserve a setter's key without changing its current callback. On success the
+ * transaction owns the callback's base reference and remains at this address until
+ * finish. The binding selects its trampoline using `lane`; another setter for the
+ * reserved key throws. A failed preparation leaves ownership with the caller.
  */
-bool mal_ffi_replace(
+bool mal_ffi_replace_prepare(
     MalVm *vm, MalFfiReplaced *site, void *key, MalFfiCallback *callback,
-    MalFfiCallback **previous);
+    MalFfiReplacement *replacement);
+/** Publish the prepared callback immediately before C runs, without touching the VM. */
+void mal_ffi_replace_commit(MalFfiReplacement *replacement);
+/** Retire the previous callback, or the unsubmitted callback, after C stops using it. */
+void mal_ffi_replace_finish(MalFfiReplacement *replacement);
 /**
  * The callback `site` keeps for `key`, for a trampoline that receives no user data,
  * or null. When it belongs to a VM on another thread, a queued callback's call is
@@ -486,7 +499,7 @@ bool mal_ffi_replace(
  * that the entry wrapper retires with `mal_ffi_callback_drop` after returning or
  * handing its separate queued reservation to the inbox.
  */
-MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key);
+MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key, unsigned lane);
 /**
  * Bracket a C call that may run JavaScript when the binding runs as an ordinary
  * native call, which keeps the collector off: everything the binding holds is
@@ -517,7 +530,7 @@ bool mal_ffi_async(
     MalVm *vm, void *data, MalFfiAsyncRun run, MalFfiAsyncComplete complete,
     MalFfiAsyncRelease release, const MalValue *keep, int32_t keep_count,
     const MalFfiInputs *inputs, MalFfiCallback *const *callbacks, int32_t callback_count,
-    MalValue *promise);
+    MalValue *promise, bool must_run);
 /** A promise rejected with the pending throw, which this clears. */
 MalValue mal_ffi_rejected(MalVm *vm);
 

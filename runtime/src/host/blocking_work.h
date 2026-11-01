@@ -20,11 +20,11 @@ bool mal_blocking_work_reserve(
 void mal_blocking_work_reservation_release(MalBlockingWorkReservation *reservation);
 usize mal_blocking_work_retained_bytes(void);
 usize mal_blocking_work_retained_jobs(void);
-// Start and teardown run on the reactor thread; success moves the reservation and payload.
+// Success moves the reservation and payload; must_run cleanup drains on workers during teardown.
 bool mal_blocking_work_start(
     MalHost *host, MalBlockingWorkRun run, void *data,
     MalHostTaskDestroy destroy, MalBlockingWorkReservation *reservation,
-    MalHostHandle *operation);
+    MalHostHandle *operation, bool must_run);
 // Borrow the payload until task release; taking the host-owned wrapper would strand its reservation.
 void *mal_blocking_work_result_data(void *result);
 void mal_blocking_work_reap(MalBlockingWork *work);

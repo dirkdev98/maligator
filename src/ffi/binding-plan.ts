@@ -1002,7 +1002,9 @@ class Planner {
 						"string",
 						"bytes",
 						"record",
-						...(callback.closes === undefined ? [] : ["handle"]),
+						...(callback.closes !== undefined || callback.queued === "wait"
+							? ["handle"]
+							: []),
 					].includes(param.kind),
 			);
 			if (
@@ -1115,7 +1117,10 @@ class Planner {
 				: undefined;
 		const keyParam = param.value.params.findIndex(
 			(value) =>
-				typeof value === "object" && value.kind === "handle" && value.name === key?.name,
+				typeof value === "object" &&
+				value.kind === "handle" &&
+				key !== undefined &&
+				this.#handles.get(value.name)?.family === this.#handles.get(key.name)?.family,
 		);
 		if (
 			key !== undefined &&
@@ -1742,12 +1747,10 @@ export function planBindings(
 			if (
 				!("gaps" in result) &&
 				result.params.some(
-					({ value }) =>
-						value.kind === "callback" &&
-						(value.replaced !== undefined || value.closes !== undefined),
+					({ value }) => value.kind === "callback" && value.closes !== undefined,
 				)
 			) {
-				throw new FfiError(`${at}: async replaced and close callbacks are unsupported`);
+				throw new FfiError(`${at}: async close callbacks are unsupported`);
 			}
 		}
 		if ("gaps" in result) unbound.push(result);

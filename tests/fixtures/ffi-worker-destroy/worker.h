@@ -6,6 +6,7 @@ typedef struct WorkerResource WorkerResource;
 typedef struct RetryResource RetryResource;
 typedef struct ReusedResource ReusedResource;
 WorkerResource *worker_open(int value);
+WorkerResource *worker_native_open(int value);
 int worker_value(WorkerResource *resource);
 int worker_close(WorkerResource *resource);
 void worker_watch(WorkerResource *resource, void (*callback)(int, void *), void *data, void (*release)(void *));

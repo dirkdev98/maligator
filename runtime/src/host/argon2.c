@@ -576,7 +576,7 @@ MalArgon2StartResult mal_argon2_start(
     state->requests = request;
     state->queued++;
     if (!mal_executor_submit(&state->executor, mal_argon2_worker,
-            mal_argon2_discard, request, sizeof(*request) + request->inputs.message_len + request->inputs.nonce_len + request->inputs.secret_len + request->inputs.associated_data_len + request->result->tag_length, (usize) request->params.memory_kib * 1024)) {
+            mal_argon2_discard, request, sizeof(*request) + request->inputs.message_len + request->inputs.nonce_len + request->inputs.secret_len + request->inputs.associated_data_len + request->result->tag_length, (usize) request->params.memory_kib * 1024, false)) {
         (void) mal_argon2_remove_queued(state, request);
         (void) mal_reactor_release_work(&host->reactor);
         (void) mal_host_operation_abort_start(&host->tasks, *operation);

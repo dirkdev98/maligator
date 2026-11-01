@@ -46,8 +46,8 @@ describe("one-shot C close completions", () => {
 			expect(executed.status, executed.stderr || executed.stdout).toBe(0);
 			expect(executed.stdout.trim()).toBe("libuv close passed");
 		}, 300_000);
-		for (const entry of ["main.ts", "shutdown.ts", "shutdown-keyed.ts"]) {
-			it(`retains close storage through ${entry === "main.ts" ? "completion" : "VM teardown"} with ${backend} calls`, () => {
+		for (const entry of ["main.ts", "combined.ts", "shutdown.ts", "shutdown-keyed.ts"]) {
+			it(`retains close storage through ${entry} with ${backend} calls`, () => {
 				const built = spawnSync(
 					process.execPath,
 					[
@@ -71,11 +71,16 @@ describe("one-shot C close completions", () => {
 						MAL_GC_AT_EXIT: "1",
 					},
 				});
+				const succeeds = entry === "main.ts" || entry === "combined.ts";
 				expect(executed.status, executed.stderr || executed.stdout).toBe(
-					entry === "main.ts" ? 0 : 1,
+					succeeds ? 0 : 1,
 				);
-				if (entry === "main.ts")
-					expect(executed.stdout.trim()).toBe("close callbacks passed");
+				if (succeeds)
+					expect(executed.stdout.trim()).toBe(
+						entry === "combined.ts"
+							? "combined close callbacks passed"
+							: "close callbacks passed",
+					);
 				else expect(executed.stderr).toContain("close shutdown requested");
 				expect(executed.stderr).not.toMatch(
 					/runtime error:|AddressSanitizer|UndefinedBehaviorSanitizer/,

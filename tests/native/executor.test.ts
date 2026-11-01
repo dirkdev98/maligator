@@ -18,6 +18,6 @@ beforeAll(() => {
 
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
-it("shares bounded helper capacity and tears down an owner without waiting for another", () => {
+it("keeps helper ownership bounded and drains cleanup on native workers", () => {
 	expect(runToStdout(binary)).toBe("executor PASS\n");
 });

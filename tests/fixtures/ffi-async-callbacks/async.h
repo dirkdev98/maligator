@@ -6,6 +6,7 @@ typedef int (*AsyncPlainCallback)(int value);
 typedef struct AsyncPair { int x; int y; } AsyncPair;
 typedef struct AsyncResource AsyncResource;
 typedef int (*AsyncResourceCallback)(AsyncResource *resource);
+typedef int (*AsyncKeyedCallback)(AsyncResource *resource, int value);
 int async_apply(int count, AsyncCallback callback, void *data);
 int async_parallel(int count, AsyncCallback callback, void *data);
 int async_plain(int count, AsyncPlainCallback callback);
@@ -36,4 +37,13 @@ int async_release_after(int value, AsyncCallback callback, void *data, void (*re
 int async_release_buffer(AsyncCallback callback, void *data, void (*release)(void *), const unsigned char *bytes, size_t length);
 void async_retained_arm_shutdown(void);
 void async_retained_wait(void);
+int async_replace(int mode, AsyncPlainCallback callback);
+int async_replace_1(AsyncPlainCallback callback);
+int async_replaced_call(int value);
+int async_replace_keyed(AsyncResource *resource, int mode, AsyncKeyedCallback callback);
+int async_replaced_keyed_call(AsyncResource *resource, int value);
+int async_replace_data(int mode, AsyncCallback callback, void *data);
+int async_replaced_data_call(int value);
+void async_replaced_arm_shutdown(int expected);
+void async_replaced_wait(void);
 #endif

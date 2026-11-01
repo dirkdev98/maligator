@@ -3,10 +3,11 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
-struct AsyncResource { int value; void *callback_data; };
+struct AsyncResource { int value; void *callback_data; AsyncKeyedCallback replacement; };
 static _Atomic int live;
 static _Atomic int shutdown_entered;
 static _Atomic int shutdown_finished;
@@ -161,7 +162,7 @@ int async_registered_call(int value) {
     void *data = registered_data;
     pthread_mutex_unlock(&registered_lock);
     if (callback != NULL) return callback(value, data);
-    AsyncResource resource = {value, data};
+    AsyncResource resource = {.value = value, .callback_data = data};
     return lookup == NULL ? 0 : lookup(&resource);
 }
 
@@ -220,3 +221,82 @@ void async_retained_arm_shutdown(void) {
 void async_retained_wait(void) {
     while (atomic_load(&retained_started) == 0) sched_yield();
 }
+
+static AsyncPlainCallback replacement_callback;
+static _Atomic int replacement_installs;
+static _Atomic bool replacement_entered;
+int async_replace_1(AsyncPlainCallback callback) { return callback(4); }
+
+int async_replace(int mode, AsyncPlainCallback callback) {
+    atomic_fetch_add(&replacement_installs, 1);
+    if (mode != 0) atomic_store(&replacement_entered, true);
+    pthread_mutex_lock(&registered_lock);
+    AsyncPlainCallback previous = replacement_callback;
+    pthread_mutex_unlock(&registered_lock);
+    int result = mode != 0 && previous != NULL ? previous(10) : 0;
+    pthread_mutex_lock(&registered_lock);
+    replacement_callback = callback;
+    pthread_mutex_unlock(&registered_lock);
+    if (mode != 0 && callback != NULL) result += callback(20);
+    return result;
+}
+
+int async_replaced_call(int value) {
+    pthread_mutex_lock(&registered_lock);
+    AsyncPlainCallback callback = replacement_callback;
+    pthread_mutex_unlock(&registered_lock);
+    return callback == NULL ? 0 : callback(value);
+}
+
+int async_replace_keyed(AsyncResource *resource, int mode, AsyncKeyedCallback callback) {
+    pthread_mutex_lock(&registered_lock);
+    AsyncKeyedCallback previous = resource->replacement;
+    pthread_mutex_unlock(&registered_lock);
+    int result = mode != 0 && previous != NULL ? previous(resource, 10) : 0;
+    pthread_mutex_lock(&registered_lock);
+    resource->replacement = callback;
+    pthread_mutex_unlock(&registered_lock);
+    if (mode != 0 && callback != NULL) result += callback(resource, 20);
+    return result;
+}
+
+int async_replaced_keyed_call(AsyncResource *resource, int value) {
+    pthread_mutex_lock(&registered_lock);
+    AsyncKeyedCallback callback = resource->replacement;
+    pthread_mutex_unlock(&registered_lock);
+    return callback == NULL ? 0 : callback(resource, value);
+}
+
+static AsyncCallback replacement_data_callback;
+static void *replacement_data;
+int async_replace_data(int mode, AsyncCallback callback, void *data) {
+    pthread_mutex_lock(&registered_lock);
+    AsyncCallback previous = replacement_data_callback;
+    void *previous_data = replacement_data;
+    pthread_mutex_unlock(&registered_lock);
+    int result = mode != 0 && previous != NULL ? previous(10, previous_data) : 0;
+    pthread_mutex_lock(&registered_lock);
+    replacement_data_callback = callback;
+    replacement_data = data;
+    pthread_mutex_unlock(&registered_lock);
+    if (mode != 0 && callback != NULL) result += callback(20, data);
+    return result;
+}
+int async_replaced_data_call(int value) {
+    pthread_mutex_lock(&registered_lock);
+    AsyncCallback callback = replacement_data_callback;
+    void *data = replacement_data;
+    pthread_mutex_unlock(&registered_lock);
+    return callback == NULL ? 0 : callback(value, data);
+}
+
+static int replacement_expected;
+static void replacement_shutdown_check(void) {
+    assert(atomic_load(&replacement_installs) == replacement_expected);
+    assert(async_replaced_call(1) == 0);
+}
+void async_replaced_arm_shutdown(int expected) {
+    replacement_expected = expected;
+    assert(atexit(replacement_shutdown_check) == 0);
+}
+void async_replaced_wait(void) { while (!atomic_load(&replacement_entered)) sched_yield(); }

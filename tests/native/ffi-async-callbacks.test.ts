@@ -19,6 +19,9 @@ describe("async C callback ownership", () => {
 			["main.ts", ""],
 			["retained.ts", ""],
 			["retained-shutdown.ts", ""],
+			["replaced.ts", ""],
+			["replaced-shutdown.ts", "queued"],
+			["replaced-shutdown.ts", "running"],
 			["shutdown.ts", ""],
 			["shutdown.ts", "string"],
 			["shutdown.ts", "handle"],
@@ -60,11 +63,14 @@ describe("async C callback ownership", () => {
 						"a C library called back into JavaScript from another thread",
 					);
 				} else {
-					const succeeds = entry === "main.ts" || entry === "retained.ts";
+					const succeeds =
+						entry === "main.ts" || entry === "retained.ts" || entry === "replaced.ts";
 					const successMessage =
-						entry === "retained.ts"
-							? "retained async callbacks passed"
-							: "async callbacks passed";
+						entry === "replaced.ts"
+							? "replaced async callbacks passed"
+							: entry === "retained.ts"
+								? "retained async callbacks passed"
+								: "async callbacks passed";
 					expect(executed.status, executed.stderr || executed.stdout).toBe(
 						succeeds ? 0 : 1,
 					);

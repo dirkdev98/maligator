@@ -3901,7 +3901,7 @@ static bool node_fs_start_job(
     if ((!reservation->active
             && !mal_blocking_work_reserve(mal_host(vm), footprint, reservation))
         || !mal_blocking_work_start(mal_host(vm), node_fs_job_run, job,
-            node_fs_job_free, reservation, &state->operation)) {
+            node_fs_job_free, reservation, &state->operation, false)) {
         node_fs_throw_errno_with_dest(vm, EAGAIN, state->syscall, job->path, job->destination);
         node_fs_job_free(job);
         mal_blocking_work_reservation_release(reservation);

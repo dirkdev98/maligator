@@ -1032,6 +1032,7 @@ class BindingWriter {
 		value: Extract<JsValue, { kind: "callback" }>,
 		owner: string,
 		site?: string,
+		lane = 0,
 	): Array<string> {
 		const type = value.type;
 		const params = type.params.map((param, index) =>
@@ -1064,7 +1065,7 @@ class BindingWriter {
 					? `(MalFfiCallback *) ${lookup.function}(mal_c${String(lookup.param)})`
 					: scoped
 						? site!
-						: `mal_ffi_replaced(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`})`;
+						: `mal_ffi_replaced(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`}, ${String(lane)})`;
 		const callback =
 			value.closes === undefined
 				? routed
@@ -1299,6 +1300,7 @@ class BindingWriter {
 		const keeps: Array<string> = [];
 		const kept: Array<string> = [];
 		const commits: Array<string> = [];
+		const replacedIndexes = new Set<number>();
 		const keptCallback = (index: number): boolean => {
 			const entry = binding.arguments[index];
 			const value =
@@ -1461,14 +1463,34 @@ class BindingWriter {
 						return;
 					}
 					if (value.kind === "callback" && value.kept) {
-						const trampoline = `mal_ffi_callback_${name}_${String(index)}`;
+						const trampoline =
+							value.replaced === undefined
+								? `mal_ffi_callback_${name}_${String(index)}`
+								: `mal_ffi_replacement_callback_${String(name.length)}_${name}_${String(index)}`;
 						const context = `mal_kept_${String(index)}`;
 						const replaced = `mal_ffi_replaced_${name}_${String(index)}`;
+						const transaction = `mal_replacement_${String(index)}`;
+						const lanes =
+							value.replaced !== undefined &&
+							!value.params.includes("data") &&
+							value.lookup === undefined;
 						if (value.replaced !== undefined)
 							trampolines.push("", `static MalFfiReplaced ${replaced};`);
 						else if (value.closes !== undefined)
 							trampolines.push("", `static char ${replaced};`);
-						trampolines.push(...this.#trampoline(trampoline, value, name, replaced));
+						if (lanes) {
+							for (const lane of [0, 1])
+								trampolines.push(
+									...this.#trampoline(
+										`${trampoline}_${String(lane)}`,
+										value,
+										name,
+										replaced,
+										lane,
+									),
+								);
+						} else
+							trampolines.push(...this.#trampoline(trampoline, value, name, replaced));
 						locals.push(`MalFfiCallback *${context} = nullptr;`);
 						body.push(
 							`if (!mal_ffi_to_function(vm, ${source}, ${value.nullable}, ${site})) goto mal_done;`,
@@ -1481,7 +1503,9 @@ class BindingWriter {
 							`\tif (${context} == nullptr) goto mal_done;`,
 							"}",
 						);
-						kept.push(`${local} = ${context} == nullptr ? nullptr : ${trampoline};`);
+						kept.push(
+							`${local} = ${context} == nullptr ? nullptr : ${lanes ? `(${transaction}.lane == 0 ? ${trampoline}_0 : ${trampoline}_1)` : trampoline};`,
+						);
 						if (value.closes !== undefined) {
 							keeps.push(
 								`if (!mal_ffi_close_prepare(vm, ${context}, ${argument(value.closes.param)}, &${replaced}, ${site})) goto mal_done;`,
@@ -1491,14 +1515,18 @@ class BindingWriter {
 							);
 						}
 						if (value.replaced !== undefined) {
-							// The library drops the previous callback once this call returns.
-							const previous = `mal_previous_${String(index)}`;
 							const key = value.replaced.key;
-							locals.push(`MalFfiCallback *${previous} = nullptr;`);
-							kept.push(
-								`if (!mal_ffi_replace(vm, &${replaced}, ${key === undefined ? "nullptr" : `(void *) mal_argument_${String(key)}`}, ${context}, &${previous})) goto mal_done;`,
+							replacedIndexes.add(index);
+							locals.push(`MalFfiReplacement ${transaction} = {};`);
+							keeps.push(
+								`if (!mal_ffi_replace_prepare(vm, &${replaced}, ${key === undefined ? "nullptr" : `(void *) mal_argument_${String(key)}`}, ${context}, &${transaction})) goto mal_done;`,
 							);
-							cleanup.push(`mal_ffi_release(${previous});`);
+							// Close completion must snapshot this registration in its lifetime cutoff.
+							commits.unshift(`mal_ffi_replace_commit(&${transaction});`);
+							cleanup.push(
+								`if (${transaction}.site == nullptr) mal_ffi_release(${context});`,
+								`mal_ffi_replace_finish(&${transaction});`,
+							);
 						}
 						return;
 					}
@@ -1705,7 +1733,7 @@ class BindingWriter {
 		const after: Array<string> = [];
 		// A kept callback the library never received goes back if the C call never ran.
 		const keptIndexes = binding.arguments.flatMap((_, index) =>
-			keptCallback(index) ? [index] : [],
+			keptCallback(index) && !replacedIndexes.has(index) ? [index] : [],
 		);
 		if (keptIndexes.length > 0) {
 			locals.push("bool mal_called = false;");
@@ -1848,6 +1876,7 @@ class BindingWriter {
 			readonly index: number;
 			readonly slot?: string;
 			readonly retained: boolean;
+			readonly replacement?: string;
 		}> = [];
 		const callbackArguments: Array<string> = [];
 		const trampolines: Array<string> = [];
@@ -2010,28 +2039,46 @@ class BindingWriter {
 					const site = `&mal_site_${String(entry.param)}`;
 					const source = argument(entry.param);
 					if (value.kind === "callback") {
-						const trampoline = `mal_ffi_async_callback_${name}_${String(index)}`;
+						const trampoline =
+							value.replaced === undefined
+								? `mal_ffi_async_callback_${name}_${String(index)}`
+								: `mal_ffi_async_replacement_callback_${String(name.length)}_${name}_${String(index)}`;
 						const field = `mal_callback_${String(index)}`;
 						const slot =
-							value.params.includes("data") || value.lookup !== undefined
+							value.params.includes("data") ||
+							value.lookup !== undefined ||
+							value.replaced !== undefined
 								? undefined
 								: `mal_ffi_async_scoped_${name}_${String(index)}`;
 						callbacks.push({
 							index,
 							retained: value.kept,
+							...(value.replaced === undefined
+								? {}
+								: { replacement: `mal_replacement_${String(index)}` }),
 							...(slot === undefined ? {} : { slot }),
 						});
 						fields.push(`MalFfiCallback *${field};`);
+						const replacement = `mal_replacement_${String(index)}`;
+						const replacedSite = `mal_ffi_replaced_${name}_${String(index)}`;
+						const lanes =
+							value.replaced !== undefined &&
+							!value.params.includes("data") &&
+							value.lookup === undefined;
+						if (value.replaced !== undefined)
+							fields.push(`MalFfiReplacement ${replacement};`);
 						if (slot !== undefined)
 							trampolines.push("", `static _Thread_local MalFfiCallback *${slot};`);
-						trampolines.push(
-							...this.#trampoline(
-								trampoline,
-								{ ...value, kept: true, queued: value.queued ?? "wait" },
-								exported,
-								slot,
-							),
-						);
+						for (const lane of lanes ? [0, 1] : [0])
+							trampolines.push(
+								...this.#trampoline(
+									lanes ? `${trampoline}_${String(lane)}` : trampoline,
+									{ ...value, kept: true, queued: value.queued ?? "wait" },
+									exported,
+									value.replaced === undefined ? slot : replacedSite,
+									lane,
+								),
+							);
 						body.push(
 							`if (!mal_ffi_to_function(vm, ${source}, ${value.nullable}, ${site})) goto mal_failed;`,
 						);
@@ -2042,7 +2089,12 @@ class BindingWriter {
 							"}",
 						);
 						callbackArguments.push(
-							`${target} = mal_ctx->${field} == nullptr ? nullptr : ${trampoline};`,
+							...(value.replaced === undefined
+								? []
+								: [
+										`if (!mal_ffi_replace_prepare(vm, &${replacedSite}, ${value.replaced.key === undefined ? "nullptr" : `(void *) mal_ctx->mal_argument_${String(value.replaced.key)}`}, mal_ctx->${field}, &mal_ctx->${replacement})) goto mal_failed;`,
+									]),
+							`${target} = mal_ctx->${field} == nullptr ? nullptr : ${lanes ? `(mal_ctx->${replacement}.lane == 0 ? ${trampoline}_0 : ${trampoline}_1)` : trampoline};`,
 						);
 						return;
 					}
@@ -2246,6 +2298,11 @@ class BindingWriter {
 							`\t${slot} = mal_ctx->mal_callback_${String(index)};`,
 						],
 			),
+			...callbacks.flatMap(({ replacement }) =>
+				replacement === undefined
+					? []
+					: [`\tmal_ffi_replace_commit(&mal_ctx->${replacement});`],
+			),
 			`\t${returns ? "mal_ctx->mal_return = " : ""}${call};`,
 			...callbacks.flatMap(({ index, slot }) =>
 				slot === undefined ? [] : [`\t${slot} = mal_previous_${String(index)};`],
@@ -2297,9 +2354,10 @@ class BindingWriter {
 					]),
 			...strings.map((temporary) => `\tmal_ffi_string_release(&mal_ctx->${temporary});`),
 			...frees.map((line) => `\t${line}`),
-			...callbacks.map(
-				({ index, retained }) =>
-					`\t${retained ? "if (!mal_ctx->mal_ran) " : ""}mal_ffi_release(mal_ctx->mal_callback_${String(index)});`,
+			...callbacks.map(({ index, retained, replacement }) =>
+				replacement === undefined
+					? `\t${retained ? "if (!mal_ctx->mal_ran) " : ""}mal_ffi_release(mal_ctx->mal_callback_${String(index)});`
+					: `\tif (mal_ctx->${replacement}.site == nullptr) mal_ffi_release(mal_ctx->mal_callback_${String(index)});\n\tmal_ffi_replace_finish(&mal_ctx->${replacement});`,
 			),
 			"\tfree(mal_ctx);",
 			"}",
@@ -2332,7 +2390,7 @@ class BindingWriter {
 				: [
 						`\tMalFfiCallback *mal_callbacks[] = { ${callbacks.map(({ index }) => `mal_ctx->mal_callback_${String(index)}`).join(", ")} };`,
 					]),
-			`\tif (mal_ffi_async(vm, mal_ctx, mal_ffi_async_run_${name}, mal_ffi_async_complete_${name}, mal_ffi_async_release_${name}, mal_keep, ${String(kept)}, ${inputs}, ${callbacks.length === 0 ? "nullptr" : "mal_callbacks"}, ${callbacks.length}, &mal_promise)) {`,
+			`\tif (mal_ffi_async(vm, mal_ctx, mal_ffi_async_run_${name}, mal_ffi_async_complete_${name}, mal_ffi_async_release_${name}, mal_keep, ${String(kept)}, ${inputs}, ${callbacks.length === 0 ? "nullptr" : "mal_callbacks"}, ${callbacks.length}, &mal_promise, ${binding.closes !== undefined || binding.params.some(({ value }) => value.kind === "callback" && value.closes !== undefined)})) {`,
 			...(compoundInputs ? ["\t\tmal_ffi_inputs_unroot(&mal_ctx->mal_inputs);"] : []),
 			"\t\tmal_ffi_unroot(&mal_keep_roots);",
 			"\t\treturn mal_promise;",

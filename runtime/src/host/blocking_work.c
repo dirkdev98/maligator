@@ -136,7 +136,7 @@ static bool mal_blocking_work_init(MalHost *host) {
 bool mal_blocking_work_start(
     MalHost *host, MalBlockingWorkRun run, void *data,
     MalHostTaskDestroy destroy, MalBlockingWorkReservation *reservation,
-    MalHostHandle *operation) {
+    MalHostHandle *operation, bool must_run) {
     if (operation != nullptr) *operation = 0;
     if (host == nullptr || run == nullptr || destroy == nullptr || operation == nullptr ||
         reservation == nullptr || !reservation->active ||
@@ -163,7 +163,7 @@ bool mal_blocking_work_start(
         .reservation = *reservation,
     };
     if (!mal_executor_submit(&state->executor, mal_blocking_work_run,
-            mal_blocking_work_discard, job, sizeof(*job), 0)) {
+            mal_blocking_work_discard, job, sizeof(*job), 0, must_run)) {
         (void) mal_reactor_release_work(&host->reactor);
         mal_host_operation_abort_start(&host->tasks, *operation);
         *operation = 0;

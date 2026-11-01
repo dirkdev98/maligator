@@ -969,7 +969,7 @@ static MalValue dns_start(MalVm *vm, NodeDnsJob *job, NodeDnsPending *state, boo
     if (mal_host(vm) == nullptr
         || !mal_blocking_work_reserve(mal_host(vm), sizeof *job, &reservation)
         || !mal_blocking_work_start(mal_host(vm), dns_job_run, job, dns_job_free,
-            &reservation, &state->operation)) {
+            &reservation, &state->operation, false)) {
         mal_blocking_work_reservation_release(&reservation);
         dns_job_free(job);
         dns_pending_free(state);

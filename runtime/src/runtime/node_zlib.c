@@ -578,7 +578,7 @@ static MalValue zlib_async(MalVm *vm, MalValue receiver, const MalValue *args,
 #endif
     if (!mal_blocking_work_reserve(mal_host(vm), sizeof *job + job->length, &reservation)
         || !mal_blocking_work_start(mal_host(vm), zlib_job_run, job, zlib_job_free,
-            &reservation, &state->operation)) {
+            &reservation, &state->operation, false)) {
         mal_blocking_work_reservation_release(&reservation);
         zlib_job_free(job);
         free(state);

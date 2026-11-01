@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <assert.h>
 
 struct WorkerResource {
     int value;
@@ -11,6 +12,8 @@ struct WorkerResource {
     void *data;
     void (*release)(void *);
     bool emit;
+    bool native_only;
+    pthread_t owner;
 };
 struct RetryResource { int attempts; };
 struct ReusedResource { int value; void (*callback)(ReusedResource *); };
@@ -32,7 +35,13 @@ WorkerResource *worker_open(int value) {
     return resource;
 }
 int worker_value(WorkerResource *resource) { return resource->value; }
+WorkerResource *worker_native_open(int value) {
+    WorkerResource *resource = worker_open(value);
+    if (resource != NULL) { resource->native_only = true; resource->owner = pthread_self(); }
+    return resource;
+}
 int worker_close(WorkerResource *resource) {
+    if (resource->native_only) assert(!pthread_equal(resource->owner, pthread_self()));
     started++;
     while (held) pause_ms(1);
     if (resource->emit && resource->callback != NULL) resource->callback(resource->value, resource->data);
