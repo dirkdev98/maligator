@@ -1,6 +1,7 @@
 #include "state.h"
 #include <stdint.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 static int live;
 
@@ -26,6 +27,8 @@ int caller_state_aligned(const CallerState *state) {
 CallerState *caller_state_same(CallerState *state) { return state; }
 
 void caller_state_cleanup(CallerState *state) {
+    state->listener = NULL;
+    state->listener_data = NULL;
     free(state->private_state);
     state->private_state = NULL;
     state->value = 0;
@@ -34,6 +37,29 @@ void caller_state_cleanup(CallerState *state) {
 
 void caller_state_visit(CallerState *state, void (*visit)(CallerState *, void *), void *data) {
     visit(state, data);
+}
+
+void caller_state_listen(CallerState *state, void (*listener)(int, void *), void *data) {
+    state->listener = listener;
+    state->listener_data = data;
+}
+
+void caller_state_emit(CallerState *state, int event) {
+    if (state->listener != NULL) state->listener(event, state->listener_data);
+}
+
+typedef struct { CallerState *state; int event; } CallerEvent;
+static void *caller_event_thread(void *data) {
+    CallerEvent *event = data;
+    caller_state_emit(event->state, event->event);
+    return NULL;
+}
+
+int caller_state_emit_thread(CallerState *state, int event) {
+    CallerEvent input = { state, event };
+    pthread_t thread;
+    int status = pthread_create(&thread, NULL, caller_event_thread, &input);
+    return status == 0 ? pthread_join(thread, NULL) : status;
 }
 
 int caller_state_live(void) { return live; }

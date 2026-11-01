@@ -16,6 +16,12 @@ declare module "maligator:ffi/state" {
 		visit: (state: State | null) => void,
 	): void;
 	export function caller_state_live(): number;
+	export function caller_state_listen(
+		state: State,
+		listener: (event: number) => void,
+	): void;
+	export function caller_state_emit(state: State, event: number): void;
+	export function caller_state_emit_thread(state: State, event: number): number;
 	export function caller_copy(value: number): Copy;
 	export function caller_copy_aligned(state: Copy): number;
 	export function regex_t(): State;

@@ -409,8 +409,8 @@ typedef struct MalFfiKept {
 } MalFfiKept;
 
 /**
- * Set while a collected handle's destroy function runs inside the collector, where
- * a library might call back or release a kept callback but no JavaScript can run.
+ * Collected handles may release callbacks, whose VM roots can change only after
+ * collection. A library callback cannot enter JavaScript while this is set.
  */
 static _Thread_local bool ffi_finalizing;
 
@@ -1397,22 +1397,26 @@ static char *ffi_identity(MalVm *vm, const MalFfiLibrary *library, const char *n
     return identity;
 }
 
-/** Forget the resource without its C cleanup, freeing any wrapper-owned storage. */
+/** Forget the resource; freeing caller-owned storage also releases its keyed callbacks. */
 static void ffi_handle_forget(MalFfiHandleObject *handle) {
     if (handle->registry != nullptr) ffi_handle_unregister(handle);
-    if (handle->owns_storage) free(handle->value);
+    if (handle->owns_storage) {
+        ffi_replaced_drop(handle->value);
+        free(handle->value);
+    }
     handle->value = nullptr;
 }
 
 static void ffi_handle_finalize(MalHeapHeader *cell) {
     MalFfiHandleObject *handle = (MalFfiHandleObject *) cell;
+    bool previous = ffi_finalizing;
+    ffi_finalizing = true;
     if (handle->value != nullptr && handle->owned && handle->type->collect
         && handle->type->destroy != nullptr) {
-        ffi_finalizing = true;
         if (handle->type->destroy(handle->value)) ffi_replaced_drop(handle->value);
-        ffi_finalizing = false;
     }
     ffi_handle_forget(handle);
+    ffi_finalizing = previous;
 }
 
 static MalValue ffi_handle_dispose(

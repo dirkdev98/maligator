@@ -13,6 +13,9 @@ export default {
 	functions: {
 		caller_state_same: { returns: { borrowed: true } },
 		caller_state_visit: { params: { visit: { callback: { data: "data" } } } },
+		caller_state_listen: {
+			params: { listener: { callback: { data: "data", replaced: true, queued: true } } },
+		},
 		regexec: { params: { "3": { constant: "0" }, "4": { constant: "nullptr" } } },
 	},
 } satisfies MaligatorLibraryContract;

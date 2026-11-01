@@ -4,6 +4,8 @@
 typedef struct CallerState {
     _Alignas(64) void *private_state;
     int value;
+    void (*listener)(int event, void *data);
+    void *listener_data;
 } CallerState;
 
 typedef struct CopiedState {
@@ -19,6 +21,9 @@ int caller_state_aligned(const CallerState *state);
 CallerState *caller_state_same(CallerState *state);
 void caller_state_cleanup(CallerState *state);
 void caller_state_visit(CallerState *state, void (*visit)(CallerState *, void *), void *data);
+void caller_state_listen(CallerState *state, void (*listener)(int, void *), void *data);
+void caller_state_emit(CallerState *state, int event);
+int caller_state_emit_thread(CallerState *state, int event);
 int caller_state_live(void);
 CopiedState caller_copy(int value);
 int caller_copy_aligned(const CopiedState *state);

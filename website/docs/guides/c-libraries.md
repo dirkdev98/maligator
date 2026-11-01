@@ -173,6 +173,8 @@ try {
 Disposing or collecting the handle frees its outer storage. This does not call C
 cleanup, so `destroy` and `collect: true` cannot accompany caller storage. Retain the
 handle while C retains its pointer, and dispose it only after C stops using it.
+The wrapper also releases callbacks keyed by that storage; calls already queued can
+finish from their copied arguments.
 The allocator does not expose writable pointer fields or manage asynchronous close.
 
 ## Describe pointers

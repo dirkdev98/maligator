@@ -49,4 +49,36 @@ describe("caller-owned C state", () => {
 		},
 		300_000,
 	);
+	it.each(
+		["compiled", "interpreted"].flatMap((backend) =>
+			["dispose", "collect"].map((lifetime) => ({ backend, lifetime })),
+		),
+	)(
+		"releases queued callback work after $lifetime through $backend calls",
+		({ backend, lifetime }) => {
+			const built = spawnSync(
+				process.execPath,
+				[
+					cliEntry,
+					"build",
+					`callbacks-${lifetime}.ts`,
+					"--config",
+					"callbacks.build.ts",
+					"--production",
+					...(backend === "interpreted" ? ["--no-compiled"] : []),
+				],
+				{ cwd: project, env: process.env, encoding: "utf8", timeout: 240_000 },
+			);
+			expect(built.status, built.stderr || built.stdout).toBe(0);
+			const executed = spawnSync(built.stdout.trim().split("\n").at(-1)!, [], {
+				cwd: project,
+				encoding: "utf8",
+				timeout: 5000,
+				env: { ...process.env, MAL_GC_STRESS: "1", MAL_GC_VERIFY: "1" },
+			});
+			expect(executed.status, executed.stderr || executed.stdout).toBe(0);
+			expect(executed.stdout.trim()).toBe("caller callback released");
+		},
+		300_000,
+	);
 });
