@@ -12,6 +12,8 @@ import type {
 export interface FfiDirectEntry {
 	readonly symbol: string;
 	readonly arity: number;
+	/** Argument conversion or a reachable C callback can enter JavaScript. */
+	readonly callsUserCode: boolean;
 	/** The result every normal completion produces, when it is a primitive. */
 	readonly result?: FfiDirectResult;
 	/**

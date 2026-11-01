@@ -1915,9 +1915,6 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
       remain valid while C uses them.
 - [ ] Map value unions, bit-fields, and anonymous record members with explicit shape
       facts where C does not identify the active value.
-- [ ] Foreign call effects: Core knows a foreign call's result kind but still
-      treats the call as running arbitrary code. Give it the binding's effects (no
-      user code without callbacks).
 - [ ] Extend struct storage reuse to conditional loop updates and recurrences that
       expose a prior result to opaque calls before replacing it.
 - [ ] Counted UTF-8 strings in queued callbacks, out/inout parameters, and state struct

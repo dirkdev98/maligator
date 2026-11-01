@@ -455,7 +455,7 @@ function immediateOnlyInstructions(
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const embeddable =
 				!protectedInstructions.has(instruction) &&
-				["call", "callKnown", "construct"].includes(
+				["call", "callForeign", "callKnown", "construct"].includes(
 					fn.instructionOpcodeName(instruction),
 				);
 			const inputStart = kernel.instructionOperandStart(instruction);
@@ -584,7 +584,10 @@ function rebuildOperation(
 	const immediateValues: Array<CompilerImmediateValue | undefined> = [];
 	if (
 		allowImmediateOperands &&
-		(opcode === "call" || opcode === "callKnown" || opcode === "construct")
+		(opcode === "call" ||
+			opcode === "callForeign" ||
+			opcode === "callKnown" ||
+			opcode === "construct")
 	) {
 		for (let index = 0; index < inputCount; index++) {
 			const input = kernel.operandAt(inputStart + index);
@@ -2241,6 +2244,39 @@ function lowerFunctionToTarget(
 						}
 					: {}),
 			} as CompilerInstruction;
+			if (rebuilt.type === "callForeign") {
+				if (rebuilt.foreignCall === undefined)
+					throw new Error("Static foreign call lost its configured binding");
+				const callee = nextRegister.value++;
+				const receiver = nextRegister.value++;
+				registerRepresentations.set(callee, "boxed");
+				registerRepresentations.set(receiver, "boxed");
+				temporaryRegisters.push(callee, receiver);
+				instructions.push(
+					{ type: "loadGlobal", registers: [callee], index: rebuilt.foreignSlot },
+					{ type: "createUndefined", registers: [receiver] },
+				);
+				rebuilt = {
+					type: "call",
+					registers: [
+						rebuilt.registers[0],
+						callee,
+						receiver,
+						...rebuilt.registers.slice(1),
+					],
+					foreignCall: rebuilt.foreignCall,
+					...(rebuilt.immediateValues === undefined
+						? {}
+						: {
+								immediateValues: [
+									undefined,
+									undefined,
+									undefined,
+									...rebuilt.immediateValues.slice(1),
+								],
+							}),
+				};
+			}
 			const numericCallback = numericSortCallbacks.get(instruction);
 			if (numericCallback !== undefined && rebuilt.type === "call")
 				rebuilt.numericSortCallback = numericCallback;
@@ -2405,7 +2441,6 @@ function lowerFunctionToTarget(
 			const loweredRegisters =
 				"registers" in lowered ? lowered.registers : EMPTY_FACT_REGISTERS;
 			const inputCount = kernel.instructionOperandCount(instruction);
-			const resultCount = kernel.instructionResultCount(instruction);
 			const inputOffset = loweredRegisters.length - inputCount;
 			Object.assign(lowered, {
 				facts: lowerInstructionFacts(
@@ -2463,14 +2498,8 @@ function lowerFunctionToTarget(
 			).immediateValues;
 			const operandStart = kernel.instructionOperandStart(instruction);
 			const operandCount = kernel.instructionOperandCount(instruction);
-			const callbackCalleeOffset =
-				coreFunction.instructionOpcodeName(instruction) === "callKnown" &&
-				lowered.type === "call"
-					? 1
-					: 0;
 			for (let index = 0; index < operandCount; index++) {
-				if (immediateValues?.[resultCount + callbackCalleeOffset + index] === undefined)
-					continue;
+				if (immediateValues?.[inputOffset + index] === undefined) continue;
 				const input = kernel.operandAt(operandStart + index);
 				if (kernel.valueDefinitionKind(input) !== 1) continue;
 				const origin = kernel.valueDefinitionOwner(input) as CoreInstructionId;

@@ -952,6 +952,18 @@ function verifyGcRoots(
 		const originOpcode = core.instructionOpcodeName(coreInstruction);
 		const attributes = core.instructionAttributes(coreInstruction);
 		const callee = fn.blocks[site.block]!.instructions[site.index - 1];
+		const foreignCallee = fn.blocks[site.block]!.instructions[site.index - 2];
+		const staticForeignCall =
+			originOpcode === "callForeign" &&
+			instruction.type === "call" &&
+			instruction.foreignCall !== undefined &&
+			foreignCallee?.type === "loadGlobal" &&
+			foreignCallee.index === attributes.foreignSlot &&
+			foreignCallee.registers[0] === instruction.registers[1] &&
+			foreignCallee.registers[0] >= fn.allocatedRegisterCount &&
+			callee?.type === "createUndefined" &&
+			callee.registers[0] === instruction.registers[2] &&
+			callee.registers[0] >= fn.allocatedRegisterCount;
 		const known =
 			typeof attributes.operation === "string"
 				? knownOperations()[knownOperationIndex(attributes.operation) ?? -1]
@@ -970,15 +982,15 @@ function verifyGcRoots(
 			callee.registers[0] === instruction.registers[1] &&
 			callee.registers[0] >= fn.allocatedRegisterCount;
 		if (
-			exactCallbackCall &&
+			(exactCallbackCall || staticForeignCall) &&
 			instruction.registers.length !==
 				core.kernel.instructionResultCount(coreInstruction) +
 					core.kernel.instructionOperandCount(coreInstruction) +
-					1
+					(staticForeignCall ? 2 : 1)
 		) {
-			fail("exact builtin callback bridge changed its argument count", { functionIndex });
+			fail("call bridge changed its argument count", { functionIndex });
 		}
-		if (instruction.type !== originOpcode && !exactCallbackCall) {
+		if (instruction.type !== originOpcode && !exactCallbackCall && !staticForeignCall) {
 			fail(
 				`Core instruction @${coreInstruction} lowered to ${instruction.type}, expected ${originOpcode}`,
 				{ functionIndex },
@@ -992,8 +1004,9 @@ function verifyGcRoots(
 		const originOutputCount = kernel.instructionResultCount(coreInstruction);
 		for (let index = 0; index < originInputCount; index++) {
 			if (
-				immediates?.[originOutputCount + (exactCallbackCall ? 1 : 0) + index] ===
-				undefined
+				immediates?.[
+					originOutputCount + (staticForeignCall ? 2 : exactCallbackCall ? 1 : 0) + index
+				] === undefined
 			)
 				continue;
 			const input = kernel.operandAt(originInputStart + index);

@@ -247,10 +247,10 @@ export interface SkippedConstant {
 export interface BindingPlan {
 	readonly functions: ReadonlyArray<BoundFunction>;
 	/**
-	 * Whether calls can reach a kept callback, including through shared C dependencies
-	 * of the configured libraries. It may run and throw during a later C call.
+	 * A shared C dependency can invoke a callback while a different binding runs,
+	 * including a call nested inside a call-scoped callback.
 	 */
-	readonly keepsCallbacks: boolean;
+	readonly hasCallbacks: boolean;
 	readonly unbound: ReadonlyArray<UnboundFunction>;
 	readonly records: ReadonlyMap<string, MappedRecord>;
 	readonly handles: ReadonlyMap<string, HandleType>;
@@ -1848,8 +1848,8 @@ export function planBindings(
 	}
 	return {
 		functions,
-		keepsCallbacks: functions.some((binding) =>
-			binding.params.some(({ value }) => value.kind === "callback" && value.kept),
+		hasCallbacks: functions.some((binding) =>
+			binding.params.some(({ value }) => value.kind === "callback"),
 		),
 		unbound,
 		records: planner.records,

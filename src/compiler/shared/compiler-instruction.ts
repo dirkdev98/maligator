@@ -407,6 +407,17 @@ type CompilerOperation =
 			type: "envPop";
 	  }
 	| {
+			/**
+			 * A static C binding whose conversions and callbacks cannot enter JavaScript.
+			 * Arguments exclude the callee and receiver; late lowering supplies the import.
+			 */
+			type: "callForeign";
+			foreignSlot: number;
+			registers: [number, ...Array<number>];
+			foreignCall?: { readonly symbol: string; readonly arity: number };
+			immediateValues?: Array<CompilerImmediateValue | undefined>;
+	  }
+	| {
 			type: "call";
 
 			// [destination, callee, this, ...arguments]

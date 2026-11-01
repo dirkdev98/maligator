@@ -37,6 +37,7 @@ export const CORE_OPCODES = [
 	"stringConcatLength",
 	"concatStrings",
 	"call",
+	"callForeign",
 	"callKnown",
 	"callSpread",
 	"callSpreadIterable",
@@ -655,6 +656,7 @@ const INPUT_ARITIES = {
 	stringConcatLength: [2, 2],
 	concatStrings: [2, MAX_STRING_CONCAT_INPUTS],
 	call: [2, 65_535],
+	callForeign: [0, 65_533],
 	callKnown: [1, 65_535],
 	callSpread: [3, 3],
 	callSpreadIterable: [3, 65_535],
@@ -788,6 +790,16 @@ function domainsFor(
 }
 
 function effectsFor(opcode: CoreOpcode): CoreInstructionEffects {
+	if (opcode === "callForeign") {
+		return {
+			reads: ["object-property", "array-element", "host", "io"],
+			writes: ["object-property", "array-element", "host", "io"],
+			mayThrow: true,
+			maySuspend: false,
+			mayGc: true,
+			callsUserCode: false,
+		};
+	}
 	const reads = domainsFor(opcode, "reads");
 	const writes = domainsFor(opcode, "writes");
 	if (

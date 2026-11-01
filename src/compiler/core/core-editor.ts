@@ -664,6 +664,7 @@ export class CoreEditor {
 		if (opcode === "loadProperty" || opcode === "loadPropertyStatic")
 			key = CORE_RECORD_FIELD_KIND_ATTRIBUTE;
 		else if (
+			opcode === "callForeign" ||
 			["call-completion", "construct-completion"].includes(
 				this.program.registry.byId(fn.instructionOpcode(instruction)).callTransfer
 					?.result ?? "",

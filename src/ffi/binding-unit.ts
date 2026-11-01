@@ -1293,13 +1293,13 @@ class BindingWriter {
 		if (compoundInputs) locals.push("MalFfiInputs mal_inputs;");
 		/** Whether JavaScript can run between converting an argument and the C call returning. */
 		const runsJavaScript =
-			this.#plan.keepsCallbacks ||
+			this.#plan.hasCallbacks ||
 			binding.params.some(({ value }) =>
 				["callback", "record", "sequence", "array"].includes(value.kind),
 			);
 		/** Whether JavaScript can run during the C call itself, in a callback. */
 		const callsBack =
-			this.#plan.keepsCallbacks ||
+			this.#plan.hasCallbacks ||
 			binding.params.some((param) => param.value.kind === "callback");
 		const argument = (param: number) =>
 			`mal_argc > ${String(param)} ? mal_args[${String(param)}] : mal_ffi_undefined()`;
@@ -2265,7 +2265,7 @@ export function generateBindingUnit(
 		...directEntry(
 			library,
 			binding,
-			plan.keepsCallbacks ||
+			plan.hasCallbacks ||
 				binding.params.some(
 					({ value }) =>
 						value.kind === "callback" ||
@@ -2361,6 +2361,20 @@ export function generateBindingUnit(
 					{
 						symbol: directSymbol(library, binding.name),
 						arity: binding.params.length,
+						callsUserCode:
+							plan.hasCallbacks ||
+							binding.params.some(
+								({ value }) =>
+									![
+										"boolean",
+										"integer",
+										"float",
+										"bigint",
+										"string",
+										"bytes",
+										"handle",
+									].includes(value.kind),
+							),
 						...(result === undefined ? {} : { result }),
 						...(borrows.length === 0 ? {} : { borrows }),
 						...(fields === undefined ? {} : { into: { fields } }),

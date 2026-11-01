@@ -1163,6 +1163,7 @@ const LOOP_SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
 ]);
 
 const LOOP_SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
+	"callForeign",
 	"createNumber",
 	"createF64",
 	"move",
@@ -1335,7 +1336,9 @@ const selectLoopScalarRepresentations: CoreFunctionPass = {
 				const opcode = header.opcode;
 				const operand = fn.kernel.useOperand(use);
 				const callArgument =
-					(opcode === "call" && operand >= 2) || (opcode === "callKnown" && operand >= 1);
+					(opcode === "call" && operand >= 2) ||
+					opcode === "callForeign" ||
+					(opcode === "callKnown" && operand >= 1);
 				if (
 					!LOOP_SCALAR_OPERATIONS.has(opcode) &&
 					!LOOP_SCALAR_CONSUMERS.has(opcode) &&

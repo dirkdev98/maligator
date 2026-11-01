@@ -21,16 +21,21 @@ export function coreForeignSlots(
 	const slots = new Map<number, FfiDirectEntry>();
 	for (const install of candidates) {
 		for (const entry of install.exports) {
-			if (entry.direct !== undefined) slots.set(entry.slot, entry.direct);
+			if (entry.direct !== undefined) {
+				if (typeof entry.direct.callsUserCode !== "boolean")
+					throw new Error(
+						`Foreign binding ${entry.direct.symbol} has no reentry contract`,
+					);
+				slots.set(entry.slot, entry.direct);
+			}
 		}
 	}
 	return slots;
 }
 
 /**
- * Calls whose callee is read straight from a C library import's slot. The installer
- * fills that slot before any code runs and imports cannot be reassigned, so the call
- * always reaches the binding behind the entry.
+ * Calls of configured C imports, selected statically or loaded from an import slot.
+ * Installers fill those immutable slots before program entry.
  */
 export function coreForeignCalls(
 	fn: CoreFunctionStore,
@@ -40,11 +45,18 @@ export function coreForeignCalls(
 	if (slots.size === 0) return calls;
 	const kernel = fn.kernel;
 	for (const instruction of fn.instructionIds()) {
-		if (
-			fn.instructionKind(instruction) !== "operation" ||
-			fn.instructionOpcodeName(instruction) !== "call"
-		)
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		if (fn.instructionOpcodeName(instruction) === "callForeign") {
+			const slot = fn.instructionAttributes(instruction).foreignSlot;
+			const entry = typeof slot === "number" ? slots.get(slot) : undefined;
+			if (entry === undefined || entry.callsUserCode)
+				throw new Error(
+					`Static foreign call ${instruction} has no callback-free binding`,
+				);
+			calls.set(instruction, entry);
 			continue;
+		}
+		if (fn.instructionOpcodeName(instruction) !== "call") continue;
 		const callee = kernel.operandAt(kernel.instructionOperandStart(instruction));
 		if (kernel.valueDefinitionKind(callee) !== 1) continue;
 		const load = coreInstructionId(kernel.valueDefinitionOwner(callee));
@@ -129,25 +141,41 @@ function resultFacts(entry: FfiDirectEntry): CoreNormalResultFacts | undefined {
 }
 
 /**
- * Publish the primitive each foreign call returns on normal completion, so callers
- * keep results such as C integers unboxed.
+ * Bind callback-free imports statically and publish their primitive normal results.
  */
-export function refineCoreForeignCallResults(
+export function specializeCoreForeignCalls(
 	compilation: ConstructedCoreCompilation,
 ): void {
 	const slots = coreForeignSlots(compilation.context.data.hostInstallCandidates);
 	if (slots.size === 0) return;
 	const { program } = compilation;
 	for (const functionId of program.functionIds()) {
-		const calls = coreForeignCalls(program.function(functionId), slots);
+		const fn = program.function(functionId);
+		const calls = coreForeignCalls(fn, slots);
 		const refined = [...calls].flatMap(([instruction, entry]) => {
 			const facts = resultFacts(entry);
-			return facts === undefined ? [] : [{ instruction, facts }];
+			return facts === undefined && entry.callsUserCode
+				? []
+				: [{ instruction, entry, facts }];
 		});
 		if (refined.length === 0) continue;
 		const editor = CoreEditor.open(program, functionId);
-		for (const { instruction, facts } of refined)
-			editor.setNormalResultFacts(instruction, facts);
+		for (const { instruction, entry, facts } of refined) {
+			if (!entry.callsUserCode && fn.instructionOpcodeName(instruction) === "call") {
+				const start = fn.kernel.instructionOperandStart(instruction);
+				const callee = fn.kernel.operandAt(start);
+				const load = coreInstructionId(fn.kernel.valueDefinitionOwner(callee));
+				const inputs = Array.from(
+					{ length: fn.kernel.instructionOperandCount(instruction) - 2 },
+					(_, index) => fn.kernel.operandAt(start + index + 2),
+				);
+				editor.replaceInstruction(instruction, "callForeign", inputs, {
+					attributes: { foreignSlot: fn.instructionAttributes(load).index },
+					sourcePosition: fn.instructionSourcePosition(instruction),
+				});
+			}
+			if (facts !== undefined) editor.setNormalResultFacts(instruction, facts);
+		}
 		editor.commit();
 	}
 }

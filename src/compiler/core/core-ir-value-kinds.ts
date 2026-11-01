@@ -217,8 +217,9 @@ function callResultKind(
 	instruction: CoreInstructionId,
 ): CompilerValueKindMask | undefined {
 	if (
+		fn.instructionOpcodeName(instruction) !== "callForeign" &&
 		fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result !==
-		"call-completion"
+			"call-completion"
 	)
 		return undefined;
 	const mask = fn.instructionAttributes(instruction)[CORE_CALL_RESULT_KIND_ATTRIBUTE];

@@ -417,12 +417,21 @@ function verifyInstructionRows(
 				fail(`instruction @${instruction} ${descriptor.opcode} has invalid output arity`);
 			}
 			const attributes = fn.instructionAttributes(instruction);
+			if (
+				descriptor.opcode === "callForeign" &&
+				(typeof attributes.foreignSlot !== "number" ||
+					!Number.isSafeInteger(attributes.foreignSlot) ||
+					attributes.foreignSlot < 0 ||
+					attributes.foreignSlot >= program.globalCount)
+			)
+				fail("Static foreign call has an invalid binding slot");
 			const callKind = attributes[CORE_CALL_RESULT_KIND_ATTRIBUTE];
 			if (
 				callKind !== undefined &&
-				(!["call-completion", "construct-completion"].includes(
-					descriptor.callTransfer?.result ?? "",
-				) ||
+				((descriptor.opcode !== "callForeign" &&
+					!["call-completion", "construct-completion"].includes(
+						descriptor.callTransfer?.result ?? "",
+					)) ||
 					resultCount !== 1 ||
 					typeof callKind !== "number" ||
 					!compilerValueKindMaskIsValid(callKind))

@@ -822,8 +822,10 @@ function scalarProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): 
 		);
 	}
 	return (
+		opcode === "callForeign" ||
 		fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
-			"call-completion" || SCALAR_PRODUCERS.has(opcode)
+			"call-completion" ||
+		SCALAR_PRODUCERS.has(opcode)
 	);
 }
 
@@ -853,6 +855,7 @@ function scalarBoundaryConsumer(
 		((opcode === "storeProperty" || opcode === "defineProperty") && operand === 2) ||
 		((opcode === "loadProperty" || opcode === "storeProperty") && operand === 1) ||
 		(opcode === "call" && operand >= 2) ||
+		opcode === "callForeign" ||
 		(opcode === "callKnown" && operand >= 1)
 	);
 }

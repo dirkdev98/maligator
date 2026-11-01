@@ -1562,6 +1562,7 @@ function stackObjectCandidate(
 		}
 		if (
 			((opcode === "call" && position >= 2) ||
+				opcode === "callForeign" ||
 				(opcode === "callKnown" && position >= 1)) &&
 			!fn.instructionAttributes(instruction).construct &&
 			fn.instructionAttributes(instruction).argumentMode === undefined &&
@@ -1571,11 +1572,12 @@ function stackObjectCandidate(
 			// copy then serves every iteration, which costs less than lending each time.
 			const callBlock = fn.instructionBlock(instruction);
 			const lent =
-				opcode === "call" &&
+				(opcode === "call" || opcode === "callForeign") &&
 				!control.loops.some(
 					(loop) => loop.blocks.has(callBlock) && !loop.blocks.has(allocationBlock),
 				) &&
-				lender?.(instruction, position - 2, layout) === true;
+				lender?.(instruction, position - (opcode === "callForeign" ? 0 : 2), layout) ===
+					true;
 			observe(
 				lent ? lends : observations,
 				instruction,

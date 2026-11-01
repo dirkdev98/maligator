@@ -103,9 +103,9 @@ export function prepareLibraries(
 		.sort()
 		.map((name) => prepareLibrary(config, name, preparation));
 	// A shared C dependency can call a callback registered through another library.
-	const keepsCallbacks = prepared.some((entry) => entry.plan.keepsCallbacks);
+	const hasCallbacks = prepared.some((entry) => entry.plan.hasCallbacks);
 	const libraries = prepared.map((entry) => {
-		const plan = { ...entry.plan, keepsCallbacks };
+		const plan = { ...entry.plan, hasCallbacks };
 		return {
 			...entry,
 			plan,

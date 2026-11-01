@@ -20,6 +20,7 @@ function compile(body: string): ProgramImage {
 					add: {
 						symbol: "mal_ffi_direct5_point_add",
 						arity: 2,
+						callsUserCode: true,
 						borrows: [
 							{ argument: 0, fields: ["x", "y"] },
 							{ argument: 1, fields: ["x", "y"] },

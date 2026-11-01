@@ -4729,6 +4729,8 @@ function lowerInstructionToBytecodeInstruction(
 				expected: instruction.expected,
 				negated: instruction.negated,
 			};
+		case "callForeign":
+			throw new Error("Static foreign calls must expand before VM encoding");
 		case "loadLocal":
 		case "storeLocal":
 			throw new Error(`Unexpected non-optimized local instruction ${instruction.type}`);

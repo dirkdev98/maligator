@@ -227,6 +227,7 @@ function instructionIntegerRanges(
 		bounds ||
 		(integerResult && (opcode === "unary" || opcode === "binary")) ||
 		opcode === "call" ||
+		opcode === "callForeign" ||
 		(opcode === "unary" && operator === "~") ||
 		(opcode === "binary" && integerBinaryConsumers.has(operator as string)) ||
 		(opcode === "callKnown" &&
