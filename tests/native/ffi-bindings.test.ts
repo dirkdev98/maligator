@@ -113,6 +113,34 @@ describe("C library bindings", () => {
 		]);
 	});
 
+	it("preserves loop-carried struct values and prior identities across backends under GC stress", () => {
+		writeFileSync(
+			path.join(project, "struct-loop.build.ts"),
+			`export default ${JSON.stringify({
+				entry: "struct-loop.ts",
+				ffi: { shapes: { contract: "shapes.ffi.ts" } },
+			})};\n`,
+		);
+		for (const flags of [[], ["--no-compiled"]]) {
+			const built = cli(project, [
+				"build",
+				"--production",
+				"--config",
+				"struct-loop.build.ts",
+				...flags,
+			]);
+			const binary = outputLines(built.stdout).at(-1)!;
+			const executed = spawnSync(binary, [], {
+				cwd: project,
+				encoding: "utf8",
+				timeout: 300_000,
+				env: { ...process.env, MAL_GC_STRESS: "1", MAL_GC_VERIFY: "1" },
+			});
+			expect(executed.status, executed.stderr || executed.stdout).toBe(0);
+			expect(outputLines(executed.stdout)).toEqual(["ffi struct recurrence passed"]);
+		}
+	}, 300_000);
+
 	it("releases a dropped handle with collect when the garbage collector reclaims it", () => {
 		writeFileSync(
 			path.join(project, "collect.build.ts"),

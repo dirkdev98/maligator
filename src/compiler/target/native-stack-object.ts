@@ -76,6 +76,12 @@ export function validateNativeStackObject(
 	const identityOnly = !site.materializations.some(
 		(materialization) => materialization.kind === "observe",
 	);
+	const consumesPriorResult = site.materializations.some(
+		(materialization) =>
+			materialization.kind === "lend" && materialization.ip === site.allocationIp,
+	);
+	// Re-entry clears the materialized copy before inputs lend the previous result.
+	if (consumesPriorResult && !identityOnly) fail();
 	const exceptionTargets = vmExceptionHandlerTargets(instructions.length, handlers);
 	const incoming = validateNativeVirtualValue(
 		instructions,
@@ -90,11 +96,11 @@ export function validateNativeStackObject(
 				instruction.opcode === "LOAD_PROTOTYPE" ||
 				instruction.opcode === "TYPEOF_COMPARE" ||
 				(instruction.opcode === "UNARY" && instruction.operator === "typeof")),
-		!identityOnly,
+		!identityOnly || consumesPriorResult,
 		undefined,
 		exceptionTargets,
 	);
-	if (!identityOnly) {
+	if (!identityOnly || consumesPriorResult) {
 		if (exceptionTargets[site.allocationIp] !== undefined) fail();
 		const handlerTargets = new Set(handlers.map((handler) => handler.handlerIp));
 		for (const [ip, aliases] of incoming) {

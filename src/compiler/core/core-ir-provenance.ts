@@ -1321,6 +1321,91 @@ function foreignStackObjects(
 	};
 }
 
+/** A loop consumes its carried object before replacing the site's storage. */
+function consumedStackObjectRecurrence(
+	fn: CoreFunctionStore,
+	allocation: CoreInstructionId,
+	allocationRoot: CoreValueId,
+	aliases: ReadonlySet<CoreValueId>,
+	roots: ReadonlyMap<CoreValueId, CoreValueId>,
+	control: CoreControlFlow,
+	index: CoreLocalFactIndex,
+	returns: ReadonlyMap<CoreValueId, ReadonlyArray<CoreInstructionId>>,
+): boolean {
+	if (aliases.size !== 2) return false;
+	const carried = [...aliases].find((root) => root !== allocationRoot)!;
+	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+	const allocationBlock = fn.instructionBlock(allocation);
+	for (const loop of control.loops) {
+		if (!loop.blocks.has(allocationBlock)) continue;
+		const start = fn.kernel.blockParameterStart(loop.header);
+		let parameter = -1;
+		for (let offset = 0; offset < fn.kernel.blockParameterCount(loop.header); offset++)
+			if (root(fn.kernel.blockParameterValue(start + offset)) === carried) {
+				if (parameter >= 0) return false;
+				parameter = offset;
+			}
+		if (parameter < 0) continue;
+		const incoming = control.predecessors[loop.header] ?? [];
+		if (!incoming.some((edge) => !loop.blocks.has(edge.from))) return false;
+		if (
+			incoming.some((edge) => {
+				const argument = edge.arguments[parameter];
+				return (
+					edge.kind !== "ordinary" ||
+					argument === undefined ||
+					(loop.blocks.has(edge.from)
+						? root(argument) !== allocationRoot ||
+							!control.dominates(allocationBlock, edge.from)
+						: aliases.has(root(argument)))
+				);
+			})
+		)
+			return false;
+
+		// Rebinding the header parameter ends the previous value's lifetime. Until
+		// then, neither a saved alias nor a second execution of the producer is safe.
+		const after = new Set<CoreBlockId>();
+		const pending = (control.successors[allocationBlock] ?? [])
+			.filter((edge) => edge.kind === "ordinary")
+			.map((edge) => edge.to);
+		while (pending.length > 0) {
+			const block = pending.pop()!;
+			if (block === loop.header || after.has(block)) continue;
+			if (block === allocationBlock) return false;
+			after.add(block);
+			for (const edge of control.successors[block] ?? [])
+				if (edge.kind === "ordinary") pending.push(edge.to);
+		}
+		const staleUse = (instruction: CoreInstructionId): boolean => {
+			const block = fn.instructionBlock(instruction);
+			return (
+				after.has(block) ||
+				(block === allocationBlock &&
+					index.locationIndices[instruction]! > index.locationIndices[allocation]!)
+			);
+		};
+		if (
+			(index.uses.get(carried) ?? []).some(
+				({ instruction }) =>
+					control.reachable.has(fn.instructionBlock(instruction)) &&
+					staleUse(instruction),
+			)
+		)
+			return false;
+		if ((returns.get(carried) ?? []).some(staleUse)) return false;
+		for (const block of [allocationBlock, ...after])
+			if (
+				(control.successors[block] ?? []).some((edge) =>
+					edge.arguments.some((value) => root(value) === carried),
+				)
+			)
+				return false;
+		return true;
+	}
+	return false;
+}
+
 function stackObjectCandidate(
 	fn: CoreFunctionStore,
 	layout: CoreNamedAllocationLayout,
@@ -1349,6 +1434,7 @@ function stackObjectCandidate(
 		fn.instructionBlock(layout.instruction),
 	);
 	const aliases = new Set([allocationRoot]);
+	let carriedAcrossAllocation = false;
 	if (flow.escapingRoots.has(allocationRoot)) {
 		// A guarded helper can join its virtual result with an ordinary fallback result.
 		if (
@@ -1387,7 +1473,6 @@ function stackObjectCandidate(
 			}
 			if (aliases.size > 16) return undefined;
 		}
-		// A carried alias must not survive a backedge that can re-enter its allocation.
 		for (const block of control.reachable) {
 			if (
 				(control.successors[block] ?? []).some(
@@ -1397,7 +1482,7 @@ function stackObjectCandidate(
 						edge.arguments.some((value) => aliases.has(roots.get(value) ?? value)),
 				)
 			)
-				return undefined;
+				carriedAcrossAllocation = true;
 		}
 		for (const block of control.reachable) {
 			const handlerArgumentStart = fn.kernel.blockHandlerArgumentStart(block);
@@ -1500,8 +1585,26 @@ function stackObjectCandidate(
 		}
 		return undefined;
 	}
+	const consumedRecurrence =
+		carriedAcrossAllocation &&
+		call &&
+		!requiresObjectIdentity &&
+		observations.size === 0 &&
+		!reachesExceptionTransport &&
+		lends.has(layout.instruction) &&
+		consumedStackObjectRecurrence(
+			fn,
+			layout.instruction,
+			allocationRoot,
+			aliases,
+			roots,
+			control,
+			index,
+			flow.returns,
+		);
+	if (carriedAcrossAllocation && !consumedRecurrence) return undefined;
 	if (
-		(aliases.size > 1 && observations.size === 0) ||
+		(aliases.size > 1 && observations.size === 0 && !consumedRecurrence) ||
 		observations.size > 8 ||
 		(observations.size > 0 && reachesExceptionTransport)
 	)

@@ -580,6 +580,18 @@ function pendingLocalCandidate(
 			? { materializationPaths: 1 }
 			: {}),
 	});
+	// Observers and lenders still call C or user code. Counting them as savings can
+	// prefer a cold seed object over the hot loop result that replaces it.
+	const runtimeBenefit =
+		candidate.kind === "stack-object"
+			? [
+					candidate.allocation,
+					...candidate.accesses.map(({ instruction }) => instruction),
+				].reduce(
+					(score, instruction) => score + costModel.forRegion([instruction]).runtimeScore,
+					0,
+				)
+			: cost.runtimeScore;
 	const materialize = (): CorePlanSpecialization => {
 		const blocks = Object.freeze(
 			[
@@ -705,7 +717,7 @@ function pendingLocalCandidate(
 			cost: Object.freeze({
 				generatedCode: cost.estimatedCStatements,
 				compilerWork: cost.compileScore,
-				runtimeBenefit: cost.runtimeScore + candidate.fanOut,
+				runtimeBenefit: runtimeBenefit + candidate.fanOut,
 			}),
 		} as const;
 		const propertyPlacement = (
@@ -1064,7 +1076,7 @@ function pendingLocalCandidate(
 			site: candidate.root,
 			revision: 0,
 			priorityClass: 0,
-			priorityScore: -(cost.runtimeScore + candidate.fanOut),
+			priorityScore: -(runtimeBenefit + candidate.fanOut),
 			targets: Object.freeze(
 				candidate.kind === "function-call-chain" && candidate.targetFunction !== undefined
 					? [candidate.targetFunction]

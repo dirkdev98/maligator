@@ -1914,9 +1914,8 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 - [ ] Foreign call effects: Core knows a foreign call's result kind but still
       treats the call as running arbitrary code. Give it the binding's effects (no
       user code without callbacks).
-- [ ] Struct results carried around a loop, as in `pos = Vector2Add(pos, vel)`,
-      still allocate: a stack object reached through a block parameter needs
-      identity checks at its accesses even when nothing observes it.
+- [ ] Extend struct storage reuse to conditional loop updates and recurrences that
+      observe a prior result before replacing it.
 - [ ] Caller-allocated state structs with pointer fields, such as zlib's
       `z_stream` and libuv's handles, cannot be created or filled from JavaScript.
 - [ ] Extend `ffi check` with sanitizer probes for accepted facts.

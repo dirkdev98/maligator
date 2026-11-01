@@ -2955,8 +2955,14 @@ function emitCompiledVariant(
 			slotCount: site.slotCount,
 		});
 		if (!elided && fieldRepresentations === undefined) nextStackSlot += site.slotCount;
+		// A self-lending result joins a heap seed, so accesses need the identity guard
+		// even when no observer creates a materialized copy.
 		if (
-			site.materializations.some((materialization) => materialization.kind === "observe")
+			site.materializations.some(
+				(materialization) =>
+					materialization.kind === "observe" ||
+					(materialization.kind === "lend" && materialization.ip === site.allocationIp),
+			)
 		)
 			stackObjectSites.get(site.allocationIp)!.materializedSlot = nextStackSlot++;
 	}
