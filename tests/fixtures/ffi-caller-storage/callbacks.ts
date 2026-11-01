@@ -32,12 +32,15 @@ export async function run(dispose: boolean): Promise<void> {
 	const received = new Promise<void>((resolve) => {
 		finish = resolve;
 	});
-	// A completed setup job leaves no native call-frame roots for explicit collection.
-	await Promise.resolve().then(() => {
-		register((event) => {
-			events.push(event);
-			if (event === 2) finish();
-		}, dispose);
+	// Host turns clear stale conservative stack roots before the continuation collects.
+	await new Promise<void>((resolve) => {
+		setTimeout(() => {
+			register((event) => {
+				events.push(event);
+				if (event === 2) finish();
+			}, dispose);
+			resolve();
+		}, 0);
 	});
 	check(events.join(",") === "1");
 	collectGarbage();

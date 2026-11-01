@@ -76,7 +76,12 @@ describe("caller-owned C state", () => {
 				timeout: 5000,
 				env: { ...process.env, MAL_GC_STRESS: "1", MAL_GC_VERIFY: "1" },
 			});
-			expect(executed.status, executed.stderr || executed.stdout).toBe(0);
+			expect(
+				executed.status,
+				[executed.error?.message, executed.signal, executed.stderr, executed.stdout]
+					.filter(Boolean)
+					.join("\n"),
+			).toBe(0);
 			expect(executed.stdout.trim()).toBe("caller callback released");
 		},
 		300_000,
