@@ -7,6 +7,43 @@ export default {
 	find: [{ includeDirs: ["."], sources: ["async.c"] }],
 	types: { AsyncResource: { handle: { destroy: "async_resource_destroy" } } },
 	functions: {
+		async_register_lookup: {
+			async: "async_register_lookup_async",
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						lookup: { function: "async_resource_data", param: "1" },
+					},
+				},
+			},
+		},
+		async_release_after: {
+			async: "async_release_after_async",
+			params: { callback: { callback: { data: "data", release: "release" } } },
+		},
+		async_release_buffer: {
+			async: "async_release_buffer_async",
+			params: {
+				callback: { callback: { data: "data", release: "release" } },
+				bytes: { bytes: { length: "length" } },
+			},
+		},
+		async_register: {
+			async: "async_register_async",
+			params: {
+				callback: { callback: { data: "data", release: "release" }, nullable: true },
+			},
+		},
+		async_registered_call: { async: "async_registered_call_async" },
+		async_registered_clear: { async: "async_registered_clear_async" },
+		async_notify: {
+			async: "async_notify_async",
+			params: {
+				callback: { callback: { data: "data", release: "release", queued: true } },
+			},
+		},
 		async_bytes_count: {
 			async: "async_bytes_count_async",
 			params: {

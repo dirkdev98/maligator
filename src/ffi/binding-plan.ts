@@ -1741,9 +1741,13 @@ export function planBindings(
 			declared.add(asyncName);
 			if (
 				!("gaps" in result) &&
-				result.params.some(({ value }) => value.kind === "callback" && value.kept)
+				result.params.some(
+					({ value }) =>
+						value.kind === "callback" &&
+						(value.replaced !== undefined || value.closes !== undefined),
+				)
 			) {
-				throw new FfiError(`${at}: an async call takes only call-scoped callbacks`);
+				throw new FfiError(`${at}: async replaced and close callbacks are unsupported`);
 			}
 		}
 		if ("gaps" in result) unbound.push(result);

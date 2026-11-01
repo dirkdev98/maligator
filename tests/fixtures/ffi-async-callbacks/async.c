@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct AsyncResource { int value; };
+struct AsyncResource { int value; void *callback_data; };
 static _Atomic int live;
 static _Atomic int shutdown_entered;
 static _Atomic int shutdown_finished;
@@ -122,4 +122,101 @@ void async_shutdown_outputs(AsyncCallback callback, void *data, char **text) {
 void async_bytes_count(long long count, void (*callback)(const unsigned char *, long long, void *), void *data) {
     const unsigned char byte = 42;
     callback(&byte, count, data);
+}
+
+static pthread_mutex_t registered_lock = PTHREAD_MUTEX_INITIALIZER;
+static AsyncCallback registered_callback;
+static AsyncResourceCallback registered_lookup;
+static void *registered_data;
+static void (*registered_release)(void *);
+
+void async_registered_clear(void) {
+    pthread_mutex_lock(&registered_lock);
+    void *data = registered_data;
+    void (*release)(void *) = registered_release;
+    registered_callback = NULL;
+    registered_lookup = NULL;
+    registered_data = NULL;
+    registered_release = NULL;
+    pthread_mutex_unlock(&registered_lock);
+    if (release != NULL) release(data);
+}
+
+int async_register(int mode, AsyncCallback callback, void *data, void (*release)(void *)) {
+    async_registered_clear();
+    pthread_mutex_lock(&registered_lock);
+    registered_callback = callback;
+    registered_data = data;
+    registered_release = release;
+    pthread_mutex_unlock(&registered_lock);
+    int result = mode > 0 && callback != NULL ? callback(11, data) : 0;
+    if (mode == 2) async_registered_clear();
+    return result;
+}
+
+int async_registered_call(int value) {
+    pthread_mutex_lock(&registered_lock);
+    AsyncCallback callback = registered_callback;
+    AsyncResourceCallback lookup = registered_lookup;
+    void *data = registered_data;
+    pthread_mutex_unlock(&registered_lock);
+    if (callback != NULL) return callback(value, data);
+    AsyncResource resource = {value, data};
+    return lookup == NULL ? 0 : lookup(&resource);
+}
+
+int async_registered_count(void) {
+    pthread_mutex_lock(&registered_lock);
+    int count = registered_callback != NULL || registered_lookup != NULL;
+    pthread_mutex_unlock(&registered_lock);
+    return count;
+}
+
+int async_register_lookup(int mode, AsyncResourceCallback callback, void *data, void (*release)(void *)) {
+    async_registered_clear();
+    pthread_mutex_lock(&registered_lock);
+    registered_lookup = callback;
+    registered_data = data;
+    registered_release = release;
+    pthread_mutex_unlock(&registered_lock);
+    int result = mode > 0 ? async_registered_call(11) : 0;
+    if (mode == 2) async_registered_clear();
+    return result;
+}
+
+void *async_resource_data(AsyncResource *resource) { return resource->callback_data; }
+int async_resource_value(AsyncResource *resource) { return resource->value; }
+
+void async_notify(void (*callback)(int, void *), void *data, void (*release)(void *)) {
+    callback(17, data);
+    release(data);
+}
+
+static _Atomic int retained_started;
+static _Atomic int retained_finished;
+
+int async_release_after(int value, AsyncCallback callback, void *data, void (*release)(void *)) {
+    atomic_fetch_add(&retained_started, 1);
+    int result = callback(value, data);
+    release(data);
+    atomic_fetch_add(&retained_finished, 1);
+    return result;
+}
+
+int async_release_buffer(AsyncCallback callback, void *data, void (*release)(void *), const unsigned char *bytes, size_t length) {
+    assert(length > 0);
+    return async_release_after(bytes[0], callback, data, release);
+}
+
+static void retained_shutdown_check(void) {
+    assert(atomic_load(&retained_started) > 0);
+    assert(atomic_load(&retained_started) == atomic_load(&retained_finished));
+}
+
+void async_retained_arm_shutdown(void) {
+    assert(atexit(retained_shutdown_check) == 0);
+}
+
+void async_retained_wait(void) {
+    while (atomic_load(&retained_started) == 0) sched_yield();
 }

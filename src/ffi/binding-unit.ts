@@ -1844,7 +1844,11 @@ class BindingWriter {
 		const name = binding.name;
 		const declaration = binding.declaration;
 		const context = `MalFfiAsync_${name}`;
-		const callbacks: Array<{ readonly index: number; readonly slot?: string }> = [];
+		const callbacks: Array<{
+			readonly index: number;
+			readonly slot?: string;
+			readonly retained: boolean;
+		}> = [];
 		const callbackArguments: Array<string> = [];
 		const trampolines: Array<string> = [];
 		const discard = (value: JsValue, expression: string): Array<string> => {
@@ -1867,7 +1871,10 @@ class BindingWriter {
 				discard(output.value, `mal_ctx->mal_output_${String(index)}`),
 			),
 		];
-		const tracksRun = binding.closes !== undefined || nativeDisposals.length > 0;
+		const tracksRun =
+			binding.closes !== undefined ||
+			nativeDisposals.length > 0 ||
+			binding.params.some(({ value }) => value.kind === "callback" && value.kept);
 		const fields: Array<string> = [];
 		if (tracksRun) fields.push("bool mal_ran;");
 		if (nativeDisposals.length > 0) fields.push("bool mal_result_observed;");
@@ -1972,7 +1979,10 @@ class BindingWriter {
 					);
 					return;
 				case "callback-release":
-					throw new Error(`async binding ${name} has a kept callback`);
+					callbackArguments.push(
+						`${target} = mal_ctx->mal_callback_${String(entry.of)} == nullptr ? nullptr : mal_ffi_release;`,
+					);
+					return;
 				case "out":
 				case "inout": {
 					const output = `mal_output_${String(entry.output)}`;
@@ -2006,14 +2016,18 @@ class BindingWriter {
 							value.params.includes("data") || value.lookup !== undefined
 								? undefined
 								: `mal_ffi_async_scoped_${name}_${String(index)}`;
-						callbacks.push({ index, ...(slot === undefined ? {} : { slot }) });
+						callbacks.push({
+							index,
+							retained: value.kept,
+							...(slot === undefined ? {} : { slot }),
+						});
 						fields.push(`MalFfiCallback *${field};`);
 						if (slot !== undefined)
 							trampolines.push("", `static _Thread_local MalFfiCallback *${slot};`);
 						trampolines.push(
 							...this.#trampoline(
 								trampoline,
-								{ ...value, kept: true, queued: "wait" },
+								{ ...value, kept: true, queued: value.queued ?? "wait" },
 								exported,
 								slot,
 							),
@@ -2284,7 +2298,8 @@ class BindingWriter {
 			...strings.map((temporary) => `\tmal_ffi_string_release(&mal_ctx->${temporary});`),
 			...frees.map((line) => `\t${line}`),
 			...callbacks.map(
-				({ index }) => `\tmal_ffi_release(mal_ctx->mal_callback_${String(index)});`,
+				({ index, retained }) =>
+					`\t${retained ? "if (!mal_ctx->mal_ran) " : ""}mal_ffi_release(mal_ctx->mal_callback_${String(index)});`,
 			),
 			"\tfree(mal_ctx);",
 			"}",

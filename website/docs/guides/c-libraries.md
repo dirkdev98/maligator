@@ -415,9 +415,13 @@ Call-scoped callbacks run on the program's thread while the C caller waits, incl
 callbacks from threads the library creates. Without user data, the library must invoke
 the C callback on the worker executing that call. An unhandled callback exception rejects
 that call's promise; later callbacks in the same call return zero without running
-JavaScript. Exceptions caught inside a callback keep their ordinary behavior. Register
-retained callbacks synchronously, with `queued` when the library calls them from other
-threads.
+JavaScript. Exceptions caught inside a callback keep their ordinary behavior.
+
+Callbacks retained through a `release` parameter can also be registered asynchronously.
+They continue to queue and wait after registration settles, until C releases them.
+Explicit `queued: true` callbacks continue without waiting. Register `replaced` and
+`closes` callbacks synchronously. When registering synchronously, use `queued` if the
+library calls back from other threads.
 
 Use `async` only for functions the library allows on another thread while the program makes other calls, such as SQLite in its default serialized mode.
 
