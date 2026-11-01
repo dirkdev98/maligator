@@ -64,6 +64,11 @@ export interface CoreModuleInterface extends ExternalModuleInterface {
  * copied into this closed contract instead.
  */
 export interface CoreProgramData {
+	/** Private module lexical cells reset only during instantiation, before evaluation. */
+	readonly moduleLexicalSlots?: ReadonlyArray<{
+		readonly slot: number;
+		readonly evaluator: number;
+	}>;
 	/** Only module evaluation can initialize these unobservable private-name cells. */
 	readonly modulePrivateNames?: ReadonlyArray<{
 		readonly slot: number;

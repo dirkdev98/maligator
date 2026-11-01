@@ -33,6 +33,45 @@ for (let index = 0; index < 2048; index++) {
 	expected = (expected + value) >>> 0;
 }
 check(sum === expected, "module numeric state survives pure C calls");
+let numericOnly = 0;
+for (let index = 0; index < 2048; index++)
+	numericOnly = (numericOnly + effects_mix(index)) >>> 0;
+check(numericOnly === expected, "evaluator-only numeric state preserves uint32 wrapping");
+let negativeZero = -0;
+negativeZero += effects_mix(0) * 0;
+check(Object.is(negativeZero, 0), "numeric state preserves negative zero addition");
+let mutable: number | { valueOf(): number } = 1;
+let objectCoercions = 0;
+effects_point({
+	get x() {
+		mutable = {
+			valueOf() {
+				objectCoercions++;
+				collect();
+				return 19;
+			},
+		};
+		return 0;
+	},
+	y: 0,
+});
+check(
+	(mutable as number) + effects_mix(0) === 19 + 1013904223 && objectCoercions === 1,
+	"callback writers preserve object coercion of module state",
+);
+let beforeInitialization = false;
+try {
+	effects_point({
+		get x() {
+			return later;
+		},
+		y: 0,
+	});
+} catch (error) {
+	beforeInitialization = error instanceof ReferenceError;
+}
+const later = 7;
+check(beforeInitialization && later === 7, "callback reads preserve the module TDZ");
 const beforeThrow = sum;
 refuses(() => {
 	sum = effects_mix(-1);

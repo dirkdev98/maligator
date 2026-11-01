@@ -86,6 +86,10 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
+import {
+	coreEvaluatorGlobalWrites,
+	coreModuleGlobalLoadInitialized,
+} from "./core-module-globals.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts";
 import { corePrivateFieldFacts } from "./core-private-field-facts.ts";
@@ -900,12 +904,12 @@ function addOperationTransfer(
 	const callMask = callResultKind(fn, instruction) ?? recordFieldKind(fn, instruction);
 	const contextual = inputs?.operationResultMask?.(instruction, output);
 	const alternatives = inputs?.operationResultAlternatives?.(instruction, output);
-	if (contextual !== undefined && alternatives !== undefined) {
-		// Stored alternatives cannot execute before the record producer completes.
+	if (alternatives !== undefined) {
+		// Alternatives only contribute once their producer has a normal result.
 		if (!alternatives.hasNormalResult) return;
 		// Recompute the complete flow before publishing a new normal-result bound.
 		const index = buffer.kinds.length;
-		addKindTransfer(buffer, KIND_TRANSFER_NORMAL_RESULT_JOIN, output, contextual);
+		addKindTransfer(buffer, KIND_TRANSFER_NORMAL_RESULT_JOIN, output, contextual ?? 0);
 		buffer.inputCounts[index] = alternatives.values.length;
 		for (const alternative of alternatives.values) {
 			(buffer.inputPoints ??= [])[buffer.inputs.length] =
@@ -1490,6 +1494,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 		key: "local-value-kinds",
 		scope: "function",
 		owner: CORE_OPTIMIZATION_OWNER.localValueKinds,
+		programDependencies: ["functions", "specializationInputs"],
 		functionDependencies: [
 			"body",
 			"cfg",
@@ -1530,9 +1535,23 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 					? COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED
 					: undefined;
 			};
+			const evaluatorGlobals = coreEvaluatorGlobalWrites(program, context, fn);
+			const operationResultAlternatives = (
+				instruction: CoreInstructionId,
+			): CoreValueAlternatives | undefined => {
+				if (fn.instructionOpcodeName(instruction) !== "loadGlobal") return undefined;
+				const index = fn.instructionAttributes(instruction).index;
+				if (typeof index !== "number") return undefined;
+				const cell = evaluatorGlobals.get(index);
+				return cell !== undefined &&
+					coreModuleGlobalLoadInitialized(fn, cfg, cell, instruction)
+					? { values: cell.stores, hasNormalResult: true }
+					: undefined;
+			};
 			if (context.data.singleAssignmentGlobalSlots.length === 0) {
 				return analyzeCoreValueKinds(program, fn, cfg, {
 					operationResultMask,
+					operationResultAlternatives,
 					elementLoadMask,
 					typedElementLoadMask,
 					runOwner,
@@ -1630,6 +1649,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			};
 			return analyzeCoreValueKinds(program, fn, cfg, {
 				operationResultMask,
+				operationResultAlternatives,
 				elementLoadMask,
 				typedElementLoadMask,
 				operationResultValue,

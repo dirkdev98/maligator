@@ -924,6 +924,27 @@ describe("Core local canonicalization", () => {
 		expect(opcodes).toContain("throwIfTdz");
 	});
 
+	it("keeps evaluator-owned mutable bindings initialized across user calls", () => {
+		const optimized = optimizedClosedModule(
+			`let accumulator = 0;
+			for (let index = 0; index < globalThis.count; index++) {
+				globalThis.tick();
+				accumulator = (accumulator + index) >>> 0;
+			}
+			globalThis.result = accumulator;`,
+			"core-module-mutable-tdz.mjs",
+		);
+		const checks = [...optimized.functionIds()].flatMap((functionId) => {
+			const fn = optimized.function(functionId);
+			return [...fn.instructionIds()].filter(
+				(instruction) =>
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionOpcodeName(instruction) === "throwIfTdz",
+			);
+		});
+		expect(checks).toEqual([]);
+	});
+
 	it("removes TDZ checks from loop cycles that only forward initialized values", () => {
 		const optimized = optimizedClosedModule(
 			`function rotate(left, right, count) {

@@ -69,6 +69,10 @@ import type {
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
+import {
+	coreEvaluatorGlobalWrites,
+	coreModuleGlobalLoadInitialized,
+} from "./core-module-globals.ts";
 import type {
 	CoreFunctionPass,
 	CoreFunctionPassContext,
@@ -1847,9 +1851,17 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 			);
 		};
 		let writtenGlobals: ReadonlySet<unknown> | undefined;
+		const evaluatorGlobals = coreEvaluatorGlobalWrites(
+			program,
+			context.compilationContext,
+			fn,
+		);
 		const initializedGlobal = (load: CoreInstructionId): boolean => {
 			const index = fn.instructionAttributes(load).index;
 			if (typeof index !== "number") return false;
+			const cell = evaluatorGlobals.get(index);
+			if (cell !== undefined && coreModuleGlobalLoadInitialized(fn, control, cell, load))
+				return true;
 			if (
 				coreReadsModuleBindingInitialized(
 					context.compilationContext,

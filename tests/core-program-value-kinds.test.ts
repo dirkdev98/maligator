@@ -44,6 +44,129 @@ import {
 
 const OBSERVATION_OPERATORS = new Set(["typeof", "!", "===", "!=="]);
 
+it.each(["initialized", "mixed", "before", "reset", "eval", "open", "linked"] as const)(
+	"bounds evaluator cell reads conservatively for %s initialization",
+	(mode) => {
+		const program = analysisProgram();
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const load = () =>
+			builder.appendInstruction(entry, "loadGlobal", [], {
+				attributes: { index: 0 },
+			})[0]!;
+		const early = mode === "before" ? load() : undefined;
+		const [number] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [number!], {
+			attributes: { index: 0 },
+		});
+		if (mode === "reset") {
+			const [empty] = builder.appendInstruction(entry, "createEmpty", []);
+			builder.appendInstruction(entry, "storeGlobal", [empty!], {
+				attributes: { index: 0 },
+			});
+		}
+		if (mode === "mixed") {
+			const [object] = builder.appendInstruction(entry, "createObject", []);
+			builder.appendInstruction(entry, "storeGlobal", [object!], {
+				attributes: { index: 0 },
+			});
+		}
+		const loaded = early ?? load();
+		builder.setTerminator(entry, { kind: "return", value: loaded });
+		const functionId = builder.finish(entry).function;
+		const base = programAnalysisContext(mode !== "open");
+		const manager = new CoreAnalysisManager(
+			program,
+			{
+				...base,
+				facts: {
+					...base.facts,
+					world: {
+						...base.facts.world,
+						eval: mode === "eval" ? "runtime" : "disabled",
+					},
+				},
+				data: {
+					...base.data,
+					moduleLexicalSlots: [{ slot: 0, evaluator: functionId }],
+					...(mode === "linked"
+						? { moduleLinks: { imports: [], exports: [], interfaces: [] } }
+						: {}),
+				},
+			},
+			new CoreOptimizationReportBuilder(program),
+		);
+		expect(
+			manager
+				.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+					scope: "function",
+					function: functionId,
+				})
+				.kindMask(loaded),
+		).toBe(
+			mode === "initialized"
+				? COMPILER_VALUE_KIND_NUMBER
+				: mode === "mixed"
+					? COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_OBJECT
+					: COMPILER_VALUE_KIND_TOP,
+		);
+	},
+);
+
+it("withdraws evaluator numeric cell bounds when another function starts writing", () => {
+	const program = analysisProgram();
+	const initializer = new CoreFunctionBuilder(program);
+	const init = initializer.createBlock();
+	const [empty] = initializer.appendInstruction(init, "createEmpty", []);
+	const emptyInstruction = initializer.bodyInstructionIds(init)[0]!;
+	initializer.appendInstruction(init, "storeGlobal", [empty!], {
+		attributes: { index: 0 },
+	});
+	initializer.setTerminator(init, { kind: "return", value: empty! });
+	const initializerId = initializer.finish(init).function;
+	const evaluator = new CoreFunctionBuilder(program);
+	const entry = evaluator.createBlock();
+	const [number] = evaluator.appendInstruction(entry, "createNumber", [], {
+		attributes: { value: 0 },
+	});
+	evaluator.appendInstruction(entry, "storeGlobal", [number!], {
+		attributes: { index: 0 },
+	});
+	const [loaded] = evaluator.appendInstruction(entry, "loadGlobal", [], {
+		attributes: { index: 0 },
+	});
+	evaluator.setTerminator(entry, { kind: "return", value: loaded! });
+	const evaluatorId = evaluator.finish(entry).function;
+	const base = programAnalysisContext();
+	const manager = new CoreAnalysisManager(
+		program,
+		{
+			...base,
+			facts: {
+				...base.facts,
+				world: { ...base.facts.world, eval: "disabled" },
+			},
+			data: {
+				...base.data,
+				moduleLexicalSlots: [{ slot: 0, evaluator: evaluatorId }],
+			},
+		},
+		new CoreOptimizationReportBuilder(program),
+	);
+	const request = { scope: "function", function: evaluatorId } as const;
+	expect(manager.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request).kindMask(loaded!)).toBe(
+		COMPILER_VALUE_KIND_NUMBER,
+	);
+	const edit = CoreEditor.open(program, initializerId);
+	edit.replaceInstruction(emptyInstruction, "createObject", []);
+	edit.commit();
+	expect(manager.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request).kindMask(loaded!)).toBe(
+		COMPILER_VALUE_KIND_TOP,
+	);
+});
+
 it("revisits callers when a return brand changes without changing the Object kind", () => {
 	const program = analysisProgram();
 	const builder = new CoreFunctionBuilder(program);

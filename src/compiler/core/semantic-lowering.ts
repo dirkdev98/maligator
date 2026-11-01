@@ -190,6 +190,7 @@ interface CoreFrontendContext {
 	 */
 	/** Module path to its lazy init function, or null when merged/eagerly initialized. */
 	compiledModuleInitForPaths: Map<string, number | null>;
+	moduleEvaluationBodies: Map<string, number>;
 
 	/**
 	 * Keep track of where the binding is stored.
@@ -890,6 +891,7 @@ export function constructSemanticProgramCore(
 		bindingFunctionNode: new Map(),
 
 		compiledModuleInitForPaths: new Map(),
+		moduleEvaluationBodies: new Map(),
 		bindingToStorage: new Map(),
 		modulePrivateNames: [],
 		nextLoopScopeId: -1,
@@ -1037,6 +1039,8 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 		context: {
 			facts: program.facts,
 			data: coreProgramDataFromSemantic(program.semantic, {
+				moduleLexicalSlots:
+					moduleLinks === undefined ? coreModuleLexicalSlots(program) : [],
 				modulePrivateNames: program.modulePrivateNames,
 				sourceCallSites: program.sourceOrigins?.callSites(),
 				cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
@@ -1736,6 +1740,40 @@ function coreInitializedLexicalReads(program: CoreFrontendContext): {
 	return { initializedCapturedReads: reads, initializedModuleBindingReads: moduleReads };
 }
 
+function coreModuleLexicalSlots(
+	program: CoreFrontendContext,
+): Array<{ slot: number; evaluator: number }> {
+	if (
+		program.evalDirect ||
+		program.facts.world.eval !== "disabled" ||
+		program.facts.closure.sourceClosure.kind !== "known"
+	)
+		return [];
+	const exported = new Set(
+		[...program.moduleNamespaces.values()].flatMap((entries) =>
+			entries.map((entry) => entry.exporter),
+		),
+	);
+	return program.semantic.files.flatMap((file) => {
+		const evaluator = program.moduleEvaluationBodies.get(file.path);
+		if (file.type !== "module" || file.commonjs || evaluator === undefined) return [];
+		return (file.scopes.find((scope) => scope.node === file.ast)?.bindings ?? []).flatMap(
+			(binding) => {
+				if (
+					binding.kind === "var" ||
+					binding.imported ||
+					binding.external ||
+					binding.undeclared ||
+					exported.has(binding)
+				)
+					return [];
+				const storage = program.bindingToStorage.get(binding);
+				return storage?.type === "global" ? [{ slot: storage.index, evaluator }] : [];
+			},
+		);
+	});
+}
+
 /**
  * Compiler-owned cells eligible for the whole-Core single-assignment proof.
  *
@@ -2189,6 +2227,7 @@ function compileModuleGraphInit(
 		nextCapturedIndex: 0,
 	};
 	registerCoreFunction(program, body);
+	program.moduleEvaluationBodies.set(file.path, body.functionIndex);
 	const bodyBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	body.blocks.push(bodyBlock);
 	const bodyCursor = { block: bodyBlock };
