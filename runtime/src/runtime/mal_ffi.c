@@ -373,6 +373,13 @@ typedef struct MalFfiHandleView {
     struct MalFfiHandleView *next;
 } MalFfiHandleView;
 
+typedef struct MalFfiRetainedField {
+    MalValue buffer;
+    MalArrayBufferPin *pin;
+    void *data;
+    usize length;
+} MalFfiRetainedField;
+
 typedef struct MalFfiHandleObject {
     MalObject object;
     MalObjectStorage object_storage;
@@ -380,6 +387,8 @@ typedef struct MalFfiHandleObject {
     /** View observations cannot replace the policy acquired with ownership. */
     const MalFfiHandleType *owner_type;
     MalFfiHandleView *views;
+    MalFfiRetainedField *retained;
+    const void *operation;
     /** Stable C storage, or the library's pointer; null once closed. */
     void *value;
     bool owned;
@@ -973,6 +982,26 @@ void mal_ffi_release(void *data) {
     ffi_release_now(kept);
 }
 
+typedef struct MalFfiAsyncPayload {
+    _Atomic u32 references;
+    void *data;
+    MalFfiAsyncRun run;
+    MalFfiAsyncRelease release;
+} MalFfiAsyncPayload;
+
+static void ffi_async_run(void *data) {
+    MalFfiAsyncPayload *payload = data;
+    payload->run(payload->data);
+}
+
+static void ffi_async_release(void *data) {
+    MalFfiAsyncPayload *payload = data;
+    if (atomic_fetch_sub_explicit(&payload->references, 1, memory_order_acq_rel) == 1) {
+        payload->release(payload->data);
+        free(payload);
+    }
+}
+
 /** A C call running on a blocking worker, until its completion settles `promise`. */
 typedef struct MalFfiAsync {
     struct MalFfiAsync *next;
@@ -983,6 +1012,8 @@ typedef struct MalFfiAsync {
     MalValue *keep;
     i32 keep_count;
     MalFfiAsyncComplete complete;
+    /** Host teardown can discard its result before VM cleanup retires argument pins. */
+    MalFfiAsyncPayload *payload;
     MalAsyncContext *async_context;
 #if MAL_REALMS
     MalRealm *realm;
@@ -1010,7 +1041,12 @@ static void ffi_async_free(MalVm *vm) {
             link = &call->next;
             continue;
         }
+        MalRootSpan kept;
+        mal_gc_root(&kept, call->keep, call->keep_count);
         *link = call->next;
+        (void) call->complete(vm, call->payload->data, false);
+        ffi_async_release(call->payload);
+        mal_gc_unroot(&kept);
         free(call->keep);
         free(call);
     }
@@ -1026,6 +1062,8 @@ static bool ffi_async_drain(MalVm *vm) {
     }
     MalFfiAsync *call = *link;
     if (call == nullptr || !mal_host_next_task(&host->tasks, &task)) return false;
+    MalRootSpan kept;
+    mal_gc_root(&kept, call->keep, call->keep_count);
     *link = call->next;
 #if MAL_REALMS
     MalRealm *saved_realm = vm->current_realm;
@@ -1041,7 +1079,7 @@ static bool ffi_async_drain(MalVm *vm) {
     void *data = mal_blocking_work_result_data(task.data);
     bool ran = data != nullptr && task.result != MAL_HOST_TERMINAL_CANCELLED;
     // The completion releases what the call held, so it runs even when the work did not.
-    if (data != nullptr) roots[1] = call->complete(vm, data, ran);
+    roots[1] = call->complete(vm, call->payload->data, ran);
     if (!ran && vm->completion.kind != MAL_COMPLETION_THROW) {
         mal_vm_throw_error(
             vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) "A C library call did not run");
@@ -1055,10 +1093,12 @@ static bool ffi_async_drain(MalVm *vm) {
         vm, roots[0], vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], rejected, roots[1]);
     mal_async_context_scope_exit(vm, &scope);
     mal_gc_unroot(&root);
+    mal_gc_unroot(&kept);
 #if MAL_REALMS
     mal_realm_switch(vm, saved_realm);
 #endif
     free(call->keep);
+    ffi_async_release(call->payload);
     free(call);
     mal_host_task_release(&host->tasks, &task);
     return true;
@@ -1066,7 +1106,8 @@ static bool ffi_async_drain(MalVm *vm) {
 
 bool mal_ffi_async(
     MalVm *vm, void *data, MalFfiAsyncRun run, MalFfiAsyncComplete complete,
-    MalFfiAsyncRelease release, const MalValue *keep, int32_t keep_count, MalValue *promise) {
+    MalFfiAsyncRelease release, const MalValue *keep, int32_t keep_count,
+    const MalFfiInputs *inputs, MalValue *promise) {
     MalHost *host = mal_host(vm);
     if (host == nullptr) {
         mal_vm_throw_error(
@@ -1089,31 +1130,40 @@ bool mal_ffi_async(
     MalValue reject;
     mal_promise_new_direct_capability(vm, promise, &resolve, &reject);
     if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+    i32 input_count = inputs == nullptr ? 0 : inputs->count;
+    if (input_count > INT32_MAX - keep_count) return mal_ffi_out_of_memory(vm);
+    i32 total = keep_count + input_count;
     MalFfiAsync *call = calloc(1, sizeof(*call));
-    MalValue *kept = keep_count == 0 ? nullptr : malloc(sizeof(*kept) * (usize) keep_count);
-    if (call == nullptr || (keep_count > 0 && kept == nullptr)) {
+    MalFfiAsyncPayload *payload = calloc(1, sizeof(*payload));
+    MalValue *kept = total == 0 ? nullptr : malloc(sizeof(*kept) * (usize) total);
+    if (call == nullptr || payload == nullptr || (total > 0 && kept == nullptr)) {
         free(call);
+        free(payload);
         free(kept);
         return mal_ffi_out_of_memory(vm);
     }
     if (keep_count > 0) memcpy(kept, keep, sizeof(*kept) * (usize) keep_count);
+    if (input_count > 0) memcpy(kept + keep_count, inputs->values, sizeof(*kept) * (usize) input_count);
     *call = (MalFfiAsync) {
         .vm = vm,
         .promise = *promise,
         .keep = kept,
-        .keep_count = keep_count,
+        .keep_count = total,
         .complete = complete,
+        .payload = payload,
         .async_context = mal_async_context_capture(vm),
 #if MAL_REALMS
         .realm = vm->current_realm,
 #endif
     };
+    *payload = (MalFfiAsyncPayload) {.references = 2, .data = data, .run = run, .release = release};
     MalBlockingWorkReservation reservation = {0};
     if (!mal_blocking_work_reserve(host, sizeof(*call), &reservation)
-        || !mal_blocking_work_start(host, run, data, release, &reservation, &call->operation)) {
+        || !mal_blocking_work_start(host, ffi_async_run, payload, ffi_async_release, &reservation, &call->operation)) {
         mal_blocking_work_reservation_release(&reservation);
         free(kept);
         free(call);
+        free(payload);
         mal_vm_throw_error(
             vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
             (const byte *) "A C library call could not be scheduled");
@@ -1408,11 +1458,27 @@ static char *ffi_identity(MalVm *vm, const MalFfiLibrary *library, const char *n
 /** Forget the resource; freeing caller-owned storage also releases its keyed callbacks. */
 static void ffi_handle_forget(MalFfiHandleObject *handle) {
     if (handle->registry != nullptr) ffi_handle_unregister(handle);
+    if (handle->retained != nullptr) {
+        for (i32 index = 0; index < handle->type->managed_field_count; index++) {
+            MalFfiRetainedField *field = &handle->retained[index];
+            if (!ffi_finalizing) mal_gc_write_barrier(field->buffer);
+            mal_array_buffer_object_release_pin(field->pin);
+        }
+        free(handle->retained);
+        handle->retained = nullptr;
+    }
     if (handle->owns_storage) {
         ffi_replaced_drop(handle->value);
         free(handle->value);
     }
     handle->value = nullptr;
+}
+
+static void ffi_handle_trace(MalHeapHeader *cell) {
+    MalFfiHandleObject *handle = (MalFfiHandleObject *) cell;
+    if (handle->retained == nullptr) return;
+    for (i32 index = 0; index < handle->type->managed_field_count; index++)
+        mal_gc_mark_value(handle->retained[index].buffer);
 }
 
 static void ffi_handle_finalize(MalHeapHeader *cell) {
@@ -1517,10 +1583,12 @@ static MalValue ffi_handle_prototype(
     for (i32 index = 0; index < type->field_count; index++) {
         const MalFfiField *field = &type->fields[index];
         char getter_name[128];
+        char setter_name[128];
         snprintf(getter_name, sizeof(getter_name), "get %s", field->name);
+        snprintf(setter_name, sizeof(setter_name), "set %s", field->name);
         mal_intrinsic_define_accessor_n(
             vm, prototype, mal_intrinsic_string_key(vm, (const byte *) field->name),
-            (const byte *) getter_name, 0, field->get, nullptr, 0, nullptr,
+            (const byte *) getter_name, 0, field->get, (const byte *) setter_name, 1, field->set,
             MAL_PROPERTY_CONFIGURABLE);
     }
     MalValue result = held[0];
@@ -1592,7 +1660,7 @@ static MalValue ffi_new_handle(
         open = nullptr;
     }
     if (open != nullptr) {
-        if (owned && !open->owned) {
+        if (owned && !open->owned && !open->owns_storage) {
             open->owned = true;
             open->owner_type = type;
         }
@@ -1635,6 +1703,8 @@ static MalValue ffi_new_handle(
     handle->type = type;
     handle->owner_type = type;
     handle->views = nullptr;
+    handle->retained = nullptr;
+    handle->operation = nullptr;
     handle->value = stored;
     handle->owned = owned;
     handle->owns_storage = owns_storage;
@@ -1642,7 +1712,18 @@ static MalValue ffi_new_handle(
     handle->registry = nullptr;
     handle->pins = 0;
     handle->scope = scope;
-    if (type->size == 0 && (state == nullptr || !ffi_handle_register(state, handle))) {
+    if (owns_storage && type->managed_field_count > 0) {
+        handle->retained = calloc((usize) type->managed_field_count, sizeof(*handle->retained));
+        if (handle->retained != nullptr) {
+            for (i32 index = 0; index < type->managed_field_count; index++)
+                handle->retained[index].buffer = mal_value_new_undefined();
+        } else {
+            ffi_handle_forget(handle);
+            mal_vm_throw_allocation_error(vm);
+        }
+    }
+    if (vm->completion.kind != MAL_COMPLETION_THROW && type->size == 0
+        && (state == nullptr || !ffi_handle_register(state, handle))) {
         if (owned && type->destroy != nullptr) type->destroy(stored);
         ffi_handle_forget(handle);
         mal_vm_throw_allocation_error(vm);
@@ -1712,13 +1793,182 @@ bool mal_ffi_handle_held(MalVm *vm, void *pin, const MalFfiSite *site) {
         "a handle the program holds, not one a callback lends");
 }
 
+bool mal_ffi_handle_idle(MalVm *vm, MalValue value, const MalFfiSite *site) {
+    MalFfiHandleObject *handle = ffi_handle(value);
+    return handle != nullptr && handle->operation == nullptr
+        ? true : ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "state no C operation is using");
+}
+
+static bool ffi_state_range(MalFfiHandleObject *handle, i32 index, void **data, usize *length) {
+    const MalFfiManagedField *field = &handle->type->managed_fields[index];
+    MalFfiRetainedField *range = &handle->retained[index];
+    if (!field->read(handle->value, data, length)) return false;
+    if (*data == nullptr) return *length == 0;
+    if (range->pin == nullptr) return false;
+    uptr start = (uptr) range->data;
+    uptr pointer = (uptr) *data;
+    return pointer >= start && pointer - start <= range->length
+        && *length <= range->length - (pointer - start);
+}
+
+static bool ffi_state_check(MalVm *vm, MalFfiHandleObject *handle, const MalFfiSite *site) {
+    for (i32 index = 0; index < handle->type->managed_field_count; index++) {
+        void *data;
+        usize length;
+        if (!ffi_state_range(handle, index, &data, &length))
+            return ffi_failf(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site,
+                "%s within its retained byte range", handle->type->managed_fields[index].name);
+    }
+    return true;
+}
+
+bool mal_ffi_begin_handle_use(MalVm *vm, void *pin, const void *operation, const MalFfiSite *site) {
+    MalFfiHandleObject *handle = pin;
+    if (handle == nullptr || handle->retained == nullptr) return true;
+    if (handle->operation == operation) return true;
+    if (handle->operation != nullptr)
+        return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "state no other C operation is using");
+    if (!ffi_state_check(vm, handle, site)) return false;
+    handle->operation = operation;
+    return true;
+}
+
+void mal_ffi_end_handle_use(
+    MalVm *vm, void *pin, const void *operation, const MalFfiSite *site, bool check) {
+    MalFfiHandleObject *handle = pin;
+    if (handle == nullptr || handle->operation != operation || handle->pins != 1) return;
+    if (check && handle->value != nullptr && vm->completion.kind != MAL_COMPLETION_THROW)
+        (void) ffi_state_check(vm, handle, site);
+    handle->operation = nullptr;
+}
+
+MalValue mal_ffi_state_bytes(
+    MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t index, const MalFfiSite *site) {
+    void *storage;
+    if (!mal_ffi_to_handle(vm, value, type, false, site, &storage, nullptr)
+        || !mal_ffi_handle_idle(vm, value, site)) return mal_value_new_undefined();
+    MalFfiHandleObject *handle = ffi_handle(value);
+    // Accessors belong to the caller allocation's descriptor, even through a view.
+    if (handle->type != type || handle->retained == nullptr
+        || index < 0 || index >= type->managed_field_count) {
+        mal_ffi_expected(vm, site, "the state field's allocating handle");
+        return mal_value_new_undefined();
+    }
+    void *data;
+    usize length;
+    if (!ffi_state_range(handle, index, &data, &length)) {
+        ffi_fail(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site, "a pointer and count within the retained byte range");
+        return mal_value_new_undefined();
+    }
+    MalFfiRetainedField *range = &handle->retained[index];
+    if (range->pin == nullptr || (data == nullptr && range->data != nullptr)) return mal_value_new_null();
+    MalArrayBufferObject *buffer = mal_value_to_array_buffer_object(range->buffer);
+    u32 offset = data == nullptr ? 0 : (u32) ((uptr) data - (uptr) buffer->data);
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    MalTypedArrayObject *array = mal_typed_array_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
+        buffer, MAL_TA_UINT8, offset, (u32) length, false);
+    mal_gc_unroot(&root);
+    return mal_value_from_typed_array_object(array);
+}
+
+bool mal_ffi_set_state_bytes(
+    MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t index, MalValue bytes,
+    const MalFfiSite *site) {
+    void *storage;
+    if (!mal_ffi_to_handle(vm, value, type, false, site, &storage, nullptr)
+        || !mal_ffi_handle_idle(vm, value, site)) return false;
+    MalFfiHandleObject *handle = ffi_handle(value);
+    if (handle->type != type || handle->retained == nullptr
+        || index < 0 || index >= type->managed_field_count)
+        return mal_ffi_expected(vm, site, "the state field's allocating handle");
+    const MalFfiManagedField *field = &type->managed_fields[index];
+    MalFfiRetainedField next = {.buffer = mal_value_new_undefined()};
+    if (!mal_value_is_null(bytes)) {
+        MalBufferSourceSpan span;
+        if (!mal_ffi_to_bytes(vm, bytes, false, field->writable, site, &next.data, &next.length, nullptr)
+            || !mal_ffi_check_count(vm, next.length, field->count_bits, field->count_signed, site)) return false;
+        if (mal_buffer_source_span(bytes, &span) != MAL_BUFFER_SOURCE_SPAN_OK) return false;
+        next.pin = mal_array_buffer_object_retain_pin(span.buffer);
+        if (next.pin == nullptr) return mal_ffi_out_of_memory(vm);
+        next.buffer = mal_value_from_array_buffer_object(span.buffer);
+    }
+    MalFfiRetainedField *range = &handle->retained[index];
+    field->write(storage, next.data, next.length);
+    mal_gc_write_barrier(range->buffer);
+    MalArrayBufferPin *previous = range->pin;
+    *range = next;
+    mal_gc_card(&handle->object.header, next.buffer);
+    mal_array_buffer_object_release_pin(previous);
+    return true;
+}
+
 void mal_ffi_unpin_handle(void *pin) {
     if (pin != nullptr) ((MalFfiHandleObject *) pin)->pins--;
+}
+
+void mal_ffi_inputs_init(MalFfiInputs *inputs, const void *operation, bool held) {
+    *inputs = (MalFfiInputs) {.operation = operation, .held = held, .rooted = true};
+    mal_ffi_root(&inputs->roots, nullptr, 0);
+}
+
+void mal_ffi_inputs_unroot(MalFfiInputs *inputs) {
+    if (inputs->rooted) {
+        mal_ffi_unroot(&inputs->roots);
+        inputs->rooted = false;
+    }
+}
+
+bool mal_ffi_input_handle(
+    MalVm *vm, MalFfiInputs *inputs, MalValue value, const MalFfiHandleType *type,
+    bool nullable, const MalFfiSite *site, void **out) {
+    if (inputs == nullptr) return mal_ffi_to_handle(vm, value, type, nullable, site, out, nullptr);
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    bool ok = true;
+    if (inputs->count == inputs->capacity) {
+        usize capacity = inputs->capacity == 0 ? 8 : (usize) inputs->capacity * 2;
+        if (capacity > INT32_MAX) capacity = INT32_MAX;
+        MalValue *grown = inputs->count == INT32_MAX ? nullptr : realloc(inputs->values, capacity * sizeof(*grown));
+        if (grown == nullptr) ok = mal_ffi_out_of_memory(vm);
+        else {
+            inputs->values = grown;
+            inputs->capacity = (i32) capacity;
+            inputs->roots.slots = grown;
+        }
+    }
+    void *pin = nullptr;
+    if (ok) ok = mal_ffi_to_handle(vm, value, type, nullable, site, out, &pin);
+    if (ok && pin != nullptr) {
+        inputs->values[inputs->count++] = value;
+        inputs->roots.count = inputs->count;
+        ok = (!inputs->held || mal_ffi_handle_held(vm, pin, site))
+            && mal_ffi_begin_handle_use(vm, pin, inputs->operation, site);
+    }
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+void mal_ffi_inputs_release(MalVm *vm, MalFfiInputs *inputs, const MalFfiSite *site, bool check) {
+    for (i32 index = 0; index < inputs->count; index++) {
+        MalFfiHandleObject *handle = ffi_handle(inputs->values[index]);
+        mal_ffi_end_handle_use(vm, handle, inputs->operation, site, check);
+        mal_ffi_unpin_handle(handle);
+    }
+    mal_ffi_inputs_unroot(inputs);
+    free(inputs->values);
+    inputs->values = nullptr;
+    inputs->count = 0;
+    inputs->capacity = 0;
 }
 
 bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, const MalFfiSite *site) {
     if (pin == nullptr) return true;
     MalFfiHandleObject *handle = pin;
+    if (handle->owns_storage && handle->type->size == 0)
+        return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
+            "library-owned storage for a destroy binding; caller storage needs explicit C cleanup");
     if (handle->pins != 1 || handle->closing)
         return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
             "a handle no other C call is using");
@@ -1778,6 +2028,7 @@ static MalValue ffi_export_value(
 void mal_ffi_install(
     MalVm *vm, const MalFfiLibrary *library, const MalHostInstallSlot *slots, int32_t count) {
     mal_gc_register_finalizer(MAL_HEAP_FFI_HANDLE_OBJECT, ffi_handle_finalize);
+    mal_gc_register_tracer(MAL_HEAP_FFI_HANDLE_OBJECT, ffi_handle_trace);
     for (i32 index = 0; index < count; index++) {
         const MalFfiExport *entry = ffi_find_export(library, slots[index].name);
         if (entry == nullptr) {

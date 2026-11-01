@@ -93,8 +93,22 @@ export interface MaligatorFfiHandle {
 /** Facts about one C type, keyed by its typedef or struct tag. */
 export interface MaligatorFfiTypeFacts {
 	handle?: MaligatorFfiHandle;
+	/** Retained byte ranges in caller-owned state. Assignment writes the pointer and
+	 * count together; C may advance them only within the assigned range.
+	 */
+	fields?: Record<string, MaligatorFfiFieldFacts>;
 	/** Header documentation that `ffi check` watches when reviewing these facts. */
 	evidence?: Array<MaligatorFfiEvidence>;
+}
+
+/** A pointer/count pair retained by a caller-owned state handle. */
+export interface MaligatorFfiFieldFacts {
+	bytes: {
+		/** The C integer field holding the remaining byte count. */
+		length: string;
+		/** Whether C writes these bytes; defaults to true for a non-const pointee. */
+		writable?: boolean;
+	};
 }
 
 /** A declaration whose documentation supports a fact, independent of its source location. */
@@ -141,6 +155,10 @@ export interface MaligatorFfiValueFacts {
 	 * drop the parameter from the JavaScript signature. The C compiler checks its type.
 	 */
 	constant?: string;
+	/** Pass the C compiler's `sizeof` for this complete struct or union type and
+	 * omit the parameter from JavaScript. Its size must fit the integer parameter.
+	 */
+	sizeof?: string;
 }
 
 /**

@@ -95,6 +95,10 @@ check(
 	c.views_caller_base(caller) === caller && c.views_read(caller) === 31,
 	"caller storage shares views",
 );
+refuses(
+	() => c.views_close_base(caller),
+	"a base destroy binding cannot own caller storage",
+);
 caller[Symbol.dispose]();
 refuses(() => c.views_read(caller), "caller storage disposal closes views");
 refuses(

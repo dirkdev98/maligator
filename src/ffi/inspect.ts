@@ -149,11 +149,12 @@ export interface HandleInspection {
 	readonly destroySuccess?: string;
 	readonly collect: boolean;
 	readonly doc?: string;
-	/** Read-only accessors of a struct handle. */
+	/** Value accessors on a struct handle or caller factory result. */
 	readonly fields: ReadonlyArray<{
 		readonly name: string;
 		readonly c: string;
 		readonly ts: string;
+		readonly set?: string;
 	}>;
 }
 
@@ -430,11 +431,19 @@ export function inspectBindings(
 				: { destroySuccess: handle.destroy.success }),
 			collect: handle.collect,
 			...(handle.doc === undefined ? {} : { doc: handle.doc }),
-			fields: handle.fields.map((field) => ({
-				name: field.name,
-				c: formatCDeclaration(field.type),
-				ts: formatTsType(field.value),
-			})),
+			fields: [
+				...handle.fields.map((field) => ({
+					name: field.name,
+					c: formatCDeclaration(field.type),
+					ts: formatTsType(field.value),
+				})),
+				...handle.managedFields.map((field) => ({
+					name: field.name,
+					c: formatCDeclaration(field.type),
+					ts: "Uint8Array | null",
+					set: "ArrayBuffer | ArrayBufferView | null",
+				})),
+			],
 		})),
 		constants,
 		skippedConstants: plan.skippedConstants,

@@ -162,8 +162,25 @@ function validateEvidence(value: unknown, at: string): void {
 
 function validateTypeFacts(value: unknown, at: string): void {
 	expectObject(value, at);
-	expectKeys(value, at, ["handle", "evidence"]);
+	expectKeys(value, at, ["handle", "fields", "evidence"]);
 	if (value.evidence !== undefined) validateEvidence(value.evidence, `${at}.evidence`);
+	if (value.fields !== undefined) {
+		expectObject(value.fields, `${at}.fields`);
+		for (const [name, field] of Object.entries(value.fields)) {
+			const fieldAt = `${at}.fields.${name}`;
+			expect(C_NAME.test(name), fieldAt, "a C field name");
+			expectObject(field, fieldAt);
+			expectKeys(field, fieldAt, ["bytes"]);
+			expectObject(field.bytes, `${fieldAt}.bytes`);
+			expectKeys(field.bytes, `${fieldAt}.bytes`, ["length", "writable"]);
+			expect(
+				typeof field.bytes.length === "string" && C_NAME.test(field.bytes.length),
+				`${fieldAt}.bytes.length`,
+				"a C field name",
+			);
+			booleanField(field.bytes, "writable", `${fieldAt}.bytes`);
+		}
+	}
 	if (value.handle === undefined) return;
 	const handle = value.handle;
 	expectObject(handle, `${at}.handle`);
@@ -237,6 +254,7 @@ function validateValueFacts(value: unknown, at: string): void {
 		"free",
 		"callback",
 		"constant",
+		"sizeof",
 	]);
 	for (const key of ["nullable", "borrowed", "out", "inout"]) {
 		booleanField(value, key, at);
@@ -332,6 +350,12 @@ function validateValueFacts(value: unknown, at: string): void {
 			"a C identifier or integer literal",
 		);
 	}
+	if (value.sizeof !== undefined)
+		expect(
+			typeof value.sizeof === "string" && C_NAME.test(value.sizeof),
+			`${at}.sizeof`,
+			"a C type name",
+		);
 	if (value.free !== undefined) {
 		expect(
 			typeof value.free === "string" && C_NAME.test(value.free),

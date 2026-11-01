@@ -12,6 +12,34 @@
 // Any isolate thread may release a store, so the seam is read atomically.
 static _Atomic(MalArrayBufferReleaseObserver) g_release_observer;
 
+struct MalArrayBufferPin {
+    MalArrayBufferObject *buffer;
+    u32 references;
+};
+
+MalArrayBufferPin *mal_array_buffer_object_retain_pin(MalArrayBufferObject *buffer) {
+    if (buffer->pins == UINT32_MAX) return nullptr;
+    MalArrayBufferPin *pin = buffer->retained_pin;
+    if (pin == nullptr) {
+        pin = malloc(sizeof(*pin));
+        if (pin == nullptr) return nullptr;
+        *pin = (MalArrayBufferPin) {.buffer = buffer};
+        buffer->retained_pin = pin;
+    }
+    pin->references++;
+    buffer->pins++;
+    return pin;
+}
+
+void mal_array_buffer_object_release_pin(MalArrayBufferPin *pin) {
+    if (pin == nullptr) return;
+    if (pin->buffer != nullptr) pin->buffer->pins--;
+    if (--pin->references == 0) {
+        if (pin->buffer != nullptr) pin->buffer->retained_pin = nullptr;
+        free(pin);
+    }
+}
+
 static MalArrayBufferObject *mal_array_buffer_object_new_impl(
     MalHeap *heap,
     MalObject *prototype,
@@ -63,6 +91,7 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
     buffer->immutable = false;
     buffer->sensitive = false;
     buffer->pins = 0;
+    buffer->retained_pin = nullptr;
 
     return buffer;
 }
@@ -186,6 +215,11 @@ bool mal_array_buffer_object_is_detached(const MalArrayBufferObject *buffer) {
 }
 
 void mal_array_buffer_object_release_store(MalHeap *heap, MalArrayBufferObject *buffer) {
+    // Dead retained owners may finalize after this wrapper, including an empty buffer.
+    if (buffer->retained_pin != nullptr) {
+        buffer->retained_pin->buffer = nullptr;
+        buffer->retained_pin = nullptr;
+    }
     if (buffer->shared_memory != nullptr) {
         mal_shared_memory_release(buffer->shared_memory);
         buffer->shared_memory = nullptr;

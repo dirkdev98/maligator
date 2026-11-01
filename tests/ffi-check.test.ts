@@ -251,6 +251,23 @@ typedef ShapesBase ShapesView;
 		).toBe(true);
 	});
 
+	it("watches types used only for fixed ABI sizes", () => {
+		const directory = project();
+		const headerPath = path.join(directory, "include/shapes.h");
+		const sized = `${header}\ntypedef struct ShapesAbi { char bytes[24]; } ShapesAbi;\nint shapes_abi(int size);\n`;
+		writeFileSync(headerPath, sized);
+		writeContract(directory, {
+			functions: { shapes_abi: { params: { size: { sizeof: "ShapesAbi" } } } },
+		});
+		accept(directory);
+		writeFileSync(headerPath, sized.replace("bytes[24]", "bytes[32]"));
+		expect(
+			check(directory, [], 1).libraries[0]?.changes.some((change) =>
+				change.path.includes("ShapesAbi"),
+			),
+		).toBe(true);
+	});
+
 	it("checks a result's release function even when it is not exported", () => {
 		const directory = project();
 		const headerPath = path.join(directory, "include/shapes.h");

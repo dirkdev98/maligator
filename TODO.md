@@ -1911,14 +1911,17 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
       application host that links the project's bindings.
 - [ ] Async twins with callbacks, and queued callbacks that return a result to a
       waiting library thread.
+- [ ] Describe pointer-valued callback result lifetimes so their backing resources
+      remain valid while C uses them.
+- [ ] Map value unions, bit-fields, and anonymous record members with explicit shape
+      facts where C does not identify the active value.
 - [ ] Foreign call effects: Core knows a foreign call's result kind but still
       treats the call as running arbitrary code. Give it the binding's effects (no
       user code without callbacks).
 - [ ] Extend struct storage reuse to conditional loop updates and recurrences that
       expose a prior result to opaque calls before replacing it.
-- [ ] Managed pointer fields for caller-allocated state structs, such as zlib's
-      `z_stream`, need retained buffers, checked pointer/count updates, and lifecycle
-      rules. Libuv handles also need storage retained through asynchronous close.
+- [ ] Retain caller-owned handle storage through asynchronous C close completion,
+      such as libuv's close callback, and reconcile worker destruction at shutdown.
 - [ ] Counted UTF-8 strings in queued callbacks, out/inout parameters, and state struct
       fields need explicit count and lifetime handling.
 - [ ] Import macros referenced by facts from transitive headers outside the declared

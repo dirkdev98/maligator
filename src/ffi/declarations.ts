@@ -44,6 +44,17 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string> {
 		lines.push("\t}");
 	}
 	for (const handle of plan.handles.values()) {
+		const fields = [
+			...handle.fields.flatMap((field) => [
+				...docComment(field.doc, "\t\t"),
+				`\t\treadonly ${field.name}: ${formatTsType(field.value)};`,
+			]),
+			...handle.managedFields.flatMap((field) => [
+				...docComment(field.doc, "\t\t"),
+				`\t\tget ${field.name}(): Uint8Array | null;`,
+				`\t\tset ${field.name}(value: ArrayBuffer | ArrayBufferView | null);`,
+			]),
+		];
 		lines.push(
 			...docComment(handle.doc, "\t"),
 			`\texport interface ${handle.name} {`,
@@ -52,17 +63,14 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string> {
 			`\t\t/** Close the handle${handle.destroy === undefined ? "" : `, releasing an owned resource with ${handle.destroy.name}`}.${handle.destroy?.success === undefined ? "" : " Failed C cleanup throws and leaves it open for retry."} */`,
 			"\t\t[Symbol.dispose](): void;",
 		);
-		for (const field of handle.fields) {
-			lines.push(
-				...docComment(field.doc, "\t\t"),
-				`\t\treadonly ${field.name}: ${formatTsType(field.value)};`,
-			);
-		}
+		// A canonical pointer view keeps its original prototype; only the factory guarantees accessors.
+		if (handle.allocator === undefined) lines.push(...fields);
 		lines.push("\t}");
 		if (handle.allocator !== undefined)
 			lines.push(
 				"\t/** Allocate zeroed caller storage. C initialization and cleanup remain explicit. */",
-				`\texport function ${handle.allocator}(): ${handle.name};`,
+				`\texport function ${handle.allocator}(): ${handle.name}${fields.length === 0 ? ";" : " & {"}`,
+				...(fields.length === 0 ? [] : [...fields, "\t};"]),
 			);
 	}
 	for (const binding of plan.functions) {

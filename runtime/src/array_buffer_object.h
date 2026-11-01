@@ -4,6 +4,8 @@
 #include "object.h"
 #include "shared_memory.h"
 
+typedef struct MalArrayBufferPin MalArrayBufferPin;
+
 /**
  * ArrayBuffer / SharedArrayBuffer backing store.
  *
@@ -47,7 +49,12 @@ typedef struct MalArrayBufferObject {
     // transferred, as with a host-defined [[ArrayBufferDetachKey]], so JavaScript
     // a C library calls back into cannot free memory the library is writing.
     u32 pins;
+    MalArrayBufferPin *retained_pin;
 } MalArrayBufferObject;
+
+/** A VM-thread pin that can be retired after its buffer wrapper has been swept. */
+MalArrayBufferPin *mal_array_buffer_object_retain_pin(MalArrayBufferObject *buffer);
+void mal_array_buffer_object_release_pin(MalArrayBufferPin *pin);
 
 /**
  * Allocate a new ArrayBuffer whose initial byte range is zero-filled. When

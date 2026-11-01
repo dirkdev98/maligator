@@ -284,8 +284,18 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 			facts.params,
 			...Object.values(facts.variants ?? {}).map((variant) => variant.params),
 		])
-			for (const value of Object.values(params ?? {}))
+			for (const value of Object.values(params ?? {})) {
 				if (value.constant !== undefined) fixedConstants.add(value.constant);
+				if (value.sizeof !== undefined) {
+					const name = value.sizeof;
+					if (model.typedefs.has(name)) type({ kind: "typedef", name }, `sizeof ${name}`);
+					else {
+						const record = model.records.get(name);
+						if (record !== undefined)
+							type({ kind: "record", tag: record.tag, name }, `sizeof ${name}`);
+					}
+				}
+			}
 	}
 	for (const name of [...fixedConstants].sort()) constant(name);
 	for (const name of Object.keys(contract.facts.types).sort()) {

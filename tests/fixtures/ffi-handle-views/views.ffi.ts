@@ -17,7 +17,6 @@ export default {
 		views_pending: { returns: { borrowed: true } },
 		views_base: { returns: { borrowed: true } },
 		views_sibling: { returns: { borrowed: true } },
-		views_caller_base: { returns: { borrowed: true } },
 		views_visit: { params: { callback: { callback: { data: "data" } } } },
 		views_lend: { params: { callback: { callback: { data: "data" } } } },
 		views_nested: { params: { callback: { callback: { data: "data" } } } },

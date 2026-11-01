@@ -164,6 +164,8 @@ Returned pointers and callback arguments share one JavaScript identity across vi
 including when C exposes the general type first. Views share pins, callback scope, and
 closed state. Observing another view preserves the destructor policy established when
 ownership was acquired. The object's original prototype and display tag stay unchanged.
+Caller allocations keep explicit C cleanup through views; a library destroy binding
+cannot take ownership of their outer storage.
 
 Some APIs fill a state struct allocated by their caller. For a complete, fixed-size
 struct, `storage: "caller"` exports a zero-argument factory named by the type fact:
@@ -175,8 +177,9 @@ types: {
 ```
 
 `CodecState()` returns a handle to aligned, zeroed C storage. It passes by pointer
-and keeps its address between calls. Pointer fields remain private to C. Initialization
-and cleanup are separate C calls, with the same preconditions the library documents:
+and keeps its address between calls. The factory result exposes scalar fields as
+read-only properties. Initialization and cleanup are separate C calls, with the same
+preconditions the library documents:
 
 ```ts
 using state = CodecState();
@@ -193,7 +196,50 @@ cleanup, so `destroy` and `collect: true` cannot accompany caller storage. Retai
 handle while C retains its pointer, and dispose it only after C stops using it.
 The wrapper also releases callbacks keyed by that storage; calls already queued can
 finish from their copied arguments.
-The allocator does not expose writable pointer fields or manage asynchronous close.
+Asynchronous close needs the library's completion and lifetime contract.
+
+For state such as zlib's `z_stream`, describe each retained byte pointer and its count:
+
+```ts
+types: {
+	z_stream: {
+		handle: { storage: "caller" },
+		fields: {
+			next_in: { bytes: { length: "avail_in", writable: false } },
+			next_out: { bytes: { length: "avail_out", writable: true } },
+		},
+	},
+},
+```
+
+Assign an `ArrayBuffer`, view, or `null` to `stream.next_in` or `stream.next_out`.
+Assignment sets the pointer and byte count together; a subview supplies a shorter range.
+The handle retains and pins the backing buffer until replacement, clearing, or disposal.
+Failed assignment preserves the previous range. Shared and detached buffers are refused;
+writable ranges also refuse immutable buffers. `writable` defaults to true for a
+non-const pointee, and `false` describes input bytes even when a header omits `const`.
+
+The pointer getter returns a `Uint8Array` over the remaining bytes, following C's cursor.
+Count properties remain read-only. C must keep the pointer and count inside the assigned
+range; invalid pairs throw before another C entry and after the call that produced them.
+While a C operation uses managed state, reading or writing fields, disposal, and
+overlapping calls through any view are refused. Keep the factory result for property
+access: C function signatures expose opaque pointer handles, whose canonical object may
+have originated through another view.
+
+Zlib's header exposes `deflateInit_` with version and ABI-size parameters. Fixed facts
+let generated C supply both while JavaScript supplies the stream and compression level:
+
+```ts
+functions: {
+	deflateInit_: {
+		params: {
+			version: { constant: "ZLIB_VERSION" },
+			stream_size: { sizeof: "z_stream" },
+		},
+	},
+},
+```
 
 ## Describe pointers
 
@@ -246,6 +292,7 @@ Array inputs convert in index order. A conversion error prevents later elements'
 getters and Proxy traps from running.
 
 - `constant` passes a C macro, enumerator, or integer for a parameter, such as `SQLITE_TRANSIENT` for a destructor or `0` for a reserved argument. The parameter disappears from the JavaScript signature, and the C compiler checks the value's type.
+- `sizeof` passes the C compiler's size of a complete struct or union, omitting the integer parameter from JavaScript. Compilation fails if its size does not fit the parameter.
 
 Each fact names the C declaration it describes. A fact that names nothing in the headers, or that does not fit the declaration, fails the build.
 

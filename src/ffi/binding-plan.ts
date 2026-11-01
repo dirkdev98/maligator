@@ -1,6 +1,7 @@
 import type {
 	MaligatorFfiCallback,
 	MaligatorFfiCount,
+	MaligatorFfiFieldFacts,
 	MaligatorFfiValueFacts,
 	MaligatorFfiVariant,
 } from "../public-api.d.ts";
@@ -123,7 +124,11 @@ export type Argument =
 	/** The destructor the library calls when it drops the kept callback argument `of`. */
 	| { readonly kind: "callback-release"; readonly of: number }
 	/** A C expression the contract fixes, such as a macro name. */
-	| { readonly kind: "constant"; readonly expression: string };
+	| {
+			readonly kind: "constant";
+			readonly expression: string;
+			readonly sizeLimit?: string;
+	  };
 
 /** A value the function writes through a pointer, returned beside its result. */
 export interface MappedOutput {
@@ -171,6 +176,17 @@ export interface MappedField {
 	readonly doc?: string;
 }
 
+export interface ManagedField {
+	readonly name: string;
+	readonly type: CType;
+	readonly count: string;
+	readonly countType: CType;
+	readonly bits: number;
+	readonly signed: boolean;
+	readonly writable: boolean;
+	readonly doc?: string;
+}
+
 export interface MappedRecord {
 	/** The type name generated declarations use. */
 	readonly name: string;
@@ -203,6 +219,7 @@ export interface HandleType {
 	readonly collect: boolean;
 	/** Read-only accessors for a struct handle's value fields. */
 	readonly fields: ReadonlyArray<MappedField>;
+	readonly managedFields: ReadonlyArray<ManagedField>;
 	readonly doc?: string;
 }
 
@@ -286,10 +303,12 @@ function factRecord(model: CModel, key: string): CRecord | undefined {
 function handleTypes(
 	model: CModel,
 	facts: LibraryFacts,
-): Map<string, Omit<HandleType, "fields">> {
-	const handles = new Map<string, Omit<HandleType, "fields">>();
+): Map<string, Omit<HandleType, "fields" | "managedFields">> {
+	const handles = new Map<string, Omit<HandleType, "fields" | "managedFields">>();
 	for (const [key, typeFacts] of Object.entries(facts.types)) {
 		const handle = typeFacts.handle;
+		if (typeFacts.fields !== undefined && handle?.storage !== "caller")
+			throw new FfiError(`types.${key}.fields: managed fields require caller storage`);
 		if (handle === undefined) {
 			if (!model.typedefs.has(key) && !model.records.has(key) && !model.enums.has(key))
 				throw new FfiError(`types.${key}: the headers declare no type named '${key}'`);
@@ -504,11 +523,14 @@ function functionFacts(model: CModel, facts: LibraryFacts): Map<string, Function
 class Planner {
 	readonly #model: CModel;
 	readonly records = new Map<string, MappedRecord>();
-	readonly #handles: ReadonlyMap<string, Omit<HandleType, "fields">>;
+	readonly #handles: ReadonlyMap<string, Omit<HandleType, "fields" | "managedFields">>;
 	readonly #recordGaps = new Map<string, string>();
 	readonly #pending = new Set<string>();
 
-	constructor(model: CModel, handles: ReadonlyMap<string, Omit<HandleType, "fields">>) {
+	constructor(
+		model: CModel,
+		handles: ReadonlyMap<string, Omit<HandleType, "fields" | "managedFields">>,
+	) {
 		this.#model = model;
 		this.#handles = handles;
 	}
@@ -783,6 +805,66 @@ class Planner {
 			}
 		}
 		return fields;
+	}
+
+	managedFields(
+		record: CRecord,
+		facts: Record<string, MaligatorFfiFieldFacts> = {},
+	): Array<ManagedField> {
+		const result: Array<ManagedField> = [];
+		const counts = new Set<string>();
+		for (const [name, fact] of Object.entries(facts)) {
+			const at = `types.${record.name}.fields.${name}`;
+			const field = record.fields.find((entry) => entry.name === name);
+			const count = record.fields.find((entry) => entry.name === fact.bytes.length);
+			const pointer =
+				field === undefined ? undefined : resolveCType(this.#model, field.type);
+			const integer =
+				count === undefined ? undefined : resolveCType(this.#model, count.type);
+			const target =
+				pointer?.kind === "pointer" ? resolveCType(this.#model, pointer.to) : undefined;
+			if (
+				field === undefined ||
+				pointer?.kind !== "pointer" ||
+				pointer.const === true ||
+				(target?.kind !== "void" &&
+					!(target?.kind === "integer" && this.#model.target.sizes[target.name] === 1))
+			)
+				throw new FfiError(`${at}: bytes requires a writable byte or void pointer field`);
+			if (
+				count === undefined ||
+				integer?.kind !== "integer" ||
+				integer.const === true ||
+				count.bitWidth !== undefined
+			)
+				throw new FfiError(
+					`${at}.bytes.length: '${fact.bytes.length}' must be a writable integer field`,
+				);
+			if (counts.has(fact.bytes.length))
+				throw new FfiError(
+					`${at}.bytes.length: '${fact.bytes.length}' already counts another field`,
+				);
+			const mapped = this.#integer(integer.name);
+			if (
+				!("value" in mapped) ||
+				(mapped.value.kind !== "integer" && mapped.value.kind !== "bigint")
+			)
+				throw new FfiError(`${at}.bytes.length: unsupported integer width`);
+			counts.add(fact.bytes.length);
+			result.push({
+				name,
+				type: field.type,
+				count: fact.bytes.length,
+				countType: count.type,
+				bits: mapped.value.bits,
+				signed: mapped.value.signed,
+				writable:
+					fact.bytes.writable ??
+					!(target !== undefined && "const" in target && target.const === true),
+				...(field.doc === undefined ? {} : { doc: field.doc }),
+			});
+		}
+		return result;
 	}
 
 	/**
@@ -1210,7 +1292,7 @@ class Planner {
 				args.push({ kind: "callback-release", of: released });
 				return;
 			}
-			if (valueFacts.constant !== undefined) {
+			if (valueFacts.constant !== undefined || valueFacts.sizeof !== undefined) {
 				if (
 					Object.keys(valueFacts).length > 1 ||
 					routed !== undefined ||
@@ -1219,7 +1301,31 @@ class Planner {
 				) {
 					throw new FfiError(`${where(at)}: a constant parameter takes no other role`);
 				}
-				args.push({ kind: "constant", expression: valueFacts.constant });
+				if (valueFacts.sizeof !== undefined) {
+					const record = factRecord(this.#model, valueFacts.sizeof);
+					const mapped =
+						resolved.kind === "integer" ? this.#integer(resolved.name) : undefined;
+					if (record?.complete !== true)
+						throw new FfiError(
+							`${where(at)}.sizeof: '${valueFacts.sizeof}' needs a complete record type`,
+						);
+					if (
+						mapped === undefined ||
+						!("value" in mapped) ||
+						(mapped.value.kind !== "integer" && mapped.value.kind !== "bigint")
+					)
+						throw new FfiError(
+							`${where(at)}.sizeof: sizeof requires an integer parameter`,
+						);
+					args.push({
+						kind: "constant",
+						expression: `sizeof(${recordSpelling(this.#model, record)})`,
+						sizeLimit: (
+							(1n << BigInt(mapped.value.bits - (mapped.value.signed ? 1 : 0))) -
+							1n
+						).toString(),
+					});
+				} else args.push({ kind: "constant", expression: valueFacts.constant! });
 				return;
 			}
 			if (routed !== undefined) {
@@ -1336,6 +1442,8 @@ class Planner {
 		if (facts.returns.constant !== undefined) {
 			throw new FfiError(`${where("returns.constant")}: constant applies to parameters`);
 		}
+		if (facts.returns.sizeof !== undefined)
+			throw new FfiError(`${where("returns.sizeof")}: sizeof applies to parameters`);
 		const returns: Mapping =
 			replaced !== undefined &&
 			Object.keys(facts.returns).length === 0 &&
@@ -1523,9 +1631,19 @@ export function planBindings(
 		handles.set(name, {
 			...handle,
 			fields:
-				handle.representation === "struct" && record !== undefined
+				(handle.representation === "struct" || handle.allocator !== undefined) &&
+				record !== undefined
 					? planner.handleFields(record)
 					: [],
+			managedFields:
+				record === undefined
+					? []
+					: planner.managedFields(
+							record,
+							handle.allocator === undefined
+								? undefined
+								: facts.types[handle.allocator]?.fields,
+						),
 		});
 	}
 

@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 typedef struct MalVm MalVm;
+typedef struct MalFfiInputs MalFfiInputs;
 typedef struct MalHostInstallSlot MalHostInstallSlot;
 typedef struct MalHostLaunchContext MalHostLaunchContext;
 typedef uint64_t MalValue;
@@ -54,11 +55,21 @@ typedef struct MalFfiLibrary {
     int32_t export_count;
 } MalFfiLibrary;
 
-/** A read-only accessor a struct handle exposes for one value field. */
+/** Accessors a struct handle exposes for one field. */
 typedef struct MalFfiField {
     const char *name;
     MalFfiFunction get;
+    MalFfiFunction set;
 } MalFfiField;
+
+typedef struct MalFfiManagedField {
+    const char *name;
+    bool (*read)(void *storage, void **data, size_t *length);
+    void (*write)(void *storage, void *data, size_t length);
+    int32_t count_bits;
+    bool count_signed;
+    bool writable;
+} MalFfiManagedField;
 
 /**
  * A C type whose values are resources the program opens and closes. A handle
@@ -84,6 +95,8 @@ typedef struct MalFfiHandleType {
     const struct MalFfiHandleType *family;
     const struct MalFfiHandleType *const *views;
     int32_t view_count;
+    const MalFfiManagedField *managed_fields;
+    int32_t managed_field_count;
 } MalFfiHandleType;
 
 /**
@@ -121,6 +134,12 @@ bool mal_ffi_to_handle(
     MalVm *vm, MalValue value, const MalFfiHandleType *type, bool nullable,
     const MalFfiSite *site, void **out, void **pin);
 void mal_ffi_unpin_handle(void *pin);
+/** Managed state permits one C operation at a time; aliases share that operation. */
+bool mal_ffi_begin_handle_use(MalVm *vm, void *pin, const void *operation, const MalFfiSite *site);
+void mal_ffi_end_handle_use(MalVm *vm, void *pin, const void *operation, const MalFfiSite *site, bool check);
+bool mal_ffi_handle_idle(MalVm *vm, MalValue value, const MalFfiSite *site);
+MalValue mal_ffi_state_bytes(MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t field, const MalFfiSite *site);
+bool mal_ffi_set_state_bytes(MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t field, MalValue bytes, const MalFfiSite *site);
 /**
  * For an async call, which outlives any callback: reject a pinned handle a callback
  * only lends, since the library may release its resource once the callback returns.
@@ -444,14 +463,15 @@ typedef void (*MalFfiAsyncRelease)(void *data);
  * Run `run(data)` on a blocking worker thread, then `complete(vm, data, ran)` on the
  * VM thread: its value fulfills `*promise`, its throw rejects it. `ran` is false when
  * the work was cancelled before it ran; complete still releases what the call held.
- * A job the host drops, which happens only when it runs out of memory, rejects
- * without `complete`, so its pins stay. `release(data)` frees the data afterwards.
- * `keep` values stay reachable until completion. False with a pending throw, leaving
- * `data` to the caller.
+ * Teardown calls `complete` with false to retire pins without reading worker state;
+ * producers may still be running until the host joins them. `release(data)` frees
+ * the data after both sides retire it. `keep` and compound input values stay rooted
+ * through result conversion. False with a pending throw, leaving `data` to the caller.
  */
 bool mal_ffi_async(
     MalVm *vm, void *data, MalFfiAsyncRun run, MalFfiAsyncComplete complete,
-    MalFfiAsyncRelease release, const MalValue *keep, int32_t keep_count, MalValue *promise);
+    MalFfiAsyncRelease release, const MalValue *keep, int32_t keep_count,
+    const MalFfiInputs *inputs, MalValue *promise);
 /** A promise rejected with the pending throw, which this clears. */
 MalValue mal_ffi_rejected(MalVm *vm);
 
@@ -478,5 +498,22 @@ typedef struct MalFfiRoots {
 
 void mal_ffi_root(MalFfiRoots *roots, MalValue *slots, int32_t count);
 void mal_ffi_unroot(MalFfiRoots *roots);
+
+/** Resources nested in compound inputs stay rooted and pinned through the call. */
+struct MalFfiInputs {
+    MalFfiRoots roots;
+    MalValue *values;
+    int32_t count;
+    int32_t capacity;
+    const void *operation;
+    bool held;
+    bool rooted;
+};
+
+void mal_ffi_inputs_init(MalFfiInputs *inputs, const void *operation, bool held);
+void mal_ffi_inputs_unroot(MalFfiInputs *inputs);
+void mal_ffi_inputs_release(MalVm *vm, MalFfiInputs *inputs, const MalFfiSite *site, bool check);
+bool mal_ffi_input_handle(MalVm *vm, MalFfiInputs *inputs, MalValue value,
+    const MalFfiHandleType *type, bool nullable, const MalFfiSite *site, void **out);
 
 #endif

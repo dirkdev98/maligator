@@ -120,11 +120,13 @@ function hasInto(binding: BoundFunction): boolean {
 function directEntry(
 	library: string,
 	binding: BoundFunction,
-	callsBack: boolean,
+	pinsResources: boolean,
 ): Array<string> {
 	return [
-		...directEntryVariant(library, binding, callsBack, false),
-		...(hasInto(binding) ? directEntryVariant(library, binding, callsBack, true) : []),
+		...directEntryVariant(library, binding, pinsResources, false),
+		...(hasInto(binding)
+			? directEntryVariant(library, binding, pinsResources, true)
+			: []),
 	];
 }
 
@@ -135,7 +137,7 @@ function directEntry(
 function directEntryVariant(
 	library: string,
 	binding: BoundFunction,
-	callsBack: boolean,
+	pinsResources: boolean,
 	into: boolean,
 ): Array<string> {
 	const arity = binding.params.length;
@@ -160,7 +162,7 @@ function directEntryVariant(
 		arity > 0 &&
 		(binding.closes !== undefined ||
 			binding.params.some(({ value }) => !UNROOTED_INPUTS.has(value.kind)) ||
-			(callsBack &&
+			(pinsResources &&
 				binding.params.some(
 					({ value }) => value.kind === "handle" || value.kind === "bytes",
 				)));
@@ -211,11 +213,14 @@ class BindingWriter {
 	readonly #plan: BindingPlan;
 	readonly #inputs = new Set<string>();
 	readonly #outputs = new Set<string>();
+	readonly #managedFamilies = new Set<string>();
 	#counter = 0;
 
 	constructor(model: CModel, plan: BindingPlan) {
 		this.#model = model;
 		this.#plan = plan;
+		for (const handle of plan.handles.values())
+			if (handle.managedFields.length > 0) this.#managedFamilies.add(handle.family);
 	}
 
 	#fresh(prefix: string): string {
@@ -232,6 +237,31 @@ class BindingWriter {
 		const handle = this.#plan.handles.get(name);
 		if (handle === undefined) throw new Error(`binding plan has no handle '${name}'`);
 		return handle;
+	}
+
+	managedFamily(name: string): boolean {
+		return this.#managedFamilies.has(this.#handle(name).family);
+	}
+
+	#hasHandles(value: JsValue): boolean {
+		if (value.kind === "handle") return true;
+		if (value.kind === "record")
+			return this.#record(value.name).fields.some((field) =>
+				this.#hasHandles(field.value),
+			);
+		return (
+			(value.kind === "array" || value.kind === "sequence") && this.#hasHandles(value.of)
+		);
+	}
+
+	#compoundInputs(binding: BoundFunction): boolean {
+		return binding.arguments.some((entry) => {
+			if (entry.kind !== "input" && entry.kind !== "inout") return false;
+			const value = binding.params[entry.param]!.value;
+			return (
+				(entry.kind === "inout" || value.kind !== "handle") && this.#hasHandles(value)
+			);
+		});
 	}
 
 	/** Mark the record helpers a value needs, recursively through fields and arrays. */
@@ -269,6 +299,7 @@ class BindingWriter {
 		strings: Array<string>,
 		/** Whether `source` is already rooted, as arguments and record fields are. */
 		rooted: boolean,
+		inputs = "nullptr",
 	): Array<string> {
 		const cast = (expression: string) =>
 			`(${localDeclaration(type, "")}) (${expression})`;
@@ -277,7 +308,7 @@ class BindingWriter {
 				const temporary = this.#fresh("handle");
 				return [
 					`void *${temporary};`,
-					`if (!mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${temporary}, nullptr)) ${fail}`,
+					`if (!${inputs === "nullptr" ? `mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${temporary}, nullptr)` : `mal_ffi_input_handle(vm, ${inputs}, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${temporary})`}) ${fail}`,
 					value.pass === "copy"
 						? `${target} = *(${this.#handle(value.name).spelling} *) ${temporary};`
 						: `${target} = ${cast(temporary)};`,
@@ -325,9 +356,10 @@ class BindingWriter {
 				];
 			}
 			case "record": {
+				const retained = this.#hasHandles(value) ? `, ${inputs}` : "";
 				if (rooted) {
 					return [
-						`if (!mal_ffi_in_${value.name}(vm, ${source}, ${site}, &${target})) ${fail}`,
+						`if (!mal_ffi_in_${value.name}(vm, ${source}, ${site}, &${target}${retained})) ${fail}`,
 					];
 				}
 				// A getter may return a fresh object that only this frame references.
@@ -338,7 +370,7 @@ class BindingWriter {
 					`MalValue ${held} = ${source};`,
 					`MalFfiRoots ${roots};`,
 					`mal_ffi_root(&${roots}, &${held}, 1);`,
-					`bool ${converted} = mal_ffi_in_${value.name}(vm, ${held}, ${site}, &${target});`,
+					`bool ${converted} = mal_ffi_in_${value.name}(vm, ${held}, ${site}, &${target}${retained});`,
 					`mal_ffi_unroot(&${roots});`,
 					`if (!${converted}) ${fail}`,
 				];
@@ -362,6 +394,7 @@ class BindingWriter {
 						fail,
 						strings,
 						false,
+						inputs,
 					).map((line) => `\t${line}`),
 					"}",
 				];
@@ -588,10 +621,12 @@ class BindingWriter {
 
 	#recordInput(name: string): Array<string> {
 		const record = this.#record(name);
+		const retained = this.#hasHandles({ kind: "record", name });
+		const parameter = retained ? ", MalFfiInputs *mal_inputs" : "";
 		const count = String(record.fields.length);
 		const lines = [
 			"",
-			`static bool mal_ffi_fields_${name}(MalVm *vm, const MalValue *mal_fields, const MalFfiSite *mal_site, ${record.spelling} *mal_out) {`,
+			`static bool mal_ffi_fields_${name}(MalVm *vm, const MalValue *mal_fields, const MalFfiSite *mal_site, ${record.spelling} *mal_out${parameter}) {`,
 			"\tMalFfiSite mal_field_site = *mal_site;",
 		];
 		record.fields.forEach((field, index) => {
@@ -606,6 +641,7 @@ class BindingWriter {
 					"return false;",
 					[],
 					true,
+					retained ? "mal_inputs" : "nullptr",
 				).map((line) => `\t${line}`),
 			);
 		});
@@ -615,7 +651,7 @@ class BindingWriter {
 			"\treturn true;",
 			"}",
 			"",
-			`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out) {`,
+			`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out${parameter}) {`,
 			...(this.#readsLeaves(record)
 				? [
 						`\tMalValue mal_leaves[${String(this.#leafCount(record))}];`,
@@ -632,7 +668,7 @@ class BindingWriter {
 						`\tmal_ffi_root(&mal_roots, mal_fields, ${count});`,
 					]
 				: []),
-			`\tbool mal_ok = mal_ffi_record_fields(vm, mal_value, &mal_ffi_record_${name}, mal_site, mal_fields) && mal_ffi_fields_${name}(vm, mal_fields, mal_site, mal_out);`,
+			`\tbool mal_ok = mal_ffi_record_fields(vm, mal_value, &mal_ffi_record_${name}, mal_site, mal_fields) && mal_ffi_fields_${name}(vm, mal_fields, mal_site, mal_out${retained ? ", mal_inputs" : ""});`,
 			...(rootFields ? ["\tmal_ffi_unroot(&mal_roots);"] : []),
 			"\treturn mal_ok;",
 			"}",
@@ -658,9 +694,12 @@ class BindingWriter {
 		const leaves = [...this.#leafRecords()].sort(byteOrder);
 		for (const name of inputs) {
 			const record = this.#record(name);
+			const retained = this.#hasHandles({ kind: "record", name })
+				? ", MalFfiInputs *mal_inputs"
+				: "";
 			lines.push(
-				`static bool mal_ffi_fields_${name}(MalVm *vm, const MalValue *mal_fields, const MalFfiSite *mal_site, ${record.spelling} *mal_out);`,
-				`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out);`,
+				`static bool mal_ffi_fields_${name}(MalVm *vm, const MalValue *mal_fields, const MalFfiSite *mal_site, ${record.spelling} *mal_out${retained});`,
+				`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out${retained});`,
 			);
 		}
 		for (const name of leaves) {
@@ -770,24 +809,78 @@ class BindingWriter {
 					`\tstatic const MalFfiSite mal_site = { ${cString(`${name}.${field.name}`)}, "this", nullptr };`,
 					"\tvoid *mal_handle;",
 					`\tif (!mal_ffi_to_handle(vm, mal_this, &mal_ffi_type_${name}, false, &mal_site, &mal_handle, nullptr)) return mal_ffi_undefined();`,
+					...(!this.managedFamily(name)
+						? []
+						: [
+								"\tif (!mal_ffi_handle_idle(vm, mal_this, &mal_site)) return mal_ffi_undefined();",
+							]),
 					`\t${handle.spelling} *mal_value = mal_handle;`,
 					`\treturn ${this.write(field.value, `mal_value->${field.name}`)};`,
 					"}",
 				);
 			}
-			const fields = handle.fields.length === 0 ? "nullptr" : `mal_ffi_fields_${name}`;
-			if (handle.fields.length > 0) {
+			for (const [index, field] of handle.managedFields.entries()) {
+				const prefix = `mal_ffi_managed_${name}_${field.name}`;
+				lines.push(
+					"",
+					`static bool ${prefix}_read(void *mal_storage, void **mal_data, size_t *mal_length) {`,
+					`\t${handle.spelling} *mal_state = mal_storage;`,
+					...(field.signed ? [`\tif (mal_state->${field.count} < 0) return false;`] : []),
+					`\tif ((uintmax_t) mal_state->${field.count} > SIZE_MAX) return false;`,
+					`\t*mal_data = (void *) mal_state->${field.name};`,
+					`\t*mal_length = (size_t) mal_state->${field.count};`,
+					"\treturn true;",
+					"}",
+					"",
+					`static void ${prefix}_write(void *mal_storage, void *mal_data, size_t mal_length) {`,
+					`\t${handle.spelling} *mal_state = mal_storage;`,
+					`\tmal_state->${field.name} = (${localDeclaration(field.type, "")}) mal_data;`,
+					`\tmal_state->${field.count} = (${localDeclaration(field.countType, "")}) mal_length;`,
+					"}",
+					"",
+					`static MalValue mal_ffi_get_${name}_${field.name}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
+					"\t(void) mal_args; (void) mal_argc; (void) mal_new_target; (void) mal_callee;",
+					`\tstatic const MalFfiSite mal_site = { ${cString(`${name}.${field.name}`)}, "this", nullptr };`,
+					`\treturn mal_ffi_state_bytes(vm, mal_this, &mal_ffi_type_${name}, ${index}, &mal_site);`,
+					"}",
+					"",
+					`static MalValue mal_ffi_set_${name}_${field.name}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
+					"\t(void) mal_new_target; (void) mal_callee;",
+					`\tstatic const MalFfiSite mal_site = { ${cString(`${name}.${field.name}`)}, "value", nullptr };`,
+					`\tmal_ffi_set_state_bytes(vm, mal_this, &mal_ffi_type_${name}, ${index}, mal_argc > 0 ? mal_args[0] : mal_ffi_undefined(), &mal_site);`,
+					"\treturn mal_ffi_undefined();",
+					"}",
+				);
+			}
+			const fieldCount = handle.fields.length + handle.managedFields.length;
+			const fields = fieldCount === 0 ? "nullptr" : `mal_ffi_fields_${name}`;
+			if (fieldCount > 0) {
 				lines.push(
 					"",
 					`static const MalFfiField ${fields}[] = {`,
 					...handle.fields.map(
-						(field) => `\t{ ${cString(field.name)}, mal_ffi_get_${name}_${field.name} },`,
+						(field) =>
+							`\t{ ${cString(field.name)}, mal_ffi_get_${name}_${field.name}, nullptr },`,
+					),
+					...handle.managedFields.map(
+						(field) =>
+							`\t{ ${cString(field.name)}, mal_ffi_get_${name}_${field.name}, mal_ffi_set_${name}_${field.name} },`,
 					),
 					"};",
 				);
 			}
 			lines.push(
 				"",
+				...(handle.managedFields.length === 0
+					? []
+					: [
+							`static const MalFfiManagedField mal_ffi_managed_fields_${name}[] = {`,
+							...handle.managedFields.map(
+								(field) =>
+									`\t{ ${cString(field.name)}, mal_ffi_managed_${name}_${field.name}_read, mal_ffi_managed_${name}_${field.name}_write, ${field.bits}, ${field.signed}, ${field.writable} },`,
+							),
+							"};",
+						]),
 				...(handle.views.length === 0
 					? []
 					: [
@@ -804,10 +897,12 @@ class BindingWriter {
 				`\t${handle.destroy?.success !== undefined},`,
 				`\t${handle.collect},`,
 				`\t${fields},`,
-				`\t${String(handle.fields.length)},`,
+				`\t${String(fieldCount)},`,
 				`\t&mal_ffi_type_${handle.family},`,
 				`\t${handle.views.length === 0 ? "nullptr" : `mal_ffi_views_${name}`},`,
 				`\t${String(handle.views.length)},`,
+				`\t${handle.managedFields.length === 0 ? "nullptr" : `mal_ffi_managed_fields_${name}`},`,
+				`\t${handle.managedFields.length},`,
 				"};",
 			);
 			if (handle.allocator !== undefined)
@@ -1130,6 +1225,9 @@ class BindingWriter {
 		const cleanup: Array<string> = [];
 		const strings: Array<string> = [];
 		const trampolines: Array<string> = [];
+		const compoundInputs = this.#compoundInputs(binding);
+		const inputs = compoundInputs ? "&mal_inputs" : "nullptr";
+		if (compoundInputs) locals.push("MalFfiInputs mal_inputs;");
 		/** Whether JavaScript can run between converting an argument and the C call returning. */
 		const runsJavaScript =
 			this.#plan.keepsCallbacks ||
@@ -1209,6 +1307,10 @@ class BindingWriter {
 					body.push(`${local} = &mal_count;`);
 					return;
 				case "constant":
+					if (entry.sizeLimit !== undefined)
+						locals.push(
+							`static_assert(${entry.expression} <= UINT64_C(${entry.sizeLimit}), "C type size exceeds parameter range");`,
+						);
 					body.push(`${local} = ${entry.expression};`);
 					return;
 				case "callback-data":
@@ -1236,6 +1338,7 @@ class BindingWriter {
 								"goto mal_done;",
 								strings,
 								true,
+								inputs,
 							),
 						);
 					}
@@ -1395,6 +1498,7 @@ class BindingWriter {
 										"goto mal_done;",
 										strings,
 										false,
+										inputs,
 									).map((line) => `\t${line}`)),
 							"}",
 						];
@@ -1435,16 +1539,29 @@ class BindingWriter {
 					}
 					if (
 						value.kind === "handle" &&
-						(runsJavaScript || binding.closes === entry.param)
+						(runsJavaScript ||
+							binding.closes === entry.param ||
+							this.managedFamily(value.name))
 					) {
 						// Pinned, so JavaScript that runs during the call cannot close it under C.
 						const handle = this.#handle(value.name);
 						const pointer = `mal_handle_${String(index)}`;
 						const pin = `mal_handle_pin_${String(index)}`;
 						locals.push(`void *${pointer};`, `void *${pin} = nullptr;`);
-						cleanup.push(`mal_ffi_unpin_handle(${pin});`);
+						const managed = this.managedFamily(value.name);
+						cleanup.push(
+							...(managed
+								? [`mal_ffi_end_handle_use(vm, ${pin}, &mal_result, ${site}, true);`]
+								: []),
+							`mal_ffi_unpin_handle(${pin});`,
+						);
 						body.push(
 							`if (!mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${pointer}, &${pin})) goto mal_done;`,
+							...(managed
+								? [
+										`if (!mal_ffi_begin_handle_use(vm, ${pin}, &mal_result, ${site})) goto mal_done;`,
+									]
+								: []),
 							...(binding.closes === entry.param
 								? [`if (!mal_ffi_begin_handle_close(vm, ${pin}, ${site})) goto mal_done;`]
 								: []),
@@ -1464,6 +1581,7 @@ class BindingWriter {
 							"goto mal_done;",
 							strings,
 							true,
+							inputs,
 						),
 					);
 					return;
@@ -1592,6 +1710,9 @@ class BindingWriter {
 				`\t${temporary}.data = nullptr;`,
 			]),
 			...locals.map((line) => `\t${line}`),
+			...(compoundInputs
+				? ["\tmal_ffi_inputs_init(&mal_inputs, &mal_result, false);"]
+				: []),
 			...body.map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
 			...keeps.map((line) => `\t${line}`),
@@ -1601,6 +1722,9 @@ class BindingWriter {
 			"mal_done:",
 			...strings.map((temporary) => `\tmal_ffi_string_release(&${temporary});`),
 			...cleanup.map((line) => `\t${line}`),
+			...(compoundInputs
+				? ["\tmal_ffi_inputs_release(vm, &mal_inputs, &mal_site_result, true);"]
+				: []),
 			"\treturn mal_result;",
 			"}",
 			"",
@@ -1632,6 +1756,19 @@ class BindingWriter {
 		/** What the context owns beyond its strings: array copies and their texts. */
 		const frees: Array<string> = [];
 		const strings: Array<string> = [];
+		const compoundInputs = this.#compoundInputs(binding);
+		const inputs = compoundInputs ? "&mal_ctx->mal_inputs" : "nullptr";
+		if (compoundInputs) fields.push("MalFfiInputs mal_inputs;");
+		const managedHandles = binding.arguments.some((entry) => {
+			if (entry.kind !== "input") return false;
+			const value = binding.params[entry.param]!.value;
+			return value.kind === "handle" && this.managedFamily(value.name);
+		});
+		if (managedHandles) locals.push("bool mal_validate = false;");
+		if (managedHandles || compoundInputs)
+			locals.push(
+				`static const MalFfiSite mal_site_result = { ${cString(exported)}, "result", nullptr };`,
+			);
 		let kept = 0;
 		const argument = (param: number) =>
 			`mal_argc > ${String(param)} ? mal_args[${String(param)}] : mal_ffi_undefined()`;
@@ -1692,6 +1829,10 @@ class BindingWriter {
 					body.push(`${target} = &mal_ctx->mal_count;`);
 					return;
 				case "constant":
+					if (entry.sizeLimit !== undefined)
+						locals.push(
+							`static_assert(${entry.expression} <= UINT64_C(${entry.sizeLimit}), "C type size exceeds parameter range");`,
+						);
 					body.push(`${target} = ${entry.expression};`);
 					return;
 				case "callback-data":
@@ -1712,6 +1853,7 @@ class BindingWriter {
 								"goto mal_failed;",
 								strings,
 								true,
+								inputs,
 							),
 						);
 					}
@@ -1793,6 +1935,7 @@ class BindingWriter {
 										"goto mal_failed;",
 										strings,
 										false,
+										inputs,
 									).map((line) => `\t${line}`)),
 							"}",
 							`${target} = (${localDeclaration(param.type, "")}) mal_ctx->${elements};`,
@@ -1805,11 +1948,24 @@ class BindingWriter {
 						const pointer = `mal_handle_${String(index)}`;
 						const pin = `mal_handle_pin_${String(index)}`;
 						fields.push(`void *${pin};`);
-						pins.push(`mal_ffi_unpin_handle(mal_ctx->${pin});`);
+						const managed = this.managedFamily(value.name);
+						pins.push(
+							...(managed
+								? [
+										`mal_ffi_end_handle_use(vm, mal_ctx->${pin}, mal_ctx, &mal_site_result, mal_validate);`,
+									]
+								: []),
+							`mal_ffi_unpin_handle(mal_ctx->${pin});`,
+						);
 						locals.push(`void *${pointer};`);
 						body.push(
 							`if (!mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${pointer}, &mal_ctx->${pin})) goto mal_failed;`,
 							`if (!mal_ffi_handle_held(vm, mal_ctx->${pin}, ${site})) goto mal_failed;`,
+							...(managed
+								? [
+										`if (!mal_ffi_begin_handle_use(vm, mal_ctx->${pin}, mal_ctx, ${site})) goto mal_failed;`,
+									]
+								: []),
 							`mal_keep[${String(kept++)}] = ${source};`,
 							value.pass === "copy"
 								? `${target} = *(${handle.spelling} *) ${pointer};`
@@ -1827,6 +1983,7 @@ class BindingWriter {
 							"goto mal_failed;",
 							strings,
 							true,
+							inputs,
 						),
 					);
 					return;
@@ -1899,8 +2056,14 @@ class BindingWriter {
 			`\tstatic const MalFfiSite mal_site_result = { ${cString(exported)}, "result", nullptr };`,
 			"\t(void) mal_site_result;",
 			"\tMalValue mal_result = mal_ffi_undefined();",
+			...(managedHandles ? ["\tbool mal_validate = mal_ran;"] : []),
 			...pins.map((line) => `\t${line}`),
-			"\tif (!mal_ran) return mal_result;",
+			...(compoundInputs
+				? [
+						"\tmal_ffi_inputs_release(vm, &mal_ctx->mal_inputs, &mal_site_result, mal_ran);",
+					]
+				: []),
+			"\tif (!mal_ran || mal_ffi_threw(vm)) return mal_result;",
 			...produce.map((line) => `\t${line}`),
 			"\tgoto mal_done;",
 			"mal_done:",
@@ -1930,13 +2093,20 @@ class BindingWriter {
 			"\tMalFfiRoots mal_keep_roots;",
 			`\tmal_ffi_root(&mal_keep_roots, mal_keep, ${keep});`,
 			"\tMalValue mal_promise = mal_ffi_undefined();",
+			...(compoundInputs
+				? ["\tmal_ffi_inputs_init(&mal_ctx->mal_inputs, mal_ctx, true);"]
+				: []),
 			...body.map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
-			`\tif (mal_ffi_async(vm, mal_ctx, mal_ffi_async_run_${name}, mal_ffi_async_complete_${name}, mal_ffi_async_release_${name}, mal_keep, ${String(kept)}, &mal_promise)) {`,
+			`\tif (mal_ffi_async(vm, mal_ctx, mal_ffi_async_run_${name}, mal_ffi_async_complete_${name}, mal_ffi_async_release_${name}, mal_keep, ${String(kept)}, ${inputs}, &mal_promise)) {`,
+			...(compoundInputs ? ["\t\tmal_ffi_inputs_unroot(&mal_ctx->mal_inputs);"] : []),
 			"\t\tmal_ffi_unroot(&mal_keep_roots);",
 			"\t\treturn mal_promise;",
 			"\t}",
 			"mal_failed:",
+			...(compoundInputs
+				? ["\tmal_ffi_inputs_release(vm, &mal_ctx->mal_inputs, &mal_site_result, false);"]
+				: []),
 			"\tmal_ffi_unroot(&mal_keep_roots);",
 			...pins.map((line) => `\t${line}`),
 			`\tmal_ffi_async_release_${name}(mal_ctx);`,
@@ -1989,7 +2159,11 @@ export function generateBindingUnit(
 			library,
 			binding,
 			plan.keepsCallbacks ||
-				binding.params.some((param) => param.value.kind === "callback"),
+				binding.params.some(
+					({ value }) =>
+						value.kind === "callback" ||
+						(value.kind === "handle" && writer.managedFamily(value.name)),
+				),
 		),
 		...(binding.async === undefined ? [] : writer.asyncFunction(binding, binding.async)),
 	]);

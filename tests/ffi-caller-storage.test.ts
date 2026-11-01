@@ -38,7 +38,7 @@ describe("caller storage contracts", () => {
 			"CopiedState",
 		);
 		expect(generateDeclarations([{ name: "state", plan }])).toContain(
-			"export function CopiedState(): CopiedState;",
+			"export function CopiedState(): CopiedState & {",
 		);
 	});
 	it.each([
