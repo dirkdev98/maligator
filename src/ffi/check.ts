@@ -296,6 +296,10 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 				type({ kind: "record", tag: record.tag, name }, `type fact ${name}`);
 			else if (model.enums.has(name)) type({ kind: "enum", name }, `type fact ${name}`);
 		}
+		for (const view of contract.facts.types[name]?.handle?.views ?? []) {
+			if (model.typedefs.has(view))
+				type({ kind: "typedef", name: view }, `view of ${name}`);
+		}
 	}
 	for (const binding of [...plan.functions].sort((a, b) =>
 		a.name < b.name ? -1 : a.name > b.name ? 1 : 0,

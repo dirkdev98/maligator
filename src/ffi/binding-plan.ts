@@ -188,6 +188,10 @@ export interface HandleType {
 	readonly spelling: string;
 	/** A copy of a struct the library passes by value, or a pointer it returns. */
 	readonly representation: "struct" | "pointer";
+	/** Directed pointer compatibility, including transitive views. */
+	readonly views: ReadonlyArray<string>;
+	/** Canonical identity shared by connected pointer views. */
+	readonly family: string;
 	/** A factory named by the type fact, allocating stable caller-owned storage. */
 	readonly allocator?: string;
 	readonly destroy?: {
@@ -405,9 +409,69 @@ function handleTypes(
 			...(handle.storage === "caller" ? { allocator: key } : {}),
 			...(destroy === undefined ? {} : { destroy }),
 			collect: handle.collect === true,
+			views: [],
+			family: record.name,
 			...(record.doc === undefined ? {} : { doc: record.doc }),
 		});
 	}
+	for (const [key, factsForType] of Object.entries(facts.types)) {
+		if (factsForType.handle?.views === undefined) continue;
+		const record = factRecord(model, key)!;
+		const handle = handles.get(record.name)!;
+		const views: Array<string> = [];
+		for (const target of factsForType.handle.views) {
+			const name = factRecord(model, target)?.name;
+			const view = name === undefined ? undefined : handles.get(name);
+			const at = `types.${key}.handle.views`;
+			if (view === undefined)
+				throw new FfiError(`${at}: '${target}' needs a handle fact`);
+			if (handle.representation !== "pointer" || view.representation !== "pointer")
+				throw new FfiError(`${at}: views require pointer handles`);
+			if (view.name === handle.name || views.includes(view.name))
+				throw new FfiError(`${at}: repeated or self view '${target}'`);
+			views.push(view.name);
+		}
+		handles.set(record.name, { ...handle, views });
+	}
+	const closure = new Map<string, ReadonlyArray<string>>();
+	const visiting = new Set<string>();
+	const resolveViews = (name: string): ReadonlyArray<string> => {
+		const known = closure.get(name);
+		if (known !== undefined) return known;
+		if (visiting.has(name))
+			throw new FfiError(`types.${name}.handle.views: cyclic views`);
+		visiting.add(name);
+		const views = new Set<string>();
+		for (const view of handles.get(name)!.views) {
+			views.add(view);
+			for (const ancestor of resolveViews(view)) views.add(ancestor);
+		}
+		visiting.delete(name);
+		const result = [...views].sort();
+		closure.set(name, result);
+		return result;
+	};
+	for (const name of handles.keys()) resolveViews(name);
+	const neighbors = new Map(
+		[...handles].map(([name, handle]) => [name, new Set(handle.views)]),
+	);
+	for (const [name, handle] of handles)
+		for (const view of handle.views) neighbors.get(view)!.add(name);
+	const families = new Map<string, string>();
+	for (const name of handles.keys()) {
+		if (families.has(name)) continue;
+		const component = new Set([name]);
+		for (const member of component)
+			for (const neighbor of neighbors.get(member)!) component.add(neighbor);
+		const family = [...component].sort()[0]!;
+		for (const member of component) families.set(member, family);
+	}
+	for (const [name, handle] of handles)
+		handles.set(name, {
+			...handle,
+			views: closure.get(name)!,
+			family: families.get(name)!,
+		});
 	return handles;
 }
 

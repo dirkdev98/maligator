@@ -222,6 +222,35 @@ describe("ffi check", () => {
 		).toBe(true);
 	});
 
+	it("watches typedefs named by handle views", () => {
+		const directory = project();
+		const headerPath = path.join(directory, "include/shapes.h");
+		const views = `${header}
+typedef struct ShapesBase { int value; } ShapesBase;
+typedef struct ShapesOther { int value; } ShapesOther;
+typedef struct ShapesDerived { ShapesBase base; } ShapesDerived;
+typedef ShapesBase ShapesView;
+`;
+		writeFileSync(headerPath, views);
+		writeContract(directory, {
+			types: {
+				ShapesBase: { handle: {} },
+				ShapesOther: { handle: {} },
+				ShapesDerived: { handle: { views: ["ShapesView"] } },
+			},
+		});
+		accept(directory);
+		writeFileSync(
+			headerPath,
+			views.replace("typedef ShapesBase ShapesView", "typedef ShapesOther ShapesView"),
+		);
+		expect(
+			check(directory, [], 1).libraries[0]?.changes.some((change) =>
+				change.path.includes("typedef ShapesView"),
+			),
+		).toBe(true);
+	});
+
 	it("checks a result's release function even when it is not exported", () => {
 		const directory = project();
 		const headerPath = path.join(directory, "include/shapes.h");

@@ -788,6 +788,13 @@ class BindingWriter {
 			}
 			lines.push(
 				"",
+				...(handle.views.length === 0
+					? []
+					: [
+							`static const MalFfiHandleType *const mal_ffi_views_${name}[] = {`,
+							...handle.views.map((view) => `\t&mal_ffi_type_${view},`),
+							"};",
+						]),
 				`static const MalFfiHandleType mal_ffi_type_${name} = {`,
 				`\t${cString(name)},`,
 				`\t${handle.representation === "struct" ? `sizeof(${handle.spelling})` : "0"},`,
@@ -798,6 +805,9 @@ class BindingWriter {
 				`\t${handle.collect},`,
 				`\t${fields},`,
 				`\t${String(handle.fields.length)},`,
+				`\t&mal_ffi_type_${handle.family},`,
+				`\t${handle.views.length === 0 ? "nullptr" : `mal_ffi_views_${name}`},`,
+				`\t${String(handle.views.length)},`,
 				"};",
 			);
 			if (handle.allocator !== undefined)

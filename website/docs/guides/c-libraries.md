@@ -147,6 +147,24 @@ disposal, so it cannot use `collect: true`.
 - `collect: true` releases a handle the program drops once it is garbage collected. Leave it off for resources that must be released on one thread or before the library shuts down, such as raylib's GPU textures.
 - `nullable` on a parameter accepts `null` for a string or handle pointer and passes `NULL`.
 
+When a library accepts the same allocation through another pointer type, declare directed
+`views`. For example, libuv accepts a timer pointer as a general handle pointer:
+
+```ts
+types: {
+	uv_handle_t: { handle: {} },
+	uv_timer_t: { handle: { storage: "caller", views: ["uv_handle_t"] } },
+},
+```
+
+A view asserts that the pointer needs no adjustment. Both types need pointer handle
+facts; copied struct values cannot declare views. Compatibility follows transitive views,
+and the reverse conversion requires C to return or lend that more specific pointer type.
+Returned pointers and callback arguments share one JavaScript identity across views,
+including when C exposes the general type first. Views share pins, callback scope, and
+closed state. Observing another view preserves the destructor policy established when
+ownership was acquired. The object's original prototype and display tag stay unchanged.
+
 Some APIs fill a state struct allocated by their caller. For a complete, fixed-size
 struct, `storage: "caller"` exports a zero-argument factory named by the type fact:
 

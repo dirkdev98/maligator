@@ -8,6 +8,7 @@
 
 # Allocator, GC roots, suspended work, and re-entrant lifetime.
 tests/native/ffi-caller-storage.test.ts
+tests/native/ffi-handle-views.test.ts
 tests/native/ffi-conditional-destroy.test.ts
 tests/native/ffi-array-order.test.ts
 tests/native/ffi-counted-strings.test.ts

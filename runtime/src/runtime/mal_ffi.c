@@ -368,10 +368,18 @@ MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length) {
 
 typedef struct MalFfiState MalFfiState;
 
+typedef struct MalFfiHandleView {
+    const MalFfiHandleType *type;
+    struct MalFfiHandleView *next;
+} MalFfiHandleView;
+
 typedef struct MalFfiHandleObject {
     MalObject object;
     MalObjectStorage object_storage;
     const MalFfiHandleType *type;
+    /** View observations cannot replace the policy acquired with ownership. */
+    const MalFfiHandleType *owner_type;
+    MalFfiHandleView *views;
     /** Stable C storage, or the library's pointer; null once closed. */
     void *value;
     bool owned;
@@ -543,7 +551,7 @@ static bool ffi_handle_register(MalFfiState *state, MalFfiHandleObject *handle) 
         }
         free(previous);
     }
-    ffi_handle_place(state, (MalFfiHandleEntry) {handle->type, handle->value, handle});
+    ffi_handle_place(state, (MalFfiHandleEntry) {handle->type->family, handle->value, handle});
     state->handle_count++;
     handle->registry = state;
     return true;
@@ -555,7 +563,7 @@ static void ffi_handle_unregister(MalFfiHandleObject *handle) {
     if (state == nullptr) return;
     handle->registry = nullptr;
     usize mask = state->handle_capacity - 1;
-    usize slot = ffi_handle_slot(handle->type, handle->value, state->handle_capacity);
+    usize slot = ffi_handle_slot(handle->type->family, handle->value, state->handle_capacity);
     while (state->handles[slot].handle != handle) slot = (slot + 1) & mask;
     state->handles[slot] = (MalFfiHandleEntry) {0};
     state->handle_count--;
@@ -1411,11 +1419,16 @@ static void ffi_handle_finalize(MalHeapHeader *cell) {
     MalFfiHandleObject *handle = (MalFfiHandleObject *) cell;
     bool previous = ffi_finalizing;
     ffi_finalizing = true;
-    if (handle->value != nullptr && handle->owned && handle->type->collect
-        && handle->type->destroy != nullptr) {
-        if (handle->type->destroy(handle->value)) ffi_replaced_drop(handle->value);
+    if (handle->value != nullptr && handle->owned && handle->owner_type->collect
+        && handle->owner_type->destroy != nullptr) {
+        if (handle->owner_type->destroy(handle->value)) ffi_replaced_drop(handle->value);
     }
     ffi_handle_forget(handle);
+    while (handle->views != nullptr) {
+        MalFfiHandleView *view = handle->views;
+        handle->views = view->next;
+        free(view);
+    }
     ffi_finalizing = previous;
 }
 
@@ -1441,19 +1454,20 @@ static MalValue ffi_handle_dispose(
     }
     if (handle->value != nullptr) {
         void *value = handle->value;
-        bool release = handle->owned && handle->type->destroy != nullptr;
+        const MalFfiHandleType *owner = handle->owner_type;
+        bool release = handle->owned && owner->destroy != nullptr;
         handle->closing = true;
         // Unconditional release can hand out the same pointer again. A conditional
         // release keeps its identity until C confirms it stopped owning the resource.
-        if (handle->type->size == 0 && (!release || !handle->type->destroy_can_fail))
+        if (handle->type->size == 0 && (!release || !owner->destroy_can_fail))
             ffi_handle_forget(handle);
         if (release) {
-            if (!handle->type->destroy(value)) {
+            if (!owner->destroy(value)) {
                 handle->closing = false;
                 if (vm->completion.kind != MAL_COMPLETION_THROW) {
                     char message[512];
                     snprintf(message, sizeof(message), "%s did not release the %s handle",
-                        handle->type->destroy_name, handle->type->name);
+                        owner->destroy_name, owner->name);
                     mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) message);
                 }
                 return mal_value_new_undefined();
@@ -1550,18 +1564,49 @@ static void *ffi_allocate_storage(usize size, usize alignment) {
     return alignment <= _Alignof(max_align_t) ? malloc(size) : aligned_alloc(alignment, size);
 }
 
+static bool ffi_type_supports(const MalFfiHandleType *actual, const MalFfiHandleType *expected) {
+    if (actual == expected) return true;
+    for (i32 index = 0; index < actual->view_count; index++) {
+        if (actual->views[index] == expected) return true;
+    }
+    return false;
+}
+
+static bool ffi_handle_supports(MalFfiHandleObject *handle, const MalFfiHandleType *type) {
+    if (ffi_type_supports(handle->type, type)) return true;
+    for (MalFfiHandleView *view = handle->views; view != nullptr; view = view->next) {
+        if (ffi_type_supports(view->type, type)) return true;
+    }
+    return false;
+}
+
 /** `scope` 0 makes a handle the program holds; otherwise it lives as long as that invocation. */
 static MalValue ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned, u64 scope, bool owns_storage) {
     MalFfiState *state = type->size == 0 ? ffi_state(vm) : nullptr;
-    MalFfiHandleObject *open = state == nullptr ? nullptr : ffi_handle_find(state, type, value);
+    MalFfiHandleObject *open = state == nullptr ? nullptr : ffi_handle_find(state, type->family, value);
+    if (open != nullptr && !ffi_scope_active(vm, open->scope)) {
+        // C may reuse a callback's stack address for a different resource or type.
+        ffi_handle_forget(open);
+        open = nullptr;
+    }
     if (open != nullptr) {
-        // One pointer, one handle: closing it through any path closes it everywhere.
-        if (owned) open->owned = true;
-        // A lent handle the library lends again, or returns outright, lives on with it;
-        // one the program already held stays the program's.
-        if (open->scope != 0) open->scope = scope;
+        if (owned && !open->owned) {
+            open->owned = true;
+            open->owner_type = type;
+        }
+        if (!ffi_handle_supports(open, type)) {
+            MalFfiHandleView *view = malloc(sizeof(*view));
+            if (view == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                return mal_value_new_undefined();
+            }
+            *view = (MalFfiHandleView) {type, open->views};
+            open->views = view;
+        }
+        // A nested loan must not shorten an outer invocation's still-active loan.
+        if (scope == 0 || !ffi_scope_active(vm, open->scope)) open->scope = scope;
         return mal_value_from_heap((MalHeapHeader *) open);
     }
     void *stored = value;
@@ -1588,6 +1633,8 @@ static MalValue ffi_new_handle(
         &vm->heap, &handle->object, MAL_HEAP_FFI_HANDLE_OBJECT, mal_value_to_object(prototype));
     rooted[1] = mal_value_from_heap((MalHeapHeader *) handle);
     handle->type = type;
+    handle->owner_type = type;
+    handle->views = nullptr;
     handle->value = stored;
     handle->owned = owned;
     handle->owns_storage = owns_storage;
@@ -1641,7 +1688,7 @@ bool mal_ffi_to_handle(
         return true;
     }
     MalFfiHandleObject *handle = ffi_handle(value);
-    bool typed = handle != nullptr && handle->type == type;
+    bool typed = handle != nullptr && ffi_handle_supports(handle, type);
     if (typed && handle->value != nullptr && !handle->closing && ffi_scope_active(vm, handle->scope)) {
         *out = handle->value;
         if (pin != nullptr) {

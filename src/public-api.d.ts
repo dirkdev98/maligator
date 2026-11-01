@@ -74,6 +74,10 @@ export interface MaligatorFfiHandle {
 	 * remain explicit; disposing the handle frees only this storage.
 	 */
 	storage?: "caller";
+	/** Other handle types whose pointers accept this resource without adjustment.
+	 * Compatibility is directed and preserves the resource's identity and owner.
+	 */
+	views?: Array<string>;
 	/** The function that releases the resource, taking it as its only parameter.
 	 * A name asserts unconditional release. With `success`, release occurs only when
 	 * its integer or boolean result equals the C identifier or integer literal.

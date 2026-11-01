@@ -80,6 +80,10 @@ typedef struct MalFfiHandleType {
     bool collect;
     const MalFfiField *fields;
     int32_t field_count;
+    /** Shared registry key; compatibility remains directed through views. */
+    const struct MalFfiHandleType *family;
+    const struct MalFfiHandleType *const *views;
+    int32_t view_count;
 } MalFfiHandleType;
 
 /**

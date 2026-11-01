@@ -144,6 +144,7 @@ export interface HandleInspection {
 	/** A copy of a struct the library passes by value, or a pointer it returns. */
 	readonly representation: "struct" | "pointer";
 	readonly allocator?: string;
+	readonly views?: ReadonlyArray<string>;
 	readonly destroy?: string;
 	readonly destroySuccess?: string;
 	readonly collect: boolean;
@@ -421,6 +422,7 @@ export function inspectBindings(
 			name: handle.name,
 			c: handle.spelling,
 			representation: handle.representation,
+			...(handle.views.length === 0 ? {} : { views: handle.views }),
 			...(handle.allocator === undefined ? {} : { allocator: handle.allocator }),
 			...(handle.destroy === undefined ? {} : { destroy: handle.destroy.name }),
 			...(handle.destroy?.success === undefined

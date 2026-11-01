@@ -26,6 +26,7 @@ function constantType(constant: MappedConstant): string {
 
 function moduleDeclaration(library: string, plan: BindingPlan): Array<string> {
 	const lines = [`declare module ${JSON.stringify(ffiModuleSpecifier(library))} {`];
+	if (plan.handles.size > 0) lines.push("\tconst maligatorFfiHandle: unique symbol;");
 	const records = [...plan.records.values()].sort((left, right) =>
 		left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
 	);
@@ -46,7 +47,8 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string> {
 		lines.push(
 			...docComment(handle.doc, "\t"),
 			`\texport interface ${handle.name} {`,
-			`\t\treadonly [Symbol.toStringTag]: ${JSON.stringify(handle.name)};`,
+			`\t\treadonly [maligatorFfiHandle]: { ${[handle.name, ...handle.views].map((name) => `readonly ${name}: true`).join("; ")} };`,
+			"\t\treadonly [Symbol.toStringTag]: string;",
 			`\t\t/** Close the handle${handle.destroy === undefined ? "" : `, releasing an owned resource with ${handle.destroy.name}`}.${handle.destroy?.success === undefined ? "" : " Failed C cleanup throws and leaves it open for retry."} */`,
 			"\t\t[Symbol.dispose](): void;",
 		);
