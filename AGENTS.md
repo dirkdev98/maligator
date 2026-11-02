@@ -133,18 +133,20 @@ and exact `PASSED -> FAILED` transitions, not just totals. The workflow maintain
 `scripts/test262.json`, so never replace that baseline by hand. An intentional
 replacement, such as advancing the pinned corpus, imports a complete CI report with
 an authorized `npm run test262:update-baseline -- --from-report`. Updating
-`bench/baseline.json` requires an authorized benchmark `--update` through the
-benchmark baseline workflow. Neither baseline update is implied by running a check.
+`bench/baseline.json` requires an explicit request. Record it on the development
+laptop with `npm run bench -- --full --update`, on AC power, so the website's
+benchmark history stays on one workstation. Neither baseline update is implied by
+running a check.
 
 ## Performance and evidence
 
 Use matched workloads, output parity, source/toolchain identity, and repeated
 interleaved pairs for performance conclusions. Keep local measurements to the
-comparison a decision needs; complete benchmark families and baseline refreshes run
-in their CI workflows. Inspect `--plan=json` before costly work; a single pair or zero
-exit code does not establish acceptance. A quick check is one run without warmups,
-reported as indicative. Use the [benchmark reference](docs/benchmarking.md) for
-commands, budgets, and resume rules.
+comparison a decision needs; complete benchmark families run in their CI workflows.
+Inspect `--plan=json` before costly work; a single pair or zero exit code does not
+establish acceptance. A quick check is one run without warmups, reported as
+indicative. Use the [benchmark reference](docs/benchmarking.md) for commands, budgets,
+and resume rules.
 
 Report what was exercised, failed, and left unverified. Retain the evidence needed
 to review the current change; historical timings and old passes are not current

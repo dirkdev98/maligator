@@ -13,9 +13,10 @@ Keep source-hosted DX
 measurements (`npm run bench:dx -- --source`) separate from AOT self-compilation.
 For application profiling, use [profiling.md](profiling.md).
 
-For an authorized complete baseline refresh on an allocated Linux runner, dispatch
-[Full benchmark baseline](../.github/workflows/benchmark-baseline.yml) from `main`.
-It measures all three families with the canonical `--full --update` command and
+Record an authorized complete baseline refresh on the development laptop with
+`npm run bench -- --full --update`, on AC power. For a refresh on an allocated Linux
+runner, dispatch [Full benchmark baseline](../.github/workflows/benchmark-baseline.yml)
+from `main`. It measures every family with the canonical `--full --update` command and
 retains the exact revision, runner identity, plan, log, snapshot, and updated baseline.
 Download and review the successful run's artifact before committing its baseline;
 the workflow does not push changes. A new baseline on a different host does not
