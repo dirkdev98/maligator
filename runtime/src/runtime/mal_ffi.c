@@ -43,7 +43,8 @@ static_assert(MAL_FFI_VALUE_TRUE == MAL_VALUE_TRUE);
 static_assert(MAL_FFI_VALUE_FALSE == MAL_VALUE_FALSE);
 static_assert(MAL_FFI_VALUE_NAN == MAL_VALUE_NAN);
 
-static bool ffi_fail(
+/* Error formatting must not enlarge successful binding calls' stack frames. */
+static __attribute__((noinline)) bool ffi_fail(
     MalVm *vm, MalIntrinsic prototype, const MalFfiSite *site, const char *expectation) {
     char message[512];
     if (site->field == nullptr) {
