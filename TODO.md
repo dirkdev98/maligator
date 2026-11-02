@@ -1903,8 +1903,9 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Call function pointers returned by C and exposed in native function tables.
-      Preserve the declared C ABI, owner lifetime, callback safety, and generated types.
+- [ ] Call function pointers exposed in native function tables with an explicit owner.
+      Library-lifetime function-pointer results bind through `returns.callable`.
+      Preserve owner lifetime, the declared C ABI, callback safety, and generated types.
 
 - [ ] Bind exported C globals with explicit access and ownership contracts.
 

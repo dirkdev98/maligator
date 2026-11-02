@@ -219,6 +219,10 @@ export function formatTsType(
 	const nullable = (type: string): string =>
 		"nullable" in value && value.nullable ? `${type} | null` : type;
 	switch (value.kind) {
+		case "callable": {
+			const type = `(${formatTsParameters(value.signature)}) => ${formatTsResult(value.signature)}`;
+			return `(${type}) | null`;
+		}
 		case "bytes":
 			return nullable(
 				direction === "input" ? "ArrayBufferLike | ArrayBufferView" : "Uint8Array",

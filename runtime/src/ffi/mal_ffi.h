@@ -165,6 +165,15 @@ void mal_ffi_finish_handle_close(MalValue value, bool released);
 void mal_ffi_install(
     MalVm *vm, const MalFfiLibrary *library, const MalHostInstallSlot *slots, int32_t count);
 
+/** Capture a function pointer's object representation in private, GC-traced slots. */
+MalValue mal_ffi_new_callable(
+    MalVm *vm, const char *name, int32_t length, MalFfiFunction function,
+    const void *target, size_t target_size);
+/** Recover a captured target only for the generated entry that owns its signature. */
+bool mal_ffi_callable_target(
+    MalVm *vm, MalValue callee, MalFfiFunction function, void *target,
+    size_t target_size, const MalFfiSite *site);
+
 /** Resolve an installer by symbol name for images loaded from the wire format. */
 MalFfiInstaller mal_ffi_resolve_installer(const char *name, size_t length);
 

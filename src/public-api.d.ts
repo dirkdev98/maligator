@@ -178,6 +178,8 @@ export interface MaligatorFfiValueFacts {
 	free?: string;
 	/** A function pointer the library calls during the call with a JavaScript function. */
 	callback?: MaligatorFfiCallback;
+	/** A returned C function pointer, callable with its declared header signature. */
+	callable?: MaligatorFfiCallable;
 	/**
 	 * Pass this C macro, enumerator, or integer, such as `SQLITE_TRANSIENT` or `0`, and
 	 * drop the parameter from the JavaScript signature. The C compiler checks its type.
@@ -187,6 +189,14 @@ export interface MaligatorFfiValueFacts {
 	 * omit the parameter from JavaScript. Its size must fit the integer parameter.
 	 */
 	sizeof?: string;
+}
+
+/** A C function whose code and referenced state remain valid for the linked library. */
+export interface MaligatorFfiCallable {
+	lifetime: "library";
+	/** Facts keyed by the signature's 1-based parameter positions. */
+	params?: Record<string, MaligatorFfiValueFacts>;
+	returns?: MaligatorFfiValueFacts;
 }
 
 /**

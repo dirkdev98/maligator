@@ -312,6 +312,7 @@ function validateValueFacts(value: unknown, at: string): void {
 		"array",
 		"free",
 		"callback",
+		"callable",
 		"constant",
 		"sizeof",
 	]);
@@ -331,6 +332,25 @@ function validateValueFacts(value: unknown, at: string): void {
 	);
 	if (value.bytes !== undefined) validateCount(value.bytes, `${at}.bytes`);
 	if (value.array !== undefined) validateCount(value.array, `${at}.array`);
+	if (value.callable !== undefined) {
+		const callable = value.callable;
+		expectObject(callable, `${at}.callable`);
+		expectKeys(callable, `${at}.callable`, ["lifetime", "params", "returns"]);
+		expect(callable.lifetime === "library", `${at}.callable.lifetime`, "'library'");
+		if (callable.params !== undefined) {
+			expectObject(callable.params, `${at}.callable.params`);
+			for (const [position, facts] of Object.entries(callable.params)) {
+				expect(
+					/^[1-9]\d*$/.test(position),
+					`${at}.callable.params.${position}`,
+					"a 1-based position",
+				);
+				validateValueFacts(facts, `${at}.callable.params.${position}`);
+			}
+		}
+		if (callable.returns !== undefined)
+			validateValueFacts(callable.returns, `${at}.callable.returns`);
+	}
 	if (value.callback !== undefined) {
 		const callback = value.callback;
 		expectObject(callback, `${at}.callback`);

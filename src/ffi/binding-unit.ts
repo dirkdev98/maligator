@@ -113,6 +113,7 @@ function inputCanRunJavaScript(value: JsValue): boolean {
 		case "string":
 		case "bytes":
 		case "handle":
+		case "callable":
 			return false;
 		case "callback":
 		case "record":
@@ -256,6 +257,7 @@ class BindingWriter {
 	readonly #managedFamilies = new Set<string>();
 	readonly #viewFamilies = new Set<string>();
 	readonly #workerCloseFamilies = new Set<string>();
+	readonly #callables = new Map<string, Extract<JsValue, { kind: "callable" }>>();
 	#counter = 0;
 
 	constructor(model: CModel, plan: BindingPlan) {
@@ -340,6 +342,14 @@ class BindingWriter {
 
 	/** Mark the record helpers a value needs, recursively through fields and arrays. */
 	need(value: JsValue, direction: "input" | "output"): void {
+		if (value.kind === "callable") {
+			if (this.#callables.has(value.name)) return;
+			this.#callables.set(value.name, value);
+			for (const param of value.signature.params) this.need(param.value, "input");
+			for (const output of value.signature.outputs) this.need(output.value, "output");
+			this.need(value.signature.returns, "output");
+			return;
+		}
 		if (value.kind === "tagged") {
 			const set = direction === "input" ? this.#taggedInputs : this.#taggedOutputs;
 			if (set.has(value.name)) return;
@@ -517,6 +527,8 @@ class BindingWriter {
 				throw new Error("buffers and arrays convert with the count of their argument");
 			case "callback":
 				throw new Error("callbacks convert with their user data");
+			case "callable":
+				throw new Error("native callable values are results");
 		}
 	}
 
@@ -527,6 +539,8 @@ class BindingWriter {
 	/** `lent`: a callback argument, whose handles close when the callback returns. */
 	write(value: JsValue, expression: string, lent: boolean | string = false): string {
 		switch (value.kind) {
+			case "callable":
+				return `(${expression}) == nullptr ? mal_ffi_null() : mal_ffi_new_callable(vm, ${cString(value.site)}, ${value.signature.params.length}, mal_ffi_function_${value.name}, &(${expression}), sizeof(${expression}))`;
 			case "handle": {
 				const created = (address: string) => {
 					const loan = `mal_ffi_new_callback_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address})`;
@@ -1648,8 +1662,23 @@ class BindingWriter {
 		];
 	}
 
-	function(binding: BoundFunction): Array<string> {
+	callableHelpers(): Array<string> {
+		const values = [...this.#callables.values()];
+		return [
+			...values.flatMap((value) => [
+				`typedef ${value.targetType} MalFfiTarget_${value.name};`,
+				`static MalValue mal_ffi_function_${value.name}(MalVm *, MalValue, const MalValue *, int32_t, MalValue, MalValue);`,
+			]),
+			...values.flatMap((value) => this.function(value.signature, value)),
+		];
+	}
+
+	function(
+		binding: BoundFunction,
+		callable?: Extract<JsValue, { kind: "callable" }>,
+	): Array<string> {
 		const name = binding.name;
+		const siteName = callable?.site ?? name;
 		const declaration = binding.declaration;
 		const locals: Array<string> = [];
 		const body: Array<string> = [];
@@ -1686,11 +1715,11 @@ class BindingWriter {
 			`mal_argc > ${String(param)} ? mal_args[${String(param)}] : mal_ffi_undefined()`;
 		binding.params.forEach((param, index) => {
 			locals.push(
-				`static const MalFfiSite mal_site_${String(index)} = { ${cString(name)}, ${cString(param.name)}, nullptr };`,
+				`static const MalFfiSite mal_site_${String(index)} = { ${cString(siteName)}, ${cString(param.name)}, nullptr };`,
 			);
 		});
 		locals.push(
-			`static const MalFfiSite mal_site_result = { ${cString(name)}, "result", nullptr };`,
+			`static const MalFfiSite mal_site_result = { ${cString(siteName)}, "result", nullptr };`,
 			"(void) mal_site_result;",
 		);
 		const countOf = (counted: number): { index: number; type: CType } | undefined => {
@@ -2090,7 +2119,7 @@ class BindingWriter {
 				}
 			}
 		});
-		const call = `${declaration.name}(${declaration.params.map((_, index) => `mal_argument_${String(index)}`).join(", ")})`;
+		const call = `${callable === undefined ? declaration.name : "mal_target"}(${declaration.params.map((_, index) => `mal_argument_${String(index)}`).join(", ")})`;
 		const closing =
 			binding.closes === undefined ? undefined : binding.params[binding.closes]!.value;
 		const success =
@@ -2125,7 +2154,9 @@ class BindingWriter {
 		if (binding.returns.kind === "undefined") {
 			after.push(...enter, `${call};`, ...callbackReturns, ...leave, ...closes);
 		} else {
-			locals.push(`${localDeclaration(declaration.returns, "mal_return")};`);
+			locals.push(
+				`${binding.returns.kind === "callable" ? `${binding.returns.targetType} mal_return` : localDeclaration(declaration.returns, "mal_return")};`,
+			);
 			const owned = this.#owned(
 				binding.returns,
 				"mal_return",
@@ -2197,7 +2228,7 @@ class BindingWriter {
 			"",
 			// The body, shared by the function object (framed: the call counts as a native
 			// frame, so collection needs lifting around callbacks) and the direct entry.
-			`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed${hasInto(binding) ? ", void *mal_into, MalValue *mal_slots" : ""}) {`,
+			`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed${hasInto(binding) ? ", void *mal_into, MalValue *mal_slots" : ""}${callable === undefined ? "" : `, MalFfiTarget_${callable.name} mal_target`}) {`,
 			"\t(void) vm;",
 			"\t(void) mal_args;",
 			"\t(void) mal_argc;",
@@ -2233,7 +2264,14 @@ class BindingWriter {
 			"\t(void) mal_this;",
 			"\t(void) mal_new_target;",
 			"\t(void) mal_callee;",
-			`\treturn mal_ffi_call_${name}(vm, mal_args, mal_argc, true${hasInto(binding) ? ", nullptr, nullptr" : ""});`,
+			...(callable === undefined
+				? []
+				: [
+						`\tMalFfiTarget_${callable.name} mal_target;`,
+						`\tstatic const MalFfiSite mal_site = { ${cString(callable.site)}, "callee", nullptr };`,
+						`\tif (!mal_ffi_callable_target(vm, mal_callee, mal_ffi_function_${name}, &mal_target, sizeof(mal_target), &mal_site)) return mal_ffi_undefined();`,
+					]),
+			`\treturn mal_ffi_call_${name}(vm, mal_args, mal_argc, true${hasInto(binding) ? ", nullptr, nullptr" : ""}${callable === undefined ? "" : ", mal_target"});`,
 			"}",
 		];
 	}
@@ -2632,7 +2670,10 @@ class BindingWriter {
 			}
 		});
 		const returns = binding.returns.kind !== "undefined";
-		if (returns) fields.push(`${localDeclaration(declaration.returns, "mal_return")};`);
+		if (returns)
+			fields.push(
+				`${binding.returns.kind === "callable" ? `${binding.returns.targetType} mal_return` : localDeclaration(declaration.returns, "mal_return")};`,
+			);
 		for (const temporary of strings) fields.push(`MalFfiString ${temporary};`);
 		const call = `${declaration.name}(${declaration.params.map((_, index) => `mal_ctx->mal_argument_${String(index)}`).join(", ")})`;
 		const count = countValue(binding, binding.resultCount, "mal_ctx->");
@@ -2984,6 +3025,7 @@ export function generateBindingUnit(
 		"",
 		...writer.recordHelpers(),
 		...writer.handleTypes(),
+		...writer.callableHelpers(),
 		...functions,
 		...constants,
 		"",

@@ -310,6 +310,30 @@ functions: {
 },
 ```
 
+## Call returned functions
+
+For a returned C function pointer, assert that its code and referenced state remain
+valid for the linked library:
+
+```typescript
+functions: {
+	choose_transform: {
+		returns: { callable: { lifetime: "library" } },
+	},
+},
+```
+
+The result is a JavaScript function, or `null` for a null C pointer. Its arguments and
+result follow the header signature and the same conversions as ordinary bindings.
+The C compiler preserves the pointer's calling convention. `call`, `apply`, and `bind`
+work; construction throws.
+
+Use `callable.params`, keyed by 1-based position, and `callable.returns` to describe
+pointers in that signature. For example, `params: { "1": { bytes: { length: "2" } } }`
+accepts a buffer and supplies its byte count. Nested function-pointer results need
+their own `callable` fact. The lifetime assertion includes state the function uses;
+do not use it for a function that depends on a resource the application can close.
+
 ## Describe pointers
 
 Other pointers need a fact about what they carry. Facts go on a function's `params`, keyed by C name or by 1-based position, or on its `returns`:

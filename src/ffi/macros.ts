@@ -10,9 +10,13 @@ export function macroFactRoots(facts: LibraryFacts): Array<string> {
 	const valueFacts = (value: MaligatorFfiValueFacts | undefined): void => {
 		if (value === undefined) return;
 		shape(value.shape);
+		if (value.constant !== undefined) names.add(value.constant);
 		for (const parameter of Object.values(value.callback?.params ?? {}))
 			valueFacts(parameter);
 		valueFacts(value.callback?.returns);
+		for (const parameter of Object.values(value.callable?.params ?? {}))
+			valueFacts(parameter);
+		valueFacts(value.callable?.returns);
 	};
 	for (const value of Object.values(facts.types)) {
 		shape(value.shape);
@@ -29,7 +33,6 @@ export function macroFactRoots(facts: LibraryFacts): Array<string> {
 		])
 			for (const parameter of Object.values(params ?? {})) {
 				valueFacts(parameter);
-				if (parameter.constant !== undefined) names.add(parameter.constant);
 			}
 		for (const reference of value.evidence ?? [])
 			if (reference.kind === "macro") names.add(reference.name);

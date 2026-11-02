@@ -1004,6 +1004,44 @@ bool mal_ffi_out_of_memory(MalVm *vm) {
     return false;
 }
 
+MalValue mal_ffi_new_callable(
+    MalVm *vm, const char *name, int32_t length, MalFfiFunction function,
+    const void *target, size_t target_size) {
+    if (target_size > UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            (const byte *) "C function pointer representation is too large");
+        return mal_value_new_undefined();
+    }
+    MalArrayBufferObject *buffer = mal_array_buffer_object_new_uninitialized(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+        (u32) target_size, (u32) target_size, false, false);
+    memcpy(buffer->data, target, target_size);
+    MalValue slot = mal_value_from_array_buffer_object(buffer);
+    MalRootSpan root;
+    mal_gc_root(&root, &slot, 1);
+    MalNativeFunctionObject *callable = mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) name), length, function, &slot, 1);
+    mal_gc_unroot(&root);
+    return mal_value_from_native_function_object(callable);
+}
+
+bool mal_ffi_callable_target(
+    MalVm *vm, MalValue callee, MalFfiFunction function, void *target,
+    size_t target_size, const MalFfiSite *site) {
+    if (!mal_value_is_native_function_object(callee))
+        return mal_ffi_expected(vm, site, "a native C function");
+    MalNativeFunctionObject *callable = mal_value_to_native_function_object(callee);
+    MalValue slot = mal_native_function_object_get_slot(callable, 0);
+    if (callable->callback != function || !mal_value_is_array_buffer_object(slot))
+        return mal_ffi_expected(vm, site, "a native C function");
+    MalArrayBufferObject *buffer = mal_value_to_array_buffer_object(slot);
+    if (buffer->detached || buffer->shared || buffer->byte_length != target_size)
+        return mal_ffi_expected(vm, site, "an intact C function pointer");
+    memcpy(target, buffer->data, target_size);
+    return true;
+}
+
 void mal_ffi_root(MalFfiRoots *roots, MalValue *slots, int32_t count) {
     mal_gc_root((MalRootSpan *) roots, slots, count);
 }

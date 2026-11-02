@@ -26,6 +26,14 @@ import type { FfiText } from "./text.ts";
  */
 export type JsValue =
 	| { readonly kind: "undefined" }
+	| {
+			readonly kind: "callable";
+			readonly name: string;
+			readonly targetType: string;
+			readonly site: string;
+			readonly signature: BoundFunction;
+			readonly nullable: true;
+	  }
 	| { readonly kind: "boolean" }
 	/** An exact integer of at most 32 bits; other numbers throw on input. */
 	| { readonly kind: "integer"; readonly bits: number; readonly signed: boolean }
@@ -595,6 +603,8 @@ class Planner {
 	readonly #handles: ReadonlyMap<string, Omit<HandleType, "fields" | "managedFields">>;
 	readonly #recordGaps = new Map<string, string>();
 	readonly #pending = new Set<string>();
+	#callableCount = 0;
+	hasCallableCallbacks = false;
 
 	constructor(
 		model: CModel,
@@ -1883,8 +1893,14 @@ class Planner {
 		declaration: CFunction,
 		facts: FunctionFacts,
 		closes: number | undefined,
+		callableContext?: {
+			readonly targetType: string;
+			readonly path: string;
+			readonly site: string;
+		},
 	): BoundFunction | UnboundFunction {
-		const where = (at: string): string => `functions.${declaration.name}.${at}`;
+		const where = (at: string): string =>
+			`${callableContext?.path ?? `functions.${declaration.name}`}.${at}`;
 		const gaps: Array<Gap> = [];
 		if (declaration.variadic) {
 			gaps.push({ at: "arguments", reason: "variadic arguments need a fact per call" });
@@ -1912,6 +1928,74 @@ class Planner {
 			at: string,
 		): Mapping => {
 			const resolved = resolveCType(this.#model, type);
+			if (valueFacts.callable !== undefined) {
+				const target =
+					resolved.kind === "pointer"
+						? resolveCType(this.#model, resolved.to)
+						: undefined;
+				if (position !== "return" || target?.kind !== "function")
+					throw new FfiError(
+						`${where(at)}.callable: callable applies to returned function pointers`,
+					);
+				if (
+					Object.keys(valueFacts).some((key) => key !== "callable" && key !== "nullable")
+				)
+					throw new FfiError(
+						`${where(at)}.callable: callable cannot accompany another value representation`,
+					);
+				if (target.variadic)
+					return { gap: "a callable function pointer needs a fixed signature" };
+				const params: Array<MaligatorFfiValueFacts | undefined> = [];
+				for (const [key, facts] of Object.entries(valueFacts.callable.params ?? {})) {
+					const index = Number(key) - 1;
+					if (!Number.isInteger(index) || index < 0 || index >= target.params.length)
+						throw new FfiError(
+							`${where(at)}.callable.params.${key}: the function pointer has no such parameter`,
+						);
+					params[index] = facts;
+				}
+				const source =
+					callableContext === undefined
+						? declaration.name
+						: `((${callableContext.targetType}) nullptr)`;
+				const arguments_ = declaration.params.map(({ type }) => {
+					const resolved = resolveCType(this.#model, type);
+					if (resolved.kind !== "record") return "0";
+					const spelling =
+						type.kind === "typedef"
+							? formatCDeclaration(type)
+							: (this.#accesses.get(resolved.name)?.spelling ?? formatCDeclaration(type));
+					return `(${spelling}){0}`;
+				});
+				const targetType = `__typeof__(${source}(${arguments_.join(", ")}))`;
+				const name = `mal_callable_${this.#callableCount++}`;
+				const site = `${callableContext?.site ?? declaration.name} result`;
+				const signature = this.function(
+					{
+						...declaration,
+						name,
+						returns: target.returns,
+						params: target.params.map((type, index) => ({
+							name: `arg${index + 1}`,
+							type,
+						})),
+						variadic: false,
+						inline: false,
+					},
+					{ params, returns: valueFacts.callable.returns ?? NO_FACTS },
+					undefined,
+					{ targetType, path: `${where(at)}.callable`, site },
+				);
+				if ("gaps" in signature)
+					return {
+						gap: `callable signature: ${signature.gaps.map((gap) => `${gap.at}: ${gap.reason}`).join("; ")}`,
+					};
+				if (signature.params.some(({ value }) => value.kind === "callback"))
+					this.hasCallableCallbacks = true;
+				return {
+					value: { kind: "callable", name, targetType, site, signature, nullable: true },
+				};
+			}
 			for (const fact of ["string", "bytes", "array"] as const) {
 				if (
 					valueFacts[fact] !== undefined &&
@@ -2501,9 +2585,11 @@ export function planBindings(
 	}
 	return {
 		functions,
-		hasCallbacks: functions.some((binding) =>
-			binding.params.some(({ value }) => value.kind === "callback"),
-		),
+		hasCallbacks:
+			planner.hasCallableCallbacks ||
+			functions.some((binding) =>
+				binding.params.some(({ value }) => value.kind === "callback"),
+			),
 		unbound,
 		records: planner.records,
 		unions: planner.unions,
