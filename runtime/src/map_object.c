@@ -646,7 +646,7 @@ void mal_map_object_update_entry(MalMapObject *map, u32 entry, MalValue key, Mal
         if (old_key != key) {
             const MalString *string = mal_value_to_string(key);
             bool compact = string->storage == MAL_STRING_STORAGE_INLINE;
-            if (string->storage == MAL_STRING_STORAGE_OWNED) {
+            if (string->storage == MAL_STRING_STORAGE_OWNED || string->storage == MAL_STRING_STORAGE_ASCII_CSTR) {
                 const MalString *old_string = mal_value_to_string(old_key);
                 usize unit_size = string->latin1 || old_string->latin1 ? 1 : sizeof(c16);
                 usize limit = mal_heap_allocation_charge((usize) string->length * unit_size);

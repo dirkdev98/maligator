@@ -2159,6 +2159,7 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
         case MAL_HEAP_STRING: {
             MalString *string = (MalString *) cell;
             if (string->storage == MAL_STRING_STORAGE_OWNED ||
+                    string->storage == MAL_STRING_STORAGE_ASCII_CSTR ||
                     string->storage == MAL_STRING_STORAGE_BUILDER) {
                 gc_free_raw(&g_gc_vm->heap, (void *) string->code_units);
                 string->code_units = nullptr;
@@ -2457,7 +2458,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
             return;
         case MAL_HEAP_STRING: {
             MalStringStorage storage = ((const MalString *) cell)->storage;
-            if (storage != MAL_STRING_STORAGE_OWNED && storage != MAL_STRING_STORAGE_BUILDER) return;
+            if (storage != MAL_STRING_STORAGE_OWNED && storage != MAL_STRING_STORAGE_ASCII_CSTR && storage != MAL_STRING_STORAGE_BUILDER) return;
             break;
         }
         case MAL_HEAP_OBJECT:

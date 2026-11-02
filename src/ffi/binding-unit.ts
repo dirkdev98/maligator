@@ -407,6 +407,7 @@ class BindingWriter {
 		/** Whether `source` is already rooted, as arguments and record fields are. */
 		rooted: boolean,
 		inputs = "nullptr",
+		borrowString = false,
 	): Array<string> {
 		const cast = (expression: string) =>
 			`(${localDeclaration(type, "")}) (${expression})`;
@@ -458,7 +459,7 @@ class BindingWriter {
 				const temporary = this.#fresh("string");
 				strings.push(temporary);
 				return [
-					`if (!mal_ffi_to_string(vm, ${source}, ${value.nullable}, ${value.counted === true}, ${site}, &${temporary})) ${fail}`,
+					`if (!mal_ffi_to_string(vm, ${source}, ${value.nullable}, ${value.counted === true ? "MAL_FFI_STRING_COUNTED" : "0"}${borrowString ? " | MAL_FFI_STRING_BORROW" : ""}, ${site}, &${temporary})) ${fail}`,
 					`${target} = (${localDeclaration(type, "")}) ${temporary}.data;`,
 				];
 			}
@@ -1402,7 +1403,7 @@ class BindingWriter {
 			if (result.kind === "string") {
 				resultLocals.push("MalFfiString mal_result_text = {.data = nullptr};");
 				resultConversion.push(
-					`if (!mal_ffi_to_string(vm, mal_result, ${result.nullable}, ${result.counted === true}, &mal_site, &mal_result_text)) goto mal_done;`,
+					`if (!mal_ffi_to_string(vm, mal_result, ${result.nullable}, ${result.counted === true ? "MAL_FFI_STRING_COUNTED" : "0"}, &mal_site, &mal_result_text)) goto mal_done;`,
 					"mal_result_data = mal_result_text.data;",
 					"mal_result_length = mal_result_text.length;",
 				);
@@ -1747,6 +1748,19 @@ class BindingWriter {
 		const callsBack =
 			this.#plan.hasCallbacks ||
 			binding.params.some((param) => param.value.kind === "callback");
+		const borrowString = (type: CType): boolean => {
+			const pointer = resolveCType(this.#model, type);
+			if (pointer.kind !== "pointer") return false;
+			const target = resolveCType(this.#model, pointer.to);
+			return (
+				!runsJavaScript &&
+				!callsBack &&
+				binding.outputs.length === 0 &&
+				["undefined", "integer", "float", "boolean"].includes(binding.returns.kind) &&
+				"const" in target &&
+				target.const === true
+			);
+		};
 		const argument = (param: number) =>
 			`mal_argc > ${String(param)} ? mal_args[${String(param)}] : mal_ffi_undefined()`;
 		binding.params.forEach((param, index) => {
@@ -1845,7 +1859,7 @@ class BindingWriter {
 							const site = `&mal_site_${String(entry.param)}`;
 							strings.push(text);
 							body.push(
-								`if (!mal_ffi_to_string(vm, ${argument(entry.param)}, ${value.nullable}, true, ${site}, &${text})) goto mal_done;`,
+								`if (!mal_ffi_to_string(vm, ${argument(entry.param)}, ${value.nullable}, MAL_FFI_STRING_COUNTED, ${site}, &${text})) goto mal_done;`,
 								`${output} = (${localDeclaration(pointee, "")}) ${text}.data;`,
 							);
 							setCount(index, `${text}.length`, site, body);
@@ -1875,7 +1889,7 @@ class BindingWriter {
 						const text = this.#fresh("string");
 						strings.push(text);
 						body.push(
-							`if (!mal_ffi_to_string(vm, ${source}, ${value.nullable}, true, ${site}, &${text})) goto mal_done;`,
+							`if (!mal_ffi_to_string(vm, ${source}, ${value.nullable}, MAL_FFI_STRING_COUNTED${borrowString(param.type) ? " | MAL_FFI_STRING_BORROW" : ""}, ${site}, &${text})) goto mal_done;`,
 							`${local} = (${localDeclaration(param.type, "")}) ${text}.data;`,
 						);
 						setCount(index, `${text}.length`, site, body);
@@ -2149,6 +2163,7 @@ class BindingWriter {
 							strings,
 							true,
 							inputs,
+							borrowString(param.type),
 						),
 					);
 					return;
@@ -2492,7 +2507,7 @@ class BindingWriter {
 							const site = `&mal_site_${String(entry.param)}`;
 							strings.push(text);
 							body.push(
-								`if (!mal_ffi_to_string(vm, ${argument(entry.param)}, ${value.nullable}, true, ${site}, &${text})) goto mal_failed;`,
+								`if (!mal_ffi_to_string(vm, ${argument(entry.param)}, ${value.nullable}, MAL_FFI_STRING_COUNTED, ${site}, &${text})) goto mal_failed;`,
 								`mal_ctx->${output} = (${localDeclaration(pointee, "")}) ${text}.data;`,
 							);
 							setCount(index, `${text}.length`, site);
@@ -2592,7 +2607,7 @@ class BindingWriter {
 						const text = this.#fresh("string");
 						strings.push(text);
 						body.push(
-							`if (!mal_ffi_to_string(vm, ${source}, ${value.nullable}, true, ${site}, &${text})) goto mal_failed;`,
+							`if (!mal_ffi_to_string(vm, ${source}, ${value.nullable}, MAL_FFI_STRING_COUNTED, ${site}, &${text})) goto mal_failed;`,
 							`${target} = (${localDeclaration(param.type, "")}) ${text}.data;`,
 						);
 						setCount(index, `${text}.length`, site);

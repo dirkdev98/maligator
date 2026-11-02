@@ -250,7 +250,7 @@ static inline bool mal_ffi_to_boolean(
 #define MAL_FFI_ARRAY_INLINE 256
 
 /**
- * A UTF-8, NUL-terminated copy the binding owns until `mal_ffi_string_release`.
+ * UTF-8 bytes owned by the binding or borrowed for a nonreentrant readonly call.
  * Only `data` needs initializing, to null: zeroing the inline buffer would cost
  * more than the copy. A short string points into the struct, so it must not move
  * while in use.
@@ -258,12 +258,17 @@ static inline bool mal_ffi_to_boolean(
 typedef struct MalFfiString {
     char *data;
     size_t length;
-    char inline_data[MAL_FFI_STRING_INLINE];
+    // Ownership is only consulted for non-inline data, which leaves this buffer unused.
+    union {
+        char inline_data[MAL_FFI_STRING_INLINE];
+        bool borrowed;
+    };
 } MalFfiString;
 
-/** Counted strings allow embedded NUL; nullable strings map null to NULL and zero bytes. */
+enum { MAL_FFI_STRING_COUNTED = 1, MAL_FFI_STRING_BORROW = 2 };
+/** Borrowing excludes JS reentry and pointer results; counted inputs allow embedded NUL. */
 bool mal_ffi_to_string(
-    MalVm *vm, MalValue value, bool nullable, bool counted, const MalFfiSite *site, MalFfiString *out);
+    MalVm *vm, MalValue value, bool nullable, uint32_t flags, const MalFfiSite *site, MalFfiString *out);
 void mal_ffi_string_release(MalFfiString *string);
 /** A heap copy the caller frees, for strings that outlive one conversion such as array elements. */
 bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, char **out);

@@ -270,6 +270,7 @@ void mal_string_tiny_cache_promote(MalHeap *heap, const MalString *entry, MalStr
     if (atom == nullptr || atom->length > MAL_STRING_INLINE_CODE_UNITS
         || (atom->storage != MAL_STRING_STORAGE_INLINE
             && atom->storage != MAL_STRING_STORAGE_OWNED
+            && atom->storage != MAL_STRING_STORAGE_ASCII_CSTR
             && atom->storage != MAL_STRING_STORAGE_EXTERNAL)) {
         return;
     }
@@ -302,6 +303,23 @@ void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_unit
         memcpy(owned, code_units, sizeof(c16) * length);
         string->code_units = owned;
     }
+}
+
+const u8 *mal_string_prepare_ascii_cstr(MalHeap *heap, MalString *string) {
+    if (string->storage != MAL_STRING_STORAGE_OWNED || !string->latin1) return nullptr;
+    usize capacity = mal_heap_raw_capacity(heap, string->latin1_units);
+    if (capacity <= string->length) {
+        // Crossing a small size class could double retained storage for one terminator.
+        usize terminated = (usize) string->length + 1;
+        if (mal_heap_allocation_charge(terminated) > capacity + 1) return nullptr;
+        u8 *grown = mal_heap_try_realloc_raw_profiled(
+            heap, (void *) string->latin1_units, terminated, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+        if (grown == nullptr) return nullptr;
+        string->latin1_units = grown;
+    }
+    ((u8 *) string->latin1_units)[string->length] = 0;
+    string->storage = MAL_STRING_STORAGE_ASCII_CSTR;
+    return string->latin1_units;
 }
 
 static void mal_string_init_external_units(MalString *string, const c16 *code_units, usize length) {
@@ -1240,6 +1258,7 @@ const c16 *mal_string_flatten(MalString *mutable) {
             ? mutable->inline_latin1_units : mutable->latin1_units;
         for (usize i = 0; i < mutable->length; i++) units[i] = source[i];
         if (mutable->storage == MAL_STRING_STORAGE_OWNED ||
+                mutable->storage == MAL_STRING_STORAGE_ASCII_CSTR ||
                 mutable->storage == MAL_STRING_STORAGE_BUILDER) {
             gc_free_raw(heap, (void *) source);
         }

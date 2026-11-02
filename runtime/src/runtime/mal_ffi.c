@@ -132,9 +132,10 @@ bool mal_ffi_to_uint64(
 }
 
 bool mal_ffi_to_string(
-    MalVm *vm, MalValue value, bool nullable, bool counted, const MalFfiSite *site, MalFfiString *out) {
+    MalVm *vm, MalValue value, bool nullable, uint32_t flags, const MalFfiSite *site, MalFfiString *out) {
     out->data = nullptr;
     out->length = 0;
+    bool counted = (flags & MAL_FFI_STRING_COUNTED) != 0;
     if (nullable && mal_value_is_null(value)) return true;
     if (!mal_value_is_string(value)) {
         return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, nullable ? "a string or null" : "a string");
@@ -146,8 +147,16 @@ bool mal_ffi_to_string(
     usize capacity = sizeof(out->inline_data);
     // ASCII can fit inline even when UTF-8's worst-case expansion would require a heap copy.
     if (units >= capacity) {
+        if ((flags & MAL_FFI_STRING_BORROW) != 0 && string->latin1
+            && string->storage == MAL_STRING_STORAGE_ASCII_CSTR) {
+            out->data = (char *) string->latin1_units;
+            out->length = units;
+            out->borrowed = true;
+            return true;
+        }
         data = units > (SIZE_MAX - 1) / 3 ? nullptr : malloc(units * 3 + 1);
         if (data == nullptr) return mal_ffi_out_of_memory(vm);
+        out->borrowed = false;
         capacity = units * 3 + 1;
     }
     usize length = 0;
@@ -156,11 +165,12 @@ bool mal_ffi_to_string(
     if (units != 0 && string->latin1 && string->storage < MAL_STRING_STORAGE_DEPENDENT) {
         // A flat ASCII string is its own UTF-8: one pass copies it and checks for high
         // bytes and NULs. Otherwise the general encoder overwrites the copy.
-        MalStringSegment segment = mal_string_flat_segment((MalString *) string);
+        const u8 *flat = string->storage == MAL_STRING_STORAGE_INLINE
+            ? string->inline_latin1_units : string->latin1_units;
         u8 high = 0;
         u8 zero = 0;
         for (usize index = 0; index < units; index++) {
-            u8 unit = segment.latin1_units[index];
+            u8 unit = flat[index];
             high |= unit;
             zero |= unit == 0;
             data[index] = (char) unit;
@@ -175,6 +185,7 @@ bool mal_ffi_to_string(
         if (units > (capacity - 1) / 3) {
             data = units > (SIZE_MAX - 1) / 3 ? nullptr : malloc(units * 3 + 1);
             if (data == nullptr) return mal_ffi_out_of_memory(vm);
+            out->borrowed = false;
             capacity = units * 3 + 1;
         }
         mal_string_utf8_encode_into(string, (byte *) data, capacity, nullptr, &length);
@@ -182,6 +193,16 @@ bool mal_ffi_to_string(
         nul = memchr(data, 0, length) != nullptr;
     }
     data[length] = '\0';
+    if (units >= sizeof(out->inline_data) && (flags & MAL_FFI_STRING_BORROW) != 0 && encoded && !nul) {
+        const u8 *borrowed = mal_string_prepare_ascii_cstr(&vm->heap, (MalString *) string);
+        if (borrowed != nullptr) {
+            free(data);
+            out->data = (char *) borrowed;
+            out->length = units;
+            out->borrowed = true;
+            return true;
+        }
+    }
     out->data = data;
     out->length = length;
     if (nul && !counted) {
@@ -193,7 +214,7 @@ bool mal_ffi_to_string(
 }
 
 void mal_ffi_string_release(MalFfiString *string) {
-    if (string->data != string->inline_data) free(string->data);
+    if (string->data != nullptr && string->data != string->inline_data && !string->borrowed) free(string->data);
     string->data = nullptr;
     string->length = 0;
 }
@@ -201,7 +222,7 @@ void mal_ffi_string_release(MalFfiString *string) {
 bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, char **out) {
     *out = nullptr;
     MalFfiString string;
-    if (!mal_ffi_to_string(vm, value, false, false, site, &string)) return false;
+    if (!mal_ffi_to_string(vm, value, false, 0, site, &string)) return false;
     if (string.data != string.inline_data) {
         *out = string.data;
         return true;
@@ -2823,7 +2844,7 @@ bool mal_ffi_set_state_value(
     MalFfiString text = {.data = nullptr};
     bool ok = false;
     if (field->text && !mal_value_is_null(input)) {
-        if (!mal_ffi_to_string(vm, input, false, true, site, &text)
+        if (!mal_ffi_to_string(vm, input, false, MAL_FFI_STRING_COUNTED, site, &text)
             || !mal_ffi_check_count(vm, text.length, field->count_bits, field->count_signed, site)) goto mal_done;
         u32 capacity = text.length == 0 ? 1 : (u32) text.length;
         MalArrayBufferObject *buffer = mal_array_buffer_object_new(

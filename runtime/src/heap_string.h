@@ -6,21 +6,21 @@
 #include "heap.h"
 #include "perf_stats.h"
 
-/**
- * Physical ownership is independent of the encoding of a flat string's payload.
- */
+/** Tags below DEPENDENT describe flat JavaScript strings; encoding is separate. */
 typedef enum MalStringStorage : u32 {
     MAL_STRING_STORAGE_OWNED,
     MAL_STRING_STORAGE_INLINE,
     MAL_STRING_STORAGE_EXTERNAL,
+    /** Owned Latin1 bytes proved ASCII, NUL-free, and terminated within their allocation. */
+    MAL_STRING_STORAGE_ASCII_CSTR,
+    MAL_STRING_STORAGE_DEPENDENT,
+    MAL_STRING_STORAGE_CONS,
     /**
      * An append buffer: an owned flat payload with spare capacity (kept in `hash`)
      * that dependent prefixes share. It is never itself a JavaScript value, so its
      * length may grow while those prefixes keep theirs.
      */
     MAL_STRING_STORAGE_BUILDER,
-    MAL_STRING_STORAGE_DEPENDENT,
-    MAL_STRING_STORAGE_CONS,
 } MalStringStorage;
 
 typedef struct MalString {
@@ -140,6 +140,8 @@ MalString *mal_string_new_utf16_owned(MalHeap *heap, const c16 *units, usize len
  * Allocate and initialize a string from ASCII bytes.
  */
 MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length);
+/** Caller proves ASCII without NULs. Adds at most one backing byte; UTF16 bridging invalidates the span. */
+const u8 *mal_string_prepare_ascii_cstr(MalHeap *heap, MalString *string);
 
 /** Explicit UTF-16 bridge: widen compact leaves or flatten ropes as needed. */
 const c16 *mal_string_flatten(MalString *string);
@@ -244,7 +246,8 @@ MalStringSegment mal_string_flat_segment_resolved(MalString *string);
 /** Return the whole string as one borrowed leaf segment. A rope spanning leaves
  * is flattened in place in its compact encoding; Latin-1 content is never
  * widened. Root the string first: flattening allocates. The segment remains
- * valid while the string is rooted and not materialized by a UTF-16 bridge. */
+ * valid while rooted and until a UTF-16 bridge or C-string preparation changes
+ * its backing. Reacquire it after JavaScript reentry. */
 static inline MalStringSegment mal_string_flat_segment(MalString *string) {
     if (string->storage >= MAL_STRING_STORAGE_DEPENDENT) {
         return mal_string_flat_segment_resolved(string);
@@ -279,8 +282,8 @@ typedef struct MalStringIterator {
 } MalStringIterator;
 
 /** Segments borrow leaf storage. Root the input across GC; do not retain an
- * iterator or segment across JS reentry or a UTF-16 bridge that may materialize
- * it. Traversal never collects or mutates strings; borrowed scratch uses malloc. */
+ * iterator or segment across JS reentry, UTF-16 bridging, or C-string backing
+ * preparation. Traversal never collects or mutates strings; scratch uses malloc. */
 void mal_string_iterator_init(
     MalStringIterator *iterator, const MalString *string, usize offset, usize length);
 /** Returns segments right to left; each segment retains its forward unit order. */
