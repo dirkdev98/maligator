@@ -1333,14 +1333,18 @@ static void mal_gc_visit_frame_registers(
 }
 
 /** Trace an interpreter / generator activation frame. */
-static void mal_gc_trace_frame_in(MalGcThreadContext *ctx, MalVmFrame *frame) {
-    mal_gc_visit_frame_registers(frame, mal_gc_mark_value);
+static void mal_gc_trace_frame_metadata_in(MalGcThreadContext *ctx, MalVmFrame *frame) {
     mal_gc_mark_values_in(ctx, frame->arguments, frame->argument_count);
     mal_gc_mark_value_in(ctx, frame->this_value);
     mal_gc_mark_value_in(ctx, frame->arguments_object);
     mal_gc_mark_value_in(ctx, frame->callee);
     mal_gc_mark_value_in(ctx, frame->new_target);
     mal_gc_trace_env_in(ctx, frame->env);
+}
+
+static void mal_gc_trace_frame_in(MalGcThreadContext *ctx, MalVmFrame *frame) {
+    mal_gc_visit_frame_registers(frame, mal_gc_mark_value);
+    mal_gc_trace_frame_metadata_in(ctx, frame);
 }
 
 static void mal_gc_trace_frame(MalVmFrame *frame) {
@@ -1703,7 +1707,14 @@ static void mal_gc_trace_cell_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
                     gen->frame.function =
                         &ctx->vm->live_runtime_image.functions[gen->frame.function_index];
                 }
-                mal_gc_trace_frame_in(ctx, &gen->frame);
+                // An executing interpreter shares its register buffer with the active
+                // VM frame, whose safepoint row advances independently of this snapshot.
+                // Persistent frame metadata stays owned by the generator across resumes.
+                if (gen->state == MAL_GENERATOR_EXECUTING && !gen->frame.is_compiled) {
+                    mal_gc_trace_frame_metadata_in(ctx, &gen->frame);
+                } else {
+                    mal_gc_trace_frame_in(ctx, &gen->frame);
+                }
             }
             mal_gc_mark_value_in(ctx, gen->yielded_value);
             if (gen->async_data != nullptr) {

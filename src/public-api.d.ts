@@ -96,15 +96,16 @@ export interface MaligatorFfiTypeFacts {
 	handle?: MaligatorFfiHandle;
 	/** Select active union storage explicitly or from a record's discriminator. */
 	shape?: MaligatorFfiShape;
-	/** Retained ranges in caller-owned state. Assignment writes the pointer and
-	 * count together; C may advance them only within the assigned range.
+	/** Callable fields on complete handles, or retained ranges in caller-owned state.
+	 * Range assignment writes the pointer and count together; C may advance them only
+	 * within the assigned range.
 	 */
 	fields?: Record<string, MaligatorFfiFieldFacts>;
 	/** Header documentation that `ffi check` watches when reviewing these facts. */
 	evidence?: Array<MaligatorFfiEvidence>;
 }
 
-/** A pointer/count pair retained by a caller-owned state handle. */
+/** A callable field, or a pointer/count pair retained by caller-owned state. */
 export type MaligatorFfiFieldFacts =
 	| {
 			bytes: {
@@ -114,11 +115,18 @@ export type MaligatorFfiFieldFacts =
 				writable?: boolean;
 			};
 			string?: never;
+			callable?: never;
 	  }
 	| {
 			/** UTF-8 text kept in a private encoding, with a C field holding its byte count. */
 			string: MaligatorFfiCount;
 			bytes?: never;
+			callable?: never;
+	  }
+	| {
+			callable: MaligatorFfiCallable;
+			bytes?: never;
+			string?: never;
 	  };
 
 /** A declaration whose documentation supports a fact, independent of its source location. */
@@ -191,9 +199,10 @@ export interface MaligatorFfiValueFacts {
 	sizeof?: string;
 }
 
-/** A C function whose code and referenced state remain valid for the linked library. */
+/** A C function whose code and referenced state remain valid for its lifetime. */
 export interface MaligatorFfiCallable {
-	lifetime: "library";
+	/** Owner lifetime captures the handle whose function-table field was read. */
+	lifetime: "library" | "owner";
 	/** Facts keyed by the signature's 1-based parameter positions. */
 	params?: Record<string, MaligatorFfiValueFacts>;
 	returns?: MaligatorFfiValueFacts;

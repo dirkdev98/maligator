@@ -216,7 +216,12 @@ function validateTypeFacts(value: unknown, at: string): void {
 			const fieldAt = `${at}.fields.${name}`;
 			expect(C_NAME.test(name), fieldAt, "a C field name");
 			expectObject(field, fieldAt);
-			expectKeys(field, fieldAt, ["bytes", "string"]);
+			expectKeys(field, fieldAt, ["bytes", "string", "callable"]);
+			if (field.callable !== undefined) {
+				expectKeys(field, fieldAt, ["callable"]);
+				validateValueFacts(field, fieldAt);
+				continue;
+			}
 			expect(
 				(field.bytes !== undefined) !== (field.string !== undefined),
 				fieldAt,
@@ -336,7 +341,11 @@ function validateValueFacts(value: unknown, at: string): void {
 		const callable = value.callable;
 		expectObject(callable, `${at}.callable`);
 		expectKeys(callable, `${at}.callable`, ["lifetime", "params", "returns"]);
-		expect(callable.lifetime === "library", `${at}.callable.lifetime`, "'library'");
+		expect(
+			callable.lifetime === "library" || callable.lifetime === "owner",
+			`${at}.callable.lifetime`,
+			"'library' or 'owner'",
+		);
 		if (callable.params !== undefined) {
 			expectObject(callable.params, `${at}.callable.params`);
 			for (const [position, facts] of Object.entries(callable.params)) {

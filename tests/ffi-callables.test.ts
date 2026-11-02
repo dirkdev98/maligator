@@ -55,6 +55,56 @@ describe("returned C function contracts", () => {
 		const plan = planBindings(model, { types: {}, functions: {} });
 		expect(plan.unbound.some(({ name }) => name === "callable_choose")).toBe(true);
 	});
+	it("declares callable table fields with their C signatures", () => {
+		const plan = planBindings(model, {
+			types: contract.types,
+			functions: contract.functions,
+		});
+		const declarations = [...generateDeclarations([{ name: "callables", plan }])].join(
+			"",
+		);
+		expect(declarations).toContain(
+			"readonly self: ((arg1: CallableTable, arg2: number) => number) | null;",
+		);
+		expect(declarations).toContain("readonly fixed: ((arg2: number) => number) | null;");
+	});
+	it("rejects an owner lifetime on a returned function without an owner", () => {
+		expect(() =>
+			planBindings(model, {
+				types: {},
+				functions: {
+					callable_choose: { returns: { callable: { lifetime: "owner" } } },
+				},
+			}),
+		).toThrow("owner lifetime requires a function-table field");
+	});
+	it("rejects a callable field absent from the header", () => {
+		expect(() =>
+			planBindings(model, {
+				types: {
+					CallableTable: {
+						handle: {},
+						fields: { absent: { callable: { lifetime: "owner" } } },
+					},
+				},
+				functions: {},
+			}),
+		).toThrow("the handle has no such field");
+	});
+	it("rejects callable fields in a view family", () => {
+		expect(() =>
+			planBindings(model, {
+				types: {
+					CallableTable: {
+						handle: { views: ["CallableState"] },
+						fields: { transform: { callable: { lifetime: "owner" } } },
+					},
+					CallableState: { handle: {} },
+				},
+				functions: {},
+			}),
+		).toThrow("callable fields cannot accompany handle views");
+	});
 	it("rejects callable facts on an input", () => {
 		expect(() =>
 			planBindings(model, {

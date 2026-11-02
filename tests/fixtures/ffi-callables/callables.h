@@ -33,3 +33,27 @@ CallableFactory callable_factory(void);
 CallableAbi callable_abi(void);
 int (CALLABLE_ABI *callable_abi_anon(void))(int);
 CallableVariadic callable_variadic(void);
+
+typedef struct CallableTable {
+    CallableInt transform;
+    int (*point)(CallablePoint);
+    CallableApply visit;
+    int (*self)(struct CallableTable *, int);
+    int (CALLABLE_ABI *const abi)(int);
+    CallableFixed fixed;
+    CallableFactory factory;
+    CallableInt independent;
+} CallableTable;
+CallableTable *callable_table_new(int mode);
+void callable_table_close(CallableTable *table);
+void callable_table_swap(CallableTable *table, int mode);
+int callable_tables_live(void);
+int callable_table_hold(CallableTable *table);
+void callable_table_loan(void (*visit)(CallableTable *));
+
+typedef struct CallableState {
+    unsigned char *data;
+    size_t size;
+    int (*run)(struct CallableState *, int, CallableInt);
+} CallableState;
+void callable_state_init(CallableState *state);

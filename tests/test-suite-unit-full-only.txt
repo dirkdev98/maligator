@@ -24,5 +24,6 @@ tests/ffi-library.test.ts
 tests/ffi-model-cache.test.ts
 tests/ffi-record-shapes.test.ts
 tests/ffi-callables.test.ts
+tests/ffi-macro-types.test.ts
 tests/ffi-union-values.test.ts
 tests/ffi-probe.test.ts

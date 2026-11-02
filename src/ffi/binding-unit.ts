@@ -537,10 +537,15 @@ class BindingWriter {
 	 * A struct handle copies its struct, so `expression` must then be an lvalue.
 	 */
 	/** `lent`: a callback argument, whose handles close when the callback returns. */
-	write(value: JsValue, expression: string, lent: boolean | string = false): string {
+	write(
+		value: JsValue,
+		expression: string,
+		lent: boolean | string = false,
+		owner = "mal_ffi_undefined()",
+	): string {
 		switch (value.kind) {
 			case "callable":
-				return `(${expression}) == nullptr ? mal_ffi_null() : mal_ffi_new_callable(vm, ${cString(value.site)}, ${value.signature.params.length}, mal_ffi_function_${value.name}, &(${expression}), sizeof(${expression}))`;
+				return `(${expression}) == nullptr ? mal_ffi_null() : mal_ffi_new_callable(vm, ${cString(value.site)}, ${value.signature.params.length}, mal_ffi_function_${value.name}, &(${expression}), sizeof(${expression}), ${value.owner === undefined ? "mal_ffi_undefined()" : owner})`;
 			case "handle": {
 				const created = (address: string) => {
 					const loan = `mal_ffi_new_callback_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address})`;
@@ -1116,7 +1121,7 @@ class BindingWriter {
 					`\tif (!mal_ffi_to_handle(vm, mal_this, &mal_ffi_type_${name}, false, &mal_site, &mal_handle, nullptr)) return mal_ffi_undefined();`,
 					"\tif (!mal_ffi_handle_idle(vm, mal_this, &mal_site)) return mal_ffi_undefined();",
 					`\t${handle.spelling} *mal_value = mal_handle;`,
-					`\treturn ${this.write(field.value, `mal_value->${field.name}`)};`,
+					`\treturn ${this.write(field.value, `mal_value->${field.name}`, false, "mal_this")};`,
 					"}",
 				);
 			}
@@ -1662,15 +1667,17 @@ class BindingWriter {
 		];
 	}
 
+	callableDeclarations(): Array<string> {
+		return [...this.#callables.values()].flatMap((value) => [
+			`typedef ${value.targetType} MalFfiTarget_${value.name};`,
+			`static MalValue mal_ffi_function_${value.name}(MalVm *, MalValue, const MalValue *, int32_t, MalValue, MalValue);`,
+		]);
+	}
+
 	callableHelpers(): Array<string> {
-		const values = [...this.#callables.values()];
-		return [
-			...values.flatMap((value) => [
-				`typedef ${value.targetType} MalFfiTarget_${value.name};`,
-				`static MalValue mal_ffi_function_${value.name}(MalVm *, MalValue, const MalValue *, int32_t, MalValue, MalValue);`,
-			]),
-			...values.flatMap((value) => this.function(value.signature, value)),
-		];
+		return [...this.#callables.values()].flatMap((value) =>
+			this.function(value.signature, value),
+		);
 	}
 
 	function(
@@ -1679,6 +1686,7 @@ class BindingWriter {
 	): Array<string> {
 		const name = binding.name;
 		const siteName = callable?.site ?? name;
+		const owner = callable?.owner;
 		const declaration = binding.declaration;
 		const locals: Array<string> = [];
 		const body: Array<string> = [];
@@ -2228,7 +2236,7 @@ class BindingWriter {
 			"",
 			// The body, shared by the function object (framed: the call counts as a native
 			// frame, so collection needs lifting around callbacks) and the direct entry.
-			`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed${hasInto(binding) ? ", void *mal_into, MalValue *mal_slots" : ""}${callable === undefined ? "" : `, MalFfiTarget_${callable.name} mal_target`}) {`,
+			`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed${hasInto(binding) ? ", void *mal_into, MalValue *mal_slots" : ""}${callable === undefined ? "" : `, MalFfiTarget_${callable.name} mal_target`}${owner === undefined ? "" : ", void *mal_owner_pin"}) {`,
 			"\t(void) vm;",
 			"\t(void) mal_args;",
 			"\t(void) mal_argc;",
@@ -2242,6 +2250,11 @@ class BindingWriter {
 			...(compoundInputs
 				? ["\tmal_ffi_inputs_init(&mal_inputs, &mal_result, false);"]
 				: []),
+			...(owner === undefined
+				? []
+				: [
+						"\tif (!mal_ffi_begin_handle_use(vm, mal_owner_pin, &mal_result, &mal_site_result)) goto mal_done;",
+					]),
 			...body.map((line) => `\t${line}`),
 			...this.#resultGuards(binding, "goto mal_done;").map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
@@ -2257,6 +2270,12 @@ class BindingWriter {
 			...(compoundInputs
 				? ["\tmal_ffi_inputs_release(vm, &mal_inputs, &mal_site_result, true);"]
 				: []),
+			...(owner === undefined
+				? []
+				: [
+						"\tmal_ffi_end_handle_use(vm, mal_owner_pin, &mal_result, &mal_site_result, true);",
+						"\tmal_ffi_unpin_handle(mal_owner_pin);",
+					]),
 			"\treturn mal_result;",
 			"}",
 			"",
@@ -2268,10 +2287,11 @@ class BindingWriter {
 				? []
 				: [
 						`\tMalFfiTarget_${callable.name} mal_target;`,
+						...(owner === undefined ? [] : ["\tvoid *mal_owner_pin = nullptr;"]),
 						`\tstatic const MalFfiSite mal_site = { ${cString(callable.site)}, "callee", nullptr };`,
-						`\tif (!mal_ffi_callable_target(vm, mal_callee, mal_ffi_function_${name}, &mal_target, sizeof(mal_target), &mal_site)) return mal_ffi_undefined();`,
+						`\tif (!mal_ffi_callable_target(vm, mal_callee, mal_ffi_function_${name}, &mal_target, sizeof(mal_target), ${owner === undefined ? "nullptr, nullptr" : `&mal_ffi_type_${owner}, &mal_owner_pin`}, &mal_site)) return mal_ffi_undefined();`,
 					]),
-			`\treturn mal_ffi_call_${name}(vm, mal_args, mal_argc, true${hasInto(binding) ? ", nullptr, nullptr" : ""}${callable === undefined ? "" : ", mal_target"});`,
+			`\treturn mal_ffi_call_${name}(vm, mal_args, mal_argc, true${hasInto(binding) ? ", nullptr, nullptr" : ""}${callable === undefined ? "" : ", mal_target"}${owner === undefined ? "" : ", mal_owner_pin"});`,
 			"}",
 		];
 	}
@@ -3023,6 +3043,7 @@ export function generateBindingUnit(
 			(name) => `static const MalFfiHandleType mal_ffi_type_${name};`,
 		),
 		"",
+		...writer.callableDeclarations(),
 		...writer.recordHelpers(),
 		...writer.handleTypes(),
 		...writer.callableHelpers(),

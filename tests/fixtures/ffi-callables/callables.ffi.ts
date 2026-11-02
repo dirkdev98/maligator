@@ -1,8 +1,38 @@
+import type { MaligatorLibraryContract } from "../../../src/public-api.d.ts";
+
 // oxlint-disable-next-line import/no-default-export -- library contract fixture
 export default {
 	headers: ["callables.h"],
 	find: [{ includeDirs: ["."], sources: ["callables.c"] }],
+	types: {
+		CallableTable: {
+			handle: { destroy: "callable_table_close", collect: true },
+			fields: {
+				transform: { callable: { lifetime: "owner" } },
+				point: { callable: { lifetime: "owner" } },
+				visit: { callable: { lifetime: "owner", params: { "2": { callback: {} } } } },
+				self: { callable: { lifetime: "owner" } },
+				abi: { callable: { lifetime: "owner" } },
+				fixed: {
+					callable: { lifetime: "owner", params: { "1": { constant: "CALLABLE_MODE" } } },
+				},
+				factory: {
+					callable: { lifetime: "owner", returns: { callable: { lifetime: "library" } } },
+				},
+				independent: { callable: { lifetime: "library" } },
+			},
+		},
+		CallableState: {
+			handle: { storage: "caller" },
+			fields: {
+				data: { bytes: { length: "size" } },
+				run: { callable: { lifetime: "owner", params: { "3": { callback: {} } } } },
+			},
+		},
+	},
 	functions: {
+		callable_table_hold: { async: "callable_table_hold_async" },
+		callable_table_loan: { params: { visit: { callback: {} } } },
 		callable_choose: {
 			returns: { callable: { lifetime: "library" } },
 			async: "callable_choose_async",
@@ -37,4 +67,3 @@ export default {
 		},
 	},
 } satisfies MaligatorLibraryContract;
-import type { MaligatorLibraryContract } from "../../../src/public-api.d.ts";

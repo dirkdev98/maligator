@@ -334,6 +334,26 @@ accepts a buffer and supplies its byte count. Nested function-pointer results ne
 their own `callable` fact. The lifetime assertion includes state the function uses;
 do not use it for a function that depends on a resource the application can close.
 
+For a function table, declare callable fields on its complete handle type:
+
+```typescript
+types: {
+	PluginApi: {
+		handle: { destroy: "plugin_close" },
+		fields: { transform: { callable: { lifetime: "owner" } } },
+	},
+},
+```
+
+Reading `api.transform` captures the current pointer and the handle. Saved functions
+keep the handle reachable; closing it makes later calls throw before argument
+conversion. Calls pin the owner through callbacks and result conversion, so reentrant
+disposal throws. If C changes the field, a new read sees the new pointer; an earlier
+function retains its snapshot. Explicit C self or user-data parameters remain explicit.
+Use `"library"` for a field whose target remains valid independently of the handle.
+Callable fields cannot accompany handle views. Nested results need their own library
+lifetime; an owner lifetime applies to the field read itself.
+
 ## Describe pointers
 
 Other pointers need a fact about what they carry. Facts go on a function's `params`, keyed by C name or by 1-based position, or on its `returns`:

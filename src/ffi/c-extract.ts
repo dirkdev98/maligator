@@ -361,7 +361,55 @@ function nodeType(node: JsonObject): CType {
 	if (parsed.kind !== "unsupported") return parsed;
 	const desugared =
 		type === undefined ? undefined : stringField(type, "desugaredQualType");
-	return desugared === undefined ? parsed : parseCType(desugared);
+	const canonical = desugared === undefined ? parsed : parseCType(desugared);
+	if (canonical.kind !== "unsupported") return canonical;
+	const children = innerNodes(node).filter(
+		(child) =>
+			typeof child.kind === "string" &&
+			(child.kind.endsWith("Type") || child.kind === "QualType"),
+	);
+	const child = children.at(-1);
+	if (child === undefined) return canonical;
+	switch (node.kind) {
+		case "TypedefDecl":
+		case "TypeOfExprType":
+		case "MacroQualifiedType":
+		case "ParenType":
+			return nodeType(child);
+		case "PointerType": {
+			const target = nodeType(child);
+			return target.kind === "unsupported" ? canonical : { kind: "pointer", to: target };
+		}
+		case "FunctionProtoType": {
+			const types = children.map(nodeType);
+			if (types.some((type) => type.kind === "unsupported")) return canonical;
+			return {
+				kind: "function",
+				returns: types[0]!,
+				params: types.slice(1),
+				variadic: node.variadic === true,
+			};
+		}
+		case "QualType": {
+			const qualifiers = stringField(node, "qualifiers")?.split(" ") ?? [];
+			if (
+				qualifiers.some(
+					(qualifier) => !["const", "volatile", "restrict"].includes(qualifier),
+				)
+			)
+				return canonical;
+			const target = nodeType(child);
+			if (
+				target.kind === "unsupported" ||
+				target.kind === "array" ||
+				target.kind === "function"
+			)
+				return canonical;
+			return qualifiers.includes("const") ? { ...target, const: true } : target;
+		}
+		default:
+			return canonical;
+	}
 }
 
 /**
@@ -1383,6 +1431,97 @@ export function withCHeaders<Result>(
 	}
 }
 
+/** Macro-qualified spellings need type trees; typeof preserves their original header identities. */
+function probeDeclarationTypes(
+	input: CExtractionInput,
+	headers: CHeaders,
+	declarations: Declarations,
+): Declarations {
+	const functions = [...declarations.functions];
+	const records = new Map(declarations.records);
+	const queries: Array<{ expression: string; apply(type: CType): void }> = [];
+	functions.forEach((fn, index) => {
+		if (
+			fn.returns.kind !== "unsupported" &&
+			!fn.params.some((param) => param.type.kind === "unsupported")
+		)
+			return;
+		queries.push({
+			expression: fn.name,
+			apply(type) {
+				if (type.kind !== "function") return;
+				functions[index] = {
+					...fn,
+					returns: type.returns,
+					params: fn.params.map((param, position) => ({
+						...param,
+						type: type.params[position] ?? param.type,
+					})),
+					variadic: type.variadic,
+				};
+			},
+		});
+	});
+	const accesses = cRecordAccesses(declarations);
+	for (const record of declarations.records.values()) {
+		const access = accesses.get(record.name);
+		if (access === undefined) continue;
+		record.fields.forEach((field, index) => {
+			if (
+				field.name === undefined ||
+				field.bitWidth !== undefined ||
+				field.type.kind !== "unsupported"
+			)
+				return;
+			queries.push({
+				expression: `(${access.expression}).${field.name}`,
+				apply(type) {
+					if (type.kind === "unsupported") return;
+					const current = records.get(record.name)!;
+					records.set(record.name, {
+						...current,
+						fields: current.fields.map((field, position) =>
+							position === index ? { ...field, type } : field,
+						),
+					});
+				},
+			});
+		});
+	}
+	if (queries.length === 0) return declarations;
+	const source = path.join(headers.directory, "probe-declaration-types.c");
+	writeFileSync(
+		source,
+		[
+			...input.headers.map((header) => `#include "${header}"`),
+			...queries.map(
+				(query, index) =>
+					`typedef __typeof__(${query.expression}) __mal_declaration_type_${index};`,
+			),
+		].join("\n"),
+	);
+	const dump = runCompiler(input, [
+		FFI_C_STANDARD,
+		"-fsyntax-only",
+		"-ferror-limit=0",
+		"-Xclang",
+		"-ast-dump=json",
+		"-Xclang",
+		"-ast-dump-filter=__mal_declaration_type_",
+		...input.compileArguments,
+		"-w",
+		"-x",
+		"c",
+		source,
+	]);
+	for (const node of clangProbeDeclarations(dump.stdout)) {
+		const name = stringField(node, "name");
+		if (name === undefined || !name.startsWith("__mal_declaration_type_")) continue;
+		queries[Number(name.slice("__mal_declaration_type_".length))]?.apply(nodeType(node));
+	}
+	return { ...declarations, functions, records };
+}
+
 /** Clang omits non-fixed enum compatible types; query them without evaluating fields. */
 function probeIntegerTypes(
 	input: CExtractionInput,
@@ -1521,7 +1660,11 @@ export function extractCModelFromHeaders(
 		}
 		if (node.isImplicit !== true) nodes.push(node);
 	});
-	const declarations = collectDeclarations(nodes, cwd, isLibraryFile);
+	const declarations = probeDeclarationTypes(
+		input,
+		headers,
+		collectDeclarations(nodes, cwd, isLibraryFile),
+	);
 
 	const probes = probe(input, headers.valueProbe, headers.candidates);
 	const integerTypes = probeIntegerTypes(input, headers, declarations, probes.target);

@@ -20,6 +20,8 @@ export function macroFactRoots(facts: LibraryFacts): Array<string> {
 	};
 	for (const value of Object.values(facts.types)) {
 		shape(value.shape);
+		for (const field of Object.values(value.fields ?? {}))
+			if (field.callable !== undefined) valueFacts({ callable: field.callable });
 		const destroy = value.handle?.destroy;
 		if (typeof destroy === "object") names.add(destroy.success);
 		for (const reference of value.evidence ?? [])

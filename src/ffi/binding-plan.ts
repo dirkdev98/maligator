@@ -33,6 +33,7 @@ export type JsValue =
 			readonly site: string;
 			readonly signature: BoundFunction;
 			readonly nullable: true;
+			readonly owner?: string;
 	  }
 	| { readonly kind: "boolean" }
 	/** An exact integer of at most 32 bits; other numbers throw on input. */
@@ -288,7 +289,7 @@ export interface HandleType {
 		readonly takes: "value" | "pointer";
 	};
 	readonly collect: boolean;
-	/** Read-only accessors for a struct handle's value fields. */
+	/** Read-only value fields and explicitly declared callable fields. */
 	readonly fields: ReadonlyArray<MappedField>;
 	readonly managedFields: ReadonlyArray<ManagedField>;
 	readonly doc?: FfiText;
@@ -380,8 +381,14 @@ function handleTypes(
 	const handles = new Map<string, Omit<HandleType, "fields" | "managedFields">>();
 	for (const [key, typeFacts] of Object.entries(facts.types)) {
 		const handle = typeFacts.handle;
-		if (typeFacts.fields !== undefined && handle?.storage !== "caller")
+		if (
+			typeFacts.fields !== undefined &&
+			handle?.storage !== "caller" &&
+			Object.values(typeFacts.fields).some((field) => field.callable === undefined)
+		)
 			throw new FfiError(`types.${key}.fields: managed fields require caller storage`);
+		if (typeFacts.fields !== undefined && handle === undefined)
+			throw new FfiError(`types.${key}.fields: callable fields require a handle`);
 		if (handle === undefined) {
 			if (!model.typedefs.has(key) && !model.records.has(key) && !model.enums.has(key))
 				throw new FfiError(`types.${key}: the headers declare no type named '${key}'`);
@@ -1324,12 +1331,38 @@ class Planner {
 	handleFields(
 		record: CRecord,
 		managed: ReadonlyArray<ManagedField>,
+		handle: Omit<HandleType, "fields" | "managedFields">,
+		facts: Readonly<Record<string, MaligatorFfiFieldFacts>>,
+		exposeValues: boolean,
 	): Array<MappedField> {
 		const fields: Array<MappedField> = [];
-		for (const field of promotedCFields(this.#model, record)) {
+		const members = [...promotedCFields(this.#model, record)];
+		for (const name of Object.keys(facts))
+			if (!members.some((field) => field.name === name))
+				throw new FfiError(
+					`types.${record.name}.fields.${name}: the handle has no such field`,
+				);
+		for (const field of members) {
 			if (field.name === undefined || managed.some((entry) => entry.name === field.name))
 				continue;
-			const mapped = this.#field(field);
+			const fact = facts[field.name];
+			if (!exposeValues && fact?.callable === undefined) continue;
+			const mapped =
+				fact?.callable === undefined
+					? this.#field(field)
+					: this.#callable(
+							field.type,
+							{ callable: fact.callable },
+							{
+								targetType: `__typeof__((0, ((${handle.spelling} *) nullptr)->${field.name}))`,
+								path: `types.${record.name}.fields.${field.name}`,
+								site: `${record.name}.${field.name}`,
+								location: record.location,
+								owner: handle.name,
+							},
+						);
+			if (fact?.callable !== undefined && "gap" in mapped)
+				throw new FfiError(`types.${record.name}.fields.${field.name}: ${mapped.gap}`);
 			// Accessors return single values; array fields stay behind the handle.
 			if (
 				"value" in mapped &&
@@ -1356,6 +1389,7 @@ class Planner {
 		const counts = new Set<string>();
 		const fields = [...promotedCFields(this.#model, record)];
 		for (const [name, fact] of Object.entries(facts)) {
+			if (fact.callable !== undefined) continue;
 			const at = `types.${record.name}.fields.${name}`;
 			const kind = fact.string === undefined ? "bytes" : "string";
 			const counted = fact.string ?? fact.bytes;
@@ -1889,6 +1923,75 @@ class Planner {
 		}
 	}
 
+	#callable(
+		type: CType,
+		facts: MaligatorFfiValueFacts,
+		context: {
+			readonly targetType: string;
+			readonly path: string;
+			readonly site: string;
+			readonly location: CFunction["location"];
+			readonly owner?: string;
+		},
+	): Mapping {
+		const at = `${context.path}.callable`;
+		const callable = facts.callable!;
+		const pointer = resolveCType(this.#model, type);
+		const target =
+			pointer.kind === "pointer" ? resolveCType(this.#model, pointer.to) : undefined;
+		if (target?.kind !== "function")
+			throw new FfiError(`${at}: callable requires a function pointer`);
+		if (Object.keys(facts).some((key) => key !== "callable" && key !== "nullable"))
+			throw new FfiError(`${at}: callable cannot accompany another value representation`);
+		if (callable.lifetime === "owner" && context.owner === undefined)
+			throw new FfiError(
+				`${at}.lifetime: owner lifetime requires a function-table field`,
+			);
+		if (target.variadic)
+			return { gap: "a callable function pointer needs a fixed signature" };
+		const params: Array<MaligatorFfiValueFacts | undefined> = [];
+		for (const [key, value] of Object.entries(callable.params ?? {})) {
+			const index = Number(key) - 1;
+			if (!Number.isInteger(index) || index < 0 || index >= target.params.length)
+				throw new FfiError(
+					`${at}.params.${key}: the function pointer has no such parameter`,
+				);
+			params[index] = value;
+		}
+		const name = `mal_callable_${this.#callableCount++}`;
+		const signature = this.function(
+			{
+				name,
+				returns: target.returns,
+				params: target.params.map((type, index) => ({ name: `arg${index + 1}`, type })),
+				variadic: false,
+				inline: false,
+				attributes: [],
+				location: context.location,
+			},
+			{ params, returns: callable.returns ?? NO_FACTS },
+			undefined,
+			{ targetType: context.targetType, path: at, site: context.site },
+		);
+		if ("gaps" in signature)
+			return {
+				gap: `callable signature: ${signature.gaps.map((gap) => `${gap.at}: ${gap.reason}`).join("; ")}`,
+			};
+		if (signature.params.some(({ value }) => value.kind === "callback"))
+			this.hasCallableCallbacks = true;
+		return {
+			value: {
+				kind: "callable",
+				name,
+				targetType: context.targetType,
+				site: context.site,
+				signature,
+				nullable: true,
+				...(callable.lifetime === "owner" ? { owner: context.owner! } : {}),
+			},
+		};
+	}
+
 	function(
 		declaration: CFunction,
 		facts: FunctionFacts,
@@ -1929,31 +2032,10 @@ class Planner {
 		): Mapping => {
 			const resolved = resolveCType(this.#model, type);
 			if (valueFacts.callable !== undefined) {
-				const target =
-					resolved.kind === "pointer"
-						? resolveCType(this.#model, resolved.to)
-						: undefined;
-				if (position !== "return" || target?.kind !== "function")
+				if (position !== "return")
 					throw new FfiError(
 						`${where(at)}.callable: callable applies to returned function pointers`,
 					);
-				if (
-					Object.keys(valueFacts).some((key) => key !== "callable" && key !== "nullable")
-				)
-					throw new FfiError(
-						`${where(at)}.callable: callable cannot accompany another value representation`,
-					);
-				if (target.variadic)
-					return { gap: "a callable function pointer needs a fixed signature" };
-				const params: Array<MaligatorFfiValueFacts | undefined> = [];
-				for (const [key, facts] of Object.entries(valueFacts.callable.params ?? {})) {
-					const index = Number(key) - 1;
-					if (!Number.isInteger(index) || index < 0 || index >= target.params.length)
-						throw new FfiError(
-							`${where(at)}.callable.params.${key}: the function pointer has no such parameter`,
-						);
-					params[index] = facts;
-				}
 				const source =
 					callableContext === undefined
 						? declaration.name
@@ -1968,33 +2050,12 @@ class Planner {
 					return `(${spelling}){0}`;
 				});
 				const targetType = `__typeof__(${source}(${arguments_.join(", ")}))`;
-				const name = `mal_callable_${this.#callableCount++}`;
-				const site = `${callableContext?.site ?? declaration.name} result`;
-				const signature = this.function(
-					{
-						...declaration,
-						name,
-						returns: target.returns,
-						params: target.params.map((type, index) => ({
-							name: `arg${index + 1}`,
-							type,
-						})),
-						variadic: false,
-						inline: false,
-					},
-					{ params, returns: valueFacts.callable.returns ?? NO_FACTS },
-					undefined,
-					{ targetType, path: `${where(at)}.callable`, site },
-				);
-				if ("gaps" in signature)
-					return {
-						gap: `callable signature: ${signature.gaps.map((gap) => `${gap.at}: ${gap.reason}`).join("; ")}`,
-					};
-				if (signature.params.some(({ value }) => value.kind === "callback"))
-					this.hasCallableCallbacks = true;
-				return {
-					value: { kind: "callable", name, targetType, site, signature, nullable: true },
-				};
+				return this.#callable(type, valueFacts, {
+					targetType,
+					path: where(at),
+					site: `${callableContext?.site ?? declaration.name} result`,
+					location: declaration.location,
+				});
 			}
 			for (const fact of ["string", "bytes", "array"] as const) {
 				if (
@@ -2472,23 +2533,38 @@ export function planBindings(
 			functions.push(asyncName === undefined ? result : { ...result, async: asyncName });
 	}
 	const handles = new Map<string, HandleType>();
+	const fieldFacts = new Map<string, Readonly<Record<string, MaligatorFfiFieldFacts>>>();
+	for (const [name, type] of Object.entries(facts.types)) {
+		const record = type.handle === undefined ? undefined : factRecord(model, name);
+		if (record !== undefined && type.fields !== undefined)
+			fieldFacts.set(record.name, type.fields);
+	}
+	const familySizes = new Map<string, number>();
+	for (const handle of handleMap.values())
+		familySizes.set(handle.family, (familySizes.get(handle.family) ?? 0) + 1);
 	for (const [name, handle] of handleMap) {
 		const record = model.records.get(name);
+		const fields = fieldFacts.get(name) ?? {};
+		if (
+			(familySizes.get(handle.family) ?? 0) > 1 &&
+			Object.values(fields).some((field) => field.callable !== undefined)
+		)
+			throw new FfiError(
+				`types.${name}.fields: callable fields cannot accompany handle views`,
+			);
 		const managedFields =
-			record === undefined
-				? []
-				: planner.managedFields(
-						record,
-						handle.allocator === undefined
-							? undefined
-							: facts.types[handle.allocator]?.fields,
-					);
+			record === undefined ? [] : planner.managedFields(record, fields);
 		handles.set(name, {
 			...handle,
 			fields:
-				(handle.representation === "struct" || handle.allocator !== undefined) &&
 				record !== undefined
-					? planner.handleFields(record, managedFields)
+					? planner.handleFields(
+							record,
+							managedFields,
+							handle,
+							fields,
+							handle.representation === "struct" || handle.allocator !== undefined,
+						)
 					: [],
 			managedFields,
 		});

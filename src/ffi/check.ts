@@ -350,6 +350,7 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 				`handle ${handle.name}`,
 			);
 		if (handle.destroy !== undefined) helper(handle.destroy.name);
+		for (const field of handle.fields) mapping(field.value);
 		const success = handle.destroy?.success;
 		if (success !== undefined) constant(success);
 	}

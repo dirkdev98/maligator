@@ -1006,29 +1006,31 @@ bool mal_ffi_out_of_memory(MalVm *vm) {
 
 MalValue mal_ffi_new_callable(
     MalVm *vm, const char *name, int32_t length, MalFfiFunction function,
-    const void *target, size_t target_size) {
+    const void *target, size_t target_size, MalValue owner) {
     if (target_size > UINT32_MAX) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
             (const byte *) "C function pointer representation is too large");
         return mal_value_new_undefined();
     }
+    MalValue slots[2] = {mal_value_new_undefined(), owner};
+    MalRootSpan root;
+    mal_gc_root(&root, slots, 2);
     MalArrayBufferObject *buffer = mal_array_buffer_object_new_uninitialized(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
         (u32) target_size, (u32) target_size, false, false);
     memcpy(buffer->data, target, target_size);
-    MalValue slot = mal_value_from_array_buffer_object(buffer);
-    MalRootSpan root;
-    mal_gc_root(&root, &slot, 1);
+    slots[0] = mal_value_from_array_buffer_object(buffer);
     MalNativeFunctionObject *callable = mal_native_function_object_new_with_slots_arity(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, (const byte *) name), length, function, &slot, 1);
+        mal_intrinsic_ascii(vm, (const byte *) name), length, function, slots, 2);
     mal_gc_unroot(&root);
     return mal_value_from_native_function_object(callable);
 }
 
 bool mal_ffi_callable_target(
     MalVm *vm, MalValue callee, MalFfiFunction function, void *target,
-    size_t target_size, const MalFfiSite *site) {
+    size_t target_size, const MalFfiHandleType *owner_type, void **owner_pin,
+    const MalFfiSite *site) {
     if (!mal_value_is_native_function_object(callee))
         return mal_ffi_expected(vm, site, "a native C function");
     MalNativeFunctionObject *callable = mal_value_to_native_function_object(callee);
@@ -1039,6 +1041,13 @@ bool mal_ffi_callable_target(
     if (buffer->detached || buffer->shared || buffer->byte_length != target_size)
         return mal_ffi_expected(vm, site, "an intact C function pointer");
     memcpy(target, buffer->data, target_size);
+    if (owner_type != nullptr) {
+        MalValue owner = mal_native_function_object_get_slot(callable, 1);
+        void *storage;
+        if (!mal_ffi_to_handle(vm, owner, owner_type, false, site, &storage, nullptr)
+            || !mal_ffi_handle_idle(vm, owner, site)) return false;
+        return mal_ffi_to_handle(vm, owner, owner_type, false, site, &storage, owner_pin);
+    }
     return true;
 }
 
