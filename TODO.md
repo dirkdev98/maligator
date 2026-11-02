@@ -1907,8 +1907,6 @@ Libraries declared under `ffi` bind through their real headers: the generated C
 includes them, so the C compiler owns the ABI. Contracts hold facts only, generated
 functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
-- [ ] Support C libraries in `maligator test --watch`, which needs an in-process
-      application host that links the project's bindings.
 - [ ] Map value unions, bit-fields, and anonymous record members with explicit shape
       facts where C does not identify the active value.
 - [ ] Extend struct storage reuse to conditional loop updates and recurrences that

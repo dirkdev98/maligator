@@ -1,5 +1,5 @@
 import { chmodSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { capabilities, createPool, createWorkerUrl } from "maligator:workers";
 import type { WorkerPool } from "maligator:workers";
 import { createApplicationImageHost } from "./application-images.ts";
@@ -60,6 +60,7 @@ const installation = productCompilerInstallation(
 	assets.materialize("nodeGlobals"),
 	mutableDevelopmentRunner,
 	assets.materialize("platformSources"),
+	join(assets.materialize("testHost"), "host-driver.mts"),
 );
 
 setCacheMaintenanceCommand([process.argv[0]!]);

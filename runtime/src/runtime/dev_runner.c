@@ -177,7 +177,12 @@ int mal_dev_run_images(
         .argv = argv,
         .script_path = entry_path != nullptr ? entry_path : root_program.entry_path,
     };
-    if (assets != nullptr) {
+    bool install_maligator = assets != nullptr;
+#if MAL_DEVELOPMENT_API
+    // Tool hosts need their application bridge even without attached assets.
+    install_maligator = true;
+#endif
+    if (install_maligator) {
         mal_host_install_maligator(&vm, nullptr, 0, &launch);
     }
     mal_perf_stats_reset();

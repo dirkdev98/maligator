@@ -6,6 +6,7 @@ import type {
 	ApplicationImageDescriptor,
 	ApplicationImageHost,
 } from "./application-images.ts";
+import { artifactDigest, artifactIdentity } from "./artifact-store.ts";
 import { includeConfiguredAssets } from "./assets.ts";
 import { createBuildArtifact } from "./build-artifact.ts";
 import {
@@ -81,7 +82,7 @@ import {
 import { createDevelopmentSession } from "./development-session.ts";
 import { checkLibraries, formatFfiCheck } from "./ffi/check.ts";
 import { declarationsCurrent, generateDeclarations } from "./ffi/declarations.ts";
-import { FfiError } from "./ffi/ffi-error.ts";
+import { FfiError, FfiSourceChangedError } from "./ffi/ffi-error.ts";
 import { formatInspection, inspectBindings } from "./ffi/inspect.ts";
 import { nativeLibraryInputs, prepareLibraries, prepareLibrary } from "./ffi/library.ts";
 import type { PreparedLibraries } from "./ffi/library.ts";
@@ -108,6 +109,7 @@ import {
 	prepareProfile,
 } from "./profile-artifact.ts";
 import type { PreparedProfile } from "./profile-artifact.ts";
+import type { TestApplicationHost } from "./testing/application-host.ts";
 import {
 	executeTestCommand,
 	ISOLATED_TEST_RESULT_PREFIX,
@@ -120,7 +122,11 @@ import type {
 	IsolatedTestExecutionOptions,
 	TestCommandSummary,
 } from "./testing/command.ts";
+import { LinkedTestHostSession } from "./testing/linked-host-session.ts";
+import type { PreparedLinkedTestHost } from "./testing/linked-host-session.ts";
 import type { TestRunResult } from "./testing/protocol.ts";
+import { TestSourceChangedError } from "./testing/session.ts";
+import type { TestGenerationControls } from "./testing/session.ts";
 import { compileTestRuntimeRequest } from "./testing/test-images.ts";
 import { watchTestCommand } from "./testing/watch.ts";
 import {
@@ -151,6 +157,8 @@ export interface CommandContext {
 	availableCompileConcurrency?: number;
 	rootCompilationSignal?: AbortSignal;
 	applications?: ApplicationImageHost;
+	testApplications?: TestApplicationHost;
+	onFfiDependencies?: (paths: ReadonlyArray<string>) => void;
 	checkpoint?: () => void;
 	onCompilationPhase?: (event: CompilationPhase) => void;
 }
@@ -189,6 +197,7 @@ export interface CompilerInstallation {
 	licensePaths?: Array<string>;
 	/** Source implementation supplied for the virtual maligator:test module. */
 	testModulePath: string;
+	testHostModulePath?: string;
 	/** Node-compatible globals installed before applications and interpreted tests. */
 	nodeGlobalsPath: string;
 	/** Cache identity of the active TypeScript erasure frontend. */
@@ -227,6 +236,7 @@ export function developmentCompilerInstallation(
 			path.resolve(sourceDirectory, "../THIRD_PARTY_NOTICES.md"),
 		],
 		testModulePath: path.join(sourceDirectory, "testing/runtime.mjs"),
+		testHostModulePath: path.join(sourceDirectory, "testing/host-driver.mts"),
 		nodeGlobalsPath: path.join(sourceDirectory, "node-globals.mjs"),
 		frontendIdentity: TYPE_STRIPPER_IDENTITY,
 		evalCompiler: {
@@ -246,6 +256,7 @@ export function productCompilerInstallation(
 	nodeGlobalsPath?: string,
 	mutableDevelopmentRunnerPath?: string,
 	platformSourceRoot?: string,
+	testHostModulePath?: string,
 ): CompilerInstallation {
 	return {
 		runtimeDirectory: path.resolve(runtimeDirectory),
@@ -256,6 +267,9 @@ export function productCompilerInstallation(
 			? {}
 			: { licensePaths: licensePaths.map((file) => path.resolve(file)) }),
 		testModulePath: path.resolve(testModulePath),
+		...(testHostModulePath === undefined
+			? {}
+			: { testHostModulePath: path.resolve(testHostModulePath) }),
 		nodeGlobalsPath: path.resolve(
 			nodeGlobalsPath ?? path.join(path.dirname(testModulePath), "node-globals.mjs"),
 		),
@@ -433,8 +447,11 @@ function prepareConfiguredLibraries(
 			environment: { ...environment, ...toolchain.environmentOverrides },
 			platform: toolchain.platform ?? process.platform,
 			cross: toolchain.cross === true,
+			onDependencies: context.onFfiDependencies,
 		});
 	} catch (error) {
+		if (context.onFfiDependencies !== undefined && error instanceof FfiSourceChangedError)
+			throw new TestSourceChangedError(error.paths);
 		if (error instanceof BuildConfigError || error instanceof FfiError) {
 			commandError(`error: ${error.message}`);
 		}
@@ -1998,6 +2015,7 @@ function buildIsolatedTestRunner(
 	config: ResolvedBuildConfig,
 	libraries: PreparedLibraries | undefined,
 	environment: NodeJS.ProcessEnv = process.env,
+	applicationHost = false,
 ): string {
 	const derivation = buildDerivationFromConfig(config);
 	const toolchain = testToolchain(context, config, environment);
@@ -2025,17 +2043,97 @@ function buildIsolatedTestRunner(
 		environment,
 		plan: selectNativeBuildPlan(toolchain, false),
 		runtimeDirectory: context.installation.runtimeDirectory,
-		features: derivation.features,
+		features: applicationHost
+			? normalizeNativeFeatures({ ...derivation.features, developmentApiEnabled: true })
+			: derivation.features,
 		compilerBake,
 	});
 	return buildDevelopmentRunner(
 		nativeContext,
 		false,
-		derivation.cacheSuffix,
+		`${derivation.cacheSuffix}${applicationHost ? "-test-host" : ""}`,
 		libraries === undefined
 			? undefined
 			: nativeLibraryInputs(libraries, context.installation.runtimeDirectory),
 	).binaryPath;
+}
+
+function prepareLinkedTestHost(
+	config: ResolvedBuildConfig,
+	context: CommandContext,
+): PreparedLinkedTestHost {
+	const entry = context.installation.testHostModulePath;
+	if (entry === undefined)
+		throw new Error("this installation does not include the linked test host driver");
+	const toolchain = testToolchain(context, config);
+	const libraries = prepareConfiguredLibraries(config, context, toolchain);
+	if (libraries === undefined)
+		throw new Error("a linked test host needs configured C libraries");
+	const testConfig = { ...config, ffiModules: libraries.modules };
+	const hostConfig: ResolvedBuildConfig = {
+		...testConfig,
+		assets: {},
+		surface: { webPlatform: true, node: true, maligator: true },
+	};
+	const driverFiles = [
+		entry,
+		path.join(path.dirname(entry), "host-protocol.mts"),
+		context.installation.nodeGlobalsPath,
+	];
+	const dependencies = [...new Set([...libraries.dependencies, ...driverFiles])].sort();
+	context.onFfiDependencies?.(dependencies);
+	const identity = artifactIdentity({
+		libraries: libraries.identity,
+		engine: config.engine,
+		toolchain: toolchain.fingerprint,
+		runtime: context.installation.runtimeDirectory,
+		driver: driverFiles.map((file) => [
+			file,
+			artifactDigest(new Uint8Array(readFileSync(file))),
+		]),
+	});
+	return {
+		config: testConfig,
+		native: {
+			identity,
+			dependencies: dependencies.map((file) =>
+				new FrontendCompilationSession().snapshot(file),
+			),
+		},
+		build() {
+			const frontend = compileBuildFrontend({
+				entrypoint: entry,
+				config: hostConfig,
+				platformSourceRoot: context.installation.platformSourceRoot,
+				stripTypes: context.stripTypes,
+				stripperIdentity: context.installation.frontendIdentity,
+				nodeGlobalsSource: readFileSync(context.installation.nodeGlobalsPath, "utf8"),
+				optimization: "development",
+				interpreted: true,
+			});
+			return {
+				executable: buildIsolatedTestRunner(
+					context,
+					hostConfig,
+					libraries,
+					process.env,
+					true,
+				),
+				wires: frontend.runtimeArtifacts.map((artifact) => artifact.path),
+				entry,
+			};
+		},
+		validate() {
+			const current = prepareLinkedTestHost(config, context);
+			if (current.native.identity !== identity)
+				throw new TestSourceChangedError([
+					...new Set([
+						...dependencies,
+						...current.native.dependencies.map((dependency) => dependency.path),
+					]),
+				]);
+		},
+	};
 }
 
 function executeIsolatedTests(
@@ -2397,13 +2495,31 @@ export async function runCli(
 			let result: Awaited<ReturnType<typeof executeTestCommand>>;
 			try {
 				if (command.watch) {
-					if (context.applications === undefined) {
+					if (
+						context.applications === undefined &&
+						Object.keys(loadCommandConfig(command, context.stripTypes).ffi).length === 0
+					) {
 						commandError(
 							"error: test --watch requires a compatible native application host",
 						);
 					}
-					const watchConfig = () => {
+					const hosts = new LinkedTestHostSession(context.applications);
+					const watchContext = { ...context, testApplications: hosts };
+					const watchConfig = async (controls?: TestGenerationControls) => {
 						const current = loadCommandConfig(command, context.stripTypes);
+						if (Object.keys(current.ffi).length > 0) {
+							if (controls === undefined) return current;
+							return await hosts.activate(
+								prepareLinkedTestHost(current, {
+									...context,
+									onFfiDependencies(paths) {
+										context.onFfiDependencies?.(paths);
+										controls.discoveredPaths?.(paths);
+									},
+								}),
+								controls,
+							);
+						}
 						if (
 							compatibleDevelopmentRunner(current, context)?.inProcess !== true ||
 							context.applications === undefined
@@ -2412,9 +2528,14 @@ export async function runCli(
 								"error: test --watch requires a compatible native application host",
 							);
 						}
+						if (controls !== undefined) await hosts.useLocal();
 						return current;
 					};
-					await watchTestCommand(command, context, watchConfig);
+					try {
+						await watchTestCommand(command, watchContext, watchConfig);
+					} finally {
+						await hosts.close();
+					}
 					return;
 				}
 				const config = loadCommandConfig(command, context.stripTypes);

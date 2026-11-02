@@ -1,4 +1,4 @@
-import type { ApplicationImage, ApplicationImageHost } from "../application-images.ts";
+import type { TestApplicationHost, TestApplicationImage } from "./application-host.ts";
 import type { PreparedTestApplication } from "./prepare.ts";
 import type { TestRunOptions, TestRunResult } from "./protocol.ts";
 
@@ -17,10 +17,10 @@ function isTestRunResult(value: unknown): value is TestRunResult {
 }
 
 export async function executeTestApplication(
-	host: ApplicationImageHost,
+	host: TestApplicationHost,
 	prepared: PreparedTestApplication,
 	options: TestRunOptions,
-	controls: { image?: ApplicationImage; signal?: AbortSignal } = {},
+	controls: { image?: TestApplicationImage; signal?: AbortSignal } = {},
 ): Promise<TestRunResult> {
 	const selectedFiles = options.files ?? prepared.files;
 	if (selectedFiles.some((file) => !prepared.files.includes(file)))

@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+	appendFileSync,
 	chmodSync,
 	copyFileSync,
 	cpSync,
@@ -33,6 +34,7 @@ const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const arguments_ = process.argv.slice(2);
 let providedCli: string | undefined;
 let supervisorOnly = false;
+let ffiWatchOnly = false;
 for (let index = 0; index < arguments_.length; index++) {
 	const argument = arguments_[index];
 	if (argument === "--cli" && providedCli === undefined) {
@@ -41,13 +43,18 @@ for (let index = 0; index < arguments_.length; index++) {
 			throw new Error("--cli requires a path");
 		providedCli = path.resolve(value);
 	} else if (argument === "--supervisor-only" && !supervisorOnly) supervisorOnly = true;
+	else if (argument === "--ffi-watch-only" && !ffiWatchOnly) ffiWatchOnly = true;
 	else
 		throw new Error(
-			"usage: node scripts/selfhost-cli-check.ts [--cli PATH] [--supervisor-only]",
+			"usage: node scripts/selfhost-cli-check.ts [--cli PATH] [--supervisor-only | --ffi-watch-only]",
 		);
 }
 if (supervisorOnly && providedCli === undefined)
 	throw new Error("--supervisor-only requires --cli");
+if (ffiWatchOnly && (providedCli === undefined || supervisorOnly))
+	throw new Error(
+		"--ffi-watch-only requires --cli and cannot combine with --supervisor-only",
+	);
 const root = path.join(
 	maligatorCacheDirectory(),
 	"work",
@@ -606,6 +613,98 @@ function latestTestWatchResources(output: string) {
 	return snapshot.resources;
 }
 
+async function checkFfiTestWatch(): Promise<void> {
+	const directory = path.join(project, "ffi-watch");
+	cpSync(path.join(repositoryRoot, "tests/fixtures/ffi-test-watch"), directory, {
+		recursive: true,
+	});
+	const watcher = spawn(distributedCli, ["test", "--watch", "--status", "tests"], {
+		cwd: directory,
+		detached: process.platform !== "win32",
+		env: { ...isolatedEnv, MAL_GC_VERIFY: "1", MAL_GC_AT_EXIT: "1" },
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let output = "";
+	const log = path.join(reports, "ffi-test-watch.log");
+	writeFileSync(log, "");
+	watcher.stdout.on("data", (chunk: Buffer) => {
+		output += chunk.toString();
+		appendFileSync(log, chunk);
+	});
+	watcher.stderr.on("data", (chunk: Buffer) => {
+		output += chunk.toString();
+		appendFileSync(log, chunk);
+	});
+	const passed = () =>
+		[...output.matchAll(/Test watch generation \d+: passed\n/g)].length;
+	const wait = async (count: number) => {
+		const deadline = Date.now() + 120_000;
+		while (passed() < count) {
+			if (
+				Date.now() > deadline ||
+				watcher.exitCode !== null ||
+				watcher.signalCode !== null
+			)
+				throw new Error(
+					`packaged FFI watch did not reach generation ${count}:\n${output}`,
+				);
+			await new Promise((resolve) => {
+				setTimeout(resolve, 50);
+			});
+		}
+	};
+	let exit: number | null;
+	try {
+		await wait(1);
+		const test = path.join(directory, "tests/native.test.ts");
+		const initial = readFileSync(test, "utf8");
+		writeFileSync(
+			test,
+			initial.replace("expect(watch_next()).toBe(1)", "expect(watch_next()).toBe(2)"),
+		);
+		await wait(2);
+		if (output.includes("ffi watch host retired"))
+			throw new Error(`JavaScript edit replaced the native FFI host:\n${output}`);
+		const source = path.join(directory, "native/watch.c");
+		writeFileSync(
+			source,
+			readFileSync(source, "utf8").replace(
+				"return WATCH_VALUE;",
+				"return WATCH_VALUE + 10;",
+			),
+		);
+		writeFileSync(
+			test,
+			initial.replace("expect(watch_value()).toBe(1)", "expect(watch_value()).toBe(11)"),
+		);
+		await wait(3);
+		if (!output.includes("ffi watch host retired"))
+			throw new Error(`native edit did not retire its linked FFI host:\n${output}`);
+	} finally {
+		exit = await stopDevelopmentChild(watcher, () => output);
+		writeFileSync(path.join(reports, "ffi-test-watch.log"), output);
+	}
+	if (exit !== 0) throw new Error(`packaged FFI watch exited with ${exit}:\n${output}`);
+	const resources = latestTestWatchResources(output);
+	if (resources.loadedImages !== 0 || resources.runningApplications !== 0)
+		throw new Error(
+			`packaged FFI watch retained applications: ${JSON.stringify(resources)}`,
+		);
+	console.log(
+		"ok   packaged FFI watch reused native state for JavaScript edits and joined replaced native hosts",
+	);
+}
+
+if (ffiWatchOnly) {
+	try {
+		await checkFfiTestWatch();
+		progress.complete();
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+	process.exit(0);
+}
+
 if (existsSync(configPath)) {
 	throw new Error(`integration refuses to overwrite existing ${configPath}`);
 }
@@ -1016,6 +1115,7 @@ server.listen(0, "127.0.0.1", () => {
 	}
 
 	if (!supervisorOnly) {
+		await checkFfiTestWatch();
 		const doctorOutput = invoke(["doctor", "--verbose"]);
 		if (!doctorOutput.includes("Toolchain is ready.")) {
 			throw new Error(`doctor did not accept the isolated toolchain:\n${doctorOutput}`);

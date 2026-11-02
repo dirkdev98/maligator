@@ -583,4 +583,8 @@ target has its own snapshots, and `ffi check raylib --update` updates only rayli
 the selected target. Header snapshots and probes provide evidence for reviewing a
 contract; they do not establish the linked binary's ABI or every ownership rule.
 
-`maligator test` builds a test runtime with the bindings too. Note that `test --watch` does not support C libraries, and portable wire output rejects them.
+`maligator test` builds a test runtime with the bindings too. In `test --watch`,
+JavaScript edits start a fresh application in the linked runtime, preserving the C
+library's process state. Changes to contracts, headers, sources, or resolved library
+files replace that runtime after its applications finish cleanup. Portable wire
+output rejects C libraries.

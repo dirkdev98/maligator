@@ -77,6 +77,11 @@ export function productCliConfig(
 				type: "file",
 				path: path.resolve(repositoryRoot, "src/testing/runtime.mjs"),
 			},
+			testHost: {
+				type: "directory",
+				path: path.resolve(repositoryRoot, "src/testing"),
+				include: ["host-driver.mts", "host-protocol.mts"],
+			},
 			nodeGlobals: {
 				type: "file",
 				path: path.resolve(repositoryRoot, "src/node-globals.mjs"),

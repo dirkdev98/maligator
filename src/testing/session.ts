@@ -1,9 +1,13 @@
-import type { ApplicationImage, ApplicationImageHost } from "../application-images.ts";
 import type { CompilationOptions } from "../compiler-service.ts";
 import { frontendDependencyUnchanged } from "../frontend-cache.ts";
+import type { TestApplicationHost, TestApplicationImage } from "./application-host.ts";
 import { TestCompilationSession } from "./cache.ts";
 import type { PreparedTestApplication, TestCompilationInput } from "./prepare.ts";
 import type { TestRunOptions } from "./protocol.ts";
+
+function imageIdentity(application: PreparedTestApplication): string {
+	return JSON.stringify([application.nativeHostIdentity ?? null, application.image]);
+}
 
 export interface TestGenerationControls extends CompilationOptions {
 	generation?: number;
@@ -11,6 +15,7 @@ export interface TestGenerationControls extends CompilationOptions {
 	selectedFiles?: Array<string>;
 	prepared?: (application: PreparedTestApplication) => void;
 	validate?: () => Array<string>;
+	discoveredPaths?: (paths: ReadonlyArray<string>) => void;
 }
 
 export class TestSourceChangedError extends Error {
@@ -25,7 +30,7 @@ export class TestApplicationSession {
 	readonly frontend: TestCompilationSession;
 	readonly options: TestRunOptions;
 	readonly #prepared = new Map<string, PreparedTestApplication>();
-	readonly #images = new Map<string, ApplicationImage>();
+	readonly #images = new Map<string, TestApplicationImage>();
 	readonly #used = new Set<string>();
 	#closed = false;
 
@@ -61,7 +66,7 @@ export class TestApplicationSession {
 			cached !== undefined &&
 			cached.dependencyIdentities.every(frontendDependencyUnchanged)
 		) {
-			this.#used.add(JSON.stringify(cached.image));
+			this.#used.add(imageIdentity(cached));
 			return {
 				...cached,
 				cache: "hit",
@@ -80,15 +85,15 @@ export class TestApplicationSession {
 		}
 		const application = await compile(input);
 		this.#prepared.set(key, application);
-		this.#used.add(JSON.stringify(application.image));
+		this.#used.add(imageIdentity(application));
 		return application;
 	}
 
 	image(
-		host: ApplicationImageHost,
+		host: TestApplicationHost,
 		application: PreparedTestApplication,
-	): ApplicationImage {
-		const key = JSON.stringify(application.image);
+	): TestApplicationImage {
+		const key = imageIdentity(application);
 		const existing = this.#images.get(key);
 		if (existing !== undefined) return existing;
 		const loaded = host.load(application.image);
@@ -104,7 +109,7 @@ export class TestApplicationSession {
 			}
 		}
 		for (const [key, application] of this.#prepared) {
-			if (!this.#used.has(JSON.stringify(application.image))) this.#prepared.delete(key);
+			if (!this.#used.has(imageIdentity(application))) this.#prepared.delete(key);
 		}
 	}
 

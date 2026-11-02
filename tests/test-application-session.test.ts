@@ -15,6 +15,7 @@ import type { TestCommand } from "../src/cli.ts";
 import type { CompilationOptions } from "../src/compiler-service.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { FrontendCompilationSession } from "../src/frontend-cache.ts";
+import { hostExecutionTarget, resolveExecution } from "../src/platform/execution.ts";
 import {
 	createTestApplicationSession,
 	executeTestCommand,
@@ -25,6 +26,7 @@ import type {
 	TestCompilationInput,
 } from "../src/testing/prepare.ts";
 import type { TestRunOptions, TestRunResult } from "../src/testing/protocol.ts";
+import { TestApplicationSession } from "../src/testing/session.ts";
 import { watchTestCommand } from "../src/testing/watch.ts";
 
 function deferred<T>() {
@@ -485,6 +487,62 @@ describe("retained test application images", () => {
 		finish({ id: 1, code: 0, reason: "terminated", hasResult: false });
 		await failed;
 		expect(releases).toBe(1);
+	});
+	it("replaces an image when its native host changes while its wires stay identical", async () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-native-test-session-"));
+		const file = path.join(directory, "one.test.mts");
+		writeFileSync(file, "export const revision = 0;\n");
+		const applications = applicationHost();
+		const session = new TestApplicationSession({
+			repeat: 1,
+			bail: false,
+			timeoutMs: 1000,
+		});
+		const config = resolveBuildConfig({});
+		const execution = resolveExecution(
+			{
+				kind: "test",
+				paths: [file],
+				repeat: 1,
+				bail: false,
+				timeoutMs: 1000,
+				compileConcurrency: 1,
+				profile: false,
+			},
+			config,
+			{
+				compiled: false,
+				optimization: "development",
+				target: hostExecutionTarget(process.platform, process.arch),
+			},
+		);
+		const identities = ["first-native-host", "second-native-host"];
+		try {
+			for (const identity of identities) {
+				session.begin({});
+				const application = await session.prepare(
+					{
+						files: [file],
+						config,
+						execution,
+						native: { identity, dependencies: [] },
+					},
+					(input) =>
+						Promise.resolve({
+							...prepared(input),
+							nativeHostIdentity: input.native!.identity,
+						}),
+				);
+				session.image(applications.host, application);
+				session.finish();
+			}
+			expect(applications.loads).toBe(identities.length);
+			session.close();
+			expect(applications.releases).toBe(applications.loads);
+		} finally {
+			session.close();
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 	it("reuses immutable prepared images and seed while launching and joining a fresh application per rerun", async () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-test-session-"));

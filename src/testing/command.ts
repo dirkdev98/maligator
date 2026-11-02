@@ -372,7 +372,7 @@ export async function executeTestCommand(
 		controls.generation === undefined ? "test" : `test generation ${controls.generation}`,
 	);
 	progress.start("discover, compile, and execute selected tests");
-	const applications = context.applications;
+	const applications = context.testApplications ?? context.applications;
 	if (applications === undefined) {
 		throw new Error(
 			"`maligator test` execution requires the self-hosted Maligator executable; " +
@@ -490,6 +490,9 @@ export async function executeTestCommand(
 					execution,
 					allowSupersetCache,
 					wholeImage,
+					...("native" in applications && applications.native !== undefined
+						? { native: applications.native }
+						: {}),
 				});
 				recordCompilation(entries, compiled);
 			} catch (error) {

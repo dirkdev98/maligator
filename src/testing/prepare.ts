@@ -12,8 +12,10 @@ import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
 import { UnsupportedLinkedImagesError } from "../linked-images.ts";
 import type { Execution } from "../platform/execution.ts";
 import { cacheDevelopmentWorkerManifest } from "../worker-image-cache.ts";
+import type { NativeTestInputs } from "./application-host.ts";
 import { compileTestImage, TestCompilationSession } from "./cache.ts";
 import type { TestFrontendPhases } from "./cache.ts";
+import { TestSourceChangedError } from "./session.ts";
 import { compileLinkedTestImage } from "./test-images.ts";
 
 export interface TestCompilationInput {
@@ -22,6 +24,7 @@ export interface TestCompilationInput {
 	execution: Execution;
 	allowSupersetCache?: boolean;
 	wholeImage?: boolean;
+	native?: NativeTestInputs;
 }
 
 export interface PreparedTestApplication {
@@ -34,6 +37,7 @@ export interface PreparedTestApplication {
 	phases: TestFrontendPhases;
 	artifactHits: number;
 	artifactMisses: number;
+	nativeHostIdentity?: string;
 }
 
 export function prepareTestApplication(
@@ -105,6 +109,17 @@ function prepareTestApplicationImage(
 			...assets.flatMap((asset) => asset.files.map((file) => file.inputPath)),
 		]),
 	].sort();
+	const dependencyIdentities = new Map(
+		session
+			.dependencyIdentities(dependencies)
+			.map((dependency) => [dependency.path, dependency]),
+	);
+	for (const dependency of request.native?.dependencies ?? []) {
+		const compiled = dependencyIdentities.get(dependency.path);
+		if (compiled !== undefined && compiled.digest !== dependency.digest)
+			throw new TestSourceChangedError([dependency.path]);
+		dependencyIdentities.set(dependency.path, dependency);
+	}
 	const workerManifestPath = cacheDevelopmentWorkerManifest(
 		"workerImages" in compiled ? compiled.workerImages : [],
 		undefined,
@@ -120,6 +135,9 @@ function prepareTestApplicationImage(
 					},
 				];
 	return {
+		...(request.native === undefined
+			? {}
+			: { nativeHostIdentity: request.native.identity }),
 		image: {
 			schema: 1,
 			wires,
@@ -138,8 +156,8 @@ function prepareTestApplicationImage(
 			},
 		},
 		files: request.files,
-		dependencies,
-		dependencyIdentities: session.dependencyIdentities(dependencies),
+		dependencies: [...dependencyIdentities.keys()].sort(),
+		dependencyIdentities: [...dependencyIdentities.values()],
 		cache: compiled.cache,
 		frontendMs: compiled.frontendMs,
 		phases: compiled.phases,

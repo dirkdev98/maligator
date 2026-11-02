@@ -1,4 +1,6 @@
-Write application tests with `maligator:test`. Ordinary `maligator test` interprets a compiled development image and does not invoke a native C compiler or linker.
+Write application tests with `maligator:test`. Ordinary `maligator test` interprets a
+compiled development image. Projects with [C libraries](/guides/c-libraries) also
+compile a runtime containing their native bindings.
 
 ## Write a test
 
@@ -47,6 +49,10 @@ maligator test --isolate --compile-concurrency 2 --concurrency 2
 ```
 
 Watch mode retains compiled images and starts a fresh application on each rerun. On POSIX, sending SIGHUP to the printed PID reruns unchanged inputs. Add `--watch-failed` to select previously failing files for those unchanged reruns.
+
+C libraries share a linked runtime across JavaScript reruns, so their process state
+persists. Native input changes replace the runtime after application cleanup. Each
+new application still has fresh JavaScript globals and module state.
 
 Selected files normally share one application isolate, including module singletons and globals. `--isolate` gives each file separate application state; `--compile-concurrency` and `--concurrency` bound compilation and execution separately. Isolation requires a compatible native runtime policy. The supervisor joins the application and its descendants after every run, including resources tests left open.
 

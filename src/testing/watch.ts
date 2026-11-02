@@ -214,7 +214,9 @@ function collectDirectories(
 export async function watchTestCommand(
 	command: TestCommand,
 	context: CommandContext,
-	loadConfig: () => ResolvedBuildConfig,
+	loadConfig: (
+		controls?: TestGenerationControls,
+	) => ResolvedBuildConfig | Promise<ResolvedBuildConfig>,
 ): Promise<void> {
 	const applicationSession = createTestApplicationSession(command, context);
 	const configPath = path.resolve(command.configPath ?? BUILD_CONFIG_NAME);
@@ -222,12 +224,14 @@ export async function watchTestCommand(
 	let currentDependencies = new Map<string, FrontendDependencyIdentity>();
 	let config: ResolvedBuildConfig | undefined;
 	try {
-		config = loadConfig();
+		config = await loadConfig();
 	} catch {
 		config = undefined;
 	}
 	let states = new Map<string, string | undefined>();
 	let directories = new Set<string>();
+	const nativePaths = new Set<string>();
+	let currentNativePaths = new Set<string>();
 	let failedFiles: Array<string> = [];
 	let stopping = false;
 	const watch = context.developmentWatcher;
@@ -238,6 +242,7 @@ export async function watchTestCommand(
 				: command.paths.map((file) => path.resolve(file));
 		const dirs = new Set<string>();
 		for (const root of roots) collectDirectories(root, dirs, true);
+		for (const nativePath of nativePaths) collectDirectories(nativePath, dirs, false);
 		for (const asset of Object.values(config?.assets ?? {}))
 			if (asset.type === "directory")
 				collectDirectories(path.resolve(asset.path), dirs, false);
@@ -245,14 +250,18 @@ export async function watchTestCommand(
 			configPath,
 			...roots,
 			...dependencies.keys(),
+			...nativePaths,
 			...Object.values(config?.assets ?? {}).map((asset) => path.resolve(asset.path)),
 			...dirs,
 			...(keepPrevious ? states.keys() : []),
 		]);
 		return { dirs, states: new Map([...files].map((file) => [file, identity(file)])) };
 	};
-	const refresh = (keepPrevious = true) => {
+	const refresh = (keepPrevious = true, preserveObserved = false) => {
 		const collected = collect(keepPrevious);
+		if (preserveObserved)
+			for (const [file, value] of states)
+				if (collected.states.has(file)) collected.states.set(file, value);
 		states = collected.states;
 		directories = collected.dirs;
 	};
@@ -306,16 +315,27 @@ export async function watchTestCommand(
 	];
 	const session = createTestWatchSession(
 		async (controls, failedOnly) => {
-			const beforeConfig = identity(configPath);
-			config = loadConfig();
-			if (beforeConfig !== identity(configPath)) {
-				requestChanges([configPath]);
-				throw new TestSourceChangedError([configPath]);
-			}
 			currentDependencies = new Map();
-			refresh();
-			watch?.update(handle, watchFiles());
+			currentNativePaths = new Set();
 			try {
+				const beforeConfig = identity(configPath);
+				config = await loadConfig({
+					...controls,
+					discoveredPaths(paths) {
+						for (const file of paths) {
+							nativePaths.add(file);
+							currentNativePaths.add(file);
+							if (!states.has(file)) states.set(file, identity(file));
+						}
+						watch?.update(handle, watchFiles());
+					},
+				});
+				if (beforeConfig !== identity(configPath))
+					throw new TestSourceChangedError([configPath]);
+				const changedPaths = changed();
+				if (changedPaths.length > 0) throw new TestSourceChangedError(changedPaths);
+				refresh();
+				watch?.update(handle, watchFiles());
 				return await executeTestCommand(command, context, config, applicationSession, {
 					...controls,
 					prepared,
@@ -334,7 +354,9 @@ export async function watchTestCommand(
 				if (summary.failed === 0) dependencies.clear();
 				for (const [file, dependency] of currentDependencies)
 					dependencies.set(file, dependency);
-				refresh(false);
+				nativePaths.clear();
+				for (const file of currentNativePaths) nativePaths.add(file);
+				refresh(false, true);
 				watch?.update(handle, watchFiles());
 				process.stderr.write(
 					`Test watch generation ${generation}: ${summary.failed} failed; seed ${applicationSession.options.shuffleSeed ?? "none"}; failed files ${JSON.stringify(failedFiles)}\n`,
@@ -345,12 +367,27 @@ export async function watchTestCommand(
 					`Test watch generation ${generation} failed: ${error instanceof Error ? error.message : String(error)}; waiting for changes\n`,
 				);
 			},
-			close() {
-				return applicationSession.close();
+			async close() {
+				const failures: Array<unknown> = [];
+				try {
+					applicationSession.close();
+				} catch (error) {
+					failures.push(error);
+				}
+				try {
+					await context.testApplications?.close?.();
+				} catch (error) {
+					failures.push(error);
+				}
+				if (failures.length === 1) throw failures[0];
+				if (failures.length > 1)
+					throw new AggregateError(failures, "test application hosts could not close");
 			},
 			event(event) {
 				if (command.status) {
-					const resources = context.applications?.resources?.();
+					const resources =
+						context.testApplications?.resources?.() ??
+						context.applications?.resources?.();
 					process.stderr.write(
 						`Test session ${JSON.stringify({ ...session.snapshot(), seed: applicationSession.options.shuffleSeed ?? null, failedFiles, ...(resources === undefined ? {} : { resources }) })}\n`,
 					);
