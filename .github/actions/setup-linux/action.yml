@@ -141,6 +141,7 @@ runs:
         RESTORED_KEY: ${{ steps.restore-native-cache.outputs.cache-matched-key }}
       run: |
         node scripts/ci-native-cache.ts import "$RUNNER_TEMP/maligator-native-cache"
+        rm -rf "$RUNNER_TEMP/maligator-native-cache"
         echo "MALIGATOR_NATIVE_CACHE_RESTORED_KEY=$RESTORED_KEY" >> "$GITHUB_ENV"
 
     - name: Prepare the pinned Test262 corpus
