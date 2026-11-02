@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "sqlite.h"
 #include "crypto.h"
+#include "text.h"
 #include <zstd.h>
 #include <openssl/evp.h>
 #include <stdint.h>
@@ -65,6 +66,23 @@ int main(int argc, char **argv) {
             if (checksum != ((iterations - 1) & 1023) + 17) return 20;
         }
         if (ffi_bench_sql_finalize(s) != 0 || ffi_bench_sql_close(db) != 0) return 10;
+    } else if (strcmp(mode, "libc-strcmp") == 0) {
+        if (strcmp(pattern, "early") != 0 && strcmp(pattern, "equal") != 0 && strcmp(pattern, "late") != 0) return 21;
+        char *left = malloc(size + 1), *right = malloc(size + 1);
+        if (!left || !right) return 22;
+        memset(left, 'x', size); memset(right, 'x', size);
+        left[size] = right[size] = 0;
+        if (size != 0 && strcmp(pattern, "early") == 0) right[0] = 'y';
+        if (size != 0 && strcmp(pattern, "late") == 0) right[size - 1] = 'y';
+        for (int phase = 0; phase < 2; phase++) {
+            checksum = 0;
+            uint64_t count = phase == 0 ? warm : iterations;
+            double start = now_ms();
+            for (uint64_t i = 0; i < count; i++) checksum += ffi_bench_string_compare(left, right) < 0 ? 1U : 0U;
+            elapsed = now_ms() - start;
+        }
+        free(left); free(right);
+        if (checksum != (strcmp(pattern, "equal") == 0 || size == 0 ? 0 : iterations)) return 23;
     } else if (strcmp(mode, "zstd-compress") == 0 || strcmp(mode, "zstd-decompress") == 0) {
         ZSTD_CCtx *encoder = ZSTD_createCCtx();
         ZSTD_DCtx *decoder = ZSTD_createDCtx();

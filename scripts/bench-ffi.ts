@@ -47,6 +47,7 @@ interface Identity {
 	libraries: Record<string, FileIdentity>;
 	binaries: Record<string, FileIdentity>;
 	compiler: string;
+	os: string;
 	node: string;
 	bun: string;
 	linkage: Record<string, { imports: string; libraries: string }>;
@@ -98,6 +99,8 @@ cover the complete child. One round is indicative. No saved baseline is updated.
 SQLite uses one shared adapter to isolate embedded SQLite symbols. Timed adapter
 exports forward one call each. zstd and EVP updates call the libraries directly.
 Bun uses exact BigInt u64 arguments/results and Buffer views, without ptr caching.
+libc-strcmp compares owned ASCII strings with early, equal and late differences.
+Bun encodes terminated Buffer inputs before timing; Maligator converts JS strings.
 `);
 	process.exit(0);
 }
@@ -116,6 +119,14 @@ if (
 const CASES: Array<Case> = [
 	{ mode: "sqlite-bind", size: 0, pattern: "repeat", iterations: 1000000 },
 	{ mode: "sqlite-row", size: 0, pattern: "repeat", iterations: 250000 },
+	...[64, 4095, 65535].flatMap((size) =>
+		["early", "equal", "late"].map((pattern) => ({
+			mode: "libc-strcmp",
+			size,
+			pattern,
+			iterations: size === 64 ? 1000000 : size === 4095 ? 250000 : 10000,
+		})),
+	),
 	...[64, 1024, 1048576].flatMap((size) =>
 		["repeat", "random"].flatMap((pattern) =>
 			["zstd-compress", "zstd-decompress"].map((mode) => ({
@@ -267,6 +278,7 @@ async function build(): Promise<void> {
 		"-fPIC",
 		...includes.map((p) => `-I${p}`),
 		path.join(inputs, "sqlite.c"),
+		path.join(inputs, "text.c"),
 		...Object.values(libraries).map((l) => l.path),
 		"-Wl,-twolevel_namespace",
 		"-install_name",
@@ -286,6 +298,10 @@ async function build(): Promise<void> {
 	]);
 	await execute("control-strip", "/usr/bin/strip", ["-x", path.join(native, "control")]);
 	const contracts: Record<string, MaligatorLibraryContract> = {
+		text: {
+			headers: ["text.h"],
+			find: [{ includeDirs: [inputs], libraryDirs: [native], libraries: ["ffi-bench"] }],
+		},
 		sqlite: {
 			headers: ["sqlite.h"],
 			find: [{ includeDirs: [inputs], libraryDirs: [native], libraries: ["ffi-bench"] }],
@@ -377,6 +393,7 @@ async function build(): Promise<void> {
 				["ZSTD_compressCCtx", "libzstd"],
 				["ZSTD_decompressDCtx", "libzstd"],
 				["ffi_bench_sql_bind", "libffi-bench"],
+				["ffi_bench_string_compare", "libffi-bench"],
 			])
 				if (!imports.includes(`external _${symbol} (from ${provider})`))
 					throw new Error(`${name}: unexpected provider for ${symbol}`);
@@ -409,6 +426,7 @@ async function build(): Promise<void> {
 			].map(([name, file]) => [name!, fileIdentity(file!)]),
 		),
 		compiler: text("/usr/bin/clang", ["--version"]),
+		os: text("/usr/bin/sw_vers", []),
 		node: text(process.execPath, ["--version"]),
 		bun: text(bun, ["--version"]),
 		linkage,
@@ -518,11 +536,14 @@ async function measure(): Promise<void> {
 		];
 		if (
 			!isDeepStrictEqual(
-				parts.slice(4).map((p) => realpathSync(p)),
+				parts.slice(4, 4 + expected.length).map((p) => realpathSync(p)),
 				expected,
 			)
 		)
 			throw new Error("Calls resolved to unexpected library builds");
+		// System libraries can live only in the dyld shared cache, without a disk file to hash.
+		if (parts.length !== expected.length + 5 || !parts.at(-1)?.startsWith("/usr/lib/"))
+			throw new Error("strcmp did not resolve to the shared system library");
 	};
 	const calibrated: Array<Case> = [];
 	for (const c of CASES) {

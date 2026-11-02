@@ -12,6 +12,7 @@ const sqlite = dlopen(new URL("../native/libffi-bench.dylib", import.meta.url).p
 	ffi_bench_sql_finalize: { args: [t.ptr], returns: t.i32 },
 	ffi_bench_sql_close: { args: [t.ptr], returns: t.i32 },
 	ffi_bench_crypto_final: { args: [t.ptr, t.ptr, t.u32], returns: t.i32 },
+	ffi_bench_string_compare: { args: [t.cstring, t.cstring], returns: t.i32 },
 });
 const zstd = dlopen(process.argv[6], {
 	ZSTD_compressBound: { args: [t.u64], returns: t.u64 },
@@ -41,6 +42,7 @@ const {
 	ffi_bench_sql_finalize,
 	ffi_bench_sql_close,
 	ffi_bench_crypto_final,
+	ffi_bench_string_compare,
 } = sqlite.symbols;
 const {
 	ZSTD_compressBound,
@@ -124,6 +126,25 @@ if (mode === "sqlite-bind" || mode === "sqlite-row") {
 	}
 	if (ffi_bench_sql_finalize(statement) !== 0 || ffi_bench_sql_close(db) !== 0)
 		throw new Error("SQLite cleanup failed");
+} else if (mode === "libc-strcmp") {
+	if (!["early", "equal", "late"].includes(pattern))
+		throw new Error("Invalid string pattern");
+	data.fill(120);
+	const other = Buffer.alloc(size, 120);
+	if (pattern === "early" && size !== 0) other[0] = 121;
+	if (pattern === "late" && size !== 0) other[size - 1] = 121;
+	const left = Buffer.from(new TextDecoder().decode(data) + "\0");
+	const right = Buffer.from(new TextDecoder().decode(other) + "\0");
+	for (let phase = 0; phase < 2; phase++) {
+		checksum = 0;
+		const count = phase === 0 ? warm : iterations;
+		const start = performance.now();
+		for (let i = 0; i < count; i++)
+			checksum += ffi_bench_string_compare(left, right) < 0 ? 1 : 0;
+		elapsedMs = performance.now() - start;
+	}
+	if (checksum !== (pattern === "equal" || size === 0 ? 0 : iterations))
+		throw new Error("String comparison changed");
 } else if (mode === "zstd-compress" || mode === "zstd-decompress") {
 	const encoder = ZSTD_createCCtx();
 	const decoder = ZSTD_createDCtx();

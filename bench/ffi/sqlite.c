@@ -7,6 +7,7 @@
 #include <openssl/crypto.h>
 #include <dlfcn.h>
 #include <stdio.h>
+#include <string.h>
 
 FfiBenchDb *ffi_bench_sql_open(void) {
     sqlite3 *db = NULL;
@@ -62,7 +63,7 @@ const char *ffi_bench_library_identity(void) {
         (void *)sqlite3_finalize, (void *)sqlite3_close_v2,
         (void *)ZSTD_compressCCtx, (void *)ZSTD_decompressDCtx,
         (void *)EVP_DigestInit_ex, (void *)EVP_DigestUpdate,
-        (void *)EVP_DigestFinal_ex
+        (void *)EVP_DigestFinal_ex, (void *)strcmp
     };
     size_t used = (size_t)snprintf(result, sizeof(result), "%s\n%s\n%s\n%s\n",
         sqlite3_libversion(), sqlite3_sourceid(), ZSTD_versionString(),

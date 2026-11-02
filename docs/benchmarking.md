@@ -60,6 +60,11 @@ callers use exact BigInt values for `size_t` and pass Buffer views without cachi
 raw pointers. C and Maligator use matching optimization and linker flags; Bun uses
 its own FFI JIT.
 
+`--case libc-strcmp` compares reused ASCII strings with early, equal, and late
+differences through the same shared adapter. Bun encodes terminated buffers during
+setup; Maligator receives JavaScript strings. The system library's loaded path and
+the host OS version identify libc, which may reside only in macOS's dyld cache.
+
 `report.json` retains source and binary identities, latency samples, whole-process
 CPU and peak RSS, executable and library sizes, power state, and free disk space.
 Latency excludes setup, warmup, and output validation; resource counters include
