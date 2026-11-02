@@ -6,6 +6,7 @@ import type {
 } from "../application-images.ts";
 
 export type TestHostOperation =
+	| { kind: "ping" }
 	| { kind: "load"; image: number; descriptor: ApplicationImageDescriptor }
 	| {
 			kind: "launch";

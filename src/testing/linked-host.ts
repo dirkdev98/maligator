@@ -21,6 +21,7 @@ function deferred<Value>() {
 export interface LinkedTestHost extends TestApplicationHost {
 	readonly pid: number;
 	readonly alive: boolean;
+	check(): Promise<void>;
 	close(): Promise<void>;
 }
 
@@ -225,6 +226,7 @@ export async function startLinkedTestHost(options: {
 	socket.resume();
 	return {
 		pid: child.pid!,
+		check: () => request({ kind: "ping" }),
 		get alive() {
 			return (
 				!stopping &&

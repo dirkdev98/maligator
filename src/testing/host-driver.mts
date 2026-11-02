@@ -59,6 +59,8 @@ async function handle(request: TestHostRequest): Promise<void> {
 		if (closing !== undefined && request.kind !== "close")
 			throw new Error("linked test host is closing");
 		switch (request.kind) {
+			case "ping":
+				break;
 			case "load": {
 				if (images.has(request.image))
 					throw new Error("test image identity is already loaded");

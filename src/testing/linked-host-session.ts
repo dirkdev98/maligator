@@ -51,15 +51,22 @@ export class LinkedTestHostSession implements TestApplicationHost {
 	): Promise<ResolvedBuildConfig> {
 		if (this.#closing !== undefined) throw new Error("test application host is closing");
 		controls.signal?.throwIfAborted();
-		if (
-			this.#current?.buildIdentity === prepared.native.identity &&
-			this.#current.host.alive
-		) {
-			this.#current.native = {
-				...prepared.native,
-				identity: this.#current.native.identity,
-			};
-			return prepared.config;
+		const current = this.#current;
+		if (current?.buildIdentity === prepared.native.identity && current.host.alive) {
+			// Native preparation can block exit-event delivery. An acknowledged request
+			// proves the host still exists before this generation reuses its state.
+			try {
+				await current.host.check();
+			} catch (error) {
+				if (current.host.alive) throw error;
+			}
+			controls.signal?.throwIfAborted();
+			if (this.#closing !== undefined)
+				throw new Error("test application host is closing");
+			if (current.host.alive) {
+				current.native = { ...prepared.native, identity: current.native.identity };
+				return prepared.config;
+			}
 		}
 		const bundle = prepared.build();
 		prepared.validate();
