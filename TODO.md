@@ -1903,9 +1903,9 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Extend callable function-table fields to handle views and propagate explicit
-      owner lifetimes through nested function results. Returned functions and complete
-      table fields bind through `callable` with library or captured-owner lifetimes.
+- [ ] Extend callable function-table fields to handle views. Returned functions,
+      complete table fields, and nested results bind through `callable` with library
+      or captured-owner lifetimes.
 
 - [ ] Bind exported C globals with explicit access and ownership contracts.
 

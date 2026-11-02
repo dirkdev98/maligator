@@ -43,6 +43,7 @@ typedef struct CallableTable {
     CallableFixed fixed;
     CallableFactory factory;
     CallableInt independent;
+    CallableFactory owned_factory;
 } CallableTable;
 CallableTable *callable_table_new(int mode);
 void callable_table_close(CallableTable *table);

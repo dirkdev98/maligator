@@ -1029,7 +1029,7 @@ MalValue mal_ffi_new_callable(
 
 bool mal_ffi_callable_target(
     MalVm *vm, MalValue callee, MalFfiFunction function, void *target,
-    size_t target_size, const MalFfiHandleType *owner_type, void **owner_pin,
+    size_t target_size, const MalFfiHandleType *owner_type, void **owner_pin, MalValue *owner_value,
     const MalFfiSite *site) {
     if (!mal_value_is_native_function_object(callee))
         return mal_ffi_expected(vm, site, "a native C function");
@@ -1046,7 +1046,9 @@ bool mal_ffi_callable_target(
         void *storage;
         if (!mal_ffi_to_handle(vm, owner, owner_type, false, site, &storage, nullptr)
             || !mal_ffi_handle_idle(vm, owner, site)) return false;
-        return mal_ffi_to_handle(vm, owner, owner_type, false, site, &storage, owner_pin);
+        if (!mal_ffi_to_handle(vm, owner, owner_type, false, site, &storage, owner_pin)) return false;
+        *owner_value = owner;
+        return true;
     }
     return true;
 }

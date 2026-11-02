@@ -541,7 +541,7 @@ class BindingWriter {
 		value: JsValue,
 		expression: string,
 		lent: boolean | string = false,
-		owner = "mal_ffi_undefined()",
+		owner = "mal_owner",
 	): string {
 		switch (value.kind) {
 			case "callable":
@@ -2236,11 +2236,12 @@ class BindingWriter {
 			"",
 			// The body, shared by the function object (framed: the call counts as a native
 			// frame, so collection needs lifting around callbacks) and the direct entry.
-			`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed${hasInto(binding) ? ", void *mal_into, MalValue *mal_slots" : ""}${callable === undefined ? "" : `, MalFfiTarget_${callable.name} mal_target`}${owner === undefined ? "" : ", void *mal_owner_pin"}) {`,
+			`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed${hasInto(binding) ? ", void *mal_into, MalValue *mal_slots" : ""}${callable === undefined ? "" : `, MalFfiTarget_${callable.name} mal_target`}${owner === undefined ? "" : ", void *mal_owner_pin, MalValue mal_owner"}) {`,
 			"\t(void) vm;",
 			"\t(void) mal_args;",
 			"\t(void) mal_argc;",
 			"\t(void) mal_framed;",
+			...(owner === undefined ? [] : ["\t(void) mal_owner;"]),
 			"\tMalValue mal_result = mal_ffi_undefined();",
 			...strings.flatMap((temporary) => [
 				`\tMalFfiString ${temporary};`,
@@ -2287,11 +2288,13 @@ class BindingWriter {
 				? []
 				: [
 						`\tMalFfiTarget_${callable.name} mal_target;`,
-						...(owner === undefined ? [] : ["\tvoid *mal_owner_pin = nullptr;"]),
+						...(owner === undefined
+							? []
+							: ["\tvoid *mal_owner_pin = nullptr;", "\tMalValue mal_owner;"]),
 						`\tstatic const MalFfiSite mal_site = { ${cString(callable.site)}, "callee", nullptr };`,
-						`\tif (!mal_ffi_callable_target(vm, mal_callee, mal_ffi_function_${name}, &mal_target, sizeof(mal_target), ${owner === undefined ? "nullptr, nullptr" : `&mal_ffi_type_${owner}, &mal_owner_pin`}, &mal_site)) return mal_ffi_undefined();`,
+						`\tif (!mal_ffi_callable_target(vm, mal_callee, mal_ffi_function_${name}, &mal_target, sizeof(mal_target), ${owner === undefined ? "nullptr, nullptr, nullptr" : `&mal_ffi_type_${owner}, &mal_owner_pin, &mal_owner`}, &mal_site)) return mal_ffi_undefined();`,
 					]),
-			`\treturn mal_ffi_call_${name}(vm, mal_args, mal_argc, true${hasInto(binding) ? ", nullptr, nullptr" : ""}${callable === undefined ? "" : ", mal_target"}${owner === undefined ? "" : ", mal_owner_pin"});`,
+			`\treturn mal_ffi_call_${name}(vm, mal_args, mal_argc, true${hasInto(binding) ? ", nullptr, nullptr" : ""}${callable === undefined ? "" : ", mal_target"}${owner === undefined ? "" : ", mal_owner_pin, mal_owner"});`,
 			"}",
 		];
 	}

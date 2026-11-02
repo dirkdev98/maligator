@@ -20,6 +20,9 @@ export default {
 					callable: { lifetime: "owner", returns: { callable: { lifetime: "library" } } },
 				},
 				independent: { callable: { lifetime: "library" } },
+				owned_factory: {
+					callable: { lifetime: "owner", returns: { callable: { lifetime: "owner" } } },
+				},
 			},
 		},
 		CallableState: {

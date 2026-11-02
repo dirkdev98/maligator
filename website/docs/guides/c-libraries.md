@@ -351,8 +351,9 @@ conversion. Calls pin the owner through callbacks and result conversion, so reen
 disposal throws. If C changes the field, a new read sees the new pointer; an earlier
 function retains its snapshot. Explicit C self or user-data parameters remain explicit.
 Use `"library"` for a field whose target remains valid independently of the handle.
-Callable fields cannot accompany handle views. Nested results need their own library
-lifetime; an owner lifetime applies to the field read itself.
+Callable fields cannot accompany handle views. Nested results can use `"owner"` to
+inherit the same captured handle, or `"library"` to remain valid independently. A
+library-lifetime function cannot introduce an owner for its result.
 
 ## Describe pointers
 

@@ -104,6 +104,8 @@ const independent = table.independent!;
 check(table.self!(table, 7) === 8, "explicit owner argument");
 check(table.abi!(5) === 22 && table.fixed!(7) === 21, "table ABI and macro facts");
 const nested = table.factory!(0)!;
+const ownedNested = table.owned_factory!(0)!;
+check(ownedNested(4) === 5, "inherited owner before close");
 callable_table_swap(table, 1);
 check(savedTransform(7) === 8 && table.transform!(7) === -7, "pointer snapshots");
 check(
@@ -133,6 +135,7 @@ const pending = callable_table_hold_async(table);
 rejects(() => savedTransform(1), "worker-owned table");
 check((await pending) === -1, "worker table result");
 callable_table_close(table);
+rejects(() => ownedNested(4), "inherited owner after close");
 let readClosed = false;
 rejects(
 	() =>
@@ -187,12 +190,18 @@ function retainedTarget(): (value: number) => number {
 	const temporary = callable_table_new(0)!;
 	return temporary.transform!;
 }
-const retainedTargetOnly = retainedTarget();
+function retainedNestedTarget(): (value: number) => number {
+	const temporary = callable_table_new(0)!;
+	return temporary.owned_factory!(0)!;
+}
+const retainedTargets = [retainedTarget(), retainedNestedTarget()];
 for (let index = 0; index < 128; index++)
 	check(callable_choose(0)!(index) === index + 1, "GC allocation");
 check(
-	retainedTargetOnly(10) === 11 && callable_tables_live() === 1,
-	"captured owner survives GC",
+	retainedTargets[0]!(10) === 11 &&
+		retainedTargets[1]!(20) === 21 &&
+		callable_tables_live() === retainedTargets.length,
+	"captured owners survive GC",
 );
 
 const state = CallableState();

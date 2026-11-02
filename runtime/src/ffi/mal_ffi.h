@@ -172,7 +172,7 @@ MalValue mal_ffi_new_callable(
 /** Validate the signature and pin a captured owner before argument conversion. */
 bool mal_ffi_callable_target(
     MalVm *vm, MalValue callee, MalFfiFunction function, void *target,
-    size_t target_size, const MalFfiHandleType *owner_type, void **owner_pin,
+    size_t target_size, const MalFfiHandleType *owner_type, void **owner_pin, MalValue *owner_value,
     const MalFfiSite *site);
 
 /** Resolve an installer by symbol name for images loaded from the wire format. */

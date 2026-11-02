@@ -1971,7 +1971,12 @@ class Planner {
 			},
 			{ params, returns: callable.returns ?? NO_FACTS },
 			undefined,
-			{ targetType: context.targetType, path: at, site: context.site },
+			{
+				targetType: context.targetType,
+				path: at,
+				site: context.site,
+				...(callable.lifetime === "owner" ? { owner: context.owner! } : {}),
+			},
 		);
 		if ("gaps" in signature)
 			return {
@@ -2000,6 +2005,7 @@ class Planner {
 			readonly targetType: string;
 			readonly path: string;
 			readonly site: string;
+			readonly owner?: string;
 		},
 	): BoundFunction | UnboundFunction {
 		const where = (at: string): string =>
@@ -2055,6 +2061,9 @@ class Planner {
 					path: where(at),
 					site: `${callableContext?.site ?? declaration.name} result`,
 					location: declaration.location,
+					...(callableContext?.owner === undefined
+						? {}
+						: { owner: callableContext.owner }),
 				});
 			}
 			for (const fact of ["string", "bytes", "array"] as const) {

@@ -78,6 +78,23 @@ describe("returned C function contracts", () => {
 			}),
 		).toThrow("owner lifetime requires a function-table field");
 	});
+	it("rejects an owner lifetime introduced by a library-lifetime function", () => {
+		expect(() =>
+			planBindings(model, {
+				types: {},
+				functions: {
+					callable_factory: {
+						returns: {
+							callable: {
+								lifetime: "library",
+								returns: { callable: { lifetime: "owner" } },
+							},
+						},
+					},
+				},
+			}),
+		).toThrow("owner lifetime requires a function-table field");
+	});
 	it("rejects a callable field absent from the header", () => {
 		expect(() =>
 			planBindings(model, {

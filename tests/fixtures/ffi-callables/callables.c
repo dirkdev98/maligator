@@ -40,7 +40,7 @@ static int point_value(CallablePoint point) { return (int) (point.x + point.y); 
 static int self_value(CallableTable *table, int value) { return table->transform(value); }
 static CallableTable table_value(int mode) {
     return (CallableTable) { callable_choose(mode), point_value, apply, self_value,
-        abi_value, fixed, callable_choose, increment };
+        abi_value, fixed, callable_choose, increment, callable_choose };
 }
 CallableTable *callable_table_new(int mode) {
     CallableTable *table = malloc(sizeof(*table));
