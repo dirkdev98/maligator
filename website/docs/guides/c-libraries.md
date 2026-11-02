@@ -105,7 +105,9 @@ contain const members when C initializes every selected field before returning. 
 inout value is constructed before the call; C may update its mutable fields. Counted
 arrays of const records also use initialized copies, including on workers. Fixed
 numeric and record array buffers keep their declared bounds and nested dimensions.
-Unions and JavaScript callback results require assignable fields.
+Selected union members also use native initialization, including const scalars,
+records, and fixed arrays. Tagged values and JavaScript callback results require
+assignable fields.
 
 Repeated string inputs can retain a UTF-8 encoding alongside their JavaScript
 storage, avoiding encoding work on later synchronous calls. ASCII inputs can instead

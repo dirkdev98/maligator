@@ -963,8 +963,6 @@ class Planner {
 		const record = this.#model.records.get(name);
 		if (record === undefined || !record.complete)
 			return { gap: `union ${name}: incomplete type` };
-		if (cRecordHasConstMembers(this.#model, record))
-			return { gap: `union ${name}: const members cannot be copied by value` };
 		const field = [...promotedCFields(this.#model, record)].find(
 			(field) => field.name === shape.member,
 		);

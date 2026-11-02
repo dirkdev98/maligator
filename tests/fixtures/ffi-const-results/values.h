@@ -13,6 +13,18 @@ typedef struct ImmutableBits { const unsigned code : 3; int payload; } Immutable
 int immutable_bits_take(ImmutableBits value);
 int immutable_taken(void);
 typedef struct Before { const int value; } Before;
+typedef union ImmutableChoice { const int integer; Immutable record; const int samples[2]; } ImmutableChoice;
+typedef struct ImmutableEnvelope { const int id; ImmutableChoice payload; } ImmutableEnvelope;
+ImmutableChoice immutable_choice_int(int value);
+int immutable_choice_take_int(ImmutableChoice value);
+ImmutableChoice immutable_choice_record(int seed);
+int immutable_choice_take_record(ImmutableChoice value);
+ImmutableChoice immutable_choice_array(int seed);
+int immutable_choice_take_array(ImmutableChoice value);
+void immutable_choice_out(int seed, ImmutableChoice *value);
+void immutable_choice_inout(ImmutableChoice *value);
+int immutable_choice_sum(const ImmutableChoice *values, size_t count);
+int immutable_envelope_take(ImmutableEnvelope value);
 typedef struct __attribute__((aligned(64))) ImmutableToken { const int token; int detail; } ImmutableToken;
 ImmutableToken immutable_token_make(int seed);
 ImmutableToken immutable_token_borrow(void);

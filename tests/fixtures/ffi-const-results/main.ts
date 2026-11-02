@@ -55,6 +55,25 @@ import {
 	gridOutAsync,
 	immutable_grid_inout,
 	gridInoutAsync,
+	immutable_choice_int,
+	choiceIntAsync,
+	immutable_choice_take_int,
+	takeChoiceIntAsync,
+	immutable_choice_record,
+	choiceRecordAsync,
+	immutable_choice_take_record,
+	takeChoiceRecordAsync,
+	immutable_choice_array,
+	choiceArrayAsync,
+	immutable_choice_take_array,
+	takeChoiceArrayAsync,
+	immutable_choice_out,
+	choiceOutAsync,
+	immutable_choice_inout,
+	choiceInoutAsync,
+	immutable_choice_sum,
+	choiceSumAsync,
+	immutable_envelope_take,
 } from "maligator:ffi/const_values";
 import type { Immutable, ImmutableToken } from "maligator:ffi/const_values";
 
@@ -125,6 +144,55 @@ for (const seed of [-3, 0, 7, 19]) {
 	await notified;
 }
 verify(getFixed(), 77);
+check(
+	immutable_choice_int(-7) === -7 && (await choiceIntAsync(9)) === 9,
+	"const union scalar results",
+);
+check(
+	immutable_choice_take_int(-11) === -11 && (await takeChoiceIntAsync(13)) === 13,
+	"const union scalar constructors",
+);
+verify(immutable_choice_record(3), 3);
+verify(await choiceRecordAsync(5), 5);
+check(
+	immutable_choice_take_record(a_make(3)) === 75 &&
+		(await takeChoiceRecordAsync(a_make(5))) === 95,
+	"const union record constructors",
+);
+check(
+	immutable_choice_array(7)[1] === 8 && (await choiceArrayAsync(11))[0] === 11,
+	"const union fixed array results",
+);
+check(
+	immutable_choice_take_array([17, 19]) === 36 &&
+		(await takeChoiceArrayAsync([23, 29])) === 52,
+	"const union fixed array constructors",
+);
+verify(immutable_choice_out(31).value, 31);
+verify((await choiceOutAsync(41)).value, 41);
+check(
+	z_take(immutable_choice_inout(a_make(2)).value) === 165,
+	"const union inout preserves active record",
+);
+check(
+	z_take((await choiceInoutAsync(a_make(4))).value) === 185,
+	"worker const union inout preserves active record",
+);
+check(
+	immutable_choice_sum([1, 2, 3]) === 6 && (await choiceSumAsync([5, 7])) === 12,
+	"const union counted array constructors",
+);
+check(
+	immutable_envelope_take({ id: 11, payload: 13 }) === 24,
+	"const unions initialize inside records",
+);
+let unionRange = false;
+try {
+	immutable_choice_take_int(1.5);
+} catch (error) {
+	unionRange = error instanceof RangeError;
+}
+check(unionRange, "const union constructor preserves scalar range checks");
 verify(immutable_out().value, 21);
 verify((await outAsync()).value, 21);
 for (const output of [

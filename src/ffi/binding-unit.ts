@@ -332,6 +332,7 @@ class BindingWriter {
 				const value =
 					entry.kind === "input" ? binding.params[entry.param]!.value : undefined;
 				return (value?.kind === "record" ||
+					value?.kind === "union" ||
 					(value?.kind === "handle" && value.pass === "copy")) &&
 					this.#immutableRecord(binding.declaration.params[index]!.type)
 					? [index]
@@ -506,17 +507,16 @@ class BindingWriter {
 			case "union":
 			case "record": {
 				const retained = this.#hasHandles(value) ? `, ${inputs}` : "";
-				if (
-					value.kind === "record" &&
-					cRecordHasConstMembers(this.#model, this.#record(value.name).record)
-				) {
+				const mapped =
+					value.kind === "record"
+						? this.#record(value.name)
+						: this.#plan.unions.get(value.name)!;
+				if (cRecordHasConstMembers(this.#model, mapped.record)) {
 					if (!initializeRecord)
 						throw new Error("const-record input must initialize a native value");
 					const converted = this.#fresh("converted");
 					const spelling =
-						type.kind === "record"
-							? this.#record(value.name).spelling
-							: localDeclaration(type, "");
+						type.kind === "record" ? mapped.spelling : localDeclaration(type, "");
 					return [
 						`bool ${converted};`,
 						`${spelling} ${target} = mal_ffi_construct_${value.name}(vm, ${source}, ${site}, &${converted}${retained});`,
@@ -576,7 +576,8 @@ class BindingWriter {
 				if (initializeRecord && value.of.kind !== "array") {
 					const native = this.#fresh("native_element");
 					const construct =
-						value.of.kind === "record" && this.#immutableRecord(resolved.of);
+						(value.of.kind === "record" || value.of.kind === "union") &&
+						this.#immutableRecord(resolved.of);
 					const spelling =
 						value.of.kind === "record"
 							? this.#record(value.of.name).spelling
@@ -926,16 +927,78 @@ class BindingWriter {
 		return lines;
 	}
 
+	#initializerRoots(value: JsValue): number {
+		return value.kind === "array"
+			? value.length * (1 + this.#initializerRoots(value.of))
+			: 0;
+	}
+
+	#initializer(
+		value: JsValue,
+		type: CType,
+		source: string,
+		context: {
+			lines: Array<string>;
+			roots: string;
+			nextRoot: number;
+			site: string;
+			fail: string;
+			inputs: string;
+		},
+	): string {
+		if (value.kind === "array") {
+			const resolved = resolveCType(this.#model, type);
+			if (resolved.kind !== "array")
+				throw new Error("array initializer without array type");
+			const elements: Array<string> = [];
+			for (let index = 0; index < value.length; index++) {
+				const element = `${context.roots}[${context.nextRoot++}]`;
+				context.lines.push(
+					`\tif (!mal_ffi_element(vm, ${source}, ${index}, ${value.length}, ${context.site}, &${element})) ${context.fail}`,
+				);
+				elements.push(this.#initializer(value.of, resolved.of, element, context));
+			}
+			return `{ ${elements.join(", ")} }`;
+		}
+		const local = this.#fresh("field");
+		const aggregate =
+			value.kind === "record"
+				? this.#record(value.name)
+				: value.kind === "union"
+					? this.#plan.unions.get(value.name)
+					: undefined;
+		const spelling = aggregate?.spelling ?? localDeclaration(type, "");
+		const initialize =
+			aggregate !== undefined && cRecordHasConstMembers(this.#model, aggregate.record);
+		if (!initialize) context.lines.push(`\ttypeof_unqual(${spelling}) ${local};`);
+		context.lines.push(
+			...this.read(
+				value,
+				type,
+				source,
+				local,
+				context.site,
+				context.fail,
+				[],
+				false,
+				context.inputs,
+				false,
+				initialize,
+			).map((line) => `\t${line}`),
+		);
+		return local;
+	}
+
 	#recordConstructor(name: string): Array<string> {
 		const record = this.#record(name);
 		const retained = this.#hasHandles({ kind: "record", name });
-		const elementRoots = (value: JsValue): number =>
-			value.kind === "array" ? value.length * (1 + elementRoots(value.of)) : 0;
 		const count =
 			record.fields.length +
 			1 +
-			record.fields.reduce((total, field) => total + elementRoots(field.value), 0);
-		let nextRoot = record.fields.length + 1;
+			record.fields.reduce(
+				(total, field) => total + this.#initializerRoots(field.value),
+				0,
+			);
 		const lines = [
 			"",
 			`static ${record.spelling} mal_ffi_construct_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, bool *mal_ok${retained ? ", MalFfiInputs *mal_inputs" : ""}) {`,
@@ -945,51 +1008,18 @@ class BindingWriter {
 			`\tif (!mal_ffi_record_fields(vm, mal_fields[0], &mal_ffi_record_${name}, mal_site, mal_fields + 1)) goto mal_failed;`,
 			"\tMalFfiSite mal_field_site = *mal_site;",
 		];
-		const convert = (value: JsValue, type: CType, source: string): string => {
-			if (value.kind === "array") {
-				const resolved = resolveCType(this.#model, type);
-				if (resolved.kind !== "array")
-					throw new Error("array initializer without array type");
-				const elements: Array<string> = [];
-				for (let index = 0; index < value.length; index++) {
-					const element = `mal_fields[${nextRoot++}]`;
-					lines.push(
-						`\tif (!mal_ffi_element(vm, ${source}, ${index}, ${value.length}, &mal_field_site, &${element})) goto mal_failed;`,
-					);
-					elements.push(convert(value.of, resolved.of, element));
-				}
-				return `{ ${elements.join(", ")} }`;
-			}
-			const local = this.#fresh("field");
-			const spelling =
-				value.kind === "record"
-					? this.#record(value.name).spelling
-					: localDeclaration(type, "");
-			const initialize =
-				value.kind === "record" &&
-				cRecordHasConstMembers(this.#model, this.#record(value.name).record);
-			if (!initialize) lines.push(`\ttypeof_unqual(${spelling}) ${local};`);
-			lines.push(
-				...this.read(
-					value,
-					type,
-					source,
-					local,
-					"&mal_field_site",
-					"goto mal_failed;",
-					[],
-					false,
-					retained ? "mal_inputs" : "nullptr",
-					false,
-					initialize,
-				).map((line) => `\t${line}`),
-			);
-			return local;
+		const context = {
+			lines,
+			roots: "mal_fields",
+			nextRoot: record.fields.length + 1,
+			site: "&mal_field_site",
+			fail: "goto mal_failed;",
+			inputs: retained ? "mal_inputs" : "nullptr",
 		};
 		// C does not evaluate initializer expressions in field order, so convert first.
 		const fields = record.fields.map((field, index) => {
 			lines.push(`\tmal_field_site.field = ${cString(field.name)};`);
-			return `.${field.name} = ${convert(field.value, field.type, `mal_fields[${index + 1}]`)}`;
+			return `.${field.name} = ${this.#initializer(field.value, field.type, `mal_fields[${index + 1}]`, context)}`;
 		});
 		lines.push(
 			"\tmal_ffi_unroot(&mal_roots);",
@@ -999,6 +1029,42 @@ class BindingWriter {
 			"\tmal_ffi_unroot(&mal_roots);",
 			"\t*mal_ok = false;",
 			`\treturn (${record.spelling}) {};`,
+			"}",
+		);
+		return lines;
+	}
+
+	#unionConstructor(name: string): Array<string> {
+		const union = this.#plan.unions.get(name)!;
+		const retained = this.#hasHandles(union.member.value);
+		const count = 1 + this.#initializerRoots(union.member.value);
+		const lines = [
+			`static ${union.spelling} mal_ffi_construct_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, bool *mal_ok${retained ? ", MalFfiInputs *mal_inputs" : ""}) {`,
+			`\tMalValue mal_fields[${count}] = { mal_value };`,
+			"\tMalFfiRoots mal_roots;",
+			`\tmal_ffi_root(&mal_roots, mal_fields, ${count});`,
+		];
+		const initializer = this.#initializer(
+			union.member.value,
+			union.member.type,
+			"mal_fields[0]",
+			{
+				lines,
+				roots: "mal_fields",
+				nextRoot: 1,
+				site: "mal_site",
+				fail: "goto mal_failed;",
+				inputs: retained ? "mal_inputs" : "nullptr",
+			},
+		);
+		lines.push(
+			"\tmal_ffi_unroot(&mal_roots);",
+			"\t*mal_ok = true;",
+			`\treturn (${union.spelling}) { .${union.member.name} = ${initializer} };`,
+			"mal_failed:",
+			"\tmal_ffi_unroot(&mal_roots);",
+			"\t*mal_ok = false;",
+			`\treturn (${union.spelling}) {};`,
 			"}",
 		);
 		return lines;
@@ -1052,7 +1118,9 @@ class BindingWriter {
 				? ", MalFfiInputs *mal_inputs"
 				: "";
 			lines.push(
-				`static bool mal_ffi_union_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${union.spelling} *mal_out${retained});`,
+				cRecordHasConstMembers(this.#model, union.record)
+					? `static ${union.spelling} mal_ffi_construct_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, bool *mal_ok${retained});`
+					: `static bool mal_ffi_union_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${union.spelling} *mal_out${retained});`,
 			);
 		}
 		for (const name of this.#unionOutputs) {
@@ -1082,6 +1150,10 @@ class BindingWriter {
 		}
 		for (const name of this.#unionInputs) {
 			const union = this.#plan.unions.get(name)!;
+			if (cRecordHasConstMembers(this.#model, union.record)) {
+				lines.push(...this.#unionConstructor(name));
+				continue;
+			}
 			const retained = this.#hasHandles(union.member.value);
 			lines.push(
 				`static bool mal_ffi_union_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${union.spelling} *mal_out${retained ? ", MalFfiInputs *mal_inputs" : ""}) {`,
@@ -2161,7 +2233,10 @@ class BindingWriter {
 				}
 				case "input": {
 					const value = binding.params[entry.param]!.value;
-					if (value.kind === "record" && constArguments.has(index)) {
+					if (
+						(value.kind === "record" || value.kind === "union") &&
+						constArguments.has(index)
+					) {
 						body.push(
 							...this.read(
 								value,
@@ -2994,7 +3069,10 @@ class BindingWriter {
 					const value = binding.params[entry.param]!.value;
 					const site = `&mal_site_${String(entry.param)}`;
 					const source = argument(entry.param);
-					if (value.kind === "record" && constArguments.has(index)) {
+					if (
+						(value.kind === "record" || value.kind === "union") &&
+						constArguments.has(index)
+					) {
 						const native = this.#fresh("native_argument");
 						body.push(
 							...this.read(

@@ -4,9 +4,42 @@ import type { MaligatorLibraryContract } from "../../../src/public-api.d.ts";
 export default {
 	headers: ["values.h"],
 	find: [{ includeDirs: ["."], sources: ["values.c"] }],
-	types: { ImmutableToken: { handle: { destroy: "immutable_token_destroy" } } },
+	types: {
+		ImmutableToken: { handle: { destroy: "immutable_token_destroy" } },
+		ImmutableChoice: { shape: { member: "integer" } },
+	},
 	globals: { immutable_fixed: { get: "getFixed" } },
 	functions: {
+		immutable_choice_int: { async: "choiceIntAsync" },
+		immutable_choice_take_int: { async: "takeChoiceIntAsync" },
+		immutable_choice_record: {
+			returns: { shape: { member: "record" } },
+			async: "choiceRecordAsync",
+		},
+		immutable_choice_take_record: {
+			params: { value: { shape: { member: "record" } } },
+			async: "takeChoiceRecordAsync",
+		},
+		immutable_choice_array: {
+			returns: { shape: { member: "samples" } },
+			async: "choiceArrayAsync",
+		},
+		immutable_choice_take_array: {
+			params: { value: { shape: { member: "samples" } } },
+			async: "takeChoiceArrayAsync",
+		},
+		immutable_choice_out: {
+			params: { value: { out: true, shape: { member: "record" } } },
+			async: "choiceOutAsync",
+		},
+		immutable_choice_inout: {
+			params: { value: { inout: true, shape: { member: "record" } } },
+			async: "choiceInoutAsync",
+		},
+		immutable_choice_sum: {
+			params: { values: { array: { length: "count" } } },
+			async: "choiceSumAsync",
+		},
 		immutable_token_make: { async: "makeTokenAsync" },
 		immutable_token_borrow: { returns: { borrowed: true }, async: "borrowTokenAsync" },
 		immutable_token_consume: { async: "consumeTokenAsync" },

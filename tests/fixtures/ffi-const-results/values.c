@@ -21,6 +21,28 @@ int immutable_array(const Immutable *values, size_t count) {
     return sum;
 }
 int immutable_bits_take(ImmutableBits value) { taken++; return (int)value.code + value.payload; }
+ImmutableChoice immutable_choice_int(int value) { return (ImmutableChoice){.integer = value}; }
+int immutable_choice_take_int(ImmutableChoice value) { return value.integer; }
+ImmutableChoice immutable_choice_record(int seed) { return (ImmutableChoice){.record = a_make(seed)}; }
+int immutable_choice_take_record(ImmutableChoice value) { return z_take(value.record); }
+ImmutableChoice immutable_choice_array(int seed) { return (ImmutableChoice){.samples = {seed, seed + 1}}; }
+int immutable_choice_take_array(ImmutableChoice value) { return value.samples[0] + value.samples[1]; }
+void immutable_choice_out(int seed, ImmutableChoice *value) {
+    if ((uintptr_t)value % _Alignof(ImmutableChoice) != 0) abort();
+    ImmutableChoice native = immutable_choice_record(seed);
+    memcpy(value, &native, sizeof(native));
+}
+void immutable_choice_inout(ImmutableChoice *value) {
+    if ((uintptr_t)value % _Alignof(ImmutableChoice) != 0) abort();
+    value->record.nested.writable += 100;
+}
+int immutable_choice_sum(const ImmutableChoice *values, size_t count) {
+    if (count > 0 && (uintptr_t)values % _Alignof(ImmutableChoice) != 0) abort();
+    int sum = 0;
+    for (size_t index = 0; index < count; index++) sum += values[index].integer;
+    return sum;
+}
+int immutable_envelope_take(ImmutableEnvelope value) { return value.id + value.payload.integer; }
 void immutable_out(Immutable *value) {
     if ((uintptr_t)value % _Alignof(Immutable) != 0) abort();
     Immutable native = a_make(21);
