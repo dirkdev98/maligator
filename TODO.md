@@ -1907,7 +1907,7 @@ Libraries declared under `ffi` bind through their real headers: the generated C
 includes them, so the C compiler owns the ABI. Contracts hold facts only, generated
 functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
-- [ ] Map value unions and anonymous record members with explicit shape
+- [ ] Map value unions with explicit shape
       facts where C does not identify the active value.
 - [ ] Extend struct storage reuse to conditional loop updates and recurrences that
       expose a prior result to opaque calls before replacing it.

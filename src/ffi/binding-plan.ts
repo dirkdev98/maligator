@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
 	MaligatorFfiCallback,
 	MaligatorFfiCount,
@@ -6,7 +7,7 @@ import type {
 	MaligatorFfiVariant,
 } from "../public-api.d.ts";
 import type { CField, CFunction, CModel, CRecord } from "./c-model.ts";
-import { resolveCType } from "./c-model.ts";
+import { cRecordAccesses, promotedCFields, resolveCType } from "./c-model.ts";
 import { formatCDeclaration, parseCType } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import type { LibraryFacts } from "./contract.ts";
@@ -211,6 +212,7 @@ export interface MappedRecord {
 	readonly spelling: string;
 	readonly record: CRecord;
 	readonly fields: ReadonlyArray<MappedField>;
+	readonly private?: true;
 }
 
 /** A type whose values are handles, as the contract's facts and the headers define it. */
@@ -539,6 +541,7 @@ function functionFacts(model: CModel, facts: LibraryFacts): Map<string, Function
 
 class Planner {
 	readonly #model: CModel;
+	readonly #accesses: ReturnType<typeof cRecordAccesses>;
 	readonly records = new Map<string, MappedRecord>();
 	readonly #handles: ReadonlyMap<string, Omit<HandleType, "fields" | "managedFields">>;
 	readonly #recordGaps = new Map<string, string>();
@@ -549,6 +552,7 @@ class Planner {
 		handles: ReadonlyMap<string, Omit<HandleType, "fields" | "managedFields">>,
 	) {
 		this.#model = model;
+		this.#accesses = cRecordAccesses(model);
 		this.#handles = handles;
 	}
 
@@ -623,6 +627,9 @@ class Planner {
 						gap: `${handle.name} handles are pointers, not structs passed by value`,
 					};
 				}
+				const record = this.#model.records.get(resolved.name);
+				if (record !== undefined && this.#hasConstMember(record))
+					return { gap: `${record.name}: const members cannot be copied by value` };
 				return {
 					value: {
 						kind: "handle",
@@ -785,9 +792,30 @@ class Planner {
 		};
 	}
 
+	#hasConstMember(record: CRecord, seen = new Set<string>()): boolean {
+		if (seen.has(record.name)) return false;
+		seen.add(record.name);
+		return record.fields.some((field) => {
+			let type = resolveCType(this.#model, field.type);
+			while (type.kind === "array") type = resolveCType(this.#model, type.of);
+			if ("const" in type && type.const === true) return true;
+			const child =
+				type.kind === "record" ? this.#model.records.get(type.name) : undefined;
+			return child !== undefined && this.#hasConstMember(child, seen);
+		});
+	}
+
 	#record(name: string, tag: "struct" | "union"): Mapping {
-		const known = this.records.get(name);
-		if (known !== undefined) return { value: { kind: "record", name } };
+		const access = this.#accesses.get(name);
+		const anonymous = !/^[A-Za-z_]\w*$/.test(name);
+		const mappedName = anonymous
+			? `MaligatorFfiAnonymous_${createHash("sha256")
+					.update(JSON.stringify([access?.owner, access?.path]))
+					.digest("hex")
+					.slice(0, 16)}`
+			: name;
+		const known = this.records.get(mappedName);
+		if (known !== undefined) return { value: { kind: "record", name: mappedName } };
 		const failure = this.#recordGaps.get(name);
 		if (failure !== undefined) return { gap: failure };
 		const gap = (reason: string): Mapping => {
@@ -799,11 +827,15 @@ class Planner {
 		if (tag === "union" || record?.tag === "union") return gap("unions need a fact");
 		if (record === undefined || !record.complete)
 			return gap("opaque structs cannot pass by value");
+		if (access?.spelling === undefined)
+			return gap("the C type has no accessible spelling");
+		if (this.#hasConstMember(record))
+			return gap("const members cannot be copied by value");
 		if (this.#pending.has(name)) return gap("recursive struct");
 		this.#pending.add(name);
 		const fields: Array<MappedField> = [];
 		try {
-			for (const field of record.fields) {
+			for (const field of promotedCFields(this.#model, record)) {
 				if (field.name === undefined && field.bitWidth !== undefined) continue;
 				if (field.name === undefined) return gap("anonymous members need a fact");
 				const mapped = this.#field(field);
@@ -831,13 +863,14 @@ class Planner {
 		} finally {
 			this.#pending.delete(name);
 		}
-		this.records.set(name, {
-			name,
-			spelling: recordSpelling(this.#model, record),
+		this.records.set(mappedName, {
+			name: mappedName,
+			spelling: access.spelling,
 			record,
 			fields,
+			...(anonymous ? { private: true as const } : {}),
 		});
-		return { value: { kind: "record", name } };
+		return { value: { kind: "record", name: mappedName } };
 	}
 
 	/** The value fields a struct handle exposes; others stay hidden behind the handle. */
@@ -846,7 +879,7 @@ class Planner {
 		managed: ReadonlyArray<ManagedField>,
 	): Array<MappedField> {
 		const fields: Array<MappedField> = [];
-		for (const field of record.fields) {
+		for (const field of promotedCFields(this.#model, record)) {
 			if (field.name === undefined || managed.some((entry) => entry.name === field.name))
 				continue;
 			const mapped = this.#field(field);
@@ -870,12 +903,13 @@ class Planner {
 	): Array<ManagedField> {
 		const result: Array<ManagedField> = [];
 		const counts = new Set<string>();
+		const fields = [...promotedCFields(this.#model, record)];
 		for (const [name, fact] of Object.entries(facts)) {
 			const at = `types.${record.name}.fields.${name}`;
 			const kind = fact.string === undefined ? "bytes" : "string";
 			const counted = fact.string ?? fact.bytes;
-			const field = record.fields.find((entry) => entry.name === name);
-			const count = record.fields.find((entry) => entry.name === counted.length);
+			const field = fields.find((entry) => entry.name === name);
+			const count = fields.find((entry) => entry.name === counted.length);
 			const pointer =
 				field === undefined ? undefined : resolveCType(this.#model, field.type);
 			const integer =

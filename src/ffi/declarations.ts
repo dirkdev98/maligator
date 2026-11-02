@@ -45,7 +45,7 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string | F
 	for (const record of records) {
 		lines.push(
 			...docComment(record.record.doc, "\t"),
-			`\texport interface ${record.name} {`,
+			`\t${record.private === true ? "" : "export "}interface ${record.name} {`,
 		);
 		for (const field of record.fields) {
 			lines.push(

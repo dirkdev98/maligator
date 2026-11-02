@@ -118,7 +118,7 @@ export interface CModel {
 }
 
 /** Follow typedefs to the underlying type, keeping qualifiers spelled on the alias use. */
-export function resolveCType(model: CModel, type: CType): CType {
+export function resolveCType(model: Pick<CModel, "typedefs">, type: CType): CType {
 	let current = type;
 	const seen = new Set<string>();
 	while (current.kind === "typedef") {
@@ -137,4 +137,83 @@ export function resolveCType(model: CModel, type: CType): CType {
 			current = { ...current, const: true };
 	}
 	return current;
+}
+
+export interface CRecordAccess {
+	readonly owner: string;
+	readonly path: ReadonlyArray<string>;
+	/** Unevaluated member access, including C's promoted anonymous members. */
+	readonly expression: string;
+	readonly spelling?: string;
+}
+
+/** Spell nested anonymous types through an accessible containing declaration. */
+export function cRecordAccesses(
+	model: Pick<CModel, "records" | "typedefs">,
+): ReadonlyMap<string, CRecordAccess> {
+	const accesses = new Map<string, CRecordAccess>();
+	const visit = (record: CRecord, access: CRecordAccess): void => {
+		const known = accesses.get(record.name);
+		if (
+			known !== undefined &&
+			(known.spelling !== undefined || access.spelling === undefined)
+		)
+			return;
+		accesses.set(record.name, access);
+		for (const field of record.fields) {
+			let type = resolveCType(model, field.type);
+			let expression =
+				field.name === undefined
+					? access.expression
+					: `(${access.expression}).${field.name}`;
+			const path =
+				field.name === undefined ? [...access.path] : [...access.path, field.name];
+			while (type.kind === "array") {
+				type = resolveCType(model, type.of);
+				expression += "[0]";
+				path.push("[]");
+			}
+			if (type.kind !== "record") continue;
+			const child = model.records.get(type.name);
+			if (child !== undefined)
+				visit(child, {
+					owner: access.owner,
+					path,
+					expression,
+					...(field.name === undefined ? {} : { spelling: `__typeof__(${expression})` }),
+				});
+		}
+	};
+	for (const record of model.records.values()) {
+		if (!/^[A-Za-z_]\w*$/.test(record.name)) continue;
+		const alias = [...model.typedefs.values()].find(
+			(entry) =>
+				entry.type.kind === "record" &&
+				entry.type.name === record.name &&
+				entry.type.const !== true,
+		);
+		const spelling = record.named ? `${record.tag} ${record.name}` : alias?.name;
+		if (spelling === undefined) continue;
+		visit(record, {
+			owner: record.name,
+			path: [],
+			expression: `(*(${spelling} *)0)`,
+			spelling,
+		});
+	}
+	return accesses;
+}
+
+/** Anonymous structs promote their fields; anonymous unions retain their choice boundary. */
+export function* promotedCFields(
+	model: Pick<CModel, "records" | "typedefs">,
+	record: CRecord,
+): Generator<CField> {
+	for (const field of record.fields) {
+		const type = resolveCType(model, field.type);
+		const nested = type.kind === "record" ? model.records.get(type.name) : undefined;
+		if (field.name === undefined && nested?.tag === "struct")
+			yield* promotedCFields(model, nested);
+		else yield field;
+	}
 }

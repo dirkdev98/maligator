@@ -29,7 +29,7 @@ import type {
 	CTypedef,
 	CUntypedMacro,
 } from "./c-model.ts";
-import { resolveCType } from "./c-model.ts";
+import { cRecordAccesses, resolveCType } from "./c-model.ts";
 import { C_FLOAT_NAMES, C_INTEGER_NAMES, parseCType, unnamedTagKey } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import { clangProbeDeclarations, visitClangDeclarations } from "./clang-ast.ts";
@@ -1377,20 +1377,17 @@ function probeIntegerTypes(
 		field?: number;
 		enumeration?: string;
 	}> = [];
+	const accesses = cRecordAccesses(declarations);
 	for (const record of declarations.records.values()) {
-		if (
-			!/^[A-Za-z_]\w*$/.test(record.name) ||
-			(!record.named && !declarations.typedefs.has(record.name))
-		)
-			continue;
-		const spelling = record.named ? `${record.tag} ${record.name}` : record.name;
+		const access = accesses.get(record.name);
+		if (access === undefined) continue;
 		record.fields.forEach((field, index) => {
 			if (
 				field.name !== undefined &&
 				(field.bitWidth !== undefined || field.type.kind === "enum")
 			)
 				queries.push({
-					expression: `((${spelling} *)0)->${field.name}`,
+					expression: `(${access.expression}).${field.name}`,
 					record: record.name,
 					field: index,
 				});
@@ -1555,7 +1552,7 @@ export function extractCModelFromHeaders(
 	}
 	for (const entry of probes.typed) {
 		const documented = documentedMacro(entry.macro);
-		const resolved = resolveCType({ ...base, macros: [], untypedMacros: [] }, entry.type);
+		const resolved = resolveCType(base, entry.type);
 		// A macro that aliases a function or an unsupported type is not a constant.
 		if (resolved.kind === "function" || resolved.kind === "unsupported") {
 			untypedMacros.push(documented);

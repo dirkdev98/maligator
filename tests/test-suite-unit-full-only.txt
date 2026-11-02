@@ -22,4 +22,5 @@ tests/ffi-check.test.ts
 tests/ffi-inspect.test.ts
 tests/ffi-library.test.ts
 tests/ffi-model-cache.test.ts
+tests/ffi-record-shapes.test.ts
 tests/ffi-probe.test.ts

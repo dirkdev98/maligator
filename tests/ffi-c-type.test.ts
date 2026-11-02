@@ -46,6 +46,15 @@ describe("C type spellings", () => {
 			name: unnamedTagKey("/usr/include/x (1).h", 3, 9),
 		});
 	});
+	it("resolves Clang's containing-type prefix on anonymous C members", () => {
+		expect(
+			parseCType("struct Envelope::(anonymous at /usr/include/shape.h:5:9)"),
+		).toEqual({
+			kind: "record",
+			tag: "struct",
+			name: unnamedTagKey("/usr/include/shape.h", 5, 9),
+		});
+	});
 
 	it("records pointer nullability and keeps pointer constness", () => {
 		expect(parseCType("const char * _Nonnull const")).toEqual({

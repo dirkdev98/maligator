@@ -81,6 +81,10 @@ Conversions never coerce. A value of the wrong type throws a `TypeError`, and a 
 - A `const char *` parameter takes a string, passed as UTF-8 for the duration of the call. A string with a NUL character throws.
 - A `const char *` result is copied into a string. `NULL` becomes `null`.
 - A struct whose fields are all values passes as a plain object, copied in each direction.
+- Anonymous struct members keep C's promoted field names. Named fields with anonymous
+  struct types remain nested objects, including elements of fixed arrays.
+- Structs with const members need a pointer interface; value conversion assigns fields
+  individually.
 - Named bit-fields use their declared widths for range checks. Padding fields stay hidden;
   the C compiler owns layout and packing.
 - Enum members and macros are constants when their type maps, including struct literals such as raylib's `RAYWHITE`.

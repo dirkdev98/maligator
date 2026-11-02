@@ -62,7 +62,7 @@ export function unnamedTagKey(file: string, line: number, column: number): strin
 }
 
 const UNNAMED_TAG =
-	/^\((?:unnamed|anonymous)(?: (?:struct|union|enum))? at (.+):(\d+):(\d+)\)/;
+	/^(?:[A-Za-z_]\w*::)*\((?:unnamed|anonymous)(?: (?:struct|union|enum))? at (.+):(\d+):(\d+)\)/;
 
 type Token =
 	| { readonly kind: "word"; readonly text: string }
@@ -84,17 +84,15 @@ function tokenize(spelling: string): Array<Token> | undefined {
 			index += 3;
 			continue;
 		}
-		if ("*()[],".includes(char)) {
-			const previous = tokens.at(-1);
-			if (
-				char === "(" &&
-				previous?.kind === "word" &&
-				(previous.text === "struct" ||
-					previous.text === "union" ||
-					previous.text === "enum")
-			) {
-				const match = UNNAMED_TAG.exec(spelling.slice(index));
-				if (match === null) return undefined;
+		const previous = tokens.at(-1);
+		if (
+			previous?.kind === "word" &&
+			(previous.text === "struct" ||
+				previous.text === "union" ||
+				previous.text === "enum")
+		) {
+			const match = UNNAMED_TAG.exec(spelling.slice(index));
+			if (match !== null) {
 				tokens.push({
 					kind: "unnamed",
 					key: unnamedTagKey(match[1]!, Number(match[2]), Number(match[3])),
@@ -102,6 +100,8 @@ function tokenize(spelling: string): Array<Token> | undefined {
 				index += match[0].length;
 				continue;
 			}
+		}
+		if ("*()[],".includes(char)) {
 			tokens.push({ kind: "punct", text: char });
 			index++;
 			continue;
