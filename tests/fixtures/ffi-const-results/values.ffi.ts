@@ -9,6 +9,13 @@ export default {
 	functions: {
 		immutable_token_make: { async: "makeTokenAsync" },
 		immutable_token_borrow: { returns: { borrowed: true }, async: "borrowTokenAsync" },
+		immutable_token_consume: { async: "consumeTokenAsync" },
+		immutable_token_destroy: { async: "destroyTokenAsync" },
+		immutable_token_array: { params: { values: { array: { length: "count" } } } },
+		immutable_token_with_callback: {
+			async: "consumeTokenWithCallbackAsync",
+			params: { callback: { callback: { data: "data" } } },
+		},
 		immutable_token_visit: {
 			async: "visitTokenAsync",
 			params: { callback: { callback: { data: "data" } } },

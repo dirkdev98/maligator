@@ -326,6 +326,20 @@ class BindingWriter {
 		return record !== undefined && cRecordHasConstMembers(this.#model, record);
 	}
 
+	#constHandleArguments(binding: BoundFunction): ReadonlySet<number> {
+		return new Set(
+			binding.arguments.flatMap((entry, index) => {
+				const value =
+					entry.kind === "input" ? binding.params[entry.param]!.value : undefined;
+				return value?.kind === "handle" &&
+					value.pass === "copy" &&
+					this.#immutableRecord(binding.declaration.params[index]!.type)
+					? [index]
+					: [];
+			}),
+		);
+	}
+
 	#handle(name: string): HandleType {
 		const handle = this.#plan.handles.get(name);
 		if (handle === undefined) throw new Error(`binding plan has no handle '${name}'`);
@@ -1748,6 +1762,7 @@ class BindingWriter {
 		const siteName = callable?.site ?? name;
 		const owner = callable?.owner;
 		const declaration = binding.declaration;
+		const constHandles = this.#constHandleArguments(binding);
 		const locals: Array<string> = [];
 		const body: Array<string> = [];
 		/** Buffers resolve last: nothing may run JavaScript between them and the call. */
@@ -1855,7 +1870,8 @@ class BindingWriter {
 					`if (${local} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 				);
 				cleanup.push(`free(${local});`);
-			} else locals.push(`${localDeclaration(param.type, local)};`);
+			} else if (!constHandles.has(index))
+				locals.push(`${localDeclaration(param.type, local)};`);
 			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
 			switch (entry.kind) {
 				case "count":
@@ -2184,6 +2200,7 @@ class BindingWriter {
 					if (
 						value.kind === "handle" &&
 						(runsJavaScript ||
+							constHandles.has(index) ||
 							binding.closes === entry.param ||
 							this.managedFamily(value.name))
 					) {
@@ -2212,7 +2229,7 @@ class BindingWriter {
 									]
 								: []),
 							value.pass === "copy"
-								? `${local} = *(${handle.spelling} *) ${pointer};`
+								? `${constHandles.has(index) ? localDeclaration(param.type, local) : local} = *(${handle.spelling} *) ${pointer};`
 								: `${local} = (${localDeclaration(param.type, "")}) ${pointer};`,
 						);
 						return;
@@ -2451,6 +2468,7 @@ class BindingWriter {
 	asyncFunction(binding: BoundFunction, exported: string): Array<string> {
 		const name = binding.name;
 		const declaration = binding.declaration;
+		const constHandles = this.#constHandleArguments(binding);
 		const initializeReturn = this.#immutableRecord(declaration.returns);
 		const returnValue = initializeReturn
 			? "(*mal_ctx->mal_return)"
@@ -2567,7 +2585,9 @@ class BindingWriter {
 		binding.arguments.forEach((entry, index) => {
 			const param = declaration.params[index]!;
 			const target = `mal_ctx->mal_argument_${String(index)}`;
-			fields.push(`${localDeclaration(param.type, `mal_argument_${String(index)}`)};`);
+			fields.push(
+				`${localDeclaration(constHandles.has(index) ? { kind: "pointer", to: param.type } : param.type, `mal_argument_${String(index)}`)};`,
+			);
 			const resolved = resolveCType(this.#model, param.type);
 			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
 			switch (entry.kind) {
@@ -2810,10 +2830,19 @@ class BindingWriter {
 									]
 								: []),
 							`mal_keep[${String(kept++)}] = ${source};`,
-							value.pass === "copy"
-								? `${target} = *(${handle.spelling} *) ${pointer};`
-								: `${target} = (${localDeclaration(param.type, "")}) ${pointer};`,
+							...(constHandles.has(index)
+								? [
+										`${target} = mal_ffi_allocate_storage(1, sizeof(*${target}), _Alignof(${handle.spelling}));`,
+										`if (${target} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_failed; }`,
+										`__builtin_memcpy(${target}, ${pointer}, sizeof(*${target}));`,
+									]
+								: [
+										value.pass === "copy"
+											? `${target} = *(${handle.spelling} *) ${pointer};`
+											: `${target} = (${localDeclaration(param.type, "")}) ${pointer};`,
+									]),
 						);
+						if (constHandles.has(index)) frees.push(`free(${target});`);
 						if (binding.closes === entry.param) {
 							body.push(`mal_ctx->mal_closing = ${source};`);
 							buffers.push(
@@ -2853,7 +2882,7 @@ class BindingWriter {
 			frees.push("free(mal_ctx->mal_return);");
 		}
 		for (const temporary of strings) fields.push(`MalFfiString ${temporary};`);
-		const call = `${declaration.name}(${declaration.params.map((_, index) => `mal_ctx->mal_argument_${String(index)}`).join(", ")})`;
+		const call = `${declaration.name}(${declaration.params.map((_, index) => `${constHandles.has(index) ? "*" : ""}mal_ctx->mal_argument_${String(index)}`).join(", ")})`;
 		const count = countValue(binding, binding.resultCount, "mal_ctx->");
 		const produce: Array<string> = returns
 			? this.#owned(

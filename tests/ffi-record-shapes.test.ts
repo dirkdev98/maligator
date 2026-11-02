@@ -44,6 +44,9 @@ it("binds const-member results regardless of earlier rejected inputs", () => {
 		"immutable_token_make",
 		"immutable_token_borrow",
 		"immutable_token_visit",
+		"immutable_token_consume",
+		"immutable_token_destroy",
+		"immutable_token_with_callback",
 	])
 		expect(report.functions.find((fn) => fn.name === name)?.status).toBe("bound");
 });
@@ -54,8 +57,7 @@ it.each([
 	"immutable_inout",
 	"immutable_array",
 	"immutable_callback_result",
-	"immutable_token_consume",
-	"immutable_token_destroy",
+	"immutable_token_array",
 ])("keeps const-member initialization out of the %s input path", (name) => {
 	const directory = project("ffi-const-results");
 	const result = cli(directory, "inspect", "const_values", "--json");
@@ -76,7 +78,7 @@ it("preserves anonymous field declarations when the project moves", () => {
 	expect(sdk).not.toContain(second);
 });
 it.each([false, true])(
-	"reports const anonymous members with a handle fact %s",
+	"maps const anonymous inputs through copied handles %s",
 	(handles) => {
 		const directory = project();
 		if (handles)
@@ -102,7 +104,8 @@ it.each([false, true])(
 		};
 		for (const name of ["shapes_const_copy", "shapes_const_promoted"]) {
 			const entry = report.functions.find((candidate) => candidate.name === name);
-			expect(entry?.status).toBe("needs-facts");
+			expect(entry?.status).toBe(handles ? "bound" : "needs-facts");
+			if (handles) continue;
 			expect(
 				entry?.gaps?.some((gap) =>
 					gap.reason.includes("const members cannot be copied by value"),

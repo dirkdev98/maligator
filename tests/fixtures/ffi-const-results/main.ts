@@ -17,6 +17,13 @@ import {
 	immutable_token_address,
 	immutable_token_visit,
 	visitTokenAsync,
+	immutable_token_consume,
+	consumeTokenAsync,
+	immutable_token_destroy,
+	destroyTokenAsync,
+	immutable_token_with_callback,
+	consumeTokenWithCallbackAsync,
+	immutable_token_set,
 } from "maligator:ffi/const_values";
 import type { Immutable, ImmutableToken } from "maligator:ffi/const_values";
 
@@ -138,5 +145,49 @@ checkExpired(escaped);
 check(
 	immutable_token_destroyed() === 2,
 	"queued const callback handles preserve borrowed lifetime",
+);
+const consumed = immutable_token_make(13);
+check(immutable_token_consume(consumed) === 27, "const handle input by value");
+check((await consumeTokenAsync(consumed)) === 27, "worker const handle input by value");
+const updateDuringCall = (): void => {
+	let pinned = false;
+	try {
+		consumed[Symbol.dispose]();
+	} catch (error) {
+		pinned = error instanceof TypeError;
+	}
+	check(pinned, "copied const handle stays pinned during the C call");
+	immutable_token_set(consumed, 41);
+};
+check(
+	immutable_token_with_callback(consumed, updateDuringCall) === 27 &&
+		consumed.detail === 41,
+	"native value input is a snapshot before callback mutation",
+);
+immutable_token_set(consumed, 14);
+check(
+	(await consumeTokenWithCallbackAsync(consumed, updateDuringCall)) === 27 &&
+		consumed.detail === 41,
+	"worker value input owns its snapshot before callback mutation",
+);
+immutable_token_destroy(consumed);
+check(
+	immutable_token_destroyed() === 3 && immutable_token_destroy_sum() === 27,
+	"explicit const-value destructor closes its handle once",
+);
+const closing = immutable_token_make(17);
+const destroyed = destroyTokenAsync(closing);
+let closingRejected = false;
+try {
+	immutable_token_consume(closing);
+} catch (error) {
+	closingRejected = error instanceof TypeError;
+}
+check(closingRejected, "worker destruction rejects new const-value uses");
+await destroyed;
+closing[Symbol.dispose]();
+check(
+	immutable_token_destroyed() === 4 && immutable_token_destroy_sum() === 44,
+	"worker const-value destructor releases its copy exactly once",
 );
 console.log("const results passed");

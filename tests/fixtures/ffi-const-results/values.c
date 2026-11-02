@@ -14,6 +14,9 @@ void immutable_token_destroy(ImmutableToken value) { token_destroyed++; token_de
 int immutable_token_destroyed(void) { return token_destroyed; }
 int immutable_token_destroy_sum(void) { return token_destroy_sum; }
 uintptr_t immutable_token_address(const ImmutableToken *value) { return (uintptr_t)value; }
+int immutable_token_consume(ImmutableToken value) { return value.token + value.detail; }
+int immutable_token_with_callback(ImmutableToken value, void (*callback)(void *), void *data) { callback(data); return value.token + value.detail; }
+void immutable_token_set(ImmutableToken *value, int detail) { value->detail = detail; }
 void immutable_token_visit(int seed, void (*callback)(ImmutableToken, void *), void *data) { callback(immutable_token_make(seed), data); }
 int immutable_visit(int seed, int (*callback)(Immutable, void *), void *data) {
     return callback(a_make(seed), data) + seed;

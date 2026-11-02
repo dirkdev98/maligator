@@ -17,6 +17,9 @@ int immutable_token_destroyed(void);
 int immutable_token_destroy_sum(void);
 uintptr_t immutable_token_address(const ImmutableToken *value);
 int immutable_token_consume(ImmutableToken value);
+int immutable_token_with_callback(ImmutableToken value, void (*callback)(void *), void *data);
+void immutable_token_set(ImmutableToken *value, int detail);
+int immutable_token_array(const ImmutableToken *values, size_t count);
 void immutable_token_visit(int seed, void (*callback)(ImmutableToken, void *), void *data);
 
 extern Immutable immutable_fixed;

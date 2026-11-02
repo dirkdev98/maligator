@@ -1909,7 +1909,7 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       floating representations beyond JavaScript numbers.
 
 - [ ] Support variable-sized caller storage and const-member constructors for inputs,
-      output buffers, unions, and copied-handle arguments.
+      output buffers, and unions.
 
 - [ ] Extend compound resource-bearing results with explicit ownership and lifetime.
 

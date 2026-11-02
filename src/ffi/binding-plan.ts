@@ -766,6 +766,7 @@ class Planner {
 				const record = this.#model.records.get(resolved.name);
 				if (
 					position !== "return" &&
+					position !== "param" &&
 					record !== undefined &&
 					cRecordHasConstMembers(this.#model, record)
 				)
@@ -815,6 +816,16 @@ class Planner {
 			};
 		}
 		if (facts.array !== undefined) {
+			const record =
+				target.kind === "record" ? this.#model.records.get(target.name) : undefined;
+			if (
+				position === "param" &&
+				record !== undefined &&
+				cRecordHasConstMembers(this.#model, record)
+			)
+				return {
+					gap: `array element: ${record.name}: const members need initialization`,
+				};
 			// Elements of a borrowed array, such as a callback's, stay the library's.
 			const element = this.value(type.to, position === "param" ? "param" : "return", {
 				...(facts.borrowed === true ? { borrowed: true } : {}),
