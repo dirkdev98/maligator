@@ -59,11 +59,20 @@ export interface CRecord {
 	/** False for an opaque (forward-declared) record. */
 	readonly complete: boolean;
 	readonly fields: ReadonlyArray<CField>;
+	readonly layout?: CRecordLayout;
+	readonly attributes?: ReadonlyArray<string>;
 	/** Whether code spells it `struct name` or only through a typedef. */
 	readonly named: boolean;
 	readonly doc?: FfiText;
 	readonly location: CLocation;
 	readonly library: boolean;
+}
+
+/** Target layout in bits, including unnamed and zero-width bit-fields in declaration order. */
+export interface CRecordLayout {
+	readonly sizeBits: number;
+	readonly alignmentBits: number;
+	readonly fieldOffsetsBits: ReadonlyArray<number>;
 }
 
 export interface CEnumConstant {

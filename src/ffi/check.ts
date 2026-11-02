@@ -199,11 +199,17 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 				if (!(key in declarations)) {
 					declarations[key] = null;
 					const entry = model.records.get(value.name);
+					if (entry?.complete === true && entry.layout === undefined)
+						throw new FfiError(
+							`cannot snapshot ${key}: Clang did not identify an unambiguous record layout`,
+						);
 					declarations[key] =
 						entry === undefined
 							? null
 							: json({
 									complete: entry.complete,
+									layout: entry.layout,
+									attributes: entry.attributes,
 									fields: entry.fields.map((field, index) => ({
 										name: field.name,
 										bitWidth: field.bitWidth,

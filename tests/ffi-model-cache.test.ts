@@ -63,6 +63,74 @@ afterEach(() => {
 });
 
 describe("preprocessed C model cache", () => {
+	it("retains native layouts for packed, anonymous, and bit-field records", () => {
+		const directory = project();
+		writeFileSync(
+			path.join(directory, "cache.h"),
+			`
+static inline int local(void) { struct Public { double other; }; return sizeof(struct Public); }
+struct Public { char marker; int value; };
+typedef struct __attribute__((packed)) {
+  char marker;
+  unsigned first:3;
+  unsigned :0;
+  unsigned second:5;
+  struct { char value; } nested;
+} Packed;
+struct Opaque;
+#define DECLARE_RECORD(name) typedef struct { char value; } name
+DECLARE_RECORD(MacroRecord);
+`,
+		);
+		const request = input(directory);
+		const model = extractCModel(request);
+		expect(model.records.get("Public")?.layout).toEqual({
+			sizeBits: 64,
+			alignmentBits: 32,
+			fieldOffsetsBits: [0, 32],
+		});
+		const packed = model.records.get("Packed");
+		expect(packed?.layout).toEqual({
+			sizeBits: 48,
+			alignmentBits: 8,
+			fieldOffsetsBits: [0, 8, 32, 32, 40],
+		});
+		expect(packed?.attributes).toContain("Packed");
+		const nested = packed?.fields.at(-1)?.type;
+		expect(nested?.kind).toBe("record");
+		if (nested?.kind === "record")
+			expect(model.records.get(nested.name)?.layout).toEqual({
+				sizeBits: 8,
+				alignmentBits: 8,
+				fieldOffsetsBits: [0],
+			});
+		expect(model.records.get("Opaque")?.layout).toBeUndefined();
+		expect(model.records.get("MacroRecord")?.layout).toEqual({
+			sizeBits: 8,
+			alignmentBits: 8,
+			fieldOffsetsBits: [0],
+		});
+	});
+
+	it("refreshes layout metadata after a packing change and retains it on cache hits", () => {
+		const directory = project();
+		const header = path.join(directory, "cache.h");
+		const declaration = "struct Public { char marker; int value; };\n";
+		writeFileSync(header, declaration);
+		const request = input(directory);
+		const before = loadCModel(request).records.get("Public")?.layout;
+		expect(before).toEqual({
+			sizeBits: 64,
+			alignmentBits: 32,
+			fieldOffsetsBits: [0, 32],
+		});
+		expect(loadCModel(request).records.get("Public")?.layout).toEqual(before);
+		writeFileSync(header, `#pragma pack(push, 1)\n${declaration}#pragma pack(pop)\n`);
+		const after = loadCModel(request).records.get("Public")?.layout;
+		expect(after).toEqual({ sizeBits: 40, alignmentBits: 8, fieldOffsetsBits: [0, 8] });
+		expect(loadCModel(request).records.get("Public")?.layout).toEqual(after);
+	});
+
 	it("keeps compiler scratch outside the guarded input directories", () => {
 		const directory = project();
 		const previous = process.env.TMPDIR;

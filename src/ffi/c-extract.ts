@@ -26,6 +26,7 @@ import type {
 	CModel,
 	CParameter,
 	CRecord,
+	CRecordLayout,
 	CTarget,
 	CTypedef,
 	CUntypedMacro,
@@ -36,6 +37,7 @@ import type { CType } from "./c-type.ts";
 import { clangProbeDeclarations, visitClangDeclarations } from "./clang-ast.ts";
 import { FfiError, FfiSourceChangedError } from "./ffi-error.ts";
 import { macroReferences } from "./macros.ts";
+import { clangRecordLayouts } from "./record-layout.ts";
 import { FfiText, joinText } from "./text.ts";
 
 export interface CExtractionInput {
@@ -669,6 +671,7 @@ function collectDeclarations(
 	topLevel: ReadonlyArray<JsonObject>,
 	cwd: string,
 	isLibraryFile: (file: string) => boolean,
+	layouts: ReadonlyMap<string, CRecordLayout | null>,
 ): Declarations {
 	const documentation = new Documentation();
 
@@ -739,11 +742,20 @@ function collectDeclarations(
 			});
 		}
 		const doc = library ? documentation.declaration(span) : undefined;
+		const tag = node.tagUsed === "union" ? "union" : "struct";
+		const layout = layouts.get(`${tag} ${key}`);
 		records.set(key, {
 			name: key,
-			tag: node.tagUsed === "union" ? "union" : "struct",
+			tag,
 			complete,
 			fields,
+			...(complete &&
+			layout !== null &&
+			layout !== undefined &&
+			layout.fieldOffsetsBits.length === fields.length
+				? { layout }
+				: {}),
+			attributes: attributeKinds(node),
 			named: isNamed(node),
 			...(doc === undefined ? {} : { doc }),
 			location: { file: span.location.file, line: span.location.line },
@@ -1689,6 +1701,24 @@ export function extractCModelFromHeaders(
 	if (dump.status !== 0) {
 		throw new FfiError(`the library headers do not compile:\n${dump.stderr.trim()}`);
 	}
+	const layoutDump = runCompiler(input, [
+		FFI_C_STANDARD,
+		"-fsyntax-only",
+		"-Xclang",
+		"-skip-function-bodies",
+		"-Xclang",
+		"-fdump-record-layouts-complete",
+		"-Xclang",
+		"-fdump-record-layouts-simple",
+		...input.compileArguments,
+		"-w",
+		"-x",
+		"c",
+		probePath,
+	]);
+	if (layoutDump.status !== 0)
+		throw new FfiError(`cannot extract C record layouts:\n${layoutDump.stderr.trim()}`);
+	const layouts = clangRecordLayouts(layoutDump.stdout.toString("utf8"));
 	const nodes: Array<JsonObject> = [];
 	// Clang compresses locations across declarations, including function bodies we drop.
 	const resolveLocations = createLocationResolver();
@@ -1706,7 +1736,7 @@ export function extractCModelFromHeaders(
 	const declarations = probeDeclarationTypes(
 		input,
 		headers,
-		collectDeclarations(nodes, cwd, isLibraryFile),
+		collectDeclarations(nodes, cwd, isLibraryFile, layouts),
 	);
 
 	const probes = probe(input, headers.valueProbe, headers.candidates);

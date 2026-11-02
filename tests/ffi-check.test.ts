@@ -85,6 +85,93 @@ afterEach(() => {
 });
 
 describe("ffi check", () => {
+	it.each([
+		{
+			name: "packing",
+			before: "struct ShapesAbi { char marker; int value; };",
+			after:
+				"#pragma pack(push, 1)\nstruct ShapesAbi { char marker; int value; };\n#pragma pack(pop)",
+			property: "sizeBits",
+			beforeValue: 64,
+			afterValue: 40,
+		},
+		{
+			name: "alignment with unchanged size",
+			before: "struct __attribute__((aligned(16))) ShapesAbi { int values[16]; };",
+			after: "struct __attribute__((aligned(32))) ShapesAbi { int values[16]; };",
+			property: "alignmentBits",
+			beforeValue: 128,
+			afterValue: 256,
+		},
+		{
+			name: "field offsets with unchanged size and alignment",
+			before:
+				"struct __attribute__((aligned(16))) ShapesAbi { char marker; int value; };",
+			after:
+				"struct __attribute__((packed,aligned(16))) ShapesAbi { char marker; int value; };",
+			property: "fieldOffsetsBits",
+			beforeValue: [0, 32],
+			afterValue: [0, 8],
+		},
+	])(
+		"detects $name while generated JavaScript types stay unchanged",
+		({ before, after, property, beforeValue, afterValue }) => {
+			const directory = project();
+			const file = path.join(directory, "include/shapes.h");
+			const declarations = (record: string) =>
+				`${header}\n${record}\nstruct ShapesAbi shapes_layout(struct ShapesAbi value);\n`;
+			writeFileSync(file, declarations(before));
+			accept(directory);
+			expect(cli(directory, ["types"]).status).toBe(0);
+			const types = readFileSync(path.join(directory, "maligator-ffi.d.ts"), "utf8");
+			writeFileSync(file, declarations(after));
+			expect(cli(directory, ["types"]).status).toBe(0);
+			expect(readFileSync(path.join(directory, "maligator-ffi.d.ts"), "utf8")).toBe(
+				types,
+			);
+			expect(check(directory, [], 1).libraries[0]?.changes).toContainEqual({
+				path: `declarations.struct ShapesAbi.layout.${property}`,
+				kind: "changed",
+				before: beforeValue,
+				after: afterValue,
+			});
+		},
+	);
+
+	it("refuses to approve conflicting layouts with the same scoped tag name", () => {
+		const directory = project();
+		appendFileSync(
+			path.join(directory, "include/shapes.h"),
+			`
+void private_prototype(struct ShapesAbi { double other; } value);
+struct ShapesAbi { char marker; int value; };
+struct ShapesAbi shapes_layout(struct ShapesAbi value);
+`,
+		);
+		const result = cli(directory, ["check", "--update"]);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("cannot snapshot struct ShapesAbi");
+		expect(existsSync(path.join(directory, "maligator-ffi.lock.json"))).toBe(false);
+	});
+
+	it("watches packing for a record used only by a hidden sizeof argument", () => {
+		const directory = project();
+		const file = path.join(directory, "include/shapes.h");
+		const declarations = `${header}\ntypedef struct ShapesAbi { char marker; int value; } ShapesAbi;\nint shapes_abi(int size);\n`;
+		writeFileSync(file, declarations);
+		writeContract(directory, {
+			functions: { shapes_abi: { params: { size: { sizeof: "ShapesAbi" } } } },
+		});
+		accept(directory);
+		writeFileSync(file, `#pragma pack(push, 1)\n${declarations}\n#pragma pack(pop)\n`);
+		expect(check(directory, [], 1).libraries[0]?.changes).toContainEqual({
+			path: "declarations.struct ShapesAbi.layout.sizeBits",
+			kind: "changed",
+			before: 64,
+			after: 40,
+		});
+	});
+
 	it("detects a bit-field width change when its TypeScript type stays the same", () => {
 		const directory = project();
 		const file = path.join(directory, "include/shapes.h");
