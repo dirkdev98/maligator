@@ -34,6 +34,37 @@ artifact identity, image counts, generated-object measurements, executable size,
 cache outcomes. Use `--plan=json` before execution, `--category` or repeatable `--case`
 for focused work, and `--preset confirm --case ID` for deeper selected evidence.
 
+### C library calls
+
+On macOS, `bench:ffi` compares C, Bun FFI, and Maligator FFI against the same
+installed shared libraries. Inspect the selected cases and budget before building:
+
+```sh
+npm run bench:ffi -- --phase build --sqlite-prefix /opt/homebrew/opt/sqlite --output .cache/ffi-comparison --plan=json
+npm run bench:ffi -- --phase build --sqlite-prefix /opt/homebrew/opt/sqlite --output .cache/ffi-comparison
+npm run bench:ffi -- --phase measure --output .cache/ffi-comparison --budget-seconds 180 --plan=json
+npm run bench:ffi -- --phase measure --output .cache/ffi-comparison --budget-seconds 180
+```
+
+The prefixes need `include/` and `lib/`. zstd and OpenSSL default to their
+`pkg-config` prefixes; override them with `--zstd-prefix` and `--crypto-prefix`.
+Use a fresh output directory for each build and measurement. Keep the checkout
+unchanged between phases. Repeat `--case MODE` to narrow the modes listed by the plan.
+
+The runner freezes iteration counts after calibrating C, alternates caller order,
+and checks outputs and library resolution. SQLite uses a shared adapter because
+the runtimes can embed their own SQLite builds. Each timed adapter export forwards
+one call, while zstd and EVP updates call their libraries directly. Both JavaScript
+callers use exact BigInt values for `size_t` and pass Buffer views without caching
+raw pointers. C and Maligator use matching optimization and linker flags; Bun uses
+its own FFI JIT.
+
+`report.json` retains source and binary identities, latency samples, whole-process
+CPU and peak RSS, executable and library sizes, power state, and free disk space.
+Latency excludes setup, warmup, and output validation; resource counters include
+them. A single round is indicative, and the report does not classify an optimization
+or replace a saved baseline.
+
 Use `--owner primordial-methods` to select the 50 grouped primordial microbenchmarks.
 `bench/runtime-gap/primordial-methods.json` records the selected 200 callable identities.
 Their catalog `methods` list records the methods exercised in each measured workload;
