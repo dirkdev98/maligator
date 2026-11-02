@@ -1,5 +1,7 @@
 /* oxlint-disable no-console -- The fixture reports observable C ABI behavior. */
 import {
+	rows_notify,
+	notifyAsync,
 	rows_fill,
 	rows_fill_visit,
 	fillVisitAsync,
@@ -334,4 +336,55 @@ check(
 	(await fillAsync(2n)).values.length === 1,
 	"caller array cleanup permits the next worker call",
 );
+for (const mode of [0, 1, 4]) {
+	let delivered = false;
+	await new Promise<void>((resolve) => {
+		rows_notify(mode, (copiedRows, copiedCells) => {
+			if (mode === 0) {
+				check(
+					copiedRows?.[1]?.join(",") === "7,11,13",
+					"notification rows survive native stack reuse",
+				);
+				check(
+					copiedCells?.[1]?.[0].value === 1 && copiedCells[1][1].writable === 11,
+					"aligned const rows survive native storage release",
+				);
+			} else if (mode === 1) {
+				check(
+					copiedRows?.length === 0 && copiedCells?.length === 0,
+					"non-null empty notification arrays stay empty",
+				);
+			} else {
+				check(
+					copiedRows === null && copiedCells === null,
+					"null notification arrays stay null",
+				);
+			}
+			delivered = true;
+			resolve();
+		});
+		check(!delivered, "foreign notifications wait for the VM after the native join");
+	});
+	check(delivered, "notification is delivered after native callback release");
+}
+for (const mode of [2, 3]) {
+	let rejected = false;
+	let called = false;
+	try {
+		await notifyAsync(mode, () => {
+			called = true;
+		});
+	} catch (error) {
+		rejected = error instanceof RangeError;
+	}
+	check(
+		rejected && !called,
+		"invalid notification counts reject without reading array storage",
+	);
+}
+let recovered = false;
+await notifyAsync(0, (copiedRows) => {
+	recovered = copiedRows?.[0]?.[0] === 2;
+});
+check(recovered, "copy errors leave later callback groups usable");
 console.log("array rows passed");

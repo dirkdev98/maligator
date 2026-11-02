@@ -1,5 +1,6 @@
 #include "rows.h"
 #include <stdint.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -114,3 +115,29 @@ void ints_fill(int *values, size_t capacity, size_t *written) {
 }
 
 void rows_fill_visit(Row *values, size_t capacity, size_t *written, void (*callback)(void *), void *data) { rows_fill(values, capacity, written); callback(data); }
+
+
+typedef struct {
+    int mode;
+    void (*callback)(const Row *, int64_t, const CellRow *, int64_t, void *);
+    void *data;
+    void (*release)(void *);
+} RowNotification;
+static void *rows_produce_notification(void *argument) {
+    RowNotification *job = argument;
+    Row rows[2] = {{2, 3, 5}, {7, 11, 13}};
+    CellRow *cells = cells_make(2);
+    int64_t count = job->mode == 1 ? 0 : job->mode == 2 ? -1 : job->mode == 3 ? INT64_MAX : 2;
+    job->callback(job->mode == 4 ? NULL : rows, count, job->mode == 4 ? NULL : cells, count, job->data);
+    memset(rows, 0, sizeof(rows));
+    memset(cells, 0, 2 * sizeof(CellRow));
+    free(cells);
+    job->release(job->data);
+    return NULL;
+}
+void rows_notify(int mode, void (*callback)(const Row *, int64_t, const CellRow *, int64_t, void *), void *data, void (*release)(void *)) {
+    RowNotification job = {mode, callback, data, release};
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, rows_produce_notification, &job) != 0) abort();
+    if (pthread_join(thread, NULL) != 0) abort();
+}

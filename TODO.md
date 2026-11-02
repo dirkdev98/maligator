@@ -1912,7 +1912,7 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] Describe text and byte representations for fixed character array rows.
 
-- [ ] Copy counted array arguments for queued notification callbacks.
+- [ ] Copy pointer-bearing counted array elements for queued notification callbacks.
 
 - [ ] Extend compound resource-bearing results with explicit ownership and lifetime.
 

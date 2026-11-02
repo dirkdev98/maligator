@@ -10,6 +10,22 @@ export default {
 		TaggedCell: { shape: { tag: "kind", cases: { "1": ["payload.integer"] } } },
 	},
 	functions: {
+		rows_notify: {
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						queued: true,
+						params: {
+							"1": { array: { length: "2" }, nullable: true },
+							"3": { array: { length: "4" }, nullable: true },
+						},
+					},
+				},
+			},
+			async: "notifyAsync",
+		},
 		rows_fill_visit: {
 			params: {
 				values: { out: true, array: { length: "written", capacity: "capacity" } },

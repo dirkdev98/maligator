@@ -2139,7 +2139,7 @@ class BindingWriter {
 			return (
 				!waiting &&
 				typeof param === "object" &&
-				(param.kind === "string" || param.kind === "bytes")
+				(param.kind === "string" || param.kind === "bytes" || param.kind === "sequence")
 			);
 		};
 		const checkedCopies =
@@ -2147,7 +2147,9 @@ class BindingWriter {
 			value.params.some(
 				(param) =>
 					typeof param === "object" &&
-					(param.kind === "bytes" || (param.kind === "string" && param.counted)),
+					(param.kind === "bytes" ||
+						param.kind === "sequence" ||
+						(param.kind === "string" && param.counted)),
 			);
 		const initialized = new Set(
 			type.params.flatMap((type, index) => (this.#immutableRecord(type) ? [index] : [])),
@@ -2160,16 +2162,21 @@ class BindingWriter {
 			if (
 				waiting ||
 				typeof param !== "object" ||
-				(param.kind !== "string" && param.kind !== "bytes")
+				(param.kind !== "string" && param.kind !== "bytes" && param.kind !== "sequence")
 			) {
 				return [`${field} = ${source};`];
 			}
-			if (param.kind === "bytes" || param.counted) {
+			if (param.kind === "bytes" || param.kind === "sequence" || param.counted) {
 				const copy = `mal_copy_${String(index)}`;
 				const status = `mal_copy_status_${String(index)}`;
+				const count = `(uint64_t) mal_c${String(value.counts[index]!)}`;
+				const call =
+					param.kind === "sequence"
+						? `mal_ffi_copy_callback_array(${source}, ${count}, sizeof(*${source}), _Alignof(__typeof__(*${source})), &${copy})`
+						: `mal_ffi_copy_callback_bytes(${source}, ${count}, ${param.kind === "string"}, &${copy})`;
 				return [
 					`void *${copy};`,
-					`MalFfiCopyStatus ${status} = mal_ffi_copy_callback_bytes(${source}, (uint64_t) mal_c${String(value.counts[index]!)}, ${param.kind === "string"}, &${copy});`,
+					`MalFfiCopyStatus ${status} = ${call};`,
 					`${field} = ${copy};`,
 					`if (mal_message->mal_copy_error == MAL_FFI_COPY_OK) mal_message->mal_copy_error = ${status};`,
 				];

@@ -408,10 +408,23 @@ MalFfiCopyStatus mal_ffi_copy_callback_bytes(
     return MAL_FFI_COPY_OK;
 }
 
+MalFfiCopyStatus mal_ffi_copy_callback_array(
+    const void *source, uint64_t length, size_t stride, size_t alignment, void **out) {
+    *out = nullptr;
+    if (source == nullptr) return MAL_FFI_COPY_OK;
+    if (length > INT32_MAX || stride == 0 || length > SIZE_MAX / stride)
+        return MAL_FFI_COPY_RANGE;
+    void *copy = mal_ffi_allocate_storage(length == 0 ? 1 : (size_t) length, stride, alignment);
+    if (copy == nullptr) return MAL_FFI_COPY_MEMORY;
+    if (length > 0) memcpy(copy, source, (size_t) length * stride);
+    *out = copy;
+    return MAL_FFI_COPY_OK;
+}
+
 void mal_ffi_callback_copy_error(MalVm *vm, MalFfiCopyStatus status) {
     if (status == MAL_FFI_COPY_RANGE)
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-            (const byte *) "C callback byte count is out of range");
+            (const byte *) "C callback count is out of range");
     else if (status == MAL_FFI_COPY_MEMORY) mal_vm_throw_allocation_error(vm);
 }
 

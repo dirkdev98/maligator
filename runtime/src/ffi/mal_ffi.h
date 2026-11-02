@@ -397,6 +397,9 @@ typedef enum MalFfiCopyStatus {
 /** Copy a counted callback argument on its producer thread without touching the VM. */
 MalFfiCopyStatus mal_ffi_copy_callback_bytes(
     const void *source, uint64_t length, bool text, void **out);
+/** Preserve native element alignment while copying a notification's array storage. */
+MalFfiCopyStatus mal_ffi_copy_callback_array(
+    const void *source, uint64_t length, size_t stride, size_t alignment, void **out);
 /** Report a producer's copy failure when its message reaches the VM thread. */
 void mal_ffi_callback_copy_error(MalVm *vm, MalFfiCopyStatus status);
 /** Copy `length` bytes into a new Uint8Array. */

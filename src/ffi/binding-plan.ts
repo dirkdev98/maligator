@@ -1558,6 +1558,27 @@ class Planner {
 		);
 	}
 
+	#notificationElement(value: JsValue): boolean {
+		switch (value.kind) {
+			case "boolean":
+			case "integer":
+			case "float":
+			case "bigint":
+				return true;
+			case "array":
+			case "union":
+				return this.#notificationElement(value.of);
+			case "record":
+				return this.records
+					.get(value.name)!
+					.fields.every((field) => this.#notificationElement(field.value));
+			case "tagged":
+				return value.cases.every((entry) => this.#notificationElement(entry.value));
+			default:
+				return false;
+		}
+	}
+
 	#callback(
 		type: CType,
 		nullable: boolean,
@@ -1710,6 +1731,18 @@ class Planner {
 				throw new FfiError(
 					`${at}.callback.queued: resource-bearing values require a waiting callback`,
 				);
+			if (
+				callback.queued !== "wait" &&
+				params.some(
+					(param) =>
+						typeof param === "object" &&
+						param.kind === "sequence" &&
+						!this.#notificationElement(param.of),
+				)
+			)
+				throw new FfiError(
+					`${at}.callback.queued: notification arrays need pointer-free value elements`,
+				);
 			// A queued call outlives the C caller's arguments, so it gets copies of values.
 			const copyable = params.every(
 				(param) =>
@@ -1724,7 +1757,7 @@ class Planner {
 						"record",
 						"union",
 						"tagged",
-						...(callback.queued === "wait" ? ["sequence"] : []),
+						"sequence",
 						...(callback.closes !== undefined || callback.queued === "wait"
 							? ["handle"]
 							: []),
