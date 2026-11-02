@@ -374,6 +374,7 @@ describe("command shell", () => {
 				path.join(repoRoot, "THIRD_PARTY_NOTICES.md"),
 			],
 			testModulePath: path.join(repoRoot, "src/testing/runtime.mjs"),
+			testHostModulePath: path.join(repoRoot, "src/testing/host-driver.mts"),
 			nodeGlobalsPath: path.join(repoRoot, "src/node-globals.mjs"),
 			platformSourceRoot: path.join(repoRoot, "src"),
 			frontendIdentity: "compact-type-strip-v7",
