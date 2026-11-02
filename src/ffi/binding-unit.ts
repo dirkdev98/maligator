@@ -576,6 +576,10 @@ class BindingWriter {
 				];
 			}
 			case "array": {
+				if (value.format !== undefined)
+					return [
+						`if (!mal_ffi_to_fixed_${value.format}(vm, ${source}, (void *) (${target}), ${value.length}, ${site})) ${fail}`,
+					];
 				const resolved = resolveCType(this.#model, type);
 				if (resolved.kind !== "array")
 					throw new Error("array mapping without an array type");
@@ -713,6 +717,10 @@ class BindingWriter {
 			case "tagged":
 				return `mal_ffi_tagged_out_${value.name}(vm, ${expression}, ${lent})`;
 			case "array":
+				if (value.format === "string")
+					return `mal_ffi_from_fixed_string(vm, ${expression}, ${value.length})`;
+				if (value.format === "bytes")
+					return `mal_ffi_from_bytes(vm, ${expression}, ${value.length})`;
 				throw new Error("arrays are written field by field");
 		}
 	}
@@ -807,7 +815,7 @@ class BindingWriter {
 		target: string,
 		lent: boolean | string = false,
 	): Array<string> {
-		if (value.kind !== "array") {
+		if (value.kind !== "array" || value.format !== undefined) {
 			return [
 				`${target} = ${this.write(value, expression, lent)};`,
 				...(this.#allocates(value) ? ["if (mal_ffi_threw(vm)) goto mal_done;"] : []),

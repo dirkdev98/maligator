@@ -1,5 +1,27 @@
 /* oxlint-disable no-console -- The fixture reports observable C ABI behavior. */
 import {
+	char_rows_sum,
+	sumCharRowsAsync,
+	const_char_rows_sum,
+	sumConstCharRowsAsync,
+	char_grids_sum,
+	sumCharGridsAsync,
+	byte_rows_sum,
+	sumByteRowsAsync,
+	char_rows_make,
+	makeCharRowsAsync,
+	byte_rows_make,
+	makeByteRowsAsync,
+	char_rows_inout,
+	inoutCharRowsAsync,
+	byte_rows_inout,
+	inoutByteRowsAsync,
+	char_rows_fill,
+	fillCharRowsAsync,
+	char_rows_visit,
+	visitCharRowsAsync,
+	char_rows_notify,
+	notifyCharRowsAsync,
 	texts_notify,
 	notifyTextsAsync,
 	rows_notify,
@@ -431,4 +453,144 @@ await notifyTextsAsync(0, (copied) => {
 	textRecovered = copied?.[1]?.[0] === "caf\u00e9";
 });
 check(textRecovered, "text copy errors release the callback registration");
+const nativeText = ["one", "caf\u00e9", ""];
+for (const run of [
+	char_rows_sum,
+	sumCharRowsAsync,
+	const_char_rows_sum,
+	sumConstCharRowsAsync,
+]) {
+	check(
+		(await run(nativeText)) === 8 && (await run([])) === 0,
+		"fixed text rows use bounded UTF-8 bytes",
+	);
+}
+check(
+	char_grids_sum([["one", "two"]]) === 6 &&
+		(await sumCharGridsAsync([["caf\u00e9", ""]])) === 5,
+	"nested fixed grids retain text row boundaries",
+);
+const textSnapshot = ["one", "two"];
+const textJob = sumCharRowsAsync(textSnapshot);
+textSnapshot[0] = "changed";
+check((await textJob) === 6, "workers snapshot fixed text before returning");
+for (const invalid of ["12345678", "\u00e9\u00e9\u00e9\u00e9", "a\0b"]) {
+	const before = rows_taken();
+	let rejected = false;
+	try {
+		char_rows_sum([invalid]);
+	} catch (error) {
+		rejected = error instanceof TypeError;
+	}
+	check(
+		rejected && rows_taken() === before,
+		"invalid UTF-8 capacity or NUL input never enters C",
+	);
+}
+check(
+	char_rows_sum(["1234567", "\u00e9\u00e9\u00e9"]) === 13,
+	"text capacity includes its terminator",
+);
+const rowBacking = new Uint8Array([90, 1, 2, 3, 4, 91]);
+const rowView = rowBacking.subarray(1, 5);
+for (const run of [byte_rows_sum, sumByteRowsAsync]) {
+	check(
+		(await run([rowView, new Uint8Array([5, 6, 7, 8])])) === 36,
+		"fixed bytes accept exact subviews including zero bytes",
+	);
+}
+for (const invalid of [new Uint8Array(3), new Uint8Array(5)]) {
+	const before = rows_taken();
+	let rejected = false;
+	try {
+		byte_rows_sum([invalid]);
+	} catch (error) {
+		rejected = error instanceof TypeError;
+	}
+	check(
+		rejected && rows_taken() === before,
+		"byte rows enforce their native width before C",
+	);
+}
+for (const run of [char_rows_make, makeCharRowsAsync]) {
+	check(
+		(await run(0, 2n))?.join(",") === "one,caf\u00e9",
+		"C-owned text rows decode within each bound",
+	);
+	const before = rows_freed();
+	let rejected = false;
+	try {
+		await run(1, 2n);
+	} catch (error) {
+		rejected = error instanceof RangeError;
+	}
+	check(
+		rejected && rows_freed() === before + 1,
+		"unterminated result rows release the outer allocation",
+	);
+}
+for (const run of [byte_rows_make, makeByteRowsAsync]) {
+	const copied = await run(2n);
+	check(
+		copied?.[0]?.join(",") === "0,1,2,3" && copied[1]?.join(",") === "10,11,12,13",
+		"C byte rows return independent views",
+	);
+}
+for (const run of [char_rows_inout, inoutCharRowsAsync]) {
+	const result = await run(["one", "two"]);
+	check(
+		result.values.join(",") === "Xne" && result.count === 1n,
+		"inout text rows decode the shortened output",
+	);
+}
+for (const run of [byte_rows_inout, inoutByteRowsAsync]) {
+	const result = await run([rowView, rowView]);
+	check(
+		result.values[0]?.join(",") === "101,2,3,4" &&
+			result.count === 1n &&
+			rowView[0] === 1,
+		"inout byte rows keep input backing independent",
+	);
+}
+for (const run of [char_rows_fill, fillCharRowsAsync]) {
+	check(
+		(await run(3n)).values.join(",") === "filled,filled" &&
+			(await run(0n)).values.length === 0,
+		"out text rows honor capacity and written count",
+	);
+}
+for (const run of [char_rows_visit, visitCharRowsAsync] as const) {
+	let visited = false;
+	await run(["one", "caf\u00e9"], (values) => {
+		visited = values?.join(",") === "one,caf\u00e9";
+	});
+	check(visited, "synchronous and waiting callbacks decode fixed text rows");
+}
+await new Promise<void>((resolve) => {
+	char_rows_notify(0, (values) => {
+		check(
+			values?.join(",") === "one,caf\u00e9",
+			"notifications own inline text rows after native release",
+		);
+		resolve();
+	});
+});
+let invalidNotification = false;
+let invalidCalled = false;
+try {
+	await notifyCharRowsAsync(1, () => {
+		invalidCalled = true;
+	});
+} catch (error) {
+	invalidNotification = error instanceof RangeError;
+}
+check(
+	invalidNotification && !invalidCalled,
+	"unterminated notification rows reject on the VM thread",
+);
+let charsRecovered = false;
+await notifyCharRowsAsync(0, (values) => {
+	charsRecovered = values?.[0] === "one";
+});
+check(charsRecovered, "bounded text failure leaves later groups usable");
 console.log("array rows passed");

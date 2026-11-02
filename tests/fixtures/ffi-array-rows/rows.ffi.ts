@@ -10,6 +10,82 @@ export default {
 		TaggedCell: { shape: { tag: "kind", cases: { "1": ["payload.integer"] } } },
 	},
 	functions: {
+		char_rows_sum: {
+			params: { values: { array: { length: "count", element: { string: true } } } },
+			async: "sumCharRowsAsync",
+		},
+		const_char_rows_sum: {
+			params: { values: { array: { length: "count", element: { string: true } } } },
+			async: "sumConstCharRowsAsync",
+		},
+		char_grids_sum: {
+			params: { values: { array: { length: "count", element: { string: true } } } },
+			async: "sumCharGridsAsync",
+		},
+		byte_rows_sum: {
+			params: { values: { array: { length: "count", element: { bytes: true } } } },
+			async: "sumByteRowsAsync",
+		},
+		char_rows_make: {
+			returns: {
+				array: { length: "count", element: { string: true } },
+				free: "rows_free",
+			},
+			async: "makeCharRowsAsync",
+		},
+		byte_rows_make: {
+			returns: {
+				array: { length: "count", element: { bytes: true } },
+				free: "rows_free",
+			},
+			async: "makeByteRowsAsync",
+		},
+		char_rows_inout: {
+			params: {
+				values: { inout: true, array: { length: "count", element: { string: true } } },
+			},
+			async: "inoutCharRowsAsync",
+		},
+		byte_rows_inout: {
+			params: {
+				values: { inout: true, array: { length: "count", element: { bytes: true } } },
+			},
+			async: "inoutByteRowsAsync",
+		},
+		char_rows_fill: {
+			params: {
+				values: {
+					out: true,
+					array: { length: "written", capacity: "capacity", element: { string: true } },
+				},
+			},
+			async: "fillCharRowsAsync",
+		},
+		char_rows_visit: {
+			params: {
+				values: { array: { length: "count", element: { string: true } } },
+				callback: {
+					callback: {
+						data: "data",
+						params: { "1": { array: { length: "2", element: { string: true } } } },
+					},
+				},
+			},
+			async: "visitCharRowsAsync",
+		},
+		char_rows_notify: {
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						queued: true,
+						params: { "1": { array: { length: "2", element: { string: true } } } },
+					},
+				},
+			},
+			async: "notifyCharRowsAsync",
+		},
 		texts_notify: {
 			params: {
 				callback: {

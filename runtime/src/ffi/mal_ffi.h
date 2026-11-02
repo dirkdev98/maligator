@@ -299,6 +299,9 @@ bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, 
 bool mal_ffi_to_bytes(
     MalVm *vm, MalValue value, bool nullable, bool writable, const MalFfiSite *site,
     void **data, size_t *length, void **pin);
+/** Copy a fixed row after checking its UTF-8 capacity or exact byte length. */
+bool mal_ffi_to_fixed_string(MalVm *vm, MalValue value, void *target, size_t capacity, const MalFfiSite *site);
+bool mal_ffi_to_fixed_bytes(MalVm *vm, MalValue value, void *target, size_t capacity, const MalFfiSite *site);
 /** Release a pin from `mal_ffi_to_bytes`; null is ignored. */
 void mal_ffi_unpin(void *pin);
 /** The element count of an array argument; null yields 0 for a nullable site. */
@@ -389,6 +392,8 @@ MalValue mal_ffi_from_uint64(MalVm *vm, uint64_t value);
 MalValue mal_ffi_from_string(MalVm *vm, const char *value);
 /** Copy exactly length UTF-8 bytes, replacing invalid sequences and preserving NULs. */
 MalValue mal_ffi_from_string_length(MalVm *vm, const char *value, size_t length);
+/** Decode a character row only when its terminator lies within the native bound. */
+MalValue mal_ffi_from_fixed_string(MalVm *vm, const void *value, size_t capacity);
 typedef enum MalFfiCopyStatus {
     MAL_FFI_COPY_OK,
     MAL_FFI_COPY_RANGE,

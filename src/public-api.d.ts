@@ -193,7 +193,11 @@ export interface MaligatorFfiValueFacts {
 	/** Elements passed or returned as an array. For an out buffer, `capacity` names
 	 * an integer input that bounds caller-owned storage; it stays in the JS signature.
 	 */
-	array?: MaligatorFfiCount & { capacity?: string };
+	array?: MaligatorFfiCount & {
+		capacity?: string;
+		/** Decode fixed character rows as bounded UTF-8 text or exact byte views. */
+		element?: { string: true; bytes?: never } | { bytes: true; string?: never };
+	};
 	/** Release a copied string, buffer, or array result with this function. */
 	free?: string;
 	/** A function pointer the library calls during the call with a JavaScript function. */

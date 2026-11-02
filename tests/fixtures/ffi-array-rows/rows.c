@@ -166,3 +166,76 @@ void texts_notify(int mode, void (*callback)(const TextRow *, int64_t, void *), 
     if (pthread_create(&thread, NULL, texts_produce_notification, &job) != 0) abort();
     if (pthread_join(thread, NULL) != 0) abort();
 }
+
+int char_rows_sum(const CharRow *values, size_t count) {
+    taken++;
+    int sum = 0;
+    for (size_t i = 0; i < count; i++) {
+        const char *end = memchr(values[i], 0, sizeof(CharRow));
+        if (end == NULL) abort();
+        sum += (int)(end - values[i]);
+    }
+    return sum;
+}
+int const_char_rows_sum(const ConstCharRow *values, size_t count) { return char_rows_sum(values, count); }
+int char_grids_sum(const CharRow (*values)[2], size_t count) {
+    int sum = 0;
+    for (size_t i = 0; i < count; i++) sum += char_rows_sum(values[i], 2);
+    return sum;
+}
+int byte_rows_sum(const ByteRow *values, size_t count) {
+    taken++;
+    int sum = 0;
+    for (size_t i = 0; i < count; i++) for (size_t j = 0; j < sizeof(ByteRow); j++) sum += values[i][j];
+    return sum;
+}
+CharRow *char_rows_make(int invalid, size_t count) {
+    CharRow *values = calloc(count == 0 ? 1 : count, sizeof(CharRow));
+    if (values == NULL) abort();
+    for (size_t i = 0; i < count; i++) memcpy(values[i], i == 0 ? "one" : "caf\xc3\xa9", i == 0 ? 4 : 6);
+    if (invalid && count > 0) memset(values[count - 1], 'x', sizeof(CharRow));
+    return values;
+}
+ByteRow *byte_rows_make(size_t count) {
+    ByteRow *values = malloc((count == 0 ? 1 : count) * sizeof(ByteRow));
+    if (values == NULL) abort();
+    for (size_t i = 0; i < count; i++) for (size_t j = 0; j < sizeof(ByteRow); j++) values[i][j] = (unsigned char)(i * 10 + j);
+    return values;
+}
+void char_rows_inout(CharRow *values, size_t *count) {
+    taken++;
+    for (size_t i = 0; i < *count; i++) values[i][0] = 'X';
+    if (*count > 0) --*count;
+}
+void byte_rows_inout(ByteRow *values, size_t *count) {
+    taken++;
+    for (size_t i = 0; i < *count; i++) values[i][0] += 100;
+    if (*count > 0) --*count;
+}
+void char_rows_fill(CharRow *values, size_t capacity, size_t *written) {
+    taken++;
+    *written = capacity > 2 ? 2 : capacity;
+    for (size_t i = 0; i < *written; i++) memcpy(values[i], "filled", 7);
+}
+void char_rows_visit(const CharRow *values, size_t count, void (*callback)(const CharRow *, size_t, void *), void *data) { callback(values, count, data); }
+typedef struct {
+    int invalid;
+    void (*callback)(const CharRow *, size_t, void *);
+    void *data;
+    void (*release)(void *);
+} CharNotification;
+static void *chars_produce_notification(void *argument) {
+    CharNotification *job = argument;
+    CharRow *values = char_rows_make(job->invalid, 2);
+    job->callback(values, 2, job->data);
+    memset(values, 0, 2 * sizeof(CharRow));
+    free(values);
+    job->release(job->data);
+    return NULL;
+}
+void char_rows_notify(int invalid, void (*callback)(const CharRow *, size_t, void *), void *data, void (*release)(void *)) {
+    CharNotification job = {invalid, callback, data, release};
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, chars_produce_notification, &job) != 0) abort();
+    if (pthread_join(thread, NULL) != 0) abort();
+}

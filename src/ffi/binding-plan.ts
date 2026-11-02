@@ -88,7 +88,12 @@ export type JsValue =
 			readonly of: JsValue;
 			readonly alias?: string;
 	  }
-	| { readonly kind: "array"; readonly of: JsValue; readonly length: number }
+	| {
+			readonly kind: "array";
+			readonly of: JsValue;
+			readonly length: number;
+			readonly format?: "string" | "bytes";
+	  }
 	/**
 	 * A JavaScript function the library calls through a generated trampoline of the C
 	 * function type `type`, during the call or, when kept, until it releases it.
@@ -741,6 +746,10 @@ class Planner {
 		if (facts.array?.capacity !== undefined)
 			throw new FfiError("array.capacity applies to caller-owned output buffers");
 		const resolved = resolveCType(this.#model, type);
+		if (facts.array?.element !== undefined && resolved.kind !== "pointer")
+			throw new FfiError(
+				"array.element requires a pointer to fixed character array rows",
+			);
 		if (
 			facts.shape !== undefined &&
 			resolved.kind !== "record" &&
@@ -879,6 +888,16 @@ class Planner {
 			};
 		}
 		if (facts.array !== undefined) {
+			const format =
+				facts.array.element?.string === true
+					? "string"
+					: facts.array.element?.bytes === true
+						? "bytes"
+						: undefined;
+			if (format !== undefined && target.kind !== "array")
+				throw new FfiError("array.element requires fixed character array rows");
+			if (format !== undefined && facts.shape !== undefined)
+				throw new FfiError("array.element character formats cannot use a record shape");
 			// Elements of a borrowed array, such as a callback's, stay the library's.
 			const elementFacts = {
 				...(facts.borrowed === true ? { borrowed: true } : {}),
@@ -887,7 +906,7 @@ class Planner {
 			const elementPosition = position === "param" ? "param" : "return";
 			const element =
 				target.kind === "array"
-					? this.#array(target, elementPosition, elementFacts)
+					? this.#array(target, elementPosition, elementFacts, format)
 					: this.value(type.to, elementPosition, elementFacts);
 			if ("gap" in element) return { gap: `array element: ${element.gap}` };
 			if (element.value.kind === "sequence" || element.value.kind === "bytes") {
@@ -971,21 +990,30 @@ class Planner {
 		type: Extract<CType, { kind: "array" }>,
 		position: Position,
 		facts: MaligatorFfiValueFacts = NO_FACTS,
+		format?: "string" | "bytes",
 	): Mapping {
 		if (type.length === undefined)
 			return { gap: "an array without a length needs a fact" };
 		if (type.length === 0) return { gap: "a fixed array needs a positive length" };
 		const element = resolveCType(this.#model, type.of);
 		if (element.kind === "integer" && element.name.endsWith("char")) {
+			if (format !== undefined) {
+				const mapped = this.value(type.of, position);
+				return "gap" in mapped
+					? mapped
+					: { value: { kind: "array", of: mapped.value, length: type.length, format } };
+			}
 			return { gap: `${formatCDeclaration(type)} needs a fact: a string or bytes` };
 		}
+		if (format !== undefined && element.kind !== "array")
+			return { gap: "array.element requires fixed character array rows" };
 		const elementFacts = {
 			...(facts.borrowed === true ? { borrowed: true } : {}),
 			...(facts.shape === undefined ? {} : { shape: facts.shape }),
 		};
 		const mapped =
 			element.kind === "array"
-				? this.#array(element, position, elementFacts)
+				? this.#array(element, position, elementFacts, format)
 				: this.value(type.of, position, elementFacts);
 		return "gap" in mapped
 			? { gap: `array element: ${mapped.gap}` }
@@ -2459,7 +2487,7 @@ class Planner {
 						"return",
 						{
 							...valueFacts,
-							array: { length: valueFacts.array!.length },
+							array: { ...valueFacts.array!, capacity: undefined },
 							nullable: undefined,
 						},
 						at,

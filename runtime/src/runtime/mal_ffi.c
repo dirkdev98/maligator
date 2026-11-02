@@ -283,6 +283,30 @@ __attribute__((always_inline)) bool mal_ffi_to_bytes(
     return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, expectation);
 }
 
+bool mal_ffi_to_fixed_string(MalVm *vm, MalValue value, void *target, size_t capacity, const MalFfiSite *site) {
+    MalFfiString text = {};
+    if (!mal_ffi_to_string(vm, value, false, MAL_FFI_STRING_BORROW, site, &text)) return false;
+    bool fits = text.length < capacity;
+    if (fits) {
+        memset(target, 0, capacity);
+        memcpy(target, text.data, text.length);
+    } else mal_ffi_expected(vm, site, "UTF-8 text shorter than the declared array capacity");
+    mal_ffi_string_release(&text);
+    return fits;
+}
+
+bool mal_ffi_to_fixed_bytes(MalVm *vm, MalValue value, void *target, size_t capacity, const MalFfiSite *site) {
+    void *data;
+    size_t length;
+    if (!mal_ffi_to_bytes(vm, value, false, false, site, &data, &length, nullptr)) return false;
+    if (length != capacity) {
+        mal_ffi_expected(vm, site, "bytes matching the declared array capacity");
+        return false;
+    }
+    memcpy(target, data, length);
+    return true;
+}
+
 void mal_ffi_unpin(void *pin) {
     if (pin != nullptr) ((MalArrayBufferObject *) pin)->pins--;
 }
@@ -393,6 +417,16 @@ MalValue mal_ffi_from_string_length(MalVm *vm, const char *value, size_t length)
         return mal_value_new_undefined();
     }
     return mal_value_from_string(string);
+}
+
+MalValue mal_ffi_from_fixed_string(MalVm *vm, const void *value, size_t capacity) {
+    const void *end = memchr(value, 0, capacity);
+    if (end == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            (const byte *) "C string has no terminator within its array bound");
+        return mal_value_new_undefined();
+    }
+    return mal_ffi_from_string_length(vm, value, (const byte *) end - (const byte *) value);
 }
 
 MalFfiCopyStatus mal_ffi_copy_callback_bytes(

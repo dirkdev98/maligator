@@ -266,7 +266,10 @@ export function formatTsType(
 		case "handle":
 			return nullable(value.name);
 		case "array": {
-			const element = formatTsType(value.of);
+			if (value.format === "string") return "string";
+			if (value.format === "bytes")
+				return direction === "input" ? "ArrayBufferLike | ArrayBufferView" : "Uint8Array";
+			const element = formatTsType(value.of, direction);
 			return value.length <= 16
 				? `[${Array.from({ length: value.length }, () => element).join(", ")}]`
 				: `Array<${element}>`;

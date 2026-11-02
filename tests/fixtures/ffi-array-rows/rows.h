@@ -43,3 +43,18 @@ void rows_notify(int mode, void (*callback)(const Row *, int64_t, const CellRow 
 
 typedef const char *const TextRow[3];
 void texts_notify(int mode, void (*callback)(const TextRow *, int64_t, void *), void *data, void (*release)(void *));
+
+typedef char CharRow[8];
+typedef const char ConstCharRow[8];
+typedef unsigned char ByteRow[4];
+int char_rows_sum(const CharRow *values, size_t count);
+int const_char_rows_sum(const ConstCharRow *values, size_t count);
+int char_grids_sum(const CharRow (*values)[2], size_t count);
+int byte_rows_sum(const ByteRow *values, size_t count);
+CharRow *char_rows_make(int invalid, size_t count);
+ByteRow *byte_rows_make(size_t count);
+void char_rows_inout(CharRow *values, size_t *count);
+void byte_rows_inout(ByteRow *values, size_t *count);
+void char_rows_fill(CharRow *values, size_t capacity, size_t *written);
+void char_rows_visit(const CharRow *values, size_t count, void (*callback)(const CharRow *, size_t, void *), void *data);
+void char_rows_notify(int invalid, void (*callback)(const CharRow *, size_t, void *), void *data, void (*release)(void *));

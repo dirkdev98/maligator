@@ -1910,8 +1910,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] Support const-member tagged values whose discriminator overlaps union storage.
 
-- [ ] Describe text and byte representations for fixed character array rows.
-
 - [ ] Extend compound resource-bearing results with explicit ownership and lifetime.
 
 - [ ] Support runtime-selected variadic signatures when a bounded typed contract can

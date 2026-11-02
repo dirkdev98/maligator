@@ -482,9 +482,16 @@ functions: {
 Counted arrays preserve fixed inner dimensions. A parameter such as
 `const int (*rows)[3]` with `array: { length: "count" }` takes an array of
 three-element tuples; only the outer length supplies `count`. Numeric and record
-rows work through synchronous calls, workers, and waiting callbacks. Inputs use
+rows work through synchronous calls, workers, and callbacks. Inputs use
 native copies, and C-allocated results copy every row before `free` runs. A `shape`
 fact applies to each union leaf through the fixed dimensions.
+
+For fixed character rows, choose a representation in the array fact:
+`array: { length: "count", element: { string: true } }` maps `char (*)[N]` to
+strings. Each row must contain a NUL within its declared bound; input UTF-8 bytes
+must leave room for that terminator. `{ bytes: true }` maps each row to an exactly
+sized byte view and returns copied `Uint8Array` values. These formats also apply to
+rows within deeper fixed grids, caller output buffers, inout arrays, and callbacks.
 
 For caller-allocated array outputs, name both the written count and a capacity input:
 
