@@ -27,6 +27,7 @@ tests/native/ffi-globals.test.ts
 tests/native/ffi-aligned-values.test.ts
 tests/native/ffi-const-results.test.ts
 tests/native/ffi-const-tagged.test.ts
+tests/native/ffi-array-rows.test.ts
 tests/native/ffi-callback-results.test.ts
 tests/native/ffi-callables.test.ts
 tests/native/ffi-test-watch.test.ts

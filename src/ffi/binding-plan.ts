@@ -788,7 +788,7 @@ class Planner {
 				if (position === "param") {
 					return this.#pointer({ kind: "pointer", to: resolved.of }, position, facts);
 				}
-				return this.#array(resolved, position);
+				return this.#array(resolved, position, facts);
 			case "record": {
 				const handle = this.#handles.get(resolved.name);
 				if (
@@ -876,10 +876,15 @@ class Planner {
 		}
 		if (facts.array !== undefined) {
 			// Elements of a borrowed array, such as a callback's, stay the library's.
-			const element = this.value(type.to, position === "param" ? "param" : "return", {
+			const elementFacts = {
 				...(facts.borrowed === true ? { borrowed: true } : {}),
 				...(facts.shape === undefined ? {} : { shape: facts.shape }),
-			});
+			};
+			const elementPosition = position === "param" ? "param" : "return";
+			const element =
+				target.kind === "array"
+					? this.#array(target, elementPosition, elementFacts)
+					: this.value(type.to, elementPosition, elementFacts);
 			if ("gap" in element) return { gap: `array element: ${element.gap}` };
 			if (element.value.kind === "sequence" || element.value.kind === "bytes") {
 				return { gap: "arrays of arrays need a fact" };
@@ -958,14 +963,26 @@ class Planner {
 		};
 	}
 
-	#array(type: Extract<CType, { kind: "array" }>, position: Position): Mapping {
+	#array(
+		type: Extract<CType, { kind: "array" }>,
+		position: Position,
+		facts: MaligatorFfiValueFacts = NO_FACTS,
+	): Mapping {
 		if (type.length === undefined)
 			return { gap: "an array without a length needs a fact" };
+		if (type.length === 0) return { gap: "a fixed array needs a positive length" };
 		const element = resolveCType(this.#model, type.of);
 		if (element.kind === "integer" && element.name.endsWith("char")) {
 			return { gap: `${formatCDeclaration(type)} needs a fact: a string or bytes` };
 		}
-		const mapped = this.value(type.of, position);
+		const elementFacts = {
+			...(facts.borrowed === true ? { borrowed: true } : {}),
+			...(facts.shape === undefined ? {} : { shape: facts.shape }),
+		};
+		const mapped =
+			element.kind === "array"
+				? this.#array(element, position, elementFacts)
+				: this.value(type.of, position, elementFacts);
 		return "gap" in mapped
 			? { gap: `array element: ${mapped.gap}` }
 			: { value: { kind: "array", of: mapped.value, length: type.length } };
@@ -1703,6 +1720,7 @@ class Planner {
 						"record",
 						"union",
 						"tagged",
+						...(callback.queued === "wait" ? ["sequence"] : []),
 						...(callback.closes !== undefined || callback.queued === "wait"
 							? ["handle"]
 							: []),

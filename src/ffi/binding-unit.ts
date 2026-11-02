@@ -245,6 +245,12 @@ function localDeclaration(type: CType, name: string): string {
 	);
 }
 
+function pointerDeclaration(type: CType, name: string): string {
+	const element =
+		"const" in type && type.const === true ? { ...type, const: undefined } : type;
+	return formatCDeclaration({ kind: "pointer", to: element }, name);
+}
+
 /**
  * Emits C for one library. Every local and helper name starts with `mal_`, since
  * the library's headers are in scope and may define macros with common names.
@@ -333,6 +339,14 @@ class BindingWriter {
 		const record =
 			resolved.kind === "record" ? this.#model.records.get(resolved.name) : undefined;
 		return record !== undefined && cRecordHasConstMembers(this.#model, record);
+	}
+
+	#constStorage(type: CType): boolean {
+		const resolved = resolveCType(this.#model, type);
+		return resolved.kind === "array"
+			? this.#constStorage(resolved.of)
+			: ("const" in resolved && resolved.const === true) ||
+					this.#immutableRecord(resolved);
 	}
 
 	#constArguments(binding: BoundFunction): ReadonlySet<number> {
@@ -575,7 +589,8 @@ class BindingWriter {
 					const construct =
 						(value.of.kind === "record" ||
 							value.of.kind === "union" ||
-							value.of.kind === "tagged") &&
+							value.of.kind === "tagged" ||
+							(value.of.kind === "handle" && value.of.pass === "copy")) &&
 						this.#immutableRecord(resolved.of);
 					const spelling =
 						value.of.kind === "record"
@@ -596,7 +611,7 @@ class BindingWriter {
 							false,
 							construct,
 						),
-						`__builtin_memcpy(&(${target})[${index}], &${native}, sizeof(${native}));`,
+						`__builtin_memcpy((void *) &(${target})[${index}], &${native}, sizeof(${native}));`,
 					];
 				} else
 					converted = this.read(
@@ -738,10 +753,46 @@ class BindingWriter {
 			"else {",
 			`\t${target} = mal_ffi_new_array(vm, (int32_t) (${count}));`,
 			`\tfor (int32_t ${index} = 0; !mal_ffi_threw(vm) && ${index} < (int32_t) (${count}); ${index}++) {`,
-			`\t\tmal_ffi_set_element(vm, ${target}, ${index}, ${this.write(value.of, `(${expression})[${index}]`, true)});`,
+			...(value.of.kind === "array"
+				? this.#produceElement(
+						value.of,
+						`(${expression})[${index}]`,
+						target,
+						index,
+						true,
+					).map((line) => `\t\t${line}`)
+				: [
+						`\t\tmal_ffi_set_element(vm, ${target}, ${index}, ${this.write(value.of, `(${expression})[${index}]`, true)});`,
+					]),
 			"\t}",
 			"}",
 			"if (mal_ffi_threw(vm)) goto mal_done;",
+		];
+	}
+
+	#produceElement(
+		value: JsValue,
+		expression: string,
+		array: string,
+		index: string,
+		lent: boolean | string,
+	): Array<string> {
+		const element = this.#fresh("element");
+		const roots = this.#fresh("roots");
+		const stored = this.#fresh("stored");
+		return [
+			`MalValue ${element} = mal_ffi_undefined();`,
+			`MalFfiRoots ${roots};`,
+			`mal_ffi_root(&${roots}, &${element}, 1);`,
+			...this.#produce(value, expression, element, lent).map((line) =>
+				line.replaceAll(
+					"goto mal_done;",
+					`{ mal_ffi_unroot(&${roots}); goto mal_done; }`,
+				),
+			),
+			`bool ${stored} = mal_ffi_set_element(vm, ${array}, ${index}, ${element});`,
+			`mal_ffi_unroot(&${roots});`,
+			`if (!${stored}) goto mal_done;`,
 		];
 	}
 
@@ -761,24 +812,18 @@ class BindingWriter {
 				...(this.#allocates(value) ? ["if (mal_ffi_threw(vm)) goto mal_done;"] : []),
 			];
 		}
-		const element = this.#fresh("element");
-		const roots = this.#fresh("roots");
 		const index = this.#fresh("index");
-		const stored = this.#fresh("stored");
 		return [
 			`${target} = mal_ffi_new_array(vm, ${value.length});`,
 			"if (mal_ffi_threw(vm)) goto mal_done;",
 			`for (int32_t ${index} = 0; ${index} < ${value.length}; ${index}++) {`,
-			`\tMalValue ${element} = mal_ffi_undefined();`,
-			`\tMalFfiRoots ${roots};`,
-			`\tmal_ffi_root(&${roots}, &${element}, 1);`,
-			...this.#produce(value.of, `${expression}[${index}]`, element, lent).map(
-				(line) =>
-					`\t${line.replace("goto mal_done;", `{ mal_ffi_unroot(&${roots}); goto mal_done; }`)}`,
-			),
-			`\tbool ${stored} = mal_ffi_set_element(vm, ${target}, ${index}, ${element});`,
-			`\tmal_ffi_unroot(&${roots});`,
-			`\tif (!${stored}) goto mal_done;`,
+			...this.#produceElement(
+				value.of,
+				`${expression}[${index}]`,
+				target,
+				index,
+				lent,
+			).map((line) => `\t${line}`),
 			"}",
 		];
 	}
@@ -1657,6 +1702,7 @@ class BindingWriter {
 			const array = this.#fresh("array");
 			const roots = this.#fresh("roots");
 			const index = this.#fresh("index");
+			const done = this.#fresh("sequence_done");
 			return [
 				"if (!mal_ffi_threw(vm)) {",
 				`\tif ((${expression}) == nullptr) ${target} = mal_ffi_null();`,
@@ -1665,8 +1711,19 @@ class BindingWriter {
 				`\t\tMalFfiRoots ${roots};`,
 				`\t\tmal_ffi_root(&${roots}, &${array}, 1);`,
 				`\t\tfor (int32_t ${index} = 0; !mal_ffi_threw(vm) && ${index} < (int32_t) (${count}); ${index}++) {`,
-				`\t\t\tmal_ffi_set_element(vm, ${array}, ${index}, ${this.write(value.of, `(${expression})[${index}]`)});`,
+				...(value.of.kind === "array"
+					? this.#produceElement(
+							value.of,
+							`(${expression})[${index}]`,
+							array,
+							index,
+							false,
+						).map((line) => `\t\t\t${line.replaceAll("goto mal_done;", `goto ${done};`)}`)
+					: [
+							`\t\t\tmal_ffi_set_element(vm, ${array}, ${index}, ${this.write(value.of, `(${expression})[${index}]`)});`,
+						]),
 				"\t\t}",
+				...(value.of.kind === "array" ? [`${done}:;`] : []),
 				`\t\tmal_ffi_unroot(&${roots});`,
 				`\t\t${target} = ${array};`,
 				"\t}",
@@ -2562,14 +2619,18 @@ class BindingWriter {
 						return;
 					}
 					// Const members prohibit the assignments used by inline array staging.
-					if (value.kind === "sequence" && this.#immutableRecord(value.element)) {
+					if (
+						value.kind === "sequence" &&
+						(this.#immutableRecord(value.element) ||
+							(value.of.kind === "array" && this.#constStorage(value.element)))
+					) {
 						const elements = `mal_elements_${index}`;
 						const length = `mal_length_${index}`;
 						const position = this.#fresh("index");
 						const element = this.#fresh("element");
 						const native = this.#fresh("native_element");
 						locals.push(
-							`${localDeclaration(value.element, `*${elements}`)} = nullptr;`,
+							`${pointerDeclaration(value.element, elements)} = nullptr;`,
 							`int32_t ${length};`,
 						);
 						cleanup.push(`free(${elements});`);
@@ -2587,7 +2648,7 @@ class BindingWriter {
 								value.of,
 								value.element,
 								element,
-								native,
+								value.of.kind === "array" ? `${elements}[${position}]` : native,
 								site,
 								"goto mal_done;",
 								strings,
@@ -2596,7 +2657,11 @@ class BindingWriter {
 								false,
 								true,
 							).map((line) => `\t${line}`),
-							`\t__builtin_memcpy(&${elements}[${position}], &${native}, sizeof(${native}));`,
+							...(value.of.kind === "array"
+								? []
+								: [
+										`\t__builtin_memcpy(&${elements}[${position}], &${native}, sizeof(${native}));`,
+									]),
 							"}",
 							`${local} = (${localDeclaration(param.type, "")}) ${elements};`,
 						);
@@ -2612,7 +2677,7 @@ class BindingWriter {
 						const texts = value.of.kind === "string";
 						const storage = `mal_storage_${String(index)}`;
 						locals.push(
-							`${localDeclaration(value.element, `*${elements}`)} = nullptr;`,
+							`${pointerDeclaration(value.element, elements)} = nullptr;`,
 							`int32_t ${length} = 0;`,
 							`alignas(_Alignof(__typeof__(*${elements})) <= MAL_FFI_ARRAY_INLINE ? _Alignof(__typeof__(*${elements})) : _Alignof(max_align_t)) unsigned char ${storage}[MAL_FFI_ARRAY_INLINE];`,
 							`static_assert(sizeof(*${elements}) % _Alignof(__typeof__(*${elements})) == 0, "FFI array stride must preserve C alignment");`,
@@ -3345,14 +3410,18 @@ class BindingWriter {
 						setCount(index, `mal_bytes_length_${String(index)}`, site);
 						return;
 					}
-					if (value.kind === "sequence" && this.#immutableRecord(value.element)) {
+					if (
+						value.kind === "sequence" &&
+						(this.#immutableRecord(value.element) ||
+							(value.of.kind === "array" && this.#constStorage(value.element)))
+					) {
 						const elements = `mal_elements_${index}`;
 						const length = `mal_length_${index}`;
 						const position = this.#fresh("index");
 						const element = this.#fresh("element");
 						const native = this.#fresh("native_element");
 						fields.push(
-							`${localDeclaration(value.element, `*${elements}`)};`,
+							`${pointerDeclaration(value.element, elements)};`,
 							`int32_t ${length};`,
 						);
 						frees.push(`free(mal_ctx->${elements});`);
@@ -3370,7 +3439,7 @@ class BindingWriter {
 								value.of,
 								value.element,
 								element,
-								native,
+								value.of.kind === "array" ? `mal_ctx->${elements}[${position}]` : native,
 								site,
 								"goto mal_failed;",
 								strings,
@@ -3379,7 +3448,11 @@ class BindingWriter {
 								false,
 								true,
 							).map((line) => `\t${line}`),
-							`\t__builtin_memcpy(&mal_ctx->${elements}[${position}], &${native}, sizeof(${native}));`,
+							...(value.of.kind === "array"
+								? []
+								: [
+										`\t__builtin_memcpy(&mal_ctx->${elements}[${position}], &${native}, sizeof(${native}));`,
+									]),
 							"}",
 							`${target} = (${localDeclaration(param.type, "")}) mal_ctx->${elements};`,
 						);
@@ -3394,7 +3467,7 @@ class BindingWriter {
 						const element = this.#fresh("element");
 						const texts = value.of.kind === "string";
 						fields.push(
-							`${localDeclaration(value.element, `*${elements}`)};`,
+							`${pointerDeclaration(value.element, elements)};`,
 							`int32_t ${length};`,
 						);
 						if (texts) {

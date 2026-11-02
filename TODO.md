@@ -1910,7 +1910,11 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] Support const-member tagged values whose discriminator overlaps union storage.
 
-- [ ] Support counted outer arrays of fixed C arrays with explicit output capacities.
+- [ ] Add explicit output capacities and counted inout storage for fixed C array rows.
+
+- [ ] Describe text and byte representations for fixed character array rows.
+
+- [ ] Copy counted array arguments for queued notification callbacks.
 
 - [ ] Extend compound resource-bearing results with explicit ownership and lifetime.
 

@@ -479,6 +479,13 @@ functions: {
 - `string` marks a `char *` or `unsigned char *` as UTF-8 text.
 - `free` names the function that releases a string, buffer, or array result after it is copied.
 
+Counted arrays preserve fixed inner dimensions. A parameter such as
+`const int (*rows)[3]` with `array: { length: "count" }` takes an array of
+three-element tuples; only the outer length supplies `count`. Numeric and record
+rows work through synchronous calls, workers, and waiting callbacks. Inputs use
+native copies, and C-allocated results copy every row before `free` runs. A `shape`
+fact applies to each union leaf through the fixed dimensions.
+
 Use `string: { length: "byteCount" }` for UTF-8 pointer/count pairs. The count
 measures encoded bytes and disappears from input signatures. Counted text permits
 embedded NUL bytes; `string: true` remains NUL-terminated and rejects them on input.
