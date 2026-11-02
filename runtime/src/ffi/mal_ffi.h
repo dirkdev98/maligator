@@ -24,6 +24,7 @@ void *mal_ffi_calloc_storage(size_t count, size_t size, size_t alignment);
 
 typedef struct MalVm MalVm;
 typedef struct MalFfiInputs MalFfiInputs;
+typedef struct MalFfiWait MalFfiWait;
 typedef struct MalHostInstallSlot MalHostInstallSlot;
 typedef struct MalHostLaunchContext MalHostLaunchContext;
 typedef uint64_t MalValue;
@@ -503,13 +504,15 @@ bool mal_ffi_callback_queue(
     MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release);
 /**
  * Consume a reservation and message, waiting on a foreign thread for successful VM
- * execution. Copy the native result field before releasing the message; cancellation
- * leaves `result` untouched. The VM never writes into the producer's stack. The
- * generated entry disables cancellation until all its native references retire.
+ * execution. The returned request retains the message until its explicit release,
+ * including on cancellation. Read result storage only after success. The generated
+ * entry disables cancellation until its request and native references retire.
+ * Release a non-null request even when waiting returns false.
  */
 bool mal_ffi_callback_wait(
     MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release,
-    void *result, size_t result_offset, size_t result_size);
+    MalFfiWait **request);
+void mal_ffi_callback_wait_release(MalFfiWait *request);
 int mal_ffi_callback_wait_enter(void);
 void mal_ffi_callback_wait_leave(int cancellation_state);
 /** Cancel waiting callbacks before joining any thread that might be producing one. */

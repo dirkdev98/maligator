@@ -638,7 +638,7 @@ struct MalFfiState {
 static pthread_mutex_t ffi_queue_lock = PTHREAD_MUTEX_INITIALIZER;
 static MalFfiClose *ffi_closes;
 
-typedef struct MalFfiWait {
+struct MalFfiWait {
     struct MalFfiWait *next;
     /** Comparison key only: the request may outlive both VM and callback context. */
     MalVm *vm;
@@ -648,7 +648,7 @@ typedef struct MalFfiWait {
     bool succeeded;
     void *message;
     MalFfiQueuedFree free;
-} MalFfiWait;
+};
 
 static MalFfiWait *ffi_waiters;
 
@@ -662,7 +662,8 @@ static void ffi_wait_finish(MalFfiWait *wait, bool succeeded) {
     pthread_mutex_unlock(&ffi_queue_lock);
 }
 
-static void ffi_wait_release(MalFfiWait *wait) {
+void mal_ffi_callback_wait_release(MalFfiWait *wait) {
+    if (wait == nullptr) return;
     pthread_mutex_lock(&ffi_queue_lock);
     bool last = --wait->references == 0;
     if (last) {
@@ -1865,7 +1866,7 @@ static void ffi_queued_destroy(void *data) {
     }
     if (call->wait != nullptr) {
         ffi_wait_finish(call->wait, false);
-        ffi_wait_release(call->wait);
+        mal_ffi_callback_wait_release(call->wait);
     } else if (call->message != nullptr) call->free(call->message);
     ffi_group_release(call->group);
     free(call);
@@ -2054,7 +2055,8 @@ void mal_ffi_callback_wait_leave(int cancellation_state) {
 
 bool mal_ffi_callback_wait(
     MalFfiCallback *callback, MalFfiQueuedRun run, void *message, MalFfiQueuedFree release,
-    void *result, size_t result_offset, size_t result_size) {
+    MalFfiWait **request) {
+    *request = nullptr;
     MalFfiKept *kept = (MalFfiKept *) callback;
     MalFfiWait *wait = message == nullptr ? nullptr : calloc(1, sizeof(*wait));
     if (wait == nullptr || pthread_cond_init(&wait->changed, nullptr) != 0) {
@@ -2075,10 +2077,8 @@ bool mal_ffi_callback_wait(
     if (posted) wait->references++;
     while (posted && !wait->done) pthread_cond_wait(&wait->changed, &ffi_queue_lock);
     bool succeeded = posted && wait->succeeded;
-    if (succeeded && result_size > 0)
-        memcpy(result, (byte *) message + result_offset, result_size);
+    *request = wait;
     pthread_mutex_unlock(&ffi_queue_lock);
-    ffi_wait_release(wait);
     if (!posted) {
         atomic_fetch_sub(&kept->waiting, 1);
         ffi_kept_unref(kept);

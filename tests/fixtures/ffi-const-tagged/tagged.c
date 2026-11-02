@@ -45,3 +45,5 @@ void tagged_notify(ConstTagged value, void (*callback)(ConstTagged, void *), voi
     callback(value, data);
     release(data);
 }
+
+ConstTagged tagged_callback(ConstTagged (*callback)(void)) { return callback(); }

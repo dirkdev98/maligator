@@ -1664,6 +1664,29 @@ class BindingWriter {
 		return [`${unlessThrew}${target} = ${this.write(value, expression)};`, ...release];
 	}
 
+	// Zero the selected union member so C reads an initialized representation.
+	#callbackDefault(value: JsValue): string {
+		if (value.kind === "union") {
+			const union = this.#plan.unions.get(value.name)!;
+			return `{ .${union.member.name} = ${this.#callbackDefault(union.member.value)} }`;
+		}
+		if (value.kind === "array")
+			return `{ ${Array.from({ length: value.length }, () => this.#callbackDefault(value.of)).join(", ")} }`;
+		if (value.kind === "record")
+			return `{ ${this.#record(value.name)
+				.fields.map((field) => `.${field.name} = ${this.#callbackDefault(field.value)}`)
+				.join(", ")} }`;
+		if (value.kind === "tagged") {
+			const tagged = this.#plan.tagged.get(value.name)!;
+			const zero = tagged.cases.find((entry) =>
+				["0", "0n", "false"].includes(entry.literal),
+			);
+			if (zero !== undefined)
+				return `{ .${tagged.tag.name} = 0, ${zero.record.fields.map((field) => `.${field.name} = ${this.#callbackDefault(field.value)}`).join(", ")} }`;
+		}
+		return "{}";
+	}
+
 	/**
 	 * A C function of the callback's type that converts its arguments, calls the
 	 * JavaScript function its user data names, or else the one `site` keeps, and
@@ -1686,6 +1709,9 @@ class BindingWriter {
 			param === "data" || param === "count" ? [] : [{ value: param, index }],
 		);
 		const returns = value.returns.kind !== "undefined";
+		const immutableReturn = this.#immutableRecord(type.returns);
+		const zero = `(${localDeclaration(type.returns, "")}) ${immutableReturn ? this.#callbackDefault(value.returns) : "{}"}`;
+		const emptyReturn = immutableReturn ? zero : "mal_return";
 		const count = String(inputs.length);
 		// Handles the library lends belong to this invocation and close when it returns.
 		const lends = inputs.some(
@@ -1777,13 +1803,21 @@ class BindingWriter {
 					"goto mal_done;",
 					[],
 					false,
+					"nullptr",
+					false,
+					immutableReturn,
 				),
+				...(immutableReturn ? ["mal_return_ready = true;"] : []),
 			);
 		const lines = [
 			"",
 			`static ${formatCDeclaration(type.returns, `${body}(${signature.length === 0 ? "void" : signature.join(", ")})`)} {`,
 			...(queued ? [] : [`\tMalFfiCallback *mal_callback = ${callback};`]),
-			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
+			...(immutableReturn
+				? ["\tbool mal_return_ready = false;"]
+				: returns
+					? [`\t${localDeclaration(type.returns, "mal_return")} = {};`]
+					: []),
 			...(value.resultCount === undefined
 				? []
 				: [
@@ -1792,18 +1826,18 @@ class BindingWriter {
 			...(scoped
 				? ["\tif (mal_callback == nullptr) mal_ffi_callback_lost();"]
 				: data < 0 || value.closes !== undefined
-					? [`\tif (mal_callback == nullptr) return${returns ? " mal_return" : ""};`]
+					? [`\tif (mal_callback == nullptr) return${returns ? ` ${emptyReturn}` : ""};`]
 					: []),
 			...(value.kept
 				? [
 						...(keyedLookup && !queued ? [] : ["\tmal_ffi_callback_hold(mal_callback);"]),
 						"\tMalVm *vm = mal_ffi_callback_vm(mal_callback);",
 						// A library may call back after the VM is gone; it gets a zero result.
-						`\tif (vm == nullptr) { mal_ffi_callback_drop(mal_callback); return${returns ? " mal_return" : ""}; }`,
+						`\tif (vm == nullptr) { mal_ffi_callback_drop(mal_callback); return${returns ? ` ${emptyReturn}` : ""}; }`,
 					]
 				: [
 						"\tMalVm *vm = mal_ffi_callback_vm(mal_callback);",
-						`\tif (vm == nullptr) return${returns ? " mal_return" : ""};`,
+						`\tif (vm == nullptr) return${returns ? ` ${emptyReturn}` : ""};`,
 					]),
 			`\tstatic const MalFfiSite mal_site = { ${cString(owner)}, "callback result", nullptr };`,
 			"\t(void) mal_site;",
@@ -1867,7 +1901,9 @@ class BindingWriter {
 			...resultCleanup.map((line) => `\t${line}`),
 			...(returns
 				? [
-						`\tif (mal_ffi_threw(vm)) mal_return = (${localDeclaration(type.returns, "")}) {};`,
+						immutableReturn
+							? "\tif (mal_ffi_threw(vm)) mal_return_ready = false;"
+							: `\tif (mal_ffi_threw(vm)) mal_return = ${zero};`,
 						...(value.resultCount === undefined
 							? []
 							: [
@@ -1879,7 +1915,11 @@ class BindingWriter {
 			"\tmal_ffi_unroot(&mal_result_roots);",
 			"\tmal_ffi_unroot(&mal_roots);",
 			...(value.kept ? ["\tmal_ffi_callback_drop(mal_callback);"] : []),
-			returns ? "\treturn mal_return;" : "\treturn;",
+			returns
+				? immutableReturn
+					? `\treturn mal_return_ready ? mal_return : ${zero};`
+					: "\treturn mal_return;"
+				: "\treturn;",
 			"}",
 		];
 		return queued ? [...lines, ...this.#queuedEntry(name, value, callback)] : lines;
@@ -1897,6 +1937,10 @@ class BindingWriter {
 		const type = value.type;
 		const message = `MalFfiQueued_${name}`;
 		const returns = value.returns.kind !== "undefined";
+		const immutableReturn = this.#immutableRecord(type.returns);
+		const layout = `${message}_Layout`;
+		const zero = `(${localDeclaration(type.returns, "")}) ${immutableReturn ? this.#callbackDefault(value.returns) : "{}"}`;
+		const run = `${name}_run(${["mal_callback", ...type.params.map((_, index) => `mal_message->mal_c${String(index)}`)].join(", ")})`;
 		const waiting = value.queued === "wait";
 		const keyedLookup =
 			value.replaced !== undefined &&
@@ -1964,13 +2008,23 @@ class BindingWriter {
 			"",
 			`typedef struct ${message} {`,
 			...(checkedCopies ? ["\tMalFfiCopyStatus mal_copy_error;"] : []),
-			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")};`] : []),
+			...(returns
+				? [
+						`\t${immutableReturn ? "void *mal_return" : localDeclaration(type.returns, "mal_return")};`,
+					]
+				: []),
 			// Locals' declarations drop a top-level `const`, which the copies assign.
 			...type.params.map(
 				(param, index) => `\t${localDeclaration(param, `mal_c${String(index)}`)};`,
 			),
 			...(type.params.length === 0 ? ["\tchar mal_unused;"] : []),
 			`} ${message};`,
+			// The layout supplies offsets only: initializing it would also initialize const result storage.
+			...(immutableReturn
+				? [
+						`typedef struct ${layout} { ${message} header; ${localDeclaration(type.returns, "result")}; } ${layout};`,
+					]
+				: []),
 			"",
 			`static void ${name}_free(void *mal_data) {`,
 			`\t${message} *mal_message = mal_data;`,
@@ -1992,11 +2046,18 @@ class BindingWriter {
 						"\t}",
 					]
 				: []),
-			`\t${returns ? "mal_message->mal_return = " : ""}${name}_run(${["mal_callback", ...args.map((arg) => `mal_message->${arg}`)].join(", ")});`,
+			...(immutableReturn
+				? [
+						`\t${localDeclaration(type.returns, "mal_native")} = ${run};`,
+						"\t__builtin_memcpy(mal_message->mal_return, &mal_native, sizeof(mal_native));",
+					]
+				: [`\t${returns ? "mal_message->mal_return = " : ""}${run};`]),
 			"}",
 			"",
 			`static ${formatCDeclaration(type.returns, `${name}(${params.length === 0 ? "void" : params.join(", ")})`)} {`,
-			...(returns ? [`\t${localDeclaration(type.returns, "mal_return")} = {};`] : []),
+			...(!immutableReturn && returns
+				? [`\t${localDeclaration(type.returns, "mal_return")} = {};`]
+				: []),
 			...(value.resultCount === undefined
 				? []
 				: [
@@ -2007,13 +2068,18 @@ class BindingWriter {
 			"\tif (mal_callback != nullptr && !mal_ffi_callback_here(mal_callback)) {",
 			// A lookup without user data already reserved the call under its lock.
 			...(!keyedLookup ? ["\t\tmal_ffi_callback_reserve(mal_callback);"] : []),
-			`\t\t${message} *mal_message = mal_ffi_allocate_storage(1, sizeof(*mal_message), _Alignof(${message}));`,
+			`\t\t${message} *mal_message = mal_ffi_allocate_storage(1, sizeof(${immutableReturn ? layout : message}), _Alignof(${immutableReturn ? layout : message}));`,
 			"\t\tif (mal_message != nullptr) {",
 			...(initialized.size === 0
 				? []
 				: [
 						`\t\t\t__builtin_memcpy(mal_message, &(${message}) { ${[...initialized].map((index) => `.mal_c${String(index)} = mal_c${String(index)}`).join(", ")} }, sizeof(*mal_message));`,
 					]),
+			...(immutableReturn
+				? [
+						`\t\t\tmal_message->mal_return = (unsigned char *) mal_message + offsetof(${layout}, result);`,
+					]
+				: []),
 			"\t\t\tbool mal_ok = true;",
 			...(checkedCopies ? ["\t\t\tmal_message->mal_copy_error = MAL_FFI_COPY_OK;"] : []),
 			...copies.map((line) => `\t\t\t${line}`),
@@ -2022,15 +2088,28 @@ class BindingWriter {
 			"\t\t\t\tmal_message = nullptr;",
 			"\t\t\t}",
 			"\t\t}",
-			waiting
-				? `\t\tmal_ffi_callback_wait(mal_callback, ${name}_queued, mal_message, ${name}_free, ${returns ? `&mal_return, offsetof(${message}, mal_return), sizeof(mal_return)` : "nullptr, 0, 0"});`
-				: `\t\tmal_ffi_callback_queue(mal_callback, ${name}_queued, mal_message, ${name}_free);`,
+			...(waiting
+				? [
+						"\t\tMalFfiWait *mal_request;",
+						`\t\t${returns ? "bool mal_succeeded = " : ""}mal_ffi_callback_wait(mal_callback, ${name}_queued, mal_message, ${name}_free, &mal_request);`,
+						...(returns
+							? [
+									immutableReturn
+										? `\t\t${localDeclaration(type.returns, "mal_return")} = mal_succeeded ? *(${localDeclaration(type.returns, "*")}) mal_message->mal_return : ${zero};`
+										: "\t\tif (mal_succeeded) mal_return = mal_message->mal_return;",
+								]
+							: []),
+						"\t\tmal_ffi_callback_wait_release(mal_request);",
+					]
+				: [
+						`\t\tmal_ffi_callback_queue(mal_callback, ${name}_queued, mal_message, ${name}_free);`,
+					]),
 			...(value.closes === undefined ? [] : ["\t\tmal_ffi_close_return(mal_callback);"]),
 			...(keyedLookup ? ["\t\tmal_ffi_callback_drop(mal_callback);"] : []),
 			...(waiting ? ["\t\tmal_ffi_callback_wait_leave(mal_cancellation);"] : []),
 			`\t\treturn${returns ? " mal_return" : ""};`,
 			"\t}",
-			`\t${returns ? "mal_return = " : ""}${name}_run(${["mal_callback", ...args].join(", ")});`,
+			`\t${returns ? `${immutableReturn ? localDeclaration(type.returns, "mal_return") : "mal_return"} = ` : ""}${name}_run(${["mal_callback", ...args].join(", ")});`,
 			...(value.closes === undefined ? [] : ["\tmal_ffi_close_return(mal_callback);"]),
 			...(keyedLookup
 				? ["\tif (mal_callback != nullptr) mal_ffi_callback_drop(mal_callback);"]

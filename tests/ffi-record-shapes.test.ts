@@ -65,6 +65,10 @@ it("binds const-member inputs and results in declaration order", () => {
 		"z_make_before",
 		"immutable_visit",
 		"immutable_notify",
+		"immutable_callback_result",
+		"immutable_callback_check",
+		"immutable_callback_parallel",
+		"immutable_choice_callback",
 		"immutable_token_make",
 		"immutable_token_borrow",
 		"immutable_token_visit",
@@ -74,24 +78,6 @@ it("binds const-member inputs and results in declaration order", () => {
 	])
 		expect(report.functions.find((fn) => fn.name === name)?.status).toBe("bound");
 });
-it.each(["immutable_callback_result"])(
-	"rejects unsafe const conversion through %s",
-	(name) => {
-		const directory = project("ffi-const-results");
-		const result = cli(directory, "inspect", "const_values", "--json");
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-		const report = JSON.parse(result.stdout) as {
-			functions: Array<{
-				name: string;
-				status: string;
-				gaps?: Array<{ reason: string }>;
-			}>;
-		};
-		const entry = report.functions.find((fn) => fn.name === name);
-		expect(entry?.status).toBe("needs-facts");
-		expect(entry?.gaps?.some((gap) => gap.reason.includes("const members"))).toBe(true);
-	},
-);
 it.each([
 	["immutable_token_inout", "duplicate ownership"],
 	["immutable_token_array_out", "element ownership"],
@@ -110,7 +96,6 @@ it.each([
 it.each([
 	["tagged_overlap", "outside union storage"],
 	["tagged_promoted_overlap", "outside union storage"],
-	["tagged_callback", "const members"],
 ])("rejects unsupported const tagged storage through %s", (name, reason) => {
 	const directory = project("ffi-const-tagged");
 	const result = cli(directory, "inspect", "const_tagged", "--json");

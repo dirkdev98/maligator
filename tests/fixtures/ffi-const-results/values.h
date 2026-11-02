@@ -64,3 +64,15 @@ Immutable immutable_callback_result(Immutable (*callback)(void));
 int immutable_visit(int seed, int (*callback)(Immutable, void *), void *data);
 void immutable_notify(int seed, void (*callback)(Immutable, void *), void *data,
     void (*release)(void *));
+
+int immutable_callback_check(Immutable (*callback)(int, void *), void *data);
+int immutable_callback_parallel(Immutable (*callback)(int, void *), void *data, void (*release)(void *));
+int immutable_callback_zeroes(void);
+ImmutableChoice immutable_choice_callback(ImmutableChoice (*callback)(void));
+
+void immutable_callback_shutdown(Immutable (*callback)(int, void *), void *data);
+void immutable_callback_cancel(Immutable (*callback)(int, void *), void *data);
+void immutable_callback_wait_started(void);
+
+void immutable_callback_replace(Immutable (*callback)(int));
+Immutable immutable_callback_replaced(int index);

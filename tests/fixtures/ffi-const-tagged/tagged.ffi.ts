@@ -37,6 +37,6 @@ export default {
 			},
 			async: "notifyAsync",
 		},
-		tagged_callback: { params: { callback: { callback: {} } } },
+		tagged_callback: { params: { callback: { callback: {} } }, async: "callbackAsync" },
 	},
 } satisfies MaligatorLibraryContract;

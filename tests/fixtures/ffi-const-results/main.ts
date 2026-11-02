@@ -74,6 +74,16 @@ import {
 	immutable_choice_sum,
 	choiceSumAsync,
 	immutable_envelope_take,
+	immutable_callback_result,
+	callbackResultAsync,
+	immutable_callback_check,
+	callbackCheckAsync,
+	immutable_callback_zeroes,
+	callbackParallelAsync,
+	immutable_choice_callback,
+	immutable_callback_replace,
+	callbackReplacedAsync,
+	choiceCallbackAsync,
 } from "maligator:ffi/const_values";
 import type { Immutable, ImmutableToken } from "maligator:ffi/const_values";
 
@@ -565,4 +575,53 @@ check(
 	immutable_token_destroyed() === 10 && immutable_token_destroy_sum() === 670,
 	"array staging releases pins without duplicating owners",
 );
+for (const run of [immutable_callback_result, callbackResultAsync]) {
+	verify(await run(() => a_make(13)), 13);
+}
+for (const run of [immutable_choice_callback, choiceCallbackAsync]) {
+	verify(await run(() => a_make(17)), 17);
+}
+check(
+	(await callbackParallelAsync((index) => a_make(index))) === 100,
+	"concurrent producers receive their initialized const results",
+);
+for (const run of [immutable_callback_check, callbackCheckAsync]) {
+	for (const mode of ["throw", "getter", "range"] as const) {
+		const zeroes = immutable_callback_zeroes();
+		let calls = 0;
+		let failed = false;
+		try {
+			await run(() => {
+				calls++;
+				if (mode === "throw") throw new Error("const callback failed");
+				if (mode === "range") return { ...a_make(1), code: 1.5 };
+				return {
+					...a_make(1),
+					get code(): number {
+						throw new RangeError("const result getter");
+					},
+				};
+			});
+		} catch (error) {
+			failed =
+				mode === "range"
+					? error instanceof RangeError
+					: error instanceof Error &&
+						error.message ===
+							(mode === "throw" ? "const callback failed" : "const result getter");
+		}
+		check(
+			failed && calls === 1 && immutable_callback_zeroes() === zeroes + 2,
+			"failed const callbacks return native zeroes and skip later JavaScript calls",
+		);
+	}
+}
+verify(await callbackResultAsync(() => a_make(19)), 19);
+immutable_callback_replace((index) => {
+	immutable_callback_replace((next) => a_make(next + 10));
+	return a_make(index);
+});
+verify(await callbackReplacedAsync(3), 3);
+verify(await callbackReplacedAsync(4), 14);
+immutable_callback_replace(null);
 console.log("const results passed");

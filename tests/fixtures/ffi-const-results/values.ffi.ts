@@ -83,7 +83,39 @@ export default {
 			params: { values: { array: { length: "count" } } },
 			async: "arrayAsync",
 		},
-		immutable_callback_result: { params: { callback: { callback: {} } } },
+		immutable_callback_result: {
+			params: { callback: { callback: {} } },
+			async: "callbackResultAsync",
+		},
+		immutable_callback_check: {
+			params: { callback: { callback: { data: "data" } } },
+			async: "callbackCheckAsync",
+		},
+		immutable_callback_parallel: {
+			params: {
+				callback: { callback: { data: "data", release: "release", queued: "wait" } },
+			},
+			async: "callbackParallelAsync",
+		},
+		immutable_callback_shutdown: {
+			params: { callback: { callback: { data: "data" } } },
+			async: "callbackShutdownAsync",
+		},
+		immutable_callback_cancel: {
+			params: { callback: { callback: { data: "data" } } },
+			async: "callbackCancelAsync",
+		},
+		immutable_callback_replace: {
+			params: {
+				callback: { nullable: true, callback: { replaced: true, queued: "wait" } },
+			},
+		},
+		immutable_callback_replaced: { async: "callbackReplacedAsync" },
+		immutable_choice_callback: {
+			returns: { shape: { member: "record" } },
+			params: { callback: { callback: { returns: { shape: { member: "record" } } } } },
+			async: "choiceCallbackAsync",
+		},
 		immutable_visit: {
 			async: "visitAsync",
 			params: { callback: { callback: { data: "data" } } },

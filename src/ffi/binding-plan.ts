@@ -1684,12 +1684,6 @@ class Planner {
 		const returned = resolveCType(this.#model, target.returns);
 		let returns: JsValue = { kind: "undefined" };
 		if (returned.kind !== "void") {
-			const record =
-				returned.kind === "record" ? this.#model.records.get(returned.name) : undefined;
-			if (record !== undefined && cRecordHasConstMembers(this.#model, record))
-				return {
-					gap: `callback result: ${record.name}: const members need initialization`,
-				};
 			const mapped = this.value(target.returns, "param", resultFacts);
 			if ("gap" in mapped) return { gap: `callback result: ${mapped.gap}` };
 			if (mapped.value.kind !== "handle" && this.#containsHandle(mapped.value))

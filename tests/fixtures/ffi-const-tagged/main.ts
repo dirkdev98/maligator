@@ -18,6 +18,8 @@ import {
 	visitAsync,
 	notifyAsync,
 	tagged_calls,
+	tagged_callback,
+	callbackAsync,
 } from "maligator:ffi/const_tagged";
 function check(value: boolean, message: string): asserts value {
 	if (!value) throw new Error(message);
@@ -161,4 +163,10 @@ check(
 	invalidResult && tagged_take(tagged_make(1, 2)) === 5,
 	"unknown native tags throw and later calls remain valid",
 );
+for (const run of [tagged_callback, callbackAsync]) {
+	check(
+		tagged_take(await run(() => tagged_make(2, 13))) === 42,
+		"JavaScript constructs const tagged callback results",
+	);
+}
 console.log("const tagged passed");

@@ -1,5 +1,10 @@
 #include "values.h"
 #include <stdlib.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <assert.h>
+#include <sched.h>
+#include <time.h>
 #include <string.h>
 
 Immutable immutable_fixed = {77, {78, 79}, {80, 81}, {82}, {{83, 84}, {85, 86}}};
@@ -7,7 +12,7 @@ Immutable a_make(int seed) {
     Immutable value = {seed, {seed + 1, seed + 2}, {seed + 3, seed + 4}, {seed + 5}, {{seed + 6, seed + 7}, {seed + 8, seed + 9}}};
     return value;
 }
-static int taken;
+static _Atomic int taken;
 int immutable_taken(void) { return taken; }
 int a_take_before(Before value) { taken++; return value.value; }
 int z_take(Immutable value) {
@@ -110,4 +115,74 @@ void immutable_notify(int seed, void (*callback)(Immutable, void *), void *data,
     void (*release)(void *)) {
     callback(a_make(seed), data);
     release(data);
+}
+
+Immutable immutable_callback_result(Immutable (*callback)(void)) { return callback(); }
+ImmutableChoice immutable_choice_callback(ImmutableChoice (*callback)(void)) { return callback(); }
+static _Atomic int callback_zeroes;
+int immutable_callback_zeroes(void) { return atomic_load(&callback_zeroes); }
+int immutable_callback_check(Immutable (*callback)(int, void *), void *data) {
+    int sum = 0;
+    for (int i = 0; i < 2; i++) {
+        Immutable result = callback(i, data);
+        int value = z_take(result);
+        if (value == 0) atomic_fetch_add(&callback_zeroes, 1);
+        sum += value;
+    }
+    return sum;
+}
+typedef struct { Immutable (*callback)(int, void *); void *data; int index; int sum; } ImmutableCallbackJob;
+static void *immutable_callback_job(void *data) {
+    ImmutableCallbackJob *job = data;
+    Immutable result = job->callback(job->index, job->data);
+    job->sum = z_take(result);
+    return NULL;
+}
+int immutable_callback_parallel(Immutable (*callback)(int, void *), void *data, void (*release)(void *)) {
+    ImmutableCallbackJob jobs[2] = {{callback, data, 0, 0}, {callback, data, 1, 0}};
+    pthread_t threads[2];
+    for (int i = 0; i < 2; i++) if (pthread_create(&threads[i], NULL, immutable_callback_job, &jobs[i]) != 0) abort();
+    for (int i = 0; i < 2; i++) if (pthread_join(threads[i], NULL) != 0) abort();
+    release(data);
+    return jobs[0].sum + jobs[1].sum;
+}
+
+static _Atomic int callback_started;
+static _Atomic int callback_released;
+static int callback_shutdown_checked;
+static void immutable_verify_shutdown(void) { assert(callback_shutdown_checked); }
+static void *immutable_release_later(void *unused) {
+    (void)unused;
+    struct timespec delay = {.tv_nsec = 50000000};
+    nanosleep(&delay, NULL);
+    atomic_store(&callback_released, 1);
+    return NULL;
+}
+void immutable_callback_shutdown(Immutable (*callback)(int, void *), void *data) {
+    Immutable result = callback(0, data);
+    assert(z_take(result) == 175);
+    if (atexit(immutable_verify_shutdown) != 0) abort();
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, immutable_release_later, NULL) != 0) abort();
+    while (!atomic_load(&callback_released)) sched_yield();
+    assert(z_take(result) == 175);
+    callback_shutdown_checked = 1;
+    if (pthread_join(thread, NULL) != 0) abort();
+}
+void immutable_callback_cancel(Immutable (*callback)(int, void *), void *data) {
+    Immutable first = callback(0, data);
+    assert(z_take(first) == 175);
+    if (atexit(immutable_verify_shutdown) != 0) abort();
+    atomic_store(&callback_started, 1);
+    Immutable canceled = callback(1, data);
+    assert(z_take(canceled) == 0 && z_take(first) == 175);
+    callback_shutdown_checked = 1;
+}
+void immutable_callback_wait_started(void) { while (!atomic_load(&callback_started)) sched_yield(); }
+
+static _Atomic(Immutable (*)(int)) immutable_replacement;
+void immutable_callback_replace(Immutable (*callback)(int)) { atomic_store(&immutable_replacement, callback); }
+Immutable immutable_callback_replaced(int index) {
+    Immutable (*callback)(int) = atomic_load(&immutable_replacement);
+    return callback == NULL ? (Immutable){} : callback(index);
 }
