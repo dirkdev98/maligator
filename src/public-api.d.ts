@@ -94,7 +94,7 @@ export interface MaligatorFfiHandle {
 /** Facts about one C type, keyed by its typedef or tag. */
 export interface MaligatorFfiTypeFacts {
 	handle?: MaligatorFfiHandle;
-	/** Select the active value of a union when its C type does not identify it. */
+	/** Select active union storage explicitly or from a record's discriminator. */
 	shape?: MaligatorFfiShape;
 	/** Retained ranges in caller-owned state. Assignment writes the pointer and
 	 * count together; C may advance them only within the assigned range.
@@ -138,15 +138,19 @@ export interface MaligatorFfiCount {
 	length: string;
 }
 
-/** The union member a value copies when C has no discriminator. */
-export interface MaligatorFfiShape {
-	/** The C union member copied in both directions. */
-	member: string;
-}
+/** Select active C union storage explicitly or through an integer discriminator. */
+export type MaligatorFfiShape =
+	| { member: string }
+	| {
+			/** A direct or anonymously promoted C integer field. */
+			tag: string;
+			/** Integer constants map to paths naming the active C union members. */
+			cases: Readonly<Record<string, ReadonlyArray<string>>>;
+	  };
 
 /** Facts about a parameter or a result. */
 export interface MaligatorFfiValueFacts {
-	/** Override a union type's selected member for this value or array element. */
+	/** Override the active union shape for this value or array element. */
 	shape?: MaligatorFfiShape;
 	/** Accept `null` for a pointer parameter and pass `NULL`. */
 	nullable?: boolean;

@@ -115,6 +115,7 @@ function inputCanRunJavaScript(value: JsValue): boolean {
 			return false;
 		case "callback":
 		case "record":
+		case "tagged":
 		case "sequence":
 		case "array":
 			return true;
@@ -249,6 +250,8 @@ class BindingWriter {
 	readonly #outputs = new Set<string>();
 	readonly #unionInputs = new Set<string>();
 	readonly #unionOutputs = new Set<string>();
+	readonly #taggedInputs = new Set<string>();
+	readonly #taggedOutputs = new Set<string>();
 	readonly #managedFamilies = new Set<string>();
 	readonly #viewFamilies = new Set<string>();
 	readonly #workerCloseFamilies = new Set<string>();
@@ -277,6 +280,8 @@ class BindingWriter {
 					handles.add(value.name);
 			} else if (value.kind === "sequence" || value.kind === "array") visit(value.of);
 			else if (value.kind === "union") visit(value.of);
+			else if (value.kind === "tagged")
+				for (const entry of value.cases) visit(entry.value);
 			else if (value.kind === "record")
 				for (const field of this.#record(value.name).fields) visit(field.value);
 		};
@@ -309,6 +314,8 @@ class BindingWriter {
 	}
 
 	#hasHandles(value: JsValue): boolean {
+		if (value.kind === "tagged")
+			return value.cases.some((entry) => this.#hasHandles(entry.value));
 		if (value.kind === "union") return this.#hasHandles(value.of);
 		if (value.kind === "handle") return true;
 		if (value.kind === "record")
@@ -332,6 +339,13 @@ class BindingWriter {
 
 	/** Mark the record helpers a value needs, recursively through fields and arrays. */
 	need(value: JsValue, direction: "input" | "output"): void {
+		if (value.kind === "tagged") {
+			const set = direction === "input" ? this.#taggedInputs : this.#taggedOutputs;
+			if (set.has(value.name)) return;
+			set.add(value.name);
+			for (const entry of value.cases) this.need(entry.value, direction);
+			return;
+		}
 		if (value.kind === "union") {
 			const set = direction === "input" ? this.#unionInputs : this.#unionOutputs;
 			if (set.has(value.name)) return;
@@ -453,6 +467,24 @@ class BindingWriter {
 					`if (!${converted}) ${fail}`,
 				];
 			}
+			case "tagged": {
+				const retained = this.#hasHandles(value) ? `, ${inputs}` : "";
+				if (rooted)
+					return [
+						`if (!mal_ffi_tagged_in_${value.name}(vm, ${source}, ${site}, &${target}${retained})) ${fail}`,
+					];
+				const held = this.#fresh("held"),
+					roots = this.#fresh("roots"),
+					converted = this.#fresh("converted");
+				return [
+					`MalValue ${held} = ${source};`,
+					`MalFfiRoots ${roots};`,
+					`mal_ffi_root(&${roots}, &${held}, 1);`,
+					`bool ${converted} = mal_ffi_tagged_in_${value.name}(vm, ${held}, ${site}, &${target}${retained});`,
+					`mal_ffi_unroot(&${roots});`,
+					`if (!${converted}) ${fail}`,
+				];
+			}
 			case "array": {
 				const resolved = resolveCType(this.#model, type);
 				if (resolved.kind !== "array")
@@ -534,6 +566,8 @@ class BindingWriter {
 				return `mal_ffi_out_${value.name}(vm, ${expression}, ${lent})`;
 			case "union":
 				return `mal_ffi_union_out_${value.name}(vm, ${expression}, ${lent})`;
+			case "tagged":
+				return `mal_ffi_tagged_out_${value.name}(vm, ${expression}, ${lent})`;
 			case "array":
 				throw new Error("arrays are written field by field");
 		}
@@ -814,6 +848,7 @@ class BindingWriter {
 				`static MalValue mal_ffi_union_out_${name}(MalVm *vm, ${union.spelling} mal_value, bool mal_lent);`,
 			);
 		}
+		lines.push(...this.#taggedHelpers(true));
 		// Declared first, as nested-record tables point at types defined later.
 		for (const name of typed)
 			lines.push(`static MalFfiRecordType mal_ffi_record_${name};`);
@@ -873,6 +908,7 @@ class BindingWriter {
 				"}",
 			);
 		}
+		lines.push(...this.#taggedHelpers(false));
 		for (const name of leaves) lines.push(...this.#recordLeaves(name));
 		for (const name of inputs) lines.push(...this.#recordInput(name));
 		for (const name of outputs) {
@@ -914,6 +950,117 @@ class BindingWriter {
 				"\treturn mal_ffi_threw(vm) ? mal_ffi_undefined() : mal_record;",
 				"}",
 			);
+		}
+		return lines;
+	}
+
+	#taggedHelpers(declarations: boolean): Array<string> {
+		const lines: Array<string> = [];
+		for (const name of new Set([...this.#taggedInputs, ...this.#taggedOutputs])) {
+			const tagged = this.#plan.tagged.get(name)!;
+			const retained = tagged.cases.some((entry) =>
+				this.#hasHandles({ kind: "record", name: entry.record.name }),
+			);
+			const input = `static bool mal_ffi_tagged_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${tagged.spelling} *mal_out${retained ? ", MalFfiInputs *mal_inputs" : ""})`;
+			const output = `static MalValue mal_ffi_tagged_out_${name}(MalVm *vm, ${tagged.spelling} mal_value, bool mal_lent)`;
+			if (declarations) {
+				if (this.#taggedInputs.has(name)) lines.push(`${input};`);
+				if (this.#taggedOutputs.has(name)) lines.push(`${output};`);
+				continue;
+			}
+			if (this.#taggedInputs.has(name)) {
+				lines.push(
+					`static const char *const mal_ffi_tag_names_${name}[] = { ${cString(tagged.tag.name)} };`,
+					`static MalFfiRecordType mal_ffi_tag_type_${name} = { mal_ffi_tag_names_${name}, 1, 0, nullptr };`,
+					`${input} {`,
+					"bool mal_ok = false;",
+					"MalValue mal_tags[1] = {};",
+					"MalFfiRoots mal_roots;",
+					"mal_ffi_root(&mal_roots, mal_tags, 1);",
+					`${localDeclaration(tagged.tag.type, "mal_tag")} = {};`,
+					`if (!mal_ffi_record_fields(vm, mal_value, &mal_ffi_tag_type_${name}, mal_site, mal_tags)) goto mal_done;`,
+					...this.read(
+						tagged.tag.value,
+						tagged.tag.type,
+						"mal_tags[0]",
+						"mal_tag",
+						"mal_site",
+						"goto mal_done;",
+						[],
+						true,
+					),
+					`*mal_out = (${tagged.spelling}) {};`,
+					"switch (mal_tag) {",
+				);
+				for (const entry of tagged.cases) {
+					const caseRetained = this.#hasHandles({
+						kind: "record",
+						name: entry.record.name,
+					});
+					lines.push(
+						`case ${entry.expression}:`,
+						`mal_out->${tagged.tag.name} = mal_tag;`,
+						`if (!mal_ffi_in_${entry.record.name}(vm, mal_value, mal_site, mal_out${caseRetained ? ", mal_inputs" : ""})) goto mal_done;`,
+						`if (mal_out->${tagged.tag.name} != mal_tag) { mal_ffi_expected(vm, mal_site, "a payload preserving its discriminator"); goto mal_done; }`,
+						"mal_ok = true;",
+						"break;",
+					);
+				}
+				lines.push(
+					'default: mal_ffi_expected(vm, mal_site, "a known union discriminator"); break;',
+					"}",
+					"mal_done:",
+					"mal_ffi_unroot(&mal_roots);",
+					"return mal_ok;",
+					"}",
+				);
+			}
+			if (this.#taggedOutputs.has(name)) {
+				for (const [index, entry] of tagged.cases.entries()) {
+					const fields = [tagged.tag, ...entry.record.fields];
+					lines.push(
+						`static const char *const mal_ffi_case_names_${name}_${index}[] = { ${fields.map((field) => cString(field.name)).join(", ")} };`,
+						`static MalFfiRecordType mal_ffi_case_type_${name}_${index} = { mal_ffi_case_names_${name}_${index}, ${fields.length}, 0, nullptr };`,
+					);
+				}
+				const count =
+					Math.max(...tagged.cases.map((entry) => entry.record.fields.length)) + 1;
+				lines.push(
+					`${output} {`,
+					`MalValue mal_fields[${count}] = {};`,
+					"MalValue mal_result = mal_ffi_undefined();",
+					"MalFfiRoots mal_roots;",
+					`mal_ffi_root(&mal_roots, mal_fields, ${count});`,
+					`switch (mal_value.${tagged.tag.name}) {`,
+				);
+				for (const [index, entry] of tagged.cases.entries()) {
+					lines.push(`case ${entry.expression}:`);
+					for (const [fieldIndex, field] of [
+						tagged.tag,
+						...entry.record.fields,
+					].entries())
+						lines.push(
+							...this.#produce(
+								field.value,
+								`mal_value.${field.name}`,
+								`mal_fields[${fieldIndex}]`,
+								"mal_lent",
+							),
+						);
+					lines.push(
+						`mal_result = mal_ffi_new_record(vm, &mal_ffi_case_type_${name}_${index}, mal_fields);`,
+						"goto mal_done;",
+					);
+				}
+				lines.push(
+					`default: { static const MalFfiSite mal_site = { "value", ${cString(tagged.tag.name)}, nullptr }; mal_ffi_expected(vm, &mal_site, "a known union discriminator"); break; }`,
+					"}",
+					"mal_done:",
+					"mal_ffi_unroot(&mal_roots);",
+					"return mal_ffi_threw(vm) ? mal_ffi_undefined() : mal_result;",
+					"}",
+				);
+			}
 		}
 		return lines;
 	}

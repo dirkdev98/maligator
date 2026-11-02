@@ -25,6 +25,12 @@ it.each(
 			behavior: "pins handle arguments while union getters run",
 			output: "union getter pins passed",
 		},
+		{
+			backend,
+			directory: "tagged",
+			behavior: "selects tagged union payloads before reading getters",
+			output: "tagged union values passed",
+		},
 	]),
 )(
 	"$behavior through $backend calls",

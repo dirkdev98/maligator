@@ -285,6 +285,8 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 			if (value.lookup !== undefined) helper(value.lookup.function);
 			for (const param of value.params) if (typeof param !== "string") mapping(param);
 			mapping(value.returns);
+		} else if (value.kind === "tagged") {
+			for (const entry of value.cases) mapping(entry.value);
 		} else if (
 			value.kind === "array" ||
 			value.kind === "sequence" ||

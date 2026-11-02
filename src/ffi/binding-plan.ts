@@ -8,7 +8,12 @@ import type {
 	MaligatorFfiVariant,
 } from "../public-api.d.ts";
 import type { CField, CFunction, CModel, CRecord } from "./c-model.ts";
-import { cRecordAccesses, promotedCFields, resolveCType } from "./c-model.ts";
+import {
+	cRecordAccesses,
+	promotedCFields,
+	resolveCFieldPath,
+	resolveCType,
+} from "./c-model.ts";
 import { formatCDeclaration, parseCType } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import type { LibraryFacts } from "./contract.ts";
@@ -57,6 +62,16 @@ export type JsValue =
 	  }
 	/** A struct passed by value as a plain object. */
 	| { readonly kind: "record"; readonly name: string }
+	| {
+			readonly kind: "tagged";
+			readonly name: string;
+			readonly tag: string;
+			readonly cases: ReadonlyArray<{
+				readonly literal: string;
+				readonly value: JsValue;
+			}>;
+			readonly alias?: string;
+	  }
 	| {
 			readonly kind: "union";
 			readonly name: string;
@@ -230,6 +245,20 @@ export interface MappedUnion {
 	readonly alias?: string;
 }
 
+export interface MappedTagged {
+	readonly name: string;
+	readonly spelling: string;
+	readonly record: CRecord;
+	readonly tag: MappedField;
+	readonly cases: ReadonlyArray<{
+		readonly expression: string;
+		readonly literal: string;
+		readonly selection: ReadonlyArray<string>;
+		readonly record: MappedRecord;
+	}>;
+	readonly alias?: string;
+}
+
 /** A type whose values are handles, as the contract's facts and the headers define it. */
 export interface HandleType {
 	/** The struct the handle wraps, which also names its JavaScript type. */
@@ -282,6 +311,7 @@ export interface BindingPlan {
 	readonly unbound: ReadonlyArray<UnboundFunction>;
 	readonly records: ReadonlyMap<string, MappedRecord>;
 	readonly unions: ReadonlyMap<string, MappedUnion>;
+	readonly tagged: ReadonlyMap<string, MappedTagged>;
 	readonly handles: ReadonlyMap<string, HandleType>;
 	readonly constants: ReadonlyArray<MappedConstant>;
 	readonly skippedConstants: ReadonlyArray<SkippedConstant>;
@@ -560,6 +590,7 @@ class Planner {
 	readonly #accesses: ReturnType<typeof cRecordAccesses>;
 	readonly records = new Map<string, MappedRecord>();
 	readonly unions = new Map<string, MappedUnion>();
+	readonly tagged = new Map<string, MappedTagged>();
 	readonly #shapes = new Map<string, { alias: string; shape: MaligatorFfiShape }>();
 	readonly #handles: ReadonlyMap<string, Omit<HandleType, "fields" | "managedFields">>;
 	readonly #recordGaps = new Map<string, string>();
@@ -581,14 +612,15 @@ class Planner {
 			const resolved = type === undefined ? undefined : resolveCType(model, type);
 			if (
 				resolved?.kind !== "record" ||
-				resolved.tag !== "union" ||
-				entry.handle !== undefined
+				("member" in entry.shape && resolved.tag !== "union") ||
+				entry.handle !== undefined ||
+				handles.has(resolved.name)
 			)
 				throw new FfiError(
-					`types.${name}.shape: member selection requires a union value`,
+					`types.${name}.shape: member selection requires a union value; tagged shapes require a record value`,
 				);
 			if (this.#shapes.has(resolved.name))
-				throw new FfiError(`types.${name}.shape: this union already has a shape fact`);
+				throw new FfiError(`types.${name}.shape: this record already has a shape fact`);
 			this.#shapes.set(resolved.name, { alias: name, shape: entry.shape });
 		}
 	}
@@ -615,7 +647,7 @@ class Planner {
 			resolved.kind !== "record" &&
 			!(resolved.kind === "pointer" && facts.array !== undefined)
 		)
-			throw new FfiError("shape applies to union values or array elements");
+			throw new FfiError("shape applies to record values or array elements");
 		if (facts.fresh === true) {
 			const target =
 				resolved.kind === "pointer" ? resolveCType(this.#model, resolved.to) : undefined;
@@ -666,19 +698,19 @@ class Planner {
 				const handle = this.#handles.get(resolved.name);
 				if (
 					facts.shape !== undefined &&
-					(resolved.tag !== "union" || handle !== undefined)
+					(("member" in facts.shape && resolved.tag !== "union") || handle !== undefined)
 				)
 					throw new FfiError("shape.member applies to union values");
 				if (handle === undefined) {
 					const shape = this.#shapes.get(resolved.name);
+					const selected = facts.shape ?? shape?.shape;
+					const alias = facts.shape === undefined ? shape?.alias : undefined;
 					const mapped =
-						resolved.tag === "union"
-							? this.#union(
-									resolved.name,
-									facts.shape ?? shape?.shape,
-									facts.shape === undefined ? shape?.alias : undefined,
-								)
-							: this.#record(resolved.name, resolved.tag);
+						selected !== undefined && "tag" in selected
+							? this.#tagged(resolved.name, selected, alias)
+							: resolved.tag === "union"
+								? this.#union(resolved.name, selected, alias)
+								: this.#record(resolved.name, resolved.tag);
 					if (
 						position === "return" &&
 						facts.borrowed !== true &&
@@ -859,7 +891,11 @@ class Planner {
 		};
 	}
 
-	#union(name: string, shape: MaligatorFfiShape | undefined, alias?: string): Mapping {
+	#union(
+		name: string,
+		shape: Extract<MaligatorFfiShape, { member: string }> | undefined,
+		alias?: string,
+	): Mapping {
 		if (shape === undefined)
 			return { gap: `union ${name}: select an active member with a shape fact` };
 		const record = this.#model.records.get(name);
@@ -932,6 +968,278 @@ class Planner {
 				type.kind === "record" ? this.#model.records.get(type.name) : undefined;
 			return child !== undefined && this.#hasConstMember(child, seen);
 		});
+	}
+
+	#tagged(
+		name: string,
+		shape: Extract<MaligatorFfiShape, { tag: string }>,
+		alias?: string,
+	): Mapping {
+		const record = this.#model.records.get(name);
+		const access = this.#accesses.get(name);
+		if (record === undefined || !record.complete || access?.spelling === undefined)
+			return { gap: `tagged ${name}: the complete C type needs an accessible spelling` };
+		if (this.#hasConstMember(record))
+			return { gap: `tagged ${name}: const members cannot be copied by value` };
+		const identity = createHash("sha256")
+			.update(JSON.stringify([access.owner, access.path, shape, alias]))
+			.digest("hex")
+			.slice(0, 16);
+		const mappedName = `tagged_${identity}`;
+		const known = this.tagged.get(mappedName);
+		const asValue = (mapped: MappedTagged): JsValue => ({
+			kind: "tagged",
+			name: mapped.name,
+			tag: mapped.tag.name,
+			cases: mapped.cases.map((entry) => ({
+				literal: entry.literal,
+				value: { kind: "record", name: entry.record.name },
+			})),
+			...(mapped.alias === undefined ? {} : { alias: mapped.alias }),
+		});
+		if (known !== undefined) return { value: asValue(known) };
+		if (this.#pending.has(mappedName))
+			return { gap: `tagged ${name}: recursive value shape` };
+		const tagPath = resolveCFieldPath(this.#model, record, [shape.tag]);
+		const tagField = tagPath?.at(-1)?.field;
+		if (tagField === undefined)
+			throw new FfiError(`tagged ${name}: no discriminator '${shape.tag}'`);
+		const tagMapping = this.#field(tagField);
+		if (
+			!("value" in tagMapping) ||
+			!["integer", "bigint", "boolean"].includes(tagMapping.value.kind)
+		)
+			throw new FfiError(
+				`tagged ${name}.${shape.tag}: the discriminator must be an integer, enum, or boolean`,
+			);
+		const tag = tagMapping.value;
+		if (tag.kind !== "integer" && tag.kind !== "bigint" && tag.kind !== "boolean")
+			throw new Error("invalid tag mapping");
+		const bits = tag.kind === "boolean" ? 1 : tag.bits;
+		const signed = tag.kind === "boolean" ? false : tag.signed;
+		const minimum = signed ? -(1n << BigInt(bits - 1)) : 0n;
+		const maximum = (1n << BigInt(bits - Number(signed))) - 1n;
+		const seen = new Set<bigint>();
+		const cases: Array<MappedTagged["cases"][number]> = [];
+		this.#pending.add(mappedName);
+		try {
+			for (const [key, selection] of Object.entries(shape.cases)) {
+				const enumeration = [...this.#model.enums.values()]
+					.flatMap((entry) => entry.constants)
+					.find((entry) => entry.name === key);
+				const definition = [...this.#model.macros, ...this.#model.untypedMacros].find(
+					(entry) => entry.name === key,
+				);
+				const macro = this.#model.macros.find((entry) => entry.name === key);
+				const constant =
+					definition === undefined
+						? enumeration?.value
+						: definition.contextual !== true && definition.parameters === undefined
+							? macro?.value
+							: undefined;
+				const value = /^(?:0|-?[1-9]\d*)$/.test(key)
+					? BigInt(key)
+					: typeof constant === "bigint"
+						? constant
+						: typeof constant === "number" && Number.isSafeInteger(constant)
+							? BigInt(constant)
+							: undefined;
+				if (value === undefined)
+					throw new FfiError(`tagged ${name}: '${key}' is not a known integer constant`);
+				if (value < minimum || value > maximum)
+					throw new FfiError(`tagged ${name}: '${key}' does not fit the discriminator`);
+				if (seen.has(value))
+					throw new FfiError(`tagged ${name}: duplicate discriminator value '${key}'`);
+				seen.add(value);
+				const choices = new Map<string, number>();
+				const selected = new Set<string>();
+				for (const selector of selection) {
+					if (selected.has(selector))
+						throw new FfiError(`tagged ${name}: duplicate selection '${selector}'`);
+					selected.add(selector);
+					const path = resolveCFieldPath(this.#model, record, selector.split("."));
+					if (
+						path === undefined ||
+						!path.some((step) => step.record.tag === "union") ||
+						path.at(-1)?.record.tag !== "union"
+					)
+						throw new FfiError(
+							`tagged ${name}: '${selector}' must name an active union member`,
+						);
+					const route: Array<number> = [];
+					for (const step of path) {
+						if (step.record.tag === "union") {
+							const at = route.join(".");
+							const prior = choices.get(at);
+							if (prior !== undefined && prior !== step.index)
+								throw new FfiError(
+									`tagged ${name}: conflicting union selections in '${key}'`,
+								);
+							choices.set(at, step.index);
+						}
+						route.push(step.index);
+					}
+				}
+				const view = this.#caseRecord(
+					record,
+					[],
+					choices,
+					tagPath!.map((step) => step.index).join("."),
+					`${identity}_${cases.length}`,
+				);
+				if ("gap" in view) return view;
+				if (view.value.kind !== "record")
+					throw new Error("tagged case without record view");
+				cases.push({
+					expression:
+						value < 0n ? `(-INT64_C(${-value - 1n}) - INT64_C(1))` : `UINT64_C(${value})`,
+					literal:
+						tag.kind === "bigint"
+							? `${value}n`
+							: tag.kind === "boolean"
+								? String(value !== 0n)
+								: String(value),
+					selection,
+					record: this.records.get(view.value.name)!,
+				});
+			}
+		} finally {
+			this.#pending.delete(mappedName);
+		}
+		const mapped: MappedTagged = {
+			name: mappedName,
+			spelling: access.spelling,
+			record,
+			tag: { name: shape.tag, type: tagField.integerType ?? tagField.type, value: tag },
+			cases,
+			...(alias === undefined ? {} : { alias }),
+		};
+		this.tagged.set(mappedName, mapped);
+		return { value: asValue(mapped) };
+	}
+
+	#caseRecord(
+		record: CRecord,
+		route: ReadonlyArray<number>,
+		choices: ReadonlyMap<string, number>,
+		omitted: string,
+		identity: string,
+	): Mapping {
+		const spelling = this.#accesses.get(record.name)?.spelling;
+		if (spelling === undefined)
+			return { gap: `tagged ${record.name}: the C type has no accessible spelling` };
+		const mappedName = `MaligatorFfiCase_${identity}_${route.join("_") || "root"}`;
+		const fields: Array<MappedField> = [];
+		const append = (
+			current: CRecord,
+			path: ReadonlyArray<number>,
+		): string | undefined => {
+			const choice = choices.get(path.join("."));
+			for (const [index, field] of current.fields.entries()) {
+				if (current.tag === "union" && index !== choice) continue;
+				const next = [...path, index];
+				if (
+					next.join(".") === omitted ||
+					(field.name === undefined && field.bitWidth !== undefined)
+				)
+					continue;
+				const type = resolveCType(this.#model, field.type);
+				const nested =
+					type.kind === "record" ? this.#model.records.get(type.name) : undefined;
+				if (field.name === undefined) {
+					if (nested === undefined) return "unsupported anonymous member";
+					const failure = append(nested, next);
+					if (failure !== undefined) return failure;
+					continue;
+				}
+				// The outer discriminator owns these fields; defaults cannot activate omitted storage.
+				if (
+					current.tag === "struct" &&
+					nested?.tag === "union" &&
+					!choices.has(next.join("."))
+				)
+					continue;
+				const mapped = this.#caseField(field, next, choices, omitted, identity);
+				if (mapped === undefined) continue;
+				if ("gap" in mapped) return `field '${field.name}': ${mapped.gap}`;
+				if (mapped.value.kind === "handle")
+					return `field '${field.name}' needs a pointer interface`;
+				fields.push({
+					name: field.name,
+					type: field.integerType ?? field.type,
+					value: mapped.value,
+					...(field.bitWidth === undefined ? {} : { bitWidth: field.bitWidth }),
+				});
+			}
+			return undefined;
+		};
+		const failure = append(record, route);
+		if (failure !== undefined) return { gap: `tagged ${record.name}: ${failure}` };
+		this.records.set(mappedName, {
+			name: mappedName,
+			spelling,
+			record,
+			fields,
+			private: true,
+		});
+		return { value: { kind: "record", name: mappedName } };
+	}
+
+	#caseField(
+		field: CField,
+		route: ReadonlyArray<number>,
+		choices: ReadonlyMap<string, number>,
+		omitted: string,
+		identity: string,
+	): Mapping | undefined {
+		const type = resolveCType(this.#model, field.type);
+		const record =
+			type.kind === "record" ? this.#model.records.get(type.name) : undefined;
+		if (record === undefined) return this.#field(field);
+		const prefix = route.join(".");
+		const selectedBelow = [...choices.keys()].some(
+			(key) => key === prefix || key.startsWith(`${prefix}.`),
+		);
+		if (this.#handles.has(record.name))
+			return selectedBelow
+				? { gap: `union selectors cannot traverse ${record.name} handles` }
+				: this.#field(field);
+		if (this.#shapes.has(record.name) && !selectedBelow) return this.#field(field);
+		if (record.tag === "struct")
+			return this.#caseRecord(record, route, choices, omitted, identity);
+		const selected = choices.get(prefix);
+		if (selected === undefined) return undefined;
+		const member = record.fields[selected]!;
+		if (member.name === undefined)
+			return this.#caseRecord(record, route, choices, omitted, identity);
+		const mapping = this.#caseField(
+			member,
+			[...route, selected],
+			choices,
+			omitted,
+			identity,
+		);
+		if (mapping === undefined)
+			return { gap: `union ${record.name}: select its active member` };
+		if ("gap" in mapping) return mapping;
+		if (mapping.value.kind === "handle")
+			return { gap: `union ${record.name}: a selected handle needs a pointer interface` };
+		const spelling = this.#accesses.get(record.name)?.spelling;
+		if (spelling === undefined)
+			return { gap: `union ${record.name}: the C type has no accessible spelling` };
+		const name = `case_union_${identity}_${route.join("_")}`;
+		this.unions.set(name, {
+			name,
+			spelling,
+			record,
+			member: {
+				name: member.name,
+				type: member.integerType ?? member.type,
+				value: mapping.value,
+				...(member.bitWidth === undefined ? {} : { bitWidth: member.bitWidth }),
+			},
+		});
+		return { value: { kind: "union", name, of: mapping.value } };
 	}
 
 	#record(name: string, tag: "struct" | "union"): Mapping {
@@ -1102,6 +1410,8 @@ class Planner {
 	 */
 	#containsHandle(value: JsValue): boolean {
 		if (value.kind === "handle") return true;
+		if (value.kind === "tagged")
+			return value.cases.some((entry) => this.#containsHandle(entry.value));
 		if (value.kind === "array" || value.kind === "sequence" || value.kind === "union")
 			return this.#containsHandle(value.of);
 		return (
@@ -1277,6 +1587,7 @@ class Planner {
 						"bytes",
 						"record",
 						"union",
+						"tagged",
 						...(callback.closes !== undefined || callback.queued === "wait"
 							? ["handle"]
 							: []),
@@ -2196,6 +2507,7 @@ export function planBindings(
 		unbound,
 		records: planner.records,
 		unions: planner.unions,
+		tagged: planner.tagged,
 		handles,
 		constants,
 		skippedConstants,

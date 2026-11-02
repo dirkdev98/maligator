@@ -1901,15 +1901,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       and primary or standby selection against a dedicated topology. Keep
       topology-dependent tests separate from the deterministic local baseline.
 
-# C libraries
-
-Libraries declared under `ffi` bind through their real headers: the generated C
-includes them, so the C compiler owns the ABI. Contracts hold facts only, generated
-functions return status codes, and idiomatic APIs are plain TypeScript on top.
-
-- [ ] Map value unions with explicit shape
-      facts where C does not identify the active value.
-
 # Actors, SMP, and embedding
 
 ## Actors

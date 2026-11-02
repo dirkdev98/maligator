@@ -172,7 +172,8 @@ function suggestHandles(
 			!record.library ||
 			record.tag !== "struct" ||
 			plan.handles.has(record.name) ||
-			plan.records.has(record.name)
+			plan.records.has(record.name) ||
+			[...plan.tagged.values()].some((entry) => entry.record.name === record.name)
 		)
 			continue;
 		// Typedefs name the struct or its pointer, as zlib's `gzFile` does `gzFile_s`.
@@ -548,6 +549,8 @@ function handleNames(binding: BoundFunction): Array<string> {
 	const names = (value: JsValue | "data" | "count"): Array<string> => {
 		if (typeof value !== "object") return [];
 		if (value.kind === "handle") return [value.name];
+		if (value.kind === "tagged")
+			return value.cases.flatMap((entry) => names(entry.value));
 		if (value.kind === "sequence" || value.kind === "union") return names(value.of);
 		return value.kind === "callback" ? value.params.flatMap(names) : [];
 	};

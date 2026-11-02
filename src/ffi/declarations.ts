@@ -39,6 +39,13 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string | F
 		`declare module ${JSON.stringify(ffiModuleSpecifier(library))} {`,
 	];
 	if (plan.handles.size > 0) lines.push("\tconst maligatorFfiHandle: unique symbol;");
+	for (const tagged of plan.tagged.values()) {
+		if (tagged.alias !== undefined)
+			lines.push(
+				...docComment(tagged.record.doc, "\t"),
+				`\texport type ${tagged.alias} = ${formatTsType({ kind: "tagged", name: tagged.name, tag: tagged.tag.name, cases: tagged.cases.map((entry) => ({ literal: entry.literal, value: { kind: "record", name: entry.record.name } })) })};`,
+			);
+	}
 	for (const union of [...plan.unions.values()].sort((a, b) =>
 		a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
 	)) {
@@ -52,6 +59,13 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string | F
 		left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
 	);
 	for (const record of records) {
+		if (record.fields.length === 0) {
+			lines.push(
+				...docComment(record.record.doc, "\t"),
+				`\t${record.private === true ? "" : "export "}type ${record.name} = object;`,
+			);
+			continue;
+		}
 		lines.push(
 			...docComment(record.record.doc, "\t"),
 			`\t${record.private === true ? "" : "export "}interface ${record.name} {`,

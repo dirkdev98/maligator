@@ -131,6 +131,11 @@ export interface TypeInspectionData {
 	readonly c: string;
 	readonly ts: string;
 	readonly doc?: FfiText;
+	readonly cases?: ReadonlyArray<{
+		readonly tag: string;
+		readonly selection: ReadonlyArray<string>;
+		readonly ts: string;
+	}>;
 	readonly fields: ReadonlyArray<{
 		readonly name: string;
 		readonly c: string;
@@ -244,6 +249,11 @@ export function formatTsType(
 			return nullable("string");
 		case "record":
 			return value.name;
+		case "tagged":
+			return (
+				value.alias ??
+				`(${value.cases.map((entry) => `({ ${value.tag}: ${entry.literal} } & ${formatTsType(entry.value, direction)})`).join(" | ")})`
+			);
 		case "union":
 			return value.alias ?? formatTsType(value.of, direction);
 		case "handle":
@@ -391,6 +401,32 @@ export function inspectBindings(
 					ts: formatTsType(union.member.value),
 				},
 			],
+		});
+	for (const tagged of plan.tagged.values())
+		types.push({
+			name: tagged.alias ?? tagged.name,
+			c: tagged.spelling,
+			ts: formatTsType({
+				kind: "tagged",
+				name: tagged.name,
+				tag: tagged.tag.name,
+				cases: tagged.cases.map((entry) => ({
+					literal: entry.literal,
+					value: { kind: "record", name: entry.record.name },
+				})),
+			}),
+			fields: [
+				{
+					name: tagged.tag.name,
+					c: formatCDeclaration(tagged.tag.type),
+					ts: formatTsType(tagged.tag.value),
+				},
+			],
+			cases: tagged.cases.map((entry) => ({
+				tag: entry.literal,
+				selection: entry.selection,
+				ts: formatTsType({ kind: "record", name: entry.record.name }),
+			})),
 		});
 	const constants = plan.constants.map((constant): ConstantInspectionData => ({
 		name: constant.name,

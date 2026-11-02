@@ -108,6 +108,31 @@ The type fact sets the default. A parameter or result can override it; on counte
 arrays, the shape selects each element's union member. Callback parameters and results
 accept the same shape fact. A value result needs no pointer lifetime.
 
+For a discriminator stored beside the union, map each tag to its active C member
+paths. Paths follow named fields and C's anonymous member promotion. A named union
+field holds the selected member's value in JavaScript.
+
+```typescript
+types: {
+  Event: {
+    shape: {
+      tag: "kind",
+      cases: {
+        EVENT_INTEGER: ["payload.integer"],
+        EVENT_POINT: ["payload.point"],
+        EVENT_DONE: [],
+      },
+    },
+  },
+}
+```
+
+The generated TypeScript type narrows by `kind`. Case keys are known integer constants
+or decimal integers within the tag's range. Tags wider than 32 bits use BigInt.
+Input conversion reads the tag once before payload getters; unknown tags throw before
+reading payload fields. An empty selection hides union storage. Root unions also keep
+the selected member name, and payload writes must preserve their discriminator.
+
 Handles nested in callback arguments are loans that close when the callback returns.
 Resource-bearing values require waiting callbacks when C calls from another thread.
 Compound callback results containing handles need a pointer result interface with an

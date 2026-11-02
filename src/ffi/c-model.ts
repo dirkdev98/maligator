@@ -217,3 +217,32 @@ export function* promotedCFields(
 		else yield field;
 	}
 }
+
+export interface CFieldStep {
+	readonly record: CRecord;
+	readonly field: CField;
+	readonly index: number;
+}
+
+/** Resolve C member names without losing anonymous union choice boundaries. */
+export function resolveCFieldPath(
+	model: Pick<CModel, "records" | "typedefs">,
+	record: CRecord,
+	path: ReadonlyArray<string>,
+): ReadonlyArray<CFieldStep> | undefined {
+	if (path.length === 0) return undefined;
+	for (const [index, field] of record.fields.entries()) {
+		const step = { record, field, index };
+		const type = resolveCType(model, field.type);
+		const nested = type.kind === "record" ? model.records.get(type.name) : undefined;
+		if (field.name === path[0]) {
+			if (path.length === 1) return [step];
+			const rest = nested && resolveCFieldPath(model, nested, path.slice(1));
+			if (rest !== undefined) return [step, ...rest];
+		} else if (field.name === undefined && nested !== undefined) {
+			const rest = resolveCFieldPath(model, nested, path);
+			if (rest !== undefined) return [step, ...rest];
+		}
+	}
+	return undefined;
+}

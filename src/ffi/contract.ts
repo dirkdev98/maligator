@@ -162,6 +162,38 @@ function validateEvidence(value: unknown, at: string): void {
 
 function validateShape(value: unknown, at: string): void {
 	expectObject(value, at);
+	if (value.tag !== undefined || value.cases !== undefined) {
+		expectKeys(value, at, ["tag", "cases"]);
+		expect(
+			typeof value.tag === "string" && C_NAME.test(value.tag),
+			`${at}.tag`,
+			"a C field name",
+		);
+		expectObject(value.cases, `${at}.cases`);
+		expect(
+			Object.keys(value.cases).length > 0,
+			`${at}.cases`,
+			"at least one discriminator case",
+		);
+		for (const [key, selectors] of Object.entries(value.cases)) {
+			expect(
+				C_NAME.test(key) || /^(?:0|-?[1-9]\d*)$/.test(key),
+				`${at}.cases.${key}`,
+				"a C integer constant name or canonical decimal integer",
+			);
+			expect(
+				Array.isArray(selectors) &&
+					selectors.every(
+						(selector: unknown) =>
+							typeof selector === "string" &&
+							selector.split(".").every((part) => C_NAME.test(part)),
+					),
+				`${at}.cases.${key}`,
+				"an array of C member paths",
+			);
+		}
+		return;
+	}
 	expectKeys(value, at, ["member"]);
 	expect(
 		typeof value.member === "string" && C_NAME.test(value.member),
