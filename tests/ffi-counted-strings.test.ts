@@ -48,7 +48,7 @@ describe("counted UTF-8 contracts", () => {
 	);
 	it("declares counted results and async twins as strings", () => {
 		const plan = planBindings(model, { types: {}, functions: textContract.functions });
-		const declarations = generateDeclarations([{ name: "text", plan }]);
+		const declarations = [...generateDeclarations([{ name: "text", plan }])].join("");
 		expect(declarations).toContain(
 			"export function text_copy(text: string | null): string | null;",
 		);
@@ -83,7 +83,7 @@ describe("counted UTF-8 contracts", () => {
 					},
 				},
 			});
-			expect(generateDeclarations([{ name: "text", plan }])).toContain(
+			expect([...generateDeclarations([{ name: "text", plan }])].join("")).toContain(
 				role === "out"
 					? "export function text_out(): { text: string | null; length: number };"
 					: "export function text_out(text: string): { text: string | null; length: number };",
@@ -104,7 +104,7 @@ describe("counted UTF-8 contracts", () => {
 	});
 	it("hides callback counts and declares the copied string argument", () => {
 		const plan = planBindings(model, { types: {}, functions: textContract.functions });
-		expect(generateDeclarations([{ name: "text", plan }])).toContain(
+		expect([...generateDeclarations([{ name: "text", plan }])].join("")).toContain(
 			"export function text_counted_callback(callback: (arg1: string | null) => void, mode: number): void;",
 		);
 	});
@@ -128,7 +128,7 @@ describe("counted UTF-8 contracts", () => {
 					},
 				},
 			});
-			expect(generateDeclarations([{ name: "text", plan }])).toContain(
+			expect([...generateDeclarations([{ name: "text", plan }])].join("")).toContain(
 				"export function text_notify(callback: (arg1: string | null) => void, mode: number): void;",
 			);
 		},

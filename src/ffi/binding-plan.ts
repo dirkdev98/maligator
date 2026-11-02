@@ -11,6 +11,7 @@ import { formatCDeclaration, parseCType } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import type { LibraryFacts } from "./contract.ts";
 import { FfiError } from "./ffi-error.ts";
+import type { FfiText } from "./text.ts";
 
 /**
  * How a C value crosses into JavaScript. Mappings follow fixed rules so the same
@@ -187,7 +188,7 @@ export interface MappedField {
 	readonly name: string;
 	readonly type: CType;
 	readonly value: JsValue;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 }
 
 export interface ManagedField {
@@ -199,7 +200,7 @@ export interface ManagedField {
 	readonly bits: number;
 	readonly signed: boolean;
 	readonly writable: boolean;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 }
 
 export interface MappedRecord {
@@ -235,7 +236,7 @@ export interface HandleType {
 	/** Read-only accessors for a struct handle's value fields. */
 	readonly fields: ReadonlyArray<MappedField>;
 	readonly managedFields: ReadonlyArray<ManagedField>;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 }
 
 export interface MappedConstant {
@@ -245,7 +246,7 @@ export interface MappedConstant {
 	readonly value: JsValue;
 	/** Known at build time; otherwise the binding reads the C expression when it loads. */
 	readonly known?: bigint | number | string;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 }
 
 export interface SkippedConstant {

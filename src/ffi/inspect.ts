@@ -14,13 +14,14 @@ import type { LibraryContract, LibraryFacts } from "./contract.ts";
 import type { LinkInput, ResolvedLibrary } from "./discovery.ts";
 import { suggestFacts } from "./suggest.ts";
 import type { SuggestedFacts } from "./suggest.ts";
+import type { FfiText } from "./text.ts";
 
 /**
  * Everything the build knows about a library, in a stable JSON shape: where it was
  * found, each declaration with its C and TypeScript forms, and the facts missing
  * for the declarations that cannot bind yet. Tools that propose facts read this.
  */
-export interface FfiInspection {
+export interface FfiInspectionData {
 	readonly library: string;
 	readonly contract: string;
 	readonly resolution: {
@@ -37,7 +38,7 @@ export interface FfiInspection {
 	readonly headers: ReadonlyArray<{ readonly spelling: string; readonly path: string }>;
 	readonly files: ReadonlyArray<string>;
 	/** Structured declarations, including unmapped and transitive system types. */
-	readonly model: CModelInspection;
+	readonly model: CModelInspectionData;
 	/** Accepted contract facts, before naming and signature suggestions. */
 	readonly facts: LibraryFacts;
 	readonly summary: {
@@ -48,10 +49,10 @@ export interface FfiInspection {
 		readonly constants: number;
 		readonly skippedConstants: number;
 	};
-	readonly functions: ReadonlyArray<FunctionInspection>;
-	readonly types: ReadonlyArray<TypeInspection>;
-	readonly handles: ReadonlyArray<HandleInspection>;
-	readonly constants: ReadonlyArray<ConstantInspection>;
+	readonly functions: ReadonlyArray<FunctionInspectionData>;
+	readonly types: ReadonlyArray<TypeInspectionData>;
+	readonly handles: ReadonlyArray<HandleInspectionData>;
+	readonly constants: ReadonlyArray<ConstantInspectionData>;
 	readonly skippedConstants: ReadonlyArray<{
 		readonly name: string;
 		readonly reason: string;
@@ -61,7 +62,7 @@ export interface FfiInspection {
 }
 
 /** JSON keeps declaration maps as arrays and exact C integer values as decimal strings. */
-export interface CModelInspection extends Omit<
+export interface CModelInspectionData extends Omit<
 	CModel,
 	"records" | "enums" | "typedefs" | "macros"
 > {
@@ -79,7 +80,7 @@ export interface CModelInspection extends Omit<
 	>;
 }
 
-function inspectModel(model: CModel): CModelInspection {
+function inspectModel(model: CModel): CModelInspectionData {
 	const byName = (left: { readonly name: string }, right: { readonly name: string }) =>
 		left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
 	return {
@@ -102,14 +103,14 @@ function inspectModel(model: CModel): CModelInspection {
 	};
 }
 
-export interface FunctionInspection {
+export interface FunctionInspectionData {
 	readonly name: string;
 	/** The variadic C function a variant calls; its arguments follow the fixed ones. */
 	readonly variantOf?: string;
 	readonly status: "bound" | "needs-facts";
 	readonly c: string;
 	readonly ts?: string;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 	readonly location: { readonly file: string; readonly line: number };
 	readonly inline?: true;
 	readonly attributes?: ReadonlyArray<string>;
@@ -119,26 +120,26 @@ export interface FunctionInspection {
 		/** How the binding produces the argument: input, out, inout, a count, or result-count. */
 		readonly role?: string;
 		readonly ts?: string;
-		readonly doc?: string;
+		readonly doc?: FfiText;
 	}>;
 	readonly returns: { readonly c: string; readonly ts?: string };
 	readonly gaps?: ReadonlyArray<Gap>;
 }
 
-export interface TypeInspection {
+export interface TypeInspectionData {
 	readonly name: string;
 	readonly c: string;
 	readonly ts: string;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 	readonly fields: ReadonlyArray<{
 		readonly name: string;
 		readonly c: string;
 		readonly ts: string;
-		readonly doc?: string;
+		readonly doc?: FfiText;
 	}>;
 }
 
-export interface HandleInspection {
+export interface HandleInspectionData {
 	readonly name: string;
 	readonly c: string;
 	/** A copy of a struct the library passes by value, or a pointer it returns. */
@@ -148,7 +149,7 @@ export interface HandleInspection {
 	readonly destroy?: string;
 	readonly destroySuccess?: string;
 	readonly collect: boolean;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 	/** Value accessors on a struct handle or caller factory result. */
 	readonly fields: ReadonlyArray<{
 		readonly name: string;
@@ -158,14 +159,14 @@ export interface HandleInspection {
 	}>;
 }
 
-export interface ConstantInspection {
+export interface ConstantInspectionData {
 	readonly name: string;
 	readonly source: "enum" | "macro";
 	readonly c: string;
 	readonly ts: string;
 	/** Bigint values are decimal strings; absent when the binding evaluates the C expression. */
 	readonly value?: number | string;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 }
 
 const RESERVED = new Set(
@@ -296,7 +297,7 @@ export function inspectBindings(
 	compiler: { path: string; version: string },
 	model: CModel,
 	plan: BindingPlan,
-): FfiInspection {
+): FfiInspectionData {
 	const bound = new Map(plan.functions.map((entry) => [entry.name, entry]));
 	const unbound = new Map(plan.unbound.map((entry) => [entry.name, entry]));
 	// A variadic function with variants is reported as its variants.
@@ -311,7 +312,7 @@ export function inspectBindings(
 		(declaration) =>
 			variants.get(declaration.name) ?? [{ name: declaration.name, declaration }],
 	);
-	const functions = entries.map(({ name, declaration }): FunctionInspection => {
+	const functions = entries.map(({ name, declaration }): FunctionInspectionData => {
 		const binding = bound.get(name);
 		const gaps = unbound.get(name)?.gaps;
 		const params = declaration.params.map((param, index) => {
@@ -364,7 +365,7 @@ export function inspectBindings(
 	const types = [...plan.records.values()]
 		.filter((entry) => entry.record.library)
 		.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
-		.map((entry): TypeInspection => ({
+		.map((entry): TypeInspectionData => ({
 			name: entry.name,
 			c: entry.spelling,
 			ts: `{ ${entry.fields.map((field) => `${field.name}: ${formatTsType(field.value)}`).join("; ")} }`,
@@ -376,7 +377,7 @@ export function inspectBindings(
 				...(field.doc === undefined ? {} : { doc: field.doc }),
 			})),
 		}));
-	const constants = plan.constants.map((constant): ConstantInspection => ({
+	const constants = plan.constants.map((constant): ConstantInspectionData => ({
 		name: constant.name,
 		source: constant.source,
 		c: formatCDeclaration(constant.type),
@@ -455,7 +456,7 @@ export function inspectBindings(
 }
 
 /** A short human summary; `--json` carries the full detail. */
-export function formatInspection(inspection: FfiInspection): string {
+export function formatInspection(inspection: FfiInspectionData): string {
 	const { resolution, summary } = inspection;
 	const source =
 		resolution.method === "pkg-config"
@@ -515,3 +516,18 @@ export function formatInspection(inspection: FfiInspection): string {
 	}
 	return lines.join("\n");
 }
+
+/** The CLI wire representation keeps prose as ordinary JSON strings. */
+type JsonText<Value> = Value extends FfiText
+	? string
+	: Value extends ReadonlyArray<infer Element>
+		? ReadonlyArray<JsonText<Element>>
+		: Value extends object
+			? { [Key in keyof Value]: JsonText<Value[Key]> }
+			: Value;
+export type FfiInspection = JsonText<FfiInspectionData>;
+export type CModelInspection = JsonText<CModelInspectionData>;
+export type FunctionInspection = JsonText<FunctionInspectionData>;
+export type TypeInspection = JsonText<TypeInspectionData>;
+export type HandleInspection = JsonText<HandleInspectionData>;
+export type ConstantInspection = JsonText<ConstantInspectionData>;

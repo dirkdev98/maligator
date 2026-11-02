@@ -5,11 +5,14 @@ import type { JsValue } from "./binding-plan.ts";
 import type { CFunction } from "./c-model.ts";
 import type { CType } from "./c-type.ts";
 import { FfiError } from "./ffi-error.ts";
+import { FfiJsonReader, ffiJsonChunks, ffiJsonEqual } from "./json.ts";
 import type { PreparedLibrary } from "./library.ts";
 import { macroFactRoots, macroReferences } from "./macros.ts";
 import type { FfiProbeReport } from "./probe.ts";
+import { FfiText } from "./text.ts";
 
 type Json =
+	| FfiText
 	| null
 	| boolean
 	| number
@@ -45,10 +48,16 @@ export interface FfiLibraryCheck {
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		!(value instanceof FfiText)
+	);
 }
 
 function json(value: unknown): Json {
+	if (value instanceof FfiText) return value;
 	if (value === null || typeof value === "string" || typeof value === "boolean")
 		return value;
 	if (typeof value === "number") return Number.isFinite(value) ? value : String(value);
@@ -68,7 +77,7 @@ function documentationEvidence(prepared: PreparedLibrary): Snapshot {
 	const { model, contract } = prepared;
 	const result: Record<string, Json> = {};
 	const children = (
-		entries: ReadonlyArray<{ readonly name?: string; readonly doc?: string }>,
+		entries: ReadonlyArray<{ readonly name?: string; readonly doc?: FfiText }>,
 	): Snapshot =>
 		Object.fromEntries(
 			entries.flatMap((entry, index) =>
@@ -78,7 +87,7 @@ function documentationEvidence(prepared: PreparedLibrary): Snapshot {
 	const cite = (reference: MaligatorFfiEvidence, at: string): void => {
 		const key = `${reference.kind} ${reference.name}`;
 		if (key in result) return;
-		let doc: string | undefined;
+		let doc: FfiText | undefined;
 		let members: Snapshot | undefined;
 		let exists = false;
 		switch (reference.kind) {
@@ -354,7 +363,7 @@ function readLockfile(file: string): Lockfile {
 	if (!existsSync(file)) return { schema: 1, targets: {} };
 	let value: unknown;
 	try {
-		value = JSON.parse(readFileSync(file, "utf8"));
+		value = new FfiJsonReader(readFileSync(file), "FFI lockfile JSON").read();
 	} catch {
 		throw new FfiError(`cannot read FFI lockfile ${file}: expected JSON`);
 	}
@@ -388,7 +397,7 @@ function changes(
 	at: string,
 	result: Array<FfiChange>,
 ): void {
-	if (JSON.stringify(before) === JSON.stringify(after)) return;
+	if (ffiJsonEqual(before, after)) return;
 	if (isObject(before) && isObject(after)) {
 		for (const key of [
 			...new Set([...Object.keys(before), ...Object.keys(after)]),
@@ -442,7 +451,7 @@ export function checkLibraries(
 	if (options.update) {
 		writeFileAtomically(
 			options.file,
-			`${JSON.stringify(
+			ffiJsonChunks(
 				json({
 					schema: 1,
 					targets: {
@@ -450,9 +459,8 @@ export function checkLibraries(
 						[options.target]: options.all ? current : { ...previous, ...current },
 					},
 				}),
-				null,
 				"\t",
-			)}\n`,
+			),
 		);
 	}
 	return {
@@ -464,13 +472,24 @@ export function checkLibraries(
 }
 
 export function formatFfiCheck(report: FfiCheckReport): string {
+	const display = (value: Json | undefined): string => {
+		if (value === undefined) return "(absent)";
+		const parts: Array<string> = [];
+		let remaining = 1024;
+		for (const chunk of ffiJsonChunks(value)) {
+			parts.push(chunk.slice(0, remaining));
+			remaining -= chunk.length;
+			if (remaining < 0) return `${parts.join("")}... (use --json for the full value)`;
+		}
+		return parts.join("");
+	};
 	return [
 		`FFI declarations for ${report.target}: ${report.file}`,
 		...report.libraries.flatMap((entry) => [
 			`${entry.library}: ${entry.status === "missing" ? "no accepted snapshot" : entry.status}`,
 			...entry.changes.map(
 				(change) =>
-					`  ${change.path}: ${JSON.stringify(change.before) ?? "(absent)"} -> ${JSON.stringify(change.after) ?? "(absent)"}`,
+					`  ${change.path}: ${display(change.before)} -> ${display(change.after)}`,
 			),
 		]),
 		...(report.probe === undefined

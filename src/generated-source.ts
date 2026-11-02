@@ -5,11 +5,11 @@ const BATCH_CODE_UNITS = 256 * 1024;
 
 /** Writes concatenated UTF-16 fragments as UTF-8, optionally hashing those same bytes. */
 export function writeSourceChunks(
-	file: string,
+	file: string | number,
 	chunks: Iterable<string>,
 	digest?: Hash,
 ): number {
-	const descriptor = openSync(file, "w");
+	const descriptor = typeof file === "number" ? file : openSync(file, "w");
 	let parts: Array<string> = [];
 	let codeUnits = 0;
 	let bytes = 0;
@@ -44,6 +44,6 @@ export function writeSourceChunks(
 		flush(true);
 		return bytes;
 	} finally {
-		closeSync(descriptor);
+		if (typeof file === "string") closeSync(descriptor);
 	}
 }

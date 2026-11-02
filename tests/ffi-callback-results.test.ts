@@ -29,7 +29,7 @@ describe("callback pointer result contracts", () => {
 	});
 	it("declares pointer representations and hides native result counts", () => {
 		const plan = planBindings(model, { types: {}, functions: resultContract.functions });
-		const declarations = generateDeclarations([{ name: "results", plan }]);
+		const declarations = [...generateDeclarations([{ name: "results", plan }])].join("");
 		expect(declarations).toContain(
 			"export function result_counted(callback: (arg1: number) => string | null): string | null;",
 		);
@@ -57,7 +57,7 @@ describe("callback pointer result contracts", () => {
 			types: resultContract.types,
 			functions: resultContract.functions,
 		});
-		const declarations = generateDeclarations([{ name: "results", plan }]);
+		const declarations = [...generateDeclarations([{ name: "results", plan }])].join("");
 		expect(declarations).toContain(
 			"export function result_handle(callback: (arg1: number) => ResultResource | null): ResultResource | null;",
 		);

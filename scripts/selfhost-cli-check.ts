@@ -35,6 +35,7 @@ const arguments_ = process.argv.slice(2);
 let providedCli: string | undefined;
 let supervisorOnly = false;
 let ffiWatchOnly = false;
+let ffiLargeOnly = false;
 for (let index = 0; index < arguments_.length; index++) {
 	const argument = arguments_[index];
 	if (argument === "--cli" && providedCli === undefined) {
@@ -44,9 +45,10 @@ for (let index = 0; index < arguments_.length; index++) {
 		providedCli = path.resolve(value);
 	} else if (argument === "--supervisor-only" && !supervisorOnly) supervisorOnly = true;
 	else if (argument === "--ffi-watch-only" && !ffiWatchOnly) ffiWatchOnly = true;
+	else if (argument === "--ffi-large-only" && !ffiLargeOnly) ffiLargeOnly = true;
 	else
 		throw new Error(
-			"usage: node scripts/selfhost-cli-check.ts [--cli PATH] [--supervisor-only | --ffi-watch-only]",
+			"usage: node scripts/selfhost-cli-check.ts [--cli PATH] [--supervisor-only | --ffi-watch-only | --ffi-large-only]",
 		);
 }
 if (supervisorOnly && providedCli === undefined)
@@ -54,6 +56,10 @@ if (supervisorOnly && providedCli === undefined)
 if (ffiWatchOnly && (providedCli === undefined || supervisorOnly))
 	throw new Error(
 		"--ffi-watch-only requires --cli and cannot combine with --supervisor-only",
+	);
+if (ffiLargeOnly && (providedCli === undefined || supervisorOnly || ffiWatchOnly))
+	throw new Error(
+		"--ffi-large-only requires --cli and cannot combine with another selection",
 	);
 const root = path.join(
 	maligatorCacheDirectory(),
@@ -695,13 +701,170 @@ async function checkFfiTestWatch(): Promise<void> {
 	);
 }
 
-if (ffiWatchOnly) {
+function checkFfiLargeHeaders(): void {
+	const directory = path.join(project, "ffi-large");
+	const include = path.join(directory, "include");
+	mkdirSync(include, { recursive: true });
+	const doc = 'The caller owns this fictional resource. Grüße🙂 "quoted" \\ text. '
+		.padEnd(1024, ".")
+		.repeat(17_000);
+	const header = path.join(include, "large.h");
+	const writeHeader = (text: string): void =>
+		writeFileSync(
+			header,
+			`/* ${text} */\n#define LARGE_CODE 7\nint large_read(int value);\n`,
+		);
+	writeHeader(doc);
+	writeFileSync(path.join(directory, "large.c"), "");
+	writeFileSync(
+		path.join(directory, "large.ffi.ts"),
+		'export default {headers:["large.h"],find:[{includeDirs:["include"],sources:["large.c"]}],functions:{large_read:{evidence:[{kind:"macro",name:"LARGE_CODE"}]}}};\n',
+	);
+	writeFileSync(
+		path.join(directory, "maligator.build.ts"),
+		'export default {ffi:{large:{contract:"large.ffi.ts"}}};\n',
+	);
+	const compilerLog = path.join(directory, "compiler.log");
+	const compiler = path.join(directory, "cc");
+	const quote = (text: string): string => `'${text.replaceAll("'", "'\\''")}'`;
+	writeFileSync(
+		compiler,
+		`#!/bin/sh\nprintf '%s\\n' "$*" >> ${quote(compilerLog)}\nexec ${quote(path.join(tools, "cc"))} "$@"\n`,
+	);
+	chmodSync(compiler, 0o755);
+	const records: Array<unknown> = [];
+	const run = (host: "node" | "native", args: Array<string>, status = 0): Buffer => {
+		const start = performance.now();
+		const result = spawnSync(
+			host === "node" ? process.execPath : distributedCli,
+			host === "node" ? [path.join(repositoryRoot, "src/index.ts"), ...args] : args,
+			{
+				cwd: directory,
+				env: {
+					...isolatedEnv,
+					CC: compiler,
+					MALIGATOR_CACHE_DIR: path.join(directory, `${host}-cache`),
+				},
+				timeout: 180_000,
+				maxBuffer: 256 * 1024 * 1024,
+				stdio: ["ignore", "pipe", "pipe"],
+			},
+		);
+		records.push({
+			host,
+			args,
+			status: result.status,
+			signal: result.signal,
+			error: result.error?.message,
+			milliseconds: performance.now() - start,
+			bytes: result.stdout?.length,
+			sha256:
+				result.stdout === null
+					? null
+					: createHash("sha256").update(result.stdout).digest("hex"),
+			stderr: result.stderr?.toString().slice(0, 8192),
+		});
+		writeFileSync(
+			path.join(reports, "ffi-large.json"),
+			JSON.stringify(
+				{
+					documentationLength: doc.length,
+					documentationSha256: createHash("sha256").update(doc).digest("hex"),
+					commands: records,
+				},
+				null,
+				2,
+			),
+		);
+		if (result.error !== undefined || result.status !== status || result.signal !== null)
+			throw new Error(
+				`large FFI ${host} command ${args.join(" ")} failed: ${result.error?.message ?? result.stderr?.toString().slice(0, 8192)}`,
+			);
+		return result.stdout;
+	};
+	const astDumps = (): number =>
+		readFileSync(compilerLog, "utf8")
+			.split("\n")
+			.filter((line) => line.includes("-ast-dump")).length;
+	const source = run("node", ["ffi", "inspect", "large", "--json"]);
+	const native = run("native", ["ffi", "inspect", "large", "--json"]);
+	if (!native.equals(source))
+		throw new Error("large FFI inspection differs between Node and the packaged CLI");
+	const extracted = astDumps();
+	if (
+		!run("native", ["ffi", "inspect", "large", "--json"]).equals(source) ||
+		astDumps() !== extracted
+	)
+		throw new Error("large FFI cached inspection changed or repeated AST extraction");
+	run("node", ["ffi", "types", "--out", "node.d.ts"]);
+	run("native", ["ffi", "types", "--out", "native.d.ts"]);
+	if (
+		!readFileSync(path.join(directory, "node.d.ts")).equals(
+			readFileSync(path.join(directory, "native.d.ts")),
+		)
+	)
+		throw new Error("large FFI declarations differ between Node and the packaged CLI");
+	run("native", ["ffi", "check", "--update", "--json"]);
+	const lock = path.join(directory, "maligator-ffi.lock.json");
+	const accepted = readFileSync(lock);
+	const unchanged = run("native", ["ffi", "check", "--json"]);
+	if (
+		!unchanged.equals(run("node", ["ffi", "check", "--json"])) ||
+		!accepted.equals(readFileSync(lock))
+	)
+		throw new Error("unchanged large FFI snapshot differs or was rewritten");
+	writeHeader(`Changed ${doc}`);
+	const changed = run("native", ["ffi", "check", "--json"], 1);
+	if (!changed.equals(run("node", ["ffi", "check", "--json"], 1)))
+		throw new Error("large FFI drift differs between Node and the packaged CLI");
+	const report = JSON.parse(changed.toString("utf8")) as FfiCheckReport;
+	if (
+		!report.libraries.some((library) =>
+			library.changes.some(
+				(change) =>
+					change.path === "evidence.macro LARGE_CODE.doc" &&
+					change.before === doc &&
+					change.after === `Changed ${doc}`,
+			),
+		)
+	)
+		throw new Error("large FFI documentation drift was not reported");
+	const text = run("native", ["ffi", "check"], 1).toString("utf8");
+	if (
+		text.length > 8192 ||
+		!text.includes("evidence.macro LARGE_CODE.doc") ||
+		!text.includes("--json")
+	)
+		throw new Error("large FFI text diagnostics did not bound their values");
+	run("native", ["ffi", "check", "--update", "--json"]);
+	run("native", ["ffi", "check", "--json"]);
+	console.log(
+		"ok   packaged FFI preserves oversized documentation through inspection, cache hits, declarations, and lockfile drift",
+	);
+}
+
+if (ffiWatchOnly || ffiLargeOnly) {
+	let failure: unknown;
 	try {
-		await checkFfiTestWatch();
+		if (ffiWatchOnly) await checkFfiTestWatch();
+		else checkFfiLargeHeaders();
 		progress.complete();
+	} catch (error) {
+		failure = error;
 	} finally {
-		rmSync(root, { recursive: true, force: true });
+		try {
+			rmSync(root, { recursive: true, force: true });
+		} catch (error) {
+			failure =
+				failure === undefined
+					? error
+					: new AggregateError([failure, error], "acceptance and cleanup failed");
+		}
 	}
+	if (failure !== undefined)
+		throw failure instanceof Error
+			? failure
+			: new Error("FFI acceptance failed", { cause: failure });
 	process.exit(0);
 }
 
@@ -1116,6 +1279,7 @@ server.listen(0, "127.0.0.1", () => {
 
 	if (!supervisorOnly) {
 		await checkFfiTestWatch();
+		checkFfiLargeHeaders();
 		const doctorOutput = invoke(["doctor", "--verbose"]);
 		if (!doctorOutput.includes("Toolchain is ready.")) {
 			throw new Error(`doctor did not accept the isolated toolchain:\n${doctorOutput}`);

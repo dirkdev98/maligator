@@ -11,6 +11,7 @@ import { formatCDeclaration } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import type { LibraryFacts } from "./contract.ts";
 import { FfiError } from "./ffi-error.ts";
+import { textMatches } from "./text.ts";
 
 /**
  * Facts that would make more declarations bind, shaped as a contract spells them so
@@ -298,8 +299,10 @@ function releaseFunction(model: CModel, declaration: CFunction): string | undefi
 	);
 	if (generic.length !== 1) return undefined;
 	const release = generic[0]!.name;
-	const doc = declaration.doc ?? "";
-	return doc.includes(release) || /\bfree(?:s|d)?\b/i.test(doc) ? release : undefined;
+	const doc = declaration.doc;
+	return doc?.includes(release) || textMatches(doc, /\bfree(?:s|d)?\b/i)
+		? release
+		: undefined;
 }
 
 /** A copied result: text, or bytes or elements counted through an out parameter. */
@@ -605,14 +608,14 @@ export function suggestFacts(
 			result.kind === "handle"
 				? typed.handles.get(result.name)?.destroy?.name
 				: undefined;
-		const doc = binding.declaration.doc ?? "";
+		const doc = binding.declaration.doc;
 		if (
 			!bound.has(binding.name) &&
 			result.kind === "handle" &&
 			result.owned &&
 			destroy !== undefined &&
-			!doc.includes(destroy) &&
-			!/\bcaller\b/i.test(doc) &&
+			!doc?.includes(destroy) &&
+			!textMatches(doc, /\bcaller\b/i) &&
 			nameWords(binding.name).includes("get")
 		)
 			functions.set(binding.name, { returns: { borrowed: true } });

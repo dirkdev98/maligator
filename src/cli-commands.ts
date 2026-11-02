@@ -1,4 +1,12 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	openSync,
+	readFileSync,
+	readSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
@@ -84,6 +92,7 @@ import { checkLibraries, formatFfiCheck } from "./ffi/check.ts";
 import { declarationsCurrent, generateDeclarations } from "./ffi/declarations.ts";
 import { FfiError, FfiSourceChangedError } from "./ffi/ffi-error.ts";
 import { formatInspection, inspectBindings } from "./ffi/inspect.ts";
+import { ffiJsonChunks } from "./ffi/json.ts";
 import { nativeLibraryInputs, prepareLibraries, prepareLibrary } from "./ffi/library.ts";
 import type { PreparedLibraries } from "./ffi/library.ts";
 import { runFfiProbe } from "./ffi/probe.ts";
@@ -93,6 +102,7 @@ import {
 	FrontendCompilationSession,
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
+import { writeSourceChunks } from "./generated-source.ts";
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
@@ -161,6 +171,17 @@ export interface CommandContext {
 	onFfiDependencies?: (paths: ReadonlyArray<string>) => void;
 	checkpoint?: () => void;
 	onCompilationPhase?: (event: CompilationPhase) => void;
+}
+
+function declarationFileHeader(file: string): string {
+	const descriptor = openSync(file, "r");
+	try {
+		const buffer = Buffer.alloc(1024);
+		const length = readSync(descriptor, buffer, 0, buffer.length, 0);
+		return buffer.toString("utf8", 0, length);
+	} finally {
+		closeSync(descriptor);
+	}
 }
 
 export interface DevelopmentWatchHost {
@@ -699,7 +720,7 @@ function prepareCommandState(
 		libraries !== undefined &&
 		existsSync(FFI_DECLARATIONS_NAME) &&
 		!declarationsCurrent(
-			readFileSync(FFI_DECLARATIONS_NAME, "utf8"),
+			declarationFileHeader(FFI_DECLARATIONS_NAME),
 			libraries.libraries.map((entry) => ({
 				name: entry.contract.name,
 				plan: entry.plan,
@@ -2668,9 +2689,10 @@ function runFfiCommand(command: FfiCommand, context: CommandContext): void {
 					checked = checkLibraries(selected, { ...checkOptions, update: true });
 				checked = { ...checked, ok: checked.ok && probe.ok, probe };
 			}
-			log.info(
-				command.json ? JSON.stringify(checked, null, "\t") : formatFfiCheck(checked),
-			);
+			if (command.json) {
+				writeSourceChunks(1, ffiJsonChunks(checked, "\t"));
+				process.stdout.write("\n");
+			} else log.info(formatFfiCheck(checked));
 			if (!checked.ok)
 				commandError(
 					checked.probe?.ok === false
@@ -2689,7 +2711,7 @@ function runFfiCommand(command: FfiCommand, context: CommandContext): void {
 				name,
 				plan: prepareLibrary(config, name, preparation).plan,
 			}));
-			writeFileSync(outPath, generateDeclarations(libraries));
+			writeSourceChunks(outPath, generateDeclarations(libraries));
 			log.info(`Wrote ${path.relative(projectRoot, outPath)} for ${names.join(", ")}`);
 			return;
 		}
@@ -2702,11 +2724,10 @@ function runFfiCommand(command: FfiCommand, context: CommandContext): void {
 			prepared.model,
 			prepared.plan,
 		);
-		log.info(
-			command.json
-				? JSON.stringify(inspection, null, "\t")
-				: formatInspection(inspection),
-		);
+		if (command.json) {
+			writeSourceChunks(1, ffiJsonChunks(inspection, "\t"));
+			process.stdout.write("\n");
+		} else log.info(formatInspection(inspection));
 	} catch (error) {
 		if (error instanceof BuildConfigError || error instanceof FfiError) {
 			commandError(`error: ${error.message}`);

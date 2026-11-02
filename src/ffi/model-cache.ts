@@ -19,6 +19,7 @@ import {
 } from "./c-extract.ts";
 import type { CExtractionInput } from "./c-extract.ts";
 import type { CEnum, CModel, CRecord, CTypedef } from "./c-model.ts";
+import { FfiJsonReader, ffiJsonChunks, reviveFfiJson } from "./json.ts";
 
 const STAGE = "ffi-header-model";
 
@@ -58,7 +59,7 @@ type CachedRow =
 	| ["macro", CModel["macros"][number]]
 	| ["untypedMacro", CModel["untypedMacros"][number]];
 
-/** Each row fits independently; the aggregate model never becomes one engine string. */
+/** Rows and text scalars are emitted without flattening their fragments. */
 function* encode(
 	model: CModel,
 	dependencies: ReadonlyArray<Dependency>,
@@ -76,9 +77,7 @@ function* encode(
 		["untypedMacro", model.untypedMacros],
 	] as const) {
 		for (const entry of entries) {
-			yield JSON.stringify([kind, entry], (_key, value: unknown) =>
-				typeof value === "bigint" ? { $bigint: value.toString() } : value,
-			);
+			yield* ffiJsonChunks([kind, entry]);
 			yield "\n";
 		}
 	}
@@ -98,11 +97,9 @@ function decode(data: Buffer): CachedModel {
 	for (let start = 0; start < data.length;) {
 		let end = data.indexOf(10, start);
 		if (end < 0) end = data.length;
-		const row = JSON.parse(data.toString("utf8", start, end), (_key, value: unknown) => {
-			if (typeof value === "object" && value !== null && "$bigint" in value)
-				return BigInt((value as { $bigint: string }).$bigint);
-			return value;
-		}) as CachedRow;
+		const row = reviveFfiJson(
+			new FfiJsonReader(data, "cached FFI model JSON").parse(start, end),
+		) as CachedRow;
 		start = end + 1;
 		switch (row[0]) {
 			case "target":
@@ -173,7 +170,7 @@ export function loadCModel(input: CExtractionInput): CModel {
 	)
 		return extractCModel(input);
 	const compiler = statSync(input.compiler.path);
-	const producer = compilerProducerIdentity(STAGE, 4);
+	const producer = compilerProducerIdentity(STAGE, 5);
 	const analysis = withCHeaders<{
 		model: CModel;
 		publication?: { key: string; dependencies: ReadonlyArray<Dependency> };

@@ -617,7 +617,7 @@ describe("ffi contract facts", () => {
 	it("tells current declarations from stale ones, however they are formatted", () => {
 		const contract: LibraryFacts = shapesContract;
 		const libraries = [{ name: "shapes", plan: planBindings(model, contract) }];
-		const text = generateDeclarations(libraries);
+		const text = [...generateDeclarations(libraries)].join("");
 
 		expect(declarationsCurrent(text, libraries)).toBe(true);
 		expect(

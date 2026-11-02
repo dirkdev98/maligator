@@ -1,4 +1,5 @@
 import type { CType } from "./c-type.ts";
+import type { FfiText } from "./text.ts";
 
 export interface CLocation {
 	readonly file: string;
@@ -15,7 +16,7 @@ export interface CTarget {
 export interface CParameter {
 	readonly name?: string;
 	readonly type: CType;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 }
 
 export interface CFunction {
@@ -27,7 +28,7 @@ export interface CFunction {
 	readonly inline: boolean;
 	/** Clang attribute kinds without the `Attr` suffix, such as `WarnUnusedResult`. */
 	readonly attributes: ReadonlyArray<string>;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 	readonly location: CLocation;
 }
 
@@ -35,7 +36,7 @@ export interface CField {
 	readonly name?: string;
 	readonly type: CType;
 	readonly bitWidth?: number;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 }
 
 export interface CRecord {
@@ -47,7 +48,7 @@ export interface CRecord {
 	readonly fields: ReadonlyArray<CField>;
 	/** Whether code spells it `struct name` or only through a typedef. */
 	readonly named: boolean;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 	readonly location: CLocation;
 	readonly library: boolean;
 }
@@ -55,7 +56,7 @@ export interface CRecord {
 export interface CEnumConstant {
 	readonly name: string;
 	readonly value: bigint;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 }
 
 export interface CEnum {
@@ -63,7 +64,7 @@ export interface CEnum {
 	readonly named: boolean;
 	readonly underlying: CType;
 	readonly constants: ReadonlyArray<CEnumConstant>;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 	readonly location: CLocation;
 	readonly library: boolean;
 }
@@ -71,7 +72,7 @@ export interface CEnum {
 export interface CTypedef {
 	readonly name: string;
 	readonly type: CType;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 	readonly location: CLocation;
 	readonly library: boolean;
 }
@@ -85,7 +86,7 @@ export interface CMacroDefinition {
 	readonly library: boolean;
 	readonly expansion?: string;
 	readonly contextual?: boolean;
-	readonly doc?: string;
+	readonly doc?: FfiText;
 	readonly location: CLocation;
 }
 

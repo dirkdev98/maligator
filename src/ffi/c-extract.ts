@@ -35,6 +35,7 @@ import type { CType } from "./c-type.ts";
 import { clangProbeDeclarations, visitClangDeclarations } from "./clang-ast.ts";
 import { FfiError, FfiSourceChangedError } from "./ffi-error.ts";
 import { macroReferences } from "./macros.ts";
+import { FfiText, joinText } from "./text.ts";
 
 export interface CExtractionInput {
 	/** A clang driver, or `zig cc`, which embeds clang. */
@@ -159,7 +160,12 @@ function preprocess(
 		const lineStart = start;
 		let end = result.stdout.indexOf(10, start);
 		if (end < 0) end = result.stdout.length;
-		const text = result.stdout.toString("utf8", start, end);
+		const directive = result.stdout[start] === 35;
+		if (directive && end - start > 8 * 1024 * 1024)
+			throw new FfiError(
+				`the preprocessor directive at ${file}:${line} exceeds the supported token size`,
+			);
+		const text = directive ? result.stdout.toString("utf8", start, end) : "";
 		start = end + 1;
 		const marker = LINE_MARKER.exec(text);
 		if (marker !== null && unescapeMarkerPath(marker[2]!) === probePath)
@@ -376,9 +382,9 @@ function constantValue(node: JsonObject): bigint | undefined {
 }
 
 class SourceTexts {
-	readonly #files = new Map<string, ReadonlyArray<string>>();
+	readonly #files = new Map<string, ReadonlyArray<FfiText>>();
 
-	lines(file: string): ReadonlyArray<string> {
+	lines(file: string): ReadonlyArray<FfiText> {
 		let lines = this.#files.get(file);
 		if (lines === undefined) {
 			let data: Buffer | undefined;
@@ -387,12 +393,12 @@ class SourceTexts {
 			} catch {
 				data = undefined;
 			}
-			const decoded: Array<string> = [];
+			const decoded: Array<FfiText> = [];
 			if (data !== undefined) {
 				for (let start = 0; start <= data.length;) {
 					let end = data.indexOf(10, start);
 					if (end < 0) end = data.length;
-					decoded.push(data.toString("utf8", start, end));
+					decoded.push(FfiText.fromUtf8(data, start, end));
 					start = end + 1;
 				}
 			}
@@ -404,35 +410,62 @@ class SourceTexts {
 }
 
 /** Remove comment markers and decorative rules, keeping the prose lines. */
-function cleanComment(raw: ReadonlyArray<string>): string | undefined {
+function cleanComment(raw: ReadonlyArray<FfiText>): FfiText | undefined {
+	const stars = (text: FfiText, end = false): number => {
+		let count = 0;
+		for (const chunk of end ? [...text.chunks].reverse() : text.chunks) {
+			const length = (end ? /\*+$/ : /^\*+/).exec(chunk)?.[0].length ?? 0;
+			count += length;
+			if (length !== chunk.length) break;
+		}
+		return count;
+	};
 	const lines = raw
-		.map((line) =>
-			line
-				.trim()
-				.replace(/^\/\*+!?/, "")
-				.replace(/\*+\/$/, "")
-				.replace(/^\/\/[/!<]?/, "")
-				.replace(/^\*+(?!\/)/, "")
-				.trim(),
-		)
-		.filter((line) => !/^[-=*#/~_+]{3,}$/.test(line));
-	while (lines[0] === "") lines.shift();
-	while (lines.at(-1) === "") lines.pop();
-	return lines.length === 0 ? undefined : lines.join("\n");
+		.map((rawLine) => {
+			let line = rawLine.trim();
+			if (line.startsWith("/*")) {
+				line = line.slice(1);
+				line = line.slice(stars(line));
+				if (line.startsWith("!")) line = line.slice(1);
+			}
+			if (line.endsWith("*/")) {
+				line = line.slice(0, -1);
+				line = line.slice(0, line.length - stars(line, true));
+			}
+			if (line.startsWith("//")) {
+				line = line.slice(2);
+				if (["/", "!", "<"].some((marker) => line.startsWith(marker)))
+					line = line.slice(1);
+			}
+			line = line.slice(stars(line)).trim();
+			return line;
+		})
+		.filter(
+			(line) =>
+				!(line.length >= 3 && line.chunks.every((chunk) => /^[-=*#/~_+]*$/.test(chunk))),
+		);
+	while (lines[0]?.length === 0) lines.shift();
+	while (lines.at(-1)?.length === 0) lines.pop();
+	return lines.length === 0 ? undefined : joinText(lines, "\n");
 }
 
 /** A comment that follows only closing punctuation after `column` on `line`. */
 function trailingComment(
-	lines: ReadonlyArray<string>,
+	lines: ReadonlyArray<FfiText>,
 	line: number,
 	column: number,
-): string | undefined {
+): FfiText | undefined {
 	const text = lines[line - 1];
 	if (text === undefined) return undefined;
 	const rest = text.slice(Math.max(0, column - 1));
-	const match = /^[\s;,)]*(\/\/.*|\/\*.*)$/.exec(rest);
-	if (match === null) return undefined;
-	const comment = match[1]!;
+	let skip = 0;
+	for (const chunk of rest.chunks) {
+		const length = /^[\s;,)]*/.exec(chunk)![0].length;
+		skip += length;
+		if (length !== chunk.length) break;
+	}
+	const comment = rest.slice(skip);
+	if (!comment.startsWith("//") && !comment.startsWith("/*")) return undefined;
 	if (comment.startsWith("//")) return cleanComment([comment]);
 	const block = [comment];
 	for (let index = line; !block.at(-1)!.includes("*/") && index < lines.length; index++) {
@@ -442,34 +475,41 @@ function trailingComment(
 }
 
 /** The comment after a `#define` on `line`, skipping string and character literals. */
-function macroComment(lines: ReadonlyArray<string>, line: number): string | undefined {
+function macroComment(lines: ReadonlyArray<FfiText>, line: number): FfiText | undefined {
 	const text = lines[line - 1];
 	if (text === undefined) return undefined;
 	let quote: string | undefined;
-	for (let index = 0; index < text.length; index++) {
-		const char = text[index]!;
-		if (quote !== undefined) {
-			if (char === "\\") index++;
-			else if (char === quote) quote = undefined;
-			continue;
+	let escaped = false;
+	let slash = false;
+	let offset = 0;
+	for (const chunk of text.chunks) {
+		for (let index = 0; index < chunk.length; index++) {
+			const char = chunk[index]!;
+			if (quote !== undefined) {
+				if (escaped) escaped = false;
+				else if (char === "\\") escaped = true;
+				else if (char === quote) quote = undefined;
+				continue;
+			}
+			if (slash && (char === "/" || char === "*"))
+				return trailingComment(lines, line, offset + index);
+			if (char === '"' || char === "'") quote = char;
+			slash = char === "/";
 		}
-		if (char === '"' || char === "'") quote = char;
-		else if (text.startsWith("//", index) || text.startsWith("/*", index)) {
-			return trailingComment(lines, line, index + 1);
-		}
+		offset += chunk.length;
 	}
 	return undefined;
 }
 
 /** The comment block whose last line sits directly above `line`. */
 function commentBlockAbove(
-	lines: ReadonlyArray<string>,
+	lines: ReadonlyArray<FfiText>,
 	line: number,
-): { text: string | undefined } | undefined {
+): { text: FfiText | undefined } | undefined {
 	const above = lines[line - 2]?.trim();
 	if (above === undefined) return undefined;
 	if (above.startsWith("//")) {
-		const block: Array<string> = [];
+		const block: Array<FfiText> = [];
 		for (
 			let index = line - 2;
 			index >= 0 && lines[index]!.trim().startsWith("//");
@@ -480,7 +520,7 @@ function commentBlockAbove(
 		return { text: cleanComment(block) };
 	}
 	if (above.endsWith("*/")) {
-		const block: Array<string> = [];
+		const block: Array<FfiText> = [];
 		for (let index = line - 2; index >= 0; index--) {
 			block.unshift(lines[index]!);
 			const trimmed = lines[index]!.trim();
@@ -506,7 +546,7 @@ class Documentation {
 	readonly #sources = new SourceTexts();
 	readonly #spans = new Map<string, Array<DocumentedSpan>>();
 
-	trailing(location: NodeLocation): string | undefined {
+	trailing(location: NodeLocation): FfiText | undefined {
 		return trailingComment(
 			this.#sources.lines(location.file),
 			location.line,
@@ -523,7 +563,7 @@ class Documentation {
 		spans.push(span);
 	}
 
-	declaration(span: DeclarationSpan): string | undefined {
+	declaration(span: DeclarationSpan): FfiText | undefined {
 		const trailing = this.trailing(span.end);
 		if (trailing !== undefined) return trailing;
 		const lines = this.#sources.lines(span.begin.file);
@@ -934,7 +974,8 @@ function prepareValueProbe(
 	for (let start = 0; start < expanded.stdout.length;) {
 		let end = expanded.stdout.indexOf(10, start);
 		if (end < 0) end = expanded.stdout.length;
-		const line = expanded.stdout.toString("utf8", start, end);
+		const line =
+			expanded.stdout[start] === 35 ? expanded.stdout.toString("utf8", start, end) : "";
 		const marker = LINE_MARKER.exec(line);
 		if (marker !== null && unescapeMarkerPath(marker[2]!) === probePath)
 			identity.update(`# ${marker[1]} "<maligator-value-probe>"${marker[3]}\n`);

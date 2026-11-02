@@ -37,7 +37,7 @@ describe("caller storage contracts", () => {
 		expect(generateBindingUnit("state", ["state.h"], model, plan).exports).toContain(
 			"CopiedState",
 		);
-		expect(generateDeclarations([{ name: "state", plan }])).toContain(
+		expect([...generateDeclarations([{ name: "state", plan }])].join("")).toContain(
 			"export function CopiedState(): CopiedState & {",
 		);
 	});

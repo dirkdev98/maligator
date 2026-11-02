@@ -45,12 +45,14 @@ function input(directory: string, headers = ["cache.h"]): CExtractionInput {
 	};
 }
 function declarations(request: CExtractionInput): string {
-	return generateDeclarations([
-		{
-			name: "cache",
-			plan: planBindings(loadCModel(request), { types: {}, functions: {} }),
-		},
-	]);
+	return [
+		...generateDeclarations([
+			{
+				name: "cache",
+				plan: planBindings(loadCModel(request), { types: {}, functions: {} }),
+			},
+		]),
+	].join("");
 }
 function quote(value: string): string {
 	return `'${value.replaceAll("'", "'\"'\"'")}'`;
@@ -132,8 +134,9 @@ describe("preprocessed C model cache", () => {
 			'#define CACHE_API __attribute__((visibility("default")))\nCACHE_API int /* argument */ cache_value(int value); // Value documentation.\n',
 		);
 		expect(
-			loadCModel(input(directory)).functions.find((entry) => entry.name === "cache_value")
-				?.doc,
+			loadCModel(input(directory))
+				.functions.find((entry) => entry.name === "cache_value")
+				?.doc?.chunks.join(""),
 		).toBe("Value documentation.");
 	});
 	it("reads generated headers whose logical source is not installed", () => {

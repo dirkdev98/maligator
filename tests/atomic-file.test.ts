@@ -67,3 +67,20 @@ test("failed publication removes its temporary file", () => {
 		rmSync(directory, { recursive: true, force: true });
 	}
 });
+
+test("a failed text producer preserves the accepted file", () => {
+	const directory = mkdtempSync(path.join(tmpdir(), "mal-atomic-producer-"));
+	const destination = path.join(directory, "manifest.json");
+	try {
+		writeFileAtomically(destination, "accepted");
+		function* rejected(): Generator<string> {
+			yield "partial";
+			throw new Error("producer failed");
+		}
+		expect(() => writeFileAtomically(destination, rejected())).toThrow("producer failed");
+		expect(readFileSync(destination, "utf8")).toBe("accepted");
+		expect(readdirSync(directory)).toEqual(["manifest.json"]);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});

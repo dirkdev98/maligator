@@ -62,7 +62,7 @@ describe("managed C state contracts", () => {
 			},
 			functions: {},
 		});
-		const declarations = generateDeclarations([{ name: "managed", plan }]);
+		const declarations = [...generateDeclarations([{ name: "managed", plan }])].join("");
 		expect(declarations).toContain("get text(): string | null;");
 		expect(declarations).toContain("set text(value: string | null);");
 	});
