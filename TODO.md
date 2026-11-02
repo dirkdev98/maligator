@@ -1910,8 +1910,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] Support const-member tagged values whose discriminator overlaps union storage.
 
-- [ ] Add explicit output capacities and counted inout storage for fixed C array rows.
-
 - [ ] Describe text and byte representations for fixed character array rows.
 
 - [ ] Copy counted array arguments for queued notification callbacks.

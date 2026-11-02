@@ -1,5 +1,23 @@
 /* oxlint-disable no-console -- The fixture reports observable C ABI behavior. */
 import {
+	rows_fill,
+	rows_fill_visit,
+	fillVisitAsync,
+	fillAsync,
+	rows_full,
+	fullAsync,
+	rows_inout,
+	inoutAsync,
+	rows_bad_count,
+	badCountAsync,
+	cells_inout,
+	cellsInoutAsync,
+	cells_fill,
+	fillCellsAsync,
+	rows_created,
+	createdAsync,
+	ints_fill,
+	fillIntsAsync,
 	rows_sum,
 	rows_bump,
 	bumpAsync,
@@ -192,4 +210,128 @@ for (const run of [rows_visit, visitAsync] as const) {
 	});
 	check(sum === 41, "synchronous and waiting callbacks copy nested counted arrays");
 }
+for (const capacity of [0n, 1n, 4n]) {
+	for (const run of [rows_fill, fillAsync] as const) {
+		const output = await run(capacity);
+		const length = capacity === 0n ? 0n : capacity - 1n;
+		check(
+			output.written === length && output.values.length === Number(length),
+			"caller buffers expose only the count C writes",
+		);
+		for (let i = 0; i < output.values.length; i++)
+			check(
+				output.values[i]!.join(",") === `${i * 10},${i * 10 + 1},${i * 10 + 2}`,
+				"caller row contents use native stride",
+			);
+	}
+	for (const run of [rows_full, fullAsync] as const)
+		check(
+			(await run(capacity)).values.length === Number(capacity),
+			"a shared count and capacity stays a visible input",
+		);
+	for (const run of [cells_fill, fillCellsAsync] as const) {
+		const output = await run(capacity);
+		check(
+			output.values.length === Number(capacity),
+			"C initializes aligned const output rows",
+		);
+		for (let i = 0; i < output.values.length; i++)
+			check(
+				output.values[i]![0].value === i && output.values[i]![1].writable === 11,
+				"const output rows preserve selected fields",
+			);
+	}
+	for (const run of [ints_fill, fillIntsAsync] as const)
+		check(
+			(await run(capacity)).values.every((value, index) => value === index + 3),
+			"caller capacities also support scalar arrays",
+		);
+	for (const run of [rows_created, createdAsync] as const) {
+		const freed = rows_freed();
+		const output = await run(capacity);
+		check(
+			output.values !== null &&
+				output.values.length === Number(capacity) &&
+				output.written === capacity &&
+				rows_freed() === freed + 1,
+			"C allocated array out parameters retain their free contract",
+		);
+	}
+}
+for (const run of [rows_inout, inoutAsync] as const) {
+	const output = await run(rows);
+	check(
+		output.count === 1n &&
+			output.values.length === 1 &&
+			output.values[0]!.join(",") === "102,103,105",
+		"inout snapshots use their input length as a capacity",
+	);
+	check(
+		rows[0][0] === 2,
+		"inout row conversion preserves the original JavaScript values",
+	);
+	check((await run([])).values.length === 0, "empty inout buffers return empty arrays");
+}
+for (const run of [cells_inout, cellsInoutAsync] as const) {
+	const input: Array<[(typeof cells)[0][0], (typeof cells)[0][0]]> = [
+		[
+			{ value: 3, writable: 5 },
+			{ value: 7, writable: 11 },
+		],
+		[
+			{ value: 13, writable: 17 },
+			{ value: 19, writable: 23 },
+		],
+	];
+	const output = await run(input);
+	check(
+		output.count === 1n &&
+			output.values[0]![0].value === 3 &&
+			output.values[0]![0].writable === 105 &&
+			input[0]![0].writable === 5,
+		"const inout rows preserve immutable fields and copy mutable updates",
+	);
+}
+for (const run of [rows_bad_count, badCountAsync] as const) {
+	for (const capacity of [0n, 3n])
+		for (const mode of [0, 1]) {
+			let rejected = false;
+			try {
+				await run(capacity, mode);
+			} catch (error) {
+				rejected = error instanceof RangeError && error.message.includes("capacity");
+			}
+			check(
+				rejected,
+				"negative and over-capacity returned counts fail before buffer reads",
+			);
+		}
+}
+for (const run of [rows_fill, fillAsync] as const) {
+	for (const invalid of [-1n, 1n << 31n, (1n << 64n) - 1n]) {
+		const taken = rows_taken();
+		let rejected = false;
+		try {
+			await run(invalid);
+		} catch (error) {
+			rejected = error instanceof RangeError;
+		}
+		check(rejected && rows_taken() === taken, "invalid capacities never enter C");
+	}
+}
+for (const run of [rows_fill_visit, fillVisitAsync] as const) {
+	let failed = false;
+	try {
+		await run(3n, () => {
+			throw new Error("caller row callback failed");
+		});
+	} catch (error) {
+		failed = error instanceof Error && error.message === "caller row callback failed";
+	}
+	check(failed, "callback failures retire caller array output storage");
+}
+check(
+	(await fillAsync(2n)).values.length === 1,
+	"caller array cleanup permits the next worker call",
+);
 console.log("array rows passed");

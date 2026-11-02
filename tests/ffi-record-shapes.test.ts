@@ -49,6 +49,7 @@ it("binds const-member inputs and results in declaration order", () => {
 		"immutable_array_out",
 		"immutable_pair_out",
 		"immutable_pair_inout",
+		"immutable_pair_many",
 		"immutable_numbers_out",
 		"immutable_grid_out",
 		"immutable_grid_inout",
@@ -81,7 +82,6 @@ it("binds const-member inputs and results in declaration order", () => {
 it.each([
 	["immutable_token_inout", "duplicate ownership"],
 	["immutable_token_array_out", "element ownership"],
-	["immutable_pair_many", "allocation contract"],
 ])("rejects unsafe resource or array storage through %s", (name, reason) => {
 	const directory = project("ffi-const-results");
 	const result = cli(directory, "inspect", "const_values", "--json");

@@ -325,15 +325,22 @@ function validateTypeFacts(value: unknown, at: string): void {
 	booleanField(handle, "collect", `${at}.handle`);
 }
 
-function validateCount(value: unknown, at: string): void {
+function validateCount(value: unknown, at: string, array = false): void {
 	expectObject(value, at);
-	expectKeys(value, at, ["length"]);
+	expectKeys(value, at, array ? ["length", "capacity"] : ["length"]);
 	expect(
 		typeof value.length === "string" &&
 			(C_NAME.test(value.length) || /^[1-9]\d*$/.test(value.length)),
 		`${at}.length`,
 		"a parameter name or 1-based position",
 	);
+	if (value.capacity !== undefined)
+		expect(
+			typeof value.capacity === "string" &&
+				(C_NAME.test(value.capacity) || /^[1-9]\d*$/.test(value.capacity)),
+			`${at}.capacity`,
+			"a parameter name or 1-based position",
+		);
 }
 
 function validateValueFacts(value: unknown, at: string): void {
@@ -369,7 +376,15 @@ function validateValueFacts(value: unknown, at: string): void {
 		"one of string, bytes, or array",
 	);
 	if (value.bytes !== undefined) validateCount(value.bytes, `${at}.bytes`);
-	if (value.array !== undefined) validateCount(value.array, `${at}.array`);
+	if (value.array !== undefined) {
+		validateCount(value.array, `${at}.array`, true);
+		if ((value.array as Record<string, unknown>).capacity !== undefined)
+			expect(
+				value.out === true && value.inout !== true,
+				`${at}.array.capacity`,
+				"an out array buffer",
+			);
+	}
 	if (value.callable !== undefined) {
 		const callable = value.callable;
 		expectObject(callable, `${at}.callable`);

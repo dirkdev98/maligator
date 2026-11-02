@@ -317,6 +317,14 @@ bool mal_ffi_to_array_length(
     return true;
 }
 
+bool mal_ffi_check_array_count(
+    MalVm *vm, uint64_t count, uint64_t capacity, const MalFfiSite *site) {
+    if (count > INT32_MAX || count > capacity)
+        return ffi_fail(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site,
+            "a non-negative array count within its allocated capacity");
+    return true;
+}
+
 bool mal_ffi_check_count(
     MalVm *vm, size_t count, int32_t bits, bool is_signed, const MalFfiSite *site) {
     u64 maximum = bits >= 64 ? (is_signed ? (u64) INT64_MAX : UINT64_MAX)

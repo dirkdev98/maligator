@@ -486,6 +486,26 @@ rows work through synchronous calls, workers, and waiting callbacks. Inputs use
 native copies, and C-allocated results copy every row before `free` runs. A `shape`
 fact applies to each union leaf through the fixed dimensions.
 
+For caller-allocated array outputs, name both the written count and a capacity input:
+
+```ts
+functions: {
+	fill_rows: {
+		params: {
+			rows: { out: true, array: { length: "written", capacity: "capacity" } },
+		},
+	},
+}
+```
+
+The capacity stays in the JavaScript signature. The binding allocates aligned storage
+and returns only the prefix C reports through `written`. To return the entire buffer,
+use the same integer input for `length` and `capacity`. Inout arrays use their original
+JavaScript length as the capacity and return a native snapshot without changing the
+input. Invalid capacities and written counts throw a `RangeError`; a zero-capacity
+buffer returns an empty array. Caller-owned buffers cannot declare `free` or contain
+resource handles without an element ownership contract.
+
 Use `string: { length: "byteCount" }` for UTF-8 pointer/count pairs. The count
 measures encoded bytes and disappears from input signatures. Counted text permits
 embedded NUL bytes; `string: true` remains NUL-terminated and rejects them on input.

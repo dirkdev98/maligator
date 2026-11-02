@@ -190,8 +190,10 @@ export interface MaligatorFfiValueFacts {
 	string?: boolean | MaligatorFfiCount;
 	/** Bytes passed as an `ArrayBuffer` or a view, or returned as a new `Uint8Array`. */
 	bytes?: MaligatorFfiCount;
-	/** Elements passed or returned as an array. */
-	array?: MaligatorFfiCount;
+	/** Elements passed or returned as an array. For an out buffer, `capacity` names
+	 * an integer input that bounds caller-owned storage; it stays in the JS signature.
+	 */
+	array?: MaligatorFfiCount & { capacity?: string };
 	/** Release a copied string, buffer, or array result with this function. */
 	free?: string;
 	/** A function pointer the library calls during the call with a JavaScript function. */

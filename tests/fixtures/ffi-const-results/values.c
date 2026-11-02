@@ -186,3 +186,5 @@ Immutable immutable_callback_replaced(int index) {
     Immutable (*callback)(int) = atomic_load(&immutable_replacement);
     return callback == NULL ? (Immutable){} : callback(index);
 }
+
+void immutable_pair_many(ImmutablePair *value, size_t count) { for (size_t i = 0; i < count; i++) for (int j = 0; j < 2; j++) value[i][j].nested.writable += 100; }

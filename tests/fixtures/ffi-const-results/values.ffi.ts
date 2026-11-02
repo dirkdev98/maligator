@@ -72,6 +72,7 @@ export default {
 		immutable_token_array_out: { params: { value: { out: true } } },
 		immutable_pair_many: {
 			params: { value: { inout: true, array: { length: "count" } } },
+			async: "pairManyAsync",
 		},
 		immutable_token_out: { params: { value: { out: true } }, async: "tokenOutAsync" },
 		immutable_token_out_visit: {

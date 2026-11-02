@@ -308,6 +308,10 @@ bool mal_ffi_to_array_length(
 bool mal_ffi_check_count(
     MalVm *vm, size_t count, int32_t bits, bool is_signed, const MalFfiSite *site);
 
+/** Check a native count before allocating or reading a caller-owned array buffer. */
+bool mal_ffi_check_array_count(
+    MalVm *vm, uint64_t count, uint64_t capacity, const MalFfiSite *site);
+
 /**
  * The fields of a struct passed by value, in declaration order. Bindings declare it
  * mutable and zero `slot`: the runtime numbers each type on first use, so a VM finds

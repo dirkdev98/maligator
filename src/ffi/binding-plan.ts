@@ -179,11 +179,13 @@ export type Argument =
 /** A value the function writes through a pointer, returned beside its result. */
 export interface MappedOutput {
 	readonly name: string;
-	/** The pointee type. */
+	/** The C type of the local holding this output. */
 	readonly type: CType;
 	readonly value: JsValue;
 	/** The C parameter holding this output's byte or element count. */
 	readonly count?: number;
+	/** Caller storage bounded by a C input parameter or the original JavaScript array. */
+	readonly capacity?: number | "input";
 }
 
 export interface BoundFunction {
@@ -736,6 +738,8 @@ class Planner {
 		position: Position,
 		facts: MaligatorFfiValueFacts = NO_FACTS,
 	): Mapping {
+		if (facts.array?.capacity !== undefined)
+			throw new FfiError("array.capacity applies to caller-owned output buffers");
 		const resolved = resolveCType(this.#model, type);
 		if (
 			facts.shape !== undefined &&
@@ -2187,10 +2191,16 @@ class Planner {
 			if (counted === undefined) return;
 			const at = `params.${names[index]}.${counted.kind}.length`;
 			const count = parameterIndex(counted.count.length, at);
-			if (
-				valueFacts.out === true &&
-				resolveCType(this.#model, declaration.params[count]!.type).kind !== "pointer"
-			)
+			const capacity =
+				valueFacts.array?.capacity === undefined
+					? undefined
+					: parameterIndex(
+							valueFacts.array.capacity,
+							`params.${names[index]}.array.capacity`,
+						);
+			const countPointer =
+				resolveCType(this.#model, declaration.params[count]!.type).kind === "pointer";
+			if (valueFacts.out === true && !countPointer && capacity !== count)
 				throw new FfiError(
 					`${where(at)}: an out value needs a count C writes through a pointer`,
 				);
@@ -2199,7 +2209,7 @@ class Planner {
 					`${where(at)}: '${counted.count.length}' already counts another argument`,
 				);
 			}
-			counts.set(count, index);
+			if (capacity !== count) counts.set(count, index);
 		});
 		// The user-data parameters that route callbacks, mapped to their callback argument.
 		const callbackData = new Map<number, number>();
@@ -2350,6 +2360,10 @@ class Planner {
 						(resultCount === index ||
 							(factsAt(counted).bytes === undefined &&
 								!(
+									factsAt(counted).array !== undefined &&
+									(factsAt(counted).out === true || factsAt(counted).inout === true)
+								) &&
+								!(
 									typeof factsAt(counted).string === "object" &&
 									(factsAt(counted).out === true || factsAt(counted).inout === true)
 								))))
@@ -2384,11 +2398,86 @@ class Planner {
 				if (resolved.kind !== "pointer") {
 					throw new FfiError(`${where(at)}.${fact}: ${name} is not a pointer`);
 				}
+				const callerArray =
+					valueFacts.array !== undefined &&
+					(valueFacts.inout === true || valueFacts.array.capacity !== undefined);
+				if (callerArray) {
+					if (valueFacts.free !== undefined || valueFacts.nullable === true)
+						throw new FfiError(
+							`${where(at)}.array: caller-owned buffers cannot be nullable or declare free`,
+						);
+					if (valueFacts.inout === true && valueFacts.array?.capacity !== undefined)
+						throw new FfiError(
+							`${where(at)}.array.capacity: inout buffers use their input length`,
+						);
+					const element = resolveCType(this.#model, resolved.to);
+					if (
+						["pointer", "void", "function", "unsupported", "typedef"].includes(
+							element.kind,
+						)
+					) {
+						gap("caller-owned array buffers need complete value elements");
+						return;
+					}
+					const written = map(
+						param.type,
+						"return",
+						{
+							...valueFacts,
+							array: { length: valueFacts.array!.length },
+							nullable: undefined,
+						},
+						at,
+					);
+					if ("gap" in written) {
+						gap(written.gap);
+						return;
+					}
+					if (written.value.kind !== "sequence" || this.#containsHandle(written.value)) {
+						gap("resource-bearing caller array outputs need explicit element ownership");
+						return;
+					}
+					const capacity =
+						valueFacts.inout === true
+							? "input"
+							: parameterIndex(valueFacts.array!.capacity!, `${at}.array.capacity`);
+					if (typeof capacity === "number") {
+						const type = resolveCType(this.#model, declaration.params[capacity]!.type);
+						if (
+							capacity === index ||
+							type.kind !== "integer" ||
+							"gap" in this.#integer(type.name)
+						)
+							throw new FfiError(
+								`${where(at)}.array.capacity: capacity must be an integer input of at most 64 bits`,
+							);
+					}
+					const output = outputs.length;
+					outputs.push({
+						name,
+						type: param.type,
+						value: { ...written.value, nullable: false },
+						count: parameterIndex(valueFacts.array!.length, `${at}.array.length`),
+						capacity,
+					});
+					if (valueFacts.inout !== true) {
+						args.push({ kind: "out", output });
+						return;
+					}
+					const read = map(param.type, "param", valueFacts, at);
+					if ("gap" in read) {
+						gap(read.gap);
+						return;
+					}
+					params.push({ name, type: param.type, value: read.value });
+					args.push({ kind: "inout", param: params.length - 1, output });
+					return;
+				}
 				if (
 					resolveCType(this.#model, resolved.to).kind === "array" &&
 					valueFacts.array !== undefined
 				) {
-					gap("counted outer arrays of fixed C arrays need an allocation contract");
+					gap("counted outer array outputs need an explicit capacity");
 					return;
 				}
 				const written = map(
@@ -2482,6 +2571,13 @@ class Planner {
 			params.push({ name, type: param.type, value: mapped.value });
 			args.push({ kind: "input", param: params.length - 1 });
 		});
+
+		for (const output of outputs) {
+			if (typeof output.capacity === "number" && args[output.capacity]?.kind !== "input")
+				throw new FfiError(
+					`${where(`params.${output.name}.array.capacity`)}: capacity must remain an integer input`,
+				);
+		}
 
 		const replaced =
 			gaps.length === 0

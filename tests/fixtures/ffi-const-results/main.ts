@@ -47,6 +47,8 @@ import {
 	arrayOutAsync,
 	immutable_pair_out,
 	pairOutAsync,
+	immutable_pair_many,
+	pairManyAsync,
 	immutable_pair_inout,
 	pairInoutAsync,
 	immutable_numbers_out,
@@ -624,4 +626,17 @@ immutable_callback_replace((index) => {
 verify(await callbackReplacedAsync(3), 3);
 verify(await callbackReplacedAsync(4), 14);
 immutable_callback_replace(null);
+for (const run of [immutable_pair_many, pairManyAsync] as const) {
+	const input: Array<[Immutable, Immutable]> = [
+		[a_make(3), a_make(5)],
+		[a_make(7), a_make(11)],
+	];
+	const output = await run(input);
+	check(
+		output.value.length === input.length &&
+			output.value[1]![0].nested.writable === 109 &&
+			input[1]![0].nested.writable === 9,
+		"counted const array inout initializes every nested element",
+	);
+}
 console.log("const results passed");

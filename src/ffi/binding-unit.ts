@@ -3,6 +3,7 @@ import type { FfiDirectEntry, FfiDirectResult } from "../build-config-values.ts"
 import type {
 	BindingPlan,
 	BoundFunction,
+	Argument,
 	HandleType,
 	JsValue,
 	MappedConstant,
@@ -1637,6 +1638,122 @@ class BindingWriter {
 		return lines;
 	}
 
+	#callerArray(
+		binding: BoundFunction,
+		entry: Extract<Argument, { kind: "out" | "inout" }>,
+		index: number,
+		context: string,
+		source: string | undefined,
+		site: string,
+		fail: string,
+	): {
+		declarations: Array<string>;
+		lengthLines: Array<string>;
+		lines: Array<string>;
+		length: string;
+		cleanup: string;
+	} {
+		const output = binding.outputs[entry.output]!;
+		const value = output.value;
+		if (value.kind !== "sequence") throw new Error("caller array without a sequence");
+		const name = `mal_output_${entry.output}`;
+		const buffer = `${context}${name}`;
+		const bound = `mal_capacity_${entry.output}`;
+		const length = `${context}${bound}`;
+		const lines: Array<string> = [];
+		if (source !== undefined)
+			lines.push(
+				`if (!mal_ffi_to_array_length(vm, ${source}, false, ${site}, &${length})) ${fail}`,
+			);
+		else {
+			if (typeof output.capacity !== "number")
+				throw new Error("out array without an integer capacity");
+			const capacity = `${context}mal_argument_${output.capacity}`;
+			lines.push(
+				`if (!mal_ffi_check_array_count(vm, (uint64_t) ${capacity}, INT32_MAX, ${site})) ${fail}`,
+				`${length} = (int32_t) ${capacity};`,
+			);
+		}
+		const lengthLines = lines.splice(0);
+		lines.push(
+			`static_assert(sizeof(*${buffer}) > 0 && sizeof(*${buffer}) % _Alignof(__typeof__(*${buffer})) == 0, "FFI array stride must preserve C alignment");`,
+			`if (${length} > 0) {`,
+			`\t${buffer} = mal_ffi_calloc_storage((size_t) ${length}, sizeof(*${buffer}), _Alignof(__typeof__(*${buffer})));`,
+			`\tif (${buffer} == nullptr) { mal_ffi_out_of_memory(vm); ${fail} }`,
+			"}",
+			`${context}mal_argument_${index} = ${buffer};`,
+		);
+		if (source !== undefined) {
+			const position = this.#fresh("index");
+			const element = this.#fresh("element");
+			const native = this.#fresh("native_element");
+			const construct = value.of.kind !== "array" && this.#immutableRecord(value.element);
+			lines.push(
+				`for (int32_t ${position} = 0; ${position} < ${length}; ${position}++) {`,
+				`\tMalValue ${element};`,
+				`\tif (!mal_ffi_element(vm, ${source}, ${position}, ${length}, ${site}, &${element})) ${fail}`,
+				...this.read(
+					value.of,
+					value.element,
+					element,
+					construct ? native : `${buffer}[${position}]`,
+					site,
+					fail,
+					[],
+					false,
+					"nullptr",
+					false,
+					construct || value.of.kind === "array",
+				).map((line) => `\t${line}`),
+				...(construct
+					? [
+							`\t__builtin_memcpy((void *) &${buffer}[${position}], &${native}, sizeof(${native}));`,
+						]
+					: []),
+				"}",
+			);
+		}
+		return {
+			declarations: [
+				`${localDeclaration(output.type, name)}${context === "" ? " = nullptr" : ""};`,
+				`int32_t ${bound}${context === "" ? " = 0" : ""};`,
+			],
+			lengthLines,
+			lines,
+			length,
+			cleanup: `free((void *) ${buffer});`,
+		};
+	}
+
+	#output(
+		binding: BoundFunction,
+		index: number,
+		expression: string,
+		target: string,
+		context: string,
+	): Array<string> {
+		const output = binding.outputs[index]!;
+		const count = countValue(binding, output.count, context);
+		const owned = this.#owned(
+			output.value,
+			expression,
+			target,
+			count,
+			"&mal_site_result",
+			true,
+		);
+		if (output.capacity === undefined) return owned;
+		if (count === undefined) throw new Error("caller array without a written count");
+		return [
+			`if (!mal_ffi_threw(vm) && mal_ffi_check_array_count(vm, (uint64_t) (${count}), ${context}mal_capacity_${index}, &mal_site_result)) {`,
+			`\tif (${expression} == nullptr) ${target} = mal_ffi_new_array(vm, 0);`,
+			"\telse {",
+			...owned.map((line) => `\t\t${line}`),
+			"\t}",
+			"}",
+		];
+	}
+
 	/**
 	 * Statements that store a result or output in `target` and then release the C
 	 * memory when the caller owns it, even after a conversion threw. `pending` says
@@ -2358,6 +2475,27 @@ class BindingWriter {
 				case "out":
 				case "inout": {
 					const output = `mal_output_${String(entry.output)}`;
+					if (binding.outputs[entry.output]!.capacity !== undefined) {
+						const site =
+							entry.kind === "inout" ? `&mal_site_${entry.param}` : "&mal_site_result";
+						const prepared = this.#callerArray(
+							binding,
+							entry,
+							index,
+							"",
+							entry.kind === "inout" ? argument(entry.param) : undefined,
+							site,
+							"goto mal_done;",
+						);
+						locals.push(...prepared.declarations);
+						const into = entry.kind === "inout" ? body : buffers;
+						into.push(...prepared.lengthLines);
+						if (entry.kind === "inout") setCount(index, prepared.length, site, into);
+						into.push(...prepared.lines);
+						cleanup.push(prepared.cleanup);
+						return;
+					}
+
 					if (constOutputs.has(entry.output)) {
 						locals.push(
 							`typeof_unqual(${localDeclaration(pointee, "")}) *${output} = nullptr;`,
@@ -2935,13 +3073,12 @@ class BindingWriter {
 			);
 			binding.outputs.forEach((output, index) => {
 				after.push(
-					...this.#owned(
-						output.value,
+					...this.#output(
+						binding,
+						index,
 						outputValue(index),
 						`mal_outputs[${String(first + index)}]`,
-						countValue(binding, output.count),
-						"&mal_site_result",
-						true,
+						"",
 					),
 				);
 			});
@@ -3116,7 +3253,12 @@ class BindingWriter {
 			return value.kind === "handle" && this.managedFamily(value.name);
 		});
 		if (managedHandles) locals.push("bool mal_validate = false;");
-		if (managedHandles || compoundInputs || this.#resultGuards(binding, "").length > 0)
+		if (
+			managedHandles ||
+			compoundInputs ||
+			this.#resultGuards(binding, "").length > 0 ||
+			binding.outputs.some((output) => output.capacity !== undefined)
+		)
 			locals.push(
 				`static const MalFfiSite mal_site_result = { ${cString(exported)}, "result", nullptr };`,
 			);
@@ -3129,7 +3271,12 @@ class BindingWriter {
 				`static const MalFfiSite mal_site_${String(index)} = { ${cString(exported)}, ${cString(param.name)}, nullptr };`,
 			);
 		});
-		const setCount = (counted: number, count: string, site: string): void => {
+		const setCount = (
+			counted: number,
+			count: string,
+			site: string,
+			into = buffers,
+		): void => {
 			const index = binding.arguments.findIndex(
 				(entry) => entry.kind === "count" && entry.of === counted,
 			);
@@ -3150,7 +3297,7 @@ class BindingWriter {
 				(integer.name === "char"
 					? this.#model.target.charSigned
 					: !integer.name.startsWith("unsigned"));
-			buffers.push(
+			into.push(
 				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${bits}, ${signed}, ${site})) goto mal_failed;`,
 				...(output === undefined
 					? [
@@ -3203,6 +3350,27 @@ class BindingWriter {
 				case "out":
 				case "inout": {
 					const output = `mal_output_${String(entry.output)}`;
+					if (binding.outputs[entry.output]!.capacity !== undefined) {
+						const site =
+							entry.kind === "inout" ? `&mal_site_${entry.param}` : "&mal_site_result";
+						const prepared = this.#callerArray(
+							binding,
+							entry,
+							index,
+							"mal_ctx->",
+							entry.kind === "inout" ? argument(entry.param) : undefined,
+							site,
+							"goto mal_failed;",
+						);
+						fields.push(...prepared.declarations);
+						const into = entry.kind === "inout" ? body : buffers;
+						into.push(...prepared.lengthLines);
+						if (entry.kind === "inout") setCount(index, prepared.length, site, into);
+						into.push(...prepared.lines);
+						frees.push(prepared.cleanup);
+						return;
+					}
+
 					if (constOutputs.has(entry.output)) {
 						fields.push(`typeof_unqual(${localDeclaration(pointee, "")}) *${output};`);
 						const storage = `mal_ctx->${output}`;
@@ -3613,13 +3781,12 @@ class BindingWriter {
 				"MalFfiRoots mal_output_roots;",
 				`mal_ffi_root(&mal_output_roots, mal_outputs, ${String(keys.length)});`,
 				...binding.outputs.flatMap((output, index) =>
-					this.#owned(
-						output.value,
+					this.#output(
+						binding,
+						index,
 						outputValue(index),
 						`mal_outputs[${String(first + index)}]`,
-						countValue(binding, output.count, "mal_ctx->"),
-						"&mal_site_result",
-						true,
+						"mal_ctx->",
 					),
 				),
 				"if (!mal_ffi_threw(vm)) mal_result = mal_ffi_new_record(vm, &mal_output_type, mal_outputs);",

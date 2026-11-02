@@ -10,6 +10,55 @@ export default {
 		TaggedCell: { shape: { tag: "kind", cases: { "1": ["payload.integer"] } } },
 	},
 	functions: {
+		rows_fill_visit: {
+			params: {
+				values: { out: true, array: { length: "written", capacity: "capacity" } },
+				callback: { callback: { data: "data" } },
+			},
+			async: "fillVisitAsync",
+		},
+		rows_fill: {
+			params: {
+				values: { out: true, array: { length: "written", capacity: "capacity" } },
+			},
+			async: "fillAsync",
+		},
+		rows_full: {
+			params: {
+				values: { out: true, array: { length: "capacity", capacity: "capacity" } },
+			},
+			async: "fullAsync",
+		},
+		rows_inout: {
+			params: { values: { inout: true, array: { length: "count" } } },
+			async: "inoutAsync",
+		},
+		rows_bad_count: {
+			params: {
+				values: { out: true, array: { length: "written", capacity: "capacity" } },
+			},
+			async: "badCountAsync",
+		},
+		cells_inout: {
+			params: { values: { inout: true, array: { length: "count" } } },
+			async: "cellsInoutAsync",
+		},
+		cells_fill: {
+			params: {
+				values: { out: true, array: { length: "written", capacity: "capacity" } },
+			},
+			async: "fillCellsAsync",
+		},
+		rows_created: {
+			params: { values: { out: true, array: { length: "written" }, free: "rows_free" } },
+			async: "createdAsync",
+		},
+		ints_fill: {
+			params: {
+				values: { out: true, array: { length: "written", capacity: "capacity" } },
+			},
+			async: "fillIntsAsync",
+		},
 		rows_sum: {
 			params: { values: { array: { length: "count" }, nullable: true } },
 			async: "sumAsync",

@@ -1,5 +1,6 @@
 #pragma once
 #include <stddef.h>
+#include <stdint.h>
 
 typedef int Row[3];
 typedef struct __attribute__((aligned(64))) Cell { const int value; int writable; } Cell;
@@ -26,3 +27,14 @@ void rows_free(void *values);
 int rows_freed(void);
 int rows_taken(void);
 void rows_visit(const Row *values, size_t count, void (*callback)(const Row *, size_t, void *), void *data);
+
+void rows_fill(Row *values, size_t capacity, size_t *written);
+void rows_full(Row *values, size_t capacity);
+void rows_inout(Row *values, size_t *count);
+void rows_bad_count(Row *values, size_t capacity, int mode, int64_t *written);
+void cells_inout(CellRow *values, size_t *count);
+void cells_fill(CellRow *values, size_t capacity, size_t *written);
+void rows_created(size_t requested, Row **values, size_t *written);
+void ints_fill(int *values, size_t capacity, size_t *written);
+
+void rows_fill_visit(Row *values, size_t capacity, size_t *written, void (*callback)(void *), void *data);

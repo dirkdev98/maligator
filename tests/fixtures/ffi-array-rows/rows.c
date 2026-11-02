@@ -71,3 +71,46 @@ int rows_taken(void) { return taken; }
 void rows_visit(const Row *values, size_t count, void (*callback)(const Row *, size_t, void *), void *data) { callback(values, count, data); }
 
 int rows_bump(Row *values, size_t count) { for (size_t i = 0; i < count; i++) values[i][0] += 10; return rows_sum(values, count); }
+
+void rows_fill(Row *values, size_t capacity, size_t *written) {
+    taken++;
+    *written = capacity > 0 ? capacity - 1 : 0;
+    for (size_t i = 0; i < *written; i++) for (int j = 0; j < 3; j++) values[i][j] = (int)i * 10 + j;
+}
+void rows_full(Row *values, size_t capacity) {
+    taken++;
+    for (size_t i = 0; i < capacity; i++) for (int j = 0; j < 3; j++) values[i][j] = (int)i * 10 + j;
+}
+void rows_inout(Row *values, size_t *count) {
+    taken++;
+    for (size_t i = 0; i < *count; i++) for (int j = 0; j < 3; j++) values[i][j] += 100;
+    if (*count > 0) --*count;
+}
+void rows_bad_count(Row *values, size_t capacity, int mode, int64_t *written) {
+    (void)values;
+    taken++;
+    *written = mode == 0 ? -1 : (int64_t)capacity + 1;
+}
+void cells_inout(CellRow *values, size_t *count) {
+    taken++;
+    if (*count > 0 && (uintptr_t)values % _Alignof(CellRow) != 0) abort();
+    for (size_t i = 0; i < *count; i++) for (int j = 0; j < 2; j++) values[i][j].writable += 100;
+    if (*count > 0) --*count;
+}
+void cells_fill(CellRow *values, size_t capacity, size_t *written) {
+    taken++;
+    if (capacity > 0 && (uintptr_t)values % _Alignof(CellRow) != 0) abort();
+    for (size_t i = 0; i < capacity; i++) {
+        CellRow row = {{(int)i, 7}, {(int)i + 1, 11}};
+        memcpy(&values[i], &row, sizeof(row));
+    }
+    *written = capacity;
+}
+void rows_created(size_t requested, Row **values, size_t *written) { *values = rows_make(requested); *written = requested; }
+void ints_fill(int *values, size_t capacity, size_t *written) {
+    taken++;
+    for (size_t i = 0; i < capacity; i++) values[i] = (int)i + 3;
+    *written = capacity;
+}
+
+void rows_fill_visit(Row *values, size_t capacity, size_t *written, void (*callback)(void *), void *data) { rows_fill(values, capacity, written); callback(data); }
