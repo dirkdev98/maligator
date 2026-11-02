@@ -312,6 +312,22 @@ The wrapper also releases callbacks keyed by that storage; calls already queued 
 finish from their copied arguments.
 Asynchronous close needs the library's completion and lifetime contract.
 
+For a struct ending in a flexible or zero-length array, name that field with
+`trailing`. The factory takes the number of trailing elements as a bigint:
+
+```ts
+types: {
+	Packet: { handle: { storage: "caller", trailing: "payload" } },
+}
+```
+
+`Packet(128n)` allocates space for the fixed header and the requested payload elements,
+using C's layout and alignment. Counts that overflow allocation size throw a
+`RangeError`. The allocation starts zeroed; initialize any length field through the
+library's C API. The trailing array stays behind the handle and is not a JavaScript
+array property. Initialization, cleanup, aliases, and worker pins follow the same
+rules as fixed-size caller storage.
+
 For state such as zlib's `z_stream`, describe each retained byte pointer and its count:
 
 ```ts

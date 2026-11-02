@@ -291,6 +291,8 @@ export interface HandleType {
 	readonly family: string;
 	/** A factory named by the type fact, allocating stable caller-owned storage. */
 	readonly allocator?: string;
+	/** The trailing array whose element count the caller factory accepts. */
+	readonly trailing?: string;
 	readonly destroy?: {
 		readonly name: string;
 		readonly success?: string;
@@ -410,22 +412,50 @@ function handleTypes(
 		if (handles.has(record.name)) {
 			throw new FfiError(`types.${key}: ${record.name} already has a handle fact`);
 		}
+		if (handle.trailing !== undefined && handle.storage !== "caller")
+			throw new FfiError(`types.${key}.handle.trailing: requires caller storage`);
 		if (handle.storage === "caller") {
 			if (!record.complete || record.tag !== "struct")
 				throw new FfiError(
 					`types.${key}.handle.storage: caller storage needs a complete struct`,
 				);
-			if (
-				record.fields.some((field) => {
-					const type = resolveCType(model, field.type);
-					return (
-						type.kind === "array" && (type.length === undefined || type.length === 0)
-					);
-				})
-			)
+			const variable = record.fields.filter((field) => {
+				const type = resolveCType(model, field.type);
+				return type.kind === "array" && (type.length === undefined || type.length === 0);
+			});
+			if (variable.length > 0 && handle.trailing === undefined)
 				throw new FfiError(
-					`types.${key}.handle.storage: variable-length storage needs an allocation size`,
+					`types.${key}.handle.storage: variable-length allocation size needs a trailing field fact`,
 				);
+			if (handle.trailing !== undefined) {
+				const field = record.fields.at(-1);
+				const type = field === undefined ? undefined : resolveCType(model, field.type);
+				if (
+					field?.name !== handle.trailing ||
+					variable.length !== 1 ||
+					variable[0] !== field ||
+					type?.kind !== "array"
+				)
+					throw new FfiError(
+						`types.${key}.handle.trailing: name the final flexible or zero-length array field`,
+					);
+				const complete = (type: CType): boolean => {
+					const resolved = resolveCType(model, type);
+					if (resolved.kind === "array")
+						return (
+							resolved.length !== undefined &&
+							resolved.length > 0 &&
+							complete(resolved.of)
+						);
+					if (resolved.kind === "record")
+						return model.records.get(resolved.name)?.complete === true;
+					return !["void", "function", "unsupported", "typedef"].includes(resolved.kind);
+				};
+				if (!complete(type.of))
+					throw new FfiError(
+						`types.${key}.handle.trailing: array elements need a complete object type`,
+					);
+			}
 			if (handle.destroy !== undefined || handle.collect === true)
 				throw new FfiError(
 					`types.${key}.handle.storage: C initialization and cleanup must remain explicit`,
@@ -515,6 +545,7 @@ function handleTypes(
 					? "struct"
 					: "pointer",
 			...(handle.storage === "caller" ? { allocator: key } : {}),
+			...(handle.trailing === undefined ? {} : { trailing: handle.trailing }),
 			...(destroy === undefined ? {} : { destroy }),
 			collect: handle.collect === true,
 			views: [],

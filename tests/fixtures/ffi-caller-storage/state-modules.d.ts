@@ -6,6 +6,24 @@ declare module "maligator:ffi/state" {
 		readonly value: number;
 	}
 	export function CallerState(): State;
+	export function VariableState(length: bigint): State;
+	export function WideState(length: bigint): State;
+	export function variable_state_zero(state: State, count: bigint): number;
+	export function variable_state_fill(state: State, count: bigint, seed: number): void;
+	export function variable_state_sum(state: State): number;
+	export function variableStateSumAsync(state: State): Promise<number>;
+	export function variable_state_aligned(state: State): number;
+	export function variable_state_same(state: State): State | null;
+	export function variable_state_visit(
+		state: State,
+		callback: (state: State | null) => void,
+	): void;
+	export function variableStateVisitAsync(
+		state: State,
+		callback: (state: State | null) => void,
+	): Promise<void>;
+	export function wide_state_fill(state: State, count: bigint): void;
+	export function wide_state_sum(state: State): bigint;
 	export function caller_state_init(state: State, value: number): number;
 	export function caller_state_read(state: State): number;
 	export function caller_state_aligned(state: State): number;

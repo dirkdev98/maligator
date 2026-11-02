@@ -248,7 +248,21 @@ function validateTypeFacts(value: unknown, at: string): void {
 	if (value.handle === undefined) return;
 	const handle = value.handle;
 	expectObject(handle, `${at}.handle`);
-	expectKeys(handle, `${at}.handle`, ["destroy", "collect", "storage", "views"]);
+	expectKeys(handle, `${at}.handle`, [
+		"destroy",
+		"collect",
+		"storage",
+		"views",
+		"trailing",
+	]);
+	if (handle.trailing !== undefined) {
+		expect(
+			typeof handle.trailing === "string" && C_NAME.test(handle.trailing),
+			`${at}.handle.trailing`,
+			"a C field name",
+		);
+		expect(handle.storage === "caller", `${at}.handle.trailing`, 'storage: "caller"');
+	}
 	if (handle.views !== undefined)
 		expect(
 			Array.isArray(handle.views) &&

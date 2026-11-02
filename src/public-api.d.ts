@@ -69,11 +69,16 @@ export interface MaligatorFfiLibrary {
  * @see https://maligator.ddv.tools/api/build#MaligatorFfiHandle
  */
 export interface MaligatorFfiHandle {
-	/** Export a zero-argument factory named by the type fact. It allocates aligned,
+	/** Export a factory named by the type fact. It allocates aligned,
 	 * zeroed caller-owned storage for a complete struct. C initialization and cleanup
 	 * remain explicit; disposing the handle frees only this storage.
 	 */
 	storage?: "caller";
+	/** A final flexible or zero-length array field in caller storage. The factory
+	 * takes its element count as a bigint; without this fact it takes no arguments.
+	 * Allocation does not initialize a C count field.
+	 */
+	trailing?: string;
 	/** Other handle types whose pointers accept this resource without adjustment.
 	 * Compatibility is directed and preserves the resource's identity and owner.
 	 */

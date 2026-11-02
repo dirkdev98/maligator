@@ -2,6 +2,6 @@
 export default {
 	entry: "main.ts",
 	engine: { eval: false, realms: false },
-	surface: { webPlatform: false, node: false },
+	surface: { webPlatform: true, node: false },
 	ffi: { state: { contract: "state.ffi.ts" } },
 };

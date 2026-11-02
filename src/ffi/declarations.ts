@@ -113,7 +113,7 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string | F
 		if (handle.allocator !== undefined)
 			lines.push(
 				"\t/** Allocate zeroed caller storage. C initialization and cleanup remain explicit. */",
-				`\texport function ${handle.allocator}(): ${handle.name}${values.length === 0 ? ";" : " & {"}`,
+				`\texport function ${handle.allocator}(${handle.trailing === undefined ? "" : "length: bigint"}): ${handle.name}${values.length === 0 ? ";" : " & {"}`,
 				...(values.length === 0 ? [] : [...values, "\t};"]),
 			);
 	}

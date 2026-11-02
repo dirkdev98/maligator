@@ -5,6 +5,33 @@
 
 static int live;
 
+int variable_state_zero(const VariableState *state, size_t count) {
+    if (state->length != 0) return 0;
+    for (size_t index = 0; index < count; index++) if (state->tail[index] != 0) return 0;
+    return 1;
+}
+void variable_state_fill(VariableState *state, size_t count, int seed) {
+    state->length = (int) count;
+    for (size_t index = 0; index < count; index++) state->tail[index] = (unsigned char) (seed + index);
+}
+int variable_state_sum(const VariableState *state) {
+    int sum = 0;
+    for (int index = 0; index < state->length; index++) sum += state->tail[index];
+    return sum;
+}
+int variable_state_aligned(const VariableState *state) { return (uintptr_t)state % _Alignof(VariableState) == 0; }
+VariableState *variable_state_same(VariableState *state) { return state; }
+void variable_state_visit(VariableState *state, void (*callback)(VariableState *, void *), void *data) { callback(state, data); }
+void wide_state_fill(WideState *state, size_t count) {
+    state->length = count;
+    for (size_t index = 0; index < count; index++) state->tail[index] = UINT32_C(0x80000000) + (uint32_t)index;
+}
+uint64_t wide_state_sum(const WideState *state) {
+    uint64_t sum = 0;
+    for (size_t index = 0; index < state->length; index++) sum += state->tail[index];
+    return sum;
+}
+
 int caller_state_init(CallerState *state, int value) {
     if (value < 0 || state->private_state != NULL || state->value != 0) return -1;
     int *stored = malloc(sizeof(*stored));

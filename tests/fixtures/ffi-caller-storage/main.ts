@@ -1,6 +1,18 @@
 /* oxlint-disable no-console -- The fixture reports observable native behavior. */
 import {
 	CallerState,
+	VariableState,
+	WideState,
+	variable_state_zero,
+	variable_state_fill,
+	variable_state_sum,
+	variableStateSumAsync,
+	variable_state_aligned,
+	variable_state_same,
+	variable_state_visit,
+	variableStateVisitAsync,
+	wide_state_fill,
+	wide_state_sum,
 	caller_state_init,
 	caller_state_read,
 	caller_state_same,
@@ -69,6 +81,89 @@ check(
 	"copied handles meet C alignment",
 );
 copied[Symbol.dispose]();
+
+for (const count of [0, 1, 63, 64, 65, 129]) {
+	const variable = VariableState(BigInt(count));
+	check(
+		variable_state_zero(variable, BigInt(count)) === 1,
+		"variable caller storage starts zeroed",
+	);
+	check(
+		variable_state_aligned(variable) === 1,
+		"variable caller storage keeps native alignment",
+	);
+	variable_state_fill(variable, BigInt(count), 3);
+	const expected = count * 3 + (count * (count - 1)) / 2;
+	check(
+		variable_state_sum(variable) === expected,
+		"C uses the entire requested trailing array",
+	);
+	check(
+		(await variableStateSumAsync(variable)) === expected,
+		"worker uses variable caller storage",
+	);
+	check(
+		variable_state_same(variable) === variable,
+		"variable pointer aliases keep identity",
+	);
+	const visit = (lent: ReturnType<typeof variable_state_same>): void => {
+		check(lent === variable, "variable callback keeps canonical identity");
+		let pinned = false;
+		try {
+			variable[Symbol.dispose]();
+		} catch (error) {
+			pinned = error instanceof TypeError;
+		}
+		check(pinned, "variable storage cannot close during a C call");
+	};
+	variable_state_visit(variable, visit);
+	await variableStateVisitAsync(variable, visit);
+	variable[Symbol.dispose]();
+	let closed = false;
+	try {
+		variable_state_sum(variable);
+	} catch (error) {
+		closed = error instanceof TypeError;
+	}
+	check(closed, "disposed variable storage cannot reach C");
+}
+for (const count of [0, 1, 9, 33]) {
+	using wide = WideState(BigInt(count));
+	wide_state_fill(wide, BigInt(count));
+	check(
+		wide_state_sum(wide) ===
+			BigInt(count) * 0x80000000n + BigInt((count * (count - 1)) / 2),
+		"trailing counts use native element width",
+	);
+}
+for (const invalid of [-1n, 1n << 80n, (1n << 64n) - 1n, (1n << 64n) - 5n]) {
+	let rejected = false;
+	try {
+		VariableState(invalid);
+	} catch (error) {
+		rejected =
+			error instanceof RangeError &&
+			error.message.includes("VariableState") &&
+			error.message.includes("length");
+	}
+	check(rejected, "variable allocation rejects count and alignment rounding overflow");
+}
+let multiplied = false;
+try {
+	WideState(1n << 62n);
+} catch (error) {
+	multiplied = error instanceof RangeError;
+}
+check(multiplied, "trailing element multiplication cannot wrap");
+for (const invalid of [1, undefined, "3"]) {
+	let rejected = false;
+	try {
+		VariableState(invalid as unknown as bigint);
+	} catch (error) {
+		rejected = error instanceof TypeError;
+	}
+	check(rejected, "trailing count conversion never coerces");
+}
 
 const expression = regex_t();
 try {

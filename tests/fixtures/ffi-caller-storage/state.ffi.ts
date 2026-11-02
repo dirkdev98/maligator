@@ -9,9 +9,17 @@ export default {
 		CallerState: { handle: { storage: "caller" } },
 		CopiedState: { handle: {} },
 		regex_t: { handle: { storage: "caller" } },
+		VariableState: { handle: { storage: "caller", trailing: "tail" } },
+		WideState: { handle: { storage: "caller", trailing: "tail" } },
 	},
 	functions: {
 		caller_state_same: { returns: { borrowed: true } },
+		variable_state_same: { returns: { borrowed: true } },
+		variable_state_sum: { async: "variableStateSumAsync" },
+		variable_state_visit: {
+			async: "variableStateVisitAsync",
+			params: { callback: { callback: { data: "data" } } },
+		},
 		caller_state_visit: { params: { visit: { callback: { data: "data" } } } },
 		caller_state_listen: {
 			params: { listener: { callback: { data: "data", replaced: true, queued: true } } },

@@ -128,6 +128,11 @@ MalValue mal_ffi_new_handle(
 MalValue mal_ffi_allocate_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
     size_t size, size_t alignment);
+/** Allocate caller storage for a trailing array, rejecting size and alignment-rounding overflow. */
+MalValue mal_ffi_allocate_trailing_handle(
+    MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
+    uint64_t count, size_t offset, size_t stride, size_t minimum, size_t alignment,
+    const MalFfiSite *site);
 /**
  * A borrowed handle for a callback argument. It reads as closed once the callback
  * returns, unless the program already held a handle for the same pointer.
