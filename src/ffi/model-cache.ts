@@ -1,10 +1,9 @@
 import type { Buffer } from "node:buffer";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
 	artifactActionKey,
-	artifactDigest,
 	artifactOutput,
 	publishArtifactAction,
 	readArtifactAction,
@@ -12,7 +11,12 @@ import {
 import { maligatorCacheDirectory } from "../cache-root.ts";
 import { compilerProducerIdentity } from "../compiler-cache-identity.ts";
 import { writeSourceChunks } from "../generated-source.ts";
-import { extractCModel } from "./c-extract.ts";
+import {
+	extractCModel,
+	extractCModelFromHeaders,
+	headerSearchDirectories,
+	withCHeaders,
+} from "./c-extract.ts";
 import type { CExtractionInput } from "./c-extract.ts";
 import type { CEnum, CModel, CRecord, CTypedef } from "./c-model.ts";
 
@@ -40,14 +44,6 @@ interface CachedModel {
 	/** Every file the headers read, with its content digest when the model was extracted. */
 	readonly dependencies: ReadonlyArray<Dependency>;
 	readonly model: CModel;
-}
-
-function fileDigest(file: string): string | undefined {
-	try {
-		return artifactDigest(new Uint8Array(readFileSync(file)));
-	} catch {
-		return undefined;
-	}
 }
 
 type CachedRow =
@@ -160,51 +156,96 @@ function decode(data: Buffer): CachedModel {
 }
 
 /**
- * The C model of a library's headers, extracted once and reused until the
- * compiler, its arguments, the extractor, or any file the headers read changes.
- * The key cannot name the headers' dependencies before extraction, so each entry
- * records them and a lookup checks their contents.
+ * Reuse AST and probe analysis after Clang resolves the current include graph.
+ * Preprocessing observes new shadow headers and conditional include lookups;
+ * file versions also cover documentation that preprocessing drops.
  */
 export function loadCModel(input: CExtractionInput): CModel {
-	const compiler = statSync(input.compiler.path);
-	const producer = compilerProducerIdentity(STAGE, 2);
-	const key = artifactActionKey(producer, {
-		compiler: {
-			path: input.compiler.path,
-			version: input.compiler.version,
-			args: input.compiler.args ?? [],
-			size: compiler.size,
-			modified: compiler.mtimeMs,
-		},
-		headers: input.headers,
-		compileArguments: input.compileArguments,
-		environment: HEADER_ENVIRONMENT.map((name) => [
-			name,
-			input.environment[name] ?? null,
-		]),
-	});
 	const root = maligatorCacheDirectory();
-	const cached = readArtifactAction(root, STAGE, producer, key);
-	if (cached !== undefined) {
-		const entry = decode(readFileSync(artifactOutput(cached, "model.jsonl").path));
-		if (entry.dependencies.every(({ file, digest }) => fileDigest(file) === digest)) {
-			return entry.model;
+	const cache = canonicalPath(root);
+	if (
+		headerSearchDirectories(input).some((directory) => {
+			const relative = path.relative(canonicalPath(directory, true), cache);
+			return (
+				relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
+			);
+		})
+	)
+		return extractCModel(input);
+	const compiler = statSync(input.compiler.path);
+	const producer = compilerProducerIdentity(STAGE, 3);
+	const analysis = withCHeaders<{
+		model: CModel;
+		publication?: { key: string; dependencies: ReadonlyArray<Dependency> };
+	}>(input, (headers) => {
+		if (!headers.cacheable) return { model: extractCModelFromHeaders(input, headers) };
+		const key = artifactActionKey(producer, {
+			compiler: {
+				path: input.compiler.path,
+				version: input.compiler.version,
+				args: input.compiler.args ?? [],
+				size: compiler.size,
+				modified: compiler.mtimeMs,
+			},
+			headers: input.headers,
+			preprocessed: headers.preprocessed.identity,
+			values: headers.valueProbe.identity,
+			versions: headers.versions,
+			compileArguments: input.compileArguments,
+			environment: HEADER_ENVIRONMENT.map((name) => [
+				name,
+				input.environment[name] ?? null,
+			]),
+		});
+		const cached = readArtifactAction(root, STAGE, producer, key);
+		if (cached !== undefined) {
+			const entry = decode(readFileSync(artifactOutput(cached, "model.jsonl").path));
+			if (
+				entry.dependencies.every(({ file, digest }) =>
+					headers.versions.some(
+						(version) => version.file === file && version.digest === digest,
+					),
+				)
+			) {
+				return { model: entry.model };
+			}
+		}
+		const model = extractCModelFromHeaders(input, headers);
+		const dependencies = headers.versions.map(({ file, digest }) => ({ file, digest }));
+		return { model, publication: { key, dependencies } };
+	});
+	if (analysis.publication !== undefined) {
+		const { key, dependencies } = analysis.publication;
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-model-"));
+		try {
+			const file = path.join(directory, "model.jsonl");
+			writeSourceChunks(file, encode(analysis.model, dependencies));
+			publishArtifactAction(root, STAGE, producer, key, [{ name: "model.jsonl", file }]);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
 		}
 	}
-	const model = extractCModel(input);
-	const dependencies: Array<Dependency> = [];
-	for (const file of model.dependencies) {
-		const digest = fileDigest(file);
-		if (digest === undefined) return model;
-		dependencies.push({ file, digest });
+	return analysis.model;
+}
+
+function canonicalPath(file: string, allowInaccessible = false): string {
+	const suffix: Array<string> = [];
+	let current = path.resolve(file);
+	for (;;) {
+		try {
+			return path.join(realpathSync(current), ...suffix);
+		} catch (error) {
+			if (
+				allowInaccessible &&
+				["EACCES", "EPERM", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")
+			)
+				return path.resolve(file);
+			if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? ""))
+				throw error;
+			const parent = path.dirname(current);
+			if (parent === current) throw error;
+			suffix.unshift(path.basename(current));
+			current = parent;
+		}
 	}
-	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-model-"));
-	try {
-		const file = path.join(directory, "model.jsonl");
-		writeSourceChunks(file, encode(model, dependencies));
-		publishArtifactAction(root, STAGE, producer, key, [{ name: "model.jsonl", file }]);
-	} finally {
-		rmSync(directory, { recursive: true, force: true });
-	}
-	return model;
 }

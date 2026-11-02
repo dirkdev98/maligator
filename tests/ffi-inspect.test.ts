@@ -771,7 +771,7 @@ describe("ffi contract facts", () => {
 });
 
 describe("C model cache", () => {
-	it("reads the headers again only after one of them or the header search changes", () => {
+	it("reuses AST analysis until a header or the header search changes", () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-model-cache-"));
 		const previousCache = process.env.MALIGATOR_CACHE_DIR;
 		try {

@@ -100,7 +100,7 @@ export interface CModel {
 	readonly headers: ReadonlyArray<{ readonly spelling: string; readonly path: string }>;
 	/** Files whose declarations belong to the library. */
 	readonly files: ReadonlyArray<string>;
-	/** Every file the headers read, for cache identity. */
+	/** Native inputs read during extraction or needed to build the library. */
 	readonly dependencies: ReadonlyArray<string>;
 	readonly functions: ReadonlyArray<CFunction>;
 	/** Records from every file, since library types can embed system ones. */

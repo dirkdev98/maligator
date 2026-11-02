@@ -1,8 +1,18 @@
 import type { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	realpathSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { artifactDigest } from "../artifact-store.ts";
 import type { ToolExecutable } from "../toolchain.ts";
 import { clangMajorVersion, toolArguments } from "../toolchain.ts";
 import type {
@@ -23,7 +33,7 @@ import { resolveCType } from "./c-model.ts";
 import { C_FLOAT_NAMES, C_INTEGER_NAMES, parseCType, unnamedTagKey } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import { clangProbeDeclarations, visitClangDeclarations } from "./clang-ast.ts";
-import { FfiError } from "./ffi-error.ts";
+import { FfiError, FfiSourceChangedError } from "./ffi-error.ts";
 
 export interface CExtractionInput {
 	/** A clang driver, or `zig cc`, which embeds clang. */
@@ -33,6 +43,7 @@ export interface CExtractionInput {
 	readonly headers: ReadonlyArray<string>;
 	/** Include directories and defines the library needs, as compiler arguments. */
 	readonly compileArguments: ReadonlyArray<string>;
+	readonly onDependencies?: (files: ReadonlyArray<string>) => void;
 }
 
 /** The C standard binding units compile with; headers must parse the same way. */
@@ -102,6 +113,7 @@ interface PreprocessedMacro {
 }
 
 interface Preprocessed {
+	readonly identity: string;
 	readonly headerPaths: ReadonlyArray<string>;
 	readonly files: ReadonlySet<string>;
 	readonly macros: ReadonlyMap<string, PreprocessedMacro>;
@@ -133,21 +145,26 @@ function preprocess(
 		"c",
 		probePath,
 	]);
-	if (result.status !== 0) {
-		throw new FfiError(`cannot preprocess the library headers:\n${result.stderr.trim()}`);
-	}
 	const stack: Array<string> = [];
 	const directIncludes: Array<string> = [];
 	const files = new Set<string>();
 	const macros = new Map<string, PreprocessedMacro>();
 	let file = "";
 	let line = 0;
+	const identity = createHash("sha256");
 	for (let start = 0; start < result.stdout.length;) {
+		const lineStart = start;
 		let end = result.stdout.indexOf(10, start);
 		if (end < 0) end = result.stdout.length;
 		const text = result.stdout.toString("utf8", start, end);
 		start = end + 1;
 		const marker = LINE_MARKER.exec(text);
+		if (marker !== null && unescapeMarkerPath(marker[2]!) === probePath)
+			identity.update(`# ${marker[1]} "<maligator-header-probe>"${marker[3]}\n`);
+		else
+			identity.update(
+				result.stdout.subarray(lineStart, Math.min(end + 1, result.stdout.length)),
+			);
 		if (marker !== null) {
 			const name = unescapeMarkerPath(marker[2]!);
 			const flags = marker[3]!.trim().split(/\s+/).filter(Boolean);
@@ -159,7 +176,7 @@ function preprocess(
 				if (stack.length === 0) stack.push(name);
 			} else if (stack.length === 0) stack.push(name);
 			else stack[stack.length - 1] = name;
-			if (!isPseudoFile(name)) files.add(path.resolve(cwd, name));
+			if (flags.includes("1") && !isPseudoFile(name)) files.add(path.resolve(cwd, name));
 			file = name;
 			line = Number(marker[1]);
 			continue;
@@ -179,6 +196,10 @@ function preprocess(
 		line++;
 	}
 	files.delete(probePath);
+	input.onDependencies?.([...files].sort());
+	if (result.status !== 0) {
+		throw new FfiError(`cannot preprocess the library headers:\n${result.stderr.trim()}`);
+	}
 	const headerPaths = input.headers.map((spelling) => {
 		const suffix = `${path.sep}${path.normalize(spelling)}`;
 		const resolved =
@@ -189,7 +210,12 @@ function preprocess(
 		}
 		return resolved;
 	});
-	return { headerPaths, files, macros };
+	return {
+		identity: identity.digest("hex"),
+		headerPaths,
+		files,
+		macros,
+	};
 }
 
 /**
@@ -818,12 +844,18 @@ interface Probes {
 	readonly untyped: ReadonlyArray<PreprocessedMacro>;
 }
 
-function probe(
+interface ValueProbe {
+	readonly path: string;
+	readonly preprocessed: boolean;
+	readonly identity: string;
+}
+
+function prepareValueProbe(
 	input: CExtractionInput,
 	directory: string,
 	includes: string,
 	candidates: ReadonlyArray<PreprocessedMacro>,
-): Probes {
+): ValueProbe {
 	const lines = [includes];
 	TARGET_PROBES.forEach((name, index) => {
 		lines.push(`enum : unsigned long long { __mal_size_${index} = sizeof(${name}) };`);
@@ -838,21 +870,56 @@ function probe(
 	});
 	const probePath = path.join(directory, "probe-values.c");
 	writeFileSync(probePath, `${lines.join("\n")}\n`);
+	const expanded = runCompiler(input, [
+		FFI_C_STANDARD,
+		"-E",
+		"-w",
+		...input.compileArguments,
+		"-x",
+		"c",
+		probePath,
+	]);
+	const identity = createHash("sha256");
+	for (let start = 0; start < expanded.stdout.length;) {
+		let end = expanded.stdout.indexOf(10, start);
+		if (end < 0) end = expanded.stdout.length;
+		const line = expanded.stdout.toString("utf8", start, end);
+		const marker = LINE_MARKER.exec(line);
+		if (marker !== null && unescapeMarkerPath(marker[2]!) === probePath)
+			identity.update(`# ${marker[1]} "<maligator-value-probe>"${marker[3]}\n`);
+		else
+			identity.update(
+				expanded.stdout.subarray(start, Math.min(end + 1, expanded.stdout.length)),
+			);
+		start = end + 1;
+	}
+	if (expanded.status !== 0)
+		return { path: probePath, preprocessed: false, identity: identity.digest("hex") };
+	const artifact = path.join(directory, "probe-values.i");
+	writeFileSync(artifact, expanded.stdout);
+	return { path: artifact, preprocessed: true, identity: identity.digest("hex") };
+}
+
+function probe(
+	input: CExtractionInput,
+	valueProbe: ValueProbe,
+	candidates: ReadonlyArray<PreprocessedMacro>,
+): Probes {
 	// Probes of macros that are not expressions fail to compile; each failure stays
 	// local to its own declaration, which the AST then marks invalid or omits.
 	const result = runCompiler(input, [
 		FFI_C_STANDARD,
 		"-fsyntax-only",
-		"-w",
 		"-ferror-limit=0",
 		"-Xclang",
 		"-ast-dump=json",
 		"-Xclang",
 		"-ast-dump-filter=__mal_",
 		...input.compileArguments,
+		"-w",
 		"-x",
-		"c",
-		probePath,
+		valueProbe.preprocessed ? "cpp-output" : "c",
+		valueProbe.path,
 	]);
 	const nodes = new Map<string, JsonObject>();
 	for (const node of clangProbeDeclarations(result.stdout)) {
@@ -910,7 +977,162 @@ function probe(
  * Nothing is executed, so this works for cross targets.
  */
 export function extractCModel(input: CExtractionInput): CModel {
+	return withCHeaders(input, (headers) => extractCModelFromHeaders(input, headers));
+}
+
+/** Implementation headers also invalidate a linked runtime when its public ABI is unchanged. */
+export function extractCSourceDependencies(
+	input: Omit<CExtractionInput, "headers">,
+	source: string,
+): ReadonlyArray<string> {
 	assertClang(input.compiler);
+	input.onDependencies?.([path.dirname(source)]);
+	const extracted = preprocess({ ...input, headers: [] }, source, process.cwd());
+	return [...new Set([source, ...extracted.files])].sort();
+}
+
+interface CHeaderVersion {
+	readonly file: string;
+	readonly digest: string;
+	readonly size: number;
+	readonly mtimeMs: number;
+	readonly ctimeMs: number;
+	readonly ino: number;
+	readonly dev: number;
+}
+
+export interface CHeaders {
+	readonly directory: string;
+	readonly probePath: string;
+	readonly preprocessed: Preprocessed;
+	readonly versions: ReadonlyArray<CHeaderVersion>;
+	readonly cacheable: boolean;
+	readonly candidates: ReadonlyArray<PreprocessedMacro>;
+	readonly valueProbe: ValueProbe;
+	validate(): void;
+}
+
+function headerVersion(file: string): CHeaderVersion {
+	try {
+		const before = statSync(file);
+		const digest = artifactDigest(new Uint8Array(readFileSync(file)));
+		const after = statSync(file);
+		if (
+			["size", "mtimeMs", "ctimeMs", "ino", "dev"].some(
+				(key) => Reflect.get(before, key) !== Reflect.get(after, key),
+			)
+		)
+			throw new FfiSourceChangedError([file]);
+		return {
+			file,
+			digest,
+			size: before.size,
+			mtimeMs: before.mtimeMs,
+			ctimeMs: before.ctimeMs,
+			ino: before.ino,
+			dev: before.dev,
+		};
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT")
+			throw new FfiSourceChangedError([file]);
+		throw error;
+	}
+}
+
+export function headerSearchDirectories(input: CExtractionInput): Array<string> {
+	const directories: Array<string> = [];
+	const flags = ["-isystem", "-iquote", "-idirafter", "-iframework", "-I", "-F"];
+	const args = [...(input.compiler.args ?? []), ...input.compileArguments];
+	for (let index = 0; index < args.length; index++) {
+		const argument = args[index]!;
+		const flag = flags.find((candidate) => argument.startsWith(candidate));
+		if (flag === undefined) continue;
+		const directory = argument === flag ? args[++index] : argument.slice(flag.length);
+		if (directory !== undefined && directory.length > 0)
+			directories.push(path.resolve(directory));
+	}
+	for (const name of ["CPATH", "C_INCLUDE_PATH"]) {
+		const value = input.environment[name];
+		if (value !== undefined)
+			for (const directory of value.split(path.delimiter))
+				directories.push(path.resolve(directory));
+	}
+	return [
+		...new Set([
+			...directories,
+			...input.headers.filter(path.isAbsolute).map((header) => path.dirname(header)),
+		]),
+	];
+}
+
+function directoryVersion(directory: string): string | undefined {
+	try {
+		const value = statSync(directory);
+		return [value.size, value.mtimeMs, value.ctimeMs, value.ino, value.dev].join(":");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
+function snapshotDirectoryTree(
+	directory: string,
+	versions: Map<string, string | undefined>,
+	visited: Set<string>,
+	scratch: string,
+): boolean {
+	// A broad shared search tree can cost more to guard than parsing its selected headers.
+	if (visited.size >= 2048) return false;
+	try {
+		const before = directoryVersion(directory);
+		if (versions.has(directory) && versions.get(directory) !== before)
+			throw new FfiSourceChangedError([directory]);
+		versions.set(directory, before);
+		if (before === undefined) {
+			const parent = path.dirname(directory);
+			if (!versions.has(parent)) versions.set(parent, directoryVersion(parent));
+			return true;
+		}
+		const real = realpathSync(directory);
+		if (real === scratch) {
+			versions.delete(directory);
+			return true;
+		}
+		if (visited.has(real) || !statSync(directory).isDirectory()) return true;
+		visited.add(real);
+		for (const entry of readdirSync(directory, { withFileTypes: true }))
+			if (
+				(entry.isDirectory() || entry.isSymbolicLink()) &&
+				!snapshotDirectoryTree(
+					path.join(directory, entry.name),
+					versions,
+					visited,
+					scratch,
+				)
+			)
+				return false;
+		if (directoryVersion(directory) !== before)
+			throw new FfiSourceChangedError([directory]);
+		return true;
+	} catch (error) {
+		if (
+			["EACCES", "EPERM", "ELOOP", "ENOENT", "ENOTDIR"].includes(
+				(error as NodeJS.ErrnoException).code ?? "",
+			)
+		)
+			return false;
+		throw error;
+	}
+}
+
+/** Clang resolves includes before cache lookup, including absent and shadowed headers. */
+export function withCHeaders<Result>(
+	input: CExtractionInput,
+	read: (headers: CHeaders) => Result,
+): Result {
+	assertClang(input.compiler);
+	const searchDirectories = headerSearchDirectories(input);
+	input.onDependencies?.(searchDirectories);
 	for (const header of input.headers) {
 		if (header.length === 0 || /["\n\\]/.test(header)) {
 			throw new FfiError(`invalid header name '${header}'`);
@@ -918,116 +1140,176 @@ export function extractCModel(input: CExtractionInput): CModel {
 	}
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-"));
 	try {
-		const cwd = directory;
+		const directories = new Map<string, string | undefined>();
+		const visited = new Set<string>();
+		const scratch = realpathSync(directory);
+		const guarded = searchDirectories.every((root) =>
+			snapshotDirectoryTree(root, directories, visited, scratch),
+		);
 		const includes = input.headers.map((header) => `#include "${header}"`).join("\n");
 		const probePath = path.join(directory, "probe-headers.c");
 		writeFileSync(probePath, `${includes}\n`);
 
-		const preprocessed = preprocess(input, probePath, cwd);
-		const isLibraryFile = libraryFileFilter(input.headers, preprocessed.headerPaths);
-
-		const dump = runCompiler(input, [
-			FFI_C_STANDARD,
-			"-fsyntax-only",
-			"-w",
-			"-Xclang",
-			"-ast-dump=json",
-			...input.compileArguments,
-			"-x",
-			"c",
-			probePath,
-		]);
-		if (dump.status !== 0) {
-			throw new FfiError(`the library headers do not compile:\n${dump.stderr.trim()}`);
+		const preprocessed = preprocess(input, probePath, directory);
+		const versions = [...preprocessed.files].sort().map(headerVersion);
+		for (const file of preprocessed.files) {
+			const parent = path.dirname(file);
+			if (!directories.has(parent)) directories.set(parent, directoryVersion(parent));
 		}
-		const nodes: Array<JsonObject> = [];
-		// Clang compresses locations across declarations, including function bodies we drop.
-		const resolveLocations = createLocationResolver();
-		visitClangDeclarations(dump.stdout, (node) => {
-			resolveLocations(node);
-			if (node.kind === "FunctionDecl") {
-				node.inner = innerNodes(node).filter(
-					(child) =>
-						child.kind === "ParmVarDecl" ||
-						(typeof child.kind === "string" && child.kind.endsWith("Attr")),
-				);
-			}
-			if (node.isImplicit !== true) nodes.push(node);
-		});
-		const declarations = collectDeclarations(nodes, cwd, isLibraryFile);
-
+		const isLibraryFile = libraryFileFilter(input.headers, preprocessed.headerPaths);
 		const candidates = [...preprocessed.macros.values()].filter(
 			(macro) =>
 				!macro.functionLike &&
 				macro.body !== "" &&
 				!isPseudoFile(macro.file) &&
-				isLibraryFile(path.resolve(cwd, macro.file)) &&
+				isLibraryFile(path.resolve(directory, macro.file)) &&
 				balancedBody(macro.body),
 		);
-		const probes = probe(input, directory, includes, candidates);
-
-		const base = {
-			target: probes.target,
-			headers: input.headers.map((spelling, index) => ({
-				spelling,
-				path: preprocessed.headerPaths[index]!,
-			})),
-			files: [...preprocessed.files].filter(isLibraryFile).sort(),
-			dependencies: [...preprocessed.files].sort(),
-			functions: declarations.functions.sort((left, right) =>
-				left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
-			),
-			records: declarations.records,
-			enums: declarations.enums,
-			typedefs: declarations.typedefs,
+		const valueProbe = prepareValueProbe(input, directory, includes, candidates);
+		let includeGraphValidated = false;
+		const headers: CHeaders = {
+			directory,
+			probePath,
+			preprocessed,
+			versions,
+			cacheable: valueProbe.preprocessed && guarded,
+			candidates,
+			valueProbe,
+			validate() {
+				if (!includeGraphValidated) {
+					let current: Preprocessed;
+					try {
+						current = preprocess(input, probePath, directory);
+					} catch (error) {
+						if (error instanceof FfiError)
+							throw new FfiSourceChangedError([...preprocessed.files]);
+						throw error;
+					}
+					if (
+						JSON.stringify([...current.files].sort()) !==
+							JSON.stringify([...preprocessed.files].sort()) ||
+						JSON.stringify(current.headerPaths) !==
+							JSON.stringify(preprocessed.headerPaths)
+					)
+						throw new FfiSourceChangedError([
+							...new Set([...preprocessed.files, ...current.files]),
+						]);
+					includeGraphValidated = true;
+				}
+				const changed = versions
+					.filter(
+						(before) =>
+							JSON.stringify(headerVersion(before.file)) !== JSON.stringify(before),
+					)
+					.map((version) => version.file);
+				if (guarded)
+					for (const [root, before] of directories)
+						if (directoryVersion(root) !== before) changed.push(root);
+				if (changed.length > 0) throw new FfiSourceChangedError(changed);
+			},
 		};
-		const sources = new SourceTexts();
-		const macros: Array<CMacro> = [];
-		const untypedMacros: Array<CUntypedMacro> = [];
-		const located = (macro: PreprocessedMacro): CLocation => ({
-			file: path.resolve(cwd, macro.file),
-			line: macro.line,
-		});
-		const documentedMacro = (macro: PreprocessedMacro): CUntypedMacro => {
-			const location = located(macro);
-			const lines = sources.lines(location.file);
-			const doc =
-				macroComment(lines, location.line) ??
-				commentBlockAbove(lines, location.line)?.text;
-			return {
-				name: macro.name,
-				body: macro.body,
-				location,
-				...(doc === undefined ? {} : { doc }),
-			};
-		};
-		for (const macro of probes.untyped) {
-			untypedMacros.push(documentedMacro(macro));
-		}
-		for (const entry of probes.typed) {
-			const documented = documentedMacro(entry.macro);
-			const resolved = resolveCType(
-				{ ...base, macros: [], untypedMacros: [] },
-				entry.type,
-			);
-			// A macro that aliases a function or an unsupported type is not a constant.
-			if (resolved.kind === "function" || resolved.kind === "unsupported") {
-				untypedMacros.push(documented);
-				continue;
-			}
-			const integral =
-				resolved.kind === "integer" ||
-				resolved.kind === "bool" ||
-				resolved.kind === "enum";
-			const value = integral ? entry.integer : entry.literal;
-			macros.push({
-				...documented,
-				type: entry.type,
-				...(value === undefined ? {} : { value }),
-			});
-		}
-		return { ...base, macros, untypedMacros };
+		const result = read(headers);
+		headers.validate();
+		return result;
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
+}
+
+export function extractCModelFromHeaders(
+	input: CExtractionInput,
+	headers: CHeaders,
+): CModel {
+	const { directory, probePath, preprocessed } = headers;
+	const cwd = directory;
+	const isLibraryFile = libraryFileFilter(input.headers, preprocessed.headerPaths);
+
+	const dump = runCompiler(input, [
+		FFI_C_STANDARD,
+		"-fsyntax-only",
+		"-Xclang",
+		"-ast-dump=json",
+		...input.compileArguments,
+		"-w",
+		"-x",
+		"c",
+		probePath,
+	]);
+	if (dump.status !== 0) {
+		throw new FfiError(`the library headers do not compile:\n${dump.stderr.trim()}`);
+	}
+	const nodes: Array<JsonObject> = [];
+	// Clang compresses locations across declarations, including function bodies we drop.
+	const resolveLocations = createLocationResolver();
+	visitClangDeclarations(dump.stdout, (node) => {
+		resolveLocations(node);
+		if (node.kind === "FunctionDecl") {
+			node.inner = innerNodes(node).filter(
+				(child) =>
+					child.kind === "ParmVarDecl" ||
+					(typeof child.kind === "string" && child.kind.endsWith("Attr")),
+			);
+		}
+		if (node.isImplicit !== true) nodes.push(node);
+	});
+	const declarations = collectDeclarations(nodes, cwd, isLibraryFile);
+
+	const probes = probe(input, headers.valueProbe, headers.candidates);
+
+	const base = {
+		target: probes.target,
+		headers: input.headers.map((spelling, index) => ({
+			spelling,
+			path: preprocessed.headerPaths[index]!,
+		})),
+		files: [...preprocessed.files].filter(isLibraryFile).sort(),
+		dependencies: [...preprocessed.files].sort(),
+		functions: declarations.functions.sort((left, right) =>
+			left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+		),
+		records: declarations.records,
+		enums: declarations.enums,
+		typedefs: declarations.typedefs,
+	};
+	const sources = new SourceTexts();
+	const macros: Array<CMacro> = [];
+	const untypedMacros: Array<CUntypedMacro> = [];
+	const located = (macro: PreprocessedMacro): CLocation => ({
+		file: path.resolve(cwd, macro.file),
+		line: macro.line,
+	});
+	const documentedMacro = (macro: PreprocessedMacro): CUntypedMacro => {
+		const location = located(macro);
+		const lines = sources.lines(location.file);
+		const doc =
+			macroComment(lines, location.line) ?? commentBlockAbove(lines, location.line)?.text;
+		return {
+			name: macro.name,
+			body: macro.body,
+			location,
+			...(doc === undefined ? {} : { doc }),
+		};
+	};
+	for (const macro of probes.untyped) {
+		untypedMacros.push(documentedMacro(macro));
+	}
+	for (const entry of probes.typed) {
+		const documented = documentedMacro(entry.macro);
+		const resolved = resolveCType({ ...base, macros: [], untypedMacros: [] }, entry.type);
+		// A macro that aliases a function or an unsupported type is not a constant.
+		if (resolved.kind === "function" || resolved.kind === "unsupported") {
+			untypedMacros.push(documented);
+			continue;
+		}
+		const integral =
+			resolved.kind === "integer" || resolved.kind === "bool" || resolved.kind === "enum";
+		const value = integral ? entry.integer : entry.literal;
+		macros.push({
+			...documented,
+			type: entry.type,
+			...(value === undefined ? {} : { value }),
+		});
+	}
+	headers.validate();
+	return { ...base, macros, untypedMacros };
 }

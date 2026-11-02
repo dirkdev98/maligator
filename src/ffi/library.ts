@@ -11,7 +11,7 @@ import { planBindings } from "./binding-plan.ts";
 import type { BindingPlan } from "./binding-plan.ts";
 import { generateBindingUnit, generateInstallerRegistry } from "./binding-unit.ts";
 import type { BindingUnit } from "./binding-unit.ts";
-import { FFI_C_STANDARD } from "./c-extract.ts";
+import { FFI_C_STANDARD, extractCSourceDependencies } from "./c-extract.ts";
 import type { CModel } from "./c-model.ts";
 import { loadLibraryContract } from "./contract.ts";
 import type { LibraryContract } from "./contract.ts";
@@ -36,6 +36,7 @@ export interface LibraryPreparation {
 	readonly environment: NodeJS.ProcessEnv;
 	readonly platform: NodeJS.Platform;
 	readonly cross: boolean;
+	readonly onDependencies?: (files: ReadonlyArray<string>) => void;
 }
 
 export function prepareLibrary(
@@ -50,26 +51,56 @@ export function prepareLibrary(
 			`no ffi library '${name}' in maligator.build.ts${configured.length === 0 ? "" : ` (configured: ${configured.join(", ")})`}`,
 		);
 	}
+	preparation.onDependencies?.([path.resolve(preparation.projectRoot, entry.contract)]);
 	const contract = loadLibraryContract(
 		name,
 		entry,
 		preparation.projectRoot,
 		preparation.stripTypes,
 	);
+	preparation.onDependencies?.(
+		contract.find.flatMap((find) => [
+			...find.includeDirs,
+			...find.libraryDirs,
+			...find.sources,
+			...contract.headers.flatMap((header) =>
+				path.isAbsolute(header)
+					? [header]
+					: find.includeDirs.map((directory) => path.join(directory, header)),
+			),
+		]),
+	);
 	const library = resolveLibrary(contract, {
 		environment: preparation.environment,
 		platform: preparation.platform,
 		cross: preparation.cross,
 	});
-	const model = loadCModel({
+	preparation.onDependencies?.(
+		library.linkInputs.flatMap((input) =>
+			input.kind === "archive" || input.kind === "shared" ? [input.path] : [],
+		),
+	);
+	const extraction = {
 		compiler: preparation.compiler,
 		environment: preparation.environment,
-		headers: contract.headers,
 		compileArguments: [
 			...platformCcFlags(preparation.platform),
 			...library.compileArguments,
 		],
-	});
+		onDependencies: preparation.onDependencies,
+	};
+	const extracted = loadCModel({ ...extraction, headers: contract.headers });
+	const model: CModel = {
+		...extracted,
+		dependencies: [
+			...new Set([
+				...extracted.dependencies,
+				...library.sources.flatMap((source) =>
+					extractCSourceDependencies(extraction, source),
+				),
+			]),
+		].sort(),
+	};
 	let plan: BindingPlan;
 	try {
 		plan = planBindings(model, contract.facts);
