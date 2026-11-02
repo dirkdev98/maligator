@@ -12,6 +12,7 @@ import {
 	readdirSync,
 	renameSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	unlinkSync,
 	writeFileSync,
@@ -174,7 +175,7 @@ chmodSync(distributedCli, 0o755);
 console.log(`ok   copied selected product CLI (${distributedCli})`);
 writeFileSync(
 	path.join(reports, "identity.json"),
-	`${JSON.stringify({ sourceCli: cli, sha256: createHash("sha256").update(readFileSync(distributedCli)).digest("hex"), providedCli: providedCli ?? null, supervisorOnly, platform: process.platform, arch: process.arch, node: process.version }, null, 2)}\n`,
+	`${JSON.stringify({ sourceCli: cli, bytes: statSync(distributedCli).size, sha256: createHash("sha256").update(readFileSync(distributedCli)).digest("hex"), providedCli: providedCli ?? null, supervisorOnly, platform: process.platform, arch: process.arch, node: process.version }, null, 2)}\n`,
 );
 
 let invocation = 0;
@@ -843,6 +844,80 @@ function checkFfiLargeHeaders(): void {
 	);
 }
 
+function checkFfiValueShapes(): void {
+	const directory = path.join(root, "ffi-value-shapes");
+	cpSync(path.join(repositoryRoot, "tests/fixtures/ffi-union-values/tagged"), directory, {
+		recursive: true,
+	});
+	const commands: Array<unknown> = [];
+	const run = (host: "node" | "native", args: Array<string>): string => {
+		const result = spawnSync(
+			host === "node" ? process.execPath : distributedCli,
+			host === "node" ? [path.join(repositoryRoot, "src/index.ts"), ...args] : args,
+			{
+				cwd: directory,
+				env: isolatedEnv,
+				encoding: "utf8",
+				timeout: 180_000,
+				killSignal: "SIGKILL",
+			},
+		);
+		commands.push({
+			host,
+			args,
+			status: result.status,
+			signal: result.signal,
+			error: result.error?.message,
+			stdout: result.stdout,
+			stderr: result.stderr,
+		});
+		writeFileSync(
+			path.join(reports, "ffi-value-shapes.json"),
+			`${JSON.stringify({ commands }, null, 2)}\n`,
+		);
+		if (result.error !== undefined || result.status !== 0 || result.signal !== null)
+			throw new Error(
+				`tagged FFI ${host} command failed: ${result.error?.message ?? result.stderr}`,
+			);
+		return result.stdout;
+	};
+	const inspected = run("native", ["ffi", "inspect", "tagged", "--json"]);
+	if (inspected !== run("node", ["ffi", "inspect", "tagged", "--json"]))
+		throw new Error("tagged FFI inspection differs between Node and the packaged CLI");
+	run("native", ["ffi", "types", "--out", "native.d.ts"]);
+	run("node", ["ffi", "types", "--out", "node.d.ts"]);
+	if (
+		!readFileSync(path.join(directory, "native.d.ts")).equals(
+			readFileSync(path.join(directory, "node.d.ts")),
+		)
+	)
+		throw new Error("tagged FFI declarations differ between Node and the packaged CLI");
+	const binary = run("native", ["build", "--production"]).trim().split("\n").at(-1)!;
+	const executed = spawnSync(binary, [], {
+		cwd: directory,
+		env: { ...isolatedEnv, MAL_GC_STRESS: "1", MAL_GC_VERIFY: "1" },
+		encoding: "utf8",
+		timeout: 30_000,
+		killSignal: "SIGKILL",
+	});
+	writeFileSync(
+		path.join(reports, "ffi-value-shapes-run.json"),
+		`${JSON.stringify({ status: executed.status, signal: executed.signal, error: executed.error?.message, stdout: executed.stdout, stderr: executed.stderr }, null, 2)}\n`,
+	);
+	if (
+		executed.error !== undefined ||
+		executed.status !== 0 ||
+		executed.signal !== null ||
+		executed.stdout.trim() !== "tagged union values passed"
+	)
+		throw new Error(
+			`packaged CLI tagged FFI application failed: ${executed.error?.message ?? executed.stderr}`,
+		);
+	console.log(
+		"ok   packaged FFI preserves tagged shapes, declarations, and native callback loans without Node",
+	);
+}
+
 if (ffiWatchOnly || ffiLargeOnly) {
 	let failure: unknown;
 	try {
@@ -1280,6 +1355,7 @@ server.listen(0, "127.0.0.1", () => {
 	if (!supervisorOnly) {
 		await checkFfiTestWatch();
 		checkFfiLargeHeaders();
+		checkFfiValueShapes();
 		const doctorOutput = invoke(["doctor", "--verbose"]);
 		if (!doctorOutput.includes("Toolchain is ready.")) {
 			throw new Error(`doctor did not accept the isolated toolchain:\n${doctorOutput}`);
