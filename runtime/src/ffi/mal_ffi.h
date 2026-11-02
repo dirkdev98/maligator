@@ -102,6 +102,9 @@ typedef struct MalFfiHandleType {
     int32_t view_count;
     const MalFfiManagedField *managed_fields;
     int32_t managed_field_count;
+    /** Guarded callable accessors shared by every prototype in a pointer-view family. */
+    const MalFfiField *view_fields;
+    int32_t view_field_count;
 } MalFfiHandleType;
 
 /**

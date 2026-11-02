@@ -1903,10 +1903,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Extend callable function-table fields to handle views. Returned functions,
-      complete table fields, and nested results bind through `callable` with library
-      or captured-owner lifetimes.
-
 - [ ] Bind exported C globals with explicit access and ownership contracts.
 
 - [ ] Extend value mapping for wider integers, complex and vector values, and native

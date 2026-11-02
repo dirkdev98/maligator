@@ -37,6 +37,20 @@ describe("directed C handle views", () => {
 		});
 		expect(plan.handles.get("ViewBase")).toMatchObject({ views: [], family: "ViewBase" });
 	});
+	it("rejects two callable declarations with the same property name in one family", () => {
+		expect(() =>
+			planBindings(model, {
+				types: {
+					ViewBase: { handle: {}, fields: { read: { callable: { lifetime: "owner" } } } },
+					ViewDerived: {
+						handle: { views: ["ViewBase"] },
+						fields: { read: { callable: { lifetime: "owner" } } },
+					},
+				},
+				functions: {},
+			}),
+		).toThrow("callable view field conflicts with ViewBase.read");
+	});
 	it.each([
 		[{ ViewDerived: { views: ["Missing"] } }, "needs a handle fact"],
 		[{ ViewDerived: { views: ["ViewBase"] } }, "needs a handle fact"],

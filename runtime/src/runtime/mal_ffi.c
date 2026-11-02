@@ -2402,8 +2402,10 @@ static MalValue ffi_handle_prototype(
         MalPropertyDesc description = {.value = held[1], .flags = MAL_PROPERTY_CONFIGURABLE};
         mal_object_define_own(prototype, mal_key_from_value(tag), &description);
     }
-    for (i32 index = 0; index < type->field_count; index++) {
-        const MalFfiField *field = &type->fields[index];
+    for (i32 index = 0; index < type->field_count + type->view_field_count; index++) {
+        // Install guarded view names up front: C may refine a frozen canonical wrapper.
+        const MalFfiField *field = index < type->field_count
+            ? &type->fields[index] : &type->view_fields[index - type->field_count];
         char getter_name[128];
         char setter_name[128];
         snprintf(getter_name, sizeof(getter_name), "get %s", field->name);

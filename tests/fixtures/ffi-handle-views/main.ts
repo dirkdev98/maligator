@@ -19,6 +19,11 @@ check(c.views_read(derived) === 7, "derived accepts base input");
 check(c.views_read_middle(derived) === 7, "transitive views accept middle input");
 const base = c.views_base(derived)!;
 check(base === derived, "base result preserves identity");
+const savedBaseRead = base.read!;
+check(
+	derived.read!(derived) === 7 && savedBaseRead(base) === 7,
+	"derived-first wrapper exposes inherited callable",
+);
 c.views_visit(derived, (lent) => {
 	check(lent === derived, "base callback preserves identity");
 	refuses(() => lent[Symbol.dispose](), "view shares active-call pins");
@@ -35,6 +40,7 @@ check(
 	"C can supply sibling evidence",
 );
 base[Symbol.dispose]();
+refuses(() => savedBaseRead(base), "inherited callable closes with canonical owner");
 check(
 	c.views_derived_closes() === 1 && c.views_base_closes() === 0,
 	"base alias keeps derived owner",
@@ -45,12 +51,36 @@ const borrowed = c.views_pending(13)!;
 // @ts-expect-error Runtime conversion must also refuse an unsupported downcast.
 refuses(() => c.views_read_derived(borrowed), "base has no implicit downcast");
 Object.freeze(borrowed);
+refuses(
+	() => (borrowed as unknown as c.ViewDerived).scale,
+	"callable view requires C evidence",
+);
+const savedBeforeRefinement = borrowed.read!;
 const acquired = c.views_take_pending()!;
 check(
 	acquired === borrowed && c.views_read_derived(acquired) === 13,
 	"base-first ownership preserves identity",
 );
+check(
+	acquired.scale!(acquired, 3) === 39 && savedBeforeRefinement(acquired) === 13,
+	"frozen base-first wrapper exposes refined callable",
+);
+check(
+	acquired.invoke!(acquired, (value) => {
+		refuses(() => borrowed[Symbol.dispose](), "callable view pins canonical owner");
+		refuses(
+			() => c.views_close_derived(acquired),
+			"callable view blocks explicit destruction",
+		);
+		return value * 2;
+	}) === 26,
+	"callable view reentrant safety",
+);
 acquired[Symbol.dispose]();
+refuses(
+	() => savedBeforeRefinement(acquired),
+	"refined owner invalidates earlier callable",
+);
 check(c.views_derived_closes() === 2, "acquired ownership uses derived destructor");
 
 const ownedBase = c.views_open_base(17)!;
@@ -91,6 +121,10 @@ c.views_lend((next) => {
 
 const caller = c.ViewCaller();
 c.views_set(caller, 31);
+check(caller.read === null, "caller view begins with a null function pointer");
+c.views_caller_init(caller);
+const callerRead = caller.read!;
+check(callerRead(caller) === 31, "caller storage exposes inherited callable");
 check(
 	c.views_caller_base(caller) === caller && c.views_read(caller) === 31,
 	"caller storage shares views",
@@ -100,6 +134,7 @@ refuses(
 	"a base destroy binding cannot own caller storage",
 );
 caller[Symbol.dispose]();
+refuses(() => callerRead(caller), "caller storage invalidates view callable");
 refuses(() => c.views_read(caller), "caller storage disposal closes views");
 refuses(
 	// @ts-expect-error Runtime branding must also refuse unrelated handle types.

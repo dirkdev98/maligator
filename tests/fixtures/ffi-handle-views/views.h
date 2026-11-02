@@ -1,10 +1,15 @@
 #ifndef VIEWS_H
 #define VIEWS_H
 
-typedef struct ViewBase { int value; } ViewBase;
+typedef struct ViewBase { int value; int (*read)(struct ViewBase *); } ViewBase;
 typedef ViewBase ViewBaseAlias;
 typedef struct ViewMiddle { ViewBase base; } ViewMiddle;
-typedef struct ViewDerived { ViewMiddle middle; } ViewDerived;
+typedef struct ViewDerived {
+    ViewMiddle middle;
+    int (*scale)(ViewBase *, int);
+    int (*invoke)(ViewBase *, int (*)(int));
+    int (*read)(ViewBase *);
+} ViewDerived;
 typedef struct ViewSibling { ViewBase base; } ViewSibling;
 typedef struct ViewCaller { ViewBase base; } ViewCaller;
 typedef struct ViewUnrelated { int value; } ViewUnrelated;
@@ -17,6 +22,7 @@ ViewDerived *views_take_pending(void);
 ViewBase *views_base(ViewDerived *value);
 ViewSibling *views_sibling(ViewDerived *value);
 ViewBase *views_caller_base(ViewCaller *value);
+void views_caller_init(ViewCaller *value);
 ViewUnrelated *views_unrelated(void);
 ViewCopied views_copy(void);
 int views_read(ViewBase *value);

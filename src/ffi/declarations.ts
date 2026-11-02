@@ -79,11 +79,19 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string | F
 		lines.push("\t}");
 	}
 	for (const handle of plan.handles.values()) {
-		const fields = [
-			...handle.fields.flatMap((field) => [
-				...docComment(field.doc, "\t\t"),
-				`\t\treadonly ${field.name}: ${formatTsType(field.value)};`,
-			]),
+		const fieldLines = (
+			field: (typeof handle.fields)[number],
+		): Array<FfiText | string> => [
+			...docComment(field.doc, "\t\t"),
+			`\t\treadonly ${field.name}: ${formatTsType(field.value)};`,
+		];
+		const callables = handle.fields
+			.filter((field) => field.value.kind === "callable")
+			.flatMap(fieldLines);
+		const values = [
+			...handle.fields
+				.filter((field) => field.value.kind !== "callable")
+				.flatMap(fieldLines),
 			...handle.managedFields.flatMap((field) => [
 				...docComment(field.doc, "\t\t"),
 				`\t\tget ${field.name}(): ${field.kind === "string" ? "string" : "Uint8Array"} | null;`,
@@ -92,20 +100,21 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string | F
 		];
 		lines.push(
 			...docComment(handle.doc, "\t"),
-			`\texport interface ${handle.name} {`,
+			`\texport interface ${handle.name}${handle.views.length === 0 ? "" : ` extends ${handle.views.join(", ")}`} {`,
 			`\t\treadonly [maligatorFfiHandle]: { ${[handle.name, ...handle.views].map((name) => `readonly ${name}: true`).join("; ")} };`,
 			"\t\treadonly [Symbol.toStringTag]: string;",
 			`\t\t/** Close the handle${handle.destroy === undefined ? "" : `, releasing an owned resource with ${handle.destroy.name}`}.${handle.destroy?.success === undefined ? "" : " Failed C cleanup throws and leaves it open for retry."} */`,
 			"\t\t[Symbol.dispose](): void;",
 		);
-		// A canonical pointer view keeps its original prototype; only the factory guarantees accessors.
-		if (handle.allocator === undefined) lines.push(...fields);
+		lines.push(...callables);
+		// Caller storage factories guarantee state accessors; canonical pointer aliases may predate them.
+		if (handle.allocator === undefined) lines.push(...values);
 		lines.push("\t}");
 		if (handle.allocator !== undefined)
 			lines.push(
 				"\t/** Allocate zeroed caller storage. C initialization and cleanup remain explicit. */",
-				`\texport function ${handle.allocator}(): ${handle.name}${fields.length === 0 ? ";" : " & {"}`,
-				...(fields.length === 0 ? [] : [...fields, "\t};"]),
+				`\texport function ${handle.allocator}(): ${handle.name}${values.length === 0 ? ";" : " & {"}`,
+				...(values.length === 0 ? [] : [...values, "\t};"]),
 			);
 	}
 	for (const binding of plan.functions) {

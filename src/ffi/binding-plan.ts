@@ -2548,19 +2548,9 @@ export function planBindings(
 		if (record !== undefined && type.fields !== undefined)
 			fieldFacts.set(record.name, type.fields);
 	}
-	const familySizes = new Map<string, number>();
-	for (const handle of handleMap.values())
-		familySizes.set(handle.family, (familySizes.get(handle.family) ?? 0) + 1);
 	for (const [name, handle] of handleMap) {
 		const record = model.records.get(name);
 		const fields = fieldFacts.get(name) ?? {};
-		if (
-			(familySizes.get(handle.family) ?? 0) > 1 &&
-			Object.values(fields).some((field) => field.callable !== undefined)
-		)
-			throw new FfiError(
-				`types.${name}.fields: callable fields cannot accompany handle views`,
-			);
 		const managedFields =
 			record === undefined ? [] : planner.managedFields(record, fields);
 		handles.set(name, {
@@ -2577,6 +2567,32 @@ export function planBindings(
 					: [],
 			managedFields,
 		});
+	}
+	const families = new Map<string, Array<HandleType>>();
+	for (const handle of handles.values()) {
+		const family = families.get(handle.family) ?? [];
+		family.push(handle);
+		families.set(handle.family, family);
+	}
+	for (const family of families.values()) {
+		const callableNames = new Set(
+			family.flatMap((handle) =>
+				handle.fields
+					.filter((field) => field.value.kind === "callable")
+					.map((field) => field.name),
+			),
+		);
+		const owners = new Map<string, string>();
+		for (const handle of family)
+			for (const field of [...handle.fields, ...handle.managedFields]) {
+				if (!callableNames.has(field.name)) continue;
+				const previous = owners.get(field.name);
+				if (previous !== undefined)
+					throw new FfiError(
+						`types.${handle.name}.fields.${field.name}: callable view field conflicts with ${previous}`,
+					);
+				owners.set(field.name, `${handle.name}.${field.name}`);
+			}
 	}
 
 	const constants: Array<MappedConstant> = [];

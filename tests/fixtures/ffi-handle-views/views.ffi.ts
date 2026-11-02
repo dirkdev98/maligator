@@ -5,9 +5,18 @@ export default {
 	headers: ["views.h"],
 	find: [{ includeDirs: ["."], sources: ["views.c"] }],
 	types: {
-		ViewBase: { handle: { destroy: "views_close_base" } },
+		ViewBase: {
+			handle: { destroy: "views_close_base" },
+			fields: { read: { callable: { lifetime: "owner" } } },
+		},
 		ViewMiddle: { handle: { views: ["ViewBaseAlias"] } },
-		ViewDerived: { handle: { views: ["ViewMiddle"], destroy: "views_close_derived" } },
+		ViewDerived: {
+			handle: { views: ["ViewMiddle"], destroy: "views_close_derived" },
+			fields: {
+				scale: { callable: { lifetime: "owner" } },
+				invoke: { callable: { lifetime: "owner", params: { "2": { callback: {} } } } },
+			},
+		},
 		ViewSibling: { handle: { views: ["ViewBase"] } },
 		ViewCaller: { handle: { storage: "caller", views: ["ViewBase"] } },
 		ViewUnrelated: { handle: {} },

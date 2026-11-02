@@ -108,19 +108,20 @@ describe("returned C function contracts", () => {
 			}),
 		).toThrow("the handle has no such field");
 	});
-	it("rejects callable fields in a view family", () => {
-		expect(() =>
-			planBindings(model, {
-				types: {
-					CallableTable: {
-						handle: { views: ["CallableState"] },
-						fields: { transform: { callable: { lifetime: "owner" } } },
-					},
-					CallableState: { handle: {} },
+	it("declares callable fields in a view family", () => {
+		const plan = planBindings(model, {
+			types: {
+				CallableTable: {
+					handle: { views: ["CallableState"] },
+					fields: { transform: { callable: { lifetime: "owner" } } },
 				},
-				functions: {},
-			}),
-		).toThrow("callable fields cannot accompany handle views");
+				CallableState: { handle: {} },
+			},
+			functions: {},
+		});
+		expect([...generateDeclarations([{ name: "callables", plan }])].join("")).toContain(
+			"export interface CallableTable extends CallableState {",
+		);
 	});
 	it("rejects callable facts on an input", () => {
 		expect(() =>

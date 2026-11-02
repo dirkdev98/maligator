@@ -256,6 +256,7 @@ class BindingWriter {
 	readonly #taggedOutputs = new Set<string>();
 	readonly #managedFamilies = new Set<string>();
 	readonly #viewFamilies = new Set<string>();
+	readonly #viewFields = new Map<string, Array<{ handle: string; name: string }>>();
 	readonly #workerCloseFamilies = new Set<string>();
 	readonly #callables = new Map<string, Extract<JsValue, { kind: "callable" }>>();
 	#counter = 0;
@@ -266,6 +267,14 @@ class BindingWriter {
 		for (const handle of plan.handles.values()) {
 			if (handle.managedFields.length > 0) this.#managedFamilies.add(handle.family);
 			if (handle.views.length > 0) this.#viewFamilies.add(handle.family);
+		}
+		for (const handle of plan.handles.values()) {
+			if (!this.#viewFamilies.has(handle.family)) continue;
+			const fields = this.#viewFields.get(handle.family) ?? [];
+			for (const field of handle.fields)
+				if (field.value.kind === "callable")
+					fields.push({ handle: handle.name, name: field.name });
+			if (fields.length > 0) this.#viewFields.set(handle.family, fields);
 		}
 		for (const binding of plan.functions) {
 			const value =
@@ -1087,9 +1096,17 @@ class BindingWriter {
 
 	/** The descriptor of each handle type: its destroy wrapper and field accessors. */
 	handleTypes(): Array<string> {
-		const lines: Array<string> = [];
+		const lines: Array<string> = [...this.#viewFields].map(
+			([family, fields]) =>
+				`static const MalFfiField mal_ffi_view_fields_${family}[${fields.length}];`,
+		);
 		for (const handle of this.#plan.handles.values()) {
 			const name = handle.name;
+			const shared = this.#viewFields.get(handle.family);
+			const ownFields =
+				shared === undefined
+					? handle.fields
+					: handle.fields.filter((field) => field.value.kind !== "callable");
 			let destroy = "nullptr";
 			if (handle.destroy !== undefined) {
 				destroy = `mal_ffi_destroy_${name}`;
@@ -1158,13 +1175,13 @@ class BindingWriter {
 					"}",
 				);
 			}
-			const fieldCount = handle.fields.length + handle.managedFields.length;
+			const fieldCount = ownFields.length + handle.managedFields.length;
 			const fields = fieldCount === 0 ? "nullptr" : `mal_ffi_fields_${name}`;
 			if (fieldCount > 0) {
 				lines.push(
 					"",
 					`static const MalFfiField ${fields}[] = {`,
-					...handle.fields.map(
+					...ownFields.map(
 						(field) =>
 							`\t{ ${cString(field.name)}, mal_ffi_get_${name}_${field.name}, nullptr },`,
 					),
@@ -1209,6 +1226,8 @@ class BindingWriter {
 				`\t${String(handle.views.length)},`,
 				`\t${handle.managedFields.length === 0 ? "nullptr" : `mal_ffi_managed_fields_${name}`},`,
 				`\t${handle.managedFields.length},`,
+				`\t${shared === undefined ? "nullptr" : `mal_ffi_view_fields_${handle.family}`},`,
+				`\t${shared?.length ?? 0},`,
 				"};",
 			);
 			if (handle.allocator !== undefined)
@@ -1224,6 +1243,15 @@ class BindingWriter {
 					"}",
 				);
 		}
+		for (const [family, fields] of this.#viewFields)
+			lines.push(
+				`static const MalFfiField mal_ffi_view_fields_${family}[] = {`,
+				...fields.map(
+					(field) =>
+						`\t{ ${cString(field.name)}, mal_ffi_get_${field.handle}_${field.name}, nullptr },`,
+				),
+				"};",
+			);
 		return lines;
 	}
 
