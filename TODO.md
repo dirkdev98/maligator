@@ -1910,8 +1910,8 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] Support opaque caller storage sized by native queries.
 
-- [ ] Complete const-member construction for tagged values and JavaScript callback
-      results.
+- [ ] Complete const-member construction for JavaScript callback results and tagged
+      values whose discriminator overlaps union storage.
 
 - [ ] Support counted outer arrays of fixed C arrays with explicit output capacities.
 

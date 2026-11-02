@@ -258,6 +258,7 @@ class BindingWriter {
 	readonly #unionOutputs = new Set<string>();
 	readonly #taggedInputs = new Set<string>();
 	readonly #taggedOutputs = new Set<string>();
+	readonly #taggedCaseInitializers = new Map<string, string>();
 	readonly #managedFamilies = new Set<string>();
 	readonly #viewFamilies = new Set<string>();
 	readonly #viewFields = new Map<string, Array<{ handle: string; name: string }>>();
@@ -268,6 +269,14 @@ class BindingWriter {
 	constructor(model: CModel, plan: BindingPlan) {
 		this.#model = model;
 		this.#plan = plan;
+		for (const tagged of plan.tagged.values()) {
+			if (!cRecordHasConstMembers(model, tagged.record)) continue;
+			for (const entry of tagged.cases)
+				this.#taggedCaseInitializers.set(
+					entry.record.name,
+					`.${tagged.tag.name} = ${entry.expression}`,
+				);
+		}
 		for (const handle of plan.handles.values()) {
 			if (handle.managedFields.length > 0) this.#managedFamilies.add(handle.family);
 			if (handle.views.length > 0) this.#viewFamilies.add(handle.family);
@@ -333,6 +342,7 @@ class BindingWriter {
 					entry.kind === "input" ? binding.params[entry.param]!.value : undefined;
 				return (value?.kind === "record" ||
 					value?.kind === "union" ||
+					value?.kind === "tagged" ||
 					(value?.kind === "handle" && value.pass === "copy")) &&
 					this.#immutableRecord(binding.declaration.params[index]!.type)
 					? [index]
@@ -504,13 +514,16 @@ class BindingWriter {
 					`${target} = (${localDeclaration(type, "")}) ${temporary}.data;`,
 				];
 			}
+			case "tagged":
 			case "union":
 			case "record": {
 				const retained = this.#hasHandles(value) ? `, ${inputs}` : "";
 				const mapped =
 					value.kind === "record"
 						? this.#record(value.name)
-						: this.#plan.unions.get(value.name)!;
+						: value.kind === "union"
+							? this.#plan.unions.get(value.name)!
+							: this.#plan.tagged.get(value.name)!;
 				if (cRecordHasConstMembers(this.#model, mapped.record)) {
 					if (!initializeRecord)
 						throw new Error("const-record input must initialize a native value");
@@ -526,7 +539,9 @@ class BindingWriter {
 				const helper =
 					value.kind === "union"
 						? `mal_ffi_union_in_${value.name}`
-						: `mal_ffi_in_${value.name}`;
+						: value.kind === "tagged"
+							? `mal_ffi_tagged_in_${value.name}`
+							: `mal_ffi_in_${value.name}`;
 				if (rooted) {
 					return [
 						`if (!${helper}(vm, ${source}, ${site}, &${target}${retained})) ${fail}`,
@@ -545,24 +560,6 @@ class BindingWriter {
 					`if (!${converted}) ${fail}`,
 				];
 			}
-			case "tagged": {
-				const retained = this.#hasHandles(value) ? `, ${inputs}` : "";
-				if (rooted)
-					return [
-						`if (!mal_ffi_tagged_in_${value.name}(vm, ${source}, ${site}, &${target}${retained})) ${fail}`,
-					];
-				const held = this.#fresh("held"),
-					roots = this.#fresh("roots"),
-					converted = this.#fresh("converted");
-				return [
-					`MalValue ${held} = ${source};`,
-					`MalFfiRoots ${roots};`,
-					`mal_ffi_root(&${roots}, &${held}, 1);`,
-					`bool ${converted} = mal_ffi_tagged_in_${value.name}(vm, ${held}, ${site}, &${target}${retained});`,
-					`mal_ffi_unroot(&${roots});`,
-					`if (!${converted}) ${fail}`,
-				];
-			}
 			case "array": {
 				const resolved = resolveCType(this.#model, type);
 				if (resolved.kind !== "array")
@@ -576,7 +573,9 @@ class BindingWriter {
 				if (initializeRecord && value.of.kind !== "array") {
 					const native = this.#fresh("native_element");
 					const construct =
-						(value.of.kind === "record" || value.of.kind === "union") &&
+						(value.of.kind === "record" ||
+							value.of.kind === "union" ||
+							value.of.kind === "tagged") &&
 						this.#immutableRecord(resolved.of);
 					const spelling =
 						value.of.kind === "record"
@@ -966,7 +965,9 @@ class BindingWriter {
 				? this.#record(value.name)
 				: value.kind === "union"
 					? this.#plan.unions.get(value.name)
-					: undefined;
+					: value.kind === "tagged"
+						? this.#plan.tagged.get(value.name)
+						: undefined;
 		const spelling = aggregate?.spelling ?? localDeclaration(type, "");
 		const initialize =
 			aggregate !== undefined && cRecordHasConstMembers(this.#model, aggregate.record);
@@ -1021,6 +1022,8 @@ class BindingWriter {
 			lines.push(`\tmal_field_site.field = ${cString(field.name)};`);
 			return `.${field.name} = ${this.#initializer(field.value, field.type, `mal_fields[${index + 1}]`, context)}`;
 		});
+		const tag = this.#taggedCaseInitializers.get(name);
+		if (tag !== undefined) fields.unshift(tag);
 		lines.push(
 			"\tmal_ffi_unroot(&mal_roots);",
 			"\t*mal_ok = true;",
@@ -1239,6 +1242,53 @@ class BindingWriter {
 		return lines;
 	}
 
+	#taggedConstructor(name: string, signature: string): Array<string> {
+		const tagged = this.#plan.tagged.get(name)!;
+		const lines = [
+			`${signature} {`,
+			"MalValue mal_values[2] = { mal_value };",
+			"MalFfiRoots mal_roots;",
+			"mal_ffi_root(&mal_roots, mal_values, 2);",
+			`${localDeclaration(tagged.tag.type, "mal_tag")} = {};`,
+			`if (!mal_ffi_record_fields(vm, mal_values[0], &mal_ffi_tag_type_${name}, mal_site, mal_values + 1)) goto mal_failed;`,
+			...this.read(
+				tagged.tag.value,
+				tagged.tag.type,
+				"mal_values[1]",
+				"mal_tag",
+				"mal_site",
+				"goto mal_failed;",
+				[],
+				true,
+			),
+			"switch (mal_tag) {",
+		];
+		for (const entry of tagged.cases) {
+			const retained = this.#hasHandles({ kind: "record", name: entry.record.name });
+			lines.push(
+				`case ${entry.expression}: {`,
+				"bool mal_converted;",
+				`${tagged.spelling} mal_native = mal_ffi_construct_${entry.record.name}(vm, mal_values[0], mal_site, &mal_converted${retained ? ", mal_inputs" : ""});`,
+				"if (!mal_converted) goto mal_failed;",
+				`if (mal_native.${tagged.tag.name} != mal_tag) { mal_ffi_expected(vm, mal_site, "a payload preserving its discriminator"); goto mal_failed; }`,
+				"mal_ffi_unroot(&mal_roots);",
+				"*mal_ok = true;",
+				"return mal_native;",
+				"}",
+			);
+		}
+		lines.push(
+			'default: mal_ffi_expected(vm, mal_site, "a known union discriminator"); break;',
+			"}",
+			"mal_failed:",
+			"mal_ffi_unroot(&mal_roots);",
+			"*mal_ok = false;",
+			`return (${tagged.spelling}) {};`,
+			"}",
+		);
+		return lines;
+	}
+
 	#taggedHelpers(declarations: boolean): Array<string> {
 		const lines: Array<string> = [];
 		for (const name of new Set([...this.#taggedInputs, ...this.#taggedOutputs])) {
@@ -1246,7 +1296,10 @@ class BindingWriter {
 			const retained = tagged.cases.some((entry) =>
 				this.#hasHandles({ kind: "record", name: entry.record.name }),
 			);
-			const input = `static bool mal_ffi_tagged_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${tagged.spelling} *mal_out${retained ? ", MalFfiInputs *mal_inputs" : ""})`;
+			const immutable = cRecordHasConstMembers(this.#model, tagged.record);
+			const input = immutable
+				? `static ${tagged.spelling} mal_ffi_construct_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, bool *mal_ok${retained ? ", MalFfiInputs *mal_inputs" : ""})`
+				: `static bool mal_ffi_tagged_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${tagged.spelling} *mal_out${retained ? ", MalFfiInputs *mal_inputs" : ""})`;
 			const output = `static MalValue mal_ffi_tagged_out_${name}(MalVm *vm, ${tagged.spelling} mal_value, bool mal_lent)`;
 			if (declarations) {
 				if (this.#taggedInputs.has(name)) lines.push(`${input};`);
@@ -1257,48 +1310,53 @@ class BindingWriter {
 				lines.push(
 					`static const char *const mal_ffi_tag_names_${name}[] = { ${cString(tagged.tag.name)} };`,
 					`static MalFfiRecordType mal_ffi_tag_type_${name} = { mal_ffi_tag_names_${name}, 1, 0, nullptr };`,
-					`${input} {`,
-					"bool mal_ok = false;",
-					"MalValue mal_tags[1] = {};",
-					"MalFfiRoots mal_roots;",
-					"mal_ffi_root(&mal_roots, mal_tags, 1);",
-					`${localDeclaration(tagged.tag.type, "mal_tag")} = {};`,
-					`if (!mal_ffi_record_fields(vm, mal_value, &mal_ffi_tag_type_${name}, mal_site, mal_tags)) goto mal_done;`,
-					...this.read(
-						tagged.tag.value,
-						tagged.tag.type,
-						"mal_tags[0]",
-						"mal_tag",
-						"mal_site",
-						"goto mal_done;",
-						[],
-						true,
-					),
-					`*mal_out = (${tagged.spelling}) {};`,
-					"switch (mal_tag) {",
 				);
-				for (const entry of tagged.cases) {
-					const caseRetained = this.#hasHandles({
-						kind: "record",
-						name: entry.record.name,
-					});
+				if (immutable) lines.push(...this.#taggedConstructor(name, input));
+				else {
 					lines.push(
-						`case ${entry.expression}:`,
-						`mal_out->${tagged.tag.name} = mal_tag;`,
-						`if (!mal_ffi_in_${entry.record.name}(vm, mal_value, mal_site, mal_out${caseRetained ? ", mal_inputs" : ""})) goto mal_done;`,
-						`if (mal_out->${tagged.tag.name} != mal_tag) { mal_ffi_expected(vm, mal_site, "a payload preserving its discriminator"); goto mal_done; }`,
-						"mal_ok = true;",
-						"break;",
+						`${input} {`,
+						"bool mal_ok = false;",
+						"MalValue mal_tags[1] = {};",
+						"MalFfiRoots mal_roots;",
+						"mal_ffi_root(&mal_roots, mal_tags, 1);",
+						`${localDeclaration(tagged.tag.type, "mal_tag")} = {};`,
+						`if (!mal_ffi_record_fields(vm, mal_value, &mal_ffi_tag_type_${name}, mal_site, mal_tags)) goto mal_done;`,
+						...this.read(
+							tagged.tag.value,
+							tagged.tag.type,
+							"mal_tags[0]",
+							"mal_tag",
+							"mal_site",
+							"goto mal_done;",
+							[],
+							true,
+						),
+						`*mal_out = (${tagged.spelling}) {};`,
+						"switch (mal_tag) {",
+					);
+					for (const entry of tagged.cases) {
+						const caseRetained = this.#hasHandles({
+							kind: "record",
+							name: entry.record.name,
+						});
+						lines.push(
+							`case ${entry.expression}:`,
+							`mal_out->${tagged.tag.name} = mal_tag;`,
+							`if (!mal_ffi_in_${entry.record.name}(vm, mal_value, mal_site, mal_out${caseRetained ? ", mal_inputs" : ""})) goto mal_done;`,
+							`if (mal_out->${tagged.tag.name} != mal_tag) { mal_ffi_expected(vm, mal_site, "a payload preserving its discriminator"); goto mal_done; }`,
+							"mal_ok = true;",
+							"break;",
+						);
+					}
+					lines.push(
+						'default: mal_ffi_expected(vm, mal_site, "a known union discriminator"); break;',
+						"}",
+						"mal_done:",
+						"mal_ffi_unroot(&mal_roots);",
+						"return mal_ok;",
+						"}",
 					);
 				}
-				lines.push(
-					'default: mal_ffi_expected(vm, mal_site, "a known union discriminator"); break;',
-					"}",
-					"mal_done:",
-					"mal_ffi_unroot(&mal_roots);",
-					"return mal_ok;",
-					"}",
-				);
 			}
 			if (this.#taggedOutputs.has(name)) {
 				for (const [index, entry] of tagged.cases.entries()) {
@@ -2234,7 +2292,9 @@ class BindingWriter {
 				case "input": {
 					const value = binding.params[entry.param]!.value;
 					if (
-						(value.kind === "record" || value.kind === "union") &&
+						(value.kind === "record" ||
+							value.kind === "union" ||
+							value.kind === "tagged") &&
 						constArguments.has(index)
 					) {
 						body.push(
@@ -3070,7 +3130,9 @@ class BindingWriter {
 					const site = `&mal_site_${String(entry.param)}`;
 					const source = argument(entry.param);
 					if (
-						(value.kind === "record" || value.kind === "union") &&
+						(value.kind === "record" ||
+							value.kind === "union" ||
+							value.kind === "tagged") &&
 						constArguments.has(index)
 					) {
 						const native = this.#fresh("native_argument");

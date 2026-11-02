@@ -1026,8 +1026,6 @@ class Planner {
 		const access = this.#accesses.get(name);
 		if (record === undefined || !record.complete || access?.spelling === undefined)
 			return { gap: `tagged ${name}: the complete C type needs an accessible spelling` };
-		if (cRecordHasConstMembers(this.#model, record))
-			return { gap: `tagged ${name}: const members cannot be copied by value` };
 		const identity = createHash("sha256")
 			.update(JSON.stringify([access.owner, access.path, shape, alias]))
 			.digest("hex")
@@ -1048,6 +1046,13 @@ class Planner {
 		if (this.#pending.has(mappedName))
 			return { gap: `tagged ${name}: recursive value shape` };
 		const tagPath = resolveCFieldPath(this.#model, record, [shape.tag]);
+		if (
+			cRecordHasConstMembers(this.#model, record) &&
+			tagPath?.some((step) => step.record.tag === "union")
+		)
+			return {
+				gap: `tagged ${name}: const construction requires a discriminator outside union storage`,
+			};
 		const tagField = tagPath?.at(-1)?.field;
 		if (tagField === undefined)
 			throw new FfiError(`tagged ${name}: no discriminator '${shape.tag}'`);

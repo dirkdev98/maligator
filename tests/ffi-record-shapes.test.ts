@@ -107,6 +107,21 @@ it.each([
 	expect(entry?.status).toBe("needs-facts");
 	expect(entry?.gaps?.some((gap) => gap.reason.includes(reason))).toBe(true);
 });
+it.each([
+	["tagged_overlap", "outside union storage"],
+	["tagged_promoted_overlap", "outside union storage"],
+	["tagged_callback", "const members"],
+])("rejects unsupported const tagged storage through %s", (name, reason) => {
+	const directory = project("ffi-const-tagged");
+	const result = cli(directory, "inspect", "const_tagged", "--json");
+	expect(result.status, result.stderr || result.stdout).toBe(0);
+	const report = JSON.parse(result.stdout) as {
+		functions: Array<{ name: string; status: string; gaps?: Array<{ reason: string }> }>;
+	};
+	const entry = report.functions.find((fn) => fn.name === name);
+	expect(entry?.status).toBe("needs-facts");
+	expect(entry?.gaps?.some((gap) => gap.reason.includes(reason))).toBe(true);
+});
 it("preserves anonymous field declarations when the project moves", () => {
 	const first = project(),
 		second = project();
