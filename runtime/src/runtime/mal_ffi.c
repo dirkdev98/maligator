@@ -147,12 +147,24 @@ bool mal_ffi_to_string(
     usize capacity = sizeof(out->inline_data);
     // ASCII can fit inline even when UTF-8's worst-case expansion would require a heap copy.
     if (units >= capacity) {
-        if ((flags & MAL_FFI_STRING_BORROW) != 0 && string->latin1
-            && string->storage == MAL_STRING_STORAGE_ASCII_CSTR) {
-            out->data = (char *) string->latin1_units;
-            out->length = units;
-            out->borrowed = true;
-            return true;
+        if ((flags & MAL_FFI_STRING_BORROW) != 0
+            && string->storage == MAL_STRING_STORAGE_PREPARED_UTF8) {
+            if (string->ffi_utf8_state == 0) {
+                out->data = (char *) string->latin1_units;
+                out->length = units;
+                out->borrowed = true;
+                return true;
+            }
+            if (string->ffi_utf8_state != MAL_STRING_UTF8_SEEN) {
+                const MalStringUtf8 *encoded = mal_string_ffi_utf8_cache(string);
+                if (encoded->has_nul && !counted)
+                    return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
+                        "a string without NUL characters");
+                out->data = (char *) encoded->data;
+                out->length = encoded->length;
+                out->borrowed = true;
+                return true;
+            }
         }
         data = units > (SIZE_MAX - 1) / 3 ? nullptr : malloc(units * 3 + 1);
         if (data == nullptr) return mal_ffi_out_of_memory(vm);
@@ -193,12 +205,18 @@ bool mal_ffi_to_string(
         nul = memchr(data, 0, length) != nullptr;
     }
     data[length] = '\0';
-    if (units >= sizeof(out->inline_data) && (flags & MAL_FFI_STRING_BORROW) != 0 && encoded && !nul) {
-        const u8 *borrowed = mal_string_prepare_ascii_cstr(&vm->heap, (MalString *) string);
-        if (borrowed != nullptr) {
+    if (units >= sizeof(out->inline_data) && (flags & MAL_FFI_STRING_BORROW) != 0) {
+        const u8 *prepared = nullptr;
+        if (encoded && !nul) prepared = mal_string_prepare_ascii_cstr(&vm->heap, (MalString *) string);
+        else if (!encoded && (!nul || counted)) {
+            const MalStringUtf8 *cached = mal_string_prepare_ffi_utf8(
+                &vm->heap, (MalString *) string, (const u8 *) data, length, nul);
+            if (cached != nullptr) prepared = cached->data;
+        }
+        if (prepared != nullptr) {
             free(data);
-            out->data = (char *) borrowed;
-            out->length = units;
+            out->data = (char *) prepared;
+            out->length = length;
             out->borrowed = true;
             return true;
         }

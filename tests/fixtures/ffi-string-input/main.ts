@@ -70,6 +70,80 @@ for (const text of [
 		"dependent slices preserve UTF8 input",
 	);
 }
+for (const original of ["é".repeat(4095), "☃".repeat(4095), "😀".repeat(4095)]) {
+	const bytes = new TextEncoder().encode(original);
+	const text = new TextDecoder().decode(bytes);
+	const sum = bytes.reduce((total, byte) => total + byte, 0);
+	for (let call = 0; call < 4; call++) {
+		check(
+			input_length(text) === bytes.length,
+			"reused Unicode input keeps its byte length",
+		);
+		check(input_count(text) === sum, "reused Unicode input keeps its encoding");
+	}
+	check(
+		input_mutate(text) === bytes.length && text === original,
+		"mutable Unicode input remains a copy",
+	);
+	check(input_alias(text) === original, "Unicode aliases copy before cleanup");
+	check(
+		input_length(text.slice(1, -1)) ===
+			new TextEncoder().encode(text.slice(1, -1)).length,
+		"slicing encoded strings keeps UTF16 offsets",
+	);
+	const keys = new Map([[text, 1]]);
+	keys.set(new TextDecoder().decode(bytes), 2);
+	check(
+		keys.get(original) === 2 && text.repeat(2) === original + original,
+		"prepared Unicode strings preserve content semantics",
+	);
+	check(
+		input_after(text, {
+			get offset() {
+				check(
+					utf16Bridge(text) === `<b>${original}</b>`,
+					"later getter bridges prepared Unicode",
+				);
+				return 7;
+			},
+		}) ===
+			bytes.length + 7,
+		"later getters cannot invalidate Unicode arguments",
+	);
+	check(input_length(text) === bytes.length, "Unicode input survives UTF16 bridging");
+	const workerText = new TextDecoder().decode(bytes);
+	for (let call = 0; call < 3; call++)
+		check(input_length(workerText) === bytes.length, "prepare Unicode worker input");
+	const pending = input_length_async(workerText);
+	check(
+		utf16Bridge(workerText) === `<b>${original}</b>`,
+		"worker input survives Unicode bridging",
+	);
+	check((await pending) === bytes.length, "worker owns encoded Unicode input");
+}
+const surrogate = String.fromCharCode(...new Array<number>(300).fill(0xd800));
+const surrogateBytes = new TextEncoder().encode(surrogate);
+for (let call = 0; call < 3; call++)
+	check(
+		input_count(surrogate) === surrogateBytes.reduce((total, byte) => total + byte, 0),
+		"lone surrogate encodings remain stable",
+	);
+const countedUnicode = new TextDecoder().decode(
+	new TextEncoder().encode(`${"é".repeat(300)}\0☃`),
+);
+const countedBytes = new TextEncoder().encode(countedUnicode);
+for (let call = 0; call < 3; call++)
+	check(
+		input_count(countedUnicode) === countedBytes.reduce((total, byte) => total + byte, 0),
+		"counted Unicode input retains embedded NUL",
+	);
+let rejectedUnicodeNul = false;
+try {
+	input_length(countedUnicode);
+} catch (error) {
+	rejectedUnicodeNul = error instanceof TypeError;
+}
+check(rejectedUnicodeNul, "terminated use rejects NUL after counted Unicode use");
 const nulBytes = new Uint8Array(8191).fill(120);
 nulBytes[4096] = 0;
 const nul = new TextDecoder().decode(nulBytes);

@@ -11,8 +11,8 @@ typedef enum MalStringStorage : u32 {
     MAL_STRING_STORAGE_OWNED,
     MAL_STRING_STORAGE_INLINE,
     MAL_STRING_STORAGE_EXTERNAL,
-    /** Owned Latin1 bytes proved ASCII, NUL-free, and terminated within their allocation. */
-    MAL_STRING_STORAGE_ASCII_CSTR,
+    /** Owned flat units with a reusable UTF8 sidecar, or ASCII terminated in place. */
+    MAL_STRING_STORAGE_PREPARED_UTF8,
     MAL_STRING_STORAGE_DEPENDENT,
     MAL_STRING_STORAGE_CONS,
     /**
@@ -22,6 +22,15 @@ typedef enum MalStringStorage : u32 {
      */
     MAL_STRING_STORAGE_BUILDER,
 } MalStringStorage;
+
+typedef struct MalStringUtf8 {
+    usize length;
+    bool has_nul;
+    u8 data[];
+} MalStringUtf8;
+
+#define MAL_STRING_UTF8_SEEN ((uptr) 1)
+static_assert(_Alignof(MalStringUtf8) > MAL_STRING_UTF8_SEEN, "encoding pointers must leave the seen state unused");
 
 typedef struct MalString {
     MalHeapHeader header;
@@ -39,6 +48,11 @@ typedef struct MalString {
     union {
         const c16 *code_units;
         const u8 *latin1_units;
+        struct {
+            const void *ffi_units;
+            /** PREPARED_UTF8: zero is terminated ASCII, SEEN awaits reuse, otherwise an aligned encoding pointer. */
+            uptr ffi_utf8_state;
+        };
         c16 inline_code_units[8];
         u8 inline_latin1_units[16];
         struct {
@@ -52,6 +66,11 @@ typedef struct MalString {
         };
     };
 } MalString;
+
+static inline MalStringUtf8 *mal_string_ffi_utf8_cache(const MalString *string) {
+    return string->storage == MAL_STRING_STORAGE_PREPARED_UTF8 && string->ffi_utf8_state > MAL_STRING_UTF8_SEEN
+        ? (MalStringUtf8 *) string->ffi_utf8_state : nullptr;
+}
 
 static_assert(sizeof(MalString) == 32, "MalString must fit its 32-byte cell");
 static_assert(offsetof(MalString, hash) == 8, "string metadata must occupy one word after its header");
@@ -142,6 +161,11 @@ MalString *mal_string_new_utf16_owned(MalHeap *heap, const c16 *units, usize len
 MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length);
 /** Caller proves ASCII without NULs. Adds at most one backing byte; UTF16 bridging invalidates the span. */
 const u8 *mal_string_prepare_ascii_cstr(MalHeap *heap, MalString *string);
+/** Observe owned flat inputs, retaining their encoding on reuse; allocation failure keeps the temporary usable. */
+const MalStringUtf8 *mal_string_prepare_ffi_utf8(
+    MalHeap *heap, MalString *string, const u8 *bytes, usize length, bool has_nul);
+/** Owned code-unit and optional UTF8 allocation capacities, for retention decisions. */
+usize mal_string_retained_capacity(MalHeap *heap, const MalString *string);
 
 /** Explicit UTF-16 bridge: widen compact leaves or flatten ropes as needed. */
 const c16 *mal_string_flatten(MalString *string);

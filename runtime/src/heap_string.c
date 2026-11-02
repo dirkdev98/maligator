@@ -270,7 +270,7 @@ void mal_string_tiny_cache_promote(MalHeap *heap, const MalString *entry, MalStr
     if (atom == nullptr || atom->length > MAL_STRING_INLINE_CODE_UNITS
         || (atom->storage != MAL_STRING_STORAGE_INLINE
             && atom->storage != MAL_STRING_STORAGE_OWNED
-            && atom->storage != MAL_STRING_STORAGE_ASCII_CSTR
+            && atom->storage != MAL_STRING_STORAGE_PREPARED_UTF8
             && atom->storage != MAL_STRING_STORAGE_EXTERNAL)) {
         return;
     }
@@ -318,8 +318,37 @@ const u8 *mal_string_prepare_ascii_cstr(MalHeap *heap, MalString *string) {
         string->latin1_units = grown;
     }
     ((u8 *) string->latin1_units)[string->length] = 0;
-    string->storage = MAL_STRING_STORAGE_ASCII_CSTR;
+    string->ffi_utf8_state = 0;
+    string->storage = MAL_STRING_STORAGE_PREPARED_UTF8;
     return string->latin1_units;
+}
+
+const MalStringUtf8 *mal_string_prepare_ffi_utf8(
+    MalHeap *heap, MalString *string, const u8 *bytes, usize length, bool has_nul) {
+    if (string->storage == MAL_STRING_STORAGE_OWNED) {
+        string->ffi_utf8_state = MAL_STRING_UTF8_SEEN;
+        string->storage = MAL_STRING_STORAGE_PREPARED_UTF8;
+        return nullptr;
+    }
+    if (string->storage != MAL_STRING_STORAGE_PREPARED_UTF8 || string->ffi_utf8_state != MAL_STRING_UTF8_SEEN)
+        return nullptr;
+    if (length > SIZE_MAX - offsetof(MalStringUtf8, data) - 1) return nullptr;
+    MalStringUtf8 *encoded = mal_heap_try_alloc_raw_profiled(
+        heap, offsetof(MalStringUtf8, data) + length + 1, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    if (encoded == nullptr) return nullptr;
+    encoded->length = length;
+    encoded->has_nul = has_nul;
+    memcpy(encoded->data, bytes, length + 1);
+    string->ffi_utf8_state = (uptr) encoded;
+    string->storage = MAL_STRING_STORAGE_PREPARED_UTF8;
+    return encoded;
+}
+
+usize mal_string_retained_capacity(MalHeap *heap, const MalString *string) {
+    usize bytes = mal_heap_raw_capacity(heap, string->code_units);
+    MalStringUtf8 *encoded = mal_string_ffi_utf8_cache(string);
+    if (encoded != nullptr) bytes += mal_heap_raw_capacity(heap, encoded);
+    return bytes;
 }
 
 static void mal_string_init_external_units(MalString *string, const c16 *code_units, usize length) {
@@ -882,10 +911,15 @@ MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, 
         MAL_PERF_COUNT(string_slice_copy_results);
         return mal_string_copy_range(heap, parent, offset, length);
     }
+    usize retained_units = parent->length;
+    if (mal_string_ffi_utf8_cache(parent) != nullptr) {
+        usize unit_size = parent->latin1 ? 1 : sizeof(c16);
+        retained_units = (mal_string_retained_capacity(heap, parent) + unit_size - 1) / unit_size;
+    }
     usize minimum_dependent_length =
-        (parent->length + MAL_STRING_SLICE_MAX_RETAINED_RATIO - 1) / MAL_STRING_SLICE_MAX_RETAINED_RATIO;
+        (retained_units + MAL_STRING_SLICE_MAX_RETAINED_RATIO - 1) / MAL_STRING_SLICE_MAX_RETAINED_RATIO;
     bool use_dependent = parent->storage == MAL_STRING_STORAGE_EXTERNAL ||
-        parent->length <= MAL_STRING_SLICE_SMALL_PARENT_CODE_UNITS || length >= minimum_dependent_length;
+        retained_units <= MAL_STRING_SLICE_SMALL_PARENT_CODE_UNITS || length >= minimum_dependent_length;
     if (!use_dependent) {
         MAL_PERF_COUNT(string_slice_copy_results);
         return mal_string_copy_range(heap, parent, offset, length);
@@ -1258,9 +1292,13 @@ const c16 *mal_string_flatten(MalString *mutable) {
             ? mutable->inline_latin1_units : mutable->latin1_units;
         for (usize i = 0; i < mutable->length; i++) units[i] = source[i];
         if (mutable->storage == MAL_STRING_STORAGE_OWNED ||
-                mutable->storage == MAL_STRING_STORAGE_ASCII_CSTR ||
+                mutable->storage == MAL_STRING_STORAGE_PREPARED_UTF8 ||
                 mutable->storage == MAL_STRING_STORAGE_BUILDER) {
             gc_free_raw(heap, (void *) source);
+        }
+        if (mutable->storage == MAL_STRING_STORAGE_PREPARED_UTF8) {
+            gc_free_raw(heap, mal_string_ffi_utf8_cache(mutable));
+            mutable->ffi_utf8_state = 0;
         }
         // A widened buffer keeps its prefixes but no spare capacity.
         if (mutable->storage == MAL_STRING_STORAGE_BUILDER) mutable->hash = 0;

@@ -646,11 +646,11 @@ void mal_map_object_update_entry(MalMapObject *map, u32 entry, MalValue key, Mal
         if (old_key != key) {
             const MalString *string = mal_value_to_string(key);
             bool compact = string->storage == MAL_STRING_STORAGE_INLINE;
-            if (string->storage == MAL_STRING_STORAGE_OWNED || string->storage == MAL_STRING_STORAGE_ASCII_CSTR) {
+            if (string->storage == MAL_STRING_STORAGE_OWNED || string->storage == MAL_STRING_STORAGE_PREPARED_UTF8) {
                 const MalString *old_string = mal_value_to_string(old_key);
                 usize unit_size = string->latin1 || old_string->latin1 ? 1 : sizeof(c16);
                 usize limit = mal_heap_allocation_charge((usize) string->length * unit_size);
-                compact = mal_heap_raw_capacity(mal_gc_current_heap(), string->code_units) <= limit;
+                compact = mal_string_retained_capacity(mal_gc_current_heap(), string) <= limit;
             }
             if (compact) {
                 // Equal primitive strings share the hash and order position; keep only compact backing.

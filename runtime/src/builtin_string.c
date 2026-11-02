@@ -2393,7 +2393,7 @@ static MalValue mal_builtin_string_repeat_range_numeric(
     MalStringStorage storage = mal_string_storage(string);
     if (result_length >= MAL_STRING_REPEAT_LAZY_MIN_CODE_UNITS &&
         (storage == MAL_STRING_STORAGE_OWNED ||
-         storage == MAL_STRING_STORAGE_ASCII_CSTR ||
+         storage == MAL_STRING_STORAGE_PREPARED_UTF8 ||
          storage == MAL_STRING_STORAGE_INLINE ||
          storage == MAL_STRING_STORAGE_EXTERNAL)) {
         if (start != 0 || end != mal_string_length(string)) {
