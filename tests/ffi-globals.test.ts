@@ -202,7 +202,15 @@ describe("C global accessor contracts", () => {
 			"transfer ownership",
 		],
 		["globals_private", { get: "readPrivate" }, "externally linked"],
-		["globals_values", { get: "readValues" }, "C array"],
+		["globals_incomplete", { get: "readValues" }, "resource-free"],
+		["globals_empty", { get: "readEmpty" }, "resource-free"],
+		["globals_oversized", { get: "readOversized" }, "resource-free"],
+		["globals_fixed_values", { set: "writeFixedValues" }, "assignable"],
+		[
+			"globals_values",
+			{ get: "readValues", returns: { string: true } },
+			"element mapping",
+		],
 		["globals_mode", {}, "getter or setter"],
 		["missing_global", { get: "readMissing" }, "no global"],
 	] satisfies Array<[string, MaligatorFfiGlobalFacts, string]>)(
@@ -250,7 +258,7 @@ describe("C global accessor contracts", () => {
 			["writeMode", "set"],
 		]);
 	});
-	it.each(["globals_resource", "globals_resource_holder"])(
+	it.each(["globals_resource", "globals_resource_holder", "globals_resources"])(
 		"rejects persistent copies of a resource handle in %s",
 		(name) => {
 			const directory = mkdtempSync(path.join(tmpdir(), "mal-global-resource-"));
@@ -264,6 +272,7 @@ describe("C global accessor contracts", () => {
 typedef struct Holder { Resource resource; } Holder;
 extern Resource globals_resource;
 extern Holder globals_resource_holder;
+extern Resource globals_resources[2];
 void release_resource(Resource resource);
 `,
 				);

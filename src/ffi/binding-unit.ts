@@ -39,6 +39,10 @@ function directSymbol(library: string, name: string): string {
 	return `mal_ffi_direct${String(library.length)}_${library}_${name}`;
 }
 
+function globalArrayStorage(binding: BoundFunction): string {
+	return `mal_ffi_global_value_${binding.global!.declaration.name}`;
+}
+
 function countValue(
 	binding: BoundFunction,
 	index: number | undefined,
@@ -512,22 +516,33 @@ class BindingWriter {
 					throw new Error("array mapping without an array type");
 				const index = this.#fresh("index");
 				const element = this.#fresh("element");
+				const held = rooted ? source : this.#fresh("held");
+				const roots = this.#fresh("roots");
+				const failed = rooted ? fail : `{ mal_ffi_unroot(&${roots}); ${fail} }`;
 				return [
+					...(rooted
+						? []
+						: [
+								`MalValue ${held} = ${source};`,
+								`MalFfiRoots ${roots};`,
+								`mal_ffi_root(&${roots}, &${held}, 1);`,
+							]),
 					`for (int32_t ${index} = 0; ${index} < ${value.length}; ${index}++) {`,
 					`\tMalValue ${element};`,
-					`\tif (!mal_ffi_element(vm, ${source}, ${index}, ${value.length}, ${site}, &${element})) ${fail}`,
+					`\tif (!mal_ffi_element(vm, ${held}, ${index}, ${value.length}, ${site}, &${element})) ${failed}`,
 					...this.read(
 						value.of,
 						resolved.of,
 						element,
 						`${target}[${index}]`,
 						site,
-						fail,
+						failed,
 						strings,
 						false,
 						inputs,
 					).map((line) => `\t${line}`),
 					"}",
+					...(rooted ? [] : [`mal_ffi_unroot(&${roots});`]),
 				];
 			}
 			case "undefined":
@@ -1815,8 +1830,16 @@ class BindingWriter {
 		binding.arguments.forEach((entry, index) => {
 			const param = declaration.params[index]!;
 			const local = `mal_argument_${String(index)}`;
-			locals.push(`${localDeclaration(param.type, local)};`);
 			const resolved = resolveCType(this.#model, param.type);
+			if (binding.global?.access === "set" && resolved.kind === "array") {
+				const storage = globalArrayStorage(binding);
+				locals.push(`__typeof__((${storage}){0} + 0) ${local} = nullptr;`);
+				body.push(
+					`${local} = malloc(sizeof(${storage}));`,
+					`if (${local} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
+				);
+				cleanup.push(`free(${local});`);
+			} else locals.push(`${localDeclaration(param.type, local)};`);
 			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
 			switch (entry.kind) {
 				case "count":
@@ -2204,6 +2227,15 @@ class BindingWriter {
 		const leave = callsBack ? ["if (mal_framed) mal_ffi_collectable_end(vm);"] : [];
 		if (binding.returns.kind === "undefined") {
 			after.push(...enter, `${call};`, ...callbackReturns, ...leave, ...closes);
+		} else if (binding.returns.kind === "array" && binding.global?.access === "get") {
+			locals.push(`${globalArrayStorage(binding)} *mal_return = nullptr;`);
+			after.push(
+				"mal_return = malloc(sizeof(*mal_return));",
+				"if (mal_return == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }",
+				`${declaration.name}(mal_return);`,
+				...this.#produce(binding.returns, "(*mal_return)", "mal_result"),
+			);
+			cleanup.push("free(mal_return);");
 		} else {
 			locals.push(
 				`${binding.returns.kind === "callable" ? `${binding.returns.targetType} mal_return` : localDeclaration(declaration.returns, "mal_return")};`,
@@ -2286,6 +2318,12 @@ class BindingWriter {
 			"\t(void) mal_framed;",
 			...(owner === undefined ? [] : ["\t(void) mal_owner;"]),
 			"\tMalValue mal_result = mal_ffi_undefined();",
+			...(binding.returns.kind === "array"
+				? [
+						"\tMalFfiRoots mal_result_roots;",
+						"\tmal_ffi_root(&mal_result_roots, &mal_result, 1);",
+					]
+				: []),
 			...strings.flatMap((temporary) => [
 				`\tMalFfiString ${temporary};`,
 				`\t${temporary}.data = nullptr;`,
@@ -2320,6 +2358,9 @@ class BindingWriter {
 						"\tmal_ffi_end_handle_use(vm, mal_owner_pin, &mal_result, &mal_site_result, true);",
 						"\tmal_ffi_unpin_handle(mal_owner_pin);",
 					]),
+			...(binding.returns.kind === "array"
+				? ["\tmal_ffi_unroot(&mal_result_roots);"]
+				: []),
 			"\treturn mal_result;",
 			"}",
 			"",
@@ -3077,6 +3118,7 @@ export function generateBindingUnit(
 		.sort((left, right) => byteOrder(left.name, right.name));
 	const specifier = ffiModuleSpecifier(library);
 	const installer = ffiInstallerSymbol(library);
+	const globalArrays = new Set<string>();
 	const source = [
 		`// Generated binding for ${specifier}.`,
 		'#include "mal_ffi.h"',
@@ -3086,6 +3128,55 @@ export function generateBindingUnit(
 		...bindings.flatMap((binding) => {
 			if (binding.global === undefined) return [];
 			const name = binding.global.declaration.name;
+			const array = resolveCType(model, binding.global.declaration.type);
+			if (array.kind === "array") {
+				const get = binding.global.access === "get";
+				const storage = globalArrayStorage(binding);
+				const declarations: Array<string> = [];
+				if (!globalArrays.has(name)) {
+					globalArrays.add(name);
+					const dimensions: Array<number> = [];
+					let element: CType = array;
+					while (element.kind === "array") {
+						dimensions.push(element.length!);
+						element = resolveCType(model, element.of);
+					}
+					declarations.push(
+						`typedef __typeof__((0, ${name}${"[0]".repeat(dimensions.length)})) ${storage}${dimensions.map((length) => `[${String(length)}]`).join("")};`,
+					);
+				}
+				const type = get
+					? binding.declaration.returns
+					: binding.declaration.params[0]!.type;
+				const copy = (
+					type: CType,
+					target: string,
+					source: string,
+					depth: number,
+				): Array<string> => {
+					const resolved = resolveCType(model, type);
+					if (resolved.kind !== "array") return [`${target} = ${source};`];
+					const index = `mal_index_${String(depth)}`;
+					return [
+						`for (size_t ${index} = 0; ${index} < ${String(resolved.length)}; ${index}++) {`,
+						...copy(
+							resolved.of,
+							`${target}[${index}]`,
+							`${source}[${index}]`,
+							depth + 1,
+						).map((line) => `\t${line}`),
+						"}",
+					];
+				};
+				return [
+					...declarations,
+					`static void ${binding.declaration.name}(${storage}${get ? " *" : " "}mal_value) {`,
+					...copy(type, get ? "(*mal_value)" : name, get ? name : "mal_value", 0).map(
+						(line) => `\t${line}`,
+					),
+					"}",
+				];
+			}
 			return [
 				binding.global.access === "get"
 					? `static __typeof__(${name}) ${binding.declaration.name}(void) { return ${name}; }`

@@ -115,6 +115,10 @@ Import and call these functions like other FFI exports. A getter reads the curre
 object; a setter converts its argument completely before assigning. Value records
 and integers use the same mappings as function arguments and results.
 
+Fixed arrays of values map to JavaScript tuples, including nested arrays. Reads
+copy the C array before constructing the result. Writes stage the entire converted
+array before changing C storage, so a throwing element getter leaves it unchanged.
+
 Access requires an externally linked object. Const objects have no setter. Setters
 accept assignable values without retained pointers, so C storage cannot retain a
 temporary string encoding, buffer view, or handle. Getter results cannot transfer

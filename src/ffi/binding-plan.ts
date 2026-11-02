@@ -2013,6 +2013,7 @@ class Planner {
 			readonly path: string;
 			readonly site: string;
 			readonly owner?: string;
+			readonly fixedArrayParameters?: true;
 		},
 	): BoundFunction | UnboundFunction {
 		const where = (at: string): string =>
@@ -2352,7 +2353,14 @@ class Planner {
 					`${where(at)}.free: free applies to results and out parameters`,
 				);
 			}
-			const mapped = map(param.type, "param", valueFacts, at);
+			const mapped = map(
+				param.type,
+				callableContext?.fixedArrayParameters === true && resolved.kind === "array"
+					? "field"
+					: "param",
+				valueFacts,
+				at,
+			);
 			if ("gap" in mapped) {
 				gap(mapped.gap);
 				return;
@@ -2702,8 +2710,10 @@ export function planBindings(
 		if (entry.returns?.free !== undefined || entry.returns?.fresh === true)
 			throw new FfiError(`${at}.returns: reading a global cannot transfer ownership`);
 		const resolved = resolveCType(model, global.type);
-		if (resolved.kind === "array")
-			throw new FfiError(`${at}: a C array needs an explicit value or buffer mapping`);
+		if (resolved.kind === "array" && Object.keys(entry.returns ?? {}).length > 0)
+			throw new FfiError(
+				`${at}.returns: fixed arrays use their declared element mapping`,
+			);
 		for (const access of ["get", "set"] as const) {
 			const exported = entry[access];
 			if (exported === undefined) continue;
@@ -2714,10 +2724,11 @@ export function planBindings(
 				throw new FfiError(
 					`${at}.set: a setter requires an assignable value without retained pointers`,
 				);
-			const storageType =
-				"const" in resolved && resolved.const === true
-					? { ...resolved, const: undefined }
-					: global.type;
+			const storageType = globalStorageType(model, global.type);
+			if (resolved.kind === "array" && !globalAssignable(model, storageType, handles))
+				throw new FfiError(
+					`${at}: an array accessor requires positive signed 32-bit bounds and resource-free values`,
+				);
 			const declaration: CFunction = {
 				name: `mal_ffi_global_${access}_${name}`,
 				returns: access === "get" ? storageType : { kind: "void" },
@@ -2735,7 +2746,11 @@ export function planBindings(
 					returns: access === "get" ? (entry.returns ?? NO_FACTS) : NO_FACTS,
 				},
 				undefined,
-				{ path: access === "get" ? at : `${at}.set`, site: exported },
+				{
+					path: access === "get" ? at : `${at}.set`,
+					site: exported,
+					...(resolved.kind === "array" ? { fixedArrayParameters: true as const } : {}),
+				},
 			);
 			if (
 				!("gaps" in result) &&
@@ -2780,6 +2795,15 @@ export function planBindings(
 	};
 }
 
+function globalStorageType(model: CModel, type: CType): CType {
+	const resolved = resolveCType(model, type);
+	if (resolved.kind === "array")
+		return { ...resolved, of: globalStorageType(model, resolved.of) };
+	return "const" in resolved && resolved.const === true
+		? { ...resolved, const: undefined }
+		: type;
+}
+
 function globalAssignable(
 	model: CModel,
 	type: CType,
@@ -2797,6 +2821,8 @@ function globalAssignable(
 		case "array":
 			return (
 				resolved.length !== undefined &&
+				resolved.length > 0 &&
+				resolved.length <= 0x7fffffff &&
 				globalAssignable(model, resolved.of, handles, seen)
 			);
 		case "record": {

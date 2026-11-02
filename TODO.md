@@ -1903,8 +1903,8 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Extend global accessors to fixed arrays and explicit lifetime contracts for
-      retained pointers.
+- [ ] Extend global accessors with bounded string and byte arrays, and explicit
+      lifetime contracts for retained pointers.
 
 - [ ] Extend value mapping for wider integers, complex and vector values, and native
       floating representations beyond JavaScript numbers.

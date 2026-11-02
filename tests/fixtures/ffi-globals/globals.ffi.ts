@@ -26,5 +26,11 @@ export default {
 			returns: { callable: { lifetime: "library" } },
 		},
 		globals_unprovided: { get: "getUnprovided" },
+		globals_values: { get: "getValues", set: "setValues" },
+		globals_matrix: { get: "getMatrix", set: "setMatrix" },
+		globals_points: { get: "getPoints", set: "setPoints" },
+		globals_fixed_values: { get: "getFixedValues" },
+		globals_signals: { get: "getSignals", set: "setSignals" },
+		globals_threads: { get: "getThreads", set: "setThreads" },
 	},
 } satisfies MaligatorLibraryContract;

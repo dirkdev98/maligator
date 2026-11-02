@@ -1,11 +1,17 @@
 #include "globals.h"
 
+int globals_values[2] = {1, 2};
+int globals_matrix[2][2] = {{3, 4}, {5, 6}};
+GlobalsPoint globals_points[2] = {{7, 8}, {9, 10}};
+const GlobalsValues globals_fixed_values = {11, 12};
+volatile int globals_signals[2] = {13, 14};
+_Thread_local int globals_threads[2] = {15, 16};
+
 int globals_mode = 3;
 const int globals_limit = 42;
 GlobalsLimit globals_aliased_limit = 37;
 const GlobalsPoint globals_fixed_point = {5, 6};
 volatile int globals_signal = 1;
-int globals_values[2];
 uint64_t globals_serial;
 double globals_ratio;
 _Thread_local int globals_thread = 17;

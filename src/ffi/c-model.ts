@@ -131,6 +131,12 @@ export interface CModel {
 
 /** Follow typedefs to the underlying type, keeping qualifiers spelled on the alias use. */
 export function resolveCType(model: Pick<CModel, "typedefs">, type: CType): CType {
+	const qualify = (value: CType): CType => {
+		if (value.kind === "array") return { ...value, of: qualify(value.of) };
+		return value.kind === "function" || value.kind === "unsupported"
+			? value
+			: { ...value, const: true };
+	};
 	let current = type;
 	const seen = new Set<string>();
 	while (current.kind === "typedef") {
@@ -140,13 +146,7 @@ export function resolveCType(model: Pick<CModel, "typedefs">, type: CType): CTyp
 		if (typedef === undefined) return { kind: "unsupported", spelling: current.name };
 		const isConst = current.const === true;
 		current = typedef.type;
-		if (
-			isConst &&
-			current.kind !== "array" &&
-			current.kind !== "function" &&
-			current.kind !== "unsupported"
-		)
-			current = { ...current, const: true };
+		if (isConst) current = qualify(current);
 	}
 	return current;
 }

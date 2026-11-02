@@ -17,6 +17,17 @@ import {
 	getTitle,
 	getContext,
 	getTransform,
+	getValues,
+	setValues,
+	getMatrix,
+	setMatrix,
+	getPoints,
+	setPoints,
+	getFixedValues,
+	getSignals,
+	setSignals,
+	getThreads,
+	setThreads,
 	globals_advance,
 	globals_select,
 	globals_destroyed,
@@ -51,6 +62,62 @@ check(Object.is(getRatio(), -0), "global floating value preserves negative zero"
 setRatio(NaN);
 check(Number.isNaN(getRatio()), "global floating value preserves NaN");
 const original = getPoint();
+const originalValues = getValues();
+setValues([21, 22]);
+check(originalValues[0] === 1 && getValues()[1] === 22, "array reads copy C storage");
+check(getFixedValues()[1] === 12, "const array typedef reads preserve their value");
+setSignals([23, 24]);
+check(getSignals()[0] === 23, "volatile array access");
+setThreads([25, 26]);
+check(getThreads()[1] === 26, "thread-local array access");
+setPoints([
+	{ x: 27, y: 28 },
+	{ x: 29, y: 30 },
+]);
+check(getPoints()[1].y === 30, "record array conversion");
+setMatrix([
+	[31, 32],
+	[33, 34],
+]);
+check(getMatrix()[1][0] === 33, "multidimensional array conversion");
+refused = false;
+try {
+	setMatrix([
+		[40, 41],
+		[42, 1.5],
+	]);
+} catch (error) {
+	refused = error instanceof RangeError;
+}
+check(
+	refused && getMatrix()[0][0] === 31,
+	"invalid nested input cannot partially write C storage",
+);
+const nested: [[number, number], [number, number]] = [
+	[0, 0],
+	[45, 46],
+];
+Object.defineProperty(nested, "0", {
+	get() {
+		const row: [number, number] = [0, 0];
+		Object.defineProperty(row, "0", {
+			get() {
+				return getPoint().x + 40;
+			},
+		});
+		Object.defineProperty(row, "1", {
+			get() {
+				return getPoint().y + 40;
+			},
+		});
+		return row;
+	},
+});
+setMatrix(nested);
+check(
+	getMatrix()[0][1] === original.y + 40,
+	"fresh nested arrays survive allocating element getters",
+);
 setPoint({
 	get x() {
 		globals_advance();
@@ -112,9 +179,21 @@ const result = new Promise<unknown>((resolve) => {
 worker.port.start();
 await worker.ready;
 worker.port.postMessage(0);
-const reply = (await result) as { initial: number; updated: number; mode: number };
+const reply = (await result) as {
+	initial: number;
+	updated: number;
+	mode: number;
+	initialArray: number;
+	updatedArray: number;
+};
 check(
-	reply.initial === 17 && reply.updated === 33 && reply.mode === 23 && getThread() === 99,
+	reply.initial === 17 &&
+		reply.updated === 33 &&
+		reply.mode === 23 &&
+		getThread() === 99 &&
+		reply.initialArray === 15 &&
+		reply.updatedArray === 35 &&
+		getThreads()[0] === 25,
 	"accessors observe the calling thread's TLS and shared C objects",
 );
 await worker.terminate();
