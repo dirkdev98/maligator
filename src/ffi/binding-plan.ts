@@ -753,16 +753,6 @@ class Planner {
 				return this.#array(resolved, position);
 			case "record": {
 				const handle = this.#handles.get(resolved.name);
-				const declaration = this.#model.records.get(resolved.name);
-				if (
-					handle === undefined &&
-					position === "param" &&
-					declaration !== undefined &&
-					cRecordHasConstMembers(this.#model, declaration)
-				)
-					return {
-						gap: `${resolved.tag} ${resolved.name}: const members cannot be copied by value`,
-					};
 				if (
 					facts.shape !== undefined &&
 					(("member" in facts.shape && resolved.tag !== "union") || handle !== undefined)
@@ -1701,6 +1691,12 @@ class Planner {
 		const returned = resolveCType(this.#model, target.returns);
 		let returns: JsValue = { kind: "undefined" };
 		if (returned.kind !== "void") {
+			const record =
+				returned.kind === "record" ? this.#model.records.get(returned.name) : undefined;
+			if (record !== undefined && cRecordHasConstMembers(this.#model, record))
+				return {
+					gap: `callback result: ${record.name}: const members need initialization`,
+				};
 			const mapped = this.value(target.returns, "param", resultFacts);
 			if ("gap" in mapped) return { gap: `callback result: ${mapped.gap}` };
 			if (mapped.value.kind !== "handle" && this.#containsHandle(mapped.value))

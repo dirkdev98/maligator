@@ -29,7 +29,7 @@ afterEach(() => {
 	for (const directory of temporary.splice(0))
 		rmSync(directory, { recursive: true, force: true });
 });
-it("binds const-member results regardless of earlier rejected inputs", () => {
+it("binds const-member inputs and results in declaration order", () => {
 	const directory = project("ffi-const-results");
 	const result = cli(directory, "inspect", "const_values", "--json");
 	expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -38,6 +38,9 @@ it("binds const-member results regardless of earlier rejected inputs", () => {
 	};
 	for (const name of [
 		"a_make",
+		"a_take_before",
+		"z_take",
+		"immutable_bits_take",
 		"z_make_before",
 		"immutable_visit",
 		"immutable_notify",
@@ -51,8 +54,6 @@ it("binds const-member results regardless of earlier rejected inputs", () => {
 		expect(report.functions.find((fn) => fn.name === name)?.status).toBe("bound");
 });
 it.each([
-	"a_take_before",
-	"z_take",
 	"immutable_out",
 	"immutable_inout",
 	"immutable_array",
@@ -77,43 +78,34 @@ it("preserves anonymous field declarations when the project moves", () => {
 	expect(sdk).not.toContain(first);
 	expect(sdk).not.toContain(second);
 });
-it.each([false, true])(
-	"maps const anonymous inputs through copied handles %s",
-	(handles) => {
-		const directory = project();
-		if (handles)
-			writeFileSync(
-				join(directory, "records.ffi.ts"),
-				`export default ${JSON.stringify({
-					headers: ["records.h"],
-					find: [{ includeDirs: ["."], sources: ["records.c"] }],
-					types: {
-						ConstShapePacket: { handle: {} },
-						ConstPromotedPacket: { handle: {} },
-					},
-				})};\n`,
-			);
-		const inspected = cli(directory, "inspect", "records", "--json");
-		expect(inspected.status, inspected.stderr || inspected.stdout).toBe(0);
-		const report = JSON.parse(inspected.stdout) as {
-			functions: Array<{
-				name: string;
-				status: string;
-				gaps?: Array<{ reason: string }>;
-			}>;
-		};
-		for (const name of ["shapes_const_copy", "shapes_const_promoted"]) {
-			const entry = report.functions.find((candidate) => candidate.name === name);
-			expect(entry?.status).toBe(handles ? "bound" : "needs-facts");
-			if (handles) continue;
-			expect(
-				entry?.gaps?.some((gap) =>
-					gap.reason.includes("const members cannot be copied by value"),
-				),
-			).toBe(true);
-		}
-	},
-);
+it.each([false, true])("maps const anonymous inputs with a handle fact %s", (handles) => {
+	const directory = project();
+	if (handles)
+		writeFileSync(
+			join(directory, "records.ffi.ts"),
+			`export default ${JSON.stringify({
+				headers: ["records.h"],
+				find: [{ includeDirs: ["."], sources: ["records.c"] }],
+				types: {
+					ConstShapePacket: { handle: {} },
+					ConstPromotedPacket: { handle: {} },
+				},
+			})};\n`,
+		);
+	const inspected = cli(directory, "inspect", "records", "--json");
+	expect(inspected.status, inspected.stderr || inspected.stdout).toBe(0);
+	const report = JSON.parse(inspected.stdout) as {
+		functions: Array<{
+			name: string;
+			status: string;
+			gaps?: Array<{ reason: string }>;
+		}>;
+	};
+	for (const name of ["shapes_const_copy", "shapes_const_promoted"]) {
+		const entry = report.functions.find((candidate) => candidate.name === name);
+		expect(entry?.status).toBe("bound");
+	}
+});
 it("detects anonymous member ABI changes that preserve the JavaScript types", () => {
 	const directory = project();
 	const accepted = cli(directory, "check", "--update", "--json");

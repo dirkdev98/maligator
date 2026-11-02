@@ -18,3 +18,5 @@ void shapes_configure(ShapeState *state, unsigned generation, double weight) {
     state->generation = generation;
     state->weight = weight;
 }
+ConstShapePacket shapes_const_copy(ConstShapePacket value) { return value; }
+ConstPromotedPacket shapes_const_promoted(ConstPromotedPacket value) { return value; }

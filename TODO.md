@@ -1908,8 +1908,10 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 - [ ] Extend value mapping for wider integers, complex and vector values, and native
       floating representations beyond JavaScript numbers.
 
-- [ ] Support opaque caller storage sized by native queries, and const-member
-      constructors for inputs, output buffers, and unions.
+- [ ] Support opaque caller storage sized by native queries.
+
+- [ ] Complete const-member construction for output buffers, unions, tagged values,
+      counted input arrays, and JavaScript callback results.
 
 - [ ] Extend compound resource-bearing results with explicit ownership and lifetime.
 

@@ -7,7 +7,11 @@ typedef struct __attribute__((aligned(64))) Immutable {
     struct { const int value; int writable; } nested;
     const int samples[2];
     struct { const int promoted; };
+    const struct { const int value; int writable; } points[2];
 } Immutable;
+typedef struct ImmutableBits { const unsigned code : 3; int payload; } ImmutableBits;
+int immutable_bits_take(ImmutableBits value);
+int immutable_taken(void);
 typedef struct Before { const int value; } Before;
 typedef struct __attribute__((aligned(64))) ImmutableToken { const int token; int detail; } ImmutableToken;
 ImmutableToken immutable_token_make(int seed);

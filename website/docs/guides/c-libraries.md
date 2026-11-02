@@ -98,9 +98,10 @@ Conversions never coerce. A value of the wrong type throws a `TypeError`, and a 
 A function is exported only when every parameter and its result map. Functions that take or return other pointers, callbacks, or variadic arguments are not exported until the contract describes them.
 
 Plain records and copied struct handles can contain const members when returned by C
-or passed to a JavaScript callback. Copied handles also pass back to C by value,
-including on workers. Plain record inputs, output buffers, and JavaScript callback
-results require assignable fields.
+or passed to a JavaScript callback. Both also pass back to C by value, including on
+workers. Input conversion reads properties before initializing the native value;
+later JavaScript mutations do not change a queued worker's copy. Output buffers,
+counted input arrays, unions, and JavaScript callback results require assignable fields.
 
 Repeated string inputs can retain a UTF-8 encoding alongside their JavaScript
 storage, avoiding encoding work on later synchronous calls. ASCII inputs can instead

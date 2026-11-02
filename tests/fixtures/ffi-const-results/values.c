@@ -1,10 +1,18 @@
 #include "values.h"
 
-Immutable immutable_fixed = {77, {78, 79}, {80, 81}, {82}};
+Immutable immutable_fixed = {77, {78, 79}, {80, 81}, {82}, {{83, 84}, {85, 86}}};
 Immutable a_make(int seed) {
-    Immutable value = {seed, {seed + 1, seed + 2}, {seed + 3, seed + 4}, {seed + 5}};
+    Immutable value = {seed, {seed + 1, seed + 2}, {seed + 3, seed + 4}, {seed + 5}, {{seed + 6, seed + 7}, {seed + 8, seed + 9}}};
     return value;
 }
+static int taken;
+int immutable_taken(void) { return taken; }
+int a_take_before(Before value) { taken++; return value.value; }
+int z_take(Immutable value) {
+    taken++;
+    return value.code + value.nested.value + value.nested.writable + value.samples[0] + value.samples[1] + value.promoted + value.points[0].value + value.points[0].writable + value.points[1].value + value.points[1].writable;
+}
+int immutable_bits_take(ImmutableBits value) { taken++; return (int)value.code + value.payload; }
 Before z_make_before(int seed) { return (Before){seed + 10}; }
 static int token_destroyed;
 static int token_destroy_sum;

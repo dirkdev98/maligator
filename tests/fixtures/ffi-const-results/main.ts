@@ -24,6 +24,13 @@ import {
 	immutable_token_with_callback,
 	consumeTokenWithCallbackAsync,
 	immutable_token_set,
+	a_take_before,
+	takeBeforeAsync,
+	z_take,
+	takeAsync,
+	immutable_bits_take,
+	takeBitsAsync,
+	immutable_taken,
 } from "maligator:ffi/const_values";
 import type { Immutable, ImmutableToken } from "maligator:ffi/const_values";
 
@@ -41,9 +48,23 @@ function verify(value: Immutable, seed: number): void {
 		"const array result",
 	);
 	check(value.promoted === seed + 5, "promoted const result");
+	check(
+		value.points[0].value === seed + 6 && value.points[1].writable === seed + 9,
+		"array of const records",
+	);
 }
 for (const seed of [-3, 0, 7, 19]) {
 	verify(a_make(seed), seed);
+	check(
+		z_take(a_make(seed)) === seed * 10 + 45,
+		"plain const input initializes every field",
+	);
+	check(
+		(await takeAsync(a_make(seed))) === seed * 10 + 45,
+		"worker const input initializes every field",
+	);
+	check(a_take_before({ value: seed }) === seed, "small const input");
+	check((await takeBeforeAsync({ value: seed })) === seed, "small worker const input");
 	verify(await makeAsync(seed), seed);
 	check(
 		z_make_before(seed).value === seed + 10,
@@ -80,6 +101,92 @@ for (const seed of [-3, 0, 7, 19]) {
 	await notified;
 }
 verify(getFixed(), 77);
+const pendingInput = a_make(4);
+const captured = takeAsync(pendingInput);
+pendingInput.code = 1000;
+pendingInput.nested.value = 1000;
+pendingInput.samples[0] = 1000;
+check((await captured) === 85, "worker input snapshots const members before queueing");
+const events: Array<string> = [];
+const observed = new Proxy(a_make(4), {
+	get(target, key, receiver): unknown {
+		if (typeof key === "string") events.push(key);
+		if (key === "nested")
+			return {
+				get value() {
+					events.push("nested.value");
+					return 5;
+				},
+				get writable() {
+					events.push("nested.writable");
+					return 6;
+				},
+			};
+		if (key === "points")
+			return [0, 1].map(
+				(index) =>
+					new Proxy(
+						{ value: 10 + index * 2, writable: 11 + index * 2 },
+						{
+							get(point, field, pointReceiver): unknown {
+								const garbage = Array.from({ length: 12 }, () => ({
+									value: "native construction roots",
+								}));
+								check(garbage.length === 12, "allocating nested getter");
+								return Reflect.get(point, field, pointReceiver);
+							},
+						},
+					),
+			);
+		return Reflect.get(target, key, receiver);
+	},
+});
+check(
+	z_take(observed) === 85,
+	"Proxy and allocating nested getters construct const records",
+);
+check(
+	events.join(",") === "code,nested,samples,promoted,points,nested.value,nested.writable",
+	"const constructor snapshots immediate fields before nested conversions",
+);
+const calls = immutable_taken();
+for (const mode of ["throw", "range"] as const) {
+	let failed = false;
+	try {
+		z_take(
+			new Proxy(a_make(4), {
+				get(target, key, receiver): unknown {
+					if (key === "code" && mode === "range") return 1.5;
+					if (key === "points" && mode === "throw")
+						throw new Error("const getter failed");
+					return Reflect.get(target, key, receiver);
+				},
+			}),
+		);
+	} catch (error) {
+		failed =
+			mode === "range"
+				? error instanceof RangeError
+				: error instanceof Error && error.message === "const getter failed";
+	}
+	check(failed && immutable_taken() === calls, "failed const conversion never calls C");
+}
+check(z_take(a_make(0)) === 45, "const conversion cleanup permits the next call");
+check(
+	immutable_bits_take({ code: 7, payload: -3 }) === 4,
+	"const bit-field uses native initialization",
+);
+check(
+	(await takeBitsAsync({ code: 1, payload: 2 })) === 3,
+	"worker const bit-field input",
+);
+let bitRange = false;
+try {
+	immutable_bits_take({ code: 8, payload: 0 });
+} catch (error) {
+	bitRange = error instanceof RangeError;
+}
+check(bitRange, "const bit-field keeps its declared range");
 let caught = false;
 try {
 	immutable_visit(3, () => {

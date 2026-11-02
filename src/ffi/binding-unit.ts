@@ -326,13 +326,13 @@ class BindingWriter {
 		return record !== undefined && cRecordHasConstMembers(this.#model, record);
 	}
 
-	#constHandleArguments(binding: BoundFunction): ReadonlySet<number> {
+	#constArguments(binding: BoundFunction): ReadonlySet<number> {
 		return new Set(
 			binding.arguments.flatMap((entry, index) => {
 				const value =
 					entry.kind === "input" ? binding.params[entry.param]!.value : undefined;
-				return value?.kind === "handle" &&
-					value.pass === "copy" &&
+				return (value?.kind === "record" ||
+					(value?.kind === "handle" && value.pass === "copy")) &&
 					this.#immutableRecord(binding.declaration.params[index]!.type)
 					? [index]
 					: [];
@@ -433,6 +433,7 @@ class BindingWriter {
 		rooted: boolean,
 		inputs = "nullptr",
 		borrowString = false,
+		initializeRecord = false,
 	): Array<string> {
 		const cast = (expression: string) =>
 			`(${localDeclaration(type, "")}) (${expression})`;
@@ -491,6 +492,23 @@ class BindingWriter {
 			case "union":
 			case "record": {
 				const retained = this.#hasHandles(value) ? `, ${inputs}` : "";
+				if (
+					value.kind === "record" &&
+					cRecordHasConstMembers(this.#model, this.#record(value.name).record)
+				) {
+					if (!initializeRecord)
+						throw new Error("const-record input must initialize a native value");
+					const converted = this.#fresh("converted");
+					const spelling =
+						type.kind === "record"
+							? this.#record(value.name).spelling
+							: localDeclaration(type, "");
+					return [
+						`bool ${converted};`,
+						`${spelling} ${target} = mal_ffi_construct_${value.name}(vm, ${source}, ${site}, &${converted}${retained});`,
+						`if (!${converted}) ${fail}`,
+					];
+				}
 				const helper =
 					value.kind === "union"
 						? `mal_ffi_union_in_${value.name}`
@@ -761,6 +779,7 @@ class BindingWriter {
 		const names = new Set<string>();
 		const add = (name: string): void => {
 			if (names.has(name)) return;
+			if (cRecordHasConstMembers(this.#model, this.#record(name).record)) return;
 			names.add(name);
 			for (const field of this.#record(name).fields)
 				if (field.value.kind === "record") add(field.value.name);
@@ -778,7 +797,7 @@ class BindingWriter {
 		const record = this.#record(name);
 		return [
 			"",
-			`static bool mal_ffi_leaves_${name}(MalVm *vm, const MalValue **mal_leaves, const MalFfiSite *mal_site, ${record.spelling} *mal_out) {`,
+			`static bool mal_ffi_leaves_${name}(MalVm *vm, const MalValue **mal_leaves, const MalFfiSite *mal_site, typeof_unqual(${record.spelling}) *mal_out) {`,
 			"	MalFfiSite mal_field_site = *mal_site;",
 			...record.fields.flatMap((field) => [
 				`	mal_field_site.field = ${cString(field.name)};`,
@@ -807,12 +826,14 @@ class BindingWriter {
 
 	#recordInput(name: string): Array<string> {
 		const record = this.#record(name);
+		if (cRecordHasConstMembers(this.#model, record.record))
+			return this.#recordConstructor(name);
 		const retained = this.#hasHandles({ kind: "record", name });
 		const parameter = retained ? ", MalFfiInputs *mal_inputs" : "";
 		const count = String(record.fields.length);
 		const lines = [
 			"",
-			`static bool mal_ffi_fields_${name}(MalVm *vm, const MalValue *mal_fields, const MalFfiSite *mal_site, ${record.spelling} *mal_out${parameter}) {`,
+			`static bool mal_ffi_fields_${name}(MalVm *vm, const MalValue *mal_fields, const MalFfiSite *mal_site, typeof_unqual(${record.spelling}) *mal_out${parameter}) {`,
 			"\tMalFfiSite mal_field_site = *mal_site;",
 		];
 		record.fields.forEach((field, index) => {
@@ -837,7 +858,7 @@ class BindingWriter {
 			"\treturn true;",
 			"}",
 			"",
-			`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out${parameter}) {`,
+			`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, typeof_unqual(${record.spelling}) *mal_out${parameter}) {`,
 			...(this.#readsLeaves(record)
 				? [
 						`\tMalValue mal_leaves[${String(this.#leafCount(record))}];`,
@@ -857,6 +878,84 @@ class BindingWriter {
 			`\tbool mal_ok = mal_ffi_record_fields(vm, mal_value, &mal_ffi_record_${name}, mal_site, mal_fields) && mal_ffi_fields_${name}(vm, mal_fields, mal_site, mal_out${retained ? ", mal_inputs" : ""});`,
 			...(rootFields ? ["\tmal_ffi_unroot(&mal_roots);"] : []),
 			"\treturn mal_ok;",
+			"}",
+		);
+		return lines;
+	}
+
+	#recordConstructor(name: string): Array<string> {
+		const record = this.#record(name);
+		const retained = this.#hasHandles({ kind: "record", name });
+		const elementRoots = (value: JsValue): number =>
+			value.kind === "array" ? value.length * (1 + elementRoots(value.of)) : 0;
+		const count =
+			record.fields.length +
+			1 +
+			record.fields.reduce((total, field) => total + elementRoots(field.value), 0);
+		let nextRoot = record.fields.length + 1;
+		const lines = [
+			"",
+			`static ${record.spelling} mal_ffi_construct_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, bool *mal_ok${retained ? ", MalFfiInputs *mal_inputs" : ""}) {`,
+			`\tMalValue mal_fields[${count}] = { mal_value };`,
+			"\tMalFfiRoots mal_roots;",
+			`\tmal_ffi_root(&mal_roots, mal_fields, ${count});`,
+			`\tif (!mal_ffi_record_fields(vm, mal_fields[0], &mal_ffi_record_${name}, mal_site, mal_fields + 1)) goto mal_failed;`,
+			"\tMalFfiSite mal_field_site = *mal_site;",
+		];
+		const convert = (value: JsValue, type: CType, source: string): string => {
+			if (value.kind === "array") {
+				const resolved = resolveCType(this.#model, type);
+				if (resolved.kind !== "array")
+					throw new Error("array initializer without array type");
+				const elements: Array<string> = [];
+				for (let index = 0; index < value.length; index++) {
+					const element = `mal_fields[${nextRoot++}]`;
+					lines.push(
+						`\tif (!mal_ffi_element(vm, ${source}, ${index}, ${value.length}, &mal_field_site, &${element})) goto mal_failed;`,
+					);
+					elements.push(convert(value.of, resolved.of, element));
+				}
+				return `{ ${elements.join(", ")} }`;
+			}
+			const local = this.#fresh("field");
+			const spelling =
+				value.kind === "record"
+					? this.#record(value.name).spelling
+					: localDeclaration(type, "");
+			const initialize =
+				value.kind === "record" &&
+				cRecordHasConstMembers(this.#model, this.#record(value.name).record);
+			if (!initialize) lines.push(`\ttypeof_unqual(${spelling}) ${local};`);
+			lines.push(
+				...this.read(
+					value,
+					type,
+					source,
+					local,
+					"&mal_field_site",
+					"goto mal_failed;",
+					[],
+					false,
+					retained ? "mal_inputs" : "nullptr",
+					false,
+					initialize,
+				).map((line) => `\t${line}`),
+			);
+			return local;
+		};
+		// C does not evaluate initializer expressions in field order, so convert first.
+		const fields = record.fields.map((field, index) => {
+			lines.push(`\tmal_field_site.field = ${cString(field.name)};`);
+			return `.${field.name} = ${convert(field.value, field.type, `mal_fields[${index + 1}]`)}`;
+		});
+		lines.push(
+			"\tmal_ffi_unroot(&mal_roots);",
+			"\t*mal_ok = true;",
+			`\treturn (${record.spelling}) { ${fields.join(", ")} };`,
+			"mal_failed:",
+			"\tmal_ffi_unroot(&mal_roots);",
+			"\t*mal_ok = false;",
+			`\treturn (${record.spelling}) {};`,
 			"}",
 		);
 		return lines;
@@ -883,14 +982,19 @@ class BindingWriter {
 			const retained = this.#hasHandles({ kind: "record", name })
 				? ", MalFfiInputs *mal_inputs"
 				: "";
-			lines.push(
-				`static bool mal_ffi_fields_${name}(MalVm *vm, const MalValue *mal_fields, const MalFfiSite *mal_site, ${record.spelling} *mal_out${retained});`,
-				`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${record.spelling} *mal_out${retained});`,
-			);
+			if (cRecordHasConstMembers(this.#model, record.record))
+				lines.push(
+					`static ${record.spelling} mal_ffi_construct_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, bool *mal_ok${retained});`,
+				);
+			else
+				lines.push(
+					`static bool mal_ffi_fields_${name}(MalVm *vm, const MalValue *mal_fields, const MalFfiSite *mal_site, typeof_unqual(${record.spelling}) *mal_out${retained});`,
+					`static bool mal_ffi_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, typeof_unqual(${record.spelling}) *mal_out${retained});`,
+				);
 		}
 		for (const name of leaves) {
 			lines.push(
-				`static bool mal_ffi_leaves_${name}(MalVm *vm, const MalValue **mal_leaves, const MalFfiSite *mal_site, ${this.#record(name).spelling} *mal_out);`,
+				`static bool mal_ffi_leaves_${name}(MalVm *vm, const MalValue **mal_leaves, const MalFfiSite *mal_site, typeof_unqual(${this.#record(name).spelling}) *mal_out);`,
 			);
 		}
 		for (const name of outputs) {
@@ -1772,7 +1876,7 @@ class BindingWriter {
 		const siteName = callable?.site ?? name;
 		const owner = callable?.owner;
 		const declaration = binding.declaration;
-		const constHandles = this.#constHandleArguments(binding);
+		const constArguments = this.#constArguments(binding);
 		const locals: Array<string> = [];
 		const body: Array<string> = [];
 		/** Buffers resolve last: nothing may run JavaScript between them and the call. */
@@ -1880,7 +1984,7 @@ class BindingWriter {
 					`if (${local} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 				);
 				cleanup.push(`free(${local});`);
-			} else if (!constHandles.has(index))
+			} else if (!constArguments.has(index))
 				locals.push(`${localDeclaration(param.type, local)};`);
 			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
 			switch (entry.kind) {
@@ -1948,6 +2052,24 @@ class BindingWriter {
 				}
 				case "input": {
 					const value = binding.params[entry.param]!.value;
+					if (value.kind === "record" && constArguments.has(index)) {
+						body.push(
+							...this.read(
+								value,
+								param.type,
+								argument(entry.param),
+								local,
+								`&mal_site_${String(entry.param)}`,
+								"goto mal_done;",
+								strings,
+								true,
+								inputs,
+								false,
+								true,
+							),
+						);
+						return;
+					}
 					const site = `&mal_site_${String(entry.param)}`;
 					const source = argument(entry.param);
 					const bounded =
@@ -2210,7 +2332,7 @@ class BindingWriter {
 					if (
 						value.kind === "handle" &&
 						(runsJavaScript ||
-							constHandles.has(index) ||
+							constArguments.has(index) ||
 							binding.closes === entry.param ||
 							this.managedFamily(value.name))
 					) {
@@ -2239,7 +2361,7 @@ class BindingWriter {
 									]
 								: []),
 							value.pass === "copy"
-								? `${constHandles.has(index) ? localDeclaration(param.type, local) : local} = *(${handle.spelling} *) ${pointer};`
+								? `${constArguments.has(index) ? localDeclaration(param.type, local) : local} = *(${handle.spelling} *) ${pointer};`
 								: `${local} = (${localDeclaration(param.type, "")}) ${pointer};`,
 						);
 						return;
@@ -2478,7 +2600,7 @@ class BindingWriter {
 	asyncFunction(binding: BoundFunction, exported: string): Array<string> {
 		const name = binding.name;
 		const declaration = binding.declaration;
-		const constHandles = this.#constHandleArguments(binding);
+		const constArguments = this.#constArguments(binding);
 		const initializeReturn = this.#immutableRecord(declaration.returns);
 		const returnValue = initializeReturn
 			? "(*mal_ctx->mal_return)"
@@ -2596,7 +2718,7 @@ class BindingWriter {
 			const param = declaration.params[index]!;
 			const target = `mal_ctx->mal_argument_${String(index)}`;
 			fields.push(
-				`${localDeclaration(constHandles.has(index) ? { kind: "pointer", to: param.type } : param.type, `mal_argument_${String(index)}`)};`,
+				`${localDeclaration(constArguments.has(index) ? { kind: "pointer", to: param.type } : param.type, `mal_argument_${String(index)}`)};`,
 			);
 			const resolved = resolveCType(this.#model, param.type);
 			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
@@ -2667,6 +2789,29 @@ class BindingWriter {
 					const value = binding.params[entry.param]!.value;
 					const site = `&mal_site_${String(entry.param)}`;
 					const source = argument(entry.param);
+					if (value.kind === "record" && constArguments.has(index)) {
+						const native = this.#fresh("native_argument");
+						body.push(
+							...this.read(
+								value,
+								param.type,
+								source,
+								native,
+								site,
+								"goto mal_failed;",
+								strings,
+								true,
+								inputs,
+								false,
+								true,
+							),
+							`${target} = mal_ffi_allocate_storage(1, sizeof(${native}), _Alignof(__typeof__(${native})));`,
+							`if (${target} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_failed; }`,
+							`__builtin_memcpy(${target}, &${native}, sizeof(${native}));`,
+						);
+						frees.push(`free(${target});`);
+						return;
+					}
 					if (value.kind === "callback") {
 						const trampoline =
 							value.replaced === undefined
@@ -2840,7 +2985,7 @@ class BindingWriter {
 									]
 								: []),
 							`mal_keep[${String(kept++)}] = ${source};`,
-							...(constHandles.has(index)
+							...(constArguments.has(index)
 								? [
 										`${target} = mal_ffi_allocate_storage(1, sizeof(*${target}), _Alignof(${handle.spelling}));`,
 										`if (${target} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_failed; }`,
@@ -2852,7 +2997,7 @@ class BindingWriter {
 											: `${target} = (${localDeclaration(param.type, "")}) ${pointer};`,
 									]),
 						);
-						if (constHandles.has(index)) frees.push(`free(${target});`);
+						if (constArguments.has(index)) frees.push(`free(${target});`);
 						if (binding.closes === entry.param) {
 							body.push(`mal_ctx->mal_closing = ${source};`);
 							buffers.push(
@@ -2892,7 +3037,7 @@ class BindingWriter {
 			frees.push("free(mal_ctx->mal_return);");
 		}
 		for (const temporary of strings) fields.push(`MalFfiString ${temporary};`);
-		const call = `${declaration.name}(${declaration.params.map((_, index) => `${constHandles.has(index) ? "*" : ""}mal_ctx->mal_argument_${String(index)}`).join(", ")})`;
+		const call = `${declaration.name}(${declaration.params.map((_, index) => `${constArguments.has(index) ? "*" : ""}mal_ctx->mal_argument_${String(index)}`).join(", ")})`;
 		const count = countValue(binding, binding.resultCount, "mal_ctx->");
 		const produce: Array<string> = returns
 			? this.#owned(

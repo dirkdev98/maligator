@@ -7,6 +7,8 @@ import {
 	shapes_total,
 	shapes_configure,
 	ShapeState,
+	shapes_const_copy,
+	shapes_const_promoted,
 } from "maligator:ffi/records";
 import type { ShapeEnvelope } from "maligator:ffi/records";
 
@@ -14,6 +16,8 @@ function check(value: unknown, expected: unknown): void {
 	if (value !== expected)
 		throw new Error(`Expected ${String(expected)}, received ${String(value)}`);
 }
+check(shapes_const_copy({ detail: { value: 41 } }).detail.value, 41);
+check(shapes_const_promoted({ value: 43 }).value, 43);
 const input: ShapeEnvelope = {
 	version: 2,
 	x: 11,
