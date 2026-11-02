@@ -548,7 +548,7 @@ function handleNames(binding: BoundFunction): Array<string> {
 	const names = (value: JsValue | "data" | "count"): Array<string> => {
 		if (typeof value !== "object") return [];
 		if (value.kind === "handle") return [value.name];
-		if (value.kind === "sequence") return names(value.of);
+		if (value.kind === "sequence" || value.kind === "union") return names(value.of);
 		return value.kind === "callback" ? value.params.flatMap(names) : [];
 	};
 	return [

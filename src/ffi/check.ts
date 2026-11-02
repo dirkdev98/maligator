@@ -285,7 +285,12 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 			if (value.lookup !== undefined) helper(value.lookup.function);
 			for (const param of value.params) if (typeof param !== "string") mapping(param);
 			mapping(value.returns);
-		} else if (value.kind === "array" || value.kind === "sequence") mapping(value.of);
+		} else if (
+			value.kind === "array" ||
+			value.kind === "sequence" ||
+			value.kind === "union"
+		)
+			mapping(value.of);
 	};
 	for (const name of Object.keys(contract.facts.functions).sort()) {
 		const facts = contract.facts.functions[name]!;

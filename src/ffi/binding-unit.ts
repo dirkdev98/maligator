@@ -226,6 +226,8 @@ class BindingWriter {
 	readonly #plan: BindingPlan;
 	readonly #inputs = new Set<string>();
 	readonly #outputs = new Set<string>();
+	readonly #unionInputs = new Set<string>();
+	readonly #unionOutputs = new Set<string>();
 	readonly #managedFamilies = new Set<string>();
 	readonly #viewFamilies = new Set<string>();
 	readonly #workerCloseFamilies = new Set<string>();
@@ -253,6 +255,7 @@ class BindingWriter {
 				if (this.#workerCloseFamilies.has(this.#handle(value.name).family))
 					handles.add(value.name);
 			} else if (value.kind === "sequence" || value.kind === "array") visit(value.of);
+			else if (value.kind === "union") visit(value.of);
 			else if (value.kind === "record")
 				for (const field of this.#record(value.name).fields) visit(field.value);
 		};
@@ -285,6 +288,7 @@ class BindingWriter {
 	}
 
 	#hasHandles(value: JsValue): boolean {
+		if (value.kind === "union") return this.#hasHandles(value.of);
 		if (value.kind === "handle") return true;
 		if (value.kind === "record")
 			return this.#record(value.name).fields.some((field) =>
@@ -307,6 +311,13 @@ class BindingWriter {
 
 	/** Mark the record helpers a value needs, recursively through fields and arrays. */
 	need(value: JsValue, direction: "input" | "output"): void {
+		if (value.kind === "union") {
+			const set = direction === "input" ? this.#unionInputs : this.#unionOutputs;
+			if (set.has(value.name)) return;
+			set.add(value.name);
+			this.need(value.of, direction);
+			return;
+		}
 		if (value.kind === "array" || value.kind === "sequence") {
 			this.need(value.of, direction);
 			return;
@@ -396,11 +407,16 @@ class BindingWriter {
 					`${target} = (${localDeclaration(type, "")}) ${temporary}.data;`,
 				];
 			}
+			case "union":
 			case "record": {
 				const retained = this.#hasHandles(value) ? `, ${inputs}` : "";
+				const helper =
+					value.kind === "union"
+						? `mal_ffi_union_in_${value.name}`
+						: `mal_ffi_in_${value.name}`;
 				if (rooted) {
 					return [
-						`if (!mal_ffi_in_${value.name}(vm, ${source}, ${site}, &${target}${retained})) ${fail}`,
+						`if (!${helper}(vm, ${source}, ${site}, &${target}${retained})) ${fail}`,
 					];
 				}
 				// A getter may return a fresh object that only this frame references.
@@ -411,7 +427,7 @@ class BindingWriter {
 					`MalValue ${held} = ${source};`,
 					`MalFfiRoots ${roots};`,
 					`mal_ffi_root(&${roots}, &${held}, 1);`,
-					`bool ${converted} = mal_ffi_in_${value.name}(vm, ${held}, ${site}, &${target}${retained});`,
+					`bool ${converted} = ${helper}(vm, ${held}, ${site}, &${target}${retained});`,
 					`mal_ffi_unroot(&${roots});`,
 					`if (!${converted}) ${fail}`,
 				];
@@ -455,13 +471,18 @@ class BindingWriter {
 	 * A struct handle copies its struct, so `expression` must then be an lvalue.
 	 */
 	/** `lent`: a callback argument, whose handles close when the callback returns. */
-	write(value: JsValue, expression: string, lent = false): string {
+	write(value: JsValue, expression: string, lent: boolean | string = false): string {
 		switch (value.kind) {
 			case "handle": {
-				const created = (address: string) =>
-					lent
-						? `mal_ffi_new_callback_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address})`
-						: `mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.owned}, ${value.fresh === true})`;
+				const created = (address: string) => {
+					const loan = `mal_ffi_new_callback_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address})`;
+					const ordinary = `mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.owned}, ${value.fresh === true})`;
+					return typeof lent === "boolean"
+						? lent
+							? loan
+							: ordinary
+						: `(${lent}) ? ${loan} : ${ordinary}`;
+				};
 				return value.pass === "copy"
 					? created(`&(${expression})`)
 					: `(${expression}) == nullptr ? mal_ffi_null() : ${created(`(void *) (${expression})`)}`;
@@ -489,7 +510,9 @@ class BindingWriter {
 				if (value.counted) throw new Error("a counted string needs its byte length");
 				return `mal_ffi_from_string(vm, ${expression})`;
 			case "record":
-				return `mal_ffi_out_${value.name}(vm, ${expression})`;
+				return `mal_ffi_out_${value.name}(vm, ${expression}, ${lent})`;
+			case "union":
+				return `mal_ffi_union_out_${value.name}(vm, ${expression}, ${lent})`;
 			case "array":
 				throw new Error("arrays are written field by field");
 		}
@@ -548,7 +571,7 @@ class BindingWriter {
 		value: JsValue,
 		expression: string,
 		target: string,
-		lent = false,
+		lent: boolean | string = false,
 	): Array<string> {
 		if (value.kind !== "array") {
 			return [
@@ -580,6 +603,7 @@ class BindingWriter {
 
 	/** Whether converting a C value allocates, so earlier results need rooting. */
 	#allocates(value: JsValue): boolean {
+		if (value.kind === "union") return this.#allocates(value.of);
 		switch (value.kind) {
 			case "integer":
 			case "float":
@@ -750,10 +774,25 @@ class BindingWriter {
 		}
 		for (const name of outputs) {
 			lines.push(
-				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${this.#record(name).spelling} mal_value);`,
+				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${this.#record(name).spelling} mal_value, bool mal_lent);`,
 			);
 		}
 		const typed = [...new Set([...inputs, ...outputs])].sort(byteOrder);
+		for (const name of this.#unionInputs) {
+			const union = this.#plan.unions.get(name)!;
+			const retained = this.#hasHandles(union.member.value)
+				? ", MalFfiInputs *mal_inputs"
+				: "";
+			lines.push(
+				`static bool mal_ffi_union_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${union.spelling} *mal_out${retained});`,
+			);
+		}
+		for (const name of this.#unionOutputs) {
+			const union = this.#plan.unions.get(name)!;
+			lines.push(
+				`static MalValue mal_ffi_union_out_${name}(MalVm *vm, ${union.spelling} mal_value, bool mal_lent);`,
+			);
+		}
 		// Declared first, as nested-record tables point at types defined later.
 		for (const name of typed)
 			lines.push(`static MalFfiRecordType mal_ffi_record_${name};`);
@@ -772,6 +811,47 @@ class BindingWriter {
 				`static MalFfiRecordType mal_ffi_record_${name} = { mal_ffi_record_fields_${name}, ${String(record.fields.length)}, 0, ${nested ? `mal_ffi_record_nested_${name}` : "nullptr"} };`,
 			);
 		}
+		for (const name of this.#unionInputs) {
+			const union = this.#plan.unions.get(name)!;
+			const retained = this.#hasHandles(union.member.value);
+			lines.push(
+				`static bool mal_ffi_union_in_${name}(MalVm *vm, MalValue mal_value, const MalFfiSite *mal_site, ${union.spelling} *mal_out${retained ? ", MalFfiInputs *mal_inputs" : ""}) {`,
+				...this.read(
+					union.member.value,
+					union.member.type,
+					"mal_value",
+					`mal_out->${union.member.name}`,
+					"mal_site",
+					"return false;",
+					[],
+					true,
+					retained ? "mal_inputs" : "nullptr",
+				),
+				"return true;",
+				"}",
+			);
+		}
+		for (const name of this.#unionOutputs) {
+			const union = this.#plan.unions.get(name)!;
+			const rooted = this.#allocates(union.member.value);
+			lines.push(
+				`static MalValue mal_ffi_union_out_${name}(MalVm *vm, ${union.spelling} mal_value, bool mal_lent) {`,
+				"MalValue mal_result = mal_ffi_undefined();",
+				...(rooted
+					? ["MalFfiRoots mal_roots;", "mal_ffi_root(&mal_roots, &mal_result, 1);"]
+					: []),
+				...this.#produce(
+					union.member.value,
+					`mal_value.${union.member.name}`,
+					"mal_result",
+					"mal_lent",
+				),
+				"mal_done:",
+				...(rooted ? ["mal_ffi_unroot(&mal_roots);"] : []),
+				"return mal_ffi_threw(vm) ? mal_ffi_undefined() : mal_result;",
+				"}",
+			);
+		}
 		for (const name of leaves) lines.push(...this.#recordLeaves(name));
 		for (const name of inputs) lines.push(...this.#recordInput(name));
 		for (const name of outputs) {
@@ -781,7 +861,7 @@ class BindingWriter {
 			lines.push(
 				"",
 				// `mal_values` stays rooted by the caller while nested structs allocate.
-				`static bool mal_ffi_fill_${name}(MalVm *vm, ${record.spelling} mal_value, MalValue *mal_values) {`,
+				`static bool mal_ffi_fill_${name}(MalVm *vm, ${record.spelling} mal_value, MalValue *mal_values, bool mal_lent) {`,
 			);
 			record.fields.forEach((field, index) => {
 				lines.push(
@@ -789,6 +869,7 @@ class BindingWriter {
 						field.value,
 						`mal_value.${field.name}`,
 						`mal_values[${String(index)}]`,
+						"mal_lent",
 					).map((line) => `\t${line}`),
 				);
 			});
@@ -798,7 +879,7 @@ class BindingWriter {
 				"\treturn !mal_ffi_threw(vm);",
 				"}",
 				"",
-				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${record.spelling} mal_value) {`,
+				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${record.spelling} mal_value, bool mal_lent) {`,
 				`\tMalValue mal_values[${String(count)}] = {};`,
 				"\tMalValue mal_record = mal_ffi_undefined();",
 				...(rooted
@@ -807,7 +888,7 @@ class BindingWriter {
 							`\tmal_ffi_root(&mal_roots, mal_values, ${String(count)});`,
 						]
 					: []),
-				`\tif (mal_ffi_fill_${name}(vm, mal_value, mal_values)) mal_record = mal_ffi_new_record(vm, &mal_ffi_record_${name}, mal_values);`,
+				`\tif (mal_ffi_fill_${name}(vm, mal_value, mal_values, mal_lent)) mal_record = mal_ffi_new_record(vm, &mal_ffi_record_${name}, mal_values);`,
 				...(rooted ? ["\tmal_ffi_unroot(&mal_roots);"] : []),
 				"\treturn mal_ffi_threw(vm) ? mal_ffi_undefined() : mal_record;",
 				"}",
@@ -1055,9 +1136,8 @@ class BindingWriter {
 		const count = String(inputs.length);
 		// Handles the library lends belong to this invocation and close when it returns.
 		const lends = inputs.some(
-			({ value: input }) =>
-				(input.kind === "handle" && value.closes === undefined) ||
-				(input.kind === "sequence" && input.of.kind === "handle"),
+			({ value: input, index }) =>
+				index !== value.closes?.keyParam && this.#hasHandles(input),
 		);
 		const keyParam = value.closes?.keyParam ?? value.replaced?.keyParam;
 		const lookup = value.lookup;
@@ -1899,7 +1979,7 @@ class BindingWriter {
 					: [
 							// A compiled caller's stack object takes the fields instead of a new object.
 							"if (mal_into != nullptr) {",
-							`\tif (${callsBack ? "!mal_ffi_threw(vm) && " : ""}mal_ffi_fill_${record}(vm, mal_return, mal_slots)) mal_ffi_stack_record(vm, &mal_ffi_record_${record}, mal_into, mal_slots);`,
+							`\tif (${callsBack ? "!mal_ffi_threw(vm) && " : ""}mal_ffi_fill_${record}(vm, mal_return, mal_slots, false)) mal_ffi_stack_record(vm, &mal_ffi_record_${record}, mal_into, mal_slots);`,
 							"} else {",
 							...owned.map((line) => `\t${line}`),
 							"}",

@@ -91,9 +91,11 @@ export interface MaligatorFfiHandle {
 	collect?: boolean;
 }
 
-/** Facts about one C type, keyed by its typedef or struct tag. */
+/** Facts about one C type, keyed by its typedef or tag. */
 export interface MaligatorFfiTypeFacts {
 	handle?: MaligatorFfiHandle;
+	/** Select the active value of a union when its C type does not identify it. */
+	shape?: MaligatorFfiShape;
 	/** Retained ranges in caller-owned state. Assignment writes the pointer and
 	 * count together; C may advance them only within the assigned range.
 	 */
@@ -136,8 +138,16 @@ export interface MaligatorFfiCount {
 	length: string;
 }
 
+/** The union member a value copies when C has no discriminator. */
+export interface MaligatorFfiShape {
+	/** The C union member copied in both directions. */
+	member: string;
+}
+
 /** Facts about a parameter or a result. */
 export interface MaligatorFfiValueFacts {
+	/** Override a union type's selected member for this value or array element. */
+	shape?: MaligatorFfiShape;
 	/** Accept `null` for a pointer parameter and pass `NULL`. */
 	nullable?: boolean;
 	/** A returned handle the library keeps owning; closing it does not release it. */
@@ -227,20 +237,26 @@ export interface MaligatorFfiCallback {
 	queued?: boolean | "wait";
 	/**
 	 * Facts per callback parameter, keyed by 1-based position: `string`, `bytes`, or
-	 * `array` with a `length` naming another callback parameter, and `nullable`.
+	 * `array` with a `length` naming another callback parameter, `nullable`, and `shape`.
 	 */
 	params?: Record<string, MaligatorFfiValueFacts>;
 }
 
-/** The representation and lifetime C requires from a callback pointer result. */
-export type MaligatorFfiCallbackResult = Pick<
-	MaligatorFfiValueFacts,
-	"string" | "bytes" | "nullable"
-> & {
-	/** C stops using every result before the call returns or the registration ends,
-	 * including pointers held by pending consumers. Self-release forbids another non-null result. */
-	lifetime: "call" | "registration";
-};
+/** A callback result's value shape, or the lifetime of a returned pointer. */
+export type MaligatorFfiCallbackResult =
+	| {
+			shape: MaligatorFfiShape;
+			lifetime?: never;
+			string?: never;
+			bytes?: never;
+			nullable?: never;
+	  }
+	| (Pick<MaligatorFfiValueFacts, "string" | "bytes" | "nullable"> & {
+			/** C stops using every result before the call returns or the registration ends,
+			 * including pointers held by pending consumers. Self-release forbids another non-null result. */
+			lifetime: "call" | "registration";
+			shape?: never;
+	  });
 
 /** Facts about one C function, keyed by its name. */
 export interface MaligatorFfiFunctionFacts {
@@ -283,7 +299,7 @@ export interface MaligatorLibraryContract {
 	headers: Array<string>;
 	/** Discovery alternatives, tried in order. A build config `find` replaces them. */
 	find?: Array<MaligatorFfiFind>;
-	/** Facts about types, keyed by typedef or struct tag. */
+	/** Facts about types, keyed by typedef or tag. */
 	types?: Record<string, MaligatorFfiTypeFacts>;
 	/** Facts about functions, keyed by name. */
 	functions?: Record<string, MaligatorFfiFunctionFacts>;

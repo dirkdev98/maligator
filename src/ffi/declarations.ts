@@ -39,6 +39,15 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string | F
 		`declare module ${JSON.stringify(ffiModuleSpecifier(library))} {`,
 	];
 	if (plan.handles.size > 0) lines.push("\tconst maligatorFfiHandle: unique symbol;");
+	for (const union of [...plan.unions.values()].sort((a, b) =>
+		a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+	)) {
+		if (union.alias !== undefined)
+			lines.push(
+				...docComment(union.record.doc, "\t"),
+				`\texport type ${union.alias} = ${formatTsType(union.member.value)};`,
+			);
+	}
 	const records = [...plan.records.values()].sort((left, right) =>
 		left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
 	);

@@ -244,6 +244,8 @@ export function formatTsType(
 			return nullable("string");
 		case "record":
 			return value.name;
+		case "union":
+			return value.alias ?? formatTsType(value.of, direction);
 		case "handle":
 			return nullable(value.name);
 		case "array": {
@@ -377,6 +379,19 @@ export function inspectBindings(
 				...(field.doc === undefined ? {} : { doc: field.doc }),
 			})),
 		}));
+	for (const union of plan.unions.values())
+		types.push({
+			name: union.alias ?? union.name,
+			c: union.spelling,
+			ts: formatTsType(union.member.value),
+			fields: [
+				{
+					name: union.member.name,
+					c: formatCDeclaration(union.member.type),
+					ts: formatTsType(union.member.value),
+				},
+			],
+		});
 	const constants = plan.constants.map((constant): ConstantInspectionData => ({
 		name: constant.name,
 		source: constant.source,

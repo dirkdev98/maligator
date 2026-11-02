@@ -10,6 +10,7 @@ export type {
 	MaligatorFfiFunctionFacts,
 	MaligatorFfiHandle,
 	MaligatorFfiLibrary,
+	MaligatorFfiShape,
 	MaligatorFfiTypeFacts,
 	MaligatorFfiValueFacts,
 	MaligatorFfiVariant,

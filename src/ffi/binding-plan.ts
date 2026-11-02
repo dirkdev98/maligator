@@ -3,6 +3,7 @@ import type {
 	MaligatorFfiCallback,
 	MaligatorFfiCount,
 	MaligatorFfiFieldFacts,
+	MaligatorFfiShape,
 	MaligatorFfiValueFacts,
 	MaligatorFfiVariant,
 } from "../public-api.d.ts";
@@ -56,6 +57,12 @@ export type JsValue =
 	  }
 	/** A struct passed by value as a plain object. */
 	| { readonly kind: "record"; readonly name: string }
+	| {
+			readonly kind: "union";
+			readonly name: string;
+			readonly of: JsValue;
+			readonly alias?: string;
+	  }
 	| { readonly kind: "array"; readonly of: JsValue; readonly length: number }
 	/**
 	 * A JavaScript function the library calls through a generated trampoline of the C
@@ -215,6 +222,14 @@ export interface MappedRecord {
 	readonly private?: true;
 }
 
+export interface MappedUnion {
+	readonly name: string;
+	readonly spelling: string;
+	readonly record: CRecord;
+	readonly member: MappedField;
+	readonly alias?: string;
+}
+
 /** A type whose values are handles, as the contract's facts and the headers define it. */
 export interface HandleType {
 	/** The struct the handle wraps, which also names its JavaScript type. */
@@ -266,6 +281,7 @@ export interface BindingPlan {
 	readonly hasCallbacks: boolean;
 	readonly unbound: ReadonlyArray<UnboundFunction>;
 	readonly records: ReadonlyMap<string, MappedRecord>;
+	readonly unions: ReadonlyMap<string, MappedUnion>;
 	readonly handles: ReadonlyMap<string, HandleType>;
 	readonly constants: ReadonlyArray<MappedConstant>;
 	readonly skippedConstants: ReadonlyArray<SkippedConstant>;
@@ -543,6 +559,8 @@ class Planner {
 	readonly #model: CModel;
 	readonly #accesses: ReturnType<typeof cRecordAccesses>;
 	readonly records = new Map<string, MappedRecord>();
+	readonly unions = new Map<string, MappedUnion>();
+	readonly #shapes = new Map<string, { alias: string; shape: MaligatorFfiShape }>();
 	readonly #handles: ReadonlyMap<string, Omit<HandleType, "fields" | "managedFields">>;
 	readonly #recordGaps = new Map<string, string>();
 	readonly #pending = new Set<string>();
@@ -550,10 +568,29 @@ class Planner {
 	constructor(
 		model: CModel,
 		handles: ReadonlyMap<string, Omit<HandleType, "fields" | "managedFields">>,
+		facts: LibraryFacts,
 	) {
 		this.#model = model;
 		this.#accesses = cRecordAccesses(model);
 		this.#handles = handles;
+		for (const [name, entry] of Object.entries(facts.types)) {
+			if (entry.shape === undefined) continue;
+			const type = model.records.has(name)
+				? { kind: "record" as const, tag: model.records.get(name)!.tag, name }
+				: model.typedefs.get(name)?.type;
+			const resolved = type === undefined ? undefined : resolveCType(model, type);
+			if (
+				resolved?.kind !== "record" ||
+				resolved.tag !== "union" ||
+				entry.handle !== undefined
+			)
+				throw new FfiError(
+					`types.${name}.shape: member selection requires a union value`,
+				);
+			if (this.#shapes.has(resolved.name))
+				throw new FfiError(`types.${name}.shape: this union already has a shape fact`);
+			this.#shapes.set(resolved.name, { alias: name, shape: entry.shape });
+		}
 	}
 
 	#integer(name: string): Mapping {
@@ -573,6 +610,12 @@ class Planner {
 		facts: MaligatorFfiValueFacts = NO_FACTS,
 	): Mapping {
 		const resolved = resolveCType(this.#model, type);
+		if (
+			facts.shape !== undefined &&
+			resolved.kind !== "record" &&
+			!(resolved.kind === "pointer" && facts.array !== undefined)
+		)
+			throw new FfiError("shape applies to union values or array elements");
 		if (facts.fresh === true) {
 			const target =
 				resolved.kind === "pointer" ? resolveCType(this.#model, resolved.to) : undefined;
@@ -621,7 +664,32 @@ class Planner {
 				return this.#array(resolved, position);
 			case "record": {
 				const handle = this.#handles.get(resolved.name);
-				if (handle === undefined) return this.#record(resolved.name, resolved.tag);
+				if (
+					facts.shape !== undefined &&
+					(resolved.tag !== "union" || handle !== undefined)
+				)
+					throw new FfiError("shape.member applies to union values");
+				if (handle === undefined) {
+					const shape = this.#shapes.get(resolved.name);
+					const mapped =
+						resolved.tag === "union"
+							? this.#union(
+									resolved.name,
+									facts.shape ?? shape?.shape,
+									facts.shape === undefined ? shape?.alias : undefined,
+								)
+							: this.#record(resolved.name, resolved.tag);
+					if (
+						position === "return" &&
+						facts.borrowed !== true &&
+						"value" in mapped &&
+						this.#containsHandle(mapped.value)
+					)
+						return {
+							gap: "resource-bearing value results require a pointer result interface",
+						};
+					return mapped;
+				}
 				if (handle.representation === "pointer") {
 					return {
 						gap: `${handle.name} handles are pointers, not structs passed by value`,
@@ -676,11 +744,10 @@ class Planner {
 		}
 		if (facts.array !== undefined) {
 			// Elements of a borrowed array, such as a callback's, stay the library's.
-			const element = this.value(
-				type.to,
-				position === "param" ? "param" : "return",
-				facts.borrowed === true ? { borrowed: true } : NO_FACTS,
-			);
+			const element = this.value(type.to, position === "param" ? "param" : "return", {
+				...(facts.borrowed === true ? { borrowed: true } : {}),
+				...(facts.shape === undefined ? {} : { shape: facts.shape }),
+			});
 			if ("gap" in element) return { gap: `array element: ${element.gap}` };
 			if (element.value.kind === "sequence" || element.value.kind === "bytes") {
 				return { gap: "arrays of arrays need a fact" };
@@ -792,6 +859,68 @@ class Planner {
 		};
 	}
 
+	#union(name: string, shape: MaligatorFfiShape | undefined, alias?: string): Mapping {
+		if (shape === undefined)
+			return { gap: `union ${name}: select an active member with a shape fact` };
+		const record = this.#model.records.get(name);
+		if (record === undefined || !record.complete)
+			return { gap: `union ${name}: incomplete type` };
+		if (this.#hasConstMember(record))
+			return { gap: `union ${name}: const members cannot be copied by value` };
+		const field = [...promotedCFields(this.#model, record)].find(
+			(field) => field.name === shape.member,
+		);
+		if (field === undefined)
+			throw new FfiError(`union ${name}: no member '${shape.member}'`);
+		const identity = createHash("sha256")
+			.update(
+				JSON.stringify([
+					this.#accesses.get(name)?.owner,
+					this.#accesses.get(name)?.path,
+					shape,
+					alias,
+				]),
+			)
+			.digest("hex")
+			.slice(0, 16);
+		const mappedName = `union_${identity}`;
+		if (this.#pending.has(mappedName))
+			return { gap: `union ${name}: recursive value shape` };
+		this.#pending.add(mappedName);
+		let mapped: Mapping;
+		try {
+			mapped = this.#field(field);
+		} finally {
+			this.#pending.delete(mappedName);
+		}
+		if ("gap" in mapped) return { gap: `union ${name}.${shape.member}: ${mapped.gap}` };
+		if (mapped.value.kind === "handle")
+			return { gap: `union ${name}: a selected handle needs a pointer interface` };
+		const spelling = this.#accesses.get(name)?.spelling;
+		if (spelling === undefined)
+			return { gap: `union ${name}: the C type has no accessible spelling` };
+		this.unions.set(mappedName, {
+			name: mappedName,
+			spelling,
+			record,
+			member: {
+				name: shape.member,
+				type: field.integerType ?? field.type,
+				value: mapped.value,
+				...(field.bitWidth === undefined ? {} : { bitWidth: field.bitWidth }),
+			},
+			...(alias === undefined ? {} : { alias }),
+		});
+		return {
+			value: {
+				kind: "union",
+				name: mappedName,
+				of: mapped.value,
+				...(alias === undefined ? {} : { alias }),
+			},
+		};
+	}
+
 	#hasConstMember(record: CRecord, seen = new Set<string>()): boolean {
 		if (seen.has(record.name)) return false;
 		seen.add(record.name);
@@ -884,7 +1013,11 @@ class Planner {
 				continue;
 			const mapped = this.#field(field);
 			// Accessors return single values; array fields stay behind the handle.
-			if ("value" in mapped && mapped.value.kind !== "array") {
+			if (
+				"value" in mapped &&
+				mapped.value.kind !== "array" &&
+				!this.#containsHandle(mapped.value)
+			) {
 				fields.push({
 					name: field.name,
 					type: field.integerType ?? field.type,
@@ -967,6 +1100,18 @@ class Planner {
 	 * A callback parameter: C passes each argument to the JavaScript function as it
 	 * would a result, except handles, which the library keeps owning.
 	 */
+	#containsHandle(value: JsValue): boolean {
+		if (value.kind === "handle") return true;
+		if (value.kind === "array" || value.kind === "sequence" || value.kind === "union")
+			return this.#containsHandle(value.of);
+		return (
+			value.kind === "record" &&
+			this.records
+				.get(value.name)!
+				.fields.some((field) => this.#containsHandle(field.value))
+		);
+	}
+
 	#callback(
 		type: CType,
 		nullable: boolean,
@@ -1040,7 +1185,7 @@ class Planner {
 				);
 			}
 			const unsupported = Object.keys(stated).filter(
-				(name) => !["string", "bytes", "array", "nullable"].includes(name),
+				(name) => !["string", "bytes", "array", "nullable", "shape"].includes(name),
 			);
 			if (unsupported.length > 0) {
 				throw new FfiError(
@@ -1107,6 +1252,18 @@ class Planner {
 				? undefined
 				: this.#lookup(target, callback.lookup, `${at}.callback.lookup`);
 		if (queued) {
+			if (
+				callback.queued !== "wait" &&
+				params.some(
+					(param) =>
+						typeof param === "object" &&
+						this.#containsHandle(param) &&
+						!(callback.closes !== undefined && param.kind === "handle"),
+				)
+			)
+				throw new FfiError(
+					`${at}.callback.queued: resource-bearing values require a waiting callback`,
+				);
 			// A queued call outlives the C caller's arguments, so it gets copies of values.
 			const copyable = params.every(
 				(param) =>
@@ -1119,6 +1276,7 @@ class Planner {
 						"string",
 						"bytes",
 						"record",
+						"union",
 						...(callback.closes !== undefined || callback.queued === "wait"
 							? ["handle"]
 							: []),
@@ -1140,6 +1298,10 @@ class Planner {
 		if (returned.kind !== "void") {
 			const mapped = this.value(target.returns, "param", resultFacts);
 			if ("gap" in mapped) return { gap: `callback result: ${mapped.gap}` };
+			if (mapped.value.kind !== "handle" && this.#containsHandle(mapped.value))
+				return {
+					gap: "compound callback results containing handles require a pointer result interface",
+				};
 			if (mapped.value.kind === "handle") {
 				if (mapped.value.pass !== "pointer")
 					return { gap: "a callback handle result needs a pointer representation" };
@@ -1148,12 +1310,12 @@ class Planner {
 				(mapped.value.kind === "string" ||
 					mapped.value.kind === "bytes" ||
 					mapped.value.kind === "handle") &&
-				resultFacts === undefined
+				resultFacts?.lifetime === undefined
 			) {
 				return { gap: "a callback that returns a pointer needs a lifetime fact" };
 			}
 			if (
-				resultFacts !== undefined &&
+				resultFacts?.lifetime !== undefined &&
 				mapped.value.kind !== "string" &&
 				mapped.value.kind !== "bytes" &&
 				mapped.value.kind !== "handle"
@@ -1169,7 +1331,9 @@ class Planner {
 				params,
 				counts,
 				returns,
-				...(resultFacts === undefined ? {} : { returnLifetime: resultFacts.lifetime }),
+				...(resultFacts?.lifetime === undefined
+					? {}
+					: { returnLifetime: resultFacts.lifetime }),
 				...(resultCount === undefined ? {} : { resultCount }),
 				nullable,
 				kept,
@@ -1696,7 +1860,7 @@ class Planner {
 					resolved.to,
 					"param",
 					valueFacts.string === undefined
-						? NO_FACTS
+						? { ...(valueFacts.shape === undefined ? {} : { shape: valueFacts.shape }) }
 						: {
 								string: valueFacts.string,
 								nullable: valueFacts.nullable,
@@ -1867,7 +2031,7 @@ export function planBindings(
 	for (const handle of handleMap.values()) {
 		if (handle.destroy !== undefined) closers.set(handle.destroy.name, 0);
 	}
-	const planner = new Planner(model, handleMap);
+	const planner = new Planner(model, handleMap, facts);
 	const functions: Array<BoundFunction> = [];
 	const unbound: Array<UnboundFunction> = [];
 	const declared = new Set(model.functions.map((declaration) => declaration.name));
@@ -2031,6 +2195,7 @@ export function planBindings(
 		),
 		unbound,
 		records: planner.records,
+		unions: planner.unions,
 		handles,
 		constants,
 		skippedConstants,

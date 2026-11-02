@@ -91,6 +91,28 @@ Conversions never coerce. A value of the wrong type throws a `TypeError`, and a 
 
 A function is exported only when every parameter and its result map. Functions that take or return other pointers, callbacks, or variadic arguments are not exported until the contract describes them.
 
+## Select a union value
+
+A union needs a `shape` fact identifying its active member. Its JavaScript value is
+that member's value: selecting an integer produces a number, while selecting a struct
+produces an object. Other members stay hidden.
+
+```typescript
+types: { Scalar: { shape: { member: "integer" } } },
+functions: {
+  read_real: { returns: { shape: { member: "real" } } },
+}
+```
+
+The type fact sets the default. A parameter or result can override it; on counted
+arrays, the shape selects each element's union member. Callback parameters and results
+accept the same shape fact. A value result needs no pointer lifetime.
+
+Handles nested in callback arguments are loans that close when the callback returns.
+Resource-bearing values require waiting callbacks when C calls from another thread.
+Compound callback results containing handles need a pointer result interface with an
+explicit lifetime. Resource-bearing fields stay behind their owning handle.
+
 ## Describe resources
 
 A pointer the library allocates, or a struct that owns memory, needs to be released. Give its type a `handle` fact that names the function that releases it:

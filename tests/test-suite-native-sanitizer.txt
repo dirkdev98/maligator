@@ -10,6 +10,7 @@
 tests/native/ffi-caller-storage.test.ts
 tests/native/ffi-bit-fields.test.ts
 tests/native/ffi-record-shapes.test.ts
+tests/native/ffi-union-values.test.ts
 tests/native/ffi-handle-views.test.ts
 tests/native/ffi-managed-state.test.ts
 tests/native/ffi-worker-destroy.test.ts

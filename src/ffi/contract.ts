@@ -160,9 +160,23 @@ function validateEvidence(value: unknown, at: string): void {
 	});
 }
 
+function validateShape(value: unknown, at: string): void {
+	expectObject(value, at);
+	expectKeys(value, at, ["member"]);
+	expect(
+		typeof value.member === "string" && C_NAME.test(value.member),
+		`${at}.member`,
+		"a C union member name",
+	);
+}
+
 function validateTypeFacts(value: unknown, at: string): void {
 	expectObject(value, at);
-	expectKeys(value, at, ["handle", "fields", "evidence"]);
+	expectKeys(value, at, ["handle", "shape", "fields", "evidence"]);
+	if (value.shape !== undefined) {
+		validateShape(value.shape, `${at}.shape`);
+		expect(value.handle === undefined, at, "a value shape or a handle");
+	}
 	if (value.evidence !== undefined) validateEvidence(value.evidence, `${at}.evidence`);
 	if (value.fields !== undefined) {
 		expectObject(value.fields, `${at}.fields`);
@@ -255,6 +269,7 @@ function validateCount(value: unknown, at: string): void {
 function validateValueFacts(value: unknown, at: string): void {
 	expectObject(value, at);
 	expectKeys(value, at, [
+		"shape",
 		"nullable",
 		"borrowed",
 		"fresh",
@@ -268,6 +283,7 @@ function validateValueFacts(value: unknown, at: string): void {
 		"constant",
 		"sizeof",
 	]);
+	if (value.shape !== undefined) validateShape(value.shape, `${at}.shape`);
 	for (const key of ["nullable", "borrowed", "fresh", "out", "inout"]) {
 		booleanField(value, key, at);
 	}
@@ -300,16 +316,23 @@ function validateValueFacts(value: unknown, at: string): void {
 			const result = callback.returns;
 			expectObject(result, `${at}.callback.returns`);
 			expectKeys(result, `${at}.callback.returns`, [
+				"shape",
 				"string",
 				"bytes",
 				"nullable",
 				"lifetime",
 			]);
+			if (result.shape !== undefined)
+				expectKeys(result, `${at}.callback.returns`, ["shape"]);
 			const { lifetime, ...facts } = result;
 			expect(
-				lifetime === "call" || lifetime === "registration",
+				result.shape !== undefined
+					? lifetime === undefined
+					: lifetime === "call" || lifetime === "registration",
 				`${at}.callback.returns.lifetime`,
-				"'call' or 'registration'",
+				result.shape !== undefined
+					? "absent for a value shape"
+					: "'call' or 'registration'",
 			);
 			validateValueFacts(facts, `${at}.callback.returns`);
 		}
