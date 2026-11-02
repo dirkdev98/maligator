@@ -94,6 +94,9 @@ export interface CEnum {
 export interface CTypedef {
 	readonly name: string;
 	readonly type: CType;
+	readonly attributes?: ReadonlyArray<string>;
+	/** Effective target alignment for an alias with an alignment attribute. */
+	readonly alignmentBits?: number;
 	readonly doc?: FfiText;
 	readonly location: CLocation;
 	readonly library: boolean;

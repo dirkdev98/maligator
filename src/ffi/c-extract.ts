@@ -857,6 +857,7 @@ function collectDeclarations(
 			typedefs.set(node.name, {
 				name: node.name,
 				type: nodeType(node),
+				attributes: attributeKinds(node),
 				...(doc === undefined ? {} : { doc }),
 				location: { file: span.location.file, line: span.location.line },
 				library,
@@ -1577,19 +1578,20 @@ function probeDeclarationTypes(
 	return { ...declarations, functions, globals, records };
 }
 
-/** Clang omits non-fixed enum compatible types; query them without evaluating fields. */
-function probeIntegerTypes(
+/** Clang's JSON omits compatible enum types and effective typedef alignment. */
+function probeTypeMetadata(
 	input: CExtractionInput,
 	headers: CHeaders,
 	declarations: ReturnType<typeof collectDeclarations>,
 	target: CTarget,
-): Pick<CModel, "records" | "enums"> {
+): Pick<CModel, "records" | "enums" | "typedefs"> {
 	const names = C_INTEGER_NAMES.filter((name) => target.sizes[name] !== undefined);
 	const queries: Array<{
 		expression: string;
 		record?: string;
 		field?: number;
 		enumeration?: string;
+		alignment?: string;
 	}> = [];
 	const accesses = cRecordAccesses(declarations);
 	for (const record of declarations.records.values()) {
@@ -1618,15 +1620,23 @@ function probeIntegerTypes(
 			enumeration: enumeration.name,
 		});
 	}
+	for (const alias of declarations.typedefs.values()) {
+		if (alias.attributes?.includes("Aligned") !== true) continue;
+		queries.push({
+			expression: `_Alignof(${alias.name}) * __CHAR_BIT__`,
+			alignment: alias.name,
+		});
+	}
 	if (queries.length === 0) return declarations;
 	const source = path.join(headers.directory, "probe-integer-types.c");
 	writeFileSync(
 		source,
 		[
 			...input.headers.map((header) => `#include "${header}"`),
-			...queries.map(
-				(query, index) =>
-					`enum : int { __mal_integer_type_${index} = _Generic((${query.expression}), ${names.map((name, type) => `${name}: ${type}`).join(", ")}, default: -1) };`,
+			...queries.map((query, index) =>
+				query.alignment === undefined
+					? `enum : int { __mal_integer_type_${index} = _Generic((${query.expression}), ${names.map((name, type) => `${name}: ${type}`).join(", ")}, default: -1) };`
+					: `enum : unsigned long long { __mal_integer_type_${index} = ${query.expression} };`,
 			),
 		].join("\n"),
 	);
@@ -1651,9 +1661,18 @@ function probeIntegerTypes(
 			values.set(node.name, value);
 	}
 	const records = new Map(declarations.records),
-		enums = new Map(declarations.enums);
+		enums = new Map(declarations.enums),
+		typedefs = new Map(declarations.typedefs);
 	queries.forEach((query, index) => {
 		const value = values.get(`__mal_integer_type_${index}`);
+		if (query.alignment !== undefined) {
+			if (value !== undefined && value > 0n && value <= BigInt(Number.MAX_SAFE_INTEGER))
+				typedefs.set(query.alignment, {
+					...typedefs.get(query.alignment)!,
+					alignmentBits: Number(value),
+				});
+			return;
+		}
 		const name = value === undefined ? undefined : names[Number(value)];
 		if (name === undefined) return;
 		if (query.enumeration !== undefined)
@@ -1676,7 +1695,7 @@ function probeIntegerTypes(
 			});
 		}
 	});
-	return { records, enums };
+	return { records, enums, typedefs };
 }
 
 export function extractCModelFromHeaders(
@@ -1740,7 +1759,7 @@ export function extractCModelFromHeaders(
 	);
 
 	const probes = probe(input, headers.valueProbe, headers.candidates);
-	const integerTypes = probeIntegerTypes(input, headers, declarations, probes.target);
+	const nativeTypes = probeTypeMetadata(input, headers, declarations, probes.target);
 
 	const base = {
 		target: probes.target,
@@ -1756,9 +1775,9 @@ export function extractCModelFromHeaders(
 		globals: declarations.globals.sort((left, right) =>
 			left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
 		),
-		records: integerTypes.records,
-		enums: integerTypes.enums,
-		typedefs: declarations.typedefs,
+		records: nativeTypes.records,
+		enums: nativeTypes.enums,
+		typedefs: nativeTypes.typedefs,
 	};
 	const sources = new SourceTexts();
 	const macros: Array<CMacro> = [];

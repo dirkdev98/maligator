@@ -190,7 +190,21 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 				if (!(key in declarations)) {
 					declarations[key] = null;
 					const entry = model.typedefs.get(value.name);
-					declarations[key] = entry === undefined ? null : type(entry.type, key);
+					if (
+						entry?.attributes?.includes("Aligned") === true &&
+						entry.alignmentBits === undefined
+					)
+						throw new FfiError(
+							`cannot snapshot ${key}: Clang did not identify its effective alignment`,
+						);
+					declarations[key] =
+						entry === undefined
+							? null
+							: json({
+									type: type(entry.type, key),
+									attributes: entry.attributes,
+									alignmentBits: entry.alignmentBits,
+								});
 				}
 				return json(value);
 			}

@@ -705,6 +705,9 @@ attributes. Packing and alignment changes require review even when the generated
 JavaScript types stay the same. Layout values in JSON use bits so bit-fields retain
 their exact offsets. A reachable complete record without an identifiable layout
 cannot be accepted.
+Typedef snapshots also retain declaration attributes. Aliases with alignment
+attributes record their effective target alignment, which can differ from the
+alignment of the underlying record.
 
 Ownership rules can change while the C signature stays the same. Cite the header
 documentation that supports a type or function fact so the check watches its text:

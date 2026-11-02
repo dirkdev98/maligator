@@ -85,6 +85,25 @@ afterEach(() => {
 });
 
 describe("ffi check", () => {
+	it("detects typedef alignment changes while the underlying record and SDK stay unchanged", () => {
+		const directory = project();
+		const file = path.join(directory, "include/shapes.h");
+		const declarations = `${header}\ntypedef struct ShapesAliased { int values[16]; } ShapesAligned __attribute__((aligned(16)));\nShapesAligned shapes_aligned(ShapesAligned value);\n`;
+		writeFileSync(file, declarations);
+		accept(directory);
+		expect(cli(directory, ["types"]).status).toBe(0);
+		const types = readFileSync(path.join(directory, "maligator-ffi.d.ts"), "utf8");
+		writeFileSync(file, declarations.replace("aligned(16)", "aligned(32)"));
+		expect(cli(directory, ["types"]).status).toBe(0);
+		expect(readFileSync(path.join(directory, "maligator-ffi.d.ts"), "utf8")).toBe(types);
+		expect(check(directory, [], 1).libraries[0]?.changes).toContainEqual({
+			path: "declarations.typedef ShapesAligned.alignmentBits",
+			kind: "changed",
+			before: 128,
+			after: 256,
+		});
+	});
+
 	it.each([
 		{
 			name: "packing",
@@ -420,7 +439,7 @@ struct ShapesAbi shapes_layout(struct ShapesAbi value);
 		);
 		const report = check(directory, [], 1);
 		expect(report.libraries[0]?.changes).toContainEqual({
-			path: "declarations.typedef ShapesIndex.name",
+			path: "declarations.typedef ShapesIndex.type.name",
 			kind: "changed",
 			before: "unsigned short",
 			after: "unsigned int",

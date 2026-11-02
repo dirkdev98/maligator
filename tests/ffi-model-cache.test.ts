@@ -63,6 +63,32 @@ afterEach(() => {
 });
 
 describe("preprocessed C model cache", () => {
+	it("retains effective typedef alignment separately from canonical record layout", () => {
+		const directory = project();
+		const header = path.join(directory, "cache.h");
+		const declarations = `
+typedef int ScalarAligned __attribute__((aligned(64)));
+typedef struct Plain { int values[16]; } RecordAligned __attribute__((aligned(32)));
+typedef int NativeAligned __attribute__((aligned));
+typedef union AbiAlias { int *integer; void *pointer; } AbiAlias __attribute__((transparent_union));
+`;
+		writeFileSync(header, declarations);
+		const request = input(directory);
+		for (let hit = 0; hit < 2; hit++) {
+			const model = loadCModel(request);
+			expect(model.typedefs.get("ScalarAligned")).toMatchObject({
+				attributes: ["Aligned"],
+				alignmentBits: 512,
+			});
+			expect(model.typedefs.get("RecordAligned")?.alignmentBits).toBe(256);
+			expect(model.records.get("Plain")?.layout?.alignmentBits).toBe(32);
+			expect(model.typedefs.get("NativeAligned")?.alignmentBits).toBeGreaterThan(0);
+			expect(model.records.get("AbiAlias")?.attributes).toContain("TransparentUnion");
+		}
+		writeFileSync(header, declarations.replace("aligned(64)", "aligned(128)"));
+		expect(loadCModel(request).typedefs.get("ScalarAligned")?.alignmentBits).toBe(1024);
+	});
+
 	it("retains native layouts for packed, anonymous, and bit-field records", () => {
 		const directory = project();
 		writeFileSync(
