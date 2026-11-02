@@ -204,11 +204,11 @@ static inline bool mal_ffi_to_integer(
     }
     return mal_ffi_number_to_integer(vm, value, bits, is_signed, site, out);
 }
-/** A 64-bit integer, given as a BigInt. */
+/** An integer of `bits` width (1 through 64), given as a BigInt. */
 bool mal_ffi_to_int64(
-    MalVm *vm, MalValue value, const MalFfiSite *site, int64_t *out);
+    MalVm *vm, MalValue value, int32_t bits, const MalFfiSite *site, int64_t *out);
 bool mal_ffi_to_uint64(
-    MalVm *vm, MalValue value, const MalFfiSite *site, uint64_t *out);
+    MalVm *vm, MalValue value, int32_t bits, const MalFfiSite *site, uint64_t *out);
 static inline bool mal_ffi_to_number(
     MalVm *vm, MalValue value, const MalFfiSite *site, double *out) {
     if (value < MAL_FFI_VALUE_TAG_BASE) {

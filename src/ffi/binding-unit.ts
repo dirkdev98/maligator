@@ -368,7 +368,7 @@ class BindingWriter {
 				const width = value.signed ? "int64" : "uint64";
 				return [
 					`${width}_t ${temporary};`,
-					`if (!mal_ffi_to_${width}(vm, ${source}, ${site}, &${temporary})) ${fail}`,
+					`if (!mal_ffi_to_${width}(vm, ${source}, ${value.bits}, ${site}, &${temporary})) ${fail}`,
 					`${target} = ${cast(temporary)};`,
 				];
 			}

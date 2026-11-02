@@ -75,11 +75,14 @@ maligator ffi types
 
 Conversions never coerce. A value of the wrong type throws a `TypeError`, and a number that is not an integer or does not fit throws a `RangeError`. Both name the C function and parameter.
 
-- Integers up to 32 bits are numbers. 64-bit integers are bigints.
-- `float` and `double` are numbers, `bool` is a boolean, and enums are numbers.
+- Integers up to 32 bits are numbers. Wider integers through 64 bits are bigints.
+- `float` and `double` are numbers, `bool` is a boolean, and enums use their
+  compiler-compatible integer type.
 - A `const char *` parameter takes a string, passed as UTF-8 for the duration of the call. A string with a NUL character throws.
 - A `const char *` result is copied into a string. `NULL` becomes `null`.
 - A struct whose fields are all values passes as a plain object, copied in each direction.
+- Named bit-fields use their declared widths for range checks. Padding fields stay hidden;
+  the C compiler owns layout and packing.
 - Enum members and macros are constants when their type maps, including struct literals such as raylib's `RAYWHITE`.
 
 A function is exported only when every parameter and its result map. Functions that take or return other pointers, callbacks, or variadic arguments are not exported until the contract describes them.

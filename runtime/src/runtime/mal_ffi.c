@@ -103,26 +103,28 @@ static bool ffi_bigint(
 }
 
 bool mal_ffi_to_int64(
-    MalVm *vm, MalValue value, const MalFfiSite *site, int64_t *out) {
+    MalVm *vm, MalValue value, int32_t bits, const MalFfiSite *site, int64_t *out) {
     i128 integer;
     if (!ffi_bigint(vm, value, site, &integer)) return false;
-    if (integer < (i128) INT64_MIN || integer > (i128) INT64_MAX) {
-        return ffi_fail(
+    i128 minimum = -((i128) 1 << (bits - 1));
+    i128 maximum = ((i128) 1 << (bits - 1)) - 1;
+    if (integer < minimum || integer > maximum) {
+        return ffi_failf(
             vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site,
-            "a bigint in the signed 64-bit range");
+            "a bigint in the signed %d-bit range", bits);
     }
     *out = (i64) integer;
     return true;
 }
 
 bool mal_ffi_to_uint64(
-    MalVm *vm, MalValue value, const MalFfiSite *site, uint64_t *out) {
+    MalVm *vm, MalValue value, int32_t bits, const MalFfiSite *site, uint64_t *out) {
     i128 integer;
     if (!ffi_bigint(vm, value, site, &integer)) return false;
-    if (integer < 0 || integer > (i128) UINT64_MAX) {
-        return ffi_fail(
+    if (integer < 0 || integer >= ((i128) 1 << bits)) {
+        return ffi_failf(
             vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site,
-            "a bigint in the unsigned 64-bit range");
+            "a bigint in the unsigned %d-bit range", bits);
     }
     *out = (u64) integer;
     return true;

@@ -201,6 +201,7 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 									fields: entry.fields.map((field, index) => ({
 										name: field.name,
 										bitWidth: field.bitWidth,
+										integerType: field.integerType,
 										type: type(field.type, `${key}.${field.name ?? `field${index + 1}`}`),
 									})),
 								});

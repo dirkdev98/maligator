@@ -36,6 +36,8 @@ export interface CField {
 	readonly name?: string;
 	readonly type: CType;
 	readonly bitWidth?: number;
+	/** Compatible C type for a bit-field or enum field. */
+	readonly integerType?: Extract<CType, { kind: "integer" }>;
 	readonly doc?: FfiText;
 }
 

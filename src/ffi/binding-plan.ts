@@ -5,7 +5,7 @@ import type {
 	MaligatorFfiValueFacts,
 	MaligatorFfiVariant,
 } from "../public-api.d.ts";
-import type { CFunction, CModel, CRecord } from "./c-model.ts";
+import type { CField, CFunction, CModel, CRecord } from "./c-model.ts";
 import { resolveCType } from "./c-model.ts";
 import { formatCDeclaration, parseCType } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
@@ -23,7 +23,7 @@ export type JsValue =
 	/** An exact integer of at most 32 bits; other numbers throw on input. */
 	| { readonly kind: "integer"; readonly bits: number; readonly signed: boolean }
 	| { readonly kind: "float"; readonly bits: number }
-	/** A 64-bit integer, exact in both directions. */
+	/** An integer wider than 32 bits, exact in both directions. */
 	| { readonly kind: "bigint"; readonly bits: number; readonly signed: boolean }
 	/**
 	 * UTF-8, terminated or byte-counted. Inputs are borrowed for the call; results are copied,
@@ -188,6 +188,7 @@ export interface MappedField {
 	readonly name: string;
 	readonly type: CType;
 	readonly value: JsValue;
+	readonly bitWidth?: number;
 	readonly doc?: FfiText;
 }
 
@@ -764,6 +765,26 @@ class Planner {
 			: { value: { kind: "array", of: mapped.value, length: type.length } };
 	}
 
+	#field(field: CField): Mapping {
+		if (field.bitWidth === undefined)
+			return this.value(field.integerType ?? field.type, "field");
+		if (resolveCType(this.#model, field.type).kind === "bool" && field.bitWidth === 1)
+			return { value: { kind: "boolean" } };
+		if (field.integerType === undefined)
+			return { gap: "cannot determine the bit-field's integer type" };
+		if (field.bitWidth > 64)
+			return { gap: "bit-fields wider than 64 bits have no JavaScript mapping" };
+		const name = field.integerType.name;
+		return {
+			value: {
+				kind: field.bitWidth <= 32 ? "integer" : "bigint",
+				bits: field.bitWidth,
+				signed:
+					name === "char" ? this.#model.target.charSigned : !name.startsWith("unsigned"),
+			},
+		};
+	}
+
 	#record(name: string, tag: "struct" | "union"): Mapping {
 		const known = this.records.get(name);
 		if (known !== undefined) return { value: { kind: "record", name } };
@@ -783,10 +804,9 @@ class Planner {
 		const fields: Array<MappedField> = [];
 		try {
 			for (const field of record.fields) {
+				if (field.name === undefined && field.bitWidth !== undefined) continue;
 				if (field.name === undefined) return gap("anonymous members need a fact");
-				if (field.bitWidth !== undefined)
-					return gap(`bit-field '${field.name}' needs a fact`);
-				const mapped = this.value(field.type, "field");
+				const mapped = this.#field(field);
 				if ("gap" in mapped) {
 					// A struct that holds a pointer owns or borrows memory, so it crosses as a handle.
 					return resolveCType(this.#model, field.type).kind === "pointer"
@@ -802,8 +822,9 @@ class Planner {
 				}
 				fields.push({
 					name: field.name,
-					type: field.type,
+					type: field.integerType ?? field.type,
 					value: mapped.value,
+					...(field.bitWidth === undefined ? {} : { bitWidth: field.bitWidth }),
 					...(field.doc === undefined ? {} : { doc: field.doc }),
 				});
 			}
@@ -826,19 +847,16 @@ class Planner {
 	): Array<MappedField> {
 		const fields: Array<MappedField> = [];
 		for (const field of record.fields) {
-			if (
-				field.name === undefined ||
-				field.bitWidth !== undefined ||
-				managed.some((entry) => entry.name === field.name)
-			)
+			if (field.name === undefined || managed.some((entry) => entry.name === field.name))
 				continue;
-			const mapped = this.value(field.type, "field");
+			const mapped = this.#field(field);
 			// Accessors return single values; array fields stay behind the handle.
 			if ("value" in mapped && mapped.value.kind !== "array") {
 				fields.push({
 					name: field.name,
-					type: field.type,
+					type: field.integerType ?? field.type,
 					value: mapped.value,
+					...(field.bitWidth === undefined ? {} : { bitWidth: field.bitWidth }),
 					...(field.doc === undefined ? {} : { doc: field.doc }),
 				});
 			}

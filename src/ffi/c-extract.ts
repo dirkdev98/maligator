@@ -645,6 +645,11 @@ function collectDeclarations(
 				if (childKey !== undefined) registerRecord(child, childKey);
 				continue;
 			}
+			if (child.kind === "EnumDecl") {
+				const childKey = recordKey(child);
+				if (childKey !== undefined) registerEnum(child, childKey);
+				continue;
+			}
 			if (child.kind !== "FieldDecl") continue;
 			const fieldSpan = spanOf(child, cwd);
 			const bitWidth = child.isBitfield === true ? constantValue(child) : undefined;
@@ -1358,6 +1363,111 @@ export function withCHeaders<Result>(
 	}
 }
 
+/** Clang omits non-fixed enum compatible types; query them without evaluating fields. */
+function probeIntegerTypes(
+	input: CExtractionInput,
+	headers: CHeaders,
+	declarations: ReturnType<typeof collectDeclarations>,
+	target: CTarget,
+): Pick<CModel, "records" | "enums"> {
+	const names = C_INTEGER_NAMES.filter((name) => target.sizes[name] !== undefined);
+	const queries: Array<{
+		expression: string;
+		record?: string;
+		field?: number;
+		enumeration?: string;
+	}> = [];
+	for (const record of declarations.records.values()) {
+		if (
+			!/^[A-Za-z_]\w*$/.test(record.name) ||
+			(!record.named && !declarations.typedefs.has(record.name))
+		)
+			continue;
+		const spelling = record.named ? `${record.tag} ${record.name}` : record.name;
+		record.fields.forEach((field, index) => {
+			if (
+				field.name !== undefined &&
+				(field.bitWidth !== undefined || field.type.kind === "enum")
+			)
+				queries.push({
+					expression: `((${spelling} *)0)->${field.name}`,
+					record: record.name,
+					field: index,
+				});
+		});
+	}
+	for (const enumeration of declarations.enums.values()) {
+		if (
+			!/^[A-Za-z_]\w*$/.test(enumeration.name) ||
+			(!enumeration.named && !declarations.typedefs.has(enumeration.name))
+		)
+			continue;
+		queries.push({
+			expression: `(${enumeration.named ? `enum ${enumeration.name}` : enumeration.name})0`,
+			enumeration: enumeration.name,
+		});
+	}
+	if (queries.length === 0) return declarations;
+	const source = path.join(headers.directory, "probe-integer-types.c");
+	writeFileSync(
+		source,
+		[
+			...input.headers.map((header) => `#include "${header}"`),
+			...queries.map(
+				(query, index) =>
+					`enum : int { __mal_integer_type_${index} = _Generic((${query.expression}), ${names.map((name, type) => `${name}: ${type}`).join(", ")}, default: -1) };`,
+			),
+		].join("\n"),
+	);
+	const dump = runCompiler(input, [
+		FFI_C_STANDARD,
+		"-fsyntax-only",
+		"-ferror-limit=0",
+		"-Xclang",
+		"-ast-dump=json",
+		"-Xclang",
+		"-ast-dump-filter=__mal_integer_type_",
+		...input.compileArguments,
+		"-w",
+		"-x",
+		"c",
+		source,
+	]);
+	const values = new Map<string, bigint>();
+	for (const node of clangProbeDeclarations(dump.stdout)) {
+		const value = constantValue(node);
+		if (typeof node.name === "string" && value !== undefined)
+			values.set(node.name, value);
+	}
+	const records = new Map(declarations.records),
+		enums = new Map(declarations.enums);
+	queries.forEach((query, index) => {
+		const value = values.get(`__mal_integer_type_${index}`);
+		const name = value === undefined ? undefined : names[Number(value)];
+		if (name === undefined) return;
+		if (query.enumeration !== undefined)
+			enums.set(query.enumeration, {
+				...enums.get(query.enumeration)!,
+				underlying: { kind: "integer", name },
+			});
+		else if (query.record !== undefined && query.field !== undefined) {
+			const record = records.get(query.record)!;
+			records.set(query.record, {
+				...record,
+				fields: record.fields.map((field, fieldIndex) =>
+					fieldIndex === query.field
+						? {
+								...field,
+								integerType: { kind: "integer" as const, name },
+							}
+						: field,
+				),
+			});
+		}
+	});
+	return { records, enums };
+}
+
 export function extractCModelFromHeaders(
 	input: CExtractionInput,
 	headers: CHeaders,
@@ -1397,6 +1507,7 @@ export function extractCModelFromHeaders(
 	const declarations = collectDeclarations(nodes, cwd, isLibraryFile);
 
 	const probes = probe(input, headers.valueProbe, headers.candidates);
+	const integerTypes = probeIntegerTypes(input, headers, declarations, probes.target);
 
 	const base = {
 		target: probes.target,
@@ -1409,8 +1520,8 @@ export function extractCModelFromHeaders(
 		functions: declarations.functions.sort((left, right) =>
 			left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
 		),
-		records: declarations.records,
-		enums: declarations.enums,
+		records: integerTypes.records,
+		enums: integerTypes.enums,
 		typedefs: declarations.typedefs,
 	};
 	const sources = new SourceTexts();

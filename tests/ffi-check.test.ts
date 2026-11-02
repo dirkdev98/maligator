@@ -85,6 +85,27 @@ afterEach(() => {
 });
 
 describe("ffi check", () => {
+	it("detects a bit-field width change when its TypeScript type stays the same", () => {
+		const directory = project();
+		const file = path.join(directory, "include/shapes.h");
+		const declarations = `${header}\ntypedef struct ShapesBits { unsigned value:3; } ShapesBits;\nShapesBits shapes_bits(ShapesBits value);\n`;
+		writeFileSync(file, declarations);
+		accept(directory);
+		expect(cli(directory, ["types"]).status).toBe(0);
+		const types = readFileSync(path.join(directory, "maligator-ffi.d.ts"), "utf8");
+		writeFileSync(file, declarations.replace("value:3", "value:4"));
+		expect(cli(directory, ["types"]).status).toBe(0);
+		expect(readFileSync(path.join(directory, "maligator-ffi.d.ts"), "utf8")).toBe(types);
+		expect(
+			check(directory, [], 1).libraries[0]?.changes.find(
+				(change) => change.path === "declarations.struct ShapesBits.fields",
+			),
+		).toMatchObject({
+			kind: "changed",
+			before: [{ bitWidth: 3 }],
+			after: [{ bitWidth: 4 }],
+		});
+	});
 	it("watches pointer-valued macros reached through fixed argument aliases", () => {
 		const directory = project();
 		const headerPath = path.join(directory, "include/shapes.h");

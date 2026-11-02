@@ -372,7 +372,7 @@ export function inspectBindings(
 			...(entry.record.doc === undefined ? {} : { doc: entry.record.doc }),
 			fields: entry.fields.map((field) => ({
 				name: field.name,
-				c: formatCDeclaration(field.type),
+				c: `${formatCDeclaration(field.type)}${field.bitWidth === undefined ? "" : ` : ${field.bitWidth}`}`,
 				ts: formatTsType(field.value),
 				...(field.doc === undefined ? {} : { doc: field.doc }),
 			})),
@@ -435,7 +435,7 @@ export function inspectBindings(
 			fields: [
 				...handle.fields.map((field) => ({
 					name: field.name,
-					c: formatCDeclaration(field.type),
+					c: `${formatCDeclaration(field.type)}${field.bitWidth === undefined ? "" : ` : ${field.bitWidth}`}`,
 					ts: formatTsType(field.value),
 				})),
 				...handle.managedFields.map((field) => ({
