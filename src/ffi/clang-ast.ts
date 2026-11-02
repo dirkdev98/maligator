@@ -62,6 +62,43 @@ function valueEnd(data: Buffer, offset: number): number {
 }
 
 function parse(data: Buffer, start: number, end: number): unknown {
+	if (end - start > 256 * 1024 && (data[start] === 123 || data[start] === 91)) {
+		const object = data[start] === 123;
+		const close = object ? 125 : 93;
+		const result: JsonObject | Array<unknown> = object ? {} : [];
+		let offset = whitespace(data, start + 1);
+		if (data[offset] !== close) {
+			for (;;) {
+				let key: string | undefined;
+				if (object) {
+					if (data[offset] !== 34) return malformed(offset);
+					const keyEnd = stringEnd(data, offset);
+					const name = parse(data, offset, keyEnd);
+					if (typeof name !== "string") return malformed(offset);
+					key = name;
+					offset = whitespace(data, keyEnd);
+					if (data[offset] !== 58) return malformed(offset);
+					offset = whitespace(data, offset + 1);
+				}
+				const next = valueEnd(data, offset);
+				const value = parse(data, offset, next);
+				if (Array.isArray(result)) result.push(value);
+				else
+					Object.defineProperty(result, key!, {
+						value,
+						enumerable: true,
+						configurable: true,
+						writable: true,
+					});
+				offset = whitespace(data, next);
+				if (data[offset] === close) break;
+				if (data[offset] !== 44) return malformed(offset);
+				offset = whitespace(data, offset + 1);
+			}
+		}
+		if (offset + 1 !== end) return malformed(offset);
+		return result;
+	}
 	try {
 		return JSON.parse(data.toString("utf8", start, end));
 	} catch (error) {
@@ -78,7 +115,7 @@ function declaration(data: Buffer, start: number, end: number): JsonObject {
 	return value as JsonObject;
 }
 
-/** Decode declarations separately so an aggregate AST never becomes one engine string. */
+/** Decode containers separately so an aggregate AST never becomes one engine string. */
 export function visitClangDeclarations(
 	data: Buffer,
 	visit: (node: JsonObject) => void,

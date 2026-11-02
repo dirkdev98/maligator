@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { hash } from "node:crypto";
 import {
 	chmodSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
@@ -13,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { visitClangDeclarations } from "../../src/ffi/clang-ast.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
@@ -21,17 +23,13 @@ import {
 import { resolvePathExecutable } from "../../src/toolchain.ts";
 
 describe("large C headers", () => {
-	it("extracts declarations when clang's aggregate AST exceeds the native string limit", () => {
+	it("extracts declarations after an individual clang declaration exceeds the native string limit", () => {
 		const directory = mkdtempSync(join(tmpdir(), "mal-ffi-large-header-"));
 		try {
-			const body = "value += 1; ".repeat(32);
+			const body = "value += 1; ".repeat(16_384);
 			writeFileSync(
 				join(directory, "auxiliary.h"),
-				Array.from(
-					{ length: 256 },
-					(_, index) =>
-						`static inline int auxiliary_${index}(int value) { ${body}return value; }`,
-				).join("\n"),
+				`static inline int auxiliary(int value) { ${body}return value; }`,
 			);
 			writeFileSync(
 				join(directory, "large.h"),
@@ -62,6 +60,14 @@ describe("large C headers", () => {
 			);
 			expect(dump.status, dump.stderr.toString()).toBe(0);
 			expect(dump.stdout.byteLength).toBeGreaterThan(16 * 1024 * 1024);
+			let largestDeclaration = 0;
+			visitClangDeclarations(dump.stdout, (node) => {
+				largestDeclaration = Math.max(
+					largestDeclaration,
+					Buffer.byteLength(JSON.stringify(node)),
+				);
+			});
+			expect(largestDeclaration).toBeGreaterThan(16 * 1024 * 1024);
 			const fixture = "tests/fixtures/ffi-extract-native/main.ts";
 			const env = { MAL_FFI_HEADER_DIR: directory, MAL_FFI_COMPILER: compiler };
 			const expected = execFileSync(process.execPath, [fixture], {
@@ -105,6 +111,8 @@ describe("large C headers", () => {
 	it("preserves large documentation on extraction and cache hits", () => {
 		const directory = mkdtempSync(join(tmpdir(), "mal-ffi-large-model-"));
 		try {
+			const include = join(directory, "include");
+			mkdirSync(include);
 			const prose = "The caller owns this fictional resource. Grüße🙂".padEnd(1024, ".");
 			const documentation = Array.from(
 				{ length: 64 },
@@ -124,7 +132,7 @@ describe("large C headers", () => {
 				"#define LARGE_BIG 0x100000000ULL",
 				...declarations.map((name) => `${comment}\nint ${name}(int value);`),
 			].join("\n");
-			const headerPath = join(directory, "large.h");
+			const headerPath = join(include, "large.h");
 			writeFileSync(headerPath, header);
 			expect(statSync(headerPath).size).toBeGreaterThan(16 * 1024 * 1024);
 			const compiler = resolvePathExecutable(process.env.CC ?? "cc");
@@ -138,7 +146,7 @@ describe("large C headers", () => {
 			chmodSync(wrapper, 0o755);
 			const fixture = "tests/fixtures/ffi-extract-native/main.ts";
 			const env = {
-				MAL_FFI_HEADER_DIR: directory,
+				MAL_FFI_HEADER_DIR: include,
 				MAL_FFI_COMPILER: wrapper,
 				MAL_FFI_CACHE: "1",
 			};

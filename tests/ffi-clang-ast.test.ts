@@ -33,6 +33,43 @@ describe("clang AST decoding", () => {
 		expect(declarations('{"kind":"TranslationUnitDecl","inner":[]}')).toEqual([]);
 	});
 
+	it("preserves nested values in large declarations", () => {
+		const value = '}][{\\" Grüße🙂';
+		const children = Array.from({ length: 12_000 }, (_, index) => ({
+			kind: "IntegerLiteral",
+			value,
+			index,
+		}));
+		const node = {
+			kind: "FunctionDecl",
+			inner: children,
+			tail: { ["__proto__"]: "ordinary data" },
+		};
+		expect(
+			declarations(
+				JSON.stringify({
+					kind: "TranslationUnitDecl",
+					inner: [node, { kind: "RecordDecl" }],
+				}),
+			),
+		).toEqual([node, { kind: "RecordDecl" }]);
+	});
+
+	it("rejects malformed containers in large declarations", () => {
+		const padding = " ".repeat(256 * 1024);
+		for (const body of [
+			'{"inner":[1,]}',
+			'{"inner":[1 2]}',
+			'{"inner":[true],}',
+			'{"inner":[tru]}',
+		])
+			expect(() =>
+				declarations(
+					`{"kind":"TranslationUnitDecl","inner":[{${padding}${body.slice(1)}]}`,
+				),
+			).toThrow(/clang.*AST/);
+	});
+
 	it("reads concatenated macro probe declarations", () => {
 		const nodes = [
 			{ kind: "EnumDecl", value: "{1}" },
