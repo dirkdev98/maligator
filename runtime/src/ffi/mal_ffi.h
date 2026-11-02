@@ -146,11 +146,11 @@ void mal_ffi_end_handle_use(MalVm *vm, void *pin, const void *operation, const M
 bool mal_ffi_handle_idle(MalVm *vm, MalValue value, const MalFfiSite *site);
 MalValue mal_ffi_state_value(MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t field, const MalFfiSite *site);
 bool mal_ffi_set_state_value(MalVm *vm, MalValue value, const MalFfiHandleType *type, int32_t field, MalValue input, const MalFfiSite *site);
-/**
- * For an async call, which outlives any callback: reject a pinned handle a callback
- * only lends, since the library may release its resource once the callback returns.
- */
-bool mal_ffi_handle_held(MalVm *vm, void *pin, const MalFfiSite *site);
+/** Worker pins block field reads and reject resources a callback only lends. */
+bool mal_ffi_to_worker_handle(
+    MalVm *vm, MalValue value, const MalFfiHandleType *type, bool nullable,
+    const MalFfiSite *site, void **out, void **pin);
+void mal_ffi_unpin_worker_handle(void *pin);
 /** Begin cleanup with the sole pin, rejecting reentry until its result is known. */
 bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, bool worker, const MalFfiSite *site);
 /** Reject ambiguous pointer results before C can create a resource at a closing address. */
@@ -596,11 +596,11 @@ struct MalFfiInputs {
     int32_t count;
     int32_t capacity;
     const void *operation;
-    bool held;
+    bool worker;
     bool rooted;
 };
 
-void mal_ffi_inputs_init(MalFfiInputs *inputs, const void *operation, bool held);
+void mal_ffi_inputs_init(MalFfiInputs *inputs, const void *operation, bool worker);
 void mal_ffi_inputs_unroot(MalFfiInputs *inputs);
 void mal_ffi_inputs_release(MalVm *vm, MalFfiInputs *inputs, const MalFfiSite *site, bool check);
 bool mal_ffi_input_handle(MalVm *vm, MalFfiInputs *inputs, MalValue value,

@@ -8,5 +8,11 @@ export default {
 	functions: {
 		fields_copy: { async: "fields_copy_async" },
 		fields_visit: { params: { callback: { callback: {} } } },
+		fields_advance: { async: "fields_advance_async" },
+		fields_advance_many: {
+			async: "fields_advance_many_async",
+			params: { states: { array: { length: "count" } } },
+		},
+		fields_observe: { params: { callback: { callback: {} } } },
 	},
 } satisfies MaligatorLibraryContract;

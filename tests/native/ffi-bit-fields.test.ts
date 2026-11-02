@@ -11,14 +11,30 @@ beforeAll(() => {
 	cpSync(join(repo, "tests/fixtures/ffi-bit-fields"), project, { recursive: true });
 });
 afterAll(() => rmSync(project, { recursive: true, force: true }));
-it.each(["compiled", "interpreted"])(
-	"preserves bit-field widths and compiler layout through %s calls",
-	(backend) => {
+it.each(
+	["compiled", "interpreted"].flatMap((backend) => [
+		{
+			backend,
+			entry: "main.ts",
+			label: "preserves bit-field widths and compiler layout",
+			output: "bit-fields passed",
+		},
+		{
+			backend,
+			entry: "handle-reads.ts",
+			label: "reads handle fields only outside worker use",
+			output: "handle reads passed",
+		},
+	]),
+)(
+	"$label through $backend calls",
+	({ backend, entry, output }) => {
 		const built = spawnSync(
 			process.execPath,
 			[
 				join(repo, "src/index.ts"),
 				"build",
+				entry,
 				"--production",
 				...(backend === "interpreted" ? ["--no-compiled"] : []),
 			],
@@ -32,7 +48,7 @@ it.each(["compiled", "interpreted"])(
 			timeout: 30000,
 		});
 		expect(executed.status, executed.stderr || executed.stdout).toBe(0);
-		expect(executed.stdout.trim()).toBe("bit-fields passed");
+		expect(executed.stdout.trim()).toBe(output);
 	},
 	300000,
 );

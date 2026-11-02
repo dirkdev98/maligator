@@ -16,3 +16,8 @@ void fields_configure(FlagState *state, unsigned mode, unsigned long long count)
     state->mode = mode;
     state->count = count;
 }
+void fields_advance(FlagState *state) { state->count++; state->generation++; }
+void fields_advance_many(FlagState **states, unsigned count) {
+    for (unsigned index = 0; index < count; index++) fields_advance(states[index]);
+}
+void fields_observe(FlagState *state, void (*callback)(void)) { callback(); }

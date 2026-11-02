@@ -20,7 +20,7 @@ typedef struct __attribute__((packed)) PackedFlags {
 } PackedFlags;
 
 typedef struct FlagBox { Flags flags; unsigned version : 4; } FlagBox;
-typedef struct FlagState { unsigned mode : 3; unsigned long long count : 33; } FlagState;
+typedef struct FlagState { unsigned mode : 3; unsigned long long count : 33; unsigned generation; } FlagState;
 
 Flags fields_copy(Flags value);
 PackedFlags fields_packed(PackedFlags value);
@@ -28,3 +28,6 @@ FlagBox fields_box(FlagBox value);
 void fields_visit(Flags value, Flags (*callback)(Flags));
 unsigned long long fields_state(FlagState *state);
 void fields_configure(FlagState *state, unsigned mode, unsigned long long count);
+void fields_advance(FlagState *state);
+void fields_advance_many(FlagState **states, unsigned count);
+void fields_observe(FlagState *state, void (*callback)(void));

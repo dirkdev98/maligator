@@ -850,11 +850,7 @@ class BindingWriter {
 					`\tstatic const MalFfiSite mal_site = { ${cString(`${name}.${field.name}`)}, "this", nullptr };`,
 					"\tvoid *mal_handle;",
 					`\tif (!mal_ffi_to_handle(vm, mal_this, &mal_ffi_type_${name}, false, &mal_site, &mal_handle, nullptr)) return mal_ffi_undefined();`,
-					...(!this.managedFamily(name)
-						? []
-						: [
-								"\tif (!mal_ffi_handle_idle(vm, mal_this, &mal_site)) return mal_ffi_undefined();",
-							]),
+					"\tif (!mal_ffi_handle_idle(vm, mal_this, &mal_site)) return mal_ffi_undefined();",
 					`\t${handle.spelling} *mal_value = mal_handle;`,
 					`\treturn ${this.write(field.value, `mal_value->${field.name}`)};`,
 					"}",
@@ -2347,12 +2343,11 @@ class BindingWriter {
 										`mal_ffi_end_handle_use(vm, mal_ctx->${pin}, mal_ctx, &mal_site_result, mal_validate);`,
 									]
 								: []),
-							`mal_ffi_unpin_handle(mal_ctx->${pin});`,
+							`mal_ffi_unpin_worker_handle(mal_ctx->${pin});`,
 						);
 						locals.push(`void *${pointer};`);
 						body.push(
-							`if (!mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${pointer}, &mal_ctx->${pin})) goto mal_failed;`,
-							`if (!mal_ffi_handle_held(vm, mal_ctx->${pin}, ${site})) goto mal_failed;`,
+							`if (!mal_ffi_to_worker_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${pointer}, &mal_ctx->${pin})) goto mal_failed;`,
 							...(managed
 								? [
 										`if (!mal_ffi_begin_handle_use(vm, mal_ctx->${pin}, mal_ctx, ${site})) goto mal_failed;`,

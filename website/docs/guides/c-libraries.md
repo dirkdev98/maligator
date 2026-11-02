@@ -501,6 +501,9 @@ library calls back from other threads.
 
 Use `async` only for functions the library allows on another thread while the program makes other calls, such as SQLite in its default serialized mode.
 
+Handle field reads throw a `TypeError` while a worker call uses the handle, including
+handles passed in arrays. Read fields after the call's promise settles.
+
 A handle's destroy function can also have an `async` export. The handle rejects other
 calls and disposal until destruction finishes. A conditional destroy preserves the
 handle when C reports failure, so you can retry. VM teardown drains accepted destructors

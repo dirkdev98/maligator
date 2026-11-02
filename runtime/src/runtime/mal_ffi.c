@@ -439,6 +439,8 @@ typedef struct MalFfiHandleObject {
     MalFfiState *registry;
     /** C calls using the handle; it cannot close while any are. */
     u32 pins;
+    /** Worker calls may mutate storage concurrently with JavaScript field reads. */
+    u32 worker_pins;
     /**
      * The callback invocation this borrowed argument belongs to, or 0 for a handle
      * the program holds. Once that invocation returns the handle reads as closed:
@@ -2085,10 +2087,11 @@ static void ffi_close_detach(MalFfiKept *kept) {
     MalFfiHandleObject *handle = ffi_handle(close->handle);
     if (handle->value == close->key) ffi_handle_forget(handle);
     else close->key = nullptr;
+    if (handle->worker_closing) mal_ffi_unpin_worker_handle(handle);
+    else mal_ffi_unpin_handle(handle);
     handle->closing = false;
     handle->worker_closing = false;
     handle->operation = nullptr;
-    mal_ffi_unpin_handle(handle);
     close->handle = mal_value_new_undefined();
 }
 
@@ -2487,6 +2490,7 @@ static MalValue ffi_new_handle(
     handle->worker_closing = false;
     handle->registry = nullptr;
     handle->pins = 0;
+    handle->worker_pins = 0;
     handle->scope = scope;
     if (owns_storage && type->managed_field_count > 0) {
         handle->retained = calloc((usize) type->managed_field_count, sizeof(*handle->retained));
@@ -2563,17 +2567,40 @@ __attribute__((always_inline)) bool mal_ffi_to_handle(
                        nullable ? " or null" : "");
 }
 
-bool mal_ffi_handle_held(MalVm *vm, void *pin, const MalFfiSite *site) {
+static bool ffi_handle_held(MalVm *vm, MalFfiHandleObject *handle, const MalFfiSite *site) {
+    return handle->scope == 0 ? true
+        : ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
+            "a handle the program holds, not one a callback lends");
+}
+
+bool mal_ffi_to_worker_handle(
+    MalVm *vm, MalValue value, const MalFfiHandleType *type, bool nullable,
+    const MalFfiSite *site, void **out, void **pin) {
+    *pin = nullptr;
+    void *held;
+    if (!mal_ffi_to_handle(vm, value, type, nullable, site, out, &held)) return false;
+    MalFfiHandleObject *handle = held;
+    if (handle == nullptr) return true;
+    if (!ffi_handle_held(vm, handle, site)) {
+        mal_ffi_unpin_handle(handle);
+        return false;
+    }
+    handle->worker_pins++;
+    *pin = handle;
+    return true;
+}
+
+void mal_ffi_unpin_worker_handle(void *pin) {
     MalFfiHandleObject *handle = pin;
-    if (handle == nullptr || handle->scope == 0) return true;
-    return ffi_fail(
-        vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
-        "a handle the program holds, not one a callback lends");
+    if (handle == nullptr) return;
+    handle->worker_pins--;
+    mal_ffi_unpin_handle(handle);
 }
 
 bool mal_ffi_handle_idle(MalVm *vm, MalValue value, const MalFfiSite *site) {
     MalFfiHandleObject *handle = ffi_handle(value);
-    return handle != nullptr && handle->operation == nullptr && !ffi_handle_borrowed(handle)
+    return handle != nullptr && handle->worker_pins == 0
+        && handle->operation == nullptr && !ffi_handle_borrowed(handle)
         ? true : ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "state no C operation is using");
 }
 
@@ -2608,7 +2635,7 @@ bool mal_ffi_callback_result_handle(
     if (registration && *out == callback->result_owner)
         return mal_ffi_expected(vm, site, "a result resource independent of its registration owner");
     MalFfiHandleObject *handle = ffi_handle(value);
-    if (!mal_ffi_handle_held(vm, handle, site)) return false;
+    if (!ffi_handle_held(vm, handle, site)) return false;
     bool borrowed = ffi_handle_borrowed(handle);
     if (handle->retained != nullptr
         && (handle->operation != nullptr || (!borrowed && !ffi_state_check(vm, handle, site)))) {
@@ -2795,8 +2822,8 @@ void mal_ffi_unpin_handle(void *pin) {
     if (pin != nullptr) ((MalFfiHandleObject *) pin)->pins--;
 }
 
-void mal_ffi_inputs_init(MalFfiInputs *inputs, const void *operation, bool held) {
-    *inputs = (MalFfiInputs) {.operation = operation, .held = held, .rooted = true};
+void mal_ffi_inputs_init(MalFfiInputs *inputs, const void *operation, bool worker) {
+    *inputs = (MalFfiInputs) {.operation = operation, .worker = worker, .rooted = true};
     mal_ffi_root(&inputs->roots, nullptr, 0);
 }
 
@@ -2826,12 +2853,13 @@ bool mal_ffi_input_handle(
         }
     }
     void *pin = nullptr;
-    if (ok) ok = mal_ffi_to_handle(vm, value, type, nullable, site, out, &pin);
+    if (ok) ok = inputs->worker
+        ? mal_ffi_to_worker_handle(vm, value, type, nullable, site, out, &pin)
+        : mal_ffi_to_handle(vm, value, type, nullable, site, out, &pin);
     if (ok && pin != nullptr) {
         inputs->values[inputs->count++] = value;
         inputs->roots.count = inputs->count;
-        ok = (!inputs->held || mal_ffi_handle_held(vm, pin, site))
-            && mal_ffi_begin_handle_use(vm, pin, inputs->operation, site);
+        ok = mal_ffi_begin_handle_use(vm, pin, inputs->operation, site);
     }
     mal_gc_unroot(&root);
     return ok;
@@ -2841,7 +2869,8 @@ void mal_ffi_inputs_release(MalVm *vm, MalFfiInputs *inputs, const MalFfiSite *s
     for (i32 index = 0; index < inputs->count; index++) {
         MalFfiHandleObject *handle = ffi_handle(inputs->values[index]);
         mal_ffi_end_handle_use(vm, handle, inputs->operation, site, check);
-        mal_ffi_unpin_handle(handle);
+        if (inputs->worker) mal_ffi_unpin_worker_handle(handle);
+        else mal_ffi_unpin_handle(handle);
     }
     mal_ffi_inputs_unroot(inputs);
     free(inputs->values);
