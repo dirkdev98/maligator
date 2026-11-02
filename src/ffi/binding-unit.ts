@@ -340,6 +340,14 @@ class BindingWriter {
 		);
 	}
 
+	#constOutputs(binding: BoundFunction): ReadonlySet<number> {
+		return new Set(
+			binding.outputs.flatMap((output, index) =>
+				this.#immutableRecord(output.type) ? [index] : [],
+			),
+		);
+	}
+
 	#handle(name: string): HandleType {
 		const handle = this.#plan.handles.get(name);
 		if (handle === undefined) throw new Error(`binding plan has no handle '${name}'`);
@@ -1877,6 +1885,9 @@ class BindingWriter {
 		const owner = callable?.owner;
 		const declaration = binding.declaration;
 		const constArguments = this.#constArguments(binding);
+		const constOutputs = this.#constOutputs(binding);
+		const outputValue = (index: number): string =>
+			constOutputs.has(index) ? `(*mal_output_${index})` : `mal_output_${index}`;
 		const locals: Array<string> = [];
 		const body: Array<string> = [];
 		/** Buffers resolve last: nothing may run JavaScript between them and the call. */
@@ -2020,6 +2031,38 @@ class BindingWriter {
 				case "out":
 				case "inout": {
 					const output = `mal_output_${String(entry.output)}`;
+					if (constOutputs.has(entry.output)) {
+						locals.push(
+							`typeof_unqual(${localDeclaration(pointee, "")}) *${output} = nullptr;`,
+						);
+						const native = this.#fresh("native_output");
+						if (entry.kind === "inout")
+							body.push(
+								...this.read(
+									binding.params[entry.param]!.value,
+									pointee,
+									argument(entry.param),
+									native,
+									`&mal_site_${entry.param}`,
+									"goto mal_done;",
+									strings,
+									true,
+									inputs,
+									false,
+									true,
+								),
+							);
+						body.push(
+							`${output} = mal_ffi_allocate_storage(1, sizeof(*${output}), _Alignof(__typeof__(*${output})));`,
+							`if (${output} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
+							...(entry.kind === "inout"
+								? [`__builtin_memcpy(${output}, &${native}, sizeof(${native}));`]
+								: []),
+							`${local} = ${output};`,
+						);
+						cleanup.push(`free(${output});`);
+						return;
+					}
 					locals.push(`${localDeclaration(pointee, output)} = {};`);
 					if (entry.kind === "inout") {
 						const value = binding.params[entry.param]!.value;
@@ -2494,7 +2537,7 @@ class BindingWriter {
 				after.push(
 					...this.#owned(
 						output.value,
-						`mal_output_${String(index)}`,
+						outputValue(index),
 						`mal_outputs[${String(first + index)}]`,
 						countValue(binding, output.count),
 						"&mal_site_result",
@@ -2601,6 +2644,11 @@ class BindingWriter {
 		const name = binding.name;
 		const declaration = binding.declaration;
 		const constArguments = this.#constArguments(binding);
+		const constOutputs = this.#constOutputs(binding);
+		const outputValue = (index: number): string =>
+			constOutputs.has(index)
+				? `(*mal_ctx->mal_output_${index})`
+				: `mal_ctx->mal_output_${index}`;
 		const initializeReturn = this.#immutableRecord(declaration.returns);
 		const returnValue = initializeReturn
 			? "(*mal_ctx->mal_return)"
@@ -2633,7 +2681,7 @@ class BindingWriter {
 		const nativeDisposals = [
 			...discard(binding.returns, returnValue),
 			...binding.outputs.flatMap((output, index) =>
-				discard(output.value, `mal_ctx->mal_output_${String(index)}`),
+				discard(output.value, outputValue(index)),
 			),
 		];
 		const tracksRun =
@@ -2755,6 +2803,37 @@ class BindingWriter {
 				case "out":
 				case "inout": {
 					const output = `mal_output_${String(entry.output)}`;
+					if (constOutputs.has(entry.output)) {
+						fields.push(`typeof_unqual(${localDeclaration(pointee, "")}) *${output};`);
+						const storage = `mal_ctx->${output}`;
+						const native = this.#fresh("native_output");
+						if (entry.kind === "inout")
+							body.push(
+								...this.read(
+									binding.params[entry.param]!.value,
+									pointee,
+									argument(entry.param),
+									native,
+									`&mal_site_${entry.param}`,
+									"goto mal_failed;",
+									strings,
+									true,
+									inputs,
+									false,
+									true,
+								),
+							);
+						body.push(
+							`${storage} = mal_ffi_allocate_storage(1, sizeof(*${storage}), _Alignof(__typeof__(*${storage})));`,
+							`if (${storage} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_failed; }`,
+							...(entry.kind === "inout"
+								? [`__builtin_memcpy(${storage}, &${native}, sizeof(${native}));`]
+								: []),
+							`${target} = ${storage};`,
+						);
+						frees.push(`free(${storage});`);
+						return;
+					}
 					fields.push(`${localDeclaration(pointee, output)};`);
 					if (entry.kind === "inout") {
 						const value = binding.params[entry.param]!.value;
@@ -3064,7 +3143,7 @@ class BindingWriter {
 				...binding.outputs.flatMap((output, index) =>
 					this.#owned(
 						output.value,
-						`mal_ctx->mal_output_${String(index)}`,
+						outputValue(index),
 						`mal_outputs[${String(first + index)}]`,
 						countValue(binding, output.count, "mal_ctx->"),
 						"&mal_site_result",

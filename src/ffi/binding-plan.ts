@@ -2341,14 +2341,17 @@ class Planner {
 				if (resolved.kind !== "pointer") {
 					throw new FfiError(`${where(at)}.${fact}: ${name} is not a pointer`);
 				}
-				let target = resolveCType(this.#model, resolved.to);
+				const outputType = resolveCType(this.#model, resolved.to);
+				let target = outputType;
 				while (target.kind === "array") target = resolveCType(this.#model, target.of);
 				const record =
 					target.kind === "record" ? this.#model.records.get(target.name) : undefined;
-				if (record !== undefined && cRecordHasConstMembers(this.#model, record)) {
-					gap(
-						`${record.name}: const members require initialization rather than an output buffer`,
-					);
+				if (
+					outputType.kind === "array" &&
+					(("const" in target && target.const === true) ||
+						(record !== undefined && cRecordHasConstMembers(this.#model, record)))
+				) {
+					gap("const members in array output buffers need native initialization");
 					return;
 				}
 				const written = map(
@@ -2359,6 +2362,16 @@ class Planner {
 				);
 				if ("gap" in written) {
 					gap(written.gap);
+					return;
+				}
+				if (
+					valueFacts.inout === true &&
+					written.value.kind === "handle" &&
+					written.value.pass === "copy"
+				) {
+					gap(
+						`${written.value.name}: copied-handle inout would duplicate ownership; pass the handle pointer directly for in-place updates`,
+					);
 					return;
 				}
 				this.#free(valueFacts.free, written.value, where(at));

@@ -100,8 +100,10 @@ A function is exported only when every parameter and its result map. Functions t
 Plain records and copied struct handles can contain const members when returned by C
 or passed to a JavaScript callback. Both also pass back to C by value, including on
 workers. Input conversion reads properties before initializing the native value;
-later JavaScript mutations do not change a queued worker's copy. Output buffers,
-counted input arrays, unions, and JavaScript callback results require assignable fields.
+later JavaScript mutations do not change a queued worker's copy. A record output buffer can
+contain const members when C initializes every selected field before returning. An
+inout value is constructed before the call; C may update its mutable fields. Counted
+input arrays, unions, and JavaScript callback results require assignable fields.
 
 Repeated string inputs can retain a UTF-8 encoding alongside their JavaScript
 storage, avoiding encoding work on later synchronous calls. ASCII inputs can instead
@@ -218,6 +220,10 @@ export default defineLibrary({
 ```
 
 Functions that take or return the type then bind, and its values cross as handles. A handle that wraps a struct exposes the struct's value fields as read-only properties, and a function that takes a pointer to the struct updates the handle in place.
+
+Pass that pointer parameter directly for resource updates, preserving the handle's
+storage and owner. An `inout` fact would create a separate result and is rejected for
+copied struct handles.
 
 ```typescript src/index.ts
 import {

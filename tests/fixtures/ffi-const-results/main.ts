@@ -31,6 +31,14 @@ import {
 	immutable_bits_take,
 	takeBitsAsync,
 	immutable_taken,
+	immutable_out,
+	outAsync,
+	immutable_inout,
+	inoutAsync,
+	immutable_token_out,
+	tokenOutAsync,
+	immutable_token_out_visit,
+	tokenOutVisitAsync,
 } from "maligator:ffi/const_values";
 import type { Immutable, ImmutableToken } from "maligator:ffi/const_values";
 
@@ -101,6 +109,28 @@ for (const seed of [-3, 0, 7, 19]) {
 	await notified;
 }
 verify(getFixed(), 77);
+verify(immutable_out().value, 21);
+verify((await outAsync()).value, 21);
+for (const async of [false, true]) {
+	const input = a_make(5);
+	const output = async ? (await inoutAsync(input)).value : immutable_inout(input).value;
+	check(
+		z_take(output) === 195 && output.code === 5 && output.nested.value === 6,
+		"inout initializes const fields and updates mutable members",
+	);
+	verify(input, 5);
+}
+const beforeInvalid = immutable_taken();
+let invalidOutput = false;
+try {
+	immutable_inout({ ...a_make(5), code: 1.5 });
+} catch (error) {
+	invalidOutput = error instanceof RangeError;
+}
+check(
+	invalidOutput && immutable_taken() === beforeInvalid,
+	"failed inout construction never reaches C",
+);
 const pendingInput = a_make(4);
 const captured = takeAsync(pendingInput);
 pendingInput.code = 1000;
@@ -296,5 +326,34 @@ closing[Symbol.dispose]();
 check(
 	immutable_token_destroyed() === 4 && immutable_token_destroy_sum() === 44,
 	"worker const-value destructor releases its copy exactly once",
+);
+for (const token of [immutable_token_out(101).value, (await tokenOutAsync(103)).value]) {
+	check(
+		token.detail === token.token + 1 && immutable_token_address(token) % 64n === 0n,
+		"owned const out handles preserve native alignment",
+	);
+	token[Symbol.dispose]();
+	token[Symbol.dispose]();
+}
+check(
+	immutable_token_destroyed() === 6 && immutable_token_destroy_sum() === 248,
+	"owned const out values release exactly once",
+);
+const failOutput = (): void => {
+	throw new Error("const output callback failed");
+};
+for (const async of [false, true]) {
+	let failed = false;
+	try {
+		if (async) await tokenOutVisitAsync(203, failOutput);
+		else immutable_token_out_visit(201, failOutput);
+	} catch (error) {
+		failed = error instanceof Error && error.message === "const output callback failed";
+	}
+	check(failed, "const out callback errors reach the caller");
+}
+check(
+	immutable_token_destroyed() === 8 && immutable_token_destroy_sum() === 652,
+	"unexposed owned const outputs release after callback failure",
 );
 console.log("const results passed");

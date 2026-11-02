@@ -1910,8 +1910,8 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] Support opaque caller storage sized by native queries.
 
-- [ ] Complete const-member construction for output buffers, unions, tagged values,
-      counted input arrays, and JavaScript callback results.
+- [ ] Complete const-member construction for unions, tagged values, fixed array
+      buffers, counted input arrays, and JavaScript callback results.
 
 - [ ] Extend compound resource-bearing results with explicit ownership and lifetime.
 

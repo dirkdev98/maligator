@@ -113,4 +113,15 @@ describe("caller storage contracts", () => {
 			}),
 		).toThrow("'CallerState' is already an export");
 	});
+	it("keeps mutable copied-handle updates behind their canonical pointer", () => {
+		const plan = planBindings(model, {
+			types: { CopiedState: { handle: {} } },
+			functions: { caller_copy_aligned: { params: { state: { inout: true } } } },
+		});
+		expect(
+			plan.unbound
+				.find((fn) => fn.name === "caller_copy_aligned")
+				?.gaps.some((gap) => gap.reason.includes("duplicate ownership")),
+		).toBe(true);
+	});
 });

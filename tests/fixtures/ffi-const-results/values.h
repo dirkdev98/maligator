@@ -25,6 +25,9 @@ int immutable_token_with_callback(ImmutableToken value, void (*callback)(void *)
 void immutable_token_set(ImmutableToken *value, int detail);
 int immutable_token_array(const ImmutableToken *values, size_t count);
 void immutable_token_visit(int seed, void (*callback)(ImmutableToken, void *), void *data);
+void immutable_token_out(int seed, ImmutableToken *value);
+void immutable_token_out_visit(int seed, ImmutableToken *value, void (*callback)(void *), void *data);
+void immutable_token_inout(ImmutableToken *value);
 
 extern Immutable immutable_fixed;
 Immutable a_make(int seed);
@@ -33,6 +36,11 @@ Before z_make_before(int seed);
 int z_take(Immutable value);
 void immutable_out(Immutable *value);
 void immutable_inout(Immutable *value);
+void immutable_array_out(Immutable (*value)[2]);
+typedef Immutable ImmutablePair[2];
+void immutable_pair_out(ImmutablePair *value);
+typedef const int ImmutableNumbers[2];
+void immutable_numbers_out(ImmutableNumbers *value);
 int immutable_array(const Immutable *values, size_t count);
 Immutable immutable_callback_result(Immutable (*callback)(void));
 int immutable_visit(int seed, int (*callback)(Immutable, void *), void *data);
