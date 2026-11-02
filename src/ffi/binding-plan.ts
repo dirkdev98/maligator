@@ -764,7 +764,11 @@ class Planner {
 					};
 				}
 				const record = this.#model.records.get(resolved.name);
-				if (record !== undefined && cRecordHasConstMembers(this.#model, record))
+				if (
+					position !== "return" &&
+					record !== undefined &&
+					cRecordHasConstMembers(this.#model, record)
+				)
 					return { gap: `${record.name}: const members cannot be copied by value` };
 				return {
 					value: {

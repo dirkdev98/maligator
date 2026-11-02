@@ -4,8 +4,15 @@ import type { MaligatorLibraryContract } from "../../../src/public-api.d.ts";
 export default {
 	headers: ["values.h"],
 	find: [{ includeDirs: ["."], sources: ["values.c"] }],
+	types: { ImmutableToken: { handle: { destroy: "immutable_token_destroy" } } },
 	globals: { immutable_fixed: { get: "getFixed" } },
 	functions: {
+		immutable_token_make: { async: "makeTokenAsync" },
+		immutable_token_borrow: { returns: { borrowed: true }, async: "borrowTokenAsync" },
+		immutable_token_visit: {
+			async: "visitTokenAsync",
+			params: { callback: { callback: { data: "data" } } },
+		},
 		a_make: { async: "makeAsync" },
 		z_make_before: { async: "makeBeforeAsync" },
 		immutable_out: { params: { value: { out: true } } },

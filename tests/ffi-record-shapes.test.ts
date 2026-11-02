@@ -36,7 +36,15 @@ it("binds const-member results regardless of earlier rejected inputs", () => {
 	const report = JSON.parse(result.stdout) as {
 		functions: Array<{ name: string; status: string }>;
 	};
-	for (const name of ["a_make", "z_make_before", "immutable_visit", "immutable_notify"])
+	for (const name of [
+		"a_make",
+		"z_make_before",
+		"immutable_visit",
+		"immutable_notify",
+		"immutable_token_make",
+		"immutable_token_borrow",
+		"immutable_token_visit",
+	])
 		expect(report.functions.find((fn) => fn.name === name)?.status).toBe("bound");
 });
 it.each([
@@ -46,6 +54,8 @@ it.each([
 	"immutable_inout",
 	"immutable_array",
 	"immutable_callback_result",
+	"immutable_token_consume",
+	"immutable_token_destroy",
 ])("keeps const-member initialization out of the %s input path", (name) => {
 	const directory = project("ffi-const-results");
 	const result = cli(directory, "inspect", "const_values", "--json");

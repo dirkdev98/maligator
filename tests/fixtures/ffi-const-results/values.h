@@ -1,5 +1,6 @@
 #pragma once
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct __attribute__((aligned(64))) Immutable {
     const int code;
@@ -8,6 +9,15 @@ typedef struct __attribute__((aligned(64))) Immutable {
     struct { const int promoted; };
 } Immutable;
 typedef struct Before { const int value; } Before;
+typedef struct __attribute__((aligned(64))) ImmutableToken { const int token; int detail; } ImmutableToken;
+ImmutableToken immutable_token_make(int seed);
+ImmutableToken immutable_token_borrow(void);
+void immutable_token_destroy(ImmutableToken value);
+int immutable_token_destroyed(void);
+int immutable_token_destroy_sum(void);
+uintptr_t immutable_token_address(const ImmutableToken *value);
+int immutable_token_consume(ImmutableToken value);
+void immutable_token_visit(int seed, void (*callback)(ImmutableToken, void *), void *data);
 
 extern Immutable immutable_fixed;
 Immutable a_make(int seed);
