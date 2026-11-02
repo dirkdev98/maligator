@@ -4,12 +4,17 @@ import { artifactDigest, artifactIdentity } from "../artifact-store.ts";
 import { BuildConfigError } from "../build-config-error.ts";
 import type { FfiModule, ResolvedBuildConfig } from "../build-config-values.ts";
 import { platformCcFlags } from "../build-flags.ts";
+import { compilerProducerIdentity } from "../compiler-cache-identity.ts";
 import type { BuildConfigTypeStripper } from "../definition-module.ts";
 import type { ExternalTranslationUnit } from "../local-build.ts";
 import type { ToolExecutable } from "../toolchain.ts";
 import { planBindings } from "./binding-plan.ts";
 import type { BindingPlan } from "./binding-plan.ts";
-import { generateBindingUnit, generateInstallerRegistry } from "./binding-unit.ts";
+import {
+	describeBindingUnit,
+	generateBindingUnit,
+	generateInstallerRegistry,
+} from "./binding-unit.ts";
 import type { BindingUnit } from "./binding-unit.ts";
 import { FFI_C_STANDARD, extractCSourceDependencies } from "./c-extract.ts";
 import type { CModel } from "./c-model.ts";
@@ -122,7 +127,9 @@ export function prepareLibrary(
 
 /** Every configured library, prepared for one build. */
 export interface PreparedLibraries {
-	readonly libraries: ReadonlyArray<PreparedLibrary & { readonly unit: BindingUnit }>;
+	readonly libraries: ReadonlyArray<
+		PreparedLibrary & { readonly unit: Omit<BindingUnit, "source"> }
+	>;
 	/** The host modules the frontend resolves `maligator:ffi/<name>` to. */
 	readonly modules: ReadonlyArray<FfiModule>;
 	/** Contracts, headers, sources and resolved library files that invalidate native hosts. */
@@ -145,12 +152,7 @@ export function prepareLibraries(
 		return {
 			...entry,
 			plan,
-			unit: generateBindingUnit(
-				entry.contract.name,
-				entry.contract.headers,
-				entry.model,
-				plan,
-			),
+			unit: describeBindingUnit(entry.contract.name, plan),
 		};
 	});
 	const dependencies = [
@@ -166,8 +168,11 @@ export function prepareLibraries(
 		),
 	].sort();
 	const identity = artifactIdentity({
+		producer: compilerProducerIdentity("ffi-binding", 1),
 		libraries: libraries.map((entry) => ({
-			binding: artifactDigest(entry.unit.source),
+			facts: entry.contract.facts,
+			headers: entry.contract.headers,
+			target: entry.model.target,
 			compileArguments: entry.library.compileArguments,
 			linkInputs: entry.library.linkInputs,
 		})),
@@ -206,21 +211,33 @@ function unitId(...parts: ReadonlyArray<string>): string {
 export function nativeLibraryInputs(
 	prepared: PreparedLibraries,
 	runtimeDirectory: string,
+	selectedExports?: ReadonlyMap<string, ReadonlySet<string>>,
 ): { externalUnits: Array<ExternalTranslationUnit>; linkInputs: Array<LinkInput> } {
 	const bindingArguments = [FFI_C_STANDARD, "-I", path.join(runtimeDirectory, "src/ffi")];
+	const units = prepared.libraries.map((entry) =>
+		generateBindingUnit(
+			entry.contract.name,
+			entry.contract.headers,
+			entry.model,
+			entry.plan,
+			selectedExports === undefined
+				? undefined
+				: (selectedExports.get(entry.unit.installer) ?? new Set()),
+		),
+	);
 	const externalUnits: Array<ExternalTranslationUnit> = [
 		{
 			id: "ffi-registry",
 			source: {
-				text: generateInstallerRegistry(prepared.libraries.map((entry) => entry.unit)),
+				text: generateInstallerRegistry(units),
 			},
 			compileArguments: bindingArguments,
 		},
 	];
-	for (const entry of prepared.libraries) {
+	for (const [index, entry] of prepared.libraries.entries()) {
 		externalUnits.push({
 			id: unitId("ffi", entry.contract.name, "binding"),
-			source: { text: entry.unit.source },
+			source: { text: units[index]!.source },
 			compileArguments: [...bindingArguments, ...entry.library.compileArguments],
 		});
 		entry.library.sources.forEach((source, index) => {

@@ -57,7 +57,7 @@ import type {
 import type { CompilerDiagnostic } from "./compiler/shared/compiler-diagnostics.ts";
 import {
 	compilerProgramFactsFromConfig,
-	unanalyzedProgramClosure,
+	programClosureCertificate,
 	withProgramClosure,
 } from "./compiler/shared/compiler-facts.ts";
 import type {
@@ -95,7 +95,7 @@ import {
 } from "./worker-image-cache.ts";
 import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 10;
+const BUILD_FRONTEND_CACHE_SCHEMA = 11;
 const BUILD_FRONTEND_PIPELINE_VERSION = 6;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
@@ -106,7 +106,8 @@ const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 10;
+	schema: 11;
+	closure: Pick<ProgramClosureCertificate, "scope" | "roots" | "openings">;
 	/** The execution snapshot when a module reads it; other commands may reuse the images otherwise. */
 	execution: string | null;
 	packageAbsences: Array<string>;
@@ -167,7 +168,7 @@ export interface CompiledBuildFrontend {
 	diagnostics: Array<CompilerDiagnostic>;
 	optimizationReport?: CoreOptimizationReport;
 	optimizationPlan?: CoreOptimizationPlan;
-	/** Open on a cache hit: a restored program image is returned without a graph. */
+	/** Graph closure evidence, retained with the validated frontend inputs. */
 	closure: ProgramClosureCertificate;
 	wires?: Array<Uint8Array>;
 	fragmentArtifacts?: { hits: number; misses: number };
@@ -397,11 +398,15 @@ function loadCached(
 			imageStats: ProgramImageStats;
 			dependencies: Array<BuildDependencyIdentity>;
 			diagnostics: Array<CompilerDiagnostic>;
+			closure: ProgramClosureCertificate;
 	  }
 	| undefined {
 	const manifest = readManifest(manifestPath(root, entrypoint, identity));
 	if (
 		manifest?.schema !== BUILD_FRONTEND_CACHE_SCHEMA ||
+		manifest.closure?.scope === undefined ||
+		!Array.isArray(manifest.closure.roots) ||
+		!Array.isArray(manifest.closure.openings) ||
 		manifest.entrypoint !== entrypoint ||
 		manifest.identity !== identity ||
 		(manifest.execution !== null && manifest.execution !== execution) ||
@@ -453,6 +458,11 @@ function loadCached(
 		const loadProgramImage = () =>
 			(programImage ??= deserializeCompilerArtifact(loadCompilerArtifact()));
 		return {
+			closure: programClosureCertificate(
+				manifest.closure.scope,
+				manifest.closure.roots,
+				manifest.closure.openings,
+			),
 			workerImages: restoreWorkerImages(manifest.workerArtifacts, artifactRoot),
 			get programImage() {
 				return loadProgramImage();
@@ -740,9 +750,7 @@ function prepareBuildFrontend(
 						return cached.runtimeArtifacts.length > 1 ? cached.wires : undefined;
 					},
 					cache: "hit",
-					closure: unanalyzedProgramClosure(
-						"a frontend cache hit restores a program image without inspecting a module graph",
-					),
+					closure: cached.closure,
 					frontendMs: Date.now() - startedAt,
 					phases,
 					dependencies: cached.dependencies.map((dependency) => dependency.path),
@@ -1034,6 +1042,11 @@ function prepareBuildFrontend(
 				manifestPath(root, entrypoint, identity),
 				`${JSON.stringify({
 					schema: BUILD_FRONTEND_CACHE_SCHEMA,
+					closure: {
+						scope: facts.closure.scope,
+						roots: facts.closure.roots,
+						openings: facts.closure.openings,
+					},
 					execution: readsExecution ? executionIdentity(options.execution) : null,
 					identity,
 					contentKey: key,

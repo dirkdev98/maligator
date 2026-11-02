@@ -2845,25 +2845,85 @@ class BindingWriter {
 	}
 }
 
-/** Generate the binding unit for every declaration the plan could map. */
+/** Describe the host ABI without rendering C wrappers. */
+export function describeBindingUnit(
+	library: string,
+	plan: BindingPlan,
+): Omit<BindingUnit, "source"> {
+	return {
+		library,
+		specifier: ffiModuleSpecifier(library),
+		installer: ffiInstallerSymbol(library),
+		exports: [
+			...[...plan.handles.values()].flatMap((handle) =>
+				handle.allocator === undefined ? [] : [handle.allocator],
+			),
+			...plan.functions.flatMap((binding) =>
+				binding.async === undefined ? [binding.name] : [binding.name, binding.async],
+			),
+			...plan.constants.map((constant) => constant.name),
+		].sort(byteOrder),
+		direct: Object.fromEntries(
+			plan.functions.map((binding) => {
+				const result = directResult(binding);
+				const borrows = binding.params.flatMap(({ value }, argument) =>
+					value.kind === "record"
+						? [
+								{
+									argument,
+									fields: plan.records.get(value.name)!.fields.map((field) => field.name),
+								},
+							]
+						: [],
+				);
+				const fields = intoFields(binding, plan.records);
+				return [
+					binding.name,
+					{
+						symbol: directSymbol(library, binding.name),
+						arity: binding.params.length,
+						callsUserCode:
+							plan.hasCallbacks ||
+							binding.params.some(({ value }) => inputCanRunJavaScript(value)),
+						...(result === undefined ? {} : { result }),
+						...(borrows.length === 0 ? {} : { borrows }),
+						...(fields === undefined ? {} : { into: { fields } }),
+					},
+				];
+			}),
+		),
+	};
+}
+
+/** Generate bindings for selected exports, or the complete declared surface. */
 export function generateBindingUnit(
 	library: string,
 	headers: ReadonlyArray<string>,
 	model: CModel,
 	plan: BindingPlan,
+	selectedExports?: ReadonlySet<string>,
 ): BindingUnit {
 	const writer = new BindingWriter(model, plan);
-	for (const binding of plan.functions) {
+	const bindings = plan.functions.filter(
+		(binding) =>
+			selectedExports === undefined ||
+			selectedExports.has(binding.name) ||
+			(binding.async !== undefined && selectedExports.has(binding.async)),
+	);
+	const selectedConstants = plan.constants.filter(
+		(constant) => selectedExports === undefined || selectedExports.has(constant.name),
+	);
+	for (const binding of bindings) {
 		for (const param of binding.params) writer.need(param.value, "input");
 		for (const output of binding.outputs) writer.need(output.value, "output");
 		writer.need(binding.returns, "output");
 	}
-	for (const constant of plan.constants) writer.need(constant.value, "output");
+	for (const constant of selectedConstants) writer.need(constant.value, "output");
 	for (const handle of plan.handles.values()) {
 		for (const field of handle.fields) writer.need(field.value, "output");
 	}
 
-	const functions = plan.functions.flatMap((binding) => [
+	const functions = bindings.flatMap((binding) => [
 		"",
 		...writer.function(binding),
 		...directEntry(
@@ -2878,7 +2938,7 @@ export function generateBindingUnit(
 		),
 		...(binding.async === undefined ? [] : writer.asyncFunction(binding, binding.async)),
 	]);
-	const constants = plan.constants.flatMap((constant) => [
+	const constants = selectedConstants.flatMap((constant) => [
 		"",
 		...writer.constant(constant),
 	]);
@@ -2893,7 +2953,7 @@ export function generateBindingUnit(
 						},
 					],
 		),
-		...plan.functions.flatMap((binding) =>
+		...bindings.flatMap((binding) =>
 			[binding.name, ...(binding.async === undefined ? [] : [binding.async])].map(
 				(exported) => ({
 					name: exported,
@@ -2901,11 +2961,13 @@ export function generateBindingUnit(
 				}),
 			),
 		),
-		...plan.constants.map((constant) => ({
+		...selectedConstants.map((constant) => ({
 			name: constant.name,
 			entry: `{ ${cString(constant.name)}, 0, nullptr, mal_ffi_constant_${constant.name} }`,
 		})),
-	].sort((left, right) => byteOrder(left.name, right.name));
+	]
+		.filter((entry) => selectedExports === undefined || selectedExports.has(entry.name))
+		.sort((left, right) => byteOrder(left.name, right.name));
 	const specifier = ffiModuleSpecifier(library);
 	const installer = ffiInstallerSymbol(library);
 	const source = [
@@ -2942,39 +3004,12 @@ export function generateBindingUnit(
 		"",
 	].join("\n");
 	return {
-		library,
-		specifier,
-		installer,
+		...describeBindingUnit(library, {
+			...plan,
+			functions: bindings,
+			constants: selectedConstants,
+		}),
 		exports: exports.map((entry) => entry.name),
-		direct: Object.fromEntries(
-			plan.functions.map((binding) => {
-				const result = directResult(binding);
-				const borrows = binding.params.flatMap(({ value }, argument) =>
-					value.kind === "record"
-						? [
-								{
-									argument,
-									fields: plan.records.get(value.name)!.fields.map((field) => field.name),
-								},
-							]
-						: [],
-				);
-				const fields = intoFields(binding, plan.records);
-				return [
-					binding.name,
-					{
-						symbol: directSymbol(library, binding.name),
-						arity: binding.params.length,
-						callsUserCode:
-							plan.hasCallbacks ||
-							binding.params.some(({ value }) => inputCanRunJavaScript(value)),
-						...(result === undefined ? {} : { result }),
-						...(borrows.length === 0 ? {} : { borrows }),
-						...(fields === undefined ? {} : { into: { fields } }),
-					},
-				];
-			}),
-		),
 		source,
 	};
 }

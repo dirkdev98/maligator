@@ -27,7 +27,7 @@ rooting, and resource-safety defects can interrupt that order.
 7. Recover throughput and bound latency in the concurrent generational collector.
    Keep the native worker and Wasm inline behavior, following the ownership and
    root contract in [generational GC workers](docs/decisions/09-generational-gc-workers.md).
-8. Pursue actors, SMP, embedding, and freestanding targets after the active runtime
+8. Pursue actors, SMP, native GUI integration, and freestanding targets after the active runtime
    foundations are ready.
 
 ## Verification workflow
@@ -1901,7 +1901,28 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       and primary or standby selection against a dedicated topology. Keep
       topology-dependent tests separate from the deterministic local baseline.
 
-# Actors, SMP, and embedding
+# C libraries
+
+- [ ] Call function pointers returned by C and exposed in native function tables.
+      Preserve the declared C ABI, owner lifetime, callback safety, and generated types.
+
+- [ ] Bind exported C globals with explicit access and ownership contracts.
+
+- [ ] Extend value mapping for wider integers, complex and vector values, and native
+      floating representations beyond JavaScript numbers.
+
+- [ ] Support variable-sized caller storage and value records with const members.
+
+- [ ] Extend compound resource-bearing results with explicit ownership and lifetime.
+
+- [ ] Support runtime-selected variadic signatures when a bounded typed contract can
+      preserve C argument promotions and ABI correctness.
+
+- [ ] Remove measured marshalling, allocation, callback-dispatch, and unused binding
+      build costs. Compare representative libraries against C and Bun, retaining
+      output parity, matched toolchains, and CPU, memory, disk, and binary-size evidence.
+
+# Actors and SMP
 
 ## Actors
 
@@ -1924,12 +1945,9 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] Validate the x86_64 fiber switch on Linux. Retain ABI and sanitizer coverage.
 
-## Embedding and freestanding targets
+## Native GUI and freestanding targets
 
-- [ ] Expose the H1 one-turn pump and wake source through a stable embedding API.
-      Permit foreign GUI loops to retain event-loop ownership.
-
-- [ ] Drive a Rust GUI stack through the FFI as an embedding experiment. Validate
+- [ ] Drive a Rust GUI stack from a Maligator application through a C ABI. Validate
       lifecycle, wakeups, callbacks, rendering-loop integration, and shutdown.
 
 - [ ] Build scheduler, reactor, and GC core without libc over a fixed arena. Make

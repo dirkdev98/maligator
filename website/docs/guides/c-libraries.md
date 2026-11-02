@@ -1,5 +1,8 @@
 Call a C library from your application by declaring it in the build config. Maligator reads the library's headers with clang and compiles a binding into the application, so the C compiler handles calling conventions, structs passed by value, and macros. You need the library's headers, clang (or Zig for a `--target` build), and the library itself as an archive, a shared library, or sources.
 
+Maligator hosts the application. Embedding the Maligator runtime in a C application is
+outside the supported API.
+
 ## Declare the library
 
 Name the library under `ffi` and point it at a contract:
@@ -70,6 +73,11 @@ maligator ffi types
 ```
 
 `maligator run`, `dev`, and `build` compile the binding and link the library. `run` and `dev` build a development runtime that contains the binding instead of using a packaged one, so they need the native toolchain.
+
+Production builds with a closed module graph generate wrappers for the exports the
+application and its workers use. Namespace access retains its observable exports.
+Declaration generation and inspection describe the full header surface; development
+runtimes retain it for later application edits.
 
 ## How values cross
 

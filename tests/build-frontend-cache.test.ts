@@ -3,6 +3,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	rmSync,
 	statSync,
 	utimesSync,
 	writeFileSync,
@@ -68,6 +69,33 @@ function compile(
 }
 
 describe("normal build frontend cache", () => {
+	it.each([false, true])(
+		"retains source closure with eval %s on cache hits",
+		(evalEnabled) => {
+			const root = temporaryDirectory();
+			try {
+				const entrypoint = path.join(root, "entry.mjs");
+				write(entrypoint, "console.log(42);\n");
+				const options = {
+					entrypoint,
+					cacheDirectory: path.join(root, "cache"),
+					config: resolveBuildConfig({ engine: { eval: evalEnabled } }),
+					stripTypes: stripCompactTypes,
+					stripperIdentity: "cached-source-closure",
+				};
+				const cold = compileBuildFrontend(options);
+				const warm = compileBuildFrontend(options);
+				expect(cold.cache).toBe("miss");
+				expect(warm.cache).toBe("hit");
+				expect(cold.closure.sourceClosure.kind).toBe(evalEnabled ? "unknown" : "known");
+				expect(warm.closure).toEqual(cold.closure);
+				expect(warm.wire).toEqual(cold.wire);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		},
+	);
+
 	it("restores an AOT-equivalent definition without rebuilding the graph", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

@@ -15,6 +15,7 @@ export const COMPILER_PRODUCER_STAGES = [
 	"test-frontend",
 	"test-fragment",
 	"ffi-header-model",
+	"ffi-binding",
 ] as const;
 
 export type CompilerProducerStage = (typeof COMPILER_PRODUCER_STAGES)[number];
@@ -32,6 +33,7 @@ const PRODUCER_ROOTS: Record<CompilerProducerStage, Array<string>> = {
 	"test-frontend": ["testing/cache.ts"],
 	"test-fragment": ["testing/test-images.ts"],
 	"ffi-header-model": ["ffi/model-cache.ts"],
+	"ffi-binding": ["ffi/library.ts"],
 };
 
 let installedProducerDigests: Record<CompilerProducerStage, string> | undefined;

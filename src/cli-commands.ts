@@ -1039,10 +1039,33 @@ function prepareCommandState(
 				? "(none)"
 				: derivation.features.cargoFeatures.join(", "),
 		);
+		const selectedFfiExports =
+			production && frontend.closure.sourceClosure.kind === "known"
+				? new Map<string, Set<string>>()
+				: undefined;
+		if (selectedFfiExports !== undefined) {
+			for (const image of [
+				frontend.programImage,
+				...frontend.workerImages.map((worker) => worker.image),
+			]) {
+				for (const install of image.runtime.hostInstalls) {
+					let names = selectedFfiExports.get(install.installer);
+					if (names === undefined) {
+						names = new Set();
+						selectedFfiExports.set(install.installer, names);
+					}
+					for (const entry of install.exports) names.add(entry.name);
+				}
+			}
+		}
 		const nativeLibraries =
 			libraries === undefined
 				? undefined
-				: nativeLibraryInputs(libraries, context.installation.runtimeDirectory);
+				: nativeLibraryInputs(
+						libraries,
+						context.installation.runtimeDirectory,
+						selectedFfiExports,
+					);
 		const nativeEnvironment = compilerProfileBuildEnvironment(command);
 		reporter.detail("Native compile jobs", nativeBuildJobs(nativeEnvironment));
 		const nativeCache = new Map<"runtime" | "rust" | "binary", boolean>();
