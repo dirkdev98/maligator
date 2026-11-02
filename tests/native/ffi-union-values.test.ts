@@ -11,9 +11,25 @@ beforeAll(() => {
 	cpSync(join(repo, "tests/fixtures/ffi-union-values"), project, { recursive: true });
 });
 afterAll(() => rmSync(project, { recursive: true, force: true }));
-it.each(["compiled", "interpreted"])(
-	"converts only the selected union member through %s calls",
-	(backend) => {
+it.each(
+	["compiled", "interpreted"].flatMap((backend) => [
+		{
+			backend,
+			directory: ".",
+			behavior: "converts only the selected union member",
+			output: "union values passed",
+		},
+		{
+			backend,
+			directory: "getter-pins",
+			behavior: "pins handle arguments while union getters run",
+			output: "union getter pins passed",
+		},
+	]),
+)(
+	"$behavior through $backend calls",
+	({ backend, directory, output }) => {
+		const cwd = join(project, directory);
 		const built = spawnSync(
 			process.execPath,
 			[
@@ -22,17 +38,17 @@ it.each(["compiled", "interpreted"])(
 				"--production",
 				...(backend === "interpreted" ? ["--no-compiled"] : []),
 			],
-			{ cwd: project, env: process.env, encoding: "utf8", timeout: 240000 },
+			{ cwd, env: process.env, encoding: "utf8", timeout: 240000 },
 		);
 		expect(built.status, built.stderr || built.stdout).toBe(0);
 		const executed = spawnSync(built.stdout.trim().split("\n").at(-1)!, [], {
-			cwd: project,
+			cwd,
 			env: { ...process.env, MAL_GC_STRESS: "1", MAL_GC_VERIFY: "1" },
 			encoding: "utf8",
 			timeout: 30000,
 		});
 		expect(executed.status, executed.stderr || executed.stdout).toBe(0);
-		expect(executed.stdout.trim()).toBe("union values passed");
+		expect(executed.stdout.trim()).toBe(output);
 	},
 	300000,
 );

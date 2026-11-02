@@ -102,6 +102,27 @@ const UNROOTED_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
 	"bytes",
 ]);
 
+function inputCanRunJavaScript(value: JsValue): boolean {
+	switch (value.kind) {
+		case "undefined":
+		case "boolean":
+		case "integer":
+		case "float":
+		case "bigint":
+		case "string":
+		case "bytes":
+		case "handle":
+			return false;
+		case "callback":
+		case "record":
+		case "sequence":
+		case "array":
+			return true;
+		case "union":
+			return inputCanRunJavaScript(value.of);
+	}
+}
+
 /** The struct a binding returns, when compiled callers can take its fields instead. */
 function intoRecord(binding: BoundFunction): string | undefined {
 	return binding.returns.kind === "record" && binding.outputs.length === 0
@@ -1508,9 +1529,7 @@ class BindingWriter {
 		/** Whether JavaScript can run between converting an argument and the C call returning. */
 		const runsJavaScript =
 			this.#plan.hasCallbacks ||
-			binding.params.some(({ value }) =>
-				["callback", "record", "sequence", "array"].includes(value.kind),
-			);
+			binding.params.some(({ value }) => inputCanRunJavaScript(value));
 		/** Whether JavaScript can run during the C call itself, in a callback. */
 		const callsBack =
 			this.#plan.hasCallbacks ||
@@ -2800,18 +2819,7 @@ export function generateBindingUnit(
 						arity: binding.params.length,
 						callsUserCode:
 							plan.hasCallbacks ||
-							binding.params.some(
-								({ value }) =>
-									![
-										"boolean",
-										"integer",
-										"float",
-										"bigint",
-										"string",
-										"bytes",
-										"handle",
-									].includes(value.kind),
-							),
+							binding.params.some(({ value }) => inputCanRunJavaScript(value)),
 						...(result === undefined ? {} : { result }),
 						...(borrows.length === 0 ? {} : { borrows }),
 						...(fields === undefined ? {} : { into: { fields } }),
