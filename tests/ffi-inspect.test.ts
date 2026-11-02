@@ -277,6 +277,65 @@ describe("ffi inspect", () => {
 		});
 	});
 
+	it("generates declarations for long documentation groups", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-documentation-group-"));
+		try {
+			const names = Array.from({ length: 8000 }, (_, index) => `documented_${index}`);
+			writeFileSync(
+				path.join(directory, "group.h"),
+				[
+					"/* Shared group documentation. */",
+					...names.map((name) => `int ${name}(int value);`),
+					"int trailing_end(void); // End-specific documentation.",
+					"int following_end(void);",
+				].join("\n"),
+			);
+			writeFileSync(
+				path.join(directory, "empty.c"),
+				"typedef int EmptyTranslationUnit;\n",
+			);
+			writeFileSync(
+				path.join(directory, "group.ffi.ts"),
+				'export default { headers: ["group.h"], find: [{ includeDirs: ["."], sources: ["empty.c"] }] };\n',
+			);
+			writeFileSync(
+				path.join(directory, "maligator.build.ts"),
+				'export default { ffi: { group: { contract: "group.ffi.ts" } } };\n',
+			);
+			const result = spawnSync(process.execPath, [cliEntry, "ffi", "types"], {
+				cwd: directory,
+				encoding: "utf8",
+				timeout: 30_000,
+			});
+			expect(result.status, result.error?.message || result.stderr).toBe(0);
+			const sdk = readFileSync(path.join(directory, "maligator-ffi.d.ts"), "utf8");
+			for (const name of [names[0]!, names.at(-1)!])
+				expect(sdk).toContain(
+					`/** Shared group documentation. */\n\texport function ${name}(value: number): number;`,
+				);
+			expect(sdk).toContain(
+				"/** End-specific documentation. */\n\texport function trailing_end(): number;",
+			);
+			const inspected = spawnSync(
+				process.execPath,
+				[cliEntry, "ffi", "inspect", "group", "--json"],
+				{
+					cwd: directory,
+					encoding: "utf8",
+					maxBuffer: 16 * 1024 * 1024,
+					timeout: 30_000,
+				},
+			);
+			expect(inspected.status, inspected.error?.message || inspected.stderr).toBe(0);
+			const report = JSON.parse(inspected.stdout) as FfiInspection;
+			expect(
+				report.functions.find((entry) => entry.name === "following_end")?.doc,
+			).toBeUndefined();
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("compiles a source-only library statically with its include directory", () => {
 		expect(shapes.resolution).toEqual({
 			method: "sources",

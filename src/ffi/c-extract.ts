@@ -537,6 +537,12 @@ interface DocumentedSpan {
 	readonly trailing: boolean;
 }
 
+interface DocumentedFile {
+	readonly ends: Map<number, DocumentedSpan>;
+	readonly starts: Set<number>;
+	preceding?: Map<number, FfiText | undefined>;
+}
+
 /**
  * Documentation for a declaration: a trailing comment on its last line, otherwise
  * the comment block above it. Undocumented sibling declarations between the two
@@ -544,7 +550,7 @@ interface DocumentedSpan {
  */
 class Documentation {
 	readonly #sources = new SourceTexts();
-	readonly #spans = new Map<string, Array<DocumentedSpan>>();
+	readonly #files = new Map<string, DocumentedFile>();
 
 	trailing(location: NodeLocation): FfiText | undefined {
 		return trailingComment(
@@ -555,29 +561,43 @@ class Documentation {
 	}
 
 	record(file: string, span: DocumentedSpan): void {
-		let spans = this.#spans.get(file);
-		if (spans === undefined) {
-			spans = [];
-			this.#spans.set(file, spans);
+		let documented = this.#files.get(file);
+		if (documented === undefined) {
+			documented = { ends: new Map(), starts: new Set() };
+			this.#files.set(file, documented);
 		}
-		spans.push(span);
+		documented.starts.add(span.begin);
+		if (!span.trailing && !documented.ends.has(span.end))
+			documented.ends.set(span.end, span);
 	}
 
 	declaration(span: DeclarationSpan): FfiText | undefined {
 		const trailing = this.trailing(span.end);
 		if (trailing !== undefined) return trailing;
 		const lines = this.#sources.lines(span.begin.file);
-		const siblings = this.#spans.get(span.begin.file) ?? [];
-		let line = span.begin.line;
-		for (;;) {
-			const block = commentBlockAbove(lines, line);
-			if (block !== undefined) return block.text;
-			const sibling = siblings.find(
-				(candidate) => candidate.end === line - 1 && !candidate.trailing,
-			);
-			if (sibling === undefined) return undefined;
-			line = sibling.begin;
+		const file = this.#files.get(span.begin.file);
+		if (file?.preceding === undefined && file !== undefined) {
+			const preceding = new Map<number, FfiText | undefined>();
+			// Spans are complete before lookup; every adjacent predecessor starts earlier.
+			for (const line of [...file.starts].sort((left, right) => left - right)) {
+				const block = commentBlockAbove(lines, line);
+				const sibling = file.ends.get(line - 1);
+				preceding.set(
+					line,
+					block !== undefined
+						? block.text
+						: sibling === undefined
+							? undefined
+							: preceding.get(sibling.begin),
+				);
+			}
+			file.preceding = preceding;
 		}
+		if (file?.preceding?.has(span.begin.line)) return file.preceding.get(span.begin.line);
+		const block = commentBlockAbove(lines, span.begin.line);
+		if (block !== undefined) return block.text;
+		const sibling = file?.ends.get(span.begin.line - 1);
+		return sibling === undefined ? undefined : file?.preceding?.get(sibling.begin);
 	}
 }
 
