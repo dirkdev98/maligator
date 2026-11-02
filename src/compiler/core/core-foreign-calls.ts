@@ -1,6 +1,7 @@
 import type { FfiDirectEntry } from "../../build-config-values.ts";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../shared/compiler-value-kinds.ts";
@@ -135,6 +136,8 @@ function resultFacts(entry: FfiDirectEntry): CoreNormalResultFacts | undefined {
 			return { mask: COMPILER_VALUE_KIND_NUMBER };
 		case "boolean":
 			return { mask: COMPILER_VALUE_KIND_BOOLEAN };
+		case "bigint":
+			return { mask: COMPILER_VALUE_KIND_BIGINT };
 		case "undefined":
 			return { mask: COMPILER_VALUE_KIND_UNDEFINED };
 	}

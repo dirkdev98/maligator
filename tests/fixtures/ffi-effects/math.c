@@ -2,6 +2,8 @@
 #include <string.h>
 unsigned int effects_mix(unsigned int value) { return value * 1664525u + 1013904223u; }
 size_t effects_length(const char *value) { return strlen(value); }
+unsigned long long effects_wide(unsigned long long value) { return value; }
+long long effects_signed(long long value) { return value; }
 void effects_touch(unsigned char *bytes, size_t length) {
     for (size_t index = 0; index < length; index++) bytes[index] = 42;
 }

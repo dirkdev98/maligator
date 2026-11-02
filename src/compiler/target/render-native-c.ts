@@ -11041,7 +11041,18 @@ class NativeInstructionEmission {
 				const first = instruction.arguments[0];
 				const second = instruction.arguments[1];
 				const numericKernel = MATH_NUMBER_KERNELS[instruction.operation];
-				if (numericKernel !== undefined) {
+				if (
+					instruction.operation === "Number" &&
+					first !== undefined &&
+					this.operandKind(first) === COMPILER_VALUE_KIND_BIGINT
+				) {
+					const input = this.boxedOperand(first);
+					guard = "true";
+					direct = [
+						this.storeNumber(instruction.dst, `mal_ops_to_number(${input})`),
+						this.callPoll(),
+					];
+				} else if (numericKernel !== undefined) {
 					const guards: Array<string> = [];
 					const numbers = Array.from({ length: numericKernel[1] }, (_, index) => {
 						const operand = instruction.arguments[index];

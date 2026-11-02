@@ -52,7 +52,7 @@ function countValue(
 	return `${context}mal_argument_${String(index)}`;
 }
 
-/** The primitive a binding returns, which lets compiled callers keep it unboxed. */
+/** A binding's primitive normal result, which refines compiled caller facts. */
 function directResult(binding: BoundFunction): FfiDirectResult | undefined {
 	if (binding.outputs.length > 0) return undefined;
 	const value = binding.returns;
@@ -68,6 +68,7 @@ function directResult(binding: BoundFunction): FfiDirectResult | undefined {
 		case "float":
 			return { kind: "number" };
 		case "boolean":
+		case "bigint":
 		case "undefined":
 			return { kind: value.kind };
 		default:

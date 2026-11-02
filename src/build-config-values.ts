@@ -45,6 +45,7 @@ export type FfiDirectResult =
 	| { readonly kind: "integer"; readonly minimum: number; readonly maximum: number }
 	| { readonly kind: "number" }
 	| { readonly kind: "boolean" }
+	| { readonly kind: "bigint" }
 	| { readonly kind: "undefined" };
 
 /** The host module a configured C library provides as `maligator:ffi/<name>`. */

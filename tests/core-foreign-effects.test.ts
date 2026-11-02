@@ -8,7 +8,9 @@ import { cloneCoreFunction } from "../src/compiler/core/core-function-clone.ts";
 import { coreInstructionEffects } from "../src/compiler/core/core-ir-opcodes.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
+import { COMPILER_VALUE_KIND_BIGINT } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { decodeInstructionEffects } from "../src/compiler/shared/instruction-facts.ts";
+import { instructionResultKind } from "../src/compiler/shared/instruction-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -22,7 +24,11 @@ const binding: FfiDirectEntry = {
 	callsUserCode: false,
 	result: { kind: "integer", minimum: 0, maximum: 4294967295 },
 };
-function compile(callsUserCode: boolean, source = "return mix(value);") {
+function compile(
+	callsUserCode: boolean,
+	source = "return mix(value);",
+	result = binding.result,
+) {
 	let core: CoreFunctionStore | undefined;
 	const image = compileEntrypoint("/ffi-effects.mjs", {
 		buildConfig: {
@@ -32,7 +38,7 @@ function compile(callsUserCode: boolean, source = "return mix(value);") {
 					id: "maligator:ffi/math",
 					exports: ["mix"],
 					installer: "mal_ffi_install_math",
-					direct: { mix: { ...binding, callsUserCode } },
+					direct: { mix: { ...binding, callsUserCode, result } },
 				},
 			],
 		},
@@ -51,6 +57,29 @@ function compile(callsUserCode: boolean, source = "return mix(value);") {
 	return { core, image, native };
 }
 describe("static foreign call effects", () => {
+	it.each([false, true])(
+		"preserves BigInt normal results through artifacts with reentry %s",
+		(callsUserCode) => {
+			const { image, native } = compile(callsUserCode, "return Number(mix(value));", {
+				kind: "bigint",
+			});
+			const ip = native.body.instructions.findIndex(
+				(instruction) => instruction.opcode === "CALL",
+			);
+			const call = native.body.instructions[ip]!;
+			if (call.opcode !== "CALL") throw new Error("Missing foreign call");
+			expect(instructionResultKind(native.facts?.[ip], call.dst)).toBe(
+				COMPILER_VALUE_KIND_BIGINT,
+			);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+			expect(
+				instructionResultKind(
+					restored.native.functions[native.functionIndex]!.facts?.[ip],
+					call.dst,
+				),
+			).toBe(COMPILER_VALUE_KIND_BIGINT);
+		},
+	);
 	it("keeps C memory, exception, and GC effects while excluding JavaScript reentry", () => {
 		const { core, image, native } = compile(false);
 		const call = [...core.instructionIds()].find(

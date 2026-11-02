@@ -4,6 +4,8 @@ import { runInNewContext } from "node:vm";
 import {
 	effects_mix,
 	effects_length,
+	effects_wide,
+	effects_signed,
 	effects_touch,
 	effects_point,
 	effects_points,
@@ -25,6 +27,30 @@ function refuses(action: () => void, kind: typeof TypeError | typeof RangeError)
 setFlagsFromString("--expose-gc");
 const collect = runInNewContext("gc") as () => void;
 check(effects_length("alpine") === 6n, "literal string allocation reaches C");
+const wideCases: ReadonlyArray<readonly [bigint, number]> = [
+	[0n, 0],
+	[9007199254740993n, 9007199254740992],
+	[9223372036854775807n, 9223372036854775808],
+	[18446744073709551615n, 18446744073709551616],
+];
+for (const [value, rounded] of wideCases) {
+	let last = 0n;
+	let total = 0;
+	for (let index = 0; index < 16; index++) {
+		last = effects_wide(value);
+		total += Number(last);
+	}
+	check(
+		last === value && effects_wide(last) === value,
+		"foreign BigInts stay exact after Number conversion",
+	);
+	check(total === rounded * 16, "foreign BigInt Number rounding");
+}
+const signed = effects_signed(-9223372036854775808n);
+check(
+	signed === -9223372036854775808n && Number(signed) === -9223372036854775808,
+	"signed foreign BigInt boundary",
+);
 let sum = 0;
 for (let index = 0; index < 2048; index++) sum = (sum + effects_mix(index)) >>> 0;
 let expected = 0;
