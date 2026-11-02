@@ -44,6 +44,8 @@ it("binds const-member inputs and results in declaration order", () => {
 		"immutable_out",
 		"immutable_inout",
 		"immutable_token_out",
+		"immutable_array",
+		"immutable_token_array",
 		"z_make_before",
 		"immutable_visit",
 		"immutable_notify",
@@ -60,10 +62,8 @@ it.each([
 	"immutable_array_out",
 	"immutable_pair_out",
 	"immutable_numbers_out",
-	"immutable_array",
 	"immutable_callback_result",
-	"immutable_token_array",
-])("keeps const-member initialization out of the %s input path", (name) => {
+])("rejects unsafe const conversion through %s", (name) => {
 	const directory = project("ffi-const-results");
 	const result = cli(directory, "inspect", "const_values", "--json");
 	expect(result.status, result.stderr || result.stdout).toBe(0);

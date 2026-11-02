@@ -39,6 +39,10 @@ import {
 	tokenOutAsync,
 	immutable_token_out_visit,
 	tokenOutVisitAsync,
+	immutable_array,
+	arrayAsync,
+	immutable_token_array,
+	tokenArrayAsync,
 } from "maligator:ffi/const_values";
 import type { Immutable, ImmutableToken } from "maligator:ffi/const_values";
 
@@ -217,6 +221,28 @@ try {
 	bitRange = error instanceof RangeError;
 }
 check(bitRange, "const bit-field keeps its declared range");
+for (const count of [0, 1, 2, 5, 9]) {
+	const values = Array.from({ length: count }, (_, index) => a_make(index));
+	const sum = count * 45 + count * (count - 1) * 5;
+	check(
+		immutable_array(values) === sum,
+		"counted const records use aligned native elements",
+	);
+	const pending = arrayAsync(values);
+	if (count > 0) values[0]!.code = 1000;
+	check((await pending) === sum, "worker const array owns its element snapshots");
+}
+const beforeArrayFailure = immutable_taken();
+let arrayFailed = false;
+try {
+	immutable_array([a_make(0), { ...a_make(1), code: 1.5 }]);
+} catch (error) {
+	arrayFailed = error instanceof RangeError;
+}
+check(
+	arrayFailed && immutable_taken() === beforeArrayFailure,
+	"failed array conversion never enters C",
+);
 let caught = false;
 try {
 	immutable_visit(3, () => {
@@ -355,5 +381,45 @@ for (const async of [false, true]) {
 check(
 	immutable_token_destroyed() === 8 && immutable_token_destroy_sum() === 652,
 	"unexposed owned const outputs release after callback failure",
+);
+const arrayFirst = immutable_token_make(7);
+const arraySecond = immutable_token_make(11);
+const handleValues = [arrayFirst, arraySecond];
+Object.defineProperty(handleValues, 1, {
+	get() {
+		let pinned = false;
+		try {
+			arrayFirst[Symbol.dispose]();
+		} catch (error) {
+			pinned = error instanceof TypeError;
+		}
+		check(pinned, "const array elements stay pinned through later getters");
+		return arraySecond;
+	},
+});
+check(immutable_token_array(handleValues) === 38, "const copied-handle array inputs");
+let badHandle = false;
+try {
+	immutable_token_array([arrayFirst, {} as unknown as ImmutableToken]);
+} catch (error) {
+	badHandle = error instanceof TypeError;
+}
+check(badHandle, "invalid copied-handle array element is rejected");
+const handleArrayCall = tokenArrayAsync(handleValues);
+let arrayPinned = false;
+try {
+	arrayFirst[Symbol.dispose]();
+} catch (error) {
+	arrayPinned = error instanceof TypeError;
+}
+check(
+	arrayPinned && (await handleArrayCall) === 38,
+	"worker const arrays keep input resources alive",
+);
+arrayFirst[Symbol.dispose]();
+arraySecond[Symbol.dispose]();
+check(
+	immutable_token_destroyed() === 10 && immutable_token_destroy_sum() === 670,
+	"array staging releases pins without duplicating owners",
 );
 console.log("const results passed");

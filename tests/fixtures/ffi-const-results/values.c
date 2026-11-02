@@ -14,6 +14,12 @@ int z_take(Immutable value) {
     taken++;
     return value.code + value.nested.value + value.nested.writable + value.samples[0] + value.samples[1] + value.promoted + value.points[0].value + value.points[0].writable + value.points[1].value + value.points[1].writable;
 }
+int immutable_array(const Immutable *values, size_t count) {
+    if (count > 0 && (uintptr_t)values % _Alignof(Immutable) != 0) abort();
+    int sum = 0;
+    for (size_t index = 0; index < count; index++) sum += z_take(values[index]);
+    return sum;
+}
 int immutable_bits_take(ImmutableBits value) { taken++; return (int)value.code + value.payload; }
 void immutable_out(Immutable *value) {
     if ((uintptr_t)value % _Alignof(Immutable) != 0) abort();
@@ -36,6 +42,12 @@ int immutable_token_destroyed(void) { return token_destroyed; }
 int immutable_token_destroy_sum(void) { return token_destroy_sum; }
 uintptr_t immutable_token_address(const ImmutableToken *value) { return (uintptr_t)value; }
 int immutable_token_consume(ImmutableToken value) { return value.token + value.detail; }
+int immutable_token_array(const ImmutableToken *values, size_t count) {
+    if (count > 0 && (uintptr_t)values % _Alignof(ImmutableToken) != 0) abort();
+    int sum = 0;
+    for (size_t index = 0; index < count; index++) sum += immutable_token_consume(values[index]);
+    return sum;
+}
 int immutable_token_with_callback(ImmutableToken value, void (*callback)(void *), void *data) { callback(data); return value.token + value.detail; }
 void immutable_token_set(ImmutableToken *value, int detail) { value->detail = detail; }
 void immutable_token_visit(int seed, void (*callback)(ImmutableToken, void *), void *data) { callback(immutable_token_make(seed), data); }

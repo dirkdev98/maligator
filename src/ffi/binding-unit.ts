@@ -426,8 +426,8 @@ class BindingWriter {
 	}
 
 	/**
-	 * Statements that convert the JavaScript value `source` into the C lvalue
-	 * `target`. `fail` leaves the enclosing function after a pending throw.
+	 * Convert `source` into `target`. `initializeRecord` declares the native copy,
+	 * since const members cannot be assigned. `fail` leaves after a pending throw.
 	 */
 	read(
 		value: JsValue,
@@ -452,7 +452,7 @@ class BindingWriter {
 					`void *${temporary};`,
 					`if (!${inputs === "nullptr" ? `mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${temporary}, nullptr)` : `mal_ffi_input_handle(vm, ${inputs}, ${source}, &mal_ffi_type_${value.name}, ${value.nullable}, ${site}, &${temporary})`}) ${fail}`,
 					value.pass === "copy"
-						? `${target} = *(${this.#handle(value.name).spelling} *) ${temporary};`
+						? `${initializeRecord ? localDeclaration(type, target) : target} = *(${this.#handle(value.name).spelling} *) ${temporary};`
 						: `${target} = ${cast(temporary)};`,
 				];
 			}
@@ -2268,6 +2268,48 @@ class BindingWriter {
 						);
 						return;
 					}
+					// Const members prohibit the assignments used by inline array staging.
+					if (value.kind === "sequence" && this.#immutableRecord(value.element)) {
+						const elements = `mal_elements_${index}`;
+						const length = `mal_length_${index}`;
+						const position = this.#fresh("index");
+						const element = this.#fresh("element");
+						const native = this.#fresh("native_element");
+						locals.push(
+							`${localDeclaration(value.element, `*${elements}`)} = nullptr;`,
+							`int32_t ${length};`,
+						);
+						cleanup.push(`free(${elements});`);
+						body.push(
+							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &${length})) goto mal_done;`,
+							`static_assert(sizeof(*${elements}) % _Alignof(__typeof__(*${elements})) == 0, "FFI array stride must preserve C alignment");`,
+							`if (${length} > 0) {`,
+							`\t${elements} = mal_ffi_allocate_storage((size_t) ${length}, sizeof(*${elements}), _Alignof(__typeof__(*${elements})));`,
+							`\tif (${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
+							"}",
+							`for (int32_t ${position} = 0; ${position} < ${length}; ${position}++) {`,
+							`\tMalValue ${element};`,
+							`\tif (!mal_ffi_element(vm, ${source}, ${position}, ${length}, ${site}, &${element})) goto mal_done;`,
+							...this.read(
+								value.of,
+								value.element,
+								element,
+								native,
+								site,
+								"goto mal_done;",
+								strings,
+								false,
+								inputs,
+								false,
+								true,
+							).map((line) => `\t${line}`),
+							`\t__builtin_memcpy(&${elements}[${position}], &${native}, sizeof(${native}));`,
+							"}",
+							`${local} = (${localDeclaration(param.type, "")}) ${elements};`,
+						);
+						setCount(index, length, site, body);
+						return;
+					}
 					if (value.kind === "sequence") {
 						const elements = `mal_elements_${String(index)}`;
 						const length = `mal_length_${String(index)}`;
@@ -2985,6 +3027,47 @@ class BindingWriter {
 							`${target} = (${localDeclaration(param.type, "")}) mal_bytes_${String(index)};`,
 						);
 						setCount(index, `mal_bytes_length_${String(index)}`, site);
+						return;
+					}
+					if (value.kind === "sequence" && this.#immutableRecord(value.element)) {
+						const elements = `mal_elements_${index}`;
+						const length = `mal_length_${index}`;
+						const position = this.#fresh("index");
+						const element = this.#fresh("element");
+						const native = this.#fresh("native_element");
+						fields.push(
+							`${localDeclaration(value.element, `*${elements}`)};`,
+							`int32_t ${length};`,
+						);
+						frees.push(`free(mal_ctx->${elements});`);
+						body.push(
+							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &mal_ctx->${length})) goto mal_failed;`,
+							`static_assert(sizeof(*mal_ctx->${elements}) % _Alignof(__typeof__(*mal_ctx->${elements})) == 0, "FFI array stride must preserve C alignment");`,
+							`if (mal_ctx->${length} > 0) {`,
+							`\tmal_ctx->${elements} = mal_ffi_allocate_storage((size_t) mal_ctx->${length}, sizeof(*mal_ctx->${elements}), _Alignof(__typeof__(*mal_ctx->${elements})));`,
+							`\tif (mal_ctx->${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_failed; }`,
+							"}",
+							`for (int32_t ${position} = 0; ${position} < mal_ctx->${length}; ${position}++) {`,
+							`\tMalValue ${element};`,
+							`\tif (!mal_ffi_element(vm, ${source}, ${position}, mal_ctx->${length}, ${site}, &${element})) goto mal_failed;`,
+							...this.read(
+								value.of,
+								value.element,
+								element,
+								native,
+								site,
+								"goto mal_failed;",
+								strings,
+								false,
+								inputs,
+								false,
+								true,
+							).map((line) => `\t${line}`),
+							`\t__builtin_memcpy(&mal_ctx->${elements}[${position}], &${native}, sizeof(${native}));`,
+							"}",
+							`${target} = (${localDeclaration(param.type, "")}) mal_ctx->${elements};`,
+						);
+						setCount(index, `mal_ctx->${length}`, site);
 						return;
 					}
 					if (value.kind === "sequence") {

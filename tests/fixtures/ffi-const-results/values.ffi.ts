@@ -11,7 +11,10 @@ export default {
 		immutable_token_borrow: { returns: { borrowed: true }, async: "borrowTokenAsync" },
 		immutable_token_consume: { async: "consumeTokenAsync" },
 		immutable_token_destroy: { async: "destroyTokenAsync" },
-		immutable_token_array: { params: { values: { array: { length: "count" } } } },
+		immutable_token_array: {
+			params: { values: { array: { length: "count" } } },
+			async: "tokenArrayAsync",
+		},
 		immutable_token_with_callback: {
 			async: "consumeTokenWithCallbackAsync",
 			params: { callback: { callback: { data: "data" } } },
@@ -36,7 +39,10 @@ export default {
 			async: "tokenOutVisitAsync",
 		},
 		immutable_token_inout: { params: { value: { inout: true } } },
-		immutable_array: { params: { values: { array: { length: "count" } } } },
+		immutable_array: {
+			params: { values: { array: { length: "count" } } },
+			async: "arrayAsync",
+		},
 		immutable_callback_result: { params: { callback: { callback: {} } } },
 		immutable_visit: {
 			async: "visitAsync",
