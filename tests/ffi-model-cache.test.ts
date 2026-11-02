@@ -291,22 +291,28 @@ describe("preprocessed C model cache", () => {
 		);
 		chmodSync(wrapper, 0o755);
 		const temporal = { ...request, compiler: { ...request.compiler, path: wrapper } };
-		expect(
-			loadCModel(temporal).macros.find((macro) => macro.name === "CACHE_CLOCK")?.value,
-		).toBe("01:02:03");
-		expect(
-			loadCModel(temporal).macros.find((macro) => macro.name === "CACHE_CLOCK")?.value,
-		).toBe("04:05:06");
+		const first = loadCModel(temporal).macros.find(
+			(macro) => macro.name === "CACHE_CLOCK",
+		);
+		const second = loadCModel(temporal).macros.find(
+			(macro) => macro.name === "CACHE_CLOCK",
+		);
+		expect(first?.contextual).toBe(true);
+		expect(second?.contextual).toBe(true);
+		expect(first?.value).toBeUndefined();
+		expect(second?.value).toBeUndefined();
+		expect(second?.expansion).toBe(first?.expansion);
 	});
-	it("keeps context-dependent macro expansions in the cache identity", () => {
+	it("does not retain a probe path as a context-dependent macro value", () => {
 		const directory = project();
 		writeFileSync(path.join(directory, "cache.h"), "#define CACHE_FILE __FILE__\n");
 		const request = input(directory);
-		const value = () =>
-			loadCModel(request).macros.find((macro) => macro.name === "CACHE_FILE")?.value;
-		const first = value();
-		expect(first).toContain("probe-values.c");
-		expect(value()).not.toBe(first);
+		const macro = () =>
+			loadCModel(request).macros.find((macro) => macro.name === "CACHE_FILE");
+		const first = macro();
+		expect(first?.contextual).toBe(true);
+		expect(first?.value).toBeUndefined();
+		expect(macro()).toEqual(first);
 	});
 	it("reports opened headers when preprocessing fails", () => {
 		const directory = project();

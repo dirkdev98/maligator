@@ -34,6 +34,7 @@ import { C_FLOAT_NAMES, C_INTEGER_NAMES, parseCType, unnamedTagKey } from "./c-t
 import type { CType } from "./c-type.ts";
 import { clangProbeDeclarations, visitClangDeclarations } from "./clang-ast.ts";
 import { FfiError, FfiSourceChangedError } from "./ffi-error.ts";
+import { macroReferences } from "./macros.ts";
 
 export interface CExtractionInput {
 	/** A clang driver, or `zig cc`, which embeds clang. */
@@ -43,6 +44,7 @@ export interface CExtractionInput {
 	readonly headers: ReadonlyArray<string>;
 	/** Include directories and defines the library needs, as compiler arguments. */
 	readonly compileArguments: ReadonlyArray<string>;
+	readonly macroRoots?: ReadonlyArray<string>;
 	readonly onDependencies?: (files: ReadonlyArray<string>) => void;
 }
 
@@ -107,7 +109,8 @@ function assertClang(compiler: ToolExecutable): void {
 interface PreprocessedMacro {
 	readonly name: string;
 	readonly body: string;
-	readonly functionLike: boolean;
+	readonly parameters?: ReadonlyArray<string>;
+	readonly variadic?: boolean;
 	readonly file: string;
 	readonly line: number;
 }
@@ -183,10 +186,28 @@ function preprocess(
 		}
 		const define = DEFINE.exec(text);
 		if (define !== null) {
+			let body = define[3]!.trim();
+			let parameters: Array<string> | undefined;
+			let variadic = false;
+			if (define[2] !== undefined) {
+				const end = body.indexOf(")");
+				parameters = body
+					.slice(0, end)
+					.split(",")
+					.map((parameter) => parameter.trim())
+					.filter(Boolean)
+					.map((parameter) => {
+						if (!parameter.endsWith("...")) return parameter;
+						variadic = true;
+						return parameter.slice(0, -3).trim() || "__VA_ARGS__";
+					});
+				body = body.slice(end + 1).trim();
+			}
 			macros.set(define[1]!, {
 				name: define[1]!,
-				body: define[3]!.trim(),
-				functionLike: define[2] !== undefined,
+				body,
+				...(parameters === undefined ? {} : { parameters }),
+				...(variadic ? { variadic: true } : {}),
 				file,
 				line,
 			});
@@ -842,6 +863,10 @@ interface Probes {
 	readonly target: CTarget;
 	readonly typed: ReadonlyArray<MacroProbe>;
 	readonly untyped: ReadonlyArray<PreprocessedMacro>;
+	readonly expansions: ReadonlyMap<
+		string,
+		{ readonly expansion?: string; readonly contextual: boolean }
+	>;
 }
 
 interface ValueProbe {
@@ -857,6 +882,10 @@ function prepareValueProbe(
 	candidates: ReadonlyArray<PreprocessedMacro>,
 ): ValueProbe {
 	const lines = [includes];
+	lines.push(
+		"#define __mal_stringify(...) #__VA_ARGS__",
+		"#define __mal_expand(...) __mal_stringify(__VA_ARGS__)",
+	);
 	TARGET_PROBES.forEach((name, index) => {
 		lines.push(`enum : unsigned long long { __mal_size_${index} = sizeof(${name}) };`);
 	});
@@ -866,6 +895,28 @@ function prepareValueProbe(
 		// Unary plus promotes enums and small integers without changing the value.
 		lines.push(
 			`enum : __typeof__(+(${macro.name})) { __mal_macro_value_${index} = (${macro.name}) };`,
+		);
+		lines.push(
+			`static const char __mal_expansion_normal_${index}[] = __mal_expand(${macro.name});`,
+		);
+	});
+	// Compare actual expansion with a different caller context, after probing the
+	// ordinary declarations. Stringifying through Clang also follows token pasting.
+	for (const [name, value] of Object.entries({
+		__FILE__: '"<maligator-context-file>"',
+		__BASE_FILE__: '"<maligator-context-base>"',
+		__FILE_NAME__: '"<maligator-context-name>"',
+		__LINE__: "2147483646",
+		__INCLUDE_LEVEL__: "2147483645",
+		__COUNTER__: "2147483644",
+		__TIME__: '"<maligator-context-time>"',
+		__DATE__: '"<maligator-context-date>"',
+		__TIMESTAMP__: '"<maligator-context-timestamp>"',
+	}))
+		lines.push(`#undef ${name}`, `#define ${name} ${value}`);
+	candidates.forEach((macro, index) => {
+		lines.push(
+			`static const char __mal_expansion_neutral_${index}[] = __mal_expand(${macro.name});`,
 		);
 	});
 	const probePath = path.join(directory, "probe-values.c");
@@ -947,7 +998,38 @@ function probe(
 
 	const typed: Array<MacroProbe> = [];
 	const untyped: Array<PreprocessedMacro> = [];
+	const expansions = new Map<
+		string,
+		{ readonly expansion?: string; readonly contextual: boolean }
+	>();
+	const stringToken = (node: JsonObject | undefined): string | undefined => {
+		if (node === undefined || node.isInvalid === true) return undefined;
+		if (node.kind === "StringLiteral" && typeof node.value === "string")
+			return node.value;
+		for (const child of innerNodes(node)) {
+			const value = stringToken(child);
+			if (value !== undefined) return value;
+		}
+		return undefined;
+	};
 	candidates.forEach((macro, index) => {
+		const normal = stringToken(nodes.get(`__mal_expansion_normal_${index}`));
+		const neutral = stringToken(nodes.get(`__mal_expansion_neutral_${index}`));
+		// Compiler source-location builtins survive preprocessing but change when
+		// their expression is emitted in the binding's function body.
+		const sourceLocation =
+			neutral !== undefined &&
+			macroReferences(unescapeCString(neutral) ?? neutral.slice(1, -1)).some((name) =>
+				/^__builtin_(?:LINE|COLUMN|FILE|FUNCTION|FUNCSIG|source_location)$/.test(name),
+			);
+		expansions.set(macro.name, {
+			...(neutral === undefined ? {} : { expansion: neutral }),
+			contextual:
+				normal === undefined ||
+				neutral === undefined ||
+				normal !== neutral ||
+				sourceLocation,
+		});
 		const typeNode = nodes.get(`__mal_macro_type_${index}`);
 		const typeOf =
 			typeNode === undefined || typeNode.isInvalid === true
@@ -968,7 +1050,7 @@ function probe(
 			...(literal === undefined ? {} : { literal }),
 		});
 	});
-	return { target: { sizes, charSigned }, typed, untyped };
+	return { target: { sizes, charSigned }, typed, untyped, expansions };
 }
 
 /**
@@ -1008,6 +1090,7 @@ export interface CHeaders {
 	readonly versions: ReadonlyArray<CHeaderVersion>;
 	readonly cacheable: boolean;
 	readonly candidates: ReadonlyArray<PreprocessedMacro>;
+	readonly definitions: ReadonlyArray<PreprocessedMacro>;
 	readonly valueProbe: ValueProbe;
 	validate(): void;
 }
@@ -1157,13 +1240,30 @@ export function withCHeaders<Result>(
 			if (!directories.has(parent)) directories.set(parent, directoryVersion(parent));
 		}
 		const isLibraryFile = libraryFileFilter(input.headers, preprocessed.headerPaths);
-		const candidates = [...preprocessed.macros.values()].filter(
+		const exported = [...preprocessed.macros.values()].filter(
 			(macro) =>
-				!macro.functionLike &&
+				macro.parameters === undefined &&
 				macro.body !== "" &&
 				!isPseudoFile(macro.file) &&
 				isLibraryFile(path.resolve(directory, macro.file)) &&
 				balancedBody(macro.body),
+		);
+		const selected = new Set<string>();
+		const pending = [...exported.map((macro) => macro.name), ...(input.macroRoots ?? [])];
+		while (pending.length > 0) {
+			const name = pending.pop()!;
+			if (selected.has(name)) continue;
+			const macro = preprocessed.macros.get(name);
+			if (macro === undefined) continue;
+			selected.add(name);
+			pending.push(...macroReferences(macro.body, macro.parameters));
+		}
+		const definitions = [...preprocessed.macros.values()].filter((macro) =>
+			selected.has(macro.name),
+		);
+		const candidates = definitions.filter(
+			(macro) =>
+				macro.parameters === undefined && macro.body !== "" && balancedBody(macro.body),
 		);
 		const valueProbe = prepareValueProbe(input, directory, includes, candidates);
 		let includeGraphValidated = false;
@@ -1174,6 +1274,7 @@ export function withCHeaders<Result>(
 			versions,
 			cacheable: valueProbe.preprocessed && guarded,
 			candidates,
+			definitions,
 			valueProbe,
 			validate() {
 				if (!includeGraphValidated) {
@@ -1286,10 +1387,17 @@ export function extractCModelFromHeaders(
 		return {
 			name: macro.name,
 			body: macro.body,
+			...probes.expansions.get(macro.name),
+			library: isLibraryFile(path.resolve(cwd, macro.file)),
+			...(macro.parameters === undefined ? {} : { parameters: macro.parameters }),
+			...(macro.variadic === undefined ? {} : { variadic: macro.variadic }),
 			location,
 			...(doc === undefined ? {} : { doc }),
 		};
 	};
+	const probed = new Set(headers.candidates.map((macro) => macro.name));
+	for (const macro of headers.definitions)
+		if (!probed.has(macro.name)) untypedMacros.push(documentedMacro(macro));
 	for (const macro of probes.untyped) {
 		untypedMacros.push(documentedMacro(macro));
 	}
@@ -1303,7 +1411,12 @@ export function extractCModelFromHeaders(
 		}
 		const integral =
 			resolved.kind === "integer" || resolved.kind === "bool" || resolved.kind === "enum";
-		const value = integral ? entry.integer : entry.literal;
+		const value =
+			documented.contextual === true
+				? undefined
+				: integral
+					? entry.integer
+					: entry.literal;
 		macros.push({
 			...documented,
 			type: entry.type,

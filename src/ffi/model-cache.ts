@@ -173,7 +173,7 @@ export function loadCModel(input: CExtractionInput): CModel {
 	)
 		return extractCModel(input);
 	const compiler = statSync(input.compiler.path);
-	const producer = compilerProducerIdentity(STAGE, 3);
+	const producer = compilerProducerIdentity(STAGE, 4);
 	const analysis = withCHeaders<{
 		model: CModel;
 		publication?: { key: string; dependencies: ReadonlyArray<Dependency> };
@@ -188,6 +188,7 @@ export function loadCModel(input: CExtractionInput): CModel {
 				modified: compiler.mtimeMs,
 			},
 			headers: input.headers,
+			macroRoots: [...(input.macroRoots ?? [])].sort(),
 			preprocessed: headers.preprocessed.identity,
 			values: headers.valueProbe.identity,
 			versions: headers.versions,

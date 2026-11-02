@@ -537,10 +537,13 @@ After reviewing a contract against the installed headers, record its declaration
 maligator ffi check --update
 ```
 
-Commit `maligator-ffi.lock.json` with the contract. Fixed argument and cleanup status
-facts also watch macros and enums in the declared library headers, including macro
-aliases that have no JavaScript export. Add supporting headers to `headers` when
-their macros belong to the contract. Run `maligator ffi check` in CI to report changes
+Commit `maligator-ffi.lock.json` with the contract. Fixed argument, cleanup status, and
+documentation facts follow macro definitions through included headers, including
+function-like helpers and token-pasted expansions. Supporting macros stay private unless
+their headers belong to the declared library surface. Context-dependent macros such as
+`__COUNTER__` and `__FILE__` cannot become automatic JavaScript constants or cleanup success
+codes; fixed arguments remain C expressions evaluated by the C compiler.
+Run `maligator ffi check` in CI to report changes
 before accepting a library upgrade. The command reads the headers and facts and exits
 with status 1 if they differ or have no accepted snapshot. Review
 the changes, update the facts if needed, then run `--update` again.

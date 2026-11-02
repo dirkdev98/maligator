@@ -6,6 +6,7 @@ import type { CFunction } from "./c-model.ts";
 import type { CType } from "./c-type.ts";
 import { FfiError } from "./ffi-error.ts";
 import type { PreparedLibrary } from "./library.ts";
+import { macroFactRoots, macroReferences } from "./macros.ts";
 import type { FfiProbeReport } from "./probe.ts";
 
 type Json =
@@ -248,15 +249,15 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 			const key = `macro ${name}`;
 			declarations[key] = json({
 				body: macro.body,
-				...(typed === undefined
+				parameters: macro.parameters,
+				variadic: macro.variadic,
+				expansion: macro.expansion,
+				contextual: macro.contextual,
+				...(typed === undefined || macro.contextual === true
 					? {}
 					: { type: type(typed.type, key), value: typed.value }),
 			});
-			const expression = macro.body.replace(
-				/(?:u8|[LuU])?"(?:\\.|[^"\\])*"|(?:[LuU])?'(?:\\.|[^'\\])*'/g,
-				" ",
-			);
-			for (const identifier of expression.match(/\b[A-Za-z_]\w*\b/g) ?? [])
+			for (const identifier of macroReferences(macro.body, macro.parameters))
 				constant(identifier);
 		}
 		const enumeration = [...model.enums.values()].find((entry) =>
@@ -276,7 +277,6 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 			mapping(value.returns);
 		} else if (value.kind === "array" || value.kind === "sequence") mapping(value.of);
 	};
-	const fixedConstants = new Set<string>();
 	for (const name of Object.keys(contract.facts.functions).sort()) {
 		const facts = contract.facts.functions[name]!;
 		helper(name);
@@ -285,7 +285,6 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 			...Object.values(facts.variants ?? {}).map((variant) => variant.params),
 		])
 			for (const value of Object.values(params ?? {})) {
-				if (value.constant !== undefined) fixedConstants.add(value.constant);
 				if (value.sizeof !== undefined) {
 					const name = value.sizeof;
 					if (model.typedefs.has(name)) type({ kind: "typedef", name }, `sizeof ${name}`);
@@ -297,7 +296,7 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 				}
 			}
 	}
-	for (const name of [...fixedConstants].sort()) constant(name);
+	for (const name of macroFactRoots(contract.facts)) constant(name);
 	for (const name of Object.keys(contract.facts.types).sort()) {
 		if (model.typedefs.has(name)) type({ kind: "typedef", name }, `type fact ${name}`);
 		else {
@@ -333,11 +332,12 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 		const success = handle.destroy?.success;
 		if (success !== undefined) constant(success);
 	}
-	for (const constant of plan.constants) {
-		const macro = macros.get(constant.name);
-		declarations[`constant ${constant.name}`] = json({
-			type: type(constant.type, `constant ${constant.name}`),
-			value: constant.known,
+	for (const binding of plan.constants) {
+		constant(binding.name);
+		const macro = macros.get(binding.name);
+		declarations[`constant ${binding.name}`] = json({
+			type: type(binding.type, `constant ${binding.name}`),
+			value: binding.known,
 			body: macro?.body,
 		});
 	}

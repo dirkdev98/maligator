@@ -18,6 +18,7 @@ import type { LibraryContract } from "./contract.ts";
 import { resolveLibrary } from "./discovery.ts";
 import type { LinkInput, ResolvedLibrary } from "./discovery.ts";
 import { FfiError } from "./ffi-error.ts";
+import { macroFactRoots } from "./macros.ts";
 import { loadCModel } from "./model-cache.ts";
 
 /** A configured C library after discovery, header extraction, and mapping. */
@@ -89,7 +90,11 @@ export function prepareLibrary(
 		],
 		onDependencies: preparation.onDependencies,
 	};
-	const extracted = loadCModel({ ...extraction, headers: contract.headers });
+	const extracted = loadCModel({
+		...extraction,
+		headers: contract.headers,
+		macroRoots: macroFactRoots(contract.facts),
+	});
 	const model: CModel = {
 		...extracted,
 		dependencies: [

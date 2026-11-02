@@ -1754,10 +1754,6 @@ function constantValue(value: bigint, mapping: JsValue): bigint | number {
 }
 
 /**
- * Apply the mapping rules and the contract's facts to every declaration a
- * library's headers provide. Facts that name nothing in the headers throw.
- */
-/**
  * Bind one variant of a variadic function as a declaration whose variadic arguments
  * have the variant's types, exported under the variant's name. Calls still go to the
  * variadic function, so the C compiler applies the default argument promotions.
@@ -1922,8 +1918,16 @@ export function planBindings(
 		}
 	}
 	for (const macro of model.macros) {
+		if (!macro.library) continue;
 		if (seen.has(macro.name)) continue;
 		seen.add(macro.name);
+		if (macro.contextual === true) {
+			skippedConstants.push({
+				name: macro.name,
+				reason: "depends on the macro expansion context",
+			});
+			continue;
+		}
 		const resolved = resolveCType(model, macro.type);
 		const isString =
 			resolved.kind === "array" &&
@@ -1950,6 +1954,7 @@ export function planBindings(
 		});
 	}
 	for (const macro of model.untypedMacros) {
+		if (!macro.library || macro.parameters !== undefined) continue;
 		if (seen.has(macro.name)) continue;
 		skippedConstants.push({ name: macro.name, reason: "not a constant expression" });
 	}

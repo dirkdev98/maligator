@@ -88,7 +88,9 @@ describe("ffi check", () => {
 	it("watches pointer-valued macros reached through fixed argument aliases", () => {
 		const directory = project();
 		const headerPath = path.join(directory, "include/shapes.h");
-		const macros = `${header}\n#define SHAPES_CALLBACK_BASE ((void (*)(void))0)\n#define SHAPES_CALLBACK SHAPES_CALLBACK_BASE\nvoid shapes_callback(void (*callback)(void));\n`;
+		const privateHeader = path.join(directory, "include/private.h");
+		writeFileSync(privateHeader, "#define SHAPES_CALLBACK_BASE ((void (*)(void))0)\n");
+		const macros = `${header}\n#include "private.h"\n#define SHAPES_CALLBACK SHAPES_CALLBACK_BASE\nvoid shapes_callback(void (*callback)(void));\n`;
 		writeFileSync(headerPath, macros);
 		writeContract(directory, {
 			functions: {
@@ -96,10 +98,7 @@ describe("ffi check", () => {
 			},
 		});
 		accept(directory);
-		writeFileSync(
-			headerPath,
-			macros.replace("((void (*)(void))0)", "((void (*)(void))1)"),
-		);
+		writeFileSync(privateHeader, "#define SHAPES_CALLBACK_BASE ((void (*)(void))1)\n");
 		expect(check(directory, [], 1).libraries[0]?.changes).toContainEqual({
 			path: "declarations.macro SHAPES_CALLBACK_BASE.body",
 			kind: "changed",
@@ -107,6 +106,155 @@ describe("ffi check", () => {
 			after: "((void (*)(void))1)",
 		});
 	});
+
+	it("watches macros formed by token pasting without exporting private helpers", () => {
+		const directory = project();
+		const privateHeader = path.join(directory, "include/private.h");
+		const definitions =
+			"#define JOIN_INNER(a,b) a##b\n#define JOIN(a,b) JOIN_INNER(a,b)\n#define PRIVATE_CODE 7\n#define PRIVATE_UNRELATED 2\n";
+		writeFileSync(privateHeader, definitions);
+		appendFileSync(
+			path.join(directory, "include/shapes.h"),
+			'\n#include "private.h"\n#define SHAPES_CODE JOIN(PRIVATE_,CODE)\n',
+		);
+		accept(directory);
+		const inspected = cli(directory, ["inspect", "shapes", "--json"]);
+		expect(inspected.status, inspected.stderr).toBe(0);
+		const inspection = JSON.parse(inspected.stdout) as {
+			constants: Array<{ name: string }>;
+			skippedConstants: Array<{ name: string }>;
+		};
+		expect(inspection.constants.map(({ name }) => name)).toContain("SHAPES_CODE");
+		expect(
+			[...inspection.constants, ...inspection.skippedConstants].some(
+				({ name }) => name.startsWith("PRIVATE_") || name.startsWith("JOIN"),
+			),
+		).toBe(false);
+		writeFileSync(
+			privateHeader,
+			definitions.replace("PRIVATE_UNRELATED 2", "PRIVATE_UNRELATED 3"),
+		);
+		expect(check(directory).ok).toBe(true);
+		writeFileSync(privateHeader, definitions.replace("PRIVATE_CODE 7", "PRIVATE_CODE 8"));
+		expect(check(directory, [], 1).libraries[0]?.changes).toContainEqual({
+			path: "declarations.macro SHAPES_CODE.expansion",
+			kind: "changed",
+			before: '"7"',
+			after: '"8"',
+		});
+	});
+
+	it("tracks private macros used only by a variadic variant", () => {
+		const directory = project();
+		const privateHeader = path.join(directory, "include/private.h");
+		writeFileSync(privateHeader, '#define PRIVATE_FORMAT "%d"\n');
+		appendFileSync(
+			path.join(directory, "include/shapes.h"),
+			'\n#include "private.h"\nint shapes_log(int selector, ...);\n',
+		);
+		writeContract(directory, {
+			functions: {
+				shapes_log: {
+					variants: {
+						shapes_log_int: {
+							params: { arg2: { constant: "PRIVATE_FORMAT" } },
+							args: ["const char *"],
+						},
+					},
+				},
+			},
+		});
+		accept(directory);
+		writeFileSync(privateHeader, '#define PRIVATE_FORMAT "%x"\n');
+		expect(
+			check(directory, [], 1).libraries[0]?.changes.some(
+				(change) => change.path === "declarations.macro PRIVATE_FORMAT.body",
+			),
+		).toBe(true);
+	});
+
+	it("tracks function-like macro evidence without treating its parameters or strings as dependencies", () => {
+		const directory = project();
+		const privateHeader = path.join(directory, "include/private.h");
+		const definitions =
+			'#define VALUE 9\n#define LITERAL 3\n/** Select the supplied value. */\n#define PRIVATE_SELECT(VALUE) (VALUE + sizeof("LITERAL"))\n';
+		writeFileSync(privateHeader, definitions);
+		appendFileSync(path.join(directory, "include/shapes.h"), '\n#include "private.h"\n');
+		writeContract(directory, {
+			functions: {
+				shapes_name: { evidence: [{ kind: "macro", name: "PRIVATE_SELECT" }] },
+			},
+		});
+		accept(directory);
+		writeFileSync(
+			privateHeader,
+			definitions.replace("VALUE 9", "VALUE 10").replace("LITERAL 3", "LITERAL 4"),
+		);
+		expect(check(directory).ok).toBe(true);
+		writeFileSync(privateHeader, definitions.replace("VALUE + sizeof", "VALUE - sizeof"));
+		expect(
+			check(directory, [], 1).libraries[0]?.changes.some(
+				(change) => change.path === "declarations.macro PRIVATE_SELECT.body",
+			),
+		).toBe(true);
+	});
+
+	it("keeps context-dependent macros out of declarations and checks their definitions consistently", () => {
+		const directory = project();
+		appendFileSync(
+			path.join(directory, "include/shapes.h"),
+			`
+#define SHAPES_COUNTER __COUNTER__
+#define SHAPES_SOURCE_LINE __builtin_LINE()
+#define JOIN_INNER(a,b) a##b
+#define JOIN(a,b) JOIN_INNER(a,b)
+/** The caller's source file. */
+#define SHAPES_FILE JOIN(__FI,LE__)
+#pragma clang diagnostic ignored "-Wdate-time"
+#define SHAPES_TIME __TIME__
+#define SHAPES_LITERAL "__FILE__"
+`,
+		);
+		writeContract(directory, {
+			functions: { shapes_name: { evidence: [{ kind: "macro", name: "SHAPES_FILE" }] } },
+		});
+		accept(directory);
+		expect(check(directory).ok).toBe(true);
+		const result = cli(directory, ["types"]);
+		expect(result.status, result.stderr).toBe(0);
+		const declarations = readFileSync(path.join(directory, "maligator-ffi.d.ts"), "utf8");
+		for (const name of [
+			"SHAPES_COUNTER",
+			"SHAPES_FILE",
+			"SHAPES_TIME",
+			"SHAPES_SOURCE_LINE",
+		])
+			expect(declarations).not.toContain(name);
+		expect(declarations).toContain("SHAPES_LITERAL");
+	});
+
+	it.each(["__COUNTER__", "__builtin_LINE()"])(
+		"rejects a cleanup success code that depends on %s",
+		(expression) => {
+			const directory = project();
+			appendFileSync(
+				path.join(directory, "include/shapes.h"),
+				`\n#define SHAPES_SUCCESS ${expression}\ntypedef struct BusyResource BusyResource;\nint resource_close(BusyResource *resource);\n`,
+			);
+			writeContract(directory, {
+				types: {
+					BusyResource: {
+						handle: {
+							destroy: { function: "resource_close", success: "SHAPES_SUCCESS" },
+						},
+					},
+				},
+			});
+			const result = cli(directory, ["check", "--update"]);
+			expect(result.status).toBe(1);
+			expect(result.stderr).toContain("known integer constant");
+		},
+	);
 
 	it("watches cleanup success codes from a transitive enum header", () => {
 		const directory = project();

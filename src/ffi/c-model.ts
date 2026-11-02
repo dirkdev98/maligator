@@ -76,24 +76,27 @@ export interface CTypedef {
 	readonly library: boolean;
 }
 
-/** An object-like macro whose body is a C expression of a known type. */
-export interface CMacro {
+/** Macro definitions retained for exports, contract dependencies, or documentation evidence. */
+export interface CMacroDefinition {
 	readonly name: string;
 	readonly body: string;
-	readonly type: CType;
-	/** Known when the expression is an integer constant or a plain literal. */
-	readonly value?: bigint | number | string;
+	readonly parameters?: ReadonlyArray<string>;
+	readonly variadic?: boolean;
+	readonly library: boolean;
+	readonly expansion?: string;
+	readonly contextual?: boolean;
 	readonly doc?: string;
 	readonly location: CLocation;
 }
 
-/** An object-like macro the probe could not type, kept so inspect can explain it. */
-export interface CUntypedMacro {
-	readonly name: string;
-	readonly body: string;
-	readonly doc?: string;
-	readonly location: CLocation;
+/** An object-like macro whose body is a C expression of a known type. */
+export interface CMacro extends CMacroDefinition {
+	readonly type: CType;
+	/** Known when the expression is an integer constant or a plain literal. */
+	readonly value?: bigint | number | string;
 }
+
+export type CUntypedMacro = CMacroDefinition;
 
 export interface CModel {
 	readonly target: CTarget;

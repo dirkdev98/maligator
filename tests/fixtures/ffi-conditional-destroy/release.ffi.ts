@@ -6,7 +6,7 @@ export default {
 	find: [{ includeDirs: ["."], sources: ["release.c"] }],
 	types: {
 		BusyResource: {
-			handle: { destroy: { function: "release_close", success: "RELEASE_OK" } },
+			handle: { destroy: { function: "release_close", success: "PRIVATE_RELEASE_OK" } },
 		},
 		AlwaysResource: { handle: { destroy: "release_always_close" } },
 		BooleanResource: {

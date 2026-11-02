@@ -1,6 +1,7 @@
 #ifndef RELEASE_H
 #define RELEASE_H
 #include <stdbool.h>
+#include "release-status.h"
 
 typedef struct BusyResource BusyResource;
 typedef struct AlwaysResource AlwaysResource;
