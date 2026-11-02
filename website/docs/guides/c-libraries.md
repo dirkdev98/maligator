@@ -100,9 +100,10 @@ Conversions never coerce. A value of the wrong type throws a `TypeError`, and a 
 A function is exported only when every parameter and its result map. Functions that take or return other pointers, callbacks, or variadic arguments are not exported until the contract describes them.
 
 Repeated string inputs can retain a UTF-8 encoding alongside their JavaScript
-storage, avoiding encoding work on later synchronous calls. The extra encoding
-uses memory while retained. Mutable inputs, callbacks, and asynchronous calls use
-private input copies.
+storage, avoiding encoding work on later synchronous calls. ASCII inputs can instead
+grow their existing backing to add a NUL terminator. Preparation increases retained
+memory and can cost more than copying for short reuse sequences. Mutable inputs,
+callbacks, and asynchronous calls use private input copies.
 
 ## Read and write globals
 

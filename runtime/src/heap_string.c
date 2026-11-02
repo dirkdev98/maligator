@@ -306,12 +306,23 @@ void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_unit
 }
 
 const u8 *mal_string_prepare_ascii_cstr(MalHeap *heap, MalString *string) {
-    if (string->storage != MAL_STRING_STORAGE_OWNED || !string->latin1) return nullptr;
+    if (!string->latin1) return nullptr;
+    uptr reuse = MAL_STRING_ASCII_SEEN;
+    if (string->storage != MAL_STRING_STORAGE_OWNED) {
+        if (string->storage != MAL_STRING_STORAGE_PREPARED_UTF8
+            || string->ffi_utf8_state < MAL_STRING_ASCII_SEEN
+            || (string->ffi_utf8_state & 1) == 0) return nullptr;
+        reuse = string->ffi_utf8_state + 2;
+    }
     usize capacity = mal_heap_raw_capacity(heap, string->latin1_units);
     if (capacity <= string->length) {
-        // Crossing a small size class could double retained storage for one terminator.
+        // Delay size-class growth until repeated copies can amortize a managed allocation.
         usize terminated = (usize) string->length + 1;
-        if (mal_heap_allocation_charge(terminated) > capacity + 1) return nullptr;
+        if (reuse <= MAL_STRING_ASCII_REUSED && mal_heap_allocation_charge(terminated) > capacity + 1) {
+            string->ffi_utf8_state = reuse;
+            string->storage = MAL_STRING_STORAGE_PREPARED_UTF8;
+            return nullptr;
+        }
         u8 *grown = mal_heap_try_realloc_raw_profiled(
             heap, (void *) string->latin1_units, terminated, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
         if (grown == nullptr) return nullptr;

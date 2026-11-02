@@ -18,10 +18,12 @@ function utf16Bridge(text: string): string {
 	// oxlint-disable-next-line typescript/no-deprecated -- This wrapper forces the runtime's UTF16 bridge.
 	return text.bold();
 }
-for (const size of [0, 64, 255, 256, 257, 4095, 4096, 8191, 8192, 65535, 65536]) {
+for (const size of [
+	0, 64, 255, 256, 257, 4095, 4096, 5120, 6144, 7168, 8191, 8192, 65535, 65536,
+]) {
 	const text = owned(size);
 	const expected = "x".repeat(size);
-	for (let call = 0; call < 3; call++) {
+	for (let call = 0; call < 32; call++) {
 		check(input_length(text) === size, "repeated terminated input");
 		check(input_count(text) === size * 120, "repeated counted input");
 	}
@@ -37,6 +39,23 @@ for (const size of [0, 64, 255, 256, 257, 4095, 4096, 8191, 8192, 65535, 65536])
 		"UTF16 bridging preserves prepared input",
 	);
 	check(input_length(text) === size, "input remains valid after widening");
+}
+for (const calls of [1, 2, 3, 15]) {
+	const text = owned(4096);
+	for (let call = 0; call < calls; call++)
+		check(input_length(text) === 4096, "pending ASCII preparation preserves input");
+	const slice = text.slice(1, -1);
+	const keys = new Map([[text, calls]]);
+	check(
+		utf16Bridge(text) === `<b>${"x".repeat(4096)}</b>`,
+		"pending ASCII input can widen",
+	);
+	check(
+		slice.length === 4094 && /^x+$/.test(slice),
+		"dependent input survives pending widening",
+	);
+	check(keys.get("x".repeat(4096)) === calls, "pending input keeps its content hash");
+	check(input_length(text) === 4096, "widened pending input converts again");
 }
 const getterText = owned(8191);
 check(input_length(getterText) === 8191, "prepare input before later argument getters");

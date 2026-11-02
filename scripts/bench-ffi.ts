@@ -128,12 +128,12 @@ const CASES: Array<Case> = [
 			iterations: size === 64 ? 1000000 : size === 4096 ? 250000 : 10000,
 		})),
 	),
-	...[64, 4095, 65535].flatMap((size) =>
+	...[64, 4095, 4096, 65535].flatMap((size) =>
 		["early", "equal", "late"].map((pattern) => ({
 			mode: "libc-strcmp",
 			size,
 			pattern,
-			iterations: size === 64 ? 1000000 : size === 4095 ? 250000 : 10000,
+			iterations: size === 64 ? 1000000 : size <= 4096 ? 250000 : 10000,
 		})),
 	),
 	...[64, 1024, 1048576].flatMap((size) =>

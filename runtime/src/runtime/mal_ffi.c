@@ -149,13 +149,13 @@ bool mal_ffi_to_string(
     if (units >= capacity) {
         if ((flags & MAL_FFI_STRING_BORROW) != 0
             && string->storage == MAL_STRING_STORAGE_PREPARED_UTF8) {
-            if (string->ffi_utf8_state == 0) {
-                out->data = (char *) string->latin1_units;
-                out->length = units;
-                out->borrowed = true;
-                return true;
-            }
-            if (string->ffi_utf8_state != MAL_STRING_UTF8_SEEN) {
+            if ((string->ffi_utf8_state & 1) == 0) {
+                if (string->ffi_utf8_state == 0) {
+                    out->data = (char *) string->latin1_units;
+                    out->length = units;
+                    out->borrowed = true;
+                    return true;
+                }
                 const MalStringUtf8 *encoded = mal_string_ffi_utf8_cache(string);
                 if (encoded->has_nul && !counted)
                     return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,

@@ -30,7 +30,10 @@ typedef struct MalStringUtf8 {
 } MalStringUtf8;
 
 #define MAL_STRING_UTF8_SEEN ((uptr) 1)
-static_assert(_Alignof(MalStringUtf8) > MAL_STRING_UTF8_SEEN, "encoding pointers must leave the seen state unused");
+#define MAL_STRING_ASCII_SEEN ((uptr) 3)
+#define MAL_STRING_ASCII_REUSE_THRESHOLD 16
+#define MAL_STRING_ASCII_REUSED ((uptr) (2 * MAL_STRING_ASCII_REUSE_THRESHOLD - 1))
+static_assert(_Alignof(MalStringUtf8) > 1, "encoding pointers must leave the pending-state bit unused");
 
 typedef struct MalString {
     MalHeapHeader header;
@@ -50,7 +53,7 @@ typedef struct MalString {
         const u8 *latin1_units;
         struct {
             const void *ffi_units;
-            /** PREPARED_UTF8: zero is terminated ASCII, SEEN awaits reuse, otherwise an aligned encoding pointer. */
+            /** PREPARED_UTF8: zero is terminated ASCII, odd values count pending reuse, otherwise an encoding pointer. */
             uptr ffi_utf8_state;
         };
         c16 inline_code_units[8];
@@ -68,7 +71,8 @@ typedef struct MalString {
 } MalString;
 
 static inline MalStringUtf8 *mal_string_ffi_utf8_cache(const MalString *string) {
-    return string->storage == MAL_STRING_STORAGE_PREPARED_UTF8 && string->ffi_utf8_state > MAL_STRING_UTF8_SEEN
+    return string->storage == MAL_STRING_STORAGE_PREPARED_UTF8 && string->ffi_utf8_state != 0
+        && (string->ffi_utf8_state & 1) == 0
         ? (MalStringUtf8 *) string->ffi_utf8_state : nullptr;
 }
 
@@ -159,7 +163,7 @@ MalString *mal_string_new_utf16_owned(MalHeap *heap, const c16 *units, usize len
  * Allocate and initialize a string from ASCII bytes.
  */
 MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length);
-/** Caller proves ASCII without NULs. Adds at most one backing byte; UTF16 bridging invalidates the span. */
+/** Caller proves ASCII without NULs; reuse can grow the owned backing. UTF16 bridging invalidates the span. */
 const u8 *mal_string_prepare_ascii_cstr(MalHeap *heap, MalString *string);
 /** Observe owned flat inputs, retaining their encoding on reuse; allocation failure keeps the temporary usable. */
 const MalStringUtf8 *mal_string_prepare_ffi_utf8(
