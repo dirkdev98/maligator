@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { BuildConfigError } from "../build-config-error.ts";
+import { parseModule } from "../compiler/frontend/parser.ts";
 import type {
 	BuildConfigTypeStripper,
 	Leaf,
@@ -17,6 +18,7 @@ import {
 import type {
 	MaligatorFfiFind,
 	MaligatorFfiFunctionFacts,
+	MaligatorFfiGlobalFacts,
 	MaligatorFfiLibrary,
 	MaligatorFfiTypeFacts,
 	MaligatorLibraryContract,
@@ -146,11 +148,11 @@ function validateEvidence(value: unknown, at: string): void {
 		expectKeys(reference, entryAt, ["kind", "name"]);
 		expect(
 			typeof reference.kind === "string" &&
-				["function", "typedef", "struct", "union", "enum", "macro"].includes(
+				["function", "global", "typedef", "struct", "union", "enum", "macro"].includes(
 					reference.kind,
 				),
 			`${entryAt}.kind`,
-			"function, typedef, struct, union, enum, or macro",
+			"function, global, typedef, struct, union, enum, or macro",
 		);
 		expect(
 			typeof reference.name === "string" && C_NAME.test(reference.name),
@@ -546,6 +548,35 @@ function validateFunctionFacts(value: unknown, at: string): void {
 	}
 }
 
+function validateGlobalFacts(value: unknown, at: string): void {
+	expectObject(value, at);
+	expectKeys(value, at, ["get", "set", "returns", "evidence"]);
+	expect(
+		value.get !== undefined || value.set !== undefined,
+		at,
+		"a getter or setter export",
+	);
+	for (const key of ["get", "set"] as const)
+		if (value[key] !== undefined) {
+			const name = value[key];
+			let valid = false;
+			if (typeof name === "string" && C_NAME.test(name)) {
+				try {
+					parseModule(`export function ${name}() {}`);
+					valid = true;
+				} catch {
+					valid = false;
+				}
+			}
+			expect(valid, `${at}.${key}`, "a JavaScript function export name");
+		}
+	if (value.returns !== undefined) {
+		expect(value.get !== undefined, `${at}.returns`, "read facts beside a getter");
+		validateValueFacts(value.returns, `${at}.returns`);
+	}
+	if (value.evidence !== undefined) validateEvidence(value.evidence, `${at}.evidence`);
+}
+
 const CONTRACT_SCHEMA: ObjectSchema = {
 	object: {
 		headers: {
@@ -571,6 +602,7 @@ const CONTRACT_SCHEMA: ObjectSchema = {
 		},
 		types: { leaf: (value, at) => namedRecord(value, at, validateTypeFacts) },
 		functions: { leaf: (value, at) => namedRecord(value, at, validateFunctionFacts) },
+		globals: { leaf: (value, at) => namedRecord(value, at, validateGlobalFacts) },
 	},
 };
 
@@ -603,6 +635,7 @@ export function resolveFind(find: MaligatorFfiFind, baseDirectory: string): Reso
 export interface LibraryFacts {
 	readonly types: Readonly<Record<string, MaligatorFfiTypeFacts>>;
 	readonly functions: Readonly<Record<string, MaligatorFfiFunctionFacts>>;
+	readonly globals?: Readonly<Record<string, MaligatorFfiGlobalFacts>>;
 }
 
 export interface LibraryContract {
@@ -656,7 +689,11 @@ export function loadLibraryContract(
 		name,
 		path: contractPath,
 		headers: [...contract.headers],
-		facts: { types: { ...contract.types }, functions: { ...contract.functions } },
+		facts: {
+			types: { ...contract.types },
+			functions: { ...contract.functions },
+			...(contract.globals === undefined ? {} : { globals: { ...contract.globals } }),
+		},
 		find,
 		link: library.link,
 	};

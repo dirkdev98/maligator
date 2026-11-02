@@ -338,6 +338,7 @@ function publicReference(
 		"MaligatorFfiTypeFacts",
 		"MaligatorFfiValueFacts",
 		"MaligatorFfiFunctionFacts",
+		"MaligatorFfiGlobalFacts",
 		"MaligatorFfiVariant",
 		"MaligatorLibraryContract",
 		"MaligatorBuildConfig",

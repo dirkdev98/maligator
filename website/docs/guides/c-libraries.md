@@ -99,6 +99,30 @@ Conversions never coerce. A value of the wrong type throws a `TypeError`, and a 
 
 A function is exported only when every parameter and its result map. Functions that take or return other pointers, callbacks, or variadic arguments are not exported until the contract describes them.
 
+## Read and write globals
+
+Name the accessor exports in the contract:
+
+```typescript
+globals: {
+  library_mode: { get: "getMode", set: "setMode" },
+  library_title: { get: "getTitle", returns: { string: true } },
+  library_context: { get: "getContext", returns: { borrowed: true } },
+}
+```
+
+Import and call these functions like other FFI exports. A getter reads the current C
+object; a setter converts its argument completely before assigning. Value records
+and integers use the same mappings as function arguments and results.
+
+Access requires an externally linked object. Const objects have no setter. Setters
+accept assignable values without retained pointers, so C storage cannot retain a
+temporary string encoding, buffer view, or handle. Getter results cannot transfer
+ownership: strings are copied and handles require `borrowed: true`.
+
+Accessors run on the calling thread, including for thread-local objects. The C
+library's synchronization rules still apply to globals shared between threads.
+
 ## Select a union value
 
 A union needs a `shape` fact identifying its active member. Its JavaScript value is

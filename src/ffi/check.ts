@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { writeFileAtomically } from "../atomic-file.ts";
-import type { MaligatorFfiEvidence } from "../public-api.d.ts";
+import type { MaligatorFfiEvidence, MaligatorFfiValueFacts } from "../public-api.d.ts";
 import type { JsValue } from "./binding-plan.ts";
 import type { CFunction } from "./c-model.ts";
 import type { CType } from "./c-type.ts";
@@ -98,6 +98,12 @@ function documentationEvidence(prepared: PreparedLibrary): Snapshot {
 				if (entry !== undefined) members = children(entry.params);
 				break;
 			}
+			case "global": {
+				const entry = model.globals.find((value) => value.name === reference.name);
+				exists = entry !== undefined;
+				doc = entry?.doc;
+				break;
+			}
 			case "typedef": {
 				const entry = model.typedefs.get(reference.name);
 				exists = entry !== undefined;
@@ -136,10 +142,10 @@ function documentationEvidence(prepared: PreparedLibrary): Snapshot {
 			);
 		result[key] = json({ doc, members });
 	};
-	for (const category of ["types", "functions"] as const)
+	for (const category of ["types", "functions", "globals"] as const)
 		for (const [name, facts] of Object.entries<{
 			readonly evidence?: ReadonlyArray<MaligatorFfiEvidence>;
-		}>(contract.facts[category]))
+		}>(contract.facts[category] ?? {}))
 			facts.evidence?.forEach((reference, index) =>
 				cite(reference, `${category}.${name}.evidence[${index}]`),
 			);
@@ -298,26 +304,51 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 		)
 			mapping(value.of);
 	};
+	const valueFacts = (value: MaligatorFfiValueFacts | undefined): void => {
+		if (value === undefined) return;
+		if (value.sizeof !== undefined) {
+			const name = value.sizeof;
+			if (model.typedefs.has(name)) type({ kind: "typedef", name }, `sizeof ${name}`);
+			else {
+				const record = model.records.get(name);
+				if (record !== undefined)
+					type({ kind: "record", tag: record.tag, name }, `sizeof ${name}`);
+			}
+		}
+		for (const callable of [value.callable, value.callback]) {
+			for (const parameter of Object.values(callable?.params ?? {}))
+				valueFacts(parameter);
+			valueFacts(callable?.returns);
+		}
+	};
 	for (const name of Object.keys(contract.facts.functions).sort()) {
 		const facts = contract.facts.functions[name]!;
 		helper(name);
+		valueFacts(facts.returns);
 		for (const params of [
 			facts.params,
 			...Object.values(facts.variants ?? {}).map((variant) => variant.params),
 		])
-			for (const value of Object.values(params ?? {})) {
-				if (value.sizeof !== undefined) {
-					const name = value.sizeof;
-					if (model.typedefs.has(name)) type({ kind: "typedef", name }, `sizeof ${name}`);
-					else {
-						const record = model.records.get(name);
-						if (record !== undefined)
-							type({ kind: "record", tag: record.tag, name }, `sizeof ${name}`);
-					}
-				}
-			}
+			for (const value of Object.values(params ?? {})) valueFacts(value);
 	}
+	for (const facts of Object.values(contract.facts.types))
+		for (const field of Object.values(facts.fields ?? {}))
+			if (field.callable !== undefined) valueFacts({ callable: field.callable });
+	for (const facts of Object.values(contract.facts.globals ?? {}))
+		valueFacts(facts.returns);
 	for (const name of macroFactRoots(contract.facts)) constant(name);
+	for (const name of Object.keys(contract.facts.globals ?? {}).sort()) {
+		const global = model.globals.find((entry) => entry.name === name);
+		if (global === undefined) continue;
+		const facts = contract.facts.globals![name]!;
+		declarations[`global ${name}`] = json({
+			type: type(global.type, `global ${name}`),
+			linkage: global.linkage,
+			threadLocal: global.threadLocal,
+			attributes: [...global.attributes].sort(),
+			accessors: { get: facts.get, set: facts.set },
+		});
+	}
 	for (const name of Object.keys(contract.facts.types).sort()) {
 		if (model.typedefs.has(name)) type({ kind: "typedef", name }, `type fact ${name}`);
 		else {
@@ -334,8 +365,10 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 	for (const binding of [...plan.functions].sort((a, b) =>
 		a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
 	)) {
-		addFunction(binding.declaration, binding.name);
-		helper(binding.declaration.name);
+		if (binding.global === undefined) {
+			addFunction(binding.declaration, binding.name);
+			helper(binding.declaration.name);
+		}
 		for (const param of binding.params) mapping(param.value);
 		for (const output of binding.outputs) mapping(output.value);
 		mapping(binding.returns);

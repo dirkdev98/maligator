@@ -7,7 +7,7 @@ import type {
 	MaligatorFfiValueFacts,
 	MaligatorFfiVariant,
 } from "../public-api.d.ts";
-import type { CField, CFunction, CModel, CRecord } from "./c-model.ts";
+import type { CField, CFunction, CGlobal, CModel, CRecord } from "./c-model.ts";
 import {
 	cRecordAccesses,
 	promotedCFields,
@@ -187,6 +187,7 @@ export interface MappedOutput {
 
 export interface BoundFunction {
 	readonly name: string;
+	readonly global?: GlobalAccessor;
 	readonly declaration: CFunction;
 	/** The JavaScript parameters, in order. */
 	readonly params: ReadonlyArray<MappedParameter>;
@@ -212,8 +213,14 @@ export interface Gap {
 
 export interface UnboundFunction {
 	readonly name: string;
+	readonly global?: GlobalAccessor;
 	readonly declaration: CFunction;
 	readonly gaps: ReadonlyArray<Gap>;
+}
+
+export interface GlobalAccessor {
+	readonly declaration: CGlobal;
+	readonly access: "get" | "set";
 }
 
 export interface MappedField {
@@ -2002,7 +2009,7 @@ class Planner {
 		facts: FunctionFacts,
 		closes: number | undefined,
 		callableContext?: {
-			readonly targetType: string;
+			readonly targetType?: string;
 			readonly path: string;
 			readonly site: string;
 			readonly owner?: string;
@@ -2043,7 +2050,7 @@ class Planner {
 						`${where(at)}.callable: callable applies to returned function pointers`,
 					);
 				const source =
-					callableContext === undefined
+					callableContext?.targetType === undefined
 						? declaration.name
 						: `((${callableContext.targetType}) nullptr)`;
 				const arguments_ = declaration.params.map(({ type }) => {
@@ -2674,6 +2681,78 @@ export function planBindings(
 	constants.sort((left, right) =>
 		left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
 	);
+	const occupied = new Set([
+		...declared,
+		...constants.map(({ name }) => name),
+		...[...handles.values()].flatMap((handle) =>
+			handle.allocator === undefined ? [] : [handle.allocator],
+		),
+	]);
+	for (const [name, entry] of Object.entries(facts.globals ?? {})) {
+		const global = model.globals.find((global) => global.name === name);
+		const at = `globals.${name}`;
+		if (global === undefined)
+			throw new FfiError(`${at}: the headers declare no global '${name}'`);
+		if (global.linkage !== "external")
+			throw new FfiError(`${at}: access requires an externally linked C object`);
+		if (entry.get === undefined && entry.set === undefined)
+			throw new FfiError(`${at}: provide a getter or setter export`);
+		if (entry.returns !== undefined && entry.get === undefined)
+			throw new FfiError(`${at}.returns: read facts require a getter`);
+		if (entry.returns?.free !== undefined || entry.returns?.fresh === true)
+			throw new FfiError(`${at}.returns: reading a global cannot transfer ownership`);
+		const resolved = resolveCType(model, global.type);
+		if (resolved.kind === "array")
+			throw new FfiError(`${at}: a C array needs an explicit value or buffer mapping`);
+		for (const access of ["get", "set"] as const) {
+			const exported = entry[access];
+			if (exported === undefined) continue;
+			if (occupied.has(exported))
+				throw new FfiError(`${at}.${access}: '${exported}' is already an export`);
+			occupied.add(exported);
+			if (access === "set" && !globalAssignable(model, global.type, handles))
+				throw new FfiError(
+					`${at}.set: a setter requires an assignable value without retained pointers`,
+				);
+			const storageType =
+				"const" in resolved && resolved.const === true
+					? { ...resolved, const: undefined }
+					: global.type;
+			const declaration: CFunction = {
+				name: `mal_ffi_global_${access}_${name}`,
+				returns: access === "get" ? storageType : { kind: "void" },
+				params: access === "get" ? [] : [{ name: "value", type: storageType }],
+				variadic: false,
+				inline: true,
+				attributes: [],
+				location: global.location,
+				...(global.doc === undefined ? {} : { doc: global.doc }),
+			};
+			const result = planner.function(
+				declaration,
+				{
+					params: access === "get" ? [] : [NO_FACTS],
+					returns: access === "get" ? (entry.returns ?? NO_FACTS) : NO_FACTS,
+				},
+				undefined,
+				{ path: access === "get" ? at : `${at}.set`, site: exported },
+			);
+			if (
+				!("gaps" in result) &&
+				access === "get" &&
+				result.returns.kind === "handle" &&
+				entry.returns?.borrowed !== true
+			)
+				throw new FfiError(`${at}.returns: a global handle requires borrowed: true`);
+			const binding = {
+				...result,
+				name: exported,
+				global: { declaration: global, access },
+			};
+			if ("gaps" in binding) unbound.push(binding);
+			else functions.push(binding);
+		}
+	}
 	for (const handle of handles.values()) {
 		if (
 			handle.allocator !== undefined &&
@@ -2699,4 +2778,37 @@ export function planBindings(
 		constants,
 		skippedConstants,
 	};
+}
+
+function globalAssignable(
+	model: CModel,
+	type: CType,
+	handles: ReadonlyMap<string, Omit<HandleType, "fields" | "managedFields">>,
+	seen = new Set<string>(),
+): boolean {
+	const resolved = resolveCType(model, type);
+	if ("const" in resolved && resolved.const === true) return false;
+	switch (resolved.kind) {
+		case "bool":
+		case "integer":
+		case "float":
+		case "enum":
+			return true;
+		case "array":
+			return (
+				resolved.length !== undefined &&
+				globalAssignable(model, resolved.of, handles, seen)
+			);
+		case "record": {
+			if (seen.has(resolved.name) || handles.has(resolved.name)) return false;
+			const record = model.records.get(resolved.name);
+			if (record?.complete !== true) return false;
+			const nested = new Set([...seen, resolved.name]);
+			return record.fields.every((field) =>
+				globalAssignable(model, field.type, handles, nested),
+			);
+		}
+		default:
+			return false;
+	}
 }

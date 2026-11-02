@@ -542,7 +542,11 @@ function mergeFacts(
 			returns: { ...stated?.returns, ...suggested.returns },
 		};
 	}
-	return { types: { ...facts.types, ...Object.fromEntries(types) }, functions: merged };
+	return {
+		...facts,
+		types: { ...facts.types, ...Object.fromEntries(types) },
+		functions: merged,
+	};
 }
 
 function handleNames(binding: BoundFunction): Array<string> {
@@ -597,7 +601,7 @@ export function suggestFacts(
 	const functions = new Map<string, MaligatorFfiFunctionFacts>();
 	for (const entry of typed.unbound) {
 		// Variants already carry their own facts.
-		if (entry.name !== entry.declaration.name) continue;
+		if (entry.global !== undefined || entry.name !== entry.declaration.name) continue;
 		const suggested = suggestFunction(model, entry.declaration, entry.gaps);
 		if (suggested !== undefined) functions.set(entry.name, suggested);
 	}
@@ -606,6 +610,7 @@ export function suggestFacts(
 	// documentation tells the caller to release it, as `cairo_mesh_pattern_get_path`'s does.
 	const bound = new Set(plan.functions.map((binding) => binding.name));
 	for (const binding of typed.functions) {
+		if (binding.global !== undefined) continue;
 		const result = binding.returns;
 		const destroy =
 			result.kind === "handle"

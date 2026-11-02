@@ -3083,6 +3083,15 @@ export function generateBindingUnit(
 		"#include <stdlib.h>",
 		...headers.map((header) => `#include "${header}"`),
 		"",
+		...bindings.flatMap((binding) => {
+			if (binding.global === undefined) return [];
+			const name = binding.global.declaration.name;
+			return [
+				binding.global.access === "get"
+					? `static __typeof__(${name}) ${binding.declaration.name}(void) { return ${name}; }`
+					: `static void ${binding.declaration.name}(__typeof__(${name}) mal_value) { ${name} = mal_value; }`,
+			];
+		}),
 		// Tentative definitions: helpers refer to these before their initializers.
 		"static const MalFfiLibrary mal_ffi_library;",
 		...[...plan.handles.keys()].map(

@@ -131,7 +131,7 @@ export type MaligatorFfiFieldFacts =
 
 /** A declaration whose documentation supports a fact, independent of its source location. */
 export interface MaligatorFfiEvidence {
-	kind: "function" | "typedef" | "struct" | "union" | "enum" | "macro";
+	kind: "function" | "global" | "typedef" | "struct" | "union" | "enum" | "macro";
 	name: string;
 }
 
@@ -312,6 +312,18 @@ export interface MaligatorFfiVariant {
 	params?: Record<string, MaligatorFfiValueFacts>;
 }
 
+/** Explicit access to a library-owned C object. Accessors run on the calling thread. */
+export interface MaligatorFfiGlobalFacts {
+	/** Export a function that reads the current C value. Pointer results need lifetime facts. */
+	get?: string;
+	/** Export a function that assigns a value without retaining JavaScript storage. */
+	set?: string;
+	/** Read conversion facts; the accessor never takes ownership of the global's storage. */
+	returns?: MaligatorFfiValueFacts;
+	/** Header documentation that `ffi check` watches when reviewing these facts. */
+	evidence?: Array<MaligatorFfiEvidence>;
+}
+
 /**
  * Facts about a C library that hold wherever it is installed. The binding comes from
  * the headers plus these facts.
@@ -326,6 +338,8 @@ export interface MaligatorLibraryContract {
 	types?: Record<string, MaligatorFfiTypeFacts>;
 	/** Facts about functions, keyed by name. */
 	functions?: Record<string, MaligatorFfiFunctionFacts>;
+	/** Getter and setter exports for file-scope C objects, keyed by their C names. */
+	globals?: Record<string, MaligatorFfiGlobalFacts>;
 }
 
 /** Trusted, strictly validated configuration evaluated for each CLI invocation.

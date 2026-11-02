@@ -1903,7 +1903,8 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Bind exported C globals with explicit access and ownership contracts.
+- [ ] Extend global accessors to fixed arrays and explicit lifetime contracts for
+      retained pointers.
 
 - [ ] Extend value mapping for wider integers, complex and vector values, and native
       floating representations beyond JavaScript numbers.

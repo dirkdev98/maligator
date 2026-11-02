@@ -1,14 +1,19 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { planBindings } from "../src/ffi/binding-plan.ts";
 import { extractCModel } from "../src/ffi/c-extract.ts";
 import type { CExtractionInput } from "../src/ffi/c-extract.ts";
 import type { CModel } from "../src/ffi/c-model.ts";
+import { loadLibraryContract } from "../src/ffi/contract.ts";
 import type { FfiInspection } from "../src/ffi/inspect.ts";
 import { loadCModel } from "../src/ffi/model-cache.ts";
+import type { MaligatorFfiGlobalFacts } from "../src/public-api.d.ts";
 import { resolvePathExecutable } from "../src/toolchain.ts";
+import globalContract from "./fixtures/ffi-globals/globals.ffi.ts";
 
 describe("C global declarations", () => {
 	let directory: string;
@@ -127,4 +132,276 @@ extern int (NATIVE_CALL *native_transform)(int);
 			type: { kind: "integer", name: "int", const: true },
 		});
 	});
+});
+
+describe("C global accessor contracts", () => {
+	const fixture = path.join(import.meta.dirname, "fixtures/ffi-globals");
+	let model: CModel;
+	beforeAll(() => {
+		const compiler = resolvePathExecutable(process.env.CC ?? "clang");
+		const version = spawnSync(compiler, ["--version"], { encoding: "utf8" });
+		expect(version.status, version.stderr).toBe(0);
+		model = extractCModel({
+			compiler: { path: compiler, version: version.stdout.split("\n")[0]! },
+			environment: process.env,
+			headers: ["globals.h"],
+			compileArguments: ["-I", fixture],
+		});
+	});
+	function plan(globals: Record<string, MaligatorFfiGlobalFacts>) {
+		return planBindings(model, { types: globalContract.types, functions: {}, globals });
+	}
+	it("loads explicit accessor and documentation facts", () => {
+		const contract = loadLibraryContract(
+			"globals",
+			{ contract: "globals.ffi.ts" },
+			fixture,
+			stripCompactTypes,
+		);
+		expect(contract.facts.globals?.globals_mode).toMatchObject({
+			get: "getMode",
+			set: "setMode",
+			evidence: [{ kind: "global", name: "globals_mode" }],
+		});
+	});
+	it.each(["class", "default", "get-mode"])(
+		"rejects %s as an accessor export name",
+		(name) => {
+			const directory = mkdtempSync(path.join(tmpdir(), "mal-global-name-"));
+			try {
+				writeFileSync(
+					path.join(directory, "invalid.ffi.ts"),
+					`export default ${JSON.stringify({ headers: ["api.h"], find: [{ libraries: ["fixture"] }], globals: { mode: { get: name } } })};`,
+				);
+				expect(() =>
+					loadLibraryContract(
+						"fixture",
+						{ contract: "invalid.ffi.ts" },
+						directory,
+						stripCompactTypes,
+					),
+				).toThrow("function export name");
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
+			}
+		},
+	);
+	it.each([
+		["globals_limit", { set: "writeLimit" }, "assignable"],
+		["globals_aliased_limit", { set: "writeAliasedLimit" }, "assignable"],
+		["globals_title", { set: "writeTitle" }, "retained pointers"],
+		["globals_context", { get: "readContext" }, "borrowed: true"],
+		[
+			"globals_title",
+			{ get: "readTitle", returns: { string: true, free: "globals_destroy" } },
+			"transfer ownership",
+		],
+		[
+			"globals_context",
+			{ get: "readContext", returns: { borrowed: true, fresh: true } },
+			"transfer ownership",
+		],
+		["globals_private", { get: "readPrivate" }, "externally linked"],
+		["globals_values", { get: "readValues" }, "C array"],
+		["globals_mode", {}, "getter or setter"],
+		["missing_global", { get: "readMissing" }, "no global"],
+	] satisfies Array<[string, MaligatorFfiGlobalFacts, string]>)(
+		"rejects unsafe access to %s with %j",
+		(name, facts, message) => {
+			expect(() => plan({ [name]: facts })).toThrow(message);
+		},
+	);
+	it.each(["globals_advance", "GLOBALS_CONSTANT"])(
+		"rejects the existing export %s as an accessor",
+		(name) => {
+			expect(() => plan({ globals_mode: { get: name } })).toThrow("already an export");
+		},
+	);
+	it("rejects accessor names already used by another global or async export", () => {
+		expect(() =>
+			plan({ globals_mode: { get: "readValue" }, globals_limit: { get: "readValue" } }),
+		).toThrow("already an export");
+		expect(() =>
+			planBindings(model, {
+				types: {},
+				functions: { globals_advance: { async: "readMode" } },
+				globals: { globals_mode: { get: "readMode" } },
+			}),
+		).toThrow("already an export");
+	});
+	it("rejects accessor names already used by caller-storage factories", () => {
+		const types = { GlobalsPoint: { handle: { storage: "caller" as const } } };
+		const allocator = planBindings(model, { types, functions: {} }).handles.get(
+			"GlobalsPoint",
+		)!.allocator!;
+		expect(() =>
+			planBindings(model, {
+				types,
+				functions: {},
+				globals: { globals_mode: { get: allocator } },
+			}),
+		).toThrow("already an export");
+	});
+	it("exports only the requested write access", () => {
+		const accessors = plan({ globals_mode: { set: "writeMode" } }).functions.filter(
+			(binding) => binding.global !== undefined,
+		);
+		expect(accessors.map(({ name, global }) => [name, global?.access])).toEqual([
+			["writeMode", "set"],
+		]);
+	});
+	it.each(["globals_resource", "globals_resource_holder"])(
+		"rejects persistent copies of a resource handle in %s",
+		(name) => {
+			const directory = mkdtempSync(path.join(tmpdir(), "mal-global-resource-"));
+			try {
+				const compiler = resolvePathExecutable(process.env.CC ?? "clang");
+				const version = spawnSync(compiler, ["--version"], { encoding: "utf8" });
+				expect(version.status, version.stderr).toBe(0);
+				writeFileSync(
+					path.join(directory, "resource.h"),
+					`typedef struct Resource { int descriptor; } Resource;
+typedef struct Holder { Resource resource; } Holder;
+extern Resource globals_resource;
+extern Holder globals_resource_holder;
+void release_resource(Resource resource);
+`,
+				);
+				const extracted = extractCModel({
+					compiler: { path: compiler, version: version.stdout.split("\n")[0]! },
+					environment: process.env,
+					headers: ["resource.h"],
+					compileArguments: ["-I", directory],
+				});
+				expect(() =>
+					planBindings(extracted, {
+						types: { Resource: { handle: { destroy: "release_resource" } } },
+						functions: {},
+						globals: { [name]: { set: "setResource" } },
+					}),
+				).toThrow("assignable");
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
+			}
+		},
+	);
+	it("watches hidden sizeof dependencies in nested global callable facts", () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "mal-global-sizeof-"));
+		try {
+			const header = path.join(directory, "api.h");
+			writeFileSync(
+				header,
+				"typedef struct Config { int size; } Config;\nextern void (*(*factory)(void))(unsigned long);\n",
+			);
+			writeFileSync(
+				path.join(directory, "api.c"),
+				'#include "api.h"\nvoid (*(*factory)(void))(unsigned long);\n',
+			);
+			writeFileSync(
+				path.join(directory, "maligator.build.ts"),
+				'export default {ffi:{api:{contract:"api.ffi.ts"}}};\n',
+			);
+			writeFileSync(
+				path.join(directory, "api.ffi.ts"),
+				`export default ${JSON.stringify({
+					headers: ["api.h"],
+					find: [{ includeDirs: ["."], sources: ["api.c"] }],
+					globals: {
+						factory: {
+							get: "getFactory",
+							returns: {
+								callable: {
+									lifetime: "library",
+									returns: {
+										callable: {
+											lifetime: "library",
+											params: { "1": { sizeof: "Config" } },
+										},
+									},
+								},
+							},
+						},
+					},
+				})};\n`,
+			);
+			const cli = (...args: Array<string>) =>
+				spawnSync(
+					process.execPath,
+					[
+						path.resolve(import.meta.dirname, "../src/index.ts"),
+						"ffi",
+						"check",
+						"api",
+						...args,
+					],
+					{ cwd: directory, encoding: "utf8", timeout: 30_000 },
+				);
+			const accepted = cli("--update");
+			expect(accepted.status, accepted.stderr || accepted.stdout).toBe(0);
+			writeFileSync(
+				header,
+				readFileSync(header, "utf8").replace("int size", "long size"),
+			);
+			const changed = cli();
+			expect(changed.status).not.toBe(0);
+			expect(changed.stderr + changed.stdout).toContain("struct Config");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	}, 60_000);
+	it("reports native origins and watches accepted global ABI changes through the CLI", () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "mal-ffi-global-check-"));
+		try {
+			cpSync(fixture, directory, { recursive: true });
+			const cli = (args: Array<string>) =>
+				spawnSync(
+					process.execPath,
+					[path.resolve(import.meta.dirname, "../src/index.ts"), "ffi", ...args],
+					{ cwd: directory, encoding: "utf8", timeout: 30_000 },
+				);
+			const inspected = cli(["inspect", "globals", "--json"]);
+			expect(inspected.status, inspected.stderr || inspected.stdout).toBe(0);
+			const inspection = JSON.parse(inspected.stdout) as FfiInspection;
+			const getter = inspection.functions.find(({ name }) => name === "getMode");
+			expect(getter).toMatchObject({
+				global: { name: "globals_mode", access: "get" },
+				status: "bound",
+				ts: "() => number",
+			});
+			expect(getter).not.toHaveProperty("variantOf");
+			expect(
+				inspection.functions.some(({ name }) => name.startsWith("mal_ffi_global_")),
+			).toBe(false);
+			expect(inspection.suggestions.functions).not.toHaveProperty("getMode");
+			const accepted = cli(["check", "globals", "--update"]);
+			expect(accepted.status, accepted.stderr || accepted.stdout).toBe(0);
+			const header = path.join(directory, "globals.h");
+			writeFileSync(
+				header,
+				`${readFileSync(header, "utf8")}\nextern double unrelated_global;\n`,
+			);
+			const unchanged = cli(["check", "globals"]);
+			expect(unchanged.status, unchanged.stderr || unchanged.stdout).toBe(0);
+			writeFileSync(
+				header,
+				readFileSync(header, "utf8").replace(
+					"_Thread_local int globals_thread",
+					"int globals_thread",
+				),
+			);
+			const source = path.join(directory, "globals.c");
+			writeFileSync(
+				source,
+				readFileSync(source, "utf8").replace(
+					"_Thread_local int globals_thread",
+					"int globals_thread",
+				),
+			);
+			const changed = cli(["check", "globals"]);
+			expect(changed.status).not.toBe(0);
+			expect(changed.stderr + changed.stdout).toContain("global globals_thread");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	}, 60_000);
 });

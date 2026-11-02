@@ -39,6 +39,11 @@ export function macroFactRoots(facts: LibraryFacts): Array<string> {
 		for (const reference of value.evidence ?? [])
 			if (reference.kind === "macro") names.add(reference.name);
 	}
+	for (const value of Object.values(facts.globals ?? {})) {
+		valueFacts(value.returns);
+		for (const reference of value.evidence ?? [])
+			if (reference.kind === "macro") names.add(reference.name);
+	}
 	return [...names].filter((name) => /^[A-Za-z_]\w*$/.test(name)).sort();
 }
 

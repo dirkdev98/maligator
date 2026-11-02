@@ -105,6 +105,7 @@ function inspectModel(model: CModel): CModelInspectionData {
 
 export interface FunctionInspectionData {
 	readonly name: string;
+	readonly global?: { readonly name: string; readonly access: "get" | "set" };
 	/** The variadic C function a variant calls; its arguments follow the fixed ones. */
 	readonly variantOf?: string;
 	readonly status: "bound" | "needs-facts";
@@ -319,17 +320,21 @@ export function inspectBindings(
 	// A variadic function with variants is reported as its variants.
 	const variants = new Map<string, Array<{ name: string; declaration: CFunction }>>();
 	for (const entry of [...plan.functions, ...plan.unbound]) {
-		if (entry.name === entry.declaration.name) continue;
+		if (entry.global !== undefined || entry.name === entry.declaration.name) continue;
 		const list = variants.get(entry.declaration.name) ?? [];
 		list.push({ name: entry.name, declaration: entry.declaration });
 		variants.set(entry.declaration.name, list);
 	}
-	const entries = model.functions.flatMap(
-		(declaration) =>
-			variants.get(declaration.name) ?? [{ name: declaration.name, declaration }],
-	);
+	const entries = [
+		...model.functions.flatMap(
+			(declaration) =>
+				variants.get(declaration.name) ?? [{ name: declaration.name, declaration }],
+		),
+		...[...plan.functions, ...plan.unbound].filter((entry) => entry.global !== undefined),
+	];
 	const functions = entries.map(({ name, declaration }): FunctionInspectionData => {
 		const binding = bound.get(name);
+		const global = binding?.global ?? unbound.get(name)?.global;
 		const gaps = unbound.get(name)?.gaps;
 		const params = declaration.params.map((param, index) => {
 			const argument = binding?.arguments[index];
@@ -363,13 +368,20 @@ export function inspectBindings(
 				: `(${formatTsParameters(binding)}) => ${formatTsResult(binding)}`;
 		return {
 			name,
-			...(name === declaration.name ? {} : { variantOf: declaration.name }),
+			...(global !== undefined
+				? { global: { name: global.declaration.name, access: global.access } }
+				: name === declaration.name
+					? {}
+					: { variantOf: declaration.name }),
 			status: binding === undefined ? "needs-facts" : "bound",
-			c: formatCFunction(declaration),
+			c:
+				global === undefined
+					? formatCFunction(declaration)
+					: `extern ${global.declaration.threadLocal ? "_Thread_local " : ""}${formatCDeclaration(global.declaration.type, global.declaration.name)};`,
 			...(signature === undefined ? {} : { ts: signature }),
 			...(declaration.doc === undefined ? {} : { doc: declaration.doc }),
 			location: declaration.location,
-			...(declaration.inline ? { inline: true as const } : {}),
+			...(global === undefined && declaration.inline ? { inline: true as const } : {}),
 			...(declaration.attributes.length === 0
 				? {}
 				: { attributes: declaration.attributes }),
