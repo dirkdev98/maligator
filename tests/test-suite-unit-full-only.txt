@@ -19,4 +19,5 @@ tests/root-compiler-transport.test.ts
 tests/documentation-container.test.ts
 tests/site-deployment.test.ts
 tests/ffi-check.test.ts
+tests/ffi-library.test.ts
 tests/ffi-probe.test.ts
