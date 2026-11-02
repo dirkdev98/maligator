@@ -1909,8 +1909,7 @@ functions return status codes, and idiomatic APIs are plain TypeScript on top.
 
 - [ ] Map value unions with explicit shape
       facts where C does not identify the active value.
-- [ ] Extend struct storage reuse to conditional loop updates and recurrences that
-      expose a prior result to opaque calls before replacing it.
+- [ ] Extend struct storage reuse to conditional loop updates.
 
 # Actors, SMP, and embedding
 

@@ -2965,6 +2965,14 @@ function emitCompiledVariant(
 			)
 		)
 			stackObjectSites.get(site.allocationIp)!.materializedSlot = nextStackSlot++;
+		if (
+			site.materializations.some((entry) => entry.kind === "observe") &&
+			site.materializations.some(
+				(entry) => entry.kind === "lend" && entry.ip === site.allocationIp,
+			)
+		)
+			stackObjectSites.get(site.allocationIp)!.observedName =
+				`__stack_object_${site.allocationIp}_observed`;
 	}
 	const stackObjectMaterializations = new Map<number, StackObjectMaterialization>();
 	const stackObjectLends = new Map<number, Array<StackObjectMaterialization>>();
@@ -3455,6 +3463,8 @@ function emitCompiledVariant(
 	for (const site of stackObjectSites.values()) {
 		if (site.elided === true) continue;
 		lines.push(`    MalEmbeddedObject ${site.objectName};`);
+		if (site.observedName !== undefined)
+			lines.push(`    bool ${site.observedName} = false;`);
 		for (const slot of site.fieldSlots ?? [])
 			if (slot.representation !== "boxed" && slot.representation !== "string")
 				lines.push(`    ${cTypeOf(slot.representation)} ${slot.name};`);
@@ -5747,6 +5757,7 @@ function nativeIteratorCursorProtocol(cursor: NativeIteratorCursor): string {
 
 interface StackObjectSite {
 	objectName: string;
+	observedName?: string;
 	elided?: true;
 	materializedSlot?: number;
 	slotsOffset?: number;
@@ -11724,13 +11735,39 @@ class NativeInstructionEmission {
 					);
 				});
 				const symbol = ffiIntoSymbol(foreign.symbol);
+				if (into.observedName !== undefined && into.materializedSlot !== undefined) {
+					const cached = `__gc_slots[${into.materializedSlot}]`;
+					const ordinary = `${foreign.symbol}(vm${values.map((value) => `, ${value}`).join("")})`;
+					return [
+						`extern MalValue ${symbol}(MalVm *${", MalValue".repeat(foreign.arity)}, void *, MalValue *);`,
+						`extern MalValue ${foreign.symbol}(MalVm *${", MalValue".repeat(foreign.arity)});`,
+						...before,
+						// Favor heap production after an observation, so frequently observed
+						// loops avoid repeatedly materializing the preceding stack result.
+						`if (${into.observedName}) {`,
+						`  ${cached} = ${this.profileCall("call", ordinary)};`,
+						...after.map((line) => `  ${line}`),
+						`  ${this.throwCheck()}`,
+						`  r${instruction.dst} = ${cached};`,
+						`} else {`,
+						`  ${cached} = MAL_VALUE_UNDEFINED;`,
+						"  mal_perf_stack_object_init();",
+						`  (void) ${this.profileCall("call", `${symbol}(vm${values.map((value) => `, ${value}`).join("")}, &${into.objectName}, &__gc_slots[${into.slotsOffset!}])`)};`,
+						...after.map((line) => `  ${line}`),
+						`  ${this.throwCheck()}`,
+						`  r${instruction.dst} = mal_value_from_object(&${into.objectName}.object);`,
+						`}`,
+						`${into.observedName} = false;`,
+						this.callPoll(),
+					];
+				}
 				return [
 					`extern MalValue ${symbol}(MalVm *${", MalValue".repeat(foreign.arity)}, void *, MalValue *);`,
+					...before,
 					...(into.materializedSlot === undefined
 						? []
 						: [`__gc_slots[${into.materializedSlot}] = MAL_VALUE_UNDEFINED;`]),
 					"mal_perf_stack_object_init();",
-					...before,
 					`(void) ${this.profileCall("call", `${symbol}(vm${values.map((value) => `, ${value}`).join("")}, &${into.objectName}, &__gc_slots[${into.slotsOffset!}])`)};`,
 					...after,
 					this.throwCheck(),
@@ -15808,6 +15845,7 @@ function emitInstruction(
 		const ordinary = emission.emitGenericInstruction();
 		if (ordinary === null) return null;
 		return [
+			...(site.observedName === undefined ? [] : [`${site.observedName} = true;`]),
 			`if (${values.map((value) => `r${value} == mal_value_from_object(&${site.objectName}.object)`).join(" || ")}) {`,
 			` if (mal_value_is_undefined(${materialized})) {`,
 			...(fields === undefined

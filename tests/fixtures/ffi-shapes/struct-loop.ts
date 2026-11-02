@@ -155,4 +155,58 @@ function conditional(input: Point, count: number): Point {
 }
 const mixed = conditional(original, 10);
 check(mixed.x === 17 && mixed.y === 11.5, "conditional producer values");
+
+function observed(
+	input: Point,
+	count: number,
+	stride: number,
+	visit: (point: Point, index: number) => void,
+): Point {
+	let position = input;
+	const velocity = { x: 1, y: 0.5 };
+	for (let index = 0; index < count; index++) {
+		if (index % stride === 0) {
+			const alias = position;
+			visit(alias, index);
+		}
+		position = shapes_add(position, velocity);
+	}
+	return position;
+}
+
+for (const [count, stride] of [
+	[0, 1],
+	[1, 1],
+	[8, 1],
+	[8, 2],
+] as const) {
+	const input = { x: 2, y: 4 };
+	const prior: Array<{ point: Point; x: number; y: number }> = [];
+	let visits = 0;
+	const result = observed(input, count, stride, (point, index) => {
+		visits++;
+		const value = point.x + 10;
+		Object.defineProperty(point, "x", {
+			get() {
+				return Array.from({ length: 40 }, () => ({ value }))[0]!.value;
+			},
+			configurable: true,
+		});
+		prior.push({ point, x: value, y: point.y });
+		if (index === 2) check(advance({ x: 10, y: 20 }, 2).x === 12, "observed reentry");
+	});
+	check(visits === Math.ceil(count / stride), "conditional observer count");
+	check(
+		result.x === 2 + visits * 10 + count && result.y === 4 + count * 0.5,
+		"observed recurrence values",
+	);
+	check((result === input) === (count === 0), "observed zero-iteration identity");
+	for (const saved of prior) {
+		check(
+			saved.point.x === saved.x && saved.point.y === saved.y,
+			"observed generation remains stable",
+		);
+		check(saved.point !== result, "observed generation identity");
+	}
+}
 console.log("ffi struct recurrence passed");

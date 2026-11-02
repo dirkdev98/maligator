@@ -1591,7 +1591,7 @@ function stackObjectCandidate(
 		carriedAcrossAllocation &&
 		call &&
 		!requiresObjectIdentity &&
-		observations.size === 0 &&
+		!observations.has(layout.instruction) &&
 		!reachesExceptionTransport &&
 		lends.has(layout.instruction) &&
 		consumedStackObjectRecurrence(

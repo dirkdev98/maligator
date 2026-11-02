@@ -13,11 +13,17 @@ export function nativeVirtualValueFlow(
 	resetIps: ReadonlySet<number> = new Set(),
 	exceptionTargets: ReadonlyArray<number | undefined> = [],
 	body?: NativeBodyFacts,
+	materializedValues: ReadonlyMap<number, ReadonlyArray<number>> = new Map(),
 ) {
-	// Union and intersection distinguish a live virtual alias from a register reused on one incoming path.
+	// Union and intersection track which registers can still hold this producer's value.
 	const incoming = new Map<
 		number,
-		{ may: Set<number>; must: Set<number>; expired: Set<number> }
+		{
+			may: Set<number>;
+			must: Set<number>;
+			expired: Set<number>;
+			unmaterialized: Set<number>;
+		}
 	>();
 	const pending: Array<number> = [];
 	const add = (
@@ -25,6 +31,7 @@ export function nativeVirtualValueFlow(
 		may: ReadonlySet<number>,
 		must: ReadonlySet<number>,
 		expired: ReadonlySet<number>,
+		unmaterialized: ReadonlySet<number>,
 	): void => {
 		if (ip < 0 || ip >= instructions.length || body?.projection?.unreachable.has(ip))
 			return;
@@ -34,69 +41,86 @@ export function nativeVirtualValueFlow(
 				may: new Set(may),
 				must: new Set(must),
 				expired: new Set(expired),
+				unmaterialized: new Set(unmaterialized),
 			});
 			pending.push(ip);
 			return;
 		}
 		const beforeMay = prior.may.size,
 			beforeMust = prior.must.size,
-			beforeExpired = prior.expired.size;
+			beforeExpired = prior.expired.size,
+			beforeUnmaterialized = prior.unmaterialized.size;
 		for (const alias of may) prior.may.add(alias);
 		for (const alias of expired) prior.expired.add(alias);
+		for (const alias of unmaterialized) prior.unmaterialized.add(alias);
 		for (const alias of prior.must) if (!must.has(alias)) prior.must.delete(alias);
 		if (
 			prior.may.size !== beforeMay ||
 			prior.must.size !== beforeMust ||
-			prior.expired.size !== beforeExpired
+			prior.expired.size !== beforeExpired ||
+			prior.unmaterialized.size !== beforeUnmaterialized
 		)
 			pending.push(ip);
 	};
 	const initial = producerIp < 0 ? new Set([result]) : new Set<number>();
-	add(0, initial, initial, new Set());
+	add(0, initial, initial, new Set(), initial);
 	while (pending.length > 0) {
 		const ip = pending.pop()!;
 		const instruction = instructions[ip]!;
 		const aliases = incoming.get(ip)!;
 		const handler = exceptionTargets[ip];
-		if (handler !== undefined) add(handler, aliases.may, aliases.must, aliases.expired);
+		if (handler !== undefined)
+			add(handler, aliases.may, aliases.must, aliases.expired, aliases.unmaterialized);
 		const may = new Set(aliases.may),
 			must = new Set(aliases.must),
-			expired = new Set(aliases.expired);
+			expired = new Set(aliases.expired),
+			unmaterialized = new Set(aliases.unmaterialized);
 		const moveMay = instruction.opcode === "MOVE" && may.has(instruction.src);
 		const moveMust = instruction.opcode === "MOVE" && must.has(instruction.src);
+		const moveUnmaterialized =
+			instruction.opcode === "MOVE" && unmaterialized.has(instruction.src);
 		for (const value of body?.writes[ip] ?? vmInstructionWriteRegisters(instruction)) {
 			may.delete(value);
 			must.delete(value);
 			expired.delete(value);
+			unmaterialized.delete(value);
 		}
 		if (moveMay && instruction.opcode === "MOVE") may.add(instruction.dst);
 		if (moveMust && instruction.opcode === "MOVE") must.add(instruction.dst);
+		if (moveUnmaterialized && instruction.opcode === "MOVE")
+			unmaterialized.add(instruction.dst);
+		// Observers replace only the registers they receive with a heap copy. Other
+		// aliases still refer to storage that the next producer can overwrite.
+		for (const value of materializedValues.get(ip) ?? []) unmaterialized.delete(value);
 		if (resetIps.has(ip)) {
-			for (const alias of may) expired.add(alias);
+			for (const alias of unmaterialized) expired.add(alias);
 			may.clear();
 			must.clear();
+			unmaterialized.clear();
 		}
 		if (ip === producerIp) {
-			for (const alias of may) expired.add(alias);
+			for (const alias of unmaterialized) expired.add(alias);
 			may.clear();
 			must.clear();
+			unmaterialized.clear();
 			may.add(result);
 			must.add(result);
+			unmaterialized.add(result);
 		}
 		const target = body?.projection?.branches.get(ip);
 		if (target !== undefined) {
-			add(target, may, must, expired);
+			add(target, may, must, expired, unmaterialized);
 			continue;
 		}
 		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF")
-			add(instruction.targetIp, may, must, expired);
+			add(instruction.targetIp, may, must, expired, unmaterialized);
 		if (
 			instruction.opcode !== "JUMP" &&
 			instruction.opcode !== "RETURN" &&
 			instruction.opcode !== "THROW" &&
 			instruction.opcode !== "LOAD_UNDECLARED"
 		)
-			add(ip + 1, may, must, expired);
+			add(ip + 1, may, must, expired, unmaterialized);
 	}
 	return incoming;
 }
@@ -112,6 +136,7 @@ export function validateNativeVirtualValue(
 	resetIps: ReadonlySet<number> = new Set(),
 	exceptionTargets: ReadonlyArray<number | undefined> = [],
 	body?: NativeBodyFacts,
+	materializedValues: ReadonlyMap<number, ReadonlyArray<number>> = new Map(),
 ): ReturnType<typeof nativeVirtualValueFlow> {
 	const incoming = nativeVirtualValueFlow(
 		instructions,
@@ -120,6 +145,7 @@ export function validateNativeVirtualValue(
 		resetIps,
 		exceptionTargets,
 		body,
+		materializedValues,
 	);
 	for (const [ip, aliases] of incoming) {
 		const instruction = instructions[ip]!;

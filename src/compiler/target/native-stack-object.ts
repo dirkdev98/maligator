@@ -22,6 +22,7 @@ export function validateNativeStackObject(
 	)
 		fail();
 	const consumers = new Map<number, ReadonlyArray<number>>();
+	const observed = new Map<number, ReadonlyArray<number>>();
 	for (const access of site.accesses) {
 		const instruction = instructions[access.ip];
 		if (
@@ -69,6 +70,7 @@ export function validateNativeStackObject(
 					fail();
 			}
 			consumers.set(materialization.ip, values);
+			if (materialization.kind === "observe") observed.set(materialization.ip, values);
 		}
 	}
 	// Identity-only objects retain their stack identity without publishing it to another
@@ -80,8 +82,7 @@ export function validateNativeStackObject(
 		(materialization) =>
 			materialization.kind === "lend" && materialization.ip === site.allocationIp,
 	);
-	// Re-entry clears the materialized copy before inputs lend the previous result.
-	if (consumesPriorResult && !identityOnly) fail();
+	if (consumesPriorResult && observed.has(site.allocationIp)) fail();
 	const exceptionTargets = vmExceptionHandlerTargets(instructions.length, handlers);
 	const incoming = validateNativeVirtualValue(
 		instructions,
@@ -99,6 +100,8 @@ export function validateNativeStackObject(
 		!identityOnly || consumesPriorResult,
 		undefined,
 		exceptionTargets,
+		undefined,
+		observed,
 	);
 	if (!identityOnly || consumesPriorResult) {
 		if (exceptionTargets[site.allocationIp] !== undefined) fail();
