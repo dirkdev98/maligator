@@ -36,35 +36,37 @@ beforeAll(() => {
 		rmSync(directory, { recursive: true, force: true });
 	}
 });
-it.each(["numeric", "rows"])("declares copied notification arrays through %s", (name) => {
-	const plan = planBindings(model, {
-		types: {},
-		functions: {
-			[name]: {
-				params: {
-					callback: {
+it.each(["numeric", "rows", "strings"])(
+	"declares copied notification arrays through %s",
+	(name) => {
+		const plan = planBindings(model, {
+			types: {},
+			functions: {
+				[name]: {
+					params: {
 						callback: {
-							data: "data",
-							release: "release",
-							queued: true,
-							params: { "1": { array: { length: "2" } } },
+							callback: {
+								data: "data",
+								release: "release",
+								queued: true,
+								params: { "1": { array: { length: "2" } } },
+							},
 						},
 					},
 				},
 			},
-		},
-	});
-	const declaration = [...generateDeclarations([{ name: "notify", plan }])].join("");
-	expect(declaration).toContain(
-		name === "rows"
-			? "callback: (arg1: Array<[number, number, number]> | null) => void"
-			: "callback: (arg1: Array<number> | null) => void",
-	);
-});
-it.each([
-	["strings", "pointer-free value elements"],
-	["resources", "resource-bearing values"],
-])(
+		});
+		const declaration = [...generateDeclarations([{ name: "notify", plan }])].join("");
+		expect(declaration).toContain(
+			name === "rows"
+				? "callback: (arg1: Array<[number, number, number]> | null) => void"
+				: name === "strings"
+					? "callback: (arg1: Array<string | null> | null) => void"
+					: "callback: (arg1: Array<number> | null) => void",
+		);
+	},
+);
+it.each([["resources", "resource-bearing values"]])(
 	"rejects notification arrays without a safe copy contract through %s",
 	(name, diagnostic) => {
 		expect(() =>

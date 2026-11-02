@@ -1565,6 +1565,8 @@ class Planner {
 			case "float":
 			case "bigint":
 				return true;
+			case "string":
+				return value.counted !== true;
 			case "array":
 			case "union":
 				return this.#notificationElement(value.of);
@@ -1741,7 +1743,7 @@ class Planner {
 				)
 			)
 				throw new FfiError(
-					`${at}.callback.queued: notification arrays need pointer-free value elements`,
+					`${at}.callback.queued: notification arrays need value elements or terminated strings`,
 				);
 			// A queued call outlives the C caller's arguments, so it gets copies of values.
 			const copyable = params.every(

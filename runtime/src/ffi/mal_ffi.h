@@ -400,6 +400,9 @@ MalFfiCopyStatus mal_ffi_copy_callback_bytes(
 /** Preserve native element alignment while copying a notification's array storage. */
 MalFfiCopyStatus mal_ffi_copy_callback_array(
     const void *source, uint64_t length, size_t stride, size_t alignment, void **out);
+/** Copy a pointer table and its terminated strings into one message-owned allocation. */
+MalFfiCopyStatus mal_ffi_copy_callback_strings(
+    const void *source, uint64_t length, size_t stride, size_t alignment, void **out);
 /** Report a producer's copy failure when its message reaches the VM thread. */
 void mal_ffi_callback_copy_error(MalVm *vm, MalFfiCopyStatus status);
 /** Copy `length` bytes into a new Uint8Array. */

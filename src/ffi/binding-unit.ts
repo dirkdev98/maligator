@@ -2170,9 +2170,15 @@ class BindingWriter {
 				const copy = `mal_copy_${String(index)}`;
 				const status = `mal_copy_status_${String(index)}`;
 				const count = `(uint64_t) mal_c${String(value.counts[index]!)}`;
+				let leaf = param.kind === "sequence" ? param.of : param;
+				while (leaf.kind === "array") leaf = leaf.of;
+				const arrayCopy =
+					leaf.kind === "string"
+						? "mal_ffi_copy_callback_strings"
+						: "mal_ffi_copy_callback_array";
 				const call =
 					param.kind === "sequence"
-						? `mal_ffi_copy_callback_array(${source}, ${count}, sizeof(*${source}), _Alignof(__typeof__(*${source})), &${copy})`
+						? `${arrayCopy}(${source}, ${count}, sizeof(*${source}), _Alignof(__typeof__(*${source})), &${copy})`
 						: `mal_ffi_copy_callback_bytes(${source}, ${count}, ${param.kind === "string"}, &${copy})`;
 				return [
 					`void *${copy};`,

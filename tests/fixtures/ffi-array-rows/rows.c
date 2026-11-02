@@ -141,3 +141,28 @@ void rows_notify(int mode, void (*callback)(const Row *, int64_t, const CellRow 
     if (pthread_create(&thread, NULL, rows_produce_notification, &job) != 0) abort();
     if (pthread_join(thread, NULL) != 0) abort();
 }
+
+typedef struct {
+    int mode;
+    void (*callback)(const TextRow *, int64_t, void *);
+    void *data;
+    void (*release)(void *);
+} TextNotification;
+static void *texts_produce_notification(void *argument) {
+    TextNotification *job = argument;
+    char first[] = "native text";
+    char second[] = "caf\xc3\xa9";
+    TextRow rows[2] = {{first, NULL, ""}, {second, first, NULL}};
+    int64_t count = job->mode == 1 ? 0 : job->mode == 2 ? -1 : job->mode == 3 ? INT64_MAX : 2;
+    job->callback(job->mode == 4 ? NULL : rows, count, job->data);
+    memset(first, 'x', sizeof(first));
+    memset(second, 'x', sizeof(second));
+    job->release(job->data);
+    return NULL;
+}
+void texts_notify(int mode, void (*callback)(const TextRow *, int64_t, void *), void *data, void (*release)(void *)) {
+    TextNotification job = {mode, callback, data, release};
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, texts_produce_notification, &job) != 0) abort();
+    if (pthread_join(thread, NULL) != 0) abort();
+}

@@ -40,3 +40,6 @@ void ints_fill(int *values, size_t capacity, size_t *written);
 void rows_fill_visit(Row *values, size_t capacity, size_t *written, void (*callback)(void *), void *data);
 
 void rows_notify(int mode, void (*callback)(const Row *, int64_t, const CellRow *, int64_t, void *), void *data, void (*release)(void *));
+
+typedef const char *const TextRow[3];
+void texts_notify(int mode, void (*callback)(const TextRow *, int64_t, void *), void *data, void (*release)(void *));

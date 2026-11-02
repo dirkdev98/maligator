@@ -1912,8 +1912,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] Describe text and byte representations for fixed character array rows.
 
-- [ ] Copy pointer-bearing counted array elements for queued notification callbacks.
-
 - [ ] Extend compound resource-bearing results with explicit ownership and lifetime.
 
 - [ ] Support runtime-selected variadic signatures when a bounded typed contract can

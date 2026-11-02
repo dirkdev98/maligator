@@ -421,6 +421,44 @@ MalFfiCopyStatus mal_ffi_copy_callback_array(
     return MAL_FFI_COPY_OK;
 }
 
+MalFfiCopyStatus mal_ffi_copy_callback_strings(
+    const void *source, uint64_t length, size_t stride, size_t alignment, void **out) {
+    *out = nullptr;
+    if (source == nullptr) return MAL_FFI_COPY_OK;
+    if (length > INT32_MAX || stride == 0 || stride % sizeof(const char *) != 0 || length > SIZE_MAX / stride)
+        return MAL_FFI_COPY_RANGE;
+    size_t table_size = (size_t) length * stride;
+    size_t pointers = table_size / sizeof(const char *);
+    size_t total = table_size;
+    for (size_t i = 0; i < pointers; i++) {
+        const char *text;
+        memcpy(&text, (const byte *) source + i * sizeof(text), sizeof(text));
+        if (text == nullptr) continue;
+        size_t bytes = strlen(text);
+        if (bytes > 3 * MAL_STRING_MAX_CODE_UNITS || bytes >= SIZE_MAX - total)
+            return MAL_FFI_COPY_RANGE;
+        total += bytes + 1;
+    }
+    byte *copy = mal_ffi_allocate_storage(1, total == 0 ? 1 : total, alignment);
+    if (copy == nullptr) return MAL_FFI_COPY_MEMORY;
+    byte *next = copy + table_size;
+    // The C caller keeps the source stable until this callback returns, across both passes.
+    for (size_t i = 0; i < pointers; i++) {
+        const char *text;
+        memcpy(&text, (const byte *) source + i * sizeof(text), sizeof(text));
+        const char *stored = nullptr;
+        if (text != nullptr) {
+            size_t bytes = strlen(text) + 1;
+            memcpy(next, text, bytes);
+            stored = (const char *) next;
+            next += bytes;
+        }
+        memcpy(copy + i * sizeof(stored), &stored, sizeof(stored));
+    }
+    *out = copy;
+    return MAL_FFI_COPY_OK;
+}
+
 void mal_ffi_callback_copy_error(MalVm *vm, MalFfiCopyStatus status) {
     if (status == MAL_FFI_COPY_RANGE)
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,

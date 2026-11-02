@@ -1,5 +1,7 @@
 /* oxlint-disable no-console -- The fixture reports observable C ABI behavior. */
 import {
+	texts_notify,
+	notifyTextsAsync,
 	rows_notify,
 	notifyAsync,
 	rows_fill,
@@ -387,4 +389,46 @@ await notifyAsync(0, (copiedRows) => {
 	recovered = copiedRows?.[0]?.[0] === 2;
 });
 check(recovered, "copy errors leave later callback groups usable");
+for (const mode of [0, 1, 4]) {
+	await new Promise<void>((resolve) => {
+		texts_notify(mode, (copied) => {
+			if (mode === 0) {
+				check(
+					copied?.[0]?.[0] === "native text" &&
+						copied[0][1] === null &&
+						copied[0][2] === "",
+					"notification text rows preserve null and empty entries",
+				);
+				check(
+					copied?.[1]?.[0] === "caf\u00e9" &&
+						copied[1][1] === "native text" &&
+						copied[1][2] === null,
+					"notification text survives native stack overwrite",
+				);
+			} else if (mode === 1) {
+				check(copied?.length === 0, "empty text tables stay non-null");
+			} else {
+				check(copied === null, "null text tables stay null");
+			}
+			resolve();
+		});
+	});
+}
+for (const mode of [2, 3]) {
+	let rejected = false;
+	let called = false;
+	try {
+		await notifyTextsAsync(mode, () => {
+			called = true;
+		});
+	} catch (error) {
+		rejected = error instanceof RangeError;
+	}
+	check(rejected && !called, "invalid text table counts reject before touching pointers");
+}
+let textRecovered = false;
+await notifyTextsAsync(0, (copied) => {
+	textRecovered = copied?.[1]?.[0] === "caf\u00e9";
+});
+check(textRecovered, "text copy errors release the callback registration");
 console.log("array rows passed");
