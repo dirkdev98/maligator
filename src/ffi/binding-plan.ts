@@ -293,6 +293,7 @@ export interface HandleType {
 	readonly allocator?: string;
 	/** The trailing array whose element count the caller factory accepts. */
 	readonly trailing?: string;
+	readonly layout?: { readonly size: string; readonly alignment: string };
 	readonly destroy?: {
 		readonly name: string;
 		readonly success?: string;
@@ -414,8 +415,44 @@ function handleTypes(
 		}
 		if (handle.trailing !== undefined && handle.storage !== "caller")
 			throw new FfiError(`types.${key}.handle.trailing: requires caller storage`);
+		if (
+			handle.layout !== undefined &&
+			(handle.storage !== "caller" || handle.trailing !== undefined)
+		)
+			throw new FfiError(
+				`types.${key}.handle.layout: requires caller storage without a trailing field`,
+			);
 		if (handle.storage === "caller") {
-			if (!record.complete || record.tag !== "struct")
+			if (handle.layout !== undefined) {
+				if (record.complete || record.tag !== "struct")
+					throw new FfiError(
+						`types.${key}.handle.layout: queries require an incomplete struct`,
+					);
+				for (const [field, name] of Object.entries(handle.layout)) {
+					const query = model.functions.find((entry) => entry.name === name);
+					const result =
+						query === undefined ? undefined : resolveCType(model, query.returns);
+					const bytes =
+						result?.kind === "integer" ? model.target.sizes[result.name] : undefined;
+					const unsigned =
+						result?.kind === "integer" &&
+						(result.name === "char"
+							? !model.target.charSigned
+							: result.name.startsWith("unsigned"));
+					if (
+						query === undefined ||
+						query.params.length !== 0 ||
+						query.variadic ||
+						!unsigned ||
+						bytes === undefined ||
+						bytes < 1 ||
+						bytes > 8
+					)
+						throw new FfiError(
+							`types.${key}.handle.layout.${field}: '${name}' must take no arguments and return an unsigned integer up to 64 bits`,
+						);
+				}
+			} else if (!record.complete || record.tag !== "struct")
 				throw new FfiError(
 					`types.${key}.handle.storage: caller storage needs a complete struct`,
 				);
@@ -546,6 +583,7 @@ function handleTypes(
 					: "pointer",
 			...(handle.storage === "caller" ? { allocator: key } : {}),
 			...(handle.trailing === undefined ? {} : { trailing: handle.trailing }),
+			...(handle.layout === undefined ? {} : { layout: handle.layout }),
 			...(destroy === undefined ? {} : { destroy }),
 			collect: handle.collect === true,
 			views: [],

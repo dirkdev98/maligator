@@ -5,6 +5,26 @@ declare module "maligator:ffi/state" {
 	interface Copy extends State {
 		readonly value: number;
 	}
+	export function IncompleteState(): State;
+	export function incomplete_state_layout(size: bigint, alignment: bigint): void;
+	export function incomplete_state_default_layout(): void;
+	export function incomplete_state_size_queries(): number;
+	export function incomplete_state_alignment_queries(): number;
+	export function incomplete_state_query_hook(callback: (() => void) | null): void;
+	export function incomplete_state_init(state: State, value: number): number;
+	export function incomplete_state_read(state: State): number;
+	export function incomplete_state_cleanup(state: State): void;
+	export function incomplete_state_aligned(state: State): number;
+	export function incomplete_state_zero(state: State): number;
+	export function incomplete_state_fill(state: State): void;
+	export function incomplete_state_same(state: State): State | null;
+	export function incomplete_state_base(state: State): State | null;
+	export function incomplete_base_read(state: State): number;
+	export function incompleteVisitAsync(
+		state: State,
+		callback: (state: State | null) => void,
+	): Promise<void>;
+	export function incomplete_state_live(): number;
 	export function CallerState(): State;
 	export function VariableState(length: bigint): State;
 	export function WideState(length: bigint): State;

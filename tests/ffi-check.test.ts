@@ -85,6 +85,37 @@ afterEach(() => {
 });
 
 describe("ffi check", () => {
+	it("tracks native layout query signatures for opaque caller storage", () => {
+		const directory = project();
+		const file = path.join(directory, "include/shapes.h");
+		const declarations = `${header}\ntypedef struct ShapesOpaque ShapesOpaque;\nunsigned long shapes_opaque_size(void);\nunsigned long shapes_opaque_alignment(void);\n`;
+		writeFileSync(file, declarations);
+		writeContract(directory, {
+			types: {
+				ShapesOpaque: {
+					handle: {
+						storage: "caller",
+						layout: { size: "shapes_opaque_size", alignment: "shapes_opaque_alignment" },
+					},
+				},
+			},
+		});
+		accept(directory);
+		writeFileSync(
+			file,
+			declarations.replace(
+				"unsigned long shapes_opaque_size",
+				"unsigned long long shapes_opaque_size",
+			),
+		);
+		const changed = check(directory, [], 1);
+		expect(
+			changed.libraries[0]?.changes.some((change) =>
+				change.path.includes("function shapes_opaque_size"),
+			),
+		).toBe(true);
+	});
+
 	it("detects typedef alignment changes while the underlying record and SDK stay unchanged", () => {
 		const directory = project();
 		const file = path.join(directory, "include/shapes.h");

@@ -254,7 +254,24 @@ function validateTypeFacts(value: unknown, at: string): void {
 		"storage",
 		"views",
 		"trailing",
+		"layout",
 	]);
+	if (handle.layout !== undefined) {
+		expectObject(handle.layout, `${at}.handle.layout`);
+		expectKeys(handle.layout, `${at}.handle.layout`, ["size", "alignment"]);
+		for (const key of ["size", "alignment"])
+			expect(
+				typeof handle.layout[key] === "string" && C_NAME.test(handle.layout[key]),
+				`${at}.handle.layout.${key}`,
+				"a C function name",
+			);
+		expect(handle.storage === "caller", `${at}.handle.layout`, 'storage: "caller"');
+		expect(
+			handle.trailing === undefined,
+			`${at}.handle.layout`,
+			"layout queries without a trailing field",
+		);
+	}
 	if (handle.trailing !== undefined) {
 		expect(
 			typeof handle.trailing === "string" && C_NAME.test(handle.trailing),

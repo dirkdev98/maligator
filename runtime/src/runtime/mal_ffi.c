@@ -2637,6 +2637,18 @@ MalValue mal_ffi_allocate_handle(
     return ffi_new_handle(vm, library, type, storage, false, 0, true, false);
 }
 
+MalValue mal_ffi_allocate_opaque_handle(
+    MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
+    uint64_t size, uint64_t alignment, const MalFfiSite *site) {
+    if (size == 0 || size > SIZE_MAX || alignment == 0 || alignment > SIZE_MAX
+        || (alignment & (alignment - 1)) != 0 || size > SIZE_MAX - (alignment - 1)) {
+        ffi_fail(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site,
+            "a positive size and power-of-two alignment that fit caller storage");
+        return mal_value_new_undefined();
+    }
+    return mal_ffi_allocate_handle(vm, library, type, (size_t)size, (size_t)alignment);
+}
+
 MalValue mal_ffi_allocate_trailing_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
     uint64_t count, size_t offset, size_t stride, size_t minimum, size_t alignment,

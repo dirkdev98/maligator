@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <string.h>
 
 static int live;
 
@@ -96,3 +97,46 @@ CopiedState caller_copy(int value) { return (CopiedState) { .value = value }; }
 int caller_copy_aligned(const CopiedState *state) {
     return (uintptr_t) state % _Alignof(CopiedState) == 0;
 }
+
+struct IncompleteState { _Alignas(64) void *private_state; int value; unsigned char reserved[17]; };
+static uint64_t incomplete_size = sizeof(IncompleteState);
+static uint64_t incomplete_alignment = _Alignof(IncompleteState);
+static int incomplete_size_queries;
+static int incomplete_alignment_queries;
+static void (*incomplete_query_callback)(void *);
+static void *incomplete_query_data;
+static int incomplete_live;
+uint64_t incomplete_state_size(void) {
+    incomplete_size_queries++;
+    if (incomplete_query_callback != NULL) incomplete_query_callback(incomplete_query_data);
+    return incomplete_size;
+}
+uint64_t incomplete_state_alignment(void) { incomplete_alignment_queries++; return incomplete_alignment; }
+void incomplete_state_layout(uint64_t size, uint64_t alignment) { incomplete_size = size; incomplete_alignment = alignment; }
+void incomplete_state_default_layout(void) { incomplete_size = sizeof(IncompleteState); incomplete_alignment = _Alignof(IncompleteState); }
+int incomplete_state_size_queries(void) { return incomplete_size_queries; }
+int incomplete_state_alignment_queries(void) { return incomplete_alignment_queries; }
+void incomplete_state_query_hook(void (*callback)(void *), void *data) { incomplete_query_callback = callback; incomplete_query_data = data; }
+int incomplete_state_init(IncompleteState *state, int value) {
+    if (state->private_state != NULL || state->value != 0 || value < 0) return -1;
+    state->private_state = malloc(1);
+    if (state->private_state == NULL) abort();
+    state->value = value;
+    incomplete_live++;
+    return 0;
+}
+int incomplete_state_read(const IncompleteState *state) { return state->private_state == NULL ? -1 : state->value; }
+void incomplete_state_cleanup(IncompleteState *state) { free(state->private_state); state->private_state = NULL; state->value = 0; incomplete_live--; }
+int incomplete_state_aligned(const IncompleteState *state) { return (uintptr_t)state % _Alignof(IncompleteState) == 0 && (uintptr_t)state % incomplete_alignment == 0; }
+IncompleteState *incomplete_state_same(IncompleteState *state) { return state; }
+IncompleteBase *incomplete_state_base(IncompleteState *state) { return (IncompleteBase *)state; }
+int incomplete_base_read(const IncompleteBase *state) { return incomplete_state_read((const IncompleteState *)state); }
+void incomplete_state_visit(IncompleteState *state, void (*callback)(IncompleteState *, void *), void *data) { callback(state, data); }
+int incomplete_state_live(void) { return incomplete_live; }
+
+int incomplete_state_zero(const IncompleteState *state) {
+    const unsigned char *bytes = (const unsigned char *)state;
+    for (uint64_t i = 0; i < incomplete_size; i++) if (bytes[i] != 0) return 0;
+    return 1;
+}
+void incomplete_state_fill(IncompleteState *state) { memset(state, 0x5a, (size_t)incomplete_size); }

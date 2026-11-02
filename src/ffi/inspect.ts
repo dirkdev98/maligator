@@ -152,6 +152,7 @@ export interface HandleInspectionData {
 	readonly representation: "struct" | "pointer";
 	readonly allocator?: string;
 	readonly trailing?: string;
+	readonly layout?: { readonly size: string; readonly alignment: string };
 	readonly views?: ReadonlyArray<string>;
 	readonly destroy?: string;
 	readonly destroySuccess?: string;
@@ -495,6 +496,7 @@ export function inspectBindings(
 			...(handle.views.length === 0 ? {} : { views: handle.views }),
 			...(handle.allocator === undefined ? {} : { allocator: handle.allocator }),
 			...(handle.trailing === undefined ? {} : { trailing: handle.trailing }),
+			...(handle.layout === undefined ? {} : { layout: handle.layout }),
 			...(handle.destroy === undefined ? {} : { destroy: handle.destroy.name }),
 			...(handle.destroy?.success === undefined
 				? {}

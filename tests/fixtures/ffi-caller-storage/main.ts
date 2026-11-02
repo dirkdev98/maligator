@@ -1,6 +1,23 @@
 /* oxlint-disable no-console -- The fixture reports observable native behavior. */
 import {
 	CallerState,
+	IncompleteState,
+	incomplete_state_layout,
+	incomplete_state_default_layout,
+	incomplete_state_size_queries,
+	incomplete_state_alignment_queries,
+	incomplete_state_query_hook,
+	incomplete_state_init,
+	incomplete_state_read,
+	incomplete_state_cleanup,
+	incomplete_state_aligned,
+	incomplete_state_zero,
+	incomplete_state_fill,
+	incomplete_state_same,
+	incomplete_state_base,
+	incomplete_base_read,
+	incompleteVisitAsync,
+	incomplete_state_live,
 	VariableState,
 	WideState,
 	variable_state_zero,
@@ -186,4 +203,111 @@ try {
 } finally {
 	expression[Symbol.dispose]();
 }
+const sizeQueries = incomplete_state_size_queries();
+const alignmentQueries = incomplete_state_alignment_queries();
+const opaque = IncompleteState();
+check(
+	incomplete_state_size_queries() === sizeQueries + 1 &&
+		incomplete_state_alignment_queries() === alignmentQueries + 1,
+	"opaque factories query each layout component once",
+);
+check(
+	incomplete_state_read(opaque) === -1 && incomplete_state_aligned(opaque) === 1,
+	"queried storage starts zeroed at native alignment",
+);
+check(
+	incomplete_state_init(opaque, -1) === -1 && incomplete_state_init(opaque, 29) === 0,
+	"opaque initialization remains explicit and retryable",
+);
+check(
+	incomplete_state_same(opaque) === opaque &&
+		incomplete_state_base(opaque) === opaque &&
+		incomplete_base_read(opaque) === 29,
+	"opaque pointer views preserve canonical identity",
+);
+const opaqueCall = incompleteVisitAsync(opaque, (value) => {
+	check(
+		value === opaque && incomplete_state_read(opaque) === 29,
+		"worker callback reuses opaque storage",
+	);
+	let pinned = false;
+	try {
+		opaque[Symbol.dispose]();
+	} catch (error) {
+		pinned = error instanceof TypeError;
+	}
+	check(pinned, "opaque storage stays pinned through worker callbacks");
+});
+let opaquePinned = false;
+try {
+	opaque[Symbol.dispose]();
+} catch (error) {
+	opaquePinned = error instanceof TypeError;
+}
+check(opaquePinned, "queued worker pins opaque caller storage");
+await opaqueCall;
+incomplete_state_cleanup(opaque);
+check(
+	incomplete_state_live() === 0,
+	"explicit cleanup releases opaque internal allocations",
+);
+opaque[Symbol.dispose]();
+for (const [size, alignment] of [
+	[192n, 128n],
+	[513n, 256n],
+] as const) {
+	incomplete_state_layout(size, alignment);
+	using sized = IncompleteState();
+	check(
+		incomplete_state_aligned(sized) === 1 && incomplete_state_zero(sized) === 1,
+		"factories honor changing native sizes and alignments",
+	);
+	incomplete_state_fill(sized);
+}
+for (const [size, alignment] of [
+	[0n, 64n],
+	[64n, 0n],
+	[64n, 3n],
+	[(1n << 64n) - 1n, 64n],
+	[1n, (1n << 64n) - 1n],
+]) {
+	incomplete_state_layout(size!, alignment!);
+	let rejected = false;
+	try {
+		IncompleteState();
+	} catch (error) {
+		rejected = error instanceof RangeError && error.message.includes("layout");
+	}
+	check(rejected, "invalid native layouts fail before allocation");
+}
+incomplete_state_default_layout();
+let queryCalls = 0;
+incomplete_state_query_hook(() => {
+	queryCalls++;
+	const garbage = Array.from({ length: 16 }, () => ({ value: "opaque query roots" }));
+	check(garbage.length === 16, "native layout query may reenter JavaScript");
+});
+const observedOpaque = IncompleteState();
+check(queryCalls === 1, "layout query invokes its registered callback");
+observedOpaque[Symbol.dispose]();
+const alignBeforeFailure = incomplete_state_alignment_queries();
+incomplete_state_query_hook(() => {
+	throw new Error("opaque query failed");
+});
+let queryFailed = false;
+try {
+	IncompleteState();
+} catch (error) {
+	queryFailed = error instanceof Error && error.message === "opaque query failed";
+}
+check(
+	queryFailed && incomplete_state_alignment_queries() === alignBeforeFailure,
+	"failed size queries skip alignment and allocation",
+);
+incomplete_state_query_hook(null);
+using recoveredOpaque = IncompleteState();
+check(
+	incomplete_state_read(recoveredOpaque) === -1,
+	"opaque factories recover after a callback failure",
+);
 console.log("caller storage passed");

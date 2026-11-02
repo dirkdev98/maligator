@@ -342,6 +342,23 @@ library's C API. The trailing array stays behind the handle and is not a JavaScr
 array property. Initialization, cleanup, aliases, and worker pins follow the same
 rules as fixed-size caller storage.
 
+For an opaque, forward-declared struct, provide native layout queries:
+
+```ts
+types: {
+	OpaqueState: {
+		handle: {
+			storage: "caller",
+			layout: { size: "opaque_state_size", alignment: "opaque_state_alignment" },
+		},
+	},
+}
+```
+
+`OpaqueState()` calls both zero-argument queries for each allocation. They must return
+unsigned integers up to 64 bits. Invalid sizes, non-power-of-two alignments, and size
+rounding overflow throw a `RangeError`. C initialization and cleanup remain explicit.
+
 For state such as zlib's `z_stream`, describe each retained byte pointer and its count:
 
 ```ts

@@ -1908,8 +1908,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 - [ ] Extend value mapping for wider integers, complex and vector values, and native
       floating representations beyond JavaScript numbers.
 
-- [ ] Support opaque caller storage sized by native queries.
-
 - [ ] Support const-member tagged values whose discriminator overlaps union storage.
 
 - [ ] Support counted outer arrays of fixed C arrays with explicit output capacities.

@@ -70,7 +70,7 @@ export interface MaligatorFfiLibrary {
  */
 export interface MaligatorFfiHandle {
 	/** Export a factory named by the type fact. It allocates aligned,
-	 * zeroed caller-owned storage for a complete struct. C initialization and cleanup
+	 * zeroed caller-owned storage. C initialization and cleanup
 	 * remain explicit; disposing the handle frees only this storage.
 	 */
 	storage?: "caller";
@@ -79,6 +79,11 @@ export interface MaligatorFfiHandle {
 	 * Allocation does not initialize a C count field.
 	 */
 	trailing?: string;
+	/** Native size and alignment queries for an incomplete struct. Both functions
+	 * take no arguments and return unsigned integers up to 64 bits. The factory
+	 * calls them for each allocation, checking size and alignment before allocating.
+	 */
+	layout?: { size: string; alignment: string };
 	/** Other handle types whose pointers accept this resource without adjustment.
 	 * Compatibility is directed and preserves the resource's identity and owner.
 	 */

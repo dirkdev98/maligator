@@ -42,4 +42,28 @@ int caller_state_live(void);
 CopiedState caller_copy(int value);
 int caller_copy_aligned(const CopiedState *state);
 
+typedef struct IncompleteBase IncompleteBase;
+uint64_t incomplete_state_size(void);
+uint64_t incomplete_state_alignment(void);
+void incomplete_state_layout(uint64_t size, uint64_t alignment);
+void incomplete_state_default_layout(void);
+int incomplete_state_size_queries(void);
+int incomplete_state_alignment_queries(void);
+void incomplete_state_query_hook(void (*callback)(void *), void *data);
+int incomplete_state_init(IncompleteState *state, int value);
+int incomplete_state_read(const IncompleteState *state);
+void incomplete_state_cleanup(IncompleteState *state);
+int incomplete_state_aligned(const IncompleteState *state);
+int incomplete_state_zero(const IncompleteState *state);
+void incomplete_state_fill(IncompleteState *state);
+IncompleteState *incomplete_state_same(IncompleteState *state);
+IncompleteBase *incomplete_state_base(IncompleteState *state);
+int incomplete_base_read(const IncompleteBase *state);
+void incomplete_state_visit(IncompleteState *state, void (*callback)(IncompleteState *, void *), void *data);
+int incomplete_state_live(void);
+int incomplete_signed_size(void);
+uint64_t incomplete_arg_size(int value);
+uint64_t incomplete_var_size(int value, ...);
+unsigned __int128 incomplete_wide_size(void);
+
 #endif

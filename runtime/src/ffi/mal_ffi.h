@@ -129,6 +129,10 @@ MalValue mal_ffi_new_handle(
 MalValue mal_ffi_allocate_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
     size_t size, size_t alignment);
+/** Validate a native queried layout before allocating zeroed opaque caller storage. */
+MalValue mal_ffi_allocate_opaque_handle(
+    MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
+    uint64_t size, uint64_t alignment, const MalFfiSite *site);
 /** Allocate caller storage for a trailing array, rejecting size and alignment-rounding overflow. */
 MalValue mal_ffi_allocate_trailing_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,

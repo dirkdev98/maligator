@@ -37,6 +37,34 @@ describe("caller storage contracts", () => {
 			rmSync(directory, { recursive: true, force: true });
 		}
 	});
+	it.each([
+		{ storage: "caller", layout: { size: "incomplete_state_size" } },
+		{ storage: "caller", layout: { size: "bad()", alignment: "alignment" } },
+		{ layout: { size: "size", alignment: "alignment" } },
+		{
+			storage: "caller",
+			trailing: "tail",
+			layout: { size: "size", alignment: "alignment" },
+		},
+	])("rejects malformed queried layouts %j", (handle) => {
+		const directory = mkdtempSync(path.join(tmpdir(), "mal-layout-facts-"));
+		try {
+			writeFileSync(
+				path.join(directory, "state.ffi.ts"),
+				`export default ${JSON.stringify({ headers: ["state.h"], types: { IncompleteState: { handle } } })};\n`,
+			);
+			expect(() =>
+				loadLibraryContract(
+					"state",
+					{ contract: "state.ffi.ts" },
+					directory,
+					stripCompactTypes,
+				),
+			).toThrow("layout");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 	beforeAll(() => {
 		const compiler = process.env.CC ?? "clang";
 		const version = spawnSync(compiler, ["--version"], { encoding: "utf8" });
@@ -70,6 +98,17 @@ describe("caller storage contracts", () => {
 	});
 	it.each([
 		["IncompleteState", { storage: "caller" }, "complete struct"],
+		[
+			"CallerState",
+			{
+				storage: "caller",
+				layout: {
+					size: "incomplete_state_size",
+					alignment: "incomplete_state_alignment",
+				},
+			},
+			"incomplete struct",
+		],
 		["VariableState", { storage: "caller" }, "allocation size"],
 		["VariableState", { trailing: "tail" }, "caller storage"],
 		["VariableState", { storage: "caller", trailing: "missing" }, "final flexible"],
@@ -105,6 +144,49 @@ describe("caller storage contracts", () => {
 			);
 		},
 	);
+	it.each([
+		["incomplete_signed_size", "unsigned integer"],
+		["incomplete_arg_size", "take no arguments"],
+		["incomplete_var_size", "take no arguments"],
+		["incomplete_wide_size", "64 bits"],
+		["missing_size", "must take no arguments"],
+	])("rejects invalid opaque size query %s", (size, diagnostic) => {
+		expect(() =>
+			planBindings(model, {
+				types: {
+					IncompleteState: {
+						handle: {
+							storage: "caller",
+							layout: { size, alignment: "incomplete_state_alignment" },
+						},
+					},
+				},
+				functions: {},
+			}),
+		).toThrow(diagnostic);
+	});
+	it("binds an opaque factory without exposing its private layout", () => {
+		const plan = planBindings(model, {
+			types: {
+				IncompleteState: {
+					handle: {
+						storage: "caller",
+						layout: {
+							size: "incomplete_state_size",
+							alignment: "incomplete_state_alignment",
+						},
+					},
+				},
+			},
+			functions: {},
+		});
+		expect(generateBindingUnit("state", ["state.h"], model, plan).exports).toContain(
+			"IncompleteState",
+		);
+		expect([...generateDeclarations([{ name: "state", plan }])].join("")).toContain(
+			"export function IncompleteState(): IncompleteState;",
+		);
+	});
 	it("rejects a factory that would hide an asynchronous function export", () => {
 		expect(() =>
 			planBindings(model, {

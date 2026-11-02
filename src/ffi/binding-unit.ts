@@ -1553,17 +1553,30 @@ class BindingWriter {
 					"\t(void) mal_argc;",
 					"\t(void) mal_new_target;",
 					"\t(void) mal_callee;",
-					...(handle.trailing === undefined
+					...(handle.layout !== undefined
 						? [
-								`\treturn mal_ffi_allocate_handle(vm, &mal_ffi_library, &mal_ffi_type_${name}, sizeof(${handle.spelling}), _Alignof(${handle.spelling}));`,
+								`\tstatic const MalFfiSite mal_site = { ${cString(handle.allocator)}, "layout", nullptr };`,
+								...(this.#plan.hasCallbacks ? ["\tmal_ffi_collectable_begin(vm);"] : []),
+								`\tuint64_t mal_size = ${handle.layout.size}();`,
+								...(this.#plan.hasCallbacks ? ["\tmal_ffi_collectable_end(vm);"] : []),
+								"\tif (mal_ffi_threw(vm)) return mal_ffi_undefined();",
+								...(this.#plan.hasCallbacks ? ["\tmal_ffi_collectable_begin(vm);"] : []),
+								`\tuint64_t mal_alignment = ${handle.layout.alignment}();`,
+								...(this.#plan.hasCallbacks ? ["\tmal_ffi_collectable_end(vm);"] : []),
+								"\tif (mal_ffi_threw(vm)) return mal_ffi_undefined();",
+								`\treturn mal_ffi_allocate_opaque_handle(vm, &mal_ffi_library, &mal_ffi_type_${name}, mal_size, mal_alignment, &mal_site);`,
 							]
-						: [
-								`\tstatic const MalFfiSite mal_site = { ${cString(handle.allocator)}, "length", nullptr };`,
-								`\tstatic_assert(sizeof(((${handle.spelling} *) nullptr)->${handle.trailing}[0]) > 0, "FFI trailing elements need nonzero size");`,
-								"\tuint64_t mal_count;",
-								"\tif (!mal_ffi_to_uint64(vm, mal_argc > 0 ? mal_args[0] : mal_ffi_undefined(), 64, &mal_site, &mal_count)) return mal_ffi_undefined();",
-								`\treturn mal_ffi_allocate_trailing_handle(vm, &mal_ffi_library, &mal_ffi_type_${name}, mal_count, offsetof(${handle.spelling}, ${handle.trailing}), sizeof(((${handle.spelling} *) nullptr)->${handle.trailing}[0]), sizeof(${handle.spelling}), _Alignof(${handle.spelling}), &mal_site);`,
-							]),
+						: handle.trailing === undefined
+							? [
+									`\treturn mal_ffi_allocate_handle(vm, &mal_ffi_library, &mal_ffi_type_${name}, sizeof(${handle.spelling}), _Alignof(${handle.spelling}));`,
+								]
+							: [
+									`\tstatic const MalFfiSite mal_site = { ${cString(handle.allocator)}, "length", nullptr };`,
+									`\tstatic_assert(sizeof(((${handle.spelling} *) nullptr)->${handle.trailing}[0]) > 0, "FFI trailing elements need nonzero size");`,
+									"\tuint64_t mal_count;",
+									"\tif (!mal_ffi_to_uint64(vm, mal_argc > 0 ? mal_args[0] : mal_ffi_undefined(), 64, &mal_site, &mal_count)) return mal_ffi_undefined();",
+									`\treturn mal_ffi_allocate_trailing_handle(vm, &mal_ffi_library, &mal_ffi_type_${name}, mal_count, offsetof(${handle.spelling}, ${handle.trailing}), sizeof(((${handle.spelling} *) nullptr)->${handle.trailing}[0]), sizeof(${handle.spelling}), _Alignof(${handle.spelling}), &mal_site);`,
+								]),
 					"}",
 				);
 		}

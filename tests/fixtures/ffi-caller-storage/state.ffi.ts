@@ -6,6 +6,17 @@ export default {
 	headers: ["state.h", "regex.h", ...(process.platform === "darwin" ? ["_regex.h"] : [])],
 	find: [{ includeDirs: ["include"], sources: ["state.c"] }],
 	types: {
+		IncompleteState: {
+			handle: {
+				storage: "caller",
+				layout: {
+					size: "incomplete_state_size",
+					alignment: "incomplete_state_alignment",
+				},
+				views: ["IncompleteBase"],
+			},
+		},
+		IncompleteBase: { handle: {} },
 		CallerState: { handle: { storage: "caller" } },
 		CopiedState: { handle: {} },
 		regex_t: { handle: { storage: "caller" } },
@@ -13,6 +24,17 @@ export default {
 		WideState: { handle: { storage: "caller", trailing: "tail" } },
 	},
 	functions: {
+		incomplete_state_same: { returns: { borrowed: true } },
+		incomplete_state_base: { returns: { borrowed: true } },
+		incomplete_state_visit: {
+			params: { callback: { callback: { data: "data" } } },
+			async: "incompleteVisitAsync",
+		},
+		incomplete_state_query_hook: {
+			params: {
+				callback: { nullable: true, callback: { data: "data", replaced: true } },
+			},
+		},
 		caller_state_same: { returns: { borrowed: true } },
 		variable_state_same: { returns: { borrowed: true } },
 		variable_state_sum: { async: "variableStateSumAsync" },
