@@ -1903,6 +1903,9 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
+- [ ] Capture record size, alignment, and field offsets in `ffi check` snapshots so
+      packing-only header changes require review.
+
 - [ ] Extend global accessors with bounded string and byte arrays, and explicit
       lifetime contracts for retained pointers.
 

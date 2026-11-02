@@ -17,6 +17,11 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
+/** Free-compatible count * size storage with native alignment; overflow and allocation failure return null. */
+void *mal_ffi_allocate_storage(size_t count, size_t size, size_t alignment);
+/** Zero count * size bytes with native alignment; overflow and allocation failure return null. */
+void *mal_ffi_calloc_storage(size_t count, size_t size, size_t alignment);
+
 typedef struct MalVm MalVm;
 typedef struct MalFfiInputs MalFfiInputs;
 typedef struct MalHostInstallSlot MalHostInstallSlot;

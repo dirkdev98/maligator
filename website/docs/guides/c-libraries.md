@@ -120,6 +120,10 @@ Import and call these functions like other FFI exports. A getter reads the curre
 object; a setter converts its argument completely before assigning. Value records
 and integers use the same mappings as function arguments and results.
 
+Staged records and arrays keep their C type's alignment, including worker copies
+and callback messages. Headers can require stronger alignment than the platform
+default without a separate contract fact.
+
 Fixed arrays of values map to JavaScript tuples, including nested arrays. Reads
 copy the C array before constructing the result. Writes stage the entire converted
 array before changing C storage, so a throwing element getter leaves it unchanged.

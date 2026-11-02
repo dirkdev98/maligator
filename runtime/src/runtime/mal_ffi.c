@@ -2491,8 +2491,23 @@ void mal_ffi_callback_leave(MalVm *vm) {
     vm->ffi->invocation_depth--;
 }
 
-static void *ffi_allocate_storage(usize size, usize alignment) {
-    return alignment <= _Alignof(max_align_t) ? malloc(size) : aligned_alloc(alignment, size);
+void *mal_ffi_allocate_storage(size_t count, size_t size, size_t alignment) {
+    if (size != 0 && count > SIZE_MAX / size) return nullptr;
+    size *= count;
+    if (alignment <= _Alignof(max_align_t)) return malloc(size);
+    size_t remainder = size % alignment;
+    if (remainder != 0) {
+        size_t padding = alignment - remainder;
+        if (size > SIZE_MAX - padding) return nullptr;
+        size += padding;
+    }
+    return aligned_alloc(alignment, size);
+}
+
+void *mal_ffi_calloc_storage(size_t count, size_t size, size_t alignment) {
+    void *storage = mal_ffi_allocate_storage(count, size, alignment);
+    if (storage != nullptr) memset(storage, 0, count * size);
+    return storage;
 }
 
 static bool ffi_type_supports(const MalFfiHandleType *actual, const MalFfiHandleType *expected) {
@@ -2547,7 +2562,7 @@ static MalValue ffi_new_handle(
     }
     void *stored = value;
     if (type->size > 0) {
-        stored = ffi_allocate_storage(type->size, type->alignment);
+        stored = mal_ffi_allocate_storage(1, type->size, type->alignment);
         if (stored != nullptr) memcpy(stored, value, type->size);
         owns_storage = true;
     }
@@ -2613,7 +2628,7 @@ MalValue mal_ffi_new_handle(
 MalValue mal_ffi_allocate_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
     size_t size, size_t alignment) {
-    void *storage = ffi_allocate_storage(size, alignment);
+    void *storage = mal_ffi_allocate_storage(1, size, alignment);
     if (storage == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();

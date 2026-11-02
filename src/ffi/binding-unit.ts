@@ -1682,7 +1682,7 @@ class BindingWriter {
 			"\tif (mal_callback != nullptr && !mal_ffi_callback_here(mal_callback)) {",
 			// A lookup without user data already reserved the call under its lock.
 			...(!keyedLookup ? ["\t\tmal_ffi_callback_reserve(mal_callback);"] : []),
-			`\t\t${message} *mal_message = malloc(sizeof(*mal_message));`,
+			`\t\t${message} *mal_message = mal_ffi_allocate_storage(1, sizeof(*mal_message), _Alignof(${message}));`,
 			"\t\tif (mal_message != nullptr) {",
 			"\t\t\tbool mal_ok = true;",
 			...(checkedCopies ? ["\t\t\tmal_message->mal_copy_error = MAL_FFI_COPY_OK;"] : []),
@@ -1835,7 +1835,7 @@ class BindingWriter {
 				const storage = globalArrayStorage(binding);
 				locals.push(`__typeof__((${storage}){0} + 0) ${local} = nullptr;`);
 				body.push(
-					`${local} = malloc(sizeof(${storage}));`,
+					`${local} = mal_ffi_allocate_storage(1, sizeof(${storage}), _Alignof(${storage}));`,
 					`if (${local} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 				);
 				cleanup.push(`free(${local});`);
@@ -2047,7 +2047,8 @@ class BindingWriter {
 						locals.push(
 							`${localDeclaration(value.element, `*${elements}`)} = nullptr;`,
 							`int32_t ${length} = 0;`,
-							`alignas(max_align_t) unsigned char ${storage}[MAL_FFI_ARRAY_INLINE];`,
+							`alignas(_Alignof(__typeof__(*${elements})) <= MAL_FFI_ARRAY_INLINE ? _Alignof(__typeof__(*${elements})) : _Alignof(max_align_t)) unsigned char ${storage}[MAL_FFI_ARRAY_INLINE];`,
+							`static_assert(sizeof(*${elements}) % _Alignof(__typeof__(*${elements})) == 0, "FFI array stride must preserve C alignment");`,
 						);
 						if (texts) {
 							const freed = this.#fresh("index");
@@ -2106,7 +2107,7 @@ class BindingWriter {
 						];
 						body.push(
 							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &${length})) goto mal_done;`,
-							`if (${length} > 0 && (size_t) ${length} <= sizeof(${storage}) / sizeof(*${elements})) {`,
+							`if (${length} > 0 && _Alignof(__typeof__(*${elements})) <= MAL_FFI_ARRAY_INLINE && (size_t) ${length} <= sizeof(${storage}) / sizeof(*${elements})) {`,
 							`\t${elements} = (void *) ${storage};`,
 							// String elements must start null, since cleanup frees every slot.
 							...(texts
@@ -2115,15 +2116,15 @@ class BindingWriter {
 									]
 								: []),
 							`} else if (${length} > 0) {`,
-							`\t${elements} = calloc((size_t) ${length}, sizeof(*${elements}));`,
+							`\t${elements} = mal_ffi_calloc_storage((size_t) ${length}, sizeof(*${elements}), _Alignof(__typeof__(*${elements})));`,
 							`\tif (${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 							"}",
 							...(bulk === undefined
 								? sequential
 								: [
-										`if ((size_t) ${length} * ${bulk.fields} <= ${bulk.inline}) ${bulk.values} = ${bulk.storage};`,
+										`if (${bulk.fields === "0" ? "true" : `(size_t) ${length} <= ${bulk.inline} / ${bulk.fields}`}) ${bulk.values} = ${bulk.storage};`,
 										`else if (${length} > 0) {`,
-										`\t${bulk.values} = malloc(sizeof(MalValue) * (size_t) ${length} * ${bulk.fields});`,
+										`\t${bulk.values} = mal_ffi_allocate_storage((size_t) ${length}, sizeof(MalValue) * ${bulk.fields}, _Alignof(MalValue));`,
 										`\tif (${bulk.values} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 										"}",
 										`if (${length} > 0 && mal_ffi_try_record_elements(vm, ${source}, ${length}, &mal_ffi_record_${bulk.name}, ${bulk.values})) {`,
@@ -2230,7 +2231,7 @@ class BindingWriter {
 		} else if (binding.returns.kind === "array" && binding.global?.access === "get") {
 			locals.push(`${globalArrayStorage(binding)} *mal_return = nullptr;`);
 			after.push(
-				"mal_return = malloc(sizeof(*mal_return));",
+				`mal_return = mal_ffi_allocate_storage(1, sizeof(*mal_return), _Alignof(${globalArrayStorage(binding)}));`,
 				"if (mal_return == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }",
 				`${declaration.name}(mal_return);`,
 				...this.#produce(binding.returns, "(*mal_return)", "mal_result"),
@@ -2691,7 +2692,8 @@ class BindingWriter {
 						body.push(
 							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &mal_ctx->${length})) goto mal_failed;`,
 							`if (mal_ctx->${length} > 0) {`,
-							`\tmal_ctx->${elements} = calloc((size_t) mal_ctx->${length}, sizeof(*mal_ctx->${elements}));`,
+							`static_assert(sizeof(*mal_ctx->${elements}) % _Alignof(__typeof__(*mal_ctx->${elements})) == 0, "FFI array stride must preserve C alignment");`,
+							`\tmal_ctx->${elements} = mal_ffi_calloc_storage((size_t) mal_ctx->${length}, sizeof(*mal_ctx->${elements}), _Alignof(__typeof__(*mal_ctx->${elements})));`,
 							`\tif (mal_ctx->${elements} == nullptr) {`,
 							"\t\tmal_ffi_out_of_memory(vm);",
 							"\t\tgoto mal_failed;",
@@ -2922,7 +2924,7 @@ class BindingWriter {
 			"\t(void) mal_new_target;",
 			"\t(void) mal_callee;",
 			...locals.map((line) => `\t${line}`),
-			`\t${context} *mal_ctx = calloc(1, sizeof(*mal_ctx));`,
+			`\t${context} *mal_ctx = mal_ffi_calloc_storage(1, sizeof(*mal_ctx), _Alignof(${context}));`,
 			"\tif (mal_ctx == nullptr) {",
 			"\t\tmal_ffi_out_of_memory(vm);",
 			"\t\treturn mal_ffi_rejected(vm);",
