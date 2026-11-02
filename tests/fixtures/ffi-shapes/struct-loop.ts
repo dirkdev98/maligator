@@ -156,6 +156,89 @@ function conditional(input: Point, count: number): Point {
 const mixed = conditional(original, 10);
 check(mixed.x === 17 && mixed.y === 11.5, "conditional producer values");
 
+function skipped(input: Point, count: number, stride: number): Point {
+	let position = input;
+	const velocity = { x: 1, y: 0.5 };
+	for (let index = 0; index < count; index++)
+		if (stride > 0 && index % stride === 0) position = shapes_add(position, velocity);
+	return position;
+}
+for (const count of [0, 1, 8])
+	for (const stride of [0, 1, 2]) {
+		let reads = 0;
+		const input = {
+			get x() {
+				reads++;
+				return 2;
+			},
+			get y() {
+				reads++;
+				return 4;
+			},
+		};
+		const result = skipped(input, count, stride);
+		const calls = stride === 0 ? 0 : Math.ceil(count / stride);
+		check(
+			reads === (calls === 0 ? 0 : 2),
+			"skipped producers leave input getters untouched",
+		);
+		check((result === input) === (calls === 0), "zero-call input identity");
+		if (calls > 0)
+			check(
+				result.x === 2 + calls && result.y === 4 + calls * 0.5,
+				"skipped producer values",
+			);
+	}
+
+function permuted(input: Point, count: number): number {
+	let position = input,
+		previous = input;
+	const velocity = { x: 1, y: 0.5 };
+	for (let index = 0; index < count; index++) {
+		const next = shapes_add(position, velocity);
+		position = previous;
+		previous = next;
+	}
+	return position.x + position.y + previous.x + previous.y;
+}
+for (const count of [0, 1, 2, 8])
+	check(
+		permuted(original, count) === 12 + count * 1.5,
+		"phi permutations preserve prior generations",
+	);
+
+function selectivelyObserved(
+	input: Point,
+	count: number,
+	visit: (point: Point, index: number) => void,
+): Point {
+	let position = input;
+	const velocity = {
+		get x() {
+			return Array.from({ length: 40 }, () => ({ value: 1 }))[0]!.value;
+		},
+		y: 0.5,
+	};
+	for (let index = 0; index < count; index++) {
+		if (index % 3 === 0) visit(position, index);
+		if (index % 2 === 0) position = shapes_add(position, velocity);
+	}
+	return position;
+}
+const selectedHistory: Array<{ point: Point; x: number; y: number }> = [];
+const selected = selectivelyObserved({ x: 2, y: 4 }, 8, (point, index) => {
+	point.x += 10;
+	selectedHistory.push({ point, x: point.x, y: point.y });
+	if (index === 3)
+		check(advance({ x: 10, y: 20 }, 2).x === 12, "conditional producer reentry");
+});
+check(selected.x === 36 && selected.y === 6, "observed conditional producer values");
+for (const saved of selectedHistory)
+	check(
+		saved.point.x === saved.x && saved.point.y === saved.y && saved.point !== selected,
+		"conditional observations preserve heap generations",
+	);
+
 function observed(
 	input: Point,
 	count: number,

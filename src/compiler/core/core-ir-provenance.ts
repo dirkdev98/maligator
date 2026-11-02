@@ -1322,7 +1322,7 @@ function foreignStackObjects(
 }
 
 /** A loop consumes its carried object before replacing the site's storage. */
-function consumedStackObjectRecurrence(
+function unconditionalStackObjectRecurrence(
 	fn: CoreFunctionStore,
 	allocation: CoreInstructionId,
 	allocationRoot: CoreValueId,
@@ -1404,6 +1404,112 @@ function consumedStackObjectRecurrence(
 		return true;
 	}
 	return false;
+}
+
+function consumedStackObjectRecurrence(
+	fn: CoreFunctionStore,
+	allocation: CoreInstructionId,
+	allocationRoot: CoreValueId,
+	aliases: ReadonlySet<CoreValueId>,
+	roots: ReadonlyMap<CoreValueId, CoreValueId>,
+	control: CoreControlFlow,
+	index: CoreLocalFactIndex,
+	returns: ReadonlyMap<CoreValueId, ReadonlyArray<CoreInstructionId>>,
+): boolean {
+	if (
+		unconditionalStackObjectRecurrence(
+			fn,
+			allocation,
+			allocationRoot,
+			aliases,
+			roots,
+			control,
+			index,
+			returns,
+		)
+	)
+		return true;
+	if (!control.loops.some((loop) => loop.blocks.has(fn.instructionBlock(allocation))))
+		return false;
+	const related = (value: CoreValueId): boolean => aliases.has(roots.get(value) ?? value);
+	const values = [...fn.valueIds()].filter(related);
+	const outside = 1,
+		current = 2,
+		expired = 4;
+	type State = Map<CoreValueId, number>;
+	const initial = new Map(values.map((value) => [value, outside]));
+	const incoming = new Map<CoreBlockId, State>([[fn.entry, initial]]);
+	const pending = [fn.entry];
+	const queued = new Set(pending);
+	let produced = false;
+	const stateOf = (state: State, value: CoreValueId): number =>
+		state.get(value) ?? outside;
+	const merge = (block: CoreBlockId, state: State): void => {
+		const prior = incoming.get(block);
+		let changed = prior === undefined;
+		if (prior === undefined) incoming.set(block, state);
+		else
+			for (const value of values) {
+				const joined = stateOf(prior, value) | stateOf(state, value);
+				if (joined !== stateOf(prior, value)) {
+					prior.set(value, joined);
+					changed = true;
+				}
+			}
+		if (changed && !queued.has(block)) {
+			pending.push(block);
+			queued.add(block);
+		}
+	};
+	while (pending.length > 0) {
+		const block = pending.pop()!;
+		queued.delete(block);
+		const state = new Map(incoming.get(block));
+		for (const instruction of fn.instructionIds(block)) {
+			for (let offset = 0; offset < instructionOperandCount(fn, instruction); offset++)
+				if (stateOf(state, instructionOperand(fn, instruction, offset)!) & expired)
+					return false;
+			const move =
+				fn.kernel.instructionOpcode(instruction) >= 0 &&
+				fn.instructionOpcodeName(instruction) === "move";
+			const moved = move
+				? stateOf(state, instructionOperand(fn, instruction, 0)!)
+				: outside;
+			if (instruction === allocation) {
+				// Claims still belong to this site's current generation. Observing an
+				// argument does not make its later field or lend claims generation-free.
+				for (const [value, lifetime] of state)
+					if (lifetime & current) state.set(value, (lifetime & ~current) | expired);
+				produced = true;
+			}
+			for (let offset = 0; offset < instructionResultCount(fn, instruction); offset++) {
+				const value = instructionResult(fn, instruction, offset)!;
+				if (related(value))
+					state.set(value, instruction === allocation ? current : moved);
+			}
+		}
+		for (const edge of control.successors[block] ?? []) {
+			if (!control.reachable.has(edge.to)) continue;
+			if (edge.kind !== "ordinary") {
+				if ([...state.values()].some((lifetime) => lifetime & (current | expired)))
+					return false;
+				merge(edge.to, new Map(initial));
+				continue;
+			}
+			// Phi arguments refer to the predecessor state, even when parameters swap
+			// aliases. Sequential rebinding could make an expired generation fresh again.
+			const arguments_ = edge.arguments.map((value) => stateOf(state, value));
+			if (arguments_.some((lifetime) => lifetime & expired)) return false;
+			const next = new Map(state);
+			const start = fn.kernel.blockParameterStart(edge.to);
+			for (let offset = 0; offset < fn.kernel.blockParameterCount(edge.to); offset++) {
+				const parameter = fn.kernel.blockParameterValue(start + offset);
+				if (related(parameter)) next.set(parameter, arguments_[offset] ?? outside);
+			}
+			merge(edge.to, next);
+		}
+	}
+	return produced;
 }
 
 function stackObjectCandidate(

@@ -205,6 +205,38 @@ describe("consumed foreign struct results", () => {
 			recurringSites(deserializeCompilerArtifact(serializeCompilerArtifact(image))),
 		).toEqual(recurringSites(image));
 	});
+	it.each([
+		["skipped updates", `if (index % 2) position = add(position, velocity);`],
+		[
+			"alternating producers",
+			`if (index % 2) position = add(position, velocity); else position = add(position, other);`,
+		],
+	])("proves the current generation across %s", (_name, update) => {
+		const image = compile(`
+			let position = input; const velocity = { x: 1, y: 0.5 }; const other = { x: 2, y: 1 };
+			for (let index = 0; index < count; index++) { ${update} }
+			return position.x + position.y;
+		`);
+		expect(recurringSites(image).length).toBeGreaterThan(0);
+		expect(
+			recurringSites(deserializeCompilerArtifact(serializeCompilerArtifact(image))),
+		).toEqual(recurringSites(image));
+	});
+	it("keeps observations and skipped producers in the same generation proof", () => {
+		const image = compile(`
+			let position = input; const velocity = { x: 1, y: 0.5 };
+			for (let index = 0; index < count; index++) {
+				if (index % 3 === 0) rounds(position);
+				if (index % 2 === 0) position = add(position, velocity);
+			}
+			return position.x + position.y;
+		`);
+		expect(
+			recurringSites(image).some((site) =>
+				site.materializations.some((entry) => entry.kind === "observe"),
+			),
+		).toBe(true);
+	});
 
 	it.each([
 		[
@@ -228,16 +260,16 @@ describe("consumed foreign struct results", () => {
 		`,
 		],
 		[
-			"a conditional producer",
+			"a stale generation in a phi permutation",
 			`
-			let position = input; const velocity = { x: 1, y: 0.5 };
+			let position = input; let previous = input; const velocity = { x: 1, y: 0.5 };
 			for (let index = 0; index < count; index++) {
-				if (index % 2) position = add(position, velocity);
+				const next = add(position, velocity); position = previous; previous = next;
 			}
-			return position.x;
+			return position.x + previous.x;
 		`,
 		],
-	])("keeps heap storage when the recurrence retains %s", (_name, body) => {
+	])("declines storage reuse for %s", (_name, body) => {
 		expect(recurringSites(compile(body))).toEqual([]);
 	});
 });
