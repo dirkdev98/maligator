@@ -32,6 +32,30 @@ void immutable_inout(Immutable *value) {
     value->nested.writable += 100;
     taken++;
 }
+void immutable_array_out(Immutable (*value)[2]) {
+    if ((uintptr_t)value % _Alignof(ImmutablePair) != 0) abort();
+    Immutable native[2] = { a_make(31), a_make(41) };
+    memcpy(value, native, sizeof(native));
+}
+void immutable_pair_out(ImmutablePair *value) { immutable_array_out(value); }
+void immutable_pair_inout(ImmutablePair *value) {
+    if ((uintptr_t)value % _Alignof(ImmutablePair) != 0) abort();
+    (*value)[0].nested.writable += 100;
+    (*value)[1].nested.writable += 200;
+    taken++;
+}
+void immutable_numbers_out(ImmutableNumbers *value) {
+    const int native[2] = {17, 23};
+    memcpy(value, native, sizeof(native));
+}
+void immutable_grid_out(ImmutableGrid *value) {
+    const int native[2][2] = {{2, 3}, {5, 7}};
+    memcpy(value, native, sizeof(native));
+}
+void immutable_grid_inout(ImmutableGrid *value) {
+    if ((*value)[0][0] != 11 || (*value)[0][1] != 13 || (*value)[1][0] != 17 || (*value)[1][1] != 19) abort();
+    taken++;
+}
 Before z_make_before(int seed) { return (Before){seed + 10}; }
 static int token_destroyed;
 static int token_destroy_sum;

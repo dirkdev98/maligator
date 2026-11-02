@@ -2331,17 +2331,11 @@ class Planner {
 				if (resolved.kind !== "pointer") {
 					throw new FfiError(`${where(at)}.${fact}: ${name} is not a pointer`);
 				}
-				const outputType = resolveCType(this.#model, resolved.to);
-				let target = outputType;
-				while (target.kind === "array") target = resolveCType(this.#model, target.of);
-				const record =
-					target.kind === "record" ? this.#model.records.get(target.name) : undefined;
 				if (
-					outputType.kind === "array" &&
-					(("const" in target && target.const === true) ||
-						(record !== undefined && cRecordHasConstMembers(this.#model, record)))
+					resolveCType(this.#model, resolved.to).kind === "array" &&
+					valueFacts.array !== undefined
 				) {
-					gap("const members in array output buffers need native initialization");
+					gap("counted outer arrays of fixed C arrays need an allocation contract");
 					return;
 				}
 				const written = map(
@@ -2352,6 +2346,10 @@ class Planner {
 				);
 				if ("gap" in written) {
 					gap(written.gap);
+					return;
+				}
+				if (written.value.kind === "array" && this.#containsHandle(written.value)) {
+					gap("resource-bearing array outputs need explicit element ownership");
 					return;
 				}
 				if (
@@ -2386,7 +2384,7 @@ class Planner {
 				}
 				const read = map(
 					resolved.to,
-					"param",
+					resolveCType(this.#model, resolved.to).kind === "array" ? "field" : "param",
 					valueFacts.string === undefined
 						? { ...(valueFacts.shape === undefined ? {} : { shape: valueFacts.shape }) }
 						: {

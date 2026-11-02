@@ -46,6 +46,12 @@ it("binds const-member inputs and results in declaration order", () => {
 		"immutable_token_out",
 		"immutable_array",
 		"immutable_token_array",
+		"immutable_array_out",
+		"immutable_pair_out",
+		"immutable_pair_inout",
+		"immutable_numbers_out",
+		"immutable_grid_out",
+		"immutable_grid_inout",
 		"z_make_before",
 		"immutable_visit",
 		"immutable_notify",
@@ -58,12 +64,29 @@ it("binds const-member inputs and results in declaration order", () => {
 	])
 		expect(report.functions.find((fn) => fn.name === name)?.status).toBe("bound");
 });
+it.each(["immutable_callback_result"])(
+	"rejects unsafe const conversion through %s",
+	(name) => {
+		const directory = project("ffi-const-results");
+		const result = cli(directory, "inspect", "const_values", "--json");
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			functions: Array<{
+				name: string;
+				status: string;
+				gaps?: Array<{ reason: string }>;
+			}>;
+		};
+		const entry = report.functions.find((fn) => fn.name === name);
+		expect(entry?.status).toBe("needs-facts");
+		expect(entry?.gaps?.some((gap) => gap.reason.includes("const members"))).toBe(true);
+	},
+);
 it.each([
-	"immutable_array_out",
-	"immutable_pair_out",
-	"immutable_numbers_out",
-	"immutable_callback_result",
-])("rejects unsafe const conversion through %s", (name) => {
+	["immutable_token_inout", "duplicate ownership"],
+	["immutable_token_array_out", "element ownership"],
+	["immutable_pair_many", "allocation contract"],
+])("rejects unsafe resource or array storage through %s", (name, reason) => {
 	const directory = project("ffi-const-results");
 	const result = cli(directory, "inspect", "const_values", "--json");
 	expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -72,20 +95,7 @@ it.each([
 	};
 	const entry = report.functions.find((fn) => fn.name === name);
 	expect(entry?.status).toBe("needs-facts");
-	expect(entry?.gaps?.some((gap) => gap.reason.includes("const members"))).toBe(true);
-});
-it("keeps copied resources behind one owner for in-place updates", () => {
-	const directory = project("ffi-const-results");
-	const result = cli(directory, "inspect", "const_values", "--json");
-	expect(result.status, result.stderr || result.stdout).toBe(0);
-	const report = JSON.parse(result.stdout) as {
-		functions: Array<{ name: string; status: string; gaps?: Array<{ reason: string }> }>;
-	};
-	const entry = report.functions.find((fn) => fn.name === "immutable_token_inout");
-	expect(entry?.status).toBe("needs-facts");
-	expect(entry?.gaps?.some((gap) => gap.reason.includes("duplicate ownership"))).toBe(
-		true,
-	);
+	expect(entry?.gaps?.some((gap) => gap.reason.includes(reason))).toBe(true);
 });
 it("preserves anonymous field declarations when the project moves", () => {
 	const first = project(),

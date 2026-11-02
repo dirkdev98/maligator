@@ -43,6 +43,18 @@ import {
 	arrayAsync,
 	immutable_token_array,
 	tokenArrayAsync,
+	immutable_array_out,
+	arrayOutAsync,
+	immutable_pair_out,
+	pairOutAsync,
+	immutable_pair_inout,
+	pairInoutAsync,
+	immutable_numbers_out,
+	numbersOutAsync,
+	immutable_grid_out,
+	gridOutAsync,
+	immutable_grid_inout,
+	gridInoutAsync,
 } from "maligator:ffi/const_values";
 import type { Immutable, ImmutableToken } from "maligator:ffi/const_values";
 
@@ -115,6 +127,69 @@ for (const seed of [-3, 0, 7, 19]) {
 verify(getFixed(), 77);
 verify(immutable_out().value, 21);
 verify((await outAsync()).value, 21);
+for (const output of [
+	immutable_array_out().value,
+	(await arrayOutAsync()).value,
+	immutable_pair_out().value,
+	(await pairOutAsync()).value,
+]) {
+	verify(output[0], 31);
+	verify(output[1], 41);
+}
+for (const async of [false, true]) {
+	const input: [Immutable, Immutable] = [a_make(2), a_make(4)];
+	const output = async
+		? (await pairInoutAsync(input)).value
+		: immutable_pair_inout(input).value;
+	check(
+		z_take(output[0]) === 165 && z_take(output[1]) === 285,
+		"fixed inout arrays initialize const record elements",
+	);
+	verify(input[0], 2);
+	verify(input[1], 4);
+}
+for (const output of [immutable_numbers_out().value, (await numbersOutAsync()).value])
+	check(output[0] === 17 && output[1] === 23, "fixed const scalar output arrays");
+for (const output of [immutable_grid_out().value, (await gridOutAsync()).value])
+	check(output[0][1] === 3 && output[1][0] === 5, "nested fixed const output arrays");
+const gridSource: [[number, number], [number, number]] = [
+	[11, 13],
+	[17, 19],
+];
+const gridInput = new Proxy(gridSource, {
+	get(target, key, receiver): unknown {
+		if (key === "0" || key === "1")
+			return new Proxy([...target[Number(key)]!], {
+				get(row, field, rowReceiver): unknown {
+					const garbage = Array.from({ length: 12 }, () => ({
+						value: "nested array construction",
+					}));
+					check(garbage.length === 12, "allocating array element getter");
+					return Reflect.get(row, field, rowReceiver);
+				},
+			});
+		return Reflect.get(target, key, receiver);
+	},
+});
+check(
+	immutable_grid_inout(gridInput).value[1][1] === 19,
+	"nested array getters stay rooted through initialization",
+);
+check(
+	(await gridInoutAsync(gridInput)).value[0][0] === 11,
+	"nested const inout array worker snapshots",
+);
+const beforeFixedFailure = immutable_taken();
+let fixedFailed = false;
+try {
+	immutable_pair_inout([a_make(2), { ...a_make(4), code: 1.5 }]);
+} catch (error) {
+	fixedFailed = error instanceof RangeError;
+}
+check(
+	fixedFailed && immutable_taken() === beforeFixedFailure,
+	"failed fixed array conversion never enters C",
+);
 for (const async of [false, true]) {
 	const input = a_make(5);
 	const output = async ? (await inoutAsync(input)).value : immutable_inout(input).value;

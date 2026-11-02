@@ -342,9 +342,15 @@ class BindingWriter {
 
 	#constOutputs(binding: BoundFunction): ReadonlySet<number> {
 		return new Set(
-			binding.outputs.flatMap((output, index) =>
-				this.#immutableRecord(output.type) ? [index] : [],
-			),
+			binding.outputs.flatMap((output, index) => {
+				let type = resolveCType(this.#model, output.type);
+				if (type.kind !== "array")
+					return this.#immutableRecord(output.type) ? [index] : [];
+				while (type.kind === "array") type = resolveCType(this.#model, type.of);
+				return ("const" in type && type.const === true) || this.#immutableRecord(type)
+					? [index]
+					: [];
+			}),
 		);
 	}
 
@@ -566,6 +572,46 @@ class BindingWriter {
 				const held = rooted ? source : this.#fresh("held");
 				const roots = this.#fresh("roots");
 				const failed = rooted ? fail : `{ mal_ffi_unroot(&${roots}); ${fail} }`;
+				let converted: Array<string>;
+				if (initializeRecord && value.of.kind !== "array") {
+					const native = this.#fresh("native_element");
+					const construct =
+						value.of.kind === "record" && this.#immutableRecord(resolved.of);
+					const spelling =
+						value.of.kind === "record"
+							? this.#record(value.of.name).spelling
+							: localDeclaration(resolved.of, "");
+					converted = [
+						...(construct ? [] : [`typeof_unqual(${spelling}) ${native};`]),
+						...this.read(
+							value.of,
+							resolved.of,
+							element,
+							native,
+							site,
+							failed,
+							strings,
+							false,
+							inputs,
+							false,
+							construct,
+						),
+						`__builtin_memcpy(&(${target})[${index}], &${native}, sizeof(${native}));`,
+					];
+				} else
+					converted = this.read(
+						value.of,
+						resolved.of,
+						element,
+						`${target}[${index}]`,
+						site,
+						failed,
+						strings,
+						false,
+						inputs,
+						false,
+						initializeRecord,
+					);
 				return [
 					...(rooted
 						? []
@@ -577,17 +623,7 @@ class BindingWriter {
 					`for (int32_t ${index} = 0; ${index} < ${value.length}; ${index}++) {`,
 					`\tMalValue ${element};`,
 					`\tif (!mal_ffi_element(vm, ${held}, ${index}, ${value.length}, ${site}, &${element})) ${failed}`,
-					...this.read(
-						value.of,
-						resolved.of,
-						element,
-						`${target}[${index}]`,
-						site,
-						failed,
-						strings,
-						false,
-						inputs,
-					).map((line) => `\t${line}`),
+					...converted.map((line) => `\t${line}`),
 					"}",
 					...(rooted ? [] : [`mal_ffi_unroot(&${roots});`]),
 				];
@@ -709,7 +745,6 @@ class BindingWriter {
 		];
 	}
 
-	/** Statements that store the C value `expression` into the rooted container. */
 	/**
 	 * Statements that convert the C value `expression` into `target`, a rooted
 	 * slot. Arrays fill a new array element by element.
@@ -1462,6 +1497,19 @@ class BindingWriter {
 				...release,
 			];
 		}
+		if (value.kind === "array") {
+			const done = this.#fresh("array_done");
+			// The caller must retire its output root span even when an element throws.
+			return [
+				"if (!mal_ffi_threw(vm)) {",
+				...this.#produce(value, expression, target).map(
+					(line) => `\t${line.replaceAll("goto mal_done;", `goto ${done};`)}`,
+				),
+				`${done}:;`,
+				"}",
+				...release,
+			];
+		}
 		if (value.kind === "sequence") {
 			const array = this.#fresh("array");
 			const roots = this.#fresh("roots");
@@ -2036,7 +2084,9 @@ class BindingWriter {
 							`typeof_unqual(${localDeclaration(pointee, "")}) *${output} = nullptr;`,
 						);
 						const native = this.#fresh("native_output");
-						if (entry.kind === "inout")
+						const input =
+							entry.kind === "inout" ? binding.params[entry.param]!.value : undefined;
+						if (entry.kind === "inout" && input?.kind !== "array")
 							body.push(
 								...this.read(
 									binding.params[entry.param]!.value,
@@ -2055,11 +2105,27 @@ class BindingWriter {
 						body.push(
 							`${output} = mal_ffi_allocate_storage(1, sizeof(*${output}), _Alignof(__typeof__(*${output})));`,
 							`if (${output} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
-							...(entry.kind === "inout"
+							...(entry.kind === "inout" && input?.kind !== "array"
 								? [`__builtin_memcpy(${output}, &${native}, sizeof(${native}));`]
 								: []),
 							`${local} = ${output};`,
 						);
+						if (entry.kind === "inout" && input?.kind === "array")
+							body.push(
+								...this.read(
+									input,
+									pointee,
+									argument(entry.param),
+									outputValue(entry.output),
+									`&mal_site_${entry.param}`,
+									"goto mal_done;",
+									strings,
+									true,
+									inputs,
+									false,
+									true,
+								),
+							);
 						cleanup.push(`free(${output});`);
 						return;
 					}
@@ -2849,7 +2915,9 @@ class BindingWriter {
 						fields.push(`typeof_unqual(${localDeclaration(pointee, "")}) *${output};`);
 						const storage = `mal_ctx->${output}`;
 						const native = this.#fresh("native_output");
-						if (entry.kind === "inout")
+						const input =
+							entry.kind === "inout" ? binding.params[entry.param]!.value : undefined;
+						if (entry.kind === "inout" && input?.kind !== "array")
 							body.push(
 								...this.read(
 									binding.params[entry.param]!.value,
@@ -2868,11 +2936,27 @@ class BindingWriter {
 						body.push(
 							`${storage} = mal_ffi_allocate_storage(1, sizeof(*${storage}), _Alignof(__typeof__(*${storage})));`,
 							`if (${storage} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_failed; }`,
-							...(entry.kind === "inout"
+							...(entry.kind === "inout" && input?.kind !== "array"
 								? [`__builtin_memcpy(${storage}, &${native}, sizeof(${native}));`]
 								: []),
 							`${target} = ${storage};`,
 						);
+						if (entry.kind === "inout" && input?.kind === "array")
+							body.push(
+								...this.read(
+									input,
+									pointee,
+									argument(entry.param),
+									outputValue(entry.output),
+									`&mal_site_${entry.param}`,
+									"goto mal_failed;",
+									strings,
+									true,
+									inputs,
+									false,
+									true,
+								),
+							);
 						frees.push(`free(${storage});`);
 						return;
 					}
