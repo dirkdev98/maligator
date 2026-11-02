@@ -30,6 +30,19 @@ FfiBenchStatement *ffi_bench_sql_prepare(FfiBenchDb *db, const char *sql) {
 int ffi_bench_sql_bind(FfiBenchStatement *s, int v) {
     return sqlite3_bind_int((sqlite3_stmt *)s, 1, v);
 }
+int ffi_bench_sql_bind_text(FfiBenchStatement *s, const char *value) {
+    return sqlite3_bind_text((sqlite3_stmt *)s, 1, value, -1, SQLITE_TRANSIENT);
+}
+int ffi_bench_sql_column_bytes(FfiBenchStatement *s) {
+    return sqlite3_column_bytes((sqlite3_stmt *)s, 0);
+}
+unsigned int ffi_bench_sql_text_hash(FfiBenchStatement *s) {
+    const unsigned char *bytes = sqlite3_column_text((sqlite3_stmt *)s, 0);
+    int length = sqlite3_column_bytes((sqlite3_stmt *)s, 0);
+    unsigned int hash = 2166136261U;
+    for (int i = 0; i < length; i++) hash = (hash ^ bytes[i]) * 16777619U;
+    return hash;
+}
 int ffi_bench_sql_step(FfiBenchStatement *s) {
     return sqlite3_step((sqlite3_stmt *)s);
 }
@@ -61,6 +74,8 @@ const char *ffi_bench_library_identity(void) {
         (void *)sqlite3_bind_int, (void *)sqlite3_step,
         (void *)sqlite3_column_int, (void *)sqlite3_reset,
         (void *)sqlite3_finalize, (void *)sqlite3_close_v2,
+        (void *)sqlite3_bind_text, (void *)sqlite3_column_bytes,
+        (void *)sqlite3_column_text,
         (void *)ZSTD_compressCCtx, (void *)ZSTD_decompressDCtx,
         (void *)EVP_DigestInit_ex, (void *)EVP_DigestUpdate,
         (void *)EVP_DigestFinal_ex, (void *)strcmp

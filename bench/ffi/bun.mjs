@@ -6,6 +6,9 @@ const sqlite = dlopen(new URL("../native/libffi-bench.dylib", import.meta.url).p
 	ffi_bench_sql_open: { args: [], returns: t.ptr },
 	ffi_bench_sql_prepare: { args: [t.ptr, t.ptr], returns: t.ptr },
 	ffi_bench_sql_bind: { args: [t.ptr, t.i32], returns: t.i32 },
+	ffi_bench_sql_bind_text: { args: [t.ptr, t.cstring], returns: t.i32 },
+	ffi_bench_sql_column_bytes: { args: [t.ptr], returns: t.i32 },
+	ffi_bench_sql_text_hash: { args: [t.ptr], returns: t.u32 },
 	ffi_bench_sql_step: { args: [t.ptr], returns: t.i32 },
 	ffi_bench_sql_column: { args: [t.ptr], returns: t.i32 },
 	ffi_bench_sql_reset: { args: [t.ptr], returns: t.i32 },
@@ -36,6 +39,9 @@ const {
 	ffi_bench_sql_open,
 	ffi_bench_sql_prepare,
 	ffi_bench_sql_bind,
+	ffi_bench_sql_bind_text,
+	ffi_bench_sql_column_bytes,
+	ffi_bench_sql_text_hash,
 	ffi_bench_sql_step,
 	ffi_bench_sql_column,
 	ffi_bench_sql_reset,
@@ -124,6 +130,46 @@ if (mode === "sqlite-bind" || mode === "sqlite-row") {
 		if (checksum !== ((iterations - 1) & 1023) + 17)
 			throw new Error("SQLite binding value changed");
 	}
+	if (ffi_bench_sql_finalize(statement) !== 0 || ffi_bench_sql_close(db) !== 0)
+		throw new Error("SQLite cleanup failed");
+} else if (mode === "sqlite-text") {
+	const value =
+		pattern === "ascii"
+			? "x"
+			: pattern === "latin1"
+				? "é"
+				: pattern === "bmp"
+					? "☃"
+					: pattern === "astral"
+						? "😀"
+						: null;
+	if (value === null) throw new Error("Invalid text pattern");
+	const unit = Buffer.from(value);
+	data.fill(120);
+	for (let offset = 0; offset + unit.length <= size; offset += unit.length)
+		data.set(unit, offset);
+	const text = Buffer.from(new TextDecoder().decode(data) + "\0");
+	const db = ffi_bench_sql_open();
+	if (!db) throw new Error("SQLite open failed");
+	const statement = ffi_bench_sql_prepare(db, Buffer.from("SELECT ?1\0"));
+	if (!statement) throw new Error("SQLite prepare failed");
+	for (let phase = 0; phase < 2; phase++) {
+		const count = phase === 0 ? warm : iterations;
+		const start = performance.now();
+		for (let i = 0; i < count; i++)
+			if (ffi_bench_sql_bind_text(statement, text) !== 0)
+				throw new Error("SQLite text binding failed");
+		elapsedMs = performance.now() - start;
+	}
+	if (ffi_bench_sql_step(statement) !== 100)
+		throw new Error("SQLite text verification failed");
+	checksum = ffi_bench_sql_column_bytes(statement);
+	let expected = 2166136261;
+	for (const byte of data) expected = Math.imul(expected ^ byte, 16777619) >>> 0;
+	const actual = ffi_bench_sql_text_hash(statement);
+	if (checksum !== size || actual !== expected)
+		throw new Error("SQLite text payload changed");
+	digest = actual.toString(16);
 	if (ffi_bench_sql_finalize(statement) !== 0 || ffi_bench_sql_close(db) !== 0)
 		throw new Error("SQLite cleanup failed");
 } else if (mode === "libc-strcmp") {

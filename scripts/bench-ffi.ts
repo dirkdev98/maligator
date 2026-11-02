@@ -100,6 +100,7 @@ SQLite uses one shared adapter to isolate embedded SQLite symbols. Timed adapter
 exports forward one call each. zstd and EVP updates call the libraries directly.
 Bun uses exact BigInt u64 arguments/results and Buffer views, without ptr caching.
 libc-strcmp compares owned ASCII strings with early, equal and late differences.
+sqlite-text repeatedly binds transient ASCII, Latin1, BMP and astral UTF-8 text.
 Bun encodes terminated Buffer inputs before timing; Maligator converts JS strings.
 `);
 	process.exit(0);
@@ -119,6 +120,14 @@ if (
 const CASES: Array<Case> = [
 	{ mode: "sqlite-bind", size: 0, pattern: "repeat", iterations: 1000000 },
 	{ mode: "sqlite-row", size: 0, pattern: "repeat", iterations: 250000 },
+	...[64, 4096, 65536].flatMap((size) =>
+		["ascii", "latin1", "bmp", "astral"].map((pattern) => ({
+			mode: "sqlite-text",
+			size,
+			pattern,
+			iterations: size === 64 ? 1000000 : size === 4096 ? 250000 : 10000,
+		})),
+	),
 	...[64, 4095, 65535].flatMap((size) =>
 		["early", "equal", "late"].map((pattern) => ({
 			mode: "libc-strcmp",
@@ -530,7 +539,7 @@ async function measure(): Promise<void> {
 				throw new Error("C/Bun/Maligator output or library identity mismatch");
 		const parts = first.identity.trim().split("\n");
 		const expected = [
-			...Array<string>(8).fill(identity.libraries.sqlite!.path),
+			...Array<string>(11).fill(identity.libraries.sqlite!.path),
 			...Array<string>(2).fill(identity.libraries.zstd!.path),
 			...Array<string>(3).fill(identity.libraries.crypto!.path),
 		];

@@ -65,6 +65,11 @@ differences through the same shared adapter. Bun encodes terminated buffers duri
 setup; Maligator receives JavaScript strings. The system library's loaded path and
 the host OS version identify libc, which may reside only in macOS's dyld cache.
 
+`--case sqlite-text` binds reused text through `sqlite3_bind_text` with
+`SQLITE_TRANSIENT`. Sizes are UTF-8 byte lengths, covering ASCII and Unicode input.
+C and Bun prepare terminated bytes during setup; Maligator converts JavaScript
+strings. The selected row's byte count and content hash are checked after timing.
+
 `report.json` retains source and binary identities, latency samples, whole-process
 CPU and peak RSS, executable and library sizes, power state, and free disk space.
 Latency excludes setup, warmup, and output validation; resource counters include

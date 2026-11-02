@@ -66,6 +66,36 @@ int main(int argc, char **argv) {
             if (checksum != ((iterations - 1) & 1023) + 17) return 20;
         }
         if (ffi_bench_sql_finalize(s) != 0 || ffi_bench_sql_close(db) != 0) return 10;
+    } else if (strcmp(mode, "sqlite-text") == 0) {
+        const char *unit = strcmp(pattern, "ascii") == 0 ? "x"
+            : strcmp(pattern, "latin1") == 0 ? "é"
+            : strcmp(pattern, "bmp") == 0 ? "☃"
+            : strcmp(pattern, "astral") == 0 ? "😀" : NULL;
+        if (!unit) return 24;
+        size_t width = strlen(unit), offset = 0;
+        char *text = malloc(size + 1);
+        if (!text) return 25;
+        for (; offset + width <= size; offset += width) memcpy(text + offset, unit, width);
+        memset(text + offset, 'x', size - offset); text[size] = 0;
+        FfiBenchDb *db = ffi_bench_sql_open();
+        if (!db) return 5;
+        FfiBenchStatement *s = ffi_bench_sql_prepare(db, "SELECT ?1");
+        if (!s) return 6;
+        for (int phase = 0; phase < 2; phase++) {
+            uint64_t count = phase == 0 ? warm : iterations;
+            double start = now_ms();
+            for (uint64_t i = 0; i < count; i++)
+                if (ffi_bench_sql_bind_text(s, text) != 0) return 7;
+            elapsed = now_ms() - start;
+        }
+        if (ffi_bench_sql_step(s) != 100) return 19;
+        checksum = (uint32_t)ffi_bench_sql_column_bytes(s);
+        unsigned int actual = ffi_bench_sql_text_hash(s), expected = 2166136261U;
+        for (size_t i = 0; i < size; i++) expected = (expected ^ (unsigned char)text[i]) * 16777619U;
+        if (checksum != size || actual != expected) return 26;
+        snprintf(digest, sizeof(digest), "%x", actual);
+        if (ffi_bench_sql_finalize(s) != 0 || ffi_bench_sql_close(db) != 0) return 10;
+        free(text);
     } else if (strcmp(mode, "libc-strcmp") == 0) {
         if (strcmp(pattern, "early") != 0 && strcmp(pattern, "equal") != 0 && strcmp(pattern, "late") != 0) return 21;
         char *left = malloc(size + 1), *right = malloc(size + 1);
