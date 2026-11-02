@@ -40,7 +40,7 @@ export function macroFactRoots(facts: LibraryFacts): Array<string> {
 			if (reference.kind === "macro") names.add(reference.name);
 	}
 	for (const value of Object.values(facts.globals ?? {})) {
-		valueFacts(value.returns);
+		valueFacts({ shape: value.value?.shape, callable: value.value?.callable });
 		for (const reference of value.evidence ?? [])
 			if (reference.kind === "macro") names.add(reference.name);
 	}

@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stddef.h>
 
 typedef struct GlobalsPoint { int x; int y; } GlobalsPoint;
 typedef struct GlobalsContext { int value; } GlobalsContext;
@@ -25,6 +26,18 @@ typedef int GlobalsValues[2];
 extern const GlobalsValues globals_fixed_values;
 extern volatile int globals_signals[2];
 extern _Thread_local int globals_threads[2];
+enum { GLOBALS_TEXT_CAPACITY = 16, GLOBALS_BYTE_CAPACITY = 4 };
+extern char globals_label[GLOBALS_TEXT_CAPACITY];
+extern unsigned char globals_bytes[GLOBALS_BYTE_CAPACITY];
+extern signed char globals_signed_bytes[GLOBALS_BYTE_CAPACITY];
+extern volatile unsigned char globals_volatile_bytes[GLOBALS_BYTE_CAPACITY];
+extern _Thread_local char globals_thread_label[GLOBALS_TEXT_CAPACITY];
+typedef char GlobalsText[GLOBALS_TEXT_CAPACITY];
+extern const GlobalsText globals_fixed_label;
+extern char globals_sink[8];
+void globals_unterminate_label(void);
+unsigned int globals_label_byte(int index);
+const char *globals_sink_text(void);
 extern int globals_incomplete[];
 extern int globals_empty[0];
 extern int globals_oversized[2147483648ULL];

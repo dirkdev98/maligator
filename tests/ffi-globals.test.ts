@@ -187,30 +187,22 @@ describe("C global accessor contracts", () => {
 		},
 	);
 	it.each([
+		[
+			"globals_fixed_label",
+			{ set: "writeFixedLabel", value: { string: true } },
+			"assignable",
+		],
+		["globals_mode", { get: "readBytes", value: { bytes: true } }, "fixed byte array"],
 		["globals_limit", { set: "writeLimit" }, "assignable"],
 		["globals_aliased_limit", { set: "writeAliasedLimit" }, "assignable"],
 		["globals_title", { set: "writeTitle" }, "retained pointers"],
 		["globals_context", { get: "readContext" }, "borrowed: true"],
-		[
-			"globals_title",
-			{ get: "readTitle", returns: { string: true, free: "globals_destroy" } },
-			"transfer ownership",
-		],
-		[
-			"globals_context",
-			{ get: "readContext", returns: { borrowed: true, fresh: true } },
-			"transfer ownership",
-		],
 		["globals_private", { get: "readPrivate" }, "externally linked"],
 		["globals_incomplete", { get: "readValues" }, "resource-free"],
 		["globals_empty", { get: "readEmpty" }, "resource-free"],
 		["globals_oversized", { get: "readOversized" }, "resource-free"],
 		["globals_fixed_values", { set: "writeFixedValues" }, "assignable"],
-		[
-			"globals_values",
-			{ get: "readValues", returns: { string: true } },
-			"element mapping",
-		],
+		["globals_values", { get: "readValues", value: { string: true } }, "byte array"],
 		["globals_mode", {}, "getter or setter"],
 		["missing_global", { get: "readMissing" }, "no global"],
 	] satisfies Array<[string, MaligatorFfiGlobalFacts, string]>)(
@@ -219,6 +211,33 @@ describe("C global accessor contracts", () => {
 			expect(() => plan({ [name]: facts })).toThrow(message);
 		},
 	);
+	it.each([
+		{ free: "release" },
+		{ fresh: true },
+		{ out: true },
+		{ inout: true },
+		{ bytes: { length: "count" } },
+		{ string: { length: "count" } },
+		{ bytes: true, string: true },
+	])("rejects function-only or ambiguous global conversion facts %j", (value) => {
+		const directory = mkdtempSync(path.join(tmpdir(), "mal-global-value-"));
+		try {
+			writeFileSync(
+				path.join(directory, "invalid.ffi.ts"),
+				`export default ${JSON.stringify({ headers: ["api.h"], find: [{ libraries: ["fixture"] }], globals: { buffer: { get: "readBuffer", value } } })};`,
+			);
+			expect(() =>
+				loadLibraryContract(
+					"fixture",
+					{ contract: "invalid.ffi.ts" },
+					directory,
+					stripCompactTypes,
+				),
+			).toThrow("globals.buffer.value");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 	it.each(["globals_advance", "GLOBALS_CONSTANT"])(
 		"rejects the existing export %s as an accessor",
 		(name) => {
@@ -318,7 +337,7 @@ void release_resource(Resource resource);
 					globals: {
 						factory: {
 							get: "getFactory",
-							returns: {
+							value: {
 								callable: {
 									lifetime: "library",
 									returns: {
@@ -358,6 +377,50 @@ void release_resource(Resource resource);
 			rmSync(directory, { recursive: true, force: true });
 		}
 	}, 60_000);
+	it("requires ABI review when a bounded byte global changes capacity", () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "mal-global-capacity-"));
+		try {
+			const header = path.join(directory, "api.h");
+			writeFileSync(header, "extern unsigned char payload[4];\n");
+			writeFileSync(path.join(directory, "api.c"), "");
+			writeFileSync(
+				path.join(directory, "maligator.build.ts"),
+				'export default {ffi:{abi_bytes:{contract:"api.ffi.ts"}}};\n',
+			);
+			writeFileSync(
+				path.join(directory, "api.ffi.ts"),
+				`export default ${JSON.stringify({ headers: ["api.h"], find: [{ includeDirs: ["."], sources: ["api.c"] }], globals: { payload: { get: "getPayload", set: "setPayload", value: { bytes: true } } } })};\n`,
+			);
+			const check = (...args: Array<string>) =>
+				spawnSync(
+					process.execPath,
+					[
+						path.resolve(import.meta.dirname, "../src/index.ts"),
+						"ffi",
+						"check",
+						"--json",
+						...args,
+					],
+					{ cwd: directory, encoding: "utf8", timeout: 30_000 },
+				);
+			const accepted = check("--update");
+			expect(accepted.status, accepted.stderr || accepted.stdout).toBe(0);
+			writeFileSync(header, "extern unsigned char payload[8];\n");
+			const changed = check();
+			expect(changed.status, changed.stderr || changed.stdout).toBe(1);
+			const report = JSON.parse(changed.stdout) as {
+				libraries: Array<{ changes: Array<unknown> }>;
+			};
+			expect(report.libraries[0]?.changes).toContainEqual({
+				path: "declarations.global payload.type.length",
+				kind: "changed",
+				before: 4,
+				after: 8,
+			});
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 	it("reports native origins and watches accepted global ABI changes through the CLI", () => {
 		const directory = mkdtempSync(path.join(tmpdir(), "mal-ffi-global-check-"));
 		try {

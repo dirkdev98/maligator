@@ -1924,6 +1924,31 @@ class BindingWriter {
 					const value = binding.params[entry.param]!.value;
 					const site = `&mal_site_${String(entry.param)}`;
 					const source = argument(entry.param);
+					const bounded =
+						binding.global?.access === "set" ? binding.global.bounded : undefined;
+					if (bounded !== undefined) {
+						const capacity = `sizeof(${globalArrayStorage(binding)})`;
+						if (bounded.format === "string") {
+							const text = this.#fresh("string");
+							strings.push(text);
+							body.push(
+								`if (!mal_ffi_to_string(vm, ${source}, false, MAL_FFI_STRING_BORROW, ${site}, &${text})) goto mal_done;`,
+								`if (${text}.length >= ${capacity}) { mal_ffi_expected(vm, ${site}, "UTF-8 text shorter than the declared array capacity"); goto mal_done; }`,
+								`__builtin_memset(${local}, 0, ${capacity});`,
+								`__builtin_memcpy(${local}, ${text}.data, ${text}.length);`,
+							);
+						} else {
+							const bytes = this.#fresh("bytes");
+							const length = this.#fresh("length");
+							locals.push(`void *${bytes};`, `size_t ${length};`);
+							body.push(
+								`if (!mal_ffi_to_bytes(vm, ${source}, false, false, ${site}, &${bytes}, &${length}, nullptr)) goto mal_done;`,
+								`if (${length} != ${capacity}) { mal_ffi_expected(vm, ${site}, "bytes matching the declared array capacity"); goto mal_done; }`,
+								`__builtin_memcpy(${local}, ${bytes}, ${capacity});`,
+							);
+						}
+						return;
+					}
 					if (value.kind === "string" && value.counted) {
 						const text = this.#fresh("string");
 						strings.push(text);
@@ -2244,13 +2269,27 @@ class BindingWriter {
 		const leave = callsBack ? ["if (mal_framed) mal_ffi_collectable_end(vm);"] : [];
 		if (binding.returns.kind === "undefined") {
 			after.push(...enter, `${call};`, ...callbackReturns, ...leave, ...closes);
-		} else if (binding.returns.kind === "array" && binding.global?.access === "get") {
+		} else if (
+			binding.global?.access === "get" &&
+			resolveCType(this.#model, binding.global.declaration.type).kind === "array"
+		) {
 			locals.push(`${globalArrayStorage(binding)} *mal_return = nullptr;`);
+			const bounded = binding.global.bounded;
+			const produce =
+				bounded?.format === "bytes"
+					? ["mal_result = mal_ffi_from_bytes(vm, mal_return, sizeof(*mal_return));"]
+					: bounded?.format === "string"
+						? [
+								"const char *mal_terminator = __builtin_memchr(mal_return, 0, sizeof(*mal_return));",
+								'if (mal_terminator == nullptr) { mal_ffi_expected(vm, &mal_site_result, "NUL-terminated UTF-8 within the declared array capacity"); goto mal_done; }',
+								"mal_result = mal_ffi_from_string_length(vm, (const char *) mal_return, (size_t) (mal_terminator - (const char *) mal_return));",
+							]
+						: this.#produce(binding.returns, "(*mal_return)", "mal_result");
 			after.push(
 				`mal_return = mal_ffi_allocate_storage(1, sizeof(*mal_return), _Alignof(${globalArrayStorage(binding)}));`,
 				"if (mal_return == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }",
 				`${declaration.name}(mal_return);`,
-				...this.#produce(binding.returns, "(*mal_return)", "mal_result"),
+				...produce,
 			);
 			cleanup.push("free(mal_return);");
 		} else {

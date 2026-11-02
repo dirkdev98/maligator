@@ -91,8 +91,6 @@ Conversions never coerce. A value of the wrong type throws a `TypeError`, and a 
 - A struct whose fields are all values passes as a plain object, copied in each direction.
 - Anonymous struct members keep C's promoted field names. Named fields with anonymous
   struct types remain nested objects, including elements of fixed arrays.
-- Structs with const members need a pointer interface; value conversion assigns fields
-  individually.
 - Named bit-fields use their declared widths for range checks. Padding fields stay hidden;
   the C compiler owns layout and packing.
 - Enum members and macros are constants when their type maps, including struct literals such as raylib's `RAYWHITE`.
@@ -115,8 +113,10 @@ Name the accessor exports in the contract:
 ```typescript
 globals: {
   library_mode: { get: "getMode", set: "setMode" },
-  library_title: { get: "getTitle", returns: { string: true } },
-  library_context: { get: "getContext", returns: { borrowed: true } },
+  library_title: { get: "getTitle", value: { string: true } },
+  library_context: { get: "getContext", value: { borrowed: true } },
+  library_label: { get: "getLabel", set: "setLabel", value: { string: true } },
+  library_key: { get: "getKey", set: "setKey", value: { bytes: true } },
 }
 ```
 
@@ -131,6 +131,15 @@ default without a separate contract fact.
 Fixed arrays of values map to JavaScript tuples, including nested arrays. Reads
 copy the C array before constructing the result. Writes stage the entire converted
 array before changing C storage, so a throwing element getter leaves it unchanged.
+
+Use `value.string: true` for a fixed byte array holding UTF-8 text. Reads require a
+NUL within the declared bound. Writes reject embedded NULs and require room for the
+encoded bytes and terminator, then zero-fill the remaining capacity.
+
+Use `value.bytes: true` for a fixed byte array holding arbitrary data. A getter returns
+a fresh `Uint8Array`; a setter accepts an `ArrayBuffer` or view with exactly the declared
+byte length. Conversion failures leave C storage unchanged. These formats apply to
+one-dimensional byte arrays, and the same `value` facts describe both accessors.
 
 Access requires an externally linked object. Const objects have no setter. Setters
 accept assignable values without retained pointers, so C storage cannot retain a

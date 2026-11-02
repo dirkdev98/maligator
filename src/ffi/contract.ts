@@ -550,7 +550,7 @@ function validateFunctionFacts(value: unknown, at: string): void {
 
 function validateGlobalFacts(value: unknown, at: string): void {
 	expectObject(value, at);
-	expectKeys(value, at, ["get", "set", "returns", "evidence"]);
+	expectKeys(value, at, ["get", "set", "value", "evidence"]);
 	expect(
 		value.get !== undefined || value.set !== undefined,
 		at,
@@ -570,9 +570,32 @@ function validateGlobalFacts(value: unknown, at: string): void {
 			}
 			expect(valid, `${at}.${key}`, "a JavaScript function export name");
 		}
-	if (value.returns !== undefined) {
-		expect(value.get !== undefined, `${at}.returns`, "read facts beside a getter");
-		validateValueFacts(value.returns, `${at}.returns`);
+	if (value.value !== undefined) {
+		expectObject(value.value, `${at}.value`);
+		expectKeys(value.value, `${at}.value`, [
+			"shape",
+			"borrowed",
+			"callable",
+			"string",
+			"bytes",
+		]);
+		const { bytes, ...conversion } = value.value;
+		if (bytes !== undefined)
+			expect(bytes === true, `${at}.value.bytes`, "true for a fixed byte array");
+		if (conversion.string !== undefined)
+			expect(conversion.string === true, `${at}.value.string`, "true for UTF-8 text");
+		expect(
+			bytes !== true || conversion.string !== true,
+			`${at}.value`,
+			"one of string or bytes",
+		);
+		validateValueFacts(conversion, `${at}.value`);
+		if (conversion.borrowed !== undefined || conversion.callable !== undefined)
+			expect(
+				value.get !== undefined,
+				`${at}.value`,
+				"a getter for borrowed or callable values",
+			);
 	}
 	if (value.evidence !== undefined) validateEvidence(value.evidence, `${at}.evidence`);
 }

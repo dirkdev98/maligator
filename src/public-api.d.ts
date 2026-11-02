@@ -312,14 +312,26 @@ export interface MaligatorFfiVariant {
 	params?: Record<string, MaligatorFfiValueFacts>;
 }
 
+/** Representation of a library-owned global, shared by its read and write accessors. */
+export interface MaligatorFfiGlobalValueFacts {
+	shape?: MaligatorFfiShape;
+	/** A returned handle stays owned by the library. */
+	borrowed?: boolean;
+	callable?: MaligatorFfiCallable;
+	/** UTF-8 text; a fixed array must contain a NUL within its declared bound. */
+	string?: true;
+	/** A fixed byte array copied to or from an exactly sized byte view. */
+	bytes?: true;
+}
+
 /** Explicit access to a library-owned C object. Accessors run on the calling thread. */
 export interface MaligatorFfiGlobalFacts {
 	/** Export a function that reads the current C value. Pointer results need lifetime facts. */
 	get?: string;
 	/** Export a function that assigns a value without retaining JavaScript storage. */
 	set?: string;
-	/** Read conversion facts; the accessor never takes ownership of the global's storage. */
-	returns?: MaligatorFfiValueFacts;
+	/** Conversion facts; accessors copy values without taking ownership of global storage. */
+	value?: MaligatorFfiGlobalValueFacts;
 	/** Header documentation that `ffi check` watches when reviewing these facts. */
 	evidence?: Array<MaligatorFfiEvidence>;
 }

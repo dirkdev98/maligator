@@ -222,6 +222,7 @@ export interface UnboundFunction {
 export interface GlobalAccessor {
 	readonly declaration: CGlobal;
 	readonly access: "get" | "set";
+	readonly bounded?: { readonly format: "string" | "bytes" };
 }
 
 export interface MappedField {
@@ -2010,6 +2011,7 @@ class Planner {
 			readonly site: string;
 			readonly owner?: string;
 			readonly fixedArrayParameters?: true;
+			readonly boundedGlobal?: GlobalAccessor["bounded"];
 		},
 	): BoundFunction | UnboundFunction {
 		const where = (at: string): string =>
@@ -2041,6 +2043,8 @@ class Planner {
 			at: string,
 		): Mapping => {
 			const resolved = resolveCType(this.#model, type);
+			if (resolved.kind === "array" && callableContext?.boundedGlobal !== undefined)
+				return { value: { kind: callableContext.boundedGlobal.format, nullable: false } };
 			if (valueFacts.callable !== undefined) {
 				if (position !== "return")
 					throw new FfiError(
@@ -2412,7 +2416,10 @@ class Planner {
 				returns.value.kind === "bytes" ||
 				returns.value.kind === "sequence" ||
 				(returns.value.kind === "string" && returns.value.counted === true);
-			if (counted !== (resultCount !== undefined)) {
+			if (
+				callableContext?.boundedGlobal === undefined &&
+				counted !== (resultCount !== undefined)
+			) {
 				throw new FfiError(
 					`${where("returns")}: a buffer or array result needs its length`,
 				);
@@ -2711,15 +2718,34 @@ export function planBindings(
 			throw new FfiError(`${at}: access requires an externally linked C object`);
 		if (entry.get === undefined && entry.set === undefined)
 			throw new FfiError(`${at}: provide a getter or setter export`);
-		if (entry.returns !== undefined && entry.get === undefined)
-			throw new FfiError(`${at}.returns: read facts require a getter`);
-		if (entry.returns?.free !== undefined || entry.returns?.fresh === true)
-			throw new FfiError(`${at}.returns: reading a global cannot transfer ownership`);
+		const { bytes, ...value } = entry.value ?? {};
 		const resolved = resolveCType(model, global.type);
-		if (resolved.kind === "array" && Object.keys(entry.returns ?? {}).length > 0)
-			throw new FfiError(
-				`${at}.returns: fixed arrays use their declared element mapping`,
-			);
+		const format =
+			bytes === true ? "bytes" : value.string === true ? "string" : undefined;
+		let bounded: GlobalAccessor["bounded"];
+		if (resolved.kind === "array" && format !== undefined) {
+			const element = resolveCType(model, resolved.of);
+			if (element.kind !== "integer" || model.target.sizes[element.name] !== 1)
+				throw new FfiError(
+					`${at}.value: bounded text and bytes require a one-dimensional byte array`,
+				);
+			if (
+				value.borrowed !== undefined ||
+				value.callable !== undefined ||
+				value.shape !== undefined
+			)
+				throw new FfiError(
+					`${at}.value: a bounded array uses only its string or bytes representation`,
+				);
+			bounded = { format };
+		} else if (bytes === true)
+			throw new FfiError(`${at}.value.bytes: bytes require a fixed byte array`);
+		if (
+			resolved.kind === "array" &&
+			bounded === undefined &&
+			Object.keys(value).length > 0
+		)
+			throw new FfiError(`${at}.value: fixed arrays use their declared element mapping`);
 		for (const access of ["get", "set"] as const) {
 			const exported = entry[access];
 			if (exported === undefined) continue;
@@ -2749,26 +2775,31 @@ export function planBindings(
 				declaration,
 				{
 					params: access === "get" ? [] : [NO_FACTS],
-					returns: access === "get" ? (entry.returns ?? NO_FACTS) : NO_FACTS,
+					returns: access === "get" && bounded === undefined ? value : NO_FACTS,
 				},
 				undefined,
 				{
 					path: access === "get" ? at : `${at}.set`,
 					site: exported,
 					...(resolved.kind === "array" ? { fixedArrayParameters: true as const } : {}),
+					...(bounded === undefined ? {} : { boundedGlobal: bounded }),
 				},
 			);
 			if (
 				!("gaps" in result) &&
 				access === "get" &&
 				result.returns.kind === "handle" &&
-				entry.returns?.borrowed !== true
+				value.borrowed !== true
 			)
-				throw new FfiError(`${at}.returns: a global handle requires borrowed: true`);
+				throw new FfiError(`${at}.value: a global handle requires borrowed: true`);
 			const binding = {
 				...result,
 				name: exported,
-				global: { declaration: global, access },
+				global: {
+					declaration: global,
+					access,
+					...(bounded === undefined ? {} : { bounded }),
+				},
 			};
 			if ("gaps" in binding) unbound.push(binding);
 			else functions.push(binding);

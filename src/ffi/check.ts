@@ -355,7 +355,7 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 		for (const field of Object.values(facts.fields ?? {}))
 			if (field.callable !== undefined) valueFacts({ callable: field.callable });
 	for (const facts of Object.values(contract.facts.globals ?? {}))
-		valueFacts(facts.returns);
+		valueFacts({ shape: facts.value?.shape, callable: facts.value?.callable });
 	for (const name of macroFactRoots(contract.facts)) constant(name);
 	for (const name of Object.keys(contract.facts.globals ?? {}).sort()) {
 		const global = model.globals.find((entry) => entry.name === name);
