@@ -10,6 +10,7 @@ import type {
 import type { CField, CFunction, CGlobal, CModel, CRecord } from "./c-model.ts";
 import {
 	cRecordAccesses,
+	cRecordHasConstMembers,
 	promotedCFields,
 	resolveCFieldPath,
 	resolveCType,
@@ -720,6 +721,16 @@ class Planner {
 				return this.#array(resolved, position);
 			case "record": {
 				const handle = this.#handles.get(resolved.name);
+				const declaration = this.#model.records.get(resolved.name);
+				if (
+					handle === undefined &&
+					position === "param" &&
+					declaration !== undefined &&
+					cRecordHasConstMembers(this.#model, declaration)
+				)
+					return {
+						gap: `${resolved.tag} ${resolved.name}: const members cannot be copied by value`,
+					};
 				if (
 					facts.shape !== undefined &&
 					(("member" in facts.shape && resolved.tag !== "union") || handle !== undefined)
@@ -752,7 +763,7 @@ class Planner {
 					};
 				}
 				const record = this.#model.records.get(resolved.name);
-				if (record !== undefined && this.#hasConstMember(record))
+				if (record !== undefined && cRecordHasConstMembers(this.#model, record))
 					return { gap: `${record.name}: const members cannot be copied by value` };
 				return {
 					value: {
@@ -925,7 +936,7 @@ class Planner {
 		const record = this.#model.records.get(name);
 		if (record === undefined || !record.complete)
 			return { gap: `union ${name}: incomplete type` };
-		if (this.#hasConstMember(record))
+		if (cRecordHasConstMembers(this.#model, record))
 			return { gap: `union ${name}: const members cannot be copied by value` };
 		const field = [...promotedCFields(this.#model, record)].find(
 			(field) => field.name === shape.member,
@@ -981,19 +992,6 @@ class Planner {
 		};
 	}
 
-	#hasConstMember(record: CRecord, seen = new Set<string>()): boolean {
-		if (seen.has(record.name)) return false;
-		seen.add(record.name);
-		return record.fields.some((field) => {
-			let type = resolveCType(this.#model, field.type);
-			while (type.kind === "array") type = resolveCType(this.#model, type.of);
-			if ("const" in type && type.const === true) return true;
-			const child =
-				type.kind === "record" ? this.#model.records.get(type.name) : undefined;
-			return child !== undefined && this.#hasConstMember(child, seen);
-		});
-	}
-
 	#tagged(
 		name: string,
 		shape: Extract<MaligatorFfiShape, { tag: string }>,
@@ -1003,7 +1001,7 @@ class Planner {
 		const access = this.#accesses.get(name);
 		if (record === undefined || !record.complete || access?.spelling === undefined)
 			return { gap: `tagged ${name}: the complete C type needs an accessible spelling` };
-		if (this.#hasConstMember(record))
+		if (cRecordHasConstMembers(this.#model, record))
 			return { gap: `tagged ${name}: const members cannot be copied by value` };
 		const identity = createHash("sha256")
 			.update(JSON.stringify([access.owner, access.path, shape, alias]))
@@ -1290,8 +1288,6 @@ class Planner {
 			return gap("opaque structs cannot pass by value");
 		if (access?.spelling === undefined)
 			return gap("the C type has no accessible spelling");
-		if (this.#hasConstMember(record))
-			return gap("const members cannot be copied by value");
 		if (this.#pending.has(name)) return gap("recursive struct");
 		this.#pending.add(name);
 		const fields: Array<MappedField> = [];
@@ -2298,6 +2294,16 @@ class Planner {
 				}
 				if (resolved.kind !== "pointer") {
 					throw new FfiError(`${where(at)}.${fact}: ${name} is not a pointer`);
+				}
+				let target = resolveCType(this.#model, resolved.to);
+				while (target.kind === "array") target = resolveCType(this.#model, target.of);
+				const record =
+					target.kind === "record" ? this.#model.records.get(target.name) : undefined;
+				if (record !== undefined && cRecordHasConstMembers(this.#model, record)) {
+					gap(
+						`${record.name}: const members require initialization rather than an output buffer`,
+					);
+					return;
 				}
 				const written = map(
 					resolved.to,

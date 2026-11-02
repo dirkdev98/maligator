@@ -9,7 +9,7 @@ import type {
 	MappedRecord,
 } from "./binding-plan.ts";
 import type { CModel } from "./c-model.ts";
-import { resolveCType } from "./c-model.ts";
+import { cRecordHasConstMembers, resolveCType } from "./c-model.ts";
 import { formatCDeclaration } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 
@@ -317,6 +317,13 @@ class BindingWriter {
 		const record = this.#plan.records.get(name);
 		if (record === undefined) throw new Error(`binding plan has no record '${name}'`);
 		return record;
+	}
+
+	#immutableRecord(type: CType): boolean {
+		const resolved = resolveCType(this.#model, type);
+		const record =
+			resolved.kind === "record" ? this.#model.records.get(resolved.name) : undefined;
+		return record !== undefined && cRecordHasConstMembers(this.#model, record);
 	}
 
 	#handle(name: string): HandleType {
@@ -1597,7 +1604,11 @@ class BindingWriter {
 					typeof param === "object" &&
 					(param.kind === "bytes" || (param.kind === "string" && param.counted)),
 			);
+		const initialized = new Set(
+			type.params.flatMap((type, index) => (this.#immutableRecord(type) ? [index] : [])),
+		);
 		const copies = type.params.flatMap((_, index) => {
+			if (initialized.has(index)) return [];
 			const param = value.params[index];
 			const field = `mal_message->mal_c${String(index)}`;
 			const source = `mal_c${String(index)}`;
@@ -1684,6 +1695,11 @@ class BindingWriter {
 			...(!keyedLookup ? ["\t\tmal_ffi_callback_reserve(mal_callback);"] : []),
 			`\t\t${message} *mal_message = mal_ffi_allocate_storage(1, sizeof(*mal_message), _Alignof(${message}));`,
 			"\t\tif (mal_message != nullptr) {",
+			...(initialized.size === 0
+				? []
+				: [
+						`\t\t\t__builtin_memcpy(mal_message, &(${message}) { ${[...initialized].map((index) => `.mal_c${String(index)} = mal_c${String(index)}`).join(", ")} }, sizeof(*mal_message));`,
+					]),
 			"\t\t\tbool mal_ok = true;",
 			...(checkedCopies ? ["\t\t\tmal_message->mal_copy_error = MAL_FFI_COPY_OK;"] : []),
 			...copies.map((line) => `\t\t\t${line}`),
@@ -2238,9 +2254,12 @@ class BindingWriter {
 			);
 			cleanup.push("free(mal_return);");
 		} else {
-			locals.push(
-				`${binding.returns.kind === "callable" ? `${binding.returns.targetType} mal_return` : localDeclaration(declaration.returns, "mal_return")};`,
-			);
+			const returnDeclaration =
+				binding.returns.kind === "callable"
+					? `${binding.returns.targetType} mal_return`
+					: localDeclaration(declaration.returns, "mal_return");
+			const initialize = this.#immutableRecord(declaration.returns);
+			if (!initialize) locals.push(`${returnDeclaration};`);
 			const owned = this.#owned(
 				binding.returns,
 				"mal_return",
@@ -2252,7 +2271,7 @@ class BindingWriter {
 			const record = intoRecord(binding);
 			after.push(
 				...enter,
-				`mal_return = ${call};`,
+				`${initialize ? returnDeclaration : "mal_return"} = ${call};`,
 				...callbackReturns,
 				...leave,
 				...closes,
@@ -2393,6 +2412,10 @@ class BindingWriter {
 	asyncFunction(binding: BoundFunction, exported: string): Array<string> {
 		const name = binding.name;
 		const declaration = binding.declaration;
+		const initializeReturn = this.#immutableRecord(declaration.returns);
+		const returnValue = initializeReturn
+			? "(*mal_ctx->mal_return)"
+			: "mal_ctx->mal_return";
 		const context = `MalFfiAsync_${name}`;
 		const callbacks: Array<{
 			readonly index: number;
@@ -2419,7 +2442,7 @@ class BindingWriter {
 					];
 		};
 		const nativeDisposals = [
-			...discard(binding.returns, "mal_ctx->mal_return"),
+			...discard(binding.returns, returnValue),
 			...binding.outputs.flatMap((output, index) =>
 				discard(output.value, `mal_ctx->mal_output_${String(index)}`),
 			),
@@ -2781,15 +2804,22 @@ class BindingWriter {
 		const returns = binding.returns.kind !== "undefined";
 		if (returns)
 			fields.push(
-				`${binding.returns.kind === "callable" ? `${binding.returns.targetType} mal_return` : localDeclaration(declaration.returns, "mal_return")};`,
+				`${initializeReturn ? localDeclaration({ kind: "pointer", to: declaration.returns }, "mal_return") : binding.returns.kind === "callable" ? `${binding.returns.targetType} mal_return` : localDeclaration(declaration.returns, "mal_return")};`,
 			);
+		if (initializeReturn) {
+			buffers.push(
+				`mal_ctx->mal_return = mal_ffi_allocate_storage(1, sizeof(*mal_ctx->mal_return), _Alignof(${localDeclaration(declaration.returns, "")}));`,
+				"if (mal_ctx->mal_return == nullptr) { mal_ffi_out_of_memory(vm); goto mal_failed; }",
+			);
+			frees.push("free(mal_ctx->mal_return);");
+		}
 		for (const temporary of strings) fields.push(`MalFfiString ${temporary};`);
 		const call = `${declaration.name}(${declaration.params.map((_, index) => `mal_ctx->mal_argument_${String(index)}`).join(", ")})`;
 		const count = countValue(binding, binding.resultCount, "mal_ctx->");
 		const produce: Array<string> = returns
 			? this.#owned(
 					binding.returns,
-					"mal_ctx->mal_return",
+					returnValue,
 					"mal_result",
 					count,
 					"&mal_site_result",
@@ -2853,7 +2883,12 @@ class BindingWriter {
 					? []
 					: [`\tmal_ffi_close_start(mal_ctx->mal_callback_${String(index)});`],
 			),
-			`\t${returns ? "mal_ctx->mal_return = " : ""}${call};`,
+			...(initializeReturn
+				? [
+						`\t${localDeclaration(declaration.returns, "mal_native_return")} = ${call};`,
+						"\t__builtin_memcpy(mal_ctx->mal_return, &mal_native_return, sizeof(mal_native_return));",
+					]
+				: [`\t${returns ? "mal_ctx->mal_return = " : ""}${call};`]),
 			...callbacks.flatMap(({ replacement, registrationResult }) =>
 				replacement !== undefined && registrationResult
 					? [`\tmal_ffi_replace_return(&mal_ctx->${replacement});`]

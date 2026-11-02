@@ -163,6 +163,23 @@ export function resolveCType(model: Pick<CModel, "typedefs">, type: CType): CTyp
 	return current;
 }
 
+/** A C aggregate cannot be assigned when any embedded object is const-qualified. */
+export function cRecordHasConstMembers(
+	model: Pick<CModel, "records" | "typedefs">,
+	record: CRecord,
+	seen = new Set<string>(),
+): boolean {
+	if (seen.has(record.name)) return false;
+	seen.add(record.name);
+	return record.fields.some((field) => {
+		let type = resolveCType(model, field.type);
+		while (type.kind === "array") type = resolveCType(model, type.of);
+		if ("const" in type && type.const === true) return true;
+		const child = type.kind === "record" ? model.records.get(type.name) : undefined;
+		return child !== undefined && cRecordHasConstMembers(model, child, seen);
+	});
+}
+
 export interface CRecordAccess {
 	readonly owner: string;
 	readonly path: ReadonlyArray<string>;

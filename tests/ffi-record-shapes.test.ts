@@ -7,10 +7,10 @@ import type { FfiCheckReport } from "../src/ffi/check.ts";
 
 const repo = resolve(import.meta.dirname, "..");
 const temporary: Array<string> = [];
-function project(): string {
+function project(fixture = "ffi-record-shapes"): string {
 	const directory = mkdtempSync(join(tmpdir(), "mal-ffi-record-shapes-contract-"));
 	temporary.push(directory);
-	cpSync(join(repo, "tests/fixtures/ffi-record-shapes"), directory, { recursive: true });
+	cpSync(join(repo, "tests/fixtures", fixture), directory, { recursive: true });
 	return directory;
 }
 function cli(directory: string, ...args: Array<string>) {
@@ -28,6 +28,34 @@ function declarations(directory: string): string {
 afterEach(() => {
 	for (const directory of temporary.splice(0))
 		rmSync(directory, { recursive: true, force: true });
+});
+it("binds const-member results regardless of earlier rejected inputs", () => {
+	const directory = project("ffi-const-results");
+	const result = cli(directory, "inspect", "const_values", "--json");
+	expect(result.status, result.stderr || result.stdout).toBe(0);
+	const report = JSON.parse(result.stdout) as {
+		functions: Array<{ name: string; status: string }>;
+	};
+	for (const name of ["a_make", "z_make_before", "immutable_visit", "immutable_notify"])
+		expect(report.functions.find((fn) => fn.name === name)?.status).toBe("bound");
+});
+it.each([
+	"a_take_before",
+	"z_take",
+	"immutable_out",
+	"immutable_inout",
+	"immutable_array",
+	"immutable_callback_result",
+])("keeps const-member initialization out of the %s input path", (name) => {
+	const directory = project("ffi-const-results");
+	const result = cli(directory, "inspect", "const_values", "--json");
+	expect(result.status, result.stderr || result.stdout).toBe(0);
+	const report = JSON.parse(result.stdout) as {
+		functions: Array<{ name: string; status: string; gaps?: Array<{ reason: string }> }>;
+	};
+	const entry = report.functions.find((fn) => fn.name === name);
+	expect(entry?.status).toBe("needs-facts");
+	expect(entry?.gaps?.some((gap) => gap.reason.includes("const members"))).toBe(true);
 });
 it("preserves anonymous field declarations when the project moves", () => {
 	const first = project(),
