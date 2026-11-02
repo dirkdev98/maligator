@@ -53,6 +53,7 @@ type CachedRow =
 	| ["file", string]
 	| ["dependency", Dependency]
 	| ["function", CModel["functions"][number]]
+	| ["global", CModel["globals"][number]]
 	| ["record", CRecord]
 	| ["enum", CEnum]
 	| ["typedef", CTypedef]
@@ -70,6 +71,7 @@ function* encode(
 		["file", model.files],
 		["dependency", dependencies],
 		["function", model.functions],
+		["global", model.globals],
 		["record", model.records.values()],
 		["enum", model.enums.values()],
 		["typedef", model.typedefs.values()],
@@ -89,6 +91,7 @@ function decode(data: Buffer): CachedModel {
 	const files: Array<string> = [];
 	const dependencies: Array<Dependency> = [];
 	const functions: Array<CModel["functions"][number]> = [];
+	const globals: Array<CModel["globals"][number]> = [];
 	const records = new Map<string, CRecord>();
 	const enums = new Map<string, CEnum>();
 	const typedefs = new Map<string, CTypedef>();
@@ -117,6 +120,9 @@ function decode(data: Buffer): CachedModel {
 			case "function":
 				functions.push(row[1]);
 				break;
+			case "global":
+				globals.push(row[1]);
+				break;
 			case "record":
 				records.set(row[1].name, row[1]);
 				break;
@@ -143,6 +149,7 @@ function decode(data: Buffer): CachedModel {
 			files,
 			dependencies: dependencies.map(({ file }) => file),
 			functions,
+			globals,
 			records,
 			enums,
 			typedefs,
@@ -170,7 +177,7 @@ export function loadCModel(input: CExtractionInput): CModel {
 	)
 		return extractCModel(input);
 	const compiler = statSync(input.compiler.path);
-	const producer = compilerProducerIdentity(STAGE, 7);
+	const producer = compilerProducerIdentity(STAGE, 8);
 	const analysis = withCHeaders<{
 		model: CModel;
 		publication?: { key: string; dependencies: ReadonlyArray<Dependency> };

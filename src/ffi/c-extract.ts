@@ -20,6 +20,7 @@ import type {
 	CEnumConstant,
 	CField,
 	CFunction,
+	CGlobal,
 	CLocation,
 	CMacro,
 	CModel,
@@ -658,6 +659,7 @@ function attributeKinds(node: JsonObject): Array<string> {
 
 interface Declarations {
 	readonly functions: Array<CFunction>;
+	readonly globals: Array<CGlobal>;
 	readonly records: Map<string, CRecord>;
 	readonly enums: Map<string, CEnum>;
 	readonly typedefs: Map<string, CTypedef>;
@@ -687,6 +689,8 @@ function collectDeclarations(
 	const enumNodes = new Map<string, { node: JsonObject; key: string }>();
 	const typedefs = new Map<string, CTypedef>();
 	const functions = new Map<string, CFunction>();
+	const globals = new Map<string, CGlobal>();
+	const globalLinkage = new Map<string, CGlobal["linkage"]>();
 
 	const isNamed = (node: JsonObject): node is JsonObject & { name: string } =>
 		typeof node.name === "string" && node.name !== "";
@@ -847,6 +851,29 @@ function collectDeclarations(
 			});
 			continue;
 		}
+		if (node.kind === "VarDecl" && typeof node.name === "string") {
+			// An extern redeclaration keeps linkage established by an earlier static declaration.
+			const linkage =
+				globalLinkage.get(node.name) === "internal" ||
+				node.storageClass === "static" ||
+				node.constexpr === true
+					? "internal"
+					: "external";
+			globalLinkage.set(node.name, linkage);
+			const span = spanOf(node, cwd);
+			if (span === undefined || !isLibraryFile(span.location.file)) continue;
+			const doc = documentation.declaration(span);
+			globals.set(node.name, {
+				name: node.name,
+				type: nodeType(node),
+				linkage,
+				threadLocal: typeof node.tls === "string",
+				attributes: attributeKinds(node),
+				...(doc === undefined ? {} : { doc }),
+				location: { file: span.location.file, line: span.location.line },
+			});
+			continue;
+		}
 		if (node.kind !== "FunctionDecl" || typeof node.name !== "string") continue;
 		const span = spanOf(node, cwd);
 		if (span === undefined || !isLibraryFile(span.location.file)) continue;
@@ -882,7 +909,13 @@ function collectDeclarations(
 		});
 	}
 
-	return { functions: [...functions.values()], records, enums, typedefs };
+	return {
+		functions: [...functions.values()],
+		globals: [...globals.values()],
+		records,
+		enums,
+		typedefs,
+	};
 }
 
 const TARGET_PROBES: ReadonlyArray<string> = [
@@ -1438,8 +1471,18 @@ function probeDeclarationTypes(
 	declarations: Declarations,
 ): Declarations {
 	const functions = [...declarations.functions];
+	const globals = [...declarations.globals];
 	const records = new Map(declarations.records);
 	const queries: Array<{ expression: string; apply(type: CType): void }> = [];
+	globals.forEach((global, index) => {
+		if (global.type.kind !== "unsupported") return;
+		queries.push({
+			expression: global.name,
+			apply(type) {
+				if (type.kind !== "unsupported") globals[index] = { ...global, type };
+			},
+		});
+	});
 	functions.forEach((fn, index) => {
 		if (
 			fn.returns.kind !== "unsupported" &&
@@ -1519,7 +1562,7 @@ function probeDeclarationTypes(
 		if (name === undefined || !name.startsWith("__mal_declaration_type_")) continue;
 		queries[Number(name.slice("__mal_declaration_type_".length))]?.apply(nodeType(node));
 	}
-	return { ...declarations, functions, records };
+	return { ...declarations, functions, globals, records };
 }
 
 /** Clang omits non-fixed enum compatible types; query them without evaluating fields. */
@@ -1678,6 +1721,9 @@ export function extractCModelFromHeaders(
 		files: [...preprocessed.files].filter(isLibraryFile).sort(),
 		dependencies: [...preprocessed.files].sort(),
 		functions: declarations.functions.sort((left, right) =>
+			left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+		),
+		globals: declarations.globals.sort((left, right) =>
 			left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
 		),
 		records: integerTypes.records,

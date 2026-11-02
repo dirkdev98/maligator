@@ -32,6 +32,17 @@ export interface CFunction {
 	readonly location: CLocation;
 }
 
+/** A file-scope object; external linkage does not guarantee shared-library visibility. */
+export interface CGlobal {
+	readonly name: string;
+	readonly type: CType;
+	readonly linkage: "external" | "internal";
+	readonly threadLocal: boolean;
+	readonly attributes: ReadonlyArray<string>;
+	readonly doc?: FfiText;
+	readonly location: CLocation;
+}
+
 export interface CField {
 	readonly name?: string;
 	readonly type: CType;
@@ -109,6 +120,7 @@ export interface CModel {
 	/** Native inputs read during extraction or needed to build the library. */
 	readonly dependencies: ReadonlyArray<string>;
 	readonly functions: ReadonlyArray<CFunction>;
+	readonly globals: ReadonlyArray<CGlobal>;
 	/** Records from every file, since library types can embed system ones. */
 	readonly records: ReadonlyMap<string, CRecord>;
 	readonly enums: ReadonlyMap<string, CEnum>;
