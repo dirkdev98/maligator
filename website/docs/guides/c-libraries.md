@@ -259,6 +259,12 @@ Resource-bearing values require waiting callbacks when C calls from another thre
 Compound callback results containing handles need a pointer result interface with an
 explicit lifetime. Describe borrowed resource fields on their owning handle.
 
+Declare independently owned pointers with `handle: { owned: true }` in the payload
+record's field facts.
+Only the active case's resources enter the result transaction; inactive union storage
+is neither converted nor released. Arrays can mix tagged variants while preserving
+resource aliases and ownership.
+
 ## Describe resources
 
 A pointer the library allocates, or a struct that owns memory, needs to be released. Give its type a `handle` fact that names the function that releases it:
@@ -409,14 +415,14 @@ types: {
 ```
 
 The field must point to a destructor-backed resource allocated by the library.
-Nested plain records and explicitly selected union members share the result transaction.
+Nested plain records, selected union members, and active tagged payloads share the
+result transaction.
 Arrays of these records preserve fixed and counted dimensions. Aliased fields keep one
 handle. A failed conversion preserves existing ownership while releasing new resources
 once. Array elements follow C index order; the first owning field determines an aliased
 resource's destructor.
 Record inputs borrow their handles; callback arguments remain invocation loans.
 Use `fresh: true` beside `owned` for a new lifetime at a recycled address.
-Use a C wrapper with a pointer result for tagged unions that transfer ownership.
 Global getters and constants cannot transfer independently owned fields.
 
 When a library accepts the same allocation through another pointer type, declare directed

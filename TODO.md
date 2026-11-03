@@ -1903,8 +1903,7 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Extend transactional conversion to tagged shapes and caller-allocated resource
-      array outputs.
+- [ ] Extend transactional conversion to caller-allocated resource array outputs.
       Preserve ownership and type views through allocation failure
       after partial conversion.
 

@@ -453,3 +453,85 @@ TxBase *tx_fresh_table(void (*close)(void), TxFreshRow **rows, size_t *length) {
     *length = 2; release_bad = 0;
     return base;
 }
+
+TxTagged tx_tagged(int kind, int bad, int existing, TxResource **alias, const char **message, size_t *length) {
+    *message = "x"; *length = bad ? (size_t)-1 : 1;
+    *alias = NULL;
+    if (kind == 1 || kind == 2) {
+        *alias = existing ? current : create(241);
+        if (kind == 1) return (TxTagged) {kind, {.fields = {*alias, *alias, NULL}}};
+        return (TxTagged) {kind, {.policy = {NULL, (TxSpecial *) *alias}}};
+    }
+    if (kind == 77) *alias = create(251);
+    return (TxTagged) {kind, {.number = 1}};
+}
+static TxTaggedGrid tagged_grid_value(TxResource *first, TxResource *second) {
+    return (TxTaggedGrid) {{{2, {.policy = {NULL, (TxSpecial *) first}}},
+        {3, {.number = 1}}, {1, {.fields = {first, second, NULL}}}}};
+}
+TxTaggedGrid tx_tagged_grid(int bad, TxResource **alias, const char **message, size_t *length) {
+    *alias = create(241);
+    *message = "x"; *length = bad == 1 ? (size_t)-1 : 1;
+    TxTaggedGrid value = tagged_grid_value(*alias, create(251));
+    if (bad == 2) value.values[1].kind = 77;
+    return value;
+}
+int tx_tagged_sum(TxTagged value) {
+    if (value.kind == 1) return value.payload.fields.first->value + value.payload.fields.second->value;
+    if (value.kind == 2) return ((TxResource *) value.payload.policy.second)->value;
+    if (value.kind == 3) return value.payload.number;
+    return 0;
+}
+int tx_tagged_grid_sum(TxTaggedGrid value) {
+    return tx_tagged_sum(value.values[0]) + tx_tagged_sum(value.values[1]) + tx_tagged_sum(value.values[2]);
+}
+int tx_tagged_visit(int (*callback)(TxTaggedGrid, void *), void *data) {
+    TxResource *first = create(241), *second = create(251);
+    int result = callback(tagged_grid_value(first, second), data);
+    tx_destroy(first); tx_destroy(second);
+    return result;
+}
+void tx_tagged_out(TxTagged *value) { *value = (TxTagged) {1, {.fields = tx_fields()}}; }
+TxTagged *tx_tagged_table(size_t *length) {
+    TxTaggedGrid value = tagged_grid_value(create(241), create(251));
+    TxTagged *rows = malloc(sizeof(value.values));
+    if (rows == NULL) abort();
+    for (size_t i = 0; i < 3; i++) rows[i] = value.values[i];
+    *length = 3; release_bad = 0;
+    return rows;
+}
+TxConstTagged tx_const_tagged(void) { return (TxConstTagged) {1, {.fields = tx_fields()}}; }
+TxPromotedTagged tx_promoted_tagged(void) {
+    return (TxPromotedTagged) {1, {.fields = {{create(257)}}}};
+}
+TxBase *tx_tagged_fresh(void (*close)(void), TxFreshTagged *value) {
+    TxFreshGrid grid; const char *message; size_t length;
+    TxBase *base = tx_fresh_grid(0, close, &grid, &message, &length);
+    *value = (TxFreshTagged) {1, {.fields = {grid.rows[0].owned, grid.rows[1].fresh}}};
+    return base;
+}
+TxBase *tx_inactive_fresh(void (*close)(void), TxFreshTagged *out) {
+    TxResource *value = current;
+    close();
+    *out = (TxFreshTagged) {2, {.fields = {(TxSpecial *) value, value}}};
+    return (TxBase *) value;
+}
+static _Atomic int tagged_started;
+TxTaggedGrid tx_tagged_wait(void) {
+    TxTaggedGrid value = tagged_grid_value(create(241), create(251));
+    atomic_fetch_add(&tagged_started, 1);
+    usleep(150000);
+    return value;
+}
+TxConstTagged tx_const_tagged_wait(void) {
+    const TxConstTagged value = tx_const_tagged();
+    atomic_fetch_add(&tagged_started, 1);
+    usleep(150000);
+    return value;
+}
+int tx_tagged_started(void) { return atomic_load(&tagged_started); }
+TxTaggedGrid tx_tagged_arm(void (*callback)(void)) {
+    TxTaggedGrid value = tagged_grid_value(create(241), create(251));
+    callback();
+    return value;
+}

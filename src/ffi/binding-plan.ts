@@ -496,7 +496,7 @@ export function supportsResultTransaction(
 			return supportsResultTransaction(value.of, shapes, context);
 		case "tagged":
 			return value.cases.every((entry) =>
-				supportsResultTransaction(entry.value, shapes, "other"),
+				supportsResultTransaction(entry.value, shapes, context),
 			);
 		default:
 			return true;
@@ -1645,6 +1645,30 @@ class Planner {
 		return { value: asValue(mapped) };
 	}
 
+	#ownedField(field: CField, record: string): Mapping | undefined {
+		const facts =
+			field.name === undefined
+				? undefined
+				: this.#fields.get(record)?.[field.name]?.handle;
+		if (facts?.owned !== true) return undefined;
+		const mapped = this.value(
+			field.type,
+			"return",
+			facts.fresh === true ? { fresh: true } : {},
+		);
+		if (
+			!("value" in mapped) ||
+			mapped.value.kind !== "handle" ||
+			mapped.value.pass !== "pointer" ||
+			this.#handles.get(mapped.value.name)?.destroy === undefined ||
+			this.#handles.get(mapped.value.name)?.allocator !== undefined
+		)
+			throw new FfiError(
+				`types.${record}.fields.${field.name}.handle: requires an independently owned pointer resource with a destructor`,
+			);
+		return mapped;
+	}
+
 	#caseRecord(
 		record: CRecord,
 		route: ReadonlyArray<number>,
@@ -1686,10 +1710,11 @@ class Planner {
 					!choices.has(next.join("."))
 				)
 					continue;
-				const mapped = this.#caseField(field, next, choices, omitted, identity);
+				const owned = this.#ownedField(field, record.name);
+				const mapped = owned ?? this.#caseField(field, next, choices, omitted, identity);
 				if (mapped === undefined) continue;
 				if ("gap" in mapped) return `field '${field.name}': ${mapped.gap}`;
-				if (mapped.value.kind === "handle")
+				if (mapped.value.kind === "handle" && owned === undefined)
 					return `field '${field.name}' needs a pointer interface`;
 				fields.push({
 					name: field.name,
@@ -1801,23 +1826,7 @@ class Planner {
 				if (field.name === undefined && field.bitWidth !== undefined) continue;
 				if (field.name === undefined) return gap("anonymous members need a fact");
 				const facts = this.#fields.get(name)?.[field.name]?.handle;
-				const mapped =
-					facts?.owned === true
-						? this.value(field.type, "return", {
-								...(facts.fresh === true ? { fresh: true } : {}),
-							})
-						: this.#field(field);
-				if (
-					facts?.owned === true &&
-					(!("value" in mapped) ||
-						mapped.value.kind !== "handle" ||
-						mapped.value.pass !== "pointer" ||
-						this.#handles.get(mapped.value.name)?.destroy === undefined ||
-						this.#handles.get(mapped.value.name)?.allocator !== undefined)
-				)
-					throw new FfiError(
-						`types.${name}.fields.${field.name}.handle: requires an independently owned pointer resource with a destructor`,
-					);
+				const mapped = this.#ownedField(field, name) ?? this.#field(field);
 				if ("gap" in mapped) {
 					// A struct that holds a pointer owns or borrows memory, so it crosses as a handle.
 					return resolveCType(this.#model, field.type).kind === "pointer"

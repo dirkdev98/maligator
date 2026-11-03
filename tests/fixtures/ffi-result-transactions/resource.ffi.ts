@@ -4,6 +4,34 @@ export default {
 	headers: ["resource.h"],
 	find: [{ includeDirs: ["."], sources: ["resource.c"] }],
 	types: {
+		TxTagged: {
+			shape: {
+				tag: "kind",
+				cases: {
+					"1": ["payload.fields"],
+					"2": ["payload.policy"],
+					"3": ["payload.number"],
+					"4": [],
+				},
+			},
+		},
+		TxConstTagged: {
+			shape: {
+				tag: "kind",
+				cases: {
+					"1": ["payload.fields"],
+					"2": ["payload.policy"],
+					"3": ["payload.number"],
+				},
+			},
+		},
+		TxFreshTagged: {
+			shape: { tag: "kind", cases: { "1": ["payload.fields"], "2": ["payload.number"] } },
+		},
+		TxPromotedTagged: {
+			shape: { tag: "kind", cases: { "1": ["payload.fields"], "2": ["payload.number"] } },
+		},
+		TxPromotedFields: { fields: { first: { handle: { owned: true } } } },
 		TxGrid: { fields: { tail: { handle: { owned: true } } } },
 		TxPolicyFields: {
 			fields: { first: { handle: { owned: true } }, second: { handle: { owned: true } } },
@@ -50,6 +78,39 @@ export default {
 		},
 	},
 	functions: {
+		tx_tagged_arm: { params: { callback: { callback: {} } } },
+		tx_tagged: {
+			params: {
+				alias: { out: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "taggedAsync",
+		},
+		tx_tagged_grid: {
+			params: {
+				alias: { out: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "taggedGridAsync",
+		},
+		tx_tagged_visit: { params: { callback: { callback: { data: "data" } } } },
+		tx_tagged_out: { params: { value: { out: true } } },
+		tx_tagged_table: {
+			returns: { array: { length: "length" }, free: "tx_table_free" },
+			async: "taggedTableAsync",
+		},
+		tx_const_tagged: { async: "constTaggedAsync" },
+		tx_tagged_fresh: {
+			returns: { borrowed: true },
+			params: { close: { callback: {} }, value: { out: true } },
+			async: "taggedFreshAsync",
+		},
+		tx_inactive_fresh: {
+			returns: { borrowed: true },
+			params: { close: { callback: {} }, value: { out: true } },
+		},
+		tx_tagged_wait: { async: "taggedWaitAsync" },
+		tx_const_tagged_wait: { async: "constTaggedWaitAsync" },
 		tx_table_policy: {
 			returns: { array: { length: "length" }, free: "tx_table_free" },
 			async: "tablePolicyAsync",
