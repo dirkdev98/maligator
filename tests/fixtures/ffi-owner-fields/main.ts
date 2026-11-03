@@ -189,25 +189,214 @@ for (const register of [
 	c.owner_replace_child,
 	c.replaceChildAsync,
 ]) {
-	const registrationOwner = c.owner_result_new(73),
-		registrationChild = registrationOwner.first!;
+	const registrationOwner = c.owner_result_new(73);
+	const child = registrationOwner.first!;
 	const calls = c.owner_watch_calls();
-	let rejected = false;
-	try {
-		await Promise.resolve(register(registrationChild, () => {}));
-	} catch (error) {
-		rejected = error instanceof TypeError;
-	}
-	check(
-		rejected && c.owner_watch_calls() === calls,
-		"kept child registrations fail before C publication",
+	let oldCalls = 0,
+		newCalls = 0;
+	await Promise.resolve(
+		register(child, () => {
+			oldCalls++;
+		}),
 	);
-	await Promise.resolve(register(registrationChild, null));
 	check(
-		c.owner_watch_calls() === calls + 1,
-		"null callback unregistration remains available",
+		c.owner_fire_child(child) === 73 && oldCalls === 1,
+		"retained callbacks fire after registration returns",
 	);
+	check(
+		registrationOwner.first === child && c.owner_child_alias(child) === child,
+		"registration leases preserve fields and aliases",
+	);
+	rejects(() => child[Symbol.dispose](), "a registration protects its child view");
+	rejects(
+		() => registrationOwner[Symbol.dispose](),
+		"a registration protects its destruction root",
+	);
+	rejects(
+		() => c.owner_result_destroy(registrationOwner),
+		"a destroy binding cannot bypass registration leases",
+	);
+	await Promise.resolve(
+		register(child, () => {
+			newCalls++;
+		}),
+	);
+	c.owner_fire_child(child);
+	check(
+		oldCalls === 1 && newCalls === 1,
+		"replacement retires the previous callback and its input leases",
+	);
+	await Promise.resolve(register(child, null));
+	c.owner_fire_child(child);
+	check(
+		c.owner_watch_calls() === calls + 3 && newCalls === 1,
+		"null unregistration releases the retained input chain",
+	);
+	child[Symbol.dispose]();
 	registrationOwner[Symbol.dispose]();
+}
+{
+	const root = c.owner_result_new(74),
+		child = root.first!;
+	const subscribe = child.subscribe!;
+	let calls = 0;
+	subscribe(child, () => {
+		calls++;
+	});
+	c.owner_fire_child(child);
+	check(
+		calls === 1 && root.first === child,
+		"owner-bound callable registration keeps fields readable",
+	);
+	rejects(
+		() => root[Symbol.dispose](),
+		"a saved callable's registration protects its root",
+	);
+	subscribe(child, null);
+	root[Symbol.dispose]();
+	rejects(
+		() => subscribe(child, null),
+		"a saved callable expires after unregistration and root disposal",
+	);
+}
+{
+	const root = c.owner_result_new(75),
+		first = root.first!,
+		second = root.second!;
+	let firstCalls = 0,
+		secondCalls = 0;
+	c.owner_replace_child(first, () => {
+		firstCalls++;
+	});
+	c.owner_replace_child(second, () => {
+		secondCalls++;
+	});
+	c.owner_replace_child(c.owner_child_alias(first)!, () => {
+		firstCalls += 10;
+	});
+	c.owner_fire_child(first);
+	c.owner_fire_child(second);
+	check(
+		firstCalls === 10 && secondCalls === 1,
+		"siblings have independent replacement keys through aliases",
+	);
+	c.owner_replace_child(first, null);
+	first[Symbol.dispose]();
+	rejects(
+		() => root[Symbol.dispose](),
+		"a sibling registration still protects the common root",
+	);
+	const marker = new Error("registered callback marker");
+	c.owner_replace_child(second, () => {
+		throw marker;
+	});
+	let failure: unknown;
+	try {
+		c.owner_fire_child(second);
+	} catch (error) {
+		failure = error;
+	}
+	check(failure === marker, "callback exceptions preserve registration ownership");
+	c.owner_replace_child(second, null);
+	root[Symbol.dispose]();
+}
+{
+	const root = c.owner_result_new(76),
+		child = root.first!;
+	c.owner_watch_child(child, () => {
+		c.owner_watch_child(child, null);
+		rejects(
+			() => root[Symbol.dispose](),
+			"a retiring callback protects its root through its active frame",
+		);
+	});
+	c.owner_fire_child(child);
+	root[Symbol.dispose]();
+}
+for (const inputFirst of [false, true]) {
+	const root = c.owner_result_new(88),
+		child = root.first!;
+	const subscribe = child.subscribe!;
+	c.owner_watch_child(child, () => {});
+	c.owner_keep_child(() => child);
+	rejects(
+		() => root.first,
+		"a result lease blocks fields while an input lease overlaps it",
+	);
+	if (inputFirst) {
+		c.owner_watch_child(child, null);
+		rejects(
+			() => root.first,
+			"retiring input leases preserves the result's field restriction",
+		);
+		rejects(() => subscribe(child, null), "result leases still block saved callables");
+		check(
+			c.owner_kept_child_value() === 88,
+			"the remaining result lease preserves native storage",
+		);
+		c.owner_release_child();
+	} else {
+		c.owner_release_child();
+		check(
+			root.first === child,
+			"input-only leases leave fields readable after result release",
+		);
+		rejects(
+			() => root[Symbol.dispose](),
+			"the remaining input lease still protects lifetime",
+		);
+		subscribe(child, null);
+	}
+	root[Symbol.dispose]();
+}
+for (const register of [c.owner_watch_input, c.watchInputAsync]) {
+	const first = c.owner_result_new(77),
+		second = c.owner_result_new(78);
+	const input = [first.first!, second.first!];
+	let calls = 0;
+	await Promise.resolve(
+		register(input, () => {
+			calls++;
+		}),
+	);
+	c.owner_fire_child(input[0]!);
+	check(calls === 1, "compound registration inputs survive the C call");
+	rejects(() => first[Symbol.dispose](), "compound inputs retain their first root");
+	rejects(() => second[Symbol.dispose](), "compound inputs retain every root");
+	await Promise.resolve(register(input, null));
+	first[Symbol.dispose]();
+	second[Symbol.dispose]();
+}
+for (const register of [c.owner_keep_input, c.keepInputAsync]) {
+	for (const resultIndex of [0, 1]) {
+		const roots = [c.owner_result_new(79), c.owner_result_new(80)];
+		let caught = false;
+		try {
+			await Promise.resolve(
+				register([roots[0]!.first!, roots[1]!.first!], () => roots[resultIndex]!.second!),
+			);
+		} catch (error) {
+			caught = error instanceof TypeError;
+		}
+		check(
+			caught && c.owner_kept_child_value() === -1,
+			"registration results cannot lease a sibling from any retained input root",
+		);
+		c.owner_release_child();
+		for (const root of roots) root[Symbol.dispose]();
+	}
+}
+{
+	const root = c.owner_result_new(81);
+	c.owner_lend_result((loan) => {
+		const calls = c.owner_watch_calls();
+		rejects(
+			() => c.owner_watch_input([root.first!, loan.first!], () => {}),
+			"a later loan input rolls back earlier registration leases",
+		);
+		check(c.owner_watch_calls() === calls, "loan rejection occurs before C publication");
+	});
+	root[Symbol.dispose]();
 }
 const independent = c.owner_child_new(40)!;
 const conflicting = c.owner_result_alias(independent);
@@ -427,4 +616,25 @@ for (let index = 0; index < c.owner_program_count(); index++)
 		"growing the claim table preserves earlier resources",
 	);
 rejects(c.owner_library_owned, "claim growth preserves the original library resource");
+const registrationWorker = new Worker(
+	createWorkerUrl("./registration-worker.ts", import.meta.url),
+);
+const registrationWorkerResult = new Promise<unknown>((resolve) => {
+	registrationWorker.port.onmessage = (event) => resolve(event.data);
+});
+registrationWorker.port.start();
+const destroyedBeforeWorker = c.owner_result_destroyed();
+await registrationWorker.ready;
+registrationWorker.port.postMessage(91);
+check((await registrationWorkerResult) === 91, "worker published a child registration");
+await registrationWorker.terminate();
+check(
+	c.owner_result_destroyed() === destroyedBeforeWorker && c.owner_fire_all() === 91,
+	"registration inputs survive their VM while C retains the callback",
+);
+c.owner_clear_watches();
+check(
+	c.owner_result_destroyed() === destroyedBeforeWorker + 1,
+	"native release after worker teardown destroys the root once",
+);
 console.log("owner fields passed");

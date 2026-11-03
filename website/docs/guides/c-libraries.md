@@ -356,9 +356,16 @@ Owner fields must be reachable from a destructor-backed root through declared ow
 fields and use library-owned child storage. Descendants can omit their own destructor.
 Read them through an owning field before following their links; a raw borrowed alias
 needs a proven owner before its resource fields can be read.
-Passing an owner-bound child while registering a kept callback throws before C entry;
-passing `null` to unregister a nullable callback remains available. Plain records that
-transfer independent resource ownership need a whole-result handle and destructor.
+A kept callback leases owner-bound inputs and their destruction roots until C releases
+the callback or a replacement retires it. This includes handles inside compound inputs
+and an owner-bound callable's captured handle. Disposal and destruction reject while
+these leases remain; field reads and saved callables remain available for unregistration.
+Unregister nullable callbacks with `null` before closing their resources. The library
+must offer release or unregistration independently of root destruction. Callback loans
+cannot become registration inputs, and registration results cannot borrow any retained
+input root. Native leases also preserve the resources through VM teardown until C
+releases the registration. Plain records that transfer independent resource ownership
+need a whole-result handle and destructor.
 
 When a library accepts the same allocation through another pointer type, declare directed
 `views`. For example, libuv accepts a timer pointer as a general handle pointer:

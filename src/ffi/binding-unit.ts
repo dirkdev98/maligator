@@ -316,33 +316,26 @@ class BindingWriter {
 		}
 	}
 
-	#retainedOwnerGuards(
+	#retainCallbackOwners(
 		binding: BoundFunction,
+		callback: string,
 		argument: (index: number) => string,
 		inputs: string,
 		fail: string,
 		owner?: string,
 	): Array<string> {
-		const callbacks = binding.params.flatMap(({ value }, index) =>
-			value.kind === "callback" && value.kept
-				? [`(${argument(index)}) != mal_ffi_null()`]
-				: [],
-		);
-		if (callbacks.length === 0) return [];
 		const checks = binding.params.flatMap(({ value }, index) =>
 			value.kind === "handle"
 				? [
-						`if (!mal_ffi_retained_owners(vm, ${argument(index)}, nullptr, &mal_site_${index})) ${fail}`,
+						`if (!mal_ffi_callback_retain_owners(vm, ${callback}, ${argument(index)}, nullptr, &mal_site_${index})) ${fail}`,
 					]
 				: [],
 		);
 		if (inputs !== "nullptr" || owner !== undefined)
 			checks.push(
-				`if (!mal_ffi_retained_owners(vm, ${owner ?? "mal_ffi_undefined()"}, ${inputs}, &mal_site_result)) ${fail}`,
+				`if (!mal_ffi_callback_retain_owners(vm, ${callback}, ${owner ?? "mal_ffi_undefined()"}, ${inputs}, &mal_site_result)) ${fail}`,
 			);
-		return checks.length === 0
-			? []
-			: [`if (${callbacks.join(" || ")}) {`, ...checks.map((line) => `\t${line}`), "}"];
+		return checks;
 	}
 
 	#resultGuards(binding: BoundFunction, fail: string): Array<string> {
@@ -2818,6 +2811,14 @@ class BindingWriter {
 							`if ((${source}) != mal_ffi_null()) {`,
 							`\t${context} = ${value.queued !== undefined ? "mal_ffi_keep_queued" : "mal_ffi_keep"}(vm, ${source});`,
 							`\tif (${context} == nullptr) goto mal_done;`,
+							...this.#retainCallbackOwners(
+								binding,
+								context,
+								argument,
+								inputs,
+								"goto mal_done;",
+								owner === undefined ? undefined : "mal_owner",
+							).map((line) => `\t${line}`),
 							"}",
 						);
 						kept.push(
@@ -3249,13 +3250,6 @@ class BindingWriter {
 						"\tif (!mal_ffi_begin_handle_use(vm, mal_owner_pin, &mal_result, &mal_site_result)) goto mal_done;",
 					]),
 			...body.map((line) => `\t${line}`),
-			...this.#retainedOwnerGuards(
-				binding,
-				argument,
-				inputs,
-				"goto mal_done;",
-				owner === undefined ? undefined : "mal_owner",
-			).map((line) => `\t${line}`),
 			...this.#resultGuards(binding, "goto mal_done;").map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
 			...keeps.map((line) => `\t${line}`),
@@ -3665,6 +3659,15 @@ class BindingWriter {
 							`if ((${source}) != mal_ffi_null()) {`,
 							`\tmal_ctx->${field} = mal_ffi_keep_queued(vm, ${source});`,
 							`\tif (mal_ctx->${field} == nullptr) goto mal_failed;`,
+							...(value.kept
+								? this.#retainCallbackOwners(
+										binding,
+										`mal_ctx->${field}`,
+										argument,
+										inputs,
+										"goto mal_failed;",
+									).map((line) => `\t${line}`)
+								: []),
 							"}",
 						);
 						callbackArguments.push(
@@ -4043,9 +4046,6 @@ class BindingWriter {
 				? ["\tmal_ffi_inputs_init(&mal_ctx->mal_inputs, mal_ctx, true);"]
 				: []),
 			...body.map((line) => `\t${line}`),
-			...this.#retainedOwnerGuards(binding, argument, inputs, "goto mal_failed;").map(
-				(line) => `\t${line}`,
-			),
 			...this.#resultGuards(binding, "goto mal_failed;").map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
 			...callbackArguments.map((line) => `\t${line}`),

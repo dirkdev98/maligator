@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <pthread.h>
 static _Atomic int results_destroyed;
 static _Atomic int children_destroyed;
 static _Atomic int released;
@@ -12,7 +13,7 @@ static OwnerChild library_child = {777, 0};
 OwnerChild *owner_child_new(int value) {
     OwnerChild *child = malloc(sizeof(*child));
     if (child == 0) abort();
-    *child = (OwnerChild){value, 0};
+    *child = (OwnerChild){.value = value, .subscribe = owner_watch_child};
     return child;
 }
 void owner_child_free(OwnerChild *child) { if (child != 0) { atomic_fetch_add(&children_destroyed, 1); free(child); } }
@@ -52,17 +53,96 @@ OwnerBase *owner_result_base(OwnerResult value) { return (OwnerBase *) value.fir
 OwnerBase *owner_result_last_base(OwnerResult value) { return (OwnerBase *) value.second; }
 int owner_base_value(OwnerBase *value) { return ((OwnerChild *) value)->value; }
 static _Atomic int watch_calls;
+typedef struct OwnerWatch {
+    OwnerChild *child;
+    void (*callback)(void *);
+    void *data;
+    void (*release)(void *);
+    void (*replaced)(OwnerChild *, void *);
+    void *replaced_data;
+} OwnerWatch;
+static OwnerWatch watches[64];
+static pthread_mutex_t watch_lock = PTHREAD_MUTEX_INITIALIZER;
+static OwnerWatch *owner_watch_slot(OwnerChild *child) {
+    OwnerWatch *empty = 0;
+    for (size_t i = 0; i < sizeof(watches) / sizeof(watches[0]); i++) {
+        if (watches[i].child == child) return &watches[i];
+        if (watches[i].child == 0 && empty == 0) empty = &watches[i];
+    }
+    if (empty == 0) abort();
+    empty->child = child;
+    return empty;
+}
 void owner_watch_child(OwnerChild *child, void (*callback)(void *), void *data, void (*release)(void *)) {
-    (void) child;
     atomic_fetch_add(&watch_calls, 1);
-    if (callback != 0) callback(data);
-    if (release != 0) release(data);
+    pthread_mutex_lock(&watch_lock);
+    OwnerWatch *slot = owner_watch_slot(child);
+    void (*previous)(void *) = slot->release;
+    void *previous_data = slot->data;
+    slot->callback = callback;
+    slot->data = data;
+    slot->release = release;
+    if (callback == 0 && slot->replaced == 0) *slot = (OwnerWatch){};
+    pthread_mutex_unlock(&watch_lock);
+    if (previous != 0) previous(previous_data);
 }
 void owner_replace_child(OwnerChild *child, void (*callback)(OwnerChild *, void *), void *data) {
     atomic_fetch_add(&watch_calls, 1);
-    if (callback != 0) callback(child, data);
+    pthread_mutex_lock(&watch_lock);
+    OwnerWatch *slot = owner_watch_slot(child);
+    slot->replaced = callback;
+    slot->replaced_data = data;
+    if (callback == 0 && slot->callback == 0) *slot = (OwnerWatch){};
+    pthread_mutex_unlock(&watch_lock);
 }
 int owner_watch_calls(void) { return atomic_load(&watch_calls); }
+void owner_watch_input(OwnerChild *const *input, int count, void (*callback)(void *), void *data, void (*release)(void *)) {
+    if (count != 2) abort();
+    owner_watch_child(input[0], callback, data, release);
+}
+void owner_keep_input(OwnerChild *const *input, int count, OwnerChild *(*callback)(void *), void *data, void (*release)(void *)) {
+    if (count != 2) abort();
+    (void) input;
+    atomic_fetch_add(&watch_calls, 1);
+    owner_keep_child(callback, data, release);
+}
+int owner_fire_child(OwnerChild *child) {
+    pthread_mutex_lock(&watch_lock);
+    OwnerWatch copy = {};
+    for (size_t i = 0; i < sizeof(watches) / sizeof(watches[0]); i++)
+        if (watches[i].child == child) { copy = watches[i]; break; }
+    pthread_mutex_unlock(&watch_lock);
+    if (copy.callback != 0) copy.callback(copy.data);
+    pthread_mutex_lock(&watch_lock);
+    copy = (OwnerWatch){};
+    for (size_t i = 0; i < sizeof(watches) / sizeof(watches[0]); i++)
+        if (watches[i].child == child) { copy = watches[i]; break; }
+    pthread_mutex_unlock(&watch_lock);
+    if (copy.replaced != 0) copy.replaced(child, copy.replaced_data);
+    return child->value;
+}
+int owner_fire_all(void) {
+    int total = 0;
+    for (size_t i = 0; i < sizeof(watches) / sizeof(watches[0]); i++) {
+        pthread_mutex_lock(&watch_lock);
+        OwnerChild *child = watches[i].child;
+        pthread_mutex_unlock(&watch_lock);
+        if (child != 0) total += owner_fire_child(child);
+    }
+    return total;
+}
+void owner_clear_watches(void) {
+    for (size_t i = 0; i < sizeof(watches) / sizeof(watches[0]); i++) {
+        pthread_mutex_lock(&watch_lock);
+        OwnerWatch copy = watches[i];
+        watches[i].callback = 0;
+        watches[i].data = 0;
+        watches[i].release = 0;
+        if (watches[i].replaced == 0) watches[i] = (OwnerWatch){};
+        pthread_mutex_unlock(&watch_lock);
+        if (copy.release != 0) copy.release(copy.data);
+    }
+}
 void owner_lend_result(void (*callback)(OwnerResult, void *), void *data) {
     OwnerResult value = owner_result_new(80);
     callback(value, data);

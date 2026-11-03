@@ -17,11 +17,48 @@ export default {
 		},
 		OwnerChild: {
 			handle: { destroy: "owner_child_free", collect: true, views: ["OwnerBase"] },
-			fields: { next: { handle: { lifetime: "owner" } } },
+			fields: {
+				next: { handle: { lifetime: "owner" } },
+				subscribe: {
+					callable: {
+						lifetime: "owner",
+						params: {
+							"2": {
+								nullable: true,
+								callback: { data: "3", release: "4", queued: "wait" },
+							},
+						},
+					},
+				},
+			},
 		},
 		OwnerLeaf: { handle: {}, fields: { next: { handle: { lifetime: "owner" } } } },
 	},
 	functions: {
+		owner_watch_input: {
+			params: {
+				input: { array: { length: "count" } },
+				callback: {
+					nullable: true,
+					callback: { data: "data", release: "release", queued: "wait" },
+				},
+			},
+			async: "watchInputAsync",
+		},
+		owner_keep_input: {
+			params: {
+				input: { array: { length: "count" } },
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						queued: "wait",
+						returns: { lifetime: "registration" },
+					},
+				},
+			},
+			async: "keepInputAsync",
+		},
 		owner_library_owned: { async: "libraryOwnedAsync" },
 		owner_library_callback: {
 			params: { callback: { callback: { data: "data" } } },

@@ -1903,8 +1903,10 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Support transactional transfer of independently owned compound fields and kept
-      callback registrations tied to borrowed child lifetimes.
+- [ ] Support transactional transfer of independently owned compound fields.
+
+- [ ] Support callback registrations on borrowed children whose only C release path
+      destroys the root, without requiring a separate unregistration operation.
 
 - [ ] Preserve existing ownership when an owned C return aliases a known resource
       and conversion is abandoned after a callback throws or an async call is dropped.

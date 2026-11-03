@@ -469,6 +469,8 @@ typedef struct MalFfiCallback {
     const void *thread_identity;
     /** Native result copies outlive callback frames and the binding's result conversion. */
     void *results;
+    /** Borrowed inputs and their roots stay open until a retained context retires. */
+    void *inputs;
     bool results_accepting;
     /** A keyed registration cannot keep its own resource alive through a result. */
     void *result_owner;
@@ -687,8 +689,8 @@ void mal_ffi_inputs_unroot(MalFfiInputs *inputs);
 void mal_ffi_inputs_release(MalVm *vm, MalFfiInputs *inputs, const MalFfiSite *site, bool check);
 bool mal_ffi_input_handle(MalVm *vm, MalFfiInputs *inputs, MalValue value,
     const MalFfiHandleType *type, bool nullable, const MalFfiSite *site, void **out);
-/** Kept callbacks cannot publish pointers whose registration lacks an owning lifetime. */
-bool mal_ffi_retained_owners(MalVm *vm, MalValue value, const MalFfiInputs *inputs,
+/** Lease owner-bound inputs before publishing a retained callback to C. */
+bool mal_ffi_callback_retain_owners(MalVm *vm, MalFfiCallback *callback, MalValue value, const MalFfiInputs *inputs,
     const MalFfiSite *site);
 
 #endif

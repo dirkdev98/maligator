@@ -1,6 +1,11 @@
 #pragma once
 typedef struct OwnerBase OwnerBase;
-typedef struct OwnerChild { int value; struct OwnerChild *next; } OwnerChild;
+typedef struct OwnerChild OwnerChild;
+struct OwnerChild {
+    int value;
+    OwnerChild *next;
+    void (*subscribe)(OwnerChild *, void (*)(void *), void *, void (*)(void *));
+};
 typedef struct OwnerLeaf { int value; struct OwnerLeaf *next; } OwnerLeaf;
 typedef struct OwnerResult { OwnerChild *first; OwnerChild *second; OwnerChild *empty; OwnerChild *library; int owns_children; int marker; OwnerLeaf *nodes; } OwnerResult;
 OwnerResult owner_result_new(int seed);
@@ -28,6 +33,11 @@ int owner_base_value(OwnerBase *value);
 void owner_watch_child(OwnerChild *child, void (*callback)(void *), void *data, void (*release)(void *));
 void owner_replace_child(OwnerChild *child, void (*callback)(OwnerChild *, void *), void *data);
 int owner_watch_calls(void);
+void owner_watch_input(OwnerChild *const *input, int count, void (*callback)(void *), void *data, void (*release)(void *));
+void owner_keep_input(OwnerChild *const *input, int count, OwnerChild *(*callback)(void *), void *data, void (*release)(void *));
+int owner_fire_child(OwnerChild *child);
+int owner_fire_all(void);
+void owner_clear_watches(void);
 void owner_lend_result(void (*callback)(OwnerResult, void *), void *data);
 int owner_visit_result(OwnerChild *(*callback)(void *), void *data);
 OwnerResult owner_result_reused(int seed);
