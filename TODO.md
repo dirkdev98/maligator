@@ -1903,7 +1903,7 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Extend transactional conversion to resource-bearing arrays and tagged shapes.
+- [ ] Extend transactional conversion to counted arrays of owned records and tagged shapes.
       Preserve ownership and type views through allocation failure
       after partial conversion.
 

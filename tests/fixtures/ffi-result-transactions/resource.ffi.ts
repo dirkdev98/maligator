@@ -4,6 +4,16 @@ export default {
 	headers: ["resource.h"],
 	find: [{ includeDirs: ["."], sources: ["resource.c"] }],
 	types: {
+		TxGrid: { fields: { tail: { handle: { owned: true } } } },
+		TxPolicyFields: {
+			fields: { first: { handle: { owned: true } }, second: { handle: { owned: true } } },
+		},
+		TxFreshRow: {
+			fields: {
+				owned: { handle: { owned: true } },
+				fresh: { handle: { owned: true, fresh: true } },
+			},
+		},
 		TxPool: { handle: { destroy: "tx_pool_destroy", collect: false } },
 		TxChoice: { shape: { member: "fields" } },
 		TxConstChoice: { shape: { member: "fields" } },
@@ -40,6 +50,41 @@ export default {
 		},
 	},
 	functions: {
+		tx_policy_capacity: {
+			returns: { array: { length: "length" } },
+			params: { grid: { out: true } },
+			async: "policyCapacityAsync",
+		},
+		tx_fresh_capacity: {
+			returns: { array: { length: "length" } },
+			params: { close: { callback: {} }, grid: { out: true } },
+			async: "freshCapacityAsync",
+		},
+		tx_policy_wait: { async: "policyWaitAsync" },
+		tx_grid: {
+			params: {
+				alias: { out: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "gridAsync",
+		},
+		tx_grid_arm: { params: { callback: { callback: {} } } },
+		tx_grid_out: { params: { rows: { out: true } } },
+		tx_grid_visit: { params: { callback: { callback: { data: "data" } } } },
+		tx_grid_wait: { async: "gridWaitAsync" },
+		tx_policy_grid: {
+			params: { message: { out: true, string: { length: "length" } } },
+			async: "policyGridAsync",
+		},
+		tx_fresh_grid: {
+			returns: { borrowed: true },
+			params: {
+				close: { callback: {} },
+				grid: { out: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "freshGridAsync",
+		},
 		tx_pool_create: { returns: { fresh: true } },
 		tx_pool_peek: { returns: { borrowed: true } },
 		tx_pool_reentry: {

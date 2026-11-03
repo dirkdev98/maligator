@@ -739,6 +739,7 @@ typedef struct MalFfiResultClaim {
     bool fresh;
     bool cleanup;
     bool handed_off;
+    bool inventoried;
 } MalFfiResultClaim;
 
 typedef struct MalFfiResults {
@@ -762,6 +763,8 @@ void mal_ffi_results_init(MalFfiResults *results, MalFfiResultClaim *claims,
     MalValue *handles, int32_t capacity);
 /** Grow before inventory; raw resources still belong to the caller if reservation fails. */
 bool mal_ffi_results_reserve(MalVm *vm, MalFfiResults *results, uint64_t capacity);
+/** Register alias freshness before ordered claims choose their type and ownership. */
+void mal_ffi_result_hint(MalFfiResults *results, const MalFfiHandleType *type, void *value);
 void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
     const MalFfiHandleType *type, void *value, bool owned, bool fresh);
 MalValue mal_ffi_result_handle(MalVm *vm, MalFfiResults *results,

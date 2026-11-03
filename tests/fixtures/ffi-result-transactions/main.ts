@@ -1,6 +1,7 @@
 /* oxlint-disable no-console -- Reports observable conversion and ownership behavior. */
 import * as c from "maligator:ffi/transactions";
 import { createWorkerUrl, Worker } from "maligator:workers";
+import { checkArrays } from "./arrays.ts";
 function check(value: boolean, message: string): asserts value {
 	if (!value) throw new Error(message);
 }
@@ -1189,4 +1190,5 @@ for (const drop of [() => Promise.resolve(c.tx_native_drop()), c.nativeDropAsync
 		"overlapping pool generations each destroy once",
 	);
 }
+await checkArrays();
 console.log("result transactions passed");

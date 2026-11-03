@@ -1,6 +1,10 @@
 import { ffiIntoSymbol } from "../build-config-values.ts";
 import type { FfiDirectEntry, FfiDirectResult } from "../build-config-values.ts";
-import { hasOwnedRecordFields, supportsResultTransaction } from "./binding-plan.ts";
+import {
+	hasOwnedRecordFields,
+	hasResultHandles,
+	supportsResultTransaction,
+} from "./binding-plan.ts";
 import type {
 	BindingPlan,
 	BoundFunction,
@@ -14,6 +18,22 @@ import type { CModel } from "./c-model.ts";
 import { cRecordHasConstMembers, resolveCType } from "./c-model.ts";
 import { formatCDeclaration } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
+
+type ResourceIndex = {
+	readonly kind: "index";
+	readonly count: string;
+	readonly nullable: boolean;
+};
+type ResourceStep = { readonly kind: "field"; readonly name: string } | ResourceIndex;
+interface ResultResource {
+	readonly value: Extract<JsValue, { kind: "handle" }>;
+	readonly expression: string;
+	readonly steps: ReadonlyArray<ResourceStep>;
+}
+
+function resourceIndexes(resource: ResultResource): ReadonlyArray<ResourceIndex> {
+	return resource.steps.filter((step) => step.kind === "index");
+}
 
 /** The generated C that implements `maligator:ffi/<library>`. */
 export interface BindingUnit {
@@ -844,6 +864,7 @@ class BindingWriter {
 		array: string,
 		index: string,
 		lent: boolean | string,
+		results?: string,
 	): Array<string> {
 		const element = this.#fresh("element");
 		const roots = this.#fresh("roots");
@@ -852,7 +873,7 @@ class BindingWriter {
 			`MalValue ${element} = mal_ffi_undefined();`,
 			`MalFfiRoots ${roots};`,
 			`mal_ffi_root(&${roots}, &${element}, 1);`,
-			...this.#produce(value, expression, element, lent).map((line) =>
+			...this.#produce(value, expression, element, lent, results).map((line) =>
 				line.replaceAll(
 					"goto mal_done;",
 					`{ mal_ffi_unroot(&${roots}); goto mal_done; }`,
@@ -900,6 +921,7 @@ class BindingWriter {
 				target,
 				index,
 				lent,
+				results,
 			).map((line) => `\t${line}`),
 			"}",
 		];
@@ -1929,7 +1951,7 @@ class BindingWriter {
 			// The caller must retire its output root span even when an element throws.
 			return [
 				"if (!mal_ffi_threw(vm)) {",
-				...this.#produce(value, expression, target).map(
+				...this.#produce(value, expression, target, false, results).map(
 					(line) => `\t${line.replaceAll("goto mal_done;", `goto ${done};`)}`,
 				),
 				`${done}:;`,
@@ -1956,6 +1978,7 @@ class BindingWriter {
 							array,
 							index,
 							false,
+							results,
 						).map((line) => `\t\t\t${line.replaceAll("goto mal_done;", `goto ${done};`)}`)
 					: [
 							`\t\t\tmal_ffi_set_element(vm, ${array}, ${index}, ${results !== undefined && value.of.kind === "handle" ? `mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.of.name}, (void *) ((${expression})[${index}]), ${value.of.owned}, ${value.of.fresh === true})` : this.write(value.of, `(${expression})[${index}]`)});`,
@@ -2492,7 +2515,7 @@ class BindingWriter {
 			binding,
 			"mal_return",
 			(index) => `mal_output_${index}`,
-		).filter((group) => group.count === undefined).length;
+		).filter((group) => resourceIndexes(group).length === 0).length;
 	}
 
 	#resultResources(
@@ -2501,42 +2524,48 @@ class BindingWriter {
 		output: (index: number) => string,
 		context = "",
 		ownedOnly = true,
-	): Array<{
-		value: Extract<JsValue, { kind: "handle" }>;
-		expression: string;
-		count?: string;
-	}> {
+	): Array<ResultResource> {
 		const collect = (
 			value: JsValue,
 			expression: string,
+			steps: ReadonlyArray<ResourceStep> = [],
 			count?: number,
-		): Array<{
-			value: Extract<JsValue, { kind: "handle" }>;
-			expression: string;
-			count?: string;
-		}> => {
+		): Array<ResultResource> => {
+			if (!hasResultHandles(value, this.#plan)) return [];
 			if (value.kind === "record")
 				return this.#record(value.name).fields.flatMap((field) =>
-					collect(field.value, `(${expression}).${field.name}`),
+					collect(field.value, expression, [
+						...steps,
+						{ kind: "field", name: field.name },
+					]),
 				);
 			if (value.kind === "union") {
 				const union = this.#plan.unions.get(value.name)!;
-				return collect(value.of, `(${expression}).${union.member.name}`);
+				return collect(value.of, expression, [
+					...steps,
+					{ kind: "field", name: union.member.name },
+				]);
 			}
-			const element = value.kind === "sequence" ? value.of : value;
+			if (value.kind === "array" || value.kind === "sequence") {
+				const length =
+					value.kind === "array"
+						? String(value.length)
+						: countValue(binding, count, context);
+				if (length === undefined) throw new Error("resource array without a count");
+				return collect(value.of, expression, [
+					...steps,
+					{ kind: "index", count: length, nullable: value.kind === "sequence" },
+				]);
+			}
 			if (
-				element.kind !== "handle" ||
-				(ownedOnly &&
-					(!element.owned || this.#handle(element.name).destroy === undefined)) ||
-				this.#handle(element.name).representation !== "pointer" ||
-				element.owner !== undefined ||
-				element.lifetime !== undefined
+				value.kind !== "handle" ||
+				(ownedOnly && (!value.owned || this.#handle(value.name).destroy === undefined)) ||
+				this.#handle(value.name).representation !== "pointer" ||
+				value.owner !== undefined ||
+				value.lifetime !== undefined
 			)
 				return [];
-			if (value.kind !== "sequence") return [{ value: element, expression }];
-			const length = countValue(binding, count, context);
-			if (length === undefined) throw new Error("resource array without a count");
-			return [{ value: element, expression, count: length }];
+			return [{ value, expression, steps }];
 		};
 		return [
 			{ value: binding.returns, expression: result, count: binding.resultCount },
@@ -2545,48 +2574,88 @@ class BindingWriter {
 				expression: output(index),
 				count: entry.count,
 			})),
-		].flatMap(({ value, expression, count }) => collect(value, expression, count));
+		].flatMap(({ value, expression, count }) => collect(value, expression, [], count));
 	}
 
 	#resultFreshHints(
 		binding: BoundFunction,
 		result: string,
 		output: (index: number) => string,
-	): Array<{ value: Extract<JsValue, { kind: "handle" }>; expression: string }> {
-		const collect = (
-			value: JsValue,
+		context = "",
+	): Array<ResultResource> {
+		return this.#resultResources(binding, result, output, context, false).filter(
+			(resource) => resource.value.fresh === true,
+		);
+	}
+
+	#resourceExpression(
+		resource: ResultResource,
+		coordinates: ReadonlyMap<ResourceIndex, string>,
+		stop?: ResourceIndex,
+	): string {
+		let expression = resource.expression;
+		for (const step of resource.steps) {
+			if (step === stop) break;
+			expression =
+				step.kind === "field"
+					? `(${expression}).${step.name}`
+					: `(${expression})[${coordinates.get(step)!}]`;
+		}
+		return expression;
+	}
+
+	#walkResources(
+		resources: ReadonlyArray<ResultResource>,
+		visit: (
+			resource: ResultResource,
 			expression: string,
-		): Array<{ value: Extract<JsValue, { kind: "handle" }>; expression: string }> => {
-			if (value.kind === "record")
-				return this.#record(value.name).fields.flatMap((field) =>
-					collect(field.value, `(${expression}).${field.name}`),
-				);
-			if (value.kind === "union") {
-				const union = this.#plan.unions.get(value.name)!;
-				return collect(value.of, `(${expression}).${union.member.name}`);
+			coordinates: ReadonlyMap<ResourceIndex, string>,
+			position: number,
+		) => ReadonlyArray<string>,
+	): Array<string> {
+		const lines: Array<string> = [];
+		const active: Array<ResourceIndex> = [];
+		const coordinates = new Map<ResourceIndex, string>();
+		const close = (length: number) => {
+			while (active.length > length) {
+				coordinates.delete(active.pop()!);
+				lines.push(`${"\t".repeat(active.length)}}`);
 			}
-			return value.kind === "handle" &&
-				value.fresh === true &&
-				this.#handle(value.name).representation === "pointer"
-				? [{ value, expression }]
-				: [];
 		};
-		return [
-			{ value: binding.returns, expression: result },
-			...binding.outputs.map((entry, index) => ({
-				value: entry.value,
-				expression: output(index),
-			})),
-		].flatMap(({ value, expression }) => collect(value, expression));
+		resources.forEach((resource, position) => {
+			const indexes = resourceIndexes(resource);
+			// Shared loops preserve C row order across sibling resource fields.
+			let shared = 0;
+			while (shared < active.length && active[shared] === indexes[shared]) shared++;
+			close(shared);
+			for (const step of indexes.slice(shared)) {
+				const index = this.#fresh("resource_index");
+				const guard = step.nullable
+					? `if ((${this.#resourceExpression(resource, coordinates, step)}) != nullptr && (uint64_t) (${step.count}) <= INT32_MAX) `
+					: "";
+				lines.push(
+					`${"\t".repeat(active.length)}${guard}for (uint64_t ${index} = 0; ${index} < (uint64_t) (${step.count}); ${index}++) {`,
+				);
+				coordinates.set(step, index);
+				active.push(step);
+			}
+			lines.push(
+				...visit(
+					resource,
+					this.#resourceExpression(resource, coordinates),
+					coordinates,
+					position,
+				).map((line) => `${"\t".repeat(active.length)}${line}`),
+			);
+		});
+		close(0);
+		return lines;
 	}
 
 	#resourceFresh(
-		value: Extract<JsValue, { kind: "handle" }>,
+		value: ResultResource["value"],
 		expression: string,
-		hints: ReadonlyArray<{
-			value: Extract<JsValue, { kind: "handle" }>;
-			expression: string;
-		}>,
+		hints: ReadonlyArray<ResultResource>,
 	): string {
 		if (value.fresh === true) return "true";
 		return hints.length === 0
@@ -2594,62 +2663,57 @@ class BindingWriter {
 			: hints
 					.map(
 						(hint) =>
-							`mal_ffi_same_resource(&mal_ffi_type_${value.name}, (void *) (${expression}), &mal_ffi_type_${hint.value.name}, (void *) (${hint.expression}))`,
+							`mal_ffi_same_resource(&mal_ffi_type_${value.name}, (void *) (${expression}), &mal_ffi_type_${hint.value.name}, (void *) (${this.#resourceExpression(hint, new Map())}))`,
 					)
 					.join(" || ");
 	}
 
 	#discardResources(
-		groups: ReadonlyArray<{
-			value: Extract<JsValue, { kind: "handle" }>;
-			expression: string;
-			count?: string;
-		}>,
+		groups: ReadonlyArray<ResultResource>,
 		vm: string,
 		discards: string,
-		hints: ReadonlyArray<{
-			value: Extract<JsValue, { kind: "handle" }>;
-			expression: string;
-		}> = [],
+		hints: ReadonlyArray<ResultResource> = [],
 	): Array<string> {
-		return groups.flatMap((group, position) => {
-			const index = this.#fresh("discard_index");
-			const pointer =
-				group.count === undefined ? group.expression : `(${group.expression})[${index}]`;
+		return this.#walkResources(groups, (group, pointer, coordinates, position) => {
 			const duplicate = this.#fresh("discard_duplicate");
 			const fresh = this.#fresh("discard_fresh");
-			const compare = (other: (typeof groups)[number], bound?: string): Array<string> => {
-				const prior = this.#fresh("discard_prior");
-				const otherPointer =
-					other.count === undefined
-						? other.expression
-						: `(${other.expression})[${prior}]`;
-				const match = `mal_ffi_same_resource(&mal_ffi_type_${group.value.name}, (void *) (${pointer}), &mal_ffi_type_${other.value.name}, (void *) (${otherPointer}))`;
-				const statement = `${duplicate} = true;`;
-				if (other.count === undefined) return [`if (${match}) ${statement}`];
-				const length = bound === undefined ? `(uint64_t) (${other.count})` : bound;
-				return [
-					`if ((${other.expression}) != nullptr && (uint64_t) (${other.count}) <= INT32_MAX)`,
-					`	for (uint64_t ${prior} = 0; ${prior} < ${length}; ${prior}++)`,
-					`		if (${match}) ${statement}`,
-				];
-			};
-			const body = [
+			const indexes = resourceIndexes(group);
+			const indexedHints = hints.some((hint) => resourceIndexes(hint).length > 0);
+			const freshness =
+				indexedHints && group.value.fresh !== true
+					? [
+							`bool ${fresh} = false;`,
+							...this.#walkResources(hints, (hint, other) => [
+								`if (mal_ffi_same_resource(&mal_ffi_type_${group.value.name}, (void *) (${pointer}), &mal_ffi_type_${hint.value.name}, (void *) (${other}))) ${fresh} = true;`,
+							]),
+						]
+					: [
+							`bool ${fresh} = ${group.value.fresh === true ? "true" : this.#resourceFresh(group.value, pointer, hints)};`,
+						];
+			return [
 				`bool ${duplicate} = false;`,
-				`bool ${fresh} = ${this.#resourceFresh(group.value, pointer, hints)};`,
-				...groups.slice(0, position).flatMap((other) => compare(other)),
-				...(group.count === undefined ? [] : compare(group, index)),
+				...freshness,
+				...groups.flatMap((other, otherPosition) => {
+					const otherIndexes = resourceIndexes(other);
+					let shared = 0;
+					while (shared < indexes.length && indexes[shared] === otherIndexes[shared])
+						shared++;
+					if (shared === 0 && otherPosition >= position) return [];
+					return this.#walkResources([other], (prior, otherPointer, otherCoordinates) => {
+						// A later field in an earlier row can own this alias first.
+						let before = otherPosition < position ? "true" : "false";
+						for (const step of indexes.slice(0, shared).toReversed()) {
+							const current = coordinates.get(step)!;
+							const previous = otherCoordinates.get(step)!;
+							before = `(${previous} < ${current} || (${previous} == ${current} && ${before}))`;
+						}
+						return [
+							`if (${before} && mal_ffi_same_resource(&mal_ffi_type_${group.value.name}, (void *) (${pointer}), &mal_ffi_type_${prior.value.name}, (void *) (${otherPointer}))) ${duplicate} = true;`,
+						];
+					});
+				}),
 				`if (!${duplicate}) mal_ffi_discard_resource(${vm}, ${discards}, &mal_ffi_type_${group.value.name}, (void *) (${pointer}), ${fresh});`,
 			];
-			return group.count === undefined
-				? body
-				: [
-						`if ((${group.expression}) != nullptr && (uint64_t) (${group.count}) <= INT32_MAX) {`,
-						`	for (uint64_t ${index} = 0; ${index} < (uint64_t) (${group.count}); ${index}++) {`,
-						...body.map((line) => `		${line}`),
-						"	}",
-						"}",
-					];
 		});
 	}
 
@@ -2691,45 +2755,60 @@ class BindingWriter {
 		context = "",
 	): Array<string> {
 		const groups = this.#resultResources(binding, result, output, context, false);
-		const hints = this.#resultFreshHints(binding, result, output);
-		const inventory = groups.flatMap((group) => {
-			const claim = (pointer: string) =>
-				`mal_ffi_result_claim(vm, &mal_results, &mal_ffi_type_${group.value.name}, (void *) (${pointer}), ${group.value.owned}, ${this.#resourceFresh(group.value, pointer, hints)});`;
-			if (group.count === undefined) return [claim(group.expression)];
-			const index = this.#fresh("result_index");
-			return [
-				`if ((${group.expression}) != nullptr)`,
-				`	for (uint64_t ${index} = 0; ${index} < (uint64_t) (${group.count}); ${index}++)`,
-				`		${claim(`(${group.expression})[${index}]`)}`,
-			];
-		});
-		const arrays = groups.filter((group) => group.count !== undefined);
+		const hints = this.#resultFreshHints(binding, result, output, context);
+		const indexedHints = hints.some((hint) => resourceIndexes(hint).length > 0);
+		const inventory = [
+			...(indexedHints
+				? this.#walkResources(hints, (hint, pointer) => [
+						`mal_ffi_result_hint(&mal_results, &mal_ffi_type_${hint.value.name}, (void *) (${pointer}));`,
+					])
+				: []),
+			...this.#walkResources(groups, (group, pointer) => [
+				`mal_ffi_result_claim(vm, &mal_results, &mal_ffi_type_${group.value.name}, (void *) (${pointer}), ${group.value.owned}, ${indexedHints ? String(group.value.fresh === true) : this.#resourceFresh(group.value, pointer, hints)});`,
+			]),
+		];
+		const arrays = groups.filter((group) => resourceIndexes(group).length > 0);
 		if (arrays.length === 0) return inventory;
 		const capacity = this.#fresh("result_capacity");
 		const ready = this.#fresh("result_ready");
 		return [
 			`uint64_t ${capacity} = ${groups.length - arrays.length};`,
 			`bool ${ready} = !mal_ffi_threw(vm);`,
-			...arrays.flatMap((group) => [
-				`if ((${group.expression}) != nullptr) {`,
-				`	if ((uint64_t) (${group.count}) > INT32_MAX) {`,
-				`		if (!mal_ffi_threw(vm)) mal_ffi_check_count(vm, (size_t) (${group.count}), 32, true, &mal_site_result);`,
-				`		${ready} = false;`,
-				`	} else if ((uint64_t) (${group.count}) > UINT64_MAX - ${capacity}) {`,
-				`		if (!mal_ffi_threw(vm)) mal_ffi_out_of_memory(vm);`,
-				`		${ready} = false;`,
-				`	} else ${capacity} += (uint64_t) (${group.count});`,
-				"}",
-			]),
+			...arrays.flatMap((group) => {
+				const count = this.#fresh("result_count");
+				const nullable = resourceIndexes(group).find((step) => step.nullable);
+				return [
+					...(nullable === undefined
+						? []
+						: [
+								`if ((${this.#resourceExpression(group, new Map(), nullable)}) != nullptr) {`,
+							]),
+					`uint64_t ${count} = 1;`,
+					...resourceIndexes(group).flatMap((step) => [
+						`if ((uint64_t) (${step.count}) > INT32_MAX) {`,
+						`\tif (!mal_ffi_threw(vm)) mal_ffi_check_count(vm, (size_t) (${step.count}), 32, true, &mal_site_result);`,
+						`\t${ready} = false;`,
+						`} else if ((uint64_t) (${step.count}) != 0 && ${count} > UINT64_MAX / (uint64_t) (${step.count})) {`,
+						`\tif (!mal_ffi_threw(vm)) mal_ffi_out_of_memory(vm);`,
+						`\t${ready} = false;`,
+						`} else ${count} *= (uint64_t) (${step.count});`,
+					]),
+					`if (${count} > UINT64_MAX - ${capacity}) {`,
+					`\tif (!mal_ffi_threw(vm)) mal_ffi_out_of_memory(vm);`,
+					`\t${ready} = false;`,
+					`} else ${capacity} += ${count};`,
+					...(nullable === undefined ? [] : ["}"]),
+				];
+			}),
 			`if (${ready} && mal_ffi_results_reserve(vm, &mal_results, ${capacity})) {`,
-			...inventory.map((line) => `	${line}`),
+			...inventory.map((line) => `\t${line}`),
 			"} else {",
 			...this.#discardResources(
 				this.#resultResources(binding, result, output, context),
 				"vm",
 				"nullptr",
 				hints,
-			).map((line) => `	${line}`),
+			).map((line) => `\t${line}`),
 			"}",
 		];
 	}
@@ -2787,7 +2866,7 @@ class BindingWriter {
 			(index) => `mal_output_${index}`,
 			"",
 			false,
-		).filter((group) => group.count === undefined).length;
+		).filter((group) => resourceIndexes(group).length === 0).length;
 		const transactional = this.#transactionalResults(binding, callable === undefined);
 		const results = transactional ? "&mal_results" : undefined;
 		if (discardCount > 0 && !transactional)
@@ -3756,7 +3835,7 @@ class BindingWriter {
 			(index) => `mal_output_${index}`,
 			"",
 			false,
-		).filter((group) => group.count === undefined).length;
+		).filter((group) => resourceIndexes(group).length === 0).length;
 		const transactional = this.#transactionalResults(binding);
 		const results = transactional ? "&mal_results" : undefined;
 		const callbackArguments: Array<string> = [];
@@ -3783,7 +3862,7 @@ class BindingWriter {
 				resourceGroups,
 				"nullptr",
 				"&mal_ctx->mal_discards",
-				this.#resultFreshHints(binding, returnValue, outputValue),
+				this.#resultFreshHints(binding, returnValue, outputValue, "mal_ctx->"),
 			),
 			...[
 				{ value: binding.returns, expression: returnValue },

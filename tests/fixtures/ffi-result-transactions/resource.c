@@ -111,7 +111,9 @@ TxSpecial *tx_special_existing(int bad, char **text, const char **message, size_
     return (TxSpecial *) tx_reentry_existing(bad, text, message, length);
 }
 TxSpecial *tx_special_peek(void) { return (TxSpecial *) current; }
-void tx_special_destroy(TxSpecial *value) { tx_destroy((TxResource *) value); }
+static _Atomic int special_destroyed;
+void tx_special_destroy(TxSpecial *value) { special_destroyed++; tx_destroy((TxResource *) value); }
+int tx_special_destroyed(void) { return special_destroyed; }
 int tx_special_read(TxSpecial *value) { return ((TxResource *) value)->value; }
 
 static TxRecord record_new(void) {
@@ -292,3 +294,81 @@ int tx_pool_generation(TxPool *value) { return value->generation; }
 void tx_pool_watch(TxPool *value, void (*callback)(TxPool *)) { if (value != &pool) abort(); pool_watch = callback; }
 void tx_pool_signal(TxPool *value) { if (value != &pool) abort(); if (pool_watch != NULL) pool_watch(value); }
 void tx_pool_clear(void) { tx_pool_destroy(&pool); }
+
+static TxGrid grid_value(TxResource *first, TxResource *second) {
+    TxGrid grid = {.tail = first};
+    grid.rows[0][0] = (TxFields) {first, second, NULL};
+    grid.rows[0][1] = (TxFields) {second, first, NULL};
+    grid.rows[1][0] = (TxFields) {NULL, second, first};
+    grid.rows[1][1] = (TxFields) {first, NULL, second};
+    return grid;
+}
+TxGrid tx_grid(int bad, int existing, TxResource **alias, const char **message, size_t *length) {
+    TxResource *first = existing ? current : tx_create(157);
+    *alias = create(163);
+    *message = "x"; *length = bad ? (size_t)-1 : 1;
+    return grid_value(first, *alias);
+}
+TxChoiceGrid tx_choice_grid(void) {
+    TxFields fields = tx_fields();
+    return (TxChoiceGrid) {{{.fields = fields}, {.fields = fields}}};
+}
+void tx_grid_out(TxFields (*rows)[2]) {
+    TxFields fields = tx_fields();
+    (*rows)[0] = fields; (*rows)[1] = fields;
+}
+int tx_grid_sum(TxGrid grid) {
+    return grid.rows[0][0].first->value + grid.rows[1][1].empty->value + grid.tail->value;
+}
+int tx_grid_visit(int (*callback)(TxGrid, void *), void *data) {
+    TxResource *first = create(167), *second = create(173);
+    int result = callback(grid_value(first, second), data);
+    tx_destroy(first); tx_destroy(second);
+    return result;
+}
+static _Atomic int grid_started;
+TxGrid tx_grid_wait(void) {
+    TxGrid grid = grid_value(create(179), create(181));
+    atomic_fetch_add(&grid_started, 1);
+    usleep(150000);
+    return grid;
+}
+int tx_grid_started(void) { return atomic_load(&grid_started); }
+TxPolicyGrid tx_policy_grid(int bad, const char **message, size_t *length) {
+    TxResource *value = create(191);
+    *message = "x"; *length = bad ? (size_t)-1 : 1;
+    return (TxPolicyGrid) {{{NULL, (TxSpecial *) value}, {value, NULL}}};
+}
+TxBase *tx_fresh_grid(int bad, void (*close)(void), TxFreshGrid *grid, const char **message, size_t *length) {
+    close();
+    recycled.value = 193;
+    *message = "x"; *length = bad ? (size_t)-1 : 1;
+    *grid = (TxFreshGrid) {{{(TxSpecial *) &recycled, NULL}, {NULL, &recycled}}};
+    return (TxBase *) &recycled;
+}
+
+TxGrid tx_grid_arm(void (*callback)(void)) {
+    TxGrid grid = grid_value(create(197), create(199));
+    callback();
+    return grid;
+}
+TxPolicyGrid tx_policy_wait(void) {
+    const char *message; size_t length;
+    TxPolicyGrid grid = tx_policy_grid(0, &message, &length);
+    atomic_fetch_add(&grid_started, 1);
+    usleep(150000);
+    return grid;
+}
+static TxResource *invalid_table[1];
+TxResource **tx_policy_capacity(TxPolicyGrid *grid, size_t *length) {
+    const char *message;
+    *grid = tx_policy_grid(0, &message, length);
+    *length = (size_t)-1;
+    return invalid_table;
+}
+TxResource **tx_fresh_capacity(void (*close)(void), TxFreshGrid *grid, size_t *length) {
+    const char *message;
+    tx_fresh_grid(0, close, grid, &message, length);
+    *length = (size_t)-1;
+    return invalid_table;
+}

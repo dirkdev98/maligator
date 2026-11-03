@@ -3562,9 +3562,33 @@ mal_failed:
     return mal_ffi_threw(vm) ? false : mal_ffi_out_of_memory(vm);
 }
 
+static MalFfiResultClaim *ffi_result_insert(MalFfiResults *results,
+    const MalFfiHandleType *type, void *value) {
+    if (results->count == results->capacity) abort();
+    i32 index = results->count++;
+    MalFfiResultClaim *claim = &results->claims[index];
+    *claim = (MalFfiResultClaim) {.type = type, .value = value,
+        .handles = &results->roots.slots[2 * index]};
+    if (results->lookup != nullptr) {
+        usize slot = ffi_handle_slot(ffi_handle_family(type), value, results->lookup_capacity);
+        while (results->lookup[slot] != 0) slot = (slot + 1) & (results->lookup_capacity - 1);
+        results->lookup[slot] = index + 1;
+    }
+    return claim;
+}
+
+void mal_ffi_result_hint(MalFfiResults *results, const MalFfiHandleType *type, void *value) {
+    if (value == nullptr) return;
+    MalFfiResultClaim *claim = ffi_result_find(results, type, value);
+    if (claim == nullptr) claim = ffi_result_insert(results, type, value);
+    claim->fresh = true;
+}
+
 void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
     const MalFfiHandleType *type, void *value, bool owned, bool fresh) {
     if (value == nullptr) return;
+    MalFfiResultClaim *claim = ffi_result_find(results, type, value);
+    fresh |= claim != nullptr && claim->fresh;
     if (!ffi_retired_guard(vm, type, value, fresh)) return;
     if (results->state == nullptr) {
         MalFfiState *state = ffi_state(vm);
@@ -3575,18 +3599,11 @@ void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
             state->results = results;
         }
     }
-    MalFfiResultClaim *claim = ffi_result_find(results, type, value);
-    if (claim == nullptr) {
-        if (results->count == results->capacity) abort();
-        i32 index = results->count++;
-        claim = &results->claims[index];
-        *claim = (MalFfiResultClaim) {.type = type, .value = value,
-            .handles = &results->roots.slots[2 * index]};
-        if (results->lookup != nullptr) {
-            usize slot = ffi_handle_slot(ffi_handle_family(type), value, results->lookup_capacity);
-            while (results->lookup[slot] != 0) slot = (slot + 1) & (results->lookup_capacity - 1);
-            results->lookup[slot] = index + 1;
-        }
+    if (claim == nullptr) claim = ffi_result_insert(results, type, value);
+    if (!claim->inventoried) {
+        // Fresh hints share identity; the first actual claim chooses canonical metadata.
+        claim->type = type;
+        claim->inventoried = true;
         MalFfiHandleObject *open = vm->ffi == nullptr ? nullptr
             : ffi_handle_find(vm->ffi, ffi_handle_family(type), value);
         if (open != nullptr) {

@@ -144,12 +144,14 @@ it("rejects owned fields through an alias of a whole-object handle", () => {
 it.each([
 	{
 		name: "tx_owned_table",
+		status: "needs-facts",
 		declaration: "TxRecord *tx_owned_table(size_t *length);",
 		types: {},
 		facts: { returns: { array: { length: "length" }, free: "tx_text_free" } },
 	},
 	{
 		name: "tx_owned_grid",
+		status: "bound",
 		declaration:
 			"typedef struct TxOwnedGrid { TxFields rows[2]; } TxOwnedGrid; TxOwnedGrid tx_owned_grid(void);",
 		types: {},
@@ -157,14 +159,15 @@ it.each([
 	},
 	{
 		name: "tx_owned_choice_array",
+		status: "bound",
 		declaration:
 			"typedef union TxOwnedChoice { TxFields fields; int number; } TxOwnedChoice; typedef struct TxOwnedChoices { TxOwnedChoice choices[2]; } TxOwnedChoices; TxOwnedChoices tx_owned_choice_array(void);",
 		types: { TxOwnedChoice: { shape: { member: "fields" } } },
 		facts: {},
 	},
 ])(
-	"keeps unsupported resource-bearing result $name unbound",
-	({ name, declaration, types, facts }) => {
+	"maps resource-bearing result $name as $status",
+	({ name, status, declaration, types, facts }) => {
 		const directory = project("ffi-result-transactions");
 		writeFileSync(join(directory, "resource.h"), `\n${declaration}\n`, { flag: "a" });
 		writeFileSync(
@@ -176,9 +179,7 @@ it.each([
 		const report = JSON.parse(result.stdout) as {
 			functions: Array<{ name: string; status: string }>;
 		};
-		expect(report.functions.find((entry) => entry.name === name)?.status).toBe(
-			"needs-facts",
-		);
+		expect(report.functions.find((entry) => entry.name === name)?.status).toBe(status);
 	},
 );
 it("rejects ownership transfer from a global record getter", () => {

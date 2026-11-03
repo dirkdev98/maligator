@@ -483,7 +483,11 @@ export function supportsResultTransaction(
 				);
 			return supportsResultTransaction(value.of, shapes, "other");
 		case "array":
-			return supportsResultTransaction(value.of, shapes, "other");
+			return supportsResultTransaction(
+				value.of,
+				shapes,
+				hasOwnedRecordFields(value.of, shapes) ? context : "other",
+			);
 		case "union":
 			return supportsResultTransaction(value.of, shapes, context);
 		case "tagged":
@@ -3006,7 +3010,17 @@ class Planner {
 					gap(written.gap);
 					return;
 				}
-				if (written.value.kind === "array" && this.#containsHandle(written.value)) {
+				if (
+					written.value.kind === "array" &&
+					this.#containsHandle(written.value) &&
+					!(
+						hasOwnedRecordFields(written.value, this) &&
+						supportsResultTransaction(written.value, {
+							records: this.records,
+							handles: this.#handles,
+						})
+					)
+				) {
 					gap("resource-bearing array outputs need explicit element ownership");
 					return;
 				}
