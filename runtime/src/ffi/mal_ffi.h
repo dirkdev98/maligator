@@ -719,18 +719,21 @@ typedef struct MalFfiResultClaim {
     uint32_t flags;
     bool fresh;
     bool cleanup;
+    bool handed_off;
 } MalFfiResultClaim;
 
 typedef struct MalFfiResults {
     MalFfiRoots roots;
     MalFfiResultClaim *claims;
+    struct MalFfiResults *previous;
+    void *state;
     int32_t count;
     int32_t capacity;
 } MalFfiResults;
 
 /**
  * Stage pointer ownership until every output and final input check succeeds.
- * Inventory all claims before conversion; conversion must not reenter JavaScript.
+ * Inventory all claims before conversion, including aliases that conversion can expose.
  * Initialize before input roots and finish after their release, in root-stack order.
  */
 void mal_ffi_results_init(MalFfiResults *results, MalFfiResultClaim *claims,

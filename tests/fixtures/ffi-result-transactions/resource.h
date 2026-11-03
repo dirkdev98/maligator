@@ -15,3 +15,31 @@ int tx_destroyed(void);
 TxBase *tx_base(int value);
 int tx_base_read(TxBase *value);
 void tx_invalid(TxManaged *state, TxResource **out);
+
+void tx_watch(void (*callback)(void));
+TxResource *tx_peek(void);
+TxResource *tx_acquire(void);
+TxResource *tx_reentry(int bad, char **text, const char **message, size_t *length);
+void tx_text_free(void *text);
+void tx_register(TxResource *(*callback)(void));
+int tx_registered_value(void);
+
+int tx_read_entries(void);
+void tx_input(TxResource *value, void (*callback)(void *), void *data, void (*release)(void *));
+int tx_input_entries(void);
+
+char *tx_reentry_before(int bad, TxResource **out, const char **message, size_t *length);
+TxResource *tx_reentry_existing(int bad, char **text, const char **message, size_t *length);
+TxResource *tx_recycled(void);
+TxResource *tx_reentry_recycled(int bad, char **text, const char **message, size_t *length);
+
+typedef struct TxParent { TxResource *child; TxResource *library; } TxParent;
+TxParent *tx_parent_new(void);
+void tx_parent_bind(TxParent *parent);
+void tx_parent_destroy(TxParent *parent);
+
+typedef struct TxSpecial TxSpecial;
+TxSpecial *tx_special_existing(int bad, char **text, const char **message, size_t *length);
+TxSpecial *tx_special_peek(void);
+void tx_special_destroy(TxSpecial *value);
+int tx_special_read(TxSpecial *value);

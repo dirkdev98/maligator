@@ -2440,7 +2440,6 @@ class BindingWriter {
 
 	#transactionalResults(binding: BoundFunction): boolean {
 		const safe = (value: JsValue, nested = false): boolean => {
-			if ("free" in value && value.free !== undefined) return false;
 			switch (value.kind) {
 				case "handle":
 					return (

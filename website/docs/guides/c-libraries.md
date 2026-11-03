@@ -335,8 +335,16 @@ storage from a resource whose destruction is still pending.
 Bindings that combine direct resource pointers with copied values transfer ownership
 and publish type views after every output conversion and final managed-input check
 succeeds. A failed conversion releases new resources once and preserves existing
-handles' ownership and views. This guarantee requires outputs without custom `free`
-functions or nested resource handles.
+handles' ownership and views. This guarantee applies to direct resource-pointer
+outputs.
+
+A cleanup function supplied through `free` may call JavaScript. A new alias exposed
+during cleanup is provisional: it supports synchronous reads and leases for callback
+results. Closing it, assigning an owner or library lifetime, passing it to a worker,
+or retaining it as a callback input requires delivery first. Failed delivery closes
+provisional aliases; C result leases preserve native storage until released. A separate
+call that successfully acquires ownership keeps that ownership if the outer conversion
+fails.
 
 For a resource pointer inside a result handle, declare whether the containing resource
 owns its lifetime or the library keeps it alive:

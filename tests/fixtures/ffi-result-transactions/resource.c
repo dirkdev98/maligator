@@ -2,7 +2,10 @@
 #include <stdlib.h>
 struct TxResource { int value; };
 static TxResource *current;
+static TxResource recycled;
 static int destroyed;
+static int read_entries;
+static int input_entries;
 static TxResource *create(int value) {
     TxResource *resource = malloc(sizeof(*resource));
     if (resource == NULL) abort();
@@ -36,10 +39,10 @@ TxResource *tx_arm(void (*callback)(void), TxResource **other) {
 void tx_destroy(TxResource *value) {
     if (current == value) current = NULL;
     destroyed++;
-    free(value);
+    if (value != &recycled) free(value);
 }
 void tx_clear(void) { if (current != NULL) tx_destroy(current); }
-int tx_read(TxResource *value) { return value->value; }
+int tx_read(TxResource *value) { read_entries++; return value->value; }
 int tx_destroyed(void) { return destroyed; }
 
 TxBase *tx_base(int value) { return (TxBase *) tx_borrow(value); }
@@ -48,3 +51,62 @@ void tx_invalid(TxManaged *state, TxResource **out) {
     state->length = (size_t)-1;
     *out = create(47);
 }
+
+static void (*watch)(void);
+static TxResource *registered;
+void tx_watch(void (*callback)(void)) { watch = callback; }
+TxResource *tx_peek(void) { return current; }
+TxResource *tx_acquire(void) { return current; }
+TxResource *tx_reentry(int bad, char **text, const char **message, size_t *length) {
+    *text = malloc(2);
+    if (*text == NULL) abort();
+    (*text)[0] = 'x'; (*text)[1] = 0;
+    *message = "x";
+    *length = bad ? (size_t)-1 : 1;
+    return tx_create(61);
+}
+void tx_text_free(void *text) { if (watch != NULL) watch(); free(text); }
+void tx_register(TxResource *(*callback)(void)) { registered = callback == NULL ? NULL : callback(); }
+int tx_registered_value(void) { return registered == NULL ? -1 : registered->value; }
+
+int tx_read_entries(void) { return read_entries; }
+void tx_input(TxResource *value, void (*callback)(void *), void *data, void (*release)(void *)) {
+    (void) value; (void) callback;
+    input_entries++;
+    release(data);
+}
+int tx_input_entries(void) { return input_entries; }
+
+char *tx_reentry_before(int bad, TxResource **out, const char **message, size_t *length) {
+    char *text;
+    *out = tx_reentry(bad, &text, message, length);
+    return text;
+}
+TxResource *tx_reentry_existing(int bad, char **text, const char **message, size_t *length) {
+    *text = malloc(2);
+    if (*text == NULL) abort();
+    (*text)[0] = 'x'; (*text)[1] = 0;
+    *message = "x";
+    *length = bad ? (size_t)-1 : 1;
+    return current;
+}
+TxResource *tx_recycled(void) { recycled.value = 67; current = &recycled; return current; }
+TxResource *tx_reentry_recycled(int bad, char **text, const char **message, size_t *length) {
+    tx_recycled();
+    return tx_reentry_existing(bad, text, message, length);
+}
+
+TxParent *tx_parent_new(void) {
+    TxParent *parent = calloc(1, sizeof(*parent));
+    if (parent == NULL) abort();
+    return parent;
+}
+void tx_parent_bind(TxParent *parent) { parent->child = current; parent->library = current; }
+void tx_parent_destroy(TxParent *parent) { free(parent); }
+
+TxSpecial *tx_special_existing(int bad, char **text, const char **message, size_t *length) {
+    return (TxSpecial *) tx_reentry_existing(bad, text, message, length);
+}
+TxSpecial *tx_special_peek(void) { return (TxSpecial *) current; }
+void tx_special_destroy(TxSpecial *value) { tx_destroy((TxResource *) value); }
+int tx_special_read(TxSpecial *value) { return ((TxResource *) value)->value; }
