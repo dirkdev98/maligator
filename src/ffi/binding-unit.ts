@@ -1981,7 +1981,7 @@ class BindingWriter {
 							results,
 						).map((line) => `\t\t\t${line.replaceAll("goto mal_done;", `goto ${done};`)}`)
 					: [
-							`\t\t\tmal_ffi_set_element(vm, ${array}, ${index}, ${results !== undefined && value.of.kind === "handle" ? `mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.of.name}, (void *) ((${expression})[${index}]), ${value.of.owned}, ${value.of.fresh === true})` : this.write(value.of, `(${expression})[${index}]`)});`,
+							`\t\t\tmal_ffi_set_element(vm, ${array}, ${index}, ${results !== undefined && value.of.kind === "handle" ? `mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.of.name}, (void *) ((${expression})[${index}]), ${value.of.owned}, ${value.of.fresh === true})` : this.write(value.of, `(${expression})[${index}]`, false, undefined, results)});`,
 						]),
 				"\t\t}",
 				...(value.of.kind === "array" ? [`${done}:;`] : []),

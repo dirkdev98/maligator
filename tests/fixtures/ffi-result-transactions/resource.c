@@ -372,3 +372,84 @@ TxResource **tx_fresh_capacity(void (*close)(void), TxFreshGrid *grid, size_t *l
     *length = (size_t)-1;
     return invalid_table;
 }
+
+static _Atomic int tables_freed, table_started;
+static TxFields *table_value(TxResource *prior) {
+    TxResource *first = prior == NULL ? create(223) : prior;
+    TxResource *second = create(227);
+    TxFields *rows = malloc(2 * sizeof(*rows));
+    if (rows == NULL) abort();
+    rows[0] = (TxFields) {first, second, NULL};
+    rows[1] = (TxFields) {second, first, NULL};
+    return rows;
+}
+TxFields *tx_table(int mode, TxResource *prior, size_t *length, const char **message, size_t *text_length) {
+    *message = "x"; *text_length = mode == 1 ? (size_t)-1 : 1;
+    release_bad = mode == 5;
+    if (mode == 2) { *length = (size_t)-1; return NULL; }
+    if (mode == 3 || mode == 4) {
+        TxFields *rows = calloc(1, sizeof(*rows));
+        if (rows == NULL) abort();
+        *length = mode == 3 ? 0 : (size_t)-1;
+        return rows;
+    }
+    *length = 2;
+    return table_value(prior);
+}
+void tx_table_free(void *table) { tables_freed++; if (watch != NULL) watch(release_bad); free(table); }
+int tx_tables_freed(void) { return atomic_load(&tables_freed); }
+void tx_table_out(TxFields **rows, size_t *length) { *rows = table_value(NULL); *length = 2; release_bad = 0; }
+TxChoice *tx_table_choice(size_t *length) {
+    TxChoice *rows = malloc(2 * sizeof(*rows));
+    if (rows == NULL) abort();
+    TxFields fields = tx_fields();
+    rows[0].fields = fields; rows[1].fields = fields;
+    *length = 2; release_bad = 0;
+    return rows;
+}
+TxFields (*tx_table_grid(size_t *length))[2] {
+    *length = 1; release_bad = 0;
+    return (TxFields (*)[2]) table_value(NULL);
+}
+const TxFields *tx_table_const(size_t *length) { *length = 2; release_bad = 0; return table_value(NULL); }
+TxFields *tx_static_table(size_t *length) {
+    static TxFields rows[2];
+    TxResource *first = create(229), *second = create(233);
+    rows[0] = (TxFields) {first, second, NULL};
+    rows[1] = (TxFields) {second, first, NULL};
+    *length = 2;
+    return rows;
+}
+TxFields *tx_table_arm(void (*callback)(void), size_t *length) {
+    TxFields *rows = table_value(NULL);
+    *length = 2; release_bad = 0;
+    callback();
+    return rows;
+}
+TxFields *tx_table_wait(size_t *length) {
+    TxFields *rows = table_value(NULL);
+    *length = 2; release_bad = 0;
+    atomic_store(&table_started, 1);
+    usleep(150000);
+    return rows;
+}
+int tx_table_started(void) { return atomic_load(&table_started); }
+TxPolicyFields *tx_table_policy(size_t *length) {
+    const char *message; size_t text_length;
+    TxPolicyGrid value = tx_policy_grid(0, &message, &text_length);
+    TxPolicyFields *rows = malloc(sizeof(value.rows));
+    if (rows == NULL) abort();
+    rows[0] = value.rows[0]; rows[1] = value.rows[1];
+    *length = 2; release_bad = 0;
+    return rows;
+}
+TxBase *tx_fresh_table(void (*close)(void), TxFreshRow **rows, size_t *length) {
+    const char *message; size_t text_length;
+    TxFreshGrid value;
+    TxBase *base = tx_fresh_grid(0, close, &value, &message, &text_length);
+    *rows = malloc(sizeof(value.rows));
+    if (*rows == NULL) abort();
+    (*rows)[0] = value.rows[0]; (*rows)[1] = value.rows[1];
+    *length = 2; release_bad = 0;
+    return base;
+}

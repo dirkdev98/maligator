@@ -144,7 +144,7 @@ it("rejects owned fields through an alias of a whole-object handle", () => {
 it.each([
 	{
 		name: "tx_owned_table",
-		status: "needs-facts",
+		status: "bound",
 		declaration: "TxRecord *tx_owned_table(size_t *length);",
 		types: {},
 		facts: { returns: { array: { length: "length" }, free: "tx_text_free" } },
@@ -164,6 +164,16 @@ it.each([
 			"typedef union TxOwnedChoice { TxFields fields; int number; } TxOwnedChoice; typedef struct TxOwnedChoices { TxOwnedChoice choices[2]; } TxOwnedChoices; TxOwnedChoices tx_owned_choice_array(void);",
 		types: { TxOwnedChoice: { shape: { member: "fields" } } },
 		facts: {},
+	},
+	{
+		name: "tx_caller_owned_table",
+		status: "needs-facts",
+		declaration:
+			"void tx_caller_owned_table(TxFields *rows, size_t capacity, size_t *length);",
+		types: {},
+		facts: {
+			params: { rows: { out: true, array: { length: "length", capacity: "capacity" } } },
+		},
 	},
 ])(
 	"maps resource-bearing result $name as $status",

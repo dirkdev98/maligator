@@ -481,7 +481,11 @@ export function supportsResultTransaction(
 					value.of.lifetime === undefined &&
 					shapes.handles.get(value.of.name)!.representation === "pointer"
 				);
-			return supportsResultTransaction(value.of, shapes, "other");
+			return supportsResultTransaction(
+				value.of,
+				shapes,
+				hasOwnedRecordFields(value.of, shapes) ? context : "other",
+			);
 		case "array":
 			return supportsResultTransaction(
 				value.of,

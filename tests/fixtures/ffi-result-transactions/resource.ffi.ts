@@ -50,6 +50,54 @@ export default {
 		},
 	},
 	functions: {
+		tx_table_policy: {
+			returns: { array: { length: "length" }, free: "tx_table_free" },
+			async: "tablePolicyAsync",
+		},
+		tx_fresh_table: {
+			returns: { borrowed: true },
+			params: {
+				close: { callback: {} },
+				rows: { out: true, array: { length: "length" }, free: "tx_table_free" },
+			},
+			async: "freshTableAsync",
+		},
+		tx_table: {
+			returns: { array: { length: "length" }, free: "tx_table_free" },
+			params: {
+				prior: { nullable: true },
+				message: { out: true, string: { length: "text_length" } },
+			},
+			async: "tableAsync",
+		},
+		tx_table_out: {
+			params: { rows: { out: true, array: { length: "length" }, free: "tx_table_free" } },
+			async: "tableOutAsync",
+		},
+		tx_table_choice: {
+			returns: { array: { length: "length" }, free: "tx_table_free" },
+			async: "tableChoiceAsync",
+		},
+		tx_table_grid: {
+			returns: { array: { length: "length" }, free: "tx_table_free" },
+			async: "tableGridAsync",
+		},
+		tx_table_const: {
+			returns: { array: { length: "length" }, free: "tx_table_free" },
+			async: "tableConstAsync",
+		},
+		tx_static_table: {
+			returns: { array: { length: "length" } },
+			async: "staticTableAsync",
+		},
+		tx_table_arm: {
+			returns: { array: { length: "length" }, free: "tx_table_free" },
+			params: { callback: { callback: {} } },
+		},
+		tx_table_wait: {
+			returns: { array: { length: "length" }, free: "tx_table_free" },
+			async: "tableWaitAsync",
+		},
 		tx_policy_capacity: {
 			returns: { array: { length: "length" } },
 			params: { grid: { out: true } },

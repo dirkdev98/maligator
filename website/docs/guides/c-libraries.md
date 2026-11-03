@@ -336,7 +336,7 @@ Bindings that combine direct resource pointers with copied values transfer owner
 and publish type views after every output conversion and final managed-input check
 succeeds. A failed conversion releases new resources once and preserves existing
 handles' ownership and views. This guarantee also covers owned pointer fields in
-plain value records, fixed arrays of those records, and flat owned pointer arrays.
+plain value records, arrays of those records, and flat owned pointer arrays.
 An array's outer table may remain library owned; declare `free` only when the binding
 must release that table.
 
@@ -409,13 +409,14 @@ types: {
 ```
 
 The field must point to a destructor-backed resource allocated by the library.
-Nested plain records, fixed arrays, and explicitly selected union members share the
-result transaction. Aliased fields keep one handle, and a failed conversion preserves
-existing ownership while releasing new resources once. Array elements follow C index
-order; the first owning field determines an aliased resource's destructor.
+Nested plain records and explicitly selected union members share the result transaction.
+Arrays of these records preserve fixed and counted dimensions. Aliased fields keep one
+handle. A failed conversion preserves existing ownership while releasing new resources
+once. Array elements follow C index order; the first owning field determines an aliased
+resource's destructor.
 Record inputs borrow their handles; callback arguments remain invocation loans.
 Use `fresh: true` beside `owned` for a new lifetime at a recycled address.
-Use a C wrapper with a pointer result for tagged unions or counted arrays of owned records.
+Use a C wrapper with a pointer result for tagged unions that transfer ownership.
 Global getters and constants cannot transfer independently owned fields.
 
 When a library accepts the same allocation through another pointer type, declare directed
