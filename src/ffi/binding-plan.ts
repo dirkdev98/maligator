@@ -231,6 +231,15 @@ export interface GlobalAccessor {
 	readonly declaration: CGlobal;
 	readonly access: "get" | "set";
 	readonly bounded?: { readonly format: "string" | "bytes" };
+	readonly synchronizedCount?: true;
+	readonly retained?: {
+		readonly format: "string" | "bytes";
+		readonly count?: {
+			readonly declaration: CGlobal;
+			readonly bits: number;
+			readonly signed: boolean;
+		};
+	};
 }
 
 export interface MappedField {
@@ -2268,6 +2277,7 @@ class Planner {
 			readonly owner?: string;
 			readonly fixedArrayParameters?: true;
 			readonly boundedGlobal?: GlobalAccessor["bounded"];
+			readonly retainedGlobal?: GlobalAccessor["retained"];
 		},
 	): BoundFunction | UnboundFunction {
 		const where = (at: string): string =>
@@ -2299,6 +2309,8 @@ class Planner {
 			at: string,
 		): Mapping => {
 			const resolved = resolveCType(this.#model, type);
+			if (resolved.kind === "pointer" && callableContext?.retainedGlobal !== undefined)
+				return { value: { kind: callableContext.retainedGlobal.format, nullable: true } };
 			if (resolved.kind === "array" && callableContext?.boundedGlobal !== undefined)
 				return { value: { kind: callableContext.boundedGlobal.format, nullable: false } };
 			if (valueFacts.callable !== undefined) {
@@ -2777,6 +2789,7 @@ class Planner {
 				(returns.value.kind === "string" && returns.value.counted === true);
 			if (
 				callableContext?.boundedGlobal === undefined &&
+				callableContext?.retainedGlobal === undefined &&
 				counted !== (resultCount !== undefined)
 			) {
 				throw new FfiError(
@@ -3071,6 +3084,7 @@ export function planBindings(
 			handle.allocator === undefined ? [] : [handle.allocator],
 		),
 	]);
+	const retainedCounts = new Set<string>();
 	for (const [name, entry] of Object.entries(facts.globals ?? {})) {
 		const global = model.globals.find((global) => global.name === name);
 		const at = `globals.${name}`;
@@ -3080,12 +3094,68 @@ export function planBindings(
 			throw new FfiError(`${at}: access requires an externally linked C object`);
 		if (entry.get === undefined && entry.set === undefined)
 			throw new FfiError(`${at}: provide a getter or setter export`);
-		const { bytes, ...value } = entry.value ?? {};
+		const { bytes, lifetime, ...value } = entry.value ?? {};
 		const resolved = resolveCType(model, global.type);
 		const format =
 			bytes === true ? "bytes" : value.string === true ? "string" : undefined;
 		let bounded: GlobalAccessor["bounded"];
-		if (resolved.kind === "array" && format !== undefined) {
+		let retained: GlobalAccessor["retained"];
+		if (lifetime === "replacement") {
+			if (resolved.kind !== "pointer" || resolved.const === true || global.threadLocal)
+				throw new FfiError(
+					`${at}.value.lifetime: replacement requires an assignable non-TLS pointer`,
+				);
+			const element = resolveCType(model, resolved.to);
+			const text = value.string === true;
+			if (
+				!(element.kind === "integer" && model.target.sizes[element.name] === 1) &&
+				!(element.kind === "void" && !text)
+			)
+				throw new FfiError(`${at}.value: retained pointers require byte storage`);
+			retained = { format: text ? "string" : "bytes" };
+			if (!text) {
+				if (bytes === undefined || bytes === true)
+					throw new FfiError(`${at}.value.bytes: retained bytes need a global count`);
+				const count = model.globals.find((candidate) => candidate.name === bytes.length);
+				const type = count === undefined ? undefined : resolveCType(model, count.type);
+				const size = type?.kind === "integer" ? model.target.sizes[type.name] : undefined;
+				if (
+					count === undefined ||
+					count.linkage !== "external" ||
+					count.threadLocal ||
+					type?.kind !== "integer" ||
+					type.const === true ||
+					size === undefined ||
+					size > 8
+				)
+					throw new FfiError(
+						`${at}.value.bytes.length: requires a writable external non-TLS integer up to 64 bits`,
+					);
+				if (
+					retainedCounts.has(count.name) ||
+					facts.globals?.[count.name]?.set !== undefined
+				)
+					throw new FfiError(
+						`${at}.value.bytes.length: the count belongs exclusively to one retained pointer`,
+					);
+				retainedCounts.add(count.name);
+				retained = {
+					...retained,
+					count: {
+						declaration: count,
+						bits: size * 8,
+						signed:
+							type.name === "char"
+								? model.target.charSigned
+								: !type.name.startsWith("unsigned"),
+					},
+				};
+			}
+		} else if (typeof bytes === "object")
+			throw new FfiError(
+				`${at}.value.bytes: pointer bytes require a replacement lifetime`,
+			);
+		else if (resolved.kind === "array" && format !== undefined) {
 			const element = resolveCType(model, resolved.of);
 			if (element.kind !== "integer" || model.target.sizes[element.name] !== 1)
 				throw new FfiError(
@@ -3114,7 +3184,11 @@ export function planBindings(
 			if (occupied.has(exported))
 				throw new FfiError(`${at}.${access}: '${exported}' is already an export`);
 			occupied.add(exported);
-			if (access === "set" && !globalAssignable(model, global.type, handles))
+			if (
+				access === "set" &&
+				retained === undefined &&
+				!globalAssignable(model, global.type, handles)
+			)
 				throw new FfiError(
 					`${at}.set: a setter requires an assignable value without retained pointers`,
 				);
@@ -3145,6 +3219,7 @@ export function planBindings(
 					site: exported,
 					...(resolved.kind === "array" ? { fixedArrayParameters: true as const } : {}),
 					...(bounded === undefined ? {} : { boundedGlobal: bounded }),
+					...(retained === undefined ? {} : { retainedGlobal: retained }),
 				},
 			);
 			if (
@@ -3161,12 +3236,23 @@ export function planBindings(
 					declaration: global,
 					access,
 					...(bounded === undefined ? {} : { bounded }),
+					...(retained === undefined ? {} : { retained }),
 				},
 			};
 			if ("gaps" in binding) unbound.push(binding);
 			else functions.push(binding);
 		}
 	}
+	functions.forEach((binding, index) => {
+		if (
+			binding.global?.access === "get" &&
+			retainedCounts.has(binding.global.declaration.name)
+		)
+			functions[index] = {
+				...binding,
+				global: { ...binding.global, synchronizedCount: true },
+			};
+	});
 	for (const native of planner.natives.values()) {
 		if (
 			declared.has(native.name) ||

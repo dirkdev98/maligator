@@ -6,6 +6,25 @@ export default {
 	find: [{ includeDirs: ["."], sources: ["globals.c"] }],
 	types: { GlobalsContext: { handle: { destroy: "globals_destroy" } } },
 	globals: {
+		globals_retained_void: {
+			get: "getRetainedVoid",
+			set: "setRetainedVoid",
+			value: {
+				bytes: { length: "globals_retained_signed_count" },
+				lifetime: "replacement",
+			},
+		},
+		globals_retained_title: {
+			get: "getRetainedTitle",
+			set: "setRetainedTitle",
+			value: { string: true, lifetime: "replacement" },
+		},
+		globals_retained_bytes: {
+			get: "getRetainedBytes",
+			set: "setRetainedBytes",
+			value: { bytes: { length: "globals_retained_count" }, lifetime: "replacement" },
+		},
+		globals_retained_count: { get: "getRetainedCount" },
 		globals_mode: {
 			get: "getMode",
 			set: "setMode",

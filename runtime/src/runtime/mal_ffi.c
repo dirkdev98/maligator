@@ -521,6 +521,146 @@ MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length) {
     return mal_value_from_typed_array_object(array);
 }
 
+typedef struct MalFfiGlobalStorage {
+    const void *key;
+    const void *count_key;
+    void *data;
+    size_t capacity;
+    bool text;
+    struct MalFfiGlobalStorage *next;
+} MalFfiGlobalStorage;
+
+/* C globals outlive individual isolates. This registry owns only malloc storage;
+ * its lock serializes binding access, while C readers require library synchronization. */
+static pthread_mutex_t ffi_global_lock = PTHREAD_MUTEX_INITIALIZER;
+static MalFfiGlobalStorage *ffi_globals;
+
+void mal_ffi_read_global_count(void (*read)(void *out), void *out) {
+    pthread_mutex_lock(&ffi_global_lock);
+    read(out);
+    pthread_mutex_unlock(&ffi_global_lock);
+}
+
+MalValue mal_ffi_get_global_value(MalVm *vm, const MalFfiGlobal *global, const MalFfiSite *site) {
+    void *data = nullptr;
+    void *copy = nullptr;
+    size_t length = 0;
+    const char *error = nullptr;
+    bool memory = false;
+    pthread_mutex_lock(&ffi_global_lock);
+    MalFfiGlobalStorage *stored = ffi_globals;
+    while (stored != nullptr && stored->key != global->key) stored = stored->next;
+    if (stored != nullptr && (stored->text != global->text || stored->count_key != global->count_key))
+        error = "the retained global's original representation";
+    else if (!global->read(&data, &length)) error = "a non-negative native byte count";
+    else if (data == nullptr) {
+        if (length != 0) error = "a null pointer with zero byte count";
+    } else {
+        size_t remaining = 0;
+        if (stored != nullptr) {
+            uintptr_t start = (uintptr_t) stored->data;
+            uintptr_t pointer = (uintptr_t) data;
+            if (pointer < start || pointer - start > stored->capacity)
+                error = "a pointer within the retained allocation";
+            else remaining = stored->capacity - (pointer - start);
+        }
+        if (error == nullptr && global->text) {
+            if (stored == nullptr) length = strlen(data);
+            else {
+                const char *end = memchr(data, 0, remaining);
+                if (end == nullptr) error = "NUL-terminated text within the retained allocation";
+                else length = (size_t) (end - (const char *) data);
+            }
+        } else if (error == nullptr && stored != nullptr && length > remaining)
+            error = "a byte count within the retained allocation";
+        if (error == nullptr && length > (global->text ? 3 * MAL_STRING_MAX_CODE_UNITS : UINT32_MAX))
+            error = "a byte count within JavaScript storage limits";
+        if (error == nullptr) {
+            copy = malloc(length == 0 ? 1 : length);
+            if (copy == nullptr) memory = true;
+            else if (length > 0) memcpy(copy, data, length);
+        }
+    }
+    pthread_mutex_unlock(&ffi_global_lock);
+    if (error != nullptr) {
+        ffi_fail(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site, error);
+        return mal_value_new_undefined();
+    }
+    if (memory) {
+        mal_ffi_out_of_memory(vm);
+        return mal_value_new_undefined();
+    }
+    if (data == nullptr) return mal_value_new_null();
+    MalValue result = global->text ? mal_ffi_from_string_length(vm, copy, length)
+                                   : mal_ffi_from_bytes(vm, copy, length);
+    free(copy);
+    return result;
+}
+
+bool mal_ffi_set_global_value(MalVm *vm, const MalFfiGlobal *global, MalValue value, const MalFfiSite *site) {
+    void *copy = nullptr;
+    size_t length = 0;
+    if (!mal_value_is_null(value)) {
+        if (global->text) {
+            char *text;
+            if (!mal_ffi_to_owned_string(vm, value, site, &text)) return false;
+            copy = text;
+            length = strlen(text);
+        } else {
+            void *data;
+            if (!mal_ffi_to_bytes(vm, value, false, false, site, &data, &length, nullptr)) return false;
+            if (!mal_ffi_check_count(vm, length, global->count_bits, global->count_signed, site)) return false;
+            copy = malloc(length == 0 ? 1 : length);
+            if (copy == nullptr) return mal_ffi_out_of_memory(vm);
+            if (length > 0) memcpy(copy, data, length);
+        }
+    }
+    MalFfiGlobalStorage *candidate = copy == nullptr ? nullptr : malloc(sizeof(*candidate));
+    if (copy != nullptr && candidate == nullptr) {
+        free(copy);
+        return mal_ffi_out_of_memory(vm);
+    }
+    const char *error = nullptr;
+    void *previous = nullptr;
+    pthread_mutex_lock(&ffi_global_lock);
+    MalFfiGlobalStorage **link = &ffi_globals;
+    while (*link != nullptr && (*link)->key != global->key) link = &(*link)->next;
+    MalFfiGlobalStorage *stored = *link;
+    if (stored != nullptr && (stored->text != global->text || stored->count_key != global->count_key))
+        error = "the retained global's original representation";
+    for (MalFfiGlobalStorage *other = ffi_globals; error == nullptr && other != nullptr; other = other->next)
+        if (global->count_key != nullptr && other->key != global->key && other->count_key == global->count_key)
+            error = "a count belonging exclusively to one retained pointer";
+    if (error == nullptr) {
+        global->write(copy, length);
+        if (stored != nullptr) previous = stored->data;
+        if (copy == nullptr) {
+            if (stored != nullptr) {
+                *link = stored->next;
+                free(stored);
+            }
+        } else {
+            if (stored == nullptr) {
+                stored = candidate;
+                candidate = nullptr;
+                stored->next = *link;
+                *link = stored;
+            }
+            stored->key = global->key;
+            stored->count_key = global->count_key;
+            stored->data = copy;
+            stored->capacity = length + (global->text ? 1 : 0);
+            stored->text = global->text;
+            copy = nullptr;
+        }
+    }
+    pthread_mutex_unlock(&ffi_global_lock);
+    free(previous);
+    free(candidate);
+    free(copy);
+    return error == nullptr || mal_ffi_expected(vm, site, error);
+}
+
 typedef struct MalFfiState MalFfiState;
 
 typedef struct MalFfiHandleView {

@@ -9,6 +9,7 @@ import { extractCModel } from "../src/ffi/c-extract.ts";
 import type { CExtractionInput } from "../src/ffi/c-extract.ts";
 import type { CModel } from "../src/ffi/c-model.ts";
 import { loadLibraryContract } from "../src/ffi/contract.ts";
+import { generateDeclarations } from "../src/ffi/declarations.ts";
 import type { FfiInspection } from "../src/ffi/inspect.ts";
 import { loadCModel } from "../src/ffi/model-cache.ts";
 import type { MaligatorFfiGlobalFacts } from "../src/public-api.d.ts";
@@ -151,6 +152,84 @@ describe("C global accessor contracts", () => {
 	function plan(globals: Record<string, MaligatorFfiGlobalFacts>) {
 		return planBindings(model, { types: globalContract.types, functions: {}, globals });
 	}
+	it("exposes nullable copied values for replacement lifetimes", () => {
+		const binding = plan({
+			globals_retained_title: {
+				get: "readText",
+				set: "writeText",
+				value: { string: true, lifetime: "replacement" },
+			},
+			globals_retained_bytes: {
+				get: "readBytes",
+				set: "writeBytes",
+				value: { bytes: { length: "globals_retained_count" }, lifetime: "replacement" },
+			},
+		});
+		const sdk = [...generateDeclarations([{ name: "globals", plan: binding }])].join("");
+		expect(sdk).toContain("readText(): string | null");
+		expect(sdk).toContain("writeText(value: string | null): void");
+		expect(sdk).toContain("readBytes(): Uint8Array | null");
+		expect(sdk).toContain(
+			"writeBytes(value: ArrayBufferLike | ArrayBufferView | null): void",
+		);
+	});
+	it.each([
+		[
+			"globals_retained_tls",
+			{ string: true, lifetime: "replacement" },
+			"non-TLS pointer",
+		],
+		["globals_retained_const", { string: true, lifetime: "replacement" }, "assignable"],
+		["globals_mode", { string: true, lifetime: "replacement" }, "pointer"],
+		[
+			"globals_context",
+			{ bytes: { length: "globals_retained_count" }, lifetime: "replacement" },
+			"byte storage",
+		],
+		[
+			"globals_retained_bytes",
+			{ bytes: { length: "globals_limit" }, lifetime: "replacement" },
+			"writable external",
+		],
+		[
+			"globals_retained_bytes",
+			{ bytes: { length: "globals_thread" }, lifetime: "replacement" },
+			"non-TLS integer",
+		],
+		[
+			"globals_retained_bytes",
+			{ bytes: { length: "globals_ratio" }, lifetime: "replacement" },
+			"integer",
+		],
+		[
+			"globals_retained_bytes",
+			{ bytes: { length: "missing_count" }, lifetime: "replacement" },
+			"external",
+		],
+	] satisfies Array<[string, NonNullable<MaligatorFfiGlobalFacts["value"]>, string]>)(
+		"rejects unsupported retained storage on %s with %j",
+		(name, value, reason) => {
+			expect(() => plan({ [name]: { set: "write", value } })).toThrow(reason);
+		},
+	);
+	it("keeps a retained count exclusive to its pointer", () => {
+		const bytes: MaligatorFfiGlobalFacts = {
+			set: "writeBytes",
+			value: { bytes: { length: "globals_retained_count" }, lifetime: "replacement" },
+		};
+		expect(() =>
+			plan({
+				globals_retained_bytes: bytes,
+				globals_retained_count: { set: "writeCount" },
+			}),
+		).toThrow("exclusively");
+		expect(() =>
+			plan({
+				globals_retained_bytes: bytes,
+				globals_retained_title: { ...bytes, set: "writeOther" },
+			}),
+		).toThrow("exclusively");
+	});
 	it("loads explicit accessor and documentation facts", () => {
 		const contract = loadLibraryContract(
 			"globals",

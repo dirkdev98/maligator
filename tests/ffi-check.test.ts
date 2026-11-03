@@ -85,6 +85,31 @@ afterEach(() => {
 });
 
 describe("ffi check", () => {
+	it("tracks an unexported global carrying a retained pointer's byte count", () => {
+		const directory = project();
+		const file = path.join(directory, "include/shapes.h");
+		const declarations = `${header}\nextern unsigned char *shapes_bytes;\nextern unsigned short shapes_count;\n`;
+		writeFileSync(file, declarations);
+		writeContract(directory, {
+			globals: {
+				shapes_bytes: {
+					get: "readBytes",
+					set: "writeBytes",
+					value: { bytes: { length: "shapes_count" }, lifetime: "replacement" },
+				},
+			},
+		});
+		accept(directory);
+		writeFileSync(
+			file,
+			declarations.replace("unsigned short shapes_count", "unsigned int shapes_count"),
+		);
+		expect(
+			check(directory, [], 1).libraries[0]?.changes.some((change) =>
+				change.path.startsWith("declarations.global shapes_count."),
+			),
+		).toBe(true);
+	});
 	it.each([
 		[
 			"fixed vector lanes",

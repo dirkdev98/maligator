@@ -79,6 +79,24 @@ typedef struct MalFfiManagedField {
     bool text;
 } MalFfiManagedField;
 
+/** Native access to a process-global pointer and its optional byte count. */
+typedef struct MalFfiGlobal {
+    const void *key;
+    const void *count_key;
+    bool (*read)(void **data, size_t *length);
+    void (*write)(void *data, size_t length);
+    int32_t count_bits;
+    bool count_signed;
+    bool text;
+} MalFfiGlobal;
+
+/** Snapshot native storage before allocating a JavaScript result. */
+MalValue mal_ffi_get_global_value(MalVm *vm, const MalFfiGlobal *global, const MalFfiSite *site);
+/** Copies outlive the assigning VM and remain owned until replacement or clearing. */
+bool mal_ffi_set_global_value(MalVm *vm, const MalFfiGlobal *global, MalValue value, const MalFfiSite *site);
+/** Read a separately exported count under the retained-global lock, without VM allocation. */
+void mal_ffi_read_global_count(void (*read)(void *out), void *out);
+
 /**
  * A C type whose values are resources the program opens and closes. A handle
  * holds either the pointer the library returned or a copy of a struct the

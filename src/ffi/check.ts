@@ -361,16 +361,19 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 	for (const facts of Object.values(contract.facts.globals ?? {}))
 		valueFacts({ shape: facts.value?.shape, callable: facts.value?.callable });
 	for (const name of macroFactRoots(contract.facts)) constant(name);
-	for (const name of Object.keys(contract.facts.globals ?? {}).sort()) {
+	const globalNames = new Set(Object.keys(contract.facts.globals ?? {}));
+	for (const facts of Object.values(contract.facts.globals ?? {}))
+		if (typeof facts.value?.bytes === "object") globalNames.add(facts.value.bytes.length);
+	for (const name of [...globalNames].sort()) {
 		const global = model.globals.find((entry) => entry.name === name);
 		if (global === undefined) continue;
-		const facts = contract.facts.globals![name]!;
+		const facts = contract.facts.globals?.[name];
 		declarations[`global ${name}`] = json({
 			type: type(global.type, `global ${name}`),
 			linkage: global.linkage,
 			threadLocal: global.threadLocal,
 			attributes: [...global.attributes].sort(),
-			accessors: { get: facts.get, set: facts.set },
+			accessors: { get: facts?.get, set: facts?.set },
 		});
 	}
 	for (const name of Object.keys(contract.facts.types).sort()) {

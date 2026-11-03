@@ -5,9 +5,15 @@ import * as path from "node:path";
 import { expect, it } from "vitest";
 
 const repository = path.resolve(import.meta.dirname, "../..");
-it.each(["compiled", "interpreted"])(
-	"reads and writes C globals with TLS and ownership through %s calls",
-	(backend) => {
+it.each(
+	["compiled", "interpreted"].flatMap((backend) => [
+		{ backend, entry: "main.ts", output: "global accessors passed" },
+		{ backend, entry: "retained.ts", output: "retained globals passed" },
+		{ backend, entry: "retained-count-only.ts", output: "retained count passed" },
+	]),
+)(
+	"reads and writes C globals through $entry with $backend calls",
+	({ backend, entry, output }) => {
 		const directory = mkdtempSync(path.join(tmpdir(), "mal-ffi-global-access-"));
 		try {
 			cpSync(path.join(repository, "tests/fixtures/ffi-globals"), directory, {
@@ -18,6 +24,7 @@ it.each(["compiled", "interpreted"])(
 				[
 					path.join(repository, "src/index.ts"),
 					"build",
+					entry,
 					"--production",
 					...(backend === "interpreted" ? ["--no-compiled"] : []),
 				],
@@ -36,7 +43,7 @@ it.each(["compiled", "interpreted"])(
 				},
 			});
 			expect(executed.status, executed.stderr || executed.stdout).toBe(0);
-			expect(executed.stdout.trim()).toBe("global accessors passed");
+			expect(executed.stdout.trim()).toBe(output);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}

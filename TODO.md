@@ -1903,8 +1903,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Define explicit lifetime contracts for retained global pointers.
-
 - [ ] Support const-member tagged values whose discriminator overlaps union storage.
 
 - [ ] Extend compound resource-bearing results with explicit ownership and lifetime.

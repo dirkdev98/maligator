@@ -176,9 +176,35 @@ byte length. Conversion failures leave C storage unchanged. These formats apply 
 one-dimensional byte arrays, and the same `value` facts describe both accessors.
 
 Access requires an externally linked object. Const objects have no setter. Setters
-accept assignable values without retained pointers, so C storage cannot retain a
-temporary string encoding, buffer view, or handle. Getter results cannot transfer
-ownership: strings are copied and handles require `borrowed: true`.
+accept assignable values. Getter results cannot transfer ownership: strings are copied
+and handles require `borrowed: true`.
+
+For a pointer C retains, declare when its previous allocation stops being used:
+
+```typescript
+globals: {
+  library_title: {
+    get: "getTitle", set: "setTitle",
+    value: { string: true, lifetime: "replacement" },
+  },
+  library_data: {
+    get: "getData", set: "setData",
+    value: { bytes: { length: "library_size" }, lifetime: "replacement" },
+  },
+}
+```
+
+`replacement` asserts that C stops retaining the old allocation before the setter
+replaces or clears it. Setters stage an independent native copy before publishing the
+pointer and count. The copy survives worker teardown and source-buffer detachment.
+`null` clears the pointer and byte count; empty values keep a nonnull pointer. Getters
+return snapshots. Initial C-owned storage remains owned by C.
+
+C may advance a managed pointer or shorten its byte count within the assigned range.
+Getters reject a pointer or count outside that allocation. The count must be a writable
+external integer used only by this pointer, with no independent setter. Retained pointers
+and their counts cannot be thread-local. Coordinate C readers and mutations using the
+library's synchronization contract; the binding only serializes its own accessors.
 
 Accessors run on the calling thread, including for thread-local objects. The C
 library's synchronization rules still apply to globals shared between threads.

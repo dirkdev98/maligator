@@ -644,17 +644,41 @@ function validateGlobalFacts(value: unknown, at: string): void {
 			"callable",
 			"string",
 			"bytes",
+			"lifetime",
 		]);
-		const { bytes, ...conversion } = value.value;
-		if (bytes !== undefined)
-			expect(bytes === true, `${at}.value.bytes`, "true for a fixed byte array");
+		const { bytes, lifetime, ...conversion } = value.value;
+		if (bytes !== undefined && bytes !== true) {
+			expectObject(bytes, `${at}.value.bytes`);
+			validateCount(bytes, `${at}.value.bytes`);
+			expect(
+				typeof bytes.length === "string" && C_NAME.test(bytes.length),
+				`${at}.value.bytes.length`,
+				"a C global name",
+			);
+			expect(
+				lifetime === "replacement",
+				`${at}.value.lifetime`,
+				'"replacement" for a retained byte pointer',
+			);
+		}
 		if (conversion.string !== undefined)
 			expect(conversion.string === true, `${at}.value.string`, "true for UTF-8 text");
 		expect(
-			bytes !== true || conversion.string !== true,
+			bytes === undefined || conversion.string !== true,
 			`${at}.value`,
 			"one of string or bytes",
 		);
+		if (lifetime !== undefined) {
+			expect(lifetime === "replacement", `${at}.value.lifetime`, '"replacement"');
+			expect(
+				(conversion.string === true || (bytes !== undefined && bytes !== true)) &&
+					conversion.shape === undefined &&
+					conversion.borrowed === undefined &&
+					conversion.callable === undefined,
+				`${at}.value`,
+				"a retained string or counted byte pointer",
+			);
+		}
 		validateValueFacts(conversion, `${at}.value`);
 		if (conversion.borrowed !== undefined || conversion.callable !== undefined)
 			expect(

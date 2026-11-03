@@ -2370,6 +2370,26 @@ class BindingWriter {
 		callable?: Extract<JsValue, { kind: "callable" }>,
 	): Array<string> {
 		const name = binding.name;
+		if (binding.global?.retained !== undefined) {
+			const global = `mal_ffi_global_${binding.global.declaration.name}`;
+			const set = binding.global.access === "set";
+			return [
+				`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed) {`,
+				"\t(void) mal_args; (void) mal_argc; (void) mal_framed;",
+				`\tstatic const MalFfiSite mal_site = { ${cString(name)}, ${set ? '"value"' : '"result"'}, nullptr };`,
+				...(set
+					? [
+							`\tmal_ffi_set_global_value(vm, &${global}, mal_argc > 0 ? mal_args[0] : mal_ffi_undefined(), &mal_site);`,
+							"\treturn mal_ffi_undefined();",
+						]
+					: [`\treturn mal_ffi_get_global_value(vm, &${global}, &mal_site);`]),
+				"}",
+				`static MalValue mal_ffi_function_${name}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
+				"\t(void) mal_this; (void) mal_new_target; (void) mal_callee;",
+				`\treturn mal_ffi_call_${name}(vm, mal_args, mal_argc, true);`,
+				"}",
+			];
+		}
 		const siteName = callable?.site ?? name;
 		const owner = callable?.owner;
 		const declaration = binding.declaration;
@@ -4147,6 +4167,7 @@ export function generateBindingUnit(
 	const specifier = ffiModuleSpecifier(library);
 	const installer = ffiInstallerSymbol(library);
 	const globalArrays = new Set<string>();
+	const retainedGlobals = new Set<string>();
 	const source = [
 		`// Generated binding for ${specifier}.`,
 		'#include "mal_ffi.h"',
@@ -4156,7 +4177,49 @@ export function generateBindingUnit(
 		...bindings.flatMap((binding) => {
 			if (binding.global === undefined) return [];
 			const name = binding.global.declaration.name;
+			const retained = binding.global.retained;
+			if (retained !== undefined) {
+				if (retainedGlobals.has(name)) return [];
+				retainedGlobals.add(name);
+				const prefix = `mal_ffi_global_${name}`;
+				const count = retained.count;
+				const countName = count?.declaration.name;
+				return [
+					`static bool ${prefix}_read(void **data, size_t *length) {`,
+					`\t*data = (void *) ${name};`,
+					...(countName === undefined
+						? ["\t*length = 0;"]
+						: [
+								...(count?.signed === true
+									? [`\tif (${countName} < 0) return false;`]
+									: []),
+								`\tuint64_t count = (uint64_t) ${countName};`,
+								"\tif (count > SIZE_MAX) return false;",
+								"\t*length = (size_t) count;",
+							]),
+					"\treturn true;",
+					"}",
+					`static void ${prefix}_write(void *data, size_t length) {`,
+					`\t${name} = (__typeof__(${name})) data;`,
+					...(countName === undefined
+						? ["\t(void) length;"]
+						: [`\t${countName} = (__typeof__(${countName})) length;`]),
+					"}",
+					`static const MalFfiGlobal ${prefix} = { (const void *) &${name}, ${countName === undefined ? "nullptr" : `(const void *) &${countName}`}, ${prefix}_read, ${prefix}_write, ${String(count?.bits ?? 0)}, ${count?.signed === true ? "true" : "false"}, ${retained.format === "string" ? "true" : "false"} };`,
+				];
+			}
 			const array = resolveCType(model, binding.global.declaration.type);
+			if (binding.global.synchronizedCount === true) {
+				const helper = binding.declaration.name;
+				return [
+					`static void ${helper}_read(void *out) { *(__typeof__(${name}) *) out = ${name}; }`,
+					`static __typeof__(${name}) ${helper}(void) {`,
+					`\t__typeof__(${name}) value;`,
+					`\tmal_ffi_read_global_count(${helper}_read, (void *) &value);`,
+					"\treturn value;",
+					"}",
+				];
+			}
 			if (array.kind === "array") {
 				const get = binding.global.access === "get";
 				const storage = globalArrayStorage(binding);

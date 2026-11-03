@@ -153,7 +153,7 @@ export interface MaligatorFfiCount {
 	 * The parameter's C name, or its 1-based position. For a result, the count comes
 	 * from an integer parameter or from an integer the function writes through a pointer.
 	 * Callback counts use 1-based positions.
-	 * State counts use C field names.
+	 * State counts use C field names; global counts use C object names.
 	 */
 	length: string;
 }
@@ -338,8 +338,13 @@ export interface MaligatorFfiGlobalValueFacts {
 	callable?: MaligatorFfiCallable;
 	/** UTF-8 text; a fixed array must contain a NUL within its declared bound. */
 	string?: true;
-	/** A fixed byte array copied to or from an exactly sized byte view. */
-	bytes?: true;
+	/** Fixed array bytes, or a pointer whose byte count is another C global. */
+	bytes?: true | MaligatorFfiCount;
+	/** Keep a native copy until replacement or clearing. C must stop retaining the
+	 * previous allocation before either operation. The library's synchronization
+	 * contract still applies to its own readers and mutations.
+	 */
+	lifetime?: "replacement";
 }
 
 /** Explicit access to a library-owned C object. Accessors run on the calling thread. */
@@ -348,7 +353,7 @@ export interface MaligatorFfiGlobalFacts {
 	get?: string;
 	/** Export a function that assigns a value without retaining JavaScript storage. */
 	set?: string;
-	/** Conversion facts; accessors copy values without taking ownership of global storage. */
+	/** Conversion facts; retained pointer copies require an explicit lifetime. */
 	value?: MaligatorFfiGlobalValueFacts;
 	/** Header documentation that `ffi check` watches when reviewing these facts. */
 	evidence?: Array<MaligatorFfiEvidence>;
