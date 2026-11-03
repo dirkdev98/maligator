@@ -8,6 +8,7 @@ const repository = path.resolve(import.meta.dirname, "../..");
 it.each(
 	["compiled", "interpreted"].flatMap((backend) => [
 		{ backend, entry: "main.ts", output: "native values passed" },
+		{ backend, entry: "extensions.ts", output: "native extensions passed" },
 		{ backend, entry: "zero-only.ts", output: "native zero passed" },
 		{ backend, entry: "constant-only.ts", output: "native constants passed" },
 	]),

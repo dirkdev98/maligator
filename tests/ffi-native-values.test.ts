@@ -19,6 +19,7 @@ beforeAll(() => {
 typedef const NativeUnsigned NativeConstAlias;
 typedef const int NativeConstInt;
 typedef _Atomic(int) NativeAtomic;
+typedef int __attribute__((address_space(1))) NativeAddressSpace;
 typedef NativeUnsigned *NativePointer;
 NativeConstAlias native_const_alias(void);
 typedef __int128 Collision;
@@ -82,15 +83,57 @@ it("keeps unsupported const aliases local to their declaration", () => {
 	).toContain("const typedef aliases");
 	expect(plan.functions.some((entry) => entry.name === "native_alias")).toBe(true);
 });
-it.each(["NativePointer", "NativeAtomic", "NativeConstInt", "NativeRecord"])(
-	"rejects non-value native representation for %s",
-	(name) => {
+it.each([
+	"NativePointer",
+	"NativeAtomic",
+	"NativeAddressSpace",
+	"NativeConstInt",
+	"NativeRecord",
+])("rejects non-value native representation for %s", (name) => {
+	expect(() =>
+		planBindings(model, {
+			types: { [name]: { representation: "native" } },
+			functions: {},
+		}),
+	).toThrow("unqualified arithmetic typedef");
+});
+it("keeps fixed vector lanes separate from their padded storage layout", () => {
+	const triple = model.typedefs.get("NativeTriple")!;
+	expect(triple.type).toEqual({
+		kind: "vector",
+		of: { kind: "float", name: "float" },
+		length: 3,
+		flavor: "ext",
+	});
+	expect(triple.sizeBits).toBe(4 * model.target.sizes.float! * 8);
+	expect(model.typedefs.get("NativeAlignedTriple")!.alignmentBits).toBe(64 * 8);
+	expect(model.typedefs.get("NativeBits")!.type).toEqual({
+		kind: "bitint",
+		bits: 127,
+		signed: false,
+	});
+	expect(model.typedefs.get("NativeComplex")!.type).toEqual({
+		kind: "complex",
+		of: { kind: "float", name: "long double" },
+	});
+});
+it.each(["sizeBits", "alignmentBits"] as const)(
+	"rejects native values when Clang has not supplied %s",
+	(property) => {
+		const typedefs = new Map(model.typedefs);
+		typedefs.set("NativeTriple", {
+			...typedefs.get("NativeTriple")!,
+			[property]: undefined,
+		});
 		expect(() =>
-			planBindings(model, {
-				types: { [name]: { representation: "native" } },
-				functions: {},
-			}),
-		).toThrow("unqualified arithmetic typedef");
+			planBindings(
+				{ ...model, typedefs },
+				{
+					types: { NativeTriple: { representation: "native" } },
+					functions: {},
+				},
+			),
+		).toThrow("Clang did not identify native storage layout");
 	},
 );
 it("rejects two nominal facts in the same alias chain", () => {

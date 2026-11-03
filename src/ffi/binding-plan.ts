@@ -15,7 +15,7 @@ import {
 	resolveCFieldPath,
 	resolveCType,
 } from "./c-model.ts";
-import { formatCDeclaration, parseCType } from "./c-type.ts";
+import { formatCDeclaration, isCNativeValueType, parseCType } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import type { LibraryFacts } from "./contract.ts";
 import { FfiError } from "./ffi-error.ts";
@@ -332,6 +332,8 @@ export interface SkippedConstant {
 
 export interface NativeType {
 	readonly name: string;
+	readonly sizeBits: number;
+	readonly alignmentBits: number;
 	readonly doc?: FfiText;
 }
 
@@ -770,12 +772,18 @@ class Planner {
 					if (target === undefined) break;
 					type = target;
 				}
-				if ((type.kind !== "integer" && type.kind !== "float") || type.const === true)
+				if (!isCNativeValueType(type) || ("const" in type && type.const === true))
 					throw new FfiError(
 						`types.${name}.representation: native values require an unqualified arithmetic typedef`,
 					);
+				if (alias.sizeBits === undefined || alias.alignmentBits === undefined)
+					throw new FfiError(
+						`types.${name}.representation: Clang did not identify native storage layout`,
+					);
 				this.natives.set(name, {
 					name,
+					sizeBits: alias.sizeBits,
+					alignmentBits: alias.alignmentBits,
 					...(alias.doc === undefined ? {} : { doc: alias.doc }),
 				});
 			}
@@ -873,6 +881,12 @@ class Planner {
 					? { value: { kind: "float", bits: size * 8 } }
 					: { gap: `${resolved.name} is wider than a JavaScript number` };
 			}
+			case "complex":
+			case "vector":
+			case "bitint":
+				return {
+					gap: `${formatCDeclaration(resolved)} needs a native representation fact on a typedef`,
+				};
 			case "enum": {
 				const declaration = this.#model.enums.get(resolved.name);
 				const underlying =
@@ -3219,6 +3233,9 @@ function globalAssignable(
 		case "bool":
 		case "integer":
 		case "float":
+		case "complex":
+		case "vector":
+		case "bitint":
 		case "enum":
 			return true;
 		case "array":

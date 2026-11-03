@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { formatCDeclaration, parseCType, unnamedTagKey } from "../src/ffi/c-type.ts";
 
 describe("C type spellings", () => {
+	it.each([
+		["_BitInt(65)", 65, true],
+		["signed _BitInt(17)", 17, true],
+		["unsigned _BitInt(127)", 127, false],
+	] as const)("preserves the width and sign of %s", (spelling, bits, signed) => {
+		expect(parseCType(spelling)).toEqual({ kind: "bitint", bits, signed });
+	});
+	it.each(["long double _Complex", "_Complex long double", "__complex__ long double"])(
+		"preserves both components of %s",
+		(spelling) => {
+			expect(parseCType(spelling)).toEqual({
+				kind: "complex",
+				of: { kind: "float", name: "long double" },
+			});
+		},
+	);
 	it.each(["long double", "double long", "long volatile double"])(
 		"maps %s to its native floating type",
 		(spelling) => {
@@ -20,6 +36,8 @@ describe("C type spellings", () => {
 			"struct Color",
 			"Vector2",
 			"long double",
+			"long double _Complex",
+			"unsigned _BitInt(127)",
 			"void (int, const char *, ...)",
 		]) {
 			expect(formatCDeclaration(parseCType(spelling))).toBe(spelling);
@@ -74,8 +92,9 @@ describe("C type spellings", () => {
 	it("reports constructs it cannot map instead of guessing", () => {
 		for (const spelling of [
 			"_Atomic(int)",
+			"_BitInt(0)",
+			"_BitInt(9007199254740992)",
 			"typeof (x)",
-			"_BitInt(12)",
 			"__attribute__((__vector_size__(4 * sizeof(float)))) float",
 		]) {
 			expect(parseCType(spelling)).toEqual({ kind: "unsupported", spelling });

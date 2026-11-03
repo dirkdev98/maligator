@@ -19,16 +19,35 @@ export type CIntegerName = (typeof C_INTEGER_NAMES)[number];
 export const C_FLOAT_NAMES = ["float", "double", "long double", "_Float16"] as const;
 export type CFloatName = (typeof C_FLOAT_NAMES)[number];
 
-/**
- * A C type as clang spells it. Typedef names stay symbolic so facts and generated
- * declarations keep the library's own vocabulary; `resolveCType` in the model
- * follows them when a mapping needs the underlying type.
- */
-export type CType =
-	| { readonly kind: "void"; readonly const?: true }
+export type CScalarType =
 	| { readonly kind: "bool"; readonly const?: true }
 	| { readonly kind: "integer"; readonly name: CIntegerName; readonly const?: true }
 	| { readonly kind: "float"; readonly name: CFloatName; readonly const?: true }
+	| {
+			readonly kind: "bitint";
+			readonly bits: number;
+			readonly signed: boolean;
+			readonly const?: true;
+	  };
+/**
+ * Typedef names stay symbolic so facts and generated declarations keep the library's
+ * vocabulary; `resolveCType` follows them when a mapping needs the underlying type.
+ */
+export type CType =
+	| CScalarType
+	| { readonly kind: "void"; readonly const?: true }
+	| {
+			readonly kind: "complex";
+			readonly of: CScalarType;
+			readonly const?: true;
+	  }
+	| {
+			readonly kind: "vector";
+			readonly of: CScalarType;
+			readonly length: number;
+			readonly flavor: "gnu" | "ext";
+			readonly const?: true;
+	  }
 	| {
 			readonly kind: "pointer";
 			readonly to: CType;
@@ -51,6 +70,19 @@ export type CType =
 	| { readonly kind: "enum"; readonly name: string; readonly const?: true }
 	| { readonly kind: "typedef"; readonly name: string; readonly const?: true }
 	| { readonly kind: "unsupported"; readonly spelling: string };
+
+export function isCScalarType(type: CType): type is CScalarType {
+	return (
+		type.kind === "bool" ||
+		type.kind === "integer" ||
+		type.kind === "float" ||
+		type.kind === "bitint"
+	);
+}
+
+export function isCNativeValueType(type: CType): boolean {
+	return isCScalarType(type) || type.kind === "complex" || type.kind === "vector";
+}
 
 /**
  * The key clang's spelling gives an unnamed tag, such as
@@ -147,6 +179,8 @@ const REPRESENTATION_ATTRIBUTES = new Set([
 	"matrix_type",
 	"address_space",
 	"mode",
+	"neon_vector_type",
+	"neon_polyvector_type",
 ]);
 
 const INTEGER_WORDS = new Set([
@@ -233,6 +267,7 @@ class Parser {
 	/** Declaration specifiers: one base type plus qualifiers, in any order. */
 	specifiers(): CType {
 		let isConst = false;
+		let complex = false;
 		const integerWords: Array<string> = [];
 		let base: CType | undefined;
 		for (;;) {
@@ -240,6 +275,30 @@ class Parser {
 			const token = this.#peek();
 			if (token?.kind !== "word") break;
 			const word = token.text;
+			if (word === "_Complex" || word === "__complex__") {
+				if (complex) throw new Unsupported("duplicate complex specifier");
+				complex = true;
+				this.#index++;
+				continue;
+			}
+			if (word === "_BitInt") {
+				if (base !== undefined) throw new Unsupported("conflicting type specifiers");
+				this.#index++;
+				if (!this.#isPunct("(")) throw new Unsupported("bit width");
+				this.#index++;
+				const width = this.#peek();
+				if (
+					width?.kind !== "number" ||
+					!Number.isSafeInteger(width.value) ||
+					width.value <= 0
+				)
+					throw new Unsupported("bit width");
+				this.#index++;
+				if (!this.#isPunct(")")) throw new Unsupported("bit width");
+				this.#index++;
+				base = { kind: "bitint", bits: width.value, signed: true };
+				continue;
+			}
 			if (QUALIFIERS.has(word)) {
 				if (word === "const") isConst = true;
 				this.#index++;
@@ -279,8 +338,6 @@ class Parser {
 				word === "_Atomic" ||
 				word === "typeof" ||
 				word === "__typeof__" ||
-				word === "_BitInt" ||
-				word === "_Complex" ||
 				word === "__fp16" ||
 				word === "__bf16"
 			) {
@@ -297,10 +354,20 @@ class Parser {
 					integerWords[0] === "long"
 				)
 					base = { kind: "float", name: "long double" };
+				else if (
+					base.kind === "bitint" &&
+					integerWords.length === 1 &&
+					(integerWords[0] === "unsigned" || integerWords[0] === "signed")
+				)
+					base = { ...base, signed: integerWords[0] === "signed" };
 				else throw new Unsupported("conflicting type specifiers");
 			} else base = { kind: "integer", name: integerName(integerWords) };
 		}
 		if (base === undefined) throw new Unsupported("missing type specifier");
+		if (complex) {
+			if (!isCScalarType(base)) throw new Unsupported("complex element type");
+			base = { kind: "complex", of: base };
+		}
 		return isConst ? withConst(base) : base;
 	}
 
@@ -455,6 +522,12 @@ function baseSpelling(type: CType): string {
 		case "integer":
 		case "float":
 			return `${prefix}${type.name}`;
+		case "bitint":
+			return `${prefix}${type.signed ? "" : "unsigned "}_BitInt(${type.bits})`;
+		case "complex":
+			return `${prefix}${formatCDeclaration(type.of)} _Complex`;
+		case "vector":
+			return `${prefix}${formatCDeclaration(type.of)} __attribute__((${type.flavor === "ext" ? `ext_vector_type(${type.length})` : `vector_size(sizeof(${formatCDeclaration(type.of)}) * ${type.length})`}))`;
 		case "record":
 			return `${prefix}${type.tag} ${type.name}`;
 		case "enum":

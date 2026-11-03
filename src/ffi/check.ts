@@ -177,6 +177,9 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 				return json({ ...value, to: type(value.to, `${at}.*`) });
 			case "array":
 				return json({ ...value, of: type(value.of, `${at}[]`) });
+			case "complex":
+			case "vector":
+				return json({ ...value, of: type(value.of, `${at}.element`) });
 			case "function":
 				return json({
 					...value,
@@ -204,6 +207,7 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 									type: type(entry.type, key),
 									attributes: entry.attributes,
 									alignmentBits: entry.alignmentBits,
+									sizeBits: entry.sizeBits,
 								});
 				}
 				return json(value);

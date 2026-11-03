@@ -109,8 +109,10 @@ types: {
 Each type exports an opaque value box and a factory, such as `Wide()`, that creates
 C arithmetic zero. C functions, constants, globals, records, and arrays retain the
 opted typedef instead of converting it to a JavaScript scalar. Use C functions to
-inspect or compute with these values. This preserves unsigned 128-bit integers and
-native `long double` precision.
+inspect or compute with these values. This preserves native arithmetic precision,
+including complex components, fixed vector lanes, and bit-precise integer widths.
+Clang supplies storage size and alignment, including vector padding and explicit
+typedef alignment; `ffi check` tracks these ABI properties.
 
 Arguments become independent native copies before calls or worker dispatch, so the
 source box can be disposed afterward. Callback arguments also remain valid after

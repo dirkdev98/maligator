@@ -52,7 +52,12 @@ export interface FfiInspectionData {
 	readonly functions: ReadonlyArray<FunctionInspectionData>;
 	readonly types: ReadonlyArray<TypeInspectionData>;
 	readonly handles: ReadonlyArray<HandleInspectionData>;
-	readonly natives: ReadonlyArray<{ readonly name: string; readonly c: string }>;
+	readonly natives: ReadonlyArray<{
+		readonly name: string;
+		readonly c: string;
+		readonly sizeBits: number;
+		readonly alignmentBits: number;
+	}>;
 	readonly constants: ReadonlyArray<ConstantInspectionData>;
 	readonly skippedConstants: ReadonlyArray<{
 		readonly name: string;
@@ -495,7 +500,12 @@ export function inspectBindings(
 		},
 		functions,
 		types,
-		natives: [...plan.natives.keys()].map((name) => ({ name, c: name })),
+		natives: [...plan.natives.values()].map(({ name, sizeBits, alignmentBits }) => ({
+			name,
+			c: name,
+			sizeBits,
+			alignmentBits,
+		})),
 		handles: [...plan.handles.values()].map((handle) => ({
 			name: handle.name,
 			c: handle.spelling,

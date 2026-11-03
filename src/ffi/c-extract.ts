@@ -32,7 +32,14 @@ import type {
 	CUntypedMacro,
 } from "./c-model.ts";
 import { cRecordAccesses, resolveCType } from "./c-model.ts";
-import { C_FLOAT_NAMES, C_INTEGER_NAMES, parseCType, unnamedTagKey } from "./c-type.ts";
+import {
+	C_FLOAT_NAMES,
+	C_INTEGER_NAMES,
+	isCNativeValueType,
+	isCScalarType,
+	parseCType,
+	unnamedTagKey,
+} from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import { clangProbeDeclarations, visitClangDeclarations } from "./clang-ast.ts";
 import { FfiError, FfiSourceChangedError } from "./ffi-error.ts";
@@ -388,7 +395,39 @@ function nodeType(node: JsonObject): CType {
 	const type = objectField(node, "type");
 	const spelling = type === undefined ? undefined : stringField(type, "qualType");
 	if (spelling === undefined) return { kind: "unsupported", spelling: "" };
+	if (node.isInvalid === true) return { kind: "unsupported", spelling };
+	if (
+		node.kind === "ComplexType" ||
+		node.kind === "VectorType" ||
+		node.kind === "ExtVectorType"
+	) {
+		if (node.kind === "VectorType" && !spelling.includes("vector_size"))
+			return { kind: "unsupported", spelling };
+		const child = innerNodes(node).find(
+			(child) =>
+				typeof child.kind === "string" &&
+				(child.kind.endsWith("Type") || child.kind === "QualType"),
+		);
+		const of = child === undefined ? undefined : nodeType(child);
+		if (of === undefined || !isCScalarType(of)) return { kind: "unsupported", spelling };
+		if (node.kind === "ComplexType") return { kind: "complex", of };
+		const length = node.numElements;
+		return typeof length === "number" && Number.isSafeInteger(length) && length > 0
+			? {
+					kind: "vector",
+					of,
+					length,
+					flavor: node.kind === "ExtVectorType" ? "ext" : "gnu",
+				}
+			: { kind: "unsupported", spelling };
+	}
 	const parsed = parseCType(spelling);
+	if (node.kind === "TypedefDecl") {
+		const representation = innerNodes(node).find(
+			(child) => child.kind === "VectorType" || child.kind === "ExtVectorType",
+		);
+		if (representation !== undefined) return nodeType(representation);
+	}
 	if (parsed.kind !== "unsupported") return parsed;
 	const desugared =
 		type === undefined ? undefined : stringField(type, "desugaredQualType");
@@ -1606,7 +1645,7 @@ function probeDeclarationTypes(
 	return { ...declarations, functions, globals, records };
 }
 
-/** Clang's JSON omits compatible enum types and effective typedef alignment. */
+/** Clang's JSON leaves storage layout and compatible enum types to target probes. */
 function probeTypeMetadata(
 	input: CExtractionInput,
 	headers: CHeaders,
@@ -1620,6 +1659,7 @@ function probeTypeMetadata(
 		field?: number;
 		enumeration?: string;
 		alignment?: string;
+		size?: string;
 	}> = [];
 	const accesses = cRecordAccesses(declarations);
 	for (const record of declarations.records.values()) {
@@ -1649,11 +1689,17 @@ function probeTypeMetadata(
 		});
 	}
 	for (const alias of declarations.typedefs.values()) {
-		if (alias.attributes?.includes("Aligned") !== true) continue;
+		const native = isCNativeValueType(resolveCType(declarations, alias.type));
+		if (alias.attributes?.includes("Aligned") !== true && !native) continue;
 		queries.push({
 			expression: `_Alignof(${alias.name}) * __CHAR_BIT__`,
 			alignment: alias.name,
 		});
+		if (native)
+			queries.push({
+				expression: `sizeof(${alias.name}) * __CHAR_BIT__`,
+				size: alias.name,
+			});
 	}
 	if (queries.length === 0) return declarations;
 	const source = path.join(headers.directory, "probe-integer-types.c");
@@ -1662,7 +1708,7 @@ function probeTypeMetadata(
 		[
 			...input.headers.map((header) => `#include "${header}"`),
 			...queries.map((query, index) =>
-				query.alignment === undefined
+				query.alignment === undefined && query.size === undefined
 					? `enum : int { __mal_integer_type_${index} = _Generic((${query.expression}), ${names.map((name, type) => `${name}: ${type}`).join(", ")}, default: -1) };`
 					: `enum : unsigned long long { __mal_integer_type_${index} = ${query.expression} };`,
 			),
@@ -1693,6 +1739,14 @@ function probeTypeMetadata(
 		typedefs = new Map(declarations.typedefs);
 	queries.forEach((query, index) => {
 		const value = values.get(`__mal_integer_type_${index}`);
+		if (query.size !== undefined) {
+			if (value !== undefined && value > 0n && value <= BigInt(Number.MAX_SAFE_INTEGER))
+				typedefs.set(query.size, {
+					...typedefs.get(query.size)!,
+					sizeBits: Number(value),
+				});
+			return;
+		}
 		if (query.alignment !== undefined) {
 			if (value !== undefined && value > 0n && value <= BigInt(Number.MAX_SAFE_INTEGER))
 				typedefs.set(query.alignment, {

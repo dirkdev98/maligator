@@ -85,6 +85,42 @@ afterEach(() => {
 });
 
 describe("ffi check", () => {
+	it.each([
+		[
+			"fixed vector lanes",
+			"float ShapesNative __attribute__((ext_vector_type(3)))",
+			"float ShapesNative __attribute__((ext_vector_type(4)))",
+		],
+		[
+			"vector alignment",
+			"float ShapesNative __attribute__((ext_vector_type(3), aligned(32)))",
+			"float ShapesNative __attribute__((ext_vector_type(3), aligned(64)))",
+		],
+		[
+			"bit-precise width",
+			"unsigned _BitInt(65) ShapesNative",
+			"unsigned _BitInt(66) ShapesNative",
+		],
+		["complex components", "float _Complex ShapesNative", "double _Complex ShapesNative"],
+	])("detects %s changes behind an unchanged native SDK", (_name, before, after) => {
+		const directory = project();
+		const file = path.join(directory, "include/shapes.h");
+		const declarations = (type: string) =>
+			`${header}\ntypedef ${type};\nShapesNative shapes_native(ShapesNative value);\n`;
+		writeContract(directory, { types: { ShapesNative: { representation: "native" } } });
+		writeFileSync(file, declarations(before));
+		accept(directory);
+		expect(cli(directory, ["types"]).status).toBe(0);
+		const sdk = readFileSync(path.join(directory, "maligator-ffi.d.ts"), "utf8");
+		writeFileSync(file, declarations(after));
+		expect(cli(directory, ["types"]).status).toBe(0);
+		expect(readFileSync(path.join(directory, "maligator-ffi.d.ts"), "utf8")).toBe(sdk);
+		expect(
+			check(directory, [], 1).libraries[0]?.changes.some((change) =>
+				change.path.startsWith("declarations.typedef ShapesNative."),
+			),
+		).toBe(true);
+	});
 	it("tracks native layout query signatures for opaque caller storage", () => {
 		const directory = project();
 		const file = path.join(directory, "include/shapes.h");

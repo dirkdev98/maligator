@@ -1905,9 +1905,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] Define explicit lifetime contracts for retained global pointers.
 
-- [ ] Extend native value mapping to complex, fixed vector, and extended C arithmetic
-      types.
-
 - [ ] Support const-member tagged values whose discriminator overlaps union storage.
 
 - [ ] Extend compound resource-bearing results with explicit ownership and lifetime.

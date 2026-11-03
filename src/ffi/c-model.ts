@@ -95,8 +95,10 @@ export interface CTypedef {
 	readonly name: string;
 	readonly type: CType;
 	readonly attributes?: ReadonlyArray<string>;
-	/** Effective target alignment for an alias with an alignment attribute. */
+	/** Target alignment, including explicit alignment attributes. */
 	readonly alignmentBits?: number;
+	/** Native arithmetic storage can include padding beyond its logical width or lanes. */
+	readonly sizeBits?: number;
 	readonly doc?: FfiText;
 	readonly location: CLocation;
 	readonly library: boolean;

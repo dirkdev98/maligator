@@ -45,3 +45,28 @@ void native_notify(void (*callback)(NativeUnsigned, void *), void *data, void (*
     if (pthread_create(&thread, NULL, native_send, &job) != 0) abort();
     if (pthread_join(thread, NULL) != 0) abort();
 }
+NativeComplex native_complex_global;
+NativeComplex native_complex_make(void) { NativeComplex value; __real__ value = native_precise(); __imag__ value = 2.0L + 2.0L * LDBL_EPSILON; return value; }
+int native_complex_check(NativeComplex value) { return __real__ value == native_precise() && __imag__ value == 2.0L + 2.0L * LDBL_EPSILON; }
+NativeComplex native_complex_identity(NativeComplex value) { return value; }
+NativeVector native_vector_make(void) { return (NativeVector){2, 3, 5, 7}; }
+int native_vector_sum(NativeVector value) { return value[0] + value[1] + value[2] + value[3]; }
+NativeTriple native_triple_make(void) { return (NativeTriple){2, 3, 5}; }
+int native_triple_sum(NativeTriple value) { return (int)(value[0] + value[1] + value[2]); }
+NativeGnuVector native_gnu_make(void) { return (NativeGnuVector){2, 3, 5, 7}; }
+double native_gnu_sum(NativeGnuVector value) { return value[0] + value[1] + value[2] + value[3]; }
+NativeAlignedTriple native_aligned_triple(void) { return (NativeAlignedTriple){2, 3, 5}; }
+int native_aligned_sum(NativeAlignedTriple value) { return native_triple_sum(value); }
+NativeBits native_bits_max(void) { return ~(NativeBits)0; }
+int native_bits_check(NativeBits value) { return value == native_bits_max(); }
+NativeWideBits native_wide_bits_max(void) { return (NativeWideBits)~(NativeWideBits)0; }
+int native_wide_bits_check(NativeWideBits value) { return value == native_wide_bits_max(); }
+NativeSignedBits native_signed_bits_min(void) { return -((NativeSignedBits)1 << 63) * 2; }
+int native_signed_bits_check(NativeSignedBits value) { return value == native_signed_bits_min(); }
+NativeExtensionRecord native_extension_record(void) { return (NativeExtensionRecord){native_complex_make(), native_triple_make(), native_bits_max()}; }
+int native_extension_record_check(NativeExtensionRecord value) { return native_complex_check(value.complex) && native_triple_sum(value.vector) == 10 && native_bits_check(value.bits); }
+void native_triple_inout(NativeTriple *value) { *value += (NativeTriple){1, 2, 3}; }
+void native_complex_out(NativeComplex *value) { *value = native_complex_make(); }
+int native_triples_sum(const NativeTriple *values, size_t count) { int sum = 0; for (size_t i = 0; i < count; i++) sum += native_triple_sum(values[i]); return sum; }
+NativeComplex native_complex_callback(NativeComplex (*callback)(NativeComplex, void *), void *data) { return callback(native_complex_make(), data); }
+NativeTriple native_triple_callback(NativeTriple (*callback)(NativeTriple, void *), void *data) { return callback(native_triple_make(), data); }

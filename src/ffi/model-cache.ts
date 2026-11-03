@@ -177,7 +177,7 @@ export function loadCModel(input: CExtractionInput): CModel {
 	)
 		return extractCModel(input);
 	const compiler = statSync(input.compiler.path);
-	const producer = compilerProducerIdentity(STAGE, 11);
+	const producer = compilerProducerIdentity(STAGE, 12);
 	const analysis = withCHeaders<{
 		model: CModel;
 		publication?: { key: string; dependencies: ReadonlyArray<Dependency> };
