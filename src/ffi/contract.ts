@@ -206,7 +206,16 @@ function validateShape(value: unknown, at: string): void {
 
 function validateTypeFacts(value: unknown, at: string): void {
 	expectObject(value, at);
-	expectKeys(value, at, ["handle", "shape", "fields", "evidence"]);
+	expectKeys(value, at, ["representation", "handle", "shape", "fields", "evidence"]);
+	if (value.representation !== undefined)
+		expect(
+			value.representation === "native" &&
+				value.handle === undefined &&
+				value.shape === undefined &&
+				value.fields === undefined,
+			`${at}.representation`,
+			"native without handle, shape, or fields",
+		);
 	if (value.shape !== undefined) {
 		validateShape(value.shape, `${at}.shape`);
 		expect(value.handle === undefined, at, "a value shape or a handle");

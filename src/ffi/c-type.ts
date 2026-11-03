@@ -250,7 +250,12 @@ class Parser {
 				this.#index++;
 				continue;
 			}
-			if (base !== undefined || integerWords.length > 0) break;
+			if (
+				base !== undefined ||
+				(integerWords.length > 0 &&
+					!(word === "double" && integerWords.length === 1 && integerWords[0] === "long"))
+			)
+				break;
 			this.#index++;
 			if (word === "void") base = { kind: "void" };
 			else if (word === "_Bool" || word === "bool") base = { kind: "bool" };

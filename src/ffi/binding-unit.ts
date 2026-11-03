@@ -105,6 +105,7 @@ const UNROOTED_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
 	"bigint",
 	"string",
 	"handle",
+	"native",
 	"bytes",
 ]);
 
@@ -118,6 +119,7 @@ function inputCanRunJavaScript(value: JsValue): boolean {
 		case "string":
 		case "bytes":
 		case "handle":
+		case "native":
 		case "callable":
 			return false;
 		case "callback":
@@ -478,6 +480,14 @@ class BindingWriter {
 		const cast = (expression: string) =>
 			`(${localDeclaration(type, "")}) (${expression})`;
 		switch (value.kind) {
+			case "native": {
+				const temporary = this.#fresh("native");
+				return [
+					`void *${temporary};`,
+					`if (!mal_ffi_to_handle(vm, ${source}, &mal_ffi_type_${value.name}, false, ${site}, &${temporary}, nullptr)) ${fail}`,
+					`${target} = *(${value.name} *) ${temporary};`,
+				];
+			}
 			case "handle": {
 				const temporary = this.#fresh("handle");
 				return [
@@ -672,6 +682,8 @@ class BindingWriter {
 		owner = "mal_owner",
 	): string {
 		switch (value.kind) {
+			case "native":
+				return `mal_ffi_native_out_${value.name}(vm, ${expression})`;
 			case "callable":
 				return `(${expression}) == nullptr ? mal_ffi_null() : mal_ffi_new_callable(vm, ${cString(value.site)}, ${value.signature.params.length}, mal_ffi_function_${value.name}, &(${expression}), sizeof(${expression}), ${value.owner === undefined ? "mal_ffi_undefined()" : owner})`;
 			case "handle": {
@@ -1460,6 +1472,18 @@ class BindingWriter {
 			}
 		}
 		return lines;
+	}
+
+	nativeTypes(): Array<string> {
+		return [...this.#plan.natives.values()].flatMap(({ name }) => [
+			`static const MalFfiHandleType mal_ffi_type_${name} = { .name = ${cString(name)}, .size = sizeof(${name}), .alignment = _Alignof(${name}) };`,
+			`static MalValue mal_ffi_native_out_${name}(MalVm *vm, ${name} mal_value) { typeof_unqual(${name}) mal_copy = mal_value; return mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${name}, &mal_copy, false, false); }`,
+			`static MalValue mal_ffi_native_zero_${name}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
+			"\t(void) mal_this; (void) mal_args; (void) mal_argc; (void) mal_new_target; (void) mal_callee;",
+			`\t${name} mal_zero = {};`,
+			`\treturn mal_ffi_native_out_${name}(vm, mal_zero);`,
+			"}",
+		]);
 	}
 
 	/** The descriptor of each handle type: its destroy wrapper and field accessors. */
@@ -4002,6 +4026,7 @@ export function describeBindingUnit(
 		specifier: ffiModuleSpecifier(library),
 		installer: ffiInstallerSymbol(library),
 		exports: [
+			...plan.natives.keys(),
 			...[...plan.handles.values()].flatMap((handle) =>
 				handle.allocator === undefined ? [] : [handle.allocator],
 			),
@@ -4090,6 +4115,10 @@ export function generateBindingUnit(
 		...writer.constant(constant),
 	]);
 	const exports = [
+		...[...plan.natives.keys()].map((name) => ({
+			name,
+			entry: `{ ${cString(name)}, 0, mal_ffi_native_zero_${name}, nullptr }`,
+		})),
 		...[...plan.handles.values()].flatMap((handle) =>
 			handle.allocator === undefined
 				? []
@@ -4184,11 +4213,15 @@ export function generateBindingUnit(
 		}),
 		// Tentative definitions: helpers refer to these before their initializers.
 		"static const MalFfiLibrary mal_ffi_library;",
+		...[...plan.natives.keys()].map(
+			(name) => `static const MalFfiHandleType mal_ffi_type_${name};`,
+		),
 		...[...plan.handles.keys()].map(
 			(name) => `static const MalFfiHandleType mal_ffi_type_${name};`,
 		),
 		"",
 		...writer.callableDeclarations(),
+		...writer.nativeTypes(),
 		...writer.recordHelpers(),
 		...writer.handleTypes(),
 		...writer.callableHelpers(),

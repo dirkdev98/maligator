@@ -103,6 +103,8 @@ export interface MaligatorFfiHandle {
 
 /** Facts about one C type, keyed by its typedef or tag. */
 export interface MaligatorFfiTypeFacts {
+	/** Preserve an arithmetic typedef exactly in a nominal native value box. */
+	representation?: "native";
 	handle?: MaligatorFfiHandle;
 	/** Select active union storage explicitly or from a record's discriminator. */
 	shape?: MaligatorFfiShape;

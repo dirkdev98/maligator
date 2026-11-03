@@ -27,6 +27,7 @@ import type { FfiText } from "./text.ts";
  */
 export type JsValue =
 	| { readonly kind: "undefined" }
+	| { readonly kind: "native"; readonly name: string }
 	| {
 			readonly kind: "callable";
 			readonly name: string;
@@ -329,6 +330,11 @@ export interface SkippedConstant {
 	readonly reason: string;
 }
 
+export interface NativeType {
+	readonly name: string;
+	readonly doc?: FfiText;
+}
+
 export interface BindingPlan {
 	readonly functions: ReadonlyArray<BoundFunction>;
 	/**
@@ -340,6 +346,7 @@ export interface BindingPlan {
 	readonly records: ReadonlyMap<string, MappedRecord>;
 	readonly unions: ReadonlyMap<string, MappedUnion>;
 	readonly tagged: ReadonlyMap<string, MappedTagged>;
+	readonly natives: ReadonlyMap<string, NativeType>;
 	readonly handles: ReadonlyMap<string, HandleType>;
 	readonly constants: ReadonlyArray<MappedConstant>;
 	readonly skippedConstants: ReadonlyArray<SkippedConstant>;
@@ -685,12 +692,39 @@ function functionFacts(model: CModel, facts: LibraryFacts): Map<string, Function
 	return result;
 }
 
+function nativeAlias(
+	model: CModel,
+	natives: ReadonlyMap<string, NativeType>,
+	type: CType,
+): NativeType | { gap: string } | undefined {
+	if (natives.size === 0) return undefined;
+	const seen = new Set<string>();
+	let qualified = false;
+	while (type.kind === "typedef" && !seen.has(type.name)) {
+		const native = natives.get(type.name);
+		if (native !== undefined) {
+			if (qualified)
+				return {
+					gap: `native ${native.name}: const typedef aliases need an explicit value construction interface`,
+				};
+			return native;
+		}
+		seen.add(type.name);
+		const next = model.typedefs.get(type.name)?.type;
+		if (next === undefined) return undefined;
+		if ("const" in next && next.const === true) qualified = true;
+		type = next;
+	}
+	return undefined;
+}
+
 class Planner {
 	readonly #model: CModel;
 	readonly #accesses: ReturnType<typeof cRecordAccesses>;
 	readonly records = new Map<string, MappedRecord>();
 	readonly unions = new Map<string, MappedUnion>();
 	readonly tagged = new Map<string, MappedTagged>();
+	readonly natives = new Map<string, NativeType>();
 	readonly #shapes = new Map<string, { alias: string; shape: MaligatorFfiShape }>();
 	readonly #handles: ReadonlyMap<string, Omit<HandleType, "fields" | "managedFields">>;
 	readonly #recordGaps = new Map<string, string>();
@@ -707,6 +741,44 @@ class Planner {
 		this.#accesses = cRecordAccesses(model);
 		this.#handles = handles;
 		for (const [name, entry] of Object.entries(facts.types)) {
+			if (entry.representation === "native") {
+				if (
+					entry.handle !== undefined ||
+					entry.shape !== undefined ||
+					entry.fields !== undefined
+				)
+					throw new FfiError(
+						`types.${name}.representation: native values cannot declare handle, shape, or fields`,
+					);
+				const alias = model.typedefs.get(name);
+				if (alias === undefined)
+					throw new FfiError(
+						`types.${name}.representation: native values require an arithmetic typedef`,
+					);
+				let type: CType = { kind: "typedef", name };
+				const seen = new Set<string>();
+				while (type.kind === "typedef") {
+					if (seen.has(type.name))
+						throw new FfiError(`types.${name}.representation: recursive typedef`);
+					seen.add(type.name);
+					if (type.name !== name && facts.types[type.name]?.representation === "native")
+						throw new FfiError(
+							`types.${name}.representation: the typedef chain already has a native representation`,
+						);
+					if (type.const === true) break;
+					const target: CType | undefined = model.typedefs.get(type.name)?.type;
+					if (target === undefined) break;
+					type = target;
+				}
+				if ((type.kind !== "integer" && type.kind !== "float") || type.const === true)
+					throw new FfiError(
+						`types.${name}.representation: native values require an unqualified arithmetic typedef`,
+					);
+				this.natives.set(name, {
+					name,
+					...(alias.doc === undefined ? {} : { doc: alias.doc }),
+				});
+			}
 			if (entry.shape === undefined) continue;
 			const type = model.records.has(name)
 				? { kind: "record" as const, tag: model.records.get(name)!.tag, name }
@@ -746,6 +818,22 @@ class Planner {
 		if (facts.array?.capacity !== undefined)
 			throw new FfiError("array.capacity applies to caller-owned output buffers");
 		const resolved = resolveCType(this.#model, type);
+		const native = nativeAlias(this.#model, this.natives, type);
+		if (native !== undefined) {
+			if ("gap" in native) return native;
+			if (
+				facts.shape !== undefined ||
+				facts.array !== undefined ||
+				facts.bytes !== undefined ||
+				(facts.string !== undefined && facts.string !== false) ||
+				facts.free !== undefined ||
+				facts.fresh !== undefined
+			)
+				throw new FfiError(
+					`native ${native.name}: value boxes do not use pointer or shape facts`,
+				);
+			return { value: { kind: "native", name: native.name } };
+		}
 		if (facts.array?.element !== undefined && resolved.kind !== "pointer")
 			throw new FfiError(
 				"array.element requires a pointer to fixed character array rows",
@@ -1592,6 +1680,7 @@ class Planner {
 			case "integer":
 			case "float":
 			case "bigint":
+			case "native":
 				return true;
 			case "string":
 				return value.counted !== true;
@@ -1782,6 +1871,7 @@ class Planner {
 						"integer",
 						"float",
 						"bigint",
+						"native",
 						"string",
 						"bytes",
 						"record",
@@ -2937,9 +3027,11 @@ export function planBindings(
 			continue;
 		}
 		const known =
-			typeof macro.value === "bigint"
-				? constantValue(macro.value, mapped.value)
-				: macro.value;
+			mapped.value.kind === "native"
+				? undefined
+				: typeof macro.value === "bigint"
+					? constantValue(macro.value, mapped.value)
+					: macro.value;
 		constants.push({
 			name: macro.name,
 			source: "macro",
@@ -2959,6 +3051,7 @@ export function planBindings(
 	);
 	const occupied = new Set([
 		...declared,
+		...planner.natives.keys(),
 		...constants.map(({ name }) => name),
 		...[...handles.values()].flatMap((handle) =>
 			handle.allocator === undefined ? [] : [handle.allocator],
@@ -3011,7 +3104,7 @@ export function planBindings(
 				throw new FfiError(
 					`${at}.set: a setter requires an assignable value without retained pointers`,
 				);
-			const storageType = globalStorageType(model, global.type);
+			const storageType = globalStorageType(model, global.type, planner.natives);
 			if (resolved.kind === "array" && !globalAssignable(model, storageType, handles))
 				throw new FfiError(
 					`${at}: an array accessor requires positive signed 32-bit bounds and resource-free values`,
@@ -3060,6 +3153,17 @@ export function planBindings(
 			else functions.push(binding);
 		}
 	}
+	for (const native of planner.natives.values()) {
+		if (
+			declared.has(native.name) ||
+			constants.some((entry) => entry.name === native.name) ||
+			planner.records.has(native.name) ||
+			handles.has(native.name)
+		)
+			throw new FfiError(
+				`types.${native.name}.representation: '${native.name}' is already an export`,
+			);
+	}
 	for (const handle of handles.values()) {
 		if (
 			handle.allocator !== undefined &&
@@ -3081,16 +3185,23 @@ export function planBindings(
 		records: planner.records,
 		unions: planner.unions,
 		tagged: planner.tagged,
+		natives: planner.natives,
 		handles,
 		constants,
 		skippedConstants,
 	};
 }
 
-function globalStorageType(model: CModel, type: CType): CType {
+function globalStorageType(
+	model: CModel,
+	type: CType,
+	natives: ReadonlyMap<string, NativeType>,
+): CType {
 	const resolved = resolveCType(model, type);
 	if (resolved.kind === "array")
-		return { ...resolved, of: globalStorageType(model, resolved.of) };
+		return { ...resolved, of: globalStorageType(model, resolved.of, natives) };
+	if (nativeAlias(model, natives, type) !== undefined)
+		return "const" in type && type.const === true ? { ...type, const: undefined } : type;
 	return "const" in resolved && resolved.const === true
 		? { ...resolved, const: undefined }
 		: type;

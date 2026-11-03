@@ -97,6 +97,26 @@ Conversions never coerce. A value of the wrong type throws a `TypeError`, and a 
 
 A function is exported only when every parameter and its result map. Functions that take or return other pointers, callbacks, or variadic arguments are not exported until the contract describes them.
 
+For arithmetic typedefs that need their C precision, use a native representation:
+
+```ts
+types: {
+    Wide: { representation: "native" },
+    Precise: { representation: "native" },
+}
+```
+
+Each type exports an opaque value box and a factory, such as `Wide()`, that creates
+C arithmetic zero. C functions, constants, globals, records, and arrays retain the
+opted typedef instead of converting it to a JavaScript scalar. Use C functions to
+inspect or compute with these values. This preserves unsigned 128-bit integers and
+native `long double` precision.
+
+Arguments become independent native copies before calls or worker dispatch, so the
+source box can be disposed afterward. Callback arguments also remain valid after
+the invocation. Disposal releases a box's copied storage. The typedef definition
+must be unqualified arithmetic; const-qualified aliases need a C value interface.
+
 Plain records and copied struct handles can contain const members when returned by C
 or passed to a JavaScript callback. Both also pass back to C by value, including on
 workers. Input conversion reads properties before initializing the native value;

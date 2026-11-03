@@ -1905,8 +1905,8 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] Define explicit lifetime contracts for retained global pointers.
 
-- [ ] Extend value mapping for wider integers, complex and vector values, and native
-      floating representations beyond JavaScript numbers.
+- [ ] Extend native value mapping to complex, fixed vector, and extended C arithmetic
+      types.
 
 - [ ] Support const-member tagged values whose discriminator overlaps union storage.
 

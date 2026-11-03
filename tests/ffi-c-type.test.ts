@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { formatCDeclaration, parseCType, unnamedTagKey } from "../src/ffi/c-type.ts";
 
 describe("C type spellings", () => {
+	it.each(["long double", "double long", "long volatile double"])(
+		"maps %s to its native floating type",
+		(spelling) => {
+			expect(parseCType(spelling)).toEqual({ kind: "float", name: "long double" });
+		},
+	);
 	it("round-trips the declarator shapes clang prints", () => {
 		for (const spelling of [
 			"const char *",

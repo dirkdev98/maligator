@@ -38,7 +38,18 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string | F
 	const lines: Array<string | FfiText> = [
 		`declare module ${JSON.stringify(ffiModuleSpecifier(library))} {`,
 	];
-	if (plan.handles.size > 0) lines.push("\tconst maligatorFfiHandle: unique symbol;");
+	if (plan.handles.size > 0 || plan.natives.size > 0)
+		lines.push("\tconst maligatorFfiHandle: unique symbol;");
+	for (const native of plan.natives.values())
+		lines.push(
+			...docComment(native.doc, "\t"),
+			`\texport interface ${native.name} {`,
+			`\t\treadonly [maligatorFfiHandle]: { readonly ${native.name}: true };`,
+			"\t\treadonly [Symbol.toStringTag]: string;",
+			"\t\t[Symbol.dispose](): void;",
+			"\t}",
+			`\texport function ${native.name}(): ${native.name};`,
+		);
 	for (const tagged of plan.tagged.values()) {
 		if (tagged.alias !== undefined)
 			lines.push(

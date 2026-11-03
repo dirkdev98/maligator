@@ -52,6 +52,7 @@ export interface FfiInspectionData {
 	readonly functions: ReadonlyArray<FunctionInspectionData>;
 	readonly types: ReadonlyArray<TypeInspectionData>;
 	readonly handles: ReadonlyArray<HandleInspectionData>;
+	readonly natives: ReadonlyArray<{ readonly name: string; readonly c: string }>;
 	readonly constants: ReadonlyArray<ConstantInspectionData>;
 	readonly skippedConstants: ReadonlyArray<{
 		readonly name: string;
@@ -265,6 +266,8 @@ export function formatTsType(
 			return value.alias ?? formatTsType(value.of, direction);
 		case "handle":
 			return nullable(value.name);
+		case "native":
+			return value.name;
 		case "array": {
 			if (value.format === "string") return "string";
 			if (value.format === "bytes")
@@ -486,12 +489,13 @@ export function inspectBindings(
 			functions: functions.length,
 			bound: plan.functions.length,
 			needFacts: plan.unbound.length,
-			types: types.length,
+			types: types.length + plan.natives.size,
 			constants: constants.length,
 			skippedConstants: plan.skippedConstants.length,
 		},
 		functions,
 		types,
+		natives: [...plan.natives.keys()].map((name) => ({ name, c: name })),
 		handles: [...plan.handles.values()].map((handle) => ({
 			name: handle.name,
 			c: handle.spelling,
