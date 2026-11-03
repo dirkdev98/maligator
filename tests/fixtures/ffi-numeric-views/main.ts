@@ -57,6 +57,102 @@ check(
 );
 check(numeric_f32(new Float32Array([0.25, 0.5])) === 0.75, "float32");
 
+for (const sum of [numeric_f64, sumAsync]) {
+	for (const values of [
+		[2, 3],
+		[0.25, 0.5],
+		[2, 0.5, -3],
+		[0.5, 2, -3],
+	])
+		check(
+			(await sum(values)) === values.reduce((total, value) => total + value, 0),
+			"number-array snapshots preserve integer, double and mixed values",
+		);
+	check(
+		(await sum(Object.freeze([2, 3]))) === 5 && (await sum(Object.seal([2, 3]))) === 5,
+		"sealed and frozen packed arrays remain readable",
+	);
+	check(
+		Number.isNaN(await sum([NaN])) && (await sum([Infinity])) === Infinity,
+		"numeric snapshots preserve non-finite values",
+	);
+	let coercions = 0;
+	await rejects(() =>
+		sum([
+			2,
+			{
+				valueOf() {
+					coercions++;
+					return 3;
+				},
+			},
+		] as unknown as Array<number>),
+	);
+	check(coercions === 0, "strict numeric conversion does not coerce objects");
+	const late: Array<unknown> = Array.from({ length: 65 }, (_, index) => index + 0.25);
+	late[late.length - 1] = {};
+	await rejects(() => sum(late as Array<number>));
+	let laterReads = 0;
+	const invalid = ["bad", 3];
+	Object.defineProperty(invalid, "1", {
+		get() {
+			laterReads++;
+			return 3;
+		},
+	});
+	await rejects(() => sum(invalid as unknown as Array<number>));
+	check(laterReads === 0, "numeric rejection precedes later element getters");
+	const holes = [2, 3, 4];
+	Reflect.deleteProperty(holes, "1");
+	const prototype = Object.create(Array.prototype) as object;
+	Object.defineProperty(prototype, "1", {
+		get() {
+			holes[2] = 8;
+			return 3;
+		},
+	});
+	Object.setPrototypeOf(holes, prototype);
+	check(
+		(await sum(holes)) === 13,
+		"inherited hole getters can change later numeric elements",
+	);
+	const shrinking = [2, 3];
+	Object.defineProperty(shrinking, "0", {
+		get() {
+			shrinking.length = 1;
+			return 2;
+		},
+	});
+	await rejects(() => sum(shrinking));
+	const reads: Array<string> = [];
+	const proxy = new Proxy([2, 3], {
+		get(target, key, receiver) {
+			if (key === "0" || key === "1") reads.push(key);
+			return Reflect.get(target, key, receiver) as unknown;
+		},
+	});
+	check(
+		(await sum(proxy)) === 5 && reads.join("") === "01",
+		"Array proxies retain ordered element reads",
+	);
+}
+check(
+	Object.is(
+		numeric_visit([-0], () => {}),
+		-0,
+	),
+	"double snapshots preserve negative zero bits",
+);
+{
+	const source = [2];
+	const pending = visitAsync(source, () => {});
+	source[0] = 100;
+	check(
+		(await pending) === 4,
+		"async numeric arrays are copied before later JS mutation",
+	);
+}
+
 class Vector extends Float64Array {}
 for (const sum of [numeric_f64, sumAsync]) {
 	const storage = new Float64Array([99, 2, 3, 101]);

@@ -434,6 +434,11 @@ bool mal_ffi_record_fields(
 bool mal_ffi_try_record_elements(
     MalVm *vm, MalValue array, int32_t length, MalFfiRecordType *type,
     MalValue *values);
+/**
+ * Copy a packed ordinary Number Array without invoking JavaScript. On false,
+ * ignore the destination and convert sequentially. The caller roots the source.
+ */
+bool mal_ffi_try_f64_elements(MalValue array, int32_t length, double *out);
 /** Read element `index` of an array that must have exactly `length` elements. */
 bool mal_ffi_element(
     MalVm *vm, MalValue array, int32_t index, int32_t length, const MalFfiSite *site, MalValue *out);

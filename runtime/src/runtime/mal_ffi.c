@@ -390,6 +390,33 @@ bool mal_ffi_check_count(
         (unsigned long long) maximum);
 }
 
+// Typed views skip copying; keep the bulk work out of their shared bridge.
+__attribute__((noinline)) bool mal_ffi_try_f64_elements(MalValue value, int32_t length, double *out) {
+    if (!mal_value_is_array_object(value)) return false;
+    MalArrayObject *array = mal_value_to_array_object(value);
+    if (length < 0 || array->length != (u32) length || array->elements == nullptr
+        || array->dense_count < (u32) length || array->dense_maybe_holey) return false;
+    const MalValue *elements = array->elements;
+    // Raw doubles already have C's representation; tagged values need the decoding pass.
+    if (length > 0 && elements[0] < MAL_VALUE_TAG_BASE) {
+        bool doubles = true;
+        for (int32_t index = 0; index < length; index++) {
+            MalValue element = elements[index];
+            doubles &= element < MAL_VALUE_TAG_BASE;
+            out[index] = mal_value_to_f64(element);
+        }
+        if (doubles) return true;
+    }
+    bool valid = true;
+    for (int32_t index = 0; index < length; index++) {
+        MalValue element = elements[index];
+        bool number = mal_ops_is_number(element);
+        valid &= number;
+        out[index] = number ? mal_ops_number_as_f64(element) : 0.0;
+    }
+    return valid;
+}
+
 bool mal_ffi_element(
     MalVm *vm, MalValue array, int32_t index, int32_t length, const MalFfiSite *site, MalValue *out) {
     // An Array's dense elements are own data properties, so reading one runs no JavaScript.

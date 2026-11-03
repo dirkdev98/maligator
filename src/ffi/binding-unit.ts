@@ -3265,6 +3265,12 @@ class BindingWriter {
 						const element = this.#fresh("element");
 						// Each string element needs its own copy; the frame's string buffers hold one value each.
 						const texts = value.of.kind === "string";
+						const elementType = resolveCType(this.#model, value.element);
+						const doubles =
+							value.of.kind === "float" &&
+							value.of.bits === 64 &&
+							elementType.kind === "float" &&
+							elementType.name === "double";
 						const storage = `mal_storage_${String(index)}`;
 						locals.push(
 							`${pointerDeclaration(value.element, elements)} = nullptr;`,
@@ -3279,7 +3285,7 @@ class BindingWriter {
 							);
 						}
 						cleanup.push(
-							`if ((void *) ${elements} != (void *) ${storage}) free(${elements});`,
+							`if (${elements} != nullptr && (void *) ${elements} != (void *) ${storage}) free(${elements});`,
 						);
 						const text = this.#fresh("text");
 						// Arrays of records with immediate fields read every element in one call.
@@ -3338,11 +3344,17 @@ class BindingWriter {
 									]
 								: []),
 							`} else if (${length} > 0) {`,
-							`\t${elements} = mal_ffi_calloc_storage((size_t) ${length}, sizeof(*${elements}), _Alignof(__typeof__(*${elements})));`,
+							`\t${elements} = mal_ffi_${doubles ? "allocate" : "calloc"}_storage((size_t) ${length}, sizeof(*${elements}), _Alignof(__typeof__(*${elements})));`,
 							`\tif (${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 							"}",
 							...(bulk === undefined
-								? sequential
+								? doubles
+									? [
+											`if (!mal_ffi_try_f64_elements(${source}, ${length}, ${elements})) {`,
+											...sequential.map((line) => `\t${line}`),
+											"}",
+										]
+									: sequential
 								: [
 										`if (${bulk.fields === "0" ? "true" : `(size_t) ${length} <= ${bulk.inline} / ${bulk.fields}`}) ${bulk.values} = ${bulk.storage};`,
 										`else if (${length} > 0) {`,
@@ -4181,6 +4193,12 @@ class BindingWriter {
 						const position = this.#fresh("index");
 						const element = this.#fresh("element");
 						const texts = value.of.kind === "string";
+						const elementType = resolveCType(this.#model, value.element);
+						const doubles =
+							value.of.kind === "float" &&
+							value.of.bits === 64 &&
+							elementType.kind === "float" &&
+							elementType.name === "double";
 						fields.push(
 							`${pointerDeclaration(value.element, elements)};`,
 							`int32_t ${length};`,
@@ -4196,12 +4214,17 @@ class BindingWriter {
 							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &mal_ctx->${length})) goto mal_failed;`,
 							`if (mal_ctx->${length} > 0) {`,
 							`static_assert(sizeof(*mal_ctx->${elements}) % _Alignof(__typeof__(*mal_ctx->${elements})) == 0, "FFI array stride must preserve C alignment");`,
-							`\tmal_ctx->${elements} = mal_ffi_calloc_storage((size_t) mal_ctx->${length}, sizeof(*mal_ctx->${elements}), _Alignof(__typeof__(*mal_ctx->${elements})));`,
+							`\tmal_ctx->${elements} = mal_ffi_${doubles ? "allocate" : "calloc"}_storage((size_t) mal_ctx->${length}, sizeof(*mal_ctx->${elements}), _Alignof(__typeof__(*mal_ctx->${elements})));`,
 							`\tif (mal_ctx->${elements} == nullptr) {`,
 							"\t\tmal_ffi_out_of_memory(vm);",
 							"\t\tgoto mal_failed;",
 							"\t}",
 							"}",
+							...(doubles
+								? [
+										`if (!mal_ffi_try_f64_elements(${source}, mal_ctx->${length}, mal_ctx->${elements})) {`,
+									]
+								: []),
 							`for (int32_t ${position} = 0; ${position} < mal_ctx->${length}; ${position}++) {`,
 							`\tMalValue ${element};`,
 							`\tif (!mal_ffi_element(vm, ${source}, ${position}, mal_ctx->${length}, ${site}, &${element})) goto mal_failed;`,
@@ -4223,6 +4246,7 @@ class BindingWriter {
 										inputs,
 									).map((line) => `\t${line}`)),
 							"}",
+							...(doubles ? ["}"] : []),
 							`${target} = (${localDeclaration(param.type, "")}) mal_ctx->${elements};`,
 						);
 						if (view === undefined) body.push(...converted);
