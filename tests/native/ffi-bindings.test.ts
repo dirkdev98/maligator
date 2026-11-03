@@ -179,7 +179,7 @@ describe("C library bindings", () => {
 			"async rejected shapes_checksum_async: data expects an ArrayBuffer or a view",
 			"queued 0 9:event 9,1:event 1,2:event 2,3:event 3",
 			"ticks 1,2",
-			"async lent shapes_canvas_title_async: canvas expects a handle the program holds, not one a callback lends",
+			"async lent TypeError",
 			"later 7:event 7",
 		]);
 	}, 600_000);

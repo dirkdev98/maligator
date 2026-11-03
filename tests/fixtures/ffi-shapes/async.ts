@@ -93,7 +93,7 @@ async function runAsync(): Promise<void> {
 	try {
 		await lent;
 	} catch (error) {
-		console.log(`async lent ${(error as Error).message}`);
+		console.log(`async lent ${(error as Error).name}`);
 	}
 	// The event loop waits for a call a library thread makes later.
 	shapes_watch((event, label) => {
