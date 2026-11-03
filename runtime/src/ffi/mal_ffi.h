@@ -158,6 +158,7 @@ typedef struct MalFfiDiscardState MalFfiDiscardState;
 typedef struct MalFfiDiscardedHandle {
     const MalFfiHandleType *family;
     const void *value;
+    bool claimed;
 } MalFfiDiscardedHandle;
 typedef struct MalFfiDiscards {
     MalFfiDiscardState *state;

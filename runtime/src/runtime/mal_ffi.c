@@ -2942,10 +2942,18 @@ bool mal_ffi_discard_claim(MalVm *vm, MalFfiDiscards *discards,
     const MalFfiHandleType *type, const void *value, bool fresh) {
     if (value == nullptr) return false;
     const MalFfiHandleType *family = ffi_handle_family(type);
-    for (i32 index = 0; index < discards->count; index++)
-        if (discards->items[index].family == family && discards->items[index].value == value) return false;
-    if (discards->count == discards->capacity) abort();
-    discards->items[discards->count++] = (MalFfiDiscardedHandle) {family, value};
+    MalFfiDiscardedHandle *item = nullptr;
+    for (i32 index = 0; index < discards->count; index++) {
+        if (discards->items[index].family != family || discards->items[index].value != value) continue;
+        item = &discards->items[index];
+        if (item->claimed) return false;
+        break;
+    }
+    if (item == nullptr) {
+        if (discards->count == discards->capacity) abort();
+        item = &discards->items[discards->count++];
+        *item = (MalFfiDiscardedHandle) {.family = family, .value = value};
+    }
     if (mal_ffi_is_library_resource(type, value)) return false;
     u32 flags = 0;
     if (vm != nullptr) {
@@ -2962,7 +2970,8 @@ bool mal_ffi_discard_claim(MalVm *vm, MalFfiDiscards *discards,
                 if (entry->type == family && entry->pointer == value) { flags = (u32) entry->claim; break; }
             }
     }
-    return !(flags & MAL_FFI_DISCARD_VALID) || (fresh && (flags & MAL_FFI_DISCARD_REPLACEABLE));
+    item->claimed = !(flags & MAL_FFI_DISCARD_VALID) || (fresh && (flags & MAL_FFI_DISCARD_REPLACEABLE));
+    return item->claimed;
 }
 
 bool mal_ffi_callback_enter(MalVm *vm) {

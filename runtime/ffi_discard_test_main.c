@@ -77,7 +77,8 @@ int main(void) {
     MalValue roots[3] = {mal_ffi_undefined(), mal_ffi_undefined(), mal_ffi_undefined()};
     MalFfiRoots root;
     mal_ffi_root(&root, roots, 3);
-    bool fresh_test = getenv("MAL_FFI_DISCARD_FRESH") != nullptr;
+    bool native_fresh_test = getenv("MAL_FFI_DISCARD_NATIVE_FRESH") != nullptr;
+    bool fresh_test = native_fresh_test || getenv("MAL_FFI_DISCARD_FRESH") != nullptr;
     int *value = fresh_test ? &recycled : malloc(sizeof(*value));
     assert(value != nullptr);
     recycled_open = fresh_test;
@@ -85,11 +86,10 @@ int main(void) {
     roots[0] = mal_ffi_new_handle(&vm, &library, &resource_type, value, true, false);
     assert(!mal_ffi_threw(&vm));
     if (fresh_test) {
-        MalFfiDiscardedHandle items[3];
-        MalFfiDiscards claims[3] = {
+        MalFfiDiscardedHandle items[2];
+        MalFfiDiscards claims[2] = {
             {.items = &items[0], .capacity = 1},
             {.items = &items[1], .capacity = 1},
-            {.items = &items[2], .capacity = 1},
         };
         assert(!mal_ffi_discard_claim(&vm, &claims[0], &resource_type, value, true));
         MalFfiSite site = {"recycle", "resource", nullptr};
@@ -98,14 +98,28 @@ int main(void) {
         assert(mal_ffi_begin_handle_close(&vm, pin, false, &site));
         destroy_resource(value);
         recycled_open = true;
-        assert(!mal_ffi_discard_claim(&vm, &claims[1], &resource_type, value, false));
-        assert(mal_ffi_discard_claim(&vm, &claims[2], &resource_type, value, true));
+        if (native_fresh_test) {
+            assert(mal_ffi_discards_init(&vm, &claims[1], &items[1], 1));
+            mal_host_detach(&vm);
+            mal_ffi_finish_handle_close(roots[0], true);
+            mal_ffi_unpin_handle(pin);
+            mal_ffi_unroot(&root);
+            mal_vm_free(&vm);
+        }
+        MalVm *claim_vm = native_fresh_test ? nullptr : &vm;
+        assert(!mal_ffi_discard_claim(claim_vm, &claims[1], &resource_type, value, false));
+        assert(mal_ffi_discard_claim(claim_vm, &claims[1], &resource_type, value, true));
         destroy_resource(value);
-        mal_ffi_finish_handle_close(roots[0], true);
-        mal_ffi_unpin_handle(pin);
-        mal_host_detach(&vm);
-        mal_ffi_unroot(&root);
-        mal_vm_free(&vm);
+        assert(!mal_ffi_discard_claim(claim_vm, &claims[1], &resource_type, value, true));
+        assert(!mal_ffi_discard_claim(claim_vm, &claims[1], &resource_type, value, false));
+        mal_ffi_discards_finish(&claims[1]);
+        if (!native_fresh_test) {
+            mal_ffi_finish_handle_close(roots[0], true);
+            mal_ffi_unpin_handle(pin);
+            mal_host_detach(&vm);
+            mal_ffi_unroot(&root);
+            mal_vm_free(&vm);
+        }
         assert(destroyed == 2 && !recycled_open);
         puts("ffi fresh discard passed");
         return 0;

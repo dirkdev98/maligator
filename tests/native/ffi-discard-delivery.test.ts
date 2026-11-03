@@ -26,8 +26,13 @@ it("rejects lost deliveries and preserves an existing resource during cleanup", 
 		"ffi discarded delivery passed\n",
 	);
 });
-it("destroys a fresh recycled lifetime without destroying an open alias", () => {
+it("destroys a fresh recycled alias once after a nonfresh alias", () => {
 	expect(
 		runToStdout(binary, { env: { ...STRESS_ENV, MAL_FFI_DISCARD_FRESH: "1" } }),
+	).toBe("ffi fresh discard passed\n");
+});
+it("destroys a fresh recycled alias from native claims after VM teardown", () => {
+	expect(
+		runToStdout(binary, { env: { ...STRESS_ENV, MAL_FFI_DISCARD_NATIVE_FRESH: "1" } }),
 	).toBe("ffi fresh discard passed\n");
 });
