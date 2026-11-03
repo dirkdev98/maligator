@@ -332,6 +332,12 @@ new storage once. Failed handle construction releases its undelivered C resource
 even when automatic collection is disabled. Fresh-result facts distinguish recycled
 storage from a resource whose destruction is still pending.
 
+Bindings that combine direct resource pointers with copied values transfer ownership
+and publish type views after every output conversion and final managed-input check
+succeeds. A failed conversion releases new resources once and preserves existing
+handles' ownership and views. This guarantee requires outputs without custom `free`
+functions or nested resource handles.
+
 For a resource pointer inside a result handle, declare whether the containing resource
 owns its lifetime or the library keeps it alive:
 

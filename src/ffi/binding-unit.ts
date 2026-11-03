@@ -1814,6 +1814,7 @@ class BindingWriter {
 		expression: string,
 		target: string,
 		context: string,
+		results?: string,
 	): Array<string> {
 		const output = binding.outputs[index]!;
 		const count = countValue(binding, output.count, context);
@@ -1825,6 +1826,7 @@ class BindingWriter {
 			"&mal_site_result",
 			true,
 			`&${context}mal_discards`,
+			results,
 		);
 		if (output.capacity === undefined) return owned;
 		if (count === undefined) throw new Error("caller array without a written count");
@@ -1851,6 +1853,7 @@ class BindingWriter {
 		site: string,
 		pending: boolean,
 		discards: string,
+		results?: string,
 	): Array<string> {
 		const release =
 			"free" in value && value.free !== undefined
@@ -1859,6 +1862,10 @@ class BindingWriter {
 		// A result that allocates nothing is simply ignored when a throw is pending.
 		const unlessThrew =
 			pending && this.#allocates(value) ? "if (!mal_ffi_threw(vm)) " : "";
+		if (results !== undefined && value.kind === "handle")
+			return [
+				`if (!mal_ffi_threw(vm)) ${target} = mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.name}, (void *) (${expression}), ${value.owned}, ${value.fresh === true});`,
+			];
 		const handle =
 			value.kind === "handle" && value.owned ? this.#handle(value.name) : undefined;
 		if (
@@ -2431,6 +2438,63 @@ class BindingWriter {
 		).length;
 	}
 
+	#transactionalResults(binding: BoundFunction): boolean {
+		const safe = (value: JsValue, nested = false): boolean => {
+			if ("free" in value && value.free !== undefined) return false;
+			switch (value.kind) {
+				case "handle":
+					return (
+						!nested &&
+						value.owner === undefined &&
+						value.lifetime === undefined &&
+						this.#handle(value.name).representation === "pointer"
+					);
+				case "callable":
+					return false;
+				case "array":
+				case "sequence":
+				case "union":
+					return safe(value.of, true);
+				case "tagged":
+					return value.cases.every((entry) => safe(entry.value, true));
+				case "record":
+					return this.#record(value.name).fields.every((field) =>
+						safe(field.value, true),
+					);
+				default:
+					return true;
+			}
+		};
+		return (
+			this.#discardCount(binding) > 0 &&
+			[binding.returns, ...binding.outputs.map((output) => output.value)].every((value) =>
+				safe(value),
+			)
+		);
+	}
+
+	#resultClaims(
+		binding: BoundFunction,
+		result: string,
+		output: (index: number) => string,
+	): Array<string> {
+		return [
+			{ value: binding.returns, expression: result },
+			...binding.outputs.map((entry, index) => ({
+				value: entry.value,
+				expression: output(index),
+			})),
+		].flatMap(({ value, expression }) =>
+			value.kind === "handle" &&
+			value.owned &&
+			this.#handle(value.name).destroy !== undefined
+				? [
+						`mal_ffi_result_claim(vm, &mal_results, &mal_ffi_type_${value.name}, (void *) (${expression}), ${value.fresh === true});`,
+					]
+				: [],
+		);
+	}
+
 	callableDeclarations(): Array<string> {
 		return [...this.#callables.values()].flatMap((value) => [
 			`typedef ${value.targetType} MalFfiTarget_${value.name};`,
@@ -2478,10 +2542,18 @@ class BindingWriter {
 			constOutputs.has(index) ? `(*mal_output_${index})` : `mal_output_${index}`;
 		const locals: Array<string> = [];
 		const discardCount = this.#discardCount(binding);
-		if (discardCount > 0)
+		const transactional = this.#transactionalResults(binding);
+		const results = transactional ? "&mal_results" : undefined;
+		if (discardCount > 0 && !transactional)
 			locals.push(
 				`MalFfiDiscardedHandle mal_discarded[${discardCount}];`,
 				`MalFfiDiscards mal_discards = { .items = mal_discarded, .capacity = ${discardCount} };`,
+			);
+		if (transactional)
+			locals.push(
+				`MalFfiResultClaim mal_result_claims[${discardCount}];`,
+				`MalValue mal_result_handles[${2 * discardCount}];`,
+				"MalFfiResults mal_results;",
 			);
 		const body: Array<string> = [];
 		/** Buffers resolve last: nothing may run JavaScript between them and the call. */
@@ -3171,6 +3243,9 @@ class BindingWriter {
 					];
 		const count = countValue(binding, binding.resultCount);
 		const after: Array<string> = [];
+		const claims = transactional
+			? this.#resultClaims(binding, "mal_return", outputValue)
+			: [];
 		// A kept callback the library never received goes back if the C call never ran.
 		const keptIndexes = binding.arguments.flatMap((_, index) =>
 			keptCallback(index) && !replacedIndexes.has(index) ? [index] : [],
@@ -3189,7 +3264,14 @@ class BindingWriter {
 		];
 		const leave = callsBack ? ["if (mal_framed) mal_ffi_collectable_end(vm);"] : [];
 		if (binding.returns.kind === "undefined") {
-			after.push(...enter, `${call};`, ...callbackReturns, ...leave, ...closes);
+			after.push(
+				...enter,
+				`${call};`,
+				...callbackReturns,
+				...leave,
+				...closes,
+				...claims,
+			);
 		} else if (
 			binding.global?.access === "get" &&
 			resolveCType(this.#model, binding.global.declaration.type).kind === "array"
@@ -3228,6 +3310,7 @@ class BindingWriter {
 				"&mal_site_result",
 				callsBack,
 				"&mal_discards",
+				results,
 			);
 			const record = intoRecord(binding);
 			after.push(
@@ -3236,6 +3319,7 @@ class BindingWriter {
 				...callbackReturns,
 				...leave,
 				...closes,
+				...claims,
 				...(record === undefined
 					? owned
 					: [
@@ -3271,6 +3355,7 @@ class BindingWriter {
 						outputValue(index),
 						`mal_outputs[${String(first + index)}]`,
 						"",
+						results,
 					),
 				);
 			});
@@ -3309,6 +3394,11 @@ class BindingWriter {
 				`\t${temporary}.data = nullptr;`,
 			]),
 			...locals.map((line) => `\t${line}`),
+			...(transactional
+				? [
+						`\tmal_ffi_results_init(&mal_results, mal_result_claims, mal_result_handles, ${discardCount});`,
+					]
+				: []),
 			...(compoundInputs
 				? ["\tmal_ffi_inputs_init(&mal_inputs, &mal_result, false);"]
 				: []),
@@ -3338,6 +3428,12 @@ class BindingWriter {
 						"\tmal_ffi_end_handle_use(vm, mal_owner_pin, &mal_result, &mal_site_result, true);",
 						"\tmal_ffi_unpin_handle(mal_owner_pin);",
 					]),
+			...(transactional
+				? [
+						"\tmal_ffi_results_finish(vm, &mal_results);",
+						"\tif (mal_ffi_threw(vm)) mal_result = mal_ffi_undefined();",
+					]
+				: []),
 			...(binding.returns.kind === "array"
 				? ["\tmal_ffi_unroot(&mal_result_roots);"]
 				: []),
@@ -3392,6 +3488,8 @@ class BindingWriter {
 			readonly registrationResult: boolean;
 		}> = [];
 		const discardCount = this.#discardCount(binding);
+		const transactional = this.#transactionalResults(binding);
+		const results = transactional ? "&mal_results" : undefined;
 		const callbackArguments: Array<string> = [];
 		const trampolines: Array<string> = [];
 		const discard = (value: JsValue, expression: string): Array<string> => {
@@ -4006,6 +4104,7 @@ class BindingWriter {
 					"&mal_site_result",
 					true,
 					"&mal_ctx->mal_discards",
+					results,
 				)
 			: [];
 		if (binding.outputs.length > 0) {
@@ -4027,6 +4126,7 @@ class BindingWriter {
 						outputValue(index),
 						`mal_outputs[${String(first + index)}]`,
 						"mal_ctx->",
+						results,
 					),
 				),
 				"if (!mal_ffi_threw(vm)) mal_result = mal_ffi_new_record(vm, &mal_output_type, mal_outputs);",
@@ -4102,10 +4202,27 @@ class BindingWriter {
 						"\t}",
 					]),
 			"\tif (!mal_ran) return mal_result;",
+			...(transactional
+				? [
+						`\tMalFfiResultClaim mal_result_claims[${discardCount}];`,
+						`\tMalValue mal_result_handles[${2 * discardCount}];`,
+						"\tMalFfiResults mal_results;",
+						`\tmal_ffi_results_init(&mal_results, mal_result_claims, mal_result_handles, ${discardCount});`,
+						...this.#resultClaims(binding, returnValue, outputValue).map(
+							(line) => `\t${line}`,
+						),
+					]
+				: []),
 			...(nativeDisposals.length === 0 ? [] : ["\tmal_ctx->mal_result_observed = true;"]),
 			...produce.map((line) => `\t${line}`),
 			"\tgoto mal_done;",
 			"mal_done:",
+			...(transactional
+				? [
+						"\tmal_ffi_results_finish(vm, &mal_results);",
+						"\tif (mal_ffi_threw(vm)) mal_result = mal_ffi_undefined();",
+					]
+				: []),
 			"\treturn mal_result;",
 			"}",
 			"",

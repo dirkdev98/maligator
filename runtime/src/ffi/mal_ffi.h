@@ -711,6 +711,37 @@ typedef struct MalFfiRoots {
 void mal_ffi_root(MalFfiRoots *roots, MalValue *slots, int32_t count);
 void mal_ffi_unroot(MalFfiRoots *roots);
 
+typedef struct MalFfiResultClaim {
+    const MalFfiHandleType *type;
+    void *value;
+    void *views;
+    MalValue *handles;
+    uint32_t flags;
+    bool fresh;
+    bool cleanup;
+} MalFfiResultClaim;
+
+typedef struct MalFfiResults {
+    MalFfiRoots roots;
+    MalFfiResultClaim *claims;
+    int32_t count;
+    int32_t capacity;
+} MalFfiResults;
+
+/**
+ * Stage pointer ownership until every output and final input check succeeds.
+ * Inventory all claims before conversion; conversion must not reenter JavaScript.
+ * Initialize before input roots and finish after their release, in root-stack order.
+ */
+void mal_ffi_results_init(MalFfiResults *results, MalFfiResultClaim *claims,
+    MalValue *handles, int32_t capacity);
+void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
+    const MalFfiHandleType *type, void *value, bool fresh);
+MalValue mal_ffi_result_handle(MalVm *vm, MalFfiResults *results,
+    const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
+    bool owned, bool fresh);
+void mal_ffi_results_finish(MalVm *vm, MalFfiResults *results);
+
 /** Resources nested in compound inputs stay rooted and pinned through the call. */
 struct MalFfiInputs {
     MalFfiRoots roots;
