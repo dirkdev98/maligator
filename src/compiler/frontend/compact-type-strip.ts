@@ -1946,6 +1946,7 @@ function findTypeEnd(
 	filePath: string,
 ): number {
 	let sawType = false;
+	let expectsType = true;
 	let parentheses = 0;
 	let brackets = 0;
 	let braces = 0;
@@ -1953,19 +1954,15 @@ function findTypeEnd(
 	for (let i = start; i < source.length; i++) {
 		if (!code[i]) continue;
 		const char = source[i]!;
-		// A function return annotation may itself start with an object type:
-		// `function value(): { ok: boolean } { ... }`. In that position the first
-		// top-level `{` opens the type and the next one opens the function body.
-		// Treating both as body delimiters made valid object return types look empty.
-		if (
-			!sawType &&
-			parentheses === 0 &&
-			brackets === 0 &&
-			braces === 0 &&
-			angles === 0 &&
-			char === "{" &&
-			delimiters.includes("{")
-		) {
+		const topLevel = parentheses === 0 && brackets === 0 && braces === 0 && angles === 0;
+		if (char === "=" && source[i + 1] === ">") {
+			if (topLevel) expectsType = true;
+			i++;
+			continue;
+		}
+		// An object operand can follow a type operator; only a completed return
+		// type makes the next top-level brace the function body.
+		if (expectsType && topLevel && char === "{" && delimiters.includes("{")) {
 			sawType = true;
 			braces++;
 			continue;
@@ -1983,6 +1980,24 @@ function findTypeEnd(
 			if (!sawType) fail(filePath, start, "empty type annotations");
 			return i;
 		}
+		if (topLevel && isIdentifierStart(char)) {
+			const word = wordAt(source, code, i)!;
+			expectsType = word.text === "keyof" || word.text === "extends";
+			sawType = true;
+			i = word.end - 1;
+			continue;
+		}
+		if (topLevel) {
+			if (char === "|" || char === "&" || char === "?" || char === ":")
+				expectsType = true;
+			else if (
+				(char >= "0" && char <= "9") ||
+				char === '"' ||
+				char === "'" ||
+				char === "`"
+			)
+				expectsType = false;
+		}
 		if (char === "(") parentheses++;
 		else if (char === ")" && parentheses > 0) parentheses--;
 		else if (char === "[") brackets++;
@@ -1991,6 +2006,7 @@ function findTypeEnd(
 		else if (char === "}" && braces > 0) braces--;
 		else if (char === "<") angles++;
 		else if (char === ">" && angles > 0) angles--;
+		if (char === ")" || char === "]" || char === "}" || char === ">") expectsType = false;
 		if (
 			isIdentifierStart(char) ||
 			(char >= "0" && char <= "9") ||

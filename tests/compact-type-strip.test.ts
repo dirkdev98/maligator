@@ -42,6 +42,44 @@ function strip(source: string, filePath = "fixture.ts"): string {
 }
 
 describe("stripCompactTypes", () => {
+	test.each([
+		[
+			"function expression",
+			"const value = function(): number | { value: number } { return { value: 7 }; };",
+			"value()",
+		],
+		[
+			"object method",
+			"const object = { value(): number | { value: number } { return { value: 7 }; } };",
+			"object.value()",
+		],
+		[
+			"class method",
+			"class Value { value(): number | { value: number } { return { value: 7 }; } }",
+			"new Value().value()",
+		],
+	])("keeps an object union return in a %s", (_name, declaration, call) => {
+		const stripped = strip(`${declaration}\nglobalThis.stripResult = (${call}).value;`);
+		expect(() => parseModule(stripped)).not.toThrow();
+		expect(runInNewContext(stripped)).toBe(7);
+	});
+	test.each([
+		"number | { value: number } | undefined",
+		"number & { value: number }",
+		"Value extends { value: number } ? { value: number } : { other: number }",
+		"() => { value: number }",
+		"keyof { value: number }",
+		"Container<() => { value: number }>",
+		'number | "ok"',
+		"number | `ok`",
+		'number | /* operand */ "ok" /* body */',
+	])("keeps the function body after the return type %s", (annotation) => {
+		const source = `function value(): ${annotation} { return { value: 7 }; }
+globalThis.stripResult = value().value;`;
+		const stripped = strip(source);
+		expect(() => parseModule(stripped)).not.toThrow();
+		expect(runInNewContext(stripped)).toBe(7);
+	});
 	test.each([false, true])(
 		"keeps a method's return annotation separate from a following arrow with freeze=%s",
 		(freeze) => {
