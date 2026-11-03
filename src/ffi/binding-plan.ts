@@ -7,7 +7,14 @@ import type {
 	MaligatorFfiValueFacts,
 	MaligatorFfiVariant,
 } from "../public-api.d.ts";
-import type { CField, CFunction, CGlobal, CModel, CRecord } from "./c-model.ts";
+import type {
+	CField,
+	CFieldStep,
+	CFunction,
+	CGlobal,
+	CModel,
+	CRecord,
+} from "./c-model.ts";
 import {
 	cRecordAccesses,
 	cRecordHasConstMembers,
@@ -288,6 +295,7 @@ export interface MappedTagged {
 	readonly tag: MappedField;
 	readonly cases: ReadonlyArray<{
 		readonly expression: string;
+		readonly initializeTag: boolean;
 		readonly literal: string;
 		readonly selection: ReadonlyArray<string>;
 		readonly record: MappedRecord;
@@ -735,6 +743,60 @@ function nativeAlias(
 		type = next;
 	}
 	return undefined;
+}
+
+function compatibleTagStorage(
+	model: CModel,
+	source: CField,
+	target: CField,
+	path: ReadonlyArray<CFieldStep>,
+): boolean {
+	const left = resolveCType(model, source.integerType ?? source.type);
+	const right = resolveCType(model, target.integerType ?? target.type);
+	if (path.length === 0) {
+		if (source.bitWidth !== target.bitWidth) return false;
+		return (
+			(left.kind === "bool" && right.kind === "bool") ||
+			(left.kind === "integer" && right.kind === "integer" && left.name === right.name)
+		);
+	}
+	if (left.kind !== "record" || right.kind !== "record") return false;
+	const leftRecord = model.records.get(left.name),
+		rightRecord = model.records.get(right.name);
+	const step = path[0]!;
+	if (
+		leftRecord?.tag !== "struct" ||
+		rightRecord?.tag !== "struct" ||
+		step.record.name !== leftRecord.name
+	)
+		return false;
+	// A post-construction tag check cannot safely read an incompatible representation.
+	// Shared prefixes must also agree on target offsets and bit-field widths.
+	for (let index = 0; index <= step.index; index++) {
+		const leftField = leftRecord.fields[index],
+			rightField = rightRecord.fields[index];
+		const offset = leftRecord.layout?.fieldOffsetsBits[index];
+		if (
+			leftField === undefined ||
+			rightField === undefined ||
+			offset === undefined ||
+			offset !== rightRecord.layout?.fieldOffsetsBits[index] ||
+			leftField.bitWidth !== rightField.bitWidth
+		)
+			return false;
+		if (
+			index < step.index &&
+			formatCDeclaration(resolveCType(model, leftField.type)) !==
+				formatCDeclaration(resolveCType(model, rightField.type))
+		)
+			return false;
+	}
+	return compatibleTagStorage(
+		model,
+		step.field,
+		rightRecord.fields[step.index]!,
+		path.slice(1),
+	);
 }
 
 class Planner {
@@ -1252,13 +1314,6 @@ class Planner {
 		if (this.#pending.has(mappedName))
 			return { gap: `tagged ${name}: recursive value shape` };
 		const tagPath = resolveCFieldPath(this.#model, record, [shape.tag]);
-		if (
-			cRecordHasConstMembers(this.#model, record) &&
-			tagPath?.some((step) => step.record.tag === "union")
-		)
-			return {
-				gap: `tagged ${name}: const construction requires a discriminator outside union storage`,
-			};
 		const tagField = tagPath?.at(-1)?.field;
 		if (tagField === undefined)
 			throw new FfiError(`tagged ${name}: no discriminator '${shape.tag}'`);
@@ -1338,6 +1393,31 @@ class Planner {
 						route.push(step.index);
 					}
 				}
+				let initializeTag = true;
+				const route: Array<number> = [];
+				for (const [index, step] of tagPath!.entries()) {
+					const selected = choices.get(route.join("."));
+					if (
+						step.record.tag === "union" &&
+						selected !== undefined &&
+						selected !== step.index
+					) {
+						initializeTag = false;
+						if (
+							cRecordHasConstMembers(this.#model, record) &&
+							!compatibleTagStorage(
+								this.#model,
+								step.field,
+								step.record.fields[selected]!,
+								tagPath!.slice(index + 1),
+							)
+						)
+							return {
+								gap: `tagged ${name}: the selected payload does not share compatible discriminator storage`,
+							};
+					}
+					route.push(step.index);
+				}
 				const view = this.#caseRecord(
 					record,
 					[],
@@ -1349,6 +1429,7 @@ class Planner {
 				if (view.value.kind !== "record")
 					throw new Error("tagged case without record view");
 				cases.push({
+					initializeTag,
 					expression:
 						value < 0n ? `(-INT64_C(${-value - 1n}) - INT64_C(1))` : `UINT64_C(${value})`,
 					literal:

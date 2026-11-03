@@ -5,9 +5,14 @@ import * as path from "node:path";
 import { expect, it } from "vitest";
 
 const repository = path.resolve(import.meta.dirname, "../..");
-it.each(["compiled", "interpreted"])(
-	"constructs selected const tagged values through %s workers and callbacks",
-	(backend) => {
+it.each(
+	["compiled", "interpreted"].flatMap((backend) => [
+		{ backend, entry: "main.ts", output: "const tagged passed" },
+		{ backend, entry: "overlap.ts", output: "const overlap passed" },
+	]),
+)(
+	"constructs $entry through $backend workers and callbacks",
+	({ backend, entry, output }) => {
 		const directory = mkdtempSync(path.join(tmpdir(), "mal-ffi-const-tagged-"));
 		try {
 			cpSync(path.join(repository, "tests/fixtures/ffi-const-tagged"), directory, {
@@ -18,6 +23,7 @@ it.each(["compiled", "interpreted"])(
 				[
 					path.join(repository, "src/index.ts"),
 					"build",
+					entry,
 					"--production",
 					...(backend === "interpreted" ? ["--no-compiled"] : []),
 				],
@@ -36,7 +42,7 @@ it.each(["compiled", "interpreted"])(
 				},
 			});
 			expect(executed.status, executed.stderr || executed.stdout).toBe(0);
-			expect(executed.stdout.trim()).toBe("const tagged passed");
+			expect(executed.stdout.trim()).toBe(output);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}

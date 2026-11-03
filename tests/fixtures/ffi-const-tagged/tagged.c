@@ -47,3 +47,46 @@ void tagged_notify(ConstTagged value, void (*callback)(ConstTagged, void *), voi
 }
 
 ConstTagged tagged_callback(ConstTagged (*callback)(void)) { return callback(); }
+int tagged_overlap(ConstOverlap value) { calls++; return value.payload; }
+int tagged_promoted_overlap(ConstPromotedOverlap value) { calls++; return value.payload; }
+ConstEvent event_make(unsigned kind, int seed) {
+    switch (kind) {
+    case 0: case 1: return (ConstEvent){.point = {kind, seed}};
+    case 2: return (ConstEvent){.integer = {kind, seed}};
+    default: return (ConstEvent){.kind = 3};
+    }
+}
+int event_take(ConstEvent value) {
+    calls++;
+    switch (value.kind) {
+    case 0: case 1: return (int)value.point.x;
+    case 2: return value.integer.value;
+    case 3: return 3;
+    default: abort();
+    }
+}
+ConstEvent event_identity(ConstEvent value) { calls++; return value; }
+void event_out(ConstEvent *value) { ConstEvent native = event_make(2, 17); memcpy(value, &native, sizeof(native)); }
+void event_inout(ConstEvent *value) {
+    if (value->kind > 1) abort();
+    value->point.x += 100;
+}
+int event_sum(const ConstEvent *values, size_t count) {
+    int sum = 0;
+    for (size_t i = 0; i < count; i++) sum += event_take(values[i]);
+    return sum;
+}
+int event_visit(ConstEvent value, int (*callback)(ConstEvent, void *), void *data) { return callback(value, data); }
+ConstEvent event_callback(ConstEvent (*callback)(void)) { return callback(); }
+void event_notify(ConstEvent value, void (*callback)(ConstEvent, void *), void *data, void (*release)(void *)) { callback(value, data); release(data); }
+int event_callback_error(ConstEvent (*callback)(void)) {
+    ConstEvent first = callback();
+    ConstEvent second = callback();
+    if (first.kind != 0 || second.kind != 0 || first.point.x != 0 || second.point.x != 0) abort();
+    return 0;
+}
+ConstPromotedEvent promoted_event_make(int seed) { return (ConstPromotedEvent){.id = seed, .point = {1, seed + 1}}; }
+int promoted_event_take(ConstPromotedEvent value) { calls++; return value.kind == 3 ? value.id : value.id + (int)value.point.x; }
+int offset_event_take(ConstOffsetEvent value) { calls++; return value.point.prefix + (int)value.point.x; }
+int nested_event_take(ConstNestedEvent value) { calls++; return value.point.value; }
+int bit_event_take(ConstBitEvent value) { calls++; return value.point.value; }

@@ -281,10 +281,11 @@ class BindingWriter {
 		for (const tagged of plan.tagged.values()) {
 			if (!cRecordHasConstMembers(model, tagged.record)) continue;
 			for (const entry of tagged.cases)
-				this.#taggedCaseInitializers.set(
-					entry.record.name,
-					`.${tagged.tag.name} = ${entry.expression}`,
-				);
+				if (entry.initializeTag)
+					this.#taggedCaseInitializers.set(
+						entry.record.name,
+						`.${tagged.tag.name} = ${entry.expression}`,
+					);
 		}
 		for (const handle of plan.handles.values()) {
 			if (handle.managedFields.length > 0) this.#managedFamilies.add(handle.family);
@@ -1901,7 +1902,7 @@ class BindingWriter {
 				["0", "0n", "false"].includes(entry.literal),
 			);
 			if (zero !== undefined)
-				return `{ .${tagged.tag.name} = 0, ${zero.record.fields.map((field) => `.${field.name} = ${this.#callbackDefault(field.value)}`).join(", ")} }`;
+				return `{ ${[...(zero.initializeTag ? [`.${tagged.tag.name} = 0`] : []), ...zero.record.fields.map((field) => `.${field.name} = ${this.#callbackDefault(field.value)}`)].join(", ")} }`;
 		}
 		return "{}";
 	}

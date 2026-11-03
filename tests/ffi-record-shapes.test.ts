@@ -94,8 +94,11 @@ it.each([
 	expect(entry?.gaps?.some((gap) => gap.reason.includes(reason))).toBe(true);
 });
 it.each([
-	["tagged_overlap", "outside union storage"],
-	["tagged_promoted_overlap", "outside union storage"],
+	["tagged_bad_overlap", "compatible discriminator storage"],
+	["tagged_bad_promoted_overlap", "compatible discriminator storage"],
+	["tagged_bad_prefix", "compatible discriminator storage"],
+	["tagged_bad_offset", "compatible discriminator storage"],
+	["tagged_bad_width", "compatible discriminator storage"],
 ])("rejects unsupported const tagged storage through %s", (name, reason) => {
 	const directory = project("ffi-const-tagged");
 	const result = cli(directory, "inspect", "const_tagged", "--json");

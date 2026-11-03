@@ -128,9 +128,12 @@ inout value is constructed before the call; C may update its mutable fields. Cou
 arrays of const records also use initialized copies, including on workers. Fixed
 numeric and record array buffers keep their declared bounds and nested dimensions.
 Selected union members also use native initialization, including const scalars,
-records, and fixed arrays. Tagged values initialize their discriminator before the
-selected payload; a const discriminator must sit outside union storage. JavaScript
-callbacks can return these values synchronously or through waiting worker calls.
+records, and fixed arrays. A const discriminator can share storage with an identical
+integer member or a matching struct prefix. The selected payload initializes that
+storage; its nested discriminator must match the outer JavaScript tag. Empty cases
+initialize the tag directly. Incompatible types, offsets, and bit-field widths remain
+unbound. JavaScript callbacks can return these values synchronously or through waiting
+worker calls.
 Failed or canceled callbacks return a zero native value while the JavaScript error
 propagates to its caller.
 
