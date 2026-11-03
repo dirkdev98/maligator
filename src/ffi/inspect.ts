@@ -1,5 +1,11 @@
 import * as path from "node:path";
-import type { BindingPlan, BoundFunction, Gap, JsValue } from "./binding-plan.ts";
+import type {
+	BindingPlan,
+	BoundFunction,
+	Gap,
+	JsValue,
+	MappedParameter,
+} from "./binding-plan.ts";
 import type {
 	CEnum,
 	CFunction,
@@ -302,10 +308,16 @@ export function formatTsResult(binding: BoundFunction): string {
 /** A bound function's TypeScript parameter list. */
 export function formatTsParameters(binding: BoundFunction): string {
 	return binding.params
-		.map(
-			(param) => `${tsParameterName(param.name)}: ${formatTsType(param.value, "input")}`,
-		)
+		.map((param) => `${tsParameterName(param.name)}: ${formatTsParameterType(param)}`)
 		.join(", ");
+}
+
+function formatTsParameterType(param: MappedParameter): string {
+	if (param.view !== undefined && param.value.kind === "sequence") {
+		const array = formatTsType({ ...param.value, nullable: false }, "input");
+		return `${array} | ${param.view}${param.value.nullable ? " | null" : ""}`;
+	}
+	return formatTsType(param.value, "input");
 }
 
 /** Correlate a runtime selector with the visible arguments of its typed C wrapper. */
@@ -370,7 +382,7 @@ export function inspectBindings(
 						: argument.kind;
 			const ts =
 				argument?.kind === "input" || argument?.kind === "inout"
-					? formatTsType(binding!.params[argument.param]!.value, "input")
+					? formatTsParameterType(binding!.params[argument.param]!)
 					: argument?.kind === "out"
 						? formatTsType(binding!.outputs[argument.output]!.value)
 						: undefined;

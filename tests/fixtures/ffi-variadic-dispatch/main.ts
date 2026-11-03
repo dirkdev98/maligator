@@ -15,6 +15,10 @@ check(
 	invoke("array", [2, 3, 5]) === 10,
 	"dispatch uses visible arity after hidden counts and constants",
 );
+check(
+	invoke("array", new Int32Array([2, 3, 5])) === 10,
+	"dispatched const pointers accept matching numeric views",
+);
 const out = invoke("output");
 check(out.result === 3.5 && out.arg3 === 91, "each signature retains its output shape");
 check(

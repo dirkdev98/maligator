@@ -351,10 +351,27 @@ bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, 
 bool mal_ffi_to_bytes(
     MalVm *vm, MalValue value, bool nullable, bool writable, const MalFfiSite *site,
     void **data, size_t *length, void **pin);
+typedef enum MalFfiNumericKind {
+    MAL_FFI_NUMERIC_INT8, MAL_FFI_NUMERIC_UINT8,
+    MAL_FFI_NUMERIC_INT16, MAL_FFI_NUMERIC_UINT16,
+    MAL_FFI_NUMERIC_INT32, MAL_FFI_NUMERIC_UINT32,
+    MAL_FFI_NUMERIC_BIGINT64, MAL_FFI_NUMERIC_BIGUINT64,
+    MAL_FFI_NUMERIC_FLOAT32, MAL_FFI_NUMERIC_FLOAT64,
+} MalFfiNumericKind;
+/** A direct TypedArray brand check, without proxies or observable property reads. */
+bool mal_ffi_is_typed_array(MalValue value);
+/**
+ * Resolve matching const numeric storage after all argument getters. The extent
+ * is current, attached, unshared, and compatible with the C element layout.
+ * A non-null pin protects the storage until `mal_ffi_unpin`; numeric writes remain possible.
+ */
+bool mal_ffi_to_numeric_view(
+    MalVm *vm, MalValue value, MalFfiNumericKind expected, size_t element_size, size_t alignment,
+    const MalFfiSite *site, const void **data, int32_t *length, void **pin);
 /** Copy a fixed row after checking its UTF-8 capacity or exact byte length. */
 bool mal_ffi_to_fixed_string(MalVm *vm, MalValue value, void *target, size_t capacity, const MalFfiSite *site);
 bool mal_ffi_to_fixed_bytes(MalVm *vm, MalValue value, void *target, size_t capacity, const MalFfiSite *site);
-/** Release a pin from `mal_ffi_to_bytes`; null is ignored. */
+/** Release a native buffer loan; null is ignored. */
 void mal_ffi_unpin(void *pin);
 /** The element count of an array argument; null yields 0 for a nullable site. */
 bool mal_ffi_to_array_length(

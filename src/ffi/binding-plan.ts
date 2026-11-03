@@ -159,10 +159,23 @@ export type JsValue =
 
 type Mapping = { readonly value: JsValue } | { readonly gap: string };
 
+export type NumericView =
+	| "Int8Array"
+	| "Uint8Array"
+	| "Int16Array"
+	| "Uint16Array"
+	| "Int32Array"
+	| "Uint32Array"
+	| "BigInt64Array"
+	| "BigUint64Array"
+	| "Float32Array"
+	| "Float64Array";
+
 export interface MappedParameter {
 	readonly name: string;
 	readonly type: CType;
 	readonly value: JsValue;
+	readonly view?: NumericView;
 }
 
 /** How a binding produces one C argument. */
@@ -1049,6 +1062,34 @@ class Planner {
 			case "unsupported":
 				return { gap: `unsupported type '${formatCDeclaration(type)}'` };
 		}
+	}
+
+	#numericView(type: CType, value: JsValue): NumericView | undefined {
+		const resolved = resolveCType(this.#model, type);
+		if (resolved.kind !== "pointer" || value.kind !== "sequence") return undefined;
+		const target = resolveCType(this.#model, resolved.to);
+		if (!("const" in target && target.const === true)) return undefined;
+		const element = value.of;
+		if (
+			element.kind === "float" &&
+			target.kind === "float" &&
+			(target.name === "float" || target.name === "double")
+		) {
+			return element.bits === 32
+				? "Float32Array"
+				: element.bits === 64
+					? "Float64Array"
+					: undefined;
+		}
+		if (
+			(element.kind !== "integer" && element.kind !== "bigint") ||
+			target.kind !== "integer"
+		)
+			return undefined;
+		const views: Partial<Record<number, NumericView>> = element.signed
+			? { 8: "Int8Array", 16: "Int16Array", 32: "Int32Array", 64: "BigInt64Array" }
+			: { 8: "Uint8Array", 16: "Uint16Array", 32: "Uint32Array", 64: "BigUint64Array" };
+		return views[element.bits];
 	}
 
 	#pointer(
@@ -2880,7 +2921,13 @@ class Planner {
 					`${where(at)}: nullable applies to string, handle, buffer, and array pointers`,
 				);
 			}
-			params.push({ name, type: param.type, value: mapped.value });
+			const view = this.#numericView(param.type, mapped.value);
+			params.push({
+				name,
+				type: param.type,
+				value: mapped.value,
+				...(view === undefined ? {} : { view }),
+			});
 			args.push({ kind: "input", param: params.length - 1 });
 		});
 

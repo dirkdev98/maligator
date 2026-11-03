@@ -39,7 +39,7 @@ it("declares correlated runtime tuples while preserving each typed variant", () 
 	const bindings = plan();
 	const sdk = [...generateDeclarations([{ name: "dispatch", plan: bindings }])].join("");
 	expect(sdk).toContain('[variant: "small", arg3: number, arg4: number, arg5: number]');
-	expect(sdk).toContain('[variant: "array", arg3: ReadonlyArray<number>]');
+	expect(sdk).toContain('[variant: "array", arg3: ReadonlyArray<number> | Int32Array]');
 	expect(sdk).toContain(
 		'export function invoke(...args: [variant: "output"]): { result: number; arg3: number }',
 	);

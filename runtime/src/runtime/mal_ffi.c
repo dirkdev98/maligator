@@ -283,6 +283,37 @@ __attribute__((always_inline)) bool mal_ffi_to_bytes(
     return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, expectation);
 }
 
+bool mal_ffi_is_typed_array(MalValue value) {
+    return mal_value_is_typed_array_object(value);
+}
+
+bool mal_ffi_to_numeric_view(
+    MalVm *vm, MalValue value, MalFfiNumericKind expected, size_t element_size, size_t alignment,
+    const MalFfiSite *site, const void **data, int32_t *length, void **pin) {
+    static const MalTypedArrayKind kinds[] = {
+        MAL_TA_INT8, MAL_TA_UINT8, MAL_TA_INT16, MAL_TA_UINT16,
+        MAL_TA_INT32, MAL_TA_UINT32, MAL_TA_BIGINT64, MAL_TA_BIGUINT64,
+        MAL_TA_FLOAT32, MAL_TA_FLOAT64,
+    };
+    if (pin != nullptr) *pin = nullptr;
+    if (!mal_value_is_typed_array_object(value) || (u32) expected >= sizeof(kinds) / sizeof(*kinds))
+        return mal_ffi_expected(vm, site, "a matching numeric typed array");
+    MalTypedArrayObject *array = mal_value_to_typed_array_object(value);
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span) || span.shared || span.kind != kinds[expected]
+        || span.element_size != element_size || alignment == 0
+        || (span.data != nullptr && (uintptr_t) span.data % alignment != 0))
+        return mal_ffi_expected(vm, site, "matching, attached, unshared, in-bounds numeric storage");
+    if (!mal_ffi_check_array_count(vm, span.length, INT32_MAX, site)) return false;
+    *data = span.data;
+    *length = (int32_t) span.length;
+    if (pin != nullptr) {
+        array->buffer->pins++;
+        *pin = array->buffer;
+    }
+    return true;
+}
+
 bool mal_ffi_to_fixed_string(MalVm *vm, MalValue value, void *target, size_t capacity, const MalFfiSite *site) {
     MalFfiString text = {};
     if (!mal_ffi_to_string(vm, value, false, MAL_FFI_STRING_BORROW, site, &text)) return false;

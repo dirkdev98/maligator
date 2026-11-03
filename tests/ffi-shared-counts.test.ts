@@ -26,10 +26,10 @@ it("hides a shared count while preserving both vector inputs in the SDK", () => 
 	const plan = planBindings(model, { types: {}, functions: contract.functions });
 	const declarations = [...generateDeclarations([{ name: "pairs", plan }])].join("\n");
 	expect(declarations).toContain(
-		"pair_dot(left: ReadonlyArray<number> | null, right: ReadonlyArray<number> | null): number",
+		"pair_dot(left: ReadonlyArray<number> | Float64Array | null, right: ReadonlyArray<number> | Float64Array | null): number",
 	);
 	expect(declarations).toContain(
-		"dotAsync(left: ReadonlyArray<number> | null, right: ReadonlyArray<number> | null): Promise<number>",
+		"dotAsync(left: ReadonlyArray<number> | Float64Array | null, right: ReadonlyArray<number> | Float64Array | null): Promise<number>",
 	);
 });
 it("rejects a shared writable count without an input-length contract", () => {

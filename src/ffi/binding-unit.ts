@@ -2974,6 +2974,8 @@ class BindingWriter {
 					if (value.kind === "sequence") {
 						const elements = `mal_elements_${String(index)}`;
 						const length = `mal_length_${String(index)}`;
+						const view = binding.params[entry.param]!.view;
+						const converted: Array<string> = [];
 						const position = this.#fresh("index");
 						const element = this.#fresh("element");
 						// Each string element needs its own copy; the frame's string buffers hold one value each.
@@ -3040,7 +3042,7 @@ class BindingWriter {
 									).map((line) => `\t${line}`)),
 							"}",
 						];
-						body.push(
+						converted.push(
 							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &${length})) goto mal_done;`,
 							`if (${length} > 0 && _Alignof(__typeof__(*${elements})) <= MAL_FFI_ARRAY_INLINE && (size_t) ${length} <= sizeof(${storage}) / sizeof(*${elements})) {`,
 							`\t${elements} = (void *) ${storage};`,
@@ -3072,7 +3074,31 @@ class BindingWriter {
 									]),
 							`${local} = (${localDeclaration(param.type, "")}) ${elements};`,
 						);
-						setCount(index, length, site, body);
+						setCount(index, length, site, converted);
+						if (view === undefined) body.push(...converted);
+						else {
+							const selected = `mal_numeric_view_${index}`;
+							const data = `mal_numeric_data_${index}`;
+							const pin = callsBack ? `&mal_numeric_pin_${index}` : "nullptr";
+							locals.push(`bool ${selected};`, `const void *${data};`);
+							if (callsBack) {
+								locals.push(`void *mal_numeric_pin_${index} = nullptr;`);
+								cleanup.push(`mal_ffi_unpin(mal_numeric_pin_${index});`);
+							}
+							body.push(
+								`${selected} = mal_ffi_is_typed_array(${source});`,
+								`if (!${selected}) {`,
+								...converted.map((line) => `\t${line}`),
+								"}",
+							);
+							buffers.push(
+								`if (${selected}) {`,
+								`if (!mal_ffi_to_numeric_view(vm, ${source}, MAL_FFI_NUMERIC_${view.slice(0, -5).toUpperCase()}, sizeof(*${local}), _Alignof(__typeof__(*${local})), ${site}, &${data}, &${length}, ${pin})) goto mal_done;`,
+								`${local} = (${localDeclaration(param.type, "")}) ${data};`,
+							);
+							setCount(index, length, site, buffers);
+							buffers.push("}");
+						}
 						return;
 					}
 					if (
@@ -3819,6 +3845,8 @@ class BindingWriter {
 						// The context owns a copy of the elements, since the call outlives this frame.
 						const elements = `mal_elements_${String(index)}`;
 						const length = `mal_length_${String(index)}`;
+						const view = binding.params[entry.param]!.view;
+						const converted: Array<string> = [];
 						const position = this.#fresh("index");
 						const element = this.#fresh("element");
 						const texts = value.of.kind === "string";
@@ -3833,7 +3861,7 @@ class BindingWriter {
 							);
 						}
 						frees.push(`free(mal_ctx->${elements});`);
-						body.push(
+						converted.push(
 							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &mal_ctx->${length})) goto mal_failed;`,
 							`if (mal_ctx->${length} > 0) {`,
 							`static_assert(sizeof(*mal_ctx->${elements}) % _Alignof(__typeof__(*mal_ctx->${elements})) == 0, "FFI array stride must preserve C alignment");`,
@@ -3866,6 +3894,29 @@ class BindingWriter {
 							"}",
 							`${target} = (${localDeclaration(param.type, "")}) mal_ctx->${elements};`,
 						);
+						if (view === undefined) body.push(...converted);
+						else {
+							const selected = `mal_numeric_view_${index}`;
+							const data = `mal_numeric_data_${index}`;
+							locals.push(`bool ${selected};`, `const void *${data};`);
+							body.push(
+								`${selected} = mal_ffi_is_typed_array(${source});`,
+								`if (!${selected}) {`,
+								...converted.map((line) => `\t${line}`),
+								"}",
+							);
+							buffers.push(
+								`if (${selected}) {`,
+								`if (!mal_ffi_to_numeric_view(vm, ${source}, MAL_FFI_NUMERIC_${view.slice(0, -5).toUpperCase()}, sizeof(*mal_ctx->${elements}), _Alignof(__typeof__(*mal_ctx->${elements})), ${site}, &${data}, &mal_ctx->${length}, nullptr)) goto mal_failed;`,
+								`if (mal_ctx->${length} > 0) {`,
+								`\tmal_ctx->${elements} = mal_ffi_allocate_storage((size_t) mal_ctx->${length}, sizeof(*mal_ctx->${elements}), _Alignof(__typeof__(*mal_ctx->${elements})));`,
+								`\tif (mal_ctx->${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_failed; }`,
+								`\t__builtin_memcpy(mal_ctx->${elements}, ${data}, (size_t) mal_ctx->${length} * sizeof(*mal_ctx->${elements}));`,
+								"}",
+								`${target} = (${localDeclaration(param.type, "")}) mal_ctx->${elements};`,
+								"}",
+							);
+						}
 						setCount(index, `mal_ctx->${length}`, site);
 						return;
 					}

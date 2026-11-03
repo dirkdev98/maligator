@@ -582,6 +582,16 @@ The binding checks every input length before entering C. Counted strings contrib
 their UTF-8 byte length. Shared counts must be integer inputs; writable counts and
 output capacities keep separate parameters.
 
+Const arithmetic-pointer inputs also accept the matching typed array. For example,
+`const double *` accepts `Float64Array`, and `const uint64_t *` accepts `BigUint64Array`.
+Use the generated SDK for the library's exact native widths. Synchronous calls lend
+the view's current storage, including its offset, after argument getters finish.
+C callbacks can observe JavaScript element writes, while resizing or transferring
+the backing buffer is blocked until C returns. C must not retain the pointer.
+Async calls snapshot numeric views before scheduling worker execution, so later
+JavaScript writes and transfers cannot affect the native input. Ordinary arrays
+keep their copy semantics. Mutable pointers and fixed array rows still use copies.
+
 Counted arrays preserve fixed inner dimensions. A parameter such as
 `const int (*rows)[3]` with `array: { length: "count" }` takes an array of
 three-element tuples; only the outer length supplies `count`. Numeric and record
