@@ -154,6 +154,7 @@ export type JsValue =
 			readonly fresh?: true;
 			/** Field results borrow the containing resource's owning lifetime. */
 			readonly owner?: string;
+			readonly lifetime?: "library";
 	  };
 
 type Mapping = { readonly value: JsValue } | { readonly gap: string };
@@ -1703,7 +1704,7 @@ class Planner {
 							`${at}: owner lifetime requires library-owned parent storage`,
 						);
 					mapped = { value: { ...mapped.value, owned: false, owner: handle.name } };
-				}
+				} else mapped = { value: { ...mapped.value, lifetime: "library" } };
 			}
 			if (fact?.callable !== undefined && "gap" in mapped)
 				throw new FfiError(`types.${record.name}.fields.${field.name}: ${mapped.gap}`);

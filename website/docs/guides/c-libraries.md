@@ -348,7 +348,9 @@ a child view only closes that view. When a child type names its own destroy bind
 that binding rejects owner-bound children. Calls and callback-result leases also protect
 the owning document. A child field that points at a sibling shares the document's lifetime.
 Use `lifetime: "library"` for a borrowed pointer that remains valid independently of
-the containing resource.
+the containing resource for the process's lifetime. Destroy bindings and inferred-owned
+aliases reject that resource. Closing or collecting a view preserves the native lifetime
+claim, including cleanup after callback failures and VM shutdown.
 
 Owner fields must be reachable from a destructor-backed root through declared owner
 fields and use library-owned child storage. Descendants can omit their own destructor.

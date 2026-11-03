@@ -271,6 +271,7 @@ class BindingWriter {
 	readonly #managedFamilies = new Set<string>();
 	readonly #viewFamilies = new Set<string>();
 	readonly #ownerFamilies = new Set<string>();
+	readonly #libraryFamilies = new Set<string>();
 	readonly #viewFields = new Map<string, Array<{ handle: string; name: string }>>();
 	readonly #workerCloseFamilies = new Set<string>();
 	readonly #callables = new Map<string, Extract<JsValue, { kind: "callable" }>>();
@@ -291,9 +292,13 @@ class BindingWriter {
 		for (const handle of plan.handles.values()) {
 			if (handle.managedFields.length > 0) this.#managedFamilies.add(handle.family);
 			if (handle.views.length > 0) this.#viewFamilies.add(handle.family);
-			for (const field of handle.fields)
-				if (field.value.kind === "handle" && field.value.owner !== undefined)
+			for (const field of handle.fields) {
+				if (field.value.kind !== "handle") continue;
+				if (field.value.owner !== undefined)
 					this.#ownerFamilies.add(this.#handle(field.value.name).family);
+				if (field.value.lifetime === "library")
+					this.#libraryFamilies.add(this.#handle(field.value.name).family);
+			}
 		}
 		for (const handle of plan.handles.values()) {
 			if (!this.#viewFamilies.has(handle.family)) continue;
@@ -724,9 +729,11 @@ class BindingWriter {
 				const created = (address: string) => {
 					const loan = `mal_ffi_new_callback_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address})`;
 					const ordinary =
-						value.owner === undefined
-							? `mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.owned}, ${value.fresh === true})`
-							: `mal_ffi_new_owner_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${owner})`;
+						value.lifetime === "library"
+							? `mal_ffi_new_library_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address})`
+							: value.owner === undefined
+								? `mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.owned}, ${value.fresh === true})`
+								: `mal_ffi_new_owner_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${owner})`;
 					return typeof lent === "boolean"
 						? lent
 							? loan
@@ -1548,6 +1555,11 @@ class BindingWriter {
 				lines.push(
 					"",
 					`static bool ${destroy}(void *mal_value) {`,
+					...(this.#libraryFamilies.has(handle.family)
+						? [
+								`\tif (mal_ffi_is_library_resource(&mal_ffi_type_${name}, mal_value)) return false;`,
+							]
+						: []),
 					...(handle.destroy.success === undefined
 						? [`\t${handle.destroy.name}(${argument});`, "\treturn true;"]
 						: [
@@ -1656,6 +1668,7 @@ class BindingWriter {
 				`\t${handle.destroy?.success !== undefined},`,
 				`\t${handle.collect},`,
 				`\t${this.#ownerFamilies.has(handle.family)},`,
+				`\t${this.#libraryFamilies.has(handle.family)},`,
 				`\t${fields},`,
 				`\t${String(fieldCount)},`,
 				`\t${this.#viewFamilies.has(handle.family) ? `&mal_ffi_type_${handle.family}` : "nullptr"},`,

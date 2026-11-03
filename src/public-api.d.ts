@@ -144,8 +144,8 @@ export type MaligatorFfiFieldFacts =
 			handle?: never;
 	  }
 	| {
-			/** A borrowed pointer resource. Owner lifetime shares the owning result's
-			 * lifetime; library lifetime asserts independence from the containing handle.
+			/** A borrowed pointer. Owner lifetime follows its destruction root;
+			 * library lifetime asserts that C storage remains valid for the process.
 			 */
 			handle: { lifetime: "owner" | "library" };
 			bytes?: never;

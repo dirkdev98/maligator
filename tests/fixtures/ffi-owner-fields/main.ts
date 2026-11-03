@@ -2,6 +2,7 @@
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import * as c from "maligator:ffi/owner_fields";
+import { createWorkerUrl, Worker } from "maligator:workers";
 setFlagsFromString("--expose-gc");
 const collect = runInNewContext("gc") as () => void;
 function check(value: boolean, message: string): asserts value {
@@ -311,4 +312,119 @@ rejects(
 	() => c.owner_leaf_value(sibling),
 	"destructorless descendants expire with their root",
 );
+const libraryParent = c.owner_result_new(100),
+	program = libraryParent.library!;
+rejects(
+	() => c.owner_child_free(program),
+	"destroy bindings cannot free library storage",
+);
+let libraryDestroyRejected = false;
+try {
+	await c.destroyChildAsync(program);
+} catch (error) {
+	libraryDestroyRejected = error instanceof TypeError;
+}
+check(
+	libraryDestroyRejected && c.owner_child_value(program) === 777,
+	"worker destroy admission preserves library storage",
+);
+const closeCalls = c.owner_watch_calls();
+rejects(
+	() => c.owner_close_child(program, () => {}),
+	"close completion cannot release library storage",
+);
+let libraryCloseRejected = false;
+try {
+	await c.closeChildAsync(program, () => {});
+} catch (error) {
+	libraryCloseRejected = error instanceof TypeError;
+}
+check(
+	libraryCloseRejected && c.owner_watch_calls() === closeCalls,
+	"library close rejects before C entry",
+);
+const falseOwner = c.owner_result_alias(program);
+rejects(() => falseOwner.first, "an owning field cannot shorten library lifetime");
+falseOwner[Symbol.dispose]();
+const separate = c.owner_child_new(101)!,
+	falseLibrary = c.owner_result_library_alias(separate);
+rejects(
+	() => falseLibrary.library,
+	"library lifetime cannot replace independent ownership",
+);
+falseLibrary[Symbol.dispose]();
+separate[Symbol.dispose]();
+for (const ownedAlias of [c.owner_library_owned, c.libraryOwnedAsync]) {
+	let rejected = false;
+	try {
+		await Promise.resolve(ownedAlias());
+	} catch (error) {
+		rejected = error instanceof TypeError;
+	}
+	check(
+		rejected && c.owner_child_value(program) === 777,
+		"owned aliases cannot acquire library resources",
+	);
+}
+for (const callbackAlias of [c.owner_library_callback, c.libraryCallbackAsync]) {
+	const marker = new Error("library callback marker");
+	let caught: unknown;
+	try {
+		await Promise.resolve(
+			callbackAlias(() => {
+				throw marker;
+			}),
+		);
+	} catch (error) {
+		caught = error;
+	}
+	check(
+		caught === marker && c.owner_child_value(program) === 777,
+		"unobserved aliases preserve library storage and the callback error",
+	);
+}
+program[Symbol.dispose]();
+rejects(c.owner_library_owned, "disposing a view preserves its native library claim");
+const reopened = libraryParent.library!;
+check(
+	reopened !== program &&
+		c.owner_child_alias(reopened) === reopened &&
+		c.owner_child_value(reopened) === 777,
+	"library fields reopen a canonical borrowed view",
+);
+reopened[Symbol.dispose]();
+libraryParent[Symbol.dispose]();
+for (let index = 0; index < c.owner_program_count() - 1; index++) {
+	const container = c.owner_result_program(index),
+		item = container.library!;
+	check(
+		c.owner_child_value(item) === 1000 + index,
+		"library claims preserve distinct native resources through table growth",
+	);
+	item[Symbol.dispose]();
+	container[Symbol.dispose]();
+	rejects(() => c.owner_program_owned(index), "claims survive growth and view disposal");
+}
+const worker = new Worker(createWorkerUrl("./library-worker.ts", import.meta.url));
+const workerResult = new Promise<unknown>((resolve) => {
+	worker.port.onmessage = (event) => resolve(event.data);
+});
+worker.port.start();
+await worker.ready;
+worker.port.postMessage(c.owner_program_count() - 1);
+check(
+	(await workerResult) === 1000 + c.owner_program_count() - 1,
+	"worker observed its native library resource",
+);
+await worker.terminate();
+rejects(
+	() => c.owner_program_owned(c.owner_program_count() - 1),
+	"library claims outlive the VM that observed them",
+);
+for (let index = 0; index < c.owner_program_count(); index++)
+	rejects(
+		() => c.owner_program_owned(index),
+		"growing the claim table preserves earlier resources",
+	);
+rejects(c.owner_library_owned, "claim growth preserves the original library resource");
 console.log("owner fields passed");

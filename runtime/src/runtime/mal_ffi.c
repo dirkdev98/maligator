@@ -694,6 +694,7 @@ enum {
     MAL_FFI_HANDLE_BORROWED,
     MAL_FFI_HANDLE_OWNED,
     MAL_FFI_HANDLE_CHILD,
+    MAL_FFI_HANDLE_LIBRARY,
 };
 
 typedef struct MalFfiHandleObject {
@@ -1008,6 +1009,88 @@ static usize ffi_handle_slot(const MalFfiHandleType *type, const void *pointer, 
     key *= UINT64_C(0xBF58476D1CE4E5B9);
     key ^= key >> 32;
     return (usize) key & (capacity - 1);
+}
+
+typedef struct MalFfiLibraryClaim {
+    _Atomic(const MalFfiHandleType *) family;
+    const void *value;
+} MalFfiLibraryClaim;
+
+typedef struct MalFfiLibraryClaims {
+    struct MalFfiLibraryClaims *previous;
+    usize capacity;
+    usize count;
+    MalFfiLibraryClaim entries[];
+} MalFfiLibraryClaims;
+
+static _Atomic(MalFfiLibraryClaims *) ffi_library_claims;
+static pthread_mutex_t ffi_library_claim_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static bool ffi_library_claim_find(
+    const MalFfiLibraryClaims *claims, const MalFfiHandleType *family, const void *value) {
+    for (usize slot = ffi_handle_slot(family, value, claims->capacity);;
+         slot = (slot + 1) & (claims->capacity - 1)) {
+        const MalFfiLibraryClaim *entry = &claims->entries[slot];
+        const MalFfiHandleType *found = atomic_load_explicit(&entry->family, memory_order_acquire);
+        if (found == nullptr) return false;
+        if (found == family && entry->value == value) return true;
+    }
+}
+
+bool mal_ffi_is_library_resource(const MalFfiHandleType *type, const void *value) {
+    if (!type->library_lifetime || value == nullptr) return false;
+    MalFfiLibraryClaims *claims = atomic_load_explicit(&ffi_library_claims, memory_order_acquire);
+    return claims != nullptr && ffi_library_claim_find(claims, ffi_handle_family(type), value);
+}
+
+static void ffi_library_claim_place(
+    MalFfiLibraryClaims *claims, const MalFfiHandleType *family, const void *value) {
+    usize slot = ffi_handle_slot(family, value, claims->capacity);
+    while (atomic_load_explicit(&claims->entries[slot].family, memory_order_relaxed) != nullptr)
+        slot = (slot + 1) & (claims->capacity - 1);
+    claims->entries[slot].value = value;
+    atomic_store_explicit(&claims->entries[slot].family, family, memory_order_release);
+    claims->count++;
+}
+
+static bool ffi_library_claim_add(MalVm *vm, const MalFfiHandleType *type, const void *value) {
+    const MalFfiHandleType *family = ffi_handle_family(type);
+    pthread_mutex_lock(&ffi_library_claim_lock);
+    MalFfiLibraryClaims *claims = atomic_load_explicit(&ffi_library_claims, memory_order_relaxed);
+    if (claims != nullptr && ffi_library_claim_find(claims, family, value)) {
+        pthread_mutex_unlock(&ffi_library_claim_lock);
+        return true;
+    }
+    if (claims == nullptr || claims->count >= claims->capacity - claims->capacity / 4) {
+        usize capacity = claims == nullptr ? 64 : claims->capacity;
+        if (claims != nullptr) {
+            if (capacity > SIZE_MAX / 2) goto mal_allocation_failed;
+            capacity *= 2;
+        }
+        if (capacity > (SIZE_MAX - sizeof(MalFfiLibraryClaims)) / sizeof(MalFfiLibraryClaim))
+            goto mal_allocation_failed;
+        MalFfiLibraryClaims *grown = calloc(1, sizeof(*grown) + capacity * sizeof(MalFfiLibraryClaim));
+        if (grown == nullptr) goto mal_allocation_failed;
+        grown->capacity = capacity;
+        for (usize index = 0; index < capacity; index++) atomic_init(&grown->entries[index].family, nullptr);
+        if (claims != nullptr)
+            for (usize index = 0; index < claims->capacity; index++) {
+                const MalFfiLibraryClaim *entry = &claims->entries[index];
+                const MalFfiHandleType *found = atomic_load_explicit(&entry->family, memory_order_relaxed);
+                if (found != nullptr) ffi_library_claim_place(grown, found, entry->value);
+            }
+        // Claims last for the process. Keeping prior tables lets native cleanup read
+        // them without a VM, a lock, or a reclamation race while another VM grows it.
+        grown->previous = claims;
+        atomic_store_explicit(&ffi_library_claims, grown, memory_order_release);
+        claims = grown;
+    }
+    ffi_library_claim_place(claims, family, value);
+    pthread_mutex_unlock(&ffi_library_claim_lock);
+    return true;
+mal_allocation_failed:
+    pthread_mutex_unlock(&ffi_library_claim_lock);
+    return mal_ffi_out_of_memory(vm);
 }
 
 static MalFfiHandleObject *ffi_handle_find(
@@ -2444,7 +2527,8 @@ bool mal_ffi_close_prepare(
     const MalFfiSite *error) {
     MalFfiHandleObject *handle = ffi_handle(value);
     if (handle == nullptr || handle->value == nullptr || handle->pins != 1 || handle->closing
-        || ffi_handle_borrowed(handle) || ffi_handle_owner(handle) != nullptr)
+        || ffi_handle_borrowed(handle) || ffi_handle_owner(handle) != nullptr
+        || mal_ffi_is_library_resource(handle->type, handle->value))
         return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, error,
             "a handle no other C call is using");
     MalFfiClose *close = calloc(1, sizeof(*close));
@@ -2799,6 +2883,11 @@ static __attribute__((noinline)) bool ffi_handle_supports(MalFfiHandleObject *ha
 static MalValue ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned, u64 scope, bool owns_storage, bool fresh) {
+    if (owned && mal_ffi_is_library_resource(type, value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "Cannot take ownership of a library-lifetime C resource");
+        return mal_value_new_undefined();
+    }
     MalFfiState *state = type->size == 0 ? ffi_state(vm) : nullptr;
     MalFfiHandleObject *open = state == nullptr ? nullptr : ffi_handle_find(state, ffi_handle_family(type), value);
     if (fresh && open != nullptr && (open->closing || !ffi_handle_owners_open(vm, open))) {
@@ -2904,7 +2993,8 @@ static bool ffi_handle_can_adopt(
     MalVm *vm, MalFfiHandleObject *child, MalFfiHandleObject *owner, const MalFfiSite *site) {
     if (child == owner) return true;
     MalFfiHandleObject *prior = ffi_handle_owner(child);
-    if (child->ownership == MAL_FFI_HANDLE_OWNED || child->owns_storage || (prior != nullptr && prior != owner))
+    if (child->ownership == MAL_FFI_HANDLE_OWNED || child->ownership == MAL_FFI_HANDLE_LIBRARY
+        || child->owns_storage || (prior != nullptr && prior != owner))
         return mal_ffi_expected(vm, site, "one distinct owning resource for a borrowed pointer");
     if (prior == nullptr && (child->pins > 0 || child->closing || ffi_handle_borrowed(child)))
         return mal_ffi_expected(vm, site, "a resource no C operation is using before assigning its owner");
@@ -2952,6 +3042,11 @@ MalValue mal_ffi_new_owner_handle(
     MalFfiState *state = ffi_state(vm);
     MalFfiHandleObject *candidate = state == nullptr ? nullptr
         : ffi_handle_find(state, ffi_handle_family(type), value);
+    if (candidate != owner && mal_ffi_is_library_resource(type, value)) {
+        mal_ffi_expected(vm, &site, "a resource whose lifetime belongs to its owning handle");
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
     if (candidate != nullptr && ffi_scope_active(vm, candidate->scope)
         && !ffi_handle_owner_expired(vm, candidate)
         && !ffi_handle_can_adopt(vm, candidate, owner, &site)) {
@@ -2967,6 +3062,31 @@ MalValue mal_ffi_new_owner_handle(
     }
     mal_gc_unroot(&root);
     return mal_ffi_threw(vm) ? mal_value_new_undefined() : roots[1];
+}
+
+MalValue mal_ffi_new_library_handle(
+    MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value) {
+    MalFfiSite site = {type->name, "library lifetime", nullptr};
+    if (!type->library_lifetime || type->size != 0) {
+        mal_ffi_expected(vm, &site, "a pointer family that supports library-lifetime resource fields");
+        return mal_value_new_undefined();
+    }
+    MalFfiState *state = ffi_state(vm);
+    if (state == nullptr) { mal_ffi_out_of_memory(vm); return mal_value_new_undefined(); }
+    MalFfiHandleObject *candidate = ffi_handle_find(state, ffi_handle_family(type), value);
+    if (candidate != nullptr && ffi_scope_active(vm, candidate->scope)
+        && !ffi_handle_owner_expired(vm, candidate)) {
+        if (candidate->ownership == MAL_FFI_HANDLE_OWNED || candidate->ownership == MAL_FFI_HANDLE_CHILD
+            || (candidate->ownership != MAL_FFI_HANDLE_LIBRARY
+                && (candidate->pins != 0 || candidate->closing || ffi_handle_borrowed(candidate)))) {
+            mal_ffi_expected(vm, &site, "an independent borrowed resource for library lifetime");
+            return mal_value_new_undefined();
+        }
+    }
+    if (!ffi_library_claim_add(vm, type, value)) return mal_value_new_undefined();
+    MalValue result = ffi_new_handle(vm, library, type, value, false, 0, false, false);
+    if (!mal_ffi_threw(vm)) ffi_handle(result)->ownership = MAL_FFI_HANDLE_LIBRARY;
+    return result;
 }
 
 MalValue mal_ffi_allocate_handle(
@@ -3425,6 +3545,8 @@ bool mal_ffi_handle_results_ready(MalVm *vm, const MalFfiHandleType *type, const
 bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, bool worker, const MalFfiSite *site) {
     if (pin == nullptr) return true;
     MalFfiHandleObject *handle = pin;
+    if (mal_ffi_is_library_resource(handle->type, handle->value))
+        return mal_ffi_expected(vm, site, "a resource the program owns for a destroy binding");
     if (ffi_handle_owner(handle) != nullptr)
         return mal_ffi_expected(vm, site, "an independently owned resource for a destroy binding");
     if (handle->owns_storage && handle->type->size == 0)

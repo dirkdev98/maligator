@@ -96,3 +96,22 @@ OwnerBase *owner_unreadable_base(void) {
 }
 OwnerChild *owner_child_from_base(OwnerBase *base) { return (OwnerChild *)base; }
 void owner_unreadable_release(void) { munmap(unreadable_base, (size_t)sysconf(_SC_PAGESIZE)); unreadable_base = 0; }
+OwnerChild *owner_library_owned(void) { return &library_child; }
+OwnerChild *owner_library_callback(void (*callback)(void *), void *data) { callback(data); return &library_child; }
+OwnerResult owner_result_library_alias(OwnerChild *child) { return (OwnerResult){.library = child}; }
+static OwnerChild program_children[128];
+int owner_program_count(void) { return (int)(sizeof(program_children) / sizeof(program_children[0])); }
+OwnerResult owner_result_program(int index) {
+    if (index < 0 || index >= owner_program_count()) abort();
+    program_children[index].value = 1000 + index;
+    return (OwnerResult){.library = &program_children[index]};
+}
+OwnerChild *owner_program_owned(int index) {
+    if (index < 0 || index >= owner_program_count()) abort();
+    return &program_children[index];
+}
+void owner_close_child(OwnerChild *child, void (*done)(OwnerChild *, void *), void *data) {
+    atomic_fetch_add(&watch_calls, 1);
+    done(child, data);
+    owner_child_free(child);
+}

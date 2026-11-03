@@ -22,6 +22,15 @@ export default {
 		OwnerLeaf: { handle: {}, fields: { next: { handle: { lifetime: "owner" } } } },
 	},
 	functions: {
+		owner_library_owned: { async: "libraryOwnedAsync" },
+		owner_library_callback: {
+			params: { callback: { callback: { data: "data" } } },
+			async: "libraryCallbackAsync",
+		},
+		owner_close_child: {
+			params: { done: { callback: { data: "data", closes: "child" } } },
+			async: "closeChildAsync",
+		},
 		owner_result_new: { async: "newResultAsync" },
 		owner_result_destroy: { async: "destroyResultAsync" },
 		owner_child_free: { async: "destroyChildAsync" },

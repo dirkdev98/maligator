@@ -117,6 +117,8 @@ typedef struct MalFfiHandleType {
     bool collect;
     /** Every view in this family can represent a resource borrowed from another handle. */
     bool borrows_owner;
+    /** A field can assert process lifetime for a resource in this pointer family. */
+    bool library_lifetime;
     const MalFfiField *fields;
     int32_t field_count;
     /**
@@ -148,6 +150,10 @@ MalValue mal_ffi_new_owner_handle(
     void *value, MalValue owner);
 /** Prove the destruction boundary before reading a borrowed descendant's C fields. */
 bool mal_ffi_owner_ready(MalVm *vm, MalValue value, const MalFfiSite *site);
+/** Library lifetime survives view disposal and protects native-only result cleanup. */
+MalValue mal_ffi_new_library_handle(
+    MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value);
+bool mal_ffi_is_library_resource(const MalFfiHandleType *type, const void *value);
 /**
  * Allocate zeroed caller storage and wrap its stable pointer. Disposing or collecting
  * this handle frees the outer storage; C initialization and cleanup are explicit.

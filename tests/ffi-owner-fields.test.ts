@@ -61,7 +61,7 @@ it("declares borrowed resource fields with their destruction boundary", () => {
 	const library = plan.handles
 		.get("OwnerResult")
 		?.fields.find((field) => field.name === "library")?.value;
-	expect(library).toMatchObject({ kind: "handle", owned: false });
+	expect(library).toMatchObject({ kind: "handle", owned: false, lifetime: "library" });
 	expect(library).not.toHaveProperty("owner");
 	const sdk = [...generateDeclarations([{ name: "owner", plan }])].join("");
 	expect(sdk).toContain("readonly first: OwnerChild | null");

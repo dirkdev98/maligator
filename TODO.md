@@ -1906,6 +1906,10 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 - [ ] Support transactional transfer of independently owned compound fields and kept
       callback registrations tied to borrowed child lifetimes.
 
+- [ ] Preserve existing ownership when an owned C return aliases a known resource
+      and conversion is abandoned after a callback throws or an async call is dropped.
+      Native-only cleanup must distinguish newly transferred storage from an alias.
+
 - [ ] Remove measured marshalling, allocation, callback-dispatch, and unused binding
       build costs. Compare representative libraries against C and Bun, retaining
       output parity, matched toolchains, and CPU, memory, disk, and binary-size evidence.
