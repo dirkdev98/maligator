@@ -3048,10 +3048,6 @@ static MalValue ffi_new_handle(
                 (const byte *) "Cannot take ownership of an owner-bound C resource");
             return mal_value_new_undefined();
         }
-        if (owned && open->ownership != MAL_FFI_HANDLE_OWNED && !open->owns_storage) {
-            open->ownership = MAL_FFI_HANDLE_OWNED;
-            open->owner_type = type;
-        }
         if (open->type != type && !ffi_handle_supports(open, type)) {
             MalFfiHandleView *view = malloc(sizeof(*view));
             if (view == nullptr) {
@@ -3060,6 +3056,10 @@ static MalValue ffi_new_handle(
             }
             *view = (MalFfiHandleView) {type, open->views};
             open->views = view;
+        }
+        if (owned && open->ownership != MAL_FFI_HANDLE_OWNED && !open->owns_storage) {
+            open->ownership = MAL_FFI_HANDLE_OWNED;
+            open->owner_type = type;
         }
         // A nested loan must not shorten an outer invocation's still-active loan.
         if (scope == 0 || !ffi_scope_active(vm, open->scope)) open->scope = scope;
