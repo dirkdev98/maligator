@@ -13,6 +13,30 @@ import contract from "./fixtures/ffi-owner-fields/owner.ffi.ts";
 
 let model: CModel;
 it.each([
+	{ owner: "child" },
+	{ owner: "child", closes: "child" },
+	{ owner: 17, data: "data", release: "release" },
+	{ owner: "", data: "data", release: "release" },
+])("rejects an invalid registration owner contract %j", (callback) => {
+	const directory = mkdtempSync(path.join(tmpdir(), "mal-owner-registration-facts-"));
+	try {
+		writeFileSync(
+			path.join(directory, "owner.ffi.ts"),
+			`export default ${JSON.stringify({ headers: ["owner.h"], functions: { owner_watch_child: { params: { callback: { callback } } } } })};\n`,
+		);
+		expect(() =>
+			loadLibraryContract(
+				"owner",
+				{ contract: "owner.ffi.ts" },
+				directory,
+				stripCompactTypes,
+			),
+		).toThrow();
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+it.each([
 	{ handle: { lifetime: "call" } },
 	{ handle: {} },
 	{ handle: { lifetime: "owner" }, string: { length: "size" } },
@@ -46,6 +70,24 @@ beforeAll(() => {
 		compileArguments: ["-I", path.join(import.meta.dirname, "fixtures/ffi-owner-fields")],
 	});
 });
+
+it.each(["data", "callback", "missing"])(
+	"rejects registration owner selector %s without an input handle",
+	(owner) => {
+		expect(() =>
+			planBindings(model, {
+				types: contract.types,
+				functions: {
+					owner_watch_child: {
+						params: {
+							callback: { callback: { owner, data: "data", release: "release" } },
+						},
+					},
+				},
+			}),
+		).toThrow(/callback.owner/);
+	},
+);
 
 it("declares borrowed resource fields with their destruction boundary", () => {
 	const plan = planBindings(model, contract);

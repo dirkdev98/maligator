@@ -1,0 +1,24 @@
+#pragma once
+typedef struct LifeChild LifeChild;
+typedef struct LifeRoot { LifeChild *child; } LifeRoot;
+typedef struct RetryRoot { LifeChild *child; int fail; } RetryRoot;
+LifeRoot *life_new(int value);
+void life_destroy(LifeRoot *root);
+RetryRoot *retry_new(int value);
+int retry_destroy(RetryRoot *root);
+void retry_allow(RetryRoot *root);
+void life_subscribe(LifeChild *child, int (*callback)(void *), void *data, void (*release)(void *));
+void life_replace(LifeChild *child, int (*callback)(LifeChild *, void *), void *data);
+void life_subscribe_queued(LifeChild *child, int (*callback)(void *), void *data, void (*release)(void *));
+void life_subscribe_notice(LifeChild *child, void (*callback)(void *), void *data, void (*release)(void *));
+void life_subscribe_result(LifeChild *child, LifeRoot *(*callback)(void *), void *data, void (*release)(void *));
+void life_post(LifeChild *child);
+int life_fire_result(LifeChild *child);
+int life_fire(LifeChild *child);
+int life_fire_thread(LifeChild *child);
+int life_value(LifeChild *child);
+int life_destroyed(void);
+void life_keep_root(LifeRoot *(*callback)(void *), void *data, void (*release)(void *));
+int life_held_value(void);
+int life_held_fire(void);
+void life_clear_root(void);

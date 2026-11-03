@@ -511,6 +511,8 @@ bool mal_ffi_threw(MalVm *vm);
 typedef struct MalFfiCallback {
     _Atomic(MalVm *) vm;
     MalValue function;
+    /** Undefined for independent callbacks; null after their destruction owner retires. */
+    MalValue owner;
     const void *thread_identity;
     /** Native result copies outlive callback frames and the binding's result conversion. */
     void *results;
@@ -522,6 +524,9 @@ typedef struct MalFfiCallback {
 } MalFfiCallback;
 /** Record the owning thread before C can call a stack or retained context. */
 void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue function);
+bool mal_ffi_callback_own(MalVm *vm, MalFfiCallback *callback, MalValue value, const MalFfiSite *site);
+bool mal_ffi_callback_pin_owner(MalVm *vm, MalFfiCallback *callback, MalValue *value, void **pin,
+    const MalFfiSite *site);
 void *mal_ffi_callback_result_copy(
     MalVm *vm, MalFfiCallback *callback, const void *source, size_t length, bool terminated,
     bool registration);
@@ -567,6 +572,7 @@ void mal_ffi_release(void *data);
  * library calls back from another thread.
  */
 MalVm *mal_ffi_callback_vm(MalFfiCallback *callback);
+MalVm *mal_ffi_callback_owner_vm(MalFfiCallback *callback);
 /** Keep a native invocation alive if completion retires its registry ownership. */
 void mal_ffi_callback_hold(MalFfiCallback *callback);
 void mal_ffi_callback_drop(MalFfiCallback *callback);

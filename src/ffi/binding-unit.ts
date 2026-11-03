@@ -323,6 +323,7 @@ class BindingWriter {
 		inputs: string,
 		fail: string,
 		owner?: string,
+		registrationOwner?: number,
 	): Array<string> {
 		const checks = binding.params.flatMap(({ value }, index) =>
 			value.kind === "handle"
@@ -335,7 +336,14 @@ class BindingWriter {
 			checks.push(
 				`if (!mal_ffi_callback_retain_owners(vm, ${callback}, ${owner ?? "mal_ffi_undefined()"}, ${inputs}, &mal_site_result)) ${fail}`,
 			);
-		return checks;
+		return [
+			...(registrationOwner === undefined
+				? []
+				: [
+						`if (!mal_ffi_callback_own(vm, ${callback}, ${argument(registrationOwner)}, &mal_site_${registrationOwner})) ${fail}`,
+					]),
+			...checks,
+		];
 	}
 
 	#resultGuards(binding: BoundFunction, fail: string): Array<string> {
@@ -1995,7 +2003,7 @@ class BindingWriter {
 		const immutableReturn = this.#immutableRecord(type.returns);
 		const zero = `(${localDeclaration(type.returns, "")}) ${immutableReturn ? this.#callbackDefault(value.returns) : "{}"}`;
 		const emptyReturn = immutableReturn ? zero : "mal_return";
-		const count = String(inputs.length);
+		const count = String(inputs.length + (value.owner === undefined ? 0 : 1));
 		// Handles the library lends belong to this invocation and close when it returns.
 		const lends = inputs.some(
 			({ value: input, index }) =>
@@ -2114,7 +2122,7 @@ class BindingWriter {
 			...(value.kept
 				? [
 						...(keyedLookup && !queued ? [] : ["\tmal_ffi_callback_hold(mal_callback);"]),
-						"\tMalVm *vm = mal_ffi_callback_vm(mal_callback);",
+						`\tMalVm *vm = ${value.owner === undefined ? "mal_ffi_callback_vm" : "mal_ffi_callback_owner_vm"}(mal_callback);`,
 						// A library may call back after the VM is gone; it gets a zero result.
 						`\tif (vm == nullptr) { mal_ffi_callback_drop(mal_callback); return${returns ? ` ${emptyReturn}` : ""}; }`,
 					]
@@ -2124,13 +2132,14 @@ class BindingWriter {
 					]),
 			`\tstatic const MalFfiSite mal_site = { ${cString(owner)}, "callback result", nullptr };`,
 			"\t(void) mal_site;",
-			`\tMalValue mal_values[${inputs.length === 0 ? "1" : count}] = {};`,
+			`\tMalValue mal_values[${Math.max(Number(count), 1)}] = {};`,
 			"\tMalValue mal_result = mal_ffi_undefined();",
 			"\tMalFfiRoots mal_roots;",
 			`\tmal_ffi_root(&mal_roots, mal_values, ${count});`,
 			"\tMalFfiRoots mal_result_roots;",
 			"\tmal_ffi_root(&mal_result_roots, &mal_result, 1);",
 			...(lends ? ["\tbool mal_lent = false;"] : []),
+			...(value.owner === undefined ? [] : ["\tvoid *mal_owner_pin = nullptr;"]),
 			...resultLocals.map((line) => `\t${line}`),
 			...(value.resultCount === undefined
 				? []
@@ -2153,6 +2162,11 @@ class BindingWriter {
 						"\tmal_ffi_close_finish(mal_callback);",
 					]),
 			"\tif (mal_ffi_threw(vm)) goto mal_done;",
+			...(value.owner === undefined
+				? []
+				: [
+						`\tif (!mal_ffi_callback_pin_owner(vm, mal_callback, &mal_values[${inputs.length}], &mal_owner_pin, &mal_site)) goto mal_done;`,
+					]),
 			...(lends
 				? ["\tif (!(mal_lent = mal_ffi_callback_enter(vm))) goto mal_done;"]
 				: []),
@@ -2176,7 +2190,7 @@ class BindingWriter {
 							)
 				).map((line) => `\t${line}`);
 			}),
-			`\tif (!mal_ffi_call(vm, mal_callback->function, mal_values, ${count}, &mal_result)) goto mal_done;`,
+			`\tif (!mal_ffi_call(vm, mal_callback->function, mal_values, ${inputs.length}, &mal_result)) goto mal_done;`,
 			...(returns
 				? resultConversion.map((line) => `\t${line}`)
 				: ["\t(void) mal_result;"]),
@@ -2195,6 +2209,7 @@ class BindingWriter {
 					]
 				: []),
 			...(lends ? ["\tif (mal_lent) mal_ffi_callback_leave(vm);"] : []),
+			...(value.owner === undefined ? [] : ["\tmal_ffi_unpin_handle(mal_owner_pin);"]),
 			"\tmal_ffi_unroot(&mal_result_roots);",
 			"\tmal_ffi_unroot(&mal_roots);",
 			...(value.kept ? ["\tmal_ffi_callback_drop(mal_callback);"] : []),
@@ -3119,6 +3134,7 @@ class BindingWriter {
 								inputs,
 								"goto mal_done;",
 								owner === undefined ? undefined : "mal_owner",
+								value.owner,
 							).map((line) => `\t${line}`),
 							"}",
 						);
@@ -4051,6 +4067,8 @@ class BindingWriter {
 										argument,
 										inputs,
 										"goto mal_failed;",
+										undefined,
+										value.owner,
 									).map((line) => `\t${line}`)
 								: []),
 							"}",

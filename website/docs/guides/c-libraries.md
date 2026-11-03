@@ -380,12 +380,13 @@ Owner fields must be reachable from a destructor-backed root through declared ow
 fields and use library-owned child storage. Descendants can omit their own destructor.
 Read them through an owning field before following their links; a raw borrowed alias
 needs a proven owner before its resource fields can be read.
-A kept callback leases owner-bound inputs and their destruction roots until C releases
+Without `callback.owner`, a kept callback leases owner-bound inputs and their destruction roots until C releases
 the callback or a replacement retires it. This includes handles inside compound inputs
 and an owner-bound callable's captured handle. Disposal and destruction reject while
 these leases remain; field reads and saved callables remain available for unregistration.
 Unregister nullable callbacks with `null` before closing their resources. The library
-must offer release or unregistration independently of root destruction. Children whose
+must offer release or unregistration independently of root destruction. Declare
+`callback.owner` when root destruction ends the registration instead. Children whose
 root is a callback loan cannot become registration inputs. Registration results cannot borrow any retained
 input root. Native leases also preserve the resources through VM teardown until C
 releases the registration. Plain records that transfer independent resource ownership
@@ -730,6 +731,27 @@ When the setter's first parameter is a handle, each handle keeps its own callbac
 A key has one pending setter at a time, including synchronous setters that call back
 before returning. Another setter for that key throws; setters for other keys can run.
 Await an async setter before replacing its registration again.
+
+Use `owner` when destroying a resource ends a registration on one of its borrowed
+children, without an independent unregister operation:
+
+```typescript
+subscribe: {
+	params: { callback: { callback: { owner: "child", data: "data", release: "release" } } },
+},
+```
+
+The selector names an input handle by C parameter name or 1-based position. Its actual
+destruction root must be a non-null, independently owned library allocation with a
+destructor. Caller-owned root storage is unsupported. C must stop the registration
+and all its consumers before destruction returns. Other borrowed inputs must share
+that root.
+
+The root keeps the closure and borrowed inputs alive. A closure that captures the
+root can still be collected with it. Active callback execution prevents closing the
+root; conditional destruction failure preserves the registration. Queued calls skip
+JavaScript after the root closes. Independent result leases still prevent destruction,
+and this registration cannot return a lease on its own root or descendants.
 
 `closes` names the input handle released by a one-shot completion, such as libuv's
 `uv_close`. Both the registration function and completion return `void`:

@@ -1907,8 +1907,8 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       resource arrays, and resource tables without an outer `free` function. Preserve
       ownership and type views through allocation failure after partial conversion.
 
-- [ ] Support callback registrations on borrowed children whose only C release path
-      destroys the root, without requiring a separate unregistration operation.
+- [ ] Extend destruction-root-owned callback registrations to roots stored in caller
+      allocations or copied structs, preserving their native storage after VM teardown.
 
 - [ ] Remove measured marshalling, allocation, callback-dispatch, and unused binding
       build costs. Compare representative libraries against C and Bun, retaining

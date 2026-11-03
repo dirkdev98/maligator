@@ -713,6 +713,10 @@ typedef struct MalFfiNativeHandle {
     _Atomic u32 references;
     /** Input registrations protect lifetime while leaving callables usable. */
     _Atomic u32 results;
+    /** These input leases are reachable through the destruction root, not global GC roots. */
+    _Atomic u32 contained;
+    /** Registrations never retain this native owner back through its reference count. */
+    struct MalFfiKept *callbacks;
     void *value;
     const MalFfiHandleType *owner_type;
     MalArrayBufferStoreLease **stores;
@@ -721,9 +725,11 @@ typedef struct MalFfiNativeHandle {
     bool owns_storage;
     /** Failed delivery follows last lease release regardless of collection policy. */
     bool force_destroy;
+    bool registration_owner;
 } MalFfiNativeHandle;
 
 static void ffi_native_handle_drop(MalFfiNativeHandle *handle, bool result);
+static void ffi_owner_finish(MalFfiNativeHandle *owner, bool released);
 
 enum {
     MAL_FFI_HANDLE_BORROWED,
@@ -807,6 +813,10 @@ static void ffi_group_release(MalFfiAsyncGroup *group) {
 /** A kept callback; trampolines receive a pointer to `callback`, its first member. */
 typedef struct MalFfiKept {
     MalFfiCallback callback;
+    MalFfiNativeHandle *owner;
+    struct MalFfiKept *owner_previous;
+    struct MalFfiKept *owner_next;
+    bool release_requested;
     /** The element of the VM's kept-function holder that roots `callback.function`. */
     u32 slot;
     pthread_t thread;
@@ -1556,6 +1566,7 @@ static MAL_ISOLATE_LOCAL byte ffi_callback_thread;
 void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue function) {
     callback->vm = vm;
     callback->function = function;
+    callback->owner = mal_value_new_undefined();
     callback->thread_identity = &ffi_callback_thread;
     callback->results = nullptr;
     callback->inputs = nullptr;
@@ -1566,6 +1577,7 @@ void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue functio
 typedef struct MalFfiResultCopy {
     struct MalFfiResultCopy *next;
     MalFfiNativeHandle *handle;
+    bool contained;
     byte data[];
 } MalFfiResultCopy;
 
@@ -1610,7 +1622,11 @@ void mal_ffi_callback_results_free(MalFfiCallback *callback) {
     for (usize index = 0; index < sizeof(lists) / sizeof(lists[0]); index++)
         for (MalFfiResultCopy *copy = lists[index]; copy != nullptr;) {
             MalFfiResultCopy *next = copy->next;
-            if (copy->handle != nullptr) ffi_native_handle_drop(copy->handle, index == 0);
+            if (copy->handle != nullptr) {
+                if (copy->contained)
+                    atomic_fetch_sub_explicit(&copy->handle->contained, 1, memory_order_acq_rel);
+                ffi_native_handle_drop(copy->handle, index == 0);
+            }
             free(copy);
             copy = next;
         }
@@ -1656,6 +1672,36 @@ MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function) {
 
 static void ffi_inbox_leave(MalVm *vm);
 
+static void ffi_owner_unlink(MalFfiKept *kept) {
+    MalFfiNativeHandle *owner = kept->owner;
+    if (owner == nullptr) return;
+    if (kept->owner_previous != nullptr) kept->owner_previous->owner_next = kept->owner_next;
+    else owner->callbacks = kept->owner_next;
+    if (kept->owner_next != nullptr) kept->owner_next->owner_previous = kept->owner_previous;
+    kept->owner = nullptr;
+    kept->callback.owner = mal_value_new_null();
+    kept->owner_previous = nullptr;
+    kept->owner_next = nullptr;
+}
+
+static void ffi_kept_slot_release(MalVm *vm, MalFfiKept *kept) {
+    if (kept->slot == UINT32_MAX) return;
+    MalFfiState *state = vm->ffi;
+    MalValue array;
+    if (ffi_prepared(vm, FFI_KEPT_IDENTITY, &array))
+        (void) mal_object_set(mal_value_to_object(array), mal_key_index(kept->slot), mal_value_new_undefined());
+    if (state->free_count == state->free_capacity) {
+        u32 capacity = state->free_capacity == 0 ? 8 : state->free_capacity * 2;
+        u32 *grown = realloc(state->free_slots, capacity * sizeof(*grown));
+        if (grown != nullptr) {
+            state->free_slots = grown;
+            state->free_capacity = capacity;
+        }
+    }
+    if (state->free_count < state->free_capacity) state->free_slots[state->free_count++] = kept->slot;
+    kept->slot = UINT32_MAX;
+}
+
 /** Drop a released context's slot and free it; runs on the VM thread outside collection. */
 static void ffi_release_now(MalFfiKept *kept) {
     MalVm *vm = kept->callback.vm;
@@ -1668,26 +1714,12 @@ static void ffi_release_now(MalFfiKept *kept) {
         ffi_inbox_leave(vm);
     }
     ffi_close_detach(kept);
+    pthread_mutex_lock(&ffi_queue_lock);
+    ffi_owner_unlink(kept);
+    pthread_mutex_unlock(&ffi_queue_lock);
     if (vm != nullptr) {
         MalFfiState *state = vm->ffi;
-        MalValue array;
-        if (ffi_prepared(vm, FFI_KEPT_IDENTITY, &array)) {
-            // Overwriting an existing element allocates nothing, so this cannot throw.
-            (void) mal_object_set(
-                mal_value_to_object(array), mal_key_index(kept->slot), mal_value_new_undefined());
-        }
-        if (state->free_count == state->free_capacity) {
-            u32 capacity = state->free_capacity == 0 ? 8 : state->free_capacity * 2;
-            u32 *grown = realloc(state->free_slots, capacity * sizeof(*grown));
-            if (grown != nullptr) {
-                state->free_slots = grown;
-                state->free_capacity = capacity;
-            }
-        }
-        // Without room the slot is simply never reused.
-        if (state->free_count < state->free_capacity) {
-            state->free_slots[state->free_count++] = kept->slot;
-        }
+        ffi_kept_slot_release(vm, kept);
         if (kept->previous != nullptr) kept->previous->next = kept->next;
         else state->kept = kept->next;
         if (kept->next != nullptr) kept->next->previous = kept->previous;
@@ -1714,6 +1746,7 @@ void mal_ffi_release(void *data) {
     if (data == nullptr) return;
     MalFfiKept *kept = data;
     pthread_mutex_lock(&ffi_queue_lock);
+    kept->release_requested = true;
     kept->callback.results_accepting = false;
     MalVm *vm = kept->callback.vm;
     // A queued callback's release goes through its inbox, which wakes the event loop
@@ -1812,7 +1845,8 @@ static void ffi_scan_roots(MalVm *vm, void *data) {
     if (vm->ffi == nullptr) return;
     for (MalFfiNativeHandle *native = vm->ffi->native_handles; native != nullptr; native = native->next) {
         // Keeping the canonical wrapper prevents a later C alias from acquiring a second owner.
-        if (atomic_load_explicit(&native->references, memory_order_acquire) > 1)
+        if (atomic_load_explicit(&native->references, memory_order_acquire)
+            > 1 + atomic_load_explicit(&native->contained, memory_order_acquire))
             mal_gc_mark_value(native->wrapper);
     }
 }
@@ -2028,6 +2062,13 @@ MalVm *mal_ffi_callback_vm(MalFfiCallback *callback) {
     return vm;
 }
 
+MalVm *mal_ffi_callback_owner_vm(MalFfiCallback *callback) {
+    MalVm *vm = mal_ffi_callback_vm(callback);
+    if (vm == nullptr) return nullptr;
+    MalFfiHandleObject *owner = ffi_handle(callback->owner);
+    return owner == nullptr || owner->value == nullptr || owner->closing ? nullptr : vm;
+}
+
 void mal_ffi_callback_hold(MalFfiCallback *callback) {
     atomic_fetch_add_explicit(&((MalFfiKept *) callback)->references, 1, memory_order_relaxed);
 }
@@ -2237,6 +2278,65 @@ static void ffi_replaced_drop_before(void *key, u64 identity) {
 
 static void ffi_replaced_drop(void *key) {
     ffi_replaced_drop_before(key, UINT64_MAX);
+}
+
+static void ffi_replaced_drop_owner(MalFfiNativeHandle *owner) {
+    for (;;) {
+        MalFfiKept *kept = nullptr;
+        pthread_mutex_lock(&ffi_replaced_lock);
+        pthread_mutex_lock(&ffi_queue_lock);
+        for (MalFfiReplaced *site = ffi_replaced_sites; site != nullptr && kept == nullptr; site = site->next) {
+            MalFfiReplacedEntry *entries = site->entries;
+            for (usize index = 0; index < site->count && kept == nullptr; index++) {
+                MalFfiReplacedEntry *entry = &entries[index];
+                for (unsigned lane = 0; lane < 2; lane++) {
+                    if (entry->kept[lane] == nullptr || entry->kept[lane]->owner != owner) continue;
+                    kept = entry->kept[lane];
+                    entry->kept[lane] = nullptr;
+                    entry->identity[lane] = 0;
+                    if (entry->kept[0] == nullptr && entry->kept[1] == nullptr) {
+                        if (entry->pending == nullptr) ffi_replaced_remove(site, entry);
+                        else entry->retired = true;
+                    }
+                    break;
+                }
+            }
+        }
+        pthread_mutex_unlock(&ffi_queue_lock);
+        pthread_mutex_unlock(&ffi_replaced_lock);
+        if (kept == nullptr) return;
+        mal_ffi_release(kept);
+    }
+}
+
+static void ffi_owner_finish(MalFfiNativeHandle *owner, bool released) {
+    if (!owner->registration_owner) return;
+    if (released) ffi_replaced_drop_owner(owner);
+    for (;;) {
+        pthread_mutex_lock(&ffi_queue_lock);
+        MalFfiKept *kept = owner->callbacks;
+        if (kept == nullptr) { pthread_mutex_unlock(&ffi_queue_lock); return; }
+        atomic_fetch_add_explicit(&kept->references, 1, memory_order_relaxed);
+        ffi_owner_unlink(kept);
+        bool requested = kept->release_requested;
+        MalVm *vm = kept->callback.vm;
+        if (!released && vm != nullptr) {
+            // Collection can leave a collect:false or failed-destruction resource
+            // alive in C. Its callbacks retain native copies, never dead VM values.
+            MalFfiState *state = vm->ffi;
+            if (kept->previous != nullptr) kept->previous->next = kept->next;
+            else state->kept = kept->next;
+            if (kept->next != nullptr) kept->next->previous = kept->previous;
+            kept->previous = nullptr;
+            kept->next = nullptr;
+            kept->callback.vm = nullptr;
+            kept->callback.function = mal_value_new_undefined();
+        }
+        pthread_mutex_unlock(&ffi_queue_lock);
+        if (!released && vm != nullptr && kept->queued) ffi_inbox_leave(vm);
+        if (released && !requested) mal_ffi_release(kept);
+        ffi_kept_unref(kept);
+    }
 }
 
 /** A queued call of a kept callback from another thread, or with no `run`, its release. */
@@ -2508,14 +2608,20 @@ static void ffi_native_handle_drop(MalFfiNativeHandle *handle, bool result) {
     if (atomic_fetch_sub_explicit(&handle->references, 1, memory_order_acq_rel) != 1) return;
     bool previous = ffi_finalizing;
     ffi_finalizing = true;
+    bool released = false;
     if (handle->value != nullptr && handle->owned && (handle->force_destroy || handle->owner_type->collect)
         && handle->owner_type->destroy != nullptr) {
-        if (handle->owner_type->destroy(handle->value)) ffi_replaced_drop(handle->value);
+        if (handle->owner_type->destroy(handle->value)) {
+            released = true;
+            ffi_replaced_drop(handle->value);
+        }
     }
     if (handle->owns_storage) {
         ffi_replaced_drop(handle->value);
         free(handle->value);
+        released = true;
     }
+    ffi_owner_finish(handle, released);
     ffi_native_handle_stores_clear(handle);
     free(handle);
     ffi_finalizing = previous;
@@ -2542,6 +2648,13 @@ static void ffi_native_handle_unregister(MalFfiNativeHandle *native) {
 /** Forget the resource; freeing caller-owned storage also releases its keyed callbacks. */
 static void ffi_handle_forget(MalFfiHandleObject *handle) {
     if (handle->registry != nullptr) ffi_handle_unregister(handle);
+    // Retiring a closing address may expose a fresh resource during its C destructor.
+    // The old wrapper still traces its registrations until that destructor returns.
+    if (handle->closing && handle->native != nullptr && handle->native->callbacks != nullptr) {
+        handle->value = nullptr;
+        handle->provisional = false;
+        return;
+    }
     if (handle->retained != nullptr) {
         for (i32 index = 0; index < handle->type->managed_field_count; index++) {
             MalFfiRetainedField *field = &handle->retained[index];
@@ -2739,6 +2852,12 @@ static void ffi_handle_trace(MalHeapHeader *cell) {
     MalFfiHandleObject *handle = (MalFfiHandleObject *) cell;
     if (handle->ownership == MAL_FFI_HANDLE_CHILD)
         mal_gc_mark_value(mal_value_from_heap((MalHeapHeader *) handle->owner));
+    if (handle->native != nullptr)
+        for (MalFfiKept *kept = handle->native->callbacks; kept != nullptr; kept = kept->owner_next) {
+            mal_gc_mark_value(kept->callback.function);
+            for (MalFfiResultCopy *input = kept->callback.inputs; input != nullptr; input = input->next)
+                if (input->contained) mal_gc_mark_value(input->handle->wrapper);
+        }
     if (handle->retained == nullptr) return;
     for (i32 index = 0; index < handle->type->managed_field_count; index++)
         mal_gc_mark_value(handle->retained[index].buffer);
@@ -2751,6 +2870,7 @@ static void ffi_handle_finalize(MalHeapHeader *cell) {
     MalFfiNativeHandle *native = handle->native;
     if (native != nullptr) {
         ffi_native_handle_unregister(native);
+        native->wrapper = mal_value_new_undefined();
         native->value = handle->value;
         native->owner_type = ffi_handle_policy(handle);
         native->owned = handle->ownership == MAL_FFI_HANDLE_OWNED;
@@ -2812,6 +2932,7 @@ static MalValue ffi_handle_dispose(
                 return mal_value_new_undefined();
             }
             ffi_replaced_drop(value);
+            if (handle->native != nullptr) ffi_owner_finish(handle->native, true);
         }
         ffi_handle_forget(handle);
         handle->closing = false;
@@ -3724,6 +3845,7 @@ static bool ffi_prepare_result_handle(
         if (native == nullptr) return mal_ffi_out_of_memory(vm);
         atomic_init(&native->references, 1);
         atomic_init(&native->results, 0);
+        atomic_init(&native->contained, 0);
         native->wrapper = mal_value_from_heap((MalHeapHeader *) handle);
         native->registry = state;
         native->next = state->native_handles;
@@ -3763,6 +3885,47 @@ static bool ffi_callback_input_contains(MalFfiCallback *callback, MalFfiHandleOb
     return false;
 }
 
+bool mal_ffi_callback_own(MalVm *vm, MalFfiCallback *callback, MalValue value, const MalFfiSite *site) {
+    if (callback == nullptr) return true;
+    MalFfiHandleObject *handle = ffi_handle(value);
+    if (handle == nullptr) return mal_ffi_expected(vm, site, "a non-null registration owner");
+    if (!ffi_handle_held(vm, handle, site)) return false;
+    for (;;) {
+        if (handle->provisional || handle->scope != 0)
+            return mal_ffi_expected(vm, site, "a delivered registration owner held by the program");
+        MalFfiHandleObject *parent = ffi_handle_owner(handle);
+        if (parent == nullptr) break;
+        handle = parent;
+    }
+    if (handle->ownership != MAL_FFI_HANDLE_OWNED || handle->owns_storage
+        || ffi_handle_policy(handle)->destroy == nullptr)
+        return mal_ffi_expected(vm, site, "an independently owned library resource with a destructor");
+    MalFfiNativeHandle *native;
+    if (!ffi_prepare_result_handle(vm, handle, site, &native)) return false;
+    MalFfiKept *kept = (MalFfiKept *) callback;
+    if (kept->owner != nullptr) abort();
+    kept->owner = native;
+    native->registration_owner = true;
+    kept->callback.owner = mal_value_from_heap((MalHeapHeader *) handle);
+    kept->owner_next = native->callbacks;
+    if (native->callbacks != nullptr) native->callbacks->owner_previous = kept;
+    native->callbacks = kept;
+    mal_gc_card(&handle->object.header, callback->function);
+    ffi_kept_slot_release(vm, kept);
+    return true;
+}
+
+bool mal_ffi_callback_pin_owner(MalVm *vm, MalFfiCallback *callback, MalValue *value, void **pin,
+    const MalFfiSite *site) {
+    MalFfiHandleObject *handle = ffi_handle(callback->owner);
+    if (handle == nullptr) return mal_ffi_expected(vm, site, "a live registration owner");
+    if (!ffi_handle_held(vm, handle, site)) return false;
+    handle->pins++;
+    *value = callback->owner;
+    *pin = handle;
+    return true;
+}
+
 static bool ffi_callback_retain_handle(
     MalVm *vm, MalFfiCallback *callback, MalValue value, bool registration,
     bool input, const MalFfiSite *site) {
@@ -3772,7 +3935,15 @@ static bool ffi_callback_retain_handle(
     mal_gc_root(&root, &value, 1);
     MalFfiResultCopy *prepared = nullptr;
     MalFfiResultCopy *tail = nullptr;
+    MalFfiKept *kept = input || registration ? (MalFfiKept *) callback : nullptr;
+    MalFfiHandleObject *root_owner = kept == nullptr || kept->owner == nullptr
+        ? nullptr : ffi_handle(kept->owner->wrapper);
     for (MalFfiHandleObject *held = handle; held != nullptr; held = ffi_handle_owner(held)) {
+        if (held == root_owner) {
+            if (input) break;
+            mal_ffi_expected(vm, site, "a result resource independent of its registration owner");
+            goto mal_failed;
+        }
         if (!input && registration && (held->value == callback->result_owner
                 || ffi_callback_input_contains(callback, held))) {
             mal_ffi_expected(vm, site, "a result resource independent of its registration owner");
@@ -3786,7 +3957,8 @@ static bool ffi_callback_retain_handle(
             mal_ffi_out_of_memory(vm);
             goto mal_failed;
         }
-        *result = (MalFfiResultCopy) {.next = prepared, .handle = native};
+        *result = (MalFfiResultCopy) {.next = prepared, .handle = native,
+            .contained = input && root_owner != nullptr};
         prepared = result;
         if (tail == nullptr) tail = result;
     }
@@ -3801,6 +3973,10 @@ static bool ffi_callback_retain_handle(
     // whose owning resource could already be released.
     for (MalFfiResultCopy *result = prepared; result != nullptr; result = result->next) {
         atomic_fetch_add_explicit(&result->handle->references, 1, memory_order_relaxed);
+        if (result->contained) {
+            atomic_fetch_add_explicit(&result->handle->contained, 1, memory_order_relaxed);
+            mal_gc_card(&root_owner->object.header, result->handle->wrapper);
+        }
         if (!input) atomic_fetch_add_explicit(&result->handle->results, 1, memory_order_release);
     }
     tail->next = input ? callback->inputs : callback->results;
@@ -3834,6 +4010,13 @@ bool mal_ffi_callback_retain_owners(
     for (MalFfiHandleObject *owner = handle; owner != nullptr; owner = ffi_handle_owner(owner))
         if (owner->provisional)
             return mal_ffi_expected(vm, site, "a delivered resource before retaining an input");
+    MalFfiKept *kept = (MalFfiKept *) callback;
+    if (handle != nullptr && kept->owner != nullptr && ffi_handle_owner(handle) != nullptr) {
+        MalFfiHandleObject *root_owner = handle;
+        while (ffi_handle_owner(root_owner) != nullptr) root_owner = ffi_handle_owner(root_owner);
+        if (mal_value_from_heap((MalHeapHeader *) root_owner) != kept->owner->wrapper)
+            return mal_ffi_expected(vm, site, "borrowed inputs contained by the registration's destruction owner");
+    }
     if (handle != nullptr && ffi_handle_owner(handle) != nullptr
         && !ffi_callback_retain_handle(vm, callback, value, true, true, site)) return false;
     if (inputs != nullptr)
@@ -4067,6 +4250,7 @@ void mal_ffi_finish_handle_close(MalValue value, bool released) {
     handle->worker_closing = false;
     if (released) {
         ffi_replaced_drop(handle->value);
+        if (handle->native != nullptr) ffi_owner_finish(handle->native, true);
         ffi_handle_forget(handle);
     }
 }

@@ -443,6 +443,7 @@ function validateValueFacts(value: unknown, at: string): void {
 		const callback = value.callback;
 		expectObject(callback, `${at}.callback`);
 		expectKeys(callback, `${at}.callback`, [
+			"owner",
 			"data",
 			"release",
 			"params",
@@ -521,6 +522,13 @@ function validateValueFacts(value: unknown, at: string): void {
 				"enabled for a close completion",
 			);
 		}
+		if (callback.owner !== undefined)
+			expect(
+				callback.closes === undefined &&
+					(callback.release !== undefined || callback.replaced === true),
+				`${at}.callback.owner`,
+				"on a retained callback with release or replaced, without closes",
+			);
 		expect(
 			(callback.queued !== true && callback.queued !== "wait") ||
 				callback.release !== undefined ||
@@ -545,7 +553,7 @@ function validateValueFacts(value: unknown, at: string): void {
 			`${at}.callback.data`,
 			"the parameter whose value the release destructor receives",
 		);
-		for (const key of ["data", "release", "closes"] as const) {
+		for (const key of ["data", "release", "closes", "owner"] as const) {
 			const reference = callback[key];
 			if (reference === undefined) continue;
 			expect(

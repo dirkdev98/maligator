@@ -125,6 +125,7 @@ export type JsValue =
 			};
 			readonly nullable: boolean;
 			readonly kept: boolean;
+			readonly owner?: number;
 			/**
 			 * For a callback the next call replaces: the C parameter whose handle keys it,
 			 * and, without user data, the callback parameter that passes that handle back.
@@ -2942,6 +2943,29 @@ class Planner {
 			gaps.length === 0
 				? this.#replaced(declaration, factsAt, args, params, where)
 				: undefined;
+		if (gaps.length === 0)
+			declaration.params.forEach((parameter, index) => {
+				const owner = factsAt(index).callback?.owner;
+				if (owner === undefined) return;
+				const at = `params.${parameter.name ?? String(index + 1)}.callback.owner`;
+				const selected = args[parameterIndex(owner, at)];
+				const entry = args[index];
+				const root = selected?.kind === "input" ? params[selected.param] : undefined;
+				if (
+					entry?.kind !== "input" ||
+					selected?.kind !== "input" ||
+					root?.value.kind !== "handle" ||
+					root.value.pass === "copy"
+				)
+					throw new FfiError(`${where(at)}: an input handle with stable C storage`);
+				const callback = params[entry.param]!;
+				if (callback.value.kind !== "callback")
+					throw new FfiError(`${where(at)}: a retained callback parameter`);
+				params[entry.param] = {
+					...callback,
+					value: { ...callback.value, owner: selected.param },
+				};
+			});
 		if (gaps.length === 0)
 			this.#closingCallback(declaration, factsAt, args, params, where);
 		if (facts.returns.constant !== undefined) {
