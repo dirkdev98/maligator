@@ -43,8 +43,15 @@ typedef int __attribute__((address_space(1))) *NativeAddress;
 		});
 		expect(plan.unbound).toEqual([]);
 		expect(model.records.get("MacroApi")?.fields[0]?.type.kind).toBe("pointer");
-		for (const name of ["NativeVector", "NativeAddress"])
-			expect(resolveCType(model, { kind: "typedef", name }).kind).toBe("unsupported");
+		expect(resolveCType(model, { kind: "typedef", name: "NativeVector" })).toMatchObject({
+			kind: "vector",
+			of: { kind: "integer", name: "int" },
+			length: 4,
+			flavor: "gnu",
+		});
+		expect(resolveCType(model, { kind: "typedef", name: "NativeAddress" }).kind).toBe(
+			"unsupported",
+		);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
