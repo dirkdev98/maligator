@@ -1824,6 +1824,7 @@ class BindingWriter {
 			count,
 			"&mal_site_result",
 			true,
+			`&${context}mal_discards`,
 		);
 		if (output.capacity === undefined) return owned;
 		if (count === undefined) throw new Error("caller array without a written count");
@@ -1849,6 +1850,7 @@ class BindingWriter {
 		count: string | undefined,
 		site: string,
 		pending: boolean,
+		discards: string,
 	): Array<string> {
 		const release =
 			"free" in value && value.free !== undefined
@@ -1859,6 +1861,22 @@ class BindingWriter {
 			pending && this.#allocates(value) ? "if (!mal_ffi_threw(vm)) " : "";
 		const handle =
 			value.kind === "handle" && value.owned ? this.#handle(value.name) : undefined;
+		if (
+			value.kind === "handle" &&
+			handle?.representation === "pointer" &&
+			handle.destroy !== undefined
+		) {
+			const claim = `mal_ffi_discard_claim(vm, ${discards}, &mal_ffi_type_${handle.name}, (void *) (${expression}), ${value.fresh === true})`;
+			if (!pending)
+				return [`${claim};`, `${target} = ${this.write(value, expression)};`, ...release];
+			const destroy = this.#fresh("discard");
+			return [
+				`bool ${destroy} = ${claim};`,
+				`if (!mal_ffi_threw(vm)) ${target} = ${this.write(value, expression)};`,
+				`else if (${destroy}) mal_ffi_destroy_${handle.name}((void *) (${expression}));`,
+				...release,
+			];
+		}
 		if (pending && handle?.destroy !== undefined) {
 			// A callback threw, so no handle will own the new resource: release it here.
 			const pointer =
@@ -2403,6 +2421,16 @@ class BindingWriter {
 		];
 	}
 
+	#discardCount(binding: BoundFunction): number {
+		return [binding.returns, ...binding.outputs.map((output) => output.value)].filter(
+			(value) =>
+				value.kind === "handle" &&
+				value.owned &&
+				this.#handle(value.name).representation === "pointer" &&
+				this.#handle(value.name).destroy !== undefined,
+		).length;
+	}
+
 	callableDeclarations(): Array<string> {
 		return [...this.#callables.values()].flatMap((value) => [
 			`typedef ${value.targetType} MalFfiTarget_${value.name};`,
@@ -2449,6 +2477,12 @@ class BindingWriter {
 		const outputValue = (index: number): string =>
 			constOutputs.has(index) ? `(*mal_output_${index})` : `mal_output_${index}`;
 		const locals: Array<string> = [];
+		const discardCount = this.#discardCount(binding);
+		if (discardCount > 0)
+			locals.push(
+				`MalFfiDiscardedHandle mal_discarded[${discardCount}];`,
+				`MalFfiDiscards mal_discards = { .items = mal_discarded, .capacity = ${discardCount} };`,
+			);
 		const body: Array<string> = [];
 		/** Buffers resolve last: nothing may run JavaScript between them and the call. */
 		const buffers: Array<string> = [];
@@ -3160,6 +3194,7 @@ class BindingWriter {
 				count,
 				"&mal_site_result",
 				callsBack,
+				"&mal_discards",
 			);
 			const record = intoRecord(binding);
 			after.push(
@@ -3323,6 +3358,7 @@ class BindingWriter {
 			readonly closeKey?: number;
 			readonly registrationResult: boolean;
 		}> = [];
+		const discardCount = this.#discardCount(binding);
 		const callbackArguments: Array<string> = [];
 		const trampolines: Array<string> = [];
 		const discard = (value: JsValue, expression: string): Array<string> => {
@@ -3336,7 +3372,7 @@ class BindingWriter {
 			return handle.representation === "struct"
 				? [`mal_ffi_destroy_${handle.name}(&(${expression}));`]
 				: [
-						`if ((${expression}) != nullptr) mal_ffi_destroy_${handle.name}((void *) (${expression}));`,
+						`if (mal_ffi_discard_claim(nullptr, &mal_ctx->mal_discards, &mal_ffi_type_${handle.name}, (void *) (${expression}), ${value.fresh === true})) mal_ffi_destroy_${handle.name}((void *) (${expression}));`,
 					];
 		};
 		const nativeDisposals = [
@@ -3350,6 +3386,11 @@ class BindingWriter {
 			nativeDisposals.length > 0 ||
 			binding.params.some(({ value }) => value.kind === "callback" && value.kept);
 		const fields: Array<string> = [];
+		if (discardCount > 0)
+			fields.push(
+				"MalFfiDiscards mal_discards;",
+				`MalFfiDiscardedHandle mal_discarded[${discardCount}];`,
+			);
 		if (tracksRun) fields.push("bool mal_ran;");
 		if (nativeDisposals.length > 0) fields.push("bool mal_result_observed;");
 		const body: Array<string> = [];
@@ -3899,6 +3940,7 @@ class BindingWriter {
 					count,
 					"&mal_site_result",
 					true,
+					"&mal_ctx->mal_discards",
 				)
 			: [];
 		if (binding.outputs.length > 0) {
@@ -4023,6 +4065,7 @@ class BindingWriter {
 					? `\t${retained ? "if (!mal_ctx->mal_ran) " : ""}mal_ffi_release(mal_ctx->mal_callback_${String(index)});`
 					: `\tif (mal_ctx->${replacement}.site == nullptr) mal_ffi_release(mal_ctx->mal_callback_${String(index)});\n\tmal_ffi_replace_finish(&mal_ctx->${replacement});`,
 			),
+			...(discardCount > 0 ? ["\tmal_ffi_discards_finish(&mal_ctx->mal_discards);"] : []),
 			"\tfree(mal_ctx);",
 			"}",
 			"",
@@ -4044,6 +4087,11 @@ class BindingWriter {
 			"\tMalValue mal_promise = mal_ffi_undefined();",
 			...(compoundInputs
 				? ["\tmal_ffi_inputs_init(&mal_ctx->mal_inputs, mal_ctx, true);"]
+				: []),
+			...(discardCount > 0
+				? [
+						`\tif (!mal_ffi_discards_init(vm, &mal_ctx->mal_discards, mal_ctx->mal_discarded, ${discardCount})) goto mal_failed;`,
+					]
 				: []),
 			...body.map((line) => `\t${line}`),
 			...this.#resultGuards(binding, "goto mal_failed;").map((line) => `\t${line}`),

@@ -32,6 +32,7 @@ it.each(["compiled", "interpreted"])(
 					MAL_GC_STRESS: "1",
 					MAL_GC_VERIFY: "1",
 					MAL_GC_AT_EXIT: "1",
+					MAL_ALLOC_FAIL_TEST: "1",
 				},
 			});
 			expect(executed.status, executed.stderr || executed.stdout).toBe(0);

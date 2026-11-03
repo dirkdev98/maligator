@@ -195,3 +195,40 @@ void owner_close_child(OwnerChild *child, void (*done)(OwnerChild *, void *), vo
     done(child, data);
     owner_child_free(child);
 }
+OwnerChild *owner_alias_callback(OwnerChild *child, void (*callback)(void *), void *data) {
+    callback(data);
+    return child;
+}
+OwnerChild *owner_alias_outputs(OwnerChild *child, OwnerChild **out, void (*callback)(void *), void *data) {
+    *out = child;
+    callback(data);
+    return child;
+}
+OwnerChild *owner_new_outputs(int value, OwnerChild **out, void (*callback)(void *), void *data) {
+    return owner_alias_outputs(owner_child_new(value), out, callback, data);
+}
+static OwnerChild *global_alias;
+static _Atomic int global_started;
+void owner_global_reset(void) { global_alias = 0; atomic_store(&global_started, 0); }
+void owner_global_set(OwnerChild *child) { global_alias = child; }
+int owner_global_started(void) { return atomic_load(&global_started); }
+OwnerChild *owner_global_wait(int (*callback)(void *), void *data) {
+    atomic_store(&global_started, 1);
+    while (callback(data) != 0) usleep(1000);
+    return global_alias;
+}
+OwnerChild *owner_new_wait(int value, int (*callback)(void *), void *data) {
+    atomic_store(&global_started, 1);
+    while (callback(data) != 0) usleep(1000);
+    return owner_child_new(value);
+}
+OwnerChild *owner_new_wait_outputs(int value, OwnerChild **out, int (*callback)(void *), void *data) {
+    OwnerChild *child = owner_new_wait(value, callback, data);
+    *out = child;
+    return child;
+}
+OwnerChild *owner_loan_owned(void (*callback)(OwnerChild *, void *), void *data) {
+    OwnerChild *child = owner_child_new(96);
+    callback(child, data);
+    return child;
+}

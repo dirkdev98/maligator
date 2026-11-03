@@ -812,8 +812,18 @@ typedef struct MalFfiHandleEntry {
     const MalFfiHandleType *type;
     void *pointer;
     /** Null for an empty slot. */
-    MalFfiHandleObject *handle;
+    union {
+        MalFfiHandleObject *handle;
+        u64 claim;
+    };
 } MalFfiHandleEntry;
+
+struct MalFfiDiscardState {
+    _Atomic u32 references;
+    _Atomic bool frozen;
+    MalFfiHandleEntry *claims;
+    usize capacity;
+};
 
 enum {
     MAL_FFI_ASYNC_QUEUED,
@@ -874,7 +884,18 @@ struct MalFfiState {
     bool accepting_waits;
     MalFfiAsyncPayload *retired_async;
     MalFfiNativeHandle *native_handles;
+    MalFfiDiscardState *discards;
 };
+
+static void ffi_discards_freeze(MalVm *vm, MalFfiState *state);
+
+static void ffi_discards_drop(MalFfiDiscardState *state) {
+    if (state != nullptr
+        && atomic_fetch_sub_explicit(&state->references, 1, memory_order_acq_rel) == 1) {
+        free(state->claims);
+        free(state);
+    }
+}
 
 /**
  * Orders other threads' posts to a VM's inbox against its teardown: they post under
@@ -975,6 +996,7 @@ static void ffi_state_free(MalVm *vm) {
         ffi_kept_unref(pending);
         pending = next;
     }
+    ffi_discards_freeze(vm, state);
     // Unobserved native results can call destructors; every callback must be detached first.
     while (state->retired_async != nullptr) {
         MalFfiAsyncPayload *payload = state->retired_async;
@@ -984,6 +1006,7 @@ static void ffi_state_free(MalVm *vm) {
     free(state->free_slots);
     free(state->invocations);
     free(state->handles);
+    ffi_discards_drop(state->discards);
     free(state->shapes);
     free(state);
     vm->ffi = nullptr;
@@ -1127,7 +1150,8 @@ static bool ffi_handle_register(MalFfiState *state, MalFfiHandleObject *handle) 
         }
         free(previous);
     }
-    ffi_handle_place(state, (MalFfiHandleEntry) {ffi_handle_family(handle->type), handle->value, handle});
+    ffi_handle_place(state, (MalFfiHandleEntry) {
+        .type = ffi_handle_family(handle->type), .pointer = handle->value, .handle = handle});
     state->handle_count++;
     handle->registry = state;
     return true;
@@ -1807,19 +1831,18 @@ static bool ffi_async_drain(MalVm *vm) {
     MalAsyncContextScope scope;
     mal_async_context_scope_enter(vm, &scope, call->async_context);
     void *data = mal_blocking_work_result_data(task.data);
-    bool ran = data != nullptr && task.result != MAL_HOST_TERMINAL_CANCELLED
-        && atomic_load_explicit(&call->payload->phase, memory_order_acquire) == MAL_FFI_ASYNC_FINISHED;
+    bool finished = atomic_load_explicit(&call->payload->phase, memory_order_acquire) == MAL_FFI_ASYNC_FINISHED;
+    bool delivered = data != nullptr && task.result != MAL_HOST_TERMINAL_CANCELLED && finished;
     ffi_async_detach(call->payload);
     if (call->payload->group->failed)
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = roots[3]};
+    if (!delivered && vm->completion.kind != MAL_COMPLETION_THROW)
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            (const byte *) (finished ? "A C library result could not be delivered" : "A C library call did not run"));
     // The completion releases what the call held, so it runs even when the work did not.
-    roots[1] = call->complete(vm, call->payload->data, ran);
+    roots[1] = call->complete(vm, call->payload->data, finished);
     if (call->payload->group->failed)
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = roots[3]};
-    if (!ran && vm->completion.kind != MAL_COMPLETION_THROW) {
-        mal_vm_throw_error(
-            vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) "A C library call did not run");
-    }
     bool rejected = vm->completion.kind == MAL_COMPLETION_THROW;
     if (rejected) {
         roots[1] = vm->completion.value;
@@ -2834,6 +2857,83 @@ static bool ffi_handle_owner_expired(MalVm *vm, MalFfiHandleObject *handle) {
     return false;
 }
 
+enum {
+    MAL_FFI_DISCARD_PRESENT = 1,
+    MAL_FFI_DISCARD_VALID = 2,
+    MAL_FFI_DISCARD_REPLACEABLE = 4,
+};
+
+static u32 ffi_discard_flags(MalVm *vm, MalFfiHandleObject *handle) {
+    u32 flags = MAL_FFI_DISCARD_PRESENT;
+    if (handle->value != nullptr && ffi_scope_active(vm, handle->scope)
+        && !ffi_handle_owner_expired(vm, handle)) flags |= MAL_FFI_DISCARD_VALID;
+    if (handle->closing || !ffi_handle_owners_open(vm, handle)) flags |= MAL_FFI_DISCARD_REPLACEABLE;
+    return flags;
+}
+
+static void ffi_discards_freeze(MalVm *vm, MalFfiState *state) {
+    MalFfiDiscardState *discards = state->discards;
+    if (discards == nullptr) return;
+    // The host joins blocking work before heap finalization. Reuse the weak table
+    // without allocating at teardown, and leave native readers no VM pointers.
+    for (usize index = 0; index < state->handle_capacity; index++) {
+        MalFfiHandleEntry *entry = &state->handles[index];
+        entry->claim = entry->handle == nullptr ? 0 : ffi_discard_flags(vm, entry->handle);
+    }
+    discards->claims = state->handles;
+    discards->capacity = state->handle_capacity;
+    state->handles = nullptr;
+    atomic_store_explicit(&discards->frozen, true, memory_order_release);
+}
+
+bool mal_ffi_discards_init(MalVm *vm, MalFfiDiscards *discards,
+    MalFfiDiscardedHandle *items, int32_t capacity) {
+    MalFfiState *state = ffi_state(vm);
+    if (state == nullptr) return mal_ffi_out_of_memory(vm);
+    if (state->discards == nullptr) {
+        MalFfiDiscardState *shared = calloc(1, sizeof(*shared));
+        if (shared == nullptr) return mal_ffi_out_of_memory(vm);
+        atomic_init(&shared->references, 1);
+        atomic_init(&shared->frozen, false);
+        state->discards = shared;
+    }
+    atomic_fetch_add_explicit(&state->discards->references, 1, memory_order_relaxed);
+    *discards = (MalFfiDiscards) {.state = state->discards, .items = items, .capacity = capacity};
+    return true;
+}
+
+void mal_ffi_discards_finish(MalFfiDiscards *discards) {
+    ffi_discards_drop(discards->state);
+    discards->state = nullptr;
+}
+
+bool mal_ffi_discard_claim(MalVm *vm, MalFfiDiscards *discards,
+    const MalFfiHandleType *type, const void *value, bool fresh) {
+    if (value == nullptr) return false;
+    const MalFfiHandleType *family = ffi_handle_family(type);
+    for (i32 index = 0; index < discards->count; index++)
+        if (discards->items[index].family == family && discards->items[index].value == value) return false;
+    if (discards->count == discards->capacity) abort();
+    discards->items[discards->count++] = (MalFfiDiscardedHandle) {family, value};
+    if (mal_ffi_is_library_resource(type, value)) return false;
+    u32 flags = 0;
+    if (vm != nullptr) {
+        MalFfiHandleObject *known = vm->ffi == nullptr ? nullptr : ffi_handle_find(vm->ffi, family, value);
+        if (known != nullptr) flags = ffi_discard_flags(vm, known);
+    } else {
+        MalFfiDiscardState *state = discards->state;
+        if (state == nullptr || !atomic_load_explicit(&state->frozen, memory_order_acquire)) abort();
+        if (state->capacity != 0)
+            for (usize slot = ffi_handle_slot(family, value, state->capacity);;
+                 slot = (slot + 1) & (state->capacity - 1)) {
+                const MalFfiHandleEntry *entry = &state->claims[slot];
+                if (entry->claim == 0) break;
+                if (entry->type == family && entry->pointer == value) { flags = (u32) entry->claim; break; }
+            }
+    }
+    return !(flags & MAL_FFI_DISCARD_VALID) || (fresh && (flags & MAL_FFI_DISCARD_REPLACEABLE));
+}
+
 bool mal_ffi_callback_enter(MalVm *vm) {
     MalFfiState *state = ffi_state(vm);
     if (state != nullptr && state->invocation_depth == state->invocation_capacity) {
@@ -2953,7 +3053,14 @@ static MalValue ffi_new_handle(
     MalRootSpan root;
     mal_gc_root(&root, rooted, 2);
     MalFfiHandleObject *handle =
-        mal_heap_alloc(&vm->heap, sizeof(MalFfiHandleObject), MAL_HEAP_FFI_HANDLE_OBJECT);
+        mal_heap_try_alloc(&vm->heap, sizeof(MalFfiHandleObject), MAL_HEAP_FFI_HANDLE_OBJECT);
+    if (handle == nullptr) {
+        if (owned && type->destroy != nullptr) type->destroy(stored);
+        if (owns_storage) free(stored);
+        mal_gc_unroot(&root);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     handle->ownership = MAL_FFI_HANDLE_BORROWED;
     mal_object_init(
         &vm->heap, &handle->object, MAL_HEAP_FFI_HANDLE_OBJECT, mal_value_to_object(prototype));
@@ -2973,21 +3080,22 @@ static MalValue ffi_new_handle(
     handle->pins = 0;
     handle->worker_pins = 0;
     handle->scope = scope;
-    if (owns_storage && type->managed_field_count > 0) {
+    if (vm->completion.kind != MAL_COMPLETION_THROW && owns_storage && type->managed_field_count > 0) {
         handle->retained = calloc((usize) type->managed_field_count, sizeof(*handle->retained));
         if (handle->retained != nullptr) {
             for (i32 index = 0; index < type->managed_field_count; index++)
                 handle->retained[index].buffer = mal_value_new_undefined();
         } else {
-            ffi_handle_forget(handle);
             mal_vm_throw_allocation_error(vm);
         }
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW && type->size == 0
         && (state == nullptr || !ffi_handle_register(state, handle))) {
+        mal_vm_throw_allocation_error(vm);
+    }
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
         if (owned && type->destroy != nullptr) type->destroy(stored);
         ffi_handle_forget(handle);
-        mal_vm_throw_allocation_error(vm);
     }
     mal_gc_unroot(&root);
     return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
@@ -3365,11 +3473,8 @@ bool mal_ffi_callback_retain_owners(
     const MalFfiSite *site) {
     if (callback == nullptr) return true;
     MalFfiHandleObject *handle = ffi_handle(value);
-    if (handle != nullptr) {
-        if (!ffi_handle_held(vm, handle, site)) return false;
-        if (ffi_handle_owner(handle) != nullptr
-            && !ffi_callback_retain_handle(vm, callback, value, true, true, site)) return false;
-    }
+    if (handle != nullptr && ffi_handle_owner(handle) != nullptr
+        && !ffi_callback_retain_handle(vm, callback, value, true, true, site)) return false;
     if (inputs != nullptr)
         for (i32 index = 0; index < inputs->count; index++)
             if (!mal_ffi_callback_retain_owners(vm, callback, inputs->values[index], nullptr, site)) return false;

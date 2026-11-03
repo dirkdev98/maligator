@@ -35,6 +35,34 @@ export default {
 		OwnerLeaf: { handle: {}, fields: { next: { handle: { lifetime: "owner" } } } },
 	},
 	functions: {
+		owner_new_wait_outputs: {
+			params: { out: { out: true }, callback: { callback: { data: "data" } } },
+			async: "newWaitOutputsAsync",
+		},
+		owner_loan_owned: {
+			params: { callback: { callback: { data: "data" } } },
+			async: "loanOwnedAsync",
+		},
+		owner_alias_callback: {
+			params: { callback: { callback: { data: "data" } } },
+			async: "aliasCallbackAsync",
+		},
+		owner_alias_outputs: {
+			params: { out: { out: true }, callback: { callback: { data: "data" } } },
+			async: "aliasOutputsAsync",
+		},
+		owner_new_outputs: {
+			params: { out: { out: true }, callback: { callback: { data: "data" } } },
+			async: "newOutputsAsync",
+		},
+		owner_global_wait: {
+			params: { callback: { callback: { data: "data" } } },
+			async: "globalWaitAsync",
+		},
+		owner_new_wait: {
+			params: { callback: { callback: { data: "data" } } },
+			async: "newWaitAsync",
+		},
 		owner_watch_input: {
 			params: {
 				input: { array: { length: "count" } },

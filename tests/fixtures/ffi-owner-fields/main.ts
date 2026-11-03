@@ -637,4 +637,118 @@ check(
 	c.owner_result_destroyed() === destroyedBeforeWorker + 1,
 	"native release after worker teardown destroys the root once",
 );
+for (const invoke of [
+	c.owner_alias_callback,
+	c.aliasCallbackAsync,
+	c.owner_alias_outputs,
+	c.aliasOutputsAsync,
+]) {
+	for (const borrowed of [false, true]) {
+		const parent = borrowed ? c.owner_result_new(93) : null;
+		const child = parent === null ? c.owner_child_new(93)! : parent.first!;
+		const before = c.owner_child_destroyed();
+		const marker = new Error("owned alias callback marker");
+		let caught: unknown;
+		try {
+			await Promise.resolve(
+				invoke(child, () => {
+					throw marker;
+				}),
+			);
+		} catch (error) {
+			caught = error;
+		}
+		check(
+			caught === marker &&
+				c.owner_child_destroyed() === before &&
+				c.owner_child_value(child) === 93,
+			"abandoned aliases preserve existing ownership and the original exception",
+		);
+		if (parent !== null) parent[Symbol.dispose]();
+		else child[Symbol.dispose]();
+	}
+}
+for (const invoke of [c.owner_new_outputs, c.newOutputsAsync]) {
+	const before = c.owner_child_destroyed();
+	const marker = new Error("new alias callback marker");
+	let caught: unknown;
+	try {
+		await Promise.resolve(
+			invoke(94, () => {
+				throw marker;
+			}),
+		);
+	} catch (error) {
+		caught = error;
+	}
+	check(
+		caught === marker && c.owner_child_destroyed() === before + 1,
+		"unobserved return and out aliases destroy new storage once",
+	);
+	const result = await invoke(94, () => {});
+	check(
+		result.result === result.out,
+		"observed aliases still share one canonical wrapper",
+	);
+	result.result![Symbol.dispose]();
+}
+const failNextCell = (
+	globalThis as typeof globalThis & { __mal_fail_next_cell_allocation?: () => void }
+).__mal_fail_next_cell_allocation;
+if (failNextCell !== undefined) {
+	const before = c.owner_child_destroyed();
+	let caught = false;
+	try {
+		c.owner_new_outputs(95, failNextCell);
+	} catch (error) {
+		caught = error instanceof Error && error.message === "Out of memory";
+	}
+	check(
+		caught && c.owner_child_destroyed() === before + 1,
+		"a failed first conversion cannot destroy an aliased output twice",
+	);
+}
+for (const invoke of [c.owner_loan_owned, c.loanOwnedAsync]) {
+	const before = c.owner_child_destroyed();
+	const marker = new Error("expired loan marker");
+	let caught: unknown;
+	try {
+		await Promise.resolve(
+			invoke(() => {
+				throw marker;
+			}),
+		);
+	} catch (error) {
+		caught = error;
+	}
+	check(
+		caught === marker && c.owner_child_destroyed() === before + 1,
+		"an expired callback loan cannot suppress cleanup of transferred ownership",
+	);
+}
+for (const kind of ["owned", "child", "new", "new-outputs"]) {
+	c.owner_global_reset();
+	const rootCount = c.owner_result_destroyed(),
+		childCount = c.owner_child_destroyed();
+	const abandonedWorker = new Worker(
+		createWorkerUrl("./discard-worker.ts", import.meta.url),
+	);
+	const ready = new Promise<unknown>((resolve) => {
+		abandonedWorker.port.onmessage = (event) => resolve(event.data);
+	});
+	abandonedWorker.port.start();
+	await abandonedWorker.ready;
+	abandonedWorker.port.postMessage(kind);
+	check((await ready) === kind, "worker prepared its result after async admission");
+	while (c.owner_global_started() === 0)
+		await new Promise((resolve) => {
+			setTimeout(resolve, 1);
+		});
+	await abandonedWorker.terminate();
+	check(
+		c.owner_result_destroyed() === rootCount + (kind === "child" ? 1 : 0) &&
+			c.owner_child_destroyed() === childCount + (kind === "child" ? 2 : 1),
+		"abandoned worker results distinguish known aliases from newly allocated storage",
+	);
+}
 console.log("owner fields passed");

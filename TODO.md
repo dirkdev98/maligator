@@ -1903,14 +1903,11 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Support transactional transfer of independently owned compound fields.
+- [ ] Make independently owned compound fields, resource arrays, and multi-output
+      conversions transactional, including allocation failure after partial conversion.
 
 - [ ] Support callback registrations on borrowed children whose only C release path
       destroys the root, without requiring a separate unregistration operation.
-
-- [ ] Preserve existing ownership when an owned C return aliases a known resource
-      and conversion is abandoned after a callback throws or an async call is dropped.
-      Native-only cleanup must distinguish newly transferred storage from an alias.
 
 - [ ] Remove measured marshalling, allocation, callback-dispatch, and unused binding
       build costs. Compare representative libraries against C and Bun, retaining

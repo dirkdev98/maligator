@@ -326,6 +326,12 @@ disposal, so it cannot use `collect: true`.
 - `collect: true` releases a handle the program drops once it is garbage collected. Leave it off for resources that must be released on one thread or before the library shuts down, such as raylib's GPU textures.
 - `nullable` on a parameter accepts `null` for a string or handle pointer and passes `NULL`.
 
+If a callback throws or a worker result is discarded, cleanup preserves pointer
+resources already known to that VM. Direct return and out-parameter aliases release
+new storage once. Failed handle construction releases its undelivered C resource
+even when automatic collection is disabled. Fresh-result facts distinguish recycled
+storage from a resource whose destruction is still pending.
+
 For a resource pointer inside a result handle, declare whether the containing resource
 owns its lifetime or the library keeps it alive:
 
@@ -361,8 +367,8 @@ the callback or a replacement retires it. This includes handles inside compound 
 and an owner-bound callable's captured handle. Disposal and destruction reject while
 these leases remain; field reads and saved callables remain available for unregistration.
 Unregister nullable callbacks with `null` before closing their resources. The library
-must offer release or unregistration independently of root destruction. Callback loans
-cannot become registration inputs, and registration results cannot borrow any retained
+must offer release or unregistration independently of root destruction. Children whose
+root is a callback loan cannot become registration inputs. Registration results cannot borrow any retained
 input root. Native leases also preserve the resources through VM teardown until C
 releases the registration. Plain records that transfer independent resource ownership
 need a whole-result handle and destructor.

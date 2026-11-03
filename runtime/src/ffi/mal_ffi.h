@@ -154,6 +154,26 @@ bool mal_ffi_owner_ready(MalVm *vm, MalValue value, const MalFfiSite *site);
 MalValue mal_ffi_new_library_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value);
 bool mal_ffi_is_library_resource(const MalFfiHandleType *type, const void *value);
+typedef struct MalFfiDiscardState MalFfiDiscardState;
+typedef struct MalFfiDiscardedHandle {
+    const MalFfiHandleType *family;
+    const void *value;
+} MalFfiDiscardedHandle;
+typedef struct MalFfiDiscards {
+    MalFfiDiscardState *state;
+    MalFfiDiscardedHandle *items;
+    int32_t count;
+    int32_t capacity;
+} MalFfiDiscards;
+/** Reserve native teardown state before admitting an owned-pointer worker result. */
+bool mal_ffi_discards_init(MalVm *vm, MalFfiDiscards *discards,
+    MalFfiDiscardedHandle *items, int32_t capacity);
+void mal_ffi_discards_finish(MalFfiDiscards *discards);
+/** Record conversion attempts and return whether an abandoned pointer needs destruction.
+ * Native-only callers use the frozen claims published before VM teardown releases work.
+ */
+bool mal_ffi_discard_claim(MalVm *vm, MalFfiDiscards *discards,
+    const MalFfiHandleType *type, const void *value, bool fresh);
 /**
  * Allocate zeroed caller storage and wrap its stable pointer. Disposing or collecting
  * this handle frees the outer storage; C initialization and cleanup are explicit.
