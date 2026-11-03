@@ -143,3 +143,23 @@ ArrayResource *array_fresh_fail(ArrayResource ***out, size_t *length) {
 static ArrayResource *registered;
 void array_register(ArrayResource *(*callback)(void)) { registered = callback == NULL ? NULL : callback(); }
 int array_registered_value(void) { return registered == NULL ? -1 : registered->value; }
+
+static ArrayResource *table[5];
+static _Atomic int table_running;
+ArrayResource **table_make(ArrayResource *prior, int bad, int fail, size_t *length, const char **message, size_t *message_length) {
+    table[0] = prior == NULL ? make_resource(95) : prior;
+    table[1] = table[0]; table[2] = NULL;
+    table[3] = make_resource(97); table[4] = table[3];
+    *length = 5; *message = "x"; *message_length = bad ? (size_t)-1 : 1;
+    if (fail) atomic_store(&fail_next, 1);
+    return table;
+}
+ArrayResource **table_wait(size_t *length) {
+    const char *message; size_t bytes;
+    ArrayResource **values = table_make(NULL, 0, 0, length, &message, &bytes);
+    atomic_store_explicit(&table_running, 1, memory_order_release);
+    struct timespec delay = { .tv_nsec = 150000000 };
+    nanosleep(&delay, NULL);
+    return values;
+}
+int table_started(void) { return atomic_load_explicit(&table_running, memory_order_acquire); }

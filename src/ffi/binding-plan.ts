@@ -454,7 +454,6 @@ export function supportsResultTransaction(
 			if (value.of.kind === "handle")
 				return (
 					context === "direct" &&
-					value.free !== undefined &&
 					value.of.owned &&
 					value.of.owner === undefined &&
 					value.of.lifetime === undefined &&
@@ -3138,7 +3137,15 @@ class Planner {
 		if ("value" in returns) {
 			const results = [returns.value, ...outputs.map((output) => output.value)];
 			if (
-				results.some((value) => hasOwnedRecordFields(value, this)) &&
+				results.some(
+					(value) =>
+						hasOwnedRecordFields(value, this) ||
+						(value.kind === "sequence" &&
+							value.of.kind === "handle" &&
+							value.of.owned &&
+							this.#handles.get(value.of.name)!.representation === "pointer" &&
+							this.#handles.get(value.of.name)!.destroy !== undefined),
+				) &&
 				!results.every((value) =>
 					supportsResultTransaction(value, {
 						records: this.records,
@@ -3149,7 +3156,7 @@ class Planner {
 				gaps.push({
 					at: "return",
 					reason:
-						"independently owned record fields require a complete plain-record result transaction",
+						"independently owned compound results require a complete result transaction",
 				});
 		}
 		if ("gap" in returns || gaps.length > 0) {

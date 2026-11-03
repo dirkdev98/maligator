@@ -6,6 +6,15 @@ export default {
 	find: [{ includeDirs: ["."], sources: ["arrays.c"] }],
 	types: { ArrayResource: { handle: { destroy: "resource_free", collect: false } } },
 	functions: {
+		table_make: {
+			returns: { array: { length: "length" } },
+			params: {
+				prior: { nullable: true },
+				message: { out: true, string: { length: "message_length" } },
+			},
+			async: "tableMakeAsync",
+		},
+		table_wait: { returns: { array: { length: "length" } }, async: "tableWaitAsync" },
 		array_fresh_fail: {
 			returns: { borrowed: true, fresh: true },
 			params: { out: { out: true, ...array } },

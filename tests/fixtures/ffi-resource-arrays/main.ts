@@ -15,6 +15,61 @@ async function catches(action: () => unknown): Promise<unknown> {
 	}
 	throw new Error("expected conversion failure");
 }
+for (const invoke of [c.table_make, c.tableMakeAsync]) {
+	for (const bad of [0, 1]) {
+		const prior = c.resource_borrow(91)!;
+		const created = c.resources_created(),
+			destroyed = c.resources_destroyed(),
+			freed = c.arrays_freed();
+		if (bad === 0) {
+			const result = await invoke(prior, bad, 0);
+			check(
+				result.result![0] === prior &&
+					result.result![1] === prior &&
+					result.result![2] === null &&
+					result.result![3] === result.result![4],
+				"stable tables preserve existing aliases, duplicates and null entries",
+			);
+			dispose(result.result!);
+			check(
+				c.resources_destroyed() - destroyed === c.resources_created() - created + 1,
+				"stable table success transfers each distinct resource",
+			);
+		} else {
+			check(
+				(await catches(() => invoke(prior, bad, 0))) instanceof RangeError,
+				"stable table late conversion preserves its error",
+			);
+			check(
+				c.resource_value(prior) === 91,
+				"stable table failure preserves its prior alias",
+			);
+			prior[Symbol.dispose]();
+			check(
+				c.resources_destroyed() - destroyed === c.resources_created() - created,
+				"stable table failure rolls back new resources without adopting borrowed entries",
+			);
+			c.resource_clear();
+		}
+		check(c.arrays_freed() === freed, "stable table storage stays library owned");
+	}
+	const created = c.resources_created(),
+		destroyed = c.resources_destroyed(),
+		freed = c.arrays_freed(),
+		failures = c.allocation_failures();
+	const error = await catches(() => invoke(null, 0, 1));
+	c.allocation_reset();
+	check(
+		error instanceof Error && error.message === "Out of memory",
+		"stable table claim failure throws",
+	);
+	check(
+		c.resources_destroyed() - destroyed === c.resources_created() - created &&
+			c.allocation_failures() === failures + 1 &&
+			c.arrays_freed() === freed,
+		"stable table allocation failure releases unique elements without freeing the table",
+	);
+}
 for (const invoke of [c.array_make, c.makeAsync]) {
 	for (const count of [0, 1, 3, 257]) {
 		const created = c.resources_created(),
@@ -288,4 +343,28 @@ check(
 		c.arrays_freed() === freed + 1,
 	"native abandonment releases every unique element and outer buffer",
 );
+{
+	const created = c.resources_created(),
+		destroyed = c.resources_destroyed(),
+		freed = c.arrays_freed();
+	const worker = new Worker(createWorkerUrl("./table-abandon.ts", import.meta.url));
+	const admitted = new Promise<void>((resolve) => {
+		worker.port.onmessage = () => resolve();
+	});
+	worker.port.start();
+	await worker.ready;
+	worker.port.postMessage(null);
+	await admitted;
+	while (c.table_started() === 0)
+		await new Promise((resolve) => {
+			setTimeout(resolve, 1);
+		});
+	await worker.terminate();
+	check(
+		c.resources_created() > created &&
+			c.resources_destroyed() - destroyed === c.resources_created() - created &&
+			c.arrays_freed() === freed,
+		"native abandonment releases distinct stable-table entries and preserves outer storage",
+	);
+}
 console.log("resource arrays passed");

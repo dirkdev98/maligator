@@ -38,3 +38,6 @@ char *buffer_single(int marker);
 ArrayResource *array_fresh_fail(ArrayResource ***out, size_t *length);
 void array_register(ArrayResource *(*callback)(void));
 int array_registered_value(void);
+ArrayResource **table_make(ArrayResource *prior, int bad, int fail, size_t *length, const char **message, size_t *message_length);
+ArrayResource **table_wait(size_t *length);
+int table_started(void);

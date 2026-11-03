@@ -30,6 +30,51 @@ afterEach(() => {
 	for (const directory of temporary.splice(0))
 		rmSync(directory, { recursive: true, force: true });
 });
+it.each([false, true])(
+	"keeps owned pointer tables with incompatible companion results unbound with outer free %s",
+	(free) => {
+		const directory = project("ffi-result-transactions");
+		writeFileSync(
+			join(directory, "resource.h"),
+			"\ntypedef struct TxCopyCompanion { int value; } TxCopyCompanion;\nTxCopyCompanion tx_copy_companion(void);\nTxResource **tx_table_companion(size_t *length, TxCopyCompanion *other);\n",
+			{ flag: "a" },
+		);
+		writeFileSync(
+			join(directory, "resource.ffi.ts"),
+			`export default ${JSON.stringify({
+				...transactionContract,
+				types: { ...transactionContract.types, TxCopyCompanion: { handle: {} } },
+				functions: {
+					...transactionContract.functions,
+					tx_table_companion: {
+						returns: {
+							array: { length: "length" },
+							...(free ? { free: "tx_text_free" } : {}),
+						},
+						params: { other: { out: true } },
+					},
+				},
+			})};\n`,
+		);
+		const result = cli(directory, "inspect", "transactions", "--json");
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			functions: Array<{
+				name: string;
+				status: string;
+				gaps?: Array<{ reason: string }>;
+			}>;
+		};
+		expect(
+			report.functions.find((entry) => entry.name === "tx_copy_companion")?.status,
+		).toBe("bound");
+		const entry = report.functions.find((entry) => entry.name === "tx_table_companion");
+		expect(entry?.status).toBe("needs-facts");
+		expect(
+			entry?.gaps?.some((gap) => gap.reason.includes("complete result transaction")),
+		).toBe(true);
+	},
+);
 it("rejects owned fields through an alias of a whole-object handle", () => {
 	const directory = project("ffi-result-transactions");
 	writeFileSync(join(directory, "resource.h"), "\ntypedef TxFields TxFieldsAlias;\n", {

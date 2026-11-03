@@ -336,7 +336,13 @@ Bindings that combine direct resource pointers with copied values transfer owner
 and publish type views after every output conversion and final managed-input check
 succeeds. A failed conversion releases new resources once and preserves existing
 handles' ownership and views. This guarantee also covers owned pointer fields in
-plain value records and flat owned pointer arrays with an outer `free` function.
+plain value records and flat owned pointer arrays. An array's outer table may remain
+library owned; declare `free` only when the binding must release that table.
+
+Resource-table entries must remain readable and unchanged through delivery or failed
+delivery cleanup. Element destructors must preserve the table while cleanup walks it.
+For async results, this includes delayed conversion and native cleanup after worker
+termination. Avoid overlapping calls that overwrite the same library-owned table.
 
 Buffers supplied through `free` remain alive until every output is copied. Aliased
 allocations are released once, using their first declared cleanup function. Cleanup
