@@ -1,6 +1,10 @@
 import { Buffer } from "node:buffer";
 import process from "node:process";
-import { ffi_bench_blas_dot, ffi_bench_blas_axpy } from "maligator:ffi/blas";
+import {
+	ffi_bench_blas_dot,
+	ffi_bench_blas_dot_values,
+	ffi_bench_blas_axpy,
+} from "maligator:ffi/blas";
 import {
 	EVP_MD_CTX_new,
 	EVP_MD_CTX_free,
@@ -59,7 +63,8 @@ for (let i = 0; i < backing.length; i++) {
 	backing[i] = pattern === "repeat" ? i & 7 : seed & 255;
 }
 const data = backing.subarray(17);
-const blas = mode === "blas-dot" || mode === "blas-axpy";
+const numeric = mode === "blas-dot-copy" || mode === "blas-dot-view";
+const blas = numeric || mode === "blas-dot" || mode === "blas-axpy";
 const stride = pattern === "stride-1" ? 1 : pattern === "stride-2" ? 2 : 0;
 const workBytes = blas ? size * stride * Float64Array.BYTES_PER_ELEMENT * 2 : size;
 const warm = Math.min(
@@ -141,7 +146,8 @@ if (mode === "sqlite-bind" || mode === "sqlite-row") {
 	if (ffi_bench_sql_finalize(statement) !== 0 || ffi_bench_sql_close(db) !== 0)
 		throw new Error("SQLite cleanup failed");
 } else if (blas) {
-	if (!stride || !size) throw new Error("Invalid vector shape");
+	if (!stride || !size || (numeric && stride !== 1))
+		throw new Error("Invalid vector shape");
 	const elements = size * stride;
 	const xBacking = new Float64Array(elements + 2);
 	const yBacking = new Float64Array(elements + 2);
@@ -151,14 +157,18 @@ if (mode === "sqlite-bind" || mode === "sqlite-row") {
 	for (let i = 0; i < elements; i++)
 		x[i] = i % stride === 0 ? ((i / stride) % 13) + 1 : 17;
 	const alpha = 2 ** -20;
-	const dot = mode === "blas-dot";
+	const dot = numeric || mode === "blas-dot";
 	let result = 0;
 	for (let phase = 0; phase < 2; phase++) {
 		for (let i = 0; i < elements; i++)
 			y[i] = i % stride === 0 ? ((i / stride) % 7) + 1 : 29;
 		const count = phase === 0 ? warm : iterations;
+		const xInput = mode === "blas-dot-copy" ? Array.from(x) : x;
+		const yInput = mode === "blas-dot-copy" ? Array.from(y) : y;
 		const start = performance.now();
-		if (dot) {
+		if (numeric) {
+			for (let i = 0; i < count; i++) result = ffi_bench_blas_dot_values(xInput, yInput);
+		} else if (dot) {
 			for (let i = 0; i < count; i++) result = ffi_bench_blas_dot(x, y, stride);
 		} else {
 			for (let i = 0; i < count; i++) ffi_bench_blas_axpy(alpha, x, y, stride);

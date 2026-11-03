@@ -34,7 +34,8 @@ int main(int argc, char **argv) {
         backing[i] = repeat ? (i & 7) : (seed & 255);
     }
     unsigned char *data = backing + 17;
-    int blas = strcmp(mode, "blas-dot") == 0 || strcmp(mode, "blas-axpy") == 0;
+    int numeric = strcmp(mode, "blas-dot-copy") == 0 || strcmp(mode, "blas-dot-view") == 0;
+    int blas = numeric || strcmp(mode, "blas-dot") == 0 || strcmp(mode, "blas-axpy") == 0;
     int stride = strcmp(pattern, "stride-1") == 0 ? 1 : strcmp(pattern, "stride-2") == 0 ? 2 : 0;
     size_t work_bytes = blas ? size * (size_t)stride * sizeof(double) * 2 : size;
     uint64_t warm = 16777216 / (work_bytes ? work_bytes : 1);
@@ -100,7 +101,7 @@ int main(int argc, char **argv) {
         if (ffi_bench_sql_finalize(s) != 0 || ffi_bench_sql_close(db) != 0) return 10;
         free(text);
     } else if (blas) {
-        if (!stride || !size) return 21;
+        if (!stride || !size || (numeric && stride != 1)) return 21;
         size_t elements = size * (size_t)stride, bytes = elements * sizeof(double);
         double *x_base = malloc((elements + 2) * sizeof(double));
         double *y_base = malloc((elements + 2) * sizeof(double));
@@ -110,12 +111,14 @@ int main(int argc, char **argv) {
         for (size_t i = 0; i < elements; i++) x[i] = i % stride == 0 ? (i / stride) % 13 + 1 : 17;
         const double alpha = 0x1p-20;
         double result = 0;
-        int dot = strcmp(mode, "blas-dot") == 0;
+        int dot = numeric || strcmp(mode, "blas-dot") == 0;
         for (int phase = 0; phase < 2; phase++) {
             for (size_t i = 0; i < elements; i++) y[i] = i % stride == 0 ? (i / stride) % 7 + 1 : 29;
             uint64_t count = phase == 0 ? warm : iterations;
             double start = now_ms();
-            if (dot) {
+            if (numeric) {
+                for (uint64_t i = 0; i < count; i++) result = ffi_bench_blas_dot_values(x, y, (int)size);
+            } else if (dot) {
                 for (uint64_t i = 0; i < count; i++) result = ffi_bench_blas_dot(x, bytes, y, bytes, stride);
             } else {
                 for (uint64_t i = 0; i < count; i++) ffi_bench_blas_axpy(alpha, x, bytes, y, bytes, stride);

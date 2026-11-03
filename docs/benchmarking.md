@@ -53,7 +53,7 @@ The prefixes need `include/` and `lib/`. zstd, OpenSSL, and OpenBLAS default to 
 Use a fresh output directory for each build and measurement. Keep the checkout
 unchanged between phases. Repeat `--case MODE` to narrow the modes listed by the plan.
 
-The runner freezes iteration counts after calibrating C, alternates caller order,
+The runner freezes iteration counts after calibration, alternates caller order,
 and checks outputs and library resolution. SQLite uses a shared adapter because
 the runtimes can embed their own SQLite builds. Each timed adapter export forwards
 one call, while zstd and EVP updates call their libraries directly. Both JavaScript
@@ -69,6 +69,13 @@ offset `Float64Array` views without copying numeric elements. The runner sets
 OpenBLAS and OpenMP thread limits before loading libraries and verifies one BLAS
 thread. Exact arithmetic inputs let each caller check every result, skipped stride
 slot, and view boundary after timing. AXPY resets its output after warmup.
+
+`--case blas-dot-copy` and `--case blas-dot-view` compare Maligator number-array
+copies with const numeric `Float64Array` loans. Both call the same typed-pointer
+adapter and perform the same CBLAS dot product. C and Bun use native vectors in
+both cases. Input preparation stays outside timing. These modes share iteration
+counts calibrated from Maligator's copy path to bound the slower representation;
+other modes calibrate from C. This measures an input-representation choice.
 
 `--case sqlite-text` binds reused text through `sqlite3_bind_text` with
 `SQLITE_TRANSIENT`. Sizes are UTF-8 byte lengths, covering ASCII and Unicode input.

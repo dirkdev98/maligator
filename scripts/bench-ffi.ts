@@ -94,8 +94,10 @@ if (values.help) {
   --plan=json               inspect the selection without writing or building
 
 Build creates frozen inputs and production C/Maligator executables. Measure uses
-that directory, verifies identities, calibrates C to 150ms once per case, then
-freezes equal iteration counts across all three callers. Warmup is bounded by
+that directory, verifies identities, calibrates to 150ms once per case, then
+freezes equal iteration counts across all three callers. Numeric copy/view pairs
+share counts calibrated from Maligator's copy path; other cases calibrate C.
+Warmup is bounded by
 10,000 calls and 16 MiB. Timings exclude setup, warmup and validation; CPU/RSS
 cover the complete child. One round is indicative. No saved baseline is updated.
 SQLite uses one shared adapter to isolate embedded SQLite symbols. Timed adapter
@@ -104,6 +106,9 @@ Bun uses exact BigInt u64 arguments/results and Buffer views, without ptr cachin
 OpenBLAS dot products and AXPY updates lend offset Float64Array views through a
 shared byte-span adapter. Sizes are element counts; patterns select stride 1 or 2.
 All callers use one BLAS thread and validate every element and view boundary.
+blas-dot-copy and blas-dot-view compare number-array copying with const numeric
+view lending in Maligator. C and Bun use native vectors in both cases; every lane
+calls the same typed-pointer adapter, with setup outside timing.
 sqlite-text repeatedly binds transient ASCII, Latin1, BMP and astral UTF-8 text.
 Bun encodes terminated Buffer inputs before timing; Maligator converts JS strings.
 `);
@@ -141,6 +146,14 @@ const CASES: Array<Case> = [
 				iterations: size === 4096 ? 100000 : 1000000,
 			})),
 		),
+	),
+	...[8, 64, 4096].flatMap((size) =>
+		["blas-dot-copy", "blas-dot-view"].map((mode) => ({
+			mode,
+			size,
+			pattern: "stride-1",
+			iterations: size === 4096 ? 1000 : 10000,
+		})),
 	),
 	...[64, 1024, 1048576].flatMap((size) =>
 		["repeat", "random"].flatMap((pattern) =>
@@ -187,6 +200,10 @@ const plan = {
 		sizeUnit: "double elements",
 		alpha: 2 ** -20,
 		storage: "aligned offset Float64Array views, shared byte-span adapter",
+		numericInputs:
+			"copy/view modes share a const double-pointer adapter; C/Bun use native vectors, Maligator copies number arrays or lends Float64Array views",
+		numericCalibration:
+			"Maligator copy path at 150ms, shared by copy/view modes at each size",
 	},
 };
 if (values.plan !== undefined) {
@@ -339,6 +356,12 @@ async function build(): Promise<void> {
 						y: { bytes: { length: "y_bytes" } },
 					},
 				},
+				ffi_bench_blas_dot_values: {
+					params: {
+						x: { array: { length: "count" } },
+						y: { array: { length: "count" } },
+					},
+				},
 				ffi_bench_blas_axpy: {
 					params: {
 						x: { bytes: { length: "x_bytes" } },
@@ -447,6 +470,7 @@ async function build(): Promise<void> {
 							["ZSTD_decompressDCtx", "libzstd"],
 							["ffi_bench_sql_bind", "libffi-bench"],
 							["ffi_bench_blas_dot", "libffi-bench"],
+							["ffi_bench_blas_dot_values", "libffi-bench"],
 							["ffi_bench_blas_axpy", "libffi-bench"],
 						];
 			for (const [symbol, provider] of providers)
@@ -606,19 +630,28 @@ async function measure(): Promise<void> {
 			throw new Error("OpenBLAS did not report its configuration and one thread");
 	};
 	const calibrated: Array<Case> = [];
+	const numericIterations = new Map<number, number>();
 	for (const c of CASES) {
 		const smoke = [];
 		for (const lane of LANES)
 			smoke.push(await run(lane, { ...c, iterations: 31 }, "smoke", -1));
 		parity(smoke);
-		const probe = await run("c", c, "calibration", -1);
-		calibrated.push({
-			...c,
-			iterations: Math.max(
+		const numeric = c.mode === "blas-dot-copy" || c.mode === "blas-dot-view";
+		let iterations = numeric ? numericIterations.get(c.size) : undefined;
+		if (iterations === undefined) {
+			const probe = await run(
+				numeric ? "maligator" : "c",
+				numeric ? { ...c, mode: "blas-dot-copy" } : c,
+				"calibration",
+				-1,
+			);
+			iterations = Math.max(
 				1,
 				Math.min(100000000, Math.round((c.iterations * 150) / probe.output.elapsedMs)),
-			),
-		});
+			);
+			if (numeric) numericIterations.set(c.size, iterations);
+		}
+		calibrated.push({ ...c, iterations });
 	}
 	save("calibrated-cases.json", calibrated);
 	for (let round = 0; round < rounds; round++) {

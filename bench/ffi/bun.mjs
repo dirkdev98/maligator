@@ -16,6 +16,7 @@ const sqlite = dlopen(new URL("../native/libffi-bench.dylib", import.meta.url).p
 	ffi_bench_sql_close: { args: [t.ptr], returns: t.i32 },
 	ffi_bench_crypto_final: { args: [t.ptr, t.ptr, t.u32], returns: t.i32 },
 	ffi_bench_blas_dot: { args: [t.ptr, t.u64, t.ptr, t.u64, t.i32], returns: t.f64 },
+	ffi_bench_blas_dot_values: { args: [t.ptr, t.ptr, t.i32], returns: t.f64 },
 	ffi_bench_blas_axpy: {
 		args: [t.f64, t.ptr, t.u64, t.ptr, t.u64, t.i32],
 		returns: t.void,
@@ -53,6 +54,7 @@ const {
 	ffi_bench_sql_close,
 	ffi_bench_crypto_final,
 	ffi_bench_blas_dot,
+	ffi_bench_blas_dot_values,
 	ffi_bench_blas_axpy,
 } = sqlite.symbols;
 const {
@@ -99,7 +101,8 @@ for (let i = 0; i < backing.length; i++) {
 }
 const data = backing.subarray(17);
 const inputLength = BigInt(size);
-const blas = mode === "blas-dot" || mode === "blas-axpy";
+const numeric = mode === "blas-dot-copy" || mode === "blas-dot-view";
+const blas = numeric || mode === "blas-dot" || mode === "blas-axpy";
 const stride = pattern === "stride-1" ? 1 : pattern === "stride-2" ? 2 : 0;
 const workBytes = blas ? size * stride * Float64Array.BYTES_PER_ELEMENT * 2 : size;
 const warm = Math.min(
@@ -181,7 +184,8 @@ if (mode === "sqlite-bind" || mode === "sqlite-row") {
 	if (ffi_bench_sql_finalize(statement) !== 0 || ffi_bench_sql_close(db) !== 0)
 		throw new Error("SQLite cleanup failed");
 } else if (blas) {
-	if (!stride || !size) throw new Error("Invalid vector shape");
+	if (!stride || !size || (numeric && stride !== 1))
+		throw new Error("Invalid vector shape");
 	const elements = size * stride;
 	const xBacking = new Float64Array(elements + 2);
 	const yBacking = new Float64Array(elements + 2);
@@ -192,14 +196,16 @@ if (mode === "sqlite-bind" || mode === "sqlite-row") {
 	for (let i = 0; i < elements; i++)
 		x[i] = i % stride === 0 ? ((i / stride) % 13) + 1 : 17;
 	const alpha = 2 ** -20;
-	const dot = mode === "blas-dot";
+	const dot = numeric || mode === "blas-dot";
 	let result = 0;
 	for (let phase = 0; phase < 2; phase++) {
 		for (let i = 0; i < elements; i++)
 			y[i] = i % stride === 0 ? ((i / stride) % 7) + 1 : 29;
 		const count = phase === 0 ? warm : iterations;
 		const start = performance.now();
-		if (dot) {
+		if (numeric) {
+			for (let i = 0; i < count; i++) result = ffi_bench_blas_dot_values(x, y, size);
+		} else if (dot) {
 			for (let i = 0; i < count; i++)
 				result = ffi_bench_blas_dot(x, byteLength, y, byteLength, stride);
 		} else {
