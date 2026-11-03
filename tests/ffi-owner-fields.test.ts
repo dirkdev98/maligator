@@ -67,7 +67,7 @@ it("declares borrowed resource fields with their destruction boundary", () => {
 	expect(sdk).toContain("readonly first: OwnerChild | null");
 });
 
-it("requires a destructor for owner-bound fields", () => {
+it("requires a destructor-backed root for owner-bound fields", () => {
 	expect(() =>
 		planBindings(model, {
 			...contract,
@@ -76,7 +76,33 @@ it("requires a destructor for owner-bound fields", () => {
 				OwnerResult: { ...contract.types.OwnerResult, handle: {} },
 			},
 		}),
-	).toThrow("destructor-backed result handle");
+	).toThrow("destructor-backed owning root");
+});
+
+it("borrows through a descendant without its own destructor", () => {
+	const plan = planBindings(model, {
+		...contract,
+		types: {
+			...contract.types,
+			OwnerChild: { ...contract.types.OwnerChild, handle: { views: ["OwnerBase"] } },
+		},
+	});
+	expect(
+		plan.handles.get("OwnerChild")?.fields.find((field) => field.name === "next")?.value,
+	).toMatchObject({ kind: "handle", owner: "OwnerChild", owned: false });
+});
+
+it("rejects owner cycles without a destruction root", () => {
+	expect(() =>
+		planBindings(model, {
+			...contract,
+			types: {
+				...contract.types,
+				OwnerResult: { ...contract.types.OwnerResult, handle: {} },
+				OwnerChild: { ...contract.types.OwnerChild, handle: { views: ["OwnerBase"] } },
+			},
+		}),
+	).toThrow("destructor-backed owning root");
 });
 
 it("rejects non-resource fields with a resource lifetime", () => {

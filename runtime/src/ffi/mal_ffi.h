@@ -146,6 +146,8 @@ MalValue mal_ffi_new_handle(
 MalValue mal_ffi_new_owner_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
     void *value, MalValue owner);
+/** Prove the destruction boundary before reading a borrowed descendant's C fields. */
+bool mal_ffi_owner_ready(MalVm *vm, MalValue value, const MalFfiSite *site);
 /**
  * Allocate zeroed caller storage and wrap its stable pointer. Disposing or collecting
  * this handle frees the outer storage; C initialization and cleanup are explicit.

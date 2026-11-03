@@ -2911,6 +2911,30 @@ static bool ffi_handle_can_adopt(
     return true;
 }
 
+static MalFfiHandleObject *ffi_owner_root(
+    MalVm *vm, MalValue owner_value, const MalFfiSite *site) {
+    MalFfiHandleObject *owner = ffi_handle(owner_value);
+    if (owner == nullptr || owner->value == nullptr || owner->closing
+        || !ffi_scope_active(vm, owner->scope) || !ffi_handle_owners_open(vm, owner)) {
+        mal_ffi_expected(vm, site, "an open owning resource");
+        return nullptr;
+    }
+    // Borrowed descendants share the same native destruction boundary. Keeping the
+    // owning root avoids retaining an entire sibling traversal through view objects.
+    while (ffi_handle_owner(owner) != nullptr) {
+        owner = ffi_handle_owner(owner);
+    }
+    if (owner->scope == 0 && ffi_handle_policy(owner)->destroy == nullptr) {
+        mal_ffi_expected(vm, site, "a destructor-backed owning root for a borrowed resource");
+        return nullptr;
+    }
+    return owner;
+}
+
+bool mal_ffi_owner_ready(MalVm *vm, MalValue value, const MalFfiSite *site) {
+    return ffi_owner_root(vm, value, site) != nullptr;
+}
+
 MalValue mal_ffi_new_owner_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
     void *value, MalValue owner_value) {
@@ -2919,18 +2943,9 @@ MalValue mal_ffi_new_owner_handle(
         mal_ffi_expected(vm, &site, "a handle family that supports owner-bound resource fields");
         return mal_value_new_undefined();
     }
-    MalFfiHandleObject *owner = ffi_handle(owner_value);
-    if (owner == nullptr || owner->value == nullptr || owner->closing
-        || !ffi_scope_active(vm, owner->scope) || !ffi_handle_owners_open(vm, owner)) {
-        mal_ffi_expected(vm, &site, "an open owning resource");
-        return mal_value_new_undefined();
-    }
-    // Borrowed descendants share the same native destruction boundary. Keeping the
-    // owning root avoids retaining an entire sibling traversal through view objects.
-    while (ffi_handle_owner(owner) != nullptr) {
-        owner_value = mal_value_from_heap((MalHeapHeader *) owner->owner);
-        owner = ffi_handle_owner(owner);
-    }
+    MalFfiHandleObject *owner = ffi_owner_root(vm, owner_value, &site);
+    if (owner == nullptr) return mal_value_new_undefined();
+    owner_value = mal_value_from_heap((MalHeapHeader *) owner);
     MalValue roots[] = {owner_value, mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, 2);

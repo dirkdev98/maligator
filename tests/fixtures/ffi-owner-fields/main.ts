@@ -113,6 +113,27 @@ check(
 );
 viewOwner[Symbol.dispose]();
 rejects(() => c.owner_base_value(base), "base views enforce the child's owner lifetime");
+const unreadable = c.owner_unreadable_base()!;
+const refinedBorrow = c.owner_child_from_base(unreadable)!;
+check(refinedBorrow === unreadable, "borrowed refinement preserves the base wrapper");
+rejects(
+	() => refinedBorrow.next,
+	"actual ownership is proved before reading a derived resource field",
+);
+refinedBorrow[Symbol.dispose]();
+c.owner_unreadable_release();
+const unclaimedRoot = c.owner_result_new(74);
+const rawLast = c.owner_result_last_base(unclaimedRoot)!;
+const refinedNull = c.owner_child_from_base(rawLast)!;
+rejects(
+	() => refinedNull.next,
+	"NULL resource fields still require an actual destruction root",
+);
+check(
+	unclaimedRoot.second === refinedNull && refinedNull.next === null,
+	"owner adoption validates nullable fields on refined views",
+);
+unclaimedRoot[Symbol.dispose]();
 let loan: c.OwnerChild | undefined;
 c.owner_lend_child((lent) => {
 	loan = lent!;
@@ -241,4 +262,53 @@ for (const keep of [c.owner_keep_child, c.keepChildAsync]) {
 	c.owner_release_child();
 	owner[Symbol.dispose]();
 }
+const document = c.owner_result_nodes(90),
+	unclaimed = c.owner_leaf_alias(document)!;
+rejects(() => unclaimed.next, "unclaimed descendants require a proven owning root");
+const leaf = document.nodes!,
+	sibling = leaf.next!;
+check(
+	leaf === unclaimed && c.owner_leaf_value(sibling) === 91,
+	"destructorless descendants borrow a common root",
+);
+check(
+	c.owner_leaf_visit(leaf, () =>
+		rejects(
+			() => document[Symbol.dispose](),
+			"descendant calls pin the destruction root",
+		),
+	) === 90,
+	"borrowed descendants retain the document during C callbacks",
+);
+c.owner_wait_reset();
+const leafPending = c.waitLeafAsync(sibling);
+rejects(() => document[Symbol.dispose](), "descendant workers pin the destruction root");
+c.owner_child_release();
+check((await leafPending) === 91, "destructorless descendant workers complete safely");
+check(
+	c.owner_leaf_results((index) => {
+		if (index === 1)
+			rejects(
+				() => document[Symbol.dispose](),
+				"descendant callback results lease the destruction root",
+			);
+		return leaf;
+	}) === 90,
+	"destructorless callback results retain their root until C returns",
+);
+const oldLeaves = c.owner_leaf_destroyed();
+leaf[Symbol.dispose]();
+check(
+	c.owner_leaf_value(sibling) === 91 && c.owner_leaf_value(document.nodes!) === 90,
+	"closing a destructorless view preserves sibling resources",
+);
+document[Symbol.dispose]();
+check(
+	c.owner_leaf_destroyed() === oldLeaves + 2,
+	"only the owning destructor releases descendants",
+);
+rejects(
+	() => c.owner_leaf_value(sibling),
+	"destructorless descendants expire with their root",
+);
 console.log("owner fields passed");

@@ -1904,8 +1904,7 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 # C libraries
 
 - [ ] Support transactional transfer of independently owned compound fields and kept
-      callback registrations tied to borrowed child lifetimes. Allow borrowed
-      descendants without their own destructor when the owning root proves lifetime.
+      callback registrations tied to borrowed child lifetimes.
 
 - [ ] Remove measured marshalling, allocation, callback-dispatch, and unused binding
       build costs. Compare representative libraries against C and Bun, retaining

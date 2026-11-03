@@ -12,12 +12,14 @@ export default {
 				second: { handle: { lifetime: "owner" } },
 				empty: { handle: { lifetime: "owner" } },
 				library: { handle: { lifetime: "library" } },
+				nodes: { handle: { lifetime: "owner" } },
 			},
 		},
 		OwnerChild: {
 			handle: { destroy: "owner_child_free", collect: true, views: ["OwnerBase"] },
 			fields: { next: { handle: { lifetime: "owner" } } },
 		},
+		OwnerLeaf: { handle: {}, fields: { next: { handle: { lifetime: "owner" } } } },
 	},
 	functions: {
 		owner_result_new: { async: "newResultAsync" },
@@ -25,8 +27,17 @@ export default {
 		owner_child_free: { async: "destroyChildAsync" },
 		owner_child_alias: { returns: { borrowed: true } },
 		owner_child_wait: { async: "waitChildAsync" },
+		owner_leaf_wait: { async: "waitLeafAsync" },
+		owner_leaf_alias: { returns: { borrowed: true } },
+		owner_leaf_visit: { params: { callback: { callback: { data: "data" } } } },
+		owner_leaf_results: {
+			params: { callback: { callback: { data: "data", returns: { lifetime: "call" } } } },
+		},
 		owner_result_wait: { async: "waitResultAsync" },
 		owner_result_base: { returns: { borrowed: true } },
+		owner_result_last_base: { returns: { borrowed: true } },
+		owner_unreadable_base: { returns: { borrowed: true } },
+		owner_child_from_base: { returns: { borrowed: true } },
 		owner_lend_child: { params: { callback: { callback: { data: "data" } } } },
 		owner_lend_result: { params: { callback: { callback: { data: "data" } } } },
 		owner_visit_result: {

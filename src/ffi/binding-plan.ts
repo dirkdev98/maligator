@@ -1698,9 +1698,9 @@ class Planner {
 				if (this.#handles.get(mapped.value.name)?.allocator !== undefined)
 					throw new FfiError(`${at}: requires library-owned resource storage`);
 				if (fact.handle.lifetime === "owner") {
-					if (handle.destroy === undefined || handle.allocator !== undefined)
+					if (handle.allocator !== undefined)
 						throw new FfiError(
-							`${at}: owner lifetime requires a destructor-backed result handle`,
+							`${at}: owner lifetime requires library-owned parent storage`,
 						);
 					mapped = { value: { ...mapped.value, owned: false, owner: handle.name } };
 				}
@@ -3147,6 +3147,28 @@ export function planBindings(
 				owners.set(field.name, `${handle.name}.${field.name}`);
 			}
 	}
+	const lifetimeRoots = new Set(
+		[...handles.values()]
+			.filter((handle) => handle.destroy !== undefined && handle.allocator === undefined)
+			.map((handle) => handle.family),
+	);
+	const lifetimeQueue = [...lifetimeRoots];
+	for (let index = 0; index < lifetimeQueue.length; index++)
+		for (const handle of families.get(lifetimeQueue[index]!)!)
+			for (const field of handle.fields) {
+				if (field.value.kind !== "handle" || field.value.owner === undefined) continue;
+				const family = handles.get(field.value.name)!.family;
+				if (lifetimeRoots.has(family)) continue;
+				lifetimeRoots.add(family);
+				lifetimeQueue.push(family);
+			}
+	for (const handle of handles.values())
+		if (!lifetimeRoots.has(handle.family))
+			for (const field of handle.fields)
+				if (field.value.kind === "handle" && field.value.owner !== undefined)
+					throw new FfiError(
+						`types.${handle.name}.fields.${field.name}.handle: owner lifetime requires a destructor-backed owning root`,
+					);
 
 	const constants: Array<MappedConstant> = [];
 	const skippedConstants: Array<SkippedConstant> = [];

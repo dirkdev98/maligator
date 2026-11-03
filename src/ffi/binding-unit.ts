@@ -1568,6 +1568,11 @@ class BindingWriter {
 					"\tvoid *mal_handle;",
 					`\tif (!mal_ffi_to_handle(vm, mal_this, &mal_ffi_type_${name}, false, &mal_site, &mal_handle, nullptr)) return mal_ffi_undefined();`,
 					"\tif (!mal_ffi_handle_idle(vm, mal_this, &mal_site)) return mal_ffi_undefined();",
+					...(field.value.kind === "handle" && field.value.owner !== undefined
+						? [
+								"\tif (!mal_ffi_owner_ready(vm, mal_this, &mal_site)) return mal_ffi_undefined();",
+							]
+						: []),
 					`\t${handle.spelling} *mal_value = mal_handle;`,
 					`\treturn ${this.write(field.value, `mal_value->${field.name}`, false, "mal_this")};`,
 					"}",

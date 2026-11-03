@@ -335,19 +335,25 @@ types: {
 		handle: { destroy: "document_free", collect: true },
 		fields: { root: { handle: { lifetime: "owner" } } },
 	},
-	Node: { handle: { destroy: "node_free" } },
+	Node: {
+		handle: {},
+		fields: { next: { handle: { lifetime: "owner" } } },
+	},
 },
 ```
 
 `document.root` returns a borrowed canonical `Node` handle or `null`. Keeping that child
 keeps the document reachable. Closing the document invalidates its children; disposing
-a child view only closes that view. The node's destroy binding cannot free a child
-owned by the document. Calls and callback-result leases on a child also protect its
-owning document. A child field that points at a sibling shares the document's lifetime.
+a child view only closes that view. When a child type names its own destroy binding,
+that binding rejects owner-bound children. Calls and callback-result leases also protect
+the owning document. A child field that points at a sibling shares the document's lifetime.
 Use `lifetime: "library"` for a borrowed pointer that remains valid independently of
 the containing resource.
 
-Owner fields require a destructor-backed handle and library-owned child storage.
+Owner fields must be reachable from a destructor-backed root through declared owner
+fields and use library-owned child storage. Descendants can omit their own destructor.
+Read them through an owning field before following their links; a raw borrowed alias
+needs a proven owner before its resource fields can be read.
 Passing an owner-bound child while registering a kept callback throws before C entry;
 passing `null` to unregister a nullable callback remains available. Plain records that
 transfer independent resource ownership need a whole-result handle and destructor.
