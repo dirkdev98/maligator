@@ -1903,8 +1903,8 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Extend transactional conversion to independently owned compound fields, copied
-      resource arrays, and resource tables without an outer `free` function. Preserve
+- [ ] Extend transactional conversion to resource-bearing arrays, selected unions,
+      tagged shapes, and resource tables without an outer `free` function. Preserve
       ownership and type views through allocation failure after partial conversion.
 
 - [ ] Extend destruction-root-owned callback registrations to roots stored in caller

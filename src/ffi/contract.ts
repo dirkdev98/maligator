@@ -231,6 +231,17 @@ function validateTypeFacts(value: unknown, at: string): void {
 			if (field.handle !== undefined) {
 				expectKeys(field, fieldAt, ["handle"]);
 				expectObject(field.handle, `${fieldAt}.handle`);
+				if (field.handle.owned !== undefined) {
+					expectKeys(field.handle, `${fieldAt}.handle`, ["owned", "fresh"]);
+					expect(field.handle.owned === true, `${fieldAt}.handle.owned`, "true");
+					booleanField(field.handle, "fresh", `${fieldAt}.handle`);
+					expect(
+						value.handle === undefined && value.shape === undefined,
+						fieldAt,
+						"an independently owned pointer field in a plain value record",
+					);
+					continue;
+				}
 				expectKeys(field.handle, `${fieldAt}.handle`, ["lifetime"]);
 				expect(
 					field.handle.lifetime === "owner" || field.handle.lifetime === "library",

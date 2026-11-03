@@ -4,6 +4,20 @@ export default {
 	headers: ["resource.h"],
 	find: [{ includeDirs: ["."], sources: ["resource.c"] }],
 	types: {
+		TxFreshFields: {
+			fields: {
+				first: { handle: { owned: true, fresh: true } },
+				second: { handle: { owned: true, fresh: true } },
+			},
+		},
+		TxFields: {
+			fields: {
+				first: { handle: { owned: true } },
+				second: { handle: { owned: true } },
+				empty: { handle: { owned: true } },
+			},
+		},
+		TxRecord: { fields: { third: { handle: { owned: true } } } },
 		TxSpecial: {
 			handle: { destroy: "tx_special_destroy", collect: false, views: ["TxResource"] },
 		},
@@ -22,6 +36,27 @@ export default {
 		},
 	},
 	functions: {
+		tx_destroy: { async: "destroyResourceAsync" },
+		tx_record: {
+			params: { message: { out: true, string: { length: "length" } } },
+			async: "recordAsync",
+		},
+		tx_record_existing: {
+			params: {
+				other: { out: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "recordExistingAsync",
+		},
+		tx_record_release: {
+			params: {
+				text: { out: true, string: true, free: "tx_text_free" },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "recordReleaseAsync",
+		},
+		tx_record_visit: { params: { callback: { callback: { data: "data" } } } },
+		tx_record_wait: { async: "recordWaitAsync" },
 		tx_special_peek: { returns: { borrowed: true } },
 		tx_special_existing: {
 			params: {

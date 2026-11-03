@@ -1395,11 +1395,21 @@ MalValue mal_ffi_new_record(MalVm *vm, MalFfiRecordType *type, const MalValue *v
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     MalShape *shape = ffi_record_shape(vm, type);
     if (shape != nullptr) {
-        return mal_value_from_object(
-            mal_object_new_shaped(&vm->heap, prototype, shape, values, (u32) type->field_count));
+        MalObject *object = mal_object_try_new_shaped(
+            &vm->heap, prototype, shape, values, (u32) type->field_count);
+        if (object == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+        return mal_value_from_object(object);
     }
     // A struct wider than the shape helper allows still gets an ordinary object.
-    MalValue record = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    MalObject *object = mal_object_try_new(&vm->heap, prototype);
+    if (object == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    MalValue record = mal_value_from_object(object);
     MalRootSpan root;
     mal_gc_root(&root, &record, 1);
     for (i32 index = 0; index < type->field_count && !mal_ffi_threw(vm); index++) {

@@ -1,9 +1,11 @@
 #include "resource.h"
 #include <stdlib.h>
+#include <stdatomic.h>
+#include <unistd.h>
 struct TxResource { int value; };
 static TxResource *current;
 static TxResource recycled;
-static int destroyed;
+static _Atomic int destroyed;
 static int read_entries;
 static int input_entries;
 static TxResource *create(int value) {
@@ -111,3 +113,46 @@ TxSpecial *tx_special_existing(int bad, char **text, const char **message, size_
 TxSpecial *tx_special_peek(void) { return (TxSpecial *) current; }
 void tx_special_destroy(TxSpecial *value) { tx_destroy((TxResource *) value); }
 int tx_special_read(TxSpecial *value) { return ((TxResource *) value)->value; }
+
+static TxRecord record_new(void) {
+    TxResource *first = tx_create(71);
+    return (TxRecord) {{first, first, NULL}, create(73), 3};
+}
+TxFields tx_fields(void) {
+    TxResource *value = tx_create(79);
+    return (TxFields) {value, value, NULL};
+}
+TxRecord tx_record(int bad, const char **message, size_t *length) {
+    *message = "x"; *length = bad ? (size_t)-1 : 1;
+    return record_new();
+}
+TxRecord tx_record_existing(int bad, TxResource **other, const char **message, size_t *length) {
+    *message = "x"; *length = bad ? (size_t)-1 : 1; *other = current;
+    return (TxRecord) {{current, current, NULL}, create(83), 5};
+}
+TxRecord tx_record_release(int bad, char **text, const char **message, size_t *length) {
+    *text = malloc(2);
+    if (*text == NULL) abort();
+    (*text)[0] = 'x'; (*text)[1] = 0;
+    *message = "x"; *length = 1; release_bad = bad;
+    return record_new();
+}
+int tx_record_sum(TxRecord value) { return value.nested.first->value + value.third->value + value.marker; }
+int tx_record_visit(int (*callback)(TxRecord, void *), void *data) {
+    TxRecord value = record_new();
+    int result = callback(value, data);
+    tx_destroy(value.nested.first); tx_destroy(value.third);
+    return result;
+}
+static _Atomic int record_started;
+TxRecord tx_record_wait(void) {
+    TxRecord value = record_new();
+    atomic_store(&record_started, 1);
+    usleep(150000);
+    return value;
+}
+int tx_record_started(void) { return atomic_load(&record_started); }
+TxFreshFields tx_fields_fresh(void) {
+    recycled.value = 101;
+    return (TxFreshFields) {&recycled, &recycled};
+}

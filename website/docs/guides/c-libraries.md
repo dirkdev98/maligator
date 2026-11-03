@@ -335,8 +335,8 @@ storage from a resource whose destruction is still pending.
 Bindings that combine direct resource pointers with copied values transfer ownership
 and publish type views after every output conversion and final managed-input check
 succeeds. A failed conversion releases new resources once and preserves existing
-handles' ownership and views. This guarantee also covers flat owned pointer arrays
-with an outer `free` function.
+handles' ownership and views. This guarantee also covers owned pointer fields in
+plain value records and flat owned pointer arrays with an outer `free` function.
 
 Buffers supplied through `free` remain alive until every output is copied. Aliased
 allocations are released once, using their first declared cleanup function. Cleanup
@@ -389,8 +389,25 @@ must offer release or unregistration independently of root destruction. Declare
 `callback.owner` when root destruction ends the registration instead. Children whose
 root is a callback loan cannot become registration inputs. Registration results cannot borrow any retained
 input root. Native leases also preserve the resources through VM teardown until C
-releases the registration. Plain records that transfer independent resource ownership
-need a whole-result handle and destructor.
+releases the registration. Use a whole-result handle when its destructor releases
+the record's resources together.
+
+For independently owned pointers in a value record, declare field ownership:
+
+```typescript
+types: {
+	Token: { handle: { destroy: "token_free" } },
+	TokenResult: { fields: { token: { handle: { owned: true } } } },
+},
+```
+
+The field must point to a destructor-backed resource allocated by the library.
+Nested plain records share the result transaction. Aliased fields keep one handle,
+and a failed conversion preserves existing ownership while releasing new resources
+once. Record inputs borrow their handles; callback arguments remain invocation loans.
+Use `fresh: true` beside `owned` for a new lifetime at a recycled address.
+Use a C wrapper with a pointer result for unions or array forms that transfer ownership.
+Global getters and constants cannot transfer independently owned fields.
 
 When a library accepts the same allocation through another pointer type, declare directed
 `views`. For example, libuv accepts a timer pointer as a general handle pointer:

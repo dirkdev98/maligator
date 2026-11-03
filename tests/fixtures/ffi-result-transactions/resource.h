@@ -43,3 +43,16 @@ TxSpecial *tx_special_existing(int bad, char **text, const char **message, size_
 TxSpecial *tx_special_peek(void);
 void tx_special_destroy(TxSpecial *value);
 int tx_special_read(TxSpecial *value);
+
+typedef struct TxFields { TxResource *first; TxResource *second; TxResource *empty; } TxFields;
+typedef struct TxRecord { TxFields nested; TxResource *third; int marker; } TxRecord;
+TxFields tx_fields(void);
+TxRecord tx_record(int bad, const char **message, size_t *length);
+TxRecord tx_record_existing(int bad, TxResource **other, const char **message, size_t *length);
+TxRecord tx_record_release(int bad, char **text, const char **message, size_t *length);
+int tx_record_sum(TxRecord value);
+int tx_record_visit(int (*callback)(TxRecord, void *), void *data);
+TxRecord tx_record_wait(void);
+int tx_record_started(void);
+typedef struct TxFreshFields { TxResource *first; TxResource *second; } TxFreshFields;
+TxFreshFields tx_fields_fresh(void);

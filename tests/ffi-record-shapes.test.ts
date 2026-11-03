@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import type { FfiCheckReport } from "../src/ffi/check.ts";
+import transactionContract from "./fixtures/ffi-result-transactions/resource.ffi.ts";
 
 const repo = resolve(import.meta.dirname, "..");
 const temporary: Array<string> = [];
@@ -28,6 +29,91 @@ function declarations(directory: string): string {
 afterEach(() => {
 	for (const directory of temporary.splice(0))
 		rmSync(directory, { recursive: true, force: true });
+});
+it("rejects owned fields through an alias of a whole-object handle", () => {
+	const directory = project("ffi-result-transactions");
+	writeFileSync(join(directory, "resource.h"), "\ntypedef TxFields TxFieldsAlias;\n", {
+		flag: "a",
+	});
+	writeFileSync(
+		join(directory, "resource.ffi.ts"),
+		`export default ${JSON.stringify({ ...transactionContract, types: { ...transactionContract.types, TxFieldsAlias: { handle: {} } } })};\n`,
+	);
+	const result = cli(directory, "inspect", "transactions", "--json");
+	expect(result.status).toBe(1);
+	expect(result.stderr).toContain("plain struct");
+});
+it.each([
+	{
+		name: "tx_owned_table",
+		declaration: "TxRecord *tx_owned_table(size_t *length);",
+		types: {},
+		facts: { returns: { array: { length: "length" }, free: "tx_text_free" } },
+	},
+	{
+		name: "tx_owned_grid",
+		declaration:
+			"typedef struct TxOwnedGrid { TxFields rows[2]; } TxOwnedGrid; TxOwnedGrid tx_owned_grid(void);",
+		types: {},
+		facts: {},
+	},
+	{
+		name: "tx_owned_choice",
+		declaration:
+			"typedef union TxOwnedChoice { TxFields fields; int number; } TxOwnedChoice; TxOwnedChoice tx_owned_choice(void);",
+		types: { TxOwnedChoice: { shape: { member: "fields" } } },
+		facts: {},
+	},
+])(
+	"keeps unsupported resource-bearing result $name unbound",
+	({ name, declaration, types, facts }) => {
+		const directory = project("ffi-result-transactions");
+		writeFileSync(join(directory, "resource.h"), `\n${declaration}\n`, { flag: "a" });
+		writeFileSync(
+			join(directory, "resource.ffi.ts"),
+			`export default ${JSON.stringify({ ...transactionContract, types: { ...transactionContract.types, ...types }, functions: { ...transactionContract.functions, [name]: facts } })};\n`,
+		);
+		const result = cli(directory, "inspect", "transactions", "--json");
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			functions: Array<{ name: string; status: string }>;
+		};
+		expect(report.functions.find((entry) => entry.name === name)?.status).toBe(
+			"needs-facts",
+		);
+	},
+);
+it("rejects ownership transfer from a global record getter", () => {
+	const directory = project("ffi-result-transactions");
+	writeFileSync(join(directory, "resource.h"), "\nextern TxRecord tx_record_global;\n", {
+		flag: "a",
+	});
+	writeFileSync(
+		join(directory, "resource.ffi.ts"),
+		`export default ${JSON.stringify({ ...transactionContract, globals: { tx_record_global: { get: "readGlobal" } } })};\n`,
+	);
+	const result = cli(directory, "inspect", "transactions", "--json");
+	expect(result.status).toBe(1);
+	expect(result.stderr).toContain("global getter cannot transfer");
+});
+it("keeps resource-bearing record constants outside ownership transfer", () => {
+	const directory = project("ffi-result-transactions");
+	writeFileSync(
+		join(directory, "resource.h"),
+		"\n#define TX_OWNED_FIELDS ((TxFields){0})\n",
+		{ flag: "a" },
+	);
+	const result = cli(directory, "inspect", "transactions", "--json");
+	expect(result.status, result.stderr || result.stdout).toBe(0);
+	const report = JSON.parse(result.stdout) as {
+		skippedConstants: Array<{ name: string; reason: string }>;
+	};
+	expect(
+		report.skippedConstants.some(
+			(entry) =>
+				entry.name === "TX_OWNED_FIELDS" && entry.reason.includes("cannot transfer"),
+		),
+	).toBe(true);
 });
 it("binds const-member inputs and results in declaration order", () => {
 	const directory = project("ffi-const-results");

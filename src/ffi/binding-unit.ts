@@ -1,5 +1,6 @@
 import { ffiIntoSymbol } from "../build-config-values.ts";
 import type { FfiDirectEntry, FfiDirectResult } from "../build-config-values.ts";
+import { hasOwnedRecordFields, supportsResultTransaction } from "./binding-plan.ts";
 import type {
 	BindingPlan,
 	BoundFunction,
@@ -720,6 +721,7 @@ class BindingWriter {
 		expression: string,
 		lent: boolean | string = false,
 		owner = "mal_owner",
+		results?: string,
 	): string {
 		switch (value.kind) {
 			case "native":
@@ -768,7 +770,7 @@ class BindingWriter {
 				if (value.counted) throw new Error("a counted string needs its byte length");
 				return `mal_ffi_from_string(vm, ${expression})`;
 			case "record":
-				return `mal_ffi_out_${value.name}(vm, ${expression}, ${lent})`;
+				return `mal_ffi_out_${value.name}(vm, ${expression}, ${lent}${hasOwnedRecordFields(value, this.#plan) ? `, ${results ?? "nullptr"}` : ""})`;
 			case "union":
 				return `mal_ffi_union_out_${value.name}(vm, ${expression}, ${lent})`;
 			case "tagged":
@@ -871,10 +873,19 @@ class BindingWriter {
 		expression: string,
 		target: string,
 		lent: boolean | string = false,
+		results?: string,
 	): Array<string> {
 		if (value.kind !== "array" || value.format !== undefined) {
+			if (value.kind === "handle" && value.owned && results !== undefined) {
+				const ordinary = `mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.name}, (void *) (${expression}), true, ${value.fresh === true})`;
+				const loan = this.write(value, expression, true);
+				return [
+					`${target} = ${lent === false ? ordinary : lent === true ? loan : `(${lent}) ? ${loan} : ${ordinary}`};`,
+					"if (mal_ffi_threw(vm)) goto mal_done;",
+				];
+			}
 			return [
-				`${target} = ${this.write(value, expression, lent)};`,
+				`${target} = ${this.write(value, expression, lent, undefined, results)};`,
 				...(this.#allocates(value) ? ["if (mal_ffi_threw(vm)) goto mal_done;"] : []),
 			];
 		}
@@ -1222,7 +1233,7 @@ class BindingWriter {
 		}
 		for (const name of outputs) {
 			lines.push(
-				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${this.#record(name).spelling} mal_value, bool mal_lent);`,
+				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${this.#record(name).spelling} mal_value, bool mal_lent${hasOwnedRecordFields({ kind: "record", name }, this.#plan) ? ", MalFfiResults *mal_results" : ""});`,
 			);
 		}
 		const typed = [...new Set([...inputs, ...outputs])].sort(byteOrder);
@@ -1312,12 +1323,14 @@ class BindingWriter {
 		for (const name of inputs) lines.push(...this.#recordInput(name));
 		for (const name of outputs) {
 			const record = this.#record(name);
+			const transactional = hasOwnedRecordFields({ kind: "record", name }, this.#plan);
+			const resultParameter = transactional ? ", MalFfiResults *mal_results" : "";
 			const count = record.fields.length;
 			const rooted = record.fields.some((field) => this.#allocates(field.value));
 			lines.push(
 				"",
 				// `mal_values` stays rooted by the caller while nested structs allocate.
-				`static bool mal_ffi_fill_${name}(MalVm *vm, ${record.spelling} mal_value, MalValue *mal_values, bool mal_lent) {`,
+				`static bool mal_ffi_fill_${name}(MalVm *vm, ${record.spelling} mal_value, MalValue *mal_values, bool mal_lent${resultParameter}) {`,
 			);
 			record.fields.forEach((field, index) => {
 				lines.push(
@@ -1326,6 +1339,7 @@ class BindingWriter {
 						`mal_value.${field.name}`,
 						`mal_values[${String(index)}]`,
 						"mal_lent",
+						transactional ? "mal_results" : undefined,
 					).map((line) => `\t${line}`),
 				);
 			});
@@ -1335,7 +1349,7 @@ class BindingWriter {
 				"\treturn !mal_ffi_threw(vm);",
 				"}",
 				"",
-				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${record.spelling} mal_value, bool mal_lent) {`,
+				`static MalValue mal_ffi_out_${name}(MalVm *vm, ${record.spelling} mal_value, bool mal_lent${resultParameter}) {`,
 				`\tMalValue mal_values[${String(count)}] = {};`,
 				"\tMalValue mal_record = mal_ffi_undefined();",
 				...(rooted
@@ -1344,7 +1358,7 @@ class BindingWriter {
 							`\tmal_ffi_root(&mal_roots, mal_values, ${String(count)});`,
 						]
 					: []),
-				`\tif (mal_ffi_fill_${name}(vm, mal_value, mal_values, mal_lent)) mal_record = mal_ffi_new_record(vm, &mal_ffi_record_${name}, mal_values);`,
+				`\tif (mal_ffi_fill_${name}(vm, mal_value, mal_values, mal_lent${transactional ? ", mal_results" : ""})) mal_record = mal_ffi_new_record(vm, &mal_ffi_record_${name}, mal_values);`,
 				...(rooted ? ["\tmal_ffi_unroot(&mal_roots);"] : []),
 				"\treturn mal_ffi_threw(vm) ? mal_ffi_undefined() : mal_record;",
 				"}",
@@ -1952,7 +1966,9 @@ class BindingWriter {
 				"}",
 			];
 		}
-		return [`${unlessThrew}${target} = ${this.write(value, expression)};`];
+		return [
+			`${unlessThrew}${target} = ${this.write(value, expression, false, undefined, results)};`,
+		];
 	}
 
 	// Zero the selected union member so C reads an initialized representation.
@@ -2470,13 +2486,11 @@ class BindingWriter {
 	}
 
 	#discardCount(binding: BoundFunction): number {
-		return [binding.returns, ...binding.outputs.map((output) => output.value)].filter(
-			(value) =>
-				value.kind === "handle" &&
-				value.owned &&
-				this.#handle(value.name).representation === "pointer" &&
-				this.#handle(value.name).destroy !== undefined,
-		).length;
+		return this.#resultResources(
+			binding,
+			"mal_return",
+			(index) => `mal_output_${index}`,
+		).filter((group) => group.count === undefined).length;
 	}
 
 	#resultResources(
@@ -2489,14 +2503,19 @@ class BindingWriter {
 		expression: string;
 		count?: string;
 	}> {
-		return [
-			{ value: binding.returns, expression: result, count: binding.resultCount },
-			...binding.outputs.map((entry, index) => ({
-				value: entry.value,
-				expression: output(index),
-				count: entry.count,
-			})),
-		].flatMap(({ value, expression, count }) => {
+		const collect = (
+			value: JsValue,
+			expression: string,
+			count?: number,
+		): Array<{
+			value: Extract<JsValue, { kind: "handle" }>;
+			expression: string;
+			count?: string;
+		}> => {
+			if (value.kind === "record")
+				return this.#record(value.name).fields.flatMap((field) =>
+					collect(field.value, `(${expression}).${field.name}`),
+				);
 			const element = value.kind === "sequence" ? value.of : value;
 			if (
 				element.kind !== "handle" ||
@@ -2509,7 +2528,15 @@ class BindingWriter {
 			const length = countValue(binding, count, context);
 			if (length === undefined) throw new Error("resource array without a count");
 			return [{ value: element, expression, count: length }];
-		});
+		};
+		return [
+			{ value: binding.returns, expression: result, count: binding.resultCount },
+			...binding.outputs.map((entry, index) => ({
+				value: entry.value,
+				expression: output(index),
+				count: entry.count,
+			})),
+		].flatMap(({ value, expression, count }) => collect(value, expression, count));
 	}
 
 	#resultFreshHints(
@@ -2517,19 +2544,27 @@ class BindingWriter {
 		result: string,
 		output: (index: number) => string,
 	): Array<{ value: Extract<JsValue, { kind: "handle" }>; expression: string }> {
+		const collect = (
+			value: JsValue,
+			expression: string,
+		): Array<{ value: Extract<JsValue, { kind: "handle" }>; expression: string }> => {
+			if (value.kind === "record")
+				return this.#record(value.name).fields.flatMap((field) =>
+					collect(field.value, `(${expression}).${field.name}`),
+				);
+			return value.kind === "handle" &&
+				value.fresh === true &&
+				this.#handle(value.name).representation === "pointer"
+				? [{ value, expression }]
+				: [];
+		};
 		return [
 			{ value: binding.returns, expression: result },
 			...binding.outputs.map((entry, index) => ({
 				value: entry.value,
 				expression: output(index),
 			})),
-		].flatMap(({ value, expression }) =>
-			value.kind === "handle" &&
-			value.fresh === true &&
-			this.#handle(value.name).representation === "pointer"
-				? [{ value, expression }]
-				: [],
-		);
+		].flatMap(({ value, expression }) => collect(value, expression));
 	}
 
 	#resourceFresh(
@@ -2606,47 +2641,11 @@ class BindingWriter {
 	}
 
 	#transactionalResults(binding: BoundFunction): boolean {
-		const safe = (value: JsValue, nested = false): boolean => {
-			switch (value.kind) {
-				case "handle":
-					return (
-						!nested &&
-						value.owner === undefined &&
-						value.lifetime === undefined &&
-						this.#handle(value.name).representation === "pointer"
-					);
-				case "callable":
-					return false;
-				case "sequence":
-					if (value.of.kind === "handle")
-						return (
-							!nested &&
-							value.free !== undefined &&
-							value.of.owned &&
-							value.of.owner === undefined &&
-							value.of.lifetime === undefined &&
-							this.#handle(value.of.name).representation === "pointer" &&
-							this.#handle(value.of.name).destroy !== undefined
-						);
-					return safe(value.of, true);
-				case "array":
-				case "union":
-					return safe(value.of, true);
-				case "tagged":
-					return value.cases.every((entry) => safe(entry.value, true));
-				case "record":
-					return this.#record(value.name).fields.every((field) =>
-						safe(field.value, true),
-					);
-				default:
-					return true;
-			}
-		};
 		return (
 			this.#resultResources(binding, "mal_return", (index) => `mal_output_${index}`)
 				.length > 0 &&
 			[binding.returns, ...binding.outputs.map((output) => output.value)].every((value) =>
-				safe(value),
+				supportsResultTransaction(value, this.#plan),
 			)
 		);
 	}
@@ -3532,7 +3531,7 @@ class BindingWriter {
 					: [
 							// A compiled caller's stack object takes the fields instead of a new object.
 							"if (mal_into != nullptr) {",
-							`\tif (${callsBack ? "!mal_ffi_threw(vm) && " : ""}mal_ffi_fill_${record}(vm, mal_return, mal_slots, false)) mal_ffi_stack_record(vm, &mal_ffi_record_${record}, mal_into, mal_slots);`,
+							`\tif (${callsBack ? "!mal_ffi_threw(vm) && " : ""}mal_ffi_fill_${record}(vm, mal_return, mal_slots, false${hasOwnedRecordFields(binding.returns, this.#plan) ? `, ${results ?? "nullptr"}` : ""})) mal_ffi_stack_record(vm, &mal_ffi_record_${record}, mal_into, mal_slots);`,
 							"} else {",
 							...owned.map((line) => `\t${line}`),
 							"}",

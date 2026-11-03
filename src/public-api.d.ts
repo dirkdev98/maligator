@@ -108,7 +108,7 @@ export interface MaligatorFfiTypeFacts {
 	handle?: MaligatorFfiHandle;
 	/** Select active union storage explicitly or from a record's discriminator. */
 	shape?: MaligatorFfiShape;
-	/** Explicit field lifetimes on handles, or retained ranges in caller-owned state.
+	/** Owned resource fields in value records, borrowed fields on handles, or retained ranges.
 	 * Range assignment writes the pointer and count together; C may advance them only
 	 * within the assigned range.
 	 */
@@ -144,10 +144,12 @@ export type MaligatorFfiFieldFacts =
 			handle?: never;
 	  }
 	| {
-			/** A borrowed pointer. Owner lifetime follows its destruction root;
-			 * library lifetime asserts that C storage remains valid for the process.
+			/** Owned fields transfer from value results; record inputs borrow their handles.
+			 * Borrowed accessor lifetime follows its owner or the C library's process storage.
 			 */
-			handle: { lifetime: "owner" | "library" };
+			handle:
+				| { lifetime: "owner" | "library"; owned?: never; fresh?: never }
+				| { owned: true; fresh?: boolean; lifetime?: never };
 			bytes?: never;
 			string?: never;
 			callable?: never;

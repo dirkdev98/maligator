@@ -1,5 +1,6 @@
 /* oxlint-disable no-console -- Reports observable conversion and ownership behavior. */
 import * as c from "maligator:ffi/transactions";
+import { createWorkerUrl, Worker } from "maligator:workers";
 function check(value: boolean, message: string): asserts value {
 	if (!value) throw new Error(message);
 }
@@ -429,5 +430,174 @@ for (const invoke of [c.tx_reentry_before, c.reentryBeforeAsync]) {
 		);
 		result.out![Symbol.dispose]();
 	}
+}
+function disposeRecord(value: c.TxRecord): void {
+	for (const resource of new Set([
+		value.nested.first,
+		value.nested.second,
+		value.nested.empty,
+		value.third,
+	]))
+		resource?.[Symbol.dispose]();
+}
+{
+	const before = c.tx_destroyed();
+	const fields = c.tx_fields();
+	check(
+		fields.first === fields.second &&
+			fields.empty === null &&
+			c.tx_read(fields.first!) === 79,
+		"direct record delivery preserves resource identity and null fields",
+	);
+	fields.first![Symbol.dispose]();
+	check(c.tx_destroyed() === before + 1, "direct record field owns its resource");
+}
+for (const invoke of [c.tx_record, c.recordAsync]) {
+	const before = c.tx_destroyed();
+	await rangeFailure(() => invoke(1));
+	check(
+		c.tx_destroyed() === before + 2,
+		"late failure releases distinct nested record resources once",
+	);
+	const value = await invoke(0);
+	check(
+		value.result.nested.first === value.result.nested.second &&
+			value.result.nested.empty === null,
+		"nested record aliases preserve canonical identity",
+	);
+	check(
+		c.tx_record_sum(value.result) === 147,
+		"record inputs borrow their resource fields",
+	);
+	disposeRecord(value.result);
+	check(
+		c.tx_destroyed() === before + 4,
+		"successful nested record transfers each owned field",
+	);
+}
+for (const invoke of [c.tx_record_existing, c.recordExistingAsync]) {
+	const prior = c.tx_borrow(89)!;
+	const before = c.tx_destroyed();
+	await rangeFailure(() => invoke(1));
+	check(
+		c.tx_destroyed() === before + 1 && c.tx_read(prior) === 89,
+		"failed record transfer preserves the prior borrowed alias",
+	);
+	prior[Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before + 1,
+		"failed field conversion preserves borrowed ownership",
+	);
+	c.tx_clear();
+	const borrowed = c.tx_borrow(97)!;
+	const result = await invoke(0);
+	check(
+		result.result.nested.first === borrowed && result.other === borrowed,
+		"record fields and direct outputs share a committed owner",
+	);
+	disposeRecord(result.result);
+	check(
+		c.tx_destroyed() === before + 4,
+		"successful fields commit prior ownership exactly once",
+	);
+}
+for (const invoke of [c.tx_record_release, c.recordReleaseAsync]) {
+	if (failNextCell !== undefined) {
+		const before = c.tx_destroyed();
+		watch(failNextCell);
+		let error: unknown;
+		try {
+			await Reflect.apply(invoke, undefined, [0]);
+		} catch (caught) {
+			error = caught;
+		}
+		watch(null);
+		check(
+			error instanceof Error && error.message === "Out of memory",
+			`final result assembly failure remains observable: ${String(error)}`,
+		);
+		check(
+			c.tx_destroyed() === before + 2,
+			"assembly failure rolls back already converted record fields",
+		);
+	}
+	const before = c.tx_destroyed();
+	const exposed: { current: c.TxResource | null } = { current: null };
+	watch(() => {
+		exposed.current = c.tx_peek();
+		c.tx_acquire();
+	});
+	await rangeFailure(() => invoke(1));
+	watch(null);
+	check(
+		exposed.current !== null &&
+			c.tx_read(exposed.current) === 71 &&
+			c.tx_destroyed() === before + 1,
+		"nested acquisition survives failure of its enclosing record result",
+	);
+	exposed.current[Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before + 2,
+		"independently acquired field retains its disposal policy",
+	);
+}
+{
+	const before = c.tx_destroyed();
+	let lent: c.TxResource | null = null;
+	check(
+		c.tx_record_visit((value) => {
+			lent = value.nested.first;
+			return c.tx_record_sum(value);
+		}) === 147,
+		"callback records lend fields while their invocation is active",
+	);
+	let closed = false;
+	try {
+		c.tx_read(lent!);
+	} catch (error) {
+		closed = error instanceof TypeError;
+	}
+	check(
+		closed && c.tx_destroyed() === before + 2,
+		"callback record loans expire without adopting C ownership",
+	);
+}
+{
+	const before = c.tx_destroyed();
+	const prior = c.tx_recycled()!;
+	const closing = c.destroyResourceAsync(prior);
+	const value = c.tx_fields_fresh();
+	await closing;
+	check(
+		value.first !== prior &&
+			value.first === value.second &&
+			c.tx_read(value.first!) === 101,
+		"fresh record fields retain a new lifetime at a closing address",
+	);
+	value.first![Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before + 2,
+		"old and fresh record lifetimes each release once",
+	);
+}
+{
+	const before = c.tx_destroyed();
+	const worker = new Worker(createWorkerUrl("./record-worker.ts", import.meta.url));
+	const admitted = new Promise<void>((resolve) => {
+		worker.port.onmessage = () => resolve();
+	});
+	worker.port.start();
+	await worker.ready;
+	worker.port.postMessage(null);
+	await admitted;
+	while (c.tx_record_started() === 0)
+		await new Promise((resolve) => {
+			setTimeout(resolve, 1);
+		});
+	await worker.terminate();
+	check(
+		c.tx_destroyed() === before + 2,
+		"abandoned async records release every distinct raw field",
+	);
 }
 console.log("result transactions passed");

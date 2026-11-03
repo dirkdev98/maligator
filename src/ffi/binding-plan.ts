@@ -400,6 +400,80 @@ export interface BindingPlan {
 	readonly skippedConstants: ReadonlyArray<SkippedConstant>;
 }
 
+type ResultShapes = Pick<BindingPlan, "records"> & {
+	readonly handles: ReadonlyMap<string, Pick<HandleType, "representation" | "destroy">>;
+};
+
+export function hasOwnedRecordFields(
+	value: JsValue,
+	shapes: Pick<BindingPlan, "records">,
+): boolean {
+	const field = (entry: MappedField): boolean =>
+		(entry.value.kind === "handle" && entry.value.owned) ||
+		hasOwnedRecordFields(entry.value, shapes);
+	switch (value.kind) {
+		case "record":
+			return shapes.records.get(value.name)!.fields.some(field);
+		case "tagged":
+			return value.cases.some((entry) => hasOwnedRecordFields(entry.value, shapes));
+		case "array":
+		case "sequence":
+		case "union":
+			return hasOwnedRecordFields(value.of, shapes);
+		default:
+			return false;
+	}
+}
+
+export function supportsResultTransaction(
+	value: JsValue,
+	shapes: ResultShapes,
+	context: "direct" | "record" | "other" = "direct",
+): boolean {
+	switch (value.kind) {
+		case "handle":
+			return (
+				context !== "other" &&
+				shapes.handles.get(value.name)!.representation === "pointer" &&
+				value.owner === undefined &&
+				value.lifetime === undefined
+			);
+		case "callable":
+			return false;
+		case "record":
+			return shapes.records
+				.get(value.name)!
+				.fields.every((field) =>
+					supportsResultTransaction(
+						field.value,
+						shapes,
+						context === "other" ? "other" : "record",
+					),
+				);
+		case "sequence":
+			if (value.of.kind === "handle")
+				return (
+					context === "direct" &&
+					value.free !== undefined &&
+					value.of.owned &&
+					value.of.owner === undefined &&
+					value.of.lifetime === undefined &&
+					shapes.handles.get(value.of.name)!.representation === "pointer" &&
+					shapes.handles.get(value.of.name)!.destroy !== undefined
+				);
+			return supportsResultTransaction(value.of, shapes, "other");
+		case "array":
+		case "union":
+			return supportsResultTransaction(value.of, shapes, "other");
+		case "tagged":
+			return value.cases.every((entry) =>
+				supportsResultTransaction(entry.value, shapes, "other"),
+			);
+		default:
+			return true;
+	}
+}
+
 type Position = "param" | "return" | "field" | "constant";
 
 /** How C code spells a struct: `struct tag`, or the typedef that names an unnamed one. */
@@ -463,8 +537,19 @@ function handleTypes(
 			)
 		)
 			throw new FfiError(`types.${key}.fields: managed fields require caller storage`);
-		if (typeFacts.fields !== undefined && handle === undefined)
-			throw new FfiError(`types.${key}.fields: explicit fields require a handle`);
+		if (typeFacts.fields !== undefined) {
+			const owned = Object.values(typeFacts.fields).every(
+				(field) => field.handle?.owned === true,
+			);
+			if (
+				(handle === undefined && !owned) ||
+				(handle !== undefined &&
+					Object.values(typeFacts.fields).some((field) => field.handle?.owned === true))
+			)
+				throw new FfiError(
+					`types.${key}.fields: independent owned fields require a plain value record; borrowed fields require a handle`,
+				);
+		}
 		if (handle === undefined) {
 			if (!model.typedefs.has(key) && !model.records.has(key) && !model.enums.has(key))
 				throw new FfiError(`types.${key}: the headers declare no type named '${key}'`);
@@ -830,6 +915,7 @@ class Planner {
 	readonly tagged = new Map<string, MappedTagged>();
 	readonly natives = new Map<string, NativeType>();
 	readonly #shapes = new Map<string, { alias: string; shape: MaligatorFfiShape }>();
+	readonly #fields = new Map<string, Readonly<Record<string, MaligatorFfiFieldFacts>>>();
 	readonly #handles: ReadonlyMap<string, Omit<HandleType, "fields" | "managedFields">>;
 	readonly #recordGaps = new Map<string, string>();
 	readonly #pending = new Set<string>();
@@ -845,6 +931,27 @@ class Planner {
 		this.#accesses = cRecordAccesses(model);
 		this.#handles = handles;
 		for (const [name, entry] of Object.entries(facts.types)) {
+			if (entry.fields !== undefined && entry.handle === undefined) {
+				const record = factRecord(model, name);
+				if (
+					record?.tag !== "struct" ||
+					!record.complete ||
+					handles.has(record.name) ||
+					entry.shape !== undefined
+				)
+					throw new FfiError(
+						`types.${name}.fields: independent ownership requires a complete plain struct`,
+					);
+				if (this.#fields.has(record.name))
+					throw new FfiError(`types.${name}.fields: this record already has field facts`);
+				const members = [...promotedCFields(model, record)];
+				for (const field of Object.keys(entry.fields))
+					if (!members.some((member) => member.name === field))
+						throw new FfiError(
+							`types.${name}.fields.${field}: the record has no such field`,
+						);
+				this.#fields.set(record.name, entry.fields);
+			}
 			if (entry.representation === "native") {
 				if (
 					entry.handle !== undefined ||
@@ -1027,7 +1134,8 @@ class Planner {
 						position === "return" &&
 						facts.borrowed !== true &&
 						"value" in mapped &&
-						this.#containsHandle(mapped.value)
+						this.#containsHandle(mapped.value) &&
+						!hasOwnedRecordFields(mapped.value, this)
 					)
 						return {
 							gap: "resource-bearing value results require a pointer result interface",
@@ -1663,7 +1771,24 @@ class Planner {
 			for (const field of promotedCFields(this.#model, record)) {
 				if (field.name === undefined && field.bitWidth !== undefined) continue;
 				if (field.name === undefined) return gap("anonymous members need a fact");
-				const mapped = this.#field(field);
+				const facts = this.#fields.get(name)?.[field.name]?.handle;
+				const mapped =
+					facts?.owned === true
+						? this.value(field.type, "return", {
+								...(facts.fresh === true ? { fresh: true } : {}),
+							})
+						: this.#field(field);
+				if (
+					facts?.owned === true &&
+					(!("value" in mapped) ||
+						mapped.value.kind !== "handle" ||
+						mapped.value.pass !== "pointer" ||
+						this.#handles.get(mapped.value.name)?.destroy === undefined ||
+						this.#handles.get(mapped.value.name)?.allocator !== undefined)
+				)
+					throw new FfiError(
+						`types.${name}.fields.${field.name}.handle: requires an independently owned pointer resource with a destructor`,
+					);
 				if ("gap" in mapped) {
 					// A struct that holds a pointer owns or borrows memory, so it crosses as a handle.
 					return resolveCType(this.#model, field.type).kind === "pointer"
@@ -1672,7 +1797,7 @@ class Planner {
 							)
 						: gap(`field '${field.name}': ${mapped.gap}`);
 				}
-				if (mapped.value.kind === "handle") {
+				if (mapped.value.kind === "handle" && facts?.owned !== true) {
 					return gap(
 						`field '${field.name}' holds a ${mapped.value.name} handle, so ${name} needs a handle fact too`,
 					);
@@ -3010,6 +3135,23 @@ class Planner {
 				);
 			}
 		} else gaps.push({ at: "return", reason: returns.gap });
+		if ("value" in returns) {
+			const results = [returns.value, ...outputs.map((output) => output.value)];
+			if (
+				results.some((value) => hasOwnedRecordFields(value, this)) &&
+				!results.every((value) =>
+					supportsResultTransaction(value, {
+						records: this.records,
+						handles: this.#handles,
+					}),
+				)
+			)
+				gaps.push({
+					at: "return",
+					reason:
+						"independently owned record fields require a complete plain-record result transaction",
+				});
+		}
 		if ("gap" in returns || gaps.length > 0) {
 			return { name: declaration.name, declaration, gaps };
 		}
@@ -3319,6 +3461,13 @@ export function planBindings(
 			skippedConstants.push({ name: macro.name, reason: mapped.gap });
 			continue;
 		}
+		if (hasOwnedRecordFields(mapped.value, planner)) {
+			skippedConstants.push({
+				name: macro.name,
+				reason: "a constant cannot transfer independently owned record fields",
+			});
+			continue;
+		}
 		const known =
 			mapped.value.kind === "native"
 				? undefined
@@ -3493,6 +3642,14 @@ export function planBindings(
 					...(retained === undefined ? {} : { retainedGlobal: retained }),
 				},
 			);
+			if (
+				!("gaps" in result) &&
+				access === "get" &&
+				hasOwnedRecordFields(result.returns, planner)
+			)
+				throw new FfiError(
+					`${at}.value: a global getter cannot transfer independently owned record fields`,
+				);
 			if (
 				!("gaps" in result) &&
 				access === "get" &&
