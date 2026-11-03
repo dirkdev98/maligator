@@ -167,9 +167,19 @@ it.each([
 	},
 	{
 		name: "tx_caller_owned_table",
-		status: "needs-facts",
+		status: "bound",
 		declaration:
 			"void tx_caller_owned_table(TxFields *rows, size_t capacity, size_t *length);",
+		types: {},
+		facts: {
+			params: { rows: { out: true, array: { length: "length", capacity: "capacity" } } },
+		},
+	},
+	{
+		name: "tx_caller_pointer_table",
+		status: "needs-facts",
+		declaration:
+			"void tx_caller_pointer_table(TxResource **rows, size_t capacity, size_t *length);",
 		types: {},
 		facts: {
 			params: { rows: { out: true, array: { length: "length", capacity: "capacity" } } },

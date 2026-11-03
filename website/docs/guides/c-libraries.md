@@ -689,8 +689,13 @@ and returns only the prefix C reports through `written`. To return the entire bu
 use the same integer input for `length` and `capacity`. Inout arrays use their original
 JavaScript length as the capacity and return a native snapshot without changing the
 input. Invalid capacities and written counts throw a `RangeError`; a zero-capacity
-buffer returns an empty array. Caller-owned buffers cannot declare `free` or contain
-resource handles without an element ownership contract.
+buffer returns an empty array. Caller-owned buffers cannot declare `free`.
+
+Record elements can transfer independently owned pointer fields using their
+`handle: { owned: true }` field facts, including fixed inner rows and tagged payloads.
+Only the written prefix transfers ownership. Invalid written counts trigger cleanup
+within the allocated capacity, preserving existing input ownership. Inout handles stay
+pinned through later getters, callbacks and worker execution.
 
 Use `string: { length: "byteCount" }` for UTF-8 pointer/count pairs. The count
 measures encoded bytes and disappears from input signatures. Counted text permits

@@ -1903,7 +1903,8 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Extend transactional conversion to caller-allocated resource array outputs.
+- [ ] Declare element ownership for flat pointer tables in caller-allocated output
+      and inout buffers.
       Preserve ownership and type views through allocation failure
       after partial conversion.
 

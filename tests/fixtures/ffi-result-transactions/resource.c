@@ -3,7 +3,7 @@
 #include <stdatomic.h>
 #include <unistd.h>
 struct TxResource { int value; };
-static TxResource *current;
+static _Atomic(TxResource *) current;
 static TxResource recycled;
 static _Atomic int destroyed;
 static int read_entries;
@@ -39,11 +39,15 @@ TxResource *tx_arm(void (*callback)(void), TxResource **other) {
     return current;
 }
 void tx_destroy(TxResource *value) {
-    if (current == value) current = NULL;
+    TxResource *expected = value;
+    atomic_compare_exchange_strong(&current, &expected, NULL);
     destroyed++;
     if (value != &recycled) free(value);
 }
-void tx_clear(void) { if (current != NULL) tx_destroy(current); }
+void tx_clear(void) {
+    TxResource *value = atomic_exchange(&current, NULL);
+    if (value != NULL) tx_destroy(value);
+}
 int tx_read(TxResource *value) { read_entries++; return value->value; }
 int tx_destroyed(void) { return destroyed; }
 
@@ -535,3 +539,74 @@ TxTaggedGrid tx_tagged_arm(void (*callback)(void)) {
     callback();
     return value;
 }
+
+static _Atomic int caller_started;
+static int caller_entries;
+void tx_caller_table(TxFields *rows, size_t capacity, long *written, int mode, TxResource **alias, const char **message, size_t *length) {
+    caller_entries++;
+    *message = "x"; *length = mode == 4 ? (size_t)-1 : 1;
+    *alias = NULL; *written = 0;
+    if (capacity == 0 || mode == 5) return;
+    TxResource *first = create(269);
+    *alias = first;
+    rows[0] = (TxFields) {first, first, NULL};
+    *written = 1;
+    if (capacity > 1 && mode != 1) {
+        rows[1] = (TxFields) {first, create(271), NULL};
+        *written = 2;
+    }
+    if (mode == 2) *written = -1;
+    if (mode == 3) *written = (long) capacity + 1;
+}
+void tx_caller_inout(TxFields *rows, size_t *length, int mode, TxResource **alias) {
+    caller_entries++;
+    *alias = *length == 0 ? NULL : rows[0].first;
+    if (mode == 1 && *length > 1) *length = 1;
+    if (mode == 2) *length = (size_t)-1;
+    if (mode == 4) { atomic_fetch_add(&caller_started, 1); usleep(150000); }
+    if (*alias != NULL && (*alias)->value < 0) abort();
+}
+void tx_caller_policy(TxPolicyFields *rows, size_t capacity, long *written, int bad) {
+    *written = 0;
+    if (capacity < 2) return;
+    TxResource *value = create(277);
+    rows[0] = (TxPolicyFields) {NULL, (TxSpecial *) value};
+    rows[1] = (TxPolicyFields) {value, NULL};
+    *written = bad ? (long) capacity + 1 : 2;
+}
+void tx_caller_tagged(TxTagged *rows, size_t capacity, long *written) {
+    *written = 0;
+    if (capacity < 3) return;
+    TxTaggedGrid value = tagged_grid_value(create(241), create(251));
+    for (size_t i = 0; i < 3; i++) rows[i] = value.values[i];
+    *written = 3;
+}
+void tx_caller_grid(TxFields (*rows)[2], size_t capacity, long *written) {
+    *written = 0;
+    if (capacity == 0) return;
+    TxResource *first = create(281), *second = create(283);
+    rows[0][0] = (TxFields) {first, second, NULL};
+    rows[0][1] = (TxFields) {second, first, NULL};
+    *written = 1;
+}
+TxBase *tx_caller_fresh(TxFreshRow *rows, size_t capacity, long *written, void (*close)(void), int bad) {
+    if (capacity < 2) abort();
+    TxFreshGrid value; const char *message; size_t length;
+    TxBase *base = tx_fresh_grid(0, close, &value, &message, &length);
+    rows[0] = value.rows[0]; rows[1] = value.rows[1];
+    *written = bad ? (long) capacity + 1 : 2;
+    return base;
+}
+void tx_caller_arm(TxFields *rows, size_t capacity, long *written, void (*callback)(void)) {
+    TxResource *alias; const char *message; size_t length;
+    tx_caller_table(rows, capacity, written, 0, &alias, &message, &length);
+    callback();
+}
+void tx_caller_wait(TxFields *rows, size_t capacity, long *written) {
+    TxResource *alias; const char *message; size_t length;
+    tx_caller_table(rows, capacity, written, 3, &alias, &message, &length);
+    atomic_fetch_add(&caller_started, 1);
+    usleep(150000);
+}
+int tx_caller_started(void) { return atomic_load(&caller_started); }
+int tx_caller_entries(void) { return caller_entries; }

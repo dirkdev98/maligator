@@ -1783,6 +1783,7 @@ class BindingWriter {
 		index: number,
 		context: string,
 		source: string | undefined,
+		inputs: string,
 		site: string,
 		fail: string,
 	): {
@@ -1840,7 +1841,7 @@ class BindingWriter {
 					fail,
 					[],
 					false,
-					"nullptr",
+					inputs,
 					false,
 					construct || value.of.kind === "array",
 				).map((line) => `\t${line}`),
@@ -2540,6 +2541,7 @@ class BindingWriter {
 			expression: string,
 			steps: ReadonlyArray<ResourceStep> = [],
 			count?: number,
+			capacity?: string,
 		): Array<ResultResource> => {
 			if (!hasResultHandles(value, this.#plan)) return [];
 			if (value.kind === "record")
@@ -2572,9 +2574,14 @@ class BindingWriter {
 						? String(value.length)
 						: countValue(binding, count, context);
 				if (length === undefined) throw new Error("resource array without a count");
+				// A malformed written count must not let cleanup leave initialized storage.
+				const bound =
+					capacity === undefined
+						? length
+						: `((uint64_t) (${length}) <= (uint64_t) (${capacity}) ? (uint64_t) (${length}) : (uint64_t) (${capacity}))`;
 				return collect(value.of, expression, [
 					...steps,
-					{ kind: "index", count: length, nullable: value.kind === "sequence" },
+					{ kind: "index", count: bound, nullable: value.kind === "sequence" },
 				]);
 			}
 			if (
@@ -2588,13 +2595,22 @@ class BindingWriter {
 			return [{ value, expression, steps }];
 		};
 		return [
-			{ value: binding.returns, expression: result, count: binding.resultCount },
+			{
+				value: binding.returns,
+				expression: result,
+				count: binding.resultCount,
+				capacity: undefined,
+			},
 			...binding.outputs.map((entry, index) => ({
 				value: entry.value,
 				expression: output(index),
 				count: entry.count,
+				capacity:
+					entry.capacity === undefined ? undefined : `${context}mal_capacity_${index}`,
 			})),
-		].flatMap(({ value, expression, count }) => collect(value, expression, [], count));
+		].flatMap(({ value, expression, count, capacity }) =>
+			collect(value, expression, [], count, capacity),
+		);
 	}
 
 	#resultFreshHints(
@@ -2788,6 +2804,14 @@ class BindingWriter {
 	): Array<string> {
 		const groups = this.#resultResources(binding, result, output, context, false);
 		const hints = this.#resultFreshHints(binding, result, output, context);
+		const capacityChecks = binding.outputs.flatMap((entry, index) => {
+			if (entry.capacity === undefined) return [];
+			const count = countValue(binding, entry.count, context);
+			if (count === undefined) throw new Error("caller array without a written count");
+			return [
+				`if (!mal_ffi_threw(vm)) mal_ffi_check_array_count(vm, (uint64_t) (${count}), ${context}mal_capacity_${index}, &mal_site_result);`,
+			];
+		});
 		const scopedHints = hints.some((hint) =>
 			hint.steps.some((step) => step.kind !== "field"),
 		);
@@ -2802,10 +2826,11 @@ class BindingWriter {
 			]),
 		];
 		const arrays = groups.filter((group) => resourceIndexes(group).length > 0);
-		if (arrays.length === 0) return inventory;
+		if (arrays.length === 0) return [...capacityChecks, ...inventory];
 		const capacity = this.#fresh("result_capacity");
 		const ready = this.#fresh("result_ready");
 		return [
+			...capacityChecks,
 			`uint64_t ${capacity} = ${groups.length - arrays.length};`,
 			`bool ${ready} = !mal_ffi_threw(vm);`,
 			...arrays.flatMap((group) => {
@@ -3072,6 +3097,7 @@ class BindingWriter {
 							index,
 							"",
 							entry.kind === "inout" ? argument(entry.param) : undefined,
+							inputs,
 							site,
 							"goto mal_done;",
 						);
@@ -4058,6 +4084,7 @@ class BindingWriter {
 							index,
 							"mal_ctx->",
 							entry.kind === "inout" ? argument(entry.param) : undefined,
+							inputs,
 							site,
 							"goto mal_failed;",
 						);

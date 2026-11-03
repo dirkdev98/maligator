@@ -2966,7 +2966,17 @@ class Planner {
 						gap(written.gap);
 						return;
 					}
-					if (written.value.kind !== "sequence" || this.#containsHandle(written.value)) {
+					if (
+						written.value.kind !== "sequence" ||
+						(this.#containsHandle(written.value) &&
+							!(
+								hasOwnedRecordFields(written.value, this) &&
+								supportsResultTransaction(written.value, {
+									records: this.records,
+									handles: this.#handles,
+								})
+							))
+					) {
 						gap("resource-bearing caller array outputs need explicit element ownership");
 						return;
 					}

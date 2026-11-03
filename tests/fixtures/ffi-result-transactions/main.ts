@@ -2,6 +2,7 @@
 import * as c from "maligator:ffi/transactions";
 import { createWorkerUrl, Worker } from "maligator:workers";
 import { checkArrays } from "./arrays.ts";
+import { checkCallerArrays } from "./caller-arrays.ts";
 import { checkTables } from "./tables.ts";
 import { checkTagged } from "./tagged.ts";
 function check(value: boolean, message: string): asserts value {
@@ -1195,4 +1196,5 @@ for (const drop of [() => Promise.resolve(c.tx_native_drop()), c.nativeDropAsync
 await checkArrays();
 await checkTables();
 await checkTagged();
+await checkCallerArrays();
 console.log("result transactions passed");

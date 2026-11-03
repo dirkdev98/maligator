@@ -78,6 +78,51 @@ export default {
 		},
 	},
 	functions: {
+		tx_caller_table: {
+			params: {
+				rows: { out: true, array: { length: "written", capacity: "capacity" } },
+				alias: { out: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "callerTableAsync",
+		},
+		tx_caller_inout: {
+			params: {
+				rows: { inout: true, array: { length: "length" } },
+				alias: { out: true },
+			},
+			async: "callerInoutAsync",
+		},
+		tx_caller_policy: {
+			params: { rows: { out: true, array: { length: "written", capacity: "capacity" } } },
+			async: "callerPolicyAsync",
+		},
+		tx_caller_tagged: {
+			params: { rows: { out: true, array: { length: "written", capacity: "capacity" } } },
+			async: "callerTaggedAsync",
+		},
+		tx_caller_grid: {
+			params: { rows: { out: true, array: { length: "written", capacity: "capacity" } } },
+			async: "callerGridAsync",
+		},
+		tx_caller_fresh: {
+			returns: { borrowed: true },
+			params: {
+				rows: { out: true, array: { length: "written", capacity: "capacity" } },
+				close: { callback: {} },
+			},
+			async: "callerFreshAsync",
+		},
+		tx_caller_arm: {
+			params: {
+				rows: { out: true, array: { length: "written", capacity: "capacity" } },
+				callback: { callback: {} },
+			},
+		},
+		tx_caller_wait: {
+			params: { rows: { out: true, array: { length: "written", capacity: "capacity" } } },
+			async: "callerWaitAsync",
+		},
 		tx_tagged_arm: { params: { callback: { callback: {} } } },
 		tx_tagged: {
 			params: {
