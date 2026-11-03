@@ -4,6 +4,7 @@ export default {
 	headers: ["resource.h"],
 	find: [{ includeDirs: ["."], sources: ["resource.c"] }],
 	types: {
+		TxPool: { handle: { destroy: "tx_pool_destroy", collect: false } },
 		TxChoice: { shape: { member: "fields" } },
 		TxConstChoice: { shape: { member: "fields" } },
 		TxFreshChoice: { shape: { member: "fields" } },
@@ -39,6 +40,39 @@ export default {
 		},
 	},
 	functions: {
+		tx_pool_create: { returns: { fresh: true } },
+		tx_pool_peek: { returns: { borrowed: true } },
+		tx_pool_reentry: {
+			params: { text: { out: true, string: true, free: "tx_text_free" } },
+		},
+		tx_pool_keep: {
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						returns: { lifetime: "registration" },
+					},
+				},
+			},
+		},
+		tx_pool_drop: { async: "poolDropAsync" },
+		tx_pool_watch: {
+			params: { callback: { callback: { owner: "value", replaced: true } } },
+		},
+		tx_native_keep: {
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						returns: { lifetime: "registration" },
+					},
+				},
+			},
+		},
+		tx_native_drop: { async: "nativeDropAsync" },
+		tx_native_wait: { params: { alias: { out: true } }, async: "nativeWaitAsync" },
 		tx_special_borrowed_inout: {
 			params: {
 				value: { inout: true, borrowed: true, nullable: true },

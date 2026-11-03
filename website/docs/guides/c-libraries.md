@@ -438,6 +438,9 @@ ownership. Result conversion publishes new views only after the complete deliver
 succeeds. A failed delivery preserves independently delivered aliases and refinements,
 including the original type of a new canonical handle exposed by a nested call.
 Borrowed echoes preserve callback-loan scope.
+When failed delivery leaves a resource retained by C, new ownership must wait for
+its native leases to end. A `fresh` result can identify the next lifetime at a reused
+address once C destroys the old resource; its registrations survive older cleanup.
 Caller allocations keep explicit C cleanup through views; a library destroy binding
 cannot take ownership of their outer storage.
 

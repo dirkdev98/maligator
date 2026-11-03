@@ -738,6 +738,7 @@ typedef struct MalFfiRetainedField {
 
 typedef struct MalFfiNativeHandle {
     struct MalFfiNativeHandle *next;
+    struct MalFfiNativeHandle *retired_next;
     MalFfiState *registry;
     MalValue wrapper;
     _Atomic u32 references;
@@ -755,6 +756,9 @@ typedef struct MalFfiNativeHandle {
     bool owns_storage;
     /** Failed delivery follows last lease release regardless of collection policy. */
     bool force_destroy;
+    bool retired;
+    bool destroying;
+    bool superseded;
     bool registration_owner;
 } MalFfiNativeHandle;
 
@@ -1102,6 +1106,67 @@ static MalFfiState *ffi_state(MalVm *vm) {
 
 static const MalFfiHandleType *ffi_handle_family(const MalFfiHandleType *type) {
     return type->family == nullptr ? type : type->family;
+}
+
+static pthread_mutex_t ffi_retired_lock = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic(MalFfiNativeHandle *) ffi_retired_handles;
+
+static bool ffi_retired_blocks(const MalFfiHandleType *type, const void *value, bool fresh) {
+    if (value == nullptr || atomic_load_explicit(&ffi_retired_handles, memory_order_acquire) == nullptr)
+        return false;
+    const MalFfiHandleType *family = ffi_handle_family(type);
+    bool found = false;
+    pthread_mutex_lock(&ffi_retired_lock);
+    for (MalFfiNativeHandle *native = atomic_load_explicit(&ffi_retired_handles, memory_order_relaxed);
+         native != nullptr; native = native->retired_next) {
+        if (!native->superseded && native->value == value
+            && ffi_handle_family(native->owner_type) == family
+            && (!fresh || !native->destroying)) {
+            found = true;
+            break;
+        }
+    }
+    if (!found && fresh) {
+        // C can return a new lifetime at this address before an older destructor returns.
+        for (MalFfiNativeHandle *native = atomic_load_explicit(&ffi_retired_handles, memory_order_relaxed);
+             native != nullptr; native = native->retired_next)
+            if (native->value == value && ffi_handle_family(native->owner_type) == family)
+                native->superseded = true;
+    }
+    pthread_mutex_unlock(&ffi_retired_lock);
+    return found;
+}
+
+static bool ffi_retired_guard(MalVm *vm, const MalFfiHandleType *type, void *value, bool fresh) {
+    if (!ffi_retired_blocks(type, value, fresh)) return true;
+    if (!mal_ffi_threw(vm))
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "A C result resource is awaiting native lease cleanup");
+    return false;
+}
+
+static void ffi_retired_register(MalFfiNativeHandle *native) {
+    // The detached lease must remain discoverable after its VM and wrapper disappear.
+    native->wrapper = mal_value_new_undefined();
+    native->retired = true;
+    pthread_mutex_lock(&ffi_retired_lock);
+    native->retired_next = atomic_load_explicit(&ffi_retired_handles, memory_order_relaxed);
+    atomic_store_explicit(&ffi_retired_handles, native, memory_order_release);
+    pthread_mutex_unlock(&ffi_retired_lock);
+}
+
+static void ffi_retired_unregister(MalFfiNativeHandle *native) {
+    pthread_mutex_lock(&ffi_retired_lock);
+    MalFfiNativeHandle *previous = nullptr;
+    MalFfiNativeHandle *entry = atomic_load_explicit(&ffi_retired_handles, memory_order_relaxed);
+    while (entry != native) {
+        previous = entry;
+        entry = entry->retired_next;
+    }
+    if (previous == nullptr)
+        atomic_store_explicit(&ffi_retired_handles, native->retired_next, memory_order_release);
+    else previous->retired_next = native->retired_next;
+    pthread_mutex_unlock(&ffi_retired_lock);
 }
 
 static usize ffi_handle_slot(const MalFfiHandleType *type, const void *pointer, usize capacity) {
@@ -2649,20 +2714,34 @@ static void ffi_native_handle_drop(MalFfiNativeHandle *handle, bool result) {
     bool previous = ffi_finalizing;
     ffi_finalizing = true;
     bool released = false;
-    if (handle->value != nullptr && handle->owned && (handle->force_destroy || handle->owner_type->collect)
-        && handle->owner_type->destroy != nullptr) {
+    bool destroys = handle->value != nullptr && handle->owned
+        && (handle->force_destroy || handle->owner_type->collect) && handle->owner_type->destroy != nullptr;
+    u64 callback_identity = 0;
+    if ((destroys || handle->owns_storage)
+        && atomic_load_explicit(&ffi_replaced_keyed, memory_order_relaxed) != 0) {
+        pthread_mutex_lock(&ffi_replaced_lock);
+        callback_identity = ffi_replaced_identity;
+        pthread_mutex_unlock(&ffi_replaced_lock);
+    }
+    if (handle->retired) {
+        pthread_mutex_lock(&ffi_retired_lock);
+        handle->destroying = true;
+        pthread_mutex_unlock(&ffi_retired_lock);
+    }
+    if (destroys) {
         if (handle->owner_type->destroy(handle->value)) {
             released = true;
-            ffi_replaced_drop(handle->value);
+            ffi_replaced_drop_before(handle->value, callback_identity);
         }
     }
     if (handle->owns_storage) {
-        ffi_replaced_drop(handle->value);
+        ffi_replaced_drop_before(handle->value, callback_identity);
         free(handle->value);
         released = true;
     }
     ffi_owner_finish(handle, released);
     ffi_native_handle_stores_clear(handle);
+    if (handle->retired) ffi_retired_unregister(handle);
     free(handle);
     ffi_finalizing = previous;
 }
@@ -3118,6 +3197,7 @@ bool mal_ffi_discard_needed(MalVm *vm, const MalFfiDiscards *discards,
     if (value == nullptr) return false;
     if (vm != nullptr && ffi_result_pending(vm, type, (void *) value, nullptr) != nullptr) return false;
     const MalFfiHandleType *family = ffi_handle_family(type);
+    if (ffi_retired_blocks(type, value, fresh)) return false;
     if (mal_ffi_is_library_resource(type, value)) return false;
     u32 flags = 0;
     if (vm != nullptr) {
@@ -3330,6 +3410,8 @@ static MalValue ffi_new_handle(
         ffi_handle_forget(open);
         open = nullptr;
     }
+    if (type->size == 0 && open == nullptr && !ffi_retired_guard(vm, type, value, fresh))
+        return mal_value_new_undefined();
     if (open != nullptr) {
         if (owned && ffi_handle_owner(open) != nullptr) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -3483,6 +3565,7 @@ mal_failed:
 void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
     const MalFfiHandleType *type, void *value, bool owned, bool fresh) {
     if (value == nullptr) return;
+    if (!ffi_retired_guard(vm, type, value, fresh)) return;
     if (results->state == nullptr) {
         MalFfiState *state = ffi_state(vm);
         if (state == nullptr) { if (!mal_ffi_threw(vm)) mal_ffi_out_of_memory(vm); }
@@ -3550,6 +3633,7 @@ static void ffi_result_retire(MalFfiHandleObject *handle, const MalFfiHandleType
         native->owned = true;
         native->owns_storage = handle->owns_storage;
         native->force_destroy = true;
+        ffi_retired_register(native);
         handle->native = nullptr;
         handle->owns_storage = false;
     }

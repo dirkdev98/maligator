@@ -194,11 +194,22 @@ for (const invoke of [
 		c.tx_registered_value() === 61 && c.tx_destroyed() === before + 1,
 		"native registration keeps an abandoned result alive",
 	);
+	let reacquired = false;
+	try {
+		c.tx_acquire();
+		reacquired = true;
+	} catch (error) {
+		check(
+			error instanceof TypeError,
+			"pending native retirement rejects acquisition with TypeError",
+		);
+	}
 	c.tx_register(null);
 	check(
 		c.tx_destroyed() === before + 2,
 		"last registration release destroys an abandoned manual resource once",
 	);
+	check(!reacquired, "an abandoned native lease cannot create a second owning wrapper");
 	let acquired: ReturnType<typeof c.tx_acquire> = null;
 	watch(() => {
 		acquired = c.tx_acquire();
@@ -1002,5 +1013,180 @@ for (const invoke of [c.tx_special_borrowed_inout, c.specialBorrowedInoutAsync])
 		"borrowed inout never acquires the input destructor",
 	);
 	c.tx_clear();
+}
+async function rejectsRetired(action: () => unknown): Promise<void> {
+	let caught: unknown;
+	try {
+		await action();
+	} catch (error) {
+		caught = error;
+	}
+	check(
+		caught instanceof TypeError,
+		"pending native retirement rejects pointer materialization",
+	);
+}
+for (const drop of [() => Promise.resolve(c.tx_native_drop()), c.nativeDropAsync]) {
+	const before = c.tx_destroyed();
+	watch(() => {
+		c.tx_native_keep(() => c.tx_peek()!);
+	});
+	await rangeFailure(() => c.tx_reentry(1));
+	watch(null);
+	for (const action of [
+		() => c.tx_acquire(),
+		() => c.tx_peek(),
+		() => c.tx_existing(0),
+		() => c.existingAsync(0),
+	])
+		await rejectsRetired(action);
+	check(
+		c.tx_destroyed() === before && c.tx_native_value() === 61,
+		"rejected aliases preserve the retired allocation for its native lease",
+	);
+	await drop();
+	check(
+		c.tx_native_value() === -1,
+		"C release clears its retained pointer before later observations",
+	);
+	check(
+		c.tx_destroyed() === before + 1,
+		`the final native lease destroys its retired resource exactly once: expected ${before + 1}, got ${c.tx_destroyed()}`,
+	);
+	const next = c.tx_create(163)!;
+	check(
+		c.tx_read(next) === 163,
+		"completed native retirement permits later ordinary allocations",
+	);
+	next[Symbol.dispose]();
+}
+{
+	const before = c.tx_destroyed();
+	watch(() => {
+		c.tx_register(() => c.tx_peek()!);
+	});
+	await rangeFailure(() => c.tx_reentry(1));
+	watch(() => {
+		c.tx_native_keep(() => c.tx_peek()!);
+	});
+	await rangeFailure(() => c.tx_reentry(1));
+	watch(null);
+	c.tx_register(null);
+	check(
+		c.tx_destroyed() === before + 1 && c.tx_native_value() === 61,
+		"releasing a non-head retirement preserves the other native lease",
+	);
+	c.tx_native_drop();
+	check(
+		c.tx_destroyed() === before + 2,
+		"independent retirement entries each release once",
+	);
+}
+{
+	const before = c.tx_destroyed();
+	watch(() => {
+		c.tx_native_keep(() => c.tx_peek()!);
+	});
+	await rangeFailure(() => c.tx_reentry_recycled(1));
+	watch(null);
+	await rejectsRetired(() => c.tx_recycled());
+	c.tx_native_drop();
+	const reused = c.tx_recycled()!;
+	check(
+		c.tx_read(reused) === 67 && c.tx_destroyed() === before + 1,
+		"final lease release makes the same native address available for a new lifetime",
+	);
+	reused[Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before + 2,
+		"reused storage has an independent destruction lifetime",
+	);
+}
+{
+	const before = c.tx_destroyed();
+	const worker = new Worker(createWorkerUrl("./retired-worker.ts", import.meta.url));
+	const retired = new Promise<void>((resolve) => {
+		worker.port.onmessage = () => resolve();
+	});
+	worker.port.start();
+	await worker.ready;
+	await retired;
+	await rejectsRetired(() => c.tx_acquire());
+	const admitted = new Promise<void>((resolve) => {
+		worker.port.onmessage = () => resolve();
+	});
+	worker.port.postMessage("wait");
+	await admitted;
+	while (c.tx_native_started() === 0)
+		await new Promise((resolve) => {
+			setTimeout(resolve, 1);
+		});
+	await worker.terminate();
+	check(
+		c.tx_destroyed() === before,
+		"native abandonment after VM teardown leaves an earlier retired lease intact",
+	);
+	check(
+		c.tx_native_value() === 61,
+		"retired storage remains usable by C after its VM exits",
+	);
+	await rejectsRetired(() => c.tx_peek());
+	await c.nativeDropAsync();
+	check(
+		c.tx_destroyed() === before + 1,
+		"foreign-thread release cleans retired storage without its original VM",
+	);
+}
+{
+	const before = c.tx_pool_destroyed();
+	const worker = new Worker(createWorkerUrl("./pool-worker.ts", import.meta.url));
+	const retired = new Promise<void>((resolve) => {
+		worker.port.onmessage = () => resolve();
+	});
+	worker.port.start();
+	await worker.ready;
+	await retired;
+	await worker.terminate();
+	c.tx_pool_pause();
+	const dropped = c.poolDropAsync();
+	while (c.tx_pool_released() === 0)
+		await new Promise((resolve) => {
+			setTimeout(resolve, 1);
+		});
+	let next: c.TxPool | null = null;
+	let caught: unknown;
+	try {
+		next = c.tx_pool_create();
+	} catch (error) {
+		caught = error;
+	}
+	let calls = 0;
+	if (next !== null)
+		check(
+			c.tx_pool_peek() === next,
+			"new aliases follow the admitted fresh pool generation",
+		);
+	if (next !== null)
+		c.tx_pool_watch(next, () => {
+			calls++;
+		});
+	c.tx_pool_continue();
+	await dropped;
+	if (next === null) c.tx_pool_clear();
+	check(
+		next !== null,
+		`a fresh generation can reuse storage while older cleanup finishes: ${String(caught)}`,
+	);
+	check(c.tx_pool_generation(next) === 2, "fresh pool storage has its own generation");
+	c.tx_pool_signal(next);
+	check(
+		calls === 1,
+		"older cleanup preserves the fresh generation's callback registration",
+	);
+	next[Symbol.dispose]();
+	check(
+		c.tx_pool_destroyed() === before + 2,
+		"overlapping pool generations each destroy once",
+	);
 }
 console.log("result transactions passed");

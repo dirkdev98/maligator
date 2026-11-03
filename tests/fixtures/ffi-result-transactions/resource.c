@@ -220,3 +220,75 @@ void tx_special_borrowed_inout(TxSpecial **value, int bad, const char **message,
     if (*value != NULL && *value != (TxSpecial *) current) abort();
     *value = tx_special_borrowed(bad, message, length);
 }
+static TxResource *native_kept;
+static void *native_data;
+static void (*native_release)(void *);
+void tx_native_keep(TxResource *(*callback)(void *), void *data, void (*release)(void *)) {
+    if (native_release != NULL) abort();
+    native_data = data;
+    native_release = release;
+    native_kept = callback(data);
+}
+int tx_native_value(void) { return native_kept == NULL ? -1 : native_kept->value; }
+void tx_native_drop(void) {
+    void (*release)(void *) = native_release;
+    void *data = native_data;
+    native_kept = NULL; native_data = NULL; native_release = NULL;
+    if (release != NULL) release(data);
+}
+static _Atomic int native_started;
+TxResource *tx_native_wait(TxResource **alias) {
+    TxResource *value = current;
+    *alias = value;
+    atomic_store(&native_started, 1);
+    usleep(150000);
+    return value;
+}
+int tx_native_started(void) { return atomic_load(&native_started); }
+struct TxPool { int generation; };
+static TxPool pool;
+static _Atomic int pool_busy, pool_pause, pool_released, pool_continue, pool_destroyed;
+static void *pool_data;
+static void (*pool_release)(void *);
+static void (*pool_watch)(TxPool *);
+TxPool *tx_pool_create(void) {
+    if (atomic_exchange(&pool_busy, 1)) abort();
+    pool.generation++;
+    return &pool;
+}
+TxPool *tx_pool_peek(void) { return &pool; }
+TxPool *tx_pool_reentry(char **text) {
+    TxPool *value = tx_pool_create();
+    *text = malloc(2);
+    if (*text == NULL) abort();
+    (*text)[0] = 'x'; (*text)[1] = 0; release_bad = 1;
+    return value;
+}
+void tx_pool_destroy(TxPool *value) {
+    if (value != &pool || !atomic_load(&pool_busy)) abort();
+    pool_watch = NULL;
+    atomic_fetch_add(&pool_destroyed, 1);
+    atomic_store(&pool_busy, 0);
+    if (atomic_exchange(&pool_pause, 0)) {
+        atomic_store(&pool_released, 1);
+        while (!atomic_load(&pool_continue)) usleep(1000);
+    }
+}
+void tx_pool_keep(TxPool *(*callback)(void *), void *data, void (*release)(void *)) {
+    if (pool_release != NULL || callback(data) != &pool) abort();
+    pool_data = data; pool_release = release;
+}
+void tx_pool_drop(void) {
+    void (*release)(void *) = pool_release;
+    void *data = pool_data;
+    pool_data = NULL; pool_release = NULL;
+    if (release != NULL) release(data);
+}
+void tx_pool_pause(void) { atomic_store(&pool_continue, 0); atomic_store(&pool_released, 0); atomic_store(&pool_pause, 1); }
+int tx_pool_released(void) { return atomic_load(&pool_released); }
+void tx_pool_continue(void) { atomic_store(&pool_continue, 1); }
+int tx_pool_destroyed(void) { return atomic_load(&pool_destroyed); }
+int tx_pool_generation(TxPool *value) { return value->generation; }
+void tx_pool_watch(TxPool *value, void (*callback)(TxPool *)) { if (value != &pool) abort(); pool_watch = callback; }
+void tx_pool_signal(TxPool *value) { if (value != &pool) abort(); if (pool_watch != NULL) pool_watch(value); }
+void tx_pool_clear(void) { tx_pool_destroy(&pool); }
