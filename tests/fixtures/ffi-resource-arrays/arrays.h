@@ -1,0 +1,40 @@
+#include <stddef.h>
+typedef struct ArrayResource ArrayResource;
+ArrayResource **array_make(int count, int bad, size_t *length, const char **message, size_t *message_length);
+ArrayResource **array_alias(ArrayResource ***other, size_t *length, size_t *other_length);
+ArrayResource *array_mixed(ArrayResource ***out, size_t *length, int bad, const char **message, size_t *message_length);
+ArrayResource **array_null(size_t *length);
+ArrayResource **array_fail(int bad, size_t *length, const char **message, size_t *message_length);
+ArrayResource **array_callback(void (*callback)(void), size_t *length);
+ArrayResource **array_existing(ArrayResource *prior, void (*callback)(void), size_t *length);
+ArrayResource **array_wait(size_t *length);
+void array_free(void *values);
+void array_watch(void (*callback)(void));
+ArrayResource *array_peek(int index);
+ArrayResource *resource_borrow(int value);
+void resource_clear(void);
+void resource_free(ArrayResource *value);
+int resource_value(ArrayResource *value);
+int resources_created(void);
+int resources_destroyed(void);
+int arrays_freed(void);
+int array_started(void);
+int allocation_failures(void);
+void allocation_reset(void);
+void *array_test_calloc(size_t count, size_t width);
+char *buffer_alias(char **other);
+void buffer_free_first(void *value);
+void buffer_free_second(void *value);
+int buffer_first_frees(void);
+int buffer_second_frees(void);
+
+ArrayResource **array_single(int count, size_t *length);
+ArrayResource **array_existing_bad(ArrayResource *prior, int bad, size_t *length, const char **message, size_t *message_length);
+ArrayResource *resource_recycled(void);
+void resource_on_destroy(void (*callback)(void));
+ArrayResource *array_fresh(ArrayResource ***out, size_t *length);
+char *buffer_single(int marker);
+
+ArrayResource *array_fresh_fail(ArrayResource ***out, size_t *length);
+void array_register(ArrayResource *(*callback)(void));
+int array_registered_value(void);

@@ -1841,9 +1841,8 @@ class BindingWriter {
 	}
 
 	/**
-	 * Statements that store a result or output in `target` and then release the C
-	 * memory when the caller owns it, even after a conversion threw. `pending` says
-	 * whether a callback or an earlier conversion may have left a throw pending.
+	 * Store a result or output in `target`; buffer release follows all output copies.
+	 * `pending` says whether a callback or an earlier conversion may have left a throw pending.
 	 */
 	#owned(
 		value: JsValue,
@@ -1855,10 +1854,6 @@ class BindingWriter {
 		discards: string,
 		results?: string,
 	): Array<string> {
-		const release =
-			"free" in value && value.free !== undefined
-				? [`if ((${expression}) != nullptr) ${value.free}((void *) (${expression}));`]
-				: [];
 		// A result that allocates nothing is simply ignored when a throw is pending.
 		const unlessThrew =
 			pending && this.#allocates(value) ? "if (!mal_ffi_threw(vm)) " : "";
@@ -1874,14 +1869,12 @@ class BindingWriter {
 			handle.destroy !== undefined
 		) {
 			const claim = `mal_ffi_discard_claim(vm, ${discards}, &mal_ffi_type_${handle.name}, (void *) (${expression}), ${value.fresh === true})`;
-			if (!pending)
-				return [`${claim};`, `${target} = ${this.write(value, expression)};`, ...release];
+			if (!pending) return [`${claim};`, `${target} = ${this.write(value, expression)};`];
 			const destroy = this.#fresh("discard");
 			return [
 				`bool ${destroy} = ${claim};`,
 				`if (!mal_ffi_threw(vm)) ${target} = ${this.write(value, expression)};`,
 				`else if (${destroy}) mal_ffi_destroy_${handle.name}((void *) (${expression}));`,
-				...release,
 			];
 		}
 		if (pending && handle?.destroy !== undefined) {
@@ -1895,19 +1888,16 @@ class BindingWriter {
 			return [
 				`if (!mal_ffi_threw(vm)) ${target} = ${this.write(value, expression)};`,
 				`else if (${present}) mal_ffi_destroy_${handle.name}(${pointer});`,
-				...release,
 			];
 		}
 		if (value.kind === "bytes") {
 			return [
 				`${unlessThrew}${target} = (${expression}) == nullptr ? mal_ffi_null() : mal_ffi_from_bytes(vm, ${expression}, (size_t) (${count}));`,
-				...release,
 			];
 		}
 		if (value.kind === "string" && value.counted) {
 			return [
 				`${unlessThrew}${target} = mal_ffi_from_string_length(vm, (const char *) (${expression}), (size_t) (${count}));`,
-				...release,
 			];
 		}
 		if (value.kind === "array") {
@@ -1920,7 +1910,6 @@ class BindingWriter {
 				),
 				`${done}:;`,
 				"}",
-				...release,
 			];
 		}
 		if (value.kind === "sequence") {
@@ -1945,7 +1934,7 @@ class BindingWriter {
 							false,
 						).map((line) => `\t\t\t${line.replaceAll("goto mal_done;", `goto ${done};`)}`)
 					: [
-							`\t\t\tmal_ffi_set_element(vm, ${array}, ${index}, ${this.write(value.of, `(${expression})[${index}]`)});`,
+							`\t\t\tmal_ffi_set_element(vm, ${array}, ${index}, ${results !== undefined && value.of.kind === "handle" ? `mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.of.name}, (void *) ((${expression})[${index}]), ${value.of.owned}, ${value.of.fresh === true})` : this.write(value.of, `(${expression})[${index}]`)});`,
 						]),
 				"\t\t}",
 				...(value.of.kind === "array" ? [`${done}:;`] : []),
@@ -1953,10 +1942,9 @@ class BindingWriter {
 				`\t\t${target} = ${array};`,
 				"\t}",
 				"}",
-				...release,
 			];
 		}
-		return [`${unlessThrew}${target} = ${this.write(value, expression)};`, ...release];
+		return [`${unlessThrew}${target} = ${this.write(value, expression)};`];
 	}
 
 	// Zero the selected union member so C reads an initialized representation.
@@ -2428,6 +2416,44 @@ class BindingWriter {
 		];
 	}
 
+	#resultReleases(
+		binding: BoundFunction,
+		result: string,
+		output: (index: number) => string,
+	): Array<string> {
+		const buffers = [
+			{ value: binding.returns, expression: result },
+			...binding.outputs.map((entry, index) => ({
+				value: entry.value,
+				expression: output(index),
+			})),
+		].flatMap(({ value, expression }) =>
+			"free" in value && value.free !== undefined
+				? [{ expression, release: value.free }]
+				: [],
+		);
+		return buffers.map((buffer, index) => {
+			const earlier = buffers
+				.slice(0, index)
+				.map(
+					(previous) =>
+						`(const void *) (${buffer.expression}) != (const void *) (${previous.expression})`,
+				);
+			return `if ((${buffer.expression}) != nullptr${earlier.length === 0 ? "" : ` && ${earlier.join(" && ")}`}) ${buffer.release}((void *) (${buffer.expression}));`;
+		});
+	}
+
+	#releaseCopiedResults(releases: ReadonlyArray<string>): Array<string> {
+		if (releases.length === 0) return [];
+		// C cleanup can collect after the converter's own root has been popped.
+		return [
+			"MalFfiRoots mal_release_roots;",
+			"mal_ffi_root(&mal_release_roots, &mal_result, 1);",
+			...releases,
+			"mal_ffi_unroot(&mal_release_roots);",
+		];
+	}
+
 	#discardCount(binding: BoundFunction): number {
 		return [binding.returns, ...binding.outputs.map((output) => output.value)].filter(
 			(value) =>
@@ -2436,6 +2462,132 @@ class BindingWriter {
 				this.#handle(value.name).representation === "pointer" &&
 				this.#handle(value.name).destroy !== undefined,
 		).length;
+	}
+
+	#resultResources(
+		binding: BoundFunction,
+		result: string,
+		output: (index: number) => string,
+		context = "",
+	): Array<{
+		value: Extract<JsValue, { kind: "handle" }>;
+		expression: string;
+		count?: string;
+	}> {
+		return [
+			{ value: binding.returns, expression: result, count: binding.resultCount },
+			...binding.outputs.map((entry, index) => ({
+				value: entry.value,
+				expression: output(index),
+				count: entry.count,
+			})),
+		].flatMap(({ value, expression, count }) => {
+			const element = value.kind === "sequence" ? value.of : value;
+			if (
+				element.kind !== "handle" ||
+				!element.owned ||
+				this.#handle(element.name).representation !== "pointer" ||
+				this.#handle(element.name).destroy === undefined
+			)
+				return [];
+			if (value.kind !== "sequence") return [{ value: element, expression }];
+			const length = countValue(binding, count, context);
+			if (length === undefined) throw new Error("resource array without a count");
+			return [{ value: element, expression, count: length }];
+		});
+	}
+
+	#resultFreshHints(
+		binding: BoundFunction,
+		result: string,
+		output: (index: number) => string,
+	): Array<{ value: Extract<JsValue, { kind: "handle" }>; expression: string }> {
+		return [
+			{ value: binding.returns, expression: result },
+			...binding.outputs.map((entry, index) => ({
+				value: entry.value,
+				expression: output(index),
+			})),
+		].flatMap(({ value, expression }) =>
+			value.kind === "handle" &&
+			value.fresh === true &&
+			this.#handle(value.name).representation === "pointer"
+				? [{ value, expression }]
+				: [],
+		);
+	}
+
+	#resourceFresh(
+		value: Extract<JsValue, { kind: "handle" }>,
+		expression: string,
+		hints: ReadonlyArray<{
+			value: Extract<JsValue, { kind: "handle" }>;
+			expression: string;
+		}>,
+	): string {
+		if (value.fresh === true) return "true";
+		return hints.length === 0
+			? "false"
+			: hints
+					.map(
+						(hint) =>
+							`mal_ffi_same_resource(&mal_ffi_type_${value.name}, (void *) (${expression}), &mal_ffi_type_${hint.value.name}, (void *) (${hint.expression}))`,
+					)
+					.join(" || ");
+	}
+
+	#discardResources(
+		groups: ReadonlyArray<{
+			value: Extract<JsValue, { kind: "handle" }>;
+			expression: string;
+			count?: string;
+		}>,
+		vm: string,
+		discards: string,
+		hints: ReadonlyArray<{
+			value: Extract<JsValue, { kind: "handle" }>;
+			expression: string;
+		}> = [],
+	): Array<string> {
+		return groups.flatMap((group, position) => {
+			const index = this.#fresh("discard_index");
+			const pointer =
+				group.count === undefined ? group.expression : `(${group.expression})[${index}]`;
+			const duplicate = this.#fresh("discard_duplicate");
+			const fresh = this.#fresh("discard_fresh");
+			const compare = (other: (typeof groups)[number], bound?: string): Array<string> => {
+				const prior = this.#fresh("discard_prior");
+				const otherPointer =
+					other.count === undefined
+						? other.expression
+						: `(${other.expression})[${prior}]`;
+				const match = `mal_ffi_same_resource(&mal_ffi_type_${group.value.name}, (void *) (${pointer}), &mal_ffi_type_${other.value.name}, (void *) (${otherPointer}))`;
+				const statement = `${duplicate} = true;`;
+				if (other.count === undefined) return [`if (${match}) ${statement}`];
+				const length = bound === undefined ? `(uint64_t) (${other.count})` : bound;
+				return [
+					`if ((${other.expression}) != nullptr && (uint64_t) (${other.count}) <= INT32_MAX)`,
+					`	for (uint64_t ${prior} = 0; ${prior} < ${length}; ${prior}++)`,
+					`		if (${match}) ${statement}`,
+				];
+			};
+			const body = [
+				`bool ${duplicate} = false;`,
+				`bool ${fresh} = ${this.#resourceFresh(group.value, pointer, hints)};`,
+				...groups.slice(0, position).flatMap((other) => compare(other)),
+				...(group.count === undefined ? [] : compare(group, index)),
+				`if (!${duplicate}) mal_ffi_discard_resource(${vm}, ${discards}, &mal_ffi_type_${group.value.name}, (void *) (${pointer}), ${fresh});`,
+			];
+			return group.count === undefined
+				? body
+				: [
+						`if ((${group.expression}) != nullptr && (uint64_t) (${group.count}) <= INT32_MAX) {`,
+						`	for (uint64_t ${index} = 0; ${index} < (uint64_t) (${group.count}); ${index}++) {`,
+						...body.map((line) => `		${line}`),
+						"	}",
+						"}",
+					];
+		});
 	}
 
 	#transactionalResults(binding: BoundFunction): boolean {
@@ -2450,8 +2602,19 @@ class BindingWriter {
 					);
 				case "callable":
 					return false;
-				case "array":
 				case "sequence":
+					if (value.of.kind === "handle")
+						return (
+							!nested &&
+							value.free !== undefined &&
+							value.of.owned &&
+							value.of.owner === undefined &&
+							value.of.lifetime === undefined &&
+							this.#handle(value.of.name).representation === "pointer" &&
+							this.#handle(value.of.name).destroy !== undefined
+						);
+					return safe(value.of, true);
+				case "array":
 				case "union":
 					return safe(value.of, true);
 				case "tagged":
@@ -2465,7 +2628,8 @@ class BindingWriter {
 			}
 		};
 		return (
-			this.#discardCount(binding) > 0 &&
+			this.#resultResources(binding, "mal_return", (index) => `mal_output_${index}`)
+				.length > 0 &&
 			[binding.returns, ...binding.outputs.map((output) => output.value)].every((value) =>
 				safe(value),
 			)
@@ -2476,22 +2640,47 @@ class BindingWriter {
 		binding: BoundFunction,
 		result: string,
 		output: (index: number) => string,
+		context = "",
 	): Array<string> {
+		const groups = this.#resultResources(binding, result, output, context);
+		const hints = this.#resultFreshHints(binding, result, output);
+		const inventory = groups.flatMap((group) => {
+			const claim = (pointer: string) =>
+				`mal_ffi_result_claim(vm, &mal_results, &mal_ffi_type_${group.value.name}, (void *) (${pointer}), ${this.#resourceFresh(group.value, pointer, hints)});`;
+			if (group.count === undefined) return [claim(group.expression)];
+			const index = this.#fresh("result_index");
+			return [
+				`if ((${group.expression}) != nullptr)`,
+				`	for (uint64_t ${index} = 0; ${index} < (uint64_t) (${group.count}); ${index}++)`,
+				`		${claim(`(${group.expression})[${index}]`)}`,
+			];
+		});
+		const arrays = groups.filter((group) => group.count !== undefined);
+		if (arrays.length === 0) return inventory;
+		const capacity = this.#fresh("result_capacity");
+		const ready = this.#fresh("result_ready");
 		return [
-			{ value: binding.returns, expression: result },
-			...binding.outputs.map((entry, index) => ({
-				value: entry.value,
-				expression: output(index),
-			})),
-		].flatMap(({ value, expression }) =>
-			value.kind === "handle" &&
-			value.owned &&
-			this.#handle(value.name).destroy !== undefined
-				? [
-						`mal_ffi_result_claim(vm, &mal_results, &mal_ffi_type_${value.name}, (void *) (${expression}), ${value.fresh === true});`,
-					]
-				: [],
-		);
+			`uint64_t ${capacity} = ${groups.length - arrays.length};`,
+			`bool ${ready} = !mal_ffi_threw(vm);`,
+			...arrays.flatMap((group) => [
+				`if ((${group.expression}) != nullptr) {`,
+				`	if ((uint64_t) (${group.count}) > INT32_MAX) {`,
+				`		if (!mal_ffi_threw(vm)) mal_ffi_check_count(vm, (size_t) (${group.count}), 32, true, &mal_site_result);`,
+				`		${ready} = false;`,
+				`	} else if ((uint64_t) (${group.count}) > UINT64_MAX - ${capacity}) {`,
+				`		if (!mal_ffi_threw(vm)) mal_ffi_out_of_memory(vm);`,
+				`		${ready} = false;`,
+				`	} else ${capacity} += (uint64_t) (${group.count});`,
+				"}",
+			]),
+			`if (${ready} && mal_ffi_results_reserve(vm, &mal_results, ${capacity})) {`,
+			...inventory.map((line) => `	${line}`),
+			"} else {",
+			...this.#discardResources(groups, "vm", "nullptr", hints).map(
+				(line) => `	${line}`,
+			),
+			"}",
+		];
 	}
 
 	callableDeclarations(): Array<string> {
@@ -2550,8 +2739,8 @@ class BindingWriter {
 			);
 		if (transactional)
 			locals.push(
-				`MalFfiResultClaim mal_result_claims[${discardCount}];`,
-				`MalValue mal_result_handles[${2 * discardCount}];`,
+				`MalFfiResultClaim mal_result_claims[${Math.max(discardCount, 1)}];`,
+				`MalValue mal_result_handles[${2 * Math.max(discardCount, 1)}];`,
 				"MalFfiResults mal_results;",
 			);
 		const body: Array<string> = [];
@@ -3242,6 +3431,9 @@ class BindingWriter {
 					];
 		const count = countValue(binding, binding.resultCount);
 		const after: Array<string> = [];
+		const releases = this.#releaseCopiedResults(
+			this.#resultReleases(binding, "mal_return", outputValue),
+		);
 		const claims = transactional
 			? this.#resultClaims(binding, "mal_return", outputValue)
 			: [];
@@ -3359,6 +3551,7 @@ class BindingWriter {
 				);
 			});
 			after.push(
+				...releases,
 				"if (!mal_ffi_threw(vm)) {",
 				// A compiled caller's stack object takes the fields instead of a new object.
 				"\tif (mal_into != nullptr) {",
@@ -3369,7 +3562,7 @@ class BindingWriter {
 				"mal_ffi_unroot(&mal_output_roots);",
 				"if (mal_ffi_threw(vm)) mal_result = mal_ffi_undefined();",
 			);
-		}
+		} else after.push(...releases);
 		return [
 			...trampolines,
 			"",
@@ -3395,7 +3588,7 @@ class BindingWriter {
 			...locals.map((line) => `\t${line}`),
 			...(transactional
 				? [
-						`\tmal_ffi_results_init(&mal_results, mal_result_claims, mal_result_handles, ${discardCount});`,
+						`\tmal_ffi_results_init(&mal_results, mal_result_claims, mal_result_handles, ${Math.max(discardCount, 1)});`,
 					]
 				: []),
 			...(compoundInputs
@@ -3492,10 +3685,6 @@ class BindingWriter {
 		const callbackArguments: Array<string> = [];
 		const trampolines: Array<string> = [];
 		const discard = (value: JsValue, expression: string): Array<string> => {
-			if ("free" in value && value.free !== undefined)
-				return [
-					`if ((${expression}) != nullptr) ${value.free}((void *) (${expression}));`,
-				];
 			if (value.kind !== "handle" || !value.owned) return [];
 			const handle = this.#handle(value.name);
 			if (handle.destroy === undefined) return [];
@@ -3505,22 +3694,40 @@ class BindingWriter {
 						`if (mal_ffi_discard_claim(nullptr, &mal_ctx->mal_discards, &mal_ffi_type_${handle.name}, (void *) (${expression}), ${value.fresh === true})) mal_ffi_destroy_${handle.name}((void *) (${expression}));`,
 					];
 		};
+		const resourceGroups = this.#resultResources(
+			binding,
+			returnValue,
+			outputValue,
+			"mal_ctx->",
+		);
+		const pointerResults = resourceGroups.length > 0;
 		const nativeDisposals = [
-			...discard(binding.returns, returnValue),
-			...binding.outputs.flatMap((output, index) =>
-				discard(output.value, outputValue(index)),
+			...this.#discardResources(
+				resourceGroups,
+				"nullptr",
+				"&mal_ctx->mal_discards",
+				this.#resultFreshHints(binding, returnValue, outputValue),
 			),
+			...[
+				{ value: binding.returns, expression: returnValue },
+				...binding.outputs.map((output, index) => ({
+					value: output.value,
+					expression: outputValue(index),
+				})),
+			].flatMap(({ value, expression }) =>
+				value.kind === "handle" && this.#handle(value.name).representation === "struct"
+					? discard(value, expression)
+					: [],
+			),
+			...this.#resultReleases(binding, returnValue, outputValue),
 		];
+
 		const tracksRun =
 			binding.closes !== undefined ||
 			nativeDisposals.length > 0 ||
 			binding.params.some(({ value }) => value.kind === "callback" && value.kept);
 		const fields: Array<string> = [];
-		if (discardCount > 0)
-			fields.push(
-				"MalFfiDiscards mal_discards;",
-				`MalFfiDiscardedHandle mal_discarded[${discardCount}];`,
-			);
+		if (pointerResults) fields.push("MalFfiDiscards mal_discards;");
 		if (tracksRun) fields.push("bool mal_ran;");
 		if (nativeDisposals.length > 0) fields.push("bool mal_result_observed;");
 		const body: Array<string> = [];
@@ -4094,6 +4301,9 @@ class BindingWriter {
 		for (const temporary of strings) fields.push(`MalFfiString ${temporary};`);
 		const call = `${declaration.name}(${declaration.params.map((_, index) => `${constArguments.has(index) ? "*" : ""}mal_ctx->mal_argument_${String(index)}`).join(", ")})`;
 		const count = countValue(binding, binding.resultCount, "mal_ctx->");
+		const releases = this.#releaseCopiedResults(
+			this.#resultReleases(binding, returnValue, outputValue),
+		);
 		const produce: Array<string> = returns
 			? this.#owned(
 					binding.returns,
@@ -4128,11 +4338,12 @@ class BindingWriter {
 						results,
 					),
 				),
+				...releases,
 				"if (!mal_ffi_threw(vm)) mal_result = mal_ffi_new_record(vm, &mal_output_type, mal_outputs);",
 				"mal_ffi_unroot(&mal_output_roots);",
 				"if (mal_ffi_threw(vm)) mal_result = mal_ffi_undefined();",
 			);
-		}
+		} else produce.push(...releases);
 		const keep = String(Math.max(kept, 1));
 		return [
 			"",
@@ -4203,11 +4414,11 @@ class BindingWriter {
 			"\tif (!mal_ran) return mal_result;",
 			...(transactional
 				? [
-						`\tMalFfiResultClaim mal_result_claims[${discardCount}];`,
-						`\tMalValue mal_result_handles[${2 * discardCount}];`,
+						`\tMalFfiResultClaim mal_result_claims[${Math.max(discardCount, 1)}];`,
+						`\tMalValue mal_result_handles[${2 * Math.max(discardCount, 1)}];`,
 						"\tMalFfiResults mal_results;",
-						`\tmal_ffi_results_init(&mal_results, mal_result_claims, mal_result_handles, ${discardCount});`,
-						...this.#resultClaims(binding, returnValue, outputValue).map(
+						`\tmal_ffi_results_init(&mal_results, mal_result_claims, mal_result_handles, ${Math.max(discardCount, 1)});`,
+						...this.#resultClaims(binding, returnValue, outputValue, "mal_ctx->").map(
 							(line) => `\t${line}`,
 						),
 					]
@@ -4246,7 +4457,7 @@ class BindingWriter {
 					? `\t${retained ? "if (!mal_ctx->mal_ran) " : ""}mal_ffi_release(mal_ctx->mal_callback_${String(index)});`
 					: `\tif (mal_ctx->${replacement}.site == nullptr) mal_ffi_release(mal_ctx->mal_callback_${String(index)});\n\tmal_ffi_replace_finish(&mal_ctx->${replacement});`,
 			),
-			...(discardCount > 0 ? ["\tmal_ffi_discards_finish(&mal_ctx->mal_discards);"] : []),
+			...(pointerResults ? ["\tmal_ffi_discards_finish(&mal_ctx->mal_discards);"] : []),
 			"\tfree(mal_ctx);",
 			"}",
 			"",
@@ -4269,9 +4480,9 @@ class BindingWriter {
 			...(compoundInputs
 				? ["\tmal_ffi_inputs_init(&mal_ctx->mal_inputs, mal_ctx, true);"]
 				: []),
-			...(discardCount > 0
+			...(pointerResults
 				? [
-						`\tif (!mal_ffi_discards_init(vm, &mal_ctx->mal_discards, mal_ctx->mal_discarded, ${discardCount})) goto mal_failed;`,
+						`\tif (!mal_ffi_discards_init(vm, &mal_ctx->mal_discards, nullptr, 0)) goto mal_failed;`,
 					]
 				: []),
 			...body.map((line) => `\t${line}`),

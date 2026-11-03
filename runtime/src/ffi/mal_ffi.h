@@ -175,6 +175,13 @@ void mal_ffi_discards_finish(MalFfiDiscards *discards);
  */
 bool mal_ffi_discard_claim(MalVm *vm, MalFfiDiscards *discards,
     const MalFfiHandleType *type, const void *value, bool fresh);
+/** Query raw ownership without allocating or recording a conversion attempt. */
+bool mal_ffi_discard_needed(MalVm *vm, const MalFfiDiscards *discards,
+    const MalFfiHandleType *type, const void *value, bool fresh);
+bool mal_ffi_same_resource(const MalFfiHandleType *left_type, const void *left,
+    const MalFfiHandleType *right_type, const void *right);
+void mal_ffi_discard_resource(MalVm *vm, const MalFfiDiscards *discards,
+    const MalFfiHandleType *type, void *value, bool fresh);
 /**
  * Allocate zeroed caller storage and wrap its stable pointer. Disposing or collecting
  * this handle frees the outer storage; C initialization and cleanup are explicit.
@@ -727,6 +734,9 @@ typedef struct MalFfiResults {
     MalFfiResultClaim *claims;
     struct MalFfiResults *previous;
     void *state;
+    void *allocation;
+    int32_t *lookup;
+    size_t lookup_capacity;
     int32_t count;
     int32_t capacity;
 } MalFfiResults;
@@ -738,6 +748,8 @@ typedef struct MalFfiResults {
  */
 void mal_ffi_results_init(MalFfiResults *results, MalFfiResultClaim *claims,
     MalValue *handles, int32_t capacity);
+/** Grow before inventory; raw resources still belong to the caller if reservation fails. */
+bool mal_ffi_results_reserve(MalVm *vm, MalFfiResults *results, uint64_t capacity);
 void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
     const MalFfiHandleType *type, void *value, bool fresh);
 MalValue mal_ffi_result_handle(MalVm *vm, MalFfiResults *results,

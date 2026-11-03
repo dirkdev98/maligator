@@ -52,9 +52,10 @@ void tx_invalid(TxManaged *state, TxResource **out) {
     *out = create(47);
 }
 
-static void (*watch)(void);
+static void (*watch)(int);
+static int release_bad;
 static TxResource *registered;
-void tx_watch(void (*callback)(void)) { watch = callback; }
+void tx_watch(void (*callback)(int)) { watch = callback; }
 TxResource *tx_peek(void) { return current; }
 TxResource *tx_acquire(void) { return current; }
 TxResource *tx_reentry(int bad, char **text, const char **message, size_t *length) {
@@ -62,10 +63,10 @@ TxResource *tx_reentry(int bad, char **text, const char **message, size_t *lengt
     if (*text == NULL) abort();
     (*text)[0] = 'x'; (*text)[1] = 0;
     *message = "x";
-    *length = bad ? (size_t)-1 : 1;
+    *length = 1; release_bad = bad;
     return tx_create(61);
 }
-void tx_text_free(void *text) { if (watch != NULL) watch(); free(text); }
+void tx_text_free(void *text) { int bad = release_bad; if (watch != NULL) watch(bad); free(text); }
 void tx_register(TxResource *(*callback)(void)) { registered = callback == NULL ? NULL : callback(); }
 int tx_registered_value(void) { return registered == NULL ? -1 : registered->value; }
 
@@ -87,7 +88,7 @@ TxResource *tx_reentry_existing(int bad, char **text, const char **message, size
     if (*text == NULL) abort();
     (*text)[0] = 'x'; (*text)[1] = 0;
     *message = "x";
-    *length = bad ? (size_t)-1 : 1;
+    *length = 1; release_bad = bad;
     return current;
 }
 TxResource *tx_recycled(void) { recycled.value = 67; current = &recycled; return current; }

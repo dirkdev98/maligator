@@ -2944,22 +2944,19 @@ void mal_ffi_discards_finish(MalFfiDiscards *discards) {
     discards->state = nullptr;
 }
 
-bool mal_ffi_discard_claim(MalVm *vm, MalFfiDiscards *discards,
+static MalFfiResultClaim *ffi_result_pending(MalVm *vm, const MalFfiHandleType *type,
+    void *value, MalFfiResults *exclude);
+
+bool mal_ffi_same_resource(const MalFfiHandleType *left_type, const void *left,
+    const MalFfiHandleType *right_type, const void *right) {
+    return left == right && ffi_handle_family(left_type) == ffi_handle_family(right_type);
+}
+
+bool mal_ffi_discard_needed(MalVm *vm, const MalFfiDiscards *discards,
     const MalFfiHandleType *type, const void *value, bool fresh) {
     if (value == nullptr) return false;
+    if (vm != nullptr && ffi_result_pending(vm, type, (void *) value, nullptr) != nullptr) return false;
     const MalFfiHandleType *family = ffi_handle_family(type);
-    MalFfiDiscardedHandle *item = nullptr;
-    for (i32 index = 0; index < discards->count; index++) {
-        if (discards->items[index].family != family || discards->items[index].value != value) continue;
-        item = &discards->items[index];
-        if (item->claimed) return false;
-        break;
-    }
-    if (item == nullptr) {
-        if (discards->count == discards->capacity) abort();
-        item = &discards->items[discards->count++];
-        *item = (MalFfiDiscardedHandle) {.family = family, .value = value};
-    }
     if (mal_ffi_is_library_resource(type, value)) return false;
     u32 flags = 0;
     if (vm != nullptr) {
@@ -2976,7 +2973,42 @@ bool mal_ffi_discard_claim(MalVm *vm, MalFfiDiscards *discards,
                 if (entry->type == family && entry->pointer == value) { flags = (u32) entry->claim; break; }
             }
     }
-    item->claimed = !(flags & MAL_FFI_DISCARD_VALID) || (fresh && (flags & MAL_FFI_DISCARD_REPLACEABLE));
+    return !(flags & MAL_FFI_DISCARD_VALID) || (fresh && (flags & MAL_FFI_DISCARD_REPLACEABLE));
+}
+
+void mal_ffi_discard_resource(MalVm *vm, const MalFfiDiscards *discards,
+    const MalFfiHandleType *type, void *value, bool fresh) {
+    if (!mal_ffi_discard_needed(vm, discards, type, value, fresh)) return;
+    MalCompletion completion = vm == nullptr ? (MalCompletion) {0} : vm->completion;
+    MalRootSpan root;
+    if (vm != nullptr) mal_gc_root(&root, &completion.value, 1);
+    bool previous = ffi_finalizing;
+    ffi_finalizing = true;
+    if (type->destroy(value)) ffi_replaced_drop(value);
+    ffi_finalizing = previous;
+    if (vm != nullptr) {
+        vm->completion = completion;
+        mal_gc_unroot(&root);
+    }
+}
+
+bool mal_ffi_discard_claim(MalVm *vm, MalFfiDiscards *discards,
+    const MalFfiHandleType *type, const void *value, bool fresh) {
+    if (value == nullptr) return false;
+    const MalFfiHandleType *family = ffi_handle_family(type);
+    MalFfiDiscardedHandle *item = nullptr;
+    for (i32 index = 0; index < discards->count; index++) {
+        if (discards->items[index].family != family || discards->items[index].value != value) continue;
+        item = &discards->items[index];
+        if (item->claimed) return false;
+        break;
+    }
+    if (item == nullptr) {
+        if (discards->count == discards->capacity) abort();
+        item = &discards->items[discards->count++];
+        *item = (MalFfiDiscardedHandle) {.family = family, .value = value};
+    }
+    item->claimed = mal_ffi_discard_needed(vm, discards, type, value, fresh);
     return item->claimed;
 }
 
@@ -3030,6 +3062,16 @@ static bool ffi_type_supports(const MalFfiHandleType *actual, const MalFfiHandle
 
 static MalFfiResultClaim *ffi_result_find(MalFfiResults *results,
     const MalFfiHandleType *type, void *value) {
+    if (results->lookup != nullptr) {
+        const MalFfiHandleType *family = ffi_handle_family(type);
+        for (usize slot = ffi_handle_slot(family, value, results->lookup_capacity);;
+             slot = (slot + 1) & (results->lookup_capacity - 1)) {
+            i32 found = results->lookup[slot];
+            if (found == 0) return nullptr;
+            MalFfiResultClaim *claim = &results->claims[found - 1];
+            if (claim->value == value && ffi_handle_family(claim->type) == family) return claim;
+        }
+    }
     for (i32 index = 0; index < results->count; index++) {
         MalFfiResultClaim *claim = &results->claims[index];
         if (claim->value == value && ffi_handle_family(claim->type) == ffi_handle_family(type)) return claim;
@@ -3234,13 +3276,43 @@ void mal_ffi_results_init(MalFfiResults *results, MalFfiResultClaim *claims,
     mal_ffi_root(&results->roots, handles, 2 * capacity);
 }
 
+bool mal_ffi_results_reserve(MalVm *vm, MalFfiResults *results, uint64_t capacity) {
+    if (capacity <= (u64) results->capacity) return true;
+    if (results->count != 0) abort();
+    if (capacity > INT32_MAX / 2) goto mal_failed;
+    usize count = (usize) capacity;
+    usize lookup_capacity = 1;
+    while (lookup_capacity < count * 2) lookup_capacity *= 2;
+    if (lookup_capacity > SIZE_MAX / sizeof(i32)) goto mal_failed;
+    usize lookup_bytes = lookup_capacity * sizeof(i32);
+    usize padding = _Alignof(MalValue) - 1;
+    usize stride = sizeof(MalFfiResultClaim) + 2 * sizeof(MalValue);
+    if (lookup_bytes > SIZE_MAX - padding || count > (SIZE_MAX - lookup_bytes - padding) / stride) goto mal_failed;
+    void *allocation = calloc(1, count * stride + lookup_bytes + padding);
+    if (allocation == nullptr) goto mal_failed;
+    void *previous = results->allocation;
+    results->allocation = allocation;
+    results->claims = allocation;
+    results->capacity = (i32) count;
+    usize roots_offset = (count * sizeof(MalFfiResultClaim) + padding) & ~padding;
+    results->roots.slots = (MalValue *) ((byte *) allocation + roots_offset);
+    results->roots.count = (i32) count * 2;
+    results->lookup = (i32 *) (results->roots.slots + count * 2);
+    results->lookup_capacity = lookup_capacity;
+    for (i32 index = 0; index < results->roots.count; index++)
+        results->roots.slots[index] = mal_value_new_undefined();
+    free(previous);
+    return true;
+mal_failed:
+    return mal_ffi_threw(vm) ? false : mal_ffi_out_of_memory(vm);
+}
 
 void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
     const MalFfiHandleType *type, void *value, bool fresh) {
     if (value == nullptr) return;
     if (results->state == nullptr) {
         MalFfiState *state = ffi_state(vm);
-        if (state == nullptr) mal_ffi_out_of_memory(vm);
+        if (state == nullptr) { if (!mal_ffi_threw(vm)) mal_ffi_out_of_memory(vm); }
         else {
             results->state = state;
             results->previous = state->results;
@@ -3254,6 +3326,11 @@ void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
         claim = &results->claims[index];
         *claim = (MalFfiResultClaim) {.type = type, .value = value,
             .handles = &results->roots.slots[2 * index]};
+        if (results->lookup != nullptr) {
+            usize slot = ffi_handle_slot(ffi_handle_family(type), value, results->lookup_capacity);
+            while (results->lookup[slot] != 0) slot = (slot + 1) & (results->lookup_capacity - 1);
+            results->lookup[slot] = index + 1;
+        }
         MalFfiHandleObject *open = vm->ffi == nullptr ? nullptr
             : ffi_handle_find(vm->ffi, ffi_handle_family(type), value);
         if (open != nullptr) {
@@ -3266,6 +3343,10 @@ void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
         && ffi_result_pending(vm, type, value, results) == nullptr
         && (!(claim->flags & MAL_FFI_DISCARD_VALID)
             || (claim->fresh && (claim->flags & MAL_FFI_DISCARD_REPLACEABLE)));
+    if (claim->cleanup && claim->handles[1] == claim->handles[0])
+        claim->handles[1] = mal_value_new_undefined();
+    else if (!claim->cleanup && (claim->flags & MAL_FFI_DISCARD_VALID)
+        && mal_value_is_undefined(claim->handles[1])) claim->handles[1] = claim->handles[0];
 }
 
 MalValue mal_ffi_result_handle(MalVm *vm, MalFfiResults *results,
@@ -3362,6 +3443,7 @@ void mal_ffi_results_finish(MalVm *vm, MalFfiResults *results) {
     }
     mal_gc_unroot(&root);
     mal_ffi_unroot(&results->roots);
+    free(results->allocation);
 }
 
 MalValue mal_ffi_new_handle(

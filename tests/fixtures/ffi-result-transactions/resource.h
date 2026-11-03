@@ -16,7 +16,7 @@ TxBase *tx_base(int value);
 int tx_base_read(TxBase *value);
 void tx_invalid(TxManaged *state, TxResource **out);
 
-void tx_watch(void (*callback)(void));
+void tx_watch(void (*callback)(int));
 TxResource *tx_peek(void);
 TxResource *tx_acquire(void);
 TxResource *tx_reentry(int bad, char **text, const char **message, size_t *length);

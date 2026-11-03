@@ -3,6 +3,18 @@ import * as c from "maligator:ffi/transactions";
 function check(value: boolean, message: string): asserts value {
 	if (!value) throw new Error(message);
 }
+
+function watch(callback: (() => void) | null): void {
+	c.tx_watch(
+		callback === null
+			? null
+			: (bad) => {
+					callback();
+					if (bad !== 0) throw new RangeError("result release failure");
+				},
+	);
+}
+
 async function rangeFailure(action: () => unknown): Promise<void> {
 	let caught: unknown;
 	try {
@@ -150,11 +162,11 @@ for (const invoke of [
 ]) {
 	const before = c.tx_destroyed();
 	let escaped: ReturnType<typeof c.tx_peek> = null;
-	c.tx_watch(() => {
+	watch(() => {
 		escaped = c.tx_peek();
 	});
 	await rangeFailure(() => invoke(1));
-	c.tx_watch(null);
+	watch(null);
 	check(
 		c.tx_destroyed() === before + 1,
 		"reentrant borrowed exposure does not leak a failed result",
@@ -169,11 +181,11 @@ for (const invoke of [
 		caught instanceof TypeError,
 		"rollback closes an alias exposed by a result releaser",
 	);
-	c.tx_watch(() => {
+	watch(() => {
 		c.tx_register(() => c.tx_peek()!);
 	});
 	await rangeFailure(() => invoke(1));
-	c.tx_watch(null);
+	watch(null);
 	check(
 		c.tx_registered_value() === 61 && c.tx_destroyed() === before + 1,
 		"native registration keeps an abandoned result alive",
@@ -184,11 +196,11 @@ for (const invoke of [
 		"last registration release destroys an abandoned manual resource once",
 	);
 	let acquired: ReturnType<typeof c.tx_acquire> = null;
-	c.tx_watch(() => {
+	watch(() => {
 		acquired = c.tx_acquire();
 	});
 	await rangeFailure(() => invoke(1));
-	c.tx_watch(null);
+	watch(null);
 	check(
 		c.tx_read(acquired!) === 61 && c.tx_destroyed() === before + 2,
 		"an independent nested ownership commit survives outer rollback",
@@ -209,7 +221,7 @@ for (const invoke of [
 	let worker: Promise<unknown> = Promise.resolve(null);
 	const reads = c.tx_read_entries(),
 		inputs = c.tx_input_entries();
-	c.tx_watch(() => {
+	watch(() => {
 		c.tx_parent_bind(parent);
 		const actions = [
 			() => parent.child,
@@ -233,7 +245,7 @@ for (const invoke of [
 		);
 	});
 	await rangeFailure(() => invoke(1));
-	c.tx_watch(null);
+	watch(null);
 	check(
 		guarded === expectedGuarded && (await worker) instanceof TypeError,
 		"provisional resources reject close and escaping input admission",
@@ -245,7 +257,7 @@ for (const invoke of [
 		"rejected admissions never reach C and preserve one rollback release",
 	);
 	let closed = false;
-	c.tx_watch(() => {
+	watch(() => {
 		const owner = c.tx_acquire()!;
 		owner[Symbol.dispose]();
 		closed = true;
@@ -256,7 +268,7 @@ for (const invoke of [
 	} catch (error) {
 		caught = error;
 	}
-	c.tx_watch(null);
+	watch(null);
 	check(
 		closed && caught instanceof TypeError && c.tx_destroyed() === before + 2,
 		"outer delivery rejects a resource released by an independent owner",
@@ -275,7 +287,7 @@ for (const invoke of [c.tx_reentry_before, c.reentryBeforeAsync]) {
 	const before = c.tx_destroyed();
 	const marker = new Error("result release marker");
 	let alias: ReturnType<typeof c.tx_peek> = null;
-	c.tx_watch(() => {
+	watch(() => {
 		alias = c.tx_peek();
 		throw marker;
 	});
@@ -285,7 +297,7 @@ for (const invoke of [c.tx_reentry_before, c.reentryBeforeAsync]) {
 	} catch (error) {
 		caught = error;
 	}
-	c.tx_watch(null);
+	watch(null);
 	check(
 		caught === marker && c.tx_destroyed() === before + 1,
 		"rollback preserves an exception from a result releaser",
@@ -301,11 +313,11 @@ for (const invoke of [c.tx_reentry_before, c.reentryBeforeAsync]) {
 for (const invoke of [c.tx_reentry_existing, c.reentryExistingAsync]) {
 	const prior = c.tx_base(71)!;
 	const before = c.tx_destroyed();
-	c.tx_watch(() => {
+	watch(() => {
 		c.tx_peek();
 	});
 	await rangeFailure(() => invoke(1));
-	c.tx_watch(null);
+	watch(null);
 	check(
 		Reflect.apply(c.tx_read, undefined, [prior]) === 71,
 		"rollback preserves an independent borrowed view acquisition",
@@ -318,12 +330,12 @@ for (const invoke of [c.tx_reentry, c.reentryAsync]) {
 	let depth = 0;
 	let acquired: ReturnType<typeof c.tx_acquire> = null;
 	const before = c.tx_destroyed();
-	c.tx_watch(() => {
+	watch(() => {
 		if (depth++ === 0) acquired = c.tx_reentry_existing(0).result;
 		else acquired = c.tx_acquire();
 	});
 	await rangeFailure(() => invoke(1));
-	c.tx_watch(null);
+	watch(null);
 	check(
 		c.tx_read(acquired!) === 61 && c.tx_destroyed() === before,
 		"nested ownership commits transfer every ancestor claim",
@@ -333,7 +345,7 @@ for (const invoke of [c.tx_reentry, c.reentryAsync]) {
 for (const invoke of [c.tx_reentry_recycled, c.reentryRecycledAsync]) {
 	let replacement: ReturnType<typeof c.tx_recycled> = null;
 	const before = c.tx_destroyed();
-	c.tx_watch(() => {
+	watch(() => {
 		c.tx_acquire()![Symbol.dispose]();
 		replacement = c.tx_recycled();
 	});
@@ -343,7 +355,7 @@ for (const invoke of [c.tx_reentry_recycled, c.reentryRecycledAsync]) {
 	} catch (error) {
 		caught = error;
 	}
-	c.tx_watch(null);
+	watch(null);
 	check(
 		caught instanceof TypeError &&
 			c.tx_read(replacement!) === 67 &&
@@ -358,24 +370,24 @@ for (const invoke of [c.tx_reentry_recycled, c.reentryRecycledAsync]) {
 }
 for (const invoke of [c.tx_reentry, c.reentryAsync]) {
 	const before = c.tx_destroyed();
-	c.tx_watch(() => {
+	watch(() => {
 		c.tx_register(() => c.tx_peek()!);
 		c.tx_register(null);
 	});
 	await rangeFailure(() => invoke(1));
-	c.tx_watch(null);
+	watch(null);
 	check(
 		c.tx_destroyed() === before + 1,
 		"lease release during conversion leaves rollback ownership intact",
 	);
 	let owner: ReturnType<typeof c.tx_acquire> = null;
 	let worker = Promise.resolve(-1);
-	c.tx_watch(() => {
+	watch(() => {
 		owner = c.tx_acquire();
 		worker = c.readAsync(owner!);
 	});
 	await rangeFailure(() => invoke(1));
-	c.tx_watch(null);
+	watch(null);
 	check(
 		(await worker) === 61 && c.tx_destroyed() === before + 1,
 		"an independent owner admits worker use before outer rollback",
@@ -390,7 +402,7 @@ for (const invoke of [c.tx_reentry_before, c.reentryBeforeAsync]) {
 	for (const borrowedView of [false, true]) {
 		let depth = 0,
 			failed = false;
-		c.tx_watch(() => {
+		watch(() => {
 			if (depth++ === 0) {
 				try {
 					c.tx_special_existing(1);
@@ -400,7 +412,7 @@ for (const invoke of [c.tx_reentry_before, c.reentryBeforeAsync]) {
 			} else if (borrowedView) c.tx_special_peek();
 		});
 		const result = await invoke(0);
-		c.tx_watch(null);
+		watch(null);
 		check(
 			failed && c.tx_read(result.out!) === 61,
 			"a failed nested refinement preserves the originating resource",

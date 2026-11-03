@@ -15,6 +15,7 @@ tests/native/number-bigint-conversion.test.ts
 tests/native/ffi-handle-views.test.ts
 tests/native/ffi-owner-fields.test.ts
 tests/native/ffi-result-transactions.test.ts
+tests/native/ffi-resource-arrays.test.ts
 tests/native/ffi-managed-state.test.ts
 tests/native/ffi-worker-destroy.test.ts
 tests/native/ffi-close-callback.test.ts

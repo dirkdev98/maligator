@@ -335,8 +335,12 @@ storage from a resource whose destruction is still pending.
 Bindings that combine direct resource pointers with copied values transfer ownership
 and publish type views after every output conversion and final managed-input check
 succeeds. A failed conversion releases new resources once and preserves existing
-handles' ownership and views. This guarantee applies to direct resource-pointer
-outputs.
+handles' ownership and views. This guarantee also covers flat owned pointer arrays
+with an outer `free` function.
+
+Buffers supplied through `free` remain alive until every output is copied. Aliased
+allocations are released once, using their first declared cleanup function. Cleanup
+runs before result assembly and ownership commit, including when copying throws.
 
 A cleanup function supplied through `free` may call JavaScript. A new alias exposed
 during cleanup is provisional: it supports synchronous reads and leases for callback
@@ -595,6 +599,12 @@ Input arrays, byte spans, and counted strings can share an integer `length` para
 The binding checks every input length before entering C. Counted strings contribute
 their UTF-8 byte length. Shared counts must be integer inputs; writable counts and
 output capacities keep separate parameters.
+
+For a flat array of owned pointer handles, declare the element type's destructor
+and the table's `free` function. The returned table must remain stable until `free`
+runs. Its cleanup releases the table; each distinct element transfers to its handle.
+Repeated pointers preserve identity. Conversion failures release new elements,
+including elements not yet converted, and preserve existing handles' ownership.
 
 Const arithmetic-pointer inputs also accept the matching typed array. For example,
 `const double *` accepts `Float64Array`, and `const uint64_t *` accepts `BigUint64Array`.

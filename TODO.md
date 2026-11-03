@@ -1903,8 +1903,9 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Make independently owned compound fields, resource arrays, and multi-output
-      conversions transactional, including allocation failure after partial conversion.
+- [ ] Extend transactional conversion to independently owned compound fields, copied
+      resource arrays, and resource tables without an outer `free` function. Preserve
+      ownership and type views through allocation failure after partial conversion.
 
 - [ ] Support callback registrations on borrowed children whose only C release path
       destroys the root, without requiring a separate unregistration operation.
