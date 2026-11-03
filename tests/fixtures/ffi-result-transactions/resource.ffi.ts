@@ -78,6 +78,86 @@ export default {
 		},
 	},
 	functions: {
+		tx_pointer_existing: {
+			params: {
+				rows: {
+					out: true,
+					borrowed: true,
+					array: { length: "written", capacity: "capacity" },
+				},
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "pointerExistingAsync",
+		},
+		tx_pointer_buffer: {
+			params: {
+				rows: {
+					out: true,
+					borrowed: false,
+					array: { length: "written", capacity: "capacity" },
+				},
+				prior: { nullable: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "pointerBufferAsync",
+		},
+		tx_pointer_borrowed: {
+			params: {
+				rows: {
+					out: true,
+					borrowed: true,
+					array: { length: "written", capacity: "capacity" },
+				},
+				prior: { nullable: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "pointerBorrowedAsync",
+		},
+		tx_pointer_return: {
+			returns: { borrowed: true, array: { length: "length" }, free: "tx_table_free" },
+			async: "pointerReturnAsync",
+		},
+		tx_pointer_out: {
+			params: {
+				rows: {
+					out: true,
+					borrowed: true,
+					array: { length: "length" },
+					free: "tx_table_free",
+				},
+			},
+			async: "pointerOutAsync",
+		},
+		tx_pointer_mixed: {
+			params: {
+				rows: {
+					out: true,
+					borrowed: true,
+					array: { length: "written", capacity: "capacity" },
+				},
+				owned: { out: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "pointerMixedAsync",
+		},
+		tx_pointer_inout: {
+			params: { rows: { inout: true, borrowed: false, array: { length: "length" } } },
+			async: "pointerInoutAsync",
+		},
+		tx_pointer_inout_borrowed: {
+			params: { rows: { inout: true, borrowed: true, array: { length: "length" } } },
+			async: "pointerInoutBorrowedAsync",
+		},
+		tx_pointer_wait: {
+			params: {
+				rows: {
+					out: true,
+					borrowed: false,
+					array: { length: "written", capacity: "capacity" },
+				},
+			},
+			async: "pointerWaitAsync",
+		},
 		tx_caller_table: {
 			params: {
 				rows: { out: true, array: { length: "written", capacity: "capacity" } },

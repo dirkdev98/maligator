@@ -3,6 +3,7 @@ import * as c from "maligator:ffi/transactions";
 import { createWorkerUrl, Worker } from "maligator:workers";
 import { checkArrays } from "./arrays.ts";
 import { checkCallerArrays } from "./caller-arrays.ts";
+import { checkPointerBuffers } from "./pointer-buffers.ts";
 import { checkTables } from "./tables.ts";
 import { checkTagged } from "./tagged.ts";
 function check(value: boolean, message: string): asserts value {
@@ -1197,4 +1198,5 @@ await checkArrays();
 await checkTables();
 await checkTagged();
 await checkCallerArrays();
+await checkPointerBuffers();
 console.log("result transactions passed");

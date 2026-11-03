@@ -610,3 +610,60 @@ void tx_caller_wait(TxFields *rows, size_t capacity, long *written) {
 }
 int tx_caller_started(void) { return atomic_load(&caller_started); }
 int tx_caller_entries(void) { return caller_entries; }
+
+static TxResource *pointer_bank[2];
+void tx_pointer_buffer(TxResource **rows, size_t capacity, long *written, int mode, TxResource *prior, const char **message, size_t *length) {
+    caller_entries++;
+    *message = "x"; *length = mode == 4 ? (size_t)-1 : 1;
+    *written = 0;
+    if (capacity == 0 || mode == 5) return;
+    rows[0] = prior == NULL ? create(353) : prior; *written = 1;
+    if (capacity > 1 && mode != 1) { rows[1] = create(359); *written = 2; }
+    if (capacity > 2 && mode != 1) { rows[2] = rows[0]; *written = 3; }
+    if (capacity > 3 && mode != 1) { rows[3] = NULL; *written = 4; }
+    if (mode == 2) *written = -1;
+    if (mode == 3) *written = (long) capacity + 1;
+}
+void tx_pointer_borrowed(TxResource **rows, size_t capacity, long *written, int mode, TxResource *prior, const char **message, size_t *length) {
+    if (pointer_bank[0] != NULL || pointer_bank[1] != NULL) abort();
+    tx_pointer_buffer(rows, capacity, written, mode, prior, message, length);
+    if (capacity > 0 && mode != 5 && prior == NULL) pointer_bank[0] = rows[0];
+    if (capacity > 1 && mode != 1 && mode != 5) pointer_bank[1] = rows[1];
+}
+void tx_pointer_existing(TxResource **rows, size_t capacity, long *written, int bad, const char **message, size_t *length) {
+    tx_pointer_buffer(rows, capacity, written, 1, current, message, length);
+    *length = bad ? (size_t)-1 : 1;
+}
+void tx_pointer_clear(void) {
+    for (size_t i = 0; i < 2; i++) { if (pointer_bank[i] != NULL) tx_destroy(pointer_bank[i]); pointer_bank[i] = NULL; }
+}
+int tx_pointer_bank_value(void) { return pointer_bank[0] == NULL ? -1 : pointer_bank[0]->value; }
+TxResource **tx_pointer_return(size_t *length) {
+    TxResource **rows = calloc(4, sizeof(*rows));
+    if (rows == NULL) abort();
+    long written; const char *message; size_t text_length;
+    tx_pointer_borrowed(rows, 4, &written, 0, NULL, &message, &text_length);
+    *length = (size_t) written; release_bad = 0;
+    return rows;
+}
+void tx_pointer_out(TxResource ***rows, size_t *length) { *rows = tx_pointer_return(length); }
+void tx_pointer_mixed(TxBase **rows, size_t capacity, long *written, TxSpecial **owned, int bad, const char **message, size_t *length) {
+    *written = 0; *owned = NULL; *message = "x"; *length = bad ? (size_t)-1 : 1;
+    if (capacity < 2) return;
+    TxResource *value = create(367);
+    rows[0] = (TxBase *) value; rows[1] = (TxBase *) value;
+    *owned = (TxSpecial *) value; *written = 2;
+}
+void tx_pointer_inout(TxResource **rows, size_t *length, int mode) {
+    caller_entries++;
+    if (mode == 1 && *length > 1) *length = 1;
+    if (mode == 2) *length = (size_t)-1;
+    if (mode == 4) { atomic_fetch_add(&caller_started, 1); usleep(150000); }
+    if (*length > 0 && rows[0]->value < 0) abort();
+}
+void tx_pointer_inout_borrowed(TxResource **rows, size_t *length, int mode) { tx_pointer_inout(rows, length, mode); }
+void tx_pointer_wait(TxResource **rows, size_t capacity, long *written) {
+    const char *message; size_t length;
+    tx_pointer_buffer(rows, capacity, written, 3, NULL, &message, &length);
+    atomic_fetch_add(&caller_started, 1); usleep(150000);
+}

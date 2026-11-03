@@ -62,27 +62,41 @@ it("keeps a borrowed pointer with a copied handle companion unbound", () => {
 		entry?.gaps?.some((gap) => gap.reason.includes("complete result transaction")),
 	).toBe(true);
 });
-it("rejects borrowed facts on numeric outputs", () => {
-	const directory = project("ffi-result-transactions");
-	writeFileSync(
-		join(directory, "resource.h"),
-		"\nvoid tx_numeric_output(int *value);\n",
-		{ flag: "a" },
-	);
-	writeFileSync(
-		join(directory, "resource.ffi.ts"),
-		`export default ${JSON.stringify({
-			...transactionContract,
-			functions: {
-				...transactionContract.functions,
-				tx_numeric_output: { params: { value: { out: true, borrowed: true } } },
-			},
-		})};\n`,
-	);
-	const result = cli(directory, "inspect", "transactions", "--json");
-	expect(result.status).toBe(1);
-	expect(result.stderr).toContain("borrowed: requires a handle output");
-});
+it.each(["standalone", "count"])(
+	"rejects borrowed facts on %s numeric outputs",
+	(role) => {
+		const directory = project("ffi-result-transactions");
+		writeFileSync(
+			join(directory, "resource.h"),
+			role === "count"
+				? "\nvoid tx_numeric_output(int *value, int *rows, size_t capacity);\n"
+				: "\nvoid tx_numeric_output(int *value);\n",
+			{ flag: "a" },
+		);
+		writeFileSync(
+			join(directory, "resource.ffi.ts"),
+			`export default ${JSON.stringify({
+				...transactionContract,
+				functions: {
+					...transactionContract.functions,
+					tx_numeric_output: {
+						params: {
+							value: { out: true, borrowed: true },
+							...(role === "count"
+								? {
+										rows: { out: true, array: { length: "value", capacity: "capacity" } },
+									}
+								: {}),
+						},
+					},
+				},
+			})};\n`,
+		);
+		const result = cli(directory, "inspect", "transactions", "--json");
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("borrowed: requires a handle output");
+	},
+);
 it.each([false, true])(
 	"keeps owned pointer tables with incompatible companion results unbound with outer free %s",
 	(free) => {
@@ -183,6 +197,65 @@ it.each([
 		types: {},
 		facts: {
 			params: { rows: { out: true, array: { length: "length", capacity: "capacity" } } },
+		},
+	},
+	...[false, true].map((borrowed) => ({
+		name: `tx_caller_pointer_${borrowed ? "borrowed" : "owned"}`,
+		status: "bound",
+		declaration: `void tx_caller_pointer_${borrowed ? "borrowed" : "owned"}(TxResource **rows, size_t capacity, size_t *length);`,
+		types: {},
+		facts: {
+			params: {
+				rows: { out: true, borrowed, array: { length: "length", capacity: "capacity" } },
+			},
+		},
+	})),
+	{
+		name: "tx_caller_pointer_without_destructor",
+		status: "needs-facts",
+		declaration:
+			"void tx_caller_pointer_without_destructor(TxBase **rows, size_t capacity, size_t *length);",
+		types: {},
+		facts: {
+			params: {
+				rows: {
+					out: true,
+					borrowed: false,
+					array: { length: "length", capacity: "capacity" },
+				},
+			},
+		},
+	},
+	{
+		name: "tx_caller_pointer_copy",
+		status: "needs-facts",
+		declaration:
+			"typedef struct TxCopyElement { int value; } TxCopyElement; TxCopyElement tx_copy_element(void); void tx_caller_pointer_copy(TxCopyElement **rows, size_t capacity, size_t *length);",
+		types: { TxCopyElement: { handle: {} } },
+		facts: {
+			params: {
+				rows: {
+					out: true,
+					borrowed: false,
+					array: { length: "length", capacity: "capacity" },
+				},
+			},
+		},
+	},
+	{
+		name: "tx_caller_pointer_storage",
+		status: "needs-facts",
+		declaration:
+			"void tx_caller_pointer_storage(TxManaged **rows, size_t capacity, size_t *length);",
+		types: {},
+		facts: {
+			params: {
+				rows: {
+					out: true,
+					borrowed: false,
+					array: { length: "length", capacity: "capacity" },
+				},
+			},
 		},
 	},
 ])(

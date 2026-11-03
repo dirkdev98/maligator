@@ -170,3 +170,14 @@ void tx_caller_arm(TxFields *rows, size_t capacity, long *written, void (*callba
 void tx_caller_wait(TxFields *rows, size_t capacity, long *written);
 int tx_caller_started(void);
 int tx_caller_entries(void);
+void tx_pointer_buffer(TxResource **rows, size_t capacity, long *written, int mode, TxResource *prior, const char **message, size_t *length);
+void tx_pointer_borrowed(TxResource **rows, size_t capacity, long *written, int mode, TxResource *prior, const char **message, size_t *length);
+void tx_pointer_existing(TxResource **rows, size_t capacity, long *written, int bad, const char **message, size_t *length);
+void tx_pointer_clear(void);
+int tx_pointer_bank_value(void);
+TxResource **tx_pointer_return(size_t *length);
+void tx_pointer_out(TxResource ***rows, size_t *length);
+void tx_pointer_mixed(TxBase **rows, size_t capacity, long *written, TxSpecial **owned, int bad, const char **message, size_t *length);
+void tx_pointer_inout(TxResource **rows, size_t *length, int mode);
+void tx_pointer_inout_borrowed(TxResource **rows, size_t *length, int mode);
+void tx_pointer_wait(TxResource **rows, size_t capacity, long *written);

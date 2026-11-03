@@ -188,7 +188,10 @@ export interface MaligatorFfiValueFacts {
 	shape?: MaligatorFfiShape;
 	/** Accept `null` for a pointer parameter and pass `NULL`. */
 	nullable?: boolean;
-	/** A returned or output handle the library keeps owning; closing it does not release it. */
+	/** A returned/output handle or flat pointer array whose pointees the library keeps
+	 * owning. Closing a borrowed wrapper does not release its resource. Caller pointer
+	 * buffers require an explicit choice: `false` transfers pointee ownership.
+	 */
 	borrowed?: boolean;
 	/** A pointer result starts a new resource lifetime, rather than aliasing an
 	 * existing handle. This distinguishes a reused address during worker cleanup.

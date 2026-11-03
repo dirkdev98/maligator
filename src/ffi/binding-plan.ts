@@ -1230,6 +1230,16 @@ class Planner {
 		return views[element.bits];
 	}
 
+	#canBorrowResult(value: JsValue): boolean {
+		return (
+			value.kind === "handle" ||
+			(value.kind === "sequence" &&
+				value.of.kind === "handle" &&
+				value.of.pass === "pointer" &&
+				this.#handles.get(value.of.name)!.representation === "pointer")
+		);
+	}
+
 	#pointer(
 		type: Extract<CType, { kind: "pointer" }>,
 		position: Position,
@@ -2804,18 +2814,6 @@ class Planner {
 				throw new FfiError(`${where(at)}: borrowed applies to results`);
 			}
 			const resolved = resolveCType(this.#model, param.type);
-			if (valueFacts.borrowed === true) {
-				const written =
-					resolved.kind === "pointer"
-						? this.value(resolved.to, "return", valueFacts)
-						: undefined;
-				if (
-					written === undefined ||
-					!("value" in written) ||
-					written.value.kind !== "handle"
-				)
-					throw new FfiError(`${where(at)}.borrowed: requires a handle output`);
-			}
 			const routed = callbackData.get(index);
 			const released = callbackReleases.get(index);
 			if (released !== undefined) {
@@ -2903,6 +2901,8 @@ class Planner {
 				if (countType.kind !== "integer" || invalidWrittenCount) {
 					throw new FfiError(`${where(at)}: a count must be an integer parameter`);
 				}
+				if (valueFacts.borrowed === true)
+					throw new FfiError(`${where(at)}.borrowed: requires a handle output`);
 				if (counted !== undefined && pointer) {
 					const written = map(resolved.to, "return", NO_FACTS, at);
 					if ("gap" in written) {
@@ -2944,12 +2944,12 @@ class Planner {
 							`${where(at)}.array.capacity: inout buffers use their input length`,
 						);
 					const element = resolveCType(this.#model, resolved.to);
-					if (
-						["pointer", "void", "function", "unsupported", "typedef"].includes(
-							element.kind,
-						)
-					) {
+					if (["void", "function", "unsupported", "typedef"].includes(element.kind)) {
 						gap("caller-owned array buffers need complete value elements");
+						return;
+					}
+					if (element.kind === "pointer" && valueFacts.borrowed === undefined) {
+						gap("caller pointer buffers require an explicit borrowed ownership choice");
 						return;
 					}
 					const written = map(
@@ -2966,11 +2966,29 @@ class Planner {
 						gap(written.gap);
 						return;
 					}
+					if (valueFacts.borrowed === true && !this.#canBorrowResult(written.value))
+						throw new FfiError(
+							`${where(at)}.borrowed: requires a handle output or flat pointer array`,
+						);
+					const pointers =
+						written.value.kind === "sequence" &&
+						written.value.of.kind === "handle" &&
+						written.value.of.pass === "pointer" &&
+						this.#handles.get(written.value.of.name)!.representation === "pointer" &&
+						(valueFacts.borrowed === true ||
+							(this.#handles.get(written.value.of.name)!.destroy !== undefined &&
+								this.#handles.get(written.value.of.name)!.allocator === undefined));
+					if (element.kind === "pointer" && !pointers) {
+						gap(
+							"caller pointer buffers need independent pointer handles with an explicit ownership choice",
+						);
+						return;
+					}
 					if (
 						written.value.kind !== "sequence" ||
 						(this.#containsHandle(written.value) &&
 							!(
-								hasOwnedRecordFields(written.value, this) &&
+								(hasOwnedRecordFields(written.value, this) || pointers) &&
 								supportsResultTransaction(written.value, {
 									records: this.records,
 									handles: this.#handles,
@@ -3033,6 +3051,11 @@ class Planner {
 					gap(written.gap);
 					return;
 				}
+				if (valueFacts.borrowed === true && !this.#canBorrowResult(written.value))
+					throw new FfiError(
+						`${where(at)}.borrowed: requires a handle output or flat pointer array`,
+					);
+
 				if (
 					written.value.kind === "array" &&
 					this.#containsHandle(written.value) &&
@@ -3186,8 +3209,10 @@ class Planner {
 				? { value: { kind: "undefined" } }
 				: map(declaration.returns, "return", facts.returns, "returns");
 		if ("value" in returns) {
-			if (facts.returns.borrowed === true && returns.value.kind !== "handle") {
-				throw new FfiError(`${where("returns.borrowed")}: the result is not a handle`);
+			if (facts.returns.borrowed === true && !this.#canBorrowResult(returns.value)) {
+				throw new FfiError(
+					`${where("returns.borrowed")}: requires a handle or flat pointer array`,
+				);
 			}
 			const counted =
 				returns.value.kind === "bytes" ||

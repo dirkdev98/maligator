@@ -1903,11 +1903,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Declare element ownership for flat pointer tables in caller-allocated output
-      and inout buffers.
-      Preserve ownership and type views through allocation failure
-      after partial conversion.
-
 - [ ] Define initialization and cleanup ownership for destruction-root callbacks on
       caller-allocated storage, preserving native storage after VM teardown.
 

@@ -647,6 +647,9 @@ and the table's `free` function. The returned table must remain stable until `fr
 runs. Its cleanup releases the table; each distinct element transfers to its handle.
 Repeated pointers preserve identity. Conversion failures release new elements,
 including elements not yet converted, and preserve existing handles' ownership.
+Use `borrowed: true` on a returned or output pointer array when C keeps owning its
+pointees. Its `free` function releases only the outer table. Borrowed output aliases
+preserve any ownership already held by an existing handle.
 
 Const arithmetic-pointer inputs also accept the matching typed array. For example,
 `const double *` accepts `Float64Array`, and `const uint64_t *` accepts `BigUint64Array`.
@@ -696,6 +699,12 @@ Record elements can transfer independently owned pointer fields using their
 Only the written prefix transfers ownership. Invalid written counts trigger cleanup
 within the allocated capacity, preserving existing input ownership. Inout handles stay
 pinned through later getters, callbacks and worker execution.
+
+Caller buffers of pointer handles require an explicit `borrowed` choice alongside
+`array`: `false` transfers independently destructible pointees to their handles;
+`true` leaves them owned by C. Null slots and repeated pointers preserve their values
+and identity. Only the written prefix participates in ownership transfer, including
+inout buffers. Inout pointer elements must be non-null handles.
 
 Use `string: { length: "byteCount" }` for UTF-8 pointer/count pairs. The count
 measures encoded bytes and disappears from input signatures. Counted text permits
