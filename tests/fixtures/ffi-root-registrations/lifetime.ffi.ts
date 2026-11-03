@@ -4,6 +4,18 @@ export default {
 	headers: ["lifetime.h"],
 	find: [{ includeDirs: ["."], sources: ["lifetime.c"] }],
 	types: {
+		CopiedRoot: {
+			handle: { destroy: "copied_destroy", collect: true },
+			fields: { child: { handle: { lifetime: "owner" } } },
+		},
+		ManualCopy: {
+			handle: { destroy: "manual_copy_destroy", collect: false },
+			fields: { child: { handle: { lifetime: "owner" } } },
+		},
+		RetryCopy: {
+			handle: { destroy: { function: "retry_copy_destroy", success: "1" } },
+			fields: { child: { handle: { lifetime: "owner" } } },
+		},
 		LifeRoot: {
 			handle: { destroy: "life_destroy", collect: true },
 			fields: { child: { handle: { lifetime: "owner" } } },
@@ -15,6 +27,33 @@ export default {
 		LifeChild: { handle: {} },
 	},
 	functions: {
+		copied_subscribe: {
+			params: {
+				callback: { callback: { owner: "root", data: "data", release: "release" } },
+			},
+		},
+		manual_copy_subscribe: {
+			params: {
+				callback: { callback: { owner: "root", data: "data", release: "release" } },
+			},
+		},
+		retry_copy_subscribe: {
+			params: {
+				callback: { callback: { owner: "root", data: "data", release: "release" } },
+			},
+		},
+		life_keep_child: {
+			params: {
+				callback: {
+					callback: {
+						data: "data",
+						release: "release",
+						returns: { lifetime: "registration" },
+					},
+				},
+			},
+		},
+		life_clear_child: { async: "clearChildAsync" },
 		life_subscribe_notice: {
 			params: {
 				callback: {

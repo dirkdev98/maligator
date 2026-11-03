@@ -4061,9 +4061,12 @@ bool mal_ffi_callback_own(MalVm *vm, MalFfiCallback *callback, MalValue value, c
         if (parent == nullptr) break;
         handle = parent;
     }
-    if (handle->ownership != MAL_FFI_HANDLE_OWNED || handle->owns_storage
-        || ffi_handle_policy(handle)->destroy == nullptr)
+    const MalFfiHandleType *policy = ffi_handle_policy(handle);
+    if (handle->ownership != MAL_FFI_HANDLE_OWNED || policy->destroy == nullptr)
         return mal_ffi_expected(vm, site, "an independently owned library resource with a destructor");
+    // Final native release must stop C consumers before freeing copied storage.
+    if (handle->owns_storage && (handle->type->size == 0 || !policy->collect || policy->destroy_can_fail))
+        return mal_ffi_expected(vm, site, "copied owner storage with an unconditional collecting destructor");
     MalFfiNativeHandle *native;
     if (!ffi_prepare_result_handle(vm, handle, site, &native)) return false;
     MalFfiKept *kept = (MalFfiKept *) callback;

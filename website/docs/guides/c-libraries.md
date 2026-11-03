@@ -783,10 +783,14 @@ subscribe: {
 ```
 
 The selector names an input handle by C parameter name or 1-based position. Its actual
-destruction root must be a non-null, independently owned library allocation with a
-destructor. Caller-owned root storage is unsupported. C must stop the registration
-and all its consumers before destruction returns. Other borrowed inputs must share
-that root.
+destruction root must be a non-null, independently owned resource with a destructor.
+C must stop the registration and all its consumers before destruction returns. Other
+borrowed inputs must share that root.
+
+A copied struct can be the root when the registration takes a pointer to its stable
+copy and its handle declares `collect: true` with an unconditional destructor. Native
+leases retain that storage after VM teardown until the last consumer releases it.
+Passing the owner by value is unsupported, as is caller-allocated root storage.
 
 The root keeps the closure and borrowed inputs alive. A closure that captures the
 root can still be collected with it. Active callback execution prevents closing the

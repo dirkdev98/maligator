@@ -1,6 +1,7 @@
 /* oxlint-disable no-console -- Reports observable registration ownership. */
 import * as c from "maligator:ffi/lifetime";
 import { createWorkerUrl, Worker } from "maligator:workers";
+import { checkCopied } from "./copied.ts";
 function check(value: boolean, message: string): asserts value {
 	if (!value) throw new Error(message);
 }
@@ -143,4 +144,5 @@ function cycle(): void {
 		"last independent lease destroys the root and its registrations",
 	);
 }
+await checkCopied(collect);
 console.log("root registrations passed");

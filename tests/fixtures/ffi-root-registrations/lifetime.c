@@ -106,3 +106,44 @@ void life_clear_root(void) {
     held = NULL; held_release = NULL; held_data = NULL;
     if (release != NULL) release(data);
 }
+
+static CopiedRoot *copied_live;
+static int copy_entries;
+CopiedRoot copied_new(int value) { return (CopiedRoot) {child_new(value)}; }
+void copied_destroy(CopiedRoot value) {
+    if (copied_live != NULL && copied_live->child == value.child) copied_live = NULL;
+    child_free(value.child);
+}
+void copied_subscribe(CopiedRoot *root, int (*callback)(void *), void *data, void (*release)(void *)) {
+    copy_entries++;
+    copied_live = root;
+    life_subscribe(root->child, callback, data, release);
+}
+int copied_value(CopiedRoot *root) { return life_value(root->child); }
+int copied_live_value(void) { return copied_live == NULL ? -1 : copied_value(copied_live); }
+int copied_entries(void) { return copy_entries; }
+ManualCopy manual_copy_new(int value) { return (ManualCopy) {child_new(value)}; }
+void manual_copy_destroy(ManualCopy value) { child_free(value.child); }
+void manual_copy_subscribe(ManualCopy *root, int (*callback)(void *), void *data, void (*release)(void *)) {
+    copy_entries++; life_subscribe(root->child, callback, data, release);
+}
+RetryCopy retry_copy_new(int value) { return (RetryCopy) {child_new(value), 1}; }
+int retry_copy_destroy(RetryCopy value) { if (value.fail) return 0; child_free(value.child); return 1; }
+void retry_copy_allow(RetryCopy *root) { root->fail = 0; }
+void retry_copy_subscribe(RetryCopy *root, int (*callback)(void *), void *data, void (*release)(void *)) {
+    copy_entries++; life_subscribe(root->child, callback, data, release);
+}
+static LifeChild *held_child;
+static void *child_data;
+static void (*child_release)(void *);
+void life_keep_child(LifeChild *(*callback)(void *), void *data, void (*release)(void *)) {
+    if (held_child != NULL) abort();
+    held_child = callback(data); child_data = data; child_release = release;
+}
+int life_held_child_value(void) { return held_child == NULL ? -1 : life_value(held_child); }
+int life_held_child_fire(void) { return held_child == NULL ? -1 : life_fire(held_child); }
+void life_clear_child(void) {
+    void (*release)(void *) = child_release; void *data = child_data;
+    held_child = NULL; child_data = NULL; child_release = NULL;
+    if (release != NULL) release(data);
+}
