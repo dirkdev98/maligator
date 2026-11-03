@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import process from "node:process";
+import { ffi_bench_blas_dot, ffi_bench_blas_axpy } from "maligator:ffi/blas";
 import {
 	EVP_MD_CTX_new,
 	EVP_MD_CTX_free,
@@ -22,7 +23,6 @@ import {
 	ffi_bench_sql_finalize,
 	ffi_bench_sql_close,
 } from "maligator:ffi/sqlite";
-import { ffi_bench_string_compare } from "maligator:ffi/text";
 import {
 	ZSTD_compressBound,
 	ZSTD_createCCtx,
@@ -59,10 +59,13 @@ for (let i = 0; i < backing.length; i++) {
 	backing[i] = pattern === "repeat" ? i & 7 : seed & 255;
 }
 const data = backing.subarray(17);
+const blas = mode === "blas-dot" || mode === "blas-axpy";
+const stride = pattern === "stride-1" ? 1 : pattern === "stride-2" ? 2 : 0;
+const workBytes = blas ? size * stride * Float64Array.BYTES_PER_ELEMENT * 2 : size;
 const warm = Math.min(
 	iterations,
 	10000,
-	Math.max(1, Math.floor(16777216 / Math.max(size, 1))),
+	Math.max(1, Math.floor(16777216 / Math.max(workBytes, 1))),
 );
 let checksum = 0;
 let digest = "";
@@ -137,25 +140,53 @@ if (mode === "sqlite-bind" || mode === "sqlite-row") {
 	digest = actual.toString(16);
 	if (ffi_bench_sql_finalize(statement) !== 0 || ffi_bench_sql_close(db) !== 0)
 		throw new Error("SQLite cleanup failed");
-} else if (mode === "libc-strcmp") {
-	if (!["early", "equal", "late"].includes(pattern))
-		throw new Error("Invalid string pattern");
-	data.fill(120);
-	const other = Buffer.alloc(size, 120);
-	if (pattern === "early" && size !== 0) other[0] = 121;
-	if (pattern === "late" && size !== 0) other[size - 1] = 121;
-	const left = new TextDecoder().decode(data);
-	const right = new TextDecoder().decode(other);
+} else if (blas) {
+	if (!stride || !size) throw new Error("Invalid vector shape");
+	const elements = size * stride;
+	const xBacking = new Float64Array(elements + 2);
+	const yBacking = new Float64Array(elements + 2);
+	const x = xBacking.subarray(1, elements + 1);
+	const y = yBacking.subarray(1, elements + 1);
+	xBacking[0] = xBacking[elements + 1] = yBacking[0] = yBacking[elements + 1] = 37;
+	for (let i = 0; i < elements; i++)
+		x[i] = i % stride === 0 ? ((i / stride) % 13) + 1 : 17;
+	const alpha = 2 ** -20;
+	const dot = mode === "blas-dot";
+	let result = 0;
 	for (let phase = 0; phase < 2; phase++) {
-		checksum = 0;
+		for (let i = 0; i < elements; i++)
+			y[i] = i % stride === 0 ? ((i / stride) % 7) + 1 : 29;
 		const count = phase === 0 ? warm : iterations;
 		const start = performance.now();
-		for (let i = 0; i < count; i++)
-			checksum += ffi_bench_string_compare(left, right) < 0 ? 1 : 0;
+		if (dot) {
+			for (let i = 0; i < count; i++) result = ffi_bench_blas_dot(x, y, stride);
+		} else {
+			for (let i = 0; i < count; i++) ffi_bench_blas_axpy(alpha, x, y, stride);
+		}
 		elapsedMs = performance.now() - start;
 	}
-	if (checksum !== (pattern === "equal" || size === 0 ? 0 : iterations))
-		throw new Error("String comparison changed");
+	let hash = 2166136261;
+	let expectedDot = 0;
+	for (let i = 0; i < elements; i++) {
+		const expectedX = i % stride === 0 ? ((i / stride) % 13) + 1 : 17;
+		const initialY = i % stride === 0 ? ((i / stride) % 7) + 1 : 29;
+		const expectedY =
+			initialY + (!dot && i % stride === 0 ? iterations * alpha * expectedX : 0);
+		if (x[i] !== expectedX || y[i] !== expectedY)
+			throw new Error("Vector contents changed");
+		if (i % stride === 0) expectedDot += expectedX * initialY;
+		hash = Math.imul(hash ^ ((y[i] * 2 ** 20) >>> 0), 16777619) >>> 0;
+	}
+	if (
+		xBacking[0] !== 37 ||
+		xBacking[elements + 1] !== 37 ||
+		yBacking[0] !== 37 ||
+		yBacking[elements + 1] !== 37
+	)
+		throw new Error("Vector view boundary changed");
+	if (dot && result !== expectedDot) throw new Error("Dot product changed");
+	checksum = dot ? result : hash;
+	digest = hash.toString(16);
 } else if (mode === "zstd-compress" || mode === "zstd-decompress") {
 	const encoder = ZSTD_createCCtx();
 	const decoder = ZSTD_createDCtx();

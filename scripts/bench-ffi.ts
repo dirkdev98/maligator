@@ -71,6 +71,7 @@ const { values } = parseArgs({
 		"sqlite-prefix": { type: "string" },
 		"zstd-prefix": { type: "string" },
 		"crypto-prefix": { type: "string" },
+		"blas-prefix": { type: "string" },
 		bun: { type: "string", default: "bun" },
 		case: { type: "string", multiple: true },
 		runs: { type: "string", default: "5" },
@@ -85,6 +86,7 @@ if (values.help) {
   --sqlite-prefix PATH      installed SQLite prefix with include/ and lib/
   --zstd-prefix PATH        installed zstd prefix (default: pkg-config libzstd)
   --crypto-prefix PATH      installed OpenSSL prefix (default: pkg-config openssl)
+  --blas-prefix PATH        installed OpenBLAS prefix (default: pkg-config openblas)
   --case MODE               repeat to select modes; see --plan=json
   --runs N                  interleaved rounds, 1..15 (default: 5)
   --budget-seconds N        phase budget including preparation (default: 285)
@@ -99,7 +101,9 @@ cover the complete child. One round is indicative. No saved baseline is updated.
 SQLite uses one shared adapter to isolate embedded SQLite symbols. Timed adapter
 exports forward one call each. zstd and EVP updates call the libraries directly.
 Bun uses exact BigInt u64 arguments/results and Buffer views, without ptr caching.
-libc-strcmp compares owned ASCII strings with early, equal and late differences.
+OpenBLAS dot products and AXPY updates lend offset Float64Array views through a
+shared byte-span adapter. Sizes are element counts; patterns select stride 1 or 2.
+All callers use one BLAS thread and validate every element and view boundary.
 sqlite-text repeatedly binds transient ASCII, Latin1, BMP and astral UTF-8 text.
 Bun encodes terminated Buffer inputs before timing; Maligator converts JS strings.
 `);
@@ -128,13 +132,15 @@ const CASES: Array<Case> = [
 			iterations: size === 64 ? 1000000 : size === 4096 ? 250000 : 10000,
 		})),
 	),
-	...[64, 4095, 4096, 65535].flatMap((size) =>
-		["early", "equal", "late"].map((pattern) => ({
-			mode: "libc-strcmp",
-			size,
-			pattern,
-			iterations: size === 64 ? 1000000 : size <= 4096 ? 250000 : 10000,
-		})),
+	...[8, 64, 4096].flatMap((size) =>
+		["stride-1", "stride-2"].flatMap((pattern) =>
+			["blas-dot", "blas-axpy"].map((mode) => ({
+				mode,
+				size,
+				pattern,
+				iterations: size === 4096 ? 100000 : 1000000,
+			})),
+		),
 	),
 	...[64, 1024, 1048576].flatMap((size) =>
 		["repeat", "random"].flatMap((pattern) =>
@@ -175,6 +181,13 @@ const plan = {
 	sqlitePrefix: values["sqlite-prefix"],
 	zstdPrefix: values["zstd-prefix"],
 	cryptoPrefix: values["crypto-prefix"],
+	blasPrefix: values["blas-prefix"],
+	blas: {
+		threads: 1,
+		sizeUnit: "double elements",
+		alpha: 2 ** -20,
+		storage: "aligned offset Float64Array views, shared byte-span adapter",
+	},
 };
 if (values.plan !== undefined) {
 	if (values.plan !== "json") throw new Error("Use --plan=json");
@@ -187,6 +200,8 @@ const deadline = performance.now() + budgetSeconds * 1000;
 const environment = cleanTestEnvironment();
 delete environment.BUN_OPTIONS;
 delete environment.BUN_JIT;
+environment.OPENBLAS_NUM_THREADS = "1";
+environment.OMP_NUM_THREADS = "1";
 function text(command: string, args: Array<string>): string {
 	const result = spawnSync(command, args, {
 		cwd: ROOT,
@@ -266,12 +281,19 @@ async function build(): Promise<void> {
 		zstd: values["zstd-prefix"] ?? text("pkg-config", ["--variable=prefix", "libzstd"]),
 		crypto:
 			values["crypto-prefix"] ?? text("pkg-config", ["--variable=prefix", "openssl"]),
+		blas:
+			values["blas-prefix"] ??
+			path.dirname(text("pkg-config", ["--variable=libdir", "openblas"])),
 	};
 	const libraries = Object.fromEntries(
 		Object.entries(prefixes).map(([name, prefix]) => [
 			name,
 			fileIdentity(
-				path.join(prefix, "lib", `lib${name === "sqlite" ? "sqlite3" : name}.dylib`),
+				path.join(
+					prefix,
+					"lib",
+					`lib${name === "sqlite" ? "sqlite3" : name === "blas" ? "openblas" : name}.dylib`,
+				),
 			),
 		]),
 	);
@@ -287,7 +309,7 @@ async function build(): Promise<void> {
 		"-fPIC",
 		...includes.map((p) => `-I${p}`),
 		path.join(inputs, "sqlite.c"),
-		path.join(inputs, "text.c"),
+		path.join(inputs, "blas.c"),
 		...Object.values(libraries).map((l) => l.path),
 		"-Wl,-twolevel_namespace",
 		"-install_name",
@@ -307,9 +329,23 @@ async function build(): Promise<void> {
 	]);
 	await execute("control-strip", "/usr/bin/strip", ["-x", path.join(native, "control")]);
 	const contracts: Record<string, MaligatorLibraryContract> = {
-		text: {
-			headers: ["text.h"],
+		blas: {
+			headers: ["blas.h"],
 			find: [{ includeDirs: [inputs], libraryDirs: [native], libraries: ["ffi-bench"] }],
+			functions: {
+				ffi_bench_blas_dot: {
+					params: {
+						x: { bytes: { length: "x_bytes" } },
+						y: { bytes: { length: "y_bytes" } },
+					},
+				},
+				ffi_bench_blas_axpy: {
+					params: {
+						x: { bytes: { length: "x_bytes" } },
+						y: { bytes: { length: "y_bytes" } },
+					},
+				},
+			},
 		},
 		sqlite: {
 			headers: ["sqlite.h"],
@@ -394,16 +430,26 @@ async function build(): Promise<void> {
 		throw new Error("Source changed while building");
 	const bun = text("/usr/bin/which", [values.bun]);
 	const linkage = Object.fromEntries(
-		["control", "maligator"].map((name) => {
-			const binary = path.join(native, name);
+		["control", "maligator", "adapter"].map((name) => {
+			const binary = name === "adapter" ? adapter : path.join(native, name);
 			const imports = text("/usr/bin/nm", ["-m", "-u", binary]);
-			for (const [symbol, provider] of [
-				["EVP_DigestUpdate", "libcrypto"],
-				["ZSTD_compressCCtx", "libzstd"],
-				["ZSTD_decompressDCtx", "libzstd"],
-				["ffi_bench_sql_bind", "libffi-bench"],
-				["ffi_bench_string_compare", "libffi-bench"],
-			])
+			const providers =
+				name === "adapter"
+					? [
+							["cblas_ddot", "libopenblas"],
+							["cblas_daxpy", "libopenblas"],
+							["openblas_set_num_threads", "libopenblas"],
+							["openblas_get_num_threads", "libopenblas"],
+						]
+					: [
+							["EVP_DigestUpdate", "libcrypto"],
+							["ZSTD_compressCCtx", "libzstd"],
+							["ZSTD_decompressDCtx", "libzstd"],
+							["ffi_bench_sql_bind", "libffi-bench"],
+							["ffi_bench_blas_dot", "libffi-bench"],
+							["ffi_bench_blas_axpy", "libffi-bench"],
+						];
+			for (const [symbol, provider] of providers)
 				if (!imports.includes(`external _${symbol} (from ${provider})`))
 					throw new Error(`${name}: unexpected provider for ${symbol}`);
 			const linkedLibraries = text("/usr/bin/otool", ["-L", binary]);
@@ -413,7 +459,12 @@ async function build(): Promise<void> {
 					.slice(1)
 					.map((line) => line.trim().split(" (compatibility")[0]!)
 					.some((p) => existsSync(p) && realpathSync(p) === library.path);
-				if (!matched && (name === "control" || library.path !== libraries.sqlite!.path))
+				if (
+					!matched &&
+					(name !== "maligator" ||
+						(library.path !== libraries.sqlite!.path &&
+							library.path !== libraries.blas!.path))
+				)
 					throw new Error(`${name}: missing ${library.path}`);
 			}
 			return [name, { imports, libraries: linkedLibraries }];
@@ -542,17 +593,17 @@ async function measure(): Promise<void> {
 			...Array<string>(11).fill(identity.libraries.sqlite!.path),
 			...Array<string>(2).fill(identity.libraries.zstd!.path),
 			...Array<string>(3).fill(identity.libraries.crypto!.path),
+			...Array<string>(5).fill(identity.libraries.blas!.path),
 		];
 		if (
 			!isDeepStrictEqual(
-				parts.slice(4, 4 + expected.length).map((p) => realpathSync(p)),
+				parts.slice(6).map((p) => realpathSync(p)),
 				expected,
 			)
 		)
 			throw new Error("Calls resolved to unexpected library builds");
-		// System libraries can live only in the dyld shared cache, without a disk file to hash.
-		if (parts.length !== expected.length + 5 || !parts.at(-1)?.startsWith("/usr/lib/"))
-			throw new Error("strcmp did not resolve to the shared system library");
+		if (!parts[4]?.trim().startsWith("OpenBLAS ") || parts[5] !== "1")
+			throw new Error("OpenBLAS did not report its configuration and one thread");
 	};
 	const calibrated: Array<Case> = [];
 	for (const c of CASES) {

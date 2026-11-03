@@ -5,6 +5,7 @@
 #include <zstd.h>
 #include <openssl/evp.h>
 #include <openssl/crypto.h>
+#include <cblas.h>
 #include <dlfcn.h>
 #include <stdio.h>
 #include <string.h>
@@ -68,6 +69,8 @@ int ffi_bench_crypto_final(EVP_MD_CTX *context, unsigned char *output, unsigned 
 }
 
 const char *ffi_bench_library_identity(void) {
+    openblas_set_num_threads(1);
+    if (openblas_get_num_threads() != 1) return NULL;
     static char result[16384];
     const void *functions[] = {
         (void *)sqlite3_open, (void *)sqlite3_prepare_v2,
@@ -78,11 +81,14 @@ const char *ffi_bench_library_identity(void) {
         (void *)sqlite3_column_text,
         (void *)ZSTD_compressCCtx, (void *)ZSTD_decompressDCtx,
         (void *)EVP_DigestInit_ex, (void *)EVP_DigestUpdate,
-        (void *)EVP_DigestFinal_ex, (void *)strcmp
+        (void *)EVP_DigestFinal_ex,
+        (void *)cblas_ddot, (void *)cblas_daxpy,
+        (void *)openblas_set_num_threads, (void *)openblas_get_num_threads,
+        (void *)openblas_get_config
     };
-    size_t used = (size_t)snprintf(result, sizeof(result), "%s\n%s\n%s\n%s\n",
+    size_t used = (size_t)snprintf(result, sizeof(result), "%s\n%s\n%s\n%s\n%s\n%d\n",
         sqlite3_libversion(), sqlite3_sourceid(), ZSTD_versionString(),
-        OpenSSL_version(OPENSSL_VERSION));
+        OpenSSL_version(OPENSSL_VERSION), openblas_get_config(), openblas_get_num_threads());
     for (size_t i = 0; i < sizeof(functions) / sizeof(functions[0]); i++) {
         Dl_info info;
         if (dladdr(functions[i], &info) == 0 || info.dli_fname == NULL) return NULL;

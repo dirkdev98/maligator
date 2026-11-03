@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "sqlite.h"
 #include "crypto.h"
-#include "text.h"
+#include "blas.h"
 #include <zstd.h>
 #include <openssl/evp.h>
 #include <stdint.h>
@@ -34,7 +34,10 @@ int main(int argc, char **argv) {
         backing[i] = repeat ? (i & 7) : (seed & 255);
     }
     unsigned char *data = backing + 17;
-    uint64_t warm = 16777216 / (size ? size : 1);
+    int blas = strcmp(mode, "blas-dot") == 0 || strcmp(mode, "blas-axpy") == 0;
+    int stride = strcmp(pattern, "stride-1") == 0 ? 1 : strcmp(pattern, "stride-2") == 0 ? 2 : 0;
+    size_t work_bytes = blas ? size * (size_t)stride * sizeof(double) * 2 : size;
+    uint64_t warm = 16777216 / (work_bytes ? work_bytes : 1);
     if (warm < 1) warm = 1;
     if (warm > 10000) warm = 10000;
     if (warm > iterations) warm = iterations;
@@ -96,23 +99,44 @@ int main(int argc, char **argv) {
         snprintf(digest, sizeof(digest), "%x", actual);
         if (ffi_bench_sql_finalize(s) != 0 || ffi_bench_sql_close(db) != 0) return 10;
         free(text);
-    } else if (strcmp(mode, "libc-strcmp") == 0) {
-        if (strcmp(pattern, "early") != 0 && strcmp(pattern, "equal") != 0 && strcmp(pattern, "late") != 0) return 21;
-        char *left = malloc(size + 1), *right = malloc(size + 1);
-        if (!left || !right) return 22;
-        memset(left, 'x', size); memset(right, 'x', size);
-        left[size] = right[size] = 0;
-        if (size != 0 && strcmp(pattern, "early") == 0) right[0] = 'y';
-        if (size != 0 && strcmp(pattern, "late") == 0) right[size - 1] = 'y';
+    } else if (blas) {
+        if (!stride || !size) return 21;
+        size_t elements = size * (size_t)stride, bytes = elements * sizeof(double);
+        double *x_base = malloc((elements + 2) * sizeof(double));
+        double *y_base = malloc((elements + 2) * sizeof(double));
+        if (!x_base || !y_base) return 22;
+        double *x = x_base + 1, *y = y_base + 1;
+        x_base[0] = x_base[elements + 1] = y_base[0] = y_base[elements + 1] = 37;
+        for (size_t i = 0; i < elements; i++) x[i] = i % stride == 0 ? (i / stride) % 13 + 1 : 17;
+        const double alpha = 0x1p-20;
+        double result = 0;
+        int dot = strcmp(mode, "blas-dot") == 0;
         for (int phase = 0; phase < 2; phase++) {
-            checksum = 0;
+            for (size_t i = 0; i < elements; i++) y[i] = i % stride == 0 ? (i / stride) % 7 + 1 : 29;
             uint64_t count = phase == 0 ? warm : iterations;
             double start = now_ms();
-            for (uint64_t i = 0; i < count; i++) checksum += ffi_bench_string_compare(left, right) < 0 ? 1U : 0U;
+            if (dot) {
+                for (uint64_t i = 0; i < count; i++) result = ffi_bench_blas_dot(x, bytes, y, bytes, stride);
+            } else {
+                for (uint64_t i = 0; i < count; i++) ffi_bench_blas_axpy(alpha, x, bytes, y, bytes, stride);
+            }
             elapsed = now_ms() - start;
         }
-        free(left); free(right);
-        if (checksum != (strcmp(pattern, "equal") == 0 || size == 0 ? 0 : iterations)) return 23;
+        uint32_t hash = 2166136261U;
+        double expected_dot = 0;
+        for (size_t i = 0; i < elements; i++) {
+            double expected_x = i % stride == 0 ? (i / stride) % 13 + 1 : 17;
+            double initial_y = i % stride == 0 ? (i / stride) % 7 + 1 : 29;
+            double expected_y = initial_y + (!dot && i % stride == 0 ? (double)iterations * alpha * expected_x : 0);
+            if (x[i] != expected_x || y[i] != expected_y) return 23;
+            if (i % stride == 0) expected_dot += expected_x * initial_y;
+            hash = (hash ^ (uint32_t)(uint64_t)(y[i] * 0x1p20)) * 16777619U;
+        }
+        if (x_base[0] != 37 || x_base[elements + 1] != 37 || y_base[0] != 37 || y_base[elements + 1] != 37) return 23;
+        if (dot && result != expected_dot) return 23;
+        checksum = dot ? (uint32_t)result : hash;
+        snprintf(digest, sizeof(digest), "%x", hash);
+        free(x_base); free(y_base);
     } else if (strcmp(mode, "zstd-compress") == 0 || strcmp(mode, "zstd-decompress") == 0) {
         ZSTD_CCtx *encoder = ZSTD_createCCtx();
         ZSTD_DCtx *decoder = ZSTD_createDCtx();

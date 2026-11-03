@@ -41,14 +41,15 @@ On macOS, `bench:ffi` compares C, Bun FFI, and Maligator FFI against the same
 installed shared libraries. Inspect the selected cases and budget before building:
 
 ```sh
-npm run bench:ffi -- --phase build --sqlite-prefix /opt/homebrew/opt/sqlite --output .cache/ffi-comparison --plan=json
-npm run bench:ffi -- --phase build --sqlite-prefix /opt/homebrew/opt/sqlite --output .cache/ffi-comparison
+npm run bench:ffi -- --phase build --sqlite-prefix /opt/homebrew/opt/sqlite --blas-prefix /opt/homebrew/opt/openblas --output .cache/ffi-comparison --plan=json
+npm run bench:ffi -- --phase build --sqlite-prefix /opt/homebrew/opt/sqlite --blas-prefix /opt/homebrew/opt/openblas --output .cache/ffi-comparison
 npm run bench:ffi -- --phase measure --output .cache/ffi-comparison --budget-seconds 180 --plan=json
 npm run bench:ffi -- --phase measure --output .cache/ffi-comparison --budget-seconds 180
 ```
 
-The prefixes need `include/` and `lib/`. zstd and OpenSSL default to their
-`pkg-config` prefixes; override them with `--zstd-prefix` and `--crypto-prefix`.
+The prefixes need `include/` and `lib/`. zstd, OpenSSL, and OpenBLAS default to their
+`pkg-config` prefixes; override them with `--zstd-prefix`, `--crypto-prefix`, and
+`--blas-prefix`.
 Use a fresh output directory for each build and measurement. Keep the checkout
 unchanged between phases. Repeat `--case MODE` to narrow the modes listed by the plan.
 
@@ -60,10 +61,14 @@ callers use exact BigInt values for `size_t` and pass Buffer views without cachi
 raw pointers. C and Maligator use matching optimization and linker flags; Bun uses
 its own FFI JIT.
 
-`--case libc-strcmp` compares reused ASCII strings with early, equal, and late
-differences through the same shared adapter. Bun encodes terminated buffers during
-setup; Maligator receives JavaScript strings. The system library's loaded path and
-the host OS version identify libc, which may reside only in macOS's dyld cache.
+`--case blas-dot` returns double-precision dot products. `--case blas-axpy` updates
+`y` in place with `y += alpha * x`. Sizes are vector element counts; patterns select
+contiguous or strided storage. All callers use the same byte-span adapter around
+CBLAS, including its bounds and alignment checks. The JavaScript callers lend
+offset `Float64Array` views without copying numeric elements. The runner sets
+OpenBLAS and OpenMP thread limits before loading libraries and verifies one BLAS
+thread. Exact arithmetic inputs let each caller check every result, skipped stride
+slot, and view boundary after timing. AXPY resets its output after warmup.
 
 `--case sqlite-text` binds reused text through `sqlite3_bind_text` with
 `SQLITE_TRANSIENT`. Sizes are UTF-8 byte lengths, covering ASCII and Unicode input.
