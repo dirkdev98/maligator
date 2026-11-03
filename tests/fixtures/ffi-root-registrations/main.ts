@@ -107,7 +107,11 @@ function cycle(): void {
 }
 {
 	const destroyed = c.life_destroyed();
-	cycle();
+	// A dispatched frame must unwind before conservative collection can release its locals.
+	Reflect.apply(cycle, undefined, []);
+	await new Promise<void>((resolve) => {
+		setTimeout(resolve, 0);
+	});
 	for (let index = 0; index < 8 && c.life_destroyed() === destroyed; index++) collect();
 	check(
 		c.life_destroyed() === destroyed + 1,
