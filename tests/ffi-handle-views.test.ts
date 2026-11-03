@@ -49,7 +49,7 @@ describe("directed C handle views", () => {
 				},
 				functions: {},
 			}),
-		).toThrow("callable view field conflicts with ViewBase.read");
+		).toThrow("view field conflicts with ViewBase.read");
 	});
 	it.each([
 		[{ ViewDerived: { views: ["Missing"] } }, "needs a handle fact"],

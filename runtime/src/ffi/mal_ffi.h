@@ -115,6 +115,8 @@ typedef struct MalFfiHandleType {
     bool destroy_can_fail;
     /** Whether collection releases an owned handle the program never closed. */
     bool collect;
+    /** Every view in this family can represent a resource borrowed from another handle. */
+    bool borrows_owner;
     const MalFfiField *fields;
     int32_t field_count;
     /**
@@ -126,7 +128,7 @@ typedef struct MalFfiHandleType {
     int32_t view_count;
     const MalFfiManagedField *managed_fields;
     int32_t managed_field_count;
-    /** Guarded callable accessors shared by every prototype in a pointer-view family. */
+    /** Guarded accessors shared by every prototype in a pointer-view family. */
     const MalFfiField *view_fields;
     int32_t view_field_count;
 } MalFfiHandleType;
@@ -140,6 +142,10 @@ typedef struct MalFfiHandleType {
 MalValue mal_ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned, bool fresh);
+/** A canonical borrowed child whose owning resource remains reachable and guarded. */
+MalValue mal_ffi_new_owner_handle(
+    MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
+    void *value, MalValue owner);
 /**
  * Allocate zeroed caller storage and wrap its stable pointer. Disposing or collecting
  * this handle frees the outer storage; C initialization and cleanup are explicit.
@@ -673,5 +679,8 @@ void mal_ffi_inputs_unroot(MalFfiInputs *inputs);
 void mal_ffi_inputs_release(MalVm *vm, MalFfiInputs *inputs, const MalFfiSite *site, bool check);
 bool mal_ffi_input_handle(MalVm *vm, MalFfiInputs *inputs, MalValue value,
     const MalFfiHandleType *type, bool nullable, const MalFfiSite *site, void **out);
+/** Kept callbacks cannot publish pointers whose registration lacks an owning lifetime. */
+bool mal_ffi_retained_owners(MalVm *vm, MalValue value, const MalFfiInputs *inputs,
+    const MalFfiSite *site);
 
 #endif

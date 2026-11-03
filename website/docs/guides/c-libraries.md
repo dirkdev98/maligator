@@ -257,7 +257,7 @@ the selected member name, and payload writes must preserve their discriminator.
 Handles nested in callback arguments are loans that close when the callback returns.
 Resource-bearing values require waiting callbacks when C calls from another thread.
 Compound callback results containing handles need a pointer result interface with an
-explicit lifetime. Resource-bearing fields stay behind their owning handle.
+explicit lifetime. Describe borrowed resource fields on their owning handle.
 
 ## Describe resources
 
@@ -325,6 +325,32 @@ disposal, so it cannot use `collect: true`.
 - A `handle` without `destroy` describes a pointer the library owns, such as the `sqlite3_context` SQLite lends to callbacks, unless `storage: "caller"` provides its outer storage.
 - `collect: true` releases a handle the program drops once it is garbage collected. Leave it off for resources that must be released on one thread or before the library shuts down, such as raylib's GPU textures.
 - `nullable` on a parameter accepts `null` for a string or handle pointer and passes `NULL`.
+
+For a resource pointer inside a result handle, declare whether the containing resource
+owns its lifetime or the library keeps it alive:
+
+```ts
+types: {
+	Document: {
+		handle: { destroy: "document_free", collect: true },
+		fields: { root: { handle: { lifetime: "owner" } } },
+	},
+	Node: { handle: { destroy: "node_free" } },
+},
+```
+
+`document.root` returns a borrowed canonical `Node` handle or `null`. Keeping that child
+keeps the document reachable. Closing the document invalidates its children; disposing
+a child view only closes that view. The node's destroy binding cannot free a child
+owned by the document. Calls and callback-result leases on a child also protect its
+owning document. A child field that points at a sibling shares the document's lifetime.
+Use `lifetime: "library"` for a borrowed pointer that remains valid independently of
+the containing resource.
+
+Owner fields require a destructor-backed handle and library-owned child storage.
+Passing an owner-bound child while registering a kept callback throws before C entry;
+passing `null` to unregister a nullable callback remains available. Plain records that
+transfer independent resource ownership need a whole-result handle and destructor.
 
 When a library accepts the same allocation through another pointer type, declare directed
 `views`. For example, libuv accepts a timer pointer as a general handle pointer:

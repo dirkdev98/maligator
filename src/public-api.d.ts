@@ -108,7 +108,7 @@ export interface MaligatorFfiTypeFacts {
 	handle?: MaligatorFfiHandle;
 	/** Select active union storage explicitly or from a record's discriminator. */
 	shape?: MaligatorFfiShape;
-	/** Callable fields on complete handles, or retained ranges in caller-owned state.
+	/** Explicit field lifetimes on handles, or retained ranges in caller-owned state.
 	 * Range assignment writes the pointer and count together; C may advance them only
 	 * within the assigned range.
 	 */
@@ -117,7 +117,7 @@ export interface MaligatorFfiTypeFacts {
 	evidence?: Array<MaligatorFfiEvidence>;
 }
 
-/** A callable field, or a pointer/count pair retained by caller-owned state. */
+/** A resource or callable field, or a range retained by caller-owned state. */
 export type MaligatorFfiFieldFacts =
 	| {
 			bytes: {
@@ -128,17 +128,29 @@ export type MaligatorFfiFieldFacts =
 			};
 			string?: never;
 			callable?: never;
+			handle?: never;
 	  }
 	| {
 			/** UTF-8 text kept in a private encoding, with a C field holding its byte count. */
 			string: MaligatorFfiCount;
 			bytes?: never;
 			callable?: never;
+			handle?: never;
 	  }
 	| {
 			callable: MaligatorFfiCallable;
 			bytes?: never;
 			string?: never;
+			handle?: never;
+	  }
+	| {
+			/** A borrowed pointer resource. Owner lifetime shares the owning result's
+			 * lifetime; library lifetime asserts independence from the containing handle.
+			 */
+			handle: { lifetime: "owner" | "library" };
+			bytes?: never;
+			string?: never;
+			callable?: never;
 	  };
 
 /** A declaration whose documentation supports a fact, independent of its source location. */

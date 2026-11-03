@@ -690,19 +690,28 @@ typedef struct MalFfiNativeHandle {
 
 static void ffi_native_handle_drop(MalFfiNativeHandle *handle);
 
+enum {
+    MAL_FFI_HANDLE_BORROWED,
+    MAL_FFI_HANDLE_OWNED,
+    MAL_FFI_HANDLE_CHILD,
+};
+
 typedef struct MalFfiHandleObject {
     MalObject object;
     MalObjectStorage object_storage;
     const MalFfiHandleType *type;
-    /** View observations cannot replace the policy acquired with ownership. */
-    const MalFfiHandleType *owner_type;
+    /** Resource ownership and a borrowed owner are exclusive; views preserve an acquired destruction policy. */
+    union {
+        const MalFfiHandleType *owner_type;
+        struct MalFfiHandleObject *owner;
+    };
     MalFfiHandleView *views;
     MalFfiRetainedField *retained;
     MalFfiNativeHandle *native;
     const void *operation;
     /** Stable C storage, or the library's pointer; null once closed. */
     void *value;
-    bool owned;
+    u8 ownership;
     /** Outer storage belongs to this wrapper, independently of C resource ownership. */
     bool owns_storage;
     /** Cleanup is in progress; callbacks cannot use or close this resource. */
@@ -1061,6 +1070,14 @@ static MalFfiHandleObject *ffi_handle(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_FFI_HANDLE_OBJECT)
         ? (MalFfiHandleObject *) mal_value_to_object(value)
         : nullptr;
+}
+
+static MalFfiHandleObject *ffi_handle_owner(MalFfiHandleObject *handle) {
+    return handle->ownership == MAL_FFI_HANDLE_CHILD ? handle->owner : nullptr;
+}
+
+static const MalFfiHandleType *ffi_handle_policy(MalFfiHandleObject *handle) {
+    return handle->ownership == MAL_FFI_HANDLE_CHILD ? handle->type : handle->owner_type;
 }
 
 static bool ffi_store(MalVm *vm, MalValue target, MalKey key, MalValue value) {
@@ -2391,6 +2408,11 @@ static void ffi_handle_forget(MalFfiHandleObject *handle) {
         handle->native = nullptr;
     }
     handle->value = nullptr;
+    if (handle->ownership == MAL_FFI_HANDLE_CHILD) {
+        if (!ffi_finalizing) mal_gc_write_barrier(mal_value_from_heap((MalHeapHeader *) handle->owner));
+        handle->ownership = MAL_FFI_HANDLE_BORROWED;
+    }
+    handle->owner_type = handle->type;
 }
 
 static void ffi_close_free(MalFfiClose *close) {
@@ -2422,7 +2444,7 @@ bool mal_ffi_close_prepare(
     const MalFfiSite *error) {
     MalFfiHandleObject *handle = ffi_handle(value);
     if (handle == nullptr || handle->value == nullptr || handle->pins != 1 || handle->closing
-        || ffi_handle_borrowed(handle))
+        || ffi_handle_borrowed(handle) || ffi_handle_owner(handle) != nullptr)
         return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, error,
             "a handle no other C call is using");
     MalFfiClose *close = calloc(1, sizeof(*close));
@@ -2560,6 +2582,8 @@ void mal_ffi_close_return(MalFfiCallback *callback) {
 
 static void ffi_handle_trace(MalHeapHeader *cell) {
     MalFfiHandleObject *handle = (MalFfiHandleObject *) cell;
+    if (handle->ownership == MAL_FFI_HANDLE_CHILD)
+        mal_gc_mark_value(mal_value_from_heap((MalHeapHeader *) handle->owner));
     if (handle->retained == nullptr) return;
     for (i32 index = 0; index < handle->type->managed_field_count; index++)
         mal_gc_mark_value(handle->retained[index].buffer);
@@ -2573,14 +2597,14 @@ static void ffi_handle_finalize(MalHeapHeader *cell) {
     if (native != nullptr) {
         ffi_native_handle_unregister(native);
         native->value = handle->value;
-        native->owner_type = handle->owner_type;
-        native->owned = handle->owned;
+        native->owner_type = ffi_handle_policy(handle);
+        native->owned = handle->ownership == MAL_FFI_HANDLE_OWNED;
         native->owns_storage = handle->owns_storage;
         handle->native = nullptr;
         handle->owns_storage = false;
-    } else if (handle->value != nullptr && handle->owned && handle->owner_type->collect
-        && handle->owner_type->destroy != nullptr) {
-        if (handle->owner_type->destroy(handle->value)) ffi_replaced_drop(handle->value);
+    } else if (handle->value != nullptr && handle->ownership == MAL_FFI_HANDLE_OWNED && ffi_handle_policy(handle)->collect
+        && ffi_handle_policy(handle)->destroy != nullptr) {
+        if (ffi_handle_policy(handle)->destroy(handle->value)) ffi_replaced_drop(handle->value);
     }
     ffi_handle_forget(handle);
     if (native != nullptr) ffi_native_handle_drop(native);
@@ -2614,8 +2638,8 @@ static MalValue ffi_handle_dispose(
     }
     if (handle->value != nullptr) {
         void *value = handle->value;
-        const MalFfiHandleType *owner = handle->owner_type;
-        bool release = handle->owned && owner->destroy != nullptr;
+        const MalFfiHandleType *owner = ffi_handle_policy(handle);
+        bool release = handle->ownership == MAL_FFI_HANDLE_OWNED && owner->destroy != nullptr;
         handle->closing = true;
         // Unconditional release can hand out the same pointer again. A conditional
         // release keeps its identity until C confirms it stopped owning the resource.
@@ -2703,6 +2727,18 @@ static bool ffi_scope_active(MalVm *vm, u64 scope) {
     return false;
 }
 
+static bool ffi_handle_owners_open(MalVm *vm, MalFfiHandleObject *handle) {
+    for (MalFfiHandleObject *owner = ffi_handle_owner(handle); owner != nullptr; owner = ffi_handle_owner(owner))
+        if (owner->value == nullptr || owner->closing || !ffi_scope_active(vm, owner->scope)) return false;
+    return true;
+}
+
+static bool ffi_handle_owner_expired(MalVm *vm, MalFfiHandleObject *handle) {
+    for (MalFfiHandleObject *owner = ffi_handle_owner(handle); owner != nullptr; owner = ffi_handle_owner(owner))
+        if (owner->value == nullptr || !ffi_scope_active(vm, owner->scope)) return true;
+    return false;
+}
+
 bool mal_ffi_callback_enter(MalVm *vm) {
     MalFfiState *state = ffi_state(vm);
     if (state != nullptr && state->invocation_depth == state->invocation_capacity) {
@@ -2765,19 +2801,24 @@ static MalValue ffi_new_handle(
     bool owned, u64 scope, bool owns_storage, bool fresh) {
     MalFfiState *state = type->size == 0 ? ffi_state(vm) : nullptr;
     MalFfiHandleObject *open = state == nullptr ? nullptr : ffi_handle_find(state, ffi_handle_family(type), value);
-    if (fresh && open != nullptr && open->closing) {
+    if (fresh && open != nullptr && (open->closing || !ffi_handle_owners_open(vm, open))) {
         ffi_replaced_drop(open->value);
         ffi_handle_forget(open);
         open = nullptr;
     }
-    if (open != nullptr && !ffi_scope_active(vm, open->scope)) {
+    if (open != nullptr && (!ffi_scope_active(vm, open->scope) || ffi_handle_owner_expired(vm, open))) {
         // C may reuse a callback's stack address for a different resource or type.
         ffi_handle_forget(open);
         open = nullptr;
     }
     if (open != nullptr) {
-        if (owned && !open->owned && !open->owns_storage) {
-            open->owned = true;
+        if (owned && ffi_handle_owner(open) != nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                (const byte *) "Cannot take ownership of an owner-bound C resource");
+            return mal_value_new_undefined();
+        }
+        if (owned && open->ownership != MAL_FFI_HANDLE_OWNED && !open->owns_storage) {
+            open->ownership = MAL_FFI_HANDLE_OWNED;
             open->owner_type = type;
         }
         if (open->type != type && !ffi_handle_supports(open, type)) {
@@ -2813,6 +2854,7 @@ static MalValue ffi_new_handle(
     mal_gc_root(&root, rooted, 2);
     MalFfiHandleObject *handle =
         mal_heap_alloc(&vm->heap, sizeof(MalFfiHandleObject), MAL_HEAP_FFI_HANDLE_OBJECT);
+    handle->ownership = MAL_FFI_HANDLE_BORROWED;
     mal_object_init(
         &vm->heap, &handle->object, MAL_HEAP_FFI_HANDLE_OBJECT, mal_value_to_object(prototype));
     rooted[1] = mal_value_from_heap((MalHeapHeader *) handle);
@@ -2823,7 +2865,7 @@ static MalValue ffi_new_handle(
     handle->native = nullptr;
     handle->operation = nullptr;
     handle->value = stored;
-    handle->owned = owned;
+    handle->ownership = owned ? MAL_FFI_HANDLE_OWNED : MAL_FFI_HANDLE_BORROWED;
     handle->owns_storage = owns_storage;
     handle->closing = false;
     handle->worker_closing = false;
@@ -2856,6 +2898,60 @@ MalValue mal_ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned, bool fresh) {
     return ffi_new_handle(vm, library, type, value, owned, 0, false, fresh);
+}
+
+static bool ffi_handle_can_adopt(
+    MalVm *vm, MalFfiHandleObject *child, MalFfiHandleObject *owner, const MalFfiSite *site) {
+    if (child == owner) return true;
+    MalFfiHandleObject *prior = ffi_handle_owner(child);
+    if (child->ownership == MAL_FFI_HANDLE_OWNED || child->owns_storage || (prior != nullptr && prior != owner))
+        return mal_ffi_expected(vm, site, "one distinct owning resource for a borrowed pointer");
+    if (prior == nullptr && (child->pins > 0 || child->closing || ffi_handle_borrowed(child)))
+        return mal_ffi_expected(vm, site, "a resource no C operation is using before assigning its owner");
+    return true;
+}
+
+MalValue mal_ffi_new_owner_handle(
+    MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,
+    void *value, MalValue owner_value) {
+    MalFfiSite site = {type->name, "owner", nullptr};
+    if (!type->borrows_owner) {
+        mal_ffi_expected(vm, &site, "a handle family that supports owner-bound resource fields");
+        return mal_value_new_undefined();
+    }
+    MalFfiHandleObject *owner = ffi_handle(owner_value);
+    if (owner == nullptr || owner->value == nullptr || owner->closing
+        || !ffi_scope_active(vm, owner->scope) || !ffi_handle_owners_open(vm, owner)) {
+        mal_ffi_expected(vm, &site, "an open owning resource");
+        return mal_value_new_undefined();
+    }
+    // Borrowed descendants share the same native destruction boundary. Keeping the
+    // owning root avoids retaining an entire sibling traversal through view objects.
+    while (ffi_handle_owner(owner) != nullptr) {
+        owner_value = mal_value_from_heap((MalHeapHeader *) owner->owner);
+        owner = ffi_handle_owner(owner);
+    }
+    MalValue roots[] = {owner_value, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    MalFfiState *state = ffi_state(vm);
+    MalFfiHandleObject *candidate = state == nullptr ? nullptr
+        : ffi_handle_find(state, ffi_handle_family(type), value);
+    if (candidate != nullptr && ffi_scope_active(vm, candidate->scope)
+        && !ffi_handle_owner_expired(vm, candidate)
+        && !ffi_handle_can_adopt(vm, candidate, owner, &site)) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    roots[1] = ffi_new_handle(vm, library, type, value, false, owner->scope, false, false);
+    MalFfiHandleObject *child = mal_ffi_threw(vm) ? nullptr : ffi_handle(roots[1]);
+    if (child != nullptr && child != owner && ffi_handle_owner(child) == nullptr) {
+        child->owner = owner;
+        child->ownership = MAL_FFI_HANDLE_CHILD;
+        mal_gc_card(&child->object.header, roots[0]);
+    }
+    mal_gc_unroot(&root);
+    return mal_ffi_threw(vm) ? mal_value_new_undefined() : roots[1];
 }
 
 MalValue mal_ffi_allocate_handle(
@@ -2919,10 +3015,11 @@ __attribute__((always_inline)) bool mal_ffi_to_handle(
     MalFfiHandleObject *handle = ffi_handle(value);
     bool typed = handle != nullptr && (handle->type == type
         || (type->family != nullptr && ffi_handle_supports(handle, type)));
-    if (typed && handle->value != nullptr && !handle->closing && ffi_scope_active(vm, handle->scope)) {
+    if (typed && handle->value != nullptr && !handle->closing && ffi_scope_active(vm, handle->scope)
+        && (!type->borrows_owner || ffi_handle_owners_open(vm, handle))) {
         *out = handle->value;
         if (pin != nullptr) {
-            handle->pins++;
+            for (MalFfiHandleObject *held = handle; held != nullptr; held = ffi_handle_owner(held)) held->pins++;
             *pin = handle;
         }
         return true;
@@ -2935,9 +3032,11 @@ __attribute__((always_inline)) bool mal_ffi_to_handle(
 }
 
 static bool ffi_handle_held(MalVm *vm, MalFfiHandleObject *handle, const MalFfiSite *site) {
-    return handle->scope == 0 ? true
-        : ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
-            "a handle the program holds, not one a callback lends");
+    for (MalFfiHandleObject *held = handle; held != nullptr; held = ffi_handle_owner(held))
+        if (held->scope != 0)
+            return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
+                "a handle and owner the program holds, not ones a callback lends");
+    return true;
 }
 
 bool mal_ffi_to_worker_handle(
@@ -2952,7 +3051,7 @@ bool mal_ffi_to_worker_handle(
         mal_ffi_unpin_handle(handle);
         return false;
     }
-    handle->worker_pins++;
+    for (MalFfiHandleObject *held_owner = handle; held_owner != nullptr; held_owner = ffi_handle_owner(held_owner)) held_owner->worker_pins++;
     *pin = handle;
     return true;
 }
@@ -2960,15 +3059,30 @@ bool mal_ffi_to_worker_handle(
 void mal_ffi_unpin_worker_handle(void *pin) {
     MalFfiHandleObject *handle = pin;
     if (handle == nullptr) return;
-    handle->worker_pins--;
+    for (MalFfiHandleObject *held = handle; held != nullptr; held = ffi_handle_owner(held)) held->worker_pins--;
     mal_ffi_unpin_handle(handle);
 }
 
 bool mal_ffi_handle_idle(MalVm *vm, MalValue value, const MalFfiSite *site) {
     MalFfiHandleObject *handle = ffi_handle(value);
-    return handle != nullptr && handle->worker_pins == 0
-        && handle->operation == nullptr && !ffi_handle_borrowed(handle)
-        ? true : ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "state no C operation is using");
+    if (handle != nullptr) {
+        for (MalFfiHandleObject *held = handle; held != nullptr; held = ffi_handle_owner(held))
+            if (held->worker_pins != 0 || held->operation != nullptr || ffi_handle_borrowed(held))
+                return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "state no C operation is using");
+        return true;
+    }
+    return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "state no C operation is using");
+}
+
+bool mal_ffi_retained_owners(
+    MalVm *vm, MalValue value, const MalFfiInputs *inputs, const MalFfiSite *site) {
+    MalFfiHandleObject *handle = ffi_handle(value);
+    if (handle != nullptr && ffi_handle_owner(handle) != nullptr)
+        return mal_ffi_expected(vm, site, "an independent resource when registering a kept callback");
+    if (inputs != nullptr)
+        for (i32 index = 0; index < inputs->count; index++)
+            if (!mal_ffi_retained_owners(vm, inputs->values[index], nullptr, site)) return false;
+    return true;
 }
 
 static bool ffi_state_range(MalFfiHandleObject *handle, i32 index, void **data, usize *length) {
@@ -2994,15 +3108,8 @@ static bool ffi_state_check(MalVm *vm, MalFfiHandleObject *handle, const MalFfiS
     return true;
 }
 
-bool mal_ffi_callback_result_handle(
-    MalVm *vm, MalFfiCallback *callback, MalValue value, const MalFfiHandleType *type,
-    bool nullable, bool registration, const MalFfiSite *site, void **out) {
-    if (!mal_ffi_to_handle(vm, value, type, nullable, site, out, nullptr)) return false;
-    if (*out == nullptr) return true;
-    if (registration && *out == callback->result_owner)
-        return mal_ffi_expected(vm, site, "a result resource independent of its registration owner");
-    MalFfiHandleObject *handle = ffi_handle(value);
-    if (!ffi_handle_held(vm, handle, site)) return false;
+static bool ffi_prepare_result_handle(
+    MalVm *vm, MalFfiHandleObject *handle, const MalFfiSite *site, MalFfiNativeHandle **prepared) {
     bool borrowed = ffi_handle_borrowed(handle);
     if (handle->retained != nullptr
         && (handle->operation != nullptr || (!borrowed && !ffi_state_check(vm, handle, site)))) {
@@ -3015,7 +3122,7 @@ bool mal_ffi_callback_result_handle(
         MalFfiNativeHandle *native = calloc(1, sizeof(*native));
         if (native == nullptr) return mal_ffi_out_of_memory(vm);
         atomic_init(&native->references, 1);
-        native->wrapper = value;
+        native->wrapper = mal_value_from_heap((MalHeapHeader *) handle);
         native->registry = state;
         native->next = state->native_handles;
         state->native_handles = native;
@@ -3044,19 +3151,60 @@ bool mal_ffi_callback_result_handle(
         native->stores = stores;
         native->store_count = count;
     }
-    MalFfiResultCopy *result = malloc(sizeof(*result));
-    if (result == nullptr) return mal_ffi_out_of_memory(vm);
+    *prepared = native;
+    return true;
+}
+
+bool mal_ffi_callback_result_handle(
+    MalVm *vm, MalFfiCallback *callback, MalValue value, const MalFfiHandleType *type,
+    bool nullable, bool registration, const MalFfiSite *site, void **out) {
+    if (!mal_ffi_to_handle(vm, value, type, nullable, site, out, nullptr)) return false;
+    if (*out == nullptr) return true;
+    MalFfiHandleObject *handle = ffi_handle(value);
+    if (!ffi_handle_held(vm, handle, site)) return false;
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    MalFfiResultCopy *prepared = nullptr;
+    MalFfiResultCopy *tail = nullptr;
+    for (MalFfiHandleObject *held = handle; held != nullptr; held = ffi_handle_owner(held)) {
+        if (registration && held->value == callback->result_owner) {
+            mal_ffi_expected(vm, site, "a result resource independent of its registration owner");
+            goto mal_failed;
+        }
+        MalFfiNativeHandle *native;
+        if (!ffi_prepare_result_handle(vm, held, site, &native)) goto mal_failed;
+        MalFfiResultCopy *result = malloc(sizeof(*result));
+        if (result == nullptr) {
+            mal_ffi_out_of_memory(vm);
+            goto mal_failed;
+        }
+        *result = (MalFfiResultCopy) {.next = prepared, .handle = native};
+        prepared = result;
+        if (tail == nullptr) tail = result;
+    }
     if (registration) pthread_mutex_lock(&ffi_queue_lock);
     if (registration && !callback->results_accepting) {
         pthread_mutex_unlock(&ffi_queue_lock);
-        free(result);
-        return mal_ffi_expected(vm, site, "a live registration for this callback result");
+        mal_ffi_expected(vm, site, "a live registration for this callback result");
+        goto mal_failed;
     }
-    atomic_fetch_add_explicit(&native->references, 1, memory_order_relaxed);
-    *result = (MalFfiResultCopy) {.next = callback->results, .handle = native};
-    callback->results = result;
+    // Publish the entire owner chain together: C must never receive a child lease
+    // whose owning resource could already be released.
+    for (MalFfiResultCopy *result = prepared; result != nullptr; result = result->next)
+        atomic_fetch_add_explicit(&result->handle->references, 1, memory_order_relaxed);
+    tail->next = callback->results;
+    callback->results = prepared;
     if (registration) pthread_mutex_unlock(&ffi_queue_lock);
+    mal_gc_unroot(&root);
     return true;
+mal_failed:
+    while (prepared != nullptr) {
+        MalFfiResultCopy *next = prepared->next;
+        free(prepared);
+        prepared = next;
+    }
+    mal_gc_unroot(&root);
+    return false;
 }
 
 bool mal_ffi_begin_handle_use(MalVm *vm, void *pin, const void *operation, const MalFfiSite *site) {
@@ -3186,7 +3334,7 @@ mal_done:
 }
 
 void mal_ffi_unpin_handle(void *pin) {
-    if (pin != nullptr) ((MalFfiHandleObject *) pin)->pins--;
+    for (MalFfiHandleObject *held = pin; held != nullptr; held = ffi_handle_owner(held)) held->pins--;
 }
 
 void mal_ffi_inputs_init(MalFfiInputs *inputs, const void *operation, bool worker) {
@@ -3262,6 +3410,8 @@ bool mal_ffi_handle_results_ready(MalVm *vm, const MalFfiHandleType *type, const
 bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, bool worker, const MalFfiSite *site) {
     if (pin == nullptr) return true;
     MalFfiHandleObject *handle = pin;
+    if (ffi_handle_owner(handle) != nullptr)
+        return mal_ffi_expected(vm, site, "an independently owned resource for a destroy binding");
     if (handle->owns_storage && handle->type->size == 0)
         return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
             "library-owned storage for a destroy binding; caller storage needs explicit C cleanup");

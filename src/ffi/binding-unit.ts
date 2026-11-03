@@ -270,6 +270,7 @@ class BindingWriter {
 	readonly #taggedCaseInitializers = new Map<string, string>();
 	readonly #managedFamilies = new Set<string>();
 	readonly #viewFamilies = new Set<string>();
+	readonly #ownerFamilies = new Set<string>();
 	readonly #viewFields = new Map<string, Array<{ handle: string; name: string }>>();
 	readonly #workerCloseFamilies = new Set<string>();
 	readonly #callables = new Map<string, Extract<JsValue, { kind: "callable" }>>();
@@ -290,12 +291,15 @@ class BindingWriter {
 		for (const handle of plan.handles.values()) {
 			if (handle.managedFields.length > 0) this.#managedFamilies.add(handle.family);
 			if (handle.views.length > 0) this.#viewFamilies.add(handle.family);
+			for (const field of handle.fields)
+				if (field.value.kind === "handle" && field.value.owner !== undefined)
+					this.#ownerFamilies.add(this.#handle(field.value.name).family);
 		}
 		for (const handle of plan.handles.values()) {
 			if (!this.#viewFamilies.has(handle.family)) continue;
 			const fields = this.#viewFields.get(handle.family) ?? [];
 			for (const field of handle.fields)
-				if (field.value.kind === "callable")
+				if (field.value.kind === "callable" || field.value.kind === "handle")
 					fields.push({ handle: handle.name, name: field.name });
 			if (fields.length > 0) this.#viewFields.set(handle.family, fields);
 		}
@@ -305,6 +309,35 @@ class BindingWriter {
 			if (binding.async !== undefined && value?.kind === "handle")
 				this.#workerCloseFamilies.add(this.#handle(value.name).family);
 		}
+	}
+
+	#retainedOwnerGuards(
+		binding: BoundFunction,
+		argument: (index: number) => string,
+		inputs: string,
+		fail: string,
+		owner?: string,
+	): Array<string> {
+		const callbacks = binding.params.flatMap(({ value }, index) =>
+			value.kind === "callback" && value.kept
+				? [`(${argument(index)}) != mal_ffi_null()`]
+				: [],
+		);
+		if (callbacks.length === 0) return [];
+		const checks = binding.params.flatMap(({ value }, index) =>
+			value.kind === "handle"
+				? [
+						`if (!mal_ffi_retained_owners(vm, ${argument(index)}, nullptr, &mal_site_${index})) ${fail}`,
+					]
+				: [],
+		);
+		if (inputs !== "nullptr" || owner !== undefined)
+			checks.push(
+				`if (!mal_ffi_retained_owners(vm, ${owner ?? "mal_ffi_undefined()"}, ${inputs}, &mal_site_result)) ${fail}`,
+			);
+		return checks.length === 0
+			? []
+			: [`if (${callbacks.join(" || ")}) {`, ...checks.map((line) => `\t${line}`), "}"];
 	}
 
 	#resultGuards(binding: BoundFunction, fail: string): Array<string> {
@@ -690,7 +723,10 @@ class BindingWriter {
 			case "handle": {
 				const created = (address: string) => {
 					const loan = `mal_ffi_new_callback_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address})`;
-					const ordinary = `mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.owned}, ${value.fresh === true})`;
+					const ordinary =
+						value.owner === undefined
+							? `mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.owned}, ${value.fresh === true})`
+							: `mal_ffi_new_owner_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${owner})`;
 					return typeof lent === "boolean"
 						? lent
 							? loan
@@ -1499,7 +1535,9 @@ class BindingWriter {
 			const ownFields =
 				shared === undefined
 					? handle.fields
-					: handle.fields.filter((field) => field.value.kind !== "callable");
+					: handle.fields.filter(
+							(field) => field.value.kind !== "callable" && field.value.kind !== "handle",
+						);
 			let destroy = "nullptr";
 			if (handle.destroy !== undefined) {
 				destroy = `mal_ffi_destroy_${name}`;
@@ -1612,6 +1650,7 @@ class BindingWriter {
 				`\t${handle.destroy === undefined ? "nullptr" : cString(handle.destroy.name)},`,
 				`\t${handle.destroy?.success !== undefined},`,
 				`\t${handle.collect},`,
+				`\t${this.#ownerFamilies.has(handle.family)},`,
 				`\t${fields},`,
 				`\t${String(fieldCount)},`,
 				`\t${this.#viewFamilies.has(handle.family) ? `&mal_ffi_type_${handle.family}` : "nullptr"},`,
@@ -3192,6 +3231,13 @@ class BindingWriter {
 						"\tif (!mal_ffi_begin_handle_use(vm, mal_owner_pin, &mal_result, &mal_site_result)) goto mal_done;",
 					]),
 			...body.map((line) => `\t${line}`),
+			...this.#retainedOwnerGuards(
+				binding,
+				argument,
+				inputs,
+				"goto mal_done;",
+				owner === undefined ? undefined : "mal_owner",
+			).map((line) => `\t${line}`),
 			...this.#resultGuards(binding, "goto mal_done;").map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
 			...keeps.map((line) => `\t${line}`),
@@ -3979,6 +4025,9 @@ class BindingWriter {
 				? ["\tmal_ffi_inputs_init(&mal_ctx->mal_inputs, mal_ctx, true);"]
 				: []),
 			...body.map((line) => `\t${line}`),
+			...this.#retainedOwnerGuards(binding, argument, inputs, "goto mal_failed;").map(
+				(line) => `\t${line}`,
+			),
 			...this.#resultGuards(binding, "goto mal_failed;").map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
 			...callbackArguments.map((line) => `\t${line}`),

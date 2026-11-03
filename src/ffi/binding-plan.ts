@@ -152,6 +152,8 @@ export type JsValue =
 			/** For results: whether closing the new handle releases the resource. */
 			readonly owned: boolean;
 			readonly fresh?: true;
+			/** Field results borrow the containing resource's owning lifetime. */
+			readonly owner?: string;
 	  };
 
 type Mapping = { readonly value: JsValue } | { readonly gap: string };
@@ -437,11 +439,13 @@ function handleTypes(
 		if (
 			typeFacts.fields !== undefined &&
 			handle?.storage !== "caller" &&
-			Object.values(typeFacts.fields).some((field) => field.callable === undefined)
+			Object.values(typeFacts.fields).some(
+				(field) => field.callable === undefined && field.handle === undefined,
+			)
 		)
 			throw new FfiError(`types.${key}.fields: managed fields require caller storage`);
 		if (typeFacts.fields !== undefined && handle === undefined)
-			throw new FfiError(`types.${key}.fields: callable fields require a handle`);
+			throw new FfiError(`types.${key}.fields: explicit fields require a handle`);
 		if (handle === undefined) {
 			if (!model.typedefs.has(key) && !model.records.has(key) && !model.enums.has(key))
 				throw new FfiError(`types.${key}: the headers declare no type named '${key}'`);
@@ -1666,8 +1670,9 @@ class Planner {
 			if (field.name === undefined || managed.some((entry) => entry.name === field.name))
 				continue;
 			const fact = facts[field.name];
-			if (!exposeValues && fact?.callable === undefined) continue;
-			const mapped =
+			if (!exposeValues && fact?.callable === undefined && fact?.handle === undefined)
+				continue;
+			let mapped: Mapping =
 				fact?.callable === undefined
 					? this.#field(field)
 					: this.#callable(
@@ -1681,13 +1686,32 @@ class Planner {
 								owner: handle.name,
 							},
 						);
+			if (fact?.handle !== undefined) {
+				const at = `types.${record.name}.fields.${field.name}.handle`;
+				mapped = this.value(field.type, "return", { borrowed: true });
+				if (
+					!("value" in mapped) ||
+					mapped.value.kind !== "handle" ||
+					mapped.value.pass !== "pointer"
+				)
+					throw new FfiError(`${at}: requires a pointer-represented resource handle`);
+				if (this.#handles.get(mapped.value.name)?.allocator !== undefined)
+					throw new FfiError(`${at}: requires library-owned resource storage`);
+				if (fact.handle.lifetime === "owner") {
+					if (handle.destroy === undefined || handle.allocator !== undefined)
+						throw new FfiError(
+							`${at}: owner lifetime requires a destructor-backed result handle`,
+						);
+					mapped = { value: { ...mapped.value, owned: false, owner: handle.name } };
+				}
+			}
 			if (fact?.callable !== undefined && "gap" in mapped)
 				throw new FfiError(`types.${record.name}.fields.${field.name}: ${mapped.gap}`);
 			// Accessors return single values; array fields stay behind the handle.
 			if (
 				"value" in mapped &&
 				mapped.value.kind !== "array" &&
-				!this.#containsHandle(mapped.value)
+				(fact?.handle !== undefined || !this.#containsHandle(mapped.value))
 			) {
 				fields.push({
 					name: field.name,
@@ -1709,7 +1733,7 @@ class Planner {
 		const counts = new Set<string>();
 		const fields = [...promotedCFields(this.#model, record)];
 		for (const [name, fact] of Object.entries(facts)) {
-			if (fact.callable !== undefined) continue;
+			if (fact.callable !== undefined || fact.handle !== undefined) continue;
 			const at = `types.${record.name}.fields.${name}`;
 			const kind = fact.string === undefined ? "bytes" : "string";
 			const counted = fact.string ?? fact.bytes;
@@ -3102,21 +3126,23 @@ export function planBindings(
 		families.set(handle.family, family);
 	}
 	for (const family of families.values()) {
-		const callableNames = new Set(
+		const viewNames = new Set(
 			family.flatMap((handle) =>
 				handle.fields
-					.filter((field) => field.value.kind === "callable")
+					.filter(
+						(field) => field.value.kind === "callable" || field.value.kind === "handle",
+					)
 					.map((field) => field.name),
 			),
 		);
 		const owners = new Map<string, string>();
 		for (const handle of family)
 			for (const field of [...handle.fields, ...handle.managedFields]) {
-				if (!callableNames.has(field.name)) continue;
+				if (!viewNames.has(field.name)) continue;
 				const previous = owners.get(field.name);
 				if (previous !== undefined)
 					throw new FfiError(
-						`types.${handle.name}.fields.${field.name}: callable view field conflicts with ${previous}`,
+						`types.${handle.name}.fields.${field.name}: view field conflicts with ${previous}`,
 					);
 				owners.set(field.name, `${handle.name}.${field.name}`);
 			}
