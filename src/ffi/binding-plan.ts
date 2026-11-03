@@ -222,6 +222,7 @@ export interface Gap {
 
 export interface UnboundFunction {
 	readonly name: string;
+	readonly dispatchOf?: string;
 	readonly global?: GlobalAccessor;
 	readonly declaration: CFunction;
 	readonly gaps: ReadonlyArray<Gap>;
@@ -346,8 +347,15 @@ export interface NativeType {
 	readonly doc?: FfiText;
 }
 
+export interface BoundDispatcher {
+	readonly name: string;
+	readonly declaration: CFunction;
+	readonly cases: ReadonlyArray<BoundFunction>;
+}
+
 export interface BindingPlan {
 	readonly functions: ReadonlyArray<BoundFunction>;
+	readonly dispatchers: ReadonlyArray<BoundDispatcher>;
 	/**
 	 * A shared C dependency can invoke a callback while a different binding runs,
 	 * including a call nested inside a call-scoped callback.
@@ -2898,11 +2906,29 @@ export function planBindings(
 	}
 	const planner = new Planner(model, handleMap, facts);
 	const functions: Array<BoundFunction> = [];
+	const dispatchers: Array<BoundDispatcher> = [];
 	const unbound: Array<UnboundFunction> = [];
 	const declared = new Set(model.functions.map((declaration) => declaration.name));
 	for (const declaration of model.functions) {
 		const variants = Object.entries(facts.functions[declaration.name]?.variants ?? {});
+		if (
+			facts.functions[declaration.name]?.dispatch !== undefined &&
+			variants.length === 0
+		)
+			throw new FfiError(
+				`functions.${declaration.name}.dispatch: provide typed variants`,
+			);
 		if (variants.length > 0) {
+			const dispatch = facts.functions[declaration.name]?.dispatch;
+			if (dispatch !== undefined) {
+				if (declared.has(dispatch) && dispatch !== declaration.name)
+					throw new FfiError(
+						`functions.${declaration.name}.dispatch: '${dispatch}' is already a function`,
+					);
+				declared.add(dispatch);
+			}
+			const cases: Array<BoundFunction> = [];
+			const gaps: Array<Gap> = [];
 			// A variadic function binds only through its variants.
 			for (const [name, variant] of variants) {
 				if (declared.has(name)) {
@@ -2919,8 +2945,28 @@ export function planBindings(
 					name,
 					variant,
 				);
-				if ("gaps" in result) unbound.push(result);
-				else functions.push(result);
+				if ("gaps" in result) {
+					unbound.push(result);
+					gaps.push(
+						...result.gaps.map((gap) => ({
+							at: name,
+							reason: `${gap.at}: ${gap.reason}`,
+						})),
+					);
+				} else {
+					functions.push(result);
+					cases.push(result);
+				}
+			}
+			if (dispatch !== undefined) {
+				if (gaps.length > 0)
+					unbound.push({
+						name: dispatch,
+						dispatchOf: declaration.name,
+						declaration,
+						gaps,
+					});
+				else dispatchers.push({ name: dispatch, declaration, cases });
 			}
 			continue;
 		}
@@ -3076,6 +3122,11 @@ export function planBindings(
 	constants.sort((left, right) =>
 		left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
 	);
+	for (const dispatch of dispatchers)
+		if (constants.some((constant) => constant.name === dispatch.name))
+			throw new FfiError(
+				`functions.${dispatch.declaration.name}.dispatch: '${dispatch.name}' is already a constant`,
+			);
 	const occupied = new Set([
 		...declared,
 		...planner.natives.keys(),
@@ -3276,6 +3327,7 @@ export function planBindings(
 	}
 	return {
 		functions,
+		dispatchers,
 		hasCallbacks:
 			planner.hasCallableCallbacks ||
 			functions.some((binding) =>

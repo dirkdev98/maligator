@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import type { BindingPlan, MappedConstant } from "./binding-plan.ts";
 import { ffiModuleSpecifier } from "./binding-unit.ts";
-import { formatTsParameters, formatTsResult, formatTsType } from "./inspect.ts";
+import {
+	formatTsDispatchArgs,
+	formatTsParameters,
+	formatTsResult,
+	formatTsType,
+} from "./inspect.ts";
 import { FfiText } from "./text.ts";
 
 function docComment(doc: FfiText | undefined, indent: string): Array<FfiText> {
@@ -139,6 +144,17 @@ function moduleDeclaration(library: string, plan: BindingPlan): Array<string | F
 				`\texport function ${binding.async}(${formatTsParameters(binding)}): Promise<${formatTsResult(binding)}>;`,
 			);
 		}
+	}
+	for (const dispatch of plan.dispatchers) {
+		lines.push(...docComment(dispatch.declaration.doc, "\t"));
+		for (const binding of dispatch.cases)
+			lines.push(
+				`\texport function ${dispatch.name}(...args: ${formatTsDispatchArgs(binding)}): ${formatTsResult(binding)};`,
+			);
+		if (dispatch.cases.length > 1)
+			lines.push(
+				`\texport function ${dispatch.name}(...args: ${dispatch.cases.map(formatTsDispatchArgs).join(" | ")}): ${[...new Set(dispatch.cases.map(formatTsResult))].join(" | ")};`,
+			);
 	}
 	for (const constant of plan.constants) {
 		lines.push(

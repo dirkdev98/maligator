@@ -311,6 +311,10 @@ export interface MaligatorFfiFunctionFacts {
 	 * name each is exported as. The function's own facts apply to every variant.
 	 */
 	variants?: Record<string, MaligatorFfiVariant>;
+	/** Export a runtime selector over these variants. Its first argument is a variant
+	 * export name, followed by that variant's JavaScript arguments.
+	 */
+	dispatch?: string;
 	/**
 	 * Also export the function under this name as one that runs the C call on a worker
 	 * thread and returns a promise of its result. Only for functions the library allows

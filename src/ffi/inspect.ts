@@ -114,6 +114,8 @@ export interface FunctionInspectionData {
 	readonly global?: { readonly name: string; readonly access: "get" | "set" };
 	/** The variadic C function a variant calls; its arguments follow the fixed ones. */
 	readonly variantOf?: string;
+	readonly dispatchOf?: string;
+	readonly variants?: ReadonlyArray<string>;
 	readonly status: "bound" | "needs-facts";
 	readonly c: string;
 	readonly ts?: string;
@@ -306,6 +308,12 @@ export function formatTsParameters(binding: BoundFunction): string {
 		.join(", ");
 }
 
+/** Correlate a runtime selector with the visible arguments of its typed C wrapper. */
+export function formatTsDispatchArgs(binding: BoundFunction): string {
+	const parameters = formatTsParameters(binding);
+	return `[variant: ${JSON.stringify(binding.name)}${parameters === "" ? "" : `, ${parameters}`}]`;
+}
+
 /** A C prototype with parameter names, as a header would declare it. */
 export function formatCFunction(declaration: CFunction): string {
 	const params = [
@@ -333,6 +341,7 @@ export function inspectBindings(
 	// A variadic function with variants is reported as its variants.
 	const variants = new Map<string, Array<{ name: string; declaration: CFunction }>>();
 	for (const entry of [...plan.functions, ...plan.unbound]) {
+		if ("dispatchOf" in entry) continue;
 		if (entry.global !== undefined || entry.name === entry.declaration.name) continue;
 		const list = variants.get(entry.declaration.name) ?? [];
 		list.push({ name: entry.name, declaration: entry.declaration });
@@ -344,11 +353,13 @@ export function inspectBindings(
 				variants.get(declaration.name) ?? [{ name: declaration.name, declaration }],
 		),
 		...[...plan.functions, ...plan.unbound].filter((entry) => entry.global !== undefined),
+		...plan.unbound.filter((entry) => entry.dispatchOf !== undefined),
 	];
 	const functions = entries.map(({ name, declaration }): FunctionInspectionData => {
 		const binding = bound.get(name);
 		const global = binding?.global ?? unbound.get(name)?.global;
 		const gaps = unbound.get(name)?.gaps;
+		const dispatchOf = unbound.get(name)?.dispatchOf;
 		const params = declaration.params.map((param, index) => {
 			const argument = binding?.arguments[index];
 			const role =
@@ -381,6 +392,7 @@ export function inspectBindings(
 				: `(${formatTsParameters(binding)}) => ${formatTsResult(binding)}`;
 		return {
 			name,
+			...(dispatchOf === undefined ? {} : { dispatchOf }),
 			...(global !== undefined
 				? { global: { name: global.declaration.name, access: global.access } }
 				: name === declaration.name
@@ -403,6 +415,18 @@ export function inspectBindings(
 			...(gaps === undefined ? {} : { gaps }),
 		};
 	});
+	for (const dispatch of plan.dispatchers)
+		functions.push({
+			name: dispatch.name,
+			dispatchOf: dispatch.declaration.name,
+			variants: dispatch.cases.map((binding) => binding.name),
+			status: "bound",
+			c: formatCFunction(dispatch.declaration),
+			ts: `(...args: ${dispatch.cases.map(formatTsDispatchArgs).join(" | ")}) => ${[...new Set(dispatch.cases.map(formatTsResult))].join(" | ")}`,
+			location: dispatch.declaration.location,
+			params: [],
+			returns: { c: formatCDeclaration(dispatch.declaration.returns) },
+		});
 	const types = [...plan.records.values()]
 		.filter((entry) => entry.record.library)
 		.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
@@ -492,7 +516,7 @@ export function inspectBindings(
 		facts: contract.facts,
 		summary: {
 			functions: functions.length,
-			bound: plan.functions.length,
+			bound: plan.functions.length + plan.dispatchers.length,
 			needFacts: plan.unbound.length,
 			types: types.length + plan.natives.size,
 			constants: constants.length,

@@ -758,7 +758,25 @@ functions: {
 },
 ```
 
-`TraceLogText(LOG_INFO, "loaded %s", name)` then calls `TraceLog` with a string as its third argument. The C compiler applies the usual argument promotions. A variant's `params` adds facts for its arguments, keyed by `arg<position>` or by position. The variadic function itself is not exported. The function reads the arguments by the types its other arguments announce, such as a format string, so a mismatch is undefined behavior in C. Pass fixed formats from a wrapper rather than text a user controls.
+`TraceLogText(LOG_INFO, "loaded %s", name)` then calls `TraceLog` with a string as its
+third argument. The C compiler applies the usual argument promotions. A variant's
+`params` adds facts for its arguments, keyed by `arg<position>` or by position. An empty
+`args` list describes a call with no extra arguments.
+
+Add `dispatch: "log"` beside `variants` to export a runtime selector. Call
+`log("TraceLogText", LOG_INFO, "loaded %s", name)` to select that declared signature.
+The generated declarations preserve the correlation between a selector and its argument
+tuple. Only declared signatures are accepted, with their visible JavaScript argument
+counts after hidden constants, counts, and output buffers. Invalid selectors and argument
+counts fail before payload conversion or entering C. Individual variants remain available
+as direct exports.
+
+Without `dispatch`, the original variadic function has no export. A dispatcher may use
+that original name. Selection never infers C types from JavaScript values or format text;
+each case calls its typed C wrapper with the original variadic prototype. The function
+still reads arguments by the types its other arguments announce, such as a format string,
+so a mismatch is undefined behavior in C. Pass fixed formats from a wrapper rather than
+text a user controls.
 
 ## Run blocking calls on a worker
 

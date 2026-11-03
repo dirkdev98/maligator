@@ -4046,6 +4046,7 @@ export function describeBindingUnit(
 		specifier: ffiModuleSpecifier(library),
 		installer: ffiInstallerSymbol(library),
 		exports: [
+			...plan.dispatchers.map((dispatch) => dispatch.name),
 			...plan.natives.keys(),
 			...[...plan.handles.values()].flatMap((handle) =>
 				handle.allocator === undefined ? [] : [handle.allocator],
@@ -4096,9 +4097,16 @@ export function generateBindingUnit(
 	selectedExports?: ReadonlySet<string>,
 ): BindingUnit {
 	const writer = new BindingWriter(model, plan);
+	const dispatchers = plan.dispatchers.filter(
+		(dispatch) => selectedExports === undefined || selectedExports.has(dispatch.name),
+	);
+	const dispatchCases = new Set(
+		dispatchers.flatMap((dispatch) => dispatch.cases.map((binding) => binding.name)),
+	);
 	const bindings = plan.functions.filter(
 		(binding) =>
 			selectedExports === undefined ||
+			dispatchCases.has(binding.name) ||
 			selectedExports.has(binding.name) ||
 			(binding.async !== undefined && selectedExports.has(binding.async)),
 	);
@@ -4134,7 +4142,33 @@ export function generateBindingUnit(
 		"",
 		...writer.constant(constant),
 	]);
+	const dispatchFunctions = dispatchers.flatMap((dispatch) => [
+		`static MalValue mal_ffi_function_${dispatch.name}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
+		"\t(void) mal_this; (void) mal_new_target; (void) mal_callee;",
+		`\tstatic const MalFfiSite mal_site = { ${cString(dispatch.name)}, "signature", nullptr };`,
+		"\tMalFfiString mal_signature = {};",
+		"\tif (!mal_ffi_to_string(vm, mal_argc > 0 ? mal_args[0] : mal_ffi_undefined(), false, 0, &mal_site, &mal_signature)) return mal_ffi_undefined();",
+		"\tint32_t mal_case = -1;",
+		...dispatch.cases.map(
+			(binding, index) =>
+				`\t${index === 0 ? "" : "else "}if (mal_signature.length == ${String(binding.name.length)} && __builtin_memcmp(mal_signature.data, ${cString(binding.name)}, ${String(binding.name.length)}) == 0) mal_case = ${String(index)};`,
+		),
+		"\tmal_ffi_string_release(&mal_signature);",
+		"\tswitch (mal_case) {",
+		...dispatch.cases.flatMap((binding, index) => [
+			`\t\tcase ${String(index)}:`,
+			`\t\t\tif (mal_argc != ${String(binding.params.length + 1)}) { mal_ffi_expected(vm, &mal_site, "the declared argument count for this signature"); return mal_ffi_undefined(); }`,
+			`\t\t\treturn mal_ffi_call_${binding.name}(vm, mal_args + 1, mal_argc - 1, true${hasInto(binding) ? ", nullptr, nullptr" : ""});`,
+		]),
+		'\t\tdefault: mal_ffi_expected(vm, &mal_site, "a declared variadic signature"); return mal_ffi_undefined();',
+		"\t}",
+		"}",
+	]);
 	const exports = [
+		...dispatchers.map((dispatch) => ({
+			name: dispatch.name,
+			entry: `{ ${cString(dispatch.name)}, 1, mal_ffi_function_${dispatch.name}, nullptr }`,
+		})),
 		...[...plan.natives.keys()].map((name) => ({
 			name,
 			entry: `{ ${cString(name)}, 0, mal_ffi_native_zero_${name}, nullptr }`,
@@ -4289,6 +4323,7 @@ export function generateBindingUnit(
 		...writer.handleTypes(),
 		...writer.callableHelpers(),
 		...functions,
+		...dispatchFunctions,
 		...constants,
 		"",
 		"static const MalFfiExport mal_ffi_exports[] = {",
@@ -4311,6 +4346,7 @@ export function generateBindingUnit(
 		...describeBindingUnit(library, {
 			...plan,
 			functions: bindings,
+			dispatchers,
 			constants: selectedConstants,
 		}),
 		exports: exports.map((entry) => entry.name),

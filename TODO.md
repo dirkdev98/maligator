@@ -1907,9 +1907,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] Extend compound resource-bearing results with explicit ownership and lifetime.
 
-- [ ] Support runtime-selected variadic signatures when a bounded typed contract can
-      preserve C argument promotions and ABI correctness.
-
 - [ ] Remove measured marshalling, allocation, callback-dispatch, and unused binding
       build costs. Compare representative libraries against C and Bun, retaining
       output parity, matched toolchains, and CPU, memory, disk, and binary-size evidence.

@@ -579,17 +579,42 @@ function validateParamFacts(value: unknown, at: string): void {
 	}
 }
 
+function validateFunctionExport(value: unknown, at: string): void {
+	let valid = false;
+	if (typeof value === "string" && C_NAME.test(value)) {
+		try {
+			parseModule(`export function ${value}() {}`);
+			valid = true;
+		} catch {
+			valid = false;
+		}
+	}
+	expect(valid, at, "a JavaScript function export name");
+}
+
 function validateFunctionFacts(value: unknown, at: string): void {
 	expectObject(value, at);
-	expectKeys(value, at, ["params", "returns", "variants", "async", "evidence"]);
+	expectKeys(value, at, [
+		"params",
+		"returns",
+		"variants",
+		"dispatch",
+		"async",
+		"evidence",
+	]);
+	if (value.dispatch !== undefined) {
+		validateFunctionExport(value.dispatch, `${at}.dispatch`);
+		expectObject(value.variants, `${at}.variants`);
+		expect(
+			Object.keys(value.variants).length > 0,
+			`${at}.dispatch`,
+			"a non-empty set of typed variants",
+		);
+	}
 	if (value.evidence !== undefined) validateEvidence(value.evidence, `${at}.evidence`);
 	if (value.params !== undefined) validateParamFacts(value.params, `${at}.params`);
 	if (value.async !== undefined) {
-		expect(
-			typeof value.async === "string" && C_NAME.test(value.async),
-			`${at}.async`,
-			"a function name",
-		);
+		validateFunctionExport(value.async, `${at}.async`);
 		expect(value.variants === undefined, `${at}.async`, "absent beside variants");
 	}
 	if (value.returns !== undefined) validateValueFacts(value.returns, `${at}.returns`);
@@ -597,15 +622,14 @@ function validateFunctionFacts(value: unknown, at: string): void {
 		expectObject(value.variants, `${at}.variants`);
 		for (const [name, variant] of Object.entries(value.variants)) {
 			const variantAt = `${at}.variants.${name}`;
-			expect(C_NAME.test(name), variantAt, "keyed by a function name");
+			validateFunctionExport(name, variantAt);
 			expectObject(variant, variantAt);
 			expectKeys(variant, variantAt, ["args", "params"]);
 			expect(
 				Array.isArray(variant.args) &&
-					variant.args.length > 0 &&
 					variant.args.every((spelling) => typeof spelling === "string"),
 				`${variantAt}.args`,
-				"a non-empty array of C type spellings",
+				"an array of C type spellings",
 			);
 			if (variant.params !== undefined) {
 				validateParamFacts(variant.params, `${variantAt}.params`);
@@ -623,19 +647,7 @@ function validateGlobalFacts(value: unknown, at: string): void {
 		"a getter or setter export",
 	);
 	for (const key of ["get", "set"] as const)
-		if (value[key] !== undefined) {
-			const name = value[key];
-			let valid = false;
-			if (typeof name === "string" && C_NAME.test(name)) {
-				try {
-					parseModule(`export function ${name}() {}`);
-					valid = true;
-				} catch {
-					valid = false;
-				}
-			}
-			expect(valid, `${at}.${key}`, "a JavaScript function export name");
-		}
+		if (value[key] !== undefined) validateFunctionExport(value[key], `${at}.${key}`);
 	if (value.value !== undefined) {
 		expectObject(value.value, `${at}.value`);
 		expectKeys(value.value, `${at}.value`, [
