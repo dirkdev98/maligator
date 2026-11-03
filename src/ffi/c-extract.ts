@@ -110,6 +110,34 @@ function assertClang(compiler: ToolExecutable): void {
 	}
 }
 
+const skipBodiesSupport = new Map<string, boolean>();
+
+function skipFunctionBodies(input: CExtractionInput): ReadonlyArray<string> {
+	const key = JSON.stringify([
+		input.compiler.path,
+		input.compiler.args,
+		input.compiler.version,
+	]);
+	let supported = skipBodiesSupport.get(key);
+	if (supported === undefined) {
+		const help = runCompiler(input, [
+			"-Xclang",
+			"-help",
+			"-fsyntax-only",
+			"-x",
+			"c",
+			"-",
+		]);
+		supported =
+			help.status === 0 &&
+			/(?:^|\n)\s+-skip-function-bodies(?:\s|$)/.test(
+				help.stdout.toString("utf8") + help.stderr,
+			);
+		skipBodiesSupport.set(key, supported);
+	}
+	return supported ? ["-Xclang", "-skip-function-bodies"] : [];
+}
+
 interface PreprocessedMacro {
 	readonly name: string;
 	readonly body: string;
@@ -1723,8 +1751,7 @@ export function extractCModelFromHeaders(
 	const layoutDump = runCompiler(input, [
 		FFI_C_STANDARD,
 		"-fsyntax-only",
-		"-Xclang",
-		"-skip-function-bodies",
+		...skipFunctionBodies(input),
 		"-Xclang",
 		"-fdump-record-layouts-complete",
 		"-Xclang",

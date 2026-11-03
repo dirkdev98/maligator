@@ -112,6 +112,8 @@ uint64_t incomplete_state_size(void) {
     return incomplete_size;
 }
 uint64_t incomplete_state_alignment(void) { incomplete_alignment_queries++; return incomplete_alignment; }
+int incomplete_signed_size(void) { return (int)sizeof(IncompleteState); }
+uint64_t incomplete_arg_size(int value) { return sizeof(IncompleteState) + (uint64_t)value; }
 void incomplete_state_layout(uint64_t size, uint64_t alignment) { incomplete_size = size; incomplete_alignment = alignment; }
 void incomplete_state_default_layout(void) { incomplete_size = sizeof(IncompleteState); incomplete_alignment = _Alignof(IncompleteState); }
 int incomplete_state_size_queries(void) { return incomplete_size_queries; }
