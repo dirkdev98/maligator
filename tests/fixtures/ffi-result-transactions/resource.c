@@ -156,3 +156,32 @@ TxFreshFields tx_fields_fresh(void) {
     recycled.value = 101;
     return (TxFreshFields) {&recycled, &recycled};
 }
+TxChoice tx_choice(int bad, int existing, TxResource **other, const char **message, size_t *length) {
+    TxFields fields = existing ? (TxFields) {current, current, NULL} : tx_fields();
+    *other = fields.first; *message = "x"; *length = bad ? (size_t)-1 : 1;
+    return (TxChoice) {.fields = fields};
+}
+TxConstChoice tx_const_choice(void) { return (TxConstChoice) {.fields = tx_fields()}; }
+TxChoice tx_choice_release(int bad, char **text, const char **message, size_t *length) {
+    TxResource *value = tx_reentry(bad, text, message, length);
+    return (TxChoice) {.fields = {value, value, NULL}};
+}
+int tx_choice_sum(TxChoice value) { return value.fields.first->value + value.fields.second->value; }
+int tx_const_choice_sum(TxConstChoice value) { return value.fields.first->value + value.fields.second->value; }
+int tx_choice_visit(int (*callback)(TxChoice, void *), void *data) {
+    TxChoice value = {.fields = tx_fields()};
+    int result = callback(value, data);
+    tx_destroy(value.fields.first);
+    return result;
+}
+static _Atomic int choice_started;
+TxChoice tx_choice_wait(void) {
+    TxChoice value = {.fields = tx_fields()};
+    atomic_store(&choice_started, 1);
+    usleep(150000);
+    return value;
+}
+int tx_choice_started(void) { return atomic_load(&choice_started); }
+TxFreshChoice tx_choice_fresh(void) { return (TxFreshChoice) {.fields = tx_fields_fresh()}; }
+TxChoiceBox tx_choice_box(void) { return (TxChoiceBox) {{.fields = tx_fields()}, 7}; }
+void tx_choice_out(TxChoice *value) { *value = (TxChoice) {.fields = tx_fields()}; }

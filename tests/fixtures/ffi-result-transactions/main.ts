@@ -600,4 +600,164 @@ for (const invoke of [c.tx_record_release, c.recordReleaseAsync]) {
 		"abandoned async records release every distinct raw field",
 	);
 }
+{
+	const before = c.tx_destroyed();
+	const nested = c.tx_choice_box();
+	const output = c.tx_choice_out().value;
+	check(
+		nested.marker === 7 &&
+			c.tx_choice_sum(nested.choice) === 158 &&
+			output.first === output.second &&
+			output.empty === null &&
+			c.tx_choice_sum(output) === 158,
+		"nested and out-parameter selected unions transfer their active fields",
+	);
+	nested.choice.first![Symbol.dispose]();
+	output.first![Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before + 2,
+		"nested and output union resources dispose independently",
+	);
+}
+for (const invoke of [c.tx_choice, c.choiceAsync]) {
+	const before = c.tx_destroyed();
+	await rangeFailure(() => invoke(1, 0));
+	check(
+		c.tx_destroyed() === before + 1,
+		"selected union failure frees its owned field once",
+	);
+	const value = await invoke(0, 0);
+	check(
+		value.result.first === value.other &&
+			value.result.second === value.other &&
+			value.result.empty === null &&
+			c.tx_choice_sum(value.result) === 158,
+		"selected union results preserve aliases and lend fields back as inputs",
+	);
+	value.other![Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before + 2,
+		"selected union success commits one resource lifetime",
+	);
+	const prior = c.tx_borrow(107)!;
+	const borrowedBefore = c.tx_destroyed();
+	await rangeFailure(() => invoke(1, 1));
+	check(
+		c.tx_read(prior) === 107,
+		"selected union rollback preserves a prior borrowed alias",
+	);
+	prior[Symbol.dispose]();
+	check(
+		c.tx_destroyed() === borrowedBefore,
+		"selected union failure does not adopt borrowed ownership",
+	);
+	c.tx_clear();
+}
+{
+	const value = c.tx_const_choice();
+	check(
+		value.first === value.second &&
+			value.empty === null &&
+			c.tx_const_choice_sum(value) === 158,
+		"const promoted union members transfer fields and support borrowed inputs",
+	);
+	value.first![Symbol.dispose]();
+}
+for (const invoke of [c.tx_choice_release, c.choiceReleaseAsync]) {
+	const before = c.tx_destroyed();
+	watch(() => {});
+	await rangeFailure(() => invoke(1));
+	watch(null);
+	check(
+		c.tx_destroyed() === before + 1,
+		"cleanup failure rolls back a selected union field",
+	);
+	if (failNextCell !== undefined) {
+		watch(failNextCell);
+		let error: unknown;
+		try {
+			await invoke(0);
+		} catch (caught) {
+			error = caught;
+		}
+		watch(null);
+		check(
+			error instanceof Error && error.message === "Out of memory",
+			"selected union assembly can fail",
+		);
+		check(
+			c.tx_destroyed() === before + 2,
+			"assembly failure rolls back a converted union field",
+		);
+	}
+	const acquired: { value: c.TxResource | null } = { value: null };
+	const acquiredBefore = c.tx_destroyed();
+	watch(() => {
+		acquired.value = c.tx_acquire();
+	});
+	await rangeFailure(() => invoke(1));
+	watch(null);
+	check(
+		acquired.value !== null &&
+			c.tx_read(acquired.value) === 61 &&
+			c.tx_destroyed() === acquiredBefore,
+		"nested acquisition retains a union field when outer delivery fails",
+	);
+	acquired.value[Symbol.dispose]();
+}
+{
+	let lent: c.TxResource | null = null;
+	check(
+		c.tx_choice_visit((value) => {
+			lent = value.first;
+			return c.tx_choice_sum(value);
+		}) === 158,
+		"callback unions lend selected fields during the invocation",
+	);
+	let closed = false;
+	try {
+		c.tx_read(lent!);
+	} catch (error) {
+		closed = error instanceof TypeError;
+	}
+	check(closed, "callback union fields expire without taking C ownership");
+}
+{
+	const before = c.tx_destroyed();
+	const prior = c.tx_recycled()!;
+	const closing = c.destroyResourceAsync(prior);
+	const value = c.tx_choice_fresh();
+	await closing;
+	check(
+		value.first !== prior &&
+			value.first === value.second &&
+			c.tx_read(value.first!) === 101,
+		"fresh selected fields start a distinct lifetime at a closing address",
+	);
+	value.first![Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before + 2,
+		"old and fresh union lifetimes each release once",
+	);
+}
+{
+	const before = c.tx_destroyed();
+	const worker = new Worker(createWorkerUrl("./record-worker.ts", import.meta.url));
+	const admitted = new Promise<void>((resolve) => {
+		worker.port.onmessage = () => resolve();
+	});
+	worker.port.start();
+	await worker.ready;
+	worker.port.postMessage("choice");
+	await admitted;
+	while (c.tx_choice_started() === 0)
+		await new Promise((resolve) => {
+			setTimeout(resolve, 1);
+		});
+	await worker.terminate();
+	check(
+		c.tx_destroyed() === before + 1,
+		"native abandonment releases selected union fields once",
+	);
+}
 console.log("result transactions passed");

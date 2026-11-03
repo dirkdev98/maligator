@@ -408,11 +408,12 @@ types: {
 ```
 
 The field must point to a destructor-backed resource allocated by the library.
-Nested plain records share the result transaction. Aliased fields keep one handle,
+Nested plain records and explicitly selected union members share the result transaction.
+Aliased fields keep one handle,
 and a failed conversion preserves existing ownership while releasing new resources
 once. Record inputs borrow their handles; callback arguments remain invocation loans.
 Use `fresh: true` beside `owned` for a new lifetime at a recycled address.
-Use a C wrapper with a pointer result for unions or array forms that transfer ownership.
+Use a C wrapper with a pointer result for tagged unions or array forms that transfer ownership.
 Global getters and constants cannot transfer independently owned fields.
 
 When a library accepts the same allocation through another pointer type, declare directed

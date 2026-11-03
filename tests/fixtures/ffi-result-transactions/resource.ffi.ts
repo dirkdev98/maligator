@@ -4,6 +4,9 @@ export default {
 	headers: ["resource.h"],
 	find: [{ includeDirs: ["."], sources: ["resource.c"] }],
 	types: {
+		TxChoice: { shape: { member: "fields" } },
+		TxConstChoice: { shape: { member: "fields" } },
+		TxFreshChoice: { shape: { member: "fields" } },
 		TxFreshFields: {
 			fields: {
 				first: { handle: { owned: true, fresh: true } },
@@ -36,6 +39,23 @@ export default {
 		},
 	},
 	functions: {
+		tx_choice_out: { params: { value: { out: true } } },
+		tx_choice: {
+			params: {
+				other: { out: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "choiceAsync",
+		},
+		tx_choice_release: {
+			params: {
+				text: { out: true, string: true, free: "tx_text_free" },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "choiceReleaseAsync",
+		},
+		tx_choice_visit: { params: { callback: { callback: { data: "data" } } } },
+		tx_choice_wait: { async: "choiceWaitAsync" },
 		tx_destroy: { async: "destroyResourceAsync" },
 		tx_record: {
 			params: { message: { out: true, string: { length: "length" } } },

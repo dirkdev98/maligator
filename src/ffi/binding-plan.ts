@@ -462,8 +462,9 @@ export function supportsResultTransaction(
 				);
 			return supportsResultTransaction(value.of, shapes, "other");
 		case "array":
-		case "union":
 			return supportsResultTransaction(value.of, shapes, "other");
+		case "union":
+			return supportsResultTransaction(value.of, shapes, context);
 		case "tagged":
 			return value.cases.every((entry) =>
 				supportsResultTransaction(entry.value, shapes, "other"),

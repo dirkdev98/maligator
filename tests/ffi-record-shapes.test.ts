@@ -103,9 +103,9 @@ it.each([
 		facts: {},
 	},
 	{
-		name: "tx_owned_choice",
+		name: "tx_owned_choice_array",
 		declaration:
-			"typedef union TxOwnedChoice { TxFields fields; int number; } TxOwnedChoice; TxOwnedChoice tx_owned_choice(void);",
+			"typedef union TxOwnedChoice { TxFields fields; int number; } TxOwnedChoice; typedef struct TxOwnedChoices { TxOwnedChoice choices[2]; } TxOwnedChoices; TxOwnedChoices tx_owned_choice_array(void);",
 		types: { TxOwnedChoice: { shape: { member: "fields" } } },
 		facts: {},
 	},

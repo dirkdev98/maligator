@@ -772,7 +772,7 @@ class BindingWriter {
 			case "record":
 				return `mal_ffi_out_${value.name}(vm, ${expression}, ${lent}${hasOwnedRecordFields(value, this.#plan) ? `, ${results ?? "nullptr"}` : ""})`;
 			case "union":
-				return `mal_ffi_union_out_${value.name}(vm, ${expression}, ${lent})`;
+				return `mal_ffi_union_out_${value.name}(vm, ${expression}, ${lent}${hasOwnedRecordFields(value, this.#plan) ? `, ${results ?? "nullptr"}` : ""})`;
 			case "tagged":
 				return `mal_ffi_tagged_out_${value.name}(vm, ${expression}, ${lent})`;
 			case "array":
@@ -1251,7 +1251,7 @@ class BindingWriter {
 		for (const name of this.#unionOutputs) {
 			const union = this.#plan.unions.get(name)!;
 			lines.push(
-				`static MalValue mal_ffi_union_out_${name}(MalVm *vm, ${union.spelling} mal_value, bool mal_lent);`,
+				`static MalValue mal_ffi_union_out_${name}(MalVm *vm, ${union.spelling} mal_value, bool mal_lent${hasOwnedRecordFields(union.member.value, this.#plan) ? ", MalFfiResults *mal_results" : ""});`,
 			);
 		}
 		lines.push(...this.#taggedHelpers(true));
@@ -1300,8 +1300,9 @@ class BindingWriter {
 		for (const name of this.#unionOutputs) {
 			const union = this.#plan.unions.get(name)!;
 			const rooted = this.#allocates(union.member.value);
+			const transactional = hasOwnedRecordFields(union.member.value, this.#plan);
 			lines.push(
-				`static MalValue mal_ffi_union_out_${name}(MalVm *vm, ${union.spelling} mal_value, bool mal_lent) {`,
+				`static MalValue mal_ffi_union_out_${name}(MalVm *vm, ${union.spelling} mal_value, bool mal_lent${transactional ? ", MalFfiResults *mal_results" : ""}) {`,
 				"MalValue mal_result = mal_ffi_undefined();",
 				...(rooted
 					? ["MalFfiRoots mal_roots;", "mal_ffi_root(&mal_roots, &mal_result, 1);"]
@@ -1311,6 +1312,7 @@ class BindingWriter {
 					`mal_value.${union.member.name}`,
 					"mal_result",
 					"mal_lent",
+					transactional ? "mal_results" : undefined,
 				),
 				"mal_done:",
 				...(rooted ? ["mal_ffi_unroot(&mal_roots);"] : []),
@@ -2516,6 +2518,10 @@ class BindingWriter {
 				return this.#record(value.name).fields.flatMap((field) =>
 					collect(field.value, `(${expression}).${field.name}`),
 				);
+			if (value.kind === "union") {
+				const union = this.#plan.unions.get(value.name)!;
+				return collect(value.of, `(${expression}).${union.member.name}`);
+			}
 			const element = value.kind === "sequence" ? value.of : value;
 			if (
 				element.kind !== "handle" ||
@@ -2552,6 +2558,10 @@ class BindingWriter {
 				return this.#record(value.name).fields.flatMap((field) =>
 					collect(field.value, `(${expression}).${field.name}`),
 				);
+			if (value.kind === "union") {
+				const union = this.#plan.unions.get(value.name)!;
+				return collect(value.of, `(${expression}).${union.member.name}`);
+			}
 			return value.kind === "handle" &&
 				value.fresh === true &&
 				this.#handle(value.name).representation === "pointer"
