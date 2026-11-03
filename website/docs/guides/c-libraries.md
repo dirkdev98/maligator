@@ -577,6 +577,11 @@ functions: {
 - `string` marks a `char *` or `unsigned char *` as UTF-8 text.
 - `free` names the function that releases a string, buffer, or array result after it is copied.
 
+Input arrays, byte spans, and counted strings can share an integer `length` parameter.
+The binding checks every input length before entering C. Counted strings contribute
+their UTF-8 byte length. Shared counts must be integer inputs; writable counts and
+output capacities keep separate parameters.
+
 Counted arrays preserve fixed inner dimensions. A parameter such as
 `const int (*rows)[3]` with `array: { length: "count" }` takes an array of
 three-element tuples; only the outer length supplies `count`. Numeric and record

@@ -2539,7 +2539,7 @@ class BindingWriter {
 		);
 		const countOf = (counted: number): { index: number; type: CType } | undefined => {
 			const index = binding.arguments.findIndex(
-				(entry) => entry.kind === "count" && entry.of === counted,
+				(entry) => entry.kind === "count" && entry.of.includes(counted),
 			);
 			return index < 0 ? undefined : { index, type: declaration.params[index]!.type };
 		};
@@ -2567,6 +2567,12 @@ class BindingWriter {
 					: !integer.name.startsWith("unsigned"));
 			into.push(
 				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${bits}, ${signed}, ${site})) goto mal_done;`,
+				...(entry?.kind === "count" && entry.of.length > 1
+					? [
+							`if (mal_count_set_${target.index} && (uint64_t) mal_argument_${target.index} != (uint64_t) (${count})) { mal_ffi_expected(vm, ${site}, "a length matching the other arguments sharing this count"); goto mal_done; }`,
+							`mal_count_set_${target.index} = true;`,
+						]
+					: []),
 				...(output === undefined
 					? [
 							`mal_argument_${String(target.index)} = (${localDeclaration(type, "")}) (${count});`,
@@ -2594,6 +2600,7 @@ class BindingWriter {
 			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
 			switch (entry.kind) {
 				case "count":
+					if (entry.of.length > 1) locals.push(`bool mal_count_set_${index} = false;`);
 					if (entry.output !== undefined) {
 						locals.push(
 							`${localDeclaration(pointee, `mal_output_${String(entry.output)}`)} = {};`,
@@ -3443,7 +3450,7 @@ class BindingWriter {
 			into = buffers,
 		): void => {
 			const index = binding.arguments.findIndex(
-				(entry) => entry.kind === "count" && entry.of === counted,
+				(entry) => entry.kind === "count" && entry.of.includes(counted),
 			);
 			if (index < 0) return;
 			const entry = binding.arguments[index];
@@ -3464,6 +3471,12 @@ class BindingWriter {
 					: !integer.name.startsWith("unsigned"));
 			into.push(
 				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${bits}, ${signed}, ${site})) goto mal_failed;`,
+				...(entry?.kind === "count" && entry.of.length > 1
+					? [
+							`if (mal_count_set_${index} && (uint64_t) mal_ctx->mal_argument_${index} != (uint64_t) (${count})) { mal_ffi_expected(vm, ${site}, "a length matching the other arguments sharing this count"); goto mal_failed; }`,
+							`mal_count_set_${index} = true;`,
+						]
+					: []),
 				...(output === undefined
 					? [
 							`mal_ctx->mal_argument_${String(index)} = (${localDeclaration(type, "")}) (${count});`,
@@ -3484,6 +3497,7 @@ class BindingWriter {
 			const pointee = resolved.kind === "pointer" ? resolved.to : param.type;
 			switch (entry.kind) {
 				case "count":
+					if (entry.of.length > 1) locals.push(`bool mal_count_set_${index} = false;`);
 					if (entry.output !== undefined) {
 						fields.push(
 							`${localDeclaration(pointee, `mal_output_${String(entry.output)}`)};`,

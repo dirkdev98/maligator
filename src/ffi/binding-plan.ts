@@ -170,11 +170,15 @@ export type Argument =
 	/** Converted from JavaScript parameter `param`. */
 	| { readonly kind: "input"; readonly param: number }
 	/**
-	 * The byte or element count of the buffer or array that argument `of` passes. With
+	 * The shared byte or element count of the buffers or arrays in `of`. With
 	 * `output`, the address of a local holding the buffer's size, which the function
 	 * updates to the count it used and the binding returns as that output.
 	 */
-	| { readonly kind: "count"; readonly of: number; readonly output?: number }
+	| {
+			readonly kind: "count";
+			readonly of: ReadonlyArray<number>;
+			readonly output?: number;
+	  }
 	/** The address of a zeroed local the function writes; returned as output `output`. */
 	| { readonly kind: "out"; readonly output: number }
 	/** The address of a local read from parameter `param` and returned as `output`. */
@@ -2476,8 +2480,7 @@ class Planner {
 			}
 		};
 
-		// The parameters that carry a buffer's or array's count, mapped to that argument.
-		const counts = new Map<number, number>();
+		const counts = new Map<number, Array<number>>();
 		declaration.params.forEach((_, index) => {
 			const valueFacts = factsAt(index);
 			const counted = valueCount(valueFacts);
@@ -2497,13 +2500,27 @@ class Planner {
 				throw new FfiError(
 					`${where(at)}: an out value needs a count C writes through a pointer`,
 				);
-			if (count === index || counts.has(count)) {
-				throw new FfiError(
-					`${where(at)}: '${counted.count.length}' already counts another argument`,
-				);
+			if (count === index) {
+				throw new FfiError(`${where(at)}: a parameter cannot count itself`);
 			}
-			if (capacity !== count) counts.set(count, index);
+			if (capacity !== count) {
+				const sources = counts.get(count) ?? [];
+				sources.push(index);
+				counts.set(count, sources);
+			}
 		});
+		for (const [count, sources] of counts) {
+			if (sources.length < 2) continue;
+			if (
+				resolveCType(this.#model, declaration.params[count]!.type).kind === "pointer" ||
+				sources.some(
+					(source) => factsAt(source).out === true || factsAt(source).inout === true,
+				)
+			)
+				throw new FfiError(
+					`${where(`params.${names[count]}`)}: a shared count needs integer input lengths`,
+				);
+		}
 		// The user-data parameters that route callbacks, mapped to their callback argument.
 		const callbackData = new Map<number, number>();
 		declaration.params.forEach((_, index) => {
@@ -2646,21 +2663,23 @@ class Planner {
 					throw new FfiError(
 						`${where(at)}: a count needs a supported integer of at most 64 bits`,
 					);
-				if (
-					countType.kind !== "integer" ||
-					(pointer &&
-						counted !== undefined &&
-						(resultCount === index ||
-							(factsAt(counted).bytes === undefined &&
+				const invalidWrittenCount =
+					pointer &&
+					counted !== undefined &&
+					(resultCount === index ||
+						counted.some((source) => {
+							const sourceFacts = factsAt(source);
+							const written = sourceFacts.out === true || sourceFacts.inout === true;
+							return (
+								sourceFacts.bytes === undefined &&
 								!(
-									factsAt(counted).array !== undefined &&
-									(factsAt(counted).out === true || factsAt(counted).inout === true)
-								) &&
-								!(
-									typeof factsAt(counted).string === "object" &&
-									(factsAt(counted).out === true || factsAt(counted).inout === true)
-								))))
-				) {
+									written &&
+									(sourceFacts.array !== undefined ||
+										typeof sourceFacts.string === "object")
+								)
+							);
+						}));
+				if (countType.kind !== "integer" || invalidWrittenCount) {
 					throw new FfiError(`${where(at)}: a count must be an integer parameter`);
 				}
 				if (counted !== undefined && pointer) {
