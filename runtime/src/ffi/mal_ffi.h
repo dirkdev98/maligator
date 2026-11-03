@@ -731,6 +731,7 @@ void mal_ffi_unroot(MalFfiRoots *roots);
 
 typedef struct MalFfiResultClaim {
     const MalFfiHandleType *type;
+    const MalFfiHandleType *owner_type;
     void *value;
     void *views;
     MalValue *handles;
@@ -753,7 +754,7 @@ typedef struct MalFfiResults {
 } MalFfiResults;
 
 /**
- * Stage pointer ownership until every output and final input check succeeds.
+ * Stage pointer views and ownership until every output and final input check succeeds.
  * Inventory all claims before conversion, including aliases that conversion can expose.
  * Initialize before input roots and finish after their release, in root-stack order.
  */
@@ -762,7 +763,7 @@ void mal_ffi_results_init(MalFfiResults *results, MalFfiResultClaim *claims,
 /** Grow before inventory; raw resources still belong to the caller if reservation fails. */
 bool mal_ffi_results_reserve(MalVm *vm, MalFfiResults *results, uint64_t capacity);
 void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
-    const MalFfiHandleType *type, void *value, bool fresh);
+    const MalFfiHandleType *type, void *value, bool owned, bool fresh);
 MalValue mal_ffi_result_handle(MalVm *vm, MalFfiResults *results,
     const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned, bool fresh);

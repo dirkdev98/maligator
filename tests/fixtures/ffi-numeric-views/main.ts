@@ -92,6 +92,20 @@ for (const sum of [numeric_f64, sumAsync]) {
 	const late: Array<unknown> = Array.from({ length: 65 }, (_, index) => index + 0.25);
 	late[late.length - 1] = {};
 	await rejects(() => sum(late as Array<number>));
+	for (const invalid of [undefined, null, false]) {
+		for (const position of [32, 64]) {
+			const values: Array<unknown> = Array.from(
+				{ length: 65 },
+				(_, index) => index + 0.25,
+			);
+			values[position] = invalid;
+			await rejects(() => sum(values as Array<number>));
+		}
+	}
+	check(
+		Number.isNaN(await sum([-Infinity, NaN])),
+		"mixed special doubles remain Number values",
+	);
 	let laterReads = 0;
 	const invalid = ["bad", 3];
 	Object.defineProperty(invalid, "1", {

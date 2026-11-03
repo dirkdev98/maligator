@@ -185,3 +185,38 @@ int tx_choice_started(void) { return atomic_load(&choice_started); }
 TxFreshChoice tx_choice_fresh(void) { return (TxFreshChoice) {.fields = tx_fields_fresh()}; }
 TxChoiceBox tx_choice_box(void) { return (TxChoiceBox) {{.fields = tx_fields()}, 7}; }
 void tx_choice_out(TxChoice *value) { *value = (TxChoice) {.fields = tx_fields()}; }
+TxSpecial *tx_special_borrowed(int bad, const char **message, size_t *length) {
+    *message = "x"; *length = bad ? (size_t)-1 : 1;
+    return (TxSpecial *) current;
+}
+TxSpecial *tx_special_borrowed_pair(int bad, TxResource **owned, const char **message, size_t *length) {
+    *owned = create(127);
+    return tx_special_borrowed(bad, message, length);
+}
+TxBase *tx_base_special(int bad, TxSpecial **owned, const char **message, size_t *length) {
+    TxBase *base = tx_base(131);
+    *owned = tx_special_borrowed(bad, message, length);
+    return base;
+}
+TxSpecial *tx_special_borrowed_release(int bad, int create, char **text, const char **message, size_t *length) {
+    if (create) tx_base(137);
+    return (TxSpecial *) tx_reentry_existing(bad, text, message, length);
+}
+TxBase *tx_base_peek(void) { return (TxBase *) current; }
+TxBase *tx_base_echo(TxBase *value) { return value; }
+void tx_base_visit(void (*callback)(TxBase *, void *), void *data) {
+    TxResource *value = create(139);
+    callback((TxBase *) value, data);
+    tx_destroy(value);
+}
+char *tx_special_borrowed_out(int bad, TxSpecial **out, const char **message, size_t *length) {
+    tx_base(149);
+    char *text;
+    *out = (TxSpecial *) tx_reentry_existing(bad, &text, message, length);
+    if (bad == 2) *length = (size_t)-1;
+    return text;
+}
+void tx_special_borrowed_inout(TxSpecial **value, int bad, const char **message, size_t *length) {
+    if (*value != NULL && *value != (TxSpecial *) current) abort();
+    *value = tx_special_borrowed(bad, message, length);
+}

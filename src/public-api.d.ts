@@ -188,7 +188,7 @@ export interface MaligatorFfiValueFacts {
 	shape?: MaligatorFfiShape;
 	/** Accept `null` for a pointer parameter and pass `NULL`. */
 	nullable?: boolean;
-	/** A returned handle the library keeps owning; closing it does not release it. */
+	/** A returned or output handle the library keeps owning; closing it does not release it. */
 	borrowed?: boolean;
 	/** A pointer result starts a new resource lifetime, rather than aliasing an
 	 * existing handle. This distinguishes a reused address during worker cleanup.

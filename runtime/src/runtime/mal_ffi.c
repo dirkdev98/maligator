@@ -399,13 +399,16 @@ __attribute__((noinline)) bool mal_ffi_try_f64_elements(MalValue value, int32_t 
     const MalValue *elements = array->elements;
     // Raw doubles already have C's representation; tagged values need the decoding pass.
     if (length > 0 && elements[0] < MAL_VALUE_TAG_BASE) {
-        bool doubles = true;
+        static_assert((MAL_VALUE_TAG_BASE & UINT32_MAX) == 0);
+        // An upper-word maximum lets SIMD validate the copy without narrowing lane comparisons.
+        u32 maximum = 0;
         for (int32_t index = 0; index < length; index++) {
             MalValue element = elements[index];
-            doubles &= element < MAL_VALUE_TAG_BASE;
+            u32 high = (u32) (element >> 32);
+            if (high > maximum) maximum = high;
             out[index] = mal_value_to_f64(element);
         }
-        if (doubles) return true;
+        if (maximum < (u32) (MAL_VALUE_TAG_BASE >> 32)) return true;
     }
     bool valid = true;
     for (int32_t index = 0; index < length; index++) {
@@ -3261,6 +3264,18 @@ static void ffi_result_track(MalVm *vm, const MalFfiHandleType *type, void *valu
     }
 }
 
+static void ffi_result_delivered(MalVm *vm, MalFfiHandleObject *handle) {
+    if (handle == nullptr || handle->value == nullptr || handle->closing || handle->scope != 0) return;
+    for (MalFfiResults *results = vm->ffi == nullptr ? nullptr : vm->ffi->results;
+         results != nullptr; results = results->previous) {
+        MalFfiResultClaim *claim = ffi_result_find(results, handle->type, handle->value);
+        if (claim == nullptr || claim->owner_type != nullptr) continue;
+        if (mal_value_is_undefined(claim->handles[1]))
+            claim->handles[1] = mal_value_from_heap((MalHeapHeader *) handle);
+        if (ffi_handle(claim->handles[1]) == handle) claim->handed_off = true;
+    }
+}
+
 static bool ffi_handle_published_supports(MalFfiHandleObject *handle, const MalFfiHandleType *type) {
     if (ffi_type_supports(handle->type, type)) return true;
     for (MalFfiHandleView *view = handle->views; view != nullptr; view = view->next) {
@@ -3466,7 +3481,7 @@ mal_failed:
 }
 
 void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
-    const MalFfiHandleType *type, void *value, bool fresh) {
+    const MalFfiHandleType *type, void *value, bool owned, bool fresh) {
     if (value == nullptr) return;
     if (results->state == nullptr) {
         MalFfiState *state = ffi_state(vm);
@@ -3496,14 +3511,15 @@ void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
             claim->flags = ffi_discard_flags(vm, open);
         }
     }
+    if (owned && type->destroy != nullptr && claim->owner_type == nullptr) claim->owner_type = type;
     claim->fresh |= fresh;
-    claim->cleanup = !mal_ffi_is_library_resource(type, value)
+    bool replaces = claim->fresh && (claim->flags & MAL_FFI_DISCARD_REPLACEABLE);
+    claim->cleanup = claim->owner_type != nullptr && !mal_ffi_is_library_resource(type, value)
         && ffi_result_pending(vm, type, value, results) == nullptr
-        && (!(claim->flags & MAL_FFI_DISCARD_VALID)
-            || (claim->fresh && (claim->flags & MAL_FFI_DISCARD_REPLACEABLE)));
-    if (claim->cleanup && claim->handles[1] == claim->handles[0])
+        && (!(claim->flags & MAL_FFI_DISCARD_VALID) || replaces);
+    if (replaces && claim->handles[1] == claim->handles[0])
         claim->handles[1] = mal_value_new_undefined();
-    else if (!claim->cleanup && (claim->flags & MAL_FFI_DISCARD_VALID)
+    else if (!replaces && (claim->flags & MAL_FFI_DISCARD_VALID)
         && mal_value_is_undefined(claim->handles[1])) claim->handles[1] = claim->handles[0];
 }
 
@@ -3562,25 +3578,28 @@ void mal_ffi_results_finish(MalVm *vm, MalFfiResults *results) {
         MalFfiHandleObject *handle = ffi_handle(claim->handles[1]);
         bool retired = false;
         if (!failed && handle != nullptr) {
-            if (!handle->owns_storage
+            if (claim->owner_type != nullptr && !handle->owns_storage
                 && (handle->ownership != MAL_FFI_HANDLE_OWNED || ffi_handle_policy(handle)->destroy == nullptr)) {
                 handle->ownership = MAL_FFI_HANDLE_OWNED;
-                handle->owner_type = claim->type;
+                handle->owner_type = claim->owner_type;
             }
-            handle->scope = 0;
-            handle->provisional = false;
+            if (claim->owner_type != nullptr) {
+                handle->scope = 0;
+                handle->provisional = false;
+            } else ffi_result_delivered(vm, handle);
             for (MalFfiResults *ancestor = results->previous; ancestor != nullptr; ancestor = ancestor->previous) {
                 MalFfiResultClaim *parent = ffi_result_find(ancestor, claim->type, claim->value);
                 if (parent == nullptr || parent->handles[1] != claim->handles[1]) continue;
-                parent->cleanup = false;
-                parent->handed_off = true;
+                if (claim->owner_type != nullptr) parent->cleanup = false;
+                if (claim->owner_type != nullptr || parent->owner_type == nullptr)
+                    parent->handed_off = true;
             }
         } else if (!claim->handed_off && handle != nullptr && claim->handles[1] != claim->handles[0]
             && ffi_result_pending(vm, claim->type, claim->value, results) == nullptr) {
             if (claim->cleanup && handle->native != nullptr) {
-                ffi_result_retire(handle, claim->type);
+                ffi_result_retire(handle, claim->owner_type);
                 retired = true;
-            } else ffi_handle_forget(handle);
+            } else if (!ffi_handle_borrowed(handle)) ffi_handle_forget(handle);
         }
         while (claim->views != nullptr) {
             MalFfiHandleView *view = claim->views;
@@ -3590,7 +3609,7 @@ void mal_ffi_results_finish(MalVm *vm, MalFfiResults *results) {
                 handle->views = view;
             } else free(view);
         }
-        if (failed && claim->cleanup && !retired && claim->type->destroy(claim->value))
+        if (failed && claim->cleanup && !retired && claim->owner_type->destroy(claim->value))
             ffi_replaced_drop(claim->value);
         vm->completion = completion;
     }
@@ -3607,7 +3626,10 @@ void mal_ffi_results_finish(MalVm *vm, MalFfiResults *results) {
 MalValue mal_ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned, bool fresh) {
-    return ffi_new_handle(vm, library, type, value, owned, 0, false, fresh, nullptr);
+    MalValue result = ffi_new_handle(vm, library, type, value, owned, 0, false, fresh, nullptr);
+    if (vm->ffi != nullptr && vm->ffi->results != nullptr && !mal_ffi_threw(vm))
+        ffi_result_delivered(vm, ffi_handle(result));
+    return result;
 }
 
 static bool ffi_handle_can_adopt(
@@ -3686,6 +3708,7 @@ MalValue mal_ffi_new_owner_handle(
         child->ownership = MAL_FFI_HANDLE_CHILD;
         mal_gc_card(&child->object.header, roots[0]);
     }
+    if (child != nullptr) ffi_result_delivered(vm, child);
     mal_gc_unroot(&root);
     return mal_ffi_threw(vm) ? mal_value_new_undefined() : roots[1];
 }
@@ -3715,7 +3738,10 @@ MalValue mal_ffi_new_library_handle(
     }
     if (!ffi_library_claim_add(vm, type, value)) return mal_value_new_undefined();
     MalValue result = ffi_new_handle(vm, library, type, value, false, 0, false, false, nullptr);
-    if (!mal_ffi_threw(vm)) ffi_handle(result)->ownership = MAL_FFI_HANDLE_LIBRARY;
+    if (!mal_ffi_threw(vm)) {
+        ffi_handle(result)->ownership = MAL_FFI_HANDLE_LIBRARY;
+        ffi_result_delivered(vm, ffi_handle(result));
+    }
     return result;
 }
 
@@ -4015,6 +4041,7 @@ static bool ffi_callback_retain_handle(
             mal_gc_card(&root_owner->object.header, result->handle->wrapper);
         }
         if (!input) atomic_fetch_add_explicit(&result->handle->results, 1, memory_order_release);
+        ffi_result_delivered(vm, ffi_handle(result->handle->wrapper));
     }
     tail->next = input ? callback->inputs : callback->results;
     if (input) callback->inputs = prepared;

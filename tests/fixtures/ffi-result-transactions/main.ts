@@ -23,7 +23,10 @@ async function rangeFailure(action: () => unknown): Promise<void> {
 	} catch (error) {
 		caught = error;
 	}
-	check(caught instanceof RangeError, "preserves the conversion error");
+	check(
+		caught instanceof RangeError,
+		`preserves the conversion error: ${String(caught)}`,
+	);
 }
 for (const invoke of [c.tx_pair, c.pairAsync]) {
 	for (const distinct of [0, 1]) {
@@ -759,5 +762,245 @@ for (const invoke of [c.tx_choice_release, c.choiceReleaseAsync]) {
 		c.tx_destroyed() === before + 1,
 		"native abandonment releases selected union fields once",
 	);
+}
+for (const invoke of [c.tx_special_borrowed, c.specialBorrowedAsync]) {
+	const prior = c.tx_base(113)!;
+	const before = c.tx_destroyed();
+	await rangeFailure(() => invoke(1));
+	let refined = false;
+	try {
+		Reflect.apply(c.tx_special_read, undefined, [prior]);
+		refined = true;
+	} catch (error) {
+		check(error instanceof TypeError, "borrowed view rejection preserves its error type");
+	}
+	check(
+		c.tx_base_read(prior) === 113,
+		"failed borrowed refinement preserves its base handle",
+	);
+	prior[Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before,
+		"failed borrowed refinement leaves C ownership unchanged",
+	);
+	c.tx_clear();
+	check(!refined, "failed borrowed-only delivery does not publish a refined type view");
+}
+function supportsSpecial(value: c.TxBase): boolean {
+	try {
+		Reflect.apply(c.tx_special_read, undefined, [value]);
+		return true;
+	} catch (error) {
+		check(error instanceof TypeError, "a rejected pointer view throws TypeError");
+		return false;
+	}
+}
+for (const invoke of [c.tx_special_borrowed, c.specialBorrowedAsync]) {
+	const prior = c.tx_base(113)!;
+	const before = c.tx_destroyed();
+	const delivered = await invoke(0);
+	check(
+		Object.is(delivered.result, prior) && supportsSpecial(prior),
+		"successful borrowing publishes a view on the canonical wrapper",
+	);
+	prior[Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before,
+		"successful borrowing does not acquire a destructor",
+	);
+	c.tx_clear();
+}
+for (const invoke of [c.tx_special_borrowed_pair, c.specialBorrowedPairAsync]) {
+	const prior = c.tx_base(113)!;
+	const before = c.tx_destroyed();
+	await rangeFailure(() => invoke(1));
+	check(
+		!supportsSpecial(prior) && c.tx_base_read(prior) === 113,
+		"an owned sibling does not publish a failed borrowed refinement",
+	);
+	prior[Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before + 1,
+		"mixed delivery releases only the independently owned sibling",
+	);
+	c.tx_clear();
+}
+for (const invoke of [c.tx_base_special, c.baseSpecialAsync]) {
+	const before = c.tx_destroyed();
+	await rangeFailure(() => invoke(1));
+	check(
+		c.tx_destroyed() === before + 1,
+		"a borrowed base inventoried first uses the owned alias destructor on rollback",
+	);
+	const delivered = await invoke(0);
+	check(
+		Object.is(delivered.result, delivered.owned) &&
+			c.tx_special_read(delivered.owned!) === 131,
+		"borrowed base and owning derived outputs share one canonical handle",
+	);
+	delivered.owned![Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before + 2,
+		"the derived ownership policy commits once after a borrowed base",
+	);
+}
+for (const invoke of [c.tx_special_borrowed_release, c.specialBorrowedReleaseAsync]) {
+	for (const refined of [false, true]) {
+		const prior = c.tx_base(113)!;
+		const before = c.tx_destroyed();
+		let alias: c.TxBase | null = null;
+		watch(() => {
+			alias = refined ? c.tx_special_peek() : c.tx_base_peek();
+		});
+		await rangeFailure(() => invoke(1, 0));
+		watch(null);
+		check(
+			Object.is(alias, prior) && supportsSpecial(prior) === refined,
+			"outer rollback preserves only independently delivered refinements",
+		);
+		prior[Symbol.dispose]();
+		check(c.tx_destroyed() === before, "nested borrowing leaves C ownership unchanged");
+		c.tx_clear();
+	}
+	const before = c.tx_destroyed();
+	let alias: c.TxBase | null = null;
+	watch(() => {
+		alias = c.tx_base_peek();
+	});
+	await rangeFailure(() => invoke(1, 1));
+	watch(null);
+	check(
+		c.tx_base_read(alias!) === 137 && supportsSpecial(alias!),
+		"an independently delivered new canonical wrapper keeps its observed primary type",
+	);
+	alias![Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before,
+		"failed outer borrowing never frees an independently delivered allocation",
+	);
+	c.tx_clear();
+	watch(() => {});
+	await rangeFailure(() => invoke(1, 1));
+	watch(null);
+	const later = c.tx_base_peek()!;
+	check(
+		!supportsSpecial(later) && c.tx_base_read(later) === 137,
+		"an undelivered borrowed wrapper does not leave a failed primary type registered",
+	);
+	later[Symbol.dispose]();
+	c.tx_clear();
+	let leased: c.TxBase | null = null;
+	const leasedBefore = c.tx_destroyed();
+	watch(() => {
+		leased = c.tx_base_peek();
+		c.tx_register(() => c.tx_peek()!);
+	});
+	await rangeFailure(() => invoke(1, 1));
+	watch(null);
+	const acquired = c.tx_acquire()!;
+	check(
+		Object.is(acquired, leased) &&
+			c.tx_registered_value() === 137 &&
+			c.tx_destroyed() === leasedBefore,
+		"native leases retain one canonical borrowed resource across outer failure",
+	);
+	c.tx_register(null);
+	acquired[Symbol.dispose]();
+	check(
+		c.tx_destroyed() === leasedBefore + 1,
+		"independent adoption after borrowed rollback destroys once after native release",
+	);
+}
+let echoedLoan: c.TxBase | null = null;
+c.tx_base_visit((loan) => {
+	echoedLoan = c.tx_base_echo(loan!);
+	check(
+		Object.is(echoedLoan, loan) && c.tx_base_read(echoedLoan!) === 139,
+		"a borrowed echo preserves its active callback loan identity",
+	);
+});
+let expiredLoan = false;
+try {
+	c.tx_base_read(echoedLoan!);
+} catch (error) {
+	expiredLoan = error instanceof TypeError;
+}
+check(expiredLoan, "a successful borrowed echo does not extend its callback loan");
+for (const invoke of [c.tx_special_borrowed_out, c.specialBorrowedOutAsync]) {
+	const unexposedBefore = c.tx_destroyed();
+	await rangeFailure(() => invoke(2));
+	const unexposed = c.tx_base_peek()!;
+	check(
+		c.tx_base_read(unexposed) === 149 && !supportsSpecial(unexposed),
+		"a failed borrowed output leaves C storage intact and discards its unpublished wrapper",
+	);
+	unexposed[Symbol.dispose]();
+	check(
+		c.tx_destroyed() === unexposedBefore,
+		"borrowed output rollback does not assume destruction responsibility",
+	);
+	c.tx_clear();
+	const delivered = await invoke(0);
+	check(
+		c.tx_special_read(delivered.out!) === 149,
+		"a successful borrowed output is usable",
+	);
+	const deliveredBefore = c.tx_destroyed();
+	delivered.out![Symbol.dispose]();
+	check(
+		c.tx_destroyed() === deliveredBefore,
+		"closing a borrowed out handle leaves its allocation with C",
+	);
+	c.tx_clear();
+	const parent = c.tx_parent_new()!;
+	const before = c.tx_destroyed();
+	let child: c.TxResource | null = null;
+	watch(() => {
+		c.tx_parent_bind(parent);
+		child = parent.child;
+	});
+	await rangeFailure(() => invoke(1));
+	watch(null);
+	check(
+		c.tx_read(child!) === 149 && supportsSpecial(child!),
+		"a successful owner getter keeps the canonical borrowed wrapper across outer rollback",
+	);
+	check(
+		c.tx_destroyed() === before,
+		"failed borrowed delivery does not destroy independently owner-bound storage",
+	);
+	parent[Symbol.dispose]();
+	c.tx_clear();
+}
+for (const invoke of [c.tx_special_borrowed_inout, c.specialBorrowedInoutAsync]) {
+	const base = c.tx_base(157)!;
+	const before = c.tx_destroyed();
+	await rangeFailure(() => invoke(null, 1));
+	check(
+		!supportsSpecial(base),
+		"a failed borrowed inout from null keeps a prior type view private",
+	);
+	const initialized = await invoke(null, 0);
+	const prior = initialized.value!;
+	check(
+		Object.is(prior, base) && c.tx_special_read(prior) === 157,
+		"nullable borrowed inout accepts an empty slot and returns its canonical pointer",
+	);
+	await rangeFailure(() => invoke(prior, 1));
+	check(
+		c.tx_special_read(prior) === 157,
+		"failed borrowed inout preserves the input handle",
+	);
+	const delivered = await invoke(prior, 0);
+	check(
+		Object.is(delivered.value, prior),
+		"borrowed inout returns the canonical input wrapper",
+	);
+	prior[Symbol.dispose]();
+	check(
+		c.tx_destroyed() === before,
+		"borrowed inout never acquires the input destructor",
+	);
+	c.tx_clear();
 }
 console.log("result transactions passed");

@@ -404,6 +404,29 @@ type ResultShapes = Pick<BindingPlan, "records"> & {
 	readonly handles: ReadonlyMap<string, Pick<HandleType, "representation" | "destroy">>;
 };
 
+export function hasResultHandles(value: JsValue, shapes: ResultShapes): boolean {
+	switch (value.kind) {
+		case "handle":
+			return (
+				shapes.handles.get(value.name)!.representation === "pointer" &&
+				value.owner === undefined &&
+				value.lifetime === undefined
+			);
+		case "record":
+			return shapes.records
+				.get(value.name)!
+				.fields.some((field) => hasResultHandles(field.value, shapes));
+		case "tagged":
+			return value.cases.some((entry) => hasResultHandles(entry.value, shapes));
+		case "array":
+		case "sequence":
+		case "union":
+			return hasResultHandles(value.of, shapes);
+		default:
+			return false;
+	}
+}
+
 export function hasOwnedRecordFields(
 	value: JsValue,
 	shapes: Pick<BindingPlan, "records">,
@@ -454,11 +477,9 @@ export function supportsResultTransaction(
 			if (value.of.kind === "handle")
 				return (
 					context === "direct" &&
-					value.of.owned &&
 					value.of.owner === undefined &&
 					value.of.lifetime === undefined &&
-					shapes.handles.get(value.of.name)!.representation === "pointer" &&
-					shapes.handles.get(value.of.name)!.destroy !== undefined
+					shapes.handles.get(value.of.name)!.representation === "pointer"
 				);
 			return supportsResultTransaction(value.of, shapes, "other");
 		case "array":
@@ -2758,10 +2779,26 @@ class Planner {
 			const gap = (reason: string): void => {
 				gaps.push({ at: `param ${index + 1} (${name})`, reason });
 			};
-			if (valueFacts.borrowed === true) {
+			if (
+				valueFacts.borrowed === true &&
+				valueFacts.out !== true &&
+				valueFacts.inout !== true
+			) {
 				throw new FfiError(`${where(at)}: borrowed applies to results`);
 			}
 			const resolved = resolveCType(this.#model, param.type);
+			if (valueFacts.borrowed === true) {
+				const written =
+					resolved.kind === "pointer"
+						? this.value(resolved.to, "return", valueFacts)
+						: undefined;
+				if (
+					written === undefined ||
+					!("value" in written) ||
+					written.value.kind !== "handle"
+				)
+					throw new FfiError(`${where(at)}.borrowed: requires a handle output`);
+			}
 			const routed = callbackData.get(index);
 			const released = callbackReleases.get(index);
 			if (released !== undefined) {
@@ -3007,7 +3044,10 @@ class Planner {
 					resolved.to,
 					resolveCType(this.#model, resolved.to).kind === "array" ? "field" : "param",
 					valueFacts.string === undefined
-						? { ...(valueFacts.shape === undefined ? {} : { shape: valueFacts.shape }) }
+						? {
+								nullable: valueFacts.nullable,
+								...(valueFacts.shape === undefined ? {} : { shape: valueFacts.shape }),
+							}
 						: {
 								string: valueFacts.string,
 								nullable: valueFacts.nullable,
@@ -3141,11 +3181,7 @@ class Planner {
 				results.some(
 					(value) =>
 						hasOwnedRecordFields(value, this) ||
-						(value.kind === "sequence" &&
-							value.of.kind === "handle" &&
-							value.of.owned &&
-							this.#handles.get(value.of.name)!.representation === "pointer" &&
-							this.#handles.get(value.of.name)!.destroy !== undefined),
+						hasResultHandles(value, { records: this.records, handles: this.#handles }),
 				) &&
 				!results.every((value) =>
 					supportsResultTransaction(value, {
@@ -3156,8 +3192,7 @@ class Planner {
 			)
 				gaps.push({
 					at: "return",
-					reason:
-						"independently owned compound results require a complete result transaction",
+					reason: "pointer results require a complete result transaction",
 				});
 		}
 		if ("gap" in returns || gaps.length > 0) {

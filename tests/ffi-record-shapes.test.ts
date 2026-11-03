@@ -30,6 +30,59 @@ afterEach(() => {
 	for (const directory of temporary.splice(0))
 		rmSync(directory, { recursive: true, force: true });
 });
+it("keeps a borrowed pointer with a copied handle companion unbound", () => {
+	const directory = project("ffi-result-transactions");
+	writeFileSync(
+		join(directory, "resource.h"),
+		"\ntypedef struct TxCopyCompanion { int value; } TxCopyCompanion;\nTxCopyCompanion tx_copy_companion(void);\nTxBase *tx_borrowed_companion(TxCopyCompanion *other);\n",
+		{ flag: "a" },
+	);
+	writeFileSync(
+		join(directory, "resource.ffi.ts"),
+		`export default ${JSON.stringify({
+			...transactionContract,
+			types: { ...transactionContract.types, TxCopyCompanion: { handle: {} } },
+			functions: {
+				...transactionContract.functions,
+				tx_borrowed_companion: {
+					returns: { borrowed: true },
+					params: { other: { out: true } },
+				},
+			},
+		})};\n`,
+	);
+	const result = cli(directory, "inspect", "transactions", "--json");
+	expect(result.status, result.stderr || result.stdout).toBe(0);
+	const report = JSON.parse(result.stdout) as {
+		functions: Array<{ name: string; status: string; gaps?: Array<{ reason: string }> }>;
+	};
+	const entry = report.functions.find((value) => value.name === "tx_borrowed_companion");
+	expect(entry?.status).toBe("needs-facts");
+	expect(
+		entry?.gaps?.some((gap) => gap.reason.includes("complete result transaction")),
+	).toBe(true);
+});
+it("rejects borrowed facts on numeric outputs", () => {
+	const directory = project("ffi-result-transactions");
+	writeFileSync(
+		join(directory, "resource.h"),
+		"\nvoid tx_numeric_output(int *value);\n",
+		{ flag: "a" },
+	);
+	writeFileSync(
+		join(directory, "resource.ffi.ts"),
+		`export default ${JSON.stringify({
+			...transactionContract,
+			functions: {
+				...transactionContract.functions,
+				tx_numeric_output: { params: { value: { out: true, borrowed: true } } },
+			},
+		})};\n`,
+	);
+	const result = cli(directory, "inspect", "transactions", "--json");
+	expect(result.status).toBe(1);
+	expect(result.stderr).toContain("borrowed: requires a handle output");
+});
 it.each([false, true])(
 	"keeps owned pointer tables with incompatible companion results unbound with outer free %s",
 	(free) => {

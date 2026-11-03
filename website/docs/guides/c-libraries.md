@@ -433,6 +433,11 @@ Returned pointers and callback arguments share one JavaScript identity across vi
 including when C exposes the general type first. Views share pins, callback scope, and
 closed state. Observing another view preserves the destructor policy established when
 ownership was acquired. The object's original prototype and display tag stay unchanged.
+Use `borrowed: true` on a pointer result or an `out`/`inout` handle when C retains
+ownership. Result conversion publishes new views only after the complete delivery
+succeeds. A failed delivery preserves independently delivered aliases and refinements,
+including the original type of a new canonical handle exposed by a nested call.
+Borrowed echoes preserve callback-loan scope.
 Caller allocations keep explicit C cleanup through views; a library destroy binding
 cannot take ownership of their outer storage.
 

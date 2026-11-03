@@ -39,6 +39,51 @@ export default {
 		},
 	},
 	functions: {
+		tx_special_borrowed_inout: {
+			params: {
+				value: { inout: true, borrowed: true, nullable: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "specialBorrowedInoutAsync",
+		},
+		tx_special_borrowed_out: {
+			returns: { string: true, free: "tx_text_free" },
+			params: {
+				out: { out: true, borrowed: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "specialBorrowedOutAsync",
+		},
+		tx_base_visit: { params: { callback: { callback: { data: "data" } } } },
+		tx_base_special: {
+			returns: { borrowed: true },
+			params: {
+				owned: { out: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "baseSpecialAsync",
+		},
+		tx_special_borrowed_pair: {
+			returns: { borrowed: true },
+			params: {
+				owned: { out: true },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "specialBorrowedPairAsync",
+		},
+		tx_special_borrowed_release: {
+			returns: { borrowed: true },
+			params: {
+				text: { out: true, string: true, free: "tx_text_free" },
+				message: { out: true, string: { length: "length" } },
+			},
+			async: "specialBorrowedReleaseAsync",
+		},
+		tx_special_borrowed: {
+			returns: { borrowed: true },
+			params: { message: { out: true, string: { length: "length" } } },
+			async: "specialBorrowedAsync",
+		},
 		tx_choice_out: { params: { value: { out: true } } },
 		tx_choice: {
 			params: {

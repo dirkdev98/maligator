@@ -2500,6 +2500,7 @@ class BindingWriter {
 		result: string,
 		output: (index: number) => string,
 		context = "",
+		ownedOnly = true,
 	): Array<{
 		value: Extract<JsValue, { kind: "handle" }>;
 		expression: string;
@@ -2525,9 +2526,11 @@ class BindingWriter {
 			const element = value.kind === "sequence" ? value.of : value;
 			if (
 				element.kind !== "handle" ||
-				!element.owned ||
+				(ownedOnly &&
+					(!element.owned || this.#handle(element.name).destroy === undefined)) ||
 				this.#handle(element.name).representation !== "pointer" ||
-				this.#handle(element.name).destroy === undefined
+				element.owner !== undefined ||
+				element.lifetime !== undefined
 			)
 				return [];
 			if (value.kind !== "sequence") return [{ value: element, expression }];
@@ -2650,10 +2653,31 @@ class BindingWriter {
 		});
 	}
 
-	#transactionalResults(binding: BoundFunction): boolean {
+	#transactionalResults(binding: BoundFunction, directReturn = true): boolean {
+		const value = binding.returns;
+		// No fallible cleanup follows this conversion, so it is already the commit point.
+		if (
+			directReturn &&
+			!this.#plan.hasCallbacks &&
+			binding.outputs.length === 0 &&
+			binding.closes === undefined &&
+			value.kind === "handle" &&
+			(!value.owned || this.#handle(value.name).destroy === undefined) &&
+			binding.params.every(({ value: input }) =>
+				input.kind === "handle"
+					? input.pass === "pointer" && !this.managedFamily(input.name)
+					: IMMEDIATE_KINDS.has(input.kind) || input.kind === "bigint",
+			)
+		)
+			return false;
 		return (
-			this.#resultResources(binding, "mal_return", (index) => `mal_output_${index}`)
-				.length > 0 &&
+			this.#resultResources(
+				binding,
+				"mal_return",
+				(index) => `mal_output_${index}`,
+				"",
+				false,
+			).length > 0 &&
 			[binding.returns, ...binding.outputs.map((output) => output.value)].every((value) =>
 				supportsResultTransaction(value, this.#plan),
 			)
@@ -2666,11 +2690,11 @@ class BindingWriter {
 		output: (index: number) => string,
 		context = "",
 	): Array<string> {
-		const groups = this.#resultResources(binding, result, output, context);
+		const groups = this.#resultResources(binding, result, output, context, false);
 		const hints = this.#resultFreshHints(binding, result, output);
 		const inventory = groups.flatMap((group) => {
 			const claim = (pointer: string) =>
-				`mal_ffi_result_claim(vm, &mal_results, &mal_ffi_type_${group.value.name}, (void *) (${pointer}), ${this.#resourceFresh(group.value, pointer, hints)});`;
+				`mal_ffi_result_claim(vm, &mal_results, &mal_ffi_type_${group.value.name}, (void *) (${pointer}), ${group.value.owned}, ${this.#resourceFresh(group.value, pointer, hints)});`;
 			if (group.count === undefined) return [claim(group.expression)];
 			const index = this.#fresh("result_index");
 			return [
@@ -2700,9 +2724,12 @@ class BindingWriter {
 			`if (${ready} && mal_ffi_results_reserve(vm, &mal_results, ${capacity})) {`,
 			...inventory.map((line) => `	${line}`),
 			"} else {",
-			...this.#discardResources(groups, "vm", "nullptr", hints).map(
-				(line) => `	${line}`,
-			),
+			...this.#discardResources(
+				this.#resultResources(binding, result, output, context),
+				"vm",
+				"nullptr",
+				hints,
+			).map((line) => `	${line}`),
 			"}",
 		];
 	}
@@ -2754,7 +2781,14 @@ class BindingWriter {
 			constOutputs.has(index) ? `(*mal_output_${index})` : `mal_output_${index}`;
 		const locals: Array<string> = [];
 		const discardCount = this.#discardCount(binding);
-		const transactional = this.#transactionalResults(binding);
+		const claimCount = this.#resultResources(
+			binding,
+			"mal_return",
+			(index) => `mal_output_${index}`,
+			"",
+			false,
+		).filter((group) => group.count === undefined).length;
+		const transactional = this.#transactionalResults(binding, callable === undefined);
 		const results = transactional ? "&mal_results" : undefined;
 		if (discardCount > 0 && !transactional)
 			locals.push(
@@ -2763,8 +2797,8 @@ class BindingWriter {
 			);
 		if (transactional)
 			locals.push(
-				`MalFfiResultClaim mal_result_claims[${Math.max(discardCount, 1)}];`,
-				`MalValue mal_result_handles[${2 * Math.max(discardCount, 1)}];`,
+				`MalFfiResultClaim mal_result_claims[${Math.max(claimCount, 1)}];`,
+				`MalValue mal_result_handles[${2 * Math.max(claimCount, 1)}];`,
 				"MalFfiResults mal_results;",
 			);
 		const body: Array<string> = [];
@@ -3625,7 +3659,7 @@ class BindingWriter {
 			...locals.map((line) => `\t${line}`),
 			...(transactional
 				? [
-						`\tmal_ffi_results_init(&mal_results, mal_result_claims, mal_result_handles, ${Math.max(discardCount, 1)});`,
+						`\tmal_ffi_results_init(&mal_results, mal_result_claims, mal_result_handles, ${Math.max(claimCount, 1)});`,
 					]
 				: []),
 			...(compoundInputs
@@ -3716,7 +3750,13 @@ class BindingWriter {
 			readonly closeKey?: number;
 			readonly registrationResult: boolean;
 		}> = [];
-		const discardCount = this.#discardCount(binding);
+		const claimCount = this.#resultResources(
+			binding,
+			"mal_return",
+			(index) => `mal_output_${index}`,
+			"",
+			false,
+		).filter((group) => group.count === undefined).length;
 		const transactional = this.#transactionalResults(binding);
 		const results = transactional ? "&mal_results" : undefined;
 		const callbackArguments: Array<string> = [];
@@ -4465,10 +4505,10 @@ class BindingWriter {
 			"\tif (!mal_ran) return mal_result;",
 			...(transactional
 				? [
-						`\tMalFfiResultClaim mal_result_claims[${Math.max(discardCount, 1)}];`,
-						`\tMalValue mal_result_handles[${2 * Math.max(discardCount, 1)}];`,
+						`\tMalFfiResultClaim mal_result_claims[${Math.max(claimCount, 1)}];`,
+						`\tMalValue mal_result_handles[${2 * Math.max(claimCount, 1)}];`,
 						"\tMalFfiResults mal_results;",
-						`\tmal_ffi_results_init(&mal_results, mal_result_claims, mal_result_handles, ${Math.max(discardCount, 1)});`,
+						`\tmal_ffi_results_init(&mal_results, mal_result_claims, mal_result_handles, ${Math.max(claimCount, 1)});`,
 						...this.#resultClaims(binding, returnValue, outputValue, "mal_ctx->").map(
 							(line) => `\t${line}`,
 						),
