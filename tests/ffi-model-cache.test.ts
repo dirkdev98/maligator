@@ -63,6 +63,39 @@ afterEach(() => {
 });
 
 describe("preprocessed C model cache", () => {
+	it("discovers implementation dependencies from a read-only working directory", () => {
+		const directory = project();
+		const source = path.join(directory, "implementation.c");
+		const header = path.join(directory, "cache.h");
+		writeFileSync(source, '#include "cache.h"\nint read_value(void) { return 1; }\n');
+		writeFileSync(header, "int read_value(void);\n");
+		const { compiler, compileArguments } = input(directory);
+		try {
+			chmodSync(directory, 0o555);
+			const result = spawnSync(
+				process.execPath,
+				[
+					"--input-type=module",
+					"--eval",
+					`import { extractCSourceDependencies } from ${JSON.stringify(path.resolve(import.meta.dirname, "../src/ffi/c-extract.ts"))};
+const request = JSON.parse(process.argv[1]);
+console.log(JSON.stringify(extractCSourceDependencies({ ...request, environment: process.env }, process.argv[2])));`,
+					JSON.stringify({ compiler, compileArguments }),
+					source,
+				],
+				{
+					cwd: directory,
+					encoding: "utf8",
+					timeout: 15_000,
+				},
+			);
+			expect(result.status, result.stderr).toBe(0);
+			expect(JSON.parse(result.stdout)).toEqual([header, source].sort());
+		} finally {
+			chmodSync(directory, 0o755);
+		}
+	});
+
 	it("retains effective typedef alignment separately from canonical record layout", () => {
 		const directory = project();
 		const header = path.join(directory, "cache.h");

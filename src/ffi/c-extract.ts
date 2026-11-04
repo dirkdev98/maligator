@@ -90,9 +90,8 @@ function runCompiler(
 	args: ReadonlyArray<string>,
 	scratchDirectory: string,
 ): { status: number | null; stdout: Buffer; stderr: string } {
-	const directory = mkdtempSync(path.join(scratchDirectory, "compiler-output-"));
-	const stdout = path.join(directory, "stdout");
-	const stderr = path.join(directory, "stderr");
+	const stdout = path.join(scratchDirectory, "compiler.stdout");
+	const stderr = path.join(scratchDirectory, "compiler.stderr");
 	const descriptors: Array<number> = [];
 	try {
 		descriptors.push(openSync(stdout, "w"));
@@ -114,7 +113,6 @@ function runCompiler(
 		};
 	} finally {
 		for (const descriptor of descriptors) closeSync(descriptor);
-		rmSync(directory, { recursive: true, force: true });
 	}
 }
 
@@ -188,11 +186,12 @@ function preprocess(
 	input: CExtractionInput,
 	probePath: string,
 	cwd: string,
+	scratchDirectory: string,
 ): Preprocessed {
 	const result = runCompiler(
 		input,
 		[FFI_C_STANDARD, "-E", "-dD", "-w", ...input.compileArguments, "-x", "c", probePath],
-		cwd,
+		scratchDirectory,
 	);
 	const stack: Array<string> = [];
 	const directIncludes: Array<string> = [];
@@ -1300,8 +1299,18 @@ export function extractCSourceDependencies(
 ): ReadonlyArray<string> {
 	assertClang(input.compiler);
 	input.onDependencies?.([path.dirname(source)]);
-	const extracted = preprocess({ ...input, headers: [] }, source, process.cwd());
-	return [...new Set([source, ...extracted.files])].sort();
+	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-source-"));
+	try {
+		const extracted = preprocess(
+			{ ...input, headers: [] },
+			source,
+			process.cwd(),
+			directory,
+		);
+		return [...new Set([source, ...extracted.files])].sort();
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
 }
 
 interface CHeaderVersion {
@@ -1464,7 +1473,7 @@ export function withCHeaders<Result>(
 		const probePath = path.join(directory, "probe-headers.c");
 		writeFileSync(probePath, `${includes}\n`);
 
-		const preprocessed = preprocess(input, probePath, directory);
+		const preprocessed = preprocess(input, probePath, directory, directory);
 		const versions = [...preprocessed.files].sort().map(headerVersion);
 		for (const file of preprocessed.files) {
 			const parent = path.dirname(file);
@@ -1511,7 +1520,7 @@ export function withCHeaders<Result>(
 				if (!includeGraphValidated) {
 					let current: Preprocessed;
 					try {
-						current = preprocess(input, probePath, directory);
+						current = preprocess(input, probePath, directory, directory);
 					} catch (error) {
 						if (error instanceof FfiError)
 							throw new FfiSourceChangedError([...preprocessed.files]);
