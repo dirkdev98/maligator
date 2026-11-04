@@ -4,6 +4,7 @@ import {
 	numeric_u8,
 	numeric_i16,
 	numeric_u16,
+	u16Async,
 	numeric_i32,
 	numeric_u32,
 	numeric_i64,
@@ -384,4 +385,65 @@ check(numeric_bool([true]) === true, "boolean arrays keep element conversion");
 await rejects(() =>
 	numeric_bool(new Uint8Array([1]) as unknown as ReadonlyArray<boolean>),
 );
+function failsWith(kind: typeof TypeError | typeof RangeError, run: () => unknown): void {
+	numeric_reset();
+	let caught: unknown;
+	try {
+		run();
+	} catch (error) {
+		caught = error;
+	}
+	check(caught instanceof kind, `expected ${kind.name}, got ${String(caught)}`);
+	check(numeric_calls() === 0, "invalid integer element reached C");
+}
+check(numeric_i8([-128, 127]) === -1, "int8 array boundaries");
+check(numeric_u8([255, 0]) === 255, "uint8 array boundaries");
+check(numeric_i16([-32768, 32767]) === -1, "int16 array boundaries");
+check(numeric_u16([65535, 0]) === 65535, "uint16 array boundaries");
+check(numeric_i32([-2147483648, 2147483647]) === -1, "int32 array boundaries");
+check(numeric_u32([4294967295, 0]) === 4294967295, "uint32 array boundary above int32");
+check(
+	numeric_u32([2 ** 31, 1]) === 2147483649,
+	"integral doubles mix with int32 elements",
+);
+check(
+	numeric_i16([-0, 0.5 * 10, 3]) === 8,
+	"negative zero and computed doubles stay exact",
+);
+const counted = Array.from({ length: 1000 }, (_, index) => index);
+check(numeric_i32(counted) === 499500, "large int32 arrays leave inline storage");
+check(
+	(await u16Async(Array.from({ length: 300 }, () => 200))) === 60000,
+	"async integer arrays copy every element",
+);
+failsWith(RangeError, () => numeric_u8([1, 256]));
+failsWith(RangeError, () => numeric_i8([-129]));
+failsWith(RangeError, () => numeric_u32([-1]));
+failsWith(RangeError, () => numeric_i32([2 ** 31]));
+failsWith(RangeError, () => numeric_i16([1.5]));
+failsWith(RangeError, () => numeric_i16([Number.NaN]));
+failsWith(RangeError, () => numeric_u16([Number.POSITIVE_INFINITY]));
+failsWith(TypeError, () => numeric_i32(["1"] as unknown as Array<number>));
+failsWith(TypeError, () => numeric_i32(["x", 2 ** 40] as unknown as Array<number>));
+failsWith(RangeError, () => numeric_i32([2 ** 40, "x"] as unknown as Array<number>));
+// oxlint-disable-next-line no-sparse-arrays -- A hole reads as undefined.
+failsWith(TypeError, () => numeric_i32([1, , 2] as Array<number>));
+let reads = 0;
+const accessed = [1, 2, 3];
+Object.defineProperty(accessed, 1, {
+	get() {
+		reads++;
+		return 20;
+	},
+});
+check(numeric_i32(accessed) === 24 && reads === 1, "accessor elements are read once");
+const trapped: Array<string> = [];
+const proxied = new Proxy([4, 5], {
+	get(target, key, receiver): unknown {
+		if (typeof key === "string") trapped.push(key);
+		return Reflect.get(target, key, receiver) as unknown;
+	},
+});
+check(numeric_i32(proxied) === 9, "proxied integer arrays convert through traps");
+check(trapped.includes("0") && trapped.includes("1"), "proxy element traps run");
 console.log("numeric views passed");

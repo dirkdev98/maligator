@@ -454,6 +454,12 @@ bool mal_ffi_try_record_elements(
  * ignore the destination and convert sequentially. The caller roots the source.
  */
 bool mal_ffi_try_f64_elements(MalValue array, int32_t length, double *out);
+/**
+ * The same for exact integers of 8, 16 or 32 `bits`, into elements of that width.
+ * False leaves no thrown exception, so the sequential conversion reports the failure.
+ */
+bool mal_ffi_try_integer_elements(
+    MalValue array, int32_t length, int32_t bits, bool is_signed, void *out);
 /** Read element `index` of an array that must have exactly `length` elements. */
 bool mal_ffi_element(
     MalVm *vm, MalValue array, int32_t index, int32_t length, const MalFfiSite *site, MalValue *out);

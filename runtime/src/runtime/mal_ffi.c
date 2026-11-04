@@ -390,13 +390,19 @@ bool mal_ffi_check_count(
         (unsigned long long) maximum);
 }
 
-// Typed views skip copying; keep the bulk work out of their shared bridge.
-__attribute__((noinline)) bool mal_ffi_try_f64_elements(MalValue value, int32_t length, double *out) {
-    if (!mal_value_is_array_object(value)) return false;
+/** An Array's elements when every one is an own data value, so reading them runs no JavaScript. */
+static const MalValue *ffi_dense_elements(MalValue value, int32_t length) {
+    if (!mal_value_is_array_object(value)) return nullptr;
     MalArrayObject *array = mal_value_to_array_object(value);
     if (length < 0 || array->length != (u32) length || array->elements == nullptr
-        || array->dense_count < (u32) length || array->dense_maybe_holey) return false;
-    const MalValue *elements = array->elements;
+        || array->dense_count < (u32) length || array->dense_maybe_holey) return nullptr;
+    return array->elements;
+}
+
+// Typed views skip copying; keep the bulk work out of their shared bridge.
+__attribute__((noinline)) bool mal_ffi_try_f64_elements(MalValue value, int32_t length, double *out) {
+    const MalValue *elements = ffi_dense_elements(value, length);
+    if (elements == nullptr) return false;
     // Raw doubles already have C's representation; tagged values need the decoding pass.
     if (length > 0 && elements[0] < MAL_VALUE_TAG_BASE) {
         static_assert((MAL_VALUE_TAG_BASE & UINT32_MAX) == 0);
@@ -418,6 +424,55 @@ __attribute__((noinline)) bool mal_ffi_try_f64_elements(MalValue value, int32_t 
         out[index] = number ? mal_ops_number_as_f64(element) : 0.0;
     }
     return valid;
+}
+
+// Unsigned stores keep each value's bits; C permits them to alias the signed element type.
+static inline __attribute__((always_inline)) void ffi_store_integer(
+    void *out, int32_t index, size_t width, i64 value) {
+    switch (width) {
+        case 1: ((u8 *) out)[index] = (u8) value; break;
+        case 2: ((u16 *) out)[index] = (u16) value; break;
+        default: ((u32 *) out)[index] = (u32) value; break;
+    }
+}
+
+static inline __attribute__((always_inline)) bool ffi_integer_elements(
+    const MalValue *elements, int32_t length, i64 minimum, i64 maximum, size_t width, void *out) {
+    // Exact integers usually use the int32 class, which one branch-free pass validates.
+    u32 classes = 0;
+    i32 low = INT32_MAX;
+    i32 high = INT32_MIN;
+    for (int32_t index = 0; index < length; index++) {
+        MalValue element = elements[index];
+        classes |= (u32) (element >> 32) ^ (u32) (MAL_VALUE_INT32 >> 32);
+        i32 integer = mal_value_to_i32(element);
+        low = integer < low ? integer : low;
+        high = integer > high ? integer : high;
+        ffi_store_integer(out, index, width, integer);
+    }
+    if (classes == 0 && low >= minimum && high <= maximum) return true;
+    for (int32_t index = 0; index < length; index++) {
+        f64 number;
+        if (!mal_ops_try_number_as_f64(elements[index], &number)
+            || !(number >= (f64) minimum && number <= (f64) maximum) || trunc(number) != number)
+            return false;
+        ffi_store_integer(out, index, width, (i64) number);
+    }
+    return true;
+}
+
+__attribute__((noinline)) bool mal_ffi_try_integer_elements(
+    MalValue value, int32_t length, int32_t bits, bool is_signed, void *out) {
+    const MalValue *elements = ffi_dense_elements(value, length);
+    if (elements == nullptr) return false;
+    i64 minimum = is_signed ? -(INT64_C(1) << (bits - 1)) : 0;
+    i64 maximum = is_signed ? (INT64_C(1) << (bits - 1)) - 1 : (INT64_C(1) << bits) - 1;
+    switch (bits) {
+        case 8: return ffi_integer_elements(elements, length, minimum, maximum, 1, out);
+        case 16: return ffi_integer_elements(elements, length, minimum, maximum, 2, out);
+        case 32: return ffi_integer_elements(elements, length, minimum, maximum, 4, out);
+        default: return false;
+    }
 }
 
 bool mal_ffi_element(

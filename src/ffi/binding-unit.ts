@@ -195,6 +195,34 @@ function immediateRecord(record: MappedRecord): boolean {
 }
 
 /**
+ * The runtime call that copies a dense Number Array into C elements without
+ * reading them one by one, for element types whose every slot it writes. A false
+ * result falls back to the sequential conversion, which reports the failure.
+ */
+function bulkNumericElements(
+	of: JsValue,
+	element: CType,
+): ((source: string, length: string, elements: string) => string) | undefined {
+	if (
+		of.kind === "float" &&
+		of.bits === 64 &&
+		element.kind === "float" &&
+		element.name === "double"
+	)
+		return (source, length, elements) =>
+			`mal_ffi_try_f64_elements(${source}, ${length}, ${elements})`;
+	if (
+		of.kind === "integer" &&
+		element.kind === "integer" &&
+		[8, 16, 32].includes(of.bits)
+	)
+		// The width guard folds at compile time and keeps any other layout sequential.
+		return (source, length, elements) =>
+			`sizeof(*${elements}) == ${String(of.bits / 8)} && mal_ffi_try_integer_elements(${source}, ${length}, ${String(of.bits)}, ${String(of.signed)}, ${elements})`;
+	return undefined;
+}
+
+/**
  * Inputs whose conversion neither runs JavaScript nor allocates, and that nothing
  * reads after the C call, so a direct entry need not root them, unless the binding
  * can call back: then handles and buffers are pinned, and cleanup releases the pin
@@ -3492,22 +3520,18 @@ class BindingWriter {
 						// Each string element needs its own copy; the frame's string buffers hold one value each.
 						const texts = value.of.kind === "string";
 						const elementType = resolveCType(this.#model, value.element);
-						const doubles =
-							value.of.kind === "float" &&
-							value.of.bits === 64 &&
-							elementType.kind === "float" &&
-							elementType.name === "double";
-						if (doubles && scratchInputs++ === 0)
+						const numeric = bulkNumericElements(value.of, elementType);
+						if (numeric !== undefined && scratchInputs++ === 0)
 							locals.push("MalFfiScratch *mal_scratch = nullptr;");
 						const storageName = `mal_storage_${String(index)}`;
 						// Reusing a heap snapshot's unused inline buffer keeps small calls off scratch setup.
-						const storage = doubles ? `${storageName}.values` : storageName;
+						const storage = numeric === undefined ? storageName : `${storageName}.values`;
 						locals.push(
 							`${pointerDeclaration(value.element, elements)} = nullptr;`,
 							`int32_t ${length} = 0;`,
-							...(doubles
+							...(numeric !== undefined
 								? [
-										`union { double values[MAL_FFI_ARRAY_INLINE / sizeof(double)]; MalFfiScratch scratch; } ${storageName};`,
+										`union { __typeof__(*${elements}) values[MAL_FFI_ARRAY_INLINE / sizeof(*${elements})]; MalFfiScratch scratch; } ${storageName};`,
 										'static_assert(sizeof(MalFfiScratch) <= MAL_FFI_ARRAY_INLINE, "FFI scratch metadata must fit unused inline storage");',
 									]
 								: [
@@ -3522,7 +3546,7 @@ class BindingWriter {
 							);
 						}
 						cleanup.push(
-							`if (${elements} != nullptr && (void *) ${elements} != (void *) ${storage}) ${doubles ? `mal_ffi_scratch_free(mal_scratch, ${elements})` : `free(${elements})`};`,
+							`if (${elements} != nullptr && (void *) ${elements} != (void *) ${storage}) ${numeric === undefined ? `free(${elements})` : `mal_ffi_scratch_free(mal_scratch, ${elements})`};`,
 						);
 						const text = this.#fresh("text");
 						// Arrays of records with immediate fields read every element in one call.
@@ -3581,18 +3605,18 @@ class BindingWriter {
 									]
 								: []),
 							`} else if (${length} > 0) {`,
-							...(doubles
+							...(numeric !== undefined
 								? [
 										`\tif (mal_scratch == nullptr) { ${storageName}.scratch = (MalFfiScratch) {0}; mal_scratch = &${storageName}.scratch; }`,
 									]
 								: []),
-							`\t${elements} = ${doubles ? `mal_ffi_scratch_allocate(vm, mal_scratch, (size_t) ${length}, sizeof(*${elements}), _Alignof(__typeof__(*${elements})), mal_scratch_inputs)` : `mal_ffi_calloc_storage((size_t) ${length}, sizeof(*${elements}), _Alignof(__typeof__(*${elements})))`};`,
+							`\t${elements} = ${numeric === undefined ? `mal_ffi_calloc_storage((size_t) ${length}, sizeof(*${elements}), _Alignof(__typeof__(*${elements})))` : `mal_ffi_scratch_allocate(vm, mal_scratch, (size_t) ${length}, sizeof(*${elements}), _Alignof(__typeof__(*${elements})), mal_scratch_inputs)`};`,
 							`\tif (${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 							"}",
 							...(bulk === undefined
-								? doubles
+								? numeric !== undefined
 									? [
-											`if (!mal_ffi_try_f64_elements(${source}, ${length}, ${elements})) {`,
+											`if (!(${numeric(source, length, elements)})) {`,
 											...sequential.map((line) => `\t${line}`),
 											"}",
 										]
@@ -4476,11 +4500,7 @@ class BindingWriter {
 						const element = this.#fresh("element");
 						const texts = value.of.kind === "string";
 						const elementType = resolveCType(this.#model, value.element);
-						const doubles =
-							value.of.kind === "float" &&
-							value.of.bits === 64 &&
-							elementType.kind === "float" &&
-							elementType.name === "double";
+						const numeric = bulkNumericElements(value.of, elementType);
 						fields.push(
 							`${pointerDeclaration(value.element, elements)};`,
 							`int32_t ${length};`,
@@ -4496,17 +4516,17 @@ class BindingWriter {
 							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &mal_ctx->${length})) goto mal_failed;`,
 							`if (mal_ctx->${length} > 0) {`,
 							`static_assert(sizeof(*mal_ctx->${elements}) % _Alignof(__typeof__(*mal_ctx->${elements})) == 0, "FFI array stride must preserve C alignment");`,
-							`\tmal_ctx->${elements} = mal_ffi_${doubles ? "allocate" : "calloc"}_storage((size_t) mal_ctx->${length}, sizeof(*mal_ctx->${elements}), _Alignof(__typeof__(*mal_ctx->${elements})));`,
+							`\tmal_ctx->${elements} = mal_ffi_${numeric === undefined ? "calloc" : "allocate"}_storage((size_t) mal_ctx->${length}, sizeof(*mal_ctx->${elements}), _Alignof(__typeof__(*mal_ctx->${elements})));`,
 							`\tif (mal_ctx->${elements} == nullptr) {`,
 							"\t\tmal_ffi_out_of_memory(vm);",
 							"\t\tgoto mal_failed;",
 							"\t}",
 							"}",
-							...(doubles
-								? [
-										`if (!mal_ffi_try_f64_elements(${source}, mal_ctx->${length}, mal_ctx->${elements})) {`,
-									]
-								: []),
+							...(numeric === undefined
+								? []
+								: [
+										`if (!(${numeric(source, `mal_ctx->${length}`, `mal_ctx->${elements}`)})) {`,
+									]),
 							`for (int32_t ${position} = 0; ${position} < mal_ctx->${length}; ${position}++) {`,
 							`\tMalValue ${element};`,
 							`\tif (!mal_ffi_element(vm, ${source}, ${position}, mal_ctx->${length}, ${site}, &${element})) goto mal_failed;`,
@@ -4528,7 +4548,7 @@ class BindingWriter {
 										inputs,
 									).map((line) => `\t${line}`)),
 							"}",
-							...(doubles ? ["}"] : []),
+							...(numeric === undefined ? [] : ["}"]),
 							`${target} = (${localDeclaration(param.type, "")}) mal_ctx->${elements};`,
 						);
 						if (view === undefined) body.push(...converted);

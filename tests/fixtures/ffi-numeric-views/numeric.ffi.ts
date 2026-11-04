@@ -14,7 +14,10 @@ export default {
 		numeric_i8: { params: { values: { array: { length: "count" } } } },
 		numeric_u8: { params: { values: { array: { length: "count" } } } },
 		numeric_i16: { params: { values: { array: { length: "count" } } } },
-		numeric_u16: { params: { values: { array: { length: "count" } } } },
+		numeric_u16: {
+			params: { values: { array: { length: "count" } } },
+			async: "u16Async",
+		},
 		numeric_i32: { params: { values: { array: { length: "count" } } } },
 		numeric_u32: { params: { values: { array: { length: "count" } } } },
 		numeric_i64: {
