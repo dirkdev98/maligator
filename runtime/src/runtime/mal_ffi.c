@@ -988,9 +988,21 @@ static void ffi_async_cancel_queued(MalVm *vm);
  * twice yields one handle. Handle entries are weak; a handle leaves the table when
  * it closes or is collected.
  */
+/** A prepared handle prototype by descriptor; the VM's prepared values root it. */
+typedef struct MalFfiPrototypeEntry {
+    const MalFfiLibrary *library;
+    /** Null for an empty slot. */
+    const MalFfiHandleType *type;
+    MalValue prototype;
+} MalFfiPrototypeEntry;
+
 struct MalFfiState {
     MalShape **shapes;
     usize shape_capacity;
+    /** Handle prototypes, so a result skips the identity lookup; open addressing. */
+    MalFfiPrototypeEntry *prototypes;
+    usize prototype_count;
+    usize prototype_capacity;
     /** Open addressing with linear probing; capacity is zero or a power of two. */
     MalFfiHandleEntry *handles;
     usize handle_count;
@@ -1149,6 +1161,7 @@ static void ffi_state_free(MalVm *vm) {
     free(state->handles);
     ffi_discards_drop(state->discards);
     free(state->shapes);
+    free(state->prototypes);
     free(state->scratch_data);
     free(state);
     vm->ffi = nullptr;
@@ -3143,8 +3156,51 @@ static MalValue ffi_handle_dispose(
     return mal_value_new_undefined();
 }
 
+static bool ffi_prototype_find(
+    MalFfiState *state, const MalFfiLibrary *library, const MalFfiHandleType *type, MalValue *out) {
+    if (state->prototype_capacity == 0) return false;
+    for (usize slot = ffi_handle_slot(type, library, state->prototype_capacity);;
+         slot = (slot + 1) & (state->prototype_capacity - 1)) {
+        const MalFfiPrototypeEntry *entry = &state->prototypes[slot];
+        if (entry->type == nullptr) return false;
+        if (entry->type == type && entry->library == library) {
+            *out = entry->prototype;
+            return true;
+        }
+    }
+}
+
+static void ffi_prototype_place(
+    MalFfiPrototypeEntry *entries, usize capacity, MalFfiPrototypeEntry entry) {
+    usize slot = ffi_handle_slot(entry.type, entry.library, capacity);
+    while (entries[slot].type != nullptr) slot = (slot + 1) & (capacity - 1);
+    entries[slot] = entry;
+}
+
+/** Best effort: without memory, the next result finds the prototype by identity again. */
+static void ffi_prototype_remember(
+    MalFfiState *state, const MalFfiLibrary *library, const MalFfiHandleType *type, MalValue prototype) {
+    if ((state->prototype_count + 1) * 2 > state->prototype_capacity) {
+        usize capacity = state->prototype_capacity == 0 ? 8 : state->prototype_capacity * 2;
+        MalFfiPrototypeEntry *grown = calloc(capacity, sizeof(*grown));
+        if (grown == nullptr) return;
+        for (usize index = 0; index < state->prototype_capacity; index++)
+            if (state->prototypes[index].type != nullptr)
+                ffi_prototype_place(grown, capacity, state->prototypes[index]);
+        free(state->prototypes);
+        state->prototypes = grown;
+        state->prototype_capacity = capacity;
+    }
+    ffi_prototype_place(
+        state->prototypes, state->prototype_capacity, (MalFfiPrototypeEntry) {library, type, prototype});
+    state->prototype_count++;
+}
+
 static MalValue ffi_handle_prototype(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type) {
+    MalFfiState *state = ffi_state(vm);
+    MalValue cached;
+    if (state != nullptr && ffi_prototype_find(state, library, type, &cached)) return cached;
     usize name_length = strlen("type:") + strlen(type->name) + 1;
     char *name = malloc(name_length);
     if (name == nullptr) {
@@ -3155,9 +3211,9 @@ static MalValue ffi_handle_prototype(
     char *identity = ffi_identity(vm, library, name);
     free(name);
     if (identity == nullptr) return mal_value_new_undefined();
-    MalValue cached;
     if (ffi_prepared(vm, identity, &cached)) {
         free(identity);
+        if (state != nullptr) ffi_prototype_remember(state, library, type, cached);
         return cached;
     }
     MalValue held[2] = {
@@ -3193,6 +3249,7 @@ static MalValue ffi_handle_prototype(
     MalValue result = held[0];
     mal_gc_unroot(&root);
     if (!ffi_prepare(vm, identity, result)) return mal_value_new_undefined();
+    if (state != nullptr) ffi_prototype_remember(state, library, type, result);
     return result;
 }
 
