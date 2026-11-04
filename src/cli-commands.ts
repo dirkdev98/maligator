@@ -1207,8 +1207,10 @@ function prepareCommandState(
 						}),
 					],
 		);
-		if (command.kind === "build" && command.internal.emitC)
+		if (command.kind === "build" && command.internal.emitC) {
 			for (const unit of output) writeSourceChunks(1, [...unit.sourceChunks, "\n"]);
+			return { dependencies, dependencyIdentities };
+		}
 		reporter.detail("Translation units", output.length);
 		reporter.detail(
 			"Generated C bytes",

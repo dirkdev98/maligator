@@ -110,6 +110,10 @@ normalized feature config, target, selected toolchain identity, build environmen
 and exact compile or Cargo arguments. Package semver is recorded as metadata, not
 used as a blanket invalidation key.
 
+`maligator build --print` writes generated C to stdout and stops before native
+compilation, linking, or artifact publication. Add `--production` to inspect the
+optimized program. A subsequent build can reuse that frontend cache.
+
 Normal builds restore cached VM definitions before generated-C emission, skipping
 unchanged graph, semantic, optimization, allocation, and lowering work while
 preserving native-code metadata. Generated translation units and the driver are then

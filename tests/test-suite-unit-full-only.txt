@@ -2,6 +2,7 @@
 tests/toolchain.test.ts
 tests/test-process.test.ts
 tests/cli-run.test.ts
+tests/cli-print.test.ts
 tests/self-compile-experiment.test.ts
 tests/wasm-cache.test.ts
 tests/wasm-embedding.test.ts

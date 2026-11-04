@@ -234,7 +234,38 @@ server.listen(0, "127.0.0.1", () => { console.log("DX_HTTP_PORT " + server.addre
 		);
 	const editedExpected = expected();
 	runBuilt(invoke(buildArgs).stdout, editedExpected);
-	runBuilt(invoke([...buildArgs, "--production"]).stdout, editedExpected);
+	const dump = path.join(reports, "large-generated.c");
+	const descriptor = openSync(dump, "w");
+	let generatedBytes: number;
+	let generatedSha256: string;
+	try {
+		// Populate the production frontend cache before linking so each phase has a bounded check.
+		const args = [...buildArgs, "--production", "--print"];
+		const startedAt = performance.now();
+		const result = spawnSync(options.cli, args, {
+			cwd: project,
+			env: options.environment,
+			stdio: ["ignore", descriptor, "pipe"],
+			encoding: "utf8",
+			timeout: 300_000,
+			killSignal: "SIGKILL",
+			maxBuffer: 8 * 1024 * 1024,
+		});
+		writeFileSync(
+			path.join(reports, "large-print.json"),
+			`${JSON.stringify({ args, durationMs: performance.now() - startedAt, status: result.status, signal: result.signal, error: result.error?.message, stderr: result.stderr }, null, 2)}\n`,
+		);
+		if (result.status !== 0)
+			throw new Error(`large C dump failed: ${result.stderr}`, { cause: result.error });
+		generatedBytes = statSync(dump).size;
+		if (generatedBytes <= 32 * 1024 * 1024)
+			throw new Error("large fixture did not exercise aggregate generated output");
+		generatedSha256 = artifactFileDigest(dump);
+	} finally {
+		closeSync(descriptor);
+		rmSync(dump, { force: true });
+	}
+	runBuilt(invoke(["build", "--config", config, "--production"]).stdout, editedExpected);
 	for (const command of ["run", "test"] as const) {
 		const directory = path.join(reports, `large-profile-${command}`);
 		const result = invoke(
@@ -257,31 +288,10 @@ server.listen(0, "127.0.0.1", () => { console.log("DX_HTTP_PORT " + server.addre
 			);
 		options.checkProfile(directory, command);
 	}
-	const dump = path.join(reports, "large-generated.c");
-	const descriptor = openSync(dump, "w");
-	try {
-		const result = spawnSync(options.cli, [...buildArgs, "--print"], {
-			cwd: project,
-			env: options.environment,
-			stdio: ["ignore", descriptor, "pipe"],
-			encoding: "utf8",
-			timeout: 300_000,
-			killSignal: "SIGKILL",
-			maxBuffer: 8 * 1024 * 1024,
-		});
-		if (result.status !== 0)
-			throw new Error(`large C dump failed: ${result.stderr}`, { cause: result.error });
-		const bytes = statSync(dump).size;
-		if (bytes <= 32 * 1024 * 1024)
-			throw new Error("large fixture did not exercise aggregate generated output");
-		writeFileSync(
-			path.join(reports, "large-inputs.json"),
-			`${JSON.stringify({ sourceBytes: statSync(dependency).size, sourceSha256: artifactFileDigest(dependency), generatedBytes: bytes, generatedSha256: artifactFileDigest(dump), commands: ["build", "run", "dev", "test", "test --watch", "build --production", "run --profile", "test --profile", "build --print"], edits: ["small dependency", "large dependency"], cacheRestoration: true }, null, 2)}\n`,
-		);
-	} finally {
-		closeSync(descriptor);
-		rmSync(dump, { force: true });
-	}
+	writeFileSync(
+		path.join(reports, "large-inputs.json"),
+		`${JSON.stringify({ sourceBytes: statSync(dependency).size, sourceSha256: artifactFileDigest(dependency), generatedBytes, generatedSha256, commands: ["build", "run", "dev", "test", "test --watch", "build --production --print", "build --production", "run --profile", "test --profile"], edits: ["small dependency", "large dependency"], cacheRestoration: true }, null, 2)}\n`,
+	);
 	console.log(
 		"ok   large sources, UTF-8 data and generated output survived command execution, edits and cache restoration",
 	);
