@@ -178,6 +178,8 @@ export interface MappedParameter {
 	readonly type: CType;
 	readonly value: JsValue;
 	readonly view?: NumericView;
+	/** The view lends storage C may write; ordinary arrays still pass a copy. */
+	readonly writable?: true;
 }
 
 /** How a binding produces one C argument. */
@@ -1217,11 +1219,11 @@ class Planner {
 		}
 	}
 
-	#numericView(type: CType, value: JsValue): NumericView | undefined {
+	#numericView(type: CType, value: JsValue, writable: boolean): NumericView | undefined {
 		const resolved = resolveCType(this.#model, type);
 		if (resolved.kind !== "pointer" || value.kind !== "sequence") return undefined;
 		const target = resolveCType(this.#model, resolved.to);
-		if (!("const" in target && target.const === true)) return undefined;
+		if (("const" in target && target.const === true) === writable) return undefined;
 		const element = value.of;
 		if (
 			element.kind === "float" &&
@@ -2954,6 +2956,10 @@ class Planner {
 			}
 			if (valueFacts.out === true || valueFacts.inout === true) {
 				const fact = valueFacts.out === true ? "out" : "inout";
+				if (valueFacts.array?.writable === true)
+					throw new FfiError(
+						`${where(at)}.array.writable: ${fact} arrays already return C's values`,
+					);
 				if (valueFacts.out === true && valueFacts.inout === true) {
 					throw new FfiError(`${where(at)}: a parameter is out or inout, not both`);
 				}
@@ -3176,12 +3182,18 @@ class Planner {
 					`${where(at)}: nullable applies to string, handle, buffer, and array pointers`,
 				);
 			}
-			const view = this.#numericView(param.type, mapped.value);
+			const writable = valueFacts.array?.writable === true;
+			const view = this.#numericView(param.type, mapped.value, writable);
+			if (writable && view === undefined)
+				throw new FfiError(
+					`${where(at)}.array.writable: writable views need a non-const arithmetic pointer`,
+				);
 			params.push({
 				name,
 				type: param.type,
 				value: mapped.value,
 				...(view === undefined ? {} : { view }),
+				...(writable ? { writable: true as const } : {}),
 			});
 			args.push({ kind: "input", param: params.length - 1 });
 		});
@@ -3503,6 +3515,10 @@ export function planBindings(
 			if (declared.has(asyncName)) {
 				throw new FfiError(`${at}: '${asyncName}' is already a function`);
 			}
+			if ("params" in result && result.params.some((param) => param.writable === true))
+				throw new FfiError(
+					`${at}: writable array views lend storage only to synchronous calls`,
+				);
 			declared.add(asyncName);
 		}
 		if ("gaps" in result) unbound.push(result);

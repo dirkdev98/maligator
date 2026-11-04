@@ -77,6 +77,10 @@ export default {
 			params: { values: { inout: true, array: { length: "count" } } },
 			async: "negateAsync",
 		},
+		numeric_scale: { params: { values: { array: { length: "count", writable: true } } } },
+		numeric_sequence: {
+			params: { values: { array: { length: "count", writable: true } } },
+		},
 		numeric_fill: {
 			params: {
 				values: { out: true, array: { length: "written", capacity: "capacity" } },

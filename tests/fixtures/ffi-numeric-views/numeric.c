@@ -103,4 +103,14 @@ void numeric_negate(int16_t *values, size_t *count) {
     calls++;
     for (size_t i = 0; i < *count; i++) values[i] = (int16_t) -values[i];
 }
+double numeric_scale(double *values, int count, double factor) {
+    calls++;
+    double total = 0;
+    for (int i = 0; i < count; i++) total += values[i] *= factor;
+    return total;
+}
+void numeric_sequence(uint64_t *values, int count, uint64_t start) {
+    calls++;
+    for (int i = 0; i < count; i++) values[i] = start + (uint64_t) i;
+}
 int numeric_live(void) { return live; }

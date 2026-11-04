@@ -33,6 +33,8 @@ void numeric_out_free(void *values);
 void numeric_fill(int16_t *values, int capacity, int *written);
 void numeric_emit(void (*visit)(void *data, const float *values, int count), void *data);
 void numeric_negate(int16_t *values, size_t *count);
+double numeric_scale(double *values, int count, double factor);
+void numeric_sequence(uint64_t *values, int count, uint64_t start);
 int numeric_live(void);
 int numeric_calls(void);
 void numeric_reset(void);

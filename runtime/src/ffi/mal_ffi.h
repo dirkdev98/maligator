@@ -399,13 +399,14 @@ bool mal_ffi_is_typed_array(MalValue value);
  */
 MalValue mal_ffi_numeric_array(MalVm *vm, const void *data, int32_t length, MalFfiNumericKind kind);
 /**
- * Resolve matching const numeric storage after all argument getters. The extent
- * is current, attached, unshared, and compatible with the C element layout.
- * A non-null pin protects the storage until `mal_ffi_unpin`; numeric writes remain possible.
+ * Resolve matching numeric storage after all argument getters. The extent is
+ * current, attached, unshared, and compatible with the C element layout; storage C
+ * may write is also mutable. A non-null pin protects the storage until
+ * `mal_ffi_unpin`; numeric writes remain possible.
  */
 bool mal_ffi_to_numeric_view(
     MalVm *vm, MalValue value, MalFfiNumericKind expected, size_t element_size, size_t alignment,
-    const MalFfiSite *site, const void **data, int32_t *length, void **pin);
+    bool writable, const MalFfiSite *site, const void **data, int32_t *length, void **pin);
 /** Copy a fixed row after checking its UTF-8 capacity or exact byte length. */
 bool mal_ffi_to_fixed_string(MalVm *vm, MalValue value, void *target, size_t capacity, const MalFfiSite *site);
 bool mal_ffi_to_fixed_bytes(MalVm *vm, MalValue value, void *target, size_t capacity, const MalFfiSite *site);

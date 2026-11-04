@@ -708,6 +708,19 @@ Async calls snapshot numeric views before scheduling worker execution, so later
 JavaScript writes and transfers cannot affect the native input. Ordinary arrays
 keep their copy semantics. Mutable pointers and fixed array rows still use copies.
 
+To let C fill a reusable typed array, mark a mutable arithmetic pointer `writable`:
+
+```ts
+functions: {
+	fill_samples: { params: { samples: { array: { length: "count", writable: true } } } },
+}
+```
+
+`fill_samples(samples)` then lends a matching `Float64Array` to C, which writes its
+elements in place. The view keeps the lending rules above and must not be backed by
+an immutable buffer. Writable views are synchronous; a function with an `async`
+twin rejects them. Ordinary arrays still pass a copy, so C's writes to them are discarded.
+
 Counted arrays preserve fixed inner dimensions. A parameter such as
 `const int (*rows)[3]` with `array: { length: "count" }` takes an array of
 three-element tuples; only the outer length supplies `count`. Numeric and record

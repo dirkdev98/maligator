@@ -359,7 +359,11 @@ function validateTypeFacts(value: unknown, at: string): void {
 
 function validateCount(value: unknown, at: string, array = false): void {
 	expectObject(value, at);
-	expectKeys(value, at, array ? ["length", "capacity", "element"] : ["length"]);
+	expectKeys(
+		value,
+		at,
+		array ? ["length", "capacity", "element", "writable"] : ["length"],
+	);
 	expect(
 		typeof value.length === "string" &&
 			(C_NAME.test(value.length) || /^[1-9]\d*$/.test(value.length)),
@@ -373,6 +377,8 @@ function validateCount(value: unknown, at: string, array = false): void {
 			`${at}.capacity`,
 			"a parameter name or 1-based position",
 		);
+	if (value.writable !== undefined)
+		expect(value.writable === true, `${at}.writable`, "true");
 	if (value.element !== undefined) {
 		const element = value.element;
 		expectObject(element, `${at}.element`);

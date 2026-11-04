@@ -3719,7 +3719,7 @@ class BindingWriter {
 							);
 							buffers.push(
 								`if (${selected}) {`,
-								`if (!mal_ffi_to_numeric_view(vm, ${source}, MAL_FFI_NUMERIC_${view.slice(0, -5).toUpperCase()}, sizeof(*${local}), _Alignof(__typeof__(*${local})), ${site}, &${data}, &${length}, ${pin})) goto mal_done;`,
+								`if (!mal_ffi_to_numeric_view(vm, ${source}, MAL_FFI_NUMERIC_${view.slice(0, -5).toUpperCase()}, sizeof(*${local}), _Alignof(__typeof__(*${local})), ${String(binding.params[entry.param]!.writable === true)}, ${site}, &${data}, &${length}, ${pin})) goto mal_done;`,
 								`${local} = (${localDeclaration(param.type, "")}) ${data};`,
 							);
 							setCount(index, length, site, buffers);
@@ -4629,7 +4629,7 @@ class BindingWriter {
 							);
 							buffers.push(
 								`if (${selected}) {`,
-								`if (!mal_ffi_to_numeric_view(vm, ${source}, MAL_FFI_NUMERIC_${view.slice(0, -5).toUpperCase()}, sizeof(*mal_ctx->${elements}), _Alignof(__typeof__(*mal_ctx->${elements})), ${site}, &${data}, &mal_ctx->${length}, nullptr)) goto mal_failed;`,
+								`if (!mal_ffi_to_numeric_view(vm, ${source}, MAL_FFI_NUMERIC_${view.slice(0, -5).toUpperCase()}, sizeof(*mal_ctx->${elements}), _Alignof(__typeof__(*mal_ctx->${elements})), false, ${site}, &${data}, &mal_ctx->${length}, nullptr)) goto mal_failed;`,
 								`if (mal_ctx->${length} > 0) {`,
 								`\tmal_ctx->${elements} = mal_ffi_allocate_storage((size_t) mal_ctx->${length}, sizeof(*mal_ctx->${elements}), _Alignof(__typeof__(*mal_ctx->${elements})));`,
 								`\tif (mal_ctx->${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_failed; }`,

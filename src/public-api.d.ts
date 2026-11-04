@@ -217,6 +217,11 @@ export interface MaligatorFfiValueFacts {
 		capacity?: string;
 		/** Decode fixed character rows as bounded UTF-8 text or exact byte views. */
 		element?: { string: true; bytes?: never } | { bytes: true; string?: never };
+		/**
+		 * Lend a matching typed array, such as a `Float64Array` for `double *`, for C
+		 * to write in place during a synchronous call. Ordinary arrays still pass a copy.
+		 */
+		writable?: true;
 	};
 	/** Release a copied string, buffer, or array result with this function. */
 	free?: string;

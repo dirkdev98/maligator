@@ -329,7 +329,7 @@ bool mal_ffi_is_typed_array(MalValue value) {
 
 bool mal_ffi_to_numeric_view(
     MalVm *vm, MalValue value, MalFfiNumericKind expected, size_t element_size, size_t alignment,
-    const MalFfiSite *site, const void **data, int32_t *length, void **pin) {
+    bool writable, const MalFfiSite *site, const void **data, int32_t *length, void **pin) {
     static const MalTypedArrayKind kinds[] = {
         MAL_TA_INT8, MAL_TA_UINT8, MAL_TA_INT16, MAL_TA_UINT16,
         MAL_TA_INT32, MAL_TA_UINT32, MAL_TA_BIGINT64, MAL_TA_BIGUINT64,
@@ -344,6 +344,8 @@ bool mal_ffi_to_numeric_view(
         || span.element_size != element_size || alignment == 0
         || (span.data != nullptr && (uintptr_t) span.data % alignment != 0))
         return mal_ffi_expected(vm, site, "matching, attached, unshared, in-bounds numeric storage");
+    if (writable && array->buffer->immutable)
+        return mal_ffi_expected(vm, site, "numeric storage that is not immutable");
     if (!mal_ffi_check_array_count(vm, span.length, INT32_MAX, site)) return false;
     *data = span.data;
     *length = (int32_t) span.length;

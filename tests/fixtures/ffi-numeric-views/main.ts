@@ -37,6 +37,8 @@ import {
 	numeric_emit,
 	numeric_live,
 	numeric_negate,
+	numeric_scale,
+	numeric_sequence,
 	negateAsync,
 } from "maligator:ffi/numeric";
 
@@ -553,4 +555,52 @@ check(
 	sameValues(numeric_negate(inoutAccessed).values, [-3, -2]) && inoutReads === 1,
 	"inout accessor elements are read once",
 );
+const scaledBacking = new Float64Array([9, 1, 2, 3, 9]);
+const scaled = scaledBacking.subarray(1, 4);
+check(numeric_scale(scaled, 2) === 12, "writable views pass their current contents");
+check(
+	sameValues(Array.from(scaledBacking), [9, 2, 4, 6, 9]),
+	"writable views receive C writes within their extent only",
+);
+const scaledCopy = [1, 2, 3];
+check(
+	numeric_scale(scaledCopy, 3) === 18 && sameValues(scaledCopy, [1, 2, 3]),
+	"ordinary arrays keep copy semantics for writable pointers",
+);
+const sequence = new BigUint64Array(4);
+numeric_sequence(sequence, 18446744073709551612n);
+check(
+	sequence.join(",") ===
+		"18446744073709551612,18446744073709551613,18446744073709551614,18446744073709551615",
+	"64-bit views keep exact native values without per-element bigints",
+);
+numeric_reset();
+for (const refused of [
+	() =>
+		numeric_scale(
+			new Float64Array(
+				(
+					new ArrayBuffer(16) as ArrayBuffer & {
+						transferToImmutable(): ArrayBuffer;
+					}
+				).transferToImmutable(),
+			),
+			2,
+		),
+	() => numeric_scale(new Float32Array(2) as unknown as Float64Array, 2),
+	() => {
+		const detached = new Float64Array(2);
+		structuredClone(detached.buffer, { transfer: [detached.buffer] });
+		return numeric_scale(detached, 2);
+	},
+]) {
+	let caught: unknown;
+	try {
+		refused();
+	} catch (error) {
+		caught = error;
+	}
+	check(caught instanceof TypeError, `expected TypeError, got ${String(caught)}`);
+}
+check(numeric_calls() === 0, "rejected writable storage never reaches C");
 console.log("numeric views passed");
