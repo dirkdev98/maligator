@@ -833,7 +833,8 @@ borrowed inputs must share that root.
 A copied struct can be the root when the registration takes a pointer to its stable
 copy and its handle declares `collect: true` with an unconditional destructor. Native
 leases retain that storage after VM teardown until the last consumer releases it.
-Passing the owner by value is unsupported, as is caller-allocated root storage.
+Initialized caller storage can also be the root when it declares an unconditional
+collecting destructor. Passing the owner by value is unsupported.
 
 The root keeps the closure and borrowed inputs alive. A closure that captures the
 root can still be collected with it. Active callback execution prevents closing the
