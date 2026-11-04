@@ -29,9 +29,15 @@ describe("large C headers", () => {
 		const directory = mkdtempSync(join(tmpdir(), "mal-ffi-large-header-"));
 		try {
 			const body = "value += 1; ".repeat(Math.ceil(LARGE_INPUT_CODE_UNITS / 1024));
+			// Extraction skips the oversized body; the table keeps a container beyond the
+			// reader's direct-parse threshold in the extractor's own input.
+			const table = Array.from({ length: 8 }, () => "1, ".repeat(1024)).join("\n");
 			writeFileSync(
 				join(directory, "auxiliary.h"),
-				`static inline int auxiliary(int value) { ${body}return value; }`,
+				[
+					`static inline int auxiliary(int value) { ${body}return value; }`,
+					`static const int auxiliary_table[] = {\n${table}1 };`,
+				].join("\n"),
 			);
 			writeFileSync(
 				join(directory, "large.h"),

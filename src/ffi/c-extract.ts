@@ -1809,11 +1809,13 @@ export function extractCModelFromHeaders(
 	const cwd = directory;
 	const isLibraryFile = libraryFileFilter(input.headers, preprocessed.headerPaths);
 
+	// Inline function bodies can dwarf a header's declarations; only parameters are read.
 	const dump = runCompiler(
 		input,
 		[
 			FFI_C_STANDARD,
 			"-fsyntax-only",
+			...skipFunctionBodies(input, directory),
 			"-Xclang",
 			"-ast-dump=json",
 			...input.compileArguments,
@@ -1849,7 +1851,8 @@ export function extractCModelFromHeaders(
 		throw new FfiError(`cannot extract C record layouts:\n${layoutDump.stderr.trim()}`);
 	const layouts = clangRecordLayouts(layoutDump.stdout.toString("utf8"));
 	const nodes: Array<JsonObject> = [];
-	// Clang compresses locations across declarations, including function bodies we drop.
+	// Clang compresses locations across declarations, including function bodies we drop
+	// when the compiler cannot skip them.
 	const resolveLocations = createLocationResolver();
 	visitClangDeclarations(dump.stdout, (node) => {
 		resolveLocations(node);
