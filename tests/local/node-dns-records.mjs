@@ -96,7 +96,7 @@ const ANSWERS = {
 
 const RCODES = { "nxdomain.test": 3, "servfail.test": 2, "refused.test": 5 };
 
-function respond(query) {
+function respond(query, forcedRcode) {
 	let offset = 12;
 	const labels = [];
 	while (query[offset] !== 0) {
@@ -108,7 +108,7 @@ function respond(query) {
 	const questionEnd = offset + 5;
 	const name = labels.join(".").toLowerCase();
 	const type = query.readUInt16BE(offset + 1);
-	const rcode = RCODES[name] ?? 0;
+	const rcode = forcedRcode ?? RCODES[name] ?? 0;
 	const records = rcode === 0 && name !== "nodata.test" ? (ANSWERS[type] ?? []) : [];
 	const header = [
 		...query.subarray(0, 2),
@@ -160,9 +160,42 @@ server.on("message", (message, remote) =>
 );
 await new Promise((resolve) => server.bind(0, "127.0.0.1", resolve));
 const address = `127.0.0.1:${server.address().port}`;
-dns.setServers([address]);
-dnsPromises.setServers([address]);
-check(dns.getServers()[0] === address, `getServers keeps the port: ${dns.getServers()}`);
+const refusers = [];
+for (let index = 0; index < 15; index++) {
+	const refuser = dgram.createSocket("udp4");
+	refuser.on("message", (message, remote) =>
+		refuser.send(respond(message, 5), remote.port, remote.address),
+	);
+	await new Promise((resolve) => refuser.bind(0, "127.0.0.1", resolve));
+	refusers.push(refuser);
+}
+const servers = [
+	...refusers.map((socket) => `127.0.0.1:${socket.address().port}`),
+	address,
+];
+dns.setServers(servers);
+check(
+	JSON.stringify(dns.getServers()) === JSON.stringify(servers),
+	"all DNS servers round-trip",
+);
+const invalidServers = thrown(() => dns.setServers([...servers, "invalid-address"]));
+check(
+	invalidServers?.code === "ERR_INVALID_IP_ADDRESS",
+	"invalid final DNS server rejects the update",
+);
+check(
+	JSON.stringify(dns.getServers()) === JSON.stringify(servers),
+	"failed DNS update preserves all servers",
+);
+dnsPromises.setServers(servers);
+check(
+	JSON.stringify(dnsPromises.getServers()) === JSON.stringify(servers),
+	"promise DNS servers round-trip",
+);
+check(
+	dns.getServers()[servers.length - 1] === address,
+	`getServers keeps the final port: ${dns.getServers()}`,
+);
 
 const callbackResolve = (method, name) =>
 	new Promise((resolve) =>
@@ -185,6 +218,14 @@ const expected = {
 		'[{"critical":0,"type":"CAA","issue":"letsencrypt.org"},{"critical":128,"type":"CAA","iodef":"mailto:x@test"}]',
 	resolveTlsa: '[{"certUsage":3,"selector":1,"match":1,"data":"deadbeef"}]',
 };
+check(
+	plain(await dnsPromises.resolveSrv("records.test")) === expected.resolveSrv,
+	"query reaches the final server beyond the inline snapshot",
+);
+dns.setServers([address]);
+await Promise.all(
+	refusers.map((socket) => new Promise((resolve) => socket.close(resolve))),
+);
 for (const [method, shape] of Object.entries(expected)) {
 	const viaCallback = plain(await callbackResolve(method, "records.test"));
 	check(viaCallback === shape, `${method}: ${viaCallback}`);

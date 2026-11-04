@@ -40,7 +40,7 @@
 
 #define DNS_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
-#define DNS_MAX_SERVERS 8
+#define DNS_INLINE_SERVERS 8
 
 typedef enum NodeDnsOrder {
     NODE_DNS_ORDER_VERBATIM,
@@ -62,6 +62,16 @@ typedef struct NodeDnsAddress {
     int family;
 } NodeDnsAddress;
 
+typedef struct {
+    struct sockaddr_storage address;
+    socklen_t length;
+} NodeDnsEndpoint;
+
+typedef struct {
+    char *address;
+    int port;
+} NodeDnsServer;
+
 /* Owned by the blocking-work pool between start and the terminal task. */
 typedef struct NodeDnsJob {
     NodeDnsKind kind;
@@ -77,8 +87,8 @@ typedef struct NodeDnsJob {
     char service[NI_MAXSERV];
     int rrtype;
     // Servers from setServers or /etc/resolv.conf, tried in order.
-    struct sockaddr_storage servers[DNS_MAX_SERVERS];
-    socklen_t server_lengths[DNS_MAX_SERVERS];
+    NodeDnsEndpoint inline_servers[DNS_INLINE_SERVERS];
+    NodeDnsEndpoint *servers;
     usize server_count;
     u8 *answer;
     int answer_length;
@@ -108,8 +118,7 @@ typedef struct NodeDnsPending {
 static MAL_ISOLATE_LOCAL NodeDnsPending *dns_pending;
 static MAL_ISOLATE_LOCAL bool dns_installed;
 static MAL_ISOLATE_LOCAL NodeDnsOrder dns_default_order = NODE_DNS_ORDER_VERBATIM;
-static MAL_ISOLATE_LOCAL char *dns_servers[DNS_MAX_SERVERS];
-static MAL_ISOLATE_LOCAL int dns_server_ports[DNS_MAX_SERVERS];
+static MAL_ISOLATE_LOCAL NodeDnsServer *dns_servers;
 static MAL_ISOLATE_LOCAL usize dns_server_count;
 static MAL_ISOLATE_LOCAL bool dns_servers_loaded;
 
@@ -259,6 +268,7 @@ static void dns_job_free(void *data) {
     free(job->host);
     free(job->addresses);
     free(job->answer);
+    if (job->servers != job->inline_servers) free(job->servers);
     free(job);
 }
 
@@ -328,7 +338,7 @@ static void dns_job_getnameinfo(NodeDnsJob *job) {
     job->system_errno = errno;
 }
 
-static void dns_load_servers(void);
+static bool dns_load_servers(MalVm *vm);
 
 #define DNS_ANSWER_CAPACITY 65536
 #define DNS_QUERY_CAPACITY 512
@@ -451,8 +461,8 @@ static int dns_exchange_tcp(const struct sockaddr *server, socklen_t length, con
     return result;
 }
 
-/* ares_query semantics: no search list; SERVFAIL, NOTIMP and REFUSED move on to the
- * next server and are reported when no server does better. */
+/* Query exact names without search suffixes. A server-side failure can be local
+ * to one resolver, so try the remaining configured servers before reporting it. */
 static void dns_job_query(NodeDnsJob *job) {
     u8 query[DNS_QUERY_CAPACITY];
     u16 id = 0;
@@ -468,22 +478,22 @@ static void dns_job_query(NodeDnsJob *job) {
         return;
     }
     if (job->server_count == 0) {
-        struct sockaddr_in *loopback = (struct sockaddr_in *) &job->servers[0];
+        struct sockaddr_in *loopback = (struct sockaddr_in *) &job->servers[0].address;
         loopback->sin_family = AF_INET;
         loopback->sin_port = htons(53);
         loopback->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        job->server_lengths[0] = sizeof *loopback;
+        job->servers[0].length = sizeof *loopback;
         job->server_count = 1;
     }
     bool refused = false, failed_rcode = false;
     for (int attempt = 0; attempt < DNS_TRIES; attempt++) {
         bool timed_out = false;
         for (usize i = 0; i < job->server_count; i++) {
-            const struct sockaddr *server = (const struct sockaddr *) &job->servers[i];
+            const struct sockaddr *server = (const struct sockaddr *) &job->servers[i].address;
             errno = 0;
-            int length = dns_exchange_udp(server, job->server_lengths[i], query, query_length, job->answer);
+            int length = dns_exchange_udp(server, job->servers[i].length, query, query_length, job->answer);
             if (length > 0 && (job->answer[2] & 0x02) != 0) {
-                length = dns_exchange_tcp(server, job->server_lengths[i], query, query_length, job->answer);
+                length = dns_exchange_tcp(server, job->servers[i].length, query, query_length, job->answer);
             }
             if (length == 0) timed_out = true;
             if (length < 0) refused = refused || errno == ECONNREFUSED;
@@ -965,9 +975,19 @@ static MalValue dns_start(MalVm *vm, NodeDnsJob *job, NodeDnsPending *state, boo
 #if MAL_REALMS
     state->realm = vm->current_realm;
 #endif
+    usize retained_bytes = sizeof *job;
+    if (job->servers != nullptr && job->servers != job->inline_servers) {
+        if (job->server_count > (SIZE_MAX - retained_bytes) / sizeof(NodeDnsEndpoint)) {
+            dns_job_free(job);
+            dns_pending_free(state);
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+        retained_bytes += job->server_count * sizeof(NodeDnsEndpoint);
+    }
     MalBlockingWorkReservation reservation = {0};
     if (mal_host(vm) == nullptr
-        || !mal_blocking_work_reserve(mal_host(vm), sizeof *job, &reservation)
+        || !mal_blocking_work_reserve(mal_host(vm), retained_bytes, &reservation)
         || !mal_blocking_work_start(mal_host(vm), dns_job_run, job, dns_job_free,
             &reservation, &state->operation, false)) {
         mal_blocking_work_reservation_release(&reservation);
@@ -1404,21 +1424,35 @@ static MalValue dns_resolve_typed(MalVm *vm, MalValue callee, const MalValue *ar
     job->host = host;
     job->family = family;
     job->rrtype = query_type;
-    dns_load_servers();
+    if (!dns_load_servers(vm)) {
+        dns_job_free(job);
+        dns_pending_free(state);
+        return mal_value_new_undefined();
+    }
+    job->servers = job->inline_servers;
+    if (dns_server_count > DNS_INLINE_SERVERS) {
+        if (dns_server_count > SIZE_MAX / sizeof(NodeDnsEndpoint) ||
+            (job->servers = calloc(dns_server_count, sizeof(NodeDnsEndpoint))) == nullptr) {
+            dns_job_free(job);
+            dns_pending_free(state);
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+    }
     for (usize i = 0; i < dns_server_count; i++) {
-        struct sockaddr_storage *storage = &job->servers[job->server_count];
-        if (dns_ip_family(dns_servers[i]) == 6) {
+        struct sockaddr_storage *storage = &job->servers[job->server_count].address;
+        if (dns_ip_family(dns_servers[i].address) == 6) {
             struct sockaddr_in6 *server = (struct sockaddr_in6 *) storage;
             server->sin6_family = AF_INET6;
-            server->sin6_port = htons((u16) dns_server_ports[i]);
-            inet_pton(AF_INET6, dns_servers[i], &server->sin6_addr);
-            job->server_lengths[job->server_count] = sizeof *server;
+            server->sin6_port = htons((u16) dns_servers[i].port);
+            inet_pton(AF_INET6, dns_servers[i].address, &server->sin6_addr);
+            job->servers[job->server_count].length = sizeof *server;
         } else {
             struct sockaddr_in *server = (struct sockaddr_in *) storage;
             server->sin_family = AF_INET;
-            server->sin_port = htons((u16) dns_server_ports[i]);
-            inet_pton(AF_INET, dns_servers[i], &server->sin_addr);
-            job->server_lengths[job->server_count] = sizeof *server;
+            server->sin_port = htons((u16) dns_servers[i].port);
+            inet_pton(AF_INET, dns_servers[i].address, &server->sin_addr);
+            job->servers[job->server_count].length = sizeof *server;
         }
         job->server_count++;
     }
@@ -1476,36 +1510,59 @@ static MalValue dns_resolve(
     return result;
 }
 
-static void dns_load_servers(void) {
-    if (dns_servers_loaded) return;
+static void dns_configuration_free(MalVm *vm) {
+    (void) vm;
+    for (usize index = 0; index < dns_server_count; index++) free(dns_servers[index].address);
+    free(dns_servers);
+    dns_servers = nullptr;
+    dns_server_count = 0;
+    dns_servers_loaded = false;
+}
+
+static bool dns_load_servers(MalVm *vm) {
+    if (dns_servers_loaded) return true;
     dns_servers_loaded = true;
     FILE *file = fopen("/etc/resolv.conf", "r");
-    if (file == nullptr) return;
+    if (file == nullptr) return true;
     char line[512];
-    while (fgets(line, sizeof line, file) != nullptr && dns_server_count < DNS_MAX_SERVERS) {
+    usize capacity = 0;
+    while (fgets(line, sizeof line, file) != nullptr) {
         char address[64];
-        if (sscanf(line, " nameserver %63s", address) == 1 && dns_ip_family(address) != 0) {
-            dns_servers[dns_server_count] = strdup(address);
-            dns_server_ports[dns_server_count] = 53;
-            if (dns_servers[dns_server_count] != nullptr) dns_server_count++;
+        if (sscanf(line, " nameserver %63s", address) != 1 || dns_ip_family(address) == 0) continue;
+        if (dns_server_count == capacity) {
+            usize maximum = SIZE_MAX / sizeof(NodeDnsServer);
+            if (capacity == maximum) goto failed;
+            capacity = capacity == 0 ? DNS_INLINE_SERVERS : capacity > maximum / 2 ? maximum : capacity * 2;
+            NodeDnsServer *grown = realloc(dns_servers, capacity * sizeof(NodeDnsServer));
+            if (grown == nullptr) goto failed;
+            dns_servers = grown;
         }
+        char *copy = strdup(address);
+        if (copy == nullptr) goto failed;
+        dns_servers[dns_server_count++] = (NodeDnsServer) {.address = copy, .port = 53};
     }
     fclose(file);
+    return true;
+failed:
+    fclose(file);
+    dns_configuration_free(vm);
+    mal_vm_throw_allocation_error(vm);
+    return false;
 }
 
 static MalValue dns_get_servers(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver, (void) args, (void) argc, (void) new_target, (void) callee;
-    dns_load_servers();
+    if (!dns_load_servers(vm)) return mal_value_new_undefined();
     MalArrayObject *list = mal_intrinsic_new_dense_array(vm, 0);
     MalValue result = mal_value_from_array_object(list);
     MalRootSpan root;
     mal_gc_root(&root, &result, 1);
     for (usize i = 0; i < dns_server_count; i++) {
         char text[INET6_ADDRSTRLEN + 16];
-        bool v6 = dns_ip_family(dns_servers[i]) == 6;
-        if (dns_server_ports[i] == 53) snprintf(text, sizeof text, "%s", dns_servers[i]);
-        else snprintf(text, sizeof text, v6 ? "[%s]:%d" : "%s:%d", dns_servers[i], dns_server_ports[i]);
+        bool v6 = dns_ip_family(dns_servers[i].address) == 6;
+        if (dns_servers[i].port == 53) snprintf(text, sizeof text, "%s", dns_servers[i].address);
+        else snprintf(text, sizeof text, v6 ? "[%s]:%d" : "%s:%d", dns_servers[i].address, dns_servers[i].port);
         mal_array_object_store(list, mal_key_index((u32) i), dns_string(vm, text));
     }
     mal_gc_unroot(&root);
@@ -1521,12 +1578,18 @@ static MalValue dns_set_servers(
         return mal_value_new_undefined();
     }
     u32 length = mal_array_object_length(mal_value_to_array_object(list));
-    char *parsed[DNS_MAX_SERVERS] = {0};
-    int ports[DNS_MAX_SERVERS] = {0};
+    NodeDnsServer *parsed = calloc(length == 0 ? 1 : length, sizeof(NodeDnsServer));
+    if (parsed == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {list, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
     usize count = 0;
     for (u32 i = 0; i < length; i++) {
-        MalValue item;
-        if (!mal_vm_get_property(vm, list, mal_key_index(i), &item)) goto failed;
+        if (!mal_vm_get_property(vm, roots[0], mal_key_index(i), &roots[1])) goto failed;
+        MalValue item = roots[1];
         char name[32];
         snprintf(name, sizeof name, "servers[%u]", i);
         if (!mal_value_is_string(item)) {
@@ -1567,22 +1630,24 @@ static MalValue dns_set_servers(
             mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_IP_ADDRESS");
             goto failed;
         }
-        if (count < DNS_MAX_SERVERS) {
-            ports[count] = port;
-            parsed[count++] = strdup(address);
-        }
+        char *copy = strdup(address);
         free(text);
+        if (copy == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            goto failed;
+        }
+        parsed[count++] = (NodeDnsServer) {.address = copy, .port = port};
     }
-    dns_load_servers();
-    for (usize i = 0; i < dns_server_count; i++) free(dns_servers[i]);
-    for (usize i = 0; i < count; i++) {
-        dns_servers[i] = parsed[i];
-        dns_server_ports[i] = ports[i];
-    }
+    dns_configuration_free(vm);
+    dns_servers = parsed;
     dns_server_count = count;
+    dns_servers_loaded = true;
+    mal_gc_unroot(&root);
     return mal_value_new_undefined();
 failed:
-    for (usize i = 0; i < count; i++) free(parsed[i]);
+    for (usize i = 0; i < count; i++) free(parsed[i].address);
+    free(parsed);
+    mal_gc_unroot(&root);
     return mal_value_new_undefined();
 }
 
@@ -1728,6 +1793,10 @@ static MalValue dns_promises_module(MalVm *vm) {
 void mal_host_install_node_dns(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    if (!mal_vm_register_runtime_cleanup(vm, dns_configuration_free)) {
+        mal_vm_throw_allocation_error(vm);
+        return;
+    }
     if (mal_node_module_install_cached(vm, "node:dns", slots, count)) return;
     (void) launch;
     MalValue roots[] = {mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined()};
@@ -1745,6 +1814,10 @@ void mal_host_install_node_dns_promises(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
+    if (!mal_vm_register_runtime_cleanup(vm, dns_configuration_free)) {
+        mal_vm_throw_allocation_error(vm);
+        return;
+    }
     if (mal_node_module_install_cached(vm, "node:dns/promises", slots, count)) return;
     MalValue module = dns_promises_module(vm);
     MalRootSpan root;
