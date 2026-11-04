@@ -1146,6 +1146,7 @@ static MalValue mal_promise_all_element(MalVm *vm, MalValue this_value, const Ma
     return mal_value_new_undefined();
 }
 
+#if MAL_PRIMORDIALS_LOCKED
 void mal_promise_all_continue(
     MalVm *vm, MalValue raw_state, u32 index, bool is_reject, MalValue argument
 ) {
@@ -1172,7 +1173,6 @@ void mal_promise_all_continue(
     }
 }
 
-#if MAL_PRIMORDIALS_LOCKED
 static bool mal_promise_all_try_dense(
     MalVm *vm, MalValue constructor, const MalValue *args, i32 arg_count,
     MalValue *result

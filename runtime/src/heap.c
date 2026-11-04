@@ -874,7 +874,9 @@ static MalProfileAllocationFamily mal_profile_family_for_heap_type(MalHeapType t
         case MAL_HEAP_DATA_VIEW_OBJECT:
             return MAL_PROFILE_ALLOCATION_FAMILY_BUFFER;
         case MAL_HEAP_PROMISE_OBJECT:
+#if MAL_PRIMORDIALS_LOCKED
         case MAL_HEAP_PROMISE_ALL_STATE:
+#endif
             return MAL_PROFILE_ALLOCATION_FAMILY_PROMISE;
         case MAL_HEAP_ITERATOR_OBJECT:
         case MAL_HEAP_STRING_CURSOR:
