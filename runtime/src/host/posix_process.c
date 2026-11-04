@@ -344,14 +344,57 @@ static int mal_proc_child_fd(const MalProcRequest *req, int index, MalProcStdio 
     return -1;
 }
 
+static void mal_proc_close_stdio_copies(int copies[3]) {
+    for (int i = 0; i < 3; i++) {
+        if (copies[i] >= 0) close(copies[i]);
+        copies[i] = -1;
+    }
+}
+
+static int mal_proc_prepare_stdio(const MalProcRequest *req, MalProcRequest *prepared, int copies[3]) {
+    *prepared = *req;
+    const MalProcStdio modes[3] = {req->stdin_mode, req->stdout_mode, req->stderr_mode};
+    // Snapshot borrowed descriptors before opening pipes: standard descriptors can
+    // cross, and a closed supplied descriptor must not become an internal pipe.
+    for (int i = 0; i < 3; i++) {
+        if (modes[i] != MAL_PROC_STDIO_FD) continue;
+        int flags;
+        do { flags = fcntl(req->stdio_fd[i], F_GETFD); } while (flags < 0 && errno == EINTR);
+        if (flags < 0) return -1;
+    }
+    for (int i = 0; i < 3; i++) {
+        if (modes[i] != MAL_PROC_STDIO_FD) continue;
+        int fd;
+        do { fd = fcntl(req->stdio_fd[i], F_DUPFD_CLOEXEC, STDERR_FILENO + 1); }
+        while (fd < 0 && errno == EINTR);
+        if (fd < 0) {
+            int error = errno;
+            mal_proc_close_stdio_copies(copies);
+            errno = error;
+            return -1;
+        }
+        copies[i] = fd;
+        prepared->stdio_fd[i] = fd;
+    }
+    return 0;
+}
+
 int mal_proc_spawn(const MalProcRequest *req, MalProcChild *child) {
     *child = (MalProcChild) {.launch_fd = -1, .stdio = {-1, -1, -1}};
+    MalProcRequest prepared;
+    int stdio_copies[3] = {-1, -1, -1};
+    if (mal_proc_prepare_stdio(req, &prepared, stdio_copies) != 0) {
+        child->launch_errno = errno;
+        return -1;
+    }
+    req = &prepared;
     int channels[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
     const MalProcStdio modes[3] = {req->stdin_mode, req->stdout_mode, req->stderr_mode};
     for (int i = 0; i < 3; i++) {
         if (modes[i] == MAL_PROC_STDIO_PIPE && mal_proc_make_channel(channels[i]) != 0) {
             child->launch_errno = errno;
             for (int j = 0; j < i; j++) mal_proc_close_pipe(channels[j]);
+            mal_proc_close_stdio_copies(stdio_copies);
             return -1;
         }
     }
@@ -365,6 +408,7 @@ int mal_proc_spawn(const MalProcRequest *req, MalProcChild *child) {
         child->launch_errno = errno;
         mal_proc_close_pipe(pipe_fds);
         for (int i = 0; i < 3; i++) mal_proc_close_pipe(channels[i]);
+        mal_proc_close_stdio_copies(stdio_copies);
         return -1;
     }
     pid_t pid = mal_proc_fork();
@@ -377,6 +421,7 @@ int mal_proc_spawn(const MalProcRequest *req, MalProcChild *child) {
         _exit(127);
     }
     int fork_errno = errno;
+    mal_proc_close_stdio_copies(stdio_copies);
     close(pipe_fds[1]);
     for (int i = 0; i < 3; i++) {
         if (channels[i][1] >= 0) close(channels[i][1]);
@@ -793,6 +838,13 @@ close_fds:
 
 int mal_proc_run(const MalProcRequest *req, MalProcResult *out) {
     memset(out, 0, sizeof(*out));
+    MalProcRequest prepared;
+    int stdio_copies[3] = {-1, -1, -1};
+    if (mal_proc_prepare_stdio(req, &prepared, stdio_copies) != 0) {
+        out->launch_errno = errno;
+        return -1;
+    }
+    req = &prepared;
 
     /* Resolve Darwin's indirect environment pointer before fork; _NSGetEnviron
      * is not part of the child's async-signal-safe region. */
@@ -813,6 +865,7 @@ int mal_proc_run(const MalProcRequest *req, MalProcResult *out) {
 
     if (mal_proc_make_pipe(errp) != 0) {
         out->io_errno = errno;
+        mal_proc_close_stdio_copies(stdio_copies);
         return -1;
     }
     if ((need_in && mal_proc_make_pipe(in_pipe) != 0) || (need_out && mal_proc_make_pipe(out_pipe) != 0)
@@ -822,6 +875,7 @@ int mal_proc_run(const MalProcRequest *req, MalProcResult *out) {
         mal_proc_close_pipe(in_pipe);
         mal_proc_close_pipe(out_pipe);
         mal_proc_close_pipe(err_pipe);
+        mal_proc_close_stdio_copies(stdio_copies);
         return -1;
     }
 
@@ -832,13 +886,18 @@ int mal_proc_run(const MalProcRequest *req, MalProcResult *out) {
         mal_proc_close_pipe(in_pipe);
         mal_proc_close_pipe(out_pipe);
         mal_proc_close_pipe(err_pipe);
+        mal_proc_close_stdio_copies(stdio_copies);
         return -1;
     }
 
     if (pid == 0) {
-        mal_proc_child(req, envp, in_pipe[0], out_pipe[1], err_pipe[1], errp[1]);
+        mal_proc_child(req, envp,
+            req->stdin_mode == MAL_PROC_STDIO_FD ? req->stdio_fd[0] : in_pipe[0],
+            req->stdout_mode == MAL_PROC_STDIO_FD ? req->stdio_fd[1] : out_pipe[1],
+            req->stderr_mode == MAL_PROC_STDIO_FD ? req->stdio_fd[2] : err_pipe[1], errp[1]);
         _exit(127); /* unreachable: mal_proc_child always _exits */
     }
+    mal_proc_close_stdio_copies(stdio_copies);
 
     /* Parent: keep the ends we drive, close the child's ends. */
     close(errp[1]);

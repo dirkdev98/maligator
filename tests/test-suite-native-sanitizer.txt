@@ -82,6 +82,7 @@ tests/native/platform-execution.test.ts
 tests/native/node-async-hooks.test.ts
 tests/native/node-scheduling.test.ts
 tests/native/node-child-process-lifecycle.test.ts
+tests/native/node-child-process-fd-stdio.test.ts
 tests/native/node-dgram-segments.test.ts
 tests/native/node-fs-encoded-writes.test.ts
 tests/native/node-fs-watch.test.ts

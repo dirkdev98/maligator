@@ -171,6 +171,8 @@ static const char *mal_ncp_errno_name(int e) {
             return "ENOENT";
         case EACCES:
             return "EACCES";
+        case EBADF:
+            return "EBADF";
         case ENOTDIR:
             return "ENOTDIR";
         case ENOEXEC:
@@ -552,9 +554,9 @@ static MalValue mal_node_process_command(MalVm *vm, const MalValue *args, i32 ar
             if (!mal_vm_get_property(vm, roots[3], mal_key_index(i), &el)) {
                 goto cleanup;
             }
-            if (async_kind && mal_value_is_int32(el) && mal_value_to_i32(el) >= 0) {
-                modes[i] = MAL_PROC_STDIO_FD;
-                stdio_fd[i] = mal_value_to_i32(el);
+            if (mal_ops_is_number(el) && !(mal_ops_number_as_f64(el) < 0)) {
+                stdio_fd[i] = mal_ops_number_value_to_i32(el);
+                modes[i] = stdio_fd[i] < 0 ? MAL_PROC_STDIO_IGNORE : MAL_PROC_STDIO_FD;
             } else {
                 modes[i] = mal_ncp_stdio_mode(el, MAL_PROC_STDIO_PIPE);
             }

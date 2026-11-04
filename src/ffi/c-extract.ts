@@ -88,8 +88,9 @@ function innerNodes(node: JsonObject): Array<JsonObject> {
 function runCompiler(
 	input: CExtractionInput,
 	args: ReadonlyArray<string>,
+	scratchDirectory: string,
 ): { status: number | null; stdout: Buffer; stderr: string } {
-	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-output-"));
+	const directory = mkdtempSync(path.join(scratchDirectory, "compiler-output-"));
 	const stdout = path.join(directory, "stdout");
 	const stderr = path.join(directory, "stderr");
 	const descriptors: Array<number> = [];
@@ -130,7 +131,10 @@ function assertClang(compiler: ToolExecutable): void {
 
 const skipBodiesSupport = new Map<string, boolean>();
 
-function skipFunctionBodies(input: CExtractionInput): ReadonlyArray<string> {
+function skipFunctionBodies(
+	input: CExtractionInput,
+	directory: string,
+): ReadonlyArray<string> {
 	const key = JSON.stringify([
 		input.compiler.path,
 		input.compiler.args,
@@ -138,14 +142,11 @@ function skipFunctionBodies(input: CExtractionInput): ReadonlyArray<string> {
 	]);
 	let supported = skipBodiesSupport.get(key);
 	if (supported === undefined) {
-		const help = runCompiler(input, [
-			"-Xclang",
-			"-help",
-			"-fsyntax-only",
-			"-x",
-			"c",
-			"-",
-		]);
+		const help = runCompiler(
+			input,
+			["-Xclang", "-help", "-fsyntax-only", "-x", "c", "-"],
+			directory,
+		);
 		supported =
 			help.status === 0 &&
 			/(?:^|\n)\s+-skip-function-bodies(?:\s|$)/.test(
@@ -188,16 +189,11 @@ function preprocess(
 	probePath: string,
 	cwd: string,
 ): Preprocessed {
-	const result = runCompiler(input, [
-		FFI_C_STANDARD,
-		"-E",
-		"-dD",
-		"-w",
-		...input.compileArguments,
-		"-x",
-		"c",
-		probePath,
-	]);
+	const result = runCompiler(
+		input,
+		[FFI_C_STANDARD, "-E", "-dD", "-w", ...input.compileArguments, "-x", "c", probePath],
+		cwd,
+	);
 	const stack: Array<string> = [];
 	const directIncludes: Array<string> = [];
 	const files = new Set<string>();
@@ -1154,15 +1150,11 @@ function prepareValueProbe(
 	});
 	const probePath = path.join(directory, "probe-values.c");
 	writeFileSync(probePath, `${lines.join("\n")}\n`);
-	const expanded = runCompiler(input, [
-		FFI_C_STANDARD,
-		"-E",
-		"-w",
-		...input.compileArguments,
-		"-x",
-		"c",
-		probePath,
-	]);
+	const expanded = runCompiler(
+		input,
+		[FFI_C_STANDARD, "-E", "-w", ...input.compileArguments, "-x", "c", probePath],
+		directory,
+	);
 	const identity = createHash("sha256");
 	for (let start = 0; start < expanded.stdout.length;) {
 		let end = expanded.stdout.indexOf(10, start);
@@ -1189,23 +1181,28 @@ function probe(
 	input: CExtractionInput,
 	valueProbe: ValueProbe,
 	candidates: ReadonlyArray<PreprocessedMacro>,
+	directory: string,
 ): Probes {
 	// Probes of macros that are not expressions fail to compile; each failure stays
 	// local to its own declaration, which the AST then marks invalid or omits.
-	const result = runCompiler(input, [
-		FFI_C_STANDARD,
-		"-fsyntax-only",
-		"-ferror-limit=0",
-		"-Xclang",
-		"-ast-dump=json",
-		"-Xclang",
-		"-ast-dump-filter=__mal_",
-		...input.compileArguments,
-		"-w",
-		"-x",
-		valueProbe.preprocessed ? "cpp-output" : "c",
-		valueProbe.path,
-	]);
+	const result = runCompiler(
+		input,
+		[
+			FFI_C_STANDARD,
+			"-fsyntax-only",
+			"-ferror-limit=0",
+			"-Xclang",
+			"-ast-dump=json",
+			"-Xclang",
+			"-ast-dump-filter=__mal_",
+			...input.compileArguments,
+			"-w",
+			"-x",
+			valueProbe.preprocessed ? "cpp-output" : "c",
+			valueProbe.path,
+		],
+		directory,
+	);
 	const nodes = new Map<string, JsonObject>();
 	for (const node of clangProbeDeclarations(result.stdout)) {
 		if (typeof node.name === "string") nodes.set(node.name, node);
@@ -1630,20 +1627,24 @@ function probeDeclarationTypes(
 			),
 		].join("\n"),
 	);
-	const dump = runCompiler(input, [
-		FFI_C_STANDARD,
-		"-fsyntax-only",
-		"-ferror-limit=0",
-		"-Xclang",
-		"-ast-dump=json",
-		"-Xclang",
-		"-ast-dump-filter=__mal_declaration_type_",
-		...input.compileArguments,
-		"-w",
-		"-x",
-		"c",
-		source,
-	]);
+	const dump = runCompiler(
+		input,
+		[
+			FFI_C_STANDARD,
+			"-fsyntax-only",
+			"-ferror-limit=0",
+			"-Xclang",
+			"-ast-dump=json",
+			"-Xclang",
+			"-ast-dump-filter=__mal_declaration_type_",
+			...input.compileArguments,
+			"-w",
+			"-x",
+			"c",
+			source,
+		],
+		headers.directory,
+	);
 	for (const node of clangProbeDeclarations(dump.stdout)) {
 		const name = stringField(node, "name");
 		if (name === undefined || !name.startsWith("__mal_declaration_type_")) continue;
@@ -1721,20 +1722,24 @@ function probeTypeMetadata(
 			),
 		].join("\n"),
 	);
-	const dump = runCompiler(input, [
-		FFI_C_STANDARD,
-		"-fsyntax-only",
-		"-ferror-limit=0",
-		"-Xclang",
-		"-ast-dump=json",
-		"-Xclang",
-		"-ast-dump-filter=__mal_integer_type_",
-		...input.compileArguments,
-		"-w",
-		"-x",
-		"c",
-		source,
-	]);
+	const dump = runCompiler(
+		input,
+		[
+			FFI_C_STANDARD,
+			"-fsyntax-only",
+			"-ferror-limit=0",
+			"-Xclang",
+			"-ast-dump=json",
+			"-Xclang",
+			"-ast-dump-filter=__mal_integer_type_",
+			...input.compileArguments,
+			"-w",
+			"-x",
+			"c",
+			source,
+		],
+		headers.directory,
+	);
 	const values = new Map<string, bigint>();
 	for (const node of clangProbeDeclarations(dump.stdout)) {
 		const value = constantValue(node);
@@ -1795,34 +1800,42 @@ export function extractCModelFromHeaders(
 	const cwd = directory;
 	const isLibraryFile = libraryFileFilter(input.headers, preprocessed.headerPaths);
 
-	const dump = runCompiler(input, [
-		FFI_C_STANDARD,
-		"-fsyntax-only",
-		"-Xclang",
-		"-ast-dump=json",
-		...input.compileArguments,
-		"-w",
-		"-x",
-		"c",
-		probePath,
-	]);
+	const dump = runCompiler(
+		input,
+		[
+			FFI_C_STANDARD,
+			"-fsyntax-only",
+			"-Xclang",
+			"-ast-dump=json",
+			...input.compileArguments,
+			"-w",
+			"-x",
+			"c",
+			probePath,
+		],
+		directory,
+	);
 	if (dump.status !== 0) {
 		throw new FfiError(`the library headers do not compile:\n${dump.stderr.trim()}`);
 	}
-	const layoutDump = runCompiler(input, [
-		FFI_C_STANDARD,
-		"-fsyntax-only",
-		...skipFunctionBodies(input),
-		"-Xclang",
-		"-fdump-record-layouts-complete",
-		"-Xclang",
-		"-fdump-record-layouts-simple",
-		...input.compileArguments,
-		"-w",
-		"-x",
-		"c",
-		probePath,
-	]);
+	const layoutDump = runCompiler(
+		input,
+		[
+			FFI_C_STANDARD,
+			"-fsyntax-only",
+			...skipFunctionBodies(input, directory),
+			"-Xclang",
+			"-fdump-record-layouts-complete",
+			"-Xclang",
+			"-fdump-record-layouts-simple",
+			...input.compileArguments,
+			"-w",
+			"-x",
+			"c",
+			probePath,
+		],
+		directory,
+	);
 	if (layoutDump.status !== 0)
 		throw new FfiError(`cannot extract C record layouts:\n${layoutDump.stderr.trim()}`);
 	const layouts = clangRecordLayouts(layoutDump.stdout.toString("utf8"));
@@ -1846,7 +1859,7 @@ export function extractCModelFromHeaders(
 		collectDeclarations(nodes, cwd, isLibraryFile, layouts),
 	);
 
-	const probes = probe(input, headers.valueProbe, headers.candidates);
+	const probes = probe(input, headers.valueProbe, headers.candidates, directory);
 	const nativeTypes = probeTypeMetadata(input, headers, declarations, probes.target);
 
 	const base = {
