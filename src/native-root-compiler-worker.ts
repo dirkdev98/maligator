@@ -5,7 +5,7 @@ import type { RootBatch } from "./compiler/root-compilation.ts";
 try {
 	const result = compileRootBatch(workerData as RootBatch);
 	if (parentPort === null) throw new Error("root compiler requires a worker parent");
-	parentPort.postMessage(result.value, result.transfers);
+	parentPort.postMessage(result);
 } finally {
 	parentPort?.close();
 }

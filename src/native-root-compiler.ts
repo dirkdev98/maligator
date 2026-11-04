@@ -16,7 +16,7 @@ export { validateRootInputs } from "./compiler/root-compilation.ts";
 
 const rootEntry = createWorkerUrl("./native-root-compiler-worker.ts", import.meta.url);
 
-// A product batch can carry two 27 MiB MALC/MALW pairs; all replies remain bounded.
+// Only control metadata and failures cross this channel; generated artifacts use owned files.
 export const ROOT_COMPILATION_MESSAGE_BYTES = 128 * 1024 * 1024;
 
 export interface NativeRootCompilationControls extends RootCompilationControls {

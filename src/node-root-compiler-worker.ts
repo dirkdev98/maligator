@@ -4,7 +4,7 @@ import type { RootBatch } from "./compiler/root-compilation.ts";
 
 try {
 	const result = compileRootBatch(workerData as RootBatch);
-	parentPort!.postMessage(result.value, result.transfers);
+	parentPort!.postMessage(result);
 } finally {
 	parentPort?.close();
 }

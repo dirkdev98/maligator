@@ -1,6 +1,13 @@
 import { spawnSync } from "node:child_process";
 import type { SpawnSyncReturns } from "node:child_process";
-import { closeSync, openSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	openSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import * as path from "node:path";
 import { artifactFileDigest } from "../src/artifact-store.ts";
 import { largeDevelopmentSource } from "../tests/fixtures/selfhost-large-development/source.ts";
@@ -20,6 +27,76 @@ interface LargeInputCheckOptions {
 	): SpawnSyncReturns<string>;
 	checkProfile(directory: string, command: "run" | "test"): void;
 	waitForOutput(read: () => string, expected: string, timeoutMs: number): Promise<void>;
+}
+
+export function checkLargeRootArtifacts(
+	options: Pick<LargeInputCheckOptions, "cli" | "project" | "reports" | "environment">,
+): void {
+	const roots = 32;
+	const literalUnits = 1024 * 1024;
+	const literal = "x".repeat(literalUnits);
+	const entries = Array.from(
+		{ length: roots },
+		(_, index) => `root-artifact-${index}.mts`,
+	);
+	for (const entry of entries)
+		writeFileSync(
+			path.join(options.project, entry),
+			`export const value = "${literal}"; console.log(value);\n`,
+		);
+	writeFileSync(
+		path.join(options.project, "root-artifacts-main.mts"),
+		`import { createWorkerUrl } from "maligator:workers";\nexport const roots = [${entries.map((entry) => `createWorkerUrl("./${entry}", import.meta.url)`).join(",")}];\n`,
+	);
+	const config = "root-artifacts.build.mts";
+	writeFileSync(
+		path.join(options.project, config),
+		`export default { entry: "root-artifacts-main.mts", engine: { eval: false, regexp: false, intl: { enabled: false } }, surface: { node: false, webPlatform: false } };\n`,
+	);
+	const output = path.join(options.reports, "root-artifacts.c");
+	const errors = path.join(options.reports, "root-artifacts.stderr");
+	const descriptors: Array<number> = [];
+	try {
+		descriptors.push(openSync(output, "w"));
+		descriptors.push(openSync(errors, "w"));
+		const startedAt = performance.now();
+		const result = spawnSync(
+			options.cli,
+			[
+				"build",
+				"--config",
+				config,
+				"--production",
+				"--print",
+				"--compile-concurrency",
+				"2",
+			],
+			{
+				cwd: options.project,
+				env: { ...options.environment, MALIGATOR_WORKERS: "2" },
+				stdio: ["ignore", descriptors[0]!, descriptors[1]!],
+				timeout: 300_000,
+				killSignal: "SIGKILL",
+			},
+		);
+		const stderr = readFileSync(errors, "utf8");
+		writeFileSync(
+			path.join(options.reports, "root-artifacts.json"),
+			`${JSON.stringify({ roots, literalUnits, uncompressedConstantBytes: roots * literalUnits * 2 * 2, durationMs: performance.now() - startedAt, status: result.status, signal: result.signal, error: result.error?.message, generatedBytes: statSync(output).size, generatedSha256: artifactFileDigest(output), stderr }, null, 2)}\n`,
+		);
+		if (result.status !== 0 || result.signal !== null)
+			throw new Error(`large root artifact publication failed:\n${stderr}`, {
+				cause: result.error,
+			});
+		if (!stderr.includes("parallel roots"))
+			throw new Error(
+				`large root artifacts did not use the parallel compiler:\n${stderr}`,
+			);
+	} finally {
+		for (const descriptor of descriptors) closeSync(descriptor);
+		rmSync(output, { force: true });
+		rmSync(errors, { force: true });
+	}
 }
 
 /** Verify large-input handling through a packaged CLI in an owned test project. */
@@ -292,6 +369,7 @@ server.listen(0, "127.0.0.1", () => { console.log("DX_HTTP_PORT " + server.addre
 		path.join(reports, "large-inputs.json"),
 		`${JSON.stringify({ sourceBytes: statSync(dependency).size, sourceSha256: artifactFileDigest(dependency), generatedBytes, generatedSha256, commands: ["build", "run", "dev", "test", "test --watch", "build --production --print", "build --production", "run --profile", "test --profile"], edits: ["small dependency", "large dependency"], cacheRestoration: true }, null, 2)}\n`,
 	);
+	checkLargeRootArtifacts(options);
 	console.log(
 		"ok   large sources, UTF-8 data and generated output survived command execution, edits and cache restoration",
 	);

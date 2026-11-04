@@ -1,4 +1,6 @@
 import { hash } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import * as path from "node:path";
 import { stripCompactTypes } from "./frontend/compact-type-strip.ts";
 import { ModuleParseCache } from "./frontend/module-graph.ts";
 import type { ModuleGraph } from "./frontend/module-graph.ts";
@@ -17,17 +19,13 @@ import type { CompilerDiagnostic } from "./shared/compiler-diagnostics.ts";
 import { serializeCompilerArtifact } from "./target/compiler-artifact-codec.ts";
 import { serializeRuntimeImage } from "./target/program-image-codec.ts";
 
-export function compileRootBatch(batch: RootBatch): {
-	value: RootBatchResult;
-	transfers: Array<ArrayBuffer>;
-} {
+export function compileRootBatch(batch: RootBatch): RootBatchResult {
 	const cancellation = new Int32Array(batch.cancellation);
 	const checkpoint = () => {
 		if (Atomics.load(cancellation, 0) !== 0)
 			throw new DOMException("root compilation cancelled", "AbortError");
 	};
 	const results: Array<RootJobResult> = [];
-	const transfers: Array<ArrayBuffer> = [];
 	const parseCache = new ModuleParseCache();
 	for (const job of batch.jobs) {
 		try {
@@ -64,26 +62,32 @@ export function compileRootBatch(batch: RootBatch): {
 			if (dependencies === undefined || packageAbsences === undefined)
 				throw new Error("compiler did not expose the root graph");
 			validateRootInputs(batch.ownerInputs);
-			const compilerArtifact = new Uint8Array(serializeCompilerArtifact(image));
-			const wire = new Uint8Array(serializeRuntimeImage(image.runtime));
+			const compilerArtifact = serializeCompilerArtifact(image);
+			writeFileSync(
+				path.join(batch.artifactDirectory, `${job.index}.malc`),
+				compilerArtifact,
+			);
+			const compilerDigest = hash("sha256", compilerArtifact, "hex");
+			const compilerSize = compilerArtifact.byteLength;
+			const wire = serializeRuntimeImage(image.runtime);
+			writeFileSync(path.join(batch.artifactDirectory, `${job.index}.malw`), wire);
 			validateRootInputs(dependencies);
 			validateRootPackageAbsences(batch.packageAbsences);
 			validateRootPackageAbsences(packageAbsences);
 			checkpoint();
 			results.push({
 				index: job.index,
-				compilerArtifact,
-				wire,
+				compilerSize,
+				wireSize: wire.byteLength,
 				dependencies,
 				packageAbsences,
 				diagnostics,
-				compilerDigest: hash("sha256", compilerArtifact, "hex"),
+				compilerDigest,
 				wireDigest: hash("sha256", wire, "hex"),
 			});
-			transfers.push(compilerArtifact.buffer, wire.buffer);
 		} catch (error) {
 			results.push({ index: job.index, failure: serializeRootFailure(error) });
 		}
 	}
-	return { value: { results }, transfers };
+	return { results };
 }

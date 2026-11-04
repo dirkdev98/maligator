@@ -114,6 +114,11 @@ used as a blanket invalidation key.
 compilation, linking, or artifact publication. Add `--production` to inspect the
 optimized program. A subsequent build can reuse that frontend cache.
 
+Parallel compiler roots hand off generated artifacts through an owned temporary
+directory, keeping their byte size out of worker message budgets. After the workers
+join, the parent verifies sizes and digests and restores the images before releasing
+the files. Returned images remain usable after the compilation closes.
+
 Normal builds restore cached VM definitions before generated-C emission, skipping
 unchanged graph, semantic, optimization, allocation, and lowering work while
 preserving native-code metadata. Generated translation units and the driver are then

@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -312,6 +319,7 @@ test("ordered root results preserve full compiler, wire, diagnostic and C artifa
 		});
 		try {
 			const parallel = await task.result;
+			await task.close();
 			assert.deepEqual(
 				parallel.workers.map((worker) => worker.entry.href),
 				serial.map((worker) => worker.entry.href),
@@ -341,3 +349,29 @@ test("ordered root results preserve full compiler, wire, diagnostic and C artifa
 		}
 	});
 });
+
+test.each(["corrupt", "missing"])(
+	"rejects a %s artifact and releases the joined handoff files",
+	async (mode) => {
+		await temporary(async (directory) => {
+			const file = path.join(directory, `${mode}.mts`);
+			writeFileSync(file, "export const value = 1;\n");
+			const graph = buildModuleGraph(file, options);
+			graph.workerEntries = graphFor([file]).workerEntries;
+			const task = startNodeRootCompilation(graph, options, captureRootInputs(graph), {
+				concurrency: 1,
+				workerUrl: new URL(
+					"./fixtures/root-compiler/artifact-integrity-worker.mts",
+					import.meta.url,
+				),
+			});
+			try {
+				await assert.rejects(task.result, Error);
+			} finally {
+				await task.close();
+			}
+			const handoff = readFileSync(path.join(directory, "handoff-directory"), "utf8");
+			assert.equal(existsSync(handoff), false);
+		});
+	},
+);

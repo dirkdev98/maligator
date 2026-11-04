@@ -1,4 +1,7 @@
 import { hash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
 import { stripCompactTypes } from "./frontend/compact-type-strip.ts";
 import type { ModuleGraph } from "./frontend/module-graph.ts";
@@ -110,6 +113,7 @@ export function startRootCompilation(
 		dynamicImportCandidates: graph.dynamicImportCandidates ?? [],
 	});
 	const entries = workerRootEntries(graph);
+	const artifactDirectory = mkdtempSync(path.join(tmpdir(), "mal-root-artifacts-"));
 	const cancellation = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
 	const state = new Int32Array(cancellation);
 	let cancelled = false;
@@ -136,6 +140,7 @@ export function startRootCompilation(
 			index % count === partition ? [{ entry, index }] : [],
 		);
 		const batch: RootBatch = {
+			artifactDirectory,
 			jobs,
 			options: compileOptions,
 			ownerInputs,
@@ -152,58 +157,76 @@ export function startRootCompilation(
 	const drained = Promise.all(joined).finally(() =>
 		controls.signal?.removeEventListener("abort", onAbort),
 	);
-	const result = drained.then((partitions): RootCompilationResult => {
-		if (cancelled) throw cancellationReason;
-		const records = partitions.flat().sort((left, right) => left.index - right.index);
-		if (
-			records.length !== entries.length ||
-			records.some((record, index) => record.index !== index)
-		)
-			throw new Error("root worker completion did not cover every declaration");
-		const diagnostics: Array<CompilerDiagnostic> = [];
-		const dependencies = new Map(ownerInputs.map((input) => [input.path, input]));
-		const packageAbsences = new Set(ownerPackageAbsences);
-		const workers = records.map((record): CompiledWorkerImage => {
-			if ("failure" in record) throw deserializeRootFailure(record.failure);
+	const result = drained
+		.then((partitions): RootCompilationResult => {
+			if (cancelled) throw cancellationReason;
+			const records = partitions.flat().sort((left, right) => left.index - right.index);
 			if (
-				hash("sha256", record.compilerArtifact, "hex") !== record.compilerDigest ||
-				hash("sha256", record.wire, "hex") !== record.wireDigest
+				records.length !== entries.length ||
+				records.some((record, index) => record.index !== index)
 			)
-				throw new Error(
-					`root worker artifact digest mismatch: ${entries[record.index]!.href}`,
+				throw new Error("root worker completion did not cover every declaration");
+			const diagnostics: Array<CompilerDiagnostic> = [];
+			const dependencies = new Map(ownerInputs.map((input) => [input.path, input]));
+			const packageAbsences = new Set(ownerPackageAbsences);
+			const workers = records.map((record): CompiledWorkerImage => {
+				if ("failure" in record) throw deserializeRootFailure(record.failure);
+				const compilerArtifact = readFileSync(
+					path.join(artifactDirectory, `${record.index}.malc`),
 				);
-			validateRootInputs(record.dependencies);
-			validateRootPackageAbsences(record.packageAbsences);
-			for (const file of record.packageAbsences) packageAbsences.add(file);
-			for (const input of record.dependencies) {
-				const previous = dependencies.get(input.path);
-				if (previous !== undefined && JSON.stringify(previous) !== JSON.stringify(input))
-					throw new Error(`root input generations differ: ${input.path}`);
-				dependencies.set(input.path, input);
-			}
-			diagnostics.push(...record.diagnostics);
-			const entry = entries[record.index]!;
-			return {
-				id: workerImageId(entry, graph),
-				entry,
-				image: deserializeCompilerArtifact(record.compilerArtifact),
-				wire: record.wire,
-			};
-		});
-		const inputs = [...dependencies.values()].sort((left, right) =>
-			left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
-		);
-		validateRootInputs(inputs);
-		const missing = [...packageAbsences].sort();
-		validateRootPackageAbsences(missing);
-		return { workers, diagnostics, dependencies: inputs, packageAbsences: missing };
-	});
+				const wireBytes = readFileSync(
+					path.join(artifactDirectory, `${record.index}.malw`),
+				);
+				const wire = new Uint8Array(
+					wireBytes.buffer,
+					wireBytes.byteOffset,
+					wireBytes.byteLength,
+				);
+				if (
+					compilerArtifact.byteLength !== record.compilerSize ||
+					wire.byteLength !== record.wireSize ||
+					hash("sha256", compilerArtifact, "hex") !== record.compilerDigest ||
+					hash("sha256", wire, "hex") !== record.wireDigest
+				)
+					throw new Error(
+						`root worker artifact digest mismatch: ${entries[record.index]!.href}`,
+					);
+				validateRootInputs(record.dependencies);
+				validateRootPackageAbsences(record.packageAbsences);
+				for (const file of record.packageAbsences) packageAbsences.add(file);
+				for (const input of record.dependencies) {
+					const previous = dependencies.get(input.path);
+					if (
+						previous !== undefined &&
+						JSON.stringify(previous) !== JSON.stringify(input)
+					)
+						throw new Error(`root input generations differ: ${input.path}`);
+					dependencies.set(input.path, input);
+				}
+				diagnostics.push(...record.diagnostics);
+				const entry = entries[record.index]!;
+				return {
+					id: workerImageId(entry, graph),
+					entry,
+					image: deserializeCompilerArtifact(compilerArtifact),
+					wire,
+				};
+			});
+			const inputs = [...dependencies.values()].sort((left, right) =>
+				left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+			);
+			validateRootInputs(inputs);
+			const missing = [...packageAbsences].sort();
+			validateRootPackageAbsences(missing);
+			return { workers, diagnostics, dependencies: inputs, packageAbsences: missing };
+		})
+		.finally(() => rmSync(artifactDirectory, { recursive: true, force: true }));
 	void result.catch(() => {});
 	return {
 		result,
 		cancel,
 		close: async () => {
-			await drained;
+			await result.catch(() => {});
 		},
 	};
 }

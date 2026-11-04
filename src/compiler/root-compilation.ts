@@ -137,6 +137,7 @@ export interface RootJob {
 	readonly entry: WorkerEntryDeclaration;
 }
 export interface RootBatch {
+	readonly artifactDirectory: string;
 	readonly jobs: ReadonlyArray<RootJob>;
 	readonly options: RootCompileOptions;
 	readonly ownerInputs: ReadonlyArray<FrontendDependencyIdentity>;
@@ -268,9 +269,9 @@ export type RootJobResult =
 	| { readonly index: number; readonly failure: RootFailure }
 	| {
 			readonly index: number;
-			readonly compilerArtifact: Uint8Array;
+			readonly compilerSize: number;
 			readonly compilerDigest: string;
-			readonly wire: Uint8Array;
+			readonly wireSize: number;
 			readonly wireDigest: string;
 			readonly dependencies: Array<FrontendDependencyIdentity>;
 			readonly packageAbsences: Array<string>;
