@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "ascii.h"
+#include "array_object.h"
 #include "async_context.h"
 #include "builtin_data_view.h"
 #include "function_object.h"
@@ -41,7 +42,7 @@
 #define DGRAM_METHOD (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE)
 #define DGRAM_RECV_TURN 64
 #define DGRAM_DATAGRAM_MAX 65536
-#define DGRAM_SEGMENTS_MAX 64
+#define DGRAM_INLINE_SEGMENTS 8
 
 typedef struct MalDgramSend {
     byte *bytes;
@@ -691,54 +692,56 @@ static bool dgram_invalid_buffer(MalVm *vm, const char *name, MalValue value) {
 }
 
 typedef struct DgramSegments {
-    struct iovec vectors[DGRAM_SEGMENTS_MAX];
-    byte *owned[DGRAM_SEGMENTS_MAX];
+    struct iovec vectors[DGRAM_INLINE_SEGMENTS];
+    byte *owned[DGRAM_INLINE_SEGMENTS];
+    MalValue values[DGRAM_INLINE_SEGMENTS + 1];
+    MalRootSpan root;
+    u32 value_count;
     i32 count;
+    usize bytes;
+    f64 offset, length;
+    bool list, sliced;
 } DgramSegments;
 
 static void dgram_segments_free(DgramSegments *segments) {
     for (i32 i = 0; i < segments->count; i++) free(segments->owned[i]);
-    segments->count = 0;
+    mal_gc_unroot(&segments->root);
 }
 
-static bool dgram_add_segment(MalVm *vm, DgramSegments *segments, MalValue value, f64 offset, f64 length,
-    bool sliced) {
-    if (segments->count == DGRAM_SEGMENTS_MAX) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, (const byte *) "Too many buffers");
-        return false;
+static bool dgram_new_value_snapshot(MalVm *vm, DgramSegments *segments) {
+    MalArrayObject *array = mal_array_object_try_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]));
+    if (array == nullptr) goto failed;
+    segments->values[0] = mal_value_from_array_object(array);
+    if (mal_array_object_try_fresh_dense_reserve_exact(array, segments->value_count)) return true;
+failed:
+    mal_vm_throw_allocation_error(vm);
+    return false;
+}
+
+static MalValue dgram_segment_value(const DgramSegments *segments, u32 index) {
+    if (!mal_value_is_array_object(segments->values[0])) return segments->values[index + 1];
+    MalValue value = mal_value_new_undefined();
+    bool present = mal_array_object_dense_get(mal_value_to_array_object(segments->values[0]), index, &value);
+    assert(present);
+    return value;
+}
+
+static MalValue dgram_retry_message(MalVm *vm, DgramSegments *segments) {
+    if (!segments->list) return segments->values[1];
+    if (!mal_value_is_array_object(segments->values[0])) {
+        if (!dgram_new_value_snapshot(vm, segments)) return mal_value_new_undefined();
+        MalArrayObject *array = mal_value_to_array_object(segments->values[0]);
+        for (u32 index = 0; index < segments->value_count; index++)
+            mal_array_object_fresh_dense_append_reserved(array, segments->values[index + 1]);
     }
-    i32 index = segments->count;
-    byte *data = nullptr;
-    usize size = 0;
-    byte *owned = nullptr;
-    if (mal_value_is_string(value)) {
-        owned = mal_string_to_utf8(mal_value_to_string(value), &size);
-        if (owned == nullptr) {
-            mal_vm_throw_allocation_error(vm);
-            return false;
-        }
-        data = owned;
-    } else {
-        MalBufferSourceSpan span;
-        if (mal_buffer_source_span(value, &span) != MAL_BUFFER_SOURCE_SPAN_OK) span = (MalBufferSourceSpan) {0};
-        size = span.length;
-        data = (byte *) mal_buffer_source_span_private(&span, &owned);
-    }
-    if (sliced) {
-        usize start = offset > 0 ? (usize) fmin(offset, (f64) size) : 0;
-        usize end = length >= 0 ? (usize) fmin((f64) start + length, (f64) size) : size;
-        data = data == nullptr ? nullptr : data + start;
-        size = end > start ? end - start : 0;
-    }
-    segments->vectors[index] = (struct iovec) {.iov_base = data, .iov_len = size};
-    segments->owned[index] = owned;
-    segments->count++;
-    return true;
+    return segments->values[0];
 }
 
 static bool dgram_collect(MalVm *vm, DgramSegments *segments, MalValue message, MalValue offset, MalValue length,
     bool sliced) {
-    f64 start = 0, count = -1;
+    segments->length = -1;
+    segments->sliced = sliced;
     if (sliced) {
         if (!mal_ops_is_number(offset)) {
             mal_node_throw_invalid_arg_type(vm, "offset", "of type number", offset);
@@ -748,35 +751,126 @@ static bool dgram_collect(MalVm *vm, DgramSegments *segments, MalValue message, 
             mal_node_throw_invalid_arg_type(vm, "length", "of type number", length);
             return false;
         }
-        start = mal_ops_number_as_f64(offset);
-        count = mal_ops_number_as_f64(length);
+        segments->offset = mal_ops_number_as_f64(offset);
+        segments->length = mal_ops_number_as_f64(length);
     }
     if (mal_value_is_string(message) || dgram_is_buffer_source(message)) {
-        return dgram_add_segment(vm, segments, message, start, count, sliced);
+        segments->values[1] = message;
+        segments->value_count = 1;
+        return true;
     }
     if (!mal_value_is_array_object(message)) return dgram_invalid_buffer(vm, "buffer", message);
-    MalValue item = mal_value_new_undefined();
-    MalRootSpan root;
-    mal_gc_root(&root, &item, 1);
-    MalValue length_value;
-    bool ok = dgram_get(vm, message, "length", &length_value);
-    i32 total = ok ? (i32) mal_ops_number_as_f64(length_value) : 0;
-    for (i32 i = 0; ok && i < total; i++) {
-        ok = mal_vm_get_property(vm, message, mal_key_from_value(mal_value_from_i32(i)), &item);
-        if (ok && !mal_value_is_string(item) && !dgram_is_buffer_source(item)) {
-            ok = dgram_invalid_buffer(vm, "buffer list arguments", item);
+    segments->list = true;
+    segments->sliced = false;
+    segments->value_count = mal_array_object_length(mal_value_to_array_object(message));
+    bool snapshot = segments->value_count > DGRAM_INLINE_SEGMENTS;
+    if (snapshot && !dgram_new_value_snapshot(vm, segments)) return false;
+    for (u32 index = 0; index < segments->value_count; index++) {
+        MalValue *slot = &segments->values[snapshot ? 1 : index + 1];
+        if (!mal_vm_get_property(vm, message, mal_key_index(index), slot)) return false;
+        if (!mal_value_is_string(*slot) && !dgram_is_buffer_source(*slot))
+            return dgram_invalid_buffer(vm, "buffer list arguments", *slot);
+        if (dgram_is_buffer_source(*slot)) {
+            *slot = mal_node_buffer_fixed_view(vm, *slot);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
         }
-        if (ok) ok = dgram_add_segment(vm, segments, item, 0, -1, false);
+        if (snapshot) mal_array_object_fresh_dense_append_reserved(
+            mal_value_to_array_object(segments->values[0]), *slot);
     }
-    mal_gc_unroot(&root);
-    return ok;
+    return true;
+}
+
+static bool dgram_segment_bytes(MalVm *vm, MalValue value, const DgramSegments *segments,
+    struct iovec *vector, byte **owned) {
+    byte *data = nullptr;
+    usize size = 0;
+    *owned = nullptr;
+    if (mal_value_is_string(value)) {
+        *owned = mal_string_to_utf8(mal_value_to_string(value), &size);
+        if (*owned == nullptr) goto failed;
+        data = *owned;
+    } else {
+        MalBufferSourceSpan span;
+        if (mal_buffer_source_span(value, &span) != MAL_BUFFER_SOURCE_SPAN_OK) span = (MalBufferSourceSpan) {0};
+        size = span.length;
+        data = (byte *) mal_buffer_source_span_private(&span, owned);
+        if (size > 0 && data == nullptr) goto failed;
+    }
+    if (segments->sliced) {
+        usize start = segments->offset > 0 ? (usize) fmin(segments->offset, (f64) size) : 0;
+        usize end = segments->length >= 0 ? (usize) fmin((f64) start + segments->length, (f64) size) : size;
+        data = data == nullptr ? nullptr : data + start;
+        size = end > start ? end - start : 0;
+    }
+    *vector = (struct iovec) {.iov_base = data, .iov_len = size};
+    return true;
+failed:
+    free(*owned);
+    *owned = nullptr;
+    mal_vm_throw_allocation_error(vm);
+    return false;
+}
+
+static bool dgram_prepare_segments(MalVm *vm, DgramSegments *segments) {
+    if (segments->value_count <= DGRAM_INLINE_SEGMENTS) {
+        for (u32 index = 0; index < segments->value_count; index++) {
+            if (!dgram_segment_bytes(vm, dgram_segment_value(segments, index), segments,
+                    &segments->vectors[index], &segments->owned[index])) return false;
+            segments->count++;
+            usize size = segments->vectors[index].iov_len;
+            if (size > SIZE_MAX - segments->bytes) {
+                mal_vm_throw_allocation_error(vm);
+                return false;
+            }
+            segments->bytes += size;
+        }
+        return true;
+    }
+    // A datagram is one byte sequence. Coalescing longer lists avoids an OS iovec
+    // ceiling while the ordinary send keeps its borrowed spans and inline vectors.
+    byte *bytes = nullptr;
+    usize capacity = 0, length = 0;
+    for (u32 index = 0; index < segments->value_count; index++) {
+        struct iovec vector;
+        byte *owned = nullptr;
+        if (!dgram_segment_bytes(vm, dgram_segment_value(segments, index), segments, &vector, &owned)) {
+            free(bytes);
+            return false;
+        }
+        bool overflow = vector.iov_len > SIZE_MAX - length;
+        usize needed = overflow ? 0 : length + vector.iov_len;
+        if (!overflow && needed > capacity) {
+            usize grown = capacity == 0 ? 256 : capacity;
+            while (grown < needed) grown = grown > SIZE_MAX / 2 ? needed : grown * 2;
+            byte *next = realloc(bytes, grown);
+            if (next == nullptr) overflow = true;
+            else { bytes = next; capacity = grown; }
+        }
+        if (overflow) {
+            free(owned);
+            free(bytes);
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+        if (vector.iov_len > 0) memcpy(bytes + length, vector.iov_base, vector.iov_len);
+        length = needed;
+        free(owned);
+    }
+    segments->vectors[0] = (struct iovec) {.iov_base = bytes, .iov_len = length};
+    segments->owned[0] = bytes;
+    segments->count = 1;
+    segments->bytes = length;
+    return true;
 }
 
 /* A nonblocking send that would block keeps the datagram, in order, until write readiness. */
 static bool dgram_enqueue(MalVm *vm, MalDgramSocket *state, const DgramSegments *segments,
     const struct msghdr *header, MalValue callback, const char *text, u16 port) {
-    usize length = 0;
-    for (i32 i = 0; i < segments->count; i++) length += segments->vectors[i].iov_len;
+    usize length = segments->bytes;
+    if (length > SIZE_MAX - state->send_queue_bytes || state->send_queue_count == UINT32_MAX) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
     MalDgramSend *send = calloc(1, sizeof(MalDgramSend));
     byte *bytes = malloc(length == 0 ? 1 : length);
     if (send == nullptr || bytes == nullptr || !dgram_arm_write(state)) {
@@ -840,19 +934,17 @@ static MalValue dgram_send(
             return undefined;
         }
     }
-    DgramSegments segments = {0};
-    if (!dgram_collect(vm, &segments, message, offset, length, sliced)) {
-        dgram_segments_free(&segments);
-        return undefined;
-    }
-    if (!mal_value_is_callable(callback)) callback = undefined;
-    if (!dgram_healthy(vm, state)) {
-        dgram_segments_free(&segments);
-        return undefined;
-    }
-    MalValue roots[] = {message, callback, address};
+    MalValue roots[] = {message, callback, address, receiver};
     MalRootSpan root;
-    mal_gc_root(&root, roots, 3);
+    mal_gc_root(&root, roots, countof(roots));
+    DgramSegments segments = {0};
+    for (usize index = 0; index < countof(segments.values); index++) segments.values[index] = undefined;
+    mal_gc_root(&segments.root, segments.values, countof(segments.values));
+    if (!dgram_collect(vm, &segments, roots[0], offset, length, sliced)) goto done;
+    if (!mal_value_is_callable(roots[1])) roots[1] = undefined;
+    // An array getter can close an unbound socket and release its native state.
+    state = dgram_find(roots[3]);
+    if (!dgram_healthy(vm, state)) goto done;
     u16 port_number = 0;
     char text[MAL_NET_ADDRESS_MAX] = {0};
     struct sockaddr_storage target;
@@ -863,14 +955,20 @@ static MalValue dgram_send(
             MalValue once_args[] = {dgram_ascii(vm, "listening"), undefined};
             MalRootSpan once_root;
             mal_gc_root(&once_root, once_args, countof(once_args));
-            once_args[1] = dgram_retry_function(vm, receiver, DGRAM_RETRY_SEND_LISTENING, undefined, args, argc, -1);
+            arg[0] = dgram_retry_message(vm, &segments);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) { mal_gc_unroot(&once_root); goto done; }
+            once_args[1] = dgram_retry_function(vm, roots[3], DGRAM_RETRY_SEND_LISTENING, undefined, arg, argc, -1);
             dgram_call_method(vm, receiver, "once", once_args, 2);
             mal_gc_unroot(&once_root);
             goto done;
         }
         if (dgram_needs_lookup(roots[2])) {
             if (!dgram_ensure_bound(vm, state) || vm->completion.kind == MAL_COMPLETION_THROW) goto done;
-            MalValue retry = dgram_retry_function(vm, receiver, DGRAM_RETRY_SEND_LOOKUP, roots[1], args, argc,
+            state = dgram_find(roots[3]);
+            if (!dgram_healthy(vm, state)) goto done;
+            arg[0] = dgram_retry_message(vm, &segments);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+            MalValue retry = dgram_retry_function(vm, roots[3], DGRAM_RETRY_SEND_LOOKUP, roots[1], arg, argc,
                 sliced ? 4 : 2);
             (void) dgram_lookup(vm, state, roots[2], retry);
             goto done;
@@ -878,6 +976,8 @@ static MalValue dgram_send(
         if (!dgram_resolve(vm, state, roots[2], false, port_number, text, &target, &target_length)) goto done;
     }
     if (!dgram_ensure_bound(vm, state) || vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    state = dgram_find(roots[3]);
+    if (!dgram_healthy(vm, state)) goto done;
     if (state->fd < 0) {
         if (mal_value_is_callable(roots[1])) {
             MalValue error = dgram_system_error(vm, EBADF, "send", text, port_number);
@@ -885,6 +985,7 @@ static MalValue dgram_send(
         }
         goto done;
     }
+    if (!dgram_prepare_segments(vm, &segments)) goto done;
     struct msghdr header = {
         .msg_name = state->connected ? nullptr : &target,
         .msg_namelen = state->connected ? 0 : target_length,

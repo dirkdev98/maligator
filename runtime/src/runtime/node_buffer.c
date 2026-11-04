@@ -460,6 +460,45 @@ static MalValue mal_buffer_new_view(
     return mal_value_from_typed_array_object(array);
 }
 
+MalValue mal_node_buffer_fixed_view(MalVm *vm, MalValue value) {
+    if (mal_value_is_typed_array_object(value) && mal_value_to_typed_array_object(value)->is_buffer)
+        return value;
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    MalValue result = mal_value_new_undefined();
+    if (mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR])) {
+        mal_host_install_node_buffer(vm, nullptr, 0, nullptr);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    }
+    MalArrayBufferObject *buffer;
+    u32 offset, length;
+    if (mal_value_is_typed_array_object(value)) {
+        MalTypedArrayObject *view = mal_value_to_typed_array_object(value);
+        buffer = view->buffer;
+        bool out_of_bounds = mal_typed_array_object_is_out_of_bounds(view);
+        offset = out_of_bounds ? 0 : view->byte_offset;
+        length = out_of_bounds ? 0 : mal_typed_array_object_byte_length(view);
+    } else {
+        MalDataViewObject *view = mal_value_to_data_view_object(value);
+        buffer = view->buffer;
+        if (mal_data_view_object_is_out_of_bounds(view)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "DataView is detached or out of bounds");
+            goto done;
+        }
+        offset = mal_data_view_object_byte_offset(view);
+        length = mal_data_view_object_byte_length(view);
+    }
+    if (buffer->detached) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "ArrayBuffer is detached");
+        goto done;
+    }
+    result = mal_buffer_new_view(vm,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE]), buffer, offset, length);
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
 static MalValue mal_buffer_new_impl(
     MalVm *vm, MalObject *prototype, u32 length, bool initialize
 ) {

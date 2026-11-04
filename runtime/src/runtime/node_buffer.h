@@ -15,6 +15,9 @@ void mal_host_install_node_buffer(
  */
 MalValue mal_node_buffer_from_owned_bytes(MalVm *vm, byte *bytes, usize length);
 
+/** Share a view's current byte range with a Buffer whose length stays fixed. */
+MalValue mal_node_buffer_fixed_view(MalVm *vm, MalValue view);
+
 /**
  * As mal_node_buffer_from_owned_bytes, but the resulting Buffer's backing store
  * is marked secret-bearing, so it is scrubbed before release instead of being
