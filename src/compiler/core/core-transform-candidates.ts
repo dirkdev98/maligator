@@ -1,7 +1,9 @@
+import type { CoreFactoryProjection } from "./core-factory-projections.ts";
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import type { CoreReadAccessorRegionPlan } from "./core-read-accessor-expansion.ts";
 
 export type CoreTransformKind =
+	| "factory-projection"
 	| "static-argument-specialization"
 	| "callback-specialization"
 	| "synchronous-callback-inline"
@@ -56,6 +58,7 @@ export interface CoreTransformCandidate {
 	readonly targets: ReadonlyArray<CoreFunctionId>;
 	readonly targetSetKind?: "closed" | "open-hints";
 	readonly readAccessorRegion?: CoreReadAccessorRegionPlan;
+	readonly factoryProjection?: CoreFactoryProjection;
 	readonly readAccessorLoopEligible?: true;
 	readonly generatedCodeCost: number;
 	readonly compilerWorkCost: number;
@@ -136,6 +139,7 @@ interface CallerConsumption {
 
 function transformKindCounts(): Record<CoreTransformKind, number> {
 	return {
+		"factory-projection": 0,
 		"static-argument-specialization": 0,
 		"callback-specialization": 0,
 		"synchronous-callback-inline": 0,

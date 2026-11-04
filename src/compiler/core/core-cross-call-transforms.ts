@@ -35,6 +35,10 @@ import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreNormalResultFacts } from "./core-editor.ts";
 import {
+	applyCoreFactoryProjection,
+	coreFactoryProjection,
+} from "./core-factory-projections.ts";
+import {
 	coreCaptureOwners,
 	coreCreatesFunctions,
 	coreSingleActivationFunctions,
@@ -98,6 +102,7 @@ import {
 	coreValueKindDemand,
 	coreInstructionResultIntegerRange,
 	coreValueKindObservation,
+	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 } from "./core-ir-value-kinds.ts";
 import type {
 	CoreProgramValueKinds,
@@ -1642,6 +1647,42 @@ function offerFunctionCandidates(
 	}
 	for (const site of outgoing) {
 		if (!fn.isInstructionLive(site.instruction)) continue;
+		const projection = coreFactoryProjection(
+			program,
+			analyses.compilationContext,
+			summaries,
+			fn,
+			site.instruction,
+			(value) =>
+				analyses
+					.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+						scope: "function",
+						function: functionId,
+					})
+					.kindMask(value),
+			() =>
+				analyses
+					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+						scope: "function",
+						function: functionId,
+					})
+					.exceptional(),
+		);
+		if (projection !== undefined) {
+			service.offer({
+				kind: "factory-projection",
+				caller: functionId,
+				site: site.instruction,
+				revision: fn.version("body"),
+				priorityClass: 1,
+				priorityScore: -32,
+				targets: [],
+				factoryProjection: projection,
+				generatedCodeCost: projection.cost,
+				compilerWorkCost: projection.cost * 2,
+				expansive: true,
+			});
+		}
 		const invocation = fn.registry.byId(fn.instructionOpcode(site.instruction))
 			.callTransfer?.invocation;
 		if (invocation === undefined) continue;
@@ -3949,6 +3990,17 @@ function applyCandidate(
 	editor: CoreEditor,
 ): AppliedTransform | undefined {
 	switch (candidate.kind) {
+		case "factory-projection": {
+			if (candidate.factoryProjection === undefined) return undefined;
+			const introduced = applyCoreFactoryProjection(
+				editor.function,
+				editor,
+				candidate.factoryProjection,
+			);
+			return introduced === undefined
+				? undefined
+				: { instructionsIntroduced: introduced, blocksIntroduced: 0 };
+		}
 		case "array-iteration-inline": {
 			const fn = program.function(candidate.caller);
 			if (!fn.isInstructionLive(candidate.site)) return undefined;
@@ -5419,6 +5471,7 @@ export function runCoreCrossCallTransforms(
 			instructionsIntroduced += applied.instructionsIntroduced;
 			blocksIntroduced += applied.blocksIntroduced;
 			if (
+				candidate.kind === "factory-projection" ||
 				candidate.kind === "inline" ||
 				candidate.kind === "synchronous-callback-inline" ||
 				candidate.kind === "guarded-inline" ||
