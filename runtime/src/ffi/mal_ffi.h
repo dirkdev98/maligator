@@ -29,6 +29,18 @@ typedef struct MalHostInstallSlot MalHostInstallSlot;
 typedef struct MalHostLaunchContext MalHostLaunchContext;
 typedef uint64_t MalValue;
 
+/** A synchronous call's private numeric snapshots; active calls never share storage. */
+typedef struct MalFfiScratch {
+    void *data;
+    size_t capacity;
+    size_t used;
+} MalFfiScratch;
+
+void *mal_ffi_scratch_allocate(MalVm *vm, MalFfiScratch *scratch, size_t count,
+    size_t size, size_t alignment, size_t reserve);
+void mal_ffi_scratch_free(MalFfiScratch *scratch, void *data);
+void mal_ffi_scratch_release(MalVm *vm, MalFfiScratch *scratch);
+
 typedef MalValue (*MalFfiFunction)(
     MalVm *vm, MalValue this_value, const MalValue *args, int32_t arg_count,
     MalValue new_target, MalValue callee);

@@ -2958,6 +2958,7 @@ class BindingWriter {
 			return value?.kind === "callback" && value.kept;
 		};
 		const cleanup: Array<string> = [];
+		let scratchInputs = 0;
 		const strings: Array<string> = [];
 		const trampolines: Array<string> = [];
 		const compoundInputs = this.#compoundInputs(binding);
@@ -3447,11 +3448,22 @@ class BindingWriter {
 							value.of.bits === 64 &&
 							elementType.kind === "float" &&
 							elementType.name === "double";
-						const storage = `mal_storage_${String(index)}`;
+						if (doubles && scratchInputs++ === 0)
+							locals.push("MalFfiScratch *mal_scratch = nullptr;");
+						const storageName = `mal_storage_${String(index)}`;
+						// Reusing a heap snapshot's unused inline buffer keeps small calls off scratch setup.
+						const storage = doubles ? `${storageName}.values` : storageName;
 						locals.push(
 							`${pointerDeclaration(value.element, elements)} = nullptr;`,
 							`int32_t ${length} = 0;`,
-							`alignas(_Alignof(__typeof__(*${elements})) <= MAL_FFI_ARRAY_INLINE ? _Alignof(__typeof__(*${elements})) : _Alignof(max_align_t)) unsigned char ${storage}[MAL_FFI_ARRAY_INLINE];`,
+							...(doubles
+								? [
+										`union { double values[MAL_FFI_ARRAY_INLINE / sizeof(double)]; MalFfiScratch scratch; } ${storageName};`,
+										'static_assert(sizeof(MalFfiScratch) <= MAL_FFI_ARRAY_INLINE, "FFI scratch metadata must fit unused inline storage");',
+									]
+								: [
+										`alignas(_Alignof(__typeof__(*${elements})) <= MAL_FFI_ARRAY_INLINE ? _Alignof(__typeof__(*${elements})) : _Alignof(max_align_t)) unsigned char ${storage}[MAL_FFI_ARRAY_INLINE];`,
+									]),
 							`static_assert(sizeof(*${elements}) % _Alignof(__typeof__(*${elements})) == 0, "FFI array stride must preserve C alignment");`,
 						);
 						if (texts) {
@@ -3461,7 +3473,7 @@ class BindingWriter {
 							);
 						}
 						cleanup.push(
-							`if (${elements} != nullptr && (void *) ${elements} != (void *) ${storage}) free(${elements});`,
+							`if (${elements} != nullptr && (void *) ${elements} != (void *) ${storage}) ${doubles ? `mal_ffi_scratch_free(mal_scratch, ${elements})` : `free(${elements})`};`,
 						);
 						const text = this.#fresh("text");
 						// Arrays of records with immediate fields read every element in one call.
@@ -3520,7 +3532,12 @@ class BindingWriter {
 									]
 								: []),
 							`} else if (${length} > 0) {`,
-							`\t${elements} = mal_ffi_${doubles ? "allocate" : "calloc"}_storage((size_t) ${length}, sizeof(*${elements}), _Alignof(__typeof__(*${elements})));`,
+							...(doubles
+								? [
+										`\tif (mal_scratch == nullptr) { ${storageName}.scratch = (MalFfiScratch) {0}; mal_scratch = &${storageName}.scratch; }`,
+									]
+								: []),
+							`\t${elements} = ${doubles ? `mal_ffi_scratch_allocate(vm, mal_scratch, (size_t) ${length}, sizeof(*${elements}), _Alignof(__typeof__(*${elements})), mal_scratch_inputs)` : `mal_ffi_calloc_storage((size_t) ${length}, sizeof(*${elements}), _Alignof(__typeof__(*${elements})))`};`,
 							`\tif (${elements} == nullptr) { mal_ffi_out_of_memory(vm); goto mal_done; }`,
 							"}",
 							...(bulk === undefined
@@ -3651,6 +3668,12 @@ class BindingWriter {
 						`mal_ffi_finish_handle_close(${argument(binding.closes)}, ${success === undefined ? "true" : `mal_return == (${success})`});`,
 					];
 		const initialization = binding.initializes;
+		if (scratchInputs > 0) {
+			locals.push(`enum { mal_scratch_inputs = ${scratchInputs} };`);
+			cleanup.push(
+				"if (mal_scratch != nullptr && mal_scratch->data != nullptr) mal_ffi_scratch_release(vm, mal_scratch);",
+			);
+		}
 		const initialized =
 			initialization === undefined
 				? []

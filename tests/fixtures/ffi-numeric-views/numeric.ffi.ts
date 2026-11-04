@@ -5,6 +5,12 @@ export default {
 	headers: ["numeric.h"],
 	find: [{ includeDirs: ["."], sources: ["numeric.c"] }],
 	functions: {
+		numeric_independent: {
+			params: {
+				left: { array: { length: "left_count" } },
+				right: { array: { length: "right_count" } },
+			},
+		},
 		numeric_i8: { params: { values: { array: { length: "count" } } } },
 		numeric_u8: { params: { values: { array: { length: "count" } } } },
 		numeric_i16: { params: { values: { array: { length: "count" } } } },

@@ -948,8 +948,6 @@ struct MalFfiState {
     usize invocation_depth;
     usize invocation_capacity;
     u64 last_invocation;
-    /** Whether the runtime cleanup that drops pending async calls is registered. */
-    bool async_cleanup;
     /**
      * The host operation other threads post queued callback calls to, open while any
      * kept callback accepts them, so the event loop waits for their calls.
@@ -961,10 +959,15 @@ struct MalFfiState {
     u32 free_count;
     u32 free_capacity;
     bool accepting_waits;
+    /** Whether the runtime cleanup that drops pending async calls is registered. */
+    bool async_cleanup;
     MalFfiAsyncPayload *retired_async;
     MalFfiNativeHandle *native_handles;
     MalFfiDiscardState *discards;
     MalFfiResults *results;
+    /** An active call owns its numeric block independently of this idle slot. */
+    void *scratch_data;
+    size_t scratch_capacity;
 };
 
 static void ffi_discards_freeze(MalVm *vm, MalFfiState *state);
@@ -1088,6 +1091,7 @@ static void ffi_state_free(MalVm *vm) {
     free(state->handles);
     ffi_discards_drop(state->discards);
     free(state->shapes);
+    free(state->scratch_data);
     free(state);
     vm->ffi = nullptr;
 }
@@ -3293,6 +3297,56 @@ void *mal_ffi_calloc_storage(size_t count, size_t size, size_t alignment) {
     void *storage = mal_ffi_allocate_storage(count, size, alignment);
     if (storage != nullptr) memset(storage, 0, count * size);
     return storage;
+}
+
+void *mal_ffi_scratch_allocate(MalVm *vm, MalFfiScratch *scratch, size_t count,
+    size_t size, size_t alignment, size_t reserve) {
+    if (size != 0 && count > SIZE_MAX / size) return nullptr;
+    size_t bytes = count * size;
+    enum { minimum = 4096, maximum = 64 * 1024 };
+    if (bytes == 0 || bytes > maximum || alignment > _Alignof(max_align_t))
+        return mal_ffi_allocate_storage(count, size, alignment);
+    if (scratch->data == nullptr) {
+        MalFfiState *state = ffi_state(vm);
+        if (state == nullptr) return mal_ffi_allocate_storage(count, size, alignment);
+        size_t wanted = reserve > maximum / bytes ? maximum : bytes * reserve;
+        size_t capacity = minimum;
+        while (capacity < wanted) capacity *= 2;
+        if (state->scratch_data != nullptr && state->scratch_capacity >= capacity) {
+            scratch->data = state->scratch_data;
+            scratch->capacity = state->scratch_capacity;
+            state->scratch_data = nullptr;
+            state->scratch_capacity = 0;
+        } else {
+            scratch->data = malloc(capacity);
+            if (scratch->data == nullptr)
+                return mal_ffi_allocate_storage(count, size, alignment);
+            scratch->capacity = capacity;
+        }
+    }
+    size_t offset = (scratch->used + alignment - 1) & ~(alignment - 1);
+    if (bytes > scratch->capacity - offset)
+        return mal_ffi_allocate_storage(count, size, alignment);
+    scratch->used = offset + bytes;
+    return (byte *) scratch->data + offset;
+}
+
+void mal_ffi_scratch_free(MalFfiScratch *scratch, void *data) {
+    uintptr_t start = (uintptr_t) scratch->data;
+    if (scratch->data != nullptr && (uintptr_t) data >= start
+        && (uintptr_t) data - start < scratch->capacity) return;
+    free(data);
+}
+
+void mal_ffi_scratch_release(MalVm *vm, MalFfiScratch *scratch) {
+    if (scratch->data == nullptr) return;
+    MalFfiState *state = vm->ffi;
+    if (state != nullptr && state->scratch_capacity < scratch->capacity) {
+        free(state->scratch_data);
+        state->scratch_data = scratch->data;
+        state->scratch_capacity = scratch->capacity;
+    } else free(scratch->data);
+    *scratch = (MalFfiScratch) {0};
 }
 
 static bool ffi_type_supports(const MalFfiHandleType *actual, const MalFfiHandleType *expected) {

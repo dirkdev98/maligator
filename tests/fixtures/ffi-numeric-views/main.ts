@@ -13,6 +13,7 @@ import {
 	numeric_f64,
 	sumAsync,
 	numeric_dot,
+	numeric_independent,
 	dotAsync,
 	numeric_visit,
 	visitAsync,
@@ -168,6 +169,74 @@ check(
 }
 
 class Vector extends Float64Array {}
+{
+	const outer = Array.from({ length: 65 }, () => 2);
+	let inner = 0;
+	check(
+		numeric_visit(outer, () => {
+			outer[0] = 100;
+			inner = numeric_f64(Array.from({ length: 65 }, () => 7));
+		}) === 4 && inner === 455,
+		"reentrant numeric callbacks preserve the outer snapshot",
+	);
+	let failed = false;
+	try {
+		numeric_visit(outer, () => {
+			numeric_f64(Array.from({ length: 65 }, () => 11));
+			throw new RangeError("nested numeric callback");
+		});
+	} catch (error) {
+		failed = error instanceof RangeError;
+	}
+	check(
+		failed && numeric_f64(outer) === 228,
+		"callback failure releases numeric scratch for subsequent calls",
+	);
+}
+{
+	const left = Array.from({ length: 65 }, (_, index) => index + 0.25);
+	const expected = left.reduce((sum, value) => sum + value, 0);
+	const right = Array.from({ length: left.length }, () => 1);
+	let inner = 0;
+	Object.defineProperty(right, 0, {
+		get() {
+			left.fill(100);
+			inner = numeric_f64(Array.from({ length: 65 }, () => 3));
+			return 1;
+		},
+	});
+	check(
+		numeric_dot(left, right) === expected && inner === 195,
+		"later getters can reenter without overwriting earlier numeric snapshots",
+	);
+}
+for (const length of [8192, 8193]) {
+	const left = Array.from({ length }, () => 2),
+		right = Array.from({ length }, () => 3);
+	check(
+		numeric_dot(left, right) === 6 * length,
+		"large numeric snapshots retain heap fallback beyond scratch capacity",
+	);
+}
+{
+	const values = Array.from({ length: 65 }, () => 2);
+	check(
+		numeric_independent(values, values) === 11 && values[0] === 2,
+		"aliased JavaScript arrays receive independent mutable native snapshots",
+	);
+}
+for (const [leftCount, rightCount] of [
+	[8, 65],
+	[65, 8],
+	[8, 8193],
+] as const) {
+	const left = Array.from({ length: leftCount }, () => 2),
+		right = Array.from({ length: rightCount }, () => 3);
+	check(
+		numeric_independent(left, right) === 12 && left[0] === 2,
+		"mixed inline and heap arguments keep numeric snapshots independent",
+	);
+}
 for (const sum of [numeric_f64, sumAsync]) {
 	const storage = new Float64Array([99, 2, 3, 101]);
 	const view = storage.subarray(1, 3);

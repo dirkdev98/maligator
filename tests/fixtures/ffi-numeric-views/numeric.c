@@ -24,6 +24,11 @@ double numeric_dot(const double *left, const double *right, int count) {
     for (int i = 0; i < count; i++) result += left[i] * right[i];
     return result;
 }
+double numeric_independent(double *left, int left_count, const double *right, int right_count) {
+    calls++;
+    if (left_count > 0) left[0] += 7;
+    return (left_count > 0 ? left[0] : 0) + (right_count > 0 ? right[0] : 0);
+}
 double numeric_visit(const double *values, int count, NumericVisit visit, void *data) {
     calls++;
     double before = count > 0 ? values[0] : 0;
