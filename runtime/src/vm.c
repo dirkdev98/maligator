@@ -439,21 +439,15 @@ void mal_vm_free_coroutine_buffer_pool(MalVm *vm) {
  */
 #define MAL_MAX_CALL_FRAMES (64 * 1024)
 
-/*
- * String and BigInt constant cells live in these arrays, and runtime values
- * point AT the cells (mal_value_from_string/bigint take a cell address; property
- * keys and stored string values hold that pointer). So the cells must never move
- * — a realloc that relocated them would dangle every outstanding reference (and
- * silently drop global properties whose key string moved). Functions and globals
- * are referenced by index, not address, so they stay growable; only these two
- * tables are fixed-capacity. A runtime-eval splice appends here without moving,
- * and overflows cleanly (RangeError) instead of relocating. Lazily committed, so
- * the resident cost tracks the constants actually materialized. The compiler
- * baked for eval alone contributes ~6k strings, so the ceilings sit well above
- * it while leaving generous headroom for eval'd code.
- */
-#define MAL_MAX_STRING_CONSTANTS (128 * 1024)
-#define MAL_MAX_BIGINT_CONSTANTS (16 * 1024)
+// Keep ordinary splices in contiguous storage; overflow pages preserve cell
+// addresses when later images exhaust the initial reservation.
+#define MAL_INITIAL_STRING_CONSTANT_CAPACITY (128 * 1024)
+#define MAL_INITIAL_BIGINT_CONSTANT_CAPACITY (16 * 1024)
+
+static void mal_vm_free_constant_pages(MalConstantPages *pool) {
+    for (i32 page = 0; page < pool->count; page++) free(pool->pages[page]);
+    free(pool->pages);
+}
 
 static MalEnv *mal_env_new_storage(
     MalVm *vm, MalEnv *parent, i32 function_index, i32 count, bool compact_parent, const MalValue *values
@@ -619,12 +613,6 @@ static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program
         program->initialize_generated_data();
     }
 
-    // Relocate the program's function / string / bigint / literal-template tables into
-    // VM-owned growable storage behind a mutable `live_runtime_image` (see vm.h), so
-    // runtime eval can splice more in later while the const access paths keep
-    // working. The instruction/handler/code-unit data the rows point at is left
-    // in place (static, or the loader arena). Counts of 0 use a capacity of 1 so
-    // a later splice always has a real array to grow.
     vm->live_runtime_image = *program;
     // Links describe one image; the merged program spliced from them has none.
     vm->live_runtime_image.module_import_count = 0;
@@ -649,26 +637,25 @@ static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program
     i32 string_count = program->string_constant_count;
     vm->initial_string_constants = program->string_constants;
     vm->initial_string_constant_count = string_count;
-    // Fixed capacity, never reallocated (see MAL_MAX_STRING_CONSTANTS): string
-    // cells must keep stable addresses because values point at them.
-    vm->string_capacity = string_count > MAL_MAX_STRING_CONSTANTS ? string_count : MAL_MAX_STRING_CONSTANTS;
-    MalString *strings = malloc(sizeof(MalString) * (usize) vm->string_capacity);
+    vm->string_primary_capacity = string_count > MAL_INITIAL_STRING_CONSTANT_CAPACITY ? string_count : MAL_INITIAL_STRING_CONSTANT_CAPACITY;
+    MalString *strings = malloc(sizeof(MalString) * (usize) vm->string_primary_capacity);
     if (string_count > 0) {
         memcpy(strings, program->string_constants, sizeof(MalString) * (usize) string_count);
     }
     vm->live_runtime_image.string_constants = strings;
+    vm->string_constant_pages = (MalConstantPages) {0};
+    vm->string_atom_capacity = vm->string_primary_capacity;
     vm->string_constant_atoms =
-        calloc((usize) vm->string_capacity, sizeof(MalString *));
+        calloc((usize) vm->string_atom_capacity, sizeof(MalString *));
 
-    // Fixed capacity, never reallocated (see MAL_MAX_BIGINT_CONSTANTS): like
-    // strings, BigInt values point at their cells.
     i32 bigint_count = program->bigint_constant_count;
-    vm->bigint_capacity = bigint_count > MAL_MAX_BIGINT_CONSTANTS ? bigint_count : MAL_MAX_BIGINT_CONSTANTS;
-    MalBigInt *bigints = malloc(sizeof(MalBigInt) * (usize) vm->bigint_capacity);
+    vm->bigint_primary_capacity = bigint_count > MAL_INITIAL_BIGINT_CONSTANT_CAPACITY ? bigint_count : MAL_INITIAL_BIGINT_CONSTANT_CAPACITY;
+    MalBigInt *bigints = malloc(sizeof(MalBigInt) * (usize) vm->bigint_primary_capacity);
     if (bigint_count > 0) {
         memcpy(bigints, program->bigint_constants, sizeof(MalBigInt) * (usize) bigint_count);
     }
     vm->live_runtime_image.bigint_constants = bigints;
+    vm->bigint_constant_pages = (MalConstantPages) {0};
 
     i32 literal_template_count = program->literal_template_data_count;
     vm->literal_template_capacity = literal_template_count > 0 ? literal_template_count : 1;
@@ -880,7 +867,7 @@ static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program
     }
     for (i32 i = 0; i < program->string_constant_count; i++) {
         vm->string_constant_atoms[i] = mal_property_atomize_string(
-            vm, (MalString *) &vm->runtime_image->string_constants[i]);
+            vm, (MalString *) mal_vm_string_constant(vm, i));
     }
     // A guarded own-slot load may execute before its source allocation site.
     // Build only those named literal shapes now, after their canonical atoms
@@ -1155,6 +1142,8 @@ void mal_vm_free(MalVm *vm) {
     free(vm->string_constant_atoms);
     free((MalString *) vm->live_runtime_image.string_constants);
     free((MalBigInt *) vm->live_runtime_image.bigint_constants);
+    mal_vm_free_constant_pages(&vm->string_constant_pages);
+    mal_vm_free_constant_pages(&vm->bigint_constant_pages);
     free((u32 *) vm->live_runtime_image.literal_template_data);
     free((i32 *) vm->live_runtime_image.cjs_module_function_indices);
     free(vm->file_string_atoms);
@@ -1250,6 +1239,59 @@ static i32 mal_vm_rebase_value_operand(i32 operand, i32 string_base) {
     return MAL_VALUE_OPERAND_STRING_BASE - (index + string_base);
 }
 
+static bool mal_vm_rebased_operand_fits(i32 operand, i32 string_base) {
+    if (operand > MAL_VALUE_OPERAND_STRING_BASE || operand < MAL_VALUE_OPERAND_STRING_MIN)
+        return true;
+    return (i64) MAL_VALUE_OPERAND_STRING_BASE - operand + string_base <=
+        MAL_VALUE_OPERAND_MAX_PAYLOAD;
+}
+
+static bool mal_vm_constant_operands_fit(
+    const MalRuntimeImage *loaded, i32 string_base, i32 new_strings
+) {
+    if ((u32) new_strings <= (UINT32_MAX >> 6) + 1) return true;
+    for (i32 f = 0; f < loaded->function_count; f++) {
+        const MalFunction *fn = &loaded->functions[f];
+        for (i32 k = 0; k < fn->instruction_count; k++) {
+            const MalInstruction *in = &fn->instructions[k];
+            const i32 *arguments = nullptr;
+            i32 count = 0;
+            switch (in->opcode) {
+                case MAL_OP_PREPARED_STRING_COMPARE:
+                    if ((i64) (in->as.prepared_string_compare.locale_options >> 6) +
+                            string_base > (UINT32_MAX >> 6)) return false;
+                    break;
+                case MAL_OP_CALL: {
+                    if (!mal_vm_rebased_operand_fits(in->as.call.callee, string_base) ||
+                        !mal_vm_rebased_operand_fits(in->as.call.this_value, string_base)) return false;
+                    const i32 *data = fn->instruction_data + in->as.call.data_offset;
+                    arguments = data + 3 + data[2];
+                    count = data[0];
+                    break;
+                }
+                case MAL_OP_CALL_KNOWN: {
+                    if (!mal_vm_rebased_operand_fits(in->as.call_known.this_value, string_base)) return false;
+                    const i32 *data = fn->instruction_data + in->as.call_known.data_offset;
+                    arguments = data + 1;
+                    count = data[0];
+                    break;
+                }
+                case MAL_OP_CONSTRUCT: {
+                    if (!mal_vm_rebased_operand_fits(in->as.construct.callee, string_base)) return false;
+                    const i32 *data = fn->instruction_data + in->as.construct.data_offset;
+                    arguments = data + 3;
+                    count = data[0];
+                    break;
+                }
+                default: break;
+            }
+            for (i32 argument = 0; argument < count; argument++)
+                if (!mal_vm_rebased_operand_fits(arguments[argument], string_base)) return false;
+        }
+    }
+    return true;
+}
+
 static void mal_vm_rebase_instruction(
     MalInstruction *in, i32 *instruction_data, i32 fn_base, const i32 *global_remap,
     i32 string_base, i32 bigint_base, i32 template_base
@@ -1304,6 +1346,12 @@ static void mal_vm_rebase_instruction(
         case MAL_OP_CREATE_STRING:
             in->as.create_string.string_index += string_base;
             break;
+        case MAL_OP_PREPARED_STRING_COMPARE: {
+            u32 plan = in->as.prepared_string_compare.locale_options;
+            in->as.prepared_string_compare.locale_options =
+                (((plan >> 6) + (u32) string_base) << 6) | (plan & 63);
+            break;
+        }
         case MAL_OP_LOAD_PROPERTY_STATIC:
         case MAL_OP_LOAD_PROPERTY_STATIC_ARRAY_LENGTH:
             in->as.load_property_static.string_index += string_base;
@@ -1520,6 +1568,27 @@ static i32 mal_vm_grown_capacity(i32 capacity, i32 needed) {
     return grown > INT32_MAX ? needed : (i32) grown;
 }
 
+static bool mal_vm_reserve_constant_pages(
+    MalConstantPages *pool, i32 primary_capacity, i32 needed, usize cell_size
+) {
+    if (needed <= primary_capacity) return true;
+    i32 pages = (i32) (((i64) needed - primary_capacity + MAL_CONSTANT_PAGE_SIZE - 1) >>
+                      MAL_CONSTANT_PAGE_BITS);
+    if (pages > pool->capacity) {
+        i32 capacity = mal_vm_grown_capacity(pool->capacity, pages);
+        void **directory = realloc(pool->pages, (usize) capacity * sizeof(void *));
+        if (directory == nullptr) return false;
+        pool->pages = directory;
+        pool->capacity = capacity;
+    }
+    while (pool->count < pages) {
+        void *cells = malloc(MAL_CONSTANT_PAGE_SIZE * cell_size);
+        if (cells == nullptr) return false;
+        pool->pages[pool->count++] = cells;
+    }
+    return true;
+}
+
 i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     MalRuntimeImage *live = &vm->live_runtime_image;
     i32 fn_base = live->function_count;
@@ -1531,17 +1600,37 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     i32 file_base = live->file_count;
     i32 source_position_base = live->source_position_count;
 
-    // String/BigInt constant cells must not move (values point at them), so their
-    // arrays are fixed-capacity and never reallocated. Refuse a splice that would
-    // overflow them up front — before mutating anything — so the failure is clean
-    // (the caller sees -1 with a pending RangeError). Functions/globals below are
-    // index-referenced and may still grow.
-    i32 new_strings = string_base + loaded->string_constant_count;
-    i32 new_bigints = bigint_base + loaded->bigint_constant_count;
-    if (new_strings > vm->string_capacity || new_bigints > vm->bigint_capacity) {
+    i64 strings = (i64) string_base + loaded->string_constant_count;
+    i64 bigints = (i64) bigint_base + loaded->bigint_constant_count;
+    if (loaded->string_constant_count < 0 || loaded->bigint_constant_count < 0 ||
+        strings > INT32_MAX || bigints > INT32_MAX ||
+        !mal_vm_constant_operands_fit(loaded, string_base, (i32) strings)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                           "eval: too many string/BigInt constants");
+                           "runtime image constant indices exceed their representation");
         return -1;
+    }
+    i32 new_strings = (i32) strings;
+    i32 new_bigints = (i32) bigints;
+    if (!mal_vm_reserve_constant_pages(&vm->string_constant_pages,
+            vm->string_primary_capacity, new_strings, sizeof(MalString)) ||
+        !mal_vm_reserve_constant_pages(&vm->bigint_constant_pages,
+            vm->bigint_primary_capacity, new_bigints, sizeof(MalBigInt))) {
+        mal_vm_throw_allocation_error(vm);
+        return -1;
+    }
+    if (new_strings > vm->string_atom_capacity) {
+        i32 capacity = mal_vm_grown_capacity(vm->string_atom_capacity, new_strings);
+        if ((usize) capacity > SIZE_MAX / sizeof(MalString *)) {
+            mal_vm_throw_allocation_error(vm);
+            return -1;
+        }
+        MalString **atoms = realloc(vm->string_constant_atoms, (usize) capacity * sizeof(MalString *));
+        if (atoms == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return -1;
+        }
+        vm->string_constant_atoms = atoms;
+        vm->string_atom_capacity = capacity;
     }
     i32 linked_namespace_slots = 0;
     if (!mal_vm_resolve_module_imports(vm, loaded, global_base, &linked_namespace_slots)) {
@@ -1561,22 +1650,37 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
         else global_remap[link->slot] = link->target;
     }
 
-    // String constants: append the loaded cells (immortal, code units in the
-    // loader arena). Constants, so no rebase.
-    if (loaded->string_constant_count > 0) {
-        memcpy((MalString *) live->string_constants + string_base, loaded->string_constants,
-               sizeof(MalString) * (usize) loaded->string_constant_count);
-        for (i32 i = string_base; i < new_strings; i++) {
-            vm->string_constant_atoms[i] = mal_property_atomize_string(
-                vm, (MalString *) &live->string_constants[i]);
+    // Copy by storage span so the common contiguous append stays one memcpy.
+    for (i32 copied = 0; copied < loaded->string_constant_count;) {
+        i32 index = string_base + copied;
+        i32 available = index < vm->string_primary_capacity
+            ? vm->string_primary_capacity - index
+            : MAL_CONSTANT_PAGE_SIZE - ((index - vm->string_primary_capacity) & (MAL_CONSTANT_PAGE_SIZE - 1));
+        i32 remaining = loaded->string_constant_count - copied;
+        i32 count = remaining < available ? remaining : available;
+        memcpy(mal_vm_string_constant(vm, index), loaded->string_constants + copied,
+               sizeof(MalString) * (usize) count);
+        copied += count;
+    }
+    for (i32 i = string_base; i < new_strings; i++) {
+        vm->string_constant_atoms[i] = mal_property_atomize_string(vm, mal_vm_string_constant(vm, i));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            free(global_remap);
+            return -1;
         }
     }
     live->string_constant_count = new_strings;
 
-    // BigInt constants: append (self-contained — the value is inline).
-    if (loaded->bigint_constant_count > 0) {
-        memcpy((MalBigInt *) live->bigint_constants + bigint_base, loaded->bigint_constants,
-               sizeof(MalBigInt) * (usize) loaded->bigint_constant_count);
+    for (i32 copied = 0; copied < loaded->bigint_constant_count;) {
+        i32 index = bigint_base + copied;
+        i32 available = index < vm->bigint_primary_capacity
+            ? vm->bigint_primary_capacity - index
+            : MAL_CONSTANT_PAGE_SIZE - ((index - vm->bigint_primary_capacity) & (MAL_CONSTANT_PAGE_SIZE - 1));
+        i32 remaining = loaded->bigint_constant_count - copied;
+        i32 count = remaining < available ? remaining : available;
+        memcpy(mal_vm_bigint_constant(vm, index), loaded->bigint_constants + copied,
+               sizeof(MalBigInt) * (usize) count);
+        copied += count;
     }
     live->bigint_constant_count = new_bigints;
 
@@ -2480,12 +2584,12 @@ static void mal_vm_run_until_frame_count(
                 continue;
             case MAL_OP_CREATE_STRING:
                 registers[instruction->as.create_string.dst] = mal_value_from_string(
-                    &vm->runtime_image->string_constants[instruction->as.create_string.string_index]);
+                    mal_vm_string_constant(vm, instruction->as.create_string.string_index));
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             case MAL_OP_CREATE_BIGINT:
                 registers[instruction->as.create_bigint.dst] = mal_value_from_bigint(
-                    &vm->runtime_image->bigint_constants[instruction->as.create_bigint.bigint_index]);
+                    mal_vm_bigint_constant(vm, instruction->as.create_bigint.bigint_index));
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             case MAL_OP_CREATE_OBJECT:
@@ -4449,7 +4553,7 @@ MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
 
                 const MalString *name = function->name_string_index >= 0 &&
                         function->name_string_index < vm->runtime_image->string_constant_count
-                    ? &vm->runtime_image->string_constants[function->name_string_index]
+                    ? mal_vm_string_constant(vm, function->name_string_index)
                     : nullptr;
                 if (name != nullptr && mal_string_length(name) > 0) {
                     mal_stack_buf_push_string(&buf, name);
@@ -5671,7 +5775,7 @@ MalString *mal_vm_callable_name(MalVm *vm, MalValue callee) {
         ].name_string_index;
 
         if (name_index >= 0 && name_index < vm->runtime_image->string_constant_count) {
-            return &vm->runtime_image->string_constants[name_index];
+            return mal_vm_string_constant(vm, name_index);
         }
 
         return mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);

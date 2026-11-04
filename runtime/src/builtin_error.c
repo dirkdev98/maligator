@@ -645,7 +645,7 @@ static MalObject *mal_error_new_callsite(MalVm *vm, i32 function_index, i32 pos_
     MalValue function_name = mal_value_new_null();
     if (function->name_string_index >= 0
         && function->name_string_index < vm->runtime_image->string_constant_count) {
-        MalString *name = &vm->runtime_image->string_constants[function->name_string_index];
+        MalString *name = mal_vm_string_constant(vm, function->name_string_index);
         if (mal_string_length(name) > 0) {
             function_name = mal_value_from_string(name);
         }

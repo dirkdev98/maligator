@@ -53,7 +53,7 @@ describe("immutable native string storage", () => {
 		},
 	);
 
-	it("uses string-base relocation for an immutable literal expression", () => {
+	it("uses page-aware string-base relocation for an immutable literal expression", () => {
 		const out = literal();
 		const source = resolveNativeLinks(
 			emitCompiledFunction(
@@ -69,7 +69,7 @@ describe("immutable native string storage", () => {
 			)!,
 		);
 		expect(source).toContain(
-			`vm->runtime_image->string_constants[(__mal_relocation->string_base + ${out.op.stringIndex})]`,
+			`mal_vm_string_constant(vm, (__mal_relocation->string_base + ${out.op.stringIndex}))`,
 		);
 	});
 

@@ -35,7 +35,7 @@ int main(void) {
         return 2;
     for (i32 index = 0; index < vm.runtime_image->function_count; index++) {
         i32 name = vm.runtime_image->functions[index].name_string_index;
-        if (name >= 0 && mal_string_equals_ascii(&vm.runtime_image->string_constants[name], "numericWorkerSpin"))
+        if (name >= 0 && mal_string_equals_ascii(mal_vm_string_constant(&vm, name), "numericWorkerSpin"))
             spin_function_index = index;
     }
     if (spin_function_index < 0) return 3;

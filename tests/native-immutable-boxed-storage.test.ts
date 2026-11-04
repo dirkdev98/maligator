@@ -87,7 +87,7 @@ describe("immutable boxed native storage", () => {
 			)!,
 		);
 		expect(relocated).toContain(
-			`runtime_image->bigint_constants[(__mal_relocation->bigint_base + ${out.op.bigintIndex})]`,
+			`mal_vm_bigint_constant(vm, (__mal_relocation->bigint_base + ${out.op.bigintIndex}))`,
 		);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
 			out.image,

@@ -333,8 +333,8 @@ int main(void) {
     MalString *to_string_name = mal_intrinsic_ascii(&vm, "toString");
     MalValue to_string_key = mal_value_new_undefined();
     for (i32 i = 0; i < vm.runtime_image->string_constant_count; i++) {
-        if (mal_string_equals(&vm.runtime_image->string_constants[i], to_string_name)) {
-            to_string_key = mal_value_from_string(&vm.runtime_image->string_constants[i]);
+        if (mal_string_equals(mal_vm_string_constant(&vm, i), to_string_name)) {
+            to_string_key = mal_value_from_string(mal_vm_string_constant(&vm, i));
             break;
         }
     }
@@ -380,7 +380,7 @@ int main(void) {
     for (i32 i = 0; i < vm.runtime_image->function_count; i++) {
         i32 name_index = vm.runtime_image->functions[i].name_string_index;
         if (name_index >= 0 &&
-            mal_string_equals(&vm.runtime_image->string_constants[name_index], call_cache_function_name)) {
+            mal_string_equals(mal_vm_string_constant(&vm, name_index), call_cache_function_name)) {
             call_cache_function_index = i;
             break;
         }

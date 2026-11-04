@@ -1618,6 +1618,14 @@ typedef struct MalShapeCopyCacheEntry {
     bool identity_projection;
 } MalShapeCopyCacheEntry;
 
+enum { MAL_CONSTANT_PAGE_BITS = 12, MAL_CONSTANT_PAGE_SIZE = 1 << MAL_CONSTANT_PAGE_BITS };
+
+typedef struct {
+    void **pages;
+    i32 count;
+    i32 capacity;
+} MalConstantPages;
+
 typedef struct MalVm {
     // Generated code reaches these on every call and throw check; leading the struct
     // keeps each access within a load's immediate offset.
@@ -1676,15 +1684,10 @@ typedef struct MalVm {
     i32 initial_string_constant_count;
 
     /**
-     * VM-owned, mutable runtime image that `runtime_image` points at. Initialized
-     * as a shallow copy of the input image with its function / string-constant /
-     * bigint-constant / literal-template / CommonJS module tables relocated into
-     * growable VM-owned
-     * storage (the
-     * instruction, handler, and code-unit data the rows point at stays in place —
-     * static, or a loader arena). Runtime eval splices more functions, globals,
-     * and constants in via mal_vm_splice_runtime_image without disturbing the const
-     * `vm->runtime_image->...` access paths. The *_capacity fields size that growth.
+     * VM-owned image extended by runtime splices. Constant tables point at stable
+     * primary cells; indices beyond their capacities use overflow pages through
+     * the constant accessors. Instruction and code-unit backing stays with the
+     * source image until VM teardown.
      */
     MalRuntimeImage live_runtime_image;
     /**
@@ -1694,8 +1697,11 @@ typedef struct MalVm {
      */
     MalCompiledFunction *call_entries;
     i32 function_capacity;
-    i32 string_capacity;
-    i32 bigint_capacity;
+    i32 string_primary_capacity;
+    i32 bigint_primary_capacity;
+    MalConstantPages string_constant_pages;
+    MalConstantPages bigint_constant_pages;
+    i32 string_atom_capacity;
     i32 literal_template_capacity;
     i32 cjs_module_capacity;
     i32 file_capacity;
@@ -2168,6 +2174,22 @@ typedef struct MalVm {
         struct MalShape *final;
     } private_append_cache[128];
 } MalVm;
+
+static inline MalString *mal_vm_string_constant(const MalVm *vm, i32 index) {
+    if (index < vm->string_primary_capacity)
+        return &vm->runtime_image->string_constants[index];
+    u32 offset = (u32) (index - vm->string_primary_capacity);
+    MalString *page = vm->string_constant_pages.pages[offset >> MAL_CONSTANT_PAGE_BITS];
+    return &page[offset & (MAL_CONSTANT_PAGE_SIZE - 1)];
+}
+
+static inline MalBigInt *mal_vm_bigint_constant(const MalVm *vm, i32 index) {
+    if (index < vm->bigint_primary_capacity)
+        return &vm->runtime_image->bigint_constants[index];
+    u32 offset = (u32) (index - vm->bigint_primary_capacity);
+    MalBigInt *page = vm->bigint_constant_pages.pages[offset >> MAL_CONSTANT_PAGE_BITS];
+    return &page[offset & (MAL_CONSTANT_PAGE_SIZE - 1)];
+}
 
 static inline u32 mal_static_slot_cache_index(const MalShape *shape, const byte *name) {
     return (u32) ((((uptr) name ^ ((uptr) shape >> 4)) * 0x9E3779B97F4A7C15ull) >> 32) &

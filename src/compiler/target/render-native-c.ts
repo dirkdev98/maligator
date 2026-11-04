@@ -1070,10 +1070,12 @@ function nativeRelocationExpressions(
 		templateOffset: (index) => indexed("literal_template_base", index),
 		// Widening mutates the row, so literals must use the current VM's copy.
 		stringValue: (index) =>
-			`mal_value_from_string(&vm->runtime_image->string_constants[${indexed("string_base", index)}])`,
+			enabled
+				? `mal_value_from_string(mal_vm_string_constant(vm, ${indexed("string_base", index)}))`
+				: `mal_value_from_string(&vm->runtime_image->string_constants[${index}])`,
 		bigintValue: (index, suffix) =>
 			enabled
-				? `mal_value_from_bigint(&vm->runtime_image->bigint_constants[${indexed("bigint_base", index)}])`
+				? `mal_value_from_bigint(mal_vm_bigint_constant(vm, ${indexed("bigint_base", index)}))`
 				: `mal_value_from_bigint(&${reference(`mal_bigints${suffix}`)}[${index}])`,
 	};
 }
@@ -10997,7 +10999,7 @@ class NativeInstructionEmission {
 			if (pattern?.kind === "string" && flags?.kind === "string") {
 				const value = `known_result_${this.ip}`;
 				return [
-					`MalValue ${value} = mal_regexp_create(vm, &vm->runtime_image->string_constants[${this.context.relocation.stringIndex(pattern.index)}], &vm->runtime_image->string_constants[${this.context.relocation.stringIndex(flags.index)}]);`,
+					`MalValue ${value} = mal_regexp_create(vm, mal_value_to_string(${this.context.relocation.stringValue(pattern.index)}), mal_value_to_string(${this.context.relocation.stringValue(flags.index)}));`,
 					this.throwCheck(),
 					`r${instruction.dst} = ${this.callValue(instruction.dst, value)};`,
 					this.callPoll(),

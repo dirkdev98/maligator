@@ -261,9 +261,21 @@ static MalString *mal_vm_string_constant_atom(MalVm *vm, const MalString *string
         string, vm->initial_string_constants,
         vm->initial_string_constant_count);
     if (index < 0) {
+        i32 count = vm->runtime_image->string_constant_count;
+        if (count > vm->string_primary_capacity) count = vm->string_primary_capacity;
         index = mal_vm_string_table_index(
-            string, vm->runtime_image->string_constants,
-            vm->runtime_image->string_constant_count);
+            string, vm->runtime_image->string_constants, count);
+    }
+    if (index < 0) {
+        i32 remaining = vm->runtime_image->string_constant_count - vm->string_primary_capacity;
+        for (i32 page = 0; remaining > 0; page++, remaining -= MAL_CONSTANT_PAGE_SIZE) {
+            i32 count = remaining < MAL_CONSTANT_PAGE_SIZE ? remaining : MAL_CONSTANT_PAGE_SIZE;
+            i32 offset = mal_vm_string_table_index(string, vm->string_constant_pages.pages[page], count);
+            if (offset >= 0) {
+                index = vm->string_primary_capacity + page * MAL_CONSTANT_PAGE_SIZE + offset;
+                break;
+            }
+        }
     }
     if (index < 0) return nullptr;
     MAL_PERF_COUNT(property_constant_atom_hits);
@@ -821,14 +833,14 @@ void mal_op_create_boolean(MalCallable *callable, const MalInstruction *instruct
 void mal_op_create_string(MalCallable *callable, const MalInstruction *instruction) {
     // The string constant is an immortal, pre-hashed static; hand back a
     // pointer instead of allocating a fresh MalString per execution.
-    MalString *string = &callable->vm->runtime_image->string_constants[instruction->as.create_string.string_index];
+    MalString *string = mal_vm_string_constant(callable->vm, instruction->as.create_string.string_index);
     callable->registers[instruction->as.create_string.dst] = mal_value_from_string(string);
 }
 
 void mal_op_create_bigint(MalCallable *callable, const MalInstruction *instruction) {
     // The bigint constant is an immortal static with its value baked at compile
     // time; hand back a pointer instead of parsing and allocating per execution.
-    MalBigInt *bigint = &callable->vm->runtime_image->bigint_constants[instruction->as.create_bigint.bigint_index];
+    MalBigInt *bigint = mal_vm_bigint_constant(callable->vm, instruction->as.create_bigint.bigint_index);
     callable->registers[instruction->as.create_bigint.dst] = mal_value_from_bigint(bigint);
 }
 
@@ -843,7 +855,7 @@ static MalValue mal_op_value_operand(MalCallable *callable, i32 operand) {
     if (operand <= MAL_VALUE_OPERAND_STRING_BASE
         && operand >= MAL_VALUE_OPERAND_STRING_MIN) {
         i32 index = MAL_VALUE_OPERAND_STRING_BASE - operand;
-        return mal_value_from_string(&callable->vm->runtime_image->string_constants[index]);
+        return mal_value_from_string(mal_vm_string_constant(callable->vm, index));
     }
     if (operand <= MAL_VALUE_OPERAND_I28_BASE && operand >= MAL_VALUE_OPERAND_I28_MIN) {
         i32 payload = MAL_VALUE_OPERAND_I28_BASE - operand;
@@ -1097,7 +1109,7 @@ static bool mal_literal_decode_value(
             if (!mal_literal_read(cursor, &index) || index >= (u32) vm->runtime_image->string_constant_count) {
                 return false;
             }
-            *out = mal_value_from_string(&vm->runtime_image->string_constants[index]);
+            *out = mal_value_from_string(mal_vm_string_constant(vm, index));
             return true;
         }
         case MAL_LITERAL_BIGINT: {
@@ -1105,7 +1117,7 @@ static bool mal_literal_decode_value(
             if (!mal_literal_read(cursor, &index) || index >= (u32) vm->runtime_image->bigint_constant_count) {
                 return false;
             }
-            *out = mal_value_from_bigint(&vm->runtime_image->bigint_constants[index]);
+            *out = mal_value_from_bigint(mal_vm_bigint_constant(vm, index));
             return true;
         }
         case MAL_LITERAL_HOLE:
@@ -1210,7 +1222,7 @@ MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind
             u32 slot;
             if (!mal_literal_read(&cursor, &slot) ||
                 slot >= (u32) vm->runtime_image->string_constant_count) { valid = false; break; }
-            MalString *string = &vm->runtime_image->string_constants[slot];
+            MalString *string = mal_vm_string_constant(vm, slot);
             if (query_kind == 1 && mal_ops_is_number(roots[0])) {
                 u32 key_index;
                 equal = mal_vm_string_to_array_index(string, &key_index) &&
@@ -1537,7 +1549,7 @@ MalValue mal_vm_op_create_module_namespace(
         return mal_value_new_undefined();
     }
     for (i32 i = 0; i < count; i++) {
-        exports[i].name = &vm->runtime_image->string_constants[name_indices[i]];
+        exports[i].name = mal_vm_string_constant(vm, name_indices[i]);
         exports[i].slot = slots[i];
     }
 
@@ -1569,7 +1581,7 @@ static MalArrayObject *mal_vm_build_template_string_array(MalVm *vm, const i32 *
     for (i32 i = 0; i < count; i++) {
         MalValue element = indices[i] < 0
                                ? mal_value_new_undefined()
-                               : mal_value_from_string(&vm->runtime_image->string_constants[indices[i]]);
+                               : mal_value_from_string(mal_vm_string_constant(vm, indices[i]));
         MalKey key = mal_key_index(i);
         MalPropertyDesc desc = {.flags = MAL_PROPERTY_ENUMERABLE, .value = element};
         mal_object_define_own(&array->object, key, &desc);
@@ -1678,7 +1690,7 @@ void mal_op_with_exit(MalCallable *callable, const MalInstruction *instruction) 
 // then reads the static binding). A getter / @@unscopables probe can throw; callers
 // check the completion.
 MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index) {
-    MalValue name = mal_value_from_string(&vm->runtime_image->string_constants[name_string_index]);
+    MalValue name = mal_value_from_string(mal_vm_string_constant(vm, name_string_index));
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
         for (MalEnv *e = env; e != nullptr && !mal_env_is_single_owner(e) &&
@@ -1712,7 +1724,7 @@ void mal_op_with_get(MalCallable *callable, const MalInstruction *instruction) {
 // Shared: resolve the reference BASE (the with-object itself, not its value) so the
 // caller reads/writes the property through it. EMPTY sentinel on a miss.
 MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_index) {
-    MalValue name = mal_value_from_string(&vm->runtime_image->string_constants[name_string_index]);
+    MalValue name = mal_value_from_string(mal_vm_string_constant(vm, name_string_index));
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
         for (MalEnv *e = env; e != nullptr && !mal_env_is_single_owner(e) &&
@@ -1747,7 +1759,7 @@ void mal_op_with_resolve_base(MalCallable *callable, const MalInstruction *instr
 // an accessor). Ordinary `with` env records have slot_count 1, so this is a
 // no-op for them.
 bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue value) {
-    MalValue name = mal_value_from_string(&vm->runtime_image->string_constants[name_string_index]);
+    MalValue name = mal_value_from_string(mal_vm_string_constant(vm, name_string_index));
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
         for (MalEnv *e = env; e != nullptr && !mal_env_is_single_owner(e) &&
@@ -1795,7 +1807,7 @@ void mal_op_create_empty(MalCallable *callable, const MalInstruction *instructio
 // A no-op (no completion change) otherwise; callers check vm->completion.
 void mal_vm_op_throw_if_tdz(MalVm *vm, MalValue value, i32 name_string_index) {
     if (mal_value_is_empty(value)) {
-        MalString *constant = &vm->runtime_image->string_constants[name_string_index];
+        MalString *constant = mal_vm_string_constant(vm, name_string_index);
         MalValue message = mal_vm_add(
             vm, mal_value_from_string(constant),
             mal_value_from_string(mal_intrinsic_ascii(vm, "' before initialization")));
@@ -1978,7 +1990,7 @@ static MalFunctionObject *mal_vm_new_closure(
     }
     MalString *name = definition->name_string_index >= 0 &&
             definition->name_string_index < vm->runtime_image->string_constant_count
-        ? &vm->runtime_image->string_constants[definition->name_string_index]
+        ? mal_vm_string_constant(vm, definition->name_string_index)
         : mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
     MalShape *shape = vm->closure_metadata_shape;
     if (__builtin_expect(shape == nullptr, 0)) {
@@ -8409,7 +8421,7 @@ void mal_op_delete_property(MalCallable *callable, const MalInstruction *instruc
 }
 
 void mal_vm_op_load_undeclared(MalVm *vm, i32 name_string_index) {
-    MalString *constant = &vm->runtime_image->string_constants[name_string_index];
+    MalString *constant = mal_vm_string_constant(vm, name_string_index);
     MalValue name = mal_value_from_string(constant);
     MalValue message = mal_vm_add(
         vm, name, mal_value_from_string(mal_intrinsic_ascii(vm, " is not defined")));
@@ -8812,7 +8824,7 @@ void mal_op_concat_strings(MalCallable *callable, const MalInstruction *instruct
 
 void mal_op_prepared_string_compare(MalCallable *callable, const MalInstruction *instruction) {
     u32 plan = instruction->as.prepared_string_compare.locale_options;
-    MalString *locale = &callable->vm->runtime_image->string_constants[plan >> 6];
+    MalString *locale = mal_vm_string_constant(callable->vm, plan >> 6);
     usize length = mal_string_length(locale);
     byte bytes[128];
     for (usize i = 0; i < length; i++) bytes[i] = (byte) mal_string_code_unit_at(locale, i);
