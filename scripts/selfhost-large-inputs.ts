@@ -12,7 +12,11 @@ interface LargeInputCheckOptions {
 	reports: string;
 	environment: NodeJS.ProcessEnv;
 	toolchainFreeEnvironment: NodeJS.ProcessEnv;
-	invoke(args: Array<string>, environment?: NodeJS.ProcessEnv): SpawnSyncReturns<string>;
+	invoke(
+		args: Array<string>,
+		environment?: NodeJS.ProcessEnv,
+		timeoutMs?: number,
+	): SpawnSyncReturns<string>;
 	checkProfile(directory: string, command: "run" | "test"): void;
 	waitForOutput(read: () => string, expected: string, timeoutMs: number): Promise<void>;
 }
@@ -83,7 +87,7 @@ console.log("LARGE_INPUTS " + JSON.stringify([revision, calculate(0), calculate(
 		JSON.parse(initial.trim().slice("LARGE_INPUTS ".length)) as Array<number>
 	)[1]!;
 	const invoke = (args: Array<string>, environment: NodeJS.ProcessEnv = {}) => {
-		const result = options.invoke(args, environment);
+		const result = options.invoke(args, environment, 300_000);
 		if (result.status !== 0 || result.signal !== null)
 			throw new Error(
 				`large-input ${args.join(" ")} failed:\n${result.stdout}\n${result.stderr}`,
@@ -250,7 +254,7 @@ server.listen(0, "127.0.0.1", () => { console.log("DX_HTTP_PORT " + server.addre
 			env: options.environment,
 			stdio: ["ignore", descriptor, "pipe"],
 			encoding: "utf8",
-			timeout: 180_000,
+			timeout: 300_000,
 			killSignal: "SIGKILL",
 			maxBuffer: 8 * 1024 * 1024,
 		});

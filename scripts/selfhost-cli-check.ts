@@ -189,18 +189,23 @@ writeFileSync(
 );
 
 let invocation = 0;
-function invokeCaptured(args: Array<string>, envOverrides: NodeJS.ProcessEnv = {}) {
+function invokeCaptured(
+	args: Array<string>,
+	envOverrides: NodeJS.ProcessEnv = {},
+	timeoutMs = supervisorOnly ? 30_000 : 180_000,
+) {
+	const startedAt = performance.now();
 	const result = spawnSync(distributedCli, args, {
 		cwd: project,
 		env: { ...isolatedEnv, ...envOverrides },
 		encoding: "utf-8",
-		timeout: supervisorOnly ? 30_000 : 180_000,
+		timeout: timeoutMs,
 		killSignal: "SIGKILL",
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	writeFileSync(
 		path.join(reports, `command-${++invocation}.json`),
-		`${JSON.stringify({ args, cli, pid: result.pid, status: result.status, signal: result.signal, error: result.error?.message, stdout: result.stdout, stderr: result.stderr }, null, 2)}\n`,
+		`${JSON.stringify({ args, cli, pid: result.pid, durationMs: performance.now() - startedAt, timeoutMs, status: result.status, signal: result.signal, error: result.error?.message, stdout: result.stdout, stderr: result.stderr }, null, 2)}\n`,
 	);
 	if (result.error)
 		throw new Error(
