@@ -1,14 +1,14 @@
 {
   "sha": "3655e7464de3d52643ecddd4b5f9f4f3e7f62398",
   "summary": {
-    "FAILED": 913,
-    "PASSED": 52665
+    "FAILED": 911,
+    "PASSED": 52667
   },
   "skips": {},
   "code": {
     "compiledFiles": 94218,
     "functionCount": 2985900,
-    "instructionCount": 110043208
+    "instructionCount": 108080801
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",
@@ -13205,7 +13205,7 @@
     "test/staging/sm/RegExp/split-obj.js": "PASSED",
     "test/staging/sm/RegExp/split.js": "PASSED",
     "test/staging/sm/RegExp/toString.js": "PASSED",
-    "test/staging/sm/RegExp/unicode-class-braced.js": "FAILED",
+    "test/staging/sm/RegExp/unicode-class-braced.js": "PASSED",
     "test/staging/sm/RegExp/unicode-class-negated.js": "PASSED",
     "test/staging/sm/RegExp/unicode-everything.js": "PASSED",
     "test/staging/sm/RegExp/unicode-ignoreCase-word-boundary.js": "PASSED",
@@ -26617,7 +26617,7 @@
     "test/staging/sm/String/split-01.js": "PASSED",
     "test/staging/sm/String/split-xregexp.js": "PASSED",
     "test/staging/sm/String/string-space-trim.js": "PASSED",
-    "test/staging/sm/String/unicode-braced.js": "FAILED",
+    "test/staging/sm/String/unicode-braced.js": "PASSED",
     "test/staging/sm/Symbol/conversions.js": "PASSED",
     "test/staging/sm/Symbol/errors.js": "PASSED",
     "test/staging/sm/Symbol/json-stringify-values.js": "PASSED",
