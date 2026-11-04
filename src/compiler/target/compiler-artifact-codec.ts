@@ -115,7 +115,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 360;
+export const COMPILER_ARTIFACT_VERSION = 361;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -923,6 +923,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		if (plan.kind === "array-iteration") {
 			w.i32(plan.initializeIp);
 			w.i32(plan.iterator);
+			w.u8(plan.privateColumns === true ? 1 : 0);
 			w.i32Array([...(plan.records ?? [])]);
 			w.u8(plan.recordGraph === undefined ? 0 : 1);
 			if (plan.recordGraph !== undefined) {
@@ -1531,9 +1532,11 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 					? (() => {
 							const initializeIp = r.i32(),
 								iterator = r.i32(),
+								privateColumns = r.u8(),
 								records = r.i32Array();
 							const graphTag = r.u8();
-							if (graphTag > 1) throw new RangeError("Invalid record iteration graph");
+							if (graphTag > 1 || privateColumns > 1)
+								throw new RangeError("Invalid record iteration graph");
 							const recordGraph =
 								graphTag === 0
 									? undefined
@@ -1570,6 +1573,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 								kind: "array-iteration" as const,
 								initializeIp,
 								iterator,
+								...(privateColumns === 1 ? { privateColumns: true as const } : {}),
 								...(records.length === 0 ? {} : { records }),
 								...(recordGraph === undefined ? {} : { recordGraph }),
 							};

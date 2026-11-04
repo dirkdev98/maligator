@@ -1498,9 +1498,16 @@ function lowerStorage(
 	suspension = lowerNativeSuspension(native, body),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	stackRoots: NativeStackRoots = "precise",
+	functions: ReadonlyArray<BytecodeFunction> = [],
 ): NativeStoragePlan {
 	const fn = native.body;
-	const selection = analyzeNativeFastPaths(native, entry, stringConstants, body);
+	const selection = analyzeNativeFastPaths(
+		native,
+		entry,
+		stringConstants,
+		body,
+		functions,
+	);
 	const controlEntries = {
 		externalGroups: nativeFastPathWindows(selection.plans, false).map(
 			(window) => window.claimedIps,
@@ -1700,6 +1707,7 @@ export function lowerNativeFunctionStorage(
 			undefined,
 			stringConstants,
 			stackRoots,
+			functions,
 		),
 		directEntries: native.directEntries.map((entry) => ({
 			...entry,
@@ -1712,6 +1720,7 @@ export function lowerNativeFunctionStorage(
 				undefined,
 				stringConstants,
 				stackRoots,
+				functions,
 			),
 		})),
 	};
@@ -1937,6 +1946,7 @@ export function validateNativeStorage(
 					(expected.kind === "array-iteration" &&
 						plan.initializeIp === expected.initializeIp &&
 						plan.iterator === expected.iterator &&
+						plan.privateColumns === expected.privateColumns &&
 						sameRecordGraph(plan.recordGraph, expected.recordGraph) &&
 						(plan.records ?? []).join() === (expected.records ?? []).join())) &&
 				(plan.kind !== "fixed-numeric" ||
@@ -2298,6 +2308,7 @@ export function validateNativeStorage(
 			suspension,
 			stringConstants,
 			stackRoots,
+			functions,
 		);
 		const projected = projectStorageBodyFacts(variant, body, selected.controlFlow, {
 			externalGroups: nativeFastPathWindows(selected, false).map(

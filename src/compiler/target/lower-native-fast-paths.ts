@@ -20,6 +20,7 @@ import { selectNativeMapEntries } from "./native-map-entry-plan.ts";
 import type { NativeMapEntryPlan } from "./native-map-entry-plan.ts";
 import { selectNativeObjectEnumerationSnapshots } from "./native-object-enumeration-snapshot.ts";
 import type { NativeObjectEnumerationSnapshotPlan } from "./native-object-enumeration-snapshot.ts";
+import { nativeRecordGraphIsPrivate } from "./native-record-columns.ts";
 import { analyzeRecordIteration } from "./native-record-iteration.ts";
 import type { NativeRecordIterationGraph } from "./native-record-iteration.ts";
 import {
@@ -217,6 +218,7 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 				readonly iterator: number;
 				readonly records?: ReadonlyArray<number>;
 				readonly recordGraph?: NativeRecordIterationGraph;
+				readonly privateColumns?: true;
 		  }
 		| {
 				readonly kind: "fixed-numeric";
@@ -2801,6 +2803,7 @@ function lowerArrayIterationRegion(
 	body: NativeBodyFacts,
 	conflicts: (ip: number) => boolean,
 	cursor: { readonly initializeIp: number; readonly iterator: number },
+	functions: ReadonlyArray<BytecodeFunction>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const step = fn.instructions[header]!;
 	if (step.opcode !== "ITERATOR_STEP" || conflicts(header)) return undefined;
@@ -2866,6 +2869,15 @@ function lowerArrayIterationRegion(
 			initializeIp: cursor.initializeIp,
 			iterator: cursor.iterator,
 			recordGraph: recordFlow.graph,
+			...(nativeRecordGraphIsPrivate(
+				fn,
+				functions,
+				cursor.initializeIp,
+				[...shape.members, shape.entryIp],
+				recordFlow,
+			)
+				? { privateColumns: true as const }
+				: {}),
 			id: header,
 			entryIp: shape.entryIp,
 			inputs: [...inputs].sort((a, b) => a - b),
@@ -2957,6 +2969,7 @@ function lowerNumericLoopRegion(
 	cursorSteps: ReadonlyMap<number, { initializeIp: number; iterator: number }>,
 	codeUnitReads: ReadonlySet<number>,
 	dataViewCalls: ReadonlyMap<number, NativeDataViewCall>,
+	functions: ReadonlyArray<BytecodeFunction>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const first = fn.instructions[header];
 	const cursor = first?.opcode === "ITERATOR_STEP" ? cursorSteps.get(header) : undefined;
@@ -2968,6 +2981,7 @@ function lowerNumericLoopRegion(
 			body,
 			conflicts,
 			cursor,
+			functions,
 		);
 	// Fixed-storage headers are comparisons, a view's length load, or a checked element read.
 	if (
@@ -3879,6 +3893,7 @@ export function analyzeNativeFastPaths(
 	entry?: NativeDirectEntryPlan,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	body = analyzeNativeBodyFacts(native.body),
+	functions: ReadonlyArray<BytecodeFunction> = [],
 ): {
 	readonly plans: NativeFastPathPlans;
 	readonly refineForControlFlow: (body: NativeBodyFacts) => NativeFastPathPlans;
@@ -4270,6 +4285,7 @@ export function analyzeNativeFastPaths(
 				cursorSteps,
 				codeUnitReads,
 				dataViewCalls,
+				functions,
 			);
 			if (plan === undefined) continue;
 			// Without a counter the trip count is unknown, and proven element accesses are

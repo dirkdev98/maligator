@@ -1480,12 +1480,61 @@ function integralLoopRegisters(
 	);
 }
 
+function recordColumnsName(plan: NativeNumericLoopRegionPlan): string {
+	return `__record_columns_${plan.id}`;
+}
+
+function recordColumn(
+	plan: Extract<NativeNumericLoopRegionPlan, { kind: "array-iteration" }>,
+	field: number,
+	pointer = false,
+): string {
+	const graph = plan.recordGraph!;
+	const descriptor = graph.fields[field];
+	const type = pointer
+		? "MalValue *"
+		: descriptor?.kind === "number"
+			? "f64"
+			: descriptor?.kind === "boolean"
+				? "u64"
+				: "MalValue";
+	const column = pointer
+		? 1 +
+			graph.fields.length +
+			graph.fields.slice(0, field).filter((item) => item.stored).length
+		: field + 1;
+	const cache = recordColumnsName(plan);
+	return `((${type} *) (${cache}_data + (size_t) ${column} * ${cache}_count))`;
+}
+
+function flushRecordColumns(
+	plan: Extract<NativeNumericLoopRegionPlan, { kind: "array-iteration" }>,
+): string {
+	const cache = recordColumnsName(plan);
+	const stores = plan.recordGraph!.fields.flatMap((field, index) =>
+		field.stored
+			? [
+					`if (${recordColumn(plan, index, true)}[__row] != nullptr) *${recordColumn(plan, index, true)}[__row] = mal_ops_number_value(${recordColumn(plan, index)}[__row]);`,
+				]
+			: [],
+	);
+	// Both sides of these stores are Numbers, so no heap reference barrier is needed.
+	return `if (${cache}_state == 2) { MAL_PERF_COUNT(record_columns_flushes); for (u32 __row = 0; __row < ${cache}_count; __row++) { ${stores.join(" ")} } free(${cache}_data); ${cache}_data = nullptr; ${cache}_owner = MAL_VALUE_UNDEFINED; ${cache}_state = 3; }`;
+}
+
 function emitRecordIterationRegion(
 	fn: BytecodeFunction,
 	plan: Extract<NativeNumericLoopRegionPlan, { kind: "array-iteration" }>,
 	reps: ReadonlyArray<VmRegisterRepresentation>,
 	propertyCache: string,
+	poll: (ip: number, spill: string, isolate: string) => string,
+	columns?: boolean,
 ): ReadonlyArray<string> {
+	if (plan.privateColumns === true && columns === undefined)
+		return [
+			...emitRecordIterationRegion(fn, plan, reps, propertyCache, poll, true),
+			...emitRecordIterationRegion(fn, plan, reps, propertyCache, poll, false),
+		];
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
 	const order = numericLoopOrder(fn, plan.id, members, true);
 	const step = fn.instructions[plan.id];
@@ -1502,7 +1551,8 @@ function emitRecordIterationRegion(
 	if (flow === undefined || order === undefined || step?.opcode !== "ITERATOR_STEP")
 		throw new Error("Invalid record iteration region");
 	const graph = flow.graph;
-	const id = `__record_loop_${plan.id}`;
+	const id = `__record_loop_${plan.id}${columns ? "_columns" : ""}`;
+	const cache = recordColumnsName(plan);
 	const local = (register: number) => `${id}_r${register}`;
 	const owner = (node: number) => `${id}_o${node}`;
 	const handle = (field: number) => `${id}_f${field}`;
@@ -1544,8 +1594,11 @@ function emitRecordIterationRegion(
 	const resume = (target: number, outputs: ReadonlyArray<number>) =>
 		`{ ${spill(outputs)} ${cursor}.index = ${id}_index; ${cursor}.done = ${id}_done; goto L${target}; }`;
 	const exits = new Map(plan.exits.map((exit) => [exit.targetIp, exit.outputs]));
-	const reach = (target: number) => {
-		if (target === plan.id) return `goto ${id}_next;`;
+	const reach = (target: number, source?: number) => {
+		if (target === plan.id) {
+			const assigned = source === undefined ? undefined : flow.assigned.get(source);
+			return `${columns && source !== undefined ? poll(source, spill([...flow.written].filter((r) => flow.kinds.has(r) && assigned?.has(r))), `${id}_isolate`) : ""} goto ${id}_next;`;
+		}
 		const outputs = exits.get(target);
 		if (outputs !== undefined) return resume(target, outputs);
 		if (!members.has(target)) throw new Error("Invalid record iteration target");
@@ -1556,6 +1609,7 @@ function emitRecordIterationRegion(
 		`mal_vm_dense_number_storage(r${plan.iterator}, &${id}_array)`,
 	];
 	const lines: Array<string> = ["{", `  MalDenseNumberSpan ${id}_array = {0};`];
+	const declined = `${id}_declined`;
 	for (const [register, mask] of flow.kinds) {
 		const numeric = mask === COMPILER_VALUE_KIND_NUMBER,
 			boolean = mask === COMPILER_VALUE_KIND_BOOLEAN;
@@ -1577,6 +1631,79 @@ function emitRecordIterationRegion(
 	}
 	for (const [field] of graph.fields.entries())
 		lines.push(`  MalShapeSnapshot ${id}_s${field} = {0};`);
+	if (columns) {
+		// Warm IC rows on the first traversal, then attempt packing only once per activation.
+		const columnCount =
+			1 + graph.fields.length + graph.fields.filter((field) => field.stored).length;
+		lines.push(
+			`  if (MAL_PRIMORDIALS_LOCKED && ${guards.join(" && ")}) {`,
+			`    if (${cache}_state == 1 && ${cursor}.index == 0 && !${cursor}.done && ${id}_array.count == ${id}_array.length && ${id}_array.count > 0 && ${id}_array.count <= 8388608 / (${columnCount} * sizeof(u64))) {`,
+			`      ${cache}_count = ${id}_array.count;`,
+			`      ${cache}_data = calloc((size_t) ${cache}_count * ${columnCount}, sizeof(u64));`,
+			`      if (${cache}_data != nullptr) {`,
+			`        for (u32 ${id}_row = 0; ${id}_row < ${cache}_count; ${id}_row++) {`,
+			`          MalValue ${id}_element = ${id}_array.elements[${id}_row];`,
+		);
+		for (const [node] of graph.references.entries())
+			lines.push(`          MalNumberRecord ${owner(node)} = {0};`);
+		for (const [field] of graph.fields.entries())
+			lines.push(
+				`          MalNumberRecordField ${handle(field)} = {0};`,
+				`          MalValue ${id}_v${field} = MAL_VALUE_UNDEFINED;`,
+			);
+		for (const [node, reference] of graph.references.entries()) {
+			const value = reference.field < 0 ? `${id}_element` : `${id}_v${reference.field}`;
+			if (reference.nullable)
+				lines.push(
+					`          if (!mal_value_is_null(${value}) && !mal_value_is_undefined(${value})) {`,
+				);
+			lines.push(
+				`          if (!mal_vm_number_record_begin(${value}, ${graph.fields.some((field) => field.object === node && field.stored)}, &${owner(node)})) goto ${id}_pack_failed;`,
+			);
+			for (let previous = 0; previous < node; previous++)
+				lines.push(
+					`          if (${owner(node)}.object == ${owner(previous)}.object) goto ${id}_pack_failed;`,
+				);
+			for (const [field, descriptor] of graph.fields.entries()) {
+				if (descriptor.object !== node) continue;
+				const op = fn.instructions[descriptor.instructionIp]!;
+				if (op.opcode !== "LOAD_PROPERTY_STATIC" && op.opcode !== "STORE_PROPERTY_STATIC")
+					throw new Error("Invalid record column field");
+				lines.push(
+					`          if (!mal_vm_number_record_field_value(&${owner(node)}, &${propertyCache}[${op.icIndex}], &${id}_s${field}, &${handle(field)}, &${id}_v${field})) goto ${id}_pack_failed;`,
+				);
+				if (descriptor.kind !== "reference")
+					lines.push(
+						`          if (!${descriptor.kind === "number" ? "mal_ops_is_number" : "mal_value_is_boolean"}(${id}_v${field})) goto ${id}_pack_failed;`,
+					);
+				if (descriptor.stored)
+					lines.push(
+						`          ${recordColumn(plan, field, true)}[${id}_row] = &((MalValue *) ${owner(node)}.fields)[${handle(field)}.slot];`,
+					);
+			}
+			if (reference.nullable) lines.push("          }");
+		}
+		lines.push(`          ${recordColumn(plan, -1)}[${id}_row] = ${id}_element;`);
+		for (const [field, descriptor] of graph.fields.entries())
+			lines.push(
+				`          ${recordColumn(plan, field)}[${id}_row] = ${descriptor.kind === "number" ? `mal_ops_is_number(${id}_v${field}) ? mal_ops_number_as_f64(${id}_v${field}) : 0.0` : descriptor.kind === "boolean" ? `mal_value_to_boolean(${id}_v${field})` : `${id}_v${field}`};`,
+			);
+		lines.push(
+			"        }",
+			`        ${cache}_owner = r${plan.iterator}; ${cache}_state = 2; MAL_PERF_COUNT(record_columns_admissions);`,
+			`        goto ${id}_packed;`,
+			`        ${id}_pack_failed:;`,
+			`        free(${cache}_data); ${cache}_data = nullptr;`,
+			"      }",
+			`      ${cache}_state = 3;`,
+			"    }",
+			`    ${id}_packed:;`,
+			`    if (${cache}_state == 0 && ${cursor}.index == 0) ${cache}_state = 1;`,
+			"  }",
+			`  if (${cache}_state == 2 && !(${guards.join(" && ")})) { ${flushRecordColumns(plan)} }`,
+		);
+		guards.push(`${cache}_state == 2`);
+	}
 	lines.push(
 		`  if (${guards.join(" && ")}) {`,
 		`    u32 ${id}_index = ${cursor}.index;`,
@@ -1585,51 +1712,61 @@ function emitRecordIterationRegion(
 		`    MAL_PERF_COUNT(dense_array_number_region_admissions);`,
 		`    ${id}_next:;`,
 	);
-	lines.push(
-		`    if (mal_gc_poll_requested_in(${id}_isolate)) ${resume(plan.id, plan.carried)}`,
-	);
+	if (!columns)
+		lines.push(
+			`    if (mal_gc_poll_requested_in(${id}_isolate)) ${resume(plan.id, plan.carried)}`,
+		);
 	lines.push(
 		`    if (${id}_done || ${id}_index >= ${id}_array.length) {`,
 		`      ${id}_done = true; ${local(step.doneDst)} = true;`,
 		`      ${reach(plan.id + 1)}`,
 		"    }",
 	);
-	lines.push(
-		`    if (${id}_index >= ${id}_array.count) ${resume(plan.id, plan.carried)}`,
-		`    MalValue ${id}_element = ${id}_array.elements[${id}_index];`,
-	);
-	for (const [node] of graph.references.entries())
-		lines.push(`    MalNumberRecord ${owner(node)} = {0};`);
-	for (const [field] of graph.fields.entries())
+	if (!columns)
 		lines.push(
-			`    MalNumberRecordField ${handle(field)} = {0};`,
-			`    MalValue ${id}_v${field} = MAL_VALUE_UNDEFINED;`,
+			`    if (${id}_index >= ${id}_array.count) ${resume(plan.id, plan.carried)}`,
+			`    MalValue ${id}_element = ${id}_array.elements[${id}_index];`,
 		);
-	const declined = `${id}_declined`;
-	for (const [node, reference] of graph.references.entries()) {
-		const value = reference.field < 0 ? `${id}_element` : `${id}_v${reference.field}`;
-		const writable = graph.fields.some((field) => field.object === node && field.stored);
-		if (reference.nullable)
-			lines.push(
-				`    if (!mal_value_is_null(${value}) && !mal_value_is_undefined(${value})) {`,
-			);
+	else
 		lines.push(
-			`    if (!mal_vm_number_record_begin(${value}, ${writable}, &${owner(node)})) goto ${declined};`,
+			`    u32 ${id}_row = ${id}_index;`,
+			`    MalValue ${id}_element = ${recordColumn(plan, -1)}[${id}_row];`,
 		);
-		for (const [field, descriptor] of graph.fields.entries()) {
-			if (descriptor.object !== node) continue;
-			const op = fn.instructions[descriptor.instructionIp]!;
-			if (op.opcode !== "LOAD_PROPERTY_STATIC" && op.opcode !== "STORE_PROPERTY_STATIC")
-				throw new Error("Invalid record iteration field");
+	if (!columns) {
+		for (const [node] of graph.references.entries())
+			lines.push(`    MalNumberRecord ${owner(node)} = {0};`);
+		for (const [field] of graph.fields.entries())
 			lines.push(
-				`    if (!mal_vm_number_record_field_value(&${owner(node)}, &${propertyCache}[${op.icIndex}], &${id}_s${field}, &${handle(field)}, &${id}_v${field})) goto ${declined};`,
+				`    MalNumberRecordField ${handle(field)} = {0};`,
+				`    MalValue ${id}_v${field} = MAL_VALUE_UNDEFINED;`,
 			);
-			if (descriptor.kind !== "reference")
+		for (const [node, reference] of graph.references.entries()) {
+			const value = reference.field < 0 ? `${id}_element` : `${id}_v${reference.field}`;
+			const writable = graph.fields.some(
+				(field) => field.object === node && field.stored,
+			);
+			if (reference.nullable)
 				lines.push(
-					`    if (!${descriptor.kind === "number" ? "mal_ops_is_number" : "mal_value_is_boolean"}(${id}_v${field})) goto ${declined};`,
+					`    if (!mal_value_is_null(${value}) && !mal_value_is_undefined(${value})) {`,
 				);
+			lines.push(
+				`    if (!mal_vm_number_record_begin(${value}, ${writable}, &${owner(node)})) goto ${declined};`,
+			);
+			for (const [field, descriptor] of graph.fields.entries()) {
+				if (descriptor.object !== node) continue;
+				const op = fn.instructions[descriptor.instructionIp]!;
+				if (op.opcode !== "LOAD_PROPERTY_STATIC" && op.opcode !== "STORE_PROPERTY_STATIC")
+					throw new Error("Invalid record iteration field");
+				lines.push(
+					`    if (!mal_vm_number_record_field_value(&${owner(node)}, &${propertyCache}[${op.icIndex}], &${id}_s${field}, &${handle(field)}, &${id}_v${field})) goto ${declined};`,
+				);
+				if (descriptor.kind !== "reference")
+					lines.push(
+						`    if (!${descriptor.kind === "number" ? "mal_ops_is_number" : "mal_value_is_boolean"}(${id}_v${field})) goto ${declined};`,
+					);
+			}
+			if (reference.nullable) lines.push("    }");
 		}
-		if (reference.nullable) lines.push("    }");
 	}
 	lines.push(
 		`    MAL_PERF_COUNT(record_iteration_region_admissions);`,
@@ -1664,13 +1801,22 @@ function emitRecordIterationRegion(
 		} else
 			switch (op.opcode) {
 				case "LOAD_PROPERTY_STATIC": {
-					const value = raw(flow.fields.get(ip)!);
-					statement = `${local(op.dst)} = ${kind(op.dst) === COMPILER_VALUE_KIND_NUMBER ? `mal_ops_number_as_f64(${value})` : kind(op.dst) === COMPILER_VALUE_KIND_BOOLEAN ? `mal_value_to_boolean(${value})` : value};`;
+					const field = flow.fields.get(ip)!;
+					const value = columns ? `${recordColumn(plan, field)}[${id}_row]` : raw(field);
+					statement = columns
+						? graph.fields[field]!.kind === "number"
+							? result(op.dst, value, COMPILER_VALUE_KIND_NUMBER)
+							: graph.fields[field]!.kind === "boolean"
+								? result(op.dst, value, COMPILER_VALUE_KIND_BOOLEAN)
+								: `${local(op.dst)} = ${value};`
+						: `${local(op.dst)} = ${kind(op.dst) === COMPILER_VALUE_KIND_NUMBER ? `mal_ops_number_as_f64(${value})` : kind(op.dst) === COMPILER_VALUE_KIND_BOOLEAN ? `mal_value_to_boolean(${value})` : value};`;
 					break;
 				}
 				case "STORE_PROPERTY_STATIC": {
 					const field = flow.fields.get(ip)!;
-					statement = `mal_vm_number_record_store(&${owner(graph.fields[field]!.object)}, ${handle(field)}, ${number(op.value)});`;
+					statement = columns
+						? `${recordColumn(plan, field)}[${id}_row] = ${number(op.value)};`
+						: `mal_vm_number_record_store(&${owner(graph.fields[field]!.object)}, ${handle(field)}, ${number(op.value)});`;
 					break;
 				}
 				case "REQUIRE_COERCIBLE":
@@ -1745,10 +1891,10 @@ function emitRecordIterationRegion(
 					break;
 				}
 				case "JUMP":
-					statement = reach(op.targetIp);
+					statement = reach(op.targetIp, ip);
 					break;
 				case "JUMP_IF":
-					statement = `if (${truthy(op.cond)}) ${reach(op.targetIp)} ${reach(ip + 1)}`;
+					statement = `if (${truthy(op.cond)}) { ${reach(op.targetIp, ip)} } ${reach(ip + 1, ip)}`;
 					break;
 				default:
 					throw new Error("Invalid record iteration instruction");
@@ -1757,7 +1903,8 @@ function emitRecordIterationRegion(
 		if (op.opcode !== "JUMP" && op.opcode !== "JUMP_IF")
 			lines.push(`    ${reach(ip + 1)}`);
 	}
-	lines.push(`    ${declined}:;`, `    ${resume(plan.id, plan.carried)}`, "  }", "}");
+	if (!columns) lines.push(`    ${declined}:;`, `    ${resume(plan.id, plan.carried)}`);
+	lines.push("  }", "}");
 	return lines;
 }
 
@@ -1771,9 +1918,10 @@ function emitNumericLoopRegion(
 	bindingLoad: (ip: number) => string,
 	facts: NativeFunctionPlan["facts"],
 	nativeInstructions: NativeFunctionPlan["instructions"],
+	poll: (ip: number, spill: string, isolate: string) => string,
 ): ReadonlyArray<string> {
 	if (plan.kind === "array-iteration" && plan.recordGraph !== undefined)
-		return emitRecordIterationRegion(fn, plan, reps, propertyCache);
+		return emitRecordIterationRegion(fn, plan, reps, propertyCache, poll);
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
 	const order = numericLoopOrder(fn, plan.id, members, true);
 	const dataViewCalls = new Map(
@@ -3543,8 +3691,20 @@ function emitCompiledVariant(
 		? undefined
 		: deferredRestRootIp;
 	const argumentUnlink = retainsArguments ? "mal_gc_unroot(&__argument_roots); " : "";
+	const columnPlans = storage.numericLoopRegions.filter(
+		(plan) => plan.kind === "array-iteration" && plan.privateColumns === true,
+	);
+	const columnsUnlink = [...columnPlans]
+		.reverse()
+		.map((plan) => {
+			const cache = recordColumnsName(plan);
+			return `free(${cache}_data); mal_gc_unroot(&${cache}_roots); `;
+		})
+		.join("");
 	const gcUnlink =
-		argumentUnlink + (needsRootFrame ? "vm->root_frame_head = __gc_frame.prev; " : "");
+		argumentUnlink +
+		columnsUnlink +
+		(needsRootFrame ? "vm->root_frame_head = __gc_frame.prev; " : "");
 
 	const profileDecisions: Array<BackendProfileDecision> = [];
 	const expressionIps = new Set(
@@ -3866,6 +4026,18 @@ function emitCompiledVariant(
 		);
 	}
 
+	// Borrowed column references need an explicit owner root even with conservative native roots.
+	for (const plan of columnPlans) {
+		const cache = recordColumnsName(plan);
+		lines.push(
+			`    u64 *${cache}_data = nullptr;`,
+			`    u32 ${cache}_count = 0;`,
+			`    u8 ${cache}_state = 0;`,
+			`    MalValue ${cache}_owner = MAL_VALUE_UNDEFINED;`,
+			`    MalRootSpan ${cache}_roots;`,
+			`    mal_gc_root(&${cache}_roots, &${cache}_owner, 1);`,
+		);
+	}
 	if (retainsArguments) {
 		// Deferred and elided rest arrays cannot root incoming values across earlier safepoints.
 		lines.push(
@@ -7746,6 +7918,16 @@ function emitBody(
 				},
 				nativeFacts,
 				nativeInstructions,
+				(branchIp, spill, isolate) => {
+					if (gcSafepointKinds.get(branchIp) !== "loop-backedge") return "";
+					const handler = handlerTargets[branchIp];
+					const mask = inactiveRootMasks.get(branchIp);
+					const onThrow =
+						handler === undefined
+							? nativeBodyReference(resources, "throwExit")
+							: `L${handler}`;
+					return `if (mal_gc_poll_requested_in(${isolate})) { MAL_PERF_COUNT(record_columns_polls); ${spill} ${cPrivateRootPublication(rootPublication, branchIp, "outgoing").join(" ")} ${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask, inactiveRootMaskStatements)};`} mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) goto ${onThrow}; }`;
+				},
 			))
 				lines.push(`    ${line}`);
 		const numberRecord = numberRecordRegionById.get(ip);

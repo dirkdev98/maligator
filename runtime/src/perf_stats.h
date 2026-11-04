@@ -241,6 +241,9 @@ typedef struct MalPerfStats {
     u64 fixed_data_view_region_views;
     u64 dense_array_number_region_admissions;
     u64 record_iteration_region_admissions;
+    u64 record_columns_admissions;
+    u64 record_columns_flushes;
+    u64 record_columns_polls;
     u64 object_keys_count_admissions;
     u64 object_values_count_admissions;
     u64 object_entries_count_admissions;

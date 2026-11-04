@@ -964,7 +964,10 @@ iterator cursor is not, by itself, permission to delete its language object.
       regions preflight nested own-data Number fields, Boolean flags, nullable
       references and Number stores before each iteration. Calls and unsupported
       layouts keep the original loop, and a guard failure finishes the whole loop
-      in the original code.
+      in the original code. Fresh, private graphs from intrinsic `Array.from`
+      mappers can retain numeric columns across repeated traversals after one
+      warming pass. Scalar guard failures write Number fields back before resuming
+      the original loop; captured, escaped and aliased graphs retain heap access.
       A failed guard restarts its whole iteration in the original loop, so no guard
       may follow a store in the same iteration. That keeps stores at keys from
       records or other views out of regions: `core-to-execution` writes typed

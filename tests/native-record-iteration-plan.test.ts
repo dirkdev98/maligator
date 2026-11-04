@@ -8,6 +8,7 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { nativeNumericBuiltinInstruction } from "../src/compiler/target/lower-native-fast-paths.ts";
+import { nativeMapperReturnsFreshGraph } from "../src/compiler/target/native-record-columns.ts";
 import { analyzeRecordIteration } from "../src/compiler/target/native-record-iteration.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
@@ -141,4 +142,124 @@ describe("native record iteration planning", () => {
 			).not.toBeNull();
 		},
 	);
+});
+
+function privateGraphProgram(
+	mapper: string,
+	after = "",
+	source = "{ length: 32 }",
+	retry = false,
+) {
+	return compileSemanticProgramToProgramImage(
+		analyzeSourceAndRunSemanticAnalysis(
+			`"use strict"; globalThis.kernel = function kernel(input) {
+   ${retry ? "while (true) { try {" : ""}
+   const rows = Array.from(${source}, ${mapper});
+   let total = 0;
+   for (let round = 0; round < 8; round++) {
+    for (const row of rows) {
+     const point = row.point;
+     point.x += row.delta;
+     if (row.active) total += point.x + (row.profile?.x ?? 7);
+    }
+   }
+   ${after}
+   return total;
+   ${retry ? "} catch {} }" : ""}
+  };`,
+			"/private-record-graph.js",
+		),
+		{
+			facts: compilerProgramFactsFromConfig(
+				resolveBuildConfig({
+					engine: { primordials: "locked", eval: false, realms: false },
+				}),
+			),
+		},
+	);
+}
+const FRESH_MAPPER =
+	"(_, id) => ({ point: { x: id * .5 }, delta: id & 3, active: (id & 7) !== 0, profile: (id & 3) === 0 ? undefined : { x: id & 15 } })";
+
+describe("private record columns", () => {
+	it("rejects producer reexecution through an exception handler", () => {
+		const image = privateGraphProgram(FRESH_MAPPER, "", "{ length: 32 }", true);
+		expect(
+			image.native.functions.every((fn) =>
+				fn.storage!.numericLoopRegions.every(
+					(plan) => plan.kind !== "array-iteration" || !plan.privateColumns,
+				),
+			),
+		).toBe(true);
+	});
+	it("rejects forged privacy metadata for caller-owned arrays", () => {
+		const image = compile();
+		const altered = {
+			...image,
+			native: {
+				...image.native,
+				functions: image.native.functions.map((fn) => ({
+					...fn,
+					storage: {
+						...fn.storage!,
+						numericLoopRegions: fn.storage!.numericLoopRegions.map((plan) =>
+							plan.kind === "array-iteration"
+								? { ...plan, privateColumns: true as const }
+								: plan,
+						),
+					},
+				})),
+			},
+		};
+		expect(() => serializeCompilerArtifact(altered)).toThrow(/storage|loop/i);
+	});
+	it("certifies branch-dependent fresh graphs and preserves the proof through the codec", () => {
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(privateGraphProgram(FRESH_MAPPER)),
+		);
+		expect(
+			image.native.functions.some((fn) =>
+				fn.storage!.numericLoopRegions.some(
+					(plan) => plan.kind === "array-iteration" && plan.privateColumns,
+				),
+			),
+		).toBe(true);
+	});
+	it.each([
+		[
+			"external mapper values",
+			"(value, id) => ({ point: value, delta: id, active: true, profile: undefined })",
+			"",
+			"input",
+		],
+		[
+			"captured graph values",
+			"(_, id) => ({ point: input, delta: id, active: true, profile: undefined })",
+			"",
+			"{ length: 32 }",
+		],
+		["post-loop observation", FRESH_MAPPER, "return rows;", "{ length: 32 }"],
+		[
+			"second traversal",
+			FRESH_MAPPER,
+			"for (const row of rows) total += row.point.x;",
+			"{ length: 32 }",
+		],
+	])("rejects %s", (_name, mapper, after, source) => {
+		const image = privateGraphProgram(mapper, after, source);
+		expect(
+			image.native.functions.every((fn) =>
+				fn.storage!.numericLoopRegions.every(
+					(plan) => plan.kind !== "array-iteration" || !plan.privateColumns,
+				),
+			),
+		).toBe(true);
+	});
+	it("rejects a mapper that can reuse allocations through a cycle", () => {
+		const image = privateGraphProgram(
+			"(_, id) => { let point; for (let i = 0; i < id; i++) point = { x: i }; return { point, delta: id, active: true, profile: undefined }; }",
+		);
+		const mapper = image.runtime.functions.find((fn) => fn.parameterCount === 2)!;
+		expect(nativeMapperReturnsFreshGraph(mapper)).toBe(false);
+	});
 });
