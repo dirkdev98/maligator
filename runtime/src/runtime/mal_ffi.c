@@ -1654,6 +1654,18 @@ MalValue mal_ffi_numeric_array(MalVm *vm, const void *data, int32_t length, MalF
     return result;
 }
 
+MalValue mal_ffi_new_dense_array(MalVm *vm, int32_t length) {
+    return mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, (u32) length));
+}
+
+bool mal_ffi_push_element(MalVm *vm, MalValue array, int32_t index, MalValue value) {
+    // Appending runs no safepoint, so neither value needs a root of its own.
+    if (mal_array_object_dense_build_values(mal_value_to_array_object(array), (u32) index, &value, 1))
+        return true;
+    mal_vm_throw_allocation_error(vm);
+    return false;
+}
+
 bool mal_ffi_set_element(MalVm *vm, MalValue array, int32_t index, MalValue value) {
     MalValue held[2] = {array, value};
     MalRootSpan root;

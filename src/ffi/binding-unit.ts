@@ -963,7 +963,7 @@ class BindingWriter {
 		return [
 			...fill,
 			"else {",
-			`\t${target} = mal_ffi_new_array(vm, (int32_t) (${count}));`,
+			`\t${target} = mal_ffi_new_dense_array(vm, (int32_t) (${count}));`,
 			`\tfor (int32_t ${index} = 0; !mal_ffi_threw(vm) && ${index} < (int32_t) (${count}); ${index}++) {`,
 			...(value.of.kind === "array"
 				? this.#produceElement(
@@ -974,7 +974,7 @@ class BindingWriter {
 						true,
 					).map((line) => `\t\t${line}`)
 				: [
-						`\t\tmal_ffi_set_element(vm, ${target}, ${index}, ${this.write(value.of, `(${expression})[${index}]`, true)});`,
+						`\t\tmal_ffi_push_element(vm, ${target}, ${index}, ${this.write(value.of, `(${expression})[${index}]`, true)});`,
 					]),
 			"\t}",
 			"}",
@@ -1003,7 +1003,7 @@ class BindingWriter {
 					`{ mal_ffi_unroot(&${roots}); goto mal_done; }`,
 				),
 			),
-			`bool ${stored} = mal_ffi_set_element(vm, ${array}, ${index}, ${element});`,
+			`bool ${stored} = mal_ffi_push_element(vm, ${array}, ${index}, ${element});`,
 			`mal_ffi_unroot(&${roots});`,
 			`if (!${stored}) goto mal_done;`,
 		];
@@ -1042,7 +1042,7 @@ class BindingWriter {
 			];
 		const index = this.#fresh("index");
 		return [
-			`${target} = mal_ffi_new_array(vm, ${value.length});`,
+			`${target} = mal_ffi_new_dense_array(vm, ${value.length});`,
 			"if (mal_ffi_threw(vm)) goto mal_done;",
 			`for (int32_t ${index} = 0; ${index} < ${value.length}; ${index}++) {`,
 			...this.#produceElement(
@@ -2115,7 +2115,7 @@ class BindingWriter {
 				"if (!mal_ffi_threw(vm)) {",
 				`\tif ((${expression}) == nullptr) ${target} = mal_ffi_null();`,
 				`\telse if (mal_ffi_check_count(vm, (size_t) (${count}), 32, true, ${site})) {`,
-				`\t\tMalValue ${array} = mal_ffi_new_array(vm, (int32_t) (${count}));`,
+				`\t\tMalValue ${array} = mal_ffi_new_dense_array(vm, (int32_t) (${count}));`,
 				`\t\tMalFfiRoots ${roots};`,
 				`\t\tmal_ffi_root(&${roots}, &${array}, 1);`,
 				`\t\tfor (int32_t ${index} = 0; !mal_ffi_threw(vm) && ${index} < (int32_t) (${count}); ${index}++) {`,
@@ -2129,7 +2129,7 @@ class BindingWriter {
 							results,
 						).map((line) => `\t\t\t${line.replaceAll("goto mal_done;", `goto ${done};`)}`)
 					: [
-							`\t\t\tmal_ffi_set_element(vm, ${array}, ${index}, ${results !== undefined && value.of.kind === "handle" ? `mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.of.name}, (void *) ((${expression})[${index}]), ${value.of.owned}, ${value.of.fresh === true})` : this.write(value.of, `(${expression})[${index}]`, false, undefined, results)});`,
+							`\t\t\tmal_ffi_push_element(vm, ${array}, ${index}, ${results !== undefined && value.of.kind === "handle" ? `mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.of.name}, (void *) ((${expression})[${index}]), ${value.of.owned}, ${value.of.fresh === true})` : this.write(value.of, `(${expression})[${index}]`, false, undefined, results)});`,
 						]),
 				"\t\t}",
 				...(value.of.kind === "array" ? [`${done}:;`] : []),

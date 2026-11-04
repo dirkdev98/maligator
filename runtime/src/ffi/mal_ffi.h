@@ -534,6 +534,13 @@ bool mal_ffi_stack_record(MalVm *vm, MalFfiRecordType *type, void *object, MalVa
 MalValue mal_ffi_new_array(MalVm *vm, int32_t length);
 /** Store an element; both values stay rooted for the duration of the call. */
 bool mal_ffi_set_element(MalVm *vm, MalValue array, int32_t index, MalValue value);
+/**
+ * An Array of `length` whose elements arrive in order through `mal_ffi_push_element`,
+ * without property stores. The caller roots it; unfilled slots read as holes.
+ */
+MalValue mal_ffi_new_dense_array(MalVm *vm, int32_t length);
+/** Append element `index`, which must follow the elements already pushed. */
+bool mal_ffi_push_element(MalVm *vm, MalValue array, int32_t index, MalValue value);
 bool mal_ffi_threw(MalVm *vm);
 /**
  * What a callback trampoline receives as its user data: the VM and the JavaScript
