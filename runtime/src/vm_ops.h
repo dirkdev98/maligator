@@ -2396,10 +2396,10 @@ static inline __attribute__((always_inline)) bool mal_vm_number_record_begin(
     return true;
 }
 
-/** A shape-mode row proves an own data field, and a store row also proves it writable. Admits only a Number value. */
-static inline __attribute__((always_inline)) bool mal_vm_number_record_field(
+/** A shape-mode row proves an own data field, and a store row also proves it writable. */
+static inline __attribute__((always_inline)) bool mal_vm_number_record_field_value(
     const MalNumberRecord *record, const MalInlineCache *ic, MalShapeSnapshot *snapshot,
-    MalNumberRecordField *field, f64 *value
+    MalNumberRecordField *field, MalValue *value
 ) {
     MAL_PERF_COUNT(number_record_field_checks);
     u8 slot;
@@ -2426,10 +2426,19 @@ static inline __attribute__((always_inline)) bool mal_vm_number_record_field(
         }
         *snapshot = (MalShapeSnapshot) {.shape = record->shape, .slot = slot};
     }
-    if (!mal_ops_try_number_as_f64(((const MalValue *) record->fields)[slot], value)) return false;
+    *value = ((const MalValue *) record->fields)[slot];
     *field = (MalNumberRecordField) {.slot = slot};
     if (polymorphic) MAL_PERF_COUNT(number_record_poly_fields);
     return true;
+}
+
+static inline __attribute__((always_inline)) bool mal_vm_number_record_field(
+    const MalNumberRecord *record, const MalInlineCache *ic, MalShapeSnapshot *snapshot,
+    MalNumberRecordField *field, f64 *value
+) {
+    MalValue boxed;
+    return mal_vm_number_record_field_value(record, ic, snapshot, field, &boxed) &&
+        mal_ops_try_number_as_f64(boxed, value);
 }
 
 static inline void mal_vm_number_record_admitted(const MalNumberRecord *record) {

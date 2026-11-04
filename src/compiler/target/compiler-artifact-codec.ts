@@ -115,7 +115,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 359;
+export const COMPILER_ARTIFACT_VERSION = 360;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -924,6 +924,22 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 			w.i32(plan.initializeIp);
 			w.i32(plan.iterator);
 			w.i32Array([...(plan.records ?? [])]);
+			w.u8(plan.recordGraph === undefined ? 0 : 1);
+			if (plan.recordGraph !== undefined) {
+				w.u32(plan.recordGraph.references.length);
+				for (const ref of plan.recordGraph.references) {
+					w.i32(ref.register);
+					w.i32(ref.field);
+					w.u8(ref.nullable ? 1 : 0);
+				}
+				w.u32(plan.recordGraph.fields.length);
+				for (const field of plan.recordGraph.fields) {
+					w.i32(field.object);
+					w.i32(field.instructionIp);
+					w.u8(field.kind === "number" ? 0 : field.kind === "boolean" ? 1 : 2);
+					w.u8(field.stored ? 1 : 0);
+				}
+			}
 		}
 		if (plan.kind === "fixed-numeric") {
 			const counter = plan.counter;
@@ -1516,11 +1532,46 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 							const initializeIp = r.i32(),
 								iterator = r.i32(),
 								records = r.i32Array();
+							const graphTag = r.u8();
+							if (graphTag > 1) throw new RangeError("Invalid record iteration graph");
+							const recordGraph =
+								graphTag === 0
+									? undefined
+									: {
+											references: Array.from({ length: r.count(9) }, () => {
+												const register = r.i32(),
+													field = r.i32(),
+													nullable = r.u8();
+												if (nullable > 1)
+													throw new RangeError("Invalid record iteration reference");
+												return { register, field, nullable: nullable === 1 };
+											}),
+											fields: Array.from({ length: r.count(10) }, () => {
+												const object = r.i32(),
+													instructionIp = r.i32(),
+													kind = r.u8(),
+													stored = r.u8();
+												if (kind > 2 || stored > 1)
+													throw new RangeError("Invalid record iteration field");
+												return {
+													object,
+													instructionIp,
+													kind:
+														kind === 0
+															? ("number" as const)
+															: kind === 1
+																? ("boolean" as const)
+																: ("reference" as const),
+													stored: stored === 1,
+												};
+											}),
+										};
 							return {
 								kind: "array-iteration" as const,
 								initializeIp,
 								iterator,
 								...(records.length === 0 ? {} : { records }),
+								...(recordGraph === undefined ? {} : { recordGraph }),
 							};
 						})()
 					: (() => {

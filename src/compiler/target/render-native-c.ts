@@ -119,6 +119,10 @@ import { nativeControlFlowContract } from "./native-control-flow.ts";
 import type { NativeControlFlowPlan } from "./native-control-flow.ts";
 import { NATIVE_ENUMERATION_SNAPSHOT_CAPACITY } from "./native-object-enumeration-snapshot.ts";
 import type { NativeObjectEnumerationSnapshotPlan } from "./native-object-enumeration-snapshot.ts";
+import {
+	analyzeRecordIteration,
+	recordIterationNullishTest,
+} from "./native-record-iteration.ts";
 import { nativeInactiveRootMasks, nativeRootMaskWordHex } from "./native-root-masks.ts";
 import type { NativeInactiveRootMask } from "./native-root-masks.ts";
 import {
@@ -1476,6 +1480,287 @@ function integralLoopRegisters(
 	);
 }
 
+function emitRecordIterationRegion(
+	fn: BytecodeFunction,
+	plan: Extract<NativeNumericLoopRegionPlan, { kind: "array-iteration" }>,
+	reps: ReadonlyArray<VmRegisterRepresentation>,
+	propertyCache: string,
+): ReadonlyArray<string> {
+	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
+	const order = numericLoopOrder(fn, plan.id, members, true);
+	const step = fn.instructions[plan.id];
+	const flow =
+		order === undefined || step?.opcode !== "ITERATOR_STEP"
+			? undefined
+			: analyzeRecordIteration(
+					fn,
+					order,
+					step.valueDst,
+					reps,
+					nativeNumericBuiltinInstruction,
+				);
+	if (flow === undefined || order === undefined || step?.opcode !== "ITERATOR_STEP")
+		throw new Error("Invalid record iteration region");
+	const graph = flow.graph;
+	const id = `__record_loop_${plan.id}`;
+	const local = (register: number) => `${id}_r${register}`;
+	const owner = (node: number) => `${id}_o${node}`;
+	const handle = (field: number) => `${id}_f${field}`;
+	// A numeric write can alias a later read through another graph path.
+	const raw = (field: number) =>
+		`((const MalValue *) ${owner(graph.fields[field]!.object)}.fields)[${handle(field)}.slot]`;
+	const kind = (register: number) => flow.kinds.get(register)!;
+	const boxed = (register: number) =>
+		kind(register) === COMPILER_VALUE_KIND_NUMBER
+			? `mal_ops_number_value(${local(register)})`
+			: kind(register) === COMPILER_VALUE_KIND_BOOLEAN
+				? `mal_value_new_boolean(${local(register)})`
+				: local(register);
+	const number = (register: number) =>
+		kind(register) === COMPILER_VALUE_KIND_NUMBER
+			? local(register)
+			: `mal_ops_number_as_f64(${local(register)})`;
+	const truthy = (register: number) =>
+		kind(register) === COMPILER_VALUE_KIND_NUMBER
+			? `mal_number_is_truthy(${local(register)})`
+			: kind(register) === COMPILER_VALUE_KIND_BOOLEAN
+				? local(register)
+				: `mal_value_is_truthy(${local(register)})`;
+	const assign = (register: number, source: number) =>
+		kind(register) === COMPILER_VALUE_KIND_NUMBER
+			? `${local(register)} = ${number(source)};`
+			: kind(register) === COMPILER_VALUE_KIND_BOOLEAN
+				? `${local(register)} = ${truthy(source)};`
+				: `${local(register)} = ${boxed(source)};`;
+	const result = (register: number, expression: string, mask: number) =>
+		`${local(register)} = ${kind(register) === mask ? expression : mask === COMPILER_VALUE_KIND_NUMBER ? `mal_ops_number_value(${expression})` : `mal_value_new_boolean(${expression})`};`;
+	const materialize = (register: number) => {
+		const rep = reps[register];
+		return `r${register} = ${rep === "boxed" ? boxed(register) : rep === "int32" ? `mal_ops_number_to_i32(${number(register)})` : rep === "number" ? number(register) : truthy(register)};`;
+	};
+	const cursor = `__iter_deferred_${plan.initializeIp}`;
+	const spill = (registers: ReadonlyArray<number>) =>
+		registers.map(materialize).join(" ");
+	const resume = (target: number, outputs: ReadonlyArray<number>) =>
+		`{ ${spill(outputs)} ${cursor}.index = ${id}_index; ${cursor}.done = ${id}_done; goto L${target}; }`;
+	const exits = new Map(plan.exits.map((exit) => [exit.targetIp, exit.outputs]));
+	const reach = (target: number) => {
+		if (target === plan.id) return `goto ${id}_next;`;
+		const outputs = exits.get(target);
+		if (outputs !== undefined) return resume(target, outputs);
+		if (!members.has(target)) throw new Error("Invalid record iteration target");
+		return `goto ${id}_L${target};`;
+	};
+	const guards: Array<string> = [
+		`${cursor}.active`,
+		`mal_vm_dense_number_storage(r${plan.iterator}, &${id}_array)`,
+	];
+	const lines: Array<string> = ["{", `  MalDenseNumberSpan ${id}_array = {0};`];
+	for (const [register, mask] of flow.kinds) {
+		const numeric = mask === COMPILER_VALUE_KIND_NUMBER,
+			boolean = mask === COMPILER_VALUE_KIND_BOOLEAN;
+		const input = plan.inputs.includes(register);
+		const rep = reps[register];
+		let initial = numeric ? "0.0" : boolean ? "false" : "MAL_VALUE_UNDEFINED";
+		if (input) {
+			if (!numeric && !boolean) throw new Error("Invalid record iteration input");
+			if (rep === "boxed") {
+				guards.push(
+					`${numeric ? "mal_ops_is_number" : "mal_value_is_boolean"}(r${register})`,
+				);
+				initial = `${numeric ? "mal_ops_is_number" : "mal_value_is_boolean"}(r${register}) ? ${numeric ? "mal_ops_number_as_f64" : "mal_value_to_boolean"}(r${register}) : ${initial}`;
+			} else initial = `r${register}`;
+		}
+		lines.push(
+			`  ${numeric ? "f64" : boolean ? "bool" : "MalValue"} ${local(register)} = ${initial};`,
+		);
+	}
+	for (const [field] of graph.fields.entries())
+		lines.push(`  MalShapeSnapshot ${id}_s${field} = {0};`);
+	lines.push(
+		`  if (${guards.join(" && ")}) {`,
+		`    u32 ${id}_index = ${cursor}.index;`,
+		`    bool ${id}_done = ${cursor}.done;`,
+		`    MalIsolateLocals *${id}_isolate = mal_isolate_locals();`,
+		`    MAL_PERF_COUNT(dense_array_number_region_admissions);`,
+		`    ${id}_next:;`,
+	);
+	lines.push(
+		`    if (mal_gc_poll_requested_in(${id}_isolate)) ${resume(plan.id, plan.carried)}`,
+	);
+	lines.push(
+		`    if (${id}_done || ${id}_index >= ${id}_array.length) {`,
+		`      ${id}_done = true; ${local(step.doneDst)} = true;`,
+		`      ${reach(plan.id + 1)}`,
+		"    }",
+	);
+	lines.push(
+		`    if (${id}_index >= ${id}_array.count) ${resume(plan.id, plan.carried)}`,
+		`    MalValue ${id}_element = ${id}_array.elements[${id}_index];`,
+	);
+	for (const [node] of graph.references.entries())
+		lines.push(`    MalNumberRecord ${owner(node)} = {0};`);
+	for (const [field] of graph.fields.entries())
+		lines.push(
+			`    MalNumberRecordField ${handle(field)} = {0};`,
+			`    MalValue ${id}_v${field} = MAL_VALUE_UNDEFINED;`,
+		);
+	const declined = `${id}_declined`;
+	for (const [node, reference] of graph.references.entries()) {
+		const value = reference.field < 0 ? `${id}_element` : `${id}_v${reference.field}`;
+		const writable = graph.fields.some((field) => field.object === node && field.stored);
+		if (reference.nullable)
+			lines.push(
+				`    if (!mal_value_is_null(${value}) && !mal_value_is_undefined(${value})) {`,
+			);
+		lines.push(
+			`    if (!mal_vm_number_record_begin(${value}, ${writable}, &${owner(node)})) goto ${declined};`,
+		);
+		for (const [field, descriptor] of graph.fields.entries()) {
+			if (descriptor.object !== node) continue;
+			const op = fn.instructions[descriptor.instructionIp]!;
+			if (op.opcode !== "LOAD_PROPERTY_STATIC" && op.opcode !== "STORE_PROPERTY_STATIC")
+				throw new Error("Invalid record iteration field");
+			lines.push(
+				`    if (!mal_vm_number_record_field_value(&${owner(node)}, &${propertyCache}[${op.icIndex}], &${id}_s${field}, &${handle(field)}, &${id}_v${field})) goto ${declined};`,
+			);
+			if (descriptor.kind !== "reference")
+				lines.push(
+					`    if (!${descriptor.kind === "number" ? "mal_ops_is_number" : "mal_value_is_boolean"}(${id}_v${field})) goto ${declined};`,
+				);
+		}
+		if (reference.nullable) lines.push("    }");
+	}
+	lines.push(
+		`    MAL_PERF_COUNT(record_iteration_region_admissions);`,
+		`    ${id}_index++;`,
+		`    ${local(step.valueDst)} = ${id}_element;`,
+		`    ${local(step.doneDst)} = false;`,
+		`    ${reach(plan.id + 1)}`,
+	);
+	for (const ip of order) {
+		if (ip === plan.id) continue;
+		const op = fn.instructions[ip]!;
+		lines.push(`    ${id}_L${ip}:;`);
+		let statement: string;
+		const numeric = nativeNumericBuiltinInstruction(op);
+		if (numeric !== undefined) {
+			const expression = nativeNumericBuiltinExpr(
+				numeric.operation,
+				numeric.arguments.map((argument) =>
+					argument.kind === "number"
+						? cF64Literal(argument.value)
+						: number(argument.register),
+				),
+			);
+			if (expression === null) throw new Error("Invalid record iteration builtin");
+			statement = result(
+				(op as { dst: number }).dst,
+				expression,
+				numeric.resultKind === "number"
+					? COMPILER_VALUE_KIND_NUMBER
+					: COMPILER_VALUE_KIND_BOOLEAN,
+			);
+		} else
+			switch (op.opcode) {
+				case "LOAD_PROPERTY_STATIC": {
+					const value = raw(flow.fields.get(ip)!);
+					statement = `${local(op.dst)} = ${kind(op.dst) === COMPILER_VALUE_KIND_NUMBER ? `mal_ops_number_as_f64(${value})` : kind(op.dst) === COMPILER_VALUE_KIND_BOOLEAN ? `mal_value_to_boolean(${value})` : value};`;
+					break;
+				}
+				case "STORE_PROPERTY_STATIC": {
+					const field = flow.fields.get(ip)!;
+					statement = `mal_vm_number_record_store(&${owner(graph.fields[field]!.object)}, ${handle(field)}, ${number(op.value)});`;
+					break;
+				}
+				case "REQUIRE_COERCIBLE":
+				case "LOAD_INTRINSIC":
+					statement = "";
+					break;
+				case "CREATE_NUMBER":
+				case "CREATE_F64":
+					statement = `${local(op.dst)} = ${kind(op.dst) === COMPILER_VALUE_KIND_NUMBER ? cF64Literal(op.value) : `mal_ops_number_value(${cF64Literal(op.value)})`};`;
+					break;
+				case "CREATE_BOOLEAN":
+					statement = `${local(op.dst)} = ${kind(op.dst) === COMPILER_VALUE_KIND_BOOLEAN ? String(op.value) : `mal_value_new_boolean(${op.value})`};`;
+					break;
+				case "CREATE_NULL":
+				case "CREATE_UNDEFINED":
+					statement = `${local(op.dst)} = ${op.opcode === "CREATE_NULL" ? "MAL_VALUE_NULL" : "MAL_VALUE_UNDEFINED"};`;
+					break;
+				case "MOVE":
+					statement = assign(op.dst, op.src);
+					break;
+				case "BINARY": {
+					const test = recordIterationNullishTest(op, flow.states.get(ip)!);
+					let expression: string | null;
+					if (test !== undefined) {
+						const value = boxed(test.register);
+						const predicate =
+							test.mask === COMPILER_VALUE_KIND_NULLISH
+								? `(mal_value_is_null(${value}) || mal_value_is_undefined(${value}))`
+								: `${test.mask === COMPILER_VALUE_KIND_NULL ? "mal_value_is_null" : "mal_value_is_undefined"}(${value})`;
+						expression = test.equal ? predicate : `!(${predicate})`;
+					} else if (NATIVE_COMPARE[op.operator] !== undefined)
+						expression = `${number(op.left)} ${op.operator === "===" || op.operator === "==" ? "==" : op.operator === "!==" || op.operator === "!=" ? "!=" : op.operator} ${number(op.right)}`;
+					else
+						expression = nativeNumberExpr(
+							op.operator,
+							number(op.left),
+							number(op.right),
+							undefined,
+						);
+					if (expression === null)
+						throw new Error("Invalid record iteration binary operation");
+					statement = result(
+						op.dst,
+						expression,
+						NATIVE_COMPARE[op.operator] !== undefined
+							? COMPILER_VALUE_KIND_BOOLEAN
+							: COMPILER_VALUE_KIND_NUMBER,
+					);
+					break;
+				}
+				case "UNARY": {
+					const value = number(op.src);
+					const expression =
+						op.operator === "!"
+							? `!(${truthy(op.src)})`
+							: op.operator === "-"
+								? `-(${value})`
+								: op.operator === "~"
+									? `(f64) ~${numberToInt32(value)}`
+									: op.operator === "increment"
+										? `${value} + 1.0`
+										: op.operator === "decrement"
+											? `${value} - 1.0`
+											: value;
+					statement = result(
+						op.dst,
+						expression,
+						op.operator === "!"
+							? COMPILER_VALUE_KIND_BOOLEAN
+							: COMPILER_VALUE_KIND_NUMBER,
+					);
+					break;
+				}
+				case "JUMP":
+					statement = reach(op.targetIp);
+					break;
+				case "JUMP_IF":
+					statement = `if (${truthy(op.cond)}) ${reach(op.targetIp)} ${reach(ip + 1)}`;
+					break;
+				default:
+					throw new Error("Invalid record iteration instruction");
+			}
+		lines.push(`    ${statement}`);
+		if (op.opcode !== "JUMP" && op.opcode !== "JUMP_IF")
+			lines.push(`    ${reach(ip + 1)}`);
+	}
+	lines.push(`    ${declined}:;`, `    ${resume(plan.id, plan.carried)}`, "  }", "}");
+	return lines;
+}
+
 // Forward block flags preserve whole-label splitting while both loop modes retain their original fallback.
 function emitNumericLoopRegion(
 	fn: BytecodeFunction,
@@ -1487,6 +1772,8 @@ function emitNumericLoopRegion(
 	facts: NativeFunctionPlan["facts"],
 	nativeInstructions: NativeFunctionPlan["instructions"],
 ): ReadonlyArray<string> {
+	if (plan.kind === "array-iteration" && plan.recordGraph !== undefined)
+		return emitRecordIterationRegion(fn, plan, reps, propertyCache);
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
 	const order = numericLoopOrder(fn, plan.id, members, true);
 	const dataViewCalls = new Map(

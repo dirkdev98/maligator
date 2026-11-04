@@ -960,9 +960,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       Index and for-of loops over Arrays now keep their sums in f64 locals,
       including fields of record elements (`sx += p.x` 5.7 to 1.7 ns per element,
       Node 1.0; `record-array-traversal` 532 to 250 ms, Node 109). Field reads
-      through polymorphic rows, nested records, stores to records and calls in the
-      body still decline, and a guard failure finishes the whole loop in the
-      original code.
+      through polymorphic rows still decline in indexed regions. Array for-of
+      regions preflight nested own-data Number fields, Boolean flags, nullable
+      references and Number stores before each iteration. Calls and unsupported
+      layouts keep the original loop, and a guard failure finishes the whole loop
+      in the original code.
       A failed guard restarts its whole iteration in the original loop, so no guard
       may follow a store in the same iteration. That keeps stores at keys from
       records or other views out of regions: `core-to-execution` writes typed

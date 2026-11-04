@@ -2,6 +2,8 @@ import { ARRAY_INITIALIZATION_LIMITS } from "../shared/array-initialization.ts";
 import { DATA_VIEW_ACCESSOR_TYPES } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NULLISH,
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_TOP,
 	compilerBuiltinInputKindsAreValid,
@@ -18,6 +20,8 @@ import { selectNativeMapEntries } from "./native-map-entry-plan.ts";
 import type { NativeMapEntryPlan } from "./native-map-entry-plan.ts";
 import { selectNativeObjectEnumerationSnapshots } from "./native-object-enumeration-snapshot.ts";
 import type { NativeObjectEnumerationSnapshotPlan } from "./native-object-enumeration-snapshot.ts";
+import { analyzeRecordIteration } from "./native-record-iteration.ts";
+import type { NativeRecordIterationGraph } from "./native-record-iteration.ts";
 import {
 	nativeGuardedMathArity,
 	NUMBER_PREDICATES,
@@ -212,6 +216,7 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 				readonly initializeIp: number;
 				readonly iterator: number;
 				readonly records?: ReadonlyArray<number>;
+				readonly recordGraph?: NativeRecordIterationGraph;
 		  }
 		| {
 				readonly kind: "fixed-numeric";
@@ -2819,6 +2824,60 @@ function lowerArrayIterationRegion(
 	)
 		return undefined;
 	const records = numericLoopRecords(fn, shape, [step.valueDst]);
+	const recordFlow = analyzeRecordIteration(
+		fn,
+		shape.order,
+		step.valueDst,
+		representations,
+		nativeNumericBuiltinInstruction,
+	);
+	if (
+		recordFlow !== undefined &&
+		(recordFlow.graph.references.length > 1 ||
+			recordFlow.graph.fields.some((field) => field.stored || field.kind !== "number"))
+	) {
+		const inputs = new Set(recordFlow.inputs);
+		const targets = new Set<number>();
+		for (const ip of shape.order)
+			for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip))
+				if (!shape.members.has(successor)) targets.add(successor);
+		const exits: Array<NativeNumericLoopRegionPlan["exits"][number]> = [];
+		for (const targetIp of [...targets].sort((a, b) => a - b)) {
+			if (targetIp >= fn.instructions.length) return undefined;
+			const outputs = registersLiveAt(fn, body, targetIp, recordFlow.written);
+			for (const register of outputs) {
+				const kind = recordFlow.kinds.get(register);
+				const rep = representations[register];
+				if (
+					recordFlow.references.has(register) ||
+					register === step.valueDst ||
+					(kind !== COMPILER_VALUE_KIND_NUMBER && kind !== COMPILER_VALUE_KIND_BOOLEAN) ||
+					(rep !== "boxed" &&
+						rep !== (kind === COMPILER_VALUE_KIND_NUMBER ? "number" : "boolean") &&
+						!(kind === COMPILER_VALUE_KIND_NUMBER && rep === "int32"))
+				)
+					return undefined;
+				if (!recordFlow.assigned.get(targetIp)?.has(register)) inputs.add(register);
+			}
+			exits.push({ targetIp, outputs });
+		}
+		return Object.freeze({
+			kind: "array-iteration" as const,
+			initializeIp: cursor.initializeIp,
+			iterator: cursor.iterator,
+			recordGraph: recordFlow.graph,
+			id: header,
+			entryIp: shape.entryIp,
+			inputs: [...inputs].sort((a, b) => a - b),
+			carried: [...inputs]
+				.filter((register) => recordFlow.written.has(register))
+				.sort((a, b) => a - b),
+			exits,
+			claimedIps: [...shape.members, shape.entryIp].sort((a, b) => a - b),
+			borrowedRegisters: borrowedRegisters(fn, [...shape.members, shape.entryIp], body),
+			fallback: "original-instructions" as const,
+		});
+	}
 	if (records === undefined) return undefined;
 	for (const ip of shape.order) {
 		if (ip === header) continue;
@@ -3922,6 +3981,12 @@ export function analyzeNativeFastPaths(
 		if (op?.opcode === "UNARY" && (op.operator === "!" || op.operator === "typeof"))
 			return true;
 		const masks = native.facts?.[ip]?.inputKindMasks;
+		if (
+			op.opcode === "BINARY" &&
+			["==", "!=", "===", "!=="].includes(op.operator) &&
+			masks?.some((mask) => mask !== 0 && (mask & ~COMPILER_VALUE_KIND_NULLISH) === 0)
+		)
+			return true;
 		return (
 			masks === undefined ||
 			masks.every((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) !== 0)

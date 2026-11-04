@@ -65,6 +65,7 @@ import type {
 	NativeControlFlowEntryOptions,
 	NativeControlFlowPlan,
 } from "./native-control-flow.ts";
+import type { NativeRecordIterationGraph } from "./native-record-iteration.ts";
 import {
 	NATIVE_ARITH,
 	NATIVE_BITWISE,
@@ -1901,6 +1902,28 @@ export function validateNativeStorage(
 			);
 		});
 
+	const sameRecordGraph = (
+		left: NativeRecordIterationGraph | undefined,
+		right: NativeRecordIterationGraph | undefined,
+	): boolean =>
+		left === undefined
+			? right === undefined
+			: right !== undefined &&
+				left.references.length === right.references.length &&
+				left.fields.length === right.fields.length &&
+				left.references.every(
+					(ref, index) =>
+						ref.register === right.references[index]!.register &&
+						ref.field === right.references[index]!.field &&
+						ref.nullable === right.references[index]!.nullable,
+				) &&
+				left.fields.every(
+					(field, index) =>
+						field.object === right.fields[index]!.object &&
+						field.instructionIp === right.fields[index]!.instructionIp &&
+						field.kind === right.fields[index]!.kind &&
+						field.stored === right.fields[index]!.stored,
+				);
 	const sameNumericLoops = (
 		stored: ReadonlyArray<NativeNumericLoopRegionPlan>,
 		selected: ReadonlyArray<NativeNumericLoopRegionPlan>,
@@ -1914,6 +1937,7 @@ export function validateNativeStorage(
 					(expected.kind === "array-iteration" &&
 						plan.initializeIp === expected.initializeIp &&
 						plan.iterator === expected.iterator &&
+						sameRecordGraph(plan.recordGraph, expected.recordGraph) &&
 						(plan.records ?? []).join() === (expected.records ?? []).join())) &&
 				(plan.kind !== "fixed-numeric" ||
 					(expected.kind === "fixed-numeric" &&
