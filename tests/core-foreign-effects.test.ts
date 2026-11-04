@@ -32,6 +32,7 @@ function compile(
 	source = "return mix(value);",
 	result = binding.result,
 	scalar?: FfiDirectEntry["scalar"],
+	imports = 'import {mix} from "maligator:ffi/math";',
 ) {
 	let core: CoreFunctionStore | undefined;
 	const image = compileEntrypoint("/ffi-effects.mjs", {
@@ -53,7 +54,7 @@ function compile(
 				},
 			],
 		},
-		entrySource: `import {mix} from "maligator:ffi/math"; function compute(value) { ${source} } globalThis.compute=compute;`,
+		entrySource: `${imports} function compute(value) { ${source} } globalThis.compute=compute;`,
 		afterCoreOptimization(program) {
 			core = coreFunctionNamed(program, "compute");
 		},
@@ -73,6 +74,47 @@ describe("static foreign call effects", () => {
 		parameters: [{ kind: "integer", bits: 32, signed: true }],
 		result: { kind: "integer", bits: 32, signed: false },
 	};
+	it.each([
+		"return math.mix(value | 0);",
+		'return math["mix"](value | 0);',
+		"return math?.mix(value | 0);",
+		"return math.mix?.(value | 0);",
+		"const target=math.mix; return target(value | 0);",
+	])("resolves the immutable foreign namespace target in %s", (source) => {
+		const { native } = compile(
+			false,
+			source,
+			binding.result,
+			scalar,
+			'import * as math from "maligator:ffi/math";',
+		);
+		expect(
+			native.instructions.some(
+				(plan) => plan?.kind === "call" && plan.foreignCall?.symbol === binding.symbol,
+			),
+		).toBe(true);
+		expect(
+			emitCompiledFunction(native, native.functionIndex, "", false)!.source,
+		).toContain(`${scalar.symbol}(`);
+	});
+	it("keeps callback effects on a resolved namespace call", () => {
+		const { core, native } = compile(
+			true,
+			"return math.mix(value);",
+			binding.result,
+			undefined,
+			'import * as math from "maligator:ffi/math";',
+		);
+		expect(
+			native.instructions.some(
+				(plan) => plan?.kind === "call" && plan.foreignCall?.symbol === binding.symbol,
+			),
+		).toBe(true);
+		const call = [...core.instructionIds()].find(
+			(instruction) => core.instructionOpcodeName(instruction) === "call",
+		)!;
+		expect(coreInstructionEffects(core, call).callsUserCode).toBe(true);
+	});
 	it.each([
 		["return mix(value | 0);", true],
 		["return mix(7);", true],

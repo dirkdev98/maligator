@@ -13,6 +13,7 @@ import {
 	scalar_u64,
 	scalar_u8,
 } from "maligator:ffi/scalar";
+import { checkNamespaceCalls } from "./namespace.ts";
 
 function check(value: boolean, message: string): asserts value {
 	if (!value) throw new Error(message);
@@ -27,9 +28,10 @@ function refuses(action: () => void, kind: typeof TypeError | typeof RangeError)
 	check(caught, "invalid scalar conversion retains its exception");
 }
 let sum = 0;
+const callsBeforeLoop = scalar_calls();
 for (let index = 0; index < 512; index++) sum += scalar_i32(index | 0);
 check(
-	sum === (511 * 512) / 2 && scalar_calls() === 512n,
+	sum === (511 * 512) / 2 && scalar_calls() === callsBeforeLoop + 512n,
 	"proven scalar loop keeps every C call",
 );
 check(scalar_u32(4294967295) === 4294967295, "unsigned boundary remains exact");
@@ -110,4 +112,5 @@ check(
 	"wide unsigned results keep their full precision",
 );
 refuses(() => scalar_u64(-1n), RangeError);
+checkNamespaceCalls();
 console.log("scalar ABI passed");

@@ -241,6 +241,7 @@ interface CoreFrontendContext {
 			exports: Array<{ name: string; exporter: Binding }>;
 		}>
 	>;
+	foreignNamespaces: Map<Binding, ReadonlyMap<string, Binding>>;
 	moduleNamespaces: Map<string, Array<{ name: string; exporter: Binding }>>;
 	/** Modules whose `import()` rejects because they failed to load or link. */
 	failedModules: ReadonlyMap<string, SyntaxDiagnostic>;
@@ -901,6 +902,7 @@ export function constructSemanticProgramCore(
 
 		moduleDefaultBinding: new Map(),
 		namespaceImports: new Map(),
+		foreignNamespaces: new Map(),
 		moduleNamespaces: new Map(),
 		failedModules: new Map(),
 		failedModuleInitializers: new Map(),
@@ -966,6 +968,29 @@ export function constructSemanticProgramCore(
 	// Host-module bindings resolve to slots as reachable code compiles. Process
 	// instead records reachable compilation without allocating a private slot.
 	program.hostModules = linkage.hostModules;
+	for (const imports of linkage.namespaceImports.values()) {
+		for (const namespace of imports) {
+			if (namespace.deferred) continue;
+			const host = linkage.hostModules.find(
+				(module) => module.specifier === namespace.module,
+			);
+			if (host === undefined) continue;
+			const foreign = new Set(
+				host.exports
+					.filter((entry) => entry.direct !== undefined)
+					.map((entry) => entry.binding),
+			);
+			if (foreign.size === 0) continue;
+			program.foreignNamespaces.set(
+				namespace.binding,
+				new Map(
+					namespace.exports
+						.filter((entry) => foreign.has(entry.exporter))
+						.map((entry) => [entry.name, entry.exporter]),
+				),
+			);
+		}
+	}
 	program.commonJsExportNames = linkage.commonJsExportNames;
 	program.hostProcess = linkage.hostProcess
 		? { installer: linkage.hostProcess.installer, retained: false }
@@ -10887,12 +10912,11 @@ function compileChainElement(
 			: node.property.type === "Identifier"
 				? compileStaticString(program, fn, cursor, node.property.name)
 				: -1;
-		const destination = nextCoreVariable(fn);
-		cursor.block.emitter.emit({
-			type: "loadProperty",
-			registers: [destination, object, key],
+		return compileMemberLoad(fn, cursor, {
+			object,
+			key,
+			foreignSlot: foreignNamespaceMember(program, fn, node),
 		});
-		return destination;
 	}
 
 	if (node.type === "CallExpression") {
@@ -10943,10 +10967,10 @@ function compileChainElement(
 						: calleeNode.property.type === "Identifier"
 							? compileStaticString(program, fn, cursor, calleeNode.property.name)
 							: -1;
-					callee = nextCoreVariable(fn);
-					cursor.block.emitter.emit({
-						type: "loadProperty",
-						registers: [callee, object, key],
+					callee = compileMemberLoad(fn, cursor, {
+						object,
+						key,
+						foreignSlot: foreignNamespaceMember(program, fn, calleeNode),
 					});
 				}
 			}
@@ -13186,6 +13210,7 @@ interface CompiledMemberReference {
 	object: number;
 	key: number;
 	receiver?: number;
+	foreignSlot?: number;
 }
 
 function compileMemberLoad(
@@ -13195,15 +13220,17 @@ function compileMemberLoad(
 ): number {
 	const destination = nextCoreVariable(fn);
 	cursor.block.emitter.emit(
-		member.receiver === undefined
-			? {
-					type: "loadProperty",
-					registers: [destination, member.object, member.key],
-				}
-			: {
-					type: "loadSuperProperty",
-					registers: [destination, member.object, member.key, member.receiver],
-				},
+		member.foreignSlot !== undefined
+			? { type: "loadGlobal", registers: [destination], index: member.foreignSlot }
+			: member.receiver === undefined
+				? {
+						type: "loadProperty",
+						registers: [destination, member.object, member.key],
+					}
+				: {
+						type: "loadSuperProperty",
+						registers: [destination, member.object, member.key, member.receiver],
+					},
 	);
 	return destination;
 }
@@ -13290,7 +13317,41 @@ function compileMemberObjectAndKey(
 		}
 	}
 
-	return { object, key, receiver };
+	return {
+		object,
+		key,
+		receiver,
+		foreignSlot: foreignNamespaceMember(program, fn, memberExpression),
+	};
+}
+
+function foreignNamespaceMember(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	member: ESTree.MemberExpression,
+): number | undefined {
+	if (
+		program.foreignNamespaces.size === 0 ||
+		member.object.type !== "Identifier" ||
+		fn.semanticFile.withDynamicNodes.has(member.object)
+	)
+		return undefined;
+	const binding = fn.semanticFile.nodeToBinding.get(member.object);
+	const exports =
+		binding === undefined ? undefined : program.foreignNamespaces.get(binding);
+	if (exports === undefined) return undefined;
+	const name =
+		!member.computed && member.property.type === "Identifier"
+			? member.property.name
+			: member.property.type === "Literal" && typeof member.property.value === "string"
+				? member.property.value
+				: undefined;
+	const exporter = name === undefined ? undefined : exports.get(name);
+	if (exporter === undefined) return undefined;
+	// Eager host namespaces read immutable installer slots. Callers evaluate the
+	// namespace binding first so replacing its lookup preserves the TDZ check.
+	const location = getOrCreateBindingLocation(program, fn, exporter);
+	return location.type === "global" ? location.index : undefined;
 }
 
 /**
