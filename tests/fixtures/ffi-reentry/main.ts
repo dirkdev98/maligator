@@ -39,9 +39,10 @@ check(getterThrew && Number(getters) === 2, "getter throws preserve their writes
 check(c.reentry_i32("%d", 37) === 37, "typed variants inherit the native audit");
 
 let state = 0;
+let observed = "";
 c.reentry_listen((value) => {
 	state = value;
-	check("x".repeat(2048).length === 2048, "callback allocation survives collection");
+	observed = "x".repeat(2048 + value);
 });
 check(c.reentry_emit(5) === 5 && state === 5, "unaudited calls preserve callback writes");
 const callable = c.reentry_callable()!;
@@ -51,6 +52,10 @@ check(
 );
 check(c.reentry_owned_text() === "cedar", "owned text copies before release");
 check(Number(state) === 7, "release callbacks retain module writes");
+check(
+	observed.length === 2055,
+	"callback allocations escape while the C result stays rooted",
+);
 c.reentry_listen(() => {
 	state = 13;
 	throw new Error("release failed");
