@@ -101,7 +101,7 @@ function decode(data: Buffer): CachedModel {
 		let end = data.indexOf(10, start);
 		if (end < 0) end = data.length;
 		const row = reviveFfiJson(
-			new FfiJsonReader(data, "cached FFI model JSON").parse(start, end),
+			new FfiJsonReader(data.subarray(start, end), "cached FFI model JSON").read(),
 		) as CachedRow;
 		start = end + 1;
 		switch (row[0]) {

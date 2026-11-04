@@ -3,11 +3,14 @@ import { FfiJsonReader } from "./json.ts";
 
 type JsonObject = Record<string, unknown>;
 
-function declaration(reader: FfiJsonReader, start: number, end: number): JsonObject {
-	const value = reader.parse(start, end);
+function declaration(
+	reader: FfiJsonReader,
+	start: number,
+): { node: JsonObject; end: number } {
+	const { value, end } = reader.value(start);
 	if (typeof value !== "object" || value === null || Array.isArray(value))
 		return reader.malformed(start);
-	return value as JsonObject;
+	return { node: value as JsonObject, end };
 }
 
 /** Decode containers separately so an aggregate AST never becomes one engine string. */
@@ -23,8 +26,7 @@ export function visitClangDeclarations(
 	let translationUnit = false;
 	for (;;) {
 		if (data[offset] !== 34) return reader.malformed(offset);
-		const keyEnd = reader.stringEnd(offset);
-		const key = reader.parse(offset, keyEnd);
+		const { value: key, end: keyEnd } = reader.value(offset);
 		if (typeof key !== "string" || keys.has(key)) return reader.malformed(offset);
 		keys.add(key);
 		offset = reader.whitespace(keyEnd);
@@ -35,8 +37,8 @@ export function visitClangDeclarations(
 			offset = reader.whitespace(offset + 1);
 			if (data[offset] !== 93) {
 				for (;;) {
-					const end = reader.valueEnd(offset);
-					visit(declaration(reader, offset, end));
+					const { node, end } = declaration(reader, offset);
+					visit(node);
 					offset = reader.whitespace(end);
 					if (data[offset] === 93) break;
 					if (data[offset] !== 44) return reader.malformed(offset);
@@ -45,8 +47,7 @@ export function visitClangDeclarations(
 			}
 			offset++;
 		} else {
-			const end = reader.valueEnd(offset);
-			const value = reader.parse(offset, end);
+			const { value, end } = reader.value(offset);
 			if (key === "kind") {
 				if (value !== "TranslationUnitDecl") return reader.malformed(offset);
 				translationUnit = true;
@@ -71,8 +72,8 @@ export function clangProbeDeclarations(data: Buffer): ReadonlyArray<JsonObject> 
 	const reader = new FfiJsonReader(data, "clang AST");
 	let offset = reader.whitespace(0);
 	while (offset < data.length) {
-		const end = reader.valueEnd(offset);
-		nodes.push(declaration(reader, offset, end));
+		const { node, end } = declaration(reader, offset);
+		nodes.push(node);
 		offset = reader.whitespace(end);
 	}
 	return nodes;

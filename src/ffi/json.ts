@@ -17,9 +17,10 @@ export class FfiJsonReader {
 	}
 	read(): unknown {
 		const start = this.whitespace(0);
-		const end = this.valueEnd(start);
-		if (this.whitespace(end) !== this.data.length) return this.malformed(end);
-		return this.parse(start, end);
+		const decoded = this.value(start);
+		if (this.whitespace(decoded.end) !== this.data.length)
+			return this.malformed(decoded.end);
+		return decoded.value;
 	}
 	whitespace(offset: number): number {
 		const data = this.data;
@@ -31,54 +32,109 @@ export class FfiJsonReader {
 		return offset;
 	}
 
-	stringEnd(offset: number): number {
+	private stringEnd(offset: number): number {
+		return this.scanStringEnd(offset, this.data.length) ?? this.malformed(offset);
+	}
+
+	private scanStringEnd(offset: number, limit: number): number | undefined {
 		const data = this.data;
-		for (let index = offset + 1; index < data.length; index++) {
+		for (let index = offset + 1; index < limit; index++) {
 			const byte = data[index];
 			if (byte === 34) return index + 1;
 			if (byte === 92) index++;
 		}
-		return this.malformed(offset);
+		return undefined;
 	}
 
-	valueEnd(offset: number): number {
+	private containerEnd(offset: number, limit: number): number | undefined {
 		const data = this.data;
-		const first = data[offset];
-		if (first === 34) return this.stringEnd(offset);
-		if (first !== 123 && first !== 91) {
-			let index = offset;
-			while (index < data.length) {
-				const byte = data[index];
-				if (
-					byte === 44 ||
-					byte === 125 ||
-					byte === 93 ||
-					byte === 32 ||
-					byte === 9 ||
-					byte === 10 ||
-					byte === 13
-				)
-					break;
-				index++;
-			}
-			if (index === offset) return this.malformed(offset);
-			return index;
-		}
 		const closes: Array<number> = [];
-		for (let index = offset; index < data.length; index++) {
+		for (let index = offset; index < limit; index++) {
 			const byte = data[index];
-			if (byte === 34) index = this.stringEnd(index) - 1;
-			else if (byte === 123) closes.push(125);
+			if (byte === 34) {
+				const end = this.scanStringEnd(index, limit);
+				if (end === undefined) return undefined;
+				index = end - 1;
+			} else if (byte === 123) closes.push(125);
 			else if (byte === 91) closes.push(93);
 			else if (byte === 125 || byte === 93) {
 				if (closes.pop() !== byte) return this.malformed(index);
 				if (closes.length === 0) return index + 1;
 			}
 		}
-		return this.malformed(offset);
+		return undefined;
 	}
 
-	parse(start: number, end: number): unknown {
+	value(start: number): { value: unknown; end: number } {
+		const data = this.data;
+		const first = data[start];
+		if (first === 123 || first === 91) {
+			// Bound lookahead so decoding a large child never scans its whole subtree again.
+			const end = this.containerEnd(start, Math.min(data.length, start + 256 * 1024));
+			if (end === undefined) return this.container(start);
+			return { value: this.parse(start, end), end };
+		}
+		if (first === 34) {
+			const end = this.stringEnd(start);
+			return { value: this.parse(start, end), end };
+		}
+		let end = start;
+		while (end < data.length) {
+			const byte = data[end];
+			if (
+				byte === 44 ||
+				byte === 125 ||
+				byte === 93 ||
+				byte === 32 ||
+				byte === 9 ||
+				byte === 10 ||
+				byte === 13
+			)
+				break;
+			end++;
+		}
+		if (end === start) return this.malformed(start);
+		return { value: this.parse(start, end), end };
+	}
+
+	private container(start: number): { value: unknown; end: number } {
+		const data = this.data;
+		const object = data[start] === 123;
+		const close = object ? 125 : 93;
+		const result: JsonObject | Array<unknown> = object ? {} : [];
+		let offset = this.whitespace(start + 1);
+		if (data[offset] !== close) {
+			for (;;) {
+				let key: string | undefined;
+				if (object) {
+					if (data[offset] !== 34) return this.malformed(offset);
+					const keyEnd = this.stringEnd(offset);
+					const name = this.parse(offset, keyEnd);
+					if (typeof name !== "string") return this.malformed(offset);
+					key = name;
+					offset = this.whitespace(keyEnd);
+					if (data[offset] !== 58) return this.malformed(offset);
+					offset = this.whitespace(offset + 1);
+				}
+				const decoded = this.value(offset);
+				if (Array.isArray(result)) result.push(decoded.value);
+				else
+					Object.defineProperty(result, key!, {
+						value: decoded.value,
+						enumerable: true,
+						configurable: true,
+						writable: true,
+					});
+				offset = this.whitespace(decoded.end);
+				if (data[offset] === close) break;
+				if (data[offset] !== 44) return this.malformed(offset);
+				offset = this.whitespace(offset + 1);
+			}
+		}
+		return { value: result, end: offset + 1 };
+	}
+
+	private parse(start: number, end: number): unknown {
 		const data = this.data;
 		if (end - start > 256 * 1024 && data[start] === 34) {
 			const parts: Array<string> = [];
@@ -112,43 +168,7 @@ export class FfiJsonReader {
 			}
 			return new FfiText(parts);
 		}
-		if (end - start > 256 * 1024 && (data[start] === 123 || data[start] === 91)) {
-			const object = data[start] === 123;
-			const close = object ? 125 : 93;
-			const result: JsonObject | Array<unknown> = object ? {} : [];
-			let offset = this.whitespace(start + 1);
-			if (data[offset] !== close) {
-				for (;;) {
-					let key: string | undefined;
-					if (object) {
-						if (data[offset] !== 34) return this.malformed(offset);
-						const keyEnd = this.stringEnd(offset);
-						const name = this.parse(offset, keyEnd);
-						if (typeof name !== "string") return this.malformed(offset);
-						key = name;
-						offset = this.whitespace(keyEnd);
-						if (data[offset] !== 58) return this.malformed(offset);
-						offset = this.whitespace(offset + 1);
-					}
-					const next = this.valueEnd(offset);
-					const value = this.parse(offset, next);
-					if (Array.isArray(result)) result.push(value);
-					else
-						Object.defineProperty(result, key!, {
-							value,
-							enumerable: true,
-							configurable: true,
-							writable: true,
-						});
-					offset = this.whitespace(next);
-					if (data[offset] === close) break;
-					if (data[offset] !== 44) return this.malformed(offset);
-					offset = this.whitespace(offset + 1);
-				}
-			}
-			if (offset + 1 !== end) return this.malformed(offset);
-			return result;
-		}
+
 		try {
 			return JSON.parse(data.toString("utf8", start, end));
 		} catch (error) {
