@@ -4,6 +4,19 @@ export default {
 	headers: ["lifetime.h"],
 	find: [{ includeDirs: ["."], sources: ["lifetime.c"] }],
 	types: {
+		CallerRoot: {
+			handle: {
+				storage: "caller",
+				destroy: "caller_cleanup",
+				collect: true,
+				views: ["CallerBase"],
+			},
+			fields: {
+				child: { handle: { lifetime: "owner" } },
+				data: { bytes: { length: "length", writable: false } },
+			},
+		},
+		CallerBase: { handle: {} },
 		CopiedRoot: {
 			handle: { destroy: "copied_destroy", collect: true },
 			fields: { child: { handle: { lifetime: "owner" } } },
@@ -27,6 +40,30 @@ export default {
 		LifeChild: { handle: {} },
 	},
 	functions: {
+		caller_init_late: {
+			initializes: { param: "root", success: "0" },
+			async: "callerInitLateAsync",
+		},
+		caller_close_view: {
+			params: { callback: { callback: { closes: "root", data: "data" } } },
+		},
+		caller_init: {
+			initializes: { param: "root", success: "0" },
+			params: { message: { out: true, string: { length: "length" } } },
+			async: "callerInitAsync",
+		},
+		caller_init_callback: {
+			initializes: { param: "root", success: "0" },
+			params: { callback: { callback: {} } },
+			async: "callerInitCallbackAsync",
+		},
+		caller_init_void: { initializes: { param: "1" }, async: "callerInitVoidAsync" },
+		caller_cleanup: { async: "callerCleanupAsync" },
+		caller_subscribe: {
+			params: {
+				callback: { callback: { owner: "root", data: "data", release: "release" } },
+			},
+		},
 		copied_subscribe: {
 			params: {
 				callback: { callback: { owner: "root", data: "data", release: "release" } },

@@ -232,6 +232,7 @@ function directEntryVariant(
 	const rooted =
 		arity > 0 &&
 		(binding.closes !== undefined ||
+			binding.initializes !== undefined ||
 			binding.params.some(({ value }) => !UNROOTED_INPUTS.has(value.kind)) ||
 			(pinsResources &&
 				binding.params.some(
@@ -349,6 +350,7 @@ class BindingWriter {
 		argument: (index: number) => string,
 		inputs: string,
 		fail: string,
+		operation: string,
 		owner?: string,
 		registrationOwner?: number,
 	): Array<string> {
@@ -367,7 +369,7 @@ class BindingWriter {
 			...(registrationOwner === undefined
 				? []
 				: [
-						`if (!mal_ffi_callback_own(vm, ${callback}, ${argument(registrationOwner)}, &mal_site_${registrationOwner})) ${fail}`,
+						`if (!mal_ffi_callback_own(vm, ${callback}, ${argument(registrationOwner)}, ${operation}, &mal_site_${registrationOwner})) ${fail}`,
 					]),
 			...checks,
 		];
@@ -3315,6 +3317,7 @@ class BindingWriter {
 								argument,
 								inputs,
 								"goto mal_done;",
+								"&mal_result",
 								owner === undefined ? undefined : "mal_owner",
 								value.owner,
 							).map((line) => `\t${line}`),
@@ -3576,6 +3579,7 @@ class BindingWriter {
 						(runsJavaScript ||
 							constArguments.has(index) ||
 							binding.closes === entry.param ||
+							binding.initializes?.param === entry.param ||
 							this.managedFamily(value.name))
 					) {
 						// Pinned, so JavaScript that runs during the call cannot close it under C.
@@ -3606,6 +3610,13 @@ class BindingWriter {
 								? `${constArguments.has(index) ? localDeclaration(param.type, local) : local} = *(${handle.spelling} *) ${pointer};`
 								: `${local} = (${localDeclaration(param.type, "")}) ${pointer};`,
 						);
+						if (binding.initializes?.param === entry.param) {
+							locals.push("bool mal_init_started = false;");
+							buffers.push(
+								`if (!mal_ffi_begin_handle_initialization(vm, ${pin}, &mal_ffi_type_${value.name}, false, ${site})) goto mal_done;`,
+								"mal_init_started = true;",
+							);
+						}
 						return;
 					}
 					body.push(
@@ -3639,6 +3650,14 @@ class BindingWriter {
 				: [
 						`mal_ffi_finish_handle_close(${argument(binding.closes)}, ${success === undefined ? "true" : `mal_return == (${success})`});`,
 					];
+		const initialization = binding.initializes;
+		const initialized =
+			initialization === undefined
+				? []
+				: [
+						`mal_ffi_finish_handle_initialization(${argument(initialization.param)}, ${initialization.success === undefined ? "true" : `mal_return == (${initialization.success})`});`,
+						"mal_init_started = false;",
+					];
 		const count = countValue(binding, binding.resultCount);
 		const after: Array<string> = [];
 		const releases = this.#releaseCopiedResults(
@@ -3668,6 +3687,7 @@ class BindingWriter {
 			after.push(
 				...enter,
 				`${call};`,
+				...initialized,
 				...callbackReturns,
 				...leave,
 				...closes,
@@ -3717,6 +3737,7 @@ class BindingWriter {
 			after.push(
 				...enter,
 				`${initialize ? returnDeclaration : "mal_return"} = ${call};`,
+				...initialized,
 				...callbackReturns,
 				...leave,
 				...closes,
@@ -3819,6 +3840,11 @@ class BindingWriter {
 			...after.map((line) => `\t${line}`),
 			"\tgoto mal_done;",
 			"mal_done:",
+			...(initialization === undefined
+				? []
+				: [
+						`\tif (mal_init_started) mal_ffi_finish_handle_initialization(${argument(initialization.param)}, false);`,
+					]),
 			...strings.map((temporary) => `\tmal_ffi_string_release(&${temporary});`),
 			...cleanup.map((line) => `\t${line}`),
 			...(compoundInputs
@@ -3940,6 +3966,7 @@ class BindingWriter {
 
 		const tracksRun =
 			binding.closes !== undefined ||
+			binding.initializes !== undefined ||
 			nativeDisposals.length > 0 ||
 			binding.params.some(({ value }) => value.kind === "callback" && value.kept);
 		const fields: Array<string> = [];
@@ -3964,6 +3991,8 @@ class BindingWriter {
 				: undefined;
 		if (binding.closes !== undefined)
 			fields.push("MalValue mal_closing;", "bool mal_close_started;");
+		if (binding.initializes !== undefined)
+			fields.push("MalValue mal_initializing;", "bool mal_init_started;");
 		if (compoundInputs) fields.push("MalFfiInputs mal_inputs;");
 		const managedHandles = binding.arguments.some((entry) => {
 			if (entry.kind !== "input") return false;
@@ -4268,6 +4297,7 @@ class BindingWriter {
 										argument,
 										inputs,
 										"goto mal_failed;",
+										"mal_ctx",
 										undefined,
 										value.owner,
 									).map((line) => `\t${line}`)
@@ -4498,6 +4528,13 @@ class BindingWriter {
 								"mal_ctx->mal_close_started = true;",
 							);
 						}
+						if (binding.initializes?.param === entry.param) {
+							body.push(`mal_ctx->mal_initializing = ${source};`);
+							buffers.push(
+								`if (!mal_ffi_begin_handle_initialization(vm, mal_ctx->${pin}, &mal_ffi_type_${value.name}, true, ${site})) goto mal_failed;`,
+								"mal_ctx->mal_init_started = true;",
+							);
+						}
 						return;
 					}
 					body.push(
@@ -4628,6 +4665,14 @@ class BindingWriter {
 			"\t(void) mal_site_result;",
 			"\tMalValue mal_result = mal_ffi_undefined();",
 			...(managedHandles ? ["\tbool mal_validate = mal_ran;"] : []),
+			...(binding.initializes === undefined
+				? []
+				: [
+						"\tif (mal_ran && mal_ctx->mal_init_started) {",
+						`\t\tmal_ffi_finish_handle_initialization(mal_ctx->mal_initializing, ${binding.initializes.success === undefined ? "true" : `mal_ctx->mal_return == (${binding.initializes.success})`});`,
+						"\t\tmal_ctx->mal_init_started = false;",
+						"\t}",
+					]),
 			...pins.map((line) => `\t${line}`),
 			...(compoundInputs
 				? [
@@ -4669,6 +4714,12 @@ class BindingWriter {
 			"",
 			`static void mal_ffi_async_release_${name}(void *mal_data) {`,
 			`\t${context} *mal_ctx = mal_data;`,
+			...(binding.initializes === undefined
+				? []
+				: [
+						// Executor release precedes heap finalization even when delivery detached while C ran.
+						`\tif (mal_ctx->mal_init_started) mal_ffi_finish_handle_initialization(mal_ctx->mal_initializing, mal_ctx->mal_ran${binding.initializes.success === undefined ? "" : ` && mal_ctx->mal_return == (${binding.initializes.success})`});`,
+					]),
 			...(binding.closes === undefined
 				? []
 				: [

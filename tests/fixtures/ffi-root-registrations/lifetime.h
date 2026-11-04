@@ -1,4 +1,5 @@
 #pragma once
+#include <stddef.h>
 typedef struct LifeChild LifeChild;
 typedef struct LifeRoot { LifeChild *child; } LifeRoot;
 typedef struct RetryRoot { LifeChild *child; int fail; } RetryRoot;
@@ -42,3 +43,21 @@ void life_keep_child(LifeChild *(*callback)(void *), void *data, void (*release)
 int life_held_child_value(void);
 int life_held_child_fire(void);
 void life_clear_child(void);
+typedef struct CallerRoot { LifeChild *child; unsigned char *data; size_t length; } CallerRoot;
+typedef struct CallerBase CallerBase;
+void caller_close_view(CallerBase *root, void (*callback)(CallerBase *, void *), void *data);
+int caller_close_entries(void);
+int caller_init(CallerRoot *root, int value, int mode, const char **message, size_t *length);
+int caller_init_callback(CallerRoot *root, void (*callback)(void));
+typedef struct CallerLater { int value; } CallerLater;
+int caller_init_late(CallerRoot *root, CallerLater later);
+void caller_init_void(CallerRoot *root, int value);
+CallerRoot *caller_echo(CallerRoot *root);
+void caller_cleanup(CallerRoot *root);
+void caller_subscribe(CallerRoot *root, int (*callback)(void *), void *data, void (*release)(void *));
+int caller_value(CallerRoot *root);
+int caller_live_value(void);
+int caller_live_byte(void);
+int caller_entries(void);
+int caller_inits(void);
+int caller_started(void);

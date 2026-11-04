@@ -323,9 +323,10 @@ function validateTypeFacts(value: unknown, at: string): void {
 	if (handle.storage !== undefined) {
 		expect(handle.storage === "caller", `${at}.handle.storage`, '"caller"');
 		expect(
-			handle.destroy === undefined && handle.collect !== true,
+			(handle.destroy === undefined && handle.collect !== true) ||
+				(typeof handle.destroy === "string" && handle.collect === true),
 			`${at}.handle`,
-			"explicit C initialization and cleanup for caller storage, without destroy or collect",
+			"explicit caller cleanup or an unconditional collecting destructor armed by initializes",
 		);
 	}
 	if (handle.destroy !== undefined) {
@@ -630,6 +631,7 @@ function validateFunctionFacts(value: unknown, at: string): void {
 		"variants",
 		"dispatch",
 		"async",
+		"initializes",
 		"evidence",
 	]);
 	if (value.dispatch !== undefined) {
@@ -648,6 +650,23 @@ function validateFunctionFacts(value: unknown, at: string): void {
 		expect(value.variants === undefined, `${at}.async`, "absent beside variants");
 	}
 	if (value.returns !== undefined) validateValueFacts(value.returns, `${at}.returns`);
+	if (value.initializes !== undefined) {
+		const init = value.initializes;
+		expectObject(init, `${at}.initializes`);
+		expectKeys(init, `${at}.initializes`, ["param", "success"]);
+		expect(
+			typeof init.param === "string" && /^(?:[A-Za-z_]\w*|[1-9]\d*)$/.test(init.param),
+			`${at}.initializes.param`,
+			"a C parameter name or 1-based position",
+		);
+		if (init.success !== undefined)
+			expect(
+				typeof init.success === "string" && C_INTEGER_CONSTANT.test(init.success),
+				`${at}.initializes.success`,
+				"a C identifier or integer literal",
+			);
+		expect(value.variants === undefined, `${at}.initializes`, "absent beside variants");
+	}
 	if (value.variants !== undefined) {
 		expectObject(value.variants, `${at}.variants`);
 		for (const [name, variant] of Object.entries(value.variants)) {

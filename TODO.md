@@ -1903,9 +1903,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 # C libraries
 
-- [ ] Define initialization and cleanup ownership for destruction-root callbacks on
-      caller-allocated storage, preserving native storage after VM teardown.
-
 - [ ] Remove measured marshalling, allocation, callback-dispatch, and unused binding
       build costs. Compare representative libraries against C and Bun, retaining
       output parity, matched toolchains, and CPU, memory, disk, and binary-size evidence.

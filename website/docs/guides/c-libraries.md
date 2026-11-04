@@ -450,8 +450,8 @@ Borrowed echoes preserve callback-loan scope.
 When failed delivery leaves a resource retained by C, new ownership must wait for
 its native leases to end. A `fresh` result can identify the next lifetime at a reused
 address once C destroys the old resource; its registrations survive older cleanup.
-Caller allocations keep explicit C cleanup through views; a library destroy binding
-cannot take ownership of their outer storage.
+Caller allocations keep ownership of their outer storage through views. A declared
+caller destructor cleans initialized C state before the binding frees that storage.
 
 Some APIs fill a state struct allocated by their caller. For a complete, fixed-size
 struct, `storage: "caller"` exports a zero-argument factory named by the type fact:
@@ -477,12 +477,41 @@ try {
 }
 ```
 
-Disposing or collecting the handle frees its outer storage. This does not call C
-cleanup, so `destroy` and `collect: true` cannot accompany caller storage. Retain the
-handle while C retains its pointer, and dispose it only after C stops using it.
+Without managed cleanup facts, disposing or collecting the handle frees only its outer
+storage. Retain the handle while C retains its pointer, and dispose it only after C
+stops using it.
 The wrapper also releases callbacks keyed by that storage; calls already queued can
 finish from their copied arguments.
 Asynchronous close needs the library's completion and lifetime contract.
+
+To manage initialized state, pair an unconditional collecting destructor with an
+initializer fact:
+
+```ts
+types: {
+	CodecState: { handle: { storage: "caller", destroy: "codec_cleanup", collect: true } },
+},
+functions: {
+	codec_init: { initializes: { param: "state", success: "0" } },
+},
+```
+
+The initializer takes an exclusive, mutable handle input. Its `success` names an
+integer status or C constant; omit it when every native return acquires cleanup
+responsibility. Failure must leave the storage safe to free without C cleanup.
+Repeated or concurrent initialization rejects before C. Ordinary pointer echoes do
+not arm cleanup.
+
+Native success arms cleanup before JavaScript result conversion. A later delivery
+error therefore leaves the state initialized. Disposal, the destructor binding, and
+collection run C cleanup before freeing the outer allocation. The destructor must
+leave that allocation to the binding. Async initialization follows the same rules,
+including discarded results during shutdown.
+
+Initialized caller storage can own callback registrations directly or through
+owner-bound children. Independent native leases preserve its storage and retained
+byte buffers after VM teardown. Release managed caller state through its destructor
+binding; a `callback.closes` completion cannot replace this cleanup contract.
 
 For a struct ending in a flexible or zero-length array, name that field with
 `trailing`. The factory takes the number of trailing elements as a bigint:

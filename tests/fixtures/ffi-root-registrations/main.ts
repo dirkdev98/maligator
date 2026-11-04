@@ -1,6 +1,7 @@
 /* oxlint-disable no-console -- Reports observable registration ownership. */
 import * as c from "maligator:ffi/lifetime";
 import { createWorkerUrl, Worker } from "maligator:workers";
+import { checkCallerInitialization } from "./caller.ts";
 import { checkCopied } from "./copied.ts";
 function check(value: boolean, message: string): asserts value {
 	if (!value) throw new Error(message);
@@ -145,4 +146,5 @@ function cycle(): void {
 	);
 }
 await checkCopied(collect);
+await checkCallerInitialization(collect);
 console.log("root registrations passed");

@@ -2834,6 +2834,8 @@ bool mal_ffi_close_prepare(
         || mal_ffi_is_library_resource(handle->type, handle->value))
         return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, error,
             "a handle no other C call is using");
+    if (handle->owns_storage && handle->type->size == 0 && ffi_handle_policy(handle)->destroy != nullptr)
+        return mal_ffi_expected(vm, error, "a destructor binding for managed caller-storage cleanup");
     MalFfiClose *close = calloc(1, sizeof(*close));
     if (close == nullptr) return mal_ffi_out_of_memory(vm);
     close->site = site;
@@ -3037,7 +3039,7 @@ static MalValue ffi_handle_dispose(
         handle->closing = true;
         // Unconditional release can hand out the same pointer again. A conditional
         // release keeps its identity until C confirms it stopped owning the resource.
-        if (handle->type->size == 0 && (!release || !owner->destroy_can_fail))
+        if (!handle->owns_storage && handle->type->size == 0 && (!release || !owner->destroy_can_fail))
             ffi_handle_forget(handle);
         if (release) {
             if (!owner->destroy(value)) {
@@ -3994,11 +3996,13 @@ static bool ffi_state_check(MalVm *vm, MalFfiHandleObject *handle, const MalFfiS
     return true;
 }
 
-static bool ffi_prepare_result_handle(
-    MalVm *vm, MalFfiHandleObject *handle, const MalFfiSite *site, MalFfiNativeHandle **prepared) {
+static bool ffi_prepare_handle(
+    MalVm *vm, MalFfiHandleObject *handle, const MalFfiSite *site,
+    MalFfiNativeHandle **prepared, const void *operation) {
     bool borrowed = ffi_handle_borrowed(handle);
     if (handle->retained != nullptr
-        && (handle->operation != nullptr || (!borrowed && !ffi_state_check(vm, handle, site)))) {
+        && ((handle->operation != nullptr && handle->operation != operation)
+            || (!borrowed && !ffi_state_check(vm, handle, site)))) {
         if (!mal_ffi_threw(vm)) mal_ffi_expected(vm, site, "state no C operation is using");
         return false;
     }
@@ -4049,7 +4053,8 @@ static bool ffi_callback_input_contains(MalFfiCallback *callback, MalFfiHandleOb
     return false;
 }
 
-bool mal_ffi_callback_own(MalVm *vm, MalFfiCallback *callback, MalValue value, const MalFfiSite *site) {
+bool mal_ffi_callback_own(MalVm *vm, MalFfiCallback *callback, MalValue value,
+    const void *operation, const MalFfiSite *site) {
     if (callback == nullptr) return true;
     MalFfiHandleObject *handle = ffi_handle(value);
     if (handle == nullptr) return mal_ffi_expected(vm, site, "a non-null registration owner");
@@ -4064,11 +4069,11 @@ bool mal_ffi_callback_own(MalVm *vm, MalFfiCallback *callback, MalValue value, c
     const MalFfiHandleType *policy = ffi_handle_policy(handle);
     if (handle->ownership != MAL_FFI_HANDLE_OWNED || policy->destroy == nullptr)
         return mal_ffi_expected(vm, site, "an independently owned library resource with a destructor");
-    // Final native release must stop C consumers before freeing copied storage.
-    if (handle->owns_storage && (handle->type->size == 0 || !policy->collect || policy->destroy_can_fail))
-        return mal_ffi_expected(vm, site, "copied owner storage with an unconditional collecting destructor");
+    // Final native release must stop C consumers before freeing owned storage.
+    if (handle->owns_storage && (!policy->collect || policy->destroy_can_fail))
+        return mal_ffi_expected(vm, site, "owner storage with an unconditional collecting destructor");
     MalFfiNativeHandle *native;
-    if (!ffi_prepare_result_handle(vm, handle, site, &native)) return false;
+    if (!ffi_prepare_handle(vm, handle, site, &native, operation)) return false;
     MalFfiKept *kept = (MalFfiKept *) callback;
     if (kept->owner != nullptr) abort();
     kept->owner = native;
@@ -4118,7 +4123,7 @@ static bool ffi_callback_retain_handle(
         }
         if (input && ffi_callback_input_contains(callback, held)) continue;
         MalFfiNativeHandle *native;
-        if (!ffi_prepare_result_handle(vm, held, site, &native)) goto mal_failed;
+        if (!ffi_prepare_handle(vm, held, site, &native, nullptr)) goto mal_failed;
         MalFfiResultCopy *result = malloc(sizeof(*result));
         if (result == nullptr) {
             mal_ffi_out_of_memory(vm);
@@ -4210,7 +4215,8 @@ bool mal_ffi_begin_handle_use(MalVm *vm, void *pin, const void *operation, const
 void mal_ffi_end_handle_use(
     MalVm *vm, void *pin, const void *operation, const MalFfiSite *site, bool check) {
     MalFfiHandleObject *handle = pin;
-    if (handle == nullptr || handle->operation != operation || handle->pins != 1) return;
+    // All arguments for this operation have finished C; independent callback pins may remain.
+    if (handle == nullptr || handle->operation != operation) return;
     if (check && handle->value != nullptr && vm->completion.kind != MAL_COMPLETION_THROW)
         (void) ffi_state_check(vm, handle, site);
     handle->operation = nullptr;
@@ -4393,6 +4399,27 @@ bool mal_ffi_handle_results_ready(MalVm *vm, const MalFfiHandleType *type, const
     return true;
 }
 
+bool mal_ffi_begin_handle_initialization(MalVm *vm, void *pin, const MalFfiHandleType *type,
+    bool worker, const MalFfiSite *site) {
+    MalFfiHandleObject *handle = pin;
+    if (handle == nullptr || handle->type != type || type->size != 0 || !handle->owns_storage
+        || handle->ownership != MAL_FFI_HANDLE_BORROWED || handle->scope != 0
+        || type->destroy == nullptr || !type->collect || type->destroy_can_fail
+        || handle->pins != 1 || handle->closing || handle->provisional || ffi_handle_borrowed(handle))
+        return mal_ffi_expected(vm, site, "uninitialized caller storage no other C call is using");
+    handle->closing = true;
+    handle->worker_closing = worker;
+    return true;
+}
+
+void mal_ffi_finish_handle_initialization(MalValue value, bool initialized) {
+    MalFfiHandleObject *handle = ffi_handle(value);
+    if (handle == nullptr) return;
+    if (initialized) handle->ownership = MAL_FFI_HANDLE_OWNED;
+    handle->closing = false;
+    handle->worker_closing = false;
+}
+
 bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, bool worker, const MalFfiSite *site) {
     if (pin == nullptr) return true;
     MalFfiHandleObject *handle = pin;
@@ -4400,7 +4427,7 @@ bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, bool worker, const MalFfiS
         return mal_ffi_expected(vm, site, "a resource the program owns for a destroy binding");
     if (ffi_handle_owner(handle) != nullptr)
         return mal_ffi_expected(vm, site, "an independently owned resource for a destroy binding");
-    if (handle->owns_storage && handle->type->size == 0)
+    if (handle->owns_storage && handle->type->size == 0 && handle->ownership != MAL_FFI_HANDLE_OWNED)
         return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
             "library-owned storage for a destroy binding; caller storage needs explicit C cleanup");
     if (handle->pins != 1 || handle->closing || handle->provisional || ffi_handle_borrowed(handle))

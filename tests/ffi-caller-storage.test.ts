@@ -15,6 +15,29 @@ import type { MaligatorFfiHandle } from "../src/public-api.d.ts";
 describe("caller storage contracts", () => {
 	let model: CModel;
 	it.each([
+		{ initializes: { param: 1 } },
+		{ initializes: { param: "state", success: "call()" } },
+		{ initializes: { param: "state" }, variants: {} },
+	])("rejects malformed initialization facts %j", (facts) => {
+		const directory = mkdtempSync(path.join(tmpdir(), "mal-init-facts-"));
+		try {
+			writeFileSync(
+				path.join(directory, "state.ffi.ts"),
+				`export default ${JSON.stringify({ headers: ["state.h"], functions: { caller_state_init: facts } })};\n`,
+			);
+			expect(() =>
+				loadLibraryContract(
+					"state",
+					{ contract: "state.ffi.ts" },
+					directory,
+					stripCompactTypes,
+				),
+			).toThrow("initializes");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+	it.each([
 		{ storage: "caller", trailing: 2 },
 		{ storage: "caller", trailing: "tail.member" },
 		{ trailing: "tail" },
@@ -118,15 +141,75 @@ describe("caller storage contracts", () => {
 		[
 			"CallerState",
 			{ storage: "caller", destroy: "caller_state_cleanup" },
-			"cleanup must remain explicit",
+			"unconditional collecting destructor",
 		],
-		["CallerState", { storage: "caller", collect: true }, "cleanup must remain explicit"],
+		[
+			"CallerState",
+			{ storage: "caller", collect: true },
+			"unconditional collecting destructor",
+		],
 	] satisfies Array<[string, MaligatorFfiHandle, string]>)(
 		"rejects unsupported allocation for %s with %j",
 		(name, handle, message) => {
 			expect(() =>
 				planBindings(model, { types: { [name]: { handle } }, functions: {} }),
 			).toThrow(message);
+		},
+	);
+	it("declares caller initialization with an explicit native success condition", () => {
+		const plan = planBindings(model, {
+			types: {
+				CallerState: {
+					handle: { storage: "caller", destroy: "caller_state_cleanup", collect: true },
+				},
+			},
+			functions: { caller_state_init: { initializes: { param: "state", success: "0" } } },
+		});
+		expect([...generateDeclarations([{ name: "state", plan }])].join("")).toContain(
+			"export function caller_state_init(state: CallerState, value: number): number;",
+		);
+	});
+	it("keeps managed caller cleanup on its destructor binding", () => {
+		expect(() =>
+			planBindings(model, {
+				types: {
+					CallerState: {
+						handle: { storage: "caller", destroy: "caller_state_cleanup", collect: true },
+					},
+				},
+				functions: {
+					caller_state_visit: {
+						params: { visit: { callback: { closes: "state", data: "data" } } },
+					},
+				},
+			}),
+		).toThrow("destructor binding");
+	});
+	it.each([
+		{ name: "caller_state_init", param: "state", facts: { nullable: true } },
+		{ name: "caller_state_init", param: "state", facts: { out: true } },
+		{ name: "caller_state_read", param: "state", facts: {} },
+		{ name: "caller_state_init", param: "missing", facts: {} },
+		{ name: "caller_state_same", param: "state", facts: {} },
+	])(
+		"rejects incompatible initialization of $name with $facts",
+		({ name, param, facts }) => {
+			expect(() =>
+				planBindings(model, {
+					types: {
+						CallerState: {
+							handle: {
+								storage: "caller",
+								destroy: "caller_state_cleanup",
+								collect: true,
+							},
+						},
+					},
+					functions: {
+						[name]: { initializes: { param, success: "0" }, params: { state: facts } },
+					},
+				}),
+			).toThrow("initializes");
 		},
 	);
 	it.each(["VariableState", "WideState"])(

@@ -2,6 +2,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <unistd.h>
 struct LifeChild {
     int value;
     int (*callback)(void *);
@@ -147,3 +148,47 @@ void life_clear_child(void) {
     held_child = NULL; child_data = NULL; child_release = NULL;
     if (release != NULL) release(data);
 }
+
+static CallerRoot *caller_live;
+static _Atomic int caller_entry_count, caller_init_count, caller_start_count;
+static int caller_close_count;
+void caller_close_view(CallerBase *root, void (*callback)(CallerBase *, void *), void *data) { (void) root; (void) callback; (void) data; caller_close_count++; }
+int caller_close_entries(void) { return caller_close_count; }
+int caller_init(CallerRoot *root, int value, int mode, const char **message, size_t *length) {
+    atomic_fetch_add(&caller_entry_count, 1);
+    *message = "x"; *length = mode == 2 ? (size_t)-1 : 1;
+    if (root->child != NULL) abort();
+    if (mode == 1) return -1;
+    if (mode != 5) { root->child = child_new(value); atomic_fetch_add(&caller_init_count, 1); }
+    if (mode == 3) root->length = (size_t)-1;
+    if (mode == 4 || mode == 5) { atomic_fetch_add(&caller_start_count, 1); usleep(150000); }
+    return mode == 5 ? -1 : 0;
+}
+int caller_init_callback(CallerRoot *root, void (*callback)(void)) {
+    const char *message; size_t length;
+    int result = caller_init(root, 443, 0, &message, &length);
+    callback(); return result;
+}
+int caller_init_late(CallerRoot *root, CallerLater later) {
+    const char *message; size_t length;
+    return caller_init(root, later.value, 0, &message, &length);
+}
+void caller_init_void(CallerRoot *root, int value) {
+    const char *message; size_t length;
+    (void) caller_init(root, value, 0, &message, &length);
+}
+CallerRoot *caller_echo(CallerRoot *root) { return root; }
+void caller_cleanup(CallerRoot *root) {
+    if (root->child == NULL) abort();
+    if (caller_live == root) caller_live = NULL;
+    child_free(root->child); root->child = NULL;
+}
+void caller_subscribe(CallerRoot *root, int (*callback)(void *), void *data, void (*release)(void *)) {
+    caller_live = root; life_subscribe(root->child, callback, data, release);
+}
+int caller_value(CallerRoot *root) { return life_value(root->child); }
+int caller_live_value(void) { return caller_live == NULL ? -1 : caller_value(caller_live); }
+int caller_live_byte(void) { return caller_live == NULL ? -1 : (int) caller_live->data[0] + (int) caller_live->length; }
+int caller_entries(void) { return atomic_load(&caller_entry_count); }
+int caller_inits(void) { return atomic_load(&caller_init_count); }
+int caller_started(void) { return atomic_load(&caller_start_count); }

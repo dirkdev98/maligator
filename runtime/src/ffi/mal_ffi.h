@@ -231,6 +231,9 @@ bool mal_ffi_to_worker_handle(
 void mal_ffi_unpin_worker_handle(void *pin);
 /** Begin cleanup with the sole pin, rejecting reentry until its result is known. */
 bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, bool worker, const MalFfiSite *site);
+bool mal_ffi_begin_handle_initialization(MalVm *vm, void *pin, const MalFfiHandleType *type,
+    bool worker, const MalFfiSite *site);
+void mal_ffi_finish_handle_initialization(MalValue value, bool initialized);
 /** Reject ambiguous pointer results before C can create a resource at a closing address. */
 bool mal_ffi_handle_results_ready(MalVm *vm, const MalFfiHandleType *type, const MalFfiSite *site);
 /** Finish cleanup, restoring a failed handle or closing a released resource. */
@@ -529,7 +532,9 @@ typedef struct MalFfiCallback {
 } MalFfiCallback;
 /** Record the owning thread before C can call a stack or retained context. */
 void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue function);
-bool mal_ffi_callback_own(MalVm *vm, MalFfiCallback *callback, MalValue value, const MalFfiSite *site);
+// The operation token permits snapshotting this call's pinned state before C starts.
+bool mal_ffi_callback_own(MalVm *vm, MalFfiCallback *callback, MalValue value,
+    const void *operation, const MalFfiSite *site);
 bool mal_ffi_callback_pin_owner(MalVm *vm, MalFfiCallback *callback, MalValue *value, void **pin,
     const MalFfiSite *site);
 void *mal_ffi_callback_result_copy(

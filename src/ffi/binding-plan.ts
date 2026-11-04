@@ -3,6 +3,7 @@ import type {
 	MaligatorFfiCallback,
 	MaligatorFfiCount,
 	MaligatorFfiFieldFacts,
+	MaligatorFfiFunctionFacts,
 	MaligatorFfiShape,
 	MaligatorFfiValueFacts,
 	MaligatorFfiVariant,
@@ -237,6 +238,7 @@ export interface BoundFunction {
 	readonly outputs: ReadonlyArray<MappedOutput>;
 	/** The parameter whose handle this destroy function releases, closed after the call. */
 	readonly closes?: number;
+	readonly initializes?: { readonly param: number; readonly success?: string };
 	/** An export that runs the C call on a worker thread and returns a promise. */
 	readonly async?: string;
 }
@@ -532,6 +534,7 @@ function valueCount(
 interface FunctionFacts {
 	readonly params: ReadonlyArray<MaligatorFfiValueFacts | undefined>;
 	readonly returns: MaligatorFfiValueFacts;
+	readonly initializes?: MaligatorFfiFunctionFacts["initializes"];
 }
 
 const EMPTY_FACTS: LibraryFacts = { types: {}, functions: {} };
@@ -671,9 +674,12 @@ function handleTypes(
 						`types.${key}.handle.trailing: array elements need a complete object type`,
 					);
 			}
-			if (handle.destroy !== undefined || handle.collect === true)
+			if (
+				(handle.destroy !== undefined || handle.collect === true) &&
+				!(typeof handle.destroy === "string" && handle.collect === true)
+			)
 				throw new FfiError(
-					`types.${key}.handle.storage: C initialization and cleanup must remain explicit`,
+					`types.${key}.handle.storage: managed caller cleanup requires an unconditional collecting destructor`,
 				);
 		}
 		const isRecord = (type: CType): boolean => {
@@ -851,7 +857,11 @@ function functionFacts(model: CModel, facts: LibraryFacts): Map<string, Function
 			}
 			params[index] = valueFacts;
 		}
-		result.set(name, { params, returns: entry.returns ?? NO_FACTS });
+		result.set(name, {
+			params,
+			returns: entry.returns ?? NO_FACTS,
+			...(entry.initializes === undefined ? {} : { initializes: entry.initializes }),
+		});
 	}
 	return result;
 }
@@ -1918,7 +1928,14 @@ class Planner {
 				if (this.#handles.get(mapped.value.name)?.allocator !== undefined)
 					throw new FfiError(`${at}: requires library-owned resource storage`);
 				if (fact.handle.lifetime === "owner") {
-					if (handle.allocator !== undefined)
+					if (
+						handle.allocator !== undefined &&
+						!(
+							handle.destroy !== undefined &&
+							handle.collect &&
+							handle.destroy.success === undefined
+						)
+					)
 						throw new FfiError(
 							`${at}: owner lifetime requires library-owned parent storage`,
 						);
@@ -2441,6 +2458,13 @@ class Planner {
 			);
 		if (resolveCType(this.#model, declaration.returns).kind !== "void")
 			throw new FfiError(`${at}: a close registration returns void`);
+		if (
+			this.#handles.get(handle.name)!.allocator !== undefined &&
+			this.#handles.get(handle.name)!.destroy !== undefined
+		)
+			throw new FfiError(
+				`${at}: initialized caller storage uses its destructor binding for cleanup`,
+			);
 		const handles = param.value.params.flatMap((value, position) =>
 			typeof value === "object" && value.kind === "handle" ? [{ value, position }] : [],
 		);
@@ -3257,6 +3281,46 @@ class Planner {
 					reason: "pointer results require a complete result transaction",
 				});
 		}
+		let initializes: BoundFunction["initializes"];
+		if (facts.initializes !== undefined) {
+			const at = "initializes";
+			const index = parameterIndex(facts.initializes.param, `${at}.param`);
+			const input = args[index];
+			const value = input?.kind === "input" ? params[input.param]!.value : undefined;
+			const pointer = resolveCType(this.#model, declaration.params[index]!.type);
+			const target =
+				pointer.kind === "pointer" ? resolveCType(this.#model, pointer.to) : undefined;
+			const handle = value?.kind === "handle" ? this.#handles.get(value.name) : undefined;
+			if (
+				input?.kind !== "input" ||
+				value?.kind !== "handle" ||
+				value.pass !== "pointer" ||
+				value.nullable ||
+				pointer.kind !== "pointer" ||
+				(target !== undefined && "const" in target && target.const === true) ||
+				handle?.allocator === undefined ||
+				handle.destroy === undefined ||
+				!handle.collect ||
+				handle.destroy.success !== undefined ||
+				closes !== undefined
+			)
+				throw new FfiError(
+					`${where(at)}: requires a mutable nonnullable caller-storage input with an unconditional collecting destructor`,
+				);
+			if (
+				facts.initializes.success !== undefined &&
+				!["integer", "enum", "bool"].includes(
+					resolveCType(this.#model, declaration.returns).kind,
+				)
+			)
+				throw new FfiError(`${where(at)}.success: requires an integer or boolean return`);
+			initializes = {
+				param: input.param,
+				...(facts.initializes.success === undefined
+					? {}
+					: { success: facts.initializes.success }),
+			};
+		}
 		if ("gap" in returns || gaps.length > 0) {
 			return { name: declaration.name, declaration, gaps };
 		}
@@ -3278,6 +3342,7 @@ class Planner {
 			...(resultCount === undefined ? {} : { resultCount }),
 			outputs,
 			...(closes === undefined ? {} : { closes }),
+			...(initializes === undefined ? {} : { initializes }),
 		};
 	}
 }
@@ -3487,7 +3552,12 @@ export function planBindings(
 	}
 	const lifetimeRoots = new Set(
 		[...handles.values()]
-			.filter((handle) => handle.destroy !== undefined && handle.allocator === undefined)
+			.filter(
+				(handle) =>
+					handle.destroy !== undefined &&
+					(handle.allocator === undefined ||
+						(handle.collect && handle.destroy.success === undefined)),
+			)
 			.map((handle) => handle.family),
 	);
 	const lifetimeQueue = [...lifetimeRoots];

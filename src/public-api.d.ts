@@ -71,7 +71,8 @@ export interface MaligatorFfiLibrary {
 export interface MaligatorFfiHandle {
 	/** Export a factory named by the type fact. It allocates aligned,
 	 * zeroed caller-owned storage. C initialization and cleanup
-	 * remain explicit; disposing the handle frees only this storage.
+	 * remain explicit. With a collecting destructor, an `initializes` function arms
+	 * cleanup; before initialization, disposal frees only the outer storage.
 	 */
 	storage?: "caller";
 	/** A final flexible or zero-length array field in caller storage. The factory
@@ -330,6 +331,11 @@ export interface MaligatorFfiFunctionFacts {
 	/** Facts per parameter, keyed by C name or by 1-based position for unnamed ones. */
 	params?: Record<string, MaligatorFfiValueFacts>;
 	returns?: MaligatorFfiValueFacts;
+	/** Arm caller-storage cleanup after C returns successfully. An omitted success
+	 * condition means every native return acquires cleanup responsibility. A failed
+	 * initialization must leave storage safe to free without calling the destructor.
+	 */
+	initializes?: { param: string; success?: string };
 	/**
 	 * Functions that call a variadic function with fixed argument types, keyed by the
 	 * name each is exported as. The function's own facts apply to every variant.
