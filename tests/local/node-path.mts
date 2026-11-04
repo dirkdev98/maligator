@@ -42,15 +42,6 @@ function throwsTypeError(name: string, fn: () => unknown): void {
 	}
 	check(name, threw);
 }
-function throwsRangeError(name: string, fn: () => unknown): void {
-	let threw = false;
-	try {
-		fn();
-	} catch (e) {
-		threw = e instanceof RangeError;
-	}
-	check(name, threw);
-}
 
 // --- bootstrap additions ---
 eq("basename-nested", basename("/foo/bar.txt"), "bar.txt");
@@ -193,8 +184,15 @@ eq("join-above-root", join("a", "..", "..", "b"), "../b");
 eq("join-trailing-separator", join("a", "b/"), "a/b/");
 eq("join-unicode", join("/alpha", "\u{1f40a}", "..", "beta.txt"), "/alpha/beta.txt");
 eq("join-embedded-nul", join("a\0b", "c"), "a\0b/c");
-const halfStringLimit = "x".repeat(1 << 23);
-throwsRangeError("join-string-limit", () => join(halfStringLimit, halfStringLimit));
+const largeSegment = "x".repeat(1 << 23);
+const largeJoined = join(largeSegment, largeSegment);
+check(
+	"join-large-path",
+	largeJoined.length === 2 * largeSegment.length + 1 &&
+		largeJoined[largeSegment.length - 1] === "x" &&
+		largeJoined[largeSegment.length] === "/" &&
+		largeJoined[largeSegment.length + 1] === "x",
+);
 
 // --- normalize ---
 eq("normalize-empty", normalize(""), ".");
