@@ -84,6 +84,7 @@ import { coreInstructionId } from "./core-ir.ts";
 import { lowerKnownOperationResults } from "./core-known-operation-results.ts";
 import { resolveKnownOperations } from "./core-known-operations.ts";
 import { reuseLiteralConstants } from "./core-literal-constants.ts";
+import { lowerLiteralObjectAssign } from "./core-literal-object-assign.ts";
 import { eliminateUnusedBlockParameters } from "./core-local-passes.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
@@ -2814,6 +2815,7 @@ export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	materializeVirtualState,
 	reuseLiteralConstants,
 	lowerKnownOperationResults,
+	lowerLiteralObjectAssign,
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,
 	annotateKnownOwnSlots,
@@ -2847,6 +2849,7 @@ export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	materializeVirtualState,
 	reuseLiteralConstants,
 	lowerKnownOperationResults,
+	lowerLiteralObjectAssign,
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,
 	annotateKnownOwnSlots,

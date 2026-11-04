@@ -5,6 +5,7 @@ tests/native/factory-projection.test.ts
 tests/native/record-sort-callback.test.ts
 tests/native/record-iteration.test.ts
 tests/native/record-columns.test.ts
+tests/native/literal-object-assign.test.ts
 tests/native/generator-fusion.test.ts
 tests/native/promise-all-dense.test.ts
 tests/native/eval-gc-runtime-compilation-p0.test.ts
