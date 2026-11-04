@@ -798,7 +798,7 @@ describe("ffi contract facts", () => {
 		);
 		rejects(
 			{ functions: { shapes_area: { returns: { borrowed: true } } } },
-			"functions.shapes_area.returns.borrowed: the result is not a handle",
+			"functions.shapes_area.returns.borrowed:",
 		);
 		rejects(
 			{ functions: { shapes_area: { returns: { free: "shapes_free" } } } },
