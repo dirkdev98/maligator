@@ -1,0 +1,273 @@
+import { spawnSync } from "node:child_process";
+import type { SpawnSyncReturns } from "node:child_process";
+import { closeSync, openSync, rmSync, statSync, writeFileSync } from "node:fs";
+import * as path from "node:path";
+import { artifactFileDigest } from "../src/artifact-store.ts";
+import { largeDevelopmentSource } from "../tests/fixtures/selfhost-large-development/source.ts";
+import { startDevelopmentDriver } from "./development-driver.ts";
+
+interface LargeInputCheckOptions {
+	cli: string;
+	project: string;
+	reports: string;
+	environment: NodeJS.ProcessEnv;
+	toolchainFreeEnvironment: NodeJS.ProcessEnv;
+	invoke(args: Array<string>, environment?: NodeJS.ProcessEnv): SpawnSyncReturns<string>;
+	checkProfile(directory: string, command: "run" | "test"): void;
+	waitForOutput(read: () => string, expected: string, timeoutMs: number): Promise<void>;
+}
+
+/** Verify large-input handling through a packaged CLI in an owned test project. */
+export async function checkLargeInputs(options: LargeInputCheckOptions): Promise<void> {
+	const { project, reports } = options;
+	const dependency = path.join(project, "large-dependency.mts");
+	const revisionFile = path.join(project, "large-revision.mts");
+	const entry = path.join(project, "large-main.mts");
+	const config = "large-inputs.build.mts";
+	const testFile = "large-inputs.test.mts";
+	const dataLength = 40 * 1024 * 1024;
+	writeFileSync(
+		dependency,
+		`/*${"x".repeat(40 * 1024 * 1024)}*/\n${largeDevelopmentSource()}`,
+	);
+	writeFileSync(
+		path.join(project, "large-records.json"),
+		JSON.stringify({ text: `${"x".repeat(dataLength)}é😀` }),
+	);
+	writeFileSync(
+		path.join(project, config),
+		`export default {
+	entry: "large-main.mts",
+	outputName: "selfhost-large-inputs",
+	engine: { eval: false, regexp: false, intl: { enabled: false } },
+	surface: { node: true },
+};\n`,
+	);
+	writeFileSync(
+		path.join(project, "large-data.mts"),
+		`import { readFileSync } from "node:fs";
+export function readData() {
+	const source = readFileSync("large-records.json", "utf8");
+	const parsed = JSON.parse(source);
+	if (parsed.text.length !== ${dataLength + 3} || parsed.text.slice(-3) !== "é😀") throw new Error("large UTF-8 data mismatch");
+	return parsed.text.length;
+}\n`,
+	);
+	writeFileSync(
+		entry,
+		`import { calculate, operationCount } from "./large-dependency.mts";
+import { readData } from "./large-data.mts";
+import { revision } from "./large-revision.mts";
+console.log("LARGE_INPUTS " + JSON.stringify([revision, calculate(0), calculate(operationCount - 1), readData()]));\n`,
+	);
+	const writeRevision = (revision: number, delta = 0) =>
+		writeFileSync(
+			revisionFile,
+			`export const revision = ${revision};\nexport const delta = ${delta};\n`,
+		);
+	writeRevision(0);
+	const expected = () => {
+		const result = spawnSync(process.execPath, [entry], {
+			cwd: project,
+			encoding: "utf8",
+			timeout: 30_000,
+		});
+		if (result.status !== 0)
+			throw new Error(`large Node reference failed: ${result.stderr}`, {
+				cause: result.error,
+			});
+		return result.stdout;
+	};
+	const initial = expected();
+	const first = (
+		JSON.parse(initial.trim().slice("LARGE_INPUTS ".length)) as Array<number>
+	)[1]!;
+	const invoke = (args: Array<string>, environment: NodeJS.ProcessEnv = {}) => {
+		const result = options.invoke(args, environment);
+		if (result.status !== 0 || result.signal !== null)
+			throw new Error(
+				`large-input ${args.join(" ")} failed:\n${result.stdout}\n${result.stderr}`,
+				{ cause: result.error },
+			);
+		return result;
+	};
+	const buildArgs = ["build", "--config", config, "--verbose"];
+	const runBuilt = (binary: string, output: string) => {
+		const result = spawnSync(binary.trim(), [], {
+			cwd: project,
+			env: options.toolchainFreeEnvironment,
+			encoding: "utf8",
+			timeout: 30_000,
+		});
+		if (result.status !== 0 || result.stdout !== output)
+			throw new Error(
+				`large-input binary disagreed with Node:\n${result.stdout}\n${result.stderr}`,
+				{ cause: result.error },
+			);
+	};
+	const built = invoke(buildArgs).stdout;
+	runBuilt(built, initial);
+	const restored = invoke(buildArgs);
+	if (restored.stdout !== built || !restored.stderr.includes("Binary cache: hit"))
+		throw new Error("large development build did not restore its binary cache");
+	runBuilt(restored.stdout, initial);
+	for (let iteration = 0; iteration < 2; iteration++) {
+		const run = invoke(["run", "--config", config], options.toolchainFreeEnvironment);
+		if (run.stdout !== initial)
+			throw new Error(`large run disagreed with Node: ${run.stdout}`);
+	}
+	writeFileSync(
+		path.join(project, testFile),
+		`import { expect, test } from "maligator:test";
+import { calculate, operationCount } from "./large-dependency.mts";
+import { readData } from "./large-data.mts";
+import { revision, delta } from "./large-revision.mts";
+let calls = 0;
+test("large inputs", () => {
+	expect(++calls).toBe(1);
+	expect(calculate(0)).toBe(${first} + delta);
+	expect(Number.isFinite(calculate(operationCount - 1))).toBe(true);
+	expect(readData()).toBe(${dataLength + 3});
+	console.log("LARGE_TEST_REVISION " + revision + " CALL " + calls);
+});\n`,
+	);
+	for (let iteration = 0; iteration < 2; iteration++) {
+		const result = invoke(
+			["test", "--config", config, testFile],
+			options.toolchainFreeEnvironment,
+		);
+		if (!result.stdout.includes("1 passed, 0 failed"))
+			throw new Error(`large test did not pass: ${result.stdout}`);
+	}
+	writeFileSync(
+		path.join(project, "large-dev.mts"),
+		`import { createServer } from "node:http";
+import { ready } from "maligator:application";
+import { calculate } from "./large-dependency.mts";
+import { readData } from "./large-data.mts";
+import { revision, delta } from "./large-revision.mts";
+if (calculate(0) !== ${first} + delta) throw new Error("stale large dependency");
+readData();
+const server = createServer((_request, response) => response.end(String(revision)));
+server.listen(0, "127.0.0.1", () => { console.log("DX_HTTP_PORT " + server.address().port); ready(); });\n`,
+	);
+	const development = startDevelopmentDriver(
+		options.cli,
+		["dev", "large-dev.mts", "--status", "--config", config],
+		{
+			cwd: project,
+			env: options.toolchainFreeEnvironment,
+			readinessTimeoutMs: 180_000,
+		},
+	);
+	let developmentCode: number | null | undefined;
+	try {
+		await development.waitForRevision(0);
+		writeRevision(1);
+		await development.waitForRevision(1);
+		const edited = `/*${"x".repeat(40 * 1024 * 1024)}*/\n${largeDevelopmentSource().replace("return value;", "return value + 1;")}`;
+		writeFileSync(dependency, edited);
+		writeRevision(2, 1);
+		await development.waitForRevision(2);
+	} finally {
+		const outcome = await development.stop();
+		writeFileSync(
+			path.join(reports, "large-dev.log"),
+			`${outcome.stdout}\n${outcome.stderr}`,
+		);
+		developmentCode = outcome.code;
+	}
+	if (developmentCode !== 0)
+		throw new Error(`large dev did not stop cleanly: ${developmentCode}`);
+	const watch = startDevelopmentDriver(
+		options.cli,
+		["test", "--watch", "--status", "--config", config, testFile],
+		{
+			cwd: project,
+			env: options.toolchainFreeEnvironment,
+		},
+	);
+	let watchCode: number | null | undefined;
+	try {
+		await options.waitForOutput(
+			() => watch.output,
+			"LARGE_TEST_REVISION 2 CALL 1",
+			180_000,
+		);
+		await options.waitForOutput(() => watch.output, "0 failed;", 180_000);
+		const beforeRerun = { stdout: watch.stdout.length, stderr: watch.stderr.length };
+		const rerunOutput = () =>
+			`${watch.stdout.slice(beforeRerun.stdout)}\n${watch.stderr.slice(beforeRerun.stderr)}`;
+		process.kill(watch.pid!, "SIGHUP");
+		await options.waitForOutput(rerunOutput, "LARGE_TEST_REVISION 2 CALL 1", 180_000);
+		await options.waitForOutput(rerunOutput, "0 failed;", 180_000);
+		const beforeEdit = { stdout: watch.stdout.length, stderr: watch.stderr.length };
+		const editedOutput = () =>
+			`${watch.stdout.slice(beforeEdit.stdout)}\n${watch.stderr.slice(beforeEdit.stderr)}`;
+		writeRevision(3, 1);
+		await options.waitForOutput(editedOutput, "LARGE_TEST_REVISION 3 CALL 1", 180_000);
+		await options.waitForOutput(editedOutput, "0 failed;", 180_000);
+	} finally {
+		const outcome = await watch.stop();
+		writeFileSync(
+			path.join(reports, "large-test-watch.log"),
+			`${outcome.stdout}\n${outcome.stderr}`,
+		);
+		watchCode = outcome.code;
+	}
+	if (watchCode !== 0)
+		throw new Error(`large test watch did not stop cleanly: ${watchCode}`);
+	const editedExpected = expected();
+	runBuilt(invoke(buildArgs).stdout, editedExpected);
+	runBuilt(invoke([...buildArgs, "--production"]).stdout, editedExpected);
+	for (const command of ["run", "test"] as const) {
+		const directory = path.join(reports, `large-profile-${command}`);
+		const result = invoke(
+			[
+				command,
+				"--profile",
+				"--config",
+				config,
+				...(command === "test" ? [testFile] : []),
+			],
+			{ MALIGATOR_PROFILE_DIRECTORY: directory },
+		);
+		if (
+			command === "run"
+				? result.stdout !== editedExpected
+				: !result.stdout.includes("1 passed, 0 failed")
+		)
+			throw new Error(
+				`large ${command} profile lost observable output: ${result.stdout}`,
+			);
+		options.checkProfile(directory, command);
+	}
+	const dump = path.join(reports, "large-generated.c");
+	const descriptor = openSync(dump, "w");
+	try {
+		const result = spawnSync(options.cli, [...buildArgs, "--print"], {
+			cwd: project,
+			env: options.environment,
+			stdio: ["ignore", descriptor, "pipe"],
+			encoding: "utf8",
+			timeout: 180_000,
+			killSignal: "SIGKILL",
+			maxBuffer: 8 * 1024 * 1024,
+		});
+		if (result.status !== 0)
+			throw new Error(`large C dump failed: ${result.stderr}`, { cause: result.error });
+		const bytes = statSync(dump).size;
+		if (bytes <= 32 * 1024 * 1024)
+			throw new Error("large fixture did not exercise aggregate generated output");
+		writeFileSync(
+			path.join(reports, "large-inputs.json"),
+			`${JSON.stringify({ sourceBytes: statSync(dependency).size, sourceSha256: artifactFileDigest(dependency), generatedBytes: bytes, generatedSha256: artifactFileDigest(dump), commands: ["build", "run", "dev", "test", "test --watch", "build --production", "run --profile", "test --profile", "build --print"], edits: ["small dependency", "large dependency"], cacheRestoration: true }, null, 2)}\n`,
+		);
+	} finally {
+		closeSync(descriptor);
+		rmSync(dump, { force: true });
+	}
+	console.log(
+		"ok   large sources, UTF-8 data and generated output survived command execution, edits and cache restoration",
+	);
+}

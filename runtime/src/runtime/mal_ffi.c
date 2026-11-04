@@ -464,7 +464,7 @@ MalValue mal_ffi_from_string(MalVm *vm, const char *value) {
 
 MalValue mal_ffi_from_string_length(MalVm *vm, const char *value, size_t length) {
     if (value == nullptr) return mal_value_new_null();
-    if (length > 3 * MAL_STRING_MAX_CODE_UNITS) {
+    if ((u64) length > UINT64_C(3) * MAL_STRING_MAX_CODE_UNITS) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, (const byte *) "C string is too large");
         return mal_value_new_undefined();
     }
@@ -494,7 +494,7 @@ MalFfiCopyStatus mal_ffi_copy_callback_bytes(
     const void *source, uint64_t length, bool text, void **out) {
     *out = nullptr;
     if (source == nullptr) return MAL_FFI_COPY_OK;
-    uint64_t limit = text ? 3 * MAL_STRING_MAX_CODE_UNITS : INT32_MAX;
+    uint64_t limit = text ? UINT64_C(3) * MAL_STRING_MAX_CODE_UNITS : INT32_MAX;
     if (length > limit || length > SIZE_MAX) return MAL_FFI_COPY_RANGE;
     void *copy = malloc(length == 0 ? 1 : (size_t) length);
     if (copy == nullptr) return MAL_FFI_COPY_MEMORY;
@@ -530,7 +530,7 @@ MalFfiCopyStatus mal_ffi_copy_callback_strings(
         memcpy(&text, (const byte *) source + i * sizeof(text), sizeof(text));
         if (text == nullptr) continue;
         size_t bytes = strlen(text);
-        if (bytes > 3 * MAL_STRING_MAX_CODE_UNITS || bytes >= SIZE_MAX - total)
+        if ((u64) bytes > UINT64_C(3) * MAL_STRING_MAX_CODE_UNITS || bytes >= SIZE_MAX - total)
             return MAL_FFI_COPY_RANGE;
         total += bytes + 1;
     }
@@ -634,7 +634,7 @@ MalValue mal_ffi_get_global_value(MalVm *vm, const MalFfiGlobal *global, const M
             }
         } else if (error == nullptr && stored != nullptr && length > remaining)
             error = "a byte count within the retained allocation";
-        if (error == nullptr && length > (global->text ? 3 * MAL_STRING_MAX_CODE_UNITS : UINT32_MAX))
+        if (error == nullptr && length > (global->text ? UINT64_C(3) * MAL_STRING_MAX_CODE_UNITS : UINT32_MAX))
             error = "a byte count within JavaScript storage limits";
         if (error == nullptr) {
             copy = malloc(length == 0 ? 1 : length);

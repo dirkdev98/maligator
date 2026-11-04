@@ -69,7 +69,7 @@ function emitProgramTranslationUnitSources(
 			options,
 			maximum === undefined
 				? undefined
-				: { targetCodeUnits: maximum, hardMaximumCodeUnits: maximum },
+				: { targetCodeUnits: maximum, maximumNativeFunctionCodeUnits: maximum },
 		).map((unit) => unit.sourceChunks.join("")),
 	);
 }
@@ -410,7 +410,9 @@ describe("emit-program-image instruction packing", () => {
 				{
 					onRendererBailout: ({ file, name }) => declined.push(`${file}:${name}`),
 				},
-				limited ? { targetCodeUnits: maximum, hardMaximumCodeUnits: maximum } : undefined,
+				limited
+					? { targetCodeUnits: maximum, maximumNativeFunctionCodeUnits: maximum }
+					: undefined,
 			);
 			expect(declined).toEqual(limited ? ["/fixture/entry.mjs:"] : []);
 		},
@@ -1088,7 +1090,7 @@ describe("emit-program-image instruction packing", () => {
 	it("locks the measured translation-unit policy independently of scheduling", () => {
 		expect(DEFAULT_TRANSLATION_UNIT_POLICY).toEqual({
 			targetCodeUnits: 2 * 1024 * 1024,
-			hardMaximumCodeUnits: 8 * 1024 * 1024,
+			maximumNativeFunctionCodeUnits: 8 * 1024 * 1024,
 		});
 	});
 
@@ -1112,7 +1114,7 @@ describe("emit-program-image instruction packing", () => {
 				{},
 				{
 					targetCodeUnits,
-					hardMaximumCodeUnits: 200_000,
+					maximumNativeFunctionCodeUnits: 200_000,
 				},
 			);
 		const small = emit(12_000);
@@ -1163,7 +1165,7 @@ describe("emit-program-image instruction packing", () => {
 		const units = emitProgramTranslationUnits(
 			image,
 			{},
-			{ targetCodeUnits: 20_000, hardMaximumCodeUnits: 200_000 },
+			{ targetCodeUnits: 20_000, maximumNativeFunctionCodeUnits: 200_000 },
 		);
 		const compiledUnit = units.find((unit) =>
 			unit.definitions.some((item) => splitSymbolFunctionIndex(image, item.symbol) === 0),
@@ -1198,11 +1200,11 @@ describe("emit-program-image instruction packing", () => {
 			runtime: { ...definition.runtime, functionCount: 1, functions },
 			native: createConservativeNativePlan(functions),
 		};
-		const emit = (hardMaximumCodeUnits: number) =>
+		const emit = (maximumNativeFunctionCodeUnits: number) =>
 			emitProgramTranslationUnits(
 				image,
 				{},
-				{ targetCodeUnits: 20_000, hardMaximumCodeUnits },
+				{ targetCodeUnits: 20_000, maximumNativeFunctionCodeUnits },
 			);
 		const compiledUnit = (units: ReturnType<typeof emit>) =>
 			units.find((unit) =>
@@ -1261,7 +1263,7 @@ describe("emit-program-image instruction packing", () => {
 			runtime: { ...image.runtime, functions: changedFunctions },
 			native: createConservativeNativePlan(changedFunctions),
 		};
-		const policy = { targetCodeUnits: 16_000, hardMaximumCodeUnits: 200_000 };
+		const policy = { targetCodeUnits: 16_000, maximumNativeFunctionCodeUnits: 200_000 };
 		const locations = (value: ProgramImage) =>
 			new Map(
 				emitProgramTranslationUnits(value, {}, policy).flatMap((unit) =>
@@ -1316,7 +1318,7 @@ describe("emit-program-image instruction packing", () => {
 				{ opcode: "RETURN" as const, value: 0 },
 			],
 		});
-		const policy = { targetCodeUnits: 16_000, hardMaximumCodeUnits: 200_000 };
+		const policy = { targetCodeUnits: 16_000, maximumNativeFunctionCodeUnits: 200_000 };
 		const codeUnits = (value: ProgramImage) =>
 			emitProgramTranslationUnits(value, {}, policy).filter(
 				(unit) => unit.kind === "code",
@@ -1382,7 +1384,7 @@ describe("emit-program-image instruction packing", () => {
 			},
 			native: createConservativeNativePlan(insertedFunctions),
 		};
-		const policy = { targetCodeUnits: 16_000, hardMaximumCodeUnits: 200_000 };
+		const policy = { targetCodeUnits: 16_000, maximumNativeFunctionCodeUnits: 200_000 };
 		const locations = (value: ProgramImage) => {
 			const byName = new Map<string, string>();
 			for (const unit of emitProgramTranslationUnits(value, {}, policy)) {
@@ -1433,7 +1435,7 @@ describe("emit-program-image instruction packing", () => {
 			},
 			native: createConservativeNativePlan(functions),
 		});
-		const policy = { targetCodeUnits: 16_000, hardMaximumCodeUnits: 200_000 };
+		const policy = { targetCodeUnits: 16_000, maximumNativeFunctionCodeUnits: 200_000 };
 		const codeUnits = (image: ProgramImage) =>
 			emitProgramTranslationUnits(image, {}, policy)
 				.filter((unit) => unit.kind === "code")
@@ -1457,7 +1459,7 @@ describe("emit-program-image instruction packing", () => {
 				},
 			},
 			{},
-			{ targetCodeUnits: 10_000, hardMaximumCodeUnits: 500_000 },
+			{ targetCodeUnits: 10_000, maximumNativeFunctionCodeUnits: 500_000 },
 		);
 		const dataUnits = units.filter((unit) => unit.kind === "data");
 
@@ -1834,9 +1836,20 @@ describe("emit-program-image instruction packing", () => {
 		expect(() => emitProgramTranslationUnitSources(definition, {}, 0)).toThrow(
 			/positive integer/,
 		);
-		expect(() => emitProgramTranslationUnitSources(definition, {}, 100)).toThrow(
-			/generated runtime-image translation unit/,
+	});
+
+	it("retains a runtime image larger than its scheduling target", () => {
+		const units = emitProgramTranslationUnits(
+			definition,
+			{},
+			{
+				targetCodeUnits: 100,
+				maximumNativeFunctionCodeUnits: 100,
+			},
 		);
+		const runtime = units.find((unit) => unit.kind === "runtime-image");
+		expect(runtime).toBeDefined();
+		expect(runtime!.sourceCodeUnits).toBeGreaterThan(100);
 	});
 
 	it("emits a wire-matched native overlay with relocated program coordinates", () => {

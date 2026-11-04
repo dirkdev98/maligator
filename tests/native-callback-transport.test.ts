@@ -191,7 +191,7 @@ describe("native builtin callback transport", () => {
 				{ debugInfo: false },
 				{
 					targetCodeUnits: maximum,
-					hardMaximumCodeUnits: maximum,
+					maximumNativeFunctionCodeUnits: maximum,
 				},
 			);
 		const symbol = `mal_callback_${transport.functionIndex}_${transport.entryId}`;

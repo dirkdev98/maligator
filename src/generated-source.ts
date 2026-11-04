@@ -1,7 +1,27 @@
 import type { Hash } from "node:crypto";
-import { closeSync, openSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readSync, writeFileSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 
 const BATCH_CODE_UNITS = 256 * 1024;
+
+/** Decode a source file in bounded chunks, preserving UTF-8 sequences across reads. */
+export function* readSourceChunks(file: string): Generator<string> {
+	const descriptor = openSync(file, "r");
+	const bytes = Buffer.allocUnsafe(BATCH_CODE_UNITS);
+	const decoder = new StringDecoder("utf8");
+	try {
+		for (;;) {
+			const length = readSync(descriptor, bytes, 0, bytes.length, null);
+			if (length === 0) break;
+			const text = decoder.write(bytes.subarray(0, length));
+			if (text.length > 0) yield text;
+		}
+		const tail = decoder.end();
+		if (tail.length > 0) yield tail;
+	} finally {
+		closeSync(descriptor);
+	}
+}
 
 /** Writes concatenated UTF-16 fragments as UTF-8, optionally hashing those same bytes. */
 export function writeSourceChunks(

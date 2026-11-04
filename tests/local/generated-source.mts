@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { writeSourceChunks } from "../../src/generated-source.ts";
+import { readSourceChunks, writeSourceChunks } from "../../src/generated-source.ts";
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "mal-source-bytes-"));
 try {
@@ -28,6 +28,9 @@ try {
 				bytes,
 				written: digest.digest("hex"),
 				read: createHash("sha256").update(readFileSync(file)).digest("hex"),
+				decoded: createHash("sha256")
+					.update([...readSourceChunks(file)].join(""))
+					.digest("hex"),
 			}),
 		);
 	}

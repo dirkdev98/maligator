@@ -15,6 +15,7 @@ import { performance } from "node:perf_hooks";
 import {
 	artifactActionKey,
 	artifactDigest,
+	artifactFileDigest,
 	artifactIdentity,
 	artifactOutput,
 	artifactProducer,
@@ -53,7 +54,7 @@ const RUNNER_WORK_ID = randomUUID();
 const GENERATED_OBJECT_PRODUCER = artifactProducer("generated-object", 5, "cc");
 const GENERATED_UNIT_SLICE_PRODUCER = artifactProducer(
 	"generated-unit-slice",
-	1,
+	2,
 	"cc-preprocess",
 );
 const GENERATED_OBJECT_COST_PRODUCER = artifactProducer(
@@ -300,10 +301,13 @@ function generatedUnitDigests(
 		const sliced = !compileArgumentsEmitDebugInfo(compileArguments);
 		const preludes = new Map<string, PreludeDeclarations>();
 		for (const [position, index] of pending.entries()) {
-			const text = readFileSync(expanded[position]!, "utf8");
-			const digest = sliced
-				? expandedGeneratedUnitDigest(text, preludes)
-				: artifactDigest(`expanded\0${text}`);
+			const file = expanded[position]!;
+			// Declaration slicing is a cache precision optimization. Large expansions
+			// use their complete bytes so parsing never requires an unbounded string.
+			const digest =
+				sliced && statSync(file).size <= 8 * 1024 * 1024
+					? expandedGeneratedUnitDigest(readFileSync(file, "utf8"), preludes)
+					: artifactFileDigest(file, "expanded\0");
 			digests[index] = digest;
 			const digestPath = `${expanded[position]!}.digest`;
 			writeFileSync(digestPath, digest);
@@ -334,7 +338,7 @@ function generatedUnitDigests(
 			{ verbose },
 		);
 		for (const [position, index] of external.entries()) {
-			digests[index] = artifactDigest(new Uint8Array(readFileSync(expanded[position]!)));
+			digests[index] = artifactFileDigest(expanded[position]!);
 		}
 	}
 	return digests.map((digest) => digest!);

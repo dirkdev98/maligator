@@ -4330,8 +4330,9 @@ static MalValue application_result(MalVm *vm, MalValue self, const MalValue *arg
     if (!mal_workers_is_application()) { throw_type(vm, "application result requires a supervised application"); return mal_value_new_undefined(); }
     if (g_self_thread->result != nullptr) { throw_type(vm, "application result already reported"); return mal_value_new_undefined(); }
     const char *error = nullptr;
-    MalSerializeLimits limits = {.max_bytes = WORKERS_DEFAULT_MAX_MESSAGE_BYTES};
-    MalSerializedValue *snapshot = mal_serialize(vm, argc > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined(), &limits, &g_hooks, &error);
+    // A single supervised result has no message queue to bound; diagnostics can
+    // legitimately exceed the default channel budget.
+    MalSerializedValue *snapshot = mal_serialize(vm, argc > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined(), nullptr, &g_hooks, &error);
     if (snapshot == nullptr) { if (!thrown(vm)) throw_clone_error(vm, error, "could not clone application result"); return mal_value_new_undefined(); }
     if (!mal_serialize_commit(vm, snapshot)) { mal_serialized_value_release(snapshot); return mal_value_new_undefined(); }
     g_self_thread->result = snapshot;

@@ -12,7 +12,7 @@ import {
 describe("large UTF-8 file reads", () => {
 	const directory = mkdtempSync(join(tmpdir(), "mal-node-fs-large-text-"));
 	const filename = join(directory, "records.json");
-	const text = `${"x".repeat(22 * 1024 * 1024)}é😀`;
+	const text = `${"x".repeat(64 * 1024 * 1024)}é😀`;
 	const source = JSON.stringify({ text, count: 42 });
 	writeFileSync(filename, source);
 	let binaries: { compiled: string; interpreted: string };
@@ -32,7 +32,7 @@ describe("large UTF-8 file reads", () => {
 	afterAll(() => rmSync(directory, { recursive: true, force: true }));
 
 	it.each(["compiled", "interpreted"] as const)(
-		"reads and parses a file above 16 Mi UTF-16 units in %s code",
+		"reads and parses a file above the former 32 Mi UTF-16-unit limit in %s code",
 		(backend) => {
 			expect(
 				runToStdout(binaries[backend], {

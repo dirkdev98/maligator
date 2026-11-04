@@ -1,10 +1,13 @@
-import { hash, randomUUID } from "node:crypto";
+import { createHash, hash, randomUUID } from "node:crypto";
 import {
 	chmodSync,
+	closeSync,
 	constants,
 	copyFileSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
+	readSync,
 	renameSync,
 	rmSync,
 	statSync,
@@ -127,8 +130,21 @@ function actionManifestPath(
 	return path.join(root, "actions", stage, producer, `${action}.json`);
 }
 
-function fileDigest(file: string): string {
-	return artifactDigest(readFileSync(file));
+/** Hash complete file bytes without requiring a file-sized Buffer or string. */
+export function artifactFileDigest(file: string, prefix = ""): string {
+	const descriptor = openSync(file, "r");
+	const digest = createHash("sha256").update(prefix);
+	const bytes = Buffer.allocUnsafe(256 * 1024);
+	try {
+		for (;;) {
+			const length = readSync(descriptor, bytes, 0, bytes.length, null);
+			if (length === 0) break;
+			digest.update(bytes.subarray(0, length));
+		}
+		return digest.digest("hex");
+	} finally {
+		closeSync(descriptor);
+	}
 }
 
 // Same-size writes can share timestamps on filesystems with a coarse clock, so a stat
@@ -157,7 +173,7 @@ function validBlob(file: string, digest: string, size: number): boolean {
 		const identity = `${digest}:${fileIdentity(stats)}`;
 		if (hashedBlobs.get(file) === identity) return true;
 		const hashedAt = Date.now();
-		if (fileDigest(file) !== digest) return false;
+		if (artifactFileDigest(file) !== digest) return false;
 		if (settledFileIdentity(stats, hashedAt)) hashedBlobs.set(file, identity);
 		return true;
 	} catch {
@@ -244,7 +260,7 @@ export function publishArtifactAction(
 		const stats = statSync(publication.file);
 		if (!stats.isFile())
 			throw new Error(`artifact output is not a file: ${publication.file}`);
-		const digest = fileDigest(publication.file);
+		const digest = artifactFileDigest(publication.file);
 		const blob = artifactBlobPath(root, digest);
 		// Every read validates its blobs, so publication trusts the copy it just hashed.
 		if (!validBlob(blob, digest, stats.size)) {

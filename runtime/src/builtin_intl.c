@@ -11,6 +11,7 @@
 #include "builtin_date.h"
 #include "builtin_iterator.h"
 #include "builtin_object.h"
+#include "checked_size.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "intl_object.h"
@@ -3157,18 +3158,26 @@ static i32 intl_segment_granularity_code(const MalString *g) {
     return 0; // grapheme
 }
 
-/** Compute segment boundaries (UTF-16 indices) for `input`. Caller frees *bounds
- * and *wordlike. Returns the boundary count (segments + 1). */
-static i32 intl_segment_bounds(MalString *input, i32 gran, i32 **bounds_out, u8 **wordlike_out) {
+/** Compute segment boundaries as UTF-16 indices. Caller frees both outputs.
+ * Returns their count, or zero with a pending allocation exception. */
+static usize intl_segment_bounds(MalVm *vm, MalString *input, i32 gran, i32 **bounds_out, u8 **wordlike_out) {
     usize len = mal_string_length(input);
-    i32 cap = (i32) len + 1;
-    i32 *bounds = malloc(sizeof(i32) * (usize) cap);
-    u8 *wordlike = malloc((usize) cap);
-    memset(wordlike, 0, (usize) cap);
-    i32 n = mal_i18n_segment(gran, (const uint16_t *) mal_string_code_units(input), len, bounds, wordlike, cap);
-    if (n < 0) {
-        n = 0;
+    // Endpoints fit signed indices; the boundary count can be one larger.
+    usize cap = len + 1;
+    usize bounds_bytes;
+    if (!mal_checked_size_multiply(sizeof(i32), cap, SIZE_MAX, &bounds_bytes)) {
+        mal_vm_throw_allocation_error(vm);
+        return 0;
     }
+    i32 *bounds = malloc(bounds_bytes);
+    u8 *wordlike = calloc(cap, sizeof(u8));
+    if (bounds == nullptr || wordlike == nullptr) {
+        free(bounds);
+        free(wordlike);
+        mal_vm_throw_allocation_error(vm);
+        return 0;
+    }
+    usize n = mal_i18n_segment(gran, (const uint16_t *) mal_string_code_units(input), len, bounds, wordlike, cap);
     *bounds_out = bounds;
     *wordlike_out = wordlike;
     return n;
@@ -3291,9 +3300,10 @@ static MalValue intl_segments_containing(MalVm *vm, MalValue this_value, const M
     i32 index = (i32) index_f;
     i32 *bounds;
     u8 *wordlike;
-    i32 count = intl_segment_bounds(input, gran, &bounds, &wordlike);
+    usize count = intl_segment_bounds(vm, input, gran, &bounds, &wordlike);
+    if (count == 0) return mal_value_new_undefined();
     MalValue result = mal_value_new_undefined();
-    for (i32 i = 0; i + 1 < count; i++) {
+    for (usize i = 0; i + 1 < count; i++) {
         if (index >= bounds[i] && index < bounds[i + 1]) {
             result = intl_make_segment_data(vm, input, bounds[i], bounds[i + 1], gran, wordlike[i] != 0);
             break;
@@ -3317,19 +3327,19 @@ static MalValue intl_segments_iterator(MalVm *vm, MalValue this_value, const Mal
     i32 gran = intl_segment_granularity_code(intl_data_string(vm, segments->data, "granularity"));
     i32 *bounds;
     u8 *wordlike;
-    i32 count = intl_segment_bounds(input, gran, &bounds, &wordlike);
+    usize count = intl_segment_bounds(vm, input, gran, &bounds, &wordlike);
+    if (count == 0) return mal_value_new_undefined();
 
-    // Snapshot the boundaries + word-like flags as JS arrays on the iterator.
     MalArrayObject *bounds_array = mal_intrinsic_new_array(vm, 0);
     MalArrayObject *wl_array = mal_intrinsic_new_array(vm, 0);
     (void) mal_array_object_fresh_dense_reserve_exact(
         bounds_array, (u32) count);
     (void) mal_array_object_fresh_dense_reserve_exact(
         wl_array, count > 0 ? (u32) count - 1 : 0);
-    for (i32 i = 0; i < count; i++) {
+    for (usize i = 0; i < count; i++) {
         intl_array_push(vm, bounds_array, (u32) i, mal_value_from_i32(bounds[i]));
     }
-    for (i32 i = 0; i + 1 < count; i++) {
+    for (usize i = 0; i + 1 < count; i++) {
         intl_array_push(vm, wl_array, (u32) i, mal_value_new_boolean(wordlike[i] != 0));
     }
     free(bounds);
@@ -3358,7 +3368,7 @@ static MalValue intl_segment_iterator_next(MalVm *vm, MalValue this_value, const
     }
     MalString *input = intl_data_string(vm, iter->data, "input");
     i32 gran = intl_segment_granularity_code(intl_data_string(vm, iter->data, "granularity"));
-    i32 pos = intl_data_int(vm, iter->data, "pos", 0);
+    u32 pos = (u32) intl_data_int(vm, iter->data, "pos", 0);
 
     MalValue bounds_value;
     mal_vm_get_property(vm, iter->data, mal_intrinsic_string_key(vm, "bounds"), &bounds_value);
@@ -3367,7 +3377,7 @@ static MalValue intl_segment_iterator_next(MalVm *vm, MalValue this_value, const
 
     MalValue length_value;
     mal_vm_get_property(vm, bounds_value, mal_intrinsic_string_key(vm, "length"), &length_value);
-    i32 count = mal_ops_is_number(length_value) ? (i32) mal_ops_number_as_f64(length_value) : 0;
+    u32 count = mal_ops_is_number(length_value) ? (u32) mal_ops_number_as_f64(length_value) : 0;
     if (pos + 1 >= count) {
         return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
     }
@@ -3386,7 +3396,7 @@ static MalValue intl_segment_iterator_next(MalVm *vm, MalValue this_value, const
     }
 
     MalValue data = intl_make_segment_data(vm, input, start, end, gran, word_like);
-    intl_resolved_set(vm, mal_value_to_object(iter->data), "pos", mal_value_from_i32(pos + 1));
+    intl_resolved_set(vm, mal_value_to_object(iter->data), "pos", mal_value_from_i32((i32) (pos + 1)));
     return mal_vm_create_iter_result(vm, data, false);
 }
 

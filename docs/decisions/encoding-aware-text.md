@@ -8,12 +8,11 @@ ordinary string content.
 
 ## Representation and ownership
 
-The string cell remains 32 bytes: a four-byte heap header, a four-byte metadata
-word, an independent eight-byte hash, and a sixteen-byte payload. The metadata
-packs a 25-bit length with storage and content flags. The engine uses the full
-length range defined in [`heap_string.h`](../../runtime/src/heap_string.h), so
-larger strings do not require a larger cell. Dependent offsets share the payload
-with the other representation-specific fields.
+The string cell uses a four-byte heap header, a full-width length, a word shared
+by the hash and flags, and a sixteen-byte payload. It stays 32 bytes. Lengths use
+the signed-index range defined in [`heap_string.h`](../../runtime/src/heap_string.h)
+so RegExp and runtime indexing agree. Dependent offsets share the payload with
+the other representation-specific fields.
 
 | Storage   | Payload                                     | Ownership and retained edges         |
 | --------- | ------------------------------------------- | ------------------------------------ |
@@ -34,12 +33,11 @@ across later coercions, calls, suspension, and final construction. Prefix-length
 checks preserve the engine's RangeError boundary before each later substitution;
 the final constructor checks the complete length before allocating.
 
-Up to 64 nonempty quasis and converted substitutions use one flat construction.
-The constructor chooses width from visible content, including narrow ranges of
-wider parents, and copies each piece without flattening its input. Flat Latin-1
-pieces use bounded word copies for short leaves. The result uses the existing
-inline cell or owned payload plus cell; it introduces no new storage kind.
-Larger templates retain pairwise lowering as a bounded fallback.
+Bounded templates construct small results in one flat allocation. The constructor
+chooses width from visible content, including narrow ranges of wider parents,
+and copies each piece without flattening its input. Large results share their
+pieces through balanced ropes, preserving the memory cost of repeated content.
+Templates exceeding the operand budget retain pairwise lowering.
 
 Cons joins preserve a weight bound: a nonterminal cons child occupies at most
 three quarters of its parent's code units. Flat/dependent leaves and a cons of at
@@ -101,11 +99,11 @@ remains explicit through construction, adoption, and finalization.
 
 ## Content identity and property keys
 
-Hashes retain the FNV64 contract over the low byte and high byte of each UTF-16
-unit, including Latin-1's zero high byte. Equal content has equal hashes across
-encodings and rope partitions. Every representation caches its full hash
-independently of its payload, and content-preserving representation changes retain
-that hash.
+Hashes use FNV modulo 2^57 over the low byte and high byte of each UTF-16 unit,
+including Latin-1's zero high byte. The remaining bits hold storage and content
+flags, leaving the length field independent of the cell size. Equal content has
+equal hashes across encodings and rope partitions. Content-preserving
+representation changes retain the cached hash.
 
 A cached left prefix is a valid FNV continuation state. Hashing can stream only
 the appended right content; balancing preserves that prefix state when it changes

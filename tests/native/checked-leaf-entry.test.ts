@@ -22,7 +22,7 @@ function mixedLeafUnits(image: ProgramImage) {
 			units = emitProgramTranslationUnits(
 				image,
 				{ compiled: true, debugInfo: false },
-				{ targetCodeUnits: limit, hardMaximumCodeUnits: limit },
+				{ targetCodeUnits: limit, maximumNativeFunctionCodeUnits: limit },
 			);
 		} catch (error) {
 			if (error instanceof RangeError) continue;

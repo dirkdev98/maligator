@@ -124,7 +124,7 @@ int32_t mal_i18n_list_format(const uint8_t *locale, size_t locale_len, int32_t l
  * (UTF-16 indices, including 0 and the end) into bounds_out, and a per-segment
  * isWordLike flag into wordlike_out. cap is bounds_out's element capacity.
  * Returns the number of boundaries (segment count + 1). */
-int32_t mal_i18n_segment(int32_t granularity, const uint16_t *text, size_t text_len, int32_t *bounds_out, uint8_t *wordlike_out, int32_t cap);
+size_t mal_i18n_segment(int32_t granularity, const uint16_t *text, size_t text_len, int32_t *bounds_out, uint8_t *wordlike_out, size_t cap);
 
 /* ---- Intl.DisplayNames ----
  * kind: 0 region, 1 script, 2 language; style: 0 long, 1 short, 2 narrow. Writes

@@ -203,7 +203,7 @@ MalValue mal_vm_concat_strings(MalVm *vm, const MalValue *parts, i32 count) {
     MalRootSpan span;
     mal_gc_root(&span, rooted_parts, count);
     MalString *string;
-    bool ok = mal_string_new_flat_parts_checked(&vm->heap, strings, (usize) count, &string);
+    bool ok = mal_string_new_parts_checked(&vm->heap, strings, (usize) count, &string);
     if (!ok) mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
     mal_gc_unroot(&span);
     return ok ? mal_value_from_string(string) : MAL_VALUE_UNDEFINED;

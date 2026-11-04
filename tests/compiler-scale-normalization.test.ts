@@ -82,7 +82,7 @@ function emittedPartitionProjection(image: ProgramImage) {
 		{},
 		{
 			targetCodeUnits: 16_000,
-			hardMaximumCodeUnits: 200_000,
+			maximumNativeFunctionCodeUnits: 200_000,
 		},
 	).map(({ id, definitions, sourceChunks }) => ({
 		id,

@@ -3,7 +3,7 @@ import type {
 	ApplicationInstance,
 	NativeApplicationBridge,
 } from "../application-images.ts";
-import { TEST_HOST_MESSAGE_LIMIT, testHostError } from "./host-protocol.mts";
+import { testHostError } from "./host-protocol.mts";
 import type { TestHostEvent, TestHostRequest } from "./host-protocol.mts";
 
 const bridge = Reflect.get(globalThis, "mal") as unknown as NativeApplicationBridge;
@@ -23,8 +23,6 @@ const lifetime = new Promise<void>((resolve, reject) => {
 
 function send(message: TestHostEvent): void {
 	const line = `${JSON.stringify({ ...message, resources: bridge._applicationResources() })}\n`;
-	if (Buffer.byteLength(line) > TEST_HOST_MESSAGE_LIMIT)
-		throw new Error("test host response exceeds the control message limit");
 	socket.write(line);
 }
 
@@ -151,14 +149,10 @@ socket.on("data", (chunk: string) => {
 		for (;;) {
 			const end = pending.indexOf("\n");
 			if (end < 0) break;
-			if (Buffer.byteLength(pending.slice(0, end)) > TEST_HOST_MESSAGE_LIMIT)
-				throw new Error("test host request exceeds the control message limit");
 			const request = JSON.parse(pending.slice(0, end)) as TestHostRequest;
 			pending = pending.slice(end + 1);
 			void handle(request).catch(fail);
 		}
-		if (Buffer.byteLength(pending) > TEST_HOST_MESSAGE_LIMIT)
-			throw new Error("test host request exceeds the control message limit");
 	} catch (error) {
 		fail(error instanceof Error ? error : new Error(String(error)));
 	}

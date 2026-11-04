@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { MAX_STRING_CODE_UNITS } from "../../src/compiler/shared/compiler-instruction.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -29,7 +30,7 @@ describe("primitive operation differential", () => {
 function used(a,b) { const left=String(a),right=String(b); try { return (left+right).length; } catch(error) { return error.name; } }
 function discarded(a,b) { const left=String(a),right=String(b); try { left+right; return 'miss'; } catch(error) { return error.name; } }
 globalThis.used=used; globalThis.discarded=discarded;
-const short='x'.repeat(1024), long='x'.repeat(9*1024*1024);
+const short='x'.repeat(1024), long='x'.repeat(${Math.floor(MAX_STRING_CODE_UNITS / 2) + 1});
 console.log(used(short,short),discarded(short,short));
 console.log(used(long,long),discarded(long,long));
 `,

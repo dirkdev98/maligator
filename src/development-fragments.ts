@@ -21,6 +21,7 @@ import type { GeneratedTranslationUnit } from "./compiler/target/emit-program-im
 import { deserializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import { createConservativeNativePlan } from "./compiler/target/program-image.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
+import { readSourceChunks, writeSourceChunks } from "./generated-source.ts";
 
 /** Driver that splices the embedded images in order and attaches their overlays. */
 export const DEVELOPMENT_FRAGMENT_MAIN = "fragment_main.c";
@@ -98,24 +99,24 @@ export function developmentFragmentUnits(
 						"sourceChunks"
 					>;
 					const source = artifactOutput(cached, output.name.replace(/\.json$/, ".c"));
-					return { ...metadata, sourceChunks: [readFileSync(source.path, "utf8")] };
+					return { ...metadata, sourceChunks: [...readSourceChunks(source.path)] };
 				});
 		const units = emitRelocatableNativeOverlayTranslationUnits(
 			overlayImage(artifact, compilerArtifact),
 			artifact.digest,
-			DEFAULT_TRANSLATION_UNIT_POLICY.hardMaximumCodeUnits,
+			DEFAULT_TRANSLATION_UNIT_POLICY.maximumNativeFunctionCodeUnits,
 			DEFAULT_TRANSLATION_UNIT_POLICY.targetCodeUnits,
 			{ kind: "fragment", name: names[index]! },
 		);
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-fragment-units-"));
 		try {
-			// Unit source is already bounded. Keep it out of JSON, whose escaping and
-			// aggregation can exceed the host engine's string limit independently.
+			// Source stays in chunks even when an indivisible definition exceeds the
+			// scheduling target; JSON escaping must never aggregate its content.
 			const publications = units.flatMap((unit, index) => {
 				const { sourceChunks, ...metadata } = unit;
 				const source = path.join(directory, `${index}.c`);
 				const descriptor = path.join(directory, `${index}.json`);
-				writeFileSync(source, sourceChunks.join(""));
+				writeSourceChunks(source, sourceChunks);
 				writeFileSync(descriptor, JSON.stringify(metadata));
 				return [
 					{ name: `${index}.json`, file: descriptor },

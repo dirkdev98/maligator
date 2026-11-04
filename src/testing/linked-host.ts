@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import type { Socket } from "node:net";
 import type { ApplicationExit, ApplicationResources } from "../application-images.ts";
 import type { TestApplication, TestApplicationHost } from "./application-host.ts";
-import { restoreTestHostError, TEST_HOST_MESSAGE_LIMIT } from "./host-protocol.mts";
+import { restoreTestHostError } from "./host-protocol.mts";
 import type { TestHostMessage, TestHostOperation } from "./host-protocol.mts";
 
 function deferred<Value>() {
@@ -157,8 +157,6 @@ export async function startLinkedTestHost(options: {
 		requests.set(id, pending);
 		try {
 			const line = `${JSON.stringify({ ...message, id })}\n`;
-			if (Buffer.byteLength(line) > TEST_HOST_MESSAGE_LIMIT)
-				throw new Error("test host request exceeds the control message limit");
 			socket.write(line);
 		} catch (error) {
 			requests.delete(id);
@@ -173,8 +171,6 @@ export async function startLinkedTestHost(options: {
 			for (;;) {
 				const end = pending.indexOf("\n");
 				if (end < 0) break;
-				if (Buffer.byteLength(pending.slice(0, end)) > TEST_HOST_MESSAGE_LIMIT)
-					throw new Error("test host response exceeds the control message limit");
 				const message = JSON.parse(pending.slice(0, end)) as TestHostMessage;
 				pending = pending.slice(end + 1);
 				resources = message.resources;
@@ -205,8 +201,6 @@ export async function startLinkedTestHost(options: {
 					}
 				}
 			}
-			if (Buffer.byteLength(pending) > TEST_HOST_MESSAGE_LIMIT)
-				throw new Error("test host response exceeds the control message limit");
 		} catch (error) {
 			fail(error instanceof Error ? error : new Error(String(error)));
 			socket.destroy();

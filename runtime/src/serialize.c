@@ -142,16 +142,20 @@ static bool enc_fail(SerEncoder *enc, const char *message) {
 
 static bool enc_reserve(SerEncoder *enc, usize extra) {
     MalSerializedValue *snap = enc->snap;
-    if (enc->limits != nullptr && enc->limits->max_bytes != 0 &&
-        snap->length + extra + enc->copied_bytes > enc->limits->max_bytes) {
-        return enc_fail(enc, "structured clone exceeds the byte limit");
+    if (extra > SIZE_MAX - snap->length)
+        return enc_fail(enc, "out of memory while serializing");
+    usize required = snap->length + extra;
+    if (enc->limits != nullptr && enc->limits->max_bytes != 0) {
+        u64 maximum = enc->limits->max_bytes;
+        if (enc->copied_bytes > maximum || required > maximum - enc->copied_bytes)
+            return enc_fail(enc, "structured clone exceeds the byte limit");
     }
-    if (snap->length + extra <= enc->capacity) {
+    if (required <= enc->capacity) {
         return true;
     }
     usize capacity = enc->capacity == 0 ? 256 : enc->capacity;
-    while (capacity < snap->length + extra) {
-        capacity *= 2;
+    while (capacity < required) {
+        capacity = capacity > SIZE_MAX / 2 ? required : capacity * 2;
     }
     byte *bytes = realloc(snap->bytes, capacity);
     if (bytes == nullptr) {

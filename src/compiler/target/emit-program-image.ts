@@ -283,7 +283,8 @@ function separatedSourceChunks(parts: ReadonlyArray<string>): Array<string> {
 
 export interface TranslationUnitPolicy {
 	readonly targetCodeUnits: number;
-	readonly hardMaximumCodeUnits: number;
+	/** Native compilation cost budget; larger functions keep their bytecode entry. */
+	readonly maximumNativeFunctionCodeUnits: number;
 }
 
 function directEntryDeclaration(
@@ -316,15 +317,19 @@ function directEntryDeclaration(
 }
 
 export const DEFAULT_TRANSLATION_UNIT_TARGET_CODE_UNITS = 2 * 1024 * 1024;
-/** Leave string-limit headroom for the self-host compiler's surrounding declarations. */
-export const TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS = 8 * 1024 * 1024;
+/** Bound native optimization cost without restricting valid program or data sizes. */
+export const MAXIMUM_NATIVE_FUNCTION_CODE_UNITS = 8 * 1024 * 1024;
 export const DEFAULT_TRANSLATION_UNIT_POLICY: TranslationUnitPolicy = {
 	targetCodeUnits: DEFAULT_TRANSLATION_UNIT_TARGET_CODE_UNITS,
-	hardMaximumCodeUnits: TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS,
+	maximumNativeFunctionCodeUnits: MAXIMUM_NATIVE_FUNCTION_CODE_UNITS,
 };
 
-function stringCodeUnitsBody(constant: Array<number>): string {
-	return `{ ${constant.length > 0 ? constant.join(", ") : "0"} }`;
+function numericArrayRows(values: ReadonlyArray<number>): Array<string> {
+	const rows: Array<string> = [];
+	for (let start = 0; start < values.length; start += 1024)
+		rows.push(`    ${values.slice(start, start + 1024).join(", ")},`);
+	if (rows.length === 0) rows.push("    0,");
+	return rows;
 }
 
 /** Constants whose units fit one byte use the runtime's compact Latin-1 storage. */
@@ -1332,11 +1337,14 @@ function externalizeDataArrays(
 		definitionLines[0] = definitionLines[0]!.replace(/^static /, "");
 		let definitionCodeUnits = definitionLines.length - 1;
 		for (const row of definitionLines) definitionCodeUnits += row.length;
+		const numeric = /^(?:const )?(?:u8|c16|i32|u32)$/.test(type);
 		if (
 			(symbol.startsWith("mal_functions") ||
 				symbol.startsWith("mal_source_positions") ||
 				symbol.startsWith("mal_strings") ||
-				(symbol.startsWith("mal_function_") && symbol.includes("_instructions"))) &&
+				(symbol.startsWith("mal_function_") && symbol.includes("_instructions")) ||
+				numeric) &&
+			definitionLines.length > 2 &&
 			definitionCodeUnits > Math.floor(maxCodeUnits / 2)
 		) {
 			const rows = definitionLines.slice(1, -1);
@@ -1357,7 +1365,9 @@ function externalizeDataArrays(
 			if (chunk.length > 0) chunks.push(chunk);
 
 			declare(symbol, `extern ${mutableType} ${symbol}[];`);
-			output.push(`${mutableType} ${symbol}[${rows.length}];`);
+			const rowElements = (row: string) => (numeric ? row.split(",").length - 1 : 1);
+			const elementCount = rows.reduce((total, row) => total + rowElements(row), 0);
+			output.push(`${mutableType} ${symbol}[${elementCount}];`);
 			let rowOffset = 0;
 			const initializer = `mal_initialize_${symbol}`;
 			splitInitializers.push(initializer);
@@ -1375,7 +1385,7 @@ function externalizeDataArrays(
 						"}",
 					].join("\n"),
 				});
-				rowOffset += chunkRows.length;
+				rowOffset += chunkRows.reduce((total, row) => total + rowElements(row), 0);
 			}
 			output.push(`static void ${initializer}(void) {`);
 			for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
@@ -1453,7 +1463,9 @@ function emitProgramImageParts(
 	for (let i = 0; i < runtime.stringConstants.length; ++i) {
 		const constant = runtime.stringConstants[i]!;
 		lines.push(
-			`static const ${stringUnitType(constant)} mal_string_${i}_code_units${suffix}[] = ${stringCodeUnitsBody(constant)};`,
+			`static const ${stringUnitType(constant)} mal_string_${i}_code_units${suffix}[] = {`,
+			numericArrayRows(constant),
+			"};",
 		);
 	}
 
@@ -1958,7 +1970,7 @@ function oversizedCodeDefinitions(
 		readonly generatedDeclarations: ReadonlyArray<GeneratedDeclaration>;
 		readonly declarationIndicesBySymbol: ReadonlyMap<string, ReadonlyArray<number>>;
 	},
-	hardMaximumCodeUnits: number,
+	maximumNativeFunctionCodeUnits: number,
 ): Array<string> {
 	const { emitted, generatedDeclarations, declarationIndicesBySymbol } = inputs;
 	let headerCodeUnits = NATIVE_C_HEADER_LINES.length;
@@ -1968,12 +1980,15 @@ function oversizedCodeDefinitions(
 		allDeclarationCodeUnits += declaration.source.length;
 	const oversized: Array<string> = [];
 	const check = (symbol: string, source: string, symbols: ReadonlySet<string>) => {
-		if (source.length + headerCodeUnits + allDeclarationCodeUnits < hardMaximumCodeUnits)
+		if (
+			source.length + headerCodeUnits + allDeclarationCodeUnits <
+			maximumNativeFunctionCodeUnits
+		)
 			return;
 		let unitCodeUnits = headerCodeUnits + source.length + 1;
 		for (const index of generatedDeclarationIndices(symbols, declarationIndicesBySymbol))
 			unitCodeUnits += generatedDeclarations[index]!.source.length + 1;
-		if (unitCodeUnits > hardMaximumCodeUnits) oversized.push(symbol);
+		if (unitCodeUnits > maximumNativeFunctionCodeUnits) oversized.push(symbol);
 	};
 	for (const fn of emitted.compiled) {
 		if (fn === null) continue;
@@ -1989,16 +2004,15 @@ export function emitProgramTranslationUnits(
 	options: EmitOptions = {},
 	policy: TranslationUnitPolicy = DEFAULT_TRANSLATION_UNIT_POLICY,
 ): Array<GeneratedTranslationUnit> {
-	const { targetCodeUnits, hardMaximumCodeUnits } = policy;
+	const { targetCodeUnits, maximumNativeFunctionCodeUnits } = policy;
 	if (
 		!Number.isSafeInteger(targetCodeUnits) ||
 		targetCodeUnits <= 0 ||
-		!Number.isSafeInteger(hardMaximumCodeUnits) ||
-		hardMaximumCodeUnits <= 0 ||
-		targetCodeUnits > hardMaximumCodeUnits
+		!Number.isSafeInteger(maximumNativeFunctionCodeUnits) ||
+		maximumNativeFunctionCodeUnits <= 0
 	) {
 		throw new RangeError(
-			"translation-unit target and hard maximum must be positive integers with target <= maximum",
+			"translation-unit target and native function budget must be positive integers",
 		);
 	}
 	const emitInputs = (excludedSymbols: ReadonlySet<string>) => {
@@ -2006,19 +2020,17 @@ export function emitProgramTranslationUnits(
 			image,
 			{ ...options, includeHeader: false },
 			true,
-			hardMaximumCodeUnits,
+			maximumNativeFunctionCodeUnits,
 			excludedSymbols,
 		);
-		const splitData = externalizeDataArrays(emitted.parts, hardMaximumCodeUnits);
-		const runtimeSource = [...GENERATED_DATA_C_HEADER_LINES, ...splitData.lines].join(
-			"\n",
+		const splitData = externalizeDataArrays(
+			emitted.parts,
+			maximumNativeFunctionCodeUnits,
 		);
-		if (runtimeSource.length > hardMaximumCodeUnits) {
-			throw new RangeError(
-				`generated runtime-image translation unit has ${runtimeSource.length} code units; ` +
-					`maximum is ${hardMaximumCodeUnits}`,
-			);
-		}
+		const runtimeChunks = separatedSourceChunks([
+			...GENERATED_DATA_C_HEADER_LINES,
+			...splitData.lines,
+		]);
 
 		const generatedDeclarations: Array<GeneratedDeclaration> =
 			splitData.declarations.concat(compiledFunctionDeclarations(emitted.compiled));
@@ -2032,7 +2044,7 @@ export function emitProgramTranslationUnits(
 		return {
 			emitted,
 			splitData,
-			runtimeSource,
+			runtimeChunks,
 			generatedDeclarations,
 			declarationIndicesBySymbol,
 		};
@@ -2042,9 +2054,9 @@ export function emitProgramTranslationUnits(
 	let excludedSymbols: ReadonlySet<string> = new Set();
 	let inputs = emitInputs(excludedSymbols);
 	for (
-		let oversized = oversizedCodeDefinitions(inputs, hardMaximumCodeUnits);
+		let oversized = oversizedCodeDefinitions(inputs, maximumNativeFunctionCodeUnits);
 		oversized.length > 0;
-		oversized = oversizedCodeDefinitions(inputs, hardMaximumCodeUnits)
+		oversized = oversizedCodeDefinitions(inputs, maximumNativeFunctionCodeUnits)
 	) {
 		excludedSymbols = new Set([...excludedSymbols, ...oversized]);
 		inputs = emitInputs(excludedSymbols);
@@ -2052,7 +2064,7 @@ export function emitProgramTranslationUnits(
 	const {
 		emitted,
 		splitData,
-		runtimeSource,
+		runtimeChunks,
 		generatedDeclarations,
 		declarationIndicesBySymbol,
 	} = inputs;
@@ -2144,14 +2156,6 @@ export function emitProgramTranslationUnits(
 			);
 			if (sourceCodeUnits <= targetCodeUnits || parts.length === 1) {
 				const sourceChunks = unitSource(headerLines, current);
-				if (sourceCodeUnits > hardMaximumCodeUnits) {
-					const part = parts[0]!;
-					throw new RangeError(
-						`generated ${part.kind} '${part.symbol}' has ${part.source.length} code units ` +
-							`and requires ${sourceCodeUnits} including its declarations; ` +
-							`translation-unit maximum is ${hardMaximumCodeUnits}`,
-					);
-				}
 				units.push({
 					id: `${kind}-${group}${prefix || "root"}`,
 					kind,
@@ -2260,8 +2264,8 @@ export function emitProgramTranslationUnits(
 		{
 			id: "runtime-image",
 			kind: "runtime-image",
-			sourceChunks: [runtimeSource],
-			sourceCodeUnits: runtimeSource.length,
+			sourceChunks: runtimeChunks,
+			sourceCodeUnits: runtimeChunks.reduce((total, chunk) => total + chunk.length, 0),
 			headerFiles: generatedHeaderFiles(GENERATED_DATA_C_HEADER_LINES),
 			definitions: [],
 		},
@@ -2330,7 +2334,7 @@ function nativeImportedGlobals(runtime: RuntimeImage): ReadonlyMap<number, numbe
 export function emitRelocatableNativeOverlayTranslationUnits(
 	image: ProgramImage,
 	wireDigest: string,
-	maxCodeUnits = TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS,
+	maxCodeUnits = MAXIMUM_NATIVE_FUNCTION_CODE_UNITS,
 	targetCodeUnits = maxCodeUnits,
 	target: NativeOverlayTarget = EVAL_COMPILER_OVERLAY,
 ): Array<GeneratedTranslationUnit> {
@@ -2347,14 +2351,8 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits <= 0) {
 		throw new RangeError("translation-unit code-unit budget must be a positive integer");
 	}
-	if (
-		!Number.isSafeInteger(targetCodeUnits) ||
-		targetCodeUnits <= 0 ||
-		targetCodeUnits > maxCodeUnits
-	) {
-		throw new RangeError(
-			"translation-unit code-unit target must be a positive integer within the maximum",
-		);
+	if (!Number.isSafeInteger(targetCodeUnits) || targetCodeUnits <= 0) {
+		throw new RangeError("translation-unit code-unit target must be a positive integer");
 	}
 	validateImageForEmission(image);
 	if (
@@ -2394,7 +2392,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	const declarations = installed.flatMap((symbol) =>
 		symbol === undefined ? [] : [`MAL_DECLARE_COMPILED(${symbol});`],
 	);
-	const table = [
+	const tableChunks = separatedSourceChunks([
 		...NATIVE_C_HEADER_LINES,
 		'#include "compiler_native.h"',
 		`#define MAL_DECLARE_COMPILED(name) MalValue name${COMPILED_FUNCTION_DECLARATION}`,
@@ -2432,12 +2430,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 				]
 			: []),
 		"};",
-	].join("\n");
-	if (table.length > maxCodeUnits) {
-		throw new RangeError(
-			`native overlay table has ${table.length} code units; maximum is ${maxCodeUnits}`,
-		);
-	}
+	]);
 
 	const header = [...NATIVE_C_HEADER_LINES, ...relocationDeclaration].join("\n");
 	const headerFiles = generatedHeaderFiles([
@@ -2448,8 +2441,8 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		{
 			id: `${unitPrefix}native-overlay-table`,
 			kind: "code",
-			sourceChunks: [table],
-			sourceCodeUnits: table.length,
+			sourceChunks: tableChunks,
+			sourceCodeUnits: tableChunks.reduce((total, chunk) => total + chunk.length, 0),
 			headerFiles,
 			definitions: [],
 		},
@@ -2477,10 +2470,6 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	for (const fn of linked) {
 		if (fn.link === undefined || fn.link.length === 0) continue;
 		const definition = `const i32 ${fn.symbol}_link[] = { ${fn.link.map((slot) => slot.index).join(", ")} };`;
-		if (linkHeader.length + 1 + definition.length > maxCodeUnits)
-			throw new RangeError(
-				`native overlay link table '${fn.symbol}_link' requires ${definition.length} code units; translation-unit maximum is ${maxCodeUnits}`,
-			);
 		if (linkCodeUnits + 1 + definition.length > targetCodeUnits) flushLinks();
 		links.push(definition);
 		linkCodeUnits += 1 + definition.length;
@@ -2545,11 +2534,6 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 				(total, chunk) => total + chunk.length,
 				0,
 			);
-			if (completeCodeUnits > maxCodeUnits) {
-				throw new RangeError(
-					`generated compiled function '${functions[0]!.fn.symbol}' requires ${completeCodeUnits} code units; translation-unit maximum is ${maxCodeUnits}`,
-				);
-			}
 			units.push({
 				id: `${unitPrefix}native-overlay-code-${prefix || "root"}`,
 				kind: "code",

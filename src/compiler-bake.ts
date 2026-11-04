@@ -24,8 +24,8 @@ import { relativeImportCone } from "./source-import-cone.ts";
 
 const COMPILER_WIRE_CACHE = path.join(maligatorCacheDirectory(), "compiler-wire");
 const SOURCE_MANIFEST = "artifact.json";
-const COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS = 1024 * 1024;
-// Smaller units confine an edit's recompilation; the maximum still admits large functions.
+const COMPILER_NATIVE_FUNCTION_CODE_UNITS = 1024 * 1024;
+// Smaller units confine edits; the independent function budget controls native compilation cost.
 const COMPILER_NATIVE_TRANSLATION_UNIT_TARGET_CODE_UNITS = 512 * 1024;
 
 /**
@@ -166,7 +166,7 @@ function compilerNativeSourceKey(
 		include: (entry) => isCompilerSource(entry.name),
 		prefix: [
 			"compiler-native-overlay-v4\0",
-			String(COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS),
+			String(COMPILER_NATIVE_FUNCTION_CODE_UNITS),
 			"\0",
 			String(COMPILER_NATIVE_TRANSLATION_UNIT_TARGET_CODE_UNITS),
 			"\0",
@@ -378,7 +378,7 @@ function ensureSourceArtifacts(
 		const units = emitRelocatableNativeOverlayTranslationUnits(
 			image,
 			outputDigest,
-			COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS,
+			COMPILER_NATIVE_FUNCTION_CODE_UNITS,
 			COMPILER_NATIVE_TRANSLATION_UNIT_TARGET_CODE_UNITS,
 		);
 		const files = units.map((unit) => `compiler-${unit.id}.c`);

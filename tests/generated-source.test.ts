@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, it } from "vitest";
-import { writeSourceChunks } from "../src/generated-source.ts";
+import { readSourceChunks, writeSourceChunks } from "../src/generated-source.ts";
 
 it.each([
 	[],
@@ -28,6 +28,7 @@ it.each([
 		const digest = createHash("sha256");
 		expect(writeSourceChunks(file, chunks, digest)).toBe(expected.length);
 		expect(readFileSync(file).equals(expected)).toBe(true);
+		expect([...readSourceChunks(file)].join("")).toBe(expected.toString("utf8"));
 		expect(digest.digest("hex")).toBe(
 			createHash("sha256").update(expected).digest("hex"),
 		);

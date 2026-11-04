@@ -151,7 +151,7 @@ describe("native direct closures", () => {
 			emitProgramTranslationUnits(
 				image,
 				{},
-				{ targetCodeUnits: 20_000, hardMaximumCodeUnits: 20_000 },
+				{ targetCodeUnits: 20_000, maximumNativeFunctionCodeUnits: 20_000 },
 			).map((unit) => unit.sourceChunks.join("")),
 		).join("\n");
 		expect(output).not.toMatch(

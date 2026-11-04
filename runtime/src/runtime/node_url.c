@@ -673,7 +673,7 @@ static MalValue url_to_http_options(
         if (vm->completion.kind == MAL_COMPLETION_THROW) goto failed;
         roots[TEMP] = mal_value_from_string(mal_intrinsic_ascii(vm, ":"));
         MalString *parts[] = {mal_value_to_string(roots[LEFT]), mal_value_to_string(roots[TEMP]), mal_value_to_string(roots[RIGHT])};
-        if (!mal_string_new_flat_parts_checked(&vm->heap, parts, countof(parts), &joined)) goto overflow;
+        if (!mal_string_new_parts_checked(&vm->heap, parts, countof(parts), &joined)) goto overflow;
         roots[TEMP] = mal_value_from_string(joined);
         url_set(vm, roots[OPTIONS], "auth", roots[TEMP]);
     }

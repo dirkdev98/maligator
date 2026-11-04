@@ -77,11 +77,12 @@ Each successful match consumes a disjoint separator-length range, so repeated
 pattern setup on that path still totals O(N + M) work. An overlong separator also
 retains the offset path and skips traversal and pattern allocation.
 
-FNV hashes process each unit's low byte and high byte, including Latin-1's zero
-high byte. A cached prefix is a valid continuation state; arbitrary final child
-hashes cannot be combined as though they were independent blocks. If balancing
+FNV hashes use arithmetic modulo 2^57 and process each unit's low byte and high
+byte, including Latin-1's zero high byte. A cached prefix is a valid continuation
+state; arbitrary final child hashes cannot be combined as though they were
+independent blocks. If balancing
 changes the physical prefix edge, construction can continue the original cached
-prefix with the appended suffix and cache the resulting full hash. This preserves
+prefix with the appended suffix and cache the resulting hash. This preserves
 append-and-hash scaling, but can hash that suffix before a caller requests the
 result's hash. Measure that work separately from descriptor allocation and first
 versus repeated hashes.

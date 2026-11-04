@@ -51,5 +51,3 @@ export function restoreTestHostError(error: TestHostError): Error {
 	if (error.stack !== undefined) restored.stack = error.stack;
 	return restored;
 }
-
-export const TEST_HOST_MESSAGE_LIMIT = 16 * 1024 * 1024;

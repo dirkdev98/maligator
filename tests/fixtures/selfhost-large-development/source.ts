@@ -9,6 +9,7 @@ export function largeDevelopmentSource(): string {
 	return [
 		...functions,
 		`const operations = [${functions.map((_, index) => `operation${index}`).join(",")}];`,
-		"console.log(operations[Number(process.argv[2]) % operations.length]?.(1));",
+		"export const operationCount = operations.length;",
+		"export function calculate(index: number) { return operations[index % operations.length]?.(1); }",
 	].join("\n");
 }

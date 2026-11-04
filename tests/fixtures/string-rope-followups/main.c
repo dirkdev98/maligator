@@ -26,7 +26,7 @@ static u64 reference_hash(const c16 *units, usize length) {
         hash = (hash ^ (u8) units[i]) * 0x100000001b3;
         hash = (hash ^ (u8) (units[i] >> 8)) * 0x100000001b3;
     }
-    return hash;
+    return hash & MAL_STRING_HASH_MASK;
 }
 
 static bool inspect_rope(const MalString *string, usize *height, usize *nodes) {
@@ -436,7 +436,7 @@ static bool full_hash_collisions_preserve_key_identity(MalVm *vm) {
             MalString *key;
             CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &key));
             // Force the hash-collision boundary independently of FNV preimage search.
-            key->hash = 0x6d616c696761746f;
+            key->hash = UINT64_C(0x6d616c696761746f) & MAL_STRING_HASH_MASK;
             key->hash_valid = true;
             MalShape *shape = mal_shape_add_property(root, mal_key_from_value(mal_value_from_string(key)), 7);
             if (pass == 0) shapes[i] = shape;

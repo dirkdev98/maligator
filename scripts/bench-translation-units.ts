@@ -15,7 +15,7 @@ import { pathToFileURL } from "node:url";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import {
-	TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS,
+	MAXIMUM_NATIVE_FUNCTION_CODE_UNITS,
 	emitProgramImage,
 	emitProgramTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
@@ -40,7 +40,7 @@ import {
 	SELF_COMPILE_CONFIG,
 } from "./self-compile-workload.ts";
 
-const HARD_MAXIMUM_CODE_UNITS = TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS;
+const HARD_MAXIMUM_CODE_UNITS = MAXIMUM_NATIVE_FUNCTION_CODE_UNITS;
 const DEFAULT_TARGETS = [512, 1024, 2048, 4096, 8192].map(
 	(kibibytes) => kibibytes * 1024,
 );
@@ -418,7 +418,7 @@ function buildSample(options: {
 }): BuiltSample {
 	const policy = {
 		targetCodeUnits: options.targetCodeUnits,
-		hardMaximumCodeUnits: HARD_MAXIMUM_CODE_UNITS,
+		maximumNativeFunctionCodeUnits: HARD_MAXIMUM_CODE_UNITS,
 	};
 	const result = buildNativeBinaryResult({
 		fixture: options.fixture,
@@ -1101,7 +1101,7 @@ function run(options: Options): void {
 		startedAt: new Date().toISOString(),
 		host: { platform: process.platform, arch: process.arch, node: process.version },
 		options,
-		hardMaximumCodeUnits: HARD_MAXIMUM_CODE_UNITS,
+		maximumNativeFunctionCodeUnits: HARD_MAXIMUM_CODE_UNITS,
 		buildSamples,
 		runtimeSamples,
 	};
@@ -1290,7 +1290,7 @@ function run(options: Options): void {
 				emitOptions,
 				{
 					targetCodeUnits: selectedTargetCodeUnits,
-					hardMaximumCodeUnits: HARD_MAXIMUM_CODE_UNITS,
+					maximumNativeFunctionCodeUnits: HARD_MAXIMUM_CODE_UNITS,
 				},
 			);
 			const screeningUnits = emitProgramTranslationUnits(
@@ -1298,7 +1298,7 @@ function run(options: Options): void {
 				emitOptions,
 				{
 					targetCodeUnits: Math.min(selectedTargetCodeUnits, 512 * 1024),
-					hardMaximumCodeUnits: HARD_MAXIMUM_CODE_UNITS,
+					maximumNativeFunctionCodeUnits: HARD_MAXIMUM_CODE_UNITS,
 				},
 			);
 			const measurements = [...buildSamples, ...ltoSamples].filter(

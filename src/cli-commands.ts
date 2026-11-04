@@ -1208,11 +1208,11 @@ function prepareCommandState(
 					],
 		);
 		if (command.kind === "build" && command.internal.emitC)
-			log.info(output.map((unit) => unit.sourceChunks.join("")).join("\n"));
+			for (const unit of output) writeSourceChunks(1, [...unit.sourceChunks, "\n"]);
 		reporter.detail("Translation units", output.length);
 		reporter.detail(
 			"Generated C bytes",
-			output.reduce((total, unit) => total + unit.sourceChunks.join("").length, 0),
+			output.reduce((total, unit) => total + unit.sourceCodeUnits, 0),
 		);
 		const binaryPath = reporter.phase(
 			"Build native binary",

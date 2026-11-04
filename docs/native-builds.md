@@ -115,7 +115,7 @@ unchanged graph, semantic, optimization, allocation, and lowering work while
 preserving native-code metadata. Generated translation units and the driver are then
 compiled to independently content-addressed objects; unchanged objects are relinked
 without invoking their C compilation again. Development overlays cache each
-bounded unit's C source separately from its metadata. Total generated output can
+unit's C source separately from its metadata. Total generated output can
 exceed the host engine's string limit without serializing one aggregate string
 or expanding C source through JSON escaping. A generated unit (including the eval
 compiler overlay) is keyed by its expanded body plus the expanded header
@@ -123,17 +123,19 @@ declarations that body can reach, so a runtime header edit only recompiles units
 that use what changed. Intrinsic slots are declared in every build for the same
 reason: eval-enabled feature sets that share a realm layout share one overlay.
 Pragmas, emitted definitions, and anything the slicer cannot classify are always
-part of the key, and builds that emit debug line tables key the whole expansion
-instead. A memo keyed by the raw unit and header contents means a
+part of the key. Debug builds and large preprocessed inputs stream a hash of the
+whole expansion instead. A memo keyed by the raw unit and header contents means a
 warm build never preprocesses its units. Embedded bytes (configured assets, and the
 images of a development build) live in header-free units keyed by their text and the
 embedded files' content digests. These units are never preprocessed: an expansion
-spells each byte out as a C literal, and a few megabytes of data would exceed the
-string limit of the engine the product CLI runs on. An asset or image object is
-reused until its bytes change.
+spells each byte out as a C literal, multiplying its processing and storage cost.
+An asset or image object is reused until its bytes change.
 
-Definitions are assigned to deterministic, edit-local hash partitions with a 2 MiB
-soft target and an 8 MiB hard limit for an indivisible definition. A function's
+Definitions are assigned to deterministic, edit-local hash partitions with a soft
+scheduling target. An indivisible definition may exceed it. Native functions
+above the compilation cost budget retain their bytecode entry; this budget does
+not reject valid programs or data. Generated source, cache restoration, printing
+and hashing use chunks rather than aggregate strings. A function's
 partition key names its source file relative to the project directory, so a project
 compiled from another location keeps its units. Code and data units remain separate,
 and worker count affects only scheduling. Application functions (project sources

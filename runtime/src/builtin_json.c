@@ -242,6 +242,11 @@ static bool mal_json_builder_push_quoted_segment(
 }
 
 static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalString *string) {
+    // Even unescaped content needs both quotes; reject before traversing or
+    // copying a rope whose minimum output cannot fit.
+    usize remaining = MAL_STRING_MAX_CODE_UNITS - builder->buffer.length;
+    if (remaining < 2 || mal_string_length(string) > remaining - 2)
+        return mal_json_throw_string_length(builder->vm);
     if (!mal_json_builder_push(builder, '"')) return false;
     c16 pending_high = 0;
     bool ok = true;

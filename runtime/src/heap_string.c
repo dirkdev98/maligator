@@ -88,7 +88,7 @@ u64 mal_string_hash_code_units(const c16 *code_units, usize length) {
         hash *= 0x100000001b3;
     }
 
-    return hash;
+    return hash & MAL_STRING_HASH_MASK;
 }
 
 static MalString ***mal_string_tiny_cache_slot(MalHeap *heap) {
@@ -260,7 +260,7 @@ static MalTinyStringCacheResult mal_string_tiny_cache_get_latin1(
     // Each Latin-1 unit hashes its byte followed by a zero UTF-16 high byte.
     MAL_PERF_ADD(string_hash_code_units, length);
     for (usize i = 0; i < length; i++) hash = (hash ^ units[i]) * 0x366000002e329ULL;
-    string->hash = hash;
+    string->hash = hash & MAL_STRING_HASH_MASK;
     string->hash_valid = true;
     mal_string_tiny_cache_store(heap, index, string);
     return (MalTinyStringCacheResult) {.string = string, .hit = false};
@@ -737,7 +737,7 @@ static void mal_string_copy_flat_part_latin1(const MalString *string, u8 *destin
         memcpy(destination, segment.latin1_units, segment.length);
 }
 
-bool mal_string_new_flat_parts_checked(
+bool mal_string_new_parts_checked(
     MalHeap *heap, MalString *const *parts, usize count, MalString **out
 ) {
     if (count == 0 || parts == nullptr || out == nullptr) abort();
@@ -756,6 +756,23 @@ bool mal_string_new_flat_parts_checked(
     }
     if (nonempty_count <= 1) {
         *out = nonempty;
+        return true;
+    }
+    if (length >= 65536) {
+        // Large templates can share their pieces like repeat and concatenation;
+        // copying their logical length would destroy rope-based construction.
+        MalValue rooted = mal_value_from_string(parts[0]);
+        MalRootSpan span;
+        mal_gc_root(&span, &rooted, 1);
+        MalString *result = nullptr;
+        for (usize i = 0; i < count; i++) {
+            if (parts[i]->length == 0) continue;
+            if (result == nullptr) result = parts[i];
+            else if (!mal_string_new_cons_checked(heap, result, parts[i], &result)) abort();
+            rooted = mal_value_from_string(result);
+        }
+        mal_gc_unroot(&span);
+        *out = result;
         return true;
     }
     bool latin1 = true;
@@ -1511,9 +1528,9 @@ u64 mal_string_hash_slow(const MalString *string) {
     }
     hash = mal_string_hash_continue(hash, suffix);
     MalString *mutable = (MalString *) string;
-    mutable->hash = hash;
+    mutable->hash = hash & MAL_STRING_HASH_MASK;
     mutable->hash_valid = true;
-    return hash;
+    return mutable->hash;
 }
 
 #define MAL_STRING_STRUCTURAL_COMPARE_CAPACITY ((usize) 64)

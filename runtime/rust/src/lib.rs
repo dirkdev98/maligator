@@ -971,8 +971,8 @@ pub unsafe extern "C" fn mal_i18n_segment(
     text_len: usize,
     bounds_out: *mut i32,
     wordlike_out: *mut u8,
-    cap: i32,
-) -> i32 {
+    cap: usize,
+) -> usize {
     use icu_segmenter::options::{SentenceBreakInvariantOptions, WordBreakInvariantOptions};
     use icu_segmenter::{GraphemeClusterSegmenter, SentenceSegmenter, WordSegmenter};
 
@@ -1019,7 +1019,7 @@ pub unsafe extern "C" fn mal_i18n_segment(
         }
     }
 
-    let n = bounds.len().min(cap.max(0) as usize);
+    let n = bounds.len().min(cap);
     if !bounds_out.is_null() {
         for (i, v) in bounds.iter().take(n).enumerate() {
             unsafe { *bounds_out.add(i) = *v };
@@ -1030,7 +1030,7 @@ pub unsafe extern "C" fn mal_i18n_segment(
             unsafe { *wordlike_out.add(i) = *v };
         }
     }
-    bounds.len() as i32
+    bounds.len()
 }
 
 // ---------------------------------------------------------------------------

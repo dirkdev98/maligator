@@ -37,8 +37,9 @@ static_assert(_Alignof(MalStringUtf8) > 1, "encoding pointers must leave the pen
 
 typedef struct MalString {
     MalHeapHeader header;
-    /** The engine limit uses the full packed length range. */
-    u32 length : 25;
+    u32 length;
+    /** FNV modulo 2^57 preserves prefix continuation while flags share this word. */
+    u64 hash : 57;
     MalStringStorage storage : 3;
     u32 hash_valid : 1;
     u32 array_index_impossible : 1;
@@ -46,8 +47,6 @@ typedef struct MalString {
     u32 property_atom : 1;
     /** Flat payload is one byte per UTF-16 unit; ropes/slices may conservatively clear it. */
     u32 latin1 : 1;
-    /** Full content hash for every representation, independent of its payload. */
-    u64 hash;
     union {
         const c16 *code_units;
         const u8 *latin1_units;
@@ -77,15 +76,14 @@ static inline MalStringUtf8 *mal_string_ffi_utf8_cache(const MalString *string) 
 }
 
 static_assert(sizeof(MalString) == 32, "MalString must fit its 32-byte cell");
-static_assert(offsetof(MalString, hash) == 8, "string metadata must occupy one word after its header");
 static_assert(offsetof(MalString, code_units) == 16, "string payload must follow its cached hash");
 #define MAL_STRING_INLINE_CODE_UNITS ((usize) 8)
 #define MAL_STRING_INLINE_LATIN1_CODE_UNITS ((usize) 16)
 
 /** Engine string lengths are measured in UTF-16 code units. */
-#define MAL_STRING_MAX_CODE_UNITS (((usize) 1 << 25) - 1)
+#define MAL_STRING_MAX_CODE_UNITS ((usize) INT32_MAX)
+#define MAL_STRING_HASH_MASK ((UINT64_C(1) << 57) - 1)
 static_assert(MAL_STRING_MAX_CODE_UNITS <= INT32_MAX, "string length must fit regexp/i32 indices");
-static_assert(MAL_STRING_MAX_CODE_UNITS < ((usize) 1 << 25), "string length must fit its packed field");
 
 /**
  * Hash a UTF-16 code unit sequence.
@@ -144,7 +142,7 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
 bool mal_string_append_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out);
 
 // Parts must remain rooted; overflow returns before allocation, and a sole nonempty part may be reused.
-bool mal_string_new_flat_parts_checked(MalHeap *heap, MalString *const *parts, usize count, MalString **out);
+bool mal_string_new_parts_checked(MalHeap *heap, MalString *const *parts, usize count, MalString **out);
 
 /**
  * Allocate a string that TAKES OWNERSHIP of an existing heap-raw buffer (one

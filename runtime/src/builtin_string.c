@@ -3470,6 +3470,11 @@ static bool mal_builtin_string_split_plan_matches(
     *overflow_match_position = length;
 
     if (separator_length > length) return true;
+    if (separator_length > 0 && separator_length == length && string == separator) {
+        match_offsets[0] = 0;
+        *match_count = 1;
+        return true;
+    }
 
     if (separator_length == 1 && string->storage != MAL_STRING_STORAGE_CONS) {
         MalStringSegment segment;

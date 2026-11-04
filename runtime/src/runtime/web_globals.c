@@ -20,6 +20,7 @@
 #include "gc.h"
 #include "heap.h"
 #include "heap_string.h"
+#include "text_buffer.h"
 #include "heap_symbol.h"
 #include "hex.h"
 #include "intrinsics.h"
@@ -667,40 +668,64 @@ static MalValue mal_web_btoa(
     if (!mal_vm_to_string(vm, args[0], &str)) {
         return mal_value_new_undefined();
     }
-    const c16 *u = mal_string_code_units(str);
+    MalValue rooted = mal_value_from_string(str);
+    MalRootSpan root;
+    mal_gc_root(&root, &rooted, 1);
+    MalStringIterator iterator;
+    MalStringSegment segment;
     usize n = mal_string_length(str);
-    for (usize i = 0; i < n; i++) {
-        if (u[i] > 0xFF) {
+    if (!str->latin1) {
+        mal_string_iterator_init(&iterator, str, 0, n);
+        bool valid = true;
+        while (valid && mal_string_iterator_next(&iterator, &segment)) {
+            if (segment.latin1) continue;
+            for (usize i = 0; i < segment.length; i++) {
+                if (segment.utf16_units[i] <= 0xff) continue;
+                valid = false;
+                break;
+            }
+        }
+        mal_string_iterator_dispose(&iterator);
+        if (!valid) {
             mal_dom_exception_throw(vm,
                 "btoa: string contains a character outside the Latin1 range",
                 "InvalidCharacterError");
+            mal_gc_unroot(&root);
             return mal_value_new_undefined();
         }
     }
     usize out_len;
-    if (!mal_base64_encoded_length(
-            n, true, MAL_STRING_MAX_CODE_UNITS, &out_len)) {
+    if (!mal_base64_encoded_length(n, true, MAL_STRING_MAX_CODE_UNITS, &out_len)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        mal_gc_unroot(&root);
         return mal_value_new_undefined();
     }
-    c16 *out = malloc(sizeof(c16) * (out_len == 0 ? 1 : out_len));
-    if (out == nullptr) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
-        return mal_value_new_undefined();
+    MalTextBuffer output = {.heap = &vm->heap};
+    mal_text_buffer_hint_capacity(&output, out_len);
+    byte input[3];
+    usize input_length = 0;
+    mal_string_iterator_init(&iterator, str, 0, n);
+    while (output.status == MAL_TEXT_BUFFER_OK && mal_string_iterator_next(&iterator, &segment)) {
+        for (usize i = 0; i < segment.length; i++) {
+            input[input_length++] = (byte) mal_string_segment_code_unit_at(&segment, i);
+            if (input_length < countof(input)) continue;
+            byte encoded[4];
+            usize length = mal_base64_encode_block(input, input_length, MAL_BASE64_ALPHABET_STANDARD, true, encoded);
+            mal_text_buffer_append_latin1(&output, (const u8 *) encoded, length);
+            input_length = 0;
+            if (output.status != MAL_TEXT_BUFFER_OK) break;
+        }
     }
-    usize o = 0;
-    for (usize i = 0; i < n; i += 3) {
-        byte input[3];
-        usize input_length = n - i < 3 ? n - i : 3;
-        for (usize j = 0; j < input_length; j++) input[j] = (byte) (u8) u[i + j];
+    mal_string_iterator_dispose(&iterator);
+    if (input_length > 0 && output.status == MAL_TEXT_BUFFER_OK) {
         byte encoded[4];
-        usize encoded_length = mal_base64_encode_block(
-            input, input_length, MAL_BASE64_ALPHABET_STANDARD, true, encoded);
-        for (usize j = 0; j < encoded_length; j++) out[o++] = (u8) encoded[j];
+        usize length = mal_base64_encode_block(input, input_length, MAL_BASE64_ALPHABET_STANDARD, true, encoded);
+        mal_text_buffer_append_latin1(&output, (const u8 *) encoded, length);
     }
-    MalValue result = mal_value_from_string(mal_string_new_copy(&vm->heap, out, o));
-    free(out);
-    return result;
+    MalString *finished = mal_text_buffer_finish(&vm->heap, &output);
+    if (finished == nullptr) mal_vm_throw_allocation_error(vm);
+    mal_gc_unroot(&root);
+    return finished == nullptr ? mal_value_new_undefined() : mal_value_from_string(finished);
 }
 
 static MalValue mal_web_atob(

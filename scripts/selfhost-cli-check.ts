@@ -27,9 +27,9 @@ import { buildProductCli } from "../src/product-builder.ts";
 import { parseProfileCapture, profileCaptureIdentity } from "../src/profile-artifact.ts";
 import type { PreparedProfile, ProfileManifest } from "../src/profile-artifact.ts";
 import { requireToolchain, resolvePathExecutable } from "../src/toolchain.ts";
-import { largeDevelopmentSource } from "../tests/fixtures/selfhost-large-development/source.ts";
 import { requireHeapLimit } from "./heap-limit.ts";
 import { isolatedToolsDirectory } from "./isolated-tools.ts";
+import { checkLargeInputs } from "./selfhost-large-inputs.ts";
 
 requireHeapLimit(8192);
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
@@ -38,6 +38,7 @@ let providedCli: string | undefined;
 let supervisorOnly = false;
 let ffiWatchOnly = false;
 let ffiLargeOnly = false;
+let largeInputsOnly = false;
 for (let index = 0; index < arguments_.length; index++) {
 	const argument = arguments_[index];
 	if (argument === "--cli" && providedCli === undefined) {
@@ -48,9 +49,10 @@ for (let index = 0; index < arguments_.length; index++) {
 	} else if (argument === "--supervisor-only" && !supervisorOnly) supervisorOnly = true;
 	else if (argument === "--ffi-watch-only" && !ffiWatchOnly) ffiWatchOnly = true;
 	else if (argument === "--ffi-large-only" && !ffiLargeOnly) ffiLargeOnly = true;
+	else if (argument === "--large-inputs-only" && !largeInputsOnly) largeInputsOnly = true;
 	else
 		throw new Error(
-			"usage: node scripts/selfhost-cli-check.ts [--cli PATH] [--supervisor-only | --ffi-watch-only | --ffi-large-only]",
+			"usage: node scripts/selfhost-cli-check.ts [--cli PATH] [--supervisor-only | --ffi-watch-only | --ffi-large-only | --large-inputs-only]",
 		);
 }
 if (supervisorOnly && providedCli === undefined)
@@ -62,6 +64,13 @@ if (ffiWatchOnly && (providedCli === undefined || supervisorOnly))
 if (ffiLargeOnly && (providedCli === undefined || supervisorOnly || ffiWatchOnly))
 	throw new Error(
 		"--ffi-large-only requires --cli and cannot combine with another selection",
+	);
+if (
+	largeInputsOnly &&
+	(providedCli === undefined || supervisorOnly || ffiWatchOnly || ffiLargeOnly)
+)
+	throw new Error(
+		"--large-inputs-only requires --cli and cannot combine with another selection",
 	);
 const root = path.join(
 	maligatorCacheDirectory(),
@@ -180,7 +189,7 @@ writeFileSync(
 );
 
 let invocation = 0;
-function invokeCaptured(args: Array<string>, envOverrides: Record<string, string> = {}) {
+function invokeCaptured(args: Array<string>, envOverrides: NodeJS.ProcessEnv = {}) {
 	const result = spawnSync(distributedCli, args, {
 		cwd: project,
 		env: { ...isolatedEnv, ...envOverrides },
@@ -944,6 +953,25 @@ if (ffiWatchOnly || ffiLargeOnly) {
 	process.exit(0);
 }
 
+if (largeInputsOnly) {
+	try {
+		await checkLargeInputs({
+			cli: distributedCli,
+			project,
+			reports,
+			environment: isolatedEnv,
+			toolchainFreeEnvironment: { ...isolatedEnv, ...testOnlyEnv },
+			invoke: invokeCaptured,
+			checkProfile,
+			waitForOutput,
+		});
+		progress.complete();
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+	process.exit(0);
+}
+
 if (existsSync(configPath)) {
 	throw new Error(`integration refuses to overwrite existing ${configPath}`);
 }
@@ -1563,45 +1591,16 @@ test("passes a pointer-valued constant through a macro alias", () => {
 		}
 		console.log("ok   distributed compiler restored the cached linked binary");
 
-		const largeConfig = "large-development.build.mts";
-		const largeEntry = path.join(project, "large-development.mts");
-		writeFileSync(largeEntry, largeDevelopmentSource());
-		writeFileSync(
-			path.join(project, largeConfig),
-			`export default {
-	entry: "large-development.mts",
-	outputName: "selfhost-large-development",
-	engine: { eval: false, regexp: false, intl: { enabled: false } },
-	surface: { node: true },
-};\n`,
-		);
-		const largeArguments = ["build", "--config", largeConfig, "--verbose"];
-		const largeBuild = invoke(largeArguments).trim();
-		const largeCachedBuild = invoke(largeArguments).trim();
-		if (largeCachedBuild !== largeBuild)
-			throw new Error("large development cache restoration changed the binary path");
-		for (const argument of ["0", "3999"]) {
-			const expected = spawnSync(process.execPath, [largeEntry, argument], {
-				encoding: "utf8",
-				timeout: 30_000,
-			});
-			const actual = spawnSync(largeBuild, [argument], {
-				env: { ...isolatedEnv, PATH: noTools },
-				encoding: "utf8",
-				timeout: 30_000,
-			});
-			if (
-				expected.status !== 0 ||
-				actual.status !== 0 ||
-				actual.stdout !== expected.stdout
-			)
-				throw new Error(
-					`large development application disagreed with Node:\n${actual.stdout}\n${actual.stderr}`,
-				);
-		}
-		console.log(
-			"ok   large development fragments built and restored through the product CLI",
-		);
+		await checkLargeInputs({
+			cli: distributedCli,
+			project,
+			reports,
+			environment: isolatedEnv,
+			toolchainFreeEnvironment: { ...isolatedEnv, ...testOnlyEnv },
+			invoke: invokeCaptured,
+			checkProfile,
+			waitForOutput,
+		});
 
 		const productionConfig = "production.build.mts";
 		writeFileSync(

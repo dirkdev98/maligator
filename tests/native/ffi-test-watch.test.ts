@@ -38,12 +38,16 @@ function watch(
 		},
 	);
 	let output = "";
+	let stdout = "";
 	const listeners = new Set<() => void>();
 	const append = (chunk: Buffer) => {
 		output += chunk.toString();
 		for (const listener of listeners) listener();
 	};
-	child.stdout.on("data", append);
+	child.stdout.on("data", (chunk: Buffer) => {
+		stdout += chunk.toString();
+		append(chunk);
+	});
 	child.stderr.on("data", append);
 	let stopped = false;
 	const closed = new Promise<number | null>((resolve) => {
@@ -54,6 +58,9 @@ function watch(
 		});
 	});
 	return {
+		get stdout() {
+			return stdout;
+		},
 		get output() {
 			return output;
 		},
@@ -96,6 +103,47 @@ function passes(output: string): number {
 }
 
 describe("C libraries in persistent test watch", () => {
+	it("delivers a large diagnostic and recovers on the next edit", async () => {
+		const project = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-large-diagnostic-"));
+		cpSync(fixture, project, { recursive: true });
+		const testFile = path.join(project, "tests/native.test.ts");
+		const messageLength = 17 * 1024 * 1024;
+		writeFileSync(
+			testFile,
+			`import { watch_value } from "maligator:ffi/watch";
+import { expect, test } from "maligator:test";
+test("large diagnostic", () => {
+	expect(watch_value()).toBe(1);
+	throw new Error("DIAGNOSTIC_BEGIN" + "x".repeat(${messageLength}) + "DIAGNOSTIC_END");
+});\n`,
+		);
+		const session = watch(project);
+		try {
+			await session.until(
+				(output) =>
+					session.stdout.includes("DIAGNOSTIC_END") ||
+					output.includes("module-load error"),
+			);
+			expect(
+				session.stdout.includes("DIAGNOSTIC_END"),
+				"complete diagnostic delivered",
+			).toBe(true);
+			const start =
+				session.stdout.indexOf("DIAGNOSTIC_BEGIN") + "DIAGNOSTIC_BEGIN".length;
+			expect(session.stdout.indexOf("DIAGNOSTIC_END", start) - start).toBe(messageLength);
+			writeFileSync(
+				testFile,
+				`import { watch_value } from "maligator:ffi/watch";
+import { expect, test } from "maligator:test";
+test("recovered diagnostic", () => expect(watch_value()).toBe(1));\n`,
+			);
+			await session.until((output) => passes(output) >= 1);
+			expect(await session.stop(), "native diagnostic host stopped cleanly").toBe(0);
+		} finally {
+			await session.stop();
+			rmSync(project, { recursive: true, force: true });
+		}
+	}, 300_000);
 	it("keeps file isolates fresh in a shared native host", async () => {
 		const project = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-test-watch-isolates-"));
 		cpSync(fixture, project, { recursive: true });

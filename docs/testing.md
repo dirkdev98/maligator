@@ -611,6 +611,13 @@ selection and concurrent isolated tests. It prints the selected binary's digest
 and saves command/watch evidence under `.cache/selfhost-cli/<pid>`; the caller
 must establish which source produced that binary.
 
+Use `npm run selfhost:cli -- --cli /absolute/path/maligator --large-inputs-only`
+for the large-input matrix. It exercises source and UTF-8 data reads, development
+and production builds, toolchain-free run and test, dev and test-watch edits,
+cache restoration, profiles and streamed C output. The normal packaged-CLI check
+includes this matrix. Each subprocess and readiness observation has a deadline;
+temporary C dumps are reduced to size and digest evidence.
+
 ## Diagnostic artifacts
 
 Keep run evidence in a task-scoped directory under `.cache/`. Remove disposable
