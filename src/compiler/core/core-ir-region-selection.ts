@@ -1633,7 +1633,7 @@ function directEntryOpportunities(
 							const joinedFields = Object.freeze({
 								...fields,
 								representations: Object.freeze(
-									fields.keys.map((_, index): CorePlanRepresentation => {
+									fields.sources.map((_, index): CorePlanRepresentation => {
 										const rep = fieldCalls[0]!.fields.representations[index]!;
 										return fieldCalls.every(
 											(call) => call.fields.representations[index] === rep,
@@ -1656,6 +1656,44 @@ function directEntryOpportunities(
 							selectedCalls = calls;
 							valueRepresentations = variant.valueRepresentations;
 							instructionFacts = variant.instructionFacts;
+							resultRepresentation = variant.resultRepresentation;
+						}
+					}
+				}
+				if (
+					!needsArity &&
+					fn.parameterCount === 2 &&
+					selectedCalls.some((call) => call.numericSortCallback !== undefined)
+				) {
+					const cfg = analyses
+						.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+							scope: "function",
+							function: target,
+						})
+						.exceptional();
+					const fields = coreReadOnlyParameterFields(fn, cfg, [0, 1]);
+					if (fields !== undefined) {
+						const numericFields = Object.freeze({
+							...fields,
+							representations: Object.freeze(fields.sources.map(() => "f64" as const)),
+						});
+						const calls = selectedCalls.filter(
+							(call) => call.numericSortCallback !== undefined,
+						);
+						const variant = analyzeCoreNativeEntry(
+							program,
+							cfg,
+							parameterRepresentations,
+							undefined,
+							calls,
+							numericFields,
+						);
+						if (variant.resultRepresentation === "f64") {
+							fieldParameters = numericFields;
+							selectedCalls = calls;
+							valueRepresentations = variant.valueRepresentations;
+							instructionFacts = variant.instructionFacts;
+							constantBooleans = variant.constantBooleans;
 							resultRepresentation = variant.resultRepresentation;
 						}
 					}

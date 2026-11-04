@@ -434,6 +434,7 @@ typedef struct MalPerfStats {
 	u64 record_materializations;
 	u64 numeric_sort_callback_calls;
 	u64 numeric_sort_kernel_runs;
+	u64 record_sort_kernel_runs;
 	u64 array_sort_runtime_callback_nominations;
 	u64 typed_array_sort_runtime_callback_nominations;
 	u64 string_replace_runtime_callback_nominations;

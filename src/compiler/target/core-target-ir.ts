@@ -248,7 +248,7 @@ export interface CoreTargetDirectEntry {
 	readonly parameterRepresentations: ReadonlyArray<CoreTargetRegisterRepresentation>;
 	readonly resultRepresentation: CoreTargetRegisterRepresentation;
 	readonly fieldParameters?: {
-		readonly keys: ReadonlyArray<number>;
+		readonly sources: ReadonlyArray<{ readonly parameter: number; readonly key: number }>;
 		readonly representations: ReadonlyArray<CoreTargetRegisterRepresentation>;
 		readonly loads: ReadonlyArray<{
 			readonly instruction: CompilerInstruction;

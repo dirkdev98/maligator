@@ -42,6 +42,104 @@ function callbackPlans(image: ProgramImage) {
 }
 
 describe("numeric sort callback entries", () => {
+	it("projects both records into numeric comparator fields through the codec", () => {
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(
+				compile(
+					"return b.score - a.score || a.id - b.id;",
+					"sort",
+					"[{ score: 3, id: 0 }, { score: 2, id: 1 }]",
+				),
+			),
+		);
+		const callback = callbackPlans(image)[0]!.numericSortCallback!;
+		const target = image.native.functions[callback.functionIndex]!;
+		const entry = target.directEntries[callback.entryId]!;
+		expect(entry.parameterRepresentations).toEqual(["boxed", "boxed"]);
+		expect(
+			entry.fieldParameters!.sources.every(
+				({ parameter }) => parameter < target.body.parameterCount,
+			),
+		).toBe(true);
+		expect(
+			new Set(entry.fieldParameters!.sources.map(({ parameter }) => parameter)),
+		).toEqual(new Set([0, 1]));
+		expect(entry.fieldParameters!.representations.every((rep) => rep === "number")).toBe(
+			true,
+		);
+		expect(entry.storage!.numericWorker).toBeDefined();
+		expect(emitProgramImage(image, { debugInfo: false })).toContain(
+			"MAL_LEAF_MERGE_SORT_BODY(",
+		);
+	});
+
+	it("rejects a field projection bound to a different comparator parameter", () => {
+		const image = compile(
+			"return b.score - a.score;",
+			"sort",
+			"[{ score: 3 }, { score: 2 }]",
+		);
+		const callback = callbackPlans(image)[0]!.numericSortCallback!;
+		const target = image.native.functions[callback.functionIndex]!;
+		const entry = target.directEntries[callback.entryId]!;
+		const malformed = {
+			...image,
+			native: {
+				...image.native,
+				functions: image.native.functions.map((fn) =>
+					fn !== target
+						? fn
+						: {
+								...fn,
+								directEntries: fn.directEntries.map((candidate) =>
+									candidate !== entry
+										? candidate
+										: {
+												...candidate,
+												fieldParameters: {
+													...candidate.fieldParameters!,
+													sources: candidate.fieldParameters!.sources.map(
+														(source, index) =>
+															index === 0
+																? { ...source, parameter: 1 - source.parameter }
+																: source,
+													),
+												},
+											},
+								),
+							},
+				),
+			},
+		};
+		expect(() => serializeCompilerArtifact(malformed)).toThrow(/field/);
+	});
+
+	it("keeps effectful record comparators out of the whole-sort worker", () => {
+		const image = compile(
+			"globalThis.comparisons++; return b.score - a.score;",
+			"sort",
+			"[{ score: 3 }, { score: 2 }]",
+		);
+		for (const call of callbackPlans(image)) {
+			const callback = call.numericSortCallback!;
+			expect(
+				image.native.functions[callback.functionIndex]!.directEntries[callback.entryId]!
+					.storage!.numericWorker,
+			).toBeUndefined();
+		}
+		expect(emitProgramImage(image, { debugInfo: false })).not.toContain(
+			"MAL_LEAF_MERGE_SORT_BODY(",
+		);
+	});
+
+	it("selects Number truthiness in a numeric comparator worker", () => {
+		const image = compile("return (a - b) || (a * 0 / b);");
+		const callback = callbackPlans(image)[0]!.numericSortCallback!;
+		const entry =
+			image.native.functions[callback.functionIndex]!.directEntries[callback.entryId]!;
+		expect(entry.storage!.numericWorker).toBeDefined();
+	});
+
 	it.each(["sort", "toSorted"])(
 		"keeps forwarded %s comparators boxed until runtime target nomination",
 		(operation) => {

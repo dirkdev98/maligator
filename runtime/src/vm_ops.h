@@ -4349,88 +4349,93 @@ static inline MalNumericSortComparison mal_vm_try_numeric_sort_comparison(
 
 MalCompletion mal_builtin_sort_numeric(
     MalVm *vm, bool copy, bool via_call, i32 function_index,
-    MalNumericSortComparator comparator, MalNumericSortKernel kernel, MalValue callee,
+    MalNumericSortComparator comparator, MalNumericSortKernel kernel,
+    MalString *const *field_keys, u32 field_count, MalValue callee,
     MalValue receiver, const MalValue *args, i32 arg_count);
 
 /** Elements each sort block orders by insertion before the merges start. */
 #define MAL_SORT_INSERTION_BLOCK 16u
 
 /**
- * Stable merge sort of Number values under a comparator leaf, which cannot run
+ * Stable merge sort of predecoded keys under a comparator leaf, which cannot run
  * JavaScript, collect or throw. It makes the generic sort's decisions, which an
  * inconsistent comparator can observe: insertion within blocks, then bottom-up
  * merges that skip already ordered halves and stage only the left half. Generated
  * code instantiates it once per leaf so the comparison compiles into the loops.
- * `keys` holds 2 * count doubles; merging decoded keys keeps value decoding off the
+ * `KEYS` holds 2 * count keys; merging decoded keys keeps value decoding off the
  * merge's serial chain.
  */
+#define MAL_LEAF_MERGE_SORT_BODY(KEY_TYPE, COMPARE, KEYS) do { \
+    for (u32 low = 0, high; low < count; low = high) { \
+        high = count - low < MAL_SORT_INSERTION_BLOCK ? count : low + MAL_SORT_INSERTION_BLOCK; \
+        u32 sorted = low + 1; \
+        if (sorted == high) continue; \
+        MAL_PERF_COUNT(numeric_sort_callback_calls); \
+        bool descending = COMPARE(KEYS[low], KEYS[sorted]) > 0; \
+        for (sorted++; sorted < high; sorted++) { \
+            MAL_PERF_COUNT(numeric_sort_callback_calls); \
+            if ((COMPARE(KEYS[sorted - 1], KEYS[sorted]) > 0) != descending) break; \
+        } \
+        if (descending) { \
+            for (u32 left = low, right = sorted - 1; left < right; left++, right--) { \
+                MalValue value = values[left]; \
+                values[left] = values[right]; \
+                values[right] = value; \
+                KEY_TYPE key = KEYS[left]; \
+                KEYS[left] = KEYS[right]; \
+                KEYS[right] = key; \
+            } \
+        } \
+        for (u32 index = sorted; index < high; index++) { \
+            MalValue value = values[index]; \
+            KEY_TYPE key = KEYS[index]; \
+            u32 hole = index; \
+            while (hole > low) { \
+                MAL_PERF_COUNT(numeric_sort_callback_calls); \
+                /* A NaN order keeps elements in place, as the generic sort's zero does. */ \
+                if (!(COMPARE(KEYS[hole - 1], key) > 0)) break; \
+                values[hole] = values[hole - 1]; \
+                KEYS[hole] = KEYS[hole - 1]; \
+                hole--; \
+            } \
+            values[hole] = value; \
+            KEYS[hole] = key; \
+        } \
+    } \
+    KEY_TYPE *left_keys = KEYS + count; \
+    for (u32 width = MAL_SORT_INSERTION_BLOCK; width < count; width *= 2) { \
+        for (u32 low = 0, high; count - low > width; low = high) { \
+            u32 middle = low + width; \
+            high = count - middle > width ? middle + width : count; \
+            MAL_PERF_COUNT(numeric_sort_callback_calls); \
+            if (!(COMPARE(KEYS[middle - 1], KEYS[middle]) > 0)) continue; \
+            u32 length = middle - low; \
+            memcpy(scratch, values + low, sizeof(MalValue) * length); \
+            memcpy(left_keys, KEYS + low, sizeof(KEY_TYPE) * length); \
+            u32 left = 0; \
+            u32 right = middle; \
+            u32 out = low; \
+            while (left < length && right < high) { \
+                MAL_PERF_COUNT(numeric_sort_callback_calls); \
+                /* Merge decisions on unsorted input are unpredictable; select instead of branching. */ \
+                bool take_right = COMPARE(left_keys[left], KEYS[right]) > 0; \
+                values[out] = take_right ? values[right] : scratch[left]; \
+                KEYS[out] = take_right ? KEYS[right] : left_keys[left]; \
+                out++; \
+                right += take_right; \
+                left += !take_right; \
+            } \
+            memcpy(values + out, scratch + left, sizeof(MalValue) * (length - left)); \
+            memcpy(KEYS + out, left_keys + left, sizeof(KEY_TYPE) * (length - left)); \
+        } \
+        if (width > count / 2) break; \
+    } \
+} while (0)
+
 static inline __attribute__((always_inline)) void mal_numeric_leaf_merge_sort(
     MalValue *values, MalValue *scratch, f64 *keys, u32 count,
     f64 (*compare)(f64 left, f64 right)
 ) {
     for (u32 index = 0; index < count; index++) keys[index] = mal_ops_number_as_f64(values[index]);
-    for (u32 low = 0, high; low < count; low = high) {
-        high = count - low < MAL_SORT_INSERTION_BLOCK ? count : low + MAL_SORT_INSERTION_BLOCK;
-        u32 sorted = low + 1;
-        if (sorted == high) continue;
-        MAL_PERF_COUNT(numeric_sort_callback_calls);
-        bool descending = compare(keys[low], keys[sorted]) > 0;
-        for (sorted++; sorted < high; sorted++) {
-            MAL_PERF_COUNT(numeric_sort_callback_calls);
-            if ((compare(keys[sorted - 1], keys[sorted]) > 0) != descending) break;
-        }
-        if (descending) {
-            for (u32 left = low, right = sorted - 1; left < right; left++, right--) {
-                MalValue value = values[left];
-                values[left] = values[right];
-                values[right] = value;
-                f64 key = keys[left];
-                keys[left] = keys[right];
-                keys[right] = key;
-            }
-        }
-        for (u32 index = sorted; index < high; index++) {
-            MalValue value = values[index];
-            f64 key = keys[index];
-            u32 hole = index;
-            while (hole > low) {
-                MAL_PERF_COUNT(numeric_sort_callback_calls);
-                // A NaN order keeps elements in place, as the generic sort's zero does.
-                if (!(compare(keys[hole - 1], key) > 0)) break;
-                values[hole] = values[hole - 1];
-                keys[hole] = keys[hole - 1];
-                hole--;
-            }
-            values[hole] = value;
-            keys[hole] = key;
-        }
-    }
-    f64 *left_keys = keys + count;
-    for (u32 width = MAL_SORT_INSERTION_BLOCK; width < count; width *= 2) {
-        for (u32 low = 0, high; count - low > width; low = high) {
-            u32 middle = low + width;
-            high = count - middle > width ? middle + width : count;
-            MAL_PERF_COUNT(numeric_sort_callback_calls);
-            if (!(compare(keys[middle - 1], keys[middle]) > 0)) continue;
-            u32 length = middle - low;
-            memcpy(scratch, values + low, sizeof(MalValue) * length);
-            memcpy(left_keys, keys + low, sizeof(f64) * length);
-            u32 left = 0;
-            u32 right = middle;
-            u32 out = low;
-            while (left < length && right < high) {
-                MAL_PERF_COUNT(numeric_sort_callback_calls);
-                // Merge decisions on unsorted input are unpredictable; select instead of branching.
-                bool take_right = compare(left_keys[left], keys[right]) > 0;
-                values[out] = take_right ? values[right] : scratch[left];
-                keys[out] = take_right ? keys[right] : left_keys[left];
-                out++;
-                right += take_right;
-                left += !take_right;
-            }
-            memcpy(values + out, scratch + left, sizeof(MalValue) * (length - left));
-            memcpy(keys + out, left_keys + left, sizeof(f64) * (length - left));
-        }
-        if (width > count / 2) break;
-    }
+    MAL_LEAF_MERGE_SORT_BODY(f64, compare, keys);
 }

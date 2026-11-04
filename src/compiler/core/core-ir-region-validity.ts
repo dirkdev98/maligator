@@ -2375,10 +2375,13 @@ export function verifyCoreOptimizationPlan(
 					(entry.argumentRepresentations ?? entry.parameterRepresentations).length !==
 						2 ||
 					(entry.argumentRepresentations ?? entry.parameterRepresentations).some(
-						(representation) => representation !== "f64",
+						(representation) =>
+							representation !== (entry.fieldParameters === undefined ? "f64" : "boxed"),
 					) ||
 					entry.resultRepresentation !== "f64" ||
-					entry.fieldParameters !== undefined)
+					entry.fieldParameters?.representations.some(
+						(representation) => representation !== "f64",
+					))
 			)
 				fail(
 					`direct entry ${entry.function}:${entry.id} has an invalid numeric callback contract`,
@@ -2386,7 +2389,8 @@ export function verifyCoreOptimizationPlan(
 			const key = `${site.caller}:${site.instruction}`;
 			const previous = callSites.get(key);
 			if (
-				(entry.fieldParameters === undefined) !== (site.fieldObject === undefined) ||
+				(site.numericSortCallback === undefined &&
+					(entry.fieldParameters === undefined) !== (site.fieldObject === undefined)) ||
 				(previous !== undefined &&
 					(site.fieldObject === undefined ||
 						previous.fieldObject !== site.fieldObject ||

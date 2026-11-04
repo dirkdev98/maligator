@@ -56,17 +56,20 @@ const PARAMETER_ALIAS_OPCODES = new Set([
 export function coreReadOnlyParameterFields(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
+	parameters: ReadonlyArray<number> = [0],
 ): CoreEntryFields | undefined {
 	if (
-		fn.parameterCount !== 1 ||
+		fn.parameterCount !== parameters.length ||
 		fn.metadata.capturedCount > 0 ||
 		cfg.loops.length > 0 ||
 		cfg.irreducibleCycles.length > 0 ||
 		[...fn.instructionIds()].length > 64
 	)
 		return undefined;
-	const parameter = fn.kernel.functionParameter(0);
-	const keys: Array<number> = [];
+	const parameterValues = new Map(
+		parameters.map((index) => [fn.kernel.functionParameter(index), index]),
+	);
+	const sources: Array<{ readonly parameter: number; readonly key: number }> = [];
 	const loads: Array<{ instruction: CoreInstructionId; field: number }> = [];
 	const numericCalls: Array<CoreInstructionId> = [];
 	const math = new Set<CoreValueId>();
@@ -80,7 +83,7 @@ export function coreReadOnlyParameterFields(
 		);
 		if (fn.instructionKind(instruction) !== "operation") {
 			if (
-				operands.includes(parameter) ||
+				operands.some((value) => parameterValues.has(value)) ||
 				!["jump", "branch", "return"].includes(fn.instructionKind(instruction))
 			)
 				return undefined;
@@ -88,15 +91,26 @@ export function coreReadOnlyParameterFields(
 		}
 		const opcode = fn.instructionOpcodeName(instruction);
 		const attrs = fn.instructionAttributes(instruction);
-		if (opcode === "loadPropertyStatic" && operands[0] === parameter) {
+		const parameter = parameterValues.get(operands[0]!);
+		if (opcode === "loadPropertyStatic" && parameter !== undefined) {
 			const key = attrs.stringIndex;
 			if (typeof key !== "number") return undefined;
-			if (!keys.includes(key)) keys.push(key);
-			if (keys.length > 4) return undefined;
-			loads.push({ instruction, field: keys.indexOf(key) });
+			let field = sources.findIndex(
+				(source) => source.parameter === parameter && source.key === key,
+			);
+			if (field < 0) {
+				field = sources.length;
+				sources.push({ parameter, key });
+			}
+			if (sources.filter((source) => source.parameter === parameter).length > 4)
+				return undefined;
+			loads.push({ instruction, field });
 			continue;
 		}
-		if (operands.includes(parameter) || PARAMETER_ALIAS_OPCODES.has(opcode))
+		if (
+			operands.some((value) => parameterValues.has(value)) ||
+			PARAMETER_ALIAS_OPCODES.has(opcode)
+		)
 			return undefined;
 		if (opcode === "loadIntrinsic" && attrs.intrinsic === "Math") {
 			math.add(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
@@ -145,12 +159,12 @@ export function coreReadOnlyParameterFields(
 		)
 			return undefined;
 	}
-	return keys.length === 0 ||
+	return sources.length === 0 ||
 		(!fn.metadata.strict && mathLoads.some((value) => !callees.has(value)))
 		? undefined
 		: Object.freeze({
-				keys: Object.freeze(keys),
-				representations: Object.freeze(keys.map(() => "boxed" as const)),
+				sources: Object.freeze(sources.map((source) => Object.freeze(source))),
+				representations: Object.freeze(sources.map(() => "boxed" as const)),
 				loads: Object.freeze(loads.map((load) => Object.freeze(load))),
 				numericCalls: Object.freeze(numericCalls),
 			});
@@ -176,7 +190,9 @@ export function coreFieldArgument(
 		fn.instructionOpcodeName(layout.instruction) !== "createObjectShaped" ||
 		layout.keys.length > 4 ||
 		layout.keys.length === 0 ||
-		fields.keys.some((key) => !layout.keys.includes(key))
+		fields.sources.some(
+			({ parameter, key }) => parameter !== 0 || !layout.keys.includes(key),
+		)
 	)
 		return undefined;
 	// A single use keeps identity, aliases, and later mutation out of the deferred literal.
@@ -222,7 +238,7 @@ export function coreFieldArgument(
 		fields: Object.freeze({
 			...fields,
 			representations: Object.freeze(
-				fields.keys.map((key) => valueRepresentations[layout.keys.indexOf(key)]!),
+				fields.sources.map(({ key }) => valueRepresentations[layout.keys.indexOf(key)]!),
 			),
 		}),
 	};
@@ -704,11 +720,12 @@ export function coreFieldArgumentProofIsCurrent(
 		coreFunctionVersionsAreCurrent(fn, proof.versions) &&
 		proof.call === site.instruction &&
 		proof.allocation === site.fieldObject &&
-		fields.representations.length === fields.keys.length &&
-		fields.keys.every((key, index) => {
+		fields.representations.length === fields.sources.length &&
+		fields.sources.every(({ parameter, key }, index) => {
 			const slot = proof.keys.indexOf(key);
 			const target = fields.representations[index];
 			return (
+				parameter === 0 &&
 				slot >= 0 &&
 				(target === "boxed" || target === site.fieldValueRepresentations![slot])
 			);

@@ -10069,7 +10069,8 @@ void mal_vm_op_await_compiled(
 
 MalCompletion mal_builtin_sort_numeric(
     MalVm *vm, bool copy, bool via_call, i32 function_index,
-    MalNumericSortComparator comparator, MalNumericSortKernel kernel, MalValue callee,
+    MalNumericSortComparator comparator, MalNumericSortKernel kernel,
+    MalString *const *field_keys, u32 field_count, MalValue callee,
     MalValue receiver, const MalValue *args, i32 arg_count
 ) {
     MalNativeFunctionCallback expected = mal_value_is_native_function_object(callee)
@@ -10083,7 +10084,9 @@ MalCompletion mal_builtin_sort_numeric(
         ? mal_native_function_object_callback(mal_value_to_native_function_object(sort_callee)) : nullptr;
     bool array_sort = sort == (copy ? mal_builtin_array_to_sorted : mal_builtin_array_sort);
     bool typed_sort = sort == (copy ? mal_builtin_typed_array_to_sorted : mal_builtin_typed_array_sort);
-    bool admitted = comparator != nullptr && function_index >= 0 &&
+    bool numeric = comparator != nullptr && field_count == 0 && field_keys == nullptr;
+    bool records = comparator == nullptr && kernel != nullptr && field_keys != nullptr && field_count > 0 && field_count <= 4 && array_sort;
+    bool admitted = (numeric || records) && function_index >= 0 &&
         function_index < vm->runtime_image->function_count &&
         (!via_call || expected == mal_builtin_function_prototype_call) &&
         ((array_sort && mal_value_is_array_object(sort_receiver)) ||
@@ -10101,6 +10104,8 @@ MalCompletion mal_builtin_sort_numeric(
         .function_index = function_index,
         .numeric_sort_comparator = comparator,
         .numeric_sort_kernel = kernel,
+        .numeric_sort_keys = field_keys,
+        .numeric_sort_key_count = field_count,
         .env = mal_value_to_function_object(callback)->creation_env,
     };
     vm->exact_script_call = &exact;

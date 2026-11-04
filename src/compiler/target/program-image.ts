@@ -1718,7 +1718,7 @@ export interface NativeDirectEntryPlan {
 	readonly parameterRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 	readonly resultRepresentation: VmRegisterRepresentation;
 	readonly fieldParameters?: {
-		readonly keys: ReadonlyArray<number>;
+		readonly sources: ReadonlyArray<{ readonly parameter: number; readonly key: number }>;
 		readonly representations: ReadonlyArray<VmRegisterRepresentation>;
 		readonly loads: ReadonlyArray<{
 			readonly instructionIp: number;
@@ -1846,15 +1846,24 @@ export function validateNativeDirectEntry(
 	const fields = entry.fieldParameters;
 	if (fields !== undefined) {
 		if (
-			fn.parameterCount !== 1 ||
+			(fn.parameterCount !== 1 && fn.parameterCount !== 2) ||
 			entry.argumentRepresentations !== undefined ||
-			fields.keys.length === 0 ||
-			fields.keys.length > 4 ||
-			fields.representations.length !== fields.keys.length ||
+			fields.sources.length === 0 ||
+			fields.sources.length > fn.parameterCount * 4 ||
+			fields.sources.some(
+				({ parameter, key }) =>
+					!Number.isInteger(parameter) ||
+					parameter < 0 ||
+					parameter >= fn.parameterCount ||
+					!Number.isInteger(key) ||
+					key < 0,
+			) ||
+			fields.representations.length !== fields.sources.length ||
 			fields.representations.some(
 				(rep) => !["boxed", "number", "boolean", "string"].includes(rep),
 			) ||
-			new Set(fields.keys).size !== fields.keys.length ||
+			new Set(fields.sources.map(({ parameter, key }) => `${parameter}:${key}`)).size !==
+				fields.sources.length ||
 			fields.loads.length === 0 ||
 			fields.loads.length > 64
 		)
@@ -1865,8 +1874,8 @@ export function validateNativeDirectEntry(
 			if (
 				seen.has(load.instructionIp) ||
 				instruction?.opcode !== "LOAD_PROPERTY_STATIC" ||
-				instruction.object !== 0 ||
-				fields.keys[load.field] !== instruction.stringIndex ||
+				fields.sources[load.field]?.parameter !== instruction.object ||
+				fields.sources[load.field]?.key !== instruction.stringIndex ||
 				(entry.registerRepresentations[instruction.dst] !== "boxed" &&
 					entry.registerRepresentations[instruction.dst] !==
 						fields.representations[load.field])
@@ -2568,15 +2577,18 @@ export function validateNativeFieldCalls(
 			if (
 				targets.has(selected.functionIndex) ||
 				entry?.fieldParameters === undefined ||
-				entry.fieldParameters.keys.some(
-					(key) => !allocation.keyStringIndices.includes(key),
+				entry.fieldParameters.sources.some(
+					({ parameter, key }) =>
+						parameter !== 0 || !allocation.keyStringIndices.includes(key),
 				) ||
 				entry.fieldParameters.representations.some(
 					(rep, index) =>
 						rep !== "boxed" &&
 						rep !==
 							site.valueRepresentations[
-								allocation.keyStringIndices.indexOf(entry.fieldParameters!.keys[index]!)
+								allocation.keyStringIndices.indexOf(
+									entry.fieldParameters!.sources[index]!.key,
+								)
 							],
 				) ||
 				plan?.kind !== "call" ||
@@ -2609,9 +2621,14 @@ export function validateNativeNumericSortCallback(
 		entry === undefined ||
 		entry.id !== callback.entryId ||
 		parameters?.length !== 2 ||
-		parameters.some((representation) => representation !== "number") ||
+		parameters.some(
+			(representation) =>
+				representation !== (entry.fieldParameters === undefined ? "number" : "boxed"),
+		) ||
 		entry.resultRepresentation !== "number" ||
-		entry.fieldParameters !== undefined
+		entry.fieldParameters?.representations.some(
+			(representation) => representation !== "number",
+		)
 	) {
 		throw new RangeError("Invalid native numeric sort callback contract");
 	}
@@ -3126,11 +3143,11 @@ function remapNativeConstants(
 				: {
 						fieldParameters: {
 							...entry.fieldParameters,
-							keys: entry.fieldParameters.keys.map((key) => {
+							sources: entry.fieldParameters.sources.map(({ parameter, key }) => {
 								const index = compacted.stringOldToNew.get(key);
 								if (index === undefined)
 									throw new Error(`RuntimeImage removed entry field ${key}`);
-								return index;
+								return { parameter, key: index };
 							}),
 						},
 					}),
@@ -5778,7 +5795,7 @@ function lowerExecutionFunctionToNativePlan(
 			? {}
 			: {
 					fieldParameters: {
-						keys: entry.fieldParameters.keys,
+						sources: entry.fieldParameters.sources,
 						representations: entry.fieldParameters.representations,
 						loads: entry.fieldParameters.loads.map(({ instruction, field }) => ({
 							instructionIp: instructionIndexByTargetInstruction.get(instruction)!,

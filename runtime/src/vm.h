@@ -1597,6 +1597,8 @@ typedef struct MalExactScriptCall {
     MalCompiledFunction compiled_callback;
     MalNumericSortComparator numeric_sort_comparator;
     MalNumericSortKernel numeric_sort_kernel;
+    MalString *const *numeric_sort_keys;
+    u32 numeric_sort_key_count;
     MalEnv *env;
     MalNumericReduceCallback numeric_reduce_callback;
 } MalExactScriptCall;

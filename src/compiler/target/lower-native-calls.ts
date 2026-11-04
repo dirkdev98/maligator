@@ -162,7 +162,8 @@ function selectTransports(
 					? undefined
 					: native.body.instructions[fieldCall.allocationIp];
 			const fields =
-				entry.fieldParameters?.keys.flatMap((key, index) => {
+				entry.fieldParameters?.sources.flatMap(({ parameter, key }, index) => {
+					if (parameter !== 0) return [];
 					const slot =
 						allocation?.opcode === "CREATE_OBJECT_SHAPED"
 							? allocation.keyStringIndices.indexOf(key)
@@ -175,7 +176,7 @@ function selectTransports(
 							: nativeValueConversion(source, target);
 					return slot < 0 || mode === undefined ? [] : [{ slot, conversion: mode }];
 				}) ?? [];
-			if (fields.length !== (entry.fieldParameters?.keys.length ?? 0)) continue;
+			if (fields.length !== (entry.fieldParameters?.sources.length ?? 0)) continue;
 			targets.push({
 				functionIndex,
 				entryId,

@@ -115,7 +115,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 358;
+export const COMPILER_ARTIFACT_VERSION = 359;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -2296,8 +2296,11 @@ function writeCompilerArtifact(
 			w.i32(entry.argumentRepresentations?.length ?? -1);
 			for (const representation of entry.argumentRepresentations ?? [])
 				w.u8(representationTag(representation));
-			w.u32(entry.fieldParameters?.keys.length ?? 0);
-			for (const key of entry.fieldParameters?.keys ?? []) w.u32(key);
+			w.u32(entry.fieldParameters?.sources.length ?? 0);
+			for (const { parameter, key } of entry.fieldParameters?.sources ?? []) {
+				w.u32(parameter);
+				w.u32(key);
+			}
 			for (const rep of entry.fieldParameters?.representations ?? [])
 				w.u8(representationTag(rep));
 			w.u32(entry.fieldParameters?.loads.length ?? 0);
@@ -4922,9 +4925,12 @@ function readCompilerArtifact(
 				argumentCount < 0
 					? undefined
 					: Array.from({ length: argumentCount }, readRepresentation);
-			const fieldKeyCount = r.count(4);
-			if (fieldKeyCount > 4) throw new Error("program-image-codec: invalid field count");
-			const fieldKeys = Array.from({ length: fieldKeyCount }, () => r.u32());
+			const fieldKeyCount = r.count(8);
+			if (fieldKeyCount > 8) throw new Error("program-image-codec: invalid field count");
+			const fieldSources = Array.from({ length: fieldKeyCount }, () => ({
+				parameter: r.u32(),
+				key: r.u32(),
+			}));
 			const fieldRepresentations = Array.from(
 				{ length: fieldKeyCount },
 				readRepresentation,
@@ -4938,7 +4944,11 @@ function readCompilerArtifact(
 			const fieldParameters =
 				fieldKeyCount === 0
 					? undefined
-					: { keys: fieldKeys, representations: fieldRepresentations, loads: fieldLoads };
+					: {
+							sources: fieldSources,
+							representations: fieldRepresentations,
+							loads: fieldLoads,
+						};
 			const resultKeys = Array.from({ length: r.count(4) }, () => r.u32());
 			const resultStorage = readNativeRecordStorage(r);
 			if (resultKeys.length === 0 && resultStorage.length !== 0)

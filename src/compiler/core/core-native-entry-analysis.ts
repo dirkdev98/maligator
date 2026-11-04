@@ -257,7 +257,7 @@ export function analyzeCoreNativeEntry(
 			fields === undefined
 				? undefined
 				: {
-						keys: [...fields.keys],
+						sources: fields.sources.map((source) => ({ ...source })),
 						representations: [...fields.representations],
 						loads: fields.loads.map((load) => ({ ...load })),
 						numericCalls: [...fields.numericCalls],
@@ -387,7 +387,14 @@ export function coreNativeEntryProofIsCurrent(
 						site.guarded === current.guarded
 					);
 				})) &&
-		same(proof.fields?.keys, entry.fieldParameters?.keys) &&
+		same(
+			proof.fields?.sources.map((source) => source.key),
+			entry.fieldParameters?.sources.map((source) => source.key),
+		) &&
+		same(
+			proof.fields?.sources.map((source) => source.parameter),
+			entry.fieldParameters?.sources.map((source) => source.parameter),
+		) &&
 		same(proof.fields?.representations, entry.fieldParameters?.representations) &&
 		same(proof.fields?.numericCalls, entry.fieldParameters?.numericCalls) &&
 		(proof.fields === undefined ||

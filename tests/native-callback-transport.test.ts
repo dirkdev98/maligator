@@ -401,7 +401,11 @@ describe("native builtin callback transport", () => {
 		const key = `${transport.functionIndex}:${transport.entryId}`;
 		entries.set(key, {
 			...entries.get(key)!,
-			fieldParameters: { keys: [0], representations: ["number"], loads: [] },
+			fieldParameters: {
+				sources: [{ parameter: 0, key: 0 }],
+				representations: ["number"],
+				loads: [],
+			},
 		});
 		expect(selectNativeCallbackTransports(caller, entries)).toEqual([]);
 	});

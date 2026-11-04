@@ -631,7 +631,7 @@ export interface CoreDirectBuiltinCallbackPlan {
 }
 
 export interface CoreEntryFields {
-	readonly keys: ReadonlyArray<number>;
+	readonly sources: ReadonlyArray<{ readonly parameter: number; readonly key: number }>;
 	readonly representations: ReadonlyArray<CorePlanRepresentation>;
 	readonly loads: ReadonlyArray<{
 		readonly instruction: CoreInstructionId;

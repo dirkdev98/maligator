@@ -830,7 +830,10 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 						entry.fieldParameters === undefined
 							? undefined
 							: {
-									keys: entry.fieldParameters.keys.map((key) => key + base.string),
+									sources: entry.fieldParameters.sources.map(({ parameter, key }) => ({
+										parameter,
+										key: key + base.string,
+									})),
 									representations: entry.fieldParameters.representations,
 									loads: entry.fieldParameters.loads.map((load) => ({ ...load })),
 								},

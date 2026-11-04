@@ -1446,7 +1446,7 @@ static void mal_perf_stats_print(void) {
         "dispatch_misses=%llu function_call_forwards=%llu function_apply_forwards=%llu "
         "compiled_enters=%llu compiled_debug_frames=%llu "
         "direct_entry_hits=%llu record_materializations=%llu numeric_sort_callback_calls=%llu "
-        "numeric_sort_kernel_runs=%llu\n",
+        "numeric_sort_kernel_runs=%llu record_sort_kernel_runs=%llu\n",
         (unsigned long long) mal_perf_stats.call_cache_probes,
         (unsigned long long) mal_perf_stats.call_cache_compiled_dispatches,
         (unsigned long long) mal_perf_stats.call_cache_native_dispatches,
@@ -1458,7 +1458,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.direct_entry_hits,
         (unsigned long long) mal_perf_stats.record_materializations,
         (unsigned long long) mal_perf_stats.numeric_sort_callback_calls,
-        (unsigned long long) mal_perf_stats.numeric_sort_kernel_runs
+        (unsigned long long) mal_perf_stats.numeric_sort_kernel_runs,
+        (unsigned long long) mal_perf_stats.record_sort_kernel_runs
     );
     fprintf(stderr,
         "[perf-sort-callback-stats] array_nominations=%llu typed_nominations=%llu\n",

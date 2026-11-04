@@ -360,7 +360,10 @@ describe("own-field native entry contracts", () => {
 								...fn,
 								directEntries: fn.directEntries.map((entry) => ({
 									...entry,
-									fieldParameters: { ...entry.fieldParameters!, keys: [0xffffffff] },
+									fieldParameters: {
+										...entry.fieldParameters!,
+										sources: [{ parameter: 0, key: 0xffffffff }],
+									},
 								})),
 							},
 				),

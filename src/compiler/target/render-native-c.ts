@@ -4296,7 +4296,7 @@ function renderNumericLeaf(
 		switch (op.opcode) {
 			case "JUMP":
 			case "JUMP_IF":
-				line = `${op.opcode === "JUMP_IF" ? `if (r${op.cond}) ` : ""}goto L${op.targetIp};`;
+				line = `${op.opcode === "JUMP_IF" ? `if (${reps[op.cond] === "boolean" ? `r${op.cond}` : `mal_number_is_truthy((f64) r${op.cond})`}) ` : ""}goto L${op.targetIp};`;
 				break;
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
@@ -4571,7 +4571,7 @@ function renderCompiledFunction(
 			);
 		const args = entry.parameterRepresentations
 			.map((_, i) => `p${i}`)
-			.concat(entry.fieldParameters?.keys.map((_, i) => `fp${i}`) ?? []);
+			.concat(entry.fieldParameters?.sources.map((_, i) => `fp${i}`) ?? []);
 		const symbol = `${emitted.symbol}_leaf`;
 		const sortSymbol =
 			sortKernelEntries.has(directCompiledEntryKey(index, entry.id)) &&
@@ -4604,7 +4604,7 @@ function renderCompiledFunction(
 		const source = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n#pragma STDC FP_CONTRACT OFF\n${worker.join("\n")}\n}\n${emitted.source.replace(
 			"#pragma STDC FP_CONTRACT OFF\n",
 			`#pragma STDC FP_CONTRACT OFF\n    if (mal_vm_leaf_unobserved(vm) && mal_vm_leaf_stack_available(vm)) return ${symbol}(${args.join(", ")});\n`,
-		)}${sortSymbol === undefined ? "" : `\n${numericSortKernelDeclaration(sortSymbol)} {\n    mal_numeric_leaf_merge_sort(values, scratch, keys, count, ${symbol});\n}\n`}`;
+		)}${sortSymbol === undefined ? "" : renderNumericSortKernel(sortSymbol, symbol, entry)}`;
 		return [
 			{
 				entry,
@@ -4706,14 +4706,55 @@ function numericSortKernelEntry(entry: NativeDirectEntryPlan): boolean {
 	const parameters = entry.argumentRepresentations ?? entry.parameterRepresentations;
 	return (
 		parameters.length === 2 &&
-		parameters.every((representation) => representation === "number") &&
+		parameters.every(
+			(representation) =>
+				representation === (entry.fieldParameters === undefined ? "number" : "boxed"),
+		) &&
 		entry.resultRepresentation === "number" &&
-		entry.fieldParameters === undefined
+		(entry.fieldParameters === undefined ||
+			(numericSortRecordKeys(entry).length <= 4 &&
+				entry.fieldParameters.representations.every(
+					(representation) => representation === "number",
+				)))
 	);
 }
 
 export function numericSortKernelDeclaration(symbol: string): string {
 	return `void ${symbol}(MalValue *values, MalValue *scratch, f64 *keys, u32 count)`;
+}
+
+function numericSortRecordKeys(entry: NativeDirectEntryPlan): ReadonlyArray<number> {
+	return [...new Set(entry.fieldParameters?.sources.map(({ key }) => key))];
+}
+
+function renderNumericSortKernel(
+	symbol: string,
+	leaf: string,
+	entry: NativeDirectEntryPlan,
+): string {
+	const fields = entry.fieldParameters;
+	if (fields === undefined)
+		return `\n${numericSortKernelDeclaration(symbol)} {\n    mal_numeric_leaf_merge_sort(values, scratch, keys, count, ${leaf});\n}\n`;
+	const keys = numericSortRecordKeys(entry);
+	const type = `${symbol}_key`;
+	const compare = `${symbol}_compare`;
+	const arguments_ = [
+		...entry.parameterRepresentations.map(() => "MAL_VALUE_UNDEFINED"),
+		...fields.sources.map(
+			({ parameter, key }) =>
+				`${parameter === 0 ? "left" : "right"}.fields[${keys.indexOf(key)}]`,
+		),
+	];
+	return `\ntypedef struct { f64 fields[${keys.length}]; } ${type};
+static_assert(sizeof(${type}) == sizeof(f64) * ${keys.length}, "Record sort keys must stay packed");
+static f64 ${compare}(${type} left, ${type} right) {
+    return ${leaf}(${arguments_.join(", ")});
+}
+${numericSortKernelDeclaration(symbol)} {
+    ${type} *tuples = (${type} *) (void *) keys;
+    MAL_LEAF_MERGE_SORT_BODY(${type}, ${compare}, tuples);
+}
+`;
 }
 
 function renderCallbackAdapter(
@@ -12114,12 +12155,21 @@ class NativeInstructionEmission {
 			const entry = this.context.directCompiledEntries.get(
 				directCompiledEntryKey(numericCallback.functionIndex, numericCallback.entryId),
 			);
-			if (entry !== undefined && numericSortKernelEntry(entry)) {
+			if (
+				entry !== undefined &&
+				numericSortKernelEntry(entry) &&
+				(entry.fieldParameters === undefined || entry.leaf === true)
+			) {
 				const comparator = this.context.relocation.reference(
 					`mal_direct_${this.context.relocation.stem(numericCallback.functionIndex)}_${numericCallback.entryId}${this.suffix}`,
 				);
+				const keys = numericSortRecordKeys(entry);
+				const fieldKeys =
+					keys.length === 0
+						? "nullptr"
+						: `(MalString *[]){ ${keys.map((key) => `vm->string_constant_atoms[${this.context.relocation.stringIndex(key)}]`).join(", ")} }`;
 				return [
-					`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${this.context.relocation.functionIndex(numericCallback.functionIndex)}, ${comparator}, ${entry.leaf ? this.context.relocation.reference(`${comparator}_sort`) : "nullptr"}, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${this.context.relocation.functionIndex(numericCallback.functionIndex)}, ${entry.fieldParameters === undefined ? comparator : "nullptr"}, ${entry.leaf ? this.context.relocation.reference(`${comparator}_sort`) : "nullptr"}, ${fieldKeys}, ${keys.length}, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					this.callPoll(),

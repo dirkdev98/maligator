@@ -168,7 +168,10 @@ function selectNumericWorker(
 				return (
 					op.targetIp >= 0 &&
 					op.targetIp < fn.instructions.length &&
-					(op.opcode === "JUMP" || branches.has(ip) || reps[op.cond] === "boolean")
+					(op.opcode === "JUMP" ||
+						branches.has(ip) ||
+						reps[op.cond] === "boolean" ||
+						numeric(op.cond))
 				);
 			case "CREATE_NUMBER":
 			case "CREATE_F64":

@@ -3049,7 +3049,7 @@ function lowerFunctionToTarget(
 				? {}
 				: {
 						fieldParameters: {
-							keys: entry.fieldParameters.keys,
+							sources: entry.fieldParameters.sources,
 							representations: entry.fieldParameters.representations.map(
 								planCoreTargetRepresentation,
 							),

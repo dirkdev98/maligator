@@ -3803,6 +3803,31 @@ static bool mal_builtin_array_sort_pair_order(
     return mal_builtin_array_sort_order(vm, comparator, left, right, order_out);
 }
 
+static bool mal_array_sort_record_keys(
+    const MalValue *values, u32 count, MalString *const *keys, u32 key_count, f64 *out
+) {
+    const MalShape *cached = nullptr;
+    u32 slots[4];
+    for (u32 index = 0; index < count; index++) {
+        const MalObject *object = mal_vm_as_own_slot_object(values[index]);
+        if (object == nullptr || object->shape->inline_count == 0) return false;
+        const MalShape *shape = object->shape;
+        if (shape != cached) {
+            for (u32 key = 0; key < key_count; key++) {
+                i32 found = mal_shape_find(shape, mal_key_from_value(mal_value_from_string(keys[key])), MAL_SHAPE_FIND_GET_OWN);
+                if (found < 0 || (shape->props[found].attrs & MAL_PROPERTY_ACCESSOR)) return false;
+                slots[key] = shape->props[found].slot;
+            }
+            cached = shape;
+        }
+        for (u32 key = 0; key < key_count; key++) {
+            if (!mal_ops_try_number_as_f64(mal_object_field_load_shaped(object, slots[key]), &out[(usize) index * key_count + key]))
+                return false;
+        }
+    }
+    return true;
+}
+
 /**
  * Stable merge sort over a value buffer: insertion within blocks, then bottom-up
  * merges that skip already ordered halves. Returns false when the comparator threw;
@@ -3865,12 +3890,21 @@ static bool mal_builtin_array_sort_values(
 #if MAL_PROFILE
     numeric_leaf = nullptr;
 #endif
-    for (u32 index = 0; numeric_leaf != nullptr && index < count; index++) {
+    u32 key_count = numeric_leaf == nullptr || numeric_leaf->numeric_sort_key_count == 0 ? 1 : numeric_leaf->numeric_sort_key_count;
+    for (u32 index = 0; numeric_leaf != nullptr && numeric_leaf->numeric_sort_key_count == 0 && index < count; index++) {
         if (!mal_ops_is_number(values[index])) numeric_leaf = nullptr;
     }
     // Without key storage the generic merge still reaches the compiled comparator per pair.
-    f64 *keys = numeric_leaf == nullptr ? nullptr : malloc(sizeof(f64) * 2 * (usize) count);
+    usize key_bytes;
+    f64 *keys = numeric_leaf == nullptr ||
+        !mal_checked_size_multiply(count, sizeof(f64) * 2 * key_count, SIZE_MAX, &key_bytes)
+        ? nullptr : malloc(key_bytes);
     if (keys == nullptr) numeric_leaf = nullptr;
+    // Collection has finished. These own-data probes cannot call JS; the leaf cannot
+    // reenter or mutate records, so the snapshots remain valid throughout the merge.
+    if (numeric_leaf != nullptr && numeric_leaf->numeric_sort_key_count > 0 &&
+        !mal_array_sort_record_keys(values, count, numeric_leaf->numeric_sort_keys, key_count, keys))
+        numeric_leaf = nullptr;
     // A bounded scalar leaf cannot re-enter JS; one depth guard covers the entire merge.
     if (numeric_leaf != nullptr && !mal_vm_enter_compiled(vm, numeric_leaf->function_index)) {
         ok = false;
@@ -3879,6 +3913,7 @@ static bool mal_builtin_array_sort_values(
 
     if (numeric_leaf != nullptr) {
         MAL_PERF_COUNT(numeric_sort_kernel_runs);
+        if (numeric_leaf->numeric_sort_key_count > 0) MAL_PERF_COUNT(record_sort_kernel_runs);
         numeric_leaf->numeric_sort_kernel(values, scratch, keys, count);
         mal_vm_leave_compiled(vm);
     } else {
