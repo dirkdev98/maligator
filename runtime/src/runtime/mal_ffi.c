@@ -2065,6 +2065,10 @@ static void ffi_run_pending_releases(MalVm *vm) {
 _Atomic uint32_t mal_ffi_queued_releases;
 
 __attribute__((cold, noinline)) void mal_ffi_direct_releases(MalVm *vm) {
+    // The count spans every VM; another VM's queue leaves this one nothing to do.
+    MalFfiState *state = vm->ffi;
+    if (state == nullptr || atomic_load_explicit(&state->pending_releases, memory_order_relaxed) == nullptr)
+        return;
     // Keep the collector off as a framed call's end does: the binding's locals are not rooted.
     mal_gc_native_rooted_end(vm);
     ffi_run_pending_releases(vm);
