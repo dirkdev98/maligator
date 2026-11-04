@@ -38,16 +38,6 @@
 #define MAL_BUFFER_MAX_LENGTH INT32_MAX
 #define MAL_BUFFER_INSPECT_MAX_BYTES 50u
 
-typedef enum MalBufferEncoding {
-    MAL_BUFFER_UTF8,
-    MAL_BUFFER_LATIN1,
-    MAL_BUFFER_ASCII,
-    MAL_BUFFER_HEX,
-    MAL_BUFFER_BASE64,
-    MAL_BUFFER_BASE64URL,
-    MAL_BUFFER_UTF16LE,
-} MalBufferEncoding;
-
 static bool mal_buffer_ascii_equal_ci(const MalString *string, const char *ascii) {
     return mal_string_equals_ascii_ci(string, ascii);
 }
@@ -258,6 +248,34 @@ static usize mal_buffer_encoded_string_length(
         return mal_buffer_write_string(string, encoding, nullptr, SIZE_MAX);
     }
     return length;
+}
+
+MalBufferStringDecodePlan mal_node_buffer_plan_string_decode(MalValue string, MalValue encoding) {
+    MalBufferEncoding resolved = MAL_BUFFER_UTF8;
+    if (mal_value_is_string(encoding))
+        (void) mal_buffer_encoding_named(mal_value_to_string(encoding), &resolved);
+    const MalString *input = mal_value_to_string(string);
+    usize length = mal_string_length(input);
+    usize capacity;
+    // Small forgiving decodes avoid a sizing pass. Large ones count the actual
+    // output so ignored input cannot consume a disproportionate retained budget.
+    if (length <= 64 * 1024 && resolved == MAL_BUFFER_HEX) capacity = length / 2;
+    else if (length <= 64 * 1024 && (resolved == MAL_BUFFER_BASE64 || resolved == MAL_BUFFER_BASE64URL))
+        capacity = length / 4 * 3 + 3;
+    else capacity = mal_buffer_encoded_string_length(input, resolved);
+    return (MalBufferStringDecodePlan) {
+        .encoding = resolved,
+        .byte_capacity = capacity,
+    };
+}
+
+byte *mal_node_buffer_decode_planned_string(
+    MalValue string, MalBufferStringDecodePlan plan, usize *length_out) {
+    *length_out = 0;
+    byte *bytes = malloc(plan.byte_capacity == 0 ? 1 : plan.byte_capacity);
+    if (bytes == nullptr) return nullptr;
+    *length_out = mal_buffer_write_string(mal_value_to_string(string), plan.encoding, bytes, plan.byte_capacity);
+    return bytes;
 }
 
 static MalValue mal_buffer_string_from_bytes(

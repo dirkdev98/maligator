@@ -53,6 +53,28 @@ MalValue mal_node_buffer_encode_secret_bytes(
 /** Whether `encoding` names a Buffer encoding (case-insensitively). */
 bool mal_node_buffer_encoding_is_known(MalValue encoding);
 
+typedef enum MalBufferEncoding {
+    MAL_BUFFER_UTF8,
+    MAL_BUFFER_LATIN1,
+    MAL_BUFFER_ASCII,
+    MAL_BUFFER_HEX,
+    MAL_BUFFER_BASE64,
+    MAL_BUFFER_BASE64URL,
+    MAL_BUFFER_UTF16LE,
+} MalBufferEncoding;
+
+typedef struct MalBufferStringDecodePlan {
+    MalBufferEncoding encoding;
+    usize byte_capacity;
+} MalBufferStringDecodePlan;
+
+/** Size the encoded allocation before admission to a retained-work budget. Unknown encodings use UTF-8. */
+MalBufferStringDecodePlan mal_node_buffer_plan_string_decode(MalValue string, MalValue encoding);
+
+/** Allocate the planned bytes for the same immutable string. Null signals allocation failure. */
+byte *mal_node_buffer_decode_planned_string(
+    MalValue string, MalBufferStringDecodePlan plan, usize *length_out);
+
 /**
  * Decode a JS string into bytes using a Buffer encoding, matching
  * `Buffer.from(string, encoding)`. An unrecognized or non-string encoding falls

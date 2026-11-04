@@ -935,16 +935,13 @@ static bool node_fs_write_bytes(
                 (const byte *) "write encoding must name a supported Buffer encoding");
             return false;
         }
-        if (reservation != nullptr) {
-            usize units = mal_string_length(mal_value_to_string(data));
-            // All supported encoders allocate at most three bytes per UTF-16 unit plus padding.
-            if (units > (SIZE_MAX - 3) / 3 ||
-                !mal_blocking_work_reserve(mal_host(vm), units * 3 + 3, reservation)) {
-                node_fs_throw_errno(vm, EAGAIN, "write", nullptr);
-                return false;
-            }
+        MalBufferStringDecodePlan plan = mal_node_buffer_plan_string_decode(data, encoding);
+        if (reservation != nullptr &&
+            !mal_blocking_work_reserve(mal_host(vm), plan.byte_capacity == 0 ? 1 : plan.byte_capacity, reservation)) {
+            node_fs_throw_errno(vm, EAGAIN, "write", nullptr);
+            return false;
         }
-        *owned = mal_node_buffer_decode_string(vm, data, encoding, length);
+        *owned = mal_node_buffer_decode_planned_string(data, plan, length);
         if (*owned == nullptr) {
             mal_vm_throw_allocation_error(vm);
             return false;
