@@ -258,8 +258,10 @@ async function captureCompiler(options: Options): Promise<void> {
 			translationUnits: true,
 			environment: cleanEnvironment(),
 			onNativeBuildPhase: (event) => {
-				events.push(event);
-				console.log(JSON.stringify(event));
+				const progress = { ...event, elapsedMs: performance.now() - started };
+				events.push(progress);
+				writeJson(path.join(directory, "build-events.json"), events);
+				console.log(JSON.stringify(progress));
 			},
 		});
 		const milliseconds = performance.now() - started;
