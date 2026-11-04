@@ -60,6 +60,10 @@ import {
 	expandCoreFunctionIndexCall,
 	expandCoreFunctionPrototypeCall,
 } from "./core-function-prototype-call.ts";
+import {
+	applyCoreGeneratorFusion,
+	coreGeneratorFusion,
+} from "./core-generator-fusion.ts";
 import { joinCoreHeapBrands } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState } from "./core-heap-brands.ts";
 import {
@@ -1647,6 +1651,39 @@ function offerFunctionCandidates(
 	}
 	for (const site of outgoing) {
 		if (!fn.isInstructionLive(site.instruction)) continue;
+		const generatorTarget = coreCalleeTargetsSingleFunction(site.targets);
+		const generator =
+			generatorTarget !== undefined && program.function(generatorTarget).isGenerator
+				? coreGeneratorFusion(
+						program,
+						analyses.compilationContext,
+						summaries,
+						fn,
+						site.instruction,
+						(id, value) =>
+							analyses
+								.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+									scope: "function",
+									function: id,
+								})
+								.kindMask(value),
+					)
+				: undefined;
+		if (generator !== undefined) {
+			service.offer({
+				kind: "generator-fusion",
+				caller: functionId,
+				site: site.instruction,
+				revision: fn.version("body"),
+				priorityClass: 0,
+				priorityScore: -64,
+				targets: [generator.target],
+				generatorFusion: generator,
+				generatedCodeCost: generator.cost,
+				compilerWorkCost: generator.cost * 2,
+				expansive: true,
+			});
+		}
 		const projection = coreFactoryProjection(
 			program,
 			analyses.compilationContext,
@@ -3990,6 +4027,19 @@ function applyCandidate(
 	editor: CoreEditor,
 ): AppliedTransform | undefined {
 	switch (candidate.kind) {
+		case "generator-fusion": {
+			const plan = candidate.generatorFusion;
+			if (plan === undefined) return undefined;
+			const positions = inlineSourcePositions(
+				program,
+				editor,
+				plan.target,
+				editor.function.instructionSourcePosition(candidate.site),
+				plan.instructions,
+				program.function(plan.target),
+			);
+			return applyCoreGeneratorFusion(program, editor, plan, positions);
+		}
 		case "factory-projection": {
 			if (candidate.factoryProjection === undefined) return undefined;
 			const introduced = applyCoreFactoryProjection(
@@ -5458,6 +5508,14 @@ export function runCoreCrossCallTransforms(
 				service.recordDeclined(decline);
 				continue;
 			}
+			// Privacy covers every invocation, so unpublished edits anywhere invalidate it.
+			if (
+				candidate.kind === "generator-fusion" &&
+				[...editors.values()].some((editor) => editor.pendingEdits !== 0)
+			) {
+				service.recordDeclined("stale-anchor");
+				continue;
+			}
 			const editor =
 				editors.get(candidate.caller) ?? CoreEditor.open(program, candidate.caller);
 			editors.set(candidate.caller, editor);
@@ -5471,6 +5529,7 @@ export function runCoreCrossCallTransforms(
 			instructionsIntroduced += applied.instructionsIntroduced;
 			blocksIntroduced += applied.blocksIntroduced;
 			if (
+				candidate.kind === "generator-fusion" ||
 				candidate.kind === "factory-projection" ||
 				candidate.kind === "inline" ||
 				candidate.kind === "synchronous-callback-inline" ||

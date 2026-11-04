@@ -51,6 +51,7 @@ tests/native/exact-callback-lifetime.test.ts
 tests/native/factory-projection.test.ts
 tests/native/record-sort-callback.test.ts
 tests/native/record-iteration.test.ts
+tests/native/generator-fusion.test.ts
 tests/native/forwarded-callback.test.ts
 tests/native/forwarded-sort-callback.test.ts
 tests/native/functional-replacer-callback.test.ts

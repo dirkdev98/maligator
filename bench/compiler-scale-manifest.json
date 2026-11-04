@@ -135,6 +135,7 @@
 				"src/compiler/core/core-foreign-calls.ts",
 				"src/compiler/core/core-function-activations.ts",
 				"src/compiler/core/core-function-features.ts",
+				"src/compiler/core/core-generator-fusion.ts",
 				"src/compiler/core/core-function-kernel.ts",
 				"src/compiler/core/core-function-optimization-session.ts",
 				"src/compiler/core/core-function-prototype-call.ts",

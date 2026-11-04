@@ -996,19 +996,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       try both. Measure against the loop regions first: so far the large costs are
       boxing on loop-carried chains and call dispatch, which facts alone do not remove.
 
-- [ ] Run a `for-of` over a local generator call as the generator's own loop.
-      `iterator-generator-traversal` takes 31 ns per value against Node's 12.5, and
-      the self-compile spends about 1.8% inclusive in
-      `mal_generator_try_exact_iterator_step`: each value pays the step probe, a
-      native frame, root setup, a snapshot reload and clear, and the yield's root
-      and barrier work. When the call's exact target is a generator without
-      try/finally, environment operations, `this` or `arguments`, and its object
-      only reaches GetIterator, Core can splice the generator body in place of the
-      iterator. Each `yield` then feeds the loop body, the body's back edge resumes
-      after the yield in next mode, `return` leaves the loop, and the caller's
-      loop-carried values travel through the generator's blocks as parameters.
-      Without a finally, `break` and a throw from the body need no generator
-      return, and a throw from the generator leaves the loop unclosed as it does now.
+- [ ] Extend generator traversal fusion to guarded methods and richer suspension
+      state. Fusion requires a private callable whose every invocation is consumed
+      exclusively by the ordinary iterator protocol, Number arguments, and a
+      primitive body with one lexical yield and no handlers or environment reads.
+      State live across the yield must dominate completion paths as well as the
+      suspension point. General state transport needs explicit resume parameters.
       The self-compile's hot generators are class methods, such as
       `CoreFunctionStore#bodyInstructionIds`, `valueIds` and `#liveInstructionIds`,
       which read `this` and private fields and are reached through a method load.
