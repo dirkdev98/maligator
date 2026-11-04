@@ -30,6 +30,7 @@ it("observes shared cancellation at the phase boundary before publishing a runti
 		const flag = new Int32Array(cancellation);
 		const request = {
 			command,
+			profileDirectory: directory,
 			installation: developmentCompilerInstallation(path.resolve("src")),
 			producerDigests: compilerProducerDigestsForRoot(
 				path.resolve("src"),

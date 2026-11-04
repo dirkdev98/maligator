@@ -1,5 +1,10 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import type { BuildCommandResult, CompilerInstallation } from "./cli-commands.ts";
+import { restoreCompilerResult } from "./compiler-profile-result.ts";
+import type { CompilerResultMessage } from "./compiler-profile-result.ts";
 import type {
 	CompilationPhase,
 	CompilationRequest,
@@ -15,7 +20,7 @@ export interface NodeCompilationJob {
 }
 
 type NodeCompilationResult =
-	| { id: number; ok: true; value: BuildCommandResult }
+	| { id: number; ok: true; value: CompilerResultMessage }
 	| { id: number; ok: false; error: unknown };
 
 export type NodeCompilationReply =
@@ -45,11 +50,23 @@ export function createNodeCompilerService(
 	let resolveClosed: (() => void) | undefined;
 	const settle = (pending: PendingCompilation, reply: NodeCompilationResult) => {
 		pending.signal?.removeEventListener("abort", pending.abort);
-		if (pending.signal?.aborted) pending.reject(pending.signal.reason);
-		else if (pending.observerFailure !== undefined)
-			pending.reject(pending.observerFailure.error);
-		else if (reply.ok) pending.resolve(reply.value);
-		else pending.reject(reply.error);
+		const directory = pending.job.request.profileDirectory;
+		let outcome: { value: BuildCommandResult } | { error: unknown };
+		try {
+			if (pending.signal?.aborted) throw pending.signal.reason;
+			if (pending.observerFailure !== undefined) throw pending.observerFailure.error;
+			if (!reply.ok) throw reply.error;
+			outcome = { value: restoreCompilerResult(reply.value, directory) };
+		} catch (error) {
+			outcome = { error };
+		}
+		try {
+			rmSync(directory, { recursive: true, force: true });
+		} catch (error) {
+			if (!("error" in outcome)) outcome = { error };
+		}
+		if ("error" in outcome) pending.reject(outcome.error);
+		else pending.resolve(outcome.value);
 	};
 	const dispatch = () => {
 		if (active !== undefined) return;
@@ -119,6 +136,7 @@ export function createNodeCompilerService(
 			if (queued.length >= 1) throw new RangeError("compiler queue is full");
 			start();
 			return new Promise((resolve, reject) => {
+				const profileDirectory = mkdtempSync(join(tmpdir(), "mal-compiler-result-"));
 				const cancellation = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
 				const flag = new Int32Array(cancellation);
 				const abort = () => {
@@ -132,6 +150,7 @@ export function createNodeCompilerService(
 						phases: options.onPhase !== undefined,
 						request: {
 							command,
+							profileDirectory,
 							installation,
 							dependencyWorker,
 							compact: options.compact ?? false,

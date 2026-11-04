@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	capabilities,
 	createPool,
@@ -8,6 +11,7 @@ import {
 import type { WorkerPool } from "maligator:workers";
 import type { CompilerInstallation } from "./cli-commands.ts";
 import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
+import { restoreCompilerResult } from "./compiler-profile-result.ts";
 import type { prepare, prepareTests } from "./compiler-service-worker.ts";
 import type { CompilationPhase, CompilerService } from "./compiler-service.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
@@ -101,12 +105,15 @@ export function createNativeCompilerService(
 			const workers = await ready();
 			const cancellation = cooperativeCancellation(options.signal);
 			const progress = observePhases(options.onPhase);
+			let profileDirectory: string | undefined;
 			try {
+				profileDirectory = mkdtempSync(join(tmpdir(), "mal-compiler-result-"));
 				const result = await workers.run(
 					"prepare",
 					[
 						{
 							command,
+							profileDirectory,
 							installation,
 							producerDigests,
 							dependencyWorker,
@@ -125,7 +132,7 @@ export function createNativeCompilerService(
 				const failure = progress?.drain();
 				cancellation.check();
 				if (failure !== undefined) throw failure.error;
-				return result;
+				return restoreCompilerResult(result, profileDirectory);
 			} catch (error) {
 				progress?.drain();
 				cancellation.check();
@@ -133,6 +140,8 @@ export function createNativeCompilerService(
 			} finally {
 				progress?.close();
 				cancellation.close();
+				if (profileDirectory !== undefined)
+					rmSync(profileDirectory, { recursive: true, force: true });
 			}
 		},
 		async prepareTests(input, options = {}) {

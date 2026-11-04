@@ -1,6 +1,7 @@
 import { prepareCommand } from "./cli-commands.ts";
 import type { CommandContext } from "./cli-commands.ts";
 import { installCompilerProducerDigests } from "./compiler-cache-identity.ts";
+import { publishCompilerResult } from "./compiler-profile-result.ts";
 import type {
 	CompilationRequest,
 	CompilationTaskContext,
@@ -68,10 +69,13 @@ function compilationContext(
 
 export function prepare(context: CompilationTaskContext, request: CompilationRequest) {
 	try {
-		return prepareCommand(
-			request.command,
-			compilationContext(context, request),
-			request.compact,
+		return publishCompilerResult(
+			prepareCommand(
+				request.command,
+				compilationContext(context, request),
+				request.compact,
+			),
+			request.profileDirectory,
 		);
 	} finally {
 		request.progress?.close();

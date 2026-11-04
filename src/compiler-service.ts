@@ -38,6 +38,8 @@ export interface CompilerRequestContext {
 }
 
 export interface CompilationRequest extends CompilerRequestContext {
+	/** Parent-owned scratch space released after the compiler worker settles. */
+	profileDirectory: string;
 	command: CompilationCommand;
 	compact: boolean;
 }
