@@ -1921,9 +1921,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 - [ ] Give planner diagnostics a code and fact path. Suggestion validation reruns the
       planner, matches the human-readable message with a regex and retries without
       the rejected suggestion.
-- [ ] Decode large clang declarations in one pass. `FfiJsonReader` rescans every
-      container above 256 KiB at each nesting level before parsing its children, so a
-      168k-element data table takes 2.6 s under Node but 42.5 s interpreted.
 
 # Actors and SMP
 
