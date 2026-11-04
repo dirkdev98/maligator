@@ -140,6 +140,26 @@ for (const original of ["é".repeat(4095), "☃".repeat(4095), "😀".repeat(409
 	);
 	check((await pending) === bytes.length, "worker owns encoded Unicode input");
 }
+for (const text of [
+	"é",
+	"é".repeat(127),
+	"é".repeat(128),
+	"é".repeat(200),
+	"é".repeat(255),
+	`x${"é".repeat(254)}`,
+	"☃".repeat(7),
+	"😀".repeat(5),
+	"aé☃😀\ud800x",
+	"a\ud83d",
+	"\ude00b",
+	"\u07ff\u0800\uffff",
+]) {
+	const bytes = new TextEncoder().encode(text);
+	check(
+		input_count(text) === bytes.reduce((total, byte) => total + byte, 0),
+		"short and boundary-length Unicode inputs encode exactly",
+	);
+}
 const surrogate = String.fromCharCode(...new Array<number>(300).fill(0xd800));
 const surrogateBytes = new TextEncoder().encode(surrogate);
 for (let call = 0; call < 3; call++)

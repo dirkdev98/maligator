@@ -131,6 +131,55 @@ bool mal_ffi_to_uint64(
     return true;
 }
 
+/** Latin-1 into UTF-8, expanding each high byte to two; `out` holds twice `count` bytes. */
+static __attribute__((noinline)) usize ffi_latin1_to_utf8(const u8 *units, usize count, u8 *out) {
+    usize written = 0;
+    for (usize index = 0; index < count; index++) {
+        u8 unit = units[index];
+        if (unit < 0x80) {
+            out[written++] = unit;
+        } else {
+            out[written++] = (u8) (0xC0 | (unit >> 6));
+            out[written++] = (u8) (0x80 | (unit & 0x3F));
+        }
+    }
+    return written;
+}
+
+/**
+ * UTF-16 into UTF-8 as the general encoder writes it, with lone surrogates as U+FFFD;
+ * `out` holds three bytes per unit.
+ */
+static __attribute__((noinline)) usize ffi_utf16_to_utf8(
+    const c16 *units, usize count, u8 *out, bool *nul) {
+    usize written = 0;
+    bool zero = false;
+    for (usize index = 0; index < count; index++) {
+        u32 unit = units[index];
+        if (unit < 0x80) {
+            zero |= unit == 0;
+            out[written++] = (u8) unit;
+        } else if (unit < 0x800) {
+            out[written++] = (u8) (0xC0 | (unit >> 6));
+            out[written++] = (u8) (0x80 | (unit & 0x3F));
+        } else if (unit >= 0xD800 && unit <= 0xDBFF && index + 1 < count
+            && units[index + 1] >= 0xDC00 && units[index + 1] <= 0xDFFF) {
+            u32 scalar = 0x10000 + ((unit - 0xD800) << 10) + (units[++index] - 0xDC00);
+            out[written++] = (u8) (0xF0 | (scalar >> 18));
+            out[written++] = (u8) (0x80 | ((scalar >> 12) & 0x3F));
+            out[written++] = (u8) (0x80 | ((scalar >> 6) & 0x3F));
+            out[written++] = (u8) (0x80 | (scalar & 0x3F));
+        } else {
+            if (unit >= 0xD800 && unit <= 0xDFFF) unit = 0xFFFD;
+            out[written++] = (u8) (0xE0 | (unit >> 12));
+            out[written++] = (u8) (0x80 | ((unit >> 6) & 0x3F));
+            out[written++] = (u8) (0x80 | (unit & 0x3F));
+        }
+    }
+    *nul = zero;
+    return written;
+}
+
 bool mal_ffi_to_string(
     MalVm *vm, MalValue value, bool nullable, uint32_t flags, const MalFfiSite *site, MalFfiString *out) {
     out->data = nullptr;
@@ -174,26 +223,52 @@ bool mal_ffi_to_string(
     usize length = 0;
     bool encoded = false;
     bool nul = false;
-    if (units != 0 && string->latin1 && string->storage < MAL_STRING_STORAGE_DEPENDENT) {
-        // A flat ASCII string is its own UTF-8: one pass copies it and checks for high
-        // bytes and NULs. Otherwise the general encoder overwrites the copy.
-        const u8 *flat = string->storage == MAL_STRING_STORAGE_INLINE
+    bool flat = units != 0 && string->storage < MAL_STRING_STORAGE_DEPENDENT;
+    if (flat && string->latin1) {
+        // A flat ASCII string is its own UTF-8: one byte-wide pass copies it and checks
+        // for high bytes and NULs. Latin-1 then expands each high byte to two.
+        const u8 *units_flat = string->storage == MAL_STRING_STORAGE_INLINE
             ? string->inline_latin1_units : string->latin1_units;
         u8 high = 0;
         u8 zero = 0;
         for (usize index = 0; index < units; index++) {
-            u8 unit = flat[index];
+            u8 unit = units_flat[index];
             high |= unit;
             zero |= unit == 0;
             data[index] = (char) unit;
         }
+        nul = zero != 0;
         if (high < 0x80) {
             length = units;
-            encoded = true;
-            nul = zero != 0;
+        } else {
+            if (units * 2 >= capacity) {
+                char *grown = malloc(units * 2 + 1);
+                if (grown == nullptr) {
+                    if (data != out->inline_data) free(data);
+                    return mal_ffi_out_of_memory(vm);
+                }
+                if (data != out->inline_data) free(data);
+                data = grown;
+                out->borrowed = false;
+                capacity = units * 2 + 1;
+            }
+            length = ffi_latin1_to_utf8(units_flat, units, (u8 *) data);
         }
+        encoded = high < 0x80;
+        flat = false;
     }
-    if (!encoded) {
+    if (flat) {
+        // Flat UTF-16 encodes directly; lone surrogates become U+FFFD, as in the general encoder.
+        const c16 *units_flat = string->storage == MAL_STRING_STORAGE_INLINE
+            ? string->inline_code_units : string->code_units;
+        if (units > (capacity - 1) / 3) {
+            data = units > (SIZE_MAX - 1) / 3 ? nullptr : malloc(units * 3 + 1);
+            if (data == nullptr) return mal_ffi_out_of_memory(vm);
+            out->borrowed = false;
+            capacity = units * 3 + 1;
+        }
+        length = ffi_utf16_to_utf8(units_flat, units, (u8 *) data, &nul);
+    } else if (!encoded && length == 0) {
         if (units > (capacity - 1) / 3) {
             data = units > (SIZE_MAX - 1) / 3 ? nullptr : malloc(units * 3 + 1);
             if (data == nullptr) return mal_ffi_out_of_memory(vm);
