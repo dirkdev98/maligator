@@ -213,7 +213,7 @@ describe("reachable native-entry annotations", () => {
 			buildCoreControlFlow(program, id, { exceptions: true }),
 		);
 		expect(fields).toEqual({
-			keys: [1],
+			sources: [{ parameter: 0, key: 1 }],
 			representations: ["boxed"],
 			loads: [{ instruction: liveLoad, field: 0 }],
 			numericCalls: [],
