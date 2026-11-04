@@ -1062,6 +1062,11 @@ iterator cursor is not, by itself, permission to delete its language object.
 
 ## Compiler infrastructure
 
+- [ ] Remove aggregate transport-size ceilings from root-compiler requests,
+      dependency metadata, diagnostics, and thrown values. Preserve structured
+      clone semantics, error identity, source validation, and cancellation while
+      keeping queue reservations for backpressure.
+
 - [ ] Complete local scheduler consolidation by moving instruction-local
       canonicalization, proof, and memory rules into dirty opcode/block queues where
       their dependencies permit. Keep function CFG, loop, and memory transforms
@@ -1524,6 +1529,12 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Engine capabilities
 
+- [ ] Replace recursive JSON parsing, reviver traversal, and observable stringify
+      traversal with growable heap frames. Remove the 512-level rejection without
+      exposing the C or fiber stack. Preserve callback order, source contexts,
+      cycle detection, and the already-written prefix when plain stringify falls
+      back after a getter or toJSON call.
+
 - [ ] Replace the fixed 128-bit BigInt representation with arbitrary-precision digits.
       Remove width approximations from arithmetic, parsing, formatting, comparison,
       typed operations, and serialization.
@@ -1620,7 +1631,9 @@ entropy, cancellation, and reactor completions.
       permanent roots, so a peer sending distinct names grows the atom table without
       bound.
 
-- [ ] Align `http.maxHeaderSize` (16 KiB) with the codec's 64 KiB limit and answer
+- [ ] Honor configurable incoming HTTP header budgets across the codec and Node
+      adapter, including growth beyond fixed field-size and field-count ceilings.
+      Align `http.maxHeaderSize` (16 KiB) with the codec and answer
       HPE_HEADER_OVERFLOW with 431, as Node does.
 
 - [ ] Give the https socket facade `destroyed`, so a throwing SNICallback reports true
@@ -1664,7 +1677,9 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 - [ ] Complete BodyInit validation, arbitrary stream bodies, asynchronous consumption,
       BYOB, tee, and remaining Request and Response properties. Preserve single-use and
-      cancellation behavior.
+      cancellation behavior. Stream incoming Mal.serve bodies instead of imposing
+      the buffered 16 MiB total-size ceiling, and expose configurable budgets for
+      callers that choose buffering.
 
 - [ ] Implement Blob storage and streaming, File metadata, ordered FormData, multipart
       parsing and serialization, URL-encoded extraction, and Body.formData. Give native
@@ -1739,10 +1754,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       sources and the derived-file list, and find license texts for alloc-stdlib and
       blake2b_simd, which publish none and are listed by SPDX expression only.
 
-- [ ] fs: watching more than 256 entries per watcher on macOS (kqueue holds one fd
-      per watched file and subdirectory; FSEvents would lift it), Linux
+- [ ] fs: use FSEvents to reduce file-descriptor use for large macOS watch sets, Linux
       recursive-watch symlink entries (Node reports their events and link-target
-      changes as 'rename'), the watcher 'error' event, fs.openAsBlob, readdir's
+      changes as 'rename'), fs.openAsBlob, readdir's
       `encoding: "buffer"` and lchmod on macOS.
 
 - [ ] net and dgram: http2 servers and allowHalfOpen. Client sockets try resolved
@@ -1890,7 +1904,8 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       `reusedSocket` on its first request and `agent.destroy()` closes every idle
       connection; it tries one address per request where Node falls back and
       reports an AggregateError (`localhost` with nothing listening); https agents
-      reject pooling options. ServerResponse sends header names lowercased and lets
+      reject pooling options. Add ServerResponse.appendHeader. ServerResponse sends
+      header names lowercased and lets
       getHeader see headers passed only to writeHead. Stream destroy() emits 'error'
       and 'close' synchronously where Node defers them a tick.
 
