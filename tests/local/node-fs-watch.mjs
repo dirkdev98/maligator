@@ -98,6 +98,37 @@ async function watchFile() {
 	watcher.close();
 }
 
+async function watchLargeDirectory() {
+	const dir = path.join(root, "many");
+	fs.mkdirSync(dir);
+	for (let index = 0; index < 300; index++)
+		fs.writeFileSync(
+			path.join(dir, `entry-${String(index).padStart(3, "0")}.txt`),
+			"start",
+		);
+	const nested = path.join(dir, "zz-nested");
+	fs.mkdirSync(nested);
+	fs.writeFileSync(path.join(nested, "target.txt"), "start");
+	const watcher = fs.watch(dir, { recursive: true });
+	try {
+		const modified = (expected) => (type, name) =>
+			(type === "change" || type === "rename") &&
+			name === expected &&
+			fs.readFileSync(path.join(dir, name), "utf8").includes("+");
+		const target = "entry-299.txt";
+		await untilEvent(watcher, modified(target), () =>
+			fs.appendFileSync(path.join(dir, target), "+"),
+		);
+		const deep = path.join("zz-nested", "target.txt");
+		await untilEvent(watcher, modified(deep), () =>
+			fs.appendFileSync(path.join(dir, deep), "+"),
+		);
+		console.log("large directory and nested changes");
+	} finally {
+		watcher.close();
+	}
+}
+
 async function watchErrors() {
 	try {
 		fs.watch(path.join(root, "missing"));
@@ -187,6 +218,7 @@ async function promisesWatch() {
 await watchDirectory();
 await watchTree();
 await watchFile();
+await watchLargeDirectory();
 await watchErrors();
 await statPolling();
 await promisesWatch();

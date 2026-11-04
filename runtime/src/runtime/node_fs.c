@@ -6760,8 +6760,6 @@ static const struct {
 };
 
 #define NODE_FS_WATCH_EVENTS 32
-// kqueue needs an open descriptor per watched entry, so large trees only report renames.
-#define NODE_FS_WATCH_CHILD_LIMIT 256
 #if defined(__linux__)
 #define NODE_FS_WATCH_TREE_MASK (IN_ATTRIB | IN_CREATE | IN_MODIFY | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)
 #endif
@@ -6795,13 +6793,13 @@ typedef struct NodeFsWatcher {
     MalOp read_op;
     int fd;
     int target_fd;
+    int error;
     char *path;
     char *basename;
     // The root directory first; Linux keeps the rest sorted by watch descriptor.
     NodeFsWatchDir **dirs;
     usize dir_count;
     usize dir_capacity;
-    usize watched;
     char *name;
     usize name_capacity;
     bool directory;
@@ -6813,8 +6811,8 @@ typedef struct NodeFsWatcher {
     MalValue pending;
     NodeFsWatchEvent *queue_head;
     NodeFsWatchEvent *queue_tail;
-    MalValue abort_reason;
-    bool aborted;
+    MalValue failure_reason;
+    bool failed;
     struct NodeFsWatcher *next;
 } NodeFsWatcher;
 
@@ -6867,7 +6865,7 @@ static void node_fs_watch_scan_roots(MalVm *vm, void *data) {
         if (state->vm != vm) continue;
         mal_gc_mark_value(state->receiver);
         mal_gc_mark_value(state->pending);
-        mal_gc_mark_value(state->abort_reason);
+        mal_gc_mark_value(state->failure_reason);
         mal_gc_mark_value(mal_async_internal_value((MalHeapHeader *) state->async_context));
         for (NodeFsWatchEvent *event = state->queue_head; event != nullptr; event = event->next) {
             mal_gc_mark_value(event->result);
@@ -6907,10 +6905,11 @@ static const char *node_fs_watch_join(NodeFsWatcher *state, const char *dir, con
     if (dir[0] == '\0') return name;
     usize dir_length = strlen(dir);
     usize name_length = strlen(name);
+    if (name_length > SIZE_MAX - dir_length - 2) { state->error = ENOMEM; return nullptr; }
     usize needed = dir_length + name_length + 2;
     if (needed > state->name_capacity) {
         char *grown = realloc(state->name, needed);
-        if (grown == nullptr) return nullptr;
+        if (grown == nullptr) { state->error = ENOMEM; return nullptr; }
         state->name = grown;
         state->name_capacity = needed;
     }
@@ -6922,15 +6921,19 @@ static const char *node_fs_watch_join(NodeFsWatcher *state, const char *dir, con
 
 static NodeFsWatchDir *node_fs_watch_add_dir(NodeFsWatcher *state, const char *relative, int fd) {
     if (state->dir_count == state->dir_capacity) {
-        usize capacity = state->dir_capacity == 0 ? 4 : state->dir_capacity * 2;
+        usize maximum = SIZE_MAX / sizeof(NodeFsWatchDir *);
+        if (state->dir_capacity == maximum) { state->error = ENOMEM; return nullptr; }
+        usize capacity = state->dir_capacity == 0 ? 4
+            : state->dir_capacity > maximum / 2 ? maximum : state->dir_capacity * 2;
         NodeFsWatchDir **grown = realloc(state->dirs, capacity * sizeof(NodeFsWatchDir *));
-        if (grown == nullptr) return nullptr;
+        if (grown == nullptr) { state->error = ENOMEM; return nullptr; }
         state->dirs = grown;
         state->dir_capacity = capacity;
     }
     NodeFsWatchDir *dir = calloc(1, sizeof(NodeFsWatchDir));
     if (dir == nullptr || (dir->relative = strdup(relative)) == nullptr) {
         free(dir);
+        state->error = ENOMEM;
         return nullptr;
     }
     dir->fd = fd;
@@ -6955,12 +6958,7 @@ static void node_fs_watch_forget(NodeFsWatcher *state, const char *relative) {
             state->dirs[kept++] = dir;
             continue;
         }
-#if defined(__APPLE__)
-        state->watched--;
-        for (usize entry = 0; entry < dir->entry_count; entry++) {
-            if (dir->entry_fds[entry] >= 0) state->watched--;
-        }
-#elif defined(__linux__)
+#if defined(__linux__)
         (void) inotify_rm_watch(state->fd, dir->fd);
 #endif
         node_fs_watch_dir_free(dir);
@@ -6995,19 +6993,33 @@ static bool node_fs_watch_list(const char *path, char ***out, usize *count) {
     *count = 0;
     if (dir == nullptr) return false;
     usize capacity = 0;
-    for (struct dirent *entry = readdir(dir); entry != nullptr; entry = readdir(dir)) {
+    int error = 0;
+    for (;;) {
+        errno = 0;
+        struct dirent *entry = readdir(dir);
+        if (entry == nullptr) { error = errno; break; }
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
         if (*count == capacity) {
-            capacity = capacity == 0 ? 16 : capacity * 2;
+            usize maximum = SIZE_MAX / sizeof(char *);
+            if (capacity == maximum) { error = ENOMEM; break; }
+            capacity = capacity == 0 ? 16 : capacity > maximum / 2 ? maximum : capacity * 2;
             char **grown = realloc(*out, capacity * sizeof(char *));
-            if (grown == nullptr) break;
+            if (grown == nullptr) { error = ENOMEM; break; }
             *out = grown;
         }
         char *name = strdup(entry->d_name);
-        if (name == nullptr) break;
+        if (name == nullptr) { error = ENOMEM; break; }
         (*out)[(*count)++] = name;
     }
     closedir(dir);
+    if (error != 0) {
+        for (usize index = 0; index < *count; index++) free((*out)[index]);
+        free(*out);
+        *out = nullptr;
+        *count = 0;
+        errno = error;
+        return false;
+    }
     if (*count > 1) qsort(*out, *count, sizeof(char *), node_fs_watch_compare);
     return true;
 }
@@ -7090,12 +7102,20 @@ static void node_fs_watch_rescan(MalVm *vm, NodeFsWatcher *state, NodeFsWatchDir
  * watched directories that own theirs, so their entry keeps -1. */
 static int node_fs_watch_child(MalVm *vm, NodeFsWatcher *state, NodeFsWatchDir *dir, const char *name,
     bool announce) {
-    if (state->closed || state->watched >= NODE_FS_WATCH_CHILD_LIMIT) return -1;
+    if (state->closed || state->error != 0) return -1;
     int fd = openat(dir->fd, name, O_EVTONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        if (errno != ENOENT && errno != ENOTDIR && errno != ELOOP) state->error = errno;
+        return -1;
+    }
     struct stat st;
     bool directory = false;
-    if (fstat(fd, &st) != 0 || !(S_ISREG(st.st_mode) || (directory = state->recursive && S_ISDIR(st.st_mode)))) {
+    if (fstat(fd, &st) != 0) {
+        state->error = errno;
+        close(fd);
+        return -1;
+    }
+    if (!(S_ISREG(st.st_mode) || (directory = state->recursive && S_ISDIR(st.st_mode)))) {
         close(fd);
         return -1;
     }
@@ -7103,16 +7123,15 @@ static int node_fs_watch_child(MalVm *vm, NodeFsWatcher *state, NodeFsWatchDir *
     EV_SET(&change, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
         directory ? NOTE_WRITE : NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB, 0, (void *) (uintptr_t) (fd + 1));
     if (kevent(state->fd, &change, 1, nullptr, 0, nullptr) < 0) {
+        state->error = errno;
         close(fd);
         return -1;
     }
-    state->watched++;
     if (!directory) return fd;
     const char *relative = node_fs_watch_join(state, dir->relative, name);
     NodeFsWatchDir *child = relative == nullptr ? nullptr : node_fs_watch_add_dir(state, relative, fd);
     if (child == nullptr) {
         close(fd);
-        state->watched--;
         return -1;
     }
     node_fs_watch_rescan(vm, state, child, announce);
@@ -7121,15 +7140,21 @@ static int node_fs_watch_child(MalVm *vm, NodeFsWatcher *state, NodeFsWatchDir *
 
 static void node_fs_watch_rescan(MalVm *vm, NodeFsWatcher *state, NodeFsWatchDir *dir, bool announce) {
     char *absolute = node_fs_watch_absolute(state, dir->relative);
-    if (absolute == nullptr) return;
+    if (absolute == nullptr) { state->error = ENOMEM; return; }
     char **entries;
     usize count;
-    (void) node_fs_watch_list(absolute, &entries, &count);
+    bool listed = node_fs_watch_list(absolute, &entries, &count);
+    int error = errno;
     free(absolute);
+    if (!listed) {
+        if (error != ENOENT && error != ENOTDIR) state->error = error;
+        return;
+    }
     int *fds = count == 0 ? nullptr : malloc(count * sizeof(int));
     if (count > 0 && fds == nullptr) {
         for (usize i = 0; i < count; i++) free(entries[i]);
         free(entries);
+        state->error = ENOMEM;
         return;
     }
     usize left = 0, right = 0;
@@ -7140,13 +7165,10 @@ static void node_fs_watch_rescan(MalVm *vm, NodeFsWatcher *state, NodeFsWatchDir
             fds[right++] = dir->entry_fds[left++];
             continue;
         }
-        bool active = announce && !state->closed && vm->completion.kind != MAL_COMPLETION_THROW;
+        bool active = announce && !state->closed && state->error == 0 && vm->completion.kind != MAL_COMPLETION_THROW;
         if (order < 0) {
             int fd = dir->entry_fds[left];
-            if (fd >= 0) {
-                close(fd);
-                state->watched--;
-            }
+            if (fd >= 0) close(fd);
             const char *name = node_fs_watch_join(state, dir->relative, dir->entries[left]);
             if (name != nullptr && state->recursive && fd < 0) node_fs_watch_forget(state, name);
             if (name != nullptr && active) node_fs_watch_emit(vm, state, "rename", name);
@@ -7199,11 +7221,14 @@ static NodeFsWatchDir *node_fs_watch_find(const NodeFsWatcher *state, int wd, us
 
 static bool node_fs_watch_subdir(NodeFsWatcher *state, const char *relative) {
     char *absolute = node_fs_watch_absolute(state, relative);
-    if (absolute == nullptr) return false;
+    if (absolute == nullptr) { state->error = ENOMEM; return false; }
     // IN_ONLYDIR also rejects the DT_UNKNOWN entries that turn out not to be directories.
     int wd = inotify_add_watch(state->fd, absolute, NODE_FS_WATCH_TREE_MASK | IN_ONLYDIR | IN_DONT_FOLLOW);
     free(absolute);
-    if (wd < 0) return false;
+    if (wd < 0) {
+        if (errno != ENOENT && errno != ENOTDIR && errno != ELOOP) state->error = errno;
+        return false;
+    }
     // A descriptor that is already watched means a bind-mount loop; stop descending.
     usize index;
     if (node_fs_watch_find(state, wd, &index) != nullptr) return false;
@@ -7215,8 +7240,12 @@ static bool node_fs_watch_subdir(NodeFsWatcher *state, const char *relative) {
 static void node_fs_watch_tree(MalVm *vm, NodeFsWatcher *state, const char *relative, bool announce) {
     char *absolute = node_fs_watch_absolute(state, relative);
     DIR *directory = absolute == nullptr ? nullptr : opendir(absolute);
+    int error = absolute == nullptr ? ENOMEM : errno;
     free(absolute);
-    if (directory == nullptr) return;
+    if (directory == nullptr) {
+        if (error != ENOENT && error != ENOTDIR) state->error = error;
+        return;
+    }
     for (struct dirent *entry = readdir(directory); entry != nullptr && !state->closed; entry = readdir(directory)) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
         const char *name = node_fs_watch_join(state, relative, entry->d_name);
@@ -7224,7 +7253,8 @@ static void node_fs_watch_tree(MalVm *vm, NodeFsWatcher *state, const char *rela
         if (announce && vm->completion.kind != MAL_COMPLETION_THROW) node_fs_watch_emit(vm, state, "rename", name);
         if (entry->d_type != DT_DIR && entry->d_type != DT_UNKNOWN) continue;
         char *child = strdup(name);
-        if (child != nullptr && node_fs_watch_subdir(state, child)) node_fs_watch_tree(vm, state, child, announce);
+        if (child == nullptr) state->error = ENOMEM;
+        else if (node_fs_watch_subdir(state, child)) node_fs_watch_tree(vm, state, child, announce);
         free(child);
     }
     closedir(directory);
@@ -7267,12 +7297,16 @@ static void node_fs_watch_tree_event(MalVm *vm, NodeFsWatcher *state, const stru
 }
 #endif
 
+static void node_fs_watch_fail(MalVm *vm, NodeFsWatcher *state);
+
 static void node_fs_watch_receive(MalVm *vm, NodeFsWatcher *state) {
 #if defined(__APPLE__)
     struct kevent events[NODE_FS_WATCH_EVENTS];
     struct timespec zero = {0};
     int ready = kevent(state->fd, nullptr, 0, events, NODE_FS_WATCH_EVENTS, &zero);
+    if (ready < 0 && errno != EINTR && errno != EAGAIN) state->error = errno;
     for (int i = 0; i < ready && !state->closed && vm->completion.kind != MAL_COMPLETION_THROW; i++) {
+        if ((events[i].flags & EV_ERROR) != 0) { state->error = (int) events[i].data; break; }
         u32 flags = events[i].fflags;
         if (events[i].udata != nullptr) {
             node_fs_watch_child_event(vm, state, (int) ((uintptr_t) events[i].udata - 1));
@@ -7288,9 +7322,11 @@ static void node_fs_watch_receive(MalVm *vm, NodeFsWatcher *state) {
 #elif defined(__linux__)
     _Alignas(struct inotify_event) char buffer[4096];
     ssize_t length = read(state->fd, buffer, sizeof(buffer));
+    if (length < 0 && errno != EINTR && errno != EAGAIN) state->error = errno;
     for (ssize_t offset = 0; offset < length && !state->closed && vm->completion.kind != MAL_COMPLETION_THROW;) {
         const struct inotify_event *event = (const struct inotify_event *) (buffer + offset);
         offset += (ssize_t) (sizeof(struct inotify_event) + event->len);
+        if ((event->mask & IN_Q_OVERFLOW) != 0) { state->error = EOVERFLOW; break; }
         if (state->recursive) {
             node_fs_watch_tree_event(vm, state, event);
             continue;
@@ -7304,7 +7340,11 @@ static void node_fs_watch_receive(MalVm *vm, NodeFsWatcher *state) {
         }
     }
 #endif
-    if (!state->closed) (void) node_fs_watch_arm(state);
+    if (!state->closed && state->error != 0) node_fs_watch_fail(vm, state);
+    else if (!state->closed && !node_fs_watch_arm(state)) {
+        state->error = ENOMEM;
+        node_fs_watch_fail(vm, state);
+    }
 }
 
 static bool node_fs_watch_drain(MalVm *vm) {
@@ -7320,7 +7360,7 @@ static bool node_fs_watch_drain(MalVm *vm) {
     (void) mal_host_task_take_data(&host->tasks, &task);
     if (task.kind == MAL_HOST_TASK_TERMINAL) {
         // An iterator outlives its handle until next() has consumed the buffered events or the abort.
-        if (!state->iterator || (state->queue_head == nullptr && !state->aborted)) node_fs_watcher_free(state);
+        if (!state->iterator || (state->queue_head == nullptr && !state->failed)) node_fs_watcher_free(state);
         else state->operation = 0;
     } else if (!state->closed) {
 #if MAL_REALMS
@@ -7372,7 +7412,7 @@ static int node_fs_watch_open(NodeFsWatcher *state) {
 #else
     return ENOSYS;
 #endif
-    return 0;
+    return state->error;
 }
 
 static void node_fs_watch_close_handle(NodeFsWatcher *state) {
@@ -7507,7 +7547,7 @@ static void node_fs_watch_listen_abort(MalVm *vm, MalValue signal, MalValue hand
     MalValue values[] = {signal, handler, mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, values, countof(values));
-    if (mal_vm_get_property(vm, values[0], mal_intrinsic_string_key(vm, (const byte *) "aborted"), &values[2])
+    if (mal_vm_get_property(vm, values[0], mal_intrinsic_string_key(vm, (const byte *) "failed"), &values[2])
         && mal_value_is_truthy(values[2])) {
         mal_vm_call_value(vm, values[1], mal_value_new_undefined(), nullptr, 0);
     } else if (vm->completion.kind != MAL_COMPLETION_THROW) {
@@ -7547,7 +7587,7 @@ static NodeFsWatcher *node_fs_watch_start(MalVm *vm, MalValue filename, MalValue
     state->buffer_names = buffer_names;
     state->unreferenced = !persistent;
     state->pending = mal_value_new_undefined();
-    state->abort_reason = mal_value_new_undefined();
+    state->failure_reason = mal_value_new_undefined();
     int error = node_fs_watch_open(state);
     MalHost *host = mal_host(vm);
     state->host = host;
@@ -7639,11 +7679,11 @@ static MalValue node_fs_watch_iterator_next(
     mal_gc_root(&root, values, countof(values));
     MalValue promise = values[0];
     MalPromiseObject *object = mal_value_to_promise_object(promise);
-    if (state != nullptr && state->aborted) {
-        values[1] = state->abort_reason;
+    if (state != nullptr && state->failed) {
+        values[1] = state->failure_reason;
         if (state->operation == 0) node_fs_watcher_free(state);
-        else state->aborted = false;
-        mal_promise_reject(vm, object, mal_node_abort_error(vm, values[1]));
+        else state->failed = false;
+        mal_promise_reject(vm, object, values[1]);
     } else if (state != nullptr && state->queue_head != nullptr) {
         NodeFsWatchEvent *event = state->queue_head;
         state->queue_head = event->next;
@@ -7651,7 +7691,7 @@ static MalValue node_fs_watch_iterator_next(
         values[1] = event->result;
         MalValue value = values[1];
         free(event);
-        if (state->queue_head == nullptr && state->closed && state->operation == 0 && !state->aborted) {
+        if (state->queue_head == nullptr && state->closed && state->operation == 0 && !state->failed) {
             node_fs_watcher_free(state);
         }
         mal_promise_fulfill(vm, object, value);
@@ -7664,7 +7704,7 @@ static MalValue node_fs_watch_iterator_next(
     return promise;
 }
 
-static void node_fs_watch_iterator_finish(MalVm *vm, NodeFsWatcher *state, bool aborted, MalValue reason) {
+static void node_fs_watch_iterator_finish(MalVm *vm, NodeFsWatcher *state, bool failed, MalValue reason) {
     if (state->closed) return;
     node_fs_watch_close_handle(state);
     while (state->queue_head != nullptr) {
@@ -7676,12 +7716,34 @@ static void node_fs_watch_iterator_finish(MalVm *vm, NodeFsWatcher *state, bool 
     if (mal_value_is_object(state->pending)) {
         MalPromiseObject *promise = mal_value_to_promise_object(state->pending);
         state->pending = mal_value_new_undefined();
-        if (aborted) mal_promise_reject(vm, promise, mal_node_abort_error(vm, reason));
+        if (failed) mal_promise_reject(vm, promise, reason);
         else mal_promise_fulfill(vm, promise, mal_vm_create_iter_result(vm, mal_value_new_undefined(), true));
-    } else if (aborted) {
-        state->aborted = true;
-        state->abort_reason = reason;
+    } else if (failed) {
+        state->failed = true;
+        state->failure_reason = reason;
     }
+}
+
+static void node_fs_watch_fail(MalVm *vm, NodeFsWatcher *state) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        node_fs_watch_close_handle(state);
+        return;
+    }
+    node_fs_throw_errno(vm, state->error, "watch", state->path);
+    MalValue error = vm->completion.value;
+    MalRootSpan root;
+    mal_gc_root(&root, &error, 1);
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    if (state->iterator) node_fs_watch_iterator_finish(vm, state, true, error);
+    else {
+        node_fs_watcher_close(vm, state->receiver, nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined());
+        MalValue args[] = {node_fs_watch_ascii(vm, "error"), error};
+        MalRootSpan args_root;
+        mal_gc_root(&args_root, args, countof(args));
+        node_fs_watch_call(vm, state->receiver, "emit", args, countof(args));
+        mal_gc_unroot(&args_root);
+    }
+    mal_gc_unroot(&root);
 }
 
 static MalValue node_fs_watch_iterator_return(
@@ -7714,7 +7776,7 @@ static MalValue node_fs_watch_iterator_aborted(
     MalRootSpan root;
     mal_gc_root(&root, &reason, 1);
     (void) mal_vm_get_property(vm, signal, mal_intrinsic_string_key(vm, (const byte *) "reason"), &reason);
-    if (state != nullptr) node_fs_watch_iterator_finish(vm, state, true, reason);
+    if (state != nullptr) node_fs_watch_iterator_finish(vm, state, true, mal_node_abort_error(vm, reason));
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
 }
