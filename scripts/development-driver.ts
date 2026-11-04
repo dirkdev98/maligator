@@ -17,6 +17,7 @@ export interface DevelopmentDriverExit {
 	stdout: string;
 	stderr: string;
 	forced: boolean;
+	shutdownMs: number;
 }
 
 export function startDevelopmentDriver(
@@ -170,6 +171,7 @@ export function startDevelopmentDriver(
 		},
 		stop(): Promise<DevelopmentDriverExit> {
 			return (stopping ??= (async () => {
+				const startedAt = performance.now();
 				if (!closed) {
 					let force: ReturnType<typeof setTimeout> | undefined;
 					let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -198,7 +200,14 @@ export function startDevelopmentDriver(
 						clearTimeout(timeout);
 					}
 				}
-				return { code: child.exitCode, signal: child.signalCode, stdout, stderr, forced };
+				return {
+					code: child.exitCode,
+					signal: child.signalCode,
+					stdout,
+					stderr,
+					forced,
+					shutdownMs: performance.now() - startedAt,
+				};
 			})());
 		},
 	};

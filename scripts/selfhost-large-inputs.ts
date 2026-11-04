@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { artifactFileDigest } from "../src/artifact-store.ts";
 import { largeDevelopmentSource } from "../tests/fixtures/selfhost-large-development/source.ts";
 import { startDevelopmentDriver } from "./development-driver.ts";
+import type { DevelopmentDriverExit } from "./development-driver.ts";
 
 interface LargeInputCheckOptions {
 	cli: string;
@@ -162,9 +163,11 @@ server.listen(0, "127.0.0.1", () => { console.log("DX_HTTP_PORT " + server.addre
 			cwd: project,
 			env: options.toolchainFreeEnvironment,
 			readinessTimeoutMs: 180_000,
+			shutdownGraceMs: 10_000,
+			shutdownTimeoutMs: 15_000,
 		},
 	);
-	let developmentCode: number | null | undefined;
+	let developmentExit: DevelopmentDriverExit;
 	try {
 		await development.waitForRevision(0);
 		writeRevision(1);
@@ -174,24 +177,31 @@ server.listen(0, "127.0.0.1", () => { console.log("DX_HTTP_PORT " + server.addre
 		writeRevision(2, 1);
 		await development.waitForRevision(2);
 	} finally {
-		const outcome = await development.stop();
+		developmentExit = await development.stop();
 		writeFileSync(
-			path.join(reports, "large-dev.log"),
-			`${outcome.stdout}\n${outcome.stderr}`,
+			path.join(reports, "large-dev.json"),
+			`${JSON.stringify(developmentExit, null, 2)}\n`,
 		);
-		developmentCode = outcome.code;
 	}
-	if (developmentCode !== 0)
-		throw new Error(`large dev did not stop cleanly: ${developmentCode}`);
+	if (
+		developmentExit.code !== 0 ||
+		developmentExit.signal !== null ||
+		developmentExit.forced
+	)
+		throw new Error(
+			`large dev did not stop cleanly: ${JSON.stringify({ code: developmentExit.code, signal: developmentExit.signal, forced: developmentExit.forced, shutdownMs: developmentExit.shutdownMs })}`,
+		);
 	const watch = startDevelopmentDriver(
 		options.cli,
 		["test", "--watch", "--status", "--config", config, testFile],
 		{
 			cwd: project,
 			env: options.toolchainFreeEnvironment,
+			shutdownGraceMs: 10_000,
+			shutdownTimeoutMs: 15_000,
 		},
 	);
-	let watchCode: number | null | undefined;
+	let watchExit: DevelopmentDriverExit;
 	try {
 		await options.waitForOutput(
 			() => watch.output,
@@ -212,15 +222,16 @@ server.listen(0, "127.0.0.1", () => { console.log("DX_HTTP_PORT " + server.addre
 		await options.waitForOutput(editedOutput, "LARGE_TEST_REVISION 3 CALL 1", 180_000);
 		await options.waitForOutput(editedOutput, "0 failed;", 180_000);
 	} finally {
-		const outcome = await watch.stop();
+		watchExit = await watch.stop();
 		writeFileSync(
-			path.join(reports, "large-test-watch.log"),
-			`${outcome.stdout}\n${outcome.stderr}`,
+			path.join(reports, "large-test-watch.json"),
+			`${JSON.stringify(watchExit, null, 2)}\n`,
 		);
-		watchCode = outcome.code;
 	}
-	if (watchCode !== 0)
-		throw new Error(`large test watch did not stop cleanly: ${watchCode}`);
+	if (watchExit.code !== 0 || watchExit.signal !== null || watchExit.forced)
+		throw new Error(
+			`large test watch did not stop cleanly: ${JSON.stringify({ code: watchExit.code, signal: watchExit.signal, forced: watchExit.forced, shutdownMs: watchExit.shutdownMs })}`,
+		);
 	const editedExpected = expected();
 	runBuilt(invoke(buildArgs).stdout, editedExpected);
 	runBuilt(invoke([...buildArgs, "--production"]).stdout, editedExpected);
