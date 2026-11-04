@@ -36,6 +36,8 @@ import {
 	numeric_fill,
 	numeric_emit,
 	numeric_live,
+	numeric_negate,
+	negateAsync,
 } from "maligator:ffi/numeric";
 
 function check(value: boolean, message: string): asserts value {
@@ -520,5 +522,35 @@ check(
 		Array.from({ length: 300 }, (_, index) => index * 0.25),
 	),
 	"callback arrays copy C numbers before C reuses them",
+);
+const negated = [-32767, -1, 0, 1, 32767, 0.5 * 4];
+for (const negate of [numeric_negate, negateAsync]) {
+	const result = await negate(negated);
+	check(
+		sameValues(result.values, [32767, 1, 0, -1, -32767, -2]) && result.count === 6n,
+		"inout integer arrays return a native snapshot",
+	);
+	check(negated[0] === -32767, "inout arrays leave the input array unchanged");
+}
+check(
+	sameValues(
+		numeric_negate(Array.from({ length: 1000 }, (_, index) => index)).values,
+		Array.from({ length: 1000 }, (_, index) => (index === 0 ? 0 : -index)),
+	),
+	"large inout arrays leave inline storage",
+);
+failsWith(RangeError, () => numeric_negate([1, 40000]));
+failsWith(TypeError, () => numeric_negate(["x", 40000] as unknown as Array<number>));
+let inoutReads = 0;
+const inoutAccessed = [1, 2];
+Object.defineProperty(inoutAccessed, 0, {
+	get() {
+		inoutReads++;
+		return 3;
+	},
+});
+check(
+	sameValues(numeric_negate(inoutAccessed).values, [-3, -2]) && inoutReads === 1,
+	"inout accessor elements are read once",
 );
 console.log("numeric views passed");

@@ -73,6 +73,10 @@ export default {
 			returns: { array: { length: "count" }, free: "numeric_out_free" },
 			async: "outI32Async",
 		},
+		numeric_negate: {
+			params: { values: { inout: true, array: { length: "count" } } },
+			async: "negateAsync",
+		},
 		numeric_fill: {
 			params: {
 				values: { out: true, array: { length: "written", capacity: "capacity" } },

@@ -99,4 +99,8 @@ void numeric_emit(void (*visit)(void *data, const float *values, int count), voi
     visit(data, values, 300);
     memset(values, 0, sizeof(values));
 }
+void numeric_negate(int16_t *values, size_t *count) {
+    calls++;
+    for (size_t i = 0; i < *count; i++) values[i] = (int16_t) -values[i];
+}
 int numeric_live(void) { return live; }

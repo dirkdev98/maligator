@@ -1,6 +1,7 @@
 #ifndef FFI_NUMERIC_VIEWS_H
 #define FFI_NUMERIC_VIEWS_H
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 typedef void (*NumericVisit)(void *data);
 int8_t numeric_i8(const int8_t *values, int count);
@@ -31,6 +32,7 @@ int32_t *numeric_out_null(int *count);
 void numeric_out_free(void *values);
 void numeric_fill(int16_t *values, int capacity, int *written);
 void numeric_emit(void (*visit)(void *data, const float *values, int count), void *data);
+void numeric_negate(int16_t *values, size_t *count);
 int numeric_live(void);
 int numeric_calls(void);
 void numeric_reset(void);

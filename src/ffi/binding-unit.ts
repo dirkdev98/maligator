@@ -1939,10 +1939,15 @@ class BindingWriter {
 			);
 		}
 		const lengthLines = lines.splice(0);
+		// An inout snapshot writes every numeric element before C runs, so it needs no zeroing.
+		const numeric =
+			source === undefined
+				? undefined
+				: bulkNumericElements(value.of, resolveCType(this.#model, value.element));
 		lines.push(
 			`static_assert(sizeof(*${buffer}) > 0 && sizeof(*${buffer}) % _Alignof(__typeof__(*${buffer})) == 0, "FFI array stride must preserve C alignment");`,
 			`if (${length} > 0) {`,
-			`\t${buffer} = mal_ffi_calloc_storage((size_t) ${length}, sizeof(*${buffer}), _Alignof(__typeof__(*${buffer})));`,
+			`\t${buffer} = mal_ffi_${numeric === undefined ? "calloc" : "allocate"}_storage((size_t) ${length}, sizeof(*${buffer}), _Alignof(__typeof__(*${buffer})));`,
 			`\tif (${buffer} == nullptr) { mal_ffi_out_of_memory(vm); ${fail} }`,
 			"}",
 			`${context}mal_argument_${index} = ${buffer};`,
@@ -1952,7 +1957,7 @@ class BindingWriter {
 			const element = this.#fresh("element");
 			const native = this.#fresh("native_element");
 			const construct = value.of.kind !== "array" && this.#immutableRecord(value.element);
-			lines.push(
+			const sequential = [
 				`for (int32_t ${position} = 0; ${position} < ${length}; ${position}++) {`,
 				`\tMalValue ${element};`,
 				`\tif (!mal_ffi_element(vm, ${source}, ${position}, ${length}, ${site}, &${element})) ${fail}`,
@@ -1975,6 +1980,15 @@ class BindingWriter {
 						]
 					: []),
 				"}",
+			];
+			lines.push(
+				...(numeric === undefined
+					? sequential
+					: [
+							`if (!(${numeric(source, length, buffer)})) {`,
+							...sequential.map((line) => `\t${line}`),
+							"}",
+						]),
 			);
 		}
 		return {
