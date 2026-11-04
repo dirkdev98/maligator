@@ -1683,7 +1683,8 @@ MalValue mal_ffi_numeric_array(MalVm *vm, const void *data, int32_t length, MalF
     mal_gc_root(&root, &result, 1);
     // Chunks keep the boxed copy on the stack; immediates need no rooting.
     MalValue chunk[256];
-    for (i32 start = 0; start < length; start += (i32) countof(chunk)) {
+    // Advancing by the chunk's own count ends at `length`, which stays representable.
+    for (i32 start = 0; start < length;) {
         u32 count = (u32) (length - start) < countof(chunk) ? (u32) (length - start) : (u32) countof(chunk);
         ffi_numeric_values(data, start, count, kind, chunk);
         if (!mal_array_object_dense_build_values(mal_value_to_array_object(result), (u32) start, chunk, count)) {
@@ -1691,6 +1692,7 @@ MalValue mal_ffi_numeric_array(MalVm *vm, const void *data, int32_t length, MalF
             mal_vm_throw_allocation_error(vm);
             return mal_value_new_undefined();
         }
+        start += (i32) count;
     }
     mal_gc_unroot(&root);
     return result;
