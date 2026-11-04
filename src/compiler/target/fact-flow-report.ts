@@ -84,6 +84,16 @@ export function collectCompilerFactFlowReport(
 	runtimeInstructionIndexes: ReadonlyArray<ReadonlyMap<object, number>>,
 	nativeFunctions: ReadonlyArray<NativeFunctionPlan>,
 ): CompilerFactFlowReport {
+	const selected = [...facts.sites.values()]
+		.filter((site) => site.callTargets?.kind === "known")
+		.sort((left, right) => left.id.localeCompare(right.id));
+	if (selected.length === 0)
+		return {
+			schema: 1,
+			entries: [],
+			summary: { produced: 0, consumed: 0, narrowed: 0, dropped: 0 },
+		};
+	const selectedIds = new Set(selected.map((site) => site.id));
 	type Location = { readonly functionIndex: number; readonly instructionIndex: number };
 	const runtimeLocations = new Map<string, Array<Location>>();
 	const nativeLocations = new Map<string, Array<Location>>();
@@ -99,13 +109,13 @@ export function collectCompilerFactFlowReport(
 	for (const [functionIndex, indexes] of runtimeInstructionIndexes.entries()) {
 		for (const [instruction, instructionIndex] of indexes) {
 			const siteId = facts.instructionSites.get(instruction)?.id;
-			if (siteId !== undefined)
+			if (siteId !== undefined && selectedIds.has(siteId))
 				record(runtimeLocations, siteId, { functionIndex, instructionIndex });
 		}
 	}
 	for (const fn of nativeFunctions) {
 		for (const [instructionIndex, siteId] of (fn.compilerSiteIds ?? []).entries()) {
-			if (siteId === undefined) continue;
+			if (siteId === undefined || !selectedIds.has(siteId)) continue;
 			record(nativeLocations, siteId, {
 				functionIndex: fn.functionIndex,
 				instructionIndex,
@@ -114,9 +124,7 @@ export function collectCompilerFactFlowReport(
 	}
 
 	const entries: Array<CompilerFactFlowEntry> = [];
-	for (const site of [...facts.sites.values()].sort((left, right) =>
-		left.id.localeCompare(right.id),
-	)) {
+	for (const site of selected) {
 		if (site.callTargets?.kind !== "known") continue;
 		const targets = site.callTargets.value;
 		const functions = targets.functions.map((target) =>

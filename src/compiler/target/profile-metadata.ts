@@ -123,17 +123,15 @@ function commonDirectory(paths: Array<string>): string {
 	return split[0]!.slice(0, Math.max(0, count - 1)).join("/");
 }
 
-function stableHash(value: string, seed: number): string {
-	let hash = seed >>> 0;
-	for (let index = 0; index < value.length; index++) {
-		hash ^= value.charCodeAt(index);
-		hash = Math.imul(hash, 0x01000193) >>> 0;
-	}
-	return hash.toString(16).padStart(8, "0");
-}
-
 function digest(value: string): string {
-	return `${stableHash(value, 0x811c9dc5)}${stableHash(value, 0x9e3779b9)}`;
+	let first = 0x811c9dc5;
+	let second = 0x9e3779b9;
+	for (let index = 0; index < value.length; index++) {
+		const unit = value.charCodeAt(index);
+		first = Math.imul(first ^ unit, 0x01000193) >>> 0;
+		second = Math.imul(second ^ unit, 0x01000193) >>> 0;
+	}
+	return `${first.toString(16).padStart(8, "0")}${second.toString(16).padStart(8, "0")}`;
 }
 
 function logicalId(value: string): string {
@@ -566,9 +564,78 @@ export function buildProfileMetadata(
 				: (runtime.files[candidate.fileIndex] ?? "<unknown>"),
 		);
 	};
+	type PositionIdentity = {
+		file: string;
+		originPrefix: string;
+		chainKey: string;
+		regionId: string;
+		inlineChain: ProfileSite["inlineChain"];
+	};
+	const sourcePositionIdentity = (
+		positions: Map<number, PositionIdentity>,
+		positionId: number,
+		functionIndex: number,
+		physicalFile: string,
+	): PositionIdentity => {
+		const position = runtime.sourcePositions[positionId]!;
+		let identity = positions.get(positionId);
+		if (identity === undefined) {
+			const leafFunctionIndex = position.inlinedFunctionIndex ?? functionIndex;
+			const leafFile = functionFile(leafFunctionIndex);
+			const anchor = anchorDigest(leafFile, position.line);
+			const inlineChain: ProfileSite["inlineChain"] = [];
+			let chainPositionId = positionId;
+			let guard = 0;
+			while (chainPositionId >= 0 && guard++ < 1024) {
+				const chainPosition = runtime.sourcePositions[chainPositionId];
+				if (chainPosition === undefined) break;
+				inlineChain.push({
+					functionIndex: chainPosition.inlinedFunctionIndex ?? functionIndex,
+					positionId: chainPositionId,
+				});
+				chainPositionId = chainPosition.callerPosId ?? -1;
+			}
+			const chainKey = inlineChain
+				.map((entry) => {
+					const chainPosition = runtime.sourcePositions[entry.positionId]!;
+					const chainFile = functionFile(entry.functionIndex);
+					const chainAnchor = anchorDigest(chainFile, chainPosition.line);
+					return `${relativeFile(chainFile)}:${functionName(entry.functionIndex)}:${chainAnchor}:${chainPosition.column}`;
+				})
+				.join("<-");
+			identity = {
+				file: relativeFile(leafFile),
+				originPrefix: `${relativeFile(leafFile)}\u0000${functionName(leafFunctionIndex)}\u0000${anchor}\u0000${position.column}\u0000`,
+				chainKey,
+				regionId: logicalId(
+					`${relativeFile(physicalFile)}\u0000${functionName(functionIndex)}\u0000${chainKey}`,
+				),
+				inlineChain,
+			};
+			positions.set(positionId, identity);
+		}
+		return identity;
+	};
 	for (const table of [runtime.functions, image.native.functions.map((fn) => fn.body)]) {
 		for (const [functionIndex, fn] of table.entries()) {
 			const physicalFile = normalizedPath(runtime.files[fn.fileIndex] ?? "<unknown>");
+			const positionIdentities = new Map<number, PositionIdentity>();
+			const runtimeSites =
+				table === runtime.functions ? undefined : new Map<string, number>();
+			const reference = runtime.functions[functionIndex];
+			// Runtime site IDs are assigned first. Source positions and function identities
+			// stay fixed while the native table reuses matching occurrence coordinates.
+			if (runtimeSites !== undefined && reference?.fileIndex === fn.fileIndex) {
+				const occurrences = new Map<string, number>();
+				for (const [index, instruction] of reference.instructions.entries()) {
+					const id = reference.profileSiteIds?.[index] ?? -1;
+					if (id < 0) continue;
+					const key = `${reference.positions[index]}:${profileOperationForInstruction(instruction)}`;
+					const occurrence = occurrences.get(key) ?? 0;
+					occurrences.set(key, occurrence + 1);
+					runtimeSites.set(`${key}:${occurrence}`, id);
+				}
+			}
 			const siteIds = new Array<number>(fn.instructions.length).fill(-1);
 			const occurrenceByOrigin = new Map<string, number>();
 
@@ -578,56 +645,41 @@ export function buildProfileMetadata(
 				const position = runtime.sourcePositions[positionId];
 				if (position === undefined) continue;
 				const operation = profileOperationForInstruction(instruction);
-				const leafFunctionIndex = position.inlinedFunctionIndex ?? functionIndex;
-				const leafFile = functionFile(leafFunctionIndex);
-				const anchor = anchorDigest(leafFile, position.line);
 				const occurrenceKey = `${positionId}:${operation}`;
 				const occurrence = occurrenceByOrigin.get(occurrenceKey) ?? 0;
 				occurrenceByOrigin.set(occurrenceKey, occurrence + 1);
-				const originKey = `${relativeFile(leafFile)}\u0000${functionName(leafFunctionIndex)}\u0000${anchor}\u0000${position.column}\u0000${operation}\u0000${occurrence}`;
-				const inlineChain: Array<{ functionIndex: number; positionId: number }> = [];
-				let chainPositionId = positionId;
-				let guard = 0;
-				while (chainPositionId >= 0 && guard++ < 1024) {
-					const chainPosition = runtime.sourcePositions[chainPositionId];
-					if (chainPosition === undefined) break;
-					inlineChain.push({
-						functionIndex: chainPosition.inlinedFunctionIndex ?? functionIndex,
-						positionId: chainPositionId,
-					});
-					chainPositionId = chainPosition.callerPosId ?? -1;
-				}
-				const chainKey = inlineChain
-					.map((entry) => {
-						const chainPosition = runtime.sourcePositions[entry.positionId]!;
-						const chainFile = functionFile(entry.functionIndex);
-						const chainAnchor = anchorDigest(chainFile, chainPosition.line);
-						return `${relativeFile(chainFile)}:${functionName(entry.functionIndex)}:${chainAnchor}:${chainPosition.column}`;
-					})
-					.join("<-");
-				const originId = logicalId(originKey);
-				const instanceId = logicalId(`${originKey}\u0000${chainKey}`);
-				const regionId = logicalId(
-					`${relativeFile(physicalFile)}\u0000${functionName(functionIndex)}\u0000${chainKey}`,
-				);
-				const siteId = siteByInstance.get(instanceId) ?? sites.length;
-				if (!siteByInstance.has(instanceId)) {
-					siteByInstance.set(instanceId, siteId);
-					sites.push({
-						id: siteId,
-						logicalId: instanceId,
-						originId,
-						instanceId,
-						regionId,
-						functionIndex,
-						instructionIndex,
+				const coordinate = `${occurrenceKey}:${occurrence}`;
+				let siteId = runtimeSites?.get(coordinate);
+				if (siteId === undefined) {
+					const identity = sourcePositionIdentity(
+						positionIdentities,
 						positionId,
-						file: relativeFile(leafFile),
-						line: position.line,
-						column: position.column,
-						operation,
-						inlineChain,
-					});
+						functionIndex,
+						physicalFile,
+					);
+					const originKey = `${identity.originPrefix}${operation}\u0000${occurrence}`;
+					const instanceId = logicalId(`${originKey}\u0000${identity.chainKey}`);
+					siteId = siteByInstance.get(instanceId);
+					if (siteId === undefined) {
+						siteId = sites.length;
+						siteByInstance.set(instanceId, siteId);
+						sites.push({
+							id: siteId,
+							logicalId: instanceId,
+							originId: logicalId(originKey),
+							instanceId,
+							regionId: identity.regionId,
+							functionIndex,
+							instructionIndex,
+							positionId,
+							file: identity.file,
+							line: position.line,
+							column: position.column,
+							operation,
+							inlineChain: identity.inlineChain.map((entry) => ({ ...entry })),
+						});
+					}
+					runtimeSites?.set(coordinate, siteId);
 				}
 				siteIds[instructionIndex] = siteId;
 				const compilerSiteId =

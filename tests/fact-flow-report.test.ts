@@ -25,6 +25,15 @@ test("ordinary compilation does not collect fact flow", () => {
 	expect(definition.diagnostics.factFlow).toBeUndefined();
 });
 
+test("profiled arithmetic has no call-target flow entries", () => {
+	const image = compile("globalThis.result = globalThis.input + 1;");
+	expect(image.diagnostics.factFlow).toEqual({
+		schema: 1,
+		entries: [],
+		summary: { produced: 0, consumed: 0, narrowed: 0, dropped: 0 },
+	});
+});
+
 test("fact flow joins independent instruction maps by site, including target-specific sites", () => {
 	const sites = new Map<string, CompilerSiteFacts>(
 		["both", "vm", "native"].map((id) => [
@@ -47,9 +56,12 @@ test("fact flow joins independent instruction maps by site, including target-spe
 	);
 	const bothInstruction = {};
 	const vmInstruction = {};
+	const ignoredInstruction = {};
+	sites.set("ignored", { id: "ignored", functionId: "0", instruction: "add" });
 	const facts = { ...conservativeCompilerProgramFacts(), sites };
 	facts.instructionSites.set(bothInstruction, sites.get("both")!);
 	facts.instructionSites.set(vmInstruction, sites.get("vm")!);
+	facts.instructionSites.set(ignoredInstruction, sites.get("ignored")!);
 	const call = (target: number): BytecodeInstruction => ({
 		opcode: "CALL",
 		dst: 0,
@@ -66,7 +78,7 @@ test("fact flow joins independent instruction maps by site, including target-spe
 	};
 	const native = {
 		...createConservativeNativePlan([body]).functions[0]!,
-		compilerSiteIds: [undefined, "native", undefined, "both"],
+		compilerSiteIds: ["ignored", "native", undefined, "both"],
 		instructions: [
 			undefined,
 			{ kind: "call" as const, directFunctionIndex: 1 },
@@ -80,6 +92,7 @@ test("fact flow joins independent instruction maps by site, including target-spe
 		{ ...compiled.runtime, functions: [body] },
 		[
 			new Map([
+				[ignoredInstruction, 0],
 				[bothInstruction, 1],
 				[vmInstruction, 2],
 			]),

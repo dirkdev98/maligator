@@ -358,6 +358,17 @@ test("same-position operations retain distinct optimized instance identities", (
 	expect(sites.every((site) => site.originId !== "" && site.regionId !== "")).toBe(true);
 });
 
+test("profile sites own independent mutable inline chains", () => {
+	const definition = compile(
+		`function hot(object) { object.left = {}; object.right = {}; return object; } hot(globalThis);`,
+	);
+	const sites = definition.profiling!.sites;
+	expect(sites.length).toBeGreaterThan(1);
+	expect(new Set(sites.map((site) => site.inlineChain)).size).toBe(sites.length);
+	const links = sites.flatMap((site) => site.inlineChain);
+	expect(new Set(links).size).toBe(links.length);
+});
+
 test("every residual allocation, call, property, and boxing site has a remark", () => {
 	const definition = compile(`
 		function hot(value, escape) {
