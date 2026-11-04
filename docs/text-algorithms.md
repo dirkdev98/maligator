@@ -29,7 +29,7 @@ costs.
 | Property keys                     | Queries reuse existing atoms without inserting missing names. Shapes hash ropes without materialization; transition indexes avoid unbounded sibling-list scans for ordinary hash distributions. Untraced ICs admit only stable identities; repeated transient misses still pay normalization and lookup. | [Key resolution](../runtime/src/intrinsics.c), [shape indexes](../runtime/src/shape.c), [property ICs](../runtime/src/vm_ops.c) |
 | UTF-8 boundary                    | Decoding grows compact storage with emitted units. Buffer encoding counts bytes and writes an exactly sized adopted buffer. Both are linear passes; remaining temporary C-string encoders still reserve an upper bound.                                                                                  | [UTF-8](../runtime/src/utf8.c), [Buffer conversion](../runtime/src/runtime/node_buffer.c)                                       |
 | JSON parsing and reviver metadata | Token traversal is sequential; small integers accumulate during validation and other numbers use token-local byte scratch. Object source records build a last-occurrence hash index on demand, avoiding a backward member scan for each reviver lookup.                                                  | [JSON parser and source records](../runtime/src/builtin_json.c)                                                                 |
-| Generic stringify                 | Active-path membership is expected O(1) per container, with O(D) live identities. Native recursion has a 512-container cap and the VM's actual stack bound; pretty-printing and callbacks can add work independently of traversal.                                                                       | [Generic JSON serializer](../runtime/src/builtin_json.c)                                                                        |
+| Generic stringify                 | Active-path membership is expected O(1) per container, with O(D) live identities. A shallow native prefix hands deep subtrees to stable heap frames; pretty-printing and callbacks can add work independently of traversal.                                                                              | [Generic JSON serializer](../runtime/src/builtin_json.c)                                                                        |
 | Plain-data stringify              | Iterative traversal with expected O(V + O + K + P + Q) work, plus string traversal. Optional caches have fixed admission budgets; frames and active-path state remain O(D). Late unsupported descendants resume generic traversal on the active stack while retaining completed output.                  | [Guarded JSON serializer](../runtime/src/builtin_json.c)                                                                        |
 | JSON quoting                      | O(N + O + R), including bounded escape expansion. Safe Latin-1 and ordinary UTF-16 runs use word scanning; quoting stops for escapes and surrogate handling, including pairs across leaves.                                                                                                              | [JSON quoting](../runtime/src/builtin_json.c)                                                                                   |
 
@@ -181,14 +181,15 @@ source ranges, and reviver mutation semantics remain separate from this index.
 Syntax records for overwritten members remain allocated until parse/reviver
 cleanup, so memory follows parsed input rather than only the final object.
 
-Parsing, generic serialization, and reviver traversal remain recursive. Before
-entering another container, they check the 512-container limit and the VM's
-current native stack bound; a small scheduler fiber or sanitizer frame may reach
-the stack bound earlier. Exhaustion throws `RangeError`. Parse-node cleanup is
-allocation-free and iterative, including error cleanup. Generic serialization
-uses an active-path pointer set, removing identities as frames return so repeated
-non-cyclic children remain valid. The guarded plain serializer uses heap frames
-and is not subject to the recursive container cap.
+Parsing, generic serialization, and reviver traversal keep a shallow native
+prefix, then hand the remaining subtree to stable heap frames. The handoff also
+honors the VM's stack margin on scheduler fibers and under sanitizers. Nesting
+has no fixed rejection depth; memory and output size bound the traversal.
+Parse-node cleanup is allocation-free and iterative, including error cleanup.
+Generic serialization uses an active-path pointer set, removing identities as
+frames return so repeated non-cyclic children remain valid. Reviver traversal
+permits repeated objects because getters can change subsequent visits. The
+guarded plain serializer uses heap frames throughout.
 
 The plain serializer checks eligibility without executing hooks. At an unsupported
 descendant it rewinds only the current member's uncommitted separator/key, roots
@@ -279,14 +280,14 @@ Use the relevant row below and retain the existing six text workloads as control
 Build intended physical representations at runtime or with explicit C constructors;
 constant-folded literals can invalidate a rope or compact-storage experiment.
 
-| Target                         | Inputs that expose the cost                                                                                                  | Acceptance evidence                                                                                           |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Mixed construction and quoting | Latin-1, early/late wide units, BMP, emoji, lone surrogates; sparse/dense escapes at each alignment                          | Complete output; paired time, allocation, promotion, copied units, and quote probes                           |
-| Search                         | Repeated-prefix misses, overlaps, increasing N/M, both chain directions, cross-leaf hits, clamped offsets                    | Flat UTF-16 oracle; active comparison/traversal counters showing the intended bound                           |
-| Ropes, hashes, keys            | Balanced, append, prepend, random joins and large terminal leaves; first/cached hashes; fresh-equal/unique keys              | Content and GC checks; cons-edge weight, height, visited nodes, hash units, cache hits, and timings           |
-| JSON traversal                 | Tokens ending inside/on leaf boundaries; growing reviver key sets; compact deep chains, identity replacers, scheduler fibers | Values, negative zero, duplicate source records, callback order, lookup/seek counts, controlled depth failure |
-| Caches and fallback            | Repeated/one-use shapes; unsupported descendants at beginning/middle/end; Map mutation and representative retention          | Plan/key/backing bytes, reuse, discarded output, callback traces, quiescent retention, and time               |
-| Encoding                       | ASCII/non-ASCII, malformed/streamed data, decoded max/max+1, BOM, tiny finishes and truncated large builders                 | Exact bytes/units; sticky failure behavior, RAW/adopted capacity, and live storage after collection           |
+| Target                         | Inputs that expose the cost                                                                                                  | Acceptance evidence                                                                                                             |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Mixed construction and quoting | Latin-1, early/late wide units, BMP, emoji, lone surrogates; sparse/dense escapes at each alignment                          | Complete output; paired time, allocation, promotion, copied units, and quote probes                                             |
+| Search                         | Repeated-prefix misses, overlaps, increasing N/M, both chain directions, cross-leaf hits, clamped offsets                    | Flat UTF-16 oracle; active comparison/traversal counters showing the intended bound                                             |
+| Ropes, hashes, keys            | Balanced, append, prepend, random joins and large terminal leaves; first/cached hashes; fresh-equal/unique keys              | Content and GC checks; cons-edge weight, height, visited nodes, hash units, cache hits, and timings                             |
+| JSON traversal                 | Tokens ending inside/on leaf boundaries; growing reviver key sets; compact deep chains, identity replacers, scheduler fibers | Values, negative zero, duplicate source records, callback order, lookup/seek counts, deep traversal and malformed-input cleanup |
+| Caches and fallback            | Repeated/one-use shapes; unsupported descendants at beginning/middle/end; Map mutation and representative retention          | Plan/key/backing bytes, reuse, discarded output, callback traces, quiescent retention, and time                                 |
+| Encoding                       | ASCII/non-ASCII, malformed/streamed data, decoded max/max+1, BOM, tiny finishes and truncated large builders                 | Exact bytes/units; sticky failure behavior, RAW/adopted capacity, and live storage after collection                             |
 
 Instrumented custom C entrypoints must initialize performance statistics and run
 with them enabled. Require positive relevant counter deltas before checking upper

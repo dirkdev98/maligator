@@ -1529,12 +1529,6 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Engine capabilities
 
-- [ ] Replace recursive JSON parsing, reviver traversal, and observable stringify
-      traversal with growable heap frames. Remove the 512-level rejection without
-      exposing the C or fiber stack. Preserve callback order, source contexts,
-      cycle detection, and the already-written prefix when plain stringify falls
-      back after a getter or toJSON call.
-
 - [ ] Replace the fixed 128-bit BigInt representation with arbitrary-precision digits.
       Remove width approximations from arithmetic, parsing, formatting, comparison,
       typed operations, and serialization.

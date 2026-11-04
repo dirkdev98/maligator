@@ -1,7 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
@@ -11,10 +11,11 @@ import {
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-json-algorithms-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 const expected = ["json-algorithms PASS"];
 const hostGc = { MAL_HOST_GC: "1" };
 
-describe("JSON bounded resources and token traversal", () => {
+describe("JSON depth growth and token traversal", () => {
 	let compiled: string;
 	let interpreted: string;
 	let fiber: string;
@@ -33,12 +34,12 @@ describe("JSON bounded resources and token traversal", () => {
 		});
 	});
 
-	it("preserves callbacks, sources, and bounded failure in both backends", () => {
+	it("preserves callbacks and sources through deep traversal in both backends", () => {
 		assertExactLines(runToStdout(compiled, { env: hostGc }), expected);
 		assertExactLines(runToStdout(interpreted, { env: hostGc }), expected);
 	});
 
-	it("bounds recursive work on the scheduler's smaller fiber stack", () => {
+	it("traverses deep values on the scheduler's smaller fiber stack", () => {
 		assertExactLines(runToStdout(fiber), ["json-fiber PASS"]);
 		assertExactLines(runToStdout(fiber, { env: STRESS_ENV }), ["json-fiber PASS"]);
 	});

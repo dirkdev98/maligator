@@ -216,10 +216,12 @@ reseeks. Source ranges remain absolute UTF-16 offsets.
 Reviver source records lazily index canonical keys and the last duplicate
 occurrence, preserving property order and `context.source`. Parse records retain
 overwritten syntax members until cleanup. Cleanup uses an allocation-free iterative
-list. Parsing, reviver traversal, and generic serialization check both a
-512-container recursive limit and the VM's native stack bound, throwing
-`RangeError` before another container when a bound is reached. Small fibers and
-sanitizer frames can reach the stack bound earlier.
+list. Parsing, reviver traversal, and generic serialization retain a shallow
+native prefix and switch the remaining subtree to heap frames before native
+stack use grows further. The handoff honors the VM's stack margin for small
+fibers and sanitizer frames. Frames stay at stable addresses because their root
+spans are linked through the collector's root stack; cleanup pops children before
+parents. Input depth has no fixed rejection threshold.
 
 Generic serialization prepares property values in observable order and writes
 directly to final output, preserving getters, proxies, `toJSON`, replacers,
@@ -253,8 +255,8 @@ all active holders and remaining snapshotted keys, preserves each original array
 length, and transfers active-path cycle membership. Subsequent properties use
 observable Get and preparation; shape slots and prototype proofs are no longer
 reused. A callback can mutate later properties without changing the saved key
-order or causing earlier hooks to run again. Generic depth limits still apply to
-continuation. Caches stay within one invocation, avoiding cross-call
+order or causing earlier hooks to run again. Deep generic subtrees continue on
+heap frames. Caches stay within one invocation, avoiding cross-call
 shape/prototype invalidation state. Quoting scans safe runs in both
 encodings in bulk. UTF-16 scanning stops before surrogates so the existing pair
 handling can span leaves; lone surrogates are escaped. A short scalar prefix

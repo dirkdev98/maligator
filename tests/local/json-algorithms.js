@@ -12,55 +12,31 @@ function collect() {
 	if (typeof gc === "function") gc();
 }
 
-function expectRangeError(action, message) {
-	let caught;
-	try {
-		action();
-	} catch (error) {
-		caught = error;
-	}
-	check(caught instanceof RangeError, message);
-	collect();
-}
-
 const depth = 1200;
 const deepText = "[".repeat(depth) + "0" + "]".repeat(depth);
-expectRangeError(
-	() => JSON.parse(deepText),
-	"deep parsing fails without overflowing native stack",
+check(
+	JSON.stringify(JSON.parse(deepText)) === deepText,
+	"deep array parsing uses heap frames",
 );
 let deepReviverCalls = 0;
-expectRangeError(
-	() =>
-		JSON.parse(deepText, (key, value) => {
-			deepReviverCalls++;
-			return value;
-		}),
-	"source-tracking parse unwinds partially built nodes",
+const deepRevived = JSON.parse(deepText, (key, value) => {
+	deepReviverCalls++;
+	return value;
+});
+check(
+	JSON.stringify(deepRevived) === deepText && deepReviverCalls === depth + 1,
+	"deep revivers visit every value in postorder",
 );
-check(deepReviverCalls === 0, "a failed parse never enters the reviver");
-expectRangeError(() => JSON.rawJSON(deepText), "raw JSON depth is bounded");
 
 const deepObjectText = '{"next":'.repeat(depth) + "0" + "}".repeat(depth);
-expectRangeError(
-	() => JSON.parse(deepObjectText),
-	"deep staged objects have bounded native stack use",
-);
-expectRangeError(
-	() => JSON.parse(deepObjectText, (key, value) => value),
-	"deep source-tracking objects unwind safely",
-);
-const nearText = '{"next":'.repeat(480) + "0" + "}".repeat(480);
-const nearObject = JSON.parse(nearText, (key, value) => value);
 check(
-	JSON.stringify(nearObject, (key, value) => value) === nearText,
-	"nested objects below the depth limit preserve identity callbacks",
+	JSON.stringify(JSON.parse(deepObjectText)) === deepObjectText,
+	"deep object parsing uses heap frames",
 );
-let deepObject = 0;
-for (let i = 0; i < depth; i++) deepObject = { next: deepObject };
-expectRangeError(
-	() => JSON.stringify(deepObject, (key, value) => value),
-	"generic object frames respect the native stack bound",
+const deepObject = JSON.parse(deepObjectText, (key, value) => value);
+check(
+	JSON.stringify(deepObject, (key, value) => value) === deepObjectText,
+	"deep source-tracking objects retain identity callbacks",
 );
 
 let chain = 0;
@@ -70,17 +46,22 @@ check(
 	"plain compact serialization retains heap-frame depth support",
 );
 let identityCalls = 0;
-expectRangeError(
-	() =>
-		JSON.stringify(chain, (key, value) => {
-			identityCalls++;
-			return value;
-		}),
-	"deep identity-replacer serialization fails safely",
+check(
+	JSON.stringify(chain, (key, value) => {
+		identityCalls++;
+		return value;
+	}) === deepText && identityCalls === depth + 1,
+	"deep identity-replacer serialization visits each value once",
 );
 check(
-	identityCalls > 0 && identityCalls < depth,
-	"depth failure bounds replacer traversal",
+	JSON.stringify(chain, ["next"]) === deepText,
+	"deep serialization keeps array elements with a property allow-list",
+);
+const pretty = JSON.stringify(chain, null, " ");
+check(
+	pretty.length === depth * depth + 4 * depth + 1 &&
+		JSON.stringify(JSON.parse(pretty)) === deepText,
+	"deep pretty serialization retains indentation",
 );
 
 let lateGetterCalls = 0;
@@ -89,32 +70,147 @@ Object.defineProperty(late, "leaf", {
 	enumerable: true,
 	get() {
 		lateGetterCalls++;
+		collect();
 		return 1;
 	},
 });
 for (let i = 0; i < depth; i++) late = [late];
-expectRangeError(
-	() => JSON.stringify(late),
-	"late plain-path fallback has bounded stack use",
-);
 check(
-	lateGetterCalls === 0,
-	"speculation and depth failure invoke no unreachable getter",
+	JSON.stringify(late) === "[".repeat(depth) + '{"leaf":1}' + "]".repeat(depth) &&
+		lateGetterCalls === 1,
+	"deep plain-path fallback preserves its prefix and calls a getter once",
 );
 
 let introducedCalls = 0;
-expectRangeError(
-	() =>
-		JSON.parse('{"first":0,"later":1}', function (key, value) {
-			introducedCalls++;
-			if (key === "first") this.later = chain;
+const introduced = JSON.parse('{"first":0,"later":1}', function (key, value, context) {
+	introducedCalls++;
+	if (key === "first") this.later = chain;
+	if (key === "0")
+		check(context.source === undefined, "introduced values have no source context");
+	return value;
+});
+check(
+	introduced.later === chain && introducedCalls === depth + 3,
+	"reviver-introduced deep trees preserve postorder callback behavior",
+);
+
+let malformedCalls = 0;
+for (const invalid of [
+	deepText.slice(0, -1),
+	deepObjectText.slice(0, -1),
+	"[".repeat(depth) + "0," + "]".repeat(depth),
+]) {
+	let caught;
+	try {
+		JSON.parse(invalid, (key, value) => {
+			malformedCalls++;
 			return value;
-		}),
-	"reviver-introduced deep trees fail with rooted cleanup",
+		});
+	} catch (error) {
+		caught = error;
+	}
+	check(caught instanceof SyntaxError, "malformed deep input reports a syntax error");
+	collect();
+}
+check(malformedCalls === 0, "malformed deep input never enters the reviver");
+
+function wrapDeep(value) {
+	for (let i = 0; i < 64; i++) value = [value];
+	return value;
+}
+function unwrapDeep(value) {
+	for (let i = 0; i < 64; i++) value = value[0];
+	return value;
+}
+
+const proxyTrace = [];
+const proxyTarget = { first: 1, later: 2 };
+const proxy = new Proxy(proxyTarget, {
+	ownKeys(target) {
+		proxyTrace.push("keys");
+		return Reflect.ownKeys(target);
+	},
+	getOwnPropertyDescriptor(target, key) {
+		proxyTrace.push("desc:" + key);
+		return Reflect.getOwnPropertyDescriptor(target, key);
+	},
+	get(target, key) {
+		proxyTrace.push("get:" + key);
+		if (key === "first") delete target.later;
+		return Reflect.get(target, key);
+	},
+});
+const proxyText = JSON.stringify(wrapDeep(proxy), (key, value) =>
+	key === "later" ? 7 : value,
 );
 check(
-	introducedCalls === 1,
-	"reviver depth failure preserves postorder callback behavior",
+	JSON.stringify(unwrapDeep(JSON.parse(proxyText))) === '{"first":1,"later":7}' &&
+		proxyTrace.join("|") === "get:toJSON|keys|desc:first|desc:later|get:first|get:later",
+	"deep generic serialization snapshots proxy descriptors before value getters",
+);
+
+let toJsonCalls = 0;
+const transformed = wrapDeep({
+	toJSON(key) {
+		toJsonCalls++;
+		collect();
+		return { kept: key, dropped: undefined };
+	},
+});
+check(
+	JSON.stringify(
+		unwrapDeep(JSON.parse(JSON.stringify(transformed, (key, value) => value))),
+	) === '{"kept":"0"}' && toJsonCalls === 1,
+	"deep serialization transforms each child once and omits undefined members",
+);
+
+const filtered = JSON.stringify(wrapDeep({ first: 1, later: { first: 2, extra: 3 } }), [
+	"later",
+	"first",
+]);
+check(
+	JSON.stringify(unwrapDeep(JSON.parse(filtered))) === '{"later":{"first":2},"first":1}',
+	"deep object serialization retains property-list order",
+);
+
+const deepMutationTrace = [];
+const deepMutation = JSON.parse(
+	JSON.stringify(wrapDeep({ first: 0, same: 2, later: 3 })),
+	function (key, value, context) {
+		if (key === "first" || key === "same" || key === "later" || key === "added")
+			deepMutationTrace.push(key + ":" + String(context.source));
+		if (key === "first") {
+			delete this.same;
+			this.later = { added: 4 };
+		}
+		if (key === "added") collect();
+		return value;
+	},
+);
+check(
+	deepMutationTrace.join("|") ===
+		"first:0|same:undefined|added:undefined|later:undefined" &&
+		!("same" in unwrapDeep(deepMutation)) &&
+		unwrapDeep(deepMutation).later.added === 4,
+	"deep revivers retain snapshots and invalidate replaced source contexts",
+);
+
+const revisited = { first: 0 };
+let cyclicVisits = 0;
+Object.defineProperty(revisited, "later", {
+	enumerable: true,
+	get() {
+		cyclicVisits++;
+		return cyclicVisits < 3 ? revisited : 1;
+	},
+});
+JSON.parse('{"first":0,"later":1}', function (key, value) {
+	if (key === "first" && this !== revisited) this.later = wrapDeep(revisited);
+	return value;
+});
+check(
+	cyclicVisits === 3,
+	"revivers allow repeated objects whose getters finish traversal",
 );
 
 const marker = new Error("JSON callback marker");

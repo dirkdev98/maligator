@@ -15,6 +15,8 @@
 
 extern const MalRuntimeImage mal_runtime_image;
 
+enum { JSON_TEST_DEPTH = 1400 };
+
 static MalVm *json_vm;
 static MalValue held[7];
 static int failed;
@@ -43,19 +45,27 @@ static MalValue identity(
     return arg_count >= 2 ? args[1] : mal_value_new_undefined();
 }
 
-static void expect_depth_failure(MalValue function, MalValue input, bool callback) {
+static MalValue call_json(MalValue function, MalValue input, bool callback) {
     MalValue args[2] = {input, callback ? held[5] : mal_value_new_undefined()};
     MalCompletion completion = mal_vm_call_value(
         json_vm, function, held[6], args, callback ? 2 : 1);
-    check(completion.kind == MAL_COMPLETION_THROW &&
-        mal_value_is_object(completion.value) &&
-        mal_object_prototype(mal_value_to_object(completion.value)) ==
-            mal_value_to_object(json_vm->intrinsics[MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE]),
-        "small fiber stack reports RangeError");
+    check(completion.kind == MAL_COMPLETION_NORMAL,
+        "deep JSON traversal succeeds on a small fiber stack");
+    held[4] = completion.kind == MAL_COMPLETION_NORMAL
+        ? completion.value : mal_value_new_undefined();
     json_vm->completion = (MalCompletion) {
         .kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined(),
     };
     mal_gc_collect(json_vm);
+    return held[4];
+}
+
+static void check_parse(MalValue parse, MalValue stringify, MalValue input, bool callback) {
+    MalValue parsed = call_json(parse, input, callback);
+    MalValue text = call_json(stringify, parsed, false);
+    check(mal_value_is_string(text) &&
+        mal_string_equals(mal_value_to_string(text), mal_value_to_string(input)),
+        "fiber parse retains the complete nested value");
 }
 
 static void worker(void *arg) {
@@ -68,20 +78,23 @@ static void worker(void *arg) {
     check(mal_vm_get_property(json_vm, held[6],
         mal_intrinsic_string_key(json_vm, "stringify"), &methods[1]), "JSON.stringify exists");
     callbacks = 0;
-    expect_depth_failure(methods[0], held[1], false);
-    expect_depth_failure(methods[0], held[1], true);
-    expect_depth_failure(methods[0], held[2], true);
-    check(callbacks == 0, "failed fiber parses never invoke revivers");
-    expect_depth_failure(methods[1], held[0], true);
+    check_parse(methods[0], methods[1], held[1], false);
+    check_parse(methods[0], methods[1], held[1], true);
+    check_parse(methods[0], methods[1], held[2], true);
+    check(callbacks == 2 * (JSON_TEST_DEPTH + 1), "deep fiber parses visit every value");
+    callbacks = 0;
+    MalValue text = call_json(methods[1], held[0], true);
+    check(mal_value_is_string(text) &&
+        mal_string_equals(mal_value_to_string(text), mal_value_to_string(held[1])) &&
+        callbacks == JSON_TEST_DEPTH + 1, "fiber stringify retains every callback and nested object");
     introduce_tree = true;
     callbacks = 0;
-    expect_depth_failure(methods[0], held[3], true);
-    check(callbacks == 1, "reviver-introduced tree stops before parent callbacks");
+    MalValue introduced = call_json(methods[0], held[3], true);
+    MalValue later;
+    check(mal_vm_get_property(json_vm, introduced,
+        mal_intrinsic_string_key(json_vm, "later"), &later) && later == held[0] &&
+        callbacks == JSON_TEST_DEPTH + 3, "reviver-introduced trees finish on the fiber stack");
     introduce_tree = false;
-    MalValue args[1] = {mal_value_from_string(mal_intrinsic_ascii(json_vm, "42"))};
-    MalCompletion completion = mal_vm_call_value(json_vm, methods[0], held[6], args, 1);
-    check(completion.kind == MAL_COMPLETION_NORMAL &&
-        completion.value == mal_value_from_i32(42), "fiber JSON calls recover after depth failures");
     mal_gc_unroot(&method_roots);
 }
 
@@ -94,13 +107,13 @@ int main(void) {
     MalRootSpan roots;
     mal_gc_root(&roots, held, sizeof(held) / sizeof(*held));
     held[0] = mal_value_from_i32(0);
-    for (usize i = 0; i < 1400; i++) {
+    usize depth = JSON_TEST_DEPTH;
+    for (usize i = 0; i < depth; i++) {
         held[4] = mal_value_from_object(mal_intrinsic_new_object(&vm));
         mal_intrinsic_define_data(&vm, mal_value_to_object(held[4]), "next", held[0],
             MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
         held[0] = held[4];
     }
-    usize depth = 1400;
     byte *text = malloc(depth * 9 + 1);
     if (text == nullptr) abort();
     for (usize i = 0; i < depth; i++) memcpy(text + i * 8, "{\"next\":", 8);
