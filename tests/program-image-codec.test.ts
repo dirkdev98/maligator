@@ -1050,7 +1050,7 @@ describe("program-image-codec", () => {
 			dst: 0,
 			prefixLength: 1,
 			part: 2,
-			followingQuasiLength: 16 * 1024 * 1024,
+			followingQuasiLength: MAX_STRING_CODE_UNITS,
 		};
 		for (const operation of [
 			length,
@@ -1068,7 +1068,7 @@ describe("program-image-codec", () => {
 			{ ...length, part: 3 },
 			{ ...length, followingQuasiLength: -1 },
 			{ ...length, followingQuasiLength: 0.5 },
-			{ ...length, followingQuasiLength: 16 * 1024 * 1024 + 1 },
+			{ ...length, followingQuasiLength: MAX_STRING_CODE_UNITS + 1 },
 			{ opcode: "CONCAT_STRINGS", dst: 0, arguments: [1] },
 			{ opcode: "CONCAT_STRINGS", dst: 0, arguments: [1, -1] },
 			{ opcode: "CONCAT_STRINGS", dst: 0, arguments: [1, 3] },

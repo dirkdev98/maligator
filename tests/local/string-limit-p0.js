@@ -1,3 +1,5 @@
+import { constants } from "node:buffer";
+
 const results = [];
 
 function check(name, condition) {
@@ -365,9 +367,10 @@ check(
 
 // Build exact-limit values once so producers that add their own delimiters can
 // exercise the catchable boundary without attempting an impossible allocation.
-const halfLimit = "x".repeat(1 << 23);
-const atLimit = halfLimit + halfLimit;
-check("exact string limit remains valid", atLimit.length === 1 << 24);
+const maximum = constants.MAX_STRING_LENGTH;
+const halfLimit = "x".repeat(Math.ceil(maximum / 2));
+const atLimit = halfLimit + halfLimit.slice(0, maximum - halfLimit.length);
+check("exact string limit remains valid", atLimit.length === maximum);
 check(
 	"concat rejects one code unit past the limit",
 	throwsRangeError(() => atLimit + "x"),
@@ -488,7 +491,7 @@ check(
 
 check(
 	"encodeURIComponent rejects expansion past the limit",
-	throwsRangeError(() => encodeURIComponent("%".repeat(1 << 23))),
+	throwsRangeError(() => encodeURIComponent("%".repeat(Math.floor(maximum / 3) + 1))),
 );
 check(
 	"btoa rejects expansion past the limit",
@@ -496,11 +499,11 @@ check(
 );
 check(
 	"typed-array hex rejects expansion past the limit",
-	throwsRangeError(() => new Uint8Array((1 << 23) + 1).toHex()),
+	throwsRangeError(() => new Uint8Array(Math.floor(maximum / 2) + 1).toHex()),
 );
 check(
 	"typed-array base64 rejects expansion past the limit",
-	throwsRangeError(() => new Uint8Array(12582913).toBase64()),
+	throwsRangeError(() => new Uint8Array(Math.floor(maximum / 4) * 3 + 1).toBase64()),
 );
 check(
 	"typed-array base64 remains correct",

@@ -316,7 +316,7 @@ function directEntryDeclaration(
 }
 
 export const DEFAULT_TRANSLATION_UNIT_TARGET_CODE_UNITS = 2 * 1024 * 1024;
-/** Keep indivisible definitions below the self-host compiler's 16 MiB string limit. */
+/** Leave string-limit headroom for the self-host compiler's surrounding declarations. */
 export const TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS = 8 * 1024 * 1024;
 export const DEFAULT_TRANSLATION_UNIT_POLICY: TranslationUnitPolicy = {
 	targetCodeUnits: DEFAULT_TRANSLATION_UNIT_TARGET_CODE_UNITS,

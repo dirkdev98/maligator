@@ -10,9 +10,10 @@ ordinary string content.
 
 The string cell remains 32 bytes: a four-byte heap header, a four-byte metadata
 word, an independent eight-byte hash, and a sixteen-byte payload. The metadata
-packs a 25-bit length with storage and content flags, preserving the inclusive
-16,777,216-code-unit engine limit. Dependent offsets share the payload with the
-other representation-specific fields.
+packs a 25-bit length with storage and content flags. The engine uses the full
+length range defined in [`heap_string.h`](../../runtime/src/heap_string.h), so
+larger strings do not require a larger cell. Dependent offsets share the payload
+with the other representation-specific fields.
 
 | Storage   | Payload                                     | Ownership and retained edges         |
 | --------- | ------------------------------------------- | ------------------------------------ |

@@ -114,7 +114,10 @@ Normal builds restore cached VM definitions before generated-C emission, skippin
 unchanged graph, semantic, optimization, allocation, and lowering work while
 preserving native-code metadata. Generated translation units and the driver are then
 compiled to independently content-addressed objects; unchanged objects are relinked
-without invoking their C compilation again. A generated unit (including the eval
+without invoking their C compilation again. Development overlays cache each
+bounded unit's C source separately from its metadata. Total generated output can
+exceed the host engine's string limit without serializing one aggregate string
+or expanding C source through JSON escaping. A generated unit (including the eval
 compiler overlay) is keyed by its expanded body plus the expanded header
 declarations that body can reach, so a runtime header edit only recompiles units
 that use what changed. Intrinsic slots are declared in every build for the same

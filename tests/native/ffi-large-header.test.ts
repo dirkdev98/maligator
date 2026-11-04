@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { MAX_STRING_CODE_UNITS } from "../../src/compiler/shared/compiler-instruction.ts";
 import { visitClangDeclarations } from "../../src/ffi/clang-ast.ts";
 import {
 	buildBackendPairFromOneProgramImage,
@@ -26,7 +27,7 @@ describe("large C headers", () => {
 	it("extracts declarations after an individual clang declaration exceeds the native string limit", () => {
 		const directory = mkdtempSync(join(tmpdir(), "mal-ffi-large-header-"));
 		try {
-			const body = "value += 1; ".repeat(16_384);
+			const body = "value += 1; ".repeat(Math.ceil(MAX_STRING_CODE_UNITS / 1024));
 			writeFileSync(
 				join(directory, "auxiliary.h"),
 				`static inline int auxiliary(int value) { ${body}return value; }`,
@@ -59,7 +60,7 @@ describe("large C headers", () => {
 				{ maxBuffer: 256 * 1024 * 1024, timeout: 60_000 },
 			);
 			expect(dump.status, dump.stderr.toString()).toBe(0);
-			expect(dump.stdout.byteLength).toBeGreaterThan(16 * 1024 * 1024);
+			expect(dump.stdout.byteLength).toBeGreaterThan(MAX_STRING_CODE_UNITS);
 			let largestDeclaration = 0;
 			visitClangDeclarations(dump.stdout, (node) => {
 				largestDeclaration = Math.max(
@@ -67,7 +68,7 @@ describe("large C headers", () => {
 					Buffer.byteLength(JSON.stringify(node)),
 				);
 			});
-			expect(largestDeclaration).toBeGreaterThan(16 * 1024 * 1024);
+			expect(largestDeclaration).toBeGreaterThan(MAX_STRING_CODE_UNITS);
 			const fixture = "tests/fixtures/ffi-extract-native/main.ts";
 			const env = { MAL_FFI_HEADER_DIR: directory, MAL_FFI_COMPILER: compiler };
 			const expected = execFileSync(process.execPath, [fixture], {
@@ -119,15 +120,21 @@ describe("large C headers", () => {
 					1024,
 					".",
 				);
+				const longLineCount = Math.floor(MAX_STRING_CODE_UNITS / prose.length) + 1;
 				const documentation =
 					kind === "single-line"
-						? prose.repeat(17_000)
+						? prose.repeat(longLineCount)
 						: Array.from(
-								{ length: kind === "aggregate" ? 64 : 17_000 },
+								{ length: kind === "aggregate" ? 64 : longLineCount },
 								(_, index) => `${prose} ${index}`,
 							).join("\n");
 				const declarations = Array.from(
-					{ length: kind === "aggregate" ? 300 : 1 },
+					{
+						length:
+							kind === "aggregate"
+								? Math.ceil(MAX_STRING_CODE_UNITS / documentation.length) + 1
+								: 1,
+					},
 					(_, index) => `large_documented_${index}`,
 				);
 				const comment =
@@ -145,7 +152,7 @@ describe("large C headers", () => {
 				].join("\n");
 				const headerPath = join(include, "large.h");
 				writeFileSync(headerPath, header);
-				expect(statSync(headerPath).size).toBeGreaterThan(16 * 1024 * 1024);
+				expect(statSync(headerPath).size).toBeGreaterThan(MAX_STRING_CODE_UNITS);
 				const compiler = resolvePathExecutable(process.env.CC ?? "cc");
 				const log = join(directory, "compiler.log");
 				const wrapper = join(directory, "cc");
@@ -216,7 +223,7 @@ describe("large C headers", () => {
 					readdirSync(cache, { recursive: true, withFileTypes: true }).some(
 						(entry) =>
 							entry.isFile() &&
-							statSync(join(entry.parentPath, entry.name)).size > 16 * 1024 * 1024,
+							statSync(join(entry.parentPath, entry.name)).size > MAX_STRING_CODE_UNITS,
 					),
 				).toBe(true);
 			} finally {

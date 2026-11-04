@@ -75,7 +75,7 @@ export function developmentFragmentUnits(
 	const names = artifacts.map((artifact) => fragmentName(artifact.digest));
 	if (new Set(names).size !== names.length)
 		throw new Error("development fragments must have distinct images");
-	const producer = compilerProducerIdentity(FRAGMENT_UNITS_STAGE, 3);
+	const producer = compilerProducerIdentity(FRAGMENT_UNITS_STAGE, 4);
 	const overlays = artifacts.flatMap((artifact, index) => {
 		const compilerArtifact = compilerArtifacts?.[index];
 		const key = artifactActionKey(producer, {
@@ -90,9 +90,16 @@ export function developmentFragmentUnits(
 			key,
 		);
 		if (cached !== undefined)
-			return JSON.parse(
-				readFileSync(artifactOutput(cached, "units.json").path, "utf8"),
-			) as Array<GeneratedTranslationUnit>;
+			return cached.outputs
+				.filter((output) => output.name.endsWith(".json"))
+				.map((output): GeneratedTranslationUnit => {
+					const metadata = JSON.parse(readFileSync(output.path, "utf8")) as Omit<
+						GeneratedTranslationUnit,
+						"sourceChunks"
+					>;
+					const source = artifactOutput(cached, output.name.replace(/\.json$/, ".c"));
+					return { ...metadata, sourceChunks: [readFileSync(source.path, "utf8")] };
+				});
 		const units = emitRelocatableNativeOverlayTranslationUnits(
 			overlayImage(artifact, compilerArtifact),
 			artifact.digest,
@@ -102,11 +109,26 @@ export function developmentFragmentUnits(
 		);
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-fragment-units-"));
 		try {
-			const file = path.join(directory, "units.json");
-			writeFileSync(file, JSON.stringify(units));
-			publishArtifactAction(cacheDirectory, FRAGMENT_UNITS_STAGE, producer, key, [
-				{ name: "units.json", file },
-			]);
+			// Unit source is already bounded. Keep it out of JSON, whose escaping and
+			// aggregation can exceed the host engine's string limit independently.
+			const publications = units.flatMap((unit, index) => {
+				const { sourceChunks, ...metadata } = unit;
+				const source = path.join(directory, `${index}.c`);
+				const descriptor = path.join(directory, `${index}.json`);
+				writeFileSync(source, sourceChunks.join(""));
+				writeFileSync(descriptor, JSON.stringify(metadata));
+				return [
+					{ name: `${index}.json`, file: descriptor },
+					{ name: `${index}.c`, file: source },
+				];
+			});
+			publishArtifactAction(
+				cacheDirectory,
+				FRAGMENT_UNITS_STAGE,
+				producer,
+				key,
+				publications,
+			);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}

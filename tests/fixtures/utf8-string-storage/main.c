@@ -124,19 +124,23 @@ static bool buffer_limit_counts_decoded_units(MalVm *vm) {
     }
 
     usize maximum = MAL_STRING_MAX_CODE_UNITS;
-    byte *astral = malloc(maximum * 2 + 1);
+    usize astral_bytes = (maximum / 2) * 4;
+    byte *astral = malloc(astral_bytes + 2);
     CHECK(astral != nullptr);
     const u8 pair[] = {0xf0, 0x9f, 0x98, 0x80};
     for (usize i = 0; i < maximum / 2; i++) memcpy(astral + i * 4, pair, 4);
-    astral[maximum * 2] = 'x';
+    if (maximum % 2 != 0) astral[astral_bytes++] = 'x';
+    astral[astral_bytes] = 'y';
     MalUtf8DecodeStatus status;
     MalString *string = mal_string_from_utf8_report(
-        &vm->heap, astral, maximum * 2, nullptr, &status);
+        &vm->heap, astral, astral_bytes, nullptr, &status);
     CHECK(string != nullptr && status == MAL_UTF8_DECODE_OK && string->length == maximum);
-    CHECK(mal_string_code_unit_at(string, maximum - 2) == 0xd83d);
-    CHECK(mal_string_code_unit_at(string, maximum - 1) == 0xde00);
+    usize pair_end = (maximum / 2) * 2;
+    CHECK(mal_string_code_unit_at(string, pair_end - 2) == 0xd83d);
+    CHECK(mal_string_code_unit_at(string, pair_end - 1) == 0xde00);
+    if (maximum % 2 != 0) CHECK(mal_string_code_unit_at(string, maximum - 1) == 'x');
     mal_gc_collect(vm);
-    string = mal_string_from_utf8_report(&vm->heap, astral, maximum * 2 + 1, nullptr, &status);
+    string = mal_string_from_utf8_report(&vm->heap, astral, astral_bytes + 1, nullptr, &status);
     CHECK(string == nullptr && status == MAL_UTF8_DECODE_LENGTH_OVERFLOW);
     free(astral);
     mal_gc_unroot(&encoding_root);

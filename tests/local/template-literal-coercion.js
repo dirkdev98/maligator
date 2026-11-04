@@ -1,3 +1,5 @@
+import { constants } from "node:buffer";
+
 function assert(condition, message) {
 	if (!condition) throw new Error(message);
 }
@@ -122,7 +124,8 @@ function assertLengthError(action, message) {
 	);
 }
 function checkLengthOrder() {
-	const long = "x".repeat(9 * 1024 * 1024);
+	const maximum = constants.MAX_STRING_LENGTH;
+	const long = "x".repeat(Math.floor(maximum / 2) + 1);
 	let later = 0;
 	assertLengthError(
 		() => `${long}${long}${++later}`,
@@ -131,8 +134,8 @@ function checkLengthOrder() {
 	assertLengthError(() => {
 		`${long}${long}${++later}`;
 	}, "discarded construction preserves overflow");
-	const almost = "x".repeat(16 * 1024 * 1024 - 1);
-	assert(`${almost}x`.length === 16 * 1024 * 1024, "exact engine length limit");
+	const almost = "x".repeat(maximum - 1);
+	assert(`${almost}x`.length === maximum, "exact engine length limit");
 	assertLengthError(() => `${almost}xx${++later}`, "quasi overflow precedes expression");
 	assert(later === 0, "overflow suppresses all later effects");
 }

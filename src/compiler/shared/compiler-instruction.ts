@@ -9,7 +9,7 @@ export const MAX_PRECISE_NUMBER_SUM_INPUTS = 64;
 // Bounded operands limit native and interpreter stack/root scratch.
 export const MAX_STRING_CONCAT_INPUTS = 64;
 // Keep in sync with runtime/src/heap_string.h.
-export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
+export const MAX_STRING_CODE_UNITS = 2 ** 25 - 1;
 
 /** Numeric TypedArray brands whose element access produces a Number. */
 export type CompilerNumericTypedArrayKind =

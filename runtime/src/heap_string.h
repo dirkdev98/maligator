@@ -37,7 +37,7 @@ static_assert(_Alignof(MalStringUtf8) > 1, "encoding pointers must leave the pen
 
 typedef struct MalString {
     MalHeapHeader header;
-    /** The inclusive 2^24-unit engine limit needs 25 bits. */
+    /** The engine limit uses the full packed length range. */
     u32 length : 25;
     MalStringStorage storage : 3;
     u32 hash_valid : 1;
@@ -83,7 +83,7 @@ static_assert(offsetof(MalString, code_units) == 16, "string payload must follow
 #define MAL_STRING_INLINE_LATIN1_CODE_UNITS ((usize) 16)
 
 /** Engine string lengths are measured in UTF-16 code units. */
-#define MAL_STRING_MAX_CODE_UNITS ((usize) 16 * 1024 * 1024)
+#define MAL_STRING_MAX_CODE_UNITS (((usize) 1 << 25) - 1)
 static_assert(MAL_STRING_MAX_CODE_UNITS <= INT32_MAX, "string length must fit regexp/i32 indices");
 static_assert(MAL_STRING_MAX_CODE_UNITS < ((usize) 1 << 25), "string length must fit its packed field");
 

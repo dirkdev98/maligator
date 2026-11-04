@@ -1,7 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, it } from "vitest";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -11,6 +11,7 @@ import {
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-string-limit-p0-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("engine string length limit", () => {
 	let compiled: string;
@@ -21,12 +22,14 @@ describe("engine string length limit", () => {
 			fixture: "tests/local/string-limit-p0.js",
 			name: "string-limit-p0",
 			mainFile: HOST_MAIN,
+			nodeEnabled: true,
 			outDir,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/string-limit-p0.js",
 			name: "string-limit-p0-interpreted",
 			mainFile: HOST_MAIN,
+			nodeEnabled: true,
 			compiled: false,
 			outDir,
 		});

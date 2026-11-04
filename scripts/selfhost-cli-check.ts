@@ -27,6 +27,7 @@ import { buildProductCli } from "../src/product-builder.ts";
 import { parseProfileCapture, profileCaptureIdentity } from "../src/profile-artifact.ts";
 import type { PreparedProfile, ProfileManifest } from "../src/profile-artifact.ts";
 import { requireToolchain, resolvePathExecutable } from "../src/toolchain.ts";
+import { largeDevelopmentSource } from "../tests/fixtures/selfhost-large-development/source.ts";
 import { requireHeapLimit } from "./heap-limit.ts";
 import { isolatedToolsDirectory } from "./isolated-tools.ts";
 
@@ -1561,6 +1562,46 @@ test("passes a pointer-valued constant through a macro alias", () => {
 			);
 		}
 		console.log("ok   distributed compiler restored the cached linked binary");
+
+		const largeConfig = "large-development.build.mts";
+		const largeEntry = path.join(project, "large-development.mts");
+		writeFileSync(largeEntry, largeDevelopmentSource());
+		writeFileSync(
+			path.join(project, largeConfig),
+			`export default {
+	entry: "large-development.mts",
+	outputName: "selfhost-large-development",
+	engine: { eval: false, regexp: false, intl: { enabled: false } },
+	surface: { node: true },
+};\n`,
+		);
+		const largeArguments = ["build", "--config", largeConfig, "--verbose"];
+		const largeBuild = invoke(largeArguments).trim();
+		const largeCachedBuild = invoke(largeArguments).trim();
+		if (largeCachedBuild !== largeBuild)
+			throw new Error("large development cache restoration changed the binary path");
+		for (const argument of ["0", "3999"]) {
+			const expected = spawnSync(process.execPath, [largeEntry, argument], {
+				encoding: "utf8",
+				timeout: 30_000,
+			});
+			const actual = spawnSync(largeBuild, [argument], {
+				env: { ...isolatedEnv, PATH: noTools },
+				encoding: "utf8",
+				timeout: 30_000,
+			});
+			if (
+				expected.status !== 0 ||
+				actual.status !== 0 ||
+				actual.stdout !== expected.stdout
+			)
+				throw new Error(
+					`large development application disagreed with Node:\n${actual.stdout}\n${actual.stderr}`,
+				);
+		}
+		console.log(
+			"ok   large development fragments built and restored through the product CLI",
+		);
 
 		const productionConfig = "production.build.mts";
 		writeFileSync(
