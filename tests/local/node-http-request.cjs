@@ -63,11 +63,32 @@ const server = http.createServer(function (request, response) {
 				request.headers["x-request-" + suffix] ===
 					"value-" + suffix + "-abcdefghijklmnopqrstuvwxyz0123456789";
 		}
-		for (let i = 0; i < 24; i++) {
+		const responseHeaderCount = Number(request.headers["x-response-count"]);
+		for (let i = 0; i < responseHeaderCount; i++) {
 			response.setHeader("X-Response-" + i, "reply-" + i);
 		}
+		response.removeHeader("X-Response-5");
+		response.setHeader("X-Response-10", "replaced");
+		response.setHeader("X-Response-11", ["reply-11", "extra"]);
+		const snapshot = response.getHeaders();
+		valid =
+			valid &&
+			Object.keys(snapshot).length === responseHeaderCount - 1 &&
+			snapshot["x-response-5"] === undefined &&
+			snapshot["x-response-10"] === "replaced" &&
+			JSON.stringify(snapshot["x-response-11"]) === JSON.stringify(["reply-11", "extra"]);
 		response.statusCode = valid ? 200 : 500;
-		response.end(valid ? "many" : "many header mismatch");
+		response.end(
+			valid
+				? "many"
+				: JSON.stringify({
+						responseHeaderCount,
+						keys: Object.keys(snapshot).length,
+						removed: snapshot["x-response-5"],
+						replaced: snapshot["x-response-10"],
+						appended: snapshot["x-response-11"],
+					}),
+		);
 		return;
 	}
 

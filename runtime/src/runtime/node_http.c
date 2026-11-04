@@ -186,7 +186,6 @@ typedef struct MalNodeHttpResponseHeader {
 } MalNodeHttpResponseHeader;
 
 #define MAL_NODE_HTTP_INLINE_RESPONSE_HEADERS 8
-#define MAL_NODE_HTTP_MAX_RESPONSE_HEADERS 64
 
 typedef struct MalNodeHttpResponseNameView {
     const c16 *units;
@@ -1964,11 +1963,11 @@ static i64 http_response_header_view_index(
 
 static bool http_response_headers_reserve(
     MalNodeHttpRequestState *state, usize required) {
-    if (required > MAL_NODE_HTTP_MAX_RESPONSE_HEADERS) return false;
+    usize maximum = SIZE_MAX / sizeof(MalNodeHttpResponseHeader);
+    if (required > maximum) return false;
     if (required <= state->response_header_capacity) return true;
-    usize capacity = state->response_header_capacity * 2;
-    while (capacity < required) capacity *= 2;
-    if (capacity > MAL_NODE_HTTP_MAX_RESPONSE_HEADERS) capacity = MAL_NODE_HTTP_MAX_RESPONSE_HEADERS;
+    usize capacity = state->response_header_capacity;
+    while (capacity < required) capacity = capacity > maximum / 2 ? maximum : capacity * 2;
     MalNodeHttpResponseHeader *headers;
     if (state->response_headers == state->inline_response_headers) {
         headers = malloc(capacity * sizeof(*headers));
@@ -2048,15 +2047,9 @@ static bool http_response_store_header(
     }
     i64 index = http_response_header_view_index(state, &name);
     if (index < 0) {
-        if (state->response_header_count == MAL_NODE_HTTP_MAX_RESPONSE_HEADERS) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                               "Too many response headers");
-            return false;
-        }
         if (!http_response_headers_reserve(
                 state, state->response_header_count + 1)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                               "Response header allocation failed");
+            mal_vm_throw_allocation_error(vm);
             return false;
         }
         char *stored_name = http_response_name_materialize(vm, &name);

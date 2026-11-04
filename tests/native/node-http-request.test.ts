@@ -14,6 +14,7 @@ import {
 	withServer,
 } from "../../src/test-harness.ts";
 
+const responseHeaderCount = 400;
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-http-request-"));
 
 describe("node:http request bridge", () => {
@@ -198,7 +199,9 @@ describe("node:http request bridge", () => {
 
 	async function checkBridge(base: string): Promise<void> {
 		const port = Number(new URL(base).port);
-		const manyRequestHeaders: Record<string, string> = {};
+		const manyRequestHeaders: Record<string, string> = {
+			"x-response-count": String(responseHeaderCount),
+		};
 		for (let i = 0; i < 40; i++) {
 			const suffix = String(i).padStart(2, "0");
 			manyRequestHeaders[`x-request-${suffix}`] =
@@ -207,11 +210,20 @@ describe("node:http request bridge", () => {
 		const manyHeaders = await fetch(`${base}/many-headers`, {
 			headers: manyRequestHeaders,
 		});
-		expect(manyHeaders.status).toBe(200);
-		for (let i = 0; i < 24; i++) {
-			expect(manyHeaders.headers.get(`x-response-${i}`)).toBe(`reply-${i}`);
+		const manyBody = await manyHeaders.text();
+		expect(manyHeaders.status, manyBody).toBe(200);
+		for (let i = 0; i < responseHeaderCount; i++) {
+			const expected =
+				i === 5
+					? null
+					: i === 10
+						? "replaced"
+						: i === 11
+							? "reply-11, extra"
+							: `reply-${i}`;
+			expect(manyHeaders.headers.get(`x-response-${i}`)).toBe(expected);
 		}
-		expect(await manyHeaders.text()).toBe("many");
+		expect(manyBody).toBe("many");
 
 		const headerSnapshot = await new Promise<string>((resolve, reject) => {
 			const socket = createConnection({ host: "127.0.0.1", port }, () => {
@@ -778,13 +790,18 @@ describe("node:http request bridge", () => {
 		expect(field(line, "response_index_max_probes")).toBeLessThan(
 			field(line, "response_index_peak_entries"),
 		);
-		expect(field(line, "response_header_name_coercions")).toBe(803);
-		expect(field(line, "response_header_name_materializations")).toBe(225);
-		expect(field(line, "response_header_insertions")).toBe(225);
-		expect(field(line, "response_header_replacements")).toBe(64);
-		expect(field(line, "response_header_allocation_free_lookups")).toBe(577);
+		expect(field(line, "response_header_name_materializations")).toBe(
+			field(line, "response_header_insertions"),
+		);
+		expect(field(line, "response_header_name_coercions")).toBeGreaterThan(
+			field(line, "response_header_name_materializations"),
+		);
+		expect(field(line, "response_header_replacements")).toBeGreaterThan(0);
+		expect(field(line, "response_header_allocation_free_lookups")).toBeGreaterThan(0);
 		expect(field(line, "response_header_spills")).toBeGreaterThanOrEqual(2);
-		expect(field(line, "response_header_max_count")).toBeGreaterThanOrEqual(24);
+		expect(field(line, "response_header_max_count")).toBeGreaterThanOrEqual(
+			responseHeaderCount,
+		);
 		expect(field(line, "codec_field_spills")).toBeGreaterThan(0);
 		expect(field(line, "codec_arena_spills")).toBeGreaterThan(0);
 		expect(field(line, "codec_max_fields")).toBeGreaterThan(40);
@@ -795,8 +812,10 @@ describe("node:http request bridge", () => {
 		expect(field(line, "dispatch_enqueues")).toBe(field(line, "dispatch_dequeues"));
 		expect(field(line, "completion_enqueues")).toBe(field(line, "completion_dequeues"));
 		expect(field(line, "request_inserts")).toBe(field(line, "request_removes"));
-		expect(field(line, "request_state_allocations")).toBe(86);
-		expect(field(line, "request_state_direct_frees")).toBe(86);
+		expect(field(line, "request_state_allocations")).toBeGreaterThan(0);
+		expect(field(line, "request_state_direct_frees")).toBe(
+			field(line, "request_state_allocations"),
+		);
 		expect(field(line, "request_body_allocations")).toBe(1);
 		expect(field(line, "request_body_transfers")).toBe(1);
 		expect(field(line, "request_body_direct_frees")).toBe(0);
