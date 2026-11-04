@@ -4749,6 +4749,19 @@ static __attribute__((noinline)) MalCompletion mal_vm_call_value_general(
 );
 
 // Out of line so link-time inlining does not copy the front into every runtime caller.
+static inline __attribute__((always_inline)) MalValue mal_vm_call_native_value(
+    MalVm *vm, MalValue callee, MalValue this_value, const MalValue *args, i32 arg_count);
+
+// Out of line so its callee roots stay out of the compiled front's frame.
+static __attribute__((noinline)) MalCompletion mal_vm_call_value_native(
+    MalVm *vm, MalValue callee, MalValue this_value, const MalValue *args, i32 arg_count
+) {
+    MalValue value = mal_vm_call_native_value(vm, callee, this_value, args, arg_count);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? vm->completion
+        : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+}
+
 __attribute__((noinline)) MalCompletion mal_vm_call_value(
     MalVm *vm,
     MalValue callee,
@@ -4794,6 +4807,9 @@ __attribute__((noinline)) MalCompletion mal_vm_call_value(
             }
         }
     }
+    // Native accessors, such as C library struct fields, need no bound resolution either.
+    if (mal_value_is_native_function_object(callee))
+        return mal_vm_call_value_native(vm, callee, this_value, args, arg_count);
 #endif
     return mal_vm_call_value_general(vm, callee, this_value, args, arg_count);
 }
