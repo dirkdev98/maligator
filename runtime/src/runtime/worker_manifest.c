@@ -34,12 +34,12 @@ static void manifest_free(WorkerManifest *manifest) {
     free(manifest);
 }
 
-static byte *manifest_read(const char *path, usize limit, usize *length) {
+static byte *manifest_read(const char *path, usize *length) {
     FILE *file = fopen(path, "rb");
     if (file == nullptr) return nullptr;
-    if (fseek(file, 0, SEEK_END) != 0) { fclose(file); return nullptr; }
-    long size = ftell(file);
-    if (size < 0 || (u64) size > limit || fseek(file, 0, SEEK_SET) != 0) {
+    if (fseeko(file, 0, SEEK_END) != 0) { fclose(file); return nullptr; }
+    off_t size = ftello(file);
+    if (size < 0 || (u64) size >= SIZE_MAX || fseeko(file, 0, SEEK_SET) != 0) {
         fclose(file);
         return nullptr;
     }
@@ -84,7 +84,7 @@ static char *manifest_wire_path(const char *manifest_path, const char *wire_path
 
 MalWorkerDomain *mal_worker_manifest_load(MalVm *vm, const char *path) {
     usize length = 0;
-    byte *bytes = manifest_read(path, 16 * 1024 * 1024, &length);
+    byte *bytes = manifest_read(path, &length);
     if (bytes == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Could not read worker manifest");
         return nullptr;
@@ -101,13 +101,11 @@ MalWorkerDomain *mal_worker_manifest_load(MalVm *vm, const char *path) {
     roots[1] = manifest_property(vm, roots[0], "entries");
     if (!mal_value_is_int32(schema) || mal_value_to_i32(schema) != 1 || !mal_value_is_array_object(roots[1])) goto invalid;
     u32 count = mal_array_object_length(mal_value_to_array_object(roots[1]));
-    if (count > 4096) goto invalid;
     WorkerManifest *manifest = calloc(1, sizeof(WorkerManifest));
     if (manifest == nullptr) goto invalid;
     manifest->entries = calloc(count == 0 ? 1 : count, sizeof(MalWorkerEntry));
     if (manifest->entries == nullptr) { manifest_free(manifest); goto invalid; }
     manifest->count = count;
-    u64 total_bytes = 0;
     for (u32 index = 0; index < count; index++) {
         if (!mal_array_object_dense_get(mal_value_to_array_object(roots[1]), index, &roots[2])) goto failed;
         char *href = manifest_string(manifest_property(vm, roots[2], "href"));
@@ -117,21 +115,16 @@ MalWorkerDomain *mal_worker_manifest_load(MalVm *vm, const char *path) {
         if (href == nullptr || strncmp(href, "file:", 5) != 0 || wire_path == nullptr || digest == nullptr || strlen(digest) != 64) {
             free(wire_path); free(digest); goto failed;
         }
-        for (u32 previous = 0; previous < index; previous++) {
-            if (strcmp(manifest->entries[previous].href, href) == 0) { free(wire_path); free(digest); goto failed; }
-        }
         char *resolved = manifest_wire_path(path, wire_path);
         free(wire_path);
         if (resolved == nullptr) { free(digest); goto failed; }
         usize wire_size = 0;
-        byte *wire = manifest_read(resolved, 256 * 1024 * 1024, &wire_size);
+        byte *wire = manifest_read(resolved, &wire_size);
         free(resolved);
         if (wire == nullptr) { free(digest); goto failed; }
         manifest->entries[index].wire = wire;
         manifest->entries[index].wire_size = wire_size;
         manifest->entries[index].resolve_installer = mal_host_resolve_installer;
-        total_bytes += wire_size;
-        if (total_bytes > 512ull * 1024 * 1024) { free(digest); goto failed; }
         MalSha256 hash;
         u8 actual[32];
         byte hex[64];
@@ -153,7 +146,10 @@ MalWorkerDomain *mal_worker_manifest_load(MalVm *vm, const char *path) {
         }
         if (!found) goto failed;
     }
-    MalWorkerDomain *domain = mal_worker_domain_new(manifest->entries, manifest->count, manifest->pool_entry);
+    MalWorkerDomain *domain = mal_worker_domain_adopt(manifest->entries, manifest->count, manifest->pool_entry);
+    manifest->entries = nullptr;
+    manifest->count = 0;
+    manifest->pool_entry = nullptr;
     if (domain == nullptr) {
         manifest_free(manifest);
         mal_vm_throw_allocation_error(vm);

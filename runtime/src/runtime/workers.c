@@ -489,52 +489,92 @@ MalWorkerDomainUsage mal_worker_domain_usage(void) {
 
 static const MalWorkerEntry *domain_lookup(const MalWorkerDomain *domain, const char *href) {
     if (domain == nullptr || href == nullptr) return nullptr;
-    for (usize index = 0; index < domain->count; index++) {
-        if (strcmp(domain->entries[index].href, href) == 0) return &domain->entries[index];
+    usize lower = 0, upper = domain->count;
+    while (lower < upper) {
+        usize middle = lower + (upper - lower) / 2;
+        int order = strcmp(href, domain->entries[middle].href);
+        if (order == 0) return &domain->entries[middle];
+        if (order < 0) upper = middle;
+        else lower = middle + 1;
     }
     return nullptr;
 }
 
-MalWorkerDomain *mal_worker_domain_new(
-    const MalWorkerEntry *entries, usize count, const char *pool_entry) {
-    if ((count != 0 && entries == nullptr) || count > SIZE_MAX / sizeof(MalWorkerEntry)) return nullptr;
+static int domain_entry_order(const void *left, const void *right) {
+    return strcmp(((const MalWorkerEntry *) left)->href, ((const MalWorkerEntry *) right)->href);
+}
+
+MalWorkerDomain *mal_worker_domain_adopt(
+    MalWorkerEntry *entries, usize count, char *pool_entry) {
+    if (entries == nullptr && count != 0) {
+        free(pool_entry);
+        return nullptr;
+    }
     MalWorkerDomain *domain = calloc(1, sizeof(MalWorkerDomain));
-    if (domain == nullptr) return nullptr;
+    if (domain == nullptr) {
+        for (usize index = 0; index < count; index++) {
+            free((void *) entries[index].href);
+            free((void *) entries[index].wire);
+        }
+        free(entries);
+        free(pool_entry);
+        return nullptr;
+    }
     atomic_init(&domain->refcount, 1);
-    domain->entries = calloc(count == 0 ? 1 : count, sizeof(MalWorkerEntry));
-    if (domain->entries == nullptr) goto failed;
+    domain->entries = entries;
+    domain->count = count;
+    domain->pool_entry = pool_entry;
     for (usize index = 0; index < count; index++) {
-        const MalWorkerEntry *source = &entries[index];
-        if (source->href == nullptr || domain_lookup(domain, source->href) != nullptr
-            || (source->image == nullptr && (source->wire == nullptr || source->wire_size == 0))
-            || (source->image != nullptr && source->wire != nullptr)) goto failed;
-        MalWorkerEntry *entry = &domain->entries[index];
-        domain->count++;
-        entry->href = strdup(source->href);
-        if (entry->href == nullptr) goto failed;
-        entry->image = source->image;
-        entry->resolve_installer = source->resolve_installer;
-        if (source->wire != nullptr) {
-            if (source->wire_size > UINT64_MAX - domain->wire_bytes) goto failed;
-            byte *wire = malloc(source->wire_size);
-            if (wire == nullptr) goto failed;
-            memcpy(wire, source->wire, source->wire_size);
-            entry->wire = wire;
-            entry->wire_size = source->wire_size;
-            domain->wire_bytes += source->wire_size;
+        const MalWorkerEntry *entry = &entries[index];
+        if (entry->href == nullptr
+            || (entry->image == nullptr && (entry->wire == nullptr || entry->wire_size == 0))
+            || (entry->image != nullptr && entry->wire != nullptr)) goto failed;
+        if (entry->wire != nullptr) {
+            if (entry->wire_size > UINT64_MAX - domain->wire_bytes) goto failed;
+            domain->wire_bytes += entry->wire_size;
         }
     }
-    if (pool_entry != nullptr) {
-        if (domain_lookup(domain, pool_entry) == nullptr) goto failed;
-        domain->pool_entry = strdup(pool_entry);
-        if (domain->pool_entry == nullptr) goto failed;
-    }
+    if (count > 1) qsort(entries, count, sizeof(MalWorkerEntry), domain_entry_order);
+    for (usize index = 1; index < count; index++)
+        if (strcmp(entries[index - 1].href, entries[index].href) == 0) goto failed;
+    if (pool_entry != nullptr && domain_lookup(domain, pool_entry) == nullptr) goto failed;
     domain->counted = true;
     atomic_fetch_add_explicit(&g_domain_wire_bytes, domain->wire_bytes, memory_order_relaxed);
     atomic_fetch_add_explicit(&g_live_domains, 1, memory_order_relaxed);
     return domain;
 failed:
     mal_worker_domain_release(domain);
+    return nullptr;
+}
+
+MalWorkerDomain *mal_worker_domain_new(
+    const MalWorkerEntry *entries, usize count, const char *pool_entry) {
+    if ((count != 0 && entries == nullptr) || count > SIZE_MAX / sizeof(MalWorkerEntry)) return nullptr;
+    MalWorkerEntry *copies = calloc(count == 0 ? 1 : count, sizeof(MalWorkerEntry));
+    if (copies == nullptr) return nullptr;
+    for (usize index = 0; index < count; index++) {
+        const MalWorkerEntry *source = &entries[index];
+        if (source->href == nullptr) goto failed;
+        copies[index] = *source;
+        copies[index].wire = nullptr;
+        copies[index].href = strdup(source->href);
+        if (copies[index].href == nullptr) goto failed;
+        if (source->wire != nullptr) {
+            byte *wire = malloc(source->wire_size);
+            if (wire == nullptr) goto failed;
+            memcpy(wire, source->wire, source->wire_size);
+            copies[index].wire = wire;
+        }
+    }
+    char *pool = pool_entry == nullptr ? nullptr : strdup(pool_entry);
+    if (pool_entry != nullptr && pool == nullptr) goto failed;
+    return mal_worker_domain_adopt(copies, count, pool);
+failed:
+    for (usize index = 0; index < count; index++) {
+        free((void *) copies[index].href);
+        free((void *) copies[index].wire);
+    }
+    free(copies);
     return nullptr;
 }
 
@@ -4119,9 +4159,9 @@ static bool application_boolean(MalVm *vm, MalValue object, const char *name, bo
 static byte *application_read_wire(const char *path, usize *length) {
     FILE *file = fopen(path, "rb");
     if (file == nullptr) return nullptr;
-    if (fseek(file, 0, SEEK_END) != 0) { fclose(file); return nullptr; }
-    long size = ftell(file);
-    if (size <= 0 || size > (256l << 20) || fseek(file, 0, SEEK_SET) != 0) { fclose(file); return nullptr; }
+    if (fseeko(file, 0, SEEK_END) != 0) { fclose(file); return nullptr; }
+    off_t size = ftello(file);
+    if (size <= 0 || (u64) size > SIZE_MAX || fseeko(file, 0, SEEK_SET) != 0) { fclose(file); return nullptr; }
     byte *bytes = malloc((usize) size);
     if (bytes == nullptr || fread(bytes, 1, (usize) size, file) != (usize) size) {
         free(bytes); fclose(file); return nullptr;
@@ -4199,11 +4239,10 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
     }
     if (!get_named(vm, roots[0], "wires", &roots[1]) || !mal_value_is_array_object(roots[1])) goto failed;
     u32 count = mal_array_object_length(mal_value_to_array_object(roots[1]));
-    if (count == 0 || count > 4096) goto failed;
+    if (count == 0) goto failed;
     image->entries = calloc(count, sizeof(MalWorkerEntry));
     if (image->entries == nullptr) { mal_vm_throw_allocation_error(vm); goto failed; }
     image->count = count;
-    u64 total = 0;
     for (u32 index = 0; index < count; index++) {
         if (!mal_vm_get_property(vm, roots[1], mal_key_index(index), &roots[2]) || !mal_value_is_object(roots[2])) goto failed;
         if (!get_named(vm, roots[2], "path", &roots[3]) || !mal_value_is_string(roots[3])) goto failed;
@@ -4213,8 +4252,6 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
         entry->wire = application_read_wire(path, &entry->wire_size);
         free(path);
         if (entry->wire == nullptr) goto failed;
-        total += entry->wire_size;
-        if (total > (512ull << 20)) goto failed;
         if (!get_named(vm, roots[2], "sha256", &roots[3]) || !mal_value_is_string(roots[3])) goto failed;
         char *digest = application_string(roots[3]);
         MalSha256 hash;

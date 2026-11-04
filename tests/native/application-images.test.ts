@@ -221,3 +221,61 @@ for (const compiled of [true, false]) {
 		}
 	}, 300_000);
 }
+
+it("executes every fragment when an application has more than 4096 images", () => {
+	const directory = mkdtempSync(
+		path.join(path.resolve(".cache"), "application-fragment-growth-"),
+	);
+	try {
+		const fragmentCount = 4097;
+		const fragment = wire(directory, "count-fragment", "first");
+		const descriptor: ApplicationImageDescriptor = {
+			schema: 1,
+			wires: [
+				...Array.from({ length: fragmentCount }, () => fragment),
+				wire(directory, "count-result", "first"),
+			],
+			entryPath: path.join(fixtures, "count-result.mts"),
+			webPlatform: config.surface.webPlatform,
+			node: config.surface.node,
+			engine: {
+				...config.engine,
+				eval: config.engine.eval === true,
+				intl: config.engine.intl.enabled,
+			},
+		};
+		const descriptorPath = path.join(directory, "fragments.json");
+		writeFileSync(descriptorPath, JSON.stringify(descriptor));
+		const derivation = buildDerivationFromConfig(config);
+		const binary = buildLocalBinary({
+			context: resolveNativeBuildContext({
+				features: { ...derivation.features, developmentApiEnabled: true },
+			}),
+			name: "application-fragment-growth",
+			outDir: directory,
+			verbose: false,
+			mainFile: path.join(fixtures, "main.c"),
+			cSource: emitProgramTranslationUnits(image("count-host"), {
+				maligatorSurface: true,
+			}),
+		}).binaryPath;
+		const invocation = resolveHarnessExecutionInvocation(binary);
+		const result = spawnSync(
+			invocation.executable,
+			[...invocation.args, descriptorPath, String(fragmentCount)],
+			{
+				encoding: "utf8",
+				env: { ...process.env, MAL_GC_VERIFY: "1" },
+				timeout: scaledNativeRunTimeoutMs(60_000),
+			},
+		);
+		expect(result.error).toBeUndefined();
+		expect(
+			result.status,
+			result.stderr || result.stdout || result.signal || "no status",
+		).toBe(0);
+		expect(result.stdout).toBe("application fragments PASS\n");
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+}, 300_000);

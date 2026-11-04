@@ -29,6 +29,10 @@ typedef struct MalWorkerDomain MalWorkerDomain;
  * borrowed. A domain is immutable and may be retained across isolate threads. */
 MalWorkerDomain *mal_worker_domain_new(
     const MalWorkerEntry *entries, usize count, const char *pool_entry);
+/* Consumes the entries, names, wires and pool name on success or failure, avoiding
+ * a second wire copy when a manifest reader already owns the backing buffers. */
+MalWorkerDomain *mal_worker_domain_adopt(
+    MalWorkerEntry *entries, usize count, char *pool_entry);
 void mal_worker_domain_retain(MalWorkerDomain *domain);
 void mal_worker_domain_release(MalWorkerDomain *domain);
 

@@ -61,7 +61,7 @@ export interface ApplicationResources {
 	ownedWorkers: number;
 	processWorkers: number;
 	processImageDomains: number;
-	/** Copied worker-domain wires, excluding application roots, assets and baked code. */
+	/** Retained worker-domain wires, excluding application roots, assets and baked code. */
 	processWorkerWireBytes: number;
 }
 
