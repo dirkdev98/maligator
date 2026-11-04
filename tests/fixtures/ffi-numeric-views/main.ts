@@ -22,6 +22,20 @@ import {
 	numeric_bool,
 	numeric_calls,
 	numeric_reset,
+	numeric_out_i8,
+	numeric_out_u8,
+	numeric_out_i16,
+	numeric_out_u16,
+	numeric_out_i32,
+	outI32Async,
+	numeric_out_u32,
+	numeric_out_f32,
+	numeric_out_f64,
+	numeric_out_empty,
+	numeric_out_null,
+	numeric_fill,
+	numeric_emit,
+	numeric_live,
 } from "maligator:ffi/numeric";
 
 function check(value: boolean, message: string): asserts value {
@@ -446,4 +460,65 @@ const proxied = new Proxy([4, 5], {
 });
 check(numeric_i32(proxied) === 9, "proxied integer arrays convert through traps");
 check(trapped.includes("0") && trapped.includes("1"), "proxy element traps run");
+function sameValues(
+	actual: ReadonlyArray<number> | null,
+	expected: ReadonlyArray<number>,
+): boolean {
+	return (
+		Array.isArray(actual) &&
+		actual.length === expected.length &&
+		expected.every((value, index) => Object.is(actual[index], value) && index in actual)
+	);
+}
+check(sameValues(numeric_out_i8(), [-128, -1, 127]), "int8 array results");
+check(sameValues(numeric_out_u8(), [0, 128, 255]), "uint8 array results");
+check(sameValues(numeric_out_i16(), [-32768, -1, 32767]), "int16 array results");
+check(sameValues(numeric_out_u16(), [0, 32768, 65535]), "uint16 array results");
+check(
+	sameValues(numeric_out_i32(), [-2147483648, -1, 2147483647]),
+	"int32 array results",
+);
+check(
+	sameValues(await outI32Async(), [-2147483648, -1, 2147483647]),
+	"async int32 array results",
+);
+check(sameValues(numeric_out_u32(), [0, 2147483648, 4294967295]), "uint32 array results");
+check(
+	sameValues(numeric_out_f32(), [0.5, -0, Number.NaN, Number.NEGATIVE_INFINITY]),
+	"float array results keep negative zero, NaN and infinity",
+);
+check(
+	sameValues(numeric_out_f64(), [0.1, -0, Number.NaN, 1e308]),
+	"double array results",
+);
+const doubles = numeric_out_f64()!;
+doubles.push(1);
+check(
+	doubles.length === 5 && doubles[4] === 1,
+	"numeric array results are ordinary arrays",
+);
+check(sameValues(numeric_out_empty(), []), "empty array results");
+check(numeric_out_null() === null, "null array results");
+check(numeric_live() === 0, "array results release C storage");
+const filled = numeric_fill(400);
+check(
+	filled.written === 399 &&
+		sameValues(
+			filled.values,
+			Array.from({ length: 399 }, (_, index) => -32768 + index),
+		),
+	"caller arrays return their written prefix",
+);
+check(sameValues(numeric_fill(0).values, []), "zero-capacity caller arrays are empty");
+let emitted: ReadonlyArray<number> | null = null;
+numeric_emit((values) => {
+	emitted = values;
+});
+check(
+	sameValues(
+		emitted,
+		Array.from({ length: 300 }, (_, index) => index * 0.25),
+	),
+	"callback arrays copy C numbers before C reuses them",
+);
 console.log("numeric views passed");

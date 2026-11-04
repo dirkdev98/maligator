@@ -46,5 +46,44 @@ export default {
 		},
 		numeric_mutable: { params: { values: { array: { length: "count" } } } },
 		numeric_bool: { params: { values: { array: { length: "count" } } } },
+		numeric_out_i8: { returns: { array: { length: "count" }, free: "numeric_out_free" } },
+		numeric_out_u8: { returns: { array: { length: "count" }, free: "numeric_out_free" } },
+		numeric_out_i16: {
+			returns: { array: { length: "count" }, free: "numeric_out_free" },
+		},
+		numeric_out_u16: {
+			returns: { array: { length: "count" }, free: "numeric_out_free" },
+		},
+		numeric_out_u32: {
+			returns: { array: { length: "count" }, free: "numeric_out_free" },
+		},
+		numeric_out_f32: {
+			returns: { array: { length: "count" }, free: "numeric_out_free" },
+		},
+		numeric_out_f64: {
+			returns: { array: { length: "count" }, free: "numeric_out_free" },
+		},
+		numeric_out_empty: {
+			returns: { array: { length: "count" }, free: "numeric_out_free" },
+		},
+		numeric_out_null: {
+			returns: { array: { length: "count" }, free: "numeric_out_free" },
+		},
+		numeric_out_i32: {
+			returns: { array: { length: "count" }, free: "numeric_out_free" },
+			async: "outI32Async",
+		},
+		numeric_fill: {
+			params: {
+				values: { out: true, array: { length: "written", capacity: "capacity" } },
+			},
+		},
+		numeric_emit: {
+			params: {
+				visit: {
+					callback: { data: "data", params: { "2": { array: { length: "3" } } } },
+				},
+			},
+		},
 	},
 } satisfies MaligatorLibraryContract;

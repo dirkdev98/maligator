@@ -1614,6 +1614,46 @@ MalValue mal_ffi_new_array(MalVm *vm, int32_t length) {
     return mal_value_from_array_object(mal_intrinsic_new_array(vm, (u32) length));
 }
 
+static inline __attribute__((always_inline)) void ffi_numeric_values(
+    const void *data, i32 start, u32 count, MalFfiNumericKind kind, MalValue *out) {
+    switch (kind) {
+#define FFI_NUMERIC_VALUES(type, box) \
+        for (u32 index = 0; index < count; index++) out[index] = box(((const type *) data)[start + (i32) index]); \
+        break;
+        case MAL_FFI_NUMERIC_INT8: FFI_NUMERIC_VALUES(int8_t, mal_ffi_from_int32)
+        case MAL_FFI_NUMERIC_UINT8: FFI_NUMERIC_VALUES(uint8_t, mal_ffi_from_int32)
+        case MAL_FFI_NUMERIC_INT16: FFI_NUMERIC_VALUES(int16_t, mal_ffi_from_int32)
+        case MAL_FFI_NUMERIC_UINT16: FFI_NUMERIC_VALUES(uint16_t, mal_ffi_from_int32)
+        case MAL_FFI_NUMERIC_INT32: FFI_NUMERIC_VALUES(int32_t, mal_ffi_from_int32)
+        case MAL_FFI_NUMERIC_UINT32: FFI_NUMERIC_VALUES(uint32_t, mal_ffi_from_number)
+        case MAL_FFI_NUMERIC_FLOAT32: FFI_NUMERIC_VALUES(float, mal_ffi_from_number)
+        case MAL_FFI_NUMERIC_FLOAT64: FFI_NUMERIC_VALUES(double, mal_ffi_from_number)
+#undef FFI_NUMERIC_VALUES
+        case MAL_FFI_NUMERIC_BIGINT64:
+        case MAL_FFI_NUMERIC_BIGUINT64:
+            abort();
+    }
+}
+
+MalValue mal_ffi_numeric_array(MalVm *vm, const void *data, int32_t length, MalFfiNumericKind kind) {
+    MalValue result = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, (u32) length));
+    MalRootSpan root;
+    mal_gc_root(&root, &result, 1);
+    // Chunks keep the boxed copy on the stack; immediates need no rooting.
+    MalValue chunk[256];
+    for (i32 start = 0; start < length; start += (i32) countof(chunk)) {
+        u32 count = (u32) (length - start) < countof(chunk) ? (u32) (length - start) : (u32) countof(chunk);
+        ffi_numeric_values(data, start, count, kind, chunk);
+        if (!mal_array_object_dense_build_values(mal_value_to_array_object(result), (u32) start, chunk, count)) {
+            mal_gc_unroot(&root);
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+    }
+    mal_gc_unroot(&root);
+    return result;
+}
+
 bool mal_ffi_set_element(MalVm *vm, MalValue array, int32_t index, MalValue value) {
     MalValue held[2] = {array, value};
     MalRootSpan root;

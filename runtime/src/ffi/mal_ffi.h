@@ -384,6 +384,11 @@ typedef enum MalFfiNumericKind {
 /** A direct TypedArray brand check, without proxies or observable property reads. */
 bool mal_ffi_is_typed_array(MalValue value);
 /**
+ * A new dense Array holding `length` C numbers of `kind`, boxed as their scalar
+ * results are. Excludes the 64-bit kinds, whose elements allocate BigInts.
+ */
+MalValue mal_ffi_numeric_array(MalVm *vm, const void *data, int32_t length, MalFfiNumericKind kind);
+/**
  * Resolve matching const numeric storage after all argument getters. The extent
  * is current, attached, unshared, and compatible with the C element layout.
  * A non-null pin protects the storage until `mal_ffi_unpin`; numeric writes remain possible.

@@ -18,6 +18,20 @@ double numeric_independent(double *left, int left_count, const double *right, in
 double numeric_visit(const double *values, int count, NumericVisit visit, void *data);
 double numeric_mutable(double *values, int count);
 bool numeric_bool(const bool *values, int count);
+int8_t *numeric_out_i8(int *count);
+uint8_t *numeric_out_u8(int *count);
+int16_t *numeric_out_i16(int *count);
+uint16_t *numeric_out_u16(int *count);
+int32_t *numeric_out_i32(int *count);
+uint32_t *numeric_out_u32(int *count);
+float *numeric_out_f32(int *count);
+double *numeric_out_f64(int *count);
+int32_t *numeric_out_empty(int *count);
+int32_t *numeric_out_null(int *count);
+void numeric_out_free(void *values);
+void numeric_fill(int16_t *values, int capacity, int *written);
+void numeric_emit(void (*visit)(void *data, const float *values, int count), void *data);
+int numeric_live(void);
 int numeric_calls(void);
 void numeric_reset(void);
 #endif

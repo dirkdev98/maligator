@@ -183,6 +183,34 @@ function scalarFunction(binding: BoundFunction, entry: FfiScalarEntry): Array<st
 	];
 }
 
+/**
+ * The runtime kind that copies C numbers into a dense Array in one call, boxed as
+ * `write` boxes each scalar. 64-bit integers keep element conversion: each allocates.
+ */
+function numericArrayKind(of: JsValue): { kind: string; width: number } | undefined {
+	if (of.kind === "integer" && [8, 16, 32].includes(of.bits))
+		return {
+			kind: `MAL_FFI_NUMERIC_${of.signed ? "" : "U"}INT${String(of.bits)}`,
+			width: of.bits / 8,
+		};
+	if (of.kind === "float" && (of.bits === 32 || of.bits === 64))
+		return { kind: `MAL_FFI_NUMERIC_FLOAT${String(of.bits)}`, width: of.bits / 8 };
+	return undefined;
+}
+
+/** Statements that store a new Array of `count` C numbers from `expression` in `target`. */
+function numericArray(
+	numeric: { kind: string; width: number },
+	expression: string,
+	count: string,
+	target: string,
+): Array<string> {
+	return [
+		`static_assert(sizeof(*(${expression})) == ${String(numeric.width)}, "FFI numeric array elements must match their declared width");`,
+		`${target} = mal_ffi_numeric_array(vm, (const void *) (${expression}), (int32_t) (${count}), ${numeric.kind});`,
+	];
+}
+
 /** Values held directly in a MalValue, with no heap cell behind them. */
 const IMMEDIATE_KINDS: ReadonlySet<JsValue["kind"]> = new Set([
 	"boolean",
@@ -922,6 +950,15 @@ class BindingWriter {
 			];
 		}
 		if (value.kind !== "sequence") throw new Error("only buffers and arrays have counts");
+		const numeric = numericArrayKind(value.of);
+		if (numeric !== undefined)
+			return [
+				...fill,
+				"else {",
+				...numericArray(numeric, expression, count, target).map((line) => `\t${line}`),
+				"}",
+				"if (mal_ffi_threw(vm)) goto mal_done;",
+			];
 		const index = this.#fresh("index");
 		return [
 			...fill,
@@ -997,6 +1034,12 @@ class BindingWriter {
 				...(this.#allocates(value) ? ["if (mal_ffi_threw(vm)) goto mal_done;"] : []),
 			];
 		}
+		const numeric = numericArrayKind(value.of);
+		if (numeric !== undefined)
+			return [
+				...numericArray(numeric, expression, String(value.length), target),
+				"if (mal_ffi_threw(vm)) goto mal_done;",
+			];
 		const index = this.#fresh("index");
 		return [
 			`${target} = mal_ffi_new_array(vm, ${value.length});`,
@@ -2051,6 +2094,19 @@ class BindingWriter {
 			];
 		}
 		if (value.kind === "sequence") {
+			if (count === undefined) throw new Error("an array result needs its count");
+			const numeric = numericArrayKind(value.of);
+			if (numeric !== undefined)
+				return [
+					"if (!mal_ffi_threw(vm)) {",
+					`\tif ((${expression}) == nullptr) ${target} = mal_ffi_null();`,
+					`\telse if (mal_ffi_check_count(vm, (size_t) (${count}), 32, true, ${site})) {`,
+					...numericArray(numeric, expression, count, target).map(
+						(line) => `\t\t${line}`,
+					),
+					"\t}",
+					"}",
+				];
 			const array = this.#fresh("array");
 			const roots = this.#fresh("roots");
 			const index = this.#fresh("index");
