@@ -27,9 +27,9 @@ const char *text_invalid(int *length) {
     static const char text[] = { 'f', (char)0x80, 0, (char)0xc3, (char)0xa9 };
     *length = sizeof(text); calls++; return text;
 }
-char *text_bad_count(int mode, int *length) {
+char *text_bad_count(int mode, int64_t *length) {
     calls++;
-    *length = mode == 0 ? -1 : INT_MAX;
+    *length = mode == 0 ? -1 : INT64_MAX;
     char *text = malloc(1);
     if (text != NULL) { text[0] = 'x'; live++; }
     return text;
@@ -39,13 +39,13 @@ char *text_callback(void (*callback)(void *), void *data, int *length) {
     callback(data);
     return text;
 }
-void text_counted_callback(void (*callback)(const char *, int, void *), void *data, int mode) {
+void text_counted_callback(void (*callback)(const char *, int64_t, void *), void *data, int mode) {
     char text[] = { 'a', 0, (char)0xc3, (char)0xa9 };
-    callback(mode == 1 ? NULL : text, mode == 2 ? -1 : mode == 3 ? INT_MAX : mode == 4 ? 0 : (int)sizeof(text), data);
+    callback(mode == 1 ? NULL : text, mode == 2 ? -1 : mode == 3 ? INT64_MAX : mode == 4 ? 0 : (int64_t)sizeof(text), data);
     memset(text, 'x', sizeof(text));
 }
 typedef struct TextNotification {
-    void (*callback)(const char *, int, void *);
+    void (*callback)(const char *, int64_t, void *);
     void *data;
     void (*release)(void *);
     int mode;
@@ -56,17 +56,17 @@ static void *notify_text(void *data) {
     notification->release(notification->data);
     return NULL;
 }
-void text_notify(void (*callback)(const char *, int, void *), void *data, void (*release)(void *), int mode) {
+void text_notify(void (*callback)(const char *, int64_t, void *), void *data, void (*release)(void *), int mode) {
     TextNotification notification = {callback, data, release, mode};
     pthread_t thread;
     if (pthread_create(&thread, NULL, notify_text, &notification) != 0) abort();
     if (pthread_join(thread, NULL) != 0) abort();
 }
-void text_wait(void (*callback)(const char *, int, void *), void *data, void (*release)(void *), int mode) {
+void text_wait(void (*callback)(const char *, int64_t, void *), void *data, void (*release)(void *), int mode) {
     text_notify(callback, data, release, mode);
 }
 typedef struct MixedTextNotification {
-    void (*callback)(const char *, const char *, int, void *);
+    void (*callback)(const char *, const char *, int64_t, void *);
     void *data;
     void (*release)(void *);
     int mode;
@@ -76,14 +76,14 @@ static void *notify_mixed_text(void *data) {
     char legacy[] = "cold";
     char text[] = {'a', 0, (char)0xc3, (char)0xa9};
     notification->callback(legacy, text,
-        notification->mode == 2 ? -1 : notification->mode == 3 ? INT_MAX : (int)sizeof(text),
+        notification->mode == 2 ? -1 : notification->mode == 3 ? INT64_MAX : (int64_t)sizeof(text),
         notification->data);
     memset(legacy, 'x', sizeof(legacy));
     memset(text, 'x', sizeof(text));
     notification->release(notification->data);
     return NULL;
 }
-void text_mixed_notify(void (*callback)(const char *, const char *, int, void *), void *data, void (*release)(void *), int mode) {
+void text_mixed_notify(void (*callback)(const char *, const char *, int64_t, void *), void *data, void (*release)(void *), int mode) {
     MixedTextNotification notification = {callback, data, release, mode};
     pthread_t thread;
     if (pthread_create(&thread, NULL, notify_mixed_text, &notification) != 0) abort();
@@ -93,7 +93,7 @@ void text_out(char **text, int *length) {
     static const char source[] = {'a', 0, (char)0xc3, (char)0xa9};
     *text = text_copy(source, sizeof(source), length);
 }
-void text_out_bad(char **text, int *length, int mode) { *text = text_bad_count(mode, length); }
+void text_out_bad(char **text, int64_t *length, int mode) { *text = text_bad_count(mode, length); }
 void text_out_callback(void (*callback)(void *), void *data, char **text, int *length) {
     text_out(text, length);
     callback(data);

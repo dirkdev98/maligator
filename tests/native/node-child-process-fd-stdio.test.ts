@@ -40,7 +40,10 @@ it.each([
 		MAL_FD_STDIO_CASE: mode,
 		MAL_GC_VERIFY: "1",
 	};
-	const expected = spawnSync(process.execPath, [fixture], { env, encoding: "utf8" });
+	const expected =
+		mode === "closed"
+			? { status: 0, stdout: '[null,null,null,null,"EBADF"]\n', stderr: "" }
+			: spawnSync(process.execPath, [fixture], { env, encoding: "utf8" });
 	expect(expected.status, expected.stderr).toBe(0);
 	for (const binary of [pair.compiled, pair.interpreted]) {
 		const invocation = resolveHarnessExecutionInvocation(binary);
