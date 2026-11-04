@@ -58,6 +58,25 @@ describe("worker-thread C resource destruction", () => {
 		},
 		300_000,
 	);
+	it.each(["compiled", "interpreted"])(
+		"guards only unsettled resource families through %s calls",
+		(backend) => {
+			const executed = spawnSync(binary("results.ts", backend), [], {
+				cwd: project,
+				encoding: "utf8",
+				timeout: 30_000,
+				env: {
+					...process.env,
+					MAL_GC_STRESS: "1",
+					MAL_GC_VERIFY: "1",
+					MAL_GC_AT_EXIT: "1",
+				},
+			});
+			expect(executed.status, executed.stderr || executed.stdout).toBe(0);
+			expect(executed.stdout.trim()).toBe("worker result guards passed");
+		},
+		300_000,
+	);
 	it.each(
 		["compiled", "interpreted"].flatMap((backend) =>
 			["running", "completed", "queued", "mandatory"].map((mode) => ({ backend, mode })),

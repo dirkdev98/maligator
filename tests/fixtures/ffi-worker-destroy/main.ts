@@ -86,6 +86,10 @@ try {
 	});
 	fresh = c.worker_reused_open(29)!;
 	check(fresh !== old, "fresh resources at reused addresses have distinct identity");
+	check(
+		c.worker_reused_alias() === fresh,
+		"a retired close no longer blocks new aliases",
+	);
 	c.worker_reused_listen(fresh, (alias) => {
 		check(alias === fresh, "new callbacks preserve the new lifetime identity");
 		calls++;

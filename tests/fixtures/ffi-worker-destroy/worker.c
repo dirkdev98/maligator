@@ -35,6 +35,7 @@ WorkerResource *worker_open(int value) {
     return resource;
 }
 int worker_value(WorkerResource *resource) { return resource->value; }
+WorkerResource *worker_alias(WorkerResource *resource) { return resource; }
 WorkerResource *worker_native_open(int value) {
     WorkerResource *resource = worker_open(value);
     if (resource != NULL) { resource->native_only = true; resource->owner = pthread_self(); }

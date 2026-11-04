@@ -797,6 +797,7 @@ typedef struct MalFfiHandleObject {
     bool provisional;
     /** The table that finds this open pointer handle by its pointer, or null. */
     MalFfiState *registry;
+    struct MalFfiHandleObject *worker_close_next;
     /** C calls using the handle; it cannot close while any are. */
     u32 pins;
     /** Worker calls may mutate storage concurrently with JavaScript field reads. */
@@ -939,6 +940,8 @@ struct MalFfiState {
     MalFfiHandleEntry *handles;
     usize handle_count;
     usize handle_capacity;
+    /** Weak subset of registered handles whose worker close or initialization is unsettled. */
+    MalFfiHandleObject *worker_closes;
     /** Callbacks libraries still hold, and the kept-function holder's reusable slots. */
     MalFfiKept *kept;
     /** Releases from a collection or another thread, run on the VM thread later. */
@@ -1302,10 +1305,30 @@ static bool ffi_handle_register(MalFfiState *state, MalFfiHandleObject *handle) 
     return true;
 }
 
+static void ffi_worker_close_unlink(MalFfiHandleObject *handle) {
+    MalFfiHandleObject **link = &handle->registry->worker_closes;
+    while (*link != handle) link = &(*link)->worker_close_next;
+    *link = handle->worker_close_next;
+    handle->worker_close_next = nullptr;
+}
+
+static void ffi_handle_worker_closing(MalFfiHandleObject *handle, bool worker) {
+    if (handle->worker_closing == worker) return;
+    if (handle->registry != nullptr) {
+        if (worker) {
+            handle->worker_close_next = handle->registry->worker_closes;
+            handle->registry->worker_closes = handle;
+        } else ffi_worker_close_unlink(handle);
+    }
+    handle->worker_closing = worker;
+}
+
 /** Remove a handle's entry, shifting later probes back so lookups stay correct. */
 static void ffi_handle_unregister(MalFfiHandleObject *handle) {
     MalFfiState *state = handle->registry;
     if (state == nullptr) return;
+    // Fresh address reuse retires the guard before the old worker completion unpins its handle.
+    if (handle->worker_closing) ffi_worker_close_unlink(handle);
     handle->registry = nullptr;
     usize mask = state->handle_capacity - 1;
     usize slot = ffi_handle_slot(ffi_handle_family(handle->type), handle->value, state->handle_capacity);
@@ -2824,7 +2847,7 @@ static void ffi_close_detach(MalFfiKept *kept) {
     if (handle->worker_closing) mal_ffi_unpin_worker_handle(handle);
     else mal_ffi_unpin_handle(handle);
     handle->closing = false;
-    handle->worker_closing = false;
+    ffi_handle_worker_closing(handle, false);
     handle->operation = nullptr;
     close->handle = mal_value_new_undefined();
 }
@@ -2889,7 +2912,7 @@ void mal_ffi_close_commit(MalFfiCallback *callback, void **pin, bool worker) {
     close->scope = handle->scope;
     close->operation = handle->operation;
     handle->closing = true;
-    handle->worker_closing = worker;
+    ffi_handle_worker_closing(handle, worker);
     handle->scope = 0;
     handle->operation = nullptr;
     if (handle->owns_storage) {
@@ -2929,7 +2952,7 @@ void mal_ffi_close_cancel(MalFfiCallback *callback, void **pin) {
     if (*pin != nullptr || handle == nullptr || handle->value != close->key) abort();
     *pin = handle;
     handle->closing = false;
-    handle->worker_closing = false;
+    ffi_handle_worker_closing(handle, false);
     handle->scope = close->scope;
     handle->operation = close->operation;
     if (close->storage != nullptr) {
@@ -3550,6 +3573,7 @@ static MalValue ffi_new_handle(
     handle->owns_storage = owns_storage;
     handle->closing = false;
     handle->worker_closing = false;
+    handle->worker_close_next = nullptr;
     handle->provisional = false;
     handle->registry = nullptr;
     handle->pins = 0;
@@ -4443,10 +4467,9 @@ void mal_ffi_inputs_release(MalVm *vm, MalFfiInputs *inputs, const MalFfiSite *s
 bool mal_ffi_handle_results_ready(MalVm *vm, const MalFfiHandleType *type, const MalFfiSite *site) {
     MalFfiState *state = vm->ffi;
     if (state == nullptr) return true;
-    for (usize index = 0; index < state->handle_capacity; index++) {
-        MalFfiHandleObject *handle = state->handles[index].handle;
-        if (handle != nullptr && handle->worker_closing
-            && ffi_handle_family(handle->type) == ffi_handle_family(type))
+    for (MalFfiHandleObject *handle = state->worker_closes; handle != nullptr;
+         handle = handle->worker_close_next) {
+        if (ffi_handle_family(handle->type) == ffi_handle_family(type))
             return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
                 "a settled worker close before returning this handle type, or a fresh result fact");
     }
@@ -4462,7 +4485,7 @@ bool mal_ffi_begin_handle_initialization(MalVm *vm, void *pin, const MalFfiHandl
         || handle->pins != 1 || handle->closing || handle->provisional || ffi_handle_borrowed(handle))
         return mal_ffi_expected(vm, site, "uninitialized caller storage no other C call is using");
     handle->closing = true;
-    handle->worker_closing = worker;
+    ffi_handle_worker_closing(handle, worker);
     return true;
 }
 
@@ -4471,7 +4494,7 @@ void mal_ffi_finish_handle_initialization(MalValue value, bool initialized) {
     if (handle == nullptr) return;
     if (initialized) handle->ownership = MAL_FFI_HANDLE_OWNED;
     handle->closing = false;
-    handle->worker_closing = false;
+    ffi_handle_worker_closing(handle, false);
 }
 
 bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, bool worker, const MalFfiSite *site) {
@@ -4488,7 +4511,7 @@ bool mal_ffi_begin_handle_close(MalVm *vm, void *pin, bool worker, const MalFfiS
         return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site,
             "a handle no other C call is using");
     handle->closing = true;
-    handle->worker_closing = worker;
+    ffi_handle_worker_closing(handle, worker);
     return true;
 }
 
@@ -4496,7 +4519,7 @@ void mal_ffi_finish_handle_close(MalValue value, bool released) {
     MalFfiHandleObject *handle = ffi_handle(value);
     if (handle == nullptr) return;
     handle->closing = false;
-    handle->worker_closing = false;
+    ffi_handle_worker_closing(handle, false);
     if (released) {
         ffi_replaced_drop(handle->value);
         if (handle->native != nullptr) ffi_owner_finish(handle->native, true);

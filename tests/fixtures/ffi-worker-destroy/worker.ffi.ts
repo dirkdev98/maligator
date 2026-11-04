@@ -13,6 +13,7 @@ export default {
 	},
 	functions: {
 		worker_open: { returns: { fresh: true } },
+		worker_alias: { returns: { borrowed: true } },
 		worker_native_open: { returns: { fresh: true } },
 		worker_close: { async: "worker_close_async" },
 		worker_retry_close: { async: "worker_retry_close_async" },
