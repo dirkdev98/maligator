@@ -28,7 +28,7 @@ typedef struct MalPromiseReaction {
     struct MalPromiseReaction *next;
     /* Capability encoding: two callables, two undefined values (no result
      * capability), {direct target Promise, exact intrinsic constructor}, or
-     * {internal continuation tag, generator state}. The int32 tags cannot
+     * {internal continuation tag, continuation state}. The int32 tags cannot
      * collide with any valid user-created PromiseCapability resolve function. */
     MalValue cap_resolve;
     MalValue cap_reject;
@@ -74,6 +74,25 @@ typedef struct MalPromiseObject {
      */
     MalGeneratorObject *async_owner;
 } MalPromiseObject;
+
+/** Reference fields stay immutable after publication; jobs update only scalar state. */
+typedef struct MalPromiseAllState {
+    MalHeapHeader header;
+    MalValue promise;
+    MalValue values;
+    u32 remaining;
+    bool settled;
+} MalPromiseAllState;
+
+static_assert(sizeof(MalPromiseAllState) == 32,
+              "Promise.all aggregation must remain one 32-byte cell");
+
+MalPromiseAllState *mal_promise_all_state_new(
+    MalVm *vm, MalValue promise, MalValue values, u32 count);
+
+/** Register one index of a guarded intrinsic Promise.all traversal. */
+void mal_promise_append_all_reaction(
+    MalVm *vm, MalPromiseObject *promise, MalValue state, u32 index);
 
 /** Allocate a pending promise with the given [[Prototype]]. */
 MalPromiseObject *mal_promise_object_new(MalHeap *heap, MalObject *prototype);

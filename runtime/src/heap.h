@@ -460,6 +460,8 @@ typedef enum MalHeapType : u8 {
     MAL_HEAP_STRING_CURSOR,
     MAL_HEAP_WEAK_MAP_OBJECT,
     MAL_HEAP_WEAK_SET_OBJECT,
+    /** Private aggregation state retained by typed Promise.all reactions. */
+    MAL_HEAP_PROMISE_ALL_STATE,
 
     /**
      * Sentinel: number of distinct heap types. Must stay last. Sizes the baked

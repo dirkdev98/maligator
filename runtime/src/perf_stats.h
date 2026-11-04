@@ -467,6 +467,8 @@ typedef struct MalPerfStats {
 
     u64 promise_await_typed_continuations;
     u64 promise_await_typed_jobs;
+    u64 promise_all_typed_admissions;
+    u64 promise_all_typed_jobs;
     u64 promise_job_slab_hits;
     u64 promise_job_slab_fresh_slots;
     u64 promise_job_slab_block_allocations;

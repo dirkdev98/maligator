@@ -6,6 +6,7 @@
 #include "async_context.h"
 #include "gc.h"
 #include "microtask.h"
+#include "value_ops.h"
 #include "vm.h"
 
 #define MAL_PROMISE_REACTION_POOL_LIMIT 4096
@@ -47,6 +48,10 @@ static bool mal_promise_is_async_from_sync_reaction_tag(
 
 static inline MalValue mal_promise_dispose_resources_reaction_tag(void) {
     return mal_value_from_i32(INT32_MIN + 6);
+}
+
+static inline MalValue mal_promise_all_reaction_tag(void) {
+    return mal_value_from_i32(INT32_MIN + 7);
 }
 
 struct MalPromiseReactionBlock {
@@ -118,6 +123,18 @@ static void mal_promise_release_reaction(MalVm *vm, MalPromiseReaction *reaction
     *link = block->next;
     vm->reaction_active_block = nullptr;
     free(block);
+}
+
+MalPromiseAllState *mal_promise_all_state_new(
+    MalVm *vm, MalValue promise, MalValue values, u32 count
+) {
+    MalPromiseAllState *state = mal_heap_alloc(
+        &vm->heap, sizeof(MalPromiseAllState), MAL_HEAP_PROMISE_ALL_STATE);
+    state->promise = promise;
+    state->values = values;
+    state->remaining = count;
+    state->settled = false;
+    return state;
 }
 
 MalPromiseObject *mal_promise_object_new(MalHeap *heap, MalObject *prototype) {
@@ -203,6 +220,14 @@ void mal_promise_append_await_reaction(
         mal_value_new_undefined(),
         mal_promise_await_reaction_tag(),
         state);
+}
+
+void mal_promise_append_all_reaction(
+    MalVm *vm, MalPromiseObject *promise, MalValue state, u32 index
+) {
+    mal_promise_append_reaction_internal(
+        vm, promise, mal_value_from_u32(index), mal_value_new_undefined(),
+        mal_promise_all_reaction_tag(), state);
 }
 
 void mal_promise_append_async_generator_return_reaction(
@@ -329,7 +354,17 @@ static void mal_promise_barrier_reactions(MalPromiseReaction *reaction) {
 static void mal_promise_trigger_reactions(MalVm *vm, MalPromiseReaction *list, bool is_reject, MalValue argument) {
     while (list != nullptr) {
         MalPromiseReaction *next = list->next;
-        if (list->cap_resolve == mal_promise_await_reaction_tag()) {
+        if (list->cap_resolve == mal_promise_all_reaction_tag()) {
+            u32 index = (u32) mal_ops_number_as_f64(list->on_fulfilled);
+#if MAL_NODE
+            mal_vm_enqueue_promise_all_job_in_context(
+                vm, list->cap_reject, index, is_reject, argument,
+                list->async_context);
+#else
+            mal_vm_enqueue_promise_all_job(
+                vm, list->cap_reject, index, is_reject, argument);
+#endif
+        } else if (list->cap_resolve == mal_promise_await_reaction_tag()) {
 #if MAL_NODE
             mal_vm_enqueue_await_job_in_context(
                 vm, list->cap_reject, is_reject, argument, list->async_context);

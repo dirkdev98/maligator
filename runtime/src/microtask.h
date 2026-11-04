@@ -14,6 +14,7 @@ typedef void (*MalHostJobFn)(MalVm *vm, void *data, MalValue argument, bool is_r
  */
 typedef enum MalJobKind {
     MAL_JOB_PROMISE_REACTION,
+    MAL_JOB_PROMISE_ALL,
     MAL_JOB_PROMISE_RESOLVE_THENABLE,
     MAL_JOB_ASYNC_AWAIT,
     MAL_JOB_ASYNC_GENERATOR_RETURN,
@@ -38,7 +39,7 @@ typedef struct MalJob {
     MalAsyncContext *async_context;
 #endif
     union {
-        /** Promise reaction or typed async-await payload. */
+        /** Promise reaction or typed continuation payload. */
         struct {
             MalValue handler;
             /* Preserves MalPromiseReaction's capability encoding verbatim. */
@@ -112,6 +113,15 @@ void mal_vm_enqueue_await_job(
     bool is_reject,
     MalValue argument
 );
+
+/** Queue an intrinsic Promise.all element without materializing a callable. */
+void mal_vm_enqueue_promise_all_job(
+    MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument);
+#if MAL_NODE
+void mal_vm_enqueue_promise_all_job_in_context(
+    MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument,
+    MalAsyncContext *context);
+#endif
 #if MAL_NODE
 void mal_vm_enqueue_await_job_in_context(
     MalVm *vm,

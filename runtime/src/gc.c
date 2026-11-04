@@ -193,6 +193,7 @@ static MalHeapDeadCellPolicySlot g_dead_cell_policy[MAL_HEAP_TYPE_COUNT] = {
     [MAL_HEAP_SYMBOL] = MAL_HEAP_DEAD_CELL_RECLAIM,
     [MAL_HEAP_BIGINT] = MAL_HEAP_DEAD_CELL_RECLAIM,
     [MAL_HEAP_ENV] = MAL_HEAP_DEAD_CELL_RECLAIM,
+    [MAL_HEAP_PROMISE_ALL_STATE] = MAL_HEAP_DEAD_CELL_RECLAIM,
     [MAL_HEAP_ASYNC_CONTEXT] = MAL_HEAP_DEAD_CELL_RECLAIM,
     [MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE] = MAL_HEAP_DEAD_CELL_RECLAIM,
     [MAL_HEAP_ASYNC_RESOURCE_STATE] = MAL_HEAP_DEAD_CELL_RECLAIM,
@@ -1434,6 +1435,12 @@ static void mal_gc_trace_cell_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
             }
             return;
         }
+        case MAL_HEAP_PROMISE_ALL_STATE: {
+            MalPromiseAllState *state = (MalPromiseAllState *) cell;
+            mal_gc_mark_value_in(ctx, state->promise);
+            mal_gc_mark_value_in(ctx, state->values);
+            return;
+        }
         case MAL_HEAP_ASYNC_CONTEXT: {
             MalAsyncContext *context = (MalAsyncContext *) cell;
             if (context->parent != nullptr) {
@@ -1772,6 +1779,7 @@ static void mal_gc_mark_job(MalJob *job) {
     }
 #endif
     if (job->kind == MAL_JOB_PROMISE_REACTION ||
+        job->kind == MAL_JOB_PROMISE_ALL ||
         job->kind == MAL_JOB_ASYNC_AWAIT ||
         job->kind == MAL_JOB_ASYNC_GENERATOR_RETURN ||
         job->kind == MAL_JOB_ASYNC_FROM_SYNC) {
@@ -2181,6 +2189,7 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
         case MAL_HEAP_BIGINT:
         case MAL_HEAP_ENV:
         case MAL_HEAP_ASYNC_CONTEXT:
+        case MAL_HEAP_PROMISE_ALL_STATE:
         case MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE:
         case MAL_HEAP_ASYNC_RESOURCE_STATE:
         case MAL_HEAP_ASYNC_RUN_SCOPE_STATE:
@@ -2459,6 +2468,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         case MAL_HEAP_SYMBOL:
         case MAL_HEAP_BIGINT:
         case MAL_HEAP_ENV:
+        case MAL_HEAP_PROMISE_ALL_STATE:
             return;
         case MAL_HEAP_STRING: {
             MalStringStorage storage = ((const MalString *) cell)->storage;
@@ -2540,6 +2550,7 @@ static bool mal_gc_worker_can_trace(MalHeapHeader *cell) {
 static bool mal_gc_worker_can_trace_during_mutation(MalHeapHeader *cell) {
     if (mal_gc_type_hook_load(g_type_tracers[cell->type]) != nullptr) return false;
     return cell->type == MAL_HEAP_SYMBOL || cell->type == MAL_HEAP_ASYNC_CONTEXT ||
+        cell->type == MAL_HEAP_PROMISE_ALL_STATE ||
         cell->type == MAL_HEAP_ENV;
 }
 

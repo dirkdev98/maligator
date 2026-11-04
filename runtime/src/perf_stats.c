@@ -1139,7 +1139,8 @@ static void mal_perf_stats_print(void) {
         "native_adoption_guard_fallbacks=%llu resolve_identity_hits=%llu "
         "intrinsic_species_hits=%llu "
         "discarded_dependent_registrations=%llu guarded_fallbacks=%llu "
-        "resolving_pairs=%llu async_generator_direct_requests=%llu\n",
+        "resolving_pairs=%llu async_generator_direct_requests=%llu "
+        "all_typed_admissions=%llu all_typed_jobs=%llu\n",
         (unsigned long long) mal_perf_stats.promise_await_typed_continuations,
         (unsigned long long) mal_perf_stats.promise_await_typed_jobs,
         (unsigned long long) mal_perf_stats.promise_job_slab_hits,
@@ -1154,7 +1155,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.promise_discarded_dependent_registrations,
         (unsigned long long) mal_perf_stats.promise_guarded_fallbacks,
         (unsigned long long) mal_perf_stats.promise_resolving_pairs,
-        (unsigned long long) mal_perf_stats.promise_async_generator_direct_requests
+        (unsigned long long) mal_perf_stats.promise_async_generator_direct_requests,
+        (unsigned long long) mal_perf_stats.promise_all_typed_admissions,
+        (unsigned long long) mal_perf_stats.promise_all_typed_jobs
     );
     fprintf(stderr, "[perf-rest-stats] arrays=%llu array_values=%llu forwards=%llu forwarded_values=%llu forward_copies=%llu\n",
         (unsigned long long) mal_perf_stats.rest_array_allocations,

@@ -11,6 +11,7 @@
 #include "gc.h"
 #include "generator_object.h"
 #include "perf_stats.h"
+#include "value_ops.h"
 #include "vm.h"
 
 // Diagnostic counters describe the isolate on the current mutator thread.
@@ -158,6 +159,7 @@ static void mal_job_release(MalVm *vm, MalJob *job) {
 
 static void mal_job_recycle(MalVm *vm, MalJob *job) {
     if (job->kind == MAL_JOB_PROMISE_REACTION ||
+        job->kind == MAL_JOB_PROMISE_ALL ||
         job->kind == MAL_JOB_ASYNC_AWAIT ||
         job->kind == MAL_JOB_ASYNC_GENERATOR_RETURN ||
         job->kind == MAL_JOB_ASYNC_FROM_SYNC ||
@@ -405,6 +407,46 @@ void mal_vm_enqueue_reaction_job_in_context(
 ) {
     mal_vm_enqueue_reaction_job_with_context(
         vm, handler, is_reject, cap_resolve, cap_reject, argument, context);
+}
+#endif
+
+static void mal_vm_enqueue_promise_all_job_with_context(
+    MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument
+#if MAL_NODE
+    , MalAsyncContext *context
+#endif
+) {
+    MalJob *job = mal_job_new(vm, MAL_JOB_PROMISE_ALL);
+#if MAL_NODE
+    job->async_context = context;
+#endif
+    job->is_reject = is_reject;
+    job->as.reaction.handler = state;
+    job->as.reaction.cap_resolve = mal_value_from_u32(index);
+    job->as.reaction.cap_reject = mal_value_new_undefined();
+    job->as.reaction.argument = argument;
+    MAL_PERF_COUNT(promise_all_typed_jobs);
+    mal_vm_enqueue(vm, job);
+}
+
+void mal_vm_enqueue_promise_all_job(
+    MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument
+) {
+    mal_vm_enqueue_promise_all_job_with_context(
+        vm, state, index, is_reject, argument
+#if MAL_NODE
+        , mal_async_context_capture(vm)
+#endif
+    );
+}
+
+#if MAL_NODE
+void mal_vm_enqueue_promise_all_job_in_context(
+    MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument,
+    MalAsyncContext *context
+) {
+    mal_vm_enqueue_promise_all_job_with_context(
+        vm, state, index, is_reject, argument, context);
 }
 #endif
 
@@ -801,6 +843,12 @@ void mal_vm_drain_microtasks(MalVm *vm) {
         switch (job->kind) {
             case MAL_JOB_PROMISE_REACTION:
                 mal_vm_run_reaction_job(vm, job);
+                break;
+            case MAL_JOB_PROMISE_ALL:
+                mal_promise_all_continue(
+                    vm, job->as.reaction.handler,
+                    (u32) mal_ops_number_as_f64(job->as.reaction.cap_resolve),
+                    job->is_reject, job->as.reaction.argument);
                 break;
             case MAL_JOB_PROMISE_RESOLVE_THENABLE:
                 mal_vm_run_thenable_job(vm, job);

@@ -1146,9 +1146,93 @@ static MalValue mal_promise_all_element(MalVm *vm, MalValue this_value, const Ma
     return mal_value_new_undefined();
 }
 
+void mal_promise_all_continue(
+    MalVm *vm, MalValue raw_state, u32 index, bool is_reject, MalValue argument
+) {
+    MalPromiseAllState *state = (MalPromiseAllState *) mal_value_to_heap(raw_state);
+    MalPromiseObject *promise = mal_value_to_promise_object(state->promise);
+    if (is_reject) {
+        if (!state->settled) {
+            state->settled = true;
+            mal_promise_reject(vm, promise, argument);
+        }
+        return;
+    }
+
+    MalArrayObject *values = mal_value_to_array_object(state->values);
+    if (mal_array_object_dense_store(values, index, argument) != MAL_ARRAY_DENSE_APPLIED) {
+        abort();
+    }
+    state->remaining--;
+    if (state->remaining == 0 && !state->settled) {
+        state->settled = true;
+        // The result Array is private and its primordial chain stays locked
+        // through settlement, so resolution cannot observe a then property.
+        mal_promise_fulfill(vm, promise, state->values);
+    }
+}
+
+#if MAL_PRIMORDIALS_LOCKED
+static bool mal_promise_all_try_dense(
+    MalVm *vm, MalValue constructor, const MalValue *args, i32 arg_count,
+    MalValue *result
+) {
+    if (constructor != vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR] ||
+        !mal_vm_primitive_methods_intact(vm) || arg_count < 1 ||
+        !mal_value_is_array_object(args[0])) return false;
+    MalArrayObject *source = mal_value_to_array_object(args[0]);
+    u32 count = source->length;
+    if (source->object.for_in_keys || source->dense_count < count ||
+        (count > 0 && source->elements == nullptr)) return false;
+    for (u32 index = 0; index < count; index++) {
+        if (!mal_promise_is_canonical_intrinsic(
+                vm, source->elements[index], constructor)) return false;
+    }
+    MalArrayValuesDeferredCursor cursor;
+    if (!mal_vm_array_values_deferred_begin(vm, args[0], &cursor)) return false;
+
+    // Preflight and registration invoke no language code. The source's own
+    // elements therefore stay fixed until every continuation has been attached.
+    MalValue roots[4] = {args[0], MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    roots[1] = mal_value_from_promise_object(mal_promise_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
+    MalArrayObject *values = mal_intrinsic_new_dense_array(vm, count);
+    roots[2] = mal_value_from_array_object(values);
+    if (count > 0 && !mal_array_object_dense_build_fill(values, 0, count, MAL_VALUE_UNDEFINED)) abort();
+    if (count == 0) {
+        mal_promise_fulfill(vm, mal_value_to_promise_object(roots[1]), roots[2]);
+    } else {
+        roots[3] = mal_value_from_heap((MalHeapHeader *) mal_promise_all_state_new(
+            vm, roots[1], roots[2], count));
+        for (u32 index = 0; index < count; index++) {
+            MalPromiseObject *promise = mal_value_to_promise_object(source->elements[index]);
+            promise->is_handled = true;
+            if (promise->state == MAL_PROMISE_PENDING) {
+                mal_promise_append_all_reaction(vm, promise, roots[3], index);
+            } else {
+                mal_vm_enqueue_promise_all_job(
+                    vm, roots[3], index, promise->state == MAL_PROMISE_REJECTED,
+                    promise->result);
+            }
+        }
+    }
+    MAL_PERF_COUNT(promise_all_typed_admissions);
+    *result = roots[1];
+    mal_gc_unroot(&span);
+    return true;
+}
+#endif
+
 static MalValue mal_promise_all(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
+
+#if MAL_PRIMORDIALS_LOCKED
+    MalValue direct;
+    if (mal_promise_all_try_dense(vm, this_value, args, arg_count, &direct)) return direct;
+#endif
 
     MalPromiseCombinator ctx = mal_promise_combinator_begin(vm, this_value, args, arg_count);
     if (!ctx.ok) {
