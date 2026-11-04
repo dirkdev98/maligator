@@ -1146,6 +1146,7 @@ static void ffi_state_free(MalVm *vm) {
     MalFfiKept *pending = atomic_exchange(&state->pending_releases, nullptr);
     while (pending != nullptr) {
         MalFfiKept *next = pending->pending;
+        atomic_fetch_sub_explicit(&mal_ffi_queued_releases, 1, memory_order_relaxed);
         ffi_kept_unref(pending);
         pending = next;
     }
@@ -1935,9 +1936,19 @@ static void ffi_run_pending_releases(MalVm *vm) {
     MalFfiKept *pending = atomic_exchange(&state->pending_releases, nullptr);
     while (pending != nullptr) {
         MalFfiKept *next = pending->pending;
+        atomic_fetch_sub_explicit(&mal_ffi_queued_releases, 1, memory_order_relaxed);
         ffi_release_now(pending);
         pending = next;
     }
+}
+
+_Atomic uint32_t mal_ffi_queued_releases;
+
+__attribute__((cold, noinline)) void mal_ffi_direct_releases(MalVm *vm) {
+    // Keep the collector off as a framed call's end does: the binding's locals are not rooted.
+    mal_gc_native_rooted_end(vm);
+    ffi_run_pending_releases(vm);
+    mal_gc_native_rooted_begin(vm);
 }
 
 static bool ffi_inbox_post_release(MalFfiKept *kept);
@@ -1960,6 +1971,8 @@ void mal_ffi_release(void *data) {
     // context for the VM thread, which runs the queue after its next C call.
     if (vm != nullptr && (ffi_finalizing || !pthread_equal(kept->thread, pthread_self()))) {
         MalFfiState *state = vm->ffi;
+        // Counted before publication, so a drain never sees the count fall below the queue.
+        atomic_fetch_add_explicit(&mal_ffi_queued_releases, 1, memory_order_relaxed);
         MalFfiKept *head = atomic_load(&state->pending_releases);
         do {
             kept->pending = head;

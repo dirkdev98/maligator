@@ -3778,7 +3778,9 @@ class BindingWriter {
 			...(keptIndexes.length > 0 ? ["mal_called = true;"] : []),
 			...(callsBack ? ["if (mal_framed) mal_ffi_collectable_begin(vm);"] : []),
 		];
-		const leave = callsBack ? ["if (mal_framed) mal_ffi_collectable_end(vm);"] : [];
+		const leave = callsBack
+			? ["if (mal_framed) mal_ffi_collectable_end(vm);", "else mal_ffi_direct_leave(vm);"]
+			: [];
 		if (binding.returns.kind === "undefined") {
 			after.push(
 				...enter,

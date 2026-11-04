@@ -703,6 +703,19 @@ MalFfiCallback *mal_ffi_replaced(MalFfiReplaced *site, void *key, unsigned lane)
 void mal_ffi_collectable_begin(MalVm *vm);
 void mal_ffi_collectable_end(MalVm *vm);
 
+/** Releases queued in any VM by another thread or a collection, not yet completed. */
+extern _Atomic uint32_t mal_ffi_queued_releases;
+/** Out of line and cold, so link-time inlining keeps the release loop off every call. */
+__attribute__((cold, noinline)) void mal_ffi_direct_releases(MalVm *vm);
+/**
+ * Complete queued releases after a direct entry's C call, as `mal_ffi_collectable_end`
+ * does for an ordinary call, so they still run after the VM thread's next C call.
+ */
+static inline void mal_ffi_direct_leave(MalVm *vm) {
+    if (__builtin_expect(atomic_load_explicit(&mal_ffi_queued_releases, memory_order_relaxed) != 0, 0))
+        mal_ffi_direct_releases(vm);
+}
+
 typedef void (*MalFfiAsyncRun)(void *data);
 typedef MalValue (*MalFfiAsyncComplete)(MalVm *vm, void *data, bool ran);
 typedef void (*MalFfiAsyncRelease)(void *data);
