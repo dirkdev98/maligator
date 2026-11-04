@@ -79,6 +79,24 @@ application and its workers use. Namespace access retains its observable exports
 Declaration generation and inspection describe the full header surface; development
 runtimes retain it for later application edits.
 
+## Audited native calls
+
+By default, a native call can invoke callbacks registered through any configured
+library, including another binding to the same C dependency. If the C function's
+contract guarantees it never enters JavaScript, state that fact on the function:
+
+```typescript
+functions: {
+	read_value: { callsJavaScript: false },
+}
+```
+
+This permits callback-free marshalling and compiler facts for eligible calls. Input
+getters and result cleanup keep their own effects: a struct getter can run JavaScript,
+and a configured release function can invoke an earlier callback. The fact gives no
+purity or thread-safety guarantee. Typed variadic variants inherit it from their C
+function; a returned function pointer has its own call contract.
+
 ## How values cross
 
 Conversions never coerce. A value of the wrong type throws a `TypeError`, and a number that is not an integer or does not fit throws a `RangeError`. Both name the C function and parameter.

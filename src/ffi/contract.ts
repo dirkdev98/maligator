@@ -633,7 +633,10 @@ function validateFunctionFacts(value: unknown, at: string): void {
 		"async",
 		"initializes",
 		"evidence",
+		"callsJavaScript",
 	]);
+	if (value.callsJavaScript !== undefined)
+		expect(value.callsJavaScript === false, `${at}.callsJavaScript`, "false");
 	if (value.dispatch !== undefined) {
 		validateFunctionExport(value.dispatch, `${at}.dispatch`);
 		expectObject(value.variants, `${at}.variants`);

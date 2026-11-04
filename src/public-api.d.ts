@@ -326,6 +326,12 @@ export type MaligatorFfiCallbackResult =
 
 /** Facts about one C function, keyed by its name. */
 export interface MaligatorFfiFunctionFacts {
+	/**
+	 * Audited fact that native execution never enters JavaScript, including through
+	 * earlier callback registrations or shared C dependencies. Input getters and
+	 * result cleanup retain their own effects. Omit this to keep conservative callbacks.
+	 */
+	callsJavaScript?: false;
 	/** Header documentation that `ffi check` watches when reviewing these facts. */
 	evidence?: Array<MaligatorFfiEvidence>;
 	/** Facts per parameter, keyed by C name or by 1-based position for unnamed ones. */

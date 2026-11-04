@@ -1,5 +1,6 @@
 import { ffiIntoSymbol } from "../build-config-values.ts";
 import type { FfiDirectEntry, FfiDirectResult } from "../build-config-values.ts";
+import { bindingEffects } from "./binding-effects.ts";
 import {
 	hasOwnedRecordFields,
 	hasResultHandles,
@@ -135,30 +136,6 @@ const UNROOTED_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
 	"native",
 	"bytes",
 ]);
-
-function inputCanRunJavaScript(value: JsValue): boolean {
-	switch (value.kind) {
-		case "undefined":
-		case "boolean":
-		case "integer":
-		case "float":
-		case "bigint":
-		case "string":
-		case "bytes":
-		case "handle":
-		case "native":
-		case "callable":
-			return false;
-		case "callback":
-		case "record":
-		case "tagged":
-		case "sequence":
-		case "array":
-			return true;
-		case "union":
-			return inputCanRunJavaScript(value.of);
-	}
-}
 
 /** The struct a binding returns, when compiled callers can take its fields instead. */
 function intoRecord(binding: BoundFunction): string | undefined {
@@ -2769,10 +2746,12 @@ class BindingWriter {
 
 	#transactionalResults(binding: BoundFunction, directReturn = true): boolean {
 		const value = binding.returns;
+		const effects = bindingEffects(this.#plan, binding);
 		// No fallible cleanup follows this conversion, so it is already the commit point.
 		if (
 			directReturn &&
-			!this.#plan.hasCallbacks &&
+			!effects.native &&
+			!effects.cleanup &&
 			binding.outputs.length === 0 &&
 			binding.closes === undefined &&
 			value.kind === "handle" &&
@@ -2964,14 +2943,10 @@ class BindingWriter {
 		const compoundInputs = this.#compoundInputs(binding);
 		const inputs = compoundInputs ? "&mal_inputs" : "nullptr";
 		if (compoundInputs) locals.push("MalFfiInputs mal_inputs;");
-		/** Whether JavaScript can run between converting an argument and the C call returning. */
-		const runsJavaScript =
-			this.#plan.hasCallbacks ||
-			binding.params.some(({ value }) => inputCanRunJavaScript(value));
-		/** Whether JavaScript can run during the C call itself, in a callback. */
-		const callsBack =
-			this.#plan.hasCallbacks ||
-			binding.params.some((param) => param.value.kind === "callback");
+		const effects = bindingEffects(this.#plan, binding);
+		const runsJavaScript = effects.input || effects.native || effects.cleanup;
+		// Cleanup callbacks need the same rooted inputs as callbacks during native execution.
+		const callsBack = effects.native || effects.cleanup;
 		const borrowString = (type: CType): boolean => {
 			const pointer = resolveCType(this.#model, type);
 			if (pointer.kind !== "pointer") return false;
@@ -4871,6 +4846,7 @@ export function describeBindingUnit(
 		].sort(byteOrder),
 		direct: Object.fromEntries(
 			plan.functions.map((binding) => {
+				const effects = bindingEffects(plan, binding);
 				const result = directResult(binding);
 				const borrows = binding.params.flatMap(({ value }, argument) =>
 					value.kind === "record"
@@ -4888,9 +4864,7 @@ export function describeBindingUnit(
 					{
 						symbol: directSymbol(library, binding.name),
 						arity: binding.params.length,
-						callsUserCode:
-							plan.hasCallbacks ||
-							binding.params.some(({ value }) => inputCanRunJavaScript(value)),
+						callsUserCode: effects.input || effects.native || effects.cleanup,
 						...(result === undefined ? {} : { result }),
 						...(borrows.length === 0 ? {} : { borrows }),
 						...(fields === undefined ? {} : { into: { fields } }),
@@ -4942,7 +4916,7 @@ export function generateBindingUnit(
 		...directEntry(
 			library,
 			binding,
-			plan.hasCallbacks ||
+			Object.values(bindingEffects(plan, binding)).some(Boolean) ||
 				binding.params.some(
 					({ value }) =>
 						value.kind === "callback" ||

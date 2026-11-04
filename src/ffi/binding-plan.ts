@@ -225,6 +225,7 @@ export interface MappedOutput {
 
 export interface BoundFunction {
 	readonly name: string;
+	readonly callsJavaScript?: false;
 	readonly global?: GlobalAccessor;
 	readonly declaration: CFunction;
 	/** The JavaScript parameters, in order. */
@@ -532,6 +533,7 @@ function valueCount(
 
 /** A function's facts by parameter position. */
 interface FunctionFacts {
+	readonly callsJavaScript?: false;
 	readonly params: ReadonlyArray<MaligatorFfiValueFacts | undefined>;
 	readonly returns: MaligatorFfiValueFacts;
 	readonly initializes?: MaligatorFfiFunctionFacts["initializes"];
@@ -859,6 +861,9 @@ function functionFacts(model: CModel, facts: LibraryFacts): Map<string, Function
 		}
 		result.set(name, {
 			params,
+			...(entry.callsJavaScript === undefined
+				? {}
+				: { callsJavaScript: entry.callsJavaScript }),
 			returns: entry.returns ?? NO_FACTS,
 			...(entry.initializes === undefined ? {} : { initializes: entry.initializes }),
 		});
@@ -3336,6 +3341,9 @@ class Planner {
 		return {
 			name: declaration.name,
 			declaration,
+			...(facts.callsJavaScript === undefined
+				? {}
+				: { callsJavaScript: facts.callsJavaScript }),
 			params,
 			arguments: args,
 			returns: returns.value,
@@ -3396,7 +3404,13 @@ function planVariant(
 	}
 	const result = planner.function(
 		{ ...declaration, params, variadic: false },
-		{ params: paramFacts, returns: stated?.returns ?? NO_FACTS },
+		{
+			params: paramFacts,
+			returns: stated?.returns ?? NO_FACTS,
+			...(stated?.callsJavaScript === undefined
+				? {}
+				: { callsJavaScript: stated.callsJavaScript }),
+		},
 		undefined,
 	);
 	return { ...result, name };
