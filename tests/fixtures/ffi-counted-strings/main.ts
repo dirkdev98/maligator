@@ -4,6 +4,7 @@ import {
 	text_nullable,
 	text_legacy,
 	text_many,
+	text_many_async,
 	text_narrow,
 	text_plain,
 	text_plain_max,
@@ -94,6 +95,26 @@ for (const value of [
 check(
 	text_many(["x".repeat(128), "x".repeat(255), "é".repeat(128), "x".repeat(256)]) === 895,
 	"array strings retain their owned encodings at inline boundaries",
+);
+const manyTexts = Array.from(
+	{ length: 300 },
+	(_, index) => "é".repeat(index % 7) + String(index),
+);
+const manyBytes = manyTexts.reduce(
+	(total, text) => total + new TextEncoder().encode(text).length,
+	0,
+);
+check(
+	text_many(manyTexts) === manyBytes,
+	"string arrays keep every element across blocks",
+);
+check(
+	(await text_many_async(manyTexts)) === manyBytes,
+	"async string arrays keep every element across blocks",
+);
+check(
+	text_many(["x".repeat(5000), "y", "é".repeat(3000)]) === 11001,
+	"string array elements may exceed a block",
 );
 check(text_copy(null) === null && text_view(null) === null, "null counted results");
 check(

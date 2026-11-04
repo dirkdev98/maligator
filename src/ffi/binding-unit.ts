@@ -3595,11 +3595,10 @@ class BindingWriter {
 									]),
 							`static_assert(sizeof(*${elements}) % _Alignof(__typeof__(*${elements})) == 0, "FFI array stride must preserve C alignment");`,
 						);
+						const textArena = `mal_texts_${String(index)}`;
 						if (texts) {
-							const freed = this.#fresh("index");
-							cleanup.push(
-								`if (${elements} != nullptr) for (int32_t ${freed} = 0; ${freed} < ${length}; ${freed}++) free((void *) ${elements}[${freed}]);`,
-							);
+							locals.push(`MalFfiTexts ${textArena} = {};`);
+							cleanup.push(`mal_ffi_texts_free(&${textArena});`);
 						}
 						cleanup.push(
 							`if (${elements} != nullptr && (void *) ${elements} != (void *) ${storage}) ${numeric === undefined ? `free(${elements})` : `mal_ffi_scratch_free(mal_scratch, ${elements})`};`,
@@ -3634,7 +3633,7 @@ class BindingWriter {
 							...(texts
 								? [
 										`\tchar *${text};`,
-										`\tif (!mal_ffi_to_owned_string(vm, ${element}, ${site}, &${text})) goto mal_done;`,
+										`\tif (!mal_ffi_texts_add(vm, &${textArena}, ${element}, ${site}, &${text})) goto mal_done;`,
 										`\t${elements}[${position}] = ${text};`,
 									]
 								: this.read(
@@ -3654,12 +3653,6 @@ class BindingWriter {
 							`if (!mal_ffi_to_array_length(vm, ${source}, ${value.nullable}, ${site}, &${length})) goto mal_done;`,
 							`if (${length} > 0 && _Alignof(__typeof__(*${elements})) <= MAL_FFI_ARRAY_INLINE && (size_t) ${length} <= sizeof(${storage}) / sizeof(*${elements})) {`,
 							`\t${elements} = (void *) ${storage};`,
-							// String elements must start null, since cleanup frees every slot.
-							...(texts
-								? [
-										`\t__builtin_memset(${storage}, 0, (size_t) ${length} * sizeof(*${elements}));`,
-									]
-								: []),
 							`} else if (${length} > 0) {`,
 							...(numeric !== undefined
 								? [
@@ -4563,11 +4556,11 @@ class BindingWriter {
 							`${pointerDeclaration(value.element, elements)};`,
 							`int32_t ${length};`,
 						);
+						const textArena = `mal_texts_${String(index)}`;
 						if (texts) {
-							const freed = this.#fresh("index");
-							frees.push(
-								`if (mal_ctx->${elements} != nullptr) for (int32_t ${freed} = 0; ${freed} < mal_ctx->${length}; ${freed}++) free((void *) mal_ctx->${elements}[${freed}]);`,
-							);
+							// The context is zeroed, which leaves the arena empty.
+							fields.push(`MalFfiTexts ${textArena};`);
+							frees.push(`mal_ffi_texts_free(&mal_ctx->${textArena});`);
 						}
 						frees.push(`free(mal_ctx->${elements});`);
 						converted.push(
@@ -4591,7 +4584,7 @@ class BindingWriter {
 							...(texts
 								? [
 										`\tchar *${element}_text;`,
-										`\tif (!mal_ffi_to_owned_string(vm, ${element}, ${site}, &${element}_text)) goto mal_failed;`,
+										`\tif (!mal_ffi_texts_add(vm, &mal_ctx->${textArena}, ${element}, ${site}, &${element}_text)) goto mal_failed;`,
 										`\tmal_ctx->${elements}[${position}] = ${element}_text;`,
 									]
 								: this.read(

@@ -252,6 +252,46 @@ bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, 
     return true;
 }
 
+typedef struct MalFfiTextBlock {
+    struct MalFfiTextBlock *next;
+    size_t used;
+    size_t capacity;
+    char data[];
+} MalFfiTextBlock;
+
+bool mal_ffi_texts_add(MalVm *vm, MalFfiTexts *texts, MalValue value, const MalFfiSite *site, char **out) {
+    *out = nullptr;
+    MalFfiString string;
+    if (!mal_ffi_to_string(vm, value, false, 0, site, &string)) return false;
+    size_t bytes = string.length + 1;
+    MalFfiTextBlock *block = texts->blocks;
+    if (block == nullptr || block->capacity - block->used < bytes) {
+        size_t capacity = block == nullptr ? 256 : block->capacity * 2;
+        if (capacity < bytes) capacity = bytes;
+        MalFfiTextBlock *grown = capacity > SIZE_MAX - sizeof(*grown) ? nullptr : malloc(sizeof(*grown) + capacity);
+        if (grown == nullptr) {
+            mal_ffi_string_release(&string);
+            return mal_ffi_out_of_memory(vm);
+        }
+        *grown = (MalFfiTextBlock) {.next = block, .capacity = capacity};
+        texts->blocks = block = grown;
+    }
+    *out = block->data + block->used;
+    memcpy(*out, string.data, bytes);
+    block->used += bytes;
+    mal_ffi_string_release(&string);
+    return true;
+}
+
+void mal_ffi_texts_free(MalFfiTexts *texts) {
+    for (MalFfiTextBlock *block = texts->blocks; block != nullptr;) {
+        MalFfiTextBlock *next = block->next;
+        free(block);
+        block = next;
+    }
+    texts->blocks = nullptr;
+}
+
 __attribute__((always_inline)) bool mal_ffi_to_bytes(
     MalVm *vm, MalValue value, bool nullable, bool writable, const MalFfiSite *site,
     void **data, size_t *length, void **pin) {

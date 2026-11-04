@@ -360,8 +360,18 @@ enum { MAL_FFI_STRING_COUNTED = 1, MAL_FFI_STRING_BORROW = 2 };
 bool mal_ffi_to_string(
     MalVm *vm, MalValue value, bool nullable, uint32_t flags, const MalFfiSite *site, MalFfiString *out);
 void mal_ffi_string_release(MalFfiString *string);
-/** A heap copy the caller frees, for strings that outlive one conversion such as array elements. */
+/** A heap copy the caller frees, for strings that outlive one conversion such as global values. */
 bool mal_ffi_to_owned_string(MalVm *vm, MalValue value, const MalFfiSite *site, char **out);
+
+/**
+ * Encoded strings of one array input, packed into shared blocks that stay put until
+ * `mal_ffi_texts_free`. Zero-initialize before the first `mal_ffi_texts_add`.
+ */
+typedef struct MalFfiTexts {
+    struct MalFfiTextBlock *blocks;
+} MalFfiTexts;
+bool mal_ffi_texts_add(MalVm *vm, MalFfiTexts *texts, MalValue value, const MalFfiSite *site, char **out);
+void mal_ffi_texts_free(MalFfiTexts *texts);
 
 /**
  * The memory of an ArrayBuffer or view, which C may read and write until the call
