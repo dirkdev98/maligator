@@ -662,7 +662,8 @@ MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length) {
             vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, (const byte *) "C buffer is too large");
         return mal_value_new_undefined();
     }
-    MalArrayBufferObject *buffer = mal_array_buffer_object_new(
+    // The copy covers every visible byte before the buffer can be observed.
+    MalArrayBufferObject *buffer = mal_array_buffer_object_new_uninitialized(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
         (u32) length, (u32) length, false, false);
     if (length > 0) memcpy(buffer->data, data, length);
