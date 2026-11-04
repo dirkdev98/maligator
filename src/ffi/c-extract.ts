@@ -2,7 +2,9 @@ import type { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+	closeSync,
 	mkdtempSync,
+	openSync,
 	readFileSync,
 	readdirSync,
 	realpathSync,
@@ -87,23 +89,32 @@ function runCompiler(
 	input: CExtractionInput,
 	args: ReadonlyArray<string>,
 ): { status: number | null; stdout: Buffer; stderr: string } {
-	const result = spawnSync(
-		input.compiler.path,
-		toolArguments(input.compiler, [...args]),
-		{
-			env: input.environment,
-			maxBuffer: 1 << 30,
-			stdio: ["ignore", "pipe", "pipe"],
-		},
-	);
-	if (result.error !== undefined) {
-		throw new FfiError(`cannot run ${input.compiler.path}: ${result.error.message}`);
+	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-output-"));
+	const stdout = path.join(directory, "stdout");
+	const stderr = path.join(directory, "stderr");
+	const descriptors: Array<number> = [];
+	try {
+		descriptors.push(openSync(stdout, "w"));
+		descriptors.push(openSync(stderr, "w"));
+		const result = spawnSync(
+			input.compiler.path,
+			toolArguments(input.compiler, [...args]),
+			{
+				env: input.environment,
+				stdio: ["ignore", descriptors[0]!, descriptors[1]!],
+			},
+		);
+		if (result.error !== undefined)
+			throw new FfiError(`cannot run ${input.compiler.path}: ${result.error.message}`);
+		return {
+			status: result.status,
+			stdout: readFileSync(stdout),
+			stderr: readFileSync(stderr, "utf8"),
+		};
+	} finally {
+		for (const descriptor of descriptors) closeSync(descriptor);
+		rmSync(directory, { recursive: true, force: true });
 	}
-	return {
-		status: result.status,
-		stdout: result.stdout,
-		stderr: result.stderr.toString("utf8"),
-	};
 }
 
 function assertClang(compiler: ToolExecutable): void {
@@ -162,7 +173,7 @@ interface Preprocessed {
 }
 
 const LINE_MARKER = /^# (\d+) "((?:[^"\\]|\\.)*)"((?: \d+)*)$/;
-const DEFINE = /^#define ([A-Za-z_]\w*)(\()?(.*)$/;
+const DEFINE = /^#define ([A-Za-z_]\w*)(\()?/;
 
 function unescapeMarkerPath(text: string): string {
 	return text.replace(/\\(.)/g, "$1");
@@ -199,10 +210,6 @@ function preprocess(
 		let end = result.stdout.indexOf(10, start);
 		if (end < 0) end = result.stdout.length;
 		const directive = result.stdout[start] === 35;
-		if (directive && end - start > 8 * 1024 * 1024)
-			throw new FfiError(
-				`the preprocessor directive at ${file}:${line} exceeds the supported token size`,
-			);
 		const text = directive ? result.stdout.toString("utf8", start, end) : "";
 		start = end + 1;
 		const marker = LINE_MARKER.exec(text);
@@ -230,7 +237,7 @@ function preprocess(
 		}
 		const define = DEFINE.exec(text);
 		if (define !== null) {
-			let body = define[3]!.trim();
+			let body = text.slice(define[0].length).trim();
 			let parameters: Array<string> | undefined;
 			let variadic = false;
 			if (define[2] !== undefined) {

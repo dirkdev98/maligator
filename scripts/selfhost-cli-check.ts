@@ -725,10 +725,11 @@ function checkFfiLargeHeaders(): void {
 		.padEnd(1024, ".")
 		.repeat(17_000);
 	const header = path.join(include, "large.h");
+	const unusedMacro = `#define UNUSED_TEXT(value) "${"x".repeat(9 * 1024 * 1024)}"`;
 	const writeHeader = (text: string): void =>
 		writeFileSync(
 			header,
-			`/* ${text} */\n#define LARGE_CODE 7\nint large_read(int value);\n`,
+			`/* ${text} */\n${unusedMacro}\n#define LARGE_CODE 7\nint large_read(int value);\n`,
 		);
 	writeHeader(doc);
 	writeFileSync(path.join(directory, "large.c"), "");

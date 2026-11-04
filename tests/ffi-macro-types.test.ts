@@ -7,6 +7,33 @@ import { planBindings } from "../src/ffi/binding-plan.ts";
 import { extractCModel } from "../src/ffi/c-extract.ts";
 import { resolveCType } from "../src/ffi/c-model.ts";
 
+it("extracts usable declarations beside a large unused macro", () => {
+	const directory = mkdtempSync(path.join(tmpdir(), "mal-large-macro-"));
+	try {
+		writeFileSync(
+			path.join(directory, "api.h"),
+			`#define UNUSED_TEXT(value) "${"x".repeat(9 * 1024 * 1024)}"\nint read_value(int value);\n`,
+		);
+		const compiler = process.env.CC ?? "clang";
+		const version = spawnSync(compiler, ["--version"], { encoding: "utf8" });
+		expect(version.status, version.stderr).toBe(0);
+		const model = extractCModel({
+			compiler: { path: compiler, version: version.stdout.split("\n")[0]! },
+			environment: process.env,
+			headers: ["api.h"],
+			compileArguments: ["-I", directory],
+		});
+		expect(model.functions).toContainEqual(
+			expect.objectContaining({
+				name: "read_value",
+				returns: { kind: "integer", name: "int" },
+			}),
+		);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
 it("extracts macro-qualified function types without erasing native representations", () => {
 	const directory = mkdtempSync(path.join(tmpdir(), "mal-macro-types-"));
 	try {
