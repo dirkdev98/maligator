@@ -813,7 +813,11 @@ MalValue mal_ffi_result_handle(MalVm *vm, MalFfiResults *results,
     bool owned, bool fresh);
 void mal_ffi_results_finish(MalVm *vm, MalFfiResults *results);
 
-/** Resources nested in compound inputs stay rooted and pinned through the call. */
+/**
+ * Resources nested in compound inputs stay rooted and pinned through the call. The
+ * first few pin into inline slots; like the root span, the struct stays in place
+ * from initialization until release.
+ */
 struct MalFfiInputs {
     MalFfiRoots roots;
     MalValue *values;
@@ -822,6 +826,7 @@ struct MalFfiInputs {
     const void *operation;
     bool worker;
     bool rooted;
+    MalValue inline_values[8];
 };
 
 void mal_ffi_inputs_init(MalFfiInputs *inputs, const void *operation, bool worker);

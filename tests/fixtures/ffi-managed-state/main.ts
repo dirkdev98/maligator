@@ -387,6 +387,16 @@ check(
 	(await c.managed_many_async([state, state])) === 2,
 	"async arrays share pins for repeated handles",
 );
+const pinnedMany = Array.from({ length: 12 }, () => state);
+state.next_in = new Uint8Array([61, 67]);
+state.next_out = new Uint8Array(2);
+check(c.managed_many(pinnedMany) === 2, "arrays beyond the inline pins reach C");
+state.next_in = new Uint8Array([71, 73]);
+state.next_out = new Uint8Array(2);
+check(
+	(await c.managed_many_async(pinnedMany)) === 2,
+	"async arrays beyond the inline pins reach C",
+);
 state.next_in = new Uint8Array([59]);
 state.next_out = new Uint8Array(1);
 const indirect = await c.managed_indirect_async(state);

@@ -4573,8 +4573,13 @@ void mal_ffi_unpin_handle(void *pin) {
 }
 
 void mal_ffi_inputs_init(MalFfiInputs *inputs, const void *operation, bool worker) {
-    *inputs = (MalFfiInputs) {.operation = operation, .worker = worker, .rooted = true};
-    mal_ffi_root(&inputs->roots, nullptr, 0);
+    inputs->values = inputs->inline_values;
+    inputs->count = 0;
+    inputs->capacity = (i32) countof(inputs->inline_values);
+    inputs->operation = operation;
+    inputs->worker = worker;
+    inputs->rooted = true;
+    mal_ffi_root(&inputs->roots, inputs->values, 0);
 }
 
 void mal_ffi_inputs_unroot(MalFfiInputs *inputs) {
@@ -4592,11 +4597,15 @@ bool mal_ffi_input_handle(
     mal_gc_root(&root, &value, 1);
     bool ok = true;
     if (inputs->count == inputs->capacity) {
-        usize capacity = inputs->capacity == 0 ? 8 : (usize) inputs->capacity * 2;
+        usize capacity = (usize) inputs->capacity * 2;
         if (capacity > INT32_MAX) capacity = INT32_MAX;
-        MalValue *grown = inputs->count == INT32_MAX ? nullptr : realloc(inputs->values, capacity * sizeof(*grown));
+        bool inline_values = inputs->values == inputs->inline_values;
+        MalValue *grown = inputs->count == INT32_MAX ? nullptr
+            : inline_values ? malloc(capacity * sizeof(*grown))
+            : realloc(inputs->values, capacity * sizeof(*grown));
         if (grown == nullptr) ok = mal_ffi_out_of_memory(vm);
         else {
+            if (inline_values) memcpy(grown, inputs->inline_values, sizeof(inputs->inline_values));
             inputs->values = grown;
             inputs->capacity = (i32) capacity;
             inputs->roots.slots = grown;
@@ -4623,10 +4632,10 @@ void mal_ffi_inputs_release(MalVm *vm, MalFfiInputs *inputs, const MalFfiSite *s
         else mal_ffi_unpin_handle(handle);
     }
     mal_ffi_inputs_unroot(inputs);
-    free(inputs->values);
-    inputs->values = nullptr;
+    if (inputs->values != inputs->inline_values) free(inputs->values);
+    inputs->values = inputs->inline_values;
     inputs->count = 0;
-    inputs->capacity = 0;
+    inputs->capacity = (i32) countof(inputs->inline_values);
 }
 
 bool mal_ffi_handle_results_ready(MalVm *vm, const MalFfiHandleType *type, const MalFfiSite *site) {
