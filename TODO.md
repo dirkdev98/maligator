@@ -1905,6 +1905,25 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 - [ ] Remove measured marshalling, allocation, callback-dispatch, and unused binding
       build costs. Compare representative libraries against C and Bun, retaining
       output parity, matched toolchains, and CPU, memory, disk, and binary-size evidence.
+- [ ] Generate bindings from a reachable plan. `generateBindingUnit` builds its writer
+      and family-level facts from the full plan before selecting exports, so unused
+      handle fields, async twins and support code still reach generated C and can
+      widen runtime guards. Compute the closure the program needs (types,
+      destructors, views, fields, callback support, callable signatures, and cleanup
+      for returned handles) and derive effects from it; inspection, declarations and
+      development runtimes keep the full plan. Measure generated C and binary size.
+- [ ] Normalize callback facts during planning into explicit lifetime variants
+      (call-scoped, registration released by a destructor, replacement setter,
+      owner-rooted, close completion) with dispatch kept separate, so generation
+      reads resolved parameter references instead of reinterpreting `kept`, `owner`,
+      `replaced`, `closes`, `lookup` and `queued` per phase. Treat input/output
+      direction, ownership, owner linkage and cleanup obligations the same way.
+- [ ] Give planner diagnostics a code and fact path. Suggestion validation reruns the
+      planner, matches the human-readable message with a regex and retries without
+      the rejected suggestion.
+- [ ] Decode large clang declarations in one pass. `FfiJsonReader` rescans every
+      container above 256 KiB at each nesting level before parsing its children, so a
+      168k-element data table takes 2.6 s under Node but 42.5 s interpreted.
 
 # Actors and SMP
 
