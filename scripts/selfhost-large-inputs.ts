@@ -26,6 +26,7 @@ interface LargeInputCheckOptions {
 		timeoutMs?: number,
 	): SpawnSyncReturns<string>;
 	checkProfile(directory: string, command: "run" | "test"): void;
+	checkProfileCommands(): void;
 	waitForOutput(read: () => string, expected: string, timeoutMs: number): Promise<void>;
 }
 
@@ -343,6 +344,8 @@ server.listen(0, "127.0.0.1", () => { console.log("DX_HTTP_PORT " + server.addre
 		rmSync(dump, { force: true });
 	}
 	runBuilt(invoke(["build", "--config", config, "--production"]).stdout, editedExpected);
+	// Prepare the profile runtime separately from the large command's deadline.
+	options.checkProfileCommands();
 	for (const command of ["run", "test"] as const) {
 		const directory = path.join(reports, `large-profile-${command}`);
 		const result = invoke(

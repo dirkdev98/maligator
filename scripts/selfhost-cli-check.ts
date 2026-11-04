@@ -290,6 +290,75 @@ function checkProfile(directory: string, command: "run" | "test"): void {
 		throw new Error(`profile ${command} did not publish a valid completed capture`);
 }
 
+function checkProfileCommands(): void {
+	const profileConfig = "profile.build.mts";
+	writeFileSync(
+		path.join(project, profileConfig),
+		`export default {
+	entry: "profile-entry.mts",
+	engine: { eval: false, regexp: false, intl: { enabled: false } },
+	surface: { webPlatform: false, node: true },
+};
+`,
+	);
+	writeFileSync(
+		path.join(project, "profile-entry.mts"),
+		`if (typeof globalThis.RegExp !== "undefined" || typeof globalThis.Intl !== "undefined") throw new Error("profile engine feature mismatch");
+console.log("selfhost-profile RegExp=undefined Intl=undefined " + process.argv.slice(2).join("|"));
+console.log("PROFILE_APPLICATION_PID " + process.pid);
+`,
+	);
+	const runProfileDirectory = path.join(reports, "profile-run");
+	const profiledRun = invokeCaptured(
+		["run", "--profile", "--config", profileConfig, "--", "two words"],
+		{ MALIGATOR_PROFILE_DIRECTORY: runProfileDirectory },
+		300_000,
+	);
+	if (
+		profiledRun.status !== 0 ||
+		profiledRun.signal !== null ||
+		!profiledRun.stdout.includes(
+			"selfhost-profile RegExp=undefined Intl=undefined two words",
+		)
+	)
+		throw new Error(`profiled run failed:\n${profiledRun.stdout}\n${profiledRun.stderr}`);
+	checkApplicationPids(
+		profiledRun.stdout,
+		profiledRun.pid,
+		false,
+		"PROFILE_APPLICATION_PID",
+	);
+	checkProfile(runProfileDirectory, "run");
+	writeFileSync(
+		path.join(project, "profile.test.mts"),
+		`import { expect, test } from "maligator:test";
+test("profile preserves disabled engine features", () => {
+	expect(typeof globalThis.RegExp).toBe("undefined");
+	expect(typeof globalThis.Intl).toBe("undefined");
+	console.log("PROFILE_TEST_PID " + process.pid);
+});
+`,
+	);
+	const testProfileDirectory = path.join(reports, "profile-test");
+	const profiledTest = invokeCaptured(
+		["test", "--profile", "--config", profileConfig, "profile.test.mts"],
+		{ MALIGATOR_PROFILE_DIRECTORY: testProfileDirectory },
+	);
+	if (
+		profiledTest.status !== 0 ||
+		profiledTest.signal !== null ||
+		!profiledTest.stdout.includes("1 passed, 0 failed")
+	)
+		throw new Error(
+			`profiled tests failed:\n${profiledTest.stdout}\n${profiledTest.stderr}`,
+		);
+	checkApplicationPids(profiledTest.stdout, profiledTest.pid, false, "PROFILE_TEST_PID");
+	checkProfile(testProfileDirectory, "test");
+	console.log(
+		"ok   run and test profiles used separate AOT processes, disabled features, and valid captures",
+	);
+}
+
 async function waitForOutput(
 	read: () => string,
 	expected: string,
@@ -969,6 +1038,7 @@ if (largeInputsOnly) {
 			toolchainFreeEnvironment: { ...isolatedEnv, ...testOnlyEnv },
 			invoke: invokeCaptured,
 			checkProfile,
+			checkProfileCommands,
 			waitForOutput,
 		});
 		progress.complete();
@@ -1605,6 +1675,7 @@ test("passes a pointer-valued constant through a macro alias", () => {
 			toolchainFreeEnvironment: { ...isolatedEnv, ...testOnlyEnv },
 			invoke: invokeCaptured,
 			checkProfile,
+			checkProfileCommands,
 			waitForOutput,
 		});
 
@@ -1664,79 +1735,6 @@ ${readFileSync(path.join(project, fixture), "utf-8")}`,
 			);
 		console.log(
 			"ok   production build executed assets, eval, and forwarded arguments without a toolchain",
-		);
-
-		const profileConfig = "profile.build.mts";
-		writeFileSync(
-			path.join(project, profileConfig),
-			`export default {
-	entry: "profile-entry.mts",
-	engine: { eval: false, regexp: false, intl: { enabled: false } },
-	surface: { webPlatform: false, node: true },
-};
-`,
-		);
-		writeFileSync(
-			path.join(project, "profile-entry.mts"),
-			`if (typeof globalThis.RegExp !== "undefined" || typeof globalThis.Intl !== "undefined") throw new Error("profile engine feature mismatch");
-console.log("selfhost-profile RegExp=undefined Intl=undefined " + process.argv.slice(2).join("|"));
-console.log("PROFILE_APPLICATION_PID " + process.pid);
-`,
-		);
-		const runProfileDirectory = path.join(reports, "profile-run");
-		const profiledRun = invokeCaptured(
-			["run", "--profile", "--config", profileConfig, "--", "two words"],
-			{ MALIGATOR_PROFILE_DIRECTORY: runProfileDirectory },
-		);
-		if (
-			profiledRun.status !== 0 ||
-			profiledRun.signal !== null ||
-			!profiledRun.stdout.includes(
-				"selfhost-profile RegExp=undefined Intl=undefined two words",
-			)
-		)
-			throw new Error(
-				`profiled run failed:\n${profiledRun.stdout}\n${profiledRun.stderr}`,
-			);
-		checkApplicationPids(
-			profiledRun.stdout,
-			profiledRun.pid,
-			false,
-			"PROFILE_APPLICATION_PID",
-		);
-		checkProfile(runProfileDirectory, "run");
-		writeFileSync(
-			path.join(project, "profile.test.mts"),
-			`import { expect, test } from "maligator:test";
-test("profile preserves disabled engine features", () => {
-	expect(typeof globalThis.RegExp).toBe("undefined");
-	expect(typeof globalThis.Intl).toBe("undefined");
-	console.log("PROFILE_TEST_PID " + process.pid);
-});
-`,
-		);
-		const testProfileDirectory = path.join(reports, "profile-test");
-		const profiledTest = invokeCaptured(
-			["test", "--profile", "--config", profileConfig, "profile.test.mts"],
-			{ MALIGATOR_PROFILE_DIRECTORY: testProfileDirectory },
-		);
-		if (
-			profiledTest.status !== 0 ||
-			profiledTest.signal !== null ||
-			!profiledTest.stdout.includes("1 passed, 0 failed")
-		)
-			throw new Error(
-				`profiled tests failed:\n${profiledTest.stdout}\n${profiledTest.stderr}`,
-			);
-		checkApplicationPids(
-			profiledTest.stdout,
-			profiledTest.pid,
-			false,
-			"PROFILE_TEST_PID",
-		);
-		checkProfile(testProfileDirectory, "test");
-		console.log(
-			"ok   run and test profiles used separate AOT processes, disabled features, and valid captures",
 		);
 
 		const runOutput = invoke(["run", "--", "alpha", "two words", "--flag"]);
