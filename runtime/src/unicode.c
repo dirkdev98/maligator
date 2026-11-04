@@ -125,53 +125,116 @@ static bool unicode_case_context(const c16 *source, usize length, usize index, b
     return false;
 }
 
-MalUnicodeStatus mal_unicode_case(const c16 *source, usize length, bool upper, MalUnicodeLocale locale, c16 **output, usize *output_length) {
-    MalUnicodePoints points = {.limit = MAL_STRING_MAX_CODE_UNITS};
-    const u32 *table = upper ? mal_unicode_upper : mal_unicode_lower;
-    usize table_length = upper ? UNICODE_COUNT(mal_unicode_upper) : UNICODE_COUNT(mal_unicode_lower);
-    for (usize index = 0; index < length;) {
-        u32 cp;
-        usize width;
-        (void) mal_utf16_read_scalar(source, length, index, &cp, &width);
-        u32 special[3];
-        const u32 *mapping = nullptr;
-        usize count = 0;
-        if (!upper && cp == 0x3a3 &&
-            unicode_case_context(source, length, index, true, UNICODE_CONTEXT_CASED) &&
-            !unicode_case_context(source, length, index, false, UNICODE_CONTEXT_CASED)) {
-            special[0] = 0x3c2; mapping = special; count = 1;
+typedef struct UnicodeCaseInput {
+    const c16 *source;
+    usize length;
+    const u32 *table;
+    usize table_length;
+    bool upper;
+    MalUnicodeLocale locale;
+} UnicodeCaseInput;
+
+static UnicodeCaseInput unicode_case_input(
+    const c16 *source, usize length, bool upper, MalUnicodeLocale locale
+) {
+    return (UnicodeCaseInput) {
+        .source = source, .length = length,
+        .table = upper ? mal_unicode_upper : mal_unicode_lower,
+        .table_length = upper ? UNICODE_COUNT(mal_unicode_upper) : UNICODE_COUNT(mal_unicode_lower),
+        .upper = upper, .locale = locale,
+    };
+}
+
+static inline __attribute__((always_inline)) const u32 *unicode_case_mapping(
+    const UnicodeCaseInput *input, usize index, u32 cp, u32 special[3], usize *output_count
+) {
+    const u32 *mapping = nullptr;
+    usize count = 0;
+    if (!input->upper && cp == 0x3a3 &&
+        unicode_case_context(input->source, input->length, index, true, UNICODE_CONTEXT_CASED) &&
+        !unicode_case_context(input->source, input->length, index, false, UNICODE_CONTEXT_CASED)) {
+        special[0] = 0x3c2; mapping = special; count = 1;
+    }
+    if (input->locale == MAL_UNICODE_LOCALE_TURKIC) {
+        if (input->upper && cp == 0x69) { special[0] = 0x130; mapping = special; count = 1; }
+        else if (!input->upper && cp == 0x130) { special[0] = 0x69; mapping = special; count = 1; }
+        else if (!input->upper && cp == 0x307 && unicode_case_context(input->source, input->length, index, true, UNICODE_CONTEXT_AFTER_I)) { mapping = special; count = 0; }
+        else if (!input->upper && cp == 0x49 && !unicode_case_context(input->source, input->length, index, false, UNICODE_CONTEXT_BEFORE_DOT)) { special[0] = 0x131; mapping = special; count = 1; }
+    } else if (input->locale == MAL_UNICODE_LOCALE_LITHUANIAN) {
+        if (input->upper && cp == 0x307 && unicode_case_context(input->source, input->length, index, true, UNICODE_CONTEXT_SOFT_DOTTED)) { mapping = special; count = 0; }
+        else if (!input->upper && (cp == 0x49 || cp == 0x4a || cp == 0x12e) && unicode_case_context(input->source, input->length, index, false, UNICODE_CONTEXT_MORE_ABOVE)) {
+            special[0] = cp == 0x12e ? 0x12f : cp + 32; special[1] = 0x307; mapping = special; count = 2;
+        } else if (!input->upper && (cp == 0xcc || cp == 0xcd || cp == 0x128)) {
+            special[0] = 0x69; special[1] = 0x307; special[2] = cp == 0xcc ? 0x300 : cp == 0xcd ? 0x301 : 0x303; mapping = special; count = 3;
         }
-        if (locale == MAL_UNICODE_LOCALE_TURKIC) {
-            if (upper && cp == 0x69) { special[0] = 0x130; mapping = special; count = 1; }
-            else if (!upper && cp == 0x130) { special[0] = 0x69; mapping = special; count = 1; }
-            else if (!upper && cp == 0x307 && unicode_case_context(source, length, index, true, UNICODE_CONTEXT_AFTER_I)) { mapping = special; count = 0; }
-            else if (!upper && cp == 0x49 && !unicode_case_context(source, length, index, false, UNICODE_CONTEXT_BEFORE_DOT)) { special[0] = 0x131; mapping = special; count = 1; }
-        } else if (locale == MAL_UNICODE_LOCALE_LITHUANIAN) {
-            if (upper && cp == 0x307 && unicode_case_context(source, length, index, true, UNICODE_CONTEXT_SOFT_DOTTED)) { mapping = special; count = 0; }
-            else if (!upper && (cp == 0x49 || cp == 0x4a || cp == 0x12e) && unicode_case_context(source, length, index, false, UNICODE_CONTEXT_MORE_ABOVE)) {
-                special[0] = cp == 0x12e ? 0x12f : cp + 32; special[1] = 0x307; mapping = special; count = 2;
-            } else if (!upper && (cp == 0xcc || cp == 0xcd || cp == 0x128)) {
-                special[0] = 0x69; special[1] = 0x307; special[2] = cp == 0xcc ? 0x300 : cp == 0xcd ? 0x301 : 0x303; mapping = special; count = 3;
+    }
+    if (mapping == nullptr && cp < 0x80) {
+        special[0] = input->upper && cp >= 'a' && cp <= 'z' ? cp - 32
+            : !input->upper && cp >= 'A' && cp <= 'Z' ? cp + 32 : cp;
+        mapping = special;
+        count = 1;
+    }
+    if (mapping == nullptr) {
+        size row = unicode_row(input->table, input->table_length, 3, cp);
+        if (row < 0) { special[0] = cp; mapping = special; count = 1; }
+        else { mapping = mal_unicode_pool + input->table[row + 1]; count = input->table[row + 2]; }
+    }
+    *output_count = count;
+    return mapping;
+}
+
+MalTextBufferStatus mal_unicode_case(
+    const c16 *source, usize length, bool upper, MalUnicodeLocale locale,
+    MalTextBuffer *output, bool *changed
+) {
+    UnicodeCaseInput input = unicode_case_input(source, length, upper, locale);
+    *changed = false;
+    if (mal_text_buffer_hint_capacity(output, length) != MAL_TEXT_BUFFER_OK) return output->status;
+    for (usize index = 0; index < length;) {
+        if (*changed && locale == MAL_UNICODE_LOCALE_ROOT && source[index] < 0x80) {
+            usize end = index + 1;
+            while (end < length && source[end] < 0x80) end++;
+            if (mal_text_buffer_reserve(output, end - index) != MAL_TEXT_BUFFER_OK) return output->status;
+            if (output->utf16) {
+                c16 *units = (c16 *) output->data + output->length;
+                for (usize i = index; i < end; i++) {
+                    c16 unit = source[i];
+                    units[i - index] = upper && unit >= 'a' && unit <= 'z' ? unit - 32
+                        : !upper && unit >= 'A' && unit <= 'Z' ? unit + 32 : unit;
+                }
+            } else {
+                u8 *units = (u8 *) output->data + output->length;
+                for (usize i = index; i < end; i++) {
+                    c16 unit = source[i];
+                    units[i - index] = (u8) (upper && unit >= 'a' && unit <= 'z' ? unit - 32
+                        : !upper && unit >= 'A' && unit <= 'Z' ? unit + 32 : unit);
+                }
+            }
+            output->length += end - index;
+            index = end;
+            continue;
+        }
+        u32 cp, special[3];
+        usize width, count;
+        (void) mal_utf16_read_scalar(source, length, index, &cp, &width);
+        const u32 *mapping = unicode_case_mapping(&input, index, cp, special, &count);
+        if (!*changed && (count != 1 || mapping[0] != cp)) {
+            *changed = true;
+            if (mal_text_buffer_append_units(output, source, index) != MAL_TEXT_BUFFER_OK) return output->status;
+        }
+        if (*changed) {
+            for (usize mapped = 0; mapped < count; mapped++) {
+                u32 point = mapping[mapped];
+                if (point > 0xffff) {
+                    c16 pair[2];
+                    mal_utf16_emit_pair(point, pair);
+                    if (mal_text_buffer_append_units(output, pair, countof(pair)) != MAL_TEXT_BUFFER_OK) return output->status;
+                } else if (mal_text_buffer_push(output, (c16) point) != MAL_TEXT_BUFFER_OK) return output->status;
             }
         }
-        if (mapping == nullptr && cp < 0x80) {
-            special[0] = upper && cp >= 'a' && cp <= 'z' ? cp - 32
-                : !upper && cp >= 'A' && cp <= 'Z' ? cp + 32 : cp;
-            mapping = special;
-            count = 1;
-        }
-        if (mapping == nullptr) {
-            size row = unicode_row(table, table_length, 3, cp);
-            if (row < 0) { special[0] = cp; mapping = special; count = 1; }
-            else { mapping = mal_unicode_pool + table[row + 1]; count = table[row + 2]; }
-        }
-        for (usize mapped = 0; mapped < count; mapped++) if (!unicode_push(&points, mapping[mapped])) goto done;
         index += width;
     }
-    points.status = unicode_finish(&points, output, output_length);
- done:
-    free(points.data);
-    return points.status;
+    return output->status;
 }
 
 static bool unicode_decompose(MalUnicodePoints *points, u32 cp, bool compatibility) {

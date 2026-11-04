@@ -82,6 +82,11 @@ if (["range", "split", "regexp", "nested"].includes(mode)) {
 		"Twenty ASCII units, then é and more",
 		"Ab".repeat(127),
 		"Ab".repeat(130),
+		"K".repeat(33),
+		"ſ".repeat(35),
+		"中文😀".repeat(11),
+		"İﬃΣ".repeat(13),
+		"A".repeat(40) + "ΐ",
 	]) {
 		rows.push(visit(source(text), false), visit(source(text), true));
 	}

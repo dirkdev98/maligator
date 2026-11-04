@@ -1884,7 +1884,7 @@ static bool mal_builtin_string_segment_equals_units(
     return true;
 }
 
-static MalValue mal_builtin_string_unicode_result(MalVm *vm, MalString *source, usize source_start, const MalStringSegment *source_units, MalUnicodeStatus status, c16 *units, usize length, bool case_transform) {
+static MalValue mal_builtin_string_normalize_result(MalVm *vm, MalString *source, usize source_start, const MalStringSegment *source_units, MalUnicodeStatus status, c16 *units, usize length) {
     if (status != MAL_UNICODE_OK) {
         free(units);
         if (status == MAL_UNICODE_LENGTH_OVERFLOW) mal_builtin_string_throw_length(vm);
@@ -1892,13 +1892,6 @@ static MalValue mal_builtin_string_unicode_result(MalVm *vm, MalString *source, 
         return mal_value_new_undefined();
     }
     bool unchanged = mal_builtin_string_segment_equals_units(source_units, units, length);
-    if (case_transform) {
-        if (unchanged) MAL_PERF_COUNT(string_case_reuses);
-        else {
-            MAL_PERF_COUNT(string_case_changed_allocations);
-            MAL_PERF_ADD(string_case_changed_code_units, length);
-        }
-    }
     MalValue result = unchanged ? mal_builtin_string_slice(vm, source, source_start, source_units->length) : mal_builtin_string_from_units(vm, units, length);
     free(units);
     return result;
@@ -1930,7 +1923,7 @@ static MalValue mal_builtin_string_normalize_range_impl(
     c16 *output = nullptr;
     usize output_length = 0;
     MalUnicodeStatus status = mal_unicode_normalize(source, length, compatibility, compose, &output, &output_length);
-    MalValue result = mal_builtin_string_unicode_result(vm, string, start, &segment, status, output, output_length, false);
+    MalValue result = mal_builtin_string_normalize_result(vm, string, start, &segment, status, output, output_length);
     free(wide_scratch);
     free(range_scratch);
     return result;
@@ -2743,6 +2736,24 @@ static inline bool mal_builtin_string_ascii_case_word(u64 *word, bool to_upper, 
     return true;
 }
 
+static MalValue mal_builtin_string_unicode_case(
+    MalVm *vm, MalString *string, usize start, const c16 *source, usize length,
+    bool upper, MalUnicodeLocale locale
+) {
+    MalTextBuffer output = {.heap = &vm->heap};
+    bool changed;
+    MalTextBufferStatus status = mal_unicode_case(source, length, upper, locale, &output, &changed);
+    if (status != MAL_TEXT_BUFFER_OK) return mal_builtin_string_finish_text(vm, &output);
+    if (!changed) {
+        mal_text_buffer_dispose(&output);
+        MAL_PERF_COUNT(string_case_reuses);
+        return mal_builtin_string_slice(vm, string, start, length);
+    }
+    MAL_PERF_COUNT(string_case_changed_allocations);
+    MAL_PERF_ADD(string_case_changed_code_units, output.length);
+    return mal_builtin_string_finish_text(vm, &output);
+}
+
 // The general path's Unicode scratch would make every short ASCII conversion save and
 // restore every callee-saved register and guard the stack.
 static __attribute__((noinline)) MalValue mal_builtin_string_case_range_general(MalVm *vm, MalString *string, usize start, usize length, bool to_upper, MalUnicodeLocale locale) {
@@ -2815,10 +2826,8 @@ static __attribute__((noinline)) MalValue mal_builtin_string_case_range_general(
         c16 *range_scratch, *wide_scratch;
         MalStringSegment segment = mal_string_range_segment(string, start, length, stack, &range_scratch);
         const c16 *source = mal_string_segment_utf16(&segment, stack, &wide_scratch);
-        c16 *output = nullptr;
-        usize output_length = 0;
-        MalUnicodeStatus status = mal_unicode_case(source, length, to_upper, locale, &output, &output_length);
-        MalValue result = mal_builtin_string_unicode_result(vm, string, start, &segment, status, output, output_length, true);
+        MalValue result = mal_builtin_string_unicode_case(
+            vm, string, start, source, length, to_upper, locale);
         free(wide_scratch);
         free(range_scratch);
         return result;
