@@ -1051,6 +1051,8 @@ struct MalFfiState {
     MalFfiHandleObject *worker_closes;
     /** Callbacks libraries still hold, and the kept-function holder's reusable slots. */
     MalFfiKept *kept;
+    /** The prepared holder of kept functions, once created; the prepared values root it. */
+    MalValue kept_holder;
     /** Releases from a collection or another thread, run on the VM thread later. */
     _Atomic(MalFfiKept *) pending_releases;
     /** Callback invocations in progress, innermost last, numbered from 1. */
@@ -1925,26 +1927,50 @@ void mal_ffi_callback_results_free(MalFfiCallback *callback) {
         }
 }
 
+/**
+ * The array whose elements root kept functions by slot. It has no prototype and is
+ * written only through its dense elements, so no inherited setter can refuse a slot.
+ */
+static MalArrayObject *ffi_kept_holder(MalVm *vm, MalFfiState *state) {
+    if (mal_value_is_array_object(state->kept_holder))
+        return mal_value_to_array_object(state->kept_holder);
+    MalValue holder;
+    if (!ffi_prepared(vm, FFI_KEPT_IDENTITY, &holder)) {
+        holder = mal_value_from_array_object(mal_array_object_new(&vm->heap, nullptr));
+        char *identity = strdup(FFI_KEPT_IDENTITY);
+        if (identity == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return nullptr;
+        }
+        if (!ffi_prepare(vm, identity, holder)) return nullptr;
+    }
+    state->kept_holder = holder;
+    return mal_value_to_array_object(holder);
+}
+
+/** Slots are handed out in order or reused, so a store never leaves a gap. */
+static bool ffi_kept_store(MalVm *vm, MalArrayObject *holder, u32 slot, MalValue value) {
+    if (mal_array_object_dense_store_general(holder, slot, value) == MAL_ARRAY_DENSE_APPLIED)
+        return true;
+    mal_vm_throw_allocation_error(vm);
+    return false;
+}
+
 MalFfiCallback *mal_ffi_keep(MalVm *vm, MalValue function) {
-    MalValue held[2] = {function, mal_value_new_undefined()};
+    MalValue held[1] = {function};
     MalRootSpan root;
-    mal_gc_root(&root, held, 2);
+    mal_gc_root(&root, held, 1);
     MalFfiState *state = ffi_state(vm);
     MalFfiKept *kept = calloc(1, sizeof(*kept));
     bool ready = state != nullptr && kept != nullptr;
     if (ready) ffi_run_pending_releases(vm);
-    if (ready && !ffi_prepared(vm, FFI_KEPT_IDENTITY, &held[1])) {
-        // A holder without a prototype, so no inherited setter can refuse a slot.
-        held[1] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
-        char *identity = strdup(FFI_KEPT_IDENTITY);
-        ready = identity != nullptr && ffi_prepare(vm, identity, held[1]);
-        if (identity == nullptr) mal_vm_throw_allocation_error(vm);
-    }
+    MalArrayObject *holder = ready ? ffi_kept_holder(vm, state) : nullptr;
+    ready = holder != nullptr;
     u32 slot = 0;
     if (ready) {
         bool reused = state->free_count > 0;
         slot = reused ? state->free_slots[--state->free_count] : state->kept_slots++;
-        ready = mal_ffi_set_element(vm, held[1], (int32_t) slot, held[0]);
+        ready = ffi_kept_store(vm, holder, slot, held[0]);
         if (!ready && reused) state->free_count++;
     }
     mal_gc_unroot(&root);
@@ -1980,9 +2006,9 @@ static void ffi_owner_unlink(MalFfiKept *kept) {
 static void ffi_kept_slot_release(MalVm *vm, MalFfiKept *kept) {
     if (kept->slot == UINT32_MAX) return;
     MalFfiState *state = vm->ffi;
-    MalValue array;
-    if (ffi_prepared(vm, FFI_KEPT_IDENTITY, &array))
-        (void) mal_object_set(mal_value_to_object(array), mal_key_index(kept->slot), mal_value_new_undefined());
+    if (mal_value_is_array_object(state->kept_holder))
+        (void) ffi_kept_store(vm, mal_value_to_array_object(state->kept_holder), kept->slot,
+            mal_value_new_undefined());
     if (state->free_count == state->free_capacity) {
         u32 capacity = state->free_capacity == 0 ? 8 : state->free_capacity * 2;
         u32 *grown = realloc(state->free_slots, capacity * sizeof(*grown));
@@ -3067,9 +3093,8 @@ bool mal_ffi_close_prepare(
     bool ok = !mal_ffi_threw(vm)
         && mal_ffi_set_element(vm, roots[2], 0, roots[0])
         && mal_ffi_set_element(vm, roots[2], 1, roots[1]);
-    MalValue holder;
-    if (ok) ok = ffi_prepared(vm, FFI_KEPT_IDENTITY, &holder)
-        && mal_object_set(mal_value_to_object(holder), mal_key_index(((MalFfiKept *) callback)->slot), roots[2]);
+    MalArrayObject *holder = ok && vm->ffi != nullptr ? ffi_kept_holder(vm, vm->ffi) : nullptr;
+    if (ok) ok = holder != nullptr && ffi_kept_store(vm, holder, ((MalFfiKept *) callback)->slot, roots[2]);
     mal_gc_unroot(&root);
     if (!ok) {
         ffi_close_free(close);
