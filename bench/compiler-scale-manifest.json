@@ -127,6 +127,7 @@
 				"src/compiler/core/core-debug-view.ts",
 				"src/compiler/core/core-editor.ts",
 				"src/compiler/core/core-effect-proof-edits.ts",
+				"src/compiler/core/core-factory-projections.ts",
 				"src/compiler/core/core-format.ts",
 				"src/compiler/core/core-frontend-construction.ts",
 				"src/compiler/core/core-frontend.ts",
