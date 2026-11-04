@@ -37,7 +37,10 @@ typedef struct MalExecutorClientState {
 
 struct MalExecutorPool {
     pthread_mutex_t mutex;
-    pthread_cond_t changed;
+    /** Workers wait here; a submission wakes one, since any worker can take any job. */
+    pthread_cond_t work;
+    /** Client shutdown waits here for its running and queued jobs to settle. */
+    pthread_cond_t settled;
     pthread_t threads[MAL_EXECUTOR_MAX_THREADS];
     usize thread_count;
     usize clients;
@@ -87,7 +90,7 @@ static void *mal_executor_worker(void *data) {
         }
         if (client == nullptr) {
             if (pool->stopping) break;
-            pthread_cond_wait(&pool->changed, &pool->mutex);
+            pthread_cond_wait(&pool->work, &pool->mutex);
             continue;
         }
         mal_executor_ready_remove(pool, client);
@@ -106,7 +109,10 @@ static void *mal_executor_worker(void *data) {
         pool->working_bytes -= job->working_bytes;
         client->running--;
         free(job);
-        pthread_cond_broadcast(&pool->changed);
+        // This worker takes the next eligible job itself; another one is woken only for
+        // further queued work, which a freed concurrency or memory limit may release.
+        if (pool->queued > 1) pthread_cond_signal(&pool->work);
+        pthread_cond_broadcast(&pool->settled);
     }
     pthread_mutex_unlock(&pool->mutex);
     return nullptr;
@@ -119,7 +125,13 @@ static MalExecutorPool *mal_executor_pool_new(MalExecutorClass kind) {
         free(pool);
         return nullptr;
     }
-    if (pthread_cond_init(&pool->changed, nullptr) != 0) {
+    if (pthread_cond_init(&pool->work, nullptr) != 0) {
+        pthread_mutex_destroy(&pool->mutex);
+        free(pool);
+        return nullptr;
+    }
+    if (pthread_cond_init(&pool->settled, nullptr) != 0) {
+        pthread_cond_destroy(&pool->work);
         pthread_mutex_destroy(&pool->mutex);
         free(pool);
         return nullptr;
@@ -128,7 +140,8 @@ static MalExecutorPool *mal_executor_pool_new(MalExecutorClass kind) {
     sigset_t blocked, previous;
     sigfillset(&blocked);
     if (pthread_sigmask(SIG_BLOCK, &blocked, &previous) != 0) {
-        pthread_cond_destroy(&pool->changed);
+        pthread_cond_destroy(&pool->settled);
+        pthread_cond_destroy(&pool->work);
         pthread_mutex_destroy(&pool->mutex);
         free(pool);
         return nullptr;
@@ -140,7 +153,8 @@ static MalExecutorPool *mal_executor_pool_new(MalExecutorClass kind) {
     }
     (void) pthread_sigmask(SIG_SETMASK, &previous, nullptr);
     if (pool->thread_count == 0) {
-        pthread_cond_destroy(&pool->changed);
+        pthread_cond_destroy(&pool->settled);
+        pthread_cond_destroy(&pool->work);
         pthread_mutex_destroy(&pool->mutex);
         free(pool);
         return nullptr;
@@ -204,7 +218,7 @@ bool mal_executor_submit(MalExecutorClient *client, MalExecutorRun run,
     pool->queued++;
     pool->queued_bytes += queued_bytes;
     mal_executor_ready_add(pool, state);
-    pthread_cond_broadcast(&pool->changed);
+    pthread_cond_signal(&pool->work);
     pthread_mutex_unlock(&pool->mutex);
     return true;
 }
@@ -225,7 +239,7 @@ bool mal_executor_cancel(MalExecutorClient *client, void *data) {
         pool->queued_bytes -= job->queued_bytes;
         if (state->head == nullptr) mal_executor_ready_remove(pool, state);
         free(job);
-        pthread_cond_broadcast(&pool->changed);
+        pthread_cond_broadcast(&pool->settled);
         pthread_mutex_unlock(&pool->mutex);
         return true;
     }
@@ -262,7 +276,7 @@ void mal_executor_client_shutdown(MalExecutorClient *client) {
         }
     }
     mal_executor_ready_add(pool, state);
-    pthread_cond_broadcast(&pool->changed);
+    pthread_cond_broadcast(&pool->work);
     pthread_mutex_unlock(&pool->mutex);
     while (queued != nullptr) {
         MalExecutorJob *next = queued->next;
@@ -272,7 +286,7 @@ void mal_executor_client_shutdown(MalExecutorClient *client) {
     }
     pthread_mutex_lock(&pool->mutex);
     while (state->running != 0 || state->queued != 0)
-        pthread_cond_wait(&pool->changed, &pool->mutex);
+        pthread_cond_wait(&pool->settled, &pool->mutex);
     pthread_mutex_unlock(&pool->mutex);
 }
 
@@ -289,10 +303,11 @@ void mal_executor_client_free(MalExecutorClient *client) {
         }
         pthread_mutex_lock(&pool->mutex);
         pool->stopping = true;
-        pthread_cond_broadcast(&pool->changed);
+        pthread_cond_broadcast(&pool->work);
         pthread_mutex_unlock(&pool->mutex);
         for (usize i = 0; i < pool->thread_count; i++) pthread_join(pool->threads[i], nullptr);
-        pthread_cond_destroy(&pool->changed);
+        pthread_cond_destroy(&pool->settled);
+        pthread_cond_destroy(&pool->work);
         pthread_mutex_destroy(&pool->mutex);
         free(pool);
     }
