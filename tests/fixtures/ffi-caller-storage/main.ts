@@ -97,6 +97,18 @@ check(
 	copied.value === 11 && caller_copy_aligned(copied) === 1,
 	"copied handles meet C alignment",
 );
+const readCopy = (handle: { readonly value: number }): number => handle.value;
+let copyTotal = 0;
+for (let index = 0; index < 64; index++) copyTotal += readCopy(copied);
+check(copyTotal === 64 * 11, "repeated handle field reads reach the C value");
+const copyPrototype = Object.getPrototypeOf(copied) as object;
+const copyField = Object.getOwnPropertyDescriptor(copyPrototype, "value")!;
+Object.defineProperty(copyPrototype, "value", { configurable: true, get: () => -1 });
+check(readCopy(copied) === -1, "a redefined field accessor replaces a warm read");
+Object.defineProperty(copyPrototype, "value", copyField);
+check(readCopy(copied) === 11, "the restored field accessor reads C again");
+Object.defineProperty(copied, "value", { configurable: true, value: 5 });
+check(readCopy(copied) === 5, "an own property shadows the handle field");
 copied[Symbol.dispose]();
 
 for (const count of [0, 1, 63, 64, 65, 129]) {

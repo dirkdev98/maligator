@@ -4008,10 +4008,17 @@ static inline __attribute__((always_inline)) bool mal_vm_probe_named_read(
 }
 
 /** Whether an ordinary receiver still resolves `key` to the row's inherited accessor. */
+/** Receivers whose own properties and prototype follow ordinary object semantics. */
+static inline bool mal_vm_accessor_row_receiver(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_OBJECT) ||
+        mal_value_is_heap_type(value, MAL_HEAP_FFI_HANDLE_OBJECT);
+}
+
 static inline bool mal_vm_inherited_accessor_row_holds(
     MalValue object_value, MalValue key_value, const MalInlineCache *ic
 ) {
-    if (key_value != ic->key || !mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
+    if (key_value != ic->key || !mal_vm_accessor_row_receiver(object_value) ||
+        mal_value_heap_type(object_value) != ic->receiver_type) {
         return false;
     }
     const MalObject *object = mal_value_to_object(object_value);

@@ -6557,7 +6557,7 @@ static bool mal_ic_try_record_inherited_getter(
     MalValue receiver, MalValue key_value, MalPropertyResolution resolution,
     MalInlineCache *ic
 ) {
-    if (mal_value_heap_type(receiver) != MAL_HEAP_OBJECT ||
+    if (!mal_vm_accessor_row_receiver(receiver) ||
         !mal_value_is_callable(resolution.desc.getter) ||
         resolution.holder == nullptr ||
         resolution.holder->header.type != MAL_HEAP_OBJECT) {
@@ -6592,7 +6592,7 @@ static bool mal_ic_try_record_inherited_getter(
     ic->prim_kind = 0;
     ic->megamorphic = false;
     ic->mode = MAL_IC_MODE_INHERITED_GETTER;
-    ic->receiver_type = MAL_HEAP_OBJECT;
+    ic->receiver_type = (u8) mal_value_heap_type(receiver);
     MAL_PERF_COUNT(ic_inherited_getter_fills);
     return true;
 }
@@ -6801,8 +6801,7 @@ bool mal_vm_probe_accessor_read_miss(
     MalKey key = mal_key_from_value(key_value);
     bool recorded = false;
     // Exotic and primitive receivers decline too: the site's own access serves them.
-    if (refills <= MAL_ACCESSOR_PROBE_REFILL_LIMIT &&
-        mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
+    if (refills <= MAL_ACCESSOR_PROBE_REFILL_LIMIT && mal_vm_accessor_row_receiver(receiver)) {
         MalObject *object = mal_value_to_object(receiver);
         if (setter) {
             recorded = mal_ic_try_record_inherited_setter(object, key, key_value, ic);
