@@ -1118,6 +1118,7 @@ static MalValue mal_node_child_error_with(MalVm *vm, MalIntrinsic proto, const b
 }
 
 static void mal_node_child_maybe_close(MalVm *vm, MalNodeChild *child);
+static bool mal_node_child_observe_exit(MalVm *vm, MalNodeChild *child);
 static MalValue mal_node_exec_output(MalVm *vm, MalNodeChildPipe *pipe, MalValue encoding);
 
 static void mal_node_pipe_read(MalVm *vm, MalNodeChildPipe *pipe) {
@@ -1146,7 +1147,8 @@ static void mal_node_pipe_read(MalVm *vm, MalNodeChildPipe *pipe) {
         (void) mal_node_pipe_arm(vm, pipe);
         return;
     }
-    MalValue roots[] = {pipe->stream, mal_value_new_undefined()};
+    MalValue roots[] = {pipe->stream, mal_value_new_undefined(), child->object};
+    int index = pipe->index;
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     if (count > 0) {
@@ -1163,13 +1165,27 @@ static void mal_node_pipe_read(MalVm *vm, MalNodeChildPipe *pipe) {
             }
         } else {
             roots[1] = mal_node_buffer_from_owned_bytes(vm, bytes, (usize) count);
-            pipe->paused = !mal_node_stream_push_chunk(vm, roots[0], roots[1]);
-            if (!pipe->paused) (void) mal_node_pipe_arm(vm, pipe);
+            bool paused = !mal_node_stream_push_chunk(vm, roots[0], roots[1]);
+            // A data listener may destroy both readables and release the child.
+            child = mal_node_child_find(vm, roots[2]);
+            if (child != nullptr) {
+                pipe = &child->pipes[index];
+                pipe->paused = paused;
+                if (!paused && pipe->fd >= 0) (void) mal_node_pipe_arm(vm, pipe);
+            }
         }
     } else {
+        bool observe_exit = count == 0 && !child->exited;
         if (!child->exec) free(bytes);
         mal_node_pipe_close_fd(vm, pipe);
         mal_node_stream_push_chunk(vm, roots[0], mal_value_new_null());
+        // EOF already woke the reactor. Stream callbacks can release the child,
+        // so reacquire it before observing exit instead of waiting for a timer.
+        if (observe_exit && vm->completion.kind != MAL_COMPLETION_THROW) {
+            child = mal_node_child_find(vm, roots[2]);
+            if (child != nullptr && !child->exited)
+                mal_node_child_observe_exit(vm, child);
+        }
     }
     mal_gc_unroot(&root);
 }
@@ -1208,7 +1224,8 @@ static void mal_node_pipe_finish_end(MalVm *vm, MalNodeChildPipe *pipe) {
 }
 
 static void mal_node_pipe_complete_write(MalVm *vm, MalNodeChildPipe *pipe, int error) {
-    MalValue roots[] = {pipe->write_callback, mal_value_new_undefined()};
+    MalValue roots[] = {pipe->write_callback, mal_value_new_undefined(), pipe->child->object};
+    int index = pipe->index;
     pipe->write_callback = mal_value_new_undefined();
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -1222,8 +1239,12 @@ static void mal_node_pipe_complete_write(MalVm *vm, MalNodeChildPipe *pipe, int 
     if (mal_value_is_callable(roots[0])) {
         mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), roots + 1, error != 0 ? 1 : 0);
     }
+    MalNodeChild *child = mal_node_child_find(vm, roots[2]);
+    if (child != nullptr && error == 0 && vm->completion.kind != MAL_COMPLETION_THROW) {
+        pipe = &child->pipes[index];
+        if (pipe->ending) mal_node_pipe_finish_end(vm, pipe);
+    }
     mal_gc_unroot(&root);
-    if (error == 0 && pipe->ending && vm->completion.kind != MAL_COMPLETION_THROW) mal_node_pipe_finish_end(vm, pipe);
 }
 
 bool mal_node_child_process_drain(MalVm *vm) {
@@ -1534,25 +1555,21 @@ static void mal_node_child_flush_stdio(MalVm *vm, MalNodeChild *child) {
     }
 }
 
-static MalValue mal_node_child_poll_task(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) self; (void) args; (void) argc; (void) nt;
-    MalValue object = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
-    MalNodeChild *child = mal_node_child_find(vm, object);
-    if (child == nullptr || child->exited) return mal_value_new_undefined();
-    child->poll_timer = 0;
+static bool mal_node_child_observe_exit(MalVm *vm, MalNodeChild *child) {
+    MalValue object = child->object;
     bool finished = mal_proc_poll(&child->process, &child->result);
     if (child->process.launched && !child->spawn_emitted) {
         child->spawn_emitted = true;
         mal_node_child_emit(vm, object, "spawn", nullptr, 0);
     }
     bool listener_threw = vm->completion.kind == MAL_COMPLETION_THROW;
-    if (!finished) {
-        if (!listener_threw) mal_node_child_arm(vm, child, callee, 5);
-        return mal_value_new_undefined();
-    }
+    if (!finished) return false;
     child->exited = true;
     child->dispatching_exit = true;
+    if (child->poll_timer != 0) {
+        mal_host_clear_timeout(vm, child->poll_timer);
+        child->poll_timer = 0;
+    }
     if (child->timeout_timer != 0) {
         mal_host_clear_timeout(vm, child->timeout_timer);
         child->timeout_timer = 0;
@@ -1597,6 +1614,18 @@ child_done:
     child->dispatching_exit = false;
     if (vm->completion.kind != MAL_COMPLETION_THROW) mal_node_child_maybe_close(vm, child);
     mal_gc_unroot(&root);
+    return true;
+}
+
+static MalValue mal_node_child_poll_task(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    MalValue object = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    MalNodeChild *child = mal_node_child_find(vm, object);
+    if (child == nullptr || child->exited) return mal_value_new_undefined();
+    child->poll_timer = 0;
+    if (!mal_node_child_observe_exit(vm, child) && vm->completion.kind != MAL_COMPLETION_THROW)
+        mal_node_child_arm(vm, child, callee, 5);
     return mal_value_new_undefined();
 }
 

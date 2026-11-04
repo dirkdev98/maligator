@@ -140,6 +140,12 @@ the performance entrypoint supersedes them as the normal experiment and acceptan
 workflow. None of these commands updates `bench/baseline.json`.
 
 Smoke and quick reports are screening evidence, not acceptance.
+Pass `--bun /absolute/path/bun` to `bench:performance -- gap` to include Bun on
+the same frozen work. Reports retain Bun's executable identity, rotate host order,
+and separate kernel samples from process wall time. Bun's separate resource
+probes use ordinary execution. Keep the selected workload and scale unchanged
+when comparing a retained Maligator binary with a later revision.
+
 Headline timing excludes diagnostics. RSS is process-wide; Maligator allocation and
 collection deltas cover the measured window, while its GC pause and peak-live values
 cover the separate resource process. Node allocation is sampled and is not directly

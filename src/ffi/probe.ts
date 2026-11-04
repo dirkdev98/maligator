@@ -50,7 +50,7 @@ export interface FfiProbeReport {
 }
 
 /** Execute the selected tests and retain evidence before a caller accepts a snapshot. */
-export function runFfiProbe(
+export async function runFfiProbe(
 	options: {
 		readonly path: string;
 		readonly projectRoot: string;
@@ -60,8 +60,8 @@ export function runFfiProbe(
 		readonly environment: NodeJS.ProcessEnv;
 		readonly libraries: ReadonlyArray<PreparedLibrary>;
 	},
-	execute: (options: IsolatedTestExecutionOptions) => TestCommandSummary,
-): FfiProbeReport {
+	execute: (options: IsolatedTestExecutionOptions) => Promise<TestCommandSummary>,
+): Promise<FfiProbeReport> {
 	const session = new FrontendCompilationSession();
 	const inputs = new Map<string, FrontendDependencyIdentity>();
 	const stdout: Array<string> = [];
@@ -111,7 +111,7 @@ export function runFfiProbe(
 			for (const input of library.library.linkInputs)
 				if (input.kind === "archive" || input.kind === "shared") snapshot(input.path);
 		}
-		summary = execute({
+		summary = await execute({
 			environment,
 			timeoutMs: options.timeoutMs,
 			stdout: (text) => stdout.push(text),

@@ -80,6 +80,7 @@ tests/native/gc-weak-cleanup.test.ts
 tests/native/platform-execution.test.ts
 tests/native/node-async-hooks.test.ts
 tests/native/node-scheduling.test.ts
+tests/native/node-child-process-lifecycle.test.ts
 tests/native/host-fairness.test.ts
 tests/native/promise-pool.test.ts
 tests/native/readable-stream.test.ts

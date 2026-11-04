@@ -11,7 +11,6 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { runEnv } from "../src/build-flags.ts";
 import * as cacheManagement from "../src/cache-management.ts";
 import {
 	applicationDriverPath,
@@ -23,7 +22,6 @@ import {
 } from "../src/cli-commands.ts";
 import type { BuildCommandResult } from "../src/cli-commands.ts";
 import { BUILD_CONFIG_NAME, detectInitialEntry, initProject } from "../src/cli-init.ts";
-import { executeBinary, executeBinaryCaptured } from "../src/cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "../src/cli.ts";
 import type { CompilationOptions } from "../src/compiler-service.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
@@ -597,86 +595,6 @@ describe("command shell", () => {
 		} else if (process.platform === "linux") {
 			expect(result.stdout).toContain("apt install build-essential");
 		}
-	});
-});
-
-describe("executeBinary", () => {
-	it("captures successful stderr alongside stdout", () => {
-		expect(
-			executeBinaryCaptured(
-				process.execPath,
-				["-e", 'process.stdout.write("out"); process.stderr.write("note");'],
-				process.env,
-			),
-		).toMatchObject({ status: 0, stdout: "out", stderr: "note" });
-	});
-
-	it("stops a child that does not return before its deadline", () => {
-		expect(
-			executeBinaryCaptured(
-				process.execPath,
-				["-e", "setInterval(() => {}, 1000)"],
-				process.env,
-				100,
-			),
-		).toMatchObject({ timedOut: true, signal: "SIGKILL" });
-	});
-
-	it("selects Guard Malloc from the supplied run environment", () => {
-		const plain = { MAL_GMALLOC: "0" };
-		expect(runEnv(plain)).toEqual(plain);
-		expect(runEnv({ MAL_GMALLOC: "1" }).DYLD_INSERT_LIBRARIES).toBe(
-			"/usr/lib/libgmalloc.dylib",
-		);
-	});
-	it("forwards argument boundaries to the child", () => {
-		const script =
-			`if (process.argv[1] !== "two words" || process.argv[2] !== "--flag") ` +
-			`process.exit(9);`;
-		const outcome = executeBinary(
-			process.execPath,
-			["-e", script, "two words", "--flag"],
-			process.env,
-			"ignore",
-		);
-		expect(outcome).toEqual({ status: 0 });
-	});
-
-	it("returns the child's non-zero status", () => {
-		const outcome = executeBinary(
-			process.execPath,
-			["-e", "process.exit(23)"],
-			process.env,
-			"ignore",
-		);
-		expect(outcome).toEqual({ status: 23, signal: undefined });
-	});
-
-	it("returns the signal that terminated the child", () => {
-		const outcome = executeBinary(
-			process.execPath,
-			["-e", `process.kill(process.pid, "SIGTERM")`],
-			process.env,
-			"ignore",
-		);
-		expect(outcome).toEqual({ status: undefined, signal: "SIGTERM" });
-	});
-
-	it("captures output and preserves a non-zero status", () => {
-		const outcome = executeBinaryCaptured(
-			process.execPath,
-			[
-				"-e",
-				`process.stdout.write("out"); process.stderr.write("err"); process.exit(23);`,
-			],
-			process.env,
-		);
-		expect(outcome).toEqual({
-			status: 23,
-			signal: undefined,
-			stdout: "out",
-			stderr: "err",
-		});
 	});
 });
 

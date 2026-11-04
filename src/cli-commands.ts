@@ -55,7 +55,7 @@ import {
 } from "./cache-management.ts";
 import { maligatorCacheDirectory, MaligatorCacheRootError } from "./cache-root.ts";
 import { BUILD_CONFIG_NAME, initProject, InitError } from "./cli-init.ts";
-import { executeBinary, executeBinaryCaptured } from "./cli-run.ts";
+import { executeBinary, executeBinaryReported } from "./cli-run.ts";
 import type { RunOutcome } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
 import type {
@@ -2180,23 +2180,18 @@ function prepareLinkedTestHost(
 	};
 }
 
-function executeIsolatedTests(
+async function executeIsolatedTests(
 	command: TestCommand,
 	context: CommandContext,
 	config: ResolvedBuildConfig,
 	packagedRunner?: DevelopmentRunner,
 	options: IsolatedTestExecutionOptions = {},
-): TestCommandSummary {
+): Promise<TestCommandSummary> {
 	const environment = options.environment ?? process.env;
 	const stdout =
 		options.stdout ??
 		((text: string) => {
 			process.stdout.write(text);
-		});
-	const stderr =
-		options.stderr ??
-		((text: string) => {
-			process.stderr.write(text);
 		});
 	// A packaged runner cannot contain C library bindings, so these tests build one.
 	const libraries =
@@ -2243,24 +2238,15 @@ function executeIsolatedTests(
 		wirePaths,
 	});
 	const executionStartedAt = Date.now();
-	const outcome = executeBinaryCaptured(
-		runner,
-		args,
-		runEnv(environment),
-		options.timeoutMs,
-	);
+	const outcome = await executeBinaryReported(runner, args, runEnv(environment), {
+		timeoutMs: options.timeoutMs,
+		resultPrefix: ISOLATED_TEST_RESULT_PREFIX,
+		stdout: options.stdout,
+		stderr: options.stderr,
+	});
 	const executionMs = Date.now() - executionStartedAt;
 	options.onExecution?.(outcome, executionMs);
-	if (outcome.stderr !== "") stderr(outcome.stderr);
-	const outputLines = outcome.stdout.split("\n");
-	const resultLine = outputLines.find((line) =>
-		line.startsWith(ISOLATED_TEST_RESULT_PREFIX),
-	);
-	const applicationOutput = outputLines
-		.filter((line) => !line.startsWith(ISOLATED_TEST_RESULT_PREFIX))
-		.join("\n");
-	if (applicationOutput !== "") stdout(applicationOutput);
-	if (outcome.timedOut || outcome.status !== 0 || resultLine === undefined) {
+	if (outcome.timedOut || outcome.status !== 0 || outcome.result === undefined) {
 		commandError(
 			`error: isolated test process ${
 				outcome.timedOut
@@ -2268,14 +2254,12 @@ function executeIsolatedTests(
 					: outcome.signal
 						? `received ${outcome.signal}`
 						: `exited with ${outcome.status ?? "unknown"}`
-			}${resultLine === undefined ? " without publishing a test result" : ""}`,
+			}${outcome.result === undefined ? " without publishing a test result" : ""}`,
 		);
 	}
 	let testResult: TestRunResult;
 	try {
-		testResult = JSON.parse(
-			resultLine.slice(ISOLATED_TEST_RESULT_PREFIX.length),
-		) as TestRunResult;
+		testResult = JSON.parse(outcome.result) as TestRunResult;
 	} catch (error) {
 		commandError(
 			`error: isolated test result was invalid: ${error instanceof Error ? error.message : String(error)}`,
@@ -2297,11 +2281,11 @@ function executeIsolatedTests(
 	);
 }
 
-function executeProfiledTests(
+async function executeProfiledTests(
 	command: TestCommand,
 	context: CommandContext,
 	config: ResolvedBuildConfig,
-): TestCommandSummary {
+): Promise<TestCommandSummary> {
 	const libraries = prepareConfiguredLibraries(
 		config,
 		context,
@@ -2395,35 +2379,29 @@ function executeProfiledTests(
 	);
 	const capture = createProfileCapture("test", profile);
 	const executionStartedAt = Date.now();
-	const outcome = executeBinaryCaptured(binary, [], {
-		...runEnv(),
-		...capture.environment,
-		...compilerProfileRuntimeEnvironment(command),
-	});
-	const executionMs = Date.now() - executionStartedAt;
-	if (outcome.stderr !== "") process.stderr.write(outcome.stderr);
-	const outputLines = outcome.stdout.split("\n");
-	const resultLine = outputLines.find((line) =>
-		line.startsWith(PROFILED_TEST_RESULT_PREFIX),
+	const outcome = await executeBinaryReported(
+		binary,
+		[],
+		{
+			...runEnv(),
+			...capture.environment,
+			...compilerProfileRuntimeEnvironment(command),
+		},
+		{ resultPrefix: PROFILED_TEST_RESULT_PREFIX },
 	);
-	const applicationOutput = outputLines
-		.filter((line) => !line.startsWith(PROFILED_TEST_RESULT_PREFIX))
-		.join("\n");
-	if (applicationOutput !== "") process.stdout.write(applicationOutput);
-	if (outcome.status !== 0 || resultLine === undefined) {
+	const executionMs = Date.now() - executionStartedAt;
+	if (outcome.status !== 0 || outcome.result === undefined) {
 		commandError(
 			`error: production-profile test process ${
 				outcome.signal
 					? `received ${outcome.signal}`
 					: `exited with ${outcome.status ?? "unknown"}`
-			}${resultLine === undefined ? " without publishing a test result" : ""}`,
+			}${outcome.result === undefined ? " without publishing a test result" : ""}`,
 		);
 	}
 	let testResult: TestRunResult;
 	try {
-		testResult = JSON.parse(
-			resultLine.slice(PROFILED_TEST_RESULT_PREFIX.length),
-		) as TestRunResult;
+		testResult = JSON.parse(outcome.result) as TestRunResult;
 	} catch (error) {
 		commandError(
 			`error: production-profile test result was invalid: ${error instanceof Error ? error.message : String(error)}`,
@@ -2520,7 +2498,7 @@ export async function runCli(
 			return;
 		}
 		if (command.kind === "ffi") {
-			runFfiCommand(command, context);
+			await runFfiCommand(command, context);
 			return;
 		}
 		if (command.kind === "build") {
@@ -2596,10 +2574,10 @@ export async function runCli(
 					);
 				}
 				result = command.profile
-					? executeProfiledTests(command, context, config)
+					? await executeProfiledTests(command, context, config)
 					: developmentRunner?.inProcess === true
 						? await executeTestCommand(command, context, config)
-						: executeIsolatedTests(command, context, config, developmentRunner);
+						: await executeIsolatedTests(command, context, config, developmentRunner);
 			} catch (error) {
 				commandError(`error: ${error instanceof Error ? error.message : String(error)}`);
 			}
@@ -2639,7 +2617,10 @@ export async function runCli(
 /** Where `ffi types` writes declarations unless `--out` names another file. */
 const FFI_DECLARATIONS_NAME = "maligator-ffi.d.ts";
 
-function runFfiCommand(command: FfiCommand, context: CommandContext): void {
+async function runFfiCommand(
+	command: FfiCommand,
+	context: CommandContext,
+): Promise<void> {
 	const projectRoot = process.cwd();
 	try {
 		const config = loadBuildConfig(command.configPath, projectRoot, context.stripTypes);
@@ -2692,7 +2673,7 @@ function runFfiCommand(command: FfiCommand, context: CommandContext): void {
 					compileConcurrency: 1,
 					profile: false,
 				};
-				const probe = runFfiProbe(
+				const probe = await runFfiProbe(
 					{
 						path: probePath,
 						projectRoot,

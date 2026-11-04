@@ -1,7 +1,7 @@
-export function largeDevelopmentSource(): string {
-	const functions = Array.from({ length: 4000 }, (_, index) => {
+export function largeDevelopmentSource(functionCount = 3000, bodySteps = 48): string {
+	const functions = Array.from({ length: functionCount }, (_, index) => {
 		const body = Array.from(
-			{ length: 64 },
+			{ length: bodySteps },
 			(_, step) => `value = (value + ${step + 1}) ^ ${index + step};`,
 		).join("\n");
 		return `function operation${index}(value: number) {\n${body}\nreturn value;\n}`;

@@ -15,8 +15,10 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { artifactFileDigest } from "../src/artifact-store.ts";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
+import { resolvePathExecutable } from "../src/toolchain.ts";
 import {
 	PerformanceProcessInterruptedError,
 	runBoundedProcess,
@@ -55,6 +57,7 @@ export interface KernelOutput {
 	readonly warmupMs: ReadonlyArray<number>;
 	readonly allocatedBytes?: number;
 	readonly collections?: number;
+	readonly processWallMs?: number;
 }
 
 interface TimedKernelSample {
@@ -62,6 +65,7 @@ interface TimedKernelSample {
 	readonly warmupMs: ReadonlyArray<number>;
 	readonly allocatedBytes?: number;
 	readonly collections?: number;
+	readonly processWallMs?: number;
 }
 
 interface ResourceSample {
@@ -130,6 +134,7 @@ export interface CompilerHostGapKernelResult extends Omit<
 		readonly resource?: ResourceSample;
 		readonly resourceFailure?: string;
 	};
+	readonly bun?: CompilerHostGapKernelResult["node"];
 	readonly ratio: number;
 	readonly hostGapMs: number;
 	readonly deltaNsPerOperation: number;
@@ -178,6 +183,7 @@ interface FullCompilerAnalysis {
 }
 
 interface Options {
+	readonly bun?: string;
 	readonly samples: number;
 	readonly targetNodeMs: number;
 	readonly warmupBlocks: number;
@@ -200,6 +206,7 @@ interface Options {
 const HELP = `Usage: npm run bench:performance -- gap [options]
 
 Options:
+  --bun PATH                 include Bun with identical work and rotated host order
   --samples N                paired timing samples per host (default: 5)
   --target-node-ms N         minimum calibrated Node kernel time (default: 40)
   --warmup-blocks N          recorded warmup blocks per process (default: 5)
@@ -267,9 +274,13 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 	let plan = false;
 	let selfCompile: string | undefined;
 	let experimentManifest: string | undefined;
+	let bun: string | undefined;
 	for (let index = 0; index < args.length; index++) {
 		const option = args[index]!;
-		if (option === "--samples") {
+		if (option === "--bun") {
+			bun = requiredValue(args, index);
+			index++;
+		} else if (option === "--samples") {
 			samples = positiveInteger(requiredValue(args, index), option);
 			index++;
 		} else if (option === "--target-node-ms") {
@@ -348,6 +359,7 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 		...(preset === undefined ? {} : { preset }),
 		...(selfCompile === undefined ? {} : { selfCompile }),
 		...(experimentManifest === undefined ? {} : { experimentManifest }),
+		...(bun === undefined ? {} : { bun }),
 	};
 }
 
@@ -425,9 +437,11 @@ async function runKernel(
 	args: ReadonlyArray<string>,
 	timeoutMs: number,
 ): Promise<KernelOutput> {
-	return parseKernelOutput(
+	const startedAt = performance.now();
+	const output = parseKernelOutput(
 		(await runMeasuredProcess(command, args, cleanTestEnvironment(), timeoutMs)).stdout,
 	);
+	return { ...output, processWallMs: performance.now() - startedAt };
 }
 
 function median(values: ReadonlyArray<number>): number {
@@ -682,6 +696,7 @@ async function calibrateScale(
 	warmupBlocks: number,
 	deadline: number,
 	caseTimeoutMs: number,
+	bun?: string,
 ): Promise<number> {
 	const node = await runKernel(
 		process.execPath,
@@ -694,8 +709,18 @@ async function calibrateScale(
 		invocationTimeout(deadline, caseTimeoutMs),
 	);
 	assertRuntimeGapParity(node, maligator);
-	const fasterMs = Math.max(0.01, Math.min(node.elapsedMs, maligator.elapsedMs));
-	const slowerMs = Math.max(node.elapsedMs, maligator.elapsedMs);
+	const times = [node.elapsedMs, maligator.elapsedMs];
+	if (bun !== undefined) {
+		const output = await runKernel(
+			bun,
+			[descriptor.fixturePath, "1", String(warmupBlocks)],
+			invocationTimeout(deadline, caseTimeoutMs),
+		);
+		assertRuntimeGapParity(node, output);
+		times.push(output.elapsedMs);
+	}
+	const fasterMs = Math.max(0.01, Math.min(...times));
+	const slowerMs = Math.max(...times);
 	const targetScale = Math.max(1, Math.ceil(targetNodeMs / fasterMs));
 	const slowerScale = calibrationScaleTimeoutCap(caseTimeoutMs, slowerMs, warmupBlocks);
 	return Math.min(256, targetScale, slowerScale);
@@ -705,6 +730,9 @@ function timedSample(output: KernelOutput): TimedKernelSample {
 	return {
 		elapsedMs: output.elapsedMs,
 		warmupMs: output.warmupMs,
+		...(output.processWallMs === undefined
+			? {}
+			: { processWallMs: output.processWallMs }),
 		...(output.allocatedBytes === undefined
 			? {}
 			: { allocatedBytes: output.allocatedBytes }),
@@ -718,7 +746,12 @@ async function measureKernel(
 	descriptor: KernelDescriptor,
 	options: Pick<
 		Options,
-		"samples" | "targetNodeMs" | "warmupBlocks" | "skipNodeAllocation" | "caseTimeoutMs"
+		| "samples"
+		| "targetNodeMs"
+		| "warmupBlocks"
+		| "skipNodeAllocation"
+		| "caseTimeoutMs"
+		| "bun"
 	>,
 	deadline: number,
 ): Promise<CompilerHostGapKernelResult> {
@@ -729,9 +762,11 @@ async function measureKernel(
 		options.warmupBlocks,
 		deadline,
 		options.caseTimeoutMs,
+		options.bun,
 	);
 	const nodeSamples: Array<TimedKernelSample> = [];
 	const maligatorSamples: Array<TimedKernelSample> = [];
+	const bunSamples: Array<TimedKernelSample> = [];
 	let reference: KernelOutput | undefined;
 	for (let sample = 0; sample < options.samples; sample++) {
 		const runNode = (): Promise<KernelOutput> =>
@@ -746,16 +781,31 @@ async function measureKernel(
 				[String(scale), String(options.warmupBlocks)],
 				invocationTimeout(deadline, options.caseTimeoutMs),
 			);
-		const ordered = sample % 2 === 0 ? [runNode, runMaligator] : [runMaligator, runNode];
-		const first = await ordered[0]!();
-		const second = await ordered[1]!();
-		const node = sample % 2 === 0 ? first : second;
-		const maligator = sample % 2 === 0 ? second : first;
-		reference ??= node;
-		assertRuntimeGapParity(reference, node);
-		assertRuntimeGapParity(reference, maligator);
-		nodeSamples.push(timedSample(node));
-		maligatorSamples.push(timedSample(maligator));
+		const hosts = [
+			{ run: runNode, samples: nodeSamples },
+			{ run: runMaligator, samples: maligatorSamples },
+			...(options.bun === undefined
+				? []
+				: [
+						{
+							run: () =>
+								runKernel(
+									options.bun!,
+									[descriptor.fixturePath, String(scale), String(options.warmupBlocks)],
+									invocationTimeout(deadline, options.caseTimeoutMs),
+								),
+							samples: bunSamples,
+						},
+					]),
+		];
+		const offset = sample % hosts.length;
+		for (let index = 0; index < hosts.length; index++) {
+			const host = hosts[(offset + index) % hosts.length]!;
+			const output = await host.run();
+			reference ??= output;
+			assertRuntimeGapParity(reference, output);
+			host.samples.push(timedSample(output));
+		}
 	}
 	const nodeMedianMs = median(nodeSamples.map(({ elapsedMs }) => elapsedMs));
 	const maligatorMedianMs = median(maligatorSamples.map(({ elapsedMs }) => elapsedMs));
@@ -786,12 +836,35 @@ async function measureKernel(
 			reference!,
 		),
 	);
+	let bun: CompilerHostGapKernelResult["bun"];
+	if (options.bun !== undefined) {
+		const elapsed = bunSamples.map(({ elapsedMs }) => elapsedMs);
+		const center = median(elapsed);
+		const resource = await captureOptionalResource(async () => {
+			const measured = await timeInvocation(
+				options.bun!,
+				[descriptor.fixturePath, String(scale), String(options.warmupBlocks)],
+				cleanTestEnvironment(),
+				invocationTimeout(deadline, options.caseTimeoutMs),
+			);
+			assertRuntimeGapParity(reference!, measured.output);
+			return { cpuMs: measured.cpuMs, peakRssBytes: measured.peakRssBytes };
+		});
+		bun = {
+			samples: bunSamples,
+			medianMs: center,
+			medianAbsoluteDeviationMs: medianAbsoluteDeviation(elapsed),
+			nsPerOperation: (center * 1e6) / operations,
+			...resource,
+		};
+	}
 	return {
 		...reportDescriptor,
 		build,
 		scale,
 		operations,
 		checksum: reference!.checksum,
+		...(bun === undefined ? {} : { bun }),
 		node: {
 			samples: nodeSamples,
 			medianMs: nodeMedianMs,
@@ -1100,6 +1173,18 @@ ${Object.entries(report.fullCompiler.categoryFractions)
 
 The category association maps measured owner gaps to their representative kernels; it is a ranking model, not a claim that one primitive alone explains an owner's complete cost.
 `;
+	const bunResults = report.results.filter((result) => result.bun !== undefined);
+	const bunSection =
+		bunResults.length === 0
+			? ""
+			: `## Bun comparison
+
+All hosts execute the same source, scale, operation count and checksum. Host order rotates between samples. Process wall times include startup, warmup, measured work and shutdown; kernel times exclude those surrounding costs. Bun resource samples use ordinary execution without V8 flags.
+
+| Case | Node ms | Bun ms | Maligator ms | Node/Bun/Maligator process wall ms |
+| --- | ---: | ---: | ---: | --- |
+${bunResults.map((result) => `| ${result.id} | ${result.node.medianMs.toFixed(2)} | ${result.bun!.medianMs.toFixed(2)} | ${result.maligator.medianMs.toFixed(2)} | ${[result.node, result.bun!, result.maligator].map((host) => median(host.samples.map((sample) => sample.processWallMs!)).toFixed(2)).join(" / ")} |`).join("\n")}
+`;
 	return `# Runtime gap analysis
 
 Source: \`${report.source.commit}\`${report.source.dirty ? " with benchmark changes" : ""}
@@ -1129,6 +1214,8 @@ ${failureSection}
 ${fullCompilerSection}
 
 ${categorySections}
+
+${bunSection}
 `;
 }
 
@@ -1295,6 +1382,8 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 				{
 					schema: 1,
 					workload: "performance-gap",
+					hosts: ["node", "maligator", ...(options.bun === undefined ? [] : ["bun"])],
+					bun: options.bun ?? null,
 					preset: options.preset ?? null,
 					cases: descriptors,
 					buildsByCase: Object.fromEntries(
@@ -1324,6 +1413,25 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 	const results: Array<CompilerHostGapKernelResult> = [];
 	const failures: Array<RuntimeGapFailure> = [];
 	const source = sourceIdentity();
+	const bun =
+		options.bun === undefined
+			? undefined
+			: {
+					path: options.bun.includes(path.sep)
+						? path.resolve(options.bun)
+						: resolvePathExecutable(options.bun),
+					version: "",
+					sha256: "",
+				};
+	if (bun !== undefined) {
+		bun.version = runSynchronousProcess(
+			bun.path,
+			["--version"],
+			cleanTestEnvironment(),
+			invocationTimeout(deadline, options.caseTimeoutMs),
+		).stdout.trim();
+		bun.sha256 = artifactFileDigest(bun.path);
+	}
 	let preparationMs = 0;
 	let fullCompiler: FullCompilerAnalysis | undefined;
 	const classifyFailure = (id: string, error: unknown): RuntimeGapFailure => {
@@ -1357,6 +1465,7 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 			source,
 			runtime: {
 				node: process.version,
+				...(bun === undefined ? {} : { bun }),
 				v8: process.versions.v8,
 				platform: process.platform,
 				arch: process.arch,
@@ -1456,7 +1565,13 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 			);
 			preparationMs += build.buildMs;
 			results.push(
-				await measureKernel(build.binaryPath, build, descriptor, options, deadline),
+				await measureKernel(
+					build.binaryPath,
+					build,
+					descriptor,
+					{ ...options, ...(bun === undefined ? {} : { bun: bun.path }) },
+					deadline,
+				),
 			);
 			progress.stagePassed(index + 1, descriptors.length, descriptor.id);
 		} catch (error) {

@@ -2,7 +2,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import type { CommandContext } from "../cli-commands.ts";
-import type { CapturedRunOutcome } from "../cli-run.ts";
+import type { ReportedRunOutcome } from "../cli-run.ts";
 import type { TestCommand } from "../cli.ts";
 import { CommandProgress } from "../command-progress.ts";
 import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
@@ -54,7 +54,7 @@ export interface IsolatedTestExecutionOptions {
 		readonly binaryPath: string;
 		readonly wirePaths: ReadonlyArray<string>;
 	}) => void;
-	readonly onExecution?: (outcome: CapturedRunOutcome, durationMs: number) => void;
+	readonly onExecution?: (outcome: ReportedRunOutcome, durationMs: number) => void;
 }
 
 export const ISOLATED_TEST_RESULT_PREFIX = "__MALIGATOR_ISOLATED_TEST_RESULT__";
