@@ -729,7 +729,7 @@ function checkFfiLargeHeaders(): void {
 	const writeHeader = (text: string): void =>
 		writeFileSync(
 			header,
-			`/* ${text} */\n${unusedMacro}\n#define LARGE_CODE 7\nint large_read(int value);\n`,
+			`${unusedMacro}\n/* ${text} */\n#define LARGE_CODE 7\nint large_read(int value);\n`,
 		);
 	writeHeader(doc);
 	writeFileSync(path.join(directory, "large.c"), "");

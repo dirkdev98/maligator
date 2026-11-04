@@ -6,13 +6,14 @@ import { expect, it } from "vitest";
 import { planBindings } from "../src/ffi/binding-plan.ts";
 import { extractCModel } from "../src/ffi/c-extract.ts";
 import { resolveCType } from "../src/ffi/c-model.ts";
+import { textMatches } from "../src/ffi/text.ts";
 
 it("extracts usable declarations beside a large unused macro", () => {
 	const directory = mkdtempSync(path.join(tmpdir(), "mal-large-macro-"));
 	try {
 		writeFileSync(
 			path.join(directory, "api.h"),
-			`#define UNUSED_TEXT(value) "${"x".repeat(9 * 1024 * 1024)}"\nint read_value(int value);\n`,
+			`#define UNUSED_TEXT(value) "${"x".repeat(9 * 1024 * 1024)}"\n/* Read the status. */\n#define STATUS_CODE 7\nint read_value(int value);\n`,
 		);
 		const compiler = process.env.CC ?? "clang";
 		const version = spawnSync(compiler, ["--version"], { encoding: "utf8" });
@@ -29,6 +30,12 @@ it("extracts usable declarations beside a large unused macro", () => {
 				returns: { kind: "integer", name: "int" },
 			}),
 		);
+		expect(
+			textMatches(
+				model.macros.find((macro) => macro.name === "STATUS_CODE")?.doc,
+				/^Read the status\.$/,
+			),
+		).toBe(true);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
