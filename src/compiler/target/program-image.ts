@@ -1,3 +1,4 @@
+import type { FfiDirectEntry } from "../../build-config-values.ts";
 import type { CoreModuleInterface } from "../core/core-compilation.ts";
 import type {
 	CoreBuiltinIdentityDecision,
@@ -2650,7 +2651,7 @@ export type NativeInstructionPlan =
 			readonly directStringCharCodeAtPosition?: "inBounds";
 			readonly directClosureOwner?: number;
 			/** A C library binding's direct entry, called instead of the function object. */
-			readonly foreignCall?: { readonly symbol: string; readonly arity: number };
+			readonly foreignCall?: Pick<FfiDirectEntry, "symbol" | "arity" | "scalar">;
 	  }
 	| { readonly kind: "construct"; readonly directFunctionIndex: number }
 	| { readonly kind: "direct-closure" }

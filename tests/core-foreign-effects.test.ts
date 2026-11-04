@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FfiDirectEntry } from "../src/build-config-values.ts";
+import { ffiScalarSymbol } from "../src/build-config-values.ts";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
@@ -15,6 +16,8 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { Writer } from "../src/compiler/target/program-image-codec.ts";
+import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { coreFunctionNamed } from "./helpers/core-inspection.ts";
 import { analysisProgram } from "./helpers/core-program-analysis.ts";
 
@@ -28,6 +31,7 @@ function compile(
 	callsUserCode: boolean,
 	source = "return mix(value);",
 	result = binding.result,
+	scalar?: FfiDirectEntry["scalar"],
 ) {
 	let core: CoreFunctionStore | undefined;
 	const image = compileEntrypoint("/ffi-effects.mjs", {
@@ -38,7 +42,14 @@ function compile(
 					id: "maligator:ffi/math",
 					exports: ["mix"],
 					installer: "mal_ffi_install_math",
-					direct: { mix: { ...binding, callsUserCode, result } },
+					direct: {
+						mix: {
+							...binding,
+							callsUserCode,
+							result,
+							...(scalar === undefined ? {} : { scalar }),
+						},
+					},
 				},
 			],
 		},
@@ -57,6 +68,87 @@ function compile(
 	return { core, image, native };
 }
 describe("static foreign call effects", () => {
+	const scalar: NonNullable<FfiDirectEntry["scalar"]> = {
+		symbol: ffiScalarSymbol(binding.symbol),
+		parameters: [{ kind: "integer", bits: 32, signed: true }],
+		result: { kind: "integer", bits: 32, signed: false },
+	};
+	it.each([
+		["return mix(value | 0);", true],
+		["return mix(7);", true],
+		["return mix(value);", false],
+		["return mix(value >>> 0);", false],
+		["return mix(2147483648);", false],
+		["return mix(1.5);", false],
+		["return mix();", false],
+	] as const)("selects the scalar C ABI for proven inputs in %s", (source, selected) => {
+		const { image, native } = compile(false, source, binding.result, scalar);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		const after = restored.native.functions[native.functionIndex]!;
+		const call = after.instructions.find((plan) => plan?.kind === "call");
+		expect(call).toMatchObject({ foreignCall: { scalar } });
+		const emitted = emitCompiledFunction(after, after.functionIndex, "", false);
+		expect(emitted).not.toBeNull();
+		expect(emitted!.source.includes(`${scalar.symbol}(`)).toBe(selected);
+	});
+	it.each([
+		[{ kind: "integer", bits: 8, signed: true } as const, "127", true],
+		[{ kind: "integer", bits: 8, signed: true } as const, "value & 255", false],
+		[{ kind: "integer", bits: 16, signed: false } as const, "65535", true],
+		[{ kind: "integer", bits: 32, signed: false } as const, "value >>> 0", true],
+		[{ kind: "boolean" } as const, "Boolean(value)", true],
+		[{ kind: "boolean" } as const, "1", false],
+		[{ kind: "number" } as const, "Number(value)", true],
+	] as const)(
+		"requires the exact scalar conversion for %j from %s",
+		(parameter, argument, selected) => {
+			const entry = { ...scalar, parameters: [parameter] };
+			const { native } = compile(
+				false,
+				`return mix(${argument});`,
+				binding.result,
+				entry,
+			);
+			const emitted = emitCompiledFunction(native, native.functionIndex, "", false)!;
+			expect(emitted.source.includes(`${scalar.symbol}(`)).toBe(selected);
+		},
+	);
+	it("rejects a scalar ABI on a callback-capable binding", () => {
+		expect(() => compile(true, "return mix(value | 0);", binding.result, scalar)).toThrow(
+			"scalar ABI",
+		);
+	});
+	it.each([
+		{ ...scalar, symbol: "mal_ffi_scalar0_other" },
+		{ ...scalar, parameters: [] },
+		{ ...scalar, parameters: [{ kind: "undefined" }] },
+		{ ...scalar, parameters: [{ kind: "integer", bits: 64, signed: true }] },
+		{ ...scalar, result: { kind: "integer", bits: 0, signed: true } },
+	])("rejects an invalid scalar ABI %j", (invalid) => {
+		expect(() =>
+			compile(false, "return mix(value);", binding.result, invalid as typeof scalar),
+		).toThrow("scalar ABI");
+	});
+	it.each([
+		[0, 2],
+		[1, 2],
+		[2, 0],
+		[3, 64],
+		[4, 2],
+		[5, 4],
+	])("rejects corrupt scalar ABI byte %i set to %i", (offset, value) => {
+		const { image } = compile(false, "return mix(value | 0);", binding.result, scalar);
+		const bytes = serializeCompilerArtifact(image);
+		const writer = new Writer();
+		writer.i32(binding.arity);
+		const arity = writer.finish();
+		const symbol = Buffer.from(bytes).indexOf(
+			Buffer.concat([Buffer.from(binding.symbol), arity, Uint8Array.of(1)]),
+		);
+		expect(symbol).toBeGreaterThanOrEqual(0);
+		bytes[symbol + binding.symbol.length + arity.length + offset] = value;
+		expect(() => deserializeCompilerArtifact(bytes)).toThrow("scalar FFI");
+	});
 	it.each([false, true])(
 		"preserves BigInt normal results through artifacts with reentry %s",
 		(callsUserCode) => {

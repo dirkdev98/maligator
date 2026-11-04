@@ -1,4 +1,5 @@
-import { ffiIntoSymbol } from "../../build-config-values.ts";
+import { ffiIntoSymbol, ffiScalarCType } from "../../build-config-values.ts";
+import type { FfiScalarEntry, FfiScalarValue } from "../../build-config-values.ts";
 import {
 	CORE_STRING_SPAN_CHARACTER_METHODS,
 	CORE_STRING_SPAN_METHODS,
@@ -12228,6 +12229,74 @@ class NativeInstructionEmission {
 			this.callPoll(),
 		];
 	}
+	foreignScalarArgument(operand: number, type: FfiScalarValue): string | undefined {
+		if (type.kind === "boolean") return this.nativeBooleanOperand(operand) ?? undefined;
+		const number = this.nativeNumberOperand(operand);
+		if (number === null) return undefined;
+		if (type.kind === "number") return number;
+		const minimum = type.signed ? -(2 ** (type.bits - 1)) : 0;
+		const maximum = type.signed ? 2 ** (type.bits - 1) - 1 : 2 ** type.bits - 1;
+		const decoded = decodeVmValueOperand(operand);
+		if (decoded.kind === "number") {
+			if (
+				!Number.isInteger(decoded.value) ||
+				decoded.value < minimum ||
+				decoded.value > maximum
+			)
+				return undefined;
+		} else {
+			const exact =
+				type.signed && type.bits === 32 ? this.exactInt32Operand(operand) : undefined;
+			const range =
+				decoded.kind === "register"
+					? instructionInputIntegerRange(this.context.facts, decoded.register)
+					: undefined;
+			if (
+				exact === undefined &&
+				(range?.exactSafeIntegers !== true ||
+					range.minimum < minimum ||
+					range.maximum > maximum)
+			)
+				return undefined;
+		}
+		return `((${ffiScalarCType(type)}) (${number}))`;
+	}
+
+	emitForeignScalar(
+		instruction: Extract<BytecodeInstruction, { opcode: "CALL" }>,
+		scalar: FfiScalarEntry,
+	): Array<string> | undefined {
+		if (instruction.arguments.length < scalar.parameters.length) return undefined;
+		const arguments_: Array<string> = [];
+		for (let index = 0; index < scalar.parameters.length; index++) {
+			const value = this.foreignScalarArgument(
+				instruction.arguments[index]!,
+				scalar.parameters[index]!,
+			);
+			if (value === undefined) return undefined;
+			arguments_.push(value);
+		}
+		const expression = this.profileCall(
+			"call",
+			`${scalar.symbol}(${arguments_.join(", ")})`,
+		);
+		const result = `foreign_scalar_${this.ip}`;
+		nativeCallDecision(this.context.profile, this.ip, "call.foreign-scalar", "applied");
+		return [
+			`extern ${ffiScalarCType(scalar.result)} ${scalar.symbol}(${scalar.parameters.length === 0 ? "void" : scalar.parameters.map(ffiScalarCType).join(", ")});`,
+			scalar.result.kind === "undefined"
+				? `${expression};`
+				: `${ffiScalarCType(scalar.result)} ${result} = ${expression};`,
+			this.throwCheck(),
+			scalar.result.kind === "undefined"
+				? `r${instruction.dst} = MAL_VALUE_UNDEFINED;`
+				: scalar.result.kind === "boolean"
+					? this.storeBoolean(instruction.dst, result)
+					: this.storeNumber(instruction.dst, result),
+			this.callPoll(),
+		];
+	}
+
 	emitCall(
 		instruction: Extract<BytecodeInstruction, { opcode: "CALL" }>,
 	): Array<string> | null {
@@ -12242,6 +12311,17 @@ class NativeInstructionEmission {
 		const callResult = (value: string): string => this.callValue(instruction.dst, value);
 		const foreign = callPlan?.foreignCall;
 		if (foreign !== undefined) {
+			if (foreign.scalar !== undefined) {
+				const scalar = this.emitForeignScalar(instruction, foreign.scalar);
+				if (scalar !== undefined) return scalar;
+			}
+			nativeCallDecision(
+				this.context.profile,
+				this.ip,
+				"call.foreign-checked",
+				"retained",
+				"representation-not-proven-native",
+			);
 			// The callee is a C library import, so call its binding's direct entry with
 			// the arguments; missing ones are undefined and extra ones are dropped, as the
 			// binding's own function object would see them.

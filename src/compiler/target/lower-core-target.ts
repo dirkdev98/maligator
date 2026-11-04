@@ -555,6 +555,7 @@ function rebuildOperation(
 		selectedAttributes.foreignCall = {
 			symbol: foreignCall.symbol,
 			arity: foreignCall.arity,
+			...(foreignCall.scalar === undefined ? {} : { scalar: { ...foreignCall.scalar } }),
 		};
 	}
 	delete selectedAttributes.directFunctionIndex;

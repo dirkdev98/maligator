@@ -1,5 +1,14 @@
-import { ffiIntoSymbol } from "../build-config-values.ts";
-import type { FfiDirectEntry, FfiDirectResult } from "../build-config-values.ts";
+import {
+	ffiIntoSymbol,
+	ffiScalarCType,
+	ffiScalarSymbol,
+} from "../build-config-values.ts";
+import type {
+	FfiDirectEntry,
+	FfiDirectResult,
+	FfiScalarEntry,
+	FfiScalarValue,
+} from "../build-config-values.ts";
 import { bindingEffects } from "./binding-effects.ts";
 import {
 	hasOwnedRecordFields,
@@ -107,6 +116,71 @@ function directResult(binding: BoundFunction): FfiDirectResult | undefined {
 		default:
 			return undefined;
 	}
+}
+
+function scalarValue(value: JsValue): FfiScalarValue | undefined {
+	switch (value.kind) {
+		case "integer":
+			return value.bits <= 32
+				? { kind: "integer", bits: value.bits, signed: value.signed }
+				: undefined;
+		case "float":
+			return value.bits <= 64 ? { kind: "number" } : undefined;
+		case "boolean":
+			return { kind: "boolean" };
+		default:
+			return undefined;
+	}
+}
+
+function scalarEntry(
+	library: string,
+	plan: BindingPlan,
+	binding: BoundFunction,
+): FfiScalarEntry | undefined {
+	if (
+		binding.global !== undefined ||
+		binding.closes !== undefined ||
+		binding.initializes !== undefined ||
+		binding.outputs.length !== 0 ||
+		binding.arguments.length !== binding.params.length ||
+		binding.arguments.some(
+			(entry, index) => entry.kind !== "input" || entry.param !== index,
+		) ||
+		Object.values(bindingEffects(plan, binding)).some(Boolean)
+	)
+		return undefined;
+	const parameters: Array<FfiScalarValue> = [];
+	for (const parameter of binding.params) {
+		const type = scalarValue(parameter.value);
+		if (type === undefined) return undefined;
+		parameters.push(type);
+	}
+	const result =
+		binding.returns.kind === "undefined" ? binding.returns : scalarValue(binding.returns);
+	return result === undefined
+		? undefined
+		: {
+				symbol: ffiScalarSymbol(directSymbol(library, binding.name)),
+				parameters,
+				result,
+			};
+}
+
+function scalarFunction(binding: BoundFunction, entry: FfiScalarEntry): Array<string> {
+	const arguments_ = entry.parameters.map((type, index) => {
+		const value = `mal_a${index}`;
+		const number = type.kind === "number" ? `mal_ffi_scalar_number(${value})` : value;
+		return `(${localDeclaration(binding.declaration.params[index]!.type, "")}) (${number})`;
+	});
+	const call = `${binding.declaration.name}(${arguments_.join(", ")})`;
+	return [
+		`${ffiScalarCType(entry.result)} ${entry.symbol}(${entry.parameters.length === 0 ? "void" : entry.parameters.map((type, index) => `${ffiScalarCType(type)} mal_a${index}`).join(", ")}) {`,
+		entry.result.kind === "undefined"
+			? `\t${call};`
+			: `\treturn ${entry.result.kind === "number" ? `mal_ffi_scalar_number((double) (${call}))` : call};`,
+		"}",
+	];
 }
 
 /** Values held directly in a MalValue, with no heap cell behind them. */
@@ -4847,6 +4921,7 @@ export function describeBindingUnit(
 		direct: Object.fromEntries(
 			plan.functions.map((binding) => {
 				const effects = bindingEffects(plan, binding);
+				const scalar = scalarEntry(library, plan, binding);
 				const result = directResult(binding);
 				const borrows = binding.params.flatMap(({ value }, argument) =>
 					value.kind === "record"
@@ -4865,6 +4940,7 @@ export function describeBindingUnit(
 						symbol: directSymbol(library, binding.name),
 						arity: binding.params.length,
 						callsUserCode: effects.input || effects.native || effects.cleanup,
+						...(scalar === undefined ? {} : { scalar }),
 						...(result === undefined ? {} : { result }),
 						...(borrows.length === 0 ? {} : { borrows }),
 						...(fields === undefined ? {} : { into: { fields } }),
@@ -4910,21 +4986,47 @@ export function generateBindingUnit(
 		for (const field of handle.fields) writer.need(field.value, "output");
 	}
 
-	const functions = bindings.flatMap((binding) => [
-		"",
-		...writer.function(binding),
-		...directEntry(
-			library,
-			binding,
-			Object.values(bindingEffects(plan, binding)).some(Boolean) ||
-				binding.params.some(
-					({ value }) =>
-						value.kind === "callback" ||
-						(value.kind === "handle" && writer.managedFamily(value.name)),
-				),
-		),
-		...(binding.async === undefined ? [] : writer.asyncFunction(binding, binding.async)),
-	]);
+	const scalarBindings = bindings.flatMap((binding) => {
+		const entry = scalarEntry(library, plan, binding);
+		return entry === undefined ? [] : [{ binding, entry }];
+	});
+	const scalarFunctions = [
+		...(scalarBindings.some(
+			({ entry }) =>
+				entry.result.kind === "number" ||
+				entry.parameters.some((type) => type.kind === "number"),
+		)
+			? [
+					// Native storage must preserve the checked entry's NaN bit canonicalization.
+					"static inline double mal_ffi_scalar_number(double value) {",
+					"\tMalValue bits = mal_ffi_from_number(value);",
+					"\t__builtin_memcpy(&value, &bits, sizeof(value));",
+					"\treturn value;",
+					"}",
+				]
+			: []),
+		...scalarBindings.flatMap(({ binding, entry }) => scalarFunction(binding, entry)),
+	];
+	const functions = [
+		...scalarFunctions,
+		...bindings.flatMap((binding) => [
+			"",
+			...writer.function(binding),
+			...directEntry(
+				library,
+				binding,
+				Object.values(bindingEffects(plan, binding)).some(Boolean) ||
+					binding.params.some(
+						({ value }) =>
+							value.kind === "callback" ||
+							(value.kind === "handle" && writer.managedFamily(value.name)),
+					),
+			),
+			...(binding.async === undefined
+				? []
+				: writer.asyncFunction(binding, binding.async)),
+		]),
+	];
 	const constants = selectedConstants.flatMap((constant) => [
 		"",
 		...writer.constant(constant),

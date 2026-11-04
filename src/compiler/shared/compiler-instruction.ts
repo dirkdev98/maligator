@@ -1,3 +1,4 @@
+import type { FfiDirectEntry } from "../../build-config-values.ts";
 import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { KnownBuiltinCall } from "./compiler-facts.ts";
 import type { InstructionFacts } from "./instruction-facts.ts";
@@ -414,7 +415,7 @@ type CompilerOperation =
 			type: "callForeign";
 			foreignSlot: number;
 			registers: [number, ...Array<number>];
-			foreignCall?: { readonly symbol: string; readonly arity: number };
+			foreignCall?: Pick<FfiDirectEntry, "symbol" | "arity" | "scalar">;
 			immediateValues?: Array<CompilerImmediateValue | undefined>;
 	  }
 	| {
@@ -452,7 +453,7 @@ type CompilerOperation =
 			 * COMPILE-ONLY: the callee is a C library import, so native lowering calls the
 			 * binding's direct entry with the arguments instead of the function object.
 			 */
-			foreignCall?: { readonly symbol: string; readonly arity: number };
+			foreignCall?: Pick<FfiDirectEntry, "symbol" | "arity" | "scalar">;
 			/**
 			 * NATIVE-ONLY: the exact target is a direct closure created by this function's
 			 * activation; an empty callee means its environment comes from that scope.

@@ -1,3 +1,9 @@
+import { ffiScalarSymbol, isFfiScalarEntry } from "../../build-config-values.ts";
+import type {
+	FfiDirectEntry,
+	FfiScalarEntry,
+	FfiScalarValue,
+} from "../../build-config-values.ts";
 import { coreRegionStrategy } from "../core/core-ir-region-strategies.ts";
 import { CORE_STRING_SPAN_RANGE_METHODS } from "../core/core-ir-regions.ts";
 import type {
@@ -115,10 +121,41 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 361;
+export const COMPILER_ARTIFACT_VERSION = 362;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
+
+function writeFfiScalarValue(w: Writer, type: FfiScalarEntry["result"]): void {
+	w.u8(
+		type.kind === "undefined"
+			? 0
+			: type.kind === "boolean"
+				? 1
+				: type.kind === "number"
+					? 2
+					: 3,
+	);
+	if (type.kind === "integer") {
+		w.u8(type.bits);
+		w.u8(type.signed ? 1 : 0);
+	}
+}
+
+function readFfiScalarValue(r: Reader): FfiScalarEntry["result"] {
+	const tag = r.u8();
+	if (tag === 0) return { kind: "undefined" };
+	if (tag === 1) return { kind: "boolean" };
+	if (tag === 2) return { kind: "number" };
+	if (tag === 3) {
+		const bits = r.u8(),
+			signed = r.u8();
+		if (bits < 1 || bits > 32 || signed > 1)
+			throw new RangeError("program-image-codec: invalid scalar FFI type");
+		return { kind: "integer", bits, signed: signed === 1 };
+	}
+	throw new RangeError("program-image-codec: invalid scalar FFI type");
+}
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2603,6 +2640,11 @@ function writeCompilerArtifact(
 
 				const foreign = plan.foreignCall;
 				if (
+					foreign?.scalar !== undefined &&
+					!isFfiScalarEntry(foreign.scalar, foreign.symbol, foreign.arity)
+				)
+					throw new RangeError("program-image-codec: invalid scalar FFI metadata");
+				if (
 					foreign !== undefined &&
 					(!FOREIGN_CALL_SYMBOL.test(foreign.symbol) ||
 						!Number.isInteger(foreign.arity) ||
@@ -2631,6 +2673,13 @@ function writeCompilerArtifact(
 					for (let index = 0; index < foreign.symbol.length; index++)
 						w.u8(foreign.symbol.charCodeAt(index));
 					w.i32(foreign.arity);
+					w.u8(foreign.scalar === undefined ? 0 : 1);
+					if (foreign.scalar !== undefined) {
+						w.u32(foreign.scalar.parameters.length);
+						for (const parameter of foreign.scalar.parameters)
+							writeFfiScalarValue(w, parameter);
+						writeFfiScalarValue(w, foreign.scalar.result);
+					}
 				}
 			} else if (plan.kind === "construct" && instruction.opcode === "CONSTRUCT") {
 				if (
@@ -5238,13 +5287,36 @@ function readCompilerArtifact(
 				const flags = r.u8();
 				const operationTag = r.u8();
 				const receiverBrandTag = (flags & 128) === 0 ? 0 : r.u8();
-				let foreignCall: { symbol: string; arity: number } | undefined;
+				let foreignCall: Pick<FfiDirectEntry, "symbol" | "arity" | "scalar"> | undefined;
 				if ((flags & 8) !== 0) {
 					const length = r.count(1);
 					let symbol = "";
 					for (let index = 0; index < length; index++)
 						symbol += String.fromCharCode(r.u8());
 					foreignCall = { symbol, arity: r.i32() };
+					const scalar = r.u8();
+					if (scalar > 1)
+						throw new RangeError("program-image-codec: invalid scalar FFI tag");
+					if (scalar === 1) {
+						const count = r.count(1);
+						if (count !== foreignCall.arity)
+							throw new RangeError("program-image-codec: invalid scalar FFI arity");
+						const parameters: Array<FfiScalarValue> = [];
+						for (let index = 0; index < count; index++) {
+							const parameter = readFfiScalarValue(r);
+							if (parameter.kind === "undefined")
+								throw new RangeError("program-image-codec: invalid scalar FFI parameter");
+							parameters.push(parameter);
+						}
+						foreignCall = {
+							...foreignCall,
+							scalar: {
+								symbol: ffiScalarSymbol(symbol),
+								parameters,
+								result: readFfiScalarValue(r),
+							},
+						};
+					}
 				}
 				const guardedBuiltinCount =
 					((flags & 2) !== 0 ? 1 : 0) +

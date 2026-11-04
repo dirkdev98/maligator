@@ -14,6 +14,8 @@ export interface FfiDirectEntry {
 	readonly arity: number;
 	/** Argument conversion or a reachable C callback can enter JavaScript. */
 	readonly callsUserCode: boolean;
+	/** A typed scalar sibling; callers must prove every input conversion. */
+	readonly scalar?: FfiScalarEntry;
 	/** The result every normal completion produces, when it is a primitive. */
 	readonly result?: FfiDirectResult;
 	/**
@@ -28,6 +30,70 @@ export interface FfiDirectEntry {
 	 * its field slots.
 	 */
 	readonly into?: { readonly fields: ReadonlyArray<string> };
+}
+
+export type FfiScalarValue =
+	| { readonly kind: "integer"; readonly bits: number; readonly signed: boolean }
+	| { readonly kind: "number" }
+	| { readonly kind: "boolean" };
+
+export interface FfiScalarEntry {
+	readonly symbol: string;
+	readonly parameters: ReadonlyArray<FfiScalarValue>;
+	readonly result: FfiScalarValue | { readonly kind: "undefined" };
+}
+
+/** The scalar sibling keeps the checked entry's import identity. */
+export function ffiScalarSymbol(directSymbol: string): string {
+	return directSymbol.replace(/^mal_ffi_direct/, "mal_ffi_scalar");
+}
+
+export function ffiScalarCType(type: FfiScalarEntry["result"]): string {
+	switch (type.kind) {
+		case "undefined":
+			return "void";
+		case "boolean":
+			return "bool";
+		case "number":
+			return "double";
+		case "integer":
+			return type.signed ? "int32_t" : "uint32_t";
+	}
+}
+
+function isFfiScalarValue(value: unknown, result: boolean): boolean {
+	if (typeof value !== "object" || value === null || !("kind" in value)) return false;
+	if (value.kind === "number" || value.kind === "boolean") return true;
+	if (value.kind === "undefined") return result;
+	return (
+		value.kind === "integer" &&
+		"bits" in value &&
+		typeof value.bits === "number" &&
+		Number.isInteger(value.bits) &&
+		value.bits >= 1 &&
+		value.bits <= 32 &&
+		"signed" in value &&
+		typeof value.signed === "boolean"
+	);
+}
+
+export function isFfiScalarEntry(
+	value: unknown,
+	symbol: string,
+	arity: number,
+): value is FfiScalarEntry {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"symbol" in value &&
+		value.symbol === ffiScalarSymbol(symbol) &&
+		"parameters" in value &&
+		Array.isArray(value.parameters) &&
+		value.parameters.length === arity &&
+		value.parameters.every((type: unknown) => isFfiScalarValue(type, false)) &&
+		"result" in value &&
+		isFfiScalarValue(value.result, true)
+	);
 }
 
 /** The entry of a binding that writes a struct result into a caller's stack object. */

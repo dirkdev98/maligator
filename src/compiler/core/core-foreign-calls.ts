@@ -1,4 +1,5 @@
 import type { FfiDirectEntry } from "../../build-config-values.ts";
+import { isFfiScalarEntry } from "../../build-config-values.ts";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_BIGINT,
@@ -23,6 +24,18 @@ export function coreForeignSlots(
 	for (const install of candidates) {
 		for (const entry of install.exports) {
 			if (entry.direct !== undefined) {
+				if (
+					entry.direct.scalar !== undefined &&
+					(entry.direct.callsUserCode ||
+						!isFfiScalarEntry(
+							entry.direct.scalar,
+							entry.direct.symbol,
+							entry.direct.arity,
+						))
+				)
+					throw new Error(
+						`Foreign binding ${entry.direct.symbol} has an invalid scalar ABI`,
+					);
 				if (typeof entry.direct.callsUserCode !== "boolean")
 					throw new Error(
 						`Foreign binding ${entry.direct.symbol} has no reentry contract`,
