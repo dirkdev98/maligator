@@ -202,6 +202,10 @@ static MalHeapDeadCellPolicySlot g_dead_cell_policy[MAL_HEAP_TYPE_COUNT] = {
     [MAL_HEAP_ASYNC_RUN_SCOPE_STATE] = MAL_HEAP_DEAD_CELL_RECLAIM,
     [MAL_HEAP_OBJECT] = MAL_HEAP_DEAD_CELL_OBJECT,
     [MAL_HEAP_FUNCTION_OBJECT] = MAL_HEAP_DEAD_CELL_OBJECT,
+#if !MAL_PERF_STATS
+    // Stats builds count every Array finalization.
+    [MAL_HEAP_ARRAY_OBJECT] = MAL_HEAP_DEAD_CELL_ARRAY,
+#endif
 };
 
 void mal_gc_register_finalizer(MalHeapType type, MalGcFinalizer fn) {
