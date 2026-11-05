@@ -1889,6 +1889,10 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
         vm->function_cjs_module_bases =
             realloc(vm->function_cjs_module_bases, sizeof(i32) * capacity);
         vm->call_entries = realloc(vm->call_entries, sizeof(MalCompiledFunction) * capacity);
+        // Compiled sites bound their dispatch by capacity, so unused rows stay null.
+        for (usize i = (usize) previous_function_capacity; i < capacity; i++) {
+            vm->call_entries[i] = nullptr;
+        }
     }
     for (i32 i = fn_base; i < new_functions; i++) {
         vm->property_cache[i] = (MalPropertyCachePool){0};
