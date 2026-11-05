@@ -3,13 +3,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "vitest";
 import {
+	createProfileCapture,
 	finalizeProfileCapture,
 	formatProfileReport,
 	parseCompilerCapture,
 	parseProfileCapture,
 	profileCaptureIdentity,
 } from "../src/profile-artifact.ts";
-import type { PreparedProfile } from "../src/profile-artifact.ts";
+import { PreparedProfile } from "../src/profile-artifact.ts";
+import type { ProfileMetadata } from "../src/profile-artifact.ts";
 
 function capture(): Uint8Array {
 	const bytes = new Uint8Array(80 + 2 * 40 + 2 * 12);
@@ -160,7 +162,7 @@ function legacyV2Capture(): Uint8Array {
 	return bytes;
 }
 
-const prepared: PreparedProfile = {
+const prepared: ProfileMetadata = {
 	schema: 8,
 	calls: [],
 	mode: "sampling",
@@ -203,6 +205,13 @@ const prepared: PreparedProfile = {
 	],
 	remarks: [
 		{
+			siteId: 0,
+			phase: "lowering",
+			operation: "execute",
+			code: "execute.unobserved",
+			outcome: "retained",
+		},
+		{
 			siteId: 1,
 			phase: "lowering",
 			operation: "property",
@@ -212,6 +221,26 @@ const prepared: PreparedProfile = {
 	],
 };
 prepared.captureIdentity = profileCaptureIdentity(prepared);
+
+test("captures keep owned metadata when inputs and decoded views are mutated", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-owned-"));
+	try {
+		const input = structuredClone(prepared);
+		const snapshot = PreparedProfile.fromMetadata(input);
+		input.functions[0]!.name = "changed after preparation";
+		input.remarks.length = 0;
+		const decoded = snapshot.readMetadata();
+		decoded.functions[0]!.name = "changed decoded view";
+		decoded.sites = [];
+		const capture = createProfileCapture("run", snapshot, directory, directory);
+		expect(
+			JSON.parse(readFileSync(path.join(directory, "metadata.json"), "utf8")),
+		).toEqual(prepared);
+		expect(capture.environment.MAL_PROFILE_IDENTITY).toBe(prepared.captureIdentity);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
 
 function profileIdentityBytes(): Uint8Array {
 	if (prepared.captureIdentity === undefined)
@@ -248,7 +277,10 @@ test("legacy captures never guess between same-position operations", () => {
 	expect(parsed.records[0]?.frames[0]?.siteId).toBe(-1);
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-legacy-"));
 	writeFileSync(path.join(directory, "capture.bin"), legacyCapture());
-	expect(finalizeProfileCapture(directory, prepared, "run").findings).toEqual([]);
+	expect(
+		finalizeProfileCapture(directory, PreparedProfile.fromMetadata(prepared), "run")
+			.findings,
+	).toEqual([]);
 });
 
 test("schema-two captures retain exact legacy site IDs", () => {
@@ -302,16 +334,20 @@ test("profile finalization rejects a raw capture from another metadata or build 
 	const mismatched = capture();
 	mismatched[48] = mismatched[48]! ^ 0xff;
 	writeFileSync(path.join(directory, "capture.bin"), mismatched);
-	expect(() => finalizeProfileCapture(directory, prepared, "run")).toThrow(
-		"capture identity does not match",
-	);
+	expect(() =>
+		finalizeProfileCapture(directory, PreparedProfile.fromMetadata(prepared), "run"),
+	).toThrow("capture identity does not match");
 
 	writeFileSync(path.join(directory, "capture.bin"), capture());
 	const changedMetadata = { ...prepared, buildId: "b".repeat(64) };
-	expect(() => finalizeProfileCapture(directory, changedMetadata, "run")).toThrow(
-		"identity does not match its contents",
-	);
-	const changedFunctionIdentity: PreparedProfile = {
+	expect(() =>
+		finalizeProfileCapture(
+			directory,
+			PreparedProfile.fromMetadata(changedMetadata),
+			"run",
+		),
+	).toThrow("identity does not match its contents");
+	const changedFunctionIdentity: ProfileMetadata = {
 		...prepared,
 		functions: prepared.functions.map((fn) => ({
 			...fn,
@@ -326,9 +362,13 @@ test("profile finalization rejects a raw capture from another metadata or build 
 	expect(profileCaptureIdentity(changedFunctionIdentity)).not.toBe(
 		prepared.captureIdentity,
 	);
-	expect(() => finalizeProfileCapture(directory, changedFunctionIdentity, "run")).toThrow(
-		"identity does not match its contents",
-	);
+	expect(() =>
+		finalizeProfileCapture(
+			directory,
+			PreparedProfile.fromMetadata(changedFunctionIdentity),
+			"run",
+		),
+	).toThrow("identity does not match its contents");
 });
 
 test("profile finalization rejects compiler counters from another capture", () => {
@@ -337,16 +377,26 @@ test("profile finalization rejects compiler counters from another capture", () =
 	const mismatched = compilerCapture();
 	mismatched[32] = mismatched[32]! ^ 0xff;
 	writeFileSync(path.join(directory, "capture.bin.compiler"), mismatched);
-	expect(() => finalizeProfileCapture(directory, prepared, "run")).toThrow(
-		"compiler profile identity does not match",
-	);
+	expect(() =>
+		finalizeProfileCapture(directory, PreparedProfile.fromMetadata(prepared), "run"),
+	).toThrow("compiler profile identity does not match");
 });
 
 test("profile finalization publishes standard views and joins remarks by source site", () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-artifact-"));
 	writeFileSync(path.join(directory, "capture.bin"), captureWithNestedPhases());
 	writeFileSync(path.join(directory, "capture.bin.compiler"), compilerCapture());
-	const result = finalizeProfileCapture(directory, prepared, "run");
+	const result = finalizeProfileCapture(
+		directory,
+		PreparedProfile.fromMetadata(prepared),
+		"run",
+	);
+	expect(
+		readFileSync(path.join(directory, "remarks.jsonl"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as unknown),
+	).toEqual(prepared.remarks);
 
 	expect(result.manifest.functionIdentities).toEqual({
 		known: 0,
@@ -534,7 +584,11 @@ test("profile finalization publishes standard views and joins remarks by source 
 test("phase summary preserves evidence outside measured spans", () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-unphased-"));
 	writeFileSync(path.join(directory, "capture.bin"), capture());
-	const result = finalizeProfileCapture(directory, prepared, "run");
+	const result = finalizeProfileCapture(
+		directory,
+		PreparedProfile.fromMetadata(prepared),
+		"run",
+	);
 	expect(result.manifest.phases).toMatchObject({
 		spans: 0,
 		unphased: {
@@ -550,7 +604,11 @@ test("counts multiple major and minor pauses inside one phase", () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-gc-pauses-"));
 	try {
 		writeFileSync(path.join(directory, "capture.bin"), captureWithTwoGcPauses());
-		const result = finalizeProfileCapture(directory, prepared, "run");
+		const result = finalizeProfileCapture(
+			directory,
+			PreparedProfile.fromMetadata(prepared),
+			"run",
+		);
 		expect(result.manifest.gc).toMatchObject({
 			pauses: 2,
 			majorPauses: 1,
@@ -574,7 +632,11 @@ test("unmatched phase markers bias the capture instead of fabricating a duration
 	const bytes = captureWithNestedPhases();
 	new DataView(bytes.buffer).setBigUint64(80 + 7 * 40 + 16, 2n, true);
 	writeFileSync(path.join(directory, "capture.bin"), bytes);
-	const result = finalizeProfileCapture(directory, prepared, "run");
+	const result = finalizeProfileCapture(
+		directory,
+		PreparedProfile.fromMetadata(prepared),
+		"run",
+	);
 	expect(result.manifest.quality).toBe("biased");
 	expect(result.manifest.phases).toMatchObject({
 		spans: 1,

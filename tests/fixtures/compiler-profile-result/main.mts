@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createPool, createWorkerUrl } from "maligator:workers";
 import { restoreCompilerResult } from "../../../src/compiler-profile-result.ts";
 import { createProfileCapture } from "../../../src/profile-artifact.ts";
-import type { PreparedProfile } from "../../../src/profile-artifact.ts";
+import type { ProfileMetadata } from "../../../src/profile-artifact.ts";
 import type { produce, raw } from "./worker.mts";
 
 type ProfileWorker = { produce: typeof produce; raw: typeof raw };
@@ -42,7 +42,7 @@ try {
 	);
 	const metadata = JSON.parse(
 		readFileSync(join(capture.directory, "metadata.json"), "utf8"),
-	) as PreparedProfile;
+	) as ProfileMetadata;
 	if (
 		metadata.functions.length !== response.count ||
 		metadata.functions.at(-1)?.name !== response.lastName

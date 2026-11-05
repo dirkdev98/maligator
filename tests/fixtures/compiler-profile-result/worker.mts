@@ -1,16 +1,19 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { publishCompilerResult } from "../../../src/compiler-profile-result.ts";
-import { profileCaptureIdentity } from "../../../src/profile-artifact.ts";
-import type { PreparedProfile } from "../../../src/profile-artifact.ts";
+import {
+	PreparedProfile,
+	profileCaptureIdentity,
+} from "../../../src/profile-artifact.ts";
+import type { ProfileMetadata } from "../../../src/profile-artifact.ts";
 
-function makeProfile(): PreparedProfile {
+function makeMetadata(): ProfileMetadata {
 	const functions = Array.from({ length: 512 }, (_, index) => ({
 		name: `operation${index}_${"x".repeat(256)}`,
 		file: "fictional.mjs",
 		identity: { status: "unknown", reason: "no-source-origin" } as const,
 	}));
-	const profile: PreparedProfile = {
+	const profile: ProfileMetadata = {
 		schema: 8,
 		mode: "sampling",
 		buildId: "b".repeat(64),
@@ -25,13 +28,14 @@ function makeProfile(): PreparedProfile {
 }
 
 export function raw(_context: unknown) {
-	return makeProfile();
+	return makeMetadata();
 }
 
 export function produce(_context: unknown, directory: string) {
-	const profile = makeProfile();
+	const metadata = makeMetadata();
+	const profile = PreparedProfile.fromMetadata(metadata);
 	const binaryPath = join(directory, "application");
-	writeFileSync(`${binaryPath}.profile.json`, JSON.stringify(profile));
+	profile.writeMetadata(`${binaryPath}.profile.json`);
 	const value = publishCompilerResult(
 		{ binaryPath, profile },
 		join(directory, "handoff"),
@@ -39,7 +43,7 @@ export function produce(_context: unknown, directory: string) {
 	writeFileSync(`${binaryPath}.profile.json`, "{}");
 	return {
 		value,
-		count: profile.functions.length,
-		lastName: profile.functions.at(-1)!.name,
+		count: metadata.functions.length,
+		lastName: metadata.functions.at(-1)!.name,
 	};
 }

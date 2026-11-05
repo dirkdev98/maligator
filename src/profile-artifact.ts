@@ -82,7 +82,7 @@ const ALLOCATION_FAMILY_NAMES = [
 	"metadata",
 ];
 
-export interface PreparedProfile {
+export interface ProfileMetadata {
 	schema: 8;
 	calls: Array<{
 		file: string;
@@ -111,6 +111,49 @@ export interface PreparedProfile {
 export interface ProfileOptimizationSidecar {
 	readonly coreOptimizationReport?: CoreOptimizationReport;
 	readonly coreOptimizationPlan?: CoreOptimizationPlan;
+}
+
+/** Owns the exact metadata bytes so later compiler edits cannot alter a capture. */
+export class PreparedProfile {
+	readonly buildId: string;
+	readonly captureIdentity: string;
+	readonly entrypoint: string;
+	readonly mode: ProfileMetadata["mode"];
+	readonly #json: string;
+
+	private constructor(json: string, metadata: ProfileMetadata, identity: string) {
+		this.#json = json;
+		this.buildId = metadata.buildId;
+		this.captureIdentity = identity;
+		this.entrypoint = metadata.entrypoint;
+		this.mode = metadata.mode;
+		Object.freeze(this);
+	}
+
+	static fromMetadata(metadata: ProfileMetadata): PreparedProfile {
+		const identity =
+			metadata.captureIdentity === undefined
+				? profileCaptureIdentity(metadata)
+				: validatedCaptureIdentity(metadata);
+		return new PreparedProfile(
+			`${JSON.stringify({ ...metadata, captureIdentity: identity })}\n`,
+			metadata,
+			identity,
+		);
+	}
+
+	static fromJson(json: string): PreparedProfile {
+		const metadata = JSON.parse(json) as ProfileMetadata;
+		return new PreparedProfile(json, metadata, validatedCaptureIdentity(metadata));
+	}
+
+	readMetadata(): ProfileMetadata {
+		return JSON.parse(this.#json) as ProfileMetadata;
+	}
+
+	writeMetadata(file: string): void {
+		writeFileAtomically(file, this.#json);
+	}
 }
 
 interface RawFrame {
@@ -167,14 +210,14 @@ interface CompilerCapture {
 }
 
 /** Content identity binding the linked binary hash to its complete profile sidecar. */
-export function profileCaptureIdentity(prepared: PreparedProfile): string {
+export function profileCaptureIdentity(prepared: ProfileMetadata): string {
 	const payload = Object.fromEntries(
 		Object.entries(prepared).filter(([key]) => key !== "captureIdentity"),
 	);
 	return hashCanonicalProfileJson(payload);
 }
 
-function validatedCaptureIdentity(prepared: PreparedProfile): string {
+function validatedCaptureIdentity(prepared: ProfileMetadata): string {
 	const identity = prepared.captureIdentity;
 	if (
 		prepared.schema !== 8 ||
@@ -285,12 +328,12 @@ function profileFunctionIdentities(
 export function prepareProfile(
 	binaryPath: string,
 	image: ProgramImage,
-	mode: PreparedProfile["mode"] = "sampling",
+	mode: ProfileMetadata["mode"] = "sampling",
 	optimization: ProfileOptimizationSidecar = {},
 ): PreparedProfile {
 	const resolver = new SourceProfileIdentities();
 	const identities = profileFunctionIdentities(image, resolver);
-	const prepared: PreparedProfile = {
+	const prepared: ProfileMetadata = {
 		schema: 8,
 		calls: (image.diagnostics.sourceCallSites ?? []).map((site) => ({
 			file: site.file,
@@ -315,9 +358,9 @@ export function prepareProfile(
 			mode === "compiler" ? optimization.coreOptimizationPlan : undefined,
 		factFlow: image.diagnostics.factFlow,
 	};
-	prepared.captureIdentity = profileCaptureIdentity(prepared);
-	atomicJson(`${binaryPath}.profile.json`, prepared, true);
-	return prepared;
+	const snapshot = PreparedProfile.fromMetadata(prepared);
+	snapshot.writeMetadata(`${binaryPath}.profile.json`);
+	return snapshot;
 }
 
 export function defaultProfileDirectory(
@@ -344,7 +387,7 @@ export function createProfileCapture(
 	capturePath: string;
 	environment: { MAL_PROFILE_CAPTURE: string; MAL_PROFILE_IDENTITY: string };
 } {
-	const captureIdentity = validatedCaptureIdentity(prepared);
+	const captureIdentity = prepared.captureIdentity;
 	const override = destination ?? process.env.MALIGATOR_PROFILE_DIRECTORY;
 	const directory = path.resolve(
 		override === undefined
@@ -354,7 +397,7 @@ export function createProfileCapture(
 				: override,
 	);
 	mkdirSync(directory, { recursive: true });
-	atomicJson(path.join(directory, "metadata.json"), prepared, true);
+	prepared.writeMetadata(path.join(directory, "metadata.json"));
 	const capturePath = path.join(directory, "capture.bin");
 	return {
 		directory,
@@ -612,7 +655,7 @@ export function parseCompilerCapture(bytes: Uint8Array): CompilerCapture {
 	};
 }
 
-function positionSiteIndex(prepared: PreparedProfile): Map<string, ProfileSite> {
+function positionSiteIndex(prepared: ProfileMetadata): Map<string, ProfileSite> {
 	const result = new Map<string, ProfileSite>();
 	const ambiguous = new Set<string>();
 	for (const site of prepared.sites) {
@@ -632,8 +675,11 @@ function percentile(values: Array<number>, fraction: number): number {
 	return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))]!;
 }
 
-function cpuProfile(capture: RawCapture, prepared: PreparedProfile): object {
-	const positionSites = positionSiteIndex(prepared);
+function cpuProfile(
+	capture: RawCapture,
+	prepared: ProfileMetadata,
+	positionSites: ReadonlyMap<string, ProfileSite>,
+): object {
 	const nodes: Array<{
 		id: number;
 		callFrame: {
@@ -746,11 +792,11 @@ function allocationSampleWeight(capture: RawCapture, record: RawRecord): number 
 
 function findings(
 	capture: RawCapture,
-	prepared: PreparedProfile,
+	prepared: ProfileMetadata,
 	quality: ProfileQuality,
+	positionSites: ReadonlyMap<string, ProfileSite>,
 	compiler?: CompilerCapture,
 ): Array<ProfileFinding> {
-	const positionSites = positionSiteIndex(prepared);
 	interface FindingAggregate {
 		siteId: number;
 		cpuSamples: number;
@@ -772,12 +818,6 @@ function findings(
 		>;
 	}
 	const bySite = new Map<number, FindingAggregate>();
-	const decisionsBySite = new Map<number, Array<CompilerRemark>>();
-	for (const decision of prepared.remarks) {
-		const decisions = decisionsBySite.get(decision.siteId);
-		if (decisions === undefined) decisionsBySite.set(decision.siteId, [decision]);
-		else decisions.push(decision);
-	}
 	const compilerAllocationsBySite = new Map<number, Array<CompilerAllocationCounter>>();
 	for (const allocation of compiler?.allocations ?? []) {
 		const allocations = compilerAllocationsBySite.get(allocation.siteId);
@@ -854,6 +894,13 @@ function findings(
 				allocationFamilies: new Map(),
 			});
 		}
+	}
+	const decisionsBySite = new Map<number, Array<CompilerRemark>>();
+	for (const decision of prepared.remarks) {
+		if (!bySite.has(decision.siteId)) continue;
+		const decisions = decisionsBySite.get(decision.siteId);
+		if (decisions === undefined) decisionsBySite.set(decision.siteId, [decision]);
+		else decisions.push(decision);
 	}
 	return [...bySite.values()]
 		.map((value) => {
@@ -1023,7 +1070,7 @@ interface FunctionIdentityCoverage {
 	checkout: number;
 }
 
-function functionIdentityCoverage(prepared: PreparedProfile): FunctionIdentityCoverage {
+function functionIdentityCoverage(prepared: ProfileMetadata): FunctionIdentityCoverage {
 	const coverage: FunctionIdentityCoverage = {
 		known: 0,
 		shared: 0,
@@ -1049,7 +1096,7 @@ export interface ProfileManifest {
 	captureId: string;
 	payloadDigest: string;
 	command: string;
-	mode: PreparedProfile["mode"];
+	mode: ProfileMetadata["mode"];
 	buildId: string;
 	captureIdentity: string;
 	entrypoint: string;
@@ -1394,7 +1441,7 @@ function summarizeAllocationSamples(
 
 export function finalizeProfileCapture(
 	directory: string,
-	prepared: PreparedProfile,
+	snapshot: PreparedProfile,
 	command: string,
 	options: { workloadSucceeded?: boolean } = {},
 ): { findings: Array<ProfileFinding>; manifest: ProfileManifest } {
@@ -1403,7 +1450,7 @@ export function finalizeProfileCapture(
 	const capture = parseProfileCapture(payload);
 	let captureIdentity: string;
 	if (capture.schema >= 4) {
-		captureIdentity = validatedCaptureIdentity(prepared);
+		captureIdentity = snapshot.captureIdentity;
 		if (capture.captureIdentity !== captureIdentity) {
 			throw new Error("profile capture identity does not match its metadata and build");
 		}
@@ -1412,6 +1459,7 @@ export function finalizeProfileCapture(
 		// but never claim an unverified identity in their completed manifest.
 		captureIdentity = "legacy-unbound";
 	}
+	const prepared = snapshot.readMetadata();
 	const compilerPath = path.join(directory, "capture.bin.compiler");
 	if (prepared.mode === "compiler" && !existsSync(compilerPath)) {
 		throw new Error("compiler profile counter artifact is missing");
@@ -1433,8 +1481,12 @@ export function finalizeProfileCapture(
 	const gc = summarizeGc(capture.records);
 	const phases = summarizePhases(capture);
 	const quality = profileQuality(capture, gc, phases);
-	const ranked = findings(capture, prepared, quality, compiler);
-	atomicJson(path.join(directory, "cpu.cpuprofile"), cpuProfile(capture, prepared));
+	const positionSites = positionSiteIndex(prepared);
+	const ranked = findings(capture, prepared, quality, positionSites, compiler);
+	atomicJson(
+		path.join(directory, "cpu.cpuprofile"),
+		cpuProfile(capture, prepared, positionSites),
+	);
 	atomicJson(
 		path.join(directory, "timeline.json"),
 		capture.records

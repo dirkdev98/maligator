@@ -7,7 +7,7 @@ import {
 	finalizeProfileCapture,
 	formatProfileReport,
 } from "../src/profile-artifact.ts";
-import type { PreparedProfile } from "../src/profile-artifact.ts";
+import { PreparedProfile } from "../src/profile-artifact.ts";
 
 const HELP = `Usage: node scripts/profile-product-cli.ts [--compiler] [--runs N] [--cwd DIR] -- <cli arguments>
 
@@ -45,9 +45,7 @@ const binary = buildProductCli({
 	profile: mode,
 	onProgress: (message) => console.error(`[build] ${message}`),
 });
-const prepared = JSON.parse(
-	readFileSync(`${binary}.profile.json`, "utf8"),
-) as PreparedProfile;
+const prepared = PreparedProfile.fromJson(readFileSync(`${binary}.profile.json`, "utf8"));
 for (let run = 1; run <= runs; run++) {
 	const capture = createProfileCapture(
 		"product-cli",

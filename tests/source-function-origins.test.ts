@@ -14,7 +14,7 @@ import {
 import type { CompileCoreOptions } from "../src/compiler/pipeline/compile-core.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import { prepareProfile } from "../src/profile-artifact.ts";
-import type { PreparedProfile } from "../src/profile-artifact.ts";
+import type { ProfileMetadata } from "../src/profile-artifact.ts";
 
 function compile(
 	source: string,
@@ -34,20 +34,22 @@ function compile(
 	return { semantic, image };
 }
 
-function publish(image: ProgramImage): PreparedProfile {
+function publish(image: ProgramImage): ProfileMetadata {
 	const directory = mkdtempSync(path.join(tmpdir(), "mal-function-origins-"));
 	try {
 		const binary = path.join(directory, "program");
 		writeFileSync(binary, "identity fixture");
 		const prepared = prepareProfile(binary, image);
-		expect(JSON.parse(readFileSync(`${binary}.profile.json`, "utf8"))).toEqual(prepared);
-		return prepared;
+		expect(JSON.parse(readFileSync(`${binary}.profile.json`, "utf8"))).toEqual(
+			prepared.readMetadata(),
+		);
+		return prepared.readMetadata();
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
 }
 
-function known(profile: PreparedProfile, name: string) {
+function known(profile: ProfileMetadata, name: string) {
 	const identity = profile.functions.find((fn) => fn.name === name)?.identity;
 	expect(identity?.status).toBe("known");
 	if (identity?.status !== "known")
@@ -61,7 +63,7 @@ test("original call keys distinguish sibling calls and survive unrelated inserti
 	const source = "function run(fn) { return fn(1) + fn(2); } globalThis.saved = run;";
 	const before = publish(compile(source).image);
 	const after = publish(compile(`function unrelated() { return 9; }\n${source}`).image);
-	const keys = (profile: PreparedProfile) =>
+	const keys = (profile: ProfileMetadata) =>
 		profile.calls.map((call) => {
 			expect(call.identity.status).toBe("known");
 			expect(call.lowered).toBe(true);
@@ -173,7 +175,7 @@ test("named class methods have stable identities and distinguish method roles", 
 	globalThis.Core = Core;`;
 	const before = publish(compile(source).image);
 	const after = publish(compile(`function noise() { return 0; }\n${source}`).image);
-	const methodIdentities = (profile: PreparedProfile) =>
+	const methodIdentities = (profile: ProfileMetadata) =>
 		profile.functions
 			.filter((fn) =>
 				["method", "get value", "set value", "#private", "read"].includes(fn.name),
@@ -205,7 +207,7 @@ test("class edits change method revisions while preserving declaration origins",
 test("class method call keys survive unrelated insertion", () => {
 	const source =
 		"class Core { run(fn) { return fn(1) + fn(2); } } globalThis.Core = Core;";
-	const calls = (profile: PreparedProfile) =>
+	const calls = (profile: ProfileMetadata) =>
 		profile.calls.map((call) => {
 			expect(call.identity.status).toBe("known");
 			return call.identity.status === "known" ? call.identity.key : "";

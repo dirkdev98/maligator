@@ -14,8 +14,9 @@ import {
 	createProfileCapture,
 	finalizeProfileCapture,
 	prepareProfile,
+	PreparedProfile,
 } from "../src/profile-artifact.ts";
-import type { PreparedProfile, ProfileManifest } from "../src/profile-artifact.ts";
+import type { ProfileManifest } from "../src/profile-artifact.ts";
 import { buildNativeBinaryResult } from "../src/test-harness.ts";
 import { performanceSourceIdentity } from "./bench-compare.ts";
 import { runBoundedProcess } from "./performance-process.ts";
@@ -139,9 +140,7 @@ async function main() {
 			outDir: output,
 			environment: cleanTestEnvironment(),
 		});
-		const prepared = profile
-			? prepareProfile(built.binaryPath, built.programImage)
-			: undefined;
+		if (profile) prepareProfile(built.binaryPath, built.programImage);
 		json(path.join(output, "build.json"), {
 			binary: built.binaryPath,
 			runtimeDirectory: built.context.runtimeDirectory,
@@ -149,7 +148,6 @@ async function main() {
 			toolchain: built.context.toolchain,
 			plan: built.context.plan,
 			config,
-			prepared,
 		});
 		return;
 	}
@@ -236,7 +234,6 @@ async function main() {
 			binary: string;
 			runtimeDirectory: string;
 			sha256: string;
-			prepared?: PreparedProfile;
 		}
 	> = {};
 	for (const variant of ["ordinary", "profile"]) {
@@ -264,7 +261,9 @@ async function main() {
 	}
 	const ordinary = builds.ordinary!;
 	const profile = builds.profile!;
-	const prepared = profile.prepared!;
+	const prepared = PreparedProfile.fromJson(
+		readFileSync(`${profile.binary}.profile.json`, "utf8"),
+	);
 	const expectedSpans: Readonly<Record<number, number>> = {
 		100: 1,
 		101: 64 * selected.scale,

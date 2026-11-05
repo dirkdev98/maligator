@@ -158,11 +158,15 @@ test("profile optimizer data enters only the explicit prepared-profile sidecar",
 		);
 		expect(definition.diagnostics).not.toHaveProperty("coreOptimizationReport");
 		expect(definition.diagnostics).not.toHaveProperty("coreOptimizationPlan");
-		expect(prepared.coreOptimizationReport?.phases.length).toBeGreaterThan(0);
-		expect(prepared.coreOptimizationPlan?.version.key).toMatch(/^p:/);
+		expect(prepared.readMetadata().coreOptimizationReport?.phases.length).toBeGreaterThan(
+			0,
+		);
+		expect(prepared.readMetadata().coreOptimizationPlan?.version.key).toMatch(/^p:/);
 		expect(
 			profileCaptureIdentity(
-				JSON.parse(readFileSync(`${binary}.profile.json`, "utf8")) as typeof prepared,
+				JSON.parse(readFileSync(`${binary}.profile.json`, "utf8")) as ReturnType<
+					typeof prepared.readMetadata
+				>,
 			),
 		).toBe(prepared.captureIdentity);
 	} finally {
@@ -184,7 +188,7 @@ test("sampling sidecars omit the raw Core plan while retaining their content ide
 		);
 		const written = JSON.parse(
 			readFileSync(`${binary}.profile.json`, "utf8"),
-		) as typeof prepared;
+		) as ReturnType<typeof prepared.readMetadata>;
 		expect(written.coreOptimizationPlan).toBeUndefined();
 		expect(written.coreOptimizationReport?.phases.length).toBeGreaterThan(0);
 		expect(written.sites).toEqual(definition.profiling?.sites ?? []);

@@ -26,7 +26,7 @@ import { CommandProgress } from "../src/command-progress.ts";
 import type { FfiCheckReport } from "../src/ffi/check.ts";
 import { buildProductCli } from "../src/product-builder.ts";
 import { parseProfileCapture, profileCaptureIdentity } from "../src/profile-artifact.ts";
-import type { PreparedProfile, ProfileManifest } from "../src/profile-artifact.ts";
+import type { ProfileMetadata, ProfileManifest } from "../src/profile-artifact.ts";
 import { requireToolchain, resolvePathExecutable } from "../src/toolchain.ts";
 import { requireHeapLimit } from "./heap-limit.ts";
 import { isolatedToolsDirectory } from "./isolated-tools.ts";
@@ -270,7 +270,7 @@ function checkApplicationPids(
 function checkProfile(directory: string, command: "run" | "test"): void {
 	const metadata = JSON.parse(
 		readFileSync(path.join(directory, "metadata.json"), "utf-8"),
-	) as PreparedProfile;
+	) as ProfileMetadata;
 	const manifest = JSON.parse(
 		readFileSync(path.join(directory, "manifest.json"), "utf-8"),
 	) as ProfileManifest;

@@ -1,8 +1,8 @@
-import { copyFileSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { artifactFileDigest } from "./artifact-store.ts";
 import type { BuildCommandResult } from "./cli-commands.ts";
-import type { PreparedProfile } from "./profile-artifact.ts";
+import { PreparedProfile } from "./profile-artifact.ts";
 
 export type CompilerResultMessage = Omit<BuildCommandResult, "profile"> & {
 	profileArtifact?: {
@@ -20,12 +20,10 @@ export function publishCompilerResult(
 ): CompilerResultMessage {
 	const { profile, ...result } = value;
 	if (profile === undefined) return result;
-	if (profile.captureIdentity === undefined)
-		throw new Error("compiled profile metadata has no capture identity");
 	if (value.binaryPath === undefined)
 		throw new Error("profile metadata has no compiled binary");
 	const file = join(directory, "profile.json");
-	copyFileSync(`${value.binaryPath}.profile.json`, file);
+	profile.writeMetadata(file);
 	return {
 		...result,
 		profileArtifact: {
@@ -50,9 +48,8 @@ export function restoreCompilerResult(
 		artifactFileDigest(file) !== profileArtifact.sha256
 	)
 		throw new Error("compiler profile metadata does not match its published bytes");
-	const profile = JSON.parse(readFileSync(file, "utf8")) as PreparedProfile;
+	const profile = PreparedProfile.fromJson(readFileSync(file, "utf8"));
 	if (
-		profile?.schema !== 8 ||
 		profile.buildId !== profileArtifact.buildId ||
 		profile.captureIdentity !== profileArtifact.captureIdentity
 	)
