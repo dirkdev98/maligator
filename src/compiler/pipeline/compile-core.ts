@@ -25,11 +25,9 @@ export function compileSemanticProgramToProgramImage(
 		options.runPhase ?? (<T>(_phase: CompileCorePhase, run: () => T): T => run());
 	const optimized = optimizeSemanticProgramToCore(
 		semantic,
-		{
-			...options,
-			privateRestIteration: options.privateRestIteration ?? lowerPrivateRestIteration,
-		},
+		options,
 		runPhase,
+		options.privateRestIteration ?? lowerPrivateRestIteration,
 	);
 	return lowerOptimizedCoreToProgramImage(optimized, options, runPhase);
 }
@@ -42,11 +40,9 @@ export function compileConstructedCoreToProgramImage(
 ): ProgramImage {
 	const optimized = optimizeConstructedCore(
 		core,
-		{
-			...options,
-			privateRestIteration: options.privateRestIteration ?? lowerPrivateRestIteration,
-		},
+		options,
 		runPhase,
+		options.privateRestIteration ?? lowerPrivateRestIteration,
 	);
 	return lowerOptimizedCoreToProgramImage(optimized, options, runPhase);
 }

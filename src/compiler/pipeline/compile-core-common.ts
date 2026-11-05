@@ -82,11 +82,13 @@ export function optimizeSemanticProgramToCore(
 	semantic: SemanticProgram,
 	options: CompileCoreOptions,
 	runPhase: <T>(phase: CompileCorePhase, run: () => T) => T,
+	privateRestIteration = options.privateRestIteration,
 ): CoreCompilation {
 	return optimizeConstructedCore(
 		constructSemanticProgramCore(semantic, options, runPhase),
 		options,
 		runPhase,
+		privateRestIteration,
 	);
 }
 
@@ -94,10 +96,11 @@ export function optimizeConstructedCore(
 	core: ConstructedCoreCompilation,
 	options: CompileCoreOptions,
 	runPhase: <T>(phase: CompileCorePhase, run: () => T) => T,
+	privateRestIteration = options.privateRestIteration,
 ): CoreCompilation {
 	const optimizedResult = runPhase("optimize core ir", () => {
 		return optimizeCore(core, {
-			privateRestIteration: options.privateRestIteration,
+			privateRestIteration,
 			verification: options.coreVerification,
 			mode: options.optimization ?? "full",
 			instrumentation: options.coreInstrumentation ?? "off",
