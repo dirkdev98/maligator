@@ -71,6 +71,31 @@ function publishAction(
 }
 
 describe("CI native cache snapshots", () => {
+	it("shares immutable blob storage while retaining a snapshot after cache eviction", () => {
+		const root = path.join(directory, "cache");
+		const lastUsedMs = Date.now() - DAY_MS;
+		const action = publishAction(root, "generated-object", "object", 100, lastUsedMs);
+		const digest = createHash("sha256").update(Buffer.alloc(100, "object")).digest("hex");
+		const snapshot = path.join(directory, "snapshot");
+
+		exportSnapshot(snapshot, root);
+
+		const sourceBlob = statSync(blobPath(root, digest));
+		const snapshotBlob = statSync(blobPath(snapshot, digest));
+		expect([snapshotBlob.dev, snapshotBlob.ino]).toEqual([
+			sourceBlob.dev,
+			sourceBlob.ino,
+		]);
+		utimesSync(path.join(snapshot, action), new Date(), new Date());
+		expect(statSync(path.join(root, action)).mtimeMs).toBe(lastUsedMs);
+		rmSync(root, { recursive: true });
+
+		const restored = path.join(directory, "restored");
+		importSnapshot(snapshot, restored);
+		expect(readFileSync(blobPath(restored, digest))).toEqual(Buffer.alloc(100, "object"));
+		expect(snapshotContents(restored)).toEqual(new Set([action]));
+	});
+
 	it("keeps costlier stages ahead of newer fixture objects within the cap", () => {
 		const root = path.join(directory, "cache");
 		const now = Date.now();

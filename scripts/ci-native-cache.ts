@@ -1,7 +1,9 @@
 import { hash, randomUUID } from "node:crypto";
 import {
 	appendFileSync,
+	constants,
 	copyFileSync,
+	linkSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
@@ -275,11 +277,26 @@ function readThinLtoManifest(directory: string): Array<ThinLtoEntry> {
 	}
 }
 
-function copyAtomically(source: string, destination: string): void {
+function copyAtomically(
+	source: string,
+	destination: string,
+	shareImmutableBlob = false,
+): void {
 	mkdirSync(path.dirname(destination), { recursive: true });
 	const temporary = `${destination}.${process.pid}-${randomUUID()}`;
 	try {
-		copyFileSync(source, temporary);
+		if (shareImmutableBlob) {
+			// Cache blobs are replaced atomically, never edited in place. Sharing them keeps
+			// snapshot staging from allocating another copy of a multi-gigabyte cache.
+			try {
+				linkSync(source, temporary);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+				copyFileSync(source, temporary, constants.COPYFILE_FICLONE);
+			}
+		} else {
+			copyFileSync(source, temporary, constants.COPYFILE_FICLONE);
+		}
 		renameSync(temporary, destination);
 	} finally {
 		rmSync(temporary, { force: true });
@@ -455,7 +472,7 @@ export function exportSnapshot(
 				continue;
 			}
 			for (const [index, source] of sources.entries()) {
-				copyAtomically(source, blob(directory, entry.outputs[index]!.digest));
+				copyAtomically(source, blob(directory, entry.outputs[index]!.digest), true);
 			}
 			const manifest = path.join(directory, entry.manifest);
 			copyAtomically(path.join(root, entry.manifest), manifest);
