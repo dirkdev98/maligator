@@ -2778,7 +2778,7 @@ static void mal_vm_run_until_frame_count(
                             : mal_value_is_truthy(result);
                         MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(instruction_pointer);
                         instruction_pointer++;
-                        if (truthy) {
+                        if (truthy != (branch->as.jump_if.negate != 0)) {
                             instruction_pointer = branch->as.jump_if.target_ip;
                         }
                         MAL_PERF_COUNT(interpreter_binary_branch_fusions);
@@ -2830,7 +2830,9 @@ static void mal_vm_run_until_frame_count(
                 registers[instruction->as.binary.dst] = result; \
                 MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(instruction_pointer); \
                 MAL_PERF_COUNT(interpreter_binary_branch_fusions); \
-                instruction_pointer = result == MAL_VALUE_TRUE \
+                instruction_pointer = \
+                    (result == MAL_VALUE_TRUE) != \
+                        (instructions[instruction_pointer].as.jump_if.negate != 0) \
                     ? instructions[instruction_pointer].as.jump_if.target_ip \
                     : instruction_pointer + 1; \
                 MAL_VM_INTERPRETER_DIRECT_LEAF(); \
@@ -3519,7 +3521,7 @@ static void mal_vm_run_until_frame_count(
                         branch->as.jump_if.target_ip > instruction_pointer) {
                         MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(instruction_pointer);
                         instruction_pointer++;
-                        if (matches) {
+                        if (matches != (branch->as.jump_if.negate != 0)) {
                             instruction_pointer = branch->as.jump_if.target_ip;
                         }
                         MAL_PERF_COUNT(interpreter_guard_branch_fusions);
@@ -3547,7 +3549,9 @@ static void mal_vm_run_until_frame_count(
                         branch->as.jump_if.target_ip > instruction_pointer) {
                         MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(instruction_pointer);
                         instruction_pointer++;
-                        if (matches) instruction_pointer = branch->as.jump_if.target_ip;
+                        if (matches != (branch->as.jump_if.negate != 0)) {
+                            instruction_pointer = branch->as.jump_if.target_ip;
+                        }
                         MAL_PERF_COUNT(interpreter_guard_branch_fusions);
                     }
                 }
@@ -3643,9 +3647,10 @@ static void mal_vm_run_until_frame_count(
                 bool truthy = mal_value_is_boolean(condition)
                     ? mal_value_to_boolean(condition)
                     : mal_value_is_truthy(condition);
-                bool backedge = truthy &&
+                bool taken = truthy != (instruction->as.jump_if.negate != 0);
+                bool backedge = taken &&
                     instruction->as.jump_if.target_ip < instruction_pointer;
-                if (truthy) {
+                if (taken) {
                     instruction_pointer = instruction->as.jump_if.target_ip;
                 }
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
