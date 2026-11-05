@@ -89,6 +89,10 @@ for (const [x, y, mask] of [
 	[5, 5, "8"],
 	[5, 5, null],
 	[5, 5, traced("mask", 32)],
+	[2.9, 2 ** 33 + 5, 0],
+	[-(2 ** 31), -1, 0],
+	[NaN, 3, 0],
+	[2 ** 53, 3.5, 0],
 ]) {
 	outputs.push(productOr(x, y, mask));
 }

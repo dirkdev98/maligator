@@ -226,11 +226,14 @@ static inline i32 mal_ops_number_to_i32(f64 number) {
  */
 __attribute__((cold, noinline)) i32 mal_ops_number_to_i32_cold(f64 number);
 
-/** ToInt32 of a boxed Number; an int32-tagged value already is its own result. */
+/**
+ * ToInt32 of a boxed Number; an int32-tagged value already is its own result. A double
+ * converts out of line, since an inline select would keep its conversion on the
+ * dependency chain of loops whose values are int32.
+ */
 static inline i32 mal_ops_number_value_to_i32(MalValue value) {
-    return value >= MAL_VALUE_TAG_BASE
-        ? (i32) (u32) (value & MASK_INT32)
-        : mal_ops_number_to_i32(mal_value_to_f64(value));
+    if (__builtin_expect(value >= MAL_VALUE_TAG_BASE, 1)) return (i32) (u32) (value & MASK_INT32);
+    return mal_ops_number_to_i32_cold(mal_value_to_f64(value));
 }
 
 /**

@@ -11590,6 +11590,26 @@ class NativeInstructionEmission {
 				];
 			}
 			const numericKernel = MATH_NUMBER_KERNELS[instruction.operation];
+			if (instruction.operation === "Math.imul" && instruction.arguments.length >= 2) {
+				const int32 = (operand: number): string | null => {
+					const exact = this.exactInt32Operand(operand);
+					if (exact !== undefined) return exact;
+					const numeric = this.nativeNumberOperand(operand);
+					return numeric === null ? null : `mal_ops_number_to_i32(${numeric})`;
+				};
+				const left = int32(instruction.arguments[0]!);
+				const right = int32(instruction.arguments[1]!);
+				if (left !== null && right !== null) {
+					return [
+						this.storeMathNumber(
+							instruction.dst,
+							instruction.operation,
+							`mal_scalar_i32_from_bits((u32)(${left}) * (u32)(${right}))`,
+						),
+						this.callPoll(),
+					];
+				}
+			}
 			if (numericKernel !== undefined) {
 				const arguments_ = Array.from({ length: numericKernel[1] }, (_, index) => {
 					const operand = instruction.arguments[index];
@@ -11718,6 +11738,29 @@ class NativeInstructionEmission {
 					guard = "true";
 					direct = [
 						this.storeNumber(instruction.dst, `mal_ops_to_number(${input})`),
+						this.callPoll(),
+					];
+				} else if (
+					instruction.operation === "Math.imul" &&
+					first !== undefined &&
+					second !== undefined
+				) {
+					// imul reads only ToInt32 of each operand, so an int32-tagged argument
+					// multiplies without a round trip through double.
+					const guards: Array<string> = [];
+					const int32 = (operand: number): string => {
+						const exact = this.exactInt32Operand(operand);
+						if (exact !== undefined) return exact;
+						const numeric = this.nativeNumberOperand(operand);
+						if (numeric !== null) return `mal_ops_number_to_i32(${numeric})`;
+						const value = this.boxedOperand(operand);
+						guards.push(`mal_ops_is_number(${value})`);
+						return `mal_ops_number_value_to_i32(${value})`;
+					};
+					const product = `mal_scalar_i32_from_bits((u32)(${int32(first)}) * (u32)(${int32(second)}))`;
+					guard = guards.length === 0 ? "true" : guards.join(" && ");
+					direct = [
+						this.storeMathNumber(instruction.dst, instruction.operation, product),
 						this.callPoll(),
 					];
 				} else if (numericKernel !== undefined) {
