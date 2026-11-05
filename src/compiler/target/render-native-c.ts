@@ -372,6 +372,79 @@ function deferredRestArgumentRootIp(native: NativeFunctionPlan): number | undefi
 	return undefined;
 }
 
+interface NativeVirtualRestRoots {
+	readonly register: number;
+	readonly allocationIp: number;
+	readonly count: string;
+	readonly declarations: ReadonlyArray<string>;
+}
+
+type NativeVirtualRestRootCounts = ReadonlyMap<
+	number,
+	{ readonly incoming: string; readonly outgoing: string }
+>;
+
+function cVirtualRestRootPublication(
+	counts: NativeVirtualRestRootCounts,
+	ip: number,
+	edge: "incoming" | "outgoing",
+): string {
+	const count = counts.get(ip)?.[edge];
+	return count === undefined ? "" : `__virtual_rest_roots.count = ${count};`;
+}
+
+function virtualRestArgumentRoots(
+	native: NativeFunctionPlan,
+	directEntry: NativeDirectEntryPlan | undefined,
+): NativeVirtualRestRoots | undefined {
+	const allocations = native.body.instructions.flatMap((op, ip) =>
+		op.opcode === "CREATE_REST_ARGUMENTS" &&
+		native.instructions[ip]?.kind === "virtual-packed-rest-array"
+			? [op]
+			: [],
+	);
+	if (allocations.length !== 1) return undefined;
+	const allocation = allocations[0]!;
+	const allocationIp = native.body.instructions.indexOf(allocation);
+	if (
+		native.body.instructions
+			.slice(0, allocationIp)
+			.some((op) => op.opcode !== "CREATE_UNDEFINED")
+	)
+		return undefined;
+	const representations =
+		directEntry?.argumentRepresentations ?? directEntry?.parameterRepresentations;
+	if (representations !== undefined) {
+		const values = representations.flatMap((representation, index) =>
+			index >= allocation.startIndex &&
+			(representation === "boxed" || representation === "string")
+				? [`p${index}`]
+				: [],
+		);
+		if (values.length === 0) return undefined;
+		return {
+			register: allocation.dst,
+			allocationIp,
+			count: String(values.length),
+			declarations: [
+				`MalValue __virtual_rest_values[] = { ${values.join(", ")} };`,
+				"MalRootSpan __virtual_rest_roots;",
+				`mal_gc_root(&__virtual_rest_roots, __virtual_rest_values, ${values.length});`,
+			],
+		};
+	}
+	return {
+		register: allocation.dst,
+		allocationIp,
+		count: "__virtual_rest_count",
+		declarations: [
+			`const u32 __virtual_rest_count = arg_count > ${allocation.startIndex} ? (u32) (arg_count - ${allocation.startIndex}) : 0;`,
+			"MalRootSpan __virtual_rest_roots;",
+			`mal_gc_root(&__virtual_rest_roots, __virtual_rest_count > 0 ? (MalValue *) args + ${allocation.startIndex} : nullptr, __virtual_rest_count);`,
+		],
+	};
+}
+
 function analyzeNativeBody(
 	fn: BytecodeFunction,
 	captures: NativeCaptureAccessPlan,
@@ -3692,6 +3765,28 @@ function emitCompiledVariant(
 		? undefined
 		: deferredRestRootIp;
 	const argumentUnlink = retainsArguments ? "mal_gc_unroot(&__argument_roots); " : "";
+	const virtualRestRoots = virtualRestArgumentRoots(nativeContract, directEntry);
+	const virtualRestRootCounts = new Map(
+		virtualRestRoots === undefined
+			? []
+			: nativeContract.gc.safepoints.map(
+					(point) =>
+						[
+							point.instructionIp,
+							{
+								incoming: (point.instructionIp === virtualRestRoots.allocationIp
+									? point.outgoingRootRegisters
+									: point.incomingRootRegisters
+								).includes(virtualRestRoots.register)
+									? virtualRestRoots.count
+									: "0",
+								outgoing: point.outgoingRootRegisters.includes(virtualRestRoots.register)
+									? virtualRestRoots.count
+									: "0",
+							},
+						] as const,
+				),
+	);
 	const columnPlans = storage.numericLoopRegions.filter(
 		(plan) => plan.kind === "array-iteration" && plan.privateColumns === true,
 	);
@@ -3703,6 +3798,7 @@ function emitCompiledVariant(
 		})
 		.join("");
 	const gcUnlink =
+		(virtualRestRoots === undefined ? "" : "mal_gc_unroot(&__virtual_rest_roots); ") +
 		argumentUnlink +
 		columnsUnlink +
 		(needsRootFrame ? "vm->root_frame_head = __gc_frame.prev; " : "");
@@ -3796,6 +3892,9 @@ function emitCompiledVariant(
 		storage.controlFlow,
 		storage.elidedPureIps,
 		storage.stringComparisons,
+		fastTryTargets,
+		onFastTryLookup,
+		virtualRestRootCounts,
 	);
 	if (body === null) {
 		return null;
@@ -4046,6 +4145,9 @@ function emitCompiledVariant(
 			"    mal_gc_root(&__argument_roots, (MalValue *) args, arg_count);",
 		);
 	}
+	// The elided Array owns its suffix only while its logical register is live.
+	if (virtualRestRoots !== undefined)
+		lines.push(...virtualRestRoots.declarations.map((line) => `    ${line}`));
 
 	// Allocate this activation's captured-slot env (mirroring the interpreter) and
 	// reassign `env` so the body's LOAD/STORE_CAPTURED(self) and CREATE_FUNCTION use
@@ -6959,6 +7061,9 @@ function emitBody(
 	controlFlow?: NativeControlFlowPlan,
 	elidedPureIps: ReadonlyArray<number> = [],
 	stringComparisons: ReadonlyArray<NativeStringComparisonPlan> = [],
+	fastTryTargets: ReadonlyMap<number, NativeFastTryParameters | undefined> = new Map(),
+	onFastTryLookup?: (target: number) => void,
+	virtualRestRootCounts: NativeVirtualRestRootCounts = new Map(),
 ): EmittedBody | null {
 	const elided = new Set(elidedPureIps);
 	const copiedClosures = new Set(analysis.captures.copiedClosureIps);
@@ -7654,6 +7759,8 @@ function emitBody(
 		stackObjectInheritedAccess: undefined,
 		directCompiledTargets,
 		directCompiledEntries,
+		fastTryTargets,
+		onFastTryLookup,
 		ownedCaptureFunctionIndex: ownsCaptureEnvironment ? functionIndex : undefined,
 		functionIndex,
 		directClosures,
@@ -7785,6 +7892,13 @@ function emitBody(
 			}
 		}
 		if (elided.has(ip)) continue;
+		const virtualRestRootPublication = cVirtualRestRootPublication(
+			virtualRestRootCounts,
+			ip,
+			"incoming",
+		);
+		if (virtualRestRootPublication.length > 0)
+			lines.push(`    ${virtualRestRootPublication}`);
 		const literalSwitch = switches.get(ip);
 		if (literalSwitch !== undefined) {
 			knownPublishedPrivateRoots.clear();
@@ -7807,7 +7921,7 @@ function emitBody(
 					handler !== undefined
 						? `goto L${handler};`
 						: `goto ${nativeBodyReference(resources, "throwExit")};`;
-				return `if (mal_gc_poll_requested()) { ${cPrivateRootPublication(
+				return `if (mal_gc_poll_requested()) { ${cVirtualRestRootPublication(virtualRestRootCounts, branchIp, "outgoing")} ${cPrivateRootPublication(
 					rootPublication,
 					branchIp,
 					"outgoing",
@@ -7927,7 +8041,7 @@ function emitBody(
 						handler === undefined
 							? nativeBodyReference(resources, "throwExit")
 							: `L${handler}`;
-					return `if (mal_gc_poll_requested_in(${isolate})) { MAL_PERF_COUNT(record_columns_polls); ${spill} ${cPrivateRootPublication(rootPublication, branchIp, "outgoing").join(" ")} ${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask, inactiveRootMaskStatements)};`} mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) goto ${onThrow}; }`;
+					return `if (mal_gc_poll_requested_in(${isolate})) { MAL_PERF_COUNT(record_columns_polls); ${spill} ${cVirtualRestRootPublication(virtualRestRootCounts, branchIp, "outgoing")} ${cPrivateRootPublication(rootPublication, branchIp, "outgoing").join(" ")} ${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask, inactiveRootMaskStatements)};`} mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) goto ${onThrow}; }`;
 				},
 			))
 				lines.push(`    ${line}`);
@@ -8809,6 +8923,8 @@ interface NativeInstructionContext {
 	readonly strictCompiledTargets: ReadonlySet<number>;
 	readonly directCompiledTargets: ReadonlySet<number>;
 	readonly directCompiledEntries: DirectCompiledEntries;
+	readonly fastTryTargets?: ReadonlyMap<number, NativeFastTryParameters | undefined>;
+	readonly onFastTryLookup?: (target: number) => void;
 	readonly directResultRepresentation?: VmRegisterRepresentation;
 	readonly directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
 	readonly constantBoolean?: boolean;
@@ -9087,6 +9203,8 @@ class NativeInstructionEmission {
 			strictCompiledTargets: this.context.strictCompiledTargets,
 			directCompiledTargets: this.context.directCompiledTargets,
 			directCompiledEntries: this.context.directCompiledEntries,
+			fastTryTargets: this.context.fastTryTargets,
+			onFastTryLookup: this.context.onFastTryLookup,
 			directResultRepresentation: this.context.directResultRepresentation,
 			directArgumentRepresentations: this.context.directArgumentRepresentations,
 			constantBoolean: this.context.constantBoolean,
@@ -13302,6 +13420,11 @@ class NativeInstructionEmission {
 					}),
 				);
 
+		if (
+			callPlan?.guardedFunctionIndices?.length === 1 &&
+			this.context.callTransport === undefined
+		)
+			this.context.onFastTryLookup?.(callPlan.guardedFunctionIndices[0]!);
 		if (callPlan?.guardedFunctionIndices !== undefined) {
 			nativeCallDecision(
 				this.context.profile,
@@ -13349,19 +13472,39 @@ class NativeInstructionEmission {
 
 				if (this.context.directCompiledTargets.has(target)) {
 					const value = `__guarded_value_${this.ip}_${target}`;
-					const receiver = this.context.strictCompiledTargets.has(target)
+					const strict = this.context.strictCompiledTargets.has(target);
+					const receiver = strict
 						? this.boxedOperand(instruction.thisValue)
 						: `mal_vm_callee_this(vm, &vm->runtime_image->functions[${this.context.relocation.functionIndex(target)}], ${this.boxedOperand(instruction.thisValue)})`;
+					const ordinary = `${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}(vm, ${receiver}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee}, nullptr)`;
+					const trySymbol =
+						strict &&
+						callPlan.guardedFunctionIndices!.length === 1 &&
+						this.context.callTransport === undefined &&
+						this.context.fastTryTargets?.has(target) &&
+						this.context.fastTryTargets.get(target) === undefined
+							? this.context.relocation.reference(
+									`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}_try`,
+								)
+							: undefined;
+					const invoke =
+						trySymbol === undefined
+							? [`  MalValue ${value} = ${ordinary};`]
+							: [
+									`  MalValue ${value};`,
+									`  if (!${trySymbol}(vm, ${receiver}, ${argsExpr}, ${args.length}, mal_value_to_function_object(${guardedCallee})->creation_env, &${value})) ${value} = ${ordinary};`,
+								];
 					return [
 						`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${this.context.relocation.functionIndex(target)}) {`,
 						`  MAL_CALLEE_REALM_ENTER(${guardedCallee});`,
-						`  MalValue ${value} = ${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}(vm, ${receiver}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee}, nullptr);`,
+						...invoke,
 						"  MAL_CALLEE_REALM_LEAVE();",
 						`  ${this.throwCheck()}`,
 						`  r${instruction.dst} = ${callResult(value)};`,
 						"}",
 					];
 				}
+
 				return [
 					`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${this.context.relocation.functionIndex(target)}) {`,
 					`  MalCompletion ${tmp} = mal_vm_call_exact_script(vm, ${this.context.relocation.functionIndex(target)}, ${guardedCallee}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,

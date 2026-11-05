@@ -6,6 +6,8 @@ tests/native/record-sort-callback.test.ts
 tests/native/record-iteration.test.ts
 tests/native/record-columns.test.ts
 tests/native/literal-object-assign.test.ts
+tests/native/mapped-closure-calls.test.ts
+tests/native/rest-iteration.test.ts
 tests/native/unicode-ascii-transforms.test.ts
 tests/native/generator-fusion.test.ts
 tests/native/promise-all-dense.test.ts

@@ -235,6 +235,7 @@
 				"src/compiler/core/semantic-lowering.ts",
 				"src/compiler/core/core-capture-liveness.ts",
 				"src/compiler/core/core-instruction-removal.ts",
+				"src/compiler/core/core-rest-iteration.ts",
 				"src/compiler/core/core-rest-materialization.ts",
 				"src/compiler/core/core-synchronous-callbacks.ts"
 			]

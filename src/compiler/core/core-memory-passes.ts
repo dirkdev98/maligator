@@ -95,6 +95,7 @@ import {
 } from "./core-primitive-operations.ts";
 import { coreModulePrivateNames } from "./core-private-names.ts";
 import type { CoreModulePrivateNameIndex } from "./core-private-names.ts";
+import { lowerPrivateRestIteration } from "./core-rest-iteration.ts";
 import {
 	selectStaticPropertyReads,
 	foldStaticBindingConstants,
@@ -2816,6 +2817,7 @@ export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	reuseLiteralConstants,
 	lowerKnownOperationResults,
 	lowerLiteralObjectAssign,
+	lowerPrivateRestIteration,
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,
 	annotateKnownOwnSlots,
@@ -2850,6 +2852,7 @@ export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	reuseLiteralConstants,
 	lowerKnownOperationResults,
 	lowerLiteralObjectAssign,
+	lowerPrivateRestIteration,
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,
 	annotateKnownOwnSlots,

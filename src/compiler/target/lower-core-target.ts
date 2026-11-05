@@ -105,6 +105,7 @@ import {
 import { planCoreClassLayouts } from "./lower-class-layouts.ts";
 import { planCoreExactArrayAccesses } from "./lower-exact-arrays.ts";
 import type { CoreExactArrayAccess } from "./lower-exact-arrays.ts";
+import { mappedFunctionArrayCallHints } from "./mapped-function-array-hints.ts";
 import { planCoreDirectClosures } from "./plan-direct-closures.ts";
 import type { CoreDirectClosurePlan } from "./plan-direct-closures.ts";
 import { verifyCoreTargetBlockLayout } from "./verify-core-target-layout.ts";
@@ -1656,6 +1657,7 @@ function lowerInstructionFacts(
 
 function prepareFunctionForTargets(
 	coreFunction: CoreFunctionStore,
+	mappedCallHints: ReadonlyMap<CoreInstructionId, ReadonlyArray<CoreFunctionId>>,
 	executionFunction: number,
 	functionMap: CoreTargetFunctionMap,
 	directEntryIds: ReadonlyMap<CoreInstructionId, number>,
@@ -1700,7 +1702,7 @@ function prepareFunctionForTargets(
 		coreFunction,
 		protectedInstructions,
 	);
-	const guardedTargets = new Map<CoreInstructionId, ReadonlyArray<CoreFunctionId>>();
+	const guardedTargets = new Map(mappedCallHints);
 	const exactCallTargets = new Set<CoreInstructionId>();
 	for (const row of recipeRows) {
 		if (coreSpecializationRecipeKindAt(recipeTable, row) !== "guarded-direct-call")
@@ -3387,6 +3389,13 @@ export function prepareCoreCompilationToTargets(
 	const functions = functionMap.executionToCore.map((core, execution) =>
 		prepareFunctionForTargets(
 			compilation.program.function(core),
+			options.excludeGuardedDirectCalls === true
+				? new Map()
+				: mappedFunctionArrayCallHints(
+						compilation,
+						compilation.program.function(core),
+						functionMap.coreToExecution,
+					),
 			execution,
 			functionMap,
 			directEntryIds.get(core) ?? new Map(),

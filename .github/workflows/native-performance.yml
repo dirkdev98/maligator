@@ -17,12 +17,13 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       contains(github.event.pull_request.labels.*.name, 'native-performance') &&
       (github.event.action == 'synchronize' || github.event.label.name == 'native-performance')
-    name: JavaScript ${{ matrix.mode }} / ${{ matrix.comparison }}
+    name: ${{ matrix.lane }} ${{ matrix.mode }} / ${{ matrix.comparison }}
     runs-on: ubuntu-26.04
     timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
+        lane: [javascript, javascript-v2]
         mode: [closed-compiled, open-compiled]
         comparison: [parent, cumulative]
     env:
@@ -79,8 +80,9 @@ jobs:
         env:
           COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
           JAVASCRIPT_MODE: ${{ matrix.mode }}
+          JAVASCRIPT_LANE: ${{ matrix.lane }}
         run: |
-          node scripts/bench.ts javascript --mode "$JAVASCRIPT_MODE" --compare "$COMPARISON_BASE" \
+          node scripts/bench.ts "$JAVASCRIPT_LANE" --mode "$JAVASCRIPT_MODE" --compare "$COMPARISON_BASE" \
             --runs 5 --max-pairs 7 --budget-seconds 2700 --plan=json \
             | tee .cache/native-performance/plan.json
 
@@ -89,9 +91,10 @@ jobs:
         env:
           COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
           JAVASCRIPT_MODE: ${{ matrix.mode }}
+          JAVASCRIPT_LANE: ${{ matrix.lane }}
         run: |
           set -o pipefail
-          node scripts/bench.ts javascript --mode "$JAVASCRIPT_MODE" --compare "$COMPARISON_BASE" \
+          node scripts/bench.ts "$JAVASCRIPT_LANE" --mode "$JAVASCRIPT_MODE" --compare "$COMPARISON_BASE" \
             --runs 5 --max-pairs 7 --budget-seconds 2700 \
             2>&1 | tee .cache/native-performance/comparison.log
 
@@ -99,7 +102,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-javascript-${{ github.event.pull_request.number }}-${{ matrix.mode }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-${{ matrix.lane }}-${{ github.event.pull_request.number }}-${{ matrix.mode }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache/native-performance/
             .cache/bench-comparisons/*/*.json

@@ -318,11 +318,11 @@ these labels. Adding a label starts only that family; pushing a new head starts
 every currently labeled family. Remove other family labels before a push when
 only one family needs to run:
 
-| Label                         | Work per distinct baseline                                                                                                                     |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `native-performance`          | Separate closed-compiled and open-compiled JavaScript comparisons, five initial pairs, up to seven pairs, 45-minute comparison budgets         |
-| `native-micro-performance`    | The 13 frozen micro kernels above, seven pairs, a 40-minute total build/run budget                                                             |
-| `native-compiler-performance` | One source-only compiler program, two native captures built with `--program` pointing to it, then parser and shape slices with five pairs each |
+| Label                         | Work per distinct baseline                                                                                                                                            |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `native-performance`          | Separate `javascript` and `javascript-v2` comparisons in closed-compiled and open-compiled modes, five initial pairs, up to seven pairs, 45-minute comparison budgets |
+| `native-micro-performance`    | The 13 frozen micro kernels above, seven pairs, a 40-minute total build/run budget                                                                                    |
+| `native-compiler-performance` | One source-only compiler program, two native captures built with `--program` pointing to it, then parser and shape slices with five pairs each                        |
 
 Every family compares the candidate with `git merge-base HEAD PR_BASE_SHA` and,
 when different, with `git merge-base HEAD origin/main` for cumulative stacked-PR
