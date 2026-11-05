@@ -872,6 +872,11 @@ static MalValue mal_promise_reject_static(MalVm *vm, MalValue this_value, const 
 }
 
 bool mal_promise_resolve_value(MalVm *vm, MalValue value, MalValue *out_promise) {
+    if (mal_promise_is_canonical_intrinsic(
+            vm, value, vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR])) {
+        *out_promise = value;
+        return true;
+    }
     // Root `value` for the whole operation: creating the promise capability (and the
     // constructor read on the short-circuit path) allocates, and `value` is consumed
     // afterwards — an unrooted heap value would be freed under GC pressure.

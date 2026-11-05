@@ -621,6 +621,28 @@ checks.push(
 			});
 		})
 		.then(() => {
+			const originalConstructor = Object.getOwnPropertyDescriptor(
+				Promise.prototype,
+				"constructor",
+			);
+			let constructorGets = 0;
+			Object.defineProperty(Promise.prototype, "constructor", {
+				configurable: true,
+				get() {
+					constructorGets++;
+					return Promise;
+				},
+			});
+			const result = (async () => await Promise.resolve(68))();
+			Object.defineProperty(Promise.prototype, "constructor", originalConstructor);
+			return result.then((value) => {
+				ok(
+					"await observes inherited Promise constructor getter",
+					value === 68 && constructorGets === 1,
+				);
+			});
+		})
+		.then(() => {
 			const originalSpecies = Object.getOwnPropertyDescriptor(Promise, Symbol.species);
 			let speciesGets = 0;
 			Object.defineProperty(Promise, Symbol.species, {
