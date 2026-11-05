@@ -96,6 +96,22 @@ check(
 		indexed["01"] === "leading",
 );
 
+const indexBoundaries = JSON.parse(
+	'{"4294967295":1,"-0":2,"2147483648":3,"2147483647":4,"4294967294":5,"01":6,"0":7,"\\u0030":8,"extra":{"held":"café😀"}}',
+);
+forceGc();
+check(
+	"index keys preserve their unsigned range and duplicate ordering",
+	Object.keys(indexBoundaries).join("|") ===
+		"0|2147483647|2147483648|4294967294|4294967295|-0|01|extra" &&
+		indexBoundaries[0] === 8 &&
+		indexBoundaries[2147483648] === 3 &&
+		indexBoundaries[4294967294] === 5 &&
+		indexBoundaries["4294967295"] === 1 &&
+		indexBoundaries["-0"] === 2 &&
+		indexBoundaries.extra.held === "café😀",
+);
+
 function widthSource(count) {
 	let source = "{";
 	for (let i = 0; i < count; i++) {

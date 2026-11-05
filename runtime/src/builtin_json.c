@@ -2514,47 +2514,38 @@ static MalValue mal_json_parse_array(
 }
 
 typedef struct MalJsonObjectMembers {
-    MalKey *keys;
+    // Canonical JSON keys are String or index values; the rooted value preserves their kind.
     MalValue *roots;
     usize count;
     usize capacity;
     MalRootSpan root_span;
-    MalKey inline_keys[4];
-    MalValue inline_roots[8];
+    MalValue inline_roots[16];
 } MalJsonObjectMembers;
 
 static void mal_json_object_members_init(MalJsonObjectMembers *members) {
-    members->keys = members->inline_keys;
     members->roots = members->inline_roots;
     members->count = 0;
-    members->capacity = countof(members->inline_keys);
+    members->capacity = countof(members->inline_roots) / 2;
     mal_gc_root(&members->root_span, members->roots, 0);
 }
 
 static void mal_json_object_members_append_key(MalJsonObjectMembers *members, MalKey key) {
     if (members->count == members->capacity) {
         usize capacity;
-        usize keys_bytes;
         usize roots_bytes;
         if (!mal_checked_size_growth(members->capacity, members->count + 1,
                 8, INT32_MAX / 2, &capacity) ||
-            !mal_checked_size_multiply(capacity, sizeof(MalKey), SIZE_MAX, &keys_bytes) ||
             !mal_checked_size_multiply(capacity, sizeof(MalValue) * 2, SIZE_MAX, &roots_bytes)) abort();
-        MalKey *keys = malloc(keys_bytes);
         MalValue *roots = malloc(roots_bytes);
-        if (keys == nullptr || roots == nullptr) abort();
-        memcpy(keys, members->keys, sizeof(*keys) * members->count);
+        if (roots == nullptr) abort();
         memcpy(roots, members->roots, sizeof(*roots) * members->count * 2);
-        if (members->keys != members->inline_keys) {
-            free(members->keys);
+        if (members->roots != members->inline_roots) {
             free(members->roots);
         }
-        members->keys = keys;
         members->roots = roots;
         members->capacity = capacity;
         members->root_span.slots = roots;
     }
-    members->keys[members->count] = key;
     members->roots[members->count * 2] = key.value;
     // The key must stay rooted while its value is parsed recursively.
     members->roots[members->count * 2 + 1] = MAL_VALUE_UNDEFINED;
@@ -2564,8 +2555,7 @@ static void mal_json_object_members_append_key(MalJsonObjectMembers *members, Ma
 
 static void mal_json_object_members_dispose(MalJsonObjectMembers *members) {
     mal_gc_unroot(&members->root_span);
-    if (members->keys != members->inline_keys) {
-        free(members->keys);
+    if (members->roots != members->inline_roots) {
         free(members->roots);
     }
 }
@@ -2628,8 +2618,8 @@ static MalValue mal_json_object_members_finalize(
     if (cache != nullptr && cache->shape != nullptr && cache->shape_count == members->count) {
         MalValue values[MAL_JSON_SHAPE_MEMO_KEYS];
         usize i = 0;
-        while (i < members->count && members->keys[i].kind == MAL_KEY_STRING &&
-               members->keys[i].value == cache->shape_keys[i]) {
+        while (i < members->count && mal_value_is_string(members->roots[i * 2]) &&
+               members->roots[i * 2] == cache->shape_keys[i]) {
             values[i] = members->roots[i * 2 + 1];
             i++;
         }
@@ -2646,7 +2636,7 @@ static MalValue mal_json_object_members_finalize(
     u32 shape_count = 0;
     bool shaped = true;
     for (usize i = 0; i < members->count; i++) {
-        MalKey key = members->keys[i];
+        MalKey key = mal_key_from_value(members->roots[i * 2]);
         if (key.kind != MAL_KEY_STRING) {
             shaped = false;
             break;
@@ -2704,7 +2694,7 @@ static MalValue mal_json_object_members_finalize(
                 MAL_PROPERTY_CONFIGURABLE
         );
         mal_object_define_own(
-            mal_value_to_object(object_value), members->keys[i], &desc);
+            mal_value_to_object(object_value), mal_key_from_value(members->roots[i * 2]), &desc);
     }
     mal_gc_unroot(&object_span);
     return object_value;
