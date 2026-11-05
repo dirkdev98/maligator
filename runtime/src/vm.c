@@ -2522,6 +2522,17 @@ static_assert(
     "exact collection builtin opcodes must stay contiguous"
 );
 
+// Each handler also carries a label, so GNU C builds can dispatch through a table of
+// handler addresses. That drops the switch's range check and lets the compiler copy
+// the small dispatch block into every handler, giving each one its own indirect
+// branch to predict. Wasm has no indirect jumps and keeps the switch.
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__wasm__)
+#define MAL_VM_THREADED_DISPATCH 1
+#else
+#define MAL_VM_THREADED_DISPATCH 0
+#endif
+#define MAL_VM_CASE(name) case MAL_OP_##name: mal_vm_op_##name:
+
 static void mal_vm_run_until_frame_count(
     MalVm *vm,
     i32 target_frame_count
@@ -2529,6 +2540,40 @@ static void mal_vm_run_until_frame_count(
     , MalRealm *outer_realm
 #endif
 ) {
+#if MAL_VM_THREADED_DISPATCH
+    static const void *const mal_vm_dispatch_table[] = {
+#define BYTECODE_OPERATION(name) [MAL_OP_##name] = &&mal_vm_op_##name,
+#include "generated/bytecode_operations.inc"
+#undef BYTECODE_OPERATION
+#define MAL_VM_QUICK_BINARY_TARGET(name) [MAL_OP_BINARY_##name] = &&mal_vm_op_BINARY_##name,
+        MAL_VM_QUICK_BINARY_TARGET(ADD)
+        MAL_VM_QUICK_BINARY_TARGET(SUB)
+        MAL_VM_QUICK_BINARY_TARGET(MUL)
+        MAL_VM_QUICK_BINARY_TARGET(BIT_AND)
+        MAL_VM_QUICK_BINARY_TARGET(BIT_OR)
+        MAL_VM_QUICK_BINARY_TARGET(BIT_XOR)
+        MAL_VM_QUICK_BINARY_TARGET(SHL)
+        MAL_VM_QUICK_BINARY_TARGET(SHR)
+        MAL_VM_QUICK_BINARY_TARGET(USHR)
+        MAL_VM_QUICK_BINARY_TARGET(LT)
+        MAL_VM_QUICK_BINARY_TARGET(LTE)
+        MAL_VM_QUICK_BINARY_TARGET(GT)
+        MAL_VM_QUICK_BINARY_TARGET(GTE)
+        MAL_VM_QUICK_BINARY_TARGET(EQ)
+        MAL_VM_QUICK_BINARY_TARGET(NEQ)
+        MAL_VM_QUICK_BINARY_TARGET(STRICT_EQ)
+        MAL_VM_QUICK_BINARY_TARGET(STRICT_NEQ)
+        MAL_VM_QUICK_BINARY_TARGET(LT_BRANCH)
+        MAL_VM_QUICK_BINARY_TARGET(LTE_BRANCH)
+        MAL_VM_QUICK_BINARY_TARGET(GT_BRANCH)
+        MAL_VM_QUICK_BINARY_TARGET(GTE_BRANCH)
+        MAL_VM_QUICK_BINARY_TARGET(EQ_BRANCH)
+        MAL_VM_QUICK_BINARY_TARGET(NEQ_BRANCH)
+        MAL_VM_QUICK_BINARY_TARGET(STRICT_EQ_BRANCH)
+        MAL_VM_QUICK_BINARY_TARGET(STRICT_NEQ_BRANCH)
+#undef MAL_VM_QUICK_BINARY_TARGET
+    };
+#endif
     while (vm->frame_count > target_frame_count) {
         MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
         const MalInstruction *instructions = frame->function->instructions;
@@ -2547,14 +2592,17 @@ static void mal_vm_run_until_frame_count(
                 vm, profile_site_id, MAL_PROFILE_SITE_EXECUTION, 1);
 #endif
             const MalInstruction *instruction = &instructions[instruction_pointer++];
+#if MAL_VM_THREADED_DISPATCH
+            goto *mal_vm_dispatch_table[instruction->opcode];
+#endif
 
         switch (instruction->opcode) {
-            case MAL_OP_MOVE:
+            MAL_VM_CASE(MOVE)
                 registers[instruction->as.move.dst] = registers[instruction->as.move.src];
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
 
-            case MAL_OP_BASE_CONSTRUCT_RESULT: {
+            MAL_VM_CASE(BASE_CONSTRUCT_RESULT) {
                 MalValue value = registers[instruction->as.base_construct_result.value];
                 registers[instruction->as.base_construct_result.dst] =
                     mal_value_is_object(value)
@@ -2564,12 +2612,12 @@ static void mal_vm_run_until_frame_count(
                 continue;
             }
 
-            case MAL_OP_CREATE_NUMBER:
+            MAL_VM_CASE(CREATE_NUMBER)
                 registers[instruction->as.create_number.dst] =
                     mal_value_from_i32(instruction->as.create_number.value);
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_CREATE_F64: {
+            MAL_VM_CASE(CREATE_F64) {
                 u64 bits = (u64) instruction->as.create_f64.bits_low |
                     ((u64) instruction->as.create_f64.bits_high << 32);
                 f64 value;
@@ -2578,29 +2626,29 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
-            case MAL_OP_CREATE_BOOLEAN:
+            MAL_VM_CASE(CREATE_BOOLEAN)
                 registers[instruction->as.create_boolean.dst] =
                     mal_value_new_boolean(instruction->as.create_boolean.value != 0);
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_CREATE_STRING:
+            MAL_VM_CASE(CREATE_STRING)
                 registers[instruction->as.create_string.dst] = mal_value_from_string(
                     mal_vm_string_constant(vm, instruction->as.create_string.string_index));
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_CREATE_BIGINT:
+            MAL_VM_CASE(CREATE_BIGINT)
                 registers[instruction->as.create_bigint.dst] = mal_value_from_bigint(
                     mal_vm_bigint_constant(vm, instruction->as.create_bigint.bigint_index));
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_CREATE_OBJECT:
+            MAL_VM_CASE(CREATE_OBJECT)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_object(frame, instruction));
                 break;
-            case MAL_OP_CREATE_BASE_CONSTRUCT_RECEIVER:
+            MAL_VM_CASE(CREATE_BASE_CONSTRUCT_RECEIVER)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(
                     mal_op_create_base_construct_receiver(frame, instruction));
                 break;
-            case MAL_OP_CREATE_OBJECT_SHAPED:
+            MAL_VM_CASE(CREATE_OBJECT_SHAPED)
                 // Successful creation cannot collect or replace this activation.
                 mal_op_create_object_shaped(frame, instruction);
                 if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -2618,65 +2666,65 @@ static void mal_vm_run_until_frame_count(
                 }
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_CREATE_ARRAY:
+            MAL_VM_CASE(CREATE_ARRAY)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_array(frame, instruction));
                 break;
-            case MAL_OP_INSTANTIATE_LITERAL_TEMPLATE:
+            MAL_VM_CASE(INSTANTIATE_LITERAL_TEMPLATE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_instantiate_literal_template(frame, instruction));
                 break;
-            case MAL_OP_QUERY_STATIC_DATA:
+            MAL_VM_CASE(QUERY_STATIC_DATA)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_query_static_data(frame, instruction));
                 break;
-            case MAL_OP_CREATE_MODULE_NAMESPACE:
+            MAL_VM_CASE(CREATE_MODULE_NAMESPACE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_module_namespace(frame, instruction));
                 break;
-            case MAL_OP_CREATE_TEMPLATE_OBJECT:
+            MAL_VM_CASE(CREATE_TEMPLATE_OBJECT)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_template_object(frame, instruction));
                 break;
-            case MAL_OP_WITH_ENTER:
+            MAL_VM_CASE(WITH_ENTER)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_with_enter(frame, instruction));
                 break;
-            case MAL_OP_WITH_EXIT:
+            MAL_VM_CASE(WITH_EXIT)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_with_exit(frame, instruction));
                 break;
-            case MAL_OP_WITH_GET:
+            MAL_VM_CASE(WITH_GET)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_with_get(frame, instruction));
                 break;
-            case MAL_OP_WITH_RESOLVE_BASE:
+            MAL_VM_CASE(WITH_RESOLVE_BASE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_with_resolve_base(frame, instruction));
                 break;
-            case MAL_OP_WITH_SET:
+            MAL_VM_CASE(WITH_SET)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_with_set(frame, instruction));
                 break;
-            case MAL_OP_IS_EMPTY:
+            MAL_VM_CASE(IS_EMPTY)
                 registers[instruction->as.is_empty.dst] = mal_value_new_boolean(
                     mal_value_is_empty(registers[instruction->as.is_empty.src]));
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_CREATE_UNDEFINED:
+            MAL_VM_CASE(CREATE_UNDEFINED)
                 registers[instruction->as.create_undefined.dst] = mal_value_new_undefined();
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_CREATE_EMPTY:
+            MAL_VM_CASE(CREATE_EMPTY)
                 registers[instruction->as.create_empty.dst] = mal_value_new_empty();
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_CREATE_NULL:
+            MAL_VM_CASE(CREATE_NULL)
                 registers[instruction->as.create_null.dst] = mal_value_new_null();
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_CREATE_FUNCTION:
+            MAL_VM_CASE(CREATE_FUNCTION)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_function(frame, instruction));
                 break;
-            case MAL_OP_CREATE_ARGUMENTS_OBJECT:
+            MAL_VM_CASE(CREATE_ARGUMENTS_OBJECT)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_arguments_object(frame, instruction));
                 break;
-            case MAL_OP_LOAD_ARGUMENT_COUNT:
+            MAL_VM_CASE(LOAD_ARGUMENT_COUNT)
                 registers[instruction->as.load_argument_count.dst] =
                     mal_value_from_i32(frame->argument_count);
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_LOAD_ARGUMENT: {
+            MAL_VM_CASE(LOAD_ARGUMENT) {
                 i32 index = instruction->as.load_argument.index;
                 registers[instruction->as.load_argument.dst] =
                     index >= 0 && index < frame->argument_count
@@ -2685,7 +2733,7 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
-            case MAL_OP_LOAD_STATIC_ARGUMENT: {
+            MAL_VM_CASE(LOAD_STATIC_ARGUMENT) {
                 i32 index = instruction->as.load_static_argument.index;
                 if (index < frame->argument_count) {
                     i32 direct = instruction->as.load_static_argument.direct;
@@ -2700,28 +2748,24 @@ static void mal_vm_run_until_frame_count(
                 );
                 break;
             }
-            case MAL_OP_LOAD_THIS:
+            MAL_VM_CASE(LOAD_THIS)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_this(frame, instruction));
                 break;
-            case MAL_OP_LOAD_CALLEE:
+            MAL_VM_CASE(LOAD_CALLEE)
                 registers[instruction->as.load_callee.dst] = frame->callee;
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_LOAD_NEW_TARGET:
+            MAL_VM_CASE(LOAD_NEW_TARGET)
                 registers[instruction->as.load_new_target.dst] = frame->new_target;
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_BINARY: {
+            MAL_VM_CASE(BINARY) {
                 MalValue left = registers[instruction->as.binary.left];
                 MalValue right = registers[instruction->as.binary.right];
                 MalValue result;
                 if (!mal_vm_try_binary_number_fast(instruction->as.binary.op, left, right, &result) &&
                     !mal_vm_try_binary_strict_fast(instruction->as.binary.op, left, right, &result)) {
-                    mal_perf_binary_number_fallback(instruction->as.binary.op);
-                    MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(
-                        result = mal_vm_binary_op(frame->vm, instruction->as.binary.op, left, right);
-                        frame->registers[instruction->as.binary.dst] = result);
-                    break;
+                    goto mal_vm_interpreter_binary_slow;
                 }
                 registers[instruction->as.binary.dst] = result;
                 if (instruction_pointer < frame->function->instruction_count) {
@@ -2743,7 +2787,83 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
-            case MAL_OP_UNARY: {
+            // Every BINARY form leaves through here when its operands need the generic
+            // operation. A _BRANCH form resumes at its JUMP_IF, which reads the result.
+            mal_vm_interpreter_binary_slow: {
+                MalBinaryOp op = instruction->as.binary.op;
+                MalValue left = registers[instruction->as.binary.left];
+                MalValue right = registers[instruction->as.binary.right];
+                mal_perf_binary_number_fallback(op);
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(
+                    frame->registers[instruction->as.binary.dst] =
+                        mal_vm_binary_op(frame->vm, op, left, right));
+                break;
+            }
+// A constant operator lets the shared fast paths fold to this operator's checks.
+#define MAL_VM_QUICK_BINARY(OPERATOR) \
+            MAL_VM_CASE(BINARY_##OPERATOR) { \
+                MalValue result; \
+                if (!mal_vm_try_binary_number_fast( \
+                        MAL_BIN_##OPERATOR, registers[instruction->as.binary.left], \
+                        registers[instruction->as.binary.right], &result) && \
+                    !mal_vm_try_binary_strict_fast( \
+                        MAL_BIN_##OPERATOR, registers[instruction->as.binary.left], \
+                        registers[instruction->as.binary.right], &result)) { \
+                    goto mal_vm_interpreter_binary_slow; \
+                } \
+                registers[instruction->as.binary.dst] = result; \
+                MAL_VM_INTERPRETER_DIRECT_LEAF(); \
+                continue; \
+            }
+// Comparisons produce a Boolean, so the fused JUMP_IF tests it without truthiness.
+#define MAL_VM_QUICK_COMPARE_BRANCH(OPERATOR) \
+            MAL_VM_CASE(BINARY_##OPERATOR##_BRANCH) { \
+                MalValue result; \
+                if (!mal_vm_try_binary_number_fast( \
+                        MAL_BIN_##OPERATOR, registers[instruction->as.binary.left], \
+                        registers[instruction->as.binary.right], &result) && \
+                    !mal_vm_try_binary_strict_fast( \
+                        MAL_BIN_##OPERATOR, registers[instruction->as.binary.left], \
+                        registers[instruction->as.binary.right], &result)) { \
+                    goto mal_vm_interpreter_binary_slow; \
+                } \
+                registers[instruction->as.binary.dst] = result; \
+                MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(instruction_pointer); \
+                MAL_PERF_COUNT(interpreter_binary_branch_fusions); \
+                instruction_pointer = result == MAL_VALUE_TRUE \
+                    ? instructions[instruction_pointer].as.jump_if.target_ip \
+                    : instruction_pointer + 1; \
+                MAL_VM_INTERPRETER_DIRECT_LEAF(); \
+                continue; \
+            }
+            MAL_VM_QUICK_BINARY(ADD)
+            MAL_VM_QUICK_BINARY(SUB)
+            MAL_VM_QUICK_BINARY(MUL)
+            MAL_VM_QUICK_BINARY(BIT_AND)
+            MAL_VM_QUICK_BINARY(BIT_OR)
+            MAL_VM_QUICK_BINARY(BIT_XOR)
+            MAL_VM_QUICK_BINARY(SHL)
+            MAL_VM_QUICK_BINARY(SHR)
+            MAL_VM_QUICK_BINARY(USHR)
+            MAL_VM_QUICK_BINARY(LT)
+            MAL_VM_QUICK_BINARY(LTE)
+            MAL_VM_QUICK_BINARY(GT)
+            MAL_VM_QUICK_BINARY(GTE)
+            MAL_VM_QUICK_BINARY(EQ)
+            MAL_VM_QUICK_BINARY(NEQ)
+            MAL_VM_QUICK_BINARY(STRICT_EQ)
+            MAL_VM_QUICK_BINARY(STRICT_NEQ)
+            MAL_VM_QUICK_COMPARE_BRANCH(LT)
+            MAL_VM_QUICK_COMPARE_BRANCH(LTE)
+            MAL_VM_QUICK_COMPARE_BRANCH(GT)
+            MAL_VM_QUICK_COMPARE_BRANCH(GTE)
+            MAL_VM_QUICK_COMPARE_BRANCH(EQ)
+            MAL_VM_QUICK_COMPARE_BRANCH(NEQ)
+            MAL_VM_QUICK_COMPARE_BRANCH(STRICT_EQ)
+            MAL_VM_QUICK_COMPARE_BRANCH(STRICT_NEQ)
+#undef MAL_VM_QUICK_BINARY
+#undef MAL_VM_QUICK_COMPARE_BRANCH
+            MAL_VM_CASE(UNARY) {
                 MalUnaryOp op = instruction->as.unary.op;
                 MalValue value = registers[instruction->as.unary.src];
                 if (op == MAL_UNARY_NOT) {
@@ -2769,7 +2889,7 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_unary(frame, instruction));
                 break;
             }
-            case MAL_OP_MATH_UNARY_NUMBER: {
+            MAL_VM_CASE(MATH_UNARY_NUMBER) {
                 MalValue value = registers[instruction->as.math_unary_number.src];
                 registers[instruction->as.math_unary_number.dst] = mal_ops_number_value(
                     mal_builtin_math_unary_number_known(
@@ -2778,7 +2898,7 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
-            case MAL_OP_MATH_BINARY_NUMBER: {
+            MAL_VM_CASE(MATH_BINARY_NUMBER) {
                 MalValue left = registers[instruction->as.math_binary_number.left];
                 MalValue right = registers[instruction->as.math_binary_number.right];
                 registers[instruction->as.math_binary_number.dst] = mal_ops_number_value(
@@ -2789,7 +2909,7 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
-            case MAL_OP_TYPEOF_COMPARE: {
+            MAL_VM_CASE(TYPEOF_COMPARE) {
                 bool result = mal_vm_typeof_compare(
                     registers[instruction->as.typeof_compare.src],
                     instruction->as.typeof_compare.expected);
@@ -2799,14 +2919,14 @@ static void mal_vm_run_until_frame_count(
                 continue;
             }
 
-            case MAL_OP_STORE_GLOBAL:
+            MAL_VM_CASE(STORE_GLOBAL)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_global(frame, instruction));
                 break;
-            case MAL_OP_LOAD_GLOBAL_INDEX:
+            MAL_VM_CASE(LOAD_GLOBAL_INDEX)
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 registers[instruction->as.load_global_index.dst] = mal_value_from_i32(instruction->as.load_global_index.index);
                 continue;
-            case MAL_OP_LOAD_GLOBAL: {
+            MAL_VM_CASE(LOAD_GLOBAL) {
                 i32 dst = instruction->as.load_global.dst;
                 MalValue value = vm->globals[instruction->as.load_global.index];
                 registers[dst] = value;
@@ -2823,27 +2943,28 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
-            case MAL_OP_LOAD_PRIMORDIAL:
+            MAL_VM_CASE(LOAD_PRIMORDIAL)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_load_primordial(frame, instruction));
                 break;
-            case MAL_OP_LOAD_INTRINSIC:
+            MAL_VM_CASE(LOAD_INTRINSIC)
                 registers[instruction->as.load_intrinsic.dst] =
                     vm->intrinsics[instruction->as.load_intrinsic.intrinsic];
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_LOAD_PROPERTY: {
+            MAL_VM_CASE(LOAD_PROPERTY) {
                 MalValue object = registers[instruction->as.load_property.object];
                 MalValue key = registers[instruction->as.load_property.key];
                 MalValue result;
-                if ((mal_value_is_int32(key) || mal_value_is_f64(key)) &&
-                    mal_value_is_heap_type(object, MAL_HEAP_ARRAY_OBJECT) &&
-                    mal_vm_array_try_get_index(
-                        (const MalArrayObject *) mal_value_to_heap(object),
-                        mal_value_is_int32(key) ? (f64) mal_value_to_i32(key) : mal_value_to_f64(key),
-                        &result)) {
-                    registers[instruction->as.load_property.dst] = result;
-                    MAL_VM_INTERPRETER_DIRECT_LEAF();
-                    continue;
+                if (mal_ops_is_number(key)) {
+                    f64 index = mal_ops_number_as_f64(key);
+                    if (mal_value_is_heap_type(object, MAL_HEAP_ARRAY_OBJECT)
+                            ? mal_vm_array_try_get_index(
+                                (const MalArrayObject *) mal_value_to_heap(object), index, &result)
+                            : mal_vm_typed_array_try_get_index(object, index, &result)) {
+                        registers[instruction->as.load_property.dst] = result;
+                        MAL_VM_INTERPRETER_DIRECT_LEAF();
+                        continue;
+                    }
                 }
                 MalInlineCache *ic = mal_vm_property_ic_at(
                     frame, instruction->as.load_property.ic_index);
@@ -2863,14 +2984,27 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_property(frame, instruction));
                 break;
             }
-            case MAL_OP_LOAD_PROPERTY_STATIC: {
+            MAL_VM_CASE(LOAD_PROPERTY_STATIC) {
                 MalValue object = registers[instruction->as.load_property_static.object];
                 MalValue result;
                 MalInlineCache *ic = mal_vm_property_ic_at(
                     frame, instruction->as.load_property_static.ic_index);
-                // This one dispatch site serves every static name, so it also keeps the
-                // length rows inline; they are recorded only for `length` sites.
-                bool cache_hit = mal_vm_property_try_load_length_static(vm, object, ic, &result);
+                // This one dispatch site serves every static name, so it keeps the
+                // monomorphic own-slot and prototype-method rows inline ahead of the
+                // length rows, which are recorded only for `length` sites.
+                const MalObject *plain_object = mal_vm_as_object(object);
+                if (plain_object != nullptr && ic->mode == MAL_IC_MODE_SHAPE &&
+                    plain_object->shape == ic->shape) {
+                    mal_perf_ic_load_mono_hit();
+                    registers[instruction->as.load_property_static.dst] =
+                        mal_object_field_load_shaped(plain_object, ic->slot);
+                    MAL_PERF_COUNT(interpreter_local_load_ic_hits);
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
+                bool cache_hit = (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&
+                        mal_vm_inherited_value_try_load(vm, object, ic, &result)) ||
+                    mal_vm_property_try_load_length_static(vm, object, ic, &result);
                 if (cache_hit) {
                     registers[instruction->as.load_property_static.dst] = result;
                     MAL_PERF_COUNT(interpreter_local_load_ic_hits);
@@ -2881,7 +3015,7 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_property_static(frame, instruction));
                 break;
             }
-            case MAL_OP_LOAD_PROPERTY_STATIC_ARRAY_LENGTH: {
+            MAL_VM_CASE(LOAD_PROPERTY_STATIC_ARRAY_LENGTH) {
                 MalValue object = registers[instruction->as.load_property_static.object];
                 if (mal_value_is_heap_type(object, MAL_HEAP_ARRAY_OBJECT)) {
                     const MalArrayObject *array =
@@ -2895,7 +3029,7 @@ static void mal_vm_run_until_frame_count(
                     mal_op_load_property_static(frame, instruction));
                 break;
             }
-            case MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT: {
+            MAL_VM_CASE(LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
                 const i32 *data = frame->function->instruction_data +
                     instruction->as.load_property_static_known_own_slot.data_offset;
                 MalValue object = registers[
@@ -2913,7 +3047,7 @@ static void mal_vm_run_until_frame_count(
                     mal_op_load_property_static_known_own_slot_fallback(frame, instruction));
                 break;
             }
-            case MAL_OP_SELECT_SHAPE_CASE: {
+            MAL_VM_CASE(SELECT_SHAPE_CASE) {
                 const i32 *data = frame->function->instruction_data +
                     instruction->as.select_shape_case.data_offset;
                 MalValue object = registers[instruction->as.select_shape_case.object];
@@ -2927,7 +3061,7 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
-            case MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE: {
+            MAL_VM_CASE(LOAD_PROPERTY_STATIC_SHAPE_CASE) {
                 const i32 *data = frame->function->instruction_data +
                     instruction->as.load_property_static_shape_case.data_offset;
                 MalValue object = registers[
@@ -2948,18 +3082,19 @@ static void mal_vm_run_until_frame_count(
                     mal_op_load_property_static_shape_case_fallback(frame, instruction));
                 break;
             }
-            case MAL_OP_STORE_PROPERTY: {
+            MAL_VM_CASE(STORE_PROPERTY) {
                 MalValue object = registers[instruction->as.store_property.object];
                 MalValue key = registers[instruction->as.store_property.key];
                 MalValue value = registers[instruction->as.store_property.value];
-                if ((mal_value_is_int32(key) || mal_value_is_f64(key)) &&
-                    mal_value_is_heap_type(object, MAL_HEAP_ARRAY_OBJECT) &&
-                    mal_vm_array_try_store(
-                        (MalArrayObject *) mal_value_to_heap(object),
-                        mal_value_is_int32(key) ? (f64) mal_value_to_i32(key) : mal_value_to_f64(key),
-                        value)) {
-                    MAL_VM_INTERPRETER_DIRECT_LEAF();
-                    continue;
+                if (mal_ops_is_number(key)) {
+                    f64 index = mal_ops_number_as_f64(key);
+                    if (mal_value_is_heap_type(object, MAL_HEAP_ARRAY_OBJECT)
+                            ? mal_vm_array_try_store(
+                                (MalArrayObject *) mal_value_to_heap(object), index, value)
+                            : mal_vm_typed_array_try_set_index(object, index, value)) {
+                        MAL_VM_INTERPRETER_DIRECT_LEAF();
+                        continue;
+                    }
                 }
                 MalInlineCache *ic = mal_vm_property_ic_at(
                     frame, instruction->as.store_property.ic_index);
@@ -2972,7 +3107,7 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_property(frame, instruction));
                 break;
             }
-            case MAL_OP_STORE_PROPERTY_STATIC: {
+            MAL_VM_CASE(STORE_PROPERTY_STATIC) {
                 MalValue object = registers[instruction->as.store_property_static.object];
                 MalValue value = registers[instruction->as.store_property_static.value];
                 MalInlineCache *ic = mal_vm_property_ic_at(
@@ -2986,7 +3121,7 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_property_static(frame, instruction));
                 break;
             }
-            case MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT: {
+            MAL_VM_CASE(STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
                 const i32 *data = frame->function->instruction_data +
                     instruction->as.store_property_static_known_own_slot.data_offset;
                 MalValue object = registers[
@@ -3005,59 +3140,59 @@ static void mal_vm_run_until_frame_count(
                         frame, instruction));
                 break;
             }
-            case MAL_OP_TO_PROPERTY_KEY:
+            MAL_VM_CASE(TO_PROPERTY_KEY)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_to_property_key(frame, instruction));
                 break;
-            case MAL_OP_CALL_SPREAD: {
+            MAL_VM_CASE(CALL_SPREAD) {
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call_spread(frame, instruction));
                 break;
             }
-            case MAL_OP_CALL_REST_ARGUMENTS: {
+            MAL_VM_CASE(CALL_REST_ARGUMENTS) {
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call_rest_arguments(frame, instruction));
                 break;
             }
-            case MAL_OP_CALL_SPREAD_ITERABLE: {
+            MAL_VM_CASE(CALL_SPREAD_ITERABLE) {
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(
                     mal_op_call_spread_iterable(frame, instruction));
                 break;
             }
-            case MAL_OP_CONSTRUCT_SPREAD: {
+            MAL_VM_CASE(CONSTRUCT_SPREAD) {
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_construct_spread(frame, instruction));
                 break;
             }
-            case MAL_OP_CONSTRUCT_SUPER: {
+            MAL_VM_CASE(CONSTRUCT_SUPER) {
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_construct_super(frame, instruction));
                 break;
             }
-            case MAL_OP_CONSTRUCT_SUPER_EXPLICIT: {
+            MAL_VM_CASE(CONSTRUCT_SUPER_EXPLICIT) {
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_construct_super_explicit(frame, instruction));
                 break;
             }
-            case MAL_OP_SET_THIS:
+            MAL_VM_CASE(SET_THIS)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_set_this(frame, instruction));
                 break;
-            case MAL_OP_STORE_SUPER_PROPERTY:
+            MAL_VM_CASE(STORE_SUPER_PROPERTY)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_super_property(frame, instruction));
                 break;
-            case MAL_OP_LOAD_SUPER_PROPERTY:
+            MAL_VM_CASE(LOAD_SUPER_PROPERTY)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_super_property(frame, instruction));
                 break;
-            case MAL_OP_LOAD_PROTOTYPE:
+            MAL_VM_CASE(LOAD_PROTOTYPE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_prototype(frame, instruction));
                 break;
-            case MAL_OP_MERGE_DATA_PROPERTIES:
+            MAL_VM_CASE(MERGE_DATA_PROPERTIES)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_merge_data_properties(frame, instruction));
                 break;
-            case MAL_OP_GET_ITERATOR:
+            MAL_VM_CASE(GET_ITERATOR)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_get_iterator(frame, instruction));
                 break;
-            case MAL_OP_GET_ASYNC_ITERATOR:
+            MAL_VM_CASE(GET_ASYNC_ITERATOR)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_get_async_iterator(frame, instruction));
                 break;
-            case MAL_OP_ITERATOR_NEXT:
+            MAL_VM_CASE(ITERATOR_NEXT)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_iterator_next(frame, instruction));
                 break;
-            case MAL_OP_ITERATOR_STEP: {
+            MAL_VM_CASE(ITERATOR_STEP) {
                 MalIteratorRecord record = {
                     .iterator = registers[instruction->as.iterator_step.iterator],
                     .next_method = registers[instruction->as.iterator_step.next],
@@ -3075,17 +3210,17 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_iterator_step(frame, instruction));
                 break;
             }
-            case MAL_OP_ITERATOR_CLOSE:
+            MAL_VM_CASE(ITERATOR_CLOSE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_iterator_close(frame, instruction));
                 break;
-            case MAL_OP_FOR_IN_KEYS:
+            MAL_VM_CASE(FOR_IN_KEYS)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_for_in_keys(frame, instruction));
                 break;
-            case MAL_OP_FOR_IN_HAS:
+            MAL_VM_CASE(FOR_IN_HAS)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_for_in_has(frame, instruction));
                 break;
 
-            case MAL_OP_GENERATOR_START: {
+            MAL_VM_CASE(GENERATOR_START) {
                 MAL_VM_INTERPRETER_SYNC();
                 MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 // The parameter prologue has run; capture this activation into a
@@ -3129,7 +3264,7 @@ static void mal_vm_run_until_frame_count(
                 break;
             }
 
-            case MAL_OP_YIELD: {
+            MAL_VM_CASE(YIELD) {
                 MalGeneratorObject *generator = frame->generator;
                 // Wire frames lack trusted liveness; capture before clearing aliased resume outputs.
                 MalValue transfer_roots[] = {
@@ -3180,7 +3315,7 @@ static void mal_vm_run_until_frame_count(
                 break;
             }
 
-            case MAL_OP_TERMINAL_YIELD: {
+            MAL_VM_CASE(TERMINAL_YIELD) {
                 MAL_VM_INTERPRETER_SYNC();
                 MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 MalGeneratorObject *generator = frame->generator;
@@ -3202,7 +3337,7 @@ static void mal_vm_run_until_frame_count(
                 break;
             }
 
-            case MAL_OP_ASYNC_START: {
+            MAL_VM_CASE(ASYNC_START) {
                 // Set up the async function's result promise + hidden state and
                 // hand the promise to the caller, then keep running this frame
                 // synchronously until its first await / return / throw.
@@ -3210,7 +3345,7 @@ static void mal_vm_run_until_frame_count(
                 break;
             }
 
-            case MAL_OP_AWAIT: {
+            MAL_VM_CASE(AWAIT) {
                 MalGeneratorObject *state = frame->generator;
                 // PromiseResolve can collect after an aliased operand has left the frame.
                 MalValue transfer_roots[] = {
@@ -3246,42 +3381,42 @@ static void mal_vm_run_until_frame_count(
 #endif
                 break;
             }
-            case MAL_OP_DELETE_PROPERTY:
+            MAL_VM_CASE(DELETE_PROPERTY)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_delete_property(frame, instruction));
                 break;
-            case MAL_OP_DEFINE_ACCESSOR:
+            MAL_VM_CASE(DEFINE_ACCESSOR)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_define_accessor(frame, instruction));
                 break;
-            case MAL_OP_DEFINE_PROPERTY:
+            MAL_VM_CASE(DEFINE_PROPERTY)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_define_property(frame, instruction));
                 break;
-            case MAL_OP_SET_FUNCTION_NAME:
+            MAL_VM_CASE(SET_FUNCTION_NAME)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_set_function_name(frame, instruction));
                 break;
-            case MAL_OP_CREATE_PRIVATE_NAME:
+            MAL_VM_CASE(CREATE_PRIVATE_NAME)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_private_name(frame, instruction));
                 break;
-            case MAL_OP_CREATE_PRIVATE_NAMES:
+            MAL_VM_CASE(CREATE_PRIVATE_NAMES)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_private_names(frame, instruction));
                 break;
-            case MAL_OP_DEFINE_PRIVATE:
+            MAL_VM_CASE(DEFINE_PRIVATE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_define_private(frame, instruction));
                 break;
-            case MAL_OP_INIT_PRIVATE_FIELDS:
+            MAL_VM_CASE(INIT_PRIVATE_FIELDS)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_init_private_fields(frame, instruction));
                 break;
-            case MAL_OP_LOAD_PRIVATE:
+            MAL_VM_CASE(LOAD_PRIVATE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_private(frame, instruction));
                 break;
-            case MAL_OP_GUARD_SERVICE_EPOCH:
+            MAL_VM_CASE(GUARD_SERVICE_EPOCH)
                 registers[instruction->as.guard_service_epoch.dst] = mal_value_new_boolean(mal_vm_guard_service_epoch(vm, mal_ops_number_as_f64(registers[instruction->as.guard_service_epoch.epoch])));
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_READ_SERVICE_EPOCH:
+            MAL_VM_CASE(READ_SERVICE_EPOCH)
                 registers[instruction->as.read_service_epoch.dst] = mal_ops_number_value(mal_vm_read_service_epoch(vm));
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_PROBE_READ: {
+            MAL_VM_CASE(PROBE_READ) {
                 const i32 *data = frame->function->instruction_data + instruction->as.probe_read.data_offset;
                 MalValue value;
                 bool success = mal_vm_probe_read(vm,
@@ -3294,34 +3429,34 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
-            case MAL_OP_STORE_PRIVATE:
+            MAL_VM_CASE(STORE_PRIVATE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_private(frame, instruction));
                 break;
-            case MAL_OP_HAS_PRIVATE:
+            MAL_VM_CASE(HAS_PRIVATE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_has_private(frame, instruction));
                 break;
-            case MAL_OP_SET_PROTOTYPE:
+            MAL_VM_CASE(SET_PROTOTYPE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_set_prototype(frame, instruction));
                 break;
-            case MAL_OP_LOAD_UNDECLARED:
+            MAL_VM_CASE(LOAD_UNDECLARED)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_undeclared(frame, instruction));
                 break;
-            case MAL_OP_LOAD_GLOBAL_PROPERTY:
+            MAL_VM_CASE(LOAD_GLOBAL_PROPERTY)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_global_property(frame, instruction));
                 break;
-            case MAL_OP_STORE_GLOBAL_PROPERTY:
+            MAL_VM_CASE(STORE_GLOBAL_PROPERTY)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_global_property(frame, instruction));
                 break;
-            case MAL_OP_DECLARE_GLOBAL_LEXICAL:
+            MAL_VM_CASE(DECLARE_GLOBAL_LEXICAL)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_declare_global_lexical(frame, instruction));
                 break;
-            case MAL_OP_GLOBAL_BINDING_QUERY:
+            MAL_VM_CASE(GLOBAL_BINDING_QUERY)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_global_binding_query(frame, instruction));
                 break;
-            case MAL_OP_INIT_GLOBAL_VARS:
+            MAL_VM_CASE(INIT_GLOBAL_VARS)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_init_global_vars(frame, instruction));
                 break;
-            case MAL_OP_THROW_IF_TDZ:
+            MAL_VM_CASE(THROW_IF_TDZ)
                 if (!mal_value_is_empty(
                         registers[instruction->as.throw_if_tdz.src])) {
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
@@ -3329,48 +3464,48 @@ static void mal_vm_run_until_frame_count(
                 }
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_throw_if_tdz(frame, instruction));
                 break;
-            case MAL_OP_REQUIRE_COERCIBLE:
+            MAL_VM_CASE(REQUIRE_COERCIBLE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_require_coercible(frame, instruction));
                 break;
-            case MAL_OP_BUILTIN_ERROR:
+            MAL_VM_CASE(BUILTIN_ERROR)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_builtin_error(frame, instruction));
                 break;
-            case MAL_OP_PREPARED_STRING_COMPARE:
+            MAL_VM_CASE(PREPARED_STRING_COMPARE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_prepared_string_compare(frame, instruction));
                 break;
-            case MAL_OP_PRECISE_NUMBER_SUM:
+            MAL_VM_CASE(PRECISE_NUMBER_SUM)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_precise_number_sum(frame, instruction));
                 break;
-            case MAL_OP_STRING_CONCAT_LENGTH:
+            MAL_VM_CASE(STRING_CONCAT_LENGTH)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_string_concat_length(frame, instruction));
                 break;
-            case MAL_OP_CONCAT_STRINGS:
+            MAL_VM_CASE(CONCAT_STRINGS)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_concat_strings(frame, instruction));
                 break;
-            case MAL_OP_CHECK_SUPER_CLASS:
+            MAL_VM_CASE(CHECK_SUPER_CLASS)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_check_super_class(frame, instruction));
                 break;
-            case MAL_OP_CREATE_REST_ARGUMENTS:
+            MAL_VM_CASE(CREATE_REST_ARGUMENTS)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_rest_arguments(frame, instruction));
                 break;
-            case MAL_OP_ARRAY_REST:
+            MAL_VM_CASE(ARRAY_REST)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_array_rest(frame, instruction));
                 break;
-            case MAL_OP_CREATE_ARRAY_FROM_ITERABLE:
+            MAL_VM_CASE(CREATE_ARRAY_FROM_ITERABLE)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_array_from_iterable(frame, instruction));
                 break;
-            case MAL_OP_COPY_DATA_PROPERTIES:
+            MAL_VM_CASE(COPY_DATA_PROPERTIES)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_copy_data_properties(frame, instruction));
                 break;
 
-            case MAL_OP_LOAD_CAPTURED:
+            MAL_VM_CASE(LOAD_CAPTURED)
                 registers[instruction->as.load_captured.dst] = mal_vm_load_captured(
                     frame->env,
                     instruction->as.load_captured.owner_function_index,
                     instruction->as.load_captured.index);
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_GUARD_FUNCTION_INDEX: {
+            MAL_VM_CASE(GUARD_FUNCTION_INDEX) {
                 bool matches = mal_vm_callee_has_index(
                     vm,
                     registers[instruction->as.guard_function_index.callee],
@@ -3393,7 +3528,7 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
-            case MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT: {
+            MAL_VM_CASE(GUARD_BASE_CONSTRUCTOR_LAYOUT) {
                 const i32 *data = &frame->function->instruction_data[
                     instruction->as.guard_base_constructor_layout.data_offset];
                 bool matches = mal_vm_guard_base_constructor_layout(
@@ -3419,20 +3554,20 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
-            case MAL_OP_STORE_CAPTURED:
+            MAL_VM_CASE(STORE_CAPTURED)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_captured(frame, instruction));
                 break;
-            case MAL_OP_ENV_PUSH:
+            MAL_VM_CASE(ENV_PUSH)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_env_push(frame, instruction));
                 break;
-            case MAL_OP_ENV_COPY:
+            MAL_VM_CASE(ENV_COPY)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_env_copy(frame, instruction));
                 break;
-            case MAL_OP_ENV_POP:
+            MAL_VM_CASE(ENV_POP)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_env_pop(frame));
                 break;
 
-            case MAL_OP_CALL: {
+            MAL_VM_CASE(CALL) {
                 const i32 *call_data = frame->function->instruction_data +
                     instruction->as.call.data_offset;
                 i32 guarded_tag = call_data[3 + call_data[2] + call_data[0]];
@@ -3465,27 +3600,27 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call(frame, instruction));
                 break;
             }
-            case MAL_OP_CALL_KNOWN:
+            MAL_VM_CASE(CALL_KNOWN)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call_known(frame, instruction));
                 break;
-            case MAL_OP_CONSTRUCT: {
+            MAL_VM_CASE(CONSTRUCT) {
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_construct(frame, instruction));
                 break;
             }
 
-            case MAL_OP_THROW:
+            MAL_VM_CASE(THROW)
                 MAL_VM_INTERPRETER_ACTIVATION_BOUNDARY(mal_op_throw(frame, instruction));
                 break;
-            case MAL_OP_CATCH:
+            MAL_VM_CASE(CATCH)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_catch(frame, instruction));
                 break;
-            case MAL_OP_TRY_BEGIN:
-            case MAL_OP_TRY_END:
+            MAL_VM_CASE(TRY_BEGIN)
+            MAL_VM_CASE(TRY_END)
                 // Markers only; protected ranges live in the handler table.
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
 
-            case MAL_OP_JUMP: {
+            MAL_VM_CASE(JUMP) {
                 i32 safepoint_ip = instruction_pointer - 1;
                 bool backedge = instruction->as.jump.target_ip < instruction_pointer;
                 instruction_pointer = instruction->as.jump.target_ip;
@@ -3502,7 +3637,7 @@ static void mal_vm_run_until_frame_count(
                 }
                 continue;
             }
-            case MAL_OP_JUMP_IF: {
+            MAL_VM_CASE(JUMP_IF) {
                 i32 safepoint_ip = instruction_pointer - 1;
                 MalValue condition = registers[instruction->as.jump_if.cond];
                 bool truthy = mal_value_is_boolean(condition)
@@ -3527,7 +3662,7 @@ static void mal_vm_run_until_frame_count(
                 continue;
             }
 
-            case MAL_OP_RETURN: {
+            MAL_VM_CASE(RETURN) {
                 MAL_VM_INTERPRETER_SYNC();
                 MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 MalValue return_value = frame->registers[instruction->as.ret.value];

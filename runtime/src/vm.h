@@ -32,6 +32,35 @@ typedef enum MalOpcode {
 #include "generated/bytecode_operations.inc"
 #undef BYTECODE_OPERATION
     MAL_OP_COUNT,
+    // Interpreter-only BINARY forms. The image loader substitutes them once it has
+    // validated a function, so dispatch selects the operator instead of testing it at
+    // every execution; they keep the BINARY operands and never appear on the wire.
+    // The _BRANCH forms also perform the forward JUMP_IF on their result that follows.
+    MAL_OP_BINARY_ADD,
+    MAL_OP_BINARY_SUB,
+    MAL_OP_BINARY_MUL,
+    MAL_OP_BINARY_BIT_AND,
+    MAL_OP_BINARY_BIT_OR,
+    MAL_OP_BINARY_BIT_XOR,
+    MAL_OP_BINARY_SHL,
+    MAL_OP_BINARY_SHR,
+    MAL_OP_BINARY_USHR,
+    MAL_OP_BINARY_LT,
+    MAL_OP_BINARY_LTE,
+    MAL_OP_BINARY_GT,
+    MAL_OP_BINARY_GTE,
+    MAL_OP_BINARY_EQ,
+    MAL_OP_BINARY_NEQ,
+    MAL_OP_BINARY_STRICT_EQ,
+    MAL_OP_BINARY_STRICT_NEQ,
+    MAL_OP_BINARY_LT_BRANCH,
+    MAL_OP_BINARY_LTE_BRANCH,
+    MAL_OP_BINARY_GT_BRANCH,
+    MAL_OP_BINARY_GTE_BRANCH,
+    MAL_OP_BINARY_EQ_BRANCH,
+    MAL_OP_BINARY_NEQ_BRANCH,
+    MAL_OP_BINARY_STRICT_EQ_BRANCH,
+    MAL_OP_BINARY_STRICT_NEQ_BRANCH,
 } MalOpcode;
 
 typedef enum MalBuiltinError {

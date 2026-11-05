@@ -2503,6 +2503,51 @@ static bool mal_loaded_shape_case_selector_valid(
     return uses >= 2 && uses <= 16 && last_ip - selector_ip <= 64;
 }
 
+static MalOpcode mal_loaded_quick_binary_opcode(MalBinaryOp op, bool branch) {
+    switch (op) {
+        case MAL_BIN_ADD: return MAL_OP_BINARY_ADD;
+        case MAL_BIN_SUB: return MAL_OP_BINARY_SUB;
+        case MAL_BIN_MUL: return MAL_OP_BINARY_MUL;
+        case MAL_BIN_BIT_AND: return MAL_OP_BINARY_BIT_AND;
+        case MAL_BIN_BIT_OR: return MAL_OP_BINARY_BIT_OR;
+        case MAL_BIN_BIT_XOR: return MAL_OP_BINARY_BIT_XOR;
+        case MAL_BIN_SHL: return MAL_OP_BINARY_SHL;
+        case MAL_BIN_SHR: return MAL_OP_BINARY_SHR;
+        case MAL_BIN_USHR: return MAL_OP_BINARY_USHR;
+        case MAL_BIN_LT: return branch ? MAL_OP_BINARY_LT_BRANCH : MAL_OP_BINARY_LT;
+        case MAL_BIN_LTE: return branch ? MAL_OP_BINARY_LTE_BRANCH : MAL_OP_BINARY_LTE;
+        case MAL_BIN_GT: return branch ? MAL_OP_BINARY_GT_BRANCH : MAL_OP_BINARY_GT;
+        case MAL_BIN_GTE: return branch ? MAL_OP_BINARY_GTE_BRANCH : MAL_OP_BINARY_GTE;
+        case MAL_BIN_EQ: return branch ? MAL_OP_BINARY_EQ_BRANCH : MAL_OP_BINARY_EQ;
+        case MAL_BIN_NEQ: return branch ? MAL_OP_BINARY_NEQ_BRANCH : MAL_OP_BINARY_NEQ;
+        case MAL_BIN_STRICT_EQ:
+            return branch ? MAL_OP_BINARY_STRICT_EQ_BRANCH : MAL_OP_BINARY_STRICT_EQ;
+        case MAL_BIN_STRICT_NEQ:
+            return branch ? MAL_OP_BINARY_STRICT_NEQ_BRANCH : MAL_OP_BINARY_STRICT_NEQ;
+        default: return MAL_OP_BINARY;
+    }
+}
+
+/**
+ * Select the interpreter's operator-specific BINARY forms. This runs after every
+ * validation pass, which therefore only sees wire opcodes. A _BRANCH form requires
+ * the next instruction to be a forward JUMP_IF on its result, so the fused branch
+ * never skips a back-edge poll; a jump that targets that JUMP_IF still runs it.
+ */
+static void mal_loaded_quicken_instructions(MalFunction *fn) {
+    MalInstruction *instructions = (MalInstruction *) fn->instructions;
+    for (i32 ip = 0; ip < fn->instruction_count; ip++) {
+        MalInstruction *instruction = &instructions[ip];
+        if (instruction->opcode != MAL_OP_BINARY) continue;
+        const MalInstruction *next =
+            ip + 1 < fn->instruction_count ? &instructions[ip + 1] : nullptr;
+        bool branch = next != nullptr && next->opcode == MAL_OP_JUMP_IF &&
+            next->as.jump_if.cond == instruction->as.binary.dst &&
+            next->as.jump_if.target_ip > ip + 1;
+        instruction->opcode = mal_loaded_quick_binary_opcode(instruction->as.binary.op, branch);
+    }
+}
+
 MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
     const u8 *buf,
     usize len,
@@ -3017,6 +3062,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
         goto fail;
     }
 
+    for (u32 f = 0; f < function_count; f++) mal_loaded_quicken_instructions(&functions[f]);
     return L;
 
 fail:
