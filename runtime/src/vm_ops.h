@@ -1513,16 +1513,22 @@ static inline __attribute__((always_inline)) bool mal_vm_object_try_load_polymor
  * in every shape it meets hits by checking this shape's key at that slot. A fresh
  * row's zero key never equals a property key.
  */
+/** Whether `shape` keeps the data property `key` in inline field `slot`. */
+static inline __attribute__((always_inline)) bool mal_shape_slot_holds_data_key(
+    const MalShape *shape, u32 slot, MalValue key
+) {
+    return slot < shape->inline_count && shape->props[slot].key == key &&
+        !(shape->props[slot].attrs & MAL_PROPERTY_ACCESSOR);
+}
+
 static inline __attribute__((always_inline)) bool mal_vm_object_try_load_slot_key(
     const MalObject *object, const MalInlineCache *ic, MalValue *out
 ) {
-    const MalShape *shape = object->shape;
     u8 slot = ic->slot;
-    if (ic->mode != MAL_IC_MODE_SHAPE || ic->prim_kind != 0 || slot >= shape->inline_count) {
+    if (ic->mode != MAL_IC_MODE_SHAPE || ic->prim_kind != 0 ||
+        !mal_shape_slot_holds_data_key(object->shape, slot, ic->key)) {
         return false;
     }
-    const MalShapeProp *prop = &shape->props[slot];
-    if (prop->key != ic->key || (prop->attrs & MAL_PROPERTY_ACCESSOR)) return false;
     MAL_PERF_COUNT(ic_load_slot_key_hits);
     *out = mal_object_field_load_shaped(object, slot);
     return true;

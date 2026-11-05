@@ -2424,7 +2424,7 @@ function emitNumericLoopRegion(
 				if (callMethods.has(ip)) return "";
 				if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object))
 					// The site's own-slot row proves the field; any other row ends the iteration.
-					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); if (__builtin_expect(${id}_o->shape != ${id}_shape${op.icIndex}, 0)) ${restart} MalValue ${id}_f = ((const MalValue *) mal_object_fields_nonempty(${id}_o))[${id}_slot${op.icIndex}]; if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
+					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); if (__builtin_expect(${id}_o->shape != ${id}_shape${op.icIndex} && !mal_shape_slot_holds_data_key(${id}_o->shape, ${id}_slot${op.icIndex}, ${id}_key${op.icIndex}), 0)) ${restart} MalValue ${id}_f = ((const MalValue *) mal_object_fields_nonempty(${id}_o))[${id}_slot${op.icIndex}]; if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
 				if (boundObject === undefined || op.object !== boundObject)
 					throw new Error("Invalid numeric loop length load");
 				return `${local(op.dst)} = (f64) ${id}_${textObjects.has(op.object) ? "s" : mode === "array" ? "a" : "v"}${op.object}.length;`;
@@ -2693,6 +2693,11 @@ function emitNumericLoopRegion(
 			...fieldCaches.flatMap((cache) => [
 				`    const struct MalShape *${id}_shape${cache} = ${propertyCache}[${cache}].mode == MAL_IC_MODE_SHAPE ? ${propertyCache}[${cache}].shape : nullptr;`,
 				`    u8 ${id}_slot${cache} = ${propertyCache}[${cache}].slot;`,
+				// Records built by different branches, such as `{ value, left }` and
+				// `{ value, right }`, keep a shared field at one slot. The site's slot-key
+				// row admits them, so they stay in the region instead of leaving it; an
+				// undefined key, which no shape holds, disables that row.
+				`    MalValue ${id}_key${cache} = ${propertyCache}[${cache}].mode == MAL_IC_MODE_SHAPE && ${propertyCache}[${cache}].prim_kind == 0 ? ${propertyCache}[${cache}].key : MAL_VALUE_UNDEFINED;`,
 			]),
 			...plan.carried.map(
 				(register) => `    ${cType(register)} ${start(register)} = ${local(register)};`,
