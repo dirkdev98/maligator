@@ -48,6 +48,7 @@ export function setup(project: TestProject): void {
 		node: boolean;
 		webPlatform: boolean;
 		realms?: boolean;
+		primordials?: "mutable" | "locked";
 	}> = [
 		{ environment, node: false, webPlatform: true },
 		{ environment, node: true, webPlatform: true },
@@ -78,9 +79,17 @@ export function setup(project: TestProject): void {
 			webPlatform: true,
 		});
 	}
+	if (required.has("locked-perf-stats")) {
+		variants.push({
+			environment: { ...environment, MAL_PERF_STATS: "1" },
+			node: false,
+			webPlatform: true,
+			primordials: "locked",
+		});
+	}
 	const progress = new CommandProgress("native-prepare", { cacheLease: false });
 	for (const [index, variant] of variants.entries()) {
-		const label = `eval runtime (Node ${variant.node ? "on" : "off"}, web ${variant.webPlatform ? "on" : "off"}, realms ${variant.realms === false ? "off" : "on"}, stats ${perfStatsEnabled(variant.environment) ? "on" : "off"})`;
+		const label = `eval runtime (Node ${variant.node ? "on" : "off"}, web ${variant.webPlatform ? "on" : "off"}, realms ${variant.realms === false ? "off" : "on"}, primordials ${variant.primordials ?? "mutable"}, stats ${perfStatsEnabled(variant.environment) ? "on" : "off"})`;
 		progress.stage(index + 1, variants.length, label);
 		try {
 			const config = preparedNativeEvalConfig(variant);

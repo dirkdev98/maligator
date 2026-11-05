@@ -6,6 +6,7 @@ export type NativePreparation =
 	| "web-disabled"
 	| "realms-disabled"
 	| "perf-stats"
+	| "locked-perf-stats"
 	| "node-perf-stats";
 
 const perfManifests = new Map<string, ReadonlySet<string>>();
@@ -37,6 +38,9 @@ export function nativePreparations(root: string, file: string): Array<NativePrep
 			? (["realms-disabled"] as const)
 			: []),
 		...(perfTests(root).has(relative) ? (["perf-stats"] as const) : []),
+		...(relative === "tests/native/arguments-forwarding.test.ts"
+			? (["locked-perf-stats"] as const)
+			: []),
 		...(relative === "tests/native/node-http-ready-queues.test.ts"
 			? (["node-perf-stats"] as const)
 			: []),

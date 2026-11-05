@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
-import path from "node:path";
 
-const socketPath = path.join(os.tmpdir(), `mal-net-unix-${process.pid}.sock`);
+// AF_UNIX paths have a small platform limit; the harness supplies a private cwd.
+const socketPath = `mal-net-unix-${process.pid}.sock`;
+console.log("private cwd", process.cwd() === process.env.MAL_SOCKET_CWD);
 fs.rmSync(socketPath, { force: true });
 const log = [];
 const clientLog = [];

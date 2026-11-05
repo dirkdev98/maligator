@@ -621,6 +621,7 @@ export function buildBackendPairFromOneProgramImage(
 export interface RunOptions {
 	env?: NodeJS.ProcessEnv;
 	timeoutMs?: number;
+	cwd?: string;
 }
 
 export function scaledNativeRunTimeoutMs(
@@ -663,6 +664,7 @@ export function runToStdout(binary: string, options: RunOptions = {}): string {
 	try {
 		return execFileSync(invocation.executable, invocation.args, {
 			env,
+			cwd: options.cwd,
 			encoding: "utf-8",
 			timeout,
 		});

@@ -130,6 +130,20 @@ describe("native runtime preparation", () => {
 		expect(ensureNativeArtifacts).toHaveBeenCalledWith(contexts.at(-1));
 	});
 
+	it("prepares locked instrumentation before arguments forwarding hooks", () => {
+		setup(selectedProject("arguments-forwarding.test.ts"));
+		const locked = preparedContexts().filter(
+			(context) => context.features?.primordialsLocked === true,
+		);
+		expect(locked).toHaveLength(1);
+		expect(locked[0]?.features).toMatchObject({
+			nodeEnabled: false,
+			webPlatformEnabled: true,
+		});
+		expect(perfStatsDefines(locked[0]?.environment)).toEqual(["-DMAL_PERF_STATS=1"]);
+		expect(ensureNativeArtifacts).toHaveBeenCalledWith(locked[0]);
+	});
+
 	it.each([
 		"gc.test.ts",
 		"node-events.test.ts",

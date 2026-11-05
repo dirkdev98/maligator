@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -14,6 +14,7 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-net-unix-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 const fixture = "tests/local/node-net-unix.mjs";
+const env = { MAL_SOCKET_CWD: realpathSync(outDir) };
 
 describe("node:net Unix domain sockets", () => {
 	let expected: string;
@@ -21,9 +22,15 @@ describe("node:net Unix domain sockets", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		expected = execFileSync(process.execPath, ["--no-deprecation", fixture], {
-			encoding: "utf8",
-		});
+		expected = execFileSync(
+			process.execPath,
+			["--no-deprecation", path.resolve(fixture)],
+			{
+				encoding: "utf8",
+				cwd: outDir,
+				env: { ...process.env, ...env },
+			},
+		);
 		compiled = buildNativeBinary({
 			fixture,
 			name: "node-net-unix-compiled",
@@ -42,14 +49,22 @@ describe("node:net Unix domain sockets", () => {
 	});
 
 	it("matches Node compiled", () => {
-		expect(runToStdout(compiled, { timeoutMs: 30000 })).toBe(expected);
+		expect(runToStdout(compiled, { cwd: outDir, env, timeoutMs: 30000 })).toBe(expected);
 	});
 
 	it("matches Node interpreted", () => {
-		expect(runToStdout(interpreted, { timeoutMs: 30000 })).toBe(expected);
+		expect(runToStdout(interpreted, { cwd: outDir, env, timeoutMs: 30000 })).toBe(
+			expected,
+		);
 	});
 
 	it("matches Node under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
-		expect(runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 60000 })).toBe(expected);
+		expect(
+			runToStdout(compiled, {
+				cwd: outDir,
+				env: { ...env, ...STRESS_ENV },
+				timeoutMs: 60000,
+			}),
+		).toBe(expected);
 	});
 });
