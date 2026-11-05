@@ -268,6 +268,7 @@ static MalObjectStorage *mal_object_externalize(MalObject *object) {
     };
     memcpy(object + 1, &storage, sizeof(storage));
     object->storage_kind = MAL_OBJECT_EXTERNAL;
+    mal_heap_cell_needs_finalizer(&object->header);
     return storage;
 }
 
@@ -290,6 +291,7 @@ void mal_object_set_fields_pointer(MalObject *object, void *fields) {
 void mal_object_set_overflow_pointer(MalObject *object, MalTable *overflow) {
     if (overflow == nullptr && object->storage_kind == MAL_OBJECT_COMPACT) return;
     mal_object_externalize(object)->overflow = overflow;
+    if (overflow != nullptr) mal_heap_cell_needs_finalizer(&object->header);
 }
 
 static u8 mal_object_inline_payload_eights(usize allocation_size) {
@@ -344,7 +346,7 @@ static void mal_object_init_payload(
 }
 
 void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObject *prototype) {
-    mal_heap_header_init(heap, &object->header, type);
+    mal_heap_header_retype(&object->header, type);
     mal_object_init_payload(heap, object, prototype, MAL_OBJECT_EMBEDDED, nullptr);
 }
 
@@ -352,8 +354,9 @@ void mal_object_init_embedded_stack(
     MalHeap *heap, MalEmbeddedObject *wrapper, MalObject *prototype,
     MalShape *shape, MalValue *slots
 ) {
-    mal_object_init(heap, &wrapper->object, MAL_HEAP_OBJECT, prototype);
+    mal_heap_header_init_detached(&wrapper->object.header, MAL_HEAP_OBJECT);
     wrapper->object.header.storage = MAL_HEAP_STORAGE_IMMORTAL;
+    mal_object_init_payload(heap, &wrapper->object, prototype, MAL_OBJECT_EMBEDDED, nullptr);
     wrapper->object.shape = shape;
     wrapper->storage.fields = slots;
     wrapper->object.slot_capacity = (u8) shape->inline_count;
@@ -460,6 +463,7 @@ void mal_object_set_shaped_values(
     mal_object_set_fields_pointer(object, slots);
     object->shape = shape;
     object->slots_owned = true;
+    mal_heap_cell_needs_finalizer(&object->header);
     object->slot_capacity = (u8) count;
 }
 
@@ -497,6 +501,7 @@ void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
     }
     mal_object_set_fields_pointer(object, slots);
     object->slots_owned = true;
+    mal_heap_cell_needs_finalizer(&object->header);
     object->slot_capacity = (u8) capacity;
 }
 

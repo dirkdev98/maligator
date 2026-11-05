@@ -52,17 +52,17 @@ static bool check_incremental_entry(MalVm *vm, usize index, IncrementalEntry exp
     usize length = (usize) snprintf(name, sizeof(name), "incremental-atom-%zu-abcdefghijklmnop", index);
     mal_string_init_external_latin1(&probe, (const u8 *) name, length);
     CHECK(mal_atom_store_find(&vm->atoms, &probe) == expected.atom);
-    CHECK(!(expected.atom->header.mark & MAL_MARK_FREE));
+    CHECK(!mal_heap_cell_reclaimed(&expected.atom->header));
     length = (usize) snprintf(name, sizeof(name), "incremental-symbol-%zu-abcdefghijklmnop", index);
     mal_string_init_external_latin1(&probe, (const u8 *) name, length);
     CHECK(mal_symbol_registry_find(&vm->symbol_registry, &probe) == expected.symbol);
-    CHECK(!(expected.symbol->header.mark & MAL_MARK_FREE));
-    CHECK(!(expected.symbol->description->header.mark & MAL_MARK_FREE));
+    CHECK(!mal_heap_cell_reclaimed(&expected.symbol->header));
+    CHECK(!mal_heap_cell_reclaimed(&expected.symbol->description->header));
     length = (usize) snprintf(name, sizeof(name), "incremental-source-%zu-abcdefghijklmnop", index);
     mal_string_init_external_latin1(&probe, (const u8 *) name, length);
     CHECK(mal_native_source_cache_find(&vm->native_source_cache, &probe) == expected.source);
-    CHECK(!(expected.name->header.mark & MAL_MARK_FREE));
-    CHECK(!(expected.source->header.mark & MAL_MARK_FREE));
+    CHECK(!mal_heap_cell_reclaimed(&expected.name->header));
+    CHECK(!mal_heap_cell_reclaimed(&expected.source->header));
     return true;
 }
 
@@ -152,7 +152,7 @@ static bool check_atoms(MalVm *vm) {
         MalString probe;
         mal_string_init_external_latin1(&probe, (const u8 *) name, length);
         CHECK(mal_atom_store_find(&vm->atoms, &probe) == expected[index]);
-        CHECK(!(expected[index]->header.mark & MAL_MARK_FREE));
+        CHECK(!mal_heap_cell_reclaimed(&expected[index]->header));
     }
     CHECK(mal_atom_store_find(&vm->atoms, &wide_probe) == wide);
     mal_gc_collect(vm);
@@ -201,22 +201,22 @@ static bool check_registry_and_sources(MalVm *vm) {
     CHECK(!private_name->property_atom);
     CHECK(mal_native_source_cache_insert(&vm->native_source_cache, private_name, private_source) == private_source);
     collect_young(vm);
-    CHECK(!(private_name->header.mark & MAL_MARK_FREE));
-    CHECK(!(private_source->header.mark & MAL_MARK_FREE));
+    CHECK(!mal_heap_cell_reclaimed(&private_name->header));
+    CHECK(!mal_heap_cell_reclaimed(&private_source->header));
     for (usize index = 0; index < countof(expected_symbols); index++) {
-        CHECK(!(expected_symbols[index]->header.mark & MAL_MARK_FREE));
-        CHECK(!(expected_sources[index]->header.mark & MAL_MARK_FREE));
+        CHECK(!mal_heap_cell_reclaimed(&expected_symbols[index]->header));
+        CHECK(!mal_heap_cell_reclaimed(&expected_sources[index]->header));
     }
     mal_gc_collect(vm);
     for (usize index = 0; index < countof(expected_symbols); index++) {
-        CHECK(!(expected_symbols[index]->header.mark & MAL_MARK_FREE));
-        CHECK(!(expected_sources[index]->header.mark & MAL_MARK_FREE));
+        CHECK(!mal_heap_cell_reclaimed(&expected_symbols[index]->header));
+        CHECK(!mal_heap_cell_reclaimed(&expected_sources[index]->header));
     }
     MalString probe;
     mal_string_init_external_latin1(&probe, (const u8 *) "source-cache-only-name", 22);
     CHECK(mal_native_source_cache_find(&vm->native_source_cache, &probe) == private_source);
-    CHECK(!(private_name->header.mark & MAL_MARK_FREE));
-    CHECK(!(private_source->header.mark & MAL_MARK_FREE));
+    CHECK(!mal_heap_cell_reclaimed(&private_name->header));
+    CHECK(!mal_heap_cell_reclaimed(&private_source->header));
     mal_string_init_external_latin1(&probe, (const u8 *) "registry-only-description-0-abcdefghijklmnop", 44);
     CHECK(mal_symbol_registry_find(&vm->symbol_registry, &probe) == first);
     CHECK(mal_string_equals_ascii(first->description, "registry-only-description-0-abcdefghijklmnop"));

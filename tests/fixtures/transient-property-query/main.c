@@ -23,7 +23,7 @@ extern const MalRuntimeImage mal_runtime_image;
 static usize live_strings;
 
 static void count_strings(MalHeapHeader *cell) {
-    if (!(cell->mark & MAL_MARK_FREE) && cell->type == MAL_HEAP_STRING) live_strings++;
+    if (cell->type == MAL_HEAP_STRING) live_strings++;
 }
 
 static usize quiescent_strings(MalVm *vm) {

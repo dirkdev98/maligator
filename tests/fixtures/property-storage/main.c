@@ -274,9 +274,9 @@ static bool check_owner_gc(MalVm *vm) {
     mal_gc_safepoint(vm);
     CHECK(!mal_gc_marking_active);
     CHECK(vm->heap.minor_cells_inspected > inspected);
-    CHECK(!(young_value->header.mark & MAL_MARK_FREE) && mal_heap_mark_is_old(young_value->header.mark));
-    CHECK(!(young_key->header.mark & MAL_MARK_FREE) && mal_heap_mark_is_old(young_key->header.mark));
-    CHECK(!(young_getter->object.header.mark & MAL_MARK_FREE));
+    CHECK(!mal_heap_cell_reclaimed(&young_value->header) && mal_heap_mark_is_old(young_value->header.mark));
+    CHECK(!mal_heap_cell_reclaimed(&young_key->header) && mal_heap_mark_is_old(young_key->header.mark));
+    CHECK(!mal_heap_cell_reclaimed(&young_getter->object.header));
     MalString probe;
     mal_string_init_external_latin1(&probe, (const u8 *) "young-non-atom-property-key", 27);
     CHECK(mal_object_get_own(owners[1], string_key(&probe)).desc.value == MAL_VALUE_TRUE);
@@ -294,7 +294,7 @@ static bool tracked_string_live;
 static u32 object_finalizations;
 
 static void observe_tracked_string(MalHeapHeader *cell) {
-    if (cell == tracked_string && (cell->mark & MAL_MARK_FREE) == 0) tracked_string_live = true;
+    if (cell == tracked_string) tracked_string_live = true;
 }
 
 static bool tracked_string_is_live(MalVm *vm) {

@@ -94,6 +94,7 @@ bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed) {
     }
     if (was_inline) memcpy(grown, array->elements, sizeof(MalValue) * array->capacity);
     array->elements = grown;
+    mal_heap_cell_needs_finalizer(&array->object.header);
     array->capacity = needed;
     return true;
 }
@@ -164,6 +165,7 @@ bool mal_array_object_try_fresh_dense_reserve_exact(
             return false;
         }
         array->elements = elements;
+        mal_heap_cell_needs_finalizer(&array->object.header);
         array->capacity = needed;
     }
 

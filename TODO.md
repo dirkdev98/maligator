@@ -499,20 +499,12 @@ Arithmetic work should support these paths or fix correctness defects.
       and 645 MB of it over-tenured. Malloc zones add another 0.96 GB in 10.5
       million allocations outside the GC heap. Fragmentation of partly live blocks
       and promoted garbage are the levers; recycled blocks are already madvised.
-- [ ] Cut the cost of minor sweeps in large programs. The native self-compile
-      allocates 71 GB, and minor collections spend 6 s sweeping 616 million young
-      cells, almost all dead, one header miss per dead cell. Side mark bitmaps plus
-      a bitmap of cells that own external storage would hand dead runs back to the
-      allocator untouched; fewer dead cells, from escape analysis or allocation-free
-      iteration, are the other lever. In the parser workload's 21.8 million dead
-      young cells, arrays (6.4 M), closure environments (4.0 M), closures (3.5 M),
-      plain objects (3.1 M) and iterators (2.6 M) lead. Skipping finalizer calls
-      for plain objects saved 1.5%; prefetching did not help, and publishing a
-      block's freed bytes and free-list links once saves about nine instructions
-      per dead cell but no measurable time. Neither did a fixed nursery: capping minors at 1 to 8 MB left a
-      retention-churn loop's minor sweep time at 30 to 34 ms, the same as the
-      live-set-proportional trigger, and added majors. Starting cells on a 128-byte
-      cache line left javascript-v2 flat (total +0.18% [-0.17, 0.70]).
+- [ ] Report owned storage for strings and iterators when they acquire it. The
+      minor sweep reads a dead cell only when its finalizable bit is set, and every
+      type outside the ordinary object, array, closure and non-owning families gets
+      that bit at birth. Strings own code units only in owned, prepared UTF-8 and
+      builder storage, and iterators only while they pin a collection, so most dead
+      strings and iterators are still read for nothing.
 
 - [ ] Share one invocation-local native analysis context across storage, expression,
       root, and fast-path planning. Native read/write, branch, handler, and lazy

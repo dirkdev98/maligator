@@ -223,6 +223,7 @@ void mal_object_init_embedded_stack(
 static inline void mal_object_mark_as_prototype(MalObject *object) {
     if (object != nullptr && !object->is_prototype) {
         object->is_prototype = true;
+        mal_heap_cell_needs_finalizer(&object->header);
     }
 }
 

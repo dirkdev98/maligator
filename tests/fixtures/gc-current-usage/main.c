@@ -15,8 +15,7 @@ static MalHeap *owner;
 static usize walked_buffer_bytes;
 
 static void count_buffer(MalHeapHeader *header) {
-    if ((header->mark & MAL_MARK_FREE) != 0 ||
-        header->type != MAL_HEAP_ARRAY_BUFFER_OBJECT) return;
+    if (header->type != MAL_HEAP_ARRAY_BUFFER_OBJECT) return;
     MalArrayBufferObject *buffer = (MalArrayBufferObject *) header;
     if (buffer->shared_memory == nullptr && buffer->data != nullptr) {
         walked_buffer_bytes += buffer->allocation_capacity;
@@ -74,12 +73,12 @@ static int exercise(void) {
     mal_heap_alloc(&heap, sizeof(TestCell), MAL_HEAP_BIGINT);
     CHECK(matches_walk(&heap));
     mal_heap_begin_major(&heap);
-    first->header.mark = heap.mark_color | MAL_MARK_OLD;
+    first->header.mark = heap.mark_color | MAL_MARK_OLD | MAL_MARK_BLOCK;
     mal_heap_sweep(&heap, finalize_cell);
     CHECK(matches_walk(&heap));
     TestCell *reused = mal_heap_alloc(&heap, sizeof(TestCell), MAL_HEAP_BIGINT);
     CHECK(matches_walk(&heap));
-    reused->header.mark = heap.mark_color | MAL_MARK_OLD;
+    reused->header.mark = heap.mark_color | MAL_MARK_OLD | MAL_MARK_BLOCK;
     mal_heap_alloc(&heap, sizeof(TestCell), MAL_HEAP_BIGINT);
     CHECK(matches_walk(&heap));
     mal_heap_sweep_minor(&heap, finalize_cell);
@@ -87,15 +86,15 @@ static int exercise(void) {
     mal_heap_alloc(&heap, 10000, MAL_HEAP_BIGINT);
     CHECK(matches_walk(&heap));
     mal_heap_begin_major(&heap);
-    first->header.mark = heap.mark_color | MAL_MARK_OLD;
-    reused->header.mark = heap.mark_color | MAL_MARK_OLD;
+    first->header.mark = heap.mark_color | MAL_MARK_OLD | MAL_MARK_BLOCK;
+    reused->header.mark = heap.mark_color | MAL_MARK_OLD | MAL_MARK_BLOCK;
     mal_heap_sweep_begin(&heap);
-    heap.black_alloc = true;
+    mal_heap_set_black_alloc(&heap, true);
     TestCell *black = mal_heap_alloc(&heap, sizeof(TestCell), MAL_HEAP_BIGINT);
     CHECK(mal_heap_mark_is_current(black->header.mark, heap.mark_color));
     CHECK(matches_walk(&heap));
     while (!mal_heap_sweep_step(&heap, finalize_cell, 1)) CHECK(matches_walk(&heap));
-    heap.black_alloc = false;
+    mal_heap_set_black_alloc(&heap, false);
     CHECK(matches_walk(&heap));
 
     MalArrayBufferObject *buffer = mal_array_buffer_object_new(
