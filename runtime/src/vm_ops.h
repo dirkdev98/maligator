@@ -724,11 +724,19 @@ static inline bool mal_vm_try_binary_number_fast(
 /**
  * Strict equality is a pure leaf unless two distinct strings need a content
  * comparison. That comparison may flatten cons strings, so it retains the
- * synchronized generic boundary.
+ * synchronized generic boundary. Loose equality is a leaf when either side is
+ * undefined or null, which `?.` and `??` test: it converts nothing and holds exactly
+ * when both sides are.
  */
-static inline bool mal_vm_try_binary_strict_fast(
+static inline bool mal_vm_try_binary_equality_fast(
     MalBinaryOp op, MalValue left, MalValue right, MalValue *out
 ) {
+    if (op == MAL_BIN_EQ || op == MAL_BIN_NEQ) {
+        if (!mal_value_is_nil(left) && !mal_value_is_nil(right)) return false;
+        bool equal = mal_value_is_nil(left) && mal_value_is_nil(right);
+        *out = mal_value_new_boolean(op == MAL_BIN_EQ ? equal : !equal);
+        return true;
+    }
     if (op != MAL_BIN_STRICT_EQ && op != MAL_BIN_STRICT_NEQ) {
         return false;
     }
