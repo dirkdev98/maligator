@@ -3064,6 +3064,43 @@ static void mal_vm_fill_interp_call_cache(
 }
 
 /**
+ * Invoke a native function for an interpreted call whose arguments start at `base`
+ * on the value stack, storing its result in the caller frame's `dst` register.
+ */
+static void mal_vm_call_native_into(
+    MalVm *vm, MalValue callee, MalValue this_value, const MalValue *args, i32 arg_count,
+    i32 base, i32 dst
+) {
+    MalNativeFunctionObject *native_function = mal_value_to_native_function_object(callee);
+    MAL_PROFILE_NATIVE_CALL(vm, native_function);
+    MalNativeFunctionCallback callback = mal_native_function_object_callback(native_function);
+    // The callback may push frames and realloc the frame array, which
+    // invalidates any frame pointers. Snapshot what we need and
+    // re-resolve the frame afterwards.
+    i32 caller_frame_index = vm->frame_count - 1;
+    // A native builtin holds MalValue scratch in C locals the root scan
+    // cannot see, and many re-enter JS for callbacks; count it as a live C
+    // frame so a safepoint inside it does not collect (see gc_native_frames).
+    // The receiver/args/new.target are rooted so a builtin that lifts that
+    // suppression itself cannot lose them to a collection.
+    MalCalleeRoots ncr;
+    mal_gc_callee_roots_begin(&ncr, this_value, mal_value_new_undefined(), callee, args, arg_count);
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
+    vm->gc_native_frames++;
+    MalValue result = callback(vm, this_value, args, arg_count, mal_value_new_undefined(), callee);
+    vm->gc_native_frames--;
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+    mal_gc_callee_roots_end(&ncr);
+    vm->frames[caller_frame_index].registers[dst] = result;
+    vm->value_stack_size = base;
+}
+
+/**
  * Shared call dispatch: bound resolution, then script frame push or native
  * invocation. The arguments occupy the top `argument_count` value-stack slots
  * starting at `base`. The result register lives on the frame that was current
@@ -3146,36 +3183,9 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
             }
         }
     } else if (mal_value_is_native_function_object(resolution.callee)) {
-        MalNativeFunctionObject *native_function =
-            mal_value_to_native_function_object(resolution.callee);
-        MAL_PROFILE_NATIVE_CALL(vm, native_function);
-        MalNativeFunctionCallback callback =
-            mal_native_function_object_callback(native_function);
-        // The callback may push frames and realloc the frame array, which
-        // invalidates any frame pointers. Snapshot what we need and
-        // re-resolve the frame afterwards.
-        i32 caller_frame_index = vm->frame_count - 1;
-        // A native builtin holds MalValue scratch in C locals the root scan
-        // cannot see, and many re-enter JS for callbacks; count it as a live C
-        // frame so a safepoint inside it does not collect (see gc_native_frames).
-        // The receiver/args/new.target are rooted so a builtin that lifts that
-        // suppression itself cannot lose them to a collection.
-        MalCalleeRoots ncr;
-        mal_gc_callee_roots_begin(&ncr, resolution.this_value, mal_value_new_undefined(),
-                                  resolution.callee, resolution.args, resolution.arg_count);
-#if MAL_REALMS
-        MalRealm *saved_realm = vm->current_realm;
-        mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, resolution.callee));
-#endif
-        vm->gc_native_frames++;
-        MalValue result = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), resolution.callee);
-        vm->gc_native_frames--;
-#if MAL_REALMS
-        mal_vm_realm_switch_to(vm, saved_realm);
-#endif
-        mal_gc_callee_roots_end(&ncr);
-        vm->frames[caller_frame_index].registers[dst] = result;
-        vm->value_stack_size = base;
+        mal_vm_call_native_into(
+            vm, resolution.callee, resolution.this_value, resolution.args,
+            resolution.arg_count, base, dst);
     } else {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a function");
         vm->value_stack_size = base;
@@ -3537,6 +3547,13 @@ void mal_op_call(MalCallable *callable, const MalInstruction *instruction) {
     }
     vm->value_stack_size = base + argument_count;
 
+    // Builtin methods such as `view.setUint32` have no script target to probe
+    // and need no bound resolution.
+    if (mal_value_is_native_function_object(callee)) {
+        mal_vm_call_native_into(
+            vm, callee, this_value, &vm->value_stack[base], argument_count, base, dst);
+        return;
+    }
     if (mal_vm_try_interp_call_targets(
             vm, exact_function_index,
             guarded_function_indices, guarded_function_count, callee, this_value,
