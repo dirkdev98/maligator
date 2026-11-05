@@ -619,7 +619,7 @@ MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
     return mal_array_object_new_inline(heap, prototype, mal_array_object_inline_capacity_for(0));
 }
 
-MalArrayObject *mal_array_object_new_from_values(
+MalArrayObject *mal_array_object_new_from_values_slow(
     MalHeap *heap, MalObject *prototype, const MalValue *values, u32 count
 ) {
     u32 inline_capacity = mal_array_object_inline_capacity_for(count);

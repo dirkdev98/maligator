@@ -306,12 +306,58 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
  */
 MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype);
 
-/** Inputs must remain rooted across allocation. Capacity is reserved while the
- * scanned length is zero; initialization retains card barriers and publishes
- * the completed dense length once. No safepoint occurs inside initialization. */
-MalArrayObject *mal_array_object_new_from_values(
+MalArrayObject *mal_array_object_new_from_values_slow(
     MalHeap *heap, MalObject *prototype, const MalValue *values, u32 count
 );
+
+/** Inputs must remain rooted across allocation. Capacity is reserved while the
+ * scanned length is zero; initialization retains card barriers and publishes
+ * the completed dense length once. No safepoint occurs inside initialization.
+ * Inlined so a literal whose elements fit the cell settles its size class and
+ * copy at compile time. */
+static inline __attribute__((always_inline)) MalArrayObject *mal_array_object_new_from_values(
+    MalHeap *heap, MalObject *prototype, const MalValue *values, u32 count
+) {
+#if MAL_PERF_STATS
+    // Stats builds observe each element through the out-of-line constructor.
+    return mal_array_object_new_from_values_slow(heap, prototype, values, count);
+#else
+    u32 inline_capacity = count <= 4 ? 4 : (count + 1) & ~1u;
+    MalHeapHeader *cell = count > MAL_ARRAY_INLINE_CAPACITY_MAX ? nullptr
+        : mal_heap_cell_take(
+            heap, sizeof(MalArrayObject) + sizeof(MalValue) * inline_capacity,
+            MAL_HEAP_ARRAY_OBJECT);
+    if (__builtin_expect(cell == nullptr, 0)) {
+        return mal_array_object_new_from_values_slow(heap, prototype, values, count);
+    }
+    MalArrayObject *array = (MalArrayObject *) cell;
+    MalHeapHeader header = array->object.header;
+    array->object = (MalObject) {
+        .header = header,
+        .extensible = true,
+        .storage_kind = MAL_OBJECT_EMBEDDED,
+        .shape = mal_shape_root(heap),
+    };
+    array->object_storage = (MalObjectStorage) {.prototype = prototype};
+    mal_object_mark_as_prototype(prototype);
+    array->length = count;
+    array->length_writable = true;
+    array->dense_elements_writable = true;
+    array->dense_elements_configurable = true;
+    array->inline_capacity = inline_capacity;
+    if (count != 0) {
+        MalValue *elements = mal_array_object_inline_elements(array);
+        array->elements = elements;
+        array->capacity = inline_capacity;
+        array->dense_count = count;
+        for (u32 index = 0; index < count; index++) {
+            elements[index] = values[index];
+            mal_gc_card(&array->object.header, values[index]);
+        }
+    }
+    return array;
+#endif
+}
 
 MalArrayObject *mal_array_object_new_reserved(
     MalHeap *heap, MalObject *prototype, u32 capacity
