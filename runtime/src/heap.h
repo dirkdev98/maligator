@@ -76,7 +76,11 @@ struct MalGcBlock {
 /* The free cells of one claimed bitmap word; allocation hands them out lowest first. */
 typedef struct MalHeapCellCursor {
     u64 bits;
-    u8 *base;
+    /* The claimed word's block and its byte offset there. The VM can live on a
+     * conservatively scanned stack, where a pointer to the word's first unit would
+     * retain whichever cell it lands in; a header address retains nothing. */
+    MalGcBlock *block;
+    usize word_offset;
 } MalHeapCellCursor;
 
 typedef struct MalShape MalShape;
@@ -741,6 +745,24 @@ static inline usize mal_heap_cell_unit(const void *cell) {
     return ((uptr) cell & (MAL_GC_BLOCK_SIZE - 1)) / MAL_GC_CELL_ALIGN;
 }
 
+/* The cell `offset` bytes into `block`, formed from the header address and an opaque
+ * offset so the compiler never materializes a pointer into the middle of another
+ * cell, which a spill could leave behind as a conservative root. */
+static inline __attribute__((always_inline)) MalHeapHeader *mal_heap_block_cell_at(
+    const MalGcBlock *block, usize offset
+) {
+#if !defined(__wasi__)
+    __asm__("" : "+r"(offset));
+#endif
+    return (MalHeapHeader *) ((uptr) block + offset);
+}
+
+static inline __attribute__((always_inline)) MalHeapHeader *mal_heap_block_cell(
+    const MalGcBlock *block, usize unit
+) {
+    return mal_heap_block_cell_at(block, unit * MAL_GC_CELL_ALIGN);
+}
+
 static inline u8 mal_heap_mark_load(const MalHeapHeader *header) {
 #if defined(__wasi__)
     return header->mark;
@@ -876,8 +898,8 @@ static inline __attribute__((always_inline)) MalHeapHeader *mal_heap_cell_take(
     u64 bits = cursor->bits;
     if (__builtin_expect(bits == 0, 0)) return nullptr;
     cursor->bits = bits & (bits - 1);
-    MalHeapHeader *cell =
-        (MalHeapHeader *) (cursor->base + (usize) __builtin_ctzll(bits) * MAL_GC_CELL_ALIGN);
+    MalHeapHeader *cell = mal_heap_block_cell_at(
+        cursor->block, cursor->word_offset + (usize) __builtin_ctzll(bits) * MAL_GC_CELL_ALIGN);
     mal_heap_cell_init(heap, cell, type, mal_heap_class_cell_size(size_class));
     return cell;
 }
