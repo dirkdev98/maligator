@@ -4,6 +4,8 @@
 #include <stdatomic.h>
 #endif
 
+#include <string.h>
+
 #include "./defaults.h"
 
 #define MAL_DEFAULT_HEAP_SIZE 16 * 1024
@@ -23,11 +25,60 @@ typedef struct MalHeap MalHeap;
  */
 #define MAL_GC_NUM_SIZE_CLASSES 32
 
-/* Block allocator internals. Defined in heap.c; the heap
- * only holds pointers to them, so forward declarations suffice here. */
 typedef struct MalGcChunk MalGcChunk;
 typedef struct MalGcBlock MalGcBlock;
 typedef struct MalGcLarge MalGcLarge;
+
+#define MAL_GC_BLOCK_SIZE (32u * 1024u)
+/* Every cell is 16-byte aligned: covers void*, f64, and MalBigInt's i128. */
+#define MAL_GC_CELL_ALIGN 16u
+/* Cells of this size or smaller are size-classed in blocks; larger -> LOS. */
+#define MAL_GC_LARGE_THRESHOLD (MAL_GC_BLOCK_SIZE / 4u)
+#define MAL_GC_BLOCK_WORDS (MAL_GC_BLOCK_SIZE / MAL_GC_CELL_ALIGN / 64u)
+
+/*
+ * Block header, stored at the BLOCK_SIZE-aligned block base so a cell's block is one
+ * mask away. Managed (CELL) blocks describe their cells with bitmaps indexed by
+ * alignment unit, so the minor sweep and allocation never read a dead cell:
+ * `free_cells` holds every cell start not handed out, `young_cells` the cells handed
+ * out since the last collection that the current minor has not marked, and
+ * `finalizable` the cells whose death must run the finalizer. RAW blocks keep a bump
+ * pointer, an intrusive free list and a live count instead.
+ */
+struct MalGcBlock {
+    u8 kind;
+    u8 on_young;
+    /* On the heap free-block list with its pages returned to the OS; sweeps skip it
+     * until mal_gc_new_block reclaims it. */
+    u8 recycled;
+    /* RAW: on heap->raw_partial[size_class]. CELL: on heap->cell_avail[size_class]. */
+    u8 on_partial;
+    u16 size_class;
+    /* CELL: the next free-cell word allocation claims while this is the current block. */
+    u16 scan_word;
+    u32 cell_size;
+    /* RAW: outstanding cells. CELL: survivors counted by the last sweep. */
+    u32 live;
+    /* CELL: cells handed out since the last collection, survivors included. */
+    u32 young_count;
+    u8 *bump;
+    u8 *limit;
+    void *free_list;
+    struct MalGcBlock *next_free;
+    struct MalGcBlock *prev_free;
+    struct MalGcBlock *next_young;
+    u64 sweep_epoch;
+    u64 young_cells[MAL_GC_BLOCK_WORDS];
+    u64 free_cells[MAL_GC_BLOCK_WORDS];
+    u64 finalizable[MAL_GC_BLOCK_WORDS];
+};
+
+/* The free cells of one claimed bitmap word; allocation hands them out lowest first. */
+typedef struct MalHeapCellCursor {
+    u64 bits;
+    u8 *base;
+} MalHeapCellCursor;
+
 typedef struct MalShape MalShape;
 typedef struct MalString MalString;
 
@@ -46,35 +97,16 @@ typedef struct MalHeapCurrentUsage {
 typedef struct MalRealm MalRealm;
 #endif
 
-/** Which dead cells of one heap type a sweep must hand to its finalizer. */
-typedef enum MalHeapDeadCellPolicy {
-    MAL_HEAP_DEAD_CELL_FINALIZE,
-    /** The type never owns anything outside its cell. */
-    MAL_HEAP_DEAD_CELL_RECLAIM,
-    /** An ordinary object, which needs its finalizer only while `mal_object_finalizes`. */
-    MAL_HEAP_DEAD_CELL_OBJECT,
-    /** An Array, which also needs it while its elements live outside the cell. */
-    MAL_HEAP_DEAD_CELL_ARRAY,
-} MalHeapDeadCellPolicy;
-
-/* Relaxed atomics, like the type hooks the policy summarizes: registration may run
- * while another isolate sweeps. */
-#if defined(__wasi__)
-typedef u8 MalHeapDeadCellPolicySlot;
-#define mal_heap_dead_cell_policy_load(slot) (slot)
-#else
-typedef _Atomic(u8) MalHeapDeadCellPolicySlot;
-#define mal_heap_dead_cell_policy_load(slot) atomic_load_explicit(&(slot), memory_order_relaxed)
-#endif
-
 /**
  * Block-based, segregated-size-class, non-moving allocator.
  *
  * Chunk (~2 MB mmap, BLOCK_SIZE-aligned) -> Block (~32 KB, one size class + one
- * kind) -> Cell. Allocation pops a reclaimed cell from the size class's free list
- * (populated by the sweep) and otherwise bump-points within the current block; a
- * fresh block is claimed when the current one fills. Large objects bypass blocks
- * into the LOS list. `mal_heap_free` releases everything at shutdown.
+ * kind) -> Cell. Managed allocation claims one word of a block's free-cell bitmap
+ * into a per-class cursor, charging and enrolling its cells at once, so the inline
+ * fast path only pops the lowest bit, clears the cell and writes its header.
+ * Cursors return their unclaimed cells before anything reads the bitmaps or changes
+ * the allocation color. Large objects bypass blocks into the LOS list.
+ * `mal_heap_free` releases everything.
  */
 
 typedef struct MalHeap {
@@ -96,7 +128,9 @@ typedef struct MalHeap {
     MalGcLarge *large;
     MalGcLarge *raw_large;
     MalGcLarge *young_large;
-    /** Current bump block per size class for managed cells. */
+    /** Claimed free cells per size class; see MalHeapCellCursor. */
+    MalHeapCellCursor cell_cursors[MAL_GC_NUM_SIZE_CLASSES];
+    /** Block whose free words each class claims next. */
     MalGcBlock *cell_blocks[MAL_GC_NUM_SIZE_CLASSES];
     // An empty current RAW block stays reusable until major completion or allocation pressure.
     MalGcBlock *raw_blocks[MAL_GC_NUM_SIZE_CLASSES];
@@ -104,15 +138,15 @@ typedef struct MalHeap {
      * recycled by mal_gc_new_block before carving a fresh block from a chunk.
      * A blank block can serve any size class / kind after re-init. */
     MalGcBlock *free_blocks;
-    /** Reclaimed managed cells per size class. Majors rebuild these lists;
-     * minors preserve existing entries and add newly dead cells. */
-    void *cell_free[MAL_GC_NUM_SIZE_CLASSES];
+    /** Managed blocks with free cells per size class, linked through next_free.
+     * Majors rebuild these lists; minors add blocks that gained free cells. */
+    MalGcBlock *cell_avail[MAL_GC_NUM_SIZE_CLASSES];
     /** Managed blocks allocated into since the last sweep, including cell reuse.
      * Minor collections sweep only this list; old-only blocks need no visit. */
     MalGcBlock *young_blocks;
     // Per-block free chains permit O(1) recycling without scanning another block's cells.
     MalGcBlock *raw_partial[MAL_GC_NUM_SIZE_CLASSES];
-    /** Monotonic total of handed-out cell sizes (never decremented). */
+    /** Monotonic total of claimed cell sizes, which drives the collection trigger. */
     usize bytes_allocated;
     /** Mutator-owned occupancy; valid until finalize-all begins teardown. */
     MalHeapCurrentUsage current_usage;
@@ -120,8 +154,8 @@ typedef struct MalHeap {
     usize next_gc_at;
     /** Poison reclaimed payloads when verification is enabled. */
     bool poison_on_free;
-    /** Per heap type, which dead cells may skip the sweep's finalizer; null runs it for all. */
-    const MalHeapDeadCellPolicySlot *dead_cell_policy;
+    /** Without the collector's finalizers, every dead cell reaches the sweep's finalizer. */
+    bool finalize_every_dead_cell;
     /** Bytes of managed cells that survived the last sweep; sizes the next
      * auto-collection trigger. Zero until the first collection. */
     usize live_bytes;
@@ -130,8 +164,11 @@ typedef struct MalHeap {
     u64 minor_blocks_inspected;
     /** Flipped at each major start; matching cells survived the current major. */
     u8 mark_color;
-    /** Fresh cells remain live while an incremental sweep is in flight. */
+    /** Fresh cells remain live while an incremental sweep is in flight. Changed only
+     * through mal_heap_set_black_alloc, which keeps `alloc_mark` in step. */
     bool black_alloc;
+    /** The mark byte of a fresh block cell. */
+    u8 alloc_mark;
     /** Bytes promoted immediately by allocation during this heap's major cycles. */
     usize black_alloc_bytes;
     /** Heap-lifetime root of this isolate's hidden-class transition tree. */
@@ -488,19 +525,24 @@ typedef enum MalHeapStorage : u8 {
     MAL_HEAP_STORAGE_IMMORTAL,
 } MalHeapStorage;
 
-/** Generation, reclamation, and alternating major color share one atomic byte. */
+/**
+ * Generation, block residence, and alternating major color share one atomic byte.
+ * Only the allocator sets BLOCK; every later mark write preserves it. A reclaimed
+ * block cell keeps its stale mark, so only the block's free-cell bitmap tells it
+ * apart from a live one.
+ */
 typedef enum MalHeapMark {
     MAL_MARK_OLD = 1,
-    MAL_MARK_FREE = 2,
+    MAL_MARK_BLOCK = 2,
     MAL_MARK_COLOR = 4,
 } MalHeapMark;
 
 static inline bool mal_heap_mark_is_old(u8 mark) {
-    return (mark & (MAL_MARK_OLD | MAL_MARK_FREE)) == MAL_MARK_OLD;
+    return (mark & MAL_MARK_OLD) != 0;
 }
 
 static inline bool mal_heap_mark_is_current(u8 mark, u8 color) {
-    return (mark & MAL_MARK_FREE) == 0 && (mark & MAL_MARK_COLOR) == color;
+    return (mark & MAL_MARK_COLOR) == color;
 }
 
 /**
@@ -560,26 +602,25 @@ MalHeapCurrentUsage mal_heap_current_usage(const MalHeap *heap);
 void mal_heap_array_buffer_acquire(MalHeap *heap, usize bytes);
 void mal_heap_array_buffer_release(MalHeap *heap, usize bytes);
 
-/**
- * Initialize a heap header in place.
- */
-void mal_heap_header_init(const MalHeap *heap, MalHeapHeader *header, MalHeapType type);
-
 /** Initialize the header of a cell that no collector manages, such as a stack probe. */
 void mal_heap_header_init_detached(MalHeapHeader *header, MalHeapType type);
+
+/** Return every cursor's unclaimed cells to their blocks. Anything that reads the
+ * cell bitmaps or changes how fresh cells are marked runs this first. */
+void mal_heap_retire_cursors(MalHeap *heap);
+
+/** Change black allocation; fresh cells are marked old while it is set. */
+void mal_heap_set_black_alloc(MalHeap *heap, bool black_alloc);
 
 /**
  * Read the type tag from a heap allocation header.
  */
 MalHeapType mal_heap_header_type(const MalHeapHeader *header);
 
-/**
- * Allocate a new heap object.
- */
-void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type);
-
-/** Fallible managed-cell allocation. Existing infallible callers retain abort-on-OOM. */
-void *mal_heap_try_alloc(MalHeap *heap, usize alloc_size, MalHeapType type);
+/* Out-of-line managed allocation: cursor refills, large cells, profiling and
+ * injected failures. Callers use mal_heap_alloc and mal_heap_try_alloc. */
+void *mal_heap_alloc_slow(MalHeap *heap, usize alloc_size, MalHeapType type);
+void *mal_heap_try_alloc_slow(MalHeap *heap, usize alloc_size, MalHeapType type);
 
 /**
  * Allocate raw heap storage without initializing a heap header. Returns an
@@ -626,14 +667,15 @@ typedef void (*MalHeapFinalizeFn)(MalHeapHeader *cell);
 
 /**
  * Reclaim managed cells whose major color does not match. Finalize dead cells,
- * return block cells to free lists, and release managed large cells. Matching
+ * return block cells to their bitmaps, and release managed large cells. Matching
  * survivors become old. The caller must complete marking and weak processing first.
  */
 void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize);
 
-/** Sweep allocation-touched cells after a minor mark. Old cells stay live;
- * existing FREE links remain valid. Empty blocks await a major before
- * page reclamation so no global free-list removal is needed. */
+/** Reclaim the young cells a minor mark left unmarked. Marking must have reported
+ * every young survivor through mal_heap_note_minor_survivor; the sweep reads only
+ * cells that need their finalizer. Empty blocks await a major before page
+ * reclamation. */
 void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize);
 
 /**
@@ -653,9 +695,13 @@ void mal_heap_sweep_begin(MalHeap *heap);
  */
 bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_blocks);
 
-/** Call `visit` on every managed (CELL) cell, in any state. Used by the heap
- * verifier to re-examine each cell's edges after marking. */
+/** Call `visit` on every allocated managed cell. Used by the heap verifier to
+ * re-examine each cell's edges after marking. */
 void mal_heap_walk_cells(MalHeap *heap, MalHeapFinalizeFn visit);
+
+/** Finalize every allocated managed cell regardless of reachability and reclaim it,
+ * so a second call is a no-op. Teardown only. */
+void mal_heap_finalize_all(MalHeap *heap, MalHeapFinalizeFn finalize);
 
 #if !defined(__wasi__)
 typedef struct MalHeapLargeRange MalHeapLargeRange;
@@ -673,9 +719,188 @@ typedef struct MalHeapCellIndex {
     usize large_count;
 } MalHeapCellIndex;
 
-void mal_heap_cell_index_init(const MalHeap *heap, MalHeapCellIndex *index);
+void mal_heap_cell_index_init(MalHeap *heap, MalHeapCellIndex *index);
 void mal_heap_cell_index_free(MalHeapCellIndex *index);
 
 /** The allocated, unreclaimed managed cell containing `address`, or nullptr. */
 MalHeapHeader *mal_heap_cell_index_find(const MalHeapCellIndex *index, uptr address);
 #endif
+
+/* Size classes are 16-byte steps up to 128 bytes, then four per power-of-two band. */
+static inline u32 mal_heap_size_class(usize size) {
+    if (size <= 128) return size == 0 ? 0 : (u32) ((size + 15) >> 4) - 1;
+    u32 band = 63u - (u32) __builtin_clzll((unsigned long long) (size - 1));
+    return 8u + (band - 7u) * 4u + (u32) ((size - 1 - ((usize) 1 << band)) >> (band - 2u));
+}
+
+static inline MalGcBlock *mal_heap_cell_block(const void *cell) {
+    return (MalGcBlock *) ((uptr) cell & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
+}
+
+static inline usize mal_heap_cell_unit(const void *cell) {
+    return ((uptr) cell & (MAL_GC_BLOCK_SIZE - 1)) / MAL_GC_CELL_ALIGN;
+}
+
+static inline u8 mal_heap_mark_load(const MalHeapHeader *header) {
+#if defined(__wasi__)
+    return header->mark;
+#else
+    return atomic_load_explicit(&header->mark, memory_order_relaxed);
+#endif
+}
+
+/**
+ * Whether a dead cell of this type may own storage outside its cell. Ordinary objects
+ * and arrays start owning nothing and report it through mal_heap_cell_needs_finalizer;
+ * the other non-owning types never do. Mirrors the early returns of the collector's
+ * finalizer, so a type that gains owned state there must return true here.
+ */
+static inline bool mal_heap_type_finalizes_at_birth(MalHeapType type) {
+    switch (type) {
+        case MAL_HEAP_SYMBOL:
+        case MAL_HEAP_BIGINT:
+        case MAL_HEAP_ENV:
+#if MAL_PRIMORDIALS_LOCKED
+        case MAL_HEAP_PROMISE_ALL_STATE:
+#endif
+        case MAL_HEAP_ASYNC_CONTEXT:
+        case MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE:
+        case MAL_HEAP_ASYNC_RESOURCE_STATE:
+        case MAL_HEAP_ASYNC_RUN_SCOPE_STATE:
+        case MAL_HEAP_OBJECT:
+        case MAL_HEAP_FUNCTION_OBJECT:
+#if !MAL_PERF_STATS
+        // Stats builds count every Array finalization.
+        case MAL_HEAP_ARRAY_OBJECT:
+#endif
+            return false;
+        default:
+            return true;
+    }
+}
+
+/** Set once a finalizer is registered for a type that does not finalize from birth,
+ * such as a test observing ordinary object deaths. Every dead cell then reaches the
+ * sweep's finalizer. */
+#if defined(__wasi__)
+extern bool mal_heap_every_dead_cell_finalizes;
+#else
+extern _Atomic bool mal_heap_every_dead_cell_finalizes;
+#endif
+
+/** Record that a managed cell now owns storage its finalizer must release. Large
+ * cells are settled by type at their sweep, and unmanaged headers are never swept. */
+static inline void mal_heap_cell_needs_finalizer(MalHeapHeader *cell) {
+    if ((mal_heap_mark_load(cell) & MAL_MARK_BLOCK) == 0) return;
+    usize unit = mal_heap_cell_unit(cell);
+    mal_heap_cell_block(cell)->finalizable[unit / 64] |= UINT64_C(1) << (unit % 64);
+}
+
+/** Report a young cell the minor mark reached, after setting its OLD bit. */
+static inline void mal_heap_note_minor_survivor(MalHeapHeader *cell, u8 mark) {
+    if ((mark & MAL_MARK_BLOCK) == 0) return;
+    usize unit = mal_heap_cell_unit(cell);
+    mal_heap_cell_block(cell)->young_cells[unit / 64] &= ~(UINT64_C(1) << (unit % 64));
+}
+
+/** Whether a managed cell has been reclaimed. Unmanaged and large headers never are
+ * while reachable. */
+static inline bool mal_heap_cell_reclaimed(const MalHeapHeader *cell) {
+    if ((mal_heap_mark_load(cell) & MAL_MARK_BLOCK) == 0) return false;
+    usize unit = mal_heap_cell_unit(cell);
+    return (mal_heap_cell_block(cell)->free_cells[unit / 64] >> (unit % 64)) & 1;
+}
+
+static inline u32 mal_heap_class_cell_size(u32 size_class) {
+    if (size_class < 8) return (size_class + 1) * 16;
+    u32 band = 7 + (size_class - 8) / 4;
+    return (1u << band) + ((size_class - 8) % 4 + 1) * (1u << (band - 2));
+}
+
+/* Small classes clear with constant 16-byte stores: a table-sized memset is a libc call
+ * per cell, and a plain loop is turned back into one by loop idiom recognition. */
+#if defined(__has_builtin) && __has_builtin(__builtin_memset_inline)
+#define mal_heap_clear_16(pointer) __builtin_memset_inline((pointer), 0, 16)
+#else
+#define mal_heap_clear_16(pointer) memset((pointer), 0, 16)
+#endif
+
+static inline __attribute__((always_inline)) void mal_heap_clear_cell(u8 *cell, u32 size) {
+    switch (size) {
+        case 128: mal_heap_clear_16(cell + 112); [[fallthrough]];
+        case 112: mal_heap_clear_16(cell + 96); [[fallthrough]];
+        case 96: mal_heap_clear_16(cell + 80); [[fallthrough]];
+        case 80: mal_heap_clear_16(cell + 64); [[fallthrough]];
+        case 64: mal_heap_clear_16(cell + 48); [[fallthrough]];
+        case 48: mal_heap_clear_16(cell + 32); [[fallthrough]];
+        case 32: mal_heap_clear_16(cell + 16); [[fallthrough]];
+        case 16: mal_heap_clear_16(cell); return;
+        default: memset(cell, 0, size); return;
+    }
+}
+
+/* A conservative stack word can reach a cell abandoned before its constructor ran; a
+ * cleared payload never holds the previous occupant's edges. */
+static inline __attribute__((always_inline)) void mal_heap_cell_init(
+    const MalHeap *heap, MalHeapHeader *cell, MalHeapType type, u32 cell_size
+) {
+    mal_heap_clear_cell((u8 *) cell, cell_size);
+    cell->type = type;
+    cell->storage = MAL_HEAP_STORAGE_DYNAMIC;
+#if defined(__wasi__)
+    cell->mark = heap->alloc_mark | MAL_MARK_BLOCK;
+#else
+    // The constructor publishes the cell only after its header and payload are initialized.
+    atomic_store_explicit(&cell->mark, heap->alloc_mark | MAL_MARK_BLOCK, memory_order_relaxed);
+#endif
+    if (mal_heap_type_finalizes_at_birth(type)) {
+        usize unit = mal_heap_cell_unit(cell);
+        mal_heap_cell_block(cell)->finalizable[unit / 64] |= UINT64_C(1) << (unit % 64);
+    }
+}
+
+/* The inline fast path hands out the lowest claimed cell; claims, large cells, profiling
+ * and injected failures go out of line. */
+static inline __attribute__((always_inline)) MalHeapHeader *mal_heap_cell_take(
+    MalHeap *heap, usize alloc_size, MalHeapType type
+) {
+    if (alloc_size - 1 >= MAL_GC_LARGE_THRESHOLD) return nullptr;
+#if MAL_PROFILE
+    if (heap->profile_state != nullptr) return nullptr;
+#endif
+    u32 size_class = mal_heap_size_class(alloc_size);
+    MalHeapCellCursor *cursor = &heap->cell_cursors[size_class];
+    u64 bits = cursor->bits;
+    if (__builtin_expect(bits == 0, 0)) return nullptr;
+    cursor->bits = bits & (bits - 1);
+    MalHeapHeader *cell =
+        (MalHeapHeader *) (cursor->base + (usize) __builtin_ctzll(bits) * MAL_GC_CELL_ALIGN);
+    mal_heap_cell_init(heap, cell, type, mal_heap_class_cell_size(size_class));
+    return cell;
+}
+
+/** Allocate a managed cell with a zeroed payload; aborts when memory is exhausted. */
+static inline __attribute__((always_inline)) void *mal_heap_alloc(
+    MalHeap *heap, usize alloc_size, MalHeapType type
+) {
+    MalHeapHeader *cell = mal_heap_cell_take(heap, alloc_size, type);
+    if (__builtin_expect(cell == nullptr, 0)) return mal_heap_alloc_slow(heap, alloc_size, type);
+    return cell;
+}
+
+/** Fallible managed-cell allocation. Existing infallible callers retain abort-on-OOM. */
+static inline __attribute__((always_inline)) void *mal_heap_try_alloc(
+    MalHeap *heap, usize alloc_size, MalHeapType type
+) {
+    MalHeapHeader *cell =
+        heap->fail_next_cell_allocation ? nullptr : mal_heap_cell_take(heap, alloc_size, type);
+    if (__builtin_expect(cell == nullptr, 0)) return mal_heap_try_alloc_slow(heap, alloc_size, type);
+    return cell;
+}
+
+/** Give a freshly allocated cell its final type before anything else can observe it. */
+static inline void mal_heap_header_retype(MalHeapHeader *header, MalHeapType type) {
+    if (header->type == type) return;
+    header->type = type;
+    if (mal_heap_type_finalizes_at_birth(type)) mal_heap_cell_needs_finalizer(header);
+}

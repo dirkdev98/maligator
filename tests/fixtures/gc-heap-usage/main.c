@@ -186,18 +186,20 @@ static int check_usage(void) {
         usage.chunk_mapped_bytes != after_first.chunk_mapped_bytes ||
         usage.unclaimed_chunk_bytes != after_first.unclaimed_chunk_bytes) return 8;
     mal_heap_alloc(&heap, sizeof(TestCell), MAL_HEAP_BIGINT);
+    usize free_before_major = mal_heap_usage(&heap).managed_free_cell_bytes;
     mal_heap_begin_major(&heap);
-    live->header.mark = heap.mark_color | MAL_MARK_OLD;
+    live->header.mark = heap.mark_color | MAL_MARK_OLD | MAL_MARK_BLOCK;
     mal_heap_sweep(&heap, finalize_cell);
-    usage = mal_heap_usage(&heap);
-    if (usage.managed_free_cell_bytes != mal_heap_allocation_charge(sizeof(TestCell))) return 9;
+    usize free_after_major = mal_heap_usage(&heap).managed_free_cell_bytes;
+    if (free_after_major != free_before_major + mal_heap_allocation_charge(sizeof(TestCell))) {
+        return 9;
+    }
     mal_heap_begin_major(&heap);
-    live->header.mark = heap.mark_color | MAL_MARK_OLD;
+    live->header.mark = heap.mark_color | MAL_MARK_OLD | MAL_MARK_BLOCK;
     mal_heap_sweep_begin(&heap);
-    if (mal_heap_usage(&heap).managed_free_cell_bytes != 0) return 10;
+    if (mal_heap_usage(&heap).managed_free_cell_bytes != free_after_major) return 10;
     if (!mal_heap_sweep_step(&heap, finalize_cell, (usize) -1)) return 11;
-    if (mal_heap_usage(&heap).managed_free_cell_bytes !=
-        mal_heap_allocation_charge(sizeof(TestCell))) return 12;
+    if (mal_heap_usage(&heap).managed_free_cell_bytes != free_after_major) return 12;
 
     mal_heap_free(&heap);
     return 0;

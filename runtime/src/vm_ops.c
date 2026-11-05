@@ -933,6 +933,8 @@ MalValue mal_vm_materialize_stack_object_fields(
     object->storage_kind = storage_kind;
     object->slot_capacity = slot_capacity;
     object->inline_payload_eights = inline_payload_eights;
+    // The stack object may already be a prototype or carry a captured stack.
+    if (mal_object_finalizes(object)) mal_heap_cell_needs_finalizer(&object->header);
     g_stack_object_materializations++;
     MAL_PERF_COUNT(stack_object_materializations);
     return mal_value_from_object(object);

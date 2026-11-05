@@ -31,6 +31,19 @@ at most 4,096 values; a full buffer claims its pending values into the mutator's
 grey queue without tracing payloads or scanning roots inside an unrooted native
 frame. New allocations are marked live while a major is in flight.
 
+Managed blocks describe their cells with bitmaps: free cells, cells allocated
+since the last collection, and cells whose death must run a finalizer.
+Allocation claims one bitmap word into a per-class cursor and charges, enrolls
+and accounts for its cells at once, so the inline fast path only pops a bit,
+clears the cell and writes the header. A minor mark clears each young survivor's
+bit, which leaves exactly the dead cells; the minor sweep then reads only dead
+cells that own storage. Objects and arrays start without the finalizer bit and
+set it when they acquire owned storage, and verification checks every other dead
+cell owns nothing. A reclaimed cell keeps its stale header, so the free bitmap
+alone decides liveness for conservative roots, heap walks and verification.
+Cursors return unused cells before anything reads the bitmaps or changes
+allocation color.
+
 Workers append discoveries to private lists and acknowledge completion under the
 batch mutex. Only after observing every acknowledgement does the mutator reserve
 space for the combined discovery count and copy each list in worker order. The
@@ -51,7 +64,7 @@ that batch-owned copy. This path excludes overflow tables, host type tracers,
 shapes with more than 32 inline properties, and arrays with more than 128 dense
 elements. A batch copies at most 2,048 values. All other mutable layouts are
 traced by the mutator or while JavaScript is parked. Weak processing, all
-finalizers, sweep, allocator free lists, and large-object reclamation remain with
+finalizers, sweep, allocator bitmaps, and large-object reclamation remain with
 the mutator. Sweep starts after all marking and weak processing finish; no worker
 can still update a mark. Native block sweeping therefore uses relaxed atomic
 mark loads and stores, with no read-modify-write claim needed. Moving sweep to workers

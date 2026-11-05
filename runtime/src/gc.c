@@ -187,31 +187,16 @@ static _Atomic(MalGcTracer) g_type_tracers[MAL_HEAP_TYPE_COUNT];
     atomic_store_explicit(&(slot), (fn), memory_order_relaxed)
 #endif
 
-/* Mirrors the early returns of `mal_gc_finalize_cell` and `mal_gc_finalize_cell_owned`
- * so sweeps can skip the call; a type that gains owned state there needs FINALIZE here. */
-static MalHeapDeadCellPolicySlot g_dead_cell_policy[MAL_HEAP_TYPE_COUNT] = {
-    [MAL_HEAP_SYMBOL] = MAL_HEAP_DEAD_CELL_RECLAIM,
-    [MAL_HEAP_BIGINT] = MAL_HEAP_DEAD_CELL_RECLAIM,
-    [MAL_HEAP_ENV] = MAL_HEAP_DEAD_CELL_RECLAIM,
-#if MAL_PRIMORDIALS_LOCKED
-    [MAL_HEAP_PROMISE_ALL_STATE] = MAL_HEAP_DEAD_CELL_RECLAIM,
-#endif
-    [MAL_HEAP_ASYNC_CONTEXT] = MAL_HEAP_DEAD_CELL_RECLAIM,
-    [MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE] = MAL_HEAP_DEAD_CELL_RECLAIM,
-    [MAL_HEAP_ASYNC_RESOURCE_STATE] = MAL_HEAP_DEAD_CELL_RECLAIM,
-    [MAL_HEAP_ASYNC_RUN_SCOPE_STATE] = MAL_HEAP_DEAD_CELL_RECLAIM,
-    [MAL_HEAP_OBJECT] = MAL_HEAP_DEAD_CELL_OBJECT,
-    [MAL_HEAP_FUNCTION_OBJECT] = MAL_HEAP_DEAD_CELL_OBJECT,
-#if !MAL_PERF_STATS
-    // Stats builds count every Array finalization.
-    [MAL_HEAP_ARRAY_OBJECT] = MAL_HEAP_DEAD_CELL_ARRAY,
-#endif
-};
-
 void mal_gc_register_finalizer(MalHeapType type, MalGcFinalizer fn) {
     if ((usize) type < (usize) MAL_HEAP_TYPE_COUNT) {
+        if (fn != nullptr && !mal_heap_type_finalizes_at_birth(type)) {
+#if defined(__wasi__)
+            mal_heap_every_dead_cell_finalizes = true;
+#else
+            atomic_store_explicit(&mal_heap_every_dead_cell_finalizes, true, memory_order_relaxed);
+#endif
+        }
         mal_gc_type_hook_store(g_type_finalizers[type], fn);
-        mal_gc_type_hook_store(g_dead_cell_policy[type], (u8) MAL_HEAP_DEAD_CELL_FINALIZE);
     }
 }
 
@@ -999,7 +984,7 @@ void mal_gc_init(MalVm *vm) {
     g_gc = g;
     g_gc_vm = vm;
     mal_gc_marking_active = false;
-    vm->heap.black_alloc = false;
+    mal_heap_set_black_alloc(&vm->heap, false);
     mal_gc_poll = false;
     mal_perf_stats_init();
     g->major_every = 8;
@@ -1050,7 +1035,7 @@ void mal_gc_configure_heap(MalVm *vm) {
     }
     // Poisoning dead cells makes a missed root fail before the cell is reused.
     vm->heap.poison_on_free = g->verify_enabled;
-    vm->heap.dead_cell_policy = g_dead_cell_policy;
+    vm->heap.finalize_every_dead_cell = false;
 }
 
 void mal_gc_begin_teardown(MalVm *vm) {
@@ -1074,7 +1059,7 @@ void mal_gc_begin_teardown(MalVm *vm) {
     g->grey_count = 0;
     g->satb_count = 0;
     mal_gc_marking_active = false;
-    vm->heap.black_alloc = false;
+    mal_heap_set_black_alloc(&vm->heap, false);
     mal_gc_poll = false;
     vm->heap.next_gc_at = (usize) -1;
 }
@@ -1106,7 +1091,7 @@ static __attribute__((noinline)) void mal_gc_shade_slow(
     MalGcThreadContext *ctx, MalHeapHeader *cell
 ) {
     if (ctx->verifying) {
-        if (cell->mark & MAL_MARK_FREE) {
+        if (mal_heap_cell_reclaimed(cell)) {
             fprintf(stderr, "[gc verify] live cell (source type=%d) points to a freed "
                 "cell type=%d: a root or trace edge was missed, the target was swept "
                 "while still reachable\n", ctx->verify_source, cell->type);
@@ -1116,24 +1101,17 @@ static __attribute__((noinline)) void mal_gc_shade_slow(
     }
 #if defined(__wasi__)
     u8 mark = cell->mark;
-    if (mark & MAL_MARK_FREE) {
-        fprintf(stderr, "[gc] attempted to shade a reclaimed cell\n");
-        abort();
-    }
     if (ctx->gc->major_collection) {
         if (mal_heap_mark_is_current(mark, ctx->vm->heap.mark_color)) return;
         cell->mark = (mark & ~MAL_MARK_COLOR) | ctx->vm->heap.mark_color;
     } else {
         if (mal_heap_mark_is_old(mark)) return;
         cell->mark = mark | MAL_MARK_OLD;
+        mal_heap_note_minor_survivor(cell, mark);
     }
 #else
     u8 expected = atomic_load_explicit(&cell->mark, memory_order_relaxed);
     for (;;) {
-        if (expected & MAL_MARK_FREE) {
-            fprintf(stderr, "[gc] attempted to shade a reclaimed cell\n");
-            abort();
-        }
         u8 desired;
         if (ctx->gc->major_collection) {
             if (mal_heap_mark_is_current(expected, ctx->vm->heap.mark_color)) return;
@@ -1144,6 +1122,7 @@ static __attribute__((noinline)) void mal_gc_shade_slow(
             // thread can compete for this young cell's mark.
             atomic_store_explicit(&cell->mark, expected | MAL_MARK_OLD,
                 memory_order_relaxed);
+            mal_heap_note_minor_survivor(cell, expected);
             break;
         }
         if (atomic_compare_exchange_weak_explicit(&cell->mark, &expected, desired,
@@ -2473,8 +2452,8 @@ static inline bool mal_gc_object_owns_nothing(const MalObject *object) {
 }
 
 /* Most dead cells own nothing outside their own allocation; settling that before the
- * full finalizer keeps them off its frame. `g_dead_cell_policy` lets sweeps settle the
- * commonest of these cases without the call. */
+ * full finalizer keeps them off its frame. Sweeps reach it only for cells whose
+ * finalizable bit is set, and for large cells by `mal_heap_type_finalizes_at_birth`. */
 static void mal_gc_finalize_cell(MalHeapHeader *cell) {
     switch (cell->type) {
         case MAL_HEAP_SYMBOL:
@@ -2520,17 +2499,16 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
 // --- Mark / weak / verify --------------------------------------------------
 
 /** Verify visitor: re-trace a survivor's edges (in verify mode shading aborts on
- * a freed target). FREE cells are dead this cycle and are skipped. */
+ * a reclaimed target). */
 static void mal_gc_verify_cell(MalHeapHeader *cell) {
-    if ((cell->mark & MAL_MARK_FREE) == 0) {
-        g_gc_verify_source = (i32) cell->type;
-        mal_gc_trace_cell(cell);
-        g_gc_verify_source = -1;
-    }
+    g_gc_verify_source = (i32) cell->type;
+    mal_gc_trace_cell(cell);
+    g_gc_verify_source = -1;
 }
 
 /* Verify before any reclaimed cell can be reused, including after an incremental
- * sweep finishes; a surviving edge to FREE means a root or trace edge was missed. */
+ * sweep finishes; a surviving edge to a reclaimed cell means a root or trace edge
+ * was missed. */
 static void mal_gc_verify(MalVm *vm) {
     g_gc_verifying = true;
     mal_gc_scan_roots(vm);
@@ -3490,7 +3468,7 @@ static void mal_gc_cycle_begin(MalVm *vm) {
     // this instant is either marked now (root-reachable) or preserved by the
     // barrier / black allocation for the rest of the cycle.
     mal_gc_marking_active = true;
-    vm->heap.black_alloc = true;
+    mal_heap_set_black_alloc(&vm->heap, true);
     mal_gc_scan_roots(vm);
 
     g_gc->phase = MAL_GC_PHASE_MARK;
@@ -3555,7 +3533,7 @@ static void mal_gc_cycle_remark(MalVm *vm) {
  * the synchronous-finish path (which sweeps everything remaining first). */
 static void mal_gc_cycle_finish_sweep(MalVm *vm) {
     mal_gc_clear_remembered();
-    vm->heap.black_alloc = false;
+    mal_heap_set_black_alloc(&vm->heap, false);
     g_gc->phase = MAL_GC_PHASE_IDLE;
     g_gc->major_collection = false;
     g_gc->last_major_live_bytes = vm->heap.live_bytes;
@@ -3877,16 +3855,6 @@ static void gc_safepoint_step(MalVm *vm) {
     mal_gc_incremental_safepoint(vm);
 }
 
-/** Finalize-all visitor: free a live cell's owned side allocations regardless of
- * reachability. FREE cells (already finalized this run) are skipped, and the
- * cell is marked FREE so a second pass is a no-op. */
-static void mal_gc_finalize_live_cell(MalHeapHeader *cell) {
-    if ((cell->mark & MAL_MARK_FREE) == 0) {
-        mal_gc_finalize_cell(cell);
-        cell->mark = MAL_MARK_FREE;
-    }
-}
-
 /* Teardown helper: free EVERY cell's owned side allocations (overflow tables,
  * Map/Set entries, ArrayBuffer data, array elements, Rust regexp/Intl handles,
  * slots buffers) regardless of liveness, so a process that tears its VM down
@@ -3898,7 +3866,7 @@ static void mal_gc_finalize_live_cell(MalHeapHeader *cell) {
  * Call once, immediately before mal_heap_free. */
 void mal_gc_finalize_all(MalVm *vm) {
     if (g_gc_vm != vm) abort();
-    mal_heap_walk_cells(&vm->heap, mal_gc_finalize_live_cell);
+    mal_heap_finalize_all(&vm->heap, mal_gc_finalize_cell);
 }
 
 /* Free the per-isolate collector state's growable buffers + the struct itself.
@@ -3943,7 +3911,7 @@ void mal_gc_state_free(MalVm *vm) {
         g_gc = nullptr;
         g_gc_vm = nullptr;
         mal_gc_marking_active = false;
-        vm->heap.black_alloc = false;
+        mal_heap_set_black_alloc(&vm->heap, false);
         mal_gc_poll = false;
     }
 }

@@ -83,6 +83,7 @@ static bool mal_error_capture_stack(MalVm *vm, MalObject *error) {
     MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_from_i32(id), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(error, mal_error_stack_key(vm), &desc);
     error->has_captured_stack = true;
+    mal_heap_cell_needs_finalizer(&error->header);
     return true;
 }
 
@@ -881,6 +882,7 @@ static MalValue mal_builtin_error_capture_stack_trace(MalVm *vm, MalValue this_v
         return mal_value_new_undefined();
     }
     target_object->has_captured_stack = true;
+    mal_heap_cell_needs_finalizer(&target_object->header);
     if (mal_object_define_own(target_object, stack_key, &stack_desc) == MAL_DEFINE_OWN_REJECTED) {
         if (previous_trace.present) {
             mal_object_define_own(target_object, trace_key, &previous_trace.desc);

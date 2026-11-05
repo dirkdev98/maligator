@@ -43,7 +43,7 @@ static MalHeapHeader *searched_cell;
 static bool searched_cell_live;
 
 static void find_live_cell(MalHeapHeader *cell) {
-    if (cell == searched_cell && !(cell->mark & MAL_MARK_FREE)) searched_cell_live = true;
+    if (cell == searched_cell) searched_cell_live = true;
 }
 
 static bool is_live(MalVm *vm, MalValue value) {

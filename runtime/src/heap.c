@@ -1,6 +1,7 @@
 #include "./heap.h"
 
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -18,6 +19,21 @@
 #include "./shape.h"
 
 static _Atomic(u64) g_next_heap_identity = 1;
+
+#if defined(__wasi__)
+bool mal_heap_every_dead_cell_finalizes = false;
+#else
+_Atomic bool mal_heap_every_dead_cell_finalizes = false;
+#endif
+
+static inline bool mal_heap_finalizes_every_dead_cell(const MalHeap *heap) {
+#if defined(__wasi__)
+    return heap->finalize_every_dead_cell || mal_heap_every_dead_cell_finalizes;
+#else
+    return heap->finalize_every_dead_cell ||
+        atomic_load_explicit(&mal_heap_every_dead_cell_finalizes, memory_order_relaxed);
+#endif
+}
 /* Each pinned mutator binds header initialization to its own heap's major color. */
 
 static inline u8 mal_heap_sweep_mark_load(const MalHeapHeader *header) {
@@ -41,65 +57,12 @@ static inline void mal_heap_maybe_trigger_gc(const MalHeap *heap) {
     if (heap->bytes_allocated >= heap->next_gc_at) mal_isolate_request_poll(mal_isolate_locals());
 }
 
-/*
- * Block-based, segregated-size-class, non-moving allocator.
- *
- * Layout:  Chunk (CHUNK_SIZE mmap, BLOCK_SIZE-aligned)
- *            -> Block (BLOCK_SIZE, address-aligned: block = ptr & ~(BLOCK_SIZE-1))
- *              -> Cell (header + payload, rounded to a size class)
- *
- * Each block carries one size class and one kind (CELL / RAW). Cells are
- * bump-allocated within the current block per (kind, size class); a fresh block
- * is claimed from the newest chunk when the current block fills, and a new chunk
- * is mmap'd when the newest is exhausted. Objects larger than the largest size
- * class go to the large-object space (LOS) as individually-malloc'd records.
- *
- * The structure (per-block free lists, BLOCK_SIZE-aligned blocks, chunk
- * enumeration) lets the mark/sweep collector sweep the allocation bitmap, return
- * dead cells to their free lists, and madvise empty blocks back to the OS without
- * touching the mutator-facing API. mal_heap_free releases everything at shutdown.
- */
-
-#define MAL_GC_BLOCK_SIZE (32u * 1024u)
 #define MAL_GC_CHUNK_SIZE (2u * 1024u * 1024u)
-/* Cells of this size or smaller are size-classed in blocks; larger -> LOS. */
-#define MAL_GC_LARGE_THRESHOLD (MAL_GC_BLOCK_SIZE / 4u)
-/* Every cell is 16-byte aligned: covers void*, f64, and MalBigInt's i128. */
-#define MAL_GC_CELL_ALIGN 16u
 
 typedef enum MalGcBlockKind {
     MAL_GC_BLOCK_CELL,
     MAL_GC_BLOCK_RAW,
 } MalGcBlockKind;
-
-/* Block header, stored inline at the (BLOCK_SIZE-aligned) block base so a cell's
- * block is recovered with a single mask. Cells follow the header. */
-struct MalGcBlock {
-    u8 kind;        /* MalGcBlockKind */
-    u8 on_young;    /* on heap->young_blocks; guards duplicate enrollment */
-    u8 recycled;    /* on the heap free-block list: fully swept, pages madvised away,
-                     * bump reset. The sweep skips it (so it is not re-recycled) until
-                     * mal_gc_new_block reclaims it. */
-    u8 on_partial;  /* RAW only: block is currently on heap->raw_partial[size_class]
-                     * (has reclaimable free cells). Guards double-linking and tells
-                     * gc_free_raw whether to unlink when the block empties. */
-    u16 size_class; /* index into g_class_cell_size */
-    u32 cell_size;  /* bytes per cell in this block */
-    u32 live;       /* RAW: outstanding cells. CELL: survivors counted by the last
-                     * sweep, so a minor adds only newly surviving bytes. */
-    u8 *bump;       /* next unallocated byte */
-    u8 *limit;      /* one past the last usable byte (block_base + BLOCK_SIZE) */
-    void *free_list; /* reclaimed cells (Phase 3 sweep / gc_free_raw); intrusive */
-    /* Intrusive links: heap->free_blocks (recycled, singly linked via next_free) OR
-     * heap->raw_partial[size_class] (RAW partial blocks, doubly linked). A block is
-     * on at most one list at a time, so the two uses never overlap. */
-    struct MalGcBlock *next_free;
-    struct MalGcBlock *prev_free;
-    struct MalGcBlock *next_young;
-    u64 sweep_epoch;
-    // Index cell starts by alignment units so allocation needs no size-class division.
-    u64 young_cells[MAL_GC_BLOCK_SIZE / MAL_GC_CELL_ALIGN / 64];
-};
 
 struct MalGcChunk {
     void *base;          /* BLOCK_SIZE-aligned, CHUNK_SIZE usable bytes */
@@ -119,6 +82,7 @@ struct MalGcLarge {
     usize size; /* payload bytes */
     u8 kind;    /* MalGcBlockKind */
     u8 accounted;
+    u8 finalized; /* teardown already ran its finalizer */
 };
 
 static inline usize mal_gc_align_up(usize value) {
@@ -133,19 +97,6 @@ static inline usize mal_gc_cell_data_offset(void) {
 /* Payload offset within a LOS record (record header rounded up to cell align). */
 static inline usize mal_gc_large_data_offset(void) {
     return mal_gc_align_up(sizeof(struct MalGcLarge));
-}
-
-/* Offset of the intrusive free-list link inside a reclaimed CELL cell: past the
- * header, pointer-aligned. The header (type/storage/mark) is left intact so the
- * sweep can tell a FREE cell from a newly-dead one. A cell is reclaimable only if
- * it can hold the link past this offset; every managed object can (the smallest
- * is well over this), the 16-byte class cannot but no object is that small. */
-static inline usize mal_gc_free_next_offset(void) {
-    return (sizeof(MalHeapHeader) + alignof(void *) - 1) & ~(usize) (alignof(void *) - 1);
-}
-
-static inline bool mal_gc_cell_reclaimable(u32 cell_size) {
-    return cell_size >= mal_gc_free_next_offset() + sizeof(void *);
 }
 
 /*
@@ -170,23 +121,20 @@ static_assert(
 static_assert(MAL_GC_BLOCK_SIZE != 0 && (MAL_GC_BLOCK_SIZE & (MAL_GC_BLOCK_SIZE - 1)) == 0,
     "block size must be a power of two for the masking trick");
 
-/* size -> size-class index, O(1). Slot s covers requests in (16*(s-1), 16*s]. */
-#define MAL_GC_MAX_SLOT (MAL_GC_LARGE_THRESHOLD / MAL_GC_CELL_ALIGN)
-static u8 g_size_to_class[MAL_GC_MAX_SLOT + 1];
+/* Cell starts per size class, by alignment unit within a block. */
+static u64 g_class_cell_starts[MAL_GC_NUM_SIZE_CLASSES][MAL_GC_BLOCK_WORDS];
 /* Concurrent isolates may allocate first at the same time; the table is published once. */
 static _Atomic bool g_tables_ready = false;
 
 static void mal_gc_build_tables(void) {
-    usize ci = 0;
-    for (usize slot = 0; slot <= MAL_GC_MAX_SLOT; ++slot) {
-        usize needed = slot * MAL_GC_CELL_ALIGN;
-        if (needed < g_class_cell_size[0]) {
-            needed = g_class_cell_size[0];
+    for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; size_class++) {
+        u32 cell_size = g_class_cell_size[size_class];
+        if (mal_heap_size_class(cell_size) != size_class) abort();
+        for (usize offset = mal_gc_cell_data_offset(); offset + cell_size <= MAL_GC_BLOCK_SIZE;
+            offset += cell_size) {
+            usize unit = offset / MAL_GC_CELL_ALIGN;
+            g_class_cell_starts[size_class][unit / 64] |= UINT64_C(1) << (unit % 64);
         }
-        while (ci < MAL_GC_NUM_SIZE_CLASSES - 1 && g_class_cell_size[ci] < needed) {
-            ++ci;
-        }
-        g_size_to_class[slot] = (u8) ci;
     }
     atomic_store_explicit(&g_tables_ready, true, memory_order_release);
 }
@@ -202,13 +150,11 @@ static void mal_gc_ensure_tables(void) {
 }
 
 usize mal_heap_allocation_charge(usize alloc_size) {
-    mal_gc_ensure_tables();
     usize size = alloc_size == 0 ? 1 : alloc_size;
     if (size > MAL_GC_LARGE_THRESHOLD) {
         return size;
     }
-    usize slot = (size + MAL_GC_CELL_ALIGN - 1) / MAL_GC_CELL_ALIGN;
-    return g_class_cell_size[g_size_to_class[slot]];
+    return g_class_cell_size[mal_heap_size_class(size)];
 }
 
 /* mmap a region of `size` bytes aligned to `align` (a power of two). Records the
@@ -334,13 +280,6 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
         heap->free_blocks = recycled->next_free;
         block_base = (u8 *) recycled;
         sweep_epoch = recycled->sweep_epoch;
-#if !defined(__wasi__)
-        // MADV_FREE leaves page contents undefined; bump cells must start cleared.
-        if (kind == MAL_GC_BLOCK_CELL) {
-            memset(block_base + mal_gc_cell_data_offset(), 0,
-                MAL_GC_BLOCK_SIZE - mal_gc_cell_data_offset());
-        }
-#endif
     } else {
         block_base = (u8 *) chunk->base + chunk->next_block * MAL_GC_BLOCK_SIZE;
         chunk->next_block++;
@@ -350,31 +289,32 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
     MalGcBlock *block = (MalGcBlock *) block_base;
     block->kind = kind;
     block->on_young = 0;
-    block->next_young = nullptr;
-    memset(block->young_cells, 0, sizeof(block->young_cells));
     block->recycled = 0;
     block->on_partial = 0;
     block->size_class = size_class;
+    block->scan_word = 0;
     block->cell_size = g_class_cell_size[size_class];
     block->live = 0;
+    block->young_count = 0;
     block->sweep_epoch = sweep_epoch;
     block->free_list = nullptr;
     block->next_free = nullptr;
     block->prev_free = nullptr;
+    block->next_young = nullptr;
     block->bump = block_base + mal_gc_cell_data_offset();
     block->limit = block_base + MAL_GC_BLOCK_SIZE;
+    memset(block->young_cells, 0, sizeof(block->young_cells));
+    memset(block->finalizable, 0, sizeof(block->finalizable));
+    if (kind == MAL_GC_BLOCK_CELL) {
+        memcpy(block->free_cells, g_class_cell_starts[size_class], sizeof(block->free_cells));
+    } else {
+        memset(block->free_cells, 0, sizeof(block->free_cells));
+    }
     return block;
 }
 
-static inline void mal_gc_track_young_block(MalHeap *heap, MalGcBlock *block, void *cell) {
-    if (heap->black_alloc) return;
-    usize slot = ((uptr) cell & (MAL_GC_BLOCK_SIZE - 1)) / MAL_GC_CELL_ALIGN;
-    block->young_cells[slot / 64] |= UINT64_C(1) << (slot % 64);
-    if (!block->on_young) {
-        block->on_young = 1;
-        block->next_young = heap->young_blocks;
-        heap->young_blocks = block;
-    }
+static inline u8 *mal_gc_word_base(MalGcBlock *block, usize word) {
+    return (u8 *) block + word * 64 * MAL_GC_CELL_ALIGN;
 }
 
 static void mal_gc_clear_young_blocks(MalHeap *heap) {
@@ -384,8 +324,37 @@ static void mal_gc_clear_young_blocks(MalHeap *heap) {
         MalGcBlock *next = block->next_young;
         block->on_young = 0;
         block->next_young = nullptr;
+        block->young_count = 0;
         memset(block->young_cells, 0, sizeof(block->young_cells));
         block = next;
+    }
+}
+
+static void mal_gc_cell_block_available(MalHeap *heap, MalGcBlock *block) {
+    if (block->on_partial) return;
+    block->on_partial = 1;
+    block->next_free = heap->cell_avail[block->size_class];
+    heap->cell_avail[block->size_class] = block;
+}
+
+/* A major rebuilds the lists from its sweep; blocks it recycles must not stay linked. */
+static void mal_gc_clear_cell_avail(MalHeap *heap) {
+    for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; size_class++) {
+        MalGcBlock *block = heap->cell_avail[size_class];
+        heap->cell_avail[size_class] = nullptr;
+        while (block != nullptr) {
+            MalGcBlock *next = block->next_free;
+            block->on_partial = 0;
+            block->next_free = nullptr;
+            block = next;
+        }
+    }
+}
+
+/* Freed cells reuse lowest addresses first, so each class rescans its current block. */
+static void mal_gc_rescan_current_blocks(MalHeap *heap) {
+    for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; size_class++) {
+        if (heap->cell_blocks[size_class] != nullptr) heap->cell_blocks[size_class]->scan_word = 0;
     }
 }
 
@@ -394,8 +363,6 @@ static void mal_gc_untrack_young_large(MalHeap *heap, MalGcLarge *rec) {
         rec->young_prev->young_next = rec->young_next;
     } else if (heap->young_large == rec) {
         heap->young_large = rec->young_next;
-    } else {
-        return;
     }
     if (rec->young_next != nullptr) rec->young_next->young_prev = rec->young_prev;
     rec->young_next = nullptr;
@@ -413,21 +380,23 @@ static void mal_gc_clear_young_large(MalHeap *heap) {
     }
 }
 
-/* The policy settles most dead cells inline; a sweep's finalizer handles the rest. */
-static inline bool mal_heap_dead_cell_finalizes(const MalHeap *heap, const MalHeapHeader *cell) {
-    if (heap->dead_cell_policy == nullptr) return true;
-    switch (mal_heap_dead_cell_policy_load(heap->dead_cell_policy[cell->type])) {
-        case MAL_HEAP_DEAD_CELL_RECLAIM:
-            return false;
-        case MAL_HEAP_DEAD_CELL_OBJECT:
+/* Whether a dead cell owns storage by its type and current state. Block cells carry
+ * the answer in their finalizable bit; large cells and the verifier ask here. */
+static bool mal_heap_dead_cell_finalizes(const MalHeap *heap, const MalHeapHeader *cell) {
+    if (mal_heap_finalizes_every_dead_cell(heap) || mal_heap_type_finalizes_at_birth(cell->type)) {
+        return true;
+    }
+    switch (cell->type) {
+        case MAL_HEAP_OBJECT:
+        case MAL_HEAP_FUNCTION_OBJECT:
             return mal_object_finalizes((const MalObject *) cell);
-        case MAL_HEAP_DEAD_CELL_ARRAY: {
+        case MAL_HEAP_ARRAY_OBJECT: {
             const MalArrayObject *array = (const MalArrayObject *) cell;
             return (array->elements != nullptr && !mal_array_object_elements_inline(array)) ||
                 mal_object_finalizes(&array->object);
         }
         default:
-            return true;
+            return false;
     }
 }
 
@@ -482,6 +451,7 @@ static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
     rec->size = size;
     rec->kind = kind;
     rec->accounted = 0;
+    rec->finalized = 0;
     rec->prev = nullptr;
     rec->young_next = nullptr;
     rec->young_prev = nullptr;
@@ -511,59 +481,126 @@ static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
     return (u8 *) rec + offset;
 }
 
-/* A reclaimed cell or the current block's next bump, or nullptr when the class needs a
- * fresh block. */
-/* Small classes clear with constant 16-byte stores: a table-sized memset is a libc call per
- * reused cell, and a plain loop is turned back into one by loop idiom recognition. */
-// Clang otherwise lowered the final 16-byte clear to a bzero call on every reuse.
-#if defined(__has_builtin) && __has_builtin(__builtin_memset_inline)
-#define mal_gc_clear_16(pointer) __builtin_memset_inline((pointer), 0, 16)
-#else
-#define mal_gc_clear_16(pointer) memset((pointer), 0, 16)
-#endif
+/* Charge and enroll one word of free cells, then hand them to the class cursor.
+ * Accounting that depends on the collector's state is settled here and undone for
+ * unused cells by mal_heap_retire_cursors, which runs before that state changes. */
+static void mal_gc_claim_word(MalHeap *heap, MalGcBlock *block, usize word, u64 bits) {
+    block->free_cells[word] = 0;
+    u32 cell_size = block->cell_size;
+    u8 *base = mal_gc_word_base(block, word);
+    u32 count = (u32) __builtin_popcountll(bits);
+    usize bytes = (usize) count * cell_size;
+    if (!heap->black_alloc) {
+        block->young_cells[word] |= bits;
+        block->young_count += count;
+        if (!block->on_young) {
+            block->on_young = 1;
+            block->next_young = heap->young_blocks;
+            heap->young_blocks = block;
+        }
+    } else {
+        heap->black_alloc_bytes += bytes;
+        if (heap->sweeping && block->sweep_epoch == heap->sweep_epoch) {
+            heap->sweep_live_bytes += bytes;
+            block->live += count;
+        }
+    }
+    heap->bytes_allocated += bytes;
+    heap->current_usage.managed_owned_bytes += bytes;
+    heap->cell_cursors[block->size_class] = (MalHeapCellCursor) {.bits = bits, .base = base};
+    mal_heap_maybe_trigger_gc(heap);
+}
 
-static inline __attribute__((always_inline)) void mal_gc_clear_cell(u8 *cell, u32 size) {
-    switch (size) {
-        case 128: mal_gc_clear_16(cell + 112); [[fallthrough]];
-        case 112: mal_gc_clear_16(cell + 96); [[fallthrough]];
-        case 96: mal_gc_clear_16(cell + 80); [[fallthrough]];
-        case 80: mal_gc_clear_16(cell + 64); [[fallthrough]];
-        case 64: mal_gc_clear_16(cell + 48); [[fallthrough]];
-        case 48: mal_gc_clear_16(cell + 32); [[fallthrough]];
-        case 32: mal_gc_clear_16(cell + 16); [[fallthrough]];
-        case 16: mal_gc_clear_16(cell); return;
-        default: memset(cell, 0, size); return;
+void mal_heap_retire_cursors(MalHeap *heap) {
+    for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; size_class++) {
+        MalHeapCellCursor *cursor = &heap->cell_cursors[size_class];
+        u64 rest = cursor->bits;
+        if (rest == 0) continue;
+        cursor->bits = 0;
+        MalGcBlock *block = mal_heap_cell_block(cursor->base);
+        usize word = mal_heap_cell_unit(cursor->base) / 64;
+        u32 count = (u32) __builtin_popcountll(rest);
+        usize bytes = (usize) count * block->cell_size;
+        block->free_cells[word] |= rest;
+        block->finalizable[word] &= ~rest;
+        if (!heap->black_alloc) {
+            block->young_cells[word] &= ~rest;
+            block->young_count -= count;
+        } else {
+            heap->black_alloc_bytes -= bytes;
+            if (heap->sweeping && block->sweep_epoch == heap->sweep_epoch) {
+                heap->sweep_live_bytes -= bytes;
+                block->live -= count;
+            }
+        }
+        // `bytes_allocated` stays monotonic; the unused claim only advances the trigger.
+        heap->current_usage.managed_owned_bytes -= bytes;
+        if (block->scan_word > word) block->scan_word = (u16) word;
     }
 }
 
-static inline __attribute__((always_inline)) void *mal_gc_alloc_in_class(
-    MalHeap *heap, u16 size_class, u8 kind
-) {
-    // Reuse a cell reclaimed by the sweep (CELL) or freed by an owner finalizer
-    // (RAW) before bumping. CELL cells thread the free link past their header
-    // (mal_gc_free_next_offset); RAW cells have no header, so the link sits at
-    // offset 0. Both lists are empty until something is reclaimed, so an
-    // uncollected run is still pure bump allocation.
-    if (kind == MAL_GC_BLOCK_CELL && heap->cell_free[size_class] != nullptr) {
-        void *cell = heap->cell_free[size_class];
-        void *next = *(void **) ((u8 *) cell + mal_gc_free_next_offset());
-        heap->cell_free[size_class] = next;
-        // Reclaimed cells are scattered; the next pop's link read would otherwise miss.
-        __builtin_prefetch(next, 1, 3);
-#if !defined(__wasi__)
-        // A conservative stack word can reach a cell abandoned before its constructor
-        // ran; a cleared payload never holds the previous occupant's edges.
-        mal_gc_clear_cell(cell, g_class_cell_size[size_class]);
+static bool mal_gc_refill_cells(MalHeap *heap, u32 size_class) {
+    MalGcBlock *block = heap->cell_blocks[size_class];
+    for (;;) {
+        if (block != nullptr) {
+            for (usize word = block->scan_word; word < MAL_GC_BLOCK_WORDS; word++) {
+                u64 bits = block->free_cells[word];
+                if (bits != 0) {
+                    block->scan_word = (u16) (word + 1);
+                    mal_gc_claim_word(heap, block, word, bits);
+                    return true;
+                }
+            }
+            block->scan_word = MAL_GC_BLOCK_WORDS;
+        }
+        block = heap->cell_avail[size_class];
+        if (block != nullptr) {
+            heap->cell_avail[size_class] = block->next_free;
+            block->next_free = nullptr;
+            block->on_partial = 0;
+            block->scan_word = 0;
+        } else {
+            block = mal_gc_new_block(heap, (u16) size_class, MAL_GC_BLOCK_CELL);
+            if (block == nullptr) return false;
+        }
+        heap->cell_blocks[size_class] = block;
+    }
+}
+
+/* A managed cell with an initialized header and zeroed payload, or nullptr when memory
+ * is exhausted. */
+static MalHeapHeader *mal_gc_alloc_cell(MalHeap *heap, usize size, MalHeapType type) {
+    if (size == 0) size = 1;
+    if (size > MAL_GC_LARGE_THRESHOLD) {
+        MalHeapHeader *cell = mal_gc_alloc_large(heap, size, MAL_GC_BLOCK_CELL);
+        if (cell == nullptr) return nullptr;
+        cell->type = type;
+        cell->storage = MAL_HEAP_STORAGE_DYNAMIC;
+#if defined(__wasi__)
+        cell->mark = heap->alloc_mark;
+#else
+        atomic_store_explicit(&cell->mark, heap->alloc_mark, memory_order_relaxed);
 #endif
-        MalGcBlock *block = (MalGcBlock *) ((uptr) cell & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
-        mal_gc_track_young_block(heap, block, cell);
-        heap->bytes_allocated += g_class_cell_size[size_class];
-        heap->current_usage.managed_owned_bytes += g_class_cell_size[size_class];
-        mal_gc_count_black(heap, block, kind, g_class_cell_size[size_class]);
-        mal_heap_maybe_trigger_gc(heap);
+        cell->dirty = MAL_REMEMBERED_CLEAN;
         return cell;
     }
-    if (kind == MAL_GC_BLOCK_RAW && heap->raw_partial[size_class] != nullptr) {
+    u32 size_class = mal_heap_size_class(size);
+    MalHeapCellCursor *cursor = &heap->cell_cursors[size_class];
+    if (cursor->bits == 0 && !mal_gc_refill_cells(heap, size_class)) return nullptr;
+    u64 bits = cursor->bits;
+    cursor->bits = bits & (bits - 1);
+    MalHeapHeader *cell =
+        (MalHeapHeader *) (cursor->base + (usize) __builtin_ctzll(bits) * MAL_GC_CELL_ALIGN);
+    mal_heap_cell_init(heap, cell, type, g_class_cell_size[size_class]);
+    return cell;
+}
+
+/* RAW cells carry their free link at offset 0; both lists are empty until something is
+ * reclaimed, so an uncollected run is still pure bump allocation. */
+static inline __attribute__((always_inline)) void *mal_gc_alloc_raw_in_class(
+    MalHeap *heap, u16 size_class
+) {
+    if (heap->raw_partial[size_class] != nullptr) {
         MalGcBlock *partial = heap->raw_partial[size_class];
         void *cell = partial->free_list;
         partial->free_list = *(void **) cell;
@@ -577,58 +614,42 @@ static inline __attribute__((always_inline)) void *mal_gc_alloc_in_class(
         return cell;
     }
 
-    MalGcBlock *block = (kind == MAL_GC_BLOCK_CELL)
-        ? heap->cell_blocks[size_class]
-        : heap->raw_blocks[size_class];
+    MalGcBlock *block = heap->raw_blocks[size_class];
     if (block == nullptr || block->bump + block->cell_size > block->limit) return nullptr;
 
     void *cell = block->bump;
     block->bump += block->cell_size;
-    if (kind == MAL_GC_BLOCK_RAW) {
-        block->live++; // per-block live count drives empty-block reclamation
-    } else {
-        mal_gc_track_young_block(heap, block, cell);
-    }
+    block->live++; // per-block live count drives empty-block reclamation
     heap->bytes_allocated += block->cell_size;
-    if (kind == MAL_GC_BLOCK_CELL) heap->current_usage.managed_owned_bytes += block->cell_size;
-    else heap->current_usage.raw_owned_bytes += block->cell_size;
-    mal_gc_count_black(heap, block, kind, block->cell_size);
+    heap->current_usage.raw_owned_bytes += block->cell_size;
     mal_heap_maybe_trigger_gc(heap);
     return cell;
 }
 
-static inline u16 mal_gc_size_class(usize size) {
-    return g_size_to_class[(size + MAL_GC_CELL_ALIGN - 1) / MAL_GC_CELL_ALIGN];
-}
-
-static __attribute__((noinline)) void *mal_gc_alloc_slow(MalHeap *heap, usize size, u8 kind) {
+static __attribute__((noinline)) void *mal_gc_alloc_raw_slow(MalHeap *heap, usize size) {
     if (size == 0) {
         size = 1;
     }
     if (size > MAL_GC_LARGE_THRESHOLD) {
-        return mal_gc_alloc_large(heap, size, kind);
+        return mal_gc_alloc_large(heap, size, MAL_GC_BLOCK_RAW);
     }
-    u16 size_class = mal_gc_size_class(size);
-    void *cell = mal_gc_alloc_in_class(heap, size_class, kind);
+    u16 size_class = (u16) mal_heap_size_class(size);
+    void *cell = mal_gc_alloc_raw_in_class(heap, size_class);
     if (cell != nullptr) return cell;
-    MalGcBlock *block = mal_gc_new_block(heap, size_class, kind);
+    MalGcBlock *block = mal_gc_new_block(heap, size_class, MAL_GC_BLOCK_RAW);
     if (block == nullptr) return nullptr;
-    if (kind == MAL_GC_BLOCK_CELL) heap->cell_blocks[size_class] = block;
-    else heap->raw_blocks[size_class] = block;
-    return mal_gc_alloc_in_class(heap, size_class, kind);
+    heap->raw_blocks[size_class] = block;
+    return mal_gc_alloc_raw_in_class(heap, size_class);
 }
 
-/* Reclaimed cells and the current block's bump serve nearly every allocation without a
- * call, so an inlined hit saves no registers; block refills and large objects go out of
- * line. */
-static inline __attribute__((always_inline)) void *mal_gc_alloc(
-    MalHeap *heap, usize size, u8 kind
-) {
+/* Reclaimed cells and the current block's bump serve nearly every RAW allocation
+ * without a call; block refills and large buffers go out of line. */
+static inline __attribute__((always_inline)) void *mal_gc_alloc_raw(MalHeap *heap, usize size) {
     if (size - 1 < MAL_GC_LARGE_THRESHOLD) {
-        void *cell = mal_gc_alloc_in_class(heap, mal_gc_size_class(size), kind);
+        void *cell = mal_gc_alloc_raw_in_class(heap, (u16) mal_heap_size_class(size));
         if (cell != nullptr) return cell;
     }
-    return mal_gc_alloc_slow(heap, size, kind);
+    return mal_gc_alloc_raw_slow(heap, size);
 }
 
 void mal_heap_init(MalHeap *heap, usize capacity) {
@@ -645,10 +666,12 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->young_large = nullptr;
     heap->mark_color = 0;
     heap->black_alloc = false;
+    heap->alloc_mark = 0;
     heap->black_alloc_bytes = 0;
+    memset(heap->cell_cursors, 0, sizeof(heap->cell_cursors));
     memset(heap->cell_blocks, 0, sizeof(heap->cell_blocks));
     memset(heap->raw_blocks, 0, sizeof(heap->raw_blocks));
-    memset(heap->cell_free, 0, sizeof(heap->cell_free));
+    memset(heap->cell_avail, 0, sizeof(heap->cell_avail));
     memset(heap->raw_partial, 0, sizeof(heap->raw_partial));
     heap->free_blocks = nullptr;
     heap->young_blocks = nullptr;
@@ -656,7 +679,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->current_usage = (MalHeapCurrentUsage) {0};
     heap->next_gc_at = (usize) -1;
     heap->poison_on_free = false;
-    heap->dead_cell_policy = nullptr;
+    heap->finalize_every_dead_cell = true;
     heap->live_bytes = 0;
     heap->gc_stats = false;
     heap->minor_cells_inspected = 0;
@@ -734,9 +757,10 @@ void mal_heap_free(MalHeap *heap) {
     heap->raw_large = nullptr;
     heap->young_large = nullptr;
     heap->sweep_large = nullptr;
+    memset(heap->cell_cursors, 0, sizeof(heap->cell_cursors));
     memset(heap->cell_blocks, 0, sizeof(heap->cell_blocks));
     memset(heap->raw_blocks, 0, sizeof(heap->raw_blocks));
-    memset(heap->cell_free, 0, sizeof(heap->cell_free));
+    memset(heap->cell_avail, 0, sizeof(heap->cell_avail));
     memset(heap->raw_partial, 0, sizeof(heap->raw_partial));
     heap->free_blocks = nullptr; // the blocks themselves are freed via the chunks above
     heap->young_blocks = nullptr;
@@ -744,7 +768,7 @@ void mal_heap_free(MalHeap *heap) {
     heap->current_usage = (MalHeapCurrentUsage) {0};
     heap->next_gc_at = (usize) -1;
     heap->poison_on_free = false;
-    heap->dead_cell_policy = nullptr;
+    heap->finalize_every_dead_cell = true;
     heap->live_bytes = 0;
     heap->gc_stats = false;
     heap->minor_cells_inspected = 0;
@@ -769,12 +793,13 @@ MalHeapUsage mal_heap_usage(const MalHeap *heap) {
                 usage.raw_owned_bytes += occupied;
                 usage.raw_free_cell_bytes += handed_out - occupied;
             } else {
-                for (const u8 *cell = (const u8 *) block + mal_gc_cell_data_offset();
-                     cell < block->bump; cell += block->cell_size) {
-                    const MalHeapHeader *header = (const MalHeapHeader *) cell;
-                    if ((header->mark & MAL_MARK_FREE) == 0) {
-                        usage.managed_owned_bytes += block->cell_size;
-                    }
+                const u64 *starts = g_class_cell_starts[block->size_class];
+                for (usize word = 0; word < MAL_GC_BLOCK_WORDS; word++) {
+                    usize allocated =
+                        (usize) __builtin_popcountll(starts[word] & ~block->free_cells[word]);
+                    usize free = (usize) __builtin_popcountll(block->free_cells[word]);
+                    usage.managed_owned_bytes += allocated * block->cell_size;
+                    usage.managed_free_cell_bytes += free * block->cell_size;
                 }
             }
         }
@@ -787,16 +812,11 @@ MalHeapUsage mal_heap_usage(const MalHeap *heap) {
         usage.managed_large_bytes += large->size;
     }
     for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; ++size_class) {
-        for (const void *cell = heap->cell_free[size_class]; cell != nullptr;
-            cell = *(void *const *) ((const u8 *) cell + mal_gc_free_next_offset())) {
-            usage.managed_free_cell_bytes += g_class_cell_size[size_class];
-        }
-        const MalGcBlock *cell_block = heap->cell_blocks[size_class];
-        if (cell_block != nullptr) {
-            usage.bump_free_bytes +=
-                (usize) (cell_block->limit - cell_block->bump) / cell_block->cell_size *
-                cell_block->cell_size;
-        }
+        // Claimed cells are out of the bitmap but not yet handed out.
+        usize claimed = (usize) __builtin_popcountll(heap->cell_cursors[size_class].bits) *
+            g_class_cell_size[size_class];
+        usage.managed_owned_bytes -= claimed;
+        usage.managed_free_cell_bytes += claimed;
         const MalGcBlock *raw_block = heap->raw_blocks[size_class];
         if (raw_block != nullptr) {
             if (raw_block->live == 0) usage.raw_warm_block_bytes += MAL_GC_BLOCK_SIZE;
@@ -813,7 +833,13 @@ MalHeapUsage mal_heap_usage(const MalHeap *heap) {
 }
 
 MalHeapCurrentUsage mal_heap_current_usage(const MalHeap *heap) {
-    return heap->current_usage;
+    MalHeapCurrentUsage usage = heap->current_usage;
+    // Claims charge whole bitmap words; cells still in a cursor are not handed out.
+    for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; size_class++) {
+        usage.managed_owned_bytes -= (usize) __builtin_popcountll(heap->cell_cursors[size_class].bits) *
+            g_class_cell_size[size_class];
+    }
+    return usage;
 }
 
 void mal_heap_array_buffer_acquire(MalHeap *heap, usize bytes) {
@@ -824,20 +850,6 @@ void mal_heap_array_buffer_acquire(MalHeap *heap, usize bytes) {
 void mal_heap_array_buffer_release(MalHeap *heap, usize bytes) {
     if (bytes > heap->current_usage.array_buffer_bytes) abort();
     heap->current_usage.array_buffer_bytes -= bytes;
-}
-
-void mal_heap_header_init(const MalHeap *heap, MalHeapHeader *header, MalHeapType type) {
-    header->type = type;
-    header->storage = MAL_HEAP_STORAGE_DYNAMIC;
-    // New cells stay live when allocated during an in-flight incremental sweep.
-    u8 initial_mark = heap->mark_color | (heap->black_alloc ? MAL_MARK_OLD : 0);
-#if defined(__wasi__)
-    header->mark = initial_mark;
-#else
-    // The constructor publishes the cell only after its header and payload are initialized.
-    atomic_store_explicit(&header->mark, initial_mark, memory_order_relaxed);
-#endif
-    header->dirty = 0; // not on the remembered set
 }
 
 void mal_heap_header_init_detached(MalHeapHeader *header, MalHeapType type) {
@@ -851,8 +863,20 @@ void mal_heap_header_init_detached(MalHeapHeader *header, MalHeapType type) {
     header->dirty = 0;
 }
 
+static void mal_heap_update_alloc_mark(MalHeap *heap) {
+    heap->alloc_mark = heap->mark_color | (heap->black_alloc ? MAL_MARK_OLD : 0);
+}
+
 void mal_heap_begin_major(MalHeap *heap) {
+    mal_heap_retire_cursors(heap);
     heap->mark_color ^= MAL_MARK_COLOR;
+    mal_heap_update_alloc_mark(heap);
+}
+
+void mal_heap_set_black_alloc(MalHeap *heap, bool black_alloc) {
+    mal_heap_retire_cursors(heap);
+    heap->black_alloc = black_alloc;
+    mal_heap_update_alloc_mark(heap);
 }
 
 MalHeapType mal_heap_header_type(const MalHeapHeader *header) {
@@ -943,31 +967,29 @@ static inline void mal_heap_profile_allocation(
 #define mal_heap_profile_allocation(...) ((void) 0)
 #endif
 
-void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
-    void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_CELL);
-    if (ptr == nullptr) abort();
-	mal_heap_header_init(heap, ptr, type);
-	mal_heap_profile_allocation(
-        heap, alloc_size, mal_heap_allocation_charge(alloc_size),
-        MAL_PROFILE_ALLOCATION_MANAGED_CELL, mal_profile_family_for_heap_type(type),
-        (u8) type);
-    return ptr;
-}
-
-void *mal_heap_try_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
+void *mal_heap_try_alloc_slow(MalHeap *heap, usize alloc_size, MalHeapType type) {
     if (heap->fail_next_cell_allocation) {
         heap->fail_next_cell_allocation = false;
         return nullptr;
     }
-    void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_CELL);
-	if (ptr != nullptr) mal_heap_header_init(heap, ptr, type);
-	if (ptr != nullptr) {
+    MalHeapHeader *cell = mal_gc_alloc_cell(heap, alloc_size, type);
+    if (cell != nullptr) {
         mal_heap_profile_allocation(
             heap, alloc_size, mal_heap_allocation_charge(alloc_size),
             MAL_PROFILE_ALLOCATION_MANAGED_CELL, mal_profile_family_for_heap_type(type),
             (u8) type);
     }
-    return ptr;
+    return cell;
+}
+
+void *mal_heap_alloc_slow(MalHeap *heap, usize alloc_size, MalHeapType type) {
+    MalHeapHeader *cell = mal_gc_alloc_cell(heap, alloc_size, type);
+    if (cell == nullptr) abort();
+    mal_heap_profile_allocation(
+        heap, alloc_size, mal_heap_allocation_charge(alloc_size),
+        MAL_PROFILE_ALLOCATION_MANAGED_CELL, mal_profile_family_for_heap_type(type),
+        (u8) type);
+    return cell;
 }
 
 void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size) {
@@ -976,7 +998,7 @@ void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size) {
 }
 
 void *mal_heap_alloc_raw_profiled(MalHeap *heap, usize alloc_size, u8 profile_family) {
-    void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_RAW);
+    void *ptr = mal_gc_alloc_raw(heap, alloc_size);
     if (ptr == nullptr) abort();
     mal_heap_profile_allocation(
         heap, alloc_size, mal_heap_allocation_charge(alloc_size),
@@ -997,7 +1019,7 @@ void *mal_heap_try_alloc_raw_profiled(MalHeap *heap, usize alloc_size, u8 profil
         return nullptr;
     }
 #endif
-    void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_RAW);
+    void *ptr = mal_gc_alloc_raw(heap, alloc_size);
     if (ptr != nullptr) {
         mal_heap_profile_allocation(
             heap, alloc_size, mal_heap_allocation_charge(alloc_size),
@@ -1087,103 +1109,111 @@ static void mal_gc_trim_empty_raw_blocks(MalHeap *heap) {
     }
 }
 
-/* Stomp a reclaimed cell's payload past the free-list link with a recognizable
- * pattern. 0xDF bytes decode, as a
- * NaN-boxed MalValue, to a non-finite double far from any valid pointer or int,
- * so a use-after-free read fails loudly instead of silently aliasing. */
-static inline void mal_gc_poison_cell(u8 *cell, u32 cell_size, usize free_offset) {
-    usize start = free_offset + sizeof(void *);
+/* Stomp a reclaimed cell's payload with a recognizable pattern. 0xDF bytes decode, as
+ * a NaN-boxed MalValue, to a non-finite double far from any valid pointer or int, so a
+ * use-after-free read fails loudly instead of silently aliasing. */
+static inline void mal_gc_poison_cell(u8 *cell, u32 cell_size, usize start) {
     if (cell_size > start) {
         memset(cell + start, 0xDF, cell_size - start);
     }
 }
 
-/* Sweep one managed (CELL) block: finalize + reclaim its WHITE cells into the size
- * class's free list, count survivors (accumulated into *live_bytes), and recycle a
- * fully-dead block to the OS. Skips RAW / already-recycled blocks. Shared by the
- * full sweep and the incremental sweep step, so the reclamation rule lives in one
- * place. */
+/* Finalize the owners among one word's dead cells and return them all to the bitmap.
+ * Verification also proves no dead cell without the finalizable bit owned anything. */
+static void mal_heap_settle_dead(
+    MalHeap *heap, MalGcBlock *block, usize word, u64 dead, MalHeapFinalizeFn finalize
+) {
+    u8 *base = mal_gc_word_base(block, word);
+    u64 owners = mal_heap_finalizes_every_dead_cell(heap) ? dead : dead & block->finalizable[word];
+    if (heap->poison_on_free) {
+        for (u64 rest = dead & ~owners; rest != 0; rest &= rest - 1) {
+            MalHeapHeader *cell =
+                (MalHeapHeader *) (base + (usize) __builtin_ctzll(rest) * MAL_GC_CELL_ALIGN);
+            if (mal_heap_dead_cell_finalizes(heap, cell)) {
+                fprintf(stderr, "[gc verify] dead cell type=%d owns storage but never "
+                    "reported mal_heap_cell_needs_finalizer\n", cell->type);
+                abort();
+            }
+        }
+    }
+    for (; owners != 0; owners &= owners - 1) {
+        finalize((MalHeapHeader *) (base + (usize) __builtin_ctzll(owners) * MAL_GC_CELL_ALIGN));
+    }
+    if (heap->poison_on_free) {
+        for (u64 rest = dead; rest != 0; rest &= rest - 1) {
+            mal_gc_poison_cell(base + (usize) __builtin_ctzll(rest) * MAL_GC_CELL_ALIGN,
+                block->cell_size, sizeof(MalHeapHeader));
+        }
+    }
+    block->finalizable[word] &= ~dead;
+    block->free_cells[word] |= dead;
+}
+
+/* Sweep one managed block after a major mark: unmarked allocated cells die, survivors
+ * become old, and a block with no survivor returns its pages to the OS. Shared by the
+ * full and incremental sweeps. */
 static void mal_heap_sweep_block(
-    MalHeap *heap, MalGcBlock *block, MalHeapFinalizeFn finalize,
-    usize data_offset, usize free_offset, usize *live_bytes) {
+    MalHeap *heap, MalGcBlock *block, MalHeapFinalizeFn finalize, usize *live_bytes
+) {
     if (block->kind != MAL_GC_BLOCK_CELL || block->recycled) {
         return;
     }
-    // Sweep the block's cells into a per-block free chain while counting survivors.
-    // Publishing the chain is deferred so a block with no live cell can be handed
-    // back to the OS instead of pooling dead cells.
-    void *local_head = nullptr;
-    void *local_tail = nullptr;
+    const u64 *starts = g_class_cell_starts[block->size_class];
     usize block_live = 0;
-    for (u8 *cell = (u8 *) block + data_offset; cell + block->cell_size <= block->bump;
-        cell += block->cell_size) {
-        MalHeapHeader *header = (MalHeapHeader *) cell;
-        u8 mark = mal_heap_sweep_mark_load(header);
-        if (mal_heap_mark_is_current(mark, heap->mark_color)) {
-            // Marking has completed before the mutator owns sweep.
-            mal_heap_sweep_mark_store(header, mark | MAL_MARK_OLD);
-            *live_bytes += block->cell_size;
-            block_live++;
-            continue;
-        }
-        if ((mark & MAL_MARK_FREE) == 0) {
-            // Unreached: dead. Finalize (frees its owned side allocations), then
-            // tombstone so a later sweep does not finalize it again.
-            if (mal_heap_dead_cell_finalizes(heap, header)) finalize(header);
-            if (heap->current_usage.managed_owned_bytes < block->cell_size) abort();
-            heap->current_usage.managed_owned_bytes -= block->cell_size;
-            mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
-            if (heap->poison_on_free) {
-                mal_gc_poison_cell(cell, block->cell_size, free_offset);
+    usize dead_count = 0;
+    bool any_free = false;
+    for (usize word = 0; word < MAL_GC_BLOCK_WORDS; word++) {
+        u64 allocated = starts[word] & ~block->free_cells[word];
+        u64 dead = 0;
+        u8 *base = mal_gc_word_base(block, word);
+        for (u64 rest = allocated; rest != 0; rest &= rest - 1) {
+            u32 bit = (u32) __builtin_ctzll(rest);
+            MalHeapHeader *header = (MalHeapHeader *) (base + (usize) bit * MAL_GC_CELL_ALIGN);
+            u8 mark = mal_heap_sweep_mark_load(header);
+            if (mal_heap_mark_is_current(mark, heap->mark_color)) {
+                // Marking has completed before the mutator owns sweep.
+                mal_heap_sweep_mark_store(header, mark | MAL_MARK_OLD);
+                block_live++;
+            } else {
+                dead |= UINT64_C(1) << bit;
             }
         }
-        // FREE (incl. just-finalized): thread onto this block's local chain
-        // (head-prepend; tail is the first cell linked).
-        if (mal_gc_cell_reclaimable(block->cell_size)) {
-            if (local_tail == nullptr) {
-                local_tail = cell;
-            }
-            *(void **) (cell + free_offset) = local_head;
-            local_head = cell;
+        if (dead != 0) {
+            mal_heap_settle_dead(heap, block, word, dead, finalize);
+            dead_count += (usize) __builtin_popcountll(dead);
         }
+        any_free |= block->free_cells[word] != 0;
     }
-
-    block->live = block_live;
+    usize freed = dead_count * block->cell_size;
+    if (heap->current_usage.managed_owned_bytes < freed) abort();
+    heap->current_usage.managed_owned_bytes -= freed;
+    block->live = (u32) block_live;
+    *live_bytes += block_live * block->cell_size;
     if (block_live == 0) {
-        // Whole block dead: its owned side-allocations were freed above; return its
-        // pages to the OS and recycle the block rather than pooling the dead cells.
         mal_gc_recycle_block(heap, block);
         if (heap->cell_blocks[block->size_class] == block) {
             heap->cell_blocks[block->size_class] = nullptr;
         }
-    } else if (local_head != nullptr) {
-        // Survivors remain: splice this block's reclaimed cells onto the size
-        // class's free list for reuse.
-        *(void **) ((u8 *) local_tail + free_offset) = heap->cell_free[block->size_class];
-        heap->cell_free[block->size_class] = local_head;
+    } else if (any_free) {
+        mal_gc_cell_block_available(heap, block);
     }
 }
 
 void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
+    mal_heap_retire_cursors(heap);
     // A cell may be freed (below) and its address later reused, so any identity cache
     // keyed on a raw cell pointer is only valid within one epoch (see MalHeap.epoch).
     heap->epoch++;
     mal_perf_collection_epoch(heap->epoch);
-    usize data_offset = mal_gc_cell_data_offset();
-    usize free_offset = mal_gc_free_next_offset();
     mal_gc_clear_young_blocks(heap);
     mal_gc_clear_young_large(heap);
-
-    // Rebuild the reclaimed-cell free lists from scratch: every non-live cell
-    // (newly dead or already free) is re-linked, so cells reused since the last
-    // sweep that are now live simply drop off.
-    memset(heap->cell_free, 0, sizeof(heap->cell_free));
+    mal_gc_clear_cell_avail(heap);
     usize live_bytes = 0;
 
     for (MalGcChunk *chunk = heap->chunks; chunk != nullptr; chunk = chunk->next) {
         for (usize block_index = 0; block_index < chunk->next_block; ++block_index) {
             MalGcBlock *block = (MalGcBlock *) ((u8 *) chunk->base + block_index * MAL_GC_BLOCK_SIZE);
-            mal_heap_sweep_block(heap, block, finalize, data_offset, free_offset, &live_bytes);
+            mal_heap_sweep_block(heap, block, finalize, &live_bytes);
         }
     }
 
@@ -1196,62 +1226,42 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
 
     heap->live_bytes = live_bytes;
     mal_gc_trim_empty_raw_blocks(heap);
+    mal_gc_rescan_current_blocks(heap);
 }
 
 void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
+    mal_heap_retire_cursors(heap);
     heap->epoch++;
     mal_perf_collection_epoch(heap->epoch);
-    usize free_offset = mal_gc_free_next_offset();
     MalGcBlock *block = heap->young_blocks;
     heap->young_blocks = nullptr;
     while (block != nullptr) {
         MalGcBlock *next = block->next_young;
         block->on_young = 0;
         block->next_young = nullptr;
-        u64 young_cells[countof(block->young_cells)];
-        memcpy(young_cells, block->young_cells, sizeof(young_cells));
-        memset(block->young_cells, 0, sizeof(block->young_cells));
-        usize block_live = 0;
+        // Marking cleared each survivor's young bit, so the bits left are the dead.
+        usize dead_count = 0;
+        for (usize word = 0; word < MAL_GC_BLOCK_WORDS; word++) {
+            u64 dead = block->young_cells[word];
+            if (dead == 0) continue;
+            block->young_cells[word] = 0;
+            mal_heap_settle_dead(heap, block, word, dead, finalize);
+            dead_count += (usize) __builtin_popcountll(dead);
+        }
+        usize young = block->young_count;
+        block->young_count = 0;
         if (heap->gc_stats) {
             heap->minor_blocks_inspected++;
+            heap->minor_cells_inspected += young;
         }
-        // Finalizers release raw payloads, never cells, so the block's cell frees and
-        // their bytes accumulate locally and publish once.
-        u32 cell_size = block->cell_size;
-        bool reclaimable = mal_gc_cell_reclaimable(cell_size);
-        bool poison = heap->poison_on_free;
-        void *free_head = heap->cell_free[block->size_class];
-        usize freed = 0;
-        for (usize word = 0; word < countof(young_cells); word++) {
-            u64 remaining = young_cells[word];
-            if (heap->gc_stats) heap->minor_cells_inspected += (usize) __builtin_popcountll(remaining);
-            while (remaining != 0) {
-                usize slot = word * 64 + (usize) __builtin_ctzll(remaining);
-                remaining &= remaining - 1;
-                u8 *cell = (u8 *) block + slot * MAL_GC_CELL_ALIGN;
-                MalHeapHeader *header = (MalHeapHeader *) cell;
-                u8 mark = mal_heap_sweep_mark_load(header);
-                if (mal_heap_mark_is_old(mark)) {
-                    block_live++;
-                } else if ((mark & MAL_MARK_FREE) == 0) {
-                    if (mal_heap_dead_cell_finalizes(heap, header)) finalize(header);
-                    freed += cell_size;
-                    mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
-                    if (poison) mal_gc_poison_cell(cell, cell_size, free_offset);
-                    // Already-FREE cells remain linked; adding them again creates cycles.
-                    if (reclaimable) {
-                        *(void **) (cell + free_offset) = free_head;
-                        free_head = cell;
-                    }
-                }
-            }
-        }
-        heap->cell_free[block->size_class] = free_head;
+        if (dead_count > young) abort();
+        usize freed = dead_count * block->cell_size;
         if (heap->current_usage.managed_owned_bytes < freed) abort();
         heap->current_usage.managed_owned_bytes -= freed;
-        // Only newly allocated cells were visited; old survivors remain accounted for.
-        heap->live_bytes += block_live * block->cell_size;
-        block->live += block_live;
+        usize survivors = young - dead_count;
+        heap->live_bytes += survivors * block->cell_size;
+        block->live += (u32) survivors;
+        if (dead_count != 0) mal_gc_cell_block_available(heap, block);
         block = next;
     }
     MalGcLarge *large = heap->young_large;
@@ -1268,9 +1278,11 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         }
         large = next;
     }
+    mal_gc_rescan_current_blocks(heap);
 }
 
 void mal_heap_sweep_begin(MalHeap *heap) {
+    mal_heap_retire_cursors(heap);
     // Bump the epoch BEFORE any reclaimed cell can be handed back out (the ABA
     // guard for identity caches — see MalHeap.epoch). Clear the reclaimed-cell free
     // lists; the incremental step re-populates them per block as it sweeps. During
@@ -1288,9 +1300,10 @@ void mal_heap_sweep_begin(MalHeap *heap) {
         }
         heap->sweep_epoch = 1;
     }
-    memset(heap->cell_free, 0, sizeof(heap->cell_free));
+    // Swept blocks rejoin the lists as the cursor passes them.
+    mal_gc_clear_cell_avail(heap);
     // Black allocations during sweep are already OLD and accounted for by the
-    // sweep cursor or mal_gc_count_black, so they need no minor enrollment.
+    // sweep cursor or the claim, so they need no minor enrollment.
     mal_gc_clear_young_blocks(heap);
     mal_gc_clear_young_large(heap);
     // Walk only the chunks that exist NOW: chunks prepended during the sweep sit
@@ -1309,8 +1322,7 @@ bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_bl
     if (!heap->sweeping) {
         return true;
     }
-    usize data_offset = mal_gc_cell_data_offset();
-    usize free_offset = mal_gc_free_next_offset();
+    mal_heap_retire_cursors(heap);
     usize swept = 0;
     while (heap->sweep_chunk != nullptr) {
         MalGcChunk *chunk = heap->sweep_chunk;
@@ -1326,7 +1338,7 @@ bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_bl
                 block->sweep_epoch = heap->sweep_epoch;
                 continue;
             }
-            mal_heap_sweep_block(heap, block, finalize, data_offset, free_offset, &heap->sweep_live_bytes);
+            mal_heap_sweep_block(heap, block, finalize, &heap->sweep_live_bytes);
             block->sweep_epoch = heap->sweep_epoch;
         }
         chunk->sweep_epoch = heap->sweep_epoch;
@@ -1343,26 +1355,59 @@ bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_bl
     // Cursor exhausted: the whole heap is swept.
     heap->live_bytes = heap->sweep_live_bytes;
     mal_gc_trim_empty_raw_blocks(heap);
+    mal_gc_rescan_current_blocks(heap);
     heap->sweeping = false;
     return true;
 }
 
 void mal_heap_walk_cells(MalHeap *heap, MalHeapFinalizeFn visit) {
-    usize data_offset = mal_gc_cell_data_offset();
+    mal_heap_retire_cursors(heap);
     for (MalGcChunk *chunk = heap->chunks; chunk != nullptr; chunk = chunk->next) {
         for (usize block_index = 0; block_index < chunk->next_block; ++block_index) {
             MalGcBlock *block = (MalGcBlock *) ((u8 *) chunk->base + block_index * MAL_GC_BLOCK_SIZE);
-            if (block->kind != MAL_GC_BLOCK_CELL) {
+            if (block->kind != MAL_GC_BLOCK_CELL || block->recycled) {
                 continue;
             }
-            for (u8 *cell = (u8 *) block + data_offset; cell + block->cell_size <= block->bump;
-                cell += block->cell_size) {
-                visit((MalHeapHeader *) cell);
+            const u64 *starts = g_class_cell_starts[block->size_class];
+            for (usize word = 0; word < MAL_GC_BLOCK_WORDS; word++) {
+                u8 *base = mal_gc_word_base(block, word);
+                for (u64 rest = starts[word] & ~block->free_cells[word]; rest != 0;
+                    rest &= rest - 1) {
+                    visit((MalHeapHeader *) (base + (usize) __builtin_ctzll(rest) * MAL_GC_CELL_ALIGN));
+                }
             }
         }
     }
     for (MalGcLarge *large = heap->large; large != nullptr; large = large->next) {
         visit((MalHeapHeader *) ((u8 *) large + mal_gc_large_data_offset()));
+    }
+}
+
+void mal_heap_finalize_all(MalHeap *heap, MalHeapFinalizeFn finalize) {
+    mal_heap_retire_cursors(heap);
+    for (MalGcChunk *chunk = heap->chunks; chunk != nullptr; chunk = chunk->next) {
+        for (usize block_index = 0; block_index < chunk->next_block; ++block_index) {
+            MalGcBlock *block = (MalGcBlock *) ((u8 *) chunk->base + block_index * MAL_GC_BLOCK_SIZE);
+            if (block->kind != MAL_GC_BLOCK_CELL || block->recycled) {
+                continue;
+            }
+            const u64 *starts = g_class_cell_starts[block->size_class];
+            for (usize word = 0; word < MAL_GC_BLOCK_WORDS; word++) {
+                u64 allocated = starts[word] & ~block->free_cells[word];
+                u8 *base = mal_gc_word_base(block, word);
+                for (u64 rest = allocated; rest != 0; rest &= rest - 1) {
+                    finalize((MalHeapHeader *) (base + (usize) __builtin_ctzll(rest) * MAL_GC_CELL_ALIGN));
+                }
+                block->free_cells[word] |= allocated;
+                block->finalizable[word] = 0;
+                block->young_cells[word] = 0;
+            }
+        }
+    }
+    for (MalGcLarge *large = heap->large; large != nullptr; large = large->next) {
+        if (large->finalized) continue;
+        large->finalized = 1;
+        finalize((MalHeapHeader *) ((u8 *) large + mal_gc_large_data_offset()));
     }
 }
 
@@ -1398,7 +1443,7 @@ void gc_free_raw(MalHeap *heap, void *ptr) {
             return;
         }
         // Only the current block can stay empty; free-list reuse precedes bump growth.
-        if (heap->poison_on_free) mal_gc_poison_cell(ptr, block->cell_size, 0);
+        if (heap->poison_on_free) mal_gc_poison_cell(ptr, block->cell_size, sizeof(void *));
         *(void **) ptr = block->free_list;
         block->free_list = ptr;
         if (!block->on_partial) {
@@ -1496,7 +1541,8 @@ static int mal_heap_large_range_compare(const void *left, const void *right) {
     return a < b ? -1 : a > b ? 1 : 0;
 }
 
-void mal_heap_cell_index_init(const MalHeap *heap, MalHeapCellIndex *index) {
+void mal_heap_cell_index_init(MalHeap *heap, MalHeapCellIndex *index) {
+    mal_heap_retire_cursors(heap);
     index->heap = heap;
     index->chunk_low = heap->chunk_count == 0 ? 0 : heap->chunk_bases[0];
     index->chunk_high = heap->chunk_count == 0
@@ -1520,10 +1566,6 @@ void mal_heap_cell_index_free(MalHeapCellIndex *index) {
     index->large_count = 0;
 }
 
-static MalHeapHeader *mal_heap_unreclaimed(MalHeapHeader *header) {
-    return (mal_heap_sweep_mark_load(header) & MAL_MARK_FREE) == 0 ? header : nullptr;
-}
-
 MalHeapHeader *mal_heap_cell_index_find(const MalHeapCellIndex *index, uptr address) {
     const MalHeap *heap = index->heap;
     if (address >= index->chunk_low && address < index->chunk_high) {
@@ -1542,10 +1584,11 @@ MalHeapHeader *mal_heap_cell_index_find(const MalHeapCellIndex *index, uptr addr
                 (const MalGcBlock *) ((u8 *) chunk->base + block_index * MAL_GC_BLOCK_SIZE);
             if (block->kind != MAL_GC_BLOCK_CELL || block->recycled) return nullptr;
             uptr data = (uptr) block + mal_gc_cell_data_offset();
-            if (address < data || address >= (uptr) block->bump) return nullptr;
+            if (address < data) return nullptr;
             uptr cell = data + (address - data) / block->cell_size * block->cell_size;
-            if (cell + block->cell_size > (uptr) block->bump) return nullptr;
-            return mal_heap_unreclaimed((MalHeapHeader *) cell);
+            if (cell + block->cell_size > (uptr) block + MAL_GC_BLOCK_SIZE) return nullptr;
+            MalHeapHeader *header = (MalHeapHeader *) cell;
+            return mal_heap_cell_reclaimed(header) ? nullptr : header;
         }
     }
     usize low = 0;
@@ -1556,6 +1599,6 @@ MalHeapHeader *mal_heap_cell_index_find(const MalHeapCellIndex *index, uptr addr
         else high = middle;
     }
     if (low == 0 || address >= index->large[low - 1].end) return nullptr;
-    return mal_heap_unreclaimed((MalHeapHeader *) index->large[low - 1].start);
+    return (MalHeapHeader *) index->large[low - 1].start;
 }
 #endif

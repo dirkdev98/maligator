@@ -38,7 +38,9 @@ static TestCell *new_cell(MalHeap *heap, usize size) {
 }
 
 static void mark_live(TestCell *cell) {
-    cell->header.mark = MAL_MARK_OLD | g_heap->mark_color;
+    u8 mark = cell->header.mark;
+    cell->header.mark = (mark & MAL_MARK_BLOCK) | MAL_MARK_OLD | g_heap->mark_color;
+    mal_heap_note_minor_survivor(&cell->header, mark);
 }
 
 static void finalize_cell(MalHeapHeader *header) {
@@ -52,6 +54,17 @@ static void finalize_cell(MalHeapHeader *header) {
         gc_free_raw(g_heap, cell->owned);
         cell->owned = nullptr;
     }
+}
+
+/* Cells of one size that fill a block, measured on a scratch heap. */
+static usize cells_per_block(usize size) {
+    MalHeap scratch;
+    mal_heap_init(&scratch, 0);
+    MalGcBlock *first = mal_heap_cell_block(mal_heap_alloc(&scratch, size, MAL_HEAP_BIGINT));
+    usize count = 1;
+    while (mal_heap_cell_block(mal_heap_alloc(&scratch, size, MAL_HEAP_BIGINT)) == first) count++;
+    mal_heap_free(&scratch);
+    return count;
 }
 
 static bool live_cell(const TestCell *cell, u32 id) {
@@ -183,29 +196,33 @@ static bool minor_reenrolls_reused_cells_in_untouched_blocks(MalHeap *heap) {
     return true;
 }
 
-static bool minor_reenrolls_a_reclaimed_cell_away_from_the_bump_block(MalHeap *heap) {
-    TestCell *cells[8];
-    for (usize i = 0; i < countof(cells); i++) {
+static bool minor_reenrolls_a_reclaimed_cell_away_from_the_current_block(MalHeap *heap) {
+    // Full blocks leave the reclaimed cell as the only one to reuse.
+    TestCell *cells[3 * 8];
+    usize count = 3 * cells_per_block(8192);
+    CHECK(count <= countof(cells));
+    for (usize i = 0; i < count; i++) {
         cells[i] = new_cell(heap, 8192);
     }
+    CHECK(mal_heap_cell_block(cells[1]) != mal_heap_cell_block(cells[count - 1]));
     mal_heap_begin_major(heap);
-    for (usize i = 0; i < countof(cells); i++) {
+    for (usize i = 0; i < count; i++) {
         if (i != 1) mark_live(cells[i]);
     }
     mal_heap_sweep(heap, finalize_cell);
-    usize old_bytes = 7 * mal_heap_allocation_charge(8192);
+    usize old_bytes = (count - 1) * mal_heap_allocation_charge(8192);
     CHECK(heap->live_bytes == old_bytes && g_finalized[2] == 1);
 
     CHECK(new_cell(heap, 8192) == cells[1]);
     mal_heap_sweep_minor(heap, finalize_cell);
-    CHECK(heap->live_bytes == old_bytes && g_finalized[9] == 1);
+    CHECK(heap->live_bytes == old_bytes && g_finalized[count + 1] == 1);
     TestCell *promoted = new_cell(heap, 8192);
     CHECK(promoted == cells[1]);
     mark_live(promoted);
     mal_heap_sweep_minor(heap, finalize_cell);
     CHECK(heap->live_bytes == old_bytes + mal_heap_allocation_charge(8192));
-    CHECK(live_cell(promoted, 10));
-    for (usize i = 0; i < countof(cells); i++) {
+    CHECK(live_cell(promoted, (u32) count + 2));
+    for (usize i = 0; i < count; i++) {
         if (i != 1) CHECK(live_cell(cells[i], (u32) i + 1));
     }
     return true;
@@ -264,7 +281,7 @@ static bool incremental_major_keeps_allocations_after_a_block_was_swept(MalHeap 
     mark_live(first);
     mark_live(second);
     mal_heap_sweep_begin(heap);
-    heap->black_alloc = true;
+    mal_heap_set_black_alloc(heap, true);
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     TestCell *after_visit = new_cell(heap, 512);
     TestCell *after_visit_bump = new_cell(heap, 512);
@@ -280,7 +297,7 @@ static bool incremental_major_keeps_allocations_after_a_block_was_swept(MalHeap 
     }
     CHECK(heap->chunk_count >= 2);
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
-    heap->black_alloc = false;
+    mal_heap_set_black_alloc(heap, false);
 
     usize live_bytes = 3 * mal_heap_allocation_charge(512) + 2 * mal_heap_allocation_charge(1024)
         + countof(new_chunk_cells) * mal_heap_allocation_charge(8192);
@@ -304,12 +321,12 @@ static bool incremental_major_accounts_a_new_block_in_a_completed_chunk(MalHeap 
     mark_live(old);
     mark_live(large);
     mal_heap_sweep_begin(heap);
-    heap->black_alloc = true;
+    mal_heap_set_black_alloc(heap, true);
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     TestCell *newborn = new_cell(heap, 1024);
     CHECK(heap->chunk_count == 1);
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
-    heap->black_alloc = false;
+    mal_heap_set_black_alloc(heap, false);
     usize live_bytes = mal_heap_allocation_charge(512) + mal_heap_allocation_charge(1024) + 10000;
     CHECK(heap->live_bytes == live_bytes);
     mal_heap_sweep_minor(heap, finalize_cell);
@@ -332,7 +349,7 @@ static bool incremental_major_accounts_recycled_raw_blocks(MalHeap *heap) {
     mark_live(old_behind);
     mark_live(old_ahead);
     mal_heap_sweep_begin(heap);
-    heap->black_alloc = true;
+    mal_heap_set_black_alloc(heap, true);
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     for (usize i = 0; i < 15; i++) gc_free_raw(heap, raw_behind[i]);
     CHECK(mal_heap_usage(heap).recycled_block_bytes == 32768);
@@ -343,7 +360,7 @@ static bool incremental_major_accounts_recycled_raw_blocks(MalHeap *heap) {
     TestCell *reused_ahead = new_cell(heap, 7168);
     CHECK((void *) reused_ahead == raw_ahead[0]);
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
-    heap->black_alloc = false;
+    mal_heap_set_black_alloc(heap, false);
     usize live_bytes = mal_heap_allocation_charge(512) + mal_heap_allocation_charge(1024)
         + mal_heap_allocation_charge(3072) + mal_heap_allocation_charge(7168);
     CHECK(heap->live_bytes == live_bytes);
@@ -429,13 +446,16 @@ static usize g_narrow_minor_cells;
 static usize g_wide_minor_cells;
 
 static bool measure_fragmented_minor(MalHeap *heap, bool wide) {
-    const usize old_count = wide ? 180 : 60;
-    TestCell *old[180];
+    // Full blocks leave the holes as the only cells to reuse.
+    const usize per_block = cells_per_block(512);
+    const usize old_count = wide ? 3 * per_block : per_block;
+    TestCell *old[3 * 64];
+    CHECK(old_count <= countof(old));
     heap->gc_stats = true;
     for (usize i = 0; i < old_count; i++) old[i] = new_cell(heap, 512);
     mal_heap_begin_major(heap);
     for (usize i = 0; i < old_count; i++) {
-        bool hole = wide ? i == 0 || i == 63 || i == 126 : i < 3;
+        bool hole = wide ? i % per_block == 0 : i < 3;
         if (!hole) mark_live(old[i]);
     }
     mal_heap_sweep(heap, finalize_cell);
@@ -468,34 +488,38 @@ static bool minor_sweep_scans_three_old_blocks_for_three_new_cells(MalHeap *heap
 }
 
 static bool reused_young_cells_preserve_survivors_across_minors(MalHeap *heap) {
-    TestCell *old[675];
-    for (usize i = 0; i < countof(old); i++) old[i] = new_cell(heap, 48);
+    // One full block leaves the two holes as the only cells to reuse.
+    TestCell *old[1024];
+    const usize count = cells_per_block(48);
+    const usize last = count - 1;
+    CHECK(count <= countof(old));
+    for (usize i = 0; i < count; i++) old[i] = new_cell(heap, 48);
     mal_heap_begin_major(heap);
-    for (usize i = 0; i < countof(old); i++) {
-        if (i != 22 && i != 674) mark_live(old[i]);
+    for (usize i = 0; i < count; i++) {
+        if (i != 22 && i != last) mark_live(old[i]);
     }
     mal_heap_sweep(heap, finalize_cell);
-    CHECK(heap->live_bytes == 673 * mal_heap_allocation_charge(48));
+    CHECK(heap->live_bytes == (count - 2) * mal_heap_allocation_charge(48));
 
     TestCell *survivor = new_cell(heap, 48);
     TestCell *dead = new_cell(heap, 48);
-    CHECK((survivor == old[674] && dead == old[22]) ||
-        (survivor == old[22] && dead == old[674]));
+    CHECK((survivor == old[last] && dead == old[22]) ||
+        (survivor == old[22] && dead == old[last]));
     u32 survivor_id = survivor->id;
     u32 dead_id = dead->id;
     mark_live(survivor);
     mal_heap_sweep_minor(heap, finalize_cell);
-    CHECK(heap->live_bytes == 674 * mal_heap_allocation_charge(48));
+    CHECK(heap->live_bytes == (count - 1) * mal_heap_allocation_charge(48));
     CHECK(g_finalized[survivor_id] == 0 && g_finalized[dead_id] == 1);
 
     mal_heap_sweep_minor(heap, finalize_cell);
-    CHECK(heap->live_bytes == 674 * mal_heap_allocation_charge(48));
+    CHECK(heap->live_bytes == (count - 1) * mal_heap_allocation_charge(48));
     TestCell *again = new_cell(heap, 48);
     CHECK(again == dead);
     u32 again_id = again->id;
     mark_live(again);
     mal_heap_sweep_minor(heap, finalize_cell);
-    CHECK(heap->live_bytes == 675 * mal_heap_allocation_charge(48));
+    CHECK(heap->live_bytes == count * mal_heap_allocation_charge(48));
     CHECK(live_cell(survivor, survivor_id) && live_cell(again, again_id));
     return true;
 }
@@ -515,13 +539,13 @@ static bool incremental_major_resets_sweep_epochs_on_wrap(MalHeap *heap) {
     mark_live(second);
     mal_heap_sweep_begin(heap);
     CHECK(heap->sweep_epoch == 1);
-    heap->black_alloc = true;
+    mal_heap_set_black_alloc(heap, true);
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     TestCell *newborn = new_cell(heap, 512);
     TestCell *before_cursor = new_cell(heap, 1024);
     TestCell *fresh_block = new_cell(heap, 2048);
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
-    heap->black_alloc = false;
+    mal_heap_set_black_alloc(heap, false);
     usize live_bytes = 2 * mal_heap_allocation_charge(512) + 2 * mal_heap_allocation_charge(1024)
         + mal_heap_allocation_charge(2048);
     CHECK(heap->live_bytes == live_bytes);
@@ -599,12 +623,12 @@ static bool incremental_major_accounts_new_large_cells(MalHeap *heap) {
     mal_heap_begin_major(heap);
     mark_live(old);
     mal_heap_sweep_begin(heap);
-    heap->black_alloc = true;
+    mal_heap_set_black_alloc(heap, true);
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     TestCell *newborn = new_cell(heap, cell_size);
     CHECK(mal_heap_mark_is_current(newborn->header.mark, heap->mark_color));
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
-    heap->black_alloc = false;
+    mal_heap_set_black_alloc(heap, false);
     CHECK(heap->live_bytes == 2 * cell_size && g_finalized[2] == 1);
     mal_heap_sweep_minor(heap, finalize_cell);
     CHECK(heap->live_bytes == 2 * cell_size && live_cell(old, 1) && live_cell(newborn, 3));
@@ -661,7 +685,7 @@ int main(void) {
         major_reclaims_once_and_recycles_blocks,
         minor_preserves_old_cells_and_free_list_members,
         minor_reenrolls_reused_cells_in_untouched_blocks,
-        minor_reenrolls_a_reclaimed_cell_away_from_the_bump_block,
+        minor_reenrolls_a_reclaimed_cell_away_from_the_current_block,
         major_resets_minor_tracking_before_block_reassignment,
         incremental_major_keeps_allocations_after_a_block_was_swept,
         incremental_major_accounts_a_new_block_in_a_completed_chunk,
