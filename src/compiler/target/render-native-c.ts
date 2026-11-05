@@ -1332,8 +1332,11 @@ function isLengthPropertyName(units: ReadonlyArray<number> | undefined): boolean
 	);
 }
 
-function numberToInt32(value: string, isInt32 = false): string {
-	return isInt32 ? `((i32) ${value})` : `mal_ops_number_to_i32(${value})`;
+function numberToInt32(value: string, range?: CompilerIntegerRange): string {
+	if (compilerIntegerRangeIsInt32(range)) return `((i32) ${value})`;
+	return range === undefined
+		? `mal_ops_number_to_i32(${value})`
+		: `mal_safe_integer_number_to_i32(${value})`;
 }
 
 function nativeNumberExpr(
@@ -1348,14 +1351,8 @@ function nativeNumberExpr(
 	if (arith !== undefined) {
 		return `${left} ${arith} ${right}`;
 	}
-	const left32 = numberToInt32(
-		leftScalar,
-		compilerIntegerRangeIsInt32(inputIntegerRanges?.[0]),
-	);
-	const right32 = numberToInt32(
-		rightScalar,
-		compilerIntegerRangeIsInt32(inputIntegerRanges?.[1]),
-	);
+	const left32 = numberToInt32(leftScalar, inputIntegerRanges?.[0]);
+	const right32 = numberToInt32(rightScalar, inputIntegerRanges?.[1]);
 	const bitwise = nativeInt32Expr(operator, left32, right32);
 	if (bitwise !== null) return `(f64) (${bitwise})`;
 	if (operator === ">>>") {
@@ -2118,7 +2115,10 @@ function emitNumericLoopRegion(
 	const intOf = (register: number, ip: number) =>
 		integral.has(register)
 			? `mal_safe_integer_to_i32(${local(register)})`
-			: numberToInt32(local(register), instructionInputIsInt32(facts?.[ip], register));
+			: numberToInt32(
+					local(register),
+					instructionInputIntegerRange(facts?.[ip], register),
+				);
 	const guards: Array<string> = [];
 	const typedViewGuards: Array<string> = [];
 	const arrayViewGuards: Array<string> = [];
@@ -2635,7 +2635,7 @@ function emitNumericLoopRegion(
 								: op.operator === "decrement"
 									? `${source} - 1.0`
 									: op.operator === "~"
-										? `(f64) ~${numberToInt32(source, instructionInputIsInt32(facts?.[ip], op.src))}`
+										? `(f64) ~${numberToInt32(source, instructionInputIntegerRange(facts?.[ip], op.src))}`
 										: op.operator === "!"
 											? `!(${truthy(op.src, ip)})`
 											: source;
@@ -2996,7 +2996,7 @@ function emitNumberRecordRegion(
 							: op.operator === "decrement"
 								? `${source} - 1.0`
 								: op.operator === "~"
-									? `(f64) ~${numberToInt32(source, instructionInputIsInt32(facts?.[ip], op.src))}`
+									? `(f64) ~${numberToInt32(source, instructionInputIntegerRange(facts?.[ip], op.src))}`
 									: op.operator === "!"
 										? `!${truthy(op.src, ip)}`
 										: source;
@@ -4449,9 +4449,7 @@ function renderScalarExpression(
 	const int32 = (local: number) =>
 		reps[local] === "int32"
 			? `r${local}`
-			: instructionInputIsInt32(facts, local)
-				? `((i32) ${number(local)})`
-				: `mal_ops_number_to_i32(${number(local)})`;
+			: numberToInt32(number(local), instructionInputIntegerRange(facts, local));
 	const resultIsInt32 = (dst: number) =>
 		reps[dst] === "int32" ||
 		compilerIntegerRangeIsInt32(instructionResultIntegerRange(facts, dst));
@@ -9649,15 +9647,20 @@ class NativeInstructionEmission {
 	nativeInt32Operand(operand: number): string | null {
 		const decoded = decodeVmValueOperand(operand);
 		if (decoded.kind === "register") {
-			return this.reps[decoded.register] === "int32"
-				? this.inputValue(decoded.register)
-				: instructionInputIsInt32(this.context.facts, decoded.register)
-					? `((i32) ${this.nativeNumberOperand(operand)!})`
-					: this.reps[decoded.register] === "number"
-						? `mal_ops_number_to_i32(${this.inputValue(decoded.register)})`
-						: this.operandKind(operand) === COMPILER_VALUE_KIND_NUMBER
-							? `mal_ops_number_value_to_i32(${this.boxedOperand(operand)})`
-							: null;
+			const register = decoded.register;
+			if (this.reps[register] === "int32") return this.inputValue(register);
+			if (instructionInputIsInt32(this.context.facts, register))
+				return `((i32) ${this.nativeNumberOperand(operand)!})`;
+			if (this.reps[register] === "number") {
+				const value = this.inputValue(register);
+				return numberToInt32(
+					value,
+					instructionInputIntegerRange(this.context.facts, register),
+				);
+			}
+			return this.operandKind(operand) === COMPILER_VALUE_KIND_NUMBER
+				? `mal_ops_number_value_to_i32(${this.boxedOperand(operand)})`
+				: null;
 		}
 		return decoded.kind === "number" ? String(decoded.value) : null;
 	}
@@ -10997,14 +11000,14 @@ class NativeInstructionEmission {
 				if (nativeExpr === null) throw new Error("Invalid numeric-fusion finish");
 				const fusedInt32 = numberToInt32(
 					fusedValue,
-					instructionInputIsInt32(this.context.facts, first.dst),
+					instructionInputIntegerRange(this.context.facts, first.dst),
 				);
 				const externalInt32 =
 					this.reps[external] === "int32"
 						? this.inputValue(external)
 						: numberToInt32(
 								externalExpr,
-								instructionInputIsInt32(this.context.facts, external),
+								instructionInputIntegerRange(this.context.facts, external),
 							);
 				const int32Result =
 					this.reps[dst] === "int32" && INT32_RESULT_OPERATORS.has(operator)
@@ -11380,13 +11383,13 @@ class NativeInstructionEmission {
 							? this.inputValue(left)
 							: numberToInt32(
 									numericOperand(left),
-									instructionInputIsInt32(this.context.facts, left),
+									instructionInputIntegerRange(this.context.facts, left),
 								),
 						this.reps[right] === "int32"
 							? this.inputValue(right)
 							: numberToInt32(
 									numericOperand(right),
-									instructionInputIsInt32(this.context.facts, right),
+									instructionInputIntegerRange(this.context.facts, right),
 								),
 					)
 				: null;
@@ -14062,7 +14065,7 @@ class NativeInstructionEmission {
 					: operator === "+" || operator === "tonumeric"
 						? value
 						: operator === "~"
-							? `(f64)(~${numberToInt32(value, instructionInputIsInt32(this.context.facts, src))})`
+							? `(f64)(~${numberToInt32(value, instructionInputIntegerRange(this.context.facts, src))})`
 							: operator === "increment" || operator === "decrement"
 								? `${value} ${operator === "increment" ? "+" : "-"} 1.0`
 								: null;

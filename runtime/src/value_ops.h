@@ -197,6 +197,15 @@ static inline i32 mal_safe_integer_to_i32(i64 value) {
     return mal_ops_u32_to_i32((u32) (u64) value);
 }
 
+/** ToInt32 of a Number proven to be an exact safe integer. */
+static inline i32 mal_safe_integer_number_to_i32(f64 number) {
+#if defined(__ARM_FEATURE_JCVT)
+    return __jcvt(number);
+#else
+    return mal_safe_integer_to_i32((i64) number);
+#endif
+}
+
 /** ToInt32 for a value already known to be a JS Number. */
 static inline i32 mal_ops_number_to_i32(f64 number) {
 #if defined(__ARM_FEATURE_JCVT)

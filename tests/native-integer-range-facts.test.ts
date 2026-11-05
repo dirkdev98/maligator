@@ -155,9 +155,68 @@ describe("native integer ranges", () => {
 			if (op.opcode !== "BINARY") throw new Error("Missing bitwise consumer");
 			expect(instructionInputIsInt32(out.native.facts?.[ip], op.left)).toBe(safe);
 			const converted = `mal_ops_number_to_i32((f64) r${op.left})`;
-			expect(out.c.source.includes(converted)).toBe(!safe);
+			expect(out.c.source.includes(converted)).toBe(false);
+			const wrapped = `mal_safe_integer_number_to_i32((f64) r${op.left})`;
+			expect(out.c.source.includes(wrapped)).toBe(!safe);
 		},
 	);
+
+	it.each([
+		"(input|0)+2147483647",
+		"(input|0)-4294967296",
+		"(input>>>0)+9007194959773696",
+		"(input>>>0)-9007199254740991",
+	])("wraps proved wider safe integers without general conversion: %s", (expression) => {
+		const out = inspectStaticValueFunction(
+			`function compute(input,other,gate){const n=${expression};gate(n);return n^7;}globalThis.compute=compute;`,
+			"compute",
+		);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "^",
+		);
+		const op = out.native.body.instructions[ip]!;
+		if (op.opcode !== "BINARY") throw new Error("Missing bitwise consumer");
+		expect(instructionInputIntegerRange(out.native.facts?.[ip], op.left)).toBeDefined();
+		expect(instructionInputIsInt32(out.native.facts?.[ip], op.left)).toBe(false);
+		expect(out.c.source).toContain("mal_safe_integer_number_to_i32(");
+	});
+
+	it.each([false, true])("uses the operand's safe bounds with profile=%s", (profile) => {
+		const out = inspectStaticValueFunction(
+			"function compute(input,gate){const n=(input>>>0)+4294967296;gate(n);return n^7;}globalThis.compute=compute;",
+			"compute",
+			{ profile },
+		);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "^",
+		);
+		const op = out.native.body.instructions[ip]!;
+		if (op.opcode !== "BINARY") throw new Error("Missing bitwise consumer");
+		expect(instructionInputIntegerRange(out.native.facts?.[ip], op.left)).toMatchObject({
+			minimum: 4294967296,
+			maximum: 8589934591,
+		});
+		expect(out.c.source).toMatch(
+			new RegExp(`mal_safe_integer_number_to_i32\\((?:\\(f64\\) )?r${op.left}\\)`),
+		);
+	});
+
+	it("keeps general conversion for unproved Numbers", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(input,other,gate){const n=+input;gate(n);return n^7;}globalThis.compute=compute;",
+			"compute",
+		);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "^",
+		);
+		const op = out.native.body.instructions[ip]!;
+		if (op.opcode !== "BINARY") throw new Error("Missing bitwise consumer");
+		expect(instructionInputIntegerRange(out.native.facts?.[ip], op.left)).toBeUndefined();
+		expect(out.c.source).not.toContain("mal_safe_integer_number_to_i32(");
+		expect(out.c.source).toMatch(
+			new RegExp(`mal_ops_number_to_i32\\((?:\\(f64\\) )?r${op.left}\\)`),
+		);
+	});
 
 	it("removes a proven positive branch while preserving its input range", () => {
 		const out = inspectStaticValueFunction(
