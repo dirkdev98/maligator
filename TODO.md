@@ -499,13 +499,6 @@ Arithmetic work should support these paths or fix correctness defects.
       and 645 MB of it over-tenured. Malloc zones add another 0.96 GB in 10.5
       million allocations outside the GC heap. Fragmentation of partly live blocks
       and promoted garbage are the levers; recycled blocks are already madvised.
-- [ ] Report owned storage for strings and iterators when they acquire it. The
-      minor sweep reads a dead cell only when its finalizable bit is set, and every
-      type outside the ordinary object, array, closure and non-owning families gets
-      that bit at birth. Strings own code units only in owned, prepared UTF-8 and
-      builder storage, and iterators only while they pin a collection, so most dead
-      strings and iterators are still read for nothing.
-
 - [ ] Share one invocation-local native analysis context across storage, expression,
       root, and fast-path planning. Native read/write, branch, handler, and lazy
       root-cycle facts now share an invocation; storage CFG analysis is lazy.

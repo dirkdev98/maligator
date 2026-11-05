@@ -13,6 +13,8 @@
 #include "./gc.h"
 #include "./gc_process.h"
 #include "./array_object.h"
+#include "./heap_string.h"
+#include "./iterator_object.h"
 #include "./object.h"
 #include "./perf_stats.h"
 #include "./profile.h"
@@ -394,6 +396,16 @@ static bool mal_heap_dead_cell_finalizes(const MalHeap *heap, const MalHeapHeade
             const MalArrayObject *array = (const MalArrayObject *) cell;
             return (array->elements != nullptr && !mal_array_object_elements_inline(array)) ||
                 mal_object_finalizes(&array->object);
+        }
+        case MAL_HEAP_STRING: {
+            MalStringStorage storage = ((const MalString *) cell)->storage;
+            return storage == MAL_STRING_STORAGE_OWNED ||
+                storage == MAL_STRING_STORAGE_PREPARED_UTF8 ||
+                storage == MAL_STRING_STORAGE_BUILDER;
+        }
+        case MAL_HEAP_ITERATOR_OBJECT: {
+            const MalIteratorObject *iterator = (const MalIteratorObject *) cell;
+            return iterator->collection_pinned || mal_object_finalizes(&iterator->object);
         }
         default:
             return false;
