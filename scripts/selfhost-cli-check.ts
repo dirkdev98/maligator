@@ -20,6 +20,7 @@ import {
 import { createServer } from "node:http";
 import * as path from "node:path";
 import type { ApplicationResources } from "../src/application-images.ts";
+import type { MaligatorBuildConfig } from "../src/build-config.ts";
 import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import type { FfiCheckReport } from "../src/ffi/check.ts";
@@ -290,16 +291,14 @@ function checkProfile(directory: string, command: "run" | "test"): void {
 		throw new Error(`profile ${command} did not publish a valid completed capture`);
 }
 
-function checkProfileCommands(): void {
+function checkProfileCommands({
+	engine,
+	surface,
+}: Pick<MaligatorBuildConfig, "engine" | "surface">): void {
 	const profileConfig = "profile.build.mts";
 	writeFileSync(
 		path.join(project, profileConfig),
-		`export default {
-	entry: "profile-entry.mts",
-	engine: { eval: false, regexp: false, intl: { enabled: false } },
-	surface: { webPlatform: true, node: true },
-};
-`,
+		`export default ${JSON.stringify({ entry: "profile-entry.mts", engine, surface })};\n`,
 	);
 	writeFileSync(
 		path.join(project, "profile-entry.mts"),

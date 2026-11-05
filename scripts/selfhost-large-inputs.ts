@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import { artifactFileDigest } from "../src/artifact-store.ts";
+import type { MaligatorBuildConfig } from "../src/build-config.ts";
 import { largeDevelopmentSource } from "../tests/fixtures/selfhost-large-development/source.ts";
 import { startDevelopmentDriver } from "./development-driver.ts";
 import type { DevelopmentDriverExit } from "./development-driver.ts";
@@ -26,7 +27,7 @@ interface LargeInputCheckOptions {
 		timeoutMs?: number,
 	): SpawnSyncReturns<string>;
 	checkProfile(directory: string, command: "run" | "test"): void;
-	checkProfileCommands(): void;
+	checkProfileCommands(config: Pick<MaligatorBuildConfig, "engine" | "surface">): void;
 	waitForOutput(read: () => string, expected: string, timeoutMs: number): Promise<void>;
 }
 
@@ -117,14 +118,15 @@ export async function checkLargeInputs(options: LargeInputCheckOptions): Promise
 		path.join(project, "large-records.json"),
 		JSON.stringify({ text: `${"x".repeat(dataLength)}é😀` }),
 	);
+	const buildConfig: MaligatorBuildConfig = {
+		entry: "large-main.mts",
+		outputName: "selfhost-large-inputs",
+		engine: { eval: false, regexp: false, intl: { enabled: false } },
+		surface: { node: true },
+	};
 	writeFileSync(
 		path.join(project, config),
-		`export default {
-	entry: "large-main.mts",
-	outputName: "selfhost-large-inputs",
-	engine: { eval: false, regexp: false, intl: { enabled: false } },
-	surface: { node: true },
-};\n`,
+		`export default ${JSON.stringify(buildConfig)};\n`,
 	);
 	writeFileSync(
 		path.join(project, "large-data.mts"),
@@ -345,13 +347,14 @@ server.listen(0, "127.0.0.1", () => { console.log("DX_HTTP_PORT " + server.addre
 	}
 	runBuilt(invoke(["build", "--config", config, "--production"]).stdout, editedExpected);
 	// Prepare the profile runtime separately from the large command's deadline.
-	options.checkProfileCommands();
+	options.checkProfileCommands(buildConfig);
 	for (const command of ["run", "test"] as const) {
 		const directory = path.join(reports, `large-profile-${command}`);
 		const result = invoke(
 			[
 				command,
 				"--profile",
+				...(command === "run" ? ["--verbose"] : []),
 				"--config",
 				config,
 				...(command === "test" ? [testFile] : []),
