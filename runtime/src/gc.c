@@ -364,7 +364,8 @@ struct MalGcState {
     MalHeapHeader **remembered;
     usize remembered_count;
     usize remembered_capacity;
-    // One in every major_every collections (and the first) is a full major.
+    // With MAL_GC_MAJOR_EVERY set, and under stress, one in every major_every
+    // collections (and the first) is a full major.
     u32 collection_index;
 
     // The bounded SATB buffer holds deletion-barrier values until a mark step or
@@ -396,6 +397,7 @@ struct MalGcState {
     bool verify_enabled;
     bool stats_enabled;
     u32 major_every; // MAL_GC_MAJOR_EVERY
+    bool major_cadence_fixed;
     // Assist ratio (MAL_GC_ASSIST): grey/SATB entries traced per byte allocated
     // since the last mark step, so marking outruns allocation.
     u32 assist;
@@ -962,6 +964,8 @@ usize mal_gc_worker_limit(MalVm *vm) {
  * surviving set by at least this floor (so a small live set cannot thrash). */
 #define MAL_GC_DEFAULT_THRESHOLD ((usize) 16 * 1024 * 1024)
 #define MAL_GC_MIN_INCREMENT ((usize) 4 * 1024 * 1024)
+// Promotion that justifies a major while the last one left a small live set.
+#define MAL_GC_MIN_MAJOR_DEBT ((usize) 16 * 1024 * 1024)
 
 void mal_gc_init(MalVm *vm) {
     if (getenv("MAL_GC_GENERATIONAL") != nullptr ||
@@ -1017,6 +1021,7 @@ void mal_gc_init(MalVm *vm) {
         unsigned long v = strtoul(major_every, nullptr, 10);
         if (v >= 1) {
             g->major_every = (u32) v;
+            g->major_cadence_fixed = true;
         }
     }
 }
@@ -3793,12 +3798,18 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         return; // polled for preemption only; nothing owed
     }
 
-    // A collection is due. Decide minor vs. major by the generational cadence. Pressure
-    // takes a major only once minors have promoted half a live set since the last one:
-    // until then the old generation holds little garbage, and a live set larger than the
-    // process budget would otherwise pay a futile major for every few chunks it maps.
-    bool major = (pressure && g_gc->promotion_debt >= g_gc->last_major_live_bytes / 2) ||
-        (g_gc->collection_index % g_gc->major_every) == 0;
+    // A collection is due. The first is a major, which sets the live-set baseline. Only
+    // promoted bytes can become old garbage, so later majors wait until minors have
+    // promoted half of what the last major kept, with a floor for small heaps. Pressure
+    // drops the floor but keeps the debt: a live set larger than the process budget
+    // would otherwise pay a futile major for every few chunks it maps.
+    usize major_debt = g_gc->last_major_live_bytes / 2;
+    bool major = g_gc->major_cadence_fixed
+        ? (pressure && g_gc->promotion_debt >= major_debt) ||
+            (g_gc->collection_index % g_gc->major_every) == 0
+        : g_gc->collection_index == 0 ||
+            g_gc->promotion_debt >= (major_debt > MAL_GC_MIN_MAJOR_DEBT ? major_debt
+                : pressure ? 0 : MAL_GC_MIN_MAJOR_DEBT);
     if (!major) {
         g_gc->process_pressure = false;
         // Minor: STW-inline, exactly as today (short by construction).

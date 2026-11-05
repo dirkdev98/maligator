@@ -103,8 +103,11 @@ and wakes every registered owner. An owner whose minors have promoted at least
 half of its last major's live set starts major work and increases its marking
 assists; any other owner runs a minor, because its old generation holds little
 garbage and a live set larger than the budget would otherwise pay a futile major
-for every few chunks it maps. The generational cadence still makes every eighth
-collection a major. Another pressure signal during an active cycle completes
+for every few chunks it maps. After the first collection, which is a major,
+collections without pressure become majors on the same debt, with a 16 MiB floor
+for small heaps: only promoted bytes can
+become old garbage, and a fixed share of majors cost programs that promote little
+for nothing. `MAL_GC_MAJOR_EVERY` restores a fixed cadence for tests. Another pressure signal during an active cycle completes
 that cycle on its owner, so native growth cannot outrun a heap-only backstop.
 Releasing a temporary memory peak lowers the next threshold to match current
 reservations. Sweep and finalization still run on each owner. The
