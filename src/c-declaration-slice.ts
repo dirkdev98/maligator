@@ -6,6 +6,8 @@ export { GENERATED_PRELUDE_END };
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 const TOKEN =
 	/\s+|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|#[^\n]*|[A-Za-z_$][\w$]*|\.?\d(?:[eEpP][+-]|[\w.])*|\.\.\.|<<=|>>=|->|\+\+|--|<<|>>|<=|>=|==|!=|&&|\|\||\S/gy;
+const BODY_REFERENCE_TOKEN =
+	/"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|#[^\n]*|\.?\d(?:[eEpP][+-]|[\w.])*|([A-Za-z_$][\w$]*)/g;
 
 const KEYWORDS = new Set(
 	(
@@ -289,12 +291,19 @@ export function slicedUnitDigest(
 	const seen = new Set<string>();
 	const pending: Array<string> = [];
 	const reach = (identifier: string) => {
-		if (seen.has(identifier)) return;
+		if (seen.has(identifier) || !prelude.definitions.has(identifier)) return;
 		seen.add(identifier);
 		pending.push(identifier);
 	};
-	for (const token of tokens(expandedBody))
-		if (IDENTIFIER.test(token) && !KEYWORDS.has(token)) reach(token);
+	BODY_REFERENCE_TOKEN.lastIndex = 0;
+	for (
+		let match = BODY_REFERENCE_TOKEN.exec(expandedBody);
+		match !== null;
+		match = BODY_REFERENCE_TOKEN.exec(expandedBody)
+	) {
+		const identifier = match[1];
+		if (identifier !== undefined && !KEYWORDS.has(identifier)) reach(identifier);
+	}
 	for (const index of prelude.always)
 		for (const identifier of prelude.items[index]!.identifiers) reach(identifier);
 	while (pending.length > 0) {

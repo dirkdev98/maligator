@@ -58,6 +58,19 @@ describe("generated unit declaration slices", () => {
 		).toBe(false);
 	});
 
+	it.each([
+		["quoted strings", "hidden", String.raw`const char *text = "quoted \" hidden";`],
+		["character literals", "x", "int value = 'x';"],
+		["preprocessor directives", "hidden", '#pragma message("hidden")\nint value;'],
+		["decimal exponents", "e10", "double value = 1e10;"],
+		["hexadecimal numbers", "xFFULL", "unsigned long long value = 0xFFULL;"],
+		["floating suffixes", "f", "float value = .5f;"],
+	])("does not reach declarations named inside %s", (_kind, name, body) => {
+		expect(digest(`extern int ${name};`, body)).toBe(
+			digest(`extern long ${name};`, body),
+		);
+	});
+
 	it("keys function-pointer typedefs and externs through the names they declare", () => {
 		const body = "int run(MalVm *vm) { return mal_hook(vm); }";
 		expect(
