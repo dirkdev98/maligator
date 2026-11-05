@@ -311,7 +311,8 @@ export function prepareProfile(
 		sites: image.profiling?.sites ?? [],
 		remarks: image.diagnostics.profileRemarks ?? [],
 		coreOptimizationReport: optimization.coreOptimizationReport,
-		coreOptimizationPlan: optimization.coreOptimizationPlan,
+		coreOptimizationPlan:
+			mode === "compiler" ? optimization.coreOptimizationPlan : undefined,
 		factFlow: image.diagnostics.factFlow,
 	};
 	prepared.captureIdentity = profileCaptureIdentity(prepared);

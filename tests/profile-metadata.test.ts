@@ -170,6 +170,30 @@ test("profile optimizer data enters only the explicit prepared-profile sidecar",
 	}
 });
 
+test("sampling sidecars omit the raw Core plan while retaining their content identity", () => {
+	const definition = compile(`function hot(value) { return value + 1; }`);
+	const directory = mkdtempSync(path.join(tmpdir(), "mal-sampling-sidecar-"));
+	const binary = path.join(directory, "fixture");
+	writeFileSync(binary, "binary");
+	try {
+		const prepared = prepareProfile(
+			binary,
+			definition,
+			"sampling",
+			optimization(definition),
+		);
+		const written = JSON.parse(
+			readFileSync(`${binary}.profile.json`, "utf8"),
+		) as typeof prepared;
+		expect(written.coreOptimizationPlan).toBeUndefined();
+		expect(written.coreOptimizationReport?.phases.length).toBeGreaterThan(0);
+		expect(written.sites).toEqual(definition.profiling?.sites ?? []);
+		expect(profileCaptureIdentity(written)).toBe(prepared.captureIdentity);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
 test("canonical profile arrays preserve sparse optional facts through JSON", () => {
 	const range = new Array<number>(3);
 	range[0] = 1;
