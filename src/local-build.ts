@@ -371,7 +371,7 @@ function ensureGeneratedObjects(
 	verbose: boolean,
 	cacheVariant: string | undefined,
 	onObject?: (event: GeneratedObjectMeasurement) => void,
-): Array<GeneratedObject> {
+): { objects: Array<GeneratedObject>; projectionDurationMs: number } {
 	const parent = path.join(context.cacheDirectory, "work", "generated-object");
 	mkdirSync(parent, { recursive: true });
 	const temporaryDirectory = mkdtempSync(path.join(parent, "build-"));
@@ -405,6 +405,8 @@ function ensureGeneratedObjects(
 		return digest;
 	};
 	let unitDigests: Array<string>;
+	let projectionDurationMs = 0;
+	const projectionStartedAt = performance.now();
 	try {
 		unitDigests = generatedUnitDigests(
 			context,
@@ -415,6 +417,12 @@ function ensureGeneratedObjects(
 			temporaryDirectory,
 			verbose,
 		);
+		projectionDurationMs = performance.now() - projectionStartedAt;
+		context.onBuildPhase?.({
+			phase: "generated C projection",
+			durationMs: projectionDurationMs,
+			units: inputs.length,
+		});
 	} catch (error) {
 		rmSync(temporaryDirectory, { recursive: true, force: true });
 		throw error;
@@ -601,13 +609,14 @@ function ensureGeneratedObjects(
 	} finally {
 		rmSync(temporaryDirectory, { recursive: true, force: true });
 	}
-	return results.map((object, index) => {
+	const objects = results.map((object, index) => {
 		if (object === undefined) {
 			throw new Error(`generated object result missing for ${inputs[index]?.sourcePath}`);
 		}
 		onObject?.(object.measurement);
 		return object;
 	});
+	return { objects, projectionDurationMs };
 }
 
 /** Build the serialized-definition development driver. */
@@ -755,7 +764,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	const mainFile =
 		options.mainFile ?? path.join(context.runtimeDirectory, "test262_main.c");
 	const mainSource = readFileSync(mainFile);
-	const generatedObjects = ensureGeneratedObjects(
+	const { objects: generatedObjects, projectionDurationMs } = ensureGeneratedObjects(
 		context,
 		[
 			...cPaths.map((sourcePath, index) => ({
@@ -824,7 +833,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	const cToObjectDurationMs = performance.now() - phaseStartedAt;
 	context.onBuildPhase?.({
 		phase: "generated C objects",
-		durationMs: cToObjectDurationMs,
+		durationMs: cToObjectDurationMs - projectionDurationMs,
 		units: objects.length + 1,
 		bytes: [...objects, mainObject].reduce(
 			(total, object) => total + statSync(object.path).size,

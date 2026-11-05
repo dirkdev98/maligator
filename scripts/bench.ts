@@ -463,7 +463,7 @@ function nativeBuildRecorder(): {
 				translationUnits: generated?.units ?? 0,
 				generatedCBytes: generated?.bytes ?? 0,
 				objectBytes: objects?.bytes ?? 0,
-				cCompilationMs: phase("generated C objects"),
+				cCompilationMs: phase("generated C objects") + phase("generated C projection"),
 				linkMs: phase("link"),
 				stripMs: phase("strip"),
 				...(peakRssBytes === undefined ? {} : { peakRssBytes }),

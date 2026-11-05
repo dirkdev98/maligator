@@ -28,6 +28,7 @@ export interface NativeBuildPhaseEvent {
 		| "runtime C · runtime"
 		| "rust"
 		| "write generated C"
+		| "generated C projection"
 		| "generated C objects"
 		| "link"
 		| "strip"

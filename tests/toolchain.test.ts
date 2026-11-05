@@ -758,6 +758,7 @@ printf '!<arch>\\n' > "$2"
 			"runtime",
 			"rust",
 			"write generated C",
+			"generated C projection",
 			"generated C objects",
 			"link",
 			"publish binary",
@@ -766,6 +767,9 @@ printf '!<arch>\\n' > "$2"
 		expect(phases.find((phase) => phase.phase === "write generated C")).toMatchObject({
 			units: 2,
 			bytes: Buffer.byteLength("int value;") + Buffer.byteLength("int other_value;"),
+		});
+		expect(phases.find((phase) => phase.phase === "generated C projection")).toMatchObject({
+			units: 3,
 		});
 		expect(
 			phases.find((phase) => phase.phase === "generated C objects")?.bytes,
