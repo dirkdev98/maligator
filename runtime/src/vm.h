@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "gc.h"
+#include "function_object.h"
 #include "heap.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
@@ -2891,14 +2892,41 @@ MalValue mal_vm_call_cached_value(
     i32 arg_count
 );
 
-static inline MalCompletion mal_vm_call_cached(
+/**
+ * A compiled site's [[Call]]. The strict compiled-callee row is dispatched at the site:
+ * one shared indirect branch for every site predicted its targets poorly, while each
+ * site's own branch mostly sees one callee.
+ */
+static inline __attribute__((always_inline)) MalCompletion mal_vm_call_cached(
     MalVm *vm,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
     i32 arg_count
 ) {
-    MalValue value = mal_vm_call_cached_value(vm, callee, this_value, args, arg_count);
+    MalValue value;
+#if !MAL_REALMS && !(MAL_PROFILE && MAL_PERF_STATS)
+    MalCompiledFunction entry = nullptr;
+    MalFunctionObject *function = nullptr;
+    if (mal_value_is_function_object(callee) && vm->completion.kind != MAL_COMPLETION_THROW) {
+        function = mal_value_to_function_object(callee);
+        i32 function_index = mal_function_object_function_index(function);
+        // Rows past the image's function count stay null.
+        if ((u32) function_index < (u32) vm->function_capacity) {
+            entry = vm->call_entries[function_index];
+        }
+    }
+    if (entry != nullptr) {
+        MAL_PERF_COUNT(call_cache_probes);
+        MAL_PERF_COUNT(call_cache_compiled_dispatches);
+        value = entry(
+            vm, this_value, args, arg_count, mal_value_new_undefined(),
+            function->creation_env, callee, nullptr);
+    } else
+#endif
+    {
+        value = mal_vm_call_cached_value(vm, callee, this_value, args, arg_count);
+    }
     return vm->completion.kind == MAL_COMPLETION_THROW
         ? vm->completion
         : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
