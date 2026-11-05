@@ -172,6 +172,7 @@
 				"src/compiler/core/core-literal-constants.ts",
 				"src/compiler/core/core-local-capture-arguments.ts",
 				"src/compiler/core/core-local-optimizer.ts",
+				"src/compiler/core/core-finite-string-construction.ts",
 				"src/compiler/core/core-local-passes.ts",
 				"src/compiler/core/core-materialization-demands.ts",
 				"src/compiler/core/core-literal-graph.ts",

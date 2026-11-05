@@ -363,7 +363,13 @@ function lowerCoreImmediate(
 			};
 		case "number":
 			return {
-				type: "createNumber",
+				type:
+					Number.isInteger(value.value) &&
+					!Object.is(value.value, -0) &&
+					value.value >= -2147483648 &&
+					value.value <= 2147483647
+						? "createNumber"
+						: "createF64",
 				registers: [destination],
 				value: value.value,
 				facts,

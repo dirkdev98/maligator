@@ -37,6 +37,7 @@ import {
 import { CORE_CONDITIONAL_VALUE_KIND_ANALYSIS } from "./core-conditional-value-kinds.ts";
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { CoreEditor } from "./core-editor.ts";
+import { foldFiniteStringConstruction } from "./core-finite-string-construction.ts";
 import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
 import { removeCoreInstructions } from "./core-instruction-removal.ts";
 import {
@@ -3516,6 +3517,7 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass>
 	spreadArrayLiteralArguments,
 	scalarizeRestArgumentReads,
 	scalarizeBoundedRestReads,
+	foldFiniteStringConstruction,
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
 	rewriteNumericIdentities,
