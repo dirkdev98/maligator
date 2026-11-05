@@ -1,10 +1,15 @@
 import type { CoreModuleInterface } from "../core/core-compilation.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
+import type { LowerCoreToCoreTargetOptions } from "../target/lower-core-target.ts";
 import { lowerCoreCompilationToRuntimeExecution } from "../target/lower-execution.ts";
 import { lowerExecutionToRuntimeImage } from "../target/runtime-image.ts";
 import type { RuntimeImage } from "../target/runtime-image.ts";
 import type { CompileCoreOptions, CompileCorePhase } from "./compile-core-common.ts";
 import { optimizeSemanticProgramToCore } from "./compile-core-common.ts";
+
+export interface CompileRuntimeCoreOptions extends CompileCoreOptions {
+	readonly mappedFunctionArrayCallHints?: LowerCoreToCoreTargetOptions["mappedFunctionArrayCallHints"];
+}
 
 /**
  * Pure semantic-program pipeline for portable runtime wire consumers.
@@ -15,7 +20,7 @@ import { optimizeSemanticProgramToCore } from "./compile-core-common.ts";
  */
 export function compileSemanticProgramToRuntimeImage(
 	semantic: SemanticProgram,
-	options: CompileCoreOptions = {},
+	options: CompileRuntimeCoreOptions = {},
 ): RuntimeImage {
 	return compileSemanticProgramToLinkedRuntimeImage(semantic, options).runtime;
 }
@@ -23,7 +28,7 @@ export function compileSemanticProgramToRuntimeImage(
 /** The runtime pipeline for an image of a relocatable program that is only interpreted. */
 export function compileSemanticProgramToLinkedRuntimeImage(
 	semantic: SemanticProgram,
-	options: CompileCoreOptions = {},
+	options: CompileRuntimeCoreOptions = {},
 ): { runtime: RuntimeImage; interfaces: ReadonlyArray<CoreModuleInterface> } {
 	const runPhase =
 		options.runPhase ?? (<T>(_phase: CompileCorePhase, run: () => T): T => run());
@@ -31,6 +36,7 @@ export function compileSemanticProgramToLinkedRuntimeImage(
 	const lowered = runPhase("core to execution", () =>
 		lowerCoreCompilationToRuntimeExecution(optimized, {
 			reuseRegisters: options.optimization !== "development",
+			mappedFunctionArrayCallHints: options.mappedFunctionArrayCallHints,
 		}),
 	);
 	return {

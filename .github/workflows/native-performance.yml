@@ -1,6 +1,22 @@
 name: Native performance
 
 on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: Exact baseline commit
+        required: true
+        type: string
+      candidate:
+        description: Exact candidate commit
+        required: true
+        type: string
+      suite:
+        description: Comparison suite
+        required: true
+        type: choice
+        options: [javascript, compiler, micro, all]
+        default: javascript
   pull_request:
     types: [labeled, synchronize]
 
@@ -14,9 +30,10 @@ defaults:
 jobs:
   javascript:
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event_name == 'workflow_dispatch' && (inputs.suite == 'javascript' || inputs.suite == 'all')) ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
       contains(github.event.pull_request.labels.*.name, 'native-performance') &&
-      (github.event.action == 'synchronize' || github.event.label.name == 'native-performance')
+      (github.event.action == 'synchronize' || github.event.label.name == 'native-performance'))
     name: ${{ matrix.lane }} ${{ matrix.mode }} / ${{ matrix.comparison }}
     runs-on: ubuntu-26.04
     timeout-minutes: 55
@@ -27,23 +44,33 @@ jobs:
         mode: [closed-compiled, open-compiled]
         comparison: [parent, cumulative]
     env:
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: ${{ inputs.baseline || github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ inputs.candidate || github.event.pull_request.head.sha }}
       COMPARISON: ${{ matrix.comparison }}
+      MANUAL_COMPARISON: ${{ github.event_name == 'workflow_dispatch' }}
     steps:
       - name: Check out the candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.candidate || github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Resolve matched baseline
         id: baseline
         run: |
+          if ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ && "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'Comparisons require full commit SHAs.' >&2
+            exit 1
+          fi
+          git rev-parse --verify "$HEAD_SHA^{commit}"
+          git rev-parse --verify "$BASE_SHA^{commit}"
           parent="$(git merge-base "$HEAD_SHA" "$BASE_SHA")"
           baseline="$parent"
-          if [ "$COMPARISON" = cumulative ]; then
+          if [ "$MANUAL_COMPARISON" = true ]; then
+            baseline="$(git rev-parse "$BASE_SHA^{commit}")"
+            parent="$baseline"
+          elif [ "$COMPARISON" = cumulative ]; then
             baseline="$(git merge-base "$HEAD_SHA" origin/main)"
           fi
           echo "sha=$baseline" >> "$GITHUB_OUTPUT"
@@ -102,7 +129,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-${{ matrix.lane }}-${{ github.event.pull_request.number }}-${{ matrix.mode }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-${{ matrix.lane }}-${{ github.event.pull_request.number || 'main' }}-${{ matrix.mode }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache/native-performance/
             .cache/bench-comparisons/*/*.json
@@ -114,9 +141,10 @@ jobs:
 
   micro:
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event_name == 'workflow_dispatch' && (inputs.suite == 'micro' || inputs.suite == 'all')) ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
       contains(github.event.pull_request.labels.*.name, 'native-micro-performance') &&
-      (github.event.action == 'synchronize' || github.event.label.name == 'native-micro-performance')
+      (github.event.action == 'synchronize' || github.event.label.name == 'native-micro-performance'))
     name: Native micro / ${{ matrix.comparison }}
     runs-on: ubuntu-26.04
     timeout-minutes: 55
@@ -125,23 +153,33 @@ jobs:
       matrix:
         comparison: [parent, cumulative]
     env:
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: ${{ inputs.baseline || github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ inputs.candidate || github.event.pull_request.head.sha }}
       COMPARISON: ${{ matrix.comparison }}
+      MANUAL_COMPARISON: ${{ github.event_name == 'workflow_dispatch' }}
     steps:
       - name: Check out the candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.candidate || github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Resolve matched baseline
         id: baseline
         run: |
+          if ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ && "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'Comparisons require full commit SHAs.' >&2
+            exit 1
+          fi
+          git rev-parse --verify "$HEAD_SHA^{commit}"
+          git rev-parse --verify "$BASE_SHA^{commit}"
           parent="$(git merge-base "$HEAD_SHA" "$BASE_SHA")"
           baseline="$parent"
-          if [ "$COMPARISON" = cumulative ]; then
+          if [ "$MANUAL_COMPARISON" = true ]; then
+            baseline="$(git rev-parse "$BASE_SHA^{commit}")"
+            parent="$baseline"
+          elif [ "$COMPARISON" = cumulative ]; then
             baseline="$(git merge-base "$HEAD_SHA" origin/main)"
           fi
           echo "sha=$baseline" >> "$GITHUB_OUTPUT"
@@ -226,7 +264,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache/native-performance/**/*.json
             .cache/native-performance/**/*.log
@@ -244,7 +282,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-stable-shape-properties-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-stable-shape-properties-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/stable-shape-properties.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -255,7 +293,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-record-array-traversal-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-record-array-traversal-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/record-array-traversal.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -266,7 +304,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-direct-calls-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-direct-calls-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/direct-calls.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -277,7 +315,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-indirect-calls-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-indirect-calls-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/indirect-calls.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -288,7 +326,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-closure-calls-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-closure-calls-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/closure-calls.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -299,7 +337,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-short-lived-records-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-short-lived-records-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/short-lived-records.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -310,7 +348,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-heap-valued-projection-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-heap-valued-projection-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/heap-valued-projection.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -321,7 +359,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-chained-static-properties-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-chained-static-properties-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/chained-static-properties.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -332,7 +370,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-infrequent-getter-properties-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-infrequent-getter-properties-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/infrequent-getter-properties.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -343,7 +381,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-native-property-owned-3-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-native-property-owned-3-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/native-property-owned-3.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -354,7 +392,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-native-property-owned-6-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-native-property-owned-6-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/native-property-owned-6.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -365,7 +403,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-native-property-mixed-prototypes-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-native-property-mixed-prototypes-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/native-property-mixed-prototypes.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -376,7 +414,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-native-property-middle-getter-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-native-property-middle-getter-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/native-property-middle-getter.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
@@ -385,9 +423,10 @@ jobs:
 
   compiler:
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event_name == 'workflow_dispatch' && (inputs.suite == 'compiler' || inputs.suite == 'all')) ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
       contains(github.event.pull_request.labels.*.name, 'native-compiler-performance') &&
-      (github.event.action == 'synchronize' || github.event.label.name == 'native-compiler-performance')
+      (github.event.action == 'synchronize' || github.event.label.name == 'native-compiler-performance'))
     name: Frozen compiler slices / ${{ matrix.comparison }}
     runs-on: ubuntu-26.04
     timeout-minutes: 70
@@ -396,23 +435,33 @@ jobs:
       matrix:
         comparison: [parent, cumulative]
     env:
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: ${{ inputs.baseline || github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ inputs.candidate || github.event.pull_request.head.sha }}
       COMPARISON: ${{ matrix.comparison }}
+      MANUAL_COMPARISON: ${{ github.event_name == 'workflow_dispatch' }}
     steps:
       - name: Check out the candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.candidate || github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Resolve matched baseline
         id: baseline
         run: |
+          if ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ && "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'Comparisons require full commit SHAs.' >&2
+            exit 1
+          fi
+          git rev-parse --verify "$HEAD_SHA^{commit}"
+          git rev-parse --verify "$BASE_SHA^{commit}"
           parent="$(git merge-base "$HEAD_SHA" "$BASE_SHA")"
           baseline="$parent"
-          if [ "$COMPARISON" = cumulative ]; then
+          if [ "$MANUAL_COMPARISON" = true ]; then
+            baseline="$(git rev-parse "$BASE_SHA^{commit}")"
+            parent="$baseline"
+          elif [ "$COMPARISON" = cumulative ]; then
             baseline="$(git merge-base "$HEAD_SHA" origin/main)"
           fi
           echo "sha=$baseline" >> "$GITHUB_OUTPUT"
@@ -561,7 +610,7 @@ jobs:
         if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-compiler-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-compiler-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache/native-performance/**/*.json
             .cache/native-performance/**/*.log

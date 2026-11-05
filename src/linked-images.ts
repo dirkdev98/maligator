@@ -38,6 +38,7 @@ import {
 	serializeCompilerArtifact,
 	COMPILER_ARTIFACT_VERSION,
 } from "./compiler/target/compiler-artifact-codec.ts";
+import { mappedFunctionArrayCallHints } from "./compiler/target/mapped-function-array-hints.ts";
 import {
 	deserializeRuntimeImage,
 	serializeRuntimeImage,
@@ -187,7 +188,9 @@ export function graphReadsExecution(graph: ModuleGraph): boolean {
 
 /** The interfaces later images import from, keyed by module identity. */
 export function externalModulesOf(
-	artifacts: Iterable<{ readonly interfaces: ReadonlyArray<CoreModuleInterface> }>,
+	artifacts: Iterable<{
+		readonly interfaces: ReadonlyArray<CoreModuleInterface>;
+	}>,
 ): Map<string, ExternalModuleInterface> {
 	const modules = new Map<string, ExternalModuleInterface>();
 	for (const artifact of artifacts) {
@@ -595,7 +598,10 @@ export function compileLinkedImage(
 	let native: LinkedNativeImage | undefined;
 	let shared = false;
 	if (environment.target === "runtime") {
-		const compiled = compileSemanticProgramToLinkedRuntimeImage(semantic, compileOptions);
+		const compiled = compileSemanticProgramToLinkedRuntimeImage(semantic, {
+			...compileOptions,
+			mappedFunctionArrayCallHints,
+		});
 		shared = packageRoot !== undefined && !embedsLocation(compiled.runtime, packageRoot);
 		interfaces = compiled.interfaces;
 		stats = runtimeImageStats(compiled.runtime);

@@ -138,6 +138,7 @@ tests/native/fetch-hardening.test.ts
 tests/native/float16.test.ts
 tests/native/global-var-batch.test.ts
 tests/native/json-parse-source.test.ts
+tests/native/json-parse-shapes.test.ts
 tests/native/json-stringify-scratch.test.ts
 tests/native/literal-template.test.ts
 tests/native/literal-materialization.test.ts

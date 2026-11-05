@@ -6,9 +6,11 @@ import { lowerCoreCompilationToTargetProgram } from "./lower-core-target.ts";
 import type {
 	CoreStorageAssignment,
 	CoreTargetPreparation,
+	LowerCoreToCoreTargetOptions,
 } from "./lower-core-target.ts";
 import { layoutNativeBlocks } from "./lower-native-control-flow.ts";
 import { createNativeParallelCopyLowerer } from "./lower-native-copies.ts";
+import { mappedFunctionArrayCallHints } from "./mapped-function-array-hints.ts";
 import type { NativeProgram } from "./native-ir.ts";
 import { verifyNativeExecutionProgram } from "./verify-native-execution.ts";
 
@@ -61,9 +63,11 @@ export function lowerCoreCompilationToNativeProgram(
 	options: {
 		readonly excludeGuardedDirectCalls?: boolean;
 		readonly preparation?: CoreTargetPreparation;
+		readonly mappedFunctionArrayCallHints?: LowerCoreToCoreTargetOptions["mappedFunctionArrayCallHints"];
 	} = {},
 ): NativeProgram {
 	const target = lowerCoreCompilationToTargetProgram(compilation, {
+		...(options.preparation === undefined ? { mappedFunctionArrayCallHints } : {}),
 		...options,
 		assignStorage: nativeValueStorage,
 		layoutBlocks: layoutNativeBlocks,

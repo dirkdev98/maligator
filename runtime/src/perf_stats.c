@@ -520,7 +520,8 @@ static void mal_perf_stats_print(void) {
         "escaped_key_code_units=%llu escaped_key_reuses=%llu escaped_key_capacity_bytes=%llu "
         "plan_table_bytes=%llu plain_fallbacks=%llu flat_records=%llu plain_discarded_code_units=%llu "
         "quote_latin1_code_units=%llu quote_utf16_code_units=%llu quote_utf16_scalar_probes=%llu "
-        "parser_backward_seeks=%llu reviver_index_entries=%llu reviver_index_probes=%llu\n",
+        "parser_backward_seeks=%llu reviver_index_entries=%llu reviver_index_probes=%llu "
+        "parse_shape_memo_hits=%llu\n",
         (unsigned long long) mal_perf_stats.json_shape_plans,
         (unsigned long long) mal_perf_stats.json_shape_plan_bytes,
         (unsigned long long) mal_perf_stats.json_shape_plan_hits,
@@ -536,7 +537,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.json_quote_utf16_scalar_probes,
         (unsigned long long) mal_perf_stats.json_parser_backward_seeks,
         (unsigned long long) mal_perf_stats.json_reviver_index_entries,
-        (unsigned long long) mal_perf_stats.json_reviver_index_probes);
+        (unsigned long long) mal_perf_stats.json_reviver_index_probes,
+        (unsigned long long) mal_perf_stats.json_parse_shape_memo_hits);
     fprintf(stderr, "[perf-intl-collation-stats] hits=%llu misses=%llu\n",
         (unsigned long long) mal_perf_stats.intl_collation_cache_hits,
         (unsigned long long) mal_perf_stats.intl_collation_cache_misses);

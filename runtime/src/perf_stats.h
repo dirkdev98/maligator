@@ -198,6 +198,7 @@ typedef struct MalPerfStats {
     u64 json_parser_backward_seeks;
     u64 json_reviver_index_entries;
     u64 json_reviver_index_probes;
+    u64 json_parse_shape_memo_hits;
 
     u64 regexp_exec_calls;
     u64 regexp_fast_exec_calls;

@@ -12,6 +12,7 @@ import type {
 } from "../src/compiler/target/lower-execution.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { lowerCoreCompilationToNativeProgram } from "../src/compiler/target/lower-native.ts";
+import { mappedFunctionArrayCallHints } from "../src/compiler/target/mapped-function-array-hints.ts";
 import { nativeInactiveRootMasks } from "../src/compiler/target/native-root-masks.ts";
 import {
 	ExecutionVerificationError,
@@ -256,6 +257,12 @@ describe("Core target construction", () => {
 			lowerCoreCompilationToNativeProgram(core, {
 				preparation,
 				excludeGuardedDirectCalls: true,
+			}),
+		).toThrow("different compilation or recipe selection");
+		expect(() =>
+			lowerCoreCompilationToExecution(core, {
+				preparation,
+				mappedFunctionArrayCallHints,
 			}),
 		).toThrow("different compilation or recipe selection");
 	});

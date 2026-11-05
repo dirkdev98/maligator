@@ -1,3 +1,4 @@
+import { mappedFunctionArrayCallHints } from "../target/mapped-function-array-hints.ts";
 import { serializeRuntimeImage } from "../target/program-image-codec.ts";
 import type {
 	CompileEntrypointToBufferOptions,
@@ -16,6 +17,7 @@ export function compileEntrypointToBuffer(
 		(<T>(_phase: CompileEntrypointToBufferPhase, run: () => T): T => run());
 	const { semantic, facts } = analyzeEntrypoint(entrypointPath, options, runPhase);
 	const runtime = compileSemanticProgramToRuntimeImage(semantic, {
+		mappedFunctionArrayCallHints,
 		semanticLowering: { intrinsicGlobalReads: options.intrinsicGlobalReads },
 		facts,
 		optimization: options.optimization,

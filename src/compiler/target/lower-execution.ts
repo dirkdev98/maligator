@@ -6,6 +6,7 @@ import type { ExecutionProgram } from "./execution-ir.ts";
 import type {
 	CoreStorageAssignment,
 	CoreTargetPreparation,
+	LowerCoreToCoreTargetOptions,
 } from "./lower-core-target.ts";
 import { lowerCoreCompilationToTargetProgram } from "./lower-core-target.ts";
 import { verifyExecutionProgram } from "./verify-execution.ts";
@@ -22,6 +23,7 @@ export interface LowerCoreToExecutionOptions {
 	readonly preparation?: CoreTargetPreparation;
 	readonly reuseRegisters?: boolean;
 	readonly excludeGuardedDirectCalls?: boolean;
+	readonly mappedFunctionArrayCallHints?: LowerCoreToCoreTargetOptions["mappedFunctionArrayCallHints"];
 }
 export function lowerCoreCompilationToExecutionProgram(
 	compilation: CoreCompilation,

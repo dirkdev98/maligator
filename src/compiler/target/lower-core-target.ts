@@ -105,7 +105,7 @@ import {
 import { planCoreClassLayouts } from "./lower-class-layouts.ts";
 import { planCoreExactArrayAccesses } from "./lower-exact-arrays.ts";
 import type { CoreExactArrayAccess } from "./lower-exact-arrays.ts";
-import { mappedFunctionArrayCallHints } from "./mapped-function-array-hints.ts";
+import type { mappedFunctionArrayCallHints } from "./mapped-function-array-hints.ts";
 import { planCoreDirectClosures } from "./plan-direct-closures.ts";
 import type { CoreDirectClosurePlan } from "./plan-direct-closures.ts";
 import { verifyCoreTargetBlockLayout } from "./verify-core-target-layout.ts";
@@ -122,6 +122,7 @@ export type CoreTargetPreparation = ReturnType<typeof prepareCoreCompilationToTa
 
 export interface LowerCoreToCoreTargetOptions {
 	readonly preparation?: CoreTargetPreparation;
+	readonly mappedFunctionArrayCallHints?: typeof mappedFunctionArrayCallHints;
 	readonly assignStorage: CoreStorageAssigner;
 	readonly createParallelCopyLowerer?: (
 		nextRegister: { value: number },
@@ -1638,7 +1639,10 @@ interface CoreFieldCall {
 	readonly allocation: CoreInstructionId;
 	readonly call: CoreInstructionId;
 	readonly valueRepresentations: ReadonlyArray<CorePlanRepresentation>;
-	readonly entries: Array<{ readonly functionIndex: number; readonly entryId: number }>;
+	readonly entries: Array<{
+		readonly functionIndex: number;
+		readonly entryId: number;
+	}>;
 }
 
 const EMPTY_FACT_REGISTERS: ReadonlyArray<number> = Object.freeze([]);
@@ -3239,7 +3243,10 @@ function exactCoreCallTargets(
 
 export function prepareCoreCompilationToTargets(
 	compilation: CoreCompilation,
-	options: { readonly excludeGuardedDirectCalls?: boolean } = {},
+	options: {
+		readonly excludeGuardedDirectCalls?: boolean;
+		readonly mappedFunctionArrayCallHints?: typeof mappedFunctionArrayCallHints;
+	} = {},
 ) {
 	assertCoreOptimizationPlanCertificate(compilation.program, compilation.plan);
 	const functionMap = createCoreTargetFunctionMap(compilation);
@@ -3395,9 +3402,10 @@ export function prepareCoreCompilationToTargets(
 	const functions = functionMap.executionToCore.map((core, execution) =>
 		prepareFunctionForTargets(
 			compilation.program.function(core),
-			options.excludeGuardedDirectCalls === true
+			options.excludeGuardedDirectCalls === true ||
+				options.mappedFunctionArrayCallHints === undefined
 				? new Map()
-				: mappedFunctionArrayCallHints(
+				: options.mappedFunctionArrayCallHints(
 						compilation,
 						compilation.program.function(core),
 						functionMap.coreToExecution,
@@ -3429,6 +3437,7 @@ export function prepareCoreCompilationToTargets(
 	return Object.freeze({
 		compilation,
 		excludeGuardedDirectCalls: options.excludeGuardedDirectCalls === true,
+		mappedFunctionArrayCallHints: options.mappedFunctionArrayCallHints,
 		functionMap,
 		functions,
 		classLayouts,
@@ -3447,7 +3456,9 @@ export function lowerCoreCompilationToTargetProgram(
 		options.preparation ?? prepareCoreCompilationToTargets(compilation, options);
 	if (
 		prepared.compilation !== compilation ||
-		prepared.excludeGuardedDirectCalls !== (options.excludeGuardedDirectCalls === true)
+		prepared.excludeGuardedDirectCalls !== (options.excludeGuardedDirectCalls === true) ||
+		(options.mappedFunctionArrayCallHints !== undefined &&
+			prepared.mappedFunctionArrayCallHints !== options.mappedFunctionArrayCallHints)
 	)
 		throw new Error(
 			"Core target preparation belongs to a different compilation or recipe selection",

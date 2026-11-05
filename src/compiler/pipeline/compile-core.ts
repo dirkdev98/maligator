@@ -5,6 +5,7 @@ import { prepareCoreCompilationToTargets } from "../target/lower-core-target.ts"
 import { lowerCoreCompilationToExecution } from "../target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../target/lower-native-program-image.ts";
 import { lowerCoreCompilationToNativeProgram } from "../target/lower-native.ts";
+import { mappedFunctionArrayCallHints } from "../target/mapped-function-array-hints.ts";
 import type { ProgramImage } from "../target/program-image.ts";
 import type { CompileCoreOptions, CompileCorePhase } from "./compile-core-common.ts";
 import {
@@ -46,6 +47,7 @@ function lowerOptimizedCoreToProgramImage(
 	const lowered = runPhase("core to execution", () => {
 		preparation = prepareCoreCompilationToTargets(optimized, {
 			excludeGuardedDirectCalls,
+			mappedFunctionArrayCallHints,
 		});
 		return lowerCoreCompilationToExecution(optimized, {
 			preparation,

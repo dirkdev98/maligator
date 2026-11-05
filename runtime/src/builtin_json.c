@@ -2563,6 +2563,7 @@ static void mal_json_object_members_dispose(MalJsonObjectMembers *members) {
 #define MAL_JSON_KEY_CACHE_ENTRIES 256
 #define MAL_JSON_KEY_CACHE_BYTES 24
 #define MAL_JSON_SHAPE_MEMO_KEYS 16
+#define MAL_JSON_SHAPE_MEMOS 2
 
 typedef struct MalJsonKeyCacheEntry {
     bool filled;
@@ -2571,17 +2572,23 @@ typedef struct MalJsonKeyCacheEntry {
     MalKey key;
 } MalJsonKeyCacheEntry;
 
+typedef struct MalJsonShapeMemo {
+    MalShape *shape;
+    u32 count;
+    MalValue keys[MAL_JSON_SHAPE_MEMO_KEYS];
+} MalJsonShapeMemo;
+
 /**
  * Records repeat their keys within one document and across documents. Entries
  * hold index keys or atoms, which the collector always retains, so a short
  * escape-free key resolves from its source bytes without a string, and a record
- * whose keys repeat the last one's reuses its shape.
+ * whose ordered keys repeat reuses a retained shape. A bounded set prevents
+ * alternating nested layouts from evicting one another.
  */
 struct MalJsonKeyCache {
     MalJsonKeyCacheEntry entries[MAL_JSON_KEY_CACHE_ENTRIES];
-    MalShape *shape;
-    u32 shape_count;
-    MalValue shape_keys[MAL_JSON_SHAPE_MEMO_KEYS];
+    MalJsonShapeMemo shapes[MAL_JSON_SHAPE_MEMOS];
+    u32 next_shape;
 };
 
 static void mal_json_key_cache_free(MalVm *vm) {
@@ -2615,19 +2622,24 @@ static MalValue mal_json_object_members_finalize(
     }
 
     struct MalJsonKeyCache *cache = parser->vm->json_key_cache;
-    if (cache != nullptr && cache->shape != nullptr && cache->shape_count == members->count) {
-        MalValue values[MAL_JSON_SHAPE_MEMO_KEYS];
-        usize i = 0;
-        while (i < members->count && mal_value_is_string(members->roots[i * 2]) &&
-               members->roots[i * 2] == cache->shape_keys[i]) {
-            values[i] = members->roots[i * 2 + 1];
-            i++;
-        }
-        if (i == members->count) {
-            MalObject *prototype = mal_value_to_object(
-                parser->vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-            return mal_value_from_object(mal_object_new_shaped(
-                &parser->vm->heap, prototype, cache->shape, values, (u32) i));
+    if (cache != nullptr) {
+        for (usize memo_index = 0; memo_index < countof(cache->shapes); memo_index++) {
+            MalJsonShapeMemo *memo = &cache->shapes[memo_index];
+            if (memo->shape == nullptr || memo->count != members->count) continue;
+            MalValue values[MAL_JSON_SHAPE_MEMO_KEYS];
+            usize i = 0;
+            while (i < members->count && mal_value_is_string(members->roots[i * 2]) &&
+                   members->roots[i * 2] == memo->keys[i]) {
+                values[i] = members->roots[i * 2 + 1];
+                i++;
+            }
+            if (i == members->count) {
+                MAL_PERF_ADD(json_parse_shape_memo_hits, 1);
+                MalObject *prototype = mal_value_to_object(
+                    parser->vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+                return mal_value_from_object(mal_object_new_shaped(
+                    &parser->vm->heap, prototype, memo->shape, values, (u32) i));
+            }
         }
     }
 
@@ -2672,11 +2684,13 @@ static MalValue mal_json_object_members_finalize(
             memoizable = shape_keys[i]->property_atom;
         }
         if (memoizable) {
-            cache->shape = shape;
-            cache->shape_count = shape_count;
+            MalJsonShapeMemo *memo = &cache->shapes[cache->next_shape];
+            memo->shape = shape;
+            memo->count = shape_count;
             for (u32 i = 0; i < shape_count; i++) {
-                cache->shape_keys[i] = mal_value_from_string(shape_keys[i]);
+                memo->keys[i] = mal_value_from_string(shape_keys[i]);
             }
+            cache->next_shape = (cache->next_shape + 1) % MAL_JSON_SHAPE_MEMOS;
         }
         MalObject *prototype = mal_value_to_object(
             parser->vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);

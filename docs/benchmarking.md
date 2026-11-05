@@ -324,6 +324,10 @@ only one family needs to run:
 | `native-micro-performance`    | The 13 frozen micro kernels above, seven pairs, a 40-minute total build/run budget                                                                                    |
 | `native-compiler-performance` | One source-only compiler program, two native captures built with `--program` pointing to it, then parser and shape slices with five pairs each                        |
 
+For a merged change, dispatch `Native performance` with exact `baseline` and
+`candidate` commits and select a `suite`. It runs one comparison against that
+baseline, without the duplicate cumulative job.
+
 Every family compares the candidate with `git merge-base HEAD PR_BASE_SHA` and,
 when different, with `git merge-base HEAD origin/main` for cumulative stacked-PR
 evidence. JavaScript and micro jobs have 55-minute ceilings; compiler jobs have a

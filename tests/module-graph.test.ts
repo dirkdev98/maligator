@@ -89,6 +89,18 @@ afterAll(() => {
 	}
 });
 
+test("keeps native advisory target planning outside the eval compiler import graph", () => {
+	const graph = buildModuleGraph(
+		path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
+		{
+			stripTypes: stripCompactTypes,
+		},
+	);
+	expect(
+		graph.modules.has(path.resolve("src/compiler/target/mapped-function-array-hints.ts")),
+	).toBe(false);
+});
+
 const rel = (absolute: string) => path.relative(root, absolute);
 const pkgIndex = path.join("node_modules", "pkg", "index.mjs");
 

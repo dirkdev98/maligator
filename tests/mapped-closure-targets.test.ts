@@ -1,4 +1,10 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
+import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-runtime-program.ts";
+import { deserializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 const source = `
@@ -32,6 +38,35 @@ function inspect(options: { locked?: boolean; realms?: boolean } = {}) {
 }
 
 describe("mapped closure target hints", () => {
+	it("retains advisory targets in configured portable runtime images", () => {
+		const directory = mkdtempSync(join(tmpdir(), "mal-mapped-wire-"));
+		try {
+			const entrypoint = join(directory, "entry.mjs");
+			writeFileSync(entrypoint, source);
+			const image = deserializeRuntimeImage(
+				compileEntrypointToBuffer(entrypoint, {
+					buildConfig: resolveBuildConfig({ engine: { eval: false, realms: false } }),
+				}),
+			);
+			const selected = image.functions.findIndex(
+				(fn) =>
+					String.fromCharCode(...(image.stringConstants[fn.nameStringIndex] ?? [])) ===
+					"selected",
+			);
+			expect(selected).toBeGreaterThanOrEqual(0);
+			expect(
+				image.functions.some((fn) =>
+					fn.instructions.some(
+						(instruction) =>
+							instruction.opcode === "CALL" &&
+							instruction.guardedFunctionIndices?.includes(selected),
+					),
+				),
+			).toBe(true);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 	it("keeps replacement results boxed and retains the ordinary call ABI", () => {
 		const { calls, native } = inspect();
 		expect(calls).toHaveLength(1);
