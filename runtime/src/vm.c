@@ -4937,7 +4937,6 @@ static inline __attribute__((always_inline)) MalValue mal_vm_call_native_value(
     MalNativeFunctionObject *native_function = mal_value_to_native_function_object(callee);
     MAL_PROFILE_NATIVE_CALL(vm, native_function);
     MalNativeFunctionCallback callback = mal_native_function_object_callback(native_function);
-    MAL_PERF_COUNT(call_cache_native_dispatches);
     if (mal_perf_stats_enabled) {
         MalString *native_name = mal_native_function_object_name(native_function);
         if (native_name != nullptr) mal_perf_native_call_name(native_name);
@@ -5019,6 +5018,7 @@ __attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
     }
     // A plain native needs none of the generic call's bound or proxy resolution.
     if (mal_value_is_native_function_object(callee)) {
+        MAL_PERF_COUNT(call_cache_native_dispatches);
         MalValue value = mal_vm_call_native_value(vm, callee, this_value, args, arg_count);
         return vm->completion.kind == MAL_COMPLETION_THROW
             ? vm->completion
@@ -5086,6 +5086,7 @@ __attribute__((noinline)) static MalValue mal_vm_call_cached_value_fallback(
         callee != vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL] &&
         mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
             mal_builtin_function_prototype_apply) {
+        MAL_PERF_COUNT(call_cache_native_dispatches);
         MalValue value = mal_vm_call_native_value(vm, callee, this_value, args, arg_count);
         return vm->completion.kind == MAL_COMPLETION_THROW ? MAL_VALUE_UNDEFINED : value;
     }
