@@ -14,6 +14,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { deserializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
+import { vmSemanticProtectorGuard } from "../src/compiler/target/program-image.ts";
 import {
 	compileIsolatedTestImage,
 	compileProfiledTestImage,
@@ -63,6 +64,38 @@ describe("test discovery", () => {
 });
 
 describe("test frontend artifact cache", () => {
+	test.each(["locked", "mutable"] as const)(
+		"retains the configured %s primordial contract in profiled tests",
+		(primordials) => {
+			const root = temporaryDirectory();
+			const entry = path.join(root, "profile.test.mjs");
+			write(entry, 'import { test } from "maligator:test"; test("value", () => 42);\n');
+			const compiled = compileProfiledTestImage(
+				{
+					files: [entry],
+					config: resolveBuildConfig({ engine: { primordials } }),
+					stripTypes: stripCompactTypes,
+					stripperIdentity: "profile-test-type-strip",
+					testModuleSource: readFileSync(
+						path.resolve("src/testing/runtime.mjs"),
+						"utf-8",
+					),
+				},
+				{ repeat: 1, bail: false, timeoutMs: 1000 },
+			);
+			const guard = vmSemanticProtectorGuard(
+				compiled.programImage.native.semanticProtectors,
+				"watched-methods",
+			);
+			expect(guard?.dependencies).toEqual([
+				primordials === "locked"
+					? { kind: "world", fact: "primordials.locked" }
+					: { kind: "epoch", family: "watched-methods" },
+			]);
+			expect(guard?.obligations).toContain("fallback");
+		},
+	);
+
 	test.each([undefined, "full"] as const)(
 		"collects only the requested optimizer instrumentation in a test profile: %s",
 		(coreInstrumentation) => {

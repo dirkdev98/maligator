@@ -14,6 +14,7 @@ import type {
 	CoreOptimizationReport,
 } from "../compiler/core/core-optimization-report.ts";
 import { runSemanticAnalysisForGraph } from "../compiler/frontend/analyze-module-graph.ts";
+import { certifyProgramClosure } from "../compiler/frontend/certify-closure.ts";
 import type {
 	BuildModuleGraphOptions,
 	ModuleGraph,
@@ -26,6 +27,10 @@ import {
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
 import { compileWorkerImages } from "../compiler/pipeline/compile-worker-images.ts";
 import type { CompiledWorkerImage } from "../compiler/pipeline/compile-worker-images.ts";
+import {
+	compilerProgramFactsFromConfig,
+	withProgramClosure,
+} from "../compiler/shared/compiler-facts.ts";
 import {
 	serializeRuntimeImage,
 	WIRE_VERSION,
@@ -346,6 +351,13 @@ export function compileProfiledTestImage(
 	let optimizationReport: CoreOptimizationReport | undefined;
 	let optimizationPlan: CoreOptimizationPlan | undefined;
 	const programImage = compileSemanticProgramToProgramImage(semantic, {
+		facts: withProgramClosure(
+			compilerProgramFactsFromConfig(options.config),
+			certifyProgramClosure(graph, options.config, {
+				relocatableArtifact: false,
+				hostWireSplicing: false,
+			}),
+		),
 		optimization: "full",
 		coreInstrumentation: options.coreInstrumentation ?? "off",
 		profile: true,
