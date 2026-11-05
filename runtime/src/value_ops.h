@@ -219,6 +219,13 @@ static inline i32 mal_ops_number_to_i32(f64 number) {
 #endif
 }
 
+/**
+ * ToInt32 kept out of line for compiled code whose int32 guard failed. A branch whose
+ * cold side is plain arithmetic is if-converted into a select, which puts the double
+ * conversions on the loop's dependency chain even while the guard always holds.
+ */
+__attribute__((cold, noinline)) i32 mal_ops_number_to_i32_cold(f64 number);
+
 /** ToInt32 of a boxed Number; an int32-tagged value already is its own result. */
 static inline i32 mal_ops_number_value_to_i32(MalValue value) {
     return value >= MAL_VALUE_TAG_BASE

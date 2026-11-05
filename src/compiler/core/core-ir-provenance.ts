@@ -1,4 +1,7 @@
-import { compilerNumberFastPathInputKind } from "../shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_NUMBER,
+	compilerNumberFastPathInputKind,
+} from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
@@ -5014,8 +5017,27 @@ function discoverCandidates(
 	const numericInstructions = requested("numeric-fusion")
 		? indexedOpcodeInstructions(fn, index, "binary")
 		: [];
-	const exactInt32 = (value: CoreValueId): boolean =>
-		valueKinds().exactScalar(value) === "int32";
+	const fractionalConstant = (value: CoreValueId): boolean => {
+		const definition = definingInstruction(fn, roots.get(value) ?? value);
+		if (definition === undefined || fn.instructionKind(definition) !== "operation")
+			return false;
+		const opcode = fn.instructionOpcodeName(definition);
+		const immediate = fn.instructionAttributes(definition).value;
+		return (
+			(opcode === "createNumber" || opcode === "createF64") &&
+			typeof immediate === "number" &&
+			(immediate | 0) !== immediate
+		);
+	};
+	// A truncating pair guards each operand that may be a Number for int32 at runtime
+	// and leaves the pair through its generic instructions otherwise. Taking the integer
+	// path whenever the values allow it keeps `(sum + element) | 0` off the
+	// int-to-double-to-int conversions, whose latency bounds such a loop. A constant
+	// that can never pass the guard keeps the pair on the Number representation.
+	const int32Operand = (value: CoreValueId): boolean =>
+		valueKinds().exactScalar(value) === "int32" ||
+		((valueKinds().kindMask(value) & COMPILER_VALUE_KIND_NUMBER) !== 0 &&
+			!fractionalConstant(value));
 	const numericPairs = new Map<
 		CoreInstructionId,
 		{ readonly user: CoreInstructionId; readonly truncating: boolean }
@@ -5073,8 +5095,10 @@ function discoverCandidates(
 			["&", "|", "^", "<<", ">>"].includes(
 				fn.instructionAttributes(user).operator as string,
 			) &&
-			[0, 1].every((index) => exactInt32(instructionOperand(fn, instruction, index)!)) &&
-			exactInt32(
+			[0, 1].every((index) =>
+				int32Operand(instructionOperand(fn, instruction, index)!),
+			) &&
+			int32Operand(
 				instructionOperand(fn, user, instructionOperand(fn, user, 0) === output ? 1 : 0)!,
 			);
 		if (!truncating && fn.valueRepresentation(output) !== "boxed") continue;
