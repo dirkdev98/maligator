@@ -1199,11 +1199,11 @@ static inline MalIntrinsic mal_vm_primitive_method_proto_slot(u8 kind) {
 // also thrashes the single site cache. Loads accept any data slot; stores additionally
 // require the cached attributes to be default-writable. Direct-mapped: a collision
 // just re-resolves and overwrites, so a stale/absent entry is only a perf miss.
-#define MAL_STUB_CACHE_BITS 10
+#define MAL_STUB_CACHE_BITS 14
 #define MAL_STUB_CACHE_SIZE (1u << MAL_STUB_CACHE_BITS)
 
 // Each registered row owns its dependencies; a second bank preserves the first probe.
-#define MAL_INHERITED_STUB_CACHE_BITS 10
+#define MAL_INHERITED_STUB_CACHE_BITS 12
 #define MAL_INHERITED_STUB_CACHE_SET_COUNT (1u << MAL_INHERITED_STUB_CACHE_BITS)
 #define MAL_INHERITED_STUB_CACHE_ROW_COUNT (2u * MAL_INHERITED_STUB_CACHE_SET_COUNT)
 
