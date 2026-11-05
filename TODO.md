@@ -700,6 +700,37 @@ bounded and consumer-driven as planned below.
       self-compiler is bimodal at about 1.4 or 2.0 GB. The high runs coincide with
       a synchronous backstop, fewer major cycles and about three times the
       over-tenured bytes.
+- [ ] Speculate int32 loop state that enters as a double. A direct entry with a
+      Number parameter keeps `seed = (Math.imul(seed, a) + b) | 0` in a double
+      phi, so every iteration converts to int32 and back: `serial-compute` runs
+      995 ms against Node's 204. Versioning the loop on an int32 entry value would
+      keep the chain in integers; a boxed seed already decodes int-first.
+- [ ] Keep int32 elements integral in dense-array loop regions. The region types
+      every element as a double, so `(sum + values[i]) | 0` over small integers
+      costs 5 ns per element against Node's 0.5. Restarting into the generic loop
+      on the first double would penalize double arrays, so an int32 variant needs a
+      way back into the double region.
+- [ ] Lower `Map.prototype.keys` and `values` traversal like `entries`. Both go
+      through the generic iterator step and `mal_map_iter_next` per element, so
+      `primordial-map-traversal` takes 773 ns per round against Node's 222.
+
+## Interpreted development images
+
+`run`, `test` and `dev` interpret development images, so interpreter cost is the
+developer loop's cost. The interpreted javascript-v2 workload runs about 5 times
+Node's time; dispatch through the shared head is about a fifth of the loop.
+
+- [ ] Lay out interpreted bytecode with fallthrough. Hot loops execute a `JUMP` to
+      the next instruction after many `JUMP_IF`s, plus chains of forward `JUMP`s:
+      about a fifth of the dispatches in the records loop. Threading them in the
+      image loader through a precomputed not-taken target made the interpreter
+      6% slower, because the next instruction then came from a select over two
+      loaded targets that the CPU cannot speculate past. The block layout has to
+      emit fallthrough instead, keeping the native lowering's `JUMP_IF` then `JUMP`
+      patterns working.
+- [ ] Hoist loop-invariant constants out of interpreted loops. `CREATE_NUMBER`,
+      `CREATE_UNDEFINED` and `LOAD_INTRINSIC` are rematerialized next to their
+      uses inside loop bodies, which costs the interpreter a dispatch each.
 
 ## World-knowledge ladder
 
@@ -1984,6 +2015,14 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       mark, remembered-slot, sweep and promotion evidence. Keep peak managed
       survivor accounting distinct from exact live heap and RSS. Extend block
       ownership only if a measured need justifies background reclamation.
+
+- [ ] Make minor collection cost follow survivors instead of allocation. The minor
+      sweep reads, marks free and links every dead young cell, so
+      `moderate-retention-churn` takes 31 ns per row against Node's 7.7, with 64 of
+      83 ms of minor pause in sweeping over 16.5 M inspected cells. A smaller
+      nursery is slower (64 ns at a 4 MB cap), since each collection rescans the
+      large remembered array. Side mark bitmaps with lazy free-range allocation
+      would remove the per-dead-cell work without moving objects.
 
 ### Concurrent generational GC experiments
 
