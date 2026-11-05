@@ -2764,7 +2764,7 @@ static void mal_vm_run_until_frame_count(
                 MalValue right = registers[instruction->as.binary.right];
                 MalValue result;
                 if (!mal_vm_try_binary_number_fast(instruction->as.binary.op, left, right, &result) &&
-                    !mal_vm_try_binary_strict_fast(instruction->as.binary.op, left, right, &result)) {
+                    !mal_vm_try_binary_equality_fast(instruction->as.binary.op, left, right, &result)) {
                     goto mal_vm_interpreter_binary_slow;
                 }
                 registers[instruction->as.binary.dst] = result;
@@ -2806,7 +2806,7 @@ static void mal_vm_run_until_frame_count(
                 if (!mal_vm_try_binary_number_fast( \
                         MAL_BIN_##OPERATOR, registers[instruction->as.binary.left], \
                         registers[instruction->as.binary.right], &result) && \
-                    !mal_vm_try_binary_strict_fast( \
+                    !mal_vm_try_binary_equality_fast( \
                         MAL_BIN_##OPERATOR, registers[instruction->as.binary.left], \
                         registers[instruction->as.binary.right], &result)) { \
                     goto mal_vm_interpreter_binary_slow; \
@@ -2822,7 +2822,7 @@ static void mal_vm_run_until_frame_count(
                 if (!mal_vm_try_binary_number_fast( \
                         MAL_BIN_##OPERATOR, registers[instruction->as.binary.left], \
                         registers[instruction->as.binary.right], &result) && \
-                    !mal_vm_try_binary_strict_fast( \
+                    !mal_vm_try_binary_equality_fast( \
                         MAL_BIN_##OPERATOR, registers[instruction->as.binary.left], \
                         registers[instruction->as.binary.right], &result)) { \
                     goto mal_vm_interpreter_binary_slow; \
