@@ -488,12 +488,6 @@ Arithmetic work should support these paths or fix correctness defects.
       removes almost none of the self-compile's checks; those are reads inside
       import cycles. Prefixes that continue past calls into data-only dependencies
       removed almost none either.
-- [ ] Find why three in-cell slots for empty object literals crashed Express. Giving
-      `mal_vm_op_create_object` a 48-byte cell with `slot_capacity` 3 made the Express
-      in-process benchmark segfault in about one run in eight, tracing a minor's object
-      whose shape word was overwritten; GC stress and verification never caught it. Some
-      path still assumes an empty compact object has no fields. The reserve would let
-      small records skip slot buffers entirely.
 - [ ] Release a grown slot or element buffer when its owner moves out of it. Managed
       value buffers (an owner-marked cell type instead of RAW buffers with a finalizer)
       saved 0.5% of Express cycles and 3% of the churn loop, but a buffer left behind
@@ -718,14 +712,6 @@ bounded and consumer-driven as planned below.
 developer loop's cost. The interpreted javascript-v2 workload runs about 5 times
 Node's time; dispatch through the shared head is about a fifth of the loop.
 
-- [ ] Lay out interpreted bytecode with fallthrough. Hot loops execute a `JUMP` to
-      the next instruction after many `JUMP_IF`s, plus chains of forward `JUMP`s:
-      about a fifth of the dispatches in the records loop. Threading them in the
-      image loader through a precomputed not-taken target made the interpreter
-      6% slower, because the next instruction then came from a select over two
-      loaded targets that the CPU cannot speculate past. The block layout has to
-      emit fallthrough instead, keeping the native lowering's `JUMP_IF` then `JUMP`
-      patterns working.
 - [ ] Hoist loop-invariant constants out of interpreted loops. `CREATE_NUMBER`,
       `CREATE_UNDEFINED` and `LOAD_INTRINSIC` are rematerialized next to their
       uses inside loop bodies, which costs the interpreter a dispatch each.
