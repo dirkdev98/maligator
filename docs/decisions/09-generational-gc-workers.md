@@ -99,16 +99,17 @@ The process coordinator accounts reserved heap mappings, ordinary and shared
 backing stores, and queued native serialization storage once per allocation. Its
 soft budget defaults to 256 MiB and may be changed with
 `MAL_GC_PROCESS_BUDGET_BYTES`. Crossing a pressure threshold requests safepoints
-and wakes every registered owner. An owner whose minors have promoted at least
-half of its last major's live set starts major work and increases its marking
-assists; any other owner runs a minor, because its old generation holds little
-garbage and a live set larger than the budget would otherwise pay a futile major
-for every few chunks it maps. After the first collection, which is a major,
-collections without pressure become majors on the same debt, with a 16 MiB floor
-for small heaps: only promoted bytes can
-become old garbage, and a fixed share of majors cost programs that promote little
-for nothing. `MAL_GC_MAJOR_EVERY` restores a fixed cadence for tests. Another pressure signal during an active cycle completes
-that cycle on its owner, so native growth cannot outrun a heap-only backstop.
+and wakes every registered owner. The first collection is a major and establishes
+the managed live-set and owned RAW baselines. Without pressure, another major waits
+until minors have promoted half of the previous managed live set, with a 16 MiB
+floor. Under pressure, net growth in owned RAW storage since the previous major also
+counts toward the half-live-set threshold, since old objects can acquire side
+storage without promoting managed cells. When half of the previous managed live set
+is at most the floor, pressure starts a major without waiting for debt. A stable
+large live set avoids futile majors after every few mapped chunks.
+`MAL_GC_MAJOR_EVERY` restores a fixed cadence for tests. Another pressure signal
+during an active cycle completes that cycle on its owner, so native growth cannot
+outrun a heap-only backstop.
 Releasing a temporary memory peak lowers the next threshold to match current
 reservations. Sweep and finalization still run on each owner. The
 registry lock protects poll targets and reactor wakers through teardown. This

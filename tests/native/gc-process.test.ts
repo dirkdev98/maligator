@@ -20,3 +20,33 @@ it("paces isolate owners under process pressure and releases reservations at tea
 		rmSync(outDir, { recursive: true, force: true });
 	}
 });
+
+it("reclaims side storage grown by old arrays under process pressure", () => {
+	const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-owned-pressure-"));
+	try {
+		const binary = buildNativeBinary({
+			fixture: "tests/local/fibertest_stub.js",
+			name: "gc-owned-pressure",
+			outDir,
+			mainFile: "tests/fixtures/gc-owned-pressure/main.c",
+			evalEnabled: false,
+			realmsEnabled: false,
+			intlEnabled: false,
+			webPlatformEnabled: false,
+			nodeEnabled: false,
+			regexpEnabled: false,
+			temporalEnabled: false,
+		});
+		expect(
+			runToStdout(binary, {
+				env: {
+					MAL_GC_PROCESS_BUDGET_BYTES: "67108864",
+					MAL_GC_STRESS: undefined,
+					MAL_GC_MAJOR_EVERY: undefined,
+				},
+			}),
+		).toBe("gc-owned-pressure PASS\n");
+	} finally {
+		rmSync(outDir, { recursive: true, force: true });
+	}
+});
