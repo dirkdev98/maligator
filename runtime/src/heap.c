@@ -1591,8 +1591,9 @@ MalHeapHeader *mal_heap_cell_index_find(const MalHeapCellIndex *index, uptr addr
             if (address < data) return nullptr;
             uptr cell = data + (address - data) / block->cell_size * block->cell_size;
             if (cell + block->cell_size > (uptr) block + MAL_GC_BLOCK_SIZE) return nullptr;
-            MalHeapHeader *header = (MalHeapHeader *) cell;
-            return mal_heap_cell_reclaimed(header) ? nullptr : header;
+            usize unit = (cell - (uptr) block) / MAL_GC_CELL_ALIGN;
+            if ((block->free_cells[unit / 64] >> (unit % 64)) & 1) return nullptr;
+            return (MalHeapHeader *) cell;
         }
     }
     usize low = 0;

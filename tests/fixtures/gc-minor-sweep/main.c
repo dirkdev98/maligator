@@ -665,6 +665,51 @@ static bool oversized_large_allocations_leave_heap_usable(MalHeap *heap) {
     return true;
 }
 
+static bool cell_index_rejects_unallocated_storage(MalHeap *heap) {
+    TestCell *live = new_cell(heap, 64);
+    usize size = mal_heap_allocation_charge(64);
+    uptr live_address = (uptr) live;
+    uptr virgin_address = live_address + size;
+    MalHeapCellIndex index;
+    mal_heap_cell_index_init(heap, &index);
+    CHECK(mal_heap_cell_index_find(&index, live_address) == &live->header);
+    CHECK(mal_heap_cell_index_find(&index, live_address + size - 1) == &live->header);
+    CHECK(mal_heap_cell_index_find(&index, virgin_address) == nullptr);
+    CHECK(mal_heap_cell_index_find(&index, virgin_address + size - 1) == nullptr);
+    CHECK(mal_heap_cell_index_find(&index, (uptr) mal_heap_cell_block(live)) == nullptr);
+    mal_heap_cell_index_free(&index);
+
+    TestCell *dead = new_cell(heap, 64);
+    uptr dead_address = (uptr) dead;
+    CHECK(dead_address == virgin_address);
+    void *raw = mal_heap_alloc_raw(heap, 64);
+    TestCell *large = new_cell(heap, 10000);
+    mal_heap_cell_index_init(heap, &index);
+    CHECK(mal_heap_cell_index_find(&index, (uptr) raw) == nullptr);
+    CHECK(mal_heap_cell_index_find(&index, (uptr) large) == &large->header);
+    CHECK(mal_heap_cell_index_find(&index, (uptr) large + 9999) == &large->header);
+    mal_heap_cell_index_free(&index);
+
+    mal_heap_begin_major(heap);
+    mark_live(live);
+    mark_live(large);
+    mal_heap_sweep(heap, finalize_cell);
+    mal_heap_cell_index_init(heap, &index);
+    CHECK(mal_heap_cell_index_find(&index, live_address) == &live->header);
+    CHECK(mal_heap_cell_index_find(&index, dead_address) == nullptr);
+    CHECK(mal_heap_cell_index_find(&index, dead_address + size - 1) == nullptr);
+    CHECK(mal_heap_cell_index_find(&index, dead_address + size) == nullptr);
+    mal_heap_cell_index_free(&index);
+
+    mal_heap_begin_major(heap);
+    mal_heap_sweep(heap, finalize_cell);
+    mal_heap_cell_index_init(heap, &index);
+    CHECK(mal_heap_cell_index_find(&index, live_address) == nullptr);
+    mal_heap_cell_index_free(&index);
+    gc_free_raw(heap, raw);
+    return true;
+}
+
 static bool run_check(bool (*check)(MalHeap *)) {
     MalHeap heap;
     mal_heap_init(&heap, 0);
@@ -682,6 +727,7 @@ int main(void) {
     // Every value here is rooted explicitly; stale C locals must not retain cells.
     mal_gc_test_precise_stack_roots = true;
     bool (*checks[])(MalHeap *) = {
+        cell_index_rejects_unallocated_storage,
         major_reclaims_once_and_recycles_blocks,
         minor_preserves_old_cells_and_free_list_members,
         minor_reenrolls_reused_cells_in_untouched_blocks,
