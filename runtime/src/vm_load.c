@@ -2503,6 +2503,122 @@ static bool mal_loaded_shape_case_selector_valid(
     return uses >= 2 && uses <= 16 && last_ip - selector_ip <= 64;
 }
 
+static i32 mal_loaded_forward_jump_end(const MalInstruction *code, i32 count, i32 target) {
+    while (target < count && code[target].opcode == MAL_OP_JUMP &&
+           code[target].as.jump.target_ip > target) {
+        target = code[target].as.jump.target_ip;
+    }
+    return target;
+}
+
+/**
+ * Remove the jumps block layout leaves for the interpreter to dispatch: forward jumps
+ * to the next instruction, and the JUMP a JUMP_IF skips over, which becomes a negated
+ * JUMP_IF. Forward chains are threaded first. A JUMP that something else targets
+ * stays, and so does the argument snapshot prefix. Loaded images never trust their
+ * safepoint maps, so dropping a removed jump's row loses nothing.
+ */
+static bool mal_loaded_compact_jumps(MalFunction *fn) {
+    MalInstruction *code = (MalInstruction *) fn->instructions;
+    i32 count = fn->instruction_count;
+    i32 prefix = fn->argument_snapshot_count;
+    if (count < 2) return true;
+    for (i32 ip = 0; ip < count; ip++) {
+        MalInstruction *in = &code[ip];
+        if (in->opcode == MAL_OP_JUMP && in->as.jump.target_ip > ip) {
+            in->as.jump.target_ip = mal_loaded_forward_jump_end(code, count, in->as.jump.target_ip);
+        } else if (in->opcode == MAL_OP_JUMP_IF && in->as.jump_if.target_ip > ip) {
+            in->as.jump_if.target_ip =
+                mal_loaded_forward_jump_end(code, count, in->as.jump_if.target_ip);
+        }
+    }
+    u8 *targeted = calloc((usize) count + 1, 1);
+    bool *removed = calloc((usize) count, sizeof(bool));
+    i32 *remap = malloc(sizeof(i32) * ((usize) count + 1));
+    if (targeted == nullptr || removed == nullptr || remap == nullptr) {
+        free(targeted);
+        free(removed);
+        free(remap);
+        return false;
+    }
+    for (i32 ip = 0; ip < count; ip++) {
+        if (code[ip].opcode == MAL_OP_JUMP) targeted[code[ip].as.jump.target_ip] = 1;
+        else if (code[ip].opcode == MAL_OP_JUMP_IF) targeted[code[ip].as.jump_if.target_ip] = 1;
+    }
+    for (i32 h = 0; h < fn->handler_count; h++) targeted[fn->handlers[h].handler_ip] = 1;
+    for (i32 ip = prefix; ip + 1 < count; ip++) {
+        MalInstruction *branch = &code[ip];
+        MalInstruction *jump = &code[ip + 1];
+        if (branch->opcode == MAL_OP_JUMP_IF && branch->as.jump_if.target_ip == ip + 2 &&
+            jump->opcode == MAL_OP_JUMP && !targeted[ip + 1]) {
+            branch->as.jump_if.target_ip = jump->as.jump.target_ip;
+            branch->as.jump_if.negate = !branch->as.jump_if.negate;
+            removed[ip + 1] = true;
+            ip++;
+        }
+    }
+    for (i32 ip = count - 1; ip >= prefix; ip--) {
+        if (!removed[ip] && code[ip].opcode == MAL_OP_JUMP && code[ip].as.jump.target_ip > ip) {
+            i32 after = ip + 1;
+            while (after < count && removed[after]) after++;
+            if (code[ip].as.jump.target_ip == after) removed[ip] = true;
+        }
+    }
+    i32 kept = 0;
+    for (i32 ip = 0; ip < count; ip++) {
+        remap[ip] = kept;
+        if (!removed[ip]) kept++;
+    }
+    remap[count] = kept;
+    if (kept == count) {
+        free(targeted);
+        free(removed);
+        free(remap);
+        return true;
+    }
+    for (i32 ip = 0, out = 0; ip < count; ip++) {
+        if (removed[ip]) continue;
+        MalInstruction in = code[ip];
+        if (in.opcode == MAL_OP_JUMP) in.as.jump.target_ip = remap[in.as.jump.target_ip];
+        else if (in.opcode == MAL_OP_JUMP_IF) in.as.jump_if.target_ip = remap[in.as.jump_if.target_ip];
+        code[out++] = in;
+    }
+    MalExceptionHandler *handlers = (MalExceptionHandler *) fn->handlers;
+    for (i32 h = 0; h < fn->handler_count; h++) {
+        handlers[h].start_ip = remap[handlers[h].start_ip];
+        handlers[h].end_ip = remap[handlers[h].end_ip];
+        handlers[h].handler_ip = remap[handlers[h].handler_ip];
+    }
+    MalLineEntry *positions = (MalLineEntry *) fn->positions;
+    for (i32 p = 0; p < fn->position_count; p++) {
+        positions[p].start_ip = remap[positions[p].start_ip];
+    }
+    i32 *rows = (i32 *) fn->gc_safepoints;
+    i32 *write = rows;
+    const i32 *read = rows;
+    i32 rows_kept = 0;
+    for (i32 index = 0; index < fn->gc_safepoint_count; index++) {
+        i32 ip = read[0];
+        i32 root_count = read[1];
+        i32 clear_count = read[2 + root_count];
+        i32 length = 3 + root_count + clear_count;
+        if (!removed[ip]) {
+            memmove(write, read, sizeof(i32) * (usize) length);
+            write[0] = remap[ip];
+            write += length;
+            rows_kept++;
+        }
+        read += length;
+    }
+    fn->gc_safepoint_count = rows_kept;
+    fn->argument_snapshot_count = remap[prefix];
+    fn->instruction_count = kept;
+    free(targeted);
+    free(removed);
+    free(remap);
+    return true;
+}
+
 static MalOpcode mal_loaded_quick_binary_opcode(MalBinaryOp op, bool branch) {
     switch (op) {
         case MAL_BIN_ADD: return MAL_OP_BINARY_ADD;
@@ -3062,7 +3178,13 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
         goto fail;
     }
 
-    for (u32 f = 0; f < function_count; f++) mal_loaded_quicken_instructions(&functions[f]);
+    for (u32 f = 0; f < function_count; f++) {
+        if (!mal_loaded_compact_jumps(&functions[f])) {
+            err = "out of memory";
+            goto fail;
+        }
+        mal_loaded_quicken_instructions(&functions[f]);
+    }
     return L;
 
 fail:

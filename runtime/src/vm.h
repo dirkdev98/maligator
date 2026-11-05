@@ -227,7 +227,8 @@ typedef struct MalInstruction {
         } caught;
 
         struct {
-            i32 cond, target_ip;
+            // `negate` jumps when the condition is falsy; only the image loader sets it.
+            i32 cond, target_ip, negate;
         } jump_if;
 
         struct {
