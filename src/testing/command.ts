@@ -197,6 +197,7 @@ export function prepareProfiledTestCommand(
 	const compiled = compileProfiledTestImage(
 		{
 			files,
+			coreInstrumentation: command.profileCompiler === true ? "full" : "off",
 			config,
 			execution,
 			stripTypes: context.stripTypes,

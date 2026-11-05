@@ -16,6 +16,7 @@ import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.t
 import { deserializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
 import {
 	compileIsolatedTestImage,
+	compileProfiledTestImage,
 	compileTestFile,
 	compileTestImage,
 	TestCompilationSession,
@@ -62,6 +63,33 @@ describe("test discovery", () => {
 });
 
 describe("test frontend artifact cache", () => {
+	test.each([undefined, "full"] as const)(
+		"collects only the requested optimizer instrumentation in a test profile: %s",
+		(coreInstrumentation) => {
+			const root = temporaryDirectory();
+			const entry = path.join(root, "profile.test.mjs");
+			write(entry, 'import { test } from "maligator:test"; test("value", () => 42);\n');
+			const compiled = compileProfiledTestImage(
+				{
+					files: [entry],
+					config: resolveBuildConfig({}),
+					stripTypes: stripCompactTypes,
+					stripperIdentity: "profile-test-type-strip",
+					testModuleSource: readFileSync(
+						path.resolve("src/testing/runtime.mjs"),
+						"utf-8",
+					),
+					coreInstrumentation,
+				},
+				{ repeat: 1, bail: false, timeoutMs: 1000 },
+			);
+			const report = compiled.optimizationReport;
+			expect(report.instrumentation).toBe(coreInstrumentation ?? "off");
+			expect(report.passes.length > 0).toBe(coreInstrumentation === "full");
+			expect(compiled.programImage.profiling?.sites.length).toBeGreaterThan(0);
+		},
+	);
+
 	test("bakes options and a machine-readable result into isolated test images", () => {
 		const root = temporaryDirectory();
 		const entry = path.join(root, "isolated.test.mjs");

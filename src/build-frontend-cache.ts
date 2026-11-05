@@ -700,6 +700,9 @@ function prepareBuildFrontend(
 	const root = cacheRoot(options.cacheDirectory);
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
 	const identity = cacheIdentity(options);
+	// Compiler artifacts omit the source identities and remarks needed by a profile.
+	const liveProfile = options.profile === true;
+	const forceCompile = options.forceCompile === true || liveProfile;
 	const entryPrelude: BuildModuleGraphOptions["entryPrelude"] =
 		options.config.surface.node && options.nodeGlobalsSource !== undefined
 			? { specifier: NODE_GLOBALS_MODULE_ID, source: options.nodeGlobalsSource }
@@ -723,7 +726,7 @@ function prepareBuildFrontend(
 		};
 	};
 
-	if (!options.forceCompile) {
+	if (!forceCompile) {
 		const validationStartedAt = Date.now();
 		const cached = loadCached(
 			root,
@@ -865,7 +868,7 @@ function prepareBuildFrontend(
 		const hasWorkers = (workerRoots.workerEntries?.length ?? 0) !== 0;
 		if (hasWorkers && options.relocatable)
 			fragmentFallback = "worker roots use independent whole-program images";
-		if (!hasWorkers && fragmentsApply && options.forceCompile !== true) {
+		if (!hasWorkers && fragmentsApply && !forceCompile) {
 			try {
 				const fragments = compileBuildFragments({
 					target: options.interpreted === true ? "runtime" : "native",
@@ -953,7 +956,7 @@ function prepareBuildFrontend(
 		loadProgramImage = () => programImage;
 		imageStats = programImageStats(programImage);
 		const serializeStartedAt = Date.now();
-		compilerWire = serializeCompilerArtifact(programImage);
+		if (!liveProfile) compilerWire = serializeCompilerArtifact(programImage);
 		wires = [serializeRuntimeImage(programImage.runtime)];
 		phases.serializeMs += Date.now() - serializeStartedAt;
 	};
@@ -1037,7 +1040,7 @@ function prepareBuildFrontend(
 				: undefined);
 		// A forced compile builds one image where fragments apply; publishing it would
 		// hand later unforced builds a different program shape under the same identity.
-		if (options.forceCompile !== true || !fragmentsApply)
+		if (!liveProfile && (!forceCompile || !fragmentsApply))
 			publish(
 				manifestPath(root, entrypoint, identity),
 				`${JSON.stringify({

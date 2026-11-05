@@ -277,6 +277,8 @@ function checkProfile(directory: string, command: "run" | "test"): void {
 	const payload = readFileSync(path.join(directory, "capture.bin"));
 	const capture = parseProfileCapture(payload);
 	const identity = profileCaptureIdentity(metadata);
+	if (metadata.coreOptimizationReport?.instrumentation !== "off")
+		throw new Error(`sampling profile ${command} collected optimizer instrumentation`);
 	if (
 		capture.schema < 4 ||
 		capture.captureIdentity !== identity ||

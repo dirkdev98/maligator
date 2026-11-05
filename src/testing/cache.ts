@@ -9,7 +9,10 @@ import {
 	compilerProducerIdentity,
 } from "../compiler-cache-identity.ts";
 import type { CoreOptimizationPlan } from "../compiler/core/core-ir-regions.ts";
-import type { CoreOptimizationReport } from "../compiler/core/core-optimization-report.ts";
+import type {
+	CoreInstrumentationMode,
+	CoreOptimizationReport,
+} from "../compiler/core/core-optimization-report.ts";
 import { runSemanticAnalysisForGraph } from "../compiler/frontend/analyze-module-graph.ts";
 import type {
 	BuildModuleGraphOptions,
@@ -322,7 +325,7 @@ function testProcessEntrySource(
 /** Cold, production-optimized test image used only by `test --profile`. Ordinary
  * test execution retains its relocatable interpreted cache path. */
 export function compileProfiledTestImage(
-	options: CompileTestImageOptions,
+	options: CompileTestImageOptions & { coreInstrumentation?: CoreInstrumentationMode },
 	runOptions: object,
 ): CompiledProfiledTestImage {
 	const entries = resolvedEntries(options.files);
@@ -344,7 +347,7 @@ export function compileProfiledTestImage(
 	let optimizationPlan: CoreOptimizationPlan | undefined;
 	const programImage = compileSemanticProgramToProgramImage(semantic, {
 		optimization: "full",
-		coreInstrumentation: "full",
+		coreInstrumentation: options.coreInstrumentation ?? "off",
 		profile: true,
 		afterCoreOptimization(_program, _context, report, plan) {
 			optimizationReport = report;

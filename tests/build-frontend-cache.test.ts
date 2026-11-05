@@ -229,7 +229,6 @@ describe("normal build frontend cache", () => {
 			}
 			console.log(sum(new Float64Array([1, 2, 3])));\n`,
 		);
-		// The CLI forces profiled compiles, which still publish where fragments do not apply.
 		compileBuildFrontend({
 			entrypoint,
 			config: resolveBuildConfig({}),
@@ -237,7 +236,6 @@ describe("normal build frontend cache", () => {
 			stripperIdentity: "build-frontend-cache-test",
 			cacheDirectory,
 			profile: true,
-			forceCompile: true,
 		});
 		const plain = compile(entrypoint, cacheDirectory);
 		expect(plain.cache).toBe("miss");
@@ -248,6 +246,47 @@ describe("normal build frontend cache", () => {
 		).toBe(true);
 		expect(compile(entrypoint, cacheDirectory).programImage).toBeDefined();
 	});
+
+	it.each([false, true])(
+		"preserves source identities in repeated profiles with relocatable compilation %s",
+		(relocatable) => {
+			const root = temporaryDirectory();
+			try {
+				const entrypoint = path.join(root, "entry.mjs");
+				write(
+					entrypoint,
+					"function read(object) { return object.value; } read(globalThis);\n",
+				);
+				const options = {
+					entrypoint,
+					cacheDirectory: path.join(root, "cache"),
+					config: resolveBuildConfig({}),
+					stripTypes: stripCompactTypes,
+					stripperIdentity: "build-frontend-cache-test",
+					optimization: "development" as const,
+					profile: true,
+					relocatable,
+				};
+				const cold = compileBuildFrontend(options);
+				const repeated = compileBuildFrontend(options);
+				for (const compiled of [cold, repeated]) {
+					expect(
+						compiled.programImage.diagnostics.sourceCallSites?.length,
+					).toBeGreaterThan(0);
+					expect(
+						compiled.programImage.diagnostics.profileFunctions?.some(
+							(origin) => origin !== undefined,
+						),
+					).toBe(true);
+					expect(compiled.programImage.profiling?.sites.length).toBeGreaterThan(0);
+				}
+				expect(repeated.programImage.diagnostics).toEqual(cold.programImage.diagnostics);
+				expect(repeated.wire).toEqual(cold.wire);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("stores and replays structured primordial diagnostics", () => {
 		const root = temporaryDirectory();

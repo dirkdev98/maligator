@@ -783,16 +783,10 @@ function prepareCommandState(
 		enforcePolicies: !(
 			command.kind === "build" && command.internal.serializePath !== undefined
 		),
-		// Profile metadata is derived from the optimized semantic program and is
-		// not part of the portable wire schema yet. Do not accept a definition-only
-		// frontend cache hit that would discard its source-site identities.
 		// Verbose output recompiles for the optimizer report, but a forced compile also
 		// replaces dependency fragments with one image, which would change what is built.
 		forceCompile:
-			debugEnabled ||
-			compilerDiagnostics ||
-			command.profile ||
-			(reporter.verbose && !relocatable),
+			debugEnabled || compilerDiagnostics || (reporter.verbose && !relocatable),
 		relocatable,
 		interpreted,
 		onCompilePhase: (phase, durationMs) => {
