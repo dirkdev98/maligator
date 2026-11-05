@@ -53,6 +53,8 @@ typedef enum MalHeapDeadCellPolicy {
     MAL_HEAP_DEAD_CELL_RECLAIM,
     /** An ordinary object, which needs its finalizer only while `mal_object_finalizes`. */
     MAL_HEAP_DEAD_CELL_OBJECT,
+    /** An Array, which also needs it while its elements live outside the cell. */
+    MAL_HEAP_DEAD_CELL_ARRAY,
 } MalHeapDeadCellPolicy;
 
 /* Relaxed atomics, like the type hooks the policy summarizes: registration may run

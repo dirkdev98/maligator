@@ -11,6 +11,7 @@
 
 #include "./gc.h"
 #include "./gc_process.h"
+#include "./array_object.h"
 #include "./object.h"
 #include "./perf_stats.h"
 #include "./profile.h"
@@ -420,6 +421,11 @@ static inline bool mal_heap_dead_cell_finalizes(const MalHeap *heap, const MalHe
             return false;
         case MAL_HEAP_DEAD_CELL_OBJECT:
             return mal_object_finalizes((const MalObject *) cell);
+        case MAL_HEAP_DEAD_CELL_ARRAY: {
+            const MalArrayObject *array = (const MalArrayObject *) cell;
+            return (array->elements != nullptr && !mal_array_object_elements_inline(array)) ||
+                mal_object_finalizes(&array->object);
+        }
         default:
             return true;
     }
