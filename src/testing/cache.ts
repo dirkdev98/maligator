@@ -330,7 +330,10 @@ function testProcessEntrySource(
 /** Cold, production-optimized test image used only by `test --profile`. Ordinary
  * test execution retains its relocatable interpreted cache path. */
 export function compileProfiledTestImage(
-	options: CompileTestImageOptions & { coreInstrumentation?: CoreInstrumentationMode },
+	options: CompileTestImageOptions & {
+		coreInstrumentation?: CoreInstrumentationMode;
+		runPhase?: <Result>(label: string, run: () => Result) => Result;
+	},
 	runOptions: object,
 ): CompiledProfiledTestImage {
 	const entries = resolvedEntries(options.files);
@@ -343,11 +346,20 @@ export function compileProfiledTestImage(
 		runOptions,
 		"__MALIGATOR_TEST_RESULT__",
 	);
-	const graph = buildTestGraph(options, entries, session, entrySource);
-	const dependencies = dependencyIdentities(graph, session).map((entry) => entry.path);
-	const semantic = runSemanticAnalysisForGraph(graph);
-	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
-	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+	const runPhase =
+		options.runPhase ?? (<Result>(_label: string, run: () => Result): Result => run());
+	const graph = runPhase("Build test module graph", () =>
+		buildTestGraph(options, entries, session, entrySource),
+	);
+	const dependencies = runPhase("Snapshot test dependencies", () =>
+		dependencyIdentities(graph, session).map((entry) => entry.path),
+	);
+	const semantic = runPhase("Analyze test modules", () => {
+		const program = runSemanticAnalysisForGraph(graph);
+		assertEvalPolicy(options.config, collectDisallowedEvalUsage(program));
+		assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(program));
+		return program;
+	});
 	let optimizationReport: CoreOptimizationReport | undefined;
 	let optimizationPlan: CoreOptimizationPlan | undefined;
 	const programImage = compileSemanticProgramToProgramImage(semantic, {
@@ -361,6 +373,7 @@ export function compileProfiledTestImage(
 		optimization: "full",
 		coreInstrumentation: options.coreInstrumentation ?? "off",
 		profile: true,
+		runPhase,
 		afterCoreOptimization(_program, _context, report, plan) {
 			optimizationReport = report;
 			optimizationPlan = plan;
@@ -370,7 +383,9 @@ export function compileProfiledTestImage(
 		throw new Error("profiled test compilation lost its Core optimization sidecar");
 	}
 	return {
-		workerImages: compileTestWorkerImages(graph, options, session, "full"),
+		workerImages: runPhase("Compile test workers", () =>
+			compileTestWorkerImages(graph, options, session, "full"),
+		),
 		programImage,
 		optimizationReport,
 		optimizationPlan,

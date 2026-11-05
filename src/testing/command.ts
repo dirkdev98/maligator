@@ -175,6 +175,7 @@ export function prepareProfiledTestCommand(
 	command: TestCommand,
 	context: CommandContext,
 	config: ResolvedBuildConfig,
+	runPhase?: <Result>(label: string, run: () => Result) => Result,
 ) {
 	const discoveryStartedAt = Date.now();
 	const files = discoverTestFiles(command.paths);
@@ -198,6 +199,7 @@ export function prepareProfiledTestCommand(
 		{
 			files,
 			coreInstrumentation: command.profileCompiler === true ? "full" : "off",
+			runPhase,
 			config,
 			execution,
 			stripTypes: context.stripTypes,

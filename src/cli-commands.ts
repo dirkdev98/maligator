@@ -2282,16 +2282,32 @@ async function executeProfiledTests(
 	context: CommandContext,
 	config: ResolvedBuildConfig,
 ): Promise<TestCommandSummary> {
-	const libraries = prepareConfiguredLibraries(
-		config,
-		context,
-		testToolchain(context, config),
+	const verbose = command.verbose === true;
+	const reporter = new BuildReporter(
+		verbose,
+		!verbose,
+		context.checkpoint,
+		context.onCompilationPhase,
 	);
-	const compiled = prepareProfiledTestCommand(
-		command,
-		context,
-		libraries === undefined ? config : { ...config, ffiModules: libraries.modules },
+	reporter.start("tests", "production", "Preparing");
+	reporter.detail(
+		"Profile",
+		command.profileCompiler === true ? "compiler counters" : "sampling",
 	);
+	const libraries = reporter.phase("Prepare C libraries", () =>
+		prepareConfiguredLibraries(config, context, testToolchain(context, config)),
+	);
+	const compiled = reporter.phase("Compile modules", () =>
+		prepareProfiledTestCommand(
+			command,
+			context,
+			libraries === undefined ? config : { ...config, ffiModules: libraries.modules },
+			(label, run) => reporter.phase(label, run),
+		),
+	);
+	reporter.detail("Test files", compiled.files.length);
+	reporter.timing("Test discovery", compiled.discoveryMs);
+	reporter.timing("Test frontend", compiled.frontendMs);
 	const baseDerivation = buildDerivationFromConfig(config);
 	const derivation = {
 		features: normalizeNativeFeatures({
@@ -2326,64 +2342,119 @@ async function executeProfiledTests(
 						}),
 				}
 			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
-	const nativeContext = resolveNativeBuildContext({
-		environment: compilerProfileBuildEnvironment(command),
-		toolchain,
-		plan: selectNativeBuildPlan(toolchain, true),
-		runtimeDirectory: context.installation.runtimeDirectory,
-		features: derivation.features,
-		compilerBake,
-	});
-	const assets = includeConfiguredAssets(config.assets, process.cwd(), {
-		cacheDirectory: maligatorCacheDirectory(),
-		session: new FrontendCompilationSession(),
-	});
+	const nativeContext = reporter.phase("Prepare native build", () =>
+		resolveNativeBuildContext({
+			environment: compilerProfileBuildEnvironment(command),
+			toolchain,
+			plan: selectNativeBuildPlan(toolchain, true),
+			runtimeDirectory: context.installation.runtimeDirectory,
+			features: derivation.features,
+			compilerBake,
+			onCacheEvent: (event) =>
+				reporter.detail(
+					`${event.artifact} cache`,
+					`${event.hit ? "hit" : "miss"} (${event.path})`,
+				),
+			onBuildPhase: (event) =>
+				reporter.timing(
+					`Native phase · ${event.phase}`,
+					event.durationMs,
+					[
+						event.cache === undefined ? undefined : `cache ${event.cache}`,
+						event.units === undefined ? undefined : `${event.units} units`,
+						event.path,
+					]
+						.filter((value) => value !== undefined)
+						.join(" · ") || undefined,
+				),
+			onCommand: verbose
+				? (event) =>
+						reporter.detail(
+							"Command",
+							[event.tool, ...event.args]
+								.map((argument) =>
+									/^[A-Za-z0-9_./:@%+=,-]+$/.test(argument)
+										? argument
+										: JSON.stringify(argument),
+								)
+								.join(" "),
+						)
+				: undefined,
+		}),
+	);
+	const assets = reporter.phase("Collect assets", () =>
+		includeConfiguredAssets(config.assets, process.cwd(), {
+			cacheDirectory: maligatorCacheDirectory(),
+			session: new FrontendCompilationSession(),
+		}),
+	);
 	const emitOptions = {
 		sourcePath: nativeSourcePath,
 		compiled: true,
 		assets,
 		maligatorSurface: config.surface.maligator,
 	};
-	const source = [
+	const source = reporter.phase("Generate native code", () => [
 		...emitProgramTranslationUnits(compiled.programImage, emitOptions),
 		...emitWorkerImageTranslationUnits(compiled.workerImages, emitOptions),
-	];
-	const binary = buildLocalBinary({
-		context: nativeContext,
-		name: "maligator-profile-test",
-		cSource: source,
-		...(libraries === undefined
-			? {}
-			: nativeLibraryInputs(libraries, context.installation.runtimeDirectory)),
-		verbose: false,
-		mainFile: applicationDriverPath(
-			context.installation,
-			config.surface.webPlatform,
-			config.surface.node,
-			compiled.workerImages.length > 0,
-		),
-		cacheSuffix: derivation.cacheSuffix,
-	}).binaryPath;
-	const profile = prepareProfile(
-		binary,
-		compiled.programImage,
-		command.profileCompiler === true ? "compiler" : "sampling",
-		{
-			coreOptimizationReport: compiled.optimizationReport,
-			coreOptimizationPlan: compiled.optimizationPlan,
-		},
+	]);
+	reporter.detail("Translation units", source.length);
+	reporter.detail(
+		"Generated C code units",
+		source.reduce((total, unit) => total + unit.sourceCodeUnits, 0),
 	);
-	const capture = createProfileCapture("test", profile);
+	const binary = reporter.phase(
+		"Build native binary",
+		() =>
+			buildLocalBinary({
+				context: nativeContext,
+				name: "maligator-profile-test",
+				cSource: source,
+				...(libraries === undefined
+					? {}
+					: nativeLibraryInputs(libraries, context.installation.runtimeDirectory)),
+				verbose,
+				onWarning: (warning) => reporter.warning(warning),
+				onGeneratedObject: (event) =>
+					reporter.detail(
+						`Generated C object · ${event.generatedKind ?? event.role} · ${event.unit}`,
+						`${event.cache} · source ${formatCacheBytes(event.sourceBytes)} · object ${formatCacheBytes(event.objectBytes)}${event.compileDurationMs === null ? "" : ` · compile ${event.compileDurationMs.toFixed(1)} ms`}`,
+					),
+				mainFile: applicationDriverPath(
+					context.installation,
+					config.surface.webPlatform,
+					config.surface.node,
+					compiled.workerImages.length > 0,
+				),
+				cacheSuffix: derivation.cacheSuffix,
+			}).binaryPath,
+	);
+	const profile = reporter.phase("Prepare profile metadata", () =>
+		prepareProfile(
+			binary,
+			compiled.programImage,
+			command.profileCompiler === true ? "compiler" : "sampling",
+			{
+				coreOptimizationReport: compiled.optimizationReport,
+				coreOptimizationPlan: compiled.optimizationPlan,
+			},
+		),
+	);
+	const capture = reporter.phase("Start profile capture", () =>
+		createProfileCapture("test", profile),
+	);
 	const executionStartedAt = Date.now();
-	const outcome = await executeBinaryReported(
-		binary,
-		[],
-		{
-			...runEnv(),
-			...capture.environment,
-			...compilerProfileRuntimeEnvironment(command),
-		},
-		{ resultPrefix: PROFILED_TEST_RESULT_PREFIX },
+	const outcome = await reporter.phaseAsync("Run profiled tests", () =>
+		executeBinaryReported(
+			binary,
+			[],
+			{
+				...runEnv(),
+				...capture.environment,
+				...compilerProfileRuntimeEnvironment(command),
+			},
+			{ resultPrefix: PROFILED_TEST_RESULT_PREFIX },
+		),
 	);
 	const executionMs = Date.now() - executionStartedAt;
 	if (outcome.status !== 0 || outcome.result === undefined) {
@@ -2404,9 +2475,11 @@ async function executeProfiledTests(
 		);
 	}
 	if (existsSync(capture.capturePath)) {
-		const finalized = finalizeProfileCapture(capture.directory, profile, "test", {
-			workloadSucceeded: testResult.failed === 0,
-		});
+		const finalized = reporter.phase("Finalize profile capture", () =>
+			finalizeProfileCapture(capture.directory, profile, "test", {
+				workloadSucceeded: testResult.failed === 0,
+			}),
+		);
 		writeStderr(`Profile ${capture.directory}`);
 		for (const line of formatProfileReport(finalized)) writeStderr(line);
 	} else {
@@ -2455,7 +2528,8 @@ export async function runCli(
 		}
 		verbose =
 			(command.kind === "build" && command.internal.verbose) ||
-			((command.kind === "run" || command.kind === "dev") && command.verbose) ||
+			((command.kind === "run" || command.kind === "dev" || command.kind === "test") &&
+				command.verbose === true) ||
 			(command.kind === "doctor" && command.verbose);
 		if (command.kind === "help") {
 			log.info(CLI_HELP);

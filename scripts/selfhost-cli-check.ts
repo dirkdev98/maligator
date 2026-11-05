@@ -342,7 +342,7 @@ test("profile preserves disabled engine features", () => {
 	);
 	const testProfileDirectory = path.join(reports, "profile-test");
 	const profiledTest = invokeCaptured(
-		["test", "--profile", "--config", profileConfig, "profile.test.mts"],
+		["test", "--profile", "--verbose", "--config", profileConfig, "profile.test.mts"],
 		{ MALIGATOR_PROFILE_DIRECTORY: testProfileDirectory },
 	);
 	if (
@@ -354,6 +354,19 @@ test("profile preserves disabled engine features", () => {
 			`profiled tests failed:\n${profiledTest.stdout}\n${profiledTest.stderr}`,
 		);
 	checkApplicationPids(profiledTest.stdout, profiledTest.pid, false, "PROFILE_TEST_PID");
+	for (const phase of [
+		"Compile modules",
+		"Build native binary",
+		"Prepare profile metadata",
+		"Start profile capture",
+		"Finalize profile capture",
+	]) {
+		if (
+			!profiledTest.stderr.includes(`${phase} started`) ||
+			!profiledTest.stderr.includes(`${phase} completed`)
+		)
+			throw new Error(`profiled tests did not report ${phase}`);
+	}
 	checkProfile(testProfileDirectory, "test");
 	console.log(
 		"ok   run and test profiles used separate AOT processes, disabled features, and valid captures",

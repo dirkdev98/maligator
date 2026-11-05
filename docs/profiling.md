@@ -48,6 +48,9 @@ and exit status, but compiles the selected test graph into one cold production A
 image. It is for investigating a representative slow test selection, not for the
 ordinary interpreter-backed test loop.
 
+Add `--verbose` to `test --profile` to report compilation phases, native cache reuse,
+and capture preparation and finalization on stderr. Test results remain on stdout.
+
 `build --profile` creates an instrumented binary and writes the matching
 `<binary>.profile.json` metadata sidecar. With `--artifact`, that sidecar is copied
 to `profile.json` and covered by `artifact.json` and `SHA256SUMS`. The turnkey

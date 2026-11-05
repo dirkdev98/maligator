@@ -354,7 +354,7 @@ server.listen(0, "127.0.0.1", () => { console.log("DX_HTTP_PORT " + server.addre
 			[
 				command,
 				"--profile",
-				...(command === "run" ? ["--verbose"] : []),
+				"--verbose",
 				"--config",
 				config,
 				...(command === "test" ? [testFile] : []),

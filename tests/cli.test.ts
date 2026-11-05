@@ -262,6 +262,21 @@ describe("parseCliArgs", () => {
 		});
 	});
 
+	it("accepts verbose diagnostics for profiled tests without changing selection", () => {
+		expect(
+			parseCliArgs(["test", "--profile", "--verbose", "src/router.test.mts"]),
+		).toMatchObject({
+			kind: "test",
+			profile: true,
+			verbose: true,
+			paths: ["src/router.test.mts"],
+		});
+	});
+
+	it("rejects test build diagnostics without a production profile", () => {
+		expect(() => parseCliArgs(["test", "--verbose"])).toThrow("requires --profile");
+	});
+
 	it("keeps exact compiler counters behind an explicit profile mode", () => {
 		for (const command of ["build", "run", "dev", "test"]) {
 			expect(parseCliArgs([command, "src/main.ts", "--profile=compiler"])).toMatchObject({

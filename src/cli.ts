@@ -61,6 +61,7 @@ export interface TestCommand {
 	watch?: boolean;
 	watchFailed?: boolean;
 	status?: boolean;
+	verbose?: boolean;
 	profile: boolean;
 	profileCompiler?: boolean;
 }
@@ -603,6 +604,10 @@ function parseTest(args: Array<string>): CliCommand {
 			command.bail = true;
 			continue;
 		}
+		if (argument === "--verbose") {
+			command.verbose = true;
+			continue;
+		}
 		if (argument === "--profile" || argument === "--profile=compiler") {
 			command.profile = true;
 			if (argument === "--profile=compiler") command.profileCompiler = true;
@@ -619,6 +624,8 @@ function parseTest(args: Array<string>): CliCommand {
 	}
 	if (command.watch && command.profile)
 		throw new CliUsageError("--watch cannot be combined with --profile");
+	if (command.verbose && !command.profile)
+		throw new CliUsageError("test --verbose requires --profile");
 	if (command.watchFailed && !command.watch)
 		throw new CliUsageError("--watch-failed requires --watch");
 	if (command.status && !command.watch)
