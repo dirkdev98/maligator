@@ -315,10 +315,6 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
     return block;
 }
 
-static inline u8 *mal_gc_word_base(MalGcBlock *block, usize word) {
-    return (u8 *) block + word * 64 * MAL_GC_CELL_ALIGN;
-}
-
 static void mal_gc_clear_young_blocks(MalHeap *heap) {
     MalGcBlock *block = heap->young_blocks;
     heap->young_blocks = nullptr;
@@ -499,7 +495,6 @@ static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
 static void mal_gc_claim_word(MalHeap *heap, MalGcBlock *block, usize word, u64 bits) {
     block->free_cells[word] = 0;
     u32 cell_size = block->cell_size;
-    u8 *base = mal_gc_word_base(block, word);
     u32 count = (u32) __builtin_popcountll(bits);
     usize bytes = (usize) count * cell_size;
     if (!heap->black_alloc) {
@@ -519,7 +514,8 @@ static void mal_gc_claim_word(MalHeap *heap, MalGcBlock *block, usize word, u64 
     }
     heap->bytes_allocated += bytes;
     heap->current_usage.managed_owned_bytes += bytes;
-    heap->cell_cursors[block->size_class] = (MalHeapCellCursor) {.bits = bits, .base = base};
+    heap->cell_cursors[block->size_class] = (MalHeapCellCursor) {
+        .bits = bits, .block = block, .word_offset = word * 64 * MAL_GC_CELL_ALIGN};
     mal_heap_maybe_trigger_gc(heap);
 }
 
@@ -529,8 +525,8 @@ void mal_heap_retire_cursors(MalHeap *heap) {
         u64 rest = cursor->bits;
         if (rest == 0) continue;
         cursor->bits = 0;
-        MalGcBlock *block = mal_heap_cell_block(cursor->base);
-        usize word = mal_heap_cell_unit(cursor->base) / 64;
+        MalGcBlock *block = cursor->block;
+        usize word = cursor->word_offset / (64 * MAL_GC_CELL_ALIGN);
         u32 count = (u32) __builtin_popcountll(rest);
         usize bytes = (usize) count * block->cell_size;
         block->free_cells[word] |= rest;
@@ -601,8 +597,8 @@ static MalHeapHeader *mal_gc_alloc_cell(MalHeap *heap, usize size, MalHeapType t
     if (cursor->bits == 0 && !mal_gc_refill_cells(heap, size_class)) return nullptr;
     u64 bits = cursor->bits;
     cursor->bits = bits & (bits - 1);
-    MalHeapHeader *cell =
-        (MalHeapHeader *) (cursor->base + (usize) __builtin_ctzll(bits) * MAL_GC_CELL_ALIGN);
+    MalHeapHeader *cell = mal_heap_block_cell_at(
+        cursor->block, cursor->word_offset + (usize) __builtin_ctzll(bits) * MAL_GC_CELL_ALIGN);
     mal_heap_cell_init(heap, cell, type, g_class_cell_size[size_class]);
     return cell;
 }
@@ -1135,12 +1131,11 @@ static inline void mal_gc_poison_cell(u8 *cell, u32 cell_size, usize start) {
 static void mal_heap_settle_dead(
     MalHeap *heap, MalGcBlock *block, usize word, u64 dead, MalHeapFinalizeFn finalize
 ) {
-    u8 *base = mal_gc_word_base(block, word);
     u64 owners = mal_heap_finalizes_every_dead_cell(heap) ? dead : dead & block->finalizable[word];
     if (heap->poison_on_free) {
         for (u64 rest = dead & ~owners; rest != 0; rest &= rest - 1) {
             MalHeapHeader *cell =
-                (MalHeapHeader *) (base + (usize) __builtin_ctzll(rest) * MAL_GC_CELL_ALIGN);
+                mal_heap_block_cell(block, word * 64 + (usize) __builtin_ctzll(rest));
             if (mal_heap_dead_cell_finalizes(heap, cell)) {
                 fprintf(stderr, "[gc verify] dead cell type=%d owns storage but never "
                     "reported mal_heap_cell_needs_finalizer\n", cell->type);
@@ -1149,11 +1144,11 @@ static void mal_heap_settle_dead(
         }
     }
     for (; owners != 0; owners &= owners - 1) {
-        finalize((MalHeapHeader *) (base + (usize) __builtin_ctzll(owners) * MAL_GC_CELL_ALIGN));
+        finalize(mal_heap_block_cell(block, word * 64 + (usize) __builtin_ctzll(owners)));
     }
     if (heap->poison_on_free) {
         for (u64 rest = dead; rest != 0; rest &= rest - 1) {
-            mal_gc_poison_cell(base + (usize) __builtin_ctzll(rest) * MAL_GC_CELL_ALIGN,
+            mal_gc_poison_cell((u8 *) mal_heap_block_cell(block, word * 64 + (usize) __builtin_ctzll(rest)),
                 block->cell_size, sizeof(MalHeapHeader));
         }
     }
@@ -1177,10 +1172,9 @@ static void mal_heap_sweep_block(
     for (usize word = 0; word < MAL_GC_BLOCK_WORDS; word++) {
         u64 allocated = starts[word] & ~block->free_cells[word];
         u64 dead = 0;
-        u8 *base = mal_gc_word_base(block, word);
-        for (u64 rest = allocated; rest != 0; rest &= rest - 1) {
+            for (u64 rest = allocated; rest != 0; rest &= rest - 1) {
             u32 bit = (u32) __builtin_ctzll(rest);
-            MalHeapHeader *header = (MalHeapHeader *) (base + (usize) bit * MAL_GC_CELL_ALIGN);
+            MalHeapHeader *header = mal_heap_block_cell(block, word * 64 + bit);
             u8 mark = mal_heap_sweep_mark_load(header);
             if (mal_heap_mark_is_current(mark, heap->mark_color)) {
                 // Marking has completed before the mutator owns sweep.
@@ -1382,10 +1376,9 @@ void mal_heap_walk_cells(MalHeap *heap, MalHeapFinalizeFn visit) {
             }
             const u64 *starts = g_class_cell_starts[block->size_class];
             for (usize word = 0; word < MAL_GC_BLOCK_WORDS; word++) {
-                u8 *base = mal_gc_word_base(block, word);
-                for (u64 rest = starts[word] & ~block->free_cells[word]; rest != 0;
+                            for (u64 rest = starts[word] & ~block->free_cells[word]; rest != 0;
                     rest &= rest - 1) {
-                    visit((MalHeapHeader *) (base + (usize) __builtin_ctzll(rest) * MAL_GC_CELL_ALIGN));
+                    visit(mal_heap_block_cell(block, word * 64 + (usize) __builtin_ctzll(rest)));
                 }
             }
         }
@@ -1406,9 +1399,8 @@ void mal_heap_finalize_all(MalHeap *heap, MalHeapFinalizeFn finalize) {
             const u64 *starts = g_class_cell_starts[block->size_class];
             for (usize word = 0; word < MAL_GC_BLOCK_WORDS; word++) {
                 u64 allocated = starts[word] & ~block->free_cells[word];
-                u8 *base = mal_gc_word_base(block, word);
-                for (u64 rest = allocated; rest != 0; rest &= rest - 1) {
-                    finalize((MalHeapHeader *) (base + (usize) __builtin_ctzll(rest) * MAL_GC_CELL_ALIGN));
+                            for (u64 rest = allocated; rest != 0; rest &= rest - 1) {
+                    finalize(mal_heap_block_cell(block, word * 64 + (usize) __builtin_ctzll(rest)));
                 }
                 block->free_cells[word] |= allocated;
                 block->finalizable[word] = 0;
