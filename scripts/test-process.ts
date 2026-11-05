@@ -63,6 +63,7 @@ export async function runTestProcess(
 			detached: process.platform !== "win32",
 			env: {
 				...options.environment,
+				MAL_TEST_KEEP_ARTIFACTS: options.keepArtifacts === true ? "1" : undefined,
 				TMPDIR: temporary,
 				TMP: temporary,
 				TEMP: temporary,

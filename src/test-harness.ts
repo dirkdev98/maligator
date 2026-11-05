@@ -1,18 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-/**
- * Shared native test harness. The feature-acceptance tests (web globals, URL, GC,
- * fibers, reactor, sockets, HTTP, host event loop, servers, fetch) all build a JS
- * fixture into a real isolate binary and run it; this module owns that pipeline so
- * the tests stay declarative.
- *
- * Two responsibilities beyond deduplication:
- *   - ordinary fixture frontends, generated objects, linked binaries, and the
- *     expensive C/Rust archives are atomically cached in the shared user cache;
- *     emitted `.c` and restored binaries use shared-cache work space unless the
- *     caller requests an explicit `outDir`.
- *   - the plain + MAL_GC_STRESS+MAL_GC_VERIFY re-run that every runner used to
- *     copy-paste is one constant ({@link STRESS_ENV}) plus small assert helpers.
- */
+/** Builds native fixtures with shared compilation caches and caller-owned scratch. */
 import type { ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import * as path from "node:path";
@@ -87,14 +74,16 @@ let harnessArtifactDirectory: string | undefined;
 
 function defaultHarnessArtifactDirectory(): string {
 	if (harnessArtifactDirectory !== undefined) return harnessArtifactDirectory;
-	const parent = path.join(maligatorCacheDirectory(), "work", "test-harness");
+	const ownedDirectory = process.env.MAL_TEST_ARTIFACT_DIRECTORY;
+	const parent =
+		ownedDirectory ?? path.join(maligatorCacheDirectory(), "work", "test-harness");
 	mkdirSync(parent, { recursive: true });
 	harnessArtifactDirectory = mkdtempSync(path.join(parent, `${String(process.pid)}-`));
-	process.once("exit", () => {
-		if (harnessArtifactDirectory !== undefined) {
-			rmSync(harnessArtifactDirectory, { recursive: true, force: true });
-		}
-	});
+	if (ownedDirectory === undefined)
+		process.once("exit", () => {
+			if (harnessArtifactDirectory !== undefined)
+				rmSync(harnessArtifactDirectory, { recursive: true, force: true });
+		});
 	return harnessArtifactDirectory;
 }
 

@@ -634,6 +634,10 @@ module resolution cannot reach the repository's `package.json` or `node_modules`
 sources and binaries for diagnosis; the runner prints the path.
 Reports and the shared build cache remain outside that disposable directory.
 
+Each native test file owns nested scratch for temporary files and default harness
+outputs. Cleanup runs after that file's teardown, so completed files do not accumulate
+storage throughout a shard. `--keep-artifacts` retains these directories too.
+
 ## Cache ownership
 
 Maligator bounds its shared user-cache artifacts without touching project source,

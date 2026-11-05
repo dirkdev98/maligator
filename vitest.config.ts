@@ -109,7 +109,7 @@ export default defineConfig({
 					name: "native",
 					include: ["tests/native/**/*.test.ts"],
 					globalSetup: ["tests/native/setup.ts"],
-					setupFiles: ["tests/setup-workers.ts"],
+					setupFiles: ["tests/setup-workers.ts", "tests/native/scratch.ts"],
 					pool: "forks",
 					maxWorkers: nativeForks,
 					sequence: { groupOrder: 1 },

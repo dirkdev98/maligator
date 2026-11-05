@@ -3,6 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { preparedNativeEvalConfig } from "../helpers/native-eval-config.ts";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const cliEntry = path.join(repositoryRoot, "src/index.ts");
@@ -142,12 +143,13 @@ describe("C library bindings", () => {
 	}, 300_000);
 
 	it("releases a dropped handle with collect when the garbage collector reclaims it", () => {
+		const { engine, surface } = preparedNativeEvalConfig({ node: true });
 		writeFileSync(
 			path.join(project, "collect.build.ts"),
 			`export default ${JSON.stringify({
 				entry: "collect.ts",
-				engine: { eval: true, realms: true },
-				surface: { node: true, webPlatform: true },
+				engine,
+				surface,
 				ffi: { shapes: { contract: "shapes.ffi.ts" } },
 			})};\n`,
 		);

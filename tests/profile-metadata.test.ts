@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -24,7 +25,10 @@ import { matchProfileSites } from "../src/compiler/target/profile-metadata.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import { validateRuntimeImageMetadata } from "../src/compiler/target/runtime-image.ts";
 import { prepareProfile, profileCaptureIdentity } from "../src/profile-artifact.ts";
-import { canonicalProfileJson } from "../src/source-profile-identity.ts";
+import {
+	canonicalProfileJson,
+	hashCanonicalProfileJson,
+} from "../src/source-profile-identity.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 import { lowerExecutionFixtureToProgramImage as lowerExecutionToProgramImage } from "./helpers/native-program-image.ts";
 
@@ -176,6 +180,21 @@ test("canonical profile arrays preserve sparse optional facts through JSON", () 
 		canonicalProfileJson(facts),
 	);
 	expect(() => canonicalProfileJson([1n])).toThrow("not serializable");
+});
+
+test("canonical profile hashing preserves ordered JSON bytes across UTF-8 chunks", () => {
+	const text = "é😀\ud800".repeat(127);
+	const input = Array.from({ length: 4096 }, (_, index) => ({
+		z: text,
+		values: [index, undefined, NaN],
+		absent: undefined,
+		a: index,
+	}));
+	const ordered = input.map(({ a, values, z }) => ({ a, values, z }));
+	const expected = JSON.stringify(ordered);
+	expect(hashCanonicalProfileJson(input)).toBe(hash("sha256", expected, "hex"));
+	expect(canonicalProfileJson(input)).toBe(expected);
+	expect(() => hashCanonicalProfileJson([1n])).toThrow("not serializable");
 });
 
 test("remaps stable Core function identities in inline chains and fact-flow targets", () => {

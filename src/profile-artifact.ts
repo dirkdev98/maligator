@@ -10,7 +10,7 @@ import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { profilePhaseName } from "./profile-phases.ts";
 import {
 	SourceProfileIdentities,
-	canonicalProfileJson as canonicalJson,
+	hashCanonicalProfileJson,
 } from "./source-profile-identity.ts";
 import type {
 	ProfileFunctionIdentity,
@@ -171,7 +171,7 @@ export function profileCaptureIdentity(prepared: PreparedProfile): string {
 	const payload = Object.fromEntries(
 		Object.entries(prepared).filter(([key]) => key !== "captureIdentity"),
 	);
-	return hash("sha256", canonicalJson(payload), "hex");
+	return hashCanonicalProfileJson(payload);
 }
 
 function validatedCaptureIdentity(prepared: PreparedProfile): string {

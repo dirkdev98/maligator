@@ -32,7 +32,13 @@ function start(mode: string, keep = false) {
 		],
 		{
 			stdio: ["ignore", "pipe", "pipe"],
-			env: { ...process.env, TMPDIR: parent, TMP: parent, TEMP: parent },
+			env: {
+				...process.env,
+				TMPDIR: parent,
+				TMP: parent,
+				TEMP: parent,
+				MAL_TEST_SCRATCH_REPORT: join(parent, "scratch-report.json"),
+			},
 		},
 	);
 	let stdout = "";
@@ -94,6 +100,26 @@ test("retains scratch only when explicitly requested and reports its path", asyn
 	expect(readFileSync(join(report.nested, "generated.c"), "utf8")).toContain("int main");
 	expect(run.output().stdout).toContain(`[test-artifacts] retained ${report.root}`);
 });
+
+test.each([false, true])(
+	"bounds scratch to each native test file with keep-artifacts=%s",
+	async (keep) => {
+		const run = start("file-scratch", keep);
+		expect(await run.done, run.output().stderr || run.output().stdout).toBe(0);
+		const report = join(run.parent, "scratch-report.json");
+		const directories = JSON.parse(readFileSync(report, "utf8")) as Array<string>;
+		expect(directories).toHaveLength(
+			readdirSync(resolve("tests/fixtures/test-process")).filter((file) =>
+				/^scratch-.*\.test\.ts$/.test(file),
+			).length,
+		);
+		for (const directory of directories) expect(existsSync(directory)).toBe(keep);
+		if (!keep) {
+			rmSync(report);
+			run.assertClean();
+		}
+	},
+);
 
 test.skipIf(process.platform === "win32").each([
 	["wait", "SIGTERM", 143],

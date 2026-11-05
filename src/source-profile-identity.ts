@@ -1,4 +1,4 @@
-import { hash } from "node:crypto";
+import { createHash, hash } from "node:crypto";
 import type {
 	SourceCallSite,
 	SourceFunctionOrigin,
@@ -97,6 +97,30 @@ export class SourceProfileIdentities {
 }
 
 export function canonicalProfileJson(value: unknown): string {
+	const parts: Array<string> = [];
+	writeCanonicalProfileJson(value, (part) => parts.push(part));
+	return parts.join("");
+}
+
+/** Hash canonical UTF-8 bytes without materializing the complete metadata string. */
+export function hashCanonicalProfileJson(value: unknown): string {
+	const digest = createHash("sha256");
+	let parts: Array<string> = [];
+	let units = 0;
+	writeCanonicalProfileJson(value, (part) => {
+		parts.push(part);
+		units += part.length;
+		if (units >= 64 * 1024) {
+			digest.update(parts.join(""));
+			parts = [];
+			units = 0;
+		}
+	});
+	if (parts.length > 0) digest.update(parts.join(""));
+	return digest.digest("hex");
+}
+
+function writeCanonicalProfileJson(value: unknown, write: (part: string) => void): void {
 	if (
 		value === null ||
 		typeof value === "string" ||
@@ -105,14 +129,29 @@ export function canonicalProfileJson(value: unknown): string {
 	) {
 		const encoded = JSON.stringify(value);
 		if (encoded === undefined) throw new Error("profile metadata is not serializable");
-		return encoded;
+		write(encoded);
+		return;
 	}
-	if (Array.isArray(value))
-		return `[${Array.from(value, (entry) => (entry === undefined ? "null" : canonicalProfileJson(entry))).join(",")}]`;
+	if (Array.isArray(value)) {
+		write("[");
+		let index = 0;
+		for (const entry of value) {
+			if (index++ > 0) write(",");
+			if (entry === undefined) write("null");
+			else writeCanonicalProfileJson(entry, write);
+		}
+		write("]");
+		return;
+	}
 	if (typeof value !== "object") throw new Error("profile metadata is not serializable");
-	return `{${Object.entries(value)
+	const entries = Object.entries(value)
 		.filter(([, entry]) => entry !== undefined)
-		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-		.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalProfileJson(entry)}`)
-		.join(",")}}`;
+		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+	write("{");
+	for (const [index, [key, entry]] of entries.entries()) {
+		if (index > 0) write(",");
+		write(`${JSON.stringify(key)}:`);
+		writeCanonicalProfileJson(entry, write);
+	}
+	write("}");
 }
