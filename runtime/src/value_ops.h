@@ -227,11 +227,23 @@ static inline i32 mal_ops_number_to_i32(f64 number) {
 __attribute__((cold, noinline)) i32 mal_ops_number_to_i32_cold(f64 number);
 
 /**
- * ToInt32 of a boxed Number; an int32-tagged value already is its own result. A double
- * converts out of line, since an inline select would keep its conversion on the
- * dependency chain of loops whose values are int32.
+ * ToInt32 of a boxed Number; an int32-tagged value already is its own result. This
+ * stays a select rather than a branch on the tag: values such as `hash >>> 0` alternate
+ * between int32 tags and doubles, which a branch would mispredict.
  */
 static inline i32 mal_ops_number_value_to_i32(MalValue value) {
+    return value >= MAL_VALUE_TAG_BASE
+        ? (i32) (u32) (value & MASK_INT32)
+        : mal_ops_number_to_i32(mal_value_to_f64(value));
+}
+
+/**
+ * ToInt32 of a boxed Number expected to carry an int32 tag, such as the running
+ * state of `seed = Math.imul(seed, a) + b | 0`. The tag extraction costs nothing on
+ * the loop's dependency chain, where the select above waits for its double conversion;
+ * a double converts out of line, and a mix of both pays for mispredicted branches.
+ */
+static inline i32 mal_ops_int32_tagged_number_to_i32(MalValue value) {
     if (__builtin_expect(value >= MAL_VALUE_TAG_BASE, 1)) return (i32) (u32) (value & MASK_INT32);
     return mal_ops_number_to_i32_cold(mal_value_to_f64(value));
 }

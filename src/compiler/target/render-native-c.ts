@@ -11755,7 +11755,7 @@ class NativeInstructionEmission {
 						if (numeric !== null) return `mal_ops_number_to_i32(${numeric})`;
 						const value = this.boxedOperand(operand);
 						guards.push(`mal_ops_is_number(${value})`);
-						return `mal_ops_number_value_to_i32(${value})`;
+						return `mal_ops_int32_tagged_number_to_i32(${value})`;
 					};
 					const product = `mal_scalar_i32_from_bits((u32)(${int32(first)}) * (u32)(${int32(second)}))`;
 					guard = guards.length === 0 ? "true" : guards.join(" && ");
