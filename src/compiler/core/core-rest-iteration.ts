@@ -161,7 +161,7 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 	requiredFunctionOpcodesAny: ["createRestArguments"],
 	requiredAnalyses: [],
 	wakesOn: ["body", "cfg", "facts"],
-	changes: { cfg: true, calls: false, facts: true, representations: false },
+	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
 		const fn = context.program.function(context.item.function);

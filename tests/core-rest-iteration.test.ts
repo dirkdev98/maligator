@@ -39,6 +39,15 @@ it("keeps rest iteration virtual while forwarding the original arguments", () =>
 	).toBe(true);
 });
 
+it("updates call summaries when a rest element becomes a callback argument", () => {
+	const output = inspect(
+		"let total=0;for(const value of values)total+=base(value);return total;",
+	);
+	expect(
+		output.native.instructions.some((plan) => plan?.kind === "virtual-packed-rest-array"),
+	).toBe(true);
+});
+
 it.each([
 	["an escaped rest array", `globalThis.saved=values;${iterate}`],
 	["rest writes", `values[1]=base;${iterate}`],
