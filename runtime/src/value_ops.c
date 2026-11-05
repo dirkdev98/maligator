@@ -26,6 +26,10 @@ bool mal_ops_try_primitive_to_number(MalValue value, f64 *number_out) {
     return false;
 }
 
+i32 mal_ops_number_to_i32_cold(f64 number) {
+    return mal_ops_number_to_i32(number);
+}
+
 f64 mal_ops_number_clamp_relative(f64 number, f64 length) {
     f64 relative = mal_ops_number_to_integer_or_infinity(number);
     if (relative < 0.0) {

@@ -39,37 +39,47 @@ describe("partially static numeric call profiles", () => {
 		},
 	);
 
-	it.each(["+", "-"])(
-		"fuses truncated %s only after an exact integer proof",
-		(operator) => {
-			for (const finish of ["&", "|", "^", "<<", ">>"]) {
-				for (const position of ["left", "right"]) {
-					const expression = `(Math.imul(x,y) ${operator} Math.clz32(x))`;
-					const output = inspectStaticValueFunction(
-						`function probe(x,y){return ${position === "left" ? `${expression} ${finish} 1` : `1 ${finish} ${expression}`};}globalThis.probe=probe;`,
-						"probe",
-					);
-					const image = deserializeCompilerArtifact(
-						serializeCompilerArtifact(output.image),
-					);
-					expect(
-						image.native.functions.some((fn) =>
-							fn.specializations.some(
-								(region) => region.representation === "binary-pairs-truncating-i32",
-							),
+	it.each(["+", "-"])("fuses truncated %s over exact integer operands", (operator) => {
+		for (const finish of ["&", "|", "^", "<<", ">>"]) {
+			for (const position of ["left", "right"]) {
+				const expression = `(Math.imul(x,y) ${operator} Math.clz32(x))`;
+				const output = inspectStaticValueFunction(
+					`function probe(x,y){return ${position === "left" ? `${expression} ${finish} 1` : `1 ${finish} ${expression}`};}globalThis.probe=probe;`,
+					"probe",
+				);
+				const image = deserializeCompilerArtifact(
+					serializeCompilerArtifact(output.image),
+				);
+				expect(
+					image.native.functions.some((fn) =>
+						fn.specializations.some(
+							(region) => region.representation === "binary-pairs-truncating-i32",
 						),
-					).toBe(true);
-				}
+					),
+				).toBe(true);
 			}
+		}
+	});
+
+	it.each(["(Math.pow(x,y)+1)|0", "(Math.imul(x,y)+1)|x", "(x+y)&255"])(
+		"guards truncating integer fusion over possible Numbers in %s",
+		(expression) => {
+			const output = inspectStaticValueFunction(
+				`function probe(x,y){let sum;return ${expression};}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(
+				output.native.specializations.some(
+					(region) => region.representation === "binary-pairs-truncating-i32",
+				),
+			).toBe(true);
 		},
 	);
 
 	it.each([
-		"(Math.pow(x,y)+1)|0",
 		"(1.75+Math.imul(x,y))|0",
 		"(Math.imul(x,y)+1)>>>0",
 		"(Math.imul(x,y)*Math.imul(y,x))|0",
-		"(Math.imul(x,y)+1)|x",
 		"[sum=(Math.imul(x,y)+1),sum|0]",
 	])("declines truncating integer fusion for %s", (expression) => {
 		const output = inspectStaticValueFunction(

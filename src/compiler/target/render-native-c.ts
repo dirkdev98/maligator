@@ -10607,6 +10607,30 @@ class NativeInstructionEmission {
 						? `(r${register} >= -2147483648.0 && r${register} <= 2147483647.0 && r${register} == trunc(r${register}))`
 						: `mal_value_is_int32(${this.boxed(register)})`;
 			if (fusion.role === "start") {
+				const unboxed = (register: number): boolean =>
+					this.reps[register] === "int32" ||
+					this.reps[register] === "number" ||
+					instructionInputIsInt32(this.context.facts, register);
+				if (unboxed(left) && unboxed(right)) {
+					// Unboxed Numbers need no generic fallback: the finish's bitwise operator
+					// reads only ToInt32 of this sum, which the cold side computes out of line
+					// so the select-free integer side stays the loop's only dependency.
+					const number = (register: number): string =>
+						this.reps[register] === "number"
+							? this.typedNumber(register)
+							: `(f64)(${integer(register)})`;
+					return [
+						`__nf_${fusion.id}_ok = ${integerGuard(left)} && ${integerGuard(right)};`,
+						`if (__builtin_expect(__nf_${fusion.id}_ok, 1)) {`,
+						`  __nf_${fusion.id}_integer = mal_scalar_i32_from_bits((u32)(${integer(left)}) ${operator} (u32)(${integer(right)}));`,
+						`  __nf_${fusion.id}_value = (f64)(${integer(left)}) ${operator} (f64)(${integer(right)});`,
+						`} else {`,
+						`  __nf_${fusion.id}_value = ${number(left)} ${operator} ${number(right)};`,
+						`  __nf_${fusion.id}_integer = mal_ops_number_to_i32_cold(__nf_${fusion.id}_value);`,
+						`  __nf_${fusion.id}_ok = true;`,
+						`}`,
+					];
+				}
 				const fallback = this.emitGenericInstruction();
 				if (fallback === null) return null;
 				// Retain the exact Number result for a failed finish guard, including restored artifacts.

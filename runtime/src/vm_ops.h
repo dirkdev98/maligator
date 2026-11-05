@@ -798,6 +798,23 @@ static inline MalValue mal_vm_unary_op_fast(MalVm *vm, MalUnaryOp op, MalValue v
         (mal_ops_is_number(value) || mal_value_is_bigint(value))) {
         return value;
     }
+    if (op == MAL_UNARY_PLUS && mal_ops_is_number(value)) return value;
+    // ToNumber of undefined, null and a Boolean runs no user code and cannot throw.
+    // Compiled code may evaluate a coercion before the branch that tests for these,
+    // as in `sum += values[index] ?? 0` over a holey array.
+    if (op == MAL_UNARY_PLUS || op == MAL_UNARY_TO_NUMERIC) {
+        if (mal_value_is_undefined(value)) return MAL_VALUE_NAN;
+        if (mal_value_is_null(value)) return mal_value_from_i32(0);
+        if (mal_value_is_boolean(value)) return mal_value_from_i32(mal_value_to_boolean(value) ? 1 : 0);
+    }
+    if (op == MAL_UNARY_NEGATE && mal_ops_is_number(value)) {
+        // Zero and INT32_MIN leave the int32 range or produce -0 when negated.
+        if (mal_value_is_int32(value) && mal_value_to_i32(value) != 0 &&
+            mal_value_to_i32(value) != INT32_MIN) {
+            return mal_value_from_i32(-mal_value_to_i32(value));
+        }
+        return mal_value_from_f64_convert_nan(-mal_ops_number_as_f64(value));
+    }
     if (op == MAL_UNARY_INCREMENT || op == MAL_UNARY_DECREMENT) {
         if (mal_value_is_int32(value)) {
             i32 number = mal_value_to_i32(value);
@@ -3050,6 +3067,14 @@ static inline __attribute__((always_inline)) MalValue mal_vm_indexed_fast_load(
         if (mal_vm_typed_array_try_get_index(
                 object_value, mal_ops_number_as_f64(key_value), &element)) {
             return element;
+        }
+    } else if (mal_value_is_string(key_value)) {
+        // A computed name that stays the same at a site, such as `record[key]` with a
+        // constant key, otherwise pays the out-of-line call for a monomorphic hit.
+        const MalObject *object = mal_vm_as_object(object_value);
+        MalValue value;
+        if (object != nullptr && mal_vm_object_try_load_monomorphic(object, key_value, ic, &value)) {
+            return value;
         }
     }
     return mal_vm_indexed_load_keyed(vm, object_value, key_value, ic);
