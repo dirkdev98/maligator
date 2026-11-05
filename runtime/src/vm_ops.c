@@ -3876,11 +3876,16 @@ MalValue mal_vm_call_known_native(MalVm *vm, MalNativeFunctionCallback callback,
 #if !MAL_REALMS
     // A plain call to a loaded primordial cannot collect before the exact call roots
     // its own operands, so it needs neither this frame's roots nor its value stack.
-    if (flags == 0 && callback != nullptr && (u32) operation < MAL_KNOWN_OPERATION_COUNT) {
+    // Interpreted calls pass no callback; a native primordial supplies its own.
+    if (flags == 0 && (u32) operation < MAL_KNOWN_OPERATION_COUNT) {
         MalValue loaded = vm->known_primordial_values[nodes[operation]];
-        if (loaded != 0) {
+        MalNativeFunctionCallback exact = callback;
+        if (exact == nullptr && loaded != 0 && mal_value_is_native_function_object(loaded)) {
+            exact = mal_native_function_object_callback(mal_value_to_native_function_object(loaded));
+        }
+        if (loaded != 0 && exact != nullptr) {
             MalCompletion completion =
-                mal_vm_call_exact_native(vm, callback, loaded, receiver, args, count);
+                mal_vm_call_exact_native(vm, exact, loaded, receiver, args, count);
             if (completion.kind == MAL_COMPLETION_THROW) vm->completion = completion;
             return completion.value;
         }
