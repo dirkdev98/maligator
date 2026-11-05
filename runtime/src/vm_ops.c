@@ -940,14 +940,9 @@ MalValue mal_vm_materialize_stack_object_fields(
     return mal_value_from_object(object);
 }
 
-MalValue mal_vm_create_object_shaped(MalVm *vm, MalShape *shape, const MalValue *values, u32 count) {
-    // A static object literal: the final shape is known, so create the object
-    // directly in that shape and bulk-fill its inline slots in key order, instead
-    // of transitioning the shape property-by-property. No safepoint runs between
-    // the allocation and the fill, so the half-initialized object is never visible
-    // to the collector and caller-local `values` remain live through the copy.
-    assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
-    assert(shape->inline_count == count);
+MalValue mal_vm_create_object_shaped_slow(
+    MalVm *vm, MalShape *shape, const MalValue *values, u32 count
+) {
     MAL_PERF_COUNT(object_shaped_creations);
     MalObject *prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);

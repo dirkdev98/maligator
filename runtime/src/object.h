@@ -227,6 +227,43 @@ static inline void mal_object_mark_as_prototype(MalObject *object) {
     }
 }
 
+// Records have a few fields; a libc memcpy call per construction costs more than the copy.
+static inline __attribute__((always_inline)) void mal_object_copy_initial_fields(
+    MalValue *fields, const MalValue *values, u32 count
+) {
+    switch (count) {
+        case 8: fields[7] = values[7]; [[fallthrough]];
+        case 7: fields[6] = values[6]; [[fallthrough]];
+        case 6: fields[5] = values[5]; [[fallthrough]];
+        case 5: fields[4] = values[4]; [[fallthrough]];
+        case 4: fields[3] = values[3]; [[fallthrough]];
+        case 3: fields[2] = values[2]; [[fallthrough]];
+        case 2: fields[1] = values[1]; [[fallthrough]];
+        case 1: fields[0] = values[0]; return;
+        default: memcpy(fields, values, sizeof(MalValue) * count); return;
+    }
+}
+
+/** Initialize a fresh compact cell directly in its final shape with `count` fields. */
+static inline __attribute__((always_inline)) void mal_object_init_shaped_cell(
+    MalObject *object, MalObject *prototype, MalShape *shape, const MalValue *values, u32 count
+) {
+    assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    assert(shape->inline_count == count);
+    MalHeapHeader header = object->header;
+    *object = (MalObject) {
+        .header = header,
+        .extensible = true,
+        .storage_kind = MAL_OBJECT_COMPACT,
+        .slot_capacity = (u8) count,
+        .shape = shape,
+    };
+    memcpy(object + 1, &prototype, sizeof(prototype));
+    mal_object_mark_as_prototype(prototype);
+    mal_object_copy_initial_fields(
+        (MalValue *) ((u8 *) (object + 1) + sizeof(void *)), values, count);
+}
+
 static inline bool mal_object_is_locked_primordial(const MalObject *object) {
     return object != nullptr && object->primordial_locked;
 }

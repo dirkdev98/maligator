@@ -3652,13 +3652,34 @@ u64 mal_vm_stack_object_materialization_count(void);
 MalValue mal_vm_materialize_record(
     MalVm *vm, MalValue producer, struct MalString **keys, MalValue *values, u32 count);
 
+MalValue mal_vm_create_object_shaped_slow(
+    MalVm *vm, struct MalShape *shape, const MalValue *values, u32 count);
+
 /**
- * Create a plain object directly in `shape` (built from the literal's static
- * keys) with `count` inline slots filled from `values` in key order. The
- * Both backends cache the immutable shape per literal site. See
- * mal_vm_create_object_shaped in vm_ops.c.
+ * Create a plain object directly in `shape` (built from the literal's static keys)
+ * with `count` inline slots filled from `values` in key order; both backends cache
+ * the immutable shape per literal site. Inlined so a literal's constant count
+ * selects its size class and copy at compile time. No safepoint runs between the
+ * allocation and the fill, so the half-initialized object is never visible to the
+ * collector and caller-local `values` remain live through the copy.
  */
-MalValue mal_vm_create_object_shaped(MalVm *vm, struct MalShape *shape, const MalValue *values, u32 count);
+static inline __attribute__((always_inline)) MalValue mal_vm_create_object_shaped(
+    MalVm *vm, struct MalShape *shape, const MalValue *values, u32 count
+) {
+    MalHeapHeader *cell = vm->heap.fail_next_cell_allocation ? nullptr
+        : mal_heap_cell_take(
+            &vm->heap, sizeof(MalObject) + sizeof(void *) + sizeof(MalValue) * count,
+            MAL_HEAP_OBJECT);
+    if (__builtin_expect(cell == nullptr, 0)) {
+        return mal_vm_create_object_shaped_slow(vm, shape, values, count);
+    }
+    MAL_PERF_COUNT(object_shaped_creations);
+    mal_object_init_shaped_cell(
+        (MalObject *) cell, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+        shape, values, count);
+    mal_object_slot_coallocations++;
+    return mal_value_from_object((MalObject *) cell);
+}
 
 MalValue mal_vm_op_create_array(MalVm *vm, i32 length);
 MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32 cache_slot);
