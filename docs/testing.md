@@ -240,6 +240,14 @@ incomplete reports fail aggregation.
 selecting a lane absent from a tier fails before execution. Partial smoke selections
 never publish the full smoke cache stamp.
 
+Use the manual [Linux diagnostic workflow](../.github/workflows/linux-diagnostic.yml)
+for reviewed scratch programs that need the CI toolchain. Package `run.sh` and its
+inputs in a gzip tar archive, then supply its base64 encoding and compressed SHA-256
+digest. The workflow verifies the archive before extraction, runs from `main` with
+read-only repository permissions, bounds execution, and retains the bundle and logs
+as `linux-diagnostic-<run>-<attempt>`. The entry point receives its directory through
+`DIAGNOSTIC_DIR`; keep generated evidence beneath `.cache/linux-diagnostic`.
+
 The native-remainder workflow runs on pushes to `main`, Saturdays at 02:43 UTC,
 and manual dispatch. Its nine independent jobs cover Linux x64 (three normal and two
 sanitizer shards) and macOS ARM (two of each), with a three-hour limit per job:

@@ -1,0 +1,130 @@
+name: Run a pinned Linux diagnostic
+
+run-name: Linux diagnostic ${{ inputs.label }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        description: Short description of the reviewed experiment
+        required: true
+        type: string
+      bundle:
+        description: Base64-encoded gzip tar containing run.sh and its inputs
+        required: true
+        type: string
+      sha256:
+        description: SHA-256 of the compressed archive
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-diagnostic
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  MALIGATOR_WORKERS: "4"
+  NODE_OPTIONS: ""
+
+jobs:
+  diagnostic:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the diagnostic revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify and unpack the reviewed bundle
+        id: bundle
+        run: |
+          python3 - <<'PY'
+          import base64
+          import gzip
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import tarfile
+
+          inputs = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())["inputs"]
+          digest = inputs["sha256"]
+          if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+              raise ValueError("Expected a lowercase SHA-256 archive digest")
+          packed = base64.b64decode(inputs["bundle"], validate=True)
+          if hashlib.sha256(packed).hexdigest() != digest:
+              raise ValueError("Diagnostic bundle digest mismatch")
+          with gzip.GzipFile(fileobj=io.BytesIO(packed)) as compressed:
+              unpacked = compressed.read(8 * 1024 * 1024 + 1)
+          if len(unpacked) > 8 * 1024 * 1024:
+              raise ValueError("Diagnostic archive exceeds 8 MiB unpacked")
+          root = Path(".cache/linux-diagnostic")
+          payload = root / "payload"
+          payload.mkdir(parents=True)
+          with tarfile.open(fileobj=io.BytesIO(unpacked), mode="r:") as archive:
+              members = archive.getmembers()
+              if len(members) > 64 or sum(member.size for member in members) > 4 * 1024 * 1024:
+                  raise ValueError("Diagnostic bundle exceeds file limits")
+              for member in members:
+                  name = PurePosixPath(member.name)
+                  if name.is_absolute() or ".." in name.parts or not name.parts:
+                      raise ValueError("Diagnostic bundle paths must stay inside the payload")
+                  if not member.isfile() and not member.isdir():
+                      raise ValueError("Diagnostic bundle accepts only regular files and directories")
+              archive.extractall(payload, members=members, filter="data")
+          if not (payload / "run.sh").is_file():
+              raise ValueError("Diagnostic bundle requires run.sh")
+          (root / "bundle.tar.gz").write_bytes(packed)
+          files = [
+              {"path": str(file.relative_to(payload)), "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}
+              for file in sorted(payload.rglob("*")) if file.is_file()
+          ]
+          (root / "manifest.json").write_text(json.dumps({"bundleSha256": digest, "files": files}, indent=2) + "\n")
+          print(f"Verified {len(files)} diagnostic files: {digest}")
+          PY
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Install the matching LLVM linker
+        run: |
+          diagnostic_llvm_major="$("$CC" -dumpversion | cut -d. -f1)"
+          sudo apt-get install --yes "lld-$diagnostic_llvm_major" time
+
+      - name: Check the runner environment
+        run: |
+          npm run env:check -- --json > .cache/linux-diagnostic/environment.log
+          node src/index.ts cache status > .cache/linux-diagnostic/cache.log
+          df -h . > .cache/linux-diagnostic/disk.log
+          ps -Ao pid,pcpu,etime,args > .cache/linux-diagnostic/processes.log
+          git rev-parse HEAD > .cache/linux-diagnostic/revision.txt
+
+      - name: Run the reviewed diagnostic
+        timeout-minutes: 20
+        env:
+          DIAGNOSTIC_DIR: ${{ github.workspace }}/.cache/linux-diagnostic/payload
+        run: >-
+          timeout --signal=TERM --kill-after=15s 1200s
+          bash "$DIAGNOSTIC_DIR/run.sh"
+          > .cache/linux-diagnostic/execution.log 2>&1
+
+      - name: Retain diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/linux-diagnostic
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
