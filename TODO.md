@@ -488,13 +488,14 @@ Arithmetic work should support these paths or fix correctness defects.
       removes almost none of the self-compile's checks; those are reads inside
       import cycles. Prefixes that continue past calls into data-only dependencies
       removed almost none either.
-- [ ] Release a grown slot or element buffer when its owner moves out of it. Managed
-      value buffers (an owner-marked cell type instead of RAW buffers with a finalizer)
-      saved 0.5% of Express cycles and 3% of the churn loop, but a buffer left behind
-      by growth waited for a collection, often a major, where RAW realloc freed it at
-      once: the self-compile mapped 14.8 GB instead of 8.1 GB and ran 9% slower. Freeing
-      the old buffer outside a major cycle, and counting buffers in live bytes without
-      doubling the nursery trigger, are the open parts.
+- [ ] Keep managed value buffers out of the nursery trigger. Moving grown slots and
+      Array elements from RAW buffers with finalizers into owner-marked cells saved
+      0.5% of Express cycles and 3% of the churn loop. Releasing the old buffer on
+      growth outside a major cycle brought the self-compile's mapped memory from
+      14.8 GB back to 10.9 GB (8.1 GB with RAW buffers), but buffers then count as
+      live bytes, so the nursery doubled, minors fell from 65 to 27, system time rose
+      by 11 s and the run took 10% longer. Buffers need their own blocks, or survivor
+      accounting by kind, before the trigger can exclude them.
 - [ ] Bring the native self-compile's memory closer to its live set. Peak live
       bytes stay near 900 MB, but maximum RSS is 4.4 GB now that process GC
       pressure backs off past its budget (it was 3.5 GB while pressure forced 183
