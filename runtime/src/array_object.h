@@ -271,12 +271,18 @@ typedef enum MalArrayDenseStore {
  */
 MalArrayDenseStore mal_array_object_dense_store_general(MalArrayObject *array, u32 index, MalValue value);
 
-/* Literals and pushes append into capacity reserved beforehand, which needs no
- * gap fill or growth and should not cost a call per element. */
+/* Overwrites, and literals and pushes appending into capacity reserved beforehand,
+ * need no gap fill or growth and should not cost a call per element. */
 static inline MalArrayDenseStore mal_array_object_dense_store(
     MalArrayObject *array, u32 index, MalValue value
 ) {
 #if !MAL_PERF_STATS
+    if (array->elements != nullptr && index < array->dense_count) {
+        mal_gc_write_barrier(array->elements[index]);
+        array->elements[index] = value;
+        mal_array_object_card(array, index, value);
+        return MAL_ARRAY_DENSE_APPLIED;
+    }
     if (index == array->dense_count && index < array->capacity && array->elements != nullptr) {
         array->elements[index] = value;
         array->dense_count = index + 1;
