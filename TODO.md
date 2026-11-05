@@ -488,6 +488,19 @@ Arithmetic work should support these paths or fix correctness defects.
       removes almost none of the self-compile's checks; those are reads inside
       import cycles. Prefixes that continue past calls into data-only dependencies
       removed almost none either.
+- [ ] Find why three in-cell slots for empty object literals crashed Express. Giving
+      `mal_vm_op_create_object` a 48-byte cell with `slot_capacity` 3 made the Express
+      in-process benchmark segfault in about one run in eight, tracing a minor's object
+      whose shape word was overwritten; GC stress and verification never caught it. Some
+      path still assumes an empty compact object has no fields. The reserve would let
+      small records skip slot buffers entirely.
+- [ ] Release a grown slot or element buffer when its owner moves out of it. Managed
+      value buffers (an owner-marked cell type instead of RAW buffers with a finalizer)
+      saved 0.5% of Express cycles and 3% of the churn loop, but a buffer left behind
+      by growth waited for a collection, often a major, where RAW realloc freed it at
+      once: the self-compile mapped 14.8 GB instead of 8.1 GB and ran 9% slower. Freeing
+      the old buffer outside a major cycle, and counting buffers in live bytes without
+      doubling the nursery trigger, are the open parts.
 - [ ] Bring the native self-compile's memory closer to its live set. Peak live
       bytes stay near 900 MB, but maximum RSS is 4.4 GB now that process GC
       pressure backs off past its budget (it was 3.5 GB while pressure forced 183
