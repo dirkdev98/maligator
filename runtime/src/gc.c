@@ -386,6 +386,7 @@ struct MalGcState {
     // bytes_allocated at the previous mark step, for the assist budget.
     usize bytes_at_last_step;
     usize last_major_live_bytes;
+    usize last_major_raw_owned_bytes;
     usize promotion_debt;
     u64 promoted_bytes;
 
@@ -3414,6 +3415,7 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
     }
     if (major) {
         g_gc->last_major_live_bytes = vm->heap.live_bytes;
+        g_gc->last_major_raw_owned_bytes = vm->heap.current_usage.raw_owned_bytes;
         g_gc->promotion_debt = 0;
     } else if (vm->heap.live_bytes > live_before) {
         usize promoted = vm->heap.live_bytes - live_before;
@@ -3542,6 +3544,7 @@ static void mal_gc_cycle_finish_sweep(MalVm *vm) {
     g_gc->phase = MAL_GC_PHASE_IDLE;
     g_gc->major_collection = false;
     g_gc->last_major_live_bytes = vm->heap.live_bytes;
+    g_gc->last_major_raw_owned_bytes = vm->heap.current_usage.raw_owned_bytes;
     g_gc->promotion_debt = 0;
 
     if (g_gc->verify_enabled) {
@@ -3798,18 +3801,19 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         return; // polled for preemption only; nothing owed
     }
 
-    // A collection is due. The first is a major, which sets the live-set baseline. Only
-    // promoted bytes can become old garbage, so later majors wait until minors have
-    // promoted half of what the last major kept, with a floor for small heaps. Pressure
-    // drops the floor but keeps the debt: a live set larger than the process budget
-    // would otherwise pay a futile major for every few chunks it maps.
+    // Promotions and growing side buffers can both add old garbage. Pressure also
+    // accounts for net RAW growth since the last major, while a stable live set
+    // above the process budget does not repeatedly force a major.
     usize major_debt = g_gc->last_major_live_bytes / 2;
+    usize required_debt = major_debt > MAL_GC_MIN_MAJOR_DEBT ? major_debt
+        : pressure ? 0 : MAL_GC_MIN_MAJOR_DEBT;
+    usize raw_growth = vm->heap.current_usage.raw_owned_bytes > g_gc->last_major_raw_owned_bytes
+        ? vm->heap.current_usage.raw_owned_bytes - g_gc->last_major_raw_owned_bytes : 0;
     bool major = g_gc->major_cadence_fixed
         ? (pressure && g_gc->promotion_debt >= major_debt) ||
             (g_gc->collection_index % g_gc->major_every) == 0
-        : g_gc->collection_index == 0 ||
-            g_gc->promotion_debt >= (major_debt > MAL_GC_MIN_MAJOR_DEBT ? major_debt
-                : pressure ? 0 : MAL_GC_MIN_MAJOR_DEBT);
+        : g_gc->collection_index == 0 || g_gc->promotion_debt >= required_debt ||
+            (pressure && raw_growth >= required_debt - g_gc->promotion_debt);
     if (!major) {
         g_gc->process_pressure = false;
         // Minor: STW-inline, exactly as today (short by construction).
