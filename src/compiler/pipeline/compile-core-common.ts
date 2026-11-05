@@ -13,6 +13,7 @@ import type {
 	CoreInstrumentationMode,
 	CoreOptimizationReport,
 } from "../core/core-optimization-report.ts";
+import type { CoreFunctionPass } from "../core/core-pass.ts";
 import { optimizeCore } from "../core/optimize.ts";
 import type { DirectEvalContext } from "../frontend/direct-eval-context.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
@@ -28,6 +29,7 @@ export type CompileCorePhase =
 	| "execution to image";
 
 export interface CompileCoreOptions {
+	privateRestIteration?: CoreFunctionPass;
 	facts?: CompilerProgramFacts;
 	optimization?: "development" | "full";
 	/** Derive source-site identities and compiler remarks for a profiled image. */
@@ -95,6 +97,7 @@ export function optimizeConstructedCore(
 ): CoreCompilation {
 	const optimizedResult = runPhase("optimize core ir", () => {
 		return optimizeCore(core, {
+			privateRestIteration: options.privateRestIteration,
 			verification: options.coreVerification,
 			mode: options.optimization ?? "full",
 			instrumentation: options.coreInstrumentation ?? "off",

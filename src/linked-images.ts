@@ -10,6 +10,7 @@ import {
 } from "./compiler-cache-identity.ts";
 import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
 import type { CoreModuleInterface } from "./compiler/core/core-compilation.ts";
+import { lowerPrivateRestIteration } from "./compiler/core/core-rest-iteration.ts";
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
 import type {
 	ExternalModuleInterface,
@@ -568,6 +569,7 @@ export function compileLinkedImage(
 			: [];
 	phases.semanticMs += Date.now() - semanticStartedAt;
 	const compileOptions: CompileCoreOptions = {
+		privateRestIteration: lowerPrivateRestIteration,
 		facts,
 		optimization: "development",
 		semanticLowering: {

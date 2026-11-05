@@ -89,16 +89,18 @@ afterAll(() => {
 	}
 });
 
-test("keeps native advisory target planning outside the eval compiler import graph", () => {
+test("keeps closed-world planning outside the eval compiler import graph", () => {
 	const graph = buildModuleGraph(
 		path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
 		{
 			stripTypes: stripCompactTypes,
 		},
 	);
-	expect(
-		graph.modules.has(path.resolve("src/compiler/target/mapped-function-array-hints.ts")),
-	).toBe(false);
+	for (const file of [
+		"src/compiler/target/mapped-function-array-hints.ts",
+		"src/compiler/core/core-rest-iteration.ts",
+	])
+		expect(graph.modules.has(path.resolve(file))).toBe(false);
 });
 
 const rel = (absolute: string) => path.relative(root, absolute);

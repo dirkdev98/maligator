@@ -1,3 +1,4 @@
+import { lowerPrivateRestIteration } from "../core/core-rest-iteration.ts";
 import { mappedFunctionArrayCallHints } from "../target/mapped-function-array-hints.ts";
 import { serializeRuntimeImage } from "../target/program-image-codec.ts";
 import type {
@@ -17,6 +18,7 @@ export function compileEntrypointToBuffer(
 		(<T>(_phase: CompileEntrypointToBufferPhase, run: () => T): T => run());
 	const { semantic, facts } = analyzeEntrypoint(entrypointPath, options, runPhase);
 	const runtime = compileSemanticProgramToRuntimeImage(semantic, {
+		privateRestIteration: lowerPrivateRestIteration,
 		mappedFunctionArrayCallHints,
 		semanticLowering: { intrinsicGlobalReads: options.intrinsicGlobalReads },
 		facts,

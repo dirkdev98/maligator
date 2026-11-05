@@ -1,4 +1,5 @@
 import type { ConstructedCoreCompilation } from "../core/core-compilation.ts";
+import { lowerPrivateRestIteration } from "../core/core-rest-iteration.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type { CoreTargetPreparation } from "../target/lower-core-target.ts";
 import { prepareCoreCompilationToTargets } from "../target/lower-core-target.ts";
@@ -22,7 +23,14 @@ export function compileSemanticProgramToProgramImage(
 ): ProgramImage {
 	const runPhase =
 		options.runPhase ?? (<T>(_phase: CompileCorePhase, run: () => T): T => run());
-	const optimized = optimizeSemanticProgramToCore(semantic, options, runPhase);
+	const optimized = optimizeSemanticProgramToCore(
+		semantic,
+		{
+			...options,
+			privateRestIteration: options.privateRestIteration ?? lowerPrivateRestIteration,
+		},
+		runPhase,
+	);
 	return lowerOptimizedCoreToProgramImage(optimized, options, runPhase);
 }
 
@@ -32,7 +40,14 @@ export function compileConstructedCoreToProgramImage(
 	runPhase: <T>(phase: CompileCorePhase, run: () => T) => T = options.runPhase ??
 		(<T>(_phase: CompileCorePhase, run: () => T): T => run()),
 ): ProgramImage {
-	const optimized = optimizeConstructedCore(core, options, runPhase);
+	const optimized = optimizeConstructedCore(
+		core,
+		{
+			...options,
+			privateRestIteration: options.privateRestIteration ?? lowerPrivateRestIteration,
+		},
+		runPhase,
+	);
 	return lowerOptimizedCoreToProgramImage(optimized, options, runPhase);
 }
 

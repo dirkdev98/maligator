@@ -1,4 +1,10 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
+import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-runtime-program.ts";
+import { deserializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function inspect(
@@ -12,6 +18,33 @@ function inspect(
 	);
 }
 const iterate = "let total=base;for(const value of values)total+=value;return total;";
+
+it("lowers private rest iteration in configured portable runtime images", () => {
+	const directory = mkdtempSync(join(tmpdir(), "mal-rest-wire-"));
+	try {
+		const entrypoint = join(directory, "entry.mjs");
+		writeFileSync(
+			entrypoint,
+			`function target(base,...values){${iterate}} globalThis.target=target;`,
+		);
+		const image = deserializeRuntimeImage(
+			compileEntrypointToBuffer(entrypoint, {
+				buildConfig: resolveBuildConfig({ engine: { eval: false, realms: false } }),
+			}),
+		);
+		const target = image.functions.find(
+			(fn) =>
+				String.fromCharCode(...(image.stringConstants[fn.nameStringIndex] ?? [])) ===
+				"target",
+		);
+		expect(target).toBeDefined();
+		expect(
+			target!.instructions.some((instruction) => instruction.opcode === "GET_ITERATOR"),
+		).toBe(false);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
 
 it("lowers a private rest loop to virtual packed reads", () => {
 	const output = inspect(iterate);

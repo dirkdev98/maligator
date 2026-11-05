@@ -43,6 +43,7 @@ import type {
 } from "./core-optimization-report.ts";
 import { forwardCoreOwnSlotCallLoads } from "./core-own-slot-call-loads.ts";
 import { CoreFunctionPassScheduler } from "./core-pass-manager.ts";
+import type { CoreFunctionPass } from "./core-pass.ts";
 import {
 	specializeCorePlatformConstants,
 	pruneUnusedPlatformAliases,
@@ -64,6 +65,7 @@ import type { CoreTransformBudgetLimits } from "./core-transform-candidates.ts";
 export type { CoreOptimizationPlan } from "./core-ir-regions.ts";
 
 export interface OptimizeCoreOptions {
+	readonly privateRestIteration?: CoreFunctionPass;
 	readonly verification?: CoreVerificationProfile;
 	readonly mode?: "development" | "full";
 	readonly instrumentation?: CoreInstrumentationMode;
@@ -275,7 +277,10 @@ export function optimizeCore(
 			compilation.program.function(functionId).configureUseTraversalStatistics(true);
 		}
 	}
-	const functionResources = new CoreFunctionOptimizationResources(compilation.program);
+	const functionResources = new CoreFunctionOptimizationResources(
+		compilation.program,
+		options.privateRestIteration,
+	);
 	const functionPhaseTimes = new Map<CoreOptimizationPhase, number>();
 	const localPlanInputs: Array<CoreLocalOptimizationPlanInput> = [];
 	const runFunctionPhase: CoreFunctionOptimizationPhaseRunner = (phase, run) => {

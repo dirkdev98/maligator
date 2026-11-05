@@ -22,9 +22,9 @@ import {
 	CORE_MANDATORY_CANONICALIZATION_PASSES,
 } from "./core-local-passes.ts";
 import {
-	CORE_MEMORY_PASSES,
 	CORE_MEMORY_SSA_PASSES,
 	CORE_PROVENANCE_PASSES,
+	coreMemoryPasses,
 } from "./core-memory-passes.ts";
 import type { CoreOptimizationFamily } from "./core-optimization-families.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
@@ -33,6 +33,7 @@ import type {
 	CoreOptimizationReportBuilder,
 } from "./core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "./core-pass-manager.ts";
+import type { CoreFunctionPass } from "./core-pass.ts";
 import { CORE_PROOF_PASSES, CORE_LATE_PROOF_PASSES } from "./core-proof-passes.ts";
 import type { CoreChangeSet, CoreProgram } from "./core-store.ts";
 
@@ -60,6 +61,8 @@ export interface CoreCrossCallFunctionOptimizationResult {
 }
 
 export class CoreFunctionOptimizationResources {
+	readonly memoryPasses: ReadonlyArray<CoreFunctionPass>;
+	readonly privateRestIteration: CoreFunctionPass | undefined;
 	readonly localRules: CoreLocalRuleRegistry;
 	readonly mandatoryLocalRules: CoreLocalRuleRegistry;
 	readonly featureIndex: CoreFunctionFeatureIndex;
@@ -69,7 +72,9 @@ export class CoreFunctionOptimizationResources {
 	readonly #primaryFunctions = new Set<CoreFunctionId>();
 	readonly #crossCallFunctions = new Map<CoreCrossCallSession, Set<CoreFunctionId>>();
 
-	constructor(program: CoreProgram) {
+	constructor(program: CoreProgram, privateRestIteration?: CoreFunctionPass) {
+		this.privateRestIteration = privateRestIteration;
+		this.memoryPasses = coreMemoryPasses(privateRestIteration);
 		this.localRules = new CoreLocalRuleRegistry(program);
 		this.mandatoryLocalRules = new CoreLocalRuleRegistry(
 			program,
@@ -117,6 +122,8 @@ export class CoreFunctionOptimizationSession {
 	readonly #verification: CoreVerificationProfile;
 	readonly #crossCall: boolean;
 	readonly #benchmarkAblation: CoreOptimizationFamily | undefined;
+	readonly #memoryPasses: ReadonlyArray<CoreFunctionPass>;
+	readonly #privateRestIteration: CoreFunctionPass | undefined;
 	#optimized = false;
 
 	constructor(
@@ -135,6 +142,8 @@ export class CoreFunctionOptimizationSession {
 		this.#context = context;
 		this.#analyses = new CoreAnalysisManager(program, context, report, resources.scratch);
 		this.#specializationFeatureIndex = resources.specializationFeatureIndex;
+		this.#memoryPasses = resources.memoryPasses;
+		this.#privateRestIteration = resources.privateRestIteration;
 		this.#benchmarkAblation = options.benchmarkAblation;
 		const ablateLocalOptimization = this.#ablates("o1-scalar-structural");
 		this.#localRules = ablateLocalOptimization
@@ -195,10 +204,11 @@ export class CoreFunctionOptimizationSession {
 					: this.#passes.runComponent("proofs", CORE_PROOF_PASSES),
 			),
 		);
-		const memoryPasses = CORE_MEMORY_PASSES.filter(
+		const memoryPasses = this.#memoryPasses.filter(
 			(pass) =>
 				(!this.#ablates("provenance-escape-scalar-replacement") ||
-					!CORE_PROVENANCE_PASSES.includes(pass)) &&
+					(!CORE_PROVENANCE_PASSES.includes(pass) &&
+						pass !== this.#privateRestIteration)) &&
 				(!this.#ablates("memory-ssa-load-store") ||
 					!CORE_MEMORY_SSA_PASSES.includes(pass)),
 		);
@@ -300,7 +310,7 @@ export class CoreFunctionOptimizationSession {
 				});
 				const memoryChanges = this.#passes.runComponent(
 					"memory",
-					CORE_MEMORY_PASSES,
+					this.#memoryPasses,
 					initial,
 					{ seedLocalFromInitialChanges: false },
 				);
