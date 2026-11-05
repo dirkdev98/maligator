@@ -297,7 +297,7 @@ function checkProfileCommands(): void {
 		`export default {
 	entry: "profile-entry.mts",
 	engine: { eval: false, regexp: false, intl: { enabled: false } },
-	surface: { webPlatform: false, node: true },
+	surface: { webPlatform: true, node: true },
 };
 `,
 	);

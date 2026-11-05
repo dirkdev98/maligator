@@ -457,6 +457,8 @@ describe("late plan migration gates", () => {
 
 	it.each([
 		["length on the left", "values.length > index", 1, true],
+		["false edge with length on the right", "!(index >= values.length)", 2, false],
+		["false edge with length on the left", "!(values.length <= index)", 1, false],
 		["non-strict inequality", "index != values.length", 2, false],
 		["strict inequality", "index !== values.length", 2, false],
 		["inclusive comparison", "index <= values.length", 2, false],
@@ -484,6 +486,10 @@ describe("late plan migration gates", () => {
 				lengthPosition,
 				elements: [{ kind: "load", arrayIndexIsUint32 }],
 			});
+			const image = lower(compilation);
+			expect(() =>
+				deserializeCompilerArtifact(serializeCompilerArtifact(image)),
+			).not.toThrow();
 		},
 	);
 

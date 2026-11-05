@@ -2148,7 +2148,10 @@ export interface CoreLocalFactIndex {
 	readonly locationIndices: ArrayLike<number>;
 	readonly uses: ReadonlyMap<
 		CoreValueId,
-		ReadonlyArray<{ readonly instruction: CoreInstructionId; readonly position: number }>
+		ReadonlyArray<{
+			readonly instruction: CoreInstructionId;
+			readonly position: number;
+		}>
 	>;
 	readonly controlUses: ReadonlySet<CoreValueId>;
 	readonly handlerTargets: ReadonlySet<CoreBlockId>;
@@ -2176,7 +2179,10 @@ export function buildCoreLocalFactIndex(
 	let instructionVisits = 0;
 	const uses = new Map<
 		CoreValueId,
-		Array<{ readonly instruction: CoreInstructionId; readonly position: number }>
+		Array<{
+			readonly instruction: CoreInstructionId;
+			readonly position: number;
+		}>
 	>();
 	const controlUses = new Set<CoreValueId>();
 	const handlerTargets = new Set<CoreBlockId>();
@@ -3228,6 +3234,8 @@ function indexedLengthLoopCandidates(
 					root(candidate.value) === root(induction),
 			);
 			const arrayIndexInduction =
+				((lengthPosition === 1 && operator === ">") ||
+					(lengthPosition === 2 && operator === "<")) &&
 				loopInduction?.comparison?.operator === "<" &&
 				loopInduction.representation === "f64" &&
 				loopInduction.step === 1 &&
