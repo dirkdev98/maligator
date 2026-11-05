@@ -768,7 +768,9 @@ printf '!<arch>\\n' > "$2"
 			units: 2,
 			bytes: Buffer.byteLength("int value;") + Buffer.byteLength("int other_value;"),
 		});
-		expect(phases.find((phase) => phase.phase === "generated C projection")).toMatchObject({
+		expect(
+			phases.find((phase) => phase.phase === "generated C projection"),
+		).toMatchObject({
 			units: 3,
 		});
 		expect(
