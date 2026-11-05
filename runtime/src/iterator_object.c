@@ -23,6 +23,7 @@ void mal_iterator_object_init(
     iterator->index = 0;
     iterator->done = false;
     iterator->collection_pinned = mal_iterator_kind_uses_collection(kind);
+    if (iterator->collection_pinned) mal_heap_cell_needs_finalizer(&iterator->object.header);
     if (kind == MAL_ITERATOR_SET_VALUES || kind == MAL_ITERATOR_SET_ENTRIES) {
         iterator->pinned_set = mal_set_object_storage(mal_value_to_set_object(target));
         mal_set_storage_pin(iterator->pinned_set);

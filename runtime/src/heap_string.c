@@ -49,10 +49,19 @@ static inline void mal_perf_string_allocation(usize length) {
 #endif
 
 // The header belongs to the allocator, which already set its type and initial mark.
+/* Owned code units and UTF-8 caches are released by the string's finalizer. */
+static void mal_string_set_storage(MalString *string, MalStringStorage storage) {
+    string->storage = storage;
+    if (storage == MAL_STRING_STORAGE_OWNED || storage == MAL_STRING_STORAGE_PREPARED_UTF8 ||
+        storage == MAL_STRING_STORAGE_BUILDER) {
+        mal_heap_cell_needs_finalizer(&string->header);
+    }
+}
+
 static void mal_string_init_flat(
     MalString *string, MalStringStorage storage, bool latin1, usize length
 ) {
-    string->storage = storage;
+    mal_string_set_storage(string, storage);
     string->hash_valid = false;
     string->array_index_impossible = false;
     string->property_atom = false;
@@ -320,7 +329,7 @@ const u8 *mal_string_prepare_ascii_cstr(MalHeap *heap, MalString *string) {
         usize terminated = (usize) string->length + 1;
         if (reuse <= MAL_STRING_ASCII_REUSED && mal_heap_allocation_charge(terminated) > capacity + 1) {
             string->ffi_utf8_state = reuse;
-            string->storage = MAL_STRING_STORAGE_PREPARED_UTF8;
+            mal_string_set_storage(string, MAL_STRING_STORAGE_PREPARED_UTF8);
             return nullptr;
         }
         u8 *grown = mal_heap_try_realloc_raw_profiled(
@@ -330,7 +339,7 @@ const u8 *mal_string_prepare_ascii_cstr(MalHeap *heap, MalString *string) {
     }
     ((u8 *) string->latin1_units)[string->length] = 0;
     string->ffi_utf8_state = 0;
-    string->storage = MAL_STRING_STORAGE_PREPARED_UTF8;
+    mal_string_set_storage(string, MAL_STRING_STORAGE_PREPARED_UTF8);
     return string->latin1_units;
 }
 
@@ -338,7 +347,7 @@ const MalStringUtf8 *mal_string_prepare_ffi_utf8(
     MalHeap *heap, MalString *string, const u8 *bytes, usize length, bool has_nul) {
     if (string->storage == MAL_STRING_STORAGE_OWNED) {
         string->ffi_utf8_state = MAL_STRING_UTF8_SEEN;
-        string->storage = MAL_STRING_STORAGE_PREPARED_UTF8;
+        mal_string_set_storage(string, MAL_STRING_STORAGE_PREPARED_UTF8);
         return nullptr;
     }
     if (string->storage != MAL_STRING_STORAGE_PREPARED_UTF8 || string->ffi_utf8_state != MAL_STRING_UTF8_SEEN)
@@ -351,7 +360,7 @@ const MalStringUtf8 *mal_string_prepare_ffi_utf8(
     encoded->has_nul = has_nul;
     memcpy(encoded->data, bytes, length + 1);
     string->ffi_utf8_state = (uptr) encoded;
-    string->storage = MAL_STRING_STORAGE_PREPARED_UTF8;
+    mal_string_set_storage(string, MAL_STRING_STORAGE_PREPARED_UTF8);
     return encoded;
 }
 
@@ -1330,7 +1339,7 @@ const c16 *mal_string_flatten(MalString *mutable) {
         }
         // A widened buffer keeps its prefixes but no spare capacity.
         if (mutable->storage == MAL_STRING_STORAGE_BUILDER) mutable->hash = 0;
-        mutable->storage = MAL_STRING_STORAGE_OWNED;
+        mal_string_set_storage(mutable, MAL_STRING_STORAGE_OWNED);
         mutable->latin1 = false;
         mutable->code_units = units;
         return units;
@@ -1446,7 +1455,7 @@ static void mal_string_flatten_cons_into(MalString *mutable, void *destination, 
         mal_gc_satb_record(mal_value_from_string(mutable->left));
         mal_gc_satb_record(mal_value_from_string(mutable->right));
     }
-    mutable->storage = MAL_STRING_STORAGE_OWNED;
+    mal_string_set_storage(mutable, MAL_STRING_STORAGE_OWNED);
     mutable->latin1 = latin1;
     if (latin1) {
         mutable->latin1_units = destination;
