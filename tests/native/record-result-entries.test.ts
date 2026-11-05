@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { lowerNativeStorage } from "../../src/compiler/target/lower-native-storage.ts";
 import type { ProgramImage } from "../../src/compiler/target/program-image.ts";
+import {
+	emitCompiledFunction,
+	directCompiledEntryKey,
+} from "../../src/compiler/target/render-native-c.ts";
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
@@ -49,6 +54,104 @@ describe("record result entries", () => {
 		if (fn === undefined) throw new Error(`no native function ${name}`);
 		return fn;
 	};
+
+	it("keeps producer storage for observing parameters in the emitted C ABI", () => {
+		const preciseImage = lowerNativeStorage(image, "precise");
+		const entries = new Map(
+			preciseImage.native.functions.flatMap((fn) =>
+				fn.directEntries.map(
+					(entry) => [directCompiledEntryKey(fn.functionIndex, entry.id), entry] as const,
+				),
+			),
+		);
+		for (const [name, observed, pointers] of [
+			["hold", true, 5],
+			["stretch", false, 4],
+			["updateBundle", false, 4],
+			["decodedWeight", false, 5],
+		] as const) {
+			const fn = preciseImage.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(preciseImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			const entry = fn.directEntries.find((entry) => entry.recordParameters)!;
+			const parameter = entry.recordParameters![0]!;
+			expect(parameter.observerIps.length > 0).toBe(observed);
+			const emitted = emitCompiledFunction(
+				fn,
+				fn.functionIndex,
+				"",
+				false,
+				"static",
+				new Set(),
+				[],
+				entries,
+				false,
+				new Set(),
+				preciseImage.runtime.stringConstants,
+			)!;
+			const abi = emitted.directEntries.find((candidate) => candidate.id === entry.id)!
+				.recordParameters![0]!;
+			expect(abi.representations).toHaveLength(pointers);
+			if (name === "hold") {
+				const shaped = {
+					...entry,
+					recordParameters: [{ ...parameter, shapes: [[0, 1, 2]] }],
+				};
+				const shapedFunction = {
+					...fn,
+					directEntries: fn.directEntries.map((candidate) =>
+						candidate === entry ? shaped : candidate,
+					),
+				};
+				const shapedC = emitCompiledFunction(
+					shapedFunction,
+					fn.functionIndex,
+					"",
+					false,
+					"static",
+					new Set(),
+					[],
+					entries,
+					false,
+					new Set(),
+					preciseImage.runtime.stringConstants,
+				)!.directEntries.find((candidate) => candidate.id === entry.id)!;
+				expect(shapedC.recordParameters![0]!.representations).toHaveLength(6);
+				expect(shapedC.source).toContain("i32 * rp0_3");
+				expect(shapedC.source).not.toContain("if ((*rp0_3)");
+				expect(shapedC.source).not.toContain("mal_value_to_i32((*rp0_3))");
+				expect(shapedC.source).toContain("mal_vm_materialize_record(vm, (*rp0_5)");
+			}
+		}
+		const decoded = preciseImage.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(preciseImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "decode",
+		)!;
+		const result = decoded.directEntries.find((entry) => entry.resultFields)!;
+		const output = emitCompiledFunction(
+			decoded,
+			decoded.functionIndex,
+			"",
+			false,
+			"static",
+			new Set(),
+			[],
+			entries,
+			false,
+			new Set(),
+			preciseImage.runtime.stringConstants,
+		)!.directEntries.find((entry) => entry.id === result.id)!;
+		expect(output.resultFieldRepresentations!.at(-1)).toBe("int32");
+		expect(output.source).toContain(`i32 * rf${result.resultFields!.keys.length}`);
+		expect(output.source).not.toContain(
+			`*rf${result.resultFields!.keys.length} = mal_value_from_i32(`,
+		);
+	});
 
 	it("returns the fields of out-of-line producers to field-reading callers", () => {
 		for (const producer of [
