@@ -925,6 +925,7 @@ static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program
 
 void mal_vm_init(MalVm *vm, const MalRuntimeImage *program) {
 	mal_isolate_claim_sole();
+	vm->isolate = &mal_isolate;
 	mal_vm_init_engine_state(vm);
 	mal_vm_adopt_program_image(vm, program);
 	mal_vm_init_execution_state(vm, program);
@@ -2497,7 +2498,7 @@ static bool mal_vm_prepare_interpreter_safepoint(MalVmFrame *frame, i32 instruct
         MAL_PERF_COUNT(interpreter_state_syncs); \
         MAL_PERF_COUNT(interpreter_boundary_dispatches); \
         call; \
-        if (can_poll && mal_vm_interpreter_activation_is_current(vm, activation) && mal_gc_poll_requested()) { \
+        if (can_poll && mal_vm_interpreter_activation_is_current(vm, activation) && mal_vm_gc_poll_requested(vm)) { \
             mal_gc_safepoint(vm); \
         } \
         if (mal_vm_interpreter_activation_is_current(vm, activation)) { \
@@ -3444,7 +3445,7 @@ static void mal_vm_run_until_frame_count(
                 if (guarded_tag > MAL_MATH_UNARY_ROUND &&
                     mal_op_call_guarded_builtin(frame, instruction)) {
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
-                    if (!mal_gc_poll_requested()) continue;
+                    if (!mal_vm_gc_poll_requested(vm)) continue;
                     MalVmInterpreterActivation activation =
                         mal_vm_interpreter_activation(vm, frame);
                     if (!mal_vm_prepare_interpreter_safepoint_except(
@@ -3489,7 +3490,7 @@ static void mal_vm_run_until_frame_count(
                 bool backedge = instruction->as.jump.target_ip < instruction_pointer;
                 instruction_pointer = instruction->as.jump.target_ip;
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
-                if (backedge && mal_gc_poll_requested()) {
+                if (backedge && mal_vm_gc_poll_requested(vm)) {
                     MAL_VM_INTERPRETER_SYNC_AT(safepoint_ip);
                     mal_gc_safepoint(vm);
                     frame = &vm->frames[vm->frame_count - 1];
@@ -3513,7 +3514,7 @@ static void mal_vm_run_until_frame_count(
                     instruction_pointer = instruction->as.jump_if.target_ip;
                 }
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
-                if (backedge && mal_gc_poll_requested()) {
+                if (backedge && mal_vm_gc_poll_requested(vm)) {
                     MAL_VM_INTERPRETER_SYNC_AT(safepoint_ip);
                     mal_gc_safepoint(vm);
                     frame = &vm->frames[vm->frame_count - 1];
@@ -3609,7 +3610,7 @@ static void mal_vm_run_until_frame_count(
                         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = return_value};
                     }
                 }
-                if (vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll_requested()) {
+                if (vm->completion.kind == MAL_COMPLETION_NORMAL && mal_vm_gc_poll_requested(vm)) {
                     mal_gc_safepoint(vm);
                 }
                 break;
@@ -4035,10 +4036,10 @@ __attribute__((cold, noinline)) void mal_vm_throw_stack_overflow(MalVm *vm) {
 void mal_vm_sync_entry_stack_limit(MalVm *vm) {
 #if !defined(__wasi__)
     if (vm->runtime_image != nullptr && vm->runtime_image->conservative_stack_roots) {
-        vm->entry_stack_limit = &mal_isolate_locals()->entry_stack_limit;
+        vm->entry_stack_limit = &vm->isolate->entry_stack_limit;
         atomic_store_explicit(vm->entry_stack_limit, vm->stack_limit, memory_order_relaxed);
         // Stored after the real limit, so a request between the two is not lost.
-        if (mal_gc_poll_requested()) {
+        if (mal_vm_gc_poll_requested(vm)) {
             atomic_store_explicit(vm->entry_stack_limit, UINTPTR_MAX, memory_order_relaxed);
         }
         return;
@@ -4057,11 +4058,11 @@ __attribute__((cold, noinline)) bool mal_vm_enter_compiled_limit(MalVm *vm) {
         return false;
     }
     mal_vm_sync_entry_stack_limit(vm);
-    if (!mal_gc_poll_requested() || !mal_gc_entry_poll_due()) return true;
+    if (!mal_vm_gc_poll_requested(vm) || !mal_gc_entry_poll_due()) return true;
     mal_gc_safepoint(vm);
     if (mal_gc_poll_termination(vm)) return false;
     // A gated or stressed collection leaves the request pending for the next entry.
-    if (mal_gc_poll_requested()) mal_vm_sync_entry_stack_limit(vm);
+    if (mal_vm_gc_poll_requested(vm)) mal_vm_sync_entry_stack_limit(vm);
     return true;
 }
 

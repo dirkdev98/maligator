@@ -1633,6 +1633,12 @@ typedef struct MalVm {
     // keeps each access within a load's immediate offset.
     MalCompletion completion;
     /**
+     * The isolate record of the thread that initialized this VM, which is the only
+     * thread that runs it. Loop and call polls read it through this pointer because
+     * on macOS a thread-local access is a lookup call once a second isolate exists.
+     */
+    MalIsolateLocals *isolate;
+    /**
      * Lowest safe C-stack address (the real stack bottom plus a safety margin), or 0
      * when the platform stack bounds could not be queried. A compiled-function entry
      * whose frame is below this throws a RangeError before the C stack is actually
@@ -2176,6 +2182,10 @@ typedef struct MalVm {
         struct MalShape *final;
     } private_append_cache[128];
 } MalVm;
+
+static inline __attribute__((always_inline)) bool mal_vm_gc_poll_requested(const MalVm *vm) {
+    return mal_gc_poll_requested_in(vm->isolate);
+}
 
 static inline MalString *mal_vm_string_constant(const MalVm *vm, i32 index) {
     if (index < vm->string_primary_capacity)

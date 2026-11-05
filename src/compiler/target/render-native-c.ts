@@ -1782,7 +1782,7 @@ function emitRecordIterationRegion(
 		`  if (${guards.join(" && ")}) {`,
 		`    u32 ${id}_index = ${cursor}.index;`,
 		`    bool ${id}_done = ${cursor}.done;`,
-		`    MalIsolateLocals *${id}_isolate = mal_isolate_locals();`,
+		`    MalIsolateLocals *${id}_isolate = vm->isolate;`,
 		`    MAL_PERF_COUNT(dense_array_number_region_admissions);`,
 		`    ${id}_next:;`,
 	);
@@ -2707,7 +2707,7 @@ function emitNumericLoopRegion(
 					]),
 			`    u8 ${id}_exit = 0;`,
 			// Region instructions make no calls, so the thread's isolate cannot change inside.
-			`    MalIsolateLocals *${id}_isolate = mal_isolate_locals();`,
+			`    MalIsolateLocals *${id}_isolate = vm->isolate;`,
 			"    for (;;) {",
 			...(innerHeaders.size > 0
 				? []
@@ -7924,7 +7924,7 @@ function emitBody(
 						handler !== undefined
 							? `goto L${handler};`
 							: `goto ${nativeBodyReference(resources, "throwExit")};`;
-					return `if (mal_gc_poll_requested()) { ${cVirtualRestRootPublication(virtualRestRootCounts, branchIp, "outgoing")} ${cPrivateRootPublication(
+					return `if (mal_vm_gc_poll_requested(vm)) { ${cVirtualRestRootPublication(virtualRestRootCounts, branchIp, "outgoing")} ${cPrivateRootPublication(
 						rootPublication,
 						branchIp,
 						"outgoing",
@@ -9778,19 +9778,19 @@ class NativeInstructionEmission {
 	poll(): string {
 		return (this.pollText ??=
 			(this.context.outgoingRootPublication?.length ?? 0) > 0
-				? `if (mal_gc_poll_requested()) { ${this.context.outgoingRootPublication!.join(" ")} ${this.context.loopBackedgeInactiveRootMask === undefined ? "" : `${cInactiveRootMaskPublication(this.context.loopBackedgeInactiveRootMask, this.context.inactiveRootMaskStatements)}; `}${this.safepoint()} }`
+				? `if (mal_vm_gc_poll_requested(vm)) { ${this.context.outgoingRootPublication!.join(" ")} ${this.context.loopBackedgeInactiveRootMask === undefined ? "" : `${cInactiveRootMaskPublication(this.context.loopBackedgeInactiveRootMask, this.context.inactiveRootMaskStatements)}; `}${this.safepoint()} }`
 				: this.context.loopBackedgeInactiveRootMask === undefined
 					? this.context.gcSafepoint
-						? `if (mal_gc_poll_requested()) { ${this.safepoint()} }`
+						? `if (mal_vm_gc_poll_requested(vm)) { ${this.safepoint()} }`
 						: ""
-					: `if (mal_gc_poll_requested()) { ${cInactiveRootMaskPublication(this.context.loopBackedgeInactiveRootMask, this.context.inactiveRootMaskStatements)}; ${this.safepoint()} }`);
+					: `if (mal_vm_gc_poll_requested(vm)) { ${cInactiveRootMaskPublication(this.context.loopBackedgeInactiveRootMask, this.context.inactiveRootMaskStatements)}; ${this.safepoint()} }`);
 	}
 
 	guardedCallPoll(): string {
 		return (this.guardedCallPollText ??=
 			this.context.guardedCallInactiveRootMask === undefined
 				? this.poll()
-				: `if (mal_gc_poll_requested()) { ${(this.context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(this.context.guardedCallInactiveRootMask, this.context.inactiveRootMaskStatements)}; ${this.safepoint()} }`);
+				: `if (mal_vm_gc_poll_requested(vm)) { ${(this.context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(this.context.guardedCallInactiveRootMask, this.context.inactiveRootMaskStatements)}; ${this.safepoint()} }`);
 	}
 
 	callPoll(): string {

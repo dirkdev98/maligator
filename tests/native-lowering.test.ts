@@ -222,7 +222,7 @@ describe("SSA native lowering", () => {
 		};
 		expect(() => nativeFrameRootRegisters(body, native)).not.toThrow();
 		const output = emitCompiledFunction(native, 0, "", false)?.source;
-		expect(output).toMatch(/L1:;\s+if \(mal_gc_poll_requested\(\)\)/);
+		expect(output).toMatch(/L1:;\s+if \(mal_vm_gc_poll_requested\(vm\)\)/);
 		const left = {
 			type: "jumpIf" as const,
 			registers: [0] as [number],

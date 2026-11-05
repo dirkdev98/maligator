@@ -38,7 +38,7 @@ describe("native operand truthiness", () => {
 			expect(branch).not.toContain("mal_builtin_number_is_");
 			expect(branch).toMatch(/(?:new_boolean\(false\)|= false;)/);
 			expect(out.c.source).toContain("mal_vm_call_cached");
-			expect(out.c.source).toContain("mal_gc_poll_requested");
+			expect(out.c.source).toContain("mal_vm_gc_poll_requested");
 		},
 	);
 
@@ -59,7 +59,7 @@ describe("native operand truthiness", () => {
 		expect(branch).toContain(expected);
 		expect(branch).not.toContain("mal_value_is_truthy(");
 		expect(out.c.source).toContain("mal_vm_call_cached");
-		expect(out.c.source).toContain("mal_gc_poll_requested");
+		expect(out.c.source).toContain("mal_vm_gc_poll_requested");
 	});
 
 	it("retains the complete conversion for an unknown input", () => {

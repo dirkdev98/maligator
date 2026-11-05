@@ -447,7 +447,7 @@ describe("native static-property root-mask publication", () => {
 					);
 			}
 			expect(contract.source).toMatch(
-				/if \(mal_gc_poll_requested\(\)\) \{ (?:__gc_slots\[\d+\] = (?:r\d+|MAL_VALUE_UNDEFINED); )*MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\);/,
+				/if \(mal_vm_gc_poll_requested\(vm\)\) \{ (?:__gc_slots\[\d+\] = (?:r\d+|MAL_VALUE_UNDEFINED); )*MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\);/,
 			);
 		},
 	);
@@ -522,7 +522,7 @@ describe("native static-property root-mask publication", () => {
 			const resultAssignment = continuation.indexOf(
 				`r${register} = call_result_${ip}.value;`,
 			);
-			const poll = continuation.indexOf("if (mal_gc_poll_requested())");
+			const poll = continuation.indexOf("if (mal_vm_gc_poll_requested(vm))");
 			const collection = continuation.indexOf("mal_gc_safepoint(vm);", poll);
 			expect(throwCheck).toBeGreaterThan(0);
 			expect(resultAssignment).toBeGreaterThan(throwCheck);

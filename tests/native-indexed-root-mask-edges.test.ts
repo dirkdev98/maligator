@@ -405,7 +405,7 @@ describe("native numeric indexed-property root publication", () => {
 		]);
 		const slot = privateSlot(source, indexedLoad.dst);
 		const miss = source.indexOf("mal_vm_indexed_fast_load_index(");
-		const pollGuard = source.indexOf("if (mal_gc_poll_requested())", miss);
+		const pollGuard = source.indexOf("if (mal_vm_gc_poll_requested(vm))", miss);
 		const collection = source.indexOf("mal_gc_safepoint(vm)", pollGuard);
 		expect(pollGuard).toBeGreaterThan(miss);
 		expect(source.slice(pollGuard, collection)).toContain(`__gc_slots[${slot}] = r3;`);
@@ -525,7 +525,7 @@ describe("native numeric indexed-property root publication", () => {
 		);
 		const slot = privateSlot(source, indexedLoad.dst);
 		const miss = source.indexOf("mal_vm_indexed_fast_load_index(");
-		const pollGuard = source.indexOf("if (mal_gc_poll_requested())", miss);
+		const pollGuard = source.indexOf("if (mal_vm_gc_poll_requested(vm))", miss);
 		const safepoint = source.indexOf("mal_gc_safepoint(vm)", pollGuard);
 		expect(pollGuard).toBeGreaterThan(miss);
 		expect(safepoint).toBeGreaterThan(pollGuard);
