@@ -7863,746 +7863,759 @@ function emitBody(
 	const unitStarts: Array<number> = [];
 	const unitIps: Array<number> | undefined =
 		debug !== false && debug.captureSourceMap ? [] : undefined;
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		// Give up before an over-budget body is complete, let alone joined into one string.
-		for (; measuredLines < lines.length; measuredLines++)
-			measuredCodeUnits += lines[measuredLines]!.length + 1;
-		if (measuredCodeUnits > maxCodeUnits) return null;
-		unitStarts.push(lines.length);
-		unitIps?.push(ip);
-		for (const slot of fieldCallSites.get(ip - 1)?.boxedSlots ?? [])
-			if (slot !== undefined) activeFieldSlots.delete(slot);
-		for (const slot of fieldAllocations.get(ip - 1)?.boxedSlots ?? [])
-			if (slot !== undefined) activeFieldSlots.add(slot);
-		if (unreachable.has(ip)) continue;
-		if (jumpTargets.has(ip)) {
-			lines.push(`L${ip}:;`);
-			// Control can arrive with different published frame metadata.
-			lastPublishedPos = -1;
-			lastPublishedSite = -1;
-			const snapshot = rootContinuationSnapshots?.get(ip);
-			if (adjacentRootContinuationIp !== ip) {
-				lastPublishedInactiveRootMask = snapshot?.mask;
-				knownPublishedPrivateRoots.clear();
-				if (snapshot !== undefined) {
-					for (const [slot, register] of snapshot.roots)
-						knownPublishedPrivateRoots.set(slot, register);
-					rootContinuationSnapshots!.delete(ip);
+	// Separate the loop so V8 optimizes it independently of preparation and finalization.
+	function emitBodyInstructions(): boolean {
+		for (let ip = 0; ip < fn.instructions.length; ip++) {
+			// Give up before an over-budget body is complete, let alone joined into one string.
+			for (; measuredLines < lines.length; measuredLines++)
+				measuredCodeUnits += lines[measuredLines]!.length + 1;
+			if (measuredCodeUnits > maxCodeUnits) return false;
+			unitStarts.push(lines.length);
+			unitIps?.push(ip);
+			for (const slot of fieldCallSites.get(ip - 1)?.boxedSlots ?? [])
+				if (slot !== undefined) activeFieldSlots.delete(slot);
+			for (const slot of fieldAllocations.get(ip - 1)?.boxedSlots ?? [])
+				if (slot !== undefined) activeFieldSlots.add(slot);
+			if (unreachable.has(ip)) continue;
+			if (jumpTargets.has(ip)) {
+				lines.push(`L${ip}:;`);
+				// Control can arrive with different published frame metadata.
+				lastPublishedPos = -1;
+				lastPublishedSite = -1;
+				const snapshot = rootContinuationSnapshots?.get(ip);
+				if (adjacentRootContinuationIp !== ip) {
+					lastPublishedInactiveRootMask = snapshot?.mask;
+					knownPublishedPrivateRoots.clear();
+					if (snapshot !== undefined) {
+						for (const [slot, register] of snapshot.roots)
+							knownPublishedPrivateRoots.set(slot, register);
+						rootContinuationSnapshots!.delete(ip);
+					}
 				}
 			}
-		}
-		if (elided.has(ip)) continue;
-		const virtualRestRootPublication = cVirtualRestRootPublication(
-			virtualRestRootCounts,
-			ip,
-			"incoming",
-		);
-		if (virtualRestRootPublication.length > 0)
-			lines.push(`    ${virtualRestRootPublication}`);
-		const literalSwitch = switches.get(ip);
-		if (literalSwitch !== undefined) {
-			knownPublishedPrivateRoots.clear();
-			const selector = literalSwitch.selector;
-			const representation = reps[selector]!;
-			const selectorFacts = nativeFacts?.[literalSwitch.instructionIp + 1];
-			const selectorKind =
-				representation === "boxed"
-					? (instructionInputKind(selectorFacts, selector) ?? COMPILER_VALUE_KIND_TOP)
-					: representation === "string"
-						? COMPILER_VALUE_KIND_STRING
-						: representation === "boolean"
-							? COMPILER_VALUE_KIND_BOOLEAN
-							: COMPILER_VALUE_KIND_NUMBER;
-			const branch = (target: number, branchIp: number) => {
-				const mask = inactiveRootMasks.get(branchIp);
-				if (gcSafepointKinds.get(branchIp) !== "loop-backedge") return `goto L${target};`;
-				const handler = handlerTargets[branchIp];
-				const onThrow =
-					handler !== undefined
-						? `goto L${handler};`
-						: `goto ${nativeBodyReference(resources, "throwExit")};`;
-				return `if (mal_gc_poll_requested()) { ${cVirtualRestRootPublication(virtualRestRootCounts, branchIp, "outgoing")} ${cPrivateRootPublication(
-					rootPublication,
-					branchIp,
-					"outgoing",
-				)
-					.map((line) => `${line} `)
-					.join(
-						"",
-					)}${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask, inactiveRootMaskStatements)}; `}mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) ${onThrow} } goto L${target};`;
-			};
-			if (literalSwitch.kind === "string") {
-				const emitted = emitStringSwitch(
-					literalSwitch,
-					stringConstants,
-					suffix,
-					selectorKind,
-					relocation,
-					branch,
-				);
-				if (emitted !== undefined) {
-					lines.push(...emitted.lines);
-					profileDecisions.push({
-						instructionIndex: ip,
-						operation: "switch",
-						code: "native-string-switch",
-						outcome: "applied",
-						details: {
-							strategy: emitted.strategy,
-							cases: literalSwitch.cases.length,
-						},
-					});
+			if (elided.has(ip)) continue;
+			const virtualRestRootPublication = cVirtualRestRootPublication(
+				virtualRestRootCounts,
+				ip,
+				"incoming",
+			);
+			if (virtualRestRootPublication.length > 0)
+				lines.push(`    ${virtualRestRootPublication}`);
+			const literalSwitch = switches.get(ip);
+			if (literalSwitch !== undefined) {
+				knownPublishedPrivateRoots.clear();
+				const selector = literalSwitch.selector;
+				const representation = reps[selector]!;
+				const selectorFacts = nativeFacts?.[literalSwitch.instructionIp + 1];
+				const selectorKind =
+					representation === "boxed"
+						? (instructionInputKind(selectorFacts, selector) ?? COMPILER_VALUE_KIND_TOP)
+						: representation === "string"
+							? COMPILER_VALUE_KIND_STRING
+							: representation === "boolean"
+								? COMPILER_VALUE_KIND_BOOLEAN
+								: COMPILER_VALUE_KIND_NUMBER;
+				const branch = (target: number, branchIp: number) => {
+					const mask = inactiveRootMasks.get(branchIp);
+					if (gcSafepointKinds.get(branchIp) !== "loop-backedge")
+						return `goto L${target};`;
+					const handler = handlerTargets[branchIp];
+					const onThrow =
+						handler !== undefined
+							? `goto L${handler};`
+							: `goto ${nativeBodyReference(resources, "throwExit")};`;
+					return `if (mal_gc_poll_requested()) { ${cVirtualRestRootPublication(virtualRestRootCounts, branchIp, "outgoing")} ${cPrivateRootPublication(
+						rootPublication,
+						branchIp,
+						"outgoing",
+					)
+						.map((line) => `${line} `)
+						.join(
+							"",
+						)}${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask, inactiveRootMaskStatements)}; `}mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) ${onThrow} } goto L${target};`;
+				};
+				if (literalSwitch.kind === "string") {
+					const emitted = emitStringSwitch(
+						literalSwitch,
+						stringConstants,
+						suffix,
+						selectorKind,
+						relocation,
+						branch,
+					);
+					if (emitted !== undefined) {
+						lines.push(...emitted.lines);
+						profileDecisions.push({
+							instructionIndex: ip,
+							operation: "switch",
+							code: "native-string-switch",
+							outcome: "applied",
+							details: {
+								strategy: emitted.strategy,
+								cases: literalSwitch.cases.length,
+							},
+						});
+						ip = literalSwitch.endIp;
+						continue;
+					}
+				} else {
+					const fallback = branch(literalSwitch.defaultIp, literalSwitch.endIp);
+					const range = instructionInputIntegerRange(selectorFacts, selector);
+					const matchPossible =
+						range === undefined ||
+						literalSwitch.cases.some(
+							(label) => label.value >= range.minimum && label.value <= range.maximum,
+						);
+					if ((selectorKind & COMPILER_VALUE_KIND_NUMBER) === 0 || !matchPossible)
+						lines.push(fallback);
+					else {
+						if (selectorKind !== COMPILER_VALUE_KIND_NUMBER)
+							lines.push(`if (!mal_ops_is_number(r${selector})) { ${fallback} }`);
+						const value = `__switch_${ip}`;
+						const number =
+							representation === "boxed"
+								? `mal_ops_number_as_f64(r${selector})`
+								: `r${selector}`;
+						const int32 =
+							representation === "int32" || compilerIntegerRangeIsInt32(range);
+						if (!int32) {
+							lines.push(`f64 ${value} = ${number};`);
+							lines.push(
+								`if (!(${value} >= -2147483648.0 && ${value} <= 2147483647.0 && ${value} == trunc(${value}))) { ${fallback} }`,
+							);
+						}
+						lines.push(
+							`switch (${representation === "int32" ? number : `(i32) (${int32 ? number : value})`}) {`,
+						);
+						const seen = new Set<number>();
+						for (const [index, label] of literalSwitch.cases.entries()) {
+							if (
+								range !== undefined &&
+								(label.value < range.minimum || label.value > range.maximum)
+							)
+								continue;
+							if (seen.has(label.value)) continue;
+							seen.add(label.value);
+							lines.push(
+								`case ${label.value}: ${branch(label.targetIp, ip + index * 3 + 2)}`,
+							);
+						}
+						lines.push(`default: ${fallback}`, "}");
+					}
 					ip = literalSwitch.endIp;
 					continue;
 				}
-			} else {
-				const fallback = branch(literalSwitch.defaultIp, literalSwitch.endIp);
-				const range = instructionInputIntegerRange(selectorFacts, selector);
-				const matchPossible =
-					range === undefined ||
-					literalSwitch.cases.some(
-						(label) => label.value >= range.minimum && label.value <= range.maximum,
-					);
-				if ((selectorKind & COMPILER_VALUE_KIND_NUMBER) === 0 || !matchPossible)
-					lines.push(fallback);
-				else {
-					if (selectorKind !== COMPILER_VALUE_KIND_NUMBER)
-						lines.push(`if (!mal_ops_is_number(r${selector})) { ${fallback} }`);
-					const value = `__switch_${ip}`;
-					const number =
-						representation === "boxed"
-							? `mal_ops_number_as_f64(r${selector})`
-							: `r${selector}`;
-					const int32 = representation === "int32" || compilerIntegerRangeIsInt32(range);
-					if (!int32) {
-						lines.push(`f64 ${value} = ${number};`);
-						lines.push(
-							`if (!(${value} >= -2147483648.0 && ${value} <= 2147483647.0 && ${value} == trunc(${value}))) { ${fallback} }`,
-						);
-					}
-					lines.push(
-						`switch (${representation === "int32" ? number : `(i32) (${int32 ? number : value})`}) {`,
-					);
-					const seen = new Set<number>();
-					for (const [index, label] of literalSwitch.cases.entries()) {
-						if (
-							range !== undefined &&
-							(label.value < range.minimum || label.value > range.maximum)
-						)
-							continue;
-						if (seen.has(label.value)) continue;
-						seen.add(label.value);
-						lines.push(
-							`case ${label.value}: ${branch(label.targetIp, ip + index * 3 + 2)}`,
-						);
-					}
-					lines.push(`default: ${fallback}`, "}");
-				}
-				ip = literalSwitch.endIp;
+			}
+			if (expressionIps.has(ip) || rematerializedConstantIps.has(ip)) {
+				emittedInstructions.add(ip);
 				continue;
 			}
-		}
-		if (expressionIps.has(ip) || rematerializedConstantIps.has(ip)) {
-			emittedInstructions.add(ip);
-			continue;
-		}
-		const integerLoop = integerLoopRegionByEntry.get(ip);
-		// An iteration region steps the deferred cursor, so it needs that cursor.
-		if (
-			integerLoop !== undefined &&
-			(integerLoop.kind !== "array-iteration" ||
-				deferredIteratorCursors.has(integerLoop.initializeIp))
-		)
-			for (const line of emitNumericLoopRegion(
-				fn,
-				integerLoop,
-				reps,
-				nativeBodyReference(resources, "propertyCache"),
-				(bindingIp) => {
-					const binding = fn.instructions[bindingIp]!;
-					if (binding.opcode === "LOAD_GLOBAL")
-						return `r${binding.dst} = vm->globals[${relocation.globalIndex(binding.index)}];`;
-					if (binding.opcode === "LOAD_CAPTURED")
-						return renderCapturedLoad(
-							binding,
-							bindingIp,
-							instructionContext,
-							relocation,
-						).join(" ");
-					throw new Error("Invalid numeric loop binding load");
-				},
-				nativeFacts,
-				nativeInstructions,
-				(branchIp, spill, isolate) => {
-					if (gcSafepointKinds.get(branchIp) !== "loop-backedge") return "";
-					const handler = handlerTargets[branchIp];
-					const mask = inactiveRootMasks.get(branchIp);
-					const onThrow =
-						handler === undefined
-							? nativeBodyReference(resources, "throwExit")
-							: `L${handler}`;
-					return `if (mal_gc_poll_requested_in(${isolate})) { MAL_PERF_COUNT(record_columns_polls); ${spill} ${cVirtualRestRootPublication(virtualRestRootCounts, branchIp, "outgoing")} ${cPrivateRootPublication(rootPublication, branchIp, "outgoing").join(" ")} ${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask, inactiveRootMaskStatements)};`} mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) goto ${onThrow}; }`;
-				},
-			))
-				lines.push(`    ${line}`);
-		const numberRecord = numberRecordRegionById.get(ip);
-		if (numberRecord !== undefined)
-			for (const line of emitNumberRecordRegion(
-				fn,
-				numberRecord,
-				reps,
-				nativeBodyReference(resources, "propertyCache"),
-				loopInstructions[ip] === 1 ? shapeSnapshots : undefined,
-				nativeFacts,
-			))
-				lines.push(`    ${line}`);
-		const safepointKind = gcSafepointKinds.get(ip);
-		const rootedOutputs = !hasPrivateRoots
-			? EMPTY_ROOTED_OUTPUTS
-			: nativeRootedOutputRegisters(
-					fn.instructions[ip]!,
-					ip,
-					rootPublication!.privateCallResultIps,
-				).filter((register) => rootPublication!.slots.has(register));
-		const rootedOutputReloads =
-			rootedOutputs.length === 0
-				? EMPTY_ROOT_PUBLICATION
-				: rootedOutputs.map(
-						(register) =>
-							`__private_r${register} = __gc_slots[${rootPublication!.slots.get(register)!}];`,
-					);
-		const incomingRootPublication = cPrivateRootPublication(
-			rootPublication,
-			ip,
-			"incoming",
-			knownPublishedPrivateRoots,
-		);
-		const deferrableRoots =
-			incomingRootPublication.length <= MAX_DEFERRED_ROOT_PUBLICATION_STORES;
-		const deferredPropertyRoots =
-			deferrableRoots &&
-			(fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" ||
-				fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
-				fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
-			!staticPropertyProjectionConflicts(ip);
-		const indexedPropertyInstruction = fn.instructions[ip]!;
-		// Dense growth can allocate, but its allocator never collects inside the probe.
-		const deferredIndexedPropertyRoots =
-			deferrableRoots &&
-			hasPrivateRoots &&
-			(indexedPropertyInstruction.opcode === "LOAD_PROPERTY" ||
-				indexedPropertyInstruction.opcode === "STORE_PROPERTY") &&
-			(isNumericRep(reps[indexedPropertyInstruction.key]!) ||
-				instructionInputKind(nativeFacts?.[ip], indexedPropertyInstruction.key) ===
-					COMPILER_VALUE_KIND_NUMBER) &&
-			!staticPropertyProjectionConflicts(ip) &&
-			!stackObjectMaterializations.has(ip) &&
-			!nativeArrayPresenceProjectionActionByIp.has(ip) &&
-			!pairedArrayLoopActionByIp.has(ip) &&
-			!nativeIteratorCursorActionByIp.has(ip) &&
-			!nativeArrayPairDestructureActionByIp.has(ip) &&
-			!nativeIteratorResultVirtualizationActionByIp.has(ip) &&
-			!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
-			!numericFusionActionByIp.has(ip) &&
-			!staticPropertyNumericActionByIp.has(ip) &&
-			!constructorInitializationActionByIp.has(ip);
-		const staticPropertyWriteInstruction = fn.instructions[ip]!;
-		const deferredStaticPropertyWriteRoots =
-			deferrableRoots &&
-			(staticPropertyWriteInstruction.opcode === "STORE_PROPERTY_STATIC" ||
-				staticPropertyWriteInstruction.opcode ===
-					"STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
-				(hasPrivateRoots &&
-					staticPropertyWriteInstruction.opcode === "DEFINE_PROPERTY" &&
-					staticPropertyWriteInstruction.enumerable &&
-					staticPropertyWriteInstruction.writable &&
-					staticPropertyWriteInstruction.configurable &&
-					staticDefineStringIndexByIp.has(ip) &&
-					!definitionPublicationBarriers.has(ip))) &&
-			nativeInstructions[ip] === undefined &&
-			!stackObjectAccesses.has(ip) &&
-			!stackObjectMaterializations.has(ip) &&
-			!constructorInitializationActionByIp.has(ip);
-		const deferredOperatorRoots =
-			deferrableRoots && fn.instructions[ip]!.opcode === "BINARY";
-		const deferredPrivateAccessRoots =
-			deferrableRoots &&
-			(fn.instructions[ip]!.opcode === "LOAD_PRIVATE" ||
-				fn.instructions[ip]!.opcode === "STORE_PRIVATE");
-		// Only selected private values need the operator's mask on its fallback edge.
-		const eagerOperatorRootPublication =
-			deferredOperatorRoots && (rootPublication?.slots.size ?? 0) === 0;
-		const deferredValueGuardRoots =
-			deferrableRoots && VALUE_GUARD_OPCODES.has(fn.instructions[ip]!.opcode);
-		const deferredForInRoots =
-			deferrableRoots && fn.instructions[ip]!.opcode === "FOR_IN_HAS";
-		const iteratorCursorAction = nativeIteratorCursorActionByIp.get(ip);
-		const deferredIteratorRoots =
-			deferrableRoots &&
-			coro === null &&
-			fn.instructions[ip]!.opcode === "ITERATOR_STEP" &&
-			nativeInstructions[ip] === undefined &&
-			iteratorCursorAction?.role === "step" &&
-			(iteratorCursorAction.cursor.protocol === "array-values" ||
-				iteratorCursorAction.cursor.protocol === "string") &&
-			!nativeArrayPairDestructureActionByIp.has(ip) &&
-			!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
-			!nativeRegExpIteratorProjectionActionByIp.has(ip);
-		const guardedCallInstruction = fn.instructions[ip]!;
-		const guardedCallPlan = nativeInstructions[ip];
-		const guardedCallEffects =
-			guardedCallPlan?.kind === "call" && guardedCallPlan.guardedBuiltinCall !== undefined
-				? nativeGuardedBuiltinEffects(guardedCallPlan.guardedBuiltinCall.operation)
-				: undefined;
-		const deferredGuardedCallRoots =
-			deferrableRoots &&
-			coro === null &&
-			guardedCallInstruction.opcode === "CALL" &&
-			guardedCallPlan?.kind === "call" &&
-			(mathCalls.has(ip) ||
-				(guardedCallEffects !== undefined &&
-					!guardedCallEffects.collection &&
-					!guardedCallEffects.reentry)) &&
-			// Rooted outputs alias shadow storage before dispatch, including reused inputs.
-			!rootedOutputs.some((register) =>
-				vmInstructionUsesRegister(guardedCallInstruction, register),
-			) &&
-			guardedCallPlan.numericSortCallback === undefined &&
-			guardedCallPlan.directFunctionIndex === undefined &&
-			guardedCallPlan.directEntryId === undefined &&
-			guardedCallPlan.guardedFunctionIndices === undefined &&
-			guardedCallPlan.directFunctionCall === undefined &&
-			guardedCallPlan.directCallbackFunctionIndex === undefined &&
-			!fieldCallSites.has(ip) &&
-			!nativeStringCharCodeAtChainActionByIp.has(ip) &&
-			!nativeStringSplitCursorActionByIp.has(ip) &&
-			!nativeStringSplitProjectionActionByIp.has(ip) &&
-			!nativeRegExpExecProjectionActionByIp.has(ip) &&
-			!nativeRegExpIteratorProjectionActionByIp.has(ip) &&
-			!nativeStringSpanActionByIp.has(ip) &&
-			!nativeBuiltinCollectionCallChainActionByIp.has(ip);
-		const effects = nativeInstructionEffects(fn.instructions[ip]!, nativeFacts?.[ip]);
-		const publishesIncomingRoots =
-			safepointKind !== "loop-backedge" &&
-			!deferredPropertyRoots &&
-			!deferredPrivateAccessRoots &&
-			!deferredIndexedPropertyRoots &&
-			!deferredStaticPropertyWriteRoots &&
-			!deferredOperatorRoots &&
-			!deferredValueGuardRoots &&
-			!deferredForInRoots &&
-			!deferredIteratorRoots &&
-			!deferredGuardedCallRoots &&
-			(effects.collection || effects.reentry);
-		// Only rendered strings escape this map, so the body can update it in place.
-		if (rootPublication !== undefined && hasPrivateRoots) {
-			const point = rootPublication.safepoints.get(ip);
-			if (publishesIncomingRoots && point !== undefined)
-				for (const [slot, register] of point.active)
-					if (point.incoming.has(register))
-						knownPublishedPrivateRoots.set(slot, register);
-			// Refined GC maps identify possible shadow clearing on either edge.
-			if (point !== undefined)
-				for (const [slot, register] of knownPublishedPrivateRoots)
-					if (!point.incoming.has(register) || !point.outgoing.has(register))
-						knownPublishedPrivateRoots.delete(slot);
-			for (const register of analysis.writeRegistersAt(ip)) {
-				const slot = rootPublication.slots.get(register);
-				if (slot !== undefined && knownPublishedPrivateRoots.get(slot) === register)
-					knownPublishedPrivateRoots.delete(slot);
-			}
-			// Polls read the shadow alias; the final reload establishes private equality.
-			for (const register of rootedOutputs)
-				knownPublishedPrivateRoots.set(rootPublication.slots.get(register)!, register);
-		}
-		const outgoingRootPublication = cPrivateRootPublication(
-			rootPublication,
-			ip,
-			"outgoing",
-			knownPublishedPrivateRoots,
-		);
-		if (publishesIncomingRoots) {
-			for (const line of incomingRootPublication) lines.push(`    ${line}`);
-		}
-		const inactiveRootMask = inactiveRootMasks.get(ip);
-		const operatorInactiveRootMask =
-			deferredOperatorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
-				? inactiveRootMask
-				: undefined;
-		const indexedPropertyInactiveRootMask =
-			deferredIndexedPropertyRoots && inactiveRootMask !== lastPublishedInactiveRootMask
-				? inactiveRootMask
-				: undefined;
-		const staticPropertyWriteInactiveRootMask =
-			deferredStaticPropertyWriteRoots &&
-			inactiveRootMask !== lastPublishedInactiveRootMask
-				? inactiveRootMask
-				: undefined;
-		const iteratorStepInactiveRootMask =
-			deferredIteratorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
-				? inactiveRootMask
-				: undefined;
-		const guardedCallInactiveRootMask =
-			(deferredGuardedCallRoots ||
-				(safepointKind === "operation" && mathCalls.has(ip))) &&
-			inactiveRootMask !== lastPublishedInactiveRootMask
-				? inactiveRootMask
-				: undefined;
-		const loopBackedgeInactiveRootMask =
-			safepointKind === "loop-backedge" &&
-			inactiveRootMask !== lastPublishedInactiveRootMask
-				? inactiveRootMask
-				: undefined;
-		const valueGuardInactiveRootMask =
-			safepointKind === "operation" &&
-			VALUE_GUARD_OPCODES.has(fn.instructions[ip]!.opcode) &&
-			inactiveRootMask !== lastPublishedInactiveRootMask
-				? inactiveRootMask
-				: undefined;
-		const guardedPropertyLoadInactiveRootMask =
-			safepointKind === "operation" &&
-			(fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
-				fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
-			inactiveRootMask !== lastPublishedInactiveRootMask
-				? inactiveRootMask
-				: undefined;
-		const staticPropertyLoadInactiveRootMask =
-			safepointKind === "operation" &&
-			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" &&
-			nativeInstructions[ip] === undefined &&
-			stackObjectAccesses.get(ip) === undefined &&
-			objectEnumerationSnapshots.get(ip)?.kind !== "entries" &&
-			stackObjectInheritedAccesses.get(ip) === undefined &&
-			nativeStringSplitProjectionActionByIp.get(ip) === undefined &&
-			nativeStringSplitCursorActionByIp.get(ip) === undefined &&
-			nativeRegExpExecProjectionActionByIp.get(ip) === undefined &&
-			nativeRegExpIteratorProjectionActionByIp.get(ip) === undefined &&
-			nativeStringSpanActionByIp.get(ip) === undefined &&
-			nativeStringCharCodeAtChainActionByIp.get(ip) === undefined &&
-			nativeBuiltinCollectionCallChainActionByIp.get(ip) === undefined &&
-			inactiveRootMask !== lastPublishedInactiveRootMask
-				? inactiveRootMask
-				: undefined;
-		const privateAccessInactiveRootMask =
-			safepointKind === "operation" &&
-			(fn.instructions[ip]!.opcode === "LOAD_PRIVATE" ||
-				fn.instructions[ip]!.opcode === "STORE_PRIVATE") &&
-			inactiveRootMask !== lastPublishedInactiveRootMask
-				? inactiveRootMask
-				: undefined;
-		if (
-			inactiveRootMask !== undefined &&
-			loopBackedgeInactiveRootMask === undefined &&
-			operatorInactiveRootMask === undefined &&
-			valueGuardInactiveRootMask === undefined &&
-			guardedPropertyLoadInactiveRootMask === undefined &&
-			staticPropertyLoadInactiveRootMask === undefined &&
-			privateAccessInactiveRootMask === undefined &&
-			indexedPropertyInactiveRootMask === undefined &&
-			staticPropertyWriteInactiveRootMask === undefined &&
-			iteratorStepInactiveRootMask === undefined &&
-			guardedCallInactiveRootMask === undefined &&
-			inactiveRootMask !== lastPublishedInactiveRootMask
-		) {
-			lines.push(
-				`    ${cInactiveRootMaskPublication(inactiveRootMask, inactiveRootMaskStatements)};`,
-			);
-		}
-		if (
-			inactiveRootMask !== undefined &&
-			loopBackedgeInactiveRootMask === undefined &&
-			operatorInactiveRootMask === undefined &&
-			valueGuardInactiveRootMask === undefined &&
-			guardedPropertyLoadInactiveRootMask === undefined &&
-			staticPropertyLoadInactiveRootMask === undefined &&
-			privateAccessInactiveRootMask === undefined &&
-			indexedPropertyInactiveRootMask === undefined &&
-			staticPropertyWriteInactiveRootMask === undefined &&
-			iteratorStepInactiveRootMask === undefined &&
-			guardedCallInactiveRootMask === undefined
-		) {
-			lastPublishedInactiveRootMask = inactiveRootMask;
-		}
-		const instructionProfile: NativeInstructionProfile | undefined =
-			(fn.profileSiteIds?.[ip] ?? -1) >= 0 ? {} : undefined;
-		const arrayPresenceAction = nativeArrayPresenceProjectionActionByIp.get(ip);
-		emittedInstructions.add(ip);
-		let operatorMaskEmitted = false;
-		instructionContext.nativePlan = nativeInstructions[ip];
-		instructionContext.copiedClosure = copiedClosures.has(ip);
-		instructionContext.facts = nativeFacts?.[ip];
-		instructionContext.profileSiteId = fn.profileSiteIds?.[ip];
-		instructionContext.profile = instructionProfile;
-		instructionContext.gcSafepoint = safepointKind !== undefined;
-		instructionContext.loopPoll = safepointKind === "loop-backedge";
-		instructionContext.branchTarget = branchTargets.get(ip);
-		instructionContext.incomingRootPublication =
-			deferredPropertyRoots ||
-			deferredPrivateAccessRoots ||
-			deferredIndexedPropertyRoots ||
-			deferredStaticPropertyWriteRoots ||
-			deferredOperatorRoots ||
-			deferredValueGuardRoots ||
-			deferredForInRoots ||
-			deferredIteratorRoots ||
-			deferredGuardedCallRoots
-				? operatorInactiveRootMask === undefined
-					? incomingRootPublication
-					: [
-							...incomingRootPublication,
-							`${cInactiveRootMaskPublication(operatorInactiveRootMask, inactiveRootMaskStatements)};`,
-						]
-				: EMPTY_ROOT_PUBLICATION;
-		instructionContext.eagerIncomingRootPublication = eagerOperatorRootPublication;
-		instructionContext.onIncomingRootPublication =
-			operatorInactiveRootMask === undefined
-				? undefined
-				: () => {
-						operatorMaskEmitted = true;
-					};
-		instructionContext.outgoingRootPublication = outgoingRootPublication;
-		instructionContext.rootedOutputReloads = rootedOutputReloads;
-		instructionContext.loopBackedgeInactiveRootMask = loopBackedgeInactiveRootMask;
-		instructionContext.valueGuardInactiveRootMask = valueGuardInactiveRootMask;
-		instructionContext.guardedPropertyLoadInactiveRootMask =
-			guardedPropertyLoadInactiveRootMask;
-		instructionContext.staticPropertyLoadInactiveRootMask =
-			staticPropertyLoadInactiveRootMask;
-		instructionContext.privateAccessInactiveRootMask = privateAccessInactiveRootMask;
-		instructionContext.indexedPropertyInactiveRootMask = indexedPropertyInactiveRootMask;
-		instructionContext.staticPropertyWriteInactiveRootMask =
-			staticPropertyWriteInactiveRootMask;
-		instructionContext.guardedCallRootPublication = deferredGuardedCallRoots;
-		instructionContext.guardedCallInactiveRootMask = guardedCallInactiveRootMask;
-		instructionContext.iteratorStepRootPublication = deferredIteratorRoots;
-		instructionContext.iteratorStepInactiveRootMask = iteratorStepInactiveRootMask;
-		instructionContext.stackObjectSite = stackObjectSites.get(ip);
-		instructionContext.stackObjectAccess = stackObjectAccesses.get(ip);
-		instructionContext.stackObjectMaterialization = stackObjectMaterializations.get(ip);
-		instructionContext.stackObjectLends = stackObjectLends.get(ip);
-		instructionContext.stackObjectInheritedAccess = stackObjectInheritedAccesses.get(ip);
-		instructionContext.constantBoolean = directConstantBooleans.get(ip);
-		instructionContext.fieldLoad = fieldLoads.get(ip);
-		instructionContext.recordAllocation = records.allocations.get(ip);
-		instructionContext.recordObject = records.objects.get(ip);
-		instructionContext.recordForward = records.forwards.get(ip);
-		instructionContext.recordAccess = records.accesses.get(ip);
-		instructionContext.recordObservers = records.observers.get(ip);
-		instructionContext.recordCall = records.calls.get(ip);
-		instructionContext.recordPasses = records.passes.get(ip);
-		instructionContext.fieldAllocation = fieldAllocations.get(ip);
-		instructionContext.fieldCall = fieldCallSites.get(ip);
-		instructionContext.fieldThrowSlots =
-			activeFieldSlots.size === 0 ? EMPTY_ROOTED_OUTPUTS : [...activeFieldSlots];
-		instructionContext.callTransport = callTransportByIp.get(ip);
-		instructionContext.callbackTransport = callbackTransportByIp.get(ip);
-		instructionContext.mathCall = mathCalls.get(ip);
-		const contextInstruction = fn.instructions[ip]!;
-		instructionContext.watchedMathCallee =
-			contextInstruction.opcode === "LOAD_PROPERTY_STATIC" &&
-			mathCalleeRegisters.has(contextInstruction.dst);
-		instructionContext.numberPredicate = numberPredicates.get(ip);
-		instructionContext.stringTransform = stringTransforms.get(ip);
-		instructionContext.arrayInitialization = arrayInitializations.get(ip);
-		instructionContext.mapEntry = mapEntries.get(ip);
-		instructionContext.objectEnumerationSnapshot = objectEnumerationSnapshots.get(ip);
-		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
-		instructionContext.nativeArrayPresenceProjectionAction = arrayPresenceAction;
-		instructionContext.pairedArrayLoopAction = pairedArrayLoopActionByIp.get(ip);
-
-		instructionContext.nativeStringSplitProjectionAction =
-			nativeStringSplitProjectionActionByIp.get(ip);
-		instructionContext.nativeStringSplitCursorAction =
-			nativeStringSplitCursorActionByIp.get(ip);
-		instructionContext.stringSplitTrimLengthSite = stringSplitTrimLengthSiteByIp.get(ip);
-		instructionContext.nativeRegExpExecProjectionAction =
-			nativeRegExpExecProjectionActionByIp.get(ip);
-		instructionContext.nativeRegExpIteratorProjectionAction =
-			nativeRegExpIteratorProjectionActionByIp.get(ip);
-		instructionContext.nativeStringSpanAction = nativeStringSpanActionByIp.get(ip);
-		instructionContext.nativeStringCharCodeAtChainAction =
-			nativeStringCharCodeAtChainActionByIp.get(ip);
-		instructionContext.nativeBuiltinCollectionCallChainAction =
-			nativeBuiltinCollectionCallChainActionByIp.get(ip);
-		instructionContext.nativeIteratorCursorAction =
-			nativeIteratorCursorActionByIp.get(ip);
-		instructionContext.deferredIteratorCursor = deferredIteratorCursors.has(
-			instructionContext.nativeIteratorCursorAction?.cursor.initializeIp ?? -1,
-		);
-		instructionContext.nativeArrayPairDestructureAction =
-			nativeArrayPairDestructureActionByIp.get(ip);
-		instructionContext.nativeIteratorResultVirtualizationAction =
-			nativeIteratorResultVirtualizationActionByIp.get(ip);
-		instructionContext.nativeIteratorEntryPairVirtualizationAction =
-			nativeIteratorEntryPairVirtualizationActionByIp.get(ip);
-		instructionContext.numericFusionAction = numericFusionActionByIp.get(ip);
-		instructionContext.staticPropertyProjectionAction =
-			nativeFastPaths.propertyReadPairActions.get(ip);
-		instructionContext.staticPropertyNumericAction =
-			staticPropertyNumericActionByIp.get(ip);
-		instructionContext.propertyNumericUpdateAction =
-			propertyNumericUpdateActionByIp.get(ip);
-		instructionContext.propertyNumericUpdateFacts =
-			instructionContext.propertyNumericUpdateAction === undefined
-				? undefined
-				: nativeFacts?.[instructionContext.propertyNumericUpdateAction.plan.operationIp];
-		instructionContext.propertyReadRegionAction = propertyReadRegionActionByIp.get(ip);
-		instructionContext.constructorInitializationAction =
-			constructorInitializationActionByIp.get(ip);
-		instructionContext.privateFieldReserveCount =
-			privateFieldReserve?.id === ip ? privateFieldReserve.count : undefined;
-		instructionContext.polymorphicMethodLoad = polymorphicMethodLoads.has(ip);
-		const scalarInputDeclarations: Array<string> = [];
-		let scalarInputValues: Map<number, string> | undefined;
-		const instruction = fn.instructions[ip]!;
-		if (instruction.opcode === "CALL_KNOWN") {
-			for (const operand of instruction.arguments) {
-				const value = decodeVmValueOperand(operand);
-				if (
-					value.kind !== "register" ||
-					!expressionLocals.has(value.register) ||
-					scalarInputValues?.has(value.register)
-				)
-					continue;
-				const name = `__known_argument_${ip}_${value.register}`;
-				(scalarInputValues ??= new Map()).set(value.register, name);
-				scalarInputDeclarations.push(
-					`${cTypeOf(reps[value.register]!)} ${name} = r${value.register};`,
-				);
-			}
-		} else if (
-			(instruction.opcode === "LOAD_PROPERTY" ||
-				instruction.opcode === "STORE_PROPERTY") &&
-			expressionLocals.has(instruction.key)
-		) {
-			const name = `__indexed_key_${ip}`;
-			scalarInputValues = new Map([[instruction.key, name]]);
-			scalarInputDeclarations.push(
-				`${cTypeOf(reps[instruction.key]!)} ${name} = r${instruction.key};`,
-			);
-		}
-		instructionContext.scalarInputValues = scalarInputValues;
-		const framePosition =
-			debug !== false && nativeInstructionMayCaptureStack(instruction, reps)
-				? (fn.positions[ip] ?? -1)
-				: -1;
-		const framePositionStore =
-			debug !== false && framePosition !== -1 && framePosition !== lastPublishedPos
-				? `MAL_FRAME_POS(__frame_row, ${nativePositionEntry(debug, functionIndex, framePosition)});`
-				: undefined;
-		const slowPathFramePosition =
-			framePositionStore === undefined
-				? undefined
-				: { store: framePositionStore, consumed: false, elided: false };
-		instructionContext.slowPathFramePosition = slowPathFramePosition;
-		const emitted = emitInstruction(
-			fn.instructions[ip]!,
-			ip,
-			suffix,
-			reps,
-			fn.strict,
-			handlerTargets[ip],
-			gcUnlink,
-			thisSlot,
-			coro,
-			instructionContext,
-		);
-		if (emitted === null) {
-			return null;
-		}
-		if (
-			eagerOperatorRootPublication &&
-			operatorMaskEmitted &&
-			operatorInactiveRootMask !== undefined
-		) {
-			lines.push(
-				`    ${cInactiveRootMaskPublication(operatorInactiveRootMask, inactiveRootMaskStatements)};`,
-			);
-			lastPublishedInactiveRootMask = operatorInactiveRootMask;
-		} else if (
-			operatorMaskEmitted ||
-			valueGuardInactiveRootMask !== undefined ||
-			guardedPropertyLoadInactiveRootMask !== undefined ||
-			staticPropertyLoadInactiveRootMask !== undefined ||
-			privateAccessInactiveRootMask !== undefined ||
-			indexedPropertyInactiveRootMask !== undefined ||
-			staticPropertyWriteInactiveRootMask !== undefined ||
-			iteratorStepInactiveRootMask !== undefined ||
-			guardedCallInactiveRootMask !== undefined
-		) {
-			// Conditional paths can preserve the old mask or publish the instruction's mask.
-			lastPublishedInactiveRootMask = undefined;
-		}
-		if (slowPathFramePosition !== undefined && !slowPathFramePosition.elided) {
-			if (slowPathFramePosition.consumed) {
-				// Only the slow path published it, so the frame may still hold an older position.
-				lastPublishedPos = -1;
-			} else {
-				lines.push(`    ${slowPathFramePosition.store}`);
-				lastPublishedPos = framePosition;
-			}
-		}
-		const profileSiteId = fn.profileSiteIds?.[ip] ?? -1;
-		if (
-			debug !== false &&
-			profileSiteId >= 0 &&
-			nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps) &&
-			profileSiteId !== lastPublishedSite
-		) {
-			lines.push(`    MAL_FRAME_SITE(vm, ${profileSiteId});`);
-			lastPublishedSite = profileSiteId;
-		}
-		if (profileSiteId >= 0) {
-			lines.push(`    MAL_PROFILE_SITE(vm, ${profileSiteId});`);
-			const operationSite = profileOperationInstruction(fn.instructions[ip]!);
-			const boxingSite = profileBoxesNativeValue(emitted);
-			if (operationSite || boxingSite) {
-				profileDecisions.push(
-					...profileDecisionsForInstruction(
+			const integerLoop = integerLoopRegionByEntry.get(ip);
+			// An iteration region steps the deferred cursor, so it needs that cursor.
+			if (
+				integerLoop !== undefined &&
+				(integerLoop.kind !== "array-iteration" ||
+					deferredIteratorCursors.has(integerLoop.initializeIp))
+			)
+				for (const line of emitNumericLoopRegion(
+					fn,
+					integerLoop,
+					reps,
+					nativeBodyReference(resources, "propertyCache"),
+					(bindingIp) => {
+						const binding = fn.instructions[bindingIp]!;
+						if (binding.opcode === "LOAD_GLOBAL")
+							return `r${binding.dst} = vm->globals[${relocation.globalIndex(binding.index)}];`;
+						if (binding.opcode === "LOAD_CAPTURED")
+							return renderCapturedLoad(
+								binding,
+								bindingIp,
+								instructionContext,
+								relocation,
+							).join(" ");
+						throw new Error("Invalid numeric loop binding load");
+					},
+					nativeFacts,
+					nativeInstructions,
+					(branchIp, spill, isolate) => {
+						if (gcSafepointKinds.get(branchIp) !== "loop-backedge") return "";
+						const handler = handlerTargets[branchIp];
+						const mask = inactiveRootMasks.get(branchIp);
+						const onThrow =
+							handler === undefined
+								? nativeBodyReference(resources, "throwExit")
+								: `L${handler}`;
+						return `if (mal_gc_poll_requested_in(${isolate})) { MAL_PERF_COUNT(record_columns_polls); ${spill} ${cVirtualRestRootPublication(virtualRestRootCounts, branchIp, "outgoing")} ${cPrivateRootPublication(rootPublication, branchIp, "outgoing").join(" ")} ${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask, inactiveRootMaskStatements)};`} mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) goto ${onThrow}; }`;
+					},
+				))
+					lines.push(`    ${line}`);
+			const numberRecord = numberRecordRegionById.get(ip);
+			if (numberRecord !== undefined)
+				for (const line of emitNumberRecordRegion(
+					fn,
+					numberRecord,
+					reps,
+					nativeBodyReference(resources, "propertyCache"),
+					loopInstructions[ip] === 1 ? shapeSnapshots : undefined,
+					nativeFacts,
+				))
+					lines.push(`    ${line}`);
+			const safepointKind = gcSafepointKinds.get(ip);
+			const rootedOutputs = !hasPrivateRoots
+				? EMPTY_ROOTED_OUTPUTS
+				: nativeRootedOutputRegisters(
 						fn.instructions[ip]!,
 						ip,
-						emitted,
-						boxingSite,
-						instructionProfile?.decision,
-					),
+						rootPublication!.privateCallResultIps,
+					).filter((register) => rootPublication!.slots.has(register));
+			const rootedOutputReloads =
+				rootedOutputs.length === 0
+					? EMPTY_ROOT_PUBLICATION
+					: rootedOutputs.map(
+							(register) =>
+								`__private_r${register} = __gc_slots[${rootPublication!.slots.get(register)!}];`,
+						);
+			const incomingRootPublication = cPrivateRootPublication(
+				rootPublication,
+				ip,
+				"incoming",
+				knownPublishedPrivateRoots,
+			);
+			const deferrableRoots =
+				incomingRootPublication.length <= MAX_DEFERRED_ROOT_PUBLICATION_STORES;
+			const deferredPropertyRoots =
+				deferrableRoots &&
+				(fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" ||
+					fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+					fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
+				!staticPropertyProjectionConflicts(ip);
+			const indexedPropertyInstruction = fn.instructions[ip]!;
+			// Dense growth can allocate, but its allocator never collects inside the probe.
+			const deferredIndexedPropertyRoots =
+				deferrableRoots &&
+				hasPrivateRoots &&
+				(indexedPropertyInstruction.opcode === "LOAD_PROPERTY" ||
+					indexedPropertyInstruction.opcode === "STORE_PROPERTY") &&
+				(isNumericRep(reps[indexedPropertyInstruction.key]!) ||
+					instructionInputKind(nativeFacts?.[ip], indexedPropertyInstruction.key) ===
+						COMPILER_VALUE_KIND_NUMBER) &&
+				!staticPropertyProjectionConflicts(ip) &&
+				!stackObjectMaterializations.has(ip) &&
+				!nativeArrayPresenceProjectionActionByIp.has(ip) &&
+				!pairedArrayLoopActionByIp.has(ip) &&
+				!nativeIteratorCursorActionByIp.has(ip) &&
+				!nativeArrayPairDestructureActionByIp.has(ip) &&
+				!nativeIteratorResultVirtualizationActionByIp.has(ip) &&
+				!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
+				!numericFusionActionByIp.has(ip) &&
+				!staticPropertyNumericActionByIp.has(ip) &&
+				!constructorInitializationActionByIp.has(ip);
+			const staticPropertyWriteInstruction = fn.instructions[ip]!;
+			const deferredStaticPropertyWriteRoots =
+				deferrableRoots &&
+				(staticPropertyWriteInstruction.opcode === "STORE_PROPERTY_STATIC" ||
+					staticPropertyWriteInstruction.opcode ===
+						"STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+					(hasPrivateRoots &&
+						staticPropertyWriteInstruction.opcode === "DEFINE_PROPERTY" &&
+						staticPropertyWriteInstruction.enumerable &&
+						staticPropertyWriteInstruction.writable &&
+						staticPropertyWriteInstruction.configurable &&
+						staticDefineStringIndexByIp.has(ip) &&
+						!definitionPublicationBarriers.has(ip))) &&
+				nativeInstructions[ip] === undefined &&
+				!stackObjectAccesses.has(ip) &&
+				!stackObjectMaterializations.has(ip) &&
+				!constructorInitializationActionByIp.has(ip);
+			const deferredOperatorRoots =
+				deferrableRoots && fn.instructions[ip]!.opcode === "BINARY";
+			const deferredPrivateAccessRoots =
+				deferrableRoots &&
+				(fn.instructions[ip]!.opcode === "LOAD_PRIVATE" ||
+					fn.instructions[ip]!.opcode === "STORE_PRIVATE");
+			// Only selected private values need the operator's mask on its fallback edge.
+			const eagerOperatorRootPublication =
+				deferredOperatorRoots && (rootPublication?.slots.size ?? 0) === 0;
+			const deferredValueGuardRoots =
+				deferrableRoots && VALUE_GUARD_OPCODES.has(fn.instructions[ip]!.opcode);
+			const deferredForInRoots =
+				deferrableRoots && fn.instructions[ip]!.opcode === "FOR_IN_HAS";
+			const iteratorCursorAction = nativeIteratorCursorActionByIp.get(ip);
+			const deferredIteratorRoots =
+				deferrableRoots &&
+				coro === null &&
+				fn.instructions[ip]!.opcode === "ITERATOR_STEP" &&
+				nativeInstructions[ip] === undefined &&
+				iteratorCursorAction?.role === "step" &&
+				(iteratorCursorAction.cursor.protocol === "array-values" ||
+					iteratorCursorAction.cursor.protocol === "string") &&
+				!nativeArrayPairDestructureActionByIp.has(ip) &&
+				!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
+				!nativeRegExpIteratorProjectionActionByIp.has(ip);
+			const guardedCallInstruction = fn.instructions[ip]!;
+			const guardedCallPlan = nativeInstructions[ip];
+			const guardedCallEffects =
+				guardedCallPlan?.kind === "call" &&
+				guardedCallPlan.guardedBuiltinCall !== undefined
+					? nativeGuardedBuiltinEffects(guardedCallPlan.guardedBuiltinCall.operation)
+					: undefined;
+			const deferredGuardedCallRoots =
+				deferrableRoots &&
+				coro === null &&
+				guardedCallInstruction.opcode === "CALL" &&
+				guardedCallPlan?.kind === "call" &&
+				(mathCalls.has(ip) ||
+					(guardedCallEffects !== undefined &&
+						!guardedCallEffects.collection &&
+						!guardedCallEffects.reentry)) &&
+				// Rooted outputs alias shadow storage before dispatch, including reused inputs.
+				!rootedOutputs.some((register) =>
+					vmInstructionUsesRegister(guardedCallInstruction, register),
+				) &&
+				guardedCallPlan.numericSortCallback === undefined &&
+				guardedCallPlan.directFunctionIndex === undefined &&
+				guardedCallPlan.directEntryId === undefined &&
+				guardedCallPlan.guardedFunctionIndices === undefined &&
+				guardedCallPlan.directFunctionCall === undefined &&
+				guardedCallPlan.directCallbackFunctionIndex === undefined &&
+				!fieldCallSites.has(ip) &&
+				!nativeStringCharCodeAtChainActionByIp.has(ip) &&
+				!nativeStringSplitCursorActionByIp.has(ip) &&
+				!nativeStringSplitProjectionActionByIp.has(ip) &&
+				!nativeRegExpExecProjectionActionByIp.has(ip) &&
+				!nativeRegExpIteratorProjectionActionByIp.has(ip) &&
+				!nativeStringSpanActionByIp.has(ip) &&
+				!nativeBuiltinCollectionCallChainActionByIp.has(ip);
+			const effects = nativeInstructionEffects(fn.instructions[ip]!, nativeFacts?.[ip]);
+			const publishesIncomingRoots =
+				safepointKind !== "loop-backedge" &&
+				!deferredPropertyRoots &&
+				!deferredPrivateAccessRoots &&
+				!deferredIndexedPropertyRoots &&
+				!deferredStaticPropertyWriteRoots &&
+				!deferredOperatorRoots &&
+				!deferredValueGuardRoots &&
+				!deferredForInRoots &&
+				!deferredIteratorRoots &&
+				!deferredGuardedCallRoots &&
+				(effects.collection || effects.reentry);
+			// Only rendered strings escape this map, so the body can update it in place.
+			if (rootPublication !== undefined && hasPrivateRoots) {
+				const point = rootPublication.safepoints.get(ip);
+				if (publishesIncomingRoots && point !== undefined)
+					for (const [slot, register] of point.active)
+						if (point.incoming.has(register))
+							knownPublishedPrivateRoots.set(slot, register);
+				// Refined GC maps identify possible shadow clearing on either edge.
+				if (point !== undefined)
+					for (const [slot, register] of knownPublishedPrivateRoots)
+						if (!point.incoming.has(register) || !point.outgoing.has(register))
+							knownPublishedPrivateRoots.delete(slot);
+				for (const register of analysis.writeRegistersAt(ip)) {
+					const slot = rootPublication.slots.get(register);
+					if (slot !== undefined && knownPublishedPrivateRoots.get(slot) === register)
+						knownPublishedPrivateRoots.delete(slot);
+				}
+				// Polls read the shadow alias; the final reload establishes private equality.
+				for (const register of rootedOutputs)
+					knownPublishedPrivateRoots.set(rootPublication.slots.get(register)!, register);
+			}
+			const outgoingRootPublication = cPrivateRootPublication(
+				rootPublication,
+				ip,
+				"outgoing",
+				knownPublishedPrivateRoots,
+			);
+			if (publishesIncomingRoots) {
+				for (const line of incomingRootPublication) lines.push(`    ${line}`);
+			}
+			const inactiveRootMask = inactiveRootMasks.get(ip);
+			const operatorInactiveRootMask =
+				deferredOperatorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+					? inactiveRootMask
+					: undefined;
+			const indexedPropertyInactiveRootMask =
+				deferredIndexedPropertyRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+					? inactiveRootMask
+					: undefined;
+			const staticPropertyWriteInactiveRootMask =
+				deferredStaticPropertyWriteRoots &&
+				inactiveRootMask !== lastPublishedInactiveRootMask
+					? inactiveRootMask
+					: undefined;
+			const iteratorStepInactiveRootMask =
+				deferredIteratorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+					? inactiveRootMask
+					: undefined;
+			const guardedCallInactiveRootMask =
+				(deferredGuardedCallRoots ||
+					(safepointKind === "operation" && mathCalls.has(ip))) &&
+				inactiveRootMask !== lastPublishedInactiveRootMask
+					? inactiveRootMask
+					: undefined;
+			const loopBackedgeInactiveRootMask =
+				safepointKind === "loop-backedge" &&
+				inactiveRootMask !== lastPublishedInactiveRootMask
+					? inactiveRootMask
+					: undefined;
+			const valueGuardInactiveRootMask =
+				safepointKind === "operation" &&
+				VALUE_GUARD_OPCODES.has(fn.instructions[ip]!.opcode) &&
+				inactiveRootMask !== lastPublishedInactiveRootMask
+					? inactiveRootMask
+					: undefined;
+			const guardedPropertyLoadInactiveRootMask =
+				safepointKind === "operation" &&
+				(fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+					fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
+				inactiveRootMask !== lastPublishedInactiveRootMask
+					? inactiveRootMask
+					: undefined;
+			const staticPropertyLoadInactiveRootMask =
+				safepointKind === "operation" &&
+				fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" &&
+				nativeInstructions[ip] === undefined &&
+				stackObjectAccesses.get(ip) === undefined &&
+				objectEnumerationSnapshots.get(ip)?.kind !== "entries" &&
+				stackObjectInheritedAccesses.get(ip) === undefined &&
+				nativeStringSplitProjectionActionByIp.get(ip) === undefined &&
+				nativeStringSplitCursorActionByIp.get(ip) === undefined &&
+				nativeRegExpExecProjectionActionByIp.get(ip) === undefined &&
+				nativeRegExpIteratorProjectionActionByIp.get(ip) === undefined &&
+				nativeStringSpanActionByIp.get(ip) === undefined &&
+				nativeStringCharCodeAtChainActionByIp.get(ip) === undefined &&
+				nativeBuiltinCollectionCallChainActionByIp.get(ip) === undefined &&
+				inactiveRootMask !== lastPublishedInactiveRootMask
+					? inactiveRootMask
+					: undefined;
+			const privateAccessInactiveRootMask =
+				safepointKind === "operation" &&
+				(fn.instructions[ip]!.opcode === "LOAD_PRIVATE" ||
+					fn.instructions[ip]!.opcode === "STORE_PRIVATE") &&
+				inactiveRootMask !== lastPublishedInactiveRootMask
+					? inactiveRootMask
+					: undefined;
+			if (
+				inactiveRootMask !== undefined &&
+				loopBackedgeInactiveRootMask === undefined &&
+				operatorInactiveRootMask === undefined &&
+				valueGuardInactiveRootMask === undefined &&
+				guardedPropertyLoadInactiveRootMask === undefined &&
+				staticPropertyLoadInactiveRootMask === undefined &&
+				privateAccessInactiveRootMask === undefined &&
+				indexedPropertyInactiveRootMask === undefined &&
+				staticPropertyWriteInactiveRootMask === undefined &&
+				iteratorStepInactiveRootMask === undefined &&
+				guardedCallInactiveRootMask === undefined &&
+				inactiveRootMask !== lastPublishedInactiveRootMask
+			) {
+				lines.push(
+					`    ${cInactiveRootMaskPublication(inactiveRootMask, inactiveRootMaskStatements)};`,
 				);
 			}
-		}
-		for (const register of rootedOutputs) {
-			lines.push(`#undef r${register}`);
-			lines.push(
-				`#define r${register} (__gc_slots[${rootPublication!.slots.get(register)!}])`,
-			);
-		}
-		for (const line of scalarInputDeclarations) lines.push(`    ${line}`);
-		for (const line of emitted) {
-			lines.push(`    ${line}`);
-		}
-		for (const line of rootedOutputReloads) lines.push(`    ${line}`);
-		// The array now owns these values; keep an empty span linked until the ordinary exit.
-		if (ip === restArgumentRootReleaseIp) lines.push("    __argument_roots.count = 0;");
-		for (const register of rootedOutputs) {
-			lines.push(`#undef r${register}`);
-			lines.push(`#define r${register} (__private_r${register})`);
-		}
-		if (
-			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
-			rootPublicationContinuations.has(instruction.targetIp)
-		) {
-			if (instruction.targetIp === ip + 1)
-				adjacentRootContinuationIp = instruction.targetIp;
-			else if (
-				knownPublishedPrivateRoots.size > 0 ||
-				lastPublishedInactiveRootMask !== undefined
+			if (
+				inactiveRootMask !== undefined &&
+				loopBackedgeInactiveRootMask === undefined &&
+				operatorInactiveRootMask === undefined &&
+				valueGuardInactiveRootMask === undefined &&
+				guardedPropertyLoadInactiveRootMask === undefined &&
+				staticPropertyLoadInactiveRootMask === undefined &&
+				privateAccessInactiveRootMask === undefined &&
+				indexedPropertyInactiveRootMask === undefined &&
+				staticPropertyWriteInactiveRootMask === undefined &&
+				iteratorStepInactiveRootMask === undefined &&
+				guardedCallInactiveRootMask === undefined
 			) {
-				// Skipped lexical blocks can change publication state before the taken target.
-				(rootContinuationSnapshots ??= new Map()).set(instruction.targetIp, {
-					roots: new Map(knownPublishedPrivateRoots),
-					mask: lastPublishedInactiveRootMask,
-				});
+				lastPublishedInactiveRootMask = inactiveRootMask;
+			}
+			const instructionProfile: NativeInstructionProfile | undefined =
+				(fn.profileSiteIds?.[ip] ?? -1) >= 0 ? {} : undefined;
+			const arrayPresenceAction = nativeArrayPresenceProjectionActionByIp.get(ip);
+			emittedInstructions.add(ip);
+			let operatorMaskEmitted = false;
+			instructionContext.nativePlan = nativeInstructions[ip];
+			instructionContext.copiedClosure = copiedClosures.has(ip);
+			instructionContext.facts = nativeFacts?.[ip];
+			instructionContext.profileSiteId = fn.profileSiteIds?.[ip];
+			instructionContext.profile = instructionProfile;
+			instructionContext.gcSafepoint = safepointKind !== undefined;
+			instructionContext.loopPoll = safepointKind === "loop-backedge";
+			instructionContext.branchTarget = branchTargets.get(ip);
+			instructionContext.incomingRootPublication =
+				deferredPropertyRoots ||
+				deferredPrivateAccessRoots ||
+				deferredIndexedPropertyRoots ||
+				deferredStaticPropertyWriteRoots ||
+				deferredOperatorRoots ||
+				deferredValueGuardRoots ||
+				deferredForInRoots ||
+				deferredIteratorRoots ||
+				deferredGuardedCallRoots
+					? operatorInactiveRootMask === undefined
+						? incomingRootPublication
+						: [
+								...incomingRootPublication,
+								`${cInactiveRootMaskPublication(operatorInactiveRootMask, inactiveRootMaskStatements)};`,
+							]
+					: EMPTY_ROOT_PUBLICATION;
+			instructionContext.eagerIncomingRootPublication = eagerOperatorRootPublication;
+			instructionContext.onIncomingRootPublication =
+				operatorInactiveRootMask === undefined
+					? undefined
+					: () => {
+							operatorMaskEmitted = true;
+						};
+			instructionContext.outgoingRootPublication = outgoingRootPublication;
+			instructionContext.rootedOutputReloads = rootedOutputReloads;
+			instructionContext.loopBackedgeInactiveRootMask = loopBackedgeInactiveRootMask;
+			instructionContext.valueGuardInactiveRootMask = valueGuardInactiveRootMask;
+			instructionContext.guardedPropertyLoadInactiveRootMask =
+				guardedPropertyLoadInactiveRootMask;
+			instructionContext.staticPropertyLoadInactiveRootMask =
+				staticPropertyLoadInactiveRootMask;
+			instructionContext.privateAccessInactiveRootMask = privateAccessInactiveRootMask;
+			instructionContext.indexedPropertyInactiveRootMask =
+				indexedPropertyInactiveRootMask;
+			instructionContext.staticPropertyWriteInactiveRootMask =
+				staticPropertyWriteInactiveRootMask;
+			instructionContext.guardedCallRootPublication = deferredGuardedCallRoots;
+			instructionContext.guardedCallInactiveRootMask = guardedCallInactiveRootMask;
+			instructionContext.iteratorStepRootPublication = deferredIteratorRoots;
+			instructionContext.iteratorStepInactiveRootMask = iteratorStepInactiveRootMask;
+			instructionContext.stackObjectSite = stackObjectSites.get(ip);
+			instructionContext.stackObjectAccess = stackObjectAccesses.get(ip);
+			instructionContext.stackObjectMaterialization = stackObjectMaterializations.get(ip);
+			instructionContext.stackObjectLends = stackObjectLends.get(ip);
+			instructionContext.stackObjectInheritedAccess =
+				stackObjectInheritedAccesses.get(ip);
+			instructionContext.constantBoolean = directConstantBooleans.get(ip);
+			instructionContext.fieldLoad = fieldLoads.get(ip);
+			instructionContext.recordAllocation = records.allocations.get(ip);
+			instructionContext.recordObject = records.objects.get(ip);
+			instructionContext.recordForward = records.forwards.get(ip);
+			instructionContext.recordAccess = records.accesses.get(ip);
+			instructionContext.recordObservers = records.observers.get(ip);
+			instructionContext.recordCall = records.calls.get(ip);
+			instructionContext.recordPasses = records.passes.get(ip);
+			instructionContext.fieldAllocation = fieldAllocations.get(ip);
+			instructionContext.fieldCall = fieldCallSites.get(ip);
+			instructionContext.fieldThrowSlots =
+				activeFieldSlots.size === 0 ? EMPTY_ROOTED_OUTPUTS : [...activeFieldSlots];
+			instructionContext.callTransport = callTransportByIp.get(ip);
+			instructionContext.callbackTransport = callbackTransportByIp.get(ip);
+			instructionContext.mathCall = mathCalls.get(ip);
+			const contextInstruction = fn.instructions[ip]!;
+			instructionContext.watchedMathCallee =
+				contextInstruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				mathCalleeRegisters.has(contextInstruction.dst);
+			instructionContext.numberPredicate = numberPredicates.get(ip);
+			instructionContext.stringTransform = stringTransforms.get(ip);
+			instructionContext.arrayInitialization = arrayInitializations.get(ip);
+			instructionContext.mapEntry = mapEntries.get(ip);
+			instructionContext.objectEnumerationSnapshot = objectEnumerationSnapshots.get(ip);
+			instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
+			instructionContext.nativeArrayPresenceProjectionAction = arrayPresenceAction;
+			instructionContext.pairedArrayLoopAction = pairedArrayLoopActionByIp.get(ip);
+
+			instructionContext.nativeStringSplitProjectionAction =
+				nativeStringSplitProjectionActionByIp.get(ip);
+			instructionContext.nativeStringSplitCursorAction =
+				nativeStringSplitCursorActionByIp.get(ip);
+			instructionContext.stringSplitTrimLengthSite =
+				stringSplitTrimLengthSiteByIp.get(ip);
+			instructionContext.nativeRegExpExecProjectionAction =
+				nativeRegExpExecProjectionActionByIp.get(ip);
+			instructionContext.nativeRegExpIteratorProjectionAction =
+				nativeRegExpIteratorProjectionActionByIp.get(ip);
+			instructionContext.nativeStringSpanAction = nativeStringSpanActionByIp.get(ip);
+			instructionContext.nativeStringCharCodeAtChainAction =
+				nativeStringCharCodeAtChainActionByIp.get(ip);
+			instructionContext.nativeBuiltinCollectionCallChainAction =
+				nativeBuiltinCollectionCallChainActionByIp.get(ip);
+			instructionContext.nativeIteratorCursorAction =
+				nativeIteratorCursorActionByIp.get(ip);
+			instructionContext.deferredIteratorCursor = deferredIteratorCursors.has(
+				instructionContext.nativeIteratorCursorAction?.cursor.initializeIp ?? -1,
+			);
+			instructionContext.nativeArrayPairDestructureAction =
+				nativeArrayPairDestructureActionByIp.get(ip);
+			instructionContext.nativeIteratorResultVirtualizationAction =
+				nativeIteratorResultVirtualizationActionByIp.get(ip);
+			instructionContext.nativeIteratorEntryPairVirtualizationAction =
+				nativeIteratorEntryPairVirtualizationActionByIp.get(ip);
+			instructionContext.numericFusionAction = numericFusionActionByIp.get(ip);
+			instructionContext.staticPropertyProjectionAction =
+				nativeFastPaths.propertyReadPairActions.get(ip);
+			instructionContext.staticPropertyNumericAction =
+				staticPropertyNumericActionByIp.get(ip);
+			instructionContext.propertyNumericUpdateAction =
+				propertyNumericUpdateActionByIp.get(ip);
+			instructionContext.propertyNumericUpdateFacts =
+				instructionContext.propertyNumericUpdateAction === undefined
+					? undefined
+					: nativeFacts?.[
+							instructionContext.propertyNumericUpdateAction.plan.operationIp
+						];
+			instructionContext.propertyReadRegionAction = propertyReadRegionActionByIp.get(ip);
+			instructionContext.constructorInitializationAction =
+				constructorInitializationActionByIp.get(ip);
+			instructionContext.privateFieldReserveCount =
+				privateFieldReserve?.id === ip ? privateFieldReserve.count : undefined;
+			instructionContext.polymorphicMethodLoad = polymorphicMethodLoads.has(ip);
+			const scalarInputDeclarations: Array<string> = [];
+			let scalarInputValues: Map<number, string> | undefined;
+			const instruction = fn.instructions[ip]!;
+			if (instruction.opcode === "CALL_KNOWN") {
+				for (const operand of instruction.arguments) {
+					const value = decodeVmValueOperand(operand);
+					if (
+						value.kind !== "register" ||
+						!expressionLocals.has(value.register) ||
+						scalarInputValues?.has(value.register)
+					)
+						continue;
+					const name = `__known_argument_${ip}_${value.register}`;
+					(scalarInputValues ??= new Map()).set(value.register, name);
+					scalarInputDeclarations.push(
+						`${cTypeOf(reps[value.register]!)} ${name} = r${value.register};`,
+					);
+				}
+			} else if (
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY") &&
+				expressionLocals.has(instruction.key)
+			) {
+				const name = `__indexed_key_${ip}`;
+				scalarInputValues = new Map([[instruction.key, name]]);
+				scalarInputDeclarations.push(
+					`${cTypeOf(reps[instruction.key]!)} ${name} = r${instruction.key};`,
+				);
+			}
+			instructionContext.scalarInputValues = scalarInputValues;
+			const framePosition =
+				debug !== false && nativeInstructionMayCaptureStack(instruction, reps)
+					? (fn.positions[ip] ?? -1)
+					: -1;
+			const framePositionStore =
+				debug !== false && framePosition !== -1 && framePosition !== lastPublishedPos
+					? `MAL_FRAME_POS(__frame_row, ${nativePositionEntry(debug, functionIndex, framePosition)});`
+					: undefined;
+			const slowPathFramePosition =
+				framePositionStore === undefined
+					? undefined
+					: { store: framePositionStore, consumed: false, elided: false };
+			instructionContext.slowPathFramePosition = slowPathFramePosition;
+			const emitted = emitInstruction(
+				fn.instructions[ip]!,
+				ip,
+				suffix,
+				reps,
+				fn.strict,
+				handlerTargets[ip],
+				gcUnlink,
+				thisSlot,
+				coro,
+				instructionContext,
+			);
+			if (emitted === null) {
+				return false;
+			}
+			if (
+				eagerOperatorRootPublication &&
+				operatorMaskEmitted &&
+				operatorInactiveRootMask !== undefined
+			) {
+				lines.push(
+					`    ${cInactiveRootMaskPublication(operatorInactiveRootMask, inactiveRootMaskStatements)};`,
+				);
+				lastPublishedInactiveRootMask = operatorInactiveRootMask;
+			} else if (
+				operatorMaskEmitted ||
+				valueGuardInactiveRootMask !== undefined ||
+				guardedPropertyLoadInactiveRootMask !== undefined ||
+				staticPropertyLoadInactiveRootMask !== undefined ||
+				privateAccessInactiveRootMask !== undefined ||
+				indexedPropertyInactiveRootMask !== undefined ||
+				staticPropertyWriteInactiveRootMask !== undefined ||
+				iteratorStepInactiveRootMask !== undefined ||
+				guardedCallInactiveRootMask !== undefined
+			) {
+				// Conditional paths can preserve the old mask or publish the instruction's mask.
+				lastPublishedInactiveRootMask = undefined;
+			}
+			if (slowPathFramePosition !== undefined && !slowPathFramePosition.elided) {
+				if (slowPathFramePosition.consumed) {
+					// Only the slow path published it, so the frame may still hold an older position.
+					lastPublishedPos = -1;
+				} else {
+					lines.push(`    ${slowPathFramePosition.store}`);
+					lastPublishedPos = framePosition;
+				}
+			}
+			const profileSiteId = fn.profileSiteIds?.[ip] ?? -1;
+			if (
+				debug !== false &&
+				profileSiteId >= 0 &&
+				nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps) &&
+				profileSiteId !== lastPublishedSite
+			) {
+				lines.push(`    MAL_FRAME_SITE(vm, ${profileSiteId});`);
+				lastPublishedSite = profileSiteId;
+			}
+			if (profileSiteId >= 0) {
+				lines.push(`    MAL_PROFILE_SITE(vm, ${profileSiteId});`);
+				const operationSite = profileOperationInstruction(fn.instructions[ip]!);
+				const boxingSite = profileBoxesNativeValue(emitted);
+				if (operationSite || boxingSite) {
+					profileDecisions.push(
+						...profileDecisionsForInstruction(
+							fn.instructions[ip]!,
+							ip,
+							emitted,
+							boxingSite,
+							instructionProfile?.decision,
+						),
+					);
+				}
+			}
+			for (const register of rootedOutputs) {
+				lines.push(`#undef r${register}`);
+				lines.push(
+					`#define r${register} (__gc_slots[${rootPublication!.slots.get(register)!}])`,
+				);
+			}
+			for (const line of scalarInputDeclarations) lines.push(`    ${line}`);
+			for (const line of emitted) {
+				lines.push(`    ${line}`);
+			}
+			for (const line of rootedOutputReloads) lines.push(`    ${line}`);
+			// The array now owns these values; keep an empty span linked until the ordinary exit.
+			if (ip === restArgumentRootReleaseIp) lines.push("    __argument_roots.count = 0;");
+			for (const register of rootedOutputs) {
+				lines.push(`#undef r${register}`);
+				lines.push(`#define r${register} (__private_r${register})`);
+			}
+			if (
+				(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+				rootPublicationContinuations.has(instruction.targetIp)
+			) {
+				if (instruction.targetIp === ip + 1)
+					adjacentRootContinuationIp = instruction.targetIp;
+				else if (
+					knownPublishedPrivateRoots.size > 0 ||
+					lastPublishedInactiveRootMask !== undefined
+				) {
+					// Skipped lexical blocks can change publication state before the taken target.
+					(rootContinuationSnapshots ??= new Map()).set(instruction.targetIp, {
+						roots: new Map(knownPublishedPrivateRoots),
+						mask: lastPublishedInactiveRootMask,
+					});
+				}
 			}
 		}
+		return true;
 	}
+	if (!emitBodyInstructions()) return null;
 
 	const leafCacheDeclarations = [
 		...[...stringLeafCaches].map(
