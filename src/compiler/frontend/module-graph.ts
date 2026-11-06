@@ -527,6 +527,7 @@ export function buildModuleGraph(
 					hasDefault: false,
 					installer: library.installer,
 					direct: library.direct,
+					...(library.callbacks === undefined ? {} : { callbacks: library.callbacks }),
 				},
 			]),
 		),

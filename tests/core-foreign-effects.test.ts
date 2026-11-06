@@ -68,6 +68,81 @@ function compile(
 	)!;
 	return { core, image, native };
 }
+/**
+ * `math` binds a callback setter, so `mix` can reenter JavaScript unless the program
+ * imports nothing that registers a callback.
+ */
+function compileWithCallbacks(imports: string, source: string) {
+	const scalar: NonNullable<FfiDirectEntry["scalar"]> = {
+		symbol: ffiScalarSymbol(binding.symbol),
+		parameters: [{ kind: "integer", bits: 32, signed: true }],
+		result: { kind: "integer", bits: 32, signed: false },
+	};
+	let core: CoreFunctionStore | undefined;
+	const image = compileEntrypoint("/ffi-callback-effects.mjs", {
+		buildConfig: {
+			...resolveBuildConfig({ engine: { eval: false, realms: false } }),
+			ffiModules: [
+				{
+					id: "maligator:ffi/math",
+					exports: ["mix", "subscribe"],
+					installer: "mal_ffi_install_math",
+					direct: {
+						mix: { ...binding, callsUserCode: true },
+						subscribe: { ...binding, symbol: "mal_ffi_direct4_math_subscribe" },
+					},
+					callbacks: {
+						exports: ["subscribe"],
+						withoutCallbacks: {
+							mix: { ...binding, callsUserCode: false, scalar },
+							subscribe: { ...binding, symbol: "mal_ffi_direct4_math_subscribe" },
+						},
+					},
+				},
+			],
+		},
+		entrySource: `${imports} function compute(value) { ${source} } globalThis.compute=compute;`,
+		afterCoreOptimization(program) {
+			core = coreFunctionNamed(program, "compute");
+		},
+	});
+	if (core === undefined) throw new Error("Missing compute function");
+	const call = [...core.instructionIds()].find(
+		(instruction) =>
+			core!.instructionKind(instruction) === "operation" &&
+			["call", "callForeign"].includes(core!.instructionOpcodeName(instruction)),
+	)!;
+	return {
+		callsUserCode: coreInstructionEffects(core, call).callsUserCode,
+		image,
+		scalar,
+	};
+}
+
+describe("foreign callback reach", () => {
+	it("calls without reentry when no import reaches a callback registration", () => {
+		const { callsUserCode, image, scalar } = compileWithCallbacks(
+			'import {mix} from "maligator:ffi/math";',
+			"return mix(value | 0);",
+		);
+		expect(callsUserCode).toBe(false);
+		const native = image.native.functions.find((fn) =>
+			emitCompiledFunction(fn, fn.functionIndex, "", false)?.source.includes(
+				`${scalar.symbol}(`,
+			),
+		);
+		expect(native).toBeDefined();
+	});
+	it.each([
+		'import {mix, subscribe} from "maligator:ffi/math";',
+		'import * as math from "maligator:ffi/math"; const mix = math.mix;',
+	])("keeps callback reentry when %s can register one", (imports) => {
+		expect(compileWithCallbacks(imports, "return mix(value | 0);").callsUserCode).toBe(
+			true,
+		);
+	});
+});
+
 describe("static foreign call effects", () => {
 	const scalar: NonNullable<FfiDirectEntry["scalar"]> = {
 		symbol: ffiScalarSymbol(binding.symbol),

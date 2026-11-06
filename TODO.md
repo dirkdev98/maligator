@@ -1949,13 +1949,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       nothing, so profile the binding before changing it. The 64 KiB non-ASCII
       `sqlite-text` cases vary by about 20% between rounds while borrowing a UTF-8
       sidecar; find that variance before treating their medians as a gap.
-- [ ] Give the compiler the reachable plan's callback effects. Production C derives
-      callback reentry from the exports the program reads, but `describeBindingUnit`
-      still reports `callsUserCode` from every configured library, which withholds
-      scalar entries and memory facts from programs that never register a callback.
-      The static FFI imports of the program and its workers bound the final selection,
-      so effects derived from them stay valid for the generated C; the frontend cache
-      keys on the resulting facts.
 - [ ] Separate input and result values in the binding plan. Both share `JsValue`, so
       input handles carry a result `ownership` and input strings, bytes and
       sequences a `free` the planner rejects; generation relies on the position

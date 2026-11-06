@@ -10,7 +10,7 @@ import type { ExternalTranslationUnit } from "../local-build.ts";
 import type { ToolExecutable } from "../toolchain.ts";
 import { planBindings } from "./binding-plan.ts";
 import type { BindingPlan } from "./binding-plan.ts";
-import { reachableBindingPlan } from "./binding-reach.ts";
+import { callbackExports, reachableBindingPlan } from "./binding-reach.ts";
 import {
 	describeBindingUnit,
 	generateBindingUnit,
@@ -189,6 +189,17 @@ export function prepareLibraries(
 			exports: entry.unit.exports,
 			installer: entry.unit.installer,
 			direct: entry.unit.direct,
+			...(hasCallbacks
+				? {
+						callbacks: {
+							exports: [...callbackExports(entry.plan)].sort(),
+							withoutCallbacks: describeBindingUnit(entry.contract.name, {
+								...entry.plan,
+								hasCallbacks: false,
+							}).direct,
+						},
+					}
+				: {}),
 		})),
 		dependencies,
 		identity,

@@ -3,10 +3,12 @@ import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { planBindings } from "../src/ffi/binding-plan.ts";
 import type { BindingPlan } from "../src/ffi/binding-plan.ts";
-import { reachableBindingPlan } from "../src/ffi/binding-reach.ts";
+import { callbackExports, reachableBindingPlan } from "../src/ffi/binding-reach.ts";
 import { extractCModel } from "../src/ffi/c-extract.ts";
 import asyncContract from "./fixtures/ffi-async-callbacks/async.ffi.ts";
 import viewsContract from "./fixtures/ffi-handle-views/views.ffi.ts";
+import ownerContract from "./fixtures/ffi-owner-fields/owner.ffi.ts";
+import registrationContract from "./fixtures/ffi-root-registrations/lifetime.ffi.ts";
 
 function fixturePlan(
 	fixture: string,
@@ -80,4 +82,31 @@ describe("reachable binding plans", () => {
 			["async_replaced_data_call", "async_replaced_data_call_async"],
 		]);
 	});
+
+	it.each([
+		["ffi-handle-views", "views.h", viewsContract],
+		["ffi-async-callbacks", "async.h", asyncContract],
+		["ffi-owner-fields", "owner.h", ownerContract],
+		["ffi-root-registrations", "lifetime.h", registrationContract],
+	] as const)(
+		"finds the %s exports that reach callbacks in one pass",
+		(fixture, header, contract) => {
+			const plan = fixturePlan(fixture, header, contract);
+			const exports = [
+				...plan.functions.flatMap((binding) =>
+					binding.async === undefined ? [binding.name] : [binding.name, binding.async],
+				),
+				...plan.dispatchers.map((dispatch) => dispatch.name),
+				...plan.constants.map((constant) => constant.name),
+				...[...plan.handles.values()].flatMap((handle) =>
+					handle.allocator === undefined ? [] : [handle.allocator],
+				),
+			];
+			expect([...callbackExports(plan)].sort()).toEqual(
+				exports
+					.filter((name) => reachableBindingPlan(plan, new Set([name])).hasCallbacks)
+					.sort(),
+			);
+		},
+	);
 });
