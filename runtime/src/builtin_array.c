@@ -213,6 +213,21 @@ static MalValue mal_builtin_array_get(MalVm *vm, MalValue this_value, u32 index)
     return mal_builtin_array_get_wide(vm, this_value, (f64) index);
 }
 
+/*
+ * Whether every index Get on an ordinary array-like, such as `{ length: n }`, yields
+ * undefined. Shaped storage holds string and symbol keys only, so an object without
+ * an overflow table owns no index property, and the intact elements protector rules
+ * out inherited ones. Callers recheck it per index, since a callback can add either.
+ */
+static bool mal_builtin_array_like_has_no_elements(MalVm *vm, MalValue source) {
+    if (!mal_value_is_heap_type(source, MAL_HEAP_OBJECT)) return false;
+    const MalObject *object = mal_value_to_object(source);
+    return mal_object_overflow(object) == nullptr &&
+        mal_object_prototype(object) ==
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]) &&
+        mal_vm_array_elements_intact(vm);
+}
+
 static bool mal_builtin_array_try_store_dense_index(
     MalArrayObject *array, u32 index, MalValue value
 ) {
@@ -1167,7 +1182,8 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
     }
     MalValue ret = mal_value_new_undefined();
     for (u32 index = 0; index < length; index++) {
-        MalValue element = mal_builtin_array_get(vm, source, index);
+        MalValue element = mal_builtin_array_like_has_no_elements(vm, source)
+            ? MAL_VALUE_UNDEFINED : mal_builtin_array_get(vm, source, index);
         roots[1] = element;
 
         if (!mal_builtin_array_from_map(
