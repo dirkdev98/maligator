@@ -807,6 +807,13 @@ static inline MalValue mal_vm_unary_op_fast(MalVm *vm, MalUnaryOp op, MalValue v
         return value;
     }
     if (op == MAL_UNARY_PLUS && mal_ops_is_number(value)) return value;
+    // Template substitutions of untyped parts are mostly strings and numbers.
+    if (op == MAL_UNARY_TO_STRING) {
+        if (mal_value_is_string(value)) return value;
+        if (mal_ops_is_number(value)) {
+            return mal_value_from_string(mal_ops_to_string(&vm->heap, value));
+        }
+    }
     // ToNumber of undefined, null and a Boolean runs no user code and cannot throw.
     // Compiled code may evaluate a coercion before the branch that tests for these,
     // as in `sum += values[index] ?? 0` over a holey array.

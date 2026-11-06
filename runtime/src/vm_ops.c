@@ -4665,11 +4665,16 @@ MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue rig
     if (mal_ops_is_number(left) && mal_ops_is_number(right)) {
         return mal_vm_binary_dispatch(vm, op, left, right);
     }
-    // Neither operand needs coercion, so the label concatenation skips the rooted path.
-    MalValue concatenated;
-    if (op == MAL_BIN_ADD && vm->completion.kind != MAL_COMPLETION_THROW &&
-            mal_ops_try_add_string_int32(&vm->heap, left, right, &concatenated)) {
-        return concatenated;
+    // Neither operand needs coercion, so string concatenation skips the rooted path.
+    if (op == MAL_BIN_ADD && vm->completion.kind != MAL_COMPLETION_THROW) {
+        if (mal_value_is_string(left) && mal_value_is_string(right)) {
+            return mal_vm_concat_strings_known(
+                vm, mal_value_to_string(left), mal_value_to_string(right));
+        }
+        MalValue concatenated;
+        if (mal_ops_try_add_string_int32(&vm->heap, left, right, &concatenated)) {
+            return concatenated;
+        }
     }
 
     // A fresh primitive from the first coercion must survive the second coercion's reentry.
