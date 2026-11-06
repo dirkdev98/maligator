@@ -84,8 +84,10 @@ surface; development runtimes retain it for later application edits.
 ## Audited native calls
 
 By default, a native call can invoke callbacks registered through any configured
-library, including another binding to the same C dependency. If the C function's
-contract guarantees it never enters JavaScript, state that fact on the function:
+library, including another binding to the same C dependency. An application whose
+closed module graph imports no export that can register a callback, in any library,
+compiles its calls without that reentry. If the C function's contract guarantees it
+never enters JavaScript, state that fact on the function:
 
 ```typescript
 functions: {

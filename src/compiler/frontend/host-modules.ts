@@ -15,7 +15,7 @@
  * exports and installers remain eligible for dead-code elimination.
  */
 
-import type { FfiDirectEntry } from "../../build-config-values.ts";
+import type { FfiCallbackReach, FfiDirectEntry } from "../../build-config-values.ts";
 import { PLATFORM_MODULES } from "../../platform/catalog.ts";
 import type { PlatformData, PlatformModule } from "../../platform/catalog.ts";
 
@@ -40,6 +40,7 @@ export interface HostModuleSpec {
 	constants?: Readonly<Record<string, PlatformData>>;
 	/** Exports native code may call through a C entry instead of the function object. */
 	direct?: Readonly<Record<string, FfiDirectEntry>>;
+	callbacks?: FfiCallbackReach;
 }
 
 /**

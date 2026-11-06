@@ -31,6 +31,7 @@ import {
 	ESTREE_STOP,
 	traverseEstree,
 } from "../frontend/estree-traversal.ts";
+import { importsForeignCallbacks } from "../frontend/foreign-callbacks.ts";
 import { HOST_GLOBAL_INSTALLERS, hostInstallerSymbol } from "../frontend/host-modules.ts";
 import { isImportMeta, isImportMetaResolveCall } from "../frontend/import-meta.ts";
 import { linkModules } from "../frontend/linker.ts";
@@ -977,6 +978,28 @@ export function constructSemanticProgramCore(
 	// Host-module bindings resolve to slots as reachable code compiles. Process
 	// instead records reachable compilation without allocating a private slot.
 	program.hostModules = linkage.hostModules;
+	const graph = semantic.graph;
+	if (
+		graph !== undefined &&
+		program.facts.closure.sourceClosure.kind === "known" &&
+		!importsForeignCallbacks(graph)
+	)
+		program.hostModules = linkage.hostModules.map((host) => {
+			const callbacks = graph.modules.get(host.specifier)?.host?.callbacks;
+			if (callbacks === undefined) return host;
+			return {
+				...host,
+				exports: host.exports.map((entry) => {
+					if (entry.direct === undefined) return entry;
+					const direct = callbacks.withoutCallbacks[entry.name];
+					if (direct === undefined)
+						throw new Error(
+							`${host.specifier} has no callback-free entry for ${entry.name}`,
+						);
+					return { ...entry, direct };
+				}),
+			};
+		});
 	for (const imports of linkage.namespaceImports.values()) {
 		for (const namespace of imports) {
 			if (namespace.deferred) continue;

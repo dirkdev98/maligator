@@ -121,6 +121,17 @@ export interface FfiModule {
 	readonly installer: string;
 	/** Direct entries of the function exports, by export name. */
 	readonly direct: Readonly<Record<string, FfiDirectEntry>>;
+	readonly callbacks?: FfiCallbackReach;
+}
+
+/**
+ * Present when a configured library binds a callback, which lets any native call
+ * reenter JavaScript. A program whose closed source imports none of `exports`, in
+ * any library, can register no callback and calls through `withoutCallbacks`.
+ */
+export interface FfiCallbackReach {
+	readonly exports: ReadonlyArray<string>;
+	readonly withoutCallbacks: Readonly<Record<string, FfiDirectEntry>>;
 }
 
 export interface ResolvedBuildConfig {
