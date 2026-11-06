@@ -3444,6 +3444,64 @@ static void ffi_prototype_remember(
     state->prototype_count++;
 }
 
+/**
+ * A read-only scalar field whose getter carries the field's index, so property loads
+ * can read the field through `ffi_scalar_field_read` instead of calling the getter.
+ */
+static void ffi_define_scalar_field(
+    MalVm *vm, MalObject *prototype, const MalFfiField *field, i32 index, const char *getter_name) {
+    MalValue getter[] = {mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, getter, countof(getter));
+    MalValue slot = mal_value_from_i32(index);
+    getter[0] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) getter_name), 0, field->get, &slot, 1));
+    MalPropertyDesc description =
+        mal_intrinsic_accessor_desc(getter[0], mal_value_new_undefined(), MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(prototype, mal_intrinsic_string_key(vm, (const byte *) field->name), &description);
+    mal_gc_unroot(&root);
+}
+
+/**
+ * The getter's result for a scalar field of an open, idle handle the program holds,
+ * read from its storage. Every other receiver, such as a closed handle, a handle C is
+ * using or one whose type the getter does not belong to, takes the getter call, which
+ * reports why.
+ */
+static bool ffi_scalar_field_read(MalVm *vm, MalValue getter, MalValue receiver, MalValue *out) {
+    (void) vm;
+    MalFfiHandleObject *handle = ffi_handle(receiver);
+    if (handle == nullptr) return false;
+    const MalNativeFunctionObject *function = mal_value_to_native_function_object(getter);
+    if (function->slot_count != 1 || !mal_value_is_int32(function->slots[0])) return false;
+    const MalFfiHandleType *type = handle->type;
+    i32 index = mal_value_to_i32(function->slots[0]);
+    // Each getter belongs to exactly one type's field, so a match proves the receiver's type.
+    if (index < 0 || index >= type->field_count) return false;
+    const MalFfiField *field = &type->fields[index];
+    if (field->get != function->callback || field->scalar == MAL_FFI_FIELD_CALL) return false;
+    if (handle->value == nullptr || handle->closing || type->borrows_owner
+        || ffi_handle_owner(handle) != nullptr || handle->scope != 0
+        || handle->worker_pins != 0 || handle->operation != nullptr
+        || ffi_handle_result_borrowed(handle))
+        return false;
+    const byte *at = (const byte *) handle->value + field->offset;
+    switch ((MalFfiFieldScalar) field->scalar) {
+        case MAL_FFI_FIELD_BOOL: { bool value; memcpy(&value, at, sizeof(value)); *out = mal_ffi_from_boolean(value); return true; }
+        case MAL_FFI_FIELD_INT8: { int8_t value; memcpy(&value, at, sizeof(value)); *out = mal_ffi_from_int32(value); return true; }
+        case MAL_FFI_FIELD_UINT8: { uint8_t value; memcpy(&value, at, sizeof(value)); *out = mal_ffi_from_int32(value); return true; }
+        case MAL_FFI_FIELD_INT16: { int16_t value; memcpy(&value, at, sizeof(value)); *out = mal_ffi_from_int32(value); return true; }
+        case MAL_FFI_FIELD_UINT16: { uint16_t value; memcpy(&value, at, sizeof(value)); *out = mal_ffi_from_int32(value); return true; }
+        case MAL_FFI_FIELD_INT32: { int32_t value; memcpy(&value, at, sizeof(value)); *out = mal_ffi_from_int32(value); return true; }
+        case MAL_FFI_FIELD_UINT32: { uint32_t value; memcpy(&value, at, sizeof(value)); *out = mal_ffi_from_number(value); return true; }
+        case MAL_FFI_FIELD_FLOAT: { float value; memcpy(&value, at, sizeof(value)); *out = mal_ffi_from_number(value); return true; }
+        case MAL_FFI_FIELD_DOUBLE: { double value; memcpy(&value, at, sizeof(value)); *out = mal_ffi_from_number(value); return true; }
+        case MAL_FFI_FIELD_CALL: return false;
+    }
+    return false;
+}
+
 static MalValue ffi_handle_prototype(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type) {
     MalFfiState *state = ffi_state(vm);
@@ -3489,10 +3547,13 @@ static MalValue ffi_handle_prototype(
         char setter_name[128];
         snprintf(getter_name, sizeof(getter_name), "get %s", field->name);
         snprintf(setter_name, sizeof(setter_name), "set %s", field->name);
-        mal_intrinsic_define_accessor_n(
-            vm, prototype, mal_intrinsic_string_key(vm, (const byte *) field->name),
-            (const byte *) getter_name, 0, field->get, (const byte *) setter_name, 1, field->set,
-            MAL_PROPERTY_CONFIGURABLE);
+        if (index < type->field_count && field->scalar != MAL_FFI_FIELD_CALL && field->set == nullptr)
+            ffi_define_scalar_field(vm, prototype, field, index, getter_name);
+        else
+            mal_intrinsic_define_accessor_n(
+                vm, prototype, mal_intrinsic_string_key(vm, (const byte *) field->name),
+                (const byte *) getter_name, 0, field->get, (const byte *) setter_name, 1,
+                field->set, MAL_PROPERTY_CONFIGURABLE);
     }
     MalValue result = held[0];
     mal_gc_unroot(&root);
@@ -4951,6 +5012,7 @@ void mal_ffi_install(
     MalVm *vm, const MalFfiLibrary *library, const MalHostInstallSlot *slots, int32_t count) {
     mal_gc_register_finalizer(MAL_HEAP_FFI_HANDLE_OBJECT, ffi_handle_finalize);
     mal_gc_register_tracer(MAL_HEAP_FFI_HANDLE_OBJECT, ffi_handle_trace);
+    mal_vm_register_native_getter_read(ffi_scalar_field_read);
     mal_gc_register_root_source(ffi_scan_roots, nullptr);
     for (i32 index = 0; index < count; index++) {
         const MalFfiExport *entry = ffi_find_export(library, slots[index].name);

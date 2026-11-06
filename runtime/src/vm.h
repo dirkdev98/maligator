@@ -2882,6 +2882,16 @@ MalCompletion mal_vm_call_value(
     i32 arg_count
 );
 
+/**
+ * Produce a native getter's result for `receiver` without calling it, as a host
+ * library can for C struct fields. False leaves the read to the getter call, so a
+ * reader declines anything whose getter could throw, allocate or run JavaScript.
+ */
+typedef bool (*MalNativeGetterRead)(MalVm *vm, MalValue getter, MalValue receiver, MalValue *out);
+
+/** Install the process's native getter reader; every caller installs the same one. */
+void mal_vm_register_native_getter_read(MalNativeGetterRead read);
+
 /** Recompute a function's call_entries row after its compiled entry changes. */
 void mal_vm_refresh_call_entry(MalVm *vm, i32 function_index);
 

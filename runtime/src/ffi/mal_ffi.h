@@ -74,11 +74,29 @@ typedef struct MalFfiLibrary {
     int32_t export_count;
 } MalFfiLibrary;
 
+/** How a property load reads a scalar field without calling its getter. */
+typedef enum MalFfiFieldScalar {
+    /** Only the getter reads the field. */
+    MAL_FFI_FIELD_CALL,
+    MAL_FFI_FIELD_BOOL,
+    MAL_FFI_FIELD_INT8,
+    MAL_FFI_FIELD_UINT8,
+    MAL_FFI_FIELD_INT16,
+    MAL_FFI_FIELD_UINT16,
+    MAL_FFI_FIELD_INT32,
+    MAL_FFI_FIELD_UINT32,
+    MAL_FFI_FIELD_FLOAT,
+    MAL_FFI_FIELD_DOUBLE,
+} MalFfiFieldScalar;
+
 /** Accessors a struct handle exposes for one field. */
 typedef struct MalFfiField {
     const char *name;
     MalFfiFunction get;
     MalFfiFunction set;
+    /** For a scalar field, its offset in the handle's storage, read as `scalar` describes. */
+    uint32_t offset;
+    uint8_t scalar;
 } MalFfiField;
 
 typedef struct MalFfiManagedField {

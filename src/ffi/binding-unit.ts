@@ -27,6 +27,7 @@ import type {
 	JsResult,
 	JsValue,
 	MappedConstant,
+	MappedField,
 	MappedParameter,
 	MappedRecord,
 } from "./binding-plan.ts";
@@ -356,6 +357,33 @@ function viewsSelected(
 	return viewParameters(binding)
 		.map((index) => `mal_ffi_is_typed_array(${argument(index)})`)
 		.join(" && ");
+}
+
+/**
+ * How property loads read a value field without its getter: a C bool, an integer of
+ * at most 32 bits or a floating number, converted as `write` converts it.
+ */
+function fieldScalar(
+	field: MappedField,
+): { readonly kind: string; readonly size: number } | undefined {
+	if (field.bitWidth !== undefined) return undefined;
+	const value = field.value;
+	switch (value.kind) {
+		case "boolean":
+			return { kind: "BOOL", size: 1 };
+		case "integer":
+			return [8, 16, 32].includes(value.bits)
+				? { kind: `${value.signed ? "" : "U"}INT${value.bits}`, size: value.bits / 8 }
+				: undefined;
+		case "float":
+			return value.bits === 32
+				? { kind: "FLOAT", size: 4 }
+				: value.bits === 64
+					? { kind: "DOUBLE", size: 8 }
+					: undefined;
+		default:
+			return undefined;
+	}
 }
 
 /** The struct a binding returns, when compiled callers can take its fields instead. */
@@ -1915,16 +1943,26 @@ class BindingWriter {
 					"}",
 				);
 			}
+			// Property loads read these fields at their offsets, by their size.
+			for (const field of ownFields) {
+				const scalar = fieldScalar(field);
+				if (scalar !== undefined)
+					lines.push(
+						`static_assert(sizeof(((${handle.spelling} *) nullptr)->${field.name}) == ${scalar.size}, ${cString(`${name}.${field.name} keeps its scalar width`)});`,
+					);
+			}
 			const fieldCount = ownFields.length + handle.managedFields.length;
 			const fields = fieldCount === 0 ? "nullptr" : `mal_ffi_fields_${name}`;
 			if (fieldCount > 0) {
 				lines.push(
 					"",
 					`static const MalFfiField ${fields}[] = {`,
-					...ownFields.map(
-						(field) =>
-							`\t{ ${cString(field.name)}, mal_ffi_get_${name}_${field.name}, nullptr },`,
-					),
+					...ownFields.map((field) => {
+						const scalar = fieldScalar(field);
+						return scalar === undefined
+							? `\t{ ${cString(field.name)}, mal_ffi_get_${name}_${field.name}, nullptr },`
+							: `\t{ ${cString(field.name)}, mal_ffi_get_${name}_${field.name}, nullptr, offsetof(${handle.spelling}, ${field.name}), MAL_FFI_FIELD_${scalar.kind} },`;
+					}),
 					...handle.managedFields.map(
 						(field) =>
 							`\t{ ${cString(field.name)}, mal_ffi_get_${name}_${field.name}, mal_ffi_set_${name}_${field.name} },`,

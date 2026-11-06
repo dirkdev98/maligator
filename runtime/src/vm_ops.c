@@ -1,6 +1,7 @@
 #include "vm_ops.h"
 
 #include <assert.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -6871,6 +6872,12 @@ bool mal_vm_probe_accessor_read_miss(
     return true;
 }
 
+static _Atomic(MalNativeGetterRead) mal_vm_native_getter_read = nullptr;
+
+void mal_vm_register_native_getter_read(MalNativeGetterRead read) {
+    atomic_store_explicit(&mal_vm_native_getter_read, read, memory_order_relaxed);
+}
+
 static inline bool mal_ic_is_getter_row(const MalInlineCache *ic) {
     return ic->mode == MAL_IC_MODE_INHERITED_GETTER || ic->mode == MAL_IC_MODE_OWN_GETTER;
 }
@@ -6902,6 +6909,12 @@ static __attribute__((noinline)) bool mal_vm_getter_row_try_load(
             *out = MAL_VALUE_UNDEFINED;
             return true;
         }
+    }
+    MalNativeGetterRead read =
+        atomic_load_explicit(&mal_vm_native_getter_read, memory_order_relaxed);
+    if (read != nullptr && vm->completion.kind != MAL_COMPLETION_THROW &&
+        mal_value_is_native_function_object(getter) && read(vm, getter, object_value, out)) {
+        return true;
     }
     MalCompletion completion = mal_vm_call_value(vm, getter, object_value, nullptr, 0);
     if (completion.kind != MAL_COMPLETION_NORMAL) vm->completion = completion;
