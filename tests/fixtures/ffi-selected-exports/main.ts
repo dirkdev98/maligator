@@ -1,4 +1,5 @@
 /* oxlint-disable no-console -- The fixture reports linked C export behavior. */
+import { shape_circle, shape_value } from "maligator:ffi/shapes";
 import * as values from "maligator:ffi/values";
 import { answer } from "./bridge.ts";
 
@@ -7,4 +8,7 @@ const total = Object.values(values).reduce<number>(
 	0,
 );
 if (total !== 43) throw new Error("namespace exports changed");
-console.log(answer(35), total);
+const circle = shape_circle(5);
+if (circle === null) throw new Error("expected a circle");
+console.log(answer(35), total, shape_value(circle));
+circle[Symbol.dispose]();

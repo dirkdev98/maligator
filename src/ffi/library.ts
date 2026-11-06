@@ -10,6 +10,7 @@ import type { ExternalTranslationUnit } from "../local-build.ts";
 import type { ToolExecutable } from "../toolchain.ts";
 import { planBindings } from "./binding-plan.ts";
 import type { BindingPlan } from "./binding-plan.ts";
+import { reachableBindingPlan } from "./binding-reach.ts";
 import {
 	describeBindingUnit,
 	generateBindingUnit,
@@ -214,15 +215,20 @@ export function nativeLibraryInputs(
 	selectedExports?: ReadonlyMap<string, ReadonlySet<string>>,
 ): { externalUnits: Array<ExternalTranslationUnit>; linkInputs: Array<LinkInput> } {
 	const bindingArguments = [FFI_C_STANDARD, "-I", path.join(runtimeDirectory, "src/ffi")];
-	const units = prepared.libraries.map((entry) =>
+	const selections = prepared.libraries.map((entry) => {
+		if (selectedExports === undefined) return { plan: entry.plan, exports: undefined };
+		const exports = selectedExports.get(entry.unit.installer) ?? new Set<string>();
+		return { plan: reachableBindingPlan(entry.plan, exports), exports };
+	});
+	// A shared C dependency can call a callback registered through another library.
+	const hasCallbacks = selections.some((selection) => selection.plan.hasCallbacks);
+	const units = prepared.libraries.map((entry, index) =>
 		generateBindingUnit(
 			entry.contract.name,
 			entry.contract.headers,
 			entry.model,
-			entry.plan,
-			selectedExports === undefined
-				? undefined
-				: (selectedExports.get(entry.unit.installer) ?? new Set()),
+			{ ...selections[index]!.plan, hasCallbacks },
+			selections[index]!.exports,
 		),
 	);
 	const externalUnits: Array<ExternalTranslationUnit> = [

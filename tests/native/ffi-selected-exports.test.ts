@@ -22,7 +22,7 @@ function cli(project: string, args: Array<string>) {
 }
 
 it.each(["compiled", "interpreted"])(
-	"links only imported C exports while preserving namespaces and reexports (%s)",
+	"links only the C surface imported exports reach while preserving namespaces and reexports (%s)",
 	(backend) => {
 		const project = mkdtempSync(path.join(tmpdir(), "mal-ffi-selected-"));
 		try {
@@ -48,7 +48,7 @@ it.each(["compiled", "interpreted"])(
 					env: { ...process.env, MAL_GC_STRESS: "1", MAL_GC_VERIFY: "1" },
 				});
 				expect(executed.status, executed.stderr || executed.stdout).toBe(0);
-				expect(executed.stdout.trim()).toBe("42 43");
+				expect(executed.stdout.trim()).toBe("42 43 5");
 			}
 		} finally {
 			rmSync(project, { recursive: true, force: true });
