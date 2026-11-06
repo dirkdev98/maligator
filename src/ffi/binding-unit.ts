@@ -2981,13 +2981,20 @@ class BindingWriter {
 		});
 	}
 
-	#transactionalResults(binding: BoundFunction, directReturn = true): boolean {
+	/**
+	 * A handle result whose conversion is already the commit point: no fallible cleanup
+	 * follows it, and with `reentered` false, no JavaScript ran during the C call.
+	 */
+	#commitsDirectly(
+		binding: BoundFunction,
+		directReturn: boolean,
+		reentered: boolean,
+	): boolean {
 		const value = binding.returns;
 		const effects = bindingEffects(this.#plan, binding);
-		// No fallible cleanup follows this conversion, so it is already the commit point.
-		if (
+		return (
 			directReturn &&
-			!effects.native &&
+			!(reentered && effects.native) &&
 			!effects.cleanup &&
 			binding.outputs.length === 0 &&
 			binding.closes === undefined &&
@@ -2999,8 +3006,11 @@ class BindingWriter {
 					? input.pass === "pointer" && !this.managedFamily(input.name)
 					: IMMEDIATE_KINDS.has(input.kind) || input.kind === "bigint",
 			)
-		)
-			return false;
+		);
+	}
+
+	#transactionalResults(binding: BoundFunction, directReturn = true): boolean {
+		if (this.#commitsDirectly(binding, directReturn, true)) return false;
 		return (
 			this.#resultResources(
 				binding,
@@ -3152,6 +3162,13 @@ class BindingWriter {
 		).filter((group) => resourceIndexes(group).length === 0).length;
 		const transactional = this.#transactionalResults(binding, callable === undefined);
 		const results = transactional ? "&mal_results" : undefined;
+		// A transaction kept only for callback reentry is skipped when none entered.
+		const reentryChecked =
+			transactional &&
+			callable === undefined &&
+			discardCount === 0 &&
+			this.#commitsDirectly(binding, true, false);
+		if (reentryChecked) locals.push("uint64_t mal_reentries = mal_ffi_reentries(vm);");
 		if (discardCount > 0 && !transactional)
 			locals.push(
 				`MalFfiDiscardedHandle mal_discarded[${discardCount}];`,
@@ -3970,6 +3987,18 @@ class BindingWriter {
 				results,
 			);
 			const record = intoRecord(binding);
+			const direct = reentryChecked
+				? this.#owned(
+						binding.returns,
+						"mal_return",
+						"mal_result",
+						count,
+						"&mal_site_result",
+						callsBack,
+						"&mal_discards",
+						undefined,
+					)
+				: [];
 			after.push(
 				...enter,
 				`${initialize ? returnDeclaration : "mal_return"} = ${call};`,
@@ -3977,17 +4006,28 @@ class BindingWriter {
 				...callbackReturns,
 				...leave,
 				...closes,
-				...claims,
-				...(record === undefined
-					? owned
-					: [
-							// A compiled caller's stack object takes the fields instead of a new object.
-							"if (mal_into != nullptr) {",
-							`\tif (${callsBack ? "!mal_ffi_threw(vm) && " : ""}mal_ffi_fill_${record}(vm, mal_return, mal_slots, false${hasOwnedRecordFields(binding.returns, this.#plan) ? `, ${results ?? "nullptr"}` : ""})) mal_ffi_stack_record(vm, &mal_ffi_record_${record}, mal_into, mal_slots);`,
+				...(reentryChecked
+					? [
+							"if (mal_ffi_reentries(vm) == mal_reentries) {",
+							...direct.map((line) => `\t${line}`),
 							"} else {",
+							...claims.map((line) => `\t${line}`),
 							...owned.map((line) => `\t${line}`),
 							"}",
-						]),
+						]
+					: claims),
+				...(reentryChecked
+					? []
+					: record === undefined
+						? owned
+						: [
+								// A compiled caller's stack object takes the fields instead of a new object.
+								"if (mal_into != nullptr) {",
+								`\tif (${callsBack ? "!mal_ffi_threw(vm) && " : ""}mal_ffi_fill_${record}(vm, mal_return, mal_slots, false${hasOwnedRecordFields(binding.returns, this.#plan) ? `, ${results ?? "nullptr"}` : ""})) mal_ffi_stack_record(vm, &mal_ffi_record_${record}, mal_into, mal_slots);`,
+								"} else {",
+								...owned.map((line) => `\t${line}`),
+								"}",
+							]),
 			);
 		}
 		if (binding.outputs.length > 0) {

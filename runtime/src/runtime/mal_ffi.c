@@ -2499,7 +2499,12 @@ MalVm *mal_ffi_callback_vm(MalFfiCallback *callback) {
     FfiThread *thread = &ffi_thread;
     if (thread->finalizing) return nullptr;
     if (callback->thread_identity != thread) ffi_wrong_thread();
+    vm->ffi_reentries++;
     return vm;
+}
+
+uint64_t mal_ffi_reentries(MalVm *vm) {
+    return vm->ffi_reentries;
 }
 
 MalVm *mal_ffi_callback_owner_vm(MalFfiCallback *callback) {
@@ -3873,8 +3878,12 @@ static MalValue ffi_new_handle(
             open->ownership = MAL_FFI_HANDLE_OWNED;
             open->owner_type = type;
         }
-        // A nested loan must not shorten an outer invocation's still-active loan.
-        if (claim == nullptr && (scope == 0 || !ffi_scope_active(vm, open->scope))) open->scope = scope;
+        // Taking ownership of a destructible resource ends a callback loan, as a result
+        // transaction's commit does. Any other result keeps an active loan's scope, and a
+        // nested loan must not shorten an outer invocation's active loan.
+        if (claim == nullptr
+            && ((owned && type->destroy != nullptr && scope == 0) || !ffi_scope_active(vm, open->scope)))
+            open->scope = scope;
         MalValue result = mal_value_from_heap((MalHeapHeader *) open);
         if (claim != nullptr) ffi_result_track(vm, type, value, result);
         return result;
@@ -4090,6 +4099,12 @@ static void ffi_result_retire(MalFfiHandleObject *handle, const MalFfiHandleType
 }
 
 void mal_ffi_results_finish(MalVm *vm, MalFfiResults *results) {
+    // A conversion that claimed nothing, as after a call no callback reentered, owns
+    // only the roots its initialization pushed.
+    if (results->count == 0 && results->state == nullptr && results->allocation == nullptr) {
+        mal_ffi_unroot(&results->roots);
+        return;
+    }
     if (!mal_ffi_threw(vm))
         for (i32 index = 0; index < results->count; index++) {
             MalFfiResultClaim *claim = &results->claims[index];
@@ -4271,7 +4286,9 @@ MalValue mal_ffi_new_library_handle(
     if (!ffi_library_claim_add(vm, type, value)) return mal_value_new_undefined();
     MalValue result = ffi_new_handle(vm, library, type, value, false, 0, false, false, nullptr);
     if (!mal_ffi_threw(vm)) {
+        // Library lifetime outlasts a callback loan the resource arrived through.
         ffi_handle(result)->ownership = MAL_FFI_HANDLE_LIBRARY;
+        ffi_handle(result)->scope = 0;
         ffi_result_delivered(vm, ffi_handle(result));
     }
     return result;

@@ -624,6 +624,11 @@ void mal_ffi_release(void *data);
  */
 MalVm *mal_ffi_callback_vm(MalFfiCallback *callback);
 MalVm *mal_ffi_callback_owner_vm(MalFfiCallback *callback);
+/**
+ * How many library callbacks have entered `vm`. Unchanged across a C call, no
+ * JavaScript ran during it, so its results convert as in a callback-free program.
+ */
+uint64_t mal_ffi_reentries(MalVm *vm);
 /** Keep a native invocation alive if completion retires its registry ownership. */
 void mal_ffi_callback_hold(MalFfiCallback *callback);
 void mal_ffi_callback_drop(MalFfiCallback *callback);
