@@ -13,7 +13,9 @@ import { bindingEffects } from "./binding-effects.ts";
 import {
 	hasOwnedRecordFields,
 	hasResultHandles,
+	independentHandle,
 	keptCallback,
+	registrationOwner,
 	supportsResultTransaction,
 } from "./binding-plan.ts";
 import type {
@@ -430,9 +432,9 @@ class BindingWriter {
 			if (handle.views.length > 0) this.#viewFamilies.add(handle.family);
 			for (const field of handle.fields) {
 				if (field.value.kind !== "handle") continue;
-				if (field.value.owner !== undefined)
+				if (field.value.ownership.kind === "owner")
 					this.#ownerFamilies.add(this.#handle(field.value.name).family);
-				if (field.value.lifetime === "library")
+				if (field.value.ownership.kind === "library")
 					this.#libraryFamilies.add(this.#handle(field.value.name).family);
 			}
 		}
@@ -460,7 +462,7 @@ class BindingWriter {
 		fail: string,
 		operation: string,
 		owner?: string,
-		registrationOwner?: number,
+		ownerParam?: number,
 	): Array<string> {
 		const checks = binding.params.flatMap(({ value }, index) =>
 			value.kind === "handle"
@@ -474,10 +476,10 @@ class BindingWriter {
 				`if (!mal_ffi_callback_retain_owners(vm, ${callback}, ${owner ?? "mal_ffi_undefined()"}, ${inputs}, &mal_site_result)) ${fail}`,
 			);
 		return [
-			...(registrationOwner === undefined
+			...(ownerParam === undefined
 				? []
 				: [
-						`if (!mal_ffi_callback_own(vm, ${callback}, ${argument(registrationOwner)}, ${operation}, &mal_site_${registrationOwner})) ${fail}`,
+						`if (!mal_ffi_callback_own(vm, ${callback}, ${argument(ownerParam)}, ${operation}, &mal_site_${ownerParam})) ${fail}`,
 					]),
 			...checks,
 		];
@@ -868,11 +870,11 @@ class BindingWriter {
 				const created = (address: string) => {
 					const loan = `mal_ffi_new_callback_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address})`;
 					const ordinary =
-						value.lifetime === "library"
+						value.ownership.kind === "library"
 							? `mal_ffi_new_library_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address})`
-							: value.owner === undefined
-								? `mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.owned}, ${value.fresh === true})`
-								: `mal_ffi_new_owner_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${owner})`;
+							: value.ownership.kind === "owner"
+								? `mal_ffi_new_owner_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${owner})`
+								: `mal_ffi_new_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, ${address}, ${value.ownership.kind === "owned"}, ${value.fresh === true})`;
 					return typeof lent === "boolean"
 						? lent
 							? loan
@@ -1022,7 +1024,11 @@ class BindingWriter {
 		results?: string,
 	): Array<string> {
 		if (value.kind !== "array" || value.format !== undefined) {
-			if (value.kind === "handle" && value.owned && results !== undefined) {
+			if (
+				value.kind === "handle" &&
+				value.ownership.kind === "owned" &&
+				results !== undefined
+			) {
 				const ordinary = `mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.name}, (void *) (${expression}), true, ${value.fresh === true})`;
 				const loan = this.write(value, expression, true);
 				return [
@@ -1754,7 +1760,7 @@ class BindingWriter {
 					"\tvoid *mal_handle;",
 					`\tif (!mal_ffi_to_handle(vm, mal_this, &mal_ffi_type_${name}, false, &mal_site, &mal_handle, nullptr)) return mal_ffi_undefined();`,
 					"\tif (!mal_ffi_handle_idle(vm, mal_this, &mal_site)) return mal_ffi_undefined();",
-					...(field.value.kind === "handle" && field.value.owner !== undefined
+					...(field.value.kind === "handle" && field.value.ownership.kind === "owner"
 						? [
 								"\tif (!mal_ffi_owner_ready(vm, mal_this, &mal_site)) return mal_ffi_undefined();",
 							]
@@ -2055,10 +2061,12 @@ class BindingWriter {
 			pending && this.#allocates(value) ? "if (!mal_ffi_threw(vm)) " : "";
 		if (results !== undefined && value.kind === "handle")
 			return [
-				`if (!mal_ffi_threw(vm)) ${target} = mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.name}, (void *) (${expression}), ${value.owned}, ${value.fresh === true});`,
+				`if (!mal_ffi_threw(vm)) ${target} = mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.name}, (void *) (${expression}), ${value.ownership.kind === "owned"}, ${value.fresh === true});`,
 			];
 		const handle =
-			value.kind === "handle" && value.owned ? this.#handle(value.name) : undefined;
+			value.kind === "handle" && value.ownership.kind === "owned"
+				? this.#handle(value.name)
+				: undefined;
 		if (
 			value.kind === "handle" &&
 			handle?.representation === "pointer" &&
@@ -2144,7 +2152,7 @@ class BindingWriter {
 							results,
 						).map((line) => `\t\t\t${line.replaceAll("goto mal_done;", `goto ${done};`)}`)
 					: [
-							`\t\t\tmal_ffi_push_element(vm, ${array}, ${index}, ${results !== undefined && value.of.kind === "handle" ? `mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.of.name}, (void *) ((${expression})[${index}]), ${value.of.owned}, ${value.of.fresh === true})` : this.write(value.of, `(${expression})[${index}]`, false, undefined, results)});`,
+							`\t\t\tmal_ffi_push_element(vm, ${array}, ${index}, ${results !== undefined && value.of.kind === "handle" ? `mal_ffi_result_handle(vm, ${results}, &mal_ffi_library, &mal_ffi_type_${value.of.name}, (void *) ((${expression})[${index}]), ${value.of.ownership.kind === "owned"}, ${value.of.fresh === true})` : this.write(value.of, `(${expression})[${index}]`, false, undefined, results)});`,
 						]),
 				"\t\t}",
 				...(value.of.kind === "array" ? [`${done}:;`] : []),
@@ -2203,7 +2211,7 @@ class BindingWriter {
 			formatCDeclaration(param, `mal_c${String(index)}`),
 		);
 		const { lifetime, route } = value;
-		const registrationOwner = lifetime.kind === "call" ? undefined : lifetime.owner;
+		const ownerParam = registrationOwner(lifetime);
 		const completion = lifetime.kind === "completion" ? lifetime : undefined;
 		const inputs = value.params.flatMap((param, index) =>
 			param === "data" || param === "count" ? [] : [{ value: param, index }],
@@ -2212,7 +2220,7 @@ class BindingWriter {
 		const immutableReturn = this.#immutableRecord(type.returns);
 		const zero = `(${localDeclaration(type.returns, "")}) ${immutableReturn ? this.#callbackDefault(value.returns) : "{}"}`;
 		const emptyReturn = immutableReturn ? zero : "mal_return";
-		const count = String(inputs.length + (registrationOwner === undefined ? 0 : 1));
+		const count = String(inputs.length + (ownerParam === undefined ? 0 : 1));
 		// Handles the library lends belong to this invocation and close when it returns.
 		const lends = inputs.some(
 			({ value: input, index }) =>
@@ -2325,7 +2333,7 @@ class BindingWriter {
 			...(held
 				? [
 						...(keyedLookup && !queued ? [] : ["\tmal_ffi_callback_hold(mal_callback);"]),
-						`\tMalVm *vm = ${registrationOwner === undefined ? "mal_ffi_callback_vm" : "mal_ffi_callback_owner_vm"}(mal_callback);`,
+						`\tMalVm *vm = ${ownerParam === undefined ? "mal_ffi_callback_vm" : "mal_ffi_callback_owner_vm"}(mal_callback);`,
 						// A library may call back after the VM is gone; it gets a zero result.
 						`\tif (vm == nullptr) { mal_ffi_callback_drop(mal_callback); return${returns ? ` ${emptyReturn}` : ""}; }`,
 					]
@@ -2342,7 +2350,7 @@ class BindingWriter {
 			"\tMalFfiRoots mal_result_roots;",
 			"\tmal_ffi_root(&mal_result_roots, &mal_result, 1);",
 			...(lends ? ["\tbool mal_lent = false;"] : []),
-			...(registrationOwner === undefined ? [] : ["\tvoid *mal_owner_pin = nullptr;"]),
+			...(ownerParam === undefined ? [] : ["\tvoid *mal_owner_pin = nullptr;"]),
 			...resultLocals.map((line) => `\t${line}`),
 			...(value.resultCount === undefined
 				? []
@@ -2365,7 +2373,7 @@ class BindingWriter {
 						"\tmal_ffi_close_finish(mal_callback);",
 					]),
 			"\tif (mal_ffi_threw(vm)) goto mal_done;",
-			...(registrationOwner === undefined
+			...(ownerParam === undefined
 				? []
 				: [
 						`\tif (!mal_ffi_callback_pin_owner(vm, mal_callback, &mal_values[${inputs.length}], &mal_owner_pin, &mal_site)) goto mal_done;`,
@@ -2411,9 +2419,7 @@ class BindingWriter {
 					]
 				: []),
 			...(lends ? ["\tif (mal_lent) mal_ffi_callback_leave(vm);"] : []),
-			...(registrationOwner === undefined
-				? []
-				: ["\tmal_ffi_unpin_handle(mal_owner_pin);"]),
+			...(ownerParam === undefined ? [] : ["\tmal_ffi_unpin_handle(mal_owner_pin);"]),
 			"\tmal_ffi_unroot(&mal_result_roots);",
 			"\tmal_ffi_unroot(&mal_roots);",
 			...(held ? ["\tmal_ffi_callback_drop(mal_callback);"] : []),
@@ -2742,10 +2748,11 @@ class BindingWriter {
 			}
 			if (
 				value.kind !== "handle" ||
-				(ownedOnly && (!value.owned || this.#handle(value.name).destroy === undefined)) ||
+				(ownedOnly &&
+					(value.ownership.kind !== "owned" ||
+						this.#handle(value.name).destroy === undefined)) ||
 				this.#handle(value.name).representation !== "pointer" ||
-				value.owner !== undefined ||
-				value.lifetime !== undefined
+				!independentHandle(value)
 			)
 				return [];
 			return [{ value, expression, steps }];
@@ -2932,7 +2939,8 @@ class BindingWriter {
 			binding.outputs.length === 0 &&
 			binding.closes === undefined &&
 			value.kind === "handle" &&
-			(!value.owned || this.#handle(value.name).destroy === undefined) &&
+			(value.ownership.kind !== "owned" ||
+				this.#handle(value.name).destroy === undefined) &&
 			binding.params.every(({ value: input }) =>
 				input.kind === "handle"
 					? input.pass === "pointer" && !this.managedFamily(input.name)
@@ -2980,7 +2988,7 @@ class BindingWriter {
 					])
 				: []),
 			...this.#walkResources(groups, (group, pointer) => [
-				`mal_ffi_result_claim(vm, &mal_results, &mal_ffi_type_${group.value.name}, (void *) (${pointer}), ${group.value.owned}, ${scopedHints ? String(group.value.fresh === true) : this.#resourceFresh(group.value, pointer, hints)});`,
+				`mal_ffi_result_claim(vm, &mal_results, &mal_ffi_type_${group.value.name}, (void *) (${pointer}), ${group.value.ownership.kind === "owned"}, ${scopedHints ? String(group.value.fresh === true) : this.#resourceFresh(group.value, pointer, hints)});`,
 			]),
 		];
 		const arrays = groups.filter((group) => resourceIndexes(group).length > 0);
@@ -3471,7 +3479,7 @@ class BindingWriter {
 								"goto mal_done;",
 								"&mal_result",
 								owner === undefined ? undefined : "mal_owner",
-								lifetime.owner,
+								registrationOwner(lifetime),
 							).map((line) => `\t${line}`),
 							"}",
 						);
@@ -4092,7 +4100,7 @@ class BindingWriter {
 		const callbackArguments: Array<string> = [];
 		const trampolines: Array<string> = [];
 		const discard = (value: JsValue, expression: string): Array<string> => {
-			if (value.kind !== "handle" || !value.owned) return [];
+			if (value.kind !== "handle" || value.ownership.kind !== "owned") return [];
 			const handle = this.#handle(value.name);
 			if (handle.destroy === undefined) return [];
 			return handle.representation === "struct"
@@ -4465,7 +4473,7 @@ class BindingWriter {
 										"goto mal_failed;",
 										"mal_ctx",
 										undefined,
-										lifetime.owner,
+										registrationOwner(lifetime),
 									).map((line) => `\t${line}`)),
 							"}",
 						);

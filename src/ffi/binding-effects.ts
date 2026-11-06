@@ -32,7 +32,10 @@ function resultHasCleanup(
 	if ("free" in value && value.free !== undefined) return true;
 	switch (value.kind) {
 		case "handle":
-			return value.owned && plan.handles.get(value.name)?.destroy !== undefined;
+			return (
+				value.ownership.kind === "owned" &&
+				plan.handles.get(value.name)?.destroy !== undefined
+			);
 		case "record": {
 			if (visiting.has(value.name)) return true;
 			const nested = new Set(visiting).add(value.name);

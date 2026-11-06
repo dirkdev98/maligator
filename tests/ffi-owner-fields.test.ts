@@ -97,14 +97,12 @@ it("declares borrowed resource fields with their destruction boundary", () => {
 	).toMatchObject({
 		kind: "handle",
 		name: "OwnerChild",
-		owner: "OwnerResult",
-		owned: false,
+		ownership: { kind: "owner", owner: "OwnerResult" },
 	});
 	const library = plan.handles
 		.get("OwnerResult")
 		?.fields.find((field) => field.name === "library")?.value;
-	expect(library).toMatchObject({ kind: "handle", owned: false, lifetime: "library" });
-	expect(library).not.toHaveProperty("owner");
+	expect(library).toMatchObject({ kind: "handle", ownership: { kind: "library" } });
 	const sdk = [...generateDeclarations([{ name: "owner", plan }])].join("");
 	expect(sdk).toContain("readonly first: OwnerChild | null");
 });
@@ -131,7 +129,7 @@ it("borrows through a descendant without its own destructor", () => {
 	});
 	expect(
 		plan.handles.get("OwnerChild")?.fields.find((field) => field.name === "next")?.value,
-	).toMatchObject({ kind: "handle", owner: "OwnerChild", owned: false });
+	).toMatchObject({ kind: "handle", ownership: { kind: "owner", owner: "OwnerChild" } });
 });
 
 it("rejects owner cycles without a destruction root", () => {

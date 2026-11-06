@@ -674,7 +674,7 @@ export function suggestFacts(
 		if (
 			!bound.has(binding.name) &&
 			result.kind === "handle" &&
-			result.owned &&
+			result.ownership.kind === "owned" &&
 			destroy !== undefined &&
 			!doc?.includes(destroy) &&
 			!textMatches(doc, /\bcaller\b/i) &&
