@@ -1324,6 +1324,10 @@ export interface CHeaders {
 	 * cached model needs no probe.
 	 */
 	readonly valueProbe: ValueProbe;
+	/**
+	 * Throw when the include graph or a file changed since the first pass. Analysis
+	 * that compiles the headers again calls it after its last compilation.
+	 */
 	validate(): void;
 }
 
@@ -1499,6 +1503,18 @@ export function withCHeaders<Result>(
 		);
 		let valueProbe: ValueProbe | undefined;
 		let includeGraphValidated = false;
+		const checkVersions = (): void => {
+			const changed = versions
+				.filter(
+					(before) =>
+						JSON.stringify(headerVersion(before.file)) !== JSON.stringify(before),
+				)
+				.map((version) => version.file);
+			if (guarded)
+				for (const [root, before] of directories)
+					if (directoryVersion(root) !== before) changed.push(root);
+			if (changed.length > 0) throw new FfiSourceChangedError(changed);
+		};
 		const headers: CHeaders = {
 			directory,
 			probePath,
@@ -1532,20 +1548,13 @@ export function withCHeaders<Result>(
 						]);
 					includeGraphValidated = true;
 				}
-				const changed = versions
-					.filter(
-						(before) =>
-							JSON.stringify(headerVersion(before.file)) !== JSON.stringify(before),
-					)
-					.map((version) => version.file);
-				if (guarded)
-					for (const [root, before] of directories)
-						if (directoryVersion(root) !== before) changed.push(root);
-				if (changed.length > 0) throw new FfiSourceChangedError(changed);
+				checkVersions();
 			},
 		};
 		const result = read(headers);
-		headers.validate();
+		// Analysis that compiled the headers again validated its include graph. A read
+		// that compiled nothing returns what the first pass described.
+		checkVersions();
 		return result;
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
