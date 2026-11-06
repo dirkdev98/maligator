@@ -13378,7 +13378,14 @@ class NativeInstructionEmission {
 					`  r${instruction.dst} = ${callResult(arm.body)};`,
 					...(arm.mayThrow ? [this.throwCheck()] : []),
 				]),
-				...(arms.length === 0 ? ["{"] : ["} else {"]),
+				// Script methods with a collection name, such as a response's `set`, call
+				// here so each site keeps its own dispatch branch.
+				`${arms.length === 0 ? "if" : "} else if"} (!mal_value_is_native_function_object(${callee})) {`,
+				`  MAL_PERF_COUNT(collection_direct_fallbacks);`,
+				`  MalCompletion ${tmp} = ${this.profileCall("call", `mal_vm_call_cached(vm, ${callee}, ${receiver}, ${argsExpr}, ${args.length})`)};`,
+				`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
+				`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+				`} else {`,
 				`  MalCompletion ${tmp} = mal_builtin_collection_direct(vm, ${operation}, ${receiverFact}, ${callee}, ${receiver}, ${argsExpr}, ${args.length});`,
 				`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
 				`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
