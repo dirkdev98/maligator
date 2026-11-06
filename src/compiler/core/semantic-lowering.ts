@@ -244,7 +244,11 @@ interface CoreFrontendContext {
 			exports: Array<{ name: string; exporter: Binding }>;
 		}>
 	>;
-	foreignNamespaces: Map<Binding, ReadonlyMap<string, Binding>>;
+	/**
+	 * Eager namespace import bindings, whose static member reads load the exporter's
+	 * binding directly, by export name.
+	 */
+	namespaceMembers: Map<Binding, ReadonlyMap<string, Binding>>;
 	moduleNamespaces: Map<string, Array<{ name: string; exporter: Binding }>>;
 	/** Modules whose `import()` rejects because they failed to load or link. */
 	failedModules: ReadonlyMap<string, SyntaxDiagnostic>;
@@ -907,7 +911,7 @@ export function constructSemanticProgramCore(
 
 		moduleDefaultBinding: new Map(),
 		namespaceImports: new Map(),
-		foreignNamespaces: new Map(),
+		namespaceMembers: new Map(),
 		moduleNamespaces: new Map(),
 		failedModules: new Map(),
 		failedModuleInitializers: new Map(),
@@ -976,23 +980,9 @@ export function constructSemanticProgramCore(
 	for (const imports of linkage.namespaceImports.values()) {
 		for (const namespace of imports) {
 			if (namespace.deferred) continue;
-			const host = linkage.hostModules.find(
-				(module) => module.specifier === namespace.module,
-			);
-			if (host === undefined) continue;
-			const foreign = new Set(
-				host.exports
-					.filter((entry) => entry.direct !== undefined)
-					.map((entry) => entry.binding),
-			);
-			if (foreign.size === 0) continue;
-			program.foreignNamespaces.set(
+			program.namespaceMembers.set(
 				namespace.binding,
-				new Map(
-					namespace.exports
-						.filter((entry) => foreign.has(entry.exporter))
-						.map((entry) => [entry.name, entry.exporter]),
-				),
+				new Map(namespace.exports.map((entry) => [entry.name, entry.exporter])),
 			);
 		}
 	}
@@ -10942,6 +10932,7 @@ function compileChainElement(
 		retainHostMember(program, fn, node);
 		if (node.object.type === "Super") {
 			return compileMemberLoad(
+				program,
 				fn,
 				cursor,
 				compileMemberObjectAndKey(program, fn, cursor, node),
@@ -10973,10 +10964,10 @@ function compileChainElement(
 			: node.property.type === "Identifier"
 				? compileStaticString(program, fn, cursor, node.property.name)
 				: -1;
-		return compileMemberLoad(fn, cursor, {
+		return compileMemberLoad(program, fn, cursor, {
 			object,
 			key,
-			foreignSlot: foreignNamespaceMember(program, fn, node),
+			namespaceExport: namespaceMemberExport(program, fn, node),
 		});
 	}
 
@@ -10995,7 +10986,7 @@ function compileChainElement(
 			if (calleeNode.object.type === "Super") {
 				const member = compileMemberObjectAndKey(program, fn, cursor, calleeNode);
 				thisRegister = member.receiver!;
-				callee = compileMemberLoad(fn, cursor, member);
+				callee = compileMemberLoad(program, fn, cursor, member);
 			} else {
 				const object = compileChainElement(
 					program,
@@ -11028,10 +11019,10 @@ function compileChainElement(
 						: calleeNode.property.type === "Identifier"
 							? compileStaticString(program, fn, cursor, calleeNode.property.name)
 							: -1;
-					callee = compileMemberLoad(fn, cursor, {
+					callee = compileMemberLoad(program, fn, cursor, {
 						object,
 						key,
-						foreignSlot: foreignNamespaceMember(program, fn, calleeNode),
+						namespaceExport: namespaceMemberExport(program, fn, calleeNode),
 					});
 				}
 			}
@@ -11549,7 +11540,7 @@ function compileLogicalAssignment(
 			compiled = { ...compiled, key };
 		}
 		member = compiled;
-		current = compileMemberLoad(fn, cursor, member);
+		current = compileMemberLoad(program, fn, cursor, member);
 	} else {
 		return -1;
 	}
@@ -11902,7 +11893,7 @@ function compileTaggedTemplate(
 	} else if (tagNode.type === "MemberExpression") {
 		const member = compileMemberObjectAndKey(program, fn, cursor, tagNode);
 		thisRegister = member.receiver ?? member.object;
-		callee = compileMemberLoad(fn, cursor, member);
+		callee = compileMemberLoad(program, fn, cursor, member);
 	} else {
 		callee = compileExpression(program, fn, cursor, expression.tag);
 		thisRegister = compileUndefined(fn, cursor);
@@ -12280,7 +12271,7 @@ function compileUpdateExpression(
 
 		const current = isPrivate
 			? compilePrivateMemberLoad(program, fn, cursor, object, privateName)
-			: compileMemberLoad(fn, cursor, { ...resolved, key: effectiveKey });
+			: compileMemberLoad(program, fn, cursor, { ...resolved, key: effectiveKey });
 
 		const oldValue = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
@@ -13025,7 +13016,7 @@ function compileMemberExpression(
 	}
 
 	const member = compileMemberObjectAndKey(program, fn, cursor, memberExpression);
-	return compileMemberLoad(fn, cursor, member);
+	return compileMemberLoad(program, fn, cursor, member);
 }
 
 function compileStaticArgumentsMember(
@@ -13273,27 +13264,35 @@ interface CompiledMemberReference {
 	object: number;
 	key: number;
 	receiver?: number;
-	foreignSlot?: number;
+	namespaceExport?: Binding;
 }
 
 function compileMemberLoad(
+	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
 	member: CompiledMemberReference,
 ): number {
+	if (member.namespaceExport !== undefined) {
+		const destination = loadRegisterFromLocation(
+			fn,
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, member.namespaceExport),
+		);
+		emitTdzGuard(program, fn, cursor.block, member.namespaceExport, destination);
+		return destination;
+	}
 	const destination = nextCoreVariable(fn);
 	cursor.block.emitter.emit(
-		member.foreignSlot !== undefined
-			? { type: "loadGlobal", registers: [destination], index: member.foreignSlot }
-			: member.receiver === undefined
-				? {
-						type: "loadProperty",
-						registers: [destination, member.object, member.key],
-					}
-				: {
-						type: "loadSuperProperty",
-						registers: [destination, member.object, member.key, member.receiver],
-					},
+		member.receiver === undefined
+			? {
+					type: "loadProperty",
+					registers: [destination, member.object, member.key],
+				}
+			: {
+					type: "loadSuperProperty",
+					registers: [destination, member.object, member.key, member.receiver],
+				},
 	);
 	return destination;
 }
@@ -13384,24 +13383,30 @@ function compileMemberObjectAndKey(
 		object,
 		key,
 		receiver,
-		foreignSlot: foreignNamespaceMember(program, fn, memberExpression),
+		namespaceExport: namespaceMemberExport(program, fn, memberExpression),
 	};
 }
 
-function foreignNamespaceMember(
+/**
+ * The exporter binding a static `namespace.name` read resolves to. A module
+ * namespace object's property is a live view of that binding, so reading the binding
+ * with its own TDZ guard is the same read without the exotic object's lookup. Callers
+ * still evaluate the namespace binding and keep it as a call's receiver.
+ */
+function namespaceMemberExport(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	member: ESTree.MemberExpression,
-): number | undefined {
+): Binding | undefined {
 	if (
-		program.foreignNamespaces.size === 0 ||
+		program.namespaceMembers.size === 0 ||
 		member.object.type !== "Identifier" ||
 		fn.semanticFile.withDynamicNodes.has(member.object)
 	)
 		return undefined;
 	const binding = fn.semanticFile.nodeToBinding.get(member.object);
 	const exports =
-		binding === undefined ? undefined : program.foreignNamespaces.get(binding);
+		binding === undefined ? undefined : program.namespaceMembers.get(binding);
 	if (exports === undefined) return undefined;
 	const name =
 		!member.computed && member.property.type === "Identifier"
@@ -13411,10 +13416,10 @@ function foreignNamespaceMember(
 				: undefined;
 	const exporter = name === undefined ? undefined : exports.get(name);
 	if (exporter === undefined) return undefined;
-	// Eager host namespaces read immutable installer slots. Callers evaluate the
-	// namespace binding first so replacing its lookup preserves the TDZ check.
-	const location = getOrCreateBindingLocation(program, fn, exporter);
-	return location.type === "global" ? location.index : undefined;
+	// The namespace object only exposes exports that live in global slots.
+	return getOrCreateBindingLocation(program, fn, exporter).type === "global"
+		? exporter
+		: undefined;
 }
 
 /**
@@ -14969,7 +14974,7 @@ function compileCallValue(
 	} else if (calleeNode.type === "MemberExpression") {
 		const member = compileMemberObjectAndKey(program, fn, cursor, calleeNode);
 		thisRegister = member.receiver ?? member.object;
-		callee = compileMemberLoad(fn, cursor, member);
+		callee = compileMemberLoad(program, fn, cursor, member);
 	} else if (
 		calleeNode.type === "Identifier" &&
 		fn.semanticFile.withDynamicNodes.has(calleeNode)

@@ -19,3 +19,11 @@ export function select(secondTarget) {
 export function install(target) {
 	run = target;
 }
+
+export function receiver() {
+	return this;
+}
+
+export function readLate(namespace) {
+	return namespace.late;
+}
