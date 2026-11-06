@@ -3628,8 +3628,45 @@ MalValue mal_vm_op_to_property_key(MalVm *vm, MalValue object_value, MalValue ke
  * creating frame's environment) so the closure resolves captured bindings.
  */
 MalValue mal_vm_op_create_object(MalVm *vm);
-MalValue mal_vm_op_create_base_construct_receiver(
+MalValue mal_vm_create_base_construct_receiver_slow(
     MalVm *vm, MalValue new_target, u8 capacity);
+
+/**
+ * The receiver of a base-class construct with `capacity` slots for the fields its
+ * constructor stores. Inlined like a shaped literal, so a site's constant capacity
+ * selects the size class at compile time.
+ */
+static inline __attribute__((always_inline)) MalValue mal_vm_op_create_base_construct_receiver(
+    MalVm *vm, MalValue new_target, u8 capacity
+) {
+    if (capacity == 0 || vm->heap.fail_next_cell_allocation) {
+        return mal_vm_create_base_construct_receiver_slow(vm, new_target, capacity);
+    }
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
+        return MAL_VALUE_UNDEFINED;
+    }
+    MalHeapHeader *cell = mal_heap_cell_take(
+        &vm->heap, sizeof(MalObject) + sizeof(void *) + sizeof(MalValue) * capacity,
+        MAL_HEAP_OBJECT);
+    if (__builtin_expect(cell == nullptr, 0)) {
+        return mal_value_from_object(mal_object_new_reserved(&vm->heap, prototype, capacity));
+    }
+    MalObject *object = (MalObject *) cell;
+    MalHeapHeader header = object->header;
+    *object = (MalObject) {
+        .header = header,
+        .extensible = true,
+        .storage_kind = MAL_OBJECT_COMPACT,
+        .slot_capacity = capacity,
+        .shape = mal_shape_root(&vm->heap),
+    };
+    memcpy(object + 1, &prototype, sizeof(prototype));
+    mal_object_mark_as_prototype(prototype);
+    mal_object_slot_coallocations++;
+    return mal_value_from_object(object);
+}
 
 /**
  * Clone a compiler-emitted ordinary stack object into one managed cell before

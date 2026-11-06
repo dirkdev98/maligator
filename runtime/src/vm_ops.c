@@ -878,7 +878,7 @@ MalValue mal_vm_op_create_object(MalVm *vm) {
     return mal_value_from_object(object);
 }
 
-MalValue mal_vm_op_create_base_construct_receiver(
+MalValue mal_vm_create_base_construct_receiver_slow(
     MalVm *vm, MalValue new_target, u8 capacity
 ) {
     MalObject *prototype;
