@@ -12341,6 +12341,7 @@ const LITERAL_TEMPLATE_HOLE = 7;
 const LITERAL_TEMPLATE_ARRAY = 8;
 const LITERAL_TEMPLATE_OBJECT = 9;
 const LITERAL_TEMPLATE_KEY = 10;
+const LITERAL_TEMPLATE_INDEX_KEY = 12;
 const MIN_LITERAL_TEMPLATE_WORDS = 32;
 const literalNumberBits = new DataView(new ArrayBuffer(8));
 
@@ -12387,12 +12388,7 @@ function isStaticLiteralTemplate(
 					return false;
 				}
 				const name = staticPropertyName(property);
-				if (
-					name === undefined ||
-					name === "__proto__" ||
-					compilerPropertyKeyIsArrayIndex(name) ||
-					seen.has(name)
-				) {
+				if (name === undefined || name === "__proto__" || seen.has(name)) {
 					return false;
 				}
 				seen.add(name);
@@ -12475,6 +12471,12 @@ function compileLiteralTemplate(
 				const property = node.properties[i] as ESTree.Property;
 				const name = staticPropertyName(property)!;
 				actions.push({ type: "node", node: property.value as ESTree.Expression });
+				// An index name keys an element, which the object orders before its names.
+				if (compilerPropertyKeyIsArrayIndex(name)) {
+					actions.push({ type: "word", word: Number(name) });
+					actions.push({ type: "word", word: LITERAL_TEMPLATE_INDEX_KEY });
+					continue;
+				}
 				actions.push({
 					type: "word",
 					word: getOrCreateStringConstant(program, name),

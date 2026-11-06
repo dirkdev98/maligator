@@ -130,3 +130,16 @@ describe("Core literal constants", () => {
 		);
 	});
 });
+
+describe("static data templates", () => {
+	it("builds an object keyed by array indices from one template", () => {
+		const image = compile(
+			'return { "200": "OK", "404": "Not Found", name: "codes", "500": "Server Error", rows: { "1": [1], "2": [2] } };',
+		);
+		const opcodes = image.runtime.functions.flatMap((fn) =>
+			fn.instructions.map((instruction) => instruction.opcode),
+		);
+		expect(opcodes).toContain("INSTANTIATE_LITERAL_TEMPLATE");
+		expect(opcodes).not.toContain("DEFINE_PROPERTY");
+	});
+});

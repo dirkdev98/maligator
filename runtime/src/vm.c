@@ -1539,6 +1539,7 @@ static bool mal_vm_rebase_literal_templates(
             case MAL_LITERAL_I32:
             case MAL_LITERAL_ARRAY:
             case MAL_LITERAL_OBJECT:
+            case MAL_LITERAL_INDEX_KEY:
                 if (pos >= count) return false;
                 pos++;
                 break;

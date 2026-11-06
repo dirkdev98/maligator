@@ -1146,6 +1146,7 @@ static bool mal_literal_decode_value(
             return true;
         }
         case MAL_LITERAL_KEY:
+        case MAL_LITERAL_INDEX_KEY:
             return false;
     }
     return false;
@@ -1413,12 +1414,15 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32
         }
 
         u32 key_index = 0;
+        u32 key_tag = MAL_LITERAL_KEY;
         if (parent->is_object) {
-            u32 key_tag;
-            ok = mal_literal_read(&cursor, &key_tag) && key_tag == MAL_LITERAL_KEY &&
-                 mal_literal_read(&cursor, &key_index) &&
-                 key_index < (u32) vm->runtime_image->string_constant_count;
+            ok = mal_literal_read(&cursor, &key_tag) && mal_literal_read(&cursor, &key_index) &&
+                 (key_tag == MAL_LITERAL_KEY
+                     ? key_index < (u32) vm->runtime_image->string_constant_count
+                     : key_tag == MAL_LITERAL_INDEX_KEY && key_index <= UINT32_MAX - 1);
             if (!ok) break;
+            // Index keys live in element storage, which a cached shape cannot replay.
+            if (key_tag == MAL_LITERAL_INDEX_KEY) flat = false;
         }
 
         MalValue child;
@@ -1432,10 +1436,12 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32
         }
 
         if (parent->is_object) {
-            MalKey key = {
-                .kind = MAL_KEY_STRING,
-                .value = mal_value_from_string(vm->string_constant_atoms[key_index]),
-            };
+            MalKey key = key_tag == MAL_LITERAL_INDEX_KEY
+                ? mal_key_index(key_index)
+                : (MalKey) {
+                      .kind = MAL_KEY_STRING,
+                      .value = mal_value_from_string(vm->string_constant_atoms[key_index]),
+                  };
             MalPropertyDesc desc = {
                 .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
                 .value = child,

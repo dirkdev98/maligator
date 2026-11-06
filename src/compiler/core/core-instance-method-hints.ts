@@ -214,8 +214,10 @@ export function literalTemplateKeys(
 	const count = data[position++]!;
 	for (let index = 0; index < count && position < data.length; index++) {
 		if (tag === 9) {
-			position++;
-			keys.add(data[position++]!);
+			// Index keys (tag 12) name elements, not string constants.
+			const keyTag = data[position++];
+			const key = data[position++]!;
+			if (keyTag === 10) keys.add(key);
 		}
 		position = literalTemplateKeys(data, position, keys, depth + 1);
 	}
