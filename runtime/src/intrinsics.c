@@ -592,10 +592,10 @@ MalArrayObject *mal_intrinsic_new_dense_array(MalVm *vm, u32 length) {
 MalArrayObject *mal_intrinsic_new_dense_pair(
     MalVm *vm, MalValue first, MalValue second
 ) {
-    MalArrayObject *array = mal_intrinsic_new_dense_array(vm, 2);
     MalValue values[] = {first, second};
-    if (!mal_array_object_dense_build_values(array, 0, values, 2)) abort();
-    return array;
+    return mal_array_object_new_from_values(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]),
+        values, 2);
 }
 
 static void mal_intrinsics_init_global_this(MalVm *vm);
