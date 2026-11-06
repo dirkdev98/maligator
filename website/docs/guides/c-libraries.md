@@ -158,8 +158,9 @@ Failed or canceled callbacks return a zero native value while the JavaScript err
 propagates to its caller.
 
 Repeated string inputs can retain a UTF-8 encoding alongside their JavaScript
-storage, avoiding encoding work on later synchronous calls. ASCII inputs can instead
-grow their existing backing to add a NUL terminator. Preparation increases retained
+storage, avoiding encoding work on later synchronous calls. Long ASCII inputs can
+instead grow their existing backing to add a NUL terminator; short ones copy into
+the call's frame. Preparation increases retained
 memory and can cost more than copying for short reuse sequences. Mutable inputs,
 callbacks, and asynchronous calls use private input copies.
 

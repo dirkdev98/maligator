@@ -89,7 +89,11 @@ for (const text of [
 		"dependent slices preserve UTF8 input",
 	);
 }
-for (const original of ["é".repeat(4095), "☃".repeat(4095), "😀".repeat(4095)]) {
+// Short strings keep their UTF8 inline until reuse earns them a sidecar, long ones on the heap.
+for (const original of ["é", "☃", "😀"].flatMap((unit) => [
+	unit.repeat(20),
+	unit.repeat(4095),
+])) {
 	const bytes = new TextEncoder().encode(original);
 	const text = new TextDecoder().decode(bytes);
 	const sum = bytes.reduce((total, byte) => total + byte, 0);
