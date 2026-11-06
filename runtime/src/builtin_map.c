@@ -426,6 +426,11 @@ MalCompletion mal_builtin_collection_direct(
     const MalValue *args,
     i32 arg_count
 ) {
+    // Same-named script methods, such as an HTTP response's `set`, skip the intrinsic matching.
+    if (!mal_value_is_native_function_object(callee)) {
+        MAL_PERF_COUNT(collection_direct_fallbacks);
+        return mal_vm_call_cached(vm, callee, this_value, args, arg_count);
+    }
     MalIntrinsic expected;
     switch (operation) {
         case MAL_GUARDED_BUILTIN_MAP_GET:
