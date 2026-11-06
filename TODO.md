@@ -1955,9 +1955,12 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       ran. Scalar fields of struct
       handles read without a getter call, about 7.9 ns per warm read against 11;
       the getter-row probe and the reader's dependent loads remain, which an
-      inline-cache row for C fields checked by the static probe would remove. The 64 KiB
-      non-ASCII `sqlite-text` cases sample the same as ASCII in steady state; their
-      round-to-round variance is process-level. Cold header analysis of a
+      inline-cache row for C fields checked by the static probe would remove. Binding 48
+      to 64 KiB of non-ASCII `sqlite-text` takes about 1.5x the ASCII time, which
+      matches C, while both sample as SQLite's `strlen` and copy; the ASCII string lends
+      its own storage and the others lend the UTF-8 sidecar. Sidecar alignment, page
+      offset and offset to SQLite's buffer change it by at most 10%, and the gap fades
+      at 16 and 256 KiB. Cold header analysis of a
       macro-heavy library such as OpenSSL still spends about half its time in
       Clang's JSON dump of the macro value probe, mostly the expression trees of
       integer constants under their enum probes. Its Clang passes, and each library's
