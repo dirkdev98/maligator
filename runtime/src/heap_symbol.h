@@ -27,8 +27,14 @@ typedef struct MalSymbol {
      */
     u32 private_table_resident : 1;
 
+    /**
+     * Set for the well-known symbols. The VM's intrinsics keep them alive for its
+     * lifetime, so untraced property cache rows may key on them as on atoms.
+     */
+    u32 well_known : 1;
+
     // A truncated 1-based shape slot or table entry index, validated against each receiver.
-    u32 private_entry_hint : 29;
+    u32 private_entry_hint : 28;
 
     MalString *description;
 } MalSymbol;

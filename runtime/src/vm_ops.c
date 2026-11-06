@@ -5901,6 +5901,16 @@ static bool mal_ic_key_is_stable_string(MalValue key) {
 }
 
 /**
+ * A key a per-site or shared inherited row may hold: a stable string, or a
+ * well-known symbol, which the VM's intrinsics root. The own-slot stub, keyed by
+ * atom identity, takes stable strings only.
+ */
+static bool mal_ic_key_is_stable(MalValue key) {
+    return mal_ic_key_is_stable_string(key) ||
+        (mal_value_is_symbol(key) && mal_value_to_symbol(key)->well_known);
+}
+
+/**
  * Attribute destructive cache-row replacement without changing shipping builds.
  * A populated property IC always owns a canonical nonzero string key; zero-key
  * rows are untouched allocation-time state and are not mode transitions.
@@ -6379,14 +6389,17 @@ static bool mal_ic_try_record_inherited_slot(
     MalHeapType receiver_type = mal_value_heap_type(receiver);
     MalObject *object = mal_value_to_object(receiver);
     MalKey key = mal_key_from_value(key_value);
-    if ((receiver_type != MAL_HEAP_GENERATOR_OBJECT && !mal_ic_chain_object_admits(object, key)) ||
+    // Generators and C library handles keep their state in internal fields, so their
+    // own properties resolve like an ordinary object's.
+    bool internal_state = receiver_type == MAL_HEAP_GENERATOR_OBJECT ||
+        receiver_type == MAL_HEAP_FFI_HANDLE_OBJECT;
+    if ((!internal_state && !mal_ic_chain_object_admits(object, key)) ||
         (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
         return false;
     }
 
     bool dictionary_receiver = mal_object_has_public_overflow(object);
-    if ((dictionary_receiver &&
-         (receiver_type == MAL_HEAP_GENERATOR_OBJECT || object->shape->inline_count != 0)) ||
+    if ((dictionary_receiver && (internal_state || object->shape->inline_count != 0)) ||
         resolution.holder == nullptr ||
         !mal_ic_chain_object_admits(resolution.holder, key)) {
         return false;
@@ -6712,7 +6725,7 @@ static void mal_ic_try_record_inherited(
         MAL_PERF_COUNT(ic_inherited_reject_basic);
         return;
     }
-    if (!mal_ic_key_is_stable_string(key_value)) {
+    if (!mal_ic_key_is_stable(key_value)) {
         MAL_PERF_COUNT(ic_inherited_reject_key);
         return;
     }
@@ -6924,7 +6937,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
     if (!inherited_stub_already_probed &&
         vm->inherited_property_stub != nullptr &&
         mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT) &&
-        mal_value_is_string(key_value)) {
+        mal_ic_key_is_stable(key_value)) {
         const MalObject *object = mal_value_to_object(object_value);
         const MalInlineCache *stub =
             &vm->inherited_property_stub[mal_inherited_stub_hash(
@@ -7074,11 +7087,11 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         }
         if (object->header.type == MAL_HEAP_OBJECT &&
             object->shape->inline_count == 0 && mal_object_overflow(object) != nullptr &&
-            key.kind == MAL_KEY_STRING) {
+            (key.kind == MAL_KEY_STRING || mal_ic_key_is_stable(key_value))) {
             MalValue result = mal_value_new_undefined();
             MalPropertyLookup own = mal_property_lookup(mal_object_overflow(object), key);
             if (own.present) {
-                if (mal_ic_key_is_stable_string(key_value)) {
+                if (mal_ic_key_is_stable(key_value)) {
                     mal_ic_record_own_entry(
                         ic, mal_ic_own_entry_mode(own.desc.flags), key_value, own.entry);
                 }
