@@ -23,6 +23,7 @@ import type {
 	BoundFunction,
 	Argument,
 	HandleType,
+	JsResult,
 	JsValue,
 	MappedConstant,
 	MappedRecord,
@@ -45,7 +46,7 @@ type ResourceCase = {
 type ResourceScope = ResourceIndex | ResourceCase;
 type ResourceStep = { readonly kind: "field"; readonly name: string } | ResourceScope;
 interface ResultResource {
-	readonly value: Extract<JsValue, { kind: "handle" }>;
+	readonly value: Extract<JsResult, { kind: "handle" }>;
 	readonly expression: string;
 	readonly steps: ReadonlyArray<ResourceStep>;
 }
@@ -540,7 +541,7 @@ class BindingWriter {
 
 	#resultGuards(binding: BoundFunction, fail: string): Array<string> {
 		const handles = new Set<string>();
-		const visit = (value: JsValue): void => {
+		const visit = (value: JsResult): void => {
 			if (value.kind === "handle" && value.pass === "pointer" && value.fresh !== true) {
 				if (this.#workerCloseFamilies.has(this.#handle(value.name).family))
 					handles.add(value.name);
@@ -908,7 +909,7 @@ class BindingWriter {
 	 */
 	/** `lent`: a callback argument, whose handles close when the callback returns. */
 	write(
-		value: JsValue,
+		value: JsResult,
 		expression: string,
 		lent: boolean | string = false,
 		owner = "mal_owner",
@@ -943,8 +944,6 @@ class BindingWriter {
 			case "bytes":
 			case "sequence":
 				throw new Error("buffer and array results convert with their count");
-			case "callback":
-				throw new Error("callbacks are parameters only");
 			case "boolean":
 				return `mal_ffi_from_boolean(${expression})`;
 			case "integer":
@@ -980,7 +979,7 @@ class BindingWriter {
 	 * rooted slot: a new Uint8Array or array, or null for a null pointer.
 	 */
 	#produceCounted(
-		value: JsValue,
+		value: JsResult,
 		expression: string,
 		count: string,
 		target: string,
@@ -1039,7 +1038,7 @@ class BindingWriter {
 	}
 
 	#produceElement(
-		value: JsValue,
+		value: JsResult,
 		expression: string,
 		array: string,
 		index: string,
@@ -1070,7 +1069,7 @@ class BindingWriter {
 	 * slot. Arrays fill a new array element by element.
 	 */
 	#produce(
-		value: JsValue,
+		value: JsResult,
 		expression: string,
 		target: string,
 		lent: boolean | string = false,
@@ -2100,7 +2099,7 @@ class BindingWriter {
 	 * `pending` says whether a callback or an earlier conversion may have left a throw pending.
 	 */
 	#owned(
-		value: JsValue,
+		value: JsResult,
 		expression: string,
 		target: string,
 		count: string | undefined,
@@ -2752,7 +2751,7 @@ class BindingWriter {
 		ownedOnly = true,
 	): Array<ResultResource> {
 		const collect = (
-			value: JsValue,
+			value: JsResult,
 			expression: string,
 			steps: ReadonlyArray<ResourceStep> = [],
 			count?: number,
@@ -3010,7 +3009,7 @@ class BindingWriter {
 		);
 	}
 
-	#takesOwnership(value: Extract<JsValue, { kind: "handle" }>): boolean {
+	#takesOwnership(value: Extract<JsResult, { kind: "handle" }>): boolean {
 		return (
 			value.ownership.kind === "owned" && this.#handle(value.name).destroy !== undefined
 		);
@@ -4226,7 +4225,7 @@ class BindingWriter {
 		const results = transactional ? "&mal_results" : undefined;
 		const callbackArguments: Array<string> = [];
 		const trampolines: Array<string> = [];
-		const discard = (value: JsValue, expression: string): Array<string> => {
+		const discard = (value: JsResult, expression: string): Array<string> => {
 			if (value.kind !== "handle" || value.ownership.kind !== "owned") return [];
 			const handle = this.#handle(value.name);
 			if (handle.destroy === undefined) return [];

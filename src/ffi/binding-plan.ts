@@ -30,12 +30,100 @@ import { FfiFactError } from "./ffi-error.ts";
 import type { FfiText } from "./text.ts";
 
 /**
- * How a C value crosses into JavaScript. Mappings follow fixed rules so the same
- * header and facts always produce the same module.
+ * Values that convert the same way in both directions. Record fields, union members
+ * and tagged cases describe C storage that a binding both reads and writes, so their
+ * nested values are results that inputs lend as they are.
  */
-export type JsValue =
+type SharedValue =
 	| { readonly kind: "undefined" }
 	| { readonly kind: "native"; readonly name: string }
+	| { readonly kind: "boolean" }
+	/** An exact integer of at most 32 bits; other numbers throw on input. */
+	| { readonly kind: "integer"; readonly bits: number; readonly signed: boolean }
+	| { readonly kind: "float"; readonly bits: number }
+	/** An integer wider than 32 bits, exact in both directions. */
+	| { readonly kind: "bigint"; readonly bits: number; readonly signed: boolean }
+	/** A struct passed by value as a plain object. */
+	| { readonly kind: "record"; readonly name: string }
+	| {
+			readonly kind: "tagged";
+			readonly name: string;
+			readonly tag: string;
+			readonly cases: ReadonlyArray<{
+				readonly literal: string;
+				readonly value: JsResult;
+			}>;
+			readonly alias?: string;
+	  }
+	| {
+			readonly kind: "union";
+			readonly name: string;
+			readonly of: JsResult;
+			readonly alias?: string;
+	  };
+
+/** A fixed C array of `length` values, or of characters in `format`. */
+interface ArrayValue<Value> {
+	readonly kind: "array";
+	readonly of: Value;
+	readonly length: number;
+	readonly format?: "string" | "bytes";
+}
+
+/**
+ * A value JavaScript lends C for the duration of a call. Mappings follow fixed rules
+ * so the same header and facts always produce the same module.
+ */
+export type JsInput =
+	| SharedValue
+	| ArrayValue<JsInput>
+	/** UTF-8, terminated or byte-counted. */
+	| { readonly kind: "string"; readonly nullable: boolean; readonly counted?: true }
+	/** Bytes C uses in place; `writable` inputs reject immutable buffers. */
+	| { readonly kind: "bytes"; readonly nullable: boolean; readonly writable?: true }
+	/** A C array of `element` values, copied from a JavaScript array. */
+	| {
+			readonly kind: "sequence";
+			readonly of: JsInput;
+			readonly element: CType;
+			readonly nullable: boolean;
+	  }
+	| CallbackValue
+	/**
+	 * A resource handle. C receives the handle's pointer, a copy of its struct, or the
+	 * struct's address for the library to update in place.
+	 */
+	| {
+			readonly kind: "handle";
+			readonly name: string;
+			readonly pass: "pointer" | "copy" | "reference";
+			readonly nullable: boolean;
+	  };
+
+/**
+ * A value C hands JavaScript, with the cleanup it leaves: buffers name the `free`
+ * that releases C's copy, and handles their `ownership` of the resource.
+ */
+export type JsResult =
+	| SharedValue
+	| ArrayValue<JsResult>
+	/** UTF-8, terminated or byte-counted, copied into a JavaScript string. */
+	| {
+			readonly kind: "string";
+			readonly nullable: boolean;
+			readonly counted?: true;
+			readonly free?: string;
+	  }
+	/** Bytes copied into a Uint8Array. */
+	| { readonly kind: "bytes"; readonly nullable: boolean; readonly free?: string }
+	/** A C array of `element` values, copied into a JavaScript array. */
+	| {
+			readonly kind: "sequence";
+			readonly of: JsResult;
+			readonly element: CType;
+			readonly nullable: boolean;
+			readonly free?: string;
+	  }
 	| {
 			readonly kind: "callable";
 			readonly name: string;
@@ -45,106 +133,85 @@ export type JsValue =
 			readonly nullable: true;
 			readonly owner?: string;
 	  }
-	| { readonly kind: "boolean" }
-	/** An exact integer of at most 32 bits; other numbers throw on input. */
-	| { readonly kind: "integer"; readonly bits: number; readonly signed: boolean }
-	| { readonly kind: "float"; readonly bits: number }
-	/** An integer wider than 32 bits, exact in both directions. */
-	| { readonly kind: "bigint"; readonly bits: number; readonly signed: boolean }
-	/**
-	 * UTF-8, terminated or byte-counted. Inputs are borrowed for the call; results are copied,
-	 * then released with `free` when the caller owns them.
-	 */
-	| {
-			readonly kind: "string";
-			readonly nullable: boolean;
-			readonly counted?: true;
-			readonly free?: string;
-	  }
-	/**
-	 * Input bytes C uses in place during the call; results copied into a Uint8Array.
-	 * `writable` inputs reject immutable buffers.
-	 */
-	| {
-			readonly kind: "bytes";
-			readonly nullable: boolean;
-			readonly free?: string;
-			readonly writable?: true;
-	  }
-	/** A C array of `element` values, copied from or into a JavaScript array. */
-	| {
-			readonly kind: "sequence";
-			readonly of: JsValue;
-			readonly element: CType;
-			readonly nullable: boolean;
-			readonly free?: string;
-	  }
-	/** A struct passed by value as a plain object. */
-	| { readonly kind: "record"; readonly name: string }
-	| {
-			readonly kind: "tagged";
-			readonly name: string;
-			readonly tag: string;
-			readonly cases: ReadonlyArray<{
-				readonly literal: string;
-				readonly value: JsValue;
-			}>;
-			readonly alias?: string;
-	  }
-	| {
-			readonly kind: "union";
-			readonly name: string;
-			readonly of: JsValue;
-			readonly alias?: string;
-	  }
-	| {
-			readonly kind: "array";
-			readonly of: JsValue;
-			readonly length: number;
-			readonly format?: "string" | "bytes";
-	  }
-	/**
-	 * A JavaScript function the library calls through a generated trampoline of the C
-	 * function type `type`, during the call or, when kept, until it releases it.
-	 */
-	| {
-			readonly kind: "callback";
-			readonly type: Extract<CType, { kind: "function" }>;
-			/**
-			 * Per C parameter of the callback: its value, the user data it receives, or the
-			 * count of a buffer or array parameter, which JavaScript does not see.
-			 */
-			readonly params: ReadonlyArray<JsValue | "data" | "count">;
-			/** Per C parameter: the parameter holding its byte or element count. */
-			readonly counts: ReadonlyArray<number | undefined>;
-			readonly returns: JsValue;
-			readonly returnLifetime?: "call" | "registration";
-			readonly resultCount?: {
-				readonly param: number;
-				readonly bits: number;
-				readonly signed: boolean;
-			};
-			readonly nullable: boolean;
-			readonly lifetime: CallbackLifetime;
-			readonly route: CallbackRoute;
-			/**
-			 * Calls from other threads go to the VM thread: `queue` copies the arguments and
-			 * lets C continue, `wait` lends them and blocks C until JavaScript returns.
-			 */
-			readonly thread?: "queue" | "wait";
-	  }
-	/**
-	 * A resource handle. C receives the handle's pointer, a copy of its struct, or
-	 * the struct's address for the library to update in place.
-	 */
+	/** A resource handle wrapping the pointer C returned or a copy of its struct. */
 	| {
 			readonly kind: "handle";
 			readonly name: string;
-			readonly pass: "pointer" | "copy" | "reference";
+			readonly pass: "pointer" | "copy";
 			readonly nullable: boolean;
 			readonly ownership: HandleOwnership;
 			readonly fresh?: true;
 	  };
+
+/** A value in either direction, for walks that treat inputs and results alike. */
+export type JsValue = JsInput | JsResult;
+
+/**
+ * A JavaScript function the library calls through a generated trampoline of the C
+ * function type `type`, during the call or, when kept, until it releases it.
+ */
+type CallbackValue = {
+	readonly kind: "callback";
+	readonly type: Extract<CType, { kind: "function" }>;
+	/**
+	 * Per C parameter of the callback: the value C hands JavaScript, the user data it
+	 * receives, or the count of a buffer or array parameter, which JavaScript does not see.
+	 */
+	readonly params: ReadonlyArray<JsResult | "data" | "count">;
+	/** Per C parameter: the parameter holding its byte or element count. */
+	readonly counts: ReadonlyArray<number | undefined>;
+	readonly returns: JsInput;
+	readonly returnLifetime?: "call" | "registration";
+	readonly resultCount?: {
+		readonly param: number;
+		readonly bits: number;
+		readonly signed: boolean;
+	};
+	readonly nullable: boolean;
+	readonly lifetime: CallbackLifetime;
+	readonly route: CallbackRoute;
+	/**
+	 * Calls from other threads go to the VM thread: `queue` copies the arguments and
+	 * lets C continue, `wait` lends them and blocks C until JavaScript returns.
+	 */
+	readonly thread?: "queue" | "wait";
+};
+
+/** Whether `value` carries no result obligation or callable, so C can borrow it. */
+function isInput(value: JsValue): value is JsInput {
+	switch (value.kind) {
+		case "callable":
+			return false;
+		case "handle":
+			return !("ownership" in value);
+		case "string":
+		case "bytes":
+			return !("free" in value && value.free !== undefined);
+		case "sequence":
+			return !("free" in value && value.free !== undefined) && isInput(value.of);
+		case "array":
+			return isInput(value.of);
+		default:
+			return true;
+	}
+}
+
+/** Whether `value` states the cleanup of everything C hands JavaScript in it. */
+function isResult(value: JsValue): value is JsResult {
+	switch (value.kind) {
+		case "callback":
+			return false;
+		case "handle":
+			return "ownership" in value;
+		case "bytes":
+			return !("writable" in value && value.writable === true);
+		case "sequence":
+		case "array":
+			return isResult(value.of);
+		default:
+			return true;
+	}
+}
 
 /**
  * The fact a gap asks for: a handle type, a callback, typed variants, a pointer role
@@ -167,10 +234,75 @@ export type GapCode =
 
 type Gapped = { readonly gap: string; readonly code: GapCode };
 
+/** `value`, which its position makes an input; a result obligation in it is a planner defect. */
+function inputOf(value: JsValue): JsInput {
+	if (!isInput(value))
+		throw new Error(`a ${value.kind} input carries a result obligation`);
+	return value;
+}
+
+/** `value`, which its position makes a result; a callback or unowned handle in it is a planner defect. */
+function resultOf(value: JsValue): JsResult {
+	if (!isResult(value))
+		throw new Error(
+			`a ${value.kind} result has a callback or a handle without ownership`,
+		);
+	return value;
+}
+
 /**
- * Who releases the resource behind a handle that a result or field produces. Inputs
- * are lent to C and `borrowed`.
+ * The input that lends C the storage a field-shaped result describes, for a C array
+ * mapped as stored rather than decayed to a pointer.
  */
+function lend(value: JsResult): JsInput {
+	switch (value.kind) {
+		case "callable":
+			throw new Error("a native callable cannot be lent to C");
+		case "handle":
+			return {
+				kind: "handle",
+				name: value.name,
+				pass: value.pass,
+				nullable: value.nullable,
+			};
+		case "string":
+			return {
+				kind: "string",
+				nullable: value.nullable,
+				...(value.counted === true ? { counted: true as const } : {}),
+			};
+		case "bytes":
+			return { kind: "bytes", nullable: value.nullable };
+		case "sequence":
+			return {
+				kind: "sequence",
+				of: lend(value.of),
+				element: value.element,
+				nullable: value.nullable,
+			};
+		case "array":
+			return { ...value, of: lend(value.of) };
+		default:
+			return value;
+	}
+}
+
+/** `mapping` narrowed to the input its position makes it. */
+function inputMapping(mapping: Mapping): Mapping<JsInput> {
+	return "gap" in mapping ? mapping : { value: inputOf(mapping.value) };
+}
+
+/** `mapping` of C array storage, lent to C as an input. */
+function lentMapping(mapping: Mapping): Mapping<JsInput> {
+	return "gap" in mapping ? mapping : { value: lend(resultOf(mapping.value)) };
+}
+
+/** `mapping` narrowed to the result its position makes it. */
+function resultMapping(mapping: Mapping): Mapping<JsResult> {
+	return "gap" in mapping ? mapping : { value: resultOf(mapping.value) };
+}
+
+/** Who releases the resource behind a handle that a result or field produces. */
 export type HandleOwnership =
 	/** Closing the handle releases the resource through its destructor. */
 	| { readonly kind: "owned" }
@@ -182,10 +314,10 @@ export type HandleOwnership =
 	| { readonly kind: "library" };
 
 /** Whether a handle has a lifetime of its own, not one borrowed from an owner or the library. */
-export function independentHandle(value: Extract<JsValue, { kind: "handle" }>): boolean {
+export function independentHandle(value: Extract<JsResult, { kind: "handle" }>): boolean {
 	return value.ownership.kind === "owned" || value.ownership.kind === "borrowed";
 }
-type Mapping = { readonly value: JsValue } | Gapped;
+type Mapping<Value extends JsValue = JsValue> = { readonly value: Value } | Gapped;
 
 /**
  * How long the library may call a callback. A released or replaced registration may
@@ -226,8 +358,6 @@ export type CallbackRoute =
 	/** The callback the running call published in a per-thread slot. */
 	| { readonly kind: "scope" };
 
-type CallbackValue = Extract<JsValue, { kind: "callback" }>;
-
 /** The input handle rooting a registration, which only released and replaced ones name. */
 export function registrationOwner(lifetime: CallbackLifetime): number | undefined {
 	return lifetime.kind === "released" || lifetime.kind === "replaced"
@@ -257,7 +387,7 @@ export type NumericView =
 export interface MappedParameter {
 	readonly name: string;
 	readonly type: CType;
-	readonly value: JsValue;
+	readonly value: JsInput;
 	readonly view?: NumericView;
 	/** The view lends storage C may write; ordinary arrays still pass a copy. */
 	readonly writable?: true;
@@ -299,7 +429,7 @@ export interface MappedOutput {
 	readonly name: string;
 	/** The C type of the local holding this output. */
 	readonly type: CType;
-	readonly value: JsValue;
+	readonly value: JsResult;
 	/** The C parameter holding this output's byte or element count. */
 	readonly count?: number;
 	/** Caller storage bounded by a C input parameter or the original JavaScript array. */
@@ -315,7 +445,7 @@ export interface BoundFunction {
 	readonly params: ReadonlyArray<MappedParameter>;
 	/** How each C argument is produced, by C parameter position. */
 	readonly arguments: ReadonlyArray<Argument>;
-	readonly returns: JsValue;
+	readonly returns: JsResult;
 	/** For a buffer or array result: the C parameter that carries its count. */
 	readonly resultCount?: number;
 	/** With outputs, the function returns `{ result, ...outputs }` instead of its result. */
@@ -363,7 +493,7 @@ export interface GlobalAccessor {
 export interface MappedField {
 	readonly name: string;
 	readonly type: CType;
-	readonly value: JsValue;
+	readonly value: JsResult;
 	readonly bitWidth?: number;
 	readonly doc?: FfiText;
 }
@@ -447,7 +577,7 @@ export interface MappedConstant {
 	readonly name: string;
 	readonly source: "enum" | "macro";
 	readonly type: CType;
-	readonly value: JsValue;
+	readonly value: JsResult;
 	/** Known at build time; otherwise the binding reads the C expression when it loads. */
 	readonly known?: bigint | number | string;
 	readonly doc?: FfiText;
@@ -493,7 +623,7 @@ type ResultShapes = Pick<BindingPlan, "records"> & {
 	readonly handles: ReadonlyMap<string, Pick<HandleType, "representation" | "destroy">>;
 };
 
-export function hasResultHandles(value: JsValue, shapes: ResultShapes): boolean {
+export function hasResultHandles(value: JsResult, shapes: ResultShapes): boolean {
 	switch (value.kind) {
 		case "handle":
 			return (
@@ -537,7 +667,7 @@ export function hasOwnedRecordFields(
 }
 
 export function supportsResultTransaction(
-	value: JsValue,
+	value: JsResult,
 	shapes: ResultShapes,
 	context: "direct" | "record" | "other" = "direct",
 ): boolean {
@@ -590,6 +720,23 @@ export function supportsResultTransaction(
 }
 
 type Position = "param" | "return" | "field" | "constant";
+
+/** A fixed array of `element` values, in the direction `position` gives it. */
+function arrayOf(
+	element: JsValue,
+	position: Position,
+	length: number,
+	format?: "string" | "bytes",
+): JsValue {
+	const shape = {
+		kind: "array",
+		length,
+		...(format === undefined ? {} : { format }),
+	} as const;
+	return position === "param"
+		? { ...shape, of: inputOf(element) }
+		: { ...shape, of: resultOf(element) };
+}
 
 /** How C code spells a struct: `struct tag`, or the typedef that names an unnamed one. */
 function recordSpelling(model: CModel, record: CRecord): string {
@@ -1255,7 +1402,7 @@ class Planner {
 		}
 	}
 
-	#integer(name: string): Mapping {
+	#integer(name: string): Mapping<JsResult> {
 		const size = this.#model.target.sizes[name];
 		if (size === undefined)
 			return { gap: `${name} has no size on this target`, code: "unsupported" };
@@ -1427,17 +1574,25 @@ class Planner {
 						gap: `${record.name}: const members cannot be copied by value`,
 						code: "unsupported",
 					};
+				const copy = {
+					kind: "handle",
+					name: handle.name,
+					pass: "copy",
+					nullable: false,
+				} as const;
 				return {
-					value: {
-						kind: "handle",
-						name: handle.name,
-						pass: "copy",
-						nullable: false,
-						ownership: {
-							kind:
-								position === "return" && facts.borrowed !== true ? "owned" : "borrowed",
-						},
-					},
+					value:
+						position === "param"
+							? copy
+							: {
+									...copy,
+									ownership: {
+										kind:
+											position === "return" && facts.borrowed !== true
+												? "owned"
+												: "borrowed",
+									},
+								},
 				};
 			}
 			case "function":
@@ -1508,15 +1663,10 @@ class Planner {
 					`applies to void and byte pointers, not ${spelling}`,
 				);
 			}
-			const writable =
-				position === "param" && !("const" in target && target.const === true);
+			if (position !== "param") return { value: { kind: "bytes", nullable, ...free } };
+			const writable = !("const" in target && target.const === true);
 			return {
-				value: {
-					kind: "bytes",
-					nullable,
-					...free,
-					...(writable ? { writable: true } : {}),
-				},
+				value: { kind: "bytes", nullable, ...(writable ? { writable: true } : {}) },
 			};
 		}
 		if (facts.array !== undefined) {
@@ -1553,13 +1703,16 @@ class Planner {
 				return { gap: "arrays of arrays need a fact", code: "array" };
 			}
 			return {
-				value: {
-					kind: "sequence",
-					of: element.value,
-					element: type.to,
-					nullable,
-					...free,
-				},
+				value:
+					position === "param"
+						? { kind: "sequence", of: inputOf(element.value), element: type.to, nullable }
+						: {
+								kind: "sequence",
+								of: resultOf(element.value),
+								element: type.to,
+								nullable,
+								...free,
+							},
 			};
 		}
 		const countedString = typeof facts.string === "object";
@@ -1589,17 +1742,22 @@ class Planner {
 		if (handle !== undefined && (position === "param" || position === "return")) {
 			if (handle.representation === "pointer") {
 				return {
-					value: {
-						kind: "handle",
-						name: handle.name,
-						pass: "pointer",
-						nullable: position === "return" || facts.nullable === true,
-						ownership: {
-							kind:
-								position === "return" && facts.borrowed !== true ? "owned" : "borrowed",
-						},
-						...(facts.fresh === true ? { fresh: true as const } : {}),
-					},
+					value:
+						position === "param"
+							? {
+									kind: "handle",
+									name: handle.name,
+									pass: "pointer",
+									nullable: facts.nullable === true,
+								}
+							: {
+									kind: "handle",
+									name: handle.name,
+									pass: "pointer",
+									nullable: true,
+									ownership: { kind: facts.borrowed === true ? "borrowed" : "owned" },
+									...(facts.fresh === true ? { fresh: true as const } : {}),
+								},
 				};
 			}
 			if (position === "param") {
@@ -1609,7 +1767,6 @@ class Planner {
 						name: handle.name,
 						pass: "reference",
 						nullable: facts.nullable === true,
-						ownership: { kind: "borrowed" },
 					},
 				};
 			}
@@ -1658,7 +1815,7 @@ class Planner {
 				const mapped = this.value(type.of, position);
 				return "gap" in mapped
 					? mapped
-					: { value: { kind: "array", of: mapped.value, length: type.length, format } };
+					: { value: arrayOf(mapped.value, position, type.length, format) };
 			}
 			return {
 				gap: `${formatCDeclaration(type)} needs a fact: a string or bytes`,
@@ -1680,12 +1837,12 @@ class Planner {
 				: this.value(type.of, position, elementFacts);
 		return "gap" in mapped
 			? { ...mapped, gap: `array element: ${mapped.gap}` }
-			: { value: { kind: "array", of: mapped.value, length: type.length } };
+			: { value: arrayOf(mapped.value, position, type.length) };
 	}
 
-	#field(field: CField): Mapping {
+	#field(field: CField): Mapping<JsResult> {
 		if (field.bitWidth === undefined)
-			return this.value(field.integerType ?? field.type, "field");
+			return resultMapping(this.value(field.integerType ?? field.type, "field"));
 		if (resolveCType(this.#model, field.type).kind === "bool" && field.bitWidth === 1)
 			return { value: { kind: "boolean" } };
 		if (field.integerType === undefined)
@@ -1713,7 +1870,7 @@ class Planner {
 		name: string,
 		shape: Extract<MaligatorFfiShape, { member: string }> | undefined,
 		alias?: string,
-	): Mapping {
+	): Mapping<JsResult> {
 		if (shape === undefined)
 			return {
 				gap: `union ${name}: select an active member with a shape fact`,
@@ -1746,7 +1903,7 @@ class Planner {
 		if (this.#pending.has(mappedName))
 			return { gap: `union ${name}: recursive value shape`, code: "unsupported" };
 		this.#pending.add(mappedName);
-		let mapped: Mapping;
+		let mapped: Mapping<JsResult>;
 		try {
 			mapped = this.#field(field);
 		} finally {
@@ -1791,7 +1948,7 @@ class Planner {
 		name: string,
 		shape: Extract<MaligatorFfiShape, { tag: string }>,
 		alias?: string,
-	): Mapping {
+	): Mapping<JsResult> {
 		const record = this.#model.records.get(name);
 		const access = this.#accesses.get(name);
 		if (record === undefined || !record.complete || access?.spelling === undefined)
@@ -1805,7 +1962,7 @@ class Planner {
 			.slice(0, 16);
 		const mappedName = `tagged_${identity}`;
 		const known = this.tagged.get(mappedName);
-		const asValue = (mapped: MappedTagged): JsValue => ({
+		const asValue = (mapped: MappedTagged): JsResult => ({
 			kind: "tagged",
 			name: mapped.name,
 			tag: mapped.tag.name,
@@ -1989,16 +2146,14 @@ class Planner {
 		return { value: asValue(mapped) };
 	}
 
-	#ownedField(field: CField, record: string): Mapping | undefined {
+	#ownedField(field: CField, record: string): Mapping<JsResult> | undefined {
 		const facts =
 			field.name === undefined
 				? undefined
 				: this.#fields.get(record)?.[field.name]?.handle;
 		if (facts?.owned !== true) return undefined;
-		const mapped = this.value(
-			field.type,
-			"return",
-			facts.fresh === true ? { fresh: true } : {},
+		const mapped = resultMapping(
+			this.value(field.type, "return", facts.fresh === true ? { fresh: true } : {}),
 		);
 		if (
 			!("value" in mapped) ||
@@ -2021,7 +2176,7 @@ class Planner {
 		choices: ReadonlyMap<string, number>,
 		omitted: string,
 		identity: string,
-	): Mapping {
+	): Mapping<JsResult> {
 		const spelling = this.#accesses.get(record.name)?.spelling;
 		if (spelling === undefined)
 			return {
@@ -2098,7 +2253,7 @@ class Planner {
 		choices: ReadonlyMap<string, number>,
 		omitted: string,
 		identity: string,
-	): Mapping | undefined {
+	): Mapping<JsResult> | undefined {
 		const type = resolveCType(this.#model, field.type);
 		const record =
 			type.kind === "record" ? this.#model.records.get(type.name) : undefined;
@@ -2158,7 +2313,7 @@ class Planner {
 		return { value: { kind: "union", name, of: mapping.value } };
 	}
 
-	#record(name: string, tag: "struct" | "union"): Mapping {
+	#record(name: string, tag: "struct" | "union"): Mapping<JsResult> {
 		const access = this.#accesses.get(name);
 		const anonymous = !/^[A-Za-z_]\w*$/.test(name);
 		const mappedName = anonymous
@@ -2171,7 +2326,7 @@ class Planner {
 		if (known !== undefined) return { value: { kind: "record", name: mappedName } };
 		const failure = this.#recordGaps.get(name);
 		if (failure !== undefined) return failure;
-		const gap = (reason: string, code: GapCode): Mapping => {
+		const gap = (reason: string, code: GapCode): Gapped => {
 			const missing = { gap: `${tag} ${name}: ${reason}`, code };
 			this.#recordGaps.set(name, missing);
 			return missing;
@@ -2252,7 +2407,7 @@ class Planner {
 			const fact = facts[field.name];
 			if (!exposeValues && fact?.callable === undefined && fact?.handle === undefined)
 				continue;
-			let mapped: Mapping =
+			let mapped: Mapping<JsResult> =
 				fact?.callable === undefined
 					? this.#field(field)
 					: this.#callable(
@@ -2268,7 +2423,7 @@ class Planner {
 						);
 			if (fact?.handle !== undefined) {
 				const at = `types.${record.name}.fields.${field.name}.handle`;
-				mapped = this.value(field.type, "return", { borrowed: true });
+				mapped = resultMapping(this.value(field.type, "return", { borrowed: true }));
 				if (
 					!("value" in mapped) ||
 					mapped.value.kind !== "handle" ||
@@ -2452,7 +2607,7 @@ class Planner {
 		nullable: boolean,
 		callback: MaligatorFfiCallback,
 		at: string,
-	): Mapping {
+	): Mapping<CallbackValue> {
 		const facts = callback.params ?? {};
 		const lifetimes = [
 			...(callback.release === undefined ? [] : ["release"]),
@@ -2583,7 +2738,7 @@ class Planner {
 				`${at}.callback.returns`,
 				"the result count already counts an argument",
 			);
-		const params: Array<JsValue | "data" | "count"> = [];
+		const params: Array<JsResult | "data" | "count"> = [];
 		for (const [index, param] of target.params.entries()) {
 			if (counters.has(index) || resultCount?.param === index) {
 				params.push("count");
@@ -2601,7 +2756,9 @@ class Planner {
 				params.push("data");
 				continue;
 			}
-			const mapped = this.value(param, "return", { ...stated, borrowed: true });
+			const mapped = resultMapping(
+				this.value(param, "return", { ...stated, borrowed: true }),
+			);
 			if ("gap" in mapped) {
 				return {
 					...mapped,
@@ -2685,9 +2842,9 @@ class Planner {
 			}
 		}
 		const returned = resolveCType(this.#model, target.returns);
-		let returns: JsValue = { kind: "undefined" };
+		let returns: JsInput = { kind: "undefined" };
 		if (returned.kind !== "void") {
-			const mapped = this.value(target.returns, "param", resultFacts);
+			const mapped = inputMapping(this.value(target.returns, "param", resultFacts));
 			if ("gap" in mapped) return { ...mapped, gap: `callback result: ${mapped.gap}` };
 			if (mapped.value.kind !== "handle" && this.#containsHandle(mapped.value))
 				return {
@@ -3028,7 +3185,7 @@ class Planner {
 			readonly location: CFunction["location"];
 			readonly owner?: string;
 		},
-	): Mapping {
+	): Mapping<Extract<JsResult, { kind: "callable" }>> {
 		const at = `${context.path}.callable`;
 		const callable = facts.callable!;
 		const pointer = resolveCType(this.#model, type);
@@ -3208,6 +3365,21 @@ class Planner {
 				throw error;
 			}
 		};
+		const mapResult = (
+			type: CType,
+			valueFacts: MaligatorFfiValueFacts,
+			at: string,
+		): Mapping<JsResult> => resultMapping(map(type, "return", valueFacts, at));
+		/** A C array parameter's storage lends its rows; other inputs map as parameters. */
+		const mapInput = (
+			type: CType,
+			storage: boolean,
+			valueFacts: MaligatorFfiValueFacts,
+			at: string,
+		): Mapping<JsInput> =>
+			storage
+				? lentMapping(map(type, "field", valueFacts, at))
+				: inputMapping(map(type, "param", valueFacts, at));
 
 		const counts = new Map<number, Array<number>>();
 		declaration.params.forEach((_, index) => {
@@ -3448,7 +3620,7 @@ class Planner {
 						"requires a handle output",
 					);
 				if (counted !== undefined && pointer) {
-					const written = map(resolved.to, "return", NO_FACTS, at);
+					const written = mapResult(resolved.to, NO_FACTS, at);
 					if ("gap" in written) {
 						gap(written.gap, written.code);
 						return;
@@ -3517,9 +3689,8 @@ class Planner {
 						);
 						return;
 					}
-					const written = map(
+					const written = mapResult(
 						param.type,
-						"return",
 						{
 							...valueFacts,
 							array: { ...valueFacts.array!, capacity: undefined },
@@ -3598,7 +3769,7 @@ class Planner {
 						args.push({ kind: "out", output });
 						return;
 					}
-					const read = map(param.type, "param", valueFacts, at);
+					const read = mapInput(param.type, false, valueFacts, at);
 					if ("gap" in read) {
 						gap(read.gap, read.code);
 						return;
@@ -3614,9 +3785,8 @@ class Planner {
 					gap("counted outer array outputs need an explicit capacity", "array");
 					return;
 				}
-				const written = map(
+				const written = mapResult(
 					resolved.to,
-					"return",
 					{ ...valueFacts, nullable: undefined },
 					at,
 				);
@@ -3679,9 +3849,9 @@ class Planner {
 					args.push({ kind: "out", output });
 					return;
 				}
-				const read = map(
+				const read = mapInput(
 					resolved.to,
-					resolveCType(this.#model, resolved.to).kind === "array" ? "field" : "param",
+					resolveCType(this.#model, resolved.to).kind === "array",
 					valueFacts.string === undefined
 						? {
 								nullable: valueFacts.nullable,
@@ -3708,11 +3878,9 @@ class Planner {
 					"free applies to results and out parameters",
 				);
 			}
-			const mapped = map(
+			const mapped = mapInput(
 				param.type,
-				callableContext?.fixedArrayParameters === true && resolved.kind === "array"
-					? "field"
-					: "param",
+				callableContext?.fixedArrayParameters === true && resolved.kind === "array",
 				valueFacts,
 				at,
 			);
@@ -3812,7 +3980,7 @@ class Planner {
 				where("returns.sizeof"),
 				"sizeof applies to parameters",
 			);
-		const returns: Mapping =
+		const returns: Mapping<JsResult> =
 			replaced !== undefined &&
 			Object.keys(facts.returns).length === 0 &&
 			this.#returnsPrevious(
@@ -3821,7 +3989,7 @@ class Planner {
 				factsAt(replaced).callback?.data !== undefined,
 			)
 				? { value: { kind: "undefined" } }
-				: map(declaration.returns, "return", facts.returns, "returns");
+				: mapResult(declaration.returns, facts.returns, "returns");
 		if ("value" in returns) {
 			if (facts.returns.borrowed === true && !this.#canBorrowResult(returns.value)) {
 				throw new FfiFactError(
@@ -4254,7 +4422,7 @@ export function planBindings(
 				? { kind: "typedef", name: declaration.name }
 				: declaration.underlying;
 		const underlying = resolveCType(model, declaration.underlying);
-		const mapped = planner.value(underlying, "constant");
+		const mapped = resultMapping(planner.value(underlying, "constant"));
 		for (const constant of declaration.constants) {
 			if (seen.has(constant.name)) continue;
 			seen.add(constant.name);
@@ -4288,9 +4456,9 @@ export function planBindings(
 			resolved.kind === "array" &&
 			resolveCType(model, resolved.of).kind === "integer" &&
 			typeof macro.value === "string";
-		const mapped: Mapping = isString
+		const mapped: Mapping<JsResult> = isString
 			? { value: { kind: "string", nullable: false } }
-			: planner.value(macro.type, "constant");
+			: resultMapping(planner.value(macro.type, "constant"));
 		if ("gap" in mapped) {
 			skippedConstants.push({ name: macro.name, reason: mapped.gap });
 			continue;
