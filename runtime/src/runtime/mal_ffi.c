@@ -2507,6 +2507,10 @@ uint64_t mal_ffi_reentries(MalVm *vm) {
     return vm->ffi_reentries;
 }
 
+bool mal_ffi_results_pending(MalVm *vm) {
+    return vm->ffi != nullptr && vm->ffi->results != nullptr;
+}
+
 MalVm *mal_ffi_callback_owner_vm(MalFfiCallback *callback) {
     MalVm *vm = mal_ffi_callback_vm(callback);
     if (vm == nullptr) return nullptr;

@@ -2983,7 +2983,9 @@ class BindingWriter {
 
 	/**
 	 * A handle result whose conversion is already the commit point: no fallible cleanup
-	 * follows it, and with `reentered` false, no JavaScript ran during the C call.
+	 * follows it. With `reentered` false, the caller also checks at run time that no
+	 * JavaScript ran during the C call and, for a result that takes ownership, that no
+	 * enclosing conversion holds a claim the result could name.
 	 */
 	#commitsDirectly(
 		binding: BoundFunction,
@@ -2999,13 +3001,18 @@ class BindingWriter {
 			binding.outputs.length === 0 &&
 			binding.closes === undefined &&
 			value.kind === "handle" &&
-			(value.ownership.kind !== "owned" ||
-				this.#handle(value.name).destroy === undefined) &&
+			(!reentered || !this.#takesOwnership(value)) &&
 			binding.params.every(({ value: input }) =>
 				input.kind === "handle"
 					? input.pass === "pointer" && !this.managedFamily(input.name)
 					: IMMEDIATE_KINDS.has(input.kind) || input.kind === "bigint",
 			)
+		);
+	}
+
+	#takesOwnership(value: Extract<JsValue, { kind: "handle" }>): boolean {
+		return (
+			value.ownership.kind === "owned" && this.#handle(value.name).destroy !== undefined
 		);
 	}
 
@@ -3162,11 +3169,11 @@ class BindingWriter {
 		).filter((group) => resourceIndexes(group).length === 0).length;
 		const transactional = this.#transactionalResults(binding, callable === undefined);
 		const results = transactional ? "&mal_results" : undefined;
-		// A transaction kept only for callback reentry is skipped when none entered.
+		// A transaction kept only for callback reentry, or for an enclosing conversion's
+		// claims, is skipped when neither applies.
 		const reentryChecked =
 			transactional &&
 			callable === undefined &&
-			discardCount === 0 &&
 			this.#commitsDirectly(binding, true, false);
 		if (reentryChecked) locals.push("uint64_t mal_reentries = mal_ffi_reentries(vm);");
 		if (discardCount > 0 && !transactional)
@@ -3987,18 +3994,22 @@ class BindingWriter {
 				results,
 			);
 			const record = intoRecord(binding);
-			const direct = reentryChecked
-				? this.#owned(
-						binding.returns,
-						"mal_return",
-						"mal_result",
-						count,
-						"&mal_site_result",
-						callsBack,
-						"&mal_discards",
-						undefined,
-					)
-				: [];
+			// Without reentry nothing is pending, and a handle that cannot be created
+			// releases the resource it would have owned.
+			const direct = !reentryChecked
+				? []
+				: binding.returns.kind === "handle" && this.#takesOwnership(binding.returns)
+					? [`mal_result = ${this.write(binding.returns, "mal_return")};`]
+					: this.#owned(
+							binding.returns,
+							"mal_return",
+							"mal_result",
+							count,
+							"&mal_site_result",
+							callsBack,
+							"&mal_discards",
+							undefined,
+						);
 			after.push(
 				...enter,
 				`${initialize ? returnDeclaration : "mal_return"} = ${call};`,
@@ -4008,7 +4019,9 @@ class BindingWriter {
 				...closes,
 				...(reentryChecked
 					? [
-							"if (mal_ffi_reentries(vm) == mal_reentries) {",
+							binding.returns.kind === "handle" && this.#takesOwnership(binding.returns)
+								? "if (mal_ffi_reentries(vm) == mal_reentries && !mal_ffi_results_pending(vm)) {"
+								: "if (mal_ffi_reentries(vm) == mal_reentries) {",
 							...direct.map((line) => `\t${line}`),
 							"} else {",
 							...claims.map((line) => `\t${line}`),
