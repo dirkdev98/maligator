@@ -1513,10 +1513,15 @@ static MalValue mal_ta_iterate(MalVm *vm, MalValue this_value, const MalValue *a
     mal_gc_native_rooted_begin(vm);
     MalValue ret = mal_value_new_undefined();
 
+    // Numeric elements load inline; each load still rechecks detachment and extent.
+    bool numeric = array->kind != MAL_TA_BIGINT64 && array->kind != MAL_TA_BIGUINT64;
+    u32 element_size = mal_typed_array_element_size(array->kind);
     bool last = op == MAL_TA_FIND_LAST || op == MAL_TA_FIND_LAST_INDEX;
     for (u32 step = 0; step < length; step++) {
         u32 i = last ? length - 1 - step : step;
-        MalValue element = mal_typed_array_object_get(vm, array, i);
+        MalValue element = numeric
+            ? mal_vm_exact_numeric_typed_array_load(array, i, array->kind, element_size)
+            : mal_typed_array_object_get(vm, array, i);
         MalValue call_args[3] = {element, mal_value_from_i32((i32) i), this_value};
         MalRootSpan call_span;
         mal_gc_root(&call_span, call_args, 3);
