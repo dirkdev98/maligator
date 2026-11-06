@@ -75,9 +75,11 @@ maligator ffi types
 `maligator run`, `dev`, and `build` compile the binding and link the library. `run` and `dev` build a development runtime that contains the binding instead of using a packaged one, so they need the native toolchain.
 
 Production builds with a closed module graph generate wrappers for the exports the
-application and its workers use. Namespace access retains its observable exports.
-Declaration generation and inspection describe the full header surface; development
-runtimes retain it for later application edits.
+application and its workers use, and for the handle types, fields, views, and callable
+signatures those exports reach. When none of them registers a callback, wrappers skip
+the rooting and pinning that callback reentry needs. Namespace access retains its
+observable exports. Declaration generation and inspection describe the full header
+surface; development runtimes retain it for later application edits.
 
 ## Audited native calls
 

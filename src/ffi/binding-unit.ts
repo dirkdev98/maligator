@@ -5036,43 +5036,35 @@ export function describeBindingUnit(
 	};
 }
 
-/** Generate bindings for selected exports, or the complete declared surface. */
+/**
+ * Generate the binding for the complete declared surface, or with `selected` for the
+ * exports a program reads, from the `reachableBindingPlan` of those exports.
+ */
 export function generateBindingUnit(
 	library: string,
 	headers: ReadonlyArray<string>,
 	model: CModel,
 	plan: BindingPlan,
-	selectedExports?: ReadonlySet<string>,
+	selected?: ReadonlySet<string>,
 ): BindingUnit {
 	const writer = new BindingWriter(model, plan);
-	const dispatchers = plan.dispatchers.filter(
-		(dispatch) => selectedExports === undefined || selectedExports.has(dispatch.name),
-	);
-	const dispatchCases = new Set(
-		dispatchers.flatMap((dispatch) => dispatch.cases.map((binding) => binding.name)),
-	);
-	const bindings = plan.functions.filter(
-		(binding) =>
-			selectedExports === undefined ||
-			dispatchCases.has(binding.name) ||
-			selectedExports.has(binding.name) ||
-			(binding.async !== undefined && selectedExports.has(binding.async)),
-	);
-	const selectedConstants = plan.constants.filter(
-		(constant) => selectedExports === undefined || selectedExports.has(constant.name),
-	);
+	const exported = (name: string): boolean =>
+		selected === undefined || selected.has(name);
+	const { dispatchers, functions: bindings } = plan;
 	for (const binding of bindings) {
 		for (const param of binding.params) writer.need(param.value, "input");
 		for (const output of binding.outputs) writer.need(output.value, "output");
 		writer.need(binding.returns, "output");
 	}
-	for (const constant of selectedConstants) writer.need(constant.value, "output");
+	for (const constant of plan.constants) writer.need(constant.value, "output");
 	for (const handle of plan.handles.values()) {
 		for (const field of handle.fields) writer.need(field.value, "output");
 	}
 
 	const scalarBindings = bindings.flatMap((binding) => {
-		const entry = scalarEntry(library, plan, binding);
+		const entry = exported(binding.name)
+			? scalarEntry(library, plan, binding)
+			: undefined;
 		return entry === undefined ? [] : [{ binding, entry }];
 	});
 	const scalarFunctions = [
@@ -5096,23 +5088,27 @@ export function generateBindingUnit(
 		...scalarFunctions,
 		...bindings.flatMap((binding) => [
 			"",
+			// Also emitted for an async twin alone, which shares its static registration
+			// state; the C compiler drops the unread static functions.
 			...writer.function(binding),
-			...directEntry(
-				library,
-				binding,
-				Object.values(bindingEffects(plan, binding)).some(Boolean) ||
-					binding.params.some(
-						({ value }) =>
-							value.kind === "callback" ||
-							(value.kind === "handle" && writer.managedFamily(value.name)),
-					),
-			),
+			...(exported(binding.name)
+				? directEntry(
+						library,
+						binding,
+						Object.values(bindingEffects(plan, binding)).some(Boolean) ||
+							binding.params.some(
+								({ value }) =>
+									value.kind === "callback" ||
+									(value.kind === "handle" && writer.managedFamily(value.name)),
+							),
+					)
+				: []),
 			...(binding.async === undefined
 				? []
 				: writer.asyncFunction(binding, binding.async)),
 		]),
 	];
-	const constants = selectedConstants.flatMap((constant) => [
+	const constants = plan.constants.flatMap((constant) => [
 		"",
 		...writer.constant(constant),
 	]);
@@ -5165,12 +5161,12 @@ export function generateBindingUnit(
 				}),
 			),
 		),
-		...selectedConstants.map((constant) => ({
+		...plan.constants.map((constant) => ({
 			name: constant.name,
 			entry: `{ ${cString(constant.name)}, 0, nullptr, mal_ffi_constant_${constant.name} }`,
 		})),
 	]
-		.filter((entry) => selectedExports === undefined || selectedExports.has(entry.name))
+		.filter((entry) => exported(entry.name))
 		.sort((left, right) => byteOrder(left.name, right.name));
 	const specifier = ffiModuleSpecifier(library);
 	const installer = ffiInstallerSymbol(library);
@@ -5317,12 +5313,7 @@ export function generateBindingUnit(
 		"",
 	].join("\n");
 	return {
-		...describeBindingUnit(library, {
-			...plan,
-			functions: bindings,
-			dispatchers,
-			constants: selectedConstants,
-		}),
+		...describeBindingUnit(library, plan),
 		exports: exports.map((entry) => entry.name),
 		source,
 	};

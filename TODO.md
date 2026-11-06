@@ -1943,13 +1943,13 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 - [ ] Remove measured marshalling, allocation, callback-dispatch, and unused binding
       build costs. Compare representative libraries against C and Bun, retaining
       output parity, matched toolchains, and CPU, memory, disk, and binary-size evidence.
-- [ ] Generate bindings from a reachable plan. `generateBindingUnit` builds its writer
-      and family-level facts from the full plan before selecting exports, so unused
-      handle fields, async twins and support code still reach generated C and can
-      widen runtime guards. Compute the closure the program needs (types,
-      destructors, views, fields, callback support, callable signatures, and cleanup
-      for returned handles) and derive effects from it; inspection, declarations and
-      development runtimes keep the full plan. Measure generated C and binary size.
+- [ ] Give the compiler the reachable plan's callback effects. Production C derives
+      callback reentry from the exports the program reads, but `describeBindingUnit`
+      still reports `callsUserCode` from every configured library, which withholds
+      scalar entries and memory facts from programs that never register a callback.
+      The static FFI imports of the program and its workers bound the final selection,
+      so effects derived from them stay valid for the generated C; the frontend cache
+      keys on the resulting facts.
 - [ ] Normalize callback facts during planning into explicit lifetime variants
       (call-scoped, registration released by a destructor, replacement setter,
       owner-rooted, close completion) with dispatch kept separate, so generation
