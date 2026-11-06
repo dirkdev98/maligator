@@ -1075,10 +1075,16 @@ static void ffi_kept_unref(MalFfiKept *kept) {
 }
 
 /**
- * Collected handles may release callbacks, whose VM roots can change only after
- * collection. A library callback cannot enter JavaScript while this is set.
+ * Per-thread FFI state in one record, so a callback takes a single thread-local
+ * lookup, which macOS makes a call: its address identifies the thread that
+ * registered a callback. Collected handles may release callbacks, whose VM roots
+ * can change only after collection; a library callback cannot enter JavaScript
+ * while `finalizing` is set.
  */
-static _Thread_local bool ffi_finalizing;
+typedef struct FfiThread {
+    bool finalizing;
+} FfiThread;
+static _Thread_local FfiThread ffi_thread;
 
 typedef struct MalFfiHandleEntry {
     const MalFfiHandleType *type;
@@ -1955,13 +1961,11 @@ void mal_ffi_callback_lost(void) {
 
 static void ffi_run_pending_releases(MalVm *vm);
 
-static MAL_ISOLATE_LOCAL byte ffi_callback_thread;
-
 void mal_ffi_callback_init(MalFfiCallback *callback, MalVm *vm, MalValue function) {
     callback->vm = vm;
     callback->function = function;
     callback->owner = mal_value_new_undefined();
-    callback->thread_identity = &ffi_callback_thread;
+    callback->thread_identity = &ffi_thread;
     callback->results = nullptr;
     callback->inputs = nullptr;
     callback->results_accepting = true;
@@ -2183,14 +2187,14 @@ void mal_ffi_release(void *data) {
     MalVm *vm = kept->callback.vm;
     // A queued callback's release goes through its inbox, which wakes the event loop
     // that waits for it.
-    if (vm != nullptr && kept->queued && (ffi_finalizing || !pthread_equal(kept->thread, pthread_self()))
+    if (vm != nullptr && kept->queued && (ffi_thread.finalizing || !pthread_equal(kept->thread, pthread_self()))
         && ffi_inbox_post_release(kept)) {
         pthread_mutex_unlock(&ffi_queue_lock);
         return;
     }
     // Inside a collection or on another thread the VM cannot be touched; queue the
     // context for the VM thread, which runs the queue after its next C call.
-    if (vm != nullptr && (ffi_finalizing || !pthread_equal(kept->thread, pthread_self()))) {
+    if (vm != nullptr && (ffi_thread.finalizing || !pthread_equal(kept->thread, pthread_self()))) {
         MalFfiState *state = vm->ffi;
         // Counted before publication, so a drain never sees the count fall below the queue.
         atomic_fetch_add_explicit(&mal_ffi_queued_releases, 1, memory_order_relaxed);
@@ -2491,8 +2495,10 @@ void mal_ffi_collectable_end(MalVm *vm) {
 
 MalVm *mal_ffi_callback_vm(MalFfiCallback *callback) {
     MalVm *vm = callback->vm;
-    if (vm == nullptr || ffi_finalizing) return nullptr;
-    if (callback->thread_identity != &ffi_callback_thread) ffi_wrong_thread();
+    if (vm == nullptr) return nullptr;
+    FfiThread *thread = &ffi_thread;
+    if (thread->finalizing) return nullptr;
+    if (callback->thread_identity != thread) ffi_wrong_thread();
     return vm;
 }
 
@@ -3040,8 +3046,8 @@ static void ffi_native_handle_stores_clear(MalFfiNativeHandle *handle) {
 static void ffi_native_handle_drop(MalFfiNativeHandle *handle, bool result) {
     if (result) atomic_fetch_sub_explicit(&handle->results, 1, memory_order_acq_rel);
     if (atomic_fetch_sub_explicit(&handle->references, 1, memory_order_acq_rel) != 1) return;
-    bool previous = ffi_finalizing;
-    ffi_finalizing = true;
+    bool previous = ffi_thread.finalizing;
+    ffi_thread.finalizing = true;
     bool released = false;
     bool destroys = handle->value != nullptr && handle->owned
         && (handle->force_destroy || handle->owner_type->collect) && handle->owner_type->destroy != nullptr;
@@ -3072,7 +3078,7 @@ static void ffi_native_handle_drop(MalFfiNativeHandle *handle, bool result) {
     ffi_native_handle_stores_clear(handle);
     if (handle->retired) ffi_retired_unregister(handle);
     free(handle);
-    ffi_finalizing = previous;
+    ffi_thread.finalizing = previous;
 }
 
 static bool ffi_handle_borrowed(MalFfiHandleObject *handle) {
@@ -3106,7 +3112,7 @@ static void ffi_handle_forget(MalFfiHandleObject *handle) {
     if (handle->retained != nullptr) {
         for (i32 index = 0; index < handle->type->managed_field_count; index++) {
             MalFfiRetainedField *field = &handle->retained[index];
-            if (!ffi_finalizing) mal_gc_write_barrier(field->buffer);
+            if (!ffi_thread.finalizing) mal_gc_write_barrier(field->buffer);
             mal_array_buffer_object_release_pin(field->pin);
         }
         free(handle->retained);
@@ -3124,7 +3130,7 @@ static void ffi_handle_forget(MalFfiHandleObject *handle) {
     handle->value = nullptr;
     handle->provisional = false;
     if (handle->ownership == MAL_FFI_HANDLE_CHILD) {
-        if (!ffi_finalizing) mal_gc_write_barrier(mal_value_from_heap((MalHeapHeader *) handle->owner));
+        if (!ffi_thread.finalizing) mal_gc_write_barrier(mal_value_from_heap((MalHeapHeader *) handle->owner));
         handle->ownership = MAL_FFI_HANDLE_BORROWED;
     }
     handle->owner_type = handle->type;
@@ -3314,8 +3320,8 @@ static void ffi_handle_trace(MalHeapHeader *cell) {
 
 static void ffi_handle_finalize(MalHeapHeader *cell) {
     MalFfiHandleObject *handle = (MalFfiHandleObject *) cell;
-    bool previous = ffi_finalizing;
-    ffi_finalizing = true;
+    bool previous = ffi_thread.finalizing;
+    ffi_thread.finalizing = true;
     MalFfiNativeHandle *native = handle->native;
     if (native != nullptr) {
         ffi_native_handle_unregister(native);
@@ -3337,7 +3343,7 @@ static void ffi_handle_finalize(MalHeapHeader *cell) {
         handle->views = view->next;
         free(view);
     }
-    ffi_finalizing = previous;
+    ffi_thread.finalizing = previous;
 }
 
 static MalValue ffi_handle_dispose(
@@ -3597,10 +3603,10 @@ void mal_ffi_discard_resource(MalVm *vm, const MalFfiDiscards *discards,
     MalCompletion completion = vm == nullptr ? (MalCompletion) {0} : vm->completion;
     MalRootSpan root;
     if (vm != nullptr) mal_gc_root(&root, &completion.value, 1);
-    bool previous = ffi_finalizing;
-    ffi_finalizing = true;
+    bool previous = ffi_thread.finalizing;
+    ffi_thread.finalizing = true;
     if (type->destroy(value)) ffi_replaced_drop(value);
-    ffi_finalizing = previous;
+    ffi_thread.finalizing = previous;
     if (vm != nullptr) {
         vm->completion = completion;
         mal_gc_unroot(&root);
