@@ -90,3 +90,43 @@ typedef int __attribute__((address_space(1))) *NativeAddress;
 		rmSync(directory, { recursive: true, force: true });
 	}
 });
+
+it("spells macro expansions as Clang renders their stringified text", () => {
+	const directory = mkdtempSync(path.join(tmpdir(), "mal-macro-expansion-"));
+	try {
+		writeFileSync(
+			path.join(directory, "api.h"),
+			[
+				String.raw`#define PLAIN_TEXT "a\"b"`,
+				'#define TAB_TEXT "a\tb"',
+				String.raw`#define ACCENTED café`,
+				'#define UTF8_TEXT "café"',
+				"int use(int value);",
+				"",
+			].join("\n"),
+		);
+		const compiler = process.env.CC ?? "clang";
+		const version = spawnSync(compiler, ["--version"], { encoding: "utf8" });
+		expect(version.status, version.stderr).toBe(0);
+		const model = extractCModel({
+			compiler: { path: compiler, version: version.stdout.split("\n")[0]! },
+			environment: process.env,
+			headers: ["api.h"],
+			compileArguments: ["-I", directory],
+		});
+		const expansions = Object.fromEntries(
+			[...model.macros, ...model.untypedMacros].map((macro) => [
+				macro.name,
+				macro.expansion,
+			]),
+		);
+		expect(expansions).toMatchObject({
+			PLAIN_TEXT: String.raw`"\"a\\\"b\""`,
+			TAB_TEXT: String.raw`"\"a\tb\""`,
+			ACCENTED: String.raw`"caf\303\251"`,
+			UTF8_TEXT: String.raw`"\"caf\303\251\""`,
+		});
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});

@@ -1,4 +1,4 @@
-import type { Buffer } from "node:buffer";
+import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -1097,9 +1097,39 @@ interface Probes {
 	>;
 }
 
-interface ValueProbe {
-	readonly path: string;
-	readonly preprocessed: boolean;
+/**
+ * The macro value probe. Preprocessed, its declarations follow the headers one per
+ * line, so analysis compiles only the declarations each pass needs and reads the
+ * expansion strings from the text. Otherwise one source declares everything.
+ */
+type ValueProbe =
+	| { readonly preprocessed: false; readonly path: string }
+	| {
+			readonly preprocessed: true;
+			/** The preprocessed headers and the probe's target declarations, as Latin-1. */
+			readonly prefix: string;
+			readonly values: ReadonlyArray<string>;
+			readonly types: ReadonlyArray<string>;
+			/** Expansion strings already in Clang's spelling, by kind and index. */
+			readonly expansions: ReadonlyMap<string, string>;
+			/** Expansion declarations whose spelling Clang decodes and renders anew. */
+			readonly encoded: ReadonlyArray<string>;
+	  };
+
+/**
+ * Whether Clang's JSON spelling of this ordinary string literal is its source text:
+ * printable ASCII whose only escapes are the quotes and backslashes that
+ * stringification inserts.
+ */
+function spelledAsWritten(literal: string): boolean {
+	for (let index = 1; index < literal.length - 1; index++) {
+		const code = literal.charCodeAt(index);
+		if (code < 0x20 || code > 0x7e) return false;
+		if (code !== 0x5c) continue;
+		const next = literal[++index];
+		if (next !== "\\" && next !== '"') return false;
+	}
+	return true;
 }
 
 function prepareValueProbe(
@@ -1113,6 +1143,7 @@ function prepareValueProbe(
 		"#define __mal_stringify(...) #__VA_ARGS__",
 		"#define __mal_expand(...) __mal_stringify(__VA_ARGS__)",
 	);
+	lines.push("typedef int __mal_probe_declarations;");
 	TARGET_PROBES.forEach((name, index) => {
 		lines.push(`enum : unsigned long long { __mal_size_${index} = sizeof(${name}) };`);
 	});
@@ -1148,15 +1179,45 @@ function prepareValueProbe(
 	});
 	const probePath = path.join(directory, "probe-values.c");
 	writeFileSync(probePath, `${lines.join("\n")}\n`);
+	// Without line markers, the probe's declarations stay one per output line.
 	const expanded = runCompiler(
 		input,
-		[FFI_C_STANDARD, "-E", "-w", ...input.compileArguments, "-x", "c", probePath],
+		[FFI_C_STANDARD, "-E", "-P", "-w", ...input.compileArguments, "-x", "c", probePath],
 		directory,
 	);
 	if (expanded.status !== 0) return { path: probePath, preprocessed: false };
-	const artifact = path.join(directory, "probe-values.i");
-	writeFileSync(artifact, expanded.stdout);
-	return { path: artifact, preprocessed: true };
+	const text = expanded.stdout.toString("latin1");
+	const marker = text.indexOf("typedef int __mal_probe_declarations;");
+	if (marker < 0) return { path: probePath, preprocessed: false };
+	const values: Array<string> = [];
+	const types: Array<string> = [];
+	const expansions = new Map<string, string>();
+	const targets: Array<string> = [];
+	const encoded: Array<string> = [];
+	for (const line of text.slice(marker).split("\n")) {
+		const typed = line.lastIndexOf(" __mal_macro_type_");
+		const valued = line.indexOf(" { __mal_macro_value_");
+		const expanded = line.startsWith("static const char __mal_expansion_")
+			? line.indexOf("[] = ")
+			: -1;
+		if (line.startsWith("typedef ") && typed >= 0) {
+			types[Number.parseInt(line.slice(typed + 18), 10)] = line;
+		} else if (line.startsWith("enum : ") && valued >= 0) {
+			values[Number.parseInt(line.slice(valued + 21), 10)] = line;
+		} else if (expanded >= 0) {
+			const literal = line.slice(expanded + 5, line.lastIndexOf(";")).trimEnd();
+			if (spelledAsWritten(literal)) expansions.set(line.slice(34, expanded), literal);
+			else encoded.push(line);
+		} else targets.push(line);
+	}
+	return {
+		preprocessed: true,
+		prefix: `${text.slice(0, marker)}${targets.join("\n")}\n`,
+		values,
+		types,
+		expansions,
+		encoded,
+	};
 }
 
 function probe(
@@ -1165,33 +1226,70 @@ function probe(
 	candidates: ReadonlyArray<PreprocessedMacro>,
 	directory: string,
 ): Probes {
-	// Probes of macros that are not expressions fail to compile; each failure stays
-	// local to its own declaration, which the AST then marks invalid or omits.
-	const result = runCompiler(
-		input,
-		[
-			FFI_C_STANDARD,
-			"-fsyntax-only",
-			"-ferror-limit=0",
-			// Expected failures only need their declarations marked. Snippets for thousands
-			// of them, as OpenSSL's macros produce, cost more than the probe's own analysis.
-			"-fno-caret-diagnostics",
-			"-Xclang",
-			"-ast-dump=json",
-			"-Xclang",
-			"-ast-dump-filter=__mal_",
-			...input.compileArguments,
-			"-w",
-			"-x",
-			valueProbe.preprocessed ? "cpp-output" : "c",
-			valueProbe.path,
-		],
-		directory,
-	);
 	const nodes = new Map<string, JsonObject>();
-	for (const node of clangProbeDeclarations(result.stdout)) {
-		if (typeof node.name === "string") nodes.set(node.name, node);
-	}
+	const diagnostics: Array<string> = [];
+	const dump = (source: string, preprocessed: boolean): void => {
+		// Probes of macros that are not expressions fail to compile; each failure stays
+		// local to its own declaration, which the AST then marks invalid or omits.
+		const result = runCompiler(
+			input,
+			[
+				FFI_C_STANDARD,
+				"-fsyntax-only",
+				"-ferror-limit=0",
+				// Expected failures only need their declarations marked. Snippets for thousands
+				// of them, as OpenSSL's macros produce, cost more than the probe's own analysis.
+				"-fno-caret-diagnostics",
+				"-Xclang",
+				"-ast-dump=json",
+				"-Xclang",
+				"-ast-dump-filter=__mal_",
+				...input.compileArguments,
+				"-w",
+				"-x",
+				preprocessed ? "cpp-output" : "c",
+				source,
+			],
+			directory,
+		);
+		diagnostics.push(result.stderr.trim());
+		for (const node of clangProbeDeclarations(result.stdout)) {
+			if (typeof node.name === "string") nodes.set(node.name, node);
+		}
+	};
+	const pass = (name: string, declarations: ReadonlyArray<string>): void => {
+		if (valueProbe.preprocessed !== true) return;
+		const file = path.join(directory, name);
+		writeFileSync(
+			file,
+			Buffer.from(`${valueProbe.prefix}${declarations.join("\n")}\n`, "latin1"),
+		);
+		dump(file, true);
+	};
+	// The enum probe of an integer constant also carries its expression, so only the
+	// remaining macros need the type probe, which repeats each expression's tree.
+	if (valueProbe.preprocessed)
+		pass("probe-values.i", [
+			...valueProbe.values.filter((line) => line !== undefined),
+			...valueProbe.encoded,
+		]);
+	else dump(valueProbe.path, false);
+	const valueExpression = (index: number): JsonObject | undefined => {
+		const node = nodes.get(`__mal_macro_value_${index}`);
+		if (node === undefined || node.isInvalid === true) return undefined;
+		let expression = innerNodes(node)[0];
+		while (expression?.kind === "ConstantExpr" || expression?.kind === "ImplicitCastExpr")
+			expression = innerNodes(expression)[0];
+		return expression?.kind === "ParenExpr" ? expression : undefined;
+	};
+	if (valueProbe.preprocessed)
+		pass(
+			"probe-types.i",
+			candidates.flatMap((_macro, index) => {
+				const line = valueProbe.types[index];
+				return line === undefined || valueExpression(index) !== undefined ? [] : [line];
+			}),
+		);
 
 	const sizes: Record<string, number> = {};
 	TARGET_PROBES.forEach((name, index) => {
@@ -1206,7 +1304,7 @@ function probe(
 	}
 	if (sizes.int === undefined || sizes["void *"] === undefined) {
 		throw new FfiError(
-			`cannot determine the target data model:\n${result.stderr.trim()}`,
+			`cannot determine the target data model:\n${diagnostics.join("\n").trim()}`,
 		);
 	}
 	const charNode = nodes.get("__mal_char_signed");
@@ -1228,9 +1326,13 @@ function probe(
 		}
 		return undefined;
 	};
+	const expansion = (kind: "normal" | "neutral", index: number): string | undefined =>
+		(valueProbe.preprocessed
+			? valueProbe.expansions.get(`${kind}_${index}`)
+			: undefined) ?? stringToken(nodes.get(`__mal_expansion_${kind}_${index}`));
 	candidates.forEach((macro, index) => {
-		const normal = stringToken(nodes.get(`__mal_expansion_normal_${index}`));
-		const neutral = stringToken(nodes.get(`__mal_expansion_neutral_${index}`));
+		const normal = expansion("normal", index);
+		const neutral = expansion("neutral", index);
 		// Compiler source-location builtins survive preprocessing but change when
 		// their expression is emitted in the binding's function body.
 		const sourceLocation =
@@ -1251,7 +1353,9 @@ function probe(
 			typeNode === undefined || typeNode.isInvalid === true
 				? undefined
 				: innerNodes(typeNode)[0];
-		const expression = typeOf === undefined ? undefined : innerNodes(typeOf)[0];
+		const expression =
+			valueExpression(index) ??
+			(typeOf === undefined ? undefined : innerNodes(typeOf)[0]);
 		if (expression === undefined) {
 			untyped.push(macro);
 			return;
