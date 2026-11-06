@@ -14,4 +14,8 @@ uint64_t scalar_u64(uint64_t value);
 uint64_t scalar_calls(void);
 void scalar_touch(int32_t value);
 int32_t scalar_last(void);
+double scalar_dot(const double *left, const double *right, int32_t count);
+void scalar_scale(double *values, int32_t count, double factor);
+uint32_t scalar_sum_u8(const uint8_t *bytes, uint32_t count);
+bool scalar_empty(const double *values, int32_t count);
 #endif

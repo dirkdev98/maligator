@@ -1,5 +1,9 @@
 import { ffiIntoSymbol, ffiScalarCType } from "../../build-config-values.ts";
-import type { FfiScalarEntry, FfiScalarValue } from "../../build-config-values.ts";
+import type {
+	FfiDirectEntry,
+	FfiScalarEntry,
+	FfiScalarValue,
+} from "../../build-config-values.ts";
 import {
 	CORE_STRING_SPAN_CHARACTER_METHODS,
 	CORE_STRING_SPAN_METHODS,
@@ -12530,17 +12534,38 @@ class NativeInstructionEmission {
 		return `((${ffiScalarCType(type)}) (${number}))`;
 	}
 
+	/**
+	 * A call of the binding's scalar entry. Scalar arguments must be proven here; each
+	 * view is lent where the call runs, and `checked` converts the arguments for any
+	 * value a view check rejects.
+	 */
 	emitForeignScalar(
 		instruction: Extract<BytecodeInstruction, { opcode: "CALL" }>,
 		scalar: FfiScalarEntry,
+		checked: (() => Array<string>) | undefined,
 	): Array<string> | undefined {
 		if (instruction.arguments.length < scalar.parameters.length) return undefined;
 		const arguments_: Array<string> = [];
+		const lends: Array<string> = [];
+		const locals: Array<string> = [];
+		const lent = (index: number): string => `lend_${this.ip}_${index}`;
 		for (let index = 0; index < scalar.parameters.length; index++) {
-			const value = this.foreignScalarArgument(
-				instruction.arguments[index]!,
-				scalar.parameters[index]!,
-			);
+			const operand = instruction.arguments[index]!;
+			const type = scalar.parameters[index]!;
+			if (type.kind === "view") {
+				if (checked === undefined) return undefined;
+				const kind = `MAL_TA_${type.array.slice(0, -"Array".length).toUpperCase()}`;
+				locals.push(`void *${lent(index)};`, `int32_t ${lent(index)}_length;`);
+				lends.push(
+					`mal_typed_array_lend(${this.boxedOperand(operand)}, ${kind}, ${String(type.writable)}, &${lent(index)}, &${lent(index)}_length)`,
+					...(type.sameLength === undefined
+						? []
+						: [`${lent(index)}_length == ${lent(type.sameLength)}_length`]),
+				);
+				arguments_.push(lent(index), `${lent(index)}_length`);
+				continue;
+			}
+			const value = this.foreignScalarArgument(operand, type);
 			if (value === undefined) return undefined;
 			arguments_.push(value);
 		}
@@ -12550,8 +12575,12 @@ class NativeInstructionEmission {
 		);
 		const result = `foreign_scalar_${this.ip}`;
 		nativeCallDecision(this.context.profile, this.ip, "call.foreign-scalar", "applied");
-		return [
-			`extern ${ffiScalarCType(scalar.result)} ${scalar.symbol}(${scalar.parameters.length === 0 ? "void" : scalar.parameters.map(ffiScalarCType).join(", ")});`,
+		const parameters = scalar.parameters.flatMap((type) =>
+			type.kind === "view"
+				? [type.writable ? "void *" : "const void *", "int32_t"]
+				: [ffiScalarCType(type)],
+		);
+		const call = [
 			scalar.result.kind === "undefined"
 				? `${expression};`
 				: `${ffiScalarCType(scalar.result)} ${result} = ${expression};`,
@@ -12561,7 +12590,46 @@ class NativeInstructionEmission {
 				: scalar.result.kind === "boolean"
 					? this.storeBoolean(instruction.dst, result)
 					: this.storeNumber(instruction.dst, result),
+		];
+		return [
+			`extern ${ffiScalarCType(scalar.result)} ${scalar.symbol}(${parameters.length === 0 ? "void" : parameters.join(", ")});`,
+			...(lends.length === 0
+				? call
+				: [
+						...locals,
+						`if (${lends.join(" && ")}) {`,
+						...call.map((line) => `  ${line}`),
+						"} else {",
+						...checked!().map((line) => `  ${line}`),
+						"}",
+					]),
 			this.callPoll(),
+		];
+	}
+
+	/** A call of a binding's checked direct entry, which converts every argument. */
+	emitForeignChecked(
+		instruction: Extract<BytecodeInstruction, { opcode: "CALL" }>,
+		foreign: Pick<FfiDirectEntry, "symbol" | "arity">,
+	): Array<string> {
+		const args = instruction.arguments;
+		const { lent, before, after } = this.lendStackObjects();
+		const values = Array.from({ length: foreign.arity }, (_, index) => {
+			if (index >= args.length) return "MAL_VALUE_UNDEFINED";
+			const operand = decodeVmValueOperand(args[index]!);
+			return (
+				(operand.kind === "register" ? lent.get(operand.register) : undefined) ??
+				this.boxedOperand(args[index]!)
+			);
+		});
+		const result = `foreign_result_${this.ip}`;
+		return [
+			`extern MalValue ${foreign.symbol}(MalVm *${", MalValue".repeat(foreign.arity)});`,
+			...before,
+			`MalValue ${result} = ${this.profileCall("call", `${foreign.symbol}(vm${values.map((value) => `, ${value}`).join("")})`)};`,
+			...after,
+			this.throwCheck(),
+			`r${instruction.dst} = ${this.callValue(instruction.dst, result)};`,
 		];
 	}
 
@@ -12580,7 +12648,15 @@ class NativeInstructionEmission {
 		const foreign = callPlan?.foreignCall;
 		if (foreign !== undefined) {
 			if (foreign.scalar !== undefined) {
-				const scalar = this.emitForeignScalar(instruction, foreign.scalar);
+				// A stack object takes a struct result, which no scalar entry returns.
+				const into = this.context.stackObjectSite;
+				const scalar = this.emitForeignScalar(
+					instruction,
+					foreign.scalar,
+					into === undefined || into.elided === true
+						? () => this.emitForeignChecked(instruction, foreign)
+						: undefined,
+				);
 				if (scalar !== undefined) return scalar;
 			}
 			nativeCallDecision(
@@ -12646,25 +12722,7 @@ class NativeInstructionEmission {
 					this.callPoll(),
 				];
 			}
-			const { lent, before, after } = this.lendStackObjects();
-			const values = Array.from({ length: foreign.arity }, (_, index) => {
-				if (index >= args.length) return "MAL_VALUE_UNDEFINED";
-				const operand = decodeVmValueOperand(args[index]!);
-				return (
-					(operand.kind === "register" ? lent.get(operand.register) : undefined) ??
-					this.boxedOperand(args[index]!)
-				);
-			});
-			const result = `foreign_result_${this.ip}`;
-			return [
-				`extern MalValue ${foreign.symbol}(MalVm *${", MalValue".repeat(foreign.arity)});`,
-				...before,
-				`MalValue ${result} = ${this.profileCall("call", `${foreign.symbol}(vm${values.map((value) => `, ${value}`).join("")})`)};`,
-				...after,
-				this.throwCheck(),
-				`r${instruction.dst} = ${callResult(result)};`,
-				this.callPoll(),
-			];
+			return [...this.emitForeignChecked(instruction, foreign), this.callPoll()];
 		}
 		const calleeOperand = decodeVmValueOperand(instruction.callee);
 		if (

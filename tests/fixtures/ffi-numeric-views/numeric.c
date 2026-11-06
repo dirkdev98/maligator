@@ -114,3 +114,9 @@ void numeric_sequence(uint64_t *values, int count, uint64_t start) {
     for (int i = 0; i < count; i++) values[i] = start + (uint64_t) i;
 }
 int numeric_live(void) { return live; }
+
+uint16_t numeric_short(const uint16_t *values, uint16_t count) {
+    uint16_t sum = 0;
+    for (uint16_t index = 0; index < count; index++) sum += values[index];
+    return sum;
+}

@@ -30,6 +30,7 @@ export default {
 			params: { values: { array: { length: "count" }, nullable: true } },
 			async: "sumAsync",
 		},
+		numeric_short: { params: { values: { array: { length: "count" } } } },
 		numeric_dot: {
 			params: {
 				left: { array: { length: "count" } },

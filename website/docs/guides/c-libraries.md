@@ -709,6 +709,9 @@ Use the generated SDK for the library's exact native widths. Synchronous calls l
 the view's current storage, including its offset, after argument getters finish.
 C callbacks can observe JavaScript element writes, while resizing or transferring
 the backing buffer is blocked until C returns. C must not retain the pointer.
+Compiled code hands a matching fixed-length view's storage straight to a function
+of a library that registers no callbacks, so typed arrays are the faster choice for
+calls in hot loops.
 Async calls snapshot numeric views before scheduling worker execution, so later
 JavaScript writes and transfers cannot affect the native input. Ordinary arrays
 keep their copy semantics. Mutable pointers and fixed array rows still use copies.

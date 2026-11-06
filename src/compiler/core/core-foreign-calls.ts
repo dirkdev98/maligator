@@ -24,9 +24,12 @@ export function coreForeignSlots(
 	for (const install of candidates) {
 		for (const entry of install.exports) {
 			if (entry.direct !== undefined) {
+				// A scalar entry never runs JavaScript. Its binding's checked entry may, only
+				// while copying arrays that compiled callers lend as views instead.
 				if (
 					entry.direct.scalar !== undefined &&
-					(entry.direct.callsUserCode ||
+					((entry.direct.callsUserCode &&
+						!entry.direct.scalar.parameters.some((type) => type.kind === "view")) ||
 						!isFfiScalarEntry(
 							entry.direct.scalar,
 							entry.direct.symbol,

@@ -1974,9 +1974,11 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       In the `bench:ffi` portfolio, number-array copies into `const double *` take
       1.5x to 2.3x Bun's time, where Bun lends native vectors; Arrays hold tagged
       integers, so the copy stays, and at 4096 elements it runs near memory
-      bandwidth. An 8-element `Float64Array` loan takes 1.15x. What remains of the
-      loan is the per-call kind, count and extent checks; compiled callers could
-      hoist them out of loops whose calls cannot run JavaScript. The 64 KiB
+      bandwidth. Compiled callers of a library without callback registrations check
+      a view where they call and pass its storage to the typed scalar entry; an
+      8-element `Float64Array` dot in a function loop then takes 4.0 ns against C's
+      1.5, and the two view checks are about 45 of its 105 instructions. A
+      fixed-numeric loop region could admit the views once. The 64 KiB
       non-ASCII `sqlite-text` cases sample the same as ASCII in steady state; their
       round-to-round variance is process-level. Cold header analysis of a
       macro-heavy library such as OpenSSL still spends about half its time in
