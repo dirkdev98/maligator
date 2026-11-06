@@ -55,7 +55,7 @@ describe("one-shot C close completion contracts", () => {
 		[
 			"close_later",
 			{ callback: { owner: "handle" } },
-			"owner applies to retained callbacks",
+			"owner applies to callbacks kept with release or replaced",
 		],
 	] satisfies Array<[string, MaligatorFfiValueFacts, string]>)(
 		"rejects an unsound lifetime on %s with %j",

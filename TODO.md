@@ -1978,11 +1978,11 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       The static FFI imports of the program and its workers bound the final selection,
       so effects derived from them stay valid for the generated C; the frontend cache
       keys on the resulting facts.
-- [ ] Normalize handle ownership during planning the way callback lifetimes are:
-      owned, borrowed, owner-linked and library-lifetime results are exclusive, yet
-      `owned`, `owner`, `lifetime` and `fresh` are separate flags that generation
-      combines per site. Treat input/output direction and cleanup obligations the
-      same way.
+- [ ] Separate input and result values in the binding plan. Both share `JsValue`, so
+      input handles carry a result `ownership` and input strings, bytes and
+      sequences a `free` the planner rejects; generation relies on the position
+      instead of the type. Give results their cleanup obligation (`free`, a
+      destructor, an owner's release) as one resolved field.
 
 # Actors and SMP
 

@@ -142,12 +142,8 @@ export type JsValue =
 			readonly name: string;
 			readonly pass: "pointer" | "copy" | "reference";
 			readonly nullable: boolean;
-			/** For results: whether closing the new handle releases the resource. */
-			readonly owned: boolean;
+			readonly ownership: HandleOwnership;
 			readonly fresh?: true;
-			/** Field results borrow the containing resource's owning lifetime. */
-			readonly owner?: string;
-			readonly lifetime?: "library";
 	  };
 
 /**
@@ -170,11 +166,30 @@ export type GapCode =
 	| "unsupported";
 
 type Gapped = { readonly gap: string; readonly code: GapCode };
+
+/**
+ * Who releases the resource behind a handle that a result or field produces. Inputs
+ * are lent to C and `borrowed`.
+ */
+export type HandleOwnership =
+	/** Closing the handle releases the resource through its destructor. */
+	| { readonly kind: "owned" }
+	/** The library keeps owning the resource; closing only detaches the handle. */
+	| { readonly kind: "borrowed" }
+	/** A field result borrowing the owning lifetime of its containing handle type. */
+	| { readonly kind: "owner"; readonly owner: string }
+	/** A field result the library keeps valid for the whole process. */
+	| { readonly kind: "library" };
+
+/** Whether a handle has a lifetime of its own, not one borrowed from an owner or the library. */
+export function independentHandle(value: Extract<JsValue, { kind: "handle" }>): boolean {
+	return value.ownership.kind === "owned" || value.ownership.kind === "borrowed";
+}
 type Mapping = { readonly value: JsValue } | Gapped;
 
 /**
- * How long the library may call a callback. Kept registrations may name the input
- * handle `owner` whose destruction root holds the registration's JavaScript values.
+ * How long the library may call a callback. A released or replaced registration may
+ * name the input handle `owner` whose destruction root holds its JavaScript values.
  */
 export type CallbackLifetime =
 	/** Only while the binding runs. */
@@ -195,7 +210,6 @@ export type CallbackLifetime =
 			readonly param: number;
 			readonly key: number;
 			readonly handle?: number;
-			readonly owner?: number;
 	  };
 
 /** How a trampoline finds the registration a C call belongs to. */
@@ -213,6 +227,13 @@ export type CallbackRoute =
 	| { readonly kind: "scope" };
 
 type CallbackValue = Extract<JsValue, { kind: "callback" }>;
+
+/** The input handle rooting a registration, which only released and replaced ones name. */
+export function registrationOwner(lifetime: CallbackLifetime): number | undefined {
+	return lifetime.kind === "released" || lifetime.kind === "replaced"
+		? lifetime.owner
+		: undefined;
+}
 
 /** Whether the library may call `value` after the binding returns. */
 export function keptCallback(value: CallbackValue): value is CallbackValue & {
@@ -477,8 +498,7 @@ export function hasResultHandles(value: JsValue, shapes: ResultShapes): boolean 
 		case "handle":
 			return (
 				shapes.handles.get(value.name)!.representation === "pointer" &&
-				value.owner === undefined &&
-				value.lifetime === undefined
+				independentHandle(value)
 			);
 		case "record":
 			return shapes.records
@@ -500,7 +520,7 @@ export function hasOwnedRecordFields(
 	shapes: Pick<BindingPlan, "records">,
 ): boolean {
 	const field = (entry: MappedField): boolean =>
-		(entry.value.kind === "handle" && entry.value.owned) ||
+		(entry.value.kind === "handle" && entry.value.ownership.kind === "owned") ||
 		hasOwnedRecordFields(entry.value, shapes);
 	switch (value.kind) {
 		case "record":
@@ -526,8 +546,7 @@ export function supportsResultTransaction(
 			return (
 				context !== "other" &&
 				shapes.handles.get(value.name)!.representation === "pointer" &&
-				value.owner === undefined &&
-				value.lifetime === undefined
+				independentHandle(value)
 			);
 		case "callable":
 			return false;
@@ -545,8 +564,7 @@ export function supportsResultTransaction(
 			if (value.of.kind === "handle")
 				return (
 					context === "direct" &&
-					value.of.owner === undefined &&
-					value.of.lifetime === undefined &&
+					independentHandle(value.of) &&
 					shapes.handles.get(value.of.name)!.representation === "pointer"
 				);
 			return supportsResultTransaction(
@@ -1415,7 +1433,10 @@ class Planner {
 						name: handle.name,
 						pass: "copy",
 						nullable: false,
-						owned: position === "return" && facts.borrowed !== true,
+						ownership: {
+							kind:
+								position === "return" && facts.borrowed !== true ? "owned" : "borrowed",
+						},
 					},
 				};
 			}
@@ -1573,7 +1594,10 @@ class Planner {
 						name: handle.name,
 						pass: "pointer",
 						nullable: position === "return" || facts.nullable === true,
-						owned: position === "return" && facts.borrowed !== true,
+						ownership: {
+							kind:
+								position === "return" && facts.borrowed !== true ? "owned" : "borrowed",
+						},
 						...(facts.fresh === true ? { fresh: true as const } : {}),
 					},
 				};
@@ -1585,7 +1609,7 @@ class Planner {
 						name: handle.name,
 						pass: "reference",
 						nullable: facts.nullable === true,
-						owned: false,
+						ownership: { kind: "borrowed" },
 					},
 				};
 			}
@@ -2275,8 +2299,10 @@ class Planner {
 							at,
 							"owner lifetime requires library-owned parent storage",
 						);
-					mapped = { value: { ...mapped.value, owned: false, owner: handle.name } };
-				} else mapped = { value: { ...mapped.value, lifetime: "library" } };
+					mapped = {
+						value: { ...mapped.value, ownership: { kind: "owner", owner: handle.name } },
+					};
+				} else mapped = { value: { ...mapped.value, ownership: { kind: "library" } } };
 			}
 			if (fact?.callable !== undefined && "gap" in mapped)
 				throw new FfiFactError(
@@ -3758,18 +3784,19 @@ class Planner {
 						"an input handle with stable C storage",
 					);
 				const callback = params[entry.param]!;
-				if (callback.value.kind !== "callback" || callback.value.lifetime.kind === "call")
+				const value = callback.value;
+				if (
+					value.kind !== "callback" ||
+					(value.lifetime.kind !== "released" && value.lifetime.kind !== "replaced")
+				)
 					throw new FfiFactError(
 						"inapplicable",
 						where(at),
-						"owner applies to retained callbacks",
+						"owner applies to callbacks kept with release or replaced",
 					);
 				params[entry.param] = {
 					...callback,
-					value: {
-						...callback.value,
-						lifetime: { ...callback.value.lifetime, owner: selected.param },
-					},
+					value: { ...value, lifetime: { ...value.lifetime, owner: selected.param } },
 				};
 			});
 		if (facts.returns.constant !== undefined) {
@@ -4193,7 +4220,8 @@ export function planBindings(
 	for (let index = 0; index < lifetimeQueue.length; index++)
 		for (const handle of families.get(lifetimeQueue[index]!)!)
 			for (const field of handle.fields) {
-				if (field.value.kind !== "handle" || field.value.owner === undefined) continue;
+				if (field.value.kind !== "handle" || field.value.ownership.kind !== "owner")
+					continue;
 				const family = handles.get(field.value.name)!.family;
 				if (lifetimeRoots.has(family)) continue;
 				lifetimeRoots.add(family);
@@ -4202,7 +4230,7 @@ export function planBindings(
 	for (const handle of handles.values())
 		if (!lifetimeRoots.has(handle.family))
 			for (const field of handle.fields)
-				if (field.value.kind === "handle" && field.value.owner !== undefined)
+				if (field.value.kind === "handle" && field.value.ownership.kind === "owner")
 					throw new FfiFactError(
 						"unmet-requirement",
 						`types.${handle.name}.fields.${field.name}.handle`,

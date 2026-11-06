@@ -851,8 +851,7 @@ Await an async setter before replacing its registration again.
 
 Use `owner` when destroying a resource ends a registration on one of its borrowed
 children, without an independent unregister operation. It roots a callback the
-library keeps through `release`, `replaced`, or `closes`; a call-scoped callback has
-no registration to root:
+library keeps through `release` or `replaced`:
 
 ```typescript
 subscribe: {
