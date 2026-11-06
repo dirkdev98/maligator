@@ -258,9 +258,10 @@ export interface MaligatorFfiCallable {
 export interface MaligatorFfiCallback {
 	/**
 	 * The input handle whose destruction root owns the registration, by C name or
-	 * 1-based position. Destruction must stop the callback and all its consumers
-	 * before returning. Its closure and borrowed inputs share that root's lifetime.
-	 * The root must be an independently owned library allocation with a destructor.
+	 * 1-based position, for a callback kept through `release`, `replaced`, or
+	 * `closes`. Destruction must stop the callback and all its consumers before
+	 * returning. Its closure and borrowed inputs share that root's lifetime. The root
+	 * must be an independently owned library allocation with a destructor.
 	 */
 	owner?: string;
 	/** Native copies or resource leases remain valid for the declared lifetime. */

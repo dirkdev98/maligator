@@ -850,7 +850,9 @@ before returning. Another setter for that key throws; setters for other keys can
 Await an async setter before replacing its registration again.
 
 Use `owner` when destroying a resource ends a registration on one of its borrowed
-children, without an independent unregister operation:
+children, without an independent unregister operation. It roots a callback the
+library keeps through `release`, `replaced`, or `closes`; a call-scoped callback has
+no registration to root:
 
 ```typescript
 subscribe: {
@@ -890,8 +892,8 @@ wrapper, already closed, and its retained buffers can then be transferred. Calle
 storage and backing bytes remain alive through the native completion even after VM
 teardown; detached completions release native ownership without running JavaScript.
 The library must invoke completion exactly once and keep the resource valid until
-then. `closes` extends a callback loan through completion and cannot accompany
-`release` or `replaced`.
+then. `release`, `replaced`, and `closes` are alternative lifetimes; a callback
+states at most one.
 
 `lookup` names the function that returns `data` for a callback without a `void *` parameter, and the 1-based position of the callback parameter it takes. SQLite's user functions read it with `sqlite3_user_data` from their `sqlite3_context *`:
 

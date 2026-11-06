@@ -13,6 +13,7 @@ import { bindingEffects } from "./binding-effects.ts";
 import {
 	hasOwnedRecordFields,
 	hasResultHandles,
+	keptCallback,
 	supportsResultTransaction,
 } from "./binding-plan.ts";
 import type {
@@ -2183,9 +2184,10 @@ class BindingWriter {
 
 	/**
 	 * A C function of the callback's type that converts its arguments, calls the
-	 * JavaScript function its user data names, or else the one `site` keeps, and
-	 * converts the result back. After an exception, later calls return zero without
-	 * running JavaScript.
+	 * JavaScript function its route finds, and converts the result back. After an
+	 * exception, later calls return zero without running JavaScript. A `held`
+	 * trampoline holds its registration while JavaScript runs, as kept registrations
+	 * and async calls need; a `thread` lets calls from other threads reach the VM thread.
 	 */
 	#trampoline(
 		name: string,
@@ -2193,12 +2195,16 @@ class BindingWriter {
 		owner: string,
 		site?: string,
 		lane = 0,
+		held = keptCallback(value),
+		thread = value.thread,
 	): Array<string> {
 		const type = value.type;
 		const params = type.params.map((param, index) =>
 			formatCDeclaration(param, `mal_c${String(index)}`),
 		);
-		const data = value.params.indexOf("data");
+		const { lifetime, route } = value;
+		const registrationOwner = lifetime.kind === "call" ? undefined : lifetime.owner;
+		const completion = lifetime.kind === "completion" ? lifetime : undefined;
 		const inputs = value.params.flatMap((param, index) =>
 			param === "data" || param === "count" ? [] : [{ value: param, index }],
 		);
@@ -2206,36 +2212,30 @@ class BindingWriter {
 		const immutableReturn = this.#immutableRecord(type.returns);
 		const zero = `(${localDeclaration(type.returns, "")}) ${immutableReturn ? this.#callbackDefault(value.returns) : "{}"}`;
 		const emptyReturn = immutableReturn ? zero : "mal_return";
-		const count = String(inputs.length + (value.owner === undefined ? 0 : 1));
+		const count = String(inputs.length + (registrationOwner === undefined ? 0 : 1));
 		// Handles the library lends belong to this invocation and close when it returns.
 		const lends = inputs.some(
 			({ value: input, index }) =>
-				index !== value.closes?.keyParam && this.#hasHandles(input),
+				index !== completion?.handle && this.#hasHandles(input),
 		);
-		const keyParam = value.closes?.keyParam ?? value.replaced?.keyParam;
-		const lookup = value.lookup;
-		// Without user data, a call-scoped callback is the one its call published.
-		const scoped =
-			data < 0 &&
-			lookup === undefined &&
-			value.replaced === undefined &&
-			value.closes === undefined;
+		const key = (param: number | undefined): string =>
+			param === undefined ? "nullptr" : `(void *) mal_c${String(param)}`;
 		const routed =
-			data >= 0
-				? `mal_c${String(data)}`
-				: lookup !== undefined
-					? `(MalFfiCallback *) ${lookup.function}(mal_c${String(lookup.param)})`
-					: scoped
+			route.kind === "data"
+				? `mal_c${String(route.param)}`
+				: route.kind === "lookup"
+					? `(MalFfiCallback *) ${route.function}(mal_c${String(route.param)})`
+					: route.kind === "scope"
 						? site!
-						: `mal_ffi_replaced(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`}, ${String(lane)})`;
+						: `mal_ffi_replaced(&${site!}, ${key(route.param)}, ${String(lane)})`;
 		const callback =
-			value.closes === undefined
+			completion === undefined
 				? routed
-				: `mal_ffi_close_take(&${site!}, ${keyParam === undefined ? "nullptr" : `(void *) mal_c${String(keyParam)}`}, ${data >= 0 || lookup !== undefined ? `(MalFfiCallback *) ${routed}` : "nullptr"})`;
+				: `mal_ffi_close_take(&${site!}, ${key(completion.handle)}, ${route.kind === "data" || route.kind === "lookup" ? `(MalFfiCallback *) ${routed}` : "nullptr"})`;
 		// A queued callback's body runs as `_run` with the callback its entry found, for
 		// calls on the VM thread and queued ones, which must not look it up again.
-		const queued = value.queued !== undefined;
-		const keyedLookup = value.replaced !== undefined && data < 0 && lookup === undefined;
+		const queued = thread !== undefined;
+		const keyedLookup = lifetime.kind === "replaced" && route.kind === "key";
 		const body = queued ? `${name}_run` : name;
 		const signature = [...(queued ? ["MalFfiCallback *mal_callback"] : []), ...params];
 		const resultLocals: Array<string> = [];
@@ -2317,15 +2317,15 @@ class BindingWriter {
 				: [
 						`\tif (mal_c${String(value.resultCount.param)} != nullptr) *mal_c${String(value.resultCount.param)} = 0;`,
 					]),
-			...(scoped
+			...(route.kind === "scope"
 				? ["\tif (mal_callback == nullptr) mal_ffi_callback_lost();"]
-				: data < 0 || value.closes !== undefined
+				: route.kind !== "data" || completion !== undefined
 					? [`\tif (mal_callback == nullptr) return${returns ? ` ${emptyReturn}` : ""};`]
 					: []),
-			...(value.kept
+			...(held
 				? [
 						...(keyedLookup && !queued ? [] : ["\tmal_ffi_callback_hold(mal_callback);"]),
-						`\tMalVm *vm = ${value.owner === undefined ? "mal_ffi_callback_vm" : "mal_ffi_callback_owner_vm"}(mal_callback);`,
+						`\tMalVm *vm = ${registrationOwner === undefined ? "mal_ffi_callback_vm" : "mal_ffi_callback_owner_vm"}(mal_callback);`,
 						// A library may call back after the VM is gone; it gets a zero result.
 						`\tif (vm == nullptr) { mal_ffi_callback_drop(mal_callback); return${returns ? ` ${emptyReturn}` : ""}; }`,
 					]
@@ -2342,7 +2342,7 @@ class BindingWriter {
 			"\tMalFfiRoots mal_result_roots;",
 			"\tmal_ffi_root(&mal_result_roots, &mal_result, 1);",
 			...(lends ? ["\tbool mal_lent = false;"] : []),
-			...(value.owner === undefined ? [] : ["\tvoid *mal_owner_pin = nullptr;"]),
+			...(registrationOwner === undefined ? [] : ["\tvoid *mal_owner_pin = nullptr;"]),
 			...resultLocals.map((line) => `\t${line}`),
 			...(value.resultCount === undefined
 				? []
@@ -2352,11 +2352,11 @@ class BindingWriter {
 						"\t\tgoto mal_done;",
 						"\t}",
 					]),
-			...(value.closes === undefined
+			...(completion === undefined
 				? []
 				: [
 						...inputs.flatMap((input, position) =>
-							input.index === value.closes!.keyParam
+							input.index === completion.handle
 								? [
 										`\tmal_values[${String(position)}] = mal_ffi_close_value(mal_callback);`,
 									]
@@ -2365,7 +2365,7 @@ class BindingWriter {
 						"\tmal_ffi_close_finish(mal_callback);",
 					]),
 			"\tif (mal_ffi_threw(vm)) goto mal_done;",
-			...(value.owner === undefined
+			...(registrationOwner === undefined
 				? []
 				: [
 						`\tif (!mal_ffi_callback_pin_owner(vm, mal_callback, &mal_values[${inputs.length}], &mal_owner_pin, &mal_site)) goto mal_done;`,
@@ -2374,8 +2374,7 @@ class BindingWriter {
 				? ["\tif (!(mal_lent = mal_ffi_callback_enter(vm))) goto mal_done;"]
 				: []),
 			...inputs.flatMap((input, position) => {
-				if (value.closes !== undefined && input.index === value.closes.keyParam)
-					return [];
+				if (completion !== undefined && input.index === completion.handle) return [];
 				const counted = value.counts[input.index];
 				return (
 					counted === undefined
@@ -2412,10 +2411,12 @@ class BindingWriter {
 					]
 				: []),
 			...(lends ? ["\tif (mal_lent) mal_ffi_callback_leave(vm);"] : []),
-			...(value.owner === undefined ? [] : ["\tmal_ffi_unpin_handle(mal_owner_pin);"]),
+			...(registrationOwner === undefined
+				? []
+				: ["\tmal_ffi_unpin_handle(mal_owner_pin);"]),
 			"\tmal_ffi_unroot(&mal_result_roots);",
 			"\tmal_ffi_unroot(&mal_roots);",
-			...(value.kept ? ["\tmal_ffi_callback_drop(mal_callback);"] : []),
+			...(held ? ["\tmal_ffi_callback_drop(mal_callback);"] : []),
 			returns
 				? immutableReturn
 					? `\treturn mal_return_ready ? mal_return : ${zero};`
@@ -2423,7 +2424,9 @@ class BindingWriter {
 				: "\treturn;",
 			"}",
 		];
-		return queued ? [...lines, ...this.#queuedEntry(name, value, callback)] : lines;
+		return thread === undefined
+			? lines
+			: [...lines, ...this.#queuedEntry(name, value, callback, thread)];
 	}
 
 	/**
@@ -2434,6 +2437,7 @@ class BindingWriter {
 		name: string,
 		value: Extract<JsValue, { kind: "callback" }>,
 		callback: string,
+		thread: "queue" | "wait",
 	): Array<string> {
 		const type = value.type;
 		const message = `MalFfiQueued_${name}`;
@@ -2442,11 +2446,8 @@ class BindingWriter {
 		const layout = `${message}_Layout`;
 		const zero = `(${localDeclaration(type.returns, "")}) ${immutableReturn ? this.#callbackDefault(value.returns) : "{}"}`;
 		const run = `${name}_run(${["mal_callback", ...type.params.map((_, index) => `mal_message->mal_c${String(index)}`)].join(", ")})`;
-		const waiting = value.queued === "wait";
-		const keyedLookup =
-			value.replaced !== undefined &&
-			!value.params.includes("data") &&
-			value.lookup === undefined;
+		const waiting = thread === "wait";
+		const keyedLookup = value.lifetime.kind === "replaced" && value.route.kind === "key";
 		const args = type.params.map((_, index) => `mal_c${String(index)}`);
 		const owned = (index: number): boolean => {
 			const param = value.params[index];
@@ -2618,13 +2619,17 @@ class BindingWriter {
 				: [
 						`\t\tmal_ffi_callback_queue(mal_callback, ${name}_queued, mal_message, ${name}_free);`,
 					]),
-			...(value.closes === undefined ? [] : ["\t\tmal_ffi_close_return(mal_callback);"]),
+			...(value.lifetime.kind === "completion"
+				? ["\t\tmal_ffi_close_return(mal_callback);"]
+				: []),
 			...(keyedLookup ? ["\t\tmal_ffi_callback_drop(mal_callback);"] : []),
 			...(waiting ? ["\t\tmal_ffi_callback_wait_leave(mal_cancellation);"] : []),
 			`\t\treturn${returns ? " mal_return" : ""};`,
 			"\t}",
 			`\t${returns ? `${immutableReturn ? localDeclaration(type.returns, "mal_return") : "mal_return"} = ` : ""}${name}_run(${["mal_callback", ...args].join(", ")});`,
-			...(value.closes === undefined ? [] : ["\tmal_ffi_close_return(mal_callback);"]),
+			...(value.lifetime.kind === "completion"
+				? ["\tmal_ffi_close_return(mal_callback);"]
+				: []),
 			...(keyedLookup
 				? ["\tif (mal_callback != nullptr) mal_ffi_callback_drop(mal_callback);"]
 				: []),
@@ -3102,11 +3107,11 @@ class BindingWriter {
 		const callbackStarts: Array<string> = [];
 		const callbackReturns: Array<string> = [];
 		const replacedIndexes = new Set<number>();
-		const keptCallback = (index: number): boolean => {
+		const keptArgument = (index: number): boolean => {
 			const entry = binding.arguments[index];
 			const value =
 				entry?.kind === "input" ? binding.params[entry.param]?.value : undefined;
-			return value?.kind === "callback" && value.kept;
+			return value?.kind === "callback" && keptCallback(value);
 		};
 		const cleanup: Array<string> = [];
 		let scratchInputs = 0;
@@ -3226,7 +3231,7 @@ class BindingWriter {
 					body.push(`${local} = ${entry.expression};`);
 					return;
 				case "callback-data":
-					if (keptCallback(entry.of))
+					if (keptArgument(entry.of))
 						kept.push(`${local} = mal_kept_${String(entry.of)};`);
 					else body.push(`${local} = &mal_callback_${String(entry.of)};`);
 					return;
@@ -3420,21 +3425,20 @@ class BindingWriter {
 						setCount(index, `mal_bytes_length_${String(index)}`, site, buffers);
 						return;
 					}
-					if (value.kind === "callback" && value.kept) {
+					if (value.kind === "callback" && keptCallback(value)) {
+						const { lifetime } = value;
 						const trampoline =
-							value.replaced === undefined
-								? `mal_ffi_callback_${name}_${String(index)}`
-								: `mal_ffi_replacement_callback_${String(name.length)}_${name}_${String(index)}`;
+							lifetime.kind === "replaced"
+								? `mal_ffi_replacement_callback_${String(name.length)}_${name}_${String(index)}`
+								: `mal_ffi_callback_${name}_${String(index)}`;
 						const context = `mal_kept_${String(index)}`;
 						const replaced = `mal_ffi_replaced_${name}_${String(index)}`;
 						const transaction = `mal_replacement_${String(index)}`;
-						const lanes =
-							value.replaced !== undefined &&
-							!value.params.includes("data") &&
-							value.lookup === undefined;
-						if (value.replaced !== undefined)
+						// A setter without user data tells its registrations apart by lane.
+						const lanes = lifetime.kind === "replaced" && value.route.kind === "key";
+						if (lifetime.kind === "replaced")
 							trampolines.push("", `static MalFfiReplaced ${replaced};`);
-						else if (value.closes !== undefined)
+						else if (lifetime.kind === "completion")
 							trampolines.push("", `static char ${replaced};`);
 						if (lanes) {
 							for (const lane of [0, 1])
@@ -3457,7 +3461,7 @@ class BindingWriter {
 						// never leaves a function rooted that no library holds.
 						keeps.push(
 							`if ((${source}) != mal_ffi_null()) {`,
-							`\t${context} = ${value.queued !== undefined ? "mal_ffi_keep_queued" : "mal_ffi_keep"}(vm, ${source});`,
+							`\t${context} = ${value.thread !== undefined ? "mal_ffi_keep_queued" : "mal_ffi_keep"}(vm, ${source});`,
 							`\tif (${context} == nullptr) goto mal_done;`,
 							...this.#retainCallbackOwners(
 								binding,
@@ -3467,24 +3471,24 @@ class BindingWriter {
 								"goto mal_done;",
 								"&mal_result",
 								owner === undefined ? undefined : "mal_owner",
-								value.owner,
+								lifetime.owner,
 							).map((line) => `\t${line}`),
 							"}",
 						);
 						kept.push(
 							`${local} = ${context} == nullptr ? nullptr : ${lanes ? `(${transaction}.lane == 0 ? ${trampoline}_0 : ${trampoline}_1)` : trampoline};`,
 						);
-						if (value.closes !== undefined) {
+						if (lifetime.kind === "completion") {
 							keeps.push(
-								`if (!mal_ffi_close_prepare(vm, ${context}, ${argument(value.closes.param)}, &${replaced}, ${site})) goto mal_done;`,
+								`if (!mal_ffi_close_prepare(vm, ${context}, ${argument(lifetime.param)}, &${replaced}, ${site})) goto mal_done;`,
 							);
 							commits.push(
-								`mal_ffi_close_commit(${context}, &mal_handle_pin_${String(value.closes.key)}, false);`,
+								`mal_ffi_close_commit(${context}, &mal_handle_pin_${String(lifetime.key)}, false);`,
 							);
 							callbackStarts.push(`mal_ffi_close_start(${context});`);
 						}
-						if (value.replaced !== undefined) {
-							const key = value.replaced.key;
+						if (lifetime.kind === "replaced") {
+							const key = lifetime.key;
 							replacedIndexes.add(index);
 							locals.push(`MalFfiReplacement ${transaction} = {};`);
 							keeps.push(
@@ -3827,7 +3831,7 @@ class BindingWriter {
 			: [];
 		// A kept callback the library never received goes back if the C call never ran.
 		const keptIndexes = binding.arguments.flatMap((_, index) =>
-			keptCallback(index) && !replacedIndexes.has(index) ? [index] : [],
+			keptArgument(index) && !replacedIndexes.has(index) ? [index] : [],
 		);
 		if (keptIndexes.length > 0) {
 			locals.push("bool mal_called = false;");
@@ -4129,7 +4133,9 @@ class BindingWriter {
 			binding.closes !== undefined ||
 			binding.initializes !== undefined ||
 			nativeDisposals.length > 0 ||
-			binding.params.some(({ value }) => value.kind === "callback" && value.kept);
+			binding.params.some(
+				({ value }) => value.kind === "callback" && keptCallback(value),
+			);
 		const fields: Array<string> = [];
 		if (pointerResults) fields.push("MalFfiDiscards mal_discards;");
 		if (tracksRun) fields.push("bool mal_ran;");
@@ -4399,49 +4405,47 @@ class BindingWriter {
 						return;
 					}
 					if (value.kind === "callback") {
+						const { lifetime } = value;
 						const trampoline =
-							value.replaced === undefined
-								? `mal_ffi_async_callback_${name}_${String(index)}`
-								: `mal_ffi_async_replacement_callback_${String(name.length)}_${name}_${String(index)}`;
+							lifetime.kind === "replaced"
+								? `mal_ffi_async_replacement_callback_${String(name.length)}_${name}_${String(index)}`
+								: `mal_ffi_async_callback_${name}_${String(index)}`;
 						const field = `mal_callback_${String(index)}`;
 						const slot =
-							value.params.includes("data") ||
-							value.lookup !== undefined ||
-							value.replaced !== undefined ||
-							value.closes !== undefined
-								? undefined
-								: `mal_ffi_async_scoped_${name}_${String(index)}`;
+							value.route.kind === "scope"
+								? `mal_ffi_async_scoped_${name}_${String(index)}`
+								: undefined;
 						callbacks.push({
 							index,
-							retained: value.kept,
+							retained: keptCallback(value),
 							registrationResult: value.returnLifetime === "registration",
-							...(value.closes === undefined ? {} : { closeKey: value.closes.key }),
-							...(value.replaced === undefined
-								? {}
-								: { replacement: `mal_replacement_${String(index)}` }),
+							...(lifetime.kind === "completion" ? { closeKey: lifetime.key } : {}),
+							...(lifetime.kind === "replaced"
+								? { replacement: `mal_replacement_${String(index)}` }
+								: {}),
 							...(slot === undefined ? {} : { slot }),
 						});
 						fields.push(`MalFfiCallback *${field};`);
 						const replacement = `mal_replacement_${String(index)}`;
 						const replacedSite = `mal_ffi_replaced_${name}_${String(index)}`;
-						const lanes =
-							value.replaced !== undefined &&
-							!value.params.includes("data") &&
-							value.lookup === undefined;
-						if (value.replaced !== undefined)
+						const lanes = lifetime.kind === "replaced" && value.route.kind === "key";
+						if (lifetime.kind === "replaced")
 							fields.push(`MalFfiReplacement ${replacement};`);
 						if (slot !== undefined)
 							trampolines.push("", `static _Thread_local MalFfiCallback *${slot};`);
+						// Worker threads call even a call-scoped callback, which waits for the VM.
 						for (const lane of lanes ? [0, 1] : [0])
 							trampolines.push(
 								...this.#trampoline(
 									lanes ? `${trampoline}_${String(lane)}` : trampoline,
-									{ ...value, kept: true, queued: value.queued ?? "wait" },
+									value,
 									exported,
-									value.replaced === undefined && value.closes === undefined
-										? slot
-										: replacedSite,
+									lifetime.kind === "replaced" || lifetime.kind === "completion"
+										? replacedSite
+										: slot,
 									lane,
+									true,
+									value.thread ?? "wait",
 								),
 							);
 						body.push(
@@ -4451,8 +4455,9 @@ class BindingWriter {
 							`if ((${source}) != mal_ffi_null()) {`,
 							`\tmal_ctx->${field} = mal_ffi_keep_queued(vm, ${source});`,
 							`\tif (mal_ctx->${field} == nullptr) goto mal_failed;`,
-							...(value.kept
-								? this.#retainCallbackOwners(
+							...(lifetime.kind === "call"
+								? []
+								: this.#retainCallbackOwners(
 										binding,
 										`mal_ctx->${field}`,
 										argument,
@@ -4460,22 +4465,21 @@ class BindingWriter {
 										"goto mal_failed;",
 										"mal_ctx",
 										undefined,
-										value.owner,
-									).map((line) => `\t${line}`)
-								: []),
+										lifetime.owner,
+									).map((line) => `\t${line}`)),
 							"}",
 						);
 						callbackArguments.push(
-							...(value.closes === undefined
-								? []
-								: [
-										`if (!mal_ffi_close_prepare(vm, mal_ctx->${field}, ${argument(value.closes.param)}, &${replacedSite}, ${site})) goto mal_failed;`,
-									]),
-							...(value.replaced === undefined
-								? []
-								: [
-										`if (!mal_ffi_replace_prepare(vm, &${replacedSite}, ${value.replaced.key === undefined ? "nullptr" : `(void *) mal_ctx->mal_argument_${String(value.replaced.key)}`}, mal_ctx->${field}, &mal_ctx->${replacement})) goto mal_failed;`,
-									]),
+							...(lifetime.kind === "completion"
+								? [
+										`if (!mal_ffi_close_prepare(vm, mal_ctx->${field}, ${argument(lifetime.param)}, &${replacedSite}, ${site})) goto mal_failed;`,
+									]
+								: []),
+							...(lifetime.kind === "replaced"
+								? [
+										`if (!mal_ffi_replace_prepare(vm, &${replacedSite}, ${lifetime.key === undefined ? "nullptr" : `(void *) mal_ctx->mal_argument_${String(lifetime.key)}`}, mal_ctx->${field}, &mal_ctx->${replacement})) goto mal_failed;`,
+									]
+								: []),
 							`${target} = mal_ctx->${field} == nullptr ? nullptr : ${lanes ? `(mal_ctx->${replacement}.lane == 0 ? ${trampoline}_0 : ${trampoline}_1)` : trampoline};`,
 						);
 						return;
@@ -4940,7 +4944,7 @@ class BindingWriter {
 				: [
 						`\tMalFfiCallback *mal_callbacks[] = { ${callbacks.map(({ index }) => `mal_ctx->mal_callback_${String(index)}`).join(", ")} };`,
 					]),
-			`\tif (mal_ffi_async(vm, mal_ctx, mal_ffi_async_run_${name}, mal_ffi_async_complete_${name}, mal_ffi_async_release_${name}, mal_keep, ${String(kept)}, ${inputs}, ${callbacks.length === 0 ? "nullptr" : "mal_callbacks"}, ${callbacks.length}, &mal_promise, ${binding.closes !== undefined || binding.params.some(({ value }) => value.kind === "callback" && value.closes !== undefined)})) {`,
+			`\tif (mal_ffi_async(vm, mal_ctx, mal_ffi_async_run_${name}, mal_ffi_async_complete_${name}, mal_ffi_async_release_${name}, mal_keep, ${String(kept)}, ${inputs}, ${callbacks.length === 0 ? "nullptr" : "mal_callbacks"}, ${callbacks.length}, &mal_promise, ${binding.closes !== undefined || binding.params.some(({ value }) => value.kind === "callback" && value.lifetime.kind === "completion")})) {`,
 			...(compoundInputs ? ["\t\tmal_ffi_inputs_unroot(&mal_ctx->mal_inputs);"] : []),
 			"\t\tmal_ffi_unroot(&mal_keep_roots);",
 			"\t\treturn mal_promise;",

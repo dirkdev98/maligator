@@ -1978,12 +1978,11 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       The static FFI imports of the program and its workers bound the final selection,
       so effects derived from them stay valid for the generated C; the frontend cache
       keys on the resulting facts.
-- [ ] Normalize callback facts during planning into explicit lifetime variants
-      (call-scoped, registration released by a destructor, replacement setter,
-      owner-rooted, close completion) with dispatch kept separate, so generation
-      reads resolved parameter references instead of reinterpreting `kept`, `owner`,
-      `replaced`, `closes`, `lookup` and `queued` per phase. Treat input/output
-      direction, ownership, owner linkage and cleanup obligations the same way.
+- [ ] Normalize handle ownership during planning the way callback lifetimes are:
+      owned, borrowed, owner-linked and library-lifetime results are exclusive, yet
+      `owned`, `owner`, `lifetime` and `fresh` are separate flags that generation
+      combines per site. Treat input/output direction and cleanup obligations the
+      same way.
 
 # Actors and SMP
 

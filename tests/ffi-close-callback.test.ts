@@ -30,9 +30,9 @@ describe("one-shot C close completion contracts", () => {
 		expect(
 			plan.functions.find((binding) => binding.name === "close_later")?.params[1]?.value,
 		).toMatchObject({
-			kept: true,
-			queued: true,
-			closes: { param: 0, key: 0, keyParam: 0 },
+			lifetime: { kind: "completion", param: 0, key: 0, handle: 0 },
+			route: { kind: "key", param: 0 },
+			thread: "queue",
 			params: [{ nullable: false }],
 		});
 	});
@@ -47,6 +47,16 @@ describe("one-shot C close completion contracts", () => {
 		["close_status", { callback: { closes: "handle" } }, "returns void"],
 		["close_wrong", { callback: { closes: "handle" } }, "closing handle"],
 		["close_missing", { callback: { closes: "handle" } }, "handle or user data"],
+		[
+			"close_later",
+			{ callback: { closes: "handle", replaced: true } },
+			"replaced and closes are alternative lifetimes",
+		],
+		[
+			"close_later",
+			{ callback: { owner: "handle" } },
+			"owner applies to retained callbacks",
+		],
 	] satisfies Array<[string, MaligatorFfiValueFacts, string]>)(
 		"rejects an unsound lifetime on %s with %j",
 		(name, done, message) => {
