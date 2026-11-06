@@ -191,6 +191,8 @@ interface CoreFrontendContext {
 	/** Module path to its lazy init function, or null when merged/eagerly initialized. */
 	compiledModuleInitForPaths: Map<string, number | null>;
 	moduleEvaluationBodies: Map<string, number>;
+	/** Module path to the function that instantiates it and its dependencies. */
+	moduleInstantiations: Map<string, number>;
 
 	/**
 	 * Keep track of where the binding is stored.
@@ -893,6 +895,7 @@ export function constructSemanticProgramCore(
 
 		compiledModuleInitForPaths: new Map(),
 		moduleEvaluationBodies: new Map(),
+		moduleInstantiations: new Map(),
 		bindingToStorage: new Map(),
 		modulePrivateNames: [],
 		nextLoopScopeId: -1,
@@ -2271,70 +2274,97 @@ function compileModuleGraphInit(
 	return graph.functionIndex;
 }
 
+/**
+ * Instantiate `entry` and every ES module it imports before any of them evaluates.
+ * Each module has its own instantiation function, which runs once and then
+ * instantiates its dependencies, so the graph's instantiation code grows with its
+ * modules and edges however many entries, dynamic imports and evaluators reach it.
+ */
 function emitModuleInstantiationClosure(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
 	entry: SemanticFile,
 ): void {
-	const files: Array<SemanticFile> = [];
-	const seen = new Set<string>();
-	const visit = (file: SemanticFile): void => {
-		if (
-			file.commonjs ||
-			seen.has(file.path) ||
-			program.compiledModuleInitForPaths.get(file.path) === null
-		)
-			return;
-		seen.add(file.path);
-		files.push(file);
-		for (const dependency of moduleEvaluationDependencies(program, file))
-			visit(dependency);
+	if (entry.commonjs || program.compiledModuleInitForPaths.get(entry.path) === null)
+		return;
+	const instantiate = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "createFunction",
+		registers: [instantiate],
+		functionIndex: compileModuleInstantiation(program, entry),
+	});
+	cursor.block.emitter.emit({
+		type: "call",
+		registers: [nextCoreVariable(fn), instantiate, compileUndefined(fn, cursor)],
+	});
+}
+
+function compileModuleInstantiation(
+	program: CoreFrontendContext,
+	file: SemanticFile,
+): number {
+	const known = program.moduleInstantiations.get(file.path);
+	if (known !== undefined) return known;
+	const fn: CoreFrontendFunction = {
+		semanticFile: file,
+		functionIndex: program.nextFunctionIndex,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+		parameterCount: 0,
+		length: 0,
+		nextCoreVariable: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
 	};
-	visit(entry);
-	const savedFile = fn.semanticFile;
-	for (const file of files) {
-		fn.semanticFile = file;
-		const slot = getDynamicModuleStatusSlot(program, `\0instantiated:${file.path}`);
-		const initialized = nextCoreVariable(fn);
-		cursor.block.emitter.emit({
-			type: "loadGlobal",
-			registers: [initialized],
-			index: slot,
-		});
-		const skip: Extract<CompilerInstruction, { type: "jumpIf" }> = {
-			type: "jumpIf",
-			registers: [initialized],
-			blocks: [-1],
-		};
-		cursor.block.emitter.emit(skip);
-		const initialize = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
-		cursor.block.emitter.emit({ type: "jump", blocks: [initialize] });
-		cursor.block = fn.blocks[initialize]!;
-		const yes = nextCoreVariable(fn);
-		cursor.block.emitter.emit({ type: "createBoolean", registers: [yes], value: true });
-		cursor.block.emitter.emit({ type: "storeGlobal", registers: [yes], index: slot });
-		emitModulePrologue(program, fn, cursor.block, file);
-		for (const statement of file.ast.body) {
-			if (statement.type === "FunctionDeclaration")
-				compileFunctionDeclaration(program, fn, cursor.block, statement);
-			else if (
-				statement.type === "ExportNamedDeclaration" &&
-				statement.declaration?.type === "FunctionDeclaration"
-			)
-				compileFunctionDeclaration(program, fn, cursor.block, statement.declaration);
-			else if (
-				statement.type === "ExportDefaultDeclaration" &&
-				statement.declaration.type === "FunctionDeclaration"
-			)
-				compileExportDefault(program, fn, cursor.block, statement);
-		}
-		const join = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
-		cursor.block.emitter.emit({ type: "jump", blocks: [join] });
-		skip.blocks[0] = join;
-		cursor.block = fn.blocks[join]!;
+	registerCoreFunction(program, fn);
+	// Registered first, so an import cycle calls back into this function.
+	program.moduleInstantiations.set(file.path, fn.functionIndex);
+	const cursor: CoreFrontendCursor = { block: { emitter: unboundCoreEmitter } };
+	fn.blocks.push(cursor.block);
+	const slot = getDynamicModuleStatusSlot(program, `\0instantiated:${file.path}`);
+	const initialized = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "loadGlobal",
+		registers: [initialized],
+		index: slot,
+	});
+	const skip: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [initialized],
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(skip);
+	const initialize = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block.emitter.emit({ type: "jump", blocks: [initialize] });
+	cursor.block = fn.blocks[initialize]!;
+	// Set before the dependencies instantiate, so a cycle back here returns at once.
+	const yes = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "createBoolean", registers: [yes], value: true });
+	cursor.block.emitter.emit({ type: "storeGlobal", registers: [yes], index: slot });
+	emitModulePrologue(program, fn, cursor.block, file);
+	for (const statement of file.ast.body) {
+		if (statement.type === "FunctionDeclaration")
+			compileFunctionDeclaration(program, fn, cursor.block, statement);
+		else if (
+			statement.type === "ExportNamedDeclaration" &&
+			statement.declaration?.type === "FunctionDeclaration"
+		)
+			compileFunctionDeclaration(program, fn, cursor.block, statement.declaration);
+		else if (
+			statement.type === "ExportDefaultDeclaration" &&
+			statement.declaration.type === "FunctionDeclaration"
+		)
+			compileExportDefault(program, fn, cursor.block, statement);
 	}
-	fn.semanticFile = savedFile;
+	for (const dependency of moduleEvaluationDependencies(program, file))
+		emitModuleInstantiationClosure(program, fn, cursor, dependency);
+	const join = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block.emitter.emit({ type: "jump", blocks: [join] });
+	skip.blocks[0] = join;
+	cursor.block = fn.blocks[join]!;
+	endFunction(program, fn);
+	return fn.functionIndex;
 }
 
 function compileModuleEntry(program: CoreFrontendContext, file: SemanticFile): void {
