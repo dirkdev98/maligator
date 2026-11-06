@@ -1034,7 +1034,6 @@ void mal_gc_init(MalVm *vm) {
     g_gc = g;
     g_gc_vm = vm;
     mal_gc_marking_active = false;
-    mal_heap_set_black_alloc(&vm->heap, false);
     mal_gc_poll = false;
     mal_perf_stats_init();
     g->major_every = 8;

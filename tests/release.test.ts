@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { defineBuild } from "../npm/cli/index.js";
 import { createReleaseArchive, deterministicTar } from "../scripts/release-archive.ts";
 import { nextAlphaVersion } from "../scripts/release-version.ts";
@@ -309,23 +310,35 @@ describe("npm launcher", () => {
 		expect(workflow).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN/);
 	});
 
-	it("builds and smokes release packages on every supported GitHub host", () => {
-		const workflow = readFileSync(
-			path.resolve(import.meta.dirname, "../.github/workflows/release-packages.yml"),
-			"utf-8",
-		);
-		expect(workflow).toContain("workflow_dispatch:");
-		expect(workflow).toContain("release:build -- --all-targets");
-		expect(workflow).toContain("release:smoke");
-		expect(workflow).toContain("release:pack -- --all-targets");
-		for (const target of [
-			"aarch64-apple-darwin",
-			"x86_64-apple-darwin",
-			"aarch64-unknown-linux-gnu",
-			"x86_64-unknown-linux-gnu",
-		]) {
-			expect(workflow).toContain(`target: ${target}`);
+	it("builds each target in its own job, then packs and smokes all of them on their hosts", () => {
+		interface Job {
+			needs?: string | Array<string>;
+			strategy?: {
+				matrix: { target?: Array<string>; include?: Array<{ target: string }> };
+			};
+			steps: Array<{ run?: string }>;
 		}
+		const workflow = parse(
+			readFileSync(
+				path.resolve(import.meta.dirname, "../.github/workflows/release-packages.yml"),
+				"utf-8",
+			),
+		) as { on: Record<string, unknown>; jobs: Record<string, Job> };
+		const commands = (job: Job) => job.steps.map((step) => step.run ?? "").join("\n");
+		const allTargets = selectReleaseTargetTriples(["--all-targets"]);
+		const { build, assemble, smoke } = workflow.jobs;
+
+		expect(workflow.on).toHaveProperty("workflow_dispatch");
+		expect(build!.strategy!.matrix.target).toEqual(allTargets);
+		expect(commands(build!)).toContain("release:build -- --target ${{ matrix.target }}");
+		expect(assemble!.needs).toBe("build");
+		expect(commands(assemble!)).toContain("release:assemble -- --all-targets");
+		expect(commands(assemble!)).toContain("release:pack -- --all-targets");
+		expect(smoke!.needs).toBe("assemble");
+		expect(smoke!.strategy!.matrix.include!.map((leg) => leg.target).sort()).toEqual(
+			[...allTargets].sort(),
+		);
+		expect(commands(smoke!)).toContain("release:smoke");
 	});
 
 	it("resumes only when an existing package has identical tarball contents", () => {

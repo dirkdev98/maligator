@@ -1,5 +1,6 @@
 import { probeReadIsNamed } from "../compiler/shared/compiler-instruction.ts";
 import type { CompilerClassLayoutSite } from "../compiler/shared/compiler-instruction.ts";
+import { scanLiteralTemplateSegment } from "../compiler/shared/literal-template-data.ts";
 import type { CoreTargetClassLayout } from "../compiler/target/core-target-ir.ts";
 import type { NativeStoragePlan } from "../compiler/target/lower-native-storage.ts";
 import type {
@@ -607,40 +608,14 @@ function cloneLiteralTemplates(
 	bigintBase: number,
 ): Array<number> {
 	const cloned = [...data];
-	let position = 0;
-	while (position < cloned.length) {
-		const tag = cloned[position++]!;
-		switch (tag) {
-			case 0: // null
-			case 1: // false
-			case 2: // true
-			case 7: // hole
-				break;
-			case 3: // i32
-			case 8: // array + element count
-			case 9: // object + property count
-				if (position >= cloned.length) throw new Error("Truncated VM literal template");
-				position++;
-				break;
-			case 4: // f64 words
-				if (position + 1 >= cloned.length)
-					throw new Error("Truncated VM literal template");
-				position += 2;
-				break;
-			case 5: // string
-			case 10: // object key string
-				if (position >= cloned.length) throw new Error("Truncated VM literal template");
-				cloned[position] = cloned[position]! + stringBase;
-				position++;
-				break;
-			case 6: // bigint
-				if (position >= cloned.length) throw new Error("Truncated VM literal template");
-				cloned[position] = cloned[position]! + bigintBase;
-				position++;
-				break;
-			default:
-				throw new Error(`Unknown VM literal-template tag ${tag}`);
-		}
+	let offset = 0;
+	while (offset < cloned.length) {
+		const segment = scanLiteralTemplateSegment(cloned, offset, "VM literal template");
+		for (const reference of segment.stringReferences)
+			cloned[reference.position] = reference.index + stringBase;
+		for (const reference of segment.bigintReferences)
+			cloned[reference.position] = reference.index + bigintBase;
+		offset = segment.endOffset;
 	}
 	return cloned;
 }

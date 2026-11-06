@@ -67,12 +67,18 @@ export function scanLiteralTemplateSegment(
 		else actions[top] = remaining > 0 ? remaining - 1 : remaining + 1;
 		if (remaining < 0) {
 			const tag = take("object key tag");
-			if (tag !== 10) throw new Error(`Unknown ${owner} object tag ${tag}`);
-			const referencePosition = position;
-			stringReferences.push({
-				position: referencePosition,
-				index: take("object key"),
-			});
+			if (tag === 12) {
+				// An array-index key holds its index rather than a string reference.
+				const index = take("object index key");
+				if (!Number.isSafeInteger(index) || index < 0 || index > 0xfffffffe)
+					throw new Error(`Invalid ${owner} object index key ${index}`);
+			} else if (tag === 10) {
+				const referencePosition = position;
+				stringReferences.push({
+					position: referencePosition,
+					index: take("object key"),
+				});
+			} else throw new Error(`Unknown ${owner} object tag ${tag}`);
 		}
 		const tag = take("node");
 		switch (tag) {

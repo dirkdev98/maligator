@@ -3,10 +3,12 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import { scanLiteralTemplateSegment } from "../src/compiler/shared/literal-template-data.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 
 function compile(body: string, locked = true) {
 	return compileSemanticProgramToProgramImage(
@@ -128,5 +130,49 @@ describe("Core literal constants", () => {
 		expect(constants(compile('return ["foo", "bar"].includes(x);', false))).toHaveLength(
 			0,
 		);
+	});
+});
+
+describe("static data templates", () => {
+	it("builds an object keyed by array indices from one template", () => {
+		const image = compile(
+			'return { "200": "OK", "404": "Not Found", name: "codes", "500": "Server Error", rows: { "1": [1], "2": [2] } };',
+		);
+		const opcodes = image.runtime.functions.flatMap((fn) =>
+			fn.instructions.map((instruction) => instruction.opcode),
+		);
+		expect(opcodes).toContain("INSTANTIATE_LITERAL_TEMPLATE");
+		expect(opcodes).not.toContain("DEFINE_PROPERTY");
+	});
+
+	it("rebases index-keyed templates when Test262 batches programs into one image", () => {
+		const image = compile(
+			'return { "200": "OK", "404": "Not Found", name: "codes", "500": "Server Error", rows: { "1": [1], "2": [2] } };',
+		);
+		const { image: merged } = mergeProgramImages([image, image]);
+		const roots: Array<Array<string>> = [];
+		for (let offset = 0; offset < merged.runtime.literalTemplateData.length;) {
+			const segment = scanLiteralTemplateSegment(
+				merged.runtime.literalTemplateData,
+				offset,
+				"merged template",
+			);
+			roots.push(
+				segment.stringReferences.map((reference) =>
+					String.fromCharCode(...merged.runtime.stringConstants[reference.index]!),
+				),
+			);
+			offset = segment.endOffset;
+		}
+		expect(roots).toHaveLength(2);
+		expect(roots[1]).toEqual(roots[0]);
+		expect(roots[0]!.toSorted()).toEqual([
+			"Not Found",
+			"OK",
+			"Server Error",
+			"codes",
+			"name",
+			"rows",
+		]);
 	});
 });

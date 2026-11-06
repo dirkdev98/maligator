@@ -123,6 +123,8 @@ typedef enum MalLiteralTemplateTag {
     MAL_LITERAL_OBJECT,
     MAL_LITERAL_KEY,
     MAL_LITERAL_UNDEFINED,
+    /** An object key that is an array index, stored as the index itself. */
+    MAL_LITERAL_INDEX_KEY,
 } MalLiteralTemplateTag;
 
 typedef enum MalBinaryOp {

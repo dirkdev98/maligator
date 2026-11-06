@@ -192,6 +192,9 @@ interface CoreFrontendContext {
 	/** Module path to its lazy init function, or null when merged/eagerly initialized. */
 	compiledModuleInitForPaths: Map<string, number | null>;
 	moduleEvaluationBodies: Map<string, number>;
+	/** Module path to the function that instantiates it and its dependencies. */
+	moduleInstantiations: Map<string, number>;
+	filesByPath: ReadonlyMap<string, SemanticFile>;
 
 	/**
 	 * Keep track of where the binding is stored.
@@ -242,7 +245,11 @@ interface CoreFrontendContext {
 			exports: Array<{ name: string; exporter: Binding }>;
 		}>
 	>;
-	foreignNamespaces: Map<Binding, ReadonlyMap<string, Binding>>;
+	/**
+	 * Eager namespace import bindings, whose static member reads load the exporter's
+	 * binding directly, by export name.
+	 */
+	namespaceMembers: Map<Binding, ReadonlyMap<string, Binding>>;
 	moduleNamespaces: Map<string, Array<{ name: string; exporter: Binding }>>;
 	/** Modules whose `import()` rejects because they failed to load or link. */
 	failedModules: ReadonlyMap<string, SyntaxDiagnostic>;
@@ -896,6 +903,8 @@ export function constructSemanticProgramCore(
 
 		compiledModuleInitForPaths: new Map(),
 		moduleEvaluationBodies: new Map(),
+		moduleInstantiations: new Map(),
+		filesByPath: new Map(semantic.files.map((file) => [file.path, file])),
 		bindingToStorage: new Map(),
 		modulePrivateNames: [],
 		nextLoopScopeId: -1,
@@ -905,7 +914,7 @@ export function constructSemanticProgramCore(
 
 		moduleDefaultBinding: new Map(),
 		namespaceImports: new Map(),
-		foreignNamespaces: new Map(),
+		namespaceMembers: new Map(),
 		moduleNamespaces: new Map(),
 		failedModules: new Map(),
 		failedModuleInitializers: new Map(),
@@ -996,23 +1005,9 @@ export function constructSemanticProgramCore(
 	for (const imports of linkage.namespaceImports.values()) {
 		for (const namespace of imports) {
 			if (namespace.deferred) continue;
-			const host = program.hostModules.find(
-				(module) => module.specifier === namespace.module,
-			);
-			if (host === undefined) continue;
-			const foreign = new Set(
-				host.exports
-					.filter((entry) => entry.direct !== undefined)
-					.map((entry) => entry.binding),
-			);
-			if (foreign.size === 0) continue;
-			program.foreignNamespaces.set(
+			program.namespaceMembers.set(
 				namespace.binding,
-				new Map(
-					namespace.exports
-						.filter((entry) => foreign.has(entry.exporter))
-						.map((entry) => [entry.name, entry.exporter]),
-				),
+				new Map(namespace.exports.map((entry) => [entry.name, entry.exporter])),
 			);
 		}
 	}
@@ -2013,7 +2008,7 @@ function compileMergedModuleInit(
 	evaluationOrder: Array<string>,
 	cjsEntryId?: number,
 ) {
-	const fileByPath = new Map(program.semantic.files.map((file) => [file.path, file]));
+	const fileByPath = program.filesByPath;
 
 	// Nested functions are traced lazily and would otherwise try to compile a
 	// separate per-file init; mark every module compiled up front since the
@@ -2201,7 +2196,7 @@ function compileFileInit(program: CoreFrontendContext, initFile: SemanticFile) {
 		fn.blocks.push(prologue);
 		const prologueCursor = { block: prologue };
 		if (initFile.type === "module") {
-			emitModuleInstantiationClosure(program, fn, prologueCursor, initFile);
+			emitModuleGraphInstantiation(program, fn, prologueCursor, initFile);
 			fn.moduleInstantiated = true;
 		} else if (moduleNeedsPrologue(program, initFile))
 			emitModulePrologue(program, fn, prologue, initFile);
@@ -2254,7 +2249,7 @@ function compileModuleGraphInit(
 	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	graph.blocks.push(block);
 	const cursor = { block };
-	emitModuleInstantiationClosure(program, graph, cursor, file);
+	emitModuleGraphInstantiation(program, graph, cursor, file);
 	for (const dependency of moduleEvaluationDependencies(program, file))
 		emitModuleEvaluationCall(
 			program,
@@ -2296,70 +2291,128 @@ function compileModuleGraphInit(
 	return graph.functionIndex;
 }
 
+/**
+ * Instantiate the ES module graph `file` roots, from that module's init. The program
+ * entry's init is the first code to run, so the entry instantiates inline instead of
+ * through a function the optimizer would then inline. An import cycle back to the
+ * entry still builds that function, which finds the entry's flag already set.
+ */
+function emitModuleGraphInstantiation(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	file: SemanticFile,
+): void {
+	if (file.path === program.semantic.entrypointPath)
+		emitModuleInstantiation(program, fn, cursor, file);
+	else emitModuleInstantiationClosure(program, fn, cursor, file);
+}
+
+/**
+ * Instantiate `entry` and every ES module it imports before any of them evaluates.
+ * Each module has its own instantiation function, which runs once and then
+ * instantiates its dependencies, so the graph's instantiation code grows with its
+ * modules and edges however many entries, dynamic imports and evaluators reach it.
+ */
 function emitModuleInstantiationClosure(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
 	entry: SemanticFile,
 ): void {
-	const files: Array<SemanticFile> = [];
-	const seen = new Set<string>();
-	const visit = (file: SemanticFile): void => {
-		if (
-			file.commonjs ||
-			seen.has(file.path) ||
-			program.compiledModuleInitForPaths.get(file.path) === null
-		)
-			return;
-		seen.add(file.path);
-		files.push(file);
-		for (const dependency of moduleEvaluationDependencies(program, file))
-			visit(dependency);
+	if (entry.commonjs || program.compiledModuleInitForPaths.get(entry.path) === null)
+		return;
+	const instantiate = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "createFunction",
+		registers: [instantiate],
+		functionIndex: compileModuleInstantiation(program, entry),
+	});
+	cursor.block.emitter.emit({
+		type: "call",
+		registers: [nextCoreVariable(fn), instantiate, compileUndefined(fn, cursor)],
+	});
+}
+
+function compileModuleInstantiation(
+	program: CoreFrontendContext,
+	file: SemanticFile,
+): number {
+	const known = program.moduleInstantiations.get(file.path);
+	if (known !== undefined) return known;
+	const fn: CoreFrontendFunction = {
+		semanticFile: file,
+		functionIndex: program.nextFunctionIndex,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+		parameterCount: 0,
+		length: 0,
+		nextCoreVariable: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
 	};
-	visit(entry);
-	const savedFile = fn.semanticFile;
-	for (const file of files) {
-		fn.semanticFile = file;
-		const slot = getDynamicModuleStatusSlot(program, `\0instantiated:${file.path}`);
-		const initialized = nextCoreVariable(fn);
-		cursor.block.emitter.emit({
-			type: "loadGlobal",
-			registers: [initialized],
-			index: slot,
-		});
-		const skip: Extract<CompilerInstruction, { type: "jumpIf" }> = {
-			type: "jumpIf",
-			registers: [initialized],
-			blocks: [-1],
-		};
-		cursor.block.emitter.emit(skip);
-		const initialize = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
-		cursor.block.emitter.emit({ type: "jump", blocks: [initialize] });
-		cursor.block = fn.blocks[initialize]!;
-		const yes = nextCoreVariable(fn);
-		cursor.block.emitter.emit({ type: "createBoolean", registers: [yes], value: true });
-		cursor.block.emitter.emit({ type: "storeGlobal", registers: [yes], index: slot });
-		emitModulePrologue(program, fn, cursor.block, file);
-		for (const statement of file.ast.body) {
-			if (statement.type === "FunctionDeclaration")
-				compileFunctionDeclaration(program, fn, cursor.block, statement);
-			else if (
-				statement.type === "ExportNamedDeclaration" &&
-				statement.declaration?.type === "FunctionDeclaration"
-			)
-				compileFunctionDeclaration(program, fn, cursor.block, statement.declaration);
-			else if (
-				statement.type === "ExportDefaultDeclaration" &&
-				statement.declaration.type === "FunctionDeclaration"
-			)
-				compileExportDefault(program, fn, cursor.block, statement);
-		}
-		const join = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
-		cursor.block.emitter.emit({ type: "jump", blocks: [join] });
-		skip.blocks[0] = join;
-		cursor.block = fn.blocks[join]!;
+	registerCoreFunction(program, fn);
+	// Registered first, so an import cycle calls back into this function.
+	program.moduleInstantiations.set(file.path, fn.functionIndex);
+	const cursor: CoreFrontendCursor = { block: { emitter: unboundCoreEmitter } };
+	fn.blocks.push(cursor.block);
+	emitModuleInstantiation(program, fn, cursor, file);
+	endFunction(program, fn);
+	return fn.functionIndex;
+}
+
+/**
+ * Instantiate `file` once: its flag, TDZ bindings, namespaces and hoisted
+ * functions, then the modules it imports.
+ */
+function emitModuleInstantiation(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	file: SemanticFile,
+): void {
+	if (file.commonjs || program.compiledModuleInitForPaths.get(file.path) === null) return;
+	const slot = getDynamicModuleStatusSlot(program, `\0instantiated:${file.path}`);
+	const initialized = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "loadGlobal",
+		registers: [initialized],
+		index: slot,
+	});
+	const skip: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [initialized],
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(skip);
+	const initialize = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block.emitter.emit({ type: "jump", blocks: [initialize] });
+	cursor.block = fn.blocks[initialize]!;
+	// Set before the dependencies instantiate, so a cycle back here returns at once.
+	const yes = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "createBoolean", registers: [yes], value: true });
+	cursor.block.emitter.emit({ type: "storeGlobal", registers: [yes], index: slot });
+	emitModulePrologue(program, fn, cursor.block, file);
+	for (const statement of file.ast.body) {
+		if (statement.type === "FunctionDeclaration")
+			compileFunctionDeclaration(program, fn, cursor.block, statement);
+		else if (
+			statement.type === "ExportNamedDeclaration" &&
+			statement.declaration?.type === "FunctionDeclaration"
+		)
+			compileFunctionDeclaration(program, fn, cursor.block, statement.declaration);
+		else if (
+			statement.type === "ExportDefaultDeclaration" &&
+			statement.declaration.type === "FunctionDeclaration"
+		)
+			compileExportDefault(program, fn, cursor.block, statement);
 	}
-	fn.semanticFile = savedFile;
+	for (const dependency of moduleEvaluationDependencies(program, file))
+		emitModuleInstantiationClosure(program, fn, cursor, dependency);
+	const join = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block.emitter.emit({ type: "jump", blocks: [join] });
+	skip.blocks[0] = join;
+	cursor.block = fn.blocks[join]!;
 }
 
 function compileModuleEntry(program: CoreFrontendContext, file: SemanticFile): void {
@@ -2478,9 +2531,7 @@ function moduleEvaluationDependencies(
 	file: SemanticFile,
 ): Array<SemanticFile> {
 	const record = program.semantic.graph?.modules.get(file.path);
-	const files = new Map(
-		program.semantic.files.map((candidate) => [candidate.path, candidate]),
-	);
+	const files = program.filesByPath;
 	const seen = new Set<string>();
 	const dependencies: Array<SemanticFile> = [];
 	for (const dependency of record?.dependencies ?? []) {
@@ -11172,6 +11223,7 @@ function compileChainElement(
 		retainHostMember(program, fn, node);
 		if (node.object.type === "Super") {
 			return compileMemberLoad(
+				program,
 				fn,
 				cursor,
 				compileMemberObjectAndKey(program, fn, cursor, node),
@@ -11203,10 +11255,10 @@ function compileChainElement(
 			: node.property.type === "Identifier"
 				? compileStaticString(program, fn, cursor, node.property.name)
 				: -1;
-		return compileMemberLoad(fn, cursor, {
+		return compileMemberLoad(program, fn, cursor, {
 			object,
 			key,
-			foreignSlot: foreignNamespaceMember(program, fn, node),
+			namespaceExport: namespaceMemberExport(program, fn, node),
 		});
 	}
 
@@ -11225,7 +11277,7 @@ function compileChainElement(
 			if (calleeNode.object.type === "Super") {
 				const member = compileMemberObjectAndKey(program, fn, cursor, calleeNode);
 				thisRegister = member.receiver!;
-				callee = compileMemberLoad(fn, cursor, member);
+				callee = compileMemberLoad(program, fn, cursor, member);
 			} else {
 				const object = compileChainElement(
 					program,
@@ -11258,10 +11310,10 @@ function compileChainElement(
 						: calleeNode.property.type === "Identifier"
 							? compileStaticString(program, fn, cursor, calleeNode.property.name)
 							: -1;
-					callee = compileMemberLoad(fn, cursor, {
+					callee = compileMemberLoad(program, fn, cursor, {
 						object,
 						key,
-						foreignSlot: foreignNamespaceMember(program, fn, calleeNode),
+						namespaceExport: namespaceMemberExport(program, fn, calleeNode),
 					});
 				}
 			}
@@ -11779,7 +11831,7 @@ function compileLogicalAssignment(
 			compiled = { ...compiled, key };
 		}
 		member = compiled;
-		current = compileMemberLoad(fn, cursor, member);
+		current = compileMemberLoad(program, fn, cursor, member);
 	} else {
 		return -1;
 	}
@@ -12132,7 +12184,7 @@ function compileTaggedTemplate(
 	} else if (tagNode.type === "MemberExpression") {
 		const member = compileMemberObjectAndKey(program, fn, cursor, tagNode);
 		thisRegister = member.receiver ?? member.object;
-		callee = compileMemberLoad(fn, cursor, member);
+		callee = compileMemberLoad(program, fn, cursor, member);
 	} else {
 		callee = compileExpression(program, fn, cursor, expression.tag);
 		thisRegister = compileUndefined(fn, cursor);
@@ -12510,7 +12562,7 @@ function compileUpdateExpression(
 
 		const current = isPrivate
 			? compilePrivateMemberLoad(program, fn, cursor, object, privateName)
-			: compileMemberLoad(fn, cursor, { ...resolved, key: effectiveKey });
+			: compileMemberLoad(program, fn, cursor, { ...resolved, key: effectiveKey });
 
 		const oldValue = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
@@ -12632,6 +12684,7 @@ const LITERAL_TEMPLATE_HOLE = 7;
 const LITERAL_TEMPLATE_ARRAY = 8;
 const LITERAL_TEMPLATE_OBJECT = 9;
 const LITERAL_TEMPLATE_KEY = 10;
+const LITERAL_TEMPLATE_INDEX_KEY = 12;
 const MIN_LITERAL_TEMPLATE_WORDS = 32;
 const literalNumberBits = new DataView(new ArrayBuffer(8));
 
@@ -12678,12 +12731,7 @@ function isStaticLiteralTemplate(
 					return false;
 				}
 				const name = staticPropertyName(property);
-				if (
-					name === undefined ||
-					name === "__proto__" ||
-					compilerPropertyKeyIsArrayIndex(name) ||
-					seen.has(name)
-				) {
+				if (name === undefined || name === "__proto__" || seen.has(name)) {
 					return false;
 				}
 				seen.add(name);
@@ -12766,6 +12814,12 @@ function compileLiteralTemplate(
 				const property = node.properties[i] as ESTree.Property;
 				const name = staticPropertyName(property)!;
 				actions.push({ type: "node", node: property.value as ESTree.Expression });
+				// An index name keys an element, which the object orders before its names.
+				if (compilerPropertyKeyIsArrayIndex(name)) {
+					actions.push({ type: "word", word: Number(name) });
+					actions.push({ type: "word", word: LITERAL_TEMPLATE_INDEX_KEY });
+					continue;
+				}
 				actions.push({
 					type: "word",
 					word: getOrCreateStringConstant(program, name),
@@ -13253,7 +13307,7 @@ function compileMemberExpression(
 	}
 
 	const member = compileMemberObjectAndKey(program, fn, cursor, memberExpression);
-	return compileMemberLoad(fn, cursor, member);
+	return compileMemberLoad(program, fn, cursor, member);
 }
 
 function compileStaticArgumentsMember(
@@ -13501,27 +13555,35 @@ interface CompiledMemberReference {
 	object: number;
 	key: number;
 	receiver?: number;
-	foreignSlot?: number;
+	namespaceExport?: Binding;
 }
 
 function compileMemberLoad(
+	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
 	member: CompiledMemberReference,
 ): number {
+	if (member.namespaceExport !== undefined) {
+		const destination = loadRegisterFromLocation(
+			fn,
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, member.namespaceExport),
+		);
+		emitTdzGuard(program, fn, cursor.block, member.namespaceExport, destination);
+		return destination;
+	}
 	const destination = nextCoreVariable(fn);
 	cursor.block.emitter.emit(
-		member.foreignSlot !== undefined
-			? { type: "loadGlobal", registers: [destination], index: member.foreignSlot }
-			: member.receiver === undefined
-				? {
-						type: "loadProperty",
-						registers: [destination, member.object, member.key],
-					}
-				: {
-						type: "loadSuperProperty",
-						registers: [destination, member.object, member.key, member.receiver],
-					},
+		member.receiver === undefined
+			? {
+					type: "loadProperty",
+					registers: [destination, member.object, member.key],
+				}
+			: {
+					type: "loadSuperProperty",
+					registers: [destination, member.object, member.key, member.receiver],
+				},
 	);
 	return destination;
 }
@@ -13612,24 +13674,30 @@ function compileMemberObjectAndKey(
 		object,
 		key,
 		receiver,
-		foreignSlot: foreignNamespaceMember(program, fn, memberExpression),
+		namespaceExport: namespaceMemberExport(program, fn, memberExpression),
 	};
 }
 
-function foreignNamespaceMember(
+/**
+ * The exporter binding a static `namespace.name` read resolves to. A module
+ * namespace object's property is a live view of that binding, so reading the binding
+ * with its own TDZ guard is the same read without the exotic object's lookup. Callers
+ * still evaluate the namespace binding and keep it as a call's receiver.
+ */
+function namespaceMemberExport(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	member: ESTree.MemberExpression,
-): number | undefined {
+): Binding | undefined {
 	if (
-		program.foreignNamespaces.size === 0 ||
+		program.namespaceMembers.size === 0 ||
 		member.object.type !== "Identifier" ||
 		fn.semanticFile.withDynamicNodes.has(member.object)
 	)
 		return undefined;
 	const binding = fn.semanticFile.nodeToBinding.get(member.object);
 	const exports =
-		binding === undefined ? undefined : program.foreignNamespaces.get(binding);
+		binding === undefined ? undefined : program.namespaceMembers.get(binding);
 	if (exports === undefined) return undefined;
 	const name =
 		!member.computed && member.property.type === "Identifier"
@@ -13639,10 +13707,10 @@ function foreignNamespaceMember(
 				: undefined;
 	const exporter = name === undefined ? undefined : exports.get(name);
 	if (exporter === undefined) return undefined;
-	// Eager host namespaces read immutable installer slots. Callers evaluate the
-	// namespace binding first so replacing its lookup preserves the TDZ check.
-	const location = getOrCreateBindingLocation(program, fn, exporter);
-	return location.type === "global" ? location.index : undefined;
+	// The namespace object only exposes exports that live in global slots.
+	return getOrCreateBindingLocation(program, fn, exporter).type === "global"
+		? exporter
+		: undefined;
 }
 
 /**
@@ -14571,7 +14639,7 @@ function dynamicImportCandidates(
 	fn: CoreFrontendFunction,
 ): Array<DynamicImportCandidate> {
 	const record = program.semantic.graph?.modules.get(fn.semanticFile.path);
-	const files = new Map(program.semantic.files.map((file) => [file.path, file]));
+	const files = program.filesByPath;
 	const candidates = new Map<string, DynamicImportCandidate>();
 	for (const targetPath of program.semantic.graph?.dynamicImportCandidates ?? []) {
 		if (!files.has(targetPath) && !program.failedModules.has(targetPath)) continue;
@@ -15197,7 +15265,7 @@ function compileCallValue(
 	} else if (calleeNode.type === "MemberExpression") {
 		const member = compileMemberObjectAndKey(program, fn, cursor, calleeNode);
 		thisRegister = member.receiver ?? member.object;
-		callee = compileMemberLoad(fn, cursor, member);
+		callee = compileMemberLoad(program, fn, cursor, member);
 	} else if (
 		calleeNode.type === "Identifier" &&
 		fn.semanticFile.withDynamicNodes.has(calleeNode)
@@ -15995,7 +16063,7 @@ function emitDeferredModuleNamespaceInits(
 	fn: CoreFrontendFunction,
 	block: CoreFrontendBlock,
 ): void {
-	const files = new Map(program.semantic.files.map((file) => [file.path, file]));
+	const files = program.filesByPath;
 	const initialized = new Set<string>();
 	for (const imports of program.namespaceImports.values()) {
 		for (const namespaceImport of imports) {

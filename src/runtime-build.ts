@@ -392,7 +392,7 @@ function objectActionKey(
 		preprocessedDigest,
 		arguments: runtimeObjectCodegenArguments(context, layout, source),
 		environment: context.environmentFingerprint,
-		toolchain: context.toolchain.fingerprint,
+		cc: context.toolchain.ccFingerprint,
 		target: context.toolchain.target,
 	});
 }

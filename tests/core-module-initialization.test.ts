@@ -106,6 +106,19 @@ describe("module bindings initialized before user code", () => {
 		expect(opcodes).not.toContain("throwIfTdz");
 	});
 
+	it("reads static namespace members from the exporters' initialized bindings", () => {
+		const opcodes = readerOpcodes({
+			"entry.mjs": entry,
+			"limits.mjs": `
+				import * as bound from "./bound.mjs";
+				export function reader(value) { return bound.scale(value) % bound.LIMIT; }
+			`,
+			"bound.mjs": `export const LIMIT = 7; export function scale(value) { return value * 3; }`,
+		});
+		expect(opcodes.filter((opcode) => opcode.startsWith("loadProperty"))).toEqual([]);
+		expect(opcodes).not.toContain("throwIfTdz");
+	});
+
 	it("keeps the check in an importer that shares an import cycle with the owner", () => {
 		const opcodes = readerOpcodes({
 			"entry.mjs": entry,

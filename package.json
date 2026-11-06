@@ -1,6 +1,6 @@
 {
 	"name": "maligator",
-	"version": "0.1.0-alpha.31",
+	"version": "0.1.0-alpha.32",
 	"private": true,
 	"description": "Ahead-of-time JavaScript compiler and native runtime",
 	"homepage": "https://github.com/dirkdev98/maligator#readme",
@@ -43,6 +43,7 @@
 		"generate:third-party-notices": "node ./scripts/generate-third-party-notices.ts",
 		"lint": "node ./scripts/quality.ts lint",
 		"lint:ci": "node ./scripts/quality.ts lint-ci",
+		"release:assemble": "node ./scripts/release.ts assemble",
 		"release:build": "node ./scripts/release.ts build",
 		"release:create-github": "node ./scripts/release.ts create-github",
 		"release:pack": "node ./scripts/release.ts pack",

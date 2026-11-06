@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { expect, test } from "vitest";
 import { planModuleEvaluation } from "../src/compiler/frontend/module-evaluation-plan.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
@@ -73,3 +76,29 @@ test.each(["development", "full"] as const)(
 		);
 	},
 );
+
+test("instantiates an import chain with code that grows linearly with its modules", () => {
+	const directory = mkdtempSync(path.join(tmpdir(), "mal-module-chain-"));
+	try {
+		const instructions = (length: number): number => {
+			for (let index = 0; index < length; index++) {
+				const next = `m${length}-${index + 1}.mjs`;
+				writeFileSync(
+					path.join(directory, `m${length}-${index}.mjs`),
+					index + 1 < length
+						? `import { f${index + 1} } from "./${next}";\nexport const value${index} = ${index};\nexport function f${index}(x) { return f${index + 1}(x) + value${index}; }\n`
+						: `export const value${index} = ${index};\nexport function f${index}(x) { return x + value${index}; }\n`,
+				);
+			}
+			const image = compileEntrypoint(path.join(directory, `m${length}-0.mjs`), {
+				optimization: "development",
+			});
+			return image.runtime.functions.reduce((sum, fn) => sum + fn.instructions.length, 0);
+		};
+		const short = instructions(20);
+		// Instantiating every dependency closure inline in each module would triple it.
+		expect(instructions(40)).toBeLessThan(short * 2.5);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});

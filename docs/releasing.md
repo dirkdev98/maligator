@@ -34,10 +34,11 @@ license files. Run `npm run generate:third-party-notices` after changing
 libuv, and commit the result before cutting a release.
 
 The `Prepare release packages` GitHub Actions workflow is the preferred packaging
-path. Dispatch it on the exact release commit. It cross-builds all four targets on
-macOS ARM, executes the native binary and installed npm launcher on every supported
-host, and retains the validated tarballs plus `packages.json` for seven days. The
-intermediate multi-target workspace is deleted after the smoke matrix passes.
+path. Dispatch it on the exact release commit. It cross-builds each of the four
+targets in its own macOS ARM job, assembles and packs them in one workspace, executes
+the native binary and installed npm launcher on every supported host, and retains
+the validated tarballs plus `packages.json` for seven days. The intermediate
+per-target builds and workspace are deleted after the smoke matrix passes.
 
 ## Create the GitHub release
 
@@ -117,8 +118,10 @@ npm run release:create-github -- --confirm "$(node -p "require('./package.json')
 `release:build` and `release:pack` default to `aarch64-apple-darwin` so a local
 release only builds Apple Silicon macOS. Pass `-- --all-targets` for the complete
 matrix or `-- --target <rust-triple>` for one explicit target. Build and pack must
-use the same selection. Packing a native-host target also installs the two tarballs
-into a clean temporary project and verifies the installed launcher.
+use the same selection. `release:assemble` stages the launcher for a selection whose
+targets were built separately and merged into `dist/release`, as the workflow does.
+Packing a native-host target also installs the two tarballs into a clean temporary
+project and verifies the installed launcher.
 
 `release:publish` verifies every selected tarball against `packages.json`, publishes
 the platform packages first, and publishes `@maligator/cli` last under the `alpha`
