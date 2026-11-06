@@ -166,7 +166,8 @@ bool mal_gc_cycle_active(const MalVm *vm);
 u64 mal_gc_allocated_bytes(MalVm *vm);
 u64 mal_gc_collection_count(MalVm *vm);
 
-/* Allocate the per-isolate collector state and read diagnostic/pacing settings. */
+/* Allocate the per-isolate collector state and read diagnostic/pacing settings.
+ * Runs before mal_heap_init, so it must not read or write `vm->heap`. */
 void mal_gc_init(MalVm *vm);
 /* Install the collector policy after mal_heap_init has reset the heap fields. */
 void mal_gc_configure_heap(MalVm *vm);
