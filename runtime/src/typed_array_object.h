@@ -74,6 +74,28 @@ MalTypedArrayObject *mal_typed_array_object_new(
 /** Bytes per element for a kind. */
 u32 mal_typed_array_element_size(MalTypedArrayKind kind);
 
+/**
+ * The span of a fixed-length view over an attached, unshared, fixed-size buffer.
+ * Such a buffer keeps its length until it detaches, so the view stays within the
+ * bounds it was built with and needs no extent check. Callers on a per-call path
+ * try this inline first; false leaves every other view to the general span.
+ */
+static inline bool mal_typed_array_object_fixed_span(
+    const MalTypedArrayObject *array, MalTypedArraySpan *out) {
+    static const u8 sizes[MAL_TA_KIND_COUNT] = {1, 1, 1, 2, 2, 4, 4, 4, 8, 8, 8};
+    const MalArrayBufferObject *buffer = array->buffer;
+    if (buffer == nullptr || buffer->detached || buffer->resizable
+        || buffer->shared_memory != nullptr || array->length_tracking) return false;
+    *out = (MalTypedArraySpan) {
+        .data = array->length == 0 ? nullptr : buffer->data + array->byte_offset,
+        .length = array->length,
+        .kind = array->kind,
+        .element_size = sizes[array->kind],
+        .shared = false,
+    };
+    return true;
+}
+
 /** Whether a kind holds BigInt elements (BigInt64Array / BigUint64Array). */
 bool mal_typed_array_is_bigint(MalTypedArrayKind kind);
 

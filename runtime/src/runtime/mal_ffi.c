@@ -378,6 +378,21 @@ __attribute__((always_inline)) bool mal_ffi_to_bytes(
         *length = 0;
         return true;
     }
+    MalTypedArraySpan view;
+    if (mal_value_is_typed_array_object(value)
+        && mal_typed_array_object_fixed_span(mal_value_to_typed_array_object(value), &view)) {
+        MalArrayBufferObject *buffer = mal_value_to_typed_array_object(value)->buffer;
+        if (writable && buffer->immutable)
+            return ffi_fail(
+                vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a buffer that is not immutable");
+        *data = view.data;
+        *length = (size_t) view.length * view.element_size;
+        if (pin != nullptr) {
+            buffer->pins++;
+            *pin = buffer;
+        }
+        return true;
+    }
     MalBufferSourceSpan span;
     MalBufferSourceSpanStatus status = mal_buffer_source_span(value, &span);
     if (status == MAL_BUFFER_SOURCE_SPAN_OK && writable && span.buffer->immutable) {
@@ -400,11 +415,12 @@ __attribute__((always_inline)) bool mal_ffi_to_bytes(
     return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, expectation);
 }
 
-bool mal_ffi_is_typed_array(MalValue value) {
+// Inlined into each binding, like buffer conversion, so constant view layouts fold.
+__attribute__((always_inline)) bool mal_ffi_is_typed_array(MalValue value) {
     return mal_value_is_typed_array_object(value);
 }
 
-bool mal_ffi_to_numeric_view(
+__attribute__((always_inline)) bool mal_ffi_to_numeric_view(
     MalVm *vm, MalValue value, MalFfiNumericKind expected, size_t element_size, size_t alignment,
     bool writable, const MalFfiSite *site, const void **data, int32_t *length, void **pin) {
     static const MalTypedArrayKind kinds[] = {
@@ -417,7 +433,8 @@ bool mal_ffi_to_numeric_view(
         return mal_ffi_expected(vm, site, "a matching numeric typed array");
     MalTypedArrayObject *array = mal_value_to_typed_array_object(value);
     MalTypedArraySpan span;
-    if (!mal_typed_array_object_span(array, &span) || span.shared || span.kind != kinds[expected]
+    if (!(mal_typed_array_object_fixed_span(array, &span) || mal_typed_array_object_span(array, &span))
+        || span.shared || span.kind != kinds[expected]
         || span.element_size != element_size || alignment == 0
         || (span.data != nullptr && (uintptr_t) span.data % alignment != 0))
         return mal_ffi_expected(vm, site, "matching, attached, unshared, in-bounds numeric storage");
