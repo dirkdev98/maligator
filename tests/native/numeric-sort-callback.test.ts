@@ -10,6 +10,7 @@ import {
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
+import { preparedNativeEvalConfig } from "../helpers/native-eval-config.ts";
 
 const fixture = "tests/local/numeric-sort-callback.mjs";
 const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" }).trim();
@@ -42,9 +43,7 @@ describe("numeric sort callback specialization through both emitters", () => {
 			name: "numeric-sort-call-override",
 			mainFile: HOST_MAIN,
 			outDir: mkdtempSync(join(tmpdir(), "mal-numeric-sort-call-override-")),
-			config: resolveBuildConfig({
-				engine: { primordials: "mutable", eval: true, realms: true },
-			}),
+			config: preparedNativeEvalConfig(),
 		});
 		for (const binary of [pair.compiled, pair.interpreted])
 			expect(runToStdout(binary, { env: STRESS_ENV }).trim()).toBe(expectedOverride);
@@ -59,9 +58,10 @@ describe("numeric sort callback specialization through both emitters", () => {
 				mainFile: HOST_MAIN,
 				environment: { ...process.env, MAL_PERF_STATS: "1" },
 				outDir: mkdtempSync(join(tmpdir(), "mal-numeric-sort-callback-")),
-				config: resolveBuildConfig({
-					engine: { primordials, eval: primordials === "mutable" },
-				}),
+				config:
+					primordials === "mutable"
+						? preparedNativeEvalConfig()
+						: resolveBuildConfig({ engine: { primordials, eval: false } }),
 			});
 			const run = spawnSync(pair.compiled, [], {
 				encoding: "utf8",

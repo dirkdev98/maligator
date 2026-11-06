@@ -28,3 +28,11 @@ export function preparedNativeEvalConfig({
 		surface: { webPlatform, node },
 	});
 }
+
+/**
+ * The runtime `maligator build` resolves for an application that enables only eval and
+ * the Node surface. Native global setup prebuilds it for product builds of such configs.
+ */
+export function defaultNodeEvalConfig(): ResolvedBuildConfig {
+	return resolveBuildConfig({ engine: { eval: true }, surface: { node: true } });
+}

@@ -7,7 +7,8 @@ export type NativePreparation =
 	| "realms-disabled"
 	| "perf-stats"
 	| "locked-perf-stats"
-	| "node-perf-stats";
+	| "node-perf-stats"
+	| "node-eval-defaults";
 
 const perfManifests = new Map<string, ReadonlySet<string>>();
 
@@ -43,6 +44,10 @@ export function nativePreparations(root: string, file: string): Array<NativePrep
 			: []),
 		...(relative === "tests/native/node-http-ready-queues.test.ts"
 			? (["node-perf-stats"] as const)
+			: []),
+		// Its product build config must keep resolving to `defaultNodeEvalConfig()`.
+		...(relative === "tests/native/express-valibot-build.test.ts"
+			? (["node-eval-defaults"] as const)
 			: []),
 	];
 }
