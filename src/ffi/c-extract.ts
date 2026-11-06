@@ -1173,6 +1173,9 @@ function probe(
 			FFI_C_STANDARD,
 			"-fsyntax-only",
 			"-ferror-limit=0",
+			// Expected failures only need their declarations marked. Snippets for thousands
+			// of them, as OpenSSL's macros produce, cost more than the probe's own analysis.
+			"-fno-caret-diagnostics",
 			"-Xclang",
 			"-ast-dump=json",
 			"-Xclang",
@@ -1634,6 +1637,7 @@ function probeDeclarationTypes(
 			FFI_C_STANDARD,
 			"-fsyntax-only",
 			"-ferror-limit=0",
+			"-fno-caret-diagnostics",
 			"-Xclang",
 			"-ast-dump=json",
 			"-Xclang",
@@ -1729,6 +1733,7 @@ function probeTypeMetadata(
 			FFI_C_STANDARD,
 			"-fsyntax-only",
 			"-ferror-limit=0",
+			"-fno-caret-diagnostics",
 			"-Xclang",
 			"-ast-dump=json",
 			"-Xclang",
