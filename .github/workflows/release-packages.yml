@@ -12,13 +12,16 @@ concurrency:
 
 jobs:
   build:
-    name: Build release matrix
+    name: Build ${{ matrix.target }}
     runs-on: macos-15
-    timeout-minutes: 180
-    outputs:
-      version: ${{ steps.metadata.outputs.version }}
-      workspace_artifact_id: ${{ steps.workspace.outputs['artifact-id'] }}
-      workspace_artifact_name: ${{ steps.metadata.outputs.workspace_artifact_name }}
+    timeout-minutes: 90
+    strategy:
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+          - aarch64-unknown-linux-gnu
+          - x86_64-unknown-linux-gnu
     steps:
       - name: Check out the selected revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -28,14 +31,6 @@ jobs:
 
       - name: Set up macOS
         uses: ./.github/actions/setup-macos
-
-      - name: Read release metadata
-        id: metadata
-        shell: bash
-        run: |
-          version="$(node -p 'require("./package.json").version')"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "workspace_artifact_name=release-workspace-$version-$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
 
       - name: Install cross-build tools
         shell: bash
@@ -49,17 +44,72 @@ jobs:
           tar -xJf "$zig_archive" -C "$RUNNER_TEMP"
           echo "ZIG=$zig_dir/zig" >> "$GITHUB_ENV"
           "$zig_dir/zig" version
-          rustup target add \
-            aarch64-apple-darwin \
-            x86_64-apple-darwin \
-            aarch64-unknown-linux-gnu \
-            x86_64-unknown-linux-gnu
+          rustup target add "$RUST_TARGET"
+        env:
+          RUST_TARGET: ${{ matrix.target }}
 
       - name: Check the runner environment
         run: npm run env:check -- --json
 
-      - name: Build every release target
-        run: npm run release:build -- --all-targets
+      - name: Build the release target
+        run: npm run release:build -- --target ${{ matrix.target }}
+
+      - name: Archive the target build
+        shell: bash
+        run: >-
+          tar --exclude=dist/release/build
+          -czf "$RUNNER_TEMP/release-target-${{ matrix.target }}.tar.gz" dist/release
+
+      - name: Upload the target build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-target-${{ matrix.target }}
+          path: ${{ runner.temp }}/release-target-${{ matrix.target }}.tar.gz
+          compression-level: 0
+          retention-days: 1
+          overwrite: true
+
+  assemble:
+    name: Assemble release packages
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      workspace_artifact_name: ${{ steps.metadata.outputs.workspace_artifact_name }}
+    steps:
+      - name: Check out the selected revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up macOS
+        uses: ./.github/actions/setup-macos
+
+      - name: Read release metadata
+        id: metadata
+        shell: bash
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "workspace_artifact_name=release-workspace-$version-$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download the target builds
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-target-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/release-targets
+
+      - name: Restore the target builds
+        shell: bash
+        run: |
+          for archive in "$RUNNER_TEMP"/release-targets/release-target-*.tar.gz; do
+            tar -xzf "$archive"
+          done
+
+      - name: Assemble every release target
+        run: npm run release:assemble -- --all-targets
 
       - name: Pack and smoke the ARM macOS packages
         run: npm run release:pack -- --all-targets
@@ -67,21 +117,21 @@ jobs:
       - name: Archive the portable release workspace
         shell: bash
         run: >-
-          tar --exclude=dist/release/build --exclude=dist/release/pack-smoke
+          tar --exclude=dist/release/pack-smoke
           -czf "$RUNNER_TEMP/release-workspace.tar.gz" dist/release
 
       - name: Upload the release workspace
-        id: workspace
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.metadata.outputs.workspace_artifact_name }}
           path: ${{ runner.temp }}/release-workspace.tar.gz
           compression-level: 0
           retention-days: 1
+          overwrite: true
 
   smoke:
     name: Smoke ${{ matrix.target }}
-    needs: build
+    needs: assemble
     strategy:
       fail-fast: false
       matrix:
@@ -117,7 +167,7 @@ jobs:
       - name: Download the release workspace
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.build.outputs.workspace_artifact_name }}
+          name: ${{ needs.assemble.outputs.workspace_artifact_name }}
           path: ${{ runner.temp }}/release-workspace
 
       - name: Restore the release workspace
@@ -139,7 +189,7 @@ jobs:
 
   packages:
     name: Publish workflow artifact
-    needs: [build, smoke]
+    needs: [assemble, smoke]
     permissions:
       actions: write
       contents: read
@@ -149,7 +199,7 @@ jobs:
       - name: Download the validated release workspace
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.build.outputs.workspace_artifact_name }}
+          name: ${{ needs.assemble.outputs.workspace_artifact_name }}
           path: ${{ runner.temp }}/release-workspace
 
       - name: Extract the npm packages
@@ -162,14 +212,17 @@ jobs:
       - name: Upload the validated packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: maligator-${{ needs.build.outputs.version }}-packages
+          name: maligator-${{ needs.assemble.outputs.version }}-packages
           path: ${{ runner.temp }}/release-packages
           compression-level: 0
           retention-days: 7
 
-      - name: Remove the intermediate workspace artifact
+      - name: Remove the intermediate artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh api --method DELETE
-          "repos/$GITHUB_REPOSITORY/actions/artifacts/${{ needs.build.outputs.workspace_artifact_id }}"
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name | startswith("release-")) | .id' |
+            while read -r id; do
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+            done

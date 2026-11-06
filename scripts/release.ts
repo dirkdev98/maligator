@@ -347,7 +347,7 @@ function buildRelease(args: Array<string>): void {
 		const targetStartedAt = performance.now();
 		const prefix = `[${index + 1}/${selected.length} ${target.rust}]`;
 		releaseLog(`${prefix} build started`);
-		const rootName = `maligator-v${version}-${target.rust}`;
+		const rootName = releaseRootName(version, target);
 		const artifactDirectory = path.join(releaseRoot, "artifacts", rootName);
 		buildProductCli({
 			repositoryRoot,
@@ -370,13 +370,49 @@ function buildRelease(args: Array<string>): void {
 			`${prefix} complete in ${formatDuration(performance.now() - targetStartedAt)}`,
 		);
 	}
+	stageSelection(version, selected);
+	releaseLog(`release artifacts ready: ${releaseRoot}`);
+}
+
+function releaseRootName(version: string, target: (typeof targets)[number]): string {
+	return `maligator-v${version}-${target.rust}`;
+}
+
+function stageSelection(version: string, selected: typeof targets): void {
+	rmSync(path.join(releaseRoot, "npm/cli"), { recursive: true, force: true });
 	stageLauncherPackage(version, selected);
 	writeJson(releaseSelectionPath, {
 		schema: 1,
 		version,
 		targets: selected.map((target) => target.rust),
 	});
-	releaseLog(`release artifacts ready: ${releaseRoot}`);
+}
+
+/**
+ * Stage the launcher and selection over targets that separate `build --target` runs
+ * produced and that were merged into one release root, so `pack` sees one build.
+ */
+function assembleRelease(args: Array<string>): void {
+	const version = packageVersion();
+	assertVersionSynchronized(version);
+	const selected = selectedTargets(args);
+	for (const target of selected) {
+		const rootName = releaseRootName(version, target);
+		const missing = [
+			path.join(releaseRoot, "artifacts", rootName, "bin/maligator"),
+			path.join(releaseRoot, "artifacts", `${rootName}.tar.gz`),
+			path.join(releaseRoot, "npm", target.packageName.split("/")[1]!, "bin/maligator"),
+		].filter((file) => !existsSync(file));
+		if (missing.length > 0) {
+			throw new Error(
+				`release build output for ${target.rust} is missing: ${missing.join(", ")}`,
+			);
+		}
+	}
+	stageSelection(version, selected);
+	releaseLog(
+		`assembled ${version} for ${selected.map((target) => target.rust).join(", ")}`,
+	);
 }
 
 function smokeRelease(): void {
@@ -396,7 +432,7 @@ function smokeRelease(): void {
 	const binary = path.join(
 		releaseRoot,
 		"artifacts",
-		`maligator-v${version}-${target.rust}`,
+		releaseRootName(version, target),
 		"bin/maligator",
 	);
 	if (!existsSync(binary)) {
@@ -989,7 +1025,7 @@ function publishRelease(args: Array<string>): void {
 
 function usage(): never {
 	throw new Error(
-		"usage: node scripts/release.ts <version-alpha|verify-tag|build|pack|create-github|publish|smoke> [options]",
+		"usage: node scripts/release.ts <version-alpha|verify-tag|build|assemble|pack|create-github|publish|smoke> [options]",
 	);
 }
 
@@ -1000,7 +1036,8 @@ if (import.meta.main) {
 	else if (command === "build") {
 		requireHeapLimit(8192);
 		buildRelease(process.argv.slice(3));
-	} else if (command === "pack") packRelease(process.argv.slice(3));
+	} else if (command === "assemble") assembleRelease(process.argv.slice(3));
+	else if (command === "pack") packRelease(process.argv.slice(3));
 	else if (command === "create-github") createGitHubRelease(process.argv.slice(3));
 	else if (command === "publish") publishRelease(process.argv.slice(3));
 	else if (command === "smoke") smokeRelease();
