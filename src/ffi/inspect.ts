@@ -3,6 +3,7 @@ import type {
 	BindingPlan,
 	BoundFunction,
 	Gap,
+	GapCode,
 	JsValue,
 	MappedParameter,
 } from "./binding-plan.ts";
@@ -200,15 +201,19 @@ const RESERVED = new Set(
 	).split(" "),
 );
 
-/** The kind of fact a gap reason asks for. */
-function gapNeed(reason: string): string {
-	if (reason.includes("handle fact")) return "a handle type";
-	if (reason.includes("callback")) return "a callback";
-	if (reason.includes("variadic")) return "variants";
-	if (reason.includes("pointer")) return "a pointer fact";
-	if (reason.includes("char")) return "text or bytes";
-	return "other facts";
-}
+const GAP_NEEDS: Readonly<Record<GapCode, string>> = {
+	handle: "a handle type",
+	callback: "a callback",
+	variants: "variants",
+	pointer: "a pointer fact",
+	text: "text or bytes",
+	array: "an array length",
+	shape: "a union selection",
+	lifetime: "a result lifetime",
+	native: "a native representation",
+	ownership: "an ownership choice",
+	unsupported: "unsupported C",
+};
 
 function contractKey(key: string): string {
 	return /^(?:[A-Za-z_$][\w$]*|[1-9]\d*)$/.test(key) ? key : JSON.stringify(key);
@@ -600,7 +605,7 @@ export function formatInspection(inspection: FfiInspectionData): string {
 		// What the gaps ask for, so a large library shows which facts unlock the most.
 		const needs = new Map<string, number>();
 		for (const entry of needFacts) {
-			for (const need of new Set((entry.gaps ?? []).map((gap) => gapNeed(gap.reason))))
+			for (const need of new Set((entry.gaps ?? []).map((gap) => GAP_NEEDS[gap.code])))
 				needs.set(need, (needs.get(need) ?? 0) + 1);
 		}
 		lines.push(

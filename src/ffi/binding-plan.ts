@@ -26,7 +26,7 @@ import {
 import { formatCDeclaration, isCNativeValueType, parseCType } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import type { LibraryFacts } from "./contract.ts";
-import { FfiError } from "./ffi-error.ts";
+import { FfiFactError } from "./ffi-error.ts";
 import type { FfiText } from "./text.ts";
 
 /**
@@ -159,7 +159,27 @@ export type JsValue =
 			readonly lifetime?: "library";
 	  };
 
-type Mapping = { readonly value: JsValue } | { readonly gap: string };
+/**
+ * The fact a gap asks for: a handle type, a callback, typed variants, a pointer role
+ * (a handle, buffer, out parameter, or string), text or bytes, an array length or
+ * element mapping, a union selection, a result lifetime, a native representation, an
+ * ownership choice, or `unsupported` when no fact binds the value.
+ */
+export type GapCode =
+	| "handle"
+	| "callback"
+	| "variants"
+	| "pointer"
+	| "text"
+	| "array"
+	| "shape"
+	| "lifetime"
+	| "native"
+	| "ownership"
+	| "unsupported";
+
+type Gapped = { readonly gap: string; readonly code: GapCode };
+type Mapping = { readonly value: JsValue } | Gapped;
 
 export type NumericView =
 	| "Int8Array"
@@ -250,7 +270,10 @@ export interface BoundFunction {
 export interface Gap {
 	/** `return`, `param 2 (title)`, or `arguments` for variadics. */
 	readonly at: string;
+	readonly code: GapCode;
 	readonly reason: string;
+	/** The C parameter the missing fact belongs to. */
+	readonly param?: number;
 }
 
 export interface UnboundFunction {
@@ -558,6 +581,35 @@ function factRecord(model: CModel, key: string): CRecord | undefined {
  * Handle types from the contract's facts. A handle copies the struct when the
  * library passes it by value, and otherwise holds the pointer the library returns.
  */
+interface ModelIndex {
+	readonly functions: ReadonlyMap<string, CFunction>;
+	/** Structs some function takes or returns by value. */
+	readonly passedByValue: ReadonlySet<string>;
+}
+
+const modelIndexes = new WeakMap<CModel, ModelIndex>();
+
+/** Lookups the planner repeats per fact; suggestion validation plans one model repeatedly. */
+function modelIndex(model: CModel): ModelIndex {
+	const cached = modelIndexes.get(model);
+	if (cached !== undefined) return cached;
+	const functions = new Map<string, CFunction>();
+	const passedByValue = new Set<string>();
+	for (const declaration of model.functions) {
+		if (!functions.has(declaration.name)) functions.set(declaration.name, declaration);
+		for (const type of [
+			declaration.returns,
+			...declaration.params.map(({ type }) => type),
+		]) {
+			const resolved = resolveCType(model, type);
+			if (resolved.kind === "record") passedByValue.add(resolved.name);
+		}
+	}
+	const index = { functions, passedByValue };
+	modelIndexes.set(model, index);
+	return index;
+}
+
 function handleTypes(
 	model: CModel,
 	facts: LibraryFacts,
@@ -572,7 +624,11 @@ function handleTypes(
 				(field) => field.callable === undefined && field.handle === undefined,
 			)
 		)
-			throw new FfiError(`types.${key}.fields: managed fields require caller storage`);
+			throw new FfiFactError(
+				"unmet-requirement",
+				`types.${key}.fields`,
+				"managed fields require caller storage",
+			);
 		if (typeFacts.fields !== undefined) {
 			const owned = Object.values(typeFacts.fields).every(
 				(field) => field.handle?.owned === true,
@@ -582,39 +638,61 @@ function handleTypes(
 				(handle !== undefined &&
 					Object.values(typeFacts.fields).some((field) => field.handle?.owned === true))
 			)
-				throw new FfiError(
-					`types.${key}.fields: independent owned fields require a plain value record; borrowed fields require a handle`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`types.${key}.fields`,
+					"independent owned fields require a plain value record; borrowed fields require a handle",
 				);
 		}
 		if (handle === undefined) {
 			if (!model.typedefs.has(key) && !model.records.has(key) && !model.enums.has(key))
-				throw new FfiError(`types.${key}: the headers declare no type named '${key}'`);
+				throw new FfiFactError(
+					"unknown-name",
+					`types.${key}`,
+					`the headers declare no type named '${key}'`,
+				);
 			continue;
 		}
 		const record = factRecord(model, key);
 		if (record === undefined) {
-			throw new FfiError(`types.${key}: the headers declare no struct named '${key}'`);
+			throw new FfiFactError(
+				"unknown-name",
+				`types.${key}`,
+				`the headers declare no struct named '${key}'`,
+			);
 		}
 		if (handles.has(record.name)) {
-			throw new FfiError(`types.${key}: ${record.name} already has a handle fact`);
+			throw new FfiFactError(
+				"conflict",
+				`types.${key}`,
+				`${record.name} already has a handle fact`,
+			);
 		}
 		if (handle.trailing !== undefined && handle.storage !== "caller")
-			throw new FfiError(`types.${key}.handle.trailing: requires caller storage`);
+			throw new FfiFactError(
+				"unmet-requirement",
+				`types.${key}.handle.trailing`,
+				"requires caller storage",
+			);
 		if (
 			handle.layout !== undefined &&
 			(handle.storage !== "caller" || handle.trailing !== undefined)
 		)
-			throw new FfiError(
-				`types.${key}.handle.layout: requires caller storage without a trailing field`,
+			throw new FfiFactError(
+				"unmet-requirement",
+				`types.${key}.handle.layout`,
+				"requires caller storage without a trailing field",
 			);
 		if (handle.storage === "caller") {
 			if (handle.layout !== undefined) {
 				if (record.complete || record.tag !== "struct")
-					throw new FfiError(
-						`types.${key}.handle.layout: queries require an incomplete struct`,
+					throw new FfiFactError(
+						"unmet-requirement",
+						`types.${key}.handle.layout`,
+						"queries require an incomplete struct",
 					);
 				for (const [field, name] of Object.entries(handle.layout)) {
-					const query = model.functions.find((entry) => entry.name === name);
+					const query = modelIndex(model).functions.get(name);
 					const result =
 						query === undefined ? undefined : resolveCType(model, query.returns);
 					const bytes =
@@ -633,21 +711,27 @@ function handleTypes(
 						bytes < 1 ||
 						bytes > 8
 					)
-						throw new FfiError(
-							`types.${key}.handle.layout.${field}: '${name}' must take no arguments and return an unsigned integer up to 64 bits`,
+						throw new FfiFactError(
+							"inapplicable",
+							`types.${key}.handle.layout.${field}`,
+							`'${name}' must take no arguments and return an unsigned integer up to 64 bits`,
 						);
 				}
 			} else if (!record.complete || record.tag !== "struct")
-				throw new FfiError(
-					`types.${key}.handle.storage: caller storage needs a complete struct`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`types.${key}.handle.storage`,
+					"caller storage needs a complete struct",
 				);
 			const variable = record.fields.filter((field) => {
 				const type = resolveCType(model, field.type);
 				return type.kind === "array" && (type.length === undefined || type.length === 0);
 			});
 			if (variable.length > 0 && handle.trailing === undefined)
-				throw new FfiError(
-					`types.${key}.handle.storage: variable-length allocation size needs a trailing field fact`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`types.${key}.handle.storage`,
+					"variable-length allocation size needs a trailing field fact",
 				);
 			if (handle.trailing !== undefined) {
 				const field = record.fields.at(-1);
@@ -658,8 +742,10 @@ function handleTypes(
 					variable[0] !== field ||
 					type?.kind !== "array"
 				)
-					throw new FfiError(
-						`types.${key}.handle.trailing: name the final flexible or zero-length array field`,
+					throw new FfiFactError(
+						"unmet-requirement",
+						`types.${key}.handle.trailing`,
+						"name the final flexible or zero-length array field",
 					);
 				const complete = (type: CType): boolean => {
 					const resolved = resolveCType(model, type);
@@ -674,16 +760,20 @@ function handleTypes(
 					return !["void", "function", "unsupported", "typedef"].includes(resolved.kind);
 				};
 				if (!complete(type.of))
-					throw new FfiError(
-						`types.${key}.handle.trailing: array elements need a complete object type`,
+					throw new FfiFactError(
+						"unmet-requirement",
+						`types.${key}.handle.trailing`,
+						"array elements need a complete object type",
 					);
 			}
 			if (
 				(handle.destroy !== undefined || handle.collect === true) &&
 				!(typeof handle.destroy === "string" && handle.collect === true)
 			)
-				throw new FfiError(
-					`types.${key}.handle.storage: managed caller cleanup requires an unconditional collecting destructor`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`types.${key}.handle.storage`,
+					"managed caller cleanup requires an unconditional collecting destructor",
 				);
 		}
 		const isRecord = (type: CType): boolean => {
@@ -696,21 +786,27 @@ function handleTypes(
 				typeof handle.destroy === "string" ? handle.destroy : handle.destroy.function;
 			const success =
 				typeof handle.destroy === "string" ? undefined : handle.destroy.success;
-			const declaration = model.functions.find((entry) => entry.name === name);
+			const declaration = modelIndex(model).functions.get(name);
 			if (declaration === undefined) {
-				throw new FfiError(
-					`types.${key}.handle.destroy: the headers declare no function '${name}'`,
+				throw new FfiFactError(
+					"unknown-name",
+					`types.${key}.handle.destroy`,
+					`the headers declare no function '${name}'`,
 				);
 			}
 			if (success !== undefined) {
 				const result = resolveCType(model, declaration.returns);
 				if (!["integer", "enum", "bool"].includes(result.kind))
-					throw new FfiError(
-						`types.${key}.handle.destroy.success: ${name} must return an integer or boolean`,
+					throw new FfiFactError(
+						"inapplicable",
+						`types.${key}.handle.destroy.success`,
+						`${name} must return an integer or boolean`,
 					);
 				if (handle.collect === true)
-					throw new FfiError(
-						`types.${key}.handle.collect: cleanup that can fail requires explicit disposal`,
+					throw new FfiFactError(
+						"unmet-requirement",
+						`types.${key}.handle.collect`,
+						"cleanup that can fail requires explicit disposal",
 					);
 				if (/^[A-Za-z_]\w*$/.test(success) && success !== "true" && success !== "false") {
 					const macro = model.macros.find((entry) => entry.name === success);
@@ -724,8 +820,10 @@ function handleTypes(
 							entry.constants.some((constant) => constant.name === success),
 						)
 					)
-						throw new FfiError(
-							`types.${key}.handle.destroy.success: '${success}' is not a known integer constant`,
+						throw new FfiFactError(
+							"unknown-name",
+							`types.${key}.handle.destroy.success`,
+							`'${success}' is not a known integer constant`,
 						);
 				}
 			}
@@ -752,16 +850,14 @@ function handleTypes(
 					...(success === undefined ? {} : { success }),
 				};
 			} else {
-				throw new FfiError(
-					`types.${key}.handle.destroy: ${declaration.name} must take only a ${record.name}`,
+				throw new FfiFactError(
+					"inapplicable",
+					`types.${key}.handle.destroy`,
+					`${declaration.name} must take only a ${record.name}`,
 				);
 			}
 		}
-		const passedByValue = model.functions.some(
-			(declaration) =>
-				isRecord(declaration.returns) ||
-				declaration.params.some((param) => isRecord(param.type)),
-		);
+		const passedByValue = modelIndex(model).passedByValue.has(record.name);
 		handles.set(record.name, {
 			name: record.name,
 			spelling: recordSpelling(model, record),
@@ -789,11 +885,15 @@ function handleTypes(
 			const view = name === undefined ? undefined : handles.get(name);
 			const at = `types.${key}.handle.views`;
 			if (view === undefined)
-				throw new FfiError(`${at}: '${target}' needs a handle fact`);
+				throw new FfiFactError(
+					"unmet-requirement",
+					at,
+					`'${target}' needs a handle fact`,
+				);
 			if (handle.representation !== "pointer" || view.representation !== "pointer")
-				throw new FfiError(`${at}: views require pointer handles`);
+				throw new FfiFactError("inapplicable", at, "views require pointer handles");
 			if (view.name === handle.name || views.includes(view.name))
-				throw new FfiError(`${at}: repeated or self view '${target}'`);
+				throw new FfiFactError("conflict", at, `repeated or self view '${target}'`);
 			views.push(view.name);
 		}
 		handles.set(record.name, { ...handle, views });
@@ -804,7 +904,7 @@ function handleTypes(
 		const known = closure.get(name);
 		if (known !== undefined) return known;
 		if (visiting.has(name))
-			throw new FfiError(`types.${name}.handle.views: cyclic views`);
+			throw new FfiFactError("conflict", `types.${name}.handle.views`, "cyclic views");
 		visiting.add(name);
 		const views = new Set<string>();
 		for (const view of handles.get(name)!.views) {
@@ -843,9 +943,13 @@ function handleTypes(
 function functionFacts(model: CModel, facts: LibraryFacts): Map<string, FunctionFacts> {
 	const result = new Map<string, FunctionFacts>();
 	for (const [name, entry] of Object.entries(facts.functions)) {
-		const declaration = model.functions.find((candidate) => candidate.name === name);
+		const declaration = modelIndex(model).functions.get(name);
 		if (declaration === undefined) {
-			throw new FfiError(`functions.${name}: the headers declare no function '${name}'`);
+			throw new FfiFactError(
+				"unknown-name",
+				`functions.${name}`,
+				`the headers declare no function '${name}'`,
+			);
 		}
 		const params = new Array<MaligatorFfiValueFacts | undefined>(
 			declaration.params.length,
@@ -855,8 +959,10 @@ function functionFacts(model: CModel, facts: LibraryFacts): Map<string, Function
 				? Number(key) - 1
 				: declaration.params.findIndex((param) => param.name === key);
 			if (index < 0 || index >= declaration.params.length) {
-				throw new FfiError(
-					`functions.${name}.params.${key}: ${name} has no such parameter`,
+				throw new FfiFactError(
+					"unknown-name",
+					`functions.${name}.params.${key}`,
+					`${name} has no such parameter`,
 				);
 			}
 			params[index] = valueFacts;
@@ -877,7 +983,7 @@ function nativeAlias(
 	model: CModel,
 	natives: ReadonlyMap<string, NativeType>,
 	type: CType,
-): NativeType | { gap: string } | undefined {
+): NativeType | Gapped | undefined {
 	if (natives.size === 0) return undefined;
 	const seen = new Set<string>();
 	let qualified = false;
@@ -887,6 +993,7 @@ function nativeAlias(
 			if (qualified)
 				return {
 					gap: `native ${native.name}: const typedef aliases need an explicit value construction interface`,
+					code: "unsupported",
 				};
 			return native;
 		}
@@ -963,7 +1070,7 @@ class Planner {
 	readonly #shapes = new Map<string, { alias: string; shape: MaligatorFfiShape }>();
 	readonly #fields = new Map<string, Readonly<Record<string, MaligatorFfiFieldFacts>>>();
 	readonly #handles: ReadonlyMap<string, Omit<HandleType, "fields" | "managedFields">>;
-	readonly #recordGaps = new Map<string, string>();
+	readonly #recordGaps = new Map<string, Gapped>();
 	readonly #pending = new Set<string>();
 	#callableCount = 0;
 	hasCallableCallbacks = false;
@@ -985,16 +1092,24 @@ class Planner {
 					handles.has(record.name) ||
 					entry.shape !== undefined
 				)
-					throw new FfiError(
-						`types.${name}.fields: independent ownership requires a complete plain struct`,
+					throw new FfiFactError(
+						"unmet-requirement",
+						`types.${name}.fields`,
+						"independent ownership requires a complete plain struct",
 					);
 				if (this.#fields.has(record.name))
-					throw new FfiError(`types.${name}.fields: this record already has field facts`);
+					throw new FfiFactError(
+						"conflict",
+						`types.${name}.fields`,
+						"this record already has field facts",
+					);
 				const members = [...promotedCFields(model, record)];
 				for (const field of Object.keys(entry.fields))
 					if (!members.some((member) => member.name === field))
-						throw new FfiError(
-							`types.${name}.fields.${field}: the record has no such field`,
+						throw new FfiFactError(
+							"unknown-name",
+							`types.${name}.fields.${field}`,
+							"the record has no such field",
 						);
 				this.#fields.set(record.name, entry.fields);
 			}
@@ -1004,23 +1119,33 @@ class Planner {
 					entry.shape !== undefined ||
 					entry.fields !== undefined
 				)
-					throw new FfiError(
-						`types.${name}.representation: native values cannot declare handle, shape, or fields`,
+					throw new FfiFactError(
+						"conflict",
+						`types.${name}.representation`,
+						"native values cannot declare handle, shape, or fields",
 					);
 				const alias = model.typedefs.get(name);
 				if (alias === undefined)
-					throw new FfiError(
-						`types.${name}.representation: native values require an arithmetic typedef`,
+					throw new FfiFactError(
+						"inapplicable",
+						`types.${name}.representation`,
+						"native values require an arithmetic typedef",
 					);
 				let type: CType = { kind: "typedef", name };
 				const seen = new Set<string>();
 				while (type.kind === "typedef") {
 					if (seen.has(type.name))
-						throw new FfiError(`types.${name}.representation: recursive typedef`);
+						throw new FfiFactError(
+							"unmet-requirement",
+							`types.${name}.representation`,
+							"recursive typedef",
+						);
 					seen.add(type.name);
 					if (type.name !== name && facts.types[type.name]?.representation === "native")
-						throw new FfiError(
-							`types.${name}.representation: the typedef chain already has a native representation`,
+						throw new FfiFactError(
+							"conflict",
+							`types.${name}.representation`,
+							"the typedef chain already has a native representation",
 						);
 					if (type.const === true) break;
 					const target: CType | undefined = model.typedefs.get(type.name)?.type;
@@ -1028,12 +1153,16 @@ class Planner {
 					type = target;
 				}
 				if (!isCNativeValueType(type) || ("const" in type && type.const === true))
-					throw new FfiError(
-						`types.${name}.representation: native values require an unqualified arithmetic typedef`,
+					throw new FfiFactError(
+						"inapplicable",
+						`types.${name}.representation`,
+						"native values require an unqualified arithmetic typedef",
 					);
 				if (alias.sizeBits === undefined || alias.alignmentBits === undefined)
-					throw new FfiError(
-						`types.${name}.representation: Clang did not identify native storage layout`,
+					throw new FfiFactError(
+						"unmet-requirement",
+						`types.${name}.representation`,
+						"Clang did not identify native storage layout",
 					);
 				this.natives.set(name, {
 					name,
@@ -1053,24 +1182,34 @@ class Planner {
 				entry.handle !== undefined ||
 				handles.has(resolved.name)
 			)
-				throw new FfiError(
-					`types.${name}.shape: member selection requires a union value; tagged shapes require a record value`,
+				throw new FfiFactError(
+					"inapplicable",
+					`types.${name}.shape`,
+					"member selection requires a union value; tagged shapes require a record value",
 				);
 			if (this.#shapes.has(resolved.name))
-				throw new FfiError(`types.${name}.shape: this record already has a shape fact`);
+				throw new FfiFactError(
+					"conflict",
+					`types.${name}.shape`,
+					"this record already has a shape fact",
+				);
 			this.#shapes.set(resolved.name, { alias: name, shape: entry.shape });
 		}
 	}
 
 	#integer(name: string): Mapping {
 		const size = this.#model.target.sizes[name];
-		if (size === undefined) return { gap: `${name} has no size on this target` };
+		if (size === undefined)
+			return { gap: `${name} has no size on this target`, code: "unsupported" };
 		const signed =
 			name === "char" ? this.#model.target.charSigned : !name.startsWith("unsigned");
 		const bits = size * 8;
 		if (bits <= 32) return { value: { kind: "integer", bits, signed } };
 		if (bits === 64) return { value: { kind: "bigint", bits, signed } };
-		return { gap: `${bits}-bit integers have no JavaScript mapping` };
+		return {
+			gap: `${bits}-bit integers have no JavaScript mapping`,
+			code: "unsupported",
+		};
 	}
 
 	value(
@@ -1079,7 +1218,11 @@ class Planner {
 		facts: MaligatorFfiValueFacts = NO_FACTS,
 	): Mapping {
 		if (facts.array?.capacity !== undefined)
-			throw new FfiError("array.capacity applies to caller-owned output buffers");
+			throw new FfiFactError(
+				"inapplicable",
+				"array.capacity",
+				"applies to caller-owned output buffers",
+			);
 		const resolved = resolveCType(this.#model, type);
 		const native = nativeAlias(this.#model, this.natives, type);
 		if (native !== undefined) {
@@ -1092,21 +1235,29 @@ class Planner {
 				facts.free !== undefined ||
 				facts.fresh !== undefined
 			)
-				throw new FfiError(
+				throw new FfiFactError(
+					"inapplicable",
+					"",
 					`native ${native.name}: value boxes do not use pointer or shape facts`,
 				);
 			return { value: { kind: "native", name: native.name } };
 		}
 		if (facts.array?.element !== undefined && resolved.kind !== "pointer")
-			throw new FfiError(
-				"array.element requires a pointer to fixed character array rows",
+			throw new FfiFactError(
+				"inapplicable",
+				"array.element",
+				"requires a pointer to fixed character array rows",
 			);
 		if (
 			facts.shape !== undefined &&
 			resolved.kind !== "record" &&
 			!(resolved.kind === "pointer" && facts.array !== undefined)
 		)
-			throw new FfiError("shape applies to record values or array elements");
+			throw new FfiFactError(
+				"inapplicable",
+				"shape",
+				"applies to record values or array elements",
+			);
 		if (facts.fresh === true) {
 			const target =
 				resolved.kind === "pointer" ? resolveCType(this.#model, resolved.to) : undefined;
@@ -1119,13 +1270,17 @@ class Planner {
 				facts.bytes !== undefined ||
 				facts.string !== undefined
 			)
-				throw new FfiError("fresh applies only to pointer handle results");
+				throw new FfiFactError(
+					"inapplicable",
+					"fresh",
+					"applies only to pointer handle results",
+				);
 		}
 		switch (resolved.kind) {
 			case "void":
 				return position === "return"
 					? { value: { kind: "undefined" } }
-					: { gap: "void is not a value" };
+					: { gap: "void is not a value", code: "unsupported" };
 			case "bool":
 				return { value: { kind: "boolean" } };
 			case "integer":
@@ -1134,13 +1289,17 @@ class Planner {
 				const size = this.#model.target.sizes[resolved.name] ?? 0;
 				return size > 0 && size <= 8
 					? { value: { kind: "float", bits: size * 8 } }
-					: { gap: `${resolved.name} is wider than a JavaScript number` };
+					: {
+							gap: `${resolved.name} is wider than a JavaScript number`,
+							code: "unsupported",
+						};
 			}
 			case "complex":
 			case "vector":
 			case "bitint":
 				return {
 					gap: `${formatCDeclaration(resolved)} needs a native representation fact on a typedef`,
+					code: "native",
 				};
 			case "enum": {
 				const declaration = this.#model.enums.get(resolved.name);
@@ -1165,7 +1324,11 @@ class Planner {
 					facts.shape !== undefined &&
 					(("member" in facts.shape && resolved.tag !== "union") || handle !== undefined)
 				)
-					throw new FfiError("shape.member applies to union values");
+					throw new FfiFactError(
+						"inapplicable",
+						"shape.member",
+						"applies to union values",
+					);
 				if (handle === undefined) {
 					const shape = this.#shapes.get(resolved.name);
 					const selected = facts.shape ?? shape?.shape;
@@ -1185,12 +1348,14 @@ class Planner {
 					)
 						return {
 							gap: "resource-bearing value results require a pointer result interface",
+							code: "unsupported",
 						};
 					return mapped;
 				}
 				if (handle.representation === "pointer") {
 					return {
 						gap: `${handle.name} handles are pointers, not structs passed by value`,
+						code: "unsupported",
 					};
 				}
 				const record = this.#model.records.get(resolved.name);
@@ -1200,7 +1365,10 @@ class Planner {
 					record !== undefined &&
 					cRecordHasConstMembers(this.#model, record)
 				)
-					return { gap: `${record.name}: const members cannot be copied by value` };
+					return {
+						gap: `${record.name}: const members cannot be copied by value`,
+						code: "unsupported",
+					};
 				return {
 					value: {
 						kind: "handle",
@@ -1212,10 +1380,13 @@ class Planner {
 				};
 			}
 			case "function":
-				return { gap: "function types need a callback fact" };
+				return { gap: "function types need a callback fact", code: "callback" };
 			case "typedef":
 			case "unsupported":
-				return { gap: `unsupported type '${formatCDeclaration(type)}'` };
+				return {
+					gap: `unsupported type '${formatCDeclaration(type)}'`,
+					code: "unsupported",
+				};
 		}
 	}
 
@@ -1270,7 +1441,11 @@ class Planner {
 		const nullable = position === "return" || facts.nullable === true;
 		if (facts.bytes !== undefined) {
 			if (!byteSized && target.kind !== "void") {
-				throw new FfiError(`bytes applies to void and byte pointers, not ${spelling}`);
+				throw new FfiFactError(
+					"inapplicable",
+					"bytes",
+					`applies to void and byte pointers, not ${spelling}`,
+				);
 			}
 			const writable =
 				position === "param" && !("const" in target && target.const === true);
@@ -1291,9 +1466,17 @@ class Planner {
 						? "bytes"
 						: undefined;
 			if (format !== undefined && target.kind !== "array")
-				throw new FfiError("array.element requires fixed character array rows");
+				throw new FfiFactError(
+					"inapplicable",
+					"array.element",
+					"requires fixed character array rows",
+				);
 			if (format !== undefined && facts.shape !== undefined)
-				throw new FfiError("array.element character formats cannot use a record shape");
+				throw new FfiFactError(
+					"conflict",
+					"array.element",
+					"character formats cannot use a record shape",
+				);
 			// Elements of a borrowed array, such as a callback's, stay the library's.
 			const elementFacts = {
 				...(facts.borrowed === true ? { borrowed: true } : {}),
@@ -1304,9 +1487,9 @@ class Planner {
 				target.kind === "array"
 					? this.#array(target, elementPosition, elementFacts, format)
 					: this.value(type.to, elementPosition, elementFacts);
-			if ("gap" in element) return { gap: `array element: ${element.gap}` };
+			if ("gap" in element) return { ...element, gap: `array element: ${element.gap}` };
 			if (element.value.kind === "sequence" || element.value.kind === "bytes") {
-				return { gap: "arrays of arrays need a fact" };
+				return { gap: "arrays of arrays need a fact", code: "array" };
 			}
 			return {
 				value: {
@@ -1320,7 +1503,11 @@ class Planner {
 		}
 		const countedString = typeof facts.string === "object";
 		if ((facts.string === true || countedString) && !byteSized) {
-			throw new FfiError(`string applies to char pointers, not ${spelling}`);
+			throw new FfiFactError(
+				"inapplicable",
+				"string",
+				`applies to char pointers, not ${spelling}`,
+			);
 		}
 		if (
 			facts.string === true ||
@@ -1362,23 +1549,32 @@ class Planner {
 					},
 				};
 			}
-			return { gap: `a pointer into a ${handle.name} handle has no owner` };
+			return {
+				gap: `a pointer into a ${handle.name} handle has no owner`,
+				code: "unsupported",
+			};
 		}
 		// The record that holds the field names the fact it needs.
-		if (position === "field") return { gap: `pointer field (${spelling})` };
+		if (position === "field")
+			return { gap: `pointer field (${spelling})`, code: "pointer" };
 		if (target.kind === "function") {
-			return { gap: `function pointer (${spelling}) needs a callback fact` };
+			return {
+				gap: `function pointer (${spelling}) needs a callback fact`,
+				code: "callback",
+			};
 		}
 		if (target.kind === "integer" && target.name === "char") {
 			return {
 				gap: `${spelling} needs a fact: an output buffer, an owned string, or bytes`,
+				code: "text",
 			};
 		}
 		if (target.kind === "record" && !this.#model.records.get(target.name)?.complete) {
-			return { gap: `opaque pointer (${spelling}) needs a handle fact` };
+			return { gap: `opaque pointer (${spelling}) needs a handle fact`, code: "handle" };
 		}
 		return {
 			gap: `pointer (${spelling}) needs a fact: a handle, buffer, out parameter, or string`,
+			code: "pointer",
 		};
 	}
 
@@ -1389,8 +1585,9 @@ class Planner {
 		format?: "string" | "bytes",
 	): Mapping {
 		if (type.length === undefined)
-			return { gap: "an array without a length needs a fact" };
-		if (type.length === 0) return { gap: "a fixed array needs a positive length" };
+			return { gap: "an array without a length needs a fact", code: "array" };
+		if (type.length === 0)
+			return { gap: "a fixed array needs a positive length", code: "unsupported" };
 		const element = resolveCType(this.#model, type.of);
 		if (element.kind === "integer" && element.name.endsWith("char")) {
 			if (format !== undefined) {
@@ -1399,10 +1596,16 @@ class Planner {
 					? mapped
 					: { value: { kind: "array", of: mapped.value, length: type.length, format } };
 			}
-			return { gap: `${formatCDeclaration(type)} needs a fact: a string or bytes` };
+			return {
+				gap: `${formatCDeclaration(type)} needs a fact: a string or bytes`,
+				code: "text",
+			};
 		}
 		if (format !== undefined && element.kind !== "array")
-			return { gap: "array.element requires fixed character array rows" };
+			return {
+				gap: "array.element requires fixed character array rows",
+				code: "unsupported",
+			};
 		const elementFacts = {
 			...(facts.borrowed === true ? { borrowed: true } : {}),
 			...(facts.shape === undefined ? {} : { shape: facts.shape }),
@@ -1412,7 +1615,7 @@ class Planner {
 				? this.#array(element, position, elementFacts, format)
 				: this.value(type.of, position, elementFacts);
 		return "gap" in mapped
-			? { gap: `array element: ${mapped.gap}` }
+			? { ...mapped, gap: `array element: ${mapped.gap}` }
 			: { value: { kind: "array", of: mapped.value, length: type.length } };
 	}
 
@@ -1422,9 +1625,15 @@ class Planner {
 		if (resolveCType(this.#model, field.type).kind === "bool" && field.bitWidth === 1)
 			return { value: { kind: "boolean" } };
 		if (field.integerType === undefined)
-			return { gap: "cannot determine the bit-field's integer type" };
+			return {
+				gap: "cannot determine the bit-field's integer type",
+				code: "unsupported",
+			};
 		if (field.bitWidth > 64)
-			return { gap: "bit-fields wider than 64 bits have no JavaScript mapping" };
+			return {
+				gap: "bit-fields wider than 64 bits have no JavaScript mapping",
+				code: "unsupported",
+			};
 		const name = field.integerType.name;
 		return {
 			value: {
@@ -1442,15 +1651,22 @@ class Planner {
 		alias?: string,
 	): Mapping {
 		if (shape === undefined)
-			return { gap: `union ${name}: select an active member with a shape fact` };
+			return {
+				gap: `union ${name}: select an active member with a shape fact`,
+				code: "shape",
+			};
 		const record = this.#model.records.get(name);
 		if (record === undefined || !record.complete)
-			return { gap: `union ${name}: incomplete type` };
+			return { gap: `union ${name}: incomplete type`, code: "unsupported" };
 		const field = [...promotedCFields(this.#model, record)].find(
 			(field) => field.name === shape.member,
 		);
 		if (field === undefined)
-			throw new FfiError(`union ${name}: no member '${shape.member}'`);
+			throw new FfiFactError(
+				"unknown-name",
+				"",
+				`union ${name}: no member '${shape.member}'`,
+			);
 		const identity = createHash("sha256")
 			.update(
 				JSON.stringify([
@@ -1464,7 +1680,7 @@ class Planner {
 			.slice(0, 16);
 		const mappedName = `union_${identity}`;
 		if (this.#pending.has(mappedName))
-			return { gap: `union ${name}: recursive value shape` };
+			return { gap: `union ${name}: recursive value shape`, code: "unsupported" };
 		this.#pending.add(mappedName);
 		let mapped: Mapping;
 		try {
@@ -1472,12 +1688,19 @@ class Planner {
 		} finally {
 			this.#pending.delete(mappedName);
 		}
-		if ("gap" in mapped) return { gap: `union ${name}.${shape.member}: ${mapped.gap}` };
+		if ("gap" in mapped)
+			return { ...mapped, gap: `union ${name}.${shape.member}: ${mapped.gap}` };
 		if (mapped.value.kind === "handle")
-			return { gap: `union ${name}: a selected handle needs a pointer interface` };
+			return {
+				gap: `union ${name}: a selected handle needs a pointer interface`,
+				code: "unsupported",
+			};
 		const spelling = this.#accesses.get(name)?.spelling;
 		if (spelling === undefined)
-			return { gap: `union ${name}: the C type has no accessible spelling` };
+			return {
+				gap: `union ${name}: the C type has no accessible spelling`,
+				code: "unsupported",
+			};
 		this.unions.set(mappedName, {
 			name: mappedName,
 			spelling,
@@ -1508,7 +1731,10 @@ class Planner {
 		const record = this.#model.records.get(name);
 		const access = this.#accesses.get(name);
 		if (record === undefined || !record.complete || access?.spelling === undefined)
-			return { gap: `tagged ${name}: the complete C type needs an accessible spelling` };
+			return {
+				gap: `tagged ${name}: the complete C type needs an accessible spelling`,
+				code: "unsupported",
+			};
 		const identity = createHash("sha256")
 			.update(JSON.stringify([access.owner, access.path, shape, alias]))
 			.digest("hex")
@@ -1527,17 +1753,23 @@ class Planner {
 		});
 		if (known !== undefined) return { value: asValue(known) };
 		if (this.#pending.has(mappedName))
-			return { gap: `tagged ${name}: recursive value shape` };
+			return { gap: `tagged ${name}: recursive value shape`, code: "unsupported" };
 		const tagPath = resolveCFieldPath(this.#model, record, [shape.tag]);
 		const tagField = tagPath?.at(-1)?.field;
 		if (tagField === undefined)
-			throw new FfiError(`tagged ${name}: no discriminator '${shape.tag}'`);
+			throw new FfiFactError(
+				"unknown-name",
+				"",
+				`tagged ${name}: no discriminator '${shape.tag}'`,
+			);
 		const tagMapping = this.#field(tagField);
 		if (
 			!("value" in tagMapping) ||
 			!["integer", "bigint", "boolean"].includes(tagMapping.value.kind)
 		)
-			throw new FfiError(
+			throw new FfiFactError(
+				"inapplicable",
+				"",
 				`tagged ${name}.${shape.tag}: the discriminator must be an integer, enum, or boolean`,
 			);
 		const tag = tagMapping.value;
@@ -1573,17 +1805,33 @@ class Planner {
 							? BigInt(constant)
 							: undefined;
 				if (value === undefined)
-					throw new FfiError(`tagged ${name}: '${key}' is not a known integer constant`);
+					throw new FfiFactError(
+						"unknown-name",
+						"",
+						`tagged ${name}: '${key}' is not a known integer constant`,
+					);
 				if (value < minimum || value > maximum)
-					throw new FfiError(`tagged ${name}: '${key}' does not fit the discriminator`);
+					throw new FfiFactError(
+						"unmet-requirement",
+						"",
+						`tagged ${name}: '${key}' does not fit the discriminator`,
+					);
 				if (seen.has(value))
-					throw new FfiError(`tagged ${name}: duplicate discriminator value '${key}'`);
+					throw new FfiFactError(
+						"conflict",
+						"",
+						`tagged ${name}: duplicate discriminator value '${key}'`,
+					);
 				seen.add(value);
 				const choices = new Map<string, number>();
 				const selected = new Set<string>();
 				for (const selector of selection) {
 					if (selected.has(selector))
-						throw new FfiError(`tagged ${name}: duplicate selection '${selector}'`);
+						throw new FfiFactError(
+							"conflict",
+							"",
+							`tagged ${name}: duplicate selection '${selector}'`,
+						);
 					selected.add(selector);
 					const path = resolveCFieldPath(this.#model, record, selector.split("."));
 					if (
@@ -1591,7 +1839,9 @@ class Planner {
 						!path.some((step) => step.record.tag === "union") ||
 						path.at(-1)?.record.tag !== "union"
 					)
-						throw new FfiError(
+						throw new FfiFactError(
+							"inapplicable",
+							"",
 							`tagged ${name}: '${selector}' must name an active union member`,
 						);
 					const route: Array<number> = [];
@@ -1600,7 +1850,9 @@ class Planner {
 							const at = route.join(".");
 							const prior = choices.get(at);
 							if (prior !== undefined && prior !== step.index)
-								throw new FfiError(
+								throw new FfiFactError(
+									"conflict",
+									"",
 									`tagged ${name}: conflicting union selections in '${key}'`,
 								);
 							choices.set(at, step.index);
@@ -1629,6 +1881,7 @@ class Planner {
 						)
 							return {
 								gap: `tagged ${name}: the selected payload does not share compatible discriminator storage`,
+								code: "unsupported",
 							};
 					}
 					route.push(step.index);
@@ -1690,8 +1943,10 @@ class Planner {
 			this.#handles.get(mapped.value.name)?.destroy === undefined ||
 			this.#handles.get(mapped.value.name)?.allocator !== undefined
 		)
-			throw new FfiError(
-				`types.${record}.fields.${field.name}.handle: requires an independently owned pointer resource with a destructor`,
+			throw new FfiFactError(
+				"unmet-requirement",
+				`types.${record}.fields.${field.name}.handle`,
+				"requires an independently owned pointer resource with a destructor",
 			);
 		return mapped;
 	}
@@ -1705,13 +1960,16 @@ class Planner {
 	): Mapping {
 		const spelling = this.#accesses.get(record.name)?.spelling;
 		if (spelling === undefined)
-			return { gap: `tagged ${record.name}: the C type has no accessible spelling` };
+			return {
+				gap: `tagged ${record.name}: the C type has no accessible spelling`,
+				code: "unsupported",
+			};
 		const mappedName = `MaligatorFfiCase_${identity}_${route.join("_") || "root"}`;
 		const fields: Array<MappedField> = [];
 		const append = (
 			current: CRecord,
 			path: ReadonlyArray<number>,
-		): string | undefined => {
+		): Gapped | undefined => {
 			const choice = choices.get(path.join("."));
 			for (const [index, field] of current.fields.entries()) {
 				if (current.tag === "union" && index !== choice) continue;
@@ -1725,7 +1983,8 @@ class Planner {
 				const nested =
 					type.kind === "record" ? this.#model.records.get(type.name) : undefined;
 				if (field.name === undefined) {
-					if (nested === undefined) return "unsupported anonymous member";
+					if (nested === undefined)
+						return { gap: "unsupported anonymous member", code: "unsupported" };
 					const failure = append(nested, next);
 					if (failure !== undefined) return failure;
 					continue;
@@ -1740,9 +1999,13 @@ class Planner {
 				const owned = this.#ownedField(field, record.name);
 				const mapped = owned ?? this.#caseField(field, next, choices, omitted, identity);
 				if (mapped === undefined) continue;
-				if ("gap" in mapped) return `field '${field.name}': ${mapped.gap}`;
+				if ("gap" in mapped)
+					return { ...mapped, gap: `field '${field.name}': ${mapped.gap}` };
 				if (mapped.value.kind === "handle" && owned === undefined)
-					return `field '${field.name}' needs a pointer interface`;
+					return {
+						gap: `field '${field.name}' needs a pointer interface`,
+						code: "unsupported",
+					};
 				fields.push({
 					name: field.name,
 					type: field.integerType ?? field.type,
@@ -1753,7 +2016,8 @@ class Planner {
 			return undefined;
 		};
 		const failure = append(record, route);
-		if (failure !== undefined) return { gap: `tagged ${record.name}: ${failure}` };
+		if (failure !== undefined)
+			return { ...failure, gap: `tagged ${record.name}: ${failure.gap}` };
 		this.records.set(mappedName, {
 			name: mappedName,
 			spelling,
@@ -1781,7 +2045,10 @@ class Planner {
 		);
 		if (this.#handles.has(record.name))
 			return selectedBelow
-				? { gap: `union selectors cannot traverse ${record.name} handles` }
+				? {
+						gap: `union selectors cannot traverse ${record.name} handles`,
+						code: "unsupported",
+					}
 				: this.#field(field);
 		if (this.#shapes.has(record.name) && !selectedBelow) return this.#field(field);
 		if (record.tag === "struct")
@@ -1799,13 +2066,19 @@ class Planner {
 			identity,
 		);
 		if (mapping === undefined)
-			return { gap: `union ${record.name}: select its active member` };
+			return { gap: `union ${record.name}: select its active member`, code: "shape" };
 		if ("gap" in mapping) return mapping;
 		if (mapping.value.kind === "handle")
-			return { gap: `union ${record.name}: a selected handle needs a pointer interface` };
+			return {
+				gap: `union ${record.name}: a selected handle needs a pointer interface`,
+				code: "unsupported",
+			};
 		const spelling = this.#accesses.get(record.name)?.spelling;
 		if (spelling === undefined)
-			return { gap: `union ${record.name}: the C type has no accessible spelling` };
+			return {
+				gap: `union ${record.name}: the C type has no accessible spelling`,
+				code: "unsupported",
+			};
 		const name = `case_union_${identity}_${route.join("_")}`;
 		this.unions.set(name, {
 			name,
@@ -1833,25 +2106,27 @@ class Planner {
 		const known = this.records.get(mappedName);
 		if (known !== undefined) return { value: { kind: "record", name: mappedName } };
 		const failure = this.#recordGaps.get(name);
-		if (failure !== undefined) return { gap: failure };
-		const gap = (reason: string): Mapping => {
-			const message = `${tag} ${name}: ${reason}`;
-			this.#recordGaps.set(name, message);
-			return { gap: message };
+		if (failure !== undefined) return failure;
+		const gap = (reason: string, code: GapCode): Mapping => {
+			const missing = { gap: `${tag} ${name}: ${reason}`, code };
+			this.#recordGaps.set(name, missing);
+			return missing;
 		};
 		const record = this.#model.records.get(name);
-		if (tag === "union" || record?.tag === "union") return gap("unions need a fact");
+		if (tag === "union" || record?.tag === "union")
+			return gap("unions need a fact", "shape");
 		if (record === undefined || !record.complete)
-			return gap("opaque structs cannot pass by value");
+			return gap("opaque structs cannot pass by value", "unsupported");
 		if (access?.spelling === undefined)
-			return gap("the C type has no accessible spelling");
-		if (this.#pending.has(name)) return gap("recursive struct");
+			return gap("the C type has no accessible spelling", "unsupported");
+		if (this.#pending.has(name)) return gap("recursive struct", "unsupported");
 		this.#pending.add(name);
 		const fields: Array<MappedField> = [];
 		try {
 			for (const field of promotedCFields(this.#model, record)) {
 				if (field.name === undefined && field.bitWidth !== undefined) continue;
-				if (field.name === undefined) return gap("anonymous members need a fact");
+				if (field.name === undefined)
+					return gap("anonymous members need a fact", "unsupported");
 				const facts = this.#fields.get(name)?.[field.name]?.handle;
 				const mapped = this.#ownedField(field, name) ?? this.#field(field);
 				if ("gap" in mapped) {
@@ -1859,12 +2134,14 @@ class Planner {
 					return resolveCType(this.#model, field.type).kind === "pointer"
 						? gap(
 								`field '${field.name}' is a pointer (${formatCDeclaration(field.type)}), so ${name} needs a handle fact`,
+								"handle",
 							)
-						: gap(`field '${field.name}': ${mapped.gap}`);
+						: gap(`field '${field.name}': ${mapped.gap}`, mapped.code);
 				}
 				if (mapped.value.kind === "handle" && facts?.owned !== true) {
 					return gap(
 						`field '${field.name}' holds a ${mapped.value.name} handle, so ${name} needs a handle fact too`,
+						"handle",
 					);
 				}
 				fields.push({
@@ -1900,8 +2177,10 @@ class Planner {
 		const members = [...promotedCFields(this.#model, record)];
 		for (const name of Object.keys(facts))
 			if (!members.some((field) => field.name === name))
-				throw new FfiError(
-					`types.${record.name}.fields.${name}: the handle has no such field`,
+				throw new FfiFactError(
+					"unknown-name",
+					`types.${record.name}.fields.${name}`,
+					"the handle has no such field",
 				);
 		for (const field of members) {
 			if (field.name === undefined || managed.some((entry) => entry.name === field.name))
@@ -1931,9 +2210,17 @@ class Planner {
 					mapped.value.kind !== "handle" ||
 					mapped.value.pass !== "pointer"
 				)
-					throw new FfiError(`${at}: requires a pointer-represented resource handle`);
+					throw new FfiFactError(
+						"inapplicable",
+						at,
+						"requires a pointer-represented resource handle",
+					);
 				if (this.#handles.get(mapped.value.name)?.allocator !== undefined)
-					throw new FfiError(`${at}: requires library-owned resource storage`);
+					throw new FfiFactError(
+						"unmet-requirement",
+						at,
+						"requires library-owned resource storage",
+					);
 				if (fact.handle.lifetime === "owner") {
 					if (
 						handle.allocator !== undefined &&
@@ -1943,14 +2230,20 @@ class Planner {
 							handle.destroy.success === undefined
 						)
 					)
-						throw new FfiError(
-							`${at}: owner lifetime requires library-owned parent storage`,
+						throw new FfiFactError(
+							"unmet-requirement",
+							at,
+							"owner lifetime requires library-owned parent storage",
 						);
 					mapped = { value: { ...mapped.value, owned: false, owner: handle.name } };
 				} else mapped = { value: { ...mapped.value, lifetime: "library" } };
 			}
 			if (fact?.callable !== undefined && "gap" in mapped)
-				throw new FfiError(`types.${record.name}.fields.${field.name}: ${mapped.gap}`);
+				throw new FfiFactError(
+					"unmet-requirement",
+					`types.${record.name}.fields.${field.name}`,
+					`${mapped.gap}`,
+				);
 			// Accessors return single values; array fields stay behind the handle.
 			if (
 				"value" in mapped &&
@@ -1996,8 +2289,10 @@ class Planner {
 				(!(kind === "bytes" && target?.kind === "void") &&
 					!(target?.kind === "integer" && this.#model.target.sizes[target.name] === 1))
 			)
-				throw new FfiError(
-					`${at}: ${kind} requires a writable ${kind === "bytes" ? "byte or void" : "byte"} pointer field`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					at,
+					`${kind} requires a writable ${kind === "bytes" ? "byte or void" : "byte"} pointer field`,
 				);
 			if (
 				count === undefined ||
@@ -2005,19 +2300,27 @@ class Planner {
 				integer.const === true ||
 				count.bitWidth !== undefined
 			)
-				throw new FfiError(
-					`${at}.${kind}.length: '${counted.length}' must be a writable integer field`,
+				throw new FfiFactError(
+					"inapplicable",
+					`${at}.${kind}.length`,
+					`'${counted.length}' must be a writable integer field`,
 				);
 			if (counts.has(counted.length))
-				throw new FfiError(
-					`${at}.${kind}.length: '${counted.length}' already counts another field`,
+				throw new FfiFactError(
+					"conflict",
+					`${at}.${kind}.length`,
+					`'${counted.length}' already counts another field`,
 				);
 			const mapped = this.#integer(integer.name);
 			if (
 				!("value" in mapped) ||
 				(mapped.value.kind !== "integer" && mapped.value.kind !== "bigint")
 			)
-				throw new FfiError(`${at}.${kind}.length: unsupported integer width`);
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.${kind}.length`,
+					"unsupported integer width",
+				);
 			counts.add(counted.length);
 			result.push({
 				kind,
@@ -2098,24 +2401,32 @@ class Planner {
 		const target =
 			type.kind === "pointer" ? resolveCType(this.#model, type.to) : undefined;
 		if (target?.kind !== "function" || target.variadic) {
-			throw new FfiError(
-				`${at}.callback: ${formatCDeclaration(type)} is not a function pointer`,
+			throw new FfiFactError(
+				"inapplicable",
+				`${at}.callback`,
+				`${formatCDeclaration(type)} is not a function pointer`,
 			);
 		}
 		const factsAt = (index: number): MaligatorFfiValueFacts | undefined =>
 			facts[String(index + 1)];
 		const resultFacts = callback.returns;
 		if (resultFacts !== undefined && callback.closes !== undefined)
-			throw new FfiError(
-				`${at}.callback.returns: a close completion ends its registration before returning a pointer result`,
+			throw new FfiFactError(
+				"conflict",
+				`${at}.callback.returns`,
+				"a close completion ends its registration before returning a pointer result",
 			);
 		if (resultFacts?.lifetime === "call" && kept)
-			throw new FfiError(
-				`${at}.callback.returns: call lifetime needs a call-scoped callback`,
+			throw new FfiFactError(
+				"conflict",
+				`${at}.callback.returns`,
+				"call lifetime needs a call-scoped callback",
 			);
 		if (resultFacts?.lifetime === "registration" && !kept)
-			throw new FfiError(
-				`${at}.callback.returns: registration lifetime needs a retained callback`,
+			throw new FfiFactError(
+				"conflict",
+				`${at}.callback.returns`,
+				"registration lifetime needs a retained callback",
 			);
 		const resultCounted = resultFacts === undefined ? undefined : valueCount(resultFacts);
 		let resultCount: Extract<JsValue, { kind: "callback" }>["resultCount"];
@@ -2137,8 +2448,10 @@ class Planner {
 				!("value" in mapped) ||
 				(mapped.value.kind !== "integer" && mapped.value.kind !== "bigint")
 			)
-				throw new FfiError(
-					`${at}.callback.returns: length needs a writable supported integer pointer by 1-based position`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.callback.returns`,
+					"length needs a writable supported integer pointer by 1-based position",
 				);
 			resultCount = { param, bits: mapped.value.bits, signed: mapped.value.signed };
 		}
@@ -2146,16 +2459,20 @@ class Planner {
 			const position = Number(key) - 1;
 			const stated = facts[key]!;
 			if (position >= target.params.length) {
-				throw new FfiError(
-					`${at}.callback.params.${key}: the callback has no such parameter`,
+				throw new FfiFactError(
+					"unknown-name",
+					`${at}.callback.params.${key}`,
+					"the callback has no such parameter",
 				);
 			}
 			const unsupported = Object.keys(stated).filter(
 				(name) => !["string", "bytes", "array", "nullable", "shape"].includes(name),
 			);
 			if (unsupported.length > 0) {
-				throw new FfiError(
-					`${at}.callback.params.${key}: ${unsupported.join(", ")} does not apply to callback parameters`,
+				throw new FfiFactError(
+					"inapplicable",
+					`${at}.callback.params.${key}`,
+					`${unsupported.join(", ")} does not apply to callback parameters`,
 				);
 			}
 		}
@@ -2171,20 +2488,26 @@ class Planner {
 					? undefined
 					: resolveCType(this.#model, target.params[count]!);
 			if (countType?.kind === "integer" && "gap" in this.#integer(countType.name))
-				throw new FfiError(
-					`${at}.callback.params.${String(index + 1)}: a callback count needs a supported integer of at most 64 bits`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.callback.params.${String(index + 1)}`,
+					"a callback count needs a supported integer of at most 64 bits",
 				);
 			if (countType?.kind !== "integer" || count === index || counters.has(count)) {
-				throw new FfiError(
-					`${at}.callback.params.${String(index + 1)}: length '${counted.length}' is not another integer parameter's 1-based position`,
+				throw new FfiFactError(
+					"inapplicable",
+					`${at}.callback.params.${String(index + 1)}`,
+					`length '${counted.length}' is not another integer parameter's 1-based position`,
 				);
 			}
 			counts[index] = count;
 			counters.add(count);
 		});
 		if (resultCount !== undefined && counters.has(resultCount.param))
-			throw new FfiError(
-				`${at}.callback.returns: the result count already counts an argument`,
+			throw new FfiFactError(
+				"conflict",
+				`${at}.callback.returns`,
+				"the result count already counts an argument",
 			);
 		const params: Array<JsValue | "data" | "count"> = [];
 		for (const [index, param] of target.params.entries()) {
@@ -2206,12 +2529,19 @@ class Planner {
 			}
 			const mapped = this.value(param, "return", { ...stated, borrowed: true });
 			if ("gap" in mapped) {
-				return { gap: `callback parameter ${String(index + 1)}: ${mapped.gap}` };
+				return {
+					...mapped,
+					gap: `callback parameter ${String(index + 1)}: ${mapped.gap}`,
+				};
 			}
 			params.push(mapped.value);
 		}
 		if (routed && !params.includes("data")) {
-			throw new FfiError(`${at}.callback: the callback takes no void * for its data`);
+			throw new FfiFactError(
+				"inapplicable",
+				`${at}.callback`,
+				"the callback takes no void * for its data",
+			);
 		}
 		const lookup =
 			callback.lookup === undefined
@@ -2227,8 +2557,10 @@ class Planner {
 						!(callback.closes !== undefined && param.kind === "handle"),
 				)
 			)
-				throw new FfiError(
-					`${at}.callback.queued: resource-bearing values require a waiting callback`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.callback.queued`,
+					"resource-bearing values require a waiting callback",
 				);
 			if (
 				callback.queued !== "wait" &&
@@ -2239,8 +2571,10 @@ class Planner {
 						!this.#notificationElement(param.of),
 				)
 			)
-				throw new FfiError(
-					`${at}.callback.queued: notification arrays need value elements or terminated strings`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.callback.queued`,
+					"notification arrays need value elements or terminated strings",
 				);
 			// A queued call outlives the C caller's arguments, so it gets copies of values.
 			const copyable = params.every(
@@ -2269,8 +2603,10 @@ class Planner {
 				!copyable ||
 				(lookup !== undefined && callback.closes === undefined)
 			) {
-				throw new FfiError(
-					`${at}.callback.queued: a queued callback returns nothing, takes values, strings, buffers, and structs, and has no lookup`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.callback.queued`,
+					"a queued callback returns nothing, takes values, strings, buffers, and structs, and has no lookup",
 				);
 			}
 		}
@@ -2278,14 +2614,18 @@ class Planner {
 		let returns: JsValue = { kind: "undefined" };
 		if (returned.kind !== "void") {
 			const mapped = this.value(target.returns, "param", resultFacts);
-			if ("gap" in mapped) return { gap: `callback result: ${mapped.gap}` };
+			if ("gap" in mapped) return { ...mapped, gap: `callback result: ${mapped.gap}` };
 			if (mapped.value.kind !== "handle" && this.#containsHandle(mapped.value))
 				return {
 					gap: "compound callback results containing handles require a pointer result interface",
+					code: "unsupported",
 				};
 			if (mapped.value.kind === "handle") {
 				if (mapped.value.pass !== "pointer")
-					return { gap: "a callback handle result needs a pointer representation" };
+					return {
+						gap: "a callback handle result needs a pointer representation",
+						code: "unsupported",
+					};
 			}
 			if (
 				(mapped.value.kind === "string" ||
@@ -2293,7 +2633,10 @@ class Planner {
 					mapped.value.kind === "handle") &&
 				resultFacts?.lifetime === undefined
 			) {
-				return { gap: "a callback that returns a pointer needs a lifetime fact" };
+				return {
+					gap: "a callback that returns a pointer needs a lifetime fact",
+					code: "lifetime",
+				};
 			}
 			if (
 				resultFacts?.lifetime !== undefined &&
@@ -2301,10 +2644,18 @@ class Planner {
 				mapped.value.kind !== "bytes" &&
 				mapped.value.kind !== "handle"
 			)
-				throw new FfiError(`${at}.callback.returns: lifetime applies to pointer results`);
+				throw new FfiFactError(
+					"inapplicable",
+					`${at}.callback.returns`,
+					"lifetime applies to pointer results",
+				);
 			returns = mapped.value;
 		} else if (resultFacts !== undefined)
-			throw new FfiError(`${at}.callback.returns: lifetime applies to pointer results`);
+			throw new FfiFactError(
+				"inapplicable",
+				`${at}.callback.returns`,
+				"lifetime applies to pointer results",
+			);
 		return {
 			value: {
 				kind: "callback",
@@ -2335,9 +2686,7 @@ class Planner {
 		lookup: { readonly function: string; readonly param: string },
 		at: string,
 	): { readonly function: string; readonly param: number } {
-		const declaration = this.#model.functions.find(
-			(entry) => entry.name === lookup.function,
-		);
+		const declaration = modelIndex(this.#model).functions.get(lookup.function);
 		const param = Number(lookup.param) - 1;
 		const takes = declaration?.params[0]?.type;
 		const passed = callback.params[param];
@@ -2356,8 +2705,10 @@ class Planner {
 			resolveCType(this.#model, result.to).kind !== "void" ||
 			spelling(takes) !== spelling(passed)
 		) {
-			throw new FfiError(
-				`${at}: '${lookup.function}' does not return a void * from callback parameter ${lookup.param}`,
+			throw new FfiFactError(
+				"inapplicable",
+				at,
+				`'${lookup.function}' does not return a void * from callback parameter ${lookup.param}`,
 			);
 		}
 		return { function: lookup.function, param };
@@ -2384,7 +2735,11 @@ class Planner {
 			`params.${declaration.params[index]!.name ?? String(index + 1)}.callback`,
 		);
 		if (indexes.length > 1) {
-			throw new FfiError(`${at}: a function takes at most one replaced callback`);
+			throw new FfiFactError(
+				"conflict",
+				at,
+				"a function takes at most one replaced callback",
+			);
 		}
 		const entry = args[index];
 		if (entry?.kind !== "input") return index;
@@ -2409,8 +2764,10 @@ class Planner {
 			!param.value.params.includes("data") &&
 			param.value.lookup === undefined
 		) {
-			throw new FfiError(
-				`${at}: a replaced callback without data needs a parameter that passes its ${key.name} back`,
+			throw new FfiFactError(
+				"unmet-requirement",
+				at,
+				`a replaced callback without data needs a parameter that passes its ${key.name} back`,
 			);
 		}
 		params[entry.param] = {
@@ -2436,8 +2793,10 @@ class Planner {
 		);
 		if (indexes.length === 0) return;
 		if (indexes.length > 1)
-			throw new FfiError(
-				`${where("params")}: a function takes at most one close completion`,
+			throw new FfiFactError(
+				"conflict",
+				where("params"),
+				"a function takes at most one close completion",
 			);
 		const index = indexes[0]!;
 		const at = where(
@@ -2460,17 +2819,25 @@ class Planner {
 			handle.nullable ||
 			param.value.nullable
 		)
-			throw new FfiError(
-				`${at}: a close completion needs a nonnullable pointer handle input and callback`,
+			throw new FfiFactError(
+				"unmet-requirement",
+				at,
+				"a close completion needs a nonnullable pointer handle input and callback",
 			);
 		if (resolveCType(this.#model, declaration.returns).kind !== "void")
-			throw new FfiError(`${at}: a close registration returns void`);
+			throw new FfiFactError(
+				"unmet-requirement",
+				at,
+				"a close registration returns void",
+			);
 		if (
 			this.#handles.get(handle.name)!.allocator !== undefined &&
 			this.#handles.get(handle.name)!.destroy !== undefined
 		)
-			throw new FfiError(
-				`${at}: initialized caller storage uses its destructor binding for cleanup`,
+			throw new FfiFactError(
+				"unmet-requirement",
+				at,
+				"initialized caller storage uses its destructor binding for cleanup",
 			);
 		const handles = param.value.params.flatMap((value, position) =>
 			typeof value === "object" && value.kind === "handle" ? [{ value, position }] : [],
@@ -2484,22 +2851,30 @@ class Planner {
 						this.#handles.get(handle.name)?.family,
 			)
 		)
-			throw new FfiError(
-				`${at}: only the closing handle may be a completion pointer argument`,
+			throw new FfiFactError(
+				"unmet-requirement",
+				at,
+				"only the closing handle may be a completion pointer argument",
 			);
 		const keyParam = handles[0]?.position;
 		if (
 			keyParam !== undefined &&
 			factsAt(index).callback?.params?.[String(keyParam + 1)]?.nullable === true
 		)
-			throw new FfiError(`${at}: the completion's closing handle is nonnullable`);
+			throw new FfiFactError(
+				"unmet-requirement",
+				at,
+				"the completion's closing handle is nonnullable",
+			);
 		if (
 			keyParam === undefined &&
 			!param.value.params.includes("data") &&
 			param.value.lookup === undefined
 		)
-			throw new FfiError(
-				`${at}: a close completion needs its handle or user data to route it`,
+			throw new FfiFactError(
+				"unmet-requirement",
+				at,
+				"a close completion needs its handle or user data to route it",
 			);
 		params[entry.param] = {
 			...param,
@@ -2540,9 +2915,13 @@ class Planner {
 	#free(name: string | undefined, value: JsValue, at: string): void {
 		if (name === undefined) return;
 		if (value.kind !== "string" && value.kind !== "bytes" && value.kind !== "sequence") {
-			throw new FfiError(`${at}.free: free applies to string, buffer, and array results`);
+			throw new FfiFactError(
+				"inapplicable",
+				`${at}.free`,
+				"free applies to string, buffer, and array results",
+			);
 		}
-		const declaration = this.#model.functions.find((entry) => entry.name === name);
+		const declaration = modelIndex(this.#model).functions.get(name);
 		const param = declaration?.params[0];
 		if (
 			declaration === undefined ||
@@ -2550,8 +2929,10 @@ class Planner {
 			param === undefined ||
 			resolveCType(this.#model, param.type).kind !== "pointer"
 		) {
-			throw new FfiError(
-				`${at}.free: '${name}' is not a function that takes one pointer`,
+			throw new FfiFactError(
+				"inapplicable",
+				`${at}.free`,
+				`'${name}' is not a function that takes one pointer`,
 			);
 		}
 	}
@@ -2573,21 +2954,32 @@ class Planner {
 		const target =
 			pointer.kind === "pointer" ? resolveCType(this.#model, pointer.to) : undefined;
 		if (target?.kind !== "function")
-			throw new FfiError(`${at}: callable requires a function pointer`);
+			throw new FfiFactError("inapplicable", at, "callable requires a function pointer");
 		if (Object.keys(facts).some((key) => key !== "callable" && key !== "nullable"))
-			throw new FfiError(`${at}: callable cannot accompany another value representation`);
+			throw new FfiFactError(
+				"conflict",
+				at,
+				"callable cannot accompany another value representation",
+			);
 		if (callable.lifetime === "owner" && context.owner === undefined)
-			throw new FfiError(
-				`${at}.lifetime: owner lifetime requires a function-table field`,
+			throw new FfiFactError(
+				"inapplicable",
+				`${at}.lifetime`,
+				"owner lifetime requires a function-table field",
 			);
 		if (target.variadic)
-			return { gap: "a callable function pointer needs a fixed signature" };
+			return {
+				gap: "a callable function pointer needs a fixed signature",
+				code: "unsupported",
+			};
 		const params: Array<MaligatorFfiValueFacts | undefined> = [];
 		for (const [key, value] of Object.entries(callable.params ?? {})) {
 			const index = Number(key) - 1;
 			if (!Number.isInteger(index) || index < 0 || index >= target.params.length)
-				throw new FfiError(
-					`${at}.params.${key}: the function pointer has no such parameter`,
+				throw new FfiFactError(
+					"unknown-name",
+					`${at}.params.${key}`,
+					"the function pointer has no such parameter",
 				);
 			params[index] = value;
 		}
@@ -2614,6 +3006,7 @@ class Planner {
 		if ("gaps" in signature)
 			return {
 				gap: `callable signature: ${signature.gaps.map((gap) => `${gap.at}: ${gap.reason}`).join("; ")}`,
+				code: signature.gaps[0]!.code,
 			};
 		if (signature.params.some(({ value }) => value.kind === "callback"))
 			this.hasCallableCallbacks = true;
@@ -2648,7 +3041,11 @@ class Planner {
 			`${callableContext?.path ?? `functions.${declaration.name}`}.${at}`;
 		const gaps: Array<Gap> = [];
 		if (declaration.variadic) {
-			gaps.push({ at: "arguments", reason: "variadic arguments need a fact per call" });
+			gaps.push({
+				at: "arguments",
+				code: "variants",
+				reason: "variadic arguments need a fact per call",
+			});
 		}
 		const names = declaration.params.map(
 			(param, index) => param.name ?? `arg${index + 1}`,
@@ -2660,8 +3057,10 @@ class Planner {
 				? Number(reference) - 1
 				: declaration.params.findIndex((param) => param.name === reference);
 			if (index < 0 || index >= declaration.params.length) {
-				throw new FfiError(
-					`${where(at)}: ${declaration.name} has no parameter '${reference}'`,
+				throw new FfiFactError(
+					"unknown-name",
+					where(at),
+					`${declaration.name} has no parameter '${reference}'`,
 				);
 			}
 			return index;
@@ -2679,8 +3078,10 @@ class Planner {
 				return { value: { kind: callableContext.boundedGlobal.format, nullable: false } };
 			if (valueFacts.callable !== undefined) {
 				if (position !== "return")
-					throw new FfiError(
-						`${where(at)}.callable: callable applies to returned function pointers`,
+					throw new FfiFactError(
+						"inapplicable",
+						`${where(at)}.callable`,
+						"callable applies to returned function pointers",
 					);
 				const source =
 					callableContext?.targetType === undefined
@@ -2712,16 +3113,17 @@ class Planner {
 					resolved.kind !== "pointer" &&
 					resolved.kind !== "array"
 				) {
-					throw new FfiError(
-						`${where(at)}: ${fact} applies to pointers, not ${formatCDeclaration(type)}`,
+					throw new FfiFactError(
+						"inapplicable",
+						where(at),
+						`${fact} applies to pointers, not ${formatCDeclaration(type)}`,
 					);
 				}
 			}
 			try {
 				return this.value(type, position, valueFacts);
 			} catch (error) {
-				if (error instanceof FfiError)
-					throw new FfiError(`${where(at)}: ${error.message}`);
+				if (error instanceof FfiFactError) throw error.under(where(at));
 				throw error;
 			}
 		};
@@ -2743,11 +3145,17 @@ class Planner {
 			const countPointer =
 				resolveCType(this.#model, declaration.params[count]!.type).kind === "pointer";
 			if (valueFacts.out === true && !countPointer && capacity !== count)
-				throw new FfiError(
-					`${where(at)}: an out value needs a count C writes through a pointer`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					where(at),
+					"an out value needs a count C writes through a pointer",
 				);
 			if (count === index) {
-				throw new FfiError(`${where(at)}: a parameter cannot count itself`);
+				throw new FfiFactError(
+					"unmet-requirement",
+					where(at),
+					"a parameter cannot count itself",
+				);
 			}
 			if (capacity !== count) {
 				const sources = counts.get(count) ?? [];
@@ -2763,8 +3171,10 @@ class Planner {
 					(source) => factsAt(source).out === true || factsAt(source).inout === true,
 				)
 			)
-				throw new FfiError(
-					`${where(`params.${names[count]}`)}: a shared count needs integer input lengths`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${where(`params.${names[count]}`)}`,
+					"a shared count needs integer input lengths",
 				);
 		}
 		// The user-data parameters that route callbacks, mapped to their callback argument.
@@ -2781,8 +3191,10 @@ class Planner {
 				callbackData.has(data) ||
 				counts.has(data)
 			) {
-				throw new FfiError(
-					`${where(at)}: '${callback.data}' is not a free void * parameter`,
+				throw new FfiFactError(
+					"inapplicable",
+					where(at),
+					`'${callback.data}' is not a free void * parameter`,
 				);
 			}
 			callbackData.set(data, index);
@@ -2812,8 +3224,10 @@ class Planner {
 				counts.has(position) ||
 				factsAt(position).callback !== undefined
 			) {
-				throw new FfiError(
-					`${where(at)}: '${release}' is not a free void (*)(void *) parameter`,
+				throw new FfiFactError(
+					"inapplicable",
+					where(at),
+					`'${release}' is not a free void (*)(void *) parameter`,
 				);
 			}
 			callbackReleases.set(position, index);
@@ -2834,15 +3248,15 @@ class Planner {
 			const name = names[index]!;
 			const valueFacts = factsAt(index);
 			const at = `params.${name}`;
-			const gap = (reason: string): void => {
-				gaps.push({ at: `param ${index + 1} (${name})`, reason });
+			const gap = (reason: string, code: GapCode): void => {
+				gaps.push({ at: `param ${index + 1} (${name})`, code, reason, param: index });
 			};
 			if (
 				valueFacts.borrowed === true &&
 				valueFacts.out !== true &&
 				valueFacts.inout !== true
 			) {
-				throw new FfiError(`${where(at)}: borrowed applies to results`);
+				throw new FfiFactError("inapplicable", where(at), "borrowed applies to results");
 			}
 			const resolved = resolveCType(this.#model, param.type);
 			const routed = callbackData.get(index);
@@ -2858,23 +3272,31 @@ class Planner {
 					counts.has(index) ||
 					resultCount === index
 				) {
-					throw new FfiError(`${where(at)}: a constant parameter takes no other role`);
+					throw new FfiFactError(
+						"conflict",
+						where(at),
+						"a constant parameter takes no other role",
+					);
 				}
 				if (valueFacts.sizeof !== undefined) {
 					const record = factRecord(this.#model, valueFacts.sizeof);
 					const mapped =
 						resolved.kind === "integer" ? this.#integer(resolved.name) : undefined;
 					if (record?.complete !== true)
-						throw new FfiError(
-							`${where(at)}.sizeof: '${valueFacts.sizeof}' needs a complete record type`,
+						throw new FfiFactError(
+							"unmet-requirement",
+							`${where(at)}.sizeof`,
+							`'${valueFacts.sizeof}' needs a complete record type`,
 						);
 					if (
 						mapped === undefined ||
 						!("value" in mapped) ||
 						(mapped.value.kind !== "integer" && mapped.value.kind !== "bigint")
 					)
-						throw new FfiError(
-							`${where(at)}.sizeof: sizeof requires an integer parameter`,
+						throw new FfiFactError(
+							"inapplicable",
+							`${where(at)}.sizeof`,
+							"sizeof requires an integer parameter",
 						);
 					args.push({
 						kind: "constant",
@@ -2898,7 +3320,7 @@ class Planner {
 					valueFacts.callback,
 					where(at),
 				);
-				if ("gap" in mapped) gap(mapped.gap);
+				if ("gap" in mapped) gap(mapped.gap, mapped.code);
 				else {
 					params.push({ name, type: param.type, value: mapped.value });
 					args.push({ kind: "input", param: params.length - 1 });
@@ -2910,8 +3332,10 @@ class Planner {
 				const pointer = resolved.kind === "pointer";
 				const countType = pointer ? resolveCType(this.#model, resolved.to) : resolved;
 				if (countType.kind === "integer" && "gap" in this.#integer(countType.name))
-					throw new FfiError(
-						`${where(at)}: a count needs a supported integer of at most 64 bits`,
+					throw new FfiFactError(
+						"unmet-requirement",
+						where(at),
+						"a count needs a supported integer of at most 64 bits",
 					);
 				const invalidWrittenCount =
 					pointer &&
@@ -2930,14 +3354,22 @@ class Planner {
 							);
 						}));
 				if (countType.kind !== "integer" || invalidWrittenCount) {
-					throw new FfiError(`${where(at)}: a count must be an integer parameter`);
+					throw new FfiFactError(
+						"inapplicable",
+						where(at),
+						"a count must be an integer parameter",
+					);
 				}
 				if (valueFacts.borrowed === true)
-					throw new FfiError(`${where(at)}.borrowed: requires a handle output`);
+					throw new FfiFactError(
+						"inapplicable",
+						`${where(at)}.borrowed`,
+						"requires a handle output",
+					);
 				if (counted !== undefined && pointer) {
 					const written = map(resolved.to, "return", NO_FACTS, at);
 					if ("gap" in written) {
-						gap(written.gap);
+						gap(written.gap, written.code);
 						return;
 					}
 					args.push({ kind: "count", of: counted, output: outputs.length });
@@ -2957,34 +3389,51 @@ class Planner {
 			if (valueFacts.out === true || valueFacts.inout === true) {
 				const fact = valueFacts.out === true ? "out" : "inout";
 				if (valueFacts.array?.writable === true)
-					throw new FfiError(
-						`${where(at)}.array.writable: ${fact} arrays already return C's values`,
+					throw new FfiFactError(
+						"conflict",
+						`${where(at)}.array.writable`,
+						`${fact} arrays already return C's values`,
 					);
 				if (valueFacts.out === true && valueFacts.inout === true) {
-					throw new FfiError(`${where(at)}: a parameter is out or inout, not both`);
+					throw new FfiFactError(
+						"conflict",
+						where(at),
+						"a parameter is out or inout, not both",
+					);
 				}
 				if (resolved.kind !== "pointer") {
-					throw new FfiError(`${where(at)}.${fact}: ${name} is not a pointer`);
+					throw new FfiFactError(
+						"inapplicable",
+						`${where(at)}.${fact}`,
+						`${name} is not a pointer`,
+					);
 				}
 				const callerArray =
 					valueFacts.array !== undefined &&
 					(valueFacts.inout === true || valueFacts.array.capacity !== undefined);
 				if (callerArray) {
 					if (valueFacts.free !== undefined || valueFacts.nullable === true)
-						throw new FfiError(
-							`${where(at)}.array: caller-owned buffers cannot be nullable or declare free`,
+						throw new FfiFactError(
+							"conflict",
+							`${where(at)}.array`,
+							"caller-owned buffers cannot be nullable or declare free",
 						);
 					if (valueFacts.inout === true && valueFacts.array?.capacity !== undefined)
-						throw new FfiError(
-							`${where(at)}.array.capacity: inout buffers use their input length`,
+						throw new FfiFactError(
+							"conflict",
+							`${where(at)}.array.capacity`,
+							"inout buffers use their input length",
 						);
 					const element = resolveCType(this.#model, resolved.to);
 					if (["void", "function", "unsupported", "typedef"].includes(element.kind)) {
-						gap("caller-owned array buffers need complete value elements");
+						gap("caller-owned array buffers need complete value elements", "unsupported");
 						return;
 					}
 					if (element.kind === "pointer" && valueFacts.borrowed === undefined) {
-						gap("caller pointer buffers require an explicit borrowed ownership choice");
+						gap(
+							"caller pointer buffers require an explicit borrowed ownership choice",
+							"ownership",
+						);
 						return;
 					}
 					const written = map(
@@ -2998,12 +3447,14 @@ class Planner {
 						at,
 					);
 					if ("gap" in written) {
-						gap(written.gap);
+						gap(written.gap, written.code);
 						return;
 					}
 					if (valueFacts.borrowed === true && !this.#canBorrowResult(written.value))
-						throw new FfiError(
-							`${where(at)}.borrowed: requires a handle output or flat pointer array`,
+						throw new FfiFactError(
+							"inapplicable",
+							`${where(at)}.borrowed`,
+							"requires a handle output or flat pointer array",
 						);
 					const pointers =
 						written.value.kind === "sequence" &&
@@ -3016,6 +3467,7 @@ class Planner {
 					if (element.kind === "pointer" && !pointers) {
 						gap(
 							"caller pointer buffers need independent pointer handles with an explicit ownership choice",
+							"ownership",
 						);
 						return;
 					}
@@ -3030,7 +3482,10 @@ class Planner {
 								})
 							))
 					) {
-						gap("resource-bearing caller array outputs need explicit element ownership");
+						gap(
+							"resource-bearing caller array outputs need explicit element ownership",
+							"ownership",
+						);
 						return;
 					}
 					const capacity =
@@ -3044,8 +3499,10 @@ class Planner {
 							type.kind !== "integer" ||
 							"gap" in this.#integer(type.name)
 						)
-							throw new FfiError(
-								`${where(at)}.array.capacity: capacity must be an integer input of at most 64 bits`,
+							throw new FfiFactError(
+								"inapplicable",
+								`${where(at)}.array.capacity`,
+								"capacity must be an integer input of at most 64 bits",
 							);
 					}
 					const output = outputs.length;
@@ -3062,7 +3519,7 @@ class Planner {
 					}
 					const read = map(param.type, "param", valueFacts, at);
 					if ("gap" in read) {
-						gap(read.gap);
+						gap(read.gap, read.code);
 						return;
 					}
 					params.push({ name, type: param.type, value: read.value });
@@ -3073,7 +3530,7 @@ class Planner {
 					resolveCType(this.#model, resolved.to).kind === "array" &&
 					valueFacts.array !== undefined
 				) {
-					gap("counted outer array outputs need an explicit capacity");
+					gap("counted outer array outputs need an explicit capacity", "array");
 					return;
 				}
 				const written = map(
@@ -3083,12 +3540,14 @@ class Planner {
 					at,
 				);
 				if ("gap" in written) {
-					gap(written.gap);
+					gap(written.gap, written.code);
 					return;
 				}
 				if (valueFacts.borrowed === true && !this.#canBorrowResult(written.value))
-					throw new FfiError(
-						`${where(at)}.borrowed: requires a handle output or flat pointer array`,
+					throw new FfiFactError(
+						"inapplicable",
+						`${where(at)}.borrowed`,
+						"requires a handle output or flat pointer array",
 					);
 
 				if (
@@ -3102,7 +3561,10 @@ class Planner {
 						})
 					)
 				) {
-					gap("resource-bearing array outputs need explicit element ownership");
+					gap(
+						"resource-bearing array outputs need explicit element ownership",
+						"ownership",
+					);
 					return;
 				}
 				if (
@@ -3112,6 +3574,7 @@ class Planner {
 				) {
 					gap(
 						`${written.value.name}: copied-handle inout would duplicate ownership; pass the handle pointer directly for in-place updates`,
+						"unsupported",
 					);
 					return;
 				}
@@ -3150,7 +3613,7 @@ class Planner {
 					at,
 				);
 				if ("gap" in read) {
-					gap(read.gap);
+					gap(read.gap, read.code);
 					return;
 				}
 				params.push({ name, type: resolved.to, value: read.value });
@@ -3158,8 +3621,10 @@ class Planner {
 				return;
 			}
 			if (valueFacts.free !== undefined) {
-				throw new FfiError(
-					`${where(at)}.free: free applies to results and out parameters`,
+				throw new FfiFactError(
+					"inapplicable",
+					`${where(at)}.free`,
+					"free applies to results and out parameters",
 				);
 			}
 			const mapped = map(
@@ -3171,22 +3636,26 @@ class Planner {
 				at,
 			);
 			if ("gap" in mapped) {
-				gap(mapped.gap);
+				gap(mapped.gap, mapped.code);
 				return;
 			}
 			if (
 				valueFacts.nullable === true &&
 				!("nullable" in mapped.value && mapped.value.nullable)
 			) {
-				throw new FfiError(
-					`${where(at)}: nullable applies to string, handle, buffer, and array pointers`,
+				throw new FfiFactError(
+					"inapplicable",
+					where(at),
+					"nullable applies to string, handle, buffer, and array pointers",
 				);
 			}
 			const writable = valueFacts.array?.writable === true;
 			const view = this.#numericView(param.type, mapped.value, writable);
 			if (writable && view === undefined)
-				throw new FfiError(
-					`${where(at)}.array.writable: writable views need a non-const arithmetic pointer`,
+				throw new FfiFactError(
+					"inapplicable",
+					`${where(at)}.array.writable`,
+					"writable views need a non-const arithmetic pointer",
 				);
 			params.push({
 				name,
@@ -3200,8 +3669,10 @@ class Planner {
 
 		for (const output of outputs) {
 			if (typeof output.capacity === "number" && args[output.capacity]?.kind !== "input")
-				throw new FfiError(
-					`${where(`params.${output.name}.array.capacity`)}: capacity must remain an integer input`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${where(`params.${output.name}.array.capacity`)}`,
+					"capacity must remain an integer input",
 				);
 		}
 
@@ -3223,10 +3694,18 @@ class Planner {
 					root?.value.kind !== "handle" ||
 					root.value.pass === "copy"
 				)
-					throw new FfiError(`${where(at)}: an input handle with stable C storage`);
+					throw new FfiFactError(
+						"unmet-requirement",
+						where(at),
+						"an input handle with stable C storage",
+					);
 				const callback = params[entry.param]!;
 				if (callback.value.kind !== "callback")
-					throw new FfiError(`${where(at)}: a retained callback parameter`);
+					throw new FfiFactError(
+						"inapplicable",
+						where(at),
+						"a retained callback parameter",
+					);
 				params[entry.param] = {
 					...callback,
 					value: { ...callback.value, owner: selected.param },
@@ -3235,10 +3714,18 @@ class Planner {
 		if (gaps.length === 0)
 			this.#closingCallback(declaration, factsAt, args, params, where);
 		if (facts.returns.constant !== undefined) {
-			throw new FfiError(`${where("returns.constant")}: constant applies to parameters`);
+			throw new FfiFactError(
+				"inapplicable",
+				where("returns.constant"),
+				"constant applies to parameters",
+			);
 		}
 		if (facts.returns.sizeof !== undefined)
-			throw new FfiError(`${where("returns.sizeof")}: sizeof applies to parameters`);
+			throw new FfiFactError(
+				"inapplicable",
+				where("returns.sizeof"),
+				"sizeof applies to parameters",
+			);
 		const returns: Mapping =
 			replaced !== undefined &&
 			Object.keys(facts.returns).length === 0 &&
@@ -3251,8 +3738,10 @@ class Planner {
 				: map(declaration.returns, "return", facts.returns, "returns");
 		if ("value" in returns) {
 			if (facts.returns.borrowed === true && !this.#canBorrowResult(returns.value)) {
-				throw new FfiError(
-					`${where("returns.borrowed")}: requires a handle or flat pointer array`,
+				throw new FfiFactError(
+					"inapplicable",
+					where("returns.borrowed"),
+					"requires a handle or flat pointer array",
 				);
 			}
 			const counted =
@@ -3264,8 +3753,10 @@ class Planner {
 				callableContext?.retainedGlobal === undefined &&
 				counted !== (resultCount !== undefined)
 			) {
-				throw new FfiError(
-					`${where("returns")}: a buffer or array result needs its length`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					where("returns"),
+					"a buffer or array result needs its length",
 				);
 			}
 			this.#free(facts.returns.free, returns.value, where("returns"));
@@ -3273,11 +3764,13 @@ class Planner {
 				outputs.some((output) => output.name === "result") &&
 				returns.value.kind !== "undefined"
 			) {
-				throw new FfiError(
-					`${where("params.result")}: an output named 'result' hides the result`,
+				throw new FfiFactError(
+					"conflict",
+					where("params.result"),
+					"an output named 'result' hides the result",
 				);
 			}
-		} else gaps.push({ at: "return", reason: returns.gap });
+		} else gaps.push({ at: "return", code: returns.code, reason: returns.gap });
 		if ("value" in returns) {
 			const results = [returns.value, ...outputs.map((output) => output.value)];
 			if (
@@ -3295,6 +3788,7 @@ class Planner {
 			)
 				gaps.push({
 					at: "return",
+					code: "unsupported",
 					reason: "pointer results require a complete result transaction",
 				});
 		}
@@ -3321,8 +3815,10 @@ class Planner {
 				handle.destroy.success !== undefined ||
 				closes !== undefined
 			)
-				throw new FfiError(
-					`${where(at)}: requires a mutable nonnullable caller-storage input with an unconditional collecting destructor`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					where(at),
+					"requires a mutable nonnullable caller-storage input with an unconditional collecting destructor",
 				);
 			if (
 				facts.initializes.success !== undefined &&
@@ -3330,7 +3826,11 @@ class Planner {
 					resolveCType(this.#model, declaration.returns).kind,
 				)
 			)
-				throw new FfiError(`${where(at)}.success: requires an integer or boolean return`);
+				throw new FfiFactError(
+					"inapplicable",
+					`${where(at)}.success`,
+					"requires an integer or boolean return",
+				);
 			initializes = {
 				param: input.param,
 				...(facts.initializes.success === undefined
@@ -3347,8 +3847,10 @@ class Planner {
 				args[0].param !== closes ||
 				params[closes]?.value.kind !== "handle")
 		)
-			throw new FfiError(
-				`${where("params")}: a destroy function must keep its handle as an input`,
+			throw new FfiFactError(
+				"unmet-requirement",
+				where("params"),
+				"a destroy function must keep its handle as an input",
 			);
 		return {
 			name: declaration.name,
@@ -3386,7 +3888,7 @@ function planVariant(
 ): BoundFunction | UnboundFunction {
 	const at = `functions.${declaration.name}.variants.${name}`;
 	if (!declaration.variadic) {
-		throw new FfiError(`${at}: ${declaration.name} is not variadic`);
+		throw new FfiFactError("inapplicable", at, `${declaration.name} is not variadic`);
 	}
 	const fixed = declaration.params.length;
 	const params = [
@@ -3397,7 +3899,11 @@ function planVariant(
 				type.kind === "unsupported" ||
 				resolveCType(model, type).kind === "unsupported"
 			) {
-				throw new FfiError(`${at}.args[${index}]: '${spelling}' is not a C type`);
+				throw new FfiFactError(
+					"unknown-name",
+					`${at}.args[${index}]`,
+					`'${spelling}' is not a C type`,
+				);
 			}
 			return { name: `arg${fixed + index + 1}`, type };
 		}),
@@ -3410,7 +3916,11 @@ function planVariant(
 			? Number(key) - 1
 			: params.findIndex((param) => param.name === key);
 		if (index < fixed || index >= params.length) {
-			throw new FfiError(`${at}.params.${key}: ${name} has no such variadic argument`);
+			throw new FfiFactError(
+				"unknown-name",
+				`${at}.params.${key}`,
+				`${name} has no such variadic argument`,
+			);
 		}
 		paramFacts[index] = valueFacts;
 	}
@@ -3428,9 +3938,16 @@ function planVariant(
 	return { ...result, name };
 }
 
+/**
+ * Map a library's declarations through its contract facts. A rejected fact throws an
+ * `FfiFactError`. With `diagnostics`, a function whose facts the planner rejects is
+ * left out and its error collected instead, so one run reports every rejected function
+ * and the plan stays incomplete; type facts still throw.
+ */
 export function planBindings(
 	model: CModel,
 	facts: LibraryFacts = EMPTY_FACTS,
+	diagnostics?: Array<FfiFactError>,
 ): BindingPlan {
 	const handleMap = handleTypes(model, facts);
 	const factMap = functionFacts(model, facts);
@@ -3443,21 +3960,25 @@ export function planBindings(
 	const dispatchers: Array<BoundDispatcher> = [];
 	const unbound: Array<UnboundFunction> = [];
 	const declared = new Set(model.functions.map((declaration) => declaration.name));
-	for (const declaration of model.functions) {
+	const planDeclaration = (declaration: CFunction): void => {
 		const variants = Object.entries(facts.functions[declaration.name]?.variants ?? {});
 		if (
 			facts.functions[declaration.name]?.dispatch !== undefined &&
 			variants.length === 0
 		)
-			throw new FfiError(
-				`functions.${declaration.name}.dispatch: provide typed variants`,
+			throw new FfiFactError(
+				"unmet-requirement",
+				`functions.${declaration.name}.dispatch`,
+				"provide typed variants",
 			);
 		if (variants.length > 0) {
 			const dispatch = facts.functions[declaration.name]?.dispatch;
 			if (dispatch !== undefined) {
 				if (declared.has(dispatch) && dispatch !== declaration.name)
-					throw new FfiError(
-						`functions.${declaration.name}.dispatch: '${dispatch}' is already a function`,
+					throw new FfiFactError(
+						"conflict",
+						`functions.${declaration.name}.dispatch`,
+						`'${dispatch}' is already a function`,
 					);
 				declared.add(dispatch);
 			}
@@ -3466,8 +3987,10 @@ export function planBindings(
 			// A variadic function binds only through its variants.
 			for (const [name, variant] of variants) {
 				if (declared.has(name)) {
-					throw new FfiError(
-						`functions.${declaration.name}.variants.${name}: '${name}' is already a function`,
+					throw new FfiFactError(
+						"conflict",
+						`functions.${declaration.name}.variants.${name}`,
+						`'${name}' is already a function`,
 					);
 				}
 				declared.add(name);
@@ -3484,6 +4007,7 @@ export function planBindings(
 					gaps.push(
 						...result.gaps.map((gap) => ({
 							at: name,
+							code: gap.code,
 							reason: `${gap.at}: ${gap.reason}`,
 						})),
 					);
@@ -3502,7 +4026,7 @@ export function planBindings(
 					});
 				else dispatchers.push({ name: dispatch, declaration, cases });
 			}
-			continue;
+			return;
 		}
 		const result = planner.function(
 			declaration,
@@ -3513,17 +4037,31 @@ export function planBindings(
 		if (asyncName !== undefined) {
 			const at = `functions.${declaration.name}.async`;
 			if (declared.has(asyncName)) {
-				throw new FfiError(`${at}: '${asyncName}' is already a function`);
+				throw new FfiFactError("conflict", at, `'${asyncName}' is already a function`);
 			}
 			if ("params" in result && result.params.some((param) => param.writable === true))
-				throw new FfiError(
-					`${at}: writable array views lend storage only to synchronous calls`,
+				throw new FfiFactError(
+					"conflict",
+					at,
+					"writable array views lend storage only to synchronous calls",
 				);
 			declared.add(asyncName);
 		}
 		if ("gaps" in result) unbound.push(result);
 		else
 			functions.push(asyncName === undefined ? result : { ...result, async: asyncName });
+	};
+	for (const declaration of model.functions) {
+		if (diagnostics === undefined) {
+			planDeclaration(declaration);
+			continue;
+		}
+		try {
+			planDeclaration(declaration);
+		} catch (error) {
+			if (!(error instanceof FfiFactError)) throw error;
+			diagnostics.push(error);
+		}
 	}
 	const handles = new Map<string, HandleType>();
 	const fieldFacts = new Map<string, Readonly<Record<string, MaligatorFfiFieldFacts>>>();
@@ -3574,8 +4112,10 @@ export function planBindings(
 				if (!viewNames.has(field.name)) continue;
 				const previous = owners.get(field.name);
 				if (previous !== undefined)
-					throw new FfiError(
-						`types.${handle.name}.fields.${field.name}: view field conflicts with ${previous}`,
+					throw new FfiFactError(
+						"conflict",
+						`types.${handle.name}.fields.${field.name}`,
+						`view field conflicts with ${previous}`,
 					);
 				owners.set(field.name, `${handle.name}.${field.name}`);
 			}
@@ -3604,8 +4144,10 @@ export function planBindings(
 		if (!lifetimeRoots.has(handle.family))
 			for (const field of handle.fields)
 				if (field.value.kind === "handle" && field.value.owner !== undefined)
-					throw new FfiError(
-						`types.${handle.name}.fields.${field.name}.handle: owner lifetime requires a destructor-backed owning root`,
+					throw new FfiFactError(
+						"unmet-requirement",
+						`types.${handle.name}.fields.${field.name}.handle`,
+						"owner lifetime requires a destructor-backed owning root",
 					);
 
 	const constants: Array<MappedConstant> = [];
@@ -3698,8 +4240,10 @@ export function planBindings(
 	);
 	for (const dispatch of dispatchers)
 		if (constants.some((constant) => constant.name === dispatch.name))
-			throw new FfiError(
-				`functions.${dispatch.declaration.name}.dispatch: '${dispatch.name}' is already a constant`,
+			throw new FfiFactError(
+				"conflict",
+				`functions.${dispatch.declaration.name}.dispatch`,
+				`'${dispatch.name}' is already a constant`,
 			);
 	const occupied = new Set([
 		...declared,
@@ -3714,11 +4258,23 @@ export function planBindings(
 		const global = model.globals.find((global) => global.name === name);
 		const at = `globals.${name}`;
 		if (global === undefined)
-			throw new FfiError(`${at}: the headers declare no global '${name}'`);
+			throw new FfiFactError(
+				"unknown-name",
+				at,
+				`the headers declare no global '${name}'`,
+			);
 		if (global.linkage !== "external")
-			throw new FfiError(`${at}: access requires an externally linked C object`);
+			throw new FfiFactError(
+				"unmet-requirement",
+				at,
+				"access requires an externally linked C object",
+			);
 		if (entry.get === undefined && entry.set === undefined)
-			throw new FfiError(`${at}: provide a getter or setter export`);
+			throw new FfiFactError(
+				"unmet-requirement",
+				at,
+				"provide a getter or setter export",
+			);
 		const { bytes, lifetime, ...value } = entry.value ?? {};
 		const resolved = resolveCType(model, global.type);
 		const format =
@@ -3727,8 +4283,10 @@ export function planBindings(
 		let retained: GlobalAccessor["retained"];
 		if (lifetime === "replacement") {
 			if (resolved.kind !== "pointer" || resolved.const === true || global.threadLocal)
-				throw new FfiError(
-					`${at}.value.lifetime: replacement requires an assignable non-TLS pointer`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.value.lifetime`,
+					"replacement requires an assignable non-TLS pointer",
 				);
 			const element = resolveCType(model, resolved.to);
 			const text = value.string === true;
@@ -3736,11 +4294,19 @@ export function planBindings(
 				!(element.kind === "integer" && model.target.sizes[element.name] === 1) &&
 				!(element.kind === "void" && !text)
 			)
-				throw new FfiError(`${at}.value: retained pointers require byte storage`);
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.value`,
+					"retained pointers require byte storage",
+				);
 			retained = { format: text ? "string" : "bytes" };
 			if (!text) {
 				if (bytes === undefined || bytes === true)
-					throw new FfiError(`${at}.value.bytes: retained bytes need a global count`);
+					throw new FfiFactError(
+						"unmet-requirement",
+						`${at}.value.bytes`,
+						"retained bytes need a global count",
+					);
 				const count = model.globals.find((candidate) => candidate.name === bytes.length);
 				const type = count === undefined ? undefined : resolveCType(model, count.type);
 				const size = type?.kind === "integer" ? model.target.sizes[type.name] : undefined;
@@ -3753,15 +4319,19 @@ export function planBindings(
 					size === undefined ||
 					size > 8
 				)
-					throw new FfiError(
-						`${at}.value.bytes.length: requires a writable external non-TLS integer up to 64 bits`,
+					throw new FfiFactError(
+						"unmet-requirement",
+						`${at}.value.bytes.length`,
+						"requires a writable external non-TLS integer up to 64 bits",
 					);
 				if (
 					retainedCounts.has(count.name) ||
 					facts.globals?.[count.name]?.set !== undefined
 				)
-					throw new FfiError(
-						`${at}.value.bytes.length: the count belongs exclusively to one retained pointer`,
+					throw new FfiFactError(
+						"unmet-requirement",
+						`${at}.value.bytes.length`,
+						"the count belongs exclusively to one retained pointer",
 					);
 				retainedCounts.add(count.name);
 				retained = {
@@ -3777,50 +4347,72 @@ export function planBindings(
 				};
 			}
 		} else if (typeof bytes === "object")
-			throw new FfiError(
-				`${at}.value.bytes: pointer bytes require a replacement lifetime`,
+			throw new FfiFactError(
+				"unmet-requirement",
+				`${at}.value.bytes`,
+				"pointer bytes require a replacement lifetime",
 			);
 		else if (resolved.kind === "array" && format !== undefined) {
 			const element = resolveCType(model, resolved.of);
 			if (element.kind !== "integer" || model.target.sizes[element.name] !== 1)
-				throw new FfiError(
-					`${at}.value: bounded text and bytes require a one-dimensional byte array`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.value`,
+					"bounded text and bytes require a one-dimensional byte array",
 				);
 			if (
 				value.borrowed !== undefined ||
 				value.callable !== undefined ||
 				value.shape !== undefined
 			)
-				throw new FfiError(
-					`${at}.value: a bounded array uses only its string or bytes representation`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.value`,
+					"a bounded array uses only its string or bytes representation",
 				);
 			bounded = { format };
 		} else if (bytes === true)
-			throw new FfiError(`${at}.value.bytes: bytes require a fixed byte array`);
+			throw new FfiFactError(
+				"unmet-requirement",
+				`${at}.value.bytes`,
+				"bytes require a fixed byte array",
+			);
 		if (
 			resolved.kind === "array" &&
 			bounded === undefined &&
 			Object.keys(value).length > 0
 		)
-			throw new FfiError(`${at}.value: fixed arrays use their declared element mapping`);
+			throw new FfiFactError(
+				"unmet-requirement",
+				`${at}.value`,
+				"fixed arrays use their declared element mapping",
+			);
 		for (const access of ["get", "set"] as const) {
 			const exported = entry[access];
 			if (exported === undefined) continue;
 			if (occupied.has(exported))
-				throw new FfiError(`${at}.${access}: '${exported}' is already an export`);
+				throw new FfiFactError(
+					"conflict",
+					`${at}.${access}`,
+					`'${exported}' is already an export`,
+				);
 			occupied.add(exported);
 			if (
 				access === "set" &&
 				retained === undefined &&
 				!globalAssignable(model, global.type, handles)
 			)
-				throw new FfiError(
-					`${at}.set: a setter requires an assignable value without retained pointers`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.set`,
+					"a setter requires an assignable value without retained pointers",
 				);
 			const storageType = globalStorageType(model, global.type, planner.natives);
 			if (resolved.kind === "array" && !globalAssignable(model, storageType, handles))
-				throw new FfiError(
-					`${at}: an array accessor requires positive signed 32-bit bounds and resource-free values`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					at,
+					"an array accessor requires positive signed 32-bit bounds and resource-free values",
 				);
 			const declaration: CFunction = {
 				name: `mal_ffi_global_${access}_${name}`,
@@ -3852,8 +4444,10 @@ export function planBindings(
 				access === "get" &&
 				hasOwnedRecordFields(result.returns, planner)
 			)
-				throw new FfiError(
-					`${at}.value: a global getter cannot transfer independently owned record fields`,
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.value`,
+					"a global getter cannot transfer independently owned record fields",
 				);
 			if (
 				!("gaps" in result) &&
@@ -3861,7 +4455,11 @@ export function planBindings(
 				result.returns.kind === "handle" &&
 				value.borrowed !== true
 			)
-				throw new FfiError(`${at}.value: a global handle requires borrowed: true`);
+				throw new FfiFactError(
+					"unmet-requirement",
+					`${at}.value`,
+					"a global handle requires borrowed: true",
+				);
 			const binding = {
 				...result,
 				name: exported,
@@ -3893,8 +4491,10 @@ export function planBindings(
 			planner.records.has(native.name) ||
 			handles.has(native.name)
 		)
-			throw new FfiError(
-				`types.${native.name}.representation: '${native.name}' is already an export`,
+			throw new FfiFactError(
+				"conflict",
+				`types.${native.name}.representation`,
+				`'${native.name}' is already an export`,
 			);
 	}
 	for (const handle of handles.values()) {
@@ -3903,8 +4503,10 @@ export function planBindings(
 			(declared.has(handle.allocator) ||
 				constants.some((entry) => entry.name === handle.allocator))
 		)
-			throw new FfiError(
-				`types.${handle.allocator}.handle.storage: '${handle.allocator}' is already an export`,
+			throw new FfiFactError(
+				"conflict",
+				`types.${handle.allocator}.handle.storage`,
+				`'${handle.allocator}' is already an export`,
 			);
 	}
 	return {

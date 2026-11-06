@@ -171,7 +171,11 @@ describe("returned C function contracts", () => {
 			},
 		});
 		expect(plan.unbound.find(({ name }) => name === "callable_variadic")?.gaps).toEqual([
-			{ at: "return", reason: "a callable function pointer needs a fixed signature" },
+			{
+				at: "return",
+				code: "unsupported",
+				reason: "a callable function pointer needs a fixed signature",
+			},
 		]);
 	});
 	it.each([

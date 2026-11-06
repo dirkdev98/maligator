@@ -10,7 +10,7 @@ import type { CFunction, CModel, CRecord } from "./c-model.ts";
 import { formatCDeclaration } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import type { LibraryFacts } from "./contract.ts";
-import { FfiError } from "./ffi-error.ts";
+import { FfiError, FfiFactError, factEntry } from "./ffi-error.ts";
 import { textMatches } from "./text.ts";
 
 /**
@@ -166,6 +166,34 @@ function suggestHandles(
 	model: CModel,
 	plan: BindingPlan,
 ): Map<string, MaligatorFfiTypeFacts> {
+	// Index the model once by struct; ranking names per struct and function dominated
+	// suggestions for headers with thousands of declarations.
+	const typeNames = new Map<CRecord, Array<string>>();
+	// Typedefs name the struct or its pointer, as zlib's `gzFile` does `gzFile_s`.
+	for (const typedef of model.typedefs.values()) {
+		const record = recordOf(model, pointee(model, typedef.type) ?? typedef.type);
+		if (record !== undefined) appendTo(typeNames, record, typedef.name);
+	}
+	const singleArgument = new Map<CRecord, Array<CFunction>>();
+	const handedOut = new Set<CRecord>();
+	const pointedRecord = (type: CType): CRecord | undefined => {
+		const target = pointee(model, type);
+		return target?.kind === "record" ? model.records.get(target.name) : undefined;
+	};
+	for (const declaration of model.functions) {
+		const returned = pointedRecord(declaration.returns);
+		if (returned !== undefined) handedOut.add(returned);
+		for (const param of declaration.params) {
+			const target = pointee(model, param.type);
+			const written = target === undefined ? undefined : pointedRecord(target);
+			if (written !== undefined) handedOut.add(written);
+		}
+		const param = declaration.params[0];
+		if (declaration.params.length !== 1 || param === undefined) continue;
+		const record = recordOf(model, param.type) ?? pointedRecord(param.type);
+		if (record !== undefined) appendTo(singleArgument, record, declaration);
+	}
+	const tagged = new Set([...plan.tagged.values()].map((entry) => entry.record.name));
 	const handles = new Map<string, MaligatorFfiTypeFacts>();
 	for (const record of model.records.values()) {
 		if (
@@ -173,28 +201,13 @@ function suggestHandles(
 			record.tag !== "struct" ||
 			plan.handles.has(record.name) ||
 			plan.records.has(record.name) ||
-			[...plan.tagged.values()].some((entry) => entry.record.name === record.name)
+			tagged.has(record.name)
 		)
 			continue;
-		// Typedefs name the struct or its pointer, as zlib's `gzFile` does `gzFile_s`.
-		const typeNames = [
-			record.name,
-			...[...model.typedefs.values()].flatMap((typedef) =>
-				recordOf(model, pointee(model, typedef.type) ?? typedef.type) === record
-					? [typedef.name]
-					: [],
-			),
-		];
-		const releases = model.functions.flatMap((declaration) => {
-			const param = declaration.params[0];
-			const rank = releaseRank(declaration.name, typeNames);
-			if (declaration.params.length !== 1 || param === undefined || rank === undefined)
-				return [];
-			const target = pointee(model, param.type);
-			return recordOf(model, param.type) === record ||
-				(target?.kind === "record" && model.records.get(target.name) === record)
-				? [{ declaration, rank }]
-				: [];
+		const names = [record.name, ...(typeNames.get(record) ?? [])];
+		const releases = (singleArgument.get(record) ?? []).flatMap((declaration) => {
+			const rank = releaseRank(declaration.name, names);
+			return rank === undefined ? [] : [{ declaration, rank }];
 		});
 		const best = Math.min(...releases.map(({ rank }) => rank));
 		const ranked = releases.filter(({ rank }) => rank === best);
@@ -211,27 +224,17 @@ function suggestHandles(
 				: undefined;
 		if (release !== undefined && resolveCType(model, release.returns).kind === "void") {
 			handles.set(record.name, { handle: { destroy: release.name } });
-		} else if (!record.complete && (releases.length === 0 || !handedOut(model, record))) {
+		} else if (!record.complete && (releases.length === 0 || !handedOut.has(record))) {
 			handles.set(record.name, { handle: {} });
 		}
 	}
 	return handles;
 }
 
-/** Whether a function returns a pointer to `record` or writes one through a parameter. */
-function handedOut(model: CModel, record: CRecord): boolean {
-	const points = (type: CType): boolean => {
-		const target = pointee(model, type);
-		return target?.kind === "record" && model.records.get(target.name) === record;
-	};
-	return model.functions.some(
-		(declaration) =>
-			points(declaration.returns) ||
-			declaration.params.some((param) => {
-				const target = pointee(model, param.type);
-				return target !== undefined && points(target);
-			}),
-	);
+function appendTo<K, V>(map: Map<K, Array<V>>, key: K, value: V): void {
+	const values = map.get(key);
+	if (values === undefined) map.set(key, [value]);
+	else values.push(value);
 }
 
 /** The integer parameter that counts the elements or bytes behind pointer parameter `index`. */
@@ -395,11 +398,6 @@ function callbackParameterFacts(
 	return Object.keys(facts).length === 0 ? undefined : facts;
 }
 
-function parameterIndex(gap: Gap): number | undefined {
-	const match = /^param (\d+) /.exec(gap.at);
-	return match === null ? undefined : Number(match[1]) - 1;
-}
-
 function suggestFunction(
 	model: CModel,
 	declaration: CFunction,
@@ -444,7 +442,7 @@ function suggestFunction(
 		const index = declaration.params.findIndex((param) => param.name === counted);
 		if (index >= 0) taken.add(index);
 	}
-	for (const index of gaps.flatMap((gap) => parameterIndex(gap) ?? [])) {
+	for (const index of gaps.flatMap((gap) => gap.param ?? [])) {
 		const target = pointee(model, declaration.params[index]!.type);
 		if (target === undefined || taken.has(index)) continue;
 		if (target.kind === "function") {
@@ -565,6 +563,65 @@ function handleNames(binding: BoundFunction): Array<string> {
 	].flatMap(names);
 }
 
+/**
+ * Plan with suggestions applied, collecting every rejected function in one run so
+ * validation drops all their suggestions before planning again.
+ */
+function planWithSuggestions(
+	model: CModel,
+	facts: LibraryFacts,
+	types: ReadonlyMap<string, MaligatorFfiTypeFacts>,
+	functions: ReadonlyMap<string, MaligatorFfiFunctionFacts>,
+): { readonly plan: BindingPlan } | { readonly errors: ReadonlyArray<FfiError> } {
+	const errors: Array<FfiFactError> = [];
+	try {
+		const plan = planBindings(model, mergeFacts(facts, types, functions), errors);
+		return errors.length === 0 ? { plan } : { errors };
+	} catch (error) {
+		if (!(error instanceof FfiError)) throw error;
+		return { errors: [...errors, error] };
+	}
+}
+
+/**
+ * Drop the suggestion behind each rejected fact: the entry that holds the fact, or the
+ * suggested function whose planning reached it. False when a stated fact or an error
+ * without a fact path remains unexplained.
+ */
+function dropRejected(
+	errors: ReadonlyArray<FfiError>,
+	types: Map<string, MaligatorFfiTypeFacts>,
+	functions: Map<string, MaligatorFfiFunctionFacts>,
+): boolean {
+	const dropped = new Set<string>();
+	let explained = true;
+	for (const error of errors) {
+		const entries =
+			error instanceof FfiFactError
+				? [
+						error.entry,
+						error.context === undefined ? undefined : factEntry(error.context),
+					]
+				: [];
+		const rejected = entries.find((entry) => {
+			if (entry === undefined) return false;
+			const key = `${entry.section}.${entry.name}`;
+			if (dropped.has(key)) return true;
+			const suggestions =
+				entry.section === "types"
+					? types
+					: entry.section === "functions"
+						? functions
+						: undefined;
+			if (suggestions?.delete(entry.name) !== true) return false;
+			dropped.add(key);
+			return true;
+		});
+		if (rejected === undefined) explained = false;
+	}
+	return explained;
+}
+
 function sortedRecord<T>(entries: Iterable<[string, T]>): Record<string, T> {
 	return Object.fromEntries(
 		[...entries].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
@@ -586,17 +643,14 @@ export function suggestFacts(
 	// the gaps that remain once the types apply.
 	let typed: BindingPlan = plan;
 	for (;;) {
-		try {
-			typed = planBindings(model, mergeFacts(facts, types, new Map()));
-			break;
-		} catch (error) {
-			if (!(error instanceof FfiError)) throw error;
-			// Drop the type suggestion the planner rejected; without a name, all of them.
-			const rejected = /^types\.([^.:]+)/.exec(error.message)?.[1];
-			if (rejected !== undefined && types.delete(rejected)) continue;
-			types.clear();
+		const trial = planWithSuggestions(model, facts, types, new Map());
+		if ("plan" in trial) {
+			typed = trial.plan;
 			break;
 		}
+		if (dropRejected(trial.errors, types, new Map())) continue;
+		types.clear();
+		break;
 	}
 	const functions = new Map<string, MaligatorFfiFunctionFacts>();
 	for (const entry of typed.unbound) {
@@ -629,22 +683,9 @@ export function suggestFacts(
 			functions.set(binding.name, { returns: { borrowed: true } });
 	}
 	for (;;) {
-		let trial: BindingPlan;
-		try {
-			trial = planBindings(model, mergeFacts(facts, types, functions));
-		} catch (error) {
-			if (!(error instanceof FfiError)) throw error;
-			// Facts errors name their path; drop the suggestion the planner rejected.
-			const match = /^(types|functions)\.([^.:]+)/.exec(error.message);
-			const rejected = match === null ? undefined : match[2]!;
-			if (match?.[1] === "types" && rejected !== undefined && types.delete(rejected))
-				continue;
-			if (
-				match?.[1] === "functions" &&
-				rejected !== undefined &&
-				functions.delete(rejected)
-			)
-				continue;
+		const planned = planWithSuggestions(model, facts, types, functions);
+		if ("errors" in planned) {
+			if (dropRejected(planned.errors, types, functions)) continue;
 			// A type suggestion broke a stated fact; suggest functions alone.
 			if (types.size > 0) {
 				types.clear();
@@ -652,6 +693,7 @@ export function suggestFacts(
 			}
 			return { types: {}, functions: {}, binds: [] };
 		}
+		const trial = planned.plan;
 		const before = new Set(plan.functions.map((binding) => binding.name));
 		const newly = trial.functions.filter((binding) => !before.has(binding.name));
 		const bound = new Set(newly.map((binding) => binding.name));

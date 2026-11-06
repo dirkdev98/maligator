@@ -1068,9 +1068,15 @@ The report lists each function that is not exported and the fact it needs. It al
 
 `--json` includes the structured C model and the accepted `facts`, alongside mapped
 signatures, header documentation, missing facts and suggestions in contract shape.
-The model retains unresolved record fields and typedef chains, including transitive
-system types, so a tool can follow a pointer's type before proposing a fact. Its
-declaration tables are arrays, and exact C integer values are decimal strings.
+Each missing fact has a `code` naming the kind of fact it needs, such as `handle`,
+`callback` or `text`, or `unsupported` when no fact binds it, and the C parameter it
+belongs to. The model retains unresolved record fields and typedef chains, including
+transitive system types, so a tool can follow a pointer's type before proposing a
+fact. Its declaration tables are arrays, and exact C integer values are decimal
+strings.
+
+A contract error starts with the fact path it rejects, such as
+`functions.png_read_row.params.row.bytes`, so the fix goes in that entry.
 
 ## Check a library upgrade
 

@@ -17,6 +17,7 @@ import { extractCModel } from "../src/ffi/c-extract.ts";
 import type { CModel } from "../src/ffi/c-model.ts";
 import type { LibraryFacts } from "../src/ffi/contract.ts";
 import { declarationsCurrent, generateDeclarations } from "../src/ffi/declarations.ts";
+import type { FfiFactError } from "../src/ffi/ffi-error.ts";
 import type { FfiInspection, FunctionInspection } from "../src/ffi/inspect.ts";
 import { loadCModel } from "../src/ffi/model-cache.ts";
 import { releaseRank, suggestFacts } from "../src/ffi/suggest.ts";
@@ -507,6 +508,29 @@ describe("ffi contract facts", () => {
 		);
 	};
 
+	it("collects every rejected function with its code and fact path in one planning run", () => {
+		const diagnostics: Array<FfiFactError> = [];
+		planBindings(
+			model,
+			{
+				types: {},
+				functions: {
+					shapes_area: { returns: { free: "shapes_free" } },
+					shapes_mul: { params: { factor: { constant: "0", nullable: true } } },
+				},
+			},
+			diagnostics,
+		);
+		expect(
+			diagnostics
+				.map(({ code, path }) => ({ code, path }))
+				.sort((left, right) => left.path.localeCompare(right.path)),
+		).toEqual([
+			{ code: "inapplicable", path: "functions.shapes_area.returns.free" },
+			{ code: "conflict", path: "functions.shapes_mul.params.factor" },
+		]);
+	});
+
 	it("suggests the count, output, result, callback, and handle facts the fixture contract states", () => {
 		const suggestions = suggestFacts(
 			model,
@@ -669,6 +693,7 @@ describe("ffi contract facts", () => {
 		const log = planBindings(model).unbound.find((entry) => entry.name === "shapes_log");
 		expect(log?.gaps).toContainEqual({
 			at: "arguments",
+			code: "variants",
 			reason: "variadic arguments need a fact per call",
 		});
 	});
@@ -820,7 +845,7 @@ describe("ffi contract facts", () => {
 					shapes_bounds: { params: { points: { bytes: { length: "count" } } } },
 				},
 			},
-			"functions.shapes_bounds.params.points: bytes applies to void and byte pointers, not const ShapesPoint *",
+			"functions.shapes_bounds.params.points.bytes: applies to void and byte pointers, not const ShapesPoint *",
 		);
 		rejects(
 			{ functions: { shapes_sum2: { params: { a: { string: true } } } } },

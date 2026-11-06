@@ -5,8 +5,19 @@ import { planBindings } from "../src/ffi/binding-plan.ts";
 import { extractCModel } from "../src/ffi/c-extract.ts";
 import type { CModel } from "../src/ffi/c-model.ts";
 import type { LibraryFacts } from "../src/ffi/contract.ts";
+import { FfiFactError } from "../src/ffi/ffi-error.ts";
 import { suggestFacts } from "../src/ffi/suggest.ts";
 import type { MaligatorFfiHandle } from "../src/public-api.d.ts";
+
+function planningError(plan: () => unknown): { code: string; path: string } {
+	try {
+		plan();
+	} catch (error) {
+		if (error instanceof FfiFactError) return { code: error.code, path: error.path };
+		throw error;
+	}
+	throw new Error("expected the planner to reject a fact");
+}
 
 describe("conditional cleanup facts", () => {
 	let model: CModel;
@@ -42,13 +53,18 @@ describe("conditional cleanup facts", () => {
 		});
 	});
 	it.each([
-		{ release_value: { returns: { fresh: true } } },
-		{ release_value: { params: { resource: { fresh: true } } } },
-	])("rejects a fresh fact outside pointer results: %j", (functions) => {
-		expect(() => planBindings(model, { ...facts({}), functions })).toThrow(
-			"fresh applies only to pointer handle results",
-		);
-	});
+		["returns", { returns: { fresh: true } }],
+		["params.resource", { params: { resource: { fresh: true } } }],
+	] as const)(
+		"rejects a fresh fact on %s outside pointer results",
+		(at, release_value) => {
+			expect(
+				planningError(() =>
+					planBindings(model, { ...facts({}), functions: { release_value } }),
+				),
+			).toEqual({ code: "inapplicable", path: `functions.release_value.${at}.fresh` });
+		},
+	);
 	it.each(["0", "RELEASE_OK"])(
 		"accepts the explicit successful cleanup code %s",
 		(success) => {
