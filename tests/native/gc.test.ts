@@ -135,11 +135,11 @@ describe("targeted GC unit tests", () => {
 					expect(result.status, result.stderr || result.stdout).toBe(0);
 					assertPassLine(result.stdout, spec.tag);
 					const cycles = Number(result.stderr.match(/\bcycles=(\d+)/)?.[1] ?? 0);
-					const blackAllocation = Number(
-						result.stderr.match(/\bover_tenure_bytes=(\d+)/)?.[1] ?? 0,
+					const cycleAllocation = Number(
+						result.stderr.match(/\bcycle_allocated_bytes=(\d+)/)?.[1] ?? 0,
 					);
 					expect(cycles).toBeGreaterThan(0);
-					expect(blackAllocation).toBeGreaterThan(0);
+					expect(cycleAllocation).toBeGreaterThan(0);
 				});
 			}
 

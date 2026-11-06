@@ -160,6 +160,8 @@ void mal_gc_collect(MalVm *vm);
 
 /* Complete an in-flight cycle before the mutator idles; never starts a new one. */
 bool mal_gc_finish_pending_cycle(MalVm *vm);
+/* Whether an incremental major cycle is marking or sweeping. */
+bool mal_gc_cycle_active(const MalVm *vm);
 
 u64 mal_gc_allocated_bytes(MalVm *vm);
 u64 mal_gc_collection_count(MalVm *vm);

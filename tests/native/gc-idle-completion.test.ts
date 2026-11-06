@@ -44,7 +44,8 @@ describe("GC idle completion", () => {
 			if (result.error !== undefined) throw result.error;
 			expect(result.status, result.signal || result.stderr || result.stdout).toBe(0);
 			expect(result.stdout).toBe("gc-idle-completion PASS\n");
-			expect(result.stderr).toMatch(/\bcollections=2 minor=0 major=2 pauses=3\b/);
+			// The incremental cycle opens and closes its marking with a minor inside its own pauses.
+			expect(result.stderr).toMatch(/\bcollections=4 minor=2 major=2 pauses=3\b/);
 			const stats = result.stderr.match(/^\[gc-stats\].*$/m)?.[0];
 			expect(stats).toBeDefined();
 			expect(latencyCount(stats!, "pause_major_slice")).toBe(1);

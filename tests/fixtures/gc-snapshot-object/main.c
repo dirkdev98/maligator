@@ -120,11 +120,11 @@ int main(int argc, char **argv) {
     pthread_mutex_unlock(&gate_mutex);
 
     deadline = time(nullptr) + 30;
-    while (vm.heap.black_alloc && time(nullptr) < deadline) {
+    while (mal_gc_cycle_active(&vm) && time(nullptr) < deadline) {
         mal_gc_safepoint(&vm);
         sched_yield();
     }
-    if (vm.heap.black_alloc || overwritten_finalized != 0 || untouched_finalized != 0) return 6;
+    if (mal_gc_cycle_active(&vm) || overwritten_finalized != 0 || untouched_finalized != 0) return 6;
     mal_gc_collect(&vm);
     MalPropertyLookup kept = mal_object_get_own(paused_owner, second);
     MalPropertyLookup new_first = mal_object_get_own(paused_owner, first);

@@ -20,16 +20,22 @@ unsupported.
 The collector uses an old-generation bit and remembered set for minor collections.
 An alternating major mark color keeps generation age separate from liveness.
 Minors park JavaScript and trace inline; measured worker handoff cost exceeded
-their short mark work. They do not overlap an active major or dispatch workers,
-so native minor mark claims use relaxed atomic loads and stores under exclusive
-mutator ownership. Shared major mark claims still require atomic compare/exchange.
+their short mark work. A minor during a major's marking first joins the major's
+workers and never dispatches its own, so native minor mark claims use relaxed atomic
+loads and stores under exclusive mutator ownership. Shared major mark claims still
+require atomic compare/exchange.
 Major roots are scanned at mutator safepoints before background work begins and
 again at remark. The compiled root maps and native root spans are read only while
 their owner is parked. SATB deletion barriers preserve the initial
 major graph, and card barriers preserve old-to-young edges. The SATB buffer holds
 at most 4,096 values; a full buffer claims its pending values into the mutator's
 grey queue without tracing payloads or scanning roots inside an unrooted native
-frame. New allocations are marked live while a major is in flight.
+frame. A major cycle opens with a minor, so its snapshot holds only old cells.
+While it marks, new cells carry its color but stay young: the major neither traces
+nor records them, and minors settle them, promoting survivors already marked. A
+minor runs when the nursery fills and again at remark, before the weak pass, so
+garbage born during a long cycle is reclaimed instead of promoted. The sweep
+allocates cells old and marked.
 
 Managed blocks describe their cells with bitmaps: free cells, cells allocated
 since the last collection, and cells whose death must run a finalizer.
@@ -101,12 +107,12 @@ soft budget defaults to 256 MiB and may be changed with
 `MAL_GC_PROCESS_BUDGET_BYTES`. Crossing a pressure threshold requests safepoints
 and wakes every registered owner. The first collection is a major and establishes
 the managed live-set and owned RAW baselines. Without pressure, another major waits
-until minors have promoted half of the previous managed live set, with a 16 MiB
+until minors have promoted as much as the previous managed live set, with a 16 MiB
 floor. Under pressure, net growth in owned RAW storage since the previous major also
-counts toward the half-live-set threshold, since old objects can acquire side
-storage without promoting managed cells. When half of the previous managed live set
-is at most the floor, pressure starts a major without waiting for debt. A stable
-large live set avoids futile majors after every few mapped chunks.
+counts toward that threshold, since old objects can acquire side storage without
+promoting managed cells. When the previous managed live set is at most the floor,
+pressure starts a major without waiting for debt. A stable large live set avoids
+futile majors after every few mapped chunks.
 `MAL_GC_MAJOR_EVERY` restores a fixed cadence for tests. Another pressure signal
 during an active cycle completes that cycle on its owner, so native growth cannot
 outrun a heap-only backstop.
@@ -155,7 +161,7 @@ Large root scans, mutator-only traces, finalization, and synchronous completion
 can still create long pauses. Wasm parity and broad performance acceptance are
 tracked in [TODO.md](../../TODO.md).
 
-A copying nursery, simultaneous minor and major cycles, compaction, and shared-heap
+A copying nursery, minors during a major's sweep, compaction, and shared-heap
 mutators require separate contracts. The compiled worker-boundary fixture pauses a
 snapshot worker that requests the next poll while a getter changes property storage.
 That first poll sees the native callback's result in an active compiled root slot. It also

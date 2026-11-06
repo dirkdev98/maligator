@@ -34,10 +34,10 @@ int main(int argc, char **argv) {
     mal_gc_poll = true;
     mal_gc_safepoint(&vm);
     if (!mal_gc_marking_active) return 4;
-    for (u32 step = 0; step < 100000 && vm.heap.black_alloc; ++step) {
+    for (u32 step = 0; step < 100000 && mal_gc_cycle_active(&vm); ++step) {
         mal_gc_safepoint(&vm);
     }
-    if (vm.heap.black_alloc) return 5;
+    if (mal_gc_cycle_active(&vm)) return 5;
     MalValue first;
     MalValue last;
     if (!mal_array_object_dense_get(array, 0, &first) || first != mal_value_from_i32(0) ||

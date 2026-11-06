@@ -421,6 +421,9 @@ struct MalGcState {
     usize backstop_at;
     // bytes_allocated at the previous mark step, for the assist budget.
     usize bytes_at_last_step;
+    // bytes_allocated at which a marking cycle runs its next minor. The heap trigger
+    // stays reached meanwhile, so every claim keeps polling for mark steps.
+    usize cycle_minor_at;
     usize last_major_live_bytes;
     usize last_major_raw_owned_bytes;
     usize promotion_debt;
@@ -471,6 +474,9 @@ struct MalGcState {
     u64 compiled_root_slots_skipped;
     u64 cycles; // incremental major cycles started
     u64 sync_backstop; // cycles that had to finish synchronously
+    u64 marking_minors; // minors run while a cycle marked, between its opening and closing ones
+    u64 cycle_allocated_bytes; // allocated between a cycle's opening and its finished sweep
+    usize cycle_start_allocated;
     u64 init_mark_ns; // last init-mark pause
     u64 remark_ns; // last remark pause
     u64 max_mark_step_ns; // largest single mark step
@@ -742,7 +748,8 @@ static void mal_gc_print_stats_now(void) {
             (unsigned long long) mal_object_slot_dictionary_migration_count(),
             (unsigned long long) mal_vm_stack_object_materialization_count());
     fprintf(stderr,
-            " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "
+            " cycles=%llu sync_backstop=%llu marking_minors=%llu cycle_allocated_bytes=%llu "
+            "over_tenure_bytes=%llu "
             "promoted_bytes=%llu promotion_debt=%llu last_major_live_bytes=%llu "
             "satb_flushes=%llu satb_high_water=%llu "
             "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f "
@@ -773,6 +780,8 @@ static void mal_gc_print_stats_now(void) {
             "worker_merge_ms=%.3f worker_wait_ms=%.3f "
             "remark_wait_ms=%.3f remark_join_ms=%.3f",
             (unsigned long long) g->cycles, (unsigned long long) g->sync_backstop,
+            (unsigned long long) g->marking_minors,
+            (unsigned long long) g->cycle_allocated_bytes,
             (unsigned long long) (live_heap
                 ? g_gc_vm->heap.black_alloc_bytes : g->black_alloc_bytes_before_teardown),
             (unsigned long long) g->promoted_bytes,
@@ -2131,12 +2140,12 @@ static void mal_gc_scan_roots(MalVm *vm) {
     mal_gc_mark_values(vm->unhandled_rejections, vm->unhandled_count);
     mal_gc_mark_value(vm->entry_async_promise);
     // Atoms are permanent roots, and a minor reclaims only young cells, so it visits just
-    // the atoms inserted since the previous collection; every older atom survived that
-    // collection as a root and is old. Majors and verification still walk the store.
-    u32 recent_count = 0;
-    MalString *const *recent = g_gc_verifying
-        ? nullptr : mal_atom_store_take_recent(&vm->atoms, &recent_count);
+    // the atoms inserted since the previous minor; every older atom survived that minor
+    // as a root and is old. Majors and verification walk the store and leave the recent
+    // atoms to the next minor, which a marking cycle runs before its sweep.
     if (!g_gc->major_collection && !g_gc_verifying) {
+        u32 recent_count = 0;
+        MalString *const *recent = mal_atom_store_take_recent(&vm->atoms, &recent_count);
         for (u32 i = 0; i < recent_count; i++) mal_gc_mark_string(recent[i]);
         MAL_PERF_ADD(intern_stores[MAL_PERF_INTERN_ATOMS].root_values, recent_count);
     } else {
@@ -3462,7 +3471,8 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
     mal_gc_clear_remembered();
     g_gc->major_collection = false;
 
-    if (g_gc->verify_enabled) {
+    // A minor inside a marking cycle leaves that cycle's marks partial; it verifies at its end.
+    if (g_gc->verify_enabled && g_gc->phase == MAL_GC_PHASE_IDLE) {
         mal_gc_verify(vm);
     }
 
@@ -3490,8 +3500,89 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
 // remark re-scan them, so both pauses are O(roots), never O(heap).
 // ===========================================================================
 
+/* The worklists a marking cycle keeps across its steps; a minor inside the cycle
+ * needs empty ones of its own. */
+typedef struct MalGcMarkLists {
+    MalHeapHeader **grey;
+    usize grey_count;
+    usize grey_capacity;
+    MalWeakSetObject **weak_sets;
+    usize weak_sets_count;
+    usize weak_sets_capacity;
+    MalWeakMapObject **weak_maps;
+    usize weak_maps_count;
+    usize weak_maps_capacity;
+    MalWeakRefObject **weak_refs;
+    usize weak_refs_count;
+    usize weak_refs_capacity;
+    MalFinalizationRegistryObject **fin_regs;
+    usize fin_regs_count;
+    usize fin_regs_capacity;
+} MalGcMarkLists;
+
+static MalGcMarkLists mal_gc_swap_mark_lists(MalGcMarkLists lists) {
+    MalGcMarkLists previous = {
+        g_gc->grey, g_gc->grey_count, g_gc->grey_capacity,
+        g_gc->weak_sets, g_gc->weak_sets_count, g_gc->weak_sets_capacity,
+        g_gc->weak_maps, g_gc->weak_maps_count, g_gc->weak_maps_capacity,
+        g_gc->weak_refs, g_gc->weak_refs_count, g_gc->weak_refs_capacity,
+        g_gc->fin_regs, g_gc->fin_regs_count, g_gc->fin_regs_capacity,
+    };
+    g_gc->grey = lists.grey;
+    g_gc->grey_count = lists.grey_count;
+    g_gc->grey_capacity = lists.grey_capacity;
+    g_gc->weak_sets = lists.weak_sets;
+    g_gc->weak_sets_count = lists.weak_sets_count;
+    g_gc->weak_sets_capacity = lists.weak_sets_capacity;
+    g_gc->weak_maps = lists.weak_maps;
+    g_gc->weak_maps_count = lists.weak_maps_count;
+    g_gc->weak_maps_capacity = lists.weak_maps_capacity;
+    g_gc->weak_refs = lists.weak_refs;
+    g_gc->weak_refs_count = lists.weak_refs_count;
+    g_gc->weak_refs_capacity = lists.weak_refs_capacity;
+    g_gc->fin_regs = lists.fin_regs;
+    g_gc->fin_regs_count = lists.fin_regs_count;
+    g_gc->fin_regs_capacity = lists.fin_regs_capacity;
+    return previous;
+}
+
+/* Mark steps poll on every claim while a cycle marks, so the minor trigger is kept
+ * apart from the heap trigger until the cycle finishes. */
+static void mal_gc_park_minor_trigger(MalVm *vm) {
+    g_gc->cycle_minor_at = vm->heap.next_gc_at;
+    if (vm->heap.next_gc_at != (usize) -1) vm->heap.next_gc_at = vm->heap.bytes_allocated;
+}
+
+/*
+ * A minor while a major cycle marks. Cells born during marking carry the current
+ * color, so the major neither traces them nor records them in its snapshot. The
+ * minor promotes their survivors already marked and reclaims the rest, so garbage
+ * allocated during a long cycle no longer becomes old.
+ */
+static void mal_gc_minor_during_cycle(MalVm *vm) {
+#if !defined(__wasi__)
+    // The minor writes young marks without atomics.
+    mal_gc_workers_collect_batch(g_gc, true);
+#endif
+    MalGcMarkLists major = mal_gc_swap_mark_lists((MalGcMarkLists) {0});
+    mal_gc_collect_sync(vm, false);
+    // The minor's weak pass ends the barrier as a remark would; the cycle still marks.
+    mal_gc_marking_active = true;
+    MalGcMarkLists minor = mal_gc_swap_mark_lists(major);
+    free(minor.grey);
+    free(minor.weak_sets);
+    free(minor.weak_maps);
+    free(minor.weak_refs);
+    free(minor.fin_regs);
+    g_gc->major_collection = true;
+    mal_gc_park_minor_trigger(vm);
+}
+
 /* Flipping the major color makes old marks stale without a heap-wide reset. */
 static void mal_gc_cycle_begin(MalVm *vm) {
+    // The snapshot then holds old cells only, so a minor during marking never
+    // reclaims a cell the major has queued.
+    mal_gc_collect_sync(vm, false);
     u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     g_gc->grey_count = 0;
     g_gc->weak_maps_count = 0;
@@ -3505,16 +3596,19 @@ static void mal_gc_cycle_begin(MalVm *vm) {
     mal_heap_begin_major(&vm->heap);
     g_gc->major_collection = true;
 
-    // Enable the SATB deletion barrier + black allocation, THEN snapshot the roots.
-    // Ordering: with marking active, any store the mutator makes after this shades
-    // its old value; the root scan captures the current roots. A cell reachable at
-    // this instant is either marked now (root-reachable) or preserved by the
-    // barrier / black allocation for the rest of the cycle.
+    // Enable the SATB deletion barrier, THEN snapshot the roots. Ordering: with marking
+    // active, any store the mutator makes after this shades its old value; the root
+    // scan captures the current roots. A cell reachable at this instant is either
+    // marked now (root-reachable) or preserved by the barrier for the rest of the
+    // cycle. Cells born while marking carry the current color, so the major treats
+    // them as marked, and the cycle's minors settle them.
     mal_gc_marking_active = true;
-    mal_heap_set_black_alloc(&vm->heap, true);
+    mal_heap_set_black_alloc(&vm->heap, false);
     mal_gc_scan_roots(vm);
 
     g_gc->phase = MAL_GC_PHASE_MARK;
+    g_gc->cycle_start_allocated = vm->heap.bytes_allocated;
+    mal_gc_park_minor_trigger(vm);
     g_gc->bytes_at_last_step = vm->heap.bytes_allocated;
 
     if (g_gc->stats_enabled) {
@@ -3550,11 +3644,15 @@ static void mal_gc_cycle_remark(MalVm *vm) {
         mal_gc_drain_satb();
     } while (g_gc->grey_count > 0);
 
+    // The last minor settles the cells born since the previous one before the major
+    // weak pass and sweep, which then see only marked or old cells.
+    mal_gc_minor_during_cycle(vm);
     mal_gc_weak_pass();
 
     // Marking is complete: stop the barrier (further stores need no snapshot) and
-    // hand off to the sweep. Black allocation stays ON through the sweep so a cell
-    // born during sweeping is retained.
+    // hand off to the sweep. Allocation is black through the sweep so a cell born
+    // in a block ahead of the cursor is retained.
+    mal_heap_set_black_alloc(&vm->heap, true);
     mal_gc_marking_active = false;
     g_gc->satb_count = 0;
     g_gc->satb_drained = 0;
@@ -3575,6 +3673,7 @@ static void mal_gc_cycle_remark(MalVm *vm) {
  * advance the trigger. Called both by the incremental sweep on completion and by
  * the synchronous-finish path (which sweeps everything remaining first). */
 static void mal_gc_cycle_finish_sweep(MalVm *vm) {
+    g_gc->cycle_allocated_bytes += vm->heap.bytes_allocated - g_gc->cycle_start_allocated;
     mal_gc_clear_remembered();
     mal_heap_set_black_alloc(&vm->heap, false);
     g_gc->phase = MAL_GC_PHASE_IDLE;
@@ -3705,6 +3804,10 @@ static void mal_gc_finish_pending_pause(MalVm *vm) {
     mal_gc_pause_end(vm, true, MAL_GC_PAUSE_FINISH_PENDING, start_ns);
 }
 
+bool mal_gc_cycle_active(const MalVm *vm) {
+    return vm->gc != nullptr && vm->gc->phase != MAL_GC_PHASE_IDLE;
+}
+
 bool mal_gc_finish_pending_cycle(MalVm *vm) {
     if (g_gc_vm != vm) abort();
     if (vm->gc_native_frames != 0 || g_gc->phase == MAL_GC_PHASE_IDLE) return false;
@@ -3814,6 +3917,15 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         return;
     }
 
+    // A due backstop finishes the cycle, whose remark runs the minor anyway.
+    if (g_gc->phase == MAL_GC_PHASE_MARK && !pressure &&
+            vm->heap.bytes_allocated >= g_gc->cycle_minor_at &&
+            vm->heap.bytes_allocated < g_gc->backstop_at) {
+        u64 minor_start = mal_gc_pause_begin(vm, false);
+        mal_gc_minor_during_cycle(vm);
+        if (g_gc->stats_enabled) g_gc->marking_minors++;
+        mal_gc_pause_end(vm, false, MAL_GC_PAUSE_MINOR, minor_start);
+    }
     if (g_gc->phase != MAL_GC_PHASE_IDLE) {
         u64 start_ns = mal_gc_pause_begin(vm, true);
         MalGcPauseReason reason;
@@ -3837,10 +3949,12 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         return; // polled for preemption only; nothing owed
     }
 
-    // Promotions and growing side buffers can both add old garbage. Pressure also
+    // Promotions and growing side buffers can both add old garbage. A cycle reclaims
+    // what was born while it marked, so the last major's live set is accurate, and the
+    // next major waits until minors have promoted as much again. Pressure also
     // accounts for net RAW growth since the last major, while a stable live set
     // above the process budget does not repeatedly force a major.
-    usize major_debt = g_gc->last_major_live_bytes / 2;
+    usize major_debt = g_gc->last_major_live_bytes;
     usize required_debt = major_debt > MAL_GC_MIN_MAJOR_DEBT ? major_debt
         : pressure ? 0 : MAL_GC_MIN_MAJOR_DEBT;
     usize raw_growth = vm->heap.current_usage.raw_owned_bytes > g_gc->last_major_raw_owned_bytes

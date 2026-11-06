@@ -176,9 +176,21 @@ static int check_delete_barrier(MalVm *vm) {
     tracked[0] = &key->header;
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, count_finalized);
     mal_weak_set_object_add(set, mal_value_from_object(key));
+    // A cycle opens with a minor, which would reclaim the weakly held young key, so a
+    // first cycle promotes it while rooted.
+    MalValue key_root = mal_value_from_object(key);
+    MalRootSpan key_span;
+    mal_gc_root(&key_span, &key_root, 1);
     vm->heap.next_gc_at = 1;
     mal_gc_poll = true;
     mal_gc_safepoint(vm);
+    CHECK(mal_gc_finish_pending_cycle(vm));
+    mal_gc_unroot(&key_span);
+    for (i32 attempt = 0; attempt < 16 && !mal_gc_marking_active; attempt++) {
+        vm->heap.next_gc_at = 1;
+        mal_gc_poll = true;
+        mal_gc_safepoint(vm);
+    }
     CHECK(mal_gc_marking_active);
     CHECK(mal_weak_set_object_delete(set, mal_value_from_object(key)));
     CHECK(mal_gc_finish_pending_cycle(vm));

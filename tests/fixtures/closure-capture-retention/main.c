@@ -398,6 +398,27 @@ static int check_fallback_vector_ownership(const MalRuntimeImage *image) {
     return 0;
 }
 
+/*
+ * A cycle opens with a minor, so frames that leave the graph during marking hold old
+ * cells. Promote `values` through a first cycle while rooted, then open the next
+ * cycle with them reachable only through what the caller shades.
+ */
+static bool open_cycle_after_promoting(MalVm *vm, MalValue *values, i32 count) {
+    MalRootSpan span;
+    mal_gc_root(&span, values, count);
+    vm->heap.next_gc_at = 1;
+    mal_gc_poll = true;
+    mal_gc_safepoint(vm);
+    bool finished = mal_gc_finish_pending_cycle(vm);
+    mal_gc_unroot(&span);
+    for (i32 attempt = 0; finished && attempt < 16 && !mal_gc_marking_active; attempt++) {
+        vm->heap.next_gc_at = 1;
+        mal_gc_poll = true;
+        mal_gc_safepoint(vm);
+    }
+    return finished && mal_gc_marking_active;
+}
+
 static int check_snapshot(const MalRuntimeImage *image) {
     for (usize i = 0; i < countof(tracked); i++) tracked[i] = nullptr;
     MalVm vm;
@@ -430,10 +451,11 @@ static int check_snapshot(const MalRuntimeImage *image) {
     MalEnv *parent = mal_env_new(&vm, nullptr, 0, 1);
     parent->slots[0] = tracked_object(&vm, 3);
     MalEnv *child = mal_env_new(&vm, parent, 1, 0);
-    vm.heap.next_gc_at = 1;
-    mal_gc_poll = true;
-    mal_gc_safepoint(&vm);
-    if (!mal_gc_marking_active) return 10;
+    MalValue frame_roots[] = {
+        single_closure, multiple_closure, mal_value_from_heap(&parent->header),
+        mal_value_from_heap(&child->header),
+    };
+    if (!open_cycle_after_promoting(&vm, frame_roots, (i32) countof(frame_roots))) return 10;
     mal_gc_satb_shade_frame(&single_frame);
     mal_gc_satb_shade_frame(&multiple_frame);
     mal_gc_write_barrier_env(child);
@@ -563,10 +585,8 @@ static int check_value_snapshot(const MalRuntimeImage *image) {
     first->slots[2] = tracked_object(&vm, 1);
     MalValue closure = mal_vm_op_create_function(&vm, 9, first);
     MalVmFrame frame = { .env = mal_value_to_function_object(closure)->creation_env };
-    vm.heap.next_gc_at = 1;
-    mal_gc_poll = true;
-    mal_gc_safepoint(&vm);
-    if (!mal_gc_marking_active) return 74;
+    MalValue frame_roots[] = {closure, mal_value_from_heap(&first->header)};
+    if (!open_cycle_after_promoting(&vm, frame_roots, (i32) countof(frame_roots))) return 74;
     mal_gc_satb_shade_frame(&frame);
     mal_gc_write_barrier_env(frame.env);
     if (!mal_gc_finish_pending_cycle(&vm) || finalized[0] != 0 || finalized[1] != 0) return 75;
@@ -596,20 +616,22 @@ static int check_value_construction_during_marking(const MalRuntimeImage *image)
     vm.heap.next_gc_at = 1;
     mal_gc_poll = true;
     mal_gc_safepoint(&vm);
-    // The source owner is grey, but its captured values have not been traced yet.
+    // The source owner is grey, but its captured values have not been traced yet; the
+    // cycle's opening minor promoted them.
     if (!mal_gc_marking_active ||
             mal_heap_mark_is_current(tracked[0]->mark, vm.heap.mark_color) ||
-            mal_heap_mark_is_old(tracked[0]->mark)) return 79;
+            !mal_heap_mark_is_old(tracked[0]->mark)) return 79;
     closure = mal_vm_op_create_function(&vm, 10, source);
     MalFunctionObject *function = mal_value_to_function_object(closure);
     MalEnv *values = function->creation_env;
+    // A closure born during marking is marked and young; a minor settles it.
     if (mal_env_is_single_owner(values) || values->function_index != MAL_ENV_CAPTURE_VALUES ||
             !mal_heap_mark_is_current(function->object.header.mark, vm.heap.mark_color) ||
-            !mal_heap_mark_is_old(function->object.header.mark)) return 80;
+            mal_heap_mark_is_old(function->object.header.mark)) return 80;
     mal_gc_write_barrier_env(source_frame.env);
     source_frame.env = nullptr;
     vm.root_frame_head = source_frame.prev;
-    if (!mal_gc_finish_pending_cycle(&vm) || vm.heap.black_alloc ||
+    if (!mal_gc_finish_pending_cycle(&vm) || mal_gc_cycle_active(&vm) ||
             finalized[0] != 0 || finalized[1] != 0 ||
             !mal_heap_mark_is_old(tracked[0]->mark)) return 81;
     if (mal_value_to_heap(mal_vm_load_captured_value_at(values, 1, 1, 0)) != tracked[0]) return 82;
@@ -620,7 +642,7 @@ static int check_value_construction_during_marking(const MalRuntimeImage *image)
     vm.heap.next_gc_at = 1;
     mal_gc_poll = true;
     mal_gc_safepoint(&vm);
-    if (vm.heap.black_alloc || vm.heap.mark_color != major_color || finalized[2] != 1 ||
+    if (mal_gc_cycle_active(&vm) || vm.heap.mark_color != major_color || finalized[2] != 1 ||
             finalized[0] != 0 || finalized[1] != 0) return 83;
     if (mal_value_to_heap(mal_vm_load_captured_value_at(values, 1, 1, 0)) != tracked[0]) return 84;
 
@@ -652,10 +674,8 @@ static int check_capture_store_barriers(const MalRuntimeImage *image) {
         // Function 6 has no capture-layout certificate, so its parent remains a traced chain.
         MalEnv *scope = dynamic ? mal_env_new(&vm, owner, 6, 0) : owner;
         tracked_object(&vm, 1);
-        vm.heap.next_gc_at = 1;
-        mal_gc_poll = true;
-        mal_gc_safepoint(&vm);
-        if (!mal_gc_marking_active) return 100;
+        MalValue scope_roots[] = {mal_value_from_heap(&scope->header), mal_value_from_heap(&owner->header)};
+        if (!open_cycle_after_promoting(&vm, scope_roots, (i32) countof(scope_roots))) return 100;
         roots[1] = mal_value_from_heap(&scope->header);
         mal_vm_store_captured_non_heap(scope, 1, 0, mal_value_from_i32(42));
         if (!mal_gc_finish_pending_cycle(&vm)) return 101;
@@ -670,7 +690,7 @@ static int check_capture_store_barriers(const MalRuntimeImage *image) {
         vm.heap.next_gc_at = 1;
         mal_gc_poll = true;
         mal_gc_safepoint(&vm);
-        if (vm.heap.black_alloc || vm.heap.mark_color != major_color || finalized[2] != 0 ||
+        if (mal_gc_cycle_active(&vm) || vm.heap.mark_color != major_color || finalized[2] != 0 ||
             finalized[3] != 1 || mal_value_to_heap(owner->slots[0]) != tracked[2]) return 102;
         mal_vm_store_captured_non_heap(scope, 1, 0, MAL_VALUE_NULL);
         mal_gc_collect(&vm);
