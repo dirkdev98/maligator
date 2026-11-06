@@ -689,10 +689,16 @@ bounded and consumer-driven as planned below.
       no accessor, reads without calling user code. Memory passes could then reuse
       and hoist such loads; `this.left === null ? 0 : this.left.size()` currently
       loads `this.left` twice through its inline cache.
-- [ ] Pace concurrent marking against a faster mutator. Peak RSS of the native
-      self-compiler is bimodal at about 1.4 or 2.0 GB. The high runs coincide with
-      a synchronous backstop, fewer major cycles and about three times the
-      over-tenured bytes.
+- [ ] Pace concurrent marking against a faster mutator. No minor runs while a
+      major cycle is active, so everything allocated during it is black and old.
+      In about half of the native self-compile runs the last cycle, at 1.8-2.5 GB
+      live, lasts 4-5 s and allocates 2.4-3.9 GB black; other runs finish it in
+      1.2 s with under 100 MB. Those runs take 119-127 s instead of 115 s, with
+      twice the system time. Neither `MAL_GC_ASSIST` nor lifting the 256-cell
+      limit on a mark step while workers hold a batch changes this. Check next
+      whether safepoints skip steps under native frames in that phase; otherwise
+      young allocation during marking, with minors that mark their survivors,
+      removes the black garbage.
 - [ ] Speculate int32 loop state that enters as a double. A direct entry with a
       Number parameter keeps `seed = (Math.imul(seed, a) + b) | 0` in a double
       phi, so every iteration converts to int32 and back: `serial-compute` runs
