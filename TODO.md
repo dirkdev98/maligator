@@ -1981,7 +1981,9 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       round-to-round variance is process-level. Cold header analysis of a
       macro-heavy library such as OpenSSL still spends about half its time in
       Clang's JSON dump of the macro value probe, mostly the expression trees of
-      integer constants under their enum probes.
+      integer constants under their enum probes. Its Clang passes, and each library's
+      preprocessing in a warm build, run one after another; overlapping them needs an
+      asynchronous preparation pipeline through the synchronous build commands.
 - [ ] Separate input and result values in the binding plan. Both share `JsValue`, so
       input handles carry a result `ownership` and input strings, bytes and
       sequences a `free` the planner rejects; generation relies on the position
