@@ -175,6 +175,32 @@ static int mal_backend_create(void) {
 #endif
 }
 
+#if MAL_REACTOR_KQUEUE
+/* A cross-thread wake is one triggering kevent call; the cleared event needs no drain,
+ * where a pipe costs a write and two reads per wake. */
+#define MAL_REACTOR_WAKE_IDENT ((uintptr_t) 0)
+
+static bool mal_backend_add_wake(MalReactor *r) {
+    if (r->backend_fd < 0) return false;
+    struct kevent kev;
+    EV_SET(&kev, MAL_REACTOR_WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, r);
+    r->wake_ready = kevent(r->backend_fd, &kev, 1, nullptr, 0, nullptr) == 0;
+    return r->wake_ready;
+}
+
+static bool mal_backend_trigger_wake(MalReactor *r) {
+    struct kevent kev;
+    EV_SET(&kev, MAL_REACTOR_WAKE_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, r);
+    for (;;) {
+        if (kevent(r->backend_fd, &kev, 1, nullptr, 0, nullptr) == 0) return true;
+        if (errno != EINTR) return false;
+    }
+}
+
+static void mal_backend_drain_wake(MalReactor *r) {
+    (void) r;
+}
+#else
 static bool mal_fd_set_flags(int fd) {
     int status = fcntl(fd, F_GETFL, 0);
     if (status < 0 || fcntl(fd, F_SETFL, status | O_NONBLOCK) < 0) {
@@ -195,16 +221,10 @@ static bool mal_backend_add_wake(MalReactor *r) {
         return false;
     }
 
-#if MAL_REACTOR_KQUEUE
-    struct kevent kev;
-    EV_SET(&kev, (uintptr_t) fds[0], EVFILT_READ, EV_ADD, 0, 0, r);
-    bool added = kevent(r->backend_fd, &kev, 1, nullptr, 0, nullptr) == 0;
-#else
     struct epoll_event ev = {0};
     ev.events = EPOLLIN;
     ev.data.ptr = r;
     bool added = epoll_ctl(r->backend_fd, EPOLL_CTL_ADD, fds[0], &ev) == 0;
-#endif
     if (!added) {
         close(fds[0]);
         close(fds[1]);
@@ -212,10 +232,20 @@ static bool mal_backend_add_wake(MalReactor *r) {
     }
     r->wake_read_fd = fds[0];
     r->wake_write_fd = fds[1];
+    r->wake_ready = true;
     return true;
 }
 
-static void mal_reactor_dispatch_wake(MalReactor *r) {
+static bool mal_backend_trigger_wake(MalReactor *r) {
+    unsigned char byte = 1;
+    for (;;) {
+        if (write(r->wake_write_fd, &byte, 1) == 1) return true;
+        if (errno == EINTR) continue;
+        return errno == EAGAIN || errno == EWOULDBLOCK;
+    }
+}
+
+static void mal_backend_drain_wake(MalReactor *r) {
     unsigned char bytes[64];
     for (;;) {
         ssize_t count = read(r->wake_read_fd, bytes, sizeof(bytes));
@@ -227,6 +257,11 @@ static void mal_reactor_dispatch_wake(MalReactor *r) {
         }
         break;
     }
+}
+#endif
+
+static void mal_reactor_dispatch_wake(MalReactor *r) {
+    mal_backend_drain_wake(r);
 
     /* Clear before invoking the consumer. A producer racing the batch drain then
      * writes a fresh byte; one racing earlier is included in this callback. */
@@ -618,6 +653,7 @@ void mal_reactor_init(MalReactor *r) {
     r->backend_fd = mal_backend_create();
     r->wake_read_fd = -1;
     r->wake_write_fd = -1;
+    r->wake_ready = false;
     atomic_init(&r->wake_pending, false);
     atomic_init(&r->retained_work, 0);
     r->wake_waker = (MalWaker) {0};
@@ -657,6 +693,7 @@ void mal_reactor_free(MalReactor *r) {
         close(r->backend_fd);
         r->backend_fd = -1;
     }
+    r->wake_ready = false;
     free(r->timers);
     r->timers = nullptr;
     r->timer_count = 0;
@@ -715,7 +752,7 @@ bool mal_reactor_has_pending(const MalReactor *r) {
 }
 
 bool mal_reactor_retain_work(MalReactor *r) {
-    if (r->wake_write_fd < 0) {
+    if (!r->wake_ready) {
         return false;
     }
     usize retained = atomic_load_explicit(&r->retained_work, memory_order_relaxed);
@@ -756,26 +793,15 @@ void mal_reactor_set_waker(MalReactor *r, MalWaker waker) {
 }
 
 bool mal_reactor_wake(MalReactor *r) {
-    if (r->wake_write_fd < 0) {
+    if (!r->wake_ready) {
         return false;
     }
     if (atomic_exchange_explicit(&r->wake_pending, true, memory_order_acq_rel)) {
         return true;
     }
-    unsigned char byte = 1;
-    for (;;) {
-        if (write(r->wake_write_fd, &byte, 1) == 1) {
-            return true;
-        }
-        if (errno == EINTR) {
-            continue;
-        }
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return true;
-        }
-        atomic_store_explicit(&r->wake_pending, false, memory_order_release);
-        return false;
-    }
+    if (mal_backend_trigger_wake(r)) return true;
+    atomic_store_explicit(&r->wake_pending, false, memory_order_release);
+    return false;
 }
 
 bool mal_reactor_add_op(MalReactor *r, MalOp *op) {

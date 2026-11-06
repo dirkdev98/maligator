@@ -78,8 +78,10 @@ typedef struct MalReactorChange {
 
 struct MalReactor {
     int backend_fd; /* kqueue / epoll descriptor */
+    /* epoll wakes through a pipe; kqueue triggers a user event and keeps both at -1. */
     int wake_read_fd;
     int wake_write_fd;
+    bool wake_ready;
     _Atomic(bool) wake_pending;
     _Atomic(usize) retained_work;
     MalWaker wake_waker;

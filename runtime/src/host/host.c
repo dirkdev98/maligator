@@ -25,7 +25,7 @@ bool mal_host_init(MalHost *host) {
     }
     memset(host, 0, sizeof(*host));
     mal_reactor_init(&host->reactor);
-    if (host->reactor.backend_fd < 0 || host->reactor.wake_write_fd < 0) {
+    if (host->reactor.backend_fd < 0 || !host->reactor.wake_ready) {
         mal_reactor_free(&host->reactor);
         return false;
     }
