@@ -1948,11 +1948,11 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       integers, so the copy stays, and at 4096 elements it runs near memory
       bandwidth. Compiled callers of a library without callback registrations pass
       a matching view's storage to the typed scalar entry, and a fixed-numeric loop
-      region admits the views once at its entry; an 8-element `Float64Array` dot in
-      a function loop takes about 1.3 ns, C through a function pointer 1.5. Regions
-      still refuse loops that store module bindings, such as `bench:ffi`'s top-level
-      loops (5.4 ns per call there), and calls with integer arguments, whose range
-      checks would restart an iteration after C ran. Scalar fields of struct
+      region admits the views once at its entry; an 8-element `Float64Array` view
+      takes 0.94x Bun's time and matches C. Regions still refuse loops that store
+      module bindings (5.4 ns per call against about 1.3 ns in a region) and calls
+      with integer arguments, whose range checks would restart an iteration after C
+      ran. Scalar fields of struct
       handles read without a getter call, about 7.9 ns per warm read against 11;
       the getter-row probe and the reader's dependent loads remain, which an
       inline-cache row for C fields checked by the static probe would remove. The 64 KiB
