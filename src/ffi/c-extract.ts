@@ -1100,7 +1100,6 @@ interface Probes {
 interface ValueProbe {
 	readonly path: string;
 	readonly preprocessed: boolean;
-	readonly identity: string;
 }
 
 function prepareValueProbe(
@@ -1154,26 +1153,10 @@ function prepareValueProbe(
 		[FFI_C_STANDARD, "-E", "-w", ...input.compileArguments, "-x", "c", probePath],
 		directory,
 	);
-	const identity = createHash("sha256");
-	for (let start = 0; start < expanded.stdout.length;) {
-		let end = expanded.stdout.indexOf(10, start);
-		if (end < 0) end = expanded.stdout.length;
-		const line =
-			expanded.stdout[start] === 35 ? expanded.stdout.toString("utf8", start, end) : "";
-		const marker = LINE_MARKER.exec(line);
-		if (marker !== null && unescapeMarkerPath(marker[2]!) === probePath)
-			identity.update(`# ${marker[1]} "<maligator-value-probe>"${marker[3]}\n`);
-		else
-			identity.update(
-				expanded.stdout.subarray(start, Math.min(end + 1, expanded.stdout.length)),
-			);
-		start = end + 1;
-	}
-	if (expanded.status !== 0)
-		return { path: probePath, preprocessed: false, identity: identity.digest("hex") };
+	if (expanded.status !== 0) return { path: probePath, preprocessed: false };
 	const artifact = path.join(directory, "probe-values.i");
 	writeFileSync(artifact, expanded.stdout);
-	return { path: artifact, preprocessed: true, identity: identity.digest("hex") };
+	return { path: artifact, preprocessed: true };
 }
 
 function probe(
@@ -1328,9 +1311,15 @@ export interface CHeaders {
 	readonly probePath: string;
 	readonly preprocessed: Preprocessed;
 	readonly versions: ReadonlyArray<CHeaderVersion>;
+	/** The search trees were small enough to snapshot, so changes to them are seen. */
 	readonly cacheable: boolean;
 	readonly candidates: ReadonlyArray<PreprocessedMacro>;
 	readonly definitions: ReadonlyArray<PreprocessedMacro>;
+	/**
+	 * Macro values and expansions, preprocessed on first use. The same headers and
+	 * arguments determine it, apart from context macros such as `__FILE__`, so a
+	 * cached model needs no probe.
+	 */
 	readonly valueProbe: ValueProbe;
 	validate(): void;
 }
@@ -1505,17 +1494,20 @@ export function withCHeaders<Result>(
 			(macro) =>
 				macro.parameters === undefined && macro.body !== "" && balancedBody(macro.body),
 		);
-		const valueProbe = prepareValueProbe(input, directory, includes, candidates);
+		let valueProbe: ValueProbe | undefined;
 		let includeGraphValidated = false;
 		const headers: CHeaders = {
 			directory,
 			probePath,
 			preprocessed,
 			versions,
-			cacheable: valueProbe.preprocessed && guarded,
+			cacheable: guarded,
 			candidates,
 			definitions,
-			valueProbe,
+			get valueProbe() {
+				valueProbe ??= prepareValueProbe(input, directory, includes, candidates);
+				return valueProbe;
+			},
 			validate() {
 				if (!includeGraphValidated) {
 					let current: Preprocessed;

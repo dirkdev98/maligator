@@ -3,6 +3,7 @@ import {
 	chmodSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -443,6 +444,29 @@ DECLARE_RECORD(MacroRecord);
 		expect(first?.contextual).toBe(true);
 		expect(first?.value).toBeUndefined();
 		expect(macro()).toEqual(first);
+	});
+	it("reuses a model whose macros expand to the probe's own file", () => {
+		const directory = project();
+		writeFileSync(
+			path.join(directory, "cache.h"),
+			"#define CACHE_FILE __FILE__\nint cache_value(void);\n",
+		);
+		const request = input(directory);
+		const wrapper = path.join(directory, "clang");
+		const extractions = path.join(directory, "extractions");
+		writeFileSync(extractions, "");
+		writeFileSync(
+			wrapper,
+			`#!/bin/sh\ncase " $* " in *" -ast-dump=json "*) printf x >> ${quote(extractions)};; esac\nexec ${quote(request.compiler.path)} "$@"\n`,
+		);
+		chmodSync(wrapper, 0o755);
+		const counted = { ...request, compiler: { ...request.compiler, path: wrapper } };
+		loadCModel(counted);
+		const first = readFileSync(extractions, "utf8").length;
+		expect(loadCModel(counted).functions.map(({ name }) => name)).toContain(
+			"cache_value",
+		);
+		expect(readFileSync(extractions, "utf8").length).toBe(first);
 	});
 	it("reports opened headers when preprocessing fails", () => {
 		const directory = project();
