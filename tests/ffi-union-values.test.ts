@@ -290,7 +290,7 @@ it.each([
 				scalar_number: { params: { value: { shape: { member: "integer" } } } },
 			},
 		},
-		"shape applies to record",
+		"params.value.shape: applies to record values",
 	],
 	[
 		{

@@ -1956,9 +1956,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       reads resolved parameter references instead of reinterpreting `kept`, `owner`,
       `replaced`, `closes`, `lookup` and `queued` per phase. Treat input/output
       direction, ownership, owner linkage and cleanup obligations the same way.
-- [ ] Give planner diagnostics a code and fact path. Suggestion validation reruns the
-      planner, matches the human-readable message with a regex and retries without
-      the rejected suggestion.
 
 # Actors and SMP
 
