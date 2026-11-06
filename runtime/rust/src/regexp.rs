@@ -169,8 +169,9 @@ impl FastClass {
     }
 }
 
-/// One element of an allocation-free plan. Every quantifier is greedy and never
-/// backtracks; `compile_fast_pattern` admits only plans where that is exact.
+/// One element of an allocation-free plan. Every quantifier runs greedily and never
+/// backtracks; `compile_fast_pattern` admits only plans where that is exact, which for
+/// a lazy repeat means it would stop at the same unit.
 #[derive(Debug)]
 enum FastNode {
     Literal(Box<[u16]>),
@@ -178,6 +179,7 @@ enum FastNode {
         class: FastClass,
         min: u32,
         max: u32,
+        lazy: bool,
     },
     Group {
         body: Box<[FastNode]>,
@@ -329,7 +331,9 @@ impl FastPattern {
                     }
                     position += literal.len();
                 }
-                FastNode::Repeat { class, min, max } => {
+                FastNode::Repeat {
+                    class, min, max, ..
+                } => {
                     position = Self::repeat_end(class, *min, *max, subject, position)?;
                 }
                 // A capture around one repeat, such as `([a-z]+)`, needs no nested sequence.
@@ -339,7 +343,10 @@ impl FastPattern {
                     optional: false,
                     ..
                 } if matches!(body.as_ref(), [FastNode::Repeat { .. }]) => {
-                    let [FastNode::Repeat { class, min, max }] = body.as_ref() else {
+                    let [FastNode::Repeat {
+                        class, min, max, ..
+                    }] = body.as_ref()
+                    else {
                         unreachable!()
                     };
                     let end = Self::repeat_end(class, *min, *max, subject, position)?;
@@ -550,12 +557,34 @@ fn fast_follow(nodes: &[FastNode], outer: &FastClass) -> FastClass {
 /// need disjoint first units and must not match empty, so no other alternative could start
 /// where the taken one did, unless the match ends with the alternation: nothing can then
 /// fail after the first alternative that matches, so trying them in order is exact.
-fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass, terminal: bool) -> bool {
+///
+/// A lazy repeat stops at the first count after which the continuation matches. Under the
+/// same disjointness the continuation cannot match inside the run when it has to consume a
+/// unit or reach `$` first (`outer_end` describes what follows the enclosing sequence), so
+/// the lazy repeat stops where the greedy one does.
+fn fast_nodes_are_greedy_safe(
+    nodes: &[FastNode],
+    outer: &FastClass,
+    outer_end: FastFirstEnd,
+    terminal: bool,
+) -> bool {
     for (index, node) in nodes.iter().enumerate() {
         let follow = fast_follow(&nodes[index + 1..], outer);
+        let follow_end = match fast_first(&nodes[index + 1..]).1 {
+            FastFirstEnd::Nullable => outer_end,
+            end => end,
+        };
         let ends_match = terminal && index + 1 == nodes.len();
         match node {
-            FastNode::Repeat { class, min, max } if min != max && class.intersects(&follow) => {
+            FastNode::Repeat {
+                class,
+                min,
+                max,
+                lazy,
+            } if min != max
+                && (class.intersects(&follow)
+                    || (*lazy && follow_end == FastFirstEnd::Nullable)) =>
+            {
                 return false;
             }
             FastNode::Group { body, optional, .. } => {
@@ -565,7 +594,7 @@ fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass, terminal: b
                         return false;
                     }
                 }
-                if !fast_nodes_are_greedy_safe(body, &follow, ends_match) {
+                if !fast_nodes_are_greedy_safe(body, &follow, follow_end, ends_match) {
                     return false;
                 }
             }
@@ -574,7 +603,7 @@ fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass, terminal: b
                 for (body, _) in alternatives.iter() {
                     let (first, end) = fast_first(body);
                     if (!ends_match && (end == FastFirstEnd::Nullable || first.intersects(&seen)))
-                        || !fast_nodes_are_greedy_safe(body, &follow, ends_match)
+                        || !fast_nodes_are_greedy_safe(body, &follow, follow_end, ends_match)
                     {
                         return false;
                     }
@@ -585,7 +614,12 @@ fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass, terminal: b
                 let (first, end) = fast_first(body);
                 if end != FastFirstEnd::Consumes
                     || (min != max && first.intersects(&follow))
-                    || !fast_nodes_are_greedy_safe(body, &first.union(&follow), false)
+                    || !fast_nodes_are_greedy_safe(
+                        body,
+                        &first.union(&follow),
+                        FastFirstEnd::Nullable,
+                        false,
+                    )
                 {
                     return false;
                 }
@@ -599,7 +633,7 @@ fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass, terminal: b
 const FAST_REPEAT_LIMIT: u32 = 0xffff;
 
 /// Recursive-descent reader for the allocation-free subset: literals, escapes, classes,
-/// greedy quantifiers, plain and optional groups, a leading `^` and `$`. Anything with
+/// quantifiers, plain and optional groups, a leading `^` and `$`. Anything with
 /// Annex B or alternation semantics declines the plan.
 struct FastParser<'a> {
     units: &'a [u16],
@@ -753,7 +787,8 @@ impl FastParser<'_> {
         (members > 0).then(|| FastClass::from_ranges(ranges, negate))
     }
 
-    fn quantifier(&mut self) -> Option<Option<(u32, u32)>> {
+    /// The bounds of a quantifier after an atom and whether it is lazy.
+    fn quantifier(&mut self) -> Option<Option<(u32, u32, bool)>> {
         let bounds = match self.peek() {
             Some(0x2a) => (0, u32::MAX), // *
             Some(0x2b) => (1, u32::MAX), // +
@@ -780,10 +815,11 @@ impl FastParser<'_> {
             _ => return Some(None),
         };
         self.position += 1;
-        if self.peek() == Some(u16::from(b'?')) {
-            return None;
+        let lazy = self.peek() == Some(u16::from(b'?'));
+        if lazy {
+            self.position += 1;
         }
-        Some(Some(bounds))
+        Some(Some((bounds.0, bounds.1, lazy)))
     }
 
     fn number(&mut self) -> Option<u32> {
@@ -903,16 +939,22 @@ impl FastParser<'_> {
                     if folds {
                         fast_fold_ascii_ranges(&mut ranges);
                     }
-                    let (min, max) = bounds.unwrap_or((1, 1));
+                    let (min, max, lazy) = bounds.unwrap_or((1, 1, false));
                     FastNode::Repeat {
                         class: FastClass::from_ranges(ranges, false),
                         min,
                         max,
+                        lazy,
                     }
                 }
                 (FastAtom::Class(class), bounds) => {
-                    let (min, max) = bounds.unwrap_or((1, 1));
-                    FastNode::Repeat { class, min, max }
+                    let (min, max, lazy) = bounds.unwrap_or((1, 1, false));
+                    FastNode::Repeat {
+                        class,
+                        min,
+                        max,
+                        lazy,
+                    }
                 }
                 (FastAtom::Group(group), None) => group,
                 (
@@ -922,7 +964,7 @@ impl FastParser<'_> {
                         inner,
                         ..
                     }),
-                    Some((0, 1)),
+                    Some((0, 1, false)),
                 ) => FastNode::Group {
                     body,
                     capture,
@@ -936,7 +978,7 @@ impl FastParser<'_> {
                         inner,
                         ..
                     }),
-                    Some((min, max)),
+                    Some((min, max, false)),
                 ) if inner.is_empty() => FastNode::Loop { body, min, max },
                 (FastAtom::End, None) => FastNode::End,
                 _ => return None,
@@ -970,7 +1012,7 @@ fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
     if parser.position != units.len()
         || nodes.is_empty()
         || (anchored_start && top_level_alternation)
-        || !fast_nodes_are_greedy_safe(&nodes, &FastClass::empty(), true)
+        || !fast_nodes_are_greedy_safe(&nodes, &FastClass::empty(), FastFirstEnd::Nullable, true)
     {
         return None;
     }
@@ -2039,6 +2081,17 @@ mod tests {
         assert!(compile_fast_pattern(&utf16("(?:ab)?a"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("(a*)?"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("a+?"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("a+?b?"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(a+?)"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("a+?a"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(?:ab)+?c"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(?:ab)??c"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("a+?b"), 0).is_some());
+        assert!(compile_fast_pattern(&utf16("[a-z]+?$"), 0).is_some());
+        assert!(
+            compile_fast_pattern(&utf16(r"^\/users\/(?:([^\/]+?))\/?$"), FLAG_IGNORE_CASE)
+                .is_some()
+        );
         assert!(compile_fast_pattern(&utf16("a|b"), 0).is_some());
         assert!(compile_fast_pattern(&utf16("ab|ac"), 0).is_some());
         assert!(compile_fast_pattern(&utf16("a|"), 0).is_some());
@@ -2162,6 +2215,30 @@ mod tests {
             (r#"(foo|bar)baz"#, "barbaz", 0),
             (r#"(?:(a)|b)c"#, "bc", 0),
             (r#"(?:a|b)(c|d)?"#, "ad", FLAG_IGNORE_CASE),
+            (
+                r#"^\/users\/(?:([^\/]+?))\/?$"#,
+                "/users/a b",
+                FLAG_IGNORE_CASE,
+            ),
+            (
+                r#"^\/users\/(?:([^\/]+?))\/?$"#,
+                "/USERS/ab/",
+                FLAG_IGNORE_CASE,
+            ),
+            (
+                r#"^\/users\/(?:([^\/]+?))\/?$"#,
+                "/users/a/b",
+                FLAG_IGNORE_CASE,
+            ),
+            (
+                r#"^\/users\/(?:([^\/]+?))\/?$"#,
+                "/users/",
+                FLAG_IGNORE_CASE,
+            ),
+            (r#"a+?b"#, "xaaab", 0),
+            (r#"a{2,3}?b"#, "aaaab", 0),
+            (r#"([a-z]+?)$"#, "ab1cd", 0),
+            (r#"x([0-9]*?)y"#, "x12y", 0),
             (r#":\d{4}$|[^0-9a-z]"#, "cp:1252", 0),
             (r#":\d{4}$|[^0-9a-z]"#, "a:12b-", 0),
             (r#"a|ab"#, "xab", 0),

@@ -1194,14 +1194,11 @@ contracts or investigates costs still visible after the string follow-ups.
       static members after it. That needs its own operation through the program
       image and the native backend. Spread merges are about 1% of a self-compile.
 - [ ] Keep RegExp matches that the allocation-free plan rejects off the allocator.
-      `/^w\d*7$/.test(word)` and a route pattern such as
-      `/^\/users\/([^\/]+?)\/?$/i` run 7 to 8 times slower than Node: every match on
-      the general path builds regress's backtracking state and grows it through
-      `realloc`, about a third of the samples. The fast plan rejects both because
-      `\d*7` needs backtracking and it has no lazy loops. A lazy loop whose
-      continuation cannot succeed inside the loop's run, such as `[^\/]+?` before
-      `\/?$`, matches like a greedy one. Reusing match state across calls needs
-      regress to expose it.
+      `/^w\d*7$/.test(word)` runs 7 times slower than Node: every match on the
+      general path builds regress's backtracking state and grows it through
+      `realloc`, about a third of the samples. The fast plan rejects it because
+      `\d*7` needs backtracking. Reusing match state across calls needs regress to
+      expose it.
 - [ ] Dispatch chains of string comparisons on length. A quick self-compile makes
       187M strict comparisons against string literals: 4.4M hit on identity, 170M
       fail on length and 13M compare equal-length units, about 2 to 3% of the run.
