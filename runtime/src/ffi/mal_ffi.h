@@ -629,6 +629,11 @@ MalVm *mal_ffi_callback_owner_vm(MalFfiCallback *callback);
  * JavaScript ran during it, so its results convert as in a callback-free program.
  */
 uint64_t mal_ffi_reentries(MalVm *vm);
+/**
+ * Whether an enclosing result conversion still holds claims. A result that takes
+ * ownership of a pointer such a conversion claims needs its own transaction.
+ */
+bool mal_ffi_results_pending(MalVm *vm);
 /** Keep a native invocation alive if completion retires its registry ownership. */
 void mal_ffi_callback_hold(MalFfiCallback *callback);
 void mal_ffi_callback_drop(MalFfiCallback *callback);
