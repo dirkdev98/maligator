@@ -1262,6 +1262,17 @@ static MalString *mal_string_new_latin1(
     return string;
 }
 
+MalString *mal_string_new_inline_latin1(MalHeap *heap, const u8 *units, usize length) {
+    if (length > MAL_STRING_INLINE_LATIN1_CODE_UNITS) abort();
+    MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
+    mal_string_init_flat(string, MAL_STRING_STORAGE_INLINE, true, length);
+    mal_string_copy_inline_latin1(string->inline_latin1_units, units, length);
+    mal_perf_string_allocation(length);
+    MAL_PERF_COUNT(string_inline_allocations);
+    MAL_PERF_ADD(string_inline_code_units, length);
+    return string;
+}
+
 MalString *mal_string_new_latin1_copy(MalHeap *heap, const u8 *units, usize length) {
     return mal_string_new_latin1(heap, units, length, false, false);
 }

@@ -406,7 +406,50 @@ static i32 mal_ops_to_i32(MalValue value) {
 // mal_ops_number_value is now static inline in value_ops.h (inlined into the
 // emitted native-C backend's boundary boxing).
 
+/*
+ * A flat Latin-1 string plus an int32, such as `"row" + i` or `i + "px"`, whose result
+ * fits an inline string. It is built in one copy, without the number's own string.
+ */
+bool mal_ops_add_string_int32(
+    MalHeap *heap, MalValue left, MalValue right, MalValue *out
+) {
+    bool number_first = mal_value_is_int32(left);
+    MalString *string = mal_value_to_string(number_first ? right : left);
+    i32 integer = mal_value_to_i32(number_first ? left : right);
+    byte digits[11];
+    byte *end = digits + sizeof(digits);
+    byte *cursor = end;
+    u32 magnitude = integer < 0 ? (u32) -(i64) integer : (u32) integer;
+    do {
+        *--cursor = (byte) ('0' + magnitude % 10);
+        magnitude /= 10;
+    } while (magnitude != 0);
+    if (integer < 0) *--cursor = '-';
+    usize digit_count = (usize) (end - cursor);
+    MalStringSegment segment;
+    if (string->length + digit_count > MAL_STRING_INLINE_LATIN1_CODE_UNITS ||
+            !mal_string_try_get_segment(string, 0, string->length, &segment) ||
+            !segment.latin1) {
+        return false;
+    }
+    u8 units[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
+    u8 *write = units;
+    if (number_first) {
+        memcpy(write, cursor, digit_count);
+        write += digit_count;
+    }
+    if (segment.length != 0) memcpy(write, segment.latin1_units, segment.length);
+    write += segment.length;
+    if (!number_first) {
+        memcpy(write, cursor, digit_count);
+        write += digit_count;
+    }
+    *out = mal_value_from_string(mal_string_new_inline_latin1(heap, units, (usize) (write - units)));
+    return true;
+}
+
 bool mal_ops_add_checked(MalHeap *heap, MalValue left, MalValue right, MalValue *out) {
+    if (mal_ops_try_add_string_int32(heap, left, right, out)) return true;
     if (mal_value_is_string(left) || mal_value_is_string(right)) {
         MalString *left_string = mal_ops_to_string(heap, left);
         MalString *right_string = mal_ops_to_string(heap, right);

@@ -152,6 +152,11 @@ bool mal_string_new_parts_checked(MalHeap *heap, MalString *const *parts, usize 
 MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize length);
 
 MalString *mal_string_new_latin1_copy(MalHeap *heap, const u8 *units, usize length);
+/**
+ * A fresh inline Latin-1 string of at most `MAL_STRING_INLINE_LATIN1_CODE_UNITS` units.
+ * It skips the tiny-string cache, whose hash costs more than a short-lived result saves.
+ */
+MalString *mal_string_new_inline_latin1(MalHeap *heap, const u8 *units, usize length);
 /** Takes ownership of a mal_heap_alloc_raw buffer. */
 MalString *mal_string_new_latin1_owned(MalHeap *heap, const u8 *units, usize length);
 /** Takes ownership of UTF-16 storage known to contain a unit above Latin-1. */

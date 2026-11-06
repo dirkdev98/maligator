@@ -347,6 +347,18 @@ static inline __attribute__((always_inline)) bool mal_ops_strict_equal_string_co
 
 /** Returns false without allocating when string concatenation exceeds the engine limit. */
 bool mal_ops_add_checked(MalHeap *heap, MalValue left, MalValue right, MalValue *out);
+/** `+` of a flat Latin-1 string and an int32 whose result is an inline string; false otherwise. */
+bool mal_ops_add_string_int32(MalHeap *heap, MalValue left, MalValue right, MalValue *out);
+
+static inline bool mal_ops_try_add_string_int32(
+    MalHeap *heap, MalValue left, MalValue right, MalValue *out
+) {
+    if (!(mal_value_is_int32(left) ? mal_value_is_string(right)
+            : mal_value_is_int32(right) && mal_value_is_string(left))) {
+        return false;
+    }
+    return mal_ops_add_string_int32(heap, left, right, out);
+}
 
 MalValue mal_ops_subtract(MalValue left, MalValue right);
 
