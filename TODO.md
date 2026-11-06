@@ -1973,12 +1973,13 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       output parity, matched toolchains, and CPU, memory, disk, and binary-size evidence.
       In the `bench:ffi` portfolio, number-array copies into `const double *` take
       1.6x to 2.3x Bun's time, where Bun lends native vectors, and an 8-element
-      `Float64Array` loan 1.2x. That binding's body serves both the copy and the view
-      path, with a 576-byte frame and twelve saved registers, and checks kind, count
-      and alignment on every call. Compiled callers could hoist those checks out of
-      loops whose calls cannot run JavaScript. The 64 KiB non-ASCII `sqlite-text`
-      cases sample the same as ASCII in steady state; their round-to-round variance
-      is process-level, not per-call work.
+      `Float64Array` loan 1.1x. What remains of the loan is the per-call kind, count
+      and extent checks; compiled callers could hoist them out of loops whose calls
+      cannot run JavaScript. The 64 KiB non-ASCII `sqlite-text` cases sample the
+      same as ASCII in steady state; their round-to-round variance is process-level.
+      Cold header analysis of a macro-heavy library such as OpenSSL spends most of
+      its time in Clang's JSON dump of the macro value probe, 64 MB of it for the
+      macros' type expressions.
 - [ ] Separate input and result values in the binding plan. Both share `JsValue`, so
       input handles carry a result `ownership` and input strings, bytes and
       sequences a `free` the planner rejects; generation relies on the position
