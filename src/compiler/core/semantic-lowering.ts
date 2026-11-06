@@ -193,6 +193,7 @@ interface CoreFrontendContext {
 	moduleEvaluationBodies: Map<string, number>;
 	/** Module path to the function that instantiates it and its dependencies. */
 	moduleInstantiations: Map<string, number>;
+	filesByPath: ReadonlyMap<string, SemanticFile>;
 
 	/**
 	 * Keep track of where the binding is stored.
@@ -896,6 +897,7 @@ export function constructSemanticProgramCore(
 		compiledModuleInitForPaths: new Map(),
 		moduleEvaluationBodies: new Map(),
 		moduleInstantiations: new Map(),
+		filesByPath: new Map(semantic.files.map((file) => [file.path, file])),
 		bindingToStorage: new Map(),
 		modulePrivateNames: [],
 		nextLoopScopeId: -1,
@@ -1991,7 +1993,7 @@ function compileMergedModuleInit(
 	evaluationOrder: Array<string>,
 	cjsEntryId?: number,
 ) {
-	const fileByPath = new Map(program.semantic.files.map((file) => [file.path, file]));
+	const fileByPath = program.filesByPath;
 
 	// Nested functions are traced lazily and would otherwise try to compile a
 	// separate per-file init; mark every module compiled up front since the
@@ -2179,7 +2181,7 @@ function compileFileInit(program: CoreFrontendContext, initFile: SemanticFile) {
 		fn.blocks.push(prologue);
 		const prologueCursor = { block: prologue };
 		if (initFile.type === "module") {
-			emitModuleInstantiationClosure(program, fn, prologueCursor, initFile);
+			emitModuleGraphInstantiation(program, fn, prologueCursor, initFile);
 			fn.moduleInstantiated = true;
 		} else if (moduleNeedsPrologue(program, initFile))
 			emitModulePrologue(program, fn, prologue, initFile);
@@ -2232,7 +2234,7 @@ function compileModuleGraphInit(
 	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	graph.blocks.push(block);
 	const cursor = { block };
-	emitModuleInstantiationClosure(program, graph, cursor, file);
+	emitModuleGraphInstantiation(program, graph, cursor, file);
 	for (const dependency of moduleEvaluationDependencies(program, file))
 		emitModuleEvaluationCall(
 			program,
@@ -2272,6 +2274,23 @@ function compileModuleGraphInit(
 	emitReturn(program, graph, cursor.block, callable);
 	endFunction(program, graph);
 	return graph.functionIndex;
+}
+
+/**
+ * Instantiate the ES module graph `file` roots, from that module's init. The program
+ * entry's init is the first code to run, so the entry instantiates inline instead of
+ * through a function the optimizer would then inline. An import cycle back to the
+ * entry still builds that function, which finds the entry's flag already set.
+ */
+function emitModuleGraphInstantiation(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	file: SemanticFile,
+): void {
+	if (file.path === program.semantic.entrypointPath)
+		emitModuleInstantiation(program, fn, cursor, file);
+	else emitModuleInstantiationClosure(program, fn, cursor, file);
 }
 
 /**
@@ -2322,6 +2341,22 @@ function compileModuleInstantiation(
 	program.moduleInstantiations.set(file.path, fn.functionIndex);
 	const cursor: CoreFrontendCursor = { block: { emitter: unboundCoreEmitter } };
 	fn.blocks.push(cursor.block);
+	emitModuleInstantiation(program, fn, cursor, file);
+	endFunction(program, fn);
+	return fn.functionIndex;
+}
+
+/**
+ * Instantiate `file` once: its flag, TDZ bindings, namespaces and hoisted
+ * functions, then the modules it imports.
+ */
+function emitModuleInstantiation(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	file: SemanticFile,
+): void {
+	if (file.commonjs || program.compiledModuleInitForPaths.get(file.path) === null) return;
 	const slot = getDynamicModuleStatusSlot(program, `\0instantiated:${file.path}`);
 	const initialized = nextCoreVariable(fn);
 	cursor.block.emitter.emit({
@@ -2363,8 +2398,6 @@ function compileModuleInstantiation(
 	cursor.block.emitter.emit({ type: "jump", blocks: [join] });
 	skip.blocks[0] = join;
 	cursor.block = fn.blocks[join]!;
-	endFunction(program, fn);
-	return fn.functionIndex;
 }
 
 function compileModuleEntry(program: CoreFrontendContext, file: SemanticFile): void {
@@ -2483,9 +2516,7 @@ function moduleEvaluationDependencies(
 	file: SemanticFile,
 ): Array<SemanticFile> {
 	const record = program.semantic.graph?.modules.get(file.path);
-	const files = new Map(
-		program.semantic.files.map((candidate) => [candidate.path, candidate]),
-	);
+	const files = program.filesByPath;
 	const seen = new Set<string>();
 	const dependencies: Array<SemanticFile> = [];
 	for (const dependency of record?.dependencies ?? []) {
@@ -14312,7 +14343,7 @@ function dynamicImportCandidates(
 	fn: CoreFrontendFunction,
 ): Array<DynamicImportCandidate> {
 	const record = program.semantic.graph?.modules.get(fn.semanticFile.path);
-	const files = new Map(program.semantic.files.map((file) => [file.path, file]));
+	const files = program.filesByPath;
 	const candidates = new Map<string, DynamicImportCandidate>();
 	for (const targetPath of program.semantic.graph?.dynamicImportCandidates ?? []) {
 		if (!files.has(targetPath) && !program.failedModules.has(targetPath)) continue;
@@ -15736,7 +15767,7 @@ function emitDeferredModuleNamespaceInits(
 	fn: CoreFrontendFunction,
 	block: CoreFrontendBlock,
 ): void {
-	const files = new Map(program.semantic.files.map((file) => [file.path, file]));
+	const files = program.filesByPath;
 	const initialized = new Set<string>();
 	for (const imports of program.namespaceImports.values()) {
 		for (const namespaceImport of imports) {
