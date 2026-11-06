@@ -609,7 +609,10 @@ Arithmetic work should support these paths or fix correctness defects.
       `MalDefinePropertyCache` per static define site (510 in the compiler), and
       inherited loads (`mal_prototype_chain_epoch`), root spans and the fiber,
       profile and perf-stats state stay thread-local. Workers keep several isolates
-      per process, so this state cannot become process-global.
+      per process, so this state cannot become process-global. While a worker
+      runs, every isolate pays the call: a `TypedArray.prototype.every` callback
+      loop costs about 30% more. The sole record returns once the last worker is
+      joined.
 - [ ] Measure sequentially consistent environment slots on Linux x64. `MalEnv`
       slots are `_Atomic`, so every captured store compiles to `XCHG` on x86-64.
       Major-mark workers trace slots while the mutator runs, so stores must stay

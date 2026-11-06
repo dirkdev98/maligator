@@ -83,8 +83,8 @@ typedef struct MalIsolateLocals {
 extern MAL_ISOLATE_LOCAL MalIsolateLocals mal_isolate;
 
 #if defined(__APPLE__) && !defined(__wasi__)
-/* Even one record costs a lookup call per function on macOS. Until a second isolate
- * thread starts, the only isolate's record is also published here. */
+/* Even one record costs a lookup call per function on macOS. While no other isolate
+ * thread runs, the only isolate's record is also published here. */
 extern _Atomic(MalIsolateLocals *) mal_sole_isolate;
 
 /* Out of line, so a select cannot compute the thread-local address on every access. */
@@ -98,10 +98,16 @@ static inline __attribute__((always_inline)) MalIsolateLocals *mal_isolate_local
 #define mal_isolate_locals() (&mal_isolate)
 #endif
 
-/** Publish the calling thread's record unless another isolate thread was ever started. */
+/** Publish the calling thread's record unless another isolate thread is running. */
 void mal_isolate_claim_sole(void);
-/** Call before starting another isolate thread; afterwards each isolate reads its own record. */
+/** Call before starting an isolate thread that is never joined; each isolate then reads its own record. */
 void mal_isolate_release_sole(void);
+/**
+ * Bracket an isolate thread that its parent joins: starting withdraws the sole record,
+ * and joining the last such thread publishes the joining thread's record again.
+ */
+void mal_isolate_thread_starting(void);
+void mal_isolate_thread_joined(void);
 
 #define mal_root_span_head (mal_isolate_locals()->root_span_head)
 #define mal_prototype_chain_epoch (mal_isolate_locals()->prototype_chain_epoch)

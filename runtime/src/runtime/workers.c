@@ -2812,6 +2812,7 @@ static void worker_unlink(Isolate *iso, WorkerRecord *worker) {
 static bool worker_finish(MalVm *vm, WorkerRecord *worker) {
     WorkerThread *thread = worker->thread;
     pthread_join(thread->thread, nullptr);
+    mal_isolate_thread_joined();
     atomic_fetch_sub_explicit(&g_live_workers, 1, memory_order_acq_rel);
     worker->joined = true;
     worker_update_work(vm, worker);
@@ -3597,10 +3598,11 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
     pthread_attr_t attributes;
     pthread_attr_init(&attributes);
     pthread_attr_setstacksize(&attributes, WORKERS_STACK_BYTES);
-    mal_isolate_release_sole();
+    mal_isolate_thread_starting();
     int spawn = pthread_create(&thread->thread, &attributes, worker_thread_main, thread);
     pthread_attr_destroy(&attributes);
     if (spawn != 0) {
+        mal_isolate_thread_joined();
         // Nothing was committed: the transfer list stays attached to the sender.
         worker_unlink(iso, worker);
         port_close_record(vm, port);
@@ -3629,6 +3631,7 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
     if (!committed) {
         // The cancelled thread closes the child side and posts an exit nobody claims.
         pthread_join(thread->thread, nullptr);
+        mal_isolate_thread_joined();
         worker_unlink(iso, worker);
         port_close_record(vm, port);
         atomic_fetch_sub_explicit(&g_live_workers, 1, memory_order_acq_rel);
@@ -4031,6 +4034,7 @@ void mal_workers_shutdown(MalVm *vm) {
         WorkerRecord *worker = iso->workers;
         iso->workers = worker->next;
         pthread_join(worker->thread->thread, nullptr);
+        mal_isolate_thread_joined();
         atomic_fetch_sub_explicit(&g_live_workers, 1, memory_order_acq_rel);
         if (worker->holds_work) mal_reactor_release_work(isolate_reactor(vm));
         worker_thread_release(worker->thread);
