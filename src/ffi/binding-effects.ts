@@ -1,4 +1,4 @@
-import type { BindingPlan, BoundFunction, JsValue } from "./binding-plan.ts";
+import type { BindingPlan, BoundFunction, JsResult, JsValue } from "./binding-plan.ts";
 
 function inputCallsJavaScript(value: JsValue): boolean {
 	switch (value.kind) {
@@ -25,7 +25,7 @@ function inputCallsJavaScript(value: JsValue): boolean {
 }
 
 function resultHasCleanup(
-	value: JsValue,
+	value: JsResult,
 	plan: BindingPlan,
 	visiting: ReadonlySet<string> = new Set(),
 ): boolean {

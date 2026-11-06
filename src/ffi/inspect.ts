@@ -4,6 +4,7 @@ import type {
 	BoundFunction,
 	Gap,
 	GapCode,
+	JsResult,
 	JsValue,
 	MappedParameter,
 } from "./binding-plan.ts";
@@ -251,7 +252,7 @@ export function formatTsType(
 			);
 		case "callback": {
 			const params = value.params
-				.filter((param): param is JsValue => param !== "data" && param !== "count")
+				.filter((param): param is JsResult => param !== "data" && param !== "count")
 				.map((param, index) => `arg${index + 1}: ${formatTsType(param)}`);
 			const type = `(${params.join(", ")}) => ${formatTsType(value.returns, "input")}`;
 			return value.nullable ? `(${type}) | null` : type;

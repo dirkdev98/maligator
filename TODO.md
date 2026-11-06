@@ -1956,11 +1956,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       integer constants under their enum probes. Its Clang passes, and each library's
       preprocessing in a warm build, run one after another; overlapping them needs an
       asynchronous preparation pipeline through the synchronous build commands.
-- [ ] Separate input and result values in the binding plan. Both share `JsValue`, so
-      input handles carry a result `ownership` and input strings, bytes and
-      sequences a `free` the planner rejects; generation relies on the position
-      instead of the type. Give results their cleanup obligation (`free`, a
-      destructor, an owner's release) as one resolved field.
 
 # Actors and SMP
 
