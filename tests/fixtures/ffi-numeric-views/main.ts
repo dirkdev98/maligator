@@ -313,6 +313,10 @@ for (const dot of [numeric_dot, dotAsync]) {
 		(await dot(new Float64Array([2, 3]), new Float64Array([5, 7]))) === 31,
 		"matching shared view counts",
 	);
+	check(
+		(await dot(new Float64Array([2, 3]), [5, 7])) === 31,
+		"a view beside an Array copies only the Array",
+	);
 	await rejects(() => dot(new Float64Array(1), new Float64Array(2)));
 	const detached = new Float64Array(2);
 	const detaching = [1, 1];

@@ -270,6 +270,33 @@ const UNROOTED_INPUTS: ReadonlySet<JsValue["kind"]> = new Set([
 	"bytes",
 ]);
 
+/**
+ * The parameters that lend a typed array in place of copying an Array, when the
+ * binding also has a view-only body: one that never runs element getters, so a call
+ * whose arguments are all typed arrays needs no copy path, frame storage or rooting.
+ * Callback trampolines belong to the generic body alone.
+ */
+function viewParameters(binding: BoundFunction): ReadonlyArray<number> {
+	if (
+		binding.global !== undefined ||
+		binding.params.some(({ value }) => value.kind === "callback")
+	)
+		return [];
+	return binding.params.flatMap((param, index) =>
+		param.view !== undefined && param.value.kind === "sequence" ? [index] : [],
+	);
+}
+
+/** C that holds when every view parameter of `binding` receives a typed array. */
+function viewsSelected(
+	binding: BoundFunction,
+	argument: (index: number) => string,
+): string {
+	return viewParameters(binding)
+		.map((index) => `mal_ffi_is_typed_array(${argument(index)})`)
+		.join(" && ");
+}
+
 /** The struct a binding returns, when compiled callers can take its fields instead. */
 function intoRecord(binding: BoundFunction): string | undefined {
 	return binding.returns.kind === "record" && binding.outputs.length === 0
@@ -349,6 +376,17 @@ function directEntryVariant(
 					({ value }) => value.kind === "handle" || value.kind === "bytes",
 				)));
 	const args = arity === 0 ? "nullptr" : "mal_direct_args";
+	const views = viewParameters(binding);
+	// Typed arrays run no getters, so only the remaining parameters decide rooting.
+	const viewsRooted =
+		binding.closes !== undefined ||
+		binding.initializes !== undefined ||
+		binding.params.some(
+			({ value }, index) => !views.includes(index) && !UNROOTED_INPUTS.has(value.kind),
+		) ||
+		(pinsResources && binding.params.some(({ value }) => value.kind === "handle"));
+	const invokeViews = (args: string) =>
+		`mal_ffi_call_${binding.name}_views(vm, ${args}, ${String(arity)}, false${extra})`;
 	return [
 		"",
 		`MalValue ${symbol}(MalVm *vm${parameters.join("")}) {`,
@@ -357,6 +395,21 @@ function directEntryVariant(
 			: [
 					`	MalValue mal_direct_args[${String(arity)}] = { ${Array.from({ length: arity }, (_, index) => `mal_a${String(index)}`).join(", ")} };`,
 				]),
+		...(views.length === 0
+			? []
+			: viewsRooted
+				? [
+						`	if (${viewsSelected(binding, (index) => `mal_a${String(index)}`)}) {`,
+						"		MalFfiRoots mal_view_roots;",
+						`		mal_ffi_root(&mal_view_roots, mal_direct_args, ${String(arity)});`,
+						`		MalValue mal_view_result = ${invokeViews(args)};`,
+						"		mal_ffi_unroot(&mal_view_roots);",
+						"		return mal_view_result;",
+						"	}",
+					]
+				: [
+						`	if (${viewsSelected(binding, (index) => `mal_a${String(index)}`)}) return ${invokeViews(args)};`,
+					]),
 		...(rooted
 			? [
 					"	MalFfiRoots mal_direct_roots;",
@@ -3051,9 +3104,14 @@ class BindingWriter {
 		);
 	}
 
+	/**
+	 * The function object and the shared body of a binding, or with `views` the
+	 * body's view-only variant: typed array arguments without the Array copy path.
+	 */
 	function(
 		binding: BoundFunction,
 		callable?: Extract<JsValue, { kind: "callable" }>,
+		views = false,
 	): Array<string> {
 		const name = binding.name;
 		if (binding.global?.retained !== undefined) {
@@ -3723,11 +3781,16 @@ class BindingWriter {
 								locals.push(`void *mal_numeric_pin_${index} = nullptr;`);
 								cleanup.push(`mal_ffi_unpin(mal_numeric_pin_${index});`);
 							}
+							// The view-only body leaves its unused copy path for the C compiler to drop.
 							body.push(
-								`${selected} = mal_ffi_is_typed_array(${source});`,
-								`if (!${selected}) {`,
-								...converted.map((line) => `\t${line}`),
-								"}",
+								...(views
+									? [`${selected} = true;`]
+									: [
+											`${selected} = mal_ffi_is_typed_array(${source});`,
+											`if (!${selected}) {`,
+											...converted.map((line) => `\t${line}`),
+											"}",
+										]),
 							);
 							buffers.push(
 								`if (${selected}) {`,
@@ -3967,12 +4030,17 @@ class BindingWriter {
 				"if (mal_ffi_threw(vm)) mal_result = mal_ffi_undefined();",
 			);
 		} else after.push(...releases);
-		return [
-			...trampolines,
+		const viewDispatch =
+			views || callable !== undefined || viewParameters(binding).length === 0
+				? []
+				: [
+						`\tif (${viewsSelected(binding, (index) => `(mal_argc > ${String(index)} ? mal_args[${String(index)}] : mal_ffi_undefined())`)}) return mal_ffi_call_${name}_views(vm, mal_args, mal_argc, true${hasInto(binding) ? ", nullptr, nullptr" : ""});`,
+					];
+		const shared = [
 			"",
 			// The body, shared by the function object (framed: the call counts as a native
 			// frame, so collection needs lifting around callbacks) and the direct entry.
-			`static inline MalValue mal_ffi_call_${name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed${hasInto(binding) ? ", void *mal_into, MalValue *mal_slots" : ""}${callable === undefined ? "" : `, MalFfiTarget_${callable.name} mal_target`}${owner === undefined ? "" : ", void *mal_owner_pin, MalValue mal_owner"}) {`,
+			`static inline MalValue mal_ffi_call_${views ? `${name}_views` : name}(MalVm *vm, const MalValue *mal_args, int32_t mal_argc, bool mal_framed${hasInto(binding) ? ", void *mal_into, MalValue *mal_slots" : ""}${callable === undefined ? "" : `, MalFfiTarget_${callable.name} mal_target`}${owner === undefined ? "" : ", void *mal_owner_pin, MalValue mal_owner"}) {`,
 			"\t(void) vm;",
 			"\t(void) mal_args;",
 			"\t(void) mal_argc;",
@@ -4040,11 +4108,17 @@ class BindingWriter {
 				: []),
 			"\treturn mal_result;",
 			"}",
+		];
+		if (views) return shared;
+		return [
+			...trampolines,
+			...shared,
 			"",
 			`static MalValue mal_ffi_function_${name}(MalVm *vm, MalValue mal_this, const MalValue *mal_args, int32_t mal_argc, MalValue mal_new_target, MalValue mal_callee) {`,
 			"\t(void) mal_this;",
 			"\t(void) mal_new_target;",
 			"\t(void) mal_callee;",
+			...viewDispatch,
 			...(callable === undefined
 				? []
 				: [
@@ -5100,6 +5174,9 @@ export function generateBindingUnit(
 		...scalarFunctions,
 		...bindings.flatMap((binding) => [
 			"",
+			...(viewParameters(binding).length === 0
+				? []
+				: writer.function(binding, undefined, true)),
 			// Also emitted for an async twin alone, which shares its static registration
 			// state; the C compiler drops the unread static functions.
 			...writer.function(binding),
