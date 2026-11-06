@@ -325,8 +325,10 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
         if (integer < 0) {
             *--cursor = '-';
         }
+        // Digits fit an inline string; hashing them into the tiny-string cache costs
+        // more than the cell it might share.
         MalString *string =
-            mal_string_new_ascii(heap, cursor, (usize) (end - cursor));
+            mal_string_new_inline_latin1(heap, cursor, (usize) (end - cursor));
         if (owner != nullptr) {
             owner->small_uint_string_cache[integer] = string;
             u16 scan_limit = (u16) integer + 1;
