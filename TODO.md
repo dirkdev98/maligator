@@ -1972,13 +1972,13 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       build costs. Compare representative libraries against C and Bun, retaining
       output parity, matched toolchains, and CPU, memory, disk, and binary-size evidence.
       In the `bench:ffi` portfolio, number-array copies into `const double *` take
-      1.6x to 2.3x Bun's time, where Bun lends native vectors, and 8- to 64-element
-      `Float64Array` loans 1.3x to 1.4x. Forcing the view helpers inline changed
-      nothing; a sampled profile of the 8-element loan puts a third of the call in the
-      binding, with `mal_typed_array_object_span` out of line for each view and the
-      rest in view and shared-count validation. The 64 KiB non-ASCII
-      `sqlite-text` cases vary by about 20% between rounds while borrowing a UTF-8
-      sidecar; find that variance before treating their medians as a gap.
+      1.6x to 2.3x Bun's time, where Bun lends native vectors, and an 8-element
+      `Float64Array` loan 1.2x. That binding's body serves both the copy and the view
+      path, with a 576-byte frame and twelve saved registers, and checks kind, count
+      and alignment on every call. Compiled callers could hoist those checks out of
+      loops whose calls cannot run JavaScript. The 64 KiB non-ASCII `sqlite-text`
+      cases sample the same as ASCII in steady state; their round-to-round variance
+      is process-level, not per-call work.
 - [ ] Separate input and result values in the binding plan. Both share `JsValue`, so
       input handles carry a result `ownership` and input strings, bytes and
       sequences a `free` the planner rejects; generation relies on the position
