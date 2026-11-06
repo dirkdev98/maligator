@@ -105,10 +105,12 @@ Maligator keeps reusable inputs separate from project outputs:
 
 The user cache follows the platform convention (`~/Library/Caches` on macOS,
 `$XDG_CACHE_HOME` or `~/.cache` on Linux, and LocalAppData on Windows);
-`MALIGATOR_CACHE_DIR` replaces `<user-cache>/maligator` as a whole. Cache keys include relevant source content, producer protocol,
-normalized feature config, target, selected toolchain identity, build environment,
-and exact compile or Cargo arguments. Package semver is recorded as metadata, not
-used as a blanket invalidation key.
+`MALIGATOR_CACHE_DIR` replaces `<user-cache>/maligator` as a whole. Cache keys include
+relevant source content, producer protocol, normalized feature config, target, the
+identity of the tools that produce the artifact, build environment, and exact compile
+or Cargo arguments. A C object depends only on the C compiler, so toolchains that
+differ in their C++, archive or link tools share compiled objects. Package semver is
+recorded as metadata, not used as a blanket invalidation key.
 
 `maligator build --print` writes generated C to stdout and stops before native
 compilation, linking, or artifact publication. Add `--production` to inspect the

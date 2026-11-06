@@ -42,7 +42,7 @@ import {
 	requireToolchain,
 	requireWasmToolchain,
 } from "../src/toolchain.ts";
-import type { ToolchainReport } from "../src/toolchain.ts";
+import type { Toolchain, ToolchainReport } from "../src/toolchain.ts";
 
 interface FakeToolchain {
 	root: string;
@@ -1706,6 +1706,76 @@ printf '!<arch>\\n' > "$2"
 		});
 		expect(phases.some(({ phase }) => phase === "runtime C object compile")).toBe(false);
 		expect(compileInvocationCount(fake.logPath)).toBe(0);
+	});
+
+	it("reuses runtime objects across toolchains that differ only in C++ support", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const cacheDirectory = path.join(fake.root, "shared-object-cache");
+		const toolchain = (needsCxx: boolean) =>
+			inspectToolchain({
+				rootDir: fake.root,
+				rustDir: path.join(runtimeDirectory, "rust"),
+				env: fake.env,
+				needsCxx,
+				platform: "linux",
+			}).toolchain!;
+		const build = (selected: Toolchain) =>
+			ensureNativeArtifacts(
+				resolveNativeBuildContext({
+					toolchain: selected,
+					runtimeDirectory,
+					cacheDirectory,
+					features: {
+						evalEnabled: false,
+						realmsEnabled: false,
+						webPlatformEnabled: false,
+					},
+				}),
+			);
+		const cOnly = toolchain(false);
+		const withCxx = toolchain(true);
+
+		build(cOnly);
+		writeFileSync(fake.logPath, "");
+		build(withCxx);
+
+		expect(compileInvocationCount(fake.logPath)).toBe(0);
+	});
+
+	it("recompiles runtime objects when the C compiler changes", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const cacheDirectory = path.join(fake.root, "compiler-change-cache");
+		const toolchain = () =>
+			inspectToolchain({
+				rootDir: fake.root,
+				rustDir: path.join(runtimeDirectory, "rust"),
+				env: fake.env,
+				needsCxx: false,
+				platform: "linux",
+			}).toolchain!;
+		const build = (selected: Toolchain) =>
+			ensureNativeArtifacts(
+				resolveNativeBuildContext({
+					toolchain: selected,
+					runtimeDirectory,
+					cacheDirectory,
+					features: {
+						evalEnabled: false,
+						realmsEnabled: false,
+						webPlatformEnabled: false,
+					},
+				}),
+			);
+
+		build(toolchain());
+		executable(path.join(fake.bin, "fake-cc"), compilerScript("fake cc 2", fake.logPath));
+		const replaced = toolchain();
+		writeFileSync(fake.logPath, "");
+		build(replaced);
+
+		expect(compileInvocationCount(fake.logPath)).toBeGreaterThan(0);
 	});
 
 	it("runs Cargo when the cached Rust library is missing or corrupt", () => {

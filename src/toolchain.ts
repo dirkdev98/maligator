@@ -85,7 +85,14 @@ export interface Toolchain {
 	/** Build-process environment required by the selected driver. */
 	environmentOverrides?: Readonly<NodeJS.ProcessEnv>;
 	probes: ToolchainProbes;
+	/** Identity of every selected tool, for probes, links and other whole-toolchain products. */
 	fingerprint: string;
+	/**
+	 * Identity of the C compiler for `target`. C objects key on it instead of
+	 * `fingerprint`, so toolchains that differ only in their C++, archive, Rust or
+	 * link tools share compiled objects.
+	 */
+	ccFingerprint: string;
 	cacheHit: boolean;
 }
 
@@ -484,6 +491,28 @@ function fingerprintFor(
 			rustTarget,
 			testedFlags,
 			identities,
+		}),
+		"hex",
+	);
+}
+
+// Probe outcomes that change code generation, such as the LTO flags, reach object
+// keys through the compile arguments, so the compiler identity alone suffices here.
+function ccFingerprintFor(
+	cc: ToolExecutable,
+	target: string,
+	platform: NodeJS.Platform,
+	arch: string,
+	cacheDirectory: string,
+): string {
+	return hash(
+		"sha256",
+		JSON.stringify({
+			schema: CACHE_SCHEMA,
+			platform,
+			arch,
+			target,
+			cc: executableIdentity(cc, cacheDirectory),
 		}),
 		"hex",
 	);
@@ -1037,6 +1066,13 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 		...(crossTarget === undefined ? {} : { environmentOverrides }),
 		probes,
 		fingerprint,
+		ccFingerprint: ccFingerprintFor(
+			completeTools.cc,
+			target,
+			platform,
+			arch,
+			cacheDirectory,
+		),
 		cacheHit: report.cacheHit,
 	};
 	report.toolchain = toolchain;

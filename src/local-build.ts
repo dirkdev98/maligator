@@ -263,7 +263,7 @@ function generatedUnitDigests(
 			compileArguments: normalizedCompileArguments,
 			headerDependencies: headerHash(input),
 			environment: context.environmentFingerprint,
-			toolchain: context.toolchain.fingerprint,
+			cc: context.toolchain.ccFingerprint,
 			target: context.toolchain.target,
 		});
 		memoKeys[index] = key;
@@ -435,7 +435,7 @@ function ensureGeneratedObjects(
 			unit: unitDigests[index],
 			compileArguments: normalizedArgumentsOf(input),
 			environment: context.environmentFingerprint,
-			toolchain: context.toolchain.fingerprint,
+			cc: context.toolchain.ccFingerprint,
 			target: context.toolchain.target,
 		});
 		const costKey = artifactActionKey(GENERATED_OBJECT_COST_PRODUCER, {
@@ -443,7 +443,7 @@ function ensureGeneratedObjects(
 			compileArguments: normalizedArgumentsOf(input),
 			headerDependencies,
 			environment: context.environmentFingerprint,
-			toolchain: context.toolchain.fingerprint,
+			cc: context.toolchain.ccFingerprint,
 			target: context.toolchain.target,
 		});
 		const cached = readArtifactAction(
