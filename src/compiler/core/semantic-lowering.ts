@@ -667,6 +667,8 @@ interface SemanticControlContext {
 	completionKindReg?: number;
 	completionValueReg?: number;
 	disposeCapabilityLocation?: BindingLocation;
+	/** A sync `using` region's resources, held in locals instead of a capability. */
+	disposeResources?: Array<DisposableResourceSlot>;
 	disposeAsync?: boolean;
 
 	/**
@@ -7388,32 +7390,46 @@ function compileDisposableStatementScope(
 	return entryIdx;
 }
 
+interface DisposableResourceSlot {
+	value: BindingLocation;
+	method: BindingLocation;
+}
+
+/**
+ * Compile a `using` scope. A region with an `await using` declaration keeps its
+ * resources in a dispose capability, whose disposal can await. A sync region keeps
+ * each declaration's value and method in locals its prologue clears, so entering
+ * it allocates nothing and disposal calls each method directly.
+ */
 function compileDisposableRegion(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	disposeAsync: boolean,
 	compileProtected: (entry: CoreFrontendBlock) => CoreFrontendBlock,
 ): { entryIdx: number; tail: CoreFrontendBlock } {
+	const prologue: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	const prologueIdx = fn.blocks.push(prologue) - 1;
 	const entry: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const entryIdx = fn.blocks.push(entry) - 1;
 	const cursor: CoreFrontendCursor = { block: entry };
-	const createCapability = nextCoreVariable(fn);
-	entry.emitter.emit({
-		type: "loadIntrinsic",
-		registers: [createCapability],
-		intrinsic: "__newDisposeCapability",
-	});
-	const undefinedValue = compileUndefined(fn, cursor);
-	const capability = nextCoreVariable(fn);
-	entry.emitter.emit({
-		type: "call",
-		registers: [capability, createCapability, undefinedValue],
-	});
-	const capabilityLocation: BindingLocation = {
-		type: "local",
-		index: fn.nextLocalIndex++,
-	};
-	storeRegisterAtLocation(entry, capabilityLocation, capability);
+	let capabilityLocation: BindingLocation | undefined;
+	const resources: Array<DisposableResourceSlot> = [];
+	if (disposeAsync) {
+		const createCapability = nextCoreVariable(fn);
+		entry.emitter.emit({
+			type: "loadIntrinsic",
+			registers: [createCapability],
+			intrinsic: "__newDisposeCapability",
+		});
+		const undefinedValue = compileUndefined(fn, cursor);
+		const capability = nextCoreVariable(fn);
+		entry.emitter.emit({
+			type: "call",
+			registers: [capability, createCapability, undefinedValue],
+		});
+		capabilityLocation = { type: "local", index: fn.nextLocalIndex++ };
+		storeRegisterAtLocation(entry, capabilityLocation, capability);
+	}
 
 	const kindReg = nextCoreVariable(fn);
 	const valueReg = nextCoreVariable(fn);
@@ -7426,6 +7442,7 @@ function compileDisposableRegion(
 		completionValueReg: valueReg,
 		finalizerArms: new Map(),
 		disposeCapabilityLocation: capabilityLocation,
+		disposeResources: capabilityLocation === undefined ? resources : undefined,
 		disposeAsync,
 	};
 	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
@@ -7464,67 +7481,84 @@ function compileDisposableRegion(
 		jump.blocks[0] = finalizerIdx;
 	}
 
-	const dispose = nextCoreVariable(fn);
-	const finalizerThis = compileUndefined(fn, { block: finalizer });
-	const finalizerCapability = loadRegisterFromLocation(fn, finalizer, capabilityLocation);
-	const throwKind = nextCoreVariable(fn);
-	const hasError = nextCoreVariable(fn);
-	finalizer.emitter.emit(
-		{
-			type: "loadIntrinsic",
-			registers: [dispose],
-			intrinsic: "__disposeResources",
-		},
-		{
-			type: "createNumber",
-			registers: [throwKind],
-			value: finallyCtx.finalizerArms!.get("throw")!.kind,
-		},
-		{
-			type: "binary",
-			registers: [hasError, kindReg, throwKind],
-			operator: "===",
-		},
-	);
-	const disposeResult = nextCoreVariable(fn);
-	finalizer.emitter.emit({
-		type: "call",
-		registers: [
-			disposeResult,
-			dispose,
-			finalizerThis,
-			finalizerCapability,
-			hasError,
-			valueReg,
-		],
-	});
+	const throwKindValue = finallyCtx.finalizerArms!.get("throw")!.kind;
 	let synchronousDisposeJump:
 		| Extract<CompilerInstruction, { type: "jumpIf" }>
 		| undefined;
 	let asyncDisposeTail: CoreFrontendBlock | undefined;
-	if (finallyCtx.disposeAsync) {
-		const undefinedValue = nextCoreVariable(fn);
-		const disposedSynchronously = nextCoreVariable(fn);
+	let finalizerTail = finalizer;
+	if (capabilityLocation === undefined) {
+		finalizerTail = compileResourceDisposal(
+			fn,
+			finalizer,
+			resources,
+			kindReg,
+			valueReg,
+			throwKindValue,
+		);
+	} else {
+		const dispose = nextCoreVariable(fn);
+		const finalizerThis = compileUndefined(fn, { block: finalizer });
+		const finalizerCapability = loadRegisterFromLocation(
+			fn,
+			finalizer,
+			capabilityLocation,
+		);
+		const throwKind = nextCoreVariable(fn);
+		const hasError = nextCoreVariable(fn);
 		finalizer.emitter.emit(
-			{ type: "createUndefined", registers: [undefinedValue] },
+			{
+				type: "loadIntrinsic",
+				registers: [dispose],
+				intrinsic: "__disposeResources",
+			},
+			{
+				type: "createNumber",
+				registers: [throwKind],
+				value: throwKindValue,
+			},
 			{
 				type: "binary",
-				registers: [disposedSynchronously, disposeResult, undefinedValue],
+				registers: [hasError, kindReg, throwKind],
 				operator: "===",
 			},
 		);
-		synchronousDisposeJump = {
-			type: "jumpIf",
-			registers: [disposedSynchronously],
-			blocks: [-1],
-		};
-		finalizer.emitter.emit(synchronousDisposeJump);
-		const asyncDispose: CoreFrontendBlock = { emitter: unboundCoreEmitter };
-		const asyncDisposeIdx = fn.blocks.push(asyncDispose) - 1;
-		finalizer.emitter.emit({ type: "jump", blocks: [asyncDisposeIdx] });
-		const asyncDisposeCursor: CoreFrontendCursor = { block: asyncDispose };
-		compileAwaitRegister(program, fn, asyncDisposeCursor, disposeResult);
-		asyncDisposeTail = asyncDisposeCursor.block;
+		const disposeResult = nextCoreVariable(fn);
+		finalizer.emitter.emit({
+			type: "call",
+			registers: [
+				disposeResult,
+				dispose,
+				finalizerThis,
+				finalizerCapability,
+				hasError,
+				valueReg,
+			],
+		});
+		if (finallyCtx.disposeAsync) {
+			const undefinedValue = nextCoreVariable(fn);
+			const disposedSynchronously = nextCoreVariable(fn);
+			finalizer.emitter.emit(
+				{ type: "createUndefined", registers: [undefinedValue] },
+				{
+					type: "binary",
+					registers: [disposedSynchronously, disposeResult, undefinedValue],
+					operator: "===",
+				},
+			);
+			synchronousDisposeJump = {
+				type: "jumpIf",
+				registers: [disposedSynchronously],
+				blocks: [-1],
+			};
+			finalizer.emitter.emit(synchronousDisposeJump);
+			const asyncDispose: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+			const asyncDisposeIdx = fn.blocks.push(asyncDispose) - 1;
+			finalizer.emitter.emit({ type: "jump", blocks: [asyncDisposeIdx] });
+			const asyncDisposeCursor: CoreFrontendCursor = { block: asyncDispose };
+			compileAwaitRegister(program, fn, asyncDisposeCursor, disposeResult);
+			asyncDisposeTail = asyncDisposeCursor.block;
+		}
 	}
 
 	const dispatchBlocks: Array<{ kind: number; idx: number }> = [];
@@ -7540,7 +7574,7 @@ function compileDisposableRegion(
 		synchronousDisposeJump.blocks[0] = epilogueIdx;
 		asyncDisposeTail!.emitter.emit({ type: "jump", blocks: [epilogueIdx] });
 	} else {
-		finalizer.emitter.emit({ type: "jump", blocks: [epilogueIdx] });
+		finalizerTail.emitter.emit({ type: "jump", blocks: [epilogueIdx] });
 	}
 	for (const { kind, idx } of dispatchBlocks) {
 		const constant = nextCoreVariable(fn);
@@ -7555,7 +7589,126 @@ function compileDisposableRegion(
 			{ type: "jumpIf", registers: [matches], blocks: [idx] },
 		);
 	}
-	return { entryIdx, tail: epilogue };
+	// Each entry starts with no resources: a for-of iteration reenters the region.
+	for (const resource of resources) {
+		const absent = compileUndefined(fn, { block: prologue });
+		storeRegisterAtLocation(prologue, resource.method, absent);
+		storeRegisterAtLocation(prologue, resource.value, absent);
+	}
+	prologue.emitter.emit({ type: "jump", blocks: [entryIdx] });
+	return { entryIdx: prologueIdx, tail: epilogue };
+}
+
+/**
+ * DisposeResources for a sync region: call each added method in reverse order. A
+ * throwing method becomes the completion, wrapping an earlier error in a
+ * SuppressedError. The error state crosses each call's protected range in locals.
+ */
+function compileResourceDisposal(
+	fn: CoreFrontendFunction,
+	finalizer: CoreFrontendBlock,
+	resources: ReadonlyArray<DisposableResourceSlot>,
+	kindReg: number,
+	valueReg: number,
+	throwKindValue: number,
+): CoreFrontendBlock {
+	const newBlock = (): { block: CoreFrontendBlock; idx: number } => {
+		const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+		return { block, idx: fn.blocks.push(block) - 1 };
+	};
+	const hasErrorLocation: BindingLocation = { type: "local", index: fn.nextLocalIndex++ };
+	const errorLocation: BindingLocation = { type: "local", index: fn.nextLocalIndex++ };
+	const throwKind = nextCoreVariable(fn);
+	const hasError = nextCoreVariable(fn);
+	finalizer.emitter.emit(
+		{ type: "createNumber", registers: [throwKind], value: throwKindValue },
+		{ type: "binary", registers: [hasError, kindReg, throwKind], operator: "===" },
+	);
+	storeRegisterAtLocation(finalizer, hasErrorLocation, hasError);
+	storeRegisterAtLocation(finalizer, errorLocation, valueReg);
+
+	let current = finalizer;
+	for (const resource of resources.toReversed()) {
+		const call = newBlock();
+		const body = newBlock();
+		const exit = newBlock();
+		const handler = newBlock();
+		const suppress = newBlock();
+		const next = newBlock();
+		const method = loadRegisterFromLocation(fn, current, resource.method);
+		const absent = compileUndefined(fn, { block: current });
+		const added = nextCoreVariable(fn);
+		current.emitter.emit(
+			{ type: "binary", registers: [added, method, absent], operator: "!==" },
+			{ type: "jumpIf", registers: [added], blocks: [call.idx] },
+			{ type: "jump", blocks: [next.idx] },
+		);
+
+		call.block.emitter.emit({ type: "tryBegin", blocks: [handler.idx, exit.idx] });
+		call.block.emitter.emit({ type: "jump", blocks: [body.idx] });
+		const calledMethod = loadRegisterFromLocation(fn, body.block, resource.method);
+		const receiver = loadRegisterFromLocation(fn, body.block, resource.value);
+		const result = nextCoreVariable(fn);
+		body.block.emitter.emit(
+			{ type: "call", registers: [result, calledMethod, receiver] },
+			{ type: "jump", blocks: [exit.idx] },
+		);
+		exit.block.emitter.emit({ type: "tryEnd" }, { type: "jump", blocks: [next.idx] });
+
+		const caught = nextCoreVariable(fn);
+		handler.block.emitter.emit({ type: "catch", registers: [caught] });
+		const earlier = loadRegisterFromLocation(fn, handler.block, hasErrorLocation);
+		handler.block.emitter.emit({
+			type: "jumpIf",
+			registers: [earlier],
+			blocks: [suppress.idx],
+		});
+		const raised = nextCoreVariable(fn);
+		handler.block.emitter.emit({
+			type: "createBoolean",
+			registers: [raised],
+			value: true,
+		});
+		storeRegisterAtLocation(handler.block, hasErrorLocation, raised);
+		storeRegisterAtLocation(handler.block, errorLocation, caught);
+		handler.block.emitter.emit({ type: "jump", blocks: [next.idx] });
+
+		const constructor = nextCoreVariable(fn);
+		suppress.block.emitter.emit({
+			type: "loadIntrinsic",
+			registers: [constructor],
+			intrinsic: "SuppressedError",
+		});
+		const suppressed = loadRegisterFromLocation(fn, suppress.block, errorLocation);
+		const wrapped = nextCoreVariable(fn);
+		suppress.block.emitter.emit({
+			type: "construct",
+			registers: [wrapped, constructor, caught, suppressed],
+		});
+		storeRegisterAtLocation(suppress.block, errorLocation, wrapped);
+		suppress.block.emitter.emit({ type: "jump", blocks: [next.idx] });
+		current = next.block;
+	}
+
+	// An error raised during disposal replaces any other completion.
+	const raise = newBlock();
+	const tail = newBlock();
+	const failed = loadRegisterFromLocation(fn, current, hasErrorLocation);
+	current.emitter.emit(
+		{ type: "jumpIf", registers: [failed], blocks: [raise.idx] },
+		{ type: "jump", blocks: [tail.idx] },
+	);
+	raise.block.emitter.emit({
+		type: "createNumber",
+		registers: [kindReg],
+		value: throwKindValue,
+	});
+	const error = loadRegisterFromLocation(fn, raise.block, errorLocation);
+	raise.block.emitter.emit(
+		{ type: "move", registers: [valueReg, error] },
+		{ type: "jump", blocks: [tail.idx] },
+	);
+	return tail.block;
 }
 
 function compileClassDeclaration(
@@ -8428,6 +8581,7 @@ function compileForInOfBindingAndBody(
 	const bindCursor: CoreFrontendCursor = { block: bindBlock };
 	const boundValue = resourceDeclaration
 		? compileAddDisposableResource(
+				program,
 				fn,
 				bindCursor,
 				valueRegister,
@@ -9601,7 +9755,10 @@ function routeThroughFinalizer(
 			type: "move",
 			registers: [scope.completionValueReg!, valueRegister],
 		});
-	} else if (scope.disposeCapabilityLocation !== undefined) {
+	} else if (
+		scope.disposeCapabilityLocation !== undefined ||
+		scope.disposeResources !== undefined
+	) {
 		block.emitter.emit({
 			type: "createUndefined",
 			registers: [scope.completionValueReg!],
@@ -9990,14 +10147,26 @@ function compileReturnStatement(
 }
 
 function compileAddDisposableResource(
+	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
 	resource: number,
 	asyncHint: boolean,
 ): number {
 	const disposal = fn.loops?.findLast(
-		(scope) => scope.disposeCapabilityLocation !== undefined,
+		(scope) =>
+			scope.disposeCapabilityLocation !== undefined ||
+			scope.disposeResources !== undefined,
 	);
+	if (disposal?.disposeResources !== undefined) {
+		return compileAddResourceSlot(
+			program,
+			fn,
+			cursor,
+			disposal.disposeResources,
+			resource,
+		);
+	}
 	if (disposal?.disposeCapabilityLocation === undefined) {
 		throw new Error("resource declaration has no disposal scope");
 	}
@@ -10025,6 +10194,104 @@ function compileAddDisposableResource(
 		registers: [added, addResource, thisValue, capability, resource, asyncHintRegister],
 	});
 	return added;
+}
+
+/**
+ * AddDisposableResource for a sync region: null and undefined add nothing; any other
+ * value must be an object with a callable [Symbol.dispose], read once here.
+ */
+function compileAddResourceSlot(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	resources: Array<DisposableResourceSlot>,
+	resource: number,
+): number {
+	const slot: DisposableResourceSlot = {
+		value: { type: "local", index: fn.nextLocalIndex++ },
+		method: { type: "local", index: fn.nextLocalIndex++ },
+	};
+	resources.push(slot);
+	const newBlock = (): { block: CoreFrontendBlock; idx: number } => {
+		const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+		return { block, idx: fn.blocks.push(block) - 1 };
+	};
+	const object = newBlock();
+	const notObject = newBlock();
+	const callable = newBlock();
+	const notCallable = newBlock();
+	const missing = newBlock();
+	const done = newBlock();
+	const check = cursor.block;
+	const typeOf = (
+		block: CoreFrontendBlock,
+		value: number,
+		name: string,
+		target: number,
+	) => {
+		const type = nextCoreVariable(fn);
+		const matches = nextCoreVariable(fn);
+		block.emitter.emit({ type: "unary", registers: [type, value], operator: "typeof" });
+		const expected = compileStaticString(program, fn, { block }, name);
+		block.emitter.emit(
+			{ type: "binary", registers: [matches, type, expected], operator: "===" },
+			{ type: "jumpIf", registers: [matches], blocks: [target] },
+		);
+	};
+	const nullish = (block: CoreFrontendBlock, value: number, target: number) => {
+		const absent = compileUndefined(fn, { block });
+		const matches = nextCoreVariable(fn);
+		block.emitter.emit(
+			{ type: "binary", registers: [matches, value, absent], operator: "==" },
+			{ type: "jumpIf", registers: [matches], blocks: [target] },
+		);
+	};
+
+	nullish(check, resource, done.idx);
+	typeOf(check, resource, "object", object.idx);
+	typeOf(check, resource, "function", object.idx);
+	check.emitter.emit({ type: "jump", blocks: [notObject.idx] });
+	emitThrowTypeError(
+		program,
+		fn,
+		{ block: notObject.block },
+		"Disposable resource is not an object",
+	);
+
+	const symbol = nextCoreVariable(fn);
+	object.block.emitter.emit({
+		type: "loadIntrinsic",
+		registers: [symbol],
+		intrinsic: "Symbol",
+	});
+	const disposeName = compileStaticString(
+		program,
+		fn,
+		{ block: object.block },
+		"dispose",
+	);
+	const disposeKey = nextCoreVariable(fn);
+	const method = nextCoreVariable(fn);
+	object.block.emitter.emit(
+		{ type: "loadProperty", registers: [disposeKey, symbol, disposeName] },
+		{ type: "loadProperty", registers: [method, resource, disposeKey] },
+	);
+	typeOf(object.block, method, "function", callable.idx);
+	nullish(object.block, method, missing.idx);
+	object.block.emitter.emit({ type: "jump", blocks: [notCallable.idx] });
+	emitThrowTypeError(program, fn, { block: missing.block }, "Object is not disposable");
+	emitThrowTypeError(
+		program,
+		fn,
+		{ block: notCallable.block },
+		"Dispose method is not callable",
+	);
+
+	storeRegisterAtLocation(callable.block, slot.value, resource);
+	storeRegisterAtLocation(callable.block, slot.method, method);
+	callable.block.emitter.emit({ type: "jump", blocks: [done.idx] });
+	cursor.block = done.block;
+	return resource;
 }
 
 function compileVariableDeclaration(
@@ -10068,6 +10335,7 @@ function compileVariableDeclaration(
 		);
 		if (statement.kind === "using" || statement.kind === "await using") {
 			source = compileAddDisposableResource(
+				program,
 				fn,
 				cursor,
 				source,
