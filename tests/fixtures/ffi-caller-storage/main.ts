@@ -110,6 +110,20 @@ check(readCopy(copied) === 11, "the restored field accessor reads C again");
 Object.defineProperty(copied, "value", { configurable: true, value: 5 });
 check(readCopy(copied) === 5, "an own property shadows the handle field");
 copied[Symbol.dispose]();
+const disposedCopy = caller_copy(12);
+let disposedTotal = 0;
+for (let index = 0; index < 64; index++) disposedTotal += readCopy(disposedCopy);
+disposedCopy[Symbol.dispose]();
+let disposedRead = false;
+try {
+	readCopy(disposedCopy);
+} catch (error) {
+	disposedRead = error instanceof TypeError;
+}
+check(
+	disposedTotal === 64 * 12 && disposedRead,
+	"a warm field read of a disposed handle throws",
+);
 
 for (const count of [0, 1, 63, 64, 65, 129]) {
 	const variable = VariableState(BigInt(count));

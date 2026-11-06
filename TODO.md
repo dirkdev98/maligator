@@ -1952,7 +1952,10 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       a function loop takes about 1.3 ns, C through a function pointer 1.5. Regions
       still refuse loops that store module bindings, such as `bench:ffi`'s top-level
       loops (5.4 ns per call there), and calls with integer arguments, whose range
-      checks would restart an iteration after C ran. The 64 KiB
+      checks would restart an iteration after C ran. Scalar fields of struct
+      handles read without a getter call, about 7.9 ns per warm read against 11;
+      the getter-row probe and the reader's dependent loads remain, which an
+      inline-cache row for C fields checked by the static probe would remove. The 64 KiB
       non-ASCII `sqlite-text` cases sample the same as ASCII in steady state; their
       round-to-round variance is process-level. Cold header analysis of a
       macro-heavy library such as OpenSSL still spends about half its time in
