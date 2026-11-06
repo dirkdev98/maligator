@@ -76,19 +76,26 @@ MAL_ISOLATE_LOCAL MalIsolateLocals mal_isolate = {
 
 #if defined(__APPLE__) && !defined(__wasi__)
 _Atomic(MalIsolateLocals *) mal_sole_isolate = nullptr;
-static _Atomic bool g_isolate_thread_unjoined = false;
-static _Atomic u32 g_isolate_threads_running = 0;
+static pthread_mutex_t g_isolate_mutex = PTHREAD_MUTEX_INITIALIZER;
+static bool g_isolate_thread_unjoined;
+static u32 g_isolate_threads_running;
+static bool g_isolate_root_seen;
+static MAL_ISOLATE_LOCAL bool g_isolate_counted_thread;
+static MAL_ISOLATE_LOCAL bool g_isolate_root_registered;
 
 void mal_isolate_claim_sole(void) {
-    if (atomic_load_explicit(&g_isolate_thread_unjoined, memory_order_acquire) ||
-            atomic_load_explicit(&g_isolate_threads_running, memory_order_acquire) != 0) {
-        return;
+    pthread_mutex_lock(&g_isolate_mutex);
+    if (!g_isolate_counted_thread && !g_isolate_root_registered) {
+        g_isolate_root_registered = true;
+        // Independent roots have no join notification, so a second root disables restoration.
+        if (g_isolate_root_seen) g_isolate_thread_unjoined = true;
+        g_isolate_root_seen = true;
     }
-    MalIsolateLocals *expected = nullptr;
-    if (!atomic_compare_exchange_strong(&mal_sole_isolate, &expected, &mal_isolate) &&
-            expected != &mal_isolate) {
-        mal_isolate_release_sole();
-    }
+    MalIsolateLocals *sole = !g_isolate_thread_unjoined &&
+            g_isolate_threads_running == 0 && g_isolate_root_registered
+        ? &mal_isolate : nullptr;
+    atomic_store_explicit(&mal_sole_isolate, sole, memory_order_release);
+    pthread_mutex_unlock(&g_isolate_mutex);
 }
 
 __attribute__((noinline)) MalIsolateLocals *mal_isolate_locals_of_thread(void) {
@@ -96,27 +103,36 @@ __attribute__((noinline)) MalIsolateLocals *mal_isolate_locals_of_thread(void) {
 }
 
 void mal_isolate_release_sole(void) {
-    atomic_store_explicit(&g_isolate_thread_unjoined, true, memory_order_release);
+    pthread_mutex_lock(&g_isolate_mutex);
+    g_isolate_thread_unjoined = true;
     atomic_store_explicit(&mal_sole_isolate, nullptr, memory_order_release);
+    pthread_mutex_unlock(&g_isolate_mutex);
 }
 
 void mal_isolate_thread_starting(void) {
-    atomic_fetch_add_explicit(&g_isolate_threads_running, 1, memory_order_acq_rel);
+    pthread_mutex_lock(&g_isolate_mutex);
+    g_isolate_threads_running++;
     atomic_store_explicit(&mal_sole_isolate, nullptr, memory_order_release);
+    pthread_mutex_unlock(&g_isolate_mutex);
+}
+
+void mal_isolate_thread_entered(void) {
+    g_isolate_counted_thread = true;
 }
 
 void mal_isolate_thread_joined(void) {
-    // Only an uncounted thread can join the last counted one, so the caller's record is
-    // the one that remains.
-    if (atomic_fetch_sub_explicit(&g_isolate_threads_running, 1, memory_order_acq_rel) == 1 &&
-            !atomic_load_explicit(&g_isolate_thread_unjoined, memory_order_acquire)) {
+    pthread_mutex_lock(&g_isolate_mutex);
+    if (--g_isolate_threads_running == 0 && !g_isolate_thread_unjoined &&
+            g_isolate_root_registered) {
         atomic_store_explicit(&mal_sole_isolate, &mal_isolate, memory_order_release);
     }
+    pthread_mutex_unlock(&g_isolate_mutex);
 }
 #else
 void mal_isolate_claim_sole(void) {}
 void mal_isolate_release_sole(void) {}
 void mal_isolate_thread_starting(void) {}
+void mal_isolate_thread_entered(void) {}
 void mal_isolate_thread_joined(void) {}
 #endif
 

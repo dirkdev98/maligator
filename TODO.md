@@ -612,7 +612,7 @@ Arithmetic work should support these paths or fix correctness defects.
       per process, so this state cannot become process-global. While a worker
       runs, every isolate pays the call: a `TypedArray.prototype.every` callback
       loop costs about 30% more. The sole record returns once the last worker is
-      joined.
+      joined, provided no independent root thread has also initialized an isolate.
 - [ ] Measure sequentially consistent environment slots on Linux x64. `MalEnv`
       slots are `_Atomic`, so every captured store compiles to `XCHG` on x86-64.
       Major-mark workers trace slots while the mutator runs, so stores must stay

@@ -206,8 +206,9 @@ deadline uses the same factors. Outer test and queue job budgets remain separate
 ## GitHub Actions
 
 Pull requests and pushes to `main` run the canonical check tier on Linux x64 and the
-smoke tier on macOS ARM. The active `main` gate finishes while the newest push waits;
-newer pushes replace its pending successor. Pull request updates cancel superseded
+smoke tier on macOS ARM. The macOS gate also verifies isolate ownership after Worker
+joins. The active `main` gate finishes while the newest push waits; newer pushes
+replace its pending successor. Pull request updates cancel superseded
 runs. Linux runs seven jobs in parallel using the runner's own four-worker budget,
 splitting the native dimensions into shards:
 

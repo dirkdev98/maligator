@@ -98,15 +98,17 @@ static inline __attribute__((always_inline)) MalIsolateLocals *mal_isolate_local
 #define mal_isolate_locals() (&mal_isolate)
 #endif
 
-/** Publish the calling thread's record unless another isolate thread is running. */
+/** Register the calling root and publish its record when it is the sole known root. */
 void mal_isolate_claim_sole(void);
 /** Call before starting an isolate thread that is never joined; each isolate then reads its own record. */
 void mal_isolate_release_sole(void);
 /**
  * Bracket an isolate thread that its parent joins: starting withdraws the sole record,
- * and joining the last such thread publishes the joining thread's record again.
+ * and joining the last such thread restores it only for a unique registered root.
  */
 void mal_isolate_thread_starting(void);
+/** Mark a counted child before it initializes isolate state. */
+void mal_isolate_thread_entered(void);
 void mal_isolate_thread_joined(void);
 
 #define mal_root_span_head (mal_isolate_locals()->root_span_head)

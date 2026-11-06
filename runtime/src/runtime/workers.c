@@ -2597,6 +2597,7 @@ bool mal_workers_application_ready(MalVm *vm) {
 }
 
 static void *worker_thread_main(void *arg) {
+    mal_isolate_thread_entered();
     WorkerThread *thread = arg;
     sigset_t all;
     sigfillset(&all);

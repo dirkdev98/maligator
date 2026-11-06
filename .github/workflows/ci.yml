@@ -145,6 +145,9 @@ jobs:
       - name: Run smoke tests
         run: npm run test:smoke -- --workers 3
 
+      - name: Verify isolate ownership across Worker joins
+        run: npm run test:native -- tests/native/isolate-roots.test.ts --maxWorkers=1
+
       - name: Retain native libraries for later runs
         if: always()
         uses: ./.github/actions/save-native-cache
