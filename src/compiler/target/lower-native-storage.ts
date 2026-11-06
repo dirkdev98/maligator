@@ -1967,8 +1967,11 @@ export function validateNativeStorage(
 								view.maxOffset === expected.views[i]!.maxOffset &&
 								view.checked === expected.views[i]!.checked &&
 								view.text === expected.views[i]!.text &&
-								view.byteScale === expected.views[i]!.byteScale,
+								view.byteScale === expected.views[i]!.byteScale &&
+								view.lend === expected.views[i]!.lend &&
+								view.lentOnly === expected.views[i]!.lentOnly,
 						) &&
+						(plan.foreignCalls ?? []).join() === (expected.foreignCalls ?? []).join() &&
 						(plan.dataViewCalls?.length ?? 0) === (expected.dataViewCalls?.length ?? 0) &&
 						(plan.dataViewCalls ?? []).every(
 							(call, i) =>

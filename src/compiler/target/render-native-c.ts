@@ -1983,6 +1983,25 @@ function emitRecordIterationRegion(
 	return lines;
 }
 
+/** The declaration of a scalar entry, where each lent view takes its data and length. */
+function foreignScalarDeclaration(scalar: FfiScalarEntry): string {
+	const parameters = scalar.parameters.flatMap((type) =>
+		type.kind === "view"
+			? [type.writable ? "void *" : "const void *", "int32_t"]
+			: [ffiScalarCType(type)],
+	);
+	return `extern ${ffiScalarCType(scalar.result)} ${scalar.symbol}(${parameters.length === 0 ? "void" : parameters.join(", ")});`;
+}
+
+/** The values a scalar entry's integer result holds. */
+function foreignScalarRange(scalar: FfiScalarEntry): IntegerRange | undefined {
+	const result = scalar.result;
+	if (result.kind !== "integer") return undefined;
+	return result.signed
+		? { low: -(2 ** (result.bits - 1)), high: 2 ** (result.bits - 1) - 1 }
+		: { low: 0, high: 2 ** result.bits - 1 };
+}
+
 // Forward block flags preserve whole-label splitting while both loop modes retain their original fallback.
 function emitNumericLoopRegion(
 	fn: BytecodeFunction,
@@ -2004,10 +2023,23 @@ function emitNumericLoopRegion(
 			? (plan.dataViewCalls ?? []).map((call) => [call.ip, call])
 			: [],
 	);
+	const foreignCalls = new Map(
+		plan.kind === "fixed-numeric"
+			? (plan.foreignCalls ?? []).map((ip): [number, FfiScalarEntry] => {
+					const native = nativeInstructions[ip];
+					const scalar = native?.kind === "call" ? native.foreignCall?.scalar : undefined;
+					if (scalar === undefined) throw new Error("Invalid numeric loop foreign call");
+					return [ip, scalar];
+				})
+			: [],
+	);
 	// A region admits any other call only as a string's code unit read.
 	const codeUnitReads = new Set(
 		[...members].filter(
-			(ip) => fn.instructions[ip]?.opcode === "CALL" && !dataViewCalls.has(ip),
+			(ip) =>
+				fn.instructions[ip]?.opcode === "CALL" &&
+				!dataViewCalls.has(ip) &&
+				!foreignCalls.has(ip),
 		),
 	);
 	const flow =
@@ -2022,20 +2054,27 @@ function emitNumericLoopRegion(
 					codeUnitReads.size === 0 ? undefined : codeUnitReads,
 					true,
 					dataViewCalls,
+					foreignCalls,
 				);
 	const callMethods =
 		order === undefined
 			? new Set<number>()
 			: numericLoopCallMethods(fn, order, codeUnitReads, dataViewCalls);
 	// A getter's result range, or none for a fractional one; other calls read code units.
-	const callRanges = new Map(
-		[...dataViewCalls.values()].map(
+	const callRanges = new Map([
+		...[...dataViewCalls.values()].map(
 			(call): [BytecodeInstruction, IntegerRange | undefined] => [
 				fn.instructions[call.ip]!,
 				DATA_VIEW_INTEGER_RANGES[call.type],
 			],
 		),
-	);
+		...[...foreignCalls].map(
+			([ip, scalar]): [BytecodeInstruction, IntegerRange | undefined] => [
+				fn.instructions[ip]!,
+				foreignScalarRange(scalar),
+			],
+		),
+	]);
 	if (order === undefined || flow === undefined)
 		throw new Error("Invalid native integer loop region");
 	const floating = plan.kind !== "integer";
@@ -2163,7 +2202,9 @@ function emitNumericLoopRegion(
 	// Only element views have a dense Array alternative, and only while nothing stores.
 	const readOnly =
 		plan.kind === "fixed-numeric" &&
-		plan.views.every((view) => !view.writable && view.byteScale === undefined);
+		plan.views.every(
+			(view) => !view.writable && view.byteScale === undefined && view.lend === undefined,
+		);
 	const records = new Set(plan.kind !== "integer" ? (plan.records ?? []) : []);
 	const checkedViews = new Set(
 		plan.kind === "fixed-numeric"
@@ -2175,8 +2216,25 @@ function emitNumericLoopRegion(
 	const views = plan.kind === "fixed-numeric" ? plan.views : [];
 	const textViews = views.filter((view) => view.text === true);
 	const elementViews = views.filter(
-		(view) => view.text !== true && view.byteScale === undefined,
+		(view) =>
+			view.text !== true && view.byteScale === undefined && view.lentOnly !== true,
 	);
+	const lentViews = views.filter((view) => view.lend !== undefined);
+	// Views sharing a C count must match before C sees either.
+	const sharedLengths = [...foreignCalls].flatMap(([ip, scalar]) => {
+		const op = fn.instructions[ip]!;
+		if (op.opcode !== "CALL") return [];
+		const object = (index: number): number => {
+			const operand = decodeVmValueOperand(op.arguments[index]!);
+			if (operand.kind !== "register") throw new Error("Invalid numeric loop lent view");
+			return operand.register;
+		};
+		return scalar.parameters.flatMap((parameter, index) =>
+			parameter.kind === "view" && parameter.sameLength !== undefined
+				? [`${id}_n${object(index)} == ${id}_n${object(parameter.sameLength)}`]
+				: [],
+		);
+	});
 	const dataViews = views.filter((view) => view.byteScale !== undefined);
 	const textObjects = new Set(textViews.map((view) => view.object));
 	// A region reading only strings has one body; element views pick theirs by kind.
@@ -2238,6 +2296,12 @@ function emitNumericLoopRegion(
 							(view) =>
 								`mal_vm_fixed_data_view_storage(vm, r${view.object}, ${view.writable}, &${id}_d${view.object})`,
 						),
+						// Nothing inside runs JavaScript, so lent storage stays attached throughout.
+						...lentViews.map(
+							(view) =>
+								`mal_typed_array_lend(r${view.object}, MAL_TA_${view.lend!.slice(0, -"Array".length).toUpperCase()}, ${view.writable}, &${id}_l${view.object}, &${id}_n${view.object})`,
+						),
+						...sharedLengths,
 						...(lengthLoad?.opcode === "LOAD_PROPERTY_STATIC" && !textBound
 							? [
 									`mal_vm_admit_numeric_typed_array_length(vm, r${boundObject}, &${propertyCache}[${lengthLoad.icIndex}], &${id}_lt, &${id}_ll)`,
@@ -2292,7 +2356,7 @@ function emitNumericLoopRegion(
 		guards.length = 0;
 		guards.push(range);
 		for (const view of views) {
-			if (view.checked === true && !view.writable) continue;
+			if ((view.checked === true && !view.writable) || view.lentOnly === true) continue;
 			// A byte scale stays small enough that each bound is an exact double.
 			const scaled = (value: string) =>
 				view.byteScale === undefined
@@ -2433,6 +2497,32 @@ function emitNumericLoopRegion(
 					throw new Error("Invalid numeric loop length load");
 				return `${local(op.dst)} = (f64) ${id}_${textObjects.has(op.object) ? "s" : mode === "array" ? "a" : "v"}${op.object}.length;`;
 			case "CALL": {
+				const foreign = foreignCalls.get(ip);
+				if (foreign !== undefined) {
+					const arguments_ = foreign.parameters.flatMap((parameter, index) => {
+						const operand = decodeVmValueOperand(op.arguments[index]!);
+						if (parameter.kind === "view") {
+							if (operand.kind !== "register")
+								throw new Error("Invalid numeric loop lent view");
+							return [`${id}_l${operand.register}`, `${id}_n${operand.register}`];
+						}
+						if (operand.kind === "register")
+							return [
+								parameter.kind === "boolean"
+									? local(operand.register)
+									: num(operand.register),
+							];
+						if (operand.kind === "number") return [cF64Literal(operand.value)];
+						if (operand.kind === "boolean") return [String(operand.value)];
+						throw new Error("Invalid numeric loop scalar argument");
+					});
+					const call = `${foreign.symbol}(${arguments_.join(", ")})`;
+					return `{ ${foreignScalarDeclaration(foreign)} ${
+						foreign.result.kind === "undefined"
+							? `${call};`
+							: `${local(op.dst)} = ${integral.has(op.dst) ? "(i64) " : ""}${call};`
+					} }`;
+				}
 				const data = dataViewCalls.get(ip);
 				if (data !== undefined) {
 					const [keyRegister, value] = op.arguments;
@@ -2825,6 +2915,10 @@ function emitNumericLoopRegion(
 			...(readOnly ? [`  MalDenseNumberSpan ${id}_a${view.object} = {0};`] : []),
 		]),
 		...dataViews.map((view) => `  MalDataViewSpan ${id}_d${view.object} = {0};`),
+		...lentViews.flatMap((view) => [
+			`  void *${id}_l${view.object} = nullptr;`,
+			`  int32_t ${id}_n${view.object} = 0;`,
+		]),
 		...[...flow.kinds].map(([register, kind]) =>
 			records.has(register)
 				? `  MalValue ${local(register)} = MAL_VALUE_UNDEFINED;`
@@ -12575,11 +12669,6 @@ class NativeInstructionEmission {
 		);
 		const result = `foreign_scalar_${this.ip}`;
 		nativeCallDecision(this.context.profile, this.ip, "call.foreign-scalar", "applied");
-		const parameters = scalar.parameters.flatMap((type) =>
-			type.kind === "view"
-				? [type.writable ? "void *" : "const void *", "int32_t"]
-				: [ffiScalarCType(type)],
-		);
 		const call = [
 			scalar.result.kind === "undefined"
 				? `${expression};`
@@ -12592,7 +12681,7 @@ class NativeInstructionEmission {
 					: this.storeNumber(instruction.dst, result),
 		];
 		return [
-			`extern ${ffiScalarCType(scalar.result)} ${scalar.symbol}(${parameters.length === 0 ? "void" : parameters.join(", ")});`,
+			foreignScalarDeclaration(scalar),
 			...(lends.length === 0
 				? call
 				: [
