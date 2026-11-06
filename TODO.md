@@ -695,10 +695,11 @@ bounded and consumer-driven as planned below.
       live, lasts 4-5 s and allocates 2.4-3.9 GB black; other runs finish it in
       1.2 s with under 100 MB. Those runs take 119-127 s instead of 115 s, with
       twice the system time. Neither `MAL_GC_ASSIST` nor lifting the 256-cell
-      limit on a mark step while workers hold a batch changes this. Check next
-      whether safepoints skip steps under native frames in that phase; otherwise
-      young allocation during marking, with minors that mark their survivors,
-      removes the black garbage.
+      limit on a mark step while workers hold a batch changes this, and no step
+      is skipped under native frames: the long cycle takes about 68,000 steps
+      while its phase allocates about 26 KB per step. Find what bounds progress
+      per step there; young allocation during marking, with minors that mark
+      their survivors, would remove the black garbage regardless.
 - [ ] Speculate int32 loop state that enters as a double. A direct entry with a
       Number parameter keeps `seed = (Math.imul(seed, a) + b) | 0` in a double
       phi, so every iteration converts to int32 and back: `serial-compute` runs
