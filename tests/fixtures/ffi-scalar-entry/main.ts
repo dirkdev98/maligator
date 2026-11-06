@@ -162,5 +162,43 @@ check(
 		scalar_sum_u8(Buffer.from([4, 5])) === 9,
 	"unsigned counts carry byte view lengths",
 );
+function dotLoop(
+	a: ReadonlyArray<number> | Float64Array,
+	b: ReadonlyArray<number> | Float64Array,
+	count: number,
+): number {
+	let total = 0;
+	for (let index = 0; index < count; index++) total += scalar_dot(a, b);
+	return total;
+}
+function weightedLoop(weights: Float64Array, count: number): number {
+	let total = 0;
+	for (let index = 0; index < count; index++)
+		total += weights[index]! * scalar_dot(left, right);
+	return total;
+}
+function scaleLoop(values: Float64Array, count: number): void {
+	for (let index = 0; index < count; index++) scalar_scale(values, 0.5);
+}
+const callsBeforeLoops = scalar_calls();
+check(
+	dotLoop(left, right, 100) === 100 * 70 && scalar_calls() === callsBeforeLoops + 100n,
+	"a loop lending views calls C once per iteration",
+);
+check(dotLoop([1, 2], [3, 4], 3) === 33, "a loop over arrays still copies them");
+const callsBeforeMismatch = scalar_calls();
+refuses(() => dotLoop(left, right.subarray(1), 3), TypeError);
+check(scalar_calls() === callsBeforeMismatch, "a loop never lends mismatched views");
+check(
+	weightedLoop(new Float64Array([1, 2, 3]), 3) === 6 * 70,
+	"element reads and lent views share one loop",
+);
+check(
+	Number.isNaN(weightedLoop(new Float64Array([1]), 2)),
+	"a loop past its elements keeps reading undefined",
+);
+const halves = new Float64Array([8, 16]);
+scaleLoop(halves, 3);
+check(halves.join() === "1,2", "a loop's writable views see each call's writes");
 checkNamespaceCalls();
 console.log("scalar ABI passed");

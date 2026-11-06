@@ -122,7 +122,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 366;
+export const COMPILER_ARTIFACT_VERSION = 367;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -1047,6 +1047,9 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 				w.u8(view.checked === true ? 1 : 0);
 				w.u8(view.text === true ? 1 : 0);
 				w.i32(view.byteScale ?? 0);
+				// Zero is no lend; a lent view's tag is its array's index plus one.
+				w.u8(view.lend === undefined ? 0 : FFI_VIEW_ARRAY_TAGS.indexOf(view.lend) + 1);
+				w.u8(view.lentOnly === true ? 1 : 0);
 			}
 			w.u32(plan.dataViewCalls?.length ?? 0);
 			for (const call of plan.dataViewCalls ?? []) {
@@ -1054,6 +1057,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 				w.u8(call.set ? 1 : 0);
 				w.u8(DATA_VIEW_ACCESSOR_TYPES.indexOf(call.type));
 			}
+			w.i32Array([...(plan.foreignCalls ?? [])]);
 		}
 		w.i32(plan.id);
 		w.i32(plan.entryIp);
@@ -1694,8 +1698,18 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 										maxOffset = r.i32(),
 										checked = r.u8(),
 										text = r.u8(),
-										byteScale = r.i32();
-									if (checked > 1 || text > 1 || byteScale < 0)
+										byteScale = r.i32(),
+										lendTag = r.u8(),
+										lentOnly = r.u8();
+									const lend =
+										lendTag === 0 ? undefined : FFI_VIEW_ARRAY_TAGS[lendTag - 1];
+									if (
+										checked > 1 ||
+										text > 1 ||
+										byteScale < 0 ||
+										(lendTag !== 0 && lend === undefined) ||
+										lentOnly > (lend === undefined ? 0 : 1)
+									)
 										throw new RangeError("Invalid numeric loop view");
 									return {
 										object,
@@ -1705,6 +1719,8 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 										...(checked === 1 ? { checked: true as const } : {}),
 										...(text === 1 ? { text: true as const } : {}),
 										...(byteScale === 0 ? {} : { byteScale }),
+										...(lend === undefined ? {} : { lend }),
+										...(lentOnly === 1 ? { lentOnly: true as const } : {}),
 									};
 								}),
 							};
@@ -1716,7 +1732,12 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 									throw new RangeError("Invalid numeric loop DataView call");
 								return { ip, set: set === 1, type };
 							});
-							return dataViewCalls.length === 0 ? storage : { ...storage, dataViewCalls };
+							const foreignCalls = r.i32Array();
+							return {
+								...storage,
+								...(dataViewCalls.length === 0 ? {} : { dataViewCalls }),
+								...(foreignCalls.length === 0 ? {} : { foreignCalls }),
+							};
 						})();
 		const id = r.i32(),
 			entryIp = r.i32(),

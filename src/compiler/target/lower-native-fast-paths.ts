@@ -1,3 +1,4 @@
+import type { FfiScalarEntry, FfiViewArray } from "../../build-config-values.ts";
 import { ARRAY_INITIALIZATION_LIMITS } from "../shared/array-initialization.ts";
 import { DATA_VIEW_ACCESSOR_TYPES } from "../shared/builtin-registry.ts";
 import {
@@ -241,9 +242,15 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 					 * every byte an access covers.
 					 */
 					readonly byteScale?: number;
+					/** The typed array kind a C library call receives this view's storage as. */
+					readonly lend?: FfiViewArray;
+					/** Only C library calls use the view, so no index bounds its length. */
+					readonly lentOnly?: true;
 				}>;
 				/** The DataView accessor calls the region performs on its byte views. */
 				readonly dataViewCalls?: ReadonlyArray<NativeDataViewCall>;
+				/** Calls of C library scalar entries, which receive the admitted views. */
+				readonly foreignCalls?: ReadonlyArray<number>;
 		  }
 	);
 
@@ -1176,6 +1183,8 @@ export function numberRecordDataflow(
 	bindingLoads = indexed,
 	// DataView accessor calls a loop region performs on its byte views.
 	dataViewCalls: ReadonlyMap<number, NativeDataViewCall> = new Map(),
+	// C library calls a loop region makes with the views it admitted.
+	foreignCalls: ReadonlyMap<number, FfiScalarEntry> = new Map(),
 ): NativeNumberRecordDataflow | undefined {
 	const kinds = new Map<number, NativeNumberRecordKind>();
 	const inputs = new Set<number>();
@@ -1227,7 +1236,25 @@ export function numberRecordDataflow(
 				? undefined
 				: numericLoopCodeUnitRead(fn, ip, codeUnitReads);
 		const data = dataViewCalls.get(ip);
-		if (data !== undefined && instruction.opcode === "CALL") {
+		const foreign = foreignCalls.get(ip);
+		if (foreign !== undefined && instruction.opcode === "CALL") {
+			// The call plan fixed the C binding, so the callee is never read. Views are
+			// admitted at entry and never region values.
+			admitted =
+				foreign.parameters.every((parameter, index) => {
+					const operand = decodeVmValueOperand(instruction.arguments[index]!);
+					return (
+						parameter.kind === "view" ||
+						operand.kind !== "register" ||
+						read(operand.register, parameter.kind === "boolean" ? "boolean" : "number")
+					);
+				}) &&
+				(foreign.result.kind === "undefined" ||
+					write(
+						instruction.dst,
+						foreign.result.kind === "boolean" ? "boolean" : "number",
+					));
+		} else if (data !== undefined && instruction.opcode === "CALL") {
 			const [key, value] = instruction.arguments;
 			const littleEndian = instruction.arguments[data.set ? 2 : 1];
 			// Like a code unit read's, the callee is the method the entry proved.
@@ -2463,6 +2490,45 @@ function numericLoopDataViewCalls(
 	return calls;
 }
 
+/**
+ * Calls of C library bindings whose scalar entry lends views, and otherwise takes
+ * Numbers and Booleans, which convert without a guard. A region admits each view
+ * at entry, so its iterations call C with the storage directly; nothing inside can
+ * restart an iteration, which would repeat the call.
+ */
+export function numericLoopForeignCalls(
+	fn: BytecodeFunction,
+	body: NativeBodyFacts,
+	callPlan: (ip: number) => NativeInstructionPlan | undefined,
+): ReadonlyMap<number, FfiScalarEntry> {
+	const calls = new Map<number, FfiScalarEntry>();
+	for (const [ip, call] of fn.instructions.entries()) {
+		if (call.opcode !== "CALL") continue;
+		const plan = callPlan(ip);
+		const scalar = plan?.kind === "call" ? plan.foreignCall?.scalar : undefined;
+		if (
+			scalar === undefined ||
+			!scalar.parameters.some((parameter) => parameter.kind === "view") ||
+			call.arguments.length < scalar.parameters.length ||
+			!scalar.parameters.every((parameter, index) => {
+				const operand = decodeVmValueOperand(call.arguments[index]!);
+				return (
+					operand.kind === "register" ||
+					(parameter.kind === "number" && operand.kind === "number") ||
+					(parameter.kind === "boolean" && operand.kind === "boolean")
+				);
+			}) ||
+			scalar.parameters.some((parameter) => parameter.kind === "integer") ||
+			// An undefined result is no region value, so nothing may read it.
+			(scalar.result.kind === "undefined" &&
+				registersLiveAt(fn, body, ip + 1, new Set([call.dst])).length > 0)
+		)
+			continue;
+		calls.set(ip, scalar);
+	}
+	return calls;
+}
+
 /** The `charCodeAt` call at `ip` as a read of its receiver's code unit. */
 function numericLoopCodeUnitRead(
 	fn: BytecodeFunction,
@@ -2556,10 +2622,11 @@ function fixedNumericLoopStorage(
 	lengthLoads: ReadonlySet<number>,
 	codeUnitReads: ReadonlySet<number>,
 	dataViewCalls: ReadonlyMap<number, NativeDataViewCall>,
+	foreignCalls: ReadonlyMap<number, FfiScalarEntry>,
 ):
 	| Pick<
 			Extract<NativeNumericLoopRegionPlan, { kind: "fixed-numeric" }>,
-			"counter" | "records" | "views" | "dataViewCalls"
+			"counter" | "records" | "views" | "dataViewCalls" | "foreignCalls"
 	  >
 	| undefined {
 	const memory = shape.order.flatMap((ip): Array<NumericLoopAccess> => {
@@ -2590,7 +2657,28 @@ function fixedNumericLoopStorage(
 		codeUnitReads,
 		dataViewCalls,
 	);
-	if (memory.length === 0 || memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT)
+	const lends = shape.order.flatMap((ip) => {
+		const op = fn.instructions[ip]!;
+		const scalar = foreignCalls.get(ip);
+		if (scalar === undefined || op.opcode !== "CALL") return [];
+		return scalar.parameters.flatMap((parameter, index) => {
+			const operand = decodeVmValueOperand(op.arguments[index]!);
+			return parameter.kind === "view" && operand.kind === "register"
+				? [
+						{
+							ip,
+							object: operand.register,
+							array: parameter.array,
+							writable: parameter.writable,
+						},
+					]
+				: [];
+		});
+	});
+	if (
+		(memory.length === 0 && lends.length === 0) ||
+		memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT
+	)
 		return undefined;
 	const counted = fixedNumericLoopCounter(fn, shape, body, lengthLoads, memory);
 	const offsets = counted?.offsets ?? new Map<number, number>();
@@ -2598,6 +2686,15 @@ function fixedNumericLoopStorage(
 		counted?.windows ?? new Map<number, { scale: number; offset: number }>();
 	const lengthLoad = counted?.lengthLoad;
 	const bound = counted?.counter.bound;
+	// A restart repeats the whole iteration, so a region that calls C admits only
+	// accesses its entry proved: no checked reads, strings or DataViews.
+	if (
+		lends.length > 0 &&
+		memory.some(
+			({ ip, text, data }) => text === true || data !== undefined || !offsets.has(ip),
+		)
+	)
+		return undefined;
 	const views = new Map<
 		number,
 		{
@@ -2607,6 +2704,8 @@ function fixedNumericLoopStorage(
 			checked?: true;
 			text?: true;
 			byteScale?: number;
+			lend?: FfiViewArray;
+			lentOnly?: true;
 		}
 	>();
 	for (const { ip, op, text, data } of memory) {
@@ -2658,6 +2757,19 @@ function fixedNumericLoopStorage(
 			...(text === true ? { text: true as const } : {}),
 		});
 	}
+	for (const lend of lends) {
+		const previous = views.get(lend.object);
+		if (previous?.lend !== undefined && previous.lend !== lend.array) return undefined;
+		views.set(lend.object, {
+			writable: previous?.writable === true || lend.writable,
+			minOffset: previous?.minOffset ?? 0,
+			maxOffset: previous?.maxOffset ?? 0,
+			lend: lend.array,
+			...(previous === undefined || previous.lentOnly === true
+				? { lentOnly: true as const }
+				: {}),
+		});
+	}
 	// A failed checked read restarts the iteration in the original code, which would
 	// repeat any store the iteration already made.
 	const afterStores = new Set<number>();
@@ -2686,7 +2798,16 @@ function fixedNumericLoopStorage(
 	const bindings = numericLoopBindings(fn, shape, body);
 	if (bindings === undefined) return undefined;
 	const textual = new Set(memory.map((access) => access.text === true));
-	if (lengthLoad !== undefined && !views.has(lengthLoad.object)) {
+	const bounding = lengthLoad === undefined ? undefined : views.get(lengthLoad.object);
+	if (lengthLoad !== undefined && bounding?.lentOnly === true) {
+		// The length bound reads the view's element storage too.
+		views.set(lengthLoad.object, {
+			writable: bounding.writable,
+			minOffset: bounding.minOffset,
+			maxOffset: bounding.maxOffset,
+			...(bounding.lend === undefined ? {} : { lend: bounding.lend }),
+		});
+	} else if (lengthLoad !== undefined && !views.has(lengthLoad.object)) {
 		// A length bound whose object no access reads takes the kind of every other view.
 		if (textual.size > 1) return undefined;
 		views.set(lengthLoad.object, {
@@ -2706,6 +2827,16 @@ function fixedNumericLoopStorage(
 		),
 	);
 	const dataViews = [...views.values()].some((view) => view.byteScale !== undefined);
+	// Records restart iterations, and a known Array length needs Array views, which C
+	// cannot receive.
+	if (
+		lends.length > 0 &&
+		(records === undefined ||
+			records.size > 0 ||
+			fn.instructions[lengthLoad?.ip ?? -1]?.opcode ===
+				"LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
+	)
+		return undefined;
 	// Record regions admit Array views only, never string spans; DataViews admit with
 	// element views, never alongside strings or Arrays.
 	if (
@@ -2733,11 +2864,13 @@ function fixedNumericLoopStorage(
 		(counted !== undefined && (views.has(counted.counter.index) || views.has(bound!)))
 	)
 		return undefined;
-	const viewCalls = new Set(
-		memory.flatMap((access) =>
+	const foreignIps = [...new Set(lends.map((lend) => lend.ip))];
+	const viewCalls = new Set([
+		...memory.flatMap((access) =>
 			access.text === true || access.data !== undefined ? [access.ip] : [],
 		),
-	);
+		...foreignIps,
+	]);
 	for (const ip of shape.order) {
 		if (ip === lengthLoad?.ip) continue;
 		const op = fn.instructions[ip]!;
@@ -2793,6 +2926,7 @@ function fixedNumericLoopStorage(
 		...(records.size === 0 ? {} : { records: [...records].sort((a, b) => a - b) }),
 		views: [...views].map(([object, window]) => ({ object, ...window })),
 		...(calls.length === 0 ? {} : { dataViewCalls: calls }),
+		...(foreignIps.length === 0 ? {} : { foreignCalls: foreignIps }),
 	};
 }
 
@@ -2969,6 +3103,7 @@ function lowerNumericLoopRegion(
 	cursorSteps: ReadonlyMap<number, { initializeIp: number; iterator: number }>,
 	codeUnitReads: ReadonlySet<number>,
 	dataViewCalls: ReadonlyMap<number, NativeDataViewCall>,
+	foreignCalls: ReadonlyMap<number, FfiScalarEntry>,
 	functions: ReadonlyArray<BytecodeFunction>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const first = fn.instructions[header];
@@ -3002,6 +3137,7 @@ function lowerNumericLoopRegion(
 		lengthLoads,
 		codeUnitReads,
 		dataViewCalls,
+		foreignCalls,
 	);
 	if (storage === undefined && !integerLoopInstruction(first)) return undefined;
 	const bindings =
@@ -3039,6 +3175,12 @@ function lowerNumericLoopRegion(
 			: undefined,
 		true,
 		new Map(storage?.dataViewCalls?.map((call) => [call.ip, call])),
+		new Map(
+			(storage?.foreignCalls ?? []).map((ip): [number, FfiScalarEntry] => [
+				ip,
+				foreignCalls.get(ip)!,
+			]),
+		),
 	);
 	if (flow === undefined) return undefined;
 	const inputs = new Set(flow.inputs);
@@ -4256,6 +4398,11 @@ export function analyzeNativeFastPaths(
 			stringConstants,
 			(ip) => native.instructions[ip],
 		);
+		const foreignCalls = numericLoopForeignCalls(
+			fn,
+			body,
+			(ip) => native.instructions[ip],
+		);
 		for (const header of [...body.jumpTargets].sort((a, b) => a - b)) {
 			if (numericLoopBlocked.has(header)) continue;
 			const plan = lowerNumericLoopRegion(
@@ -4276,7 +4423,9 @@ export function analyzeNativeFastPaths(
 							kind !== "contained-fixed-typed-array-length" &&
 							!(
 								kind === "call" &&
-								(codeUnitReads.has(candidate) || dataViewCalls.has(candidate))
+								(codeUnitReads.has(candidate) ||
+									dataViewCalls.has(candidate) ||
+									foreignCalls.has(candidate))
 							) &&
 							kind !== "primitive-string-length")
 					);
@@ -4285,6 +4434,7 @@ export function analyzeNativeFastPaths(
 				cursorSteps,
 				codeUnitReads,
 				dataViewCalls,
+				foreignCalls,
 				functions,
 			);
 			if (plan === undefined) continue;

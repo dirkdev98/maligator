@@ -254,6 +254,24 @@ describe("static foreign call effects", () => {
 			expect(source).toContain(`${viewScalar.symbol}(`);
 			expect(source).toContain(`${binding.symbol}(`);
 		});
+		it("admits a loop's lent views once at the loop entry", () => {
+			const { image, native } = compile(
+				true,
+				"let total = 0; for (let i = 0; i < 64; i++) total += mix(value); return total;",
+				{ kind: "number" },
+				viewScalar,
+			);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+			const after = restored.native.functions[native.functionIndex]!;
+			const region = after.storage!.numericLoopRegions.find(
+				(plan) => plan.kind === "fixed-numeric" && plan.foreignCalls !== undefined,
+			);
+			expect(region).toMatchObject({
+				views: [{ lend: "Float64Array", lentOnly: true, writable: false }],
+			});
+			const source = emitCompiledFunction(after, after.functionIndex, "", false)!.source;
+			expect(source).toMatch(/bool __typed_loop_\d+_typed = mal_typed_array_lend\(/);
+		});
 		it.each([
 			{
 				...viewScalar,
