@@ -2010,6 +2010,8 @@ function emitNumericLoopRegion(
 	propertyCache: string,
 	// The C statement that performs the binding load at an instruction.
 	bindingLoad: (ip: number) => string,
+	// The C lvalue of a global slot.
+	globalSlot: (index: number) => string,
 	facts: NativeFunctionPlan["facts"],
 	nativeInstructions: NativeFunctionPlan["instructions"],
 	poll: (ip: number, spill: string, isolate: string) => string,
@@ -2055,6 +2057,7 @@ function emitNumericLoopRegion(
 					true,
 					dataViewCalls,
 					foreignCalls,
+					new Set(plan.globals ?? []),
 				);
 	const callMethods =
 		order === undefined
@@ -2089,6 +2092,20 @@ function emitNumericLoopRegion(
 	};
 	const local = (register: number) => `${id}_r${register}`;
 	const start = (register: number) => `${id}_s${register}`;
+	const globals = plan.globals ?? [];
+	const slotted = new Set(globals);
+	// Only stored slots are written back, and only they need an iteration's start.
+	const stored = globals.filter((index) =>
+		order.some((ip) => {
+			const op = fn.instructions[ip]!;
+			return op.opcode === "STORE_GLOBAL" && op.index === index;
+		}),
+	);
+	const slot = (index: number) => `${id}_g${index}`;
+	const slotStart = (index: number) => `${id}_gs${index}`;
+	const slotType = floating ? "f64" : "i64";
+	const boxSlot = (value: string) =>
+		`mal_ops_number_value(${floating ? value : `(f64) ${value}`})`;
 	// The header keeps the index within its guarded range, and the final step leaves it by one stride.
 	const counter = plan.kind === "fixed-numeric" ? plan.counter : undefined;
 	const pinned = new Map<number, IntegerRange>();
@@ -2257,8 +2274,24 @@ function emitNumericLoopRegion(
 	const bindingLoads = order.flatMap((ip) => {
 		const op = fn.instructions[ip]!;
 		if (op.opcode !== "LOAD_GLOBAL" && op.opcode !== "LOAD_CAPTURED") return [];
+		if (op.opcode === "LOAD_GLOBAL" && slotted.has(op.index)) return [];
 		guards.unshift(`!mal_value_is_empty(r${op.dst})`);
 		return [`  ${bindingLoad(ip)}`];
+	});
+	// A slot enters as a Number, which also declines its dead zone.
+	const slotLoads = globals.flatMap((index) => {
+		const value = `${id}_gv${index}`;
+		if (floating) {
+			guards.push(`mal_ops_is_number(${value})`);
+			return [
+				`  MalValue ${value} = ${globalSlot(index)};`,
+				`  f64 ${slot(index)} = mal_ops_is_number(${value}) ? mal_ops_number_as_f64(${value}) : 0.0;`,
+			];
+		}
+		guards.push(
+			`(mal_ops_is_number(${value}) && mal_safe_integer_admit(mal_ops_number_as_f64(${value}), &${slot(index)}))`,
+		);
+		return [`  MalValue ${value} = ${globalSlot(index)};`, `  i64 ${slot(index)} = 0;`];
 	});
 	// The reads come from guarded builtin calls licensed by locked primordials, where a
 	// primitive string's `charCodeAt` is the builtin, so admitting the string suffices.
@@ -2425,7 +2458,12 @@ function emitNumericLoopRegion(
 	const restart = `{ ${id}_exit = 0; break; }`;
 	const reach = (ip: number, from: number, mode: string): string => {
 		if (ip === plan.id)
-			return `${plan.carried.map((register) => `${start(register)} = ${local(register)};`).join(" ")}${cursor === undefined ? "" : ` ${id}_si = ${id}_ci;`} if (mal_gc_poll_requested_in(${id}_isolate)) ${restart} continue;`;
+			return `${[
+				...plan.carried.map((register) => `${start(register)} = ${local(register)};`),
+				...stored.map((index) => `${slotStart(index)} = ${slot(index)};`),
+			].join(
+				" ",
+			)}${cursor === undefined ? "" : ` ${id}_si = ${id}_ci;`} if (mal_gc_poll_requested_in(${id}_isolate)) ${restart} continue;`;
 		if (innerHeaders.has(ip))
 			return `${position.get(ip)! <= position.get(from)! ? `if (mal_gc_poll_requested_in(${id}_isolate)) { ${id}_exit = ${exitIndex.get(ip)}; break; } ` : ""}goto ${label(mode, ip)};`;
 		const exit = exitIndex.get(ip);
@@ -2626,8 +2664,17 @@ function emitNumericLoopRegion(
 				// The element load already restarted the iteration for anything but an object.
 				if (!records.has(op.src)) throw new Error("Invalid numeric loop coercible check");
 				return "";
-			// The entry loaded the binding and declined its dead zone; nothing inside stores it.
 			case "LOAD_GLOBAL":
+				if (slotted.has(op.index)) {
+					if (floating && integral.has(op.dst))
+						throw new Error("Native numeric loop slot load is integral");
+					return `${local(op.dst)} = ${slot(op.index)};`;
+				}
+				return "";
+			case "STORE_GLOBAL":
+				if (!slotted.has(op.index)) throw new Error("Invalid numeric loop global store");
+				return `${slot(op.index)} = ${floating ? num(op.src) : local(op.src)};`;
+			// The entry loaded each other binding and declined its dead zone.
 			case "LOAD_CAPTURED":
 			case "THROW_IF_TDZ":
 				return "";
@@ -2796,6 +2843,7 @@ function emitNumericLoopRegion(
 			...plan.carried.map(
 				(register) => `    ${cType(register)} ${start(register)} = ${local(register)};`,
 			),
+			...stored.map((index) => `    ${slotType} ${slotStart(index)} = ${slot(index)};`),
 			// The cursor lives in memory its helpers can reach; the loop steps a local copy.
 			...(cursor === undefined
 				? []
@@ -2842,10 +2890,14 @@ function emitNumericLoopRegion(
 					`      ${cursor}.index = ${id}_ci;`,
 					`      ${cursor}.done = ${id}_cd;`,
 				);
+			for (const index of stored)
+				lines.push(`      ${globalSlot(index)} = ${boxSlot(slot(index))};`);
 			lines.push(`      goto L${exit.targetIp};`, "    }");
 		}
 		for (const register of plan.carried)
 			lines.push(`    ${materialize(register, start(register))}`);
+		for (const index of stored)
+			lines.push(`    ${globalSlot(index)} = ${boxSlot(slotStart(index))};`);
 		if (cursor !== undefined) lines.push(`    ${cursor}.index = ${id}_si;`);
 		lines.push(`    goto L${plan.id};`);
 		integral = baseIntegral;
@@ -2909,6 +2961,7 @@ function emitNumericLoopRegion(
 	return [
 		"{",
 		...bindingLoads,
+		...slotLoads,
 		...textViews.map((view) => `  MalStringUnitSpan ${id}_s${view.object} = {0};`),
 		...elementViews.flatMap((view) => [
 			...(lengthBound ? [] : [`  MalTypedArraySpan ${id}_v${view.object} = {0};`]),
@@ -8136,6 +8189,7 @@ function emitBody(
 							).join(" ");
 						throw new Error("Invalid numeric loop binding load");
 					},
+					(index) => `vm->globals[${relocation.globalIndex(index)}]`,
 					nativeFacts,
 					nativeInstructions,
 					(branchIp, spill, isolate) => {

@@ -1991,7 +1991,8 @@ export function validateNativeStorage(
 						sameNumbers(exit.outputs, expected.exits[i]!.outputs),
 				) &&
 				sameNumbers(plan.claimedIps, expected.claimedIps) &&
-				sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters)
+				sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters) &&
+				sameNumbers(plan.globals ?? [], expected.globals ?? [])
 			);
 		});
 
