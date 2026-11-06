@@ -3490,15 +3490,10 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
 }
 
 
-// ===========================================================================
-// Incremental major collector.
-//
 // The mutator owns roots, weak processing, and sweep; eligible major-mark tasks
-// may run on native workers between safepoints. Minors park JavaScript, trace inline,
-// and do not start while a major cycle is in flight. Black allocation over-tenures
-// mid-cycle allocations (accepted, counted). Roots are SATB-exempt: init-mark and
-// remark re-scan them, so both pauses are O(roots), never O(heap).
-// ===========================================================================
+// may run on native workers between safepoints. A minor during marking joins those
+// workers before tracing young cells inline. Roots are SATB-exempt: init-mark and
+// remark scan them while their owner is parked.
 
 /* The worklists a marking cycle keeps across its steps; a minor inside the cycle
  * needs empty ones of its own. */
@@ -3583,6 +3578,11 @@ static void mal_gc_cycle_begin(MalVm *vm) {
     // The snapshot then holds old cells only, so a minor during marking never
     // reclaims a cell the major has queued.
     mal_gc_collect_sync(vm, false);
+    // The opening minor establishes the nursery deadline. Keep another nursery's
+    // allocation headroom beyond it, so a marking minor can run before the backstop.
+    usize grow = vm->heap.next_gc_at - vm->heap.bytes_allocated;
+    g_gc->backstop_at = grow > SIZE_MAX - vm->heap.next_gc_at
+        ? SIZE_MAX : vm->heap.next_gc_at + grow;
     u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     g_gc->grey_count = 0;
     g_gc->weak_maps_count = 0;
@@ -3853,8 +3853,7 @@ void mal_gc_collect(MalVm *vm) {
 static MalGcPauseReason mal_gc_cycle_advance(MalVm *vm, usize mark_budget) {
     switch (g_gc->phase) {
         case MAL_GC_PHASE_MARK: {
-            // Hard backstop: if allocation has reached the old STW trigger before the
-            // cycle finished, finish it synchronously rather than float garbage.
+            // Exhausting the cycle's allocation headroom forces a synchronous finish.
             if (vm->heap.bytes_allocated >= g_gc->backstop_at) {
                 mal_gc_cycle_finish_sync(vm);
                 if (g_gc->stats_enabled) g_gc->sync_backstop++;
@@ -3974,16 +3973,7 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         return;
     }
 
-    // A major starts an incremental cycle with a hard allocation backstop.
     g_gc->collection_index++;
-    // Start an incremental major cycle. The backstop is one more growth increment of
-    // headroom (a full ~live-set of allocation) in which to finish incrementally;
-    // reaching it forces a synchronous finish.
-    usize grow = vm->heap.live_bytes * 2;
-    if (grow < MAL_GC_MIN_INCREMENT) {
-        grow = MAL_GC_MIN_INCREMENT;
-    }
-    g_gc->backstop_at = vm->heap.bytes_allocated + grow;
     u64 start_ns = mal_gc_pause_begin(vm, true);
     mal_gc_cycle_begin(vm);
     mal_gc_pause_end(vm, true, MAL_GC_PAUSE_MAJOR_SLICE, start_ns);

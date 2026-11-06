@@ -35,7 +35,10 @@ While it marks, new cells carry its color but stay young: the major neither trac
 nor records them, and minors settle them, promoting survivors already marked. A
 minor runs when the nursery fills and again at remark, before the weak pass, so
 garbage born during a long cycle is reclaimed instead of promoted. The sweep
-allocates cells old and marked.
+allocates cells old and marked. The opening minor establishes the next nursery
+deadline; the major's allocation backstop leaves another nursery increment beyond
+it. Reaching that backstop or receiving process pressure completes the cycle
+synchronously.
 
 Managed blocks describe their cells with bitmaps: free cells, cells allocated
 since the last collection, and cells whose death must run a finalizer.

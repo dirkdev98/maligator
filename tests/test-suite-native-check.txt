@@ -34,6 +34,7 @@ tests/native/gc-heap-usage.test.ts
 tests/native/gc-current-usage.test.ts
 tests/native/gc-mark-step-scaling.test.ts
 tests/native/gc-minor-sweep.test.ts
+tests/native/gc-marking-minor.test.ts
 tests/native/gc-raw-realloc.test.ts
 tests/native/gc-remembered-scan.test.ts
 tests/native/gc-lifecycle.test.ts
