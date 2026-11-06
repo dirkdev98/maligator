@@ -194,6 +194,11 @@ interface NativeNumericLoopRegionBase {
 	readonly claimedIps: ReadonlyArray<number>;
 	readonly borrowedRegisters: ReadonlyArray<number>;
 	readonly fallback: "original-instructions";
+	/**
+	 * Global slots the region keeps in locals, entered as Numbers. It writes each slot it
+	 * stores back at every exit, the iteration's starting value when a guard restarts it.
+	 */
+	readonly globals?: ReadonlyArray<number>;
 }
 
 /** A counted loop's index, which the header compares with a bound and each iteration steps once. */
@@ -1185,6 +1190,8 @@ export function numberRecordDataflow(
 	dataViewCalls: ReadonlyMap<number, NativeDataViewCall> = new Map(),
 	// C library calls a loop region makes with the views it admitted.
 	foreignCalls: ReadonlyMap<number, FfiScalarEntry> = new Map(),
+	// Global slots a loop region keeps in locals, so their loads and stores are Numbers.
+	slotGlobals: ReadonlySet<number> = new Set(),
 ): NativeNumberRecordDataflow | undefined {
 	const kinds = new Map<number, NativeNumberRecordKind>();
 	const inputs = new Set<number>();
@@ -1198,6 +1205,7 @@ export function numberRecordDataflow(
 	const numericReads = new Set<number>();
 	const intrinsics = new Set<number>();
 	const bindings = new Set<number>();
+	const slotLoadRegisters = new Set<number>();
 	const unify = (register: number, kind: NativeNumberRecordKind): boolean => {
 		const known = kinds.get(register);
 		if (known === undefined) kinds.set(register, kind);
@@ -1337,15 +1345,29 @@ export function numberRecordDataflow(
 						!written.has(instruction.dst);
 					intrinsics.add(instruction.dst);
 					break;
-				// A region neither calls out nor stores bindings, so the entry loads each binding
-				// once into its register, which reads inside then see as an input.
+				// A region runs no JavaScript, so the entry loads each binding the loop does not
+				// store once into its register, which reads inside then see as an input.
 				case "LOAD_GLOBAL":
 				case "LOAD_CAPTURED":
+					if (
+						instruction.opcode === "LOAD_GLOBAL" &&
+						slotGlobals.has(instruction.index)
+					) {
+						admitted = bindingLoads && write(instruction.dst, "number");
+						slotLoadRegisters.add(instruction.dst);
+						break;
+					}
 					admitted = bindingLoads && representations[instruction.dst] === "boxed";
 					bindings.add(instruction.dst);
 					break;
+				case "STORE_GLOBAL":
+					admitted =
+						slotGlobals.has(instruction.index) && read(instruction.src, "number");
+					break;
 				case "THROW_IF_TDZ":
-					admitted = bindings.has(instruction.src);
+					admitted =
+						bindings.has(instruction.src) ||
+						(slotLoadRegisters.has(instruction.src) && read(instruction.src, "number"));
 					break;
 				case "STORE_PROPERTY_STATIC":
 					admitted = read(instruction.value, "number");
@@ -1378,7 +1400,11 @@ export function numberRecordDataflow(
 			}
 		if (!admitted) return undefined;
 		const after = new Set(before);
-		if (instruction.opcode !== "LOAD_GLOBAL" && instruction.opcode !== "LOAD_CAPTURED")
+		const entryLoad =
+			(instruction.opcode === "LOAD_GLOBAL" || instruction.opcode === "LOAD_CAPTURED") &&
+			bindings.has(instruction.dst) &&
+			!(instruction.opcode === "LOAD_GLOBAL" && slotGlobals.has(instruction.index));
+		if (!entryLoad)
 			for (const register of vmInstructionWriteRegisters(instruction))
 				after.add(register);
 		for (const successor of numberRecordSuccessors(instruction, ip))
@@ -2583,14 +2609,47 @@ export function numericLoopCallMethods(
  * Registers a loop loads from globals or enclosing functions' bindings, which its region
  * loads once at entry: nothing in a region calls out or stores a binding.
  */
+/**
+ * The bindings a numeric loop region reads. The entry loads each invariant binding once
+ * into its register. A global slot the loop stores, or whose register the loop reuses,
+ * lives in a local instead, which nothing inside can observe, since a region runs no
+ * JavaScript.
+ */
+interface NumericLoopBindings {
+	/** Registers the entry loads an unchanging binding into. */
+	readonly invariant: ReadonlySet<number>;
+	/** Global slots kept in locals. */
+	readonly slots: ReadonlySet<number>;
+	/** Registers the loop loads a slot kept in a local into. */
+	readonly slotLoads: ReadonlySet<number>;
+}
+
 function numericLoopBindings(
 	fn: BytecodeFunction,
 	shape: NativeNumericLoopShape,
 	body: NativeBodyFacts,
-): ReadonlySet<number> | undefined {
-	const bindings = new Set<number>();
+): NumericLoopBindings | undefined {
+	const writesElsewhere = (ip: number, register: number) =>
+		shape.order.some(
+			(other) =>
+				other !== ip &&
+				vmInstructionWriteRegisters(fn.instructions[other]!).includes(register),
+		);
+	const slots = new Set<number>();
 	for (const ip of shape.order) {
 		const op = fn.instructions[ip]!;
+		if (op.opcode === "STORE_GLOBAL") slots.add(op.index);
+		else if (op.opcode === "LOAD_GLOBAL" && writesElsewhere(ip, op.dst))
+			slots.add(op.index);
+	}
+	const invariant = new Set<number>();
+	const slotLoads = new Set<number>();
+	for (const ip of shape.order) {
+		const op = fn.instructions[ip]!;
+		if (op.opcode === "LOAD_GLOBAL" && slots.has(op.index)) {
+			slotLoads.add(op.dst);
+			continue;
+		}
 		if (op.opcode !== "LOAD_GLOBAL" && op.opcode !== "LOAD_CAPTURED") continue;
 		// A function's own capture environment may not exist yet where the loop starts.
 		if (
@@ -2598,21 +2657,34 @@ function numericLoopBindings(
 			(fn.capturedCount > 0 || op.ownerFunctionIndex < 0)
 		)
 			return undefined;
-		if (
-			shape.order.some(
-				(other) =>
-					other !== ip &&
-					vmInstructionWriteRegisters(fn.instructions[other]!).includes(op.dst),
-			)
-		)
-			return undefined;
-		bindings.add(op.dst);
+		if (writesElsewhere(ip, op.dst)) return undefined;
+		invariant.add(op.dst);
 	}
 	// The entry loads each binding into its register, which only a header that read the
 	// register before reloading it could observe.
-	return registersLiveAt(fn, body, shape.order[0]!, bindings).length > 0
+	return registersLiveAt(fn, body, shape.order[0]!, invariant).length > 0
 		? undefined
-		: bindings;
+		: { invariant, slots, slotLoads };
+}
+
+/** Whether a region admits `op` as a binding load, a slot store or its TDZ check. */
+function numericLoopBindingInstruction(
+	op: BytecodeInstruction,
+	bindings: NumericLoopBindings,
+): boolean {
+	switch (op.opcode) {
+		case "LOAD_GLOBAL":
+		case "LOAD_CAPTURED":
+			return true;
+		case "STORE_GLOBAL":
+			return bindings.slots.has(op.index);
+		// The entry declines a binding still in its temporal dead zone, and a slot kept in
+		// a local holds a Number throughout.
+		case "THROW_IF_TDZ":
+			return bindings.invariant.has(op.src) || bindings.slotLoads.has(op.src);
+		default:
+			return false;
+	}
 }
 
 function fixedNumericLoopStorage(
@@ -2623,6 +2695,7 @@ function fixedNumericLoopStorage(
 	codeUnitReads: ReadonlySet<number>,
 	dataViewCalls: ReadonlyMap<number, NativeDataViewCall>,
 	foreignCalls: ReadonlyMap<number, FfiScalarEntry>,
+	bindings: NumericLoopBindings,
 ):
 	| Pick<
 			Extract<NativeNumericLoopRegionPlan, { kind: "fixed-numeric" }>,
@@ -2795,8 +2868,6 @@ function fixedNumericLoopStorage(
 		)
 	)
 		return undefined;
-	const bindings = numericLoopBindings(fn, shape, body);
-	if (bindings === undefined) return undefined;
 	const textual = new Set(memory.map((access) => access.text === true));
 	const bounding = lengthLoad === undefined ? undefined : views.get(lengthLoad.object);
 	if (lengthLoad !== undefined && bounding?.lentOnly === true) {
@@ -2897,13 +2968,7 @@ function fixedNumericLoopStorage(
 		}
 		if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object)) continue;
 		if (op.opcode === "REQUIRE_COERCIBLE" && records.has(op.src)) continue;
-		// The entry declines a binding still in its temporal dead zone.
-		if (
-			op.opcode === "LOAD_GLOBAL" ||
-			op.opcode === "LOAD_CAPTURED" ||
-			(op.opcode === "THROW_IF_TDZ" && bindings.has(op.src))
-		)
-			continue;
+		if (numericLoopBindingInstruction(op, bindings)) continue;
 		if (
 			vmInstructionWriteRegisters(op).some(
 				(register) => register === bound || views.has(register),
@@ -3123,13 +3188,16 @@ function lowerNumericLoopRegion(
 		first === undefined ||
 		(!integerLoopInstruction(first) &&
 			!lengthLoads.has(header) &&
-			first.opcode !== "LOAD_PROPERTY") ||
+			first.opcode !== "LOAD_PROPERTY" &&
+			first.opcode !== "LOAD_GLOBAL") ||
 		conflicts(header)
 	)
 		return undefined;
 	const shape = numericLoopShape(fn, body, header, true);
 	if (shape === undefined || conflicts(shape.entryIp) || shape.order.some(conflicts))
 		return undefined;
+	const bindings = numericLoopBindings(fn, shape, body);
+	if (bindings === undefined) return undefined;
 	const storage = fixedNumericLoopStorage(
 		fn,
 		shape,
@@ -3138,20 +3206,20 @@ function lowerNumericLoopRegion(
 		codeUnitReads,
 		dataViewCalls,
 		foreignCalls,
+		bindings,
 	);
-	if (storage === undefined && !integerLoopInstruction(first)) return undefined;
-	const bindings =
-		storage === undefined ? numericLoopBindings(fn, shape, body) : new Set<number>();
-	if (bindings === undefined) return undefined;
+	if (
+		storage === undefined &&
+		!integerLoopInstruction(first) &&
+		first.opcode !== "LOAD_GLOBAL"
+	)
+		return undefined;
 	if (
 		(storage === undefined &&
 			shape.order.some((ip) => {
 				const op = fn.instructions[ip]!;
 				return (
-					!integerLoopInstruction(op) &&
-					op.opcode !== "LOAD_GLOBAL" &&
-					op.opcode !== "LOAD_CAPTURED" &&
-					!(op.opcode === "THROW_IF_TDZ" && bindings.has(op.src))
+					!integerLoopInstruction(op) && !numericLoopBindingInstruction(op, bindings)
 				);
 			})) ||
 		(storage === undefined &&
@@ -3181,6 +3249,7 @@ function lowerNumericLoopRegion(
 				foreignCalls.get(ip)!,
 			]),
 		),
+		bindings.slots,
 	);
 	if (flow === undefined) return undefined;
 	const inputs = new Set(flow.inputs);
@@ -3240,6 +3309,9 @@ function lowerNumericLoopRegion(
 		claimedIps: Object.freeze(claimedIps),
 		borrowedRegisters: borrowedRegisters(fn, claimedIps, body),
 		fallback: "original-instructions",
+		...(bindings.slots.size === 0
+			? {}
+			: { globals: Object.freeze([...bindings.slots].sort((a, b) => a - b)) }),
 	});
 }
 

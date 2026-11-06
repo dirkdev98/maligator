@@ -1977,10 +1977,9 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       bandwidth. Compiled callers of a library without callback registrations pass
       a matching view's storage to the typed scalar entry, and a fixed-numeric loop
       region admits the views once at its entry; an 8-element `Float64Array` view
-      takes 0.94x Bun's time and matches C. Regions still refuse loops that store
-      module bindings (5.4 ns per call against about 1.3 ns in a region) and calls
-      with integer arguments, whose range checks would restart an iteration after C
-      ran. Scalar fields of struct
+      takes 0.94x Bun's time and matches C, including in module-level loops that store
+      module bindings. Regions still refuse calls with integer arguments, whose range
+      checks would restart an iteration after C ran. Scalar fields of struct
       handles read without a getter call, about 7.9 ns per warm read against 11;
       the getter-row probe and the reader's dependent loads remain, which an
       inline-cache row for C fields checked by the static probe would remove. Binding 48
