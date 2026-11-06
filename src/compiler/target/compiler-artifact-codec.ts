@@ -2,7 +2,8 @@ import { ffiScalarSymbol, isFfiScalarEntry } from "../../build-config-values.ts"
 import type {
 	FfiDirectEntry,
 	FfiScalarEntry,
-	FfiScalarValue,
+	FfiScalarParameter,
+	FfiViewArray,
 } from "../../build-config-values.ts";
 import { coreRegionStrategy } from "../core/core-ir-region-strategies.ts";
 import { CORE_STRING_SPAN_RANGE_METHODS } from "../core/core-ir-regions.ts";
@@ -121,7 +122,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 365;
+export const COMPILER_ARTIFACT_VERSION = 366;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -142,8 +143,54 @@ function writeFfiScalarValue(w: Writer, type: FfiScalarEntry["result"]): void {
 	}
 }
 
-function readFfiScalarValue(r: Reader): FfiScalarEntry["result"] {
+/** View arrays by their serialized index. */
+const FFI_VIEW_ARRAY_TAGS: ReadonlyArray<FfiViewArray> = [
+	"Int8Array",
+	"Uint8Array",
+	"Int16Array",
+	"Uint16Array",
+	"Int32Array",
+	"Uint32Array",
+	"BigInt64Array",
+	"BigUint64Array",
+	"Float32Array",
+	"Float64Array",
+];
+
+function writeFfiScalarParameter(w: Writer, type: FfiScalarParameter): void {
+	if (type.kind !== "view") {
+		writeFfiScalarValue(w, type);
+		return;
+	}
+	w.u8(4);
+	w.u8(FFI_VIEW_ARRAY_TAGS.indexOf(type.array));
+	w.u8(type.writable ? 1 : 0);
+	w.i32(type.sameLength ?? -1);
+}
+
+function readFfiScalarParameter(
+	r: Reader,
+): FfiScalarParameter | FfiScalarEntry["result"] {
 	const tag = r.u8();
+	if (tag !== 4) return readFfiScalarTag(r, tag);
+	const array = FFI_VIEW_ARRAY_TAGS[r.u8()];
+	const writable = r.u8();
+	const sameLength = r.i32();
+	if (array === undefined || writable > 1)
+		throw new RangeError("program-image-codec: invalid scalar FFI view");
+	return {
+		kind: "view",
+		array,
+		writable: writable === 1,
+		...(sameLength === -1 ? {} : { sameLength }),
+	};
+}
+
+function readFfiScalarValue(r: Reader): FfiScalarEntry["result"] {
+	return readFfiScalarTag(r, r.u8());
+}
+
+function readFfiScalarTag(r: Reader, tag: number): FfiScalarEntry["result"] {
 	if (tag === 0) return { kind: "undefined" };
 	if (tag === 1) return { kind: "boolean" };
 	if (tag === 2) return { kind: "number" };
@@ -2677,7 +2724,7 @@ function writeCompilerArtifact(
 					if (foreign.scalar !== undefined) {
 						w.u32(foreign.scalar.parameters.length);
 						for (const parameter of foreign.scalar.parameters)
-							writeFfiScalarValue(w, parameter);
+							writeFfiScalarParameter(w, parameter);
 						writeFfiScalarValue(w, foreign.scalar.result);
 					}
 				}
@@ -5301,21 +5348,21 @@ function readCompilerArtifact(
 						const count = r.count(1);
 						if (count !== foreignCall.arity)
 							throw new RangeError("program-image-codec: invalid scalar FFI arity");
-						const parameters: Array<FfiScalarValue> = [];
+						const parameters: Array<FfiScalarParameter> = [];
 						for (let index = 0; index < count; index++) {
-							const parameter = readFfiScalarValue(r);
+							const parameter = readFfiScalarParameter(r);
 							if (parameter.kind === "undefined")
 								throw new RangeError("program-image-codec: invalid scalar FFI parameter");
 							parameters.push(parameter);
 						}
-						foreignCall = {
-							...foreignCall,
-							scalar: {
-								symbol: ffiScalarSymbol(symbol),
-								parameters,
-								result: readFfiScalarValue(r),
-							},
+						const scalar = {
+							symbol: ffiScalarSymbol(symbol),
+							parameters,
+							result: readFfiScalarValue(r),
 						};
+						if (!isFfiScalarEntry(scalar, symbol, foreignCall.arity))
+							throw new RangeError("program-image-codec: invalid scalar FFI metadata");
+						foreignCall = { ...foreignCall, scalar };
 					}
 				}
 				const guardedBuiltinCount =

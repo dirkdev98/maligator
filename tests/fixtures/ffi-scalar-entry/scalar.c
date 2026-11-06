@@ -23,3 +23,18 @@ uint64_t scalar_u64(uint64_t value) { return value; }
 uint64_t scalar_calls(void) { return calls; }
 void scalar_touch(int32_t value) { last = value; }
 int32_t scalar_last(void) { return last; }
+double scalar_dot(const double *left, const double *right, int32_t count) {
+    calls++;
+    double sum = 0;
+    for (int32_t index = 0; index < count; index++) sum += left[index] * right[index];
+    return sum;
+}
+void scalar_scale(double *values, int32_t count, double factor) {
+    for (int32_t index = 0; index < count; index++) values[index] *= factor;
+}
+uint32_t scalar_sum_u8(const uint8_t *bytes, uint32_t count) {
+    uint32_t sum = 0;
+    for (uint32_t index = 0; index < count; index++) sum += bytes[index];
+    return sum;
+}
+bool scalar_empty(const double *values, int32_t count) { return values == NULL && count == 0; }

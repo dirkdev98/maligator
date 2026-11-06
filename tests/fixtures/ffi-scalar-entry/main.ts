@@ -1,6 +1,8 @@
 /* oxlint-disable no-console -- The fixture reports observable scalar ABI behavior. */
 import {
 	scalar_calls,
+	scalar_dot,
+	scalar_empty,
 	scalar_float,
 	scalar_float32,
 	scalar_high,
@@ -8,6 +10,8 @@ import {
 	scalar_last,
 	scalar_nan,
 	scalar_not,
+	scalar_scale,
+	scalar_sum_u8,
 	scalar_touch,
 	scalar_u32,
 	scalar_u64,
@@ -112,5 +116,51 @@ check(
 	"wide unsigned results keep their full precision",
 );
 refuses(() => scalar_u64(-1n), RangeError);
+
+const left = new Float64Array([1, 2, 3, 4]);
+const right = new Float64Array([5, 6, 7, 8]);
+const callsBeforeViews = scalar_calls();
+let dot = 0;
+for (let index = 0; index < 64; index++) dot += scalar_dot(left, right);
+check(
+	dot === 64 * 70 && scalar_calls() === callsBeforeViews + 64n,
+	"lent views reach every C call",
+);
+check(scalar_dot([1, 2], [3, 4]) === 11, "arrays still convert by copy");
+check(
+	scalar_dot(left.subarray(1), right.subarray(1)) === 2 * 6 + 3 * 7 + 4 * 8,
+	"offset views lend their own elements",
+);
+const callsBeforeRejection = scalar_calls();
+refuses(() => scalar_dot(left, right.subarray(1)), TypeError);
+refuses(
+	() => scalar_dot(new Float32Array(4) as unknown as Float64Array, right),
+	TypeError,
+);
+const detached = new Float64Array(4);
+detached.buffer.transfer();
+refuses(() => scalar_dot(detached, right), TypeError);
+check(scalar_calls() === callsBeforeRejection, "rejected views never enter C");
+const resizable = new Float64Array(new ArrayBuffer(32, { maxByteLength: 64 }), 0, 4);
+resizable.fill(1);
+check(scalar_dot(resizable, right) === 26, "views of resizable buffers still convert");
+check(scalar_empty(new Float64Array(0)), "empty views pass C a null pointer");
+const scaled = new Float64Array([1, 2, 3]);
+scalar_scale(scaled, 2);
+check(scaled.join() === "2,4,6", "writable views receive C's writes");
+const frozen = new Float64Array(
+	(
+		new Float64Array([1, 2]).buffer as ArrayBuffer & {
+			transferToImmutable(): ArrayBuffer;
+		}
+	).transferToImmutable(),
+);
+refuses(() => scalar_scale(frozen, 2), TypeError);
+check(frozen.join() === "1,2", "immutable views refuse C writes");
+check(
+	scalar_sum_u8(new Uint8Array([1, 2, 250])) === 253 &&
+		scalar_sum_u8(Buffer.from([4, 5])) === 9,
+	"unsigned counts carry byte view lengths",
+);
 checkNamespaceCalls();
 console.log("scalar ABI passed");

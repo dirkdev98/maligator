@@ -15,6 +15,7 @@ uint64_t numeric_u64(const uint64_t *values, int count);
 float numeric_f32(const float *values, int count);
 double numeric_f64(const double *values, int count);
 double numeric_dot(const double *left, const double *right, int count);
+uint16_t numeric_short(const uint16_t *values, uint16_t count);
 double numeric_independent(double *left, int left_count, const double *right, int right_count);
 double numeric_visit(const double *values, int count, NumericVisit visit, void *data);
 double numeric_mutable(double *values, int count);

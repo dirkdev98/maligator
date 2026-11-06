@@ -398,13 +398,16 @@ export type Argument =
 	/** Converted from JavaScript parameter `param`. */
 	| { readonly kind: "input"; readonly param: number }
 	/**
-	 * The shared byte or element count of the buffers or arrays in `of`. With
-	 * `output`, the address of a local holding the buffer's size, which the function
-	 * updates to the count it used and the binding returns as that output.
+	 * The shared byte or element count of the buffers or arrays in `of`, in a C
+	 * integer of `bits` that may be `signed`. With `output`, the address of a local
+	 * holding the buffer's size, which the function updates to the count it used and
+	 * the binding returns as that output.
 	 */
 	| {
 			readonly kind: "count";
 			readonly of: ReadonlyArray<number>;
+			readonly bits: number;
+			readonly signed: boolean;
 			readonly output?: number;
 	  }
 	/** The address of a zeroed local the function writes; returned as output `output`. */
@@ -3606,13 +3609,21 @@ class Planner {
 								)
 							);
 						}));
-				if (countType.kind !== "integer" || invalidWrittenCount) {
+				const integer =
+					countType.kind === "integer" ? this.#integer(countType.name) : undefined;
+				if (
+					integer === undefined ||
+					!("value" in integer) ||
+					(integer.value.kind !== "integer" && integer.value.kind !== "bigint") ||
+					invalidWrittenCount
+				) {
 					throw new FfiFactError(
 						"inapplicable",
 						where(at),
 						"a count must be an integer parameter",
 					);
 				}
+				const width = { bits: integer.value.bits, signed: integer.value.signed };
 				if (valueFacts.borrowed === true)
 					throw new FfiFactError(
 						"inapplicable",
@@ -3625,12 +3636,12 @@ class Planner {
 						gap(written.gap, written.code);
 						return;
 					}
-					args.push({ kind: "count", of: counted, output: outputs.length });
+					args.push({ kind: "count", of: counted, ...width, output: outputs.length });
 					outputs.push({ name, type: resolved.to, value: written.value });
 					return;
 				}
 				if (counted !== undefined) {
-					args.push({ kind: "count", of: counted });
+					args.push({ kind: "count", of: counted, ...width });
 					return;
 				}
 				if (pointer) {

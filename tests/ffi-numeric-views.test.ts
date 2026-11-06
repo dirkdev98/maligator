@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { beforeAll, expect, it } from "vitest";
 import { planBindings } from "../src/ffi/binding-plan.ts";
+import { describeBindingUnit } from "../src/ffi/binding-unit.ts";
 import { extractCModel } from "../src/ffi/c-extract.ts";
 import { generateDeclarations } from "../src/ffi/declarations.ts";
 import contract from "./fixtures/ffi-numeric-views/numeric.ffi.ts";
@@ -97,4 +98,22 @@ it.each([
 			functions: { ...contract.functions, [name]: facts },
 		}),
 	).toThrow(message);
+});
+
+it("lends views to compiled callers when the C count holds any lent length", () => {
+	// Without a callback registration C cannot reenter JavaScript, so a scalar entry exists.
+	const plan = {
+		...planBindings(model, { types: {}, functions: contract.functions }),
+		hasCallbacks: false,
+	};
+	const { direct } = describeBindingUnit("numeric", plan);
+	expect(direct.numeric_dot?.scalar?.parameters).toEqual([
+		{ kind: "view", array: "Float64Array", writable: false },
+		{ kind: "view", array: "Float64Array", writable: false, sameLength: 0 },
+	]);
+	expect(direct.numeric_scale?.scalar?.parameters).toEqual([
+		{ kind: "view", array: "Float64Array", writable: true },
+		{ kind: "number" },
+	]);
+	expect(direct.numeric_short?.scalar).toBeUndefined();
 });

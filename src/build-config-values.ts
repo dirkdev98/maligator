@@ -37,9 +37,51 @@ export type FfiScalarValue =
 	| { readonly kind: "number" }
 	| { readonly kind: "boolean" };
 
+/** The numeric typed array a C pointer parameter lends its elements from. */
+export type FfiViewArray =
+	| "Int8Array"
+	| "Uint8Array"
+	| "Int16Array"
+	| "Uint16Array"
+	| "Int32Array"
+	| "Uint32Array"
+	| "BigInt64Array"
+	| "BigUint64Array"
+	| "Float32Array"
+	| "Float64Array";
+
+const FFI_VIEW_ARRAYS: ReadonlySet<string> = new Set<FfiViewArray>([
+	"Int8Array",
+	"Uint8Array",
+	"Int16Array",
+	"Uint16Array",
+	"Int32Array",
+	"Uint32Array",
+	"BigInt64Array",
+	"BigUint64Array",
+	"Float32Array",
+	"Float64Array",
+]);
+
+/**
+ * A typed array whose storage the scalar entry receives as its data pointer and
+ * element count. Callers check the view where they call and take the checked entry
+ * for anything else, such as a detached, resizable or misaligned view.
+ */
+export type FfiScalarView = {
+	readonly kind: "view";
+	readonly array: FfiViewArray;
+	/** C may write the elements, so an immutable buffer takes the checked entry. */
+	readonly writable: boolean;
+	/** An earlier view parameter whose C count this view shares; their lengths must match. */
+	readonly sameLength?: number;
+};
+
+export type FfiScalarParameter = FfiScalarValue | FfiScalarView;
+
 export interface FfiScalarEntry {
 	readonly symbol: string;
-	readonly parameters: ReadonlyArray<FfiScalarValue>;
+	readonly parameters: ReadonlyArray<FfiScalarParameter>;
 	readonly result: FfiScalarValue | { readonly kind: "undefined" };
 }
 
@@ -77,6 +119,41 @@ function isFfiScalarValue(value: unknown, result: boolean): boolean {
 	);
 }
 
+function isFfiScalarView(
+	value: unknown,
+	index: number,
+	parameters: ReadonlyArray<unknown>,
+): boolean {
+	if (
+		typeof value !== "object" ||
+		value === null ||
+		!("kind" in value) ||
+		value.kind !== "view" ||
+		!("array" in value) ||
+		typeof value.array !== "string" ||
+		!FFI_VIEW_ARRAYS.has(value.array) ||
+		!("writable" in value) ||
+		typeof value.writable !== "boolean"
+	)
+		return false;
+	if (!("sameLength" in value) || value.sameLength === undefined) return true;
+	const shared = value.sameLength;
+	if (
+		typeof shared !== "number" ||
+		!Number.isInteger(shared) ||
+		shared < 0 ||
+		shared >= index
+	)
+		return false;
+	const earlier: unknown = parameters[shared];
+	return (
+		typeof earlier === "object" &&
+		earlier !== null &&
+		"kind" in earlier &&
+		earlier.kind === "view"
+	);
+}
+
 export function isFfiScalarEntry(
 	value: unknown,
 	symbol: string,
@@ -90,7 +167,10 @@ export function isFfiScalarEntry(
 		"parameters" in value &&
 		Array.isArray(value.parameters) &&
 		value.parameters.length === arity &&
-		value.parameters.every((type: unknown) => isFfiScalarValue(type, false)) &&
+		value.parameters.every(
+			(type: unknown, index: number, parameters: ReadonlyArray<unknown>) =>
+				isFfiScalarValue(type, false) || isFfiScalarView(type, index, parameters),
+		) &&
 		"result" in value &&
 		isFfiScalarValue(value.result, true)
 	);

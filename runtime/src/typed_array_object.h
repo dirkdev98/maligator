@@ -96,6 +96,26 @@ static inline bool mal_typed_array_object_fixed_span(
     return true;
 }
 
+/**
+ * The elements a compiled caller lends a C call that cannot run JavaScript, so
+ * nothing detaches the buffer while C holds them: a fixed-length `kind` view
+ * aligned to its element size, of at most INT32_MAX elements, and not immutable
+ * when C may write it. False sends every other value to the checked FFI entry,
+ * which explains the mismatch.
+ */
+static inline bool mal_typed_array_lend(
+    MalValue value, MalTypedArrayKind kind, bool writable, void **data, int32_t *length) {
+    if (!mal_value_is_typed_array_object(value)) return false;
+    const MalTypedArrayObject *array = mal_value_to_typed_array_object(value);
+    MalTypedArraySpan span;
+    if (array->kind != kind || !mal_typed_array_object_fixed_span(array, &span)
+        || span.length > INT32_MAX || (writable && array->buffer->immutable)
+        || (uintptr_t) span.data % span.element_size != 0) return false;
+    *data = span.data;
+    *length = (int32_t) span.length;
+    return true;
+}
+
 /** Whether a kind holds BigInt elements (BigInt64Array / BigUint64Array). */
 bool mal_typed_array_is_bigint(MalTypedArrayKind kind);
 

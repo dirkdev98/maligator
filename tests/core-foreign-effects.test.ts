@@ -230,6 +230,53 @@ describe("static foreign call effects", () => {
 			expect(emitted.source.includes(`${scalar.symbol}(`)).toBe(selected);
 		},
 	);
+	describe("lent views", () => {
+		const viewScalar: NonNullable<FfiDirectEntry["scalar"]> = {
+			symbol: ffiScalarSymbol(binding.symbol),
+			parameters: [{ kind: "view", array: "Float64Array", writable: false }],
+			result: { kind: "number" },
+		};
+		it("lends a typed array to the scalar C ABI and converts anything else", () => {
+			// Array conversion can run getters, so the binding reenters JavaScript.
+			const { image, native } = compile(
+				true,
+				"return mix(value);",
+				{ kind: "number" },
+				viewScalar,
+			);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+			const after = restored.native.functions[native.functionIndex]!;
+			expect(after.instructions.find((plan) => plan?.kind === "call")).toMatchObject({
+				foreignCall: { scalar: viewScalar },
+			});
+			const source = emitCompiledFunction(after, after.functionIndex, "", false)!.source;
+			expect(source).toContain("mal_typed_array_lend(");
+			expect(source).toContain(`${viewScalar.symbol}(`);
+			expect(source).toContain(`${binding.symbol}(`);
+		});
+		it.each([
+			{
+				...viewScalar,
+				parameters: [
+					{ kind: "view", array: "Float64Array", writable: false, sameLength: 0 },
+				],
+			},
+			{
+				...viewScalar,
+				parameters: [{ kind: "view", array: "Uint8ClampedArray", writable: false }],
+			},
+			{ ...viewScalar, parameters: [{ kind: "view", array: "Float64Array" }] },
+		])("rejects an invalid view %j", (invalid) => {
+			expect(() =>
+				compile(
+					true,
+					"return mix(value);",
+					{ kind: "number" },
+					invalid as typeof viewScalar,
+				),
+			).toThrow("scalar ABI");
+		});
+	});
 	it("rejects a scalar ABI on a callback-capable binding", () => {
 		expect(() => compile(true, "return mix(value | 0);", binding.result, scalar)).toThrow(
 			"scalar ABI",

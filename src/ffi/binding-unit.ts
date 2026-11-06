@@ -7,6 +7,7 @@ import type {
 	FfiDirectEntry,
 	FfiDirectResult,
 	FfiScalarEntry,
+	FfiScalarParameter,
 	FfiScalarValue,
 } from "../build-config-values.ts";
 import { bindingEffects } from "./binding-effects.ts";
@@ -26,6 +27,7 @@ import type {
 	JsResult,
 	JsValue,
 	MappedConstant,
+	MappedParameter,
 	MappedRecord,
 } from "./binding-plan.ts";
 import type { CModel } from "./c-model.ts";
@@ -137,6 +139,18 @@ function scalarValue(value: JsValue): FfiScalarValue | undefined {
 	}
 }
 
+function scalarParameter(param: MappedParameter): FfiScalarParameter | undefined {
+	return param.view !== undefined && param.value.kind === "sequence"
+		? { kind: "view", array: param.view, writable: param.writable === true }
+		: scalarValue(param.value);
+}
+
+/**
+ * The typed entry compiled callers take once they have proven each scalar argument
+ * and checked each view they lend. A count C derives from views reaches C as their
+ * shared length, so views sharing one must match and the count's integer must hold
+ * any lent length.
+ */
 function scalarEntry(
 	library: string,
 	plan: BindingPlan,
@@ -146,19 +160,36 @@ function scalarEntry(
 		binding.global !== undefined ||
 		binding.closes !== undefined ||
 		binding.initializes !== undefined ||
-		binding.outputs.length !== 0 ||
-		binding.arguments.length !== binding.params.length ||
-		binding.arguments.some(
-			(entry, index) => entry.kind !== "input" || entry.param !== index,
-		) ||
-		Object.values(bindingEffects(plan, binding)).some(Boolean)
+		binding.outputs.length !== 0
 	)
 		return undefined;
-	const parameters: Array<FfiScalarValue> = [];
+	// Only arrays the checked entry copies run JavaScript while arguments convert.
+	const effects = bindingEffects(plan, binding);
+	if (effects.native || effects.cleanup) return undefined;
+	const parameters: Array<FfiScalarParameter> = [];
 	for (const parameter of binding.params) {
-		const type = scalarValue(parameter.value);
+		const type = scalarParameter(parameter);
 		if (type === undefined) return undefined;
 		parameters.push(type);
+	}
+	for (const entry of binding.arguments) {
+		if (entry.kind === "input") continue;
+		if (entry.kind === "constant" && entry.sizeLimit === undefined) continue;
+		if (entry.kind !== "count" || entry.output !== undefined || entry.bits < 32)
+			return undefined;
+		const views = entry.of
+			.flatMap((argument) => {
+				const source = binding.arguments[argument];
+				return source?.kind === "input" && parameters[source.param]?.kind === "view"
+					? [source.param]
+					: [];
+			})
+			.sort((a, b) => a - b);
+		if (views.length === 0 || views.length !== entry.of.length) return undefined;
+		for (const param of views.slice(1)) {
+			const view = parameters[param]!;
+			if (view.kind === "view") parameters[param] = { ...view, sameLength: views[0]! };
+		}
 	}
 	const result =
 		binding.returns.kind === "undefined" ? binding.returns : scalarValue(binding.returns);
@@ -172,14 +203,43 @@ function scalarEntry(
 }
 
 function scalarFunction(binding: BoundFunction, entry: FfiScalarEntry): Array<string> {
-	const arguments_ = entry.parameters.map((type, index) => {
-		const value = `mal_a${index}`;
-		const number = type.kind === "number" ? `mal_ffi_scalar_number(${value})` : value;
-		return `(${localDeclaration(binding.declaration.params[index]!.type, "")}) (${number})`;
+	const anchor = (param: number): number => {
+		const parameter = entry.parameters[param]!;
+		return parameter.kind === "view" ? (parameter.sameLength ?? param) : param;
+	};
+	const arguments_ = binding.arguments.map((argument, index) => {
+		const type = localDeclaration(binding.declaration.params[index]!.type, "");
+		switch (argument.kind) {
+			case "input": {
+				const parameter = entry.parameters[argument.param]!;
+				const value = `mal_a${argument.param}`;
+				return `(${type}) (${parameter.kind === "number" ? `mal_ffi_scalar_number(${value})` : value})`;
+			}
+			case "count": {
+				const source = binding.arguments[argument.of[0]!]!;
+				if (source.kind !== "input")
+					throw new Error("a scalar count counts a view input");
+				return `(${type}) (mal_n${anchor(source.param)})`;
+			}
+			case "constant":
+				return argument.expression;
+			default:
+				throw new Error(`a scalar entry has no ${argument.kind} argument`);
+		}
 	});
+	const parameters = entry.parameters.flatMap((type, index) =>
+		type.kind === "view"
+			? [`${type.writable ? "" : "const "}void *mal_a${index}`, `int32_t mal_n${index}`]
+			: [`${ffiScalarCType(type)} mal_a${index}`],
+	);
 	const call = `${binding.declaration.name}(${arguments_.join(", ")})`;
 	return [
-		`${ffiScalarCType(entry.result)} ${entry.symbol}(${entry.parameters.length === 0 ? "void" : entry.parameters.map((type, index) => `${ffiScalarCType(type)} mal_a${index}`).join(", ")}) {`,
+		`${ffiScalarCType(entry.result)} ${entry.symbol}(${parameters.length === 0 ? "void" : parameters.join(", ")}) {`,
+		...entry.parameters.flatMap((type, index) =>
+			type.kind === "view" && type.sameLength !== undefined
+				? [`\t(void) mal_n${index};`]
+				: [],
+		),
 		entry.result.kind === "undefined"
 			? `\t${call};`
 			: `\treturn ${entry.result.kind === "number" ? `mal_ffi_scalar_number((double) (${call}))` : call};`,
@@ -3250,24 +3310,14 @@ class BindingWriter {
 			into: Array<string>,
 		) => {
 			const target = countOf(counted);
-			if (target === undefined) return;
-			const entry = binding.arguments[target.index];
-			const output = entry?.kind === "count" ? entry.output : undefined;
+			const entry = target === undefined ? undefined : binding.arguments[target.index];
+			if (target === undefined || entry?.kind !== "count") return;
+			const output = entry.output;
 			// A count the function updates lives in an output local it gets the address of.
 			const type = output === undefined ? target.type : binding.outputs[output]!.type;
-			const integer = resolveCType(this.#model, type);
-			const bits =
-				integer.kind === "integer"
-					? (this.#model.target.sizes[integer.name] ?? 4) * 8
-					: 32;
-			const signed =
-				integer.kind === "integer" &&
-				(integer.name === "char"
-					? this.#model.target.charSigned
-					: !integer.name.startsWith("unsigned"));
 			into.push(
-				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${bits}, ${signed}, ${site})) goto mal_done;`,
-				...(entry?.kind === "count" && entry.of.length > 1
+				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${entry.bits}, ${entry.signed}, ${site})) goto mal_done;`,
+				...(entry.of.length > 1
 					? [
 							`if (mal_count_set_${target.index} && (uint64_t) mal_argument_${target.index} != (uint64_t) (${count})) { mal_ffi_expected(vm, ${site}, "a length matching the other arguments sharing this count"); goto mal_done; }`,
 							`mal_count_set_${target.index} = true;`,
@@ -4328,26 +4378,16 @@ class BindingWriter {
 			const index = binding.arguments.findIndex(
 				(entry) => entry.kind === "count" && entry.of.includes(counted),
 			);
-			if (index < 0) return;
-			const entry = binding.arguments[index];
-			const output = entry?.kind === "count" ? entry.output : undefined;
+			const entry = index < 0 ? undefined : binding.arguments[index];
+			if (entry?.kind !== "count") return;
+			const output = entry.output;
 			const type =
 				output === undefined
 					? declaration.params[index]!.type
 					: binding.outputs[output]!.type;
-			const integer = resolveCType(this.#model, type);
-			const bits =
-				integer.kind === "integer"
-					? (this.#model.target.sizes[integer.name] ?? 4) * 8
-					: 32;
-			const signed =
-				integer.kind === "integer" &&
-				(integer.name === "char"
-					? this.#model.target.charSigned
-					: !integer.name.startsWith("unsigned"));
 			into.push(
-				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${bits}, ${signed}, ${site})) goto mal_failed;`,
-				...(entry?.kind === "count" && entry.of.length > 1
+				`if (!mal_ffi_check_count(vm, (size_t) (${count}), ${entry.bits}, ${entry.signed}, ${site})) goto mal_failed;`,
+				...(entry.of.length > 1
 					? [
 							`if (mal_count_set_${index} && (uint64_t) mal_ctx->mal_argument_${index} != (uint64_t) (${count})) { mal_ffi_expected(vm, ${site}, "a length matching the other arguments sharing this count"); goto mal_failed; }`,
 							`mal_count_set_${index} = true;`,
