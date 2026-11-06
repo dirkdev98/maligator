@@ -1082,7 +1082,54 @@ static bool mal_builtin_object_collect_impl(MalVm *vm, MalValue target, MalPrope
 // Object.keys/values/entries (+ getOwnPropertyNames) collector. The result array
 // is held across getter / proxy-trap re-entry that the body performs, so root it
 // and lift this builtin's GC suppression around the collection.
+/*
+ * Keys, values or entries of a small ordinary object whose public properties all
+ * live in its shape, gathered on the stack and published as one literal-sized
+ * Array. Shape order is the [[OwnPropertyKeys]] order, and plain data reads run
+ * no user code; an accessor leaves the observable paths to the caller.
+ */
+static bool mal_builtin_object_collect_small_shaped(
+    MalVm *vm, MalValue target, MalPropertyIterKind iter_kind,
+    MalBuiltinObjectCollect collect, MalValue *out
+) {
+    const MalObject *object = mal_value_to_object(target);
+    const MalShape *shape = object->shape;
+    if (mal_object_has_public_overflow(object) ||
+        shape->inline_count > MAL_ARRAY_INLINE_CAPACITY_MAX) {
+        return false;
+    }
+    bool enumerable_only = iter_kind == MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER;
+    MalValue items[MAL_ARRAY_INLINE_CAPACITY_MAX];
+    u32 count = 0;
+    for (u32 i = 0; i < shape->inline_count; i++) {
+        const MalShapeProp *prop = &shape->props[i];
+        if (!mal_value_is_string(prop->key) ||
+            (enumerable_only && !(prop->attrs & MAL_PROPERTY_ENUMERABLE))) {
+            continue;
+        }
+        if (collect == MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
+            items[count++] = prop->key;
+            continue;
+        }
+        if (prop->attrs & MAL_PROPERTY_ACCESSOR) return false;
+        MalValue value = mal_object_field_load(object, prop->slot);
+        items[count++] = collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES
+            ? mal_value_from_array_object(mal_intrinsic_new_dense_pair(vm, prop->key, value))
+            : value;
+    }
+    MalObject *array_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]);
+    *out = mal_value_from_array_object(
+        mal_array_object_new_from_values(&vm->heap, array_prototype, items, count));
+    return true;
+}
+
 static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalPropertyIterKind iter_kind, MalBuiltinObjectCollect collect) {
+    MalValue small;
+    if (mal_value_is_heap_type(target, MAL_HEAP_OBJECT) &&
+        mal_builtin_object_collect_small_shaped(vm, target, iter_kind, collect, &small)) {
+        return small;
+    }
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
     MalValue result_box = mal_value_from_array_object(result);
     if (mal_value_is_heap_type(target, MAL_HEAP_OBJECT) &&
