@@ -548,6 +548,10 @@ static MalValue mal_builtin_number_format_result(
     if (length <= 0 || (usize) length > capacity) {
         abort();
     }
+    if ((usize) length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
+        return mal_value_from_string(
+            mal_string_new_inline_latin1(&vm->heap, buffer, (usize) length));
+    }
     return mal_value_from_string(mal_string_new_ascii(&vm->heap, buffer, (usize) length));
 }
 
@@ -631,8 +635,11 @@ MalValue mal_builtin_number_to_fixed_numeric(MalVm *vm, f64 number, i32 digits) 
         length = mal_builtin_number_format_safe_integer_fixed(
             number, digits, buffer, sizeof(buffer));
     } else {
-        length = mal_number_format_fixed(
-            number, digits, buffer, (i32) sizeof(buffer));
+        length = (i32) mal_number_format_fixed_plain(number, (u32) digits, buffer);
+        if (length == 0) {
+            length = mal_number_format_fixed(
+                number, digits, buffer, (i32) sizeof(buffer));
+        }
     }
     return mal_builtin_number_format_result(vm, buffer, length, sizeof(buffer));
 }

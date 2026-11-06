@@ -191,3 +191,56 @@ usize mal_number_format_shortest_plain(f64 value, byte out[32]) {
 #endif
     return 0;
 }
+
+#define MAL_NUMBER_FIXED_PLAIN_MAX_FRACTION_DIGITS 20u
+
+usize mal_number_format_fixed_plain(f64 value, u32 fraction_digits, byte out[48]) {
+    static const u64 powers_of_five[] = {
+        1ull, 5ull, 25ull, 125ull, 625ull, 3125ull, 15625ull, 78125ull, 390625ull,
+        1953125ull, 9765625ull, 48828125ull, 244140625ull, 1220703125ull,
+        6103515625ull, 30517578125ull, 152587890625ull, 762939453125ull,
+        3814697265625ull, 19073486328125ull, 95367431640625ull,
+    };
+    static_assert(countof(powers_of_five) == MAL_NUMBER_FIXED_PLAIN_MAX_FRACTION_DIGITS + 1);
+    f64 magnitude = fabs(value);
+    if (fraction_digits > MAL_NUMBER_FIXED_PLAIN_MAX_FRACTION_DIGITS ||
+        !(magnitude < 0x1p53)) {
+        return 0;
+    }
+    // toFixed picks the integer n nearest to value * 10^f, the larger on a tie.
+    // value * 10^f = significand * 5^f * 2^(exponent + f) is exact in 128 bits,
+    // so adding half of the dropped binary unit rounds the exact product.
+    u64 digits = 0;
+    // Below 2^-70 even 20 fraction digits scale the value under 0.5.
+    if (magnitude >= 0x1p-70) {
+        u64 bits;
+        memcpy(&bits, &magnitude, sizeof(bits));
+        u64 significand = (bits & (((u64) 1 << 52) - 1)) | ((u64) 1 << 52);
+        i32 binary_exponent = (i32) ((bits >> 52) & 0x7ff) - 1075;
+        unsigned __int128 scaled =
+            (unsigned __int128) significand * powers_of_five[fraction_digits];
+        i32 drop = -(binary_exponent + (i32) fraction_digits);
+        if (drop <= 0) {
+            scaled <<= -drop;
+        } else {
+            scaled = (scaled + ((unsigned __int128) 1 << (drop - 1))) >> drop;
+        }
+        if ((scaled >> 64) != 0) return 0;
+        digits = (u64) scaled;
+    }
+
+    byte reversed[MAL_NUMBER_FIXED_PLAIN_MAX_FRACTION_DIGITS + 1];
+    usize count = 0;
+    do {
+        reversed[count++] = (byte) ('0' + digits % 10);
+        digits /= 10;
+    } while (digits != 0);
+    while (count <= fraction_digits) reversed[count++] = '0';
+    usize length = 0;
+    if (value < 0) out[length++] = '-';
+    for (usize i = count; i > 0; i--) {
+        if (i == fraction_digits) out[length++] = '.';
+        out[length++] = reversed[i - 1];
+    }
+    return length;
+}

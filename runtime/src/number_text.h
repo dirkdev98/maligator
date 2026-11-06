@@ -21,3 +21,10 @@ f64 mal_number_parse_decimal(const byte *text, usize length);
  * and returns their length, or zero when the general formatter must decide.
  */
 usize mal_number_format_shortest_plain(f64 value, byte out[32]);
+
+/**
+ * Number::prototype.toFixed digits for magnitudes below 2^53 with at most 20
+ * fraction digits whose scaled value fits 64 bits. Writes at most 48 bytes and
+ * returns their length, or zero when the general formatter must decide.
+ */
+usize mal_number_format_fixed_plain(f64 value, u32 fraction_digits, byte out[48]);
