@@ -125,22 +125,13 @@ export type JsValue =
 				readonly signed: boolean;
 			};
 			readonly nullable: boolean;
-			readonly kept: boolean;
-			readonly owner?: number;
+			readonly lifetime: CallbackLifetime;
+			readonly route: CallbackRoute;
 			/**
-			 * For a callback the next call replaces: the C parameter whose handle keys it,
-			 * and, without user data, the callback parameter that passes that handle back.
+			 * Calls from other threads go to the VM thread: `queue` copies the arguments and
+			 * lets C continue, `wait` lends them and blocks C until JavaScript returns.
 			 */
-			readonly replaced?: { readonly key?: number; readonly keyParam?: number };
-			readonly closes?: {
-				readonly param: number;
-				readonly key: number;
-				readonly keyParam?: number;
-			};
-			/** The C function that returns the user data from callback parameter `param`. */
-			readonly lookup?: { readonly function: string; readonly param: number };
-			/** Calls from other threads queue for the VM thread with copied arguments. */
-			readonly queued?: true | "wait";
+			readonly thread?: "queue" | "wait";
 	  }
 	/**
 	 * A resource handle. C receives the handle's pointer, a copy of its struct, or
@@ -180,6 +171,55 @@ export type GapCode =
 
 type Gapped = { readonly gap: string; readonly code: GapCode };
 type Mapping = { readonly value: JsValue } | Gapped;
+
+/**
+ * How long the library may call a callback. Kept registrations may name the input
+ * handle `owner` whose destruction root holds the registration's JavaScript values.
+ */
+export type CallbackLifetime =
+	/** Only while the binding runs. */
+	| { readonly kind: "call" }
+	/** Until the library calls the destructor it received with the user data. */
+	| { readonly kind: "released"; readonly owner?: number }
+	/**
+	 * Until the next call of the setter replaces it; per handle when `key` names the C
+	 * parameter whose handle keys the registration.
+	 */
+	| { readonly kind: "replaced"; readonly key?: number; readonly owner?: number }
+	/**
+	 * One completion that ends the handle input `param`, passed as C argument `key`;
+	 * `handle` is the callback parameter that passes that handle back.
+	 */
+	| {
+			readonly kind: "completion";
+			readonly param: number;
+			readonly key: number;
+			readonly handle?: number;
+			readonly owner?: number;
+	  };
+
+/** How a trampoline finds the registration a C call belongs to. */
+export type CallbackRoute =
+	/** The user data C passes back as callback parameter `param`. */
+	| { readonly kind: "data"; readonly param: number }
+	/** The user data `function` returns from callback parameter `param`. */
+	| { readonly kind: "lookup"; readonly function: string; readonly param: number }
+	/**
+	 * The registration a replacement setter or close completion keyed by the handle in
+	 * callback parameter `param`, or the setter's only registration without one.
+	 */
+	| { readonly kind: "key"; readonly param?: number }
+	/** The callback the running call published in a per-thread slot. */
+	| { readonly kind: "scope" };
+
+type CallbackValue = Extract<JsValue, { kind: "callback" }>;
+
+/** Whether the library may call `value` after the binding returns. */
+export function keptCallback(value: CallbackValue): value is CallbackValue & {
+	readonly lifetime: Exclude<CallbackLifetime, { readonly kind: "call" }>;
+} {
+	return value.lifetime.kind !== "call";
+}
 
 export type NumericView =
 	| "Int8Array"
@@ -2388,10 +2428,18 @@ class Planner {
 		at: string,
 	): Mapping {
 		const facts = callback.params ?? {};
-		const kept =
-			callback.release !== undefined ||
-			callback.replaced === true ||
-			callback.closes !== undefined;
+		const lifetimes = [
+			...(callback.release === undefined ? [] : ["release"]),
+			...(callback.replaced === true ? ["replaced"] : []),
+			...(callback.closes === undefined ? [] : ["closes"]),
+		];
+		if (lifetimes.length > 1)
+			throw new FfiFactError(
+				"conflict",
+				`${at}.callback`,
+				`${lifetimes.join(" and ")} are alternative lifetimes`,
+			);
+		const kept = lifetimes.length > 0;
 		const queued =
 			callback.queued === true ||
 			callback.queued === "wait" ||
@@ -2668,11 +2716,21 @@ class Planner {
 					: { returnLifetime: resultFacts.lifetime }),
 				...(resultCount === undefined ? {} : { resultCount }),
 				nullable,
-				kept,
-				...(lookup === undefined ? {} : { lookup }),
-				...(queued
-					? { queued: callback.queued === "wait" ? ("wait" as const) : (true as const) }
-					: {}),
+				// The function resolves a setter's key, a completion, and an owner root.
+				lifetime:
+					callback.release !== undefined
+						? { kind: "released" }
+						: callback.replaced === true
+							? { kind: "replaced" }
+							: { kind: "call" },
+				route: routed
+					? { kind: "data", param: params.indexOf("data") }
+					: lookup !== undefined
+						? { kind: "lookup", ...lookup }
+						: callback.replaced === true || callback.closes !== undefined
+							? { kind: "key" }
+							: { kind: "scope" },
+				...(queued ? { thread: callback.queued === "wait" ? "wait" : "queue" } : {}),
 			},
 		};
 	}
@@ -2758,12 +2816,7 @@ class Planner {
 				key !== undefined &&
 				this.#handles.get(value.name)?.family === this.#handles.get(key.name)?.family,
 		);
-		if (
-			key !== undefined &&
-			keyParam < 0 &&
-			!param.value.params.includes("data") &&
-			param.value.lookup === undefined
-		) {
+		if (key !== undefined && keyParam < 0 && param.value.route.kind === "key") {
 			throw new FfiFactError(
 				"unmet-requirement",
 				at,
@@ -2774,8 +2827,10 @@ class Planner {
 			...param,
 			value: {
 				...param.value,
-				replaced:
-					key === undefined ? {} : { key: 0, ...(keyParam < 0 ? {} : { keyParam }) },
+				lifetime: { kind: "replaced", ...(key === undefined ? {} : { key: 0 }) },
+				...(param.value.route.kind === "key" && key !== undefined
+					? { route: { kind: "key", param: keyParam } }
+					: {}),
 			},
 		};
 		return index;
@@ -2866,11 +2921,7 @@ class Planner {
 				at,
 				"the completion's closing handle is nonnullable",
 			);
-		if (
-			keyParam === undefined &&
-			!param.value.params.includes("data") &&
-			param.value.lookup === undefined
-		)
+		if (keyParam === undefined && param.value.route.kind === "key")
 			throw new FfiFactError(
 				"unmet-requirement",
 				at,
@@ -2885,11 +2936,15 @@ class Planner {
 						? { ...value, nullable: false }
 						: value,
 				),
-				closes: {
+				lifetime: {
+					kind: "completion",
 					param: input.param,
 					key,
-					...(keyParam === undefined ? {} : { keyParam }),
+					...(keyParam === undefined ? {} : { handle: keyParam }),
 				},
+				...(param.value.route.kind === "key"
+					? { route: { kind: "key", param: keyParam } }
+					: {}),
 			},
 		};
 	}
@@ -3681,6 +3736,9 @@ class Planner {
 				? this.#replaced(declaration, factsAt, args, params, where)
 				: undefined;
 		if (gaps.length === 0)
+			this.#closingCallback(declaration, factsAt, args, params, where);
+		// Owners root kept registrations, so they follow the lifetimes resolved above.
+		if (gaps.length === 0)
 			declaration.params.forEach((parameter, index) => {
 				const owner = factsAt(index).callback?.owner;
 				if (owner === undefined) return;
@@ -3700,19 +3758,20 @@ class Planner {
 						"an input handle with stable C storage",
 					);
 				const callback = params[entry.param]!;
-				if (callback.value.kind !== "callback")
+				if (callback.value.kind !== "callback" || callback.value.lifetime.kind === "call")
 					throw new FfiFactError(
 						"inapplicable",
 						where(at),
-						"a retained callback parameter",
+						"owner applies to retained callbacks",
 					);
 				params[entry.param] = {
 					...callback,
-					value: { ...callback.value, owner: selected.param },
+					value: {
+						...callback.value,
+						lifetime: { ...callback.value.lifetime, owner: selected.param },
+					},
 				};
 			});
-		if (gaps.length === 0)
-			this.#closingCallback(declaration, factsAt, args, params, where);
 		if (facts.returns.constant !== undefined) {
 			throw new FfiFactError(
 				"inapplicable",

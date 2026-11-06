@@ -312,7 +312,7 @@ function snapshot(prepared: PreparedLibrary): Snapshot {
 	const mapping = (value: JsValue): void => {
 		if ("free" in value && value.free !== undefined) helper(value.free);
 		if (value.kind === "callback") {
-			if (value.lookup !== undefined) helper(value.lookup.function);
+			if (value.route.kind === "lookup") helper(value.route.function);
 			for (const param of value.params) if (typeof param !== "string") mapping(param);
 			mapping(value.returns);
 		} else if (value.kind === "callable") {
