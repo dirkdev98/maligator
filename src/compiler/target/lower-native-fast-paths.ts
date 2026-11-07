@@ -1,4 +1,8 @@
-import type { FfiScalarEntry, FfiViewArray } from "../../build-config-values.ts";
+import type {
+	FfiScalarEntry,
+	FfiScalarValue,
+	FfiViewArray,
+} from "../../build-config-values.ts";
 import { ARRAY_INITIALIZATION_LIMITS } from "../shared/array-initialization.ts";
 import { DATA_VIEW_ACCESSOR_TYPES } from "../shared/builtin-registry.ts";
 import {
@@ -9,7 +13,12 @@ import {
 	COMPILER_VALUE_KIND_TOP,
 	compilerBuiltinInputKindsAreValid,
 } from "../shared/compiler-value-kinds.ts";
-import { instructionInputKind } from "../shared/instruction-facts.ts";
+import {
+	instructionInputIntegerRange,
+	instructionInputIsInt32,
+	instructionInputKind,
+} from "../shared/instruction-facts.ts";
+import type { InstructionFacts } from "../shared/instruction-facts.ts";
 import { bytecodeLoopInstructions } from "./bytecode-loops.ts";
 import { selectNativeStringTransform } from "./lower-native-string-transforms.ts";
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
@@ -2522,10 +2531,46 @@ function numericLoopDataViewCalls(
  * at entry, so its iterations call C with the storage directly; nothing inside can
  * restart an iteration, which would repeat the call.
  */
+/**
+ * Whether a C integer parameter receives `operand` exactly: a constant in its range, or
+ * a register its facts prove holds only integers that fit, so no conversion can fail.
+ */
+export function ffiIntegerArgumentFits(
+	operand: number,
+	type: Extract<FfiScalarValue, { kind: "integer" }>,
+	facts: InstructionFacts | undefined,
+	representation: VmRegisterRepresentation | undefined,
+): boolean {
+	const minimum = type.signed ? -(2 ** (type.bits - 1)) : 0;
+	const maximum = type.signed ? 2 ** (type.bits - 1) - 1 : 2 ** type.bits - 1;
+	const decoded = decodeVmValueOperand(operand);
+	if (decoded.kind === "number")
+		return (
+			Number.isInteger(decoded.value) &&
+			decoded.value >= minimum &&
+			decoded.value <= maximum
+		);
+	if (decoded.kind !== "register") return false;
+	if (
+		type.signed &&
+		type.bits === 32 &&
+		(representation === "int32" || instructionInputIsInt32(facts, decoded.register))
+	)
+		return true;
+	const range = instructionInputIntegerRange(facts, decoded.register);
+	return (
+		range?.exactSafeIntegers === true &&
+		range.minimum >= minimum &&
+		range.maximum <= maximum
+	);
+}
+
 export function numericLoopForeignCalls(
 	fn: BytecodeFunction,
 	body: NativeBodyFacts,
 	callPlan: (ip: number) => NativeInstructionPlan | undefined,
+	facts: (ip: number) => InstructionFacts | undefined,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
 ): ReadonlyMap<number, FfiScalarEntry> {
 	const calls = new Map<number, FfiScalarEntry>();
 	for (const [ip, call] of fn.instructions.entries()) {
@@ -2537,14 +2582,22 @@ export function numericLoopForeignCalls(
 			!scalar.parameters.some((parameter) => parameter.kind === "view") ||
 			call.arguments.length < scalar.parameters.length ||
 			!scalar.parameters.every((parameter, index) => {
-				const operand = decodeVmValueOperand(call.arguments[index]!);
+				const argument = call.arguments[index]!;
+				const operand = decodeVmValueOperand(argument);
+				// A conversion that could fail would restart an iteration after C ran.
+				if (parameter.kind === "integer")
+					return ffiIntegerArgumentFits(
+						argument,
+						parameter,
+						facts(ip),
+						operand.kind === "register" ? representations[operand.register] : undefined,
+					);
 				return (
 					operand.kind === "register" ||
 					(parameter.kind === "number" && operand.kind === "number") ||
 					(parameter.kind === "boolean" && operand.kind === "boolean")
 				);
 			}) ||
-			scalar.parameters.some((parameter) => parameter.kind === "integer") ||
 			// An undefined result is no region value, so nothing may read it.
 			(scalar.result.kind === "undefined" &&
 				registersLiveAt(fn, body, ip + 1, new Set([call.dst])).length > 0)
@@ -4474,6 +4527,8 @@ export function analyzeNativeFastPaths(
 			fn,
 			body,
 			(ip) => native.instructions[ip],
+			(ip) => native.facts?.[ip],
+			native.registerRepresentations,
 		);
 		for (const header of [...body.jumpTargets].sort((a, b) => a - b)) {
 			if (numericLoopBlocked.has(header)) continue;

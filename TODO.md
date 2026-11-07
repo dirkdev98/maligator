@@ -1978,8 +1978,9 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       a matching view's storage to the typed scalar entry, and a fixed-numeric loop
       region admits the views once at its entry; an 8-element `Float64Array` view
       takes 0.94x Bun's time and matches C, including in module-level loops that store
-      module bindings. Regions still refuse calls with integer arguments, whose range
-      checks would restart an iteration after C ran. Scalar fields of struct
+      module bindings. Regions call C with integer arguments whose range the facts prove;
+      they still refuse an unproven one, whose range check would restart an iteration
+      after C ran. Scalar fields of struct
       handles read without a getter call, about 7.9 ns per warm read against 11;
       the getter-row probe and the reader's dependent loads remain, which an
       inline-cache row for C fields checked by the static probe would remove. Binding 48

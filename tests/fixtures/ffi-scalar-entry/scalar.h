@@ -18,4 +18,5 @@ double scalar_dot(const double *left, const double *right, int32_t count);
 void scalar_scale(double *values, int32_t count, double factor);
 uint32_t scalar_sum_u8(const uint8_t *bytes, uint32_t count);
 bool scalar_empty(const double *values, int32_t count);
+double scalar_at(const double *values, int32_t count, int32_t index);
 #endif
