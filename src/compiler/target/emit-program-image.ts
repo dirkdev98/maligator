@@ -438,6 +438,12 @@ function malFunctionRow(
 	return [`    MAL_FUNCTION_ROW(${values.join(", ")}),`];
 }
 
+// Trust in root maps never survives serialization, so a function that never runs
+// claims none: a restored image must emit what the compiling process emitted.
+function emissionUnreachable(image: ProgramImage, functionIndex: number): boolean {
+	return image.native.functions[functionIndex]?.unreachable === true;
+}
+
 function safepointRootData(fn: BytecodeFunction): Array<number> {
 	return (fn.gcSafepoints ?? []).flatMap((safepoint) => [
 		safepoint.instructionIp,
@@ -1624,7 +1630,10 @@ function emitProgramImageParts(
 	// (generators/async) keep their overlay.
 	const omitBytecode = compiled.map((c) => c !== null);
 	const trustedSafepoints = runtime.functions.map(
-		(fn, index) => !omitBytecode[index] && vmSafepointRootMapsAreTrusted(fn),
+		(fn, index) =>
+			!omitBytecode[index] &&
+			!emissionUnreachable(image, index) &&
+			vmSafepointRootMapsAreTrusted(fn),
 	);
 	const instructionDataByFunction = runtime.functions.map((fn, i) =>
 		omitBytecode[i]
@@ -3044,7 +3053,10 @@ function emitBatchUnits(
 		// need no bytecode tables.
 		const omitBytecode = compiled.map((c) => c !== null);
 		const trustedSafepoints = runtime.functions.map(
-			(fn, index) => !omitBytecode[index] && vmSafepointRootMapsAreTrusted(fn),
+			(fn, index) =>
+				!omitBytecode[index] &&
+				!emissionUnreachable(image, index) &&
+				vmSafepointRootMapsAreTrusted(fn),
 		);
 
 		const instructionSymbols: Array<string> = [];
