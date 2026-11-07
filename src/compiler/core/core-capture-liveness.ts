@@ -16,6 +16,7 @@ import type {
 } from "./core-ir.ts";
 import {
 	coreEvaluatorGlobalWrites,
+	coreEvaluatorPrivateSlotMap,
 	coreUnreadModuleBindingSlots,
 	coreUnreadModuleBindingStores,
 } from "./core-module-globals.ts";
@@ -119,9 +120,11 @@ function forwardEvaluatorGlobalLoads(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 	fn: CoreFunctionStore,
+	privateSlots: ReadonlyMap<CoreFunctionId, ReadonlySet<number>>,
 	edit: () => CoreEditor,
 ): void {
-	const cells = coreEvaluatorGlobalWrites(program, context, fn);
+	if (!privateSlots.has(fn.id)) return;
+	const cells = coreEvaluatorGlobalWrites(program, context, fn, privateSlots);
 	if (cells.size === 0) return;
 	const accesses = new Map<number, CellAccesses>();
 	for (const instruction of fn.instructionIds()) {
@@ -415,13 +418,14 @@ function forwardAllOwnCapturedLoads(
 	context: CoreCompilationContext,
 	functions: ReadonlyArray<CoreFunctionId>,
 	foreignWrites: ReadonlySet<string>,
+	privateSlots: ReadonlyMap<CoreFunctionId, ReadonlySet<number>>,
 	edit: (id: CoreFunctionId) => CoreEditor,
 ): void {
 	for (const id of functions) {
 		const fn = program.function(id);
 		if (fn.isAsync || fn.isGenerator) continue;
 		forwardOwnCapturedLoads(program, fn, foreignWrites, () => edit(id));
-		forwardEvaluatorGlobalLoads(program, context, fn, () => edit(id));
+		forwardEvaluatorGlobalLoads(program, context, fn, privateSlots, () => edit(id));
 	}
 }
 
@@ -438,14 +442,22 @@ export function forwardCoreOwnCapturedLoads(
 	const uses = scanCapturedSlots(program, functions);
 	if (uses === undefined) return 0;
 	const editors = new Map<CoreFunctionId, CoreEditor>();
-	forwardAllOwnCapturedLoads(program, context, functions, uses.foreignWrites, (id) => {
-		let editor = editors.get(id);
-		if (editor === undefined) {
-			editor = CoreEditor.open(program, id);
-			editors.set(id, editor);
-		}
-		return editor;
-	});
+	const privateSlots = coreEvaluatorPrivateSlotMap(program, context);
+	forwardAllOwnCapturedLoads(
+		program,
+		context,
+		functions,
+		uses.foreignWrites,
+		privateSlots,
+		(id) => {
+			let editor = editors.get(id);
+			if (editor === undefined) {
+				editor = CoreEditor.open(program, id);
+				editors.set(id, editor);
+			}
+			return editor;
+		},
+	);
 	for (const editor of editors.values()) editor.commit();
 	return editors.size;
 }
@@ -468,6 +480,8 @@ export function pruneCoreCaptureLiveness(
 	// Guards and inline source frames reference code without instantiating its identity.
 	const roots = new Set(context.data.cjsModuleFunctionIndices.map(coreFunctionId));
 	const functions = [...program.functionIds()];
+	// Decided before any editor opens; rounds only drop stores, which adds no writer.
+	const privateSlots = coreEvaluatorPrivateSlotMap(program, context);
 	const entry = functions[0];
 	if (entry !== undefined) roots.add(entry);
 	for (const installer of context.data.hostInstallCandidates) {
@@ -506,7 +520,14 @@ export function pruneCoreCaptureLiveness(
 		const live = functions.filter((id) => instantiable.has(id));
 		const uses = scanCapturedSlots(program, live);
 		if (uses === undefined) break;
-		forwardAllOwnCapturedLoads(program, context, live, uses.foreignWrites, edit);
+		forwardAllOwnCapturedLoads(
+			program,
+			context,
+			live,
+			uses.foreignWrites,
+			privateSlots,
+			edit,
+		);
 		const readers = new Set(uses.implicitReads);
 		for (const id of live) {
 			const fn = program.function(id);
