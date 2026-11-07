@@ -1208,12 +1208,15 @@ contracts or investigates costs still visible after the string follow-ups.
       subject, which test every literal in turn.
 - [ ] Inline methods that construct their own class, and read class getters
       without a call. `v = v.add(new Vec(1, 2)); acc += v.len2 & 7` over a class
-      with two declared fields takes 37 ns per iteration against Node's 3.3. Once
-      the guarded constructor inline grows `add` past the inline template's limits,
-      the template is undefined ("unsupported-graph"), so the temporary `Vec` stays
-      an allocation. The read-accessor transform offers no candidate for `v.len2`
-      because `v` is a loop phi of two constructions, so each read calls the getter
-      from the static miss path.
+      with two declared fields takes 37 ns per iteration against Node's 3.3. `new Vec`
+      inside `add` reads the class body's own immutable name binding through
+      `loadCaptured`, and the inliner refuses environment reads without a capture
+      context, so no method that names its own class inlines. Reading the
+      declaration's binding instead, for a class without static initializers whose
+      binding nothing writes, lets `add` inline but leaves the loop as fast: the
+      temporary `Vec` still allocates. The read-accessor transform offers no candidate for
+      `v.len2` because `v` is a loop phi of two constructions, so each read calls
+      the getter from the static miss path.
 - [ ] Construct derived classes without the generic super path. `new Pair(l, r)`
       with `super(l)` into a one-field base takes 116 ns against Node's 5.6
       (`constructor-derived-super-retained`). The construct inliner refuses
