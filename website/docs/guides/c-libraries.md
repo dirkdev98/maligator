@@ -428,6 +428,23 @@ input root. Native leases also preserve the resources through VM teardown until 
 releases the registration. Use a whole-result handle when its destructor releases
 the record's resources together.
 
+When a handle's struct points at a counted run of values, such as Dear ImGui's
+`ImGuiTableSortSpecs` with `Specs` and `SpecsCount`, declare an `array` field:
+
+```ts
+types: {
+	SortSpecs: { handle: {}, fields: { specs: { array: { length: "count" } } } },
+},
+functions: { sort_specs: { returns: { borrowed: true } } },
+```
+
+`specs.specs` returns a fresh array of as many `SortSpec` records as the `count` field
+holds when it is read, or `null` for a null pointer. Each read copies again, so later C
+changes appear in the next read and not in earlier arrays. Elements are values: records,
+numbers, or strings, never handles. A negative or oversized count throws a `RangeError`.
+Array fields work on any handle, including library-owned pointer handles whose other
+fields stay hidden.
+
 For independently owned pointers in a value record, declare field ownership:
 
 ```typescript

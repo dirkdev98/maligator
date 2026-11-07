@@ -118,7 +118,7 @@ export interface MaligatorFfiTypeFacts {
 	evidence?: Array<MaligatorFfiEvidence>;
 }
 
-/** A resource or callable field, or a range retained by caller-owned state. */
+/** A resource, callable or counted array field, or a range retained by caller-owned state. */
 export type MaligatorFfiFieldFacts =
 	| {
 			bytes: {
@@ -130,6 +130,7 @@ export type MaligatorFfiFieldFacts =
 			string?: never;
 			callable?: never;
 			handle?: never;
+			array?: never;
 	  }
 	| {
 			/** UTF-8 text kept in a private encoding, with a C field holding its byte count. */
@@ -137,12 +138,14 @@ export type MaligatorFfiFieldFacts =
 			bytes?: never;
 			callable?: never;
 			handle?: never;
+			array?: never;
 	  }
 	| {
 			callable: MaligatorFfiCallable;
 			bytes?: never;
 			string?: never;
 			handle?: never;
+			array?: never;
 	  }
 	| {
 			/** Owned fields transfer from value results; record inputs borrow their handles.
@@ -154,6 +157,18 @@ export type MaligatorFfiFieldFacts =
 			bytes?: never;
 			string?: never;
 			callable?: never;
+			array?: never;
+	  }
+	| {
+			/**
+			 * A pointer to values on any handle, read as a fresh array of as many elements as
+			 * the C integer field `length` holds; `null` for a null pointer.
+			 */
+			array: MaligatorFfiCount;
+			bytes?: never;
+			string?: never;
+			callable?: never;
+			handle?: never;
 	  };
 
 /** A declaration whose documentation supports a fact, independent of its source location. */

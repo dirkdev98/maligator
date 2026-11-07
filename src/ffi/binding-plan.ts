@@ -509,6 +509,8 @@ export interface MappedField {
 	readonly type: CType;
 	readonly value: JsResult;
 	readonly bitWidth?: number;
+	/** For an array field: the C integer field holding its element count. */
+	readonly count?: string;
 	readonly doc?: FfiText;
 }
 
@@ -840,7 +842,10 @@ function handleTypes(
 			typeFacts.fields !== undefined &&
 			handle?.storage !== "caller" &&
 			Object.values(typeFacts.fields).some(
-				(field) => field.callable === undefined && field.handle === undefined,
+				(field) =>
+					field.callable === undefined &&
+					field.handle === undefined &&
+					field.array === undefined,
 			)
 		)
 			throw new FfiFactError(
@@ -849,6 +854,15 @@ function handleTypes(
 				"managed fields require caller storage",
 			);
 		if (typeFacts.fields !== undefined) {
+			if (
+				handle === undefined &&
+				Object.values(typeFacts.fields).some((field) => field.array !== undefined)
+			)
+				throw new FfiFactError(
+					"unmet-requirement",
+					`types.${key}.fields`,
+					"array fields require a handle",
+				);
 			const owned = Object.values(typeFacts.fields).every(
 				(field) => field.handle?.owned === true,
 			);
@@ -2419,6 +2433,10 @@ class Planner {
 			if (field.name === undefined || managed.some((entry) => entry.name === field.name))
 				continue;
 			const fact = facts[field.name];
+			if (fact?.array !== undefined) {
+				fields.push(this.#arrayField(record, field, fact.array.length, members));
+				continue;
+			}
 			if (!exposeValues && fact?.callable === undefined && fact?.handle === undefined)
 				continue;
 			let mapped: Mapping<JsResult> =
@@ -2497,6 +2515,54 @@ class Planner {
 		return fields;
 	}
 
+	/** A pointer field read as a copied array of the values its count field says it holds. */
+	#arrayField(
+		record: CRecord,
+		field: CField,
+		length: string,
+		members: ReadonlyArray<CField>,
+	): MappedField {
+		const at = `types.${record.name}.fields.${field.name}.array`;
+		const count = members.find((member) => member.name === length);
+		const countType =
+			count === undefined ? undefined : resolveCType(this.#model, count.type);
+		const integer =
+			countType?.kind === "integer" ? this.#integer(countType.name) : undefined;
+		if (
+			count === undefined ||
+			count.bitWidth !== undefined ||
+			integer === undefined ||
+			!("value" in integer) ||
+			(integer.value.kind !== "integer" && integer.value.kind !== "bigint")
+		)
+			throw new FfiFactError(
+				"inapplicable",
+				`${at}.length`,
+				`'${length}' must be an integer field of at most 64 bits`,
+			);
+		if (resolveCType(this.#model, field.type).kind !== "pointer")
+			throw new FfiFactError(
+				"inapplicable",
+				at,
+				`'${field.name}' is not a pointer field`,
+			);
+		const mapped = resultMapping(this.value(field.type, "return", { array: { length } }));
+		if ("gap" in mapped) throw new FfiFactError("unmet-requirement", at, mapped.gap);
+		if (mapped.value.kind !== "sequence" || this.#containsHandle(mapped.value))
+			throw new FfiFactError(
+				"unmet-requirement",
+				at,
+				"array fields hold values without handles",
+			);
+		return {
+			name: field.name!,
+			type: field.type,
+			value: mapped.value,
+			count: length,
+			...(field.doc === undefined ? {} : { doc: field.doc }),
+		};
+	}
+
 	managedFields(
 		record: CRecord,
 		facts: Record<string, MaligatorFfiFieldFacts> = {},
@@ -2505,7 +2571,12 @@ class Planner {
 		const counts = new Set<string>();
 		const fields = [...promotedCFields(this.#model, record)];
 		for (const [name, fact] of Object.entries(facts)) {
-			if (fact.callable !== undefined || fact.handle !== undefined) continue;
+			if (
+				fact.callable !== undefined ||
+				fact.handle !== undefined ||
+				fact.array !== undefined
+			)
+				continue;
 			const at = `types.${record.name}.fields.${name}`;
 			const kind = fact.string === undefined ? "bytes" : "string";
 			const counted = fact.string ?? fact.bytes;

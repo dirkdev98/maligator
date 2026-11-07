@@ -1125,10 +1125,11 @@ class BindingWriter {
 		expression: string,
 		count: string,
 		target: string,
+		reader = "callback",
 	): Array<string> {
 		const site = this.#fresh("site");
 		const fill = [
-			`static const MalFfiSite ${site} = { "callback", "length", nullptr };`,
+			`static const MalFfiSite ${site} = { ${cString(reader)}, "length", nullptr };`,
 			`if ((${expression}) == nullptr) ${target} = mal_ffi_null();`,
 			`else if (!mal_ffi_check_count(vm, (size_t) (${count}), 32, true, &${site})) goto mal_done;`,
 		];
@@ -1960,7 +1961,25 @@ class BindingWriter {
 							]
 						: []),
 					`\t${handle.spelling} *mal_value = mal_handle;`,
-					`\treturn ${this.write(field.value, `mal_value->${field.name}`, false, "mal_this")};`,
+					...(field.count === undefined
+						? [
+								`\treturn ${this.write(field.value, `mal_value->${field.name}`, false, "mal_this")};`,
+							]
+						: [
+								"\tMalValue mal_result = mal_ffi_undefined();",
+								"\tMalFfiRoots mal_roots;",
+								"\tmal_ffi_root(&mal_roots, &mal_result, 1);",
+								...this.#produceCounted(
+									field.value,
+									`mal_value->${field.name}`,
+									`mal_value->${field.count}`,
+									"mal_result",
+									`${name}.${field.name}`,
+								).map((line) => `\t${line}`),
+								"mal_done:",
+								"\tmal_ffi_unroot(&mal_roots);",
+								"\treturn mal_ffi_threw(vm) ? mal_ffi_undefined() : mal_result;",
+							]),
 					"}",
 				);
 			}
