@@ -2810,6 +2810,24 @@ mal_vm_property_try_load_static_missing(
     return mal_vm_property_try_load_static_rows(vm, receiver, object, ic);
 }
 
+static _Atomic(MalNativeGetterRead) mal_vm_native_getter_read = nullptr;
+
+void mal_vm_register_native_getter_read(MalNativeGetterRead read) {
+    atomic_store_explicit(&mal_vm_native_getter_read, read, memory_order_relaxed);
+}
+
+/** A native reader's answer for an inherited getter row that still holds for `receiver`. */
+static inline bool mal_vm_native_getter_row_try_read(
+    MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
+) {
+    MalNativeGetterRead read =
+        atomic_load_explicit(&mal_vm_native_getter_read, memory_order_relaxed);
+    return read != nullptr && ic->mode == MAL_IC_MODE_INHERITED_GETTER &&
+        mal_vm_inherited_accessor_row_holds(receiver, ic->key, ic) &&
+        vm->completion.kind != MAL_COMPLETION_THROW &&
+        mal_value_is_native_function_object(ic->value) && read(vm, ic->value, receiver, out);
+}
+
 // Keep all non-monomorphic static cache hits noncollecting: callers may hold private roots.
 // The hottest outcomes return before the row search saves the registers it uses.
 __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
@@ -6872,12 +6890,6 @@ bool mal_vm_probe_accessor_read_miss(
     return true;
 }
 
-static _Atomic(MalNativeGetterRead) mal_vm_native_getter_read = nullptr;
-
-void mal_vm_register_native_getter_read(MalNativeGetterRead read) {
-    atomic_store_explicit(&mal_vm_native_getter_read, read, memory_order_relaxed);
-}
-
 static inline bool mal_ic_is_getter_row(const MalInlineCache *ic) {
     return ic->mode == MAL_IC_MODE_INHERITED_GETTER || ic->mode == MAL_IC_MODE_OWN_GETTER;
 }
@@ -7373,6 +7385,8 @@ __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss(
     // its key on the receiver's chain, so the key is not missing, and nothing here
     // reads the receiver once the getter's own frame has rooted it.
     MalValue result;
+    // A native reader, such as a C struct field's, answers before the getter call's frame.
+    if (mal_vm_native_getter_row_try_read(vm, object_value, ic, &result)) return result;
     if (mal_ic_is_getter_row(ic) &&
         mal_vm_getter_row_try_load(
             vm, object_value, mal_value_from_string(vm->string_constant_atoms[atom]), ic,

@@ -1953,9 +1953,10 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       module bindings. Regions call C with integer arguments whose range the facts prove;
       they still refuse an unproven one, whose range check would restart an iteration
       after C ran. Scalar fields of struct
-      handles read without a getter call, about 7.9 ns per warm read against 11;
-      the getter-row probe and the reader's dependent loads remain, which an
-      inline-cache row for C fields checked by the static probe would remove. Binding 48
+      handles read without a getter call, about 7.5 ns per warm read against 11: the
+      static probe's remainder, the miss path and the reader's 20 dependent loads. An
+      inline-cache row the static probe checks without a call would remove most of
+      that, but needs the VM to know which handle state makes a field readable. Binding 48
       to 64 KiB of non-ASCII `sqlite-text` takes about 1.5x the ASCII time, which
       matches C, while both sample as SQLite's `strlen` and copy; the ASCII string lends
       its own storage and the others lend the UTF-8 sidecar. Sidecar alignment, page
