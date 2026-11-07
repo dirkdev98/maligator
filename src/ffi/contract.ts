@@ -520,7 +520,37 @@ function validateValueFacts(value: unknown, at: string): void {
 			"queued",
 			"closes",
 			"returns",
+			"once",
+			"field",
+			"constants",
 		]);
+		booleanField(callback, "once", `${at}.callback`);
+		if (callback.once === true)
+			expect(
+				callback.release === undefined &&
+					callback.replaced !== true &&
+					callback.closes === undefined,
+				`${at}.callback.once`,
+				"a one-shot callback without release, replaced, or closes",
+			);
+		if (callback.field !== undefined)
+			expect(
+				typeof callback.field === "string" && C_NAME.test(callback.field),
+				`${at}.callback.field`,
+				"a C member name",
+			);
+		if (callback.constants !== undefined) {
+			expectObject(callback.constants, `${at}.callback.constants`);
+			expect(callback.field !== undefined, `${at}.callback.constants`, "beside field");
+			for (const [member, expression] of Object.entries(callback.constants))
+				expect(
+					C_NAME.test(member) &&
+						typeof expression === "string" &&
+						C_INTEGER_CONSTANT.test(expression),
+					`${at}.callback.constants.${member}`,
+					"a C identifier or integer literal for a C member",
+				);
+		}
 		if (callback.returns !== undefined) {
 			const result = callback.returns;
 			expectObject(result, `${at}.callback.returns`);
@@ -601,9 +631,10 @@ function validateValueFacts(value: unknown, at: string): void {
 			(callback.queued !== true && callback.queued !== "wait") ||
 				callback.release !== undefined ||
 				callback.replaced === true ||
-				callback.closes !== undefined,
+				callback.closes !== undefined ||
+				callback.once === true,
 			`${at}.callback.queued`,
-			"on a callback the library keeps, with release, replaced, or closes",
+			"on a callback the library keeps, with release, replaced, closes, or once",
 		);
 		if (callback.params !== undefined) {
 			expectObject(callback.params, `${at}.callback.params`);

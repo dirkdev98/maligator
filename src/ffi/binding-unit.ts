@@ -250,6 +250,26 @@ function scalarFunction(binding: BoundFunction, entry: FfiScalarEntry): Array<st
 }
 
 /**
+ * Statements that build a struct argument carrying a callback: zeroed, then its
+ * function pointer, routing data and fixed members.
+ */
+function callbackRecord(
+	local: string,
+	record: NonNullable<Extract<JsValue, { kind: "callback" }>["record"]>,
+	functionPointer: string,
+	data: string,
+): Array<string> {
+	return [
+		`__builtin_memset(&${local}, 0, sizeof(${local}));`,
+		`${local}.${record.field} = ${functionPointer};`,
+		...(record.data === undefined ? [] : [`${local}.${record.data} = ${data};`]),
+		...record.constants.map(
+			({ member, expression }) => `${local}.${member} = ${expression};`,
+		),
+	];
+}
+
+/**
  * Statements that point each `end` argument at the terminator of the converted text it
  * closes, once every argument has converted. `argument` spells C argument `index`'s
  * converted value. Input text has no embedded NUL, so its terminator marks the end.
@@ -2656,6 +2676,8 @@ class BindingWriter {
 			...(ownerParam === undefined ? [] : ["\tmal_ffi_unpin_handle(mal_owner_pin);"]),
 			"\tmal_ffi_unroot(&mal_result_roots);",
 			"\tmal_ffi_unroot(&mal_roots);",
+			// A one-shot registration ends with its call; the hold keeps it valid until the drop.
+			...(lifetime.kind === "once" ? ["\tmal_ffi_release(mal_callback);"] : []),
 			...(held ? ["\tmal_ffi_callback_drop(mal_callback);"] : []),
 			returns
 				? immutableReturn
@@ -3739,8 +3761,16 @@ class BindingWriter {
 							).map((line) => `\t${line}`),
 							"}",
 						);
+						const functionPointer = `${context} == nullptr ? nullptr : ${lanes ? `(${transaction}.lane == 0 ? ${trampoline}_0 : ${trampoline}_1)` : trampoline}`;
 						kept.push(
-							`${local} = ${context} == nullptr ? nullptr : ${lanes ? `(${transaction}.lane == 0 ? ${trampoline}_0 : ${trampoline}_1)` : trampoline};`,
+							...(value.record === undefined
+								? [`${local} = ${functionPointer};`]
+								: callbackRecord(
+										local,
+										value.record,
+										functionPointer,
+										`(void *) ${context}`,
+									)),
 						);
 						if (lifetime.kind === "completion") {
 							keeps.push(
@@ -3794,7 +3824,16 @@ class BindingWriter {
 							...(slot === undefined
 								? []
 								: [`${slot} = &mal_callback_${String(index)};`]),
-							`${local} = ${value.nullable ? `(${source}) == mal_ffi_null() ? nullptr : ` : ""}${trampoline};`,
+							...(value.record === undefined
+								? [
+										`${local} = ${value.nullable ? `(${source}) == mal_ffi_null() ? nullptr : ` : ""}${trampoline};`,
+									]
+								: callbackRecord(
+										local,
+										value.record,
+										trampoline,
+										`&mal_callback_${String(index)}`,
+									)),
 						);
 						return;
 					}

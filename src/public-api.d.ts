@@ -341,6 +341,19 @@ export interface MaligatorFfiCallback {
 	 * `array` with a `length` naming another callback parameter, `nullable`, and `shape`.
 	 */
 	params?: Record<string, MaligatorFfiValueFacts>;
+	/**
+	 * The library calls the callback exactly once, during or after the function, and
+	 * then drops it, as WebGPU's request functions do. Needs `data` or `lookup`.
+	 */
+	once?: boolean;
+	/**
+	 * On a struct parameter passed by value, such as WebGPU's callback info records: the
+	 * function pointer member that receives the callback. `data` then names the `void *`
+	 * member for the registration, and the parameter takes a JavaScript function.
+	 */
+	field?: string;
+	/** C identifiers or integer literals for other members of a `field` record; the rest start zeroed. */
+	constants?: Record<string, string>;
 }
 
 /** A callback result's value shape, or the lifetime of a returned pointer. */

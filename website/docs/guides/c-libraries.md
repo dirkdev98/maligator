@@ -941,8 +941,41 @@ wrapper, already closed, and its retained buffers can then be transferred. Calle
 storage and backing bytes remain alive through the native completion even after VM
 teardown; detached completions release native ownership without running JavaScript.
 The library must invoke completion exactly once and keep the resource valid until
-then. `release`, `replaced`, and `closes` are alternative lifetimes; a callback
+then. `release`, `replaced`, `closes`, and `once` are alternative lifetimes; a callback
 states at most one.
+
+`once: true` describes a callback the library calls exactly once, during or after the
+function, as WebGPU's request functions do. It needs `data` or `lookup`. The registration
+stays alive until that call returns, then the library may forget the pointer; an
+exception rethrows from the library call that triggered it. With `queued`, a call from
+another thread queues for the program's thread and the event loop waits for it. A
+registration the library never calls stays alive until the program exits.
+
+Some libraries take the callback inside a struct passed by value, such as WebGPU's
+`WGPURequestAdapterCallbackInfo`. Name its function pointer member with `field` and its
+`void *` member with `data`; the parameter then takes a JavaScript function, and the
+binding builds the struct around the callback. Other members start zeroed unless
+`constants` fixes them:
+
+```typescript
+functions: {
+	request_device: {
+		params: {
+			info: {
+				callback: {
+					field: "callback",
+					data: "userdata",
+					once: true,
+					constants: { mode: "REQUEST_DEFERRED" },
+				},
+			},
+		},
+	},
+},
+```
+
+A callback record keeps its callback for the call or, with `once`, for its one call.
+One-shot and record callbacks register through synchronous calls only.
 
 `lookup` names the function that returns `data` for a callback without a `void *` parameter, and the 1-based position of the callback parameter it takes. SQLite's user functions read it with `sqlite3_user_data` from their `sqlite3_context *`:
 

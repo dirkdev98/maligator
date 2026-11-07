@@ -176,6 +176,19 @@ type CallbackValue = {
 	 * lets C continue, `wait` lends them and blocks C until JavaScript returns.
 	 */
 	readonly thread?: "queue" | "wait";
+	/**
+	 * For a struct passed by value that carries the callback: the function pointer
+	 * member, the `void *` member that routes to the registration, and C expressions
+	 * for other members. The binding builds the struct; unnamed members start zeroed.
+	 */
+	readonly record?: {
+		readonly field: string;
+		readonly data?: string;
+		readonly constants: ReadonlyArray<{
+			readonly member: string;
+			readonly expression: string;
+		}>;
+	};
 };
 
 /** Whether `value` carries no result obligation or callable, so C can borrow it. */
@@ -329,6 +342,8 @@ export type CallbackLifetime =
 	| { readonly kind: "call" }
 	/** Until the library calls the destructor it received with the user data. */
 	| { readonly kind: "released"; readonly owner?: number }
+	/** Until the library's one call, during or after the binding, returns. */
+	| { readonly kind: "once" }
 	/**
 	 * Until the next call of the setter replaces it; per handle when `key` names the C
 	 * parameter whose handle keys the registration.
@@ -2728,6 +2743,7 @@ class Planner {
 			...(callback.release === undefined ? [] : ["release"]),
 			...(callback.replaced === true ? ["replaced"] : []),
 			...(callback.closes === undefined ? [] : ["closes"]),
+			...(callback.once === true ? ["once"] : []),
 		];
 		if (lifetimes.length > 1)
 			throw new FfiFactError(
@@ -2742,8 +2758,11 @@ class Planner {
 			callback.closes !== undefined;
 		// Whether the callback receives its user data as a `void *` parameter.
 		const routed = callback.data !== undefined && callback.lookup === undefined;
+		const resolvedType = resolveCType(this.#model, type);
 		const target =
-			type.kind === "pointer" ? resolveCType(this.#model, type.to) : undefined;
+			resolvedType.kind === "pointer"
+				? resolveCType(this.#model, resolvedType.to)
+				: undefined;
 		if (target?.kind !== "function" || target.variadic) {
 			throw new FfiFactError(
 				"inapplicable",
@@ -2771,6 +2790,18 @@ class Planner {
 				"conflict",
 				`${at}.callback.returns`,
 				"registration lifetime needs a retained callback",
+			);
+		if (resultFacts?.lifetime === "registration" && callback.once === true)
+			throw new FfiFactError(
+				"conflict",
+				`${at}.callback.returns`,
+				"a one-shot callback's registration ends as it returns",
+			);
+		if (callback.once === true && callback.data === undefined)
+			throw new FfiFactError(
+				"unmet-requirement",
+				`${at}.callback.once`,
+				"a one-shot callback needs data or a lookup to find its registration",
 			);
 		const resultCounted = resultFacts === undefined ? undefined : valueCount(resultFacts);
 		let resultCount: Extract<JsValue, { kind: "callback" }>["resultCount"];
@@ -3027,7 +3058,9 @@ class Planner {
 						? { kind: "released" }
 						: callback.replaced === true
 							? { kind: "replaced" }
-							: { kind: "call" },
+							: callback.once === true
+								? { kind: "once" }
+								: { kind: "call" },
 				route: routed
 					? { kind: "data", param: params.indexOf("data") }
 					: lookup !== undefined
@@ -3036,6 +3069,85 @@ class Planner {
 							? { kind: "key" }
 							: { kind: "scope" },
 				...(queued ? { thread: callback.queued === "wait" ? "wait" : "queue" } : {}),
+			},
+		};
+	}
+
+	/**
+	 * A struct passed by value whose `field` member takes a callback, as WebGPU's
+	 * callback info records do. The JavaScript function becomes the callback; `data`
+	 * names the member routing to its registration and `constants` fix other members.
+	 */
+	#callbackRecord(type: CType, facts: MaligatorFfiValueFacts, at: string): CallbackValue {
+		const callback = facts.callback!;
+		const record = resolveCType(this.#model, type);
+		const complete =
+			record.kind === "record" ? this.#model.records.get(record.name) : undefined;
+		if (complete?.complete !== true || complete.tag !== "struct")
+			throw new FfiFactError(
+				"inapplicable",
+				`${at}.callback.field`,
+				`${formatCDeclaration(type)} is not a struct passed by value`,
+			);
+		if (Object.keys(facts).length > 1)
+			throw new FfiFactError(
+				"conflict",
+				`${at}.callback`,
+				"a callback record parameter takes no other facts",
+			);
+		if (
+			callback.release !== undefined ||
+			callback.replaced === true ||
+			callback.closes !== undefined ||
+			callback.owner !== undefined
+		)
+			throw new FfiFactError(
+				"inapplicable",
+				`${at}.callback`,
+				"a callback record keeps its callback for the call or, with once, for one call",
+			);
+		const members = [...promotedCFields(this.#model, complete)];
+		const member = (name: string, role: string) => {
+			const found = members.find((entry) => entry.name === name);
+			if (found === undefined || found.bitWidth !== undefined)
+				throw new FfiFactError(
+					"unknown-name",
+					`${at}.callback.${role}`,
+					`${complete.name} has no member '${name}'`,
+				);
+			return found;
+		};
+		const field = member(callback.field!, "field");
+		if (callback.data !== undefined) {
+			const data = resolveCType(this.#model, member(callback.data, "data").type);
+			if (data.kind !== "pointer" || resolveCType(this.#model, data.to).kind !== "void")
+				throw new FfiFactError(
+					"inapplicable",
+					`${at}.callback.data`,
+					`'${callback.data}' is not a void * member`,
+				);
+		}
+		const constants = Object.entries(callback.constants ?? {}).map(
+			([name, expression]) => {
+				member(name, `constants.${name}`);
+				if (name === callback.field || name === callback.data)
+					throw new FfiFactError(
+						"conflict",
+						`${at}.callback.constants.${name}`,
+						"the binding sets the callback and data members",
+					);
+				return { member: name, expression };
+			},
+		);
+		const mapped = this.#callback(field.type, false, callback, at);
+		if ("gap" in mapped)
+			throw new FfiFactError("unmet-requirement", `${at}.callback`, mapped.gap);
+		return {
+			...mapped.value,
+			record: {
+				field: callback.field!,
+				...(callback.data === undefined ? {} : { data: callback.data }),
+				constants,
 			},
 		};
 	}
@@ -3641,7 +3753,8 @@ class Planner {
 		const callbackData = new Map<number, number>();
 		declaration.params.forEach((_, index) => {
 			const callback = factsAt(index).callback;
-			if (callback?.data === undefined) return;
+			// A record callback's data names one of the record's members.
+			if (callback?.data === undefined || callback.field !== undefined) return;
 			const at = `params.${names[index]}.callback.data`;
 			const data = parameterIndex(callback.data, at);
 			const resolved = resolveCType(this.#model, declaration.params[data]!.type);
@@ -3813,6 +3926,12 @@ class Planner {
 			}
 			if (routed !== undefined) {
 				args.push({ kind: "callback-data", of: routed });
+				return;
+			}
+			if (valueFacts.callback?.field !== undefined) {
+				const mapped = this.#callbackRecord(param.type, valueFacts, where(at));
+				params.push({ name, type: param.type, value: mapped });
+				args.push({ kind: "input", param: params.length - 1 });
 				return;
 			}
 			if (valueFacts.callback !== undefined) {
@@ -4631,6 +4750,19 @@ export function planBindings(
 					"conflict",
 					at,
 					"writable array views lend storage only to synchronous calls",
+				);
+			if (
+				"params" in result &&
+				result.params.some(
+					({ value }) =>
+						value.kind === "callback" &&
+						(value.lifetime.kind === "once" || value.record !== undefined),
+				)
+			)
+				throw new FfiFactError(
+					"conflict",
+					at,
+					"one-shot and record callbacks register only through synchronous calls",
 				);
 			declared.add(asyncName);
 		}
