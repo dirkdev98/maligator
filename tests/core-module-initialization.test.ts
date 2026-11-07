@@ -4,34 +4,46 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-module-graph.ts";
+import { certifyProgramClosure } from "../src/compiler/frontend/certify-closure.ts";
 import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
-import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	compilerProgramFactsFromConfig,
+	withProgramClosure,
+} from "../src/compiler/shared/compiler-facts.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
 import { inspectStaticValueFunctions } from "./helpers/static-values.ts";
 
 function readerOpcodes(
 	files: Readonly<Record<string, string>>,
 	primordials: "locked" | "mutable" = "mutable",
+	sourceClosure: "open" | "closed" = "open",
 ): ReadonlyArray<string> {
 	const root = mkdtempSync(join(tmpdir(), "mal-module-initialization-"));
 	try {
 		for (const [name, source] of Object.entries(files))
 			writeFileSync(join(root, name), source);
 		let opcodes: ReadonlyArray<string> = [];
-		compileSemanticProgramToProgramImage(
-			runSemanticAnalysisForGraph(buildModuleGraph(join(root, "entry.mjs"))),
-			{
-				facts: compilerProgramFactsFromConfig(
-					resolveBuildConfig({ engine: { primordials } }),
-				),
-				afterCoreOptimization(program) {
-					const reader = coreFunctionNamed(program, "reader");
-					if (reader === undefined) throw new Error("Missing Core function reader");
-					opcodes = coreOperations(reader).map((operation) => operation.opcode);
-				},
+		const config = resolveBuildConfig({ engine: { primordials } });
+		const graph = buildModuleGraph(join(root, "entry.mjs"));
+		const facts = compilerProgramFactsFromConfig(config);
+		compileSemanticProgramToProgramImage(runSemanticAnalysisForGraph(graph), {
+			facts:
+				sourceClosure === "open"
+					? facts
+					: withProgramClosure(
+							facts,
+							certifyProgramClosure(graph, config, {
+								relocatableArtifact: false,
+								hostWireSplicing: false,
+							}),
+						),
+			afterCoreOptimization(program) {
+				const reader = coreFunctionNamed(program, "reader");
+				if (reader === undefined) throw new Error("Missing Core function reader");
+				opcodes = coreOperations(reader).map((operation) => operation.opcode);
 			},
-		);
+		});
 		return opcodes;
 	} finally {
 		rmSync(root, { recursive: true, force: true });
@@ -192,6 +204,27 @@ describe("module bindings initialized before user code", () => {
 			`,
 		});
 		expect(opcodes).toContain("throwIfTdz");
+	});
+
+	it("calls a function declaration of a module in an import cycle directly", () => {
+		const opcodes = readerOpcodes(
+			{
+				"entry.mjs": entry,
+				"limits.mjs": `
+				import { scale } from "./scale.mjs";
+				export function reader(value) { return scale(value) % 7; }
+			`,
+				"scale.mjs": `
+				import { reader } from "./limits.mjs";
+				globalThis.early = reader;
+				export function scale(value) { return value * 3; }
+			`,
+			},
+			"mutable",
+			"closed",
+		);
+		expect(opcodes).not.toContain("call");
+		expect(opcodes).not.toContain("guardFunctionIndex");
 	});
 });
 
