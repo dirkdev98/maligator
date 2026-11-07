@@ -142,6 +142,42 @@ console.log(scan.has(3));${MAP_LOOP}`,
 		);
 	});
 
+	it.each([
+		["a module binding", "", ""],
+		["a closure binding", "function make() {", "return run; }\nconst run = make();"],
+	])("guesses the method of the one object literal %s holds", (_name, open, close) => {
+		const { guessed } = compile(
+			"literal",
+			`${open}
+const api = { add(a, b) { return a + b; }, mul(a, b) { return a * b; } };
+function run(n) {
+	let acc = 0;
+	for (let i = 0; i < n; i++) acc = api.add(acc, api.mul(i & 15, 3)) | 0;
+	return acc;
+}
+${close}
+console.log(run(64));`,
+		);
+		expect(guessed("run")).toBe(true);
+	});
+
+	it("does not guess from a binding assigned another value", () => {
+		const { guessed } = compile(
+			"reassigned",
+			`
+let api = { add(a, b) { return a + b; } };
+function run(n) {
+	let acc = 0;
+	for (let i = 0; i < n; i++) acc = api.add(acc, i) | 0;
+	return acc;
+}
+console.log(run(64));
+api = { add: Math.max };
+console.log(run(64));`,
+		);
+		expect(guessed("run")).toBe(false);
+	});
+
 	it("lets application methods guess application callees", () => {
 		const { guessed } = compile(
 			"application",
