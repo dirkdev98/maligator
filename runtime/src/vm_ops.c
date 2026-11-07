@@ -7346,11 +7346,18 @@ __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss(
     // for a nullish receiver, whose TypeError the general path raises. A held row has
     // its key on the receiver's chain, so the key is not missing, and nothing here
     // reads the receiver once the getter's own frame has rooted it.
+    MalValue key_value = mal_value_from_string(vm->string_constant_atoms[atom]);
+    // A class getter, which most getter rows hold, is called the way a compiled call site
+    // calls it, before the row's frame for every other getter.
+    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER && mal_value_is_function_object(ic->value) &&
+        mal_vm_inherited_accessor_row_holds(object_value, key_value, ic)) {
+        MAL_PERF_COUNT(ic_load_inherited_getter_hits);
+        MalCompletion completion = mal_vm_call_cached(vm, ic->value, object_value, nullptr, 0);
+        return completion.kind == MAL_COMPLETION_NORMAL ? completion.value : MAL_VALUE_UNDEFINED;
+    }
     MalValue result;
     if (mal_ic_is_getter_row(ic) &&
-        mal_vm_getter_row_try_load(
-            vm, object_value, mal_value_from_string(vm->string_constant_atoms[atom]), ic,
-            &result)) {
+        mal_vm_getter_row_try_load(vm, object_value, key_value, ic, &result)) {
         return result;
     }
     return mal_vm_op_load_property_ic_static_miss_general(vm, object_value, atom, ic);
