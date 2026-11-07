@@ -1154,7 +1154,9 @@ const IMMUTABLE_GLOBAL_VALUES = new Set(["undefined", "NaN", "Infinity"]);
 /**
  * Module-scope bindings that a module initializes before it can run user code.
  *
- * Outside an import cycle a module evaluates after its dependencies and before its
+ * Linking a module graph creates the function declarations of all its modules before
+ * any of them evaluates, so those read initialized even inside an import cycle.
+ * Outside a cycle a module evaluates after its dependencies and before its
  * importers, so before its own body runs no code holds one of its functions. Until
  * that body first runs user code it can neither call nor publish one, so every
  * function except a writer of the binding reads it initialized. A TDZ error in this
@@ -1169,15 +1171,18 @@ function coreInitializedModuleGlobalSlots(program: CoreFrontendContext): Array<n
 		if (
 			file.type !== "module" ||
 			file.commonjs ||
-			cyclic.has(file.path) ||
-			graph?.modules.get(file.path)?.platform?.evaluation === "side-effect-free" ||
-			(program.cjsImports.get(file.path)?.length ?? 0) > 0
+			// Pruning an unused platform module also removes its declarations' stores.
+			graph?.modules.get(file.path)?.platform?.evaluation === "side-effect-free"
 		)
 			continue;
-		for (const binding of moduleInitializationPrefix(
-			file,
-			program.facts.world.primordialPolicy === "locked",
-		)) {
+		const prefix =
+			cyclic.has(file.path) || (program.cjsImports.get(file.path)?.length ?? 0) > 0
+				? moduleFunctionDeclarations(file)
+				: moduleInitializationPrefix(
+						file,
+						program.facts.world.primordialPolicy === "locked",
+					);
+		for (const binding of prefix) {
 			const location = program.bindingToStorage.get(binding);
 			if (location?.type === "global") slots.add(location.index);
 		}
@@ -1284,13 +1289,9 @@ function coreModuleVarGlobalSlots(
 	return [...slots].sort((left, right) => left - right);
 }
 
-/** Bindings initialized by module instantiation or before the first possible user-code call. */
-function moduleInitializationPrefix(
-	file: SemanticFile,
-	lockedPrimordials: boolean,
-): ReadonlySet<Binding> {
-	const initialized = new Set<Binding>();
-	// Module function declarations are initialized before any body statement can re-enter user code.
+/** A module's top-level function declarations, which module instantiation initializes. */
+function moduleFunctionDeclarations(file: SemanticFile): Set<Binding> {
+	const declarations = new Set<Binding>();
 	for (const statement of file.ast.body) {
 		const declaration =
 			statement.type === "ExportNamedDeclaration" ||
@@ -1299,8 +1300,17 @@ function moduleInitializationPrefix(
 				: statement;
 		if (declaration?.type !== "FunctionDeclaration" || declaration.id === null) continue;
 		const binding = file.nodeToBinding.get(declaration.id);
-		if (binding !== undefined) initialized.add(binding);
+		if (binding !== undefined) declarations.add(binding);
 	}
+	return declarations;
+}
+
+/** Bindings initialized by module instantiation or before the first possible user-code call. */
+function moduleInitializationPrefix(
+	file: SemanticFile,
+	lockedPrimordials: boolean,
+): ReadonlySet<Binding> {
+	const initialized = moduleFunctionDeclarations(file);
 	const primitives = new Set<Binding>();
 	const classes = new Set<Binding>();
 	const readable = (node: ESTree.Identifier): boolean => {

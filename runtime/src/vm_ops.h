@@ -3775,6 +3775,24 @@ static inline bool mal_vm_try_define_property_static_cached(
         return false;
     }
     MalObject *object = mal_value_to_object(object_value);
+    // A class field definition on its fresh receiver appends one default data slot the
+    // object already has room for, and nothing can watch the object yet. The general
+    // append below rechecks the whole plan and handles prototypes and growth.
+    const MalShapeAppendPlan *plan = &cache->append;
+    if (plan->source != nullptr && object->shape == plan->source && plan->final != nullptr &&
+        plan->final->inline_count == plan->source->inline_count + 1 &&
+        plan->final->inline_count <= object->slot_capacity && object->extensible &&
+        !object->is_prototype && !object->watched_method_proto &&
+        !mal_object_has_public_overflow(object) &&
+        (plan->source->inline_count > 0 || !object->slots_owned)) {
+        u32 slot = plan->source->inline_count;
+        ((MalValue *) mal_object_fields(object))[slot] = value;
+        mal_gc_card(&object->header, value);
+        mal_gc_card(&object->header, plan->final->props[slot].key);
+        object->shape = plan->final;
+        MAL_PERF_COUNT(define_property_transition_hits);
+        return true;
+    }
     if (!mal_object_try_append_shaped_values(object, &cache->append, &value, 1)) {
         return false;
     }
