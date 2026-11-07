@@ -9509,6 +9509,35 @@ void mal_vm_op_define_property_static(MalVm *vm, MalValue object_value,
         vm, object_value, key, value, enumerable, writable, configurable);
 }
 
+void mal_vm_receiver_fields_define(
+    MalVm *vm, MalValue receiver, MalReceiverFieldsCache *cache, MalString **keys, u32 count
+) {
+    MalObject *object = mal_value_to_object(receiver);
+    if (object->shape == mal_shape_root(&vm->heap) && count <= object->slot_capacity &&
+        mal_object_fields(object) != nullptr) {
+        MalShape *shape = mal_shape_from_string_keys(&vm->heap, keys, count);
+        bool inline_slots = shape != nullptr && shape->inline_count == count;
+        for (u32 index = 0; inline_slots && index < count; index++)
+            inline_slots = shape->props[index].slot == index;
+        if (inline_slots) {
+            *cache = (MalReceiverFieldsCache) {
+                .shape = shape,
+                .heap_identity = vm->heap.identity,
+                .heap_epoch = vm->heap.epoch,
+            };
+            MalValue *fields = mal_object_fields(object);
+            for (u32 index = 0; index < count; index++) fields[index] = MAL_VALUE_UNDEFINED;
+            object->shape = shape;
+            return;
+        }
+    }
+    for (u32 index = 0; index < count; index++) {
+        MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(keys[index])};
+        mal_vm_define_property_key(vm, receiver, key, MAL_VALUE_UNDEFINED, true, true, true);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+    }
+}
+
 void mal_vm_op_define_property_static_cached(
     MalVm *vm, MalDefinePropertyCache *cache, MalValue object_value,
     i32 string_index, MalValue value, bool enumerable, bool writable,
