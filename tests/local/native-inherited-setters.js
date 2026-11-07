@@ -112,4 +112,47 @@ const frozen = Object.freeze(
 for (let i = 1; i <= 4; i++) frozen.value = i;
 expectValue(frozenCalls, 10, "an inherited setter runs for a frozen receiver");
 
+class Gauge {
+	#level = 0;
+	get level() {
+		return this.#level;
+	}
+	set level(next) {
+		this.#level = next;
+	}
+}
+class Dial extends Gauge {}
+const gauges = [new Gauge(), new Dial(), new Gauge(), new Dial()];
+function levelRound(base) {
+	for (let index = 0; index < gauges.length; index++) gauges[index].level = base + index;
+}
+const overrides = [];
+const levelChanges = [
+	() => {},
+	() =>
+		Object.defineProperty(Dial.prototype, "level", {
+			get() {
+				return -1;
+			},
+			set(next) {
+				overrides.push(next);
+			},
+			configurable: true,
+		}),
+];
+for (const [phase, change] of levelChanges.entries()) {
+	change();
+	for (let round = 0; round < 10; round++) levelRound(phase * 100);
+}
+expectValue(
+	`${gauges[0].level},${gauges[2].level}`,
+	"100,102",
+	"one site stores through the base class setter",
+);
+expectValue(
+	overrides.slice(-2).join(","),
+	"101,103",
+	"a subclass override reaches the shared store site",
+);
+
 console.log("native-inherited-setters PASS");

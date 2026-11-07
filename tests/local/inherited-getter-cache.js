@@ -95,4 +95,52 @@ lines.push(`dictionary ${readDoubled(dictionaryChild)} ${readDoubled(dictionaryC
 Object.defineProperty(dictionaryPrototype, "doubled", { value: "dictionary data" });
 lines.push(`dictionary redefined ${readDoubled(dictionaryChild)}`);
 
+// One site alternating between a class and its subclass reaches the same inherited
+// getter through two chains; a change on either chain reaches the site's next read.
+class Account {
+	constructor(value) {
+		this.value = value;
+	}
+	get score() {
+		return this.value + 1;
+	}
+}
+class Premium extends Account {}
+const accounts = [new Account(1), new Premium(2), new Account(3), new Premium(4)];
+function scoreRound() {
+	let scores = "";
+	for (const account of accounts) scores += `${account.score},`;
+	return scores;
+}
+const chainChanges = [
+	["steady", () => {}],
+	[
+		"subclass override",
+		() =>
+			Object.defineProperty(Premium.prototype, "score", {
+				get() {
+					return this.value * 100;
+				},
+				configurable: true,
+			}),
+	],
+	["subclass restored", () => delete Premium.prototype.score],
+	[
+		"base redefined",
+		() =>
+			Object.defineProperty(Account.prototype, "score", {
+				get() {
+					return -this.value;
+				},
+				configurable: true,
+			}),
+	],
+];
+for (const [name, change] of chainChanges) {
+	change();
+	let rounds = "";
+	for (let round = 0; round < 20; round++) rounds = scoreRound();
+	lines.push(`${name} ${rounds}`);
+}
+
 console.log(lines.join("\n"));

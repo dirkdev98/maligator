@@ -6617,6 +6617,31 @@ static bool mal_ic_try_record_missing(
 }
 
 /**
+ * Admit a second receiver layout into an accessor row whose holder and accessor it
+ * shares. Its chain joins the row's dependencies, so a mutation along either chain still
+ * clears the whole row.
+ */
+static bool mal_ic_try_extend_inherited_accessor(
+    MalObject *object, MalValue key_value, MalObject *holder, MalValue accessor, u8 mode,
+    MalInlineCache *ic
+) {
+    if (ic->mode != mode || ic->poly_count != 1 || ic->key != key_value ||
+        ic->proto_object[1] != holder || ic->value != accessor ||
+        object->header.type != ic->receiver_type ||
+        (object->shape == ic->shape && mal_object_prototype(object) == ic->proto_object[0])) {
+        return false;
+    }
+    if (!mal_object_extend_prototype_cache(object, holder, ic)) {
+        mal_vm_property_cache_invalidate(ic);
+        return false;
+    }
+    ic->entry = (void *) object->shape;
+    ic->proto_object[2] = mal_object_prototype(object);
+    ic->poly_count = 2;
+    return true;
+}
+
+/**
  * Record an ordinary-chain accessor's getter. The chain registration clears the row
  * on any mutation of an object between the receiver and the holder, so a hit only
  * needs the receiver's shape and first prototype, as for inherited value rows.
@@ -6648,6 +6673,11 @@ static bool mal_ic_try_record_inherited_getter(
     if (!own.present || !(own.desc.flags & MAL_PROPERTY_ACCESSOR) ||
         own.desc.getter != resolution.desc.getter) {
         return false;
+    }
+    if (mal_ic_try_extend_inherited_accessor(
+            object, key_value, resolution.holder, resolution.desc.getter,
+            MAL_IC_MODE_INHERITED_GETTER, ic)) {
+        return true;
     }
     if (!mal_ic_record_local_prototype_chain(object, resolution.holder, ic, false)) {
         return false;
@@ -6696,6 +6726,11 @@ static bool mal_ic_try_record_inherited_setter(
     if (!own.present || !(own.desc.flags & MAL_PROPERTY_ACCESSOR) ||
         own.desc.setter != resolution.desc.setter) {
         return false;
+    }
+    if (mal_ic_try_extend_inherited_accessor(
+            object, key_value, resolution.holder, resolution.desc.setter,
+            MAL_IC_MODE_INHERITED_SETTER, ic)) {
+        return true;
     }
     if (!mal_ic_record_local_prototype_chain(object, resolution.holder, ic, false)) {
         return false;
@@ -7470,9 +7505,8 @@ static void mal_vm_op_store_object_property_ic(
     MalValue value, bool strict, MalInlineCache *ic
 ) {
     MalObject *object = (MalObject *) mal_value_to_heap(object_value);
-    if (ic->mode == MAL_IC_MODE_INHERITED_SETTER && key_value == ic->key &&
-        object->shape == ic->shape && mal_object_prototype(object) == ic->proto_object[0] &&
-        !mal_object_has_public_overflow(object)) {
+    if (ic->mode == MAL_IC_MODE_INHERITED_SETTER &&
+        mal_vm_inherited_accessor_row_holds(object_value, key_value, ic)) {
         MAL_PERF_COUNT(ic_store_inherited_setter_hits);
         MalCompletion completion = mal_vm_call_value(vm, ic->value, object_value, &value, 1);
         if (completion.kind != MAL_COMPLETION_NORMAL) vm->completion = completion;

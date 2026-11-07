@@ -4166,13 +4166,24 @@ static inline __attribute__((always_inline)) bool mal_vm_probe_named_read(
     return found;
 }
 
-/** Whether an ordinary receiver still resolves `key` to the row's inherited accessor. */
 /** Receivers whose own properties and prototype follow ordinary object semantics. */
 static inline bool mal_vm_accessor_row_receiver(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_OBJECT) ||
         mal_value_is_heap_type(value, MAL_HEAP_FFI_HANDLE_OBJECT);
 }
 
+/** An inherited accessor row's second receiver shape, kept where those rows store no
+ * other pointer; its first prototype is `proto_object[2]`. */
+static inline const struct MalShape *mal_ic_accessor_alternate_shape(const MalInlineCache *ic) {
+    return (const struct MalShape *) ic->entry;
+}
+
+/**
+ * Whether an ordinary receiver still resolves `key` to the row's inherited accessor. A
+ * row holds two receiver layouts (shape and first prototype) that reach the same
+ * holder's accessor, such as instances of a class and of a subclass, so a site that
+ * alternates between them keeps hitting.
+ */
 static inline bool mal_vm_inherited_accessor_row_holds(
     MalValue object_value, MalValue key_value, const MalInlineCache *ic
 ) {
@@ -4181,8 +4192,11 @@ static inline bool mal_vm_inherited_accessor_row_holds(
         return false;
     }
     const MalObject *object = mal_value_to_object(object_value);
-    return object->shape == ic->shape && mal_object_prototype(object) == ic->proto_object[0] &&
-        !mal_object_has_public_overflow(object);
+    if (mal_object_has_public_overflow(object)) return false;
+    const MalObject *prototype = mal_object_prototype(object);
+    return (object->shape == ic->shape && prototype == ic->proto_object[0]) ||
+        (ic->poly_count == 2 && object->shape == mal_ic_accessor_alternate_shape(ic) &&
+         prototype == ic->proto_object[2]);
 }
 
 bool mal_vm_probe_accessor_read_miss(

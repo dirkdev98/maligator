@@ -183,15 +183,9 @@ void mal_object_invalidate_prototype_dependents(MalObject *object) {
     }
 }
 
-bool mal_object_register_prototype_cache(
-    MalObject *receiver, MalObject *holder, void *cache,
-    bool include_receiver
-) {
-    MAL_PERF_COUNT(prototype_dependency_register_calls);
-    mal_object_unregister_prototype_cache(cache);
-    if (include_receiver) mal_object_mark_as_prototype(receiver);
-    for (MalObject *cursor = include_receiver ? receiver : mal_object_prototype(receiver);
-         cursor != nullptr; cursor = mal_object_prototype(cursor)) {
+// Links every object from `first` through `holder`, or the whole chain without a holder.
+static bool mal_prototype_dependency_link_chain(MalObject *first, MalObject *holder, void *cache) {
+    for (MalObject *cursor = first; cursor != nullptr; cursor = mal_object_prototype(cursor)) {
         MalPrototypeCacheDependency *dependency = mal_prototype_dependency_alloc();
         MAL_PERF_COUNT(prototype_dependency_register_nodes);
         mal_prototype_dependency_link(dependency, cursor, cache);
@@ -199,7 +193,28 @@ bool mal_object_register_prototype_cache(
             return true;
         }
     }
-    if (holder == nullptr) {
+    return holder == nullptr;
+}
+
+bool mal_object_register_prototype_cache(
+    MalObject *receiver, MalObject *holder, void *cache,
+    bool include_receiver
+) {
+    MAL_PERF_COUNT(prototype_dependency_register_calls);
+    mal_object_unregister_prototype_cache(cache);
+    if (include_receiver) mal_object_mark_as_prototype(receiver);
+    if (mal_prototype_dependency_link_chain(
+            include_receiver ? receiver : mal_object_prototype(receiver), holder, cache)) {
+        return true;
+    }
+    MAL_PERF_COUNT(prototype_dependency_register_failures);
+    mal_object_unregister_prototype_cache(cache);
+    return false;
+}
+
+bool mal_object_extend_prototype_cache(MalObject *receiver, MalObject *holder, void *cache) {
+    MAL_PERF_COUNT(prototype_dependency_register_calls);
+    if (mal_prototype_dependency_link_chain(mal_object_prototype(receiver), holder, cache)) {
         return true;
     }
     MAL_PERF_COUNT(prototype_dependency_register_failures);

@@ -277,6 +277,10 @@ bool mal_object_register_prototype_cache(
 	MalObject *receiver, MalObject *holder, void *cache,
 	bool include_receiver);
 
+/** Add a further receiver's chain through `holder` to a registered row's dependencies.
+ * On failure every dependency of the row is gone, so the caller must clear it. */
+bool mal_object_extend_prototype_cache(MalObject *receiver, MalObject *holder, void *cache);
+
 bool mal_object_register_constructor_layout_cache(
 	MalObject *constructor, MalObject *prototype, void *cache);
 void mal_object_unregister_prototype_cache(void *cache);
