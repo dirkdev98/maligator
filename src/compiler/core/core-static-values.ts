@@ -2696,6 +2696,8 @@ export class CoreStaticValueAnalysis {
 		const description = this.#program.staticDescriptions.description(value.description);
 		if (
 			(description.kind !== "array" && description.kind !== "object") ||
+			// Every array owns its length, even when the description does not know its value.
+			(description.kind === "array" && key === "length") ||
 			mayHaveUnlistedOwnKey(description, key) ||
 			description.properties.some((property) =>
 				typeof key === "string" ? property.key === key : typeof property.key !== "string",
