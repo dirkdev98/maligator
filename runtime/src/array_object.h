@@ -72,7 +72,7 @@ static inline void mal_array_object_card(MalArrayObject *array, u32 index, MalVa
     }
     mal_gc_array_card_slow(owner, index, value);
 }
-#define MAL_ARRAY_INLINE_CAPACITY_MAX 8u
+#define MAL_ARRAY_INLINE_CAPACITY_MAX 14u
 
 static_assert(sizeof(MalArrayObject) <= 64, "MalArrayObject outgrew its 64-byte size class");
 
