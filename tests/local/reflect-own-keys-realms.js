@@ -32,3 +32,6 @@ for (const holder of [Reflect, foreign.Reflect]) {
 	if (!(thrown instanceof ErrorType)) throw new Error("primitive error realm");
 }
 console.log("reflect-key-realms 6");
+
+// Each keeps a body of its own once every call inlines it, for its plan.
+Object.assign(globalThis, { ownKeys });
