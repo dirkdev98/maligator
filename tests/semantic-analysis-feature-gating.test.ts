@@ -134,3 +134,58 @@ test("dynamic and escaping parameter uses keep mixed arguments bindings eager", 
 	expect(file.staticArgumentsAccesses.size).toBe(0);
 	expect(file.lazyArgumentsBindings.size).toBe(0);
 });
+
+test.each([
+	[
+		"Array.prototype.slice copies record their start",
+		"return Array.prototype.slice.call(arguments, 2);",
+		false,
+		[2],
+	],
+	[
+		"array literal slice copies start at zero",
+		"return [].slice.call(arguments);",
+		false,
+		[0],
+	],
+	[
+		"a sloppy written formal keeps the object",
+		"a = 1; return [].slice.call(arguments);",
+		false,
+		[],
+	],
+	[
+		"a strict written formal still copies",
+		"a = 1; return [].slice.call(arguments);",
+		true,
+		[0],
+	],
+	[
+		"a local Array is not the builtin",
+		"const Array = {}; return Array.prototype.slice.call(arguments);",
+		true,
+		[],
+	],
+	[
+		"an arrow copies another function's arguments",
+		"return () => [].slice.call(arguments);",
+		true,
+		[],
+	],
+	[
+		"an optional chain keeps the object",
+		"return [].slice.call(arguments)?.length;",
+		true,
+		[],
+	],
+	[
+		"an element store keeps the object",
+		"arguments[0] = 1; return [].slice.call(arguments);",
+		true,
+		[],
+	],
+	["a negative start keeps the object", "return [].slice.call(arguments, -1);", true, []],
+] as const)("%s", (_, body, strict, starts) => {
+	const file = analyze(`function copy(a) { ${body} }`, strict);
+	expect([...file.argumentsCopyCalls.values()]).toEqual(starts);
+});

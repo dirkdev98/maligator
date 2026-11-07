@@ -5709,9 +5709,12 @@ function compileFunctionParams(
 			if (binding) mappedParameterBindings.set(i, binding);
 		}
 	}
+	const lockedPrimordials = program.facts.world.primordialPolicy === "locked";
 	const materializesArguments =
 		argumentsBinding?.usageNodes.some(
-			(usage) => fn.semanticFile.staticArgumentsAccesses.get(usage) === undefined,
+			(usage) =>
+				fn.semanticFile.staticArgumentsAccesses.get(usage) === undefined &&
+				!(lockedPrimordials && fn.semanticFile.argumentsCopyUsages.has(usage)),
 		) ?? false;
 	const lazilyMaterializesArguments =
 		argumentsBinding !== undefined &&
@@ -15015,6 +15018,17 @@ function compileCall(
 	cursor: CoreFrontendCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
+	// Locked primordials pin the builtin slice and call, so the copy is the incoming arguments.
+	const copyStart = fn.semanticFile.argumentsCopyCalls.get(callExpression);
+	if (copyStart !== undefined && program.facts.world.primordialPolicy === "locked") {
+		const copy = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
+			type: "createRestArguments",
+			registers: [copy],
+			startIndex: copyStart,
+		});
+		return copy;
+	}
 	if (!fn.semanticFile.commonjs) {
 		const required = tryCompileCreateRequireCall(program, fn, cursor, callExpression);
 		if (required !== undefined) return required;

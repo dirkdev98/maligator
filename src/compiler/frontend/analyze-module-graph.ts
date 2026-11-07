@@ -59,6 +59,8 @@ function analyzeModuleRecord(record: ModuleRecord): SemanticFile {
 		nodeToBinding: new Map(),
 		withDynamicNodes: new Set(),
 		staticArgumentsAccesses: new Map(),
+		argumentsCopyCalls: new Map(),
+		argumentsCopyUsages: new Set(),
 		guardedArgumentsAccesses: new Set(),
 		lazyArgumentsBindings: new Set(),
 		hasDirectEval: new Set(),

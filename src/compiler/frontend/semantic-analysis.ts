@@ -60,6 +60,15 @@ export interface SemanticFile {
 	staticArgumentsAccesses: Map<ESTree.Node, StaticArgumentsAccess>;
 
 	/**
+	 * `Array.prototype.slice.call(arguments[, k])` and `[].slice.call(arguments[, k])`
+	 * calls of a wholly static binding, with their start index. While primordials are
+	 * locked, lowering builds the copy from the frame without the arguments object.
+	 */
+	argumentsCopyCalls: Map<ESTree.CallExpression, number>;
+	/** The `arguments` references inside `argumentsCopyCalls`. */
+	argumentsCopyUsages: Set<ESTree.Node>;
+
+	/**
 	 * Body reads of a lazy binding in `staticArgumentsAccesses`. They read the frame
 	 * only while the binding is still EMPTY: once a body use has materialized the
 	 * object, callees may have changed its length or elements.
@@ -273,6 +282,8 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		nodeToBinding: new Map(),
 		withDynamicNodes: new Set(),
 		staticArgumentsAccesses: new Map(),
+		argumentsCopyCalls: new Map(),
+		argumentsCopyUsages: new Set(),
 		guardedArgumentsAccesses: new Set(),
 		lazyArgumentsBindings: new Set(),
 		hasDirectEval: new Set(),
@@ -749,6 +760,69 @@ function usageIsInFunctionParameters(
 	}
 }
 
+/**
+ * The call and start index when this `arguments` reference is the receiver of
+ * `Array.prototype.slice.call(arguments[, k])` or `[].slice.call(arguments[, k])` with
+ * a non-negative integer literal `k`, outside any optional chain.
+ */
+function argumentsCopyCall(
+	file: SemanticFile,
+	identifier: ESTree.Identifier,
+	parents: Map<ESTree.Node, ESTree.Node>,
+): { call: ESTree.CallExpression; start: number } | undefined {
+	const call = parents.get(identifier);
+	if (
+		call?.type !== "CallExpression" ||
+		call.optional ||
+		call.arguments[0] !== identifier ||
+		call.arguments.length > 2
+	)
+		return undefined;
+	let start = 0;
+	const second = call.arguments[1];
+	if (second !== undefined) {
+		if (
+			second.type !== "Literal" ||
+			typeof second.value !== "number" ||
+			!Number.isInteger(second.value) ||
+			second.value < 0 ||
+			second.value > 0x7fff_ffff
+		)
+			return undefined;
+		start = second.value;
+	}
+	const named = (node: ESTree.Node, name: string): node is ESTree.MemberExpression =>
+		node.type === "MemberExpression" &&
+		!node.computed &&
+		!node.optional &&
+		node.property.type === "Identifier" &&
+		node.property.name === name;
+	const callee = call.callee as ESTree.Node;
+	if (!named(callee, "call") || !named(callee.object, "slice")) return undefined;
+	const owner = callee.object.object;
+	if (owner.type === "ArrayExpression") {
+		if (owner.elements.length !== 0) return undefined;
+	} else if (
+		!named(owner, "prototype") ||
+		owner.object.type !== "Identifier" ||
+		owner.object.name !== "Array" ||
+		file.withDynamicNodes.has(owner.object) ||
+		file.nodeToBinding.get(owner.object)?.undeclared === undefined
+	) {
+		return undefined;
+	}
+	for (
+		let current: ESTree.Node | undefined = parents.get(call);
+		current?.type === "MemberExpression" ||
+		current?.type === "CallExpression" ||
+		current?.type === "ChainExpression";
+		current = parents.get(current)
+	) {
+		if (current.type === "ChainExpression") return undefined;
+	}
+	return { call, start };
+}
+
 function canLazilyMaterializeArgumentsUse(
 	file: SemanticFile,
 	usage: ESTree.Node,
@@ -773,9 +847,29 @@ function canLazilyMaterializeArgumentsUse(
 function classifyStaticArgumentsUsage(file: SemanticFile): void {
 	const parents = new Map<ESTree.Node, ESTree.Node>();
 	const candidates = new Map<Binding, Map<ESTree.Node, StaticArgumentsAccess>>();
+	const copies = new Map<
+		Binding,
+		Map<ESTree.Node, { call: ESTree.CallExpression; start: number }>
+	>();
 
 	traverseEstree(file.ast, (node, { parent }) => {
 		if (parent) parents.set(node, parent);
+		if (node.type === "Identifier") {
+			const binding = file.nodeToBinding.get(node);
+			const copy =
+				binding?.implicit === "arguments" &&
+				!file.withDynamicNodes.has(node) &&
+				accessIsInOwningFunction(file, node, binding)
+					? argumentsCopyCall(file, node, parents)
+					: undefined;
+			if (binding && copy) {
+				const byNode =
+					copies.get(binding) ??
+					new Map<ESTree.Node, { call: ESTree.CallExpression; start: number }>();
+				byNode.set(node, copy);
+				copies.set(binding, byNode);
+			}
+		}
 		if (node.type === "MemberExpression" && node.object.type === "Identifier") {
 			const identifier = node.object;
 			const binding = file.nodeToBinding.get(identifier);
@@ -808,7 +902,10 @@ function classifyStaticArgumentsUsage(file: SemanticFile): void {
 		}
 	});
 
-	for (const [binding, byNode] of candidates) {
+	for (const binding of new Set([...candidates.keys(), ...copies.keys()])) {
+		const byNode =
+			candidates.get(binding) ?? new Map<ESTree.Node, StaticArgumentsAccess>();
+		const bindingCopies = copies.get(binding);
 		const isStaticRead = (usage: ESTree.Node): boolean => {
 			const access = byNode.get(usage);
 			return (
@@ -828,13 +925,28 @@ function classifyStaticArgumentsUsage(file: SemanticFile): void {
 				)
 			);
 		};
-		if (binding.usageNodes.length > 0 && binding.usageNodes.every(isStaticRead)) {
+		const owner = argumentsBindingOwner(file, binding);
+		// A copy reads the object's current elements, which are the incoming values
+		// only while no formal it maps is ever written.
+		const isCopy = (usage: ESTree.Node): boolean =>
+			bindingCopies?.has(usage) === true &&
+			owner !== undefined &&
+			argumentsMatchIncomingValues(file, owner, parents);
+		if (
+			binding.usageNodes.length > 0 &&
+			binding.usageNodes.every((usage) => isStaticRead(usage) || isCopy(usage))
+		) {
 			for (const [usage, access] of byNode)
 				file.staticArgumentsAccesses.set(usage, access);
+			for (const usage of binding.usageNodes) {
+				const copy = bindingCopies?.get(usage);
+				if (copy === undefined) continue;
+				file.argumentsCopyUsages.add(usage);
+				file.argumentsCopyCalls.set(copy.call, copy.start);
+			}
 			continue;
 		}
 
-		const owner = argumentsBindingOwner(file, binding);
 		if (!owner) continue;
 		const parameterUsages = binding.usageNodes.filter((usage) =>
 			usageIsInFunctionParameters(usage, owner, parents),
