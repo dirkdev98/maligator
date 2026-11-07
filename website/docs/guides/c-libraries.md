@@ -689,6 +689,21 @@ functions: {
 - `string` marks a `char *` or `unsigned char *` as UTF-8 text.
 - `free` names the function that releases a string, buffer, or array result after it is copied.
 
+When C sizes a buffer from several parameters, write its length as their product:
+
+```ts
+functions: {
+	fill_pixels: { params: { pixels: { bytes: { length: "width * height * 4" } } } },
+}
+```
+
+`fill_pixels(width, height, pixels)` keeps every factor in its signature. Before C runs,
+the binding multiplies the converted factors and literals and throws a `RangeError` when
+the buffer is shorter, a factor is negative, or the product overflows. A longer buffer
+passes unchanged, so one allocation can serve several sizes. On an `array`, the product
+counts elements. Products apply to input buffers and arrays of functions, not to results,
+outputs, strings, callbacks, or fields.
+
 Input arrays, byte spans, and counted strings can share an integer `length` parameter.
 The binding checks every input length before entering C. Counted strings contribute
 their UTF-8 byte length. Shared counts must be integer inputs; writable counts and

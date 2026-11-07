@@ -436,6 +436,14 @@ bool mal_ffi_to_array_length(
 /** Check that a buffer or array count fits the C integer parameter that carries it. */
 bool mal_ffi_check_count(
     MalVm *vm, size_t count, int32_t bits, bool is_signed, const MalFfiSite *site);
+/**
+ * Check that a buffer or array of `available` units holds the `required` units its
+ * length factors multiply to. `valid` is false when a factor is negative or the
+ * product overflows 64 bits.
+ */
+bool mal_ffi_check_extent(
+    MalVm *vm, uint64_t available, uint64_t required, bool valid, const char *unit,
+    const MalFfiSite *site);
 
 /** Check a native count before allocating or reading a caller-owned array buffer. */
 bool mal_ffi_check_array_count(

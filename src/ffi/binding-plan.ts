@@ -26,6 +26,7 @@ import {
 import { formatCDeclaration, isCNativeValueType, parseCType } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
 import type { LibraryFacts } from "./contract.ts";
+import { lengthProduct } from "./contract.ts";
 import { FfiFactError } from "./ffi-error.ts";
 import type { FfiText } from "./text.ts";
 
@@ -391,6 +392,11 @@ export interface MappedParameter {
 	readonly view?: NumericView;
 	/** The view lends storage C may write; ordinary arrays still pass a copy. */
 	readonly writable?: true;
+	/**
+	 * The minimum byte or element length of a buffer or array, the product of the
+	 * integer inputs at C argument positions `factors` and `scale`.
+	 */
+	readonly extent?: { readonly factors: ReadonlyArray<number>; readonly scale: bigint };
 }
 
 /** How a binding produces one C argument. */
@@ -3294,6 +3300,12 @@ class Planner {
 		const factsAt = (index: number): MaligatorFfiValueFacts =>
 			facts.params[index] ?? NO_FACTS;
 		const parameterIndex = (reference: string, at: string): number => {
+			if (lengthProduct(reference) !== undefined)
+				throw new FfiFactError(
+					"inapplicable",
+					where(at),
+					"a product length applies to input buffers and arrays of a function",
+				);
 			const index = /^\d+$/.test(reference)
 				? Number(reference) - 1
 				: declaration.params.findIndex((param) => param.name === reference);
@@ -3385,11 +3397,39 @@ class Planner {
 				: inputMapping(map(type, "param", valueFacts, at));
 
 		const counts = new Map<number, Array<number>>();
+		// Buffers whose length a product of integer inputs gives, which stay parameters.
+		const extents = new Map<
+			number,
+			{ params: Array<number>; scale: bigint; at: string }
+		>();
 		declaration.params.forEach((_, index) => {
 			const valueFacts = factsAt(index);
 			const counted = valueCount(valueFacts);
 			if (counted === undefined) return;
 			const at = `params.${names[index]}.${counted.kind}.length`;
+			const product = lengthProduct(counted.count.length);
+			if (product !== undefined) {
+				if (
+					counted.kind === "string" ||
+					valueFacts.out === true ||
+					valueFacts.inout === true ||
+					callableContext !== undefined
+				)
+					throw new FfiFactError(
+						"inapplicable",
+						where(at),
+						"a product length applies to input buffers and arrays of a function",
+					);
+				const factors = product.params.map((reference) => parameterIndex(reference, at));
+				if (factors.includes(index))
+					throw new FfiFactError(
+						"unmet-requirement",
+						where(at),
+						"a parameter cannot count itself",
+					);
+				extents.set(index, { params: factors, scale: product.scale, at });
+				return;
+			}
 			const count = parameterIndex(counted.count.length, at);
 			const capacity =
 				valueFacts.array?.capacity === undefined
@@ -3917,15 +3957,42 @@ class Planner {
 					`${where(at)}.array.writable`,
 					"writable views need a non-const arithmetic pointer",
 				);
+			const extent = extents.get(index);
+			if (
+				extent !== undefined &&
+				mapped.value.kind !== "bytes" &&
+				mapped.value.kind !== "sequence"
+			)
+				throw new FfiFactError(
+					"inapplicable",
+					where(extent.at),
+					"a product length applies to input buffers and arrays of a function",
+				);
 			params.push({
 				name,
 				type: param.type,
 				value: mapped.value,
 				...(view === undefined ? {} : { view }),
 				...(writable ? { writable: true as const } : {}),
+				...(extent === undefined
+					? {}
+					: { extent: { factors: extent.params, scale: extent.scale } }),
 			});
 			args.push({ kind: "input", param: params.length - 1 });
 		});
+
+		for (const [, extent] of extents) {
+			for (const factor of extent.params) {
+				const entry = args[factor];
+				const value = entry?.kind === "input" ? params[entry.param]?.value : undefined;
+				if (value?.kind !== "integer" && value?.kind !== "bigint")
+					throw new FfiFactError(
+						"unmet-requirement",
+						where(extent.at),
+						`'${declaration.params[factor]!.name ?? String(factor + 1)}' must remain an integer input`,
+					);
+			}
+		}
 
 		for (const output of outputs) {
 			if (typeof output.capacity === "number" && args[output.capacity]?.kind !== "input")

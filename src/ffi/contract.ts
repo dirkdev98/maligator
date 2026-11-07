@@ -121,6 +121,28 @@ export const ffiLibrariesLeaf: Leaf = {
 const C_NAME = /^[A-Za-z_]\w*$/;
 const C_INTEGER_CONSTANT = /^(?:[A-Za-z_]\w*|-?(?:0[xX][0-9a-fA-F]+|\d+)[uUlL]*)$/;
 
+/**
+ * A length written as a product of integer parameters and positive integer literals,
+ * such as `"width * height * 4"`: the parameters it multiplies and the literals'
+ * product. A single name or position is not a product.
+ */
+export function lengthProduct(
+	length: string,
+): { readonly params: ReadonlyArray<string>; readonly scale: bigint } | undefined {
+	const terms = length.split("*").map((term) => term.trim());
+	if (terms.length < 2) return undefined;
+	const params: Array<string> = [];
+	let scale = 1n;
+	for (const term of terms) {
+		if (C_NAME.test(term)) params.push(term);
+		else if (/^[1-9]\d*$/.test(term)) scale *= BigInt(term);
+		else return undefined;
+	}
+	return params.length === 0 || scale > 0xffff_ffff_ffff_ffffn
+		? undefined
+		: { params, scale };
+}
+
 /** Validate a record keyed by C names, checking each entry with `entry`. */
 function namedRecord(
 	value: unknown,
@@ -366,9 +388,11 @@ function validateCount(value: unknown, at: string, array = false): void {
 	);
 	expect(
 		typeof value.length === "string" &&
-			(C_NAME.test(value.length) || /^[1-9]\d*$/.test(value.length)),
+			(C_NAME.test(value.length) ||
+				/^[1-9]\d*$/.test(value.length) ||
+				lengthProduct(value.length) !== undefined),
 		`${at}.length`,
-		"a parameter name or 1-based position",
+		"a parameter name, a 1-based position, or a product such as 'width * height * 4'",
 	);
 	if (value.capacity !== undefined)
 		expect(

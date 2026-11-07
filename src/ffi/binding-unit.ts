@@ -161,7 +161,8 @@ function scalarEntry(
 		binding.global !== undefined ||
 		binding.closes !== undefined ||
 		binding.initializes !== undefined ||
-		binding.outputs.length !== 0
+		binding.outputs.length !== 0 ||
+		binding.params.some((parameter) => parameter.extent !== undefined)
 	)
 		return undefined;
 	// Only arrays the checked entry copies run JavaScript while arguments convert.
@@ -246,6 +247,41 @@ function scalarFunction(binding: BoundFunction, entry: FfiScalarEntry): Array<st
 			: `\treturn ${entry.result.kind === "number" ? `mal_ffi_scalar_number((double) (${call}))` : call};`,
 		"}",
 	];
+}
+
+/**
+ * Statements that reject a buffer or array shorter than the product its `extent`
+ * names, once every argument has converted. `argument` spells C argument `index`'s
+ * converted value and `length` the converted length of the buffer at that index.
+ */
+function extentChecks(
+	binding: BoundFunction,
+	argument: (index: number) => string,
+	length: (index: number) => string,
+	failure: string,
+): Array<string> {
+	return binding.arguments.flatMap((entry, index) => {
+		if (entry.kind !== "input") return [];
+		const parameter = binding.params[entry.param]!;
+		if (parameter.extent === undefined) return [];
+		const factors = parameter.extent.factors.map((factor) => {
+			const source = binding.arguments[factor]!;
+			const value =
+				source.kind === "input" ? binding.params[source.param]!.value : undefined;
+			if (value?.kind !== "integer" && value?.kind !== "bigint")
+				throw new Error("an extent factor is an integer input");
+			const converted = argument(factor);
+			return `mal_extent_valid = mal_extent_valid && ${value.signed ? `(${converted}) >= 0 && ` : ""}!__builtin_mul_overflow(mal_extent, (uint64_t) (${converted}), &mal_extent);`;
+		});
+		return [
+			"{",
+			`	uint64_t mal_extent = UINT64_C(${parameter.extent.scale.toString()});`,
+			"	bool mal_extent_valid = true;",
+			...factors.map((line) => `	${line}`),
+			`	if (!mal_ffi_check_extent(vm, (uint64_t) (${length(index)}), mal_extent, mal_extent_valid, ${cString(parameter.value.kind === "bytes" ? "bytes" : "elements")}, &mal_site_${String(entry.param)})) ${failure}`,
+			"}",
+		];
+	});
 }
 
 /**
@@ -4214,6 +4250,16 @@ class BindingWriter {
 			...body.map((line) => `\t${line}`),
 			...this.#resultGuards(binding, "goto mal_done;").map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
+			...extentChecks(
+				binding,
+				(index) => `mal_argument_${String(index)}`,
+				(index) =>
+					binding.params[(binding.arguments[index] as { param: number }).param]!.value
+						.kind === "bytes"
+						? `mal_bytes_length_${String(index)}`
+						: `mal_length_${String(index)}`,
+				"goto mal_done;",
+			).map((line) => `\t${line}`),
 			...keeps.map((line) => `\t${line}`),
 			...kept.map((line) => `\t${line}`),
 			...commits.map((line) => `\t${line}`),
@@ -5143,6 +5189,16 @@ class BindingWriter {
 			...body.map((line) => `\t${line}`),
 			...this.#resultGuards(binding, "goto mal_failed;").map((line) => `\t${line}`),
 			...buffers.map((line) => `\t${line}`),
+			...extentChecks(
+				binding,
+				(index) => `mal_ctx->mal_argument_${String(index)}`,
+				(index) =>
+					binding.params[(binding.arguments[index] as { param: number }).param]!.value
+						.kind === "bytes"
+						? `mal_bytes_length_${String(index)}`
+						: `mal_ctx->mal_length_${String(index)}`,
+				"goto mal_failed;",
+			).map((line) => `\t${line}`),
 			...callbackArguments.map((line) => `\t${line}`),
 			...callbacks.flatMap(({ index, closeKey }) =>
 				closeKey === undefined

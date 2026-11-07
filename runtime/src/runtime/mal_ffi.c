@@ -526,6 +526,19 @@ bool mal_ffi_check_count(
         (unsigned long long) maximum);
 }
 
+bool mal_ffi_check_extent(
+    MalVm *vm, uint64_t available, uint64_t required, bool valid, const char *unit,
+    const MalFfiSite *site) {
+    if (!valid)
+        return ffi_fail(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site,
+            "length factors that are non-negative and multiply to at most 2^64 - 1");
+    if (available >= required) return true;
+    return ffi_failf(
+        vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site, "at least %llu %s",
+        (unsigned long long) required, unit);
+}
+
 /** An Array's elements when every one is an own data value, so reading them runs no JavaScript. */
 static const MalValue *ffi_dense_elements(MalValue value, int32_t length) {
     if (!mal_value_is_array_object(value)) return nullptr;

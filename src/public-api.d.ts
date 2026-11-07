@@ -169,6 +169,9 @@ export interface MaligatorFfiCount {
 	 * from an integer parameter or from an integer the function writes through a pointer.
 	 * Callback counts use 1-based positions.
 	 * State counts use C field names; global counts use C object names.
+	 * An input buffer or array of a function can instead require a minimum length, a
+	 * product of integer parameters and literals such as `"width * height * 4"`; those
+	 * parameters stay in the JavaScript signature.
 	 */
 	length: string;
 }
