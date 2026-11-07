@@ -4628,3 +4628,31 @@ static inline __attribute__((always_inline)) void mal_numeric_leaf_merge_sort(
     for (u32 index = 0; index < count; index++) keys[index] = mal_ops_number_as_f64(values[index]);
     MAL_LEAF_MERGE_SORT_BODY(f64, compare, keys);
 }
+
+/** Below this many elements the merge beats the radix passes' fixed cost. */
+#define MAL_NUMERIC_RADIX_SORT_MIN 128u
+
+/**
+ * Stably order `values` by their Number `keys`, ascending or descending, staging the
+ * result in `scratch`. False, with nothing moved, when a key is NaN or the pass
+ * storage cannot be allocated.
+ */
+bool mal_numeric_radix_sort(
+    MalValue *values, MalValue *scratch, const f64 *keys, u32 count, bool descending);
+
+/**
+ * Sort kernel for a leaf that returns `a - b` (or `b - a`) of its two Numbers. Without
+ * NaN keys that comparator is a consistent total preorder in which only equal Numbers
+ * tie, so the stable radix order is the order the merge would produce.
+ */
+static inline __attribute__((always_inline)) void mal_numeric_difference_sort(
+    MalValue *values, MalValue *scratch, f64 *keys, u32 count, bool descending,
+    f64 (*compare)(f64 left, f64 right)
+) {
+    for (u32 index = 0; index < count; index++) keys[index] = mal_ops_number_as_f64(values[index]);
+    if (count >= MAL_NUMERIC_RADIX_SORT_MIN &&
+        mal_numeric_radix_sort(values, scratch, keys, count, descending)) {
+        return;
+    }
+    MAL_LEAF_MERGE_SORT_BODY(f64, compare, keys);
+}

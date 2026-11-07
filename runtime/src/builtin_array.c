@@ -3819,6 +3819,64 @@ static bool mal_builtin_array_sort_pair_order(
     return mal_builtin_array_sort_order(vm, comparator, left, right, order_out);
 }
 
+bool mal_numeric_radix_sort(
+    MalValue *values, MalValue *scratch, const f64 *keys, u32 count, bool descending
+) {
+    usize bytes;
+    if (!mal_checked_size_multiply(count, 2 * (sizeof(u64) + sizeof(u32)), SIZE_MAX, &bytes)) {
+        return false;
+    }
+    u64 *storage = malloc(bytes);
+    if (storage == nullptr) return false;
+    u64 *radix = storage;
+    u64 *radix_out = radix + count;
+    u32 *order = (u32 *) (radix_out + count);
+    u32 *order_out = order + count;
+    u32 digits[8][256] = {0};
+    for (u32 index = 0; index < count; index++) {
+        f64 key = keys[index];
+        if (key != key) {
+            free(storage);
+            return false;
+        }
+        // The comparator ties -0 with 0, so both take one key and keep their order.
+        f64 normalized = key == 0 ? 0.0 : key;
+        u64 bits;
+        memcpy(&bits, &normalized, sizeof(bits));
+        bits = bits >> 63 ? ~bits : bits | (UINT64_C(1) << 63);
+        if (descending) bits = ~bits;
+        radix[index] = bits;
+        order[index] = index;
+        for (u32 digit = 0; digit < 8; digit++) digits[digit][(bits >> (8 * digit)) & 0xff]++;
+    }
+    for (u32 digit = 0; digit < 8; digit++) {
+        u32 *bucket = digits[digit];
+        u32 shift = 8 * digit;
+        // A byte every key shares cannot reorder anything.
+        if (bucket[(radix[0] >> shift) & 0xff] == count) continue;
+        for (u32 value = 0, offset = 0; value < 256; value++) {
+            u32 size = bucket[value];
+            bucket[value] = offset;
+            offset += size;
+        }
+        for (u32 index = 0; index < count; index++) {
+            u32 slot = bucket[(radix[index] >> shift) & 0xff]++;
+            radix_out[slot] = radix[index];
+            order_out[slot] = order[index];
+        }
+        u64 *swap_radix = radix;
+        radix = radix_out;
+        radix_out = swap_radix;
+        u32 *swap_order = order;
+        order = order_out;
+        order_out = swap_order;
+    }
+    for (u32 index = 0; index < count; index++) scratch[index] = values[order[index]];
+    memcpy(values, scratch, sizeof(MalValue) * count);
+    free(storage);
+    return true;
+}
+
 static bool mal_array_sort_record_keys(
     const MalValue *values, u32 count, MalString *const *keys, u32 key_count, f64 *out
 ) {

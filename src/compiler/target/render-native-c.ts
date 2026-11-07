@@ -5334,7 +5334,7 @@ function renderCompiledFunction(
 		const source = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n#pragma STDC FP_CONTRACT OFF\n${worker.join("\n")}\n}\n${emitted.source.replace(
 			"#pragma STDC FP_CONTRACT OFF\n",
 			`#pragma STDC FP_CONTRACT OFF\n    if (mal_vm_leaf_unobserved(vm) && mal_vm_leaf_stack_available(vm)) return ${symbol}(${args.join(", ")});\n`,
-		)}${sortSymbol === undefined ? "" : renderNumericSortKernel(sortSymbol, symbol, entry)}`;
+		)}${sortSymbol === undefined ? "" : renderNumericSortKernel(sortSymbol, symbol, entry, native)}`;
 		return [
 			{
 				entry,
@@ -5457,14 +5457,52 @@ function numericSortRecordKeys(entry: NativeDirectEntryPlan): ReadonlyArray<numb
 	return [...new Set(entry.fieldParameters?.sources.map(({ key }) => key))];
 }
 
+/**
+ * `ascending` for a leaf whose only work is returning its first Number parameter minus
+ * its second, `descending` for the reverse difference.
+ */
+function numericSortDifference(
+	native: NativeFunctionPlan,
+	entry: NativeDirectEntryPlan,
+): "ascending" | "descending" | undefined {
+	const storage = entry.storage;
+	if (storage === undefined || native.body.parameterCount !== 2) return undefined;
+	const skipped = new Set([
+		...(storage.controlFlow?.unreachableIps ?? []),
+		...storage.elidedPureIps,
+	]);
+	const live = native.body.instructions.filter(
+		(op, ip) => !skipped.has(ip) && !(op.opcode === "JUMP" && op.targetIp === ip + 1),
+	);
+	if (live.length !== 2) return undefined;
+	const [difference, result] = live;
+	if (
+		difference?.opcode !== "BINARY" ||
+		difference.operator !== "-" ||
+		result?.opcode !== "RETURN" ||
+		result.value !== difference.dst
+	)
+		return undefined;
+	if (difference.left === 0 && difference.right === 1) return "ascending";
+	if (difference.left === 1 && difference.right === 0) return "descending";
+	return undefined;
+}
+
 function renderNumericSortKernel(
 	symbol: string,
 	leaf: string,
 	entry: NativeDirectEntryPlan,
+	native: NativeFunctionPlan,
 ): string {
 	const fields = entry.fieldParameters;
-	if (fields === undefined)
-		return `\n${numericSortKernelDeclaration(symbol)} {\n    mal_numeric_leaf_merge_sort(values, scratch, keys, count, ${leaf});\n}\n`;
+	if (fields === undefined) {
+		const difference = numericSortDifference(native, entry);
+		const body =
+			difference === undefined
+				? `mal_numeric_leaf_merge_sort(values, scratch, keys, count, ${leaf})`
+				: `mal_numeric_difference_sort(values, scratch, keys, count, ${difference === "descending"}, ${leaf})`;
+		return `\n${numericSortKernelDeclaration(symbol)} {\n    ${body};\n}\n`;
+	}
 	const keys = numericSortRecordKeys(entry);
 	const type = `${symbol}_key`;
 	const compare = `${symbol}_compare`;

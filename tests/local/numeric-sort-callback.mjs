@@ -287,3 +287,24 @@ try {
 } catch (error) {
 	console.log("run-throw", error.message, runComparisons);
 }
+// Past the size where `a - b` and `b - a` sorts take the radix order: equal Numbers,
+// including -0 and 0, keep their original order in both directions.
+const signedValues = [0, -0, 3, -3, 0.5, -0.5, Infinity, -Infinity, 2 ** 40, -(2 ** 40)];
+const wide = Array.from(
+	{ length: 300 },
+	(_, index) => signedValues[(index * 7) % signedValues.length],
+);
+const describeOrder = (values) =>
+	values.map((value) => (Object.is(value, -0) ? "-0" : String(value))).join(",");
+console.log(
+	"wide-ascending",
+	describeOrder(wide.slice().sort((left, right) => left - right)),
+);
+console.log(
+	"wide-descending",
+	describeOrder(wide.slice().sort((left, right) => right - left)),
+);
+console.log(
+	"wide-copy",
+	describeOrder(wide.toSorted((left, right) => left - right).slice(0, 40)),
+);
