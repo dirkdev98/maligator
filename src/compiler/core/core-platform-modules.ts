@@ -69,14 +69,16 @@ export function pruneUnusedPlatformModuleInitializers(
 			initializerParents.set(target, parents);
 		}
 	}
-	const unusedModuleDeclaration = (
+	/** Owners of the unneeded module cells a hoisted declaration is stored to, if only stored there. */
+	const unusedDeclarationOwners = (
 		fn: CoreFunctionStore,
 		instruction: CoreInstructionId,
-	): boolean => {
-		if (fn.instructionOpcodeName(instruction) !== "createFunction") return false;
+	): ReadonlyArray<number> | undefined => {
+		if (fn.instructionOpcodeName(instruction) !== "createFunction") return undefined;
 		const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 		if (fn.kernel.valueHandlerUseCount(value) !== 0 || fn.valueUseCount(value) === 0)
-			return false;
+			return undefined;
+		const owners: Array<number> = [];
 		for (
 			let use = fn.kernel.valueFirstUse(value);
 			use >= 0;
@@ -87,13 +89,17 @@ export function pruneUnusedPlatformModuleInitializers(
 				fn.instructionKind(store) !== "operation" ||
 				fn.instructionOpcodeName(store) !== "storeGlobal"
 			)
-				return false;
+				return undefined;
 			const slot = fn.instructionAttributes(store).index;
 			const owner = typeof slot === "number" ? slotOwners.get(slot) : undefined;
-			if (owner === undefined || needed.has(owner)) return false;
+			if (owner === undefined || needed.has(owner)) return undefined;
+			owners.push(owner);
 		}
-		return true;
+		return owners;
 	};
+	// Module instantiation creates hoisted declarations before anything demands their
+	// module, so a skipped declaration's body is walked once its owner becomes needed.
+	const deferredDeclarations = new Map<number, Array<CoreFunctionId>>();
 	const visited = new Set<CoreFunctionId>();
 	const pending = [
 		coreFunctionId(0),
@@ -102,7 +108,7 @@ export function pruneUnusedPlatformModuleInitializers(
 	const demandInitializer = (owner: number) => {
 		if (needed.has(owner)) return;
 		needed.add(owner);
-		pending.push(coreFunctionId(owner));
+		pending.push(coreFunctionId(owner), ...(deferredDeclarations.get(owner) ?? []));
 		// Re-export-only modules can be the sole evaluation path to a live dependency.
 		for (const parent of initializerParents.get(owner) ?? []) demandInitializer(parent);
 	};
@@ -126,7 +132,19 @@ export function pruneUnusedPlatformModuleInitializers(
 			const opcode = header.opcode;
 			const attributes = fn.kernel.instructionAttributes(instruction);
 			if (eagerInitializer(fn, instruction) !== undefined) continue;
-			if (unusedModuleDeclaration(fn, instruction)) continue;
+			const declarationOwners = unusedDeclarationOwners(fn, instruction);
+			if (
+				declarationOwners !== undefined &&
+				typeof attributes.functionIndex === "number"
+			) {
+				const body = coreFunctionId(attributes.functionIndex);
+				for (const owner of declarationOwners) {
+					const deferred = deferredDeclarations.get(owner) ?? [];
+					deferred.push(body);
+					deferredDeclarations.set(owner, deferred);
+				}
+				continue;
+			}
 			if (opcode === "loadGlobal" && typeof attributes.index === "number")
 				demand(attributes.index);
 			if (opcode === "createModuleNamespace" && Array.isArray(attributes.exports)) {
