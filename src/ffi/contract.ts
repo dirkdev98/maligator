@@ -249,7 +249,19 @@ function validateTypeFacts(value: unknown, at: string): void {
 			const fieldAt = `${at}.fields.${name}`;
 			expect(C_NAME.test(name), fieldAt, "a C field name");
 			expectObject(field, fieldAt);
-			expectKeys(field, fieldAt, ["bytes", "string", "callable", "handle", "array"]);
+			expectKeys(field, fieldAt, [
+				"bytes",
+				"string",
+				"callable",
+				"handle",
+				"array",
+				"value",
+			]);
+			if (field.value !== undefined) {
+				expectKeys(field, fieldAt, ["value"]);
+				expect(field.value === true, `${fieldAt}.value`, "true");
+				continue;
+			}
 			if (field.array !== undefined) {
 				expectKeys(field, fieldAt, ["array"]);
 				expectObject(field.array, `${fieldAt}.array`);

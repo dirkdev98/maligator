@@ -10,6 +10,8 @@ export default {
 			fields: {
 				specs: { array: { length: "count" } },
 				order: { array: { length: "order_count" } },
+				count: { value: true },
+				weight: { value: true },
 			},
 		},
 	},

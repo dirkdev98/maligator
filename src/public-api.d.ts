@@ -131,6 +131,7 @@ export type MaligatorFfiFieldFacts =
 			callable?: never;
 			handle?: never;
 			array?: never;
+			value?: never;
 	  }
 	| {
 			/** UTF-8 text kept in a private encoding, with a C field holding its byte count. */
@@ -139,6 +140,7 @@ export type MaligatorFfiFieldFacts =
 			callable?: never;
 			handle?: never;
 			array?: never;
+			value?: never;
 	  }
 	| {
 			callable: MaligatorFfiCallable;
@@ -146,6 +148,7 @@ export type MaligatorFfiFieldFacts =
 			string?: never;
 			handle?: never;
 			array?: never;
+			value?: never;
 	  }
 	| {
 			/** Owned fields transfer from value results; record inputs borrow their handles.
@@ -158,6 +161,7 @@ export type MaligatorFfiFieldFacts =
 			string?: never;
 			callable?: never;
 			array?: never;
+			value?: never;
 	  }
 	| {
 			/**
@@ -169,6 +173,19 @@ export type MaligatorFfiFieldFacts =
 			string?: never;
 			callable?: never;
 			handle?: never;
+			value?: never;
+	  }
+	| {
+			/**
+			 * Expose this value member as a read-only property on any handle, including a
+			 * library-owned pointer handle whose other members stay hidden.
+			 */
+			value: true;
+			bytes?: never;
+			string?: never;
+			callable?: never;
+			handle?: never;
+			array?: never;
 	  };
 
 /** A declaration whose documentation supports a fact, independent of its source location. */

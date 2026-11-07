@@ -860,7 +860,8 @@ function handleTypes(
 				(field) =>
 					field.callable === undefined &&
 					field.handle === undefined &&
-					field.array === undefined,
+					field.array === undefined &&
+					field.value === undefined,
 			)
 		)
 			throw new FfiFactError(
@@ -871,12 +872,14 @@ function handleTypes(
 		if (typeFacts.fields !== undefined) {
 			if (
 				handle === undefined &&
-				Object.values(typeFacts.fields).some((field) => field.array !== undefined)
+				Object.values(typeFacts.fields).some(
+					(field) => field.array !== undefined || field.value !== undefined,
+				)
 			)
 				throw new FfiFactError(
 					"unmet-requirement",
 					`types.${key}.fields`,
-					"array fields require a handle",
+					"array and value fields require a handle",
 				);
 			const owned = Object.values(typeFacts.fields).every(
 				(field) => field.handle?.owned === true,
@@ -2474,7 +2477,12 @@ class Planner {
 				fields.push(this.#arrayField(record, field, fact.array.length, members));
 				continue;
 			}
-			if (!exposeValues && fact?.callable === undefined && fact?.handle === undefined)
+			if (
+				!exposeValues &&
+				fact?.callable === undefined &&
+				fact?.handle === undefined &&
+				fact?.value !== true
+			)
 				continue;
 			let mapped: Mapping<JsResult> =
 				fact?.callable === undefined
@@ -2529,11 +2537,21 @@ class Planner {
 					};
 				} else mapped = { value: { ...mapped.value, ownership: { kind: "library" } } };
 			}
-			if (fact?.callable !== undefined && "gap" in mapped)
+			if ((fact?.callable !== undefined || fact?.value === true) && "gap" in mapped)
 				throw new FfiFactError(
 					"unmet-requirement",
 					`types.${record.name}.fields.${field.name}`,
 					`${mapped.gap}`,
+				);
+			if (
+				fact?.value === true &&
+				"value" in mapped &&
+				(mapped.value.kind === "array" || this.#containsHandle(mapped.value))
+			)
+				throw new FfiFactError(
+					"unmet-requirement",
+					`types.${record.name}.fields.${field.name}.value`,
+					"value fields hold single values without handles",
 				);
 			// Accessors return single values; array fields stay behind the handle.
 			if (
@@ -2612,7 +2630,8 @@ class Planner {
 			if (
 				fact.callable !== undefined ||
 				fact.handle !== undefined ||
-				fact.array !== undefined
+				fact.array !== undefined ||
+				fact.value !== undefined
 			)
 				continue;
 			const at = `types.${record.name}.fields.${name}`;

@@ -32,13 +32,21 @@ it("types counted array fields of a library-owned handle", () => {
 	const declarations = [...generateDeclarations([{ name: "sorting", plan }])].join("\n");
 	expect(declarations).toContain("readonly specs: Array<SortSpec> | null;");
 	expect(declarations).toContain("readonly order: Array<number> | null;");
+	expect(declarations).toContain("readonly count: number;");
+	expect(declarations).toContain("readonly weight: number;");
+	expect(declarations).not.toContain("readonly order_count");
 });
 
 it.each<[string, MaligatorFfiTypeFacts, string]>([
 	[
 		"a type without a handle",
 		{ fields: { specs: { array: { length: "count" } } } },
-		"array fields require a handle",
+		"array and value fields require a handle",
+	],
+	[
+		"a value fact on a pointer member",
+		{ handle: {}, fields: { specs: { value: true } } },
+		"types.SortSpecs.fields.specs",
 	],
 	[
 		"a count that is not an integer field",
@@ -50,7 +58,7 @@ it.each<[string, MaligatorFfiTypeFacts, string]>([
 		{ handle: {}, fields: { count: { array: { length: "order_count" } } } },
 		"'count' is not a pointer field",
 	],
-])("rejects an array field on %s", (_name, facts, message) => {
+])("rejects an array or value field on %s", (_name, facts, message) => {
 	expect(() =>
 		planBindings(model, { types: { SortSpecs: facts }, functions: contract.functions }),
 	).toThrow(message);

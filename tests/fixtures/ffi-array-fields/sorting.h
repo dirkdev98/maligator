@@ -7,6 +7,7 @@ typedef struct {
 	int count;
 	const unsigned short *order;
 	unsigned int order_count;
+	double weight;
 } SortSpecs;
 
 const SortSpecs *sort_specs(void);

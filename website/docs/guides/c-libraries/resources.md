@@ -155,24 +155,29 @@ input root. Native leases also preserve the resources through VM teardown until 
 releases the registration. Use a whole-result handle when its destructor releases
 the record's resources together.
 
-## Counted array fields
+## Fields of library-owned records
 
-When a handle's struct points at a counted run of values, such as Dear ImGui's
-`ImGuiTableSortSpecs` with `Specs` and `SpecsCount`, declare an `array` field:
+A pointer handle the library returns keeps its struct's members hidden, since the
+handle only promises the pointer. Declare the members to read. `value: true` exposes a
+value member as a read-only property, and `array` reads a counted run of values, such as
+Dear ImGui's `ImGuiTableSortSpecs` with `Specs` and `SpecsCount`:
 
 ```ts
 types: {
-	SortSpecs: { handle: {}, fields: { specs: { array: { length: "count" } } } },
+	SortSpecs: {
+		handle: {},
+		fields: { count: { value: true }, specs: { array: { length: "count" } } },
+	},
 },
 functions: { sort_specs: { returns: { borrowed: true } } },
 ```
 
-`specs.specs` returns a fresh array of as many `SortSpec` records as the `count` field
-holds when it is read, or `null` for a null pointer. Each read copies again, so later C
-changes appear in the next read and not in earlier arrays. Elements are values: records,
-numbers, or strings, never handles. A negative or oversized count throws a `RangeError`.
-Array fields work on any handle, including library-owned pointer handles whose other
-fields stay hidden.
+`specs.count` reads the member's current value. `specs.specs` returns a fresh array of
+as many `SortSpec` records as the `count` field holds when it is read, or `null` for a
+null pointer. Each read copies again, so later C changes appear in the next read and not
+in earlier arrays. Elements are values: records, numbers, or strings, never handles. A
+negative or oversized count throws a `RangeError`. Both facts work on any handle; struct
+handles and caller storage already expose their value members.
 
 ## Owned fields in records
 
