@@ -787,7 +787,7 @@ describe("ffi contract facts", () => {
 	it("rejects variants that do not fit their declaration", () => {
 		rejects(
 			{ functions: { shapes_add: { variants: { shapes_add_more: { args: ["int"] } } } } },
-			"functions.shapes_add.variants.shapes_add_more: shapes_add is not variadic",
+			"functions.shapes_add.variants.shapes_add_more.args: shapes_add is not variadic",
 		);
 		rejects(
 			{ functions: { shapes_log: { variants: { shapes_twice: { args: ["int"] } } } } },
