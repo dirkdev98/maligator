@@ -2694,6 +2694,13 @@ class Planner {
 		at: string,
 	): Mapping<CallbackValue> {
 		const facts = callback.params ?? {};
+		for (const [key, valueFacts] of Object.entries(facts))
+			if (valueFacts.pointee !== undefined || valueFacts.end !== undefined)
+				throw new FfiFactError(
+					"inapplicable",
+					`${at}.callback.params.${key}`,
+					"pointee and end apply to parameters of functions the program calls",
+				);
 		const lifetimes = [
 			...(callback.release === undefined ? [] : ["release"]),
 			...(callback.replaced === true ? ["replaced"] : []),
@@ -3346,6 +3353,56 @@ class Planner {
 		};
 	}
 
+	/**
+	 * `declaration` with each `void *` parameter a `pointee` fact types replaced by a
+	 * pointer to that type, keeping the pointee's constness. C converts the typed pointer
+	 * back to `void *` at the call.
+	 */
+	#withPointees(
+		declaration: CFunction,
+		facts: FunctionFacts,
+		where: (at: string) => string,
+	): CFunction {
+		if (!facts.params.some((valueFacts) => valueFacts?.pointee !== undefined))
+			return declaration;
+		return {
+			...declaration,
+			params: declaration.params.map((param, index) => {
+				const pointee = facts.params[index]?.pointee;
+				if (pointee === undefined) return param;
+				const at = where(`params.${param.name ?? String(index + 1)}.pointee`);
+				const resolved = resolveCType(this.#model, param.type);
+				const target =
+					resolved.kind === "pointer"
+						? resolveCType(this.#model, resolved.to)
+						: undefined;
+				if (resolved.kind !== "pointer" || target?.kind !== "void")
+					throw new FfiFactError(
+						"inapplicable",
+						at,
+						`applies to void pointers, not ${formatCDeclaration(param.type)}`,
+					);
+				const constant = "const" in target && target.const === true;
+				const parsed = parseCType(`${constant ? "const " : ""}${pointee}`);
+				const kind = resolveCType(this.#model, parsed).kind;
+				if (["unsupported", "void", "function"].includes(kind))
+					throw new FfiFactError(
+						"unknown-name",
+						at,
+						`'${pointee}' is not a C value type`,
+					);
+				return {
+					...param,
+					type: {
+						kind: "pointer" as const,
+						to: parsed,
+						...(resolved.const === true ? { const: true as const } : {}),
+					},
+				};
+			}),
+		};
+	}
+
 	function(
 		declaration: CFunction,
 		facts: FunctionFacts,
@@ -3362,6 +3419,7 @@ class Planner {
 	): BoundFunction | UnboundFunction {
 		const where = (at: string): string =>
 			`${callableContext?.path ?? `functions.${declaration.name}`}.${at}`;
+		declaration = this.#withPointees(declaration, facts, where);
 		const gaps: Array<Gap> = [];
 		if (declaration.variadic) {
 			gaps.push({
@@ -4349,8 +4407,46 @@ function planVariant(
 ): BoundFunction | UnboundFunction {
 	const at = `functions.${declaration.name}.variants.${name}`;
 	if (!declaration.variadic) {
-		throw new FfiFactError("inapplicable", at, `${declaration.name} is not variadic`);
+		if (variant.args !== undefined)
+			throw new FfiFactError(
+				"inapplicable",
+				`${at}.args`,
+				`${declaration.name} is not variadic`,
+			);
+		const paramFacts: Array<MaligatorFfiValueFacts | undefined> = declaration.params.map(
+			(_, index) => stated?.params[index],
+		);
+		for (const [key, valueFacts] of Object.entries(variant.params ?? {})) {
+			const index = /^\d+$/.test(key)
+				? Number(key) - 1
+				: declaration.params.findIndex((param) => param.name === key);
+			if (index < 0 || index >= declaration.params.length)
+				throw new FfiFactError(
+					"unknown-name",
+					`${at}.params.${key}`,
+					`${declaration.name} has no parameter '${key}'`,
+				);
+			paramFacts[index] = valueFacts;
+		}
+		const result = planner.function(
+			declaration,
+			{
+				params: paramFacts,
+				returns: stated?.returns ?? NO_FACTS,
+				...(stated?.callsJavaScript === undefined
+					? {}
+					: { callsJavaScript: stated.callsJavaScript }),
+			},
+			undefined,
+		);
+		return { ...result, name };
 	}
+	if (variant.args === undefined)
+		throw new FfiFactError(
+			"unmet-requirement",
+			`${at}.args`,
+			"variants of a variadic function need the C types of their extra arguments",
+		);
 	const fixed = declaration.params.length;
 	const params = [
 		...declaration.params,

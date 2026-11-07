@@ -257,6 +257,12 @@ export interface MaligatorFfiValueFacts {
 	 */
 	sizeof?: string;
 	/**
+	 * The C type a `void *` or `const void *` parameter points at, such as `double`, when
+	 * another argument selects it at runtime. The parameter then binds as a pointer to
+	 * that type, keeping its constness; pair it with per-type `variants`.
+	 */
+	pointee?: string;
+	/**
 	 * Pass the address of the terminator of the NUL-terminated string that this
 	 * parameter, named by C name or 1-based position, passes, and omit this parameter
 	 * from JavaScript. C then reads that text as a `[start, end)` range.
@@ -393,9 +399,17 @@ export interface MaligatorFfiFunctionFacts {
 
 /** One way to call a variadic function: the C types of the arguments after the fixed ones. */
 export interface MaligatorFfiVariant {
-	/** C type spellings, such as `int` or `const char *`; arguments are named `arg<position>`. */
-	args: Array<string>;
-	/** Facts for the variadic arguments, keyed by `arg<position>` or by 1-based position. */
+	/**
+	 * For a variadic function, the C type spellings of the arguments after the fixed
+	 * ones, such as `int` or `const char *`; arguments are named `arg<position>`.
+	 * Variants of other functions have no `args`.
+	 */
+	args?: Array<string>;
+	/**
+	 * Facts for the variadic arguments, keyed by `arg<position>` or by 1-based position.
+	 * Variants of other functions state facts for any parameter, by C name or position,
+	 * replacing the function's own facts for that parameter.
+	 */
 	params?: Record<string, MaligatorFfiValueFacts>;
 }
 

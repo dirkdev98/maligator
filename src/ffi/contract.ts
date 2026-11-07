@@ -445,7 +445,14 @@ function validateValueFacts(value: unknown, at: string): void {
 		"constant",
 		"sizeof",
 		"end",
+		"pointee",
 	]);
+	if (value.pointee !== undefined)
+		expect(
+			typeof value.pointee === "string" && value.pointee.trim().length > 0,
+			`${at}.pointee`,
+			"a C type spelling",
+		);
 	if (value.shape !== undefined) validateShape(value.shape, `${at}.shape`);
 	if (value.end !== undefined)
 		expect(
@@ -726,12 +733,13 @@ function validateFunctionFacts(value: unknown, at: string): void {
 			validateFunctionExport(name, variantAt);
 			expectObject(variant, variantAt);
 			expectKeys(variant, variantAt, ["args", "params"]);
-			expect(
-				Array.isArray(variant.args) &&
-					variant.args.every((spelling) => typeof spelling === "string"),
-				`${variantAt}.args`,
-				"an array of C type spellings",
-			);
+			if (variant.args !== undefined)
+				expect(
+					Array.isArray(variant.args) &&
+						variant.args.every((spelling) => typeof spelling === "string"),
+					`${variantAt}.args`,
+					"an array of C type spellings",
+				);
 			if (variant.params !== undefined) {
 				validateParamFacts(variant.params, `${variantAt}.params`);
 			}

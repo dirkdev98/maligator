@@ -1051,6 +1051,34 @@ still reads arguments by the types its other arguments announce, such as a forma
 so a mismatch is undefined behavior in C. Pass fixed formats from a wrapper rather than
 text a user controls.
 
+## Type void pointers
+
+Some functions take a `void *` and an argument that says what it points at, as Dear
+ImGui's `igSliderScalar` takes an `ImGuiDataType`. Give such a function a variant per
+type. Variants of a function that is not variadic have no `args`; their `params` replace
+the function's facts for the parameters they name:
+
+```typescript
+functions: {
+	scalar_step: {
+		variants: {
+			scalar_step_double: {
+				params: { type: { constant: "DATA_DOUBLE" }, value: { pointee: "double", inout: true } },
+			},
+			scalar_step_int: {
+				params: { type: { constant: "DATA_INT" }, value: { pointee: "int", inout: true } },
+			},
+		},
+	},
+},
+```
+
+`pointee` names the C type the pointer addresses; the parameter then binds as a pointer
+to that type, `const` for a `const void *`, so other facts such as `inout` and `array`
+apply. `constant` fixes the selector, so each export can only pass the type it names.
+Like variadic functions, a function with variants exports only its variants, and
+`dispatch` adds a runtime selector over them.
+
 ## Run blocking calls on a worker
 
 `async` exports a function a second time, under a new name, as one that runs the C call on a worker thread and returns a promise of its result. A slow call, such as a database query or an image decode, then leaves the event loop free:
