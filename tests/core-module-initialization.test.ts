@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { coreFunctionId } from "../src/compiler/core/core-ir.ts";
+import type { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-module-graph.ts";
 import { certifyProgramClosure } from "../src/compiler/frontend/certify-closure.ts";
 import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
@@ -11,19 +13,24 @@ import {
 	compilerProgramFactsFromConfig,
 	withProgramClosure,
 } from "../src/compiler/shared/compiler-facts.ts";
-import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
+import {
+	coreFunctionNamed,
+	coreFunctions,
+	coreOperations,
+} from "./helpers/core-inspection.ts";
 import { inspectStaticValueFunctions } from "./helpers/static-values.ts";
 
-function readerOpcodes(
+function inspectOptimized<T>(
 	files: Readonly<Record<string, string>>,
+	inspect: (program: CoreProgram) => T,
 	primordials: "locked" | "mutable" = "mutable",
 	sourceClosure: "open" | "closed" = "open",
-): ReadonlyArray<string> {
+): T {
 	const root = mkdtempSync(join(tmpdir(), "mal-module-initialization-"));
 	try {
 		for (const [name, source] of Object.entries(files))
 			writeFileSync(join(root, name), source);
-		let opcodes: ReadonlyArray<string> = [];
+		let inspected: { value: T } | undefined;
 		const config = resolveBuildConfig({ engine: { primordials } });
 		const graph = buildModuleGraph(join(root, "entry.mjs"));
 		const facts = compilerProgramFactsFromConfig(config);
@@ -39,15 +46,31 @@ function readerOpcodes(
 							}),
 						),
 			afterCoreOptimization(program) {
-				const reader = coreFunctionNamed(program, "reader");
-				if (reader === undefined) throw new Error("Missing Core function reader");
-				opcodes = coreOperations(reader).map((operation) => operation.opcode);
+				inspected = { value: inspect(program) };
 			},
 		});
-		return opcodes;
+		if (inspected === undefined) throw new Error("Core optimization did not finish");
+		return inspected.value;
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+}
+
+function readerOpcodes(
+	files: Readonly<Record<string, string>>,
+	primordials: "locked" | "mutable" = "mutable",
+	sourceClosure: "open" | "closed" = "open",
+): ReadonlyArray<string> {
+	return inspectOptimized(
+		files,
+		(program) => {
+			const reader = coreFunctionNamed(program, "reader");
+			if (reader === undefined) throw new Error("Missing Core function reader");
+			return coreOperations(reader).map((operation) => operation.opcode);
+		},
+		primordials,
+		sourceClosure,
+	);
 }
 
 const entry = `import { reader } from "./limits.mjs"; globalThis.result = reader(3);`;
@@ -226,6 +249,60 @@ describe("module bindings initialized before user code", () => {
 		expect(opcodes).not.toContain("call");
 		expect(opcodes).not.toContain("guardFunctionIndex");
 	});
+});
+
+function createdFunctionNames(program: CoreProgram): ReadonlyArray<string> {
+	const names = new Map(
+		coreFunctions(program).map((fn) => [
+			fn.id,
+			String.fromCodePoint(
+				...(program.stringConstants[fn.metadata.nameStringIndex] ?? []),
+			),
+		]),
+	);
+	return coreFunctions(program).flatMap((fn) =>
+		coreOperations(fn).flatMap(({ opcode, attributes }) =>
+			opcode === "createFunction" && typeof attributes.functionIndex === "number"
+				? [names.get(coreFunctionId(attributes.functionIndex)) ?? ""]
+				: [],
+		),
+	);
+}
+
+describe("unread module bindings", () => {
+	it.each([
+		["closed", false],
+		["open", true],
+	] as const)(
+		"drops what only unread exports hold only in a %s program",
+		(sourceClosure, kept) => {
+			const unread = inspectOptimized(
+				{
+					"entry.mjs": `import { used } from "./lib.mjs"; globalThis.result = used(3);`,
+					"lib.mjs": `
+						export function used(value) { return value + 1; }
+						export const CONFIG = { retries: 3 };
+						export function unused() { return CONFIG.retries; }
+					`,
+				},
+				(program) => ({
+					unused: createdFunctionNames(program).includes("unused"),
+					config: coreFunctions(program).some((fn) =>
+						coreOperations(fn).some(({ opcode }) =>
+							[
+								"createObject",
+								"createObjectShaped",
+								"instantiateLiteralTemplate",
+							].includes(opcode),
+						),
+					),
+				}),
+				"mutable",
+				sourceClosure,
+			);
+			expect(unread).toEqual({ unused: kept, config: kept });
+		},
+	);
 });
 
 function capturedReaders(source: string, names: ReadonlyArray<string>) {

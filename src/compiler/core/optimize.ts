@@ -32,6 +32,7 @@ import {
 	CORE_CONSTRUCTION_ANNOTATION_PASSES,
 	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
 } from "./core-local-passes.ts";
+import { pruneUnreadModuleBindings } from "./core-module-globals.ts";
 import type { CoreOptimizationBenchmarkAblation } from "./core-optimization-families.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationOwnerId } from "./core-optimization-owners.ts";
@@ -245,6 +246,7 @@ export function optimizeCore(
 	);
 	pruneUnusedPlatformAliases(compilation);
 	pruneUnusedPlatformModuleInitializers(compilation);
+	pruneUnreadModuleBindings(compilation);
 	if (ablatedFamily !== "inlining-cross-call") liftLocalCaptureArguments(compilation);
 	if (ablatedFamily !== "provenance-escape-scalar-replacement")
 		deferCapturedRestMaterialization(compilation);

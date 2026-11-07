@@ -530,6 +530,7 @@ describe("whole-program Core value kinds", () => {
 		const sourcePath = "suspending-result.mjs";
 		const source = `${declaration}
 function isNumber() { return typeof produce() === "number"; }
+globalThis.isNumber = isNumber;
 globalThis.result = isNumber();`;
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

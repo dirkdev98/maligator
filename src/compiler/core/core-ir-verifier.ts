@@ -1509,7 +1509,10 @@ function verifyCompilationContext(
 		}
 		requireExistingFunction(program, functionId, "compilation context CJS module");
 	}
-	for (const slot of context.data.singleAssignmentGlobalSlots) {
+	for (const slot of [
+		...context.data.singleAssignmentGlobalSlots,
+		...(context.data.moduleBindingSlots ?? []),
+	]) {
 		if (!Number.isSafeInteger(slot) || slot < 0 || slot >= program.globalCount) {
 			fail(`compilation context references invalid global slot ${slot}`);
 		}
