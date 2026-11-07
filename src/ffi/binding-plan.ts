@@ -1662,6 +1662,15 @@ class Planner {
 		return views[element.bits];
 	}
 
+	/** The handle type of `value` when it adopts a library pointer to a copied struct. */
+	#structPointer(value: JsValue): string | undefined {
+		return value.kind === "handle" &&
+			value.pass === "pointer" &&
+			this.#handles.get(value.name)?.representation === "struct"
+			? value.name
+			: undefined;
+	}
+
 	#canBorrowResult(value: JsValue): boolean {
 		return (
 			value.kind === "handle" ||
@@ -1730,6 +1739,12 @@ class Planner {
 			if (element.value.kind === "sequence" || element.value.kind === "bytes") {
 				return { gap: "arrays of arrays need a fact", code: "array" };
 			}
+			const adopted = this.#structPointer(element.value);
+			if (adopted !== undefined)
+				return {
+					gap: `array element: a pointer into a ${adopted} handle has no owner`,
+					code: "unsupported",
+				};
 			return {
 				value:
 					position === "param"
@@ -1798,9 +1813,15 @@ class Planner {
 					},
 				};
 			}
+			// The handle adopts the library's pointer as its struct storage.
 			return {
-				gap: `a pointer into a ${handle.name} handle has no owner`,
-				code: "unsupported",
+				value: {
+					kind: "handle",
+					name: handle.name,
+					pass: "pointer",
+					nullable: true,
+					ownership: { kind: facts.borrowed === true ? "borrowed" : "owned" },
+				},
 			};
 		}
 		// The record that holds the field names the fact it needs.
@@ -2187,6 +2208,7 @@ class Planner {
 			!("value" in mapped) ||
 			mapped.value.kind !== "handle" ||
 			mapped.value.pass !== "pointer" ||
+			this.#structPointer(mapped.value) !== undefined ||
 			this.#handles.get(mapped.value.name)?.destroy === undefined ||
 			this.#handles.get(mapped.value.name)?.allocator !== undefined
 		)
@@ -2459,7 +2481,8 @@ class Planner {
 				if (
 					!("value" in mapped) ||
 					mapped.value.kind !== "handle" ||
-					mapped.value.pass !== "pointer"
+					mapped.value.pass !== "pointer" ||
+					this.#structPointer(mapped.value) !== undefined
 				)
 					throw new FfiFactError(
 						"inapplicable",
@@ -2857,6 +2880,13 @@ class Planner {
 					gap: `callback parameter ${String(index + 1)}: ${mapped.gap}`,
 				};
 			}
+			// A loan cannot adopt the pointer: it closes when the callback returns.
+			const adopted = this.#structPointer(mapped.value);
+			if (adopted !== undefined)
+				return {
+					gap: `callback parameter ${String(index + 1)}: a pointer into a ${adopted} handle has no owner`,
+					code: "unsupported",
+				};
 			params.push(mapped.value);
 		}
 		if (routed && !params.includes("data")) {

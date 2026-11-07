@@ -350,6 +350,17 @@ the handle open for retry. Cleanup callbacks cannot use or recursively close the
 handle while its release is in progress. Conditional cleanup requires explicit
 disposal, so it cannot use `collect: true`.
 
+A struct the library both allocates and passes by value, such as cimplot's
+`ImPlotSpec`, binds with the same `handle` fact. A pointer result such as
+`Style *style_new(void)` returns a `Style` handle that keeps the library's pointer as
+its storage: by-value parameters copy the struct from it, pointer parameters update it
+in place, its fields read the library's current values, and disposal passes that
+pointer to `destroy`. With `borrowed: true`, closing such a handle leaves the struct to
+the library. Unlike pointer handles, each result is a new handle object, so `fresh` and
+`views` do not apply, and callbacks cannot receive these pointers. When `destroy` takes
+a pointer, it also receives the address of a handle's copy for by-value results, so
+mix the two only when that function cleans up the struct's contents without freeing it.
+
 - `borrowed` marks a result the library keeps owning. Closing it does not release it.
 - A `handle` without `destroy` describes a pointer the library owns, such as the `sqlite3_context` SQLite lends to callbacks, unless `storage: "caller"` provides its outer storage.
 - `collect: true` releases a handle the program drops once it is garbage collected. Leave it off for resources that must be released on one thread or before the library shuts down, such as raylib's GPU textures.

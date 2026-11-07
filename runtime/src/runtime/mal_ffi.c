@@ -3890,9 +3890,14 @@ static __attribute__((noinline)) bool ffi_handle_supports(MalFfiHandleObject *ha
 }
 
 /** `scope` 0 makes a handle the program holds; otherwise it lives as long as that invocation. */
+/*
+ * A struct type's handle copies the struct at `value`, unless `adopt` keeps the
+ * library's pointer to a complete struct as the handle's storage. An adopted pointer
+ * is neither registered nor freed by the handle; its destroy receives that pointer.
+ */
 static MalValue ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
-    bool owned, u64 scope, bool owns_storage, bool fresh, MalFfiResultClaim *claim) {
+    bool owned, u64 scope, bool owns_storage, bool fresh, MalFfiResultClaim *claim, bool adopt) {
     if (claim == nullptr && type->size == 0) {
         MalFfiResultClaim *pending = ffi_result_pending(vm, type, value, nullptr);
         if (pending != nullptr) {
@@ -3967,7 +3972,7 @@ static MalValue ffi_new_handle(
         return result;
     }
     void *stored = value;
-    if (type->size > 0) {
+    if (type->size > 0 && !adopt) {
         stored = mal_ffi_allocate_storage(1, type->size, type->alignment);
         if (stored != nullptr) memcpy(stored, value, type->size);
         owns_storage = true;
@@ -4036,7 +4041,7 @@ static MalValue ffi_new_handle(
     }
     if (claim != nullptr && !mal_ffi_threw(vm)) ffi_result_track(vm, type, value, rooted[1]);
     if (canonical != type && !mal_ffi_threw(vm))
-        rooted[1] = ffi_new_handle(vm, library, type, value, owned, scope, false, fresh, claim);
+        rooted[1] = ffi_new_handle(vm, library, type, value, owned, scope, false, fresh, claim, adopt);
     mal_gc_unroot(&root);
     return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
         : rooted[1];
@@ -4154,7 +4159,7 @@ MalValue mal_ffi_result_handle(MalVm *vm, MalFfiResults *results,
         return mal_value_new_undefined();
     }
     MalValue result = ffi_new_handle(vm, library, type, value, owned, 0, false,
-        claim == nullptr ? fresh : claim->fresh, claim);
+        claim == nullptr ? fresh : claim->fresh, claim, false);
     if (claim != nullptr && !mal_ffi_threw(vm)) claim->handles[1] = result;
     return result;
 }
@@ -4251,7 +4256,16 @@ void mal_ffi_results_finish(MalVm *vm, MalFfiResults *results) {
 MalValue mal_ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned, bool fresh) {
-    MalValue result = ffi_new_handle(vm, library, type, value, owned, 0, false, fresh, nullptr);
+    MalValue result = ffi_new_handle(vm, library, type, value, owned, 0, false, fresh, nullptr, false);
+    if (vm->ffi != nullptr && vm->ffi->results != nullptr && !mal_ffi_threw(vm))
+        ffi_result_delivered(vm, ffi_handle(result));
+    return result;
+}
+
+MalValue mal_ffi_new_struct_pointer_handle(
+    MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
+    bool owned) {
+    MalValue result = ffi_new_handle(vm, library, type, value, owned, 0, false, false, nullptr, true);
     if (vm->ffi != nullptr && vm->ffi->results != nullptr && !mal_ffi_threw(vm))
         ffi_result_delivered(vm, ffi_handle(result));
     return result;
@@ -4326,7 +4340,7 @@ MalValue mal_ffi_new_owner_handle(
         mal_gc_unroot(&root);
         return mal_value_new_undefined();
     }
-    roots[1] = ffi_new_handle(vm, library, type, value, false, owner->scope, false, false, nullptr);
+    roots[1] = ffi_new_handle(vm, library, type, value, false, owner->scope, false, false, nullptr, false);
     MalFfiHandleObject *child = mal_ffi_threw(vm) ? nullptr : ffi_handle(roots[1]);
     if (child != nullptr && child != owner && ffi_handle_owner(child) == nullptr) {
         child->owner = owner;
@@ -4362,7 +4376,7 @@ MalValue mal_ffi_new_library_handle(
         }
     }
     if (!ffi_library_claim_add(vm, type, value)) return mal_value_new_undefined();
-    MalValue result = ffi_new_handle(vm, library, type, value, false, 0, false, false, nullptr);
+    MalValue result = ffi_new_handle(vm, library, type, value, false, 0, false, false, nullptr, false);
     if (!mal_ffi_threw(vm)) {
         // Library lifetime outlasts a callback loan the resource arrived through.
         ffi_handle(result)->ownership = MAL_FFI_HANDLE_LIBRARY;
@@ -4381,7 +4395,7 @@ MalValue mal_ffi_allocate_handle(
         return mal_value_new_undefined();
     }
     memset(storage, 0, size);
-    return ffi_new_handle(vm, library, type, storage, false, 0, true, false, nullptr);
+    return ffi_new_handle(vm, library, type, storage, false, 0, true, false, nullptr, false);
 }
 
 MalValue mal_ffi_allocate_opaque_handle(
@@ -4418,7 +4432,7 @@ MalValue mal_ffi_new_callback_handle(
     u64 scope = state == nullptr || state->invocation_depth == 0
         ? 0
         : state->invocations[state->invocation_depth - 1];
-    return ffi_new_handle(vm, library, type, value, false, scope, false, false, nullptr);
+    return ffi_new_handle(vm, library, type, value, false, scope, false, false, nullptr, false);
 }
 
 // ThinLTO must specialize the descriptor and optional pin at each binding site.

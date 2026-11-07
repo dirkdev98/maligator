@@ -174,6 +174,14 @@ typedef struct MalFfiHandleType {
 MalValue mal_ffi_new_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
     bool owned, bool fresh);
+/**
+ * Wrap a library pointer to a complete struct whose handle type otherwise copies
+ * structs. The handle keeps that pointer as its storage, so C changes stay visible
+ * and destroy receives it; the handle never frees it itself.
+ */
+MalValue mal_ffi_new_struct_pointer_handle(
+    MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type, void *value,
+    bool owned);
 /** A canonical borrowed child whose owning resource remains reachable and guarded. */
 MalValue mal_ffi_new_owner_handle(
     MalVm *vm, const MalFfiLibrary *library, const MalFfiHandleType *type,

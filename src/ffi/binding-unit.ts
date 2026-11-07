@@ -1077,6 +1077,17 @@ class BindingWriter {
 							: ordinary
 						: `(${lent}) ? ${loan} : ${ordinary}`;
 				};
+				if (
+					value.pass === "pointer" &&
+					this.#handle(value.name).representation === "struct"
+				) {
+					if (
+						lent !== false ||
+						(value.ownership.kind !== "owned" && value.ownership.kind !== "borrowed")
+					)
+						throw new Error("a struct pointer handle is an owned or borrowed result");
+					return `(${expression}) == nullptr ? mal_ffi_null() : mal_ffi_new_struct_pointer_handle(vm, &mal_ffi_library, &mal_ffi_type_${value.name}, (void *) (${expression}), ${value.ownership.kind === "owned"})`;
+				}
 				return value.pass === "copy"
 					? created(`&(${expression})`)
 					: `(${expression}) == nullptr ? mal_ffi_null() : ${created(`(void *) (${expression})`)}`;
