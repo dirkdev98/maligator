@@ -87,6 +87,7 @@ import type {
 } from "./lower-native-captures.ts";
 import {
 	DATA_VIEW_ELEMENT_SIZES,
+	ffiIntegerArgumentFits,
 	nativeDataViewAccessor,
 	numericLoopCallMethods,
 	numericLoopOrder,
@@ -2544,6 +2545,19 @@ function emitNumericLoopRegion(
 								throw new Error("Invalid numeric loop lent view");
 							return [`${id}_l${operand.register}`, `${id}_n${operand.register}`];
 						}
+						// The planner proved each integer argument exact and in range.
+						if (parameter.kind === "integer")
+							return [
+								`((${ffiScalarCType(parameter)}) ${
+									operand.kind === "register"
+										? integral.has(operand.register)
+											? local(operand.register)
+											: num(operand.register)
+										: operand.kind === "number"
+											? String(operand.value)
+											: ""
+								})`,
+							];
 						if (operand.kind === "register")
 							return [
 								parameter.kind === "boolean"
@@ -12592,31 +12606,16 @@ class NativeInstructionEmission {
 		const number = this.nativeNumberOperand(operand);
 		if (number === null) return undefined;
 		if (type.kind === "number") return number;
-		const minimum = type.signed ? -(2 ** (type.bits - 1)) : 0;
-		const maximum = type.signed ? 2 ** (type.bits - 1) - 1 : 2 ** type.bits - 1;
 		const decoded = decodeVmValueOperand(operand);
-		if (decoded.kind === "number") {
-			if (
-				!Number.isInteger(decoded.value) ||
-				decoded.value < minimum ||
-				decoded.value > maximum
+		if (
+			!ffiIntegerArgumentFits(
+				operand,
+				type,
+				this.context.facts,
+				decoded.kind === "register" ? this.reps[decoded.register] : undefined,
 			)
-				return undefined;
-		} else {
-			const exact =
-				type.signed && type.bits === 32 ? this.exactInt32Operand(operand) : undefined;
-			const range =
-				decoded.kind === "register"
-					? instructionInputIntegerRange(this.context.facts, decoded.register)
-					: undefined;
-			if (
-				exact === undefined &&
-				(range?.exactSafeIntegers !== true ||
-					range.minimum < minimum ||
-					range.maximum > maximum)
-			)
-				return undefined;
-		}
+		)
+			return undefined;
 		return `((${ffiScalarCType(type)}) (${number}))`;
 	}
 

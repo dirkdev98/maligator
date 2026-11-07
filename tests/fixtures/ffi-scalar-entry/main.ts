@@ -1,5 +1,6 @@
 /* oxlint-disable no-console -- The fixture reports observable scalar ABI behavior. */
 import {
+	scalar_at,
 	scalar_calls,
 	scalar_dot,
 	scalar_empty,
@@ -177,6 +178,11 @@ function weightedLoop(weights: Float64Array, count: number): number {
 		total += weights[index]! * scalar_dot(left, right);
 	return total;
 }
+function indexLoop(values: Float64Array): number {
+	let total = 0;
+	for (let index = 0; index < 4; index++) total += scalar_at(values, index);
+	return total;
+}
 function scaleLoop(values: Float64Array, count: number): void {
 	for (let index = 0; index < count; index++) scalar_scale(values, 0.5);
 }
@@ -196,6 +202,13 @@ check(
 check(
 	Number.isNaN(weightedLoop(new Float64Array([1]), 2)),
 	"a loop past its elements keeps reading undefined",
+);
+const callsBeforeIndexLoop = scalar_calls();
+check(
+	indexLoop(new Float64Array([1, 2, 4, 8, 16])) === 15 &&
+		indexLoop(new Float64Array([1, 2])) === 1 &&
+		scalar_calls() === callsBeforeIndexLoop + 8n,
+	"a loop passes its counter to an integer parameter",
 );
 const halves = new Float64Array([8, 16]);
 scaleLoop(halves, 3);

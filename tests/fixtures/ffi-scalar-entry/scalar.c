@@ -38,3 +38,7 @@ uint32_t scalar_sum_u8(const uint8_t *bytes, uint32_t count) {
     return sum;
 }
 bool scalar_empty(const double *values, int32_t count) { return values == NULL && count == 0; }
+double scalar_at(const double *values, int32_t count, int32_t index) {
+    calls++;
+    return index >= 0 && index < count ? values[index] : -1;
+}

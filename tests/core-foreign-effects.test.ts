@@ -46,6 +46,7 @@ function compile(
 					direct: {
 						mix: {
 							...binding,
+							arity: Math.max(binding.arity, scalar?.parameters.length ?? 0),
 							callsUserCode,
 							result,
 							...(scalar === undefined ? {} : { scalar }),
@@ -272,6 +273,31 @@ describe("static foreign call effects", () => {
 			const source = emitCompiledFunction(after, after.functionIndex, "", false)!.source;
 			expect(source).toMatch(/bool __typed_loop_\d+_typed = mal_typed_array_lend\(/);
 		});
+		it.each([
+			["i", true],
+			["i * 0.5", false],
+		] as const)(
+			"calls C inside the loop region with %s as an integer argument: %s",
+			(argument, admitted) => {
+				const { native } = compile(
+					true,
+					`let total = 0; for (let i = 0; i < 64; i++) total += mix(value, ${argument}); return total;`,
+					{ kind: "number" },
+					{
+						...viewScalar,
+						parameters: [
+							...viewScalar.parameters,
+							{ kind: "integer", bits: 32, signed: true },
+						],
+					},
+				);
+				expect(
+					native.storage!.numericLoopRegions.some(
+						(plan) => plan.kind === "fixed-numeric" && plan.foreignCalls !== undefined,
+					),
+				).toBe(admitted);
+			},
+		);
 		it.each([
 			{
 				...viewScalar,
