@@ -31,6 +31,7 @@ import {
 	coreCalleeTargetsCallability,
 	coreCalleeTargetsSingleFunction,
 } from "./core-callee-targets.ts";
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreNormalResultFacts } from "./core-editor.ts";
@@ -122,6 +123,8 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
+import { coreEvaluatorGlobalWrites, coreGlobalSlotUses } from "./core-module-globals.ts";
+import type { CoreGlobalSlotUses } from "./core-module-globals.ts";
 import { coreArgumentObservation } from "./core-native-entry-analysis.ts";
 import {
 	coreFieldArgument,
@@ -344,6 +347,9 @@ interface InlineCaptureContext {
 	// The callee was created in the caller's current scope chain, so its captured
 	// stores reach the same environments from an inlined copy.
 	readonly sameScopeChain?: true;
+	// Nothing else reads the callee, so inlining moves its body, loops included,
+	// rather than copying it.
+	readonly moved?: true;
 }
 
 function immutableCaptureValue(
@@ -530,6 +536,74 @@ function singleActivationCaptureContext(
 	return { caller, callee, site };
 }
 
+// Module function declarations live in global slots their instantiation assigns once.
+const discoveredGlobalSlotUses = new WeakMap<
+	CoreProgram,
+	{ readonly uses: CoreGlobalSlotUses; readonly context: CoreCompilationContext }
+>();
+
+/**
+ * A module body's call through the only read of a slot that holds one module function,
+ * when that function reads a cell the body assigns. Inlining moves the function, loops
+ * included, so the body reads the cell as the value it stored.
+ */
+function movedModuleFunctionContext(
+	program: CoreProgram,
+	{
+		uses,
+		context,
+	}: { readonly uses: CoreGlobalSlotUses; readonly context: CoreCompilationContext },
+	caller: CoreFunctionStore,
+	callee: CoreValueId,
+	site: CoreInstructionId,
+	target: CoreFunctionId,
+): InlineCaptureContext | undefined {
+	if (caller.kernel.valueDefinitionKind(callee) !== 1) return undefined;
+	const load = coreInstructionId(caller.kernel.valueDefinitionOwner(callee));
+	const slot = caller.instructionAttributes(load).index;
+	if (
+		caller.instructionOpcodeName(load) !== "loadGlobal" ||
+		typeof slot !== "number" ||
+		uses.reads.get(slot) !== 1
+	)
+		return undefined;
+	const writes = uses.writes.get(slot);
+	if (writes?.length !== 1) return undefined;
+	const writer = program.function(writes[0]!.function);
+	if (coreDirectCreatedFunction(writer, writes[0]!.value) !== target) return undefined;
+	for (
+		let use = caller.kernel.valueFirstUse(callee);
+		use >= 0;
+		use = caller.kernel.useNext(use)
+	) {
+		if (caller.kernel.useLive(use) === 0) continue;
+		const instruction = coreInstructionId(caller.kernel.useInstruction(use));
+		if (
+			instruction !== site &&
+			!(
+				caller.instructionKind(instruction) === "operation" &&
+				caller.instructionOpcodeName(instruction) === "throwIfTdz"
+			)
+		)
+			return undefined;
+	}
+	// A closure created in the moved body would bind the caller's scope, not the callee's.
+	const fn = program.function(target);
+	if (coreCreatesFunctions(fn)) return undefined;
+	const cells = coreEvaluatorGlobalWrites(program, context, caller);
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "loadGlobal"
+		)
+			continue;
+		const index = fn.instructionAttributes(instruction).index;
+		if (typeof index === "number" && (cells.get(index)?.stores.length ?? 0) > 0)
+			return { caller, callee, site, moved: true };
+	}
+	return undefined;
+}
+
 function applicationCaptureContext(
 	program: CoreProgram,
 	caller: CoreFunctionStore,
@@ -539,6 +613,7 @@ function applicationCaptureContext(
 ): InlineCaptureContext | undefined {
 	const cells = discoveredCapturedCellWrites.get(program);
 	const once = discoveredSingleActivations.get(program);
+	const slots = discoveredGlobalSlotUses.get(program);
 	return (
 		directCaptureContext(caller, callee, site, target) ??
 		(cells === undefined
@@ -546,7 +621,10 @@ function applicationCaptureContext(
 			: ancestorCaptureContext(program, cells, caller, callee, site, target)) ??
 		(once === undefined
 			? undefined
-			: singleActivationCaptureContext(program, once, caller, callee, site, target))
+			: singleActivationCaptureContext(program, once, caller, callee, site, target)) ??
+		(slots === undefined
+			? undefined
+			: movedModuleFunctionContext(program, slots, caller, callee, site, target))
 	);
 }
 
@@ -716,7 +794,9 @@ function inlineTarget(
 		synchronousCallback?.function === fn &&
 		synchronousCallback.bodyVersion === fn.version("body");
 	// A closure whose only use is this call moves its loops here rather than copying them.
-	const loopsAllowed = callbackConsumer || captureContext?.sameScopeChain === true;
+	const moved = captureContext?.moved === true;
+	const loopsAllowed =
+		callbackConsumer || moved || captureContext?.sameScopeChain === true;
 	if (
 		fn.isGenerator ||
 		fn.isAsync ||
@@ -759,7 +839,7 @@ function inlineTarget(
 		}
 		if (visited.has(block)) return true;
 		if (
-			visited.size >= (callbackConsumer ? 64 : 16) ||
+			visited.size >= (callbackConsumer || moved ? 64 : 16) ||
 			(!callbackConsumer && fn.kernel.blockHandlerBlock(block) !== undefined)
 		)
 			return false;
@@ -778,7 +858,7 @@ function inlineTarget(
 					return false;
 			}
 			if (
-				++instructionCount > (callbackConsumer ? 128 : 48) ||
+				++instructionCount > (callbackConsumer || moved ? 128 : 48) ||
 				(INLINE_UNSUPPORTED_OPCODES.has(opcode) &&
 					!(opcode === "storeCaptured" && captureContext?.sameScopeChain === true)) ||
 				(invocation !== "construct" && opcode === "loadNewTarget") ||
@@ -1631,6 +1711,9 @@ function offerFunctionCandidates(
 	fieldEntryNominees: ReadonlyMap<number, number>,
 	capturedCells: () => CapturedCellWrites,
 	singleActivations: () => ReadonlySet<CoreFunctionId>,
+	globalSlotUses: () =>
+		| { readonly uses: CoreGlobalSlotUses; readonly context: CoreCompilationContext }
+		| undefined,
 	privateNames: CoreModulePrivateNameIndex,
 	readAccessors: boolean,
 	accessorWork?: CoreReadAccessorWork,
@@ -1638,6 +1721,17 @@ function offerFunctionCandidates(
 ): void {
 	const fn = program.function(functionId);
 	const outgoing = summaries.targets.outgoing(functionId);
+	const movedModuleFunction = (
+		caller: CoreFunctionStore,
+		callee: CoreValueId,
+		site: CoreInstructionId,
+		target: CoreFunctionId,
+	): InlineCaptureContext | undefined => {
+		const discovered = globalSlotUses();
+		return discovered === undefined
+			? undefined
+			: movedModuleFunctionContext(program, discovered, caller, callee, site, target);
+	};
 	const globalTargetUses = new Map<CoreFunctionId, number>();
 	const blockFrequencies = new Map<CoreBlockId, number>();
 	const offeredReadAccessorSites = new Set<CoreInstructionId>();
@@ -1955,7 +2049,8 @@ function offerFunctionCandidates(
 						site.callee,
 						site.instruction,
 						exactTarget,
-					)));
+					) ??
+					movedModuleFunction(fn, site.callee, site.instruction, exactTarget)));
 		if (localCaptureContext !== undefined) capturedCells();
 		const consumerProof =
 			exactTarget === undefined || open || invocation !== "call"
@@ -2973,6 +3068,22 @@ export function discoverCoreCrossCallCandidates(
 		}
 		return cells;
 	};
+	discoveredGlobalSlotUses.delete(program);
+	// Unseen reads of a closed program's slots would make a moved body a copy.
+	const globalSlotUses = () => {
+		const context = analyses.compilationContext;
+		if (
+			context.facts.closure.sourceClosure.kind !== "known" ||
+			context.facts.world.eval !== "disabled"
+		)
+			return undefined;
+		let discovered = discoveredGlobalSlotUses.get(program);
+		if (discovered === undefined) {
+			discovered = { uses: coreGlobalSlotUses(program), context };
+			discoveredGlobalSlotUses.set(program, discovered);
+		}
+		return discovered;
+	};
 	const privateNames = coreModulePrivateNames(program, analyses.compilationContext);
 	readAccessorInputs.set(program, {
 		names: privateNames,
@@ -2990,6 +3101,7 @@ export function discoverCoreCrossCallCandidates(
 			fieldEntryNominees,
 			capturedCells,
 			singleActivations,
+			globalSlotUses,
 			privateNames,
 			readAccessors,
 			accessorWork,

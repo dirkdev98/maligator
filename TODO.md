@@ -1366,17 +1366,6 @@ contracts or investigates costs still visible after the string follow-ups.
       samples. Interning by address made each name cheap; the property traffic
       remains. Finding those names through the shared shape stub instead of a
       shape search changed nothing measurable.
-- [ ] Optimize module-scope state that only the module body's call tree uses. A
-      top-level `run(N)` in an ES module calls a separately compiled `run`, while the
-      same CommonJS module inlines `run` into its wrapper and scalar-replaces the
-      `const state = { hits: 0, misses: 0 }` that `run`'s loop updates: 5.0 against
-      0.66 ns per iteration. The inliner moves loops only out of a closure created in
-      the caller, and no pass turns a module slot that only its evaluator reads into a
-      local. Moving a module function whose only read is one call in the module body,
-      then promoting such slots, would close the gap. Methods of a module-scope object
-      literal show it from the other side: `api.add(a, b)` costs 9.6 ns as an ES module
-      and 5.1 ns in CommonJS, because static cell facts reject an object with function
-      values or receiver uses, and only the inlined CommonJS copy sees the literal.
 - [ ] Bound the call targets of methods stored on module-scope objects. In a
       script, `holder.run(value)` with `holder.run` assigned two functions
       dispatches to both through a finite guarded set; as an ES module the same

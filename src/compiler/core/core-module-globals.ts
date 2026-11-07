@@ -342,3 +342,33 @@ export function pruneUnreadModuleBindings(compilation: ConstructedCoreCompilatio
 		editor.commit();
 	}
 }
+
+/** How a program reads and assigns its global slots, from each function's cached scans. */
+export interface CoreGlobalSlotUses {
+	/** Instructions that read each slot or hand it to the runtime. */
+	readonly reads: ReadonlyMap<number, number>;
+	/** The values each slot is assigned, besides its dead-zone marker. */
+	readonly writes: ReadonlyMap<
+		number,
+		ReadonlyArray<{ readonly function: CoreFunctionId; readonly value: CoreValueId }>
+	>;
+}
+
+export function coreGlobalSlotUses(program: CoreProgram): CoreGlobalSlotUses {
+	const reads = new Map<number, number>();
+	const writes = new Map<
+		number,
+		Array<{ function: CoreFunctionId; value: CoreValueId }>
+	>();
+	for (const id of program.functionIds()) {
+		const fn = program.function(id);
+		for (const slot of globalSlotReads(fn)) reads.set(slot, (reads.get(slot) ?? 0) + 1);
+		for (const write of globalWrites(fn)) {
+			if (write.empty) continue;
+			const values = writes.get(write.slot) ?? [];
+			values.push({ function: id, value: write.value });
+			writes.set(write.slot, values);
+		}
+	}
+	return { reads, writes };
+}

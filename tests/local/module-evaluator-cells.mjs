@@ -46,6 +46,16 @@ const gc = globalThis.__mal_collect_garbage;
 if (typeof gc === "function") gc();
 results.push(checksum, text);
 
+// A function only the module body calls moves into it, cells and all.
+const stats = { hits: 0, misses: 0 };
+function tally(count) {
+	for (let index = 0; index < count; index++)
+		if (index % 3 === 0) stats.misses++;
+		else stats.hits++;
+}
+tally(100);
+results.push(stats.hits, stats.misses);
+
 // A handler reads what the stores left, and a read before the declaration still throws.
 let handled = 0;
 for (let index = 0; index < 10; index++) {
