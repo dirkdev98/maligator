@@ -1166,7 +1166,8 @@ only reproducible input.
       opaque callee that returns its strict `arguments` costs 340 ns per call against
       Node's 6.6 (`call-arguments-escape`). Dense storage needs define, delete,
       freeze, and own-key order to understand it, and a move to the table once an
-      index gets non-default attributes.
+      index gets non-default attributes. In V8's EarleyBoyer, creating arguments
+      objects takes 19% of the main thread's samples.
 
 - [ ] Deterministically release nonescaping RegExp and ICU handles at compiled scope
       end once ownership analysis proves their lifetime. Retain finalization for every
@@ -1184,6 +1185,28 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
+- [ ] Build fewer primordials at startup. A closed-world `console.log` program
+      starts in 2.1 ms against Porffor's 1.3 and a 1.2 ms spawn floor, and
+      `mal_intrinsics_init` takes about 0.7 ms of that. The cost is spread over the
+      builtin installs at 10 to 50 µs each, so only lazy installs for families a
+      program never reaches, or a prebuilt heap image, would remove most of it.
+- [ ] Search UTF-16 subjects with regress start predicates. regress 0.11.1 skips its
+      start-position prefilter whenever the `utf16` feature is on, so a pattern that
+      can only start at `<` tries a backtracking match at every code unit. Upstream
+      master searches UTF-16 input with unit predicates, which takes
+      `/<script|<style|<link/` over a 35 KB UTF-16 subject from 309 to 25 ms per 1000
+      searches, but it is unreleased. Porffor's `regex` benchmark stays
+      backtracking-bound either way: its first pattern takes 890 ms in regress alone,
+      against Porffor's 432 and Bun's 145. Its tag-name run
+      `[^\/\0>\x20\t\r\n\f]*` is followed by `[^>]*`, which accepts every unit the
+      first run gives back, so treating such a run as possessive would remove most
+      of that work.
+- [ ] Admit array literals whose constant keys LICM hoisted into a later loop's
+      preheader. The native initialization region resolves keys only from the
+      function's entry chain or the instructions just before the allocation. A
+      13-element literal in a second loop that shares keys with an earlier literal
+      therefore falls back to `createArray` and one `defineProperty` per element:
+      4M of them take 270 ms against Bun's 21.
 - [ ] Keep medium flat strings' units in their own cell. A string past the 16
       Latin-1 or 8 UTF-16 inline units allocates a separate owned buffer that a
       finalizer frees, so building `${order.region}/${order.category}` costs 27.7 ns
