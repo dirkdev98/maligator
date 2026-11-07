@@ -48,7 +48,7 @@ export async function prepareContainerDocumentation(
 					],
 				},
 			],
-			langs: ["typescript", "javascript", "json", "shellscript"],
+			langs: ["typescript", "javascript", "json", "shellscript", "c"],
 		});
 		const created = await pagefind.createIndex({
 			forceLanguage: "en",
