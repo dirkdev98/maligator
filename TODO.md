@@ -1366,6 +1366,14 @@ contracts or investigates costs still visible after the string follow-ups.
       samples. Interning by address made each name cheap; the property traffic
       remains. Finding those names through the shared shape stub instead of a
       shape search changed nothing measurable.
+- [ ] Drop unused `loadCallee` reads, so named function expressions inline. A body
+      like `exports.add = function add(a, b) {...}` keeps a dead read of its callee for
+      its own name, which is neither discardable nor GC-free, and the inliner refuses
+      any body containing one. Marking it both lets a guessed CommonJS export inline:
+      a loop calling two such exports went from 10.2 to 5.2 ns per iteration. It also
+      changes eight unit tests, among them a native GC-root ordering error in
+      `native-property-update-plan` and a lost value kind in `core-record-write-facts`,
+      which need understanding first.
 - [ ] Bound the call targets of methods stored on module-scope objects. In a
       script, `holder.run(value)` with `holder.run` assigned two functions
       dispatches to both through a finite guarded set; as an ES module the same

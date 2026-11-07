@@ -40,9 +40,17 @@ function boxed(box) {
 	return count;
 }`;
 
-function compile(name: string, entry: string, prelude?: string) {
-	const file = join(directory, `${name}.mjs`);
+function compile(
+	name: string,
+	entry: string,
+	prelude?: string,
+	modules: Readonly<Record<string, string>> = {},
+	extension = "mjs",
+) {
+	const file = join(directory, `${name}.${extension}`);
 	writeFileSync(file, entry);
+	for (const [moduleName, source] of Object.entries(modules))
+		writeFileSync(join(directory, moduleName), source);
 	const analysis = analyzeEntrypoint(
 		file,
 		{
@@ -157,6 +165,26 @@ function run(n) {
 }
 ${close}
 console.log(run(64));`,
+		);
+		expect(guessed("run")).toBe(true);
+	});
+
+	it.each([
+		["properties of its exports", "exports.add = function (a, b) { return a + b; };"],
+		["its module.exports literal", "module.exports = { add(a, b) { return a + b; } };"],
+	])("guesses a required CommonJS module's method from %s", (_name, exports) => {
+		const { guessed } = compile(
+			"required",
+			`const util = require("./required-util.cjs");
+function run(n) {
+	let acc = 0;
+	for (let i = 0; i < n; i++) acc = util.add(acc, i) | 0;
+	return acc;
+}
+console.log(run(64));`,
+			undefined,
+			{ "required-util.cjs": exports },
+			"cjs",
 		);
 		expect(guessed("run")).toBe(true);
 	});

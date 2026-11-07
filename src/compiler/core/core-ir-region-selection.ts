@@ -1203,7 +1203,10 @@ function guardedCallOpportunities(
 	localClaims: (caller: CoreFunctionId, instruction: CoreInstructionId) => boolean,
 ): ReadonlyArray<CorePlanningOpportunity> {
 	const candidates: Array<CorePlanningOpportunity> = [];
-	const instanceMethodHints = coreInstanceMethodHints(program);
+	const instanceMethodHints = coreInstanceMethodHints(
+		program,
+		analyses.compilationContext,
+	);
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
 		const targetSites = summaries.targets.outgoing(caller);

@@ -3048,7 +3048,10 @@ export function discoverCoreCrossCallCandidates(
 	accessorWork?: CoreReadAccessorWork,
 	clones: ReadonlySet<CoreFunctionId> = new Set(),
 ): void {
-	const instanceMethodHints = coreInstanceMethodHints(program);
+	const instanceMethodHints = coreInstanceMethodHints(
+		program,
+		analyses.compilationContext,
+	);
 	const fieldEntryNominees = nativeFieldEntryNominees(program, liveFunctions);
 	discoveredCapturedCellWrites.delete(program);
 	discoveredSingleActivations.delete(program);
