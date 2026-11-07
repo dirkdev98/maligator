@@ -3,6 +3,98 @@ Call a C library from your application by declaring it in the build config. Mali
 Maligator hosts the application. Embedding the Maligator runtime in a C application is
 outside the supported API.
 
+## Bind a small library
+
+A library compiled from sources shows the whole loop. Save a header and its
+implementation:
+
+```c native/stats.h
+int stats_add(int a, int b);
+double stats_mean(const double *values, int count);
+```
+
+```c native/stats.c
+#include "stats.h"
+
+int stats_add(int a, int b) {
+	return a + b;
+}
+
+double stats_mean(const double *values, int count) {
+	double total = 0;
+	for (int index = 0; index < count; index++) total += values[index];
+	return count == 0 ? 0 : total / count;
+}
+```
+
+Declare the library in a contract and name the contract in the build config:
+
+```typescript native/stats.ffi.ts
+import { defineLibrary } from "@maligator/cli";
+
+export default defineLibrary({
+	headers: ["stats.h"],
+	find: [{ includeDirs: ["."], sources: ["stats.c"] }],
+});
+```
+
+```typescript maligator.build.ts
+import { defineBuild } from "@maligator/cli";
+
+export default defineBuild({
+	entry: "src/index.ts",
+	ffi: { stats: { contract: "native/stats.ffi.ts" } },
+});
+```
+
+Ask what binds:
+
+```shell
+maligator ffi inspect stats
+```
+
+`stats_add` takes and returns integers, so it binds as it is. `stats_mean` takes a
+pointer, and a header cannot say whether that pointer is one value, an output, or an
+array. The report says so and suggests the fact that binds it:
+
+```text
+stats_mean param 1 (values): pointer (const double *) needs a fact: a handle, buffer, out parameter, or string
+  functions: {
+    stats_mean: { params: { values: { array: { length: "count" } } } },
+  },
+```
+
+Add the suggestion to the contract, beside `find`:
+
+```typescript native/stats.ffi.ts
+functions: { stats_mean: { params: { values: { array: { length: "count" } } } } },
+```
+
+`values` now takes a JavaScript array or a `Float64Array`, and `count` disappears from
+the signature because the binding passes the array's length. Generate declarations and
+call both functions:
+
+```shell
+maligator ffi types
+```
+
+```typescript src/index.ts
+import { stats_add, stats_mean } from "maligator:ffi/stats";
+
+console.log(stats_add(2, 3), stats_mean([1, 2, 3, 4]));
+```
+
+```shell
+maligator run
+```
+
+```text
+5 2.5
+```
+
+Larger libraries follow the same loop: declare, inspect, add the facts the report asks
+for, and regenerate declarations.
+
 ## Declare the library
 
 Name the library under `ffi` and point it at a contract:
@@ -81,26 +173,6 @@ the rooting and pinning that callback reentry needs. Namespace access retains it
 observable exports. Declaration generation and inspection describe the full header
 surface; development runtimes retain it for later application edits.
 
-## Audited native calls
-
-By default, a native call can invoke callbacks registered through any configured
-library, including another binding to the same C dependency. An application whose
-closed module graph imports no export that can register a callback, in any library,
-compiles its calls without that reentry. If the C function's contract guarantees it
-never enters JavaScript, state that fact on the function:
-
-```typescript
-functions: {
-	read_value: { callsJavaScript: false },
-}
-```
-
-This permits callback-free marshalling and compiler facts for eligible calls. Input
-getters and result cleanup keep their own effects: a struct getter can run JavaScript,
-and a configured release function can invoke an earlier callback. The fact gives no
-purity or thread-safety guarantee. Typed variadic variants inherit it from their C
-function; a returned function pointer has its own call contract.
-
 ## How values cross
 
 Conversions never coerce. A value of the wrong type throws a `TypeError`, and a number that is not an integer or does not fit throws a `RangeError`. Both name the C function and parameter.
@@ -166,962 +238,66 @@ the call's frame. Preparation increases retained
 memory and can cost more than copying for short reuse sequences. Mutable inputs,
 callbacks, and asynchronous calls use private input copies.
 
-## Read and write globals
+## Describe what headers cannot say
 
-Name the accessor exports in the contract:
+Headers give types, not intent. A fact in the contract states the rest, and a fact
+that does not fit its declaration fails the build:
 
-```typescript
-globals: {
-  library_mode: { get: "getMode", set: "setMode" },
-  library_title: { get: "getTitle", value: { string: true } },
-  library_context: { get: "getContext", value: { borrowed: true } },
-  library_label: { get: "getLabel", set: "setLabel", value: { string: true } },
-  library_key: { get: "getKey", set: "setKey", value: { bytes: true } },
-}
+| What the C code does                                    | Fact                              | Guide                                                        |
+| ------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------ |
+| Writes through a pointer, or reads and writes it        | `out`, `inout`                    | [Pointers and buffers](/guides/c-libraries/pointers)         |
+| Takes a buffer or array with a count                    | `bytes`, `array` with `length`    | [Pointers and buffers](/guides/c-libraries/pointers)         |
+| Takes or returns text                                   | `string`                          | [Pointers and buffers](/guides/c-libraries/pointers)         |
+| Selects what a `void *` points at with another argument | `pointee` with `variants`         | [Pointers and buffers](/guides/c-libraries/pointers)         |
+| Allocates a resource the program must release           | `handle` with `destroy`           | [C resources](/guides/c-libraries/resources)                 |
+| Keeps owning a pointer it returns                       | `borrowed`                        | [C resources](/guides/c-libraries/resources)                 |
+| Fills state the caller allocates                        | `handle` with `storage: "caller"` | [C resources](/guides/c-libraries/resources)                 |
+| Calls back into the program                             | `callback`                        | [Callbacks](/guides/c-libraries/callbacks)                   |
+| Returns a function pointer                              | `callable`                        | [Callbacks](/guides/c-libraries/callbacks)                   |
+| Exposes globals, unions, or variadic functions          | `globals`, `shape`, `variants`    | [Globals, unions, and variadics](/guides/c-libraries/values) |
+
+Facts go on a function's `params`, keyed by C name or 1-based position, on its
+`returns`, or on a type under `types`.
+
+## Find what cannot bind
+
+```shell
+maligator ffi inspect raylib
 ```
 
-Import and call these functions like other FFI exports. A getter reads the current C
-object; a setter converts its argument completely before assigning. Value records
-and integers use the same mappings as function arguments and results.
-
-Staged records and arrays keep their C type's alignment, including worker copies
-and callback messages. Headers can require stronger alignment than the platform
-default without a separate contract fact.
-
-Fixed arrays of values map to JavaScript tuples, including nested arrays. Reads
-copy the C array before constructing the result. Writes stage the entire converted
-array before changing C storage, so a throwing element getter leaves it unchanged.
-
-Use `value.string: true` for a fixed byte array holding UTF-8 text. Reads require a
-NUL within the declared bound. Writes reject embedded NULs and require room for the
-encoded bytes and terminator, then zero-fill the remaining capacity.
-
-Use `value.bytes: true` for a fixed byte array holding arbitrary data. A getter returns
-a fresh `Uint8Array`; a setter accepts an `ArrayBuffer` or view with exactly the declared
-byte length. Conversion failures leave C storage unchanged. These formats apply to
-one-dimensional byte arrays, and the same `value` facts describe both accessors.
-
-Access requires an externally linked object. Const objects have no setter. Setters
-accept assignable values. Getter results cannot transfer ownership: strings are copied
-and handles require `borrowed: true`.
-
-For a pointer C retains, declare when its previous allocation stops being used:
-
-```typescript
-globals: {
-  library_title: {
-    get: "getTitle", set: "setTitle",
-    value: { string: true, lifetime: "replacement" },
-  },
-  library_data: {
-    get: "getData", set: "setData",
-    value: { bytes: { length: "library_size" }, lifetime: "replacement" },
-  },
-}
-```
-
-`replacement` asserts that C stops retaining the old allocation before the setter
-replaces or clears it. Setters stage an independent native copy before publishing the
-pointer and count. The copy survives worker teardown and source-buffer detachment.
-`null` clears the pointer and byte count; empty values keep a nonnull pointer. Getters
-return snapshots. Initial C-owned storage remains owned by C.
-
-C may advance a managed pointer or shorten its byte count within the assigned range.
-Getters reject a pointer or count outside that allocation. The count must be a writable
-external integer used only by this pointer, with no independent setter. Retained pointers
-and their counts cannot be thread-local. Coordinate C readers and mutations using the
-library's synchronization contract; the binding only serializes its own accessors.
-
-Accessors run on the calling thread, including for thread-local objects. The C
-library's synchronization rules still apply to globals shared between threads.
-
-## Select a union value
-
-A union needs a `shape` fact identifying its active member. Its JavaScript value is
-that member's value: selecting an integer produces a number, while selecting a struct
-produces an object. Other members stay hidden.
-
-```typescript
-types: { Scalar: { shape: { member: "integer" } } },
-functions: {
-  read_real: { returns: { shape: { member: "real" } } },
-}
-```
-
-The type fact sets the default. A parameter or result can override it; on counted
-arrays, the shape selects each element's union member. Callback parameters and results
-accept the same shape fact. A value result needs no pointer lifetime.
-
-For a discriminator stored beside the union, map each tag to its active C member
-paths. Paths follow named fields and C's anonymous member promotion. A named union
-field holds the selected member's value in JavaScript.
-
-```typescript
-types: {
-  Event: {
-    shape: {
-      tag: "kind",
-      cases: {
-        EVENT_INTEGER: ["payload.integer"],
-        EVENT_POINT: ["payload.point"],
-        EVENT_DONE: [],
-      },
-    },
-  },
-}
-```
-
-The generated TypeScript type narrows by `kind`. Case keys are known integer constants
-or decimal integers within the tag's range. Tags wider than 32 bits use BigInt.
-Input conversion reads the tag once before payload getters; unknown tags throw before
-reading payload fields. An empty selection hides union storage. Root unions also keep
-the selected member name, and payload writes must preserve their discriminator.
-
-Handles nested in callback arguments are loans that close when the callback returns.
-Resource-bearing values require waiting callbacks when C calls from another thread.
-Compound callback results containing handles need a pointer result interface with an
-explicit lifetime. Describe borrowed resource fields on their owning handle.
-
-Declare independently owned pointers with `handle: { owned: true }` in the payload
-record's field facts.
-Only the active case's resources enter the result transaction; inactive union storage
-is neither converted nor released. Arrays can mix tagged variants while preserving
-resource aliases and ownership.
-
-## Describe resources
-
-A pointer the library allocates, or a struct that owns memory, needs to be released. Give its type a `handle` fact that names the function that releases it:
-
-```typescript native/raylib.ffi.ts
-import { defineLibrary } from "@maligator/cli";
-
-export default defineLibrary({
-	headers: ["raylib.h"],
-	find: [{ pkgConfig: "raylib" }],
-	types: {
-		Image: { handle: { destroy: "UnloadImage", collect: true } },
-		Texture: { handle: { destroy: "UnloadTexture" } },
-	},
-	functions: { GetFontDefault: { returns: { borrowed: true } } },
-});
-```
-
-Functions that take or return the type then bind, and its values cross as handles. A handle that wraps a struct exposes the struct's value fields as read-only properties, and a function that takes a pointer to the struct updates the handle in place.
-
-Pass that pointer parameter directly for resource updates, preserving the handle's
-storage and owner. An `inout` fact would create a separate result and is rejected for
-copied struct handles.
-
-```typescript src/index.ts
-import {
-	BLUE,
-	ExportImage,
-	GenImageColor,
-	ImageDrawRectangle,
-	RAYWHITE,
-} from "maligator:ffi/raylib";
-
-using image = GenImageColor(64, 32, RAYWHITE);
-ImageDrawRectangle(image, 8, 8, 16, 16, BLUE);
-ExportImage(image, `image-${image.width}x${image.height}.png`);
-```
-
-Leaving a `using` scope or calling `[Symbol.dispose]()` releases the resource through `destroy`, and calling the destroy function yourself also closes the handle. A closed handle throws a `TypeError` instead of reaching C, and closing a handle while a C call uses it, from a callback or a getter, throws one too.
-
-A function name in `destroy` asserts that cleanup always releases the resource,
-regardless of its return status. For cleanup that can fail while keeping the resource
-alive, state its successful return code:
-
-```ts
-types: {
-	sqlite3: {
-		handle: { destroy: { function: "sqlite3_close", success: "SQLITE_OK" } },
-	},
-	sqlite3_stmt: { handle: { destroy: "sqlite3_finalize" } },
-}
-```
-
-[`sqlite3_close`](https://www.sqlite.org/c3ref/close.html) leaves a busy database
-open, while [`sqlite3_finalize`](https://www.sqlite.org/c3ref/finalize.html) releases
-a statement even when returning an error. A conditional destroy binding preserves
-the C status and closes the handle only when it equals `success`, a known C integer
-constant or integer literal. Failed `[Symbol.dispose]()` throws an `Error` and leaves
-the handle open for retry. Cleanup callbacks cannot use or recursively close the
-handle while its release is in progress. Conditional cleanup requires explicit
-disposal, so it cannot use `collect: true`.
-
-A struct the library both allocates and passes by value, such as cimplot's
-`ImPlotSpec`, binds with the same `handle` fact. A pointer result such as
-`Style *style_new(void)` returns a `Style` handle that keeps the library's pointer as
-its storage: by-value parameters copy the struct from it, pointer parameters update it
-in place, its fields read the library's current values, and disposal passes that
-pointer to `destroy`. With `borrowed: true`, closing such a handle leaves the struct to
-the library. Unlike pointer handles, each result is a new handle object, so `fresh` and
-`views` do not apply, and callbacks cannot receive these pointers. When `destroy` takes
-a pointer, it also receives the address of a handle's copy for by-value results, so
-mix the two only when that function cleans up the struct's contents without freeing it.
-
-- `borrowed` marks a result the library keeps owning. Closing it does not release it.
-- A `handle` without `destroy` describes a pointer the library owns, such as the `sqlite3_context` SQLite lends to callbacks, unless `storage: "caller"` provides its outer storage.
-- `collect: true` releases a handle the program drops once it is garbage collected. Leave it off for resources that must be released on one thread or before the library shuts down, such as raylib's GPU textures.
-- `nullable` on a parameter accepts `null` for a string or handle pointer and passes `NULL`.
-
-If a callback throws or a worker result is discarded, cleanup preserves pointer
-resources already known to that VM. Direct return and out-parameter aliases release
-new storage once. Failed handle construction releases its undelivered C resource
-even when automatic collection is disabled. Fresh-result facts distinguish recycled
-storage from a resource whose destruction is still pending.
-
-Bindings that combine direct resource pointers with copied values transfer ownership
-and publish type views after every output conversion and final managed-input check
-succeeds. A failed conversion releases new resources once and preserves existing
-handles' ownership and views. This guarantee also covers owned pointer fields in
-plain value records, arrays of those records, and flat owned pointer arrays.
-An array's outer table may remain library owned; declare `free` only when the binding
-must release that table.
-
-Resource-table entries must remain readable and unchanged through delivery or failed
-delivery cleanup. Element destructors must preserve the table while cleanup walks it.
-For async results, this includes delayed conversion and native cleanup after worker
-termination. Avoid overlapping calls that overwrite the same library-owned table.
-
-Buffers supplied through `free` remain alive until every output is copied. Aliased
-allocations are released once, using their first declared cleanup function. Cleanup
-runs before result assembly and ownership commit, including when copying throws.
-
-A cleanup function supplied through `free` may call JavaScript. A new alias exposed
-during cleanup is provisional: it supports synchronous reads and leases for callback
-results. Closing it, assigning an owner or library lifetime, passing it to a worker,
-or retaining it as a callback input requires delivery first. Failed delivery closes
-provisional aliases; C result leases preserve native storage until released. A separate
-call that successfully acquires ownership keeps that ownership if the outer conversion
-fails.
-
-For a resource pointer inside a result handle, declare whether the containing resource
-owns its lifetime or the library keeps it alive:
-
-```ts
-types: {
-	Document: {
-		handle: { destroy: "document_free", collect: true },
-		fields: { root: { handle: { lifetime: "owner" } } },
-	},
-	Node: {
-		handle: {},
-		fields: { next: { handle: { lifetime: "owner" } } },
-	},
-},
-```
-
-`document.root` returns a borrowed canonical `Node` handle or `null`. Keeping that child
-keeps the document reachable. Closing the document invalidates its children; disposing
-a child view only closes that view. When a child type names its own destroy binding,
-that binding rejects owner-bound children. Calls and callback-result leases also protect
-the owning document. A child field that points at a sibling shares the document's lifetime.
-Use `lifetime: "library"` for a borrowed pointer that remains valid independently of
-the containing resource for the process's lifetime. Destroy bindings and inferred-owned
-aliases reject that resource. Closing or collecting a view preserves the native lifetime
-claim, including cleanup after callback failures and VM shutdown.
-
-Owner fields must be reachable from a destructor-backed root through declared owner
-fields and use library-owned child storage. Descendants can omit their own destructor.
-Read them through an owning field before following their links; a raw borrowed alias
-needs a proven owner before its resource fields can be read.
-Without `callback.owner`, a kept callback leases owner-bound inputs and their destruction roots until C releases
-the callback or a replacement retires it. This includes handles inside compound inputs
-and an owner-bound callable's captured handle. Disposal and destruction reject while
-these leases remain; field reads and saved callables remain available for unregistration.
-Unregister nullable callbacks with `null` before closing their resources. The library
-must offer release or unregistration independently of root destruction. Declare
-`callback.owner` when root destruction ends the registration instead. Children whose
-root is a callback loan cannot become registration inputs. Registration results cannot borrow any retained
-input root. Native leases also preserve the resources through VM teardown until C
-releases the registration. Use a whole-result handle when its destructor releases
-the record's resources together.
-
-When a handle's struct points at a counted run of values, such as Dear ImGui's
-`ImGuiTableSortSpecs` with `Specs` and `SpecsCount`, declare an `array` field:
-
-```ts
-types: {
-	SortSpecs: { handle: {}, fields: { specs: { array: { length: "count" } } } },
-},
-functions: { sort_specs: { returns: { borrowed: true } } },
-```
-
-`specs.specs` returns a fresh array of as many `SortSpec` records as the `count` field
-holds when it is read, or `null` for a null pointer. Each read copies again, so later C
-changes appear in the next read and not in earlier arrays. Elements are values: records,
-numbers, or strings, never handles. A negative or oversized count throws a `RangeError`.
-Array fields work on any handle, including library-owned pointer handles whose other
-fields stay hidden.
-
-For independently owned pointers in a value record, declare field ownership:
-
-```typescript
-types: {
-	Token: { handle: { destroy: "token_free" } },
-	TokenResult: { fields: { token: { handle: { owned: true } } } },
-},
-```
-
-The field must point to a destructor-backed resource allocated by the library.
-Nested plain records, selected union members, and active tagged payloads share the
-result transaction.
-Arrays of these records preserve fixed and counted dimensions. Aliased fields keep one
-handle. A failed conversion preserves existing ownership while releasing new resources
-once. Array elements follow C index order; the first owning field determines an aliased
-resource's destructor.
-Record inputs borrow their handles; callback arguments remain invocation loans.
-Use `fresh: true` beside `owned` for a new lifetime at a recycled address.
-Global getters and constants cannot transfer independently owned fields.
-
-When a library accepts the same allocation through another pointer type, declare directed
-`views`. For example, libuv accepts a timer pointer as a general handle pointer:
-
-```ts
-types: {
-	uv_handle_t: { handle: {} },
-	uv_timer_t: { handle: { storage: "caller", views: ["uv_handle_t"] } },
-},
-```
-
-A view asserts that the pointer needs no adjustment. Both types need pointer handle
-facts; copied struct values cannot declare views. Compatibility follows transitive views,
-and the reverse conversion requires C to return or lend that more specific pointer type.
-Returned pointers and callback arguments share one JavaScript identity across views,
-including when C exposes the general type first. Views share pins, callback scope, and
-closed state. Observing another view preserves the destructor policy established when
-ownership was acquired. The object's original prototype and display tag stay unchanged.
-Use `borrowed: true` on a pointer result or an `out`/`inout` handle when C retains
-ownership. Result conversion publishes new views only after the complete delivery
-succeeds. A failed delivery preserves independently delivered aliases and refinements,
-including the original type of a new canonical handle exposed by a nested call.
-Borrowed echoes preserve callback-loan scope.
-When failed delivery leaves a resource retained by C, new ownership must wait for
-its native leases to end. A `fresh` result can identify the next lifetime at a reused
-address once C destroys the old resource; its registrations survive older cleanup.
-Caller allocations keep ownership of their outer storage through views. A declared
-caller destructor cleans initialized C state before the binding frees that storage.
-
-Some APIs fill a state struct allocated by their caller. For a complete, fixed-size
-struct, `storage: "caller"` exports a zero-argument factory named by the type fact:
-
-```ts
-types: {
-	CodecState: { handle: { storage: "caller" } },
-}
-```
-
-`CodecState()` returns a handle to aligned, zeroed C storage. It passes by pointer
-and keeps its address between calls. The factory result exposes scalar fields as
-read-only properties. Initialization and cleanup are separate C calls, with the same
-preconditions the library documents:
-
-```ts
-using state = CodecState();
-if (codec_init(state) !== 0) throw new Error("Codec initialization failed");
-try {
-	codec_run(state);
-} finally {
-	codec_cleanup(state);
-}
-```
-
-Without managed cleanup facts, disposing or collecting the handle frees only its outer
-storage. Retain the handle while C retains its pointer, and dispose it only after C
-stops using it.
-The wrapper also releases callbacks keyed by that storage; calls already queued can
-finish from their copied arguments.
-Asynchronous close needs the library's completion and lifetime contract.
-
-To manage initialized state, pair an unconditional collecting destructor with an
-initializer fact:
-
-```ts
-types: {
-	CodecState: { handle: { storage: "caller", destroy: "codec_cleanup", collect: true } },
-},
-functions: {
-	codec_init: { initializes: { param: "state", success: "0" } },
-},
-```
-
-The initializer takes an exclusive, mutable handle input. Its `success` names an
-integer status or C constant; omit it when every native return acquires cleanup
-responsibility. Failure must leave the storage safe to free without C cleanup.
-Repeated or concurrent initialization rejects before C. Ordinary pointer echoes do
-not arm cleanup.
-
-Native success arms cleanup before JavaScript result conversion. A later delivery
-error therefore leaves the state initialized. Disposal, the destructor binding, and
-collection run C cleanup before freeing the outer allocation. The destructor must
-leave that allocation to the binding. Async initialization follows the same rules,
-including discarded results during shutdown.
-
-Initialized caller storage can own callback registrations directly or through
-owner-bound children. Independent native leases preserve its storage and retained
-byte buffers after VM teardown. Release managed caller state through its destructor
-binding; a `callback.closes` completion cannot replace this cleanup contract.
-
-For a struct ending in a flexible or zero-length array, name that field with
-`trailing`. The factory takes the number of trailing elements as a bigint:
-
-```ts
-types: {
-	Packet: { handle: { storage: "caller", trailing: "payload" } },
-}
-```
-
-`Packet(128n)` allocates space for the fixed header and the requested payload elements,
-using C's layout and alignment. Counts that overflow allocation size throw a
-`RangeError`. The allocation starts zeroed; initialize any length field through the
-library's C API. The trailing array stays behind the handle and is not a JavaScript
-array property. Initialization, cleanup, aliases, and worker pins follow the same
-rules as fixed-size caller storage.
-
-For an opaque, forward-declared struct, provide native layout queries:
-
-```ts
-types: {
-	OpaqueState: {
-		handle: {
-			storage: "caller",
-			layout: { size: "opaque_state_size", alignment: "opaque_state_alignment" },
-		},
-	},
-}
-```
-
-`OpaqueState()` calls both zero-argument queries for each allocation. They must return
-unsigned integers up to 64 bits. Invalid sizes, non-power-of-two alignments, and size
-rounding overflow throw a `RangeError`. C initialization and cleanup remain explicit.
-
-For state such as zlib's `z_stream`, describe each retained byte pointer and its count:
-
-```ts
-types: {
-	z_stream: {
-		handle: { storage: "caller" },
-		fields: {
-			next_in: { bytes: { length: "avail_in", writable: false } },
-			next_out: { bytes: { length: "avail_out", writable: true } },
-		},
-	},
-},
-```
-
-Assign an `ArrayBuffer`, view, or `null` to `stream.next_in` or `stream.next_out`.
-Assignment sets the pointer and byte count together; a subview supplies a shorter range.
-The handle retains and pins the backing buffer until replacement, clearing, or disposal.
-Failed assignment preserves the previous range. Shared and detached buffers are refused;
-writable ranges also refuse immutable buffers. `writable` defaults to true for a
-non-const pointee, and `false` describes input bytes even when a header omits `const`.
-
-The pointer getter returns a `Uint8Array` over the remaining bytes, following C's cursor.
-Count properties remain read-only. C must keep the pointer and count inside the assigned
-range; invalid pairs throw before another C entry and after the call that produced them.
-While a C operation uses managed state, reading or writing fields, disposal, and
-overlapping calls through any view are refused. Keep the factory result for property
-access: C function signatures expose opaque pointer handles, whose canonical object may
-have originated through another view.
-
-For a UTF-8 field, use `label: { string: { length: "label_length" } }` and assign a
-string or `null`. Assignment retains a private counted encoding, including embedded
-NUL bytes. The getter returns a string snapshot of C's current pointer/count range;
-C writes affect later snapshots without changing the original JavaScript string.
-An empty string has a non-null pointer and a zero count. Text follows the same range,
-operation, and close-lifetime rules as retained byte fields.
-
-Zlib's header exposes `deflateInit_` with version and ABI-size parameters. Fixed facts
-let generated C supply both while JavaScript supplies the stream and compression level:
-
-```ts
-functions: {
-	deflateInit_: {
-		params: {
-			version: { constant: "ZLIB_VERSION" },
-			stream_size: { sizeof: "z_stream" },
-		},
-	},
-},
-```
-
-## Call returned functions
-
-For a returned C function pointer, assert that its code and referenced state remain
-valid for the linked library:
+The report lists each function that is not exported and the fact it needs. It also suggests facts from naming and signature conventions: a count parameter beside a pointer, a pointer the function writes, the `void *` a callback receives or the function that returns it, a setter that replaces its callback, a struct with its own release function or an opaque one nothing releases, a getter's result as borrowed, a result whose documentation says how to free it. Each suggestion is checked against the headers and listed only when it makes a function bind, but it comes from names rather than the library's documentation, so review it before adding it to the contract.
+
+`--json` includes the structured C model and the accepted `facts`, alongside mapped
+signatures, header documentation, missing facts and suggestions in contract shape.
+Each missing fact has a `code` naming the kind of fact it needs, such as `handle`,
+`callback` or `text`, or `unsupported` when no fact binds it, and the C parameter it
+belongs to. The model retains unresolved record fields and typedef chains, including
+transitive system types, so a tool can follow a pointer's type before proposing a
+fact. Its declaration tables are arrays, and exact C integer values are decimal
+strings.
+
+A contract error starts with the fact path it rejects, such as
+`functions.png_read_row.params.row.bytes`, so the fix goes in that entry.
+
+## Audited native calls
+
+By default, a native call can invoke callbacks registered through any configured
+library, including another binding to the same C dependency. An application whose
+closed module graph imports no export that can register a callback, in any library,
+compiles its calls without that reentry. If the C function's contract guarantees it
+never enters JavaScript, state that fact on the function:
 
 ```typescript
 functions: {
-	choose_transform: {
-		returns: { callable: { lifetime: "library" } },
-	},
-},
-```
-
-The result is a JavaScript function, or `null` for a null C pointer. Its arguments and
-result follow the header signature and the same conversions as ordinary bindings.
-The C compiler preserves the pointer's calling convention. `call`, `apply`, and `bind`
-work; construction throws.
-
-Use `callable.params`, keyed by 1-based position, and `callable.returns` to describe
-pointers in that signature. For example, `params: { "1": { bytes: { length: "2" } } }`
-accepts a buffer and supplies its byte count. Nested function-pointer results need
-their own `callable` fact. The lifetime assertion includes state the function uses;
-do not use it for a function that depends on a resource the application can close.
-
-For a function table, declare callable fields on its complete handle type:
-
-```typescript
-types: {
-	PluginApi: {
-		handle: { destroy: "plugin_close" },
-		fields: { transform: { callable: { lifetime: "owner" } } },
-	},
-},
-```
-
-Reading `api.transform` captures the current pointer and the handle. Saved functions
-keep the handle reachable; closing it makes later calls throw before argument
-conversion. Calls pin the owner through callbacks and result conversion, so reentrant
-disposal throws. If C changes the field, a new read sees the new pointer; an earlier
-function retains its snapshot. Explicit C self or user-data parameters remain explicit.
-Use `"library"` for a field whose target remains valid independently of the handle.
-Callable fields work through handle views, including aliases frozen before C supplies
-a more specific view. Each getter checks that C has supplied evidence for its declaring
-type before reading the field. Declare each callable property name on one type in the
-view family; aliases share one object and cannot select different same-named getters.
-
-Nested results can use `"owner"` to inherit the same captured handle, or `"library"` to
-remain valid independently. A library-lifetime function cannot introduce an owner for
-its result.
-
-## Describe pointers
-
-Other pointers need a fact about what they carry. Facts go on a function's `params`, keyed by C name or by 1-based position, or on its `returns`:
-
-```typescript native/raylib.ffi.ts
-functions: {
-	GetCodepoint: { params: { codepointSize: { out: true } } },
-	UpdateCamera: { params: { camera: { inout: true } } },
-	DrawTriangleStrip: { params: { points: { array: { length: "pointCount" } } } },
-	LoadFileData: { returns: { bytes: { length: "dataSize" }, free: "UnloadFileData" } },
-	LoadFileText: { returns: { string: true, free: "UnloadFileText" } },
-},
-```
-
-- `out` marks a pointer the function writes through, and `inout` also passes the current value in. A function with outputs returns an object with each output and the C result as `result`, so `GetCodepoint("✓")` returns `{ result: 10003, codepointSize: 3 }`. A status code stays in `result`; the binding does not throw for it.
-- `bytes` passes an `ArrayBuffer` or a view without copying, and `array` copies a JavaScript array into C memory for the call. `length` names the parameter that carries the count, which disappears from the JavaScript signature. When it names a pointer to the count, as `compress` in zlib takes `destLen`, the function receives the buffer's size, and the count it writes there returns as an output. Shared buffers are rejected, as are immutable buffers where C may write. While C uses a buffer, transferring or resizing it, including from a callback, throws a `TypeError`.
-- On a result, `bytes` and `array` copy the C memory into a `Uint8Array` or an array. `length` names an integer parameter, or a pointer the function writes the count through.
-- `string` marks a `char *` or `unsigned char *` as UTF-8 text.
-- `free` names the function that releases a string, buffer, or array result after it is copied.
-
-When C sizes a buffer from several parameters, write its length as their product:
-
-```ts
-functions: {
-	fill_pixels: { params: { pixels: { bytes: { length: "width * height * 4" } } } },
+	read_value: { callsJavaScript: false },
 }
 ```
 
-`fill_pixels(width, height, pixels)` keeps every factor in its signature. Before C runs,
-the binding multiplies the converted factors and literals and throws a `RangeError` when
-the buffer is shorter, a factor is negative, or the product overflows. A longer buffer
-passes unchanged, so one allocation can serve several sizes. On an `array`, the product
-counts elements. Products apply to input buffers and arrays of functions, not to results,
-outputs, strings, callbacks, or fields.
-
-Input arrays, byte spans, and counted strings can share an integer `length` parameter.
-The binding checks every input length before entering C. Counted strings contribute
-their UTF-8 byte length. Shared counts must be integer inputs; writable counts and
-output capacities keep separate parameters.
-
-For a flat array of owned pointer handles, declare the element type's destructor
-and the table's `free` function. The returned table must remain stable until `free`
-runs. Its cleanup releases the table; each distinct element transfers to its handle.
-Repeated pointers preserve identity. Conversion failures release new elements,
-including elements not yet converted, and preserve existing handles' ownership.
-Use `borrowed: true` on a returned or output pointer array when C keeps owning its
-pointees. Its `free` function releases only the outer table. Borrowed output aliases
-preserve any ownership already held by an existing handle.
-
-Const arithmetic-pointer inputs also accept the matching typed array. For example,
-`const double *` accepts `Float64Array`, and `const uint64_t *` accepts `BigUint64Array`.
-Use the generated SDK for the library's exact native widths. Synchronous calls lend
-the view's current storage, including its offset, after argument getters finish.
-C callbacks can observe JavaScript element writes, while resizing or transferring
-the backing buffer is blocked until C returns. C must not retain the pointer.
-Compiled code hands a matching fixed-length view's storage straight to a function
-of a library that registers no callbacks, so typed arrays are the faster choice for
-calls in hot loops.
-Async calls snapshot numeric views before scheduling worker execution, so later
-JavaScript writes and transfers cannot affect the native input. Ordinary arrays
-keep their copy semantics. Mutable pointers and fixed array rows still use copies.
-
-To let C fill a reusable typed array, mark a mutable arithmetic pointer `writable`:
-
-```ts
-functions: {
-	fill_samples: { params: { samples: { array: { length: "count", writable: true } } } },
-}
-```
-
-`fill_samples(samples)` then lends a matching `Float64Array` to C, which writes its
-elements in place. The view keeps the lending rules above and must not be backed by
-an immutable buffer. Writable views are synchronous; a function with an `async`
-twin rejects them. Ordinary arrays still pass a copy, so C's writes to them are discarded.
-
-Counted arrays preserve fixed inner dimensions. A parameter such as
-`const int (*rows)[3]` with `array: { length: "count" }` takes an array of
-three-element tuples; only the outer length supplies `count`. Numeric and record
-rows work through synchronous calls, workers, and callbacks. Inputs use
-native copies, and C-allocated results copy every row before `free` runs. A `shape`
-fact applies to each union leaf through the fixed dimensions.
-
-For fixed character rows, choose a representation in the array fact:
-`array: { length: "count", element: { string: true } }` maps `char (*)[N]` to
-strings. Each row must contain a NUL within its declared bound; input UTF-8 bytes
-must leave room for that terminator. `{ bytes: true }` maps each row to an exactly
-sized byte view and returns copied `Uint8Array` values. These formats also apply to
-rows within deeper fixed grids, caller output buffers, inout arrays, and callbacks.
-
-For caller-allocated array outputs, name both the written count and a capacity input:
-
-```ts
-functions: {
-	fill_rows: {
-		params: {
-			rows: { out: true, array: { length: "written", capacity: "capacity" } },
-		},
-	},
-}
-```
-
-The capacity stays in the JavaScript signature. The binding allocates aligned storage
-and returns only the prefix C reports through `written`. To return the entire buffer,
-use the same integer input for `length` and `capacity`. Inout arrays use their original
-JavaScript length as the capacity and return a native snapshot without changing the
-input. Invalid capacities and written counts throw a `RangeError`; a zero-capacity
-buffer returns an empty array. Caller-owned buffers cannot declare `free`.
-
-Record elements can transfer independently owned pointer fields using their
-`handle: { owned: true }` field facts, including fixed inner rows and tagged payloads.
-Only the written prefix transfers ownership. Invalid written counts trigger cleanup
-within the allocated capacity, preserving existing input ownership. Inout handles stay
-pinned through later getters, callbacks and worker execution.
-
-Caller buffers of pointer handles require an explicit `borrowed` choice alongside
-`array`: `false` transfers independently destructible pointees to their handles;
-`true` leaves them owned by C. Null slots and repeated pointers preserve their values
-and identity. Only the written prefix participates in ownership transfer, including
-inout buffers. Inout pointer elements must be non-null handles.
-
-Use `string: { length: "byteCount" }` for UTF-8 pointer/count pairs. The count
-measures encoded bytes and disappears from input signatures. Counted text permits
-embedded NUL bytes; `string: true` remains NUL-terminated and rejects them on input.
-
-```ts
-functions: {
-	copy_text: {
-		params: { text: { string: { length: "length" } } },
-		returns: { string: { length: "written" }, free: "text_free" },
-	},
-}
-```
-
-A result's length comes from an integer parameter or a count the function writes
-through a pointer. Results copy exactly that many UTF-8 bytes, preserving NULs and
-replacing invalid sequences. Negative or excessive lengths throw before reading
-the buffer; `free` still releases an owned result when conversion fails. The fact
-must describe the C buffer's actual allocation.
-
-Counted text works with ordinary functions, async twins, and callbacks.
-In `callback.params`, `length` names the count's 1-based parameter position.
-Queued notifications copy exactly that many bytes before the C callback returns;
-waiting callbacks borrow the source until JavaScript conversion finishes. Negative
-or excessive counts reject before a foreign thread copies the buffer. Counted text
-cannot accompany `bytes` or `array`.
-With `nullable: true`, a null input passes `NULL` and a zero count; an empty string
-passes a non-null pointer and a zero count.
-
-An `out` string names an integer count pointer that C fills. The output object contains
-the decoded text and updated count. An `inout` string initializes its count from the
-encoded input and decodes the updated pointer/count pair, so C may advance a cursor
-within that encoding. Both forms support async twins. Input encodings are borrowed:
-C must not free or reallocate them. Use `free` only when the returned pointer owns a
-separate C allocation.
-
-Array inputs convert in index order. A conversion error prevents later elements'
-getters and Proxy traps from running.
-
-- `constant` passes a C macro, enumerator, or integer for a parameter, such as `SQLITE_TRANSIENT` for a destructor or `0` for a reserved argument. The parameter disappears from the JavaScript signature, and the C compiler checks the value's type.
-- `sizeof` passes the C compiler's size of a complete struct or union, omitting the integer parameter from JavaScript. Compilation fails if its size does not fit the parameter.
-- `end` passes the end of a NUL-terminated string parameter, for APIs such as Dear ImGui's `ImFont_CalcWordWrapPosition` that read text as a `[text, text_end)` range: `text_end: { end: "text" }` points at the terminator of the same UTF-8 encoding and disappears from the JavaScript signature. A null string passes `NULL` for both.
-
-Each fact names the C declaration it describes. A fact that names nothing in the headers, or that does not fit the declaration, fails the build.
-
-## Pass callbacks
-
-A `callback` fact passes a JavaScript function where the library takes a function pointer. `data` names the `void *` parameter the library hands back to the callback; it disappears from the JavaScript signature:
-
-```typescript native/sqlite.ffi.ts
-functions: {
-	sqlite3_create_collation_v2: {
-		params: {
-			xCompare: {
-				callback: {
-					data: "pArg",
-					release: "xDestroy",
-					params: { 3: { bytes: { length: "2" } }, 5: { bytes: { length: "4" } } },
-				},
-			},
-		},
-	},
-},
-```
-
-Without a retention fact, the library may call the function only until the C function returns, as iteration and comparison functions do. An exception in the callback skips its remaining calls and rethrows when the C function returns. Such a callback binds without `data` too, as `qsort`'s comparator does: `callback: {}`.
-
-`release` names the `void (*)(void *)` parameter that takes the destructor for `data`, for a library that keeps the callback, such as SQLite's `xDestroy`. The library may call the function until it calls the destructor, and an exception rethrows from the library call that triggered it.
-
-`replaced: true` describes a setter that keeps its callback until its next call replaces it, such as GLFW's `glfwSetKeyCallback` or SQLite's `sqlite3_update_hook`. `data` is then optional:
-
-```typescript native/glfw.ffi.ts
-functions: {
-	glfwSetKeyCallback: { params: { callback: { callback: { replaced: true }, nullable: true } } },
-},
-```
-
-When the setter's first parameter is a handle, each handle keeps its own callback until its resource is destroyed. Without `data`, the callback must receive that handle, as GLFW's window callbacks do. With `nullable`, `null` removes the callback. A result that is the replaced callback, or with `data` its user data, is dropped.
-
-A key has one pending setter at a time, including synchronous setters that call back
-before returning. Another setter for that key throws; setters for other keys can run.
-Await an async setter before replacing its registration again.
-
-Use `owner` when destroying a resource ends a registration on one of its borrowed
-children, without an independent unregister operation. It roots a callback the
-library keeps through `release` or `replaced`:
-
-```typescript
-subscribe: {
-	params: { callback: { callback: { owner: "child", data: "data", release: "release" } } },
-},
-```
-
-The selector names an input handle by C parameter name or 1-based position. Its actual
-destruction root must be a non-null, independently owned resource with a destructor.
-C must stop the registration and all its consumers before destruction returns. Other
-borrowed inputs must share that root.
-
-A copied struct can be the root when the registration takes a pointer to its stable
-copy and its handle declares `collect: true` with an unconditional destructor. Native
-leases retain that storage after VM teardown until the last consumer releases it.
-Initialized caller storage can also be the root when it declares an unconditional
-collecting destructor. Passing the owner by value is unsupported.
-
-The root keeps the closure and borrowed inputs alive. A closure that captures the
-root can still be collected with it. Active callback execution prevents closing the
-root; conditional destruction failure preserves the registration. Queued calls skip
-JavaScript after the root closes. Independent result leases still prevent destruction,
-and this registration cannot return a lease on its own root or descendants.
-
-`closes` names the input handle released by a one-shot completion, such as libuv's
-`uv_close`. Both the registration function and completion return `void`:
-
-```typescript native/uv.ffi.ts
-uv_close: { params: { close_cb: { callback: { closes: "handle" } } } },
-```
-
-The callback and handle are nonnullable. The callback receives the closing handle
-or routes through `data`; other arguments must be safe to copy. Foreign completions
-queue for the program's thread, so the program needs an event loop. Further C calls
-and disposal reject the handle while close is pending. Completion receives the same
-wrapper, already closed, and its retained buffers can then be transferred. Caller
-storage and backing bytes remain alive through the native completion even after VM
-teardown; detached completions release native ownership without running JavaScript.
-The library must invoke completion exactly once and keep the resource valid until
-then. `release`, `replaced`, `closes`, and `once` are alternative lifetimes; a callback
-states at most one.
-
-`once: true` describes a callback the library calls exactly once, during or after the
-function, as WebGPU's request functions do. It needs `data` or `lookup`. The registration
-stays alive until that call returns, then the library may forget the pointer; an
-exception rethrows from the library call that triggered it. With `queued`, a call from
-another thread queues for the program's thread and the event loop waits for it. A
-registration the library never calls stays alive until the program exits.
-
-Some libraries take the callback inside a struct passed by value, such as WebGPU's
-`WGPURequestAdapterCallbackInfo`. Name its function pointer member with `field` and its
-`void *` member with `data`; the parameter then takes a JavaScript function, and the
-binding builds the struct around the callback. Other members start zeroed unless
-`constants` fixes them:
-
-```typescript
-functions: {
-	request_device: {
-		params: {
-			info: {
-				callback: {
-					field: "callback",
-					data: "userdata",
-					once: true,
-					constants: { mode: "REQUEST_DEFERRED" },
-				},
-			},
-		},
-	},
-},
-```
-
-A callback record keeps its callback for the call or, with `once`, for its one call.
-One-shot and record callbacks register through synchronous calls only.
-
-`lookup` names the function that returns `data` for a callback without a `void *` parameter, and the 1-based position of the callback parameter it takes. SQLite's user functions read it with `sqlite3_user_data` from their `sqlite3_context *`:
-
-```typescript native/sqlite.ffi.ts
-sqlite3_create_function_v2: {
-	params: {
-		xFunc: {
-			callback: {
-				data: "pApp",
-				release: "xDestroy",
-				lookup: { function: "sqlite3_user_data", param: "1" },
-				params: { 3: { array: { length: "2" } } },
-			},
-		},
-		xStep: { constant: "0" },
-		xFinal: { constant: "0" },
-	},
-},
-```
-
-Handles a callback receives are lent for that call: once it returns they read as closed, unless the program already held a handle for the same resource. A callback's own `params`, keyed by 1-based position, take `string`, `bytes`, `array`, and `nullable` facts. A `length` names another callback parameter, which the function does not receive, so the collation above receives two `Uint8Array` copies.
-
-JavaScript runs on one thread, so a library that calls back from another thread aborts the program, unless the callback is `queued`. A destructor may run on any thread; the release completes on the program's thread.
-
-`queued: true` marks a kept callback the library may call from its own threads, as audio and network libraries do. A call from another thread copies its arguments and queues for the program's thread, and the C caller continues at once; a call on the program's thread runs immediately. So the callback returns nothing, and takes values, strings, buffers, structs, and counted arrays of values or terminated strings. Array copies preserve fixed rows, native alignment, and null string entries. Resource-bearing elements need a waiting callback. An exception it throws is uncaught, as one in an event handler. The program needs an event loop, such as the web platform surface, and it keeps running while the callback is kept.
-
-Use `queued: "wait"` when the C caller needs a result.
-The foreign thread waits until JavaScript returns and conversion succeeds. An exception
-returns zero to C and remains uncaught on the program's thread. Shutdown cancels waiting
-calls and rejects new ones with a zero result.
-Waiting callbacks borrow pointed-to arguments while C waits. A handle they receive is
-lent for that callback, unless the program already owns the same resource.
-
-For a callback returning text or bytes, describe `callback.returns`:
-
-```ts
-callback: {
-	data: "data",
-	returns: { string: { length: "1" }, lifetime: "call" },
-},
-```
-
-The length names a writable integer pointer by its callback parameter position. It is
-hidden from JavaScript and receives the returned UTF-8 byte count. Use `string: true`
-for NUL-terminated text, or `bytes: { length: "1" }` for a buffer result. `nullable`
-permits `null`; empty values keep a non-null pointer with a zero count.
-
-Each result gets an independent native copy. All copies survive subsequent and nested
-callbacks, garbage collection, and source-buffer transfer until the enclosing binding
-finishes converting its outputs. C must stop using them before that binding returns.
-Async twins retain the same lifetime through worker execution and completion conversion.
-An exception returns a null pointer and zero count to C.
-
-A retained callback uses `lifetime: "registration"` instead. Its copies survive until
-the library invokes `release`, the next setter replaces the callback, or its owning
-resource closes. C must stop using all returned pointers at that boundary, including
-ones held by pending consumers. All earlier results remain valid when the same callback
-returns again. A callback that releases or replaces itself cannot then publish another
-non-null result; conversion throws a `TypeError` and C receives null and a zero count.
-Native copies can outlive the VM when C still owns the registration; callbacks after
-VM shutdown return null without running JavaScript.
-One-shot `closes` completions cannot return pointers because their registration ends
-as the completion runs.
-
-A callback can return a pointer handle with an explicit result lifetime. C borrows
-the resource; ownership stays with the canonical handle. The handle must belong to the
-program rather than being a callback loan. Disposal and destruction throw while C holds
-a result lease. Managed state also rejects field access and other C operations until
-the call finishes converting its outputs or the registration ends. Repeated results and compatible views share
-the same owner. Collection keeps the wrapper alive while the VM runs; native leases
-preserve storage and retained backing stores during teardown and follow the handle's
-existing `collect` policy when they retire. `collect: false` still requires explicit
-resource cleanup.
-
-For `lifetime: "registration"`, unregister the callback before closing resources it
-returned. Registration cleanup must be independent of those resources. A keyed callback
-cannot return its own registration owner because the resulting lease would prevent
-cleanup. The same constraint applies to indirect ownership cycles and release-backed
-registrations whose owners are opaque to the binding.
-
-Stop or join callback producers through an async twin so the program's thread remains
-available to run their callbacks. A handle whose destructor joins such a producer also
-needs `collect: false` and asynchronous destruction.
-
-## Call variadic functions
-
-A variadic function such as `TraceLog(int logLevel, const char *text, ...)` binds through variants. Each variant fixes the C types of the arguments after the fixed ones and becomes its own export, with those arguments named by position:
-
-```typescript native/raylib.ffi.ts
-functions: {
-	TraceLog: {
-		variants: {
-			TraceLogNumber: { args: ["double"] },
-			TraceLogText: { args: ["const char *"] },
-		},
-	},
-},
-```
-
-`TraceLogText(LOG_INFO, "loaded %s", name)` then calls `TraceLog` with a string as its
-third argument. The C compiler applies the usual argument promotions. A variant's
-`params` adds facts for its arguments, keyed by `arg<position>` or by position. An empty
-`args` list describes a call with no extra arguments.
-
-Add `dispatch: "log"` beside `variants` to export a runtime selector. Call
-`log("TraceLogText", LOG_INFO, "loaded %s", name)` to select that declared signature.
-The generated declarations preserve the correlation between a selector and its argument
-tuple. Only declared signatures are accepted, with their visible JavaScript argument
-counts after hidden constants, counts, and output buffers. Invalid selectors and argument
-counts fail before payload conversion or entering C. Individual variants remain available
-as direct exports.
-
-Without `dispatch`, the original variadic function has no export. A dispatcher may use
-that original name. Selection never infers C types from JavaScript values or format text;
-each case calls its typed C wrapper with the original variadic prototype. The function
-still reads arguments by the types its other arguments announce, such as a format string,
-so a mismatch is undefined behavior in C. Pass fixed formats from a wrapper rather than
-text a user controls.
-
-## Type void pointers
-
-Some functions take a `void *` and an argument that says what it points at, as Dear
-ImGui's `igSliderScalar` takes an `ImGuiDataType`. Give such a function a variant per
-type. Variants of a function that is not variadic have no `args`; their `params` replace
-the function's facts for the parameters they name:
-
-```typescript
-functions: {
-	scalar_step: {
-		variants: {
-			scalar_step_double: {
-				params: { type: { constant: "DATA_DOUBLE" }, value: { pointee: "double", inout: true } },
-			},
-			scalar_step_int: {
-				params: { type: { constant: "DATA_INT" }, value: { pointee: "int", inout: true } },
-			},
-		},
-	},
-},
-```
-
-`pointee` names the C type the pointer addresses; the parameter then binds as a pointer
-to that type, `const` for a `const void *`, so other facts such as `inout` and `array`
-apply. `constant` fixes the selector, so each export can only pass the type it names.
-Like variadic functions, a function with variants exports only its variants, and
-`dispatch` adds a runtime selector over them.
+This permits callback-free marshalling and compiler facts for eligible calls. Input
+getters and result cleanup keep their own effects: a struct getter can run JavaScript,
+and a configured release function can invoke an earlier callback. The fact gives no
+purity or thread-safety guarantee. Typed variadic variants inherit it from their C
+function; a returned function pointer has its own call contract.
 
 ## Run blocking calls on a worker
 
@@ -1169,26 +345,6 @@ of a resource whose worker destruction has not returned. Without this fact, call
 that return the same handle family reject before entering C while its worker close
 is pending. Existing aliases keep their shared identity; a fresh resource gets a new
 wrapper and its own callbacks.
-
-## Find what cannot bind
-
-```shell
-maligator ffi inspect raylib
-```
-
-The report lists each function that is not exported and the fact it needs. It also suggests facts from naming and signature conventions: a count parameter beside a pointer, a pointer the function writes, the `void *` a callback receives or the function that returns it, a setter that replaces its callback, a struct with its own release function or an opaque one nothing releases, a getter's result as borrowed, a result whose documentation says how to free it. Each suggestion is checked against the headers and listed only when it makes a function bind, but it comes from names rather than the library's documentation, so review it before adding it to the contract.
-
-`--json` includes the structured C model and the accepted `facts`, alongside mapped
-signatures, header documentation, missing facts and suggestions in contract shape.
-Each missing fact has a `code` naming the kind of fact it needs, such as `handle`,
-`callback` or `text`, or `unsupported` when no fact binds it, and the C parameter it
-belongs to. The model retains unresolved record fields and typedef chains, including
-transitive system types, so a tool can follow a pointer's type before proposing a
-fact. Its declaration tables are arrays, and exact C integer values are decimal
-strings.
-
-A contract error starts with the fact path it rejects, such as
-`functions.png_read_row.params.row.bytes`, so the fix goes in that entry.
 
 ## Check a library upgrade
 

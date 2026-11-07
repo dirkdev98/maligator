@@ -51,6 +51,26 @@ export const guides = [
 		"Bind a C library through its headers and call it.",
 	],
 	[
+		"c-libraries/pointers",
+		"Pointers and buffers",
+		"Pass buffers, arrays, text, and outputs to C.",
+	],
+	[
+		"c-libraries/resources",
+		"C resources",
+		"Wrap C allocations and caller-owned state in handles.",
+	],
+	[
+		"c-libraries/callbacks",
+		"Callbacks",
+		"Pass JavaScript functions to C and call the functions it returns.",
+	],
+	[
+		"c-libraries/values",
+		"Globals, unions, and variadics",
+		"Read C globals, select union members, and call variadic functions.",
+	],
+	[
 		"workers",
 		"Run tasks in workers",
 		"Create a persistent pool with isolated module state.",
