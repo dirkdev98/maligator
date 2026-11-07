@@ -65,6 +65,9 @@ describe("literal Object.assign", () => {
 		["specialValues", "preserves Number and BigInt values"],
 		["keys", "preserves integer and Symbol enumeration"],
 		["prototype", "invokes the inherited prototype setter"],
+		["plainSources", "copies plain data sources in order without aliasing them"],
+		["hiddenTarget", "keeps a nonenumerable target field nonenumerable"],
+		["sharedPrototype", "reaches objects that inherit from the target"],
 	])("%s: %s", (scenario) => {
 		const oracle = expected(scenario);
 		for (const binary of [pair.compiled, pair.interpreted])

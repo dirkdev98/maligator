@@ -3879,6 +3879,12 @@ void mal_vm_op_define_accessor(
 
 /** Object spread `{...source}` into target; a throwing getter sets completion. */
 void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue source);
+/**
+ * Copy an ordinary source's own enumerable data properties onto an ordinary target with
+ * CreateDataProperty semantics when its properties are all string-keyed data in its
+ * shape. False, with nothing copied, for any other source.
+ */
+bool mal_vm_try_merge_data_properties(MalVm *vm, MalValue target_value, MalValue source);
 
 /** Set [[Prototype]] for an object-literal `__proto__:` member or class heritage. */
 void mal_vm_op_set_prototype(MalVm *vm, MalValue object_value, MalValue prototype_value, bool literal);

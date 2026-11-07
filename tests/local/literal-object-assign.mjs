@@ -159,6 +159,36 @@ const scenarios = {
 			Object.hasOwn(target, "__proto__"),
 		];
 	},
+	plainSources() {
+		const first = { a: 1, b: 2 };
+		const target = Object.assign({}, first, { b: 3, c: 4 }, null, { toString: 5 });
+		first.a = 9;
+		return [
+			Object.keys(target),
+			target.a,
+			target.b,
+			target.c,
+			Object.hasOwn(target, "toString"),
+		];
+	},
+	hiddenTarget() {
+		const target = {};
+		Object.defineProperty(target, "hidden", {
+			value: 1,
+			writable: true,
+			enumerable: false,
+			configurable: true,
+		});
+		Object.assign(target, { hidden: 2, shown: 3 });
+		return [Object.keys(target), target.hidden];
+	},
+	sharedPrototype() {
+		const base = { kept: 1 };
+		const child = Object.create(base);
+		const before = child.added;
+		Object.assign(base, { added: 2 });
+		return [before, child.added, child.kept];
+	},
 	mutable() {
 		Object.assign = (target, source) => [target.original, source.revision, "custom"];
 		return Object.assign({ original: 3 }, { revision: 11 });

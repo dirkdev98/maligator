@@ -9363,6 +9363,11 @@ static bool mal_vm_try_merge_plain_data_properties(MalObject *target, MalValue s
     return true;
 }
 
+bool mal_vm_try_merge_data_properties(MalVm *vm, MalValue target_value, MalValue source) {
+    return mal_vm_try_merge_shaped_data_properties(vm, target_value, source) ||
+        mal_vm_try_merge_plain_data_properties(mal_value_to_object(target_value), source);
+}
+
 void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue source) {
     // Spreading null/undefined contributes nothing.
     if (mal_value_is_nil(source)) {
