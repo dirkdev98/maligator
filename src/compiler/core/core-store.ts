@@ -1652,6 +1652,7 @@ export class CoreFunctionStore {
 			this.#bodyEntry === undefined ? undefined : mappedBlock(this.#bodyEntry),
 		);
 		dense.#activeEditor = false;
+		this.#program._editorClosed(mutation, this.id);
 		for (const domain of FUNCTION_DOMAINS) {
 			dense.#versions[domain] = this.#versions[domain] + 1;
 		}
@@ -1686,6 +1687,7 @@ export class CoreFunctionStore {
 		this.#blockSnapshot = undefined;
 		this.#instructionSnapshot = undefined;
 		this.#activeEditor = true;
+		this.#program._editorOpened(mutation, this.id);
 	}
 
 	_endEdit(mutation: CoreStoreMutation, domains: ReadonlySet<CoreChangeDomain>): void {
@@ -1697,6 +1699,7 @@ export class CoreFunctionStore {
 		}
 		this.#program._recordFunctionChange(mutation, this.id, domains);
 		this.#activeEditor = false;
+		this.#program._editorClosed(mutation, this.id);
 	}
 
 	_createBlock(
@@ -2775,6 +2778,7 @@ export class CoreProgram {
 	}
 	readonly #functions: Array<CoreFunctionStore | undefined> = [];
 	#generation = 0;
+	readonly #editing = new Set<CoreFunctionId>();
 	readonly #versions: Record<CoreProgramChangeDomain, number> = {
 		functions: 0,
 		data: 0,
@@ -3126,6 +3130,21 @@ export class CoreProgram {
 	): void {
 		this.#requireMutation(mutation);
 		for (const domain of domains) this.#versions[domain]++;
+	}
+
+	/** Functions whose editor has not committed yet, so the program-flow log omits their edits. */
+	get editingFunctions(): ReadonlySet<CoreFunctionId> {
+		return this.#editing;
+	}
+
+	_editorOpened(mutation: CoreStoreMutation, functionId: CoreFunctionId): void {
+		this.#requireMutation(mutation);
+		this.#editing.add(functionId);
+	}
+
+	_editorClosed(mutation: CoreStoreMutation, functionId: CoreFunctionId): void {
+		this.#requireMutation(mutation);
+		this.#editing.delete(functionId);
 	}
 
 	_recordFunctionChange(

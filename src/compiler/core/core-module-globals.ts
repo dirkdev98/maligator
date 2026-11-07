@@ -4,8 +4,9 @@ import type {
 } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
-import { coreInstructionId } from "./core-ir.ts";
+import { coreFunctionId, coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import { CORE_PROGRAM_FLOW_BODY } from "./core-store.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 interface GlobalWrite {
@@ -63,6 +64,126 @@ export interface CoreModuleGlobalWrites {
 	readonly resets: ReadonlyArray<CoreInstructionId>;
 }
 
+const lexicalSlotsByEvaluator = new WeakMap<
+	NonNullable<CoreCompilationContext["data"]["moduleLexicalSlots"]>,
+	ReadonlyMap<number, ReadonlyArray<number>>
+>();
+
+// Every function's value kinds ask for its cells, and only module evaluators own any.
+function evaluatorLexicalSlots(
+	context: CoreCompilationContext,
+): ReadonlyMap<number, ReadonlyArray<number>> {
+	const entries = context.data.moduleLexicalSlots;
+	if (entries === undefined) return new Map();
+	let byEvaluator = lexicalSlotsByEvaluator.get(entries);
+	if (byEvaluator === undefined) {
+		const map = new Map<number, Array<number>>();
+		for (const { slot, evaluator } of entries) {
+			const slots = map.get(evaluator) ?? [];
+			slots.push(slot);
+			map.set(evaluator, slots);
+		}
+		byEvaluator = map;
+		lexicalSlotsByEvaluator.set(entries, byEvaluator);
+	}
+	return byEvaluator;
+}
+
+/**
+ * The functions whose committed bodies assign each module lexical slot a value. The
+ * program-flow log names every function an editor changed since the last refresh, and
+ * functions still under an editor are scanned when asked about.
+ */
+class CoreLexicalWriterIndex {
+	readonly #program: CoreProgram;
+	readonly #slots: ReadonlySet<number>;
+	readonly #writers = new Map<number, Set<CoreFunctionId>>();
+	readonly #assigned = new Map<CoreFunctionId, ReadonlyArray<number>>();
+	#generation = -1;
+	#revision = 0;
+	#capacity = 0;
+
+	constructor(program: CoreProgram, slots: ReadonlySet<number>) {
+		this.#program = program;
+		this.#slots = slots;
+	}
+
+	/** Whether a function other than `owner` assigns `slot` a value. */
+	assignedElsewhere(slot: number, owner: CoreFunctionId): boolean {
+		this.#refresh();
+		for (const writer of this.#writers.get(slot) ?? []) if (writer !== owner) return true;
+		for (const id of this.#program.editingFunctions)
+			if (id !== owner && this.#assignedSlots(this.#program.function(id)).includes(slot))
+				return true;
+		return false;
+	}
+
+	#assignedSlots(fn: CoreFunctionStore): ReadonlyArray<number> {
+		return globalWrites(fn).flatMap((write) =>
+			!write.empty && this.#slots.has(write.slot) ? [write.slot] : [],
+		);
+	}
+
+	#scan(id: CoreFunctionId): void {
+		for (const slot of this.#assigned.get(id) ?? []) this.#writers.get(slot)?.delete(id);
+		this.#assigned.delete(id);
+		if (!this.#program.hasFunction(id)) return;
+		const slots = this.#assignedSlots(this.#program.function(id));
+		if (slots.length === 0) return;
+		this.#assigned.set(id, slots);
+		for (const slot of slots) {
+			const writers = this.#writers.get(slot) ?? new Set<CoreFunctionId>();
+			writers.add(id);
+			this.#writers.set(slot, writers);
+		}
+	}
+
+	#refresh(): void {
+		const program = this.#program;
+		if (this.#generation !== program.generation) {
+			// Finalizing the construction generation replaces every function and the log.
+			this.#writers.clear();
+			this.#assigned.clear();
+			for (const id of program.functionIds()) this.#scan(id);
+			this.#generation = program.generation;
+		} else {
+			for (
+				let revision = this.#revision;
+				revision < program.programFlowRevision;
+				revision++
+			)
+				if ((program.programFlowDomainMaskAt(revision) & CORE_PROGRAM_FLOW_BODY) !== 0)
+					this.#scan(program.programFlowFunctionAt(revision));
+			for (let index = this.#capacity; index < program.functionCapacity; index++)
+				this.#scan(coreFunctionId(index));
+		}
+		this.#revision = program.programFlowRevision;
+		this.#capacity = program.functionCapacity;
+	}
+}
+
+const lexicalWriterIndexes = new WeakMap<
+	CoreProgram,
+	{
+		readonly entries: NonNullable<CoreCompilationContext["data"]["moduleLexicalSlots"]>;
+		readonly index: CoreLexicalWriterIndex;
+	}
+>();
+
+function lexicalWriterIndex(
+	program: CoreProgram,
+	entries: NonNullable<CoreCompilationContext["data"]["moduleLexicalSlots"]>,
+): CoreLexicalWriterIndex {
+	const cached = lexicalWriterIndexes.get(program);
+	if (cached?.entries === entries) return cached.index;
+	const index = new CoreLexicalWriterIndex(
+		program,
+		new Set(entries.map(({ slot }) => slot)),
+	);
+	lexicalWriterIndexes.set(program, { entries, index });
+	return index;
+}
+
 /** Private lexical cells whose non-empty writers all belong to this evaluator. */
 export function coreEvaluatorGlobalWrites(
 	program: CoreProgram,
@@ -73,25 +194,26 @@ export function coreEvaluatorGlobalWrites(
 		number,
 		{ stores: Array<GlobalWrite>; resets: Array<CoreInstructionId> }
 	>();
+	const entries = context.data.moduleLexicalSlots;
 	if (
 		context.facts.world.eval !== "disabled" ||
 		context.facts.closure.sourceClosure.kind !== "known" ||
-		context.data.moduleLinks !== undefined
+		context.data.moduleLinks !== undefined ||
+		entries === undefined
 	)
 		return cells;
-	for (const { slot, evaluator } of context.data.moduleLexicalSlots ?? [])
-		if (evaluator === fn.id) cells.set(slot, { stores: [], resets: [] });
-	if (cells.size === 0) return cells;
-	for (const functionId of program.functionIds()) {
-		for (const write of globalWrites(program.function(functionId))) {
-			const cell = cells.get(write.slot);
-			if (cell === undefined) continue;
-			if (functionId !== fn.id) {
-				// Other functions may instantiate the TDZ, but cannot assign the binding.
-				if (!write.empty) cells.delete(write.slot);
-			} else if (write.empty) cell.resets.push(write.instruction);
-			else cell.stores.push(write);
-		}
+	const owned = evaluatorLexicalSlots(context).get(fn.id);
+	if (owned === undefined) return cells;
+	// Other functions may instantiate the TDZ, but cannot assign the binding.
+	const writers = lexicalWriterIndex(program, entries);
+	for (const slot of owned)
+		if (!writers.assignedElsewhere(slot, fn.id))
+			cells.set(slot, { stores: [], resets: [] });
+	for (const write of globalWrites(fn)) {
+		const cell = cells.get(write.slot);
+		if (cell === undefined) continue;
+		if (write.empty) cell.resets.push(write.instruction);
+		else cell.stores.push(write);
 	}
 	return cells;
 }
@@ -145,6 +267,27 @@ function referencedGlobalSlots(
 	return slots;
 }
 
+const readScans = new WeakMap<
+	CoreFunctionStore,
+	{ readonly bodyVersion: number; readonly slots: ReadonlyArray<number> }
+>();
+
+function globalSlotReads(fn: CoreFunctionStore): ReadonlyArray<number> {
+	const bodyVersion = fn.hasActiveEditor ? undefined : fn.version("body");
+	const cached = readScans.get(fn);
+	if (bodyVersion !== undefined && cached?.bodyVersion === bodyVersion)
+		return cached.slots;
+	const slots: Array<number> = [];
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode !== "storeGlobal")
+			slots.push(...referencedGlobalSlots(opcode, fn.instructionAttributes(instruction)));
+	}
+	if (bodyVersion !== undefined) readScans.set(fn, { bodyVersion, slots });
+	return slots;
+}
+
 /**
  * Module binding slots that no instruction of `functions` reads. In a closed program
  * only Core instructions and host installers reach a module binding, so stores to one
@@ -159,19 +302,8 @@ export function coreUnreadModuleBindingSlots(
 	for (const { exports } of context.data.hostInstallCandidates)
 		for (const { slot } of exports) unread.delete(slot);
 	if (unread.size === 0) return unread;
-	for (const id of functions) {
-		const fn = program.function(id);
-		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode === "storeGlobal") continue;
-			for (const slot of referencedGlobalSlots(
-				opcode,
-				fn.instructionAttributes(instruction),
-			))
-				unread.delete(slot);
-		}
-	}
+	for (const id of functions)
+		for (const slot of globalSlotReads(program.function(id))) unread.delete(slot);
 	return unread;
 }
 

@@ -354,6 +354,7 @@ describe("normal build frontend cache", () => {
 				const fields = value.split(";");
 				return fields[1] + fields[0] + fields.length;
 			}
+			globalThis.project = project;
 			globalThis.result = project("alpha;beta");\n`,
 		);
 
@@ -466,6 +467,7 @@ describe("normal build frontend cache", () => {
 		write(
 			entrypoint,
 			`function parse(value) { return Number(value.slice(1)); }
+			globalThis.parse = parse;
 			globalThis.result = parse("x42");\n`,
 		);
 

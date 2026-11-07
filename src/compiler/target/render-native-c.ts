@@ -7417,6 +7417,60 @@ function emitBody(
 			plan.stringIndex,
 		]),
 	);
+	// A class's declared fields are defined `undefined` on its fresh receiver before any
+	// code can observe it, so its creation defines them at once.
+	const receiverFields = new Map<number, ReadonlyArray<number>>();
+	const fusedFieldDefines = new Set<number>();
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (
+			op.opcode !== "CREATE_BASE_CONSTRUCT_RECEIVER" ||
+			nativeInstructions[ip] !== undefined ||
+			stackObjectSites.has(ip)
+		)
+			continue;
+		const keys: Array<number> = [];
+		const defines: Array<number> = [];
+		const names = new Set<string>();
+		const undefinedRegisters = new Set<number>();
+		for (let next = ip + 1; next < fn.instructions.length; next++) {
+			if (jumpTargets.has(next)) break;
+			const candidate = fn.instructions[next]!;
+			if (candidate.opcode === "CREATE_UNDEFINED" && candidate.dst !== op.dst) {
+				undefinedRegisters.add(candidate.dst);
+				continue;
+			}
+			if (candidate.opcode === "CREATE_STRING" && candidate.dst !== op.dst) {
+				undefinedRegisters.delete(candidate.dst);
+				continue;
+			}
+			const stringIndex = staticDefineStringIndexByIp.get(next);
+			const name =
+				stringIndex === undefined
+					? undefined
+					: String.fromCharCode(...(stringConstants[stringIndex] ?? []));
+			if (
+				candidate.opcode !== "DEFINE_PROPERTY" ||
+				candidate.object !== op.dst ||
+				!candidate.enumerable ||
+				!candidate.writable ||
+				!candidate.configurable ||
+				!undefinedRegisters.has(candidate.value) ||
+				nativeInstructions[next] !== undefined ||
+				stackObjectAccesses.has(next) ||
+				stringIndex === undefined ||
+				name === undefined ||
+				names.has(name) ||
+				keys.length >= op.constructorSlotReserve
+			)
+				break;
+			names.add(name);
+			keys.push(stringIndex);
+			defines.push(next);
+		}
+		if (defines.length === 0) continue;
+		receiverFields.set(ip, keys);
+		for (const define of defines) fusedFieldDefines.add(define);
+	}
 	const mathCalls = new Map(
 		fastPathPlans.mathCalls.map((plan) => [plan.instructionIp, plan]),
 	);
@@ -7895,6 +7949,8 @@ function emitBody(
 		nativePlan: undefined,
 		stringConstants,
 		staticDefineStringIndexByIp,
+		receiverFields,
+		fusedFieldDefines,
 		iterationEligibilityRegisters,
 		resources,
 		directEntryCalls,
@@ -9191,6 +9247,10 @@ interface NativeInstructionContext {
 	readonly relocation: NativeRelocationExpressions;
 	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly staticDefineStringIndexByIp: ReadonlyMap<number, number>;
+	/** Static string keys of the declared fields each base construct receiver creates. */
+	readonly receiverFields: ReadonlyMap<number, ReadonlyArray<number>>;
+	/** Field definitions a receiver's creation already performed. */
+	readonly fusedFieldDefines: ReadonlySet<number>;
 	// Registers loaded from the Array iteration guard; a call through one checks identity first.
 	readonly iterationEligibilityRegisters?: ReadonlySet<number>;
 }
@@ -9343,6 +9403,8 @@ class NativeInstructionEmission {
 			stringConstants: this.context.stringConstants,
 			stringComparisons: this.context.stringComparisons,
 			staticDefineStringIndexByIp: this.context.staticDefineStringIndexByIp,
+			receiverFields: this.context.receiverFields,
+			fusedFieldDefines: this.context.fusedFieldDefines,
 			iterationEligibilityRegisters: this.context.iterationEligibilityRegisters,
 			directEntryCalls: this.context.directEntryCalls,
 			stringLeafCaches: this.context.stringLeafCaches,
@@ -14703,11 +14765,19 @@ class NativeInstructionEmission {
 					`mal_object_init_embedded_stack(&vm->heap, &${this.context.stackObjectSite.objectName}, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), mal_shape_root(&vm->heap), nullptr);`,
 					`r${instruction.dst} = mal_value_from_object(&${this.context.stackObjectSite.objectName}.object);`,
 				];
-			case "CREATE_BASE_CONSTRUCT_RECEIVER":
+			case "CREATE_BASE_CONSTRUCT_RECEIVER": {
+				const fields = this.context.receiverFields.get(this.ip);
+				if (fields !== undefined)
+					return [
+						`static MAL_ISOLATE_LOCAL MalReceiverFieldsCache __rfc_${this.ip};`,
+						`r${instruction.dst} = ${this.profileCall("allocation", `mal_vm_op_create_base_construct_receiver_fields(vm, ${this.boxed(instruction.newTarget)}, ${instruction.constructorSlotReserve}, &__rfc_${this.ip}, (MalString *[]){ ${fields.map((index) => `vm->string_constant_atoms[${this.context.relocation.stringIndex(index)}]`).join(", ")} }, ${fields.length})`)};`,
+						this.throwCheck(),
+					];
 				return [
 					`r${instruction.dst} = ${this.profileCall("allocation", `mal_vm_op_create_base_construct_receiver(vm, ${this.boxed(instruction.newTarget)}, ${instruction.constructorSlotReserve})`)};`,
 					this.throwCheck(),
 				];
+			}
 			case "CREATE_OBJECT_SHAPED":
 				return this.emitObjectLiteral(instruction);
 			case "CREATE_ARRAY":
@@ -16388,6 +16458,8 @@ class NativeInstructionEmission {
 	emitDefineProperty(
 		instruction: Extract<BytecodeInstruction, { opcode: "DEFINE_PROPERTY" }>,
 	): Array<string> | null {
+		// The receiver's creation defined this declared field.
+		if (this.context.fusedFieldDefines.has(this.ip)) return [];
 		const stringIndex = this.context.staticDefineStringIndexByIp.get(this.ip);
 		const objectPossible =
 			((this.operandKind(instruction.object) ?? COMPILER_VALUE_KIND_TOP) &

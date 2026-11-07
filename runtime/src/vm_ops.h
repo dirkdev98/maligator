@@ -3800,6 +3800,43 @@ static inline bool mal_vm_try_define_property_static_cached(
     return true;
 }
 
+/** A construct site's shape for the fields its class declares, valid for one heap. */
+typedef struct MalReceiverFieldsCache {
+    struct MalShape *shape;
+    u64 heap_identity;
+    u32 heap_epoch;
+} MalReceiverFieldsCache;
+
+/** Define `count` declared fields as `undefined` on a receiver nothing else holds yet. */
+void mal_vm_receiver_fields_define(
+    MalVm *vm, MalValue receiver, MalReceiverFieldsCache *cache, struct MalString **keys,
+    u32 count);
+
+/**
+ * The receiver of a base-class construct with its declared fields defined as
+ * `undefined`, in order, as the definitions that follow its creation would add them.
+ * Nothing can observe the receiver in between, so the site's cached shape replaces
+ * one transition per field.
+ */
+static inline __attribute__((always_inline)) MalValue mal_vm_op_create_base_construct_receiver_fields(
+    MalVm *vm, MalValue new_target, u8 capacity, MalReceiverFieldsCache *cache,
+    struct MalString **keys, u32 count
+) {
+    MalValue receiver = mal_vm_op_create_base_construct_receiver(vm, new_target, capacity);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return receiver;
+    MalObject *object = mal_value_to_object(receiver);
+    if (cache->shape != nullptr && cache->heap_identity == vm->heap.identity &&
+        cache->heap_epoch == vm->heap.epoch && object->shape == mal_shape_root(&vm->heap) &&
+        count <= object->slot_capacity) {
+        MalValue *fields = mal_object_fields(object);
+        for (u32 index = 0; index < count; index++) fields[index] = MAL_VALUE_UNDEFINED;
+        object->shape = cache->shape;
+        return receiver;
+    }
+    mal_vm_receiver_fields_define(vm, receiver, cache, keys, count);
+    return receiver;
+}
+
 /** Define a static-name property through a VM-lifetime guarded shape transition. */
 void mal_vm_op_define_property_static_cached(
     MalVm *vm, MalDefinePropertyCache *cache, MalValue object_value,
