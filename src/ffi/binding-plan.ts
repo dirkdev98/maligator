@@ -426,6 +426,11 @@ export type Argument =
 	| { readonly kind: "callback-data"; readonly of: number }
 	/** The destructor the library calls when it drops the kept callback argument `of`. */
 	| { readonly kind: "callback-release"; readonly of: number }
+	/**
+	 * The address of the terminator of the text C argument `of` passes, so C reads that
+	 * input as a range; null when the input is null.
+	 */
+	| { readonly kind: "end"; readonly of: number }
 	/** A C expression the contract fixes, such as a macro name. */
 	| {
 			readonly kind: "constant";
@@ -3540,6 +3545,8 @@ class Planner {
 		const params: Array<MappedParameter> = [];
 		const args: Array<Argument> = [];
 		const outputs: Array<MappedOutput> = [];
+		// End pointer parameters, by the input whose range they close.
+		const ends = new Map<number, number>();
 		declaration.params.forEach((param, index) => {
 			const name = names[index]!;
 			const valueFacts = factsAt(index);
@@ -3559,6 +3566,46 @@ class Planner {
 			const released = callbackReleases.get(index);
 			if (released !== undefined) {
 				args.push({ kind: "callback-release", of: released });
+				return;
+			}
+			if (valueFacts.end !== undefined) {
+				if (
+					Object.keys(valueFacts).length > 1 ||
+					routed !== undefined ||
+					counts.has(index) ||
+					resultCount === index ||
+					callableContext !== undefined
+				)
+					throw new FfiFactError(
+						"conflict",
+						where(`${at}.end`),
+						"an end pointer of a function parameter takes no other role",
+					);
+				const target =
+					resolved.kind === "pointer"
+						? resolveCType(this.#model, resolved.to)
+						: undefined;
+				if (
+					target === undefined ||
+					!(
+						target.kind === "void" ||
+						(target.kind === "integer" && this.#model.target.sizes[target.name] === 1)
+					)
+				)
+					throw new FfiFactError(
+						"inapplicable",
+						where(`${at}.end`),
+						`applies to void and byte pointers, not ${formatCDeclaration(param.type)}`,
+					);
+				const source = parameterIndex(valueFacts.end, `${at}.end`);
+				if (source === index)
+					throw new FfiFactError(
+						"unmet-requirement",
+						where(`${at}.end`),
+						"a parameter cannot end itself",
+					);
+				ends.set(index, source);
+				args.push({ kind: "end", of: source });
 				return;
 			}
 			if (valueFacts.constant !== undefined || valueFacts.sizeof !== undefined) {
@@ -3980,6 +4027,17 @@ class Planner {
 			});
 			args.push({ kind: "input", param: params.length - 1 });
 		});
+
+		for (const [index, source] of ends) {
+			const entry = args[source];
+			const value = entry?.kind === "input" ? params[entry.param]?.value : undefined;
+			if (value?.kind !== "string" || value.counted === true)
+				throw new FfiFactError(
+					"unmet-requirement",
+					where(`params.${names[index]}.end`),
+					`'${names[source]}' must be a NUL-terminated string input`,
+				);
+		}
 
 		for (const [, extent] of extents) {
 			for (const factor of extent.params) {

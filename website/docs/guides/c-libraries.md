@@ -829,6 +829,7 @@ getters and Proxy traps from running.
 
 - `constant` passes a C macro, enumerator, or integer for a parameter, such as `SQLITE_TRANSIENT` for a destructor or `0` for a reserved argument. The parameter disappears from the JavaScript signature, and the C compiler checks the value's type.
 - `sizeof` passes the C compiler's size of a complete struct or union, omitting the integer parameter from JavaScript. Compilation fails if its size does not fit the parameter.
+- `end` passes the end of a NUL-terminated string parameter, for APIs such as Dear ImGui's `ImFont_CalcWordWrapPosition` that read text as a `[text, text_end)` range: `text_end: { end: "text" }` points at the terminator of the same UTF-8 encoding and disappears from the JavaScript signature. A null string passes `NULL` for both.
 
 Each fact names the C declaration it describes. A fact that names nothing in the headers, or that does not fit the declaration, fails the build.
 

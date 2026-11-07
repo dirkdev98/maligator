@@ -433,8 +433,16 @@ function validateValueFacts(value: unknown, at: string): void {
 		"callable",
 		"constant",
 		"sizeof",
+		"end",
 	]);
 	if (value.shape !== undefined) validateShape(value.shape, `${at}.shape`);
+	if (value.end !== undefined)
+		expect(
+			typeof value.end === "string" &&
+				(C_NAME.test(value.end) || /^[1-9]\d*$/.test(value.end)),
+			`${at}.end`,
+			"a parameter name or 1-based position",
+		);
 	for (const key of ["nullable", "borrowed", "fresh", "out", "inout"]) {
 		booleanField(value, key, at);
 	}

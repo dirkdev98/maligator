@@ -385,7 +385,9 @@ export function inspectBindings(
 					? undefined
 					: argument.kind === "count"
 						? `count of ${argument.of.map((source) => binding!.declaration.params[source]?.name ?? `arg${source + 1}`).join(", ")}`
-						: argument.kind;
+						: argument.kind === "end"
+							? `end of ${binding!.declaration.params[argument.of]?.name ?? `arg${argument.of + 1}`}`
+							: argument.kind;
 			const ts =
 				argument?.kind === "input" || argument?.kind === "inout"
 					? formatTsParameterType(binding!.params[argument.param]!)

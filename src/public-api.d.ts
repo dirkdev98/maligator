@@ -241,6 +241,12 @@ export interface MaligatorFfiValueFacts {
 	 * omit the parameter from JavaScript. Its size must fit the integer parameter.
 	 */
 	sizeof?: string;
+	/**
+	 * Pass the address of the terminator of the NUL-terminated string that this
+	 * parameter, named by C name or 1-based position, passes, and omit this parameter
+	 * from JavaScript. C then reads that text as a `[start, end)` range.
+	 */
+	end?: string;
 }
 
 /** A C function whose code and referenced state remain valid for its lifetime. */

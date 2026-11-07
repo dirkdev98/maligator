@@ -250,6 +250,24 @@ function scalarFunction(binding: BoundFunction, entry: FfiScalarEntry): Array<st
 }
 
 /**
+ * Statements that point each `end` argument at the terminator of the converted text it
+ * closes, once every argument has converted. `argument` spells C argument `index`'s
+ * converted value. Input text has no embedded NUL, so its terminator marks the end.
+ */
+function endPointers(
+	binding: BoundFunction,
+	argument: (index: number) => string,
+): Array<string> {
+	return binding.arguments.flatMap((entry, index) => {
+		if (entry.kind !== "end") return [];
+		const start = `(const char *) (${argument(entry.of)})`;
+		return [
+			`${argument(index)} = (${localDeclaration(binding.declaration.params[index]!.type, "")}) (${argument(entry.of)} == nullptr ? nullptr : ${start} + __builtin_strlen(${start}));`,
+		];
+	});
+}
+
+/**
  * Statements that reject a buffer or array shorter than the product its `extent`
  * names, once every argument has converted. `argument` spells C argument `index`'s
  * converted value and `length` the converted length of the buffer at that index.
@@ -3453,6 +3471,9 @@ class BindingWriter {
 						`${local} = mal_kept_${String(entry.of)} == nullptr ? nullptr : mal_ffi_release;`,
 					);
 					return;
+				case "end":
+					// Set once every input converts; see endPointers.
+					return;
 				case "out":
 				case "inout": {
 					const output = `mal_output_${String(entry.output)}`;
@@ -4260,6 +4281,9 @@ class BindingWriter {
 						: `mal_length_${String(index)}`,
 				"goto mal_done;",
 			).map((line) => `\t${line}`),
+			...endPointers(binding, (index) => `mal_argument_${String(index)}`).map(
+				(line) => `\t${line}`,
+			),
 			...keeps.map((line) => `\t${line}`),
 			...kept.map((line) => `\t${line}`),
 			...commits.map((line) => `\t${line}`),
@@ -4525,6 +4549,8 @@ class BindingWriter {
 					callbackArguments.push(
 						`${target} = mal_ctx->mal_callback_${String(entry.of)} == nullptr ? nullptr : mal_ffi_release;`,
 					);
+					return;
+				case "end":
 					return;
 				case "out":
 				case "inout": {
@@ -5199,6 +5225,9 @@ class BindingWriter {
 						: `mal_ctx->mal_length_${String(index)}`,
 				"goto mal_failed;",
 			).map((line) => `\t${line}`),
+			...endPointers(binding, (index) => `mal_ctx->mal_argument_${String(index)}`).map(
+				(line) => `\t${line}`,
+			),
 			...callbackArguments.map((line) => `\t${line}`),
 			...callbacks.flatMap(({ index, closeKey }) =>
 				closeKey === undefined
