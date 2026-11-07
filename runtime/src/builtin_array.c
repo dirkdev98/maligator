@@ -5416,7 +5416,7 @@ static bool mal_array_default_species(MalVm *vm, MalValue recv) {
     // own layout holds no `constructor` that could redirect species.
     bool may_shadow = (receiver->shape != nullptr && receiver->shape->inline_count != 0) ||
         mal_object_has_public_overflow(receiver);
-    MalKey ctor_key = mal_intrinsic_string_key(vm, (const byte *) "constructor");
+    MalKey ctor_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CONSTRUCTOR);
     if (may_shadow && mal_object_get_own(receiver, ctor_key).present) {
         return false;
     }

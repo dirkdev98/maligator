@@ -1200,7 +1200,7 @@ static MalValue regexp_constructor(MalVm *vm, MalValue this_value, const MalValu
         // RegExp(re) with no flags and re.constructor === RegExp returns re.
         if (pattern_is_regexp && mal_value_is_undefined(flags)) {
             MalValue pattern_constructor;
-            if (!mal_vm_get_property(vm, pattern, mal_intrinsic_string_key(vm, (const byte *) "constructor"), &pattern_constructor)) {
+            if (!mal_vm_get_property(vm, pattern, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CONSTRUCTOR), &pattern_constructor)) {
                 return mal_value_new_undefined();
             }
             if (pattern_constructor == used_new_target) {
@@ -1661,7 +1661,7 @@ static bool regexp_same_value(MalValue a, MalValue b) {
 static MalValue regexp_species_constructor(MalVm *vm, MalValue rx, bool *ok) {
     *ok = true;
     MalValue constructor;
-    if (!mal_vm_get_property(vm, rx, mal_intrinsic_string_key(vm, (const byte *) "constructor"), &constructor)) {
+    if (!mal_vm_get_property(vm, rx, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CONSTRUCTOR), &constructor)) {
         *ok = false;
         return mal_value_new_undefined();
     }
