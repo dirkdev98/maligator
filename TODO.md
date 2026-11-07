@@ -1184,6 +1184,15 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
+- [ ] Keep medium flat strings' units in their own cell. A string past the 16
+      Latin-1 or 8 UTF-16 inline units allocates a separate owned buffer that a
+      finalizer frees, so building `${order.region}/${order.category}` costs 27.7 ns
+      against Node's 3.5, and with the `Map.get` that follows 65 against 70. Copying
+      units of up to 96 bytes into the tail of a larger string cell cut those to 20
+      and 58 ns. Such a string needs its own storage kind among the flat ones:
+      external storage also covers transient buffers, which Map keys must not
+      retain. The flat-kind checks in the runtime, the GC finalizer, slices, Map key
+      compaction, FFI borrowing and the white-box string fixtures all name kinds.
 - [ ] Size an object literal that starts with a spread when it is created.
       `({ ...record, extra: 1 })` over a three-field record takes 50 ns against
       Node's 10. Lowering emits an empty `createObject` and then
