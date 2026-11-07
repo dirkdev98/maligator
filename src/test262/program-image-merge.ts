@@ -20,13 +20,19 @@ export interface MergedProgramImage {
 
 function rebaseNativeStorage(
 	storage: NativeStoragePlan | undefined,
-	functionBase: number,
-	stringBase: number,
+	base: RebaseBases,
 ): NativeStoragePlan | undefined {
+	const functionBase = base.function;
+	const stringBase = base.string;
 	return storage === undefined
 		? undefined
 		: {
 				...storage,
+				numericLoopRegions: storage.numericLoopRegions.map((plan) =>
+					plan.globals === undefined
+						? plan
+						: { ...plan, globals: plan.globals.map((slot) => slot + base.global) },
+				),
 				stringComparisons: storage.stringComparisons.map((plan) => ({
 					...plan,
 					operand: rebaseVmValueOperand(plan.operand, stringBase),
@@ -768,7 +774,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 		mergedNativeFunctions.push(
 			...programImage.native.functions.map((native, localFunctionIndex) => ({
 				...native,
-				storage: rebaseNativeStorage(native.storage, base.function, base.string),
+				storage: rebaseNativeStorage(native.storage, base),
 				body: {
 					...native.body,
 					closureCaptureOwners: native.body.closureCaptureOwners?.map((owner) =>
@@ -794,7 +800,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 				registerRepresentations: [...native.registerRepresentations],
 				directEntries: native.directEntries.map((entry) => ({
 					...entry,
-					storage: rebaseNativeStorage(entry.storage, base.function, base.string),
+					storage: rebaseNativeStorage(entry.storage, base),
 					callOverrides: entry.callOverrides?.map((call) => ({
 						...call,
 						functionIndex: call.functionIndex + base.function,

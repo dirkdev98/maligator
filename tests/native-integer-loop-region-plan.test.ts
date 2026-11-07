@@ -7,9 +7,11 @@ import {
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import type { NativeNumericLoopRegionPlan } from "../src/compiler/target/lower-native-fast-paths.ts";
 import { numericLoopShape } from "../src/compiler/target/lower-native-fast-paths.ts";
+import { validateNativeProgramStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
+import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 
 function compile(body: string, profile = false) {
 	return compileSemanticProgramToProgramImage(
@@ -184,5 +186,33 @@ describe("native safe-integer loop regions", () => {
 					},
 				}),
 			).toThrow(/invalid or stale storage plan/);
+	});
+
+	it("keeps the global slots it holds in locals valid when merged behind another program", () => {
+		const script = (source: string, file: string) =>
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(source, file),
+			);
+		const loop = script(
+			"let sum = 0;\nfor (let i = 0; i < 1000; i++) sum += (i * 3) % 7;\nglobalThis.sum = sum;\n",
+			"/global-loop.js",
+		);
+		const globals = loop.native.functions.flatMap(
+			(fn) => fn.storage?.numericLoopRegions.flatMap((plan) => plan.globals ?? []) ?? [],
+		);
+		expect(globals).not.toHaveLength(0);
+		const merged = mergeProgramImages([
+			script(
+				"let first = 1, second = 2;\nglobalThis.total = first + second;\n",
+				"/other.js",
+			),
+			loop,
+		]);
+		expect(() =>
+			validateNativeProgramStorage(
+				merged.image.native,
+				merged.image.runtime.stringConstants,
+			),
+		).not.toThrow();
 	});
 });
