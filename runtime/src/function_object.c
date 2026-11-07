@@ -90,9 +90,42 @@ static void mal_native_function_init_state(
 #endif
     function->slots = nullptr;
     function->slot_count = 0;
+    function->slots_inline = false;
 #if MAL_REALMS
     function->realm = heap->current_realm;
 #endif
+}
+
+// Larger slot sets keep the cell in the small size classes and use a RAW vector.
+#define MAL_NATIVE_FUNCTION_INLINE_SLOTS_MAX 16
+
+static MalNativeFunctionObject *mal_native_function_alloc(
+    MalHeap *heap, u32 metadata_count, i32 slot_count
+) {
+    u32 inline_slots = slot_count > 0 && slot_count <= MAL_NATIVE_FUNCTION_INLINE_SLOTS_MAX
+        ? (u32) slot_count : 0;
+    return mal_heap_alloc(
+        heap, sizeof(MalNativeFunctionObject) + (metadata_count + inline_slots) * sizeof(MalValue),
+        MAL_HEAP_NATIVE_FUNCTION_OBJECT);
+}
+
+static void mal_native_function_attach_slots(
+    MalHeap *heap, MalNativeFunctionObject *function, u32 metadata_count,
+    const MalValue *slots, i32 slot_count
+) {
+    if (slot_count <= 0) return;
+    if (slot_count <= MAL_NATIVE_FUNCTION_INLINE_SLOTS_MAX) {
+        function->slots = (MalValue *) (function + 1) + metadata_count;
+        function->slots_inline = true;
+    } else {
+        function->slots = mal_heap_alloc_raw_profiled(
+            heap, sizeof(MalValue) * slot_count, MAL_PROFILE_ALLOCATION_FAMILY_FUNCTION);
+        mal_heap_cell_needs_finalizer(&function->object.header);
+    }
+    function->slot_count = slot_count;
+    for (i32 i = 0; i < slot_count; i++) {
+        function->slots[i] = slots[i];
+    }
 }
 
 static void mal_function_init_state(
@@ -219,19 +252,11 @@ MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity(
     const MalValue *slots,
     i32 slot_count
 ) {
-    MalNativeFunctionObject *function =
-        mal_native_function_object_new_arity(heap, prototype, name, length, callback);
-    if (slot_count > 0) {
-        function->slots = mal_heap_alloc_raw_profiled(
-            heap, sizeof(MalValue) * slot_count,
-            MAL_PROFILE_ALLOCATION_FAMILY_FUNCTION);
-        function->slot_count = slot_count;
-        for (i32 i = 0; i < slot_count; i++) {
-            function->slots[i] = slots[i];
-        }
-    }
-
-    return function;
+    MalKey length_key;
+    MalKey name_key;
+    mal_native_function_metadata_keys(heap, name != nullptr, &length_key, &name_key);
+    return mal_native_function_object_new_with_slots_arity_keys(
+        heap, prototype, name, length, callback, slots, slot_count, length_key, name_key);
 }
 
 MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity_keys(
@@ -246,22 +271,12 @@ MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity_keys(
     MalKey name_key
 ) {
     u32 metadata_count = name == nullptr ? 1 : 2;
-    MalNativeFunctionObject *function =
-        mal_heap_alloc(heap, sizeof(MalNativeFunctionObject) + metadata_count * sizeof(MalValue),
-                       MAL_HEAP_NATIVE_FUNCTION_OBJECT);
+    MalNativeFunctionObject *function = mal_native_function_alloc(heap, metadata_count, slot_count);
     mal_native_function_init_state(heap, function, prototype, name, length, callback);
     mal_function_init_metadata(
         heap, &function->object, length_key, mal_value_from_i32(length), name_key, name,
         (MalValue *) (function + 1));
-    if (slot_count > 0) {
-        function->slots = mal_heap_alloc_raw_profiled(
-            heap, sizeof(MalValue) * slot_count,
-            MAL_PROFILE_ALLOCATION_FAMILY_FUNCTION);
-        function->slot_count = slot_count;
-        for (i32 i = 0; i < slot_count; i++) {
-            function->slots[i] = slots[i];
-        }
-    }
+    mal_native_function_attach_slots(heap, function, metadata_count, slots, slot_count);
     return function;
 }
 

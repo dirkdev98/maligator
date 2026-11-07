@@ -14,6 +14,7 @@
 #include "./gc_process.h"
 #include "./array_buffer_object.h"
 #include "./array_object.h"
+#include "./function_object.h"
 #include "./heap_string.h"
 #include "./iterator_object.h"
 #include "./object.h"
@@ -403,6 +404,11 @@ static bool mal_heap_dead_cell_finalizes(const MalHeap *heap, const MalHeapHeade
         case MAL_HEAP_ITERATOR_OBJECT: {
             const MalIteratorObject *iterator = (const MalIteratorObject *) cell;
             return iterator->collection_pinned || mal_object_finalizes(&iterator->object);
+        }
+        case MAL_HEAP_NATIVE_FUNCTION_OBJECT: {
+            const MalNativeFunctionObject *function = (const MalNativeFunctionObject *) cell;
+            return (function->slots != nullptr && !function->slots_inline) ||
+                mal_object_finalizes(&function->object);
         }
         case MAL_HEAP_ARRAY_BUFFER_OBJECT: {
             const MalArrayBufferObject *buffer = (const MalArrayBufferObject *) cell;

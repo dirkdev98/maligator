@@ -2335,10 +2335,10 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
         }
         case MAL_HEAP_NATIVE_FUNCTION_OBJECT: {
             MalNativeFunctionObject *fn = (MalNativeFunctionObject *) cell;
-            if (fn->slots != nullptr) {
+            if (fn->slots != nullptr && !fn->slots_inline) {
                 gc_free_raw(&g_gc_vm->heap, fn->slots);
-                fn->slots = nullptr;
             }
+            fn->slots = nullptr;
             break;
         }
         case MAL_HEAP_REGEXP_OBJECT: {

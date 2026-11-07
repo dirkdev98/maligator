@@ -89,13 +89,15 @@ typedef struct MalNativeFunctionObject {
 #endif
 
     /**
-     * Internal slots (the spec's [[...]] closure state). Heap-owned, nullptr
-     * when the function carries none. Created via
-     * mal_native_function_object_new_with_slots; a pair of functions can share
-     * one mutable cell by storing the same heap object in a slot.
+     * Internal slots (the spec's [[...]] closure state), nullptr when the function
+     * carries none. Created via mal_native_function_object_new_with_slots; a pair of
+     * functions can share one mutable cell by storing the same heap object in a slot.
+     * A small set lives in the function's own cell (`slots_inline`), so creating and
+     * sweeping such a function needs no separate allocation.
      */
     MalValue *slots;
     i32 slot_count;
+    bool slots_inline;
 
 #if MAL_REALMS
     /**
