@@ -10,9 +10,14 @@ typedef struct MalArrayBufferStoreLease MalArrayBufferStoreLease;
 /**
  * ArrayBuffer / SharedArrayBuffer backing store.
  *
- * `data` is a native allocation. A store lease can retain its bytes independently
- * of the GC wrapper; ordinary stores are released by detach or the GC sweep.
- * An ordinary store charges its allocation_capacity to the process budget
+ * `data` is a native allocation, or the cell's own `inline_bytes` for a small
+ * fixed-length store. An inline store dies with its cell, so such a buffer owns
+ * nothing for the sweep to finalize; it moves to a native allocation before its
+ * bytes can outlive the cell (a pin, a store lease, a transfer) or must be scrubbed
+ * (sensitive). The heap never moves cells, so inline bytes stay put while the
+ * buffer lives. A store lease can retain native bytes independently of the GC
+ * wrapper; ordinary stores are released by detach or the GC sweep.
+ * A native store charges its allocation_capacity to the process budget
  * (gc_process.h) once; the charge moves with the allocation (move_store,
  * structured-clone transfer) and is released only where it is freed. Shared
  * backings are charged by shared_memory.c instead.
@@ -52,14 +57,46 @@ typedef struct MalArrayBufferObject {
     u32 pins;
     MalArrayBufferPin *retained_pin;
     MalArrayBufferStoreLease *store_lease;
+    alignas(16) byte inline_bytes[];
 } MalArrayBufferObject;
 
-/** A VM-thread pin that can be retired after its buffer wrapper has been swept. */
-MalArrayBufferPin *mal_array_buffer_object_retain_pin(MalArrayBufferObject *buffer);
+/** Largest fixed-length ordinary store kept inside its cell. */
+#define MAL_ARRAY_BUFFER_INLINE_MAX_BYTES 256u
+
+static inline bool mal_array_buffer_object_store_is_inline(const MalArrayBufferObject *buffer) {
+    return buffer->data == buffer->inline_bytes;
+}
+
+/** Whether a dead buffer holds storage outside its cell that its finalizer must release. */
+static inline bool mal_array_buffer_object_owns_storage(const MalArrayBufferObject *buffer) {
+    return (buffer->data != nullptr && !mal_array_buffer_object_store_is_inline(buffer))
+        || buffer->shared_memory != nullptr || buffer->retained_pin != nullptr
+        || buffer->store_lease != nullptr;
+}
+
+bool mal_array_buffer_object_move_out_of_cell(MalHeap *heap, MalArrayBufferObject *buffer);
+
+/** Move an inline store to a native allocation; false when that allocation fails. */
+static inline bool mal_array_buffer_object_externalize(
+    MalHeap *heap, MalArrayBufferObject *buffer
+) {
+    return !mal_array_buffer_object_store_is_inline(buffer)
+        || mal_array_buffer_object_move_out_of_cell(heap, buffer);
+}
+
+/** Apply the scrub-before-release contract, moving an inline store out of its cell
+ * first so the sweep scrubs it; false when that allocation fails. */
+bool mal_array_buffer_object_set_sensitive(
+    MalHeap *heap, MalArrayBufferObject *buffer, bool sensitive);
+
+/** A VM-thread pin that can be retired after its buffer wrapper has been swept.
+ * Pinned bytes never live in the cell, since C may hold them past the wrapper. */
+MalArrayBufferPin *mal_array_buffer_object_retain_pin(MalHeap *heap, MalArrayBufferObject *buffer);
 void mal_array_buffer_object_release_pin(MalArrayBufferPin *pin);
 
 /** Retain ordinary backing bytes independently of their wrapper. Does not pin it. */
-MalArrayBufferStoreLease *mal_array_buffer_object_retain_store(MalArrayBufferObject *buffer);
+MalArrayBufferStoreLease *mal_array_buffer_object_retain_store(
+    MalHeap *heap, MalArrayBufferObject *buffer);
 /** Retire a native owner on any thread; the last owner scrubs and frees the store. */
 void mal_array_buffer_store_release(MalArrayBufferStoreLease *lease);
 /** Move the lease's wrapper reference alongside a raw store ownership transfer. */
@@ -84,12 +121,12 @@ MalArrayBufferObject *mal_array_buffer_object_new(
  * This is only for leaf native constructors that overwrite the complete visible
  * range before the object can become observable. Hidden resizable capacity is
  * still zeroed by resize immediately before exposure. Prefer the initialized
- * constructor otherwise.
+ * constructor otherwise. `sensitive` selects the scrub-before-release contract.
  */
 MalArrayBufferObject *mal_array_buffer_object_new_uninitialized(
     MalHeap *heap, MalObject *prototype,
     u32 byte_length, u32 max_byte_length,
-    bool resizable, bool shared);
+    bool resizable, bool shared, bool sensitive);
 
 /**
  * Move an existing store into a fresh ArrayBuffer header without copying its

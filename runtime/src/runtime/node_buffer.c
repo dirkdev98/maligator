@@ -528,7 +528,7 @@ static MalValue mal_buffer_new_impl(
             length, length, false, false)
         : mal_array_buffer_object_new_uninitialized(
             &vm->heap, backing_prototype,
-            length, length, false, false);
+            length, length, false, false, false);
     MalValue backing = mal_value_from_array_buffer_object(buffer);
     MalRootSpan root;
     mal_gc_root(&root, &backing, 1);

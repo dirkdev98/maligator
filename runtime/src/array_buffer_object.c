@@ -29,9 +29,33 @@ static void release_store_data(byte *data, u32 capacity, const MalArrayBufferRel
     mal_gc_process_release(capacity);
 }
 
-MalArrayBufferStoreLease *mal_array_buffer_object_retain_store(MalArrayBufferObject *buffer) {
+bool mal_array_buffer_object_move_out_of_cell(MalHeap *heap, MalArrayBufferObject *buffer) {
+    u32 capacity = buffer->allocation_capacity;
+    byte *data = malloc(capacity);
+    if (data == nullptr) return false;
+    memcpy(data, buffer->inline_bytes, capacity);
+    buffer->data = data;
+    mal_heap_cell_needs_finalizer(&buffer->object.header);
+    mal_heap_array_buffer_acquire(heap, capacity);
+    mal_gc_process_charge(capacity);
+    mal_profile_native_allocation(heap, capacity, MAL_PROFILE_ALLOCATION_FAMILY_BUFFER);
+    return true;
+}
+
+bool mal_array_buffer_object_set_sensitive(
+    MalHeap *heap, MalArrayBufferObject *buffer, bool sensitive
+) {
+    if (sensitive && !mal_array_buffer_object_externalize(heap, buffer)) return false;
+    buffer->sensitive = sensitive;
+    return true;
+}
+
+MalArrayBufferStoreLease *mal_array_buffer_object_retain_store(
+    MalHeap *heap, MalArrayBufferObject *buffer
+) {
     if (buffer->shared || buffer->detached
-        || (buffer->data == nullptr && buffer->allocation_capacity > 0)) return nullptr;
+        || (buffer->data == nullptr && buffer->allocation_capacity > 0)
+        || !mal_array_buffer_object_externalize(heap, buffer)) return nullptr;
     MalArrayBufferStoreLease *lease = buffer->store_lease;
     if (lease == nullptr) {
         lease = malloc(sizeof(*lease));
@@ -68,14 +92,15 @@ struct MalArrayBufferPin {
     u32 references;
 };
 
-MalArrayBufferPin *mal_array_buffer_object_retain_pin(MalArrayBufferObject *buffer) {
-    if (buffer->pins == UINT32_MAX) return nullptr;
+MalArrayBufferPin *mal_array_buffer_object_retain_pin(MalHeap *heap, MalArrayBufferObject *buffer) {
+    if (buffer->pins == UINT32_MAX || !mal_array_buffer_object_externalize(heap, buffer)) return nullptr;
     MalArrayBufferPin *pin = buffer->retained_pin;
     if (pin == nullptr) {
         pin = malloc(sizeof(*pin));
         if (pin == nullptr) return nullptr;
         *pin = (MalArrayBufferPin) {.buffer = buffer};
         buffer->retained_pin = pin;
+        mal_heap_cell_needs_finalizer(&buffer->object.header);
     }
     pin->references++;
     buffer->pins++;
@@ -98,15 +123,27 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
     u32 max_byte_length,
     bool resizable,
     bool shared,
-    bool initialize
+    bool initialize,
+    bool sensitive
 ) {
-    MalArrayBufferObject *buffer = mal_heap_alloc(heap, sizeof(MalArrayBufferObject), MAL_HEAP_ARRAY_BUFFER_OBJECT);
-    mal_object_init(heap, &buffer->object, MAL_HEAP_ARRAY_BUFFER_OBJECT, prototype);
-
     // Resizable buffers reserve the maximum so the backing store never moves.
     u32 capacity = resizable ? max_byte_length : byte_length;
+    // A small fixed store lives in the cell, which allocation already zeroed, so
+    // the sweep reclaims it with the cell instead of finalizing and freeing it.
+    bool store_inline = !resizable && !shared && !sensitive && capacity > 0
+        && capacity <= MAL_ARRAY_BUFFER_INLINE_MAX_BYTES;
+    MalArrayBufferObject *buffer = mal_heap_alloc(
+        heap, sizeof(MalArrayBufferObject) + (store_inline ? capacity : 0),
+        MAL_HEAP_ARRAY_BUFFER_OBJECT);
+    mal_object_init(heap, &buffer->object, MAL_HEAP_ARRAY_BUFFER_OBJECT, prototype);
+
     buffer->data = nullptr;
     buffer->shared_memory = nullptr;
+    if (store_inline) {
+        buffer->data = buffer->inline_bytes;
+    } else {
+        mal_heap_cell_needs_finalizer(&buffer->object.header);
+    }
     if (shared) {
         // Even a zero-length SharedArrayBuffer needs a backing: its identity is
         // what clones and wait/notify keys share across isolates.
@@ -114,7 +151,7 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
         if (buffer->shared_memory != nullptr) {
             buffer->data = mal_shared_memory_data(buffer->shared_memory);
         }
-    } else if (capacity > 0) {
+    } else if (capacity > 0 && !store_inline) {
         // Only currently exposed bytes require zero semantics. Reserving a much
         // larger resizable capacity must not eagerly dirty every future page;
         // resize zeroes each newly exposed range before publishing its length.
@@ -127,7 +164,7 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
             buffer->data = calloc(capacity, 1);
         }
     }
-    if (buffer->data != nullptr && !shared) {
+    if (buffer->data != nullptr && !shared && !store_inline) {
         mal_heap_array_buffer_acquire(heap, capacity);
         mal_gc_process_charge(capacity);
         mal_profile_native_allocation(
@@ -140,7 +177,7 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
     buffer->detached = false;
     buffer->shared = shared;
     buffer->immutable = false;
-    buffer->sensitive = false;
+    buffer->sensitive = sensitive;
     buffer->pins = 0;
     buffer->retained_pin = nullptr;
     buffer->store_lease = nullptr;
@@ -157,16 +194,16 @@ MalArrayBufferObject *mal_array_buffer_object_new(
     bool shared
 ) {
     return mal_array_buffer_object_new_impl(
-        heap, prototype, byte_length, max_byte_length, resizable, shared, true);
+        heap, prototype, byte_length, max_byte_length, resizable, shared, true, false);
 }
 
 MalArrayBufferObject *mal_array_buffer_object_new_uninitialized(
     MalHeap *heap, MalObject *prototype,
     u32 byte_length, u32 max_byte_length,
-    bool resizable, bool shared) {
+    bool resizable, bool shared, bool sensitive) {
     return mal_array_buffer_object_new_impl(
         heap, prototype, byte_length, max_byte_length,
-        resizable, shared, false);
+        resizable, shared, false, sensitive);
 }
 
 MalArrayBufferObject *mal_array_buffer_object_move_store(
@@ -179,6 +216,20 @@ MalArrayBufferObject *mal_array_buffer_object_move_store(
         (resizable && byte_length > max_byte_length)) {
         abort();
     }
+    if (mal_array_buffer_object_store_is_inline(source)) {
+        // Inline bytes die with the source cell, so they are copied rather than moved.
+        // An inline store is fixed and never sensitive, and the copy fits inline too.
+        MalArrayBufferObject *result = mal_array_buffer_object_new_impl(
+            heap, prototype, byte_length, max_byte_length, resizable, false, true, false);
+        u32 kept = byte_length < source->byte_length ? byte_length : source->byte_length;
+        memcpy(result->data, source->data, kept);
+        result->immutable = immutable;
+        source->data = nullptr;
+        source->byte_length = 0;
+        source->allocation_capacity = 0;
+        source->detached = true;
+        return result;
+    }
     if (byte_length > source->byte_length) {
         memset(source->data + source->byte_length, 0,
             byte_length - source->byte_length);
@@ -186,7 +237,7 @@ MalArrayBufferObject *mal_array_buffer_object_move_store(
     // The process charge travels with the allocation: the empty header charged
     // nothing, and the detached source no longer frees it.
     MalArrayBufferObject *result = mal_array_buffer_object_new_impl(
-        heap, prototype, 0, 0, false, false, false);
+        heap, prototype, 0, 0, false, false, false, false);
     result->data = source->data;
     result->store_lease = mal_array_buffer_object_take_store_lease(source);
     result->byte_length = byte_length;
@@ -207,10 +258,8 @@ MalArrayBufferObject *mal_array_buffer_object_move_store(
 MalArrayBufferObject *mal_array_buffer_object_new_sensitive(
     MalHeap *heap, MalObject *prototype, u32 byte_length
 ) {
-    MalArrayBufferObject *buffer =
-        mal_array_buffer_object_new(heap, prototype, byte_length, byte_length, false, false);
-    buffer->sensitive = true;
-    return buffer;
+    return mal_array_buffer_object_new_impl(
+        heap, prototype, byte_length, byte_length, false, false, true, true);
 }
 
 MalArrayBufferObject *mal_array_buffer_object_adopt(
@@ -236,7 +285,7 @@ MalArrayBufferObject *mal_array_buffer_object_adopt(
 MalArrayBufferObject *mal_array_buffer_object_wrap_shared(
     MalHeap *heap, MalObject *prototype, MalSharedMemory *memory) {
     MalArrayBufferObject *buffer = mal_array_buffer_object_new_impl(
-        heap, prototype, 0, 0, false, false, false);
+        heap, prototype, 0, 0, false, false, false, false);
     mal_shared_memory_retain(memory);
     buffer->shared_memory = memory;
     buffer->data = mal_shared_memory_data(memory);
@@ -276,6 +325,11 @@ void mal_array_buffer_object_release_store(MalHeap *heap, MalArrayBufferObject *
     if (buffer->shared_memory != nullptr) {
         mal_shared_memory_release(buffer->shared_memory);
         buffer->shared_memory = nullptr;
+        buffer->data = nullptr;
+        buffer->allocation_capacity = 0;
+        return;
+    }
+    if (mal_array_buffer_object_store_is_inline(buffer)) {
         buffer->data = nullptr;
         buffer->allocation_capacity = 0;
         return;

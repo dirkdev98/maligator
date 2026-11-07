@@ -12,6 +12,7 @@
 
 #include "./gc.h"
 #include "./gc_process.h"
+#include "./array_buffer_object.h"
 #include "./array_object.h"
 #include "./heap_string.h"
 #include "./iterator_object.h"
@@ -402,6 +403,11 @@ static bool mal_heap_dead_cell_finalizes(const MalHeap *heap, const MalHeapHeade
         case MAL_HEAP_ITERATOR_OBJECT: {
             const MalIteratorObject *iterator = (const MalIteratorObject *) cell;
             return iterator->collection_pinned || mal_object_finalizes(&iterator->object);
+        }
+        case MAL_HEAP_ARRAY_BUFFER_OBJECT: {
+            const MalArrayBufferObject *buffer = (const MalArrayBufferObject *) cell;
+            return mal_array_buffer_object_owns_storage(buffer) ||
+                mal_object_finalizes(&buffer->object);
         }
         default:
             return false;

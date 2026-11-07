@@ -369,6 +369,21 @@ void mal_ffi_texts_free(MalFfiTexts *texts) {
     texts->blocks = nullptr;
 }
 
+/* A pinned store never lives in its buffer's cell: C may keep the address for as long
+ * as the pin lasts, and a later lease or transfer must not move the bytes under it. */
+static inline bool ffi_pinnable_store(MalVm *vm, MalValue value) {
+    MalArrayBufferObject *buffer = nullptr;
+    if (mal_value_is_typed_array_object(value)) {
+        buffer = mal_value_to_typed_array_object(value)->buffer;
+    } else if (mal_value_is_array_buffer_object(value)) {
+        buffer = mal_value_to_array_buffer_object(value);
+    } else if (mal_value_is_data_view_object(value)) {
+        buffer = mal_value_to_data_view_object(value)->buffer;
+    }
+    return buffer == nullptr || mal_array_buffer_object_externalize(&vm->heap, buffer)
+        || mal_ffi_out_of_memory(vm);
+}
+
 __attribute__((always_inline)) bool mal_ffi_to_bytes(
     MalVm *vm, MalValue value, bool nullable, bool writable, const MalFfiSite *site,
     void **data, size_t *length, void **pin) {
@@ -378,6 +393,7 @@ __attribute__((always_inline)) bool mal_ffi_to_bytes(
         *length = 0;
         return true;
     }
+    if (pin != nullptr && !ffi_pinnable_store(vm, value)) return false;
     MalTypedArraySpan view;
     if (mal_value_is_typed_array_object(value)
         && mal_typed_array_object_fixed_span(mal_value_to_typed_array_object(value), &view)) {
@@ -432,6 +448,7 @@ __attribute__((always_inline)) bool mal_ffi_to_numeric_view(
     if (!mal_value_is_typed_array_object(value) || (u32) expected >= sizeof(kinds) / sizeof(*kinds))
         return mal_ffi_expected(vm, site, "a matching numeric typed array");
     MalTypedArrayObject *array = mal_value_to_typed_array_object(value);
+    if (pin != nullptr && !ffi_pinnable_store(vm, value)) return false;
     MalTypedArraySpan span;
     if (!(mal_typed_array_object_fixed_span(array, &span) || mal_typed_array_object_span(array, &span))
         || span.shared || span.kind != kinds[expected]
@@ -774,7 +791,7 @@ MalValue mal_ffi_from_bytes(MalVm *vm, const void *data, size_t length) {
     // The copy covers every visible byte before the buffer can be observed.
     MalArrayBufferObject *buffer = mal_array_buffer_object_new_uninitialized(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-        (u32) length, (u32) length, false, false);
+        (u32) length, (u32) length, false, false, false);
     if (length > 0) memcpy(buffer->data, data, length);
     MalValue buffer_value = mal_value_from_array_buffer_object(buffer);
     MalRootSpan root;
@@ -1875,7 +1892,7 @@ MalValue mal_ffi_new_callable(
     mal_gc_root(&root, slots, 2);
     MalArrayBufferObject *buffer = mal_array_buffer_object_new_uninitialized(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-        (u32) target_size, (u32) target_size, false, false);
+        (u32) target_size, (u32) target_size, false, false, false);
     memcpy(buffer->data, target, target_size);
     slots[0] = mal_value_from_array_buffer_object(buffer);
     MalNativeFunctionObject *callable = mal_native_function_object_new_with_slots_arity(
@@ -3209,7 +3226,7 @@ bool mal_ffi_close_prepare(
             MalFfiRetainedField *field = &handle->retained[index];
             if (field->pin == nullptr) continue;
             MalArrayBufferStoreLease *lease = mal_array_buffer_object_retain_store(
-                mal_value_to_array_buffer_object(field->buffer));
+                &vm->heap, mal_value_to_array_buffer_object(field->buffer));
             if (lease == nullptr) {
                 ffi_close_free(close);
                 return mal_ffi_out_of_memory(vm);
@@ -4568,7 +4585,7 @@ static bool ffi_prepare_handle(
             MalFfiRetainedField *field = &handle->retained[index];
             if (field->pin == nullptr) continue;
             MalArrayBufferStoreLease *lease = mal_array_buffer_object_retain_store(
-                mal_value_to_array_buffer_object(field->buffer));
+                &vm->heap, mal_value_to_array_buffer_object(field->buffer));
             if (lease == nullptr) {
                 for (i32 previous = 0; previous < count; previous++)
                     mal_array_buffer_store_release(stores[previous]);
@@ -4823,7 +4840,9 @@ bool mal_ffi_set_state_value(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
             capacity, capacity, false, false);
         roots[2] = mal_value_from_array_buffer_object(buffer);
-        if (buffer->data == nullptr) {
+        // Pinning can move the store out of the cell, so its address is read after.
+        next.pin = buffer->data == nullptr ? nullptr : mal_array_buffer_object_retain_pin(&vm->heap, buffer);
+        if (next.pin == nullptr) {
             mal_ffi_out_of_memory(vm);
             goto mal_done;
         }
@@ -4831,21 +4850,18 @@ bool mal_ffi_set_state_value(
         next.data = buffer->data;
         next.length = text.length;
         next.buffer = roots[2];
-        next.pin = mal_array_buffer_object_retain_pin(buffer);
-        if (next.pin == nullptr) {
-            mal_ffi_out_of_memory(vm);
-            goto mal_done;
-        }
     } else if (!mal_value_is_null(input)) {
         MalBufferSourceSpan span;
-        if (!mal_ffi_to_bytes(vm, input, false, field->writable, site, &next.data, &next.length, nullptr)
-            || !mal_ffi_check_count(vm, next.length, field->count_bits, field->count_signed, site)) goto mal_done;
-        if (mal_buffer_source_span(input, &span) != MAL_BUFFER_SOURCE_SPAN_OK) goto mal_done;
-        next.pin = mal_array_buffer_object_retain_pin(span.buffer);
-        if (next.pin == nullptr) {
-            mal_ffi_out_of_memory(vm);
-            goto mal_done;
+        if (mal_buffer_source_span(input, &span) == MAL_BUFFER_SOURCE_SPAN_OK && !span.shared) {
+            next.pin = mal_array_buffer_object_retain_pin(&vm->heap, span.buffer);
+            if (next.pin == nullptr) {
+                mal_ffi_out_of_memory(vm);
+                goto mal_done;
+            }
         }
+        if (!mal_ffi_to_bytes(vm, input, false, field->writable, site, &next.data, &next.length, nullptr)
+            || !mal_ffi_check_count(vm, next.length, field->count_bits, field->count_signed, site)
+            || next.pin == nullptr) goto mal_done;
         next.buffer = mal_value_from_array_buffer_object(span.buffer);
     }
     MalFfiRetainedField *range = &handle->retained[index];
@@ -4858,6 +4874,7 @@ bool mal_ffi_set_state_value(
     if (handle->native != nullptr) ffi_native_handle_stores_clear(handle->native);
     ok = true;
 mal_done:
+    if (!ok) mal_array_buffer_object_release_pin(next.pin);
     mal_ffi_string_release(&text);
     mal_gc_unroot(&root);
     return ok;

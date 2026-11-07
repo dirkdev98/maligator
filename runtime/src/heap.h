@@ -773,8 +773,8 @@ static inline u8 mal_heap_mark_load(const MalHeapHeader *header) {
 
 /**
  * Whether a dead cell of this type may own storage outside its cell. Ordinary objects,
- * arrays, strings and iterators start owning nothing and report it through
- * mal_heap_cell_needs_finalizer; the other non-owning types never do. Mirrors the
+ * arrays, ArrayBuffers, strings and iterators start owning nothing and report it
+ * through mal_heap_cell_needs_finalizer; the other non-owning types never do. Mirrors the
  * collector's finalizer, so a type that gains owned state there must either return
  * true here or report it.
  */
@@ -794,6 +794,7 @@ static inline bool mal_heap_type_finalizes_at_birth(MalHeapType type) {
         case MAL_HEAP_ASYNC_RUN_SCOPE_STATE:
         case MAL_HEAP_OBJECT:
         case MAL_HEAP_FUNCTION_OBJECT:
+        case MAL_HEAP_ARRAY_BUFFER_OBJECT:
 #if !MAL_PERF_STATS
         // Stats builds count every Array finalization.
         case MAL_HEAP_ARRAY_OBJECT:

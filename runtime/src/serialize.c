@@ -594,6 +594,11 @@ static bool enc_validate_transfers(SerEncoder *enc, MalValue list_value) {
                 mal_array_buffer_object_is_pinned(buffer)) {
                 return enc_fail(enc, "ArrayBuffer cannot be transferred");
             }
+            // Commit hands the store itself to the receiver, and an inline store
+            // cannot outlive the sender's cell.
+            if (!mal_array_buffer_object_externalize(&enc->vm->heap, buffer)) {
+                return enc_fail(enc, "out of memory while serializing");
+            }
             snap->transfer_sources[i] = buffer;
         } else if (enc->hooks == nullptr || enc->hooks->encode == nullptr) {
             return enc_fail(enc, "transfer list item is not transferable");
@@ -921,7 +926,7 @@ static MalArrayBufferObject *dec_buffer(SerDecoder *dec, SerResource *resource) 
     if (dec->take && max_length <= resource->capacity) {
         // The backing already carries its process charge; only the empty wrapper is new.
         MalArrayBufferObject *buffer = mal_array_buffer_object_new_uninitialized(
-            &vm->heap, prototype, 0, 0, false, false);
+            &vm->heap, prototype, 0, 0, false, false, false);
         buffer->data = resource->data;
         buffer->store_lease = resource->store_lease;
         resource->store_lease = nullptr;
@@ -937,14 +942,14 @@ static MalArrayBufferObject *dec_buffer(SerDecoder *dec, SerResource *resource) 
         return buffer;
     }
     MalArrayBufferObject *buffer = mal_array_buffer_object_new_uninitialized(
-        &vm->heap, prototype, resource->length, max_length, resource->resizable, false);
+        &vm->heap, prototype, resource->length, max_length, resource->resizable, false,
+        resource->sensitive);
     if (max_length > 0 && buffer->data == nullptr) {
         return nullptr;
     }
     if (resource->length > 0) {
         memcpy(buffer->data, resource->data, resource->length);
     }
-    buffer->sensitive = resource->sensitive;
     return buffer;
 }
 

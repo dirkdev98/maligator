@@ -54,15 +54,19 @@ static void secret_observation_reset(void) {
     memset(&g_observed, 0, sizeof(g_observed));
 }
 
+/* An ordinary store this small would live in its cell and never reach the release
+ * observer, so the ordinary control uses one past the inline limit. */
+#define PLAIN_LENGTH (MAL_ARRAY_BUFFER_INLINE_MAX_BYTES + SECRET_LENGTH)
+
 static MalArrayBufferObject *secret_buffer_new(MalVm *vm, bool sensitive) {
     MalObject *prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
+    u32 length = sensitive ? SECRET_LENGTH : PLAIN_LENGTH;
     MalArrayBufferObject *buffer = sensitive
-        ? mal_array_buffer_object_new_sensitive(&vm->heap, prototype, SECRET_LENGTH)
-        : mal_array_buffer_object_new(
-              &vm->heap, prototype, SECRET_LENGTH, SECRET_LENGTH, false, false);
+        ? mal_array_buffer_object_new_sensitive(&vm->heap, prototype, length)
+        : mal_array_buffer_object_new(&vm->heap, prototype, length, length, false, false);
     if (buffer == nullptr || buffer->data == nullptr) return nullptr;
-    memset(buffer->data, SECRET_BYTE, SECRET_LENGTH);
+    memset(buffer->data, SECRET_BYTE, length);
     g_observed.target = (uptr) buffer;
     return buffer;
 }
@@ -128,8 +132,9 @@ static bool a_shrunken_store_is_scrubbed_to_its_capacity(MalVm *vm) {
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
     MalArrayBufferObject *buffer = mal_array_buffer_object_new(
         &vm->heap, prototype, SECRET_LENGTH, SECRET_LENGTH, true, false);
-    if (buffer->data == nullptr) return false;
-    buffer->sensitive = true;
+    if (buffer->data == nullptr || !mal_array_buffer_object_set_sensitive(&vm->heap, buffer, true)) {
+        return false;
+    }
     memset(buffer->data, SECRET_BYTE, SECRET_LENGTH);
     g_observed.target = (uptr) buffer;
     bool shrunk = mal_array_buffer_object_resize(buffer, 8);
@@ -215,11 +220,11 @@ static NativeStore native_store(MalVm *vm, bool adopted, u32 length, u32 capacit
     MalArrayBufferObject *buffer = adopted
         ? mal_array_buffer_object_adopt(&vm->heap, prototype, malloc(capacity), capacity, true)
         : mal_array_buffer_object_new(&vm->heap, prototype, length, capacity, resizable, false);
-    buffer->sensitive = true;
+    if (!mal_array_buffer_object_set_sensitive(&vm->heap, buffer, true)) abort();
     if (buffer->data != nullptr) memset(buffer->data, SECRET_BYTE, buffer->allocation_capacity);
     if (resizable && !mal_array_buffer_object_resize(buffer, 8)) abort();
-    MalArrayBufferStoreLease *lease = mal_array_buffer_object_retain_store(buffer);
-    MalArrayBufferStoreLease *other = mal_array_buffer_object_retain_store(buffer);
+    MalArrayBufferStoreLease *lease = mal_array_buffer_object_retain_store(&vm->heap, buffer);
+    MalArrayBufferStoreLease *other = mal_array_buffer_object_retain_store(&vm->heap, buffer);
     if (lease == nullptr || other == nullptr) abort();
     mal_array_buffer_store_release(other);
     return (NativeStore) {lease, buffer->data, buffer->allocation_capacity, (uptr) buffer, false};

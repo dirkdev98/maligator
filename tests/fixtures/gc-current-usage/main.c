@@ -17,7 +17,8 @@ static usize walked_buffer_bytes;
 static void count_buffer(MalHeapHeader *header) {
     if (header->type != MAL_HEAP_ARRAY_BUFFER_OBJECT) return;
     MalArrayBufferObject *buffer = (MalArrayBufferObject *) header;
-    if (buffer->shared_memory == nullptr && buffer->data != nullptr) {
+    if (buffer->shared_memory == nullptr && buffer->data != nullptr &&
+        !mal_array_buffer_object_store_is_inline(buffer)) {
         walked_buffer_bytes += buffer->allocation_capacity;
     }
 }

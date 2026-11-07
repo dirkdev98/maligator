@@ -62,7 +62,7 @@ static MalValue mal_ta_create_impl(
             byte_length, byte_length, false, false)
         : mal_array_buffer_object_new_uninitialized(
             &vm->heap, buffer_prototype,
-            byte_length, byte_length, false, false);
+            byte_length, byte_length, false, false, false);
     MalTypedArrayObject *array = mal_typed_array_object_new(&vm->heap, mal_ta_kind_prototype(vm, kind), buffer, kind, 0, length, false);
     return mal_value_from_typed_array_object(array);
 }

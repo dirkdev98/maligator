@@ -3,46 +3,52 @@ function check(value, message) {
 }
 
 const baseline = process.memoryUsage().arrayBuffers;
+// Fixed stores up to 256 bytes live in the buffer's heap cell and count as heap
+// memory, so every fixed length here stays above that.
+const fixedLength = 384;
 
 function exercise() {
-	const source = new ArrayBuffer(64, { maxByteLength: 128 });
+	const source = new ArrayBuffer(512, { maxByteLength: 1024 });
 	check(
-		process.memoryUsage().arrayBuffers === baseline + 128,
+		process.memoryUsage().arrayBuffers === baseline + 1024,
 		"resizable buffer counts reserved capacity",
 	);
 	source.resize(16);
 	check(
-		process.memoryUsage().arrayBuffers === baseline + 128,
+		process.memoryUsage().arrayBuffers === baseline + 1024,
 		"resize retains backing capacity",
 	);
-	const moved = source.transferToFixedLength(8);
-	check(source.byteLength === 0 && moved.byteLength === 8, "store moved to fixed buffer");
+	const moved = source.transferToFixedLength(fixedLength);
 	check(
-		process.memoryUsage().arrayBuffers === baseline + 128,
+		source.byteLength === 0 && moved.byteLength === fixedLength,
+		"store moved to fixed buffer",
+	);
+	check(
+		process.memoryUsage().arrayBuffers === baseline + 1024,
 		"move preserves one backing owner",
 	);
 	const copied = structuredClone(moved);
 	check(
-		process.memoryUsage().arrayBuffers === baseline + 136,
+		process.memoryUsage().arrayBuffers === baseline + 1024 + fixedLength,
 		"clone adds one destination backing",
 	);
 	const transferred = structuredClone(copied, { transfer: [copied] });
 	const usage = process.memoryUsage();
 	check(
-		copied.byteLength === 0 && transferred.byteLength === 8,
+		copied.byteLength === 0 && transferred.byteLength === fixedLength,
 		"clone transfer detached source",
 	);
 	check(
-		usage.arrayBuffers === baseline + 136 &&
+		usage.arrayBuffers === baseline + 1024 + fixedLength &&
 			usage.external >= usage.arrayBuffers &&
 			usage.heapTotal >= usage.heapUsed,
 		"serialization moves the backing without changing total ownership",
 	);
 	check(
-		moved.byteLength === 8 && new Uint8Array(moved)[0] === 0,
+		moved.byteLength === fixedLength && new Uint8Array(moved)[0] === 0,
 		"moved backing remains live",
 	);
-	check(transferred.byteLength === 8, "transferred backing remains live");
+	check(transferred.byteLength === fixedLength, "transferred backing remains live");
 }
 
 exercise();

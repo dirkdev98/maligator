@@ -317,7 +317,7 @@ static MalValue mal_builtin_array_buffer_slice(MalVm *vm, MalValue this_value, c
                 &vm->heap,
                 mal_value_to_object(
                     vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-                new_length, new_length, false, false));
+                new_length, new_length, false, false, false));
     } else {
         MalValue len_arg = mal_value_from_i32((i32) new_length);
         MalCompletion completion =
@@ -454,11 +454,11 @@ static MalValue mal_builtin_array_buffer_transfer_impl(MalVm *vm, MalValue this_
         return mal_value_from_array_buffer_object(result);
     }
 
-    MalArrayBufferObject *result = mal_array_buffer_object_new_uninitialized(
-        &vm->heap, prototype, new_length, max_byte_length, resizable, false);
     // The contents move, so the scrub-before-release contract moves with them:
     // transferring a derived key must not leave an unscrubbed copy behind.
-    result->sensitive = buffer->sensitive;
+    MalArrayBufferObject *result = mal_array_buffer_object_new_uninitialized(
+        &vm->heap, prototype, new_length, max_byte_length, resizable, false,
+        buffer->sensitive);
     u32 copy = new_length < buffer->byte_length ? new_length : buffer->byte_length;
     if (copy > 0) {
         memcpy(result->data, buffer->data, copy);
@@ -535,9 +535,8 @@ static MalValue mal_builtin_array_buffer_transfer_to_immutable(MalVm *vm, MalVal
 
     MalArrayBufferObject *result = mal_array_buffer_object_new_uninitialized(
         &vm->heap, prototype,
-        new_length, new_length, false, false);
+        new_length, new_length, false, false, buffer->sensitive);
     result->immutable = true;
-    result->sensitive = buffer->sensitive;
     u32 copy = new_length < buffer->byte_length ? new_length : buffer->byte_length;
     if (copy > 0) {
         memcpy(result->data, buffer->data, copy);
@@ -588,10 +587,9 @@ static MalValue mal_builtin_array_buffer_slice_to_immutable(MalVm *vm, MalValue 
     MalArrayBufferObject *result = mal_array_buffer_object_new_uninitialized(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-        new_length, new_length, false, false
+        new_length, new_length, false, false, buffer->sensitive
     );
     result->immutable = true;
-    result->sensitive = buffer->sensitive;
     if (new_length > 0) {
         memcpy(result->data, buffer->data + first, new_length);
     }
@@ -710,7 +708,7 @@ static MalValue mal_shared_array_buffer_slice(MalVm *vm, MalValue this_value, co
                 &vm->heap,
                 mal_value_to_object(
                     vm->intrinsics[MAL_INTRINSIC_SHARED_ARRAY_BUFFER_PROTOTYPE]),
-                new_length, new_length, false, true));
+                new_length, new_length, false, true, false));
     } else {
         MalValue len_arg = mal_value_from_i32((i32) new_length);
         MalCompletion completion =
