@@ -172,7 +172,7 @@ static bool rejects_unrepresentable_outputs_before_materialization(MalVm *vm) {
         // These methods must reject from the extent before observing any byte.
         MalArrayBufferObject *backing = mal_array_buffer_object_new_uninitialized(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-            lengths[i], lengths[i], false, false);
+            lengths[i], lengths[i], false, false, false);
         CHECK(backing->data != nullptr);
         MalValue roots[] = {mal_value_from_array_buffer_object(backing), mal_value_new_undefined(), mal_value_new_undefined()};
         MalRootSpan span;

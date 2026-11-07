@@ -56,9 +56,9 @@ static MalSerializedValue *snapshot(MalVm *vm, MalValue value, MalValue transfer
     return result;
 }
 
-static void retain_then_retire_native_owner(MalArrayBufferObject *buffer, bool leased) {
+static void retain_then_retire_native_owner(MalHeap *heap, MalArrayBufferObject *buffer, bool leased) {
     if (!leased) return;
-    MalArrayBufferStoreLease *lease = mal_array_buffer_object_retain_store(buffer);
+    MalArrayBufferStoreLease *lease = mal_array_buffer_object_retain_store(heap, buffer);
     CHECK(lease != nullptr);
     mal_array_buffer_store_release(lease);
 }
@@ -76,7 +76,7 @@ static void check_transfers(bool leased) {
     roots[0] = mal_value_from_array_buffer_object(source);
     memset(source->data, 0xA5, source->allocation_capacity);
     source->sensitive = true;
-    retain_then_retire_native_owner(source, leased);
+    retain_then_retire_native_owner(&vm.heap, source, leased);
     watched_store = source->data;
     mal_array_buffer_object_set_release_observer(observe_release);
     roots[1] = array(&vm, roots, 1);
@@ -101,10 +101,12 @@ static void check_transfers(bool leased) {
     CHECK(mal_array_buffer_object_resize(received, 32));
     for (u32 i = 16; i < 32; i++) CHECK(received->data[i] == 0);
 
+    // Above the inline limit, so the store is a native allocation the moves can share.
+    const u32 large_capacity = MAL_ARRAY_BUFFER_INLINE_MAX_BYTES * 2;
     roots[4] = mal_value_from_array_buffer_object(mal_array_buffer_object_new(
-        &vm.heap, prototype, 64, 64, false, false));
+        &vm.heap, prototype, large_capacity, large_capacity, false, false));
     MalArrayBufferObject *large = mal_value_to_array_buffer_object(roots[4]);
-    retain_then_retire_native_owner(large, leased);
+    retain_then_retire_native_owner(&vm.heap, large, leased);
     roots[5] = mal_value_from_array_buffer_object(mal_array_buffer_object_move_store(
         &vm.heap, prototype, large, 8, 8, false, false));
     byte *physical = mal_value_to_array_buffer_object(roots[5])->data;
@@ -112,7 +114,7 @@ static void check_transfers(bool leased) {
     moved = snapshot(&vm, roots[5], roots[6], nullptr);
     CHECK(mal_deserialize_take(&vm, moved, nullptr, &roots[7]));
     MalArrayBufferObject *small = mal_value_to_array_buffer_object(roots[7]);
-    CHECK(small->data == physical && small->allocation_capacity == 64);
+    CHECK(small->data == physical && small->allocation_capacity == large_capacity);
     CHECK(!small->resizable && small->byte_length == 8 && small->max_byte_length == 8);
     mal_serialized_value_release(moved);
 
@@ -132,7 +134,7 @@ static void check_transfers(bool leased) {
     roots[4] = mal_value_from_array_buffer_object(mal_array_buffer_object_new(
         &vm.heap, prototype, 16, 64, true, false));
     MalArrayBufferObject *failure_source = mal_value_to_array_buffer_object(roots[4]);
-    retain_then_retire_native_owner(failure_source, leased);
+    retain_then_retire_native_owner(&vm.heap, failure_source, leased);
     byte *failure_store = failure_source->data;
     roots[5] = mal_value_from_object(mal_intrinsic_new_object(&vm));
     const MalSerializeHooks hooks = {.data = &roots[5], .encode = encode_failure_marker, .decode = reject_marker};
@@ -149,7 +151,7 @@ static void check_transfers(bool leased) {
 
     roots[0] = mal_value_from_array_buffer_object(mal_array_buffer_object_new(
         &vm.heap, prototype, 32, 32, false, false));
-    retain_then_retire_native_owner(mal_value_to_array_buffer_object(roots[0]), leased);
+    retain_then_retire_native_owner(&vm.heap, mal_value_to_array_buffer_object(roots[0]), leased);
     roots[1] = array(&vm, roots, 1);
     moved = snapshot(&vm, roots[0], roots[1], nullptr);
     mal_serialized_value_release(moved);
