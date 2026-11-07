@@ -128,6 +128,80 @@ globalThis.stripResult = [${call}(true), ${call}(false), ${call}(true, 11, 2)];`
 		},
 	);
 
+	test.each([
+		[
+			"a type predicate naming an object type",
+			"function isAll(value: string | { all: true }): value is { all: true } { return typeof value === 'object' && value.all === true; }",
+			"[isAll({ all: true }), isAll('x')]",
+			[true, false],
+		],
+		[
+			"an assertion predicate naming an object type",
+			"function check(value: unknown): asserts value is { all: true } { if (value === 'x') throw new Error(); }",
+			"[check({ all: true }), 1]",
+			[undefined, 1],
+		],
+		[
+			"a readonly array of object types",
+			"function list(): readonly { value: number }[] { return [{ value: 7 }]; }",
+			"list()[0].value",
+			7,
+		],
+	])("keeps the function body after %s", (_name, declaration, call, expected) => {
+		const stripped = strip(`${declaration}\nglobalThis.stripResult = ${call};`);
+		expect(() => parseModule(stripped)).not.toThrow();
+		expect(runInNewContext(stripped)).toEqual(expected);
+	});
+
+	test.each([
+		[
+			"a parenthesized function return type",
+			"const make = (x: number): (() => number) => () => x;",
+			"make(1)()",
+			1,
+		],
+		[
+			"a parenthesized return type of a property value",
+			"const adder = { make: (x: number): ((y: number) => number) => (y) => x + y };",
+			"adder.make(1)(2)",
+			3,
+		],
+		[
+			"a return type in a conditional's true branch",
+			"const pick = (flag: boolean) => flag ? (b: number): number => b + 1 : (b: number): number => b - 1;",
+			"[pick(true)(1), pick(false)(1)]",
+			[2, 0],
+		],
+		[
+			"an untyped parameter inside a typed function",
+			"function double(values: number[]): number[] { return values.map(x => x * 2); }",
+			"double([1, 2])",
+			[2, 4],
+		],
+		[
+			"a conditional whose false branch is an arrow",
+			"const flag = false; const value = 4; const choose = flag ? (value) : c => c + 1;",
+			"choose(1)",
+			2,
+		],
+		[
+			"a conditional whose true branch is a call",
+			"const flag = false; const id = (v: number) => v; const choose = flag ? id(1) : c => c + 2;",
+			"choose(1)",
+			3,
+		],
+		[
+			"an arrow property value",
+			"const object = { inc: b => b + 1 };",
+			"object.inc(1)",
+			2,
+		],
+	])("strips arrows with %s", (_name, declaration, call, expected) => {
+		const stripped = strip(`${declaration}\nglobalThis.stripResult = ${call};`);
+		expect(() => parseModule(stripped)).not.toThrow();
+		expect(runInNewContext(stripped)).toEqual(expected);
+	});
+
 	test("preserves this and nested conditionals inside a typed default parameter", () => {
 		const source = `function choose(flag: boolean, value: { value: number } = flag ? this : flag === false ? { value: 7 } : { value: 9 }, offset: number = 1) { return value.value + offset; }
 globalThis.stripResult = [choose.call({ value: 2 }, true), choose.call({}, false), choose.call({}, null)];`;

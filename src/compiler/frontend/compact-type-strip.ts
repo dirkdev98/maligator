@@ -1789,7 +1789,7 @@ function blankArrowAnnotations(
 ): void {
 	for (let arrow = 0; arrow < source.length - 1; arrow++) {
 		if (!code[arrow] || output[arrow] !== "=" || output[arrow + 1] !== ">") continue;
-		const head = findParenthesizedArrowHead(source, code, arrow);
+		const head = findParenthesizedArrowHead(source, code, arrow, filePath);
 		if (head !== undefined) {
 			const open = matchingBackward(
 				source,
@@ -1827,27 +1827,6 @@ function blankArrowAnnotations(
 			);
 			continue;
 		}
-
-		const before = previousCodeIndex(source, code, arrow - 1);
-		let colon = before;
-		while (colon >= 0 && source[colon] !== ":") {
-			if (
-				code[colon] &&
-				(source[colon] === "," ||
-					source[colon] === ";" ||
-					source[colon] === "{" ||
-					source[colon] === "}" ||
-					(source[colon] === ">" &&
-						source[previousCodeIndex(source, code, colon - 1)] === "="))
-			)
-				break;
-			colon--;
-		}
-		if (colon >= 0 && code[colon] && source[colon] === ":") {
-			const optional = previousCodeIndex(source, code, colon - 1);
-			if (source[optional] === "?") blank(output, source, optional, optional + 1);
-			blank(output, source, colon, arrow);
-		}
 	}
 }
 
@@ -1855,44 +1834,168 @@ function findParenthesizedArrowHead(
 	source: string,
 	code: Array<boolean>,
 	arrow: number,
+	filePath: string,
 ): { parametersClose: number; returnColon?: number } | undefined {
 	const before = previousCodeIndex(source, code, arrow - 1);
-	if (source[before] === ")") return { parametersClose: before };
+	if (source[before] === ")") {
+		// `(x): (() => T) => body` ends its return type, not its parameters, in `)`.
+		const open = matchingBackward(source, code, before, "(", ")", filePath);
+		const colon = previousCodeIndex(source, code, open - 1);
+		return (
+			returnAnnotatedHead(source, code, colon, arrow, filePath) ?? {
+				parametersClose: before,
+			}
+		);
+	}
 
+	// Walk back over the return type. It cannot extend past a bracket that encloses
+	// the arrow, a top-level comma or `=`, or a statement boundary.
 	let parentheses = 0;
 	let brackets = 0;
 	let braces = 0;
 	let angles = 0;
 	for (let i = before; i >= 0; i = previousCodeIndex(source, code, i - 1)) {
 		const char = source[i]!;
-		if (char === ")") parentheses++;
-		else if (char === "(" && parentheses > 0) parentheses--;
-		else if (char === "]") brackets++;
-		else if (char === "[" && brackets > 0) brackets--;
-		else if (char === "}") braces++;
-		else if (char === "{" && braces > 0) braces--;
-		else if (char === ">") {
-			if (
-				parentheses === 0 &&
-				brackets === 0 &&
-				braces === 0 &&
-				angles === 0 &&
-				source[previousCodeIndex(source, code, i - 1)] === "="
-			) {
-				return undefined;
-			}
-			angles++;
-		} else if (char === "<" && angles > 0) angles--;
-
-		if (parentheses !== 0 || brackets !== 0 || braces !== 0 || angles !== 0) continue;
-		if (char === ";") return undefined;
-		if (char !== ":") continue;
-		const parametersClose = previousCodeIndex(source, code, i - 1);
-		if (source[parametersClose] === ")") {
-			return { parametersClose, returnColon: i };
+		const topLevel = parentheses === 0 && brackets === 0 && braces === 0 && angles === 0;
+		if (char === ">" && source[previousCodeIndex(source, code, i - 1)] === "=") {
+			if (topLevel) return undefined;
+			i = previousCodeIndex(source, code, i - 1);
+			continue;
 		}
+		if (char === ")") parentheses++;
+		else if (char === "]") brackets++;
+		else if (char === "}") braces++;
+		else if (char === ">") angles++;
+		else if (char === "(") {
+			if (parentheses === 0) return undefined;
+			parentheses--;
+		} else if (char === "[") {
+			if (brackets === 0) return undefined;
+			brackets--;
+		} else if (char === "{") {
+			if (braces === 0) return undefined;
+			braces--;
+		} else if (char === "<") {
+			if (angles === 0) return undefined;
+			angles--;
+		}
+
+		if (!topLevel) continue;
+		if (char === ";" || char === "," || char === "=") return undefined;
+		if (char !== ":") continue;
+		const head = returnAnnotatedHead(source, code, i, arrow, filePath);
+		if (head !== undefined) return head;
 	}
 	return undefined;
+}
+
+const ARROW_PREFIX_WORDS = new Set([
+	"async",
+	"await",
+	"default",
+	"return",
+	"throw",
+	"yield",
+]);
+
+/**
+ * The head of `(params): Type => body` when `colon` is such a return annotation's
+ * colon. A conditional's own `:` takes the same shape, as in `a ? (b) : c => d`; the
+ * parenthesized group then follows a `?`, and the colon only annotates the arrow when
+ * the conditional's `:` still follows the arrow.
+ */
+function returnAnnotatedHead(
+	source: string,
+	code: Array<boolean>,
+	colon: number,
+	arrow: number,
+	filePath: string,
+): { parametersClose: number; returnColon: number } | undefined {
+	if (colon < 0 || source[colon] !== ":") return undefined;
+	const parametersClose = previousCodeIndex(source, code, colon - 1);
+	if (source[parametersClose] !== ")") return undefined;
+	const open = matchingBackward(source, code, parametersClose, "(", ")", filePath);
+	let prefix = previousCodeIndex(source, code, open - 1);
+	// Type parameters sit between an arrow's parameters and what precedes the arrow.
+	if (source[prefix] === ">" && source[prefix - 1] !== "=") {
+		const typeParameters = matchingBackwardOrMinusOne(source, code, prefix, "<", ">");
+		if (typeParameters < 0) return undefined;
+		prefix = previousCodeIndex(source, code, typeParameters - 1);
+	}
+	const head = { parametersClose, returnColon: colon };
+	if (prefix < 0) return head;
+	const char = source[prefix]!;
+	if (isIdentifierPart(char)) {
+		let start = prefix;
+		while (start > 0 && isIdentifierPart(source[start - 1])) start--;
+		return ARROW_PREFIX_WORDS.has(source.slice(start, prefix + 1)) ? head : undefined;
+	}
+	if (char === "?") {
+		if (source[prefix - 1] === "?") return undefined;
+		return conditionalContinuesAfter(source, code, arrow) ? head : undefined;
+	}
+	if (char === "=") return "=!<>".includes(source[prefix - 1]!) ? undefined : head;
+	if (char === ">") return source[prefix - 1] === "=" ? head : undefined;
+	return "([{,:;}".includes(char) ? head : undefined;
+}
+
+const STATEMENT_WORDS = new Set([
+	"break",
+	"class",
+	"const",
+	"continue",
+	"do",
+	"export",
+	"for",
+	"function",
+	"if",
+	"import",
+	"let",
+	"return",
+	"switch",
+	"throw",
+	"try",
+	"var",
+	"while",
+]);
+
+/** Whether a `:` closing the enclosing conditional follows the arrow at `arrow`. */
+function conditionalContinuesAfter(
+	source: string,
+	code: Array<boolean>,
+	arrow: number,
+): boolean {
+	let depth = 0;
+	let pending = 0;
+	for (let i = arrow + 2; i < source.length; i++) {
+		const char = source[i]!;
+		// A line that opens a statement ends the expression an automatic semicolon closed.
+		if (depth === 0 && char === "\n") {
+			const next = nextCodeIndex(source, code, i + 1);
+			const word = next < source.length ? wordAt(source, code, next) : undefined;
+			if (word !== undefined && STATEMENT_WORDS.has(word.text)) return false;
+		}
+		if (!code[i]) continue;
+		if (char === "(" || char === "[" || char === "{") depth++;
+		else if (char === ")" || char === "]" || char === "}") {
+			if (depth === 0) return false;
+			depth--;
+		} else if (depth === 0) {
+			if (char === "," || char === ";") return false;
+			if (
+				char === "?" &&
+				source[i + 1] !== "." &&
+				source[i + 1] !== "?" &&
+				source[i - 1] !== "?"
+			)
+				pending++;
+			else if (char === ":") {
+				if (pending === 0) return true;
+				pending--;
+			}
+		}
+	}
+	return false;
 }
 
 function blankParameterAnnotations(
@@ -1938,6 +2041,9 @@ function blankParameterAnnotations(
 	}
 }
 
+/** Words a type operand follows, so a top-level `{` after one opens an object type. */
+const TYPE_OPERAND_WORDS = new Set(["extends", "is", "keyof", "readonly"]);
+
 function findTypeEnd(
 	source: string,
 	code: Array<boolean>,
@@ -1982,7 +2088,7 @@ function findTypeEnd(
 		}
 		if (topLevel && isIdentifierStart(char)) {
 			const word = wordAt(source, code, i)!;
-			expectsType = word.text === "keyof" || word.text === "extends";
+			expectsType = TYPE_OPERAND_WORDS.has(word.text);
 			sawType = true;
 			i = word.end - 1;
 			continue;
