@@ -30,7 +30,10 @@ export interface CjsExportInfo {
 	 * initial `exports` object.
 	 */
 	reassignsModuleExports: boolean;
-	/** Literal require specifiers assigned directly to module.exports. */
+	/**
+	 * Literal require specifiers whose exports this module re-exports: assigned to
+	 * module.exports, spread into it, or copied by a compiler's star-export helper.
+	 */
 	reexports: Set<string>;
 }
 
@@ -81,6 +84,75 @@ function literalRequireSpecifier(node: ESTree.Node): string | null {
 	return argument.value;
 }
 
+/** `require("x")`, or one interop helper call around it such as `__importStar(require("x"))`. */
+function wrappedRequireSpecifier(node: ESTree.Node): string | null {
+	const direct = literalRequireSpecifier(node);
+	if (direct !== null || node.type !== "CallExpression" || node.arguments.length !== 1) {
+		return direct;
+	}
+	return literalRequireSpecifier(node.arguments[0] as ESTree.Node);
+}
+
+/** The helper name a call invokes: `f(…)`, `ns.f(…)` or the indirect `(0, ns.f)(…)`. */
+function calleeName(node: ESTree.CallExpression): string | null {
+	let callee = node.callee as ESTree.Node;
+	if (callee.type === "SequenceExpression") {
+		callee = callee.expressions.at(-1) as ESTree.Node;
+	}
+	if (callee.type === "Identifier") return callee.name;
+	if (callee.type === "MemberExpression" && !callee.computed) {
+		return callee.property.type === "Identifier" ? callee.property.name : null;
+	}
+	return null;
+}
+
+/**
+ * The module a TypeScript star-export helper copies into `exports`:
+ * `__exportStar(require("x"), exports)`, or `__export(require("x"))` from older
+ * compilers. Node's CommonJS lexer recognizes the same calls.
+ */
+function starExportSpecifier(node: ESTree.CallExpression): string | null {
+	const name = calleeName(node);
+	const source = node.arguments[0] as ESTree.Node | undefined;
+	if (source === undefined) return null;
+	if (name === "__exportStar" && node.arguments.length === 2) {
+		const target = node.arguments[1] as ESTree.Node;
+		return isExportsIdentifier(target) || isModuleExports(target)
+			? literalRequireSpecifier(source)
+			: null;
+	}
+	return name === "__export" && node.arguments.length === 1
+		? literalRequireSpecifier(source)
+		: null;
+}
+
+/** The binding Babel's `Object.keys(_x).forEach(…)` star export iterates, if any. */
+function babelStarExportBinding(node: ESTree.CallExpression): string | null {
+	const callee = node.callee as ESTree.Node;
+	if (
+		callee.type !== "MemberExpression" ||
+		callee.computed ||
+		callee.property.type !== "Identifier" ||
+		callee.property.name !== "forEach" ||
+		callee.object.type !== "CallExpression"
+	) {
+		return null;
+	}
+	const keys = callee.object;
+	const keysCallee = keys.callee as ESTree.Node;
+	const source = keys.arguments[0] as ESTree.Node | undefined;
+	return keysCallee.type === "MemberExpression" &&
+		!keysCallee.computed &&
+		keysCallee.object.type === "Identifier" &&
+		keysCallee.object.name === "Object" &&
+		keysCallee.property.type === "Identifier" &&
+		keysCallee.property.name === "keys" &&
+		keys.arguments.length === 1 &&
+		source?.type === "Identifier"
+		? source.name
+		: null;
+}
+
 export function detectCjsExports(ast: ESTree.Program): CjsExportInfo {
 	const names = new Set<string>();
 	let complete = true;
@@ -91,6 +163,10 @@ export function detectCjsExports(ast: ESTree.Program): CjsExportInfo {
 		for (const property of object.properties) {
 			if (property.type !== "Property" || property.computed) {
 				// Spread, computed key, etc. — cannot enumerate fully.
+				if (property.type === "SpreadElement") {
+					const reexport = literalRequireSpecifier(property.argument);
+					if (reexport !== null) reexports.add(reexport);
+				}
 				complete = false;
 				continue;
 			}
@@ -171,11 +247,34 @@ export function detectCjsExports(ast: ESTree.Program): CjsExportInfo {
 		}
 	};
 
+	// Bindings of required modules, which a Babel star export later iterates.
+	const requiredBindings = new Map<string, string>();
+	const handleStarExport = (node: ESTree.CallExpression) => {
+		const binding = babelStarExportBinding(node);
+		const reexport =
+			binding === null
+				? starExportSpecifier(node)
+				: (requiredBindings.get(binding) ?? null);
+		if (reexport !== null) {
+			reexports.add(reexport);
+			complete = false;
+		}
+	};
+
 	traverseEstree(ast.body, (node) => {
 		if (node.type === "AssignmentExpression") {
 			handleAssignment(node);
 		} else if (node.type === "CallExpression") {
 			handleDefineProperty(node);
+			handleStarExport(node);
+		} else if (
+			node.type === "VariableDeclarator" &&
+			node.id.type === "Identifier" &&
+			node.init !== null &&
+			node.init !== undefined
+		) {
+			const specifier = wrappedRequireSpecifier(node.init);
+			if (specifier !== null) requiredBindings.set(node.id.name, specifier);
 		}
 	});
 	return { names, complete, reassignsModuleExports, reexports };

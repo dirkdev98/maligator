@@ -2,7 +2,7 @@ import type { ESTree } from "meriyah";
 import type { FfiDirectEntry } from "../../build-config-values.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
 import { debugEnabled, log } from "../../utils.ts";
-import { detectCjsExports, isPureDataCjsModule } from "../frontend/cjs-exports.ts";
+import { isPureDataCjsModule } from "../frontend/cjs-exports.ts";
 import { moduleCreateRequireDeclarators } from "../frontend/create-require.ts";
 import {
 	DIRECT_EVAL_PRIVATE_FIELD,
@@ -14723,7 +14723,9 @@ function compileCjsDynamicInitializer(
 ): number {
 	const existing = program.cjsDynamicNamespaces.get(file.path);
 	if (existing !== undefined) return existing.initializer;
-	const names = [...new Set(["default", ...detectCjsExports(file.ast).names])].sort();
+	const names = [
+		...new Set(["default", ...program.commonJsExportNames(file.path)]),
+	].sort();
 	const exports = names.map((name) => ({
 		nameStringIndex: getOrCreateStringConstant(program, name),
 		slot: program.nextGlobalIndex++,

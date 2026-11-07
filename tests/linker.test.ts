@@ -207,6 +207,47 @@ test("follows CommonJS whole-module re-exports when building namespaces", () => 
 	});
 });
 
+test.each([
+	[
+		"TypeScript's __exportStar helper",
+		`var __exportStar = (this && this.__exportStar) || function (m, exports) { for (var p in m) if (p !== "default") exports[p] = m[p]; };\n__exportStar(require("./a.cjs"), exports);\ntslib_1.__exportStar(require("./b.cjs"), exports);\n`,
+	],
+	[
+		"an older TypeScript __export helper",
+		`function __export(m) { for (var p in m) if (!exports.hasOwnProperty(p)) exports[p] = m[p]; }\n__export(require("./a.cjs"));\n(0, helpers.__exportStar)(require("./b.cjs"), exports);\n`,
+	],
+	[
+		"Babel's star export loop",
+		`var _a = require("./a.cjs");\nvar _b = _interopRequireWildcard(require("./b.cjs"));\nObject.keys(_a).forEach(function (key) { exports[key] = _a[key]; });\nObject.keys(_b).forEach(function (key) { Object.defineProperty(exports, key, { enumerable: true, get: function () { return _b[key]; } }); });\n`,
+	],
+	[
+		"a spread into module.exports",
+		`module.exports = { ...require("./a.cjs"), ...require("./b.cjs") };\n`,
+	],
+])(
+	"follows CommonJS star re-exports written by %s when building namespaces",
+	(_name, entry) => {
+		const root = tree({
+			"entry.cjs": entry,
+			"a.cjs": `exports.forwardRef = function () {};\n`,
+			"b.cjs": `exports.createElement = function () {};\n`,
+			"main.mjs": `import * as ns from "./entry.cjs";\nglobalThis.sink = ns;\n`,
+		});
+
+		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"));
+		const linkage = linkModules(program);
+
+		expect(linkage.cjsImports.get(path.join(root, "main.mjs"))?.[0]).toMatchObject({
+			kind: "namespace",
+			names: ["createElement", "forwardRef"],
+		});
+		expect(linkage.commonJsExportNames(path.join(root, "entry.cjs"))).toEqual([
+			"createElement",
+			"forwardRef",
+		]);
+	},
+);
+
 test("re-exporting from a CommonJS module records cjs imports for it", () => {
 	const root = tree({
 		"lib.cjs": `exports.x = 1;\nexports.y = 2;\n`,
