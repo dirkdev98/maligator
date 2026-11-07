@@ -508,6 +508,24 @@ export function pruneCoreCaptureLiveness(
 	return [...editors.values()].map((editor) => editor.commit());
 }
 
+/**
+ * Functions a closed program can run: the entry, CommonJS module wrappers and every
+ * function their code can create. Calling a function needs its identity, so a body
+ * nothing creates never runs, even while it stays an inlining or guard source.
+ */
+export function coreInstantiableFunctions(
+	program: CoreProgram,
+	context: CoreCompilationContext,
+): ReadonlySet<CoreFunctionId> | undefined {
+	if (context.facts.closure.sourceClosure.kind !== "known") return undefined;
+	const roots = new Set(context.data.cjsModuleFunctionIndices.map(coreFunctionId));
+	for (const entry of program.functionIds()) {
+		roots.add(entry);
+		break;
+	}
+	return instantiableFunctions(program, roots);
+}
+
 // Functions some running code can create; a body nothing creates never runs, even
 // while it stays in the program as an inlining or guard source.
 function instantiableFunctions(

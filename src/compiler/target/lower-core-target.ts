@@ -1,5 +1,6 @@
 import type { FfiDirectEntry } from "../../build-config-values.ts";
 import { coreCompilerSiteId } from "../core/compiler-site-facts.ts";
+import { coreInstantiableFunctions } from "../core/core-capture-liveness.ts";
 import type { CoreCompilation } from "../core/core-compilation.ts";
 import { coreConstructorSlotReserve } from "../core/core-constructor-layout.ts";
 import { coreForeignCalls, coreForeignSlots } from "../core/core-foreign-calls.ts";
@@ -3477,9 +3478,16 @@ export function lowerCoreCompilationToTargetProgram(
 					),
 				)
 			: undefined;
+	const instantiable = coreInstantiableFunctions(
+		compilation.program,
+		compilation.context,
+	);
 	const functions = prepared.functions.map((fn) => ({
 		...(prepared.specializedOnly.has(fn.coreFunction.id)
 			? { specializedOnly: true as const }
+			: {}),
+		...(instantiable !== undefined && !instantiable.has(fn.coreFunction.id)
+			? { unreachable: true as const }
 			: {}),
 		...lowerFunctionToTarget(fn, options, directClosures?.get(fn.coreFunction.id)),
 	}));

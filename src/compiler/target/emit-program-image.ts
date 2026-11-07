@@ -1145,7 +1145,14 @@ function emitNativeFunctions(
 		functionIndex: number,
 		availability: NativeCompilationAvailability,
 	): CompiledFunction | null => {
-		if (!options.useCompiled) return null;
+		// A function the program never creates runs nowhere; its bytecode stays as the fallback.
+		// A closure site still needs every participant's native body to share its scope.
+		if (
+			!options.useCompiled ||
+			(image.native.functions[functionIndex]!.unreachable === true &&
+				closureParticipation[functionIndex] === undefined)
+		)
+			return null;
 		fastTryLookups[functionIndex]?.clear();
 		const emitted = renderFunction(
 			image.native.functions[functionIndex]!,

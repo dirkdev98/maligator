@@ -1608,6 +1608,8 @@ export interface NativeFunctionPlan {
 	readonly body: BytecodeFunction;
 	readonly storageValues?: ReadonlyArray<number>;
 	readonly specializedOnly?: true;
+	/** The closed program never creates this function; it keeps only its bytecode. */
+	readonly unreachable?: true;
 	readonly functionIndex: number;
 	readonly mode: "direct" | "resumable";
 	readonly registerRepresentations: ReadonlyArray<VmRegisterRepresentation>;
@@ -5886,6 +5888,7 @@ function lowerExecutionFunctionToNativePlan(
 		functionIndex: fn.functionIndex,
 		mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 		...(fn.specializedOnly ? { specializedOnly: true as const } : {}),
+		...(fn.unreachable ? { unreachable: true as const } : {}),
 		registerRepresentations: [...fn.registerRepresentations],
 		directEntries,
 		...(fn.literalSwitches === undefined
