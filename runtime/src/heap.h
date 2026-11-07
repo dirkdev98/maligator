@@ -853,6 +853,14 @@ static inline u32 mal_heap_class_cell_size(u32 size_class) {
 
 static inline __attribute__((always_inline)) void mal_heap_clear_cell(u8 *cell, u32 size) {
     switch (size) {
+        case 256: mal_heap_clear_16(cell + 240); [[fallthrough]];
+        case 240: mal_heap_clear_16(cell + 224); [[fallthrough]];
+        case 224: mal_heap_clear_16(cell + 208); [[fallthrough]];
+        case 208: mal_heap_clear_16(cell + 192); [[fallthrough]];
+        case 192: mal_heap_clear_16(cell + 176); [[fallthrough]];
+        case 176: mal_heap_clear_16(cell + 160); [[fallthrough]];
+        case 160: mal_heap_clear_16(cell + 144); [[fallthrough]];
+        case 144: mal_heap_clear_16(cell + 128); [[fallthrough]];
         case 128: mal_heap_clear_16(cell + 112); [[fallthrough]];
         case 112: mal_heap_clear_16(cell + 96); [[fallthrough]];
         case 96: mal_heap_clear_16(cell + 80); [[fallthrough]];
