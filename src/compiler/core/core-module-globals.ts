@@ -1,7 +1,11 @@
-import type { CoreCompilationContext } from "./core-compilation.ts";
+import type {
+	CoreCompilationContext,
+	ConstructedCoreCompilation,
+} from "./core-compilation.ts";
+import { CoreEditor } from "./core-editor.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 interface GlobalWrite {
@@ -115,4 +119,94 @@ export function coreModuleGlobalLoadInitialized(
 			precedes(store.instruction, load) &&
 			cell.resets.every((reset) => precedes(reset, store.instruction)),
 	);
+}
+
+/** Global slots an instruction other than a binding store reads or hands to the runtime. */
+function referencedGlobalSlots(
+	opcode: string,
+	attributes: Readonly<Record<string, unknown>>,
+): ReadonlyArray<number> {
+	const slots: Array<number> = [];
+	for (const key of ["index", "cacheSlot", "foreignSlot"])
+		if (
+			typeof attributes[key] === "number" &&
+			(key !== "index" || opcode === "loadGlobal" || opcode === "loadGlobalIndex")
+		)
+			slots.push(attributes[key]);
+	if (opcode === "createModuleNamespace" && Array.isArray(attributes.exports))
+		for (const entry of attributes.exports as ReadonlyArray<unknown>)
+			if (
+				entry !== null &&
+				typeof entry === "object" &&
+				"slot" in entry &&
+				typeof entry.slot === "number"
+			)
+				slots.push(entry.slot);
+	return slots;
+}
+
+/**
+ * Module binding slots that no instruction of `functions` reads. In a closed program
+ * only Core instructions and host installers reach a module binding, so stores to one
+ * of these write values no code can observe.
+ */
+export function coreUnreadModuleBindingSlots(
+	program: CoreProgram,
+	context: CoreCompilationContext,
+	functions: Iterable<CoreFunctionId>,
+): Set<number> {
+	const unread = new Set(context.data.moduleBindingSlots ?? []);
+	for (const { exports } of context.data.hostInstallCandidates)
+		for (const { slot } of exports) unread.delete(slot);
+	if (unread.size === 0) return unread;
+	for (const id of functions) {
+		const fn = program.function(id);
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode === "storeGlobal") continue;
+			for (const slot of referencedGlobalSlots(
+				opcode,
+				fn.instructionAttributes(instruction),
+			))
+				unread.delete(slot);
+		}
+	}
+	return unread;
+}
+
+/** The stores of `fn` to slots in `unread`. */
+export function coreUnreadModuleBindingStores(
+	fn: CoreFunctionStore,
+	unread: ReadonlySet<number>,
+): Array<CoreInstructionId> {
+	const stores: Array<CoreInstructionId> = [];
+	if (unread.size === 0) return stores;
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "storeGlobal"
+		)
+			continue;
+		const slot = fn.instructionAttributes(instruction).index;
+		if (typeof slot === "number" && unread.has(slot)) stores.push(instruction);
+	}
+	return stores;
+}
+
+/**
+ * Drops the stores to module bindings nothing reads, so dead-code elimination can
+ * remove the initializers that only fed them.
+ */
+export function pruneUnreadModuleBindings(compilation: ConstructedCoreCompilation): void {
+	const { program, context } = compilation;
+	const unread = coreUnreadModuleBindingSlots(program, context, program.functionIds());
+	if (unread.size === 0) return;
+	for (const id of program.functionIds()) {
+		const stores = coreUnreadModuleBindingStores(program.function(id), unread);
+		if (stores.length === 0) continue;
+		const editor = CoreEditor.open(program, id);
+		for (const store of stores) editor.removeInstruction(store);
+		editor.commit();
+	}
 }

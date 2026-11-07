@@ -1061,6 +1061,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 			data: coreProgramDataFromSemantic(program.semantic, {
 				moduleLexicalSlots:
 					moduleLinks === undefined ? coreModuleLexicalSlots(program) : [],
+				moduleBindingSlots: coreModuleBindingSlots(program),
 				modulePrivateNames: program.modulePrivateNames,
 				sourceCallSites: program.sourceOrigins?.callSites(),
 				cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
@@ -1768,6 +1769,33 @@ function coreInitializedLexicalReads(program: CoreFrontendContext): {
 			moduleReads.push({ slots: topLevelSlots, functions: functionPrefixes });
 	}
 	return { initializedCapturedReads: reads, initializedModuleBindingReads: moduleReads };
+}
+
+/** Global slots of the ES module bindings a closed program declares, imports a namespace into, or exports by default. */
+function coreModuleBindingSlots(program: CoreFrontendContext): Array<number> {
+	if (
+		program.evalDirect ||
+		program.facts.world.eval !== "disabled" ||
+		program.facts.closure.sourceClosure.kind !== "known"
+	)
+		return [];
+	const slots = new Set<number>();
+	const add = (binding: Binding | undefined) => {
+		const location =
+			binding === undefined ? undefined : program.bindingToStorage.get(binding);
+		if (location?.type === "global") slots.add(location.index);
+	};
+	for (const file of program.semantic.files) {
+		if (file.type !== "module" || file.commonjs) continue;
+		// Module-level blocks and class names keep their bindings in global slots too.
+		for (const scope of file.scopes)
+			for (const binding of scope.bindings)
+				if (!binding.imported && !binding.external && !binding.undeclared) add(binding);
+		add(program.moduleDefaultBinding.get(file.path));
+		for (const { binding } of program.namespaceImports.get(file.path) ?? []) add(binding);
+		for (const { binding } of program.cjsImports.get(file.path) ?? []) add(binding);
+	}
+	return [...slots].sort((left, right) => left - right);
 }
 
 function coreModuleLexicalSlots(

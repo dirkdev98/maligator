@@ -14,6 +14,10 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
+import {
+	coreUnreadModuleBindingSlots,
+	coreUnreadModuleBindingStores,
+} from "./core-module-globals.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
 import type { CoreChangeSet, CoreFunctionStore } from "./core-store.ts";
 import type { CoreProgram } from "./core-store.ts";
@@ -401,7 +405,7 @@ export function forwardCoreOwnCapturedLoads(
 
 /**
  * Source-frame retention does not make an uninstantiated function body executable,
- * and captured slots that no remaining code reads need no stores. Dropping a store
+ * and captured slots and module bindings that no remaining code reads need no stores. Dropping a store
  * can leave its closure unused, which in turn uninstantiates that closure's body.
  */
 export function pruneCoreCaptureLiveness(
@@ -469,9 +473,12 @@ export function pruneCoreCaptureLiveness(
 				}
 			}
 		}
+		const unreadBindings = coreUnreadModuleBindingSlots(program, context, live);
 		let released = false;
 		for (const id of functions) {
 			const fn = program.function(id);
+			for (const store of coreUnreadModuleBindingStores(fn, unreadBindings))
+				edit(id).removeInstruction(store);
 			const closures: Array<CoreInstructionId> = [];
 			for (const instruction of fn.instructionIds()) {
 				const header = fn.instructionHeader(instruction);

@@ -69,6 +69,12 @@ export interface CoreProgramData {
 		readonly slot: number;
 		readonly evaluator: number;
 	}>;
+	/**
+	 * Slots of the ES module bindings of a closed program. Only Core instructions and
+	 * host installers reach them: no global name lookup, eval or other image sees
+	 * module scope.
+	 */
+	readonly moduleBindingSlots?: ReadonlyArray<number>;
 	/** Only module evaluation can initialize these unobservable private-name cells. */
 	readonly modulePrivateNames?: ReadonlyArray<{
 		readonly slot: number;
