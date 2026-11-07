@@ -522,6 +522,11 @@ interface CoreFrontendFunction {
 	staticArgumentsFallbackRegister?: number;
 	/** Incoming arguments as a packed rest view for in-range element reads. */
 	argumentsElementRegister?: number;
+	/**
+	 * Locked primordials pin the builtin slice, so this function's `arguments` copies
+	 * read the frame and its reads use `argumentsCopyAccesses`; no object exists.
+	 */
+	argumentsCopyPlan?: boolean;
 	classContext?: SemanticClassContext;
 
 	/**
@@ -5709,21 +5714,27 @@ function compileFunctionParams(
 			if (binding) mappedParameterBindings.set(i, binding);
 		}
 	}
-	const lockedPrimordials = program.facts.world.primordialPolicy === "locked";
+	if (
+		argumentsBinding !== undefined &&
+		program.facts.world.primordialPolicy === "locked" &&
+		fn.semanticFile.argumentsCopyBindings.has(argumentsBinding)
+	)
+		fn.argumentsCopyPlan = true;
 	const materializesArguments =
-		argumentsBinding?.usageNodes.some(
-			(usage) =>
-				fn.semanticFile.staticArgumentsAccesses.get(usage) === undefined &&
-				!(lockedPrimordials && fn.semanticFile.argumentsCopyUsages.has(usage)),
-		) ?? false;
+		fn.argumentsCopyPlan !== true &&
+		(argumentsBinding?.usageNodes.some(
+			(usage) => fn.semanticFile.staticArgumentsAccesses.get(usage) === undefined,
+		) ??
+			false);
 	const lazilyMaterializesArguments =
+		fn.argumentsCopyPlan !== true &&
 		argumentsBinding !== undefined &&
 		fn.semanticFile.lazyArgumentsBindings.has(argumentsBinding);
 	let hasStaticIndex = false;
 	let hasElement = false;
 	if (argumentsBinding && (!materializesArguments || lazilyMaterializesArguments)) {
 		for (const usage of argumentsBinding.usageNodes) {
-			const access = fn.semanticFile.staticArgumentsAccesses.get(usage);
+			const access = staticArgumentsAccess(fn, usage);
 			if (access?.kind === "index") hasStaticIndex = true;
 			if (access?.kind === "element") hasElement = true;
 		}
@@ -5745,7 +5756,7 @@ function compileFunctionParams(
 		let argumentCountRegister: number | undefined;
 		const indexRegisters = new Map<number, number>();
 		for (const usage of argumentsBinding.usageNodes) {
-			const access = fn.semanticFile.staticArgumentsAccesses.get(usage);
+			const access = staticArgumentsAccess(fn, usage);
 			if (!access) continue;
 			if (access.kind === "element") {
 				if (argumentCountRegister === undefined) {
@@ -13351,6 +13362,15 @@ function compileMemberExpression(
 	return compileMemberLoad(program, fn, cursor, member);
 }
 
+function staticArgumentsAccess(
+	fn: CoreFrontendFunction,
+	usage: ESTree.Node,
+): StaticArgumentsAccess | undefined {
+	return fn.argumentsCopyPlan === true
+		? fn.semanticFile.argumentsCopyAccesses.get(usage)
+		: fn.semanticFile.staticArgumentsAccesses.get(usage);
+}
+
 function compileStaticArgumentsMember(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -13359,8 +13379,7 @@ function compileStaticArgumentsMember(
 ): number | undefined {
 	if (memberExpression.object.type !== "Identifier") return undefined;
 	const usage = memberExpression.object;
-	const access: StaticArgumentsAccess | undefined =
-		fn.semanticFile.staticArgumentsAccesses.get(usage);
+	const access = staticArgumentsAccess(fn, usage);
 	if (access?.member !== memberExpression) return undefined;
 	if (access.kind === "element")
 		return compileArgumentsElementRead(program, fn, cursor, usage, memberExpression);
@@ -13375,7 +13394,10 @@ function compileStaticArgumentsMember(
 	) {
 		return undefined;
 	}
-	if (!fn.semanticFile.guardedArgumentsAccesses.has(usage)) {
+	if (
+		fn.argumentsCopyPlan === true ||
+		!fn.semanticFile.guardedArgumentsAccesses.has(usage)
+	) {
 		return compileDirectArgumentsRead(
 			program,
 			fn,
@@ -15018,9 +15040,10 @@ function compileCall(
 	cursor: CoreFrontendCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
-	// Locked primordials pin the builtin slice and call, so the copy is the incoming arguments.
-	const copyStart = fn.semanticFile.argumentsCopyCalls.get(callExpression);
-	if (copyStart !== undefined && program.facts.world.primordialPolicy === "locked") {
+	const copyStart = fn.argumentsCopyPlan
+		? fn.semanticFile.argumentsCopyCalls.get(callExpression)
+		: undefined;
+	if (copyStart !== undefined) {
 		const copy = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
 			type: "createRestArguments",

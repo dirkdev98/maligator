@@ -60,13 +60,16 @@ export interface SemanticFile {
 	staticArgumentsAccesses: Map<ESTree.Node, StaticArgumentsAccess>;
 
 	/**
-	 * `Array.prototype.slice.call(arguments[, k])` and `[].slice.call(arguments[, k])`
-	 * calls of a wholly static binding, with their start index. While primordials are
-	 * locked, lowering builds the copy from the frame without the arguments object.
+	 * Bindings whose uses are all direct reads or `Array.prototype.slice.call(arguments[, k])`
+	 * and `[].slice.call(arguments[, k])` copies. While primordials are locked, lowering
+	 * builds each copy from the frame and never creates the object; otherwise the
+	 * builtin receives the object and the classification above applies.
 	 */
+	argumentsCopyBindings: Set<Binding>;
+	/** Reads of an `argumentsCopyBindings` binding, valid only under that plan. */
+	argumentsCopyAccesses: Map<ESTree.Node, StaticArgumentsAccess>;
+	/** Copy calls of an `argumentsCopyBindings` binding, with their start index. */
 	argumentsCopyCalls: Map<ESTree.CallExpression, number>;
-	/** The `arguments` references inside `argumentsCopyCalls`. */
-	argumentsCopyUsages: Set<ESTree.Node>;
 
 	/**
 	 * Body reads of a lazy binding in `staticArgumentsAccesses`. They read the frame
@@ -282,8 +285,9 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		nodeToBinding: new Map(),
 		withDynamicNodes: new Set(),
 		staticArgumentsAccesses: new Map(),
+		argumentsCopyBindings: new Set(),
+		argumentsCopyAccesses: new Map(),
 		argumentsCopyCalls: new Map(),
-		argumentsCopyUsages: new Set(),
 		guardedArgumentsAccesses: new Set(),
 		lazyArgumentsBindings: new Set(),
 		hasDirectEval: new Set(),
@@ -925,6 +929,11 @@ function classifyStaticArgumentsUsage(file: SemanticFile): void {
 				)
 			);
 		};
+		if (binding.usageNodes.length > 0 && binding.usageNodes.every(isStaticRead)) {
+			for (const [usage, access] of byNode)
+				file.staticArgumentsAccesses.set(usage, access);
+			continue;
+		}
 		const owner = argumentsBindingOwner(file, binding);
 		// A copy reads the object's current elements, which are the incoming values
 		// only while no formal it maps is ever written.
@@ -933,18 +942,13 @@ function classifyStaticArgumentsUsage(file: SemanticFile): void {
 			owner !== undefined &&
 			argumentsMatchIncomingValues(file, owner, parents);
 		if (
-			binding.usageNodes.length > 0 &&
+			bindingCopies !== undefined &&
 			binding.usageNodes.every((usage) => isStaticRead(usage) || isCopy(usage))
 		) {
-			for (const [usage, access] of byNode)
-				file.staticArgumentsAccesses.set(usage, access);
-			for (const usage of binding.usageNodes) {
-				const copy = bindingCopies?.get(usage);
-				if (copy === undefined) continue;
-				file.argumentsCopyUsages.add(usage);
+			file.argumentsCopyBindings.add(binding);
+			for (const [usage, access] of byNode) file.argumentsCopyAccesses.set(usage, access);
+			for (const copy of bindingCopies.values())
 				file.argumentsCopyCalls.set(copy.call, copy.start);
-			}
-			continue;
 		}
 
 		if (!owner) continue;
