@@ -1756,11 +1756,13 @@ typedef struct MalVm {
     MalString **file_string_atoms;
 
     /**
-     * Runtime-image-local CommonJS ids are rebased at the require seam. Runtime
-     * splices remain interpreted, so the active frame identifies which module
-     * table segment an id belongs to without rewriting numeric operands.
+     * Runtime-image-local CommonJS ids are rebased at the require seam by the base of
+     * the innermost JavaScript function, interpreted or compiled, so neither bytecode
+     * operands nor the constants in a spliced image's native overlay are rewritten.
      */
     i32 *function_cjs_module_bases;
+    /** Whether a splice gave some function a nonzero base, so a require must find its caller. */
+    bool cjs_module_bases_vary;
 
     /**
      * Per-function, VM-owned property-site caches shared by compiled and
@@ -2501,6 +2503,8 @@ static inline __attribute__((always_inline)) MalNativeFrame *mal_vm_enter_compil
 
 /** The innermost visible compiled JavaScript function on the running stack, or -1. */
 i32 mal_vm_innermost_compiled_function(MalVm *vm);
+/** The innermost JavaScript function on the running stack, interpreted or compiled, or -1. */
+i32 mal_vm_innermost_function(MalVm *vm);
 
 /** Source position id of entry `entry` in a function's position table, or -1 outside it. */
 static inline i32 mal_function_position_entry_id(const MalFunction *function, i32 entry) {

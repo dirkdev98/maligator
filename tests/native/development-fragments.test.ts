@@ -120,6 +120,38 @@ describe("development builds from relocatable fragments", () => {
 		expect(fragments.has(undefined)).toBe(false);
 	});
 
+	it("resolves compiled CommonJS requires within their own image", () => {
+		const commonjs = path.join(project, "commonjs");
+		const greeter = path.join(commonjs, "node_modules", "greeter");
+		mkdirSync(greeter, { recursive: true });
+		writeFileSync(
+			path.join(greeter, "package.json"),
+			JSON.stringify({ name: "greeter", main: "index.js" }),
+		);
+		writeFileSync(
+			path.join(greeter, "index.js"),
+			'const { greet } = require("./greet.js");\nmodule.exports = function createGreeter(name) { return greet(name); };\n',
+		);
+		writeFileSync(
+			path.join(greeter, "greet.js"),
+			"exports.greet = (name) => `hello ${name}`;\n",
+		);
+		writeFileSync(
+			path.join(commonjs, "settings.cjs"),
+			"module.exports = { answer: 42 };\n",
+		);
+		writeFileSync(
+			path.join(commonjs, "main.mjs"),
+			'import createGreeter from "greeter";\nimport settings from "./settings.cjs";\nconsole.log(createGreeter.name, createGreeter("images"), settings.answer);\n',
+		);
+		writeFileSync(
+			path.join(commonjs, "maligator.build.ts"),
+			'export default { entry: "main.mjs", outputName: "commonjs", surface: { node: true } };\n',
+		);
+		build(commonjs);
+		expect(runBinary(commonjs, "commonjs")).toBe("createGreeter hello images 42\n");
+	});
+
 	it("runs worker roots through the compiled worker registry", () => {
 		const workers = path.join(project, "workers");
 		mkdirSync(workers, { recursive: true });

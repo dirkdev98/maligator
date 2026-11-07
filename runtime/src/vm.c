@@ -700,6 +700,7 @@ static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program
     vm->live_runtime_image.source_positions = source_positions;
 	vm->function_cjs_module_bases =
 		calloc((usize) vm->function_capacity, sizeof(i32));
+    vm->cjs_module_bases_vary = false;
     vm->call_entries = calloc((usize) vm->function_capacity, sizeof(MalCompiledFunction));
     for (i32 i = 0; i < function_count; i++) mal_vm_refresh_call_entry(vm, i);
 }
@@ -935,10 +936,9 @@ void mal_vm_init(MalVm *vm, const MalRuntimeImage *program) {
 }
 
 MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
-    if (vm->frame_count > 0) {
-        i32 caller_function_index =
-            vm->frames[vm->frame_count - 1].function_index;
-        id += vm->function_cjs_module_bases[caller_function_index];
+    if (vm->cjs_module_bases_vary) {
+        i32 caller_function_index = mal_vm_innermost_function(vm);
+        if (caller_function_index >= 0) id += vm->function_cjs_module_bases[caller_function_index];
     }
     if (id < 0 || id >= vm->runtime_image->cjs_module_count) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "invalid CommonJS module id");
@@ -1901,6 +1901,7 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
         vm->function_cjs_module_bases[i] = cjs_module_base;
         vm->call_entries[i] = nullptr;
     }
+    if (cjs_module_base != 0 && new_functions > fn_base) vm->cjs_module_bases_vary = true;
 
     // Spliced functions may execute guarded loads before their own literal
     // origins. Their strings and function rows are now fully rebased and live.
@@ -4411,6 +4412,27 @@ i32 mal_vm_innermost_compiled_function(MalVm *vm) {
     }
 #endif
     return -1;
+}
+
+i32 mal_vm_innermost_function(MalVm *vm) {
+    // Orders the two frame stacks the way mal_vm_capture_stack merges them. A hidden
+    // compiled record stands for an interpreted frame, which the fallback returns.
+    i32 interpreted = vm->frame_count - 1;
+#if MAL_NATIVE_FRAME_WALK
+    MalWalkedFrame frames[16];
+    usize capacity = sizeof frames / sizeof frames[0];
+    usize count = mal_vm_walk_compiled_frames(vm, frames, capacity);
+    for (usize index = 0; index < count && index < capacity; index++) {
+        if (interpreted >= 0 && mal_vm_frame_native_positions(vm)[interpreted] <= frames[index].frame) break;
+        if (!mal_native_frame_hidden(frames[index].record)) return frames[index].record->function_index;
+    }
+#else
+    for (i32 native = vm->native_frame_count - 1; native >= 0; native--) {
+        if (interpreted >= 0 && native < vm->frames[interpreted].native_depth) break;
+        if (!mal_native_frame_hidden(&vm->native_frames[native])) return vm->native_frames[native].function_index;
+    }
+#endif
+    return interpreted >= 0 ? vm->frames[interpreted].function_index : -1;
 }
 
 static void mal_stack_trace_push_interpreted(MalStackTrace *trace, const MalVmFrame *frame) {
