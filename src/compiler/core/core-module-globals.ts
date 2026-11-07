@@ -184,16 +184,12 @@ function lexicalWriterIndex(
 	return index;
 }
 
-/** Private lexical cells whose non-empty writers all belong to this evaluator. */
-export function coreEvaluatorGlobalWrites(
+/** The lexical slots of evaluator `id` that no other function assigns a value. */
+function coreEvaluatorPrivateSlots(
 	program: CoreProgram,
 	context: CoreCompilationContext,
-	fn: CoreFunctionStore,
-): ReadonlyMap<number, CoreModuleGlobalWrites> {
-	const cells = new Map<
-		number,
-		{ stores: Array<GlobalWrite>; resets: Array<CoreInstructionId> }
-	>();
+	id: CoreFunctionId,
+): ReadonlyArray<number> {
 	const entries = context.data.moduleLexicalSlots;
 	if (
 		context.facts.world.eval !== "disabled" ||
@@ -201,14 +197,51 @@ export function coreEvaluatorGlobalWrites(
 		context.data.moduleLinks !== undefined ||
 		entries === undefined
 	)
-		return cells;
-	const owned = evaluatorLexicalSlots(context).get(fn.id);
-	if (owned === undefined) return cells;
+		return [];
+	const owned = evaluatorLexicalSlots(context).get(id);
+	if (owned === undefined) return [];
 	// Other functions may instantiate the TDZ, but cannot assign the binding.
 	const writers = lexicalWriterIndex(program, entries);
-	for (const slot of owned)
-		if (!writers.assignedElsewhere(slot, fn.id))
-			cells.set(slot, { stores: [], resets: [] });
+	return owned.filter((slot) => !writers.assignedElsewhere(slot, id));
+}
+
+/**
+ * Every evaluator's private lexical slots, decided once before a batch opens editors.
+ * A batch that only forwards loads and drops stores can keep using them: its edits
+ * add no writer, so a slot private before stays private.
+ */
+export function coreEvaluatorPrivateSlotMap(
+	program: CoreProgram,
+	context: CoreCompilationContext,
+): ReadonlyMap<CoreFunctionId, ReadonlySet<number>> {
+	const slots = new Map<CoreFunctionId, ReadonlySet<number>>();
+	for (const evaluator of evaluatorLexicalSlots(context).keys()) {
+		const id = coreFunctionId(evaluator);
+		if (!program.hasFunction(id)) continue;
+		const own = coreEvaluatorPrivateSlots(program, context, id);
+		if (own.length > 0) slots.set(id, new Set(own));
+	}
+	return slots;
+}
+
+/** Private lexical cells whose non-empty writers all belong to this evaluator. */
+export function coreEvaluatorGlobalWrites(
+	program: CoreProgram,
+	context: CoreCompilationContext,
+	fn: CoreFunctionStore,
+	// Private slots decided before a batch of editors opened, whose edits add no stores.
+	privateSlots?: ReadonlyMap<CoreFunctionId, ReadonlySet<number>>,
+): ReadonlyMap<number, CoreModuleGlobalWrites> {
+	const cells = new Map<
+		number,
+		{ stores: Array<GlobalWrite>; resets: Array<CoreInstructionId> }
+	>();
+	for (const slot of privateSlots?.get(fn.id) ??
+		(privateSlots === undefined
+			? coreEvaluatorPrivateSlots(program, context, fn.id)
+			: []))
+		cells.set(slot, { stores: [], resets: [] });
+	if (cells.size === 0) return cells;
 	for (const write of globalWrites(fn)) {
 		const cell = cells.get(write.slot);
 		if (cell === undefined) continue;
@@ -341,4 +374,34 @@ export function pruneUnreadModuleBindings(compilation: ConstructedCoreCompilatio
 		for (const store of stores) editor.removeInstruction(store);
 		editor.commit();
 	}
+}
+
+/** How a program reads and assigns its global slots, from each function's cached scans. */
+export interface CoreGlobalSlotUses {
+	/** Instructions that read each slot or hand it to the runtime. */
+	readonly reads: ReadonlyMap<number, number>;
+	/** The values each slot is assigned, besides its dead-zone marker. */
+	readonly writes: ReadonlyMap<
+		number,
+		ReadonlyArray<{ readonly function: CoreFunctionId; readonly value: CoreValueId }>
+	>;
+}
+
+export function coreGlobalSlotUses(program: CoreProgram): CoreGlobalSlotUses {
+	const reads = new Map<number, number>();
+	const writes = new Map<
+		number,
+		Array<{ function: CoreFunctionId; value: CoreValueId }>
+	>();
+	for (const id of program.functionIds()) {
+		const fn = program.function(id);
+		for (const slot of globalSlotReads(fn)) reads.set(slot, (reads.get(slot) ?? 0) + 1);
+		for (const write of globalWrites(fn)) {
+			if (write.empty) continue;
+			const values = writes.get(write.slot) ?? [];
+			values.push({ function: id, value: write.value });
+			writes.set(write.slot, values);
+		}
+	}
+	return { reads, writes };
 }

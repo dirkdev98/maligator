@@ -92,6 +92,27 @@ describe("native body reachability", () => {
 			`mal_compiled_${index}(`,
 		);
 	});
+	it("emits no C body for a function only its inlined copies use", () => {
+		const original = compile(
+			"function scale(v) { return v * 2; } console.log(scale(Number(globalThis.seed ?? 3)));",
+		);
+		for (const image of [
+			original,
+			deserializeCompilerArtifact(serializeCompilerArtifact(original)),
+		]) {
+			const scale = image.runtime.functions.findIndex(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.nameStringIndex] ?? []),
+					) === "scale",
+			);
+			expect(image.native.functions[scale]?.unreachable).toBe(true);
+			const source = emitProgramImage(image);
+			expect(source).not.toContain(`mal_compiled_${scale}(`);
+			expect(source).toContain(`mal_function_${scale}_instructions`);
+		}
+	});
+
 	it("retains bytecode when compilation is disabled", () => {
 		const image = compile(`${predicate} console.log(allNil(globalThis.values));`);
 		const index = image.native.functions.findIndex((fn) => fn.specializedOnly);

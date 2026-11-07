@@ -1184,6 +1184,15 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
+- [ ] Keep medium flat strings' units in their own cell. A string past the 16
+      Latin-1 or 8 UTF-16 inline units allocates a separate owned buffer that a
+      finalizer frees, so building `${order.region}/${order.category}` costs 27.7 ns
+      against Node's 3.5, and with the `Map.get` that follows 65 against 70. Copying
+      units of up to 96 bytes into the tail of a larger string cell cut those to 20
+      and 58 ns. Such a string needs its own storage kind among the flat ones:
+      external storage also covers transient buffers, which Map keys must not
+      retain. The flat-kind checks in the runtime, the GC finalizer, slices, Map key
+      compaction, FFI borrowing and the white-box string fixtures all name kinds.
 - [ ] Size an object literal that starts with a spread when it is created.
       `({ ...record, extra: 1 })` over a three-field record takes 50 ns against
       Node's 10. Lowering emits an empty `createObject` and then
@@ -1206,6 +1215,17 @@ contracts or investigates costs still visible after the string follow-ups.
       dispatches on length or hash. The volume likely comes from `===` chains such as
       `op.opcode === "A" || op.opcode === "B"` and `if`/`else if` ladders over one
       subject, which test every literal in turn.
+- [ ] Inline methods that construct their own class, and read class getters
+      without a call. `v = v.add(new Vec(1, 2)); acc += v.len2 & 7` over a class
+      with two declared fields takes 37 ns per iteration against Node's 3.3. `new Vec`
+      inside `add` reads the class body's own immutable name binding through
+      `loadCaptured`, and the inliner refuses environment reads without a capture
+      context, so no method that names its own class inlines. Reading the
+      declaration's binding instead, for a class without static initializers whose
+      binding nothing writes, lets `add` inline but leaves the loop as fast: the
+      temporary `Vec` still allocates. The read-accessor transform offers no candidate for
+      `v.len2` because `v` is a loop phi of two constructions, so each read calls
+      the getter from the static miss path.
 - [ ] Construct derived classes without the generic super path. `new Pair(l, r)`
       with `super(l)` into a one-field base takes 116 ns against Node's 5.6
       (`constructor-derived-super-retained`). The construct inliner refuses
@@ -1346,17 +1366,14 @@ contracts or investigates costs still visible after the string follow-ups.
       samples. Interning by address made each name cheap; the property traffic
       remains. Finding those names through the shared shape stub instead of a
       shape search changed nothing measurable.
-- [ ] Optimize module-scope state that only the module body's call tree uses. A
-      top-level `run(N)` in an ES module calls a separately compiled `run`, while the
-      same CommonJS module inlines `run` into its wrapper and scalar-replaces the
-      `const state = { hits: 0, misses: 0 }` that `run`'s loop updates: 5.0 against
-      0.66 ns per iteration. The inliner moves loops only out of a closure created in
-      the caller, and no pass turns a module slot that only its evaluator reads into a
-      local. Moving a module function whose only read is one call in the module body,
-      then promoting such slots, would close the gap. Methods of a module-scope object
-      literal show it from the other side: `api.add(a, b)` costs 9.6 ns as an ES module
-      and 5.1 ns in CommonJS, because static cell facts reject an object with function
-      values or receiver uses, and only the inlined CommonJS copy sees the literal.
+- [ ] Drop unused `loadCallee` reads, so named function expressions inline. A body
+      like `exports.add = function add(a, b) {...}` keeps a dead read of its callee for
+      its own name, which is neither discardable nor GC-free, and the inliner refuses
+      any body containing one. Marking it both lets a guessed CommonJS export inline:
+      a loop calling two such exports went from 10.2 to 5.2 ns per iteration. It also
+      changes eight unit tests, among them a native GC-root ordering error in
+      `native-property-update-plan` and a lost value kind in `core-record-write-facts`,
+      which need understanding first.
 - [ ] Bound the call targets of methods stored on module-scope objects. In a
       script, `holder.run(value)` with `holder.run` assigned two functions
       dispatches to both through a finite guarded set; as an ES module the same

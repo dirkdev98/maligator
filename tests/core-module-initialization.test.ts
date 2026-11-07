@@ -269,6 +269,33 @@ function createdFunctionNames(program: CoreProgram): ReadonlyArray<string> {
 	);
 }
 
+describe("module functions called once by their module body", () => {
+	it.each([
+		["moves a function that updates a module cell into the body", "", false],
+		["keeps a function another read can still call", "globalThis.tally = tally;", true],
+	] as const)("%s", (_name, exposure, called) => {
+		const calls = inspectOptimized(
+			{
+				"entry.mjs": `
+					const stats = { hits: 0, misses: 0 };
+					function tally(n) {
+						for (let index = 0; index < n; index++)
+							if (index % 3 === 0) stats.misses++;
+							else stats.hits++;
+					}
+					${exposure}
+					tally(Number(globalThis.count ?? 30));
+					globalThis.result = stats.hits - stats.misses;
+				`,
+			},
+			(program) => createdFunctionNames(program).includes("tally"),
+			"locked",
+			"closed",
+		);
+		expect(calls).toBe(called);
+	});
+});
+
 describe("unread module bindings", () => {
 	it.each([
 		["closed", false],

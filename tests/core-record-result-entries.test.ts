@@ -144,6 +144,8 @@ function literalOnly(text, start) {
 	while (end < text.length && text.charCodeAt(end) !== 32) end++;
 	return { start, end };
 }
+// A sole call from the module body would move \`optional\` into it, entry and all.
+globalThis.optional = optional;
 let total = 0;
 for (let index = 0; index < 8; index++) {
 	try {

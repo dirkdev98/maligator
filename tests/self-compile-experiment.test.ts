@@ -312,7 +312,8 @@ it("emits a decodable runtime image alongside C and keeps C-only hashing indepen
 	onTestFinished(() => rmSync(root, { recursive: true, force: true }));
 	const input = path.join(root, "input.mjs"),
 		output = path.join(root, "output");
-	writeFileSync(input, "export function add(a,b){return a+b;}");
+	// Nothing reads a closed program's entry exports, so the function needs a reader.
+	writeFileSync(input, "export function add(a,b){return a+b;} globalThis.add = add;");
 	const run = spawnSync(
 		process.execPath,
 		[path.resolve("bench/self-compile.mts"), input, output],

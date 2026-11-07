@@ -32,3 +32,6 @@ for (const holder of [Object, foreign.Object]) {
 	}
 }
 console.log("own-key-realms 8");
+
+// Each keeps a body of its own once every call inlines it, for its plan.
+Object.assign(globalThis, { names, symbols });

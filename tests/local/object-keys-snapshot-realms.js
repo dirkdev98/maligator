@@ -52,3 +52,6 @@ try {
 	delete other.Array.prototype[17];
 }
 console.log(JSON.stringify(rows));
+
+// Each keeps a body of its own once every call inlines it, for its plan.
+Object.assign(globalThis, { inspect, inspectValues, count });

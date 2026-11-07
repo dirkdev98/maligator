@@ -170,3 +170,6 @@ if (["keys", "values", "entries"].includes(mode)) {
 	rows.push(events);
 } else throw new Error("unknown enumeration mode");
 console.log(JSON.stringify(rows));
+
+// Each keeps a body of its own once every call inlines it, for its plan.
+Object.assign(globalThis, { count, keys, values, entries });

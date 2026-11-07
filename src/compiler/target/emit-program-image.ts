@@ -438,6 +438,12 @@ function malFunctionRow(
 	return [`    MAL_FUNCTION_ROW(${values.join(", ")}),`];
 }
 
+// Trust in root maps never survives serialization, so a function that never runs
+// claims none: a restored image must emit what the compiling process emitted.
+function emissionUnreachable(image: ProgramImage, functionIndex: number): boolean {
+	return image.native.functions[functionIndex]?.unreachable === true;
+}
+
 function safepointRootData(fn: BytecodeFunction): Array<number> {
 	return (fn.gcSafepoints ?? []).flatMap((safepoint) => [
 		safepoint.instructionIp,
@@ -1145,7 +1151,14 @@ function emitNativeFunctions(
 		functionIndex: number,
 		availability: NativeCompilationAvailability,
 	): CompiledFunction | null => {
-		if (!options.useCompiled) return null;
+		// A function the program never creates runs nowhere; its bytecode stays as the fallback.
+		// A closure site still needs every participant's native body to share its scope.
+		if (
+			!options.useCompiled ||
+			(image.native.functions[functionIndex]!.unreachable === true &&
+				closureParticipation[functionIndex] === undefined)
+		)
+			return null;
 		fastTryLookups[functionIndex]?.clear();
 		const emitted = renderFunction(
 			image.native.functions[functionIndex]!,
@@ -1617,7 +1630,10 @@ function emitProgramImageParts(
 	// (generators/async) keep their overlay.
 	const omitBytecode = compiled.map((c) => c !== null);
 	const trustedSafepoints = runtime.functions.map(
-		(fn, index) => !omitBytecode[index] && vmSafepointRootMapsAreTrusted(fn),
+		(fn, index) =>
+			!omitBytecode[index] &&
+			!emissionUnreachable(image, index) &&
+			vmSafepointRootMapsAreTrusted(fn),
 	);
 	const instructionDataByFunction = runtime.functions.map((fn, i) =>
 		omitBytecode[i]
@@ -3037,7 +3053,10 @@ function emitBatchUnits(
 		// need no bytecode tables.
 		const omitBytecode = compiled.map((c) => c !== null);
 		const trustedSafepoints = runtime.functions.map(
-			(fn, index) => !omitBytecode[index] && vmSafepointRootMapsAreTrusted(fn),
+			(fn, index) =>
+				!omitBytecode[index] &&
+				!emissionUnreachable(image, index) &&
+				vmSafepointRootMapsAreTrusted(fn),
 		);
 
 		const instructionSymbols: Array<string> = [];

@@ -1,3 +1,4 @@
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import { coreDirectCreatedFunction } from "./core-ir-call-targets.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreFunctionId, coreInstructionId } from "./core-ir.ts";
@@ -154,16 +155,87 @@ function installedPrototypeOwner(
 export interface CoreInstanceMethodHints {
 	readonly toolchain: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>;
 	readonly application: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>;
+	/** Methods of the one object literal a module or closure cell is ever assigned, by cell. */
+	readonly literalCells: ReadonlyMap<string, ReadonlyMap<number, CoreFunctionId>>;
 }
 
-export function coreInstanceMethodHints(program: CoreProgram): CoreInstanceMethodHints {
+function cellKey(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): string | undefined {
+	const opcode = fn.instructionOpcodeName(instruction);
+	const { index, functionIndex } = fn.instructionAttributes(instruction);
+	if (typeof index !== "number") return undefined;
+	if (opcode === "loadGlobal" || opcode === "storeGlobal") return `global:${index}`;
+	return (opcode === "loadCaptured" || opcode === "storeCaptured") &&
+		typeof functionIndex === "number"
+		? `captured:${functionIndex}:${index}`
+		: undefined;
+}
+
+function movedDefinition(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	seen = new Set<CoreValueId>(),
+): CoreInstructionId | undefined {
+	if (seen.has(value) || fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+	seen.add(value);
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	if (fn.instructionOpcodeName(definition) !== "move") return definition;
+	const input = materializeInstructionOperands(fn, definition)[0];
+	return input === undefined ? undefined : movedDefinition(fn, input, seen);
+}
+
+/** The functions an object literal creates as its own properties, by key. */
+function literalMethods(
+	fn: CoreFunctionStore,
+	literal: CoreInstructionId,
+): ReadonlyMap<number, CoreFunctionId> | undefined {
+	const keys = fn.instructionAttributes(literal).keyStringIndices;
+	if (!Array.isArray(keys)) return undefined;
+	const values = materializeInstructionOperands(fn, literal);
+	const methods = new Map<number, CoreFunctionId>();
+	keys.forEach((key, position) => {
+		const value = values[position];
+		const target = value === undefined ? undefined : coreDirectCreatedFunction(fn, value);
+		if (typeof key === "number" && target !== undefined) methods.set(key, target);
+	});
+	return methods.size === 0 ? undefined : methods;
+}
+
+export function coreInstanceMethodHints(
+	program: CoreProgram,
+	context?: CoreCompilationContext,
+): CoreInstanceMethodHints {
 	const hints = new Map<number, Array<CoreFunctionId>>();
+	// A second assignment leaves the cell without one value to guess from.
+	const stored = new Map<
+		string,
+		{ readonly fn: CoreFunctionStore; readonly definition: CoreInstructionId } | null
+	>();
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode === "storeGlobal" || opcode === "storeCaptured") {
+				const key = cellKey(fn, instruction);
+				const value = materializeInstructionOperands(fn, instruction)[0];
+				const definition = value === undefined ? undefined : movedDefinition(fn, value);
+				if (key === undefined) continue;
+				if (
+					definition !== undefined &&
+					fn.instructionOpcodeName(definition) === "createEmpty"
+				)
+					continue;
+				stored.set(
+					key,
+					stored.has(key) || definition === undefined ? null : { fn, definition },
+				);
+				continue;
+			}
 			if (
-				fn.instructionKind(instruction) !== "operation" ||
-				fn.instructionOpcodeName(instruction) !== "defineProperty" ||
+				opcode !== "defineProperty" ||
 				fn.instructionAttributes(instruction).enumerable !== false
 			) {
 				continue;
@@ -189,7 +261,147 @@ export function coreInstanceMethodHints(program: CoreProgram): CoreInstanceMetho
 		);
 		if (owned.length > 0) application.set(stringIndex, owned);
 	}
-	return { toolchain: hints, application };
+	const exports = new Map<number, ReadonlyMap<number, CoreFunctionId> | undefined>();
+	const moduleExports = (id: number) => {
+		if (!exports.has(id)) {
+			const wrapper = context?.data.cjsModuleFunctionIndices[id];
+			exports.set(
+				id,
+				wrapper === undefined || !program.hasFunction(coreFunctionId(wrapper))
+					? undefined
+					: commonJsExportMethods(program, program.function(coreFunctionId(wrapper))),
+			);
+		}
+		return exports.get(id);
+	};
+	// A cell holds one literal, or a CommonJS module's exports either directly or
+	// through the slot the program entry stores an eager `require` in.
+	const cellMethods = (
+		key: string,
+		hops: number,
+	): ReadonlyMap<number, CoreFunctionId> | undefined => {
+		const value = stored.get(key);
+		if (value === undefined || value === null) return undefined;
+		const { fn, definition } = value;
+		const opcode = fn.instructionOpcodeName(definition);
+		if (opcode === "createObjectShaped") return literalMethods(fn, definition);
+		const required = commonJsRequiredModule(fn, definition);
+		if (required !== undefined) return moduleExports(required);
+		const source =
+			opcode === "loadGlobal" || opcode === "loadCaptured"
+				? cellKey(fn, definition)
+				: undefined;
+		return source === undefined || hops === 0 ? undefined : cellMethods(source, hops - 1);
+	};
+	const literalCells = new Map<string, ReadonlyMap<number, CoreFunctionId>>();
+	for (const key of stored.keys()) {
+		const methods = cellMethods(key, 1);
+		if (methods !== undefined) literalCells.set(key, methods);
+	}
+	return { toolchain: hints, application, literalCells };
+}
+
+/** The module a `require` lowered to `__cjs_require(id)` evaluates. */
+function commonJsRequiredModule(
+	fn: CoreFunctionStore,
+	call: CoreInstructionId,
+): number | undefined {
+	if (fn.instructionOpcodeName(call) !== "call") return undefined;
+	const [callee, , id] = materializeInstructionOperands(fn, call);
+	const intrinsic = callee === undefined ? undefined : movedDefinition(fn, callee);
+	const constant = id === undefined ? undefined : movedDefinition(fn, id);
+	if (
+		intrinsic === undefined ||
+		constant === undefined ||
+		fn.instructionOpcodeName(intrinsic) !== "loadIntrinsic" ||
+		fn.instructionAttributes(intrinsic).intrinsic !== "__cjs_require" ||
+		fn.instructionOpcodeName(constant) !== "createNumber"
+	)
+		return undefined;
+	const value = fn.instructionAttributes(constant).value;
+	return typeof value === "number" ? value : undefined;
+}
+
+/**
+ * Functions a CommonJS module wrapper stores on its `exports` object, or puts in the
+ * literal it assigns to `module.exports`, by key. The wrapper receives `module` and
+ * `exports` as its first two parameters.
+ */
+function commonJsExportMethods(
+	program: CoreProgram,
+	wrapper: CoreFunctionStore,
+): ReadonlyMap<number, CoreFunctionId> | undefined {
+	if (wrapper.parameterCount < 2) return undefined;
+	const module = wrapper.kernel.functionParameter(0);
+	const exportsObject = wrapper.kernel.functionParameter(1);
+	const cells = new Map<string, CoreValueId>();
+	const created = new Map<string, CoreFunctionId>();
+	for (const instruction of wrapper.instructionIds()) {
+		if (
+			wrapper.instructionKind(instruction) !== "operation" ||
+			wrapper.instructionOpcodeName(instruction) !== "storeCaptured"
+		)
+			continue;
+		const key = cellKey(wrapper, instruction);
+		const value = materializeInstructionOperands(wrapper, instruction)[0];
+		if (key === undefined || value === undefined) continue;
+		const root = canonicalMoveRoot(wrapper, value);
+		if (root === module || root === exportsObject) cells.set(key, root);
+		const target = coreDirectCreatedFunction(wrapper, value);
+		if (target !== undefined) created.set(key, target);
+	}
+	const rootOf = (value: CoreValueId): CoreValueId | undefined => {
+		const root = canonicalMoveRoot(wrapper, value);
+		if (root === module || root === exportsObject) return root;
+		const definition = movedDefinition(wrapper, value);
+		if (definition === undefined) return undefined;
+		const opcode = wrapper.instructionOpcodeName(definition);
+		if (opcode === "loadCaptured") return cells.get(cellKey(wrapper, definition) ?? "");
+		if (opcode !== "loadPropertyStatic") return undefined;
+		const [receiver] = materializeInstructionOperands(wrapper, definition);
+		const stringIndex = wrapper.instructionAttributes(definition).stringIndex;
+		return receiver !== undefined &&
+			rootOf(receiver) === module &&
+			typeof stringIndex === "number" &&
+			stringConstantEquals(program, stringIndex, "exports")
+			? exportsObject
+			: undefined;
+	};
+	const methods = new Map<number, CoreFunctionId>();
+	for (const instruction of wrapper.instructionIds()) {
+		if (
+			wrapper.instructionKind(instruction) !== "operation" ||
+			wrapper.instructionOpcodeName(instruction) !== "storePropertyStatic"
+		)
+			continue;
+		const [receiver, value] = materializeInstructionOperands(wrapper, instruction);
+		const stringIndex = wrapper.instructionAttributes(instruction).stringIndex;
+		if (receiver === undefined || value === undefined || typeof stringIndex !== "number")
+			continue;
+		const owner = rootOf(receiver);
+		if (owner === exportsObject) {
+			const definition = movedDefinition(wrapper, value);
+			const target =
+				coreDirectCreatedFunction(wrapper, value) ??
+				(definition !== undefined &&
+				wrapper.instructionOpcodeName(definition) === "loadCaptured"
+					? created.get(cellKey(wrapper, definition) ?? "")
+					: undefined);
+			if (target !== undefined) methods.set(stringIndex, target);
+		} else if (
+			owner === module &&
+			stringConstantEquals(program, stringIndex, "exports")
+		) {
+			const literal = movedDefinition(wrapper, value);
+			if (
+				literal !== undefined &&
+				wrapper.instructionOpcodeName(literal) === "createObjectShaped"
+			)
+				for (const [key, target] of literalMethods(wrapper, literal) ?? [])
+					methods.set(key, target);
+		}
+	}
+	return methods.size === 0 ? undefined : methods;
 }
 
 export interface CoreAccessorHints {
@@ -337,6 +549,13 @@ export function coreInstanceMethodTargets(
 	) {
 		return undefined;
 	}
+	// A receiver read from a cell that only ever holds one literal names that literal's method.
+	const cell = movedDefinition(fn, load.receiver);
+	const cellMethod =
+		cell === undefined
+			? undefined
+			: hints.literalCells.get(cellKey(fn, cell) ?? "")?.get(load.stringIndex);
+	if (cellMethod !== undefined) return [cellMethod];
 	const targets = (
 		fn.metadata.toolchain === true ? hints.toolchain : hints.application
 	).get(load.stringIndex);

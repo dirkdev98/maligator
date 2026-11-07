@@ -23,6 +23,8 @@ function count(record, observe) {
 	observe(record);
 	return values.length;
 }
+// Keeps a body of its own once every call inlines it, for its length-only snapshot.
+globalThis.countValues = count;
 function traverse(record, observe) {
 	const values = Object.values(record);
 	let text = "";

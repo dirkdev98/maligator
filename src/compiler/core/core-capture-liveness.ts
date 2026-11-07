@@ -15,6 +15,8 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import {
+	coreEvaluatorGlobalWrites,
+	coreEvaluatorPrivateSlotMap,
 	coreUnreadModuleBindingSlots,
 	coreUnreadModuleBindingStores,
 } from "./core-module-globals.ts";
@@ -86,10 +88,7 @@ function forwardOwnCapturedLoads(
 	foreignWrites: ReadonlySet<string>,
 	edit: () => CoreEditor,
 ): void {
-	const slots = new Map<
-		number,
-		{ loads: Array<CoreInstructionId>; stores: Array<CoreInstructionId> }
-	>();
+	const slots = new Map<number, CellAccesses>();
 	for (const instruction of fn.instructionIds()) {
 		const header = fn.instructionHeader(instruction);
 		if (typeof header === "string") continue;
@@ -109,9 +108,58 @@ function forwardOwnCapturedLoads(
 		}
 		(opcode === "loadCaptured" ? slot.loads : slot.stores).push(instruction);
 	}
-	for (const [index, slot] of slots)
-		if (slot.loads.length === 0 || slot.stores.length === 0) slots.delete(index);
-	if (slots.size === 0) return;
+	forwardCellLoads(program, fn, slots.values(), edit);
+}
+
+/**
+ * Read a module evaluator's private lexical cells as SSA values. Only the evaluator
+ * assigns them, and instantiation's dead-zone resets finish before it starts, so a
+ * call cannot change them between the evaluator's own stores and loads.
+ */
+function forwardEvaluatorGlobalLoads(
+	program: CoreProgram,
+	context: CoreCompilationContext,
+	fn: CoreFunctionStore,
+	privateSlots: ReadonlyMap<CoreFunctionId, ReadonlySet<number>>,
+	edit: () => CoreEditor,
+): void {
+	if (!privateSlots.has(fn.id)) return;
+	const cells = coreEvaluatorGlobalWrites(program, context, fn, privateSlots);
+	if (cells.size === 0) return;
+	const accesses = new Map<number, CellAccesses>();
+	for (const instruction of fn.instructionIds()) {
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
+		if (opcode !== "loadGlobal" && opcode !== "storeGlobal") continue;
+		const { index } = fn.instructionAttributes(instruction);
+		if (typeof index !== "number" || !cells.has(index)) continue;
+		let cell = accesses.get(index);
+		if (cell === undefined) {
+			cell = { loads: [], stores: [] };
+			accesses.set(index, cell);
+		}
+		(opcode === "loadGlobal" ? cell.loads : cell.stores).push(instruction);
+	}
+	forwardCellLoads(program, fn, accesses.values(), edit);
+}
+
+interface CellAccesses {
+	readonly loads: Array<CoreInstructionId>;
+	readonly stores: Array<CoreInstructionId>;
+}
+
+/** Replace loads of cells only `fn` writes with the values its own stores leave. */
+function forwardCellLoads(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	accesses: Iterable<CellAccesses>,
+	edit: () => CoreEditor,
+): void {
+	const cells = [...accesses].filter(
+		(cell) => cell.loads.length > 0 && cell.stores.length > 0,
+	);
+	if (cells.length === 0) return;
 	const control = buildCoreControlFlow(program, fn.id);
 	const definition = (value: CoreValueId): string | undefined =>
 		fn.kernel.valueDefinitionKind(value) === 1
@@ -119,7 +167,7 @@ function forwardOwnCapturedLoads(
 			: undefined;
 	const stored = (store: CoreInstructionId): CoreValueId =>
 		fn.kernel.operandAt(fn.kernel.instructionOperandStart(store));
-	for (const { loads, stores } of slots.values()) {
+	for (const { loads, stores } of cells) {
 		const storeSet = new Set(stores);
 		const lastStore = new Map<CoreBlockId, CoreValueId>();
 		for (const block of control.reversePostorder) {
@@ -367,14 +415,17 @@ function scanCapturedSlots(
 
 function forwardAllOwnCapturedLoads(
 	program: CoreProgram,
+	context: CoreCompilationContext,
 	functions: ReadonlyArray<CoreFunctionId>,
 	foreignWrites: ReadonlySet<string>,
+	privateSlots: ReadonlyMap<CoreFunctionId, ReadonlySet<number>>,
 	edit: (id: CoreFunctionId) => CoreEditor,
 ): void {
 	for (const id of functions) {
 		const fn = program.function(id);
-		if (!fn.isAsync && !fn.isGenerator)
-			forwardOwnCapturedLoads(program, fn, foreignWrites, () => edit(id));
+		if (fn.isAsync || fn.isGenerator) continue;
+		forwardOwnCapturedLoads(program, fn, foreignWrites, () => edit(id));
+		forwardEvaluatorGlobalLoads(program, context, fn, privateSlots, () => edit(id));
 	}
 }
 
@@ -391,14 +442,22 @@ export function forwardCoreOwnCapturedLoads(
 	const uses = scanCapturedSlots(program, functions);
 	if (uses === undefined) return 0;
 	const editors = new Map<CoreFunctionId, CoreEditor>();
-	forwardAllOwnCapturedLoads(program, functions, uses.foreignWrites, (id) => {
-		let editor = editors.get(id);
-		if (editor === undefined) {
-			editor = CoreEditor.open(program, id);
-			editors.set(id, editor);
-		}
-		return editor;
-	});
+	const privateSlots = coreEvaluatorPrivateSlotMap(program, context);
+	forwardAllOwnCapturedLoads(
+		program,
+		context,
+		functions,
+		uses.foreignWrites,
+		privateSlots,
+		(id) => {
+			let editor = editors.get(id);
+			if (editor === undefined) {
+				editor = CoreEditor.open(program, id);
+				editors.set(id, editor);
+			}
+			return editor;
+		},
+	);
 	for (const editor of editors.values()) editor.commit();
 	return editors.size;
 }
@@ -421,6 +480,8 @@ export function pruneCoreCaptureLiveness(
 	// Guards and inline source frames reference code without instantiating its identity.
 	const roots = new Set(context.data.cjsModuleFunctionIndices.map(coreFunctionId));
 	const functions = [...program.functionIds()];
+	// Decided before any editor opens; rounds only drop stores, which adds no writer.
+	const privateSlots = coreEvaluatorPrivateSlotMap(program, context);
 	const entry = functions[0];
 	if (entry !== undefined) roots.add(entry);
 	for (const installer of context.data.hostInstallCandidates) {
@@ -459,7 +520,14 @@ export function pruneCoreCaptureLiveness(
 		const live = functions.filter((id) => instantiable.has(id));
 		const uses = scanCapturedSlots(program, live);
 		if (uses === undefined) break;
-		forwardAllOwnCapturedLoads(program, live, uses.foreignWrites, edit);
+		forwardAllOwnCapturedLoads(
+			program,
+			context,
+			live,
+			uses.foreignWrites,
+			privateSlots,
+			edit,
+		);
 		const readers = new Set(uses.implicitReads);
 		for (const id of live) {
 			const fn = program.function(id);
@@ -506,6 +574,24 @@ export function pruneCoreCaptureLiveness(
 		if (!released) break;
 	}
 	return [...editors.values()].map((editor) => editor.commit());
+}
+
+/**
+ * Functions a closed program can run: the entry, CommonJS module wrappers and every
+ * function their code can create. Calling a function needs its identity, so a body
+ * nothing creates never runs, even while it stays an inlining or guard source.
+ */
+export function coreInstantiableFunctions(
+	program: CoreProgram,
+	context: CoreCompilationContext,
+): ReadonlySet<CoreFunctionId> | undefined {
+	if (context.facts.closure.sourceClosure.kind !== "known") return undefined;
+	const roots = new Set(context.data.cjsModuleFunctionIndices.map(coreFunctionId));
+	for (const entry of program.functionIds()) {
+		roots.add(entry);
+		break;
+	}
+	return instantiableFunctions(program, roots);
 }
 
 // Functions some running code can create; a body nothing creates never runs, even

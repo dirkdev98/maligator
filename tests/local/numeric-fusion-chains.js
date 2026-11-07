@@ -205,3 +205,21 @@ for (const [left, right, other] of fusionInputs)
 	outputs.push(captureFusion(() => primitiveFusionPartial(left, right, other, ":")));
 outputs.push(events.join(","));
 console.log(outputs.map(show).join(" "));
+
+// Each keeps a body of its own once every call inlines it, for its plan.
+Object.assign(globalThis, {
+	sum,
+	mixed,
+	primitiveFusionStart,
+	primitiveFusionFinish,
+	primitiveFusionLink,
+	primitiveFusionStringStart,
+	primitiveFusionStringLink,
+	primitiveFusionStringFinish,
+	primitiveFusionStringCompare,
+	primitiveFusionReverseCompare,
+	primitiveFusionStrict,
+	primitiveFusionLoose,
+	primitiveFusionManaged,
+	primitiveFusionPartial,
+});
