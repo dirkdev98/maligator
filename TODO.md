@@ -1377,15 +1377,6 @@ contracts or investigates costs still visible after the string follow-ups.
       literal show it from the other side: `api.add(a, b)` costs 9.6 ns as an ES module
       and 5.1 ns in CommonJS, because static cell facts reject an object with function
       values or receiver uses, and only the inlined CommonJS copy sees the literal.
-- [ ] Forward a module evaluator's loads of a cell it alone assigns once. app-batch
-      hashes its serialized output in a module-level loop over `let serialized`
-      at 9.6 ns per character against Node's 1.7; the same loop in a function runs at
-      1.4, because there `index < serialized.length` and `serialized.charCodeAt(index)`
-      read one value and the call gets the in-bounds `charCodeAt`. At module level
-      each read is its own `loadGlobal`. `coreEvaluatorGlobalWrites` already proves the
-      cell private and finds its single dominating store, which value kinds use; the
-      loads could take that store's value. The loop is about half of app-batch's gap
-      to Node.
 - [ ] Bound the call targets of methods stored on module-scope objects. In a
       script, `holder.run(value)` with `holder.run` assigned two functions
       dispatches to both through a finite guarded set; as an ES module the same
