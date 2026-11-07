@@ -220,10 +220,17 @@ export function expandCoreArrayIterationCall(
 	}).outputs[0]!;
 	const zero = append(fast, "createNumber", [], { value: 0 }).outputs[0]!;
 	const one = append(fast, "createNumber", [], { value: 1 }).outputs[0]!;
+	// With the default species, map's ArraySpeciesCreate(O, len) is ArrayCreate(len): the
+	// result has its final length before the first define, and the runtime reserves it.
 	const created =
-		name === "map" || filter
-			? append(fast, "createArray", [], { length: 0 }).outputs[0]!
-			: undefined;
+		name === "map"
+			? append(fast, "construct", [
+					append(fast, "loadIntrinsic", [], { intrinsic: "Array" }).outputs[0]!,
+					length,
+				]).outputs[0]!
+			: filter
+				? append(fast, "createArray", [], { length: 0 }).outputs[0]!
+				: undefined;
 	if (reduce) instructionsIntroduced++;
 	// The accumulator also carries boxed callback results, so an unboxed seed boxes first.
 	const seed = reduce
@@ -324,12 +331,6 @@ export function expandCoreArrayIterationCall(
 			jump(normalExit, join, [undefinedValue]);
 			break;
 		case "map":
-			// Trailing holes leave the defines short of ArraySpeciesCreate's length.
-			append(normalExit, "storePropertyStatic", [created!, length], {
-				stringIndex: lengthKey,
-			});
-			jump(normalExit, join, [created!]);
-			break;
 		case "filter":
 			jump(normalExit, join, [created!]);
 			break;
