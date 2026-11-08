@@ -2492,13 +2492,15 @@ function emitNumericLoopRegion(
 			case "CALL_KNOWN":
 			case "MATH_UNARY_NUMBER":
 			case "MATH_BINARY_NUMBER": {
-				const builtin = floating ? nativeNumericBuiltinInstruction(op) : undefined;
+				const builtin = nativeNumericBuiltinInstruction(op);
 				if (builtin === undefined) throw new Error("Invalid numeric loop builtin");
-				if (integral.has(op.dst)) {
+				if (!floating || integral.has(op.dst)) {
 					const [first, second] = builtin.arguments.map((argument) =>
 						argument.kind === "number"
 							? `(i32) ${argument.value | 0}`
-							: intOf(argument.register, ip),
+							: floating
+								? intOf(argument.register, ip)
+								: int32(argument.register),
 					);
 					return builtin.operation === "Math.imul"
 						? `${local(op.dst)} = (i64) (i32) ((u32) ${first} * (u32) ${second});`

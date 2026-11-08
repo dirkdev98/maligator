@@ -99,6 +99,19 @@ function hashRange(count) {
 	return hash;
 }
 
+function multiplyState(start, multiplier, limit) {
+	let value = start;
+	for (let index = 0; index < limit; index++)
+		value = (Math.imul(value, multiplier) + 1013904223) | 0;
+	return value;
+}
+
+function leadingZeroState(start, limit) {
+	let value = start;
+	for (let index = 0; index < limit; index++) value = Math.clz32(value);
+	return value;
+}
+
 function smallestFactor(value) {
 	for (let divisor = 2; divisor * divisor <= value; divisor++)
 		if (value % divisor === 0) return divisor;
@@ -207,6 +220,85 @@ function reference(name, values) {
 
 check(reference("collatz", [1, 27, 3, 77031].map(collatzSteps)), "collatz");
 check(reference("hash", [0, 1000, 77777].map(hashRange)), "hash");
+const intrinsicCases = [
+	[0, -1426500812, 27],
+	[-0, -1426500812, 27],
+	[1, -1267516731, 27],
+	[-1, -1585484893, 26],
+	[1.5, -1267516731, 27],
+	[NaN, -1426500812, 27],
+	[Infinity, -1426500812, 27],
+	[-Infinity, -1426500812, 27],
+	[2147483648, 720982836, 26],
+	[4294967295, -1585484893, 26],
+	[Number.MAX_SAFE_INTEGER, -1585484893, 26],
+	[-Number.MAX_SAFE_INTEGER, -1267516731, 27],
+	[2 ** 53, -1426500812, 27],
+	["3", -949548569, 27],
+	[null, -1426500812, 27],
+	[undefined, -1426500812, 27],
+];
+for (const [seed, product, zeros] of intrinsicCases) {
+	check(multiplyState(seed, 1664525, 4) === product, "integer multiply recurrence");
+	check(leadingZeroState(seed, 3) === zeros, "leading zero recurrence");
+}
+for (const seed of [
+	...intrinsicCases.map(([seed]) => seed),
+	{ marker: "unobserved seed" },
+	1n,
+	Symbol("seed"),
+]) {
+	check(Object.is(multiplyState(seed, 3, 0), seed), "multiply zero-trip identity");
+	check(Object.is(leadingZeroState(seed, 0), seed), "leading zero zero-trip identity");
+}
+let multiplierCoercions = 0;
+check(
+	multiplyState(
+		2,
+		{
+			valueOf() {
+				multiplierCoercions++;
+				return 3;
+			},
+		},
+		3,
+	) === 295853065 && multiplierCoercions === 3,
+	"multiply coerces its multiplier on every fallback iteration",
+);
+let seedCoercions = 0;
+check(
+	leadingZeroState(
+		{
+			valueOf() {
+				seedCoercions++;
+				return 1;
+			},
+		},
+		3,
+	) === 27 && seedCoercions === 1,
+	"leading zero coerces its initial seed once",
+);
+const intrinsicFailure = { marker: "intrinsic failure" };
+let throwingCoercions = 0;
+try {
+	multiplyState(
+		2,
+		{
+			valueOf() {
+				if (++throwingCoercions === 2) throw intrinsicFailure;
+				return 3;
+			},
+		},
+		3,
+	);
+	check(false, "multiply coercion must throw");
+} catch (error) {
+	check(
+		error === intrinsicFailure && throwingCoercions === 2,
+		"multiply abrupt coercion",
+	);
+}
+check(multiplyState(7, 1664525, 100000) === -517394777, "polled multiply recurrence");
 check(
 	reference("factor", [97, 2187, 7919 * 7919, 1 << 20].map(smallestFactor)),
 	"factor",

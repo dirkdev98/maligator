@@ -700,11 +700,6 @@ bounded and consumer-driven as planned below.
       marking are now young and reclaimed at remark, so a long cycle costs memory
       held until then rather than promoted garbage; find what bounds progress per
       step.
-- [ ] Speculate int32 loop state that enters as a double. A direct entry with a
-      Number parameter keeps `seed = (Math.imul(seed, a) + b) | 0` in a double
-      phi, so every iteration converts to int32 and back: `serial-compute` runs
-      995 ms against Node's 204. Versioning the loop on an int32 entry value would
-      keep the chain in integers; a boxed seed already decodes int-first.
 - [ ] Keep int32 elements integral in dense-array loop regions. The region types
       every element as a double, so `(sum + values[i]) | 0` over small integers
       costs 5 ns per element against Node's 0.5. Restarting into the generic loop

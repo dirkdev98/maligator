@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -13,13 +15,18 @@ import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 
-function compile(body: string, profile = false) {
+function compile(body: string, profile = false, locked = false) {
 	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			`globalThis.step = function step(start, limit) { ${body} };`,
 			"/integer-loop-plan.js",
 		),
-		{ profile },
+		{
+			profile,
+			...(locked
+				? { facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) }
+				: {}),
+		},
 	);
 }
 
@@ -38,6 +45,23 @@ function regions(image: ProgramImage): ReadonlyArray<NativeNumericLoopRegionPlan
 }
 
 describe("native safe-integer loop regions", () => {
+	it.each(["Math.imul(value, 1664525)", "Math.clz32(value)"])(
+		"keeps the integer builtin recurrence %s in a region",
+		(expression) => {
+			const image = compile(
+				`
+				let value = start;
+				for (let index = 0; index < limit; index++) value = ${expression};
+				return value;
+			`,
+				false,
+				true,
+			);
+			expect(regions(image).map((region) => region.kind)).toEqual(["integer"]);
+			expect(() => serializeCompilerArtifact(image)).not.toThrow();
+		},
+	);
+
 	it.each([false, true])(
 		"preserves contained fusion admission and profile boundaries with profiling %s",
 		(profile) => {

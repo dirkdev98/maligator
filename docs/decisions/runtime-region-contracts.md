@@ -123,6 +123,11 @@ store. Collecting initializers retain the owner as an ordinary rooted value and
 use per-store barriers; no backing pointer survives their calls. A handler that
 could observe partially changed Array length prevents that admission.
 
+Safe-integer regions also retain certified `Math.imul` and `Math.clz32` calls in
+integer locals. Entry guards reject non-integer inputs and negative zero before
+the original loop performs any coercion. Integer arithmetic failure restores the
+iteration's starting values, while polling publishes completed iterations.
+
 DataView accessor calls join fixed storage regions as byte views. Admission uses the
 conditions that make `byteLength` the intrinsic getter: the watched-prototype
 protector, the intrinsic prototype, an empty own layout, and a fixed view over an

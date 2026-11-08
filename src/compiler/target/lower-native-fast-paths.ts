@@ -1693,6 +1693,12 @@ function integerLoopInstruction(instruction: BytecodeInstruction): boolean {
 			);
 		case "UNARY":
 			return NUMBER_RECORD_UNARY_OPERATORS.has(instruction.operator);
+		case "CALL_KNOWN":
+		case "MATH_UNARY_NUMBER":
+		case "MATH_BINARY_NUMBER": {
+			const operation = nativeNumericBuiltinInstruction(instruction)?.operation;
+			return operation === "Math.imul" || operation === "Math.clz32";
+		}
 		default:
 			return false;
 	}
@@ -3279,8 +3285,9 @@ function lowerNumericLoopRegion(
 			!shape.order.some((ip) => {
 				const instruction = fn.instructions[ip]!;
 				return (
-					instruction.opcode === "BINARY" &&
-					INTEGER_LOOP_PROFITABLE_OPERATORS.has(instruction.operator)
+					(instruction.opcode === "BINARY" &&
+						INTEGER_LOOP_PROFITABLE_OPERATORS.has(instruction.operator)) ||
+					nativeNumericBuiltinInstruction(instruction) !== undefined
 				);
 			}))
 	)
