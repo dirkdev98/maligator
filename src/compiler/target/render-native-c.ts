@@ -3889,7 +3889,7 @@ function emitCompiledVariant(
 				0,
 			),
 		});
-		nextStackSlot += loads.length + 1;
+		if (loads.length > 0) nextStackSlot += loads.length + 1;
 	}
 	const regexpIteratorProjectionSites = new Map<
 		number,
@@ -7039,8 +7039,10 @@ function analyzeNativeRegionTopology(
 				(left, right) => left.captureIndex - right.captureIndex,
 			);
 			if (
-				loads.length === 0 ||
 				loads.length > 8 ||
+				projection.anchors.length !== (loads.length === 0 ? 1 : 2) ||
+				projection.anchors[0] !== projection.callIp ||
+				projection.anchors[1] !== projection.loads[0]?.ip ||
 				seenExecCalls.has(projection.callIp) ||
 				loads.some(
 					(load, index) =>
@@ -7938,9 +7940,12 @@ function emitBody(
 		);
 	}
 	for (const site of regexpExecProjectionSites.values()) {
+		if (site.loads.length === 0) continue;
 		lines.push(
 			`bool __regexp_exec_${site.projection.callIp}_fast = false;`,
 			`bool __regexp_exec_${site.projection.callIp}_projected = false;`,
+		);
+		lines.push(
 			`i32 __regexp_exec_${site.projection.callIp}_starts[${site.loads.length}];`,
 			`i32 __regexp_exec_${site.projection.callIp}_ends[${site.loads.length}];`,
 		);
@@ -12672,6 +12677,14 @@ class NativeInstructionEmission {
 			if (this.context.nativeRegExpExecProjectionAction?.role === "call") {
 				const { site } = this.context.nativeRegExpExecProjectionAction;
 				const projection = site.projection;
+				if (site.loads.length === 0) {
+					const callee = `mal_vm_load_primordial(vm, ${knownOperations()[knownOperationIndex(instruction.operation)!]!.node})`;
+					return [
+						`r${instruction.dst} = ${this.profileCall("regexp", `mal_regexp_exec_result_projection(vm, ${callee}, ${this.boxedOperand(instruction.thisValue)}, ${this.boxedOperand(instruction.arguments[0]!)})`)};`,
+						this.throwCheck(),
+						this.callPoll(),
+					];
+				}
 				const indices = site.loads.map((load) => load.captureIndex).join(", ");
 				const outputs = site.loads
 					.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
@@ -13335,6 +13348,17 @@ class NativeInstructionEmission {
 		if (this.context.nativeRegExpExecProjectionAction?.role === "call") {
 			const { site, propertyLoad } = this.context.nativeRegExpExecProjectionAction;
 			const projection = site.projection;
+			if (site.loads.length === 0) {
+				const callee =
+					propertyLoad === undefined
+						? this.boxedOperand(instruction.callee)
+						: `mal_vm_load_primordial(vm, ${knownOperations()[knownOperationIndex("RegExp.prototype.exec")!]!.node})`;
+				return [
+					`r${instruction.dst} = ${this.profileCall("regexp", `mal_regexp_exec_result_projection(vm, ${callee}, ${this.boxedOperand(instruction.thisValue)}, ${this.boxedOperand(instruction.arguments[0]!)})`)};`,
+					this.throwCheck(),
+					this.callPoll(),
+				];
+			}
 			const fast = `__regexp_exec_${projection.callIp}_fast`;
 			const indices = site.loads.map((load) => load.captureIndex).join(", ");
 			const outputs = site.loads

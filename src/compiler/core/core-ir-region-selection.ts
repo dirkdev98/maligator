@@ -571,12 +571,14 @@ function pendingLocalCandidate(
 		closes === undefined
 			? instructions
 			: instructions.filter((instruction) => !closes.includes(instruction));
+	const fusedExecResult =
+		candidate.kind === "regexp-exec-projection" && candidate.loads.length === 0;
 	const cost = costModel.forRegion(costed, {
-		genericTwins: 1,
+		genericTwins: fusedExecResult ? 0 : 1,
 		...(candidate.kind === "stack-object" ||
 		candidate.kind === "string-split-projection" ||
 		candidate.kind === "string-split-cursor" ||
-		candidate.kind === "regexp-exec-projection" ||
+		(candidate.kind === "regexp-exec-projection" && !fusedExecResult) ||
 		candidate.kind === "regexp-iterator-projection" ||
 		candidate.kind === "iterator-result-virtualization" ||
 		candidate.kind === "iterator-entry-pair-virtualization"
@@ -631,7 +633,12 @@ function pendingLocalCandidate(
 													candidate.consumers[0]!.instruction,
 												])
 											: candidate.kind === "regexp-exec-projection"
-												? Object.freeze([candidate.call, candidate.loads[0]!.instruction])
+												? Object.freeze([
+														candidate.call,
+														...candidate.loads
+															.slice(0, 1)
+															.map((load) => load.instruction),
+													])
 												: candidate.kind === "regexp-iterator-projection"
 													? Object.freeze([
 															candidate.step,
@@ -1087,7 +1094,9 @@ function pendingLocalCandidate(
 			),
 			generatedCodeCost: cost.estimatedCStatements,
 			compilerWorkCost: cost.compileScore,
+			// Empty exec projections keep their fallback inside one runtime call.
 			expansive:
+				!fusedExecResult &&
 				candidate.kind !== "builtin-collection-call-chain" &&
 				candidate.kind !== "string-char-code-at-chain" &&
 				candidate.kind !== "iterator-entry-pair-virtualization",

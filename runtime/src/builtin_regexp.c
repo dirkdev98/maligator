@@ -3814,4 +3814,41 @@ int mal_regexp_try_exact_iterator_step(
 
 #endif // MAL_REGEXP
 
+MalValue mal_regexp_exec_result_projection(
+    MalVm *vm, MalValue callee, MalValue regexp, MalValue string
+) {
+    MalValue args[1] = {string};
+#if MAL_REGEXP
+    // The captured exec only observes the RegExp brand and lastIndex; unrelated
+    // prototype mutations do not change its authority or matching algorithm.
+    if (mal_value_is_native_function_object(callee) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) == regexp_proto_exec &&
+        mal_value_is_regexp_object(regexp)
+#if MAL_REALMS
+        && mal_vm_callee_realm(vm, callee) == vm->current_realm
+#endif
+    ) {
+        MalCalleeRoots roots;
+        mal_gc_callee_roots_begin(
+            &roots, regexp, mal_value_new_undefined(), callee, args, 1);
+        vm->gc_native_frames++;
+        MalValue result = mal_value_new_undefined();
+        MalString *subject;
+        if (mal_vm_to_string(vm, args[0], &subject)) {
+            args[0] = mal_value_from_string(subject);
+            result = regexp_builtin_exec(
+                vm, mal_value_to_regexp_object(regexp), regexp, subject,
+                REGEXP_BUILTIN_EXEC_MATCH_ONLY, false, nullptr);
+            if (!regexp_threw(vm) && mal_value_is_boolean(result)) {
+                MAL_PERF_COUNT(regexp_exec_result_elisions);
+            }
+        }
+        vm->gc_native_frames--;
+        mal_gc_callee_roots_end(&roots);
+        return result;
+    }
+#endif
+    return mal_vm_call_cached_value(vm, callee, regexp, args, 1);
+}
+
 #include "generated/known_native_builtin_regexp_c.inc"

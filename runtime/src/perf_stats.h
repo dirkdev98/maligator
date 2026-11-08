@@ -209,6 +209,7 @@ typedef struct MalPerfStats {
     u64 regexp_utf16_cache_hits;
     u64 regexp_utf16_cache_fills;
     u64 regexp_latin1_exec_calls;
+    u64 regexp_exec_result_elisions;
 
     u64 intrinsic_ascii_calls;
     u64 intrinsic_ascii_bytes;

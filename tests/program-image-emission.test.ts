@@ -485,6 +485,36 @@ describe("emit-program-image instruction packing", () => {
 		).toBe(0);
 	});
 
+	it.each([
+		["function", 2],
+		["function*", 0],
+		["async function", 0],
+	] as const)("reserves ordinary constructor capacity for %s", (kind, reserve) => {
+		const source = `${kind} Pair(left, right) {
+			this.left = left;
+			this.right = right;
+			this.left = left;
+		}
+		globalThis.Pair = Pair;`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"ordinary-constructor-capacity.js",
+			parseScript(source, { strict: false }),
+		);
+		const image = compileSemanticProgramToProgramImage(semantic);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		for (const current of [image, restored]) {
+			const constructor = current.runtime.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(current.runtime.stringConstants[fn.nameStringIndex] ?? []),
+					) === "Pair",
+			);
+			expect(constructor).toBeDefined();
+			expect(constructor!.constructorSlotReserve).toBe(reserve);
+		}
+	});
+
 	it("combines semantic dependencies with one retained region twin", () => {
 		const license = vmRegionLicense(
 			[
@@ -4585,6 +4615,54 @@ describe("native update-expression representation", () => {
 			/Invalid Core string-split projection/,
 		);
 	});
+
+	it.each(["mutable", "locked"] as const)(
+		"retains RegExp.exec calls without observed captures under %s primordials",
+		(primordials) => {
+			const source = `
+				globalThis.discard = function(regexp, value) { regexp.exec(value); };
+				globalThis.literal = function(value) { /(a)/.exec(value); };
+				globalThis.matched = function(regexp, value) { return regexp.exec(value) !== null; };
+				globalThis.escape = function(regexp, value) { return regexp.exec(value); };
+			`;
+			const semantic = analyzeSourceAndRunSemanticAnalysis(
+				source,
+				"regexp-discarded-result.js",
+				parseScript(source, { strict: false }),
+			);
+			const lowered = compileSemanticProgramToProgramImage(semantic, {
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { primordials } }),
+				),
+			});
+			const projections = specializations(lowered).filter(
+				(region) => region.kind === "regexp-exec-projection",
+			);
+			expect(projections).toHaveLength(3);
+			for (const projection of projections) {
+				expect(projection.loads).toEqual([]);
+				expect(projection.anchors).toEqual([projection.callIp]);
+			}
+			const cached = deserializeCompilerArtifact(serializeCompilerArtifact(lowered));
+			expect(
+				specializations(cached).filter(
+					(region) => region.kind === "regexp-exec-projection",
+				),
+			).toEqual(projections);
+			for (const [index, fn] of cached.native.functions.entries()) {
+				if (
+					fn.specializations.some((region) => region.kind === "regexp-exec-projection")
+				) {
+					expect(emitCompiledFunction(fn, index, "", false)?.source).toContain(
+						"mal_regexp_exec_result_projection(vm,",
+					);
+				}
+			}
+			const emitted = emitProgramImage(cached, { compiled: true });
+			expect(emitted).toContain("mal_regexp_exec_result_projection(vm,");
+			expect(emitted).not.toMatch(/__regexp_exec_\d+_(?:starts|ends)\[0\]/);
+		},
+	);
 
 	it("carries Core-selected RegExp.exec projections through lowering and wire", () => {
 		const source = `globalThis.parse = function parse(regexp, value) {
