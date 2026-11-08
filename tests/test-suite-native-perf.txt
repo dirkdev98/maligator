@@ -50,3 +50,4 @@ tests/native/string-search-followups.test.ts
 tests/native/string-split-fresh-array.test.ts
 tests/native/text-buffer.test.ts
 tests/native/tiny-string-cache.test.ts
+tests/native/wide-class-layout.test.ts
