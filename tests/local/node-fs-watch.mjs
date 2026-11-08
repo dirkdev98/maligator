@@ -178,16 +178,40 @@ async function statPolling() {
 	console.log("watchFile calls after unwatch", calls);
 
 	const missing = path.join(root, "appears.txt");
-	await new Promise((resolve) => {
-		// A first report can arrive before the file appears; the write must not outlive the fixture.
-		const appear = setTimeout(() => fs.writeFileSync(missing, "xyz"), 60);
-		fs.watchFile(missing, { interval: 20 }, (curr, prev) => {
-			console.log("appeared", curr.size, prev.size, prev.mtimeMs, prev.ino);
-			fs.unwatchFile(missing);
-			clearTimeout(appear);
-			resolve();
+	let deadline;
+	try {
+		await new Promise((resolve, reject) => {
+			deadline = setTimeout(
+				() => reject(new Error("Timed out waiting for fs.watchFile appearance")),
+				10_000,
+			);
+			let reportedMissing = false;
+			fs.watchFile(missing, { interval: 20 }, (curr, prev) => {
+				if (!reportedMissing) {
+					if (curr.nlink !== 0 || prev.nlink !== 0) {
+						reject(new Error("Expected the initial missing-file report"));
+						return;
+					}
+					reportedMissing = true;
+					console.log("watchFile missing", curr.size, prev.size);
+					// Publish only after the missing report, with no partially written file to sample.
+					const replacement = path.join(root, "appears-next.txt");
+					fs.writeFileSync(replacement, "xyz");
+					fs.renameSync(replacement, missing);
+					return;
+				}
+				if (curr.size !== 3 || prev.nlink !== 0) {
+					reject(new Error("Expected the completed file after the missing report"));
+					return;
+				}
+				console.log("appeared", curr.size, prev.size, prev.mtimeMs, prev.ino);
+				resolve();
+			});
 		});
-	});
+	} finally {
+		clearTimeout(deadline);
+		fs.unwatchFile(missing);
+	}
 }
 
 async function promisesWatch() {

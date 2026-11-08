@@ -14,7 +14,10 @@ describe("node:dns lookup and the system resolver", () => {
 	const binaries: Record<string, string> = {};
 
 	beforeAll(() => {
-		expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+		expected = execFileSync(process.execPath, [fixture], {
+			encoding: "utf8",
+			timeout: 60_000,
+		});
 		for (const compiled of [true, false]) {
 			binaries[compiled ? "compiled" : "interpreted"] = buildNativeBinary({
 				fixture,

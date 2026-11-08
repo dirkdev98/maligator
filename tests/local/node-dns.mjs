@@ -16,9 +16,14 @@ show("localhost v4 all", await lookup("localhost", { family: "IPv4", all: true }
 show("ip literal", await lookup("::1"));
 show("ip literal all", await lookup("10.0.0.1", { all: true }));
 let syncAfterCall = "pending";
-dns.lookup("127.0.0.1", () => show("literal callback runs later", syncAfterCall));
+const literalLookup = new Promise((resolve) => {
+	dns.lookup("127.0.0.1", () => {
+		show("literal callback runs later", syncAfterCall);
+		resolve();
+	});
+});
 syncAfterCall = "sync code finished first";
-await new Promise((resolve) => setTimeout(resolve, 10));
+await literalLookup;
 show("unresolvable", await lookup("maligator-test.invalid"));
 for (const run of [
 	() => dns.lookup("localhost", 5, () => {}),
