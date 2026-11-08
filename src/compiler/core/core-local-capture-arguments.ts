@@ -71,6 +71,7 @@ function helperBody(
 				opcode === "loadCallee" ||
 				opcode === "loadArgumentCount" ||
 				opcode === "loadArgument" ||
+				opcode === "loadDynamicArgument" ||
 				opcode === "loadStaticArgument" ||
 				opcode === "createFunction" ||
 				opcode === "createArgumentsObject" ||

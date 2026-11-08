@@ -46,6 +46,7 @@ const argumentProofs = new WeakMap<
 
 // These read the parameter through the activation rather than as an operand.
 const PARAMETER_ALIAS_OPCODES = new Set([
+	"loadDynamicArgument",
 	"loadArgument",
 	"loadStaticArgument",
 	"createArgumentsObject",

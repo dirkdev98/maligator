@@ -131,6 +131,14 @@ function recurse(n) {
 }
 lines.push(`recurse ${recurse(10)}`);
 
+function innerRead(key) {
+	return arguments[key];
+}
+function outerRead(key) {
+	return `${innerRead(key, "inner")} ${arguments[1]}`;
+}
+lines.push(`nested frame ${outerRead(1, "outer")}`);
+
 function collect() {
 	var out = "";
 	for (var i = 0; i < arguments.length; i++) {

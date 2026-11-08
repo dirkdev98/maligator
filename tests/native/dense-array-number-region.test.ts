@@ -103,6 +103,14 @@ describe("dense Array number loop regions", () => {
 				MAL_HOST_GC: "1",
 				DENSE_ARRAY_PROTOTYPE_HOLE: primordials === "mutable" ? "1" : "0",
 			};
+			for (const name of ["scatterNumbers", "incrementPresent", "addAt"])
+				expect(
+					regionPlans(pair, name).some(
+						(plan) =>
+							plan.kind === "fixed-numeric" && plan.views.some((view) => view.writable),
+					),
+					name,
+				).toBe(true);
 			const expected = execFileSync(process.execPath, [fixture], {
 				encoding: "utf8",
 				env: { ...process.env, ...env },
@@ -118,6 +126,13 @@ describe("dense Array number loop regions", () => {
 				Number(
 					measured.stderr.match(
 						/\[perf-dense-array-region-stats\] admissions=(\d+)/,
+					)?.[1] ?? 0,
+				),
+			).toBeGreaterThan(0);
+			expect(
+				Number(
+					measured.stderr.match(
+						/\[perf-dense-array-region-stats\].* element-stores=(\d+)/,
 					)?.[1] ?? 0,
 				),
 			).toBeGreaterThan(0);

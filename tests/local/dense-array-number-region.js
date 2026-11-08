@@ -1,5 +1,18 @@
-// Dense Array element sums run in an unboxed loop region; every other element
-// shape must decline before it is read and finish in the original loop.
+function scatterNumbers(values, output, source, target, count) {
+	while (--count >= 0) output[target++] = values[source++] * 2;
+	return [source, target, count];
+}
+
+function incrementPresent(values) {
+	for (let index = 0; index < values.length; index++) values[index] += 0.5;
+	return values;
+}
+
+function addAt(values, key, count) {
+	while (--count >= 0) values[key] += 0.5;
+	return values;
+}
+
 function sumReloaded(values) {
 	let total = 0;
 	for (let index = 0; index < values.length; index++) total += values[index];
@@ -324,6 +337,178 @@ try {
 	lines.push(`for-of destructured null ${error instanceof TypeError}`);
 }
 lines.push(`for-of break ${sumUntilNegative([1, 2, 3, -1, 100])}`);
+function recordScatter(label, values, output, source, target, count) {
+	let state;
+	try {
+		state = scatterNumbers(values, output, source, target, count);
+	} catch (error) {
+		state = error.name;
+	}
+	lines.push(
+		JSON.stringify([
+			label,
+			state,
+			Object.keys(output),
+			Array.from(output, (value) => (Object.is(value, -0) ? "-0" : String(value))),
+			output["1.5"],
+			output["2.5"],
+			output.NaN,
+		]),
+	);
+}
+
+recordScatter("independent indices", [1, 2, 3, 4], [0, 0, 0, 0, 0], 1, 2, 3);
+const aliased = [1, 2, 3, 4, 5];
+recordScatter("aliased forward", aliased, aliased, 0, 1, 4);
+const reverseAlias = [1, 2, 3, 4, 5];
+recordScatter("aliased backward", reverseAlias, reverseAlias, 1, 0, 4);
+const filledBackwards = new Array(8);
+for (let index = filledBackwards.length - 1; index >= 0; index--)
+	filledBackwards[index] = 0;
+recordScatter("filled holes", [1, 2, 3], filledBackwards, 0, 1, 3);
+recordScatter(
+	"non-finite values",
+	[-0, NaN, Infinity, -Infinity, 2 ** 53],
+	[0, 0, 0, 0, 0],
+	0,
+	0,
+	5,
+);
+recordScatter("past source", [1, 2], [0, 0, 0, 0], 0, 0, 4);
+recordScatter("extending target", [1, 2, 3, 4], [0, 0], 0, 0, 4);
+recordScatter("sealed", [1, 2, 3], Object.seal([0, 0, 0]), 0, 0, 3);
+recordScatter("nonextensible", [1, 2, 3], Object.preventExtensions([0, 0, 0]), 0, 0, 3);
+recordScatter("frozen", [1, 2, 3], Object.freeze([0, 0, 0]), 0, 0, 3);
+recordScatter("frozen zero-trip", [1], Object.freeze([0]), 0, 0, 0);
+const fixedLength = [0, 0, 0];
+Object.defineProperty(fixedLength, "length", { writable: false });
+recordScatter("fixed length", [1, 2, 3], fixedLength, 0, 0, 3);
+const readonlyElement = [0, 0, 0];
+Object.defineProperty(readonlyElement, "1", { writable: false });
+recordScatter("readonly element", [1, 2, 3], readonlyElement, 0, 0, 3);
+const fractionalKeys = [1, 2, 3];
+fractionalKeys["0.5"] = 7;
+fractionalKeys["1.5"] = 9;
+recordScatter("fractional source", fractionalKeys, [0, 0], 0.5, 0, 2);
+recordScatter("fractional target", [1, 2], [0, 0, 0], 0, 1.5, 2);
+recordScatter("negative target", [1, 2, 3], [0, 0], 0, -1, 3);
+recordScatter("negative zero key", [1, 2], [0, 0], -0, -0, 2);
+const notANumber = [1];
+notANumber.NaN = 7;
+recordScatter("NaN source", notANumber, [0, 0], NaN, 0, 2);
+recordScatter("NaN target", [1, 2], [0, 0], 0, NaN, 2);
+const storeEvents = [];
+const getterPrototype = Object.create(Array.prototype);
+Object.defineProperty(getterPrototype, "1", {
+	get() {
+		storeEvents.push("source getter");
+		return 5;
+	},
+});
+const inheritedSource = [1, , 3];
+Object.setPrototypeOf(inheritedSource, getterPrototype);
+recordScatter("inherited source", inheritedSource, [0, 0, 0], 0, 0, 3);
+const setterPrototype = Object.create(Array.prototype);
+Object.defineProperty(setterPrototype, "1", {
+	set(value) {
+		storeEvents.push(`target setter ${value}`);
+	},
+});
+const inheritedTarget = [0, , 0];
+Object.setPrototypeOf(inheritedTarget, setterPrototype);
+recordScatter("inherited target", [1, 2, 3], inheritedTarget, 0, 0, 3);
+const accessorTarget = [0, 0, 0];
+Object.defineProperty(accessorTarget, "1", {
+	set(value) {
+		storeEvents.push(`own setter ${value}`);
+	},
+	get() {
+		return 13;
+	},
+});
+recordScatter("own target accessor", [1, 2, 3], accessorTarget, 0, 0, 3);
+const shrinkingTarget = [0, 0, 0];
+recordScatter(
+	"coercion resizes storage",
+	[
+		1,
+		{
+			valueOf() {
+				storeEvents.push("source coercion");
+				shrinkingTarget.length = 0;
+				return 7;
+			},
+		},
+		3,
+	],
+	shrinkingTarget,
+	0,
+	0,
+	3,
+);
+const failedTarget = [0, 0, 0];
+recordScatter(
+	"coercion throws",
+	[
+		1,
+		{
+			valueOf() {
+				storeEvents.push("throwing coercion");
+				throw new RangeError("fixture");
+			},
+		},
+		3,
+	],
+	failedTarget,
+	0,
+	0,
+	3,
+);
+const proxyTarget = new Proxy([0, 0, 0], {
+	set(target, key, value, receiver) {
+		storeEvents.push(`proxy set ${key}`);
+		return Reflect.set(target, key, value, receiver);
+	},
+});
+recordScatter("proxy target", [1, 2, 3], proxyTarget, 0, 0, 3);
+const untouchedProxy = new Proxy([], {
+	get() {
+		throw new Error("zero-trip receiver was observed");
+	},
+	set() {
+		throw new Error("zero-trip receiver was written");
+	},
+});
+lines.push(`zero-trip proxy ${scatterNumbers(untouchedProxy, untouchedProxy, 0, 0, 0)}`);
+const oldHeapValues = [{ value: 1 }, "old", [3]];
+recordScatter("overwritten heap values", [1, 2, 3], oldHeapValues, 0, 0, 3);
+for (const Type of [Float64Array, Int32Array, Uint8Array])
+	recordScatter(Type.name, new Type([1, 2, 3, 4]), new Type(4), 1, 0, 3);
+const overlappingBuffer = new ArrayBuffer(6 * 8);
+const overlappingSource = new Float64Array(overlappingBuffer, 0, 5);
+overlappingSource.set([1, 2, 3, 4, 5]);
+recordScatter(
+	"overlapping views",
+	overlappingSource,
+	new Float64Array(overlappingBuffer, 8, 5),
+	0,
+	0,
+	4,
+);
+const manyWrites = Array.from({ length: 2048 }, (_, index) => index * 0.25);
+recordScatter(
+	"polling",
+	manyWrites,
+	new Array(manyWrites.length).fill(0),
+	0,
+	0,
+	manyWrites.length,
+);
+lines.push(`increment present ${incrementPresent([1, 2.5, -0])}`);
+for (const key of [-0, -1, 0.5, NaN, Infinity, "0"])
+	lines.push(`compound key ${String(key)} ${addAt([1, 2], key, 2)[key]}`);
+lines.push(`store events ${storeEvents.join(",")}`);
+
 if (process.env.DENSE_ARRAY_PROTOTYPE_HOLE === "1") {
 	Array.prototype[1] = 100;
 	show("prototype hole", sumReloaded([1, , 3]));

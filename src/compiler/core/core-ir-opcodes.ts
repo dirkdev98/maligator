@@ -96,6 +96,7 @@ export const CORE_OPCODES = [
 	"iteratorStep",
 	"loadArgument",
 	"loadArgumentCount",
+	"loadDynamicArgument",
 	"loadCallee",
 	"loadCaptured",
 	"loadGlobalIndex",
@@ -194,6 +195,7 @@ const TWO_OUTPUTS = new Set<CoreOpcode>([
 ]);
 
 const GC_FREE = new Set<CoreOpcode>([
+	"loadDynamicArgument",
 	"createRestArgumentsState",
 	"guardServiceEpoch",
 	"readServiceEpoch",
@@ -714,6 +716,7 @@ const INPUT_ARITIES = {
 	iteratorNext: [2, 2],
 	iteratorStep: [2, 2],
 	loadArgument: [0, 0],
+	loadDynamicArgument: [1, 1],
 	loadArgumentCount: [0, 0],
 	loadCallee: [0, 0],
 	loadCaptured: [0, 0],

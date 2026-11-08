@@ -533,7 +533,11 @@ export function coreArgumentObservation(fn: CoreFunctionStore): CoreArgumentObse
 		const header = fn.instructionHeader(instruction);
 		if (typeof header === "string") continue;
 		const opcode = header.opcode;
-		if (opcode === "createArgumentsObject" || opcode === "callRestArguments")
+		if (
+			opcode === "createArgumentsObject" ||
+			opcode === "callRestArguments" ||
+			opcode === "loadDynamicArgument"
+		)
 			return { kind: "general" };
 		if (opcode === "createRestArguments") {
 			const startIndex = fn.instructionAttributes(instruction).startIndex;

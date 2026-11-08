@@ -103,6 +103,13 @@ the same materialization contract. The cached heap object becomes authoritative
 before invoking either observer, including when the builtin changes descriptors
 or returns the same object. Callee and receiver positions require separate proof.
 
+An unmapped arguments binding can read an in-range numeric index from its incoming
+slice while the binding remains unmaterialized. The invocation retains and roots
+the entire slice, including extra arguments, through its last read. Other keys and
+materialized bindings use the arguments object's property semantics. This read
+belongs to its activation, so transformations cannot move it into another function
+or use an entry that retains only declared parameters.
+
 Fixed TypedArray regions preserve memory-operation order for overlapping views.
 Read-only reductions retain the same storage guards without requiring writable
 buffers. Every view contributes its complete visited index window, including all
@@ -122,6 +129,18 @@ with zero scanned length, then publishes each initialized slot at its original
 store. Collecting initializers retain the owner as an ordinary rooted value and
 use per-store barriers; no backing pointer survives their calls. A handler that
 could observe partially changed Array length prevents that admission.
+
+Safe-integer regions also retain certified `Math.imul` and `Math.clz32` calls in
+integer locals. Entry guards reject non-integer inputs and negative zero before
+the original loop performs any coercion. Integer arithmetic failure restores the
+iteration's starting values, while polling publishes completed iterations.
+
+Dense Array loops may overwrite a present own element when the storage has uniform
+writable descriptors. An overwrite must be the iteration's sole store, followed
+only by local work that cannot restart it. Independent indices check each access
+before the store commits; holes, accessors, coercions and unsupported descriptors
+resume the original iteration. Replacing a heap value preserves the deletion
+barrier. Borrowed storage ends at a poll, after publishing the completed iteration.
 
 DataView accessor calls join fixed storage regions as byte views. Admission uses the
 conditions that make `byteLength` the intrinsic getter: the watched-prototype

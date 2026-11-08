@@ -137,6 +137,7 @@ export const BYTECODE_OPERATIONS = [
 	"PRECISE_NUMBER_SUM",
 	"STRING_CONCAT_LENGTH",
 	"CONCAT_STRINGS",
+	"LOAD_DYNAMIC_ARGUMENT",
 ] as const;
 
 export type BytecodeOperation = (typeof BYTECODE_OPERATIONS)[number];

@@ -212,7 +212,7 @@ test/language/statements/await-using/initializer-Symbol.dispose-called-at-end-of
 test/language/statements/using/initializer-disposed-at-end-of-forstatement.js
 test/language/statements/using/throws-suppressederror-if-multiple-errors-during-disposal.js
 
-# Binding, coercion, and eval environments (49)
+# Binding, coercion, and eval environments
 test/built-ins/JSON/stringify/replacer-function-object-deleted-property.js
 test/built-ins/Object/create/properties-arg-to-object-bigint.js
 test/built-ins/eval/no-construct.js
@@ -237,9 +237,11 @@ test/language/expressions/assignment/dstr/obj-prop-put-let.js
 test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-elem-obj-prop-id-init.js
 test/language/expressions/class/elements/new-no-sc-line-method-rs-privatename-identifier.js
 test/language/expressions/compound-assignment/11.13.2-37-s.js
+test/language/expressions/compound-assignment/S11.13.2_A7.1_T4.js
 test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v-.js
 test/language/expressions/less-than-or-equal/S11.8.3_A3.1_T1.2.js
 test/language/expressions/postfix-decrement/bigint.js
+test/language/expressions/postfix-increment/S11.3.1_A6_T3.js
 test/language/expressions/prefix-increment/bigint.js
 test/language/expressions/prefix-increment/operator-prefix-increment-x-calls-putvalue-lhs-newvalue-.js
 test/language/function-code/10.4.3-1-54gs.js

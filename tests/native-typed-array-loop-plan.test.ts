@@ -176,13 +176,12 @@ describe("fixed TypedArray loop storage", () => {
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
 	});
-	it("declines a store whose key is not the loop index", () => {
+	it("checks a terminal store whose key is not the loop index", () => {
 		const image = compile("for(let i=0;i<count;i++)output[i&7]=left[i];return output;");
-		expect(
-			image.native.functions[1]!.storage!.numericLoopRegions.filter(
-				(plan) => plan.kind === "fixed-numeric",
-			),
-		).toEqual([]);
+		const [plan] = image.native.functions[1]!.storage!.numericLoopRegions;
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing checked storage region");
+		expect(plan.counter).toBeUndefined();
+		expect(plan.views.every((view) => view.checked === true)).toBe(true);
 	});
 	it("retains all eight owners for a seven-input numeric kernel", () => {
 		const image = compile(
@@ -539,7 +538,7 @@ describe("fixed TypedArray loop storage", () => {
 		).toEqual([]);
 	});
 
-	it("kills a hoisted constant overwritten by a memory result in the loop", () => {
+	it("checks indices when a memory result overwrites a hoisted offset", () => {
 		const image = compile("for(let i=0;i<count;i++){output[i+1]=left[i]+right[i];}");
 		const native = image.native.functions[1]!;
 		const constant = native.body.instructions.find(
@@ -561,7 +560,10 @@ describe("fixed TypedArray loop storage", () => {
 				}),
 			},
 		};
-		expect(analyzeNativeFastPaths(changed).plans.numericLoopRegions).toEqual([]);
+		const [plan] = analyzeNativeFastPaths(changed).plans.numericLoopRegions;
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing checked storage region");
+		expect(plan.counter).toBeUndefined();
+		expect(plan.views.every((view) => view.checked === true)).toBe(true);
 	});
 	it("requires the induction update to consume this iteration's increment", () => {
 		const native = compile(
@@ -603,12 +605,16 @@ describe("fixed TypedArray loop storage", () => {
 					],
 				},
 			}).plans.numericLoopRegions;
-			expect(selected.map((region) => region.kind)).toEqual(
-				earlyUpdate ? [] : ["fixed-numeric"],
-			);
+			expect(selected.map((region) => region.kind)).toEqual(["fixed-numeric"]);
+			if (selected[0]?.kind !== "fixed-numeric")
+				throw new Error("Missing storage region");
+			if (earlyUpdate) {
+				expect(selected[0].counter).toBeUndefined();
+				expect(selected[0].views.every((view) => view.checked === true)).toBe(true);
+			} else expect(selected[0].counter).toBeDefined();
 		}
 	});
-	it("rejects a strided update that reads the previous iteration's arithmetic result", () => {
+	it("checks indices when a strided update reads the previous iteration's result", () => {
 		const native = compile("for(let i=0;i<count;i+=2){output[i]=left[i]+right[i];}")
 			.native.functions[1]!;
 		const plan = native.storage!.numericLoopRegions[0];
@@ -628,13 +634,15 @@ describe("fixed TypedArray loop storage", () => {
 		);
 		const step = original[stepIp]!;
 		const instructions = original.with(stepIp, update).with(updateIp, step);
-		expect(
-			analyzeNativeFastPaths({
-				...native,
-				body: { ...native.body, instructions },
-				instructions: instructions.map(() => undefined),
-			}).plans.numericLoopRegions,
-		).toEqual([]);
+		const [checked] = analyzeNativeFastPaths({
+			...native,
+			body: { ...native.body, instructions },
+			instructions: instructions.map(() => undefined),
+		}).plans.numericLoopRegions;
+		if (checked?.kind !== "fixed-numeric")
+			throw new Error("Missing checked storage region");
+		expect(checked.counter).toBeUndefined();
+		expect(checked.views.every((view) => view.checked === true)).toBe(true);
 	});
 	it("retains one range and three ordered view accesses through the artifact", () => {
 		const image = compile(body),
@@ -660,7 +668,6 @@ describe("fixed TypedArray loop storage", () => {
 		const kindGuards = [...source.matchAll(/\.kind == MAL_TA_FLOAT64/g)];
 		expect(kindGuards).toHaveLength(plan.views.length);
 		expect(kindGuards.at(-1)!.index).toBeLessThan(source.indexOf("for (;;)"));
-		expect(source.match(/for \(;;\)/g)).toHaveLength(2);
 		expect(source.match(/mal_vm_fixed_numeric_storage\(/g)).toHaveLength(
 			plan.views.length,
 		);
@@ -700,15 +707,12 @@ describe("fixed TypedArray loop storage", () => {
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 	});
 	it.each([
-		"for(let i=0;i<count;i++){output[i]=left[i]+right[i];hook();}",
-		"for(let i=0;i<count;i++){let key;if(i&1)key=i+1;else key=i+2;output[key]=left[i]+right[i];}",
 		"let key=0;for(let i=0;i<count;i++){output[key]=left[i]+right[i];key=i+2;}",
 		"let offset=1;for(let i=0;i<count;i++){output[i+offset]=left[i]+right[i];offset=2;}",
 		"let offset;if(hook)offset=1;else offset=2;for(let i=0;i<count;i++){output[i+offset]=left[i]+right[i];}",
 		"for(let i=0;i<count;i++){let key=i+1;key=left[i];output[key]=left[i]+right[i];}",
 		"for(let i=0;i<count;i++){output[i+0.5]=left[i]+right[i];}",
 		"for(let i=0;i<count;i++){output[i+2147483648]=left[i]+right[i];}",
-
 		"for(let i=0;i<count;i+=0){output[i]=left[i]+right[i];}",
 		"for(let i=0;i<count;i-=2){output[i]=left[i]+right[i];}",
 		"for(let i=count;i>=0;i++){output[i]=left[i]+right[i];}",
@@ -719,11 +723,24 @@ describe("fixed TypedArray loop storage", () => {
 		"for(let i=0;i<count;i+=0.5){output[i]=left[i]+right[i];}",
 		"for(let i=0;i<count;i+=2147483648){output[i]=left[i]+right[i];}",
 		"for(let i=0;i<count;i+=hook){output[i]=left[i]+right[i];}",
+		"for(let i=0;i<count;i++){output[i]=left[i]+right[i];count--;}",
+	])("checks every access without a proven terminal-store window: %s", (source) => {
+		const image = compile(source);
+		const [plan] = image.native.functions[1]!.storage!.numericLoopRegions;
+		expect(plan?.kind).toBe("fixed-numeric");
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing checked storage region");
+		expect(plan.counter).toBeUndefined();
+		expect(plan.views.every((view) => view.checked === true)).toBe(true);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+	it.each([
+		"for(let i=0;i<count;i++){output[i]=left[i]+right[i];hook();}",
+		"for(let i=0;i<count;i++){let key;if(i&1)key=i+1;else key=i+2;output[key]=left[i]+right[i];}",
+
 		"let step=2;for(let i=0;i<count;i+=step){output[i]=left[i]+right[i];step=left[i];}",
 		"let step;for(let i=0;i<count;i+=step){output[i]=left[i]+right[i];if(hook)step=2;else step=4;}",
 		"for(let i=0;i<count;i++){output[i]=left[i]+right[i];left=right;}",
 		"for(let i=0;i<count;){output[i]=left[i]+right[i];if(hook)i++;}",
-		"for(let i=0;i<count;i++){output[i]=left[i]+right[i];count--;}",
 		"for(let i=0;i<count;i++){output[i]=left[i]+right[i];output[i]=hook(i);}",
 	])("declines an unproved interior: %s", (source) => {
 		expect(

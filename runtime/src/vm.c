@@ -2739,6 +2739,12 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
+            MAL_VM_CASE(LOAD_DYNAMIC_ARGUMENT)
+                registers[instruction->as.load_dynamic_argument.dst] =
+                    mal_vm_load_dynamic_argument(frame->arguments, frame->argument_count,
+                        registers[instruction->as.load_dynamic_argument.key]);
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             MAL_VM_CASE(LOAD_STATIC_ARGUMENT) {
                 i32 index = instruction->as.load_static_argument.index;
                 if (index < frame->argument_count) {
