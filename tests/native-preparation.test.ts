@@ -1,10 +1,13 @@
+import { readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
+import ts from "typescript-v6-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TestProject } from "vitest/node";
 import { perfStatsDefines } from "../src/build-flags.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import type { NativeBuildContextOptions } from "../src/native-build-context.ts";
 import { ensureNativeArtifacts } from "../src/runtime-build.ts";
+import type { BuildOptions } from "../src/test-harness.ts";
 import { setup } from "./native/setup.ts";
 
 vi.mock("../src/native-build-context.ts", () => ({
@@ -27,6 +30,110 @@ function preparedContexts(): Array<NativeBuildContextOptions> {
 	return vi.mocked(resolveNativeBuildContext).mock.calls.map(([options]) => options!);
 }
 
+function implicitInstrumentedConsumers(): Array<{ file: string; node: boolean }> {
+	const overrides = new Set<keyof BuildOptions>([
+		"config",
+		"evalEnabled",
+		"realmsEnabled",
+		"intlEnabled",
+		"intlFeatures",
+		"webPlatformEnabled",
+		"regexpEnabled",
+		"temporalEnabled",
+		"profileEnabled",
+		"production",
+		"compilerBake",
+		"cacheDirectory",
+	]);
+	const builders = new Map([
+		["buildNativeBinary", 0],
+		["buildNativeBinaryResult", 0],
+		["buildNativeProgramImage", 1],
+		["buildNativeProgramImageResult", 1],
+		["buildBackendPairFromOneProgramImage", 0],
+	]);
+	const consumers: Array<{ file: string; node: boolean }> = [];
+	for (const file of readdirSync("tests/native", {
+		recursive: true,
+		encoding: "utf8",
+	}).sort()) {
+		if (!file.endsWith(".test.ts")) continue;
+		const source = ts.createSourceFile(
+			file,
+			readFileSync(path.join("tests/native", file), "utf8"),
+			ts.ScriptTarget.Latest,
+			true,
+		);
+		const imported = new Map<string, number>();
+		for (const statement of source.statements) {
+			if (
+				!ts.isImportDeclaration(statement) ||
+				!ts.isStringLiteral(statement.moduleSpecifier) ||
+				!statement.moduleSpecifier.text.endsWith("/test-harness.ts")
+			)
+				continue;
+			const bindings = statement.importClause?.namedBindings;
+			if (bindings === undefined || !ts.isNamedImports(bindings)) continue;
+			for (const binding of bindings.elements) {
+				const index = builders.get((binding.propertyName ?? binding.name).text);
+				if (index !== undefined) imported.set(binding.name.text, index);
+			}
+		}
+		const profiles = new Set<boolean>();
+		// Importing native modules would execute their process and temporary-directory setup.
+		const visit = (expression: ts.Node): void => {
+			if (ts.isCallExpression(expression) && ts.isIdentifier(expression.expression)) {
+				const index = imported.get(expression.expression.text);
+				const options = index === undefined ? undefined : expression.arguments[index];
+				if (options !== undefined && ts.isObjectLiteralExpression(options)) {
+					const properties = new Map<string, ts.Expression>();
+					let implicit = true;
+					for (const property of options.properties) {
+						if (
+							(ts.isPropertyAssignment(property) ||
+								ts.isShorthandPropertyAssignment(property)) &&
+							(ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+						) {
+							const name = property.name.text;
+							if (overrides.has(name as keyof BuildOptions)) implicit = false;
+							properties.set(
+								name,
+								ts.isPropertyAssignment(property) ? property.initializer : property.name,
+							);
+						} else {
+							implicit = false;
+						}
+					}
+					const environment = properties.get("environment");
+					const node = properties.get("nodeEnabled");
+					if (
+						implicit &&
+						(node === undefined ||
+							node.kind === ts.SyntaxKind.TrueKeyword ||
+							node.kind === ts.SyntaxKind.FalseKeyword) &&
+						environment !== undefined &&
+						ts.isObjectLiteralExpression(environment) &&
+						environment.properties.some(
+							(property, index) =>
+								!environment.properties.slice(index + 1).some(ts.isSpreadAssignment) &&
+								ts.isPropertyAssignment(property) &&
+								(ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
+								property.name.text === "MAL_PERF_STATS" &&
+								ts.isStringLiteral(property.initializer) &&
+								property.initializer.text === "1",
+						)
+					)
+						profiles.add(node?.kind === ts.SyntaxKind.TrueKeyword);
+				}
+			}
+			ts.forEachChild(expression, visit);
+		};
+		visit(source);
+		for (const node of profiles) consumers.push({ file, node });
+	}
+	return consumers;
+}
+
 describe("native runtime preparation", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -39,43 +146,39 @@ describe("native runtime preparation", () => {
 
 	afterEach(() => vi.unstubAllEnvs());
 
-	it.each([
-		"map-get-set-cache.test.ts",
-		"array-push-direct.test.ts",
-		"collection-direct.test.ts",
-		"entry-pair-parameters.test.ts",
-		"object-rest-shaped.test.ts",
-		"own-table-property-cache.test.ts",
-	])("prepares default surfaces and instrumentation for %s before hooks", (file) => {
-		setup(selectedProject(file));
-		const contexts = preparedContexts();
-		expect(contexts).toHaveLength(3);
-		expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
-			[],
-			[],
-			["-DMAL_PERF_STATS=1"],
-		]);
-		expect(contexts.map((context) => context.features?.nodeEnabled)).toEqual([
-			false,
-			true,
-			false,
-		]);
-		for (const [index, context] of contexts.entries()) {
-			expect(context.features).toMatchObject({
-				evalEnabled: true,
-				realmsEnabled: true,
-				intlEnabled: true,
-				temporalEnabled: true,
-				webPlatformEnabled: true,
-				profileEnabled: false,
-			});
-			expect(context.environment).toMatchObject({
-				MAL_BUILD_JOBS: "4",
-				CARGO_BUILD_JOBS: "4",
-			});
-			expect(ensureNativeArtifacts).toHaveBeenNthCalledWith(index + 1, context);
-		}
-	});
+	it.each(implicitInstrumentedConsumers())(
+		"prepares the selected instrumented profile for $file before hooks",
+		({ file, node }) => {
+			setup(selectedProject(file));
+			const contexts = preparedContexts();
+			expect(contexts).toHaveLength(3);
+			expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
+				[],
+				[],
+				["-DMAL_PERF_STATS=1"],
+			]);
+			expect(contexts.map((context) => context.features?.nodeEnabled)).toEqual([
+				false,
+				true,
+				node,
+			]);
+			for (const [index, context] of contexts.entries()) {
+				expect(context.features).toMatchObject({
+					evalEnabled: true,
+					realmsEnabled: true,
+					intlEnabled: true,
+					temporalEnabled: true,
+					webPlatformEnabled: true,
+					profileEnabled: false,
+				});
+				expect(context.environment).toMatchObject({
+					MAL_BUILD_JOBS: "4",
+					CARGO_BUILD_JOBS: "4",
+				});
+				expect(ensureNativeArtifacts).toHaveBeenNthCalledWith(index + 1, context);
+			}
+		},
+	);
 
 	it("prepares the instrumented archive once for multiple selected consumers", () => {
 		setup(selectedProject("map-get-set-cache.test.ts", "collection-direct.test.ts"));
@@ -149,7 +252,6 @@ describe("native runtime preparation", () => {
 
 	it.each([
 		"gc.test.ts",
-		"node-events.test.ts",
 		"object-spread-shaped.test.ts",
 		"profile.test.ts",
 		"interpreter-dense-array.test.ts",

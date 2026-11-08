@@ -372,7 +372,11 @@ It also prepares the instrumented default runtime without Node when a selected
 file is listed in `tests/test-suite-native-perf.txt`. Keep that manifest in sync
 with tests using the default internal feature profile and `MAL_PERF_STATS=1`:
 compiling the shared native eval compiler belongs in preparation, before timed
-fixture hooks. Focused selections outside the manifest keep ordinary preparation.
+fixture hooks. Node-enabled counter fixtures need the separate `node-perf-stats`
+preparation in `tests/helpers/native-preparations.ts`. A unit audit checks literal
+harness builds using implicit default profiles. Explicit configs, dynamic options
+and profiling builds need their preparation identities reviewed separately.
+Focused selections outside the manifest keep ordinary preparation.
 `MAL_BUILD_JOBS` and `CARGO_BUILD_JOBS` can lower a build pool further; neither can
 raise it above the inherited allocation. Resource controls survive canonical
 environment cleaning without retaining ambient runtime modes.

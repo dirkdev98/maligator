@@ -1,19 +1,23 @@
 # Files using the default internal native feature profile with MAL_PERF_STATS=1.
 # Prepare this shared archive before timed hooks, alongside the ordinary archive.
 tests/native/arguments-alias.test.ts
-tests/native/canonical-typed-dispatch.test.ts
 tests/native/arguments-element-reads.test.ts
 tests/native/arguments-forwarding.test.ts
 tests/native/arguments-slice-copy.test.ts
 tests/native/arguments-static.test.ts
+tests/native/array-dense-shrink.test.ts
 tests/native/array-deque-direct.test.ts
 tests/native/array-push-direct.test.ts
 tests/native/array-values-deferred-iterator.test.ts
 tests/native/async-generator-direct-promise.test.ts
+tests/native/canonical-typed-dispatch.test.ts
+tests/native/class-layout-guards.test.ts
 tests/native/collection-direct.test.ts
 tests/native/collection-perf-stats.test.ts
 tests/native/compiled-call-cache-family.test.ts
+tests/native/constant-key-property-cache.test.ts
 tests/native/coroutine-pool.test.ts
+tests/native/dictionary-direct.test.ts
 tests/native/direct-known-call.test.ts
 tests/native/entry-pair-parameters.test.ts
 tests/native/error-capture-stack.test.ts
@@ -21,15 +25,19 @@ tests/native/fresh-dense-indexed-reserve.test.ts
 tests/native/function-inherited-cache.test.ts
 tests/native/function-own-slot-cache.test.ts
 tests/native/gc-raw-realloc.test.ts
+tests/native/grouped-hash-index.test.ts
 tests/native/inherited-method-cache.test.ts
 tests/native/interpreter-property-ic.test.ts
 tests/native/interpreter-strict-equality.test.ts
 tests/native/json-late-fallback.test.ts
+tests/native/json-stringify-scratch.test.ts
 tests/native/known-own-slot-load.test.ts
 tests/native/lazy-capture-environment.test.ts
 tests/native/map-get-set-cache.test.ts
 tests/native/map-string-representative.test.ts
 tests/native/native-constructor-prototypes.test.ts
+tests/native/native-for-in-own-keys.test.ts
+tests/native/native-inherited-setters.test.ts
 tests/native/native-shape-snapshots.test.ts
 tests/native/numeric-sort-callback.test.ts
 tests/native/object-rest-shaped.test.ts
@@ -48,6 +56,7 @@ tests/native/string-cursor-frontier.test.ts
 tests/native/string-rope-followups.test.ts
 tests/native/string-search-followups.test.ts
 tests/native/string-split-fresh-array.test.ts
+tests/native/symbol-key-property-cache.test.ts
 tests/native/text-buffer.test.ts
 tests/native/tiny-string-cache.test.ts
 tests/native/wide-class-layout.test.ts
