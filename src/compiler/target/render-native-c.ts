@@ -3950,13 +3950,15 @@ function emitCompiledVariant(
 			capturesEnv ||
 			hasWith ||
 			analysis.captures.copiedValues.length > 0);
-	const retainsForwardedArguments = fn.instructions.some(
-		(instruction) => instruction.opcode === "CALL_REST_ARGUMENTS",
+	const retainsIncomingArguments = fn.instructions.some(
+		(instruction) =>
+			instruction.opcode === "CALL_REST_ARGUMENTS" ||
+			instruction.opcode === "LOAD_DYNAMIC_ARGUMENT",
 	);
-	const deferredRestRootIp = retainsForwardedArguments
+	const deferredRestRootIp = retainsIncomingArguments
 		? undefined
 		: deferredRestArgumentRootIp(nativeContract);
-	const retainsArguments = retainsForwardedArguments || deferredRestRootIp !== undefined;
+	const retainsArguments = retainsIncomingArguments || deferredRestRootIp !== undefined;
 	const restArgumentRootReleaseIp = fn.instructions.some(
 		(instruction) =>
 			instruction.opcode === "LOAD_ARGUMENT" ||
@@ -15422,6 +15424,12 @@ class NativeInstructionEmission {
 				return [
 					`r${instruction.dst} = arg_count > ${instruction.index} ? args[${instruction.index}] : MAL_VALUE_UNDEFINED;`,
 				];
+			case "LOAD_DYNAMIC_ARGUMENT": {
+				if (this.context.directArgumentRepresentations !== undefined)
+					throw new Error("Direct entry observes the general argument slice");
+				const value = `mal_vm_load_dynamic_argument(args, arg_count, ${this.boxed(instruction.key)})`;
+				return [`r${instruction.dst} = ${this.callValue(instruction.dst, value)};`];
+			}
 			case "LOAD_STATIC_ARGUMENT": {
 				if (this.context.directArgumentRepresentations !== undefined) {
 					const representation =

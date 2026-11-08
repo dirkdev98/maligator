@@ -211,6 +211,7 @@ const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "SET_PROTOTYPE", object: 10, prototype: 13, literal: true },
 	{ opcode: "LOAD_ARGUMENT_COUNT", dst: 14 },
 	{ opcode: "LOAD_ARGUMENT", dst: 14, index: 2 },
+	{ opcode: "LOAD_DYNAMIC_ARGUMENT", dst: 14, key: 1 },
 	{
 		opcode: "LOAD_STATIC_ARGUMENT",
 		dst: 14,
@@ -1013,7 +1014,7 @@ describe("program-image-codec", () => {
 
 	it("covers every opcode in the wire table", () => {
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-23)).toEqual([
+		const appended = [
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -1037,7 +1038,9 @@ describe("program-image-codec", () => {
 			"PRECISE_NUMBER_SUM",
 			"STRING_CONCAT_LENGTH",
 			"CONCAT_STRINGS",
-		]);
+			"LOAD_DYNAMIC_ARGUMENT",
+		];
+		expect(WIRE_OPCODES.slice(-appended.length)).toEqual(appended);
 	});
 
 	it("round-trips template construction and rejects invalid bounds and registers", () => {

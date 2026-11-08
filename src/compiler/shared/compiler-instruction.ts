@@ -348,6 +348,11 @@ type CompilerOperation =
 			index: number;
 	  }
 	| {
+			/** Read the retained incoming slice; invalid indices produce undefined without coercion. */
+			type: "loadDynamicArgument";
+			registers: [number, number];
+	  }
+	| {
 			// Direct static index read. Supplied indexes use the optional live mapped
 			// value; missing indexes lazily materialize and cache the arguments object.
 			type: "loadStaticArgument";

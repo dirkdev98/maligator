@@ -332,6 +332,7 @@ const INLINE_ENVIRONMENT_OPCODES: ReadonlySet<string> = new Set([
 ]);
 
 const INLINE_UNSUPPORTED_OPCODES = new Set([
+	"loadDynamicArgument",
 	"createArgumentsObject",
 	"createRestArguments",
 	"createRestArgumentsState",
@@ -2244,6 +2245,7 @@ function canBridgeInlineResult(
 }
 
 const CALLBACK_SPECIALIZATION_EXCLUDED_OPCODES: ReadonlySet<string> = new Set([
+	"loadDynamicArgument",
 	"loadCallee",
 	"loadArgument",
 	"loadArgumentCount",

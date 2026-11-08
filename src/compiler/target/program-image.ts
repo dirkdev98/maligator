@@ -1341,6 +1341,7 @@ export function nativeInstructionEffects(
 		case "MOVE":
 		case "LOAD_CALLEE":
 		case "LOAD_ARGUMENT":
+		case "LOAD_DYNAMIC_ARGUMENT":
 		case "LOAD_ARGUMENT_COUNT":
 		case "CREATE_UNDEFINED":
 		case "CREATE_NULL":
@@ -1934,6 +1935,7 @@ export function validateNativeDirectEntry(
 			throw new RangeError("Native direct entry has an incomplete rest view");
 		if (
 			instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
+			instruction.opcode === "LOAD_DYNAMIC_ARGUMENT" ||
 			instruction.opcode === "CALL_REST_ARGUMENTS"
 		)
 			throw new RangeError("Native direct entry observes the general argument slice");
@@ -2983,6 +2985,7 @@ export function vmNativeInstructionMayCaptureStack(
 		case "CREATE_BIGINT":
 		case "LOAD_ARGUMENT_COUNT":
 		case "LOAD_ARGUMENT":
+		case "LOAD_DYNAMIC_ARGUMENT":
 		case "LOAD_NEW_TARGET":
 		case "LOAD_THIS":
 		case "LOAD_CALLEE":

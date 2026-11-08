@@ -522,6 +522,7 @@ interface CoreFrontendFunction {
 	staticArgumentsFallbackRegister?: number;
 	/** Incoming arguments as a packed rest view for in-range element reads. */
 	argumentsElementRegister?: number;
+	directArgumentElements?: true;
 	/**
 	 * Locked primordials pin the builtin slice, so this function's `arguments` copies
 	 * read the frame and its reads use `argumentsCopyAccesses`; no object exists.
@@ -5767,6 +5768,14 @@ function compileFunctionParams(
 					});
 				}
 				(fn.staticArgumentsRegisters ??= new Map()).set(usage, argumentCountRegister);
+				if (
+					!fn.isGenerator &&
+					!fn.isAsync &&
+					!fn.mappedArgumentSlots?.some((slot) => slot >= 0)
+				) {
+					fn.directArgumentElements = true;
+					continue;
+				}
 				// Without these facts the view could not stay virtual and would allocate per call.
 				if (
 					fn.argumentsElementRegister === undefined &&
@@ -13438,7 +13447,7 @@ function compileArgumentsElementRead(
 	const count = fn.staticArgumentsRegisters?.get(usage);
 	const objectJumps: Array<Extract<CompilerInstruction, { type: "jump" }>> = [];
 	let viewDone: Extract<CompilerInstruction, { type: "jump" }> | undefined;
-	if (view !== undefined && count !== undefined) {
+	if ((fn.directArgumentElements || view !== undefined) && count !== undefined) {
 		const current = loadRegisterFromLocation(
 			fn,
 			cursor.block,
@@ -13492,7 +13501,11 @@ function compileArgumentsElementRead(
 			operator: "<",
 		});
 		guard(inRange);
-		cursor.block.emitter.emit({ type: "loadProperty", registers: [result, view, index] });
+		cursor.block.emitter.emit(
+			fn.directArgumentElements
+				? { type: "loadDynamicArgument", registers: [result, index] }
+				: { type: "loadProperty", registers: [result, view!, index] },
+		);
 		viewDone = { type: "jump", blocks: [-1] };
 		cursor.block.emitter.emit(viewDone);
 		const objectIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;

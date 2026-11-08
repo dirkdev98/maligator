@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 84u
+#define WIRE_VERSION 85u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -776,6 +776,11 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             if (o->as.load_argument.index < 0) {
                 r->ok = false;
             }
+            return;
+        case WIRE_LOAD_DYNAMIC_ARGUMENT:
+            o->opcode = MAL_OP_LOAD_DYNAMIC_ARGUMENT;
+            o->as.load_dynamic_argument.dst = rd_i32(r);
+            o->as.load_dynamic_argument.key = rd_i32(r);
             return;
         case WIRE_LOAD_STATIC_ARGUMENT:
             o->opcode = MAL_OP_LOAD_STATIC_ARGUMENT;
@@ -1628,6 +1633,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_CREATE_ARGUMENTS_OBJECT, create_arguments_object);
         MAL_WRITES_DST(MAL_OP_LOAD_ARGUMENT_COUNT, load_argument_count);
         MAL_WRITES_DST(MAL_OP_LOAD_ARGUMENT, load_argument);
+        MAL_WRITES_DST(MAL_OP_LOAD_DYNAMIC_ARGUMENT, load_dynamic_argument);
         case MAL_OP_LOAD_STATIC_ARGUMENT:
             return instruction->as.load_static_argument.dst == target_register ||
                 instruction->as.load_static_argument.fallback == target_register;
@@ -1791,7 +1797,8 @@ static i32 argument_retention_limit(const MalFunction *fn) {
         if (instruction->opcode == MAL_OP_CREATE_ARGUMENTS_OBJECT ||
             instruction->opcode == MAL_OP_CREATE_REST_ARGUMENTS ||
             instruction->opcode == MAL_OP_CALL_REST_ARGUMENTS ||
-            instruction->opcode == MAL_OP_LOAD_ARGUMENT) {
+            instruction->opcode == MAL_OP_LOAD_ARGUMENT ||
+            instruction->opcode == MAL_OP_LOAD_DYNAMIC_ARGUMENT) {
             return INT32_MAX;
         }
         if (instruction->opcode == MAL_OP_LOAD_STATIC_ARGUMENT &&
@@ -2924,6 +2931,11 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                         r.ok = false;
                     }
                 }
+            } else if (instruction->opcode == MAL_OP_LOAD_DYNAMIC_ARGUMENT) {
+                i32 dst = instruction->as.load_dynamic_argument.dst;
+                i32 key = instruction->as.load_dynamic_argument.key;
+                if (dst < 0 || dst >= fn->register_count ||
+                    key < 0 || key >= fn->register_count) r.ok = false;
             } else if (instruction->opcode == MAL_OP_GUARD_SERVICE_EPOCH) {
                 if (instruction->as.guard_service_epoch.dst < 0 || instruction->as.guard_service_epoch.dst >= fn->register_count || instruction->as.guard_service_epoch.epoch < 0 || instruction->as.guard_service_epoch.epoch >= fn->register_count) r.ok = false;
             } else if (instruction->opcode == MAL_OP_READ_SERVICE_EPOCH) {

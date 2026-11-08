@@ -500,6 +500,17 @@ void mal_op_load_argument_count(MalCallable *callable, const MalInstruction *ins
 void mal_op_load_argument(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_load_static_argument(MalCallable *callable, const MalInstruction *instruction);
 
+/** Read an incoming value without observing an arguments object's properties. */
+static inline MalValue mal_vm_load_dynamic_argument(
+    const MalValue *arguments, i32 count, MalValue key
+) {
+    if (!mal_ops_is_number(key)) return MAL_VALUE_UNDEFINED;
+    f64 number = mal_ops_number_as_f64(key);
+    if (!(number >= 0.0 && number < (f64) count)) return MAL_VALUE_UNDEFINED;
+    u32 index = (u32) number;
+    return number == (f64) index ? arguments[index] : MAL_VALUE_UNDEFINED;
+}
+
 // Build an arguments object over `args`; a non-empty map aliases indexed
 // properties to captured formal bindings. Shared by both execution backends.
 MalValue mal_create_arguments_object(

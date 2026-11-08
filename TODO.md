@@ -1161,10 +1161,9 @@ only reproducible input.
       opaque callee that returns its strict `arguments` costs 340 ns per call against
       Node's 6.6 (`call-arguments-escape`). Dense storage needs define, delete,
       freeze, and own-key order to understand it, and a move to the table once an
-      index gets non-default attributes. In V8's EarleyBoyer, creating arguments
-      objects takes 19% of the main thread's samples: its `var a = arguments`
-      loops read `a[i]` with a dynamic index, which stays virtual only under
-      locked primordials, and the suite needs mutable ones.
+      index gets non-default attributes. Unmapped in-range numeric reads can use
+      the incoming slice under either primordial policy; escaping or materialized
+      arguments objects still need dense indexed storage.
 
 - [ ] Deterministically release nonescaping RegExp and ICU handles at compiled scope
       end once ownership analysis proves their lifetime. Retain finalization for every

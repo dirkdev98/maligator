@@ -359,6 +359,10 @@ typedef struct MalInstruction {
         } load_argument;
 
         struct {
+            i32 dst, key;
+        } load_dynamic_argument;
+
+        struct {
             i32 dst, direct, fallback, index;
         } load_static_argument;
 

@@ -166,6 +166,7 @@ function staticParameterPlan(
 					"loadCallee",
 					"loadNewTarget",
 					"loadArgument",
+					"loadDynamicArgument",
 					"loadArgumentCount",
 					"loadStaticArgument",
 					"createArgumentsObject",

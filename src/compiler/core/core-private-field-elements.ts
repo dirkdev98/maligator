@@ -70,6 +70,7 @@ const CALLBACK_METHODS: ReadonlyMap<string, number> = new Map([
 
 // Operations through which a function can reach arguments it declares no parameter for.
 const ARGUMENT_READERS: ReadonlySet<string> = new Set([
+	"loadDynamicArgument",
 	"callRestArguments",
 	"createArgumentsObject",
 	"createRestArguments",

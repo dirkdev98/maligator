@@ -623,6 +623,7 @@ export function computeArgumentRetentionLimit(
 			case "CREATE_REST_ARGUMENTS":
 			case "CALL_REST_ARGUMENTS":
 			case "LOAD_ARGUMENT":
+			case "LOAD_DYNAMIC_ARGUMENT":
 				return 0x7fffffff;
 			case "LOAD_STATIC_ARGUMENT":
 				maximum = Math.max(maximum, instruction.index);
@@ -880,6 +881,11 @@ export type BytecodeInstruction =
 			opcode: "LOAD_ARGUMENT";
 			dst: number;
 			index: number;
+	  }
+	| {
+			opcode: "LOAD_DYNAMIC_ARGUMENT";
+			dst: number;
+			key: number;
 	  }
 	| {
 			opcode: "LOAD_STATIC_ARGUMENT";
@@ -3978,6 +3984,12 @@ function lowerInstructionToBytecodeInstruction(
 				opcode: "LOAD_ARGUMENT",
 				dst: instruction.registers[0],
 				index: instruction.index,
+			};
+		case "loadDynamicArgument":
+			return {
+				opcode: "LOAD_DYNAMIC_ARGUMENT",
+				dst: instruction.registers[0],
+				key: instruction.registers[1],
 			};
 		case "loadStaticArgument":
 			return {

@@ -29,30 +29,32 @@ function argumentObjects(binary: string): number {
 	return Number(line?.match(/(?:^|\s)objects=([0-9]+)/)?.[1]);
 }
 
-describe("local arguments aliases", () => {
-	let compiled: string;
-	let interpreted: string;
-	let expected: string;
-	beforeAll(() => {
-		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
-			fixture,
-			name: "arguments-alias",
-			outDir,
-			config: preparedNativeEvalConfig({ primordials: "locked" }),
-			environment: { ...process.env, MAL_PERF_STATS: "1" },
-		}));
-		expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
-	}, 600_000);
+describe.each(["mutable", "locked"] as const)(
+	"local arguments aliases (%s primordials)",
+	(primordials) => {
+		let compiled: string;
+		let interpreted: string;
+		let expected: string;
+		beforeAll(() => {
+			({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
+				fixture,
+				name: `arguments-alias-${primordials}`,
+				outDir,
+				config: preparedNativeEvalConfig({ primordials }),
+				environment: { ...process.env, MAL_PERF_STATS: "1" },
+			}));
+			expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+		}, 600_000);
 
-	it("read the same values and object as `arguments`", () => {
-		for (const binary of [compiled, interpreted]) {
-			expect(runToStdout(binary)).toBe(expected);
-			expect(runToStdout(binary, { env: STRESS_ENV, timeoutMs: 60000 })).toBe(expected);
-		}
-	});
+		it("read the same values and object as `arguments`", () => {
+			for (const binary of [compiled, interpreted]) {
+				expect(runToStdout(binary)).toBe(expected);
+				expect(runToStdout(binary, { env: STRESS_ENV, timeoutMs: 60000 })).toBe(expected);
+			}
+		});
 
-	it("read the frame without building an arguments object", () => {
-		// 4000 reading calls; the identity, write, reassignment and escape cases build a few.
-		expect(argumentObjects(compiled)).toBeLessThan(30);
-	});
-});
+		it("read the frame without building an arguments object", () => {
+			expect(argumentObjects(compiled)).toBeLessThan(30);
+		});
+	},
+);

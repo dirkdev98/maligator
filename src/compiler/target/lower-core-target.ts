@@ -183,6 +183,7 @@ const REGISTERLESS_CORE_OPERATIONS: ReadonlySet<string> = new Set([
 ]);
 
 const RAW_ARGUMENT_OPCODES: ReadonlySet<string> = new Set([
+	"loadDynamicArgument",
 	"loadArgumentCount",
 	"loadArgument",
 	"loadStaticArgument",

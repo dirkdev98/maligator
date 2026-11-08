@@ -53,12 +53,8 @@ describe.each(["mutable", "locked"] as const)(
 			}
 		});
 
-		it.runIf(primordials === "locked")(
-			"copy incoming arguments without building an arguments object",
-			() => {
-				// 2500 copy-loop calls; the fixture's other cases build fewer than 20 objects.
-				expect(argumentObjects(compiled)).toBeLessThan(40);
-			},
-		);
+		it("copy incoming arguments without building an arguments object", () => {
+			expect(argumentObjects(compiled)).toBeLessThan(40);
+		});
 	},
 );

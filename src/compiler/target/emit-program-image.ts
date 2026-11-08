@@ -3275,6 +3275,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_LOAD_ARGUMENT_COUNT, .as.load_argument_count = { .dst = ${instruction.dst} } }`;
 		case "LOAD_ARGUMENT":
 			return `{ .opcode = MAL_OP_LOAD_ARGUMENT, .as.load_argument = { .dst = ${instruction.dst}, .index = ${instruction.index} } }`;
+		case "LOAD_DYNAMIC_ARGUMENT":
+			return `{ .opcode = MAL_OP_LOAD_DYNAMIC_ARGUMENT, .as.load_dynamic_argument = { .dst = ${instruction.dst}, .key = ${instruction.key} } }`;
 		case "LOAD_STATIC_ARGUMENT":
 			return `{ .opcode = MAL_OP_LOAD_STATIC_ARGUMENT, .as.load_static_argument = { .dst = ${instruction.dst}, .direct = ${instruction.direct}, .fallback = ${instruction.fallback}, .index = ${instruction.index} } }`;
 		case "LOAD_THIS":

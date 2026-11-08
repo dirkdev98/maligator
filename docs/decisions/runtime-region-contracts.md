@@ -103,6 +103,13 @@ the same materialization contract. The cached heap object becomes authoritative
 before invoking either observer, including when the builtin changes descriptors
 or returns the same object. Callee and receiver positions require separate proof.
 
+An unmapped arguments binding can read an in-range numeric index from its incoming
+slice while the binding remains unmaterialized. The invocation retains and roots
+the entire slice, including extra arguments, through its last read. Other keys and
+materialized bindings use the arguments object's property semantics. This read
+belongs to its activation, so transformations cannot move it into another function
+or use an entry that retains only declared parameters.
+
 Fixed TypedArray regions preserve memory-operation order for overlapping views.
 Read-only reductions retain the same storage guards without requiring writable
 buffers. Every view contributes its complete visited index window, including all
