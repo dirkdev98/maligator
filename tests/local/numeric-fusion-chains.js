@@ -203,6 +203,33 @@ for (const flag of [false, true])
 	}
 for (const [left, right, other] of fusionInputs)
 	outputs.push(captureFusion(() => primitiveFusionPartial(left, right, other, ":")));
+// The chain's result feeds two numeric reads; strings and objects take the slow path.
+function sharedFinish(values, carry) {
+	const out = [];
+	for (let i = 0; i < values.length; i++) {
+		const l = i * 3 + values[i] + carry;
+		carry = (l >> 4) + 1;
+		out.push(l & 0xff);
+	}
+	return `${out.join(",")}:${carry}`;
+}
+outputs.push(
+	sharedFinish([1, 2, 3, 4], 5),
+	sharedFinish([1, 2, "7", 4.5, -3, 2 ** 40], 5),
+	sharedFinish(
+		[
+			1,
+			{
+				valueOf() {
+					events.push("valueOf");
+					return 9;
+				},
+			},
+			3,
+		],
+		-1,
+	),
+);
 outputs.push(events.join(","));
 console.log(outputs.map(show).join(" "));
 
@@ -222,4 +249,5 @@ Object.assign(globalThis, {
 	primitiveFusionLoose,
 	primitiveFusionManaged,
 	primitiveFusionPartial,
+	sharedFinish,
 });

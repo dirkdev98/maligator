@@ -7500,6 +7500,43 @@ function emitBody(
 						plan.exits.map((exit) => exit.targetIp),
 					),
 				]);
+	// A boxed arithmetic finish also leaves its Number in the chain's temporaries, which
+	// later numeric reads in its block use instead of unboxing the register again. The
+	// temporaries change only within the chain, which precedes the finish in its block.
+	const numericFusionShadows = new Map<number, Map<number, number>>();
+	const numericFusionShadowedIps = new Set<number>();
+	for (const [ip, fusion] of numericFusionActionByIp) {
+		const finish = fn.instructions[ip];
+		if (
+			fusion.role !== "finish" ||
+			fusion.truncating ||
+			finish?.opcode !== "BINARY" ||
+			reps[fusion.first.dst] !== "boxed" ||
+			reps[finish.dst] !== "boxed" ||
+			!producesNumberFromNumbers(finish.operator)
+		)
+			continue;
+		numericFusionShadowedIps.add(ip);
+		for (
+			let next = ip + 1;
+			next < fn.instructions.length && !jumpTargets.has(next);
+			next++
+		) {
+			const shadows = numericFusionShadows.get(next) ?? new Map<number, number>();
+			shadows.set(finish.dst, fusion.id);
+			numericFusionShadows.set(next, shadows);
+			const instruction = fn.instructions[next]!;
+			if (
+				instruction.opcode === "JUMP" ||
+				instruction.opcode === "JUMP_IF" ||
+				Object.entries(instruction).some(
+					([key, value]) =>
+						(key === "dst" || key.endsWith("Dst")) && value === finish.dst,
+				)
+			)
+				break;
+		}
+	}
 	const numberRecordRegionById = new Map(
 		fastPathPlans.numberRecordRegions.map((plan) => [plan.id, plan]),
 	);
@@ -8131,6 +8168,8 @@ function emitBody(
 		nativeIteratorResultVirtualizationAction: undefined,
 		nativeIteratorEntryPairVirtualizationAction: undefined,
 		numericFusionAction: undefined,
+		numericFusionShadows: undefined,
+		numericFusionShadowed: false,
 		staticPropertyProjectionAction: undefined,
 		staticPropertyNumericAction: undefined,
 		propertyNumericUpdateAction: undefined,
@@ -8765,6 +8804,8 @@ function emitBody(
 			instructionContext.nativeIteratorEntryPairVirtualizationAction =
 				nativeIteratorEntryPairVirtualizationActionByIp.get(ip);
 			instructionContext.numericFusionAction = numericFusionActionByIp.get(ip);
+			instructionContext.numericFusionShadows = numericFusionShadows.get(ip);
+			instructionContext.numericFusionShadowed = numericFusionShadowedIps.has(ip);
 			instructionContext.staticPropertyProjectionAction =
 				nativeFastPaths.propertyReadPairActions.get(ip);
 			instructionContext.staticPropertyNumericAction =
@@ -9327,6 +9368,10 @@ interface NativeInstructionContext {
 	readonly nativeIteratorResultVirtualizationAction?: NativeIteratorResultVirtualizationAction;
 	readonly nativeIteratorEntryPairVirtualizationAction?: NativeIteratorEntryPairVirtualizationAction;
 	readonly numericFusionAction?: NativeNumericFusionAction;
+	/** Boxed registers whose numeric value a fused finish also left in its temporaries. */
+	readonly numericFusionShadows?: ReadonlyMap<number, number>;
+	/** The fused finish here keeps its result in the chain's temporaries for later reads. */
+	readonly numericFusionShadowed?: boolean;
 	readonly staticPropertyProjectionAction?: NativePropertyReadPairAction;
 	readonly staticPropertyNumericAction?: NativePropertyProjectionAction;
 	readonly propertyNumericUpdateAction?: NativePropertyNumericUpdateAction;
@@ -10064,7 +10109,16 @@ class NativeInstructionEmission {
 			: `mal_ops_number_as_f64(${this.boxed(r)})`;
 		const boolean =
 			this.reps[r] === "boolean" ? `r${r}` : `mal_value_to_boolean(${this.boxed(r)})`;
-		return nativePrimitiveNumberExpression(this.boxed(r), mask, number, boolean);
+		const expression = nativePrimitiveNumberExpression(
+			this.boxed(r),
+			mask,
+			number,
+			boolean,
+		);
+		const shadow = this.context.numericFusionShadows?.get(r);
+		return shadow === undefined
+			? expression
+			: `(__nf_${shadow}_ok ? __nf_${shadow}_value : ${expression})`;
 	}
 
 	suspendSnapshot(): Array<string> {
@@ -11341,13 +11395,18 @@ class NativeInstructionEmission {
 								firstOnLeft ? externalInt32 : fusedInt32,
 							)
 						: null;
-				result = `r${dst} = ${this.reps[dst] === "number" ? nativeExpr : this.reps[dst] === "int32" ? (int32Result ?? `mal_ops_number_to_i32(${nativeExpr})`) : this.profileCall("boxing", `mal_ops_number_value(${nativeExpr})`)};`;
+				result = this.context.numericFusionShadowed
+					? `${fusedValue} = ${nativeExpr}; r${dst} = ${this.profileCall("boxing", `mal_ops_number_value(${fusedValue})`)};`
+					: `r${dst} = ${this.reps[dst] === "number" ? nativeExpr : this.reps[dst] === "int32" ? (int32Result ?? `mal_ops_number_to_i32(${nativeExpr})`) : this.profileCall("boxing", `mal_ops_number_value(${nativeExpr})`)};`;
 			}
 			return [
 				`if (__nf_${fusion.id}_ok${externalGuard === "" ? "" : ` && ${externalGuard}`}) {`,
 				`  ${result}`,
 				`} else {`,
 				...fallback.map((line) => `  ${line}`),
+				...(this.context.numericFusionShadowed
+					? [`  __nf_${fusion.id}_ok = false;`]
+					: []),
 				`}`,
 			];
 		}

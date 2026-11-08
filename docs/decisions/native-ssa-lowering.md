@@ -259,7 +259,10 @@ and relational String pairs keep lexical comparison on the original fallback.
 Starts, links and finishes consume the same partial facts in full and resumable
 entries. A nontruncating fusion carries only boxed intermediates in its `f64`
 temporary; a failed guard materializes that value before coercion, root publication
-or re-entry. Scalar results retain their existing completion-before-decode contract.
+or re-entry. A boxed arithmetic finish still boxes its result, and also leaves it in
+that temporary for numeric reads later in its block, which no longer unbox it on a
+loop-carried path; its failed guard clears the temporary's validity instead.
+Scalar results retain their existing completion-before-decode contract.
 Numeric overlays preserve the original operations, so frameless entries can prove
 their own scalar paths without inheriting the full entry's fusion state or losing
 eligibility merely because that state exists.

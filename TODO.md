@@ -1820,10 +1820,6 @@ remains a Maligator extension and does not count as global fetch conformance.
       Parameter seeds dispatch to a [Number variant](docs/decisions/07-private-literals-and-native-entries.md);
       other seeds still box the recurrence edge, and specializing it must preserve
       zero-trip behavior and coercion effects.
-- [ ] Keep a numeric-fusion chain's result unboxed for its numeric consumers. In
-      Crypto's am3, `l = ... + w_array[j] + c` feeds `l >> 28` and `l & 0xfffffff`,
-      so its fusion ends at `l`, which is boxed and unboxed on the loop-carried path
-      through `c`. Consumers in the same block could read the fusion's f64 value.
 
 - [ ] Detect child exits from SIGCHLD or a kqueue process source instead of the
       5 ms waitpid poll, emit 'data' on exec/execFile child streams (output goes
