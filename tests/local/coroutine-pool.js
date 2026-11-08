@@ -51,15 +51,19 @@ for (let i = 0; i < suspended.length; i++) {
 
 // The interpreter owns a separate argument buffer when the arguments object
 // escapes. This one exceeds the 64 KiB per-buffer policy and must never be pooled.
+// Storing the object in a binding read below makes it escape; a local alias would
+// let the compiler read the argument count without creating the object.
+let escapedArguments;
 function* wideArguments() {
-	const captured = arguments;
-	yield captured.length;
+	escapedArguments = arguments;
+	yield escapedArguments.length;
 }
 const wideValues = new Array(9000).fill(1);
 for (let i = 0; i < 4; i++) {
 	const generator = wideArguments(...wideValues);
 	const first = generator.next();
 	if (first.done || first.value !== wideValues.length) throw new Error("wide arguments");
+	if (escapedArguments.length !== wideValues.length) throw new Error("escaped arguments");
 	const returned = generator.return("wide");
 	if (!returned.done || returned.value !== "wide") throw new Error("wide return");
 }
