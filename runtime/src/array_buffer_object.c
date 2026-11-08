@@ -222,7 +222,8 @@ MalArrayBufferObject *mal_array_buffer_object_move_store(
         MalArrayBufferObject *result = mal_array_buffer_object_new_impl(
             heap, prototype, byte_length, max_byte_length, resizable, false, true, false);
         u32 kept = byte_length < source->byte_length ? byte_length : source->byte_length;
-        memcpy(result->data, source->data, kept);
+        // An empty store has no data pointer, which memcpy may not receive even for 0 bytes.
+        if (kept > 0) memcpy(result->data, source->data, kept);
         result->immutable = immutable;
         source->data = nullptr;
         source->byte_length = 0;
