@@ -2852,7 +2852,11 @@ function fixedNumericLoopStorage(
 		return undefined;
 	const provenCounter = fixedNumericLoopCounter(fn, shape, body, lengthLoads, memory);
 	const checkedStore = memory.some(
-		({ ip, op }) => op.opcode === "STORE_PROPERTY" && !provenCounter?.offsets.has(ip),
+		({ ip, op, data }) =>
+			op.opcode === "STORE_PROPERTY" &&
+			!(data === undefined
+				? provenCounter?.offsets.has(ip)
+				: provenCounter?.windows.has(ip)),
 	);
 	const terminalStore = numericLoopHasTerminalStore(fn, shape.order[0]!, shape.order);
 	if (checkedStore && !terminalStore) return undefined;
