@@ -128,6 +128,13 @@ integer locals. Entry guards reject non-integer inputs and negative zero before
 the original loop performs any coercion. Integer arithmetic failure restores the
 iteration's starting values, while polling publishes completed iterations.
 
+Dense Array loops may overwrite a present own element when the storage has uniform
+writable descriptors. An overwrite must be the iteration's sole store, followed
+only by local work that cannot restart it. Independent indices check each access
+before the store commits; holes, accessors, coercions and unsupported descriptors
+resume the original iteration. Replacing a heap value preserves the deletion
+barrier. Borrowed storage ends at a poll, after publishing the completed iteration.
+
 DataView accessor calls join fixed storage regions as byte views. Admission uses the
 conditions that make `byteLength` the intrinsic getter: the watched-prototype
 protector, the intrinsic prototype, an empty own layout, and a fixed view over an

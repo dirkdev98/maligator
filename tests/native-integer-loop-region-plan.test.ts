@@ -45,6 +45,52 @@ function regions(image: ProgramImage): ReadonlyArray<NativeNumericLoopRegionPlan
 }
 
 describe("native safe-integer loop regions", () => {
+	it("admits a compound element update with a terminal store", () => {
+		const image = compile(`
+			for (let index = 0; index < start.length; index++) start[index] += 0.5;
+			return start;
+		`);
+		expect(
+			regions(image).some(
+				(plan) =>
+					plan.kind === "fixed-numeric" && plan.views.some((view) => view.writable),
+			),
+		).toBe(true);
+		expect(
+			regions(deserializeCompilerArtifact(serializeCompilerArtifact(image))),
+		).toEqual(regions(image));
+	});
+
+	it("checks independent element indices before a terminal loop store", () => {
+		const image = compile(`
+			const left = start.left, right = start.right;
+			let source = 1, target = 2, count = limit;
+			while (--count >= 0) right[target++] = left[source++] * 2 + 1;
+			return target;
+		`);
+		const [plan] = regions(image);
+		expect(plan?.kind).toBe("fixed-numeric");
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing numeric storage loop");
+		expect(plan.counter).toBeUndefined();
+		expect(plan.views.some((view) => view.writable && view.checked)).toBe(true);
+		expect(
+			regions(deserializeCompilerArtifact(serializeCompilerArtifact(image))),
+		).toEqual(regions(image));
+	});
+
+	it.each([
+		"right[target++] = left[source++]; right[target++] = 1;",
+		"right[target++] = left[source++]; total += left[source++];",
+	])("declines iteration replay after an independent store: %s", (body) => {
+		const image = compile(`
+			const left = start.left, right = start.right;
+			let source = 1, target = 2, count = limit, total = 0;
+			while (--count >= 0) { ${body} }
+			return total + target;
+		`);
+		expect(regions(image)).toEqual([]);
+	});
+
 	it.each(["Math.imul(value, 1664525)", "Math.clz32(value)"])(
 		"keeps the integer builtin recurrence %s in a region",
 		(expression) => {

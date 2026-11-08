@@ -1314,6 +1314,7 @@ export function numberRecordDataflow(
 					break;
 				}
 				case "LOAD_PROPERTY":
+				case "TO_PROPERTY_KEY":
 					admitted =
 						indexed &&
 						read(instruction.key, "number") &&
@@ -1704,6 +1705,42 @@ function integerLoopInstruction(instruction: BytecodeInstruction): boolean {
 	}
 }
 
+/** A sole store followed only by local work, so a guard can never replay it. */
+export function numericLoopHasTerminalStore(
+	fn: BytecodeFunction,
+	header: number,
+	order: ReadonlyArray<number>,
+): boolean {
+	const stores = order.filter((ip) => fn.instructions[ip]!.opcode === "STORE_PROPERTY");
+	if (stores.length !== 1) return false;
+	if (
+		order.some((ip) =>
+			numberRecordSuccessors(fn.instructions[ip]!, ip).some(
+				(next) => next <= ip && next !== header,
+			),
+		)
+	)
+		return false;
+	const members = new Set(order);
+	const seen = new Set<number>();
+	const pending = numberRecordSuccessors(fn.instructions[stores[0]!]!, stores[0]!);
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		if (ip === header || !members.has(ip) || seen.has(ip)) continue;
+		seen.add(ip);
+		const op = fn.instructions[ip]!;
+		if (
+			!integerLoopInstruction(op) &&
+			!["LOAD_GLOBAL", "STORE_GLOBAL", "LOAD_CAPTURED", "THROW_IF_TDZ"].includes(
+				op.opcode,
+			)
+		)
+			return false;
+		pending.push(...numberRecordSuccessors(op, ip));
+	}
+	return true;
+}
+
 function bytecodePredecessors(
 	fn: BytecodeFunction,
 	body: NativeBodyFacts,
@@ -2064,6 +2101,7 @@ function numericLoopIndexFacts(
 			(op.opcode === "UNARY" && (op.operator === "tonumeric" || op.operator === "+"))
 		)
 			result = facts.get(op.src);
+		else if (op.opcode === "TO_PROPERTY_KEY") result = facts.get(op.key);
 		else if (
 			op.opcode === "UNARY" &&
 			(op.operator === "increment" || op.operator === "decrement")
@@ -2812,7 +2850,13 @@ function fixedNumericLoopStorage(
 		memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT
 	)
 		return undefined;
-	const counted = fixedNumericLoopCounter(fn, shape, body, lengthLoads, memory);
+	const provenCounter = fixedNumericLoopCounter(fn, shape, body, lengthLoads, memory);
+	const checkedStore = memory.some(
+		({ ip, op }) => op.opcode === "STORE_PROPERTY" && !provenCounter?.offsets.has(ip),
+	);
+	const terminalStore = numericLoopHasTerminalStore(fn, shape.order[0]!, shape.order);
+	if (checkedStore && !terminalStore) return undefined;
+	const counted = checkedStore ? undefined : provenCounter;
 	const offsets = counted?.offsets ?? new Map<number, number>();
 	const windows =
 		counted?.windows ?? new Map<number, { scale: number; offset: number }>();
@@ -2868,12 +2912,10 @@ function fixedNumericLoopStorage(
 			});
 			continue;
 		}
-		// Without a counter, every access is a read that checks its own key. Stores stay
-		// at counted keys, whose range the entry guards prove even in a checked view.
+		// A terminal checked store validates its own key before the iteration commits.
 		if (offset === undefined) {
-			if (op.opcode !== "LOAD_PROPERTY") return undefined;
 			views.set(op.object, {
-				writable: previous?.writable === true,
+				writable: previous?.writable === true || op.opcode === "STORE_PROPERTY",
 				minOffset: previous?.minOffset ?? 0,
 				maxOffset: previous?.maxOffset ?? 0,
 				checked: true,
@@ -2980,12 +3022,13 @@ function fixedNumericLoopStorage(
 		(lengthLoad !== undefined && views.get(lengthLoad.object)?.byteScale !== undefined)
 	)
 		return undefined;
-	// Stores admit only TypedArray views, whose length no store changes; records and
-	// a known Array length need Array views, which stay read-only so stores keep their kinds.
+	// Record guards can restart an iteration; a known Array length permits only the
+	// terminal-store alternative, whose overwrite cannot change that length.
 	if (
 		(records.size > 0 ||
-			fn.instructions[lengthLoad?.ip ?? -1]?.opcode ===
-				"LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
+			(fn.instructions[lengthLoad?.ip ?? -1]?.opcode ===
+				"LOAD_PROPERTY_STATIC_ARRAY_LENGTH" &&
+				!terminalStore)) &&
 		[...views.values()].some((view) => view.writable)
 	)
 		return undefined;
@@ -3034,6 +3077,26 @@ function fixedNumericLoopStorage(
 			)
 		)
 			return undefined;
+		if (op.opcode === "TO_PROPERTY_KEY") {
+			// An admitted receiver is coercible; the Number key remains private to its accesses.
+			if (
+				!views.has(op.object) ||
+				shape.order.some((other) => {
+					const use = fn.instructions[other]!;
+					return (
+						vmInstructionReadRegisters(use).includes(op.dst) &&
+						!(
+							(use.opcode === "LOAD_PROPERTY" || use.opcode === "STORE_PROPERTY") &&
+							use.key === op.dst &&
+							use.object !== op.dst &&
+							(use.opcode !== "STORE_PROPERTY" || use.value !== op.dst)
+						)
+					);
+				})
+			)
+				return undefined;
+			continue;
+		}
 		if (op.opcode === "LOAD_PROPERTY" || op.opcode === "STORE_PROPERTY") continue;
 		if (
 			(op.opcode !== "CREATE_NUMBER" &&
@@ -3346,6 +3409,16 @@ function lowerNumericLoopRegion(
 	}
 	// A record is an iteration's borrowed element, never a Number to pass in or out.
 	const records = new Set(storage?.records ?? []);
+	const preparedKeys = shape.order.flatMap((ip) => {
+		const op = fn.instructions[ip]!;
+		return op.opcode === "TO_PROPERTY_KEY" ? [op.dst] : [];
+	});
+	if (
+		preparedKeys.some(
+			(key) => inputs.has(key) || exits.some((exit) => exit.outputs.includes(key)),
+		)
+	)
+		return undefined;
 	if (
 		[...inputs].some((register) => records.has(register)) ||
 		exits.some((exit) => exit.outputs.some((register) => records.has(register)))

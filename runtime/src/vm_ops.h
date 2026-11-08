@@ -2723,25 +2723,41 @@ static inline bool mal_vm_fixed_numeric_storage(
 }
 
 /**
- * A dense Array's elements below `count`, borrowed until a poll like typed-array
- * bytes. A hole or non-Number element is not an own Number, so its read declines.
+ * Dense Array storage borrowed until a poll. Reads establish their own value kind;
+ * writable borrows overwrite only present elements and preserve the deletion barrier.
  */
 typedef struct MalDenseNumberSpan {
-    const MalValue *elements;
+    MalValue *elements;
     u32 length;
     u32 count;
 } MalDenseNumberSpan;
 
-static inline bool mal_vm_dense_number_storage(MalValue receiver, MalDenseNumberSpan *span) {
+static inline bool mal_vm_dense_number_storage(
+    MalValue receiver, bool writable, MalDenseNumberSpan *span
+) {
     if (!mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT)) return false;
     const MalArrayObject *array = (const MalArrayObject *) mal_value_to_heap(receiver);
-    if (array->dense_deopted) return false;
+    if (array->dense_deopted || (writable && !array->dense_elements_writable)) return false;
     *span = (MalDenseNumberSpan) {
         .elements = array->elements,
         .length = array->length,
         .count = array->elements == nullptr ? 0
             : array->dense_count < array->length ? array->dense_count : array->length,
     };
+    return true;
+}
+
+static inline bool mal_vm_dense_number_store(
+    const MalDenseNumberSpan *span, u32 index, f64 value
+) {
+    if (index >= span->count) return false;
+    MalValue *slot = &span->elements[index];
+    MalValue previous = *slot;
+    if (mal_value_is_array_hole(previous)) return false;
+    // Number stores introduce no young edge, but replaced heap values still need SATB.
+    mal_gc_write_barrier(previous);
+    *slot = mal_ops_number_value(value);
+    MAL_PERF_COUNT(dense_array_number_region_stores);
     return true;
 }
 

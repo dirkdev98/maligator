@@ -90,6 +90,7 @@ import {
 	ffiIntegerArgumentFits,
 	nativeDataViewAccessor,
 	numericLoopCallMethods,
+	numericLoopHasTerminalStore,
 	numericLoopOrder,
 	nativeNumericBuiltinInstruction,
 	lowerNativeFastPaths,
@@ -1503,6 +1504,8 @@ function integralLoopRegisters(
 				return Object.is(op.value, -0) ? undefined : safe(op.value, op.value);
 			case "MOVE":
 				return rangeOf(op.src);
+			case "TO_PROPERTY_KEY":
+				return rangeOf(op.key);
 			case "LOAD_PROPERTY":
 				return elementLoads;
 			case "CALL":
@@ -1682,7 +1685,7 @@ function emitRecordIterationRegion(
 	};
 	const guards: Array<string> = [
 		`${cursor}.active`,
-		`mal_vm_dense_number_storage(r${plan.iterator}, &${id}_array)`,
+		`mal_vm_dense_number_storage(r${plan.iterator}, false, &${id}_array)`,
 	];
 	const lines: Array<string> = ["{", `  MalDenseNumberSpan ${id}_array = {0};`];
 	const declined = `${id}_declined`;
@@ -2217,12 +2220,12 @@ function emitNumericLoopRegion(
 			);
 		else guards.push(`mal_safe_integer_admit(${value}, &${local(register)})`);
 	}
-	// Only element views have a dense Array alternative, and only while nothing stores.
-	const readOnly =
+	// An Array overwrite may commit only after the iteration's last restarting operation.
+	const arrayAlternative =
 		plan.kind === "fixed-numeric" &&
-		plan.views.every(
-			(view) => !view.writable && view.byteScale === undefined && view.lend === undefined,
-		);
+		plan.views.every((view) => view.byteScale === undefined && view.lend === undefined) &&
+		(plan.views.every((view) => !view.writable) ||
+			numericLoopHasTerminalStore(fn, plan.id, order));
 	const records = new Set(plan.kind !== "integer" ? (plan.records ?? []) : []);
 	const checkedViews = new Set(
 		plan.kind === "fixed-numeric"
@@ -2348,11 +2351,11 @@ function emitNumericLoopRegion(
 				? [`  MalTypedArrayObject *${id}_lt = nullptr;`, `  u32 ${id}_ll = 0;`]
 				: []),
 			`  bool ${id}_typed = ${typedAdmissions.join(" && ")};`,
-			`  bool ${id}_array = ${readOnly ? `!${id}_typed && ${elementViews.map((view) => `mal_vm_dense_number_storage(r${view.object}, &${id}_a${view.object})`).join(" && ")}` : "false"};`,
+			`  bool ${id}_array = ${arrayAlternative ? `!${id}_typed && ${elementViews.map((view) => `mal_vm_dense_number_storage(r${view.object}, ${view.writable}, &${id}_a${view.object})`).join(" && ")}` : "false"};`,
 		);
 		if (counter !== undefined && boundObject !== undefined && !textBound)
 			rangePrelude.push(
-				`  ${local(counter.bound)} = ${typedPossible ? `${id}_typed ? (f64) ${id}_v${boundObject}.length : ` : ""}${readOnly ? `${id}_array ? (f64) ${id}_a${boundObject}.length : ` : ""}0.0;`,
+				`  ${local(counter.bound)} = ${typedPossible ? `${id}_typed ? (f64) ${id}_v${boundObject}.length : ` : ""}${arrayAlternative ? `${id}_array ? (f64) ${id}_a${boundObject}.length : ` : ""}0.0;`,
 			);
 		guards.unshift(`(${id}_typed || ${id}_array)`);
 		if (textViews.length > 0) guards.unshift(`${id}_text`);
@@ -2653,8 +2656,15 @@ function emitNumericLoopRegion(
 				return `{ ${bound}${local(op.dst)} = ${integral.has(op.dst) ? "(i64) " : ""}mal_vm_fixed_numeric_load(&${id}_v${op.object}, (u32) ${key}); }`;
 			}
 			case "STORE_PROPERTY": {
-				if (mode === "array") throw new Error("Invalid dense Array loop store");
 				const key = integral.has(op.key) ? local(op.key) : num(op.key);
+				const length = `${id}_${mode === "array" ? "a" : "v"}${op.object}.${mode === "array" ? "count" : "length"}`;
+				const bound = !checkedViews.has(op.object)
+					? ""
+					: integral.has(op.key)
+						? `if (__builtin_expect(!(${key} >= 0 && ${key} < (i64) ${length}), 0)) ${restart} `
+						: `if (__builtin_expect(!(${key} >= 0.0 && ${key} < (f64) ${length}) || ${key} != trunc(${key}), 0)) ${restart} `;
+				if (mode === "array")
+					return `{ ${bound}if (__builtin_expect(!mal_vm_dense_number_store(&${id}_a${op.object}, (u32) ${key}, ${num(op.value)}), 0)) ${restart} }`;
 				const access = nativeInstructions[ip];
 				if (
 					mode !== "f64" &&
@@ -2670,11 +2680,11 @@ function emitNumericLoopRegion(
 								: access.elementKind === "Uint8ClampedArray"
 									? `mal_typed_array_to_uint8_clamp(${num(op.value)})`
 									: `(u${width * 8}) mal_ops_number_to_uint32(${num(op.value)})`;
-					return `mal_scalar_store_native_u${width * 8}(${id}_v${op.object}.data + (usize)(u32) ${key} * ${width}, ${bits});`;
+					return `{ ${bound}mal_scalar_store_native_u${width * 8}(${id}_v${op.object}.data + (usize)(u32) ${key} * ${width}, ${bits}); }`;
 				}
 				return mode === "f64"
-					? `mal_scalar_store_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8, mal_scalar_f64_to_bits(${num(op.value)}));`
-					: `mal_vm_fixed_numeric_store(&${id}_v${op.object}, (u32) ${key}, ${num(op.value)});`;
+					? `{ ${bound}mal_scalar_store_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8, mal_scalar_f64_to_bits(${num(op.value)})); }`
+					: `{ ${bound}mal_vm_fixed_numeric_store(&${id}_v${op.object}, (u32) ${key}, ${num(op.value)}); }`;
 			}
 			case "REQUIRE_COERCIBLE":
 				// The element load already restarted the iteration for anything but an object.
@@ -2701,6 +2711,8 @@ function emitNumericLoopRegion(
 				return `${local(op.dst)} = ${op.value};`;
 			case "MOVE":
 				return `${local(op.dst)} = ${integral.has(op.dst) ? local(op.src) : num(op.src)};`;
+			case "TO_PROPERTY_KEY":
+				return `${local(op.dst)} = ${integral.has(op.dst) ? local(op.key) : num(op.key)};`;
 			case "BINARY": {
 				const compared = compilerIntegerRangeComparison(
 					op.operator,
@@ -2969,7 +2981,7 @@ function emitNumericLoopRegion(
 					? `  MalValue ${local(register)} = MAL_VALUE_UNDEFINED;`
 					: `  ${cType(register)} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
 			),
-			`  if (${[`${cursor}.active`, `mal_vm_dense_number_storage(r${plan.iterator}, &${id}_a)`, ...guards].join(" && ")}) {`,
+			`  if (${[`${cursor}.active`, `mal_vm_dense_number_storage(r${plan.iterator}, false, &${id}_a)`, ...guards].join(" && ")}) {`,
 			...arrayBody(),
 			"  }",
 			"}",
@@ -2981,7 +2993,7 @@ function emitNumericLoopRegion(
 		...textViews.map((view) => `  MalStringUnitSpan ${id}_s${view.object} = {0};`),
 		...elementViews.flatMap((view) => [
 			...(lengthBound ? [] : [`  MalTypedArraySpan ${id}_v${view.object} = {0};`]),
-			...(readOnly ? [`  MalDenseNumberSpan ${id}_a${view.object} = {0};`] : []),
+			...(arrayAlternative ? [`  MalDenseNumberSpan ${id}_a${view.object} = {0};`] : []),
 		]),
 		...dataViews.map((view) => `  MalDataViewSpan ${id}_d${view.object} = {0};`),
 		...lentViews.flatMap((view) => [
@@ -2999,7 +3011,7 @@ function emitNumericLoopRegion(
 			: [
 					`  if (${[...guards, ...typedViewGuards].join(" && ") || "true"}) {`,
 					...typedBodies,
-					...(readOnly && !textual
+					...(arrayAlternative && !textual
 						? [
 								`  } else if (${[...guards, ...arrayViewGuards].join(" && ")}) {`,
 								...arrayBody(),
