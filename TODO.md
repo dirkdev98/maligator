@@ -1167,7 +1167,9 @@ only reproducible input.
       Node's 6.6 (`call-arguments-escape`). Dense storage needs define, delete,
       freeze, and own-key order to understand it, and a move to the table once an
       index gets non-default attributes. In V8's EarleyBoyer, creating arguments
-      objects takes 19% of the main thread's samples.
+      objects takes 19% of the main thread's samples: its `var a = arguments`
+      loops read `a[i]` with a dynamic index, which stays virtual only under
+      locked primordials, and the suite needs mutable ones.
 
 - [ ] Deterministically release nonescaping RegExp and ICU handles at compiled scope
       end once ownership analysis proves their lifetime. Retain finalization for every
@@ -1186,10 +1188,11 @@ contracts or investigates costs still visible after the string follow-ups.
 ## Focused performance work
 
 - [ ] Build fewer primordials at startup. A closed-world `console.log` program
-      starts in 2.1 ms against Porffor's 1.3 and a 1.2 ms spawn floor, and
-      `mal_intrinsics_init` takes about 0.7 ms of that. The cost is spread over the
-      builtin installs at 10 to 50 µs each, so only lazy installs for families a
-      program never reaches, or a prebuilt heap image, would remove most of it.
+      starts in 1.8 ms against Porffor's 1.3 and a 1.1 ms floor for an empty C
+      `main`. A warm `mal_intrinsics_init` takes 140 µs, most of it property
+      defines, table growth and name interning spread over the builtin installs,
+      so only lazy installs for families a program never reaches, or a prebuilt
+      heap image, would remove most of it.
 - [ ] Search UTF-16 subjects with regress start predicates. regress 0.11.1 skips its
       start-position prefilter whenever the `utf16` feature is on, so a pattern that
       can only start at `<` tries a backtracking match at every code unit. Upstream
