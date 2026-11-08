@@ -107,6 +107,13 @@ typedef struct MalNativeFunctionObject {
      */
     MalRealm *realm;
 #endif
+
+    /**
+     * The `length`/`name` metadata values and any inline slots that share the cell. As
+     * the last member it also gives the object MalValue's alignment, which 32-bit
+     * targets would not otherwise round its size up to.
+     */
+    MalValue trailing[];
 } MalNativeFunctionObject;
 
 /**

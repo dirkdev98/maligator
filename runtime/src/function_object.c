@@ -115,7 +115,7 @@ static void mal_native_function_attach_slots(
 ) {
     if (slot_count <= 0) return;
     if (slot_count <= MAL_NATIVE_FUNCTION_INLINE_SLOTS_MAX) {
-        function->slots = (MalValue *) (function + 1) + metadata_count;
+        function->slots = function->trailing + metadata_count;
         function->slots_inline = true;
     } else {
         function->slots = mal_heap_alloc_raw_profiled(
@@ -226,7 +226,7 @@ MalNativeFunctionObject *mal_native_function_object_new_arity(
     mal_native_function_init_state(heap, function, prototype, name, length, callback);
     mal_function_init_metadata(
         heap, &function->object, length_key, mal_value_from_i32(length), name_key, name,
-        (MalValue *) (function + 1));
+        function->trailing);
 
     return function;
 }
@@ -275,7 +275,7 @@ MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity_keys(
     mal_native_function_init_state(heap, function, prototype, name, length, callback);
     mal_function_init_metadata(
         heap, &function->object, length_key, mal_value_from_i32(length), name_key, name,
-        (MalValue *) (function + 1));
+        function->trailing);
     mal_native_function_attach_slots(heap, function, metadata_count, slots, slot_count);
     return function;
 }
