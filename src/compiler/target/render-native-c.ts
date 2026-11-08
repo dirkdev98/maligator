@@ -91,6 +91,7 @@ import {
 	nativeDataViewAccessor,
 	numericLoopCallMethods,
 	numericLoopHasTerminalStore,
+	numericLoopSupportsCheckedIntegers,
 	numericLoopOrder,
 	nativeNumericBuiltinInstruction,
 	lowerNativeFastPaths,
@@ -2019,6 +2020,7 @@ function emitNumericLoopRegion(
 	facts: NativeFunctionPlan["facts"],
 	nativeInstructions: NativeFunctionPlan["instructions"],
 	poll: (ip: number, spill: string, isolate: string) => string,
+	arrayArithmetic?: "number" | "checked-integer",
 ): ReadonlyArray<string> {
 	if (plan.kind === "array-iteration" && plan.recordGraph !== undefined)
 		return emitRecordIterationRegion(fn, plan, reps, propertyCache, poll);
@@ -2084,7 +2086,8 @@ function emitNumericLoopRegion(
 	]);
 	if (order === undefined || flow === undefined)
 		throw new Error("Invalid native integer loop region");
-	const floating = plan.kind !== "integer";
+	const floating = plan.kind !== "integer" && arrayArithmetic !== "checked-integer";
+	const arrayNumberFallback = `__array_number_fallback_${plan.id}`;
 	// The deferred cursor's index is the iteration state a restart must rewind.
 	const cursor =
 		plan.kind === "array-iteration" ? `__iter_deferred_${plan.initializeIp}` : undefined;
@@ -2200,6 +2203,10 @@ function emitNumericLoopRegion(
 			initial.set(register, `(i64) r${register}`);
 			continue;
 		}
+		if (representation === "boxed" && arrayArithmetic === "checked-integer") {
+			guards.push(`mal_safe_integer_value_admit(r${register}, &${local(register)})`);
+			continue;
+		}
 		const value =
 			representation === "boxed"
 				? `mal_ops_number_as_f64(r${register})`
@@ -2220,6 +2227,35 @@ function emitNumericLoopRegion(
 			);
 		else guards.push(`mal_safe_integer_admit(${value}, &${local(register)})`);
 	}
+	if (arrayArithmetic === "checked-integer") {
+		const written = new Set(
+			order.flatMap((ip) => vmInstructionWriteRegisters(fn.instructions[ip]!)),
+		);
+		for (const register of plan.inputs) {
+			if (kindOf(register) === "boolean") continue;
+			const ranges = written.has(register)
+				? []
+				: order.flatMap((ip) => {
+						const range = instructionInputIntegerRange(facts?.[ip], register);
+						return range === undefined ? [] : [range];
+					});
+			const low = Math.max(
+				ADMITTED_INPUT_RANGE.low,
+				ranges.length === 0
+					? -Infinity
+					: Math.min(...ranges.map((range) => range.minimum)),
+			);
+			const high = Math.min(
+				ADMITTED_INPUT_RANGE.high,
+				ranges.length === 0
+					? Infinity
+					: Math.max(...ranges.map((range) => range.maximum)),
+			);
+			guards.push(
+				`(${local(register)} >= INT64_C(${low}) && ${local(register)} <= INT64_C(${high}))`,
+			);
+		}
+	}
 	// An Array overwrite may commit only after the iteration's last restarting operation.
 	const arrayAlternative =
 		plan.kind === "fixed-numeric" &&
@@ -2227,13 +2263,39 @@ function emitNumericLoopRegion(
 		(plan.views.every((view) => !view.writable) ||
 			numericLoopHasTerminalStore(fn, plan.id, order));
 	const records = new Set(plan.kind !== "integer" ? (plan.records ?? []) : []);
+	if (
+		arrayArithmetic === undefined &&
+		plan.kind === "fixed-numeric" &&
+		arrayAlternative &&
+		records.size === 0 &&
+		globals.length === 0 &&
+		plan.views.every((view) => view.text !== true && view.lentOnly !== true) &&
+		numericLoopSupportsCheckedIntegers(fn, plan.id, order)
+	) {
+		const emit = (arithmetic: "number" | "checked-integer") =>
+			emitNumericLoopRegion(
+				fn,
+				plan,
+				reps,
+				propertyCache,
+				bindingLoad,
+				globalSlot,
+				facts,
+				nativeInstructions,
+				poll,
+				arithmetic,
+			);
+		return [...emit("checked-integer"), `${arrayNumberFallback}:;`, ...emit("number")];
+	}
 	const checkedViews = new Set(
 		plan.kind === "fixed-numeric"
 			? plan.views.flatMap((view) => (view.checked === true ? [view.object] : []))
 			: [],
 	);
 	// Records exist only for Array views.
-	const arrayOnly = plan.kind === "fixed-numeric" && records.size > 0;
+	const arrayOnly =
+		plan.kind === "fixed-numeric" &&
+		(records.size > 0 || arrayArithmetic === "checked-integer");
 	const views = plan.kind === "fixed-numeric" ? plan.views : [];
 	const textViews = views.filter((view) => view.text === true);
 	const elementViews = views.filter(
@@ -2467,7 +2529,7 @@ function emitNumericLoopRegion(
 				...stored.map((index) => `${slotStart(index)} = ${slot(index)};`),
 			].join(
 				" ",
-			)}${cursor === undefined ? "" : ` ${id}_si = ${id}_ci;`} if (mal_gc_poll_requested_in(${id}_isolate)) ${restart} continue;`;
+			)}${cursor === undefined ? "" : ` ${id}_si = ${id}_ci;`}${arrayArithmetic === "checked-integer" ? " MAL_PERF_COUNT(dense_array_integer_region_back_edges);" : ""} if (mal_gc_poll_requested_in(${id}_isolate)) ${restart} continue;`;
 		if (innerHeaders.has(ip))
 			return `${position.get(ip)! <= position.get(from)! ? `if (mal_gc_poll_requested_in(${id}_isolate)) { ${id}_exit = ${exitIndex.get(ip)}; break; } ` : ""}goto ${label(mode, ip)};`;
 		const exit = exitIndex.get(ip);
@@ -2620,16 +2682,19 @@ function emitNumericLoopRegion(
 				return `{ ${bound}${local(op.dst)} = ${integral.has(op.dst) ? "(i64)" : "(f64)"} mal_string_unit_span_at(&${id}_s${op.thisValue}, (u32) ${key}); }`;
 			}
 			case "LOAD_PROPERTY": {
-				const key = integral.has(op.key) ? local(op.key) : num(op.key);
+				const integerKey = !floating || integral.has(op.key);
+				const key = integerKey ? local(op.key) : num(op.key);
 				const length = `${id}_${mode === "array" ? "a" : "v"}${op.object}.${mode === "array" ? "count" : "length"}`;
 				// Any other key leaves the view to the generic load, which handles holes and non-indices.
 				const bound = !checkedViews.has(op.object)
 					? ""
-					: integral.has(op.key)
+					: integerKey
 						? `if (__builtin_expect(!(${key} >= 0 && ${key} < (i64) ${length}), 0)) ${restart} `
 						: `if (__builtin_expect(!(${key} >= 0.0 && ${key} < (f64) ${length}) || ${key} != trunc(${key}), 0)) ${restart} `;
 				if (mode === "array" && records.has(op.dst))
 					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_value_is_heap_type(${id}_e, MAL_HEAP_OBJECT), 0)) ${restart} ${local(op.dst)} = ${id}_e; }`;
+				if (mode === "array" && arrayArithmetic === "checked-integer")
+					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_safe_integer_value_admit(${id}_e, &${local(op.dst)}), 0)) ${restart} }`;
 				if (mode === "array")
 					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_e); }`;
 				if (mode === "f64")
@@ -2656,11 +2721,12 @@ function emitNumericLoopRegion(
 				return `{ ${bound}${local(op.dst)} = ${integral.has(op.dst) ? "(i64) " : ""}mal_vm_fixed_numeric_load(&${id}_v${op.object}, (u32) ${key}); }`;
 			}
 			case "STORE_PROPERTY": {
-				const key = integral.has(op.key) ? local(op.key) : num(op.key);
+				const integerKey = !floating || integral.has(op.key);
+				const key = integerKey ? local(op.key) : num(op.key);
 				const length = `${id}_${mode === "array" ? "a" : "v"}${op.object}.${mode === "array" ? "count" : "length"}`;
 				const bound = !checkedViews.has(op.object)
 					? ""
-					: integral.has(op.key)
+					: integerKey
 						? `if (__builtin_expect(!(${key} >= 0 && ${key} < (i64) ${length}), 0)) ${restart} `
 						: `if (__builtin_expect(!(${key} >= 0.0 && ${key} < (f64) ${length}) || ${key} != trunc(${key}), 0)) ${restart} `;
 				if (mode === "array")
@@ -2927,46 +2993,50 @@ function emitNumericLoopRegion(
 		for (const index of stored)
 			lines.push(`    ${globalSlot(index)} = ${boxSlot(slotStart(index))};`);
 		if (cursor !== undefined) lines.push(`    ${cursor}.index = ${id}_si;`);
-		lines.push(`    goto L${plan.id};`);
+		lines.push(
+			`    goto ${arrayArithmetic === "checked-integer" ? arrayNumberFallback : `L${plan.id}`};`,
+		);
 		integral = baseIntegral;
 		return lines;
 	};
-	const typedBodies = textual
-		? ["    MAL_PERF_COUNT(fixed_typed_array_region_admissions);", ...loopBody("text")]
-		: plan.kind === "fixed-numeric"
-			? [
-					"    MAL_PERF_COUNT(fixed_typed_array_region_admissions);",
-					...((counter?.stride ?? 1) > 1
-						? ["    MAL_PERF_COUNT(fixed_typed_array_stride_regions);"]
-						: []),
-					...(views.some((view) => view.minOffset !== 0 || view.maxOffset !== 0)
-						? ["    MAL_PERF_COUNT(fixed_typed_array_affine_regions);"]
-						: []),
-					...elementViews.map(
-						(view) =>
-							`    MAL_PERF_COUNT(fixed_typed_array_region_views[${id}_v${view.object}.kind]);`,
-					),
-					...dataViews.map(() => "    MAL_PERF_COUNT(fixed_data_view_region_views);"),
-					// DataView accesses name their own element types, so only element views select a body.
-					...(elementViews.length === 0
-						? loopBody("typed")
-						: [
-								// One bounded specialization keeps kind dispatch out of the established Float64 loop.
-								`    if (${elementViews.map((view) => `${id}_v${view.object}.kind == MAL_TA_FLOAT64`).join(" && ")}) {`,
-								"      MAL_PERF_COUNT(fixed_typed_array_region_f64_admissions);",
-								...loopBody("f64").map((line) => `  ${line}`),
-								...(!integerBody
-									? []
-									: [
-											`    } else if (${elementViews.map((view) => `${id}_v${view.object}.kind < MAL_TA_FLOAT32`).join(" && ")}) {`,
-											...loopBody("integer").map((line) => `  ${line}`),
-										]),
-								"    } else {",
-								...loopBody("typed").map((line) => `  ${line}`),
-								"    }",
-							]),
-				]
-			: loopBody("typed");
+	const typedBodies = arrayOnly
+		? []
+		: textual
+			? ["    MAL_PERF_COUNT(fixed_typed_array_region_admissions);", ...loopBody("text")]
+			: plan.kind === "fixed-numeric"
+				? [
+						"    MAL_PERF_COUNT(fixed_typed_array_region_admissions);",
+						...((counter?.stride ?? 1) > 1
+							? ["    MAL_PERF_COUNT(fixed_typed_array_stride_regions);"]
+							: []),
+						...(views.some((view) => view.minOffset !== 0 || view.maxOffset !== 0)
+							? ["    MAL_PERF_COUNT(fixed_typed_array_affine_regions);"]
+							: []),
+						...elementViews.map(
+							(view) =>
+								`    MAL_PERF_COUNT(fixed_typed_array_region_views[${id}_v${view.object}.kind]);`,
+						),
+						...dataViews.map(() => "    MAL_PERF_COUNT(fixed_data_view_region_views);"),
+						// DataView accesses name their own element types, so only element views select a body.
+						...(elementViews.length === 0
+							? loopBody("typed")
+							: [
+									// One bounded specialization keeps kind dispatch out of the established Float64 loop.
+									`    if (${elementViews.map((view) => `${id}_v${view.object}.kind == MAL_TA_FLOAT64`).join(" && ")}) {`,
+									"      MAL_PERF_COUNT(fixed_typed_array_region_f64_admissions);",
+									...loopBody("f64").map((line) => `  ${line}`),
+									...(!integerBody
+										? []
+										: [
+												`    } else if (${elementViews.map((view) => `${id}_v${view.object}.kind < MAL_TA_FLOAT32`).join(" && ")}) {`,
+												...loopBody("integer").map((line) => `  ${line}`),
+											]),
+									"    } else {",
+									...loopBody("typed").map((line) => `  ${line}`),
+									"    }",
+								]),
+					]
+				: loopBody("typed");
 	const arrayBody = (): ReadonlyArray<string> => [
 		"    MAL_PERF_COUNT(dense_array_number_region_admissions);",
 		...loopBody("array"),

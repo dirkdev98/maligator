@@ -141,6 +141,12 @@ only by local work that cannot restart it. Independent indices check each access
 before the store commits; holes, accessors, coercions and unsupported descriptors
 resume the original iteration. Replacing a heap value preserves the deletion
 barrier. Borrowed storage ends at a poll, after publishing the completed iteration.
+Integer-heavy Array bodies first try safe-integer locals. Entry inputs fit the signed
+or unsigned 32-bit range; loaded elements and intermediate arithmetic remain exact
+safe integers other than negative zero. Invariant input guards also expose known
+bounds to the C compiler. A failed guard restores the current iteration's start and
+enters the Number body. Arithmetic that could restart after a store excludes this
+specialization.
 
 DataView accessor calls join fixed storage regions as byte views. Admission uses the
 conditions that make `byteLength` the intrinsic getter: the watched-prototype
