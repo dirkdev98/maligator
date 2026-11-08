@@ -520,6 +520,8 @@ function runFallbacks() {
 		Number,
 		Function("value", "index", "return value + index + 4"),
 	];
+	// The compiled eval compiler also nominates callbacks while constructing Function.
+	globalThis.__mal_reset_perf_stats?.();
 	const output = [];
 	for (const callback of callbacks) {
 		output.push(globalThis.forwardArray([1, 2], [callback], false).join());

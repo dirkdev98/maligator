@@ -9,6 +9,8 @@ const callback = foreign.Function(
 	"b",
 	"if(this!==globalThis||arguments.length!==2)throw new Error('foreign this'); return a<b?-1:a>b?1:0;",
 );
+// Foreign Function compilation runs compiler code that shares these nomination counters.
+globalThis.__mal_reset_perf_stats?.();
 const results = [];
 for (const input of [[3, 1, 2], new BigInt64Array([3n, 1n, 2n])]) {
 	results.push(globalThis.forwardRealmSort(input, callback, false).join(","));

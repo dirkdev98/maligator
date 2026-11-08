@@ -4,11 +4,15 @@ const callback = foreign.Function(
 	"index",
 	"return [value + index, this === globalThis].join(':')",
 );
-const a = Array.from([2, 3], callback);
-const b = Float64Array.from(
-	[2, 3],
-	foreign.Function("value", "index", "return this === globalThis ? value + index : -1"),
+const typedCallback = foreign.Function(
+	"value",
+	"index",
+	"return this === globalThis ? value + index : -1",
 );
+// Foreign Function compilation runs compiler code that shares these nomination counters.
+globalThis.__mal_reset_perf_stats?.();
+const a = Array.from([2, 3], callback);
+const b = Float64Array.from([2, 3], typedCallback);
 function local(value, index) {
 	"use strict";
 	if (this !== undefined || arguments.length !== 2)

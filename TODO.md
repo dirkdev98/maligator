@@ -20,8 +20,7 @@ rooting, and resource-safety defects can interrupt that order.
 4. Use those foundations for scalar materialization and virtual iteration, then
    source-closure reduction and profitability-aware specialization. These are
    dependency-ordered workstreams, not parallel requirements for the next session.
-5. Resolve known reliability findings, including the intermittent DNS gate failure,
-   and complete recoverable resource handling.
+5. Resolve known reliability findings and complete recoverable resource handling.
 6. Advance ECMAScript, WinterTC, Node, and ecosystem correctness. Their existing
    backlog below remains in scope; it is not replaced by the performance programme.
 7. Recover throughput and bound latency in the concurrent generational collector.
@@ -41,16 +40,6 @@ rooting, and resource-safety defects can interrupt that order.
       consumed file identities, but adding a file or renaming a previously unwatched
       path does not change that file set. Capture recursive directory membership and
       exercise add/remove changes without editing an existing source dependency.
-
-- [ ] Isolate `tests/native/forwarded-sort-callback.test.ts` from the eval
-      compiler's own sorts. It counts process-wide comparator nominations, and in
-      plain native builds the eval compiler runs as compiled code whose `.sort` calls
-      nominate their comparators too: the `fallbacks` case reads 22 and the eval
-      case 42 where the test expects 0 and 1. CI runs it only under sanitizers,
-      where the eval compiler is interpreted, so it passes there.
-      `tests/native/forwarded-from-mapper.test.ts` fails the same way under the
-      plain runner through the eval compiler's `Array.from` mappers (`fallbacks`
-      reads 39 Array nominations where it expects 0).
 
 - [ ] Find why `tests/native/node-fs-watch.test.ts` takes minutes on the macOS
       Native remainder runner. Its three tests take 5 to 8 s on Linux, but on macOS

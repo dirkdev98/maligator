@@ -308,15 +308,6 @@ function runReentry() {
 	console.log("reentry", nested);
 }
 function runFallbacks() {
-	check(
-		globalThis.forwardSort([10, 2], undefined).join(",") === "10,2",
-		"default Array order",
-	);
-	check(
-		globalThis.forwardCopy(new Int32Array([10, 2]), [undefined], false).join(",") ===
-			"2,10",
-		"default TypedArray order",
-	);
 	function compare(a, b) {
 		return a - b;
 	}
@@ -327,14 +318,26 @@ function runFallbacks() {
 			return Reflect.apply(target, receiver, args);
 		},
 	});
-	for (const callback of [
+	const callbacks = [
 		compare.bind(null),
 		proxy,
 		Math.min,
 		Function("a", "b", "return a-b"),
 		async function asyncCompare() {},
 		function* generatorCompare() {},
-	]) {
+	];
+	// The compiled eval compiler also nominates callbacks while constructing Function.
+	globalThis.__mal_reset_perf_stats?.();
+	check(
+		globalThis.forwardSort([10, 2], undefined).join(",") === "10,2",
+		"default Array order",
+	);
+	check(
+		globalThis.forwardCopy(new Int32Array([10, 2]), [undefined], false).join(",") ===
+			"2,10",
+		"default TypedArray order",
+	);
+	for (const callback of callbacks) {
 		globalThis.forwardSort([2, 1], callback);
 		globalThis.forwardCopy(new Int32Array([2, 1]), [callback], false);
 	}

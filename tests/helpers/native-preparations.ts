@@ -45,7 +45,8 @@ export function nativePreparations(root: string, file: string): Array<NativePrep
 		relative === "tests/native/arguments-slice-copy.test.ts"
 			? (["locked-perf-stats"] as const)
 			: []),
-		...(relative === "tests/native/node-events.test.ts" ||
+		...(relative === "tests/native/forwarded-callback-counters.test.ts" ||
+		relative === "tests/native/node-events.test.ts" ||
 		relative === "tests/native/node-http-request.test.ts" ||
 		relative === "tests/native/node-http-ready-queues.test.ts"
 			? (["node-perf-stats"] as const)

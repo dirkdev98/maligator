@@ -71,7 +71,7 @@ describe("forwarded sort comparator nomination", () => {
 				const measured = spawnSync(pair.compiled, [], {
 					encoding: "utf8",
 					timeout: 60_000,
-					env: { ...process.env, ...env, MAL_PERF_STATS: "1" },
+					env: { ...process.env, ...env, MAL_PERF_STATS: "1", MAL_PERF_CONTROL: "1" },
 				});
 				expect(measured.status, `${kind} compiled: ${measured.stderr}`).toBe(0);
 				expect(measured.stdout).toBe(expected);
@@ -207,6 +207,7 @@ describe("forwarded sort comparator nomination", () => {
 					MAL_TEST262: "1",
 					MAL_HOST_GC: "1",
 					MAL_PERF_STATS: "1",
+					MAL_PERF_CONTROL: "1",
 					...STRESS_ENV,
 				},
 			});
