@@ -40,7 +40,8 @@ export function nativePreparations(root: string, file: string): Array<NativePrep
 			: []),
 		...(perfTests(root).has(relative) ? (["perf-stats"] as const) : []),
 		...(relative === "tests/native/arguments-forwarding.test.ts" ||
-		relative === "tests/native/arguments-element-reads.test.ts"
+		relative === "tests/native/arguments-element-reads.test.ts" ||
+		relative === "tests/native/arguments-slice-copy.test.ts"
 			? (["locked-perf-stats"] as const)
 			: []),
 		...(relative === "tests/native/node-http-ready-queues.test.ts"
