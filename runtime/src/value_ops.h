@@ -154,6 +154,16 @@ static inline bool mal_safe_integer_admit(f64 value, i64 *out) {
     return true;
 }
 
+/** Admit without coercion, retaining an int32 payload instead of widening it first. */
+static inline bool mal_safe_integer_value_admit(MalValue value, i64 *out) {
+    if (value >= MAL_VALUE_TAG_BASE) {
+        if (value >= MAL_VALUE_STATIC) return false;
+        *out = mal_value_to_i32(value);
+        return true;
+    }
+    return mal_safe_integer_admit(mal_value_to_f64(value), out);
+}
+
 static inline bool mal_safe_integer_fits(i64 value, i64 *out) {
     if (value > MAL_SAFE_INTEGER_MAX || value < -MAL_SAFE_INTEGER_MAX) return false;
     *out = value;

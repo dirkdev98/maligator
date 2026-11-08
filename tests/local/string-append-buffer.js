@@ -20,12 +20,12 @@ lines.push(
 	`slice ${frozen === base} ${frozen.length} ${extended.endsWith("-more")} ${frozen.endsWith(",")}`,
 );
 
-const wide = grow("latin:", 40, (index) => (index === 20 ? "☃" : "x"));
+const wide = grow("latin:", 180, (index) => (index === 140 ? "☃" : "x"));
 lines.push(
-	`encoding ${wide.length} ${wide.indexOf("☃")} ${wide.charCodeAt(26)} ${wide.at(-1)}`,
+	`encoding ${wide.length} ${wide.indexOf("☃")} ${wide.charCodeAt(146)} ${wide.at(-1)}`,
 );
 
-const widened = grow("w:", 60, (index) => String.fromCharCode(97 + (index % 26)));
+const widened = grow("w:", 180, (index) => String.fromCharCode(97 + (index % 26)));
 const unit = widened.charCodeAt(30);
 const afterWiden = widened + "é" + "tail";
 lines.push(`widen ${unit} ${afterWiden.slice(-5)} ${afterWiden.length}`);

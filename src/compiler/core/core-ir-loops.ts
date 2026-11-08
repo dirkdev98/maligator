@@ -631,6 +631,9 @@ export function analyzeCoreLoopInductions(
 							0,
 							constant === undefined ? 0xffff_ffff : 0xffff_ffff >>> (constant & 31),
 						);
+					} else if (operator === ">>" && constant !== undefined) {
+						const shift = constant & 31;
+						range = numericRange(-0x8000_0000 >> shift, 0x7fff_ffff >> shift);
 					} else if (
 						operator === "&" &&
 						constant !== undefined &&

@@ -8,7 +8,11 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import type { NativeNumericLoopRegionPlan } from "../src/compiler/target/lower-native-fast-paths.ts";
-import { numericLoopShape } from "../src/compiler/target/lower-native-fast-paths.ts";
+import {
+	numericLoopOrder,
+	numericLoopShape,
+	numericLoopSupportsCheckedIntegers,
+} from "../src/compiler/target/lower-native-fast-paths.ts";
 import { validateNativeProgramStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
@@ -45,6 +49,35 @@ function regions(image: ProgramImage): ReadonlyArray<NativeNumericLoopRegionPlan
 }
 
 describe("native safe-integer loop regions", () => {
+	it.each([
+		["limit = limit | 0", true],
+		["limit = ~limit", true],
+		["limit = limit + 1", false],
+		["limit = limit - 1", false],
+		["limit = limit * 3", false],
+		["limit = limit / 3", false],
+		["limit = limit % 3", false],
+		["limit = -limit", false],
+		["limit++", false],
+	] as const)("keeps the store commit boundary before %s", (suffix, admitted) => {
+		const image = compile(`
+				let count = 1;
+				while (count-- > 0) { start[0] = (start[0] + 1) | 0; ${suffix}; }
+				return limit;
+			`);
+		const fn = image.native.functions[1]!;
+		const plan = regions(image).find((candidate) => candidate.kind === "fixed-numeric");
+		if (plan === undefined) throw new Error("Missing Array number region");
+		const order = numericLoopOrder(
+			fn.body,
+			plan.id,
+			new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp)),
+			true,
+		);
+		if (order === undefined) throw new Error("Missing region instruction order");
+		expect(numericLoopSupportsCheckedIntegers(fn.body, plan.id, order)).toBe(admitted);
+	});
+
 	it("admits a compound element update with a terminal store", () => {
 		const image = compile(`
 			for (let index = 0; index < start.length; index++) start[index] += 0.5;

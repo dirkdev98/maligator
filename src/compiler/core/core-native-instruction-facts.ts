@@ -153,6 +153,7 @@ const pairInt32Inputs = Object.freeze([
 	Object.freeze([COMPILER_INT32_RANGE, COMPILER_INT32_RANGE]),
 ]);
 const boundBinaryConsumers: ReadonlySet<string> = new Set([
+	"*",
 	"%",
 	"<",
 	"<=",

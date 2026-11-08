@@ -20,6 +20,56 @@ import { nativeInt32ArithmeticExpression } from "../src/compiler/target/native-s
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("native integer ranges", () => {
+	it("leaves dynamic BigInt shifts outside Number bounds", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(input,shift,gate){const n=input>>shift;gate(n);return n*2n;}globalThis.compute=compute;",
+			"compute",
+		);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		const op = out.native.body.instructions[ip]!;
+		if (op.opcode !== "BINARY") throw new Error("Missing BigInt multiply");
+		expect(instructionInputIntegerRange(out.native.facts?.[ip], op.left)).toBeUndefined();
+	});
+
+	it.each([0, 1, 14, 31, 32, 33, -1, -32, 1.5])(
+		"retains a signed shift's bounds at multiplication for shift %s",
+		(shift) => {
+			const out = inspectStaticValueFunction(
+				`function compute(input,other,gate){const n=input>>${shift};gate(n);return n*(other|0);}globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "BINARY" && op.operator === "*",
+			);
+			const op = out.native.body.instructions[ip]!;
+			if (op.opcode !== "BINARY") throw new Error("Missing multiply consumer");
+			expect(instructionInputIntegerRange(out.native.facts?.[ip], op.left)).toEqual({
+				...COMPILER_INT32_RANGE,
+				minimum: -0x8000_0000 >> shift,
+				maximum: 0x7fff_ffff >> shift,
+			});
+		},
+	);
+
+	it("retains a constant mask's bounds at multiplication", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(input,other,gate){const n=input&16383;gate(n);return n*(other|0);}globalThis.compute=compute;",
+			"compute",
+		);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		const op = out.native.body.instructions[ip]!;
+		if (op.opcode !== "BINARY") throw new Error("Missing multiply consumer");
+		expect(instructionInputIntegerRange(out.native.facts?.[ip], op.left)).toEqual({
+			...COMPILER_INT32_RANGE,
+			minimum: 0,
+			maximum: 16383,
+		});
+	});
+
 	it("uses the external operand's bounds in a numeric fusion's integer finish", () => {
 		const out = inspectStaticValueFunction(
 			"function compute(left,right,gate){const n=(right&255)+1;gate(n);return (left+2)^n;}globalThis.compute=compute;",

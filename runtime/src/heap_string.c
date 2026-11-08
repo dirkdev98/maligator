@@ -1098,9 +1098,11 @@ static bool mal_string_try_append(
             left->parent->length == left->length) {
         buffer = left->parent;
         if (buffer->latin1 && !right->latin1) return false;
-    } else if (left->storage != MAL_STRING_STORAGE_CONS || right->length > MAL_STRING_APPEND_PIECE_MAX) {
-        // Only a rope that an earlier append produced starts a buffer, so a single
-        // concatenation stays one constant-size cons node.
+    } else if (left->storage != MAL_STRING_STORAGE_CONS || right->length > MAL_STRING_APPEND_PIECE_MAX ||
+            (left->left->storage != MAL_STRING_STORAGE_CONS &&
+             left->right->storage != MAL_STRING_STORAGE_CONS)) {
+        // A second rope link distinguishes a growing chain from a short
+        // concatenation before paying for a backing buffer and dependent prefix.
         return false;
     }
     bool latin1 = buffer != nullptr ? buffer->latin1 : left->latin1 && right->latin1;

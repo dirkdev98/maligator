@@ -1710,6 +1710,7 @@ export function numericLoopHasTerminalStore(
 	fn: BytecodeFunction,
 	header: number,
 	order: ReadonlyArray<number>,
+	arithmetic: "number" | "checked-integer" = "number",
 ): boolean {
 	const stores = order.filter((ip) => fn.instructions[ip]!.opcode === "STORE_PROPERTY");
 	if (stores.length !== 1) return false;
@@ -1730,6 +1731,12 @@ export function numericLoopHasTerminalStore(
 		seen.add(ip);
 		const op = fn.instructions[ip]!;
 		if (
+			arithmetic === "checked-integer" &&
+			((op.opcode === "BINARY" && ["+", "-", "*", "/", "%"].includes(op.operator)) ||
+				(op.opcode === "UNARY" && ["-", "increment", "decrement"].includes(op.operator)))
+		)
+			return false;
+		if (
 			!integerLoopInstruction(op) &&
 			!["LOAD_GLOBAL", "STORE_GLOBAL", "LOAD_CAPTURED", "THROW_IF_TDZ"].includes(
 				op.opcode,
@@ -1739,6 +1746,47 @@ export function numericLoopHasTerminalStore(
 		pending.push(...numberRecordSuccessors(op, ip));
 	}
 	return true;
+}
+
+/** Checked arithmetic must finish before a store, so a failure can resume its iteration. */
+export function numericLoopSupportsCheckedIntegers(
+	fn: BytecodeFunction,
+	header: number,
+	order: ReadonlyArray<number>,
+): boolean {
+	if (
+		!order.some((ip) => {
+			const op = fn.instructions[ip]!;
+			return (
+				(op.opcode === "BINARY" && INTEGER_LOOP_PROFITABLE_OPERATORS.has(op.operator)) ||
+				(op.opcode === "UNARY" && op.operator === "~")
+			);
+		})
+	)
+		return false;
+	if (
+		!order.every((ip) => {
+			const op = fn.instructions[ip]!;
+			return (
+				integerLoopInstruction(op) ||
+				[
+					"LOAD_PROPERTY",
+					"STORE_PROPERTY",
+					"TO_PROPERTY_KEY",
+					"LOAD_PROPERTY_STATIC",
+					"LOAD_PROPERTY_STATIC_ARRAY_LENGTH",
+					"LOAD_GLOBAL",
+					"LOAD_CAPTURED",
+					"THROW_IF_TDZ",
+				].includes(op.opcode)
+			);
+		})
+	)
+		return false;
+	return (
+		!order.some((ip) => fn.instructions[ip]!.opcode === "STORE_PROPERTY") ||
+		numericLoopHasTerminalStore(fn, header, order, "checked-integer")
+	);
 }
 
 function bytecodePredecessors(
