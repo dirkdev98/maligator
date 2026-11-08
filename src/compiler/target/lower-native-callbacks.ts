@@ -39,7 +39,9 @@ export function selectNativeCallbackTransports(
 		for (let entryId = 0; ; entryId++) {
 			const entry = entries.get(`${functionIndex}:${entryId}`);
 			if (entry === undefined) break;
+			// A dispatched entry passed no builtin callback contract.
 			if (
+				entry.canonicalDispatch === true ||
 				entry.fieldParameters !== undefined ||
 				entry.resultFields !== undefined ||
 				entry.recordParameters !== undefined ||

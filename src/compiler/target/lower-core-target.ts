@@ -3124,6 +3124,7 @@ function lowerFunctionToTarget(
 							planCoreTargetRepresentation,
 						),
 					}),
+			...(entry.canonicalDispatch === true ? { canonicalDispatch: true as const } : {}),
 			...(entry.constantBooleans === undefined
 				? {}
 				: {

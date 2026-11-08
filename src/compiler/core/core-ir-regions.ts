@@ -654,6 +654,12 @@ export interface CoreDirectEntryPlan {
 	}>;
 	readonly parameterRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
+	/**
+	 * The canonical entry runs this variant whenever its arguments already have the
+	 * parameter representations, so calls whose target or argument kinds stay unknown
+	 * at compile time still reach it.
+	 */
+	readonly canonicalDispatch?: true;
 	readonly fieldParameters?: CoreEntryFields;
 	readonly resultFields?: CoreEntryResultFields;
 	readonly recordParameters?: ReadonlyArray<CoreEntryRecordParameter>;

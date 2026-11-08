@@ -99,6 +99,8 @@ export interface NativeFastEntryInput {
 	readonly signature: string;
 	/** The canonical entry also exports its fast body as `trySymbol` for other fast bodies. */
 	readonly trySymbol: string | undefined;
+	/** Statements that open the canonical entry, ahead of its fast body. */
+	readonly dispatch?: ReadonlyArray<string>;
 	readonly fullSymbol: string;
 	readonly fullArguments: ReadonlyArray<string>;
 	readonly prologue: ReadonlyArray<string>;
@@ -357,7 +359,9 @@ export function renderNativeFastEntry(
 		// The fast body follows its prologue; suffix text is deliberately unmapped.
 		const fastStart = exported
 			? 2
-			: 2 + (fn.hasPrototype && directEntry === undefined ? 1 : 0);
+			: 2 +
+				(input.dispatch?.length ?? 0) +
+				(fn.hasPrototype && directEntry === undefined ? 1 : 0);
 		const prefix = output.slice(0, fastStart).join("\n");
 		const prologue = fast.slice(0, fast.length - lines.length).join("\n");
 		const offset =
@@ -385,6 +389,7 @@ export function renderNativeFastEntry(
 		return emit([
 			input.signature,
 			pragma,
+			...(input.dispatch ?? []),
 			...(fn.hasPrototype && directEntry === undefined
 				? ["    if (!mal_value_is_undefined(new_target)) goto __full;"]
 				: []),
@@ -419,6 +424,7 @@ export function renderNativeFastEntry(
 		"    return false;",
 		"}",
 		input.signature,
+		...(input.dispatch ?? []),
 		"    MalValue __fast_result;",
 		`    if (${fn.hasPrototype ? "mal_value_is_undefined(new_target) && " : ""}${entryGuards.length === 0 ? "" : `${entryGuards.join(" && ")} && `}${input.trySymbol}(vm, this_value, ${arguments_}, env, &__fast_result)) return __fast_result;`,
 		full,

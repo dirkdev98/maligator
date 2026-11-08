@@ -122,7 +122,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 369;
+export const COMPILER_ARTIFACT_VERSION = 370;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -2459,6 +2459,7 @@ function writeCompilerArtifact(
 			w.i32(entry.argumentRepresentations?.length ?? -1);
 			for (const representation of entry.argumentRepresentations ?? [])
 				w.u8(representationTag(representation));
+			w.u8(entry.canonicalDispatch === true ? 1 : 0);
 			w.u32(entry.fieldParameters?.sources.length ?? 0);
 			for (const { parameter, key } of entry.fieldParameters?.sources ?? []) {
 				w.u32(parameter);
@@ -5100,6 +5101,9 @@ function readCompilerArtifact(
 				argumentCount < 0
 					? undefined
 					: Array.from({ length: argumentCount }, readRepresentation);
+			const dispatchTag = r.u8();
+			if (dispatchTag > 1) throw new Error("program-image-codec: invalid entry dispatch");
+			const canonicalDispatch = dispatchTag === 1;
 			const fieldKeyCount = r.count(8);
 			if (fieldKeyCount > 8) throw new Error("program-image-codec: invalid field count");
 			const fieldSources = Array.from({ length: fieldKeyCount }, () => ({
@@ -5250,6 +5254,7 @@ function readCompilerArtifact(
 				parameterRepresentations,
 				resultRepresentation,
 				...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
+				...(canonicalDispatch ? { canonicalDispatch: true as const } : {}),
 				...(constantCount === 0 ? {} : { constantBooleans }),
 				...(instructionFacts.length === 0 ? {} : { instructionFacts }),
 				...(callOverrides.length === 0 ? {} : { callOverrides }),

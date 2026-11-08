@@ -192,6 +192,7 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	expect(reader.u32()).toBe(1); // Parameter count.
 	reader.u8(); // Parameter representation.
 	expect(reader.i32()).toBe(-1); // No argument slice specialization.
+	expect(reader.u8()).toBe(0); // No canonical dispatch.
 	expect(reader.u32()).toBe(0); // Field keys.
 	expect(reader.u32()).toBe(0); // Field loads.
 	expect(reader.u32()).toBe(0); // Result field keys.

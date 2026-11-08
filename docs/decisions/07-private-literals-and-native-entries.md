@@ -32,3 +32,13 @@ Unavailable compilation or typed arguments retain the required canonical entry. 
 every reachable call selects a typed entry, both the canonical C body and its bytecode
 are omitted from the native image. Function identity and diagnostic metadata remain.
 Interpreted images and relocatable overlays retain their executable bodies.
+
+Calls that stay generic, such as a method read from a prototype, can still reach a
+typed entry through the callee. A looping function whose parameters seed a loop
+recurrence and are never used as objects gets a Number variant, and its canonical
+entry runs that variant when every such argument is already a Number and the call is
+no construction. Other arguments run the canonical body unchanged, so coercion and
+zero-trip behavior stay where the source puts them. The dispatch moves onto a variant
+callers already select when that variant takes at least those parameters as Numbers,
+and disappears with the canonical body when selected calls cover every use. These
+candidates compete for the specialization budget by the recurrences they unbox.

@@ -277,6 +277,8 @@ export interface CoreTargetDirectEntry {
 		}
 	>;
 	readonly argumentRepresentations?: ReadonlyArray<CoreTargetRegisterRepresentation>;
+	/** The canonical entry runs this variant when the arguments have its representations. */
+	readonly canonicalDispatch?: true;
 	readonly instructionFacts?: ReadonlyArray<{
 		readonly instruction: CompilerInstruction;
 		readonly masks: ReadonlyArray<number>;

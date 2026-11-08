@@ -13,6 +13,7 @@ const omissionProofs = new WeakMap<
 		readonly liveFunctions: ReadonlyArray<CoreFunctionId>;
 		readonly entries: ReadonlyArray<{
 			readonly function: CoreFunctionId;
+			readonly canonicalDispatch: true | undefined;
 			readonly calls: CoreDirectEntryPlan["callSites"];
 		}>;
 	}
@@ -41,6 +42,7 @@ export function coreSpecializedOnlyFunctions(
 			liveFunctions: [...liveFunctions],
 			entries: entries.map((entry) => ({
 				function: entry.function,
+				canonicalDispatch: entry.canonicalDispatch,
 				calls: entry.callSites.map((site) => ({ ...site })),
 			})),
 		});
@@ -71,6 +73,7 @@ export function coreNativeBodyOmissionProofIsCurrent(
 			const current = plan.directEntries[index]!;
 			return (
 				entry.function === current.function &&
+				entry.canonicalDispatch === current.canonicalDispatch &&
 				entry.calls.length === current.callSites.length &&
 				entry.calls.every((site, index) => {
 					const call = current.callSites[index]!;
@@ -99,6 +102,9 @@ function findSpecializedOnlyFunctions(
 	if (entries.length === 0 || context?.facts.closure.sourceClosure.kind !== "known")
 		return [];
 	const candidates = new Set(entries.map((entry) => entry.function));
+	// A dispatching canonical entry is its variant's only way in.
+	for (const entry of entries)
+		if (entry.canonicalDispatch === true) candidates.delete(entry.function);
 	for (const entrypoint of program.functionIds()) {
 		candidates.delete(entrypoint);
 		break;

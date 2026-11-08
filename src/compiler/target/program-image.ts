@@ -1748,6 +1748,8 @@ export interface NativeDirectEntryPlan {
 	};
 	readonly recordParameters?: ReadonlyArray<NativeRecordParameter>;
 	readonly argumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
+	/** The canonical entry runs this variant when the arguments have its representations. */
+	readonly canonicalDispatch?: true;
 	readonly instructionFacts?: ReadonlyArray<{
 		readonly instructionIp: number;
 		readonly masks: ReadonlyArray<number>;
@@ -5848,6 +5850,7 @@ function lowerExecutionFunctionToNativePlan(
 		...(entry.argumentRepresentations === undefined
 			? {}
 			: { argumentRepresentations: [...entry.argumentRepresentations] }),
+		...(entry.canonicalDispatch === true ? { canonicalDispatch: true as const } : {}),
 		...(entry.constantBooleans === undefined
 			? {}
 			: {

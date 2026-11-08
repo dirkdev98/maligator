@@ -2032,7 +2032,10 @@ export function verifyCoreOptimizationPlan(
 		plan.directEntries.map((entry) => [`${entry.function}:${entry.id}`, entry]),
 	);
 	const reachableEntries = new Set<string>();
-	const pendingEntries = plan.directEntries.filter((entry) => entry.callSites.length > 0);
+	// The canonical entry reaches a dispatched variant whenever its body is emitted.
+	const pendingEntries = plan.directEntries.filter(
+		(entry) => entry.callSites.length > 0 || entry.canonicalDispatch === true,
+	);
 	for (let cursor = 0; cursor < pendingEntries.length; cursor++) {
 		const entry = pendingEntries[cursor]!;
 		const key = `${entry.function}:${entry.id}`;
@@ -2297,6 +2300,36 @@ export function verifyCoreOptimizationPlan(
 		}
 		if (!reachableEntries.has(`${entry.function}:${entry.id}`)) {
 			fail(`direct entry ${entry.function}:${entry.id} has no reachable callsites`);
+		}
+		if (entry.canonicalDispatch !== undefined) {
+			const observation = coreArgumentObservation(fn);
+			if (
+				entry.canonicalDispatch !== true ||
+				entry.argumentRepresentations !== undefined ||
+				entry.fieldParameters !== undefined ||
+				entry.resultFields !== undefined ||
+				entry.recordParameters !== undefined ||
+				!entry.parameterRepresentations.includes("f64") ||
+				entry.parameterRepresentations.some((rep) => rep !== "f64" && rep !== "boxed") ||
+				fn.isGenerator ||
+				fn.isAsync ||
+				fn.metadata.isClassConstructor ||
+				fn.metadata.isDerivedConstructor ||
+				observation.kind === "general" ||
+				observation.readsCount ||
+				observation.indices.length > 0 ||
+				observation.restStarts.length > 0 ||
+				plan.specializedOnlyFunctions?.includes(entry.function) === true ||
+				plan.directEntries.some(
+					(other) =>
+						other !== entry &&
+						other.function === entry.function &&
+						other.canonicalDispatch !== undefined,
+				)
+			)
+				fail(
+					`direct entry ${entry.function}:${entry.id} has an invalid canonical dispatch contract`,
+				);
 		}
 		const callbackObservation = entry.callSites.some(
 			(site) => site.builtinCallbackOperation !== undefined,

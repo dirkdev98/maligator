@@ -3499,6 +3499,23 @@ function emitCompiledVariant(
 		directEntry !== undefined
 			? `mal_direct_${name}_${directEntry.id}${suffix}`
 			: `mal_compiled_${name}${suffix}`;
+	// An entry the image later drops for its size is no longer available to dispatch to.
+	// A variant that lost a numeric loop region of the canonical body would run its loops
+	// slower than the boxed parameters cost.
+	const dispatchEntry =
+		directEntry === undefined && native.specializedOnly !== true
+			? native.directEntries.find(
+					(entry) =>
+						entry.canonicalDispatch === true &&
+						directCompiledEntries.has(directCompiledEntryKey(index, entry.id)) &&
+						(entry.storage?.numericLoopRegions.length ?? 0) >=
+							(native.storage?.numericLoopRegions.length ?? 0),
+				)
+			: undefined;
+	const dispatch =
+		dispatchEntry === undefined
+			? []
+			: renderCanonicalDispatch(dispatchEntry, name, suffix);
 	const relocation = nativeRelocationExpressions(
 		relocatable === false ? undefined : `${symbol}_link`,
 		relocatable === false ? undefined : relocatable.symbolStems,
@@ -4373,7 +4390,7 @@ function emitCompiledVariant(
 			signature: frameSignature,
 			resultType,
 			inactiveRows: rootMaskStatements.declarations,
-			prologue: lines,
+			prologue: [...dispatch, ...lines],
 			body: body.lines,
 			unitStarts: body.unitStarts,
 			fallOff,
@@ -4461,6 +4478,7 @@ function emitCompiledVariant(
 						storage.propertyReadPairs.length > 0 ||
 						storage.propertyProjections.length > 0,
 					signature,
+					dispatch,
 					fullSymbol,
 					fullArguments:
 						directParameters === undefined
@@ -4510,12 +4528,15 @@ function emitCompiledVariant(
 					f64Literal: cF64Literal,
 				})
 			: undefined;
+	// A fast entry's wrapper dispatches before its fast body; a plain body does so itself.
+	const bodyDispatch = fastEntry === undefined ? dispatch : [];
 	const bodyOffset =
 		joinedCodeUnits([
 			fastEntry === undefined
 				? frameSignature
 				: `static ${NATIVE_ENTRY_ATTRIBUTES}MAL_COMPILED_FRAME __attribute__((noinline)) __attribute__((aligned(64))) ${resultType} ${fullSymbol}(${parameterList}) {`,
 			"#pragma STDC FP_CONTRACT OFF",
+			...bodyDispatch,
 			...rootMaskStatements.declarations,
 			...lines,
 		]) + 1;
@@ -4525,6 +4546,7 @@ function emitCompiledVariant(
 			: `static ${NATIVE_ENTRY_ATTRIBUTES}MAL_COMPILED_FRAME __attribute__((noinline)) __attribute__((aligned(64))) ${resultType} ${fullSymbol}(${parameterList}) {`,
 		// Each JavaScript arithmetic operation rounds separately, including expression chains.
 		"#pragma STDC FP_CONTRACT OFF",
+		...bodyDispatch,
 		...rootMaskStatements.declarations,
 		...lines,
 		...body.lines,
@@ -4581,7 +4603,7 @@ function emitCompiledVariant(
 		declarationSymbols: new Set([
 			symbol,
 			...relocation.declarationSymbols,
-			...generatedDeclarationSymbols((fastEntry ?? []).join("\n")),
+			...generatedDeclarationSymbols([...dispatch, ...(fastEntry ?? [])].join("\n")),
 		]),
 		source: source.join("\n"),
 		...(relocation.enabled ? { link: relocation.link } : {}),
@@ -5525,12 +5547,15 @@ ${numericSortKernelDeclaration(symbol)} {
 `;
 }
 
-function renderCallbackAdapter(
+/**
+ * Admission tests and the call that pass a generic call's arguments to a typed entry,
+ * which leaves activation, realm, receiver adjustment and argument roots to the caller.
+ */
+function typedEntryInvocation(
 	entry: NativeDirectEntryPlan,
 	name: number | string,
 	suffix: string,
-	linkage: "static" | "external",
-): string {
+): { readonly guards: ReadonlyArray<string>; readonly call: ReadonlyArray<string> } {
 	const parameters = entry.argumentRepresentations ?? entry.parameterRepresentations;
 	const guards = [
 		entry.argumentRepresentations === undefined
@@ -5559,7 +5584,23 @@ function renderCallbackAdapter(
 				: entry.resultRepresentation === "boolean"
 					? "mal_value_new_boolean(value)"
 					: "value";
-	// The runtime callback path owns activation, realm, receiver adjustment, and argument roots.
+	return {
+		guards,
+		call: [
+			`${cTypeOf(entry.resultRepresentation)} value = mal_direct_${name}_${entry.id}${suffix}(vm, this_value${values.length ? `, ${values.join(", ")}` : ""}, env, callee);`,
+			"if (MAL_THREW()) return MAL_VALUE_UNDEFINED;",
+			`return ${result};`,
+		],
+	};
+}
+
+function renderCallbackAdapter(
+	entry: NativeDirectEntryPlan,
+	name: number | string,
+	suffix: string,
+	linkage: "static" | "external",
+): string {
+	const { guards, call } = typedEntryInvocation(entry, name, suffix);
 	return [
 		`${linkage === "static" ? "static " : ""}MalValue ${nativeCallbackSymbol(name, entry.id, suffix)}${COMPILED_FUNCTION_DECLARATION} {`,
 		`    if (!(${guards.map((guard) => `(${guard})`).join(" && ")})) {`,
@@ -5567,11 +5608,28 @@ function renderCallbackAdapter(
 		`        return mal_compiled_${name}${suffix}(vm, this_value, args, arg_count, new_target, env, callee, entry_state);`,
 		"    }",
 		"    MAL_PERF_COUNT(array_iteration_typed_callback_hits);",
-		`    ${cTypeOf(entry.resultRepresentation)} value = mal_direct_${name}_${entry.id}${suffix}(vm, this_value${values.length ? `, ${values.join(", ")}` : ""}, env, callee);`,
-		"    if (MAL_THREW()) return MAL_VALUE_UNDEFINED;",
-		`    return ${result};`,
+		...call.map((line) => `    ${line}`),
 		"}",
 	].join("\n");
+}
+
+/**
+ * Statements opening a canonical entry that run its dispatched variant, before any
+ * frame or fast body, when the call is no construction and the arguments match.
+ */
+function renderCanonicalDispatch(
+	entry: NativeDirectEntryPlan,
+	name: number | string,
+	suffix: string,
+): ReadonlyArray<string> {
+	const { guards, call } = typedEntryInvocation(entry, name, suffix);
+	return [
+		`    if (${["mal_value_is_undefined(new_target)", ...guards].map((guard) => `(${guard})`).join(" && ")}) {`,
+		"        MAL_PERF_COUNT(canonical_typed_dispatch_hits);",
+		...call.map((line) => `        ${line}`),
+		"    }",
+		"    MAL_PERF_COUNT(canonical_typed_dispatch_fallbacks);",
+	];
 }
 
 export function numericReductionDeclaration(symbol: string): string {

@@ -1067,9 +1067,12 @@ function emitNativeFunctions(
 		),
 	);
 	const sortKernelEntries = numericSortKernelDemand(image.native.functions);
-	const references = image.native.functions.map((native) => {
+	const references = image.native.functions.map((native, functionIndex) => {
 		const targets = new Set<number>();
 		const entries = new Set<string>();
+		for (const entry of native.directEntries)
+			if (entry.canonicalDispatch === true)
+				entries.add(directCompiledEntryKey(functionIndex, entry.id));
 		for (const storage of [
 			native.storage,
 			...native.directEntries.map((entry) => entry.storage),

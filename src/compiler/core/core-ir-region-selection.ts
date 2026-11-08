@@ -71,6 +71,7 @@ import { coreNativeCallbackEntryOpportunities } from "./core-native-callback-ent
 import {
 	coreArgumentObservation,
 	analyzeCoreNativeEntry,
+	compactCoreNativeEntries,
 } from "./core-native-entry-analysis.ts";
 import { connectCoreNativeEntries } from "./core-native-entry-graph.ts";
 import {
@@ -102,6 +103,7 @@ import type {
 	CorePrivatePackedRestArrayElementPlan,
 	CoreUnsignedArithmeticPlan,
 } from "./core-native-numeric-analysis.ts";
+import { coreNumericParameterEntryOpportunities } from "./core-native-parameter-entries.ts";
 import { analyzeCoreRecordStorageWidths } from "./core-record-storage-widths.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
@@ -134,6 +136,7 @@ interface PendingDirectEntry {
 	readonly budget: CoreTransformCandidate;
 	readonly function: CoreFunctionId;
 	readonly callSites: ReadonlyArray<CoreDirectEntryCallSite>;
+	readonly canonicalDispatch?: true;
 	readonly parameterRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
 	readonly valueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
@@ -2237,6 +2240,69 @@ class RecordPlanning {
 }
 
 /**
+ * Moves each canonical dispatch onto a plain variant that callers already select,
+ * whose facts hold for any invocation with its parameter representations, and retires
+ * the dispatch's own copy. A copy that another variant calls stays. `widens` admits a
+ * variant that also takes as Numbers some parameters the dispatch left boxed, which
+ * only narrows the calls it admits; it applies before the dispatch plans callees.
+ */
+function shareCanonicalDispatch(
+	program: CoreProgram,
+	entries: ReadonlyArray<CoreDirectEntryPlan>,
+	widens: boolean,
+	retire: (functionId: CoreFunctionId) => void,
+): ReadonlyArray<CoreDirectEntryPlan> {
+	const called = new Set(
+		entries.flatMap((entry) =>
+			(entry.callOverrides ?? []).map((call) => `${call.target}:${call.entryId}`),
+		),
+	);
+	const shared = new Map<CoreFunctionId, CoreDirectEntryPlan>();
+	for (const dispatch of entries) {
+		// Only a dispatch's own copy has no call sites; a variant it moved onto keeps them.
+		if (
+			dispatch.canonicalDispatch !== true ||
+			dispatch.callSites.length > 0 ||
+			called.has(`${dispatch.function}:${dispatch.id}`)
+		)
+			continue;
+		const target = entries.find(
+			(entry) =>
+				entry.function === dispatch.function &&
+				entry.canonicalDispatch !== true &&
+				entry.argumentRepresentations === undefined &&
+				entry.fieldParameters === undefined &&
+				entry.resultFields === undefined &&
+				entry.recordParameters === undefined &&
+				entry.parameterRepresentations.length ===
+					dispatch.parameterRepresentations.length &&
+				entry.parameterRepresentations.every(
+					(rep, index) =>
+						rep === dispatch.parameterRepresentations[index] ||
+						(widens &&
+							rep === "f64" &&
+							dispatch.parameterRepresentations[index] === "boxed"),
+				),
+		);
+		if (target !== undefined) shared.set(dispatch.function, target);
+	}
+	if (shared.size === 0) return entries;
+	for (const functionId of shared.keys()) retire(functionId);
+	return compactCoreNativeEntries(
+		program,
+		entries.flatMap((entry) =>
+			entry.canonicalDispatch === true &&
+			entry.callSites.length === 0 &&
+			shared.has(entry.function)
+				? []
+				: shared.get(entry.function) === entry
+					? [Object.freeze({ ...entry, canonicalDispatch: true as const })]
+					: [entry],
+		),
+	);
+}
+
+/**
  * A record parameter entry keeps the calls whose records a selected record call keeps
  * in storage and hands to it; the other calls fall back to an ordinary call, and an
  * entry left without such calls stays as an ordinary entry. Dropping a call can take
@@ -2640,6 +2706,44 @@ export function buildCoreOptimizationPlan(
 				});
 			}
 		}
+		for (const opportunity of coreNumericParameterEntryOpportunities(
+			program,
+			analyses,
+			live,
+			new Set(directBuiltinCallbacks.map((callback) => callback.target)),
+		)) {
+			opportunities.push({
+				kind: "direct-entry",
+				caller: opportunity.function,
+				priorityScore: -opportunity.runtimeBenefit,
+				generatedCodeCost: opportunity.generatedCode,
+				compilerWorkCost: opportunity.compilerWork,
+				resolve() {
+					const candidate = opportunity.resolve();
+					return candidate === undefined
+						? []
+						: [
+								{
+									...candidate,
+									runtimeBenefit: opportunity.runtimeBenefit,
+									budget: {
+										kind: "direct-entry",
+										caller: opportunity.function,
+										site: opportunity.instruction,
+										revision: 1,
+										priorityClass: 2,
+										priorityScore: -opportunity.runtimeBenefit,
+										targets: Object.freeze([opportunity.function]),
+										generatedCodeCost: opportunity.generatedCode,
+										compilerWorkCost: opportunity.compilerWork,
+										// One entry per function, retired when selected calls cover the function.
+										expansive: false,
+									},
+								},
+							];
+				},
+			});
+		}
 	}
 	opportunities.sort((left, right) => {
 		return (
@@ -2678,6 +2782,7 @@ export function buildCoreOptimizationPlan(
 	const claimed = new Map<CoreFunctionId, Map<CoreInstructionId, ClaimState>>();
 	const specializations: Array<CorePlanSpecialization> = [];
 	const directEntriesByFunction = new Map<CoreFunctionId, Array<CoreDirectEntryPlan>>();
+	const dispatchBudgets = new Map<CoreFunctionId, CoreTransformCandidate>();
 	for (const opportunity of service.orderDiscovery(opportunities)) {
 		// A proven single target only replaces dispatch, so it neither grows code nor
 		// competes with speculative specializations for the program budget.
@@ -2788,43 +2893,46 @@ export function buildCoreOptimizationPlan(
 					continue;
 				}
 				for (const selection of claims) claim(selection, claimed);
-				entries.push(
-					Object.freeze({
-						id: entries.length,
-						function: candidate.function,
-						callSites: candidate.callSites,
-						parameterRepresentations: candidate.parameterRepresentations,
-						...(candidate.fieldParameters === undefined
-							? {}
-							: { fieldParameters: candidate.fieldParameters }),
-						...(candidate.resultFields === undefined
-							? {}
-							: { resultFields: candidate.resultFields }),
-						...(candidate.recordParameters === undefined
-							? {}
-							: { recordParameters: candidate.recordParameters }),
-						resultRepresentation: candidate.resultRepresentation,
-						...(candidate.valueRepresentations === undefined
-							? {}
-							: { valueRepresentations: candidate.valueRepresentations }),
-						...(candidate.argumentRepresentations === undefined
-							? {}
-							: { argumentRepresentations: candidate.argumentRepresentations }),
-						...(candidate.constantBooleans === undefined
-							? {}
-							: { constantBooleans: candidate.constantBooleans }),
-						...(candidate.instructionFacts === undefined
-							? {}
-							: { instructionFacts: candidate.instructionFacts }),
-						target: "native",
-						fallback: "canonical-core",
-						cost: Object.freeze({
-							generatedCode: budget.generatedCodeCost,
-							compilerWork: budget.compilerWorkCost,
-							runtimeBenefit: candidate.runtimeBenefit,
-						}),
+				const entry: CoreDirectEntryPlan = Object.freeze({
+					id: entries.length,
+					function: candidate.function,
+					callSites: candidate.callSites,
+					...(candidate.canonicalDispatch === true
+						? { canonicalDispatch: true as const }
+						: {}),
+					parameterRepresentations: candidate.parameterRepresentations,
+					...(candidate.fieldParameters === undefined
+						? {}
+						: { fieldParameters: candidate.fieldParameters }),
+					...(candidate.resultFields === undefined
+						? {}
+						: { resultFields: candidate.resultFields }),
+					...(candidate.recordParameters === undefined
+						? {}
+						: { recordParameters: candidate.recordParameters }),
+					resultRepresentation: candidate.resultRepresentation,
+					...(candidate.valueRepresentations === undefined
+						? {}
+						: { valueRepresentations: candidate.valueRepresentations }),
+					...(candidate.argumentRepresentations === undefined
+						? {}
+						: { argumentRepresentations: candidate.argumentRepresentations }),
+					...(candidate.constantBooleans === undefined
+						? {}
+						: { constantBooleans: candidate.constantBooleans }),
+					...(candidate.instructionFacts === undefined
+						? {}
+						: { instructionFacts: candidate.instructionFacts }),
+					target: "native",
+					fallback: "canonical-core",
+					cost: Object.freeze({
+						generatedCode: budget.generatedCodeCost,
+						compilerWork: budget.compilerWorkCost,
+						runtimeBenefit: candidate.runtimeBenefit,
 					}),
-				);
+				});
+				entries.push(entry);
+				if (entry.canonicalDispatch === true) dispatchBudgets.set(entry.function, budget);
 				directEntriesByFunction.set(candidate.function, entries);
 			} else {
 				claim(candidate.claims, claimed);
@@ -2833,12 +2941,51 @@ export function buildCoreOptimizationPlan(
 			}
 		}
 	}
+	// Dispatched variants follow the variants that callers select by identity.
+	const selectedDirectEntries = compactCoreNativeEntries(
+		program,
+		[...directEntriesByFunction]
+			.sort(([left], [right]) => left - right)
+			.flatMap(([, entries]) => [
+				...entries.filter((entry) => entry.canonicalDispatch !== true),
+				...entries.filter((entry) => entry.canonicalDispatch === true),
+			]),
+	);
+	// Selected calls that cover every executable use omit the canonical body, which would
+	// otherwise be the only way into its dispatched variant.
+	const omittedBodies = new Set(
+		coreSpecializedOnlyFunctions(
+			program,
+			options.context,
+			summaries.targets,
+			liveFunctions,
+			selectedDirectEntries.filter((entry) => entry.canonicalDispatch !== true),
+		),
+	);
+	const retireDispatch = (functionId: CoreFunctionId) => {
+		discovery.compilerWork += service.recordRetiredEntry(
+			dispatchBudgets.get(functionId)!,
+		);
+		selectedByKind["direct-entry"]!--;
+		increment(declinedByPlanReason, "unreferenced-entry");
+	};
+	const reachableDirectEntries = selectedDirectEntries.filter((entry) => {
+		if (entry.canonicalDispatch !== true || !omittedBodies.has(entry.function))
+			return true;
+		retireDispatch(entry.function);
+		return false;
+	});
 	const initialDirectEntries = keepSuppliedRecordParameters(
 		program,
 		analyses,
-		[...directEntriesByFunction]
-			.sort(([left], [right]) => left - right)
-			.flatMap(([, entries]) => entries),
+		shareCanonicalDispatch(
+			program,
+			reachableDirectEntries.length === selectedDirectEntries.length
+				? selectedDirectEntries
+				: compactCoreNativeEntries(program, reachableDirectEntries),
+			true,
+			retireDispatch,
+		),
 	);
 	const connectedAdmissions = new Map<
 		CoreFunctionId,
@@ -2910,7 +3057,11 @@ export function buildCoreOptimizationPlan(
 		selectedByKind["direct-entry"]!--;
 		increment(declinedByPlanReason, "unreferenced-entry");
 	}
-	const directEntries = linkRecordForwards(program, analyses, connected.entries);
+	const directEntries = linkRecordForwards(
+		program,
+		analyses,
+		shareCanonicalDispatch(program, connected.entries, false, retireDispatch),
+	);
 	const recordStorageWidths = directEntries.some(
 		(entry) => entry.resultFields !== undefined || entry.recordParameters !== undefined,
 	)

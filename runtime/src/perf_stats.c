@@ -1228,6 +1228,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.array_iteration_numeric_reduce_calls,
         (unsigned long long) mal_perf_stats.array_iteration_runtime_callback_nominations
     );
+    fprintf(stderr, "[perf-typed-dispatch-stats] hits=%llu fallbacks=%llu\n",
+        (unsigned long long) mal_perf_stats.canonical_typed_dispatch_hits,
+        (unsigned long long) mal_perf_stats.canonical_typed_dispatch_fallbacks);
     fprintf(stderr, "[perf-string-span-equal-stats] calls=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_equal_calls);
     fprintf(stderr, "[perf-string-span-stats] admissions=%llu projections=%llu materializations=%llu\n",

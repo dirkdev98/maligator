@@ -519,6 +519,8 @@ typedef struct MalPerfStats {
     u64 string_span_equal_calls;
     u64 array_iteration_typed_callback_hits;
     u64 array_iteration_typed_callback_fallbacks;
+    u64 canonical_typed_dispatch_hits;
+    u64 canonical_typed_dispatch_fallbacks;
 
     u64 node_event_singleton_inserts;
     u64 node_event_listener_array_allocations;

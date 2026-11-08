@@ -171,8 +171,11 @@ export function connectCoreNativeEntries(
 	): EntryNode | undefined => {
 		const signature = entrySignature(parameters, arguments_);
 		const entries = nodes.get(target) ?? [];
+		// A dispatched variant keeps the boxed results it was planned with; a connected
+		// sibling with the same signature may prove scalar ones, and takes the dispatch over.
 		const existing = entries.find(
 			({ entry }) =>
+				entry.canonicalDispatch !== true &&
 				entry.fieldParameters === undefined &&
 				// Only the calls whose record proofs it carries may use a record entry.
 				entry.resultFields === undefined &&
