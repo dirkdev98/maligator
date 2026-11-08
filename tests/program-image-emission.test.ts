@@ -485,6 +485,36 @@ describe("emit-program-image instruction packing", () => {
 		).toBe(0);
 	});
 
+	it.each([
+		["function", 2],
+		["function*", 0],
+		["async function", 0],
+	] as const)("reserves ordinary constructor capacity for %s", (kind, reserve) => {
+		const source = `${kind} Pair(left, right) {
+			this.left = left;
+			this.right = right;
+			this.left = left;
+		}
+		globalThis.Pair = Pair;`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"ordinary-constructor-capacity.js",
+			parseScript(source, { strict: false }),
+		);
+		const image = compileSemanticProgramToProgramImage(semantic);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		for (const current of [image, restored]) {
+			const constructor = current.runtime.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(current.runtime.stringConstants[fn.nameStringIndex] ?? []),
+					) === "Pair",
+			);
+			expect(constructor).toBeDefined();
+			expect(constructor!.constructorSlotReserve).toBe(reserve);
+		}
+	});
+
 	it("combines semantic dependencies with one retained region twin", () => {
 		const license = vmRegionLicense(
 			[

@@ -1481,7 +1481,11 @@ describe("program-image-codec", () => {
 	});
 
 	it("round-trips and validates constructor slot reserves", () => {
-		const withReserve = (constructorSlotReserve: number, isDerivedConstructor = false) =>
+		const withReserve = (
+			constructorSlotReserve: number,
+			isDerivedConstructor = false,
+			flags: Partial<BytecodeFunction> = {},
+		) =>
 			withRuntime(definition, {
 				functions: definition.runtime.functions.map((fn, index) =>
 					index === 0
@@ -1490,6 +1494,7 @@ describe("program-image-codec", () => {
 								isClassConstructor: true,
 								isDerivedConstructor,
 								constructorSlotReserve,
+								...flags,
 							}
 						: fn,
 				),
@@ -1499,9 +1504,20 @@ describe("program-image-codec", () => {
 			deserializeCompilerArtifact(serializeCompilerArtifact(valid)).runtime.functions[0]!
 				.constructorSlotReserve,
 		).toBe(CORE_MAX_SHAPED_OBJECT_SLOTS);
+		const ordinary = withReserve(2, false, {
+			isClassConstructor: false,
+			hasPrototype: true,
+		});
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(ordinary)).runtime
+				.functions[0]!.constructorSlotReserve,
+		).toBe(2);
 		for (const invalid of [
 			withReserve(CORE_MAX_SHAPED_OBJECT_SLOTS + 1),
 			withReserve(1, true),
+			withReserve(1, false, { isClassConstructor: false, hasPrototype: false }),
+			withReserve(1, false, { isGenerator: true }),
+			withReserve(1, false, { isAsync: true }),
 		]) {
 			expect(() => serializeCompilerArtifact(invalid)).toThrow(
 				/invalid constructor slot reserve/,

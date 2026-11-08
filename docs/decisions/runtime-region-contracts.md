@@ -18,6 +18,11 @@ and legacy match state. When no capture is observed, the call is the sole region
 anchor and matching can omit the result Array. A null comparison still observes
 the same success or failure; escaping match objects retain the original call.
 
+Constructor capacity hints reserve storage while property presence follows the
+original stores. Ordinary constructors retain inherited setters, callbacks and
+returned-object behavior; publishing a complete initial shape requires a separate
+initialization proof.
+
 Exact callback contexts carry the callee, creation environment, canonical compiled
 entry, and stable function index. Runtime image growth can replace the function
 table, so contexts resolve rows through that index. Dynamically scoped contexts

@@ -23,7 +23,13 @@ function rootDefinition(
 
 /** Capacity only: these properties are not considered present until their stores execute. */
 export function coreConstructorSlotReserve(fn: CoreFunctionStore): number {
-	if (!fn.metadata.isClassConstructor || fn.metadata.isDerivedConstructor) return 0;
+	if (
+		fn.metadata.isDerivedConstructor ||
+		fn.isGenerator ||
+		fn.isAsync ||
+		(!fn.metadata.isClassConstructor && !fn.metadata.hasPrototype)
+	)
+		return 0;
 	const keys = new Set<number>();
 	// Private elements share the instance's shape slots; each install names a distinct element.
 	let privateElements = 0;

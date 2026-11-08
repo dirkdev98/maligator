@@ -2174,7 +2174,10 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 			!isNonnegativeSafeInteger(fn.constructorSlotReserve) ||
 			fn.constructorSlotReserve > CORE_MAX_SHAPED_OBJECT_SLOTS ||
 			(fn.constructorSlotReserve !== 0 &&
-				(!fn.isClassConstructor || fn.isDerivedConstructor))
+				(fn.isDerivedConstructor ||
+					fn.isGenerator ||
+					fn.isAsync ||
+					(!fn.isClassConstructor && !fn.hasPrototype)))
 		)
 			throw new RangeError("invalid constructor slot reserve");
 		for (const instruction of fn.instructions) {

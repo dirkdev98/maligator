@@ -147,6 +147,7 @@ tests/native/json-parse-shapes.test.ts
 tests/native/json-stringify-scratch.test.ts
 tests/native/literal-template.test.ts
 tests/native/literal-materialization.test.ts
+tests/native/ordinary-constructor-capacity.test.ts
 tests/native/static-array-copies.test.ts
 tests/native/symbol-registry-reuse.test.ts
 tests/native/node-buffer.test.ts
