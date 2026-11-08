@@ -1357,7 +1357,7 @@ function verifySpecialization(
 			});
 		if (
 			candidate?.kind !== "regexp-exec-projection" ||
-			selection.anchors.length !== 2 ||
+			selection.anchors.length !== (candidate.loads.length === 0 ? 1 : 2) ||
 			selection.anchors[0] !== candidate.call ||
 			selection.anchors[1] !== candidate.loads[0]?.instruction ||
 			regexp.property !== candidate.property ||

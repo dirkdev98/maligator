@@ -62,6 +62,11 @@ bool mal_regexp_exec_capture_projection(
     MalValue *result_out
 );
 
+/** Preserve the captured call while projecting a result observed only as null. */
+MalValue mal_regexp_exec_result_projection(
+    MalVm *vm, MalValue callee, MalValue regexp, MalValue string
+);
+
 /**
  * Locked-world form for a fresh unaliased RegExp literal. Its property lookup,
  * callback identity, and Realm are compiler-proven; arbitrary input coercion is

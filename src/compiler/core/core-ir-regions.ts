@@ -833,10 +833,11 @@ export interface CoreAllocatedRegExpExecProjectionRegion extends CoreAllocatedRe
 	"regexp-exec-projection",
 	"regexp-capture-spans",
 	"whole-region",
-	readonly [
-		Extract<CompilerInstruction, { type: "call" | "callKnown" }>,
-		Extract<CompilerInstruction, { type: "loadProperty" }>,
-	]
+	| readonly [Extract<CompilerInstruction, { type: "call" | "callKnown" }>]
+	| readonly [
+			Extract<CompilerInstruction, { type: "call" | "callKnown" }>,
+			Extract<CompilerInstruction, { type: "loadProperty" }>,
+	  ]
 > {
 	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly propertyPlacement: CorePropertyPlacement;

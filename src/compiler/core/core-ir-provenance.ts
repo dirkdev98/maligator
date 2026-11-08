@@ -4430,7 +4430,7 @@ function regexpExecProjectionCandidates(
 			safe = false;
 			break;
 		}
-		if (!safe || loads.length === 0 || loads.length > 8) continue;
+		if (!safe || loads.length > 8) continue;
 
 		for (const load of loads) {
 			const capture = root(instructionResult(fn, load.instruction, 0)!);

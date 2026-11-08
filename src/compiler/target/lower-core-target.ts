@@ -1330,7 +1330,7 @@ function lowerCoreSpecializations(
 			});
 			regions.push({
 				...envelope(row),
-				anchors: [call, loads[0]!.instruction],
+				anchors: loads.length === 0 ? [call] : [call, loads[0]!.instruction],
 				kind: "regexp-exec-projection",
 				license: {
 					guard: regexp.guard,

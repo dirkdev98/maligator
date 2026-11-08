@@ -4698,7 +4698,7 @@ function lowerExecutionFunctionToNativePlan(
 					!guard.obligations.includes("fallback") ||
 					!guard.obligations.includes("materialize") ||
 					region.lastIndexEffect !== "retained-call-twin" ||
-					resolvedAnchors.length !== 2 ||
+					resolvedAnchors.length !== (loads.length === 0 ? 1 : 2) ||
 					region.resultRegisters.length === 0
 				) {
 					throw coreRegionError(region.kind, "projection metadata");
@@ -4928,7 +4928,6 @@ function lowerExecutionFunctionToNativePlan(
 						(register) =>
 							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
 					) ||
-					resolvedLoads.length === 0 ||
 					resolvedLoads.length > 8 ||
 					new Set(resolvedLoads.map((load) => load.captureIndex)).size !==
 						resolvedLoads.length ||

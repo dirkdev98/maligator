@@ -261,6 +261,7 @@ tests/native/static-property-membership.test.ts
 tests/native/indexed-operand-facts.test.ts
 tests/native/native-fast-entry.test.ts
 tests/native/regexp-span-continuation.test.ts
+tests/native/regexp-discarded-result.test.ts
 tests/native/map-region-entries.test.ts
 tests/native/array-initialization-region.test.ts
 tests/native/array-initialization-incremental.test.ts

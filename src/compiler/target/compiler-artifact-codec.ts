@@ -122,7 +122,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 371;
+export const COMPILER_ARTIFACT_VERSION = 372;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -4174,7 +4174,7 @@ function validateRegExpExecProjectionRegion(
 	let valid =
 		region.representation === "regexp-capture-spans" &&
 		region.lastIndexEffect === "retained-call-twin" &&
-		region.anchors.length === 2 &&
+		region.anchors.length === (region.loads.length === 0 ? 1 : 2) &&
 		region.anchors[0] === region.callIp &&
 		region.anchors[1] === region.loads[0]?.ip &&
 		(call?.opcode === "CALL" || call?.opcode === "CALL_KNOWN") &&
@@ -4213,7 +4213,6 @@ function validateRegExpExecProjectionRegion(
 			(register) =>
 				Number.isInteger(register) && register >= 0 && register < fn.registerCount,
 		) &&
-		region.loads.length > 0 &&
 		region.loads.length <= 8;
 	for (const check of region.nullChecks) {
 		const comparison = fn.instructions[check.comparisonIp];
