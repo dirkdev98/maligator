@@ -10419,9 +10419,11 @@ function compileVariableDeclaration(
 			}
 		}
 
+		// Reads of an `arguments` alias resolve to `arguments`, so it stores nothing.
+		const init = fn.semanticFile.argumentsAliasDeclarators.has(decl) ? null : decl.init;
 		// `var` bindings are initialized once by DeclarationInstantiation. A bare
 		// declaration has no runtime assignment at its textual position.
-		if (statement.kind === "var" && !decl.init) {
+		if (statement.kind === "var" && !init) {
 			continue;
 		}
 
@@ -10431,7 +10433,7 @@ function compileVariableDeclaration(
 			cursor,
 
 			// Initialize variables to undefined if they don't have an initializer.
-			decl.init ?? { type: "Identifier", name: "undefined" },
+			init ?? { type: "Identifier", name: "undefined" },
 
 			// NamedEvaluation: anonymous initializers take the binding name.
 			decl.id.type === "Identifier" ? decl.id.name : undefined,

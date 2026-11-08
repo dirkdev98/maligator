@@ -62,7 +62,7 @@ function withRest(...rest) {
 	return arguments.length * 10 + rest.length;
 }
 function escaped() {
-	const value = arguments;
+	const value = [arguments][0];
 	return value.length * 10 + value[0];
 }
 function mutated() {

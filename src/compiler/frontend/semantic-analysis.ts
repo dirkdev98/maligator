@@ -70,6 +70,11 @@ export interface SemanticFile {
 	argumentsCopyAccesses: Map<ESTree.Node, StaticArgumentsAccess>;
 	/** Copy calls of an `argumentsCopyBindings` binding, with their start index. */
 	argumentsCopyCalls: Map<ESTree.CallExpression, number>;
+	/**
+	 * `var a = arguments` declarators whose reads of `a` resolve to the `arguments`
+	 * binding instead. They store nothing, so `arguments` is not used there.
+	 */
+	argumentsAliasDeclarators: Set<ESTree.VariableDeclarator>;
 
 	/**
 	 * Body reads of a lazy binding in `staticArgumentsAccesses`. They read the frame
@@ -288,6 +293,7 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		argumentsCopyBindings: new Set(),
 		argumentsCopyAccesses: new Map(),
 		argumentsCopyCalls: new Map(),
+		argumentsAliasDeclarators: new Set(),
 		guardedArgumentsAccesses: new Set(),
 		lazyArgumentsBindings: new Set(),
 		hasDirectEval: new Set(),
@@ -362,6 +368,7 @@ export function analyzeFile(file: SemanticFile) {
 	markDirectEvalDynamicUsages(file);
 	if (candidates.hasImplicitArguments) {
 		semanticAnalysisWorkCounts.staticArgumentsTraversals++;
+		resolveArgumentsAliases(file);
 		classifyStaticArgumentsUsage(file);
 	}
 	calculateBindingScopedTo(file);
@@ -825,6 +832,89 @@ function argumentsCopyCall(
 		if (current.type === "ChainExpression") return undefined;
 	}
 	return { call, start };
+}
+
+/**
+ * Resolve the reads of a local `var a = arguments` to the `arguments` binding, so the
+ * classification below treats `a.length` and `a[i]` like direct reads. Every read must
+ * observe the object itself: the declarator is a statement of the owning function's
+ * body, the alias is never written again and is read only by later statements of that
+ * function's own code, and neither binding can change through `with` or direct eval.
+ */
+function resolveArgumentsAliases(file: SemanticFile): void {
+	const parents = new Map<ESTree.Node, ESTree.Node>();
+	const declarators: Array<ESTree.VariableDeclarator> = [];
+	traverseEstree(file.ast, (node, { parent }) => {
+		if (parent) parents.set(node, parent);
+		if (
+			node.type === "VariableDeclarator" &&
+			node.id.type === "Identifier" &&
+			node.init?.type === "Identifier" &&
+			file.nodeToBinding.get(node.init)?.implicit === "arguments"
+		)
+			declarators.push(node);
+	});
+	for (const declarator of declarators) {
+		const init = declarator.init as ESTree.Identifier;
+		const argumentsBinding = file.nodeToBinding.get(init)!;
+		const alias = file.nodeToBinding.get(declarator.id);
+		const owner = argumentsBindingOwner(file, argumentsBinding)?.node;
+		const statement = parents.get(declarator);
+		if (
+			alias === undefined ||
+			alias.implicit !== undefined ||
+			alias.undeclared ||
+			alias.annexBVarBinding !== undefined ||
+			(owner?.type !== "FunctionDeclaration" && owner?.type !== "FunctionExpression") ||
+			file.hasDirectEval.has(owner) ||
+			statement?.type !== "VariableDeclaration" ||
+			(statement.kind !== "var" && statement.kind !== "let" && statement.kind !== "const")
+		)
+			continue;
+		const body = owner.body!.body;
+		const position = body.indexOf(statement);
+		const declaratorIndex = statement.declarations.indexOf(declarator);
+		// The top-level statement holding `node`, when no function unit lies in between.
+		const ownStatement = (node: ESTree.Node): ESTree.Node | undefined => {
+			let current = node;
+			for (let parent = parents.get(current); parent; parent = parents.get(parent)) {
+				if (parent === owner.body) return current;
+				if (FUNCTION_UNIT_NODE_TYPES.has(parent.type)) return undefined;
+				current = parent;
+			}
+			return undefined;
+		};
+		const readsLater = (usage: ESTree.Node): boolean => {
+			const top = usage.type === "Identifier" ? ownStatement(usage) : undefined;
+			if (top === undefined || file.withDynamicNodes.has(usage)) return false;
+			if (top !== statement) return body.indexOf(top as ESTree.Statement) > position;
+			return statement.declarations.some(
+				(later, index) => index > declaratorIndex && nodeIsWithin(usage, later, parents),
+			);
+		};
+		const reads = alias.usageNodes.filter((usage) => usage !== declarator.id);
+		if (
+			position === -1 ||
+			file.withDynamicNodes.has(init) ||
+			!argumentsBinding.usageNodes.every(
+				(usage) => usage.type === "Identifier" && identifierIsOnlyRead(usage, parents),
+			) ||
+			!reads.every(
+				(usage) =>
+					usage.type === "Identifier" &&
+					identifierIsOnlyRead(usage, parents) &&
+					readsLater(usage),
+			)
+		)
+			continue;
+		argumentsBinding.usageNodes.splice(argumentsBinding.usageNodes.indexOf(init), 1);
+		for (const read of reads) {
+			file.nodeToBinding.set(read, argumentsBinding);
+			argumentsBinding.usageNodes.push(read);
+		}
+		alias.usageNodes = [declarator.id];
+		file.argumentsAliasDeclarators.add(declarator);
+	}
 }
 
 function canLazilyMaterializeArgumentsUse(

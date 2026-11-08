@@ -1,5 +1,6 @@
 # Files using the default internal native feature profile with MAL_PERF_STATS=1.
 # Prepare this shared archive before timed hooks, alongside the ordinary archive.
+tests/native/arguments-alias.test.ts
 tests/native/arguments-element-reads.test.ts
 tests/native/arguments-forwarding.test.ts
 tests/native/arguments-slice-copy.test.ts
