@@ -205,6 +205,7 @@ tests/native/map-storage.test.ts
 tests/native/weak-storage.test.ts
 
 tests/native/string-rope-followups.test.ts
+tests/native/string-append-buffer.test.ts
 tests/native/string-cursor-frontier.test.ts
 
 tests/native/string-search-followups.test.ts
