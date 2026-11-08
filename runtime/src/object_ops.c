@@ -360,6 +360,47 @@ void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
     }
 }
 
+void mal_object_freeze_primordial(MalObject *object) {
+    if (object->header.type == MAL_HEAP_ARRAY_OBJECT) {
+        MalArrayObject *array = (MalArrayObject *) object;
+        // Dense elements share one attribute set, so writable ones move to the
+        // table, where each entry carries its own marker.
+        if (array->dense_count != 0 && array->dense_elements_writable) {
+            mal_object_array_deoptimize(array);
+        }
+        array->length_shadow_writable = array->length_writable;
+    }
+    const MalShape *shape = object->shape;
+    for (u32 i = 0; i < shape->inline_count; i++) {
+        // A shape has no room for the marker, so the object becomes a dictionary.
+        if (mal_value_is_string(shape->props[i].key) &&
+            (shape->props[i].attrs & MAL_PROPERTY_WRITABLE)) {
+            mal_object_dictionarize(object);
+            break;
+        }
+    }
+    if (mal_object_has_public_overflow(object)) {
+        MalTable *table = mal_object_overflow(object);
+        MalTableIter iter;
+        mal_table_iter_init(&iter, table, MAL_TABLE_ITER_STORAGE);
+        MalKey key;
+        void *entry;
+        while (mal_table_iter_next(&iter, &key, &entry)) {
+            if (key.kind == MAL_KEY_SYMBOL &&
+                mal_symbol_is_private(mal_value_to_symbol(key.value))) {
+                continue;
+            }
+            MalPropertyDesc desc = mal_property_entry_desc(table, entry);
+            if ((desc.flags & (MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_WRITABLE)) ==
+                MAL_PROPERTY_WRITABLE) {
+                desc.flags |= MAL_PROPERTY_SHADOW_WRITABLE;
+                mal_property_write_entry(table, entry, &desc);
+            }
+        }
+    }
+    mal_object_set_integrity_level(object, true);
+}
+
 MalObject *mal_object_get_prototype(const MalObject *object) {
     return mal_object_prototype(object);
 }

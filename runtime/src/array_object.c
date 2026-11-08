@@ -49,6 +49,7 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
     mal_object_init(heap, &array->object, MAL_HEAP_ARRAY_OBJECT, prototype);
     array->length = 0;
     array->length_writable = true;
+    array->length_shadow_writable = false;
     array->elements = nullptr;
     array->capacity = 0;
     array->dense_count = 0;

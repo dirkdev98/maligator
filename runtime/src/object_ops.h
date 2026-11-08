@@ -45,6 +45,14 @@ void mal_object_set_extensible(MalObject *object, bool extensible);
 void mal_object_set_integrity_level(MalObject *object, bool clear_writable);
 
 /**
+ * Freeze an object whose own properties all live in its shape and overflow table,
+ * as the primordial lock requires: each writable data property also records
+ * MAL_PROPERTY_SHADOW_WRITABLE, so OrdinarySet still lets a distinct receiver
+ * shadow it.
+ */
+void mal_object_freeze_primordial(MalObject *object);
+
+/**
  * Return the object's current prototype.
  */
 MalObject *mal_object_get_prototype(const MalObject *object);

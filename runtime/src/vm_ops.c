@@ -756,7 +756,9 @@ bool mal_vm_get_own_property(
     if (mal_value_is_array_object(object_value) && mal_array_key_is_length(key)) {
         MalArrayObject *array = mal_value_to_array_object(object_value);
         *desc_out = (MalPropertyDesc) {
-            .flags = array->length_writable ? MAL_PROPERTY_WRITABLE : MAL_PROPERTY_NONE,
+            .flags = array->length_writable ? MAL_PROPERTY_WRITABLE
+                : array->length_shadow_writable ? MAL_PROPERTY_SHADOW_WRITABLE
+                : MAL_PROPERTY_NONE,
             .value = mal_value_from_u32(mal_array_object_length(array)),
             .getter = mal_value_new_undefined(),
             .setter = mal_value_new_undefined(),

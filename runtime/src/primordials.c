@@ -3,8 +3,10 @@
 #include <stdlib.h>
 
 #include "builtin_object.h"
+#include "heap_symbol.h"
 #include "intrinsics.h"
 #include "object_ops.h"
+#include "property_iter.h"
 #include "rooted_collection.h"
 #include "value_ops.h"
 #include "vm_ops.h"
@@ -103,6 +105,17 @@ void mal_primordials_throw_property_mutation(
 }
 
 #if MAL_PRIMORDIALS_LOCKED
+static void mal_primordials_lock_value(MalVm *vm, MalValue value);
+
+static void mal_primordials_lock_desc_values(MalVm *vm, const MalPropertyDesc *desc) {
+    if (desc->flags & MAL_PROPERTY_ACCESSOR) {
+        mal_primordials_lock_value(vm, desc->getter);
+        mal_primordials_lock_value(vm, desc->setter);
+    } else {
+        mal_primordials_lock_value(vm, desc->value);
+    }
+}
+
 static void mal_primordials_lock_value(MalVm *vm, MalValue value) {
     if (!mal_value_is_object(value)) return;
     MalObject *object = mal_value_to_object(value);
@@ -113,6 +126,31 @@ static void mal_primordials_lock_value(MalVm *vm, MalValue value) {
     MalObject *prototype = mal_object_get_prototype(object);
     if (prototype != nullptr) {
         mal_primordials_lock_value(vm, mal_value_from_object(prototype));
+    }
+
+    // These kinds keep every own property in their shape and table, except an
+    // array's `length` and elements and a String wrapper's non-writable `length`
+    // and indices, so they freeze in place. Other exotic objects and script
+    // functions with a lazy `prototype` take the generic pass.
+    MalHeapType type = object->header.type;
+    if (type == MAL_HEAP_OBJECT || type == MAL_HEAP_NATIVE_FUNCTION_OBJECT ||
+        type == MAL_HEAP_ARRAY_OBJECT || type == MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT) {
+        mal_object_freeze_primordial(object);
+        MalPropertyIter iter;
+        mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_STORAGE_ORDER);
+        MalKey key;
+        MalPropertyDesc desc;
+        while (mal_property_iter_next(&iter, &key, &desc)) {
+            if (key.kind == MAL_KEY_SYMBOL &&
+                mal_symbol_is_private(mal_value_to_symbol(key.value))) {
+                continue;
+            }
+            mal_primordials_lock_desc_values(vm, &desc);
+        }
+        object->immutable_prototype = true;
+        object->primordial_locked = true;
+        object->primordial_locking = false;
+        return;
     }
 
     MalRootedKeySnapshot keys;
@@ -135,12 +173,7 @@ static void mal_primordials_lock_value(MalVm *vm, MalValue value) {
                 abort();
             }
         }
-        if (desc.flags & MAL_PROPERTY_ACCESSOR) {
-            mal_primordials_lock_value(vm, desc.getter);
-            mal_primordials_lock_value(vm, desc.setter);
-        } else {
-            mal_primordials_lock_value(vm, desc.value);
-        }
+        mal_primordials_lock_desc_values(vm, &desc);
     }
     mal_rooted_key_snapshot_dispose(&keys);
 

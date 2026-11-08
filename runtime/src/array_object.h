@@ -34,6 +34,13 @@ typedef struct MalArrayObject {
     u32 length_writable : 1;
 
     /**
+     * A locked primordial array's `length` was writable before the lock froze it,
+     * so OrdinarySet still lets a distinct receiver shadow it
+     * (MAL_PROPERTY_SHADOW_WRITABLE).
+     */
+    u32 length_shadow_writable : 1;
+
+    /**
      * Set once an array has deoptimized to table storage; it then stays table-mode
      * forever (never re-densifies). Distinguishes a deopted array (elements == null,
      * must use the table) from a fresh/lazy one (elements == null, still eligible —
@@ -56,10 +63,10 @@ typedef struct MalArrayObject {
      */
     u32 inline_capacity : 4;
     // Earlier elements contain no young edges; unindexed cards clear this frontier.
-    u32 minor_scan_start : 23;
+    u32 minor_scan_start : 22;
 } MalArrayObject;
 
-#define MAL_ARRAY_MINOR_SCAN_MAX ((u32) ((1u << 23) - 1))
+#define MAL_ARRAY_MINOR_SCAN_MAX ((u32) ((1u << 22) - 1))
 
 /* Indexed card barrier for an element store. Primitive elements, young arrays and stores
  * at or above a remembered array's scan frontier never reach the out-of-line update. */

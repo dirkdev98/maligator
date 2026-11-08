@@ -252,6 +252,26 @@ for (const [name, value] of [
 	check(name + " is physically frozen", Object.isFrozen(value));
 }
 
+check(
+	"locked Array.prototype lists length once",
+	Reflect.ownKeys(Array.prototype).filter((key) => key === "length").length === 1,
+);
+const arrayLike = Object.create(Array.prototype);
+arrayLike.length = 3;
+check(
+	"objects inheriting the locked Array.prototype can assign their own length",
+	Object.hasOwn(arrayLike, "length") &&
+		arrayLike.length === 3 &&
+		Array.prototype.length === 0,
+);
+const maxNameDescriptor = Object.getOwnPropertyDescriptor(Math.max, "name");
+check(
+	"locked native functions freeze their name",
+	maxNameDescriptor.value === "max" &&
+		maxNameDescriptor.writable === false &&
+		maxNameDescriptor.configurable === false,
+);
+
 const splitDescriptor = Object.getOwnPropertyDescriptor(String.prototype, "split");
 check(
 	"protected descriptors are physical",
