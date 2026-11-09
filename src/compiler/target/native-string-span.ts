@@ -15,6 +15,26 @@ import {
 } from "./runtime-image.ts";
 import type { BytecodeExceptionHandler, BytecodeInstruction } from "./runtime-image.ts";
 
+function isStaticPropertyLoad(
+	instruction: BytecodeInstruction | undefined,
+): instruction is Extract<
+	BytecodeInstruction,
+	{
+		opcode:
+			| "LOAD_PROPERTY_STATIC"
+			| "LOAD_PROPERTY_STATIC_ARRAY_LENGTH"
+			| "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+			| "LOAD_PROPERTY_STATIC_SHAPE_CASE";
+	}
+> {
+	return (
+		instruction?.opcode === "LOAD_PROPERTY_STATIC" ||
+		instruction?.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH" ||
+		instruction?.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+		instruction?.opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE"
+	);
+}
+
 function nativeSpanCalleeName<T extends string>(
 	instructions: ReadonlyArray<BytecodeInstruction>,
 	ip: number,
@@ -52,7 +72,7 @@ function nativeSpanCalleeName<T extends string>(
 			let found: T | undefined;
 			if (vmInstructionWriteRegisters(op).includes(call.callee)) {
 				found = names.find((name) =>
-					op.opcode === "LOAD_PROPERTY_STATIC"
+					isStaticPropertyLoad(op)
 						? stringConstantEquals(strings[op.stringIndex], name)
 						: operationPrefix === "" &&
 							(op.opcode === "LOAD_GLOBAL_PROPERTY"
@@ -130,7 +150,7 @@ export function validateNativeStringSpan(
 		(producer.opcode === "CALL_KNOWN"
 			? producer.operation !== `String.prototype.${region.rangeOperation}` ||
 				region.propertyIp !== -1
-			: property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+			: !isStaticPropertyLoad(property) ||
 				!stringConstantEquals(strings[property.stringIndex], region.rangeOperation) ||
 				property.dst !== producer.callee ||
 				property.object !== producer.thisValue) ||
@@ -170,7 +190,7 @@ export function validateNativeStringSpan(
 			fail();
 		if (
 			consumer.kind === "length" &&
-			(instruction.opcode !== "LOAD_PROPERTY_STATIC" ||
+			(!isStaticPropertyLoad(instruction) ||
 				instruction.object !== consumer.value ||
 				!stringConstantEquals(strings[instruction.stringIndex], "length"))
 		)
@@ -190,7 +210,7 @@ export function validateNativeStringSpan(
 			fail();
 		if (
 			methodProperty !== undefined &&
-			(instruction.opcode !== "LOAD_PROPERTY_STATIC" ||
+			(!isStaticPropertyLoad(instruction) ||
 				instruction.object !== consumer.value ||
 				!stringConstantEquals(strings[instruction.stringIndex], methodProperty))
 		)

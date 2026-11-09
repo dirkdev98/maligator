@@ -13,6 +13,11 @@ operation. Neither a property name nor a receiver constructor establishes method
 identity. Realm checks also protect delayed materialization, whose prototype must
 belong to the original operation's realm.
 
+String-span validation follows the property load's semantic operands across
+ordinary and specialized slot encodings. The key, receiver and captured callee
+must still match the region; each encoding retains its own slot or selector
+proof and generic fallback.
+
 RegExp exec projections retain the ordinary input conversion, lastIndex access
 and legacy match state. When no capture is observed, the call is the sole region
 anchor and matching can omit the result Array. A null comparison still observes

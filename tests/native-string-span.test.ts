@@ -3,12 +3,14 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
+import { validateNativeStringSpan } from "../src/compiler/target/native-string-span.ts";
 import { vmRegionActions } from "../src/compiler/target/program-image.ts";
 import type {
 	ProgramImage,
@@ -45,6 +47,55 @@ const branching = `const part = value.slice(start, end); const length = part.len
  return Number(part) + length;`;
 
 describe("composable string spans", () => {
+	it("validates captured property authority after own-slot lowering", () => {
+		const image = compileEntrypoint("tests/local/string-span-case.js", {
+			buildConfig: resolveBuildConfig({
+				engine: { primordials: "locked", eval: false, realms: false },
+				surface: { node: true },
+			}),
+			enforcePolicies: false,
+			coreInstrumentation: "off",
+		});
+		const lowered = image.native.functions.flatMap((fn) =>
+			fn.specializations.flatMap((region) =>
+				region.kind === "string-span" &&
+				fn.body.instructions[region.propertyIp]?.opcode ===
+					"LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+					? [{ fn, region }]
+					: [],
+			),
+		);
+		expect(lowered.length).toBeGreaterThan(0);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		for (const { fn, region } of lowered) {
+			const property = fn.body.instructions[region.propertyIp]!;
+			if (property.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT")
+				throw new Error("Expected known own-slot load");
+			for (const forged of [
+				{ ...property, object: property.dst },
+				{ ...property, dst: property.object },
+				{
+					...property,
+					stringIndex: region.consumers
+						.map((c) => fn.body.instructions[c.ip])
+						.find((op) => op?.opcode === "LOAD_PROPERTY_STATIC")!.stringIndex,
+				},
+			]) {
+				const instructions = fn.body.instructions.map((op, ip) =>
+					ip === region.propertyIp ? forged : op,
+				);
+				expect(() =>
+					validateNativeStringSpan(
+						instructions,
+						region,
+						image.runtime.stringConstants,
+						fn.body.handlers,
+					),
+				).toThrow(/string-span/);
+			}
+		}
+	});
+
 	it.each(["mutable", "locked"] as const)(
 		"roots both primitive replacement operands before conversion under %s primordials",
 		(mode) => {
