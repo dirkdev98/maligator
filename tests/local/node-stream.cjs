@@ -45,9 +45,7 @@ async function main() {
 	const output = [];
 	transform.on("data", (chunk) => output.push(chunk));
 	transform.end("cjs");
-	await Promise.resolve();
-	await Promise.resolve();
-	await Promise.resolve();
+	await StreamPromises.finished(transform);
 	check(output.join(",") === "cjs:buffer", "CommonJS inherited transform");
 	check(transform.readableEnded && transform.writableFinished, "CommonJS lifecycle");
 

@@ -78,7 +78,7 @@ async function main() {
 	send.extra = "extensible";
 	check(send.extra === "extensible", "ordinary extensible properties");
 
-	const readable = new Readable({ encoding: "utf8" });
+	const readable = new Readable({ encoding: "utf8", read() {} });
 	check(
 		readable.readable === true &&
 			readable.destroyed === false &&
@@ -98,6 +98,8 @@ async function main() {
 		flowing.push(chunk);
 		if (chunk === "first") readable.pause();
 	});
+	check(flowing.length === 0, "initial flow waits for a tick");
+	await new Promise((resolve) => process.nextTick(resolve));
 	check(
 		flowing.join(",") === "queued" && !readable.isPaused(),
 		"data listener starts flow",
@@ -107,7 +109,7 @@ async function main() {
 	check(flowing.join(",") === "queued,first" && readable.isPaused(), "pause queues data");
 	readable.resume();
 	readable.push(null);
-	await Promise.resolve();
+	await new Promise((resolve) => setImmediate(resolve));
 	let lateEnd = false;
 	readable.on("end", () => {
 		lateEnd = true;
@@ -130,8 +132,10 @@ async function main() {
 		}
 	});
 	reentrant.push("first");
+	await new Promise((resolve) => process.nextTick(resolve));
 	check(reentrantChunks.join(",") === "first", "reentrant push remains paused");
 	reentrant.resume();
+	await new Promise((resolve) => process.nextTick(resolve));
 	check(
 		reentrantChunks.join(",") === "first,second",
 		"reentrant push survives queue drain",
@@ -154,8 +158,10 @@ async function main() {
 	);
 	source.push("a");
 	source.push("b");
+	await new Promise((resolve) => process.nextTick(resolve));
 	check(piped.join(",") === "a" && source.isPaused(), "write false pauses source");
 	destination.emit("drain");
+	await new Promise((resolve) => process.nextTick(resolve));
 	check(piped.join(",") === "a,b", "drain resumes queued data");
 	source.unpipe(destination);
 	source.push("c");
@@ -322,7 +328,7 @@ async function main() {
 		},
 	});
 	customReadable.on("data", (chunk) => pulled.push(chunk.toString()));
-	await settle();
+	await new Promise((resolve) => customReadable.on("end", resolve));
 	check(
 		pulled.join() === "1,2,3" &&
 			pullSizes.join() === "2,2,2,2" &&
@@ -429,6 +435,7 @@ async function main() {
 	multiSource.pipe(secondDestination);
 	multiSource.push("one");
 	multiSource.push("two");
+	await new Promise((resolve) => process.nextTick(resolve));
 	firstDestination.emit("drain");
 	check(
 		firstChunks.join(",") === "one" &&
@@ -437,6 +444,7 @@ async function main() {
 		"first destination drain waits for all blocked pipes",
 	);
 	secondDestination.emit("drain");
+	await new Promise((resolve) => process.nextTick(resolve));
 	check(
 		firstChunks.join(",") === "one,two" && secondChunks.join(",") === "one,two",
 		"last destination drain resumes source",
@@ -453,7 +461,7 @@ async function main() {
 	check(
 		firstChunks.length === 2 &&
 			secondChunks.length === 2 &&
-			multiSource._malReadableQueue.length === 1,
+			multiSource.readableLength === Buffer.byteLength("buffered-after-unpipe"),
 		"unpipe buffers subsequent chunks",
 	);
 

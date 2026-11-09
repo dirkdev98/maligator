@@ -122,6 +122,13 @@ initial state fields in the state object itself. The public `_readableState` and
 `_writableState` objects retain their ordinary descriptors and mutation behavior.
 Properties become visible through the existing initialization writes.
 
+Readable startup and synchronous `_read` callbacks buffer pushes until the read
+boundary has returned. Scheduled flow primes `read(0)` and drains through ordinary
+`read()` calls, preserving FIFO consumption, pause handling and readable lengths.
+Later pushes may deliver directly only outside that boundary with an empty buffer.
+EOF after the boundary drains without adding a tick before end scheduling, so
+Transform readable completion keeps its ordering relative to writable finish.
+
 ### Backpressure
 
 Read and write flow control are explicit and bounded:

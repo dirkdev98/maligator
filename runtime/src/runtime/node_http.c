@@ -1404,24 +1404,25 @@ static void http_initialize_shaped_object(
     }
 }
 
+static const char *http_readable_state_names[] = {
+    "encoding", "decoder", "ended", "endEmitted", "destroyed",
+    "objectMode", "highWaterMark", "reading", "sync", "length",
+};
+
 static const MalShapeAppendPlan *http_readable_state_append_plan(MalVm *vm) {
     if (vm->node_http_readable_state_append_plan.source != nullptr) {
         return &vm->node_http_readable_state_append_plan;
     }
-    static const char *names[] = {
-        "encoding", "decoder", "ended", "endEmitted", "destroyed",
-        "objectMode", "highWaterMark", "reading",
-    };
     MalShape *source = mal_shape_root(&vm->heap);
     MalShape *shape = source;
-    for (usize i = 0; i < countof(names); i++) {
+    for (usize i = 0; i < countof(http_readable_state_names); i++) {
         shape = mal_shape_add_property(
-            shape, mal_intrinsic_string_key(vm, (const byte *) names[i]),
+            shape, mal_intrinsic_string_key(vm, (const byte *) http_readable_state_names[i]),
             HTTP_VISIBLE);
     }
     (void) mal_object_append_plan_init(
         &vm->node_http_readable_state_append_plan, source, shape,
-        (u32) countof(names));
+        (u32) countof(http_readable_state_names));
     return &vm->node_http_readable_state_append_plan;
 }
 
@@ -1528,23 +1529,22 @@ static MalValue http_new_incoming_message(MalVm *vm) {
     roots[1] = mal_value_from_object(
         mal_object_new_reserved(&vm->heap, nullptr, HTTP_EVENTS_SLOTS));
     roots[2] = mal_value_from_object(mal_object_new_reserved(
-        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), 8));
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+        countof(http_readable_state_names)));
     roots[3] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
     roots[4] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
 
-    static const char *state_names[] = {
-        "encoding", "decoder", "ended", "endEmitted", "destroyed",
-        "objectMode", "highWaterMark", "reading",
-    };
     MalValue state_values[] = {
         mal_value_new_null(), mal_value_new_null(), mal_value_new_boolean(false),
         mal_value_new_boolean(false), mal_value_new_boolean(false),
         mal_value_new_boolean(false), mal_value_from_i32(16384),
-        mal_value_new_boolean(false),
+        mal_value_new_boolean(false), mal_value_new_boolean(true),
+        mal_value_from_i32(0),
     };
+    static_assert(countof(state_values) == countof(http_readable_state_names));
     http_initialize_shaped_object(
         vm, roots[2], http_readable_state_append_plan(vm),
-        state_names, state_values, countof(state_values));
+        http_readable_state_names, state_values, countof(state_values));
 
     http_incoming_message_dispatch_shapes(vm);
     static const char *request_names[] = {

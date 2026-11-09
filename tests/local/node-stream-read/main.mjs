@@ -75,6 +75,64 @@ console.log(
 zero.push(null);
 console.log(String(zero.read(10)), zero.read());
 
+const initialFlow = [];
+let initialReads = 0;
+const initial = new Readable({
+	read() {
+		initialFlow.push("read-before");
+		this.push(initialReads++ === 0 ? "x" : null);
+		initialFlow.push("read-after");
+	},
+});
+initial.on("data", (chunk) => initialFlow.push(`data:${chunk}`));
+initialFlow.push("before");
+initial.push("a");
+initialFlow.push("after");
+process.nextTick(() => initialFlow.push("tick"));
+await tick();
+console.log("initial-flow", initialFlow.join(","));
+
+const synchronousEnd = [];
+const synchronous = new Readable({
+	read() {
+		synchronousEnd.push("read-before");
+		this.push("x");
+		this.push(null);
+		synchronousEnd.push("read-after");
+	},
+});
+synchronous.on("data", (chunk) => synchronousEnd.push(`data:${chunk}`));
+synchronousEnd.push("attached");
+process.nextTick(() => synchronousEnd.push("tick"));
+await tick();
+console.log("synchronous-end", synchronousEnd.join(","));
+
+const bufferedEnd = [];
+const bufferedInitial = new Readable({
+	read() {
+		bufferedEnd.push("unexpected-read");
+	},
+});
+bufferedInitial.push("a");
+bufferedInitial.push("b");
+bufferedInitial.push(null);
+bufferedInitial.on("data", (chunk) => bufferedEnd.push(`data:${chunk}`));
+bufferedEnd.push("attached");
+process.nextTick(() => bufferedEnd.push("tick"));
+await tick();
+console.log("buffered-end", bufferedEnd.join(","));
+
+const laterFlow = [];
+const later = new Readable({ read() {} });
+later.on("data", (chunk) => laterFlow.push(`data:${chunk}`));
+await tick();
+laterFlow.push("before");
+later.push("later");
+laterFlow.push("after");
+later.push(null);
+await tick();
+console.log("later-flow", laterFlow.join(","));
+
 const { Transform, Writable, pipeline } = await import("node:stream");
 const lifecycle = [];
 const upper = new Transform({

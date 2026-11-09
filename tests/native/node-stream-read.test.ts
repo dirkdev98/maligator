@@ -7,6 +7,7 @@ import {
 	buildNativeBinary,
 	resolveHarnessExecutionInvocation,
 	scaledNativeRunTimeoutMs,
+	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 const FIXTURE = "tests/local/node-stream-read/main.mjs";
@@ -28,18 +29,26 @@ for (const compiled of [true, false]) {
 		afterAll(() => {
 			if (outDir !== undefined) rmSync(outDir, { recursive: true, force: true });
 		});
-		test(`reads paused streams with the output Node prints (compiled=${compiled})`, () => {
-			const expected = execFileSync(process.execPath, ["--no-deprecation", FIXTURE], {
-				encoding: "utf8",
-			});
-			const invocation = resolveHarnessExecutionInvocation(binary);
-			const result = spawnSync(invocation.executable, invocation.args, {
-				encoding: "utf8",
-				timeout: scaledNativeRunTimeoutMs(60_000),
-			});
-			if (result.error !== undefined) throw result.error;
-			expect(result.status, result.stderr).toBe(0);
-			expect(result.stdout.split("\n")).toEqual(expected.split("\n"));
-		}, 300_000);
+		test.each([
+			{ mode: "normal", env: {} },
+			{ mode: "GC stress", env: STRESS_ENV },
+		])(
+			"preserves Readable reads and initial flow ordering with $mode",
+			({ env }) => {
+				const expected = execFileSync(process.execPath, ["--no-deprecation", FIXTURE], {
+					encoding: "utf8",
+				});
+				const invocation = resolveHarnessExecutionInvocation(binary);
+				const result = spawnSync(invocation.executable, invocation.args, {
+					env: { ...process.env, ...env },
+					encoding: "utf8",
+					timeout: scaledNativeRunTimeoutMs(60_000),
+				});
+				if (result.error !== undefined) throw result.error;
+				expect(result.status, result.stderr).toBe(0);
+				expect(result.stdout.split("\n")).toEqual(expected.split("\n"));
+			},
+			300_000,
+		);
 	});
 }

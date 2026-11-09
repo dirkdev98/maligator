@@ -824,11 +824,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       Middle generator stages in pipeline receive the previous Readable itself, where
       Node wraps it with fromReadable.
 
-- [ ] Make synchronous native push respect the initial ReadableState.sync boundary so data
-      delivery agrees with first _read and nextTick ordering. Preserve HTTP read-credit
-      and backpressure behavior. Verify the event trace before measuring complete Express
-      routes; do not trade observable ordering for throughput.
-
 - [ ] node:stream: a pipeline stage that pumps into a web TransformStream rejects with
       "Value is not a function" (Readable → TransformStream → Writable), although the
       TransformStream's writer and async iteration work on their own.
