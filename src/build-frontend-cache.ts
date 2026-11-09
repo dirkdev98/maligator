@@ -29,8 +29,12 @@ import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import type {
 	BuildModuleGraphOptions,
 	ModuleGraph,
+	ModuleResolutionInput,
 } from "./compiler/frontend/module-graph.ts";
-import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
+import {
+	buildModuleGraph,
+	moduleResolutionInputUnchanged,
+} from "./compiler/frontend/module-graph.ts";
 import { collectPrimordialMutationDiagnostics } from "./compiler/frontend/primordial-diagnostics.ts";
 import {
 	collectDisallowedEvalUsage,
@@ -46,10 +50,7 @@ import type {
 import type { CompileEntrypointOptions } from "./compiler/pipeline/compile-program-common.ts";
 import { compileWorkerImages } from "./compiler/pipeline/compile-worker-images.ts";
 import type { CompiledWorkerImage } from "./compiler/pipeline/compile-worker-images.ts";
-import {
-	captureRootPackageAbsences,
-	validateRootPackageAbsences,
-} from "./compiler/root-compilation.ts";
+import { validateRootResolutionInputs } from "./compiler/root-compilation.ts";
 import type {
 	StartRootCompilation,
 	validateRootInputs,
@@ -95,7 +96,7 @@ import {
 } from "./worker-image-cache.ts";
 import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 11;
+const BUILD_FRONTEND_CACHE_SCHEMA = 12;
 const BUILD_FRONTEND_PIPELINE_VERSION = 6;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
@@ -106,11 +107,11 @@ const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 11;
+	schema: 12;
 	closure: Pick<ProgramClosureCertificate, "scope" | "roots" | "openings">;
 	/** The execution snapshot when a module reads it; other commands may reuse the images otherwise. */
 	execution: string | null;
-	packageAbsences: Array<string>;
+	resolutionInputs: Array<ModuleResolutionInput>;
 	workerArtifacts: Array<WorkerImageArtifact>;
 	identity: string;
 	contentKey: string;
@@ -420,10 +421,8 @@ function loadCached(
 		!validImageStats(manifest.imageStats) ||
 		!Array.isArray(manifest.diagnostics) ||
 		!Array.isArray(manifest.dependencies) ||
-		!Array.isArray(manifest.packageAbsences) ||
-		manifest.packageAbsences.some(
-			(file) => typeof file !== "string" || existsSync(file),
-		) ||
+		!Array.isArray(manifest.resolutionInputs) ||
+		!manifest.resolutionInputs.every(moduleResolutionInputUnchanged) ||
 		!artifactsUnchanged(manifest.runtimeArtifacts, artifactRoot) ||
 		(manifest.fragmentCompilerArtifacts !== undefined &&
 			(!Array.isArray(manifest.fragmentCompilerArtifacts) ||
@@ -597,7 +596,7 @@ type PreparedBuildFrontend =
 				workers: ReadonlyArray<CompiledWorkerImage>,
 				diagnostics?: ReadonlyArray<CompilerDiagnostic>,
 				dependencies?: ReadonlyArray<BuildDependencyIdentity>,
-				packageAbsences?: ReadonlyArray<string>,
+				resolutionInputs?: ReadonlyArray<ModuleResolutionInput>,
 			): CompiledBuildFrontend;
 	  };
 
@@ -680,7 +679,7 @@ export async function compileBuildFrontendAsync(
 		result!.workers,
 		result!.diagnostics,
 		result!.dependencies,
-		result!.packageAbsences,
+		result!.resolutionInputs,
 	);
 }
 
@@ -784,7 +783,7 @@ function prepareBuildFrontend(
 		platformSourceRoot: options.platformSourceRoot,
 	});
 	phases.graphMs = Date.now() - graphStartedAt;
-	const ownerPackageAbsences = captureRootPackageAbsences(builtGraph);
+	const ownerResolutionInputs = builtGraph.resolutionInputs;
 	// Worker roots compile from their own graphs, so assume they read the snapshot.
 	const readsExecution =
 		graphReadsExecution(builtGraph) || (builtGraph.workerEntries?.length ?? 0) > 0;
@@ -973,9 +972,18 @@ function prepareBuildFrontend(
 		coreInstrumentation: options.coreInstrumentation,
 		onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
 	};
+	const serialWorkerResolutionInputs: Array<ModuleResolutionInput> = [];
 	const compileWorkers = () => {
 		const workerStartedAt = Date.now();
-		const result = compileWorkerImages(workerRoots, workerOptions);
+		const result = compileWorkerImages(workerRoots, {
+			...workerOptions,
+			runPhase(phase, run) {
+				const result = run();
+				if (phase === "graph")
+					serialWorkerResolutionInputs.push(...(result as ModuleGraph).resolutionInputs);
+				return result;
+			},
+		});
 		phases.workerMs += Date.now() - workerStartedAt;
 		return result;
 	};
@@ -983,12 +991,19 @@ function prepareBuildFrontend(
 		workerImages: ReadonlyArray<CompiledWorkerImage>,
 		workerDiagnostics: ReadonlyArray<CompilerDiagnostic> = [],
 		workerDependencies: ReadonlyArray<BuildDependencyIdentity> = [],
-		workerPackageAbsences: ReadonlyArray<string> = [],
+		workerResolutionInputs: ReadonlyArray<ModuleResolutionInput> = serialWorkerResolutionInputs,
 	): CompiledBuildFrontend => {
-		const packageAbsences = [
-			...new Set([...ownerPackageAbsences, ...workerPackageAbsences]),
-		].sort();
-		validateRootPackageAbsences(packageAbsences);
+		const resolutionByKey = new Map(ownerResolutionInputs);
+		for (const [key, observation] of workerResolutionInputs) {
+			const previous = resolutionByKey.get(key);
+			if (previous !== undefined && previous !== observation)
+				throw new Error(`root resolution input generations differ: ${key.slice(5)}`);
+			resolutionByKey.set(key, observation);
+		}
+		const resolutionInputs = [...resolutionByKey].sort(([left], [right]) =>
+			left < right ? -1 : left > right ? 1 : 0,
+		);
+		validateRootResolutionInputs(resolutionInputs);
 		diagnostics.push(...workerDiagnostics);
 		const workerArtifacts = cacheWorkerImages(workerImages, artifactRoot);
 		const dependenciesByPath = new Map(
@@ -1061,7 +1076,7 @@ function prepareBuildFrontend(
 					...(compilerArtifact === undefined ? {} : { compilerArtifact }),
 					imageStats,
 					entrypoint,
-					packageAbsences,
+					resolutionInputs,
 					dependencies,
 					diagnostics,
 				} satisfies BuildFrontendManifest)}\n`,

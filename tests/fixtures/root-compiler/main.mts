@@ -32,6 +32,7 @@ function check(value: unknown, message: string): asserts value {
 function graphFor(count = 1): ModuleGraph {
 	const paths = Array.from({ length: count }, (_, index) => `/unused-root-${index}.mts`);
 	return {
+		resolutionInputs: [],
 		entry: paths[0]!,
 		modules: new Map(),
 		nodeEnabled: false,

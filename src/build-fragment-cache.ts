@@ -148,6 +148,7 @@ export function preludeGraph(
 		}
 	}
 	return {
+		resolutionInputs: graph.resolutionInputs,
 		entry: specifier,
 		nodeEnabled: graph.nodeEnabled,
 		execution,

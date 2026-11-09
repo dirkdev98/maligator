@@ -296,6 +296,7 @@ export function compileExplorerCore(source: string, settings: unknown = {}) {
 		}
 	});
 	const graph: ModuleGraph = {
+		resolutionInputs: [],
 		entry: sourcePath,
 		nodeEnabled: config.node,
 		modules: new Map([

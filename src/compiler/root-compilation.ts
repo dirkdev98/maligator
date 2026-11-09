@@ -6,7 +6,8 @@ import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
 import { CoreOptimizationPlanVerificationError } from "./core/core-ir-region-validity.ts";
 import { CoreIrVerificationError } from "./core/core-ir-verifier.ts";
 import { CoreOptimizationBudgetError } from "./core/core-pass.ts";
-import type { ModuleGraph } from "./frontend/module-graph.ts";
+import { moduleResolutionInputUnchanged } from "./frontend/module-graph.ts";
+import type { ModuleGraph, ModuleResolutionInput } from "./frontend/module-graph.ts";
 import { SyntaxDiagnostic } from "./frontend/syntax-diagnostic.ts";
 import type { WorkerEntryDeclaration } from "./frontend/worker-entries.ts";
 import type { CompileEntrypointOptions } from "./pipeline/compile-program-common.ts";
@@ -88,24 +89,12 @@ export function captureRootInputs(graph: ModuleGraph): Array<FrontendDependencyI
 	);
 }
 
-export function captureRootPackageAbsences(graph: ModuleGraph): Array<string> {
-	const missing = new Set<string>();
-	for (const record of graph.modules.values()) {
-		if (record.host || (record.virtual && record.sourcePath === undefined)) continue;
-		let directory = path.dirname(record.sourcePath ?? record.path);
-		for (;;) {
-			const file = path.join(directory, "package.json");
-			if (!existsSync(file)) missing.add(file);
-			const parent = path.dirname(directory);
-			if (parent === directory) break;
-			directory = parent;
-		}
-	}
-	return [...missing].sort();
-}
-
-export function validateRootPackageAbsences(files: ReadonlyArray<string>): void {
-	for (const file of files) if (existsSync(file)) throw new RootInputChangedError(file);
+export function validateRootResolutionInputs(
+	inputs: ReadonlyArray<ModuleResolutionInput>,
+): void {
+	for (const input of inputs)
+		if (!moduleResolutionInputUnchanged(input))
+			throw new RootInputChangedError(input[0].slice(5));
 }
 
 export function rootPhysicalModulePaths(graph: ModuleGraph): Array<string> {
@@ -141,7 +130,7 @@ export interface RootBatch {
 	readonly jobs: ReadonlyArray<RootJob>;
 	readonly options: RootCompileOptions;
 	readonly ownerInputs: ReadonlyArray<FrontendDependencyIdentity>;
-	readonly packageAbsences: ReadonlyArray<string>;
+	readonly resolutionInputs: ReadonlyArray<ModuleResolutionInput>;
 	readonly ownerModulePaths: ReadonlyArray<string>;
 	readonly cancellation: SharedArrayBuffer;
 }
@@ -274,7 +263,7 @@ export type RootJobResult =
 			readonly wireSize: number;
 			readonly wireDigest: string;
 			readonly dependencies: Array<FrontendDependencyIdentity>;
-			readonly packageAbsences: Array<string>;
+			readonly resolutionInputs: Array<ModuleResolutionInput>;
 			readonly diagnostics: Array<CompilerDiagnostic>;
 	  };
 export interface RootBatchResult {
@@ -285,7 +274,7 @@ export interface RootCompilationResult {
 	workers: Array<CompiledWorkerImage>;
 	diagnostics: Array<CompilerDiagnostic>;
 	dependencies: Array<FrontendDependencyIdentity>;
-	packageAbsences: Array<string>;
+	resolutionInputs: Array<ModuleResolutionInput>;
 }
 
 export interface RootCompilation {

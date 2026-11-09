@@ -3,16 +3,15 @@ import { writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { stripCompactTypes } from "./frontend/compact-type-strip.ts";
 import { ModuleParseCache } from "./frontend/module-graph.ts";
-import type { ModuleGraph } from "./frontend/module-graph.ts";
+import type { ModuleGraph, ModuleResolutionInput } from "./frontend/module-graph.ts";
 import { compileEntrypoint } from "./pipeline/compile-program.ts";
 import {
 	captureRootInputs,
-	captureRootPackageAbsences,
 	rootPhysicalModulePaths,
 	RootInputChangedError,
 	serializeRootFailure,
 	validateRootInputs,
-	validateRootPackageAbsences,
+	validateRootResolutionInputs,
 } from "./root-compilation.ts";
 import type { RootBatch, RootBatchResult, RootJobResult } from "./root-compilation.ts";
 import type { CompilerDiagnostic } from "./shared/compiler-diagnostics.ts";
@@ -31,9 +30,9 @@ export function compileRootBatch(batch: RootBatch): RootBatchResult {
 		try {
 			checkpoint();
 			validateRootInputs(batch.ownerInputs);
-			validateRootPackageAbsences(batch.packageAbsences);
+			validateRootResolutionInputs(batch.resolutionInputs);
 			let dependencies: ReturnType<typeof captureRootInputs> | undefined;
-			let packageAbsences: Array<string> | undefined;
+			let resolutionInputs: Array<ModuleResolutionInput> | undefined;
 			const diagnostics: Array<CompilerDiagnostic> = [];
 			const image = compileEntrypoint(job.entry.path, {
 				...batch.options,
@@ -52,14 +51,14 @@ export function compileRootBatch(batch: RootBatch): RootBatchResult {
 							if (!batch.ownerModulePaths.includes(file))
 								throw new RootInputChangedError(file);
 						dependencies = captureRootInputs(graph);
-						packageAbsences = captureRootPackageAbsences(graph);
-						validateRootPackageAbsences(batch.packageAbsences);
+						resolutionInputs = [...graph.resolutionInputs];
+						validateRootResolutionInputs(batch.resolutionInputs);
 					}
 					checkpoint();
 					return result;
 				},
 			});
-			if (dependencies === undefined || packageAbsences === undefined)
+			if (dependencies === undefined || resolutionInputs === undefined)
 				throw new Error("compiler did not expose the root graph");
 			validateRootInputs(batch.ownerInputs);
 			const compilerArtifact = serializeCompilerArtifact(image);
@@ -72,15 +71,15 @@ export function compileRootBatch(batch: RootBatch): RootBatchResult {
 			const wire = serializeRuntimeImage(image.runtime);
 			writeFileSync(path.join(batch.artifactDirectory, `${job.index}.malw`), wire);
 			validateRootInputs(dependencies);
-			validateRootPackageAbsences(batch.packageAbsences);
-			validateRootPackageAbsences(packageAbsences);
+			validateRootResolutionInputs(batch.resolutionInputs);
+			validateRootResolutionInputs(resolutionInputs);
 			checkpoint();
 			results.push({
 				index: job.index,
 				compilerSize,
 				wireSize: wire.byteLength,
 				dependencies,
-				packageAbsences,
+				resolutionInputs,
 				diagnostics,
 				compilerDigest,
 				wireDigest: hash("sha256", wire, "hex"),

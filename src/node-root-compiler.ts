@@ -13,9 +13,8 @@ import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
 
 export {
 	captureRootInputs,
-	captureRootPackageAbsences,
 	validateRootInputs,
-	validateRootPackageAbsences,
+	validateRootResolutionInputs,
 } from "./compiler/root-compilation.ts";
 
 export interface NodeRootCompilationControls extends RootCompilationControls {

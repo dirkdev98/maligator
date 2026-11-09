@@ -21,10 +21,7 @@ import { parseCliArgs } from "../src/cli.ts";
 import { compilerProducerImplementationDigestForRoot } from "../src/compiler-cache-identity.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { compileWorkerImages } from "../src/compiler/pipeline/compile-worker-images.ts";
-import {
-	validateRootInputs,
-	captureRootPackageAbsences,
-} from "../src/compiler/root-compilation.ts";
+import { validateRootInputs } from "../src/compiler/root-compilation.ts";
 import type { RootCompilationResult } from "../src/compiler/root-compilation.ts";
 import { serializeCompilerArtifact } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
@@ -82,7 +79,7 @@ function immediateCompiler(): BuildRootCompiler {
 					workers,
 					diagnostics,
 					dependencies: [...inputs],
-					packageAbsences: captureRootPackageAbsences(graph),
+					resolutionInputs: [...graph.resolutionInputs],
 				}),
 				cancel() {},
 				close: async () => {},
@@ -420,10 +417,10 @@ test("adding an absent package selection input during join rejects, then invalid
 	const root = path.dirname(options.entrypoint);
 	const nested = path.join(root, "nested");
 	mkdirSync(nested);
-	writeFileSync(path.join(nested, "first.mts"), 'console.log("first");');
+	writeFileSync(path.join(nested, "first.js"), 'console.log("first");');
 	writeFileSync(
 		options.entrypoint,
-		'import {createWorkerUrl} from "maligator:workers"; console.log(createWorkerUrl("./nested/first.mts",import.meta.url));',
+		'import {createWorkerUrl} from "maligator:workers"; console.log(createWorkerUrl("./nested/first.js",import.meta.url));',
 	);
 	const negative = path.join(nested, "package.json");
 	const base = immediateCompiler();
@@ -441,7 +438,6 @@ test("adding an absent package selection input during join rejects, then invalid
 	};
 	const pending = compileBuildFrontendAsync(options, compiler, { concurrency: 3 });
 	await Promise.resolve();
-	assert.ok(accepted!.packageAbsences.includes(negative));
 	writeFileSync(negative, '{"type":"module"}');
 	result.resolve(accepted!);
 	await assert.rejects(pending, /package.*changed|input changed|appeared/);
@@ -450,6 +446,34 @@ test("adding an absent package selection input during join rejects, then invalid
 	assert.equal(compileBuildFrontend(options).cache, "hit");
 	writeFileSync(negative, '{"type":"module"}');
 	assert.equal(compileBuildFrontend(options).cache, "miss");
+});
+
+test("a newly preferred file before publication rejects the compiled worker images", async () => {
+	const options = fixture();
+	const root = path.dirname(options.entrypoint);
+	writeFileSync(
+		path.join(root, "first.mts"),
+		'import { value } from "./value"; console.log(value);\n',
+	);
+	writeFileSync(path.join(root, "value.mjs"), 'export const value = "old";\n');
+	await assert.rejects(
+		compileBuildFrontendAsync(options, immediateCompiler(), {
+			concurrency: 3,
+			beforePublication() {
+				writeFileSync(path.join(root, "value"), 'export const value = "new";\n');
+			},
+		}),
+		/input changed before publication/,
+	);
+	const changed = compileBuildFrontend(options);
+	assert.equal(changed.cache, "miss");
+	assert.equal(compileBuildFrontend(options).cache, "hit");
+	assert.deepEqual(
+		changed.workerImages.map((worker) => worker.wire),
+		compileBuildFrontend({ ...options, forceCompile: true }).workerImages.map(
+			(worker) => worker.wire,
+		),
+	);
 });
 
 for (const automatic of [false, true])

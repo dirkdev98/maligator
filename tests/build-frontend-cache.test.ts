@@ -16,6 +16,7 @@ import {
 	BuildCompilationSession,
 	compileBuildFrontend,
 } from "../src/build-frontend-cache.ts";
+import type { CompiledBuildFrontend } from "../src/build-frontend-cache.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
 import { deserializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
@@ -68,7 +69,88 @@ function compile(
 	});
 }
 
+function runtimeImages(frontend: CompiledBuildFrontend) {
+	return [frontend.wire, ...frontend.workerImages.map((worker) => worker.wire)];
+}
+
 describe("normal build frontend cache", () => {
+	it.each([false, true])(
+		"re-resolves a newly preferred file when the old candidate was a directory: %s",
+		(wasDirectory) => {
+			const root = temporaryDirectory();
+			try {
+				const entrypoint = path.join(root, "entry.mjs");
+				const preferred = path.join(root, "value");
+				write(path.join(root, "package.json"), '{"type":"module"}\n');
+				write(entrypoint, 'import { value } from "./value"; console.log(value);\n');
+				write(`${preferred}.mjs`, 'export const value = "old";\n');
+				if (wasDirectory) mkdirSync(preferred);
+				const options = {
+					entrypoint,
+					cacheDirectory: path.join(root, "cache"),
+					config: resolveBuildConfig({}),
+					stripTypes: stripCompactTypes,
+					stripperIdentity: "resolution-file-precedence",
+					session: new BuildCompilationSession(),
+				};
+				const before = compileBuildFrontend(options);
+				expect(compileBuildFrontend(options).cache).toBe("hit");
+				if (wasDirectory) rmSync(preferred, { recursive: true });
+				write(preferred, 'export const value = "new";\n');
+				const changed = compileBuildFrontend(options);
+				expect(changed.cache).toBe("miss");
+				expect(changed.wire).not.toEqual(before.wire);
+				expect(compileBuildFrontend(options).wire).toEqual(changed.wire);
+				expect(compileBuildFrontend(options).cache).toBe("hit");
+				expect(compileBuildFrontend({ ...options, forceCompile: true }).wire).toEqual(
+					changed.wire,
+				);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it.each([false, true])("re-resolves a nearer package for worker root: %s", (worker) => {
+		const root = temporaryDirectory();
+		try {
+			interpretedPackageProject(root, 'module.exports = "old";\n');
+			const nested = path.join(root, "nested");
+			mkdirSync(nested);
+			const consumer = path.join(nested, "consumer.mjs");
+			write(consumer, 'import value from "located"; console.log(value);\n');
+			const entrypoint = worker ? path.join(root, "entry.mjs") : consumer;
+			if (worker)
+				write(
+					entrypoint,
+					'import { createWorkerUrl } from "maligator:workers"; console.log(createWorkerUrl("./nested/consumer.mjs", import.meta.url));\n',
+				);
+			const options = {
+				entrypoint,
+				cacheDirectory: path.join(root, "cache"),
+				config: resolveBuildConfig({}),
+				stripTypes: stripCompactTypes,
+				stripperIdentity: "resolution-nearer-package",
+				session: new BuildCompilationSession(),
+			};
+			const before = compileBuildFrontend(options);
+			expect(compileBuildFrontend(options).cache).toBe("hit");
+			const packageDirectory = path.join(nested, "node_modules/located");
+			mkdirSync(packageDirectory, { recursive: true });
+			write(path.join(packageDirectory, "package.json"), '{"main":"index.js"}\n');
+			write(path.join(packageDirectory, "index.js"), 'module.exports = "new";\n');
+			const changed = compileBuildFrontend(options);
+			expect(changed.cache).toBe("miss");
+			expect(runtimeImages(changed)).not.toEqual(runtimeImages(before));
+			expect(compileBuildFrontend(options).cache).toBe("hit");
+			expect(
+				runtimeImages(compileBuildFrontend({ ...options, forceCompile: true })),
+			).toEqual(runtimeImages(changed));
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it.each([false, true])(
 		"retains source closure with eval %s on cache hits",
 		(evalEnabled) => {

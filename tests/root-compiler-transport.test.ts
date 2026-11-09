@@ -22,11 +22,10 @@ import { compileWorkerImages } from "../src/compiler/pipeline/compile-worker-ima
 import {
 	RootInputChangedError,
 	captureRootInputs,
-	captureRootPackageAbsences,
 	deserializeRootFailure,
 	serializeRootFailure,
 	validateRootInputs,
-	validateRootPackageAbsences,
+	validateRootResolutionInputs,
 } from "../src/compiler/root-compilation.ts";
 import { serializeCompilerArtifact } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitWorkerImageTranslationUnits } from "../src/compiler/target/emit-worker-images.ts";
@@ -44,6 +43,7 @@ const options = {
 };
 function graphFor(files: ReadonlyArray<string>): ModuleGraph {
 	return {
+		resolutionInputs: [],
 		entry: files[0]!,
 		modules: new Map(),
 		nodeEnabled: false,
@@ -134,12 +134,12 @@ test("unsupported stripper is rejected before worker admission", () => {
 test("a new formerly absent package boundary rejects the consumed graph", async () => {
 	await temporary((directory) => {
 		const file = path.join(directory, "entry.mts");
-		writeFileSync(file, "export const value = 1;\n");
+		writeFileSync(file, 'import "./dependency.js";\n');
+		writeFileSync(path.join(directory, "dependency.js"), 'console.log("dependency");\n');
 		const graph = buildModuleGraph(file, options);
-		const missing = captureRootPackageAbsences(graph);
-		assert.ok(missing.includes(path.join(directory, "package.json")));
+		const missing = [...graph.resolutionInputs];
 		writeFileSync(path.join(directory, "package.json"), '{"type":"commonjs"}\n');
-		assert.throws(() => validateRootPackageAbsences(missing), RootInputChangedError);
+		assert.throws(() => validateRootResolutionInputs(missing), RootInputChangedError);
 	});
 });
 
@@ -272,7 +272,7 @@ test("an admitted root rejects a newly created nearer package target", async () 
 			task.result,
 			(error: unknown) =>
 				error instanceof RootInputChangedError &&
-				error.path === path.join(nearer, "index.mjs"),
+				(error.path === nearer || error.path === path.join(nearer, "index.mjs")),
 		);
 		await task.close();
 	});

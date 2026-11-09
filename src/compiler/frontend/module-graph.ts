@@ -127,7 +127,11 @@ export interface ExternalModuleInterface {
 	exports: ReadonlyArray<string>;
 }
 
+export type ModuleResolutionInput = readonly [key: string, observation: string];
+
 export interface ModuleGraph {
+	/** Filesystem decisions that can change resolution without editing a consumed file. */
+	resolutionInputs: ReadonlyArray<ModuleResolutionInput>;
 	workerEntries?: Array<WorkerEntryDeclaration>;
 	dynamicImportCandidates?: ReadonlyArray<string>;
 	execution?: Execution;
@@ -1066,6 +1070,7 @@ export function buildModuleGraph(
 	}
 
 	return {
+		resolutionInputs: [...ctx.observed],
 		workerEntries,
 		dynamicImportCandidates: [...declaredCandidates].sort(),
 		entry,
@@ -1875,6 +1880,28 @@ function statObservation(kind: "kind" | "json", target: string): string {
 		return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
 	}
 	return stats.isFile() ? "f" : stats.isDirectory() ? "d" : "o";
+}
+
+/** Validate a resolver observation without loading or parsing its module graph. */
+export function moduleResolutionInputUnchanged(input: unknown): boolean {
+	if (
+		!Array.isArray(input) ||
+		input.length !== 2 ||
+		typeof input[0] !== "string" ||
+		typeof input[1] !== "string" ||
+		(!input[0].startsWith("kind\0") && !input[0].startsWith("json\0"))
+	)
+		return false;
+	let current: string;
+	try {
+		current = statObservation(
+			input[0].startsWith("kind") ? "kind" : "json",
+			input[0].slice(5),
+		);
+	} catch {
+		current = "-";
+	}
+	return current === input[1];
 }
 
 /**

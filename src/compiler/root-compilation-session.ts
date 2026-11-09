@@ -9,12 +9,11 @@ import type { CompileEntrypointOptions } from "./pipeline/compile-program-common
 import { workerImageId } from "./pipeline/compile-worker-images.ts";
 import type { CompiledWorkerImage } from "./pipeline/compile-worker-images.ts";
 import {
-	captureRootPackageAbsences,
 	deserializeRootFailure,
 	rootPhysicalModulePaths,
 	serializeRootFailure,
 	validateRootInputs,
-	validateRootPackageAbsences,
+	validateRootResolutionInputs,
 	workerRootEntries,
 } from "./root-compilation.ts";
 import type {
@@ -97,7 +96,7 @@ export function startRootCompilation(
 			"roots require compact stripping and serializable compiler options",
 		);
 	validateRootInputs(ownerInputs);
-	const ownerPackageAbsences = captureRootPackageAbsences(graph);
+	const ownerResolutionInputs = [...graph.resolutionInputs];
 	const {
 		stripTypes: _strip,
 		parseCache: _parse,
@@ -144,7 +143,7 @@ export function startRootCompilation(
 			jobs,
 			options: compileOptions,
 			ownerInputs,
-			packageAbsences: ownerPackageAbsences,
+			resolutionInputs: ownerResolutionInputs,
 			ownerModulePaths: rootPhysicalModulePaths(graph),
 			cancellation,
 		};
@@ -168,7 +167,7 @@ export function startRootCompilation(
 				throw new Error("root worker completion did not cover every declaration");
 			const diagnostics: Array<CompilerDiagnostic> = [];
 			const dependencies = new Map(ownerInputs.map((input) => [input.path, input]));
-			const packageAbsences = new Set(ownerPackageAbsences);
+			const resolutionInputs = new Map(ownerResolutionInputs);
 			const workers = records.map((record): CompiledWorkerImage => {
 				if ("failure" in record) throw deserializeRootFailure(record.failure);
 				const compilerArtifact = readFileSync(
@@ -192,8 +191,13 @@ export function startRootCompilation(
 						`root worker artifact digest mismatch: ${entries[record.index]!.href}`,
 					);
 				validateRootInputs(record.dependencies);
-				validateRootPackageAbsences(record.packageAbsences);
-				for (const file of record.packageAbsences) packageAbsences.add(file);
+				validateRootResolutionInputs(record.resolutionInputs);
+				for (const [key, observation] of record.resolutionInputs) {
+					const previous = resolutionInputs.get(key);
+					if (previous !== undefined && previous !== observation)
+						throw new Error(`root resolution input generations differ: ${key.slice(5)}`);
+					resolutionInputs.set(key, observation);
+				}
 				for (const input of record.dependencies) {
 					const previous = dependencies.get(input.path);
 					if (
@@ -216,9 +220,16 @@ export function startRootCompilation(
 				left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
 			);
 			validateRootInputs(inputs);
-			const missing = [...packageAbsences].sort();
-			validateRootPackageAbsences(missing);
-			return { workers, diagnostics, dependencies: inputs, packageAbsences: missing };
+			const observations = [...resolutionInputs].sort(([left], [right]) =>
+				left < right ? -1 : left > right ? 1 : 0,
+			);
+			validateRootResolutionInputs(observations);
+			return {
+				workers,
+				diagnostics,
+				dependencies: inputs,
+				resolutionInputs: observations,
+			};
 		})
 		.finally(() => rmSync(artifactDirectory, { recursive: true, force: true }));
 	void result.catch(() => {});

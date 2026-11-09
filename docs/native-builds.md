@@ -123,7 +123,10 @@ the files. Returned images remain usable after the compilation closes.
 
 Normal builds restore cached VM definitions before generated-C emission, skipping
 unchanged graph, semantic, optimization, allocation, and lowering work while
-preserving native-code metadata. Generated translation units and the driver are then
+preserving native-code metadata. Cache validation includes the resolver's file-kind
+and package-identity observations, so newly preferred paths invalidate a warm build
+without reparsing an unchanged graph. Owner and worker observations must still agree
+when compiled images are published. Generated translation units and the driver are then
 compiled to independently content-addressed objects; unchanged objects are relinked
 without invoking their C compilation again. The product CLI writes each root's generated
 units to its build directory before emitting the next root or preparing native runtime
