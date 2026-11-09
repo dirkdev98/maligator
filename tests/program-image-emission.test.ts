@@ -3737,6 +3737,8 @@ describe("native update-expression representation", () => {
 		["String", `"a😀"`, "string-iterator-cursor"],
 		["TypedArray", "new Uint8Array([1, 2])", "typed-array-iterator-cursor"],
 		["Map", "new Map([[1, 2]])", "map-iterator-cursor"],
+		["Map keys", "new Map([[1, 2]]).keys()", "map-iterator-cursor"],
+		["Map values", "new Map([[1, 2]]).values()", "map-iterator-cursor"],
 		["Set", "new Set([1, 2])", "set-iterator-cursor"],
 	])("selects the %s stateful iterator protocol", (_name, iterable, kind) => {
 		const definition = lockedDefinition(
@@ -3744,9 +3746,66 @@ describe("native update-expression representation", () => {
 		);
 		expect(specializations(definition).some((region) => region.kind === kind)).toBe(true);
 		const output = emitProgramImage(definition, { compiled: true });
-		expect(output).toMatch(
-			/mal_vm_iterator_step_protocol_cursor\(vm, __iter_cursor_\d+, &iter_rec_\d+, &iter_val_\d+, &iter_done_\d+\)/,
+		if (kind === "map-iterator-cursor") {
+			expect(output).toMatch(/mal_vm_iterator_try_step_in_place\(__iter_cursor_/);
+		} else {
+			expect(output).toMatch(
+				/mal_vm_iterator_step_protocol_cursor\(vm, __iter_cursor_\d+, &iter_rec_\d+, &iter_val_\d+, &iter_done_\d+\)/,
+			);
+		}
+	});
+
+	it.each([
+		["keys", "locked"],
+		["values", "locked"],
+		["keys", "mutable"],
+		["values", "mutable"],
+	] as const)(
+		"defers roots around the noncollecting Map %s probe with %s primordials",
+		(method, primordials) => {
+			const source = `function visit() { const map = new Map([[{ child: { meta: { value: 1 } } }, { child: { meta: { value: 2 } } }]]); let total = 0; for (const value of map.${method}()) total += value.child.meta.value; return total; } globalThis.visit = visit;`;
+			const definition = compilePreciseProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					source,
+					"map-cursor.js",
+					parseScript(source, { strict: false }),
+				),
+				{
+					facts: compilerProgramFactsFromConfig(
+						resolveBuildConfig({ engine: { primordials } }),
+					),
+				},
+			);
+			const owner = definition.native.functions.find((fn) =>
+				fn.specializations.some((region) => region.kind === "map-iterator-cursor"),
+			)!;
+			expect(owner).toBeDefined();
+			const output = emitCompiledFunction(owner, owner.functionIndex, "", false)!.source;
+			const probe = output.indexOf("mal_vm_iterator_try_step_in_place(");
+			expect(probe).toBeGreaterThan(0);
+			const start = output.lastIndexOf("\nL", probe);
+			expect(output.slice(start, probe)).not.toMatch(
+				/__gc_slots\[\d+\]\s*=|MAL_ROOT_MASK\(/,
+			);
+			const fallback = output.indexOf("mal_vm_iterator_step(vm,", probe);
+			expect(fallback).toBeGreaterThan(probe);
+			expect(output.slice(probe, fallback)).toMatch(/MAL_ROOT_MASK\(/);
+		},
+	);
+
+	it("retains Map cursor admission when traversal bodies consume expansion slots", () => {
+		const definition = compileEntrypoint(
+			"bench/runtime-gap/cases/primordial-map-traversal.mjs",
+			{
+				buildConfig: resolveBuildConfig({
+					engine: { eval: false, realms: false },
+					surface: { node: true },
+				}),
+			},
 		);
+		expect(
+			specializations(definition).some((region) => region.kind === "map-iterator-cursor"),
+		).toBe(true);
 	});
 
 	it("guards constructed iterator entry pairs while retaining materialization fallback", () => {

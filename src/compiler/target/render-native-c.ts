@@ -8599,7 +8599,8 @@ function emitBody(
 				nativeInstructions[ip] === undefined &&
 				iteratorCursorAction?.role === "step" &&
 				(iteratorCursorAction.cursor.protocol === "array-values" ||
-					iteratorCursorAction.cursor.protocol === "string") &&
+					iteratorCursorAction.cursor.protocol === "string" ||
+					iteratorCursorAction.cursor.protocol === "map") &&
 				!nativeArrayPairDestructureActionByIp.has(ip) &&
 				!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
 				!nativeRegExpIteratorProjectionActionByIp.has(ip);
@@ -14762,7 +14763,9 @@ class NativeInstructionEmission {
 				? undefined
 				: this.context.nativeIteratorCursorAction?.cursor.protocol === "array-values"
 					? `mal_vm_iterator_step_dense_array_cursor(vm, __iter_cursor_${cursorInitializeIp}, &${rec}, &${val}, &${done})`
-					: `mal_vm_iterator_step_protocol_cursor(vm, __iter_cursor_${cursorInitializeIp}, &${rec}, &${val}, &${done})`;
+					: this.context.nativeIteratorCursorAction?.cursor.protocol === "map"
+						? `mal_vm_iterator_step_map_cursor(vm, __iter_cursor_${cursorInitializeIp}, &${rec}, &${val}, &${done})`
+						: `mal_vm_iterator_step_protocol_cursor(vm, __iter_cursor_${cursorInitializeIp}, &${rec}, &${val}, &${done})`;
 		const deferred =
 			this.context.deferredIteratorCursor && cursorInitializeIp !== undefined
 				? `__iter_deferred_${cursorInitializeIp}`
@@ -14802,10 +14805,15 @@ class NativeInstructionEmission {
 		}
 		const denseArrayProbe = `mal_vm_iterator_try_dense_array_step(&${rec}, &${val}, &${done})`;
 		const denseArrayCursorProbe = `mal_vm_iterator_try_dense_array_cursor_step(__iter_cursor_${cursorInitializeIp}, &${val}, &${done})`;
+		const mapCursorProbe = `mal_vm_iterator_try_step_in_place(__iter_cursor_${cursorInitializeIp}, &${val}, &${done})`;
+		const cursorProbe =
+			this.context.nativeIteratorCursorAction?.cursor.protocol === "map"
+				? mapCursorProbe
+				: denseArrayCursorProbe;
 		const denseProbe =
 			cursorInitializeIp === undefined
 				? denseArrayProbe
-				: `(__iter_cursor_${cursorInitializeIp} != nullptr ? ${denseArrayCursorProbe} : ${denseArrayProbe})`;
+				: `(__iter_cursor_${cursorInitializeIp} != nullptr ? ${cursorProbe} : ${denseArrayProbe})`;
 		const iteratorProbe = deferredOr(
 			`mal_vm_array_values_deferred_try_step(${this.boxed(instruction.iterator)}, &${deferred}, &${val}, &${done})`,
 			this.context.nativeIteratorCursorAction?.cursor.protocol === "string"

@@ -215,6 +215,15 @@ update checks the current live entry and canonical key before using the ordinary
 barrier-aware updater. Reference values and equal string or BigInt representatives
 need no additional retained roots; the Map owns its stored keys and values.
 
+Map key and value method results may nominate the existing Map cursor. Mutable
+constructor names are hints only: the actual iterator brand and captured native
+next method authorize admission. Nonterminal steps reread current collection
+storage and advance the authoritative iterator without allocating. A miss leaves
+its frontier unchanged for the rooted protocol path, which owns exhaustion and
+pin release. Native root publication may wait until that path is needed.
+Retained iterator cursors consume code and analysis budgets, but no body-expansion
+slot: they replace protocol dispatch without cloning a body.
+
 Entry-pair consumers may reuse keys and values from an exact captured builtin
 iterator without constructing an otherwise unobservable pair Array. Both values
 must be rooted before key coercion or callbacks can mutate the collection. A

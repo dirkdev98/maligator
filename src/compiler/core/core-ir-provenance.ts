@@ -3476,6 +3476,7 @@ function constructedIntrinsicName(
 }
 
 function iteratorCursorKind(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	source: CoreValueId,
@@ -3498,6 +3499,71 @@ function iteratorCursorKind(
 	const exactCollection = attributes.exactCollectionReceiver;
 	const intrinsic = constructedIntrinsicName(fn, roots, sourceInstruction);
 	if (
+		sourceInstruction !== undefined &&
+		fn.instructionOpcodeName(sourceInstruction) === "callKnown" &&
+		(attributes.operation === "Map.prototype.keys" ||
+			attributes.operation === "Map.prototype.values")
+	) {
+		return { kind: "map-iterator-cursor", protocol: "map" };
+	}
+	if (
+		sourceInstruction !== undefined &&
+		fn.instructionOpcodeName(sourceInstruction) === "call" &&
+		attributes.construct !== true &&
+		attributes.argumentMode === undefined
+	) {
+		const callee = instructionOperand(fn, sourceInstruction, 0);
+		const calleeDefinition =
+			callee === undefined
+				? undefined
+				: definingInstruction(fn, roots.get(callee) ?? callee);
+		if (calleeDefinition !== undefined) {
+			const calleeOpcode = fn.instructionOpcodeName(calleeDefinition);
+			const calleeAttributes = fn.instructionAttributes(calleeDefinition);
+			if (calleeOpcode === "loadPrimordial") {
+				const name =
+					getPrimordialCatalog().nodes[calleeAttributes.nodeIndex as number]?.[0];
+				if (name === "Map.prototype.keys" || name === "Map.prototype.values")
+					return { kind: "map-iterator-cursor", protocol: "map" };
+			} else if (
+				calleeOpcode === "loadPropertyStatic" &&
+				typeof calleeAttributes.stringIndex === "number"
+			) {
+				const name = program.stringConstantText(calleeAttributes.stringIndex);
+				if (name === "keys" || name === "values") {
+					const receiver = instructionOperand(fn, calleeDefinition, 0);
+					const definition =
+						receiver === undefined
+							? undefined
+							: definingInstruction(fn, roots.get(receiver) ?? receiver);
+					const constructor =
+						definition !== undefined &&
+						fn.instructionOpcodeName(definition) === "construct"
+							? instructionOperand(fn, definition, 0)
+							: undefined;
+					const constructorDefinition =
+						constructor === undefined
+							? undefined
+							: definingInstruction(fn, roots.get(constructor) ?? constructor);
+					const constructorName =
+						constructorDefinition !== undefined &&
+						fn.instructionOpcodeName(constructorDefinition) === "loadGlobalProperty"
+							? fn.instructionAttributes(constructorDefinition).nameStringIndex
+							: undefined;
+					// Mutable globals only predict the cursor; its brand and captured next guard admission.
+					if (
+						definition !== undefined &&
+						(fn.instructionAttributes(definition).exactCollectionReceiver === "Map" ||
+							constructedIntrinsicName(fn, roots, definition) === "Map" ||
+							(typeof constructorName === "number" &&
+								program.stringConstantText(constructorName) === "Map"))
+					)
+						return { kind: "map-iterator-cursor", protocol: "map" };
+				}
+			}
+		}
+	}
+	if (
 		(typeof exactTypedArray === "string" &&
 			NUMERIC_TYPED_ARRAY_INTRINSICS.has(exactTypedArray)) ||
 		(typeof intrinsic === "string" && NUMERIC_TYPED_ARRAY_INTRINSICS.has(intrinsic))
@@ -3517,6 +3583,7 @@ function iteratorCursorKind(
 }
 
 function iteratorCursorCandidates(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
@@ -3551,7 +3618,7 @@ function iteratorCursorCandidates(
 				.sort((left, right) => left - right),
 		);
 		if (steps.length === 0 || steps.length > 32) continue;
-		const strategy = iteratorCursorKind(fn, roots, source);
+		const strategy = iteratorCursorKind(program, fn, roots, source);
 		const closes =
 			strategy.kind === "array-values-iterator-cursor"
 				? exclusiveIteratorCloses(fn, control, roots, index, iterator, next, steps)
@@ -4979,7 +5046,7 @@ function discoverCandidates(
 			"map-iterator-cursor",
 			"set-iterator-cursor",
 		].some((kind) => requested(kind as CoreLocalSpecializationCandidate["kind"]))
-			? iteratorCursorCandidates(fn, control, roots, index)
+			? iteratorCursorCandidates(program, fn, control, roots, index)
 			: []),
 		...(requested("iterator-result-virtualization")
 			? iteratorResultVirtualizationCandidates(fn, control, index)

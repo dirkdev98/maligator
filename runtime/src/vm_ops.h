@@ -3592,6 +3592,60 @@ static inline bool mal_vm_iterator_try_string_step(
         mal_vm_iterator_try_string_cursor_step(vm, iterator, value_out, done_out);
 }
 
+/**
+ * A Set value, Map key or value, or dense Array element step that allocates nothing
+ * and is not the last; false leaves every other step to the protocol cursor, which
+ * rereads the same position.
+ */
+static inline bool mal_vm_iterator_try_step_in_place(
+    MalIteratorObject *iterator, MalValue *value_out, bool *done_out
+) {
+    if (iterator->done) return false;
+    switch (iterator->kind) {
+        case MAL_ITERATOR_SET_VALUES: {
+            MalSetObject *set = mal_value_to_set_object(iterator->target);
+            MalSetIter iter;
+            mal_set_iter_init(&iter, set->entries);
+            iter.index = (usize) iterator->index;
+            if (!mal_set_iter_next(&iter, value_out)) return false;
+            iterator->index = (u64) iter.index;
+            mal_perf_collection_iteration_step(set);
+            *done_out = false;
+            return true;
+        }
+        case MAL_ITERATOR_MAP_KEYS:
+        case MAL_ITERATOR_MAP_VALUES: {
+            MalMapObject *map = mal_value_to_map_object(iterator->target);
+            MalMapIter iter;
+            mal_map_iter_init(&iter, map->entries);
+            iter.index = (usize) iterator->index;
+            MalValue key;
+            MalValue mapped;
+            if (!mal_map_iter_next(&iter, &key, &mapped)) return false;
+            iterator->index = (u64) iter.index;
+            mal_perf_collection_iteration_step(map);
+            *value_out = iterator->kind == MAL_ITERATOR_MAP_KEYS ? key : mapped;
+            *done_out = false;
+            return true;
+        }
+        case MAL_ITERATOR_ARRAY_VALUES: {
+            if (!mal_value_is_array_object(iterator->target)) return false;
+            MalArrayObject *array = mal_value_to_array_object(iterator->target);
+            u64 index = iterator->index;
+            if (index >= array->length ||
+                !mal_array_object_dense_get(array, (u32) index, value_out)) {
+                return false;
+            }
+            iterator->index++;
+            mal_perf_collection_iteration_step(array);
+            *done_out = false;
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
 /** Step a compiler-retained cursor, falling back only for sparse/prototype Get. */
 static inline bool mal_vm_iterator_step_dense_array_cursor(
     MalVm *vm, MalIteratorObject *cursor, const MalIteratorRecord *record,
@@ -3600,6 +3654,15 @@ static inline bool mal_vm_iterator_step_dense_array_cursor(
     if (mal_vm_iterator_try_dense_array_cursor_step(cursor, value_out, done_out)) {
         return true;
     }
+    return mal_vm_iterator_step(vm, record, value_out, done_out);
+}
+
+/** Step a retained Map cursor without publishing a frame on its nonterminal leaf. */
+static inline bool mal_vm_iterator_step_map_cursor(
+    MalVm *vm, MalIteratorObject *cursor, const MalIteratorRecord *record,
+    MalValue *value_out, bool *done_out
+) {
+    if (mal_vm_iterator_try_step_in_place(cursor, value_out, done_out)) return true;
     return mal_vm_iterator_step(vm, record, value_out, done_out);
 }
 

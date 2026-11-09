@@ -155,6 +155,99 @@ if (scenario === "shapes") {
 	} catch (error) {
 		events.push(error === marker);
 	}
+} else if (scenario === "map-mutation") {
+	function keys() {
+		const map = new Map([
+			[{ id: 0 }, 0],
+			[{ id: 1 }, 1],
+			[{ id: 2 }, 2],
+		]);
+		for (const key of map.keys()) {
+			const id = key.id;
+			map.delete(key);
+			if (id === 0)
+				for (let index = 3; index < 24; index++) map.set({ id: index }, index);
+			const padding = Array.from({ length: 12 }, (_, index) => ({ index }));
+			events.push(key.id, padding.length);
+		}
+		events.push(map.size);
+	}
+	function values() {
+		const map = new Map([
+			[0, { id: 0 }],
+			[1, { id: 1 }],
+		]);
+		let first = true;
+		for (const value of map.values()) {
+			if (first) {
+				first = false;
+				map.clear();
+				map.set(2, { id: 2 });
+			}
+			const padding = Array.from({ length: 12 }, (_, index) => ({ index }));
+			events.push(value.id, padding.length);
+		}
+	}
+	keys();
+	values();
+} else if (scenario === "map-protocols") {
+	const map = new Map([
+		[0, "zero"],
+		[1, "one"],
+		[2, "two"],
+	]);
+	const keys = map.keys();
+	for (const key of keys) {
+		keys.next = () => {
+			throw new Error("captured next was replaced");
+		};
+		events.push(key);
+		if (key === 0)
+			events.push(Reflect.apply(Object.getPrototypeOf(keys).next, keys, []).value);
+	}
+	const values = map.values();
+	values.next = function () {
+		return this === values ? { done: true } : { value: "wrong", done: false };
+	};
+	for (const value of values) events.push(value);
+	const retained = map.values();
+	retained.return = function () {
+		events.push("close", this === retained);
+		return {};
+	};
+	for (const value of retained) {
+		events.push(value);
+		break;
+	}
+	for (const value of retained) events.push(value);
+	map.set(3, "three");
+	events.push(retained.next().done);
+	const pairs = new Map([
+		[
+			["a", "b"],
+			["c", "d"],
+		],
+	]);
+	for (const [first, second] of pairs.keys()) events.push(first, second);
+	for (const [first, second] of pairs.values()) events.push(first, second);
+	const OriginalMap = Map;
+	globalThis.Map = function () {
+		return {
+			keys() {
+				return ["foreign-key"].values();
+			},
+			values() {
+				return ["foreign-value"].values();
+			},
+		};
+	};
+	try {
+		const foreign = new Map();
+		for (const key of foreign.keys()) events.push(key);
+		for (const value of foreign.values()) events.push(value);
+	} finally {
+		globalThis.Map = OriginalMap;
+	}
 } else if (scenario === "abrupt") {
 	for (const key of ["done", "value"]) {
 		const marker = { key };

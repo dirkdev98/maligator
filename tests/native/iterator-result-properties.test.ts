@@ -47,6 +47,16 @@ describe.each(["conservative", "precise"] as const)("%s roots", (nativeStackRoot
 			behavior: "preserves iterator next receivers, arguments and callable fallbacks",
 		},
 		{ scenario: "abrupt", behavior: "propagates iterator-result getter exceptions" },
+		{
+			scenario: "map-mutation",
+			behavior:
+				"keeps Map key and value iteration live across deletion, growth and collection",
+		},
+		{
+			scenario: "map-protocols",
+			behavior:
+				"preserves captured Map iterator protocols, external advancement and exhaustion",
+		},
 	] as const)("$behavior", ({ scenario }) => {
 		const env = { ITERATOR_RESULT_CASE: scenario };
 		const expected = execFileSync(process.execPath, [fixture], {

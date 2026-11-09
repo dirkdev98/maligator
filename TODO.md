@@ -143,11 +143,6 @@ static generated-code size and helper counts do not establish runtime cost.
       changed downstream scalar/effect decisions and runtime savings that repay
       Node/native analysis and generated-C cost.
 
-- [ ] Extend existing Map cursor admission to keys and values for app-batch and
-      primordial-map-traversal. Require reduced dispatch and an end-to-end gain with
-      bounded planning/code size, preserving deletion, growth, exhaustion and generic
-      iterator behavior.
-
 ## Interpreted development images
 
 `run`, `test` and `dev` interpret development images, so interpreter dispatch and
