@@ -23,6 +23,13 @@ original stores. Ordinary constructors retain inherited setters, callbacks and
 returned-object behavior; publishing a complete initial shape requires a separate
 initialization proof.
 
+Captured rest arrays and strict hoisted closure groups may be initialized after an
+early return when their bindings have no earlier observer. Whole-program slot writers,
+closure creation ancestry and direct value uses must agree on that boundary. The
+destination executes at most once per activation, so mutually recursive helpers retain
+one identity and share the existing capture environment; dynamic scope, reassignment
+and exhausted analysis bounds retain eager initialization.
+
 Exact callback contexts carry the callee, creation environment, canonical compiled
 entry, and stable function index. Runtime image growth can replace the function
 table, so contexts resolve rows through that index. Dynamically scoped contexts

@@ -1,5 +1,3 @@
-// Functions whose captured bindings only reach a closure on some paths.
-
 const lines = [];
 
 function createLogger(namespace, enabled) {
@@ -127,5 +125,39 @@ function joined(flag) {
 	return reader === null ? note : `${note} ${reader()}`;
 }
 lines.push(joined(false), joined(true));
+
+function processFields(fields, seed, keep) {
+	"use strict";
+	if (!fields || fields.length === 0) return seed;
+	let total = seed;
+	const initial = first(0);
+	function first(index) {
+		return index < fields.length ? second(index) : total;
+	}
+	function second(index) {
+		total += fields[index];
+		return first(index + 1);
+	}
+	if (keep) return () => [first, second, total, initial];
+	return initial;
+}
+let skippedFields = 0;
+for (let index = 0; index < 2000; index++) skippedFields += processFields([], 1, false);
+const readers = [processFields([1, 2], 3, true), processFields([4], 5, true)];
+const initial = readers[0]();
+initial[0](1);
+const repeated = readers[0]();
+lines.push(
+	`fields ${skippedFields} ${processFields(null, 7, false)} ${processFields([2, 3], 1, false)}`,
+);
+lines.push(
+	`identities ${initial[0] === repeated[0]} ${initial[1] === repeated[1]} ${initial[0] !== readers[1]()[0]} ${repeated[2]}`,
+);
+
+function capturedSuffix(enabled, ...values) {
+	if (!enabled) return 0;
+	return () => values.join(":");
+}
+lines.push(`suffix ${capturedSuffix(false, 1, 2)} ${capturedSuffix(true, 3, 4)()}`);
 
 console.log(lines.join("\n"));

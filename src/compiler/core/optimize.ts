@@ -5,6 +5,7 @@ import {
 	forwardCoreOwnCapturedLoads,
 	pruneCoreCaptureLiveness,
 } from "./core-capture-liveness.ts";
+import { deferCapturedAllocations } from "./core-captured-materialization.ts";
 import type { ConstructedCoreCompilation, CoreCompilation } from "./core-compilation.ts";
 import {
 	emptyCoreCrossCallTransformResult,
@@ -53,7 +54,6 @@ import { pruneUnusedPlatformModuleInitializers } from "./core-platform-modules.t
 import { analyzeCorePrivateFields } from "./core-private-field-analysis.ts";
 import { installCorePrivateFieldFacts } from "./core-private-field-facts.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
-import { deferCapturedRestMaterialization } from "./core-rest-materialization.ts";
 import {
 	CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
 	coreProgramTransformBudgets,
@@ -249,7 +249,7 @@ export function optimizeCore(
 	pruneUnreadModuleBindings(compilation);
 	if (ablatedFamily !== "inlining-cross-call") liftLocalCaptureArguments(compilation);
 	if (ablatedFamily !== "provenance-escape-scalar-replacement")
-		deferCapturedRestMaterialization(compilation);
+		deferCapturedAllocations(compilation);
 	// Rest deferral recognizes a captured rest array by its owner's binding reads.
 	if (ablatedFamily !== "memory-ssa-load-store")
 		forwardCoreOwnCapturedLoads(compilation.program, compilation.context);

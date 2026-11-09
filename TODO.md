@@ -324,13 +324,6 @@ contracts or investigates costs still visible after the string follow-ups.
       lifetime consumers together; require lower allocation and end-to-end cost with
       stable footprint and binary size.
 
-- [ ] Defer Router processParams environments and hoisted closures to their first
-      certified use, including equivalent forwarded rest arrays. Preserve hoisting,
-      identity, roots and eval/with/mapped-argument behavior. Check current repeated
-      call-only capture layouts before trying owner-vector sharing; add no lookup to each
-      call. Keep only lower Express or compiler allocation/runtime cost after planning,
-      generated size and retained owner storage.
-
 - [ ] Use the checked Express workload to establish repeated held-getter misses, then
       reuse one valid row at the rooted static-load call seam. Preserve receiver identity,
       reentry, completion and roots; require full-route benefit and stable size while

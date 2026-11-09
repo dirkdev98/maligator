@@ -32,7 +32,7 @@ function allocationStats(binary: string): string {
 	return line ?? "";
 }
 
-describe("lazy capture environments", () => {
+describe.each([true, false])("lazy capture environments with eval=%s", (evalEnabled) => {
 	let compiled: string;
 	let interpreted: string;
 	let expected: string;
@@ -40,6 +40,7 @@ describe("lazy capture environments", () => {
 		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "lazy-capture-environment",
+			evalEnabled,
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		}));
