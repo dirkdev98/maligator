@@ -453,13 +453,6 @@ contracts or investigates costs still visible after the string follow-ups.
       base. Factory functions are unaffected because each call owns its slots.
       Give such evaluations their own class scope, as per-iteration bindings do.
 
-- [ ] Materialize a script function's lazy `prototype` before the function stops
-      being extensible. `Object.freeze`, `Object.seal`, `Object.preventExtensions`
-      and `Reflect.preventExtensions` on a constructor or generator whose
-      `prototype` was never read leave it without one, because the later lazy
-      definition is rejected: `Object.getOwnPropertyNames(Object.freeze(function f() {}))`
-      lists `length,name` where Node lists `length,name,prototype`.
-
 - [ ] Fix remaining RegExp @@replace protocol and coercion cases. Prefer shared
       replacement semantics over case-specific branches.
 

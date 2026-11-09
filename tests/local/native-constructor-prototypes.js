@@ -126,4 +126,141 @@ expectValue(
 	"the setter, not a field, received next",
 );
 
+const closeOperations = [
+	["prevent", Object.preventExtensions],
+	["seal", Object.seal],
+	["freeze", Object.freeze],
+	["reflect", Reflect.preventExtensions],
+];
+const prototypeFactories = [
+	["ordinary", () => function ordinary() {}],
+	["generator", () => function* generator() {}],
+	["async generator", () => async function* asyncGenerator() {}],
+];
+for (const [operation, close] of closeOperations) {
+	for (const [kind, create] of prototypeFactories) {
+		for (const wrapped of [false, true]) {
+			const target = create();
+			const receiver = wrapped ? new Proxy(new Proxy(target, {}), {}) : target;
+			expectValue(
+				close(receiver),
+				operation === "reflect" ? true : receiver,
+				"close result",
+			);
+			expectValue(Object.isExtensible(target), false, "function is closed");
+			expectValue(
+				Object.getOwnPropertyNames(target).includes("prototype"),
+				true,
+				"untouched prototype remains an own property",
+			);
+			const descriptor = Object.getOwnPropertyDescriptor(target, "prototype");
+			expectValue(descriptor.enumerable, false, "prototype is not enumerable");
+			expectValue(descriptor.configurable, false, "prototype is not configurable");
+			expectValue(
+				descriptor.writable,
+				operation !== "freeze",
+				"prototype writability follows integrity",
+			);
+			const prototype = descriptor.value;
+			expectValue(target.prototype, prototype, "prototype identity is stable");
+			expectValue(
+				Object.hasOwn(prototype, "constructor"),
+				kind === "ordinary",
+				"function kind controls the constructor backlink",
+			);
+			if (kind === "ordinary") {
+				expectValue(prototype.constructor, target, "ordinary constructor backlink");
+				expectValue(
+					Object.getPrototypeOf(new target()),
+					prototype,
+					"closed constructor still constructs",
+				);
+			} else {
+				expectValue(
+					Object.getPrototypeOf(prototype),
+					Object.getPrototypeOf(target).prototype,
+					"generator prototype parent",
+				);
+				expectValue(
+					Object.getPrototypeOf(target()),
+					prototype,
+					"generator keeps its prototype",
+				);
+			}
+		}
+	}
+	for (const create of [
+		() => () => {},
+		() => async function asyncFunction() {},
+		() => ({ method() {} }).method,
+		() => function boundTarget() {}.bind(null),
+	]) {
+		const target = create();
+		close(target);
+		expectValue(
+			Object.hasOwn(target, "prototype"),
+			false,
+			"closing does not invent a prototype",
+		);
+	}
+	const replaced = function replaced() {};
+	const replacement = {};
+	replaced.prototype = replacement;
+	close(replaced);
+	expectValue(replaced.prototype, replacement, "closing keeps an overridden prototype");
+	let getterCalls = 0;
+	const accessor = () => {};
+	const getter = () => {
+		getterCalls++;
+		return replacement;
+	};
+	Object.defineProperty(accessor, "prototype", { get: getter, configurable: true });
+	close(accessor);
+	expectValue(getterCalls, 0, "closing does not call a prototype getter");
+	expectValue(
+		Object.getOwnPropertyDescriptor(accessor, "prototype").get,
+		getter,
+		"closing preserves the accessor",
+	);
+}
+const denied = new Proxy(function denied() {}, {
+	preventExtensions() {
+		return false;
+	},
+});
+expectValue(
+	Reflect.preventExtensions(denied),
+	false,
+	"Reflect preserves a failed trap result",
+);
+for (const close of [Object.preventExtensions, Object.freeze, Object.seal]) {
+	let threw = false;
+	try {
+		close(denied);
+	} catch (error) {
+		threw = error instanceof TypeError;
+	}
+	expectValue(threw, true, "Object integrity operations reject a failed trap");
+}
+const forwarded = function forwarded() {};
+const revocable = Proxy.revocable(forwarded, {
+	get preventExtensions() {
+		revocable.revoke();
+		const padding = Array.from({ length: 30 }, (_, index) => ({ index }));
+		expectValue(padding.length, 30, "trap lookup can allocate");
+		return (target) => Reflect.preventExtensions(target);
+	},
+});
+expectValue(
+	Reflect.preventExtensions(revocable.proxy),
+	true,
+	"revocation during lookup keeps the captured target",
+);
+expectValue(Object.isExtensible(forwarded), false, "forwarded target is closed");
+expectValue(
+	Object.hasOwn(forwarded, "prototype"),
+	true,
+	"forwarded target retains its lazy prototype",
+);
+
 console.log("native-constructor-prototypes PASS");

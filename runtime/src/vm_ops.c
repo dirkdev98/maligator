@@ -804,6 +804,33 @@ bool mal_vm_is_extensible_object(
     return true;
 }
 
+bool mal_vm_prevent_extensions(MalVm *vm, MalValue object_value, bool *prevented_out) {
+    if (!mal_value_is_object(object_value)) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "PreventExtensions requires an object");
+        return false;
+    }
+    MalRootSpan root;
+    mal_gc_root(&root, &object_value, 1);
+    bool ok;
+    if (mal_value_is_proxy_object(object_value)) {
+        ok = mal_proxy_prevent_extensions(
+            vm, mal_value_to_proxy_object(object_value), prevented_out);
+    } else {
+        // Lazy own properties must exist before the ordinary extensibility gate closes.
+        if (mal_vm_script_function_has_prototype(vm, object_value)) {
+            mal_vm_function_prototype(vm, object_value);
+        }
+        ok = vm->completion.kind != MAL_COMPLETION_THROW;
+        if (ok) {
+            mal_object_set_extensible(mal_value_to_object(object_value), false);
+            *prevented_out = true;
+        }
+    }
+    mal_gc_unroot(&root);
+    return ok;
+}
+
 void mal_op_move(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.move.dst] = callable->registers[instruction->as.move.src];
 }

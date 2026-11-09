@@ -358,16 +358,11 @@ static MalValue mal_reflect_prevent_extensions(MalVm *vm, MalValue this_value, c
         return mal_value_new_undefined();
     }
 
-    if (mal_value_is_proxy_object(target)) {
-        bool success;
-        if (!mal_proxy_prevent_extensions(vm, mal_value_to_proxy_object(target), &success)) {
-            return mal_value_new_undefined();
-        }
-        return mal_value_new_boolean(success);
+    bool success;
+    if (!mal_vm_prevent_extensions(vm, target, &success)) {
+        return mal_value_new_undefined();
     }
-
-    mal_object_set_extensible(mal_value_to_object(target), false);
-    return mal_value_new_boolean(true);
+    return mal_value_new_boolean(success);
 }
 
 void mal_builtin_reflect_install(MalVm *vm) {

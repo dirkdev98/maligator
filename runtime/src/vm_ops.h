@@ -340,6 +340,9 @@ bool mal_vm_get_own_property(
 /** Spec IsExtensible over ordinary and Proxy objects. */
 bool mal_vm_is_extensible_object(MalVm *vm, MalValue object, bool *extensible_out);
 
+/** [[PreventExtensions]], including lazy own properties; false reports an exception. */
+bool mal_vm_prevent_extensions(MalVm *vm, MalValue object, bool *prevented_out);
+
 /** Spec IsArray: recurse through Proxy targets and throw for a revoked Proxy. */
 bool mal_vm_is_array(MalVm *vm, MalValue value, bool *is_array_out);
 

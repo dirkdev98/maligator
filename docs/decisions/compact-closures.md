@@ -66,6 +66,13 @@ compiler emits one only when every capture is an initialized immutable frame val
 so the cell holds exactly the value display and never reserves the owner-vector
 fallback that ordinary creation keeps for an incomplete copy.
 
+Script constructor and generator prototypes remain lazy until observation or
+non-extensibility. The shared VM preventExtensions operation materializes the
+kind-specific own prototype before closing an ordinary function, including Proxy
+forwarding. Freeze and seal then update its descriptor through their ordinary
+integrity operation. Existing prototype values and accessors keep their identity;
+function kinds without an own prototype do not acquire one.
+
 When an incoming owner already has heap storage, ordinary closure construction
 copies only a sparse selection that reduces retained storage. Other closures keep
 the owner, and native entries cache its proven immutable values once per invocation.

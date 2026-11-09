@@ -1749,18 +1749,14 @@ static MalValue mal_builtin_object_prevent_extensions(MalVm *vm, MalValue this_v
         return arg_count > 0 ? args[0] : mal_value_new_undefined();
     }
 
-    if (mal_value_is_proxy_object(args[0])) {
-        bool success;
-        if (!mal_proxy_prevent_extensions(vm, mal_value_to_proxy_object(args[0]), &success)) {
-            return mal_value_new_undefined();
-        }
-        if (!success) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object.preventExtensions on a proxy that returned false");
-        }
-        return args[0];
+    bool success;
+    if (!mal_vm_prevent_extensions(vm, args[0], &success)) {
+        return mal_value_new_undefined();
     }
-
-    mal_object_set_extensible(mal_value_to_object(args[0]), false);
+    if (!success) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Object.preventExtensions on a proxy that returned false");
+    }
     return args[0];
 }
 
@@ -1793,14 +1789,8 @@ bool mal_builtin_object_set_integrity(
     }
 
     bool prevented;
-    if (mal_value_is_proxy_object(target)) {
-        if (!mal_proxy_prevent_extensions(
-                vm, mal_value_to_proxy_object(target), &prevented)) {
-            return false;
-        }
-    } else {
-        mal_object_set_extensible(mal_value_to_object(target), false);
-        prevented = true;
+    if (!mal_vm_prevent_extensions(vm, target, &prevented)) {
+        return false;
     }
     if (!prevented) {
         return false;

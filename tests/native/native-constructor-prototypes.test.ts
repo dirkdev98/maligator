@@ -50,5 +50,6 @@ describe("native constructor prototype reuse", () => {
 
 	it("matches the interpreted semantics", () => {
 		assertExactLines(runToStdout(interpreted), expected);
+		assertExactLines(runToStdout(interpreted, { env: STRESS_ENV }), expected);
 	});
 });

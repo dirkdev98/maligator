@@ -1182,14 +1182,7 @@ bool mal_proxy_prevent_extensions(MalVm *vm, MalProxyObject *proxy, bool *out) {
         goto done;
     }
     if (mal_value_is_undefined(roots[2])) {
-        if (mal_value_is_proxy_object(roots[0])) {
-            ok = mal_proxy_prevent_extensions(
-                vm, mal_value_to_proxy_object(roots[0]), out);
-        } else {
-            mal_object_set_extensible(mal_value_to_object(roots[0]), false);
-            *out = true;
-            ok = true;
-        }
+        ok = mal_vm_prevent_extensions(vm, roots[0], out);
         goto done;
     }
 
