@@ -15,7 +15,12 @@ import type {
 	ApplicationImageHost,
 } from "./application-images.ts";
 import { artifactDigest, artifactIdentity } from "./artifact-store.ts";
-import { includeConfiguredAssets } from "./assets.ts";
+import {
+	assetDirectoryUnchanged,
+	configuredAssetDirectories,
+	includeConfiguredAssets,
+} from "./assets.ts";
+import type { AssetDirectoryIdentity } from "./assets.ts";
 import { createBuildArtifact } from "./build-artifact.ts";
 import {
 	BuildConfigError,
@@ -189,8 +194,8 @@ function declarationFileHeader(file: string): string {
 }
 
 export interface DevelopmentWatchHost {
-	create(files: Array<string>): unknown;
-	update(handle: unknown, files: Array<string>): void;
+	create(files: Array<string>, directories: Array<string>): unknown;
+	update(handle: unknown, files: Array<string>, directories: Array<string>): void;
 	wait(handle: unknown, timeoutMs: number): Promise<void>;
 	close(handle: unknown): void;
 }
@@ -337,7 +342,10 @@ export function productCompilerInstallation(
 								]),
 					],
 				}),
-		evalCompiler: { kind: "prebuilt", wirePath: path.resolve(compilerWirePath) },
+		evalCompiler: {
+			kind: "prebuilt",
+			wirePath: path.resolve(compilerWirePath),
+		},
 	};
 }
 
@@ -349,6 +357,7 @@ export interface BuildCommandResult {
 	runArguments?: Array<string>;
 	dependencies?: Array<string>;
 	dependencyIdentities?: Array<FrontendDependencyIdentity>;
+	assetDirectories?: Array<AssetDirectoryIdentity>;
 	profile?: PreparedProfile;
 }
 
@@ -357,7 +366,10 @@ class CommandError extends Error {
 
 	constructor(message: string, exitCode = 1) {
 		super(message);
-		Object.defineProperty(this, "name", { value: "CommandError", configurable: true });
+		Object.defineProperty(this, "name", {
+			value: "CommandError",
+			configurable: true,
+		});
 		this.exitCode = exitCode;
 	}
 }
@@ -674,12 +686,18 @@ function prepareCommandState(
 			throw error;
 		}
 	});
+	const assetDirectories = assets.flatMap((asset) => asset.directories);
 	const assetIdentities = frontendSession.dependencyIdentities(
 		assets.flatMap((asset) => asset.files.map((file) => file.inputPath)),
 	);
 	const validatePreparedInputs = () => {
 		validateConfig();
-		if (!validateConfiguration) return;
+		for (const identity of assetDirectories) {
+			if (!assetDirectoryUnchanged(identity))
+				throw new BuildConfigError(
+					`asset directory changed before build publication: ${identity.path}`,
+				);
+		}
 		for (const identity of assetIdentities) {
 			if (!frontendDependencyUnchanged(identity))
 				throw new BuildConfigError(
@@ -916,7 +934,12 @@ function prepareCommandState(
 				reporter.detail("Worker manifest", workerManifest);
 			reporter.detail("Serialized bytes", frontend.wire.length);
 			reporter.complete("Serialized", serializePath, true);
-			return { serializedPath: serializePath, dependencies, dependencyIdentities };
+			return {
+				serializedPath: serializePath,
+				dependencies,
+				dependencyIdentities,
+				assetDirectories,
+			};
 		}
 
 		const packagedRunner =
@@ -993,6 +1016,7 @@ function prepareCommandState(
 				runArguments,
 				dependencies,
 				dependencyIdentities,
+				assetDirectories,
 			};
 		}
 
@@ -1161,6 +1185,7 @@ function prepareCommandState(
 				],
 				dependencies,
 				dependencyIdentities,
+				assetDirectories,
 			};
 		}
 
@@ -1198,7 +1223,7 @@ function prepareCommandState(
 		if (command.kind === "build" && command.internal.emitC) {
 			for (const unit of generatedUnits())
 				writeSourceChunks(1, [...unit.sourceChunks, "\n"]);
-			return { dependencies, dependencyIdentities };
+			return { dependencies, dependencyIdentities, assetDirectories };
 		}
 		const output = reporter.phase("Generate native code", () =>
 			prepareGeneratedSources(
@@ -1323,6 +1348,7 @@ function prepareCommandState(
 				artifactDirectory: artifact.directory,
 				dependencies,
 				dependencyIdentities,
+				assetDirectories,
 				...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
 			};
 		}
@@ -1335,6 +1361,7 @@ function prepareCommandState(
 			binaryPath,
 			dependencies,
 			dependencyIdentities,
+			assetDirectories,
 			...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
 		};
 	};
@@ -1411,7 +1438,9 @@ export async function runCommand(
 					capture.directory,
 					result.profile,
 					"run",
-					{ workloadSucceeded: outcome.status === 0 && outcome.signal === undefined },
+					{
+						workloadSucceeded: outcome.status === 0 && outcome.signal === undefined,
+					},
 				);
 				writeStderr(`Profile ${capture.directory}`);
 				for (const line of formatProfileReport(finalized)) writeStderr(line);
@@ -1558,7 +1587,7 @@ interface WatchedFileState {
 function watchIdentity(file: string): string | undefined {
 	try {
 		const stats = statSync(file);
-		return stats.isFile()
+		return stats.isFile() || stats.isDirectory()
 			? `${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}:${stats.ino}:${stats.dev}`
 			: undefined;
 	} catch {
@@ -1692,9 +1721,22 @@ export async function devCommand(
 			initialDependencies = [];
 		}
 	}
-	let states = watchedFiles(command, initialDependencies);
+	const assetWatchDirectories = () => {
+		try {
+			return configuredAssetDirectories(
+				loadCommandConfig(command, context.stripTypes).assets,
+			);
+		} catch {
+			return [];
+		}
+	};
+	let directories = assetWatchDirectories();
+	let states = watchedFiles(command, [...initialDependencies, ...directories]);
 	const watchHost = context.developmentWatcher;
-	const watchHandle = watchHost?.create(states.map((state) => state.file));
+	const watchHandle = watchHost?.create(
+		states.map((state) => state.file),
+		directories,
+	);
 	const shutdown = new AbortController();
 	const restorations = new Set<Promise<void>>();
 	const restorationFailures: Array<unknown> = [];
@@ -1817,9 +1859,23 @@ export async function devCommand(
 	const development = createDevelopmentSession(command, compiler, {
 		async publish(build, generation, isCurrent, signal) {
 			if (!isCurrent()) return false;
+			directories = [
+				...new Set([
+					...assetWatchDirectories(),
+					...(build.assetDirectories ?? []).map((identity) => identity.path),
+				]),
+			];
+			watchHost?.update(
+				watchHandle,
+				states.map((state) => state.file),
+				directories,
+			);
 			const validate = () => [
 				...new Set([
 					...changedFiles(states, true),
+					...(build.assetDirectories ?? [])
+						.filter((identity) => !assetDirectoryUnchanged(identity))
+						.map((identity) => identity.path),
 					...(build.dependencyIdentities ?? [])
 						.filter((identity) => !frontendDependencyUnchanged(identity))
 						.map((identity) => identity.path),
@@ -1837,6 +1893,7 @@ export async function devCommand(
 			states = watchedFiles(command, [
 				...previousStates.keys(),
 				...(build.dependencies ?? []),
+				...directories,
 			]).map((state) => {
 				const identity = identities.get(state.file);
 				return identity === undefined
@@ -1849,6 +1906,7 @@ export async function devCommand(
 			watchHost?.update(
 				watchHandle,
 				states.map((state) => state.file),
+				directories,
 			);
 			if (child !== undefined) {
 				await stopApplication();
@@ -1957,14 +2015,20 @@ export async function devCommand(
 		writeStderr(
 			`Changed ${changedPaths.map((file) => path.relative(process.cwd(), file)).join(", ")}`,
 		);
-		const changed = new Set(changedPaths);
+		directories = assetWatchDirectories();
+		const changed = new Set([...changedPaths, ...directories]);
 		const previous = new Map(states.map((state) => [state.file, state]));
-		states = watchedFiles(command, [...previous.keys(), ...changedPaths]).map((state) =>
+		states = watchedFiles(command, [
+			...previous.keys(),
+			...changedPaths,
+			...directories,
+		]).map((state) =>
 			changed.has(state.file) ? state : (previous.get(state.file) ?? state),
 		);
 		watchHost?.update(
 			watchHandle,
 			states.map((state) => state.file),
+			directories,
 		);
 		development.request(
 			changedPaths,
@@ -2082,7 +2146,10 @@ function buildIsolatedTestRunner(
 		plan: selectNativeBuildPlan(toolchain, false),
 		runtimeDirectory: context.installation.runtimeDirectory,
 		features: applicationHost
-			? normalizeNativeFeatures({ ...derivation.features, developmentApiEnabled: true })
+			? normalizeNativeFeatures({
+					...derivation.features,
+					developmentApiEnabled: true,
+				})
 			: derivation.features,
 		compilerBake,
 	});
@@ -2705,7 +2772,10 @@ async function runFfiCommand(
 			projectRoot,
 			stripTypes: context.stripTypes,
 			compiler,
-			environment: { ...process.env, ...report.toolchain?.environmentOverrides },
+			environment: {
+				...process.env,
+				...report.toolchain?.environmentOverrides,
+			},
 			platform: report.platform ?? process.platform,
 			cross: report.cross === true,
 		};

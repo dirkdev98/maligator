@@ -47,8 +47,11 @@ interface ProductDevelopmentWatcher {
 function updateDevelopmentDirectories(
 	handle: ProductDevelopmentWatcher,
 	files: Array<string>,
+	directories: Array<string>,
 ): void {
-	handle.directories = [...new Set(files.map((file) => dirname(file)))];
+	handle.directories = [
+		...new Set([...files.map((file) => dirname(file)), ...directories]),
+	];
 }
 
 const installation = productCompilerInstallation(
@@ -70,7 +73,10 @@ await runCli(process.argv.slice(2), {
 	stripTypes: stripCompactTypes,
 	installation,
 	compiler: createNativeCompilerService(installation, producerDigests, dependencyWorker),
-	rootCompiler: { start: startNativeRootCompilation, validateInputs: validateRootInputs },
+	rootCompiler: {
+		start: startNativeRootCompilation,
+		validateInputs: validateRootInputs,
+	},
 	availableCompileConcurrency: Math.min(
 		workerBudget(process.env.MALIGATOR_WORKERS),
 		capabilities().parallelism,
@@ -83,13 +89,20 @@ await runCli(process.argv.slice(2), {
 		status: (handle) => mal._developmentProcessStatus(handle as number),
 	},
 	developmentWatcher: {
-		create(files) {
-			const handle: ProductDevelopmentWatcher = { directories: [], waits: undefined };
-			updateDevelopmentDirectories(handle, files);
+		create(files, directories) {
+			const handle: ProductDevelopmentWatcher = {
+				directories: [],
+				waits: undefined,
+			};
+			updateDevelopmentDirectories(handle, files, directories);
 			return handle;
 		},
-		update(handle, files) {
-			updateDevelopmentDirectories(handle as ProductDevelopmentWatcher, files);
+		update(handle, files, directories) {
+			updateDevelopmentDirectories(
+				handle as ProductDevelopmentWatcher,
+				files,
+				directories,
+			);
 		},
 		async wait(opaqueHandle, timeoutMs) {
 			const handle = opaqueHandle as ProductDevelopmentWatcher;

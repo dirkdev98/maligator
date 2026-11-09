@@ -14,8 +14,15 @@ function notify(handle: NodeDevelopmentWatcher): void {
 	handle.wake?.();
 }
 
-function updateDirectories(handle: NodeDevelopmentWatcher, files: Array<string>): void {
-	const directories = new Set(files.map((file) => path.dirname(path.resolve(file))));
+function updateDirectories(
+	handle: NodeDevelopmentWatcher,
+	files: Array<string>,
+	observedDirectories: Array<string>,
+): void {
+	const directories = new Set([
+		...files.map((file) => path.dirname(path.resolve(file))),
+		...observedDirectories.map((directory) => path.resolve(directory)),
+	]);
 	for (const [directory, watcher] of handle.watchers) {
 		if (directories.has(directory)) continue;
 		watcher.close();
@@ -39,17 +46,17 @@ function updateDirectories(handle: NodeDevelopmentWatcher, files: Array<string>)
 }
 
 export const nodeDevelopmentWatchHost: DevelopmentWatchHost = {
-	create(files) {
+	create(files, directories) {
 		const handle: NodeDevelopmentWatcher = {
 			watchers: new Map(),
 			pending: false,
 			wake: undefined,
 		};
-		updateDirectories(handle, files);
+		updateDirectories(handle, files, directories);
 		return handle;
 	},
-	update(handle, files) {
-		updateDirectories(handle as NodeDevelopmentWatcher, files);
+	update(handle, files, directories) {
+		updateDirectories(handle as NodeDevelopmentWatcher, files, directories);
 	},
 	async wait(opaqueHandle, timeoutMs) {
 		const handle = opaqueHandle as NodeDevelopmentWatcher;

@@ -252,13 +252,24 @@ function nativeEntryBudgetImage(): ProgramImage {
 				{ opcode: "CREATE_F64", dst: 1, value: 7 },
 				...Array.from(
 					{ length: 150 },
-					() => ({ opcode: "BINARY", operator: "+", dst: 0, left: 0, right: 1 }) as const,
+					() =>
+						({
+							opcode: "BINARY",
+							operator: "+",
+							dst: 0,
+							left: 0,
+							right: 1,
+						}) as const,
 				),
 				{ opcode: "RETURN", value: 0 },
 			],
 		},
 	];
-	let image = testProgramImage({ ...definition.runtime, functions, functionCount: 2 });
+	let image = testProgramImage({
+		...definition.runtime,
+		functions,
+		functionCount: 2,
+	});
 	image = withNativeFunctionPlan(image, 0, (plan) => ({
 		...plan,
 		instructions: plan.instructions.with(2, {
@@ -411,7 +422,10 @@ describe("emit-program-image instruction packing", () => {
 					onRendererBailout: ({ file, name }) => declined.push(`${file}:${name}`),
 				},
 				limited
-					? { targetCodeUnits: maximum, maximumNativeFunctionCodeUnits: maximum }
+					? {
+							targetCodeUnits: maximum,
+							maximumNativeFunctionCodeUnits: maximum,
+						}
 					: undefined,
 			);
 			expect(declined).toEqual(limited ? ["/fixture/entry.mjs:"] : []);
@@ -870,7 +884,10 @@ describe("emit-program-image instruction packing", () => {
 			...specializedFunction,
 			instructions: specializedInstructions.map((instruction) =>
 				instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
-					? { ...instruction, candidates: [{ ...instruction.candidates[0]!, slot: 0 }] }
+					? {
+							...instruction,
+							candidates: [{ ...instruction.candidates[0]!, slot: 0 }],
+						}
 					: instruction,
 			),
 		};
@@ -1004,7 +1021,11 @@ describe("emit-program-image instruction packing", () => {
 		const functions = [fn, leaf, { ...leaf }];
 		const image: ProgramImage = {
 			...definition,
-			runtime: { ...definition.runtime, functionCount: functions.length, functions },
+			runtime: {
+				...definition.runtime,
+				functionCount: functions.length,
+				functions,
+			},
 			native: createConservativeNativePlan(functions),
 		};
 		for (const output of [
@@ -1293,7 +1314,10 @@ describe("emit-program-image instruction packing", () => {
 			runtime: { ...image.runtime, functions: changedFunctions },
 			native: createConservativeNativePlan(changedFunctions),
 		};
-		const policy = { targetCodeUnits: 16_000, maximumNativeFunctionCodeUnits: 200_000 };
+		const policy = {
+			targetCodeUnits: 16_000,
+			maximumNativeFunctionCodeUnits: 200_000,
+		};
 		const locations = (value: ProgramImage) =>
 			new Map(
 				emitProgramTranslationUnits(value, {}, policy).flatMap((unit) =>
@@ -1348,7 +1372,10 @@ describe("emit-program-image instruction packing", () => {
 				{ opcode: "RETURN" as const, value: 0 },
 			],
 		});
-		const policy = { targetCodeUnits: 16_000, maximumNativeFunctionCodeUnits: 200_000 };
+		const policy = {
+			targetCodeUnits: 16_000,
+			maximumNativeFunctionCodeUnits: 200_000,
+		};
 		const codeUnits = (value: ProgramImage) =>
 			emitProgramTranslationUnits(value, {}, policy).filter(
 				(unit) => unit.kind === "code",
@@ -1414,7 +1441,10 @@ describe("emit-program-image instruction packing", () => {
 			},
 			native: createConservativeNativePlan(insertedFunctions),
 		};
-		const policy = { targetCodeUnits: 16_000, maximumNativeFunctionCodeUnits: 200_000 };
+		const policy = {
+			targetCodeUnits: 16_000,
+			maximumNativeFunctionCodeUnits: 200_000,
+		};
 		const locations = (value: ProgramImage) => {
 			const byName = new Map<string, string>();
 			for (const unit of emitProgramTranslationUnits(value, {}, policy)) {
@@ -1465,7 +1495,10 @@ describe("emit-program-image instruction packing", () => {
 			},
 			native: createConservativeNativePlan(functions),
 		});
-		const policy = { targetCodeUnits: 16_000, maximumNativeFunctionCodeUnits: 200_000 };
+		const policy = {
+			targetCodeUnits: 16_000,
+			maximumNativeFunctionCodeUnits: 200_000,
+		};
 		const codeUnits = (image: ProgramImage) =>
 			emitProgramTranslationUnits(image, {}, policy)
 				.filter((unit) => unit.kind === "code")
@@ -1783,7 +1816,10 @@ describe("emit-program-image instruction packing", () => {
 
 	it("reports exact typed calls without inventing a callee identity guard", () => {
 		const image = nativeEntryBudgetImage();
-		const caller = { ...image.runtime.functions[0]!, profileSiteIds: [-1, -1, 0, -1] };
+		const caller = {
+			...image.runtime.functions[0]!,
+			profileSiteIds: [-1, -1, 0, -1],
+		};
 		const plan = { ...image.native.functions[0]!, body: caller };
 		const entry = image.native.functions[1]!.directEntries[0]!;
 		const compiled = emitCompiledFunction(
@@ -1817,7 +1853,10 @@ describe("emit-program-image instruction packing", () => {
 	it("addresses a relocated sloppy direct callee's function and own frame at its relocated index", () => {
 		const image = nativeEntryBudgetImage();
 		const entry = image.native.functions[1]!.directEntries[0]!;
-		const relocation = { ...TEST_RELOCATION, symbolStems: ["caller", "callee"] };
+		const relocation = {
+			...TEST_RELOCATION,
+			symbolStems: ["caller", "callee"],
+		};
 		const emit = (directEntries: ReadonlyMap<string, typeof entry>) =>
 			resolveNativeLinks(
 				emitCompiledFunction(
@@ -2563,8 +2602,20 @@ describe("emit-program-image instruction packing", () => {
 			parameterCount: 1,
 			registerCount: 4,
 			instructions: [
-				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 1, stringIndex: 1, icIndex: 0 },
-				{ opcode: "LOAD_PROPERTY_STATIC", object: 1, dst: 2, stringIndex: 2, icIndex: 1 },
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					object: 0,
+					dst: 1,
+					stringIndex: 1,
+					icIndex: 0,
+				},
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					object: 1,
+					dst: 2,
+					stringIndex: 2,
+					icIndex: 1,
+				},
 				{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 3 },
 				{ opcode: "JUMP_IF", cond: 2, targetIp: 0 },
 				{ opcode: "RETURN", value: 2 },
@@ -2644,10 +2695,28 @@ describe("emit-program-image instruction packing", () => {
 			parameterCount: 1,
 			registerCount: 6,
 			instructions: [
-				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 1, stringIndex: 1, icIndex: 0 },
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					object: 0,
+					dst: 1,
+					stringIndex: 1,
+					icIndex: 0,
+				},
 				{ opcode: "CREATE_NUMBER", dst: 4, value: 1 },
-				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 2, stringIndex: 2, icIndex: 1 },
-				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 3, stringIndex: 3, icIndex: 2 },
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					object: 0,
+					dst: 2,
+					stringIndex: 2,
+					icIndex: 1,
+				},
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					object: 0,
+					dst: 3,
+					stringIndex: 3,
+					icIndex: 2,
+				},
 				{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 5 },
 				{ opcode: "JUMP_IF", cond: 3, targetIp: 0 },
 				{ opcode: "RETURN", value: 1 },
@@ -2740,10 +2809,28 @@ describe("emit-program-image instruction packing", () => {
 			registerCount: 7,
 			instructions: [
 				{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
-				{ opcode: "LOAD_PROPERTY_STATIC", object: 1, dst: 2, stringIndex: 0, icIndex: 0 },
-				{ opcode: "LOAD_PROPERTY_STATIC", object: 1, dst: 3, stringIndex: 1, icIndex: 1 },
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					object: 1,
+					dst: 2,
+					stringIndex: 0,
+					icIndex: 0,
+				},
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					object: 1,
+					dst: 3,
+					stringIndex: 1,
+					icIndex: 1,
+				},
 				{ opcode: "BINARY", dst: 4, left: 2, right: 3, operator: "+" },
-				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 6, stringIndex: 2, icIndex: 2 },
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					object: 0,
+					dst: 6,
+					stringIndex: 2,
+					icIndex: 2,
+				},
 				{ opcode: "MOVE", dst: 6, src: 0 },
 				{
 					opcode: "CALL",
@@ -2952,6 +3039,7 @@ describe("emit-program-image instruction packing", () => {
 				{
 					name: "compilerWire",
 					type: "file",
+					directories: [],
 					hash: "hash",
 					version: "1",
 					files: [
@@ -2987,6 +3075,7 @@ describe("emit-program-image instruction packing", () => {
 				{
 					name: "catalog",
 					type: "file",
+					directories: [],
 					hash: "hash",
 					version: "1",
 					files: [{ ...file, path: "catalog.json" }],

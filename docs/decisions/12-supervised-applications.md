@@ -76,8 +76,12 @@ actually consumed; publication validates those identities before and after
 awaited shutdown/evaluation boundaries. A failed compilation leaves the last
 successful application running. A superseded replacement cannot become current.
 Applications that need exclusive resources currently use joined stop/start.
-Dev does not yet track directory topology for configured assets: adding a new
-asset path requires another watched input change to trigger compilation.
+Configured asset directories retain the consumed recursive membership alongside
+file identities. Publication validates both after awaited boundaries. Watchers
+observe directory paths directly, including empty subdirectories and root parents,
+so additions, removals and renames trigger compilation without a source edit.
+A failed or superseded generation still refreshes directory observations so a
+missing root or a newly created subtree can recover.
 
 Run waits for preparation, launches a fresh application and returns its terminal
 outcome. Tests preserve the selected application as one shared module graph by

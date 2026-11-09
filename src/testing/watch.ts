@@ -255,7 +255,10 @@ export async function watchTestCommand(
 			...dirs,
 			...(keepPrevious ? states.keys() : []),
 		]);
-		return { dirs, states: new Map([...files].map((file) => [file, identity(file)])) };
+		return {
+			dirs,
+			states: new Map([...files].map((file) => [file, identity(file)])),
+		};
 	};
 	const refresh = (keepPrevious = true, preserveObserved = false) => {
 		const collected = collect(keepPrevious);
@@ -266,13 +269,8 @@ export async function watchTestCommand(
 		directories = collected.dirs;
 	};
 	refresh();
-	const watchFiles = () => [
-		...states.keys(),
-		...[...directories].map((directory) =>
-			path.join(directory, ".maligator-watch-directory"),
-		),
-	];
-	const handle = watch?.create(watchFiles());
+	const watchFiles = () => [...states.keys()];
+	const handle = watch?.create(watchFiles(), [...directories]);
 	const changed = () => {
 		const current = collect();
 		return [...new Set([...states.keys(), ...current.states.keys()])].filter(
@@ -284,7 +282,7 @@ export async function watchTestCommand(
 	const requestChanges = (paths: Array<string>) => {
 		const all = paths.includes(configPath) || paths.some((file) => directories.has(file));
 		refresh();
-		watch?.update(handle, watchFiles());
+		watch?.update(handle, watchFiles(), [...directories]);
 		session.request(paths, all);
 	};
 	const prepared = (application: PreparedTestApplication) => {
@@ -303,7 +301,7 @@ export async function watchTestCommand(
 					dependency.dev,
 				].join(":"),
 			);
-		watch?.update(handle, watchFiles());
+		watch?.update(handle, watchFiles(), [...directories]);
 	};
 	const validate = () => [
 		...new Set([
@@ -327,7 +325,7 @@ export async function watchTestCommand(
 							currentNativePaths.add(file);
 							if (!states.has(file)) states.set(file, identity(file));
 						}
-						watch?.update(handle, watchFiles());
+						watch?.update(handle, watchFiles(), [...directories]);
 					},
 				});
 				if (beforeConfig !== identity(configPath))
@@ -335,7 +333,7 @@ export async function watchTestCommand(
 				const changedPaths = changed();
 				if (changedPaths.length > 0) throw new TestSourceChangedError(changedPaths);
 				refresh();
-				watch?.update(handle, watchFiles());
+				watch?.update(handle, watchFiles(), [...directories]);
 				return await executeTestCommand(command, context, config, applicationSession, {
 					...controls,
 					prepared,
@@ -357,7 +355,7 @@ export async function watchTestCommand(
 				nativePaths.clear();
 				for (const file of currentNativePaths) nativePaths.add(file);
 				refresh(false, true);
-				watch?.update(handle, watchFiles());
+				watch?.update(handle, watchFiles(), [...directories]);
 				process.stderr.write(
 					`Test watch generation ${generation}: ${summary.failed} failed; seed ${applicationSession.options.shuffleSeed ?? "none"}; failed files ${JSON.stringify(failedFiles)}\n`,
 				);

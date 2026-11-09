@@ -4,6 +4,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	renameSync,
 	rmSync,
 	utimesSync,
 	writeFileSync,
@@ -11,6 +12,7 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { includeConfiguredAssets } from "../src/assets.ts";
 import * as cacheManagement from "../src/cache-management.ts";
 import {
 	applicationDriverPath,
@@ -614,6 +616,115 @@ describe("command shell", () => {
 });
 
 describe("development coordinator", () => {
+	it.each(["rename", "add", "remove", "subtree"])(
+		"rejects stale asset membership after %s without a source edit",
+		async (change) => {
+			const directory = tmpdir();
+			const tree = path.join(directory, "assets");
+			const empty = path.join(tree, "empty");
+			const entry = path.join(directory, "entry.mts");
+			const configPath = path.join(directory, "maligator.config.mts");
+			mkdirSync(empty, { recursive: true });
+			writeFileSync(entry, "export const value = 1;\n");
+			writeFileSync(path.join(tree, "keep.txt"), "keep");
+			writeFileSync(path.join(tree, "remove.txt"), "remove");
+			writeFileSync(path.join(empty, "ignored.bin"), "renamed");
+			const assets = {
+				content: { type: "directory" as const, path: tree, include: ["**/*.txt"] },
+			};
+			writeFileSync(configPath, `export default ${JSON.stringify({ entry, assets })};\n`);
+			let preparations = 0;
+			let running = false;
+			const spawned: Array<string> = [];
+			const watched: Array<string> = [];
+			try {
+				await devCommand(
+					{
+						kind: "dev",
+						entry,
+						configPath,
+						verbose: false,
+						profile: false,
+						programArgs: [],
+					},
+					{
+						stripTypes: stripCompactTypes,
+						installation: productCompilerInstallation(
+							directory,
+							"compiler.malw",
+							"test-runtime.mjs",
+						),
+						compiler: {
+							prepare() {
+								const included = includeConfiguredAssets(assets);
+								const files = included.flatMap((asset) =>
+									asset.files.map((file) => file.inputPath),
+								);
+								const snapshots = new FrontendCompilationSession();
+								for (const file of files) snapshots.snapshot(file);
+								const dependencyIdentities = snapshots.dependencyIdentities(files);
+								if (++preparations === 1) {
+									if (change === "rename")
+										renameSync(
+											path.join(empty, "ignored.bin"),
+											path.join(empty, "added.txt"),
+										);
+									if (change === "add")
+										writeFileSync(path.join(empty, "added.txt"), "added");
+									if (change === "remove") rmSync(path.join(tree, "remove.txt"));
+									if (change === "subtree") {
+										mkdirSync(path.join(empty, "new"));
+										writeFileSync(path.join(empty, "new/added.txt"), "added");
+									}
+								}
+								return Promise.resolve({
+									binaryPath: preparations === 1 ? "stale" : "current",
+									dependencies: [entry, ...files],
+									dependencyIdentities,
+									assetDirectories: included.flatMap((asset) => asset.directories),
+								});
+							},
+							async close() {},
+						},
+						developmentWatcher: {
+							create(_files, directories) {
+								watched.push(...directories);
+								return {};
+							},
+							update(_handle, _files, directories) {
+								watched.push(...directories);
+							},
+							wait(_handle, timeoutMs) {
+								return new Promise<void>((resolve) => {
+									setTimeout(resolve, timeoutMs);
+								});
+							},
+							close() {},
+						},
+						developmentProcesses: {
+							spawn(binary) {
+								spawned.push(binary);
+								running = true;
+								process.emit("SIGINT");
+								return {};
+							},
+							kill() {
+								running = false;
+							},
+							status() {
+								return running ? undefined : 0;
+							},
+						},
+					},
+				);
+				expect(spawned).toEqual(["current"]);
+				expect(watched).toContain(empty);
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
+			}
+		},
+	);
+
 	it("rejects a changed newly imported dependency before replacing the application", async () => {
 		const directory = tmpdir();
 		const entry = path.join(directory, "entry.mts");

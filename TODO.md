@@ -30,11 +30,6 @@ themselves commit the project to optimizing every API.
       arbitrary-precision BigInt measurements after its correctness implementation and
       preserve input-scaling coverage.
 
-- [ ] Track configured asset-directory topology in `dev`. Publication validates
-      consumed file identities, but adding a file or renaming a previously unwatched
-      path does not change that file set. Capture recursive directory membership and
-      exercise add/remove changes without editing an existing source dependency.
-
 - [ ] Diagnose the macOS node-fs-watch timeout with bounded phase evidence separating
       compilation, event delivery and teardown. Preserve watcher behavior and report an
       unreproduced or runner-only failure explicitly.

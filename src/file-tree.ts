@@ -27,17 +27,19 @@ export const lexicalNameComparator: NameComparator = (left, right) =>
 export const legacyLocaleNameComparator: NameComparator = (left, right) =>
 	left.localeCompare(right) || lexicalNameComparator(left, right);
 
-/** Visit every non-directory entry in deterministic depth-first order. */
+/** Visit non-directory entries in deterministic depth-first order; observers see each directory enumeration, including empty ones. */
 export function walkDirectoryTree(
 	directory: string,
 	visit: (entry: DirectoryTreeEntry) => void,
 	compareNames: NameComparator = lexicalNameComparator,
 	descend: (entry: DirectoryTreeEntry) => boolean = () => true,
+	observeDirectory?: (directory: string, entries: ReadonlyArray<Dirent>) => void,
 ): void {
 	const walk = (currentDirectory: string, relativeSegments: Array<string>): void => {
 		const entries = readdirSync(currentDirectory, { withFileTypes: true }).sort((a, b) =>
 			compareNames(a.name, b.name),
 		);
+		observeDirectory?.(currentDirectory, entries);
 		for (const dirent of entries) {
 			const nextSegments = [...relativeSegments, dirent.name];
 			const fullPath = path.join(currentDirectory, dirent.name);

@@ -1,6 +1,7 @@
 import { hash } from "node:crypto";
 import {
 	mkdirSync,
+	lstatSync,
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
@@ -9,6 +10,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
+import type { Dirent } from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomically } from "./atomic-file.ts";
 import { BuildConfigError } from "./build-config.ts";
@@ -49,6 +51,77 @@ export interface IncludedAsset {
 	hash: string;
 	version: string;
 	files: Array<IncludedAssetFile>;
+	directories: Array<AssetDirectoryIdentity>;
+}
+
+export interface AssetDirectoryIdentity {
+	path: string;
+	stat: string;
+	members: string;
+}
+
+function directoryStat(directory: string): string | undefined {
+	try {
+		const stats = lstatSync(directory);
+		return stats.isDirectory()
+			? `${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}:${stats.ino}:${stats.dev}`
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function directoryMembers(entries: ReadonlyArray<Dirent>): string {
+	return hash(
+		"sha256",
+		JSON.stringify(
+			entries
+				.map((entry) => [
+					entry.name,
+					entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other",
+				])
+				.sort((a, b) => (a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0)),
+		),
+		"hex",
+	);
+}
+
+/** Validate the exact enumeration consumed by the build, including unmatched entries. */
+export function assetDirectoryUnchanged(identity: AssetDirectoryIdentity): boolean {
+	if (directoryStat(identity.path) !== identity.stat) return false;
+	try {
+		return (
+			directoryMembers(readdirSync(identity.path, { withFileTypes: true })) ===
+			identity.members
+		);
+	} catch {
+		return false;
+	}
+}
+
+/** Watch parents as well as existing subtrees so missing or renamed roots can recover. */
+export function configuredAssetDirectories(
+	assets: Record<string, AssetInclusion>,
+	projectRoot: string = process.cwd(),
+): Array<string> {
+	const directories = new Set<string>();
+	for (const asset of Object.values(assets)) {
+		const root = path.resolve(projectRoot, asset.path);
+		directories.add(path.dirname(root));
+		if (asset.type !== "directory" || directoryStat(root) === undefined) continue;
+		try {
+			walkDirectoryTree(
+				root,
+				() => {},
+				undefined,
+				undefined,
+				(directory) => directories.add(directory),
+			);
+		} catch {
+			// Keep the observed parents when an entry disappears during enumeration.
+		}
+	}
+	return [...directories].sort();
 }
 
 function assetError(name: string, message: string): never {
@@ -214,6 +287,7 @@ function includeDirectory(
 	sourcePath: string,
 	config: Extract<AssetInclusion, { type: "directory" }>,
 	stagingDirectory: string,
+	directories: Array<AssetDirectoryIdentity>,
 	options?: AssetCollectionOptions,
 ): Array<IncludedAssetFile> {
 	const patterns = config.include.map((pattern) => validatePattern(name, pattern));
@@ -238,6 +312,17 @@ function includeDirectory(
 			}
 		},
 		legacyLocaleNameComparator,
+		undefined,
+		(directory, entries) => {
+			const stat = directoryStat(directory);
+			if (stat === undefined)
+				assetError(name, `directory changed while collecting '${directory}'`);
+			directories.push({
+				path: directory,
+				stat,
+				members: directoryMembers(entries),
+			});
+		},
 	);
 	for (let index = 0; index < matched.length; index++) {
 		if (!matched[index]) {
@@ -284,10 +369,18 @@ export function includeConfiguredAssets(
 			assetError(name, `'${sourcePath}' is not a directory`);
 		}
 
+		const directories: Array<AssetDirectoryIdentity> = [];
 		const files =
 			config.type === "file"
 				? includeFile(name, sourcePath, stagingDirectory, options)
-				: includeDirectory(name, sourcePath, config, stagingDirectory, options);
+				: includeDirectory(
+						name,
+						sourcePath,
+						config,
+						stagingDirectory,
+						directories,
+						options,
+					);
 		const digestInput = {
 			version: ASSET_FORMAT_VERSION,
 			type: config.type,
@@ -299,6 +392,7 @@ export function includeConfiguredAssets(
 			hash: hash("sha256", JSON.stringify(digestInput), "hex"),
 			version: ASSET_FORMAT_VERSION,
 			files,
+			directories,
 		});
 	}
 	return included;

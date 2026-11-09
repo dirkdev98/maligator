@@ -2,13 +2,20 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	renameSync,
+	rmSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { ASSET_FORMAT_VERSION, includeConfiguredAssets } from "../src/assets.ts";
+import {
+	ASSET_FORMAT_VERSION,
+	assetDirectoryUnchanged,
+	configuredAssetDirectories,
+	includeConfiguredAssets,
+} from "../src/assets.ts";
 import { BuildConfigError } from "../src/build-config.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
@@ -165,5 +172,63 @@ describe("configured asset inclusion", () => {
 		expect(output).toContain(".asset_count = 1");
 		expect(output).toContain(".installer = mal_host_install_maligator");
 		expect(output).toContain("static const u8 mal_asset_0_file_0_data[] = { 0 };");
+	});
+});
+
+describe("asset directory observations", () => {
+	it.each(["rename", "add", "remove", "subtree"])(
+		"invalidates consumed membership after %s",
+		(change) => {
+			const root = fixture();
+			try {
+				const config = {
+					docs: {
+						type: "directory" as const,
+						path: "tree",
+						include: ["**/*.txt"],
+					},
+				};
+				const [asset] = includeConfiguredAssets(config, root);
+				expect(asset!.directories.every(assetDirectoryUnchanged)).toBe(true);
+				if (change === "rename")
+					renameSync(
+						path.join(root, "tree/nested/ignored.bin"),
+						path.join(root, "tree/nested/renamed.txt"),
+					);
+				if (change === "add") writeFileSync(path.join(root, "tree/added.txt"), "added");
+				if (change === "remove") rmSync(path.join(root, "tree/nested/child.txt"));
+				if (change === "subtree") {
+					mkdirSync(path.join(root, "tree/new/empty"), { recursive: true });
+					writeFileSync(path.join(root, "tree/new/added.txt"), "added");
+				}
+				expect(asset!.directories.every(assetDirectoryUnchanged)).toBe(false);
+				const current = includeConfiguredAssets(config, root)[0]!;
+				expect(current.directories.every(assetDirectoryUnchanged)).toBe(true);
+				expect(current.hash).not.toBe(asset!.hash);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it("watches empty subdirectories and the parent of a missing root", () => {
+		const root = fixture();
+		try {
+			mkdirSync(path.join(root, "tree/empty"));
+			const config = {
+				docs: {
+					type: "directory" as const,
+					path: "tree",
+					include: ["**/*.txt"],
+				},
+			};
+			expect(configuredAssetDirectories(config, root)).toContain(
+				path.join(root, "tree/empty"),
+			);
+			rmSync(path.join(root, "tree"), { recursive: true });
+			expect(configuredAssetDirectories(config, root)).toEqual([root]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
