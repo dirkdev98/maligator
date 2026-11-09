@@ -375,7 +375,9 @@ describe("emit-program-image instruction packing", () => {
 		]) {
 			let callCount = 0;
 			for (const source of sources) {
-				const calls = [...source.matchAll(/if \(!(mal_compiled_[A-Za-z0-9_]+_try)\(/g)];
+				const calls = [
+					...source.matchAll(/(?:!|return )(mal_compiled_[A-Za-z0-9_]+_try)\(/g),
+				];
 				callCount += calls.length;
 				for (const call of calls) {
 					const declaration = source.indexOf(`bool ${call[1]}(`);

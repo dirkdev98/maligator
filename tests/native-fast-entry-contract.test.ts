@@ -967,11 +967,13 @@ function unexpectedHelpers(lines: ReadonlyArray<string>): ReadonlyArray<string> 
 
 function fastEntry(
 	fn: BytecodeFunction,
-	calleeTry: (
-		ip: number,
-	) =>
+	calleeTry: (ip: number) =>
 		| string
-		| { readonly symbol: string; readonly parameters: ReadonlyArray<"i32" | "boxed"> }
+		| {
+				readonly symbol: string;
+				readonly parameters: ReadonlyArray<"i32" | "boxed">;
+				readonly guard?: string;
+		  }
 		| undefined = () => undefined,
 	exported = true,
 	controlFlow?: NativeControlFlowPlan,
@@ -1655,6 +1657,57 @@ describe("native fast entries", () => {
 		);
 		expect(source).not.toContain("(const MalValue[])");
 	});
+
+	it("forwards a fast tail call's output while preserving another return predecessor", () => {
+		const source = fastEntry(
+			body([
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+				{ opcode: "MOVE", src: 0, dst: 2 },
+				{ opcode: "JUMP", targetIp: 4 },
+				{
+					opcode: "CALL",
+					dst: 2,
+					callee: 1,
+					thisValue: -1,
+					argumentCount: 1,
+					arguments: [0],
+				},
+				{ opcode: "RETURN", value: 2 },
+			]),
+			() => ({ symbol: "mal_compiled_7_try", parameters: ["boxed"], guard: "allowed" }),
+		)!.join("\n");
+		expect(source).toContain(
+			"if (!(allowed)) goto __full; return mal_compiled_7_try(vm, MAL_VALUE_UNDEFINED, __fast_r0, mal_value_to_function_object(__fast_r1)->creation_env, out);",
+		);
+		expect(source).toContain("F4:;");
+		expect(source).toContain("*out = __fast_r2; return true;");
+		expect(source).not.toContain("&__fast_r2");
+	});
+
+	it.each([false, true])(
+		"keeps local result storage for a non-tail call with exported=%s",
+		(exported) => {
+			const source = fastEntry(
+				body([
+					{
+						opcode: "CALL",
+						dst: 2,
+						callee: 1,
+						thisValue: -1,
+						argumentCount: 1,
+						arguments: [0],
+					},
+					{ opcode: "BINARY", dst: 3, left: 2, right: 0, operator: "+" },
+					{ opcode: "RETURN", value: 3 },
+				]),
+				() => ({ symbol: "mal_compiled_7_try", parameters: ["boxed"] }),
+				exported,
+			)!.join("\n");
+			expect(source).toContain(
+				"mal_value_to_function_object(__fast_r1)->creation_env, &__fast_r2)",
+			);
+		},
+	);
 
 	it("accept a backward jump to a merge block that does not loop", () => {
 		expect(

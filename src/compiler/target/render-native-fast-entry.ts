@@ -1272,7 +1272,13 @@ function fastInstruction(
 								return `mal_value_to_i32(${boxed})`;
 							})
 							.join(", ");
-			return `if (${guards.length === 0 ? "" : `${guards.join(" || ")} || `}!${callee.symbol}(vm, ${receiver}, ${arguments_}, ${callee.environment}, &__fast_r${op.dst})) goto __full;`;
+			const next = input.fn.instructions[ip + 1];
+			const forwardsResult =
+				exported && next?.opcode === "RETURN" && next.value === op.dst;
+			const call = `${callee.symbol}(vm, ${receiver}, ${arguments_}, ${callee.environment}, ${forwardsResult ? "out" : `&__fast_r${op.dst}`})`;
+			if (forwardsResult)
+				return `${guards.length === 0 ? "" : `if (${guards.join(" || ")}) goto __full; `}return ${call};`;
+			return `if (${guards.length === 0 ? "" : `${guards.join(" || ")} || `}!${call}) goto __full;`;
 		}
 		case "CALL_KNOWN": {
 			if (

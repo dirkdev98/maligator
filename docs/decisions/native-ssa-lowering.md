@@ -324,6 +324,8 @@ function, and a fast body may call another one's `_try` at a proven exact call
 site. Small boxed parameter lists use fixed positional arguments to avoid building
 an argument vector between fast bodies. The canonical entry still adapts omitted
 arguments to `undefined`; stricter integer parameters retain their admission guards.
+Immediate helper returns forward the caller's result storage, preserving callee
+guards and the effect-free restart path.
 Recursive bodies never qualify, since a body becomes available only after
 its callees do. Entries a numeric worker, literal-switch dispatch, or selected
 region already serves, and entries whose operator proofs rule out Numbers, keep
