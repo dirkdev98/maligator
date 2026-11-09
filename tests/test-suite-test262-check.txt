@@ -2,6 +2,10 @@
 # from baseline or report changes. Keep representative siblings only and keep
 # this selection disjoint from Test262 smoke.
 
+# Proxy slot snapshots and nested prototype invariants.
+test/staging/sm/Proxy/revoke-as-side-effect.js
+test/staging/sm/Proxy/getPrototypeOf.js
+
 # Core built-in and runtime boundaries (75)
 test/annexB/built-ins/Date/prototype/getYear/return-value.js
 test/annexB/built-ins/Date/prototype/setYear/date-value-read-before-tonumber-when-date-is-valid.js

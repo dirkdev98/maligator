@@ -180,6 +180,7 @@ tests/native/node-fs.test.ts
 tests/native/node-net.test.ts
 tests/native/node-sqlite.test.ts
 tests/native/node-stream.test.ts
+tests/native/proxy-revocation.test.ts
 tests/native/node-tls.test.ts
 tests/native/node-zlib.test.ts
 tests/native/node-zlib-compress.test.ts

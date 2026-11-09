@@ -511,11 +511,6 @@ contracts or investigates costs still visible after the string follow-ups.
       descending shared-root-cause order. Keep each repaired cluster in the curated
       regression manifest.
 
-- [ ] Preserve Proxy targets and handlers across reentrant trap lookup. The
-      `revoke-as-side-effect.js` case crashes in `getPrototypeOf` after the trap
-      getter revokes the proxy; audit internal methods that reload those slots
-      after calling user code.
-
 - [ ] Complete script-global environment-record behavior across separately evaluated
       scripts. `$262.evalScript` now compiles a Script, but the runtime keeps no
       [[VarNames]]: a `let` over a var that an earlier eval created is refused, and

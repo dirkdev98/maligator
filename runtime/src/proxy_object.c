@@ -186,12 +186,6 @@ static bool mal_proxy_get_trap_from_handler(
     return true;
 }
 
-static bool mal_proxy_get_trap(
-    MalVm *vm, MalProxyObject *proxy, MalHotIntrinsicKey trap_key, MalValue *out
-) {
-    return mal_proxy_get_trap_from_handler(vm, proxy->handler, trap_key, out);
-}
-
 // Forward declaration: target-own probing recurses through a proxy target's
 // getOwnPropertyDescriptor trap.
 static bool mal_proxy_target_get_own(MalVm *vm, MalValue target, MalKey key, bool *present, MalPropertyDesc *desc);
@@ -949,51 +943,71 @@ invariant_done:
     return ok;
 }
 
-// ---- getPrototypeOf -------------------------------------------------------
-
 bool mal_proxy_get_prototype_of(MalVm *vm, MalProxyObject *proxy, MalValue *out) {
     *out = mal_value_new_null();
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
     }
-    MalValue trap;
-    if (!mal_proxy_get_trap(vm, proxy, MAL_HOT_KEY_PROXY_GET_PROTOTYPE_OF, &trap)) {
+    if (!mal_proxy_dispatch_enter(vm)) {
         return false;
     }
-    if (mal_value_is_undefined(trap)) {
-        if (mal_value_is_proxy_object(proxy->target)) {
-            return mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(proxy->target), out);
+    // GetMethod can revoke the proxy; this operation still owns its initial slots.
+    MalValue roots[] = {
+        proxy->target, proxy->handler,
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool ok = false;
+    if (!mal_proxy_get_trap_from_handler(
+            vm, roots[1], MAL_HOT_KEY_PROXY_GET_PROTOTYPE_OF, &roots[2])) {
+        goto done;
+    }
+    if (mal_value_is_undefined(roots[2])) {
+        if (mal_value_is_proxy_object(roots[0])) {
+            ok = mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(roots[0]), out);
+        } else {
+            MalObject *proto = mal_object_get_prototype(mal_value_to_object(roots[0]));
+            *out = proto != nullptr ? mal_value_from_object(proto) : mal_value_new_null();
+            ok = true;
         }
-        MalObject *proto = mal_object_get_prototype(mal_value_to_object(proxy->target));
-        *out = proto != nullptr ? mal_value_from_object(proto) : mal_value_new_null();
-        return true;
+        goto done;
     }
 
-    MalValue args[1] = {proxy->target};
-    MalCompletion completion = mal_vm_call_value(vm, trap, proxy->handler, args, 1);
+    MalCompletion completion = mal_vm_call_value(vm, roots[2], roots[1], roots, 1);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
-        return false;
+        goto done;
     }
-    MalValue result = completion.value;
-    if (!mal_value_is_object(result) && !mal_value_is_null(result)) {
+    roots[3] = completion.value;
+    if (!mal_value_is_object(roots[3]) && !mal_value_is_null(roots[3])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "proxy getPrototypeOf trap must return an object or null");
-        return false;
+        goto done;
     }
 
-    // Invariant: for a non-extensible (non-proxy) target the reported prototype
-    // must equal the target's actual prototype.
-    if (!mal_value_is_proxy_object(proxy->target) && !mal_object_is_extensible(mal_value_to_object(proxy->target))) {
-        MalObject *proto = mal_object_get_prototype(mal_value_to_object(proxy->target));
-        MalValue actual = proto != nullptr ? mal_value_from_object(proto) : mal_value_new_null();
-        if (!mal_proxy_same_value(result, actual)) {
+    bool extensible;
+    if (!mal_vm_is_extensible_object(vm, roots[0], &extensible)) goto done;
+    if (!extensible) {
+        MalValue actual;
+        if (mal_value_is_proxy_object(roots[0])) {
+            if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(roots[0]), &actual))
+                goto done;
+        } else {
+            MalObject *proto = mal_object_get_prototype(mal_value_to_object(roots[0]));
+            actual = proto != nullptr ? mal_value_from_object(proto) : mal_value_new_null();
+        }
+        if (!mal_proxy_same_value(roots[3], actual)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "proxy getPrototypeOf trap returned a different prototype for a non-extensible target");
-            return false;
+            goto done;
         }
     }
 
-    *out = result;
-    return true;
+    *out = roots[3];
+    ok = true;
+done:
+    mal_gc_unroot(&root);
+    mal_proxy_dispatch_leave(vm);
+    return ok;
 }
 
 // ---- setPrototypeOf -------------------------------------------------------
@@ -1206,8 +1220,6 @@ done:
     return ok;
 }
 
-// ---- apply / construct ----------------------------------------------------
-
 // Set a TypeError and return it as a throw completion. vm->completion is LEFT
 // set to the throw (mal_vm_call_value's contract: the throw stays pending so the
 // compiled CALL/CONSTRUCT site and the dispatchers observe it).
@@ -1232,16 +1244,34 @@ MalCompletion mal_proxy_apply(MalVm *vm, MalProxyObject *proxy, MalValue this_va
     if (mal_proxy_check_revoked(vm, proxy)) {
         return vm->completion;
     }
-    MalValue trap;
-    if (!mal_proxy_get_trap(vm, proxy, MAL_HOT_KEY_PROXY_APPLY, &trap)) {
-        return vm->completion;
+    MalValue roots[] = {
+        proxy->target, proxy->handler, mal_value_new_undefined(),
+        this_value, mal_value_new_undefined(),
+    };
+    MalRootSpan root, argument_roots;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_gc_root(&argument_roots, (MalValue *) args, arg_count);
+    MalCompletion completion;
+    if (!mal_proxy_get_trap_from_handler(vm, roots[1], MAL_HOT_KEY_PROXY_APPLY, &roots[2])) {
+        completion = vm->completion;
+        goto done;
     }
-    if (mal_value_is_undefined(trap)) {
-        return mal_vm_call_value(vm, proxy->target, this_value, args, arg_count);
+    if (mal_value_is_undefined(roots[2])) {
+        completion = mal_vm_call_value(vm, roots[0], roots[3], args, arg_count);
+        goto done;
     }
 
-    MalValue trap_args[3] = {proxy->target, this_value, mal_proxy_args_array(vm, args, arg_count)};
-    return mal_vm_call_value(vm, trap, proxy->handler, trap_args, 3);
+    roots[4] = mal_proxy_args_array(vm, args, arg_count);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        completion = vm->completion;
+        goto done;
+    }
+    MalValue trap_args[3] = {roots[0], roots[3], roots[4]};
+    completion = mal_vm_call_value(vm, roots[2], roots[1], trap_args, 3);
+done:
+    mal_gc_unroot(&argument_roots);
+    mal_gc_unroot(&root);
+    return completion;
 }
 
 MalCompletion mal_proxy_construct(MalVm *vm, MalProxyObject *proxy, const MalValue *args, i32 arg_count, MalValue new_target) {
@@ -1252,22 +1282,35 @@ MalCompletion mal_proxy_construct(MalVm *vm, MalProxyObject *proxy, const MalVal
     if (mal_proxy_check_revoked(vm, proxy)) {
         return vm->completion;
     }
-    MalValue trap;
-    if (!mal_proxy_get_trap(vm, proxy, MAL_HOT_KEY_PROXY_CONSTRUCT, &trap)) {
-        return vm->completion;
+    MalValue roots[] = {
+        proxy->target, proxy->handler, mal_value_new_undefined(),
+        new_target, mal_value_new_undefined(),
+    };
+    MalRootSpan root, argument_roots;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_gc_root(&argument_roots, (MalValue *) args, arg_count);
+    MalCompletion completion;
+    if (!mal_proxy_get_trap_from_handler(vm, roots[1], MAL_HOT_KEY_PROXY_CONSTRUCT, &roots[2])) {
+        completion = vm->completion;
+        goto done;
     }
-    if (mal_value_is_undefined(trap)) {
-        return mal_vm_construct_value_with_target(vm, proxy->target, args, arg_count, new_target);
+    if (mal_value_is_undefined(roots[2])) {
+        completion = mal_vm_construct_value_with_target(vm, roots[0], args, arg_count, roots[3]);
+        goto done;
     }
 
-    MalValue trap_args[3] = {proxy->target, mal_proxy_args_array(vm, args, arg_count), new_target};
-    MalCompletion completion = mal_vm_call_value(vm, trap, proxy->handler, trap_args, 3);
-    if (completion.kind != MAL_COMPLETION_NORMAL) {
-        return completion;
+    roots[4] = mal_proxy_args_array(vm, args, arg_count);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        completion = vm->completion;
+        goto done;
     }
-    // Invariant: the construct trap must return an object.
-    if (!mal_value_is_object(completion.value)) {
-        return mal_proxy_throw_completion(vm, "proxy construct trap must return an object");
+    MalValue trap_args[3] = {roots[0], roots[4], roots[3]};
+    completion = mal_vm_call_value(vm, roots[2], roots[1], trap_args, 3);
+    if (completion.kind == MAL_COMPLETION_NORMAL && !mal_value_is_object(completion.value)) {
+        completion = mal_proxy_throw_completion(vm, "proxy construct trap must return an object");
     }
+done:
+    mal_gc_unroot(&argument_roots);
+    mal_gc_unroot(&root);
     return completion;
 }
