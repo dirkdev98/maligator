@@ -212,11 +212,10 @@ Shared lifetime and fallback rules are recorded in
       or equivalent selection identities, including worker roots; test edit-free
       warm invalidation without clearing caches or reparsing every graph on a hit.
 
-- [ ] Remove the largest demonstrated repeated compiler work on frozen self-compile and
-      compiler-scale inputs, starting with one scheduler, dependency or representation
-      boundary. Require lower end-to-end time or peak memory on Node and rebuilt native
-      hosts with unchanged emitted C/runtime wire, sound invalidation and explicit host
-      tradeoffs.
+- [ ] Validate scalar safepoint-root block transfers on frozen self-compile and
+      compiler-scale inputs. Require lower end-to-end time or peak memory on Node and
+      rebuilt native hosts with unchanged emitted C/runtime wire and explicit host
+      tradeoffs before accepting the throughput change.
 
 - [ ] Bound aggregate work and retained state for analysis extensions, including
       discovery, rejected candidates and nested queries, with conservative fallback on

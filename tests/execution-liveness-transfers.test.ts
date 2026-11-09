@@ -168,6 +168,29 @@ describe("Execution liveness block-transfer summaries", () => {
 		);
 	});
 
+	it("preserves earlier roots when single-word live states recur", () => {
+		check(
+			[
+				[
+					op("rootUse", [0, 1]),
+					op("move", [1, 2]),
+					op("rootUse", [0, 1]),
+					op("createUndefined", [1]),
+					op("rootUse", [0, 2]),
+					op("return", [0]),
+				],
+			],
+			["boxed", "string", "boxed"],
+		);
+	});
+
+	it("retains empty root obligations at scalar-only safepoints", () => {
+		check(
+			[[op("move", [0, 1]), op("rootUse", [1, -1]), op("return", [0])]],
+			["f64", "i32"],
+		);
+	});
+
 	it("matches an independent set-based solver on 400 deterministic graphs", () => {
 		let seed = 711;
 		const random = (limit: number) => {

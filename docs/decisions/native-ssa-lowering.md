@@ -72,6 +72,11 @@ masking, and frame-linking contracts below apply to precise-root entries; conser
 entries preserve their live C storage and explicit helper ownership instead. Suspended
 coroutines retain traced snapshots independently of the active stack's root mode.
 
+Safepoint root transfer uses a scalar bitmap when physical registers fit one word.
+Block-indexed typed arrays hold generated, killed and live-in words; larger register
+sets retain the multiword solver. Both paths preserve ordered incoming, outgoing
+and union snapshots for the independent verifier.
+
 Native storage planning precedes C rendering. For precise roots it chooses root slot order, private
 boxed locals and their publication obligations, stable incoming roots, and bounded
 single-use scalar expressions separately for canonical and typed entries. Direct
