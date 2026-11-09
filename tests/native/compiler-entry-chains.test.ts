@@ -57,6 +57,15 @@ it("preserves private accessor fallbacks and boxed predicate callbacks under col
 	expect(
 		emitCompiledFunction(helper, helper.functionIndex, "", false)?.trySymbol,
 	).toBeDefined();
+	const maybeVoid = pair.programImage.native.functions.find(
+		(fn) =>
+			String.fromCharCode(
+				...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+			) === "maybeVoid",
+	)!;
+	expect(
+		emitCompiledFunction(maybeVoid, maybeVoid.functionIndex, "", false)?.tryAbi?.result,
+	).toBe("undefined");
 	for (const binary of [pair.compiled, pair.interpreted]) {
 		expect(
 			runToStdout(binary, {

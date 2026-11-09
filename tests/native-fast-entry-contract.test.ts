@@ -26,6 +26,7 @@ import { selectNativeStringComparisons } from "../src/compiler/target/native-str
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type { NativeDirectEntryPlan } from "../src/compiler/target/program-image.ts";
 import { renderNativeFastEntry } from "../src/compiler/target/render-native-fast-entry.ts";
+import type { NativeFastTryAbi } from "../src/compiler/target/render-native-fast-entry.ts";
 import type {
 	BytecodeFunction,
 	BytecodeInstruction,
@@ -931,6 +932,38 @@ it("passes small boxed entries directly while adapting missing canonical argumen
 	);
 });
 
+it("omits undefined fast results while retaining the full entry's other return values", () => {
+	const source = fastEntry(
+		body([
+			{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+			{ opcode: "CREATE_ARRAY", dst: 3, length: 0 },
+			{ opcode: "RETURN", value: 3 },
+			{ opcode: "CREATE_UNDEFINED", dst: 2 },
+			{ opcode: "RETURN", value: 2 },
+		]),
+		undefined,
+		true,
+		undefined,
+		[
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				registers: [2],
+				inputOffset: 0,
+				inputKindMasks: [COMPILER_VALUE_KIND_UNDEFINED],
+			},
+		],
+	)!.join("\n");
+	expect(source).toContain("MalValue __fast_p1, MalEnv *env) {");
+	expect(source).toContain(
+		"(arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED), env)) return MAL_VALUE_UNDEFINED;",
+	);
+	expect(source).toContain("return read_full(vm,");
+	expect(source).not.toContain("MalValue *out");
+});
+
 it.each([
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULLISH,
@@ -971,7 +1004,7 @@ function fastEntry(
 		| string
 		| {
 				readonly symbol: string;
-				readonly parameters: ReadonlyArray<"i32" | "boxed">;
+				readonly abi: NativeFastTryAbi;
 				readonly guard?: string;
 		  }
 		| undefined = () => undefined,
@@ -1001,7 +1034,9 @@ function fastEntry(
 			return entry === undefined
 				? undefined
 				: {
-						...(typeof entry === "string" ? { symbol: entry } : entry),
+						...(typeof entry === "string"
+							? { symbol: entry, abi: { result: "boxed" as const } }
+							: entry),
 						environment: `mal_value_to_function_object(${callee})->creation_env`,
 					};
 		},
@@ -1628,7 +1663,10 @@ describe("native fast entries", () => {
 				],
 				{ parameterCount: 3 },
 			),
-			() => ({ symbol: "mal_compiled_7_try", parameters: ["i32"] }),
+			() => ({
+				symbol: "mal_compiled_7_try",
+				abi: { parameters: ["i32"], result: "boxed" },
+			}),
 		)!;
 		const source = lines.join("\n");
 		expect(source).toContain("i32 __fast_p1");
@@ -1650,7 +1688,10 @@ describe("native fast entries", () => {
 				},
 				{ opcode: "RETURN", value: 2 },
 			]),
-			() => ({ symbol: "mal_compiled_7_try", parameters: ["boxed", "boxed"] }),
+			() => ({
+				symbol: "mal_compiled_7_try",
+				abi: { parameters: ["boxed", "boxed"], result: "boxed" },
+			}),
 		)!.join("\n");
 		expect(source).toContain(
 			"mal_compiled_7_try(vm, MAL_VALUE_UNDEFINED, __fast_r0, MAL_VALUE_UNDEFINED,",
@@ -1674,7 +1715,11 @@ describe("native fast entries", () => {
 				},
 				{ opcode: "RETURN", value: 2 },
 			]),
-			() => ({ symbol: "mal_compiled_7_try", parameters: ["boxed"], guard: "allowed" }),
+			() => ({
+				symbol: "mal_compiled_7_try",
+				abi: { parameters: ["boxed"], result: "boxed" },
+				guard: "allowed",
+			}),
 		)!.join("\n");
 		expect(source).toContain(
 			"if (!(allowed)) goto __full; return mal_compiled_7_try(vm, MAL_VALUE_UNDEFINED, __fast_r0, mal_value_to_function_object(__fast_r1)->creation_env, out);",
@@ -1682,6 +1727,51 @@ describe("native fast entries", () => {
 		expect(source).toContain("F4:;");
 		expect(source).toContain("*out = __fast_r2; return true;");
 		expect(source).not.toContain("&__fast_r2");
+	});
+
+	it.each([
+		["boxed", "boxed"],
+		["boxed", "undefined"],
+		["undefined", "boxed"],
+		["undefined", "undefined"],
+	] as const)("adapts a %s tail return from a %s helper ABI", (caller, callee) => {
+		const source = fastEntry(
+			body([
+				{
+					opcode: "CALL",
+					dst: 2,
+					callee: 1,
+					thisValue: -1,
+					argumentCount: 1,
+					arguments: [0],
+				},
+				{ opcode: "RETURN", value: 2 },
+			]),
+			() => ({
+				symbol: "mal_compiled_7_try",
+				abi: { parameters: ["boxed"], result: callee },
+			}),
+			true,
+			undefined,
+			caller === "undefined"
+				? [
+						undefined,
+						{
+							registers: [2],
+							inputOffset: 0,
+							inputKindMasks: [COMPILER_VALUE_KIND_UNDEFINED],
+						},
+					]
+				: [],
+		)!.join("\n");
+		const output =
+			callee === "boxed" ? `, ${caller === callee ? "out" : "&__fast_r2"}` : "";
+		expect(source).toContain(
+			`mal_compiled_7_try(vm, MAL_VALUE_UNDEFINED, __fast_r0, mal_value_to_function_object(__fast_r1)->creation_env${output})`,
+		);
+		expect(source.includes("return mal_compiled_7_try(")).toBe(caller === callee);
+		if (caller === "boxed" && callee === "undefined")
+			expect(source).toContain("__fast_r2 = MAL_VALUE_UNDEFINED;");
 	});
 
 	it.each([false, true])(
@@ -1700,7 +1790,10 @@ describe("native fast entries", () => {
 					{ opcode: "BINARY", dst: 3, left: 2, right: 0, operator: "+" },
 					{ opcode: "RETURN", value: 3 },
 				]),
-				() => ({ symbol: "mal_compiled_7_try", parameters: ["boxed"] }),
+				() => ({
+					symbol: "mal_compiled_7_try",
+					abi: { parameters: ["boxed"], result: "boxed" },
+				}),
 				exported,
 			)!.join("\n");
 			expect(source).toContain(

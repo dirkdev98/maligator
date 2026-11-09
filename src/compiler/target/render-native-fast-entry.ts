@@ -68,23 +68,28 @@ const MAXIMUM_FAST_ENTRY_INSTRUCTIONS = 64;
 
 export type NativeFastTryParameters = ReadonlyArray<"i32" | "boxed">;
 
-export function nativeFastTryParameterList(parameters?: NativeFastTryParameters): string {
-	return parameters === undefined
-		? FAST_TRY_PARAMETERS
-		: [
-				"MalVm *vm",
-				"MalValue this_value",
-				...parameters.map(
+export interface NativeFastTryAbi {
+	readonly parameters?: NativeFastTryParameters;
+	readonly result: "boxed" | "undefined";
+}
+
+export function nativeFastTryParameterList(abi: NativeFastTryAbi): string {
+	return [
+		"MalVm *vm",
+		"MalValue this_value",
+		...(abi.parameters === undefined
+			? ["const MalValue *args", "i32 arg_count"]
+			: abi.parameters.map(
 					(kind, index) => `${kind === "i32" ? "i32" : "MalValue"} __fast_p${index}`,
-				),
-				"MalEnv *env",
-				"MalValue *out",
-			].join(", ");
+				)),
+		"MalEnv *env",
+		...(abi.result === "boxed" ? ["MalValue *out"] : []),
+	].join(", ");
 }
 
 export interface NativeFastEntryInput {
 	readonly onSourceMap?: (ranges: ReadonlyArray<NativeSourceRange>) => void;
-	readonly onTryParameters?: (parameters: NativeFastTryParameters | undefined) => void;
+	readonly onTryAbi?: (abi: NativeFastTryAbi) => void;
 	readonly fn: BytecodeFunction;
 	readonly facts: NativeFunctionPlan["facts"];
 	readonly instructions: NativeFunctionPlan["instructions"];
@@ -123,7 +128,7 @@ export interface NativeFastEntryInput {
 				readonly symbol: string;
 				readonly environment: string;
 				readonly guard?: string;
-				readonly parameters?: NativeFastTryParameters;
+				readonly abi: NativeFastTryAbi;
 		  }
 		| undefined;
 	readonly f64Literal: (value: number) => string;
@@ -256,6 +261,23 @@ export function renderNativeFastEntry(
 	const tryParameters = exported
 		? scalarTryParameters(fn, graph, accesses, rejected)
 		: undefined;
+	const tryAbi: NativeFastTryAbi = {
+		parameters: tryParameters,
+		result:
+			exported &&
+			[...graph.keys()].every((ip) => {
+				const op = fn.instructions[ip]!;
+				return (
+					rejected.has(ip) ||
+					elided.has(ip) ||
+					op.opcode !== "RETURN" ||
+					instructionInputKind(input.facts?.[ip], op.value) ===
+						COMPILER_VALUE_KIND_UNDEFINED
+				);
+			})
+				? "undefined"
+				: "boxed",
+	};
 	for (const register of constants.keys())
 		if (!initialized.has(register)) constants.delete(register);
 	for (const register of integers)
@@ -288,6 +310,7 @@ export function renderNativeFastEntry(
 						integers,
 						cachedNumbers,
 						tryParameters,
+						tryAbi.result,
 					);
 		if (line === undefined) return undefined;
 		if (
@@ -315,7 +338,7 @@ export function renderNativeFastEntry(
 	}
 	const mappedLineCount = lines.length;
 	if (targets.has(fn.instructions.length)) lines.push(`F${fn.instructions.length}:;`);
-	lines.push(`    ${fastReturn("MAL_VALUE_UNDEFINED", result, exported)}`);
+	lines.push(`    ${fastReturn("MAL_VALUE_UNDEFINED", result, exported, tryAbi.result)}`);
 
 	// Register identifiers share C's namespace with runtime typedefs such as f32 and f64.
 	const locals = [...registers].sort((left, right) => left - right);
@@ -355,7 +378,7 @@ export function renderNativeFastEntry(
 	// C admits the pragma only before the body's first statement.
 	const pragma = "#pragma STDC FP_CONTRACT OFF";
 	const emit = (output: ReadonlyArray<string>): ReadonlyArray<string> => {
-		if (exported) input.onTryParameters?.(tryParameters);
+		if (exported) input.onTryAbi?.(tryAbi);
 		// The fast body follows its prologue; suffix text is deliberately unmapped.
 		const fastStart = exported
 			? 2
@@ -417,7 +440,7 @@ export function renderNativeFastEntry(
 					)
 					.join(", ");
 	return emit([
-		`${linkage}__attribute__((no_stack_protector)) __attribute__((aligned(64))) bool ${input.trySymbol}(${nativeFastTryParameterList(tryParameters)}) {`,
+		`${linkage}__attribute__((no_stack_protector)) __attribute__((aligned(64))) bool ${input.trySymbol}(${nativeFastTryParameterList(tryAbi)}) {`,
 		pragma,
 		...fast,
 		"__full:",
@@ -425,16 +448,12 @@ export function renderNativeFastEntry(
 		"}",
 		input.signature,
 		...(input.dispatch ?? []),
-		"    MalValue __fast_result;",
-		`    if (${fn.hasPrototype ? "mal_value_is_undefined(new_target) && " : ""}${entryGuards.length === 0 ? "" : `${entryGuards.join(" && ")} && `}${input.trySymbol}(vm, this_value, ${arguments_}, env, &__fast_result)) return __fast_result;`,
+		...(tryAbi.result === "boxed" ? ["    MalValue __fast_result;"] : []),
+		`    if (${fn.hasPrototype ? "mal_value_is_undefined(new_target) && " : ""}${entryGuards.length === 0 ? "" : `${entryGuards.join(" && ")} && `}${input.trySymbol}(vm, this_value, ${arguments_}, env${tryAbi.result === "boxed" ? ", &__fast_result" : ""})) return ${tryAbi.result === "boxed" ? "__fast_result" : "MAL_VALUE_UNDEFINED"};`,
 		full,
 		"}",
 	]);
 }
-
-/** Parameters of an exported fast body; it reports success and writes the result. */
-export const FAST_TRY_PARAMETERS =
-	"MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalEnv *env, MalValue *out";
 
 function fastEntryGraph(
 	instructions: ReadonlyArray<BytecodeInstruction>,
@@ -598,8 +617,12 @@ function fastReturn(
 	value: string,
 	directEntry: NativeDirectEntryPlan | undefined,
 	exported: boolean,
+	tryResult: NativeFastTryAbi["result"] = "boxed",
 ): string {
-	if (exported) return `{ *out = ${value}; return true; }`;
+	if (exported)
+		return tryResult === "undefined"
+			? "return true;"
+			: `{ *out = ${value}; return true; }`;
 	switch (directEntry?.resultRepresentation) {
 		case undefined:
 		case "boxed":
@@ -982,6 +1005,7 @@ function fastInstruction(
 	integers: ReadonlySet<number>,
 	cachedNumbers: ReadonlySet<number>,
 	tryParameters: NativeFastTryParameters | undefined,
+	tryResult: NativeFastTryAbi["result"] = "boxed",
 ): string | undefined {
 	const masks = input.facts?.[ip]?.inputKindMasks;
 	const values: FastNumbers = {
@@ -1192,7 +1216,12 @@ function fastInstruction(
 			const returned = value(op.value);
 			return returned === undefined
 				? undefined
-				: fastReturn(returned, exported ? undefined : input.directEntry, exported);
+				: fastReturn(
+						returned,
+						exported ? undefined : input.directEntry,
+						exported,
+						tryResult,
+					);
 		}
 		case "CALL": {
 			const plan = input.instructions[ip];
@@ -1256,9 +1285,9 @@ function fastInstruction(
 				args.length === 0 ? "nullptr" : `(const MalValue[]){ ${args.join(", ")} }`;
 			const guards = callee.guard === undefined ? [] : [`!(${callee.guard})`];
 			const arguments_ =
-				callee.parameters === undefined
+				callee.abi.parameters === undefined
 					? `${list}, ${args.length}`
-					: callee.parameters
+					: callee.abi.parameters
 							.map((kind, index) => {
 								const boxed = args[index] ?? "MAL_VALUE_UNDEFINED";
 								if (kind === "boxed") return boxed;
@@ -1274,11 +1303,18 @@ function fastInstruction(
 							.join(", ");
 			const next = input.fn.instructions[ip + 1];
 			const forwardsResult =
-				exported && next?.opcode === "RETURN" && next.value === op.dst;
-			const call = `${callee.symbol}(vm, ${receiver}, ${arguments_}, ${callee.environment}, ${forwardsResult ? "out" : `&__fast_r${op.dst}`})`;
+				exported &&
+				tryResult === callee.abi.result &&
+				next?.opcode === "RETURN" &&
+				next.value === op.dst;
+			const output =
+				callee.abi.result === "boxed"
+					? `, ${forwardsResult ? "out" : `&__fast_r${op.dst}`}`
+					: "";
+			const call = `${callee.symbol}(vm, ${receiver}, ${arguments_}, ${callee.environment}${output})`;
 			if (forwardsResult)
 				return `${guards.length === 0 ? "" : `if (${guards.join(" || ")}) goto __full; `}return ${call};`;
-			return `if (${guards.length === 0 ? "" : `${guards.join(" || ")} || `}!${call}) goto __full;`;
+			return `if (${guards.length === 0 ? "" : `${guards.join(" || ")} || `}!${call}) goto __full;${callee.abi.result === "undefined" ? ` __fast_r${op.dst} = MAL_VALUE_UNDEFINED;` : ""}`;
 		}
 		case "CALL_KNOWN": {
 			if (

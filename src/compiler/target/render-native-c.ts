@@ -201,7 +201,7 @@ import type {
 	VmSemanticDependency,
 	VmSemanticProtectorFact,
 } from "./program-image.ts";
-import type { NativeFastTryParameters } from "./render-native-fast-entry.ts";
+import type { NativeFastTryAbi } from "./render-native-fast-entry.ts";
 import { renderNativeFastEntry } from "./render-native-fast-entry.ts";
 import {
 	computeArgumentRetentionLimit,
@@ -1009,7 +1009,7 @@ export interface CompiledFunction extends NativeCallCoverage {
 	link?: ReadonlyArray<NativeLinkSlot>;
 	/** The canonical body's exported frameless fast path, which other fast paths call. */
 	trySymbol?: string;
-	tryParameters?: NativeFastTryParameters;
+	tryAbi?: NativeFastTryAbi;
 	/** Additional native-only ordinary-call symbols emitted beside the canonical body. */
 	directEntries: Array<{
 		readonly declarationSymbols: ReadonlySet<string>;
@@ -3499,7 +3499,7 @@ function emitCompiledVariant(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	maxCodeUnits = Infinity,
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
-	fastTryTargets: ReadonlyMap<number, NativeFastTryParameters | undefined> = new Map(),
+	fastTryTargets: ReadonlyMap<number, NativeFastTryAbi> = new Map(),
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 	onFastTryLookup?: (target: number) => void,
 ): CompiledFunction | null {
@@ -4488,15 +4488,15 @@ function emitCompiledVariant(
 	);
 	const fullSymbol = `${symbol}_full`;
 	let fastSourceMap: ReadonlyArray<NativeSourceRange> = [];
-	let tryParameters: NativeFastTryParameters | undefined;
+	let tryAbi: NativeFastTryAbi | undefined;
 	const fastEntry =
 		split === undefined &&
 		directEntry?.resultFields === undefined &&
 		directEntry?.recordParameters === undefined
 			? renderNativeFastEntry({
 					fn,
-					onTryParameters: (parameters) => {
-						tryParameters = parameters;
+					onTryAbi: (abi) => {
+						tryAbi = abi;
 					},
 					onSourceMap:
 						debug !== false && debug.captureSourceMap
@@ -4529,7 +4529,7 @@ function emitCompiledVariant(
 						return target !== undefined && fastTryTargets.has(target)
 							? {
 									symbol: `mal_compiled_${relocation.stem(target)}${suffix}_try`,
-									parameters: fastTryTargets.get(target),
+									abi: fastTryTargets.get(target)!,
 									...(plan?.kind === "call" && plan.directFunctionIndex === undefined
 										? {
 												guard: `mal_vm_callee_has_index(vm, ${callee}, ${relocation.functionIndex(target)})`,
@@ -4698,7 +4698,7 @@ function emitCompiledVariant(
 		native.specializedOnly !== true
 			? {
 					trySymbol: `${symbol}_try`,
-					...(tryParameters === undefined ? {} : { tryParameters }),
+					tryAbi: tryAbi!,
 				}
 			: {}),
 		profileDecisions,
@@ -5213,7 +5213,7 @@ export function emitCompiledFunction(
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	sortKernelEntries: ReadonlySet<string> = new Set(),
 	reductionEntries: ReadonlySet<string> = new Set(),
-	fastTryTargets: ReadonlyMap<number, NativeFastTryParameters | undefined> = new Map(),
+	fastTryTargets: ReadonlyMap<number, NativeFastTryAbi> = new Map(),
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 ): CompiledFunction | null {
 	if (native.storage === undefined)
@@ -5271,7 +5271,7 @@ export function createNativeFunctionRenderer(
 		splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 		sortKernelEntries: ReadonlySet<string> = new Set(),
 		reductionEntries: ReadonlySet<string> = new Set(),
-		fastTryTargets: ReadonlyMap<number, NativeFastTryParameters | undefined> = new Map(),
+		fastTryTargets: ReadonlyMap<number, NativeFastTryAbi> = new Map(),
 		directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 	): CompiledFunction | null => {
 		if (native.storage === undefined)
@@ -5332,7 +5332,7 @@ function renderCompiledFunction(
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	sortKernelEntries: ReadonlySet<string> = new Set(),
 	reductionEntries: ReadonlySet<string> = new Set(),
-	fastTryTargets: ReadonlyMap<number, NativeFastTryParameters | undefined> = new Map(),
+	fastTryTargets: ReadonlyMap<number, NativeFastTryAbi> = new Map(),
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 	onFastTryLookup?: (target: number) => void,
 ): CompiledFunction | null {
@@ -7413,7 +7413,7 @@ function emitBody(
 	controlFlow?: NativeControlFlowPlan,
 	elidedPureIps: ReadonlyArray<number> = [],
 	stringComparisons: ReadonlyArray<NativeStringComparisonPlan> = [],
-	fastTryTargets: ReadonlyMap<number, NativeFastTryParameters | undefined> = new Map(),
+	fastTryTargets: ReadonlyMap<number, NativeFastTryAbi> = new Map(),
 	onFastTryLookup?: (target: number) => void,
 	virtualRestRootCounts: NativeVirtualRestRootCounts = new Map(),
 ): EmittedBody | null {
@@ -9390,7 +9390,7 @@ interface NativeInstructionContext {
 	readonly strictCompiledTargets: ReadonlySet<number>;
 	readonly directCompiledTargets: ReadonlySet<number>;
 	readonly directCompiledEntries: DirectCompiledEntries;
-	readonly fastTryTargets?: ReadonlyMap<number, NativeFastTryParameters | undefined>;
+	readonly fastTryTargets?: ReadonlyMap<number, NativeFastTryAbi>;
 	readonly onFastTryLookup?: (target: number) => void;
 	readonly directResultRepresentation?: VmRegisterRepresentation;
 	readonly directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
@@ -14100,12 +14100,13 @@ class NativeInstructionEmission {
 						? this.boxedOperand(instruction.thisValue)
 						: `mal_vm_callee_this(vm, &vm->runtime_image->functions[${this.context.relocation.functionIndex(target)}], ${this.boxedOperand(instruction.thisValue)})`;
 					const ordinary = `${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}(vm, ${receiver}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee}, nullptr)`;
+					const tryAbi = this.context.fastTryTargets?.get(target);
 					const trySymbol =
 						strict &&
 						callPlan.guardedFunctionIndices!.length === 1 &&
 						this.context.callTransport === undefined &&
-						this.context.fastTryTargets?.has(target) &&
-						this.context.fastTryTargets.get(target) === undefined
+						tryAbi !== undefined &&
+						tryAbi.parameters === undefined
 							? this.context.relocation.reference(
 									`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}_try`,
 								)
@@ -14114,8 +14115,8 @@ class NativeInstructionEmission {
 						trySymbol === undefined
 							? [`  MalValue ${value} = ${ordinary};`]
 							: [
-									`  MalValue ${value};`,
-									`  if (!${trySymbol}(vm, ${receiver}, ${argsExpr}, ${args.length}, mal_value_to_function_object(${guardedCallee})->creation_env, &${value})) ${value} = ${ordinary};`,
+									`  MalValue ${value}${tryAbi!.result === "undefined" ? " = MAL_VALUE_UNDEFINED" : ""};`,
+									`  if (!${trySymbol}(vm, ${receiver}, ${argsExpr}, ${args.length}, mal_value_to_function_object(${guardedCallee})->creation_env${tryAbi!.result === "boxed" ? `, &${value}` : ""})) ${value} = ${ordinary};`,
 								];
 					return [
 						`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${this.context.relocation.functionIndex(target)}) {`,

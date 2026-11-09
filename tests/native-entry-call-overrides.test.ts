@@ -150,7 +150,7 @@ describe("native entry call overrides", () => {
 	it("selects a frameless callee from an exact typed override absent from the canonical plan", () => {
 		const emitted = emit(true, false, "number", "number", {
 			canonicalTarget: false,
-			availableTargets: new Map([[1, undefined]]),
+			availableTargets: new Map([[1, { result: "boxed" }]]),
 		});
 		expect(emitted.directEntries[0]!.source).toContain("mal_compiled_1_try(vm,");
 		expect(emitted.source).not.toContain("mal_compiled_1_try(vm,");
@@ -158,13 +158,44 @@ describe("native entry call overrides", () => {
 
 	it("guards the loaded target before entering the frameless callee of a guarded override", () => {
 		const source = emit(true, true, "number", "number", {
-			availableTargets: new Map([[1, undefined]]),
+			availableTargets: new Map([[1, { result: "boxed" }]]),
 		}).directEntries[0]!.source;
 		expect(source).toContain(
 			"!(mal_vm_callee_has_index(vm, __fast_r0, 1)) || !mal_compiled_1_try(vm,",
 		);
 		expect(source).toContain("if (__guarded_index_0 == 1)");
 		expect(source).toContain("mal_vm_call_cached(vm,");
+	});
+
+	it("reconstructs an undefined guarded fast result and retains the ordinary miss result", () => {
+		const native = createConservativeNativePlan([{ ...fn, needsArguments: true }])
+			.functions[0]!;
+		const source = emitCompiledFunction(
+			lowerNativeFunctionStorage({
+				...native,
+				instructions: [{ kind: "call", guardedFunctionIndices: [1] }, undefined],
+			}),
+			0,
+			"",
+			false,
+			"static",
+			new Set([1]),
+			[],
+			new Map(),
+			false,
+			new Set([1]),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			new Map([[1, { result: "undefined" }]]),
+		)!.source;
+		expect(source).toContain("MalValue __guarded_value_0_1 = MAL_VALUE_UNDEFINED;");
+		expect(source).toMatch(
+			/if \(!mal_compiled_1_try\(vm, [^\n]+creation_env\)\) __guarded_value_0_1 = mal_compiled_1\(/,
+		);
 	});
 
 	it("keeps the typed full body when its frameless callee is unavailable", () => {

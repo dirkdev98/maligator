@@ -326,6 +326,10 @@ an argument vector between fast bodies. The canonical entry still adapts omitted
 arguments to `undefined`; stricter integer parameters retain their admission guards.
 Immediate helper returns forward the caller's result storage, preserving callee
 guards and the effect-free restart path.
+An exported fast body whose admitted returns prove `undefined` reports only
+success. Its callers reconstruct that value on success and retain the full entry's
+return value on a miss. Availability and caller cache identities include this result
+ABI because admitting another callee can expand a body's successful return paths.
 Recursive bodies never qualify, since a body becomes available only after
 its callees do. Entries a numeric worker, literal-switch dispatch, or selected
 region already serves, and entries whose operator proofs rule out Numbers, keep

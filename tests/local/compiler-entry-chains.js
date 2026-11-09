@@ -72,4 +72,12 @@ custom.filter = (callback) => [
 	callback.call({ kind: "operation", start: 0 }, custom[0], 0),
 ];
 log.push(predicates(custom, { kind: "return", start: 0 })[0]);
+
+function maybeVoid(value) {
+	if (value === true) return;
+	return [value];
+}
+globalThis.maybeVoid = maybeVoid;
+for (const value of [true, 7, "fallback"])
+	log.push(Reflect.apply(globalThis.maybeVoid, undefined, [value]));
 console.log(JSON.stringify(log));

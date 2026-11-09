@@ -32,7 +32,7 @@ import type {
 	CompiledFunction,
 	NativeDirectClosureEnvironment,
 } from "./render-native-c.ts";
-import type { NativeFastTryParameters } from "./render-native-fast-entry.ts";
+import type { NativeFastTryAbi } from "./render-native-fast-entry.ts";
 import { nativeFastTryParameterList } from "./render-native-fast-entry.ts";
 import {
 	compressPositions,
@@ -766,7 +766,7 @@ interface TranslationUnitPartition {
 interface NativeCompilationAvailability {
 	directCompiledTargets: Set<number>;
 	/** Functions whose canonical body exports a frameless fast path. */
-	fastTryTargets: Map<number, NativeFastTryParameters | undefined>;
+	fastTryTargets: Map<number, NativeFastTryAbi>;
 	/** Closures, by creator, whose creator and every caller run native code that enters them without an object. */
 	directClosures: Map<string, NativeDirectClosureEnvironment>;
 	directCompiledEntries: Map<
@@ -926,10 +926,10 @@ function nativeCompilationAvailability(
 			}
 		}
 	}
-	const fastTryTargets = new Map<number, NativeFastTryParameters | undefined>();
+	const fastTryTargets = new Map<number, NativeFastTryAbi>();
 	for (const target of directCompiledTargets)
 		if (compiled[target]?.trySymbol !== undefined)
-			fastTryTargets.set(target, compiled[target].tryParameters);
+			fastTryTargets.set(target, compiled[target].tryAbi!);
 	const directClosures = new Map<string, NativeDirectClosureEnvironment>();
 	for (const [key, site] of closureSites)
 		if (
@@ -1002,7 +1002,8 @@ function compiledAvailabilityMatches(
 		if (
 			(a.source.length === 0) !== (b.source.length === 0) ||
 			(a.trySymbol === undefined) !== (b.trySymbol === undefined) ||
-			a.tryParameters?.join(",") !== b.tryParameters?.join(",") ||
+			a.tryAbi?.parameters?.join(",") !== b.tryAbi?.parameters?.join(",") ||
+			a.tryAbi?.result !== b.tryAbi?.result ||
 			a.directEntries.length !== b.directEntries.length
 		)
 			return false;
@@ -1236,10 +1237,13 @@ function emitNativeFunctions(
 		for (const closure of closureParticipation[functionIndex] ?? [])
 			key += availability.directClosures.has(closure) ? "1" : "0";
 		key += ":";
-		for (const target of fastTryLookups[functionIndex] ?? [])
-			key += availability.fastTryTargets.has(target)
-				? `[${availability.fastTryTargets.get(target)?.join(",") ?? ""}]`
-				: "0";
+		for (const target of fastTryLookups[functionIndex] ?? []) {
+			const abi = availability.fastTryTargets.get(target);
+			key +=
+				abi === undefined
+					? "0"
+					: `[${abi.parameters?.join(",") ?? "vector"}:${abi.result}]`;
+		}
 		return key;
 	};
 	const emit = (
@@ -1543,7 +1547,7 @@ function emitProgramImageParts(
 					lines.push(`static MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`);
 					if (fn.trySymbol !== undefined)
 						lines.push(
-							`static bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryParameters)});`,
+							`static bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryAbi!)});`,
 						);
 				}
 			}
@@ -1582,9 +1586,7 @@ function emitProgramImageParts(
 			if (fn !== null) {
 				if (fn.source.length > 0) lines.push(`MAL_DECLARE_COMPILED(${fn.symbol});`);
 				if (fn.trySymbol !== undefined)
-					lines.push(
-						`bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryParameters)});`,
-					);
+					lines.push(`bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryAbi!)});`);
 			}
 		}
 		for (const fn of compiled) {
@@ -1882,7 +1884,7 @@ function compiledFunctionDeclarations(
 							: [
 									{
 										symbol: fn.trySymbol,
-										source: `bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryParameters)});`,
+										source: `bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryAbi!)});`,
 									},
 								]),
 					],
@@ -3001,9 +3003,7 @@ function emitBatchUnits(
 				? [`${storage}MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`]
 				: []),
 			...(canonical && fn.trySymbol !== undefined
-				? [
-						`${storage}bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryParameters)});`,
-					]
+				? [`${storage}bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryAbi!)});`]
 				: []),
 			...fn.directEntries.flatMap((entry) => [
 				`${storage}${directEntryDeclaration(entry)};`,

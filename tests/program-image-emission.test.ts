@@ -389,6 +389,29 @@ describe("emit-program-image instruction packing", () => {
 		}
 	});
 
+	it("refreshes callers when newly admitted callee paths change the result ABI", () => {
+		const image = lowerNativeStorage(
+			compileEntrypoint(
+				new URL("./local/frameless-forward-call.js", import.meta.url).pathname,
+				{
+					buildConfig: resolveBuildConfig({
+						engine: { primordials: "locked", eval: false, realms: false },
+					}),
+					coreOptimizationBenchmarkAblation: { family: "inlining-cross-call" },
+				},
+			),
+		);
+		const source = emitProgramImage(image, { compiled: true });
+		const caller = namedFunctionIndex(image, "caller");
+		const middle = namedFunctionIndex(image, "middle");
+		const callerBody = source.match(
+			new RegExp(`bool mal_compiled_${caller}_try\\([^\\n]+\\) \\{([\\s\\S]*?)^}`, "m"),
+		)![1]!;
+		expect(callerBody).toMatch(
+			new RegExp(`return mal_compiled_${middle}_try\\([^\\n]+, out\\);`),
+		);
+	});
+
 	it.each([false, true])(
 		"reports a renderer bailout only when the function exceeds its C budget, limited=%s",
 		(limited) => {
