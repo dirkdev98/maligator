@@ -434,7 +434,7 @@ jobs:
       (github.event.action == 'synchronize' || github.event.label.name == 'native-compiler-performance'))
     name: Frozen compiler slices / ${{ matrix.comparison }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 70
+    timeout-minutes: ${{ inputs.memory_policy && 240 || 70 }}
     strategy:
       fail-fast: false
       matrix:
@@ -444,6 +444,7 @@ jobs:
       HEAD_SHA: ${{ inputs.candidate || github.event.pull_request.head.sha }}
       COMPARISON: ${{ matrix.comparison }}
       MANUAL_COMPARISON: ${{ github.event_name == 'workflow_dispatch' }}
+      CAPTURE_BUDGET_SECONDS: ${{ inputs.memory_policy && 1800 || 900 }}
     steps:
       - name: Check out the candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -488,6 +489,12 @@ jobs:
           ln -s "$(command -v ld.lld-21)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
           echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
 
+      - name: Set up matched Bun controls
+        if: steps.baseline.outputs.skip != 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.4
+
       - name: Check environment and freeze the compiler program
         if: steps.baseline.outputs.skip != 'true'
         env:
@@ -528,17 +535,17 @@ jobs:
           script="$PWD/scripts/self-compile-experiment.ts"
           cd "$task/baseline-source"
           node "$script" capture "$task/baseline" --program "$task/program" \
-            --budget-seconds 900 --plan=json | tee "$task/baseline-plan.json"
-          node "$script" capture "$task/baseline" --program "$task/program" --budget-seconds 900
+            --budget-seconds "$CAPTURE_BUDGET_SECONDS" --plan=json | tee "$task/baseline-plan.json"
+          node "$script" capture "$task/baseline" --program "$task/program" --budget-seconds "$CAPTURE_BUDGET_SECONDS"
 
       - name: Capture the candidate compiler for the frozen program
         if: steps.baseline.outputs.skip != 'true'
         run: |
           node scripts/self-compile-experiment.ts capture .cache/native-performance/candidate \
-            --program .cache/native-performance/program --budget-seconds 900 --plan=json \
+            --program .cache/native-performance/program --budget-seconds "$CAPTURE_BUDGET_SECONDS" --plan=json \
             | tee .cache/native-performance/candidate-plan.json
           node scripts/self-compile-experiment.ts capture .cache/native-performance/candidate \
-            --program .cache/native-performance/program --budget-seconds 900
+            --program .cache/native-performance/program --budget-seconds "$CAPTURE_BUDGET_SECONDS"
 
       - name: Record compiler build and section sizes
         if: steps.baseline.outputs.skip != 'true'
@@ -582,11 +589,11 @@ jobs:
           node scripts/self-compile-experiment.ts compare \
             .cache/native-performance/baseline .cache/native-performance/candidate \
             --output .cache/native-performance/parser --workload parser --pairs 5 \
-            --budget-seconds 480 --plan=json | tee .cache/native-performance/parser-plan.json
+            --bun "$(command -v bun)" --budget-seconds 480 --plan=json | tee .cache/native-performance/parser-plan.json
           node scripts/self-compile-experiment.ts compare \
             .cache/native-performance/baseline .cache/native-performance/candidate \
             --output .cache/native-performance/parser --workload parser --pairs 5 \
-            --budget-seconds 480 2>&1 | tee .cache/native-performance/parser.log
+            --bun "$(command -v bun)" --budget-seconds 480 2>&1 | tee .cache/native-performance/parser.log
 
       - name: Compare the shape-analysis slice
         if: >-
@@ -597,11 +604,11 @@ jobs:
           node scripts/self-compile-experiment.ts compare \
             .cache/native-performance/baseline .cache/native-performance/candidate \
             --output .cache/native-performance/shape --workload shape --pairs 5 \
-            --budget-seconds 1500 --plan=json | tee .cache/native-performance/shape-plan.json
+            --bun "$(command -v bun)" --budget-seconds 1500 --plan=json | tee .cache/native-performance/shape-plan.json
           node scripts/self-compile-experiment.ts compare \
             .cache/native-performance/baseline .cache/native-performance/candidate \
             --output .cache/native-performance/shape --workload shape --pairs 5 \
-            --budget-seconds 1500 2>&1 | tee .cache/native-performance/shape.log
+            --bun "$(command -v bun)" --budget-seconds 1500 2>&1 | tee .cache/native-performance/shape.log
 
       - name: Compare the compiler nursery cap without tracing
         if: >-
@@ -613,12 +620,12 @@ jobs:
             .cache/native-performance/candidate .cache/native-performance/candidate \
             --output .cache/native-performance/nursery-ordinary --workload full --pairs 3 \
             --shared-oracle --candidate-nursery-max-bytes 67108864 \
-            --budget-seconds 600 --plan=json | tee .cache/native-performance/nursery-ordinary-plan.json
+            --bun "$(command -v bun)" --budget-seconds 5400 --plan=json | tee .cache/native-performance/nursery-ordinary-plan.json
           node scripts/self-compile-experiment.ts compare \
             .cache/native-performance/candidate .cache/native-performance/candidate \
             --output .cache/native-performance/nursery-ordinary --workload full --pairs 3 \
             --shared-oracle --candidate-nursery-max-bytes 67108864 \
-            --budget-seconds 600 2>&1 | tee .cache/native-performance/nursery-ordinary.log
+            --bun "$(command -v bun)" --budget-seconds 5400 2>&1 | tee .cache/native-performance/nursery-ordinary.log
 
       - name: Attribute compiler memory in separate diagnostic runs
         if: >-
@@ -629,13 +636,13 @@ jobs:
           node scripts/self-compile-experiment.ts compare \
             .cache/native-performance/candidate .cache/native-performance/candidate \
             --output .cache/native-performance/nursery-memory --workload full --pairs 1 \
-            --shared-oracle --gc-memory --candidate-nursery-max-bytes 67108864 \
-            --budget-seconds 300 --plan=json | tee .cache/native-performance/nursery-memory-plan.json
+            --shared-oracle --gc-memory --gc-memory-interval 256 --candidate-nursery-max-bytes 67108864 \
+            --bun "$(command -v bun)" --budget-seconds 3600 --plan=json | tee .cache/native-performance/nursery-memory-plan.json
           node scripts/self-compile-experiment.ts compare \
             .cache/native-performance/candidate .cache/native-performance/candidate \
             --output .cache/native-performance/nursery-memory --workload full --pairs 1 \
-            --shared-oracle --gc-memory --candidate-nursery-max-bytes 67108864 \
-            --budget-seconds 300 2>&1 | tee .cache/native-performance/nursery-memory.log
+            --shared-oracle --gc-memory --gc-memory-interval 256 --candidate-nursery-max-bytes 67108864 \
+            --bun "$(command -v bun)" --budget-seconds 3600 2>&1 | tee .cache/native-performance/nursery-memory.log
 
       - name: Remove disposable baseline source and dependency links
         if: always() && steps.baseline.outputs.skip != 'true'

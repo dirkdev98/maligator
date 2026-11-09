@@ -25,6 +25,28 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
 
+it("retains completed-major ownership samples when tracing pauses sparsely", () => {
+	const invocation = resolveHarnessExecutionInvocation(binary);
+	const logs = ["1", "256"].map((interval) => {
+		const result = spawnSync(invocation.executable, invocation.args, {
+			encoding: "utf8",
+			timeout: 30_000,
+			env: {
+				...process.env,
+				MAL_GC_STRESS: "0",
+				MAL_GC_VERIFY: "1",
+				MAL_GC_MEMORY_TRACE: interval,
+				MAL_GC_NURSERY_MAX_BYTES: "4194304",
+			},
+		});
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		return result.stderr.split("\n").filter((line) => line.startsWith("[gc-memory]"));
+	});
+	expect(logs[1]!.length).toBeLessThan(logs[0]!.length);
+	for (const samples of logs)
+		expect(samples.some((line) => line.includes("major_complete=1"))).toBe(true);
+});
+
 it.each([false, true])(
 	"bounds transient nursery growth with the optional cap=%s",
 	(capped) => {

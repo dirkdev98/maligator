@@ -44,7 +44,7 @@ import path from 'node:path';
 const target = process.argv[2];
 const output = process.argv[3];
 if (${options.observeEnvironment ?? false}) {
- writeFileSync(path.join(${JSON.stringify(root)}, path.basename(path.dirname(output)) + '.env.json'), JSON.stringify({trace:process.env.MAL_GC_MEMORY_TRACE, cap:process.env.MAL_GC_NURSERY_MAX_BYTES}));
+ writeFileSync(path.join(${JSON.stringify(root)}, path.basename(path.dirname(output)) + '.env.json'), JSON.stringify({trace:process.env.MAL_GC_MEMORY_TRACE, cap:process.env.MAL_GC_NURSERY_MAX_BYTES, bunOptions:process.env.BUN_OPTIONS}));
  if (process.env.MAL_GC_MEMORY_TRACE) console.error('[gc-memory] schema=1 sample=1 moment=after managed_owned_bytes=100 process_reserved_bytes=200');
 }
 if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
@@ -99,6 +99,16 @@ if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
 	const base = capture("base");
 	const candidate = capture("candidate");
 	const output = path.join(root, "result");
+	const bun = path.join(root, "bun.mjs");
+	writeFileSync(
+		bun,
+		`#!${process.execPath}
+import { spawnSync } from 'node:child_process';
+if (process.argv[2] === '--version') console.log('1.0.0-fixture');
+else process.exit(spawnSync(process.execPath, process.argv.slice(2), {stdio:'inherit'}).status ?? 2);
+`,
+		{ mode: 0o755 },
+	);
 	const command = [
 		script,
 		"compare",
@@ -126,8 +136,9 @@ if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
 			}>;
 			pairs: Array<unknown>;
 			target: string;
+			references: Array<{ label: string; digest: string; wireDigest: string }>;
 		};
-	return { root, base, candidate, output, command, run, report };
+	return { root, base, candidate, output, command, run, report, bun };
 }
 
 async function expectProcessStopped(pid: number): Promise<void> {
@@ -527,24 +538,26 @@ it("keeps GC diagnostics explicit and applies a candidate cap by run role for on
 			"native",
 			"--shared-oracle",
 			"--gc-memory",
+			"--gc-memory-interval",
+			"64",
 			"--candidate-nursery-max-bytes",
 			"67108864",
 		],
 		{
 			encoding: "utf8",
 			timeout: 20_000,
-			env: { ...process.env, MAL_GC_NURSERY_MAX_BYTES: "8388608" },
+			env: { ...process.env, MAL_GC_NURSERY_MAX_BYTES: "8388608", BUN_OPTIONS: "--smol" },
 		},
 	);
 	expect(result.status, result.stderr).toBe(0);
 	for (const label of ["warm-base", "pair-0-base", "pair-1-base"])
 		expect(
 			JSON.parse(readFileSync(path.join(test.root, `${label}.env.json`), "utf8")),
-		).toEqual({ trace: "1" });
+		).toEqual({ trace: "64" });
 	for (const label of ["warm-candidate", "pair-0-candidate", "pair-1-candidate"])
 		expect(
 			JSON.parse(readFileSync(path.join(test.root, `${label}.env.json`), "utf8")),
-		).toEqual({ trace: "1", cap: "67108864" });
+		).toEqual({ trace: "64", cap: "67108864" });
 	expect(test.report().samples).toHaveLength(6);
 });
 
@@ -555,3 +568,41 @@ it("rejects GC diagnostics on the Node host before creating evidence", () => {
 	expect(result.stderr).toContain("GC memory options require --host native");
 	expect(existsSync(test.output)).toBe(false);
 });
+
+it("checks and records an additional JavaScript host against each revision's Node output", () => {
+	const test = fixture();
+	const result = test.run("--bun", test.bun);
+	expect(result.status, result.stderr).toBe(0);
+	expect(test.report()).toMatchObject({
+		complete: true,
+		bun: { executable: test.bun, version: "1.0.0-fixture" },
+	});
+	expect(test.report().references.map(({ label }) => label)).toEqual([
+		"node-reference",
+		"node-reference-candidate",
+		"bun-reference",
+		"bun-reference-candidate",
+	]);
+	for (const reference of test.report().references)
+		expect(reference.wireDigest).toBe(test.report().samples[0]!.wireDigest);
+});
+
+it("rejects a Bun reference with different frozen output before native warmups", () => {
+	const test = fixture({ wrongRun: "bun-reference" });
+	const result = test.run("--bun", test.bun, "--shared-oracle");
+	expect(result.status).toBe(2);
+	expect(readFileSync(path.join(test.output, "run.log"), "utf8")).toContain(
+		"bun-reference output differs from the frozen Node oracle",
+	);
+	expect(test.report().samples).toHaveLength(0);
+});
+
+it.each(["0", "-1", "1.5"])(
+	"rejects an invalid GC memory interval %s before creating evidence",
+	(interval) => {
+		const test = fixture();
+		const result = test.run("--gc-memory-interval", interval, "--plan=json");
+		expect(result.status).toBe(2);
+		expect(existsSync(test.output)).toBe(false);
+	},
+);

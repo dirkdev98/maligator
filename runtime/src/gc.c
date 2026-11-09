@@ -461,7 +461,7 @@ struct MalGcState {
     // since the last mark step, so marking outruns allocation.
     u32 assist;
     usize nursery_max_bytes;
-    bool memory_trace;
+    usize memory_trace_interval;
     u64 memory_sample;
 
     // --- Per-collection statistics (MAL_GC_STATS=1) ---------------------------
@@ -1082,7 +1082,18 @@ void mal_gc_init(MalVm *vm) {
         g->stats_enabled = true;
         mal_gc_stats_claim(g);
     }
-    g->memory_trace = getenv("MAL_GC_MEMORY_TRACE") != nullptr;
+    const char *memory_trace = getenv("MAL_GC_MEMORY_TRACE");
+    if (memory_trace != nullptr) {
+        char *end;
+        errno = 0;
+        unsigned long long interval = strtoull(memory_trace, &end, 10);
+        if (errno != 0 || end == memory_trace || *end != '\0' ||
+            memory_trace[0] == '-' || interval == 0 || interval > SIZE_MAX) {
+            fprintf(stderr, "MAL_GC_MEMORY_TRACE requires a positive pause interval\n");
+            abort();
+        }
+        g->memory_trace_interval = (usize) interval;
+    }
     const char *nursery_max = getenv("MAL_GC_NURSERY_MAX_BYTES");
     if (nursery_max != nullptr) {
         char *end;
@@ -3357,8 +3368,6 @@ static u64 mal_gc_remembered_object_slots(const MalObject *object) {
     return slots + mal_gc_remembered_table_slots(mal_object_overflow(object));
 }
 
-// --- Statistics helpers ----------------------------------------------------
-
 static void mal_gc_memory_sample(MalVm *vm, const char *moment, bool major) {
     MalHeapUsage usage = mal_heap_usage(&vm->heap);
     MalHeapCurrentUsage current = mal_heap_current_usage(&vm->heap);
@@ -3384,9 +3393,11 @@ static void mal_gc_memory_sample(MalVm *vm, const char *moment, bool major) {
 }
 
 static u64 mal_gc_pause_begin(MalVm *vm, bool major) {
-    if (g_gc->memory_trace) {
+    if (g_gc->memory_trace_interval != 0) {
         g_gc->memory_sample++;
-        mal_gc_memory_sample(vm, "before", major);
+        if ((g_gc->memory_sample - 1) % g_gc->memory_trace_interval == 0) {
+            mal_gc_memory_sample(vm, "before", major);
+        }
     }
     u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     mal_profile_event(vm, MAL_PROFILE_RECORD_GC_BEGIN, major ? 1 : 0);
@@ -3396,7 +3407,11 @@ static u64 mal_gc_pause_begin(MalVm *vm, bool major) {
 static void mal_gc_pause_end(MalVm *vm, bool major, MalGcPauseReason reason, u64 start_ns) {
     mal_profile_event(vm, MAL_PROFILE_RECORD_GC_END, major ? 1 : 0);
     u64 end_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
-    if (g_gc->memory_trace) mal_gc_memory_sample(vm, "after", major);
+    if (g_gc->memory_trace_interval != 0 &&
+        ((g_gc->memory_sample - 1) % g_gc->memory_trace_interval == 0 ||
+         (major && g_gc->phase == MAL_GC_PHASE_IDLE))) {
+        mal_gc_memory_sample(vm, "after", major);
+    }
     if (!g_gc->stats_enabled) return;
     u64 elapsed_ns = end_ns - start_ns;
     g_gc->pause_count++;

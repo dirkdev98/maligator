@@ -330,10 +330,12 @@ baseline, without the duplicate cumulative job.
 
 Every family compares the candidate with `git merge-base HEAD PR_BASE_SHA` and,
 when different, with `git merge-base HEAD origin/main` for cumulative stacked-PR
-evidence. JavaScript and micro jobs have 55-minute ceilings; compiler jobs have a
-70-minute ceiling. Compiler captures use 15-minute build budgets, the parser slice
-has an eight-minute comparison budget, and the shape slice has a 25-minute budget.
-The compiler lane uses `self-compile-experiment.ts`'s frozen Node output oracle and retains its build
+evidence. JavaScript and micro jobs have 55-minute ceilings; ordinary compiler jobs
+have a 70-minute ceiling. Compiler captures use 15-minute build budgets, the parser
+slice has an eight-minute comparison budget, and the shape slice has a 25-minute
+budget. The explicit memory-policy comparison allows longer preparation and full-input
+measurement within a four-hour job. The compiler lane checks Node and Bun output on
+the same frozen input and retains its build
 events, captured source identities, output digests, resource logs, and partial reports. The
 workflow uploads evidence even on failure, preserves failing exit codes, and
 does not update benchmark baselines. These checks complement the ordinary test
@@ -440,10 +442,15 @@ npm run bench:self-compile-experiment -- compare .cache/compiler-base .cache/com
 
 Remove `--plan=json` to execute. Select `--workload shape` or `--workload full`
 for larger inputs, and `--host node` for a separate Node-hosted comparison.
+Pass `--bun /absolute/path/bun` to check and time Bun against the same frozen
+Node oracle. The report records the executable digest and version; each reference
+is one process observation, separate from the alternating native pairs.
 For a nursery-size experiment, compare the same native capture in both roles and
 pass `--candidate-nursery-max-bytes 67108864`; only candidate runs receive that cap.
 Run a separate comparison with `--gc-memory` to retain synchronized ownership
-samples and complete snapshots at managed-occupancy and process-reserve peaks.
+samples and complete rows at the largest sampled managed occupancy and process
+reservation. `--gc-memory-interval 256` samples every 256 pauses and every major
+completion, reducing heap walks while retaining completed-cycle observations.
 Those traced timings are diagnostic. Keep ordinary elapsed time, peak RSS and
 pause costs separate, and do not sum overlapping reserve categories. The manual
 Native performance workflow's `memory_policy` input runs both comparisons on the

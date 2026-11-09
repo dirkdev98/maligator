@@ -46,7 +46,9 @@ Options:
   --pairs N                         alternating measured pairs (default: 5)
   --cold                            Node fresh-process pairs without extra oracle or warmups
   --shared-oracle                   require both revisions to match the baseline Node output
+  --bun EXECUTABLE                   check and time Bun on the same frozen input
   --gc-memory                       trace synchronized GC ownership samples (native diagnostics)
+  --gc-memory-interval N             sample every N pauses and each major completion (default: 1)
   --candidate-nursery-max-bytes N    cap only the candidate nursery increment, at least 4194304
   --budget-seconds N                total command budget (default: 600)
   --plan=json                       show work without building or writing
@@ -85,6 +87,8 @@ interface Options {
 	plan: boolean;
 	sourceOnly: boolean;
 	gcMemory: boolean;
+	gcMemoryInterval: number;
+	bun?: string;
 	candidateNurseryMaxBytes?: number;
 	coreOptimizationAblation?: CoreOptimizationBenchmarkAblation["family"];
 }
@@ -189,7 +193,8 @@ function currentHost(): Capture["host"] {
 function cleanEnvironment(): NodeJS.ProcessEnv {
 	const environment = { ...process.env };
 	for (const key of Object.keys(environment)) {
-		if (key.startsWith("MAL_") || key.startsWith("NODE_")) delete environment[key];
+		if (key.startsWith("MAL_") || key.startsWith("NODE_") || key.startsWith("BUN_"))
+			delete environment[key];
 	}
 	environment.MAL_CORE_INSTRUMENTATION = "off";
 	return environment;
@@ -407,6 +412,21 @@ function compareCapturedCompilers(options: Options): void {
 	const target = path.join(baseDirectory, "source", TARGETS[options.workload]);
 	const pairs: Array<readonly [Sample, Sample]> = [];
 	const samples: Array<Sample> = [];
+	const references: Array<Sample> = [];
+	let bun: { executable: string; sha256: string; version: string } | undefined;
+	if (options.bun !== undefined) {
+		const version = spawnSync(options.bun, ["--version"], {
+			encoding: "utf8",
+			env: cleanEnvironment(),
+			timeout: 20_000,
+		});
+		if (version.status !== 0) throw new Error(`Bun version probe failed: ${options.bun}`);
+		bun = {
+			executable: options.bun,
+			sha256: sha256(readFileSync(options.bun)),
+			version: version.stdout.trim(),
+		};
+	}
 	const report = {
 		schema: 1,
 		status: "running",
@@ -416,18 +436,28 @@ function compareCapturedCompilers(options: Options): void {
 		target,
 		samples,
 		pairs,
+		references,
+		...(bun === undefined ? {} : { bun }),
 	};
 	const save = () =>
 		writeJson(reportPath, { ...report, summary: summarizeCompilerPairs(pairs) });
 	save();
-	const run = (label: string, capture: string, host: "native" | "node"): Sample => {
+	const run = (
+		label: string,
+		capture: string,
+		host: "native" | "node" | "bun",
+	): Sample => {
 		const directory = path.join(options.output, label);
 		mkdirSync(directory);
 		const output = path.join(directory, "output");
 		const executable =
-			host === "node" ? process.execPath : path.join(capture, "compiler");
+			host === "native"
+				? path.join(capture, "compiler")
+				: host === "bun"
+					? options.bun!
+					: process.execPath;
 		const args = [target, output];
-		if (host === "node")
+		if (host !== "native")
 			args.unshift(path.join(capture, "source/bench/self-compile.mts"));
 		console.log(`${label}: ${executable}`);
 		const stdoutPath = path.join(directory, "stdout.json");
@@ -441,7 +471,7 @@ function compareCapturedCompilers(options: Options): void {
 		if (host === "native") {
 			if (options.gcMemory) {
 				environment.MAL_GC_STATS = "1";
-				environment.MAL_GC_MEMORY_TRACE = "1";
+				environment.MAL_GC_MEMORY_TRACE = String(options.gcMemoryInterval);
 			}
 			if (label.endsWith("-candidate") && options.candidateNurseryMaxBytes !== undefined)
 				environment.MAL_GC_NURSERY_MAX_BYTES = String(options.candidateNurseryMaxBytes);
@@ -538,15 +568,50 @@ function compareCapturedCompilers(options: Options): void {
 				: { peakRssBytes: Number(rss) * (process.platform === "linux" ? 1024 : 1) }),
 		};
 	};
+	const verify = (sample: Sample, expected: Sample | undefined): void => {
+		if (expected === undefined) throw new Error("Missing compiler revision oracle");
+		if (
+			sample.digest !== expected.digest ||
+			sample.units !== expected.units ||
+			sample.codeUnits !== expected.codeUnits
+		)
+			throw new Error(
+				`${sample.label} output differs from the frozen Node oracle; see ${options.output}`,
+			);
+		if (
+			sample.wireDigest !== expected.wireDigest ||
+			sample.wireBytes !== expected.wireBytes
+		)
+			throw new Error(
+				`${sample.label} runtime image differs from the frozen Node oracle; see ${options.output}`,
+			);
+	};
 	let reference: Sample | undefined;
 	let candidateReference: Sample | undefined;
 	if (!options.cold) {
 		reference = run("node-reference", baseDirectory, "node");
+		references.push(reference);
 		writeJson(path.join(options.output, "oracle.json"), reference);
 		if (options.perRevisionOracle) {
 			candidateReference = run("node-reference-candidate", candidateDirectory, "node");
+			references.push(candidateReference);
 			writeJson(path.join(options.output, "oracle-candidate.json"), candidateReference);
 		}
+		if (options.bun !== undefined) {
+			const baseline = run("bun-reference", baseDirectory, "bun");
+			references.push(baseline);
+			writeJson(path.join(options.output, "bun-reference.json"), baseline);
+			save();
+			verify(baseline, reference);
+			if (options.perRevisionOracle) {
+				const head = run("bun-reference-candidate", candidateDirectory, "bun");
+				references.push(head);
+				writeJson(path.join(options.output, "bun-reference-candidate.json"), head);
+				save();
+				verify(head, candidateReference);
+			}
+		}
+		save();
 	}
 	const checked = (label: string, directory: string): Sample => {
 		const sample = run(label, directory, options.host);
@@ -560,22 +625,7 @@ function compareCapturedCompilers(options: Options): void {
 			directory === candidateDirectory && options.perRevisionOracle
 				? candidateReference
 				: reference;
-		if (expected === undefined) throw new Error("Missing compiler revision oracle");
-		if (
-			sample.digest !== expected.digest ||
-			sample.units !== expected.units ||
-			sample.codeUnits !== expected.codeUnits
-		)
-			throw new Error(
-				`${label} output differs from the frozen Node oracle; see ${options.output}`,
-			);
-		if (
-			sample.wireDigest !== expected.wireDigest ||
-			sample.wireBytes !== expected.wireBytes
-		)
-			throw new Error(
-				`${label} runtime image differs from the frozen Node oracle; see ${options.output}`,
-			);
+		verify(sample, expected);
 		return sample;
 	};
 	if (!options.cold) {
@@ -628,6 +678,7 @@ function parseOptions(args: Array<string>): Options | undefined {
 		plan: false,
 		sourceOnly: false,
 		gcMemory: false,
+		gcMemoryInterval: 1,
 	};
 	while (args.length > 0) {
 		const option = args.shift();
@@ -635,6 +686,13 @@ function parseOptions(args: Array<string>): Options | undefined {
 		else if (option === "--shared-oracle" && command === "compare")
 			options.perRevisionOracle = false;
 		else if (option === "--gc-memory" && command === "compare") options.gcMemory = true;
+		else if (option === "--gc-memory-interval" && command === "compare") {
+			const interval = Number(take());
+			if (!Number.isSafeInteger(interval) || interval < 1)
+				throw new Error("--gc-memory-interval requires a positive integer");
+			options.gcMemoryInterval = interval;
+		} else if (option === "--bun" && command === "compare")
+			options.bun = path.resolve(take());
 		else if (option === "--candidate-nursery-max-bytes" && command === "compare") {
 			const bytes = Number(take());
 			if (!Number.isSafeInteger(bytes) || bytes < 4194304)
@@ -691,6 +749,10 @@ function parseOptions(args: Array<string>): Options | undefined {
 		throw new Error("GC memory options require --host native");
 	if (options.cold && options.host !== "node")
 		throw new Error("--cold requires --host node");
+	if (options.gcMemoryInterval !== 1 && !options.gcMemory)
+		throw new Error("--gc-memory-interval requires --gc-memory");
+	if (options.cold && options.bun !== undefined)
+		throw new Error("Bun references require a comparison without --cold");
 	if (options.cold) options.perRevisionOracle = false;
 	return options;
 }
@@ -827,6 +889,13 @@ if (import.meta.main) {
 															? "two Node oracles"
 															: "one Node oracle",
 														"two warmups",
+													]),
+											...(options.bun === undefined
+												? []
+												: [
+														options.perRevisionOracle
+															? "two Bun references"
+															: "one Bun reference",
 													]),
 											`${2 * options.pairs} measured compiler runs`,
 											...(options.gcMemory
