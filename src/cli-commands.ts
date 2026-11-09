@@ -103,7 +103,11 @@ import {
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
 import { writeSourceChunks } from "./generated-source.ts";
-import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
+import {
+	buildDevelopmentRunner,
+	buildLocalBinary,
+	prepareGeneratedSources,
+} from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
@@ -1161,55 +1165,49 @@ function prepareCommandState(
 		}
 
 		const programImage = frontend.programImage;
-		const output = reporter.phase("Generate native code", () =>
-			developmentFragments
-				? [
-						...developmentFragmentUnits(
-							frontend.runtimeArtifacts,
-							frontend.fragmentCompilerArtifacts,
-							entrypointPath,
-							maligatorCacheDirectory(),
-							assets,
+		function* generatedUnits() {
+			if (developmentFragments) {
+				yield* developmentFragmentUnits(
+					frontend.runtimeArtifacts,
+					frontend.fragmentCompilerArtifacts,
+					entrypointPath,
+					maligatorCacheDirectory(),
+					assets,
+				);
+			} else {
+				yield* emitProgramTranslationUnits(programImage, {
+					sourcePath: nativeSourcePath,
+					partitionRoot: process.cwd(),
+					compiled: compiledNativeOutput,
+					assets,
+					maligatorSurface: buildConfig.surface.maligator,
+					onRendererBailout: ({ file, name }) =>
+						reporter.warning(
+							`${file}: ${name || "<anonymous>"} runs in the bytecode interpreter because native code generation declined it`,
 						),
-						// Worker roots stay whole-program images behind the compiled registry.
-						...emitWorkerImageTranslationUnits(frontend.workerImages, {
-							sourcePath: nativeSourcePath,
-							partitionRoot: process.cwd(),
-							compiled: compiledNativeOutput,
-							assets,
-							maligatorSurface: buildConfig.surface.maligator,
-						}),
-					]
-				: [
-						...emitProgramTranslationUnits(programImage, {
-							sourcePath: nativeSourcePath,
-							partitionRoot: process.cwd(),
-							compiled: compiledNativeOutput,
-							assets,
-							maligatorSurface: buildConfig.surface.maligator,
-							onRendererBailout: ({ file, name }) =>
-								reporter.warning(
-									`${file}: ${name || "<anonymous>"} runs in the bytecode interpreter because native code generation declined it`,
-								),
-						}),
-						...emitWorkerImageTranslationUnits(frontend.workerImages, {
-							sourcePath: nativeSourcePath,
-							partitionRoot: process.cwd(),
-							compiled: compiledNativeOutput,
-							assets,
-							maligatorSurface: buildConfig.surface.maligator,
-						}),
-					],
-		);
+				});
+			}
+			yield* emitWorkerImageTranslationUnits(frontend.workerImages, {
+				sourcePath: nativeSourcePath,
+				partitionRoot: process.cwd(),
+				compiled: compiledNativeOutput,
+				assets,
+				maligatorSurface: buildConfig.surface.maligator,
+			});
+		}
 		if (command.kind === "build" && command.internal.emitC) {
-			for (const unit of output) writeSourceChunks(1, [...unit.sourceChunks, "\n"]);
+			for (const unit of generatedUnits())
+				writeSourceChunks(1, [...unit.sourceChunks, "\n"]);
 			return { dependencies, dependencyIdentities };
 		}
-		reporter.detail("Translation units", output.length);
-		reporter.detail(
-			"Generated C bytes",
-			output.reduce((total, unit) => total + unit.sourceCodeUnits, 0),
+		const output = reporter.phase("Generate native code", () =>
+			prepareGeneratedSources(
+				{ context: nativeContext, name, cacheSuffix: derivation.cacheSuffix },
+				generatedUnits(),
+			),
 		);
+		reporter.detail("Translation units", output.units.length);
+		reporter.detail("Generated C bytes", output.sourceCodeUnits);
 		const binaryPath = reporter.phase(
 			"Build native binary",
 			() =>

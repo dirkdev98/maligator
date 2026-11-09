@@ -118,7 +118,10 @@ export interface LocalBuildOptions {
 	/** Base name for the emitted `.c` and linked binary. */
 	name: string;
 	/** Emitted translation unit(s), each of which must already include `vm.h`. */
-	cSource: string | ReadonlyArray<string | GeneratedTranslationUnit>;
+	cSource:
+		| string
+		| ReadonlyArray<string | GeneratedTranslationUnit>
+		| GeneratedSourceFiles;
 	/** Surface compiler/archive output instead of swallowing it. */
 	verbose: boolean;
 	/** Entry-point translation unit; defaults to the test262 harness main. */
@@ -137,6 +140,80 @@ export interface LocalBuildOptions {
 	linkInputs?: ReadonlyArray<LinkInput>;
 	onWarning?: (message: string) => void;
 	onGeneratedObject?: (event: GeneratedObjectMeasurement) => void;
+}
+
+export interface GeneratedSourceFiles {
+	readonly units: ReadonlyArray<GeneratedObjectInput>;
+	readonly sourceCodeUnits: number;
+	readonly writeDurationMs: number;
+}
+
+function localBuildOutput(
+	options: Pick<LocalBuildOptions, "context" | "name" | "cacheSuffix" | "outDir">,
+) {
+	const { context } = options;
+	const artifactName = `${options.name}${buildSuffix(options.cacheSuffix ?? "", context.environment)}`;
+	const directory =
+		options.outDir ??
+		path.join(
+			BUILD_DIRECTORY,
+			context.plan.mode,
+			...(context.toolchain.cross === true ? [context.toolchain.rustTarget] : []),
+		);
+	return { directory, artifactName, binaryPath: path.join(directory, artifactName) };
+}
+
+/** Materialize each unit before its producer prepares another root or runtime image. */
+export function prepareGeneratedSources(
+	options: Pick<LocalBuildOptions, "context" | "name" | "cacheSuffix" | "outDir">,
+	sources: Iterable<string | GeneratedTranslationUnit>,
+): GeneratedSourceFiles {
+	const { directory, artifactName } = localBuildOutput(options);
+	mkdirSync(directory, { recursive: true });
+	const units: Array<GeneratedObjectInput> = [];
+	const ids = new Set<string>();
+	let sourceCodeUnits = 0;
+	let writeDurationMs = 0;
+	for (const input of sources) {
+		const startedAt = performance.now();
+		const id =
+			typeof input === "string"
+				? `source-${artifactDigest(input).slice(0, 16)}`
+				: input.id;
+		if (!/^[a-z0-9][a-z0-9._-]*$/.test(id))
+			throw new Error(`generated translation unit has unsafe id '${id}'`);
+		if (ids.has(id)) throw new Error(`duplicate generated translation unit id '${id}'`);
+		ids.add(id);
+		const sourcePath = path.join(
+			directory,
+			units.length === 0 ? `${artifactName}.c` : `${artifactName}.${id}.c`,
+		);
+		const digest = createHash("sha256");
+		const sourceChunks = typeof input === "string" ? [input] : input.sourceChunks;
+		const sourceBytes = writeSourceChunks(sourcePath, sourceChunks, digest);
+		sourceCodeUnits += typeof input === "string" ? input.length : input.sourceCodeUnits;
+		units.push({
+			sourcePath,
+			unitId: id,
+			sourceDigest: digest.digest("hex"),
+			sourceBytes,
+			role: "generated",
+			...(typeof input === "string"
+				? {}
+				: {
+						generatedKind: input.kind,
+						headerFiles: input.headerFiles,
+						definitions: input.definitions,
+						...(input.embeddedFileDigests === undefined
+							? {}
+							: { embeddedFileDigests: input.embeddedFileDigests }),
+					}),
+		});
+		writeDurationMs += performance.now() - startedAt;
+	}
+	if (units.length === 0)
+		throw new Error("buildLocalBinary requires at least one C translation unit");
+	return { units, sourceCodeUnits, writeDurationMs };
 }
 
 /** Exact inputs and output of one final native link. */
@@ -661,70 +738,39 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	// objcopy can reject large LTO ELFs after succeeding on a small probe.
 	const zigLinkTimeStrip =
 		context.plan.strip && context.toolchain.tools.strip?.args?.[0] === "objcopy";
-	const artifacts = ensureNativeArtifacts(context, options.verbose);
-	const artifactName = `${options.name}${buildSuffix(
-		options.cacheSuffix ?? "",
-		context.environment,
-	)}`;
-	const outputDirectory =
-		options.outDir ??
-		path.join(
-			BUILD_DIRECTORY,
-			context.plan.mode,
-			...(context.toolchain.cross === true ? [context.toolchain.rustTarget] : []),
-		);
+	const {
+		directory: outputDirectory,
+		artifactName,
+		binaryPath,
+	} = localBuildOutput(options);
 	mkdirSync(outputDirectory, { recursive: true });
-	const cPath = path.join(outputDirectory, `${artifactName}.c`);
-	const binaryPath = path.join(outputDirectory, artifactName);
-	const sourceInputs =
-		typeof options.cSource === "string" ? [options.cSource] : [...options.cSource];
-	if (sourceInputs.length === 0) {
-		throw new Error("buildLocalBinary requires at least one C translation unit");
-	}
-	const units: Array<{
-		id: string;
-		sourceChunks: ReadonlyArray<string>;
-		generatedKind?: GeneratedTranslationUnitKind;
-		headerFiles?: ReadonlyArray<string>;
-		definitions?: ReadonlyArray<GeneratedTranslationUnitDefinition>;
-		embeddedFileDigests?: ReadonlyArray<string>;
-	}> = sourceInputs.map((input) =>
-		typeof input === "string"
-			? {
-					id: `source-${artifactDigest(input).slice(0, 16)}`,
-					sourceChunks: [input],
-				}
-			: {
-					id: input.id,
-					sourceChunks: input.sourceChunks,
-					generatedKind: input.kind,
-					headerFiles: input.headerFiles,
-					definitions: input.definitions,
-					...(input.embeddedFileDigests === undefined
-						? {}
-						: { embeddedFileDigests: input.embeddedFileDigests }),
-				},
-	);
+	const sources =
+		typeof options.cSource === "object" && "units" in options.cSource
+			? options.cSource
+			: prepareGeneratedSources(
+					options,
+					typeof options.cSource === "string" ? [options.cSource] : options.cSource,
+				);
 	const unitIds = new Set<string>();
-	for (const unit of [...units, ...(options.externalUnits ?? [])]) {
-		if (!/^[a-z0-9][a-z0-9._-]*$/.test(unit.id)) {
-			throw new Error(`generated translation unit has unsafe id '${unit.id}'`);
+	for (const id of [
+		...sources.units.map((unit) => unit.unitId),
+		...(options.externalUnits ?? []).map((unit) => unit.id),
+	]) {
+		if (!/^[a-z0-9][a-z0-9._-]*$/.test(id)) {
+			throw new Error(`generated translation unit has unsafe id '${id}'`);
 		}
-		if (unitIds.has(unit.id)) {
-			throw new Error(`duplicate generated translation unit id '${unit.id}'`);
+		if (unitIds.has(id)) {
+			throw new Error(`duplicate generated translation unit id '${id}'`);
 		}
-		unitIds.add(unit.id);
+		unitIds.add(id);
 	}
-	let phaseStartedAt = performance.now();
-	const sourceMeasurements: Array<{ digest: string; bytes: number }> = [];
-	const cPaths = units.map((unit, index) => {
-		const sourcePath =
-			index === 0 ? cPath : path.join(outputDirectory, `${artifactName}.${unit.id}.c`);
-		const digest = createHash("sha256");
-		const bytes = writeSourceChunks(sourcePath, unit.sourceChunks, digest);
-		sourceMeasurements.push({ digest: digest.digest("hex"), bytes });
-		return sourcePath;
+	context.onBuildPhase?.({
+		phase: "write generated C",
+		durationMs: sources.writeDurationMs,
+		units: sources.units.length,
+		bytes: sources.units.reduce((total, source) => total + source.sourceBytes, 0),
 	});
+	const artifacts = ensureNativeArtifacts(context, options.verbose);
 	const externalArguments = ccExtraFlags(
 		context.plan,
 		context.environment,
@@ -752,40 +798,16 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			};
 		},
 	);
-	context.onBuildPhase?.({
-		phase: "write generated C",
-		durationMs: performance.now() - phaseStartedAt,
-		units: units.length,
-		bytes: sourceMeasurements.reduce((total, source) => total + source.bytes, 0),
-	});
 	const compileArguments = generatedCCompileArguments(context);
 	const thinLtoCache = thinLtoCacheArguments(context);
-	phaseStartedAt = performance.now();
+	let phaseStartedAt = performance.now();
 	const mainFile =
 		options.mainFile ?? path.join(context.runtimeDirectory, "test262_main.c");
 	const mainSource = readFileSync(mainFile);
 	const { objects: generatedObjects, projectionDurationMs } = ensureGeneratedObjects(
 		context,
 		[
-			...cPaths.map((sourcePath, index) => ({
-				sourcePath,
-				unitId: units[index]!.id,
-				sourceDigest: sourceMeasurements[index]!.digest,
-				sourceBytes: sourceMeasurements[index]!.bytes,
-				role: "generated" as const,
-				...(units[index]!.generatedKind === undefined
-					? {}
-					: { generatedKind: units[index]!.generatedKind }),
-				...(units[index]!.headerFiles === undefined
-					? {}
-					: { headerFiles: units[index]!.headerFiles }),
-				...(units[index]!.definitions === undefined
-					? {}
-					: { definitions: units[index]!.definitions }),
-				...(units[index]!.embeddedFileDigests === undefined
-					? {}
-					: { embeddedFileDigests: units[index]!.embeddedFileDigests }),
-			})),
+			...sources.units,
 			...externalInputs,
 			{
 				sourcePath: mainFile,

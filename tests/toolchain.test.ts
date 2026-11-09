@@ -19,7 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 import { normalizeNativeFeatures, selectNativeBuildPlan } from "../src/build-flags.ts";
 import { cargoCacheDirectory, maligatorCacheDirectory } from "../src/cache-root.ts";
 import { ensureCompilerWire } from "../src/compiler-bake.ts";
-import { buildLocalBinary } from "../src/local-build.ts";
+import { buildLocalBinary, prepareGeneratedSources } from "../src/local-build.ts";
 import type { GeneratedObjectMeasurement } from "../src/local-build.ts";
 import {
 	nativeBuildEnvironmentFingerprint,
@@ -749,20 +749,9 @@ printf '!<arch>\\n' > "$2"
 		);
 		expect(invocations).toContain(`-o ${binary}`);
 		expect(existsSync(`${binary}.c`)).toBe(true);
-		expect(phases.map((phase) => phase.phase)).toEqual([
-			"runtime C projection",
-			"runtime C object compile",
-			"runtime C · engine",
-			"runtime C · host",
-			"runtime C · runtime",
-			"runtime",
-			"rust",
-			"write generated C",
-			"generated C projection",
-			"generated C objects",
-			"link",
-			"publish binary",
-		]);
+		expect(phases.findIndex((phase) => phase.phase === "write generated C")).toBeLessThan(
+			phases.findIndex((phase) => phase.phase === "runtime"),
+		);
 		expect(phases.every((phase) => phase.durationMs >= 0)).toBe(true);
 		expect(phases.find((phase) => phase.phase === "write generated C")).toMatchObject({
 			units: 2,
@@ -1594,6 +1583,48 @@ printf '!<arch>\\n' > "$2"
 			"node-zlib",
 			"url",
 		]);
+	});
+
+	it("materializes each generated unit before preparing the next root", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		try {
+			const toolchain = inspectToolchain({
+				rootDir: fake.root,
+				rustDir: path.join(runtimeDirectory, "rust"),
+				env: fake.env,
+				needsCxx: false,
+				platform: "linux",
+			}).toolchain!;
+			const context = resolveNativeBuildContext({
+				toolchain,
+				runtimeDirectory,
+				cacheDirectory: path.join(fake.root, "cache"),
+				features: { evalEnabled: false, webPlatformEnabled: false },
+			});
+			const options = { context, name: "streamed", outDir: fake.root };
+			const first = "int first;\n";
+			const second = "int second;\n";
+			function* sources() {
+				yield first;
+				expect(readFileSync(path.join(fake.root, "streamed.c"), "utf8")).toBe(first);
+				yield second;
+			}
+			const prepared = prepareGeneratedSources(options, sources());
+			const result = buildLocalBinary({ ...options, cSource: prepared, verbose: false });
+			expect(existsSync(result.binaryPath)).toBe(true);
+			for (const [index, source] of [first, second].entries()) {
+				const unit = prepared.units[index]!;
+				expect(readFileSync(unit.sourcePath, "utf8")).toBe(source);
+				expect(
+					result.measurements.objects.find((object) => object.unit === unit.unitId),
+				).toMatchObject({
+					sourceBytes: Buffer.byteLength(source),
+				});
+			}
+		} finally {
+			rmSync(fake.root, { recursive: true, force: true });
+		}
 	});
 
 	it("invalidates changed and incomplete runtime artifacts", () => {

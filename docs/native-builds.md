@@ -125,7 +125,10 @@ Normal builds restore cached VM definitions before generated-C emission, skippin
 unchanged graph, semantic, optimization, allocation, and lowering work while
 preserving native-code metadata. Generated translation units and the driver are then
 compiled to independently content-addressed objects; unchanged objects are relinked
-without invoking their C compilation again. Development overlays cache each
+without invoking their C compilation again. The product CLI writes each root's generated
+units to its build directory before emitting the next root or preparing native runtime
+artifacts. Only file identities and unit metadata remain live during runtime preparation.
+Development overlays cache each
 unit's C source separately from its metadata. Total generated output can
 exceed the host engine's string limit without serializing one aggregate string
 or expanding C source through JSON escaping. A generated unit (including the eval
