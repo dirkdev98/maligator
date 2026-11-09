@@ -22,8 +22,9 @@ under the npm `alpha` dist-tag. The release automation does not attempt to chang
 remove the registry's `latest` tag.
 
 Prepare the next numeric alpha with `npm run version:alpha`, write its release notes in
-`docs/releases/<version>.md`, commit the release preparation, and push that exact commit
-to `main` before dispatching the workflow. The notes become the GitHub release body.
+`docs/releases/<version>.md`, and run `npm run site:update` so the website shows the new
+version. Commit that as `release: prepare alpha.<n>` and push that exact commit to
+`main` before dispatching the workflow. The notes become the GitHub release body.
 
 ## Prepare the packages
 
@@ -78,6 +79,9 @@ gh workflow run npm-release.yml --ref main -f release_tag="$release_tag"
 The retry path accepts only the exact version in `package.json`, checks that the
 release is an immutable prerelease whose tag commit is contained in `main`, and
 revalidates every downloaded tarball before publishing.
+
+Once every package shows the version under the `alpha` dist-tag, close the issues the
+release notes list as fixed.
 
 ## One-time repository setup
 

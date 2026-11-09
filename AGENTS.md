@@ -148,6 +148,10 @@ establish acceptance. A quick check is one run without warmups, reported as
 indicative. Use the [benchmark reference](docs/benchmarking.md) for commands, budgets,
 and resume rules.
 
+Report performance next to Node.js and Bun on the same workload:
+`bench:performance -- gap --bun <path>`, or `bench:ffi` for C and Bun. Say whether
+each gap grew or shrank.
+
 Report what was exercised, failed, and left unverified. Retain the evidence needed
 to review the current change; historical timings and old passes are not current
 validation. Cite the retained [run report](docs/testing.md#reports), not the mutable
