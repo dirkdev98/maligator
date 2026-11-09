@@ -38,10 +38,6 @@ themselves commit the project to optimizing every API.
 
 ## Core IR contract
 
-- [ ] Repair the boolean unboxing proof in `lower-known-operation-results` exposed by
-      `MAL_DEBUG=true` development compilation of the string-span case fixture with Node
-      globals. Preserve the verifier and establish whether runtime lowering is affected.
-
 Core SSA is the only optimizing middle end for development, testing, interpreted
 execution, native execution, and production builds. Internal formats use a hard
 cut-over: schema changes invalidate cached artifacts rather than introducing adapters

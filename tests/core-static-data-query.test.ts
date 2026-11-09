@@ -1,11 +1,15 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { corePrimitiveEffectRefinement } from "../src/compiler/core/core-ir-value-kinds.ts";
 import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
+import { lowerKnownOperationResults } from "../src/compiler/core/core-known-operation-results.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
 import { coreStaticDataQueryPlan } from "../src/compiler/core/core-static-data-query.ts";
 import { CoreStaticValueAnalysis } from "../src/compiler/core/core-static-values.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
@@ -24,6 +28,7 @@ import {
 import { nativeInstructionEffects } from "../src/compiler/target/program-image.ts";
 import { validateRuntimeImageMetadata } from "../src/compiler/target/runtime-image.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
+import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function inspect(body: string) {
@@ -317,6 +322,59 @@ describe("static-data query representation", () => {
 });
 
 describe("constant static-array search results", () => {
+	it.each([
+		["includes", "boolean", 0],
+		["includes", "boolean", 2],
+		["indexOf", "i32", 2],
+		["lastIndexOf", "f64", 2],
+	] as const)(
+		"preserves %s's existing %s result when lowering a %s-element search",
+		(method, representation, length) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock([{}, {}]);
+			const element = builder.blockParameterValue(entry, 0);
+			const needle = builder.blockParameterValue(entry, 1);
+			const [array] = builder.appendInstruction(entry, "createArray", [], {
+				attributes: { length },
+			});
+			if (length > 0) {
+				const [key] = builder.appendInstruction(entry, "createNumber", [], {
+					attributes: { value: 0 },
+				});
+				builder.appendInstruction(entry, "defineProperty", [array!, key!, element], {
+					attributes: { enumerable: true },
+				});
+			}
+			const [result] = builder.appendInstruction(entry, "callKnown", [array!, needle], {
+				attributes: { operation: `Array.prototype.${method}` },
+				outputRepresentations: [representation],
+			});
+			builder.setTerminator(entry, { kind: "return", value: result! });
+			const fn = program.function(builder.finish(entry).function);
+			const baseContext = programAnalysisContext();
+			const context = {
+				...baseContext,
+				facts: {
+					...baseContext.facts,
+					world: { ...baseContext.facts.world, primordialPolicy: "locked" as const },
+				},
+			};
+			const report = new CoreOptimizationReportBuilder(program);
+			const analyses = new CoreAnalysisManager(program, context, report);
+			new CoreFunctionPassScheduler(program, context, analyses, report, fn.id, {
+				optionalMaxRunsPerWorkItem: 1,
+				verification: "per-pass",
+			}).runComponent("memory", [lowerKnownOperationResults]);
+			expect(
+				fn.instructionOpcodeName(
+					coreInstructionId(fn.kernel.valueDefinitionOwner(result!)),
+				),
+			).not.toBe("callKnown");
+			expect(fn.valueRepresentation(result!)).toBe(representation);
+		},
+	);
+
 	it.each(["includes", "indexOf", "lastIndexOf"])(
 		"keeps native BigInt literal wrapping in %s comparisons",
 		(method) => {

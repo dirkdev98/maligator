@@ -303,7 +303,17 @@ export const lowerKnownOperationResults: CoreFunctionPass = {
 					}
 				}
 			}
-			editor.replaceInstruction(instruction, "move", [result]);
+			const producer = literalDefinition(fn, result)!;
+			const start = fn.kernel.instructionOperandStart(producer);
+			const inputs = Array.from(
+				{ length: fn.kernel.instructionOperandCount(producer) },
+				(_, index) => fn.kernel.operandAt(start + index),
+			);
+			// Retain the call's scalar storage without unboxing a newly boxed temporary.
+			editor.replaceInstruction(instruction, fn.instructionOpcodeName(producer), inputs, {
+				attributes: fn.instructionAttributes(producer),
+			});
+			editor.removeInstruction(producer);
 			return editor.commit();
 		}
 		return undefined;
