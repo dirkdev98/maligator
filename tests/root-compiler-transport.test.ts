@@ -338,8 +338,8 @@ test("ordered root results preserve full compiler, wire, diagnostic and C artifa
 				maligatorSurface: config.surface.maligator,
 			};
 			assert.deepEqual(
-				emitWorkerImageTranslationUnits(parallel.workers, emission),
-				emitWorkerImageTranslationUnits(serial, emission),
+				[...emitWorkerImageTranslationUnits(parallel.workers, emission)],
+				[...emitWorkerImageTranslationUnits(serial, emission)],
 			);
 			for (const file of files)
 				assert.ok(parallel.dependencies.some((input) => input.path === file));

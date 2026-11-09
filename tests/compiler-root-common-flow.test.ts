@@ -136,10 +136,12 @@ test("serial and async shared flow retain complete compiler/runtime/C outputs an
 
 test("workers compiled from another directory emit the same code units", () => {
 	const codeUnits = (options: CompileBuildFrontendOptions) =>
-		emitWorkerImageTranslationUnits(
-			compileBuildFrontend({ ...options, forceCompile: true }).workerImages,
-			{ partitionRoot: path.dirname(options.entrypoint) },
-		)
+		[
+			...emitWorkerImageTranslationUnits(
+				compileBuildFrontend({ ...options, forceCompile: true }).workerImages,
+				{ partitionRoot: path.dirname(options.entrypoint) },
+			),
+		]
 			.filter((unit) => unit.kind === "code")
 			.map((unit) => ({ id: unit.id, source: unit.sourceChunks.join("") }));
 

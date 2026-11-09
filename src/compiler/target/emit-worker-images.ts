@@ -3,25 +3,23 @@ import type { CompiledWorkerImage } from "../pipeline/compile-worker-images.ts";
 import { cEscapeString, emitProgramTranslationUnits } from "./emit-program-image.ts";
 import type { EmitOptions, GeneratedTranslationUnit } from "./emit-program-image.ts";
 
-export function emitWorkerImageTranslationUnits(
+export function* emitWorkerImageTranslationUnits(
 	workers: ReadonlyArray<CompiledWorkerImage>,
 	options: EmitOptions = {},
-): Array<GeneratedTranslationUnit> {
-	const units = workers.flatMap((worker) =>
-		emitProgramTranslationUnits(worker.image, {
+): Generator<GeneratedTranslationUnit> {
+	for (const worker of workers) {
+		for (const unit of emitProgramTranslationUnits(worker.image, {
 			...options,
 			symbolSuffix: `_worker_${worker.id}`,
-		}).map((unit) => ({ ...unit, id: `worker-${worker.id}-${unit.id}` })),
+		}))
+			yield { ...unit, id: `worker-${worker.id}-${unit.id}` };
+	}
+	yield emitWorkerRegistryTranslationUnit(
+		workers.map((worker) => ({
+			entry: worker.entry,
+			imageSymbol: `mal_runtime_image_worker_${worker.id}`,
+		})),
 	);
-	units.push(
-		emitWorkerRegistryTranslationUnit(
-			workers.map((worker) => ({
-				entry: worker.entry,
-				imageSymbol: `mal_runtime_image_worker_${worker.id}`,
-			})),
-		),
-	);
-	return units;
 }
 
 export function emitWorkerRegistryTranslationUnit(

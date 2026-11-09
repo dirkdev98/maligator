@@ -34,7 +34,7 @@ test("worker roots survive a frontend cache hit independently of parent runtime 
 		expect(restored.cache).toBe("hit");
 		expect(restored.workerImages[0]!.wire).toEqual(first.workerImages[0]!.wire);
 		expect(restored.workerImages[0]!.image.runtime.entrypointPath).toBe(worker);
-		const registry = emitWorkerImageTranslationUnits(restored.workerImages).find(
+		const registry = [...emitWorkerImageTranslationUnits(restored.workerImages)].find(
 			(unit) => unit.id === "worker-registry",
 		)!;
 		expect(registry.sourceChunks.join("")).toContain(
