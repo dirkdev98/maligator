@@ -1014,6 +1014,8 @@ typedef struct MalFfiHandleObject {
     bool owns_storage;
     /** Cleanup is in progress; callbacks cannot use or close this resource. */
     bool closing;
+    /** Selected for collection; weak aliases cannot resurrect this wrapper. */
+    bool condemned;
     bool worker_closing;
     /** A result conversion still owns this resource's undelivered lifetime. */
     bool provisional;
@@ -1510,15 +1512,34 @@ mal_allocation_failed:
     return mal_ffi_out_of_memory(vm);
 }
 
-static MalFfiHandleObject *ffi_handle_find(
+typedef struct MalFfiHandleLookup {
+    MalFfiHandleObject *handle;
+    bool reserved;
+} MalFfiHandleLookup;
+
+static MalFfiHandleLookup ffi_handle_find(
     MalFfiState *state, const MalFfiHandleType *type, const void *pointer) {
-    if (state->handle_capacity == 0) return nullptr;
+    if (state == nullptr || state->handle_capacity == 0) return (MalFfiHandleLookup) {0};
     for (usize slot = ffi_handle_slot(type, pointer, state->handle_capacity);;
          slot = (slot + 1) & (state->handle_capacity - 1)) {
         MalFfiHandleEntry *entry = &state->handles[slot];
-        if (entry->handle == nullptr) return nullptr;
-        if (entry->type == type && entry->pointer == pointer) return entry->handle;
+        if (entry->handle == nullptr) return (MalFfiHandleLookup) {0};
+        if (entry->type != type || entry->pointer != pointer) continue;
+        if (entry->handle->condemned) return (MalFfiHandleLookup) {.reserved = true};
+        // Weak recovery can publish into an already-traced old object. Neither a
+        // temporary root nor a generational card preserves that incremental edge.
+        if (mal_gc_marking_active)
+            mal_gc_satb_record(mal_value_from_heap((MalHeapHeader *) entry->handle));
+        return (MalFfiHandleLookup) {.handle = entry->handle};
     }
+}
+
+static bool ffi_handle_available(MalVm *vm, MalFfiHandleLookup lookup) {
+    if (!lookup.reserved) return true;
+    if (!mal_ffi_threw(vm))
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "A C resource is awaiting collected handle cleanup");
+    return false;
 }
 
 static void ffi_handle_place(MalFfiState *state, MalFfiHandleEntry entry) {
@@ -2319,6 +2340,34 @@ static void ffi_scan_roots(MalVm *vm, void *data) {
     }
 }
 
+static void ffi_clean_weak_handles(MalVm *vm, void *data, bool (*is_live)(MalValue)) {
+    (void) data;
+    MalFfiState *state = vm->ffi;
+    if (state == nullptr) return;
+    for (usize slot = 0; slot < state->handle_capacity;) {
+        MalFfiHandleObject *handle = state->handles[slot].handle;
+        if (handle == nullptr || is_live(mal_value_from_heap((MalHeapHeader *) handle))) {
+            slot++;
+            continue;
+        }
+        const MalFfiHandleType *policy = ffi_handle_policy(handle);
+        if (handle->native != nullptr || handle->owns_storage ||
+            (handle->ownership == MAL_FFI_HANDLE_OWNED && policy->collect && policy->destroy != nullptr)) {
+            // Keep cleanup ownership reserved until the ordinary finalizer runs.
+            handle->condemned = true;
+            slot++;
+        } else {
+            ffi_handle_unregister(handle);
+            // Backshift deletion may have moved another entry into this slot.
+        }
+    }
+    // Struct handles are not interned, but can still own weak callback registrations.
+    for (MalFfiNativeHandle *native = state->native_handles; native != nullptr; native = native->next) {
+        MalFfiHandleObject *handle = ffi_handle(native->wrapper);
+        if (handle != nullptr && !is_live(native->wrapper)) handle->condemned = true;
+    }
+}
+
 static void ffi_async_free(MalVm *vm) {
     ffi_async_cancel_queued(vm);
     MalFfiAsync **link = &ffi_async_pending;
@@ -2545,7 +2594,12 @@ MalVm *mal_ffi_callback_owner_vm(MalFfiCallback *callback) {
     MalVm *vm = mal_ffi_callback_vm(callback);
     if (vm == nullptr) return nullptr;
     MalFfiHandleObject *owner = ffi_handle(callback->owner);
-    return owner == nullptr || owner->value == nullptr || owner->closing ? nullptr : vm;
+    if (owner == nullptr || owner->value == nullptr || owner->closing || owner->condemned) return nullptr;
+    if (mal_gc_marking_active) {
+        mal_gc_satb_record(callback->owner);
+        mal_gc_satb_record(callback->function);
+    }
+    return vm;
 }
 
 void mal_ffi_callback_hold(MalFfiCallback *callback) {
@@ -3369,6 +3423,7 @@ static void ffi_handle_finalize(MalHeapHeader *cell) {
         native->owner_type = ffi_handle_policy(handle);
         native->owned = handle->ownership == MAL_FFI_HANDLE_OWNED;
         native->owns_storage = handle->owns_storage;
+        ffi_retired_register(native);
         handle->native = nullptr;
         handle->owns_storage = false;
     } else if (handle->value != nullptr && handle->ownership == MAL_FFI_HANDLE_OWNED && ffi_handle_policy(handle)->collect
@@ -3621,6 +3676,7 @@ enum {
 };
 
 static u32 ffi_discard_flags(MalVm *vm, MalFfiHandleObject *handle) {
+    if (handle->condemned) return MAL_FFI_DISCARD_PRESENT | MAL_FFI_DISCARD_VALID;
     u32 flags = MAL_FFI_DISCARD_PRESENT;
     if (handle->value != nullptr && ffi_scope_active(vm, handle->scope)
         && !ffi_handle_owner_expired(vm, handle)) flags |= MAL_FFI_DISCARD_VALID;
@@ -3681,8 +3737,9 @@ bool mal_ffi_discard_needed(MalVm *vm, const MalFfiDiscards *discards,
     if (mal_ffi_is_library_resource(type, value)) return false;
     u32 flags = 0;
     if (vm != nullptr) {
-        MalFfiHandleObject *known = vm->ffi == nullptr ? nullptr : ffi_handle_find(vm->ffi, family, value);
-        if (known != nullptr) flags = ffi_discard_flags(vm, known);
+        MalFfiHandleLookup lookup = ffi_handle_find(vm->ffi, family, value);
+        if (lookup.reserved) return false;
+        if (lookup.handle != nullptr) flags = ffi_discard_flags(vm, lookup.handle);
     } else {
         MalFfiDiscardState *state = discards->state;
         if (state == nullptr || !atomic_load_explicit(&state->frozen, memory_order_acquire)) abort();
@@ -3934,7 +3991,9 @@ static MalValue ffi_new_handle(
         return mal_value_new_undefined();
     }
     MalFfiState *state = type->size == 0 ? ffi_state(vm) : nullptr;
-    MalFfiHandleObject *open = state == nullptr ? nullptr : ffi_handle_find(state, ffi_handle_family(type), value);
+    MalFfiHandleLookup lookup = ffi_handle_find(state, ffi_handle_family(type), value);
+    if (!ffi_handle_available(vm, lookup)) return mal_value_new_undefined();
+    MalFfiHandleObject *open = lookup.handle;
     if (fresh && open != nullptr && (open->closing || !ffi_handle_owners_open(vm, open))) {
         ffi_replaced_drop(open->value);
         ffi_handle_forget(open);
@@ -4032,6 +4091,7 @@ static MalValue ffi_new_handle(
     handle->ownership = claim == nullptr && owned ? MAL_FFI_HANDLE_OWNED : MAL_FFI_HANDLE_BORROWED;
     handle->owns_storage = owns_storage;
     handle->closing = false;
+    handle->condemned = false;
     handle->worker_closing = false;
     handle->worker_close_next = nullptr;
     handle->provisional = false;
@@ -4130,6 +4190,8 @@ void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
     MalFfiResultClaim *claim = ffi_result_find(results, type, value);
     fresh |= claim != nullptr && claim->fresh;
     if (!ffi_retired_guard(vm, type, value, fresh)) return;
+    MalFfiHandleLookup lookup = ffi_handle_find(vm->ffi, ffi_handle_family(type), value);
+    if (!ffi_handle_available(vm, lookup)) return;
     if (results->state == nullptr) {
         MalFfiState *state = ffi_state(vm);
         if (state == nullptr) { if (!mal_ffi_threw(vm)) mal_ffi_out_of_memory(vm); }
@@ -4144,8 +4206,7 @@ void mal_ffi_result_claim(MalVm *vm, MalFfiResults *results,
         // Fresh hints share identity; the first actual claim chooses canonical metadata.
         claim->type = type;
         claim->inventoried = true;
-        MalFfiHandleObject *open = vm->ffi == nullptr ? nullptr
-            : ffi_handle_find(vm->ffi, ffi_handle_family(type), value);
+        MalFfiHandleObject *open = lookup.handle;
         if (open != nullptr) {
             claim->handles[0] = mal_value_from_heap((MalHeapHeader *) open);
             claim->flags = ffi_discard_flags(vm, open);
@@ -4339,8 +4400,12 @@ MalValue mal_ffi_new_owner_handle(
     MalRootSpan root;
     mal_gc_root(&root, roots, 2);
     MalFfiState *state = ffi_state(vm);
-    MalFfiHandleObject *candidate = state == nullptr ? nullptr
-        : ffi_handle_find(state, ffi_handle_family(type), value);
+    MalFfiHandleLookup lookup = ffi_handle_find(state, ffi_handle_family(type), value);
+    if (!ffi_handle_available(vm, lookup)) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    MalFfiHandleObject *candidate = lookup.handle;
     if (candidate != owner && ffi_result_pending(vm, type, value, nullptr) != nullptr) {
         mal_ffi_expected(vm, &site, "a delivered resource before assigning an owner");
         mal_gc_unroot(&root);
@@ -4382,7 +4447,9 @@ MalValue mal_ffi_new_library_handle(
         mal_ffi_expected(vm, &site, "a delivered resource for library lifetime");
         return mal_value_new_undefined();
     }
-    MalFfiHandleObject *candidate = ffi_handle_find(state, ffi_handle_family(type), value);
+    MalFfiHandleLookup lookup = ffi_handle_find(state, ffi_handle_family(type), value);
+    if (!ffi_handle_available(vm, lookup)) return mal_value_new_undefined();
+    MalFfiHandleObject *candidate = lookup.handle;
     if (candidate != nullptr && ffi_scope_active(vm, candidate->scope)
         && !ffi_handle_owner_expired(vm, candidate)) {
         if (candidate->ownership == MAL_FFI_HANDLE_OWNED || candidate->ownership == MAL_FFI_HANDLE_CHILD
@@ -4645,7 +4712,8 @@ bool mal_ffi_callback_own(MalVm *vm, MalFfiCallback *callback, MalValue value,
 bool mal_ffi_callback_pin_owner(MalVm *vm, MalFfiCallback *callback, MalValue *value, void **pin,
     const MalFfiSite *site) {
     MalFfiHandleObject *handle = ffi_handle(callback->owner);
-    if (handle == nullptr) return mal_ffi_expected(vm, site, "a live registration owner");
+    if (handle == nullptr || handle->condemned)
+        return mal_ffi_expected(vm, site, "a live registration owner");
     if (!ffi_handle_held(vm, handle, site)) return false;
     handle->pins++;
     *value = callback->owner;
@@ -5058,6 +5126,7 @@ void mal_ffi_install(
     mal_gc_register_tracer(MAL_HEAP_FFI_HANDLE_OBJECT, ffi_handle_trace);
     mal_vm_register_native_getter_read(ffi_scalar_field_read);
     mal_gc_register_root_source(ffi_scan_roots, nullptr);
+    mal_gc_register_weak_source(ffi_clean_weak_handles, nullptr);
     for (i32 index = 0; index < count; index++) {
         const MalFfiExport *entry = ffi_find_export(library, slots[index].name);
         if (entry == nullptr) {

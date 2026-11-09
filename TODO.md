@@ -133,10 +133,6 @@ Use representative compiled workloads to locate executed dispatch, allocation,
 property and collection costs. Keep field facts bounded and consumer-driven;
 static generated-code size and helper counts do not establish runtime cost.
 
-- [ ] Add guarded `Math.imul` and `Math.clz32` admission through existing builtin descriptors
-      for repeated checksum and bitset consumers. Require default-world runtime benefit,
-      bounded analysis/code growth and mutation/coercion fallbacks.
-
 - [ ] Test bounded method target sets for one repeated Core-store receiver using existing
       provenance, target caps and incremental summaries. Track relevant property/prototype
       writes and retain open fallbacks. Stop if exactness needs whole-heap flow; require
@@ -932,8 +928,3 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       weak-cache workload and a no-weak-entry control, recording scan work, total CPU,
       pause time and bounded index memory. Remove or simplify the optimization if it
       cannot pay; preserve weak-cleanup SATB correctness independently.
-
-- [ ] Clear an exhausted Map/Set iterator's target after releasing its storage pin and
-      required compaction, with SATB deletion protection. Cover ordinary and direct cursor
-      exhaustion and prove the owner can be collected while repeated next calls stay
-      exhausted.

@@ -66,4 +66,6 @@ void mal_iterator_object_release_collection_pin(MalIteratorObject *iterator) {
     mal_iterator_object_finalize_collection_pin(iterator);
     if (set != nullptr) mal_set_object_compact(set);
     else mal_map_object_compact(map);
+    if (mal_gc_marking_active) mal_gc_satb_record(iterator->target);
+    iterator->target = MAL_VALUE_UNDEFINED;
 }

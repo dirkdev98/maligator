@@ -124,6 +124,13 @@ void mal_gc_mark_values(const MalValue *values, i32 count);
 typedef void (*MalGcRootSourceFn)(MalVm *vm, void *data);
 void mal_gc_register_root_source(MalGcRootSourceFn fn, void *data);
 
+/* External weak tables must stop exposing dead cells after the ephemeron fixpoint,
+ * before sweep can reclaim them. Like root sources, registrations persist across
+ * sequential VMs. Cleanup may remove weak entries, but must not allocate managed
+ * objects, publish heap edges, invoke JS, or destroy resources. */
+typedef void (*MalGcWeakSourceFn)(MalVm *vm, void *data, bool (*is_live)(MalValue));
+void mal_gc_register_weak_source(MalGcWeakSourceFn fn, void *data);
+
 /* Per-type finalizer hook: the host/runtime layers register a finalizer for a heap
  * type they define (e.g. the fetch Response/Request body buffers), so the engine's
  * sweep frees their owned memory without a compile-time dependency on those types.

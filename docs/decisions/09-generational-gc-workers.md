@@ -75,7 +75,20 @@ elements. A batch copies at most 2,048 values. All other mutable layouts are
 traced by the mutator or while JavaScript is parked. Weak processing, all
 finalizers, sweep, allocator bitmaps, and large-object reclamation remain with
 the mutator. Sweep starts after all marking and weak processing finish; no worker
-can still update a mark. Native block sweeping therefore uses relaxed atomic
+can still update a mark. External weak sources remove dead non-owning FFI aliases
+at the ephemeron fixpoint. Cleanup-owning handles reserve their resource until
+ordinary finalization, and detached native leases preserve that reservation until
+their last release. Weak lookups and owner-bound callbacks shade recovered values
+during marking; condemned callback owners cannot enter JavaScript during sweep.
+Weak-source registrations belong to the isolate and read the current VM, so they
+remain safe across sequential VMs without retaining a discarded host subsystem.
+
+Exhausted Map/Set iterators release their storage pin, compact the collection, and
+clear their target with an SATB deletion barrier. A retained exhausted iterator
+therefore keeps its sticky completion state without retaining its collection.
+Finalization only releases the storage pin and never compacts or publishes edges.
+
+Native block sweeping therefore uses relaxed atomic
 mark loads and stores, with no read-modify-write claim needed. Moving sweep to workers
 would need exclusive block ownership and a separate mutator-affine finalization
 handoff; it is deferred unless matched

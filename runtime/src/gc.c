@@ -207,6 +207,25 @@ void mal_gc_register_root_source(MalGcRootSourceFn fn, void *data) {
     g_root_source_count++;
 }
 
+#define MAL_GC_MAX_WEAK_SOURCES 16
+typedef struct MalGcWeakSource {
+    MalGcWeakSourceFn fn;
+    void *data;
+} MalGcWeakSource;
+static MAL_ISOLATE_LOCAL MalGcWeakSource g_weak_sources[MAL_GC_MAX_WEAK_SOURCES];
+static MAL_ISOLATE_LOCAL i32 g_weak_source_count = 0;
+
+void mal_gc_register_weak_source(MalGcWeakSourceFn fn, void *data) {
+    for (i32 i = 0; i < g_weak_source_count; ++i) {
+        if (g_weak_sources[i].fn == fn && g_weak_sources[i].data == data) return;
+    }
+    if (g_weak_source_count == MAL_GC_MAX_WEAK_SOURCES) {
+        fprintf(stderr, "[gc] weak source capacity exceeded\n");
+        abort();
+    }
+    g_weak_sources[g_weak_source_count++] = (MalGcWeakSource) {fn, data};
+}
+
 /* Per-type finalizers/tracers name code for a heap type, not isolate state, so the
  * registry is process-wide. Every registration of a type installs the same function;
  * relaxed atomics let another isolate's helper read a slot while a mutator installs it. */
@@ -3205,6 +3224,9 @@ static void mal_gc_weak_pass(void) {
     // Collector-owned deletion of dead weak entries must not put those edges back
     // into SATB after the ephemeron fixpoint has completed.
     mal_gc_marking_active = false;
+
+    for (i32 i = 0; i < g_weak_source_count; ++i)
+        g_weak_sources[i].fn(g_gc_vm, g_weak_sources[i].data, mal_gc_is_marked);
 
     for (usize i = 0; i < g_gc->weak_maps_count; ++i) {
         MalWeakMapObject *map = g_gc->weak_maps[i];
