@@ -486,6 +486,11 @@ without `--program` and compares those snapshots with `--host node`. These contr
 measure the changed compiler's own planning and emission cost, while each revision's
 output is checked against its own oracle. They run separately from the memory-policy
 experiment, which uses one frozen compiler program throughout.
+Dispatch with `compiler_program=revision` to build each native compiler from its own
+revision. This includes producer changes in native timings as well as their generated
+code's execution cost. That mode adds repeated full-input comparisons on both native
+and Node hosts, with each revision checked against its own output oracle. The input
+tree remains frozen to the baseline capture in both modes.
 
 Warm comparisons require each capture's native output to match its own Node
 output on the same frozen baseline input.
