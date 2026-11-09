@@ -97,7 +97,7 @@ maligator cache prune [--max-gb number] [--min-age-days number]
 maligator cache clear --all
 ```
 
-The cache keeps itself within a budget: after a command, Maligator trims it in the background once it passes 20 GiB, back to 15 GiB. On a volume with at least 200 GiB available to the cache the limit is 100 GiB, trimmed back to 40 GiB. `MALIGATOR_CACHE_MAX_GB` fixes the limit and `MALIGATOR_CACHE_MAINTENANCE=off` turns the background trim off; CI runners (`CI=true`) skip it. Entries used in the last hour and scratch of running commands are never removed, so other projects keep working while it runs.
+The cache keeps itself within a budget: after a command, Maligator trims it in the background once it passes 20 GiB, back to 15 GiB. On a volume with at least 200 GiB available to the cache the limit is 100 GiB, trimmed back to 40 GiB. `MALIGATOR_CACHE_MAX_GB` fixes the limit and `MALIGATOR_CACHE_MAINTENANCE=off` turns the background trim off; CI runners (`CI=true`) skip it. Maintenance normally protects entries used within the last hour. Below 10 GiB of free disk space, it can trim below the normal budget and protects the last ten minutes instead. Active command scratch remains protected.
 
 `status` reports Maligator-owned cache usage, the budget and the last trim. `prune` removes eligible stale, rebuildable entries right away. Its default target is the budget's trim-back size and its minimum age is 1 day; protections can leave more than the target. Use `--dry-run` to inspect candidates and `--verbose` for each entry. `clear --all` explicitly removes rebuildable cache entries. See [Troubleshooting](/guides/troubleshooting#inspect-cache-usage).
 

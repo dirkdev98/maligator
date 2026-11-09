@@ -59,8 +59,9 @@ for configuration.
 
 `run` and `dev` use compile-time-specialized runtimes embedded in the platform
 package for locked or mutable primordials, configured assets, the Web and Node
-surfaces, and Realm support when Intl is disabled. Those profiles do not need a local
-native toolchain. `dev` retains compiler identities between edits and restarts a fresh
+surfaces, and Realm support when Intl, profiling, and C libraries are disabled.
+Those profiles do not need a local native toolchain. `dev` retains compiler identities
+between edits and restarts a fresh
 application VM after every successful rebuild. Build failures keep the watcher alive
 for recovery on the next edit.
 
@@ -92,14 +93,14 @@ defaults, availability, and direct links.
 
 ## Build toolchain
 
-`maligator test` and supported `maligator run` profiles use the development runtime
-embedded in the platform CLI and do not require a native toolchain. Native `build`
-commands and development runs using Intl require:
+Supported `run`, `dev`, and `test` profiles use the development runtime embedded in
+the platform CLI. Native builds, profiling, Intl-enabled development execution, and
+projects with C libraries require:
 
 - A C23 compiler and archive tool: Apple clang, clang 19 or newer, or GCC 15 or
   newer
 - Rustup with the `cargo` and `rustc` toolchain selected by Maligator
-- A C++ compiler/runtime only when `surface.webPlatform` is enabled
+- A C++ compiler/runtime when `surface.webPlatform` or `surface.node` is enabled
 
 On macOS, install Apple command-line tools with `xcode-select --install`. On Linux,
 install a recent compiler and set `CC` and `CXX` when it is not your system default.

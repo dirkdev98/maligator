@@ -49,11 +49,9 @@ Responsibilities are divided as follows:
 | Runtime personality | JS objects, roots, promise settlement, normalized header views, redirects/cookies and other personality policy              | File descriptors, parser structs, TLS state                          |
 | Entry/embedder      | Runtime selection and turn pumping                                                                                          | Protocol parsing or direct JS invocation from I/O callbacks          |
 
-`libMalHost.a` must eventually compile without `vm.h`. The temporary attachment in
-`runtime/src/host/host.h` may remain as entry/embedder glue, but protocol modules
-must receive `MalHost *` and opaque handles, never `MalVm *`. Runtime timer lists
-move out of `MalHost`; the host provides clock/timer tasks while each personality
-owns callback values and GC roots.
+Protocol modules receive `MalHost *` and opaque handles. Runtime adapters own
+callback values and GC roots. Remaining timer-ownership and embedder-boundary work
+is tracked in [the host roadmap](../../TODO.md#active-host-work).
 
 ### Host ABI
 
@@ -114,9 +112,10 @@ The transport header list is not the WinterTC `Headers` object.
   are not exposed by a personality, it must explicitly discard that task; the host
   still parses framing correctly.
 
-The default limits are 64 KiB per start-line-plus-header block, 16 KiB per field,
-256 fields, and 64 KiB per emitted body buffer. They are host options with finite
-hard maxima. There is no default whole-body limit because bodies are streamed.
+The codec fixes limits at 64 KiB per start-line-plus-header block, 16 KiB per field,
+256 fields, and 64 KiB per emitted body buffer. Configurable header budgets remain
+in [the host roadmap](../../TODO.md#active-host-work). The transport streams bodies;
+adapters can impose their own buffering limits.
 
 ### Backpressure
 
@@ -204,12 +203,12 @@ cross-source ordering is the order in which the reactor thread enqueues tasks.
 
 ### DNS and sockets
 
-The C host owns address parsing, DNS scheduling, Happy Eyeballs connection attempts,
-socket options, and descriptor teardown. Use `getaddrinfo` work on a bounded
-thread pool because kqueue/epoll do not make libc DNS asynchronous. Results include
-IPv6 and IPv4 addresses and are consumed only on the reactor thread. The initial
-Happy Eyeballs policy follows RFC 8305 with a configurable 250 ms fallback delay;
-tests use an injected resolver/clock to avoid timing dependence.
+The C host owns address parsing, DNS scheduling, connection attempts, socket options,
+and descriptor teardown. `getaddrinfo` runs on a bounded thread pool because
+kqueue/epoll do not make libc DNS asynchronous. Results include IPv6 and IPv4
+addresses and are consumed only on the reactor thread. The HTTP client attempts one
+address per request; Happy Eyeballs racing remains in
+[the host roadmap](../../TODO.md#active-host-work).
 
 Resolver cancellation suppresses publication to a retired operation even when the
 underlying libc call cannot be interrupted. The bounded pool and result queue have
@@ -252,65 +251,15 @@ features rather than relying only on source preprocessor guards.
 
 ## Verification requirements
 
-### Tests
+Verify framing and raw-byte preservation, bounded buffering, exactly-once completion,
+cancellation races, and teardown through public adapter APIs. Use GC stress and
+sanitizers where ownership crosses tasks. When fuzzing, target the callback adapter,
+framing state, and operation-state transitions.
 
-- Unit-test handle generations, task FIFO order, buffer reference ownership, read
-  credit, write high/low water marks, and every state transition in the
-  exactly-once table.
-- Use injected reactor, resolver, clock, and short-read/short-write transports to
-  deterministically cover DNS completion after cancel, timeout versus success,
-  cancel during connect/TLS/head/body/write/idle-pool, duplicate readiness, peer
-  half-close, and host teardown with live operations.
-- Test llhttp with every possible split point and byte-at-a-time input for request
-  and response start lines, fields, fixed-length bodies, chunk extensions, trailers,
-  and EOF-delimited responses. Include duplicate fields and mixed field-name case.
-- Add a request-smuggling corpus: conflicting/duplicate `Content-Length`, all
-  `Transfer-Encoding`/`Content-Length` combinations, malformed chunks, obs-fold,
-  invalid tokens/control bytes, premature EOF, oversized lines/fields/counts, and
-  surplus bytes before a pipelined message.
-- Extend native loopback tests for streaming upload/download, pause/resume under
-  backpressure, keep-alive reuse and non-reuse, pipelining response order, raw header
-  order/case, `Set-Cookie`, trailers, compressed bytes passed unchanged, DNS
-  IPv4/IPv6 fallback, abort, timeout, and handler rejection.
-- Run the same neutral transport fixtures through WinterTC and Node adapters. Their
-  object-level assertions differ, but captured wire bytes and terminal host records
-  must match.
-- Run targeted native tests under UBSan on macOS and ASan+UBSan on Linux, plus
-  `MAL_GC_STRESS`/`MAL_GC_VERIFY` for adapters retaining JS state across tasks.
-
-### Fuzzing
-
-- Fuzz the llhttp callback adapter and framing state machine, not llhttp alone. The
-  harness fragments arbitrary input, enforces allocation/field limits, and checks
-  that success consumes a deterministic prefix and failure never resumes parsing.
-- Fuzz serialization from arbitrary ordered raw headers and body boundaries. Parse
-  the output again and assert framing, byte preservation, and no CR/LF injection.
-- Maintain seed corpora from llhttp, HTTP conformance cases, smuggling advisories,
-  and every fixed parser bug. Keep smoke corpora bounded for CI and longer sanitizer
-  runs in scheduled jobs. Every crash becomes a checked-in regression input.
-- Add a randomized operation-state harness that permutes readiness, DNS, timeout,
-  cancellation, shutdown, and task release. Its invariants are one terminal task,
-  no progress after cancellation wins, no live resources after release, and no task
-  referencing a retired generation.
-
-### Benchmarks
-
-Use matched representative workloads to track:
-
-- loopback requests/second and p50/p95/p99 latency for 0 B, 1 KiB, and 1 MiB bodies;
-- concurrent keep-alive at 1, 32, 256, and 1,024 connections;
-- streaming upload/download with a deliberately slow consumer;
-- peak RSS and host allocations per connection/request;
-- HTTP-only and TLS-enabled binary size;
-- optional out-of-tree Hyper results on the same machine and harness as a reference,
-  never as a correctness oracle or product dependency.
-
-The HTTP/1 server and client acceptance gates require an explicit recorded exception
-for more than a 10% throughput regression, 15% p99 latency regression, or
-unbounded/whole-body memory growth relative to the matched baseline. A paused stream
-must remain within its configured connection budget plus one 64 KiB task buffer.
-Reproducibility metadata belongs in CI artifacts or dedicated reports; the benchmark file
-stores only the latest comparison snapshot.
+Use [testing](../testing.md) for the selected gates and
+[benchmarking](../benchmarking.md) for matched throughput, latency, memory, and size
+comparisons. Unfinished coverage belongs in
+[the host roadmap](../../TODO.md#active-host-work).
 
 ## Consequences
 

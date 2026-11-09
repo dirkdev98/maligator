@@ -40,11 +40,10 @@ pieces through balanced ropes, preserving the memory cost of repeated content.
 Templates exceeding the operand budget retain pairwise lowering.
 
 Cons joins preserve a weight bound: a nonterminal cons child occupies at most
-three quarters of its parent's code units. Flat/dependent leaves and a cons of at
-most 32 units with two flat/dependent children are terminal for balancing. The
-short terminal cons adds at most one edge, avoiding reconstruction of tiny
-intermediates without copying their content. Height remains logarithmic in
-logical length without adding a height field. Joins reuse existing boundaries in the middle half of a subtree
+three quarters of its parent's code units. Flat/dependent leaves and cons subtrees
+of at most 32 units are terminal for balancing. A terminal subtree adds at most
+31 edges; larger cons edges shrink by at least one quarter. Height remains
+logarithmic in logical length without adding a height field. Joins reuse existing boundaries in the middle half of a subtree
 and rebuild included paths; they split a flat leaf only when necessary. Existing
 strings and shared subtrees keep their identities. Later materialization can
 remove edges without invalidating the bound.
@@ -161,10 +160,15 @@ the shared source. A fused nonescaping trim-length consumer remains follow-up wo
 
 Latin-1 well-formedness and no-op trim preserve compact inputs. ASCII case changes
 use compact output, with identity results when unchanged; Unicode/locale fallbacks
-retain required bridges. Single-argument concat shares a balanced prefix beyond
-inline results, multiargument concat uses the builder, and repeat/padding use
-encoded self-copying while retaining the large lazy-repeat path. These paths
-preserve observable coercion and callback order.
+retain required bridges. Single-argument concat uses the checked append path:
+short results stay inline, growing chains can use owned append buffers, and other
+joins retain balanced ropes. An append buffer is internal storage; returned dependent
+prefixes keep immutable lengths, and only the latest complete prefix can extend the
+buffer. Branching from an older prefix retains ordinary joins. Prepared flat strings
+can also own a reusable UTF-8 sidecar without changing their JavaScript content.
+Multiargument concat uses the text builder, and repeat/padding use encoded
+self-copying while retaining the large lazy-repeat path. These paths preserve
+observable coercion and callback order.
 
 ## Shared construction and external encoding
 

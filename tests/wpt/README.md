@@ -50,10 +50,10 @@ npm run test:wpt -- \
   --backend interpreted
 ```
 
-Accepted modes are `normal` and `gc-stress`; accepted backends are `compiled`
-and `interpreted`. An explicitly requested mode that a selected manifest entry
-does not declare is an error. Interpreted executions use the same native host
-with `buildNativeBinary({ compiled: false })`.
+Accepted modes are `normal` and `gc-stress`; accepted backends are `compiled`,
+`interpreted`, and `wire`. An explicitly requested mode that a selected manifest entry
+does not declare is an error. The interpreted native backend embeds bytecode in its
+executable; the wire backend loads a development image through the shared native runner.
 
 `--policy bail` stops after the first unexpected execution and writes a partial
 report. `--policy complete` is the default for the leaf runner and always writes

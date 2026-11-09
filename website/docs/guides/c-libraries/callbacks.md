@@ -151,7 +151,7 @@ Handles a callback receives are lent for that call: once it returns they read as
 
 ## Calls from other threads
 
-JavaScript runs on one thread, so a library that calls back from another thread aborts the program, unless the callback is `queued`. A destructor may run on any thread; the release completes on the program's thread.
+JavaScript callbacks run on the program's thread. A callback registered through a synchronous C call aborts if invoked from another thread unless it declares `queued`. Async exports route callbacks to the program's thread while the C caller waits; see [Run blocking calls on a worker](/guides/c-libraries#run-blocking-calls-on-a-worker). A destructor may run on any thread; release completes on the program's thread.
 
 `queued: true` marks a kept callback the library may call from its own threads, as audio and network libraries do. A call from another thread copies its arguments and queues for the program's thread, and the C caller continues at once; a call on the program's thread runs immediately. So the callback returns nothing, and takes values, strings, buffers, structs, and counted arrays of values or terminated strings. Array copies preserve fixed rows, native alignment, and null string entries. Resource-bearing elements need a waiting callback. An exception it throws is uncaught, as one in an event handler. The program needs an event loop, such as the web platform surface, and it keeps running while the callback is kept.
 

@@ -77,7 +77,7 @@ This gives compiled and interpreted frames the same source identity while keepin
 native implementation frames out of the user-facing result.
 
 Profile-enabled images may additionally emit explicitly nested phase boundaries.
-The self-host compiler wraps its seven existing synchronous phase callbacks with
+The self-host compiler wraps its synchronous phase callbacks with
 these markers. Finalization validates strict nesting, reports inclusive and self
 monotonic-wall time, and attributes CPU samples, estimated charged allocation, and
 GC pauses to the innermost active phase. Innermost attribution keeps nested-phase
@@ -94,8 +94,8 @@ storage (`managed-cell`, `raw-payload`, or `native-backing`), a coarse stable fa
 and the exact managed object kind when available. The report applies the sample's
 inclusion probability to estimate requested and charged allocation traffic. Charged
 means managed size-class capacity, or requested size where an external allocator's
-usable size is unavailable. It is allocation traffic—not retained memory, live heap,
-peak RSS, or an OS page commitment.
+usable size is unavailable. Allocation traffic is separate from retained memory,
+live heap, peak RSS, and OS page commitment.
 
 Because sampling is cooperative, long native calls or code with sparse safe points
 can delay samples. The manifest reports median and p99 process-CPU delay, dropped
@@ -151,8 +151,8 @@ to carry the same identity. Legacy v1-v3 captures remain readable but are marked
 
 | File                   | Purpose                                                              |
 | ---------------------- | -------------------------------------------------------------------- |
-| `capture.bin`          | Bounded v4 raw evidence, bound to its build and metadata             |
-| `capture.bin.compiler` | Exact v4 census carrying the same capture identity                   |
+| `capture.bin`          | Bounded raw evidence, bound to its build and metadata                |
+| `capture.bin.compiler` | Exact census carrying the same capture identity                      |
 | `metadata.json`        | Exact build ID, functions, source sites, and compiler remarks        |
 | `cpu.cpuprofile`       | Logical JS stacks for Chromium DevTools-compatible viewers           |
 | `timeline.json`        | GC and phase begin/end events in trace-event form                    |
@@ -182,7 +182,7 @@ JavaScript semantics.
 
 ## Scope and overhead
 
-This first slice is designed for local and staging investigations. It does not
+Profiling supports local and staging investigations. It does not
 provide live attach, continuous production collection, heap snapshots, automatic
 profile-guided recompilation, or per-test timeout stack capture. Fatal signals that
 cannot safely return to a VM safe point may leave a partial directory.

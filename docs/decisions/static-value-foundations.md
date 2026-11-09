@@ -199,8 +199,8 @@ source position and exception edge. The native and interpreted backends allocate
 fresh error using a shared checked identity/message table. Argument expressions and
 earlier observable conversions remain; unused input objects can disappear. Earlier
 unknown coercions prevent selection. The compiler never throws the JavaScript error
-during compilation. Runtime wire version 47 and compiler artifact version 73 encode
-these errors and prepared collation directly, replacing the native-only annotations.
+during compilation. Runtime wire and compiler artifacts encode these errors and
+prepared collation directly, with incompatible schemas rejected on load.
 
 The materialization pass discards bounded private initializer writes after proving
 that the aggregate has no content or identity observer. It retains computed-key
@@ -549,9 +549,8 @@ retain callee metadata, roots, arguments, completion handling and constructor ch
 The interpreter resolves the same operation through the current VM's primordial
 bindings and ordinary engine entry route. No compiler-host heap pointer is embedded.
 
-`CALL_KNOWN` replaces the former exact-builtin and literal-method wire tags. Runtime
-wire version 45 and compiler artifact version 67 reject older representations.
-Region plans use absent producer markers when normalization has removed a property
+`CALL_KNOWN` carries the known operation identity across both backends. Runtime wire
+and compiler-artifact versions reject incompatible representations. Region plans use absent producer markers when normalization has removed a property
 or intrinsic load, and validate the remaining operation identity and operands.
 
 To regenerate bindings, capture a full inventory and supply its explicit callback
@@ -746,7 +745,7 @@ The importer verifies complete mode coverage, a shared source identity, resolved
 configurations, target identity and descriptor digests. It uses the captured target even
 when importing on another host and preserves the audits of other targets.
 
-Every discovered descriptor receives a coverage row and an owning later slice.
+Every discovered descriptor receives a coverage row and an owning coverage task.
 Every axis/profile cell remains pending until it has the appropriate positive and
 negative witnesses. Resolved/direct dispatch does not prove input allocation
 elimination. Budget bailouts, missing support and blanket runtime-only labels are
@@ -1128,7 +1127,7 @@ indices. Register facts reference the existing operand list, with an explicit
 input offset so constrained input/output aliases remain distinct.
 
 Repeated one- and two-operand kind sequences share immutable tables bounded by the
-eight-bit kind domain. Specialized entries inherit canonical facts and transport
+closed value-kind domain. Specialized entries inherit canonical facts and transport
 only changed dimensions. Effect encodings are reused only for deeply frozen summaries.
 
 Native semantic facts occupy a separate table from lowering strategies. Range,
@@ -1293,33 +1292,9 @@ payload preparation. Symbol creation, registry insertion, wrapper inputs and
 wrong-brand errors keep their own obligations. These classifications exclude
 mutable targets, unproved coercion, entropy and sumPrecise iteration.
 
-## Baseline measurement
+## Measurement
 
-```sh
-node scripts/static-values-baseline.ts .cache/static-values-baseline
-```
-
-This writes function-scoped Core, execution IR and C for `includes` and absent
-`includex`, with observed and unused results in separate functions. It also records
-normal/profiled compiled/interpreted native execution, output parity, GC/allocation
-counters, native toolchain/configuration, compile samples and generated sizes.
-`bench/static-values.mjs` supplies never, cold and hot execution modes. Keep the
-result directory when comparing revisions; never infer allocation elimination from
-a discarded result or from a direct call alone.
-
-For paired compiler translation measurements, capture each revision with
-`npm run bench:self-compile-experiment -- capture <directory>`, then inspect and run
-the comparison using the same two capture directories:
-
-```sh
-npm run bench:self-compile-experiment -- compare <base> <candidate> --output .cache/static-values-compare --host native --workload parser --pairs 5 --budget-seconds 600 --plan=json
-npm run bench:self-compile-experiment -- compare <base> <candidate> --output .cache/static-values-compare --host native --workload parser --pairs 5 --budget-seconds 600
-```
-
-Use a separate output directory with `--host node --workload full` for Node-hosted
-translation. The runner alternates paired samples and checks every generated output
-against its frozen Node oracle. Report native compiler build time separately from
-translation. For application measurements, run both captured binaries with the same
-`never`, `cold` and `hot` arguments, warm each once, then alternate execution order
-for at least five pairs. Keep stdout checksums, process resource reports and the
-`MAL_HOST_GC=1 MAL_GC_STATS=1 MAL_PERF_STATS=1` allocation/retention probes.
+Use [benchmarking](../benchmarking.md) for paired compiler and application
+comparisons and [profiling](../profiling.md) to locate executed costs. Retain source
+identity, complete output parity, and allocation evidence; a discarded result or a
+direct call alone does not prove allocation elimination.

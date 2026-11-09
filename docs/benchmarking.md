@@ -88,8 +88,8 @@ Latency excludes setup, warmup, and output validation; resource counters include
 them. A single round is indicative, and the report does not classify an optimization
 or replace a saved baseline.
 
-Use `--owner primordial-methods` to select the 50 grouped primordial microbenchmarks.
-`bench/runtime-gap/primordial-methods.json` records the selected 200 callable identities.
+Use `--owner primordial-methods` to select the grouped primordial microbenchmarks.
+`bench/runtime-gap/primordial-methods.json` records the selected callable identities.
 Their catalog `methods` list records the methods exercised in each measured workload;
 the result is a group workload offset, not an individual method cost. Case `features`
 enable RegExp or the Intl collator only where required, and plans and reports record
@@ -103,8 +103,8 @@ scratch work. `experiment run ID` supports `smoke`, `verify`, and `confirm` pres
 promotion refuses collisions and does not add the new case to a default suite unless
 `--preset survey` or `--preset quick` is explicit. `experiment remove ID` deletes only
 that experiment. `case.mjs` is the only scratch source file and may import only the
-committed runtime-gap case runner; this makes the queue's selected two-file transport
-and later promotion exact rather than best-effort.
+committed runtime-gap case runner, keeping the scratch workload self-contained for
+comparison and promotion.
 
 `bench:performance -- portfolio --baseline REF` is the broad acceptance path. Its
 versioned, fixed-weight portfolio delegates to app-batch, compiler-app, JavaScript,

@@ -2,10 +2,8 @@
 
 The VM owns three insertion-only stores independently of object property tables:
 canonical property atoms, the Symbol.for registry, and cached native callable
-source strings. MalTable now owns only property storage. It retains ordered
-entries, property flags, accessor ownership, handles, epochs, private-symbol
-hints and pinned traversal; the former GENERAL mode and instrumentation roles
-for atoms and the symbol registry are removed.
+source strings. MalTable owns property storage: ordered entries, property flags,
+accessor ownership, handles, epochs, private-symbol hints and pinned traversal.
 
 Each typed store embeds a zero-initialized pointer/size/capacity descriptor in
 MalVm. An empty store allocates nothing. First insertion allocates 16 direct
@@ -46,21 +44,23 @@ Names are atomized by the caller, while lookup remains content-correct for an
 already-atom string originating elsewhere. Equal names preserve the first source.
 VM-owned cache values never live on possibly shared or immortal string cells.
 
-All three stores are strong VM roots. Minor, major, incremental remark and
-verification root scans visit the typed buckets; registry symbols trace their
-immutable descriptions through ordinary cell traversal. Source-cache scans mark
-both names and sources. These insertion-only root stores need neither a managed
-owner card nor a deletion SATB barrier: roots are rescanned at remark, and no edge
-is replaced or removed during VM execution. Their raw payloads do not become GC
-roots independently of the owning VM. Teardown releases each RAW allocation before
-heap destruction and never hashes or dereferences member cells.
+All three stores are strong VM roots. Minor collections visit only atoms inserted
+since the previous minor: older atoms have already survived as permanent roots.
+Majors, incremental remark, and verification scan the atom buckets. Registry symbols
+and native-source entries retain bucket scans; symbols trace their immutable
+descriptions and source entries mark both names and sources.
 
-The scan API exposes physical bucket traversal only for synchronous GC/native
-inspection. Insertion invalidates its cursor and returned bucket addresses; it is
-not an ECMAScript iterator. Root scan work follows capacity rather than live size.
-The new source cache also adds its own lazy allocation where the old atom table
-reused a value lane. These are explicit memory/scan tradeoffs to measure, not an
-unconditional speed or peak-memory claim.
+These insertion-only root stores need neither a managed owner card nor a deletion
+SATB barrier: roots are rescanned at remark, and no edge is replaced or removed during
+VM execution. Their raw payloads do not become GC roots independently of the owning
+VM. Teardown releases RAW ownership before heap destruction and never hashes or
+dereferences member cells.
+
+The bucket scan API supports synchronous GC/native inspection. Insertion invalidates
+its cursor and returned bucket addresses. Full bucket scans follow capacity; the
+minor atom list follows recent insertions and adds separately owned RAW storage.
+Source-cache storage also allocates independently. Measure those memory and scan
+tradeoffs separately from runtime speed.
 
 `[perf-intern-store]` attributes lookups, hits, misses, novel inserts, duplicate
 insertions, probe groups/candidates, growth and rehashed entries to each owner.
@@ -69,8 +69,7 @@ the public allocation-byte accessor reports current charged ownership, excluding
 the embedded descriptor. Root counters separate physical scan slots from live
 root values. Property telemetry retains `[perf-table-stats] role=object`.
 
-Runtime source discovery includes the new translation unit. Runtime source and
-header hashes invalidate archives and generated application ABI consumers after
-the MalVm/table changes; the portable program-image wire format does not change.
-Focused tests and matched measurements determine acceptance separately from this
-storage contract.
+Runtime source and header identities invalidate archives and generated application
+ABI consumers when these layouts change. The portable program-image wire format
+contains no intern-store layout. Focused tests and matched measurements establish
+acceptance separately from this storage contract.

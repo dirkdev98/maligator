@@ -29,18 +29,15 @@ those proofs for integer arithmetic and updates. Floating operands retain Number
 arithmetic, and signed division/remainder retain their JavaScript edge semantics.
 Yield and await box numeric observations and preserve scalar suspension storage.
 
-Program value-kind summaries carry the initial own data-field kinds of fresh
-returned literals. The existing call worklist joins common own keys, propagates
-field-only changes through finite targets and recursive forwarding, and keeps an
-empty normal-return set distinct from unknown fields. Mutated or escaped producers
-withdraw that contract. Missing keys do not prove undefined, since prototypes may
-supply them. Read-only call results project these fields through the same worklist,
-including parameter/returned-field cycles. The consumer follows aliases and rejects writes,
-escapes, dynamic keys and handler transport. Every read key must be own: an inherited
-getter could publish or mutate the receiver before a later read. Proven masks are
-published independently of effects at the normal-result boundary, so local scalar
-selection and native variants consume them without dropping coercion, completion
-or GC behavior. Partial field unions stay boxed and reach C predicates. Point-sensitive proofs for mutating or escaping records remain unfinished.
+Program value-kind summaries carry own-data field facts of fresh returned records.
+The bounded call worklist joins common own keys and propagates field-only changes
+through finite targets and recursive forwarding. An empty normal-return set remains
+distinct from unknown fields. Point-specific reads join reaching initializers and
+private writes, including exceptional prefixes and loop-carried alternatives;
+escapes, accessors and unproved aliases retain conservative results. Missing keys do
+not prove undefined because prototypes may supply them. These field proofs are
+independent of shared storage widths and invocation effects, so scalar selection and
+native variants preserve coercion, completion and GC obligations.
 
 Record storage has a separate certified width analysis over the selected entry
 and storage-sharing graph. Initial allocation masks and every virtual write join
@@ -69,7 +66,13 @@ Constants and source resources are finalized jointly over both targets; a
 constant used only by the native body must survive compaction. Captures, profiling
 sites, test batch relocation, and compiler artifacts preserve both bodies.
 
-Native storage planning precedes C rendering. It chooses root slot order, private
+Native C uses conservative scanning of C-stack locals. Wasm emission relowers with
+precise shadow roots because its stack cannot be scanned. Root-slot publication,
+masking, and frame-linking contracts below apply to precise-root entries; conservative
+entries preserve their live C storage and explicit helper ownership instead. Suspended
+coroutines retain traced snapshots independently of the active stack's root mode.
+
+Native storage planning precedes C rendering. For precise roots it chooses root slot order, private
 boxed locals and their publication obligations, stable incoming roots, and bounded
 single-use scalar expressions separately for canonical and typed entries. Direct
 SSA bodies persist a logical-root-to-physical-slot map. Audited private locals,
@@ -330,7 +333,7 @@ callers branch on the marker. Elision needs the creator, the callee and every
 caller compiled, and callers outside generators and async functions; otherwise the
 object stays.
 
-Ordinary numeric indexed reads and stores defer private-root publication until
+In precise-root entries, ordinary numeric indexed reads and stores defer private-root publication until
 their dense probe misses. Dense growth may allocate raw storage but does not
 collect inside the probe. Generic fallbacks publish incoming private values and
 the safepoint union mask before entering helpers or user code. Conditional
@@ -495,8 +498,8 @@ calls alone. Their boxed argument buffer and canonical fallback remain necessary
 
 Direct activation-local stack objects with existing certificates
 can store several fields in independent number, int32, and boolean locals. Stable
-boxed and string fields occupy dedicated shadow slots initialized before frame
-publication and active throughout the invocation. Each slot joins its initializer
+boxed and string fields occupy dedicated root storage, initialized before frame
+publication in precise-root mode and preserved in C storage in conservative mode. Each slot joins its initializer
 and certified stores using each instruction's input kinds and integer bounds,
 independently of the source register's joined representation. Boxed writers can
 feed Number, Boolean or String fields when every write proves that kind. Integer
@@ -525,30 +528,26 @@ value. Each exact, unguarded call site gets the entry only when its result's use
 known: static reads and writes of those keys, and observers, which are any other use
 but a control-flow edge or handler argument. A site whose observers lie on every path
 from the call keeps the ordinary entry, since it would only copy the callee's
-literal. The entry takes one `MalValue *` per field after its parameters and writes
-the literal's operands through them where the literal would have been allocated. The
-caller passes rooted frame slots, and its accesses use them until the first observer
-on a path creates the object with `mal_vm_materialize_record`, which takes the
-prototype from the callee's realm. That object is cached for the call and is the
-record from then on, for accesses as well as observers. A returned value other than
-the empty value takes the object's place in that cache, so accesses on a shared
-object or an implicit undefined behave as on the ordinary path. A forwarding entry
-passes its own pointers to the callee's record entry, or copies the slots of the
-returned literal when the callee has none. A caller can also hand the storage itself
-to an exact callee whose entry takes that parameter as a record parameter: one
-`MalValue *` to the fields, the object slot and the producer, in that order. The
-callee's accesses and observers use that storage as the caller's would, so a write
-or a created object is the caller's as well. A record parameter may not be reachable
-through `arguments` or outlive the call, and a callee that passes it on observes it.
-An object literal that a call hands to a record parameter lives in the same kind of
-storage, with the prototype the literal would have had in the producer slot. Each
-call that hands it over carries its uses and claims the allocation, so no stack
-object takes it. A call whose entry takes no record parameter for its argument
-observes the record instead, and a record parameter entry keeps only the calls
-whose records a selected record call or literal supplies. Core re-proves both sides
-before lowering, the bytecode validators check the allocation and call result
-flows, and transport selection pairs a record entry only with the calls that carry
-these plans. Fields travel boxed.
+literal. The entry takes a typed pointer per field, selected by the certified storage
+width analysis. Caller and callee share those fields and an object cell, so writes
+and earlier materialization remain visible to both. Heap-capable fields retain the
+root obligations of the selected stack-root mode. The first observer materializes
+through `mal_vm_materialize_record`, using the producer realm when needed, and caches
+the resulting identity. Later accesses use that object. Ordinary return values keep
+their canonical behavior.
+
+A forwarding entry passes its storage to a selected record callee or copies the
+returned literal's fields. Borrowed record parameters use the same per-field typed
+pointers and shared object cell; observer-bearing parameters also receive the
+producer and any shape ordinal required for materialization. Parameters must not be
+reachable through `arguments` or outlive the call. Caller-owned literals use the
+same storage contract. A call without a compatible record parameter observes and
+materializes the record instead.
+
+Core re-proves producer and consumer uses before lowering, target validation checks
+allocation and result flows, and transport selection pairs each entry with its
+certified callers. Numeric and Boolean fields stay scalar until an observer needs
+boxed values; unknown and heap-bearing fields retain their representation and roots.
 
 Literal-shape caches are shared by both target bodies. Their slot identities come
 from Core allocation origins, independently of physical block order. Both the wire
@@ -564,8 +563,9 @@ Validation rejects duplicate IDs, incompatible capacities, and shared rows whose
 property keys or operation contracts disagree. Static cache hits omit key checks,
 so physical instruction ordinals cannot identify these shared rows.
 
-Resumable functions keep per-value representations in C locals. Each invocation
-publishes an active root array for traced locals and the coroutine itself. A separate
+Resumable functions keep per-value representations in C locals. Precise-root
+invocations publish an active root array for traced locals and the coroutine itself;
+conservative-root invocations retain that live state on the native stack. A separate
 boxed activation buffer holds the largest individual suspension snapshot, plus
 two resume mailboxes. Each site's ordered map assigns its live locals to shared slots.
 Full value liveness covers scalars, exceptional edges, and finally paths. Boxed and
@@ -617,10 +617,7 @@ full table string. Debug position runs are compressed once and reused for their
 count and rows. Batch interning retains its exact content keys. These changes
 remove intermediate serialization work without changing the generated C contract.
 
-This boundary does not yet implement general native block scheduling,
-additional typed aggregate transport, or shared cold regions. It provides
-independent value and storage identities for those changes. Some fast-path and
-region discovery still occurs during rendering; the emitter is not yet solely a
-renderer of upstream selections. Performance acceptance
-still requires matched workloads and repeated measurements; fewer emitted locals
-alone do not establish a speedup.
+Remaining scheduling, aggregate transport, and renderer-selection work lives in
+[TODO.md](../../TODO.md#native-ssa-storage). Performance acceptance requires matched
+workloads and repeated measurements; fewer emitted locals alone do not establish a
+speedup.

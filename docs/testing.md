@@ -130,8 +130,8 @@ still run when relevant; a check pass does not replace them.
 For a compiler representation failure, use the product CLI with `MAL_DEBUG=true`
 and a self-contained fixture. A raw Test262 file may require harness includes;
 reproduce it through `scripts/test262.ts --filter <path> --variant strict --policy bail`
-instead of assuming it can be built as a standalone program. Add an explicit
-backend/mode only when that dimension matters to the failure.
+instead of assuming it can be built as a standalone program. Select the intended
+dimensions with explicit `--backend` and `--mode` arguments.
 
 ## Tiers
 
@@ -201,7 +201,7 @@ this race check.
 `runToStdout` starts with a 20-second default child deadline. Sanitizer
 instrumentation and maximal GC stress (`MAL_GC_STRESS=1`) each multiply it by three;
 combined runs receive 180 seconds because both costs apply. An explicit child
-deadline uses the same factors. Outer test and queue job budgets remain separate.
+deadline uses the same factors. Outer test and CI job budgets remain separate.
 
 ## GitHub Actions
 
@@ -289,8 +289,8 @@ retained for fourteen days. See the
 [inventory workflow](decisions/static-value-foundations.md#native-inventory-and-coverage)
 for local captures and imports.
 
-Linux jobs run on Ubuntu 26.04 with its Clang 21, the compiler the remote verification
-host uses. The workflows use four workers per Linux job and three macOS workers
+Linux jobs run on Ubuntu 26.04 with its Clang 21. The workflows use four workers per
+Linux job and three macOS workers
 to match the hosted CPU allocations. External actions are pinned to immutable commit
 SHAs; local setup actions install Node 26, the repository-pinned Rust toolchain, and
 the platform compiler before running `env:check`.
@@ -352,7 +352,7 @@ changing it or touching the issue.
 ## Worker budgets
 
 Use `npm run test:check -- --workers 4` to set a total allocation, or set
-`MALIGATOR_WORKERS=4` for focused commands and queue jobs. The default is half the
+`MALIGATOR_WORKERS=4` for focused commands. The default is half the
 CPUs reported by `os.availableParallelism()`, with a minimum of one; explicit
 allocations are capped at the available CPUs. `--workers` overrides the environment
 default for the gate. Plans and reports record the effective budget and each stage's
@@ -381,8 +381,8 @@ Focused selections outside the manifest keep ordinary preparation.
 raise it above the inherited allocation. Resource controls survive canonical
 environment cleaning without retaining ambient runtime modes.
 
-The allocation limits managed test and build pools; the queue's CPU affinity and
-quota remain the operating-system limits. Changing worker counts does not change
+The allocation limits managed test and build pools; CPU affinity and quotas remain
+operating-system limits. Changing worker counts does not change
 artifact identities or permit reuse of previous test verdicts.
 
 ## Reports

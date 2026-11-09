@@ -28,7 +28,7 @@ Every native build performs the same discovery and capability checks used by
 strictly from `PATH`. Runtime translation units are compiled directly with `CC` and
 collected into three static archives with `ar`. The Rust half is built with the
 `cargo`/`rustc` that Rustup selects for `runtime/rust/rust-toolchain.toml`. A C++
-compiler/runtime is only required when `surface.webPlatform` is enabled.
+compiler/runtime is required when `surface.webPlatform` or `surface.node` is enabled.
 
 The runtime needs real C23: the `bool`/`true`/`false` keywords (no `<stdbool.h>`),
 `nullptr`, and `#embed`. gcc 14 and older accept `-std=c2x` but lack `#embed`, so the
@@ -72,8 +72,8 @@ is shared between images. An image evaluates only after the images before it hav
 settled, top-level await included. A dependency edit that keeps its exported names leaves
 the application image cached. Note that `require` and `import()` across an image boundary
 still compile one whole program. Code does not optimize across images,
-which costs a few percent of throughput against a whole-program development
-binary. Configured assets and each image's bytes are embedded in units of their own, so
+so measure throughput separately from whole-program development builds.
+Configured assets and each image's bytes are embedded in units of their own, so
 an asset edit and an application edit never recompile each other's objects. A build with
 `MALIGATOR_DEVELOPMENT_FRAGMENTS=0` links one whole program instead. Worker roots
 always link their whole-program images behind the compiled worker registry.

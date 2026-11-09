@@ -46,8 +46,8 @@ suspension, exceptional edges, and loop backedges; this retains required loop
 polls and prevents reuse across possible re-entry. Relevant writes remain memory
 clobbers. Kernel retirement therefore cannot preserve the old columns reference.
 
-References remain boxed and participate in normal root planning. The first version
-does not retain raw array backing addresses or assume stable lengths and elements.
+References remain boxed and participate in normal root planning. Regions do not
+retain raw array backing addresses or assume stable lengths and elements.
 Native and interpreted targets consume the same portable `PROBE_READ` operation;
 its extra operands use side data to preserve the packed instruction ABI.
 Named probes use the existing per-site property caches and their prototype
@@ -82,11 +82,8 @@ Getter and setter probes are `PROBE_READ` kinds with their own property cache ro
 A row holds the inherited accessor's chain registration, so a hit needs only the
 receiver's shape and first prototype. A receiver that resolves elsewhere, or a
 row refilled four times by alternating classes, declines the row permanently and
-leaves the site to its original access. Outside loops, and for names receivers
-also hold as data, the probe code cost more than it saved: exposing 1,722 sites
-in the self-compile made it 3.9% slower. Restricted to loops and uniquely
-accessor names it is neutral there, while a getter and setter pair over a private
-field runs 3.4 times faster.
+leaves the site to its original access. Exposure is restricted to loops and uniquely
+accessor names to bound probe code at sites that can reuse the accessor target.
 
 The benchmark-only `class-read-accessors` ablation disables caller expansion and
 accessor exposure while retaining summaries and ordinary inline selection. It applies when building the

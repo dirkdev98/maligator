@@ -45,7 +45,7 @@ Native builds compile the runtime on your machine and need:
 - A C compiler and archive tool with C23 support: Apple clang, clang 19 or newer, or
   gcc 15 or newer.
 - Rustup, for the Rust toolchain pinned by the runtime.
-- A C++ compiler, only when `surface.webPlatform` is enabled.
+- A C++ compiler when `surface.webPlatform` or `surface.node` is enabled.
 
 `maligator doctor --verbose` checks all of it.
 [Set up native builds](https://maligator.ddv.tools/guides/native-toolchain) covers
@@ -64,7 +64,7 @@ What works today:
 
 What does not, yet:
 
-- Real project use has only just started and keeps exposing rough edges.
+- Application compatibility needs verification against representative workloads.
 - The Node.js surface is curated, not complete.
 - Some paths are quick; ordinary constructs can still be much slower.
 - Windows is not supported, and the alpha binaries are unsigned and not notarized.

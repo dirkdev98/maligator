@@ -19,9 +19,8 @@ one load at `fields[slot]`.
 An earlier layout packed int32, double and raw-pointer fields into physical
 variants of each shape. However, every cache hit then decoded a four-way field
 token, the decode was too large to inline at most sites, and a representation
-change repacked the payload and swapped the object's shape. Uniform slots made the
-native self-compile about 1.6% faster. A drawback is that int32-heavy records
-grow four bytes per field.
+change repacked the payload and swapped the object's shape. Uniform slots avoid that
+decode and repacking, at the cost of larger fields for int32-heavy records.
 
 Representation knowledge belongs in facts about a shape's fields rather than in
 their storage, so a new fact never needs a new physical layout or a migration.
@@ -33,9 +32,8 @@ their private name with writable-only attributes. Public symbols still move the
 object to dictionary mode, so a symbol key in a shape is always private:
 reflection, copying, and serialization skip non-string shape keys, and
 integrity levels leave them unchanged. Dictionary mode moves private elements
-into the table with the same descriptor. Keeping them in a private-only table
-cost every instance a storage sidecar and a table, which made constructing a
-class with three private fields 3.6 times slower than with public ones.
+into the table with the same descriptor. Shaped private storage avoids allocating
+a sidecar and a private-only table for every instance.
 
 A private name's hint is its last slot plus one. A read validates the hint
 against the receiver's own shape, so subclasses that add fields after the base
@@ -44,9 +42,8 @@ cached source-to-final shape pair.
 
 A public property that finds the shape full of private elements moves them into
 the private-only table and rebuilds the shape from the public properties instead
-of turning the object into a dictionary. The compiler's own function store has 90
-private fields; dictionary mode made every public field load an own-table lookup
-and the self-compile 11% slower. Evicted names are marked table-resident, so later
+of turning the object into a dictionary. This preserves shaped public access when
+private fields exhaust shape capacity. Evicted names are marked table-resident, so later
 instances of the class install them straight into the table and private reads skip
 the shape check.
 

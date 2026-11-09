@@ -1,10 +1,10 @@
-`maligator build` compiles Maligator's C runtime and Rust crate together with your application, so it needs a native toolchain on the build host. `run`, `dev`, and `test` use the runtime embedded in the distributed CLI for ordinary profiles with Intl disabled and do not need these tools. The executables you build do not need them either.
+`maligator build` compiles Maligator's C runtime and Rust crate together with your application, so it needs a native toolchain on the build host. `run`, `dev`, and `test` use the runtime embedded in the distributed CLI for supported profiles with Intl, profiling, and C libraries disabled. The executables you build do not need these tools.
 
 ## Install the requirements
 
 - A C compiler and archive tool with C23 support: Apple clang, clang 19 or newer, or gcc 15 or newer. gcc 14 and older accept `-std=c2x` but lack `#embed`, so `doctor` rejects them.
 - Rustup. Maligator builds its runtime with the Rust toolchain pinned by that runtime.
-- A C++ compiler and runtime, only when `surface.webPlatform` is enabled.
+- A C++ compiler and runtime when `surface.webPlatform` or `surface.node` is enabled.
 
 On macOS, Apple's command-line tools provide the C and C++ compilers:
 

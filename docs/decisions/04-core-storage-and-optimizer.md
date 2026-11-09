@@ -18,7 +18,7 @@ SemanticProgram
          plan: CoreOptimizationPlan,
          context: CoreCompilationContext
        }
-    -> ExecutionProgram
+    -> ExecutionProgram + NativeProgram
     -> ProgramImage
 ```
 

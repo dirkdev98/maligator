@@ -85,360 +85,44 @@ callback and receiver-sensitive call effects and returned object-field transport
 Keep the sub-60-second AC self-compile target; leave broad acceptance to CI.
 Arithmetic work should support these paths or fix correctness defects.
 
-- [ ] Cover remaining object and builtin receiver classes, then extend
-      receiver/argument-sensitive function-call effects and dispatch.
-      Keep brands independent of publication, containment and mutable heap contents.
-      Reuse the bounded normal-result worklist and retain loaded-callee guards.
-      Ordinary and spread calls, constructors with receiver substitution, recursive
-      returns and compatible phi alternatives now have normal-result brand transport;
-      immutable global slots and private fields also carry collection brands.
-      Returned record fields now carry brands through producer and caller writes,
-      recursive forwarding and suspension, with own-data and escape proofs kept
-      separate. Record refresh preserves independently published call facts.
-      Guarded collection calls consume receiver brands independently of callee
-      identity, preserving shadowed-method and cross-brand fallbacks.
-      WeakMap and WeakSet now use the same brand transport and noncollecting
-      get/has/delete kernels, including independent callee guards and wire tags.
-      Primitive and omitted weak keys now constrain normal results through local
-      and complete caller bounds: undefined reads, false predicates and no normal
-      mutator result. Result folding retains receiver and argument effects;
-      invocation normalization preserves fixed keys before iterable tails.
-      Weak mutators now have fixed-arity entries across known and guarded calls,
-      preserving key errors, completion checks and GC publication. Interpreter
-      direct hits validate keys before entering the unsynchronized leaf path.
-      Symbol registration now survives the shared kind worklist through calls,
-      phis, returned records, unboxing and suspension. Weak normal completions and
-      Symbol.keyFor use these bounds; typeof still treats both subkinds as Symbol.
-      Holdable Object/unregistered-Symbol bounds now select nonthrowing weak
-      mutation entries in known, guarded and resumable native calls. Exact receiver
-      proofs remove only the key throw effect; mutation, GC publication and polls
-      remain. Effect proofs refresh when key bounds widen or narrow.
-      Existing callee-target facts now fold function typeof and truthiness
-      observations, including widened script identity sets, while retaining factory
-      calls and their effects. Guard results remain Boolean targets; async/generator
-      invocation wrappers stay separate from callable body returns. Extend the same
-      independent operand, callee and completion contracts to more object builtins
-      and callback-aware function calls; keep the bounded shared worklists.
-      Opaque builtin and bound functions now retain callable certainty, and Proxy
-      construction follows its target's callability without forwarding dispatch
-      identity. Builtin descriptors, key lists and certified allocation results
-      carry noncallable normal returns; species, protocol and mutable-method
-      alternatives stay open. Identity-returning builtins preserve operand targets.
-      Exact noncoercing scalar predicates and Array.isArray now preserve operand
-      containment and function caller bounds independently of invocation effects.
-      Their contracts compose through own-slot call summaries; coercing, aggregate,
-      constructor and mutable-method alternatives remain conservative.
-      Exact Map/Set forEach calls now compose finite script callback summaries and
-      captured scalar builtin effects. Recursive callback dependencies invalidate
-      callers and native proofs; known read-only callbacks preserve caller fields
-      while receiver/callback validation, GC publication and polls remain.
-      Invocation targets and callable certainty now converge through forwarding,
-      spread and recursive normal returns. Return dependencies wake their callers;
-      edited and newly formed recursive components restart without stale bounds.
-      Returned own-data fields now carry callable certainty and finite invocation
-      identities through producer/caller writes, recursive forwarding and suspension.
-      Field-only changes wake return consumers; memory alternatives wake earlier
-      loop reads. Escapes, accessors, unknown keys and wrappers retain fallbacks.
-      Cover opaque script sets, callback retention, Array/species and protocol
-      effects, and receiver-sensitive builtin errors. Callable status alone remains
-      insufficient for effect refinement.
-      Broad native, sanitizer and self-hosted acceptance remains on CI.
-      Interpreter call-return polls now require a trusted safepoint map when the
-      image provides exact roots. Noncollecting call effects can omit those maps
-      without exposing stale registers to an all-register fallback scan. Profiling
-      artifact restoration covers both interpreted root modes under GC stress.
+- [ ] Cover remaining object and builtin receiver classes, opaque script target
+      sets, callback retention, Array/species and protocol effects, and
+      receiver-sensitive builtin errors. Extend receiver/argument-sensitive call
+      summaries through the existing bounded worklists. Keep callable certainty,
+      finite invocation identities, normal results and effects independent; retain
+      mutable-callee fallbacks, completion checks, publication and polls.
 
-- [ ] Extend selected typed call/aggregate transport and expression regions using
-      Core proofs, with bounded code-size decisions and matched runtime evidence.
-      Move remaining emission-local selection into explicit native plans before
-      claiming the C emitter only renders selected decisions. Native emission now
-      starts from planned canonical entries, typed entries and private closure
-      environments, withdrawing unavailable or oversized bodies before publishing
-      C. Frameless paths still require a base proof, and cache identities include
-      the numeric-sort leaf contract independently of entry presence. Rendered
-      bodies subscribe only to fast-callee availability queried during admission,
-      including unavailable callees. Normal result-kind
-      bounds from complete script callee sets now reach Core and native storage.
-      Calls whose Number result depends on a guarded typed entry still need scalar
-      transport along that admitted branch when the canonical result remains boxed.
-      Normal return integer ranges now reach scalar call storage and decoding,
-      including spread, rest and resumable calls. Forwarded parameters and strict
-      receivers now project kinds and ranges from that caller's actual operands,
-      including known iterable prefixes and omitted positional arguments.
-      Normal return bounds now converge through chains and recursive callee
-      components before publication, with conservative widening for growing ranges.
-      Loop storage webs now use independent widths and whole-value induction
-      bounds. Exact integer result facts reach full, scalar and eligible fast-entry
-      kernels; ordinary, generator and async observations preserve scalar storage.
-      Carry those integer views into the remaining guarded call/aggregate transport.
-      Integer rounding results now retain their precise intervals through normal
-      returns, selected entries and read-only record fields. Eligible frameless
-      Math operations share full-body kernels and bounds, with independent operand
-      guards and mutable-callee checks before the ordinary fallback.
-      Identity observations now use forwarded normal returns through chains and
-      phi components, including observation-argument sharing and NaN-aware equality
-      emission. Compatible normal-return identities now reach general consumers,
-      retaining stronger result facts and explicit scalar boxing/widening boundaries.
-      Native storage now omits roots and poll publication for unobserved final call
-      results, including ordinary, known, spread, rest, construction and resumable
-      paths. Helper state, borrowed outputs and reused input storage remain rooted.
-      Carry identities into remaining storage and liveness contracts.
-      Explicit native return plans now use normal-result kinds to pass Object
-      completions through base and derived constructors and to omit the result-kind
-      check for base primitive completions. Unknown and mixed Object bounds retain
-      generic completion; derived primitive/undefined checks and coroutine returns
-      keep their own protocols, independently of invocation effects.
-      Builtin alias returns now share independent result projections across kinds,
-      integer intervals, return provenance and identity consumers. Known positional
-      prefixes survive list transport; boxing and unboxing require input-kind
-      proof. Invocation effects and stronger post-call bounds remain intact.
-      Conditional aliases now publish input-kind requirements in program return
-      summaries; identity, kind and interval consumers check them independently.
-      Finite script-call chains now substitute conditional parameter and receiver
-      projections through joined returns and recursive components. Known prefixes
-      survive iterable transport; unknown list contents and sloppy receiver boxing
-      retain their conditions. Callee edits withdraw stale projections. Escape
-      effects and own-field proofs remain independent of the alias projection.
-      Mutable Object.is now consumes operand identity,
-      kinds and scalar views behind a loaded-callee guard, including frameless hits;
-      its miss retains arbitrary results, throwing and root publication.
-      SameValue also consumes each operand's interval, preserving only the NaN and
-      signed-zero handling still required by the unbounded operand.
-      Strict equality and SameValue now share partial kind and scalar consumers;
-      noncoercing comparisons can form expressions within their root-safe windows.
-      Immediate and joined literal lengths also select SameValue String kernels
-      across full, delayed, frameless and resumable paths, including guarded hits.
-      Typeof comparisons now share direct category predicates and partial kind
-      consumers in full and frameless bodies: nullable primitive unions need only
-      a null test, nullable Object unions need only a callability test, and other
-      unions without null skip its branch, including after suspension.
-      Primitive-only receiver bounds now remove impossible Array and plain-object
-      probes from property reads, writes, definitions and membership in full and
-      resumable bodies. Frameless admission also rejects Array-only reads that
-      cannot hit. Generic helpers retain key coercion, prototype accessors,
-      strict-write errors and GC publication independently of receiver bounds.
-      Grouped own-slot read pairs, read regions, numeric projections, updates and
-      number-record regions also reject receivers whose bounds exclude Object;
-      unknown and Object-containing bounds retain their guarded admission.
-      Array-only paired loops, presence windows, pair destructuring and deferred
-      iterator paths now consume receiver bounds too. Primitive length loads skip
-      Array and TypedArray admission; generic iterator-brand cursors remain because
-      a primitive's custom iterator can supply an Array iterator.
-      Conditional kind bounds now follow dominating predicate edges and phi inputs,
-      including duplicate successors, backedges, calls and suspension. Canonical
-      effects and whole-value representations stay independent. Local observation
-      and coercion folds consume those bounds, and exact primitive String lengths
-      bypass property probes in full, frameless and resumable entries. Scoped
-      effect proofs still need availability obligations before code motion can
-      consume branch-only facts. Static length reads now infer Number normal results
-      from primitive String/nullish receiver bounds before operation lowering;
-      nullish-only inputs have no normal result. Those bounds reach return summaries,
-      selected entries and scalar property-result storage while preserving getter
-      effects and ordinary object/prototype fallbacks.
-      Intrinsic String/nullish length reads now publish nonnegative safe-integer
-      ranges, and proven genuine Array length reads publish uint32 ranges. Shared
-      range queries carry those bounds through phi joins, normal returns and private
-      record fields into predicate folds and native entries; escaped fields and
-      unknown Object/Proxy reads retain their general results and effects.
-      Deletes now publish Boolean normal results independently of receiver effects.
-      Empty primitive-wrapper bounds remove delete dispatch while preserving computed
-      key conversion and exceptions; selected native entries also consume those
-      bounds, and frameless bodies bail out before object-key coercion.
-      Static membership now shares current property descriptions with reflection:
-      proven own fields fold independently of their values, and genuine Array
-      length remains present after escape or mutation. Inherited results require
-      world proofs; unknown keys, Proxy receivers and escaped ordinary properties
-      retain their effects and fallback, including across suspension.
-      String/Symbol key conversions now retain normal-result facts independently
-      of base exceptions. Static reads, membership and descriptors match Symbol
-      SSA aliases and stable identities; repeated fresh allocation sites and
-      uncertain registry keys retain their fallbacks. Cell transport clears
-      producer-local SSA discriminators before rebinding the proof in its reader.
-      Static own-key tables now refine String/Symbol key effects independently
-      of collection: validated short tables omit GC and throw work, while tables
-      reaching the runtime polling interval retain rooted completion checks.
-      Unused short queries disappear without dropping key evaluation. Coercing
-      keys keep user-code, mutation, throw and collection effects.
-- [ ] Give record entries typed fields. Program value-kind flow now carries initial
-      own-field kind summaries through exact call chains, finite callee sets,
-      recursive forwarding, spread/rest and constructor completions. Field-only
-      changes wake callers without rebuilding the any-script scalar aggregate.
-      Conditional returns and loop-carried aliases join common own fields through
-      bounded control-flow walks, including initial integer bounds.
-      Call results now project initial own fields through that worklist, closing
-      parameter/field cycles. Reads retain facts before later writes and escapes;
-      known own sibling writes preserve untouched fields. A bounded CFG/use walk
-      accounts for backedges, possible getters/setters and fresh producer lifetimes.
-      Handler transport still rejects the proof. Normal-result publication
-      feeds local representations and native predicates without requiring pure
-      effects. Publication now changes only normal-result facts and specialization
-      inputs, preserving structural, call and memory analyses while waking local
-      kind/range consumers and the program return-kind worklist.
-      Certified storage widths now join every virtual writer across
-      producers, callers, borrowed parameters, caller-owned literals and forwards.
-      The native ABI carries typed pointers through artifacts, relocation, split
-      units, forwards and materialization. Numeric and Boolean fields use scalar
-      locals; integer field bounds join every virtual writer and select i32 only
-      when the full storage lifetime excludes negative zero and fits signed int32.
-      Boxed unions without heap kinds also omit GC roots. Heap fields stay rooted,
-      and materialized records retain ordinary object access. Field values
-      whose kind unions exclude Object and Symbol no longer extend overwritten
-      field lifetimes; own-slot refinement, scalar replacement and allocation
-      sinking consume the same weak-holdability bound. Object and Symbol unions
-      keep lifetime barriers, and fields used after a safepoint keep their GC roots.
-      Parameters without observers omit the producer realm and union-shape pointers. Shape
-      ordinals use i32 storage throughout the C ABI and materialization. Callers
-      omit the producer root when neither a caller/callee observer nor backend
-      fallback needs materialization. The scanner workload's whole C is now 111,548
-      bytes, down from 115,075 before returned-field
-      feedback and 111,795 before typed fields. Reads after own writes now join
-      the initial fields with every preceding writer in the kind and range worklists,
-      including loops and suspension. Incompatible kinds and negative zero widen
-      independently; escapes and possible accessors retain the fallback.
-      Write-backed observations enter propagation demands only once a finite
-      initial field contract emerges; later contracts expand the demand set and
-      withdrawn contracts override previously published bounds.
-      Fresh producer allocations now retain own-field summaries across private
-      writes, joining every writer with the initial kind and integer bounds before
-      forwarding the result. Structural input plans survive metadata changes;
-      values and ranges are solved afresh. Non-returned locals add no field demands.
-      Returned field initializers and private writers also retain dominating
-      branch kind bounds through call chains; later unguarded writes widen them.
-      Caller-side field joins retain each writer's control location too. Fixed
-      structural kind bounds constrain growing value masks in the existing
-      worklist, including nullable joins, loops, merged records and suspension;
-      empty producer cycles remain empty and predicate edits withdraw old bounds.
-      Independent own-data presence now licenses noncollecting named reads even
-      when the field kind is unknown. Native full, resumable and frameless bodies
-      consume that proof after virtual-field handling; misses resolve the physical
-      own slot without invoking getters or prototypes. Inlining discards the scoped
-      proof and republishes it from the cloned flow. Withdrawn presence removes its
-      hint and effect refinement independently of normal-result kinds and bounds.
-      Writable own-data presence now also licenses materialized named overwrites
-      in full and resumable bodies. These stores retain their mutation effect and
-      GC write barriers while omitting generic completion, collection and reentry
-      branches. Different producer layouts resolve their existing physical slots
-      through the same property cache; preceding escapes or descriptor changes
-      retain the generic store. Cloning drops scoped access hints and proofs.
-      Forwarded call and constructor results now retain those summaries across
-      private writes to proven existing own fields. Cached structural plans
-      revalidate required keys against current callee summaries; unknown sources
-      and empty recursive cycles cannot acquire a field contract from a write.
-      Wide numeric and heap-bearing unions retain their storage and root needs.
-      Finite groups of private call and constructor results now retain common own
-      fields through merged aliases and recursive producer updates. Every source
-      must retain the required own keys; all component writers join initial kinds
-      and ranges. Earlier single-source read proofs keep their point-specific
-      precision. Merged reads now follow selected values backward through phi edges,
-      joining only preceding writes and rejecting preceding escapes or possible
-      accessors. A producer resets only its own allocation lifetime, including on
-      backedges; later effects do not withdraw an earlier read. Writer/source
-      correlations within the surviving prefix remain conservative.
-      Caller reads now retain only reaching writer values. A definite overwrite
-      through the selected receiver removes initial and earlier payload kinds
-      and bounds while retaining the initial own-property contract. Producer
-      completion gates remain independent of the empty initial value contribution;
-      empty recursive producers cannot bootstrap from later writes. Removing a
-      writer withdraws its value bound even after publication.
-      Producer summaries now apply the same bounded prefix walk at each normal
-      return, retaining only reaching writers and the initial values of selected
-      sources that can still contribute. Early returns retain earlier values;
-      definite overwrites remove unknown payloads through literal allocations,
-      forwarding calls, merged aliases, loops and recursive producer chains.
-      Initializer completion and the own-data contract remain independent gates.
-      Exceptional predecessors now retain prefixes at each throwing instruction,
-      so a caught RHS failure cannot make a later, unexecuted store kill an
-      earlier payload. Writes completed before a later throw remain eligible.
-      Caller joins now project the surviving initial sources independently of
-      all-source own presence and normal completion. A killed unknown initializer
-      cannot widen another source's numeric kind or range; conditional writes,
-      caught failures and escapes retain their conservative alternatives.
-      Predecessor-specific receiver identities now separate writes to disjoint
-      fresh record sources and recognize definite writes through correlated
-      phis. Earlier allocation executions on loop backedges retain their payloads;
-      every source used to exclude a writer still needs the returned-record proof.
-      Writer payload phis now follow the same selected edge. Kind and integer-range
-      queries retain the edge's branch outcome even when block merging creates a
-      critical edge. Normal-result joins, producer summaries and resumable reads
-      consume these alternatives independently of the original store's effects.
-      Cyclic payload phis retain their conservative joins.
-      Private producer writes now flow through the existing Core field SSA and
-      materialize at each eligible return. Initializer and overwritten payload
-      lifetimes remain explicit at their original aggregate uses. Named virtual
-      objects retain shaped materialization, so Boolean, String and numeric fields
-      reach the same typed result entries. Concurrent producer records keep separate
-      SSA state; caller writes still widen the shared ABI storage. Escapes,
-      descriptor changes and unsupported protected accesses retain physical objects.
-      Relational writer bounds now use comparison-local integer facts for both
-      operands of branches and guards, including bounds from numeric calls and
-      other record fields. Unsolved comparison operands keep their edges empty
-      during range convergence; unknown or noninteger operands retain wide storage.
-      Per-subject indexing reuses the bounded range query without another solve.
-      Later integer guards now tighten earlier relations at the consumer, including
-      transitive chains, nonstrict cycles and arithmetic payloads. The same bounds
-      reach private producer writes, caller writes, result entries and resumable
-      field reads. One-hop queries avoid the bounded closure worklist. Identity
-      remainders consume these facts across boxed, double and int32 storage, using
-      an explicit conversion whenever a move cannot preserve the representation.
-      Remaining object work includes relational bounds without an integer basis,
-      composition of edge-local bounds with earlier relational chains,
-      payload/source correlations across separate merges and cyclic phis, producer storage outside private
-      single-layout SSA promotion, indexed producer summaries, broader parameter-relative
-      call effects and coroutine record transport. Record-call admission and
-      profitability are owned by the following tasks.
-      Activation-local field storage now joins per-instruction kinds and integer
-      bounds from all initializers and certified writers, including branch-local
-      proofs through boxed registers. Scalar fields omit shadow slots; String and
-      unknown unions retain roots and materialized accesses keep their fallback.
-      Own-field observations
-      also carry initial integer bounds through the normal-result worklist, including
-      finite targets, recursive forwarding and suspension. Growing fields widen
-      independently of bounded siblings. The scanner still calls
-      `mal_builtin_string_char_code_at_known` twice per character
-      on a boxed string parameter.
-- [ ] Admit more record calls. Not admitted yet: calls through instance-method hints,
-      which need a guarded fallback that keeps the returned object as the record;
-      record parameters that a callee passes on instead of observing; and forwarding
-      more than one call deep, or through a helper that also reads the record. In the
-      quick self-compile census, record calls cover 892K calls, mostly
-      `decodeVmValueOperand`, `coreTerminatorInput`, `valueEnvironment` and
-      `copyTerminatorEdge`, and record parameters take 186K calls.
-- [ ] Weigh record entries against other plans in the code budget. The 401K context
-      literals `operandShape` reads only to report a failure, and the 241K edges
-      `CoreEditor#touchEdge` keeps only when they are new, qualify as record
-      parameters, but their entries miss the quick self-compile's generated-code
-      budget. Giving callees that take records the 16× planning weight of record
-      producers admitted them, displaced 77 array iterator cursors and 67 iterator
-      result virtualizations, and slowed the self-compile run by 1.5%. Direct-entry
-      opportunities sum their call weights while local ones take their best
-      instruction, so a flat weight cannot trade saved records against saved
-      iterators. Limiting the weight to callees of at most 64 instructions kept
-      `operandShape` and `#touchEdge` while losing only 5 cursors and 9
-      virtualizations, yet the run was still 1.2% slower (16.13 s against 15.94 s,
-      three interleaved pairs), with 8.8% more time in the emit phase.
+- [ ] Extend typed call and aggregate transport using Core proofs and bounded
+      code-size decisions. Carry scalar results along admitted guarded branches
+      when the canonical call remains boxed, and extend integer and identity views
+      into remaining aggregate, storage and liveness consumers. Preserve ordinary
+      fallback, constructor completion and coroutine protocols.
+
+- [ ] Extend record field proofs beyond private single-layout SSA promotion:
+      relational bounds without an integer basis, composition with earlier
+      relational chains, payload/source correlations across separate merges and
+      cyclic phis, indexed producer summaries, parameter-relative call effects,
+      and coroutine record transport. Preserve point-specific own-data and
+      lifetime proofs independently of shared storage widths.
+
+- [ ] Admit record calls through instance-method hints with a guarded fallback,
+      forwarded parameters, deeper call chains, and helpers that also read the
+      record. Keep the returned object's identity and observer behavior intact.
+
+- [ ] Weigh record entries against other plans in the generated-code budget.
+      Compare saved allocations, retained generic paths, iterator state, analysis
+      work and emission cost. Uniformly increasing record weights or planning
+      limits can displace more useful plans; require representative measurements.
 
 - [ ] Stream the product CLI's translation units to disk. Its build keeps the CLI's
       emitted C, 650 MB with the worker root's, in memory while it compiles the
       compiler again for the worker root, and peaks at 4.25 GB of heap; the release
       build and the self-hosted CLI check rerun themselves with an 8 GB limit.
-- [ ] Improve Node.js self-compile phase time and memory using the restored cold
-      paired comparison. The protocol now requires strict emitted-C and runtime-image
-      byte parity; use matched before/after evidence for speedup claims. Compiling
-      the compiler itself peaks near 1.6 GB of live heap while its Core, execution,
-      native, and image forms coexist; Node 24's default 2 GB heap leaves little
-      margin for in-process native builds of the compiler.
-      Keep the representative Node.js self-compile below 60 seconds on AC power;
-      stable acceptance remains unverified. Alternating frozen-input controls at
-      `0ce7ac8f` took 58.42 and 58.51 seconds on AC, after earlier unmatched samples
-      exceeded the budget. The clean `2edb537e` weak-collection slice took 56.72
-      seconds in one AC budget sample, emitting 174,011,708 C code units across
-      145 units; this establishes neither a speedup nor timing stability.
-      Preserve matched source and workload identities before
-      attributing such variation to new facts. Check each completed semantic slice
-      against the budget without expanding into speculative micro-optimizations.
-      Analysis extensions must stay bounded and reuse existing worklists. Leave
-      long checks to CI and keep local verification to the affected units and
-      quality checks. Transitive range queries share the existing 32-step budget.
+- [ ] Improve Node.js self-compile phase time and memory using cold paired
+      comparisons with strict emitted-C and runtime-image byte parity. Keep the
+      representative Node.js self-compile below 60 seconds on AC power and measure
+      stability alongside analysis extensions. Preserve source and workload
+      identities; reuse bounded worklists and leave broad acceptance to CI.
 
 - [ ] Spread one split native function over several translation units. Outlining
       functions past 256 Ki into 128 Ki parts cut the self-compile `-O2` unit wall time
@@ -514,76 +198,11 @@ Arithmetic work should support these paths or fix correctness defects.
       rules over plan facts rather than a planning choice.
       Fast-entry `calleeTry` selection now consumes typed call overrides and
       declines guarded or unavailable targets without borrowing canonical proofs.
-- [ ] Use typed-entry reachable edges in surviving liveness, scalar use and result ABI
-      decisions. A validated per-variant plan now removes impossible C branches and
-      unreachable safepoints, eliminating the dead coercive addition and root frame
-      in String entries for Number predicates. Surviving GC maps retain their full
-      hidden helper obligations. Propagate the refined edges into the remaining
-      dataflow and specialization decisions while preserving handlers, resume points,
-      region and record continuations, and canonical fallbacks.
-      Full entries, frameless fast entries and numeric leaves now share that plan;
-      fast admission uses the reachable graph. A shared unused-value plan removes
-      effect-free producers and copy chains across full, fast, numeric and resumable
-      C bodies while retaining root writes, hidden ownership uses and profile sites.
-      Return ABI proofs now join reachable returns using existing kind and range
-      observations, preserving handler entry contracts; callers consume those
-      scalar results through existing typed transports. Use the surviving graph
-      during fast-path discovery, and carry edge projections into remaining shape
-      and lifetime analyses. String comparison length proofs now join surviving
-      literal definitions and copies, retaining unknown handler, resume and helper
-      entries; full, frameless and resumable branches consume the validated plan.
-      Connected entry finalization now retires callee nominations made unreachable
-      by later return facts, prunes unrooted sibling components and compacts IDs
-      without changing semantic proofs. Retired code capacity is released while
-      spent proof work remains charged as discovery.
-      Span continuation discovery and virtual alias validation now consume the
-      entry's surviving edges. Overlay consumers retain storage ownership without
-      becoming helper entry roots; dead observers and overwrites no longer pin
-      materialization. Generic span fallbacks retain String comparison length facts.
-      Enumeration counts and snapshots now use the same projected virtual-value
-      lifetimes, retaining fallback materialization and profiled observations.
-      Map hint sites also have Core collection-chain entry certificates; retiring
-      dead certificates now closes helper reachability from surviving entries while
-      retaining every continuation of a live helper. Map reuse hints also consume
-      projected edges and aliases; dead endpoints no longer retain hint locals or
-      their Core call chains, while live updates retain receiver and key checks.
-      Fixed fast paths, literal-switch targets and field-call windows share the
-      same conditional continuation closure; handler and resume roots retain their
-      explicit entry contracts.
-      Entirely dead fixed windows and instruction-local plans are retired after
-      projection, so their helper state and optimization metadata do not reach C.
-      Record producers, caller-owned literals, parameter uses and forwarding sites
-      retain storage ownership without creating control-flow entries. Their
-      surviving view drops dead producers, uses and materialization observers;
-      source certificates and entry ABI layouts remain intact.
-      Array initializer discovery follows unique surviving edges across proven
-      branches, retaining source store sites and live initializer effects. Holes,
-      protected incremental ranges and independent helper entries retain fallback.
-      Static property definitions now join reaching String identities through
-      copies and key conversions on the same graph. Conversion effects stay at
-      their source sites; unknown and indexed keys keep their existing paths.
-      String and Symbol key conversions retain result kinds independently of
-      throw effects. Boxed keys consume those kinds in conversion and definition
-      branches while preserving nullish-base checks and Number decoding.
-      Coercibility guards consume non-nullish kind unions in full and resumable
-      bodies. Frameless entries perform only a rejecting nil probe and leave error
-      construction and frame metadata to the full fallback.
-      Generic and exact indexed accesses consume Number and integer-range facts
-      through boxed keys and values. Frameless reads share those proofs; numeric
-      misses retain deferred root publication and check completion before decoding
-      scalar results. Non-numeric keys retain their coercing fallback.
-      Frameless admission now stops individual paths before unsupported effects,
-      retaining successful sibling returns and pruning state beyond each restart.
-      Primitive unary facts also govern typed-entry admission; fallback retains
-      original arguments and reachable fast loops still require a full frame.
-      Definition initialization also accounts for incoming private-root publication
-      reads after physical root selection, so conservative maps cannot expose
-      future locals while rematerialized values retain their existing proofs.
-      Frameless arithmetic converts eligible primitive operands independently,
-      retaining Number guards only for uncertain operands. String parsing, mixed
-      relational primitives, shifts and Number exponentiation use noncollecting
-      helpers. String alternatives in addition and lexical String pairs retain
-      fallback while mixed numeric paths survive those same operand unions.
+- [ ] Carry typed-entry reachable edges into remaining scalar-use, shape and
+      lifetime analyses. Preserve handlers, resume points, hidden helper ownership,
+      source certificates, record storage and generic continuations. Retiring an
+      unreachable entry must not remove state a surviving helper or observer owns.
+
 - [ ] Shrink the largest inline expansions in generated code. Uniform tagged
       field slots and the one-compare Number decode cut the self-compiler's text
       from 55.0 to 49.9 MB; the inline static load probe is now about 19
@@ -610,22 +229,9 @@ Arithmetic work should support these paths or fix correctness defects.
 
 ## Compiled native output
 
-Native output should read and perform like a compiled language rather than a
-translated interpreter. Measured against Node on the default closed world, class
-accessors over private fields still run 75 ms against 14, polymorphic subclass
-methods 40 against 10 and recursive method calls 86 against 29.
-
-The native self-compiler takes about 15.6 s and its profile is flat: sampled by
-program counter, 37% of its time is compiled JavaScript, 12% the collector and
-allocation, 11% property lookup helpers, 8% collections and 7% array helpers.
-Hardware counters place its gap to Node in instruction count, not stalls: at a
-similar front-end stall rate it retires about 2.4 times Node's instructions. It makes
-about 480 M compiled entries per run, yet cheaper calls alone did not move it:
-guarded direct calls at hinted method sites, inline inherited-method hits, frameless
-accessor entries and up to four times the inlining budget each changed it by 2% or
-less. A whole-program points-to model over construction Core took 108 s in Node to
-converge and still left generic paths at the hot receivers, so field facts stay
-bounded and consumer-driven as planned below.
+Use representative compiled workloads to locate executed dispatch, allocation,
+property and collection costs. Keep field facts bounded and consumer-driven;
+static generated-code size and helper counts do not establish runtime cost.
 
 - [ ] Guard `Math.imul`, `Math.clz32`, `Math.pow` and `Math.atan2` like the other
       `Math` calls. With eval or realms enabled, the default, a known builtin call
@@ -1357,18 +963,10 @@ contracts or investigates costs still visible after the string follow-ups.
       closure object the call passes as its callee. Sinking creation into the
       cases that use it, or passing no object when the target never reads its
       callee, would remove most of these allocations.
-- [ ] Publish compiled root frames only on paths that can reach a safepoint.
-      Small accessors such as the Core store's `instructionKind` and `checkedId`
-      link a root frame and clear their GC slots on entry although only their
-      throw paths collect. In the full self-compile's optimize phase those
-      accessors take about 14% of the samples, and loading and dispatching the
-      method calls to them another 8%; calling them directly on a known
-      `CoreFunctionStore` receiver would remove most of both. Their call sites in
-      loops are already offered as guarded inlines (218 for `instructionKind`,
-      286 for `instructionOpcodeName`) but the cross-call program budget runs out
-      first; letting inlines of 32 or fewer units bypass that budget grew the
-      compiler's own output for `parser.ts` by 49% and made the self-compile 44%
-      slower, so the remedy is cheaper calls or a hotness signal, not more inlining.
+- [ ] Reduce precise-root frame publication on paths that cannot reach a safepoint.
+      Native C uses conservative stack roots; measure this work on precise-root
+      targets such as Wasm. Keep collecting throw paths rooted and avoid expanding
+      inlining budgets merely to bypass entry overhead.
 - [ ] Keep Node stream state in native fields. The C stream runtime reads and
       writes its state as own properties named by C strings, about 177 interned
       names per Express JSON request, and its helpers take 7% of that route's
@@ -2044,18 +1642,10 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 ## Generational GC workers
 
-- [ ] Resolve the native performance trade-off: the historical five-family
-      portfolio found a 1.15% aggregate cost against `40063120`, while the current
-      retained source estimates a 0.82% gain against `d149ffe6` with a 95% interval
-      from 0.87% worse to 2.29% better. Neither comparison establishes recovered
-      throughput. A separate ten-pair, 30-second HTTP routes comparison found a
-      0.66% loss against `d149ffe6`; a newer five-pair run estimated a 1.77%
-      loss and 1.68% more server CPU per completed response, both with intervals
-      spanning zero. Its single GC diagnostic cannot attribute the loss. A
-      direct ten-pair primitive-filter rollback found no routes throughput or
-      CPU recovery. Profile matched finished HTTP binaries to locate the routes
-      CPU difference before another collector scheduling change. Keep
-      mutator-owned sweep unless measured benefit justifies worker ownership.
+- [ ] Establish the native collector's throughput and CPU tradeoff with repeated
+      matched application and HTTP comparisons. Profile finished binaries before
+      changing scheduling. Keep mutator-owned sweep unless measured benefit
+      justifies worker ownership.
 - [ ] Validate native worker capacity under live constrained and nested CPU quotas.
       Synthetic v1/v2 mounted-path and visible-ancestor fixtures pass; hidden
       namespace ancestors cannot be inferred. Keep the inline capacity fallback.
@@ -2068,14 +1658,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       survivor accounting distinct from exact live heap and RSS. Extend block
       ownership only if a measured need justifies background reclamation.
 
-- [ ] Make minor collection cost follow survivors instead of allocation. The minor
-      sweep reads, marks free and links every dead young cell, so
-      `moderate-retention-churn` takes 31 ns per row against Node's 7.7, with 64 of
-      83 ms of minor pause in sweeping over 16.5 M inspected cells. A smaller
-      nursery is slower (64 ns at a 4 MB cap), since each collection rescans the
-      large remembered array. Side mark bitmaps with lazy free-range allocation
-      would remove the per-dead-cell work without moving objects.
-
 ### Concurrent generational GC experiments
 
 - [ ] Barriers: decide dense-fill and scalar captured-store card specialization
@@ -2084,11 +1666,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       had a neutral application cut. Dense shift/copy card narrowing was rolled
       back after a repeated application slowdown; its semantic fixture remains.
       Keep SATB deletion protection independent of generational facts.
-- [ ] Pacing: replace the eighth-collection major cadence with a pressure policy
-      built on young survival, promotion debt, major reclamation yield, RAW and
-      chunk capacity and assist cost. Fixed cadences are not one: 16 raised peak
-      RSS about 27% without improving elapsed or CPU time, and 4 traded fewer
-      minor visits for more major work and 3.1% more pause time.
 - [ ] Bounded slices: retain the skipped-block sweep budget only after combined
       latency review. One instrumented app run had more short major slices and a
       5.998 ms minor pause outlier; repeat before claiming application pause gains.
@@ -2111,13 +1688,13 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 These are not active tasks and become actionable only when their condition is
 observed.
 
-- Replace global free lists with per-block lists, or release chunks, only when a
-  workload shows long sweep exposure; the app diagnostic allocated 32,800 bytes
-  during major sweep.
+- Extend block or chunk reclamation only when a workload shows long sweep exposure
+  or retained capacity that the existing bitmap allocator and page release cannot
+  address.
 - Elide SATB barriers only if concurrent GC becomes the default and a realistic
   store-heavy workload makes the barrier material.
-- Revisit MalVm and host-structure layout when multiple VMs or isolates are active in
-  one process.
+- Revisit MalVm and host-structure layout when measurements show per-isolate storage
+  limiting concurrent workloads.
 - Choose segmented, guarded, or fixed fiber stacks when measured actor density makes
   the current policy limiting.
 - Consider separate actor heaps only if idle actor density becomes a measured
