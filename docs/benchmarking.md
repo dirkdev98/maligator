@@ -334,7 +334,7 @@ evidence. JavaScript and micro jobs have 55-minute ceilings; ordinary compiler j
 have a 70-minute ceiling. Compiler captures use 15-minute build budgets, the parser
 slice has an eight-minute comparison budget, and the shape slice has a 25-minute
 budget. The explicit memory-policy comparison allows longer preparation and full-input
-measurement within a four-hour job. The compiler lane checks Node and Bun output on
+measurement within a job capped at 270 minutes. The compiler lane checks Node and Bun output on
 the same frozen input and retains its build
 events, captured source identities, output digests, resource logs, and partial reports. The
 workflow uploads evidence even on failure, preserves failing exit codes, and
@@ -449,8 +449,9 @@ For a nursery-size experiment, compare the same native capture in both roles and
 pass `--candidate-nursery-max-bytes 67108864`; only candidate runs receive that cap.
 Run a separate comparison with `--gc-memory` to retain synchronized ownership
 samples and complete rows at the largest sampled managed occupancy and process
-reservation. `--gc-memory-interval 256` samples every 256 pauses and every major
-completion, reducing heap walks while retaining completed-cycle observations.
+reservation. `--gc-memory-interval 256` samples every 256 pauses and each major
+pause ending with an idle collector. This reduces heap walks while retaining
+completed-cycle observations. Snapshot row counts are not collection counts.
 Those traced timings are diagnostic. Keep ordinary elapsed time, peak RSS and
 pause costs separate, and do not sum overlapping reserve categories. The manual
 Native performance workflow's `memory_policy` input runs both comparisons on the

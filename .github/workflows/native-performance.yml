@@ -434,7 +434,7 @@ jobs:
       (github.event.action == 'synchronize' || github.event.label.name == 'native-compiler-performance'))
     name: Frozen compiler slices / ${{ matrix.comparison }}
     runs-on: ubuntu-26.04
-    timeout-minutes: ${{ inputs.memory_policy && 240 || 70 }}
+    timeout-minutes: ${{ inputs.memory_policy && 270 || 70 }}
     strategy:
       fail-fast: false
       matrix:

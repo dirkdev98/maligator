@@ -48,7 +48,7 @@ Options:
   --shared-oracle                   require both revisions to match the baseline Node output
   --bun EXECUTABLE                   check and time Bun on the same frozen input
   --gc-memory                       trace synchronized GC ownership samples (native diagnostics)
-  --gc-memory-interval N             sample every N pauses and each major completion (default: 1)
+  --gc-memory-interval N             sample every N pauses and each pause ending a major cycle (default: 1)
   --candidate-nursery-max-bytes N    cap only the candidate nursery increment, at least 4194304
   --budget-seconds N                total command budget (default: 600)
   --plan=json                       show work without building or writing
