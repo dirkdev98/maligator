@@ -170,3 +170,4 @@ tests/native/record-field-kinds.test.ts
 tests/native/record-result-entries.test.ts
 tests/native/ffi-handle-sweep.test.ts
 tests/native/iterator-exhaustion.test.ts
+tests/native/gc-nursery-budget.test.ts

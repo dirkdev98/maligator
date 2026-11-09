@@ -460,6 +460,9 @@ struct MalGcState {
     // Assist ratio (MAL_GC_ASSIST): grey/SATB entries traced per byte allocated
     // since the last mark step, so marking outruns allocation.
     u32 assist;
+    usize nursery_max_bytes;
+    bool memory_trace;
+    u64 memory_sample;
 
     // --- Per-collection statistics (MAL_GC_STATS=1) ---------------------------
     u64 collections;
@@ -1078,6 +1081,20 @@ void mal_gc_init(MalVm *vm) {
     if (getenv("MAL_GC_STATS") != nullptr) {
         g->stats_enabled = true;
         mal_gc_stats_claim(g);
+    }
+    g->memory_trace = getenv("MAL_GC_MEMORY_TRACE") != nullptr;
+    const char *nursery_max = getenv("MAL_GC_NURSERY_MAX_BYTES");
+    if (nursery_max != nullptr) {
+        char *end;
+        errno = 0;
+        unsigned long long bytes = strtoull(nursery_max, &end, 10);
+        if (errno != 0 || end == nursery_max || *end != '\0' ||
+            nursery_max[0] == '-' || bytes < MAL_GC_MIN_INCREMENT || bytes > SIZE_MAX) {
+            fprintf(stderr, "MAL_GC_NURSERY_MAX_BYTES requires an integer of at least %zu bytes\n",
+                MAL_GC_MIN_INCREMENT);
+            abort();
+        }
+        g->nursery_max_bytes = (usize) bytes;
     }
 
     const char *major_every = getenv("MAL_GC_MAJOR_EVERY");
@@ -3342,7 +3359,35 @@ static u64 mal_gc_remembered_object_slots(const MalObject *object) {
 
 // --- Statistics helpers ----------------------------------------------------
 
+static void mal_gc_memory_sample(MalVm *vm, const char *moment, bool major) {
+    MalHeapUsage usage = mal_heap_usage(&vm->heap);
+    MalHeapCurrentUsage current = mal_heap_current_usage(&vm->heap);
+    usize snapshots = 0;
+#if !defined(__wasi__)
+    snapshots = g_gc->batch_edges_capacity * sizeof(MalValue) +
+        g_gc->batch_edge_meta_capacity * 2 * sizeof(usize);
+#endif
+    fprintf(stderr,
+        "[gc-memory] schema=1 sample=%llu moment=%s kind=%s phase=%d major_complete=%d "
+        "survivor_baseline_bytes=%zu managed_owned_bytes=%zu raw_owned_bytes=%zu "
+        "managed_large_bytes=%zu managed_free_cell_bytes=%zu raw_free_cell_bytes=%zu "
+        "raw_warm_block_bytes=%zu bump_free_bytes=%zu recycled_block_bytes=%zu "
+        "unclaimed_chunk_bytes=%zu chunk_mapped_bytes=%zu array_buffer_bytes=%zu "
+        "snapshot_reserved_bytes=%zu process_reserved_bytes=%zu nursery_max_bytes=%zu\n",
+        (unsigned long long) g_gc->memory_sample, moment, major ? "major" : "minor",
+        (int) g_gc->phase, moment[0] == 'a' && major && g_gc->phase == MAL_GC_PHASE_IDLE,
+        vm->heap.live_bytes, usage.managed_owned_bytes, usage.raw_owned_bytes,
+        usage.managed_large_bytes, usage.managed_free_cell_bytes, usage.raw_free_cell_bytes,
+        usage.raw_warm_block_bytes, usage.bump_free_bytes, usage.recycled_block_bytes,
+        usage.unclaimed_chunk_bytes, usage.chunk_mapped_bytes, current.array_buffer_bytes,
+        snapshots, mal_gc_process_bytes(), g_gc->nursery_max_bytes);
+}
+
 static u64 mal_gc_pause_begin(MalVm *vm, bool major) {
+    if (g_gc->memory_trace) {
+        g_gc->memory_sample++;
+        mal_gc_memory_sample(vm, "before", major);
+    }
     u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     mal_profile_event(vm, MAL_PROFILE_RECORD_GC_BEGIN, major ? 1 : 0);
     return start_ns;
@@ -3350,8 +3395,10 @@ static u64 mal_gc_pause_begin(MalVm *vm, bool major) {
 
 static void mal_gc_pause_end(MalVm *vm, bool major, MalGcPauseReason reason, u64 start_ns) {
     mal_profile_event(vm, MAL_PROFILE_RECORD_GC_END, major ? 1 : 0);
+    u64 end_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
+    if (g_gc->memory_trace) mal_gc_memory_sample(vm, "after", major);
     if (!g_gc->stats_enabled) return;
-    u64 elapsed_ns = mal_monotonic_now_ns() - start_ns;
+    u64 elapsed_ns = end_ns - start_ns;
     g_gc->pause_count++;
     g_gc->total_ns += elapsed_ns;
     mal_gc_record_latency(&g_gc->pause_latency[reason], elapsed_ns);
@@ -3375,12 +3422,15 @@ static void mal_gc_stat_peak_live(MalVm *vm) {
 
 /* Collect again only after another live-set of allocation, with a floor. */
 static usize mal_gc_advance_trigger(MalVm *vm) {
-    usize grow = vm->heap.live_bytes * 2;
+    usize grow = vm->heap.live_bytes > SIZE_MAX / 2 ? SIZE_MAX : vm->heap.live_bytes * 2;
+    if (g_gc->nursery_max_bytes != 0 && grow > g_gc->nursery_max_bytes)
+        grow = g_gc->nursery_max_bytes;
     if (grow < MAL_GC_MIN_INCREMENT) {
         grow = MAL_GC_MIN_INCREMENT;
     }
     if (vm->heap.next_gc_at != (usize) -1) {
-        vm->heap.next_gc_at = vm->heap.bytes_allocated + grow;
+        vm->heap.next_gc_at = grow > SIZE_MAX - vm->heap.bytes_allocated
+            ? SIZE_MAX : vm->heap.bytes_allocated + grow;
     }
     return grow;
 }

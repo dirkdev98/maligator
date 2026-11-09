@@ -313,3 +313,4 @@ tests/native/ffi-native-values.test.ts
 tests/native/ffi-variadic-dispatch.test.ts
 tests/native/ffi-handle-sweep.test.ts
 tests/native/iterator-exhaustion.test.ts
+tests/native/gc-nursery-budget.test.ts

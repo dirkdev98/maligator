@@ -27,6 +27,7 @@ function fixture(
 		wireBytes?: number;
 		missingWire?: boolean;
 		truncatedWire?: boolean;
+		observeEnvironment?: boolean;
 	} = {},
 ) {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-experiment-"));
@@ -42,6 +43,10 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 const target = process.argv[2];
 const output = process.argv[3];
+if (${options.observeEnvironment ?? false}) {
+ writeFileSync(path.join(${JSON.stringify(root)}, path.basename(path.dirname(output)) + '.env.json'), JSON.stringify({trace:process.env.MAL_GC_MEMORY_TRACE, cap:process.env.MAL_GC_NURSERY_MAX_BYTES}));
+ if (process.env.MAL_GC_MEMORY_TRACE) console.error('[gc-memory] schema=1 sample=1 moment=after managed_owned_bytes=100 process_reserved_bytes=200');
+}
 if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
   writeFileSync(${JSON.stringify(path.join(root, "descendant.pid"))}, String(child.pid));
@@ -56,11 +61,15 @@ if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
   console.log(JSON.stringify({ units: 1, codeUnits: text.length, wireBytes: ${options.wireBytes ?? 3}, phases: {} }));
 }
 `,
-			compiler: "unused native executable in a Node-hosted fixture",
+			compiler: `#!/bin/sh\nexec '${process.execPath}' "$(dirname "$0")/source/bench/self-compile.mts" "$@"\n`,
 		};
 		for (const [name, contents] of Object.entries(files)) {
 			mkdirSync(path.dirname(path.join(directory, name)), { recursive: true });
-			writeFileSync(path.join(directory, name), contents);
+			writeFileSync(
+				path.join(directory, name),
+				contents,
+				name === "compiler" ? { mode: 0o755 } : {},
+			);
 		}
 		const manifest = {
 			schema: 5,
@@ -503,4 +512,46 @@ it("accepts source-only captures for Node comparisons and rejects native executi
 		"requires two native compiler captures",
 	);
 	expect(existsSync(path.join(test.output, "node-reference"))).toBe(false);
+});
+
+it("keeps GC diagnostics explicit and applies a candidate cap by run role for one native capture", () => {
+	const test = fixture({ observeEnvironment: true });
+	// Both roles deliberately use the same executable and frozen source.
+	const args = [...test.command];
+	args[3] = test.base;
+	const result = spawnSync(
+		process.execPath,
+		[
+			...args,
+			"--host",
+			"native",
+			"--shared-oracle",
+			"--gc-memory",
+			"--candidate-nursery-max-bytes",
+			"67108864",
+		],
+		{
+			encoding: "utf8",
+			timeout: 20_000,
+			env: { ...process.env, MAL_GC_NURSERY_MAX_BYTES: "8388608" },
+		},
+	);
+	expect(result.status, result.stderr).toBe(0);
+	for (const label of ["warm-base", "pair-0-base", "pair-1-base"])
+		expect(
+			JSON.parse(readFileSync(path.join(test.root, `${label}.env.json`), "utf8")),
+		).toEqual({ trace: "1" });
+	for (const label of ["warm-candidate", "pair-0-candidate", "pair-1-candidate"])
+		expect(
+			JSON.parse(readFileSync(path.join(test.root, `${label}.env.json`), "utf8")),
+		).toEqual({ trace: "1", cap: "67108864" });
+	expect(test.report().samples).toHaveLength(6);
+});
+
+it("rejects GC diagnostics on the Node host before creating evidence", () => {
+	const test = fixture();
+	const result = test.run("--gc-memory", "--plan=json");
+	expect(result.status).toBe(2);
+	expect(result.stderr).toContain("GC memory options require --host native");
+	expect(existsSync(test.output)).toBe(false);
 });

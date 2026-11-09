@@ -17,6 +17,11 @@ on:
         type: choice
         options: [javascript, compiler, micro, all]
         default: javascript
+      memory_policy:
+        description: Compare a 64 MiB nursery cap and trace compiler ownership separately
+        required: false
+        type: boolean
+        default: false
   pull_request:
     types: [labeled, synchronize]
 
@@ -597,6 +602,40 @@ jobs:
             .cache/native-performance/baseline .cache/native-performance/candidate \
             --output .cache/native-performance/shape --workload shape --pairs 5 \
             --budget-seconds 1500 2>&1 | tee .cache/native-performance/shape.log
+
+      - name: Compare the compiler nursery cap without tracing
+        if: >-
+          !cancelled() && steps.baseline.outputs.skip != 'true' &&
+          github.event_name == 'workflow_dispatch' && inputs.memory_policy
+        run: |
+          set -o pipefail
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/candidate .cache/native-performance/candidate \
+            --output .cache/native-performance/nursery-ordinary --workload full --pairs 3 \
+            --shared-oracle --candidate-nursery-max-bytes 67108864 \
+            --budget-seconds 600 --plan=json | tee .cache/native-performance/nursery-ordinary-plan.json
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/candidate .cache/native-performance/candidate \
+            --output .cache/native-performance/nursery-ordinary --workload full --pairs 3 \
+            --shared-oracle --candidate-nursery-max-bytes 67108864 \
+            --budget-seconds 600 2>&1 | tee .cache/native-performance/nursery-ordinary.log
+
+      - name: Attribute compiler memory in separate diagnostic runs
+        if: >-
+          !cancelled() && steps.baseline.outputs.skip != 'true' &&
+          github.event_name == 'workflow_dispatch' && inputs.memory_policy
+        run: |
+          set -o pipefail
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/candidate .cache/native-performance/candidate \
+            --output .cache/native-performance/nursery-memory --workload full --pairs 1 \
+            --shared-oracle --gc-memory --candidate-nursery-max-bytes 67108864 \
+            --budget-seconds 300 --plan=json | tee .cache/native-performance/nursery-memory-plan.json
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/candidate .cache/native-performance/candidate \
+            --output .cache/native-performance/nursery-memory --workload full --pairs 1 \
+            --shared-oracle --gc-memory --candidate-nursery-max-bytes 67108864 \
+            --budget-seconds 300 2>&1 | tee .cache/native-performance/nursery-memory.log
 
       - name: Remove disposable baseline source and dependency links
         if: always() && steps.baseline.outputs.skip != 'true'

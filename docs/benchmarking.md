@@ -440,6 +440,14 @@ npm run bench:self-compile-experiment -- compare .cache/compiler-base .cache/com
 
 Remove `--plan=json` to execute. Select `--workload shape` or `--workload full`
 for larger inputs, and `--host node` for a separate Node-hosted comparison.
+For a nursery-size experiment, compare the same native capture in both roles and
+pass `--candidate-nursery-max-bytes 67108864`; only candidate runs receive that cap.
+Run a separate comparison with `--gc-memory` to retain synchronized ownership
+samples and complete snapshots at managed-occupancy and process-reserve peaks.
+Those traced timings are diagnostic. Keep ordinary elapsed time, peak RSS and
+pause costs separate, and do not sum overlapping reserve categories. The manual
+Native performance workflow's `memory_policy` input runs both comparisons on the
+full frozen compiler input, alongside its ordinary compiler controls.
 Both Node compiler snapshots use the same source preparation. Native captures use
 a fresh explicit module frontend because cached artifacts deliberately lose trusted
 precise VM root maps on deserialization. This keeps their GC policy consistent.

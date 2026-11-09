@@ -46,6 +46,8 @@ Options:
   --pairs N                         alternating measured pairs (default: 5)
   --cold                            Node fresh-process pairs without extra oracle or warmups
   --shared-oracle                   require both revisions to match the baseline Node output
+  --gc-memory                       trace synchronized GC ownership samples (native diagnostics)
+  --candidate-nursery-max-bytes N    cap only the candidate nursery increment, at least 4194304
   --budget-seconds N                total command budget (default: 600)
   --plan=json                       show work without building or writing
 
@@ -82,6 +84,8 @@ interface Options {
 	budgetSeconds: number;
 	plan: boolean;
 	sourceOnly: boolean;
+	gcMemory: boolean;
+	candidateNurseryMaxBytes?: number;
 	coreOptimizationAblation?: CoreOptimizationBenchmarkAblation["family"];
 }
 
@@ -111,6 +115,11 @@ interface Sample {
 	codeUnits: number;
 	phases: Record<string, number>;
 	peakRssBytes?: number;
+	gcMemory?: {
+		samples: number;
+		peakManaged: Record<string, string | number>;
+		peakProcess: Record<string, string | number>;
+	};
 }
 
 function writeJson(file: string, value: unknown): void {
@@ -428,6 +437,15 @@ function compareCapturedCompilers(options: Options): void {
 		const timed = process.platform === "darwin" || process.platform === "linux";
 		const started = performance.now();
 		let result: ReturnType<typeof spawnSync>;
+		const environment = cleanEnvironment();
+		if (host === "native") {
+			if (options.gcMemory) {
+				environment.MAL_GC_STATS = "1";
+				environment.MAL_GC_MEMORY_TRACE = "1";
+			}
+			if (label.endsWith("-candidate") && options.candidateNurseryMaxBytes !== undefined)
+				environment.MAL_GC_NURSERY_MAX_BYTES = String(options.candidateNurseryMaxBytes);
+		}
 		try {
 			result = spawnSync(
 				timed ? "/usr/bin/time" : executable,
@@ -435,7 +453,7 @@ function compareCapturedCompilers(options: Options): void {
 					? [process.platform === "darwin" ? "-lp" : "-v", executable, ...args]
 					: args,
 				{
-					env: cleanEnvironment(),
+					env: environment,
 					stdio: ["ignore", stdout, stderr],
 				},
 			);
@@ -470,9 +488,48 @@ function compareCapturedCompilers(options: Options): void {
 				: resourceLog.match(/Maximum resident set size \(kbytes\):\s*(\d+)/)?.[1];
 		if (timed && rss === undefined)
 			throw new Error(`${label} resource probe omitted peak RSS`);
+		let gcMemory: Sample["gcMemory"];
+		if (options.gcMemory && host === "native") {
+			const snapshots = resourceLog
+				.split("\n")
+				.filter((line) => line.startsWith("[gc-memory] "))
+				.map((line) =>
+					Object.fromEntries(
+						[...line.matchAll(/([a-z_]+)=([^ ]+)/g)].map(
+							(match) =>
+								[
+									match[1]!,
+									/^\d+$/.test(match[2]!) ? Number(match[2]) : match[2]!,
+								] as const,
+						),
+					),
+				);
+			if (
+				snapshots.length === 0 ||
+				snapshots.some(
+					(row) =>
+						row.schema !== 1 ||
+						typeof row.managed_owned_bytes !== "number" ||
+						typeof row.process_reserved_bytes !== "number",
+				)
+			)
+				throw new Error(`${label} omitted valid GC memory snapshots`);
+			gcMemory = {
+				samples: snapshots.length,
+				peakManaged: snapshots.reduce((peak, row) =>
+					Number(row.managed_owned_bytes) > Number(peak.managed_owned_bytes) ? row : peak,
+				),
+				peakProcess: snapshots.reduce((peak, row) =>
+					Number(row.process_reserved_bytes) > Number(peak.process_reserved_bytes)
+						? row
+						: peak,
+				),
+			};
+		}
 		return {
 			...summary,
 			label,
+			...(gcMemory === undefined ? {} : { gcMemory }),
 			wallMs,
 			digest: digestSelfCompileOutput(output),
 			wireDigest: sha256(wire),
@@ -570,13 +627,22 @@ function parseOptions(args: Array<string>): Options | undefined {
 		budgetSeconds: 600,
 		plan: false,
 		sourceOnly: false,
+		gcMemory: false,
 	};
 	while (args.length > 0) {
 		const option = args.shift();
 		if (option === "--plan=json") options.plan = true;
 		else if (option === "--shared-oracle" && command === "compare")
 			options.perRevisionOracle = false;
-		else if (option === "--cold" && command === "compare") options.cold = true;
+		else if (option === "--gc-memory" && command === "compare") options.gcMemory = true;
+		else if (option === "--candidate-nursery-max-bytes" && command === "compare") {
+			const bytes = Number(take());
+			if (!Number.isSafeInteger(bytes) || bytes < 4194304)
+				throw new Error(
+					"--candidate-nursery-max-bytes requires an integer of at least 4194304",
+				);
+			options.candidateNurseryMaxBytes = bytes;
+		} else if (option === "--cold" && command === "compare") options.cold = true;
 		else if (option === "--source-only" && command === "capture")
 			options.sourceOnly = true;
 		else if (option === "--program" && command === "capture")
@@ -618,6 +684,11 @@ function parseOptions(args: Array<string>): Options | undefined {
 		} else throw new Error(`unknown option: ${option}`);
 	}
 	if (!options.output) throw new Error("compare requires --output DIRECTORY");
+	if (
+		(options.gcMemory || options.candidateNurseryMaxBytes !== undefined) &&
+		options.host !== "native"
+	)
+		throw new Error("GC memory options require --host native");
 	if (options.cold && options.host !== "node")
 		throw new Error("--cold requires --host node");
 	if (options.cold) options.perRevisionOracle = false;
@@ -758,6 +829,14 @@ if (import.meta.main) {
 														"two warmups",
 													]),
 											`${2 * options.pairs} measured compiler runs`,
+											...(options.gcMemory
+												? ["GC ownership tracing; diagnostic timings"]
+												: []),
+											...(options.candidateNurseryMaxBytes === undefined
+												? []
+												: [
+														`candidate nursery increment capped at ${options.candidateNurseryMaxBytes} bytes`,
+													]),
 											"verify emitted C and stripped runtime-wire byte parity",
 											"verify capture integrity",
 										],
