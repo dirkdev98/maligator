@@ -190,10 +190,11 @@ Synchronous GC stress alone cannot establish this overlap.
 ## Ownership diagnostics
 
 `MAL_GC_MEMORY_TRACE=1` records synchronized ownership samples before and after
-collector pauses. Each row keeps managed occupancy, RAW ownership, partly occupied
+collector pauses. A larger positive value samples every N pauses and each major
+pause ending with an idle collector. Each row keeps managed occupancy, RAW ownership, partly occupied
 block capacity, mapped chunks, ArrayBuffer ownership, snapshot reserve and process
 reserve together. High-water summaries retain the complete row for each selected
-peak. They do not add peaks from different moments. RAW warm reserve overlaps
+sampled peak. They do not establish uncaptured peaks or add peaks from different moments. RAW warm reserve overlaps
 other capacity fields; process reserve overlaps heap mappings and backing stores.
 Neither is resident memory. Survivor bytes are the collector's last accounting
 baseline, including floating garbage, rather than an exact reachability census.
@@ -201,7 +202,7 @@ baseline, including floating garbage, rather than an exact reachability census.
 `MAL_GC_NURSERY_MAX_BYTES` optionally bounds the allocation increment after a
 collection, with a 4 MiB minimum. Without it, the increment follows the existing
 live-set policy. It leaves explicit collection disabling and major-cycle debt
-accounting intact. This control permits a matched nursery-size experiment without
-changing the default policy before workload evidence establishes the tradeoff.
+accounting intact. A fixed cap trades retained block capacity for collection
+frequency and compiler CPU time, so it remains an explicit footprint choice.
 Tracing perturbs execution, so ordinary time and peak RSS comparisons run
 separately from ownership diagnostics.
