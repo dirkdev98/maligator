@@ -58,6 +58,7 @@ globalThis.iterate = function iterate(values) {
 function compileSource(
 	source: string,
 	primordials: "locked" | "mutable",
+	optimization: "full" | "development" = "full",
 ): CoreCompilation {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
 		source,
@@ -67,6 +68,7 @@ function compileSource(
 	return optimizeSemanticProgramToCore(
 		semantic,
 		{
+			optimization,
 			facts: compilerProgramFactsFromConfig(
 				resolveBuildConfig({ engine: { primordials } }),
 			),
@@ -196,6 +198,34 @@ function withVmRegion(
 }
 
 describe("Core plan admission modes", () => {
+	it.each([
+		{
+			name: "captured stores with unreachable abrupt cleanup",
+			source: `function setup() {
+				let first, second;
+				return function assign(values) {
+					[first, second] = values;
+					return first + second;
+				};
+			} globalThis.assign = setup();`,
+		},
+		{
+			name: "member stores with reachable abrupt cleanup",
+			source: `globalThis.assign = function assign(values, target) {
+				[target.first, target.second] = values;
+				return target;
+			};`,
+		},
+	])("lowers iterator cursor plans for $name", ({ source }) => {
+		const compilation = compileSource(source, "mutable", "development");
+		expect(
+			projectCoreSpecializationRecipes(compilation.plan.recipes).some(
+				(selection) => selection.kind === "array-values-iterator-cursor",
+			),
+		).toBe(true);
+		expect(lower(compilation).runtime.functions.length).toBeGreaterThan(0);
+	});
+
 	it("keeps a locked-world license stable and re-checks an invalidatable one per use", () => {
 		const lockedCompilation = compileSource(MULTI_REGION_SOURCE, "locked");
 		const mutableCompilation = compileSource(MULTI_REGION_SOURCE, "mutable");

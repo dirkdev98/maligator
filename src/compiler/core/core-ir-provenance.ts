@@ -3628,7 +3628,9 @@ function iteratorCursorCandidates(
 			...new Set(
 				instructions.flatMap((instruction) => {
 					const handler = handlerBlock(fn, fn.instructionBlock(instruction));
-					return handler === undefined ? [] : [handler];
+					return handler === undefined || !control.reachable.has(handler)
+						? []
+						: [handler];
 				}),
 			),
 		]);
@@ -3664,12 +3666,15 @@ function exclusiveIteratorCloses(
 	const protocol = new Set([root(iterator), root(next)]);
 	const closes: Array<CoreInstructionId> = [];
 	for (const { instruction, position } of index.uses.get(root(iterator)) ?? []) {
+		if (!control.reachable.has(fn.instructionBlock(instruction))) continue;
 		if (position !== 0) return undefined;
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (opcode === "iteratorClose") closes.push(instruction);
 		else if (opcode !== "iteratorStep" || !steps.includes(instruction)) return undefined;
 	}
-	const nextUses = index.uses.get(root(next)) ?? [];
+	const nextUses = (index.uses.get(root(next)) ?? []).filter(({ instruction }) =>
+		control.reachable.has(fn.instructionBlock(instruction)),
+	);
 	if (
 		closes.length > 32 ||
 		nextUses.length !== steps.length ||
