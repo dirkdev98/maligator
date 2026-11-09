@@ -176,7 +176,8 @@ static void stream_init_readable(MalVm *vm, MalValue receiver, MalValue options,
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    roots[2] = mal_value_from_object(mal_object_new_reserved(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), 9));
     roots[3] = stream_new_array(vm);
     roots[5] = stream_new_array(vm);
     roots[6] = stream_option(vm, roots[1], "encoding");
@@ -230,7 +231,8 @@ static void stream_init_writable(MalVm *vm, MalValue receiver, MalValue options,
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    roots[2] = mal_value_from_object(mal_object_new_reserved(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), 8));
     roots[3] = stream_new_array(vm);
     roots[4] = stream_new_array(vm);
     bool object_mode = mal_value_is_truthy(stream_option(vm, roots[1], "objectMode"))

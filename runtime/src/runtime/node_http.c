@@ -1527,7 +1527,8 @@ static MalValue http_new_incoming_message(MalVm *vm) {
         mal_object_new_reserved(&vm->heap, prototype, HTTP_INCOMING_MESSAGE_SLOTS));
     roots[1] = mal_value_from_object(
         mal_object_new_reserved(&vm->heap, nullptr, HTTP_EVENTS_SLOTS));
-    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    roots[2] = mal_value_from_object(mal_object_new_reserved(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), 8));
     roots[3] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
     roots[4] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
 

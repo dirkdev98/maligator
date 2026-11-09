@@ -117,6 +117,11 @@ The codec fixes limits at 64 KiB per start-line-plus-header block, 16 KiB per fi
 in [the host roadmap](../../TODO.md#active-host-work). The transport streams bodies;
 adapters can impose their own buffering limits.
 
+Node stream constructors and the HTTP incoming adapter reserve capacity for the
+initial state fields in the state object itself. The public `_readableState` and
+`_writableState` objects retain their ordinary descriptors and mutation behavior.
+Properties become visible through the existing initialization writes.
+
 ### Backpressure
 
 Read and write flow control are explicit and bounded:

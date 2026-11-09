@@ -73,10 +73,9 @@ executions, measuring both compiler hosts.
       otherwise require repeated-chain and compiler-workload savings that repay planning
       and native build cost.
 
-- [ ] Stream product CLI translation units to the owned build directory and release
-      completed chunks before preparing further roots. Require byte-identical C/runtime
-      images, lower peak build memory and no end-to-end build regression on Node and
-      self-hosted paths.
+- [ ] Establish peak build-memory and end-to-end evidence for streamed product CLI
+      emission on Node and self-hosted paths. Require byte-identical C/runtime images,
+      lower peak memory, worker-root controls and no end-to-end build regression.
 
 - [ ] Distribute existing parts of one oversized native function across bounded
       translation units using a shared transfer-struct declaration. Keep only a cold-build
@@ -864,11 +863,10 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       and backpressure behavior. Verify the event trace before measuring complete Express
       routes; do not trade observable ordering for throughput.
 
-- [ ] Use the checked Express raw and parsed-body routes to select one stream
-      construction, state-access or event-table churn cost. Remove it at the runtime owner
-      while preserving observable state mutation, listener order and read scheduling.
-      Require matched route throughput/CPU and allocation improvement with bare-server and
-      memory controls; avoid a parallel mirrored state representation.
+- [ ] Validate stream state coallocation on the checked Express raw and parsed-body
+      routes. Require matched throughput/CPU and allocation-call improvement with
+      bare-server and memory controls. Preserve observable state mutation, listener order
+      and read scheduling.
 
 - [ ] node:stream: a pipeline stage that pumps into a web TransformStream rejects with
       "Value is not a function" (Readable → TransformStream → Writable), although the
