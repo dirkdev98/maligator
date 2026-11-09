@@ -10,7 +10,12 @@ its class evaluator; Core validates the complete writer graph, a unique
 `createPrivateName` initializer, and an acyclic evaluation site. Captured and
 per-evaluation private environments remain conservative. Equal private keys do
 not make their field values immutable. These identities reflect the separate
-private environments created by [class evaluation](https://tc39.es/ecma262/multipage/ecmascript-language-functions-and-classes.html#sec-classdefinitionevaluation).
+private environments created by [class evaluation](https://tc39.es/ecma262/multipage/ecmascript-language-functions-and-classes.html#sec-runtime-semantics-classdefinitionevaluation).
+
+Repeated class evaluations enter fresh capture scopes shared by the constructor,
+methods, private names and computed field keys. The inner class name remains in
+the TDZ during heritage and element evaluation. Normal, throwing and suspended
+exits restore the enclosing environment before an outer finalizer resumes.
 
 Call specialization groups a bounded sequence of accessor calls and non-observable
 work. It preserves the originally resolved callee and arguments.

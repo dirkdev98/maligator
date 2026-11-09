@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
@@ -18,6 +19,20 @@ function compile(source: string) {
 	);
 	return { core: lowerSemanticProgramToCore(semantic).program, semantic };
 }
+
+test.each(["development", "full"] as const)(
+	"preserves class evaluation captures through %s optimization and artifact round trips",
+	(optimization) => {
+		const { semantic } = compile(
+			readFileSync(new URL("./local/class-evaluation-scope.js", import.meta.url), "utf8"),
+		);
+		const image = compileSemanticProgramToProgramImage(semantic, {
+			optimization,
+			coreVerification: "per-pass",
+		});
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	},
+);
 
 test("super reads retain their receiver through Core, lowering, and wire encoding", () => {
 	const { core, semantic } = compile(`

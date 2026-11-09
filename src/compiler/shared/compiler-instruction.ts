@@ -402,11 +402,9 @@ type CompilerOperation =
 			shapeCaseCandidates: ReadonlyArray<CompilerShapeCaseCandidate>;
 	  }
 	| {
-			// Per-iteration loop environment (CreatePerIterationEnvironment). envPush
-			// enters a loop scope (fresh env, parent = current); envCopy replaces the
-			// current scope env with a sibling that copies the bindings forward; envPop
-			// restores the enclosing env. scopeId is a synthetic negative capture-scope
-			// id; slotCount = number of captured loop-head bindings.
+			// Synthetic lexical scopes use negative IDs to stay separate from function
+			// environments. envPush creates a child scope; envCopy replaces the current
+			// loop scope with a sibling retaining its bindings; envPop restores the parent.
 			type: "envPush" | "envCopy";
 			scopeId: number;
 			slotCount: number;

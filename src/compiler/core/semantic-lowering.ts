@@ -218,11 +218,10 @@ interface CoreFrontendContext {
 	nextGlobalIndex: number;
 
 	/**
-	 * Next synthetic per-iteration loop-scope env id. Negative so it never collides
-	 * with a function index (env capture resolution matches on this id); decremented
-	 * per capturing loop. See compileForStatement / setupPerIterationScope.
+	 * Synthetic capture-scope IDs are negative so they cannot collide with
+	 * function-owned environments during closure capture resolution.
 	 */
-	nextLoopScopeId: number;
+	nextCaptureScopeId: number;
 
 	/**
 	 * ES module linkage. Synthetic bindings holding each module's anonymous
@@ -914,7 +913,7 @@ export function constructSemanticProgramCore(
 		filesByPath: new Map(semantic.files.map((file) => [file.path, file])),
 		bindingToStorage: new Map(),
 		modulePrivateNames: [],
-		nextLoopScopeId: -1,
+		nextCaptureScopeId: -1,
 		nodeToFunctionCache: new Map(),
 
 		nextGlobalIndex: 0,
@@ -4303,7 +4302,7 @@ function mintPrivateNames(
 	cursor: CoreFrontendCursor,
 	bindings: Array<Binding | undefined>,
 ) {
-	const capturedIndices: Array<number> = [];
+	const captured = new Map<number, Array<number>>();
 	for (const binding of bindings) {
 		if (!binding) continue;
 		const location = getOrCreateBindingLocation(program, fn, binding);
@@ -4317,19 +4316,18 @@ function mintPrivateNames(
 			storeRegisterAtLocation(cursor.block, location, name);
 			continue;
 		}
-		if (location.type !== "captured" || location.functionIndex !== fn.functionIndex) {
-			throw new Error(
-				"Private names must use captured slots owned by the class evaluator",
-			);
-		}
-		capturedIndices.push(location.index);
+		if (location.type !== "captured")
+			throw new Error("Private names require a class environment");
+		const indices = captured.get(location.functionIndex) ?? [];
+		indices.push(location.index);
+		captured.set(location.functionIndex, indices);
 	}
-	if (capturedIndices.length === 0) return;
-	cursor.block.emitter.emit({
-		type: "createPrivateNames",
-		functionIndex: fn.functionIndex,
-		capturedIndices,
-	});
+	for (const [functionIndex, capturedIndices] of captured)
+		cursor.block.emitter.emit({
+			type: "createPrivateNames",
+			functionIndex,
+			capturedIndices,
+		});
 }
 
 /**
@@ -4632,6 +4630,105 @@ function compileClass(
 	classNode: ESTree.ClassDeclaration | ESTree.ClassExpression,
 	nameHint?: string,
 ): number {
+	if (!fn.loops?.some((scope) => scope.kind === "loop"))
+		return compileClassBody(program, fn, cursor, classNode, nameHint);
+	const scope = { scopeId: program.nextCaptureScopeId--, slotCount: 0 };
+	const self = classNode.id ? fn.semanticFile.nodeToBinding.get(classNode.id) : undefined;
+	if (self && !self.undeclared)
+		program.bindingToStorage.set(self, {
+			type: "captured",
+			functionIndex: scope.scopeId,
+			index: scope.slotCount++,
+		});
+	const prologue: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	const prologueIndex = fn.blocks.push(prologue) - 1;
+	const body: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	const bodyIndex = fn.blocks.push(body) - 1;
+	cursor.block.emitter.emit({ type: "jump", blocks: [prologueIndex] });
+	cursor.block = body;
+	const protectedRange: Extract<CompilerInstruction, { type: "tryBegin" }> = {
+		type: "tryBegin",
+		blocks: [-1, -1],
+	};
+	const kindReg = nextCoreVariable(fn);
+	const valueReg = nextCoreVariable(fn);
+	const cleanup: SemanticControlContext = {
+		kind: "finally",
+		breakJumps: [],
+		continueJumps: [],
+		finallyEntryJumps: [],
+		completionKindReg: kindReg,
+		completionValueReg: valueReg,
+		finalizerArms: new Map(),
+	};
+	body.emitter.emit(protectedRange);
+	fn.loops.push(cleanup);
+	let constructor: number;
+	try {
+		constructor = compileClassBody(program, fn, cursor, classNode, nameHint, scope);
+	} finally {
+		fn.loops.pop();
+	}
+	const result: BindingLocation = { type: "local", index: fn.nextLocalIndex++ };
+	if (constructor !== -1) storeRegisterAtLocation(cursor.block, result, constructor);
+	const exit: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	const exitIndex = fn.blocks.push(exit) - 1;
+	cursor.block.emitter.emit({ type: "jump", blocks: [exitIndex] });
+	exit.emitter.emit({ type: "tryEnd" });
+	protectedRange.blocks[1] = exitIndex;
+	routeThroughFinalizer(exit, cleanup, "normal", null);
+	const handler: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	protectedRange.blocks[0] = fn.blocks.push(handler) - 1;
+	const error = nextCoreVariable(fn);
+	handler.emitter.emit({ type: "catch", registers: [error] });
+	routeThroughFinalizer(
+		handler,
+		cleanup,
+		"throw",
+		(block) => block.emitter.emit({ type: "throw", registers: [valueReg] }),
+		error,
+	);
+	const finalizer: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	const finalizerIndex = fn.blocks.push(finalizer) - 1;
+	for (const jump of cleanup.finallyEntryJumps!) jump.blocks[0] = finalizerIndex;
+	// Outer iterator closing can throw or suspend, so run it outside this protected range.
+	finalizer.emitter.emit({ type: "envPop" });
+	const arms: Array<{ kind: number; index: number }> = [];
+	for (const { kind, fill } of cleanup.finalizerArms!.values()) {
+		const arm: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+		const index = fn.blocks.push(arm) - 1;
+		fill(arm);
+		arms.push({ kind, index });
+	}
+	const dispatch: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	finalizer.emitter.emit({ type: "jump", blocks: [fn.blocks.push(dispatch) - 1] });
+	for (const { kind, index } of arms) {
+		const constant = nextCoreVariable(fn);
+		const matches = nextCoreVariable(fn);
+		dispatch.emitter.emit(
+			{ type: "createNumber", registers: [constant], value: kind },
+			{ type: "binary", registers: [matches, kindReg, constant], operator: "===" },
+			{ type: "jumpIf", registers: [matches], blocks: [index] },
+		);
+	}
+	const continuation: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	dispatch.emitter.emit({ type: "jump", blocks: [fn.blocks.push(continuation) - 1] });
+	// Body compilation discovers synthetic slots; enter the environment before its protected range.
+	prologue.emitter.emit({ type: "envPush", ...scope });
+	storeRegisterAtLocation(prologue, result, compileUndefined(fn, { block: prologue }));
+	prologue.emitter.emit({ type: "jump", blocks: [bodyIndex] });
+	cursor.block = continuation;
+	return constructor === -1 ? -1 : loadRegisterFromLocation(fn, continuation, result);
+}
+
+function compileClassBody(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	classNode: ESTree.ClassDeclaration | ESTree.ClassExpression,
+	nameHint?: string,
+	scope?: { scopeId: number; slotCount: number },
+): number {
 	const classId = program.nextFunctionIndex;
 	// A module body evaluates a class outside loops at most once, so its private
 	// environment is a singleton: module globals hold it, and methods inlined into
@@ -4640,8 +4737,22 @@ function compileClass(
 		fn.moduleInstantiated && (fn.loops?.length ?? 0) === 0 && !program.evalDirect
 			? "global"
 			: "captured";
-	const machineryBinding = (name: string) =>
-		createSyntheticBinding(program, fn, name, machineryScope);
+	const machineryBinding = (name: string): Binding => {
+		if (scope === undefined)
+			return createSyntheticBinding(program, fn, name, machineryScope);
+		const binding: Binding = {
+			kind: "const",
+			name,
+			usageNodes: [],
+			scopedTo: "captured",
+		};
+		program.bindingToStorage.set(binding, {
+			type: "captured",
+			functionIndex: scope.scopeId,
+			index: scope.slotCount++,
+		});
+		return binding;
+	};
 	const selfBinding = classNode.id
 		? fn.semanticFile.nodeToBinding.get(classNode.id)
 		: undefined;
@@ -8373,7 +8484,7 @@ function setupPerIterationScope(
 	if (captured.length === 0) {
 		return null;
 	}
-	const scopeId = program.nextLoopScopeId--;
+	const scopeId = program.nextCaptureScopeId--;
 	captured.forEach((binding, index) => {
 		program.bindingToStorage.set(binding, {
 			type: "captured",

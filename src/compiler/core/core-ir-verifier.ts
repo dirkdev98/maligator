@@ -1447,7 +1447,9 @@ function verifyCrossFunctionReferences(
 					attribute,
 					target,
 					attribute === "functionIndex" &&
-						(opcode === "loadCaptured" || opcode === "storeCaptured"),
+						(opcode === "loadCaptured" ||
+							opcode === "storeCaptured" ||
+							opcode === "createPrivateNames"),
 				);
 			}
 			const guarded = attributes.guardedFunctionIndices;

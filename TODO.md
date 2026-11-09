@@ -434,16 +434,6 @@ contracts or investigates costs still visible after the string follow-ups.
       the same program, production or not, keep a different stack layout and never
       reproduce it, so a harness fixture cannot guard the fix as it stands.
 
-- [ ] Mint private names per class evaluation inside loops. A class expression
-      evaluated by each iteration of a loop in one activation keeps its private
-      names in that activation's captured slots, so every evaluation overwrites
-      the same slots: after `for (...) list.push(class { #x; static has(o) { return #x in o; } })`,
-      `list[1].has(new list[0]())` is true in both backends where Node returns
-      false. The class's home-object and heritage slots are shared the same way:
-      `super.m()` in the first iteration's subclass calls the last iteration's
-      base. Factory functions are unaffected because each call owns its slots.
-      Give such evaluations their own class scope, as per-iteration bindings do.
-
 - [ ] Fix remaining RegExp @@replace protocol and coercion cases. Prefer shared
       replacement semantics over case-specific branches.
 

@@ -482,6 +482,12 @@ describe("Core verification", () => {
 		const capturedProgram = new CoreProgram(coreOpcodeRegistry);
 		const capturedBuilder = new CoreFunctionBuilder(capturedProgram);
 		const capturedEntry = capturedBuilder.createBlock();
+		capturedBuilder.appendInstruction(capturedEntry, "envPush", [], {
+			attributes: { scopeId: -1, slotCount: 1 },
+		});
+		capturedBuilder.appendInstruction(capturedEntry, "createPrivateNames", [], {
+			attributes: { functionIndex: -1, capturedIndices: [0] },
+		});
 		const [captured] = capturedBuilder.appendInstruction(
 			capturedEntry,
 			"loadCaptured",
