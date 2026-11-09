@@ -434,7 +434,7 @@ jobs:
       (github.event.action == 'synchronize' || github.event.label.name == 'native-compiler-performance'))
     name: Frozen compiler slices / ${{ matrix.comparison }}
     runs-on: ubuntu-26.04
-    timeout-minutes: ${{ inputs.memory_policy && 270 || 70 }}
+    timeout-minutes: ${{ inputs.memory_policy && 270 || 90 }}
     strategy:
       fail-fast: false
       matrix:
@@ -528,6 +528,22 @@ jobs:
           test -z "$(git -C "$baseline" status --porcelain)"
           git -C "$baseline" rev-parse HEAD | tee .cache/native-performance/archive-commit.txt
 
+      - name: Capture each producer revision for Node controls
+        id: node-captures
+        if: steps.baseline.outputs.skip != 'true' && !inputs.memory_policy
+        run: |
+          task="$PWD/.cache/native-performance"
+          script="$PWD/scripts/self-compile-experiment.ts"
+          (
+            cd "$task/baseline-source"
+            node "$script" capture "$task/baseline-node" --source-only --budget-seconds 120 --plan=json \
+              | tee "$task/baseline-node-plan.json"
+            node "$script" capture "$task/baseline-node" --source-only --budget-seconds 120
+          )
+          node "$script" capture "$task/candidate-node" --source-only --budget-seconds 120 --plan=json \
+            | tee "$task/candidate-node-plan.json"
+          node "$script" capture "$task/candidate-node" --source-only --budget-seconds 120
+
       - name: Capture the baseline compiler for the frozen program
         if: steps.baseline.outputs.skip != 'true'
         run: |
@@ -609,6 +625,27 @@ jobs:
             .cache/native-performance/baseline .cache/native-performance/candidate \
             --output .cache/native-performance/shape --workload shape --pairs 5 \
             --bun "$(command -v bun)" --budget-seconds 1500 2>&1 | tee .cache/native-performance/shape.log
+
+      - name: Compare Node producer costs
+        if: >-
+          !cancelled() && steps.baseline.outputs.skip != 'true' &&
+          !inputs.memory_policy && steps.node-captures.outcome == 'success'
+        run: |
+          set -o pipefail
+          for workload in parser shape; do
+            budget=240
+            if [ "$workload" = shape ]; then budget=600; fi
+            node scripts/self-compile-experiment.ts compare \
+              .cache/native-performance/baseline-node .cache/native-performance/candidate-node \
+              --output ".cache/native-performance/node-$workload" --workload "$workload" --pairs 5 --host node \
+              --bun "$(command -v bun)" --budget-seconds "$budget" --plan=json \
+              | tee ".cache/native-performance/node-$workload-plan.json"
+            node scripts/self-compile-experiment.ts compare \
+              .cache/native-performance/baseline-node .cache/native-performance/candidate-node \
+              --output ".cache/native-performance/node-$workload" --workload "$workload" --pairs 5 --host node \
+              --bun "$(command -v bun)" --budget-seconds "$budget" 2>&1 \
+              | tee ".cache/native-performance/node-$workload.log"
+          done
 
       - name: Compare the compiler nursery cap without tracing
         if: >-

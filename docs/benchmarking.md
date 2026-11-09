@@ -481,6 +481,11 @@ so the resulting native executables can still be checked against an exact Node
 oracle. Each capture preserves the frozen source and its original manifest digest.
 This isolates the speed of the generated native program; measuring a changed
 compiler's own output still requires semantic benchmarks when emitted C differs.
+The ordinary compiler performance workflow also captures each producer revision
+without `--program` and compares those snapshots with `--host node`. These controls
+measure the changed compiler's own planning and emission cost, while each revision's
+output is checked against its own oracle. They run separately from the memory-policy
+experiment, which uses one frozen compiler program throughout.
 
 Warm comparisons require each capture's native output to match its own Node
 output on the same frozen baseline input.
