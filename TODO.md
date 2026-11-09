@@ -3,49 +3,41 @@
 This is the sole project roadmap. It contains unfinished work only; completed work
 belongs in commits, tests, generated reports, and benchmark baselines.
 
-Each task has one owning section. Cross-cutting dependencies may be mentioned, but
-the work itself is not duplicated. Priority orders performance work; correctness,
-rooting, and resource-safety defects can interrupt that order.
+Each task has one owning section. Correctness, rooting, resource safety and
+compatibility remain requirements independently of optimization payoff.
 
 ## Current priorities
 
-1. Identify the first missing or lost proof at real hot sites, rather than repeating
-   emitter-only searches. Complete the P0 admission audit before choosing another
-   multi-optimization implementation session.
-2. Extend bounded Core analysis and its consumers together: start with callback-aware
-   call summaries, selective effects, and field/representation facts. The first P1
-   implementation is selected by applicability and cost, not by syntax alone.
-3. Improve Core planning and optimization throughput on both Node and the self-hosted
-   compiler. Measure this alongside every analysis extension, not as leftover work.
-4. Use those foundations for scalar materialization and virtual iteration, then
-   source-closure reduction and profitability-aware specialization. These are
-   dependency-ordered workstreams, not parallel requirements for the next session.
-5. Resolve known reliability findings and complete recoverable resource handling.
-6. Advance ECMAScript, WinterTC, Node, and ecosystem correctness. Their existing
-   backlog below remains in scope; it is not replaced by the performance programme.
-7. Recover throughput and bound latency in the concurrent generational collector.
-   Keep the native worker and Wasm inline behavior, following the ownership and
-   root contract in [generational GC workers](docs/decisions/09-generational-gc-workers.md).
-8. Pursue actors, SMP, native GUI integration, and freestanding targets after the active runtime
-   foundations are ready.
+Choose performance work from a repeated consumer and a bounded mechanism. Use
+existing diagnostics only as needed to select a candidate; a broad admission audit
+is not a prerequisite to independent work.
+
+- Reduce repeated compiler work and product-emission peak memory on Node and the
+  rebuilt native compiler.
+- Remove a leading runtime-owned stream, allocation, string or collector cost in a
+  representative application.
+- Extend native specialization only where a current method, field, cursor or
+  callback consumer can repay the extra proof and generated-code work.
+- Keep actor, GUI and constrained-target features on their own product track.
+
+Inventory and coverage ledgers record proved behavior; pending cells do not by
+themselves commit the project to optimizing every API.
 
 ## Verification workflow
 
-- [ ] Broaden runtime-gap coverage with enabled RegExp/Intl, pending and rejected
-      promises, weak-reference collection, arbitrary-precision BigInt beyond the
-      current 128-bit storage, and input-size scaling. Keep conversion costs separate
-      from traversal and checksum work.
+- [ ] Extend runtime-gap coverage for a selected RegExp, Intl, promise or weak-collection
+      consumer, separating conversion, traversal and checksum cost. Add
+      arbitrary-precision BigInt measurements after its correctness implementation and
+      preserve input-scaling coverage.
 
 - [ ] Track configured asset-directory topology in `dev`. Publication validates
       consumed file identities, but adding a file or renaming a previously unwatched
       path does not change that file set. Capture recursive directory membership and
       exercise add/remove changes without editing an existing source dependency.
 
-- [ ] Find why `tests/native/node-fs-watch.test.ts` takes minutes on the macOS
-      Native remainder runner. Its three tests take 5 to 8 s on Linux, but on macOS
-      they ranged from 22 s to 972 s over ten runs on 2026-10-22 and 23, and one run
-      hit the 20-minute hook timeout. The spread predates that night's compiler
-      changes, so it points at the watcher or the runner rather than the build.
+- [ ] Diagnose the macOS node-fs-watch timeout with bounded phase evidence separating
+      compilation, event delivery and teardown. Preserve watcher behavior and report an
+      unreproduced or runner-only failure explicitly.
 
 # Compiler and Core IR
 
@@ -60,90 +52,42 @@ Core owns all multi-instruction optimization decisions and their proof obligatio
 Target lowering may validate and consume Core decisions, while VM and C emission
 perform only local lowering from explicit target metadata.
 
-Performance recovery should come from standard SSA, dataflow, effect, representation,
-and whole-program optimizations. Do not maintain a queue of retired optimizer patterns
-to restore; generic passes may naturally rediscover their useful results.
-
-An emitter-only restriction is not a project-wide restriction on analysis work.
-Prefer preserving and consuming existing facts, but extend analysis when a concrete
-hot consumer needs a stronger proof. An analysis contract may land before its
-consumer with precision, invalidation, and cost tests; it is not a runtime speedup
-until the consumer admits real sites and measurements establish a benefit.
+Prefer existing SSA, dataflow, effect and representation proofs. Extend analysis
+only for a named consumer whose expected repeated saving can justify discovery,
+invalidation, retained memory and emitted-code costs. An analysis contract needs a
+bounded consumer follow-up and explicit cost evidence; it is not a runtime win.
 
 ## Native SSA storage
 
 The independent target boundary and current storage contract are recorded in
 [native SSA lowering](docs/decisions/native-ssa-lowering.md).
 
-Current facts/effects goal priority: objects, builtins and function calls. Prefer
-normal-result identity and heap-brand facts, receiver/argument-sensitive call
-effects, builtin dispatch and completion checks, and the resulting storage/root
-work over further arithmetic specialization. Preserve mutable-callee fallbacks,
-coercion and exception order, publication and GC obligations in every entry mode.
-Prioritize callable certainty independently of finite invocation identities, then
-callback and receiver-sensitive call effects and returned object-field transport.
-Keep the sub-60-second AC self-compile target; leave broad acceptance to CI.
-Arithmetic work should support these paths or fix correctness defects.
+Choose native specialization by repeated consumer benefit and total cost. Preserve
+mutable-callee fallback, coercion and exception order, publication, roots and polls.
+Compare additional compiler/build time with absolute runtime savings over plausible
+executions, measuring both compiler hosts.
 
-- [ ] Cover remaining object and builtin receiver classes, opaque script target
-      sets, callback retention, Array/species and protocol effects, and
-      receiver-sensitive builtin errors. Extend receiver/argument-sensitive call
-      summaries through the existing bounded worklists. Keep callable certainty,
-      finite invocation identities, normal results and effects independent; retain
-      mutable-callee fallbacks, completion checks, publication and polls.
+- [ ] Try proven scalar argument/result transport through one existing frameless helper
+      chain where conversions survive optimized C. Reuse entry representations and
+      preserve effect-free restart. Stop if the C compiler already removes the traffic;
+      otherwise require repeated-chain and compiler-workload savings that repay planning
+      and native build cost.
 
-- [ ] Extend typed call and aggregate transport using Core proofs and bounded
-      code-size decisions. Carry scalar results along admitted guarded branches
-      when the canonical call remains boxed, and extend integer and identity views
-      into remaining aggregate, storage and liveness consumers. Preserve ordinary
-      fallback, constructor completion and coroutine protocols.
+- [ ] Stream product CLI translation units to the owned build directory and release
+      completed chunks before preparing further roots. Require byte-identical C/runtime
+      images, lower peak build memory and no end-to-end build regression on Node and
+      self-hosted paths.
 
-- [ ] Extend record field proofs beyond private single-layout SSA promotion:
-      relational bounds without an integer basis, composition with earlier
-      relational chains, payload/source correlations across separate merges and
-      cyclic phis, indexed producer summaries, parameter-relative call effects,
-      and coroutine record transport. Preserve point-specific own-data and
-      lifetime proofs independently of shared storage widths.
+- [ ] Distribute existing parts of one oversized native function across bounded
+      translation units using a shared transfer-struct declaration. Keep only a cold-build
+      improvement after link cost, peak memory, binary size and representative execution
+      are included on both compiler hosts.
 
-- [ ] Admit record calls through instance-method hints with a guarded fallback,
-      forwarded parameters, deeper call chains, and helpers that also read the
-      record. Keep the returned object's identity and observer behavior intact.
+- [ ] Bound the end-to-end cost of splitter text recovery on current self-compile output
+      before designing emitted read/write and control metadata. Migrate renderer and
+      splitter together only if removing that work pays on both hosts while preserving
+      split semantics, build time and size.
 
-- [ ] Weigh record entries against other plans in the generated-code budget.
-      Compare saved allocations, retained generic paths, iterator state, analysis
-      work and emission cost. Uniformly increasing record weights or planning
-      limits can displace more useful plans; require representative measurements.
-
-- [ ] Stream the product CLI's translation units to disk. Its build keeps the CLI's
-      emitted C, 650 MB with the worker root's, in memory while it compiles the
-      compiler again for the worker root, and peaks at 4.25 GB of heap; the release
-      build and the self-hosted CLI check rerun themselves with an 8 GB limit.
-- [ ] Improve Node.js self-compile phase time and memory using cold paired
-      comparisons with strict emitted-C and runtime-image byte parity. Keep the
-      representative Node.js self-compile below 60 seconds on AC power and measure
-      stability alongside analysis extensions. Preserve source and workload
-      identities; reuse bounded worklists and leave broad acceptance to CI.
-
-- [ ] Spread one split native function over several translation units. Outlining
-      functions past 256 Ki into 128 Ki parts cut the self-compile `-O2` unit wall time
-      from 132 s to 59 s at eight jobs, but `emitInstruction`'s 252 parts still compile
-      in one 6 MB unit for 19–21 s, now the slowest. `-O1` saves only 15–20% of that
-      unit and grows its object. Parts are static and share a per-function transfer
-      struct, so they need external part symbols and a shared struct header.
-- [ ] Reduce the native splitter's emission cost. It adds about 1.1 s (13%) to Node
-      emission of the self-compile program, mostly block parsing and bitset liveness
-      over every value local that a part names. In the native self-compiler its
-      tokenizer, liveness, and interface planning take about 9% of the emission
-      phase; flattening rope lines before tokenizing only moved that time into the
-      tokenizer itself. The lasting fix is to stop recovering declarations, uses,
-      control transfers and address-exposed storage from C text: emission units
-      should carry that metadata for the operations they actually emit, including
-      fast-path branches and helper temporaries, and the splitter should consume
-      it. That needs every renderer path to report its C-level reads and writes,
-      so it lands as one migration rather than per opcode. A cheap splitter would
-      also pay for lower thresholds: splitting past 64 Ki into 32 Ki parts cut the
-      self-compile's clang CPU from 352 s to 322 s, but added 4 s of
-      single-threaded emission, which cancels the saving at eight jobs.
 - [ ] Hoist labelled function declarations in sloppy function bodies. Annex B makes
       `label: function f() {}` a top-level var-scoped declaration initialized at
       entry, so `f()` before it runs `f`; Maligator throws a TypeError in both
@@ -151,41 +95,16 @@ Arithmetic work should support these paths or fix correctness defects.
       `block-scoped-functions-annex-b-label.js` fails too). Once hoisted,
       `coreInitializedLexicalReads` must treat them as hoisted: it visits them at
       their statement, so `f` would read a later `const` without its TDZ check.
-- [ ] Fold the TDZ checks that remain on module bindings read through import cycles
-      and immediately invoked setup functions, such as the one that opens meriyah.
-      The self-compile Core keeps 1,600 checks: 1,067 on module bindings, 491 on
-      captured cells and 42 on loop values. Importers outside a cycle, closures
-      created after the declaration and hoisted functions referenced only after it
-      (in function bodies, CommonJS modules and acyclic ES modules) already read
-      their bindings initialized. The hoisted rule pays in CommonJS libraries but
-      removes almost none of the self-compile's checks; those are reads inside
-      import cycles. Prefixes that continue past calls into data-only dependencies
-      removed almost none either.
-- [ ] Keep managed value buffers out of the nursery trigger. Moving grown slots and
-      Array elements from RAW buffers with finalizers into owner-marked cells saved
-      0.5% of Express cycles and 3% of the churn loop. Releasing the old buffer on
-      growth outside a major cycle brought the self-compile's mapped memory from
-      14.8 GB back to 10.9 GB (8.1 GB with RAW buffers), but buffers then count as
-      live bytes, so the nursery doubled, minors fell from 65 to 27, system time rose
-      by 11 s and the run took 10% longer. Buffers need their own blocks, or survivor
-      accounting by kind, before the trigger can exclude them.
-- [ ] Bring the native self-compile's memory closer to its live set. Peak live
-      bytes stay near 900 MB, but maximum RSS is 4.4 GB now that process GC
-      pressure backs off past its budget (it was 3.5 GB while pressure forced 183
-      major collections and cost 40 s), and RSS understates it: on macOS the
-      physical footprint peaked at 6.2 GB because up to 2.1 GB of GC chunks were
-      compressed. At the end of a run the 4.1 GB of mapped chunks hold 311 MB live
-      after the last major, 1.4 GB of free cells in partly live cell blocks, 1.4 GB
-      of recycled empty blocks and 0.46 GB of free raw cells; 1.5 GB was promoted
-      and 645 MB of it over-tenured. Malloc zones add another 0.96 GB in 10.5
-      million allocations outside the GC heap. Fragmentation of partly live blocks
-      and promoted garbage are the levers; recycled blocks are already madvised.
-- [ ] Share one invocation-local native analysis context across storage, expression,
-      root, and fast-path planning. Native read/write, branch, handler, and lazy
-      root-cycle facts now share an invocation; storage CFG analysis is lazy.
-      Combine preserved Core identities with native
-      CFG, effects, ownership, and uses; invalidate facts after layout/copy changes
-      and measure cost on both compiler hosts without another wholesale IR rewrite.
+- [ ] Separate owner-held value-buffer pressure from survivor bytes that size the nursery
+      without losing ownership or major-cycle accounting. Compare native self-compile,
+      app-batch and Express time, physical footprint and pauses; retain only a bounded
+      policy with stable memory use.
+
+- [ ] Attribute current native self-compile footprint to live objects, partly occupied
+      blocks, promoted garbage and external allocations, then change one owning policy.
+      Require sustained footprint reduction without unacceptable compilation or pause
+      cost; reuse existing page release before adding reclamation machinery.
+
 - [ ] Finish remaining legality-affecting renderer selection in explicit native
       plans; capture-owner and String-transform strategies now persist and validate.
       Exact String comparison and concatenation operand proofs now select direct
@@ -198,34 +117,20 @@ Arithmetic work should support these paths or fix correctness defects.
       rules over plan facts rather than a planning choice.
       Fast-entry `calleeTry` selection now consumes typed call overrides and
       declines guarded or unavailable targets without borrowing canonical proofs.
-- [ ] Carry typed-entry reachable edges into remaining scalar-use, shape and
-      lifetime analyses. Preserve handlers, resume points, hidden helper ownership,
-      source certificates, record storage and generic continuations. Retiring an
-      unreachable entry must not remove state a surviving helper or observer owns.
+- [ ] Preserve helper-owned state, handlers, resume entries and source certificates when
+      retiring native entry paths. Extend reachable-edge consumption only for a selected
+      surviving entry that removes measured work, with negative coverage for shared record
+      storage and generic continuations.
 
-- [ ] Shrink the largest inline expansions in generated code. Uniform tagged
-      field slots and the one-compare Number decode cut the self-compiler's text
-      from 55.0 to 49.9 MB; the inline static load probe is now about 19
-      instructions, spent on the value class, heap type, cache mode, shape and
-      storage-kind checks. Throw checks, `MAL_FRAME_POS`, root masks and
-      safepoint polls were about 5% each of one 800 KB translation unit.
-      `MAL_FRAME_POS` is now one store into the C-stack frame record. A shape
-      root per exotic object kind would let the shape compare imply the heap type.
-- [ ] Reach the remaining thread-locals without a call on macOS, where a profile
-      shows them. Every `_Thread_local` read there is a `_tlv_get_addr` call
-      (Linux reads the thread pointer). Generated code still keeps a thread-local
-      `MalDefinePropertyCache` per static define site (510 in the compiler), and
-      inherited loads (`mal_prototype_chain_epoch`), root spans and the fiber,
-      profile and perf-stats state stay thread-local. Workers keep several isolates
-      per process, so this state cannot become process-global. While a worker
-      runs, every isolate pays the call: a `TypedArray.prototype.every` callback
-      loop costs about 30% more. The sole record returns once the last worker is
-      joined, provided no independent root thread has also initialized an isolate.
-- [ ] Measure sequentially consistent environment slots on Linux x64. `MalEnv`
-      slots are `_Atomic`, so every captured store compiles to `XCHG` on x86-64.
-      Major-mark workers trace slots while the mutator runs, so stores must stay
-      release, but the mutator's own loads could be relaxed. On Apple Silicon
-      relaxed loads with release stores changed none of six closure workloads.
+- [ ] Measure residual isolate-local lookup in the checked-in worker/Tinypool workload on
+      macOS, then prototype one hot state family carried through an existing activation.
+      Keep only a worker-runtime gain with stable size and single-isolate controls,
+      preserving thread ownership and teardown.
+
+- [ ] Prove mutator/marker ordering for captured slots, then compare relaxed mutator loads
+      and release stores on Linux x64 closure and self-compile workloads. Preserve atomic
+      layout/publication and retain only a runtime win with collector and Apple Silicon
+      controls.
 
 ## Compiled native output
 
@@ -233,86 +138,30 @@ Use representative compiled workloads to locate executed dispatch, allocation,
 property and collection costs. Keep field facts bounded and consumer-driven;
 static generated-code size and helper counts do not establish runtime cost.
 
-- [ ] Guard `Math.imul`, `Math.clz32`, `Math.pow` and `Math.atan2` like the other
-      `Math` calls. With eval or realms enabled, the default, a known builtin call
-      keeps a fallback obligation, and only operations in
-      `VM_GUARDED_BUILTIN_OPERATIONS` then lower to a guarded inline kernel. These
-      four become fully generic calls: an FNV loop with `Math.imul` runs about five
-      times slower than Node, and the call keeps the loop out of a region. Their
-      callee checks need `MAL_MATH_*` entries in the runtime's Math builtins.
-- [ ] Keep binary searches off the element-load latency chain. A loop region
-      without a counter now keeps `lo`, `hi` and `mid` in integer locals (12 M
-      probes 96 to 53 ms, Node 13; random targets 105 to 67 ms, Node 56). Clang
-      turns the bound updates into selects, so every iteration waits for the
-      element load and compare, while Node's predicted branches run ahead. A search
-      that leaves the region, such as one over records or with a call in its body,
-      still runs on doubles.
-- [ ] Give inline method bodies typed fields instead of a check per access. Class
-      layout cells replaced the per-site probes on class members with a shape
-      compare, but `store.kind(i)` in a loop still costs about 15 ns against
-      Node's 2: every access re-checks the receiver, the array and the key and
-      boxes the result. Reusing one receiver guard per activation saves only 17%
-      of that. The rest needs field kinds (an Array of int32 behind `#opcodes`)
-      flowing into Core value kinds and representations, which means bringing
-      class layouts into Core.
-- [ ] Resolve method calls through a sound closed-world call graph. Instance
-      method hints are guarded guesses that the call graph does not see, so
-      parameter, return and effect summaries stop at every method call. Hints now
-      cover subclass overrides, which took the polymorphic kernel from 62 to 39 ms,
-      and recursive methods outside loops get guarded direct calls. A name-based
-      target set that includes every function stored under the name, and every
-      function that escapes into a dynamic-key store, would make these exact. Note
-      that replacing dispatch alone gains nothing: the value is in exact targets
-      that need no method load and inline without a guard. Names alone will not
-      stay exact on the self-compiler: its construction Core calls no dynamic-key
-      read directly, but 747 of them flow into stores and arguments, and copy loops
-      such as `out[k] = src[k]` would put every method behind every name. Key kinds
-      and the receivers' allocation classes have to keep those reads apart.
-      Class granularity alone does not get there. A whole-program flow of class
-      instances, prototypes and functions over construction Core took 9.4 s in Node
-      on the 7,600 self-compile functions and resolved none of its 25,229 named
-      calls: instances pass through arrays, object literals, `Array.from` callbacks
-      and destructured returns, where a class-level model loses them. Once an
-      instance can hide among unknown values, a computed store on an unknown
-      receiver (`integerRecipes[current.value] = 0` on a destructured typed array)
-      may set `__proto__` or shadow a member, and a computed read may return
-      `__defineGetter__`, so its class's chain is no longer exact. The
-      `class-methods` case and the objects phase pricing loop hold their instances
-      in arrays too. Exact targets need allocation-site cells for arrays and
-      records, with models of builtin callbacks and iteration, before class facts
-      pay off.
-- [ ] Prove property names getter-free in the closed world. With source closure,
-      locked primordials and no `Proxy`, a name that no class, object literal or
-      `defineProperty` gives an accessor, and that the primordial catalog lists as
-      no accessor, reads without calling user code. Memory passes could then reuse
-      and hoist such loads; `this.left === null ? 0 : this.left.size()` currently
-      loads `this.left` twice through its inline cache.
-- [ ] Pace concurrent marking against a faster mutator. A late native
-      self-compile cycle at 1.8-2.5 GB live could take 4-5 s, about 68,000 steps
-      while its phase allocated about 26 KB per step. Neither `MAL_GC_ASSIST` nor
-      lifting the 256-cell limit on a mark step while workers hold a batch
-      shortened it, and no step was skipped under native frames. Cells born during
-      marking are now young and reclaimed at remark, so a long cycle costs memory
-      held until then rather than promoted garbage; find what bounds progress per
-      step.
-- [ ] Keep int32 elements integral in dense-array loop regions. The region types
-      every element as a double, so `(sum + values[i]) | 0` over small integers
-      costs 5 ns per element against Node's 0.5. Restarting into the generic loop
-      on the first double would penalize double arrays, so an int32 variant needs a
-      way back into the double region.
-- [ ] Lower `Map.prototype.keys` and `values` traversal like `entries`. Both go
-      through the generic iterator step and `mal_map_iter_next` per element, so
-      `primordial-map-traversal` takes 773 ns per round against Node's 222.
+- [ ] Add guarded `Math.imul` and `Math.clz32` admission through existing builtin descriptors
+      for repeated checksum and bitset consumers. Require default-world runtime benefit,
+      bounded analysis/code growth and mutation/coercion fallbacks.
+
+- [ ] Test bounded method target sets for one repeated Core-store receiver using existing
+      provenance, target caps and incremental summaries. Track relevant property/prototype
+      writes and retain open fallbacks. Stop if exactness needs whole-heap flow; require
+      changed downstream scalar/effect decisions and runtime savings that repay
+      Node/native analysis and generated-C cost.
+
+- [ ] Extend existing Map cursor admission to keys and values for app-batch and
+      primordial-map-traversal. Require reduced dispatch and an end-to-end gain with
+      bounded planning/code size, preserving deletion, growth, exhaustion and generic
+      iterator behavior.
 
 ## Interpreted development images
 
-`run`, `test` and `dev` interpret development images, so interpreter cost is the
-developer loop's cost. The interpreted javascript-v2 workload runs about 5 times
-Node's time; dispatch through the shared head is about a fifth of the loop.
+`run`, `test` and `dev` interpret development images, so interpreter dispatch and
+compilation both contribute to developer-loop latency.
 
-- [ ] Hoist loop-invariant constants out of interpreted loops. `CREATE_NUMBER`,
-      `CREATE_UNDEFINED` and `LOAD_INTRINSIC` are rematerialized next to their
-      uses inside loop bodies, which costs the interpreter a dispatch each.
+- [ ] Hoist pure loop-invariant constants in interpreted development images using existing
+      Core loop facts and valid intrinsic identities. Keep fewer dispatches only when
+      interpreted JavaScript and development runs improve after compilation, frame size
+      and zero-trip/handler behavior are included.
 
 ## World-knowledge ladder
 
@@ -327,122 +176,34 @@ Node's time; dispatch through the shared head is about a fifth of the loop.
 These levels are cumulative facts consumed by one optimizer, not separate pipelines.
 Runtime eval may remove source closure without invalidating authority closure.
 
-## P0: performance diagnosis and admission
+## Performance diagnosis and admission
 
-- [ ] Produce a bounded, source-ranked missed-optimization report for current
-      JavaScript, representative compiler inputs, and relevant Express hot paths.
-      Extend the existing fact-flow, candidate, and profile reports rather than
-      building a parallel diagnostics framework. For each leading site, record
-      observed cost, applicable facts, attempted consumer, admission/decline reason,
-      and the expected removal in generated C. Distinguish missing analysis, lost
-      facts, an insufficient semantic contract, absent lowering, budget rejection,
-      and already-specialized code whose runtime kernel is still expensive.
-      Exit with the leading five opportunities and one chosen vertical slice; do
-      not make exhaustive instrumentation a prerequisite to useful implementation.
+- [ ] Use existing profiles and admission reports to trace leading sites in one selected
+      application or compiler workload to the first blocking boundary. Stop with a bounded
+      experiment, expected removed work, compile/build costs and a decisive acceptance
+      criterion; do not require exhaustive diagnostics before independent work.
 
-- [ ] Trace the reported callback, iterator, and scalar-record blockers through
-      Core facts, candidate selection, region/signature admission, variant planning,
-      target/image lowering, and emission. Establish the first failing boundary:
-      ordinary-call-driven signature selection for builtin callbacks, iterator
-      synchronization with an authoritative language object, or field/initializer
-      facts and materialization requirements. Separate absent proofs from valid
-      conservative declines. Retain a reduced positive and negative fixture for
-      each selected blocker; do not assume that its previous workaround is the fix.
-
-- [ ] Establish two distinct cost ledgers on the same source checkpoint: execution
-      of generated applications, and compilation on Node versus the self-hosted
-      compiler. Rank compiler work by phase and sampled source cost, then inspect
-      hot functions' generated paths. Separate excessive compiler work from slow
-      execution of that work. A report must not infer runtime progress from static
-      helper counts, a synthetic-only win, or unchanged generated operations.
-
-## P1: callback-aware interprocedural facts
+## Callback specialization
 
 Shared lifetime and fallback rules are recorded in
 [runtime region contracts](docs/decisions/runtime-region-contracts.md).
 
-- [ ] Find where the runtime-gap `spread-computed-update-read-*` loops spend their
-      time. `checksum = (checksum + copies[i & 31][key]) | 0`, with a module-level
-      `const key = "p3"` and 32 objects from `{ ...source, [key]: value }`, takes
-      5.7 ns per iteration against Node's 0.9. Samples put 55% in
-      `mal_vm_indexed_load_keyed` and `mal_vm_object_try_load`, yet the keyed path
-      itself is not the cost: a prototype that turned the read into a named
-      `loadPropertyStatic` (folding the proven string binding, leaving canonical
-      numeric strings keyed) kept the loop at 57 ms. The lookup on objects built by
-      a spread plus a computed key is the next suspect.
-- [ ] Complete shared builtin callback invocation contracts beyond the existing
-      argument-kind/arity descriptors: receiver, return
-      use, invocation multiplicity, retention, and synchronous versus deferred
-      invocation. A sort comparator must receive numeric facts only when element
-      facts justify them. Preserve canonical identity and mutation requirements;
-      builtin names or source closure alone do not prove callback behavior.
-      Map/Set forEach now separates its validation/internal-iteration effects from
-      finite callback bodies in the shared registry and call graph. Unknown callback
-      identities and mutable method alternatives retain the broad barrier; extend
-      receiver and argument effects before relaxing retention or Array protocols.
+- [ ] Try one fixed numeric TypedArray reduction with a known synchronous reducer in the
+      existing loop machinery. Preserve callback arguments, floating-point order and
+      buffer invalidation. First bound the removable callback-transport cost against a
+      same-order indexed control; retain only if repeated execution repays bounded
+      cloning, analysis and generated-code growth.
 
-## P1: selective effects, aliases, and field facts
+## Selective field facts
 
-- [ ] Extend the existing summaries with the parameter-relative effects required
-      by a selected consumer: field reads/writes, aliasing/retention, callback
-      invocation/reentry, and mutation of relevant prototype or buffer state.
-      Preserve useful facts across a proven read-only call or an unrelated write;
-      unknown effects stay conservative. Start with scalar-field calls and callback
-      regions, using bounded summaries and the existing analysis manager rather
-      than a general whole-heap points-to analysis. Test invalidation and recursive
-      summary convergence as well as the positive optimization.
-      Conditional own-slot effects now compose through finite call sets, reordered
-      parameters, receivers and recursive components. The existing memory consumer
-      preserves untouched slots only after resolving every required access to own
-      data; unknown calls, escaping aliases and unproven bases retain the barrier.
+- [ ] Carry allocation-site field kinds through one repeated record-backed compiler
+      accessor chain so numeric arithmetic preserves validated access paths. Reuse bounded
+      field indexes and writer/alias invalidation; keep shape, backing-pointer and value
+      stability independent. Stop if the consumer requires a global mutable-shape type
+      system or its saving cannot repay analysis and code growth.
 
-- [ ] Preserve useful value, field, and range facts through joins, selected calls,
-      variant-local planning, and target lowering. Distinguish semantic kind facts
-      at an operation from a physical register's joined storage representation.
-      Diagnose boxed initializers instead of assuming every boxed value requires
-      an observable object. Keep numeric signed-zero/overflow constraints and
-      pointer-root requirements explicit. Extend the existing bounded range walk
-      only for a demonstrated consumer; a larger walk limit is not an optimization.
-      Private field facts (kinds, brands, construction-only fields and the element
-      kinds of arrays only private fields hold) stop at method parameters: in
-      `kill(id) { this.#live[id] = 0 }` the key is unknown and in
-      `add(op) { this.#ops.push(op) }` the value is, because method calls reach no
-      targets. Of the self-compiler's 94 Array fields, 23 keep known elements, and
-      its native self-compile did not measurably move. A brand check followed by a
-      field read of the same class on the same receiver still runs both checks.
-      Field kinds per allocation site are the missing fact in class-heavy loops:
-      `sum + store.opcode(id)` keeps a generic `+` fallback because `.opcode` of a
-      `{ opcode, a, b }` element is unknown, and that fallback can call user code,
-      so it invalidates every loop-carried accessor prefix. The loop planner also
-      admits only accessors whose last read is indexed and only loops without a
-      parent loop, so `this.#ops[id].opcode` reruns its method, private and indexed
-      probes on every iteration (75 ms against Node's 15 in a 4 M-read kernel).
+## Compiler throughput and analysis scalability
 
-- [ ] Extend existing scalar-replacement, field-entry, and conditional-materialization
-      plans to one real multi-field region unlocked by the preceding facts. Keep
-      fields in SSA/native values through admitted operations and materialize only
-      at certified observations or fallbacks. Preserve initializer effects/order,
-      aliases, per-allocation identity, joins, exceptions, and GC roots; never
-      re-evaluate an initializer or manufacture a different fallback object.
-      Exit with reduced executed allocation/slot traffic on a representative
-      workload, not merely a new plan kind or a synthetic object that never escapes.
-
-## P1: compiler throughput and analysis scalability
-
-- [ ] Bring the Node-hosted self-compile toward 40 s. A fresh-process full run takes
-      about 52.5 s on AC. In a CPU-profiled run Core optimization took 33 s
-      (cross-call transforms 8.9 s, memory and provenance 5.4 s, program flow about
-      6 s, structural CFG 2.6 s, verification 2.3 s), execution to image 7.6 s,
-      emission 5.6 s and Core to execution 4.2 s. Scavenges take about 5 s. Iterator
-      results are still 13 GB of the run's 84 GB sampled allocation, spread over many
-      polymorphic or unoptimized loops (none above 0.8 GB), and Map/Set table growth
-      adds about 12 GB. In program flow, call targets take 2.9 s (2.2 s in the first
-      solve), summaries 1.6 s and value kinds 1.5 s. Targets, summaries and
-      reachability re-solve only dirty functions and SCCs; value kinds reset every
-      component a change touches, since parameter kinds flow to callees and return
-      kinds to callers, so each of their 4 solves re-evaluates the whole program.
-      6ce7d318 still triples plan candidates by planning every exact call outside the
-      budget.
 - [ ] Invalidate warm frontend caches when module-resolution topology changes.
       The original serial cache can retain a resolved `.mjs` target after a preferred
       extensionless file appears, or retain a package target after a nearer package
@@ -451,217 +212,35 @@ Shared lifetime and fallback rules are recorded in
       or equivalent selection identities, including worker roots; test edit-free
       warm invalidation without clearing caches or reparsing every graph on a hit.
 
-- [ ] Reduce the largest measured Core planning/optimization costs on both hosts.
-      Attribute candidate discovery, shared-fact/transfer construction, CFG and
-      dominance work, fixed-point iterations, invalidations, and materialization of
-      intermediate data. Use the existing feature indexes, summaries, and analysis
-      manager to skip irrelevant work and rebuild only invalidated results. Reopen
-      a previously optimized subsystem only with fresh residual-cost evidence.
-      Static-value queries request memory versions only when a written slot value
-      can be described. Private-cell proofs now follow body, control-flow,
-      exception-flow, effect and data revisions; result facts and guarded lowering
-      hints retain descriptor proofs and their work budgets. Open bindings do not
-      demand cell indexes. Semantic edits still clear the cell proofs; narrowing
-      that invalidation to individual cells needs complete alias and initialization
-      dependencies. Continue measuring residual query, dominance and verification
-      costs before changing those boundaries.
+- [ ] Remove the largest demonstrated repeated compiler work on frozen self-compile and
+      compiler-scale inputs, starting with one scheduler, dependency or representation
+      boundary. Require lower end-to-end time or peak memory on Node and rebuilt native
+      hosts with unchanged emitted C/runtime wire, sound invalidation and explicit host
+      tradeoffs.
 
-- [ ] Put aggregate work and memory budgets around analysis extensions, including
-      rejected candidates and nested queries, not only admitted entries. Reuse
-      versioned queries within their valid lifetime; bound contexts and recursive
-      propagation and fall back conservatively on budget exhaustion. Record
-      instruction visits, transfer/summary builds, cache reuse, and peak retained
-      data in opt-in diagnostics. Do not trade a cheap emitter for hidden planning
-      scans, uncontrolled cache growth, or a new unconditional whole-program pass.
-      Memory, integer, containment and program-kind queries already solve only the
-      partitions, roots and dependencies a consumer requests. Still to do: decode
-      memory accesses by requested family, narrow shared instruction, root and use
-      indexing and partition state to requested reads, query only the needed property
-      contents, and defer candidate recognition while preserving exact ranking and
-      costs. Measure the compact integer snapshot's retained memory and representative
-      compile time before extending these caches.
+- [ ] Bound aggregate work and retained state for analysis extensions, including
+      discovery, rejected candidates and nested queries, with conservative fallback on
+      exhaustion. Add only counters needed to prove limits and require end-to-end evidence
+      before narrowing indexes or growing caches.
 
-- [ ] Add representative small, medium, and large compiler-scaling cases to the
-      existing measurement workflow. Alternate Node and rebuilt self-hosted
-      measurements, checking equal generated output within each checkpoint.
-      Exercise production and diagnostic configurations where their paths differ.
-      Accept improvements by end-to-end execution and memory costs; retain phase
-      regressions explicitly and distinguish reduced work from host-specific speed.
+## Iteration and loop regions
 
-## P2: virtual iteration and loop regions
+An existing iterator cursor is not, by itself, permission to delete its language
+object. Retained loop experiments preserve effects, authoritative state and fallback.
 
-Depends on a P0 hot site and the necessary P1 effect/escape facts. An existing
-iterator cursor is not, by itself, permission to delete its language object.
+- [ ] Bound one typed-store side-exit experiment to core-to-execution or optimizer-queue
+      and the corresponding compiler loop. First establish removable executed cost; then
+      preserve already-committed stores and continuation state without generic OSR.
+      Require end-to-end native self-compile benefit, Node-host planning controls, and
+      acceptable code, frame and build costs.
 
-- [ ] Add an explicit Core ownership/materialization contract for a nonescaping
-      array or fixed-TypedArray iterator whose language identity need not be
-      observable on the admitted path. Define authoritative cursor state, progress,
-      exhaustion, mutation visibility, exception/close behavior, and reconstruction
-      before any fallback. Start with one exact synchronous protocol; preserve own
-      iterator overrides, inherited properties, holes, and required roots/polls.
-      Exit with removal of an actual hot iterator/protocol allocation or dispatch,
-      plus negative tests that retain the authoritative-object implementation.
+## Source closure and generated-code profitability
 
-- [ ] Consume range, storage-stability, and effect facts in a bounded loop region
-      to avoid repeated length, bounds, identity, and element-kind work. Preserve
-      per-iteration length semantics when mutation is possible, and reload backing
-      pointers across invalidating operations. Reuse existing loop/region machinery
-      and separate admission checks from proven interior operations. Do not claim
-      SIMD/vectorization from simpler C, remove necessary polls, enable fast-math,
-      or reorder observable accesses to make a loop look native.
-      Safe-integer loop regions cover only innermost loops of numbers and
-      Booleans. No loop in the self-compiled compiler qualifies: of its 2,495
-      single-entry innermost loops, only 15 have one blocking opcode (10 iterator
-      steps, 4 keyed loads, 1 static load), so typed-array or property access
-      inside such a region needs a consumer outside the compiler first.
-
-- [ ] Close the for-in per-call gap. With shared per-shape key arrays and
-      internal iteration, a for-in over a five-field record takes 6.0 ns per key
-      (10.5 when reading values) against Node's 1.5 (2.3). The remaining cost is
-      per loop: the out-of-line `mal_for_in_keys` call with its prototype-chain
-      check and snapshot entry, and the function call of each small kernel.
-
-- [ ] Close the rest of the `JSON.stringify` small-record gap. 300k calls on a
-      five-field record take 26 ms against Node's 20. Shape plans persist across
-      calls, and an unused map or list no longer costs a libc call. Most remaining
-      samples are inside `mal_builtin_json_stringify` itself; the plain frame
-      walk, string segment lookup, output buffer growth and the result string's
-      allocation take 3 to 6% each.
-- [ ] Elide the remaining call-only closures. Direct closures cover layouts that
-      capture nothing, one owner, or a chain that starts with the creating
-      activation, and escaping reads create the object on first use. A layout that
-      skips an owner, such as TypeScript's reportError capturing the module scope
-      and checkTypeRelatedTo but not createTypeChecker, still builds a function
-      object per activation: checkTypeRelatedTo creates three of them on each of its
-      million calls. Passing the creator's chain instead made every call of such a
-      closure resolve its owners by lookup and cost 1% of the TypeScript check;
-      closures with an identical layout could share one capture vector instead.
-- [ ] Finish prettier's method shims. Each `createMethodShim` call now gets its own
-      clone whose `getImplementation.call(object)` inlines behind a check of the
-      loaded `call`, but `implementation.apply(object, rest)` still joins the
-      inlined callback's known result with `object[name]`, so it stays a
-      rest-argument apply into `stringOrArrayAt` (the clone is still about 3% of
-      the prettier run). Threading the join, or splitting the apply on the
-      callback's result, would let the known path call, and inline, it directly.
-      The clone itself never inlines into the AstPath getters that call it: the
-      inliner rejects `createRestArgumentsState` and `callRestArguments`, and the
-      clone has 18 blocks against the limit of 16.
-- [ ] Make prettier's AstPath getters and TypeScript enum reads cheaper. Five
-      prettier rounds call AstPath getters 7.4 million times through the static
-      miss path, and read about 16 million `SyntaxKind` members from dictionary
-      objects through the out-of-line probe, which now saves the registers its
-      other rows need even for this one.
-- [ ] Finish specializing higher-order helpers. TypeScript's binarySearchKey clone
-      now inlines getTypeId, compareComparableValues and its `some(array)` test,
-      but it is still the hottest TypeScript function at about 6%. Cloning small
-      helpers at every site that omits a tested argument, or behind a module `var`
-      alias, cost prettier 0.4 to 1.2%.
-- [ ] Narrow the remaining class accessor gap. Loop sites now probe for a
-      uniquely named class getter or setter and inline it behind a function-index
-      guard: the `#celsius` getter/setter pair takes 33 ms for 5M iterations
-      (was 112, Node 2). Each iteration still pays two accessor probes, two guards
-      and the private hint check that V8 hoists out of the loop. Exposure runs
-      before inlining, so an accessor read inside a helper called from a loop
-      stays a call, and names that some literal or store also uses as data, such
-      as `metadata` on the compiler's function store, are never exposed. Private
-      elements live in shape slots behind a name-level slot hint (a
-      three-private-field class constructs in 108 instead of 269 ms per 3M, public
-      fields 75); a per-site shape row would make the private probe a single
-      compare.
-
-- [ ] Widen numeric loop regions beyond plain Array element and record sums.
-      Index and for-of loops over Arrays now keep their sums in f64 locals,
-      including fields of record elements (`sx += p.x` 5.7 to 1.7 ns per element,
-      Node 1.0; `record-array-traversal` 532 to 250 ms, Node 109). Field reads
-      through polymorphic rows still decline in indexed regions. Array for-of
-      regions preflight nested own-data Number fields, Boolean flags, nullable
-      references and Number stores before each iteration. Calls and unsupported
-      layouts keep the original loop, and a guard failure finishes the whole loop
-      in the original code. Fresh, private graphs from intrinsic `Array.from`
-      mappers can retain numeric columns across repeated traversals after one
-      warming pass. Scalar guard failures write Number fields back before resuming
-      the original loop; captured, escaped and aliased graphs retain heap access.
-      A failed guard restarts its whole iteration in the original loop, so no guard
-      may follow a store in the same iteration. That keeps stores at keys from
-      records or other views out of regions: `core-to-execution` writes typed
-      images at `instruction.id * 2` (9.1 ns per operation against Node's 2.4),
-      and `optimizer-queue` appends with `queue[length++] = index` after a
-      store (7.3 against 2.4). Both need side exits that leave mid-iteration with
-      the live registers, which in turn needs every fallback plan's state, such as
-      indexed-length kinds and fusion flags, to be valid at the exit.
-      A region with inner loops is entered once, so a single restart finishes the
-      whole loop in the original code. Regions over records therefore stay
-      innermost, because their field guards fail until the original loop has
-      cached the shapes. A retry that jumped from the original header back to the
-      region's entry after one generic iteration made the nested union-find loop
-      14% slower without any restart, likely because the backward jump merged the
-      region into the original loop's cycle. Nesting a counted inner loop also
-      turns its accesses into checked reads with a double index: an `imul` sum over
-      record fields ran 35 ms nested against 28 innermost. Inner loops need their own
-      counters, with range guards at each inner entry, before records can nest.
-      Frame-local shape snapshots for plain static loads and stores in loops made
-      such a loop about 8% faster but the self-compiler's parser slice 1.7 to 2.6%
-      slower, so they serve number-record regions only.
-- [ ] Track field representation facts on shapes. Every field is now one tagged
-      slot, so int32, Number, object, constant or a known field shape would be a
-      monotone fact on a shape's property that widens in place, not a physical
-      layout with repacking. A region could then guard its receivers' shape once
-      and skip per-field tag checks, and chained loads could skip the inner shape
-      compare. Widening must reach the transition subtree and integrity variants,
-      and trusting code needs either one fact epoch or per-field dependencies;
-      try both. Measure against the loop regions first: so far the large costs are
-      boxing on loop-carried chains and call dispatch, which facts alone do not remove.
-
-- [ ] Extend generator traversal fusion to guarded methods and richer suspension
-      state. Fusion requires a private callable whose every invocation is consumed
-      exclusively by the ordinary iterator protocol, Number arguments, and a
-      primitive body with one lexical yield and no handlers or environment reads.
-      State live across the yield must dominate completion paths as well as the
-      suspension point. General state transport needs explicit resume parameters.
-      The self-compile's hot generators are class methods, such as
-      `CoreFunctionStore#bodyInstructionIds`, `valueIds` and `#liveInstructionIds`,
-      which read `this` and private fields and are reached through a method load.
-      Covering them takes a guarded method target with the generic `for-of` as
-      fallback, and a `this` binding, on top of the splice.
-
-## P2: composable temporary values
-
-- [ ] Extend existing string/capture projections only where the P0 profile shows
-      materialization is a leading cost. Compose a bounded sequence of span,
-      concatenation, length, numeric, or character consumers through an explicit
-      virtual-value contract, instead of adding source-pattern recipes. Preserve
-      UTF-16 indexing, source lifetime, case-conversion semantics, length limits,
-      effects, and fallback materialization. Distinguish string allocation costs
-      from RegExp/native-kernel costs that more compiler analysis will not remove.
-- [ ] Allocate a fresh literal only on the paths where it escapes. A loop that
-      builds `[index, index + 1, index * 2]` from an inlined helper, reads its
-      elements and length, and publishes it every 1024th iteration has every read
-      forwarded, yet still allocates and initializes the array on each iteration:
-      about 32 ns/op natively against Node's 7.8. Moving the allocation and its
-      initializing stores into the publishing branch needs the stores' values to
-      stay available there and the escape to be the only remaining use.
-
-## P2: source closure and generated-code profitability
-
-- [ ] Reduce remaining execution-liveness work where saved analysis outweighs demand
-      bookkeeping. Sharing across verification or frame-exit consumers requires an
-      explicit body-ownership contract; mutable function identity is insufficient.
-- [ ] Establish a complete source-closed entry/escape set for native reduction,
-      including exports, host callbacks, dynamic loading/eval policy, reflection,
-      and generic/interpreted callers. Use it to remove unreachable functions,
-      unused ABI siblings, bytecode, and metadata only when every required entry
-      and fallback is covered. Retain canonical boxed adapters where observable;
-      locked primordials alone never justify deleting them. Reuse the same closure
-      certificate for runtime-feature reduction and verify all affected loaders,
-      cache identities, debug/profile modes, and mixed execution paths.
-
-- [ ] Extend the existing generated-code cost model to charge for whole admitted
-      regions and ABI siblings, retained generic twins, materialization, guard
-      frequency, and downstream C compilation/linking. Calibrate on small and
-      large representative inputs and expose reasons for budget declines. Keep
-      per-function and whole-program caps; prefer profitable shared mechanisms
-      over many clones. Treat measured runtime, analysis time, build memory, and
-      code-size tradeoffs as separate acceptance dimensions.
+- [ ] Identify one residual bytecode or metadata payload removable by the existing closure
+      certificate in closed compiled app-batch/JavaScript images. Stop if required
+      fallback or loader entries account for it. Preserve generic, interpreted, callback
+      and debug paths, and require lower binary/build cost without new whole-program
+      analysis or disproportionate compilation.
 
 ## Compiler infrastructure
 
@@ -670,71 +249,52 @@ iterator cursor is not, by itself, permission to delete its language object.
       clone semantics, error identity, source validation, and cancellation while
       keeping queue reservations for backpressure.
 
-- [ ] Complete local scheduler consolidation by moving instruction-local
-      canonicalization, proof, and memory rules into dirty opcode/block queues where
-      their dependencies permit. Keep function CFG, loop, and memory transforms
-      with the phase manager, and program flow, cross-call selection, and late
-      recipes with their program owners.
-
 - [ ] Extend the shared bytecode-operation and builtin descriptors to generate operand
       schemas, lowering completeness, effects, representation constraints, safepoint
       policy, and GC declarations. Adding an operation must not leave compiler, wire,
       native-C, interpreter, or runtime contracts inconsistent. Callback invocation
-      semantics are owned by the P1 callback work above, not a second descriptor set.
+      semantics are owned by the callback work above, not a second descriptor set.
 
 ## Compiler measurement and diagnostics
 
-- [ ] Close gaps in the existing report's end-to-end cost accounting: cold process
-      versus warm kernel time; complete analysis discovery/planning; register
-      allocation, lowering, emission and serialization; downstream C compilation
-      plus linking; generated C/binary size and peak build memory. Retain source,
-      host, toolchain, flags, world/eval policy, runtime features, cache state,
-      sample dispersion, and raw paired samples. Node repeats beside development
-      and production native executables are controls, not two Node build modes.
+- [ ] Fill accounting gaps for the selected optimization in existing reports: ordinary
+      application time, Node/native compilation, C/link cost, peak memory and emitted
+      size. Retain frozen inputs, identities, raw pairs and parity; keep profiled
+      attribution separate from acceptance timings.
 
-- [ ] Extend source-derived C symbols/line mappings and the existing source-to-Core,
-      target, C, and disassembly reports with final admitted-entry identities and
-      decline reasons. Retain a sidecar mapping for stripped production artifacts
-      without changing the measured flags or requiring local symbols to survive.
-      Final compiler remarks must agree with the emitted path; static counts and
-      sampled/executed counts must remain distinguishable.
+- [ ] Make existing source/compiler remarks identify the final admitted entry or decline
+      reason needed by a selected investigation, including stripped-artifact sidecars
+      where necessary. Keep remarks consistent with emission and distinguish static
+      opportunities from executed or sampled counts.
 
 ## Compiler acceptance policy
 
-Use staged acceptance: inspect applicability and the expected Core/C change, run
-focused correctness tests and a bounded pilot, then invest in repeated representative
-measurements for a promising vertical slice. Do not spend a full benchmark matrix
-proving that a candidate with zero admitted sites changes no executed code. Such a
-candidate may still be compiler-throughput work, but must be measured as that.
+Start with an exercised consumer, the work a candidate removes, and a bounded pilot.
+Stop when there is no admitted site, a decisive negative upper bound, or no plausible
+repayment of added compilation and native-build cost. Focused correctness coverage
+and repeated ordinary execution establish acceptance; profiles and simpler generated
+C explain mechanisms rather than proving a speedup.
 
-Every accepted runtime optimization requires focused semantic coverage, optimized-Core
-and proof validation, an actual allocation/dispatch/materialization change, and
-repeated representative timings with matching checksums. Analysis-only milestones
-need explicit precision, invalidation, budget, and cost evidence, with their consumer
-still tracked as unfinished. Structural simplification is not a measured speedup.
+Compare complete application savings, Node/native compiler cost, downstream C/link
+cost, peak memory and generated size. Extra compilation can be worthwhile when the
+intended workload runs enough to repay its measured absolute cost; state that
+breakeven assumption. Pure compiler-throughput work needs lower end-to-end time or
+memory with preserved behavior, without a separate application speedup. Runtime
+kernels need their owning semantic and lifetime proofs, not an invented Core change.
 
-Measure both compiler hosts when analysis/planning changes. Include discovery and
-rejected candidates; tiny warmed per-entry timings are not total compiler overhead.
-Use the same frozen input and configuration, rebuild native hosts from the checkpoint
-under test, and require Node/native output parity within each checkpoint. Keep
-intentional baseline/candidate output differences distinct from host divergence.
+For throughput-only compiler refactors, preserve emitted C and runtime wire where
+those outputs are in scope. Intentional optimizations can change generated output,
+but Node/native hosts must agree within each checkpoint and observable behavior must
+agree across checkpoints. Include discovery, rejected candidates, invalidation and
+retained analysis state in compiler cost. Keep controls and unfavorable results;
+record material memory, pause, size and build tradeoffs explicitly.
 
-Report controls individually, including negative and inconclusive results. Preserve
-raw samples; do not treat marginal and paired medians as interchangeable or attribute
-a combined win to every constituent change. Prevent unexplained material regressions
-and record accepted phase, memory, size, and compilation tradeoffs explicitly. A
-synthetic fixture establishes a mechanism, not its importance in real applications.
-
-World-sensitive work requires applicable locked/mutable, strict/sloppy, mutation,
-eval and cross-Realm coverage, safe invalidation, and evidence that only disproven
-guards/fallbacks were removed. Preserve exception, OOM, rooting, suspension, debug,
-profiling, and mixed-execution contracts at their owning layer.
-
-Follow AGENTS.md and docs/testing.md for the relevant gates. Full standards/full
-release runs and baseline updates remain separate approvals. Keep detailed evidence
-and completed/rejected experiment history outside this unfinished-work roadmap;
-retain reproduction sources and helpers with their evidence instead of deleting the
-only reproducible input.
+Preserve mutable/locked primordial, strict/sloppy, eval, Realm, suspension, OOM,
+exception, rooting and mixed-execution contracts at their owning layer. Follow
+[AGENTS.md](AGENTS.md), [testing](docs/testing.md) and
+[benchmarking](docs/benchmarking.md) for focused checks, matched measurements and CI
+acceptance. Baseline replacement remains an explicit action. Keep detailed evidence
+and rejected experiment history outside this roadmap.
 
 # Runtime safety and allocation
 
@@ -742,30 +302,21 @@ only reproducible input.
       runtime-helper, and direct-native allocations. OOM must remain catchable without
       corruption, lost roots, recursive failure, or partial observable objects.
 
-- [ ] Keep suspended generator frames in GC-managed storage. Compiled coroutines
-      take their register and argument buffers from a malloc'd pool, so a
-      generator that dies suspended needs a finalizer to return them. In the
-      JavaScript benchmark's async phase every generator ends suspended in its
-      `finally`, and that finalization is 11% of the phase (55 ms per round
-      against Node's 39). The compiled code allocates the registers before the
-      generator exists, so the change spans code emission and the coroutine runtime.
+- [ ] Prototype GC-managed register/argument storage for suspended compiled generators in
+      the JavaScript async workload. Preserve creation-time roots, resume/return/finally
+      and OOM behavior, and retain only lower total allocation/finalization cost without
+      worse pause, live-memory or build costs.
 
-- [ ] Store an arguments object's indexed elements densely. Mapped and unmapped
-      arguments objects keep every index in a property table, so creating one with
-      16 values upserts 16 entries and each `arguments[i]` read hashes its key. An
-      opaque callee that returns its strict `arguments` costs 340 ns per call against
-      Node's 6.6 (`call-arguments-escape`). Dense storage needs define, delete,
-      freeze, and own-key order to understand it, and a move to the table once an
-      index gets non-default attributes. Unmapped in-range numeric reads can use
-      the incoming slice under either primordial policy; escaping or materialized
-      arguments objects still need dense indexed storage.
+- [ ] Prototype dense default indices for escaping unmapped arguments, with
+      descriptor/delete transitions to ordinary properties. Preserve key order,
+      freeze/seal and mapped aliases; require a checked-in repeated-call consumer to
+      improve after memory and fallback costs, using call-arguments-escape as the
+      mechanism control.
 
-- [ ] Deterministically release nonescaping RegExp and ICU handles at compiled scope
-      end once ownership analysis proves their lifetime. Retain finalization for every
-      uncertain path.
-
-- [ ] Add Intl locale subsetting with deterministic configuration and cache identity.
-      Missing data must follow an explicit failure or fallback policy.
+- [ ] Add explicit locale subsetting with deterministic configuration, cache identity and
+      missing-data behavior. Measure residual locale-dependent bytes after existing
+      service selection before choosing the provider implementation; do not claim savings
+      from locale-independent tables.
 
 # Strings and text
 
@@ -776,284 +327,100 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
-- [ ] Build fewer primordials at startup. A closed-world `console.log` program
-      starts in 1.8 ms against Porffor's 1.3 and a 1.1 ms floor for an empty C
-      `main`. A warm `mal_intrinsics_init` takes 140 µs, most of it property
-      defines, table growth and name interning spread over the builtin installs,
-      so only lazy installs for families a program never reaches, or a prebuilt
-      heap image, would remove most of it.
-- [ ] Search UTF-16 subjects with regress start predicates. regress 0.11.1 skips its
-      start-position prefilter whenever the `utf16` feature is on, so a pattern that
-      can only start at `<` tries a backtracking match at every code unit. Upstream
-      master searches UTF-16 input with unit predicates, which takes
-      `/<script|<style|<link/` over a 35 KB UTF-16 subject from 309 to 25 ms per 1000
-      searches, but it is unreleased. Porffor's `regex` benchmark stays
-      backtracking-bound either way: its first pattern takes 890 ms in regress alone,
-      against Porffor's 432 and Bun's 145. Its tag-name run
-      `[^\/\0>\x20\t\r\n\f]*` is followed by `[^>]*`, which accepts every unit the
-      first run gives back, so treating such a run as possessive would remove most
-      of that work.
-- [ ] Admit array literals whose constant keys LICM hoisted into a later loop's
-      preheader. The native initialization region resolves keys only from the
-      function's entry chain or the instructions just before the allocation. A
-      13-element literal in a second loop that shares keys with an earlier literal
-      therefore falls back to `createArray` and one `defineProperty` per element:
-      4M of them take 270 ms against Bun's 21.
-- [ ] Keep medium flat strings' units in their own cell. A string past the 16
-      Latin-1 or 8 UTF-16 inline units allocates a separate owned buffer that a
-      finalizer frees, so building `${order.region}/${order.category}` costs 27.7 ns
-      against Node's 3.5, and with the `Map.get` that follows 65 against 70. Copying
-      units of up to 96 bytes into the tail of a larger string cell cut those to 20
-      and 58 ns. Such a string needs its own storage kind among the flat ones:
-      external storage also covers transient buffers, which Map keys must not
-      retain. The flat-kind checks in the runtime, the GC finalizer, slices, Map key
-      compaction, FFI borrowing and the white-box string fixtures all name kinds.
-- [ ] Size an object literal that starts with a spread when it is created.
-      `({ ...record, extra: 1 })` over a three-field record takes 50 ns against
-      Node's 10. Lowering emits an empty `createObject` and then
-      `mergeDataProperties`, so the merge grows the empty object's slots through a
-      RAW allocation that the sweep later frees, and a trailing property can grow
-      them again. A literal whose first member is a spread could create its object
-      from the source, with the source's enumerable count plus a reserve for the
-      static members after it. That needs its own operation through the program
-      image and the native backend. Spread merges are about 1% of a self-compile.
-- [ ] Keep RegExp matches that the allocation-free plan rejects off the allocator.
-      `/^w\d*7$/.test(word)` runs 7 times slower than Node: every match on the
-      general path builds regress's backtracking state and grows it through
-      `realloc`, about a third of the samples. The fast plan rejects it because
-      `\d*7` needs backtracking. Reusing match state across calls needs regress to
-      expose it.
-- [ ] Dispatch chains of string comparisons on length. A quick self-compile makes
-      187M strict comparisons against string literals: 4.4M hit on identity, 170M
-      fail on length and 13M compare equal-length units, about 2 to 3% of the run.
-      Each comparison is already inline, and a `switch` over string cases already
-      dispatches on length or hash. The volume likely comes from `===` chains such as
-      `op.opcode === "A" || op.opcode === "B"` and `if`/`else if` ladders over one
-      subject, which test every literal in turn.
-- [ ] Inline methods that construct their own class, and read class getters
-      without a call. `v = v.add(new Vec(1, 2)); acc += v.len2 & 7` over a class
-      with two declared fields takes 37 ns per iteration against Node's 3.3. `new Vec`
-      inside `add` reads the class body's own immutable name binding through
-      `loadCaptured`, and the inliner refuses environment reads without a capture
-      context, so no method that names its own class inlines. Reading the
-      declaration's binding instead, for a class without static initializers whose
-      binding nothing writes, lets `add` inline but leaves the loop as fast: the
-      temporary `Vec` still allocates. The read-accessor transform offers no candidate for
-      `v.len2` because `v` is a loop phi of two constructions, so each read calls
-      the getter from the static miss path.
-- [ ] Construct derived classes without the generic super path. `new Pair(l, r)`
-      with `super(l)` into a one-field base takes 116 ns against Node's 5.6
-      (`constructor-derived-super-retained`). The construct inliner refuses
-      derived constructors, so the site goes through `mal_vm_construct_value`.
-      Inside, `super(l)` allocates an argument Array for `constructSuper`, the
-      base constructs its receiver for its own one field, and the derived
-      field then grows the slots through malloc, which also costs a finalizer.
-      Inlining the derived body at a construct site needs `constructSuper` to
-      become an inlined base construction with `new.target` as the receiver's
-      prototype source and a slot reserve for every class in the chain, behind a
-      guard that the constructor's prototype is still the heritage.
-- [ ] Allocate closure environments where a closure first needs them. Router's
-      `processParams` returns early through `done()` for most layers, yet each call
-      allocates its environment and hoisted closures on entry: about 160 bytes per
-      call and 8% of the in-process Express allocation volume. Native code already
-      defers the environment to the first closure creation that needs it, but
-      semantic lowering (`compileStatementsToBlock` with `hoistFunctions`) creates
-      the hoisted `param` and `paramCallback` closures at block entry. Sink a hoisted
-      declaration to the nearest dominator of its binding's reads and of the other
-      closures created in the same activation, unless the function uses direct
-      eval, `with` or mapped arguments.
-- [ ] Keep a script closure's `length` and `name` out of its cell until they are
-      reflected on or redefined. Dropping both from frame-copied closures, as an
-      upper-bound probe that breaks reflection, shrank the cell from 128 to 112
-      bytes and cut javascript-v2's allocation phase 4.35% and total 0.78%, through
-      fewer minor collections (242 to 234). Field writers include `object_ops.c`'s
-      slot-pointer accessor, the shaped stores in `vm_ops.h` and the define and
-      delete paths; a shared-fields design must copy the fields at every shape
-      change and value redefinition.
-- [ ] Call a held getter row straight from the static-load probe. A read such as
-      `debug.enabled` still passes the out-of-line remaining probe, which declines
-      getter rows, and then the static-miss front before the getter runs: about 80
-      instructions per accessor read that a getter-mode dispatch would skip.
-- [ ] Defer rest arrays that are only forwarded past an early return.
-      `deferCapturedRestMaterialization` moves a rest array past the guard only when
-      an inner closure captures it, so a function that forwards `...args` after an
-      early-return guard allocates the array on every call.
-- [ ] Pace collections with Request and Response body bytes. Bodies live in malloc,
-      so cutting managed allocation per request spaces collections out and leaves
-      more dead Responses holding their bodies; each such cut raised the bare HTTP
-      server's RSS by about 0.4 MB. Owning bodies as raw heap cells would charge
-      them to the collector.
-- [ ] Close the closed-compiled JavaScript benchmark's per-call gap. An unknown-target
-      call still costs 6.4 ns against Node's 4.3 (a four-closure loop, 191 ms
-      against 129) and a five-class method loop 345 ms against 232. The generic entry
-      still unpacks an argument array, publishes a root frame and returns through a
-      completion check. Frame rows are not the cost (a build without them ran the
-      self-compile 0.3% faster), and field entries beat inlining the `quote` bodies.
-      Entering strict compiled callees from each call site instead of the shared
-      cached dispatch cut javascript-v2's calls phase 2.78% but left its total flat
-      (-0.25% [-0.72, 0.40]). With object-literal methods guarded, same-function bound
-      calls inlined and `f.apply(t, [...])` on fresh array literals calling `f`
-      directly, that phase takes 48 ms against Node's 29. Before the `.apply` rewrite,
-      `callbacks[i](v)` took 17% of its samples and the `collectArguments(...spread)`
-      call 11.5%. Fully static literals such as `[1, 2]` become templates, so
-      `f.apply(t, [1, 2])` still runs generic. Builds with mutable primordials, such
-      as Test262's, keep bound and applied calls generic.
-- [ ] Close the rest of the objects phase's order loop. It takes 35.7 ms against
-      Node's 19.3, down from 47.9 now that a chain of generic adds keeps its sum
-      unboxed. The dispatched `quote` result is still boxed because the fallback call
-      can return anything, and `% MOD` runs the generic remainder on the
-      loop-carried checksum. The dispatch itself runs twice: three class cell checks
-      pick the method, then its function index is compared with the same three
-      targets once to decide whether to build `order` and once to pick the direct
-      entry. A class cell's method is runtime state, so calling each entry straight
-      from its class branch needs a fact that nothing reassigns `quote`. The
-      `accumulator` closure stays a call as well: the inliner rejects captured
-      bindings unless the closure was created in the caller's scope chain.
-- [ ] Keep int32 sums over dense numeric Arrays in integer registers. Elements load as
-      doubles, so `sum = (sum + id) | 0` converts `sum` to a double, adds and
-      truncates back every iteration: 5 ns per element against Node's 0.42, while
-      `sum += id`, counts and maxima already run within 25% of Node. Integer loop
-      bodies that treat dense elements as int32 and re-enter the double body for any
-      other number cut that loop to 0.55 ns, but no javascript-v2 loop qualifies and
-      only 1 of the native self-compiler's 21 dense-array loops does, which ran 1.26%
-      slower over 3 pairs. Land it with a consumer that pays.
-- [ ] Stop converting a loop-carried number at every inner-loop region entry and exit.
-      Over empty inner Arrays such a loop costs 4.5 to 5.3 ns per outer element
-      against 3.5 when it carries a Boolean, and with `| 0` over short inner Arrays 12
-      ns against Node's 2.3. Reading `.length` of Array elements is planned as an
-      object field, so that region bails out on its first element on every call: 2.45
-      ns against 0.67.
-- [ ] Expose the user-iterator protocol to Core. In the native self-compile
-      `mal_vm_iterator_step` is 3.9% inclusive, almost all of it the compiler's own
-      cursor classes: for-of over one costs 32 ns per step against Node's 2, and array
-      spread and `mal_vm_get_iterator` add another 2.5% in generic `Symbol.iterator`
-      and `next` lookups. Lowering GetIterator and each step into the
-      `Symbol.iterator` call, the `next` load and call and the `done` and `value`
-      loads, guarded by the captured `next` identity, saves about 8 ns alone; the rest
-      needs guarded call targets, inlining and scalar replacement of the result
-      literal to apply to `next`. Map and Set for-of at sites Core cannot type cost
-      about 9 ns per step against Node's 1, but they are 0.13% of the self-compile and
-      about 0.15% of javascript-v2.
-- [ ] Run inlined `filter` callbacks over an unknown dense Array without per-element
-      dispatch. `values.filter((value) => (value & 7) === (round & 7))` over 1024
-      numbers takes 5.0 ns per element against Node's 1.2 (3.9 with a constant in
-      place of the captured `round`). Each element pays a generic `index in array`
-      hole test with a boxed result, an element load that dispatches on the
-      Array kind, and a reload of the captured binding: loop-invariant code motion
-      keeps it in the loop because the `in` test and the load may call user code
-      on an arbitrary receiver. The array is not known to be packed, so the
-      region needs the dense storage check at entry that numeric loop regions use,
-      plus the appends to the result array.
-- [ ] Give large functions allocation-free iteration. Region selection spends the
-      program generated-code budget after about 1,700 of 28,700 discovery
-      opportunities in the self-compile, so functions such as render-native-c's
-      `emitBody` get no deferred iterator cursors or entry pairs: its 54 for-of
-      loops allocate an ArrayIterator each, and `entries()` loops a pair per step.
-      Raising the program budget fourfold made the self-compile 3.1% slower,
-      because the compiler then emits more C for its own input. Within the
-      functions it reaches, four expansive plans per function decline about 3,300
-      more; raising that limit to 16 made the self-compile 1.04% slower (optimize
-      +18 ms and emit +20 ms for `parser.ts`) with no measurable gain in the
-      compiler's own run. Admission needs a runtime benefit signal, such as loop
-      nesting or a profile, rather than a larger budget or limit.
-- [ ] Stop allocating closures that are only called. render-native-c's
-      `emitInstruction` creates about 40 closures on entry to every call and uses
-      a few per case: 1.64 million closures from 46,000 calls in the parser workload. Only the 20 of its 225 creation sites that capture lifting
-      rewrites are reduced to direct calls, and even those still allocate the
-      closure object the call passes as its callee. Sinking creation into the
-      cases that use it, or passing no object when the target never reads its
-      callee, would remove most of these allocations.
-- [ ] Reduce precise-root frame publication on paths that cannot reach a safepoint.
-      Native C uses conservative stack roots; measure this work on precise-root
-      targets such as Wasm. Keep collecting throw paths rooted and avoid expanding
-      inlining budgets merely to bypass entry overhead.
-- [ ] Keep Node stream state in native fields. The C stream runtime reads and
-      writes its state as own properties named by C strings, about 177 interned
-      names per Express JSON request, and its helpers take 7% of that route's
-      samples. Interning by address made each name cheap; the property traffic
-      remains. Finding those names through the shared shape stub instead of a
-      shape search changed nothing measurable.
-- [ ] Drop unused `loadCallee` reads, so named function expressions inline. A body
-      like `exports.add = function add(a, b) {...}` keeps a dead read of its callee for
-      its own name, which is neither discardable nor GC-free, and the inliner refuses
-      any body containing one. Marking it both lets a guessed CommonJS export inline:
-      a loop calling two such exports went from 10.2 to 5.2 ns per iteration. It also
-      changes eight unit tests, among them a native GC-root ordering error in
-      `native-property-update-plan` and a lost value kind in `core-record-write-facts`,
-      which need understanding first.
-- [ ] Bound the call targets of methods stored on module-scope objects. In a
-      script, `holder.run(value)` with `holder.run` assigned two functions
-      dispatches to both through a finite guarded set; as an ES module the same
-      code calls generically. Module function declarations are stored into their
-      slots by the module's instantiation function, while `holder.run = first`
-      runs in its body, and the program-flow engine collects known-function
-      property writes per function, resolving a receiver slot only from a store in
-      that same function. Resolving closed slots from every function's stores needs
-      a cross-function dependency in that incremental collection.
-      `finite-call-target-dispatch` compiles its fixture as a script until then.
-- [ ] Fuse projected split/trim length consumption without flattening the shared
-      rope or repeatedly descending from its root for each field's edges and slice.
-      First prove split and trim results and their aliases do not escape through
-      ordinary uses, terminators, or phi/jump-edge arguments; the current ordinary
-      use index does not cover control-edge uses. Carry that stronger Core proof
-      through region and artifact verification, and invalidate affected cache/schema
-      identities before suppressing materialization. Preserve trim identity guards,
-      observable fallback, reentry, and abrupt completion. Cover loop-carried and
-      returned fields, then compare matched first-pass and repeated-input runs of
-      concatenation-prepared and flat controls. Require throughput to hold against
-      the materializing implementation, with complete output checks and
-      GC/materialization safety.
+- [ ] Check and bound UTF-16 start-position filtering in the pinned RegExp backend using
+      the existing mixed-text/search workloads. Keep a backend change only with ordinary
+      first-pass/repeated-input gains and exact captures/UTF-16 semantics; do not bundle
+      speculative possessive rewrites.
 
-- [ ] Extend the inline Array iteration expansion to flatMap, findLast,
-      findLastIndex and unseeded reduce, each with fixture coverage of holes,
-      receiver mutation and fallback receivers. Expanded sites still run the
-      eligibility guard on non-Array receivers with the same method names (Map and
-      Set `forEach`, user `find` methods); measure that tax before widening.
+- [ ] Bound a later-preheader array-initialization experiment to existing
+      constant/dominance facts and initialization-region fixtures. Reproduce the original
+      multi-loop admission loss before changing it, then require useful
+      repeated-allocation exposure and fewer executed property definitions with bounded
+      planning and handler/fallback controls.
 
-- [ ] Cut the per-element cost of expanded Array iteration loops: `array-map`
-      spends 6.1 ns per element against Node's 1.3. The HasProperty test still boxes
-      its result for a truthiness test, separate from the element load, because the
-      array presence projection does not fire on these loops; the callback's
-      loop-invariant captured read (`value + round`) reloads through
-      `mal_vm_load_captured` every element; and each result goes through
-      `mal_vm_array_try_define_index`.
+- [ ] Prototype one flat string storage kind with an in-cell medium payload for app-batch
+      keys and short-concat controls. Migrate flat-kind, GC, slicing, Map-key and FFI
+      lifetime consumers together; require lower allocation and end-to-end cost with
+      stable footprint and binary size.
 
-- [ ] Cut the hinted Map lookup's cost when keys alternate. A get on a 4,096-entry
-      Map with alternating keys takes 7.1 ns for int32 keys and 8.6 ns for objects
-      against Node's 4.3 and 4.9. Int32 and identity lookups are frameless leaf
-      calls with a one-multiply hash now; what remains is the dependent probe
-      chain (hash, control group, slot, key) and, at a receiver the compiler
-      cannot type, the method capture guard before every call.
-- [ ] Reduce rope construction cost in append and prepend loops. Balanced joins
-      split and rebuild O(log n) nodes per piece; `string-rope-access` still spends
-      about 20% in join, split, node allocation and sweep. Copying short pieces into
-      the adjacent edge leaf was measured and rejected: it slowed short
-      concatenations by about 20% without improving rope access. Preserve the
-      bounded-traversal, append-hash continuation and encoding-aware rope fixtures.
+- [ ] Reserve fresh object-literal capacity for an initial spread plus known trailing
+      fields using one bounded lowering/runtime path. Preserve single-pass
+      enumerable/getter/proxy order and fallback, then compare allocation and total time
+      in JavaScript dynamic objects and spread controls, including the spread-built lookup
+      case.
 
-- [ ] Hash string keys faster than byte-serial FNV-1a without losing encoding
-      independence or the leaf-streaming continuation that append hashing and the
-      rope fixtures rely on. Long Map, Set and property keys pay roughly one
-      dependent multiply per code unit.
+- [ ] Defer Router processParams environments and hoisted closures to their first
+      certified use, including equivalent forwarded rest arrays. Preserve hoisting,
+      identity, roots and eval/with/mapped-argument behavior. Check current repeated
+      call-only capture layouts before trying owner-vector sharing; add no lookup to each
+      call. Keep only lower Express or compiler allocation/runtime cost after planning,
+      generated size and retained owner storage.
 
-- [ ] Remove per-match allocations from RegExp execution. regress builds a fresh
-      backtracking executor for every exec; together with result arrays it
-      dominates `primordial-string-regexp-projections`. In the
-      Express in-process route RegExp execution took about 11% of the samples:
-      backtracking under a third of that and malloc/free about as much, from each
-      match's capture vector and from widening Latin-1 subjects for patterns with
-      non-ASCII classes. The allocation-free plan now runs linear patterns such as
-      routes and media types, 37% of the route's executions; the rest need
-      alternation and quantified groups, for example content-type's parameter
-      pattern with its quoted-string alternative.
+- [ ] Use the checked Express workload to establish repeated held-getter misses, then
+      reuse one valid row at the rooted static-load call seam. Preserve receiver identity,
+      reentry, completion and roots; require full-route benefit and stable size while
+      noncollecting probes remain noncollecting.
 
-- [ ] Investigate full-output checksum traversal and construction/replacement in
-      the complete mixed-text pipeline. Use `scripts/profile-text-pipeline.ts`
-      with its encoding, escape, and surrogate controls, then confirm candidate
-      changes through paired ordinary builds with the complete checksum retained.
-      Bound marker overhead and resolve cooperative-sampler delay before treating
-      instrumented phase intervals as production cost shares. Quoting counters
-      alone do not attribute an aggregate timing change.
+- [ ] Account for owned Request/Response body bytes in collector pressure or managed
+      ownership without double charging transferred/streamed storage. Preserve body
+      lifetime and cancellation; compare stable RSS/footprint, pauses and bare/Express
+      throughput across body sizes.
+
+- [ ] Keep a bounded successful guarded-call continuation native through immediate
+      arithmetic or a known call before merging with the boxed fallback. Use current
+      method-name and JavaScript objects-loop consumers, re-establishing any historical
+      pricing-loop exposure. Reuse record entries and guard facts; preserve identity,
+      roots, completion and current-state fallback without replay. Charge duplicated code
+      and require runtime savings to repay both compiler hosts and C/build cost.
+
+- [ ] Expose one CoreFunctionStore cursor's captured iterator/next protocol to existing
+      guarded call and scalar-replacement passes. Require removal of repeated
+      protocol/result work in native self-compile, bounded Node/native planning and C
+      growth, and exact mutation, done/value, abrupt-close and fallback behavior.
+
+- [ ] Compare current region ranking with one bounded exposure signal for repeated
+      iterator/record work in native self-compile, keeping existing program and function
+      caps. Include discovery/rejected-candidate work, displaced plans, generic twins and
+      actual C/link/size cost; retain only a net compiler/application benefit rather than
+      larger budgets.
+
+- [ ] Resolve the root-order and value-kind obligations exposed when removing unused
+      loadCallee, then make genuinely unobserved callee reads discardable at their owning
+      layer. Preserve observable callee/arguments identity and require CommonJS/Express
+      benefit with bounded inlining and compiler cost.
+
+- [ ] Resolve finite method writes through proven closed module slots across instantiation
+      and body functions, recording incremental dependencies on every contributing store.
+      Require ES-module finite-call-target parity and real repeated-call benefit, with
+      bounded solve work and conservative dynamic/escaping-store fallback.
+
+- [ ] Complete ordinary, terminator and phi/edge escape proof before suppressing
+      split/trim materialization, carrying it through verification and cache identities.
+      For the checked rope split/trim checksum, require full-output parity, safe
+      fallback/reentry and throughput no worse than materialization on first-pass,
+      repeated-input and flat controls.
+
+- [ ] Admit a dense Array fast path for existing expanded map/filter loops so presence,
+      element load and stable callback captures avoid repeated generic dispatch. Reuse
+      bounded effects/storage facts and preserve holes, species, mutation and fallback;
+      require full-workload gains after both compiler hosts and code-size costs.
+
+- [ ] Bound first-hash cost on long Map/property keys, then compare one streaming
+      encoding-independent hash with append continuation intact. Require exact key
+      behavior and a representative application/compiler improvement after
+      short/cached-key controls, compile-time constant hashing, collision behavior, memory
+      and size.
+
+- [ ] Measure allocations in current residual general RegExp matches on Express and text
+      workloads, then prototype bounded executor-state reuse at the Rust ABI. Preserve
+      exact captures, backtracking, lastIndex and reentry, cap retained state, and require
+      ordinary first-pass/repeated-input gains without broad fast-pattern expansion.
+
+- [ ] Use the existing complete mixed-text workload to select one leading construction,
+      replacement, JSON or checksum-traversal cost, including rope rebuilding where
+      exposed. Confirm through ordinary paired builds with full checksum and
+      encoding/surrogate controls, rejecting work that merely shifts cost between
+      construction and traversal.
 
 # ECMAScript correctness
 
@@ -1091,22 +458,17 @@ contracts or investigates costs still visible after the string follow-ups.
       The loader already aliases CommonJS registry entries and namespace slots;
       `import()` additionally needs the earlier image's module evaluation state.
 
-- [ ] Give `run`, `dev` and development builds one linked image per application
-      module, as `maligator test` does. Measure native development builds first: every
-      image adds an overlay table and link units.
+- [ ] Evaluate per-application-module linked images for run, dev and development builds
+      using one frozen multi-module edit cycle. Preserve singleton, require/import and
+      evaluation-state semantics; choose granularity from incremental and clean build
+      time, link units, overlays and memory on both compiler hosts before rolling it out.
 
-- [ ] Download prebuilt images and native libraries instead of compiling them into an
-      empty cache. A fresh install compiles the `maligator test` runtime image (about
-      650 ms of a 750 ms first test), every dependency island (6.3 s for an empty-cache
-      `run` of express, drizzle and valibot, while reusing a cached island from another
-      location costs about 230 ms) and, for a first build, the runtime C and Rust
-      libraries (35 s). Ship the toolchain images in the npm platform packages. Publish
-      dependency images keyed by package version and compiler identity, and static
-      runtime libraries for the common build-setting combinations (eval, Intl, web and
-      node surface, primordial policy, target), as GitHub release assets or as OCI
-      artifacts on ghcr.io, the way Homebrew hosts its bottles. Consumers verify the
-      digest, cache the download and link it statically; anything without a match
-      still compiles locally.
+- [ ] Prototype shipping one existing toolchain runtime image or common runtime-library
+      artifact with the matching platform package. Key it by full source, toolchain,
+      target and configuration identity, verify its digest and retain local compilation
+      fallback. Accept on cold end-to-end install/use savings after transfer, package size
+      and cache storage; do not add a universal dependency-image registry or build-setting
+      matrix as a prerequisite.
 
 ## Active correctness clusters
 
@@ -1254,9 +616,6 @@ contracts or investigates costs still visible after the string follow-ups.
       blank-space-preserving stripper. Re-evaluate the compact implementation before
       selecting a larger dependency.
 
-- [ ] Optionally tier hot eval-created functions through native C compilation when a
-      toolchain is available. Preserve interpreter fallback.
-
 # Host architecture and transport
 
 The accepted ownership, streaming, cancellation, and event-loop contract is
@@ -1299,11 +658,10 @@ entropy, cancellation, and reactor completions.
 - [ ] Confirm SNI context matching against CVE-2026-48928 once details are published,
       and SQLite 3.53.3 against CVE-2026-69867.
 
-- [ ] Stop re-arming epoll for every exchange on Linux. Each read op re-arms its
-      EPOLLONESHOT registration with an `epoll_ctl`, so a keep-alive connection pays
-      a syscall per request. kqueue now submits registrations with the next wait,
-      which gained 1.5% on Express routes; epoll cannot batch, so it needs
-      persistent registrations whose unused directions are dropped lazily.
+- [ ] Compare persistent Linux epoll interests with the current one-shot registration on
+      representative keep-alive HTTP traffic. Preserve cancellation, stale-token and
+      fd-reuse safety and avoid idle spin; accept only lower end-to-end CPU or request
+      latency with stable throughput and bounded registrations.
 
 # WinterTC web platform
 
@@ -1392,20 +750,20 @@ remains a Maligator extension and does not count as global fetch conformance.
       hooks and thrown-hook precedence. Buffer validators and copyBytesFrom currently
       use a generic formatter.
 
-- [ ] Measure remaining UPM performance paths: off-loop filesystem and
-      decompression scheduling, and DNS/Agent dispatcher reuse. Use matched
-      workloads after output parity; AOT does not need a V8 compile cache.
+- [ ] Use one frozen UPM archive/install workload with output parity to choose a leading
+      filesystem scheduling, decompression scheduling or DNS/Agent reuse cost. Change one
+      owner path, preserve backpressure/cancellation, and accept on complete-workload wall
+      time, CPU and memory; do not add a V8-style compile cache.
 
-- [ ] Reduce boxing and numeric conversion in loop recurrences whose initial
-      value is unknown and not a parameter, including persistent Tinypool task inputs.
-      Parameter seeds dispatch to a [Number variant](docs/decisions/07-private-literals-and-native-entries.md);
-      other seeds still box the recurrence edge, and specializing it must preserve
-      zero-trip behavior and coercion effects.
+- [ ] Prototype one guarded numeric recurrence for the nonparameter task seed in the
+      persistent Tinypool workload. Preserve zero-trip and coercion effects and retain
+      boxed fallback; accept on complete task throughput after dispatch, both-host
+      compilation and generated-size costs.
 
-- [ ] Detect child exits from SIGCHLD or a kqueue process source instead of the
-      5 ms waitpid poll, emit 'data' on exec/execFile child streams (output goes
-      straight to the callback buffer today), and implement fork with an IPC channel.
-      Exercise active-child cleanup in embedded VM teardown on a Linux host.
+- [ ] Replace periodic child-exit polling with a host completion source while preserving
+      exit/reap ordering, ref/unref and VM teardown. Keep exec/execFile stream data and
+      fork IPC support. Validate Linux teardown and platform event ownership, and compare
+      exit latency and idle CPU separately from API correctness.
 
 - [ ] Fail CI when THIRD_PARTY_NOTICES.md is stale against Cargo.lock, the vendored
       sources and the derived-file list, and find license texts for alloc-stdlib and
@@ -1484,13 +842,10 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       backpressure and message size. Web events: base Event fields as prototype
       getters like Node, and MessageEvent.prototype.initMessageEvent.
 
-- [ ] worker_threads: `locks` / `navigator.locks` (LockManager request/query,
-      exclusive and shared modes, ifAvailable, steal, signal), shared across threads
-      through a process-wide table with per-isolate grant mailboxes.
-      `markAsUntransferable` should also make an ArrayBuffer's
-      `transfer()`/`transferToFixedLength()` throw "ArrayBuffer is not detachable
-      and could not be cloned.", as V8's detach key does. BroadcastChannel scans one
-      process-wide list; index it by name if processes use many channels.
+- [ ] Implement worker_threads locks and navigator.locks with request/query,
+      exclusive/shared modes, ifAvailable, steal and signal, using process-wide ownership
+      and per-isolate grant delivery. Make markAsUntransferable also prevent ArrayBuffer
+      transfer and transferToFixedLength with the required detach error.
 
 - [ ] vm's SourceTextModule, SyntheticModule, measureMemory and DONT_CONTEXTIFY, and
       a live contextified global (contexts copy the sandbox's own enumerable
@@ -1511,20 +866,16 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       Middle generator stages in pipeline receive the previous Readable itself, where
       Node wraps it with fromReadable.
 
-- [ ] node:stream: a native `push` delivers straight to 'data' listeners while the
-      stream flows, where Node buffers until the first `_read` because
-      `ReadableState.sync` starts true. A synchronous handler therefore sees 'data'
-      before its own `nextTick`. Granting node:http body read credit with the head,
-      so a small POST body arrives in the request's own turn, made Express form
-      7.3% and json 0.9% slower in alternating closed-build screens; the extra
-      time spread over Express's JavaScript, not GC, and its cause is unknown.
-- [ ] Bring node:stream construction and events to Node's cost. A `new Readable`
-      takes 570 to 800 ns against Node's 42, flowing a body 1.8 to 2.2 us against
-      0.5, and a listener add/remove 54 ns against 12; raw-body and `qs.parse`
-      run 3 to 4x Node. Node 26 also pre-fills a stream's `_events` with `close`,
-      `error`, `data`, `end` and `readable` and sets removed keys to undefined;
-      Maligator deletes them, and the shape churn in `ee_remove_one` costs about
-      1.6% of the Express JSON route.
+- [ ] Make synchronous native push respect the initial ReadableState.sync boundary so data
+      delivery agrees with first _read and nextTick ordering. Preserve HTTP read-credit
+      and backpressure behavior. Verify the event trace before measuring complete Express
+      routes; do not trade observable ordering for throughput.
+
+- [ ] Use the checked Express raw and parsed-body routes to select one stream
+      construction, state-access or event-table churn cost. Remove it at the runtime owner
+      while preserving observable state mutation, listener order and read scheduling.
+      Require matched route throughput/CPU and allocation improvement with bare-server and
+      memory controls; avoid a parallel mirrored state representation.
 
 - [ ] node:stream: a pipeline stage that pumps into a web TransformStream rejects with
       "Value is not a function" (Readable → TransformStream → Writable), although the
@@ -1566,42 +917,18 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       getHeader see headers passed only to writeHead. Stream destroy() emits 'error'
       and 'close' synchronously where Node defers them a tick.
 
-- [ ] Close measured Express performance gaps without regressing fixture behavior or
-      bare-server throughput. Profile before selecting compiler or runtime work.
-
 - [ ] Exercise postgres.js logical replication, prepared transactions, negotiated TLS,
       and primary or standby selection against a dedicated topology. Keep
       topology-dependent tests separate from the deterministic local baseline.
 
 # C libraries
 
-- [ ] Remove measured marshalling, allocation, callback-dispatch, and unused binding
-      build costs. Compare representative libraries against C and Bun, retaining
-      output parity, matched toolchains, and CPU, memory, disk, and binary-size evidence.
-      In the `bench:ffi` portfolio, number-array copies into `const double *` take
-      1.5x to 2.3x Bun's time, where Bun lends native vectors; Arrays hold tagged
-      integers, so the copy stays, and at 4096 elements it runs near memory
-      bandwidth. Compiled callers of a library without callback registrations pass
-      a matching view's storage to the typed scalar entry, and a fixed-numeric loop
-      region admits the views once at its entry; an 8-element `Float64Array` view
-      takes 0.94x Bun's time and matches C, including in module-level loops that store
-      module bindings. Regions call C with integer arguments whose range the facts prove;
-      they still refuse an unproven one, whose range check would restart an iteration
-      after C ran. Scalar fields of struct
-      handles read without a getter call, about 7.5 ns per warm read against 11: the
-      static probe's remainder, the miss path and the reader's 20 dependent loads. An
-      inline-cache row the static probe checks without a call would remove most of
-      that, but needs the VM to know which handle state makes a field readable. Binding 48
-      to 64 KiB of non-ASCII `sqlite-text` takes about 1.5x the ASCII time, which
-      matches C, while both sample as SQLite's `strlen` and copy; the ASCII string lends
-      its own storage and the others lend the UTF-8 sidecar. Sidecar alignment, page
-      offset and offset to SQLite's buffer change it by at most 10%, and the gap fades
-      at 16 and 256 KiB. Cold header analysis of a
-      macro-heavy library such as OpenSSL still spends about half its time in
-      Clang's JSON dump of the macro value probe, mostly the expression trees of
-      integer constants under their enum probes. Its Clang passes, and each library's
-      preprocessing in a warm build, run one after another; overlapping them needs an
-      asynchronous preparation pipeline through the synchronous build commands.
+- [ ] Measure the remaining cold macro-value probe cost for the frozen OpenSSL FFI input
+      after existing declaration filtering and type-probe deduplication. Prototype one
+      bounded way to reduce emitted/parsed expression trees while preserving macro values,
+      types and diagnostics. Accept on complete cold binding-build time and peak memory
+      with both compiler hosts; do not expand to a general asynchronous pipeline without a
+      new decisive case.
 
 # Actors and SMP
 
@@ -1637,78 +964,36 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 - [ ] Add a poll or ISR backend and fixed-size fiber stacks for constrained targets.
       Keep backend selection separate from JavaScript semantics.
 
-- [ ] Define a minimal-core profile omitting unused bytecode, Intl data, web APIs, and
-      host modules. Verify omitted personalities do not remain linked indirectly.
+- [ ] Define the minimal-core capability profile using existing feature selection and
+      source-closure certification. Verify omitted bytecode, Intl, web and host
+      personalities are absent from linked output and unsupported features fail
+      explicitly; record binary, resident-memory and build costs without requiring a
+      runtime speedup.
 
 ## Generational GC workers
 
-- [ ] Establish the native collector's throughput and CPU tradeoff with repeated
-      matched application and HTTP comparisons. Profile finished binaries before
-      changing scheduling. Keep mutator-owned sweep unless measured benefit
-      justifies worker ownership.
+- [ ] Compare the current native GC scheduling policy with one bounded pacing change on
+      native self-compile, app-batch and representative HTTP traffic. Measure total CPU,
+      wall time, peak storage and pause distributions from matched finished binaries; keep
+      mutator-owned sweep unless a measured end-to-end gain pays for ownership complexity.
+
 - [ ] Validate native worker capacity under live constrained and nested CPU quotas.
       Synthetic v1/v2 mounted-path and visible-ancestor fixtures pass; hidden
       namespace ancestors cannot be inferred. Keep the inline capacity fallback.
-- [ ] Measure peak committed/deferred storage, synchronous minor and long
-      root/remark/finalizer pauses, and backstop completions. Lower allocation in
-      the production JavaScript workload coincides with longer maximum minor pauses,
-      despite less total GC time in raw diagnostic pairs. Isolate the expensive
-      collection with matched checkpoint ablations before changing pacing; retain
-      mark, remembered-slot, sweep and promotion evidence. Keep peak managed
-      survivor accounting distinct from exact live heap and RSS. Extend block
-      ownership only if a measured need justifies background reclamation.
+- [ ] Attribute peak committed/deferred storage and long minor, root, remark or finalizer
+      pauses on matched production workloads, including the current skipped-block slice
+      budget. Keep managed survivors, exact liveness and RSS distinct. Bound any change to
+      the measured phase or container, preserving tracing and promotion; require lower
+      tail latency or retained storage without a material total-CPU/throughput regression.
 
 ### Concurrent generational GC experiments
 
-- [ ] Barriers: decide dense-fill and scalar captured-store card specialization
-      after representative HTTP and compiler comparisons; app-batch screens were
-      mixed. Dense reverse removes redundant scans under whole-array tracing and
-      had a neutral application cut. Dense shift/copy card narrowing was rolled
-      back after a repeated application slowdown; its semantic fixture remains.
-      Keep SATB deletion protection independent of generational facts.
-- [ ] Bounded slices: retain the skipped-block sweep budget only after combined
-      latency review. One instrumented app run had more short major slices and a
-      5.998 ms minor pause outlier; repeat before claiming application pause gains.
-      Use mutator-only array trace attribution to identify a measured large-container
-      or root-scan offender before adding resumable tracing or wider exact liveness.
-- [ ] Dirty ranges: compare sparse and dense old-container writes with logical
-      scanned slots and discoveries on applications. The 8,192-slot sparse array
-      fixture shows one discovery from a full-owner scan; cards remain experimental.
-- [ ] Ephemerons: focused Linux ASan+UBSan and app-batch timing are complete,
-      but app-batch visited zero weak entries. Measure a representative
-      weak-heavy workload and bounded pending-index memory before retaining
-      the indexed pass; retain the separate weak-cleanup SATB correctness fix.
-- [ ] Release exhausted Map/Set iterator targets after dropping their storage pin.
-      The current GC trace retains the entire owner through `iterator->target`.
-      Audit direct cursor helpers and preserve SATB before clearing that edge;
-      this retention predates the specialized collection stores.
+- [ ] Decide whether to retain the existing ephemeron pending index using a representative
+      weak-cache workload and a no-weak-entry control, recording scan work, total CPU,
+      pause time and bounded index memory. Remove or simplify the optimization if it
+      cannot pay; preserve weak-cleanup SATB correctness independently.
 
-# Triggered work
-
-These are not active tasks and become actionable only when their condition is
-observed.
-
-- Extend block or chunk reclamation only when a workload shows long sweep exposure
-  or retained capacity that the existing bitmap allocator and page release cannot
-  address.
-- Elide SATB barriers only if concurrent GC becomes the default and a realistic
-  store-heavy workload makes the barrier material.
-- Revisit MalVm and host-structure layout when measurements show per-isolate storage
-  limiting concurrent workloads.
-- Choose segmented, guarded, or fixed fiber stacks when measured actor density makes
-  the current policy limiting.
-- Consider separate actor heaps only if idle actor density becomes a measured
-  constraint; preserve copy-message semantics meanwhile.
-- Add io_uring only after epoll validates the completion-oriented reactor interface.
-- Reconsider timezone-offset caching only if Date profiling makes it a top-five
-  self-time contributor.
-
-- Reopen VM-independent leaf workers only when actual activation overhead is a
-  leading cost and existing eligibility covers real hot sites; neutral structural
-  simplification is not justification for broader eligibility on its own.
-- Specialize collection storage or eliminate generator/async objects only after a
-  representative profile and explicit identity/escape/completion contract establish
-  the need. They are not prerequisites for the bounded P1 work.
-- Start another emitter-only sweep when the fact-flow report identifies sufficient
-  existing proofs that still select a general path; do not rediscover already
-  implemented primitive kernels or mistake inline helpers for unavoidable calls.
+- [ ] Clear an exhausted Map/Set iterator's target after releasing its storage pin and
+      required compaction, with SATB deletion protection. Cover ordinary and direct cursor
+      exhaustion and prove the owner can be collected while repeated next calls stay
+      exhausted.
