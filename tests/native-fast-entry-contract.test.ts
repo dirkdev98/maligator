@@ -891,7 +891,7 @@ it("transports an index as an Int32 only after guarding the canonical arguments"
 	expect(unexpectedHelpers(lines)).toEqual([]);
 });
 
-it("keeps the argument vector when an index parameter is overwritten", () => {
+it("keeps an overwritten index parameter boxed", () => {
 	const lines = fastEntry(
 		body([
 			{ opcode: "MOVE", src: 0, dst: 1 },
@@ -902,7 +902,7 @@ it("keeps the argument vector when an index parameter is overwritten", () => {
 	expect(lines.join("\n")).not.toContain("i32 __fast_p1");
 });
 
-it("keeps the argument vector when a successful path bypasses the index", () => {
+it("keeps a bypassable index parameter boxed", () => {
 	const lines = fastEntry(
 		body([
 			{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
@@ -912,6 +912,23 @@ it("keeps the argument vector when a successful path bypasses the index", () => 
 		]),
 	)!;
 	expect(lines.join("\n")).not.toContain("i32 __fast_p1");
+});
+
+it("passes small boxed entries directly while adapting missing canonical arguments", () => {
+	const source = fastEntry(
+		body([
+			{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator: "===" },
+			{ opcode: "RETURN", value: 2 },
+		]),
+	)!.join("\n");
+	expect(source).toContain(
+		"bool mal_compiled_0_try(MalVm *vm, MalValue this_value, MalValue __fast_p0, MalValue __fast_p1, MalEnv *env, MalValue *out)",
+	);
+	expect(source).toContain("__fast_r0 = __fast_p0;");
+	expect(source).toContain("__fast_r1 = __fast_p1;");
+	expect(source).toContain(
+		"mal_compiled_0_try(vm, this_value, (arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED), (arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED), env, &__fast_result)",
+	);
 });
 
 it.each([
@@ -1616,6 +1633,27 @@ describe("native fast entries", () => {
 		expect(source).toContain("mal_compiled_7_try(vm, MAL_VALUE_UNDEFINED, __fast_p1,");
 		expect(source).not.toContain("(const MalValue[])");
 		expect(source).not.toContain("mal_value_is_int32(__fast_r1)");
+	});
+
+	it("fills missing boxed helper parameters without building an argument vector", () => {
+		const source = fastEntry(
+			body([
+				{
+					opcode: "CALL",
+					dst: 2,
+					callee: 1,
+					thisValue: -1,
+					argumentCount: 1,
+					arguments: [0],
+				},
+				{ opcode: "RETURN", value: 2 },
+			]),
+			() => ({ symbol: "mal_compiled_7_try", parameters: ["boxed", "boxed"] }),
+		)!.join("\n");
+		expect(source).toContain(
+			"mal_compiled_7_try(vm, MAL_VALUE_UNDEFINED, __fast_r0, MAL_VALUE_UNDEFINED,",
+		);
+		expect(source).not.toContain("(const MalValue[])");
 	});
 
 	it("accept a backward jump to a merge block that does not loop", () => {

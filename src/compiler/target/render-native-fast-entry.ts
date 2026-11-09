@@ -557,7 +557,7 @@ function scalarTryParameters(
 		}
 		if (required && indexed) parameters[parameter] = "i32";
 	}
-	return parameters.includes("i32") ? parameters : undefined;
+	return parameters.includes("i32") || parameters.length <= 2 ? parameters : undefined;
 }
 
 function boxed(representation: VmRegisterRepresentation, value: string): string {

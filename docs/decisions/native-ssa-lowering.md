@@ -321,7 +321,10 @@ observed profile restarts the activation in the full entry; nothing observable h
 happened by then and nothing in the fast entry can allocate, so it needs no frame
 row, root frame or safepoint. A canonical fast body is also exported as a `_try`
 function, and a fast body may call another one's `_try` at a proven exact call
-site. Recursive bodies never qualify, since a body becomes available only after
+site. Small boxed parameter lists use fixed positional arguments to avoid building
+an argument vector between fast bodies. The canonical entry still adapts omitted
+arguments to `undefined`; stricter integer parameters retain their admission guards.
+Recursive bodies never qualify, since a body becomes available only after
 its callees do. Entries a numeric worker, literal-switch dispatch, or selected
 region already serves, and entries whose operator proofs rule out Numbers, keep
 only their full entry.
