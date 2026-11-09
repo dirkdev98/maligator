@@ -1,14 +1,14 @@
 {
   "sha": "3655e7464de3d52643ecddd4b5f9f4f3e7f62398",
   "summary": {
-    "FAILED": 911,
-    "PASSED": 52667
+    "FAILED": 909,
+    "PASSED": 52669
   },
   "skips": {},
   "code": {
     "compiledFiles": 94218,
-    "functionCount": 2985900,
-    "instructionCount": 108080801
+    "functionCount": 2987125,
+    "instructionCount": 107759303
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",
@@ -39966,7 +39966,7 @@
     "test/staging/sm/PrivateName/proxy-1.js": "PASSED",
     "test/staging/sm/Promise/bug-1287334.js": "PASSED",
     "test/staging/sm/Promise/methods-non-enumerable.js": "PASSED",
-    "test/staging/sm/Proxy/getPrototypeOf.js": "FAILED",
+    "test/staging/sm/Proxy/getPrototypeOf.js": "PASSED",
     "test/staging/sm/Proxy/ownkeys-allowed-types.js": "PASSED",
     "test/staging/sm/Proxy/proxy-constructNonObject.js": "PASSED",
     "test/staging/sm/Proxy/regress-bug1037770.js": "PASSED",
@@ -53364,7 +53364,7 @@
     "test/staging/sm/Proxy/ownkeys-linear.js": "PASSED",
     "test/staging/sm/Proxy/proxy-no-receiver-overwrite.js": "PASSED",
     "test/staging/sm/Proxy/regress-bug1062349.js": "PASSED",
-    "test/staging/sm/Proxy/revoke-as-side-effect.js": "FAILED",
+    "test/staging/sm/Proxy/revoke-as-side-effect.js": "PASSED",
     "test/staging/sm/Proxy/trap-null.js": "PASSED",
     "test/staging/sm/Reflect/defineProperty.js": "PASSED",
     "test/staging/sm/Reflect/getPrototypeOf.js": "PASSED",
