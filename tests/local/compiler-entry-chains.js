@@ -80,4 +80,32 @@ function maybeVoid(value) {
 globalThis.maybeVoid = maybeVoid;
 for (const value of [true, 7, "fallback"])
 	log.push(Reflect.apply(globalThis.maybeVoid, undefined, [value]));
+
+function identityOrClone(value) {
+	if (value && typeof value === "object" && !value.keep) return { ...value };
+	return value;
+}
+globalThis.identityOrClone = identityOrClone;
+const retained = { keep: true, id: 7 };
+for (const value of [
+	0,
+	-0,
+	NaN,
+	Infinity,
+	undefined,
+	null,
+	true,
+	"identity",
+	1n,
+	Symbol("identity"),
+	retained,
+	retained,
+])
+	log.push(
+		Object.is(Reflect.apply(globalThis.identityOrClone, undefined, [value]), value),
+	);
+log.push(Reflect.apply(globalThis.identityOrClone, undefined, []) === undefined);
+const original = { keep: false, id: 11 };
+const cloned = Reflect.apply(globalThis.identityOrClone, undefined, [original]);
+log.push(cloned === original, cloned.keep, cloned.id);
 console.log(JSON.stringify(log));

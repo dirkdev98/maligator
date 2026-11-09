@@ -14111,12 +14111,20 @@ class NativeInstructionEmission {
 									`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}_try`,
 								)
 							: undefined;
+					const reconstructed =
+						tryAbi?.result.kind === "undefined"
+							? "MAL_VALUE_UNDEFINED"
+							: tryAbi?.result.kind === "parameter"
+								? args[tryAbi.result.index] === undefined
+									? "MAL_VALUE_UNDEFINED"
+									: this.boxedOperand(args[tryAbi.result.index]!)
+								: undefined;
 					const invoke =
 						trySymbol === undefined
 							? [`  MalValue ${value} = ${ordinary};`]
 							: [
-									`  MalValue ${value}${tryAbi!.result === "undefined" ? " = MAL_VALUE_UNDEFINED" : ""};`,
-									`  if (!${trySymbol}(vm, ${receiver}, ${argsExpr}, ${args.length}, mal_value_to_function_object(${guardedCallee})->creation_env${tryAbi!.result === "boxed" ? `, &${value}` : ""})) ${value} = ${ordinary};`,
+									`  MalValue ${value}${reconstructed === undefined ? "" : ` = ${reconstructed}`};`,
+									`  if (!${trySymbol}(vm, ${receiver}, ${argsExpr}, ${args.length}, mal_value_to_function_object(${guardedCallee})->creation_env${tryAbi!.result.kind === "boxed" ? `, &${value}` : ""})) ${value} = ${ordinary};`,
 								];
 					return [
 						`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${this.context.relocation.functionIndex(target)}) {`,

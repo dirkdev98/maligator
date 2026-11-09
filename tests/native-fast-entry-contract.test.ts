@@ -25,7 +25,10 @@ import type { NativeControlFlowPlan } from "../src/compiler/target/native-contro
 import { selectNativeStringComparisons } from "../src/compiler/target/native-string-comparisons.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type { NativeDirectEntryPlan } from "../src/compiler/target/program-image.ts";
-import { renderNativeFastEntry } from "../src/compiler/target/render-native-fast-entry.ts";
+import {
+	nativeFastTryAbiKey,
+	renderNativeFastEntry,
+} from "../src/compiler/target/render-native-fast-entry.ts";
 import type { NativeFastTryAbi } from "../src/compiler/target/render-native-fast-entry.ts";
 import type {
 	BytecodeFunction,
@@ -964,6 +967,82 @@ it("omits undefined fast results while retaining the full entry's other return v
 	expect(source).not.toContain("MalValue *out");
 });
 
+it("reconstructs an unchanged argument including an omitted argument", () => {
+	const source = fastEntry(body([{ opcode: "RETURN", value: 1 }]))!.join("\n");
+	expect(source).not.toContain("MalValue *out");
+	expect(source).toContain(
+		"env)) return (arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED);",
+	);
+});
+
+it.each<[string, ReadonlyArray<BytecodeInstruction>]>([
+	[
+		"a written parameter",
+		[
+			{ opcode: "CREATE_NUMBER", dst: 0, value: 7 },
+			{ opcode: "RETURN", value: 0 },
+		],
+	],
+	[
+		"different returned parameters",
+		[
+			{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
+			{ opcode: "RETURN", value: 0 },
+			{ opcode: "RETURN", value: 1 },
+		],
+	],
+	[
+		"normal fallthrough",
+		[
+			{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
+			{ opcode: "RETURN", value: 0 },
+		],
+	],
+])("retains result storage for %s", (_name, instructions) => {
+	expect(fastEntry(body(instructions))!.join("\n")).toContain("MalValue *out");
+});
+
+it("changes the result ABI when an admitted call writes the returned parameter", () => {
+	const fn = body([
+		{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+		{
+			opcode: "CALL",
+			dst: 0,
+			callee: 1,
+			thisValue: -1,
+			argumentCount: 0,
+			arguments: [],
+		},
+		{ opcode: "RETURN", value: 0 },
+		{ opcode: "RETURN", value: 0 },
+	]);
+	expect(fastEntry(fn)!.join("\n")).not.toContain("MalValue *out");
+	expect(fastEntry(fn, () => "mal_compiled_7_try")!.join("\n")).toContain(
+		"MalValue *out",
+	);
+});
+
+it("keys every fast ABI component independently of descriptor allocation", () => {
+	const abis: ReadonlyArray<NativeFastTryAbi | undefined> = [
+		undefined,
+		{ result: { kind: "boxed" } },
+		{ result: { kind: "undefined" } },
+		{ result: { kind: "parameter", index: 0 } },
+		{ result: { kind: "parameter", index: 1 } },
+		{ parameters: ["boxed"], result: { kind: "parameter", index: 0 } },
+		{ parameters: ["i32"], result: { kind: "parameter", index: 0 } },
+	];
+	expect(new Set(abis.map(nativeFastTryAbiKey)).size).toBe(abis.length);
+	for (const abi of abis) {
+		if (abi === undefined) continue;
+		const clone: NativeFastTryAbi = {
+			parameters: abi.parameters === undefined ? undefined : [...abi.parameters],
+			result: { ...abi.result },
+		};
+		expect(nativeFastTryAbiKey(clone)).toBe(nativeFastTryAbiKey(abi));
+	}
+});
+
 it.each([
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULLISH,
@@ -1035,7 +1114,7 @@ function fastEntry(
 				? undefined
 				: {
 						...(typeof entry === "string"
-							? { symbol: entry, abi: { result: "boxed" as const } }
+							? { symbol: entry, abi: { result: { kind: "boxed" as const } } }
 							: entry),
 						environment: `mal_value_to_function_object(${callee})->creation_env`,
 					};
@@ -1344,6 +1423,30 @@ describe("native fast entries", () => {
 		expect(unexpectedHelpers(booleanOrString)).toEqual([]);
 		expect(booleanOrString.join("\n")).toContain("mal_value_is_string(__fast_r0)");
 		expect(booleanOrString.join("\n")).not.toContain("mal_ops_is_number(");
+	});
+
+	it.each([0, 1])("reconstructs nested result parameter %i", (index) => {
+		const source = fastEntry(
+			body([
+				{
+					opcode: "CALL",
+					dst: 2,
+					callee: 1,
+					thisValue: -1,
+					argumentCount: 1,
+					arguments: [0],
+				},
+				{ opcode: "RETURN", value: 2 },
+			]),
+			() => ({
+				symbol: "mal_compiled_7_try",
+				abi: { parameters: ["boxed", "boxed"], result: { kind: "parameter", index } },
+			}),
+		)!.join("\n");
+		expect(source).toContain(
+			`creation_env)) goto __full; __fast_r2 = ${index === 0 ? "__fast_r0" : "MAL_VALUE_UNDEFINED"};`,
+		);
+		expect(source).not.toContain("&__fast_r2");
 	});
 
 	it.each(["<", "<=", ">", ">="] as const)(
@@ -1665,7 +1768,7 @@ describe("native fast entries", () => {
 			),
 			() => ({
 				symbol: "mal_compiled_7_try",
-				abi: { parameters: ["i32"], result: "boxed" },
+				abi: { parameters: ["i32"], result: { kind: "boxed" } },
 			}),
 		)!;
 		const source = lines.join("\n");
@@ -1690,7 +1793,7 @@ describe("native fast entries", () => {
 			]),
 			() => ({
 				symbol: "mal_compiled_7_try",
-				abi: { parameters: ["boxed", "boxed"], result: "boxed" },
+				abi: { parameters: ["boxed", "boxed"], result: { kind: "boxed" } },
 			}),
 		)!.join("\n");
 		expect(source).toContain(
@@ -1717,7 +1820,7 @@ describe("native fast entries", () => {
 			]),
 			() => ({
 				symbol: "mal_compiled_7_try",
-				abi: { parameters: ["boxed"], result: "boxed" },
+				abi: { parameters: ["boxed"], result: { kind: "boxed" } },
 				guard: "allowed",
 			}),
 		)!.join("\n");
@@ -1749,7 +1852,7 @@ describe("native fast entries", () => {
 			]),
 			() => ({
 				symbol: "mal_compiled_7_try",
-				abi: { parameters: ["boxed"], result: callee },
+				abi: { parameters: ["boxed"], result: { kind: callee } },
 			}),
 			true,
 			undefined,
@@ -1792,7 +1895,7 @@ describe("native fast entries", () => {
 				]),
 				() => ({
 					symbol: "mal_compiled_7_try",
-					abi: { parameters: ["boxed"], result: "boxed" },
+					abi: { parameters: ["boxed"], result: { kind: "boxed" } },
 				}),
 				exported,
 			)!.join("\n");

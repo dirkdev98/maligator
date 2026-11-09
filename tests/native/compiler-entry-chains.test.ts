@@ -64,8 +64,19 @@ it("preserves private accessor fallbacks and boxed predicate callbacks under col
 			) === "maybeVoid",
 	)!;
 	expect(
-		emitCompiledFunction(maybeVoid, maybeVoid.functionIndex, "", false)?.tryAbi?.result,
+		emitCompiledFunction(maybeVoid, maybeVoid.functionIndex, "", false)?.tryAbi?.result
+			.kind,
 	).toBe("undefined");
+	const identityOrClone = pair.programImage.native.functions.find(
+		(fn) =>
+			String.fromCharCode(
+				...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+			) === "identityOrClone",
+	)!;
+	expect(
+		emitCompiledFunction(identityOrClone, identityOrClone.functionIndex, "", false)
+			?.tryAbi?.result,
+	).toEqual({ kind: "parameter", index: 0 });
 	for (const binary of [pair.compiled, pair.interpreted]) {
 		expect(
 			runToStdout(binary, {

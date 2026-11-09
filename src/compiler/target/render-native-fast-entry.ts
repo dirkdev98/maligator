@@ -68,9 +68,24 @@ const MAXIMUM_FAST_ENTRY_INSTRUCTIONS = 64;
 
 export type NativeFastTryParameters = ReadonlyArray<"i32" | "boxed">;
 
+export type NativeFastTryResult =
+	| { readonly kind: "boxed" }
+	| { readonly kind: "undefined" }
+	| { readonly kind: "parameter"; readonly index: number };
+
+const BOXED_FAST_RESULT = { kind: "boxed" } as const;
+const UNDEFINED_FAST_RESULT = { kind: "undefined" } as const;
+
 export interface NativeFastTryAbi {
 	readonly parameters?: NativeFastTryParameters;
-	readonly result: "boxed" | "undefined";
+	readonly result: NativeFastTryResult;
+}
+
+export function nativeFastTryAbiKey(abi: NativeFastTryAbi | undefined): string {
+	if (abi === undefined) return "0";
+	const result =
+		abi.result.kind === "parameter" ? `parameter:${abi.result.index}` : abi.result.kind;
+	return `[${abi.parameters?.join(",") ?? "vector"}:${result}]`;
 }
 
 export function nativeFastTryParameterList(abi: NativeFastTryAbi): string {
@@ -83,7 +98,7 @@ export function nativeFastTryParameterList(abi: NativeFastTryAbi): string {
 					(kind, index) => `${kind === "i32" ? "i32" : "MalValue"} __fast_p${index}`,
 				)),
 		"MalEnv *env",
-		...(abi.result === "boxed" ? ["MalValue *out"] : []),
+		...(abi.result.kind === "boxed" ? ["MalValue *out"] : []),
 	].join(", ");
 }
 
@@ -261,6 +276,17 @@ export function renderNativeFastEntry(
 	const tryParameters = exported
 		? scalarTryParameters(fn, graph, accesses, rejected)
 		: undefined;
+	const returnedParameter = instructions.find((op) => op.opcode === "RETURN")?.value;
+	const returnsParameter =
+		exported &&
+		!fallsThrough &&
+		returnedParameter !== undefined &&
+		returnedParameter >= 0 &&
+		returnedParameter < fn.parameterCount &&
+		instructions.every(
+			(op) => op.opcode !== "RETURN" || op.value === returnedParameter,
+		) &&
+		![...accesses.values()].some((access) => access.writes.includes(returnedParameter));
 	const tryAbi: NativeFastTryAbi = {
 		parameters: tryParameters,
 		result:
@@ -275,8 +301,10 @@ export function renderNativeFastEntry(
 						COMPILER_VALUE_KIND_UNDEFINED
 				);
 			})
-				? "undefined"
-				: "boxed",
+				? UNDEFINED_FAST_RESULT
+				: returnsParameter
+					? { kind: "parameter", index: returnedParameter }
+					: BOXED_FAST_RESULT,
 	};
 	for (const register of constants.keys())
 		if (!initialized.has(register)) constants.delete(register);
@@ -439,6 +467,12 @@ export function renderNativeFastEntry(
 							: `(arg_count > ${index} ? args[${index}] : MAL_VALUE_UNDEFINED)`,
 					)
 					.join(", ");
+	const resultValue =
+		tryAbi.result.kind === "boxed"
+			? "__fast_result"
+			: tryAbi.result.kind === "undefined"
+				? "MAL_VALUE_UNDEFINED"
+				: `(arg_count > ${tryAbi.result.index} ? args[${tryAbi.result.index}] : MAL_VALUE_UNDEFINED)`;
 	return emit([
 		`${linkage}__attribute__((no_stack_protector)) __attribute__((aligned(64))) bool ${input.trySymbol}(${nativeFastTryParameterList(tryAbi)}) {`,
 		pragma,
@@ -448,8 +482,8 @@ export function renderNativeFastEntry(
 		"}",
 		input.signature,
 		...(input.dispatch ?? []),
-		...(tryAbi.result === "boxed" ? ["    MalValue __fast_result;"] : []),
-		`    if (${fn.hasPrototype ? "mal_value_is_undefined(new_target) && " : ""}${entryGuards.length === 0 ? "" : `${entryGuards.join(" && ")} && `}${input.trySymbol}(vm, this_value, ${arguments_}, env${tryAbi.result === "boxed" ? ", &__fast_result" : ""})) return ${tryAbi.result === "boxed" ? "__fast_result" : "MAL_VALUE_UNDEFINED"};`,
+		...(tryAbi.result.kind === "boxed" ? ["    MalValue __fast_result;"] : []),
+		`    if (${fn.hasPrototype ? "mal_value_is_undefined(new_target) && " : ""}${entryGuards.length === 0 ? "" : `${entryGuards.join(" && ")} && `}${input.trySymbol}(vm, this_value, ${arguments_}, env${tryAbi.result.kind === "boxed" ? ", &__fast_result" : ""})) return ${resultValue};`,
 		full,
 		"}",
 	]);
@@ -617,12 +651,12 @@ function fastReturn(
 	value: string,
 	directEntry: NativeDirectEntryPlan | undefined,
 	exported: boolean,
-	tryResult: NativeFastTryAbi["result"] = "boxed",
+	tryResult: NativeFastTryResult = BOXED_FAST_RESULT,
 ): string {
 	if (exported)
-		return tryResult === "undefined"
-			? "return true;"
-			: `{ *out = ${value}; return true; }`;
+		return tryResult.kind === "boxed"
+			? `{ *out = ${value}; return true; }`
+			: "return true;";
 	switch (directEntry?.resultRepresentation) {
 		case undefined:
 		case "boxed":
@@ -1005,7 +1039,7 @@ function fastInstruction(
 	integers: ReadonlySet<number>,
 	cachedNumbers: ReadonlySet<number>,
 	tryParameters: NativeFastTryParameters | undefined,
-	tryResult: NativeFastTryAbi["result"] = "boxed",
+	tryResult: NativeFastTryResult = BOXED_FAST_RESULT,
 ): string | undefined {
 	const masks = input.facts?.[ip]?.inputKindMasks;
 	const values: FastNumbers = {
@@ -1304,17 +1338,24 @@ function fastInstruction(
 			const next = input.fn.instructions[ip + 1];
 			const forwardsResult =
 				exported &&
-				tryResult === callee.abi.result &&
+				tryResult.kind !== "parameter" &&
+				tryResult.kind === callee.abi.result.kind &&
 				next?.opcode === "RETURN" &&
 				next.value === op.dst;
 			const output =
-				callee.abi.result === "boxed"
+				callee.abi.result.kind === "boxed"
 					? `, ${forwardsResult ? "out" : `&__fast_r${op.dst}`}`
 					: "";
 			const call = `${callee.symbol}(vm, ${receiver}, ${arguments_}, ${callee.environment}${output})`;
 			if (forwardsResult)
 				return `${guards.length === 0 ? "" : `if (${guards.join(" || ")}) goto __full; `}return ${call};`;
-			return `if (${guards.length === 0 ? "" : `${guards.join(" || ")} || `}!${call}) goto __full;${callee.abi.result === "undefined" ? ` __fast_r${op.dst} = MAL_VALUE_UNDEFINED;` : ""}`;
+			const resultValue =
+				callee.abi.result.kind === "undefined"
+					? "MAL_VALUE_UNDEFINED"
+					: callee.abi.result.kind === "parameter"
+						? (args[callee.abi.result.index] ?? "MAL_VALUE_UNDEFINED")
+						: undefined;
+			return `if (${guards.length === 0 ? "" : `${guards.join(" || ")} || `}!${call}) goto __full;${resultValue === undefined ? "" : ` __fast_r${op.dst} = ${resultValue};`}`;
 		}
 		case "CALL_KNOWN": {
 			if (

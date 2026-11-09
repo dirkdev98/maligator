@@ -33,7 +33,10 @@ import type {
 	NativeDirectClosureEnvironment,
 } from "./render-native-c.ts";
 import type { NativeFastTryAbi } from "./render-native-fast-entry.ts";
-import { nativeFastTryParameterList } from "./render-native-fast-entry.ts";
+import {
+	nativeFastTryAbiKey,
+	nativeFastTryParameterList,
+} from "./render-native-fast-entry.ts";
 import {
 	compressPositions,
 	computeArgumentRetentionLimit,
@@ -1002,8 +1005,7 @@ function compiledAvailabilityMatches(
 		if (
 			(a.source.length === 0) !== (b.source.length === 0) ||
 			(a.trySymbol === undefined) !== (b.trySymbol === undefined) ||
-			a.tryAbi?.parameters?.join(",") !== b.tryAbi?.parameters?.join(",") ||
-			a.tryAbi?.result !== b.tryAbi?.result ||
+			nativeFastTryAbiKey(a.tryAbi) !== nativeFastTryAbiKey(b.tryAbi) ||
 			a.directEntries.length !== b.directEntries.length
 		)
 			return false;
@@ -1238,11 +1240,7 @@ function emitNativeFunctions(
 			key += availability.directClosures.has(closure) ? "1" : "0";
 		key += ":";
 		for (const target of fastTryLookups[functionIndex] ?? []) {
-			const abi = availability.fastTryTargets.get(target);
-			key +=
-				abi === undefined
-					? "0"
-					: `[${abi.parameters?.join(",") ?? "vector"}:${abi.result}]`;
+			key += nativeFastTryAbiKey(availability.fastTryTargets.get(target));
 		}
 		return key;
 	};

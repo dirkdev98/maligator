@@ -330,6 +330,11 @@ An exported fast body whose admitted returns prove `undefined` reports only
 success. Its callers reconstruct that value on success and retain the full entry's
 return value on a miss. Availability and caller cache identities include this result
 ABI because admitting another callee can expand a body's successful return paths.
+The same success-only ABI can forward an original positional argument when every
+admitted return reads that unwritten parameter and no successful path falls through.
+Callers retain the already evaluated argument, including `undefined` for an omitted
+argument. This describes fast success only; a full fallback can return a different
+value or allocate a copy.
 Recursive bodies never qualify, since a body becomes available only after
 its callees do. Entries a numeric worker, literal-switch dispatch, or selected
 region already serves, and entries whose operator proofs rule out Numbers, keep
