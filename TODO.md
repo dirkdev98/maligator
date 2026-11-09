@@ -73,10 +73,6 @@ executions, measuring both compiler hosts.
       otherwise require repeated-chain and compiler-workload savings that repay planning
       and native build cost.
 
-- [ ] Establish peak build-memory and end-to-end evidence for streamed product CLI
-      emission on Node and self-hosted paths. Require byte-identical C/runtime images,
-      lower peak memory, worker-root controls and no end-to-end build regression.
-
 - [ ] Distribute existing parts of one oversized native function across bounded
       translation units using a shared transfer-struct declaration. Keep only a cold-build
       improvement after link cost, peak memory, binary size and representative execution
@@ -211,11 +207,6 @@ Shared lifetime and fallback rules are recorded in
       or equivalent selection identities, including worker roots; test edit-free
       warm invalidation without clearing caches or reparsing every graph on a hit.
 
-- [ ] Validate scalar safepoint-root block transfers on frozen self-compile and
-      compiler-scale inputs. Require lower end-to-end time or peak memory on Node and
-      rebuilt native hosts with unchanged emitted C/runtime wire and explicit host
-      tradeoffs before accepting the throughput change.
-
 - [ ] Bound aggregate work and retained state for analysis extensions, including
       discovery, rejected candidates and nested queries, with conservative fallback on
       exhaustion. Add only counters needed to prove limits and require end-to-end evidence
@@ -340,11 +331,6 @@ contracts or investigates costs still visible after the string follow-ups.
       keys and short-concat controls. Migrate flat-kind, GC, slicing, Map-key and FFI
       lifetime consumers together; require lower allocation and end-to-end cost with
       stable footprint and binary size.
-
-- [ ] Validate allocation and total time for initial-spread capacity hints in
-      JavaScript dynamic objects and retained spread controls, including the spread-built
-      lookup case. Keep enumerable/getter/proxy order, fallback and existing copy
-      scalar replacement intact.
 
 - [ ] Defer Router processParams environments and hoisted closures to their first
       certified use, including equivalent forwarded rest arrays. Preserve hoisting,
@@ -862,11 +848,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       delivery agrees with first _read and nextTick ordering. Preserve HTTP read-credit
       and backpressure behavior. Verify the event trace before measuring complete Express
       routes; do not trade observable ordering for throughput.
-
-- [ ] Validate stream state coallocation on the checked Express raw and parsed-body
-      routes. Require matched throughput/CPU and allocation-call improvement with
-      bare-server and memory controls. Preserve observable state mutation, listener order
-      and read scheduling.
 
 - [ ] node:stream: a pipeline stage that pumps into a web TransformStream rejects with
       "Value is not a function" (Readable → TransformStream → Writable), although the
