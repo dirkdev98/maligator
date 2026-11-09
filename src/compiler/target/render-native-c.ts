@@ -15018,7 +15018,7 @@ class NativeInstructionEmission {
 			case "CREATE_OBJECT":
 				if (this.context.stackObjectSite === undefined) {
 					return [
-						`r${instruction.dst} = ${this.profileCall("allocation", `mal_vm_op_create_object(vm)`)};`,
+						`r${instruction.dst} = ${this.profileCall("allocation", instruction.reserveSource < 0 ? "mal_vm_op_create_object(vm)" : `mal_vm_op_create_object_for_spread(vm, ${this.boxed(instruction.reserveSource)}, ${instruction.slotReserve})`)};`,
 						this.throwCheck(),
 					];
 				}

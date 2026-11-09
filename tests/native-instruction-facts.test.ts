@@ -366,7 +366,10 @@ describe("independent native instruction facts", () => {
 			inputKindMasks: [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_STRING],
 		};
 		expect(
-			nativeInstructionEffects({ opcode: "CREATE_OBJECT", dst: 0 }, facts),
+			nativeInstructionEffects(
+				{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 0 },
+				facts,
+			),
 		).toMatchObject({ allocation: true, throwing: true });
 		const effects = nativeInstructionEffects(
 			{ opcode: "BINARY", operator: "+", dst: 2, left: 0, right: 1 },

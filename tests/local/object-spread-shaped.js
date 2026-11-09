@@ -39,6 +39,48 @@ check(
 		overwritten.next === 31,
 );
 
+const trailingEffects = [];
+const trailingCopy = {
+	...new Proxy(
+		{ first: 1 },
+		{
+			ownKeys(target) {
+				trailingEffects.push("keys");
+				return Reflect.ownKeys(target);
+			},
+			getOwnPropertyDescriptor(target, key) {
+				trailingEffects.push("descriptor:" + key);
+				return Reflect.getOwnPropertyDescriptor(target, key);
+			},
+			get(target, key) {
+				trailingEffects.push("get:" + key);
+				gc();
+				return target[key];
+			},
+		},
+	),
+	[(() => {
+		trailingEffects.push("key");
+		return "last";
+	})()]: (() => {
+		trailingEffects.push("value");
+		gc();
+		return shared;
+	})(),
+};
+check(
+	"first spread completes before trailing member evaluation",
+	trailingEffects.join(",") === "keys,descriptor:first,get:first,key,value" &&
+		trailingCopy.last === shared,
+);
+for (const source of [null, undefined]) {
+	const copy = { ...source, retained: shared };
+	check(
+		"nullish initial spread keeps trailing fields",
+		copy.retained === shared && Object.keys(copy).join(",") === "retained",
+	);
+}
+
 const nullSource = Object.create(null);
 nullSource.alpha = 1;
 nullSource.beta = 2;

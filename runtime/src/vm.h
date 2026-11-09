@@ -260,7 +260,7 @@ typedef struct MalInstruction {
         } create_bigint;
 
         struct {
-            i32 dst;
+            i32 dst, reserve_source, slot_reserve;
         } create_object;
 
         struct {

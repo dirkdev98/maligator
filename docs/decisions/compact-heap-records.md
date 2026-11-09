@@ -61,6 +61,14 @@ grow. Embedded objects and separately owned fields cannot infer an inline bound.
 Spare capacity remains invisible to reflection and tracing until each new field
 is initialized and its shape is published.
 
+An initial object-literal spread gives empty-object creation a bounded capacity
+hint from the source and known trailing fields. It retains the normal merge and
+property definitions, so existing shape and virtual-state analysis can still remove
+the copy. Virtualization discards a capacity hint when its source becomes virtual.
+Ordinary shaped sources add their current inline bound; proxies and other exotics
+retain the enumerable-key, descriptor and getter walk. Spare slots change capacity
+only, and later properties become visible through their original definitions.
+
 ## Compiled access
 
 Inline caches retain the shape and slot. A numeric read region can carry its

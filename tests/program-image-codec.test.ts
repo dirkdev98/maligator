@@ -1291,6 +1291,8 @@ describe("program-image-codec", () => {
 
 		const barrierInstruction: BytecodeInstruction = {
 			opcode: "CREATE_OBJECT",
+			reserveSource: -1,
+			slotReserve: 0,
 			dst: 7,
 		};
 		const barrierFunctions = valid.runtime.functions.map((fn) => ({
@@ -1411,9 +1413,9 @@ describe("program-image-codec", () => {
 		expect(() => check([{ opcode: "CREATE_UNDEFINED", dst: 2 }])).toThrow(
 			/receiver is redefined/,
 		);
-		expect(() => check([{ opcode: "CREATE_OBJECT", dst: 0 }])).toThrow(
-			/crosses an invalid instruction/,
-		);
+		expect(() =>
+			check([{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 0 }]),
+		).toThrow(/crosses an invalid instruction/);
 		expect(() =>
 			check(
 				Array.from({ length: 65 }, () => ({ opcode: "CREATE_NUMBER", dst: 0, value: 3 })),
@@ -1479,6 +1481,33 @@ describe("program-image-codec", () => {
 		);
 		expect(restored).toEqual(definition);
 	});
+
+	it.each([-1, 0, 7, CORE_MAX_SHAPED_OBJECT_SLOTS + 1])(
+		"enforces bounded object slot reserves (%s)",
+		(slotReserve) => {
+			const operation: BytecodeInstruction = {
+				opcode: "CREATE_OBJECT",
+				dst: 0,
+				reserveSource: 1,
+				slotReserve,
+			};
+			const runtime = {
+				...definition.runtime,
+				functions: definition.runtime.functions.map((fn, index) =>
+					index === 0 ? { ...fn, instructions: [operation], positions: [0] } : fn,
+				),
+			};
+			const wire = serializeRuntimeImage(runtime);
+			if (slotReserve < 0 || slotReserve > CORE_MAX_SHAPED_OBJECT_SLOTS)
+				expect(() => deserializeRuntimeImage(wire)).toThrow(
+					/invalid object slot reserve/,
+				);
+			else
+				expect(deserializeRuntimeImage(wire).functions[0]!.instructions).toEqual([
+					operation,
+				]);
+		},
+	);
 
 	it("round-trips and validates constructor slot reserves", () => {
 		const withReserve = (

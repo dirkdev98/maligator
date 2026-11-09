@@ -799,6 +799,8 @@ export type BytecodeInstruction =
 	| {
 			opcode: "CREATE_OBJECT";
 			dst: number;
+			reserveSource: number;
+			slotReserve: number;
 	  }
 	| {
 			opcode: "CREATE_BASE_CONSTRUCT_RECEIVER";
@@ -1508,6 +1510,7 @@ export function vmInstructionWriteRegisters(
 }
 
 const VM_REGISTER_USE_FIELDS = [
+	"reserveSource",
 	"state",
 	"epoch",
 	"prefixLength",
@@ -3887,6 +3890,9 @@ function lowerInstructionToBytecodeInstruction(
 			return {
 				opcode: "CREATE_OBJECT",
 				dst: instruction.registers[0],
+				reserveSource:
+					instruction.slotReserve === undefined ? -1 : instruction.registers[1]!,
+				slotReserve: instruction.slotReserve ?? 0,
 			};
 		case "createBaseConstructReceiver":
 			return {

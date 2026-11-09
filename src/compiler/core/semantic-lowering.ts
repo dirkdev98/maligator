@@ -89,6 +89,7 @@ import type {
 	CoreModuleLink,
 	CoreModuleLinks,
 } from "./core-compilation.ts";
+import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { formatCoreProgram } from "./core-format.ts";
 import {
@@ -13076,10 +13077,30 @@ function compileObjectExpression(
 		return destination;
 	}
 
+	const initialSpread = objectExpression.properties[0];
+	const spreadSource =
+		initialSpread?.type === "SpreadElement"
+			? compileExpression(program, fn, cursor, initialSpread.argument)
+			: undefined;
+	let slotReserve = 0;
+	if (spreadSource !== undefined) {
+		for (let index = 1; index < objectExpression.properties.length; index++) {
+			const property = objectExpression.properties[index]!;
+			if (property.type !== "Property" || property.kind !== "init") continue;
+			const name = staticPropertyName(property);
+			if (
+				name !== undefined &&
+				name !== "__proto__" &&
+				!compilerPropertyKeyIsArrayIndex(name)
+			)
+				slotReserve = Math.min(slotReserve + 1, CORE_MAX_SHAPED_OBJECT_SLOTS);
+		}
+	}
 	const object = nextCoreVariable(fn);
 	cursor.block.emitter.emit({
 		type: "createObject",
-		registers: [object],
+		registers: spreadSource === undefined ? [object] : [object, spreadSource],
+		...(spreadSource === undefined ? {} : { slotReserve }),
 	});
 
 	// If any method/accessor references `super`, the object literal is the
@@ -13116,11 +13137,14 @@ function compileObjectExpression(
 		);
 	}
 
-	for (const property of objectExpression.properties) {
+	for (const [index, property] of objectExpression.properties.entries()) {
 		if (property.type === "SpreadElement") {
 			// Object spread copies the source's own enumerable properties into
 			// the literal under construction.
-			const source = compileExpression(program, fn, cursor, property.argument);
+			const source =
+				index === 0 && spreadSource !== undefined
+					? spreadSource
+					: compileExpression(program, fn, cursor, property.argument);
 			cursor.block.emitter.emit({
 				type: "mergeDataProperties",
 				registers: [object, source],

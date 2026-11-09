@@ -188,7 +188,7 @@ describe("wire loader side-data validation", () => {
 			propertyIcCount: 0,
 			literalShapeCount: 0,
 			instructions: [
-				{ opcode: "CREATE_OBJECT", dst: 0 },
+				{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 0 },
 				{ opcode: "CREATE_UNDEFINED", dst: 1 },
 				{ opcode: "BASE_CONSTRUCT_RESULT", dst: 2, receiver: 0, value: 1 },
 				{ opcode: "RETURN", value: 2 },

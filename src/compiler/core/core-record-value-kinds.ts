@@ -256,8 +256,7 @@ function recordKeys(
 	const header = fn.instructionHeader(instruction);
 	if (typeof header === "string") return undefined;
 	const opcode = header.opcode;
-	if (opcode === "createObject" && fn.kernel.instructionOperandCount(instruction) === 0)
-		return EMPTY_RECORD_KEYS;
+	if (opcode === "createObject") return EMPTY_RECORD_KEYS;
 	if (opcode !== "createObjectShaped") return undefined;
 	const keys = fn.instructionAttributes(instruction).keyStringIndices;
 	if (

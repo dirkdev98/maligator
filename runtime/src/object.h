@@ -312,6 +312,7 @@ MalObject *mal_object_try_new(MalHeap *heap, MalObject *prototype);
 
 /** Allocate an empty object with hidden capacity for later shape transitions. */
 MalObject *mal_object_new_reserved(MalHeap *heap, MalObject *prototype, u8 capacity);
+MalObject *mal_object_try_new_reserved(MalHeap *heap, MalObject *prototype, u8 capacity);
 
 /** Allocate an ordinary object and its known inline slots in one managed cell. */
 MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,

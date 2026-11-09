@@ -213,8 +213,10 @@ type CompilerOperation =
 	| {
 			type: "createObject";
 
-			// [destination, ...finite-region Number guards]
+			// With slotReserve, the first input supplies only the initial spread's capacity.
+			// Remaining inputs are finite-region Number guards.
 			registers: [number, ...Array<number>];
+			slotReserve?: number;
 	  }
 	| {
 			type: "createBaseConstructReceiver";

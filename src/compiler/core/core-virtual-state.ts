@@ -148,6 +148,12 @@ export const materializeVirtualState: CoreFunctionPass = {
 						}
 						continue;
 					}
+					if (
+						op === "createObject" &&
+						operand === 0 &&
+						typeof fn.instructionAttributes(instruction).slotReserve === "number"
+					)
+						continue;
 					if (op !== "mergeDataProperties" || operand !== 1) return undefined;
 				}
 			}
@@ -436,6 +442,21 @@ export const materializeVirtualState: CoreFunctionPass = {
 						}
 					}
 					continue;
+				}
+				if (
+					op === "createObject" &&
+					typeof attrs.slotReserve === "number" &&
+					aliases.has(args[0]!) &&
+					!args.slice(1).some((input) => aliases.has(input))
+				) {
+					const { slotReserve: _slotReserve, ...attributes } = attrs;
+					replacements.set(instruction, {
+						opcode: op,
+						inputs: args.slice(1),
+						attributes,
+					});
+					boundary = instruction;
+					break;
 				}
 				if (op === "move" && aliases.has(args[0]!)) {
 					const alias = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));

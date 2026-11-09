@@ -429,6 +429,8 @@ describe("Test262 VM image merger", () => {
 			},
 			{
 				opcode: "CREATE_OBJECT",
+				reserveSource: -1,
+				slotReserve: 0,
 				dst: 3,
 			},
 			{

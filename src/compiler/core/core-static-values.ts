@@ -2513,7 +2513,7 @@ export class CoreStaticValueAnalysis {
 		if (opcode === "createObject" || opcode === "createObjectShaped") {
 			brand = "object";
 			const keys = (attributes.keyStringIndices ?? []) as ReadonlyArray<number>;
-			if (keys.length !== operands.length)
+			if (opcode === "createObjectShaped" && keys.length !== operands.length)
 				return { kind: "unknown", reason: "unsupported-producer" };
 			this.statistics.visits += keys.length;
 			if (this.statistics.visits > this.#limit)

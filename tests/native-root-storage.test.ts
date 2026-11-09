@@ -608,12 +608,12 @@ function continuousRootPlan(
 
 const sharedAcrossSafepoints: Parameters<typeof continuousRootPlan> = [
 	[
-		{ opcode: "CREATE_OBJECT", dst: 2 },
+		{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 2 },
 		{ opcode: "MOVE", dst: 6, src: 2 },
-		{ opcode: "CREATE_OBJECT", dst: 3 },
+		{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 3 },
 		{ opcode: "MOVE", dst: 4, src: 0 },
 		{ opcode: "MOVE", dst: 6, src: 3 },
-		{ opcode: "CREATE_OBJECT", dst: 5 },
+		{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 5 },
 		{ opcode: "MOVE", dst: 6, src: 4 },
 		{ opcode: "RETURN", value: 5 },
 	],
@@ -627,10 +627,10 @@ const sharedAcrossSafepoints: Parameters<typeof continuousRootPlan> = [
 
 const readByHandler: Parameters<typeof continuousRootPlan> = [
 	[
-		{ opcode: "CREATE_OBJECT", dst: 2 },
+		{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 2 },
 		{ opcode: "MOVE", dst: 3, src: 0 },
 		{ opcode: "MOVE", dst: 6, src: 0 },
-		{ opcode: "CREATE_OBJECT", dst: 4 },
+		{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 4 },
 		{ opcode: "MOVE", dst: 6, src: 3 },
 		{ opcode: "RETURN", value: 6 },
 		{ opcode: "CATCH", dst: 5 },
@@ -656,11 +656,11 @@ describe("continuously rooted storage sharing", () => {
 	it("keeps a value read on the next loop iteration live past its last read in program order", () => {
 		const { slots } = continuousRootPlan(
 			[
-				{ opcode: "CREATE_OBJECT", dst: 2 },
+				{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 2 },
 				{ opcode: "MOVE", dst: 6, src: 2 },
 				{ opcode: "MOVE", dst: 4, src: 6 },
 				{ opcode: "JUMP_IF", cond: 7, targetIp: 1 },
-				{ opcode: "CREATE_OBJECT", dst: 5 },
+				{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 5 },
 				{ opcode: "MOVE", dst: 6, src: 4 },
 				{ opcode: "RETURN", value: 5 },
 			],

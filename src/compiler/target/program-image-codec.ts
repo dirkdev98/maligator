@@ -44,7 +44,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 86;
+export const WIRE_VERSION = 87;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -838,6 +838,10 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.bigintIndex);
 			return;
 		case "CREATE_OBJECT":
+			w.i32(i.dst);
+			w.i32(i.reserveSource);
+			w.i32(i.slotReserve);
+			return;
 		case "CREATE_UNDEFINED":
 		case "CREATE_EMPTY":
 		case "CREATE_NULL":
@@ -1712,8 +1716,21 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 			return { opcode, dst: r.i32(), stringIndex: r.i32() };
 		case "CREATE_BIGINT":
 			return { opcode, dst: r.i32(), bigintIndex: r.i32() };
-		case "CREATE_OBJECT":
-			return { opcode, dst: r.i32() };
+		case "CREATE_OBJECT": {
+			const instruction = {
+				opcode,
+				dst: r.i32(),
+				reserveSource: r.i32(),
+				slotReserve: r.i32(),
+			} as const;
+			if (
+				instruction.reserveSource < -1 ||
+				instruction.slotReserve < 0 ||
+				instruction.slotReserve > CORE_MAX_SHAPED_OBJECT_SLOTS
+			)
+				throw new RangeError("program-image-codec: invalid object slot reserve");
+			return instruction;
+		}
 		case "CREATE_BASE_CONSTRUCT_RECEIVER": {
 			const instruction = {
 				opcode,

@@ -393,7 +393,7 @@ describe("private-root publication state at collecting edges", () => {
 		const source = emit(
 			[
 				load,
-				{ opcode: "CREATE_OBJECT", dst: 4 },
+				{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 4 },
 				call(retained),
 				returned,
 				{ opcode: "CATCH", dst: 3 },

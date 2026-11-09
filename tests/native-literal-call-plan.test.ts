@@ -25,7 +25,7 @@ function mathImage() {
 function propertyImage(key: string) {
 	const original = mathImage();
 	const instructions = [
-		{ opcode: "CREATE_OBJECT" as const, dst: 0 },
+		{ opcode: "CREATE_OBJECT" as const, reserveSource: -1, slotReserve: 0, dst: 0 },
 		{ opcode: "CREATE_UNDEFINED" as const, dst: 2 },
 		{ opcode: "CREATE_STRING" as const, dst: 1, stringIndex: 0 },
 		{
@@ -157,7 +157,7 @@ describe("persisted literal and Math call choices", () => {
 			const image = propertyImage("field");
 			const original = image.native.functions[0]!.body;
 			const instructions = [
-				{ opcode: "CREATE_OBJECT", dst: 1 },
+				{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 1 },
 				{ opcode: "JUMP_IF", cond: 0, targetIp: 4 },
 				{ opcode: "CREATE_STRING", dst: 2, stringIndex: 0 },
 				{ opcode: "JUMP", targetIp: 6 },

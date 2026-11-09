@@ -102,6 +102,15 @@ export function coreMaterializationPlan(
 				continue;
 			}
 			if (
+				opcode === "createObject" &&
+				operand === 0 &&
+				typeof attributes.slotReserve === "number"
+			) {
+				record("metadata", "spread-capacity");
+				storage = true;
+				continue;
+			}
+			if (
 				opcode === "typeofCompare" ||
 				(opcode === "unary" && attributes.operator === "typeof")
 			) {

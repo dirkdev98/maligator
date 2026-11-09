@@ -96,7 +96,7 @@ describe("native lexical owner lookup contract", () => {
 		const emitted = emit(
 			[
 				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 3 },
-				{ opcode: "CREATE_OBJECT", dst: 1 },
+				{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 1 },
 				{ opcode: "LOAD_CAPTURED", dst: 2, ownerFunctionIndex: 2, index: 3 },
 				{ opcode: "RETURN", value: 2 },
 			],
@@ -446,7 +446,7 @@ describe("native lexical owner lookup contract", () => {
 
 	it("omits incoming environment roots only for a certified empty layout", () => {
 		const instructions: Array<BytecodeInstruction> = [
-			{ opcode: "CREATE_OBJECT", dst: 0 },
+			{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 0 },
 			{ opcode: "RETURN", value: 0 },
 		];
 		for (const closureCaptureOwners of [undefined, [], [2]]) {

@@ -3662,6 +3662,7 @@ MalValue mal_vm_op_to_property_key(MalVm *vm, MalValue object_value, MalValue ke
  * creating frame's environment) so the closure resolves captured bindings.
  */
 MalValue mal_vm_op_create_object(MalVm *vm);
+MalValue mal_vm_op_create_object_for_spread(MalVm *vm, MalValue source, u8 trailing_capacity);
 MalValue mal_vm_create_base_construct_receiver_slow(
     MalVm *vm, MalValue new_target, u8 capacity);
 

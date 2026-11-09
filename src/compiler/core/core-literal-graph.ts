@@ -168,7 +168,7 @@ export function literalGraph(
 					}
 				} else {
 					const keys = (attributes.keyStringIndices ?? []) as ReadonlyArray<number>;
-					const values = operands(fn, instruction);
+					const values = opcode === "createObject" ? [] : operands(fn, instruction);
 					if (keys.length !== values.length) return undefined;
 					words.push(9, keys.length);
 					for (let i = keys.length - 1; i >= 0; i--) {

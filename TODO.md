@@ -342,11 +342,10 @@ contracts or investigates costs still visible after the string follow-ups.
       lifetime consumers together; require lower allocation and end-to-end cost with
       stable footprint and binary size.
 
-- [ ] Reserve fresh object-literal capacity for an initial spread plus known trailing
-      fields using one bounded lowering/runtime path. Preserve single-pass
-      enumerable/getter/proxy order and fallback, then compare allocation and total time
-      in JavaScript dynamic objects and spread controls, including the spread-built lookup
-      case.
+- [ ] Validate allocation and total time for initial-spread capacity hints in
+      JavaScript dynamic objects and retained spread controls, including the spread-built
+      lookup case. Keep enumerable/getter/proxy order, fallback and existing copy
+      scalar replacement intact.
 
 - [ ] Defer Router processParams environments and hoisted closures to their first
       certified use, including equivalent forwarded rest arrays. Preserve hoisting,

@@ -881,6 +881,24 @@ MalValue mal_vm_op_create_object(MalVm *vm) {
     return mal_value_from_object(object);
 }
 
+MalValue mal_vm_op_create_object_for_spread(MalVm *vm, MalValue source, u8 trailing_capacity) {
+    u32 capacity = trailing_capacity;
+    if (mal_value_is_heap_type(source, MAL_HEAP_OBJECT)) {
+        const MalObject *object = mal_value_to_object(source);
+        if (!mal_object_has_public_overflow(object)) capacity += object->shape->inline_count;
+    }
+    if (capacity > MAL_SHAPE_MAX_INLINE_SLOTS) capacity = MAL_SHAPE_MAX_INLINE_SLOTS;
+    MalObject *object = mal_object_try_new_reserved(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+        (u8) capacity);
+    if (object == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return MAL_VALUE_UNDEFINED;
+    }
+    MAL_PERF_COUNT(object_empty_creations);
+    return mal_value_from_object(object);
+}
+
 MalValue mal_vm_create_base_construct_receiver_slow(
     MalVm *vm, MalValue new_target, u8 capacity
 ) {
@@ -988,7 +1006,11 @@ MalValue mal_vm_materialize_record(
 }
 
 void mal_op_create_object(MalCallable *callable, const MalInstruction *instruction) {
-    callable->registers[instruction->as.create_object.dst] = mal_vm_op_create_object(callable->vm);
+    i32 source = instruction->as.create_object.reserve_source;
+    callable->registers[instruction->as.create_object.dst] = source < 0
+        ? mal_vm_op_create_object(callable->vm)
+        : mal_vm_op_create_object_for_spread(callable->vm, callable->registers[source],
+            (u8) instruction->as.create_object.slot_reserve);
 }
 
 void mal_op_create_base_construct_receiver(
@@ -9232,7 +9254,6 @@ static bool mal_vm_try_merge_shaped_data_properties(
     MalObject *target = mal_value_to_object(target_value);
     MalObject *source_object = mal_value_to_object(source);
     if (target->shape != mal_shape_root(&vm->heap)
-        || mal_object_fields(target) != nullptr
         || mal_object_has_public_overflow(target)
         || !target->extensible
         || source_object->shape == nullptr

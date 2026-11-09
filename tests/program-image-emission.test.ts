@@ -614,7 +614,7 @@ describe("emit-program-image instruction packing", () => {
 	it("uses static define helpers only for non-index string keys", () => {
 		const emitDefine = (key: string): string => {
 			const defineInstructions: Array<BytecodeInstruction> = [
-				{ opcode: "CREATE_OBJECT", dst: 0 },
+				{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 0 },
 				{ opcode: "CREATE_UNDEFINED", dst: 2 },
 				{ opcode: "CREATE_STRING", dst: 1, stringIndex: 0 },
 				{
@@ -2565,7 +2565,7 @@ describe("emit-program-image instruction packing", () => {
 			instructions: [
 				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 1, stringIndex: 1, icIndex: 0 },
 				{ opcode: "LOAD_PROPERTY_STATIC", object: 1, dst: 2, stringIndex: 2, icIndex: 1 },
-				{ opcode: "CREATE_OBJECT", dst: 3 },
+				{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 3 },
 				{ opcode: "JUMP_IF", cond: 2, targetIp: 0 },
 				{ opcode: "RETURN", value: 2 },
 			],
@@ -2648,7 +2648,7 @@ describe("emit-program-image instruction packing", () => {
 				{ opcode: "CREATE_NUMBER", dst: 4, value: 1 },
 				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 2, stringIndex: 2, icIndex: 1 },
 				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 3, stringIndex: 3, icIndex: 2 },
-				{ opcode: "CREATE_OBJECT", dst: 5 },
+				{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 5 },
 				{ opcode: "JUMP_IF", cond: 3, targetIp: 0 },
 				{ opcode: "RETURN", value: 1 },
 			],

@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 86u
+#define WIRE_VERSION 87u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -675,6 +675,12 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
         case WIRE_CREATE_OBJECT:
             o->opcode = MAL_OP_CREATE_OBJECT;
             o->as.create_object.dst = rd_i32(r);
+            o->as.create_object.reserve_source = rd_i32(r);
+            o->as.create_object.slot_reserve = rd_i32(r);
+            if (o->as.create_object.reserve_source < -1 ||
+                o->as.create_object.slot_reserve < 0 ||
+                o->as.create_object.slot_reserve > MAL_SHAPE_MAX_INLINE_SLOTS)
+                r->ok = false;
             return;
         case WIRE_CREATE_BASE_CONSTRUCT_RECEIVER:
             o->opcode = MAL_OP_CREATE_BASE_CONSTRUCT_RECEIVER;
@@ -2937,6 +2943,11 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                 i32 key = instruction->as.load_dynamic_argument.key;
                 if (dst < 0 || dst >= fn->register_count ||
                     key < 0 || key >= fn->register_count) r.ok = false;
+            } else if (instruction->opcode == MAL_OP_CREATE_OBJECT) {
+                if (instruction->as.create_object.dst < 0 ||
+                    instruction->as.create_object.dst >= fn->register_count ||
+                    instruction->as.create_object.reserve_source >= fn->register_count)
+                    r.ok = false;
             } else if (instruction->opcode == MAL_OP_GUARD_SERVICE_EPOCH) {
                 if (instruction->as.guard_service_epoch.dst < 0 || instruction->as.guard_service_epoch.dst >= fn->register_count || instruction->as.guard_service_epoch.epoch < 0 || instruction->as.guard_service_epoch.epoch >= fn->register_count) r.ok = false;
             } else if (instruction->opcode == MAL_OP_READ_SERVICE_EPOCH) {

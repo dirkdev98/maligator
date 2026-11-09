@@ -415,6 +415,18 @@ MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *
     return object;
 }
 
+MalObject *mal_object_try_new_reserved(MalHeap *heap, MalObject *prototype, u8 capacity) {
+    if (capacity == 0) return mal_object_try_new(heap, prototype);
+    MalObject *object = mal_heap_try_alloc(
+        heap, sizeof(MalObject) + sizeof(void *) + sizeof(MalValue) * capacity,
+        MAL_HEAP_OBJECT);
+    if (object == nullptr) return nullptr;
+    mal_object_init_payload(heap, object, prototype, MAL_OBJECT_COMPACT, nullptr);
+    object->slot_capacity = capacity;
+    mal_object_slot_coallocations++;
+    return object;
+}
+
 MalObject *mal_object_try_new_shaped(
     MalHeap *heap, MalObject *prototype, MalShape *shape,
     const MalValue *values, u32 count

@@ -213,7 +213,7 @@ describe("bounded native property read regions", () => {
 
 	it("requires a continuation before collection, reentry, throwing, or mutation", () => {
 		const boundaries: Array<BytecodeInstruction> = [
-			{ opcode: "CREATE_OBJECT", dst: 4 },
+			{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 4 },
 			{
 				opcode: "CALL",
 				dst: 4,
@@ -416,7 +416,7 @@ describe("bounded native property read regions", () => {
 			load(6),
 			load(7),
 			{ opcode: "JUMP_IF", cond: 1, targetIp: 7 },
-			{ opcode: "CREATE_OBJECT", dst: 8 },
+			{ opcode: "CREATE_OBJECT", reserveSource: -1, slotReserve: 0, dst: 8 },
 			{ opcode: "JUMP", targetIp: 10 },
 			{ opcode: "RETURN", value: 1 },
 			load(2),
