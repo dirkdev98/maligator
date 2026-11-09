@@ -310,11 +310,6 @@ contracts or investigates costs still visible after the string follow-ups.
       lifetime consumers together; require lower allocation and end-to-end cost with
       stable footprint and binary size.
 
-- [ ] Use the checked Express workload to establish repeated held-getter misses, then
-      reuse one valid row at the rooted static-load call seam. Preserve receiver identity,
-      reentry, completion and roots; require full-route benefit and stable size while
-      noncollecting probes remain noncollecting.
-
 - [ ] Account for owned Request/Response body bytes in collector pressure or managed
       ownership without double charging transferred/streamed storage. Preserve body
       lifetime and cancellation; compare stable RSS/footprint, pauses and bare/Express
