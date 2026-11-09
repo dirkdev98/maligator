@@ -98,13 +98,17 @@ describe("guarded captured rest materialization", () => {
 		expect(source).toContain("mal_gc_root(&__argument_roots");
 		expect(source).not.toContain("__argument_roots.count = 0");
 	});
-	it("retains eager initialization across named parameter bindings", () => {
-		const { rest, branch } = compile(`function run(first, ...args) {
+	it("defers captured suffix rest initialization while preserving its argument offset", () => {
+		const { rest, branch, fn } = compile(`function run(first, ...args) {
 			if (!globalThis.gate.enabled) return false;
 			globalThis.reader = () => args;
 			return args;
 		}`);
-		expect(rest).toBeLessThan(branch);
+		expect(rest).toBeGreaterThan(branch);
+		expect(fn.instructions[rest]).toMatchObject({
+			opcode: "CREATE_REST_ARGUMENTS",
+			startIndex: 1,
+		});
 	});
 	it("tracks transitive closure observers whose immediate parent never reads the binding", () => {
 		const { rest, branch } = compile(`function run(...args) {
