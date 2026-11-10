@@ -1,0 +1,15 @@
+{
+	"CaseFolding.txt": "a004797658a457bec4dc11683e39f69249ea3b595b752dbea6721c4c9f587b0d",
+	"PropertyValueAliases.txt": "06c4c8eaf7b0bf34abe73b113da1215bd784ac254d4c223600b90267caa4bbbd",
+	"Scripts.txt": "0071fd81b6aeae25f6e8bce8efec3066a6476a91b49bdb2f52dc76e817862a6a",
+	"ScriptExtensions.txt": "5c9d34a922f687726f2a8bcf57d49f905987e51f1b21b58c95a00fbe255cec23",
+	"extracted/DerivedGeneralCategory.txt": "d6b151d2d40ee9b1876d26f417980f45ffae47b6055ccf7203cb31f07a030f94",
+	"DerivedCoreProperties.txt": "09c928886a178fcafd93c29e4bd59073a058e5a100b716d425cb563ab50f68c9",
+	"PropList.txt": "f438f532e8737bb8a2702126cdf9c4af5e357c58c7acf9d9eb2fc7c1a1d955d6",
+	"emoji/emoji-data.txt": "80d00f8e616a0ef27fd6b8de3b758c06383b5d917e2977709578e68baf733bf1",
+	"extracted/DerivedBinaryProperties.txt": "f4336d325727d94c31f06b660488f5213a5b6f6cf8bb55b090f87bac704805a5",
+	"DerivedNormalizationProps.txt": "98ac7f67d985fe781e317f6182e885e94cabb0c314769e6dd73e48b226931ccd",
+	"UnicodeData.txt": "0736451de439ae7baf1425136617da495e09ee5afbe6e394374db7009ea08950",
+	"emoji-sequences.txt": "1823dce71f3dd9cb0ad1976797baee4ffbdc1909756f43af8ce4c57f732843a4",
+	"emoji-zwj-sequences.txt": "f61b5213bdf85a57741a9f903cb38d0f39a3d13be6ff4aca3b39857e859a9191"
+}

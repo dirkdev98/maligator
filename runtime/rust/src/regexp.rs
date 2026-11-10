@@ -1224,7 +1224,7 @@ fn regress_flags(bits: u32) -> Flags {
     flags.icase = bits & FLAG_IGNORE_CASE != 0;
     flags.multiline = bits & FLAG_MULTILINE != 0;
     flags.dot_all = bits & FLAG_DOT_ALL != 0;
-    flags.unicode = bits & FLAG_UNICODE != 0;
+    flags.unicode = bits & (FLAG_UNICODE | FLAG_UNICODE_SETS) != 0;
     flags.unicode_sets = bits & FLAG_UNICODE_SETS != 0;
     flags
 }

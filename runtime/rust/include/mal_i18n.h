@@ -14,11 +14,8 @@
 extern "C" {
 #endif
 
-/* Bump alongside MAL_I18N_ABI_VERSION in lib.rs on breaking changes.
- * v2: added mal_i18n_collator_free / mal_i18n_plural_rules_free (GC finalization).
- * v3: mal_i18n_number_format gained min/max significant-digit parameters.
- * v4: mal_i18n_number_format gained a sign_display parameter. */
-#define MAL_I18N_ABI_VERSION 5u
+/* Identifies the flat transport contract shared with lib.rs. */
+#define MAL_I18N_ABI_VERSION 6u
 
 /* Status codes for fallible entry points; mapped to JS exceptions by the C side. */
 typedef enum MalI18nStatus {
@@ -55,7 +52,10 @@ int32_t mal_i18n_canonicalize_locale(const uint8_t *tag, size_t tag_len, uint8_t
 int32_t mal_i18n_locale_direction(const uint8_t *tag, size_t tag_len);
 int32_t mal_i18n_locale_maximize(const uint8_t *tag, size_t tag_len, uint8_t *out, int32_t out_cap);
 int32_t mal_i18n_locale_minimize(const uint8_t *tag, size_t tag_len, uint8_t *out, int32_t out_cap);
+/* An absent first-day keyword returns MAL_LOCALE_FIELD_ABSENT; a present empty
+ * keyword returns zero. */
 int32_t mal_i18n_locale_field(const uint8_t *tag, size_t tag_len, int32_t field, uint8_t *out, int32_t out_cap);
+#define MAL_LOCALE_FIELD_ABSENT (-2)
 
 /* mal_i18n_locale_field selectors. */
 #define MAL_LOCALE_FIELD_BASE_NAME 0

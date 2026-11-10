@@ -206,7 +206,7 @@ static MalString *intl_call_locale_fn(MalVm *vm, IntlLocaleFn fn, const MalStrin
     return result;
 }
 
-/** mal_i18n_locale_field as a MalString (empty string when the field is absent). */
+/** Preserve the first-day keyword's absent state separately from an empty value. */
 static MalString *intl_locale_field_string(MalVm *vm, const MalString *tag, i32 field) {
     byte in[320];
     usize in_len;
@@ -215,6 +215,7 @@ static MalString *intl_locale_field_string(MalVm *vm, const MalString *tag, i32 
     }
     byte out[160];
     i32 n = mal_i18n_locale_field(in, in_len, field, out, (i32) sizeof(out));
+    if (n == MAL_LOCALE_FIELD_ABSENT) return nullptr;
     if (n < 0) {
         return mal_string_new_ascii(&vm->heap, (const byte *) "", 0);
     }
@@ -799,6 +800,7 @@ static MalValue intl_locale_field_getter(MalVm *vm, MalValue this_value, i32 fie
         return mal_value_new_undefined();
     }
     MalString *value = intl_locale_field_string(vm, mal_value_to_string(locale->data), field);
+    if (value == nullptr) return mal_value_new_undefined();
     usize len = mal_string_length(value);
     if (as_bool) {
         return mal_value_new_boolean(len > 0 && !intl_string_eq_ascii(value, "false"));
@@ -829,7 +831,7 @@ LOCALE_GETTER(intl_locale_get_hour_cycle, MAL_LOCALE_FIELD_HOUR_CYCLE, false, tr
 LOCALE_GETTER(intl_locale_get_case_first, MAL_LOCALE_FIELD_CASE_FIRST, false, true)
 LOCALE_GETTER(intl_locale_get_numeric, MAL_LOCALE_FIELD_NUMERIC, true, false)
 LOCALE_GETTER(intl_locale_get_numbering_system, MAL_LOCALE_FIELD_NUMBERING_SYSTEM, false, true)
-LOCALE_GETTER(intl_locale_get_first_day_of_week, MAL_LOCALE_FIELD_FIRST_DAY_OF_WEEK, false, true)
+LOCALE_GETTER(intl_locale_get_first_day_of_week, MAL_LOCALE_FIELD_FIRST_DAY_OF_WEEK, false, false)
 
 static MalValue intl_locale_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
     (void) args;

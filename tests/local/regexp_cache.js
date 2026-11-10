@@ -764,6 +764,32 @@ check(
 		Object.getPrototypeOf(literals[1]) === RegExp.prototype,
 );
 
+for (const [left, right] of [
+	["\u0277", "\ua7dd"],
+	["\u{1df40}", "\u{1df41}"],
+	["\u00df", "\u{1df95}"],
+]) {
+	for (const flags of ["iu", "iv"]) {
+		for (const pattern of [left, `[${left}]`]) {
+			check(
+				`Unicode 18 ${flags} folding for ${left}`,
+				new RegExp(`^(?:${pattern})+$`, flags).test(left + right),
+			);
+		}
+	}
+}
+check("Unicode 18 legacy BMP folding", new RegExp("\ua7dd", "i").test("\u0277"));
+check(
+	"legacy folding keeps supplementary code units distinct",
+	!new RegExp("\u{1df40}", "i").test("\u{1df41}"),
+);
+check(
+	"Unicode 18 script and casing properties agree",
+	new RegExp("^[\\p{Script=Latin}&&\\p{Cased}]+$", "v").test(
+		"\u0277\ua7dd\u{1df40}\u{1df41}\u{1df95}",
+	),
+);
+
 let passed = 0;
 for (const [name, condition] of results) {
 	if (condition) passed++;

@@ -8,6 +8,7 @@
 		"runtime/src/generated/known_*.inc",
 		"runtime/src/generated/node_builtin_*.inc",
 		"runtime/rust/target",
+		"runtime/rust/vendor",
 		"runtime/vendor",
 		"tests/wpt/fixtures",
 		"tests/fixtures/ffi-shapes/maligator-ffi.d.ts"

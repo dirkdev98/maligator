@@ -153,7 +153,7 @@ function linkedPackages(metadata: CargoMetadata): Array<CargoPackage> {
 	}
 	return [...seen]
 		.map((id) => packages.get(id)!)
-		.filter((pkg) => pkg.source !== null)
+		.filter((pkg) => pkg.id !== rootId)
 		.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
 }
 
@@ -190,7 +190,7 @@ function rustSection(): string {
 	const lines = [
 		"## Rust crates",
 		"",
-		"The runtime links these crates from crates.io through `runtime/rust/Cargo.lock`. Each license",
+		"The runtime links these crates through `runtime/rust/Cargo.lock`. Each license",
 		"text below is followed by the crates that ship it; dual-licensed crates list every text they",
 		"provide, and the recipient may choose among the alternatives their license expression offers.",
 		"",

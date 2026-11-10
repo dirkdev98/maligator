@@ -4,6 +4,14 @@ function check(name, ok) {
 }
 
 check("Intl present", typeof Intl === "object");
+check("first-day keyword absent", new Intl.Locale("en").firstDayOfWeek === undefined);
+for (const locale of [
+	new Intl.Locale("en-u-fw"),
+	new Intl.Locale("en-u-fw-true"),
+	new Intl.Locale("en", { firstDayOfWeek: true }),
+]) {
+	check("first-day keyword present and empty", locale.firstDayOfWeek === "");
+}
 for (const [tag, maximal, minimal] of [
 	["und-Zzzz-ZZ", "en-Latn-US", "en"],
 	["und-Qaaa", "en-Qaaa-US", "en-Qaaa"],

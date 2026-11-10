@@ -57,13 +57,8 @@ pub mod crypto_cipher;
 #[cfg(feature = "node-crypto")]
 pub mod crypto_pkey;
 
-/// ABI version. Bump on any breaking change to the C header so the C side can
-/// assert the linked archive matches `mal_i18n.h`.
-/// v2: added `mal_i18n_collator_free` / `mal_i18n_plural_rules_free` (gc_todo.md D2).
-/// v3: `mal_i18n_number_format` gained min/max significant-digit parameters.
-/// v4: `mal_i18n_number_format` gained a sign_display parameter.
-/// v5: NumberFormat / DateTimeFormat gained persistent formatter handles.
-pub const MAL_I18N_ABI_VERSION: u32 = 5;
+/// Identifies the flat transport contract shared with `mal_i18n.h`.
+pub const MAL_I18N_ABI_VERSION: u32 = 6;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]
@@ -168,10 +163,12 @@ pub const MAL_LOCALE_FIELD_NUMERIC: i32 = 8;
 pub const MAL_LOCALE_FIELD_NUMBERING_SYSTEM: i32 = 9;
 pub const MAL_LOCALE_FIELD_VARIANTS: i32 = 10;
 pub const MAL_LOCALE_FIELD_FIRST_DAY_OF_WEEK: i32 = 11;
+pub const MAL_LOCALE_FIELD_ABSENT: i32 = -2;
 
 /// Extract a subtag or Unicode-extension keyword (the Intl.Locale getters).
 /// Writes the value (UTF-8, empty when absent) into `out`; returns -1 for an
-/// invalid tag or unknown field.
+/// invalid tag or unknown field. An absent first-day keyword returns
+/// `MAL_LOCALE_FIELD_ABSENT`, distinguishing it from a present empty value.
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_locale_field(tag_ptr: *const u8, tag_len: usize, field: i32, out: *mut u8, out_cap: i32) -> i32 {
     use icu_locale::extensions::unicode::key;
@@ -196,7 +193,12 @@ pub unsafe extern "C" fn mal_i18n_locale_field(tag_ptr: *const u8, tag_len: usiz
         },
         MAL_LOCALE_FIELD_NUMBERING_SYSTEM => keyword(key!("nu")),
         MAL_LOCALE_FIELD_VARIANTS => locale.id.variants.to_string(),
-        MAL_LOCALE_FIELD_FIRST_DAY_OF_WEEK => keyword(key!("fw")),
+        MAL_LOCALE_FIELD_FIRST_DAY_OF_WEEK => {
+            let Some(value) = locale.extensions.unicode.keywords.get(&key!("fw")) else {
+                return MAL_LOCALE_FIELD_ABSENT;
+            };
+            value.to_string()
+        },
         _ => return -1,
     };
     unsafe { write_utf8(&value, out, out_cap) }

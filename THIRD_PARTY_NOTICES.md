@@ -198,7 +198,7 @@ authorization of the copyright holder.
 
 ## Rust crates
 
-The runtime links these crates from crates.io through `runtime/rust/Cargo.lock`. Each license
+The runtime links these crates through `runtime/rust/Cargo.lock`. Each license
 text below is followed by the crates that ship it; dual-licensed crates list every text they
 provide, and the recipient may choose among the alternatives their license expression offers.
 

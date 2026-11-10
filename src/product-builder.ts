@@ -34,6 +34,7 @@ export const PRODUCT_RUNTIME_ASSET_INCLUDE = [
 	"rust/rust-toolchain.toml",
 	"rust/src/**",
 	"rust/include/**",
+	"rust/vendor/regress/**",
 	"vendor/llhttp/include/**",
 	"vendor/llhttp/src/**",
 	"vendor/llhttp/LICENSE-MIT",
