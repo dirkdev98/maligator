@@ -244,7 +244,7 @@ test/language/expressions/assignment/dstr/obj-prop-put-let.js
 test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-elem-obj-prop-id-init.js
 test/language/expressions/class/elements/new-no-sc-line-method-rs-privatename-identifier.js
 test/language/expressions/compound-assignment/11.13.2-37-s.js
-test/language/expressions/compound-assignment/S11.13.2_A7.1_T4.js
+test/language/expressions/compound-assignment/left-hand-side-property-reference-topropertykey-once-mult.js
 test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v-.js
 test/language/expressions/less-than-or-equal/S11.8.3_A3.1_T1.2.js
 test/language/expressions/postfix-decrement/bigint.js
