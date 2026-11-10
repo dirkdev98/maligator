@@ -84,7 +84,9 @@ describe("native rendering analysis lifetime", () => {
 			image.runtime.stringConstants,
 		];
 		for (const available of [false, true, false]) {
-			args[16] = available ? new Map([[callee, undefined]]) : new Map();
+			args[16] = available
+				? new Map([[callee, { result: { kind: "boxed" } }]])
+				: new Map();
 			lookups.clear();
 			const emitted = render(...args);
 			expect(lookups).toEqual(new Set([`${native.functionIndex}:${callee}`]));
