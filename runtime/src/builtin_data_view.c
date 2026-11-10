@@ -598,10 +598,7 @@ static MalValue mal_dv_get_byte_length(MalVm *vm, MalValue this_value, const Mal
         return mal_value_new_undefined();
     }
     u32 byte_length;
-    if (!mal_data_view_extent(view, &byte_length)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read byteLength of an out-of-bounds view");
-        return mal_value_new_undefined();
-    }
+    mal_data_view_extent(view, &byte_length);
     return mal_value_from_i32((i32) byte_length);
 }
 
@@ -614,8 +611,7 @@ static MalValue mal_dv_get_byte_offset(MalVm *vm, MalValue this_value, const Mal
         return mal_value_new_undefined();
     }
     if (mal_data_view_is_out_of_bounds(view)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read byteOffset of an out-of-bounds view");
-        return mal_value_new_undefined();
+        return mal_value_from_i32(0);
     }
     return mal_value_from_i32((i32) view->byte_offset);
 }

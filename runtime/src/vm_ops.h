@@ -1839,8 +1839,8 @@ static inline bool mal_vm_try_typed_array_length(
 
 /**
  * A fixed DataView whose `byteLength` resolves to the intact intrinsic getter, read
- * while its buffer is attached, unshared and still covers it. The getter would throw
- * for the other views, so they take the full lookup.
+ * while its buffer is attached, unshared and still covers it. Other buffer states
+ * need the builtin's current extent witness.
  */
 static inline bool mal_vm_admit_data_view_byte_length(
     const MalVm *vm, MalValue receiver, u32 *length

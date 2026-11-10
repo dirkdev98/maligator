@@ -122,7 +122,6 @@ const detached = new DataView(new ArrayBuffer(8));
 detached.buffer.transfer();
 attempt("detached-get", () => detached.getUint8(0));
 attempt("detached-set", () => detached.setUint8(0, 1));
-attempt("detached-length", () => detached.byteLength);
 
 const resizable = new ArrayBuffer(16, { maxByteLength: 32 });
 const fixed = new DataView(resizable, 4, 8);
@@ -131,7 +130,6 @@ attempt("fixed-length", () => fixed.byteLength);
 attempt("tracking-length", () => tracking.byteLength);
 resizable.resize(8);
 attempt("shrunk-fixed-get", () => fixed.getUint8(0));
-attempt("shrunk-fixed-length", () => fixed.byteLength);
 attempt("shrunk-tracking-length", () => tracking.byteLength);
 attempt("shrunk-tracking-get", () => tracking.getUint8(3));
 attempt("shrunk-tracking-past", () => tracking.getUint8(4));

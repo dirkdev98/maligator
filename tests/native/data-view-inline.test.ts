@@ -3,7 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildNativeBinary, runToStdout, STRESS_ENV } from "../../src/test-harness.ts";
+import {
+	assertResultPass,
+	buildNativeBinary,
+	runToStdout,
+	STRESS_ENV,
+} from "../../src/test-harness.ts";
 
 describe("inline DataView access", () => {
 	const fixture = "tests/local/data-view-inline.js";
@@ -24,5 +29,19 @@ describe("inline DataView access", () => {
 			expect(runToStdout(binary, { env: STRESS_ENV, timeoutMs: 120_000 })).toBe(expected);
 		},
 		600_000,
+	);
+
+	it.each([true, false])(
+		"reports zero metadata for invalid views and recovers after resizing (compiled: %s)",
+		(compiled) => {
+			const binary = buildNativeBinary({
+				fixture: "tests/local/data-view-metadata.js",
+				name: `data-view-metadata-${compiled ? "c" : "i"}`,
+				compiled,
+				outDir,
+			});
+			assertResultPass(runToStdout(binary));
+			assertResultPass(runToStdout(binary, { env: STRESS_ENV }));
+		},
 	);
 });
