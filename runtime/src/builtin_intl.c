@@ -1015,7 +1015,7 @@ static MalString *intl_option_enum(
  * 3..8 alphanumerics (the `type` production used for numberingSystem/calendar/
  * collation options).
  */
-static bool intl_is_valid_numbering_system(const MalString *s) {
+static bool intl_is_valid_unicode_type(const MalString *s) {
     usize n = mal_string_length(s);
     const c16 *u = mal_string_code_units(s);
     usize seg = 0;
@@ -1298,69 +1298,62 @@ static MalValue intl_collator_constructor(MalVm *vm, MalValue this_value, const 
     }
 
     roots[3] = mal_value_from_string(locale);
+    static const char *const USAGES[] = {"sort", "search"};
+    static const char *const CASE_FIRST_VALUES[] = {"upper", "lower", "false"};
+    static const char *const SENSITIVITIES[] = {"base", "accent", "case", "variant"};
+    bool ok;
     bool present;
-    MalString *usage = nullptr;
-    if (!intl_option_string(vm, roots[1], "usage", &usage, &present)) {
+    MalString *usage = intl_option_enum(vm, roots[1], "usage", USAGES, countof(USAGES), "sort", &ok);
+    if (!ok) {
         goto done;
     }
-    if (usage == nullptr) usage = mal_intrinsic_ascii(vm, "sort");
     roots[4] = mal_value_from_string(usage);
-    MalString *sensitivity = nullptr;
-    if (!intl_option_string(vm, roots[1], "sensitivity", &sensitivity, &present)) {
+    if (!intl_check_locale_matcher(vm, roots[1])) {
         goto done;
     }
-    i32 strength = 2; // "variant"
-    i32 case_level = 0;
-    if (sensitivity != nullptr) {
-        if (intl_string_eq_ascii(sensitivity, "base")) {
-            strength = 0;
-        } else if (intl_string_eq_ascii(sensitivity, "accent")) {
-            strength = 1;
-        } else if (intl_string_eq_ascii(sensitivity, "case")) {
-            strength = 0;
-            case_level = 1;
-        } else {
-            strength = 2; // "variant"
-        }
-    } else {
-        sensitivity = mal_intrinsic_ascii(vm, "variant");
+    MalString *collation = nullptr;
+    if (!intl_option_string(vm, roots[1], "collation", &collation, &present)) {
+        goto done;
     }
-
-    roots[5] = mal_value_from_string(sensitivity);
+    if (collation != nullptr && !intl_is_valid_unicode_type(collation)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid collation");
+        goto done;
+    }
+    if (collation == nullptr) collation = mal_intrinsic_ascii(vm, "default");
+    roots[7] = mal_value_from_string(collation);
     bool numeric_present;
     bool numeric = false;
     if (!intl_option_bool(vm, roots[1], "numeric", &numeric, &numeric_present)) {
         goto done;
+    }
+    MalString *case_first = intl_option_enum(
+        vm, roots[1], "caseFirst", CASE_FIRST_VALUES, countof(CASE_FIRST_VALUES), "false", &ok);
+    if (!ok) {
+        goto done;
+    }
+    i32 case_first_code = 0;
+    if (intl_string_eq_ascii(case_first, "upper")) case_first_code = 1;
+    else if (intl_string_eq_ascii(case_first, "lower")) case_first_code = 2;
+    roots[6] = mal_value_from_string(case_first);
+    MalString *sensitivity = intl_option_enum(
+        vm, roots[1], "sensitivity", SENSITIVITIES, countof(SENSITIVITIES), "variant", &ok);
+    if (!ok) {
+        goto done;
+    }
+    roots[5] = mal_value_from_string(sensitivity);
+    i32 strength = 2;
+    i32 case_level = 0;
+    if (intl_string_eq_ascii(sensitivity, "base")) strength = 0;
+    else if (intl_string_eq_ascii(sensitivity, "accent")) strength = 1;
+    else if (intl_string_eq_ascii(sensitivity, "case")) {
+        strength = 0;
+        case_level = 1;
     }
     bool ignore_present;
     bool ignore_punctuation = false;
     if (!intl_option_bool(vm, roots[1], "ignorePunctuation", &ignore_punctuation, &ignore_present)) {
         goto done;
     }
-    MalString *case_first = nullptr;
-    if (!intl_option_string(vm, roots[1], "caseFirst", &case_first, &present)) {
-        goto done;
-    }
-    i32 case_first_code = 0;
-    if (case_first != nullptr) {
-        if (intl_string_eq_ascii(case_first, "upper")) {
-            case_first_code = 1;
-        } else if (intl_string_eq_ascii(case_first, "lower")) {
-            case_first_code = 2;
-        }
-    } else {
-        case_first = mal_intrinsic_ascii(vm, "false");
-    }
-    roots[6] = mal_value_from_string(case_first);
-    MalString *collation = nullptr;
-    if (!intl_option_string(vm, roots[1], "collation", &collation, &present)) {
-        goto done;
-    }
-    if (collation == nullptr) {
-        collation = mal_intrinsic_ascii(vm, "default");
-    }
-
-    roots[7] = mal_value_from_string(collation);
     locale = mal_value_to_string(roots[3]);
     byte locale_buf[160];
     usize locale_len;
@@ -1585,15 +1578,16 @@ static MalValue intl_plural_rules_constructor(MalVm *vm, MalValue this_value, co
     if (locale == nullptr) {
         return mal_value_new_undefined();
     }
-    bool present;
-    MalString *type = nullptr;
-    if (!intl_option_string(vm, options, "type", &type, &present)) {
+    if (!intl_check_locale_matcher(vm, options)) {
         return mal_value_new_undefined();
     }
-    bool ordinal = type != nullptr && intl_string_eq_ascii(type, "ordinal");
-    if (type == nullptr) {
-        type = mal_intrinsic_ascii(vm, "cardinal");
+    static const char *const TYPES[] = {"cardinal", "ordinal"};
+    bool ok;
+    MalString *type = intl_option_enum(vm, options, "type", TYPES, countof(TYPES), "cardinal", &ok);
+    if (!ok) {
+        return mal_value_new_undefined();
     }
+    bool ordinal = intl_string_eq_ascii(type, "ordinal");
 
     byte locale_buf[160];
     usize locale_len;
@@ -1848,6 +1842,9 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
         return mal_value_new_undefined();
     }
     if (!intl_number_format_options(vm, options, &options)) {
+        return mal_value_new_undefined();
+    }
+    if (!intl_check_locale_matcher(vm, options)) {
         return mal_value_new_undefined();
     }
     static const char *const STYLES[] = {"decimal", "percent", "currency", "unit"};
@@ -2128,6 +2125,9 @@ static MalValue intl_date_time_format_constructor(MalVm *vm, MalValue this_value
 
     MalString *locale = intl_resolve_locale(vm, locales);
     if (locale == nullptr) {
+        return mal_value_new_undefined();
+    }
+    if (!intl_check_locale_matcher(vm, options)) {
         return mal_value_new_undefined();
     }
     bool present;
@@ -2959,7 +2959,7 @@ static MalValue intl_relative_time_format_constructor(MalVm *vm, MalValue this_v
     if (!intl_option_string(vm, options, "numberingSystem", &numbering_system, &ns_present)) {
         return mal_value_new_undefined();
     }
-    if (ns_present && !intl_is_valid_numbering_system(numbering_system)) {
+    if (ns_present && !intl_is_valid_unicode_type(numbering_system)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid numberingSystem");
         return mal_value_new_undefined();
     }
@@ -3522,7 +3522,7 @@ static MalValue intl_duration_format_constructor(MalVm *vm, MalValue this_value,
     if (!intl_option_string(vm, options, "numberingSystem", &numbering_system, &present)) {
         return mal_value_new_undefined();
     }
-    if (present && !intl_is_valid_numbering_system(numbering_system)) {
+    if (present && !intl_is_valid_unicode_type(numbering_system)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid numberingSystem");
         return mal_value_new_undefined();
     }
