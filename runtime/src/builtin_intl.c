@@ -2449,10 +2449,15 @@ static i64 intl_string_index_of(const MalString *hay, const MalString *needle, u
 }
 
 static void intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, const char *type, MalValue value) {
+    MalValue roots[] = {mal_value_from_array_object(parts), value, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
     MalObject *part = mal_intrinsic_new_object(vm);
+    roots[2] = mal_value_from_object(part);
     intl_resolved_set(vm, part, "type", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) type)));
-    intl_resolved_set(vm, part, "value", value);
-    intl_array_push(vm, parts, (*index)++, mal_value_from_object(part));
+    intl_resolved_set(vm, part, "value", roots[1]);
+    intl_array_push(vm, parts, (*index)++, roots[2]);
+    mal_gc_unroot(&root);
 }
 
 static MalValue intl_substring(MalVm *vm, MalString *s, usize start, usize end) {
@@ -2489,184 +2494,225 @@ static MalValue intl_list_format_constructor(MalVm *vm, MalValue this_value, con
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Intl.ListFormat must be called with new");
         return mal_value_new_undefined();
     }
-    MalValue locales = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
-
-    MalString *locale = intl_resolve_locale(vm, locales);
-    if (locale == nullptr) {
-        return mal_value_new_undefined();
-    }
-    if (!intl_get_options_object(vm, options, &options)) {
-        return mal_value_new_undefined();
-    }
-    if (!intl_check_locale_matcher(vm, options)) {
-        return mal_value_new_undefined();
-    }
+    MalValue roots[] = {
+        arg_count >= 2 ? args[1] : mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_LIST_FORMAT_PROTOTYPE);
+    if (prototype == nullptr) goto done;
+    roots[1] = mal_value_from_object(prototype);
+    MalString *locale = intl_resolve_locale(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    if (locale == nullptr) goto done;
+    roots[2] = mal_value_from_string(locale);
+    if (!intl_get_options_object(vm, roots[0], &roots[0]) || !intl_check_locale_matcher(vm, roots[0])) goto done;
     static const char *const TYPES[] = {"conjunction", "disjunction", "unit"};
     static const char *const STYLES[] = {"long", "short", "narrow"};
     bool ok;
-    MalString *type = intl_option_enum(vm, options, "type", TYPES, countof(TYPES), "conjunction", &ok);
-    if (!ok) {
-        return mal_value_new_undefined();
-    }
-    MalString *style = intl_option_enum(vm, options, "style", STYLES, countof(STYLES), "long", &ok);
-    if (!ok) {
-        return mal_value_new_undefined();
-    }
+    MalString *type = intl_option_enum(vm, roots[0], "type", TYPES, countof(TYPES), "conjunction", &ok);
+    if (!ok) goto done;
+    roots[3] = mal_value_from_string(type);
+    MalString *style = intl_option_enum(vm, roots[0], "style", STYLES, countof(STYLES), "long", &ok);
+    if (!ok) goto done;
+    roots[4] = mal_value_from_string(style);
 
     MalObject *resolved = mal_intrinsic_new_object(vm);
-    intl_resolved_set(vm, resolved, "locale", mal_value_from_string(locale));
-    intl_resolved_set(vm, resolved, "type", mal_value_from_string(type));
-    intl_resolved_set(vm, resolved, "style", mal_value_from_string(style));
-
-    MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_LIST_FORMAT_PROTOTYPE);
-    if (prototype == nullptr) {
-        return mal_value_new_undefined();
+    roots[5] = mal_value_from_object(resolved);
+    intl_resolved_set(vm, resolved, "locale", roots[2]);
+    intl_resolved_set(vm, resolved, "type", roots[3]);
+    intl_resolved_set(vm, resolved, "style", roots[4]);
+    MalIntlObject *lf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_LIST_FORMAT, nullptr, roots[5]);
+    roots[6] = mal_value_from_intl_object(lf);
+    byte stack_locale[160];
+    usize locale_len = mal_string_length(locale);
+    byte *locale_buf = locale_len < sizeof(stack_locale) ? stack_locale : malloc(locale_len + 1);
+    if (locale_buf == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        goto done;
     }
-    MalIntlObject *lf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_LIST_FORMAT, nullptr, mal_value_from_object(resolved));
-    return mal_value_from_intl_object(lf);
+    if (!intl_tag_utf8(locale, locale_buf, locale_len + 1, &locale_len)) {
+        if (locale_buf != stack_locale) free(locale_buf);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid list formatter locale");
+        goto done;
+    }
+    lf->handle = mal_i18n_list_formatter_new(locale_buf, locale_len, intl_list_type_code(type), intl_list_length_code(style));
+    if (locale_buf != stack_locale) free(locale_buf);
+    if (lf->handle == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not create list formatter");
+        goto done;
+    }
+    result = roots[6];
+ done:
+    mal_gc_unroot(&root);
+    return result;
 }
 
-/**
- * StringListFromIterable: drain `iterable` into a fresh array of String values,
- * throwing TypeError if any element is not a String. Returns the array (length
- * in *count_out), or null with a pending throw.
- */
 static MalArrayObject *intl_string_list_from_iterable(MalVm *vm, MalValue iterable, u32 *count_out) {
+    MalValue roots[] = {
+        iterable, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
     MalArrayObject *list = mal_intrinsic_new_array(vm, 0);
+    roots[1] = mal_value_from_array_object(list);
+    MalArrayObject *result = nullptr;
     *count_out = 0;
     if (mal_value_is_undefined(iterable)) {
-        return list;
+        result = list;
+        goto done;
     }
     MalIteratorRecord record;
-    if (!mal_vm_get_iterator(vm, iterable, &record)) {
-        return nullptr;
-    }
+    if (!mal_vm_get_iterator(vm, iterable, &record)) goto done;
+    roots[2] = record.iterator;
+    roots[3] = record.next_method;
     u32 count = 0;
     while (true) {
-        MalValue item;
-        bool done;
-        if (!mal_vm_iterator_step(vm, &record, &item, &done)) {
-            return nullptr;
-        }
-        if (done) {
-            break;
-        }
-        if (!mal_value_is_string(item)) {
+        bool finished;
+        if (!mal_vm_iterator_step(vm, &record, &roots[4], &finished)) goto done;
+        if (finished) break;
+        if (!mal_value_is_string(roots[4])) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Intl.ListFormat list element must be a String");
             mal_vm_iterator_close(vm, &record);
-            return nullptr;
+            goto done;
         }
-        intl_array_push(vm, list, count++, item);
+        if (count == INT32_MAX) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "list is too long");
+            mal_vm_iterator_close(vm, &record);
+            goto done;
+        }
+        if (mal_array_object_dense_store(list, count, roots[4]) != MAL_ARRAY_DENSE_APPLIED) {
+            mal_vm_throw_allocation_error(vm);
+            goto done;
+        }
+        list->length = ++count;
     }
     *count_out = count;
-    return list;
+    result = list;
+ done:
+    mal_gc_unroot(&root);
+    return result;
 }
 
-/** Read a String array of `count` elements into a freshly-malloc'd MalU16Str[]. */
-static MalU16Str *intl_collect_u16(MalVm *vm, MalArrayObject *list, u32 count) {
-    if (count == 0) {
-        return nullptr;
-    }
-    MalU16Str *items = malloc(sizeof(MalU16Str) * count);
-    for (u32 i = 0; i < count; i++) {
-        MalKey key = mal_key_index(i);
-        MalValue element;
-        mal_vm_get_property(vm, mal_value_from_array_object(list), key, &element);
-        MalString *s = mal_value_to_string(element);
-        items[i].ptr = (const uint16_t *) mal_string_code_units(s);
-        items[i].len = mal_string_length(s);
-    }
-    return items;
-}
-
-static MalValue intl_list_format_do(MalVm *vm, MalIntlObject *lf, MalArrayObject *list, u32 count) {
-    MalString *locale = intl_data_string(vm, lf->data, "locale");
-    i32 type_code = intl_list_type_code(intl_data_string(vm, lf->data, "type"));
-    i32 length_code = intl_list_length_code(intl_data_string(vm, lf->data, "style"));
-    MalU16Str *items = intl_collect_u16(vm, list, count);
-    byte locale_buf[160];
-    usize locale_len = 0;
-    if (locale != nullptr) {
-        intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len);
-    }
-    byte out[512];
-    i32 n = mal_i18n_list_format(locale_buf, locale_len, type_code, length_code, items, count, out, (i32) sizeof(out));
-    MalValue result;
-    if (n < 0) {
-        free(items);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format list");
+static MalValue intl_list_format_result(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool to_parts) {
+    MalIntlObject *lf;
+    if (!intl_this(vm, this_value, MAL_INTL_LIST_FORMAT, &lf, "Intl.ListFormat method called on incompatible receiver")) {
         return mal_value_new_undefined();
     }
-    if (n <= (i32) sizeof(out)) {
-        result = intl_string_from_utf8(vm, out, (usize) n);
-    } else {
-        byte *big = malloc((usize) n);
-        mal_i18n_list_format(locale_buf, locale_len, type_code, length_code, items, count, big, n);
-        result = intl_string_from_utf8(vm, big, (usize) n);
-        free(big);
+    MalValue roots[] = {this_value, mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    MalU16Str stack_items[16];
+    MalI18nListLiteral stack_spans[17];
+    c16 stack_literals[256];
+    MalU16Str *items = stack_items;
+    MalI18nListLiteral *spans = stack_spans;
+    c16 *literals = stack_literals;
+    u32 count;
+    MalArrayObject *list = intl_string_list_from_iterable(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &count);
+    if (list == nullptr) goto done;
+    roots[1] = mal_value_from_array_object(list);
+    MalArrayObject *parts = nullptr;
+    u32 part_index = 0;
+    if (to_parts) {
+        if (count > (UINT32_MAX - 1) / 2) goto too_long;
+        parts = mal_intrinsic_new_array(vm, 0);
+        roots[2] = mal_value_from_array_object(parts);
     }
-    free(items);
+    if (count <= 1) {
+        MalValue value = count == 0 ? mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "")) : list->elements[0];
+        if (to_parts && count == 1) intl_parts_push(vm, parts, &part_index, "element", value);
+        result = to_parts ? roots[2] : value;
+        goto done;
+    }
+    usize spans_count = (usize) count + 1;
+    if (count > countof(stack_items)) {
+        usize items_bytes, spans_bytes;
+        if (!mal_checked_size_multiply(count, sizeof(*items), SIZE_MAX, &items_bytes) ||
+            !mal_checked_size_multiply(spans_count, sizeof(*spans), SIZE_MAX, &spans_bytes)) goto too_long;
+        items = malloc(items_bytes);
+        spans = malloc(spans_bytes);
+        if (items == nullptr || spans == nullptr) goto allocation_error;
+    }
+    // This private array is built only by sequential dense appends. Borrowing
+    // its strings invokes no accessors, and Rust retains none of their pointers.
+    assert(list->elements != nullptr && list->dense_count == count);
+    for (u32 i = 0; i < count; i++) {
+        MalString *element = mal_value_to_string(list->elements[i]);
+        items[i].ptr = (const uint16_t *) mal_string_code_units(element);
+        items[i].len = mal_string_length(element);
+    }
+    i32 literal_length = mal_i18n_list_formatter_literals(lf->handle, items, count, (uint16_t *) literals, countof(stack_literals), spans, spans_count);
+    if (literal_length < 0) goto format_error;
+    if ((usize) literal_length > countof(stack_literals)) {
+        usize bytes;
+        if (!mal_checked_size_multiply((usize) literal_length, sizeof(*literals), SIZE_MAX, &bytes)) goto too_long;
+        literals = malloc(bytes);
+        if (literals == nullptr) goto allocation_error;
+        if (mal_i18n_list_formatter_literals(lf->handle, items, count, (uint16_t *) literals, (usize) literal_length, spans, spans_count) != literal_length) goto format_error;
+    }
+    if (to_parts) {
+        MalString *pool = mal_string_new_copy(&vm->heap, literals, (usize) literal_length);
+        roots[3] = mal_value_from_string(pool);
+        for (usize i = 0; i < spans_count; i++) {
+            if (spans[i].len != 0) {
+                MalValue value = mal_value_from_string(mal_string_new_slice(&vm->heap, pool, spans[i].start, spans[i].len));
+                intl_parts_push(vm, parts, &part_index, "literal", value);
+            }
+            if (i < count) intl_parts_push(vm, parts, &part_index, "element", list->elements[i]);
+        }
+        result = roots[2];
+    } else {
+        usize length = (usize) literal_length;
+        for (u32 i = 0; i < count; i++) {
+            if (!mal_checked_size_add(length, items[i].len, MAL_STRING_MAX_CODE_UNITS, &length)) goto too_long;
+        }
+        c16 stack_output[128];
+        c16 *output = length <= countof(stack_output) ? stack_output : mal_heap_alloc_raw_profiled(&vm->heap, length * sizeof(c16), MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+        usize cursor = 0;
+        for (usize i = 0; i < spans_count; i++) {
+            memcpy(output + cursor, literals + spans[i].start, spans[i].len * sizeof(c16));
+            cursor += spans[i].len;
+            if (i < count) {
+                memcpy(output + cursor, items[i].ptr, items[i].len * sizeof(c16));
+                cursor += items[i].len;
+            }
+        }
+        MalString *formatted = output == stack_output ? mal_string_new_copy(&vm->heap, output, length) : mal_string_new_owned(&vm->heap, output, length);
+        result = mal_value_from_string(formatted);
+    }
+    goto done;
+ too_long:
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "list is too long");
+    goto done;
+ allocation_error:
+    mal_vm_throw_allocation_error(vm);
+    goto done;
+ format_error:
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format list");
+ done:
+    if (items != stack_items) free(items);
+    if (spans != stack_spans) free(spans);
+    if (literals != stack_literals) free(literals);
+    mal_gc_unroot(&root);
     return result;
 }
 
 static MalValue intl_list_format_format(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
     (void) nt;
     (void) cl;
-    MalIntlObject *lf;
-    if (!intl_this(vm, this_value, MAL_INTL_LIST_FORMAT, &lf, "Intl.ListFormat.prototype.format called on incompatible receiver")) {
-        return mal_value_new_undefined();
-    }
-    u32 count;
-    MalArrayObject *list = intl_string_list_from_iterable(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &count);
-    if (list == nullptr) {
-        return mal_value_new_undefined();
-    }
-    return intl_list_format_do(vm, lf, list, count);
+    return intl_list_format_result(vm, this_value, args, arg_count, false);
 }
 
 static MalValue intl_list_format_format_to_parts(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
     (void) nt;
     (void) cl;
-    MalIntlObject *lf;
-    if (!intl_this(vm, this_value, MAL_INTL_LIST_FORMAT, &lf, "Intl.ListFormat.prototype.formatToParts called on incompatible receiver")) {
-        return mal_value_new_undefined();
-    }
-    u32 count;
-    MalArrayObject *list = intl_string_list_from_iterable(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &count);
-    if (list == nullptr) {
-        return mal_value_new_undefined();
-    }
-    MalValue formatted_value = intl_list_format_do(vm, lf, list, count);
-    if (!mal_value_is_string(formatted_value)) {
-        return mal_value_new_undefined();
-    }
-    MalString *formatted = mal_value_to_string(formatted_value);
-
-    // Reconstruct parts by matching each element left-to-right; the text between
-    // matches is the locale's "literal" separator.
-    MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
-    u32 part_index = 0;
-    usize cursor = 0;
-    for (u32 i = 0; i < count; i++) {
-        MalKey key = mal_key_index(i);
-        MalValue element;
-        mal_vm_get_property(vm, mal_value_from_array_object(list), key, &element);
-        MalString *el = mal_value_to_string(element);
-        i64 pos = intl_string_index_of(formatted, el, cursor);
-        if (pos < 0) {
-            pos = (i64) cursor;
-        }
-        if ((usize) pos > cursor) {
-            intl_parts_push(vm, parts, &part_index, "literal", intl_substring(vm, formatted, cursor, (usize) pos));
-        }
-        intl_parts_push(vm, parts, &part_index, "element", mal_value_from_string(el));
-        cursor = (usize) pos + mal_string_length(el);
-    }
-    if (cursor < mal_string_length(formatted)) {
-        intl_parts_push(vm, parts, &part_index, "literal", intl_substring(vm, formatted, cursor, mal_string_length(formatted)));
-    }
-    return mal_value_from_array_object(parts);
+    return intl_list_format_result(vm, this_value, args, arg_count, true);
 }
 
 static MalValue intl_list_format_resolved_options(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {

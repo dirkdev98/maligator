@@ -2461,6 +2461,11 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
                     mal_i18n_datetime_formatter_free(intl->handle);
                 }
 #endif
+#if MAL_INTL_HAS_LIST_FORMAT
+                if (intl->kind == MAL_INTL_LIST_FORMAT) {
+                    mal_i18n_list_formatter_free(intl->handle);
+                }
+#endif
                 intl->handle = nullptr;
             }
             break;

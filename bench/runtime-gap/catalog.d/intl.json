@@ -1,0 +1,81 @@
+{
+	"schema": 1,
+	"cases": [
+		{
+			"id": "intl-list-format-reuse",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-list-format",
+			"category": "api-builtins",
+			"mechanisms": ["list-format", "persistent-formatters"],
+			"inputShape": "Reused English conjunction formatter over rotating Unicode string lists.",
+			"unit": "formatted lists",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/lib.rs",
+			"fixture": "cases/intl-list-format-reuse.mjs",
+			"controls": [
+				"intl-list-format-parts",
+				"intl-list-format-construct",
+				"intl-list-format-long"
+			],
+			"methods": ["Intl.ListFormat.prototype.format"],
+			"features": ["intl-list-format"]
+		},
+		{
+			"id": "intl-list-format-parts",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-list-format",
+			"category": "api-builtins",
+			"mechanisms": ["list-format", "persistent-formatters"],
+			"inputShape": "Reused English formatter with every returned part consumed.",
+			"unit": "formatted lists",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/lib.rs",
+			"fixture": "cases/intl-list-format-parts.mjs",
+			"controls": [
+				"intl-list-format-reuse",
+				"intl-list-format-construct",
+				"intl-list-format-long"
+			],
+			"methods": ["Intl.ListFormat.prototype.formatToParts"],
+			"features": ["intl-list-format"]
+		},
+		{
+			"id": "intl-list-format-construct",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-list-format",
+			"category": "api-builtins",
+			"mechanisms": ["list-format", "persistent-formatters"],
+			"inputShape": "Construct and format an English conjunction for every operation.",
+			"unit": "formatted lists",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/lib.rs",
+			"fixture": "cases/intl-list-format-construct.mjs",
+			"controls": [
+				"intl-list-format-reuse",
+				"intl-list-format-parts",
+				"intl-list-format-long"
+			],
+			"methods": ["Intl.ListFormat.prototype.format"],
+			"features": ["intl-list-format"]
+		},
+		{
+			"id": "intl-list-format-long",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-list-format",
+			"category": "api-builtins",
+			"mechanisms": ["list-format", "persistent-formatters"],
+			"inputShape": "Reused English formatter with 32 long elements exceeding the UTF-8 stack buffer.",
+			"unit": "formatted lists",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/lib.rs",
+			"fixture": "cases/intl-list-format-long.mjs",
+			"controls": [
+				"intl-list-format-reuse",
+				"intl-list-format-parts",
+				"intl-list-format-construct"
+			],
+			"methods": ["Intl.ListFormat.prototype.format"],
+			"features": ["intl-list-format"]
+		}
+	]
+}

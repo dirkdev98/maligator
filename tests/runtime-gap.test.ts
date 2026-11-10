@@ -527,12 +527,13 @@ runRuntimeGapCase("allocation-snapshot", run, verify);
 	});
 
 	it.each([
-		["primordial-regexp-escaped-records", true, false],
-		["primordial-string-normalize-collation", false, true],
-		["primordial-promise-batch-results", false, false],
+		["primordial-regexp-escaped-records", true, false, false],
+		["primordial-string-normalize-collation", false, true, false],
+		["primordial-promise-batch-results", false, false, false],
+		["intl-list-format-reuse", false, false, true],
 	] as const)(
 		"clones %s with runnable work and its required features",
-		(sourceId, regexp, collator) => {
+		(sourceId, regexp, collator, listFormat) => {
 			const id = `unit-clone-${sourceId}-${process.pid}`;
 			const directory = path.join(RUNTIME_GAP_EXPERIMENTS, id);
 			const original = loadRuntimeGapCatalog().cases.find(({ id }) => id === sourceId)!;
@@ -563,7 +564,10 @@ runRuntimeGapCase("allocation-snapshot", run, verify);
 				});
 				expect(plan.buildsByCase[id]!.engine).toMatchObject({
 					regexp,
-					intl: { enabled: collator, features: collator ? ["collator"] : [] },
+					intl: {
+						enabled: collator || listFormat,
+						features: listFormat ? ["list-format"] : collator ? ["collator"] : [],
+					},
 				});
 				const cloned = JSON.parse(
 					execFileSync(process.execPath, [path.join(directory, "case.mjs"), "1", "1"], {

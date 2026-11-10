@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 /* Identifies the flat transport contract shared with lib.rs. */
-#define MAL_I18N_ABI_VERSION 6u
+#define MAL_I18N_ABI_VERSION 7u
 
 /* Status codes for fallible entry points; mapped to JS exceptions by the C side. */
 typedef enum MalI18nStatus {
@@ -115,9 +115,22 @@ typedef struct MalU16Str {
     size_t len;
 } MalU16Str;
 
-/* list_type: 0 conjunction(and), 1 disjunction(or), 2 unit; length: 0 long, 1
- * short, 2 narrow. Writes UTF-8 into out; returns the full length, or -1. */
-int32_t mal_i18n_list_format(const uint8_t *locale, size_t locale_len, int32_t list_type, int32_t length, const MalU16Str *items, size_t items_count, uint8_t *out, int32_t out_cap);
+/* list_type: 0 conjunction, 1 disjunction, 2 unit; length: 0 long,
+ * 1 short, 2 narrow. The handle owns the locale's immutable ICU plan. */
+void *mal_i18n_list_formatter_new(const uint8_t *locale, size_t locale_len, int32_t list_type, int32_t length);
+void mal_i18n_list_formatter_free(void *handle);
+
+typedef struct MalI18nListLiteral {
+    size_t start;
+    size_t len;
+} MalI18nListLiteral;
+
+/* Write UTF-16 literal units and items_count + 1 spans, alternating with the
+ * original elements. Return required literal capacity, or -1 on failure. Input
+ * spans are borrowed for this call only. No JS allocation/callback may occur
+ * while they are borrowed. An undersized out buffer receives a prefix; retry
+ * with the returned capacity. spans_cap must be at least items_count + 1. */
+int32_t mal_i18n_list_formatter_literals(const void *handle, const MalU16Str *items, size_t items_count, uint16_t *out, size_t out_cap, MalI18nListLiteral *spans, size_t spans_cap);
 
 /* ---- Intl.Segmenter ----
  * granularity: 0 grapheme, 1 word, 2 sentence. Writes segment boundary positions

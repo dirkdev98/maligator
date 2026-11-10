@@ -8,8 +8,9 @@
 //!   * The C runtime owns ALL JavaScript-spec glue: option-bag parsing, ToXxx
 //!     coercions, and the ECMA-402 / Date / RegExp abstract operations.
 //!   * This crate exposes only flat, pure primitives over the C ABI.
-//!   * i18n strings cross as UTF-8 via length-probe-then-fill; regexp patterns/
-//!     subjects cross as UTF-16 (see src/regexp.rs).
+//!   * Locale tags cross as UTF-8. List elements and literal spans use UTF-16
+//!     to preserve JS code units; other formatted text uses UTF-8 probe/fill.
+//!     Regexp patterns/subjects cross as UTF-16 (see src/regexp.rs).
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -58,7 +59,7 @@ pub mod crypto_cipher;
 pub mod crypto_pkey;
 
 /// Identifies the flat transport contract shared with `mal_i18n.h`.
-pub const MAL_I18N_ABI_VERSION: u32 = 6;
+pub const MAL_I18N_ABI_VERSION: u32 = 7;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]
@@ -920,26 +921,27 @@ pub struct MalU16Str {
     pub len: usize,
 }
 
-/// Format a list of strings for `locale`. list_type: 0 conjunction(and), 1
-/// disjunction(or), 2 unit; length: 0 long, 1 short, 2 narrow. Writes UTF-8 into
-/// `out`; returns the full length, or -1 on failure.
+/// Literal spans alternate with the original UTF-16 inputs. Elements never
+/// round-trip through scalar-value text, preserving lone surrogates and empties.
+#[repr(C)]
+pub struct MalI18nListLiteral {
+    pub start: usize,
+    pub len: usize,
+}
+
 #[cfg(feature = "intl-list-format")]
 #[no_mangle]
-pub unsafe extern "C" fn mal_i18n_list_format(
+pub unsafe extern "C" fn mal_i18n_list_formatter_new(
     locale_ptr: *const u8,
     locale_len: usize,
     list_type: i32,
     length: i32,
-    items: *const MalU16Str,
-    items_count: usize,
-    out: *mut u8,
-    out_cap: i32,
-) -> i32 {
+) -> *mut core::ffi::c_void {
     use icu_list::options::{ListFormatterOptions, ListLength};
     use icu_list::ListFormatter;
 
     let Some(locale) = parse_locale(locale_ptr, locale_len) else {
-        return -1;
+        return core::ptr::null_mut();
     };
     let prefs = (&locale).into();
     let options = ListFormatterOptions::default().with_length(match length {
@@ -952,21 +954,126 @@ pub unsafe extern "C" fn mal_i18n_list_format(
         2 => ListFormatter::try_new_unit(prefs, options),
         _ => ListFormatter::try_new_and(prefs, options),
     };
-    let Ok(formatter) = formatter else {
+    match formatter {
+        Ok(formatter) => Box::into_raw(Box::new(formatter)).cast(),
+        Err(_) => core::ptr::null_mut(),
+    }
+}
+
+#[cfg(feature = "intl-list-format")]
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_list_formatter_free(handle: *mut core::ffi::c_void) {
+    if !handle.is_null() {
+        drop(unsafe { Box::from_raw(handle.cast::<icu_list::ListFormatter>()) });
+    }
+}
+
+#[cfg(feature = "intl-list-format")]
+struct ListElement<'a>(&'a [u16]);
+
+#[cfg(feature = "intl-list-format")]
+impl writeable::Writeable for ListElement<'_> {
+    fn write_to<W: core::fmt::Write + ?Sized>(&self, sink: &mut W) -> core::fmt::Result {
+        // ICU inspects a scalar prefix for conditional conjunctions. Rendering
+        // skips this adapter entirely and uses the original JS strings instead.
+        for scalar in char::decode_utf16(self.0.iter().copied()) {
+            sink.write_char(scalar.unwrap_or(char::REPLACEMENT_CHARACTER))?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "intl-list-format")]
+struct ListLiterals<'a> {
+    out: &'a mut [u16],
+    spans: &'a mut [MalI18nListLiteral],
+    written: usize,
+    start: usize,
+    element: usize,
+}
+
+#[cfg(feature = "intl-list-format")]
+impl core::fmt::Write for ListLiterals<'_> {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        for unit in text.encode_utf16() {
+            if self.written >= i32::MAX as usize {
+                return Err(core::fmt::Error);
+            }
+            if let Some(slot) = self.out.get_mut(self.written) {
+                *slot = unit;
+            }
+            self.written += 1;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "intl-list-format")]
+impl ListLiterals<'_> {
+    fn close_span(&mut self) -> core::fmt::Result {
+        let span = self.spans.get_mut(self.element).ok_or(core::fmt::Error)?;
+        *span = MalI18nListLiteral { start: self.start, len: self.written - self.start };
+        self.start = self.written;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "intl-list-format")]
+impl writeable::PartsWrite for ListLiterals<'_> {
+    type SubPartsWrite = Self;
+
+    fn with_part(
+        &mut self,
+        part: writeable::Part,
+        mut f: impl FnMut(&mut Self) -> core::fmt::Result,
+    ) -> core::fmt::Result {
+        if part == icu_list::parts::ELEMENT {
+            // ICU emits each input once, in order, even when it is empty.
+            // Skipping the closure removes conversion and copying of elements.
+            self.close_span()?;
+            self.element += 1;
+            Ok(())
+        } else if part == icu_list::parts::LITERAL {
+            f(self)
+        } else {
+            Err(core::fmt::Error)
+        }
+    }
+}
+
+/// Write UTF-16 literals and items_count + 1 spans into caller-owned buffers.
+/// Returns the required literal capacity, or -1. No input or output is retained.
+#[cfg(feature = "intl-list-format")]
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_list_formatter_literals(
+    handle: *const core::ffi::c_void,
+    items: *const MalU16Str,
+    items_count: usize,
+    out: *mut u16,
+    out_cap: usize,
+    spans: *mut MalI18nListLiteral,
+    spans_cap: usize,
+) -> i32 {
+    use writeable::Writeable;
+
+    if handle.is_null() || spans.is_null() || items_count >= spans_cap
+        || (items_count != 0 && items.is_null()) || (out_cap != 0 && out.is_null()) {
         return -1;
-    };
-    let slice = unsafe { nullable_slice(items, items_count) };
-    let strings: Vec<String> = slice
-        .iter()
-        .map(|s| {
-            // List formatting is scalar-value based: lone surrogates become
-            // U+FFFD when each item is converted to a Rust String.
-            let u = unsafe { nullable_u16_slice(s.ptr, s.len) };
-            String::from_utf16_lossy(u)
-        })
-        .collect();
-    let text = formatter.format_to_string(strings.iter());
-    unsafe { write_utf8(&text, out, out_cap) }
+    }
+    let formatter = unsafe { &*handle.cast::<icu_list::ListFormatter>() };
+    let items = unsafe { nullable_slice(items, items_count) };
+    if items.iter().any(|item| item.len != 0 && item.ptr.is_null()) {
+        return -1;
+    }
+    let values = items.iter().map(|item| ListElement(unsafe { nullable_u16_slice(item.ptr, item.len) }));
+    let out = if out_cap == 0 { &mut [] } else { unsafe { core::slice::from_raw_parts_mut(out, out_cap) } };
+    let spans = unsafe { core::slice::from_raw_parts_mut(spans, items_count + 1) };
+    let mut sink = ListLiterals { out, spans, written: 0, start: 0, element: 0 };
+    if formatter.format(values).write_to_parts(&mut sink).is_err()
+        || sink.element != items_count || sink.close_span().is_err() {
+        return -1;
+    }
+    sink.written as i32
 }
 
 // ---------------------------------------------------------------------------

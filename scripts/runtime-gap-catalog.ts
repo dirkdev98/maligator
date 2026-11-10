@@ -19,7 +19,7 @@ export type RuntimeGapCategory =
 	| "compiler-algorithms"
 	| "unattributed-execution";
 
-export type RuntimeGapFeature = "regexp" | "intl-collator";
+export type RuntimeGapFeature = "regexp" | "intl-collator" | "intl-list-format";
 
 export interface RuntimeGapCaseDescriptor {
 	readonly id: string;
@@ -90,10 +90,15 @@ function record(value: unknown, label: string): Readonly<Record<string, unknown>
 export function runtimeGapFeatures(value: unknown): ReadonlyArray<RuntimeGapFeature> {
 	if (
 		!Array.isArray(value) ||
-		value.some((feature) => feature !== "regexp" && feature !== "intl-collator") ||
+		value.some(
+			(feature) =>
+				feature !== "regexp" &&
+				feature !== "intl-collator" &&
+				feature !== "intl-list-format",
+		) ||
 		new Set(value).size !== value.length
 	) {
-		throw new Error("runtime-gap features must be unique regexp or intl-collator names");
+		throw new Error("runtime-gap features must be unique supported feature names");
 	}
 	return value as ReadonlyArray<RuntimeGapFeature>;
 }

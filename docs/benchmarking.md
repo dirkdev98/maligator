@@ -92,7 +92,7 @@ Use `--owner primordial-methods` to select the grouped primordial microbenchmark
 `bench/runtime-gap/primordial-methods.json` records the selected callable identities.
 Their catalog `methods` list records the methods exercised in each measured workload;
 the result is a group workload offset, not an individual method cost. Case `features`
-enable RegExp or the Intl collator only where required, and plans and reports record
+enable optional runtime components only where required, and plans and reports record
 the resolved build configuration for each case. Run the date workloads with `TZ=UTC`.
 For a bounded local survey, use
 `TZ=UTC npm run bench:performance -- gap --owner primordial-methods --samples 5 --target-node-ms 20 --budget-seconds 3600 --plan=json`,

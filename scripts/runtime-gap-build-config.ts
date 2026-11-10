@@ -6,12 +6,19 @@ export function runtimeGapBuildConfig(
 	resolveConfig: typeof resolveBuildConfig = resolveBuildConfig,
 ) {
 	const collator = features.includes("intl-collator");
+	const listFormat = features.includes("intl-list-format");
 	return resolveConfig({
 		engine: {
 			eval: false,
 			realms: false,
 			regexp: features.includes("regexp"),
-			intl: { enabled: collator, features: collator ? ["collator"] : [] },
+			intl: {
+				enabled: collator || listFormat,
+				features: [
+					...(collator ? (["collator"] as const) : []),
+					...(listFormat ? (["list-format"] as const) : []),
+				],
+			},
 		},
 		surface: { node: true, webPlatform: false, maligator: true },
 	});
