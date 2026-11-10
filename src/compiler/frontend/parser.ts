@@ -58,9 +58,24 @@ function parseWithMeriyah(
 	}
 }
 
-function normalizeAnnexBIfFunctions(program: ESTree.Program): void {
-	// Annex B models bare if-clause declarations as synthetic blocks before var mirroring.
-	traverseEstree(program.body, (node) => {
+function normalizeAnnexBFunctions(program: ESTree.Program): void {
+	traverseEstree(program, (node) => {
+		const statements =
+			node.type === "Program" || node.type === "BlockStatement"
+				? node.body
+				: node.type === "SwitchCase"
+					? node.consequent
+					: undefined;
+		if (statements !== undefined) {
+			for (let index = 0; index < statements.length; index++) {
+				let declaration = statements[index]!;
+				while (declaration.type === "LabeledStatement") declaration = declaration.body;
+				// Label chains on declarations contribute the same binding and empty
+				// evaluation as their function, including entry-time initialization.
+				if (declaration.type === "FunctionDeclaration") statements[index] = declaration;
+			}
+		}
+		// Bare if-clause declarations need a block before Annex B var mirroring.
 		if (node.type !== "IfStatement") return;
 		if (node.consequent.type === "FunctionDeclaration") {
 			node.consequent = {
@@ -275,7 +290,7 @@ export function parseScript(
 				// destructuring target `[f() = 1] = x` — but breaking real AnnexB code
 				// is worse than missing that one early error.)
 			});
-	if (!strict) normalizeAnnexBIfFunctions(ast);
+	if (!strict) normalizeAnnexBFunctions(ast);
 	return {
 		type: "script",
 		strict,

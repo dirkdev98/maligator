@@ -2,6 +2,9 @@
 # from baseline or report changes. Keep representative siblings only and keep
 # this selection disjoint from Test262 smoke.
 
+# Labelled declarations, shared switch scopes, and eval hoisting.
+test/staging/sm/lexical-environment/block-scoped-functions-annex-b-label.js
+
 # Proxy slot snapshots and nested prototype invariants.
 test/staging/sm/Proxy/revoke-as-side-effect.js
 test/staging/sm/Proxy/getPrototypeOf.js

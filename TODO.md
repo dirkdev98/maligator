@@ -78,13 +78,6 @@ executions, measuring both compiler hosts.
       splitter together only if removing that work pays on both hosts while preserving
       split semantics, build time and size.
 
-- [ ] Hoist labelled function declarations in sloppy function bodies. Annex B makes
-      `label: function f() {}` a top-level var-scoped declaration initialized at
-      entry, so `f()` before it runs `f`; Maligator throws a TypeError in both
-      backends where Node runs it (Test262's staging
-      `block-scoped-functions-annex-b-label.js` fails too). Once hoisted,
-      `coreInitializedLexicalReads` must treat them as hoisted: it visits them at
-      their statement, so `f` would read a later `const` without its TDZ check.
 - [ ] Separate owner-held value-buffer pressure from survivor bytes that size the nursery
       without losing ownership or major-cycle accounting. Compare native self-compile,
       app-batch and Express time, physical footprint and pauses; retain only a bounded

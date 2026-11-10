@@ -7229,6 +7229,7 @@ function compileStatementsToBlock(
 	 */
 	hoistFunctions = false,
 	resourceScope = true,
+	initializedFunctions?: ReadonlySet<ESTree.FunctionDeclaration>,
 ): number {
 	if (
 		resourceScope &&
@@ -7238,7 +7239,13 @@ function compileStatementsToBlock(
 				(statement.kind === "using" || statement.kind === "await using"),
 		)
 	) {
-		return compileDisposableStatementScope(program, fn, statements, hoistFunctions);
+		return compileDisposableStatementScope(
+			program,
+			fn,
+			statements,
+			hoistFunctions,
+			initializedFunctions,
+		);
 	}
 
 	let block: CoreFrontendBlock = {
@@ -7376,7 +7383,8 @@ function compileStatementsToBlock(
 		for (const declaration of functionDeclarations) {
 			const binding = fn.semanticFile.nodeToBinding.get(declaration);
 			if (binding?.kind !== "let") continue;
-			compileFunctionDeclaration(program, fn, block, declaration, false);
+			if (!initializedFunctions?.has(declaration))
+				compileFunctionDeclaration(program, fn, block, declaration, false);
 			if (binding.annexBVarBinding) {
 				annexBHoistedDeclarations.add(declaration);
 			} else {
@@ -7591,6 +7599,7 @@ function compileDisposableStatementScope(
 	fn: CoreFrontendFunction,
 	statements: Array<ESTree.Statement>,
 	hoistFunctions: boolean,
+	initializedFunctions?: ReadonlySet<ESTree.FunctionDeclaration>,
 ): number {
 	const { entryIdx } = compileDisposableRegion(
 		program,
@@ -7606,6 +7615,7 @@ function compileDisposableStatementScope(
 				statements,
 				hoistFunctions,
 				false,
+				initializedFunctions,
 			);
 			entry.emitter.emit({ type: "jump", blocks: [bodyEntry] });
 			return fn.blocks.at(-1)!;
@@ -8179,11 +8189,29 @@ function compileSwitchStatement(
 	resetEvalCompletion(fn, cursor.block);
 	const scope = fn.semanticFile.nodeToScope.get(statement);
 	if (scope) emitTdzHoleInits(program, fn, cursor.block, scope.bindings);
+	for (const binding of scope?.bindings ?? [])
+		if (binding.scopedTo === "captured") getOrCreateBindingLocation(program, fn, binding);
+	// All cases share one lexical environment, initialized before any case test.
+	// Annex B var mirroring still runs only when its declaration is reached.
+	const initializedFunctions = new Set<ESTree.FunctionDeclaration>();
+	for (const switchCase of statement.cases)
+		for (const declaration of switchCase.consequent)
+			if (declaration.type === "FunctionDeclaration") {
+				compileFunctionDeclaration(program, fn, cursor.block, declaration, false);
+				initializedFunctions.add(declaration);
+			}
 
 	const bodyStarts: Array<number> = [];
 	let previousTail: CoreFrontendBlock | undefined;
 	for (const switchCase of statement.cases) {
-		const start = compileStatementsToBlock(program, fn, switchCase.consequent);
+		const start = compileStatementsToBlock(
+			program,
+			fn,
+			switchCase.consequent,
+			false,
+			true,
+			initializedFunctions,
+		);
 		if (previousTail) {
 			previousTail.emitter.emit({
 				type: "jump",
