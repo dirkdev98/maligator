@@ -264,4 +264,71 @@ ok(
 	"array species may return a callable object",
 	mappedCallability(sourceArray) === "function",
 );
+class ArithmeticReader {
+	constructor() {
+		this.bias = 3;
+	}
+	read(value) {
+		return (value + this.bias) & 255;
+	}
+}
+const arithmeticReader = new ArithmeticReader();
+let arithmeticPrefixes = 0;
+function guardedArithmetic(value) {
+	arithmeticPrefixes++;
+	let total = 7;
+	for (let index = 0; index < 1; index++)
+		total = (total + arithmeticReader.read(value)) | 0;
+	return total;
+}
+function replaceArithmeticReader(callback) {
+	arithmeticReader.read = callback;
+}
+globalThis.guardedArithmetic = guardedArithmetic;
+globalThis.replaceArithmeticReader = replaceArithmeticReader;
+ok("guarded arithmetic numeric hit", guardedArithmetic(2) === 12);
+let arithmeticCalls = 0;
+let arithmeticCoercions = 0;
+replaceArithmeticReader(function () {
+	arithmeticCalls++;
+	if (typeof gc === "function") gc();
+	return {
+		valueOf() {
+			arithmeticCoercions++;
+			if (typeof gc === "function") gc();
+			return "5";
+		},
+	};
+});
+ok("guarded arithmetic coerces a replacement once", guardedArithmetic(2) === 75);
+ok(
+	"guarded arithmetic does not replay its prefix or call",
+	arithmeticPrefixes === 2 && arithmeticCalls === 1 && arithmeticCoercions === 1,
+);
+const arithmeticError = {};
+replaceArithmeticReader(function () {
+	arithmeticCalls++;
+	return {
+		valueOf() {
+			throw arithmeticError;
+		},
+	};
+});
+try {
+	guardedArithmetic(2);
+	throw new Error("missing arithmetic error");
+} catch (error) {
+	ok("guarded arithmetic preserves coercion failure", error === arithmeticError);
+}
+ok(
+	"abrupt arithmetic does not replay",
+	arithmeticPrefixes === 3 && arithmeticCalls === 2,
+);
+replaceArithmeticReader(() => 1n);
+try {
+	guardedArithmetic(2);
+	throw new Error("missing arithmetic BigInt error");
+} catch (error) {
+	ok("guarded arithmetic retains mixed BigInt failure", error instanceof TypeError);
+}
 console.log("finite-call-target-dispatch PASS");

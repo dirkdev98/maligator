@@ -29,6 +29,12 @@ those proofs for integer arithmetic and updates. Floating operands retain Number
 arithmetic, and signed division/remainder retain their JavaScript edge semantics.
 Yield and await box numeric observations and preserve scalar suspension storage.
 
+Single-use arithmetic after a guarded inline join can continue in each completed
+predecessor before the boxed fallback merges. Sole transfers and a first join
+operation preserve coercion and exception order without replaying calls or crossing
+handlers. Numeric dispatch overlays consume generated-code and compiler-work budgets
+without competing with body cloning for the expansion allowance.
+
 Program value-kind summaries carry own-data field facts of fresh returned records.
 The bounded call worklist joins common own keys and propagates field-only changes
 through finite targets and recursive forwarding. An empty normal-return set remains

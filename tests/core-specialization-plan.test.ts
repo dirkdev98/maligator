@@ -583,7 +583,7 @@ describe("late Core specialization plan", () => {
 		expect(declined.statistics.discovery.skippedByReason["generated-code-cost"]).toBe(1);
 	});
 
-	it("materializes local payloads only after expansion admission", () => {
+	it("admits numeric overlays without consuming body expansions", () => {
 		const { program, function: functionId } = numericProgram();
 		const first = planning(program, [functionId]);
 		for (const limit of [0, 1]) {
@@ -601,8 +601,10 @@ describe("late Core specialization plan", () => {
 				},
 			);
 			expect(plan.statistics.considered).toBeGreaterThan(0);
-			expect(materialized).toBe(limit);
-			expect(planSpecializations(plan)).toHaveLength(limit);
+			expect(materialized).toBe(1);
+			expect(planSpecializations(plan)).toHaveLength(1);
+			expect(plan.statistics.generatedCodeConsumed).toBeGreaterThan(0);
+			expect(plan.statistics.compilerWorkConsumed).toBeGreaterThan(0);
 		}
 	});
 

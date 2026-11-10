@@ -1094,10 +1094,11 @@ function pendingLocalCandidate(
 			),
 			generatedCodeCost: cost.estimatedCStatements,
 			compilerWorkCost: cost.compileScore,
-			// Protocol cursors replace dispatch without cloning a body; code and work budgets still apply.
+			// Dispatch overlays do not clone bodies; code and work budgets still apply.
 			expansive:
 				!fusedExecResult &&
 				!isIteratorCursorCandidate(candidate) &&
+				candidate.kind !== "numeric-fusion" &&
 				candidate.kind !== "builtin-collection-call-chain" &&
 				candidate.kind !== "string-char-code-at-chain" &&
 				candidate.kind !== "iterator-entry-pair-virtualization",

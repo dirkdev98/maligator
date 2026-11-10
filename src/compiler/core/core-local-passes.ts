@@ -39,6 +39,7 @@ import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.t
 import { CoreEditor } from "./core-editor.ts";
 import { foldFiniteStringConstruction } from "./core-finite-string-construction.ts";
 import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
+import { continueGuardedCallArithmetic } from "./core-guarded-continuations.ts";
 import { removeCoreInstructions } from "./core-instruction-removal.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
@@ -3581,6 +3582,7 @@ export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> 
 	spreadArrayLiteralArguments,
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
+	continueGuardedCallArithmetic,
 	afterLateCfgEdits(canonicalizeBlockParameters),
 	afterLateCfgEdits(simplifyBlockParameters),
 	eliminateUnusedBlockParameters,
