@@ -1,14 +1,14 @@
 {
   "sha": "3655e7464de3d52643ecddd4b5f9f4f3e7f62398",
   "summary": {
-    "FAILED": 909,
-    "PASSED": 52669
+    "FAILED": 908,
+    "PASSED": 52670
   },
   "skips": {},
   "code": {
     "compiledFiles": 94218,
     "functionCount": 2987125,
-    "instructionCount": 107759303
+    "instructionCount": 107767223
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",
@@ -26671,7 +26671,7 @@
     "test/staging/sm/class/superCallBaseInvoked.js": "PASSED",
     "test/staging/sm/class/superCallProperBase.js": "FAILED",
     "test/staging/sm/class/superPropBasicCalls.js": "PASSED",
-    "test/staging/sm/class/superPropChains.js": "FAILED",
+    "test/staging/sm/class/superPropChains.js": "PASSED",
     "test/staging/sm/class/superPropDestructuring.js": "PASSED",
     "test/staging/sm/class/superPropHeavyweightArrow.js": "PASSED",
     "test/staging/sm/class/superPropNoOverwriting.js": "PASSED",
