@@ -324,6 +324,8 @@ function, and a fast body may call another one's `_try` at a proven exact call
 site. Small boxed parameter lists use fixed positional arguments to avoid building
 an argument vector between fast bodies. The canonical entry still adapts omitted
 arguments to `undefined`; stricter integer parameters retain their admission guards.
+Zero-parameter fast entries omit the argument pointer and count. Their callers still
+evaluate extra arguments before the call.
 Immediate helper returns forward the caller's result storage, preserving callee
 guards and the effect-free restart path.
 An exported fast body whose admitted returns prove `undefined` reports only

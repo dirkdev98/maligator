@@ -77,6 +77,16 @@ it("preserves private accessor fallbacks and boxed predicate callbacks under col
 		emitCompiledFunction(identityOrClone, identityOrClone.functionIndex, "", false)
 			?.tryAbi?.result,
 	).toEqual({ kind: "parameter", index: 0 });
+	const readReady = pair.programImage.native.functions.find(
+		(fn) =>
+			String.fromCharCode(
+				...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+			) === "readReady",
+	)!;
+	expect(
+		emitCompiledFunction(readReady, readReady.functionIndex, "", false)?.tryAbi
+			?.parameters,
+	).toEqual([]);
 	for (const binary of [pair.compiled, pair.interpreted]) {
 		expect(
 			runToStdout(binary, {

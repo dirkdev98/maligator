@@ -108,4 +108,32 @@ log.push(Reflect.apply(globalThis.identityOrClone, undefined, []) === undefined)
 const original = { keep: false, id: 11 };
 const cloned = Reflect.apply(globalThis.identityOrClone, undefined, [original]);
 log.push(cloned === original, cloned.keep, cloned.id);
+
+function readReady() {
+	"use strict";
+	return this.ready;
+}
+globalThis.readReady = readReady;
+for (const receiver of [
+	{ ready: 7 },
+	{
+		get ready() {
+			log.push("ready getter");
+			globalThis.__mal_collect_garbage?.();
+			return 11;
+		},
+	},
+	{
+		get ready() {
+			log.push("ready throw");
+			throw new Error("ready");
+		},
+	},
+]) {
+	try {
+		log.push(Reflect.apply(globalThis.readReady, receiver, [log.push("extra argument")]));
+	} catch (error) {
+		log.push(error.message);
+	}
+}
 console.log(JSON.stringify(log));

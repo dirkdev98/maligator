@@ -459,14 +459,19 @@ export function renderNativeFastEntry(
 		) ?? [];
 	const arguments_ =
 		tryParameters === undefined
-			? "args, arg_count"
-			: tryParameters
-					.map((kind, index) =>
-						kind === "i32"
-							? `mal_value_to_i32(args[${index}])`
-							: `(arg_count > ${index} ? args[${index}] : MAL_VALUE_UNDEFINED)`,
-					)
-					.join(", ");
+			? ["args", "arg_count"]
+			: tryParameters.map((kind, index) =>
+					kind === "i32"
+						? `mal_value_to_i32(args[${index}])`
+						: `(arg_count > ${index} ? args[${index}] : MAL_VALUE_UNDEFINED)`,
+				);
+	const call = `${input.trySymbol}(${[
+		"vm",
+		"this_value",
+		...arguments_,
+		"env",
+		...(tryAbi.result.kind === "boxed" ? ["&__fast_result"] : []),
+	].join(", ")})`;
 	const resultValue =
 		tryAbi.result.kind === "boxed"
 			? "__fast_result"
@@ -483,7 +488,7 @@ export function renderNativeFastEntry(
 		input.signature,
 		...(input.dispatch ?? []),
 		...(tryAbi.result.kind === "boxed" ? ["    MalValue __fast_result;"] : []),
-		`    if (${fn.hasPrototype ? "mal_value_is_undefined(new_target) && " : ""}${entryGuards.length === 0 ? "" : `${entryGuards.join(" && ")} && `}${input.trySymbol}(vm, this_value, ${arguments_}, env${tryAbi.result.kind === "boxed" ? ", &__fast_result" : ""})) return ${resultValue};`,
+		`    if (${fn.hasPrototype ? "mal_value_is_undefined(new_target) && " : ""}${entryGuards.length === 0 ? "" : `${entryGuards.join(" && ")} && `}${call}) return ${resultValue};`,
 		full,
 		"}",
 	]);
@@ -575,7 +580,7 @@ function scalarTryParameters(
 	>,
 	rejected: ReadonlySet<number>,
 ): NativeFastTryParameters | undefined {
-	if (fn.parameterCount === 0 || fn.parameterCount > 4) return undefined;
+	if (fn.parameterCount > 4) return undefined;
 	const parameters = Array.from(
 		{ length: fn.parameterCount },
 		(): "i32" | "boxed" => "boxed",
@@ -1320,21 +1325,19 @@ function fastInstruction(
 			const guards = callee.guard === undefined ? [] : [`!(${callee.guard})`];
 			const arguments_ =
 				callee.abi.parameters === undefined
-					? `${list}, ${args.length}`
-					: callee.abi.parameters
-							.map((kind, index) => {
-								const boxed = args[index] ?? "MAL_VALUE_UNDEFINED";
-								if (kind === "boxed") return boxed;
-								const register = op.arguments[index];
-								const scalar =
-									register === undefined || index >= op.argumentCount
-										? undefined
-										: exactInteger(values, register);
-								if (scalar !== undefined) return scalar;
-								guards.push(`!mal_value_is_int32(${boxed})`);
-								return `mal_value_to_i32(${boxed})`;
-							})
-							.join(", ");
+					? [list, String(args.length)]
+					: callee.abi.parameters.map((kind, index) => {
+							const boxed = args[index] ?? "MAL_VALUE_UNDEFINED";
+							if (kind === "boxed") return boxed;
+							const register = op.arguments[index];
+							const scalar =
+								register === undefined || index >= op.argumentCount
+									? undefined
+									: exactInteger(values, register);
+							if (scalar !== undefined) return scalar;
+							guards.push(`!mal_value_is_int32(${boxed})`);
+							return `mal_value_to_i32(${boxed})`;
+						});
 			const next = input.fn.instructions[ip + 1];
 			const forwardsResult =
 				exported &&
@@ -1342,11 +1345,15 @@ function fastInstruction(
 				tryResult.kind === callee.abi.result.kind &&
 				next?.opcode === "RETURN" &&
 				next.value === op.dst;
-			const output =
-				callee.abi.result.kind === "boxed"
-					? `, ${forwardsResult ? "out" : `&__fast_r${op.dst}`}`
-					: "";
-			const call = `${callee.symbol}(vm, ${receiver}, ${arguments_}, ${callee.environment}${output})`;
+			const call = `${callee.symbol}(${[
+				"vm",
+				receiver,
+				...arguments_,
+				callee.environment,
+				...(callee.abi.result.kind === "boxed"
+					? [forwardsResult ? "out" : `&__fast_r${op.dst}`]
+					: []),
+			].join(", ")})`;
 			if (forwardsResult)
 				return `${guards.length === 0 ? "" : `if (${guards.join(" || ")}) goto __full; `}return ${call};`;
 			const resultValue =

@@ -1026,6 +1026,7 @@ it("keys every fast ABI component independently of descriptor allocation", () =>
 	const abis: ReadonlyArray<NativeFastTryAbi | undefined> = [
 		undefined,
 		{ result: { kind: "boxed" } },
+		{ parameters: [], result: { kind: "boxed" } },
 		{ result: { kind: "undefined" } },
 		{ result: { kind: "parameter", index: 0 } },
 		{ result: { kind: "parameter", index: 1 } },
@@ -1800,6 +1801,47 @@ describe("native fast entries", () => {
 			"mal_compiled_7_try(vm, MAL_VALUE_UNDEFINED, __fast_r0, MAL_VALUE_UNDEFINED,",
 		);
 		expect(source).not.toContain("(const MalValue[])");
+	});
+
+	it("exports a zero-parameter helper without argument transport", () => {
+		const source = fastEntry(
+			body(
+				[
+					{ opcode: "CREATE_UNDEFINED", dst: 0 },
+					{ opcode: "RETURN", value: 0 },
+				],
+				{ parameterCount: 0 },
+			),
+			undefined,
+			true,
+		)!.join("\n");
+		expect(source).toContain(
+			"bool mal_compiled_0_try(MalVm *vm, MalValue this_value, MalEnv *env, MalValue *out)",
+		);
+		expect(source).toContain("mal_compiled_0_try(vm, this_value, env, &__fast_result)");
+	});
+
+	it("calls a zero-parameter helper without forwarding evaluated extra arguments", () => {
+		const source = fastEntry(
+			body([
+				{
+					opcode: "CALL",
+					dst: 2,
+					callee: 1,
+					thisValue: -1,
+					argumentCount: 1,
+					arguments: [0],
+				},
+				{ opcode: "RETURN", value: 2 },
+			]),
+			() => ({
+				symbol: "mal_compiled_7_try",
+				abi: { parameters: [], result: { kind: "boxed" } },
+			}),
+		)!.join("\n");
+		expect(source).toContain(
+			"mal_compiled_7_try(vm, MAL_VALUE_UNDEFINED, mal_value_to_function_object(__fast_r1)->creation_env, out)",
+		);
 	});
 
 	it("forwards a fast tail call's output while preserving another return predecessor", () => {
