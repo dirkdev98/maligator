@@ -408,8 +408,9 @@ describe("emit-program-image instruction packing", () => {
 			new RegExp(`bool mal_compiled_${caller}_try\\([^\\n]+\\) \\{([\\s\\S]*?)^}`, "m"),
 		)![1]!;
 		expect(callerBody).toMatch(
-			new RegExp(`return mal_compiled_${middle}_try\\([^\\n]+, out\\);`),
+			new RegExp(`mal_compiled_${middle}_try\\([^\\n]+creation_env\\)`),
 		);
+		expect(callerBody).not.toContain("&__fast_r");
 	});
 
 	it.each([false, true])(

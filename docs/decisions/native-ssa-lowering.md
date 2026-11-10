@@ -329,8 +329,10 @@ evaluate extra arguments before the call.
 Immediate helper returns forward the caller's result storage, preserving callee
 guards and the effect-free restart path.
 An exported fast body whose admitted returns prove `undefined` reports only
-success. Its callers reconstruct that value on success and retain the full entry's
-return value on a miss. Availability and caller cache identities include this result
+success when its graph reaches every live return site. Return-site coverage limits
+full-body validation probes of helpers with a separate ordinary return. Callers
+reconstruct that value on success and retain the full entry's return value on a miss.
+Availability and caller cache identities include this result
 ABI because admitting another callee can expand a body's successful return paths.
 The same success-only ABI can forward an original positional argument when every
 admitted return reads that unwritten parameter and no successful path falls through.

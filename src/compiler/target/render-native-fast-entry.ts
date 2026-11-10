@@ -291,6 +291,9 @@ export function renderNativeFastEntry(
 		parameters: tryParameters,
 		result:
 			exported &&
+			fn.instructions.every(
+				(op, ip) => op.opcode !== "RETURN" || unreachable.has(ip) || graph.has(ip),
+			) &&
 			[...graph.keys()].every((ip) => {
 				const op = fn.instructions[ip]!;
 				return (

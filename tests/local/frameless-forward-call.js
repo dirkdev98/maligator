@@ -3,9 +3,9 @@ function caller(value) {
 }
 function middle(value) {
 	if (value === undefined) return;
-	return later(value);
+	later(value);
 }
 function later(value) {
-	return value + 1;
+	if (value === true) throw new Error("later");
 }
 globalThis.result = caller(globalThis.input);

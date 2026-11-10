@@ -66,7 +66,7 @@ it("preserves private accessor fallbacks and boxed predicate callbacks under col
 	expect(
 		emitCompiledFunction(maybeVoid, maybeVoid.functionIndex, "", false)?.tryAbi?.result
 			.kind,
-	).toBe("undefined");
+	).toBe("boxed");
 	const identityOrClone = pair.programImage.native.functions.find(
 		(fn) =>
 			String.fromCharCode(

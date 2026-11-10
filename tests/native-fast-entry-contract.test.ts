@@ -935,37 +935,80 @@ it("passes small boxed entries directly while adapting missing canonical argumen
 	);
 });
 
-it("omits undefined fast results while retaining the full entry's other return values", () => {
-	const source = fastEntry(
-		body([
-			{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
-			{ opcode: "CREATE_ARRAY", dst: 3, length: 0 },
-			{ opcode: "RETURN", value: 3 },
-			{ opcode: "CREATE_UNDEFINED", dst: 2 },
-			{ opcode: "RETURN", value: 2 },
-		]),
-		undefined,
-		true,
-		undefined,
-		[
+it.each([false, true])(
+	"keeps result storage for a partial undefined bailout unless its allocating return is dead=%s",
+	(dead) => {
+		const source = fastEntry(
+			body([
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+				{ opcode: "CREATE_ARRAY", dst: 3, length: 0 },
+				{ opcode: "RETURN", value: 3 },
+				{ opcode: "CREATE_UNDEFINED", dst: 2 },
+				{ opcode: "RETURN", value: 2 },
+			]),
 			undefined,
+			true,
+			dead
+				? { branches: [{ instructionIp: 0, targetIp: 3 }], unreachableIps: [1, 2] }
+				: undefined,
+			[
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{
+					registers: [2],
+					inputOffset: 0,
+					inputKindMasks: [COMPILER_VALUE_KIND_UNDEFINED],
+				},
+			],
+		)!.join("\n");
+		expect(source.includes("MalValue *out")).toBe(!dead);
+		if (dead) expect(source).toContain("env)) return MAL_VALUE_UNDEFINED;");
+		else expect(source).toContain("env, &__fast_result)) return __fast_result;");
+		expect(source).toContain("return read_full(vm,");
+	},
+);
+
+it.each([false, true])(
+	"omits undefined storage for a cold miss only when it rejoins an admitted return=%s",
+	(rejoins) => {
+		const source = fastEntry(
+			body([
+				{ opcode: "CREATE_UNDEFINED", dst: 2 },
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+				{ opcode: "RETURN", value: 2 },
+				{
+					opcode: "STORE_PROPERTY_STATIC",
+					object: 0,
+					value: 1,
+					stringIndex: 0,
+					icIndex: 0,
+				},
+				rejoins ? { opcode: "JUMP", targetIp: 2 } : { opcode: "RETURN", value: 2 },
+			]),
 			undefined,
+			true,
 			undefined,
-			undefined,
-			{
-				registers: [2],
-				inputOffset: 0,
-				inputKindMasks: [COMPILER_VALUE_KIND_UNDEFINED],
-			},
-		],
-	)!.join("\n");
-	expect(source).toContain("MalValue __fast_p1, MalEnv *env) {");
-	expect(source).toContain(
-		"(arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED), env)) return MAL_VALUE_UNDEFINED;",
-	);
-	expect(source).toContain("return read_full(vm,");
-	expect(source).not.toContain("MalValue *out");
-});
+			[
+				undefined,
+				undefined,
+				{
+					registers: [2],
+					inputOffset: 0,
+					inputKindMasks: [COMPILER_VALUE_KIND_UNDEFINED],
+				},
+				undefined,
+				{
+					registers: [2],
+					inputOffset: 0,
+					inputKindMasks: [COMPILER_VALUE_KIND_UNDEFINED],
+				},
+			],
+		)!.join("\n");
+		expect(source.includes("MalValue *out")).toBe(!rejoins);
+	},
+);
 
 it("reconstructs an unchanged argument including an omitted argument", () => {
 	const source = fastEntry(body([{ opcode: "RETURN", value: 1 }]))!.join("\n");
