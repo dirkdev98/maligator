@@ -192,6 +192,43 @@ function earlyExit(value) {
 equal(earlyExit("stop"), 0);
 equal(earlyExit("skip"), 0);
 equal(earlyExit("add"), 10);
+function longHashCases(value) {
+	switch (value) {
+		case "long-string-selector-that-must-use-the-streaming-hash-01234567890123456789-0":
+			return 1;
+		case "long-string-selector-that-must-use-the-streaming-hash-01234567890123456789-1":
+			return 2;
+		case "long-string-selector-that-must-use-the-streaming-hash-01234567890123456789-2":
+			return 3;
+		case "long-string-selector-that-must-use-the-streaming-hash-01234567890123456789-3":
+			return 4;
+		case "long-string-selector-that-must-use-the-streaming-hash-01234567890123456789-4":
+			return 5;
+		case "long-string-selector-that-must-use-the-streaming-hash-01234567890123456789-5":
+			return 6;
+		case "long-string-selector-that-must-use-the-streaming-hash-01234567890123456789-6":
+			return 7;
+		case "long-string-selector-that-must-use-the-streaming-hash-01234567890123456789-7":
+			return 8;
+		default:
+			return -1;
+	}
+}
+for (let index = 0; index < 8; index++) {
+	equal(
+		longHashCases(
+			"long-string-selector-that-must-use-the-streaming-hash-01234567890123456789-" +
+				index,
+		),
+		index + 1,
+	);
+}
+equal(
+	longHashCases(
+		"long-string-selector-that-must-use-the-streaming-hash-01234567890123456789-miss",
+	),
+	-1,
+);
 function collidingHashCases(value) {
 	switch (value) {
 		case "Kq-v14C2OZ":

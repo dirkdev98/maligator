@@ -98,14 +98,19 @@ remains explicit through construction, adoption, and finalization.
 
 ## Content identity and property keys
 
-Hashes use FNV modulo 2^57 over the low byte and high byte of each UTF-16 unit,
-including Latin-1's zero high byte. The remaining bits hold storage and content
-flags, leaving the length field independent of the cell size. Equal content has
-equal hashes across encodings and rope partitions. Content-preserving
-representation changes retain the cached hash.
+Short strings use FNV modulo 2^57 over each UTF-16 unit's low and high bytes.
+Long strings use a streaming polynomial modulo 2^57 - 13, unrolled to break the
+serial multiply chain. Both physical encodings feed the same code units, so content
+identity remains independent of encoding and rope partitions. The cached state fits
+beside the storage and content flags without enlarging the cell.
 
-A cached left prefix is a valid FNV continuation state. Hashing can stream only
-the appended right content; balancing preserves that prefix state when it changes
+The complete string length selects the algorithm. A cached prefix can continue only
+when its algorithm matches the complete string; crossing the short-string threshold
+rehashes the prefix. Content-preserving representation changes retain the cached hash.
+Native literal-switch hashing mirrors the runtime's algorithm and threshold.
+
+A cached left prefix using the same algorithm is a continuation state. Hashing can
+stream only the appended right content; balancing preserves that state when it changes
 the physical prefix edge. Arbitrary final child hashes are not independently
 composable. Hashing preserves storage and borrowed segment lifetimes. Equality
 and lexical ordering first recognize pointer identity. Equality may reject

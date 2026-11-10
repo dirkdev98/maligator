@@ -38,7 +38,7 @@ static_assert(_Alignof(MalStringUtf8) > 1, "encoding pointers must leave the pen
 typedef struct MalString {
     MalHeapHeader header;
     u32 length;
-    /** FNV modulo 2^57 preserves prefix continuation while flags share this word. */
+    /** Streaming content-hash state shares its word with storage and content flags. */
     u64 hash : 57;
     MalStringStorage storage : 3;
     u32 hash_valid : 1;

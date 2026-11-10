@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { nativeStringSwitchHash } from "../src/compiler/shared/native-string-switch.ts";
 import {
 	serializeCompilerArtifact,
 	deserializeCompilerArtifact,
@@ -64,6 +65,33 @@ const largeLabels = [
 ];
 
 describe("native literal string switch certificate", () => {
+	it.each([55, 63, 64, 65, 73, 128, 8192])(
+		"hashes %i UTF-16 units with exact modular arithmetic",
+		(length) => {
+			for (const wide of [false, true]) {
+				const units = Array.from({ length }, (_, index) =>
+					index % 13 === 0
+						? 0
+						: wide
+							? (index * 4051 + 0xd800) & 0xffff
+							: (index * 37) & 0xff,
+				);
+				let expected = length < 64 ? 0xcbf29ce484222325n : 0x1f29ce484222846n;
+				for (const unit of units) {
+					if (length < 64) {
+						expected =
+							((expected ^ BigInt(unit & 255)) * 0x100000001b3n) & 0x1ffffffffffffffn;
+						expected =
+							((expected ^ BigInt(unit >>> 8)) * 0x100000001b3n) & 0x1ffffffffffffffn;
+					} else
+						expected =
+							(expected * 0x100000001b3n + BigInt(unit) + 1n) % 0x1fffffffffffff3n;
+				}
+				expect(nativeStringSwitchHash(units)).toBe(Number(expected & 0xffffffffn));
+			}
+		},
+	);
+
 	it.each([
 		{ labels: ["yes", "no"], strategy: "direct" },
 		{ labels: ["", "a", "bb", "ccc", "dddd"], strategy: "length" },

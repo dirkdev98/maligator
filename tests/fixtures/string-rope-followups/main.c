@@ -21,12 +21,55 @@ extern const MalRuntimeImage mal_runtime_image;
     } while (0)
 
 static u64 reference_hash(const c16 *units, usize length) {
+    if (length >= 64) {
+        u64 hash = UINT64_C(0x1f29ce484222846);
+        for (usize i = 0; i < length; i++) {
+            hash = (u64) (((unsigned __int128) hash * UINT64_C(0x100000001b3)
+                + units[i] + 1) % UINT64_C(0x1fffffffffffff3));
+        }
+        return hash;
+    }
     u64 hash = 0xcbf29ce484222325;
     for (usize i = 0; i < length; i++) {
         hash = (hash ^ (u8) units[i]) * 0x100000001b3;
         hash = (hash ^ (u8) (units[i] >> 8)) * 0x100000001b3;
     }
     return hash & MAL_STRING_HASH_MASK;
+}
+
+static bool hash_algorithms_follow_string_length_and_encoding(MalVm *vm) {
+    c16 units[152];
+    MalValue roots[4];
+    for (usize i = 0; i < countof(roots); i++) roots[i] = mal_value_new_undefined();
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    for (usize encoding = 0; encoding < 2; encoding++) {
+        for (usize i = 0; i < countof(units); i++) {
+            units[i] = i % 13 == 0 ? 0
+                : encoding == 0 ? (c16) ('a' + i % 26)
+                : (c16) (i % 3 == 0 ? 0xd800 + i : 0x100 + i);
+        }
+        for (usize length = 55; length < 82; length++) {
+            for (usize split = 56; split < 66 && split < length; split++) {
+                MalString *left = mal_string_new_copy(&vm->heap, units, split);
+                roots[0] = mal_value_from_string(left);
+                CHECK(mal_string_hash(left) == reference_hash(units, split));
+                MalString *right = mal_string_new_copy(&vm->heap, units + split, length - split);
+                roots[1] = mal_value_from_string(right);
+                MalString *joined;
+                CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &joined));
+                roots[2] = mal_value_from_string(joined);
+                CHECK(mal_string_hash(joined) == reference_hash(units, length));
+                MalString *flat = mal_string_new_copy(&vm->heap, units, length);
+                roots[3] = mal_value_from_string(flat);
+                CHECK(mal_string_hash(flat) == mal_string_hash(joined));
+                (void) mal_string_code_units(flat);
+                CHECK(mal_string_hash(flat) == reference_hash(units, length));
+            }
+        }
+    }
+    mal_gc_unroot(&span);
+    return true;
 }
 
 static bool inspect_rope(const MalString *string, usize *height, usize *nodes) {
@@ -493,7 +536,8 @@ int main(void) {
 #endif
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    bool passed = short_chains_reuse_their_intermediate(&vm)
+    bool passed = hash_algorithms_follow_string_length_and_encoding(&vm)
+        && short_chains_reuse_their_intermediate(&vm)
         && unit_appends_keep_bounded_height(&vm);
     for (usize construction = 0; construction < 4 && passed; construction++) {
         passed = traversal_and_balancing(&vm, 257, construction)

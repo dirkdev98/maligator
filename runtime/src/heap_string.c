@@ -85,8 +85,65 @@ static void mal_string_init_inline(
     MAL_PERF_ADD(string_inline_code_units, length);
 }
 
+#define MAL_STRING_LONG_HASH_THRESHOLD 64
+#define MAL_STRING_HASH_PRIME (MAL_STRING_HASH_MASK - 12)
+#define MAL_STRING_HASH_LONG_SEED UINT64_C(0x1f29ce484222846)
+
+/* The prime fits the cached state and permits continuation across arbitrary
+ * segments. Reducing an unrolled polynomial breaks the serial multiply chain. */
+static u64 mal_string_hash_reduce(unsigned __int128 value) {
+    // The unrolled sum is below 2^115, so two folds leave less than twice the modulus.
+    u64 folded = (u64) (value & MAL_STRING_HASH_MASK) + (u64) (value >> 57) * 13;
+    u64 reduced = (folded & MAL_STRING_HASH_MASK) + (folded >> 57) * 13;
+    return reduced >= MAL_STRING_HASH_PRIME ? reduced - MAL_STRING_HASH_PRIME : reduced;
+}
+static u64 mal_string_hash_long_latin1(u64 hash, const u8 *units, usize length) {
+    usize index = 0;
+    for (; index + 8 <= length; index += 8) {
+        unsigned __int128 value = (unsigned __int128) hash * UINT64_C(0xd6aec795d5d91a);
+        value += (unsigned __int128) (units[index + 0] + 1) * UINT64_C(0x1b16d5e073e59cd);
+        value += (unsigned __int128) (units[index + 1] + 1) * UINT64_C(0x369b9b5aace703);
+        value += (unsigned __int128) (units[index + 2] + 1) * UINT64_C(0xe38beb4d458fd5);
+        value += (unsigned __int128) (units[index + 3] + 1) * UINT64_C(0x255ca396556721);
+        value += (unsigned __int128) (units[index + 4] + 1) * UINT64_C(0xa97b212768291f);
+        value += (unsigned __int128) (units[index + 5] + 1) * UINT64_C(0x366000682e329);
+        value += (unsigned __int128) (units[index + 6] + 1) * UINT64_C(0x100000001b3);
+        value += (unsigned __int128) (units[index + 7] + 1);
+        hash = mal_string_hash_reduce(value);
+    }
+    for (; index < length; index++) {
+        hash = mal_string_hash_reduce((unsigned __int128) hash * UINT64_C(0x100000001b3)
+            + units[index] + 1);
+    }
+    return hash;
+}
+
+static u64 mal_string_hash_long_utf16(u64 hash, const c16 *units, usize length) {
+    usize index = 0;
+    for (; index + 8 <= length; index += 8) {
+        unsigned __int128 value = (unsigned __int128) hash * UINT64_C(0xd6aec795d5d91a);
+        value += (unsigned __int128) (units[index + 0] + 1) * UINT64_C(0x1b16d5e073e59cd);
+        value += (unsigned __int128) (units[index + 1] + 1) * UINT64_C(0x369b9b5aace703);
+        value += (unsigned __int128) (units[index + 2] + 1) * UINT64_C(0xe38beb4d458fd5);
+        value += (unsigned __int128) (units[index + 3] + 1) * UINT64_C(0x255ca396556721);
+        value += (unsigned __int128) (units[index + 4] + 1) * UINT64_C(0xa97b212768291f);
+        value += (unsigned __int128) (units[index + 5] + 1) * UINT64_C(0x366000682e329);
+        value += (unsigned __int128) (units[index + 6] + 1) * UINT64_C(0x100000001b3);
+        value += (unsigned __int128) (units[index + 7] + 1);
+        hash = mal_string_hash_reduce(value);
+    }
+    for (; index < length; index++) {
+        hash = mal_string_hash_reduce((unsigned __int128) hash * UINT64_C(0x100000001b3)
+            + units[index] + 1);
+    }
+    return hash;
+}
+
 u64 mal_string_hash_code_units(const c16 *code_units, usize length) {
     MAL_PERF_ADD(string_hash_code_units, length);
+    if (length >= MAL_STRING_LONG_HASH_THRESHOLD) {
+        return mal_string_hash_long_utf16(MAL_STRING_HASH_LONG_SEED, code_units, length);
+    }
     u64 hash = 0xcbf29ce484222325;
 
     for (usize i = 0; i < length; i++) {
@@ -965,7 +1022,7 @@ MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, 
     return mal_string_new_dependent_resolved(heap, parent, offset, length);
 }
 
-static u64 mal_string_hash_continue(u64 hash, const MalString *string);
+static u64 mal_string_hash_continue(u64 hash, const MalString *string, bool long_hash);
 
 static MalString *mal_string_new_cons_node(MalHeap *heap, MalString *left, MalString *right) {
     usize length = left->length + right->length;
@@ -1201,8 +1258,11 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
     MalString *string = mal_string_join(heap, left, right);
     // Repeated prepends must not rehash a growing suffix; append-biased joins can carry the prefix.
     if (left->hash_valid && left->length > MAL_STRING_INLINE_CODE_UNITS &&
-        right->length <= left->length) {
-        string->hash = mal_string_hash_continue(left->hash, right);
+        right->length <= left->length &&
+        (left->length >= MAL_STRING_LONG_HASH_THRESHOLD) ==
+            (string->length >= MAL_STRING_LONG_HASH_THRESHOLD)) {
+        string->hash = mal_string_hash_continue(left->hash, right,
+            string->length >= MAL_STRING_LONG_HASH_THRESHOLD);
         string->hash_valid = true;
     }
     *out = string;
@@ -1494,8 +1554,13 @@ MalStringSegment mal_string_flat_segment_resolved(MalString *string) {
     return segment;
 }
 
-static u64 mal_string_hash_segment(u64 hash, const MalStringSegment *segment) {
+static u64 mal_string_hash_segment(u64 hash, const MalStringSegment *segment, bool long_hash) {
     MAL_PERF_ADD(string_hash_code_units, segment->length);
+    if (long_hash) {
+        return segment->latin1
+            ? mal_string_hash_long_latin1(hash, segment->latin1_units, segment->length)
+            : mal_string_hash_long_utf16(hash, segment->utf16_units, segment->length);
+    }
     if (segment->latin1) {
         // UTF-16 FNV hashes a zero high byte after each Latin-1 unit. XORing
         // zero is a no-op, so fold the two modular prime multiplies into one.
@@ -1516,11 +1581,11 @@ static u64 mal_string_hash_segment(u64 hash, const MalStringSegment *segment) {
     return hash;
 }
 
-static u64 mal_string_hash_continue(u64 hash, const MalString *string) {
+static u64 mal_string_hash_continue(u64 hash, const MalString *string, bool long_hash) {
     // Hashing cannot reenter or collect. Rope balance bounds the left recursion;
     // keeping the right walk iterative avoids GC-owned cursor bookkeeping.
     while (string->storage == MAL_STRING_STORAGE_CONS) {
-        hash = mal_string_hash_continue(hash, string->left);
+        hash = mal_string_hash_continue(hash, string->left, long_hash);
         string = string->right;
     }
     usize length = string->length;
@@ -1531,7 +1596,7 @@ static u64 mal_string_hash_continue(u64 hash, const MalString *string) {
         string = string->parent;
     }
     MalStringSegment segment = mal_string_leaf_segment(string, offset, length);
-    return mal_string_hash_segment(hash, &segment);
+    return mal_string_hash_segment(hash, &segment, long_hash);
 }
 
 u64 mal_string_hash_slow(const MalString *string) {
@@ -1541,14 +1606,16 @@ u64 mal_string_hash_slow(const MalString *string) {
     }
     MAL_PERF_COUNT(string_hash_computes);
     if (string->storage == MAL_STRING_STORAGE_DEPENDENT) MAL_PERF_COUNT(string_hash_dependent_computes);
-    u64 hash = 0xcbf29ce484222325;
+    bool long_hash = string->length >= MAL_STRING_LONG_HASH_THRESHOLD;
+    u64 hash = long_hash ? MAL_STRING_HASH_LONG_SEED : UINT64_C(0xcbf29ce484222325);
     const MalString *suffix = string;
-    if (string->storage == MAL_STRING_STORAGE_CONS && string->left->hash_valid) {
-        // A final FNV state can continue with suffix units, not another final hash.
+    if (string->storage == MAL_STRING_STORAGE_CONS && string->left->hash_valid &&
+        (!long_hash || string->left->length >= MAL_STRING_LONG_HASH_THRESHOLD)) {
+        // Continue the cached state with suffix units only when both use the same hash.
         hash = string->left->hash;
         suffix = string->right;
     }
-    hash = mal_string_hash_continue(hash, suffix);
+    hash = mal_string_hash_continue(hash, suffix, long_hash);
     MalString *mutable = (MalString *) string;
     mutable->hash = hash & MAL_STRING_HASH_MASK;
     mutable->hash_valid = true;
