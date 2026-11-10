@@ -17,6 +17,10 @@
 #include "intl_object.h"
 #include "intrinsics.h"
 #include "mal_i18n.h"
+#if MAL_TEMPORAL && MAL_INTL_HAS_DURATION_FORMAT
+#include "temporal_object.h"
+#include "temporal_rs/Duration.h"
+#endif
 #include "shape.h"
 #include "value_ops.h"
 #include "utf16.h"
@@ -3526,49 +3530,61 @@ static MalValue intl_duration_format_constructor(MalVm *vm, MalValue this_value,
     MalValue locales = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
 
+    MalValue roots[] = {locales, options, mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    u8 styles[10], displays[10];
+    MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_DURATION_FORMAT_PROTOTYPE);
+    if (prototype == nullptr) goto done;
+    roots[2] = mal_value_from_object(prototype);
     MalString *locale = intl_resolve_locale(vm, locales);
     if (locale == nullptr) {
-        return mal_value_new_undefined();
+        goto done;
     }
+    roots[3] = mal_value_from_string(locale);
     if (!intl_get_options_object(vm, options, &options)) {
-        return mal_value_new_undefined();
+        goto done;
     }
+    roots[1] = options;
     if (!intl_check_locale_matcher(vm, options)) {
-        return mal_value_new_undefined();
+        goto done;
     }
 
     bool present;
     MalString *numbering_system = nullptr;
     if (!intl_option_string(vm, options, "numberingSystem", &numbering_system, &present)) {
-        return mal_value_new_undefined();
+        goto done;
     }
+    if (present) roots[4] = mal_value_from_string(numbering_system);
     if (present && !intl_is_valid_unicode_type(numbering_system)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid numberingSystem");
-        return mal_value_new_undefined();
+        goto done;
     }
 
     static const char *const BASE_STYLES[] = {"long", "short", "narrow", "digital"};
     bool ok;
     MalString *base = intl_option_enum(vm, options, "style", BASE_STYLES, countof(BASE_STYLES), "short", &ok);
     if (!ok) {
-        return mal_value_new_undefined();
+        goto done;
     }
+    roots[5] = mal_value_from_string(base);
     bool digital = intl_string_eq_ascii(base, "digital");
     const char *base_cstr = digital ? "digital" : (intl_string_eq_ascii(base, "long") ? "long" : (intl_string_eq_ascii(base, "narrow") ? "narrow" : "short"));
 
     MalObject *resolved = mal_intrinsic_new_object(vm);
+    roots[6] = mal_value_from_object(resolved);
     intl_resolved_set(vm, resolved, "locale", mal_value_from_string(locale));
     intl_resolved_set(vm, resolved, "numberingSystem", mal_value_from_string(numbering_system != nullptr ? numbering_system : mal_intrinsic_ascii(vm, "latn")));
     intl_resolved_set(vm, resolved, "style", mal_value_from_string(base));
 
-    // GetDurationUnitOptions per unit, applying the spec defaults + validation.
     const char *prev_style = nullptr;
     for (i32 i = 0; i < 10; i++) {
         const char *const *allowed = DURATION_UNITS[i].group == 0 ? DUR_STYLES_DATE : (DURATION_UNITS[i].group == 1 ? DUR_STYLES_TIME : DUR_STYLES_SUBSEC);
         usize allowed_n = DURATION_UNITS[i].group == 0 ? countof(DUR_STYLES_DATE) : (DURATION_UNITS[i].group == 1 ? countof(DUR_STYLES_TIME) : countof(DUR_STYLES_SUBSEC));
         const char *style = dur_get_style(vm, options, DURATION_UNITS[i].unit, allowed, allowed_n, &ok);
         if (!ok) {
-            return mal_value_new_undefined();
+            goto done;
         }
         const char *display_default = "always";
         if (style == nullptr) {
@@ -3579,10 +3595,11 @@ static MalValue intl_duration_format_constructor(MalVm *vm, MalValue this_value,
                 }
                 style = DURATION_UNITS[i].digital_default;
             } else {
-                display_default = "auto";
                 if (dur_str_eq(prev_style, "fractional") || dur_str_eq(prev_style, "numeric") || dur_str_eq(prev_style, "2-digit")) {
+                    display_default = (i == 5 || i == 6) ? "always" : "auto";
                     style = "numeric";
                 } else {
+                    display_default = "auto";
                     style = base_cstr;
                 }
             }
@@ -3591,184 +3608,202 @@ static MalValue intl_duration_format_constructor(MalVm *vm, MalValue this_value,
             style = "fractional";
             display_default = "auto";
         }
-        // GetOption(options, "<unit>Display", «auto, always», display_default).
         static const char *const DISPLAYS[] = {"auto", "always"};
         const char *display = dur_get_style(vm, options, DURATION_UNITS[i].display, DISPLAYS, countof(DISPLAYS), &ok);
         if (!ok) {
-            return mal_value_new_undefined();
+            goto done;
         }
         if (display == nullptr) {
             display = display_default;
         }
         if (dur_str_eq(display, "always") && dur_str_eq(style, "fractional")) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "fractional unit cannot be displayed always");
-            return mal_value_new_undefined();
+            goto done;
         }
         if (dur_str_eq(prev_style, "fractional") && !dur_str_eq(style, "fractional")) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "a unit after a fractional unit must be fractional");
-            return mal_value_new_undefined();
+            goto done;
         }
         if (dur_str_eq(prev_style, "numeric") || dur_str_eq(prev_style, "2-digit")) {
             if (!dur_str_eq(style, "fractional") && !dur_str_eq(style, "numeric") && !dur_str_eq(style, "2-digit")) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid unit style after numeric");
-                return mal_value_new_undefined();
+                goto done;
             }
-            if (i == 5 || i == 6) { // minutes, seconds
+            if (i == 5 || i == 6) {
                 style = "2-digit";
             }
         }
-        intl_resolved_set(vm, resolved, DURATION_UNITS[i].unit, mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) style)));
+        styles[i] = dur_str_eq(style, "long") ? 0 : dur_str_eq(style, "short") ? 1 : dur_str_eq(style, "narrow") ? 2 : dur_str_eq(style, "numeric") ? 3 : dur_str_eq(style, "2-digit") ? 4 : 5;
+        displays[i] = dur_str_eq(display, "always");
+        intl_resolved_set(vm, resolved, DURATION_UNITS[i].unit, mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) (dur_str_eq(style, "fractional") ? "numeric" : style))));
         intl_resolved_set(vm, resolved, DURATION_UNITS[i].display, mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) display)));
         prev_style = style;
     }
 
-    // GetNumberOption(options, "fractionalDigits", 0, 9, undefined).
     i32 fractional_digits = -1;
     MalValue fd_value;
-    if (mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "fractionalDigits"), &fd_value) && !mal_value_is_undefined(fd_value)) {
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "fractionalDigits"), &fd_value)) goto done;
+    if (!mal_value_is_undefined(fd_value)) {
+        roots[8] = fd_value;
         f64 fd;
         if (!mal_vm_to_number(vm, fd_value, &fd)) {
-            return mal_value_new_undefined();
+            goto done;
         }
         if (isnan(fd) || fd < 0.0 || fd > 9.0) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "fractionalDigits out of range");
-            return mal_value_new_undefined();
+            goto done;
         }
         fractional_digits = (i32) floor(fd);
         intl_resolved_set(vm, resolved, "fractionalDigits", mal_value_from_i32(fractional_digits));
     }
 
-    MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_DURATION_FORMAT_PROTOTYPE);
-    if (prototype == nullptr) {
-        return mal_value_new_undefined();
+    MalIntlObject *df = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_DURATION_FORMAT, nullptr, roots[6]);
+    roots[7] = mal_value_from_intl_object(df);
+    usize locale_len = mal_string_length(locale);
+    usize numbering_len = numbering_system == nullptr ? 0 : mal_string_length(numbering_system);
+    usize needed;
+    if (!mal_checked_size_add(locale_len, numbering_len, SIZE_MAX - 2, &needed)) {
+        mal_vm_throw_allocation_error(vm);
+        goto done;
     }
-    MalIntlObject *df = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_DURATION_FORMAT, nullptr, mal_value_from_object(resolved));
-    return mal_value_from_intl_object(df);
+    needed += 2;
+    byte stack[256];
+    byte *bytes = needed <= sizeof(stack) ? stack : malloc(needed);
+    if (bytes == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        goto done;
+    }
+    byte *numbering = bytes + locale_len + 1;
+    bool ascii = intl_tag_utf8(locale, bytes, locale_len + 1, &locale_len);
+    if (numbering_system != nullptr) ascii = ascii && intl_tag_utf8(numbering_system, numbering, numbering_len + 1, &numbering_len);
+    MalI18nDurationResolved native = {0};
+    if (ascii) df->handle = mal_i18n_duration_new(bytes, locale_len, numbering, numbering_len, digital ? 3 : intl_string_eq_ascii(base, "long") ? 0 : intl_string_eq_ascii(base, "narrow") ? 2 : 1, fractional_digits, styles, displays, &native);
+    if (df->handle != nullptr) mal_heap_charge_external(&vm->heap, native.heap_bytes);
+    if (bytes != stack) free(bytes);
+    if (df->handle == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not create duration formatter");
+        goto done;
+    }
+    roots[8] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.locale, native.locale_len));
+    intl_resolved_set(vm, resolved, "locale", roots[8]);
+    roots[8] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.numbering, native.numbering_len));
+    intl_resolved_set(vm, resolved, "numberingSystem", roots[8]);
+    if (native.two_digit_hours && styles[4] == 3) intl_resolved_set(vm, resolved, "hours", mal_value_from_string(mal_intrinsic_ascii(vm, "2-digit")));
+    result = roots[7];
+ done:
+    mal_gc_unroot(&root);
+    return result;
 }
 
-/**
- * ToDurationRecord(input): read the 10 duration fields off `input` (which must be
- * an object), each via ToIntegerIfIntegral, enforcing a single sign. Fills
- * units[10] (magnitudes) + *sign_negative. Returns false with a pending throw.
- */
-static bool intl_to_duration_record(MalVm *vm, MalValue input, u64 *units, bool *sign_negative) {
-    if (!mal_value_is_object(input)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "duration must be an object");
+// ToIntegerIfIntegral is immediate; mixed-sign and aggregate bounds follow all reads.
+static bool intl_to_duration_record(MalVm *vm, MalValue input, f64 *units) {
+    if (mal_value_is_string(input)) {
+        MalString *text = mal_value_to_string(input);
+        if (mal_i18n_duration_parse(mal_string_code_units(text), mal_string_length(text), units) == 0) return true;
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid duration string");
         return false;
     }
+#if MAL_TEMPORAL
+    if (mal_value_is_temporal_object(input)) {
+        MalTemporalObject *object = mal_value_to_temporal_object(input);
+        if (object->kind == MAL_TEMPORAL_DURATION && object->handle != nullptr) {
+            units[0] = (f64) temporal_rs_Duration_years(object->handle);
+            units[1] = (f64) temporal_rs_Duration_months(object->handle);
+            units[2] = (f64) temporal_rs_Duration_weeks(object->handle);
+            units[3] = (f64) temporal_rs_Duration_days(object->handle);
+            units[4] = (f64) temporal_rs_Duration_hours(object->handle);
+            units[5] = (f64) temporal_rs_Duration_minutes(object->handle);
+            units[6] = (f64) temporal_rs_Duration_seconds(object->handle);
+            units[7] = (f64) temporal_rs_Duration_milliseconds(object->handle);
+            units[8] = temporal_rs_Duration_microseconds(object->handle);
+            units[9] = temporal_rs_Duration_nanoseconds(object->handle);
+            return true;
+        }
+    }
+#endif
+    if (!mal_value_is_object(input)) {
+        mal_vm_throw_error(vm, mal_value_is_string(input) ? MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE : MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "duration must be an object");
+        return false;
+    }
+    MalValue roots[] = {input, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool result = false;
     bool any = false;
-    i32 sign = 0;
-    for (i32 i = 0; i < 10; i++) {
-        units[i] = 0;
-        MalValue v;
-        if (!mal_vm_get_property(vm, input, mal_intrinsic_string_key(vm, DURATION_UNITS[i].unit), &v)) {
-            return false;
-        }
-        if (mal_value_is_undefined(v)) {
-            continue;
-        }
+    static const u8 order[] = {3, 4, 8, 7, 5, 1, 9, 6, 2, 0};
+    memset(units, 0, 10 * sizeof(f64));
+    for (usize property = 0; property < countof(order); property++) {
+        u8 unit = order[property];
+        if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, DURATION_UNITS[unit].unit), &roots[1])) goto done;
+        if (mal_value_is_undefined(roots[1])) continue;
         any = true;
-        f64 d;
-        if (!mal_vm_to_number(vm, v, &d)) {
-            return false;
-        }
-        if (!isfinite(d) || floor(d) != d) {
+        f64 value;
+        if (!mal_vm_to_number(vm, roots[1], &value)) goto done;
+        if (!isfinite(value) || floor(value) != value) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "duration field must be an integer");
-            return false;
+            goto done;
         }
-        if (d < 0.0) {
-            if (sign > 0) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "duration fields must have a consistent sign");
-                return false;
-            }
-            sign = -1;
-        } else if (d > 0.0) {
-            if (sign < 0) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "duration fields must have a consistent sign");
-                return false;
-            }
-            sign = 1;
-        }
-        units[i] = (u64) fabs(d);
+        units[unit] = value;
     }
     if (!any) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "duration must have at least one field");
-        return false;
+        goto done;
     }
-    *sign_negative = sign < 0;
-    return true;
+    result = true;
+ done:
+    mal_gc_unroot(&root);
+    return result;
 }
 
-static MalValue intl_duration_format_do(MalVm *vm, MalIntlObject *df, MalValue duration_arg) {
-    u64 units[10];
-    bool sign_negative;
-    if (!intl_to_duration_record(vm, duration_arg, units, &sign_negative)) {
-        return mal_value_new_undefined();
+static MalValue intl_duration_format_result(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool to_parts) {
+    MalIntlObject *df;
+    if (!intl_this(vm, this_value, MAL_INTL_DURATION_FORMAT, &df, "Intl.DurationFormat method called on incompatible receiver")) return mal_value_new_undefined();
+    MalValue roots[] = {this_value, arg_count >= 1 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    byte stack[512];
+    byte *out = stack;
+    f64 units[10];
+    if (!intl_to_duration_record(vm, roots[1], units)) goto done;
+    i32 n = mal_i18n_duration_format(df->handle, units, out, sizeof(stack));
+    if (n < 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, n == -2 ? "duration is out of range or has inconsistent signs" : "could not format duration");
+        goto done;
     }
-    MalString *locale = intl_data_string(vm, df->data, "locale");
-    MalString *style = intl_data_string(vm, df->data, "style");
-    i32 base_style = 1; // short
-    if (style != nullptr) {
-        if (intl_string_eq_ascii(style, "long")) {
-            base_style = 0;
-        } else if (intl_string_eq_ascii(style, "narrow")) {
-            base_style = 2;
-        } else if (intl_string_eq_ascii(style, "digital")) {
-            base_style = 3;
+    if (n > (i32) sizeof(stack)) {
+        out = malloc((usize) n);
+        if (out == nullptr) { mal_vm_throw_allocation_error(vm); goto done; }
+        i32 written = mal_i18n_duration_format(df->handle, units, out, n);
+        if (written != n) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format duration");
+            goto done;
         }
     }
-    i32 fractional_digits = intl_data_int(vm, df->data, "fractionalDigits", -1);
-
-    byte locale_buf[160];
-    usize locale_len = 0;
-    if (locale != nullptr) {
-        intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len);
-    }
-    byte out[512];
-    i32 n = mal_i18n_duration_format(locale_buf, locale_len, base_style, fractional_digits, sign_negative ? 1 : 0, units, out, (i32) sizeof(out));
-    if (n < 0) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format duration");
-        return mal_value_new_undefined();
-    }
-    if (n <= (i32) sizeof(out)) {
-        return intl_string_from_utf8(vm, out, (usize) n);
-    }
-    byte *big = malloc((usize) n);
-    mal_i18n_duration_format(locale_buf, locale_len, base_style, fractional_digits, sign_negative ? 1 : 0, units, big, n);
-    MalValue result = intl_string_from_utf8(vm, big, (usize) n);
-    free(big);
+    roots[2] = intl_string_from_utf8(vm, out, (usize) n);
+    if (!to_parts) { result = roots[2]; goto done; }
+    MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
+    roots[3] = mal_value_from_array_object(parts);
+    u32 index = 0;
+    // Structured unit labels require annotations from the underlying unit patterns.
+    if (n > 0) intl_parts_push(vm, parts, &index, "literal", roots[2]);
+    result = roots[3];
+ done:
+    if (out != stack) free(out);
+    mal_gc_unroot(&root);
     return result;
 }
 
 static MalValue intl_duration_format_format(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
     (void) nt;
     (void) cl;
-    MalIntlObject *df;
-    if (!intl_this(vm, this_value, MAL_INTL_DURATION_FORMAT, &df, "Intl.DurationFormat.prototype.format called on incompatible receiver")) {
-        return mal_value_new_undefined();
-    }
-    return intl_duration_format_do(vm, df, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    return intl_duration_format_result(vm, this_value, args, arg_count, false);
 }
 
 static MalValue intl_duration_format_format_to_parts(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
     (void) nt;
     (void) cl;
-    MalIntlObject *df;
-    if (!intl_this(vm, this_value, MAL_INTL_DURATION_FORMAT, &df, "Intl.DurationFormat.prototype.formatToParts called on incompatible receiver")) {
-        return mal_value_new_undefined();
-    }
-    MalValue formatted = intl_duration_format_do(vm, df, arg_count >= 1 ? args[0] : mal_value_new_undefined());
-    if (!mal_value_is_string(formatted)) {
-        return mal_value_new_undefined();
-    }
-    // Best-effort: a single literal part (exact part decomposition needs ICU
-    // field positions, which the shim does not yet expose).
-    MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
-    u32 idx = 0;
-    if (mal_string_length(mal_value_to_string(formatted)) > 0) {
-        intl_parts_push(vm, parts, &idx, "literal", formatted);
-    }
-    return mal_value_from_array_object(parts);
+    return intl_duration_format_result(vm, this_value, args, arg_count, true);
 }
 
 static MalValue intl_duration_format_resolved_options(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {

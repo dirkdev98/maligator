@@ -35,6 +35,7 @@ tests/native/ffi-counted-strings.test.ts
 tests/native/ffi-string-input.test.ts
 tests/native/intl-list-format.test.ts
 tests/native/intl-relative-time.test.ts
+tests/native/intl-duration.test.ts
 tests/native/ffi-globals.test.ts
 tests/native/ffi-aligned-values.test.ts
 tests/native/ffi-const-results.test.ts

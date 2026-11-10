@@ -404,11 +404,11 @@ contracts or investigates costs still visible after the string follow-ups.
 
 - [ ] Finish Intl NumberFormat style, notation, rounding and numeric parts; DateTimeFormat
       option/calendar/time-zone selection, parts and interval fields; and DurationFormat
-      resolved unit styles, visibility, sign and parts. Keep reusable native plans and
+      structured unit and numeric parts. Keep reusable native plans and
       measure constructor cost, steady-state formatting and retained memory together.
 
-- [ ] Generate pinned ICU decimal digit and symbol data for the remaining numbering
-      systems and locale/system combinations. Preserve per-service data selection and
+- [ ] Generate decimal symbol data for the remaining locale/numbering-system
+      combinations. Preserve per-service data selection and
       report actual fallback; do not substitute another language's punctuation.
 
 - [ ] Cover the conservative stack scan's single-owner env walk with a regression

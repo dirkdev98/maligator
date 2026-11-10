@@ -180,6 +180,82 @@
 			],
 			"methods": ["Intl.RelativeTimeFormat.prototype.format"],
 			"features": ["intl-relative-time-format"]
+		},
+		{
+			"id": "intl-duration-text",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-duration-format",
+			"category": "api-builtins",
+			"mechanisms": ["duration-format", "persistent-formatters", "exact-duration-fields"],
+			"inputShape": "Reused English long formatter with rotating hour, minute and second fields.",
+			"unit": "formatted durations",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_duration.rs",
+			"fixture": "cases/intl-duration-text.mjs",
+			"controls": [
+				"intl-duration-digital",
+				"intl-duration-construct",
+				"intl-duration-all-units"
+			],
+			"methods": ["Intl.DurationFormat.prototype.format"],
+			"features": ["intl-duration-format"]
+		},
+		{
+			"id": "intl-duration-digital",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-duration-format",
+			"category": "api-builtins",
+			"mechanisms": ["duration-format", "persistent-formatters", "exact-duration-fields"],
+			"inputShape": "Reused English digital formatter with rotating hour, minute and second fields.",
+			"unit": "formatted durations",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_duration.rs",
+			"fixture": "cases/intl-duration-digital.mjs",
+			"controls": [
+				"intl-duration-text",
+				"intl-duration-construct",
+				"intl-duration-all-units"
+			],
+			"methods": ["Intl.DurationFormat.prototype.format"],
+			"features": ["intl-duration-format"]
+		},
+		{
+			"id": "intl-duration-construct",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-duration-format",
+			"category": "api-builtins",
+			"mechanisms": ["duration-format", "persistent-formatters", "exact-duration-fields"],
+			"inputShape": "Fresh English long formatter and one complete duration render per operation.",
+			"unit": "formatted durations",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_duration.rs",
+			"fixture": "cases/intl-duration-construct.mjs",
+			"controls": [
+				"intl-duration-text",
+				"intl-duration-digital",
+				"intl-duration-all-units"
+			],
+			"methods": ["Intl.DurationFormat.prototype.format"],
+			"features": ["intl-duration-format"]
+		},
+		{
+			"id": "intl-duration-all-units",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-duration-format",
+			"category": "api-builtins",
+			"mechanisms": ["duration-format", "persistent-formatters", "exact-duration-fields"],
+			"inputShape": "Reused English long formatter rendering every duration unit.",
+			"unit": "formatted durations",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_duration.rs",
+			"fixture": "cases/intl-duration-all-units.mjs",
+			"controls": [
+				"intl-duration-text",
+				"intl-duration-digital",
+				"intl-duration-construct"
+			],
+			"methods": ["Intl.DurationFormat.prototype.format"],
+			"features": ["intl-duration-format"]
 		}
 	]
 }

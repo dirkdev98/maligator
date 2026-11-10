@@ -1,6 +1,37 @@
 const collect = globalThis.__mal_collect_garbage ?? globalThis.gc ?? (() => {});
 
 if (process.env.RELATIVE_SCENARIO === "rounding") {
+	const uppercase = new Intl.RelativeTimeFormat("en", {
+		numberingSystem: "ARAB",
+	});
+	if (
+		uppercase.resolvedOptions().numberingSystem !== "arab" ||
+		uppercase.format(12, "day") !==
+			new Intl.RelativeTimeFormat("en", { numberingSystem: "arab" }).format(12, "day")
+	)
+		throw new Error("numbering option is not canonicalized");
+
+	for (const [system, zero] of [
+		["fullwide", 0xff10],
+		["mathsans", 0x1d7e2],
+		["ahom", 0x11730],
+	]) {
+		const formatter = new Intl.RelativeTimeFormat("en", { numberingSystem: system });
+		const expected =
+			"in " +
+			Array.from("1,234,567,890", (ch) =>
+				ch >= "0" && ch <= "9" ? String.fromCodePoint(zero + Number(ch)) : ch,
+			).join("") +
+			" seconds";
+		if (
+			formatter.format(1234567890, "second") !== expected ||
+			formatter
+				.formatToParts(1234567890, "second")
+				.map((part) => part.value)
+				.join("") !== expected
+		)
+			throw new Error("supplementary decimal digits lost");
+	}
 	const cases = [
 		[Number.MIN_VALUE, "always", "in 0 days"],
 		[-Number.MIN_VALUE, "auto", "0 days ago"],
@@ -48,7 +79,10 @@ if (process.env.RELATIVE_SCENARIO === "rounding") {
 				});
 				cursor += length;
 			}
-			expected.push({ type: "literal", value: value < 0 ? " years ago" : " years" });
+			expected.push({
+				type: "literal",
+				value: value < 0 ? " years ago" : " years",
+			});
 			if (formatter.format(value, "year") !== expected.map((part) => part.value).join(""))
 				throw new Error("large finite integer lost precision");
 			const parts = formatter.formatToParts(value, "years");

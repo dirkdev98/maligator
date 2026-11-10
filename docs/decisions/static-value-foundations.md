@@ -186,6 +186,26 @@ retain receiver/argument coercion before target locale validation. Wire loading 
 the ASCII locale, option bits and registers; packed option bits preserve the 20-byte
 VM instruction layout.
 
+Intl formatter objects own their reusable native plans. Option coercion and
+constructor prototype lookup stay in the C runtime; Rust retains only immutable
+configuration and bundled locale data. Native allocations attach to a rooted owner
+before charging the process budget, and finalization releases the same owned bytes.
+Provider fallback does not establish locale availability.
+
+Decimal digits come from checksum-pinned CLDR supplemental numbering-system data.
+`scripts/generate-intl-digit-data.ts` generates the Rust table from
+`numberingSystems.json`. Numeric systems use their published scalar sequences;
+algorithmic systems require a separate formatting algorithm. Symbols continue to
+come from the ICU locale provider, so missing symbol combinations keep that provider's
+fallback rather than borrowing punctuation from another language.
+
+Duration records retain their original Number values across the ABI. Per-field
+conversion follows property order, while mixed-sign and aggregate validation follow
+all property reads. Rust checks bounds before integer conversion and sums exact
+nanoseconds in wide integers, since floating-point scaling can misclassify valid
+records and subseconds can exceed a machine word. Formatting combines fractional
+units before truncation and reuses the constructor's resolved unit styles.
+
 Primitive-string parsing shares the runtime's UTF-16 parsing kernels. Numeric radices
 and BigInt widths use direct numeric entries, guarded when their registers remain
 boxed. Nonprimitive inputs retain ordered coercion through the known operation.

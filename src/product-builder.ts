@@ -42,6 +42,7 @@ export const PRODUCT_RUNTIME_ASSET_INCLUDE = [
 	"vendor/node/LICENSE",
 	"vendor/sqlite/**",
 	"vendor/unicode/LICENSE.txt",
+	"vendor/cldr/LICENSE",
 ];
 
 function productRuntimeConfig(primordials: "locked" | "mutable") {

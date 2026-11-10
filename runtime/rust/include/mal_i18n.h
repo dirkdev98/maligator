@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 /* Identifies the flat transport contract shared with lib.rs. */
-#define MAL_I18N_ABI_VERSION 8u
+#define MAL_I18N_ABI_VERSION 9u
 
 /* Status codes for fallible entry points; mapped to JS exceptions by the C side. */
 typedef enum MalI18nStatus {
@@ -145,12 +145,22 @@ size_t mal_i18n_segment(int32_t granularity, const uint16_t *text, size_t text_l
  * Fallback option), or -2 when the code is structurally invalid. */
 int32_t mal_i18n_display_name(const uint8_t *locale, size_t locale_len, int32_t kind, int32_t style, const uint8_t *code, size_t code_len, uint8_t *out, int32_t out_cap);
 
-/* ---- Intl.DurationFormat ----
- * base_style: 0 long, 1 short, 2 narrow, 3 digital. fractional_digits: -1 for
- * "show all", else a fixed count. units is 10 u64s: years, months, weeks, days,
- * hours, minutes, seconds, milliseconds, microseconds, nanoseconds. Writes UTF-8
- * into out; returns the full length, or -1. */
-int32_t mal_i18n_duration_format(const uint8_t *locale, size_t locale_len, int32_t base_style, int32_t fractional_digits, int32_t sign_negative, const uint64_t *units, uint8_t *out, int32_t out_cap);
+/* Intl.DurationFormat: styles long/short/narrow/numeric/2-digit/fractional = 0..5,
+ * display auto/always = 0/1. The metadata pointers live until _free.
+ * Original Number values cross as doubles; validation precedes integer conversion. */
+typedef struct MalI18nDurationResolved {
+    const uint8_t *locale;
+    size_t locale_len;
+    const uint8_t *numbering;
+    size_t numbering_len;
+    size_t heap_bytes;
+    uint8_t two_digit_hours;
+} MalI18nDurationResolved;
+void *mal_i18n_duration_new(const uint8_t *locale, size_t locale_len, const uint8_t *numbering, size_t numbering_len, int32_t style, int32_t fractional_digits, const uint8_t *styles, const uint8_t *displays, MalI18nDurationResolved *resolved);
+size_t mal_i18n_duration_free(void *handle);
+int32_t mal_i18n_duration_parse(const uint16_t *text, size_t length, double *out);
+/* Returns the full UTF-8 length, -2 for an invalid record, -1 for a data error. */
+int32_t mal_i18n_duration_format(void *handle, const double *units, uint8_t *out, int32_t out_cap);
 
 /* ---- Intl.RelativeTimeFormat ---- */
 typedef struct MalI18nRelativeResolved {

@@ -127,10 +127,17 @@ describe("runtime-gap case catalog", () => {
 				readonly preset: string;
 				readonly samples: number;
 				readonly targetNodeMs: number;
-				readonly cases: ReadonlyArray<{ readonly id: string; readonly suite: string }>;
+				readonly cases: ReadonlyArray<{
+					readonly id: string;
+					readonly suite: string;
+				}>;
 			};
 			const catalog = loadRuntimeGapCatalog();
-			expect(plan).toMatchObject({ preset: "quick", samples: 3, targetNodeMs: 20 });
+			expect(plan).toMatchObject({
+				preset: "quick",
+				samples: 3,
+				targetNodeMs: 20,
+			});
 			expect(plan.cases.map(({ id }) => id)).toEqual(catalog.presets.quick);
 			expect(plan.cases.every(({ suite }) => suite === "runtime")).toBe(true);
 			expect(existsSync(output)).toBe(false);
@@ -173,7 +180,10 @@ describe("runtime-gap case catalog", () => {
 			),
 		) as {
 			readonly preset: string | null;
-			readonly cases: ReadonlyArray<{ readonly id: string; readonly owner: string }>;
+			readonly cases: ReadonlyArray<{
+				readonly id: string;
+				readonly owner: string;
+			}>;
 		};
 		expect(plan.preset).toBeNull();
 		expect(plan.cases.map(({ id }) => id)).toEqual(
@@ -255,7 +265,9 @@ runRuntimeGapCase("allocation-snapshot", run, verify);
 `,
 			);
 			const output = JSON.parse(
-				execFileSync(process.execPath, [fixture, "1", "1"], { encoding: "utf8" }),
+				execFileSync(process.execPath, [fixture, "1", "1"], {
+					encoding: "utf8",
+				}),
 			) as { readonly allocatedBytes: number };
 			expect(output.allocatedBytes).toBe(10);
 		} finally {
@@ -532,6 +544,7 @@ runRuntimeGapCase("allocation-snapshot", run, verify);
 		["primordial-promise-batch-results", false, []],
 		["intl-list-format-reuse", false, ["list-format"]],
 		["intl-relative-time-reuse", false, ["relative-time-format"]],
+		["intl-duration-text", false, ["duration-format"]],
 	] as const)(
 		"clones %s with runnable work and its required features",
 		(sourceId, regexp, intlFeatures) => {
@@ -626,7 +639,11 @@ runRuntimeGapCase("allocation-snapshot", run, verify);
 		writeFileSync(path.join(directory, "case.mjs"), original);
 		writeFileSync(
 			path.join(directory, "experiment.json"),
-			JSON.stringify({ schema: 1, id, case: { ...descriptor, fixture: "case.mjs" } }),
+			JSON.stringify({
+				schema: 1,
+				id,
+				case: { ...descriptor, fixture: "case.mjs" },
+			}),
 		);
 		try {
 			expect(() =>

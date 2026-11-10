@@ -25,6 +25,7 @@ jiff = { version = "0.2.42", features = ["tzdb-bundle-always"] }
 # result stringification use icu_locale and writeable in every Intl build.
 icu_locale = { version = "2.4.0", optional = true }
 icu_provider = { version = "2.4.0", optional = true }
+fixed_decimal = { version = "0.7.3", optional = true }
 icu_collator = { version = "2.4.0", optional = true }
 icu_decimal = { version = "2.4.0", optional = true, features = ["alloc"] }
 icu_datetime = { version = "2.4.0", optional = true }
@@ -40,6 +41,7 @@ icu_experimental = { version = "0.7.0", optional = true }
 writeable = { version = "0.6.4", optional = true }
 # temporal_rs joins here for the Temporal global.
 temporal_capi = { version = "0.2.6", default-features = false, optional = true }
+temporal_rs = { version = "0.2.6", default-features = false, optional = true }
 # regress: the ECMAScript RegExp engine (the one Boa uses). Lives in this crate
 # rather than its own because two Rust staticlibs can't co-link (duplicate std
 # panic-runtime symbols). The `utf16` feature matches over &[u16] with no UTF-8
@@ -163,8 +165,15 @@ intl-relative-time-format = [
 ]
 intl-duration-format = [
 	"intl",
-	"intl-number-format",
-	"intl-plural-rules",
+	"dep:temporal_rs",
+	"dep:fixed_decimal",
+	"dep:icu_decimal",
+	"icu_decimal/compiled_data",
+	"dep:icu_plurals",
+	"icu_plurals/compiled_data",
+	"dep:icu_list",
+	"icu_list/compiled_data",
+	"dep:icu_provider",
 	"dep:icu_experimental",
 	"icu_experimental/compiled_data",
 ]

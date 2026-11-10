@@ -868,6 +868,7 @@ dependencies = [
  "brotli-decompressor",
  "chacha20",
  "ctr",
+ "fixed_decimal",
  "flate2",
  "ghash",
  "icu_calendar",
@@ -888,6 +889,7 @@ dependencies = [
  "rust-argon2",
  "rustls",
  "temporal_capi",
+ "temporal_rs",
  "writeable",
 ]
 

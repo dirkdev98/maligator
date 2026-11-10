@@ -59,7 +59,7 @@ pub mod crypto_cipher;
 pub mod crypto_pkey;
 
 /// Identifies the flat transport contract shared with `mal_i18n.h`.
-pub const MAL_I18N_ABI_VERSION: u32 = 8;
+pub const MAL_I18N_ABI_VERSION: u32 = 9;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]
@@ -75,6 +75,10 @@ pub extern "C" fn mal_i18n_abi_version() -> u32 {
 // visibility, so the C side links them exactly as before when the feature is on.
 #[cfg(feature = "intl-relative-time-format")]
 mod intl_relative_time;
+#[cfg(feature = "intl-duration-format")]
+mod intl_duration;
+#[cfg(any(feature = "intl-relative-time-format", feature = "intl-duration-format"))]
+mod intl_decimal;
 
 #[cfg(feature = "intl")]
 mod intl {
@@ -1232,67 +1236,6 @@ pub unsafe extern "C" fn mal_i18n_display_name(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Intl.DurationFormat — icu_experimental::duration.
-// ---------------------------------------------------------------------------
-
-/// Format a duration for `locale`. base_style: 0 long, 1 short, 2 narrow, 3
-/// digital. fractional_digits: -1 for "show all", else a fixed count.
-/// sign_negative != 0 marks the whole duration negative. `units` is 10 u64s in
-/// the order years, months, weeks, days, hours, minutes, seconds, milliseconds,
-/// microseconds, nanoseconds. Writes UTF-8 into `out`; returns the length, or -1.
-#[cfg(feature = "intl-duration-format")]
-#[no_mangle]
-pub unsafe extern "C" fn mal_i18n_duration_format(
-    locale_ptr: *const u8,
-    locale_len: usize,
-    base_style: i32,
-    fractional_digits: i32,
-    sign_negative: i32,
-    units: *const u64,
-    out: *mut u8,
-    out_cap: i32,
-) -> i32 {
-    use icu_experimental::duration::options::{BaseStyle, DurationFormatterOptions, FractionalDigits};
-    use icu_experimental::duration::{Duration, DurationFormatter, DurationSign, ValidatedDurationFormatterOptions};
-    use writeable::Writeable;
-
-    let Some(locale) = parse_locale(locale_ptr, locale_len) else {
-        return -1;
-    };
-    let u = unsafe { core::slice::from_raw_parts(units, 10) };
-    let duration = Duration {
-        sign: if sign_negative != 0 { DurationSign::Negative } else { DurationSign::Positive },
-        years: u[0],
-        months: u[1],
-        weeks: u[2],
-        days: u[3],
-        hours: u[4],
-        minutes: u[5],
-        seconds: u[6],
-        milliseconds: u[7],
-        microseconds: u[8],
-        nanoseconds: u[9],
-    };
-    let mut options = DurationFormatterOptions::default();
-    options.base = match base_style {
-        1 => BaseStyle::Short,
-        2 => BaseStyle::Narrow,
-        3 => BaseStyle::Digital,
-        _ => BaseStyle::Long,
-    };
-    if fractional_digits >= 0 {
-        options.fractional_digits = FractionalDigits::Fixed(fractional_digits as u8);
-    }
-    let Ok(validated) = ValidatedDurationFormatterOptions::validate(options) else {
-        return -1;
-    };
-    let Ok(formatter) = DurationFormatter::try_new((&locale).into(), validated) else {
-        return -1;
-    };
-    let text = formatter.format(&duration).write_to_string().into_owned();
-    unsafe { write_utf8(&text, out, out_cap) }
-}
 } // mod intl
 
 /// Status codes returned by fallible FFI entry points. The C side maps these to

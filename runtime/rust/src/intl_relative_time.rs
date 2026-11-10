@@ -1,33 +1,14 @@
+use crate::intl_decimal::{supports_digits, DecimalProvider};
 use core::fmt;
 use icu_decimal::input::Decimal;
 use icu_experimental::relativetime::{provider::*, RelativeTimeFormatterPreferences};
 use icu_provider::marker::ErasedMarker;
 use icu_provider::prelude::*;
-use std::cell::RefCell;
 use writeable::Writeable;
 
 use crate::intl::parse_locale;
 
 type Patterns = DataPayload<ErasedMarker<RelativeTimePatternData<'static>>>;
-
-struct DecimalProvider {
-    numbering_system: RefCell<Option<Box<DataMarkerAttributes>>>,
-}
-
-impl<M: DataMarker> DataProvider<M> for DecimalProvider
-where
-    icu_decimal::provider::Baked: DataProvider<M>,
-{
-    fn load(&self, req: DataRequest) -> Result<DataResponse<M>, DataError> {
-        let result = icu_decimal::provider::Baked.load(req)?;
-        if std::any::TypeId::of::<M>()
-            == std::any::TypeId::of::<icu_decimal::provider::DecimalDigitsV1>()
-        {
-            *self.numbering_system.borrow_mut() = Some(req.id.marker_attributes.to_owned());
-        }
-        Ok(result)
-    }
-}
 
 struct RelativeTimePlan {
     prefs: RelativeTimeFormatterPreferences,
@@ -123,27 +104,19 @@ pub unsafe extern "C" fn mal_i18n_relative_time_new(
     } else {
         let bytes = unsafe { crate::ffi::nullable_slice(numbering_ptr, numbering_len) };
         core::str::from_utf8(bytes).ok().and_then(|text| {
+            let canonical = text.to_ascii_lowercase();
+            let text = canonical.as_str();
             let keyword = icu_locale::extensions::unicode::Value::try_from_str(text).ok()?;
             let system =
                 icu_experimental::relativetime::preferences::NumberingSystem::try_from(&keyword)
                     .ok()?;
-            let request = DataRequest {
-                id: DataIdentifierBorrowed::for_marker_attributes(
-                    DataMarkerAttributes::from_str_or_panic(text),
-                ),
-                ..Default::default()
-            };
-            let response: Result<DataResponse<icu_decimal::provider::DecimalDigitsV1>, _> =
-                icu_decimal::provider::Baked.load(request);
-            response.ok().map(|_| system)
+            supports_digits(text).then_some(system)
         })
     };
     if let Some(system) = explicit {
         prefs.numbering_system = Some(system);
     }
-    let provider = DecimalProvider {
-        numbering_system: RefCell::new(None),
-    };
+    let provider = DecimalProvider::default();
     let Ok(decimal) = icu_decimal::DecimalFormatter::try_new_unstable(
         &provider,
         (&prefs).into(),
