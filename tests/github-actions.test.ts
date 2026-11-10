@@ -140,12 +140,12 @@ describe("GitHub Actions", () => {
 		expect(action).toContain('case "$(uname -m)" in');
 		expect(action).toContain("rustup_target=aarch64-apple-darwin");
 		expect(action).toContain("rustup_target=x86_64-apple-darwin");
-		expect(action).toContain("rustup/archive/1.29.0/$rustup_target/rustup-init");
+		expect(action).toContain("rustup/archive/1.29.3/$rustup_target/rustup-init");
 		expect(action).toContain(
-			"aeb4105778ca1bd3c6b0e75768f581c656633cd51368fa61289b6a71696ac7e1",
+			"63752a1919a3a4793173ec70f8f212621a7ce38ba6a246095984482f4de20f9f",
 		);
 		expect(action).toContain(
-			"33cf85df9142bc6d29cbc62fa5ca1d4c29622cddb55213a4c1a43c457fb9b2d7",
+			"bc107f1fb0228de7fa32413c89c1b305cea9cd256e94b01150cd054128145429",
 		);
 		expect(action).toContain('echo "RUSTUP_HOME=$rustup_home" >> "$GITHUB_ENV"');
 	});

@@ -2,7 +2,7 @@
 
 /* oxlint-disable -- This compatibility fixture intentionally uses untyped CommonJS. */
 
-const postgres = require("postgres");
+const postgres = require("postgres").default;
 
 const sql = postgres({
 	connect_timeout: null,

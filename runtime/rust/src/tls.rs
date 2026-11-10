@@ -279,7 +279,7 @@ fn client_config(
         0
     } else {
         NEXT_CONFIG_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| MAL_TLS_STATUS_ERROR)?
     };
     let policy = ClientPolicy { config: Arc::new(config), id, deferred };
@@ -352,7 +352,7 @@ unsafe fn output<'a>(pointer: *mut u8, length: usize) -> Option<&'a mut [u8]> {
 #[no_mangle]
 /// # Safety
 /// Every non-null pointer must be valid for its stated length or output slot.
-pub unsafe extern "C" fn mal_tls_client_create(
+pub unsafe extern "C" fn mal_tls_client_config_create(
     server_name: *const u8,
     server_name_len: usize,
     ca_pem: *const u8,
@@ -364,7 +364,7 @@ pub unsafe extern "C" fn mal_tls_client_create(
     key_pem: *const u8,
     key_pem_len: usize,
     insecure: i32,
-    out_handle: *mut *mut MalTlsClient,
+    out_handle: *mut *mut MalTlsClientConfig,
 ) -> i32 {
     if out_handle.is_null() {
         return MAL_TLS_STATUS_INVALID_ARGUMENT;
@@ -394,15 +394,109 @@ pub unsafe extern "C" fn mal_tls_client_create(
         Ok(policy) => policy,
         Err(status) => return status,
     };
-    let Ok(connection) = ClientConnection::new(policy.config, server_name.clone()) else {
+    unsafe {
+        *out_handle = Box::into_raw(Box::new(MalTlsClientConfig {
+            policy,
+            server_name,
+        }))
+    };
+    MAL_TLS_STATUS_OK
+}
+
+#[no_mangle]
+/// # Safety
+/// Every non-null pointer must be valid for its stated length or output slot.
+pub unsafe extern "C" fn mal_tls_client_create(
+    server_name: *const u8,
+    server_name_len: usize,
+    ca_pem: *const u8,
+    ca_pem_len: usize,
+    alpn: *const u8,
+    alpn_len: usize,
+    cert_pem: *const u8,
+    cert_pem_len: usize,
+    key_pem: *const u8,
+    key_pem_len: usize,
+    insecure: i32,
+    out_handle: *mut *mut MalTlsClient,
+) -> i32 {
+    if out_handle.is_null() {
+        return MAL_TLS_STATUS_INVALID_ARGUMENT;
+    }
+    unsafe { *out_handle = core::ptr::null_mut() };
+    let mut config = core::ptr::null_mut();
+    let status = unsafe {
+        mal_tls_client_config_create(
+            server_name,
+            server_name_len,
+            ca_pem,
+            ca_pem_len,
+            alpn,
+            alpn_len,
+            cert_pem,
+            cert_pem_len,
+            key_pem,
+            key_pem_len,
+            insecure,
+            &mut config,
+        )
+    };
+    if status != MAL_TLS_STATUS_OK {
+        return status;
+    }
+    let status = unsafe { mal_tls_client_from_config(config, out_handle) };
+    unsafe { mal_tls_client_config_free(&mut config) };
+    status
+}
+
+pub struct MalTlsClientConfig {
+    policy: ClientPolicy,
+    server_name: ServerName<'static>,
+}
+
+#[no_mangle]
+/// # Safety
+/// `config` is a live client policy and `out_handle` is a writable pointer slot.
+/// The new session owns its policy reference independently of `config`.
+pub unsafe extern "C" fn mal_tls_client_from_config(
+    config: *const MalTlsClientConfig,
+    out_handle: *mut *mut MalTlsClient,
+) -> i32 {
+    if out_handle.is_null() {
+        return MAL_TLS_STATUS_INVALID_ARGUMENT;
+    }
+    unsafe { *out_handle = core::ptr::null_mut() };
+    let Some(config) = (unsafe { config.as_ref() }) else {
+        return MAL_TLS_STATUS_INVALID_ARGUMENT;
+    };
+    let policy = &config.policy;
+    let Ok(connection) = ClientConnection::new(policy.config.clone(), config.server_name.clone())
+    else {
         return MAL_TLS_STATUS_ERROR;
     };
     let session = new_session(Connection::Client(connection), policy.id, None);
     unsafe {
-        (*session).server_verdict = policy.deferred.map(|verifier| (verifier, server_name));
+        (*session).server_verdict = policy
+            .deferred
+            .clone()
+            .map(|verifier| (verifier, config.server_name.clone()));
         *out_handle = session;
     }
     MAL_TLS_STATUS_OK
+}
+
+#[no_mangle]
+/// # Safety
+/// `config` is null or a writable slot containing a live client policy or null.
+pub unsafe extern "C" fn mal_tls_client_config_free(config: *mut *mut MalTlsClientConfig) {
+    if config.is_null() {
+        return;
+    }
+    let pointer = unsafe { *config };
+    unsafe { *config = core::ptr::null_mut() };
+    if !pointer.is_null() {
+        drop(unsafe { Box::from_raw(pointer) });
+    }
 }
 
 fn new_session(
@@ -1019,8 +1113,7 @@ pub unsafe extern "C" fn mal_tls_client_wants_write(handle: *const MalTlsClient)
 
 #[no_mangle]
 /// # Safety
-/// `handle` must be null or a valid writable slot containing a pointer returned by
-/// `mal_tls_client_create` that has not already been freed.
+/// `handle` is null or a writable slot containing an owned live client session or null.
 pub unsafe extern "C" fn mal_tls_client_free(handle: *mut *mut MalTlsClient) {
     if handle.is_null() {
         return;

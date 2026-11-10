@@ -52,7 +52,9 @@ try {
 	console.log("POSTGRES FEATURE pool");
 
 	const query = sql`select pg_sleep(10)`.execute();
-	setTimeout(() => query.cancel(), 25);
+	setTimeout(() => {
+		void query.cancel();
+	}, 25);
 	let cancelled = false;
 	try {
 		await query;

@@ -4835,7 +4835,7 @@ function compileClassBody(
 					"'arguments' is not allowed in a class field initializer",
 				);
 			}
-			const valueNode = (member.value ?? null) as ESTree.Expression | null;
+			const valueNode = member.value ?? null;
 			let entry: SemanticInstanceFieldPlanEntry;
 			if (member.key.type === "PrivateIdentifier") {
 				const name = `#${member.key.name}`;
@@ -6685,9 +6685,7 @@ function compileObjectPatternTarget(
 	const consumedKeys: Array<number> = [];
 
 	for (const property of pattern.properties) {
-		if (property.type === "RestElement" || property.type === "SpreadElement") {
-			// Rest is last by grammar. The typings allow SpreadElement here,
-			// both shapes carry the target in argument.
+		if (property.type === "RestElement") {
 			const privateTarget = isAssign
 				? privateAssignmentMemberTarget(property.argument)
 				: undefined;
@@ -7215,7 +7213,7 @@ function compileArrayPatternTarget(
 function compileStatementsToBlock(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
-	statements: Array<ESTree.Statement>,
+	statements: Array<ESTree.Statement | ESTree.ModuleDeclaration>,
 	/**
 	 * Hoist top-level function declarations in this list to the start of the
 	 * block, matching FunctionDeclarationInstantiation / GlobalDeclarationInstantiation:
@@ -7597,7 +7595,7 @@ function compileStatementsToBlock(
 function compileDisposableStatementScope(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
-	statements: Array<ESTree.Statement>,
+	statements: Array<ESTree.Statement | ESTree.ModuleDeclaration>,
 	hoistFunctions: boolean,
 	initializedFunctions?: ReadonlySet<ESTree.FunctionDeclaration>,
 ): number {
@@ -11146,7 +11144,11 @@ function compileExpression(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
-	expression: ESTree.Expression | ESTree.PrivateIdentifier,
+	expression:
+		| ESTree.Expression
+		| ESTree.PrivateIdentifier
+		| ESTree.Super
+		| ESTree.SpreadElement,
 	nameHint?: string,
 ) {
 	switch (expression.type) {
@@ -12836,7 +12838,7 @@ function compileBinary(
 	}
 
 	if (!isCompilerBinaryOperator(binaryExpression.operator)) {
-		throw new Error(`Unsupported binary operator ${binaryExpression.operator}`);
+		throw new Error("Unsupported binary operator");
 	}
 
 	const left = compileExpression(program, fn, cursor, binaryExpression.left);
@@ -13003,6 +13005,8 @@ function compileLiteralTemplate(
 			encoded.push(LITERAL_TEMPLATE_ARRAY, node.elements.length);
 			for (let i = node.elements.length - 1; i >= 0; --i) {
 				const element = node.elements[i];
+				if (element?.type === "SpreadElement")
+					throw new Error("A static literal template cannot contain spread elements");
 				actions.push(
 					element === null || element === undefined
 						? { type: "word", word: LITERAL_TEMPLATE_HOLE }
@@ -14469,12 +14473,7 @@ function compileDirectEval(
 ): number {
 	// The callee is read and every argument evaluated before PerformEval, which
 	// runs only while `eval` still is %eval%; otherwise this is an ordinary call.
-	const evalFunction = compileExpression(
-		program,
-		fn,
-		cursor,
-		callExpression.callee as ESTree.Expression,
-	);
+	const evalFunction = compileExpression(program, fn, cursor, callExpression.callee);
 	const spread = callExpression.arguments.some((arg) => arg.type === "SpreadElement");
 	const argumentsArray = spread
 		? compileSpreadArgumentsArray(program, fn, cursor, callExpression.arguments)
@@ -15191,6 +15190,11 @@ function compileDynamicImport(
 	callExpression: ESTree.CallExpression,
 ): number {
 	const source = callExpression.arguments[0];
+	if (source?.type === "SpreadElement")
+		throw new SyntaxDiagnostic(
+			"parse",
+			"Import arguments cannot contain spread elements",
+		);
 	return source
 		? compileImportExpression(program, fn, cursor, source)
 		: compileImportExpression(program, fn, cursor, {

@@ -141,11 +141,11 @@ leave expensive operations at runtime. A required runtime exception is never rep
 as a compiler error. General transcendental functions, time zones, and locale services
 require their own target certificates.
 
-Case conversion and normalization use Unicode 17.0.0 tables generated for both
+Case conversion and normalization use Unicode 18.0.0 tables generated for both
 TypeScript and C from the same checksum-verified Unicode Character Database files.
 Run `node scripts/generate-unicode-data.ts <ucd-directory> <output-directory>` with
 `UnicodeData.txt`, `SpecialCasing.txt`, `DerivedCoreProperties.txt`,
-`CompositionExclusions.txt`, and `PropList.txt` from the official 17.0.0 distribution.
+`CompositionExclusions.txt`, and `PropList.txt` from the official 18.0.0 distribution.
 The generated `unicode-data.ts` belongs in `src/compiler/shared`; `unicode_data.h`
 belongs in `runtime/src`. The data license is retained in `runtime/vendor/unicode`.
 Updating Unicode requires reviewing the contextual rules and bumping the evaluator

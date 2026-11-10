@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 const checks = [];
 
 const encoded = new TextEncoder().encode("OK");
@@ -25,6 +27,20 @@ checks.push(
 	typeof Response === "undefined",
 	typeof EventTarget === "function",
 );
+
+const scope = new AsyncLocalStorage();
+const order = [];
+Promise.resolve().then(() => order.push("promise"));
+await new Promise((resolve) => {
+	scope.run("queued", () => {
+		queueMicrotask(() => {
+			checks.push(scope.getStore() === "queued");
+			order.push("microtask");
+			resolve();
+		});
+	});
+});
+checks.push(order.join(",") === "promise,microtask", scope.getStore() === undefined);
 
 const passed = checks.filter(Boolean).length;
 console.log(`RESULT ${passed}/${checks.length}`);

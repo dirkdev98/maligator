@@ -1105,6 +1105,11 @@ void mal_base64_globals_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_method_n(vm, global_this, (const byte *) "atob", 1, mal_web_atob);
 }
 
+void mal_microtask_global_install(MalVm *vm, MalObject *global_this) {
+    mal_intrinsic_define_method_n(vm, global_this, (const byte *) "queueMicrotask", 1,
+        mal_web_queue_microtask);
+}
+
 void mal_navigator_global_install(MalVm *vm, MalObject *global_this) {
     long processors = sysconf(_SC_NPROCESSORS_ONLN);
     MalValue value = mal_value_from_object(mal_intrinsic_new_object(vm));
@@ -1128,9 +1133,7 @@ void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
 
     mal_base64_globals_install(vm, global_this);
 
-    // queueMicrotask.
-    mal_intrinsic_define_method_n(vm, global_this, (const byte *) "queueMicrotask", 1,
-        mal_web_queue_microtask);
+    mal_microtask_global_install(vm, global_this);
 
     mal_structured_clone_global_install(vm, global_this);
 

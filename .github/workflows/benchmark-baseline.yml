@@ -38,16 +38,16 @@ jobs:
 
       - name: Select matching LLVM archive and link tools
         run: |
-          sudo apt-get install --yes llvm-21 lld-21
+          sudo apt-get install --yes llvm-23 lld-23
           mkdir -p "$RUNNER_TEMP/benchmark-bin"
-          ln -s "$(command -v llvm-ar-21)" "$RUNNER_TEMP/benchmark-bin/ar"
-          ln -s "$(command -v ld.lld-21)" "$RUNNER_TEMP/benchmark-bin/ld.lld"
+          ln -s "$(command -v llvm-ar-23)" "$RUNNER_TEMP/benchmark-bin/ar"
+          ln -s "$(command -v ld.lld-23)" "$RUNNER_TEMP/benchmark-bin/ld.lld"
           echo "$RUNNER_TEMP/benchmark-bin" >> "$GITHUB_PATH"
 
       - name: Install the pinned HTTP load generator
         run: |
-          cargo install oha --version 1.14.0 --locked
-          test "$(oha --version)" = "oha 1.14.0"
+          cargo install oha --version 1.16.0 --locked
+          test "$(oha --version)" = "oha 1.16.0"
 
       - name: Check the runner and record the complete plan
         run: |
@@ -72,7 +72,7 @@ jobs:
 
       - name: Retain baseline and verification evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: benchmark-baseline-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/benchmark-baseline/

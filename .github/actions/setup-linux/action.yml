@@ -5,7 +5,7 @@ inputs:
   node-version:
     description: Exact Node.js version used by Maligator CI.
     required: false
-    default: 26.12.0
+    default: 26.13.0
   cache-test262:
     description: Restore and save the pinned Test262 corpus.
     required: false
@@ -23,21 +23,14 @@ runs:
   using: composite
   steps:
     - name: Set up Node.js
-      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ inputs.node-version }}
         cache: npm
         cache-dependency-path: package-lock.json
 
-    - name: Select Clang 21
-      shell: bash
-      run: |
-        if ! command -v clang-21 >/dev/null || ! command -v clang++-21 >/dev/null || ! command -v llvm-ar-21 >/dev/null; then
-          sudo apt-get update
-          sudo apt-get install --yes clang-21 llvm-21
-        fi
-        echo "CC=clang-21" >> "$GITHUB_ENV"
-        echo "CXX=clang++-21" >> "$GITHUB_ENV"
+    - name: Set up LLVM
+      uses: ./.github/actions/setup-llvm
 
     - name: Set up FFI integration libraries
       shell: bash

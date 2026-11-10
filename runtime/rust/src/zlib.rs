@@ -157,6 +157,7 @@ fn brotli_parameter(id: u32) -> Option<BrotliEncoderParameter> {
 }
 
 impl MalZlibStream {
+    #[cfg(test)]
     fn new(format: u32) -> Option<Self> {
         Self::with_config(Config {
             format,

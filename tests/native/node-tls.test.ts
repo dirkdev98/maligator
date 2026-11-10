@@ -17,8 +17,10 @@ async function run(
 	insecure: boolean,
 	stress: boolean,
 	args: Array<string> = [],
+	mode = "wrapped",
 ): Promise<string> {
 	const server = createServer({ cert: certificate, key }, (socket: TLSSocket) => {
+		if (mode === "early-end") socket.once("end", () => socket.end());
 		socket.on("data", (chunk: Buffer) => {
 			if (chunk.toString("utf8") !== "ping")
 				socket.destroy(new Error("unexpected request"));
@@ -45,6 +47,7 @@ async function run(
 						TLS_CA: insecure ? "" : ca,
 						TLS_INSECURE: insecure ? "1" : "0",
 						TLS_PORT: String(address.port),
+						TLS_MODE: mode,
 					},
 					timeout: 20_000,
 				},
@@ -95,6 +98,25 @@ describe("node:tls socket wrapping", () => {
 	it("keeps TLS socket state rooted under GC stress", async () => {
 		for (const binary of binaries) {
 			expect(await run(binary, false, true)).toContain("NODE TLS PASS");
+		}
+	});
+	it.each([
+		["queued", "encrypts writes queued before the handshake"],
+		["retry", "retries resolved addresses with a fresh TLS session"],
+		["early-end", "finishes the handshake before an empty early end"],
+		["cancel", "cancels while DNS is pending"],
+	])("%s: %s", async (mode) => {
+		expect(
+			await run(
+				process.execPath,
+				false,
+				false,
+				["tests/local/node-tls-socket.cjs"],
+				mode,
+			),
+		).toContain("NODE TLS PASS");
+		for (const binary of binaries) {
+			expect(await run(binary, false, true, [], mode)).toContain("NODE TLS PASS");
 		}
 	});
 });

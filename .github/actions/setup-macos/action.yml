@@ -5,7 +5,7 @@ inputs:
   node-version:
     description: Exact Node.js version used by Maligator CI.
     required: false
-    default: 26.12.0
+    default: 26.13.0
   cache-test262:
     description: Restore and save the pinned Test262 corpus.
     required: false
@@ -23,7 +23,7 @@ runs:
   using: composite
   steps:
     - name: Set up Node.js
-      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ inputs.node-version }}
         cache: npm
@@ -47,11 +47,11 @@ runs:
         case "$(uname -m)" in
           arm64)
             rustup_target=aarch64-apple-darwin
-            rustup_sha=aeb4105778ca1bd3c6b0e75768f581c656633cd51368fa61289b6a71696ac7e1
+            rustup_sha=63752a1919a3a4793173ec70f8f212621a7ce38ba6a246095984482f4de20f9f
             ;;
           x86_64)
             rustup_target=x86_64-apple-darwin
-            rustup_sha=33cf85df9142bc6d29cbc62fa5ca1d4c29622cddb55213a4c1a43c457fb9b2d7
+            rustup_sha=bc107f1fb0228de7fa32413c89c1b305cea9cd256e94b01150cd054128145429
             ;;
           *)
             echo "unsupported macOS architecture: $(uname -m)" >&2
@@ -60,7 +60,7 @@ runs:
         esac
         # The hosted ARM image's Homebrew Rustup can install unusable proxies: https://github.com/actions/runner-images/issues/14097
         curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-          "https://static.rust-lang.org/rustup/archive/1.29.0/$rustup_target/rustup-init" \
+          "https://static.rust-lang.org/rustup/archive/1.29.3/$rustup_target/rustup-init" \
           --output "$rustup_init"
         echo "$rustup_sha  $rustup_init" | shasum -a 256 --check
         chmod +x "$rustup_init"

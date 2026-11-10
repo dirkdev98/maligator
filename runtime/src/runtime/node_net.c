@@ -62,6 +62,7 @@ typedef struct MalNodeNetSocketState {
     MalValue receiver;
     MalAsyncContext *async_context;
     MalAsyncContext *tls_context;
+    MalTlsClientConfig *tls_config;
 #if MAL_REALMS
     MalRealm *realm;
 #endif
@@ -198,6 +199,7 @@ static void net_state_free(MalNodeNetSocketState *state) {
     }
     free(state->addresses);
     free(state->address_lengths);
+    mal_tls_client_config_free(&state->tls_config);
     free(state->path);
     free(state);
 }
@@ -560,9 +562,9 @@ static bool net_ascii_string(
 static bool net_start_next_address(MalNodeNetSocketState *state) {
     while (state->address_index < state->address_count) {
         usize index = state->address_index++;
-        if (mal_tcp_connect_address_start(mal_host(state->vm),
+        if (mal_tcp_connect_tls_address_start(mal_host(state->vm),
                 (const struct sockaddr *) &state->addresses[index],
-                state->address_lengths[index], &state->operation)) {
+                state->address_lengths[index], state->tls_config, &state->operation)) {
             state->resolving = false;
             return true;
         }
@@ -751,12 +753,11 @@ static bool net_socket_lookup(
     return vm->completion.kind != MAL_COMPLETION_THROW;
 }
 
-static MalValue net_socket_connect(
+static MalValue net_socket_connect_config(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee) {
-    (void) new_target;
-    (void) callee;
+    MalTlsClientConfig *config) {
     if (net_state(receiver) != nullptr || argc < 1) {
+        mal_tls_client_config_free(&config);
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                            "Socket is already connecting or connected");
         return mal_value_new_undefined();
@@ -817,6 +818,9 @@ static MalValue net_socket_connect(
     state->vm = vm;
     state->receiver = receiver;
     state->async_context = mal_async_context_capture(vm);
+    state->tls_config = config;
+    state->tls_context = config == nullptr ? nullptr : state->async_context;
+    config = nullptr;
     state->destroy_error = undefined;
     state->server = undefined;
     state->next_write_token = 1;
@@ -828,8 +832,8 @@ static MalValue net_socket_connect(
     if (path != nullptr) {
         state->path = path;
         path = nullptr;
-        started = mal_tcp_connect_address_start(mal_host(vm),
-            (const struct sockaddr *) &pipe_address, pipe_length, &state->operation);
+        started = mal_tcp_connect_tls_address_start(mal_host(vm),
+            (const struct sockaddr *) &pipe_address, pipe_length, state->tls_config, &state->operation);
     } else {
         state->port = (u16) port_number;
         struct sockaddr_storage numeric;
@@ -867,10 +871,24 @@ static MalValue net_socket_connect(
     if (lookup && !net_socket_lookup(vm, receiver, roots[2], roots[4], roots[5], roots[6])) goto done;
     result = receiver;
 done:
+    mal_tls_client_config_free(&config);
     free(host);
     free(path);
     mal_gc_unroot(&root);
     return result;
+}
+
+static MalValue net_socket_connect(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    return net_socket_connect_config(vm, receiver, args, argc, nullptr);
+}
+
+MalValue mal_node_net_connect_tls(
+    MalVm *vm, MalValue socket, MalValue options, MalTlsClientConfig *config) {
+    return net_socket_connect_config(vm, socket, &options, 1, config);
 }
 
 static bool net_chunk_bytes(
@@ -1019,8 +1037,11 @@ static MalValue net_resolving_close_task(
     MalRootSpan root;
     mal_gc_root(&root, &socket, 1);
     MalHostTask cancelled = {.kind = MAL_HOST_TASK_TERMINAL, .result = MAL_HOST_TERMINAL_CANCELLED};
+    MalAsyncContextScope scope;
+    mal_async_context_scope_enter(vm, &scope, state->async_context);
     net_dispatch_terminal(vm, state, &cancelled, nullptr);
     net_state_free(state);
+    mal_async_context_scope_exit(vm, &scope);
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
 }
@@ -2535,6 +2556,9 @@ bool mal_node_net_drain(MalVm *vm) {
         && state->address_index < state->address_count && !state->destroyed) {
         mal_tcp_terminal_free(data);
         mal_host_task_release(&host->tasks, &task);
+        // The failed transport owned only the copied segment; the logical write is still queued.
+        state->write_in_flight = false;
+        state->active_segment = 0;
         if (net_start_next_address(state)) {
             net_pump_writes(state);
             net_maybe_shutdown_write(state);

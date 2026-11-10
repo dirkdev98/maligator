@@ -42,14 +42,11 @@ try {
 	const timestamp = new Date("2024-01-02T03:04:05.000Z");
 	const [typed] = await sql`
 		select
-			${sql.array([1, 2, 3], 1007)}::int[] as numbers,
-			${sql.array(
-				[
-					["a", "b"],
-					["c", "d"],
-				],
-				1009,
-			)}::text[] as nested,
+			${[1, 2, 3]}::int[] as numbers,
+			${[
+				["a", "b"],
+				["c", "d"],
+			]}::text[] as nested,
 			${sql.json({ snake_key: { inner_value: 42 } })}::jsonb as payload,
 			${Buffer.from([0, 1, 255])}::bytea as bytes,
 			${timestamp}::timestamptz as happened_at

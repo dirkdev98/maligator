@@ -18,8 +18,9 @@ API, Node.js module, or language feature.
 npm install --global @maligator/cli@alpha
 ```
 
-Prebuilt packages cover macOS and glibc-based Linux on arm64 and x64. The npm launcher
-needs Node.js 20 or newer; the CLI itself and the executables it builds do not.
+Prebuilt packages cover macOS 15 or newer and glibc-based Linux on arm64 and x64.
+The npm launcher needs Node.js 20 or newer; the CLI itself and the executables it
+builds do not.
 
 ## Quick start
 

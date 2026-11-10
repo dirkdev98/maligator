@@ -65,9 +65,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js without shared caches
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 26.12.0
+          node-version: 26.13.0
           package-manager-cache: false
 
       - name: Check current writer permission and resolve main and candidate
@@ -124,21 +124,24 @@ jobs:
           printf 'main=%s\ncandidate=%s\n' "$BASE_SHA" "$HEAD_SHA" > "$GITHUB_WORKSPACE/evidence/revisions.txt"
 
       - name: Set up Node.js without shared caches
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 26.12.0
+          node-version: 26.13.0
           package-manager-cache: false
+
+      - name: Set up LLVM
+        uses: ./.github/actions/setup-llvm
 
       - name: Install the native toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-21 llvm-21 lld-21 linux-tools-generic
+          sudo apt-get install --yes linux-tools-generic
           mkdir -p "$RUNNER_TEMP/microbench-bin"
-          ln -s "$(command -v llvm-ar-21)" "$RUNNER_TEMP/microbench-bin/ar"
-          ln -s "$(command -v ld.lld-21)" "$RUNNER_TEMP/microbench-bin/ld.lld"
+          ln -s "$(command -v llvm-ar-23)" "$RUNNER_TEMP/microbench-bin/ar"
+          ln -s "$(command -v ld.lld-23)" "$RUNNER_TEMP/microbench-bin/ld.lld"
           echo "$RUNNER_TEMP/microbench-bin" >> "$GITHUB_PATH"
-          echo 'CC=clang-21' >> "$GITHUB_ENV"
-          echo 'CXX=clang++-21' >> "$GITHUB_ENV"
+          echo 'CC=clang-23' >> "$GITHUB_ENV"
+          echo 'CXX=clang++-23' >> "$GITHUB_ENV"
           for candidate in /usr/lib/linux-tools/*/perf; do
             if [ -x "$candidate" ]; then
               echo "NATIVE_MICRO_PERF=$candidate" >> "$GITHUB_ENV"
@@ -195,7 +198,7 @@ jobs:
 
       - name: Retain comparison evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: microbench-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -230,7 +233,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Download the sanitized comparison summary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: microbench-${{ github.run_id }}-${{ github.run_attempt }}
           path: report

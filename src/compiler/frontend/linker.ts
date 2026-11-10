@@ -958,8 +958,8 @@ function specifierName(node: ESTree.Node): string {
 	if ("name" in node && typeof node.name === "string") {
 		return node.name;
 	}
-	if ("value" in node) {
-		return String(node.value);
+	if ("value" in node && typeof node.value === "string") {
+		return node.value;
 	}
 	return "";
 }

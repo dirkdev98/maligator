@@ -72,6 +72,7 @@ void mal_runtime_personality_install(MalVm *vm, bool web_platform, bool node) {
             mal_structured_clone_global_install(vm, global_this);
             mal_navigator_global_install(vm, global_this);
             mal_base64_globals_install(vm, global_this);
+            mal_microtask_global_install(vm, global_this);
             mal_events_install(vm, global_this);
         }
     }

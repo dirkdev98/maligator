@@ -19,31 +19,24 @@ crate-type = ["staticlib"]
 # Bundled IANA tzdb for Date's LocalTZA (deterministic offsets, not the host's
 # /usr/share/zoneinfo). The system zone *identity* still comes from TZ / the
 # /etc/localtime symlink via TimeZone::system().
-jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
-# ICU4X for the Intl surface. Optional + gated behind the `intl` feature so an
-# ICU4X for the Intl surface — one optional sub-crate PER ECMA-402 service (not the
-# `icu` meta-crate, which pulls every component non-optionally). This lets the build
-# config select services (engine.intl.features): an unselected service's crate isn't
-# compiled, so its compiled_data (baked CLDR) never lands in the binary. `icu_locale`
-# + `writeable` are the always-on floor (locale parsing / negotiation + result
-# stringification). Sizes are dominated by locale-INDEPENDENT per-service data —
-# Segmenter's LSTM models alone are ~12 MB, Collator's root table ~4 MB.
-# `alloc` on decimal/datetime/calendar/time/list matches what the `icu` meta-crate
-# enabled: it gates the `format_to_string` / Display impls our FFI stringifies with.
-icu_locale = { version = "2", optional = true }
-icu_collator = { version = "2", optional = true }
-icu_decimal = { version = "2", optional = true, features = ["alloc"] }
-icu_datetime = { version = "2", optional = true }
-icu_calendar = { version = "2", optional = true, features = ["alloc"] }
-icu_time = { version = "2", optional = true, features = ["alloc"] }
-icu_plurals = { version = "2", optional = true }
-icu_list = { version = "2", optional = true, features = ["alloc"] }
-icu_segmenter = { version = "2", optional = true }
+jiff = { version = "0.2.42", features = ["tzdb-bundle-always"] }
+# Separate optional ICU4X components keep unselected Intl services and their
+# compiled locale data out of native binaries. Locale parsing, negotiation and
+# result stringification use icu_locale and writeable in every Intl build.
+icu_locale = { version = "2.4.0", optional = true }
+icu_collator = { version = "2.4.0", optional = true }
+icu_decimal = { version = "2.4.0", optional = true, features = ["alloc"] }
+icu_datetime = { version = "2.4.0", optional = true }
+icu_calendar = { version = "2.4.0", optional = true, features = ["alloc"] }
+icu_time = { version = "2.4.0", optional = true, features = ["alloc"] }
+icu_plurals = { version = "2.4.0", optional = true }
+icu_list = { version = "2.4.0", optional = true, features = ["alloc"] }
+icu_segmenter = { version = "2.4.0", optional = true }
 # Experimental ICU services (one crate for all three): DisplayNames,
 # RelativeTimeFormat, Duration. Their CLDR data is all-or-nothing at the crate level.
-icu_experimental = { version = "0.5", optional = true }
+icu_experimental = { version = "0.7.0", optional = true }
 # Writeable: stringify ICU "formatted" results that expose Writeable (not Display).
-writeable = { version = "0.6", optional = true }
+writeable = { version = "0.6.4", optional = true }
 # temporal_rs joins here for the Temporal global.
 temporal_capi = { version = "0.2.6", default-features = false, optional = true }
 # regress: the ECMAScript RegExp engine (the one Boa uses). Lives in this crate
@@ -52,19 +45,21 @@ temporal_capi = { version = "0.2.6", default-features = false, optional = true }
 # conversion. Optional + gated behind the `regexp` feature (engine.regexp): off
 # drops the regex engine + its Unicode tables. See src/regexp.rs +
 # docs/decisions/03-regexp.md.
-regress = { version = "0.11", features = ["utf16"], optional = true }
+regress = { version = "0.12.0", features = ["utf16"], optional = true }
 # ada-url: the WHATWG URL parser (wraps the C++ `ada` library). Optional + gated
 # behind the `url` feature, selected by either the web or Node host surface. A build
 # with neither drops the parser and its C++ runtime link argument. See src/url.rs.
-ada-url = { version = "3", optional = true }
+ada-url = { version = "4.0.0", optional = true }
 # Pure-Rust streaming codecs for the node:zlib backend. `zlib-rs` is selected
 # explicitly so enabling Node never introduces a system libz dependency.
-flate2 = { version = "1", default-features = false, features = [
+flate2 = { version = "1.1.11", default-features = false, features = [
 	"zlib-rs",
 ], optional = true }
-brotli-decompressor = { version = "5", optional = true }
+brotli-decompressor = { version = "6.3.1", optional = true }
 # Pure-Rust Brotli encoder (no C library); it shares brotli-decompressor above.
-brotli = { version = "8", default-features = false, features = ["std"], optional = true }
+brotli = { version = "9.1.1", default-features = false, features = [
+	"std",
+], optional = true }
 # 0.23.46 or later: RUSTSEC-2026-0285.
 rustls = { version = "0.23.46", default-features = false, features = [
 	"ring",
@@ -83,11 +78,13 @@ rust-argon2 = { version = "3", default-features = false, optional = true }
 # chacha20poly1305, whose typestate and one-shot AEAD APIs would force update()
 # to buffer whole messages; CBC, GCM and ChaCha20-Poly1305 are composed from them
 # in src/crypto_cipher.rs. All are pure Rust with runtime CPU feature detection.
-aes = { version = "0.8", optional = true }
-ctr = { version = "0.9", default-features = false, optional = true }
-ghash = { version = "0.5", default-features = false, optional = true }
-chacha20 = { version = "0.9", default-features = false, optional = true }
-poly1305 = { version = "0.8", default-features = false, optional = true }
+aes = { version = "0.9.4", optional = true }
+ctr = { version = "0.10.1", default-features = false, optional = true }
+ghash = { version = "0.6.0", default-features = false, optional = true }
+chacha20 = { version = "0.10.2", default-features = false, features = [
+	"cipher",
+], optional = true }
+poly1305 = { version = "0.9.1", default-features = false, optional = true }
 # Asymmetric signing for node:crypto; already in the tree through rustls.
 ring = { version = "0.17", optional = true }
 

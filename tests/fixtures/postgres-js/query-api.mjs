@@ -1,6 +1,6 @@
 import postgres from "postgres";
 
-/* oxlint-disable no-console, typescript/no-misused-promises, typescript/no-unsafe-assignment, typescript/no-unsafe-member-access, typescript/no-unsafe-return -- Native compatibility fixture values come from postgres.js. */
+/* oxlint-disable no-console, typescript/no-unsafe-assignment, typescript/no-unsafe-member-access, typescript/no-unsafe-return -- Native compatibility fixture values come from postgres.js. */
 
 const sql = postgres({
 	connect_timeout: 3,

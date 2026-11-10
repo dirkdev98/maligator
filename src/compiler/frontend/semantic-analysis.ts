@@ -1610,7 +1610,7 @@ function extractBindingsAndRegister(
 	 *
 	 * We need this for destructure patterns.
 	 */
-	const extractNames = (node?: ESTree.Node): Array<string> => {
+	const extractNames = (node?: ESTree.Node | null): Array<string> => {
 		if (!node) {
 			return [];
 		}

@@ -68,8 +68,8 @@ console.log(used(long,long),discarded(long,long));
 							),
 							directEntries: fn.directEntries.map((entry) => ({
 								...entry,
-								registerRepresentations: entry.registerRepresentations.map(
-									(rep, local) => (inputs.has(local) ? "boxed" : rep),
+								registerRepresentations: entry.registerRepresentations.map((rep, local) =>
+									inputs.has(local) ? "boxed" : rep,
 								),
 							})),
 						};

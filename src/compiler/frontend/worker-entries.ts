@@ -375,7 +375,7 @@ function staticUrlValue(
 		return left !== undefined && right !== undefined ? left + right : undefined;
 	}
 	if (node.type === "CallExpression" || node.type === "NewExpression") {
-		const identity = calleeIdentity(modules, record, node.callee as ESTree.Node);
+		const identity = calleeIdentity(modules, record, node.callee);
 		const globalUrl =
 			node.type === "NewExpression" &&
 			node.callee.type === "Identifier" &&
@@ -504,7 +504,7 @@ export function discoverWorkerEntries(
 		}
 		traverseEstree(record.parsed.ast.body, (node) => {
 			if (node.type !== "CallExpression" && node.type !== "NewExpression") return;
-			const identity = calleeIdentity(modules, record, node.callee as ESTree.Node);
+			const identity = calleeIdentity(modules, record, node.callee);
 			const declaration = node.type === "CallExpression" && isDeclaration(identity);
 			const worker =
 				node.type === "NewExpression" &&

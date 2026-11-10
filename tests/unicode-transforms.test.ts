@@ -7,6 +7,7 @@ import {
 } from "../src/compiler/shared/unicode-transform.ts";
 
 const normalizationCases = [
+	["\u209d\u209e\u209f", "\u209d\u209e\u209f", "\u209d\u209e\u209f", "wyz", "wyz"],
 	["\u1e0a\u0323", "\u1e0c\u0307", "D\u0323\u0307", "\u1e0c\u0307", "D\u0323\u0307"],
 	["\u212b", "\u00c5", "A\u030a", "\u00c5", "A\u030a"],
 	["\ufb03", "\ufb03", "\ufb03", "ffi", "ffi"],
@@ -30,6 +31,8 @@ describe("pinned Unicode transforms", () => {
 		},
 	);
 	it.each([
+		["\u0277\u027c", "\ua7dd\ua7e2", "\u0277\u027c"],
+		["\ua7dd\ua7e2", "\ua7dd\ua7e2", "\u0277\u027c"],
 		["Straße ﬃ", "STRASSE FFI", "straße ﬃ"],
 		["ΟΣ ΟΣΑ ΟΣ\u0301", "ΟΣ ΟΣΑ ΟΣ\u0301", "ος οσα ος\u0301"],
 		["AΣ'A AΣ'", "AΣ'A AΣ'", "aσ'a aς'"],

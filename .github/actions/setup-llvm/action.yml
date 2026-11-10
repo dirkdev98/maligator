@@ -1,0 +1,18 @@
+name: Set up LLVM
+description: Install the matching C compiler, archive tool, and linker from the LLVM repository.
+
+runs:
+  using: composite
+  steps:
+    - name: Select LLVM 23
+      shell: bash
+      run: |
+        if ! command -v clang-23 >/dev/null || ! command -v clang++-23 >/dev/null || ! command -v llvm-ar-23 >/dev/null || ! command -v ld.lld-23 >/dev/null; then
+          curl --fail --location --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key --output "$RUNNER_TEMP/apt.llvm.org.asc"
+          sudo install -m 644 "$RUNNER_TEMP/apt.llvm.org.asc" /usr/share/keyrings/apt.llvm.org.asc
+          echo 'deb [signed-by=/usr/share/keyrings/apt.llvm.org.asc] https://apt.llvm.org/resolute/ llvm-toolchain-resolute-23 main' | sudo tee /etc/apt/sources.list.d/llvm-23.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install --yes clang-23 llvm-23 lld-23
+        fi
+        echo "CC=clang-23" >> "$GITHUB_ENV"
+        echo "CXX=clang++-23" >> "$GITHUB_ENV"

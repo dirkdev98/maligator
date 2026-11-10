@@ -1136,7 +1136,7 @@ pub unsafe extern "C" fn mal_i18n_relative_time(
     };
     let prefs = (&locale).into();
     let mut options = RelativeTimeFormatterOptions::default();
-    options.numeric = if numeric_auto != 0 { Numeric::Auto } else { Numeric::Always };
+    options.numeric = Some(if numeric_auto != 0 { Numeric::Auto } else { Numeric::Always });
 
     let formatter = match (length, unit) {
         (0, 0) => RelativeTimeFormatter::try_new_long_second(prefs, options),

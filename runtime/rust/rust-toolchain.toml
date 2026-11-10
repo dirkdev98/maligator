@@ -1,5 +1,4 @@
 [toolchain]
-# Pinned for reproducible builds. 1.96.0 is current stable (2026-05-25) and
-# satisfies the MSRV of both ICU4X 2.x and temporal_rs.
-channel = "1.96.0"
+# Pin the compiler used for reproducible Rust archives and C ABI shims.
+channel = "1.99.1"
 profile = "minimal"

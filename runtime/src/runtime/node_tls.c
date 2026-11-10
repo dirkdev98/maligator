@@ -177,17 +177,20 @@ static MalValue node_tls_connect(
             return mal_value_new_undefined();
         }
     }
-    if (!mal_value_is_object(roots[1])) {
+    bool direct = mal_value_is_undefined(roots[1]);
+    if (!direct && !mal_value_is_object(roots[1])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                            "tls.connect: options.socket must be a socket");
         mal_gc_unroot(&root);
         return mal_value_new_undefined();
     }
     if (mal_value_is_undefined(roots[2])
-        && !node_tls_get(vm, roots[1], "host", &roots[2])) {
+        && !node_tls_get(vm, direct ? roots[0] : roots[1], "host", &roots[2])) {
         mal_gc_unroot(&root);
         return mal_value_new_undefined();
     }
+    if (direct && mal_value_is_undefined(roots[2]))
+        roots[2] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "localhost"));
     if (!node_tls_reject_unsupported(vm, roots[0])
         || !node_tls_alpn_protocol(vm, roots[5], &roots[7])) {
         mal_gc_unroot(&root);
@@ -256,17 +259,38 @@ static MalValue node_tls_connect(
         return mal_value_new_undefined();
     }
     MalTlsClientIdentity identity = {cert_pem, cert_pem_length, key_pem, key_pem_length};
-    bool started = mal_node_net_start_tls(vm, roots[1],
-        server_name, server_name_length, ca_pem, ca_pem_length,
-        alpn, alpn_length, &identity, insecure);
+    bool started = false;
+    if (direct) {
+        MalTlsClientConfig *config = nullptr;
+        if (mal_tcp_tls_create_client_config(server_name, server_name_length,
+                ca_pem, ca_pem_length, alpn, alpn_length, &identity, insecure, &config)
+            == MAL_TLS_STATUS_OK) {
+            MalCompletion socket = mal_vm_construct_value(vm,
+                vm->intrinsics[MAL_INTRINSIC_NODE_NET_SOCKET_CONSTRUCTOR], nullptr, 0);
+            if (socket.kind != MAL_COMPLETION_THROW) {
+                roots[1] = socket.value;
+                mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), (const byte *) "encrypted",
+                    mal_value_new_boolean(true), TLS_VISIBLE);
+                MalValue connected = mal_node_net_connect_tls(vm, roots[1], roots[0], config);
+                config = nullptr;
+                started = !mal_value_is_undefined(connected) && vm->completion.kind != MAL_COMPLETION_THROW;
+            }
+        }
+        mal_tls_client_config_free(&config);
+    } else {
+        started = mal_node_net_start_tls(vm, roots[1],
+            server_name, server_name_length, ca_pem, ca_pem_length,
+            alpn, alpn_length, &identity, insecure);
+    }
     free(server_name);
     free(ca_pem);
     free(alpn);
     free(cert_pem);
     free(key_pem);
     if (!started) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-                           "Failed to start TLS on socket");
+        if (vm->completion.kind != MAL_COMPLETION_THROW)
+            mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                               "Failed to start TLS on socket");
         mal_gc_unroot(&root);
         return mal_value_new_undefined();
     }

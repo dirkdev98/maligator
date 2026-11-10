@@ -30,6 +30,7 @@ extern "C" {
 #define MAL_TLS_INFO_AUTHORIZATION_ERROR 6
 
 typedef struct MalTlsClient MalTlsClient;
+typedef struct MalTlsClientConfig MalTlsClientConfig;
 typedef struct MalTlsServerConfig MalTlsServerConfig;
 typedef struct MalTlsAcceptor MalTlsAcceptor;
 
@@ -75,6 +76,16 @@ int32_t mal_tls_client_create(
     const uint8_t *cert_pem, size_t cert_pem_len,
     const uint8_t *key_pem, size_t key_pem_len,
     int32_t insecure, MalTlsClient **out_handle);
+/* A policy can create independent attempts before DNS or transport I/O. */
+int32_t mal_tls_client_config_create(
+    const uint8_t *server_name, size_t server_name_len,
+    const uint8_t *ca_pem, size_t ca_pem_len,
+    const uint8_t *alpn, size_t alpn_len,
+    const uint8_t *cert_pem, size_t cert_pem_len,
+    const uint8_t *key_pem, size_t key_pem_len,
+    int32_t insecure, MalTlsClientConfig **out_config);
+int32_t mal_tls_client_from_config(const MalTlsClientConfig *config, MalTlsClient **out_handle);
+void mal_tls_client_config_free(MalTlsClientConfig **config);
 int32_t mal_tls_client_read_ciphertext(
     MalTlsClient *handle, const uint8_t *input, size_t input_len,
     size_t *consumed);

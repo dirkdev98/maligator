@@ -195,8 +195,8 @@ describe("boxed scalar expressions at phi boundaries", () => {
 						].sort((a, b) => a - b),
 					})),
 				},
-				registerRepresentations: source.native.registerRepresentations.map(
-					(rep, local) => (local === leaf.dst ? "boxed" : rep),
+				registerRepresentations: source.native.registerRepresentations.map((rep, local) =>
+					local === leaf.dst ? "boxed" : rep,
 				),
 			}),
 		};

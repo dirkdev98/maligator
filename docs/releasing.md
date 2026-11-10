@@ -11,8 +11,9 @@ Node.js launcher with exact-version optional dependencies on the native packages
 There is no source-build fallback. An unsupported host or installation without its
 optional platform package fails with an actionable message. Windows is deferred
 because the native host/runtime currently depends on POSIX APIs. The alpha binaries
-are unsigned; macOS artifacts are not notarized. Minimum OS versions will be fixed
-after the release artifacts have run on the clean-host validation matrix.
+are unsigned; macOS artifacts are not notarized. Zig cross-builds target macOS 15
+or newer. Linux builds target glibc 2.31 and kernel 5.10 or newer; clean-host
+compatibility checks still run in CI.
 
 ## Versions and channels
 

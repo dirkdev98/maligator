@@ -5,8 +5,7 @@
 //! block (and, when decrypting with padding, the last full block) is held back.
 //! Pointers are borrowed for one call; no message string crosses the ABI.
 
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit, KeyIvInit, StreamCipher};
+use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit, KeyIvInit, StreamCipher};
 use aes::{Aes128, Aes192, Aes256};
 use chacha20::ChaCha20;
 use ghash::GHash;
@@ -40,7 +39,7 @@ impl Block {
     }
 
     fn encrypt(&self, block: &mut [u8; 16]) {
-        let b = GenericArray::from_mut_slice(block);
+        let b = block.into();
         match self {
             Block::A128(c) => c.encrypt_block(b),
             Block::A192(c) => c.encrypt_block(b),
@@ -49,7 +48,7 @@ impl Block {
     }
 
     fn decrypt(&self, block: &mut [u8; 16]) {
-        let b = GenericArray::from_mut_slice(block);
+        let b = block.into();
         match self {
             Block::A128(c) => c.decrypt_block(b),
             Block::A192(c) => c.decrypt_block(b),
@@ -72,14 +71,13 @@ enum Ctr {
 
 impl Ctr {
     fn new(key: &[u8], counter: &[u8; 16], gcm: bool) -> Option<Ctr> {
-        let iv = GenericArray::from_slice(counter);
         Some(match (key.len(), gcm) {
-            (16, false) => Ctr::A128(Ctr128::new(GenericArray::from_slice(key), iv)),
-            (24, false) => Ctr::A192(Ctr128::new(GenericArray::from_slice(key), iv)),
-            (32, false) => Ctr::A256(Ctr128::new(GenericArray::from_slice(key), iv)),
-            (16, true) => Ctr::G128(Ctr32::new(GenericArray::from_slice(key), iv)),
-            (24, true) => Ctr::G192(Ctr32::new(GenericArray::from_slice(key), iv)),
-            (32, true) => Ctr::G256(Ctr32::new(GenericArray::from_slice(key), iv)),
+            (16, false) => Ctr::A128(Ctr128::new_from_slices(key, counter).ok()?),
+            (24, false) => Ctr::A192(Ctr128::new_from_slices(key, counter).ok()?),
+            (32, false) => Ctr::A256(Ctr128::new_from_slices(key, counter).ok()?),
+            (16, true) => Ctr::G128(Ctr32::new_from_slices(key, counter).ok()?),
+            (24, true) => Ctr::G192(Ctr32::new_from_slices(key, counter).ok()?),
+            (32, true) => Ctr::G256(Ctr32::new_from_slices(key, counter).ok()?),
             _ => return None,
         })
     }
@@ -195,7 +193,7 @@ fn gcm_j0(iv: &[u8], h: &[u8; 16]) -> [u8; 16] {
         j0[15] = 1;
         return j0;
     }
-    let mut hash = GHash::new(GenericArray::from_slice(h));
+    let mut hash = GHash::new(h.into());
     hash.update_padded(iv);
     let mut lengths = [0u8; 16];
     lengths[8..].copy_from_slice(&((iv.len() as u64) * 8).to_be_bytes());
@@ -242,7 +240,7 @@ impl MalCipher {
                 let ctr = Ctr::new(key, &counter, true).ok_or(MAL_CIPHER_INVALID_KEY)?;
                 Mode::Gcm {
                     ctr,
-                    mac: Mac::new(GHash::new(GenericArray::from_slice(&h))),
+                    mac: Mac::new(GHash::new((&h).into())),
                     mask,
                 }
             }
@@ -254,10 +252,12 @@ impl MalCipher {
                     return Err(MAL_CIPHER_INVALID_IV);
                 }
                 let mut stream =
-                    ChaCha20::new(GenericArray::from_slice(key), GenericArray::from_slice(iv));
+                    ChaCha20::new_from_slices(key, iv).map_err(|_| MAL_CIPHER_INVALID_KEY)?;
                 let mut block0 = [0u8; 64];
                 stream.apply_keystream(&mut block0);
-                let mac = Mac::new(Poly1305::new(GenericArray::from_slice(&block0[..32])));
+                let mac = Mac::new(
+                    Poly1305::new_from_slice(&block0[..32]).map_err(|_| MAL_CIPHER_INVALID_KEY)?,
+                );
                 Mode::Chacha { stream, mac }
             }
             _ => return Err(MAL_CIPHER_UNKNOWN),

@@ -8,6 +8,10 @@ void mal_host_install_node_net(
 
 bool mal_node_net_drain(MalVm *vm);
 typedef struct MalTlsClientIdentity MalTlsClientIdentity;
+typedef struct MalTlsClientConfig MalTlsClientConfig;
+/* Consumes the policy, including on failure, and configures TLS before transport I/O. */
+MalValue mal_node_net_connect_tls(
+    MalVm *vm, MalValue socket, MalValue options, MalTlsClientConfig *config);
 bool mal_node_net_start_tls(
     MalVm *vm, MalValue socket,
     const byte *server_name, usize server_name_length,

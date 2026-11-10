@@ -113,6 +113,7 @@ export async function startPostgresAuthPeer(
 		let buffered = Buffer.alloc(0);
 		let startup = true;
 		let scramFirst = "";
+		let scramHeader = "";
 		let scramServer = "";
 		let authenticated = false;
 
@@ -151,8 +152,12 @@ export async function startPostgresAuthPeer(
 				}
 				const length = body.readInt32BE(zero + 1);
 				const first = body.toString("utf8", zero + 5, zero + 5 + length);
-				if (!first.startsWith("n,,n=*,r="))
+				if (
+					!/^[ny],,n=\*,r=/.test(first) ||
+					(first.startsWith("y,,") && options.tls === undefined)
+				)
 					throw new Error("invalid SCRAM client first message");
+				scramHeader = first.slice(0, 3);
 				scramFirst = first.slice(3);
 				const nonce = scramFirst.slice("n=*,r=".length);
 				scramServer = `r=${nonce}-server,s=${scramSalt.toString("base64")},i=4096`;
@@ -163,6 +168,8 @@ export async function startPostgresAuthPeer(
 			const proofIndex = final.lastIndexOf(",p=");
 			if (proofIndex < 0) throw new Error("missing SCRAM proof");
 			const withoutProof = final.slice(0, proofIndex);
+			if (!withoutProof.startsWith(`c=${Buffer.from(scramHeader).toString("base64")},`))
+				throw new Error("invalid SCRAM channel-binding header");
 			const provided = Buffer.from(final.slice(proofIndex + 3), "base64");
 			const expected = scramProof(scramFirst, scramServer, withoutProof);
 			if (

@@ -236,10 +236,15 @@ plaintext, inspect wants-read/wants-write, and extract a structured alert/error.
 Rust owns Rustls objects and allocations; C owns sockets, DNS, reactor registration,
 timeouts, operation state, and all buffers passed across the ABI.
 
+Client trust and hostname policy is resolved before DNS begins. The Node adapter
+retains that policy across address retries, while each transport owns a fresh TLS
+session installed before reactor activation. Queued application writes therefore
+stay encrypted even when a connection attempt fails or the caller ends early.
+
 The TLS feature must be absent from Cargo resolution and final links when disabled.
 An HTTP-only build has no Rustls symbols, trust store, or TLS code/data. Enabling TLS
 does not enable HTTP/2. Certificate and hostname verification are on by default;
-custom roots are explicit host options, and an insecure verifier is test-only.
+custom roots and `rejectUnauthorized` are explicit caller policy.
 
 ### Build gates
 

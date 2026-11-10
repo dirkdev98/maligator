@@ -1,12 +1,12 @@
 # SQLite amalgamation
 
-- Version: 3.53.3
-- Release number: 3530300
-- Upstream archive: https://sqlite.org/2026/sqlite-amalgamation-3530300.zip
-- Archive SHA3-256: `d45c688a8cb23f68611a894a756a12d7eb6ab6e9e2468ca70adbeab3808b5ab9`
-- `sqlite3.c` SHA-256: `87497ab605bedd0dbee27a209c1eeff8c89b229b13f921a7efdbb81a13f779fd`
-- `sqlite3.h` SHA-256: `4ff81af4849acabc76fc8349abb926814395072617ca18e08800abf734ab7612`
-- Retrieved: 2026-08-03
+- Version: 3.54.1
+- Release number: 3540100
+- Upstream archive: https://sqlite.org/2026/sqlite-amalgamation-3540100.zip
+- Archive SHA3-256: `92281c86e2957f9b9305890f9ac04204caa7b677cc868dc326d942689df28e30`
+- `sqlite3.c` SHA-256: `0c657666d819f261cc4007526ad57e1669de9949df7a8ea847aa284a2bf0ee52`
+- `sqlite3.h` SHA-256: `d6c84557261893439b341d2e6c35187ae3ea24fbfd843ad94616f72d89242b8c`
+- Retrieved: 2026-11-10
 
 Only the official `sqlite3.c` and `sqlite3.h` deliverables are vendored. SQLite
 has dedicated both files to the public domain:

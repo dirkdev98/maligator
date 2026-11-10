@@ -88,7 +88,7 @@ console.log(
 console.log("codes", zlib.codes.Z_DATA_ERROR, zlib.codes["-5"], zlib.codes.Z_OK);
 console.log(
 	"constants",
-	Object.keys(zlib.constants).length,
+	zlib.constants.BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH,
 	zlib.constants.Z_MAX_CHUNK,
 	zlib.constants.BROTLI_DEFAULT_QUALITY,
 );

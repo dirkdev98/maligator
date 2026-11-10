@@ -473,6 +473,7 @@ static bool tcp_flush_tls(MalTcpConnection *connection) {
 #endif
 
 static bool tcp_flush(MalTcpConnection *connection) {
+    if (connection->connecting) return true;
 #if MAL_NODE
     // Writes queued while a ClientHello awaits its config must wait for the session.
     if (connection->tls_acceptor != nullptr) return true;
@@ -483,9 +484,9 @@ static bool tcp_flush(MalTcpConnection *connection) {
 #endif
 }
 
-bool mal_tcp_connect_address_start(
+bool mal_tcp_connect_tls_address_start(
     MalHost *host, const struct sockaddr *address, socklen_t length,
-    MalHostHandle *operation) {
+    const MalTlsClientConfig *config, MalHostHandle *operation) {
     if (host == nullptr || address == nullptr || operation == nullptr
         || !mal_host_operation_start(&host->tasks, operation)) {
         return false;
@@ -494,6 +495,13 @@ bool mal_tcp_connect_address_start(
     if (connection == nullptr) goto fail;
     connection->host = host;
     connection->operation = *operation;
+    connection->fd = -1;
+#if MAL_NODE
+    if (config != nullptr && mal_tls_client_from_config(config, &connection->tls) != MAL_TLS_STATUS_OK)
+        goto fail_connection;
+#else
+    if (config != nullptr) goto fail_connection;
+#endif
     connection->fd = mal_net_connect_address(address, length);
     int connect_error = connection->fd < 0 ? errno : 0;
     connection->connecting = true;
@@ -520,6 +528,12 @@ fail_connection:
 fail:
     (void) mal_host_operation_abort_start(&host->tasks, *operation);
     return false;
+}
+
+bool mal_tcp_connect_address_start(
+    MalHost *host, const struct sockaddr *address, socklen_t length,
+    MalHostHandle *operation) {
+    return mal_tcp_connect_tls_address_start(host, address, length, nullptr, operation);
 }
 
 bool mal_tcp_connect_start(
@@ -561,7 +575,11 @@ bool mal_tcp_shutdown_write(MalHost *host, MalHostHandle operation) {
     MalTcpConnection *connection = host == nullptr ? nullptr : tcp_find(host, operation);
     if (connection == nullptr) return false;
     connection->shutdown_requested = true;
-    return connection->connecting || connection->write_head != nullptr
+    bool handshaking = false;
+#if MAL_NODE
+    handshaking = connection->tls != nullptr && mal_tls_client_is_handshaking(connection->tls) != 0;
+#endif
+    return connection->connecting || connection->write_head != nullptr || handshaking
         || shutdown(connection->fd, SHUT_WR) == 0 || errno == ENOTCONN;
 }
 
@@ -610,17 +628,17 @@ bool mal_tcp_set_no_delay(MalHost *host, MalHostHandle operation, bool enabled) 
         &value, sizeof(value)) == 0;
 }
 
-int mal_tcp_tls_create_client(
+int mal_tcp_tls_create_client_config(
     const byte *server_name, usize server_name_length,
     const byte *ca_pem, usize ca_pem_length,
     const byte *alpn, usize alpn_length, const MalTlsClientIdentity *identity, bool insecure,
-    MalTlsClient **out) {
+    MalTlsClientConfig **out) {
 #if MAL_NODE
     static const MalTlsClientIdentity anonymous = {0};
     if (identity == nullptr) identity = &anonymous;
     // Insecure clients still load the default roots: authorizationError reports their verdict.
     if (ca_pem != nullptr) {
-        return mal_tls_client_create((const uint8_t *)server_name, server_name_length,
+        return mal_tls_client_config_create((const uint8_t *)server_name, server_name_length,
             (const uint8_t *)ca_pem, ca_pem_length, (const uint8_t *)alpn, alpn_length,
             identity->cert_pem, identity->cert_pem_length,
             identity->key_pem, identity->key_pem_length, insecure ? 1 : 0, out);
@@ -641,10 +659,10 @@ int mal_tcp_tls_create_client(
         if (mal_posix_fs_read_file(extra_path, &extra, &extra_length) != 0) {
             free(roots); return MAL_TLS_STATUS_ERROR;
         }
-        MalTlsClient *validation = nullptr;
-        int status = mal_tls_client_create((const uint8_t *)server_name, server_name_length,
+        MalTlsClientConfig *validation = nullptr;
+        int status = mal_tls_client_config_create((const uint8_t *)server_name, server_name_length,
             (const uint8_t *)extra, extra_length, nullptr, 0, nullptr, 0, nullptr, 0, 0, &validation);
-        mal_tls_client_free(&validation);
+        mal_tls_client_config_free(&validation);
         if (status != MAL_TLS_STATUS_OK || roots_length == SIZE_MAX || extra_length > SIZE_MAX - roots_length - 1) {
             free(extra); free(roots); return MAL_TLS_STATUS_ERROR;
         }
@@ -656,7 +674,7 @@ int mal_tcp_tls_create_client(
         roots_length += extra_length;
         free(extra);
     }
-    int status = mal_tls_client_create((const uint8_t *)server_name, server_name_length,
+    int status = mal_tls_client_config_create((const uint8_t *)server_name, server_name_length,
         (const uint8_t *)roots, roots_length, (const uint8_t *)alpn, alpn_length,
         identity->cert_pem, identity->cert_pem_length,
         identity->key_pem, identity->key_pem_length, insecure ? 1 : 0, out);
@@ -668,6 +686,23 @@ int mal_tcp_tls_create_client(
     if (out != nullptr) *out = nullptr;
     return -1;
 #endif
+}
+
+int mal_tcp_tls_create_client(
+    const byte *server_name, usize server_name_length,
+    const byte *ca_pem, usize ca_pem_length,
+    const byte *alpn, usize alpn_length, const MalTlsClientIdentity *identity, bool insecure,
+    MalTlsClient **out) {
+    if (out == nullptr) return -1;
+    *out = nullptr;
+    MalTlsClientConfig *config = nullptr;
+    int status = mal_tcp_tls_create_client_config(server_name, server_name_length,
+        ca_pem, ca_pem_length, alpn, alpn_length, identity, insecure, &config);
+#if MAL_NODE
+    if (status == MAL_TLS_STATUS_OK) status = mal_tls_client_from_config(config, out);
+    mal_tls_client_config_free(&config);
+#endif
+    return status;
 }
 
 #if MAL_NODE

@@ -709,7 +709,7 @@ remains a Maligator extension and does not count as global fetch conformance.
       four) and give request sockets `authorized`, `authorizationError` and
       getPeerCertificate. Cache the deferred verification verdict on the session, and
       accept tls.connect's `checkServerIdentity` option. `new tls.TLSSocket(socket,
-options)` wrapping with a deferred start, and `setDefaultCACertificates`.
+  options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       rootCertificates comes from the system store rather than Node's NSS list, and
       no certificate compression is offered. Plain 'connection' listeners on a
       tls.Server see a TLSSocket where Node passes the raw socket.

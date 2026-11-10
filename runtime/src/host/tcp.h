@@ -8,6 +8,7 @@
 
 typedef struct MalHost MalHost;
 typedef struct MalTlsClient MalTlsClient;
+typedef struct MalTlsClientConfig MalTlsClientConfig;
 typedef struct MalTlsServerConfig MalTlsServerConfig;
 
 typedef enum MalTcpProgressKind {
@@ -44,6 +45,10 @@ bool mal_tcp_connect_start(
 bool mal_tcp_connect_address_start(
     MalHost *host, const struct sockaddr *address, socklen_t length,
     MalHostHandle *operation);
+/* The borrowed policy creates a fresh session before transport I/O can begin. */
+bool mal_tcp_connect_tls_address_start(
+    MalHost *host, const struct sockaddr *address, socklen_t length,
+    const MalTlsClientConfig *config, MalHostHandle *operation);
 bool mal_tcp_write_owned(
     MalHost *host, MalHostHandle operation, byte *bytes, usize length,
     u64 write_token);
@@ -97,6 +102,11 @@ bool mal_tcp_connection_endpoints(
 void mal_tcp_shutdown(MalHost *host);
 
 /* An explicit CA replaces defaults; otherwise use host roots plus NODE_EXTRA_CA_CERTS. */
+int mal_tcp_tls_create_client_config(
+    const byte *server_name, usize server_name_length,
+    const byte *ca_pem, usize ca_pem_length,
+    const byte *alpn, usize alpn_length, const MalTlsClientIdentity *identity, bool insecure,
+    MalTlsClientConfig **out);
 int mal_tcp_tls_create_client(
     const byte *server_name, usize server_name_length,
     const byte *ca_pem, usize ca_pem_length,

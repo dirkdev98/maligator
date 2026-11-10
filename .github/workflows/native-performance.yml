@@ -97,10 +97,10 @@ jobs:
       - name: Select matching LLVM archive and link tools
         if: steps.baseline.outputs.skip != 'true'
         run: |
-          sudo apt-get install --yes llvm-21 lld-21
+          sudo apt-get install --yes llvm-23 lld-23
           mkdir -p "$RUNNER_TEMP/native-performance-bin"
-          ln -s "$(command -v llvm-ar-21)" "$RUNNER_TEMP/native-performance-bin/ar"
-          ln -s "$(command -v ld.lld-21)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
+          ln -s "$(command -v llvm-ar-23)" "$RUNNER_TEMP/native-performance-bin/ar"
+          ln -s "$(command -v ld.lld-23)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
           echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
 
       - name: Check the runner environment
@@ -138,7 +138,7 @@ jobs:
 
       - name: Retain comparison evidence
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-${{ matrix.lane }}-${{ github.event.pull_request.number || 'main' }}-${{ matrix.mode }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -206,7 +206,7 @@ jobs:
       - name: Select matching LLVM archive and link tools
         if: steps.baseline.outputs.skip != 'true'
         run: |
-          sudo apt-get install --yes llvm-21 lld-21 linux-tools-generic
+          sudo apt-get install --yes llvm-23 lld-23 linux-tools-generic
           for candidate in /usr/lib/linux-tools/*/perf; do
             if [ -x "$candidate" ]; then
               echo "NATIVE_MICRO_PERF=$candidate" >> "$GITHUB_ENV"
@@ -214,8 +214,8 @@ jobs:
             fi
           done
           mkdir -p "$RUNNER_TEMP/native-performance-bin"
-          ln -s "$(command -v llvm-ar-21)" "$RUNNER_TEMP/native-performance-bin/ar"
-          ln -s "$(command -v ld.lld-21)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
+          ln -s "$(command -v llvm-ar-23)" "$RUNNER_TEMP/native-performance-bin/ar"
+          ln -s "$(command -v ld.lld-23)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
           echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
 
       - name: Check environment and inspect the micro plan
@@ -273,7 +273,7 @@ jobs:
 
       - name: Retain micro evidence
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -291,7 +291,7 @@ jobs:
 
       - name: Retain stable-shape-properties executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-stable-shape-properties-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/stable-shape-properties.tar.gz
@@ -302,7 +302,7 @@ jobs:
 
       - name: Retain record-array-traversal executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-record-array-traversal-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/record-array-traversal.tar.gz
@@ -313,7 +313,7 @@ jobs:
 
       - name: Retain direct-calls executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-direct-calls-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/direct-calls.tar.gz
@@ -324,7 +324,7 @@ jobs:
 
       - name: Retain indirect-calls executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-indirect-calls-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/indirect-calls.tar.gz
@@ -335,7 +335,7 @@ jobs:
 
       - name: Retain closure-calls executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-closure-calls-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/closure-calls.tar.gz
@@ -346,7 +346,7 @@ jobs:
 
       - name: Retain short-lived-records executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-short-lived-records-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/short-lived-records.tar.gz
@@ -357,7 +357,7 @@ jobs:
 
       - name: Retain heap-valued-projection executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-heap-valued-projection-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/heap-valued-projection.tar.gz
@@ -368,7 +368,7 @@ jobs:
 
       - name: Retain chained-static-properties executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-chained-static-properties-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/chained-static-properties.tar.gz
@@ -379,7 +379,7 @@ jobs:
 
       - name: Retain infrequent-getter-properties executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-infrequent-getter-properties-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/infrequent-getter-properties.tar.gz
@@ -390,7 +390,7 @@ jobs:
 
       - name: Retain native-property-owned-3 executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-native-property-owned-3-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/native-property-owned-3.tar.gz
@@ -401,7 +401,7 @@ jobs:
 
       - name: Retain native-property-owned-6 executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-native-property-owned-6-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/native-property-owned-6.tar.gz
@@ -412,7 +412,7 @@ jobs:
 
       - name: Retain native-property-mixed-prototypes executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-native-property-mixed-prototypes-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/native-property-mixed-prototypes.tar.gz
@@ -423,7 +423,7 @@ jobs:
 
       - name: Retain native-property-middle-getter executable bundle
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-micro-elf-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-native-property-middle-getter-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/native-performance/binary-bundles/native-property-middle-getter.tar.gz
@@ -490,10 +490,10 @@ jobs:
       - name: Select matching LLVM archive and link tools
         if: steps.baseline.outputs.skip != 'true'
         run: |
-          sudo apt-get install --yes llvm-21 lld-21
+          sudo apt-get install --yes llvm-23 lld-23
           mkdir -p "$RUNNER_TEMP/native-performance-bin"
-          ln -s "$(command -v llvm-ar-21)" "$RUNNER_TEMP/native-performance-bin/ar"
-          ln -s "$(command -v ld.lld-21)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
+          ln -s "$(command -v llvm-ar-23)" "$RUNNER_TEMP/native-performance-bin/ar"
+          ln -s "$(command -v ld.lld-23)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
           echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
 
       - name: Set up matched Bun controls
@@ -668,7 +668,7 @@ jobs:
         if: >-
           always() && steps.baseline.outputs.skip != 'true' &&
           (inputs.compiler_program == 'revision' || inputs.memory_policy)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-compiler-slices-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -770,7 +770,7 @@ jobs:
 
       - name: Retain compiler comparison evidence
         if: always() && steps.baseline.outputs.skip != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-compiler-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

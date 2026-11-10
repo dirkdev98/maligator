@@ -53,9 +53,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 26.12.0
+          node-version: 26.13.0
 
       - name: Compare website inputs with the live container
         id: changes
@@ -87,12 +87,12 @@ jobs:
         run: |
           archive="$RUNNER_TEMP/zig.tar.xz"
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-            https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz \
+            https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz \
             --output "$archive"
-          echo "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239  $archive" | sha256sum --check
+          echo "3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a  $archive" | sha256sum --check
           tar -xJf "$archive" -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/zig-x86_64-linux-0.15.2/zig" version
+          echo "$RUNNER_TEMP/zig-x86_64-linux-0.17.1" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/zig-x86_64-linux-0.17.1/zig" version
 
       - name: Install the pinned WASI toolchain
         uses: ./.github/actions/setup-wasi
@@ -153,7 +153,7 @@ jobs:
 
       - name: Retain the reviewed deployment inputs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: website-build-${{ github.run_id }}
           path: ${{ runner.temp }}/website-build.tar.gz
@@ -163,7 +163,7 @@ jobs:
 
       - name: Retain deployment verification
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: website-verification-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/website-build

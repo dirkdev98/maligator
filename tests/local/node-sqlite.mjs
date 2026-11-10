@@ -19,6 +19,27 @@ check(sqlite.StatementSync === StatementSync, "default StatementSync identity");
 const db = new DatabaseSync(":memory:");
 check(db.isOpen, "database opens synchronously");
 check(!db.isTransaction, "database starts outside a transaction");
+const jsonText = 'line\n"item"';
+equal(
+	db.prepare("SELECT format('%J', ?) AS value").get(jsonText).value,
+	JSON.stringify(jsonText),
+	"SQL format quotes and escapes JSON text",
+);
+equal(
+	db.prepare("SELECT date('2026-11-10', 'weekday -1') AS value").get().value,
+	"2026-11-09",
+	"negative weekday selects the previous matching day",
+);
+equal(
+	db
+		.prepare(
+			"SELECT strftime('%Y-%m-%d %H:%M:%f', '2026-02-10', 'end of month') AS value",
+		)
+		.get().value,
+	"2026-02-28 23:59:59.999",
+	"end of month selects the final millisecond",
+);
+
 db.exec(`
 	CREATE TABLE users (
 		id INTEGER PRIMARY KEY,

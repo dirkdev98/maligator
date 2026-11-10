@@ -18,8 +18,8 @@ Module instances and globals start fresh in each replacement. Store data that mu
 For an application with asynchronous startup, call [ready](/api/application#ready) after your own resources accept work:
 
 ```typescript src/index.ts
-import { ready } from "maligator:application";
 import { createServer } from "node:http";
+import { ready } from "maligator:application";
 
 createServer((_request, response) => response.end("hello")).listen(
 	3000,

@@ -125,6 +125,9 @@ int main(void) {
         puts("unicode-case-storage PASS");
         return 0;
     }
+    CASE(u"\u0277\u027c", u"\ua7dd\ua7e2", true, MAL_UNICODE_LOCALE_ROOT);
+    CASE(u"\ua7dd\ua7e2", u"\u0277\u027c", false, MAL_UNICODE_LOCALE_ROOT);
+    NORMALIZE(u"\u209d\u209e\u209f", u"wyz", true, true);
     CASE(u"Stra\u00dfe \ufb03", u"STRASSE FFI", true, MAL_UNICODE_LOCALE_ROOT);
     CASE(u"A\u03a3'A A\u03a3'", u"a\u03c3'a a\u03c2'", false, MAL_UNICODE_LOCALE_ROOT);
     CASE(u"\U00010400\U00010428\xd800""", u"\U00010428\U00010428\xd800""", false, MAL_UNICODE_LOCALE_ROOT);
