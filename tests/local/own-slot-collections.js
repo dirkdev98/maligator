@@ -64,7 +64,25 @@ function fill(record, reverse) {
 	return Object.assign(record, values);
 }
 const rows = [];
-if (mode === "fallback") {
+if (mode === "detached-view") {
+	const backing = fill(new ArrayBuffer(8), false);
+	const view = fill(new DataView(backing), false);
+	for (let i = 0; i < 6; i++) {
+		globalThis.readBuiltinInternals(view);
+		globalThis.sumCollectionNumbers(view);
+	}
+	backing.transfer();
+	const result = globalThis.readBuiltinInternals(view);
+	if (
+		result[0] !== marker ||
+		result[1] !== 0 ||
+		result[2] !== marker ||
+		result[4] !== "tail" ||
+		globalThis.sumCollectionNumbers(view) !== 15
+	)
+		throw new Error("detached view metadata or own fields lost");
+	rows.push("detached view metadata");
+} else if (mode === "fallback") {
 	for (const kind of kinds) {
 		const record = fill(make(kind), false);
 		for (let i = 0; i < 5; i++) globalThis.readCollectionReferences(record);
@@ -158,13 +176,7 @@ if (mode === "fallback") {
 		backing.transfer();
 		if (globalThis.readBuiltinInternals(backing)[1] !== 0)
 			throw new Error("stale buffer length");
-		let caught = false;
-		try {
-			globalThis.readBuiltinInternals(view);
-		} catch (error) {
-			caught = error instanceof TypeError;
-		}
-		if (!caught || globalThis.sumCollectionNumbers(view) !== 15)
+		if (globalThis.sumCollectionNumbers(view) !== 15)
 			throw new Error("detached view fallback lost");
 		rows.push("view detached");
 	}

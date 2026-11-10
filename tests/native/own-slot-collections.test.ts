@@ -54,6 +54,7 @@ describe("named own-field regions over builtin receivers", () => {
 				"mixed",
 				"dictionary",
 				"fallback",
+				"detached-view",
 			]) {
 				const env = {
 					OWN_SLOT_MODE: mode,
@@ -61,11 +62,15 @@ describe("named own-field regions over builtin receivers", () => {
 					MAL_HOST_GC: "1",
 					MAL_PERF_STATS: "1",
 				};
-				const expected = execFileSync(process.execPath, ["--expose-gc", fixture], {
-					encoding: "utf8",
-					env: { ...process.env, ...env },
-					timeout: 15000,
-				});
+				// Detached metadata follows ECMA-262; the Node oracle still throws.
+				const expected =
+					mode === "detached-view"
+						? '["detached view metadata"]\n'
+						: execFileSync(process.execPath, ["--expose-gc", fixture], {
+								encoding: "utf8",
+								env: { ...process.env, ...env },
+								timeout: 15000,
+							});
 				for (const [backend, target] of [
 					["compiled", pair.compiled],
 					["interpreted", pair.interpreted],

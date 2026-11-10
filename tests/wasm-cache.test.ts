@@ -38,6 +38,7 @@ function sourceCheckout(directory: string): string {
 		"embedding",
 		"rust/src",
 		"rust/include",
+		"rust/vendor",
 		"rust/Cargo.toml",
 		"rust/Cargo.lock",
 		"rust/rust-toolchain.toml",
