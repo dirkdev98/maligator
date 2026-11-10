@@ -1,17 +1,19 @@
-// engine.intl.features subset fixture. Built with the "core" services
-// (collator, number-format, date-time-format, plural-rules, list-format) selected
-// and the heavy/rare ones (segmenter, display-names, relative-time-format,
-// duration-format) dropped. Asserts the selected services are present + localized
-// and the dropped ones are absent (their Intl.X is undefined), while the
-// non-namespace methods of selected services still localize.
-
 const results = [];
 function check(name, ok) {
 	results.push([name, !!ok]);
 }
 
-// Selected services present + localized.
 check("Intl present", typeof Intl === "object");
+for (const [tag, maximal, minimal] of [
+	["und-Zzzz-ZZ", "en-Latn-US", "en"],
+	["und-Qaaa", "en-Qaaa-US", "en-Qaaa"],
+	["und-AQ-u-ca-gregory", "en-Latn-AQ-u-ca-gregory", "en-AQ-u-ca-gregory"],
+	["tlh", "tlh", "tlh"],
+]) {
+	const locale = new Intl.Locale(tag);
+	check(`${tag} likely subtags`, locale.maximize().toString() === maximal);
+	check(`${tag} minimal subtags`, locale.minimize().toString() === minimal);
+}
 check(
 	"NumberFormat localized",
 	new Intl.NumberFormat("de-DE").format(1234.5) === "1.234,5",

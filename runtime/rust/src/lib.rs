@@ -93,6 +93,18 @@ fn locale_expander() -> icu_locale::LocaleExpander {
     icu_locale::LocaleExpander::new_extended()
 }
 
+fn maximize_locale(expander: &icu_locale::LocaleExpander, id: &mut icu_locale::LanguageIdentifier) {
+    expander.maximize(id);
+    // ICU leaves unresolved `und` unchanged; Intl retains the CLDR default fallback.
+    if id.language.is_unknown() {
+        let (language, script, region) =
+            icu_locale::fallback::provider::Baked::SINGLETON_LOCALE_LIKELY_SUBTAGS_LANGUAGE_V1.und;
+        id.language = language;
+        id.script.get_or_insert(script);
+        id.region.get_or_insert(region);
+    }
+}
+
 /// Parse + canonicalize a BCP-47 locale tag into `out`; returns the full length,
 /// or -1 if the tag is structurally invalid (RangeError on the C side).
 #[no_mangle]
@@ -125,7 +137,7 @@ pub unsafe extern "C" fn mal_i18n_locale_maximize(tag_ptr: *const u8, tag_len: u
     let Some(mut locale) = parse_locale(tag_ptr, tag_len) else {
         return -1;
     };
-    locale_expander().maximize(&mut locale.id);
+    maximize_locale(&locale_expander(), &mut locale.id);
     unsafe { write_utf8(&locale.to_string(), out, out_cap) }
 }
 
@@ -135,7 +147,9 @@ pub unsafe extern "C" fn mal_i18n_locale_minimize(tag_ptr: *const u8, tag_len: u
     let Some(mut locale) = parse_locale(tag_ptr, tag_len) else {
         return -1;
     };
-    locale_expander().minimize(&mut locale.id);
+    let expander = locale_expander();
+    maximize_locale(&expander, &mut locale.id);
+    expander.minimize(&mut locale.id);
     unsafe { write_utf8(&locale.to_string(), out, out_cap) }
 }
 
@@ -1168,6 +1182,8 @@ pub unsafe extern "C" fn mal_i18n_relative_time(
     let Ok(formatter) = formatter else {
         return -1;
     };
+    // ECMA-402 looks up auto literals with ToString(value), which maps -0 to "0".
+    let value = if numeric_auto != 0 && value == 0.0 { 0.0 } else { value };
     let rendered = format!("{}", value);
     let Ok(decimal) = Decimal::try_from_str(&rendered) else {
         return -1;
