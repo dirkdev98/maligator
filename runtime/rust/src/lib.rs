@@ -59,7 +59,7 @@ pub mod crypto_cipher;
 pub mod crypto_pkey;
 
 /// Identifies the flat transport contract shared with `mal_i18n.h`.
-pub const MAL_I18N_ABI_VERSION: u32 = 7;
+pub const MAL_I18N_ABI_VERSION: u32 = 8;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]
@@ -73,12 +73,15 @@ pub extern "C" fn mal_i18n_abi_version() -> u32 {
 // `regexp` and URL by `url` (above). The
 // `#[no_mangle]` symbols export from inside this module regardless of Rust
 // visibility, so the C side links them exactly as before when the feature is on.
+#[cfg(feature = "intl-relative-time-format")]
+mod intl_relative_time;
+
 #[cfg(feature = "intl")]
 mod intl {
 use crate::ffi::{nullable_slice, nullable_u16_slice, write_utf8};
 
 /// Parse a BCP-47 tag from a UTF-8 buffer into an ICU4X Locale.
-fn parse_locale(tag_ptr: *const u8, tag_len: usize) -> Option<icu_locale::Locale> {
+pub(super) fn parse_locale(tag_ptr: *const u8, tag_len: usize) -> Option<icu_locale::Locale> {
     let bytes = unsafe { core::slice::from_raw_parts(tag_ptr, tag_len) };
     core::str::from_utf8(bytes).ok().and_then(|text| text.parse::<icu_locale::Locale>().ok())
 }
@@ -1227,78 +1230,6 @@ pub unsafe extern "C" fn mal_i18n_display_name(
         Some(text) => unsafe { write_utf8(&text, out, out_cap) },
         None => -1,
     }
-}
-
-// ---------------------------------------------------------------------------
-// Intl.RelativeTimeFormat — icu_experimental::relativetime.
-// ---------------------------------------------------------------------------
-
-/// Format `value` of `unit` relative to now. length: 0 long, 1 short, 2 narrow.
-/// unit: 0 second, 1 minute, 2 hour, 3 day, 4 week, 5 month, 6 quarter, 7 year.
-/// numeric_auto != 0 selects Numeric::Auto ("yesterday"), else Always ("1 day
-/// ago"). Writes UTF-8 into `out`; returns the length, or -1 on failure.
-#[cfg(feature = "intl-relative-time-format")]
-#[no_mangle]
-pub unsafe extern "C" fn mal_i18n_relative_time(
-    locale_ptr: *const u8,
-    locale_len: usize,
-    length: i32,
-    unit: i32,
-    numeric_auto: i32,
-    value: f64,
-    out: *mut u8,
-    out_cap: i32,
-) -> i32 {
-    use icu_decimal::input::Decimal;
-    use icu_experimental::relativetime::options::Numeric;
-    use icu_experimental::relativetime::{RelativeTimeFormatter, RelativeTimeFormatterOptions};
-    use writeable::Writeable;
-
-    let Some(locale) = parse_locale(locale_ptr, locale_len) else {
-        return -1;
-    };
-    let prefs = (&locale).into();
-    let mut options = RelativeTimeFormatterOptions::default();
-    options.numeric = Some(if numeric_auto != 0 { Numeric::Auto } else { Numeric::Always });
-
-    let formatter = match (length, unit) {
-        (0, 0) => RelativeTimeFormatter::try_new_long_second(prefs, options),
-        (0, 1) => RelativeTimeFormatter::try_new_long_minute(prefs, options),
-        (0, 2) => RelativeTimeFormatter::try_new_long_hour(prefs, options),
-        (0, 3) => RelativeTimeFormatter::try_new_long_day(prefs, options),
-        (0, 4) => RelativeTimeFormatter::try_new_long_week(prefs, options),
-        (0, 5) => RelativeTimeFormatter::try_new_long_month(prefs, options),
-        (0, 6) => RelativeTimeFormatter::try_new_long_quarter(prefs, options),
-        (0, 7) => RelativeTimeFormatter::try_new_long_year(prefs, options),
-        (1, 0) => RelativeTimeFormatter::try_new_short_second(prefs, options),
-        (1, 1) => RelativeTimeFormatter::try_new_short_minute(prefs, options),
-        (1, 2) => RelativeTimeFormatter::try_new_short_hour(prefs, options),
-        (1, 3) => RelativeTimeFormatter::try_new_short_day(prefs, options),
-        (1, 4) => RelativeTimeFormatter::try_new_short_week(prefs, options),
-        (1, 5) => RelativeTimeFormatter::try_new_short_month(prefs, options),
-        (1, 6) => RelativeTimeFormatter::try_new_short_quarter(prefs, options),
-        (1, 7) => RelativeTimeFormatter::try_new_short_year(prefs, options),
-        (2, 0) => RelativeTimeFormatter::try_new_narrow_second(prefs, options),
-        (2, 1) => RelativeTimeFormatter::try_new_narrow_minute(prefs, options),
-        (2, 2) => RelativeTimeFormatter::try_new_narrow_hour(prefs, options),
-        (2, 3) => RelativeTimeFormatter::try_new_narrow_day(prefs, options),
-        (2, 4) => RelativeTimeFormatter::try_new_narrow_week(prefs, options),
-        (2, 5) => RelativeTimeFormatter::try_new_narrow_month(prefs, options),
-        (2, 6) => RelativeTimeFormatter::try_new_narrow_quarter(prefs, options),
-        (2, 7) => RelativeTimeFormatter::try_new_narrow_year(prefs, options),
-        _ => return -1,
-    };
-    let Ok(formatter) = formatter else {
-        return -1;
-    };
-    // ECMA-402 looks up auto literals with ToString(value), which maps -0 to "0".
-    let value = if numeric_auto != 0 && value == 0.0 { 0.0 } else { value };
-    let rendered = format!("{}", value);
-    let Ok(decimal) = Decimal::try_from_str(&rendered) else {
-        return -1;
-    };
-    let text = formatter.format(decimal).write_to_string().into_owned();
-    unsafe { write_utf8(&text, out, out_cap) }
 }
 
 // ---------------------------------------------------------------------------

@@ -527,13 +527,14 @@ runRuntimeGapCase("allocation-snapshot", run, verify);
 	});
 
 	it.each([
-		["primordial-regexp-escaped-records", true, false, false],
-		["primordial-string-normalize-collation", false, true, false],
-		["primordial-promise-batch-results", false, false, false],
-		["intl-list-format-reuse", false, false, true],
+		["primordial-regexp-escaped-records", true, []],
+		["primordial-string-normalize-collation", false, ["collator"]],
+		["primordial-promise-batch-results", false, []],
+		["intl-list-format-reuse", false, ["list-format"]],
+		["intl-relative-time-reuse", false, ["relative-time-format"]],
 	] as const)(
 		"clones %s with runnable work and its required features",
-		(sourceId, regexp, collator, listFormat) => {
+		(sourceId, regexp, intlFeatures) => {
 			const id = `unit-clone-${sourceId}-${process.pid}`;
 			const directory = path.join(RUNTIME_GAP_EXPERIMENTS, id);
 			const original = loadRuntimeGapCatalog().cases.find(({ id }) => id === sourceId)!;
@@ -565,8 +566,8 @@ runRuntimeGapCase("allocation-snapshot", run, verify);
 				expect(plan.buildsByCase[id]!.engine).toMatchObject({
 					regexp,
 					intl: {
-						enabled: collator || listFormat,
-						features: listFormat ? ["list-format"] : collator ? ["collator"] : [],
+						enabled: intlFeatures.length > 0,
+						features: intlFeatures,
 					},
 				});
 				const cloned = JSON.parse(

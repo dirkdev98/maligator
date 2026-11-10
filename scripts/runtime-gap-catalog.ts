@@ -19,7 +19,11 @@ export type RuntimeGapCategory =
 	| "compiler-algorithms"
 	| "unattributed-execution";
 
-export type RuntimeGapFeature = "regexp" | "intl-collator" | "intl-list-format";
+export type RuntimeGapFeature =
+	| "regexp"
+	| "intl-collator"
+	| "intl-list-format"
+	| "intl-relative-time-format";
 
 export interface RuntimeGapCaseDescriptor {
 	readonly id: string;
@@ -94,7 +98,8 @@ export function runtimeGapFeatures(value: unknown): ReadonlyArray<RuntimeGapFeat
 			(feature) =>
 				feature !== "regexp" &&
 				feature !== "intl-collator" &&
-				feature !== "intl-list-format",
+				feature !== "intl-list-format" &&
+				feature !== "intl-relative-time-format",
 		) ||
 		new Set(value).size !== value.length
 	) {

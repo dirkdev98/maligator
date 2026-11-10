@@ -76,6 +76,110 @@
 			],
 			"methods": ["Intl.ListFormat.prototype.format"],
 			"features": ["intl-list-format"]
+		},
+		{
+			"id": "intl-relative-time-reuse",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-relative-time-format",
+			"category": "api-builtins",
+			"mechanisms": ["relative-time-format", "persistent-formatters", "numeric-parts"],
+			"inputShape": "Reused English numeric relative-day formatter over bounded integer values.",
+			"unit": "formatted relative times",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_relative_time.rs",
+			"fixture": "cases/intl-relative-time-reuse.mjs",
+			"controls": [
+				"intl-relative-time-units",
+				"intl-relative-time-construct",
+				"intl-relative-time-parts",
+				"intl-relative-time-auto"
+			],
+			"methods": ["Intl.RelativeTimeFormat.prototype.format"],
+			"features": ["intl-relative-time-format"]
+		},
+		{
+			"id": "intl-relative-time-units",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-relative-time-format",
+			"category": "api-builtins",
+			"mechanisms": ["relative-time-format", "persistent-formatters", "numeric-parts"],
+			"inputShape": "Reused English numeric formatter alternating through every relative-time unit.",
+			"unit": "formatted relative times",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_relative_time.rs",
+			"fixture": "cases/intl-relative-time-units.mjs",
+			"controls": [
+				"intl-relative-time-reuse",
+				"intl-relative-time-construct",
+				"intl-relative-time-parts",
+				"intl-relative-time-auto"
+			],
+			"methods": ["Intl.RelativeTimeFormat.prototype.format"],
+			"features": ["intl-relative-time-format"]
+		},
+		{
+			"id": "intl-relative-time-construct",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-relative-time-format",
+			"category": "api-builtins",
+			"mechanisms": ["relative-time-format", "persistent-formatters", "numeric-parts"],
+			"inputShape": "Construct and format a bounded numeric relative day for every operation.",
+			"unit": "formatted relative times",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_relative_time.rs",
+			"fixture": "cases/intl-relative-time-construct.mjs",
+			"controls": [
+				"intl-relative-time-reuse",
+				"intl-relative-time-units",
+				"intl-relative-time-parts",
+				"intl-relative-time-auto"
+			],
+			"methods": ["Intl.RelativeTimeFormat.prototype.format"],
+			"features": ["intl-relative-time-format"]
+		},
+		{
+			"id": "intl-relative-time-parts",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-relative-time-format",
+			"category": "api-builtins",
+			"mechanisms": ["relative-time-format", "persistent-formatters", "numeric-parts"],
+			"inputShape": "Reused English formatter returning and consuming numeric parts without grouping.",
+			"unit": "formatted relative times",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_relative_time.rs",
+			"fixture": "cases/intl-relative-time-parts.mjs",
+			"controls": [
+				"intl-relative-time-reuse",
+				"intl-relative-time-units",
+				"intl-relative-time-construct",
+				"intl-relative-time-auto"
+			],
+			"methods": ["Intl.RelativeTimeFormat.prototype.formatToParts"],
+			"features": ["intl-relative-time-format"]
+		},
+		{
+			"id": "intl-relative-time-auto",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-relative-time-format",
+			"category": "api-builtins",
+			"mechanisms": [
+				"relative-time-format",
+				"persistent-formatters",
+				"automatic-literals"
+			],
+			"inputShape": "Reused English formatter alternating exact named days and numeric fallback.",
+			"unit": "formatted relative times",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_relative_time.rs",
+			"fixture": "cases/intl-relative-time-auto.mjs",
+			"controls": [
+				"intl-relative-time-reuse",
+				"intl-relative-time-units",
+				"intl-relative-time-construct",
+				"intl-relative-time-parts"
+			],
+			"methods": ["Intl.RelativeTimeFormat.prototype.format"],
+			"features": ["intl-relative-time-format"]
 		}
 	]
 }

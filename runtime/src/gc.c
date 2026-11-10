@@ -2466,6 +2466,11 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
                     mal_i18n_list_formatter_free(intl->handle);
                 }
 #endif
+#if MAL_INTL_HAS_RELATIVE_TIME_FORMAT
+                if (intl->kind == MAL_INTL_RELATIVE_TIME_FORMAT) {
+                    mal_gc_process_release(mal_i18n_relative_time_free(intl->handle));
+                }
+#endif
                 intl->handle = nullptr;
             }
             break;

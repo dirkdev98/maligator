@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 /* Identifies the flat transport contract shared with lib.rs. */
-#define MAL_I18N_ABI_VERSION 7u
+#define MAL_I18N_ABI_VERSION 8u
 
 /* Status codes for fallible entry points; mapped to JS exceptions by the C side. */
 typedef enum MalI18nStatus {
@@ -152,10 +152,44 @@ int32_t mal_i18n_display_name(const uint8_t *locale, size_t locale_len, int32_t 
  * into out; returns the full length, or -1. */
 int32_t mal_i18n_duration_format(const uint8_t *locale, size_t locale_len, int32_t base_style, int32_t fractional_digits, int32_t sign_negative, const uint64_t *units, uint8_t *out, int32_t out_cap);
 
-/* ---- Intl.RelativeTimeFormat ----
- * length: 0 long, 1 short, 2 narrow; unit: 0 second .. 7 year; numeric_auto != 0
- * selects Numeric "auto". Writes UTF-8 into out; returns the length, or -1. */
-int32_t mal_i18n_relative_time(const uint8_t *locale, size_t locale_len, int32_t length, int32_t unit, int32_t numeric_auto, double value, uint8_t *out, int32_t out_cap);
+/* ---- Intl.RelativeTimeFormat ---- */
+typedef struct MalI18nRelativeResolved {
+    const uint8_t *locale;
+    size_t locale_len;
+    const uint8_t *numbering_system;
+    size_t numbering_len;
+    size_t heap_bytes;
+    uint8_t locale_matches_input;
+} MalI18nRelativeResolved;
+
+/* length: 0 long, 1 short, 2 narrow; numeric_auto != 0 selects "auto".
+ * A missing numbering-system option is represented by a zero length.
+ * Resolved strings borrow the immutable plan and remain valid until free.
+ * heap_bytes reports owned native bytes for GC allocation/process pressure;
+ * free returns the same charge for release. Compiled payloads borrow static data. */
+void *mal_i18n_relative_time_new(const uint8_t *locale, size_t locale_len, const uint8_t *numbering, size_t numbering_len, int32_t length, int32_t numeric_auto, MalI18nRelativeResolved *resolved);
+size_t mal_i18n_relative_time_free(void *handle);
+
+typedef enum MalI18nRelativePartKind {
+    MAL_RELATIVE_LITERAL,
+    MAL_RELATIVE_INTEGER,
+    MAL_RELATIVE_GROUP,
+    MAL_RELATIVE_DECIMAL,
+    MAL_RELATIVE_FRACTION,
+} MalI18nRelativePartKind;
+
+typedef struct MalI18nRelativePart {
+    size_t start;
+    size_t len;
+    int32_t kind;
+} MalI18nRelativePart;
+
+/* unit: 0 second .. 7 year. Write UTF-16 text and part spans into caller-owned
+ * buffers, returning required text capacity or -1. A nonnull spans_needed asks
+ * for parts and receives their required capacity; null omits part tracking.
+ * Undersized buffers receive prefixes; retry with both reported capacities.
+ * Buffers are borrowed for this call only. No JS allocation/callback may occur. */
+int32_t mal_i18n_relative_time_format(void *handle, double value, int32_t unit, uint16_t *out, size_t out_cap, MalI18nRelativePart *spans, size_t spans_cap, size_t *spans_needed);
 
 #ifdef __cplusplus
 }

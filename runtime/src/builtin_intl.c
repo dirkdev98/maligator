@@ -1174,10 +1174,10 @@ static MalValue intl_resolved_copy(MalVm *vm, MalValue template_value, const cha
     return mal_vm_create_object_shaped(vm, shape, values, count);
 }
 
-#if MAL_INTL_HAS_NUMBER_FORMAT
+#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_RELATIVE_TIME_FORMAT
 /** CoerceOptionsToObject: undefined creates a null-prototype bag; all other
  * non-null values pass through ToObject. */
-static bool intl_number_format_options(MalVm *vm, MalValue options, MalValue *out) {
+static bool intl_coerce_options_to_object(MalVm *vm, MalValue options, MalValue *out) {
     if (mal_value_is_undefined(options)) {
         *out = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
         return true;
@@ -1189,7 +1189,9 @@ static bool intl_number_format_options(MalVm *vm, MalValue options, MalValue *ou
     *out = mal_value_is_object(options) ? options : mal_builtin_object_box_primitive(vm, options);
     return true;
 }
+#endif
 
+#if MAL_INTL_HAS_NUMBER_FORMAT
 /** DefaultNumberOption for the integer digit options supported by the backend. */
 static bool intl_number_option(MalVm *vm, MalValue value, i32 minimum, i32 maximum, i32 *out, bool *present) {
     if (mal_value_is_undefined(value)) {
@@ -1841,7 +1843,7 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
     if (locale == nullptr) {
         return mal_value_new_undefined();
     }
-    if (!intl_number_format_options(vm, options, &options)) {
+    if (!intl_coerce_options_to_object(vm, options, &options)) {
         return mal_value_new_undefined();
     }
     if (!intl_check_locale_matcher(vm, options)) {
@@ -2421,34 +2423,20 @@ static void intl_install_date_time_format(MalVm *vm, MalObject *intl_object) {
 // Intl.ListFormat — icu::list (conjunction/disjunction/unit; long/short/narrow).
 // ---------------------------------------------------------------------------
 
-#if MAL_INTL_HAS_LIST_FORMAT || MAL_INTL_HAS_RELATIVE_TIME_FORMAT || MAL_INTL_HAS_DURATION_FORMAT
-static i64 intl_string_index_of(const MalString *hay, const MalString *needle, usize from) {
-    usize hn = mal_string_length(hay);
-    usize nn = mal_string_length(needle);
-    const c16 *h = mal_string_code_units(hay);
-    const c16 *p = mal_string_code_units(needle);
-    if (nn == 0) {
-        return (i64) from;
+#if MAL_INTL_HAS_LIST_FORMAT || MAL_INTL_HAS_RELATIVE_TIME_FORMAT
+static i32 intl_length_code(const MalString *style) {
+    if (style != nullptr && intl_string_eq_ascii(style, "short")) {
+        return 1;
     }
-    if (nn > hn) {
-        return -1;
+    if (style != nullptr && intl_string_eq_ascii(style, "narrow")) {
+        return 2;
     }
-    for (usize i = from; i + nn <= hn; i++) {
-        bool eq = true;
-        for (usize j = 0; j < nn; j++) {
-            if (h[i + j] != p[j]) {
-                eq = false;
-                break;
-            }
-        }
-        if (eq) {
-            return (i64) i;
-        }
-    }
-    return -1;
+    return 0;
 }
+#endif
 
-static void intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, const char *type, MalValue value) {
+#if MAL_INTL_HAS_LIST_FORMAT || MAL_INTL_HAS_RELATIVE_TIME_FORMAT || MAL_INTL_HAS_DURATION_FORMAT
+static MalObject *intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, const char *type, MalValue value) {
     MalValue roots[] = {mal_value_from_array_object(parts), value, mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -2458,12 +2446,8 @@ static void intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, const 
     intl_resolved_set(vm, part, "value", roots[1]);
     intl_array_push(vm, parts, (*index)++, roots[2]);
     mal_gc_unroot(&root);
+    return part;
 }
-
-static MalValue intl_substring(MalVm *vm, MalString *s, usize start, usize end) {
-    return mal_value_from_string(mal_string_new_slice(&vm->heap, s, start, end - start));
-}
-
 #endif
 
 #if MAL_INTL_HAS_LIST_FORMAT
@@ -2475,16 +2459,6 @@ static i32 intl_list_type_code(const MalString *type) {
         return 2;
     }
     return 0; // conjunction
-}
-
-static i32 intl_list_length_code(const MalString *style) {
-    if (style != nullptr && intl_string_eq_ascii(style, "short")) {
-        return 1;
-    }
-    if (style != nullptr && intl_string_eq_ascii(style, "narrow")) {
-        return 2;
-    }
-    return 0; // long
 }
 
 static MalValue intl_list_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2539,7 +2513,7 @@ static MalValue intl_list_format_constructor(MalVm *vm, MalValue this_value, con
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid list formatter locale");
         goto done;
     }
-    lf->handle = mal_i18n_list_formatter_new(locale_buf, locale_len, intl_list_type_code(type), intl_list_length_code(style));
+    lf->handle = mal_i18n_list_formatter_new(locale_buf, locale_len, intl_list_type_code(type), intl_length_code(style));
     if (locale_buf != stack_locale) free(locale_buf);
     if (lf->handle == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not create list formatter");
@@ -2950,12 +2924,13 @@ static void intl_install_display_names(MalVm *vm, MalObject *intl_object) {
 // ---------------------------------------------------------------------------
 
 #if MAL_INTL_HAS_RELATIVE_TIME_FORMAT
+static const char *const INTL_RELATIVE_UNITS[] = {"second", "minute", "hour", "day", "week", "month", "quarter", "year"};
+
 /** SingularRelativeTimeUnit: map a unit string (singular or plural) to 0..7, or -1. */
 static i32 intl_relative_unit_code(const MalString *unit) {
-    static const char *const SINGULAR[8] = {"second", "minute", "hour", "day", "week", "month", "quarter", "year"};
     static const char *const PLURAL[8] = {"seconds", "minutes", "hours", "days", "weeks", "months", "quarters", "years"};
     for (i32 i = 0; i < 8; i++) {
-        if (intl_string_eq_ascii(unit, SINGULAR[i]) || intl_string_eq_ascii(unit, PLURAL[i])) {
+        if (intl_string_eq_ascii(unit, INTL_RELATIVE_UNITS[i]) || intl_string_eq_ascii(unit, PLURAL[i])) {
             return i;
         }
     }
@@ -2969,179 +2944,178 @@ static MalValue intl_relative_time_format_constructor(MalVm *vm, MalValue this_v
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Intl.RelativeTimeFormat must be called with new");
         return mal_value_new_undefined();
     }
-    MalValue locales = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
-
-    MalString *locale = intl_resolve_locale(vm, locales);
-    if (locale == nullptr) {
-        return mal_value_new_undefined();
-    }
-    // RelativeTimeFormat uses CoerceOptionsToObject: a primitive options bag is
-    // read through its prototype chain (the option readers handle that); only
-    // null throws.
-    if (mal_value_is_null(options)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "options must be an object");
-        return mal_value_new_undefined();
-    }
-    if (!intl_check_locale_matcher(vm, options)) {
-        return mal_value_new_undefined();
-    }
-
-    // GetOption order (per options-order): localeMatcher, numeric, style, then
-    // the numberingSystem option (which we validate but do not yet apply).
-    static const char *const NUMERICS[] = {"always", "auto"};
-    static const char *const STYLES[] = {"long", "short", "narrow"};
-    bool ok;
-    MalString *numeric = intl_option_enum(vm, options, "numeric", NUMERICS, countof(NUMERICS), "always", &ok);
-    if (!ok) {
-        return mal_value_new_undefined();
-    }
-    MalString *style = intl_option_enum(vm, options, "style", STYLES, countof(STYLES), "long", &ok);
-    if (!ok) {
-        return mal_value_new_undefined();
-    }
-    bool ns_present;
-    MalString *numbering_system = nullptr;
-    if (!intl_option_string(vm, options, "numberingSystem", &numbering_system, &ns_present)) {
-        return mal_value_new_undefined();
-    }
-    if (ns_present && !intl_is_valid_unicode_type(numbering_system)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid numberingSystem");
-        return mal_value_new_undefined();
-    }
-
-    MalObject *resolved = mal_intrinsic_new_object(vm);
-    intl_resolved_set(vm, resolved, "locale", mal_value_from_string(locale));
-    intl_resolved_set(vm, resolved, "style", mal_value_from_string(style));
-    intl_resolved_set(vm, resolved, "numeric", mal_value_from_string(numeric));
-    intl_resolved_set(vm, resolved, "numberingSystem", mal_value_from_string(mal_intrinsic_ascii(vm, "latn")));
-
+    MalValue roots[] = {
+        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
+        arg_count >= 2 ? args[1] : mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
     MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_RELATIVE_TIME_FORMAT_PROTOTYPE);
-    if (prototype == nullptr) {
-        return mal_value_new_undefined();
+    if (prototype == nullptr) goto done;
+    roots[2] = mal_value_from_object(prototype);
+    MalString *locale = intl_resolve_locale(vm, roots[0]);
+    if (locale == nullptr) goto done;
+    roots[3] = mal_value_from_string(locale);
+    // The private null-prototype default bag has no observable reads or identity.
+    // The option readers treat undefined as that bag without allocating it.
+    if (!mal_value_is_undefined(roots[1]) && !intl_coerce_options_to_object(vm, roots[1], &roots[1])) goto done;
+    if (!intl_check_locale_matcher(vm, roots[1])) goto done;
+    bool ns_present;
+    MalString *numbering = nullptr;
+    if (!intl_option_string(vm, roots[1], "numberingSystem", &numbering, &ns_present)) goto done;
+    if (ns_present) {
+        roots[4] = mal_value_from_string(numbering);
+        if (!intl_is_valid_unicode_type(numbering)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid numberingSystem");
+            goto done;
+        }
     }
-    MalIntlObject *rtf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_RELATIVE_TIME_FORMAT, nullptr, mal_value_from_object(resolved));
-    return mal_value_from_intl_object(rtf);
+    static const char *const STYLES[] = {"long", "short", "narrow"};
+    static const char *const NUMERICS[] = {"always", "auto"};
+    bool ok;
+    MalString *style = intl_option_enum(vm, roots[1], "style", STYLES, countof(STYLES), "long", &ok);
+    if (!ok) goto done;
+    roots[5] = mal_value_from_string(style);
+    MalString *numeric = intl_option_enum(vm, roots[1], "numeric", NUMERICS, countof(NUMERICS), "always", &ok);
+    if (!ok) goto done;
+    roots[6] = mal_value_from_string(numeric);
+    MalObject *resolved = mal_intrinsic_new_object(vm);
+    roots[7] = mal_value_from_object(resolved);
+    MalIntlObject *rtf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_RELATIVE_TIME_FORMAT, nullptr, roots[7]);
+    roots[8] = mal_value_from_intl_object(rtf);
+    usize locale_len = mal_string_length(locale);
+    usize numbering_len = ns_present ? mal_string_length(numbering) : 0;
+    usize bytes_needed;
+    if (!mal_checked_size_add(locale_len, numbering_len, SIZE_MAX - 2, &bytes_needed)) {
+        mal_vm_throw_allocation_error(vm);
+        goto done;
+    }
+    bytes_needed += 2;
+    byte stack[256];
+    byte *bytes = bytes_needed <= sizeof(stack) ? stack : malloc(bytes_needed);
+    if (bytes == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        goto done;
+    }
+    byte *numbering_bytes = bytes + locale_len + 1;
+    bool ascii = intl_tag_utf8(locale, bytes, locale_len + 1, &locale_len);
+    if (ns_present) ascii = ascii && intl_tag_utf8(numbering, numbering_bytes, numbering_len + 1, &numbering_len);
+    MalI18nRelativeResolved native = {0};
+    if (ascii) rtf->handle = mal_i18n_relative_time_new(bytes, locale_len, numbering_bytes, numbering_len, intl_length_code(style), intl_string_eq_ascii(numeric, "auto"), &native);
+    if (rtf->handle != nullptr) mal_heap_charge_external(&vm->heap, native.heap_bytes);
+    if (bytes != stack) free(bytes);
+    if (rtf->handle == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not create relative time formatter");
+        goto done;
+    }
+    roots[9] = native.locale_matches_input ? roots[3] : mal_value_from_string(mal_string_new_ascii(&vm->heap, native.locale, native.locale_len));
+    intl_resolved_set(vm, resolved, "locale", roots[9]);
+    roots[9] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.numbering_system, native.numbering_len));
+    intl_resolved_set(vm, resolved, "style", roots[5]);
+    intl_resolved_set(vm, resolved, "numeric", roots[6]);
+    intl_resolved_set(vm, resolved, "numberingSystem", roots[9]);
+    result = roots[8];
+ done:
+    mal_gc_unroot(&root);
+    return result;
 }
 
-/** Shared format core: returns the formatted string, or undefined + pending throw. */
-static MalValue intl_relative_time_do(MalVm *vm, MalIntlObject *rtf, MalValue value_arg, MalValue unit_arg) {
-    f64 value;
-    if (!mal_vm_to_number(vm, value_arg, &value)) {
+static MalValue intl_relative_time_result(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool to_parts) {
+    MalIntlObject *rtf;
+    if (!intl_this(vm, this_value, MAL_INTL_RELATIVE_TIME_FORMAT, &rtf, "Intl.RelativeTimeFormat method called on incompatible receiver")) {
         return mal_value_new_undefined();
     }
+    MalValue roots[] = {
+        this_value,
+        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
+        arg_count >= 2 ? args[1] : mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    c16 stack[256];
+    MalI18nRelativePart stack_spans[24];
+    c16 *units = stack;
+    MalI18nRelativePart *spans = stack_spans;
+    f64 value;
+    if (!mal_vm_to_number(vm, roots[1], &value)) goto done;
+    MalString *unit;
+    if (!mal_vm_to_string(vm, roots[2], &unit)) goto done;
+    roots[2] = mal_value_from_string(unit);
     if (!isfinite(value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Intl.RelativeTimeFormat value must be finite");
-        return mal_value_new_undefined();
-    }
-    MalString *unit;
-    if (!mal_vm_to_string(vm, unit_arg, &unit)) {
-        return mal_value_new_undefined();
+        goto done;
     }
     i32 unit_code = intl_relative_unit_code(unit);
     if (unit_code < 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid unit for Intl.RelativeTimeFormat");
-        return mal_value_new_undefined();
+        goto done;
     }
-    MalString *locale = intl_data_string(vm, rtf->data, "locale");
-    MalString *style = intl_data_string(vm, rtf->data, "style");
-    MalString *numeric = intl_data_string(vm, rtf->data, "numeric");
-    i32 length_code = 0;
-    if (style != nullptr && intl_string_eq_ascii(style, "short")) {
-        length_code = 1;
-    } else if (style != nullptr && intl_string_eq_ascii(style, "narrow")) {
-        length_code = 2;
+    usize spans_needed = 0;
+    i32 needed = mal_i18n_relative_time_format(rtf->handle, value, unit_code, (uint16_t *) units, countof(stack), to_parts ? spans : nullptr, to_parts ? countof(stack_spans) : 0, to_parts ? &spans_needed : nullptr);
+    if (needed < 0) goto format_error;
+    if ((usize) needed > countof(stack) || spans_needed > countof(stack_spans)) {
+        usize bytes;
+        if ((usize) needed > countof(stack)) {
+            if (!mal_checked_size_multiply((usize) needed, sizeof(*units), SIZE_MAX, &bytes)) goto allocation_error;
+            units = malloc(bytes);
+            if (units == nullptr) goto allocation_error;
+        }
+        if (spans_needed > countof(stack_spans)) {
+            if (!mal_checked_size_multiply(spans_needed, sizeof(*spans), SIZE_MAX, &bytes)) goto allocation_error;
+            spans = malloc(bytes);
+            if (spans == nullptr) goto allocation_error;
+        }
+        usize expected_parts = spans_needed;
+        if (mal_i18n_relative_time_format(rtf->handle, value, unit_code, (uint16_t *) units, units == stack ? countof(stack) : (usize) needed, to_parts ? spans : nullptr, to_parts ? (spans == stack_spans ? countof(stack_spans) : spans_needed) : 0, to_parts ? &spans_needed : nullptr) != needed || spans_needed != expected_parts) goto format_error;
     }
-    i32 numeric_auto = numeric != nullptr && intl_string_eq_ascii(numeric, "auto") ? 1 : 0;
-
-    byte locale_buf[160];
-    usize locale_len = 0;
-    if (locale != nullptr) {
-        intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len);
+    MalString *pool = mal_string_new_copy(&vm->heap, units, (usize) needed);
+    roots[3] = mal_value_from_string(pool);
+    if (!to_parts) {
+        result = roots[3];
+        goto done;
     }
-    byte out[256];
-    i32 n = mal_i18n_relative_time(locale_buf, locale_len, length_code, unit_code, numeric_auto, value, out, (i32) sizeof(out));
-    if (n < 0) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format relative time");
-        return mal_value_new_undefined();
+    MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
+    roots[4] = mal_value_from_array_object(parts);
+    roots[5] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) INTL_RELATIVE_UNITS[unit_code]));
+    static const char *const TYPES[] = {"literal", "integer", "group", "decimal", "fraction"};
+    u32 index = 0;
+    for (usize i = 0; i < spans_needed; i++) {
+        assert(spans[i].kind >= 0 && spans[i].kind < (i32) countof(TYPES));
+        MalValue text = mal_value_from_string(mal_string_new_slice(&vm->heap, pool, spans[i].start, spans[i].len));
+        MalObject *part = intl_parts_push(vm, parts, &index, TYPES[spans[i].kind], text);
+        if (spans[i].kind != MAL_RELATIVE_LITERAL) intl_resolved_set(vm, part, "unit", roots[5]);
     }
-    if (n <= (i32) sizeof(out)) {
-        return intl_string_from_utf8(vm, out, (usize) n);
-    }
-    byte *big = malloc((usize) n);
-    mal_i18n_relative_time(locale_buf, locale_len, length_code, unit_code, numeric_auto, value, big, n);
-    MalValue result = intl_string_from_utf8(vm, big, (usize) n);
-    free(big);
+    result = roots[4];
+    goto done;
+ allocation_error:
+    mal_vm_throw_allocation_error(vm);
+    goto done;
+ format_error:
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format relative time");
+ done:
+    if (units != stack) free(units);
+    if (spans != stack_spans) free(spans);
+    mal_gc_unroot(&root);
     return result;
 }
 
 static MalValue intl_relative_time_format_format(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
     (void) nt;
     (void) cl;
-    MalIntlObject *rtf;
-    if (!intl_this(vm, this_value, MAL_INTL_RELATIVE_TIME_FORMAT, &rtf, "Intl.RelativeTimeFormat.prototype.format called on incompatible receiver")) {
-        return mal_value_new_undefined();
-    }
-    return intl_relative_time_do(
-        vm, rtf, arg_count >= 1 ? args[0] : mal_value_new_undefined(), arg_count >= 2 ? args[1] : mal_value_new_undefined()
-    );
+    return intl_relative_time_result(vm, this_value, args, arg_count, false);
 }
 
 static MalValue intl_relative_time_format_format_to_parts(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
     (void) nt;
     (void) cl;
-    MalIntlObject *rtf;
-    if (!intl_this(vm, this_value, MAL_INTL_RELATIVE_TIME_FORMAT, &rtf, "Intl.RelativeTimeFormat.prototype.formatToParts called on incompatible receiver")) {
-        return mal_value_new_undefined();
-    }
-    // Coerce value first (to surface the integer substring we split out).
-    f64 value;
-    if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &value)) {
-        return mal_value_new_undefined();
-    }
-    MalValue formatted_value = intl_relative_time_do(
-        vm, rtf, arg_count >= 1 ? args[0] : mal_value_new_undefined(), arg_count >= 2 ? args[1] : mal_value_new_undefined()
-    );
-    if (!mal_value_is_string(formatted_value)) {
-        return mal_value_new_undefined();
-    }
-    MalString *formatted = mal_value_to_string(formatted_value);
-    MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
-    u32 part_index = 0;
-
-    // Locate the integer rendering of |value| and split it out as an "integer"
-    // part (with `unit`); the rest is "literal". Auto numeric ("yesterday") has
-    // no number, yielding a single literal part.
-    byte numbuf[32];
-    i32 nb = snprintf((char *) numbuf, sizeof(numbuf), "%.0f", value < 0 ? -value : value);
-    MalString *num = mal_string_new_ascii(&vm->heap, numbuf, (usize) (nb < 0 ? 0 : nb));
-    i64 pos = intl_string_index_of(formatted, num, 0);
-    if (pos < 0 || mal_string_length(num) == 0) {
-        if (mal_string_length(formatted) > 0) {
-            intl_parts_push(vm, parts, &part_index, "literal", formatted_value);
-        }
-        return mal_value_from_array_object(parts);
-    }
-    MalString *unit;
-    if (!mal_vm_to_string(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), &unit)) {
-        return mal_value_new_undefined();
-    }
-    if ((usize) pos > 0) {
-        intl_parts_push(vm, parts, &part_index, "literal", intl_substring(vm, formatted, 0, (usize) pos));
-    }
-    // The "integer" part carries a `unit` field (singular unit name).
-    {
-        MalObject *part = mal_intrinsic_new_object(vm);
-        intl_resolved_set(vm, part, "type", mal_value_from_string(mal_intrinsic_ascii(vm, "integer")));
-        intl_resolved_set(vm, part, "value", mal_value_from_string(num));
-        intl_resolved_set(vm, part, "unit", mal_value_from_string(unit));
-        intl_array_push(vm, parts, part_index++, mal_value_from_object(part));
-    }
-    usize after = (usize) pos + mal_string_length(num);
-    if (after < mal_string_length(formatted)) {
-        intl_parts_push(vm, parts, &part_index, "literal", intl_substring(vm, formatted, after, mal_string_length(formatted)));
-    }
-    return mal_value_from_array_object(parts);
+    return intl_relative_time_result(vm, this_value, args, arg_count, true);
 }
 
 static MalValue intl_relative_time_format_resolved_options(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {

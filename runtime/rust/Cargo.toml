@@ -24,6 +24,7 @@ jiff = { version = "0.2.42", features = ["tzdb-bundle-always"] }
 # compiled locale data out of native binaries. Locale parsing, negotiation and
 # result stringification use icu_locale and writeable in every Intl build.
 icu_locale = { version = "2.4.0", optional = true }
+icu_provider = { version = "2.4.0", optional = true }
 icu_collator = { version = "2.4.0", optional = true }
 icu_decimal = { version = "2.4.0", optional = true, features = ["alloc"] }
 icu_datetime = { version = "2.4.0", optional = true }
@@ -152,7 +153,11 @@ intl-segmenter = ["intl", "dep:icu_segmenter", "icu_segmenter/compiled_data"]
 intl-display-names = ["intl", "dep:icu_experimental", "icu_experimental/compiled_data"]
 intl-relative-time-format = [
 	"intl",
-	"intl-number-format",
+	"dep:icu_decimal",
+	"icu_decimal/compiled_data",
+	"dep:icu_plurals",
+	"icu_plurals/compiled_data",
+	"dep:icu_provider",
 	"dep:icu_experimental",
 	"icu_experimental/compiled_data",
 ]

@@ -397,6 +397,20 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Active correctness clusters
 
+- [ ] Resolve Intl locale availability and matching per service from bundled data.
+      Preserve requested-locale order, lookup and best-fit semantics, relevant Unicode
+      extensions and observable option coercion. Provider fallback alone does not prove
+      that a locale is supported.
+
+- [ ] Finish Intl NumberFormat style, notation, rounding and numeric parts; DateTimeFormat
+      option/calendar/time-zone selection, parts and interval fields; and DurationFormat
+      resolved unit styles, visibility, sign and parts. Keep reusable native plans and
+      measure constructor cost, steady-state formatting and retained memory together.
+
+- [ ] Generate pinned ICU decimal digit and symbol data for the remaining numbering
+      systems and locale/system combinations. Preserve per-service data selection and
+      report actual fallback; do not substitute another language's punctuation.
+
 - [ ] Cover the conservative stack scan's single-owner env walk with a regression
       test. A closure that keeps only its own scope, run after the enclosing scope
       dies, aborted with "attempted to shade a reclaimed cell" before e59c19f8 in a
