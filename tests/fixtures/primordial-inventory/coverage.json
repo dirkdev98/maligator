@@ -62128,6 +62128,19 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.constants\",\"BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH\"]",
+			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.constants",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.constants",
+				"mal_host_install_node_zlib:constants"
+			],
+			"key": "BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.constants\",\"BROTLI_DECODER_ERROR_DICTIONARY_NOT_SET\"]",
 			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.constants",
 			"ownerPaths": [
