@@ -1,14 +1,14 @@
 {
   "sha": "3655e7464de3d52643ecddd4b5f9f4f3e7f62398",
   "summary": {
-    "FAILED": 908,
-    "PASSED": 52670
+    "FAILED": 907,
+    "PASSED": 52671
   },
   "skips": {},
   "code": {
     "compiledFiles": 94218,
     "functionCount": 2987125,
-    "instructionCount": 107767223
+    "instructionCount": 107767221
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",
@@ -40118,7 +40118,7 @@
     "test/staging/sm/global/eval-in-strict-eval-in-normal-function.js": "PASSED",
     "test/staging/sm/global/parenthesized-eval-is-direct.js": "PASSED",
     "test/staging/sm/lexical-environment/block-scoped-functions-annex-b-arguments.js": "FAILED",
-    "test/staging/sm/lexical-environment/block-scoped-functions-annex-b-label.js": "FAILED",
+    "test/staging/sm/lexical-environment/block-scoped-functions-annex-b-label.js": "PASSED",
     "test/staging/sm/lexical-environment/block-scoped-functions-annex-b-with.js": "PASSED",
     "test/staging/sm/lexical-environment/block-scoped-functions-strict.js": "PASSED",
     "test/staging/sm/lexical-environment/eval-has-lexical-environment.js": "PASSED",
