@@ -440,7 +440,7 @@ jobs:
       (github.event.action == 'synchronize' || github.event.label.name == 'native-compiler-performance'))
     name: Compiler execution (${{ inputs.compiler_program || 'frozen' }}) / ${{ matrix.comparison }}
     runs-on: ubuntu-26.04
-    timeout-minutes: ${{ inputs.memory_policy && 270 || inputs.compiler_program == 'revision' && 260 || 90 }}
+    timeout-minutes: ${{ inputs.memory_policy && 270 || inputs.compiler_program == 'revision' && 260 || 120 }}
     strategy:
       fail-fast: false
       matrix:
@@ -450,7 +450,7 @@ jobs:
       HEAD_SHA: ${{ inputs.candidate || github.event.pull_request.head.sha }}
       COMPARISON: ${{ matrix.comparison }}
       MANUAL_COMPARISON: ${{ github.event_name == 'workflow_dispatch' }}
-      CAPTURE_BUDGET_SECONDS: ${{ (inputs.memory_policy || inputs.compiler_program == 'revision') && 1800 || 900 }}
+      CAPTURE_BUDGET_SECONDS: "1800"
       COMPILER_PROGRAM: ${{ inputs.compiler_program || 'frozen' }}
     steps:
       - name: Check out the candidate
@@ -663,6 +663,32 @@ jobs:
               --bun "$(command -v bun)" --budget-seconds "$budget" 2>&1 \
               | tee ".cache/native-performance/node-$workload.log"
           done
+
+      - name: Retain compiler slice evidence before full comparisons
+        if: >-
+          always() && steps.baseline.outputs.skip != 'true' &&
+          (inputs.compiler_program == 'revision' || inputs.memory_policy)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-compiler-slices-${{ github.event.pull_request.number || 'main' }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/native-performance/parser/**/*.json
+            .cache/native-performance/parser/**/*.log
+            .cache/native-performance/shape/**/*.json
+            .cache/native-performance/shape/**/*.log
+            .cache/native-performance/node-parser/**/*.json
+            .cache/native-performance/node-parser/**/*.log
+            .cache/native-performance/node-shape/**/*.json
+            .cache/native-performance/node-shape/**/*.log
+            .cache/native-performance/baseline/capture.json
+            .cache/native-performance/candidate/capture.json
+            .cache/native-performance/baseline-node/capture.json
+            .cache/native-performance/candidate-node/capture.json
+            .cache/native-performance/compiler-build-sizes.json
+            .cache/native-performance/environment.log
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7
 
       - name: Compare full native compiler revisions
         if: >-

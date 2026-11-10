@@ -331,7 +331,7 @@ baseline, without the duplicate cumulative job.
 Every family compares the candidate with `git merge-base HEAD PR_BASE_SHA` and,
 when different, with `git merge-base HEAD origin/main` for cumulative stacked-PR
 evidence. JavaScript and micro jobs have 55-minute ceilings; ordinary compiler jobs
-have a 90-minute ceiling. Frozen compiler captures use 15-minute build budgets, the parser
+have a 120-minute ceiling. Native compiler captures use 30-minute build budgets, the parser
 slice has an eight-minute comparison budget, and the shape slice has a 25-minute
 budget. Revision comparisons allow 30 minutes per native capture and full-input
 measurement within a 260-minute job. Their Node comparisons use source-only captures
@@ -340,7 +340,8 @@ comparison allows longer preparation and full-input measurement within a job cap
 at 270 minutes. The compiler lane checks Node and Bun output on
 the same frozen input and retains its build
 events, captured source identities, output digests, resource logs, and partial reports. The
-workflow uploads evidence even on failure, preserves failing exit codes, and
+workflow uploads slice evidence before full-input comparisons, retains evidence even
+on failure, preserves failing exit codes, and
 does not update benchmark baselines. These checks complement the ordinary test
 gate; use the raw variability and completeness records when assessing a change.
 Classified metrics absent from any source/sample, such as native-build RSS on cache hits,
