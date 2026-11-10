@@ -34,6 +34,11 @@ themselves commit the project to optimizing every API.
       compilation, event delivery and teardown. Preserve watcher behavior and report an
       unreproduced or runner-only failure explicitly.
 
+- [ ] Measure guarded arithmetic continuations, long-key hashing and cold FFI probes in
+      full application and compiler workloads. Include Node and rebuilt native compiler
+      costs, binding stub compilation/linking, peak memory and generated size. Require
+      repeated matched savings beyond the focused runtime-gap and extraction cases.
+
 # Compiler and Core IR
 
 ## Core IR contract
@@ -298,13 +303,6 @@ contracts or investigates costs still visible after the string follow-ups.
       repeated-allocation exposure and fewer executed property definitions with bounded
       planning and handler/fallback controls.
 
-- [ ] Keep a bounded successful guarded-call continuation native through immediate
-      arithmetic or a known call before merging with the boxed fallback. Use current
-      method-name and JavaScript objects-loop consumers, re-establishing any historical
-      pricing-loop exposure. Reuse record entries and guard facts; preserve identity,
-      roots, completion and current-state fallback without replay. Charge duplicated code
-      and require runtime savings to repay both compiler hosts and C/build cost.
-
 - [ ] Expose one CoreFunctionStore cursor's captured iterator/next protocol to existing
       guarded call and scalar-replacement passes. Require removal of repeated
       protocol/result work in native self-compile, bounded Node/native planning and C
@@ -332,16 +330,11 @@ contracts or investigates costs still visible after the string follow-ups.
       fallback/reentry and throughput no worse than materialization on first-pass,
       repeated-input and flat controls.
 
-- [ ] Admit a dense Array fast path for existing expanded map/filter loops so presence,
-      element load and stable callback captures avoid repeated generic dispatch. Reuse
-      bounded effects/storage facts and preserve holes, species, mutation and fallback;
-      require full-workload gains after both compiler hosts and code-size costs.
-
-- [ ] Bound first-hash cost on long Map/property keys, then compare one streaming
-      encoding-independent hash with append continuation intact. Require exact key
-      behavior and a representative application/compiler improvement after
-      short/cached-key controls, compile-time constant hashing, collision behavior, memory
-      and size.
+- [ ] Carry an owning Core proof for private default-species map/filter output stores,
+      or establish their index range through the eligibility guard. Remove repeated
+      index/descriptor checks only with that proof; preserve map holes and final length,
+      filter's geometric growth, write barriers and generic fallback. Compare the measured
+      output-store ceiling with compiler work, native build cost and generated size.
 
 - [ ] Bound first-pass and changing-subject RegExp executor allocations in Express and
       text workloads before extending the pinned backend's reusable-state API. Preserve
@@ -613,10 +606,6 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [ ] Complete Headers guards, Web IDL record conversion, descriptors, and
       Proxy-sensitive behavior. Expand applicable WPT with outbound fetch.
 
-- [ ] Convert ResponseInit members in Web IDL order (`headers`, `status`,
-      `statusText`). The constructor reads `status` and `statusText` first, so a
-      `valueOf` on `status` that adds `headers` is observed, unlike in Node.
-
 - [ ] Complete URL and URLSearchParams Web IDL behavior and broader WPT, then implement
       URLPattern. Connect object URLs after Blob lifetime and revocation are defined.
 
@@ -819,15 +808,6 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 - [ ] Exercise postgres.js logical replication, prepared transactions, negotiated TLS,
       and primary or standby selection against a dedicated topology. Keep
       topology-dependent tests separate from the deterministic local baseline.
-
-# C libraries
-
-- [ ] Measure the remaining cold macro-value probe cost for the frozen OpenSSL FFI input
-      after existing declaration filtering and type-probe deduplication. Prototype one
-      bounded way to reduce emitted/parsed expression trees while preserving macro values,
-      types and diagnostics. Accept on complete cold binding-build time and peak memory
-      with both compiler hosts; do not expand to a general asynchronous pipeline without a
-      new decisive case.
 
 # Actors and SMP
 
