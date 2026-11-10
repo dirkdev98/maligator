@@ -67,14 +67,21 @@ export function visitClangDeclarations(
 }
 
 /** Clang's filtered dump concatenates complete JSON declarations without an array. */
-export function clangProbeDeclarations(data: Buffer): ReadonlyArray<JsonObject> {
-	const nodes: Array<JsonObject> = [];
+export function visitClangProbeDeclarations(
+	data: Buffer,
+	visit: (node: JsonObject) => void,
+): void {
 	const reader = new FfiJsonReader(data, "clang AST");
 	let offset = reader.whitespace(0);
 	while (offset < data.length) {
 		const { node, end } = declaration(reader, offset);
-		nodes.push(node);
+		visit(node);
 		offset = reader.whitespace(end);
 	}
+}
+
+export function clangProbeDeclarations(data: Buffer): ReadonlyArray<JsonObject> {
+	const nodes: Array<JsonObject> = [];
+	visitClangProbeDeclarations(data, (node) => nodes.push(node));
 	return nodes;
 }

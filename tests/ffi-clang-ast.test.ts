@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { clangProbeDeclarations, visitClangDeclarations } from "../src/ffi/clang-ast.ts";
+import {
+	clangProbeDeclarations,
+	visitClangDeclarations,
+	visitClangProbeDeclarations,
+} from "../src/ffi/clang-ast.ts";
 
 function declarations(text: string): Array<Record<string, unknown>> {
 	const result: Array<Record<string, unknown>> = [];
@@ -80,6 +84,12 @@ describe("clang AST decoding", () => {
 				Buffer.from(nodes.map((node) => JSON.stringify(node, null, 2)).join("\n\n")),
 			),
 		).toEqual(nodes);
+		const visited: Array<Record<string, unknown>> = [];
+		visitClangProbeDeclarations(
+			Buffer.from(nodes.map((node) => JSON.stringify(node)).join("\n")),
+			(node) => visited.push(node),
+		);
+		expect(visited).toEqual(nodes);
 	});
 
 	it.each([

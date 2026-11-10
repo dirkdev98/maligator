@@ -8,6 +8,69 @@ import { extractCModel } from "../src/ffi/c-extract.ts";
 import { resolveCType } from "../src/ffi/c-model.ts";
 import { textMatches } from "../src/ffi/text.ts";
 
+it("preserves constant types and alias metadata beside nonconstant macro probes", () => {
+	const directory = mkdtempSync(path.join(tmpdir(), "mal-macro-probes-"));
+	try {
+		writeFileSync(
+			path.join(directory, "probes.h"),
+			`
+int read_native(void);
+#define NARROW ((signed char)-7)
+/* The alternate spelling. */
+#define ALIAS NARROW
+#define WIDE ((((unsigned __int128)1) << 100) + 7)
+#define BITS ((unsigned _BitInt(37))0x1ffffffffULL)
+#define TEXT "native text"
+#define FLOATING (-1.25)
+#define ADDRESS ((void *)4)
+#define CALL_RESULT read_native()
+#define CONTEXT __COUNTER__
+#define CONTEXT_ALIAS CONTEXT
+#define INVALID int;
+#define FOLLOWING 19
+`,
+		);
+		const compiler = process.env.CC ?? "clang";
+		const version = spawnSync(compiler, ["--version"], { encoding: "utf8" });
+		expect(version.status, version.stderr).toBe(0);
+		const model = extractCModel({
+			compiler: { path: compiler, version: version.stdout.split("\n")[0]! },
+			environment: process.env,
+			headers: ["probes.h"],
+			compileArguments: ["-I", directory],
+		});
+		const macros = new Map(model.macros.map((macro) => [macro.name, macro]));
+		for (const name of ["NARROW", "ALIAS"]) {
+			expect(macros.get(name)).toMatchObject({
+				type: { kind: "integer", name: "signed char" },
+				value: -7n,
+			});
+		}
+		expect(textMatches(macros.get("ALIAS")?.doc, /^The alternate spelling\.$/)).toBe(
+			true,
+		);
+		expect(macros.get("WIDE")?.value).toBe((1n << 100n) + 7n);
+		expect(macros.get("BITS")).toMatchObject({
+			type: { kind: "bitint", bits: 37, signed: false },
+		});
+		expect(macros.get("TEXT")?.value).toBe("native text");
+		expect(macros.get("FLOATING")?.value).toBe(-1.25);
+		expect(macros.get("ADDRESS")?.type.kind).toBe("pointer");
+		expect(macros.get("CALL_RESULT")).toMatchObject({
+			type: { kind: "integer", name: "int" },
+		});
+		expect(macros.get("CALL_RESULT")?.value).toBeUndefined();
+		for (const name of ["CONTEXT", "CONTEXT_ALIAS"]) {
+			expect(macros.get(name)?.contextual).toBe(true);
+			expect(macros.get(name)?.value).toBeUndefined();
+		}
+		expect(model.untypedMacros.some((macro) => macro.name === "INVALID")).toBe(true);
+		expect(macros.get("FOLLOWING")?.value).toBe(19n);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
 it("extracts usable declarations beside a large unused macro", () => {
 	const directory = mkdtempSync(path.join(tmpdir(), "mal-large-macro-"));
 	try {

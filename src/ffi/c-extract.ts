@@ -43,7 +43,11 @@ import {
 	unnamedTagKey,
 } from "./c-type.ts";
 import type { CType } from "./c-type.ts";
-import { clangProbeDeclarations, visitClangDeclarations } from "./clang-ast.ts";
+import {
+	clangProbeDeclarations,
+	visitClangDeclarations,
+	visitClangProbeDeclarations,
+} from "./clang-ast.ts";
 import { FfiError, FfiSourceChangedError } from "./ffi-error.ts";
 import { macroReferences } from "./macros.ts";
 import { clangRecordLayouts } from "./record-layout.ts";
@@ -1110,6 +1114,8 @@ type ValueProbe =
 			readonly prefix: string;
 			readonly values: ReadonlyArray<string>;
 			readonly types: ReadonlyArray<string>;
+			readonly valueRepresentatives: ReadonlyArray<number>;
+			readonly typeRepresentatives: ReadonlyArray<number>;
 			/** Expansion strings already in Clang's spelling, by kind and index. */
 			readonly expansions: ReadonlyMap<string, string>;
 			/** Expansion declarations whose spelling Clang decodes and renders anew. */
@@ -1130,6 +1136,26 @@ function spelledAsWritten(literal: string): boolean {
 		if (next !== "\\" && next !== '"') return false;
 	}
 	return true;
+}
+
+function probeRepresentatives(
+	lines: ReadonlyArray<string>,
+	kind: "value" | "type",
+): ReadonlyArray<number> {
+	const found = new Map<string, number>();
+	return lines.map((line, index) => {
+		const marker =
+			kind === "value"
+				? ` { __mal_macro_value_${index} = `
+				: ` __mal_macro_type_${index};`;
+		const position = line.lastIndexOf(marker);
+		if (position < 0) return index;
+		const key = `${line.slice(0, position)}\0${line.slice(position + marker.length)}`;
+		const representative = found.get(key);
+		if (representative !== undefined) return representative;
+		found.set(key, index);
+		return index;
+	});
 }
 
 function prepareValueProbe(
@@ -1215,8 +1241,27 @@ function prepareValueProbe(
 		prefix: `${text.slice(0, marker)}${targets.join("\n")}\n`,
 		values,
 		types,
+		valueRepresentatives: probeRepresentatives(values, "value"),
+		typeRepresentatives: probeRepresentatives(types, "type"),
 		expansions,
 		encoded,
+	};
+}
+
+/* Probe consumers need type and constant/literal expression data. Discard source
+ * ranges and declaration references before retaining the next decoded tree. */
+function compactProbeNode(node: JsonObject): JsonObject {
+	return {
+		kind: node.kind,
+		name: node.name,
+		isInvalid: node.isInvalid,
+		type: node.type,
+		value: node.value,
+		opcode: node.opcode,
+		numElements: node.numElements,
+		variadic: node.variadic,
+		qualifiers: node.qualifiers,
+		inner: innerNodes(node).map(compactProbeNode),
 	};
 }
 
@@ -1253,9 +1298,9 @@ function probe(
 			directory,
 		);
 		diagnostics.push(result.stderr.trim());
-		for (const node of clangProbeDeclarations(result.stdout)) {
-			if (typeof node.name === "string") nodes.set(node.name, node);
-		}
+		visitClangProbeDeclarations(result.stdout, (node) => {
+			if (typeof node.name === "string") nodes.set(node.name, compactProbeNode(node));
+		});
 	};
 	const pass = (name: string, declarations: ReadonlyArray<string>): void => {
 		if (valueProbe.preprocessed !== true) return;
@@ -1266,30 +1311,39 @@ function probe(
 		);
 		dump(file, true);
 	};
-	// The enum probe of an integer constant also carries its expression, so only the
-	// remaining macros need the type probe, which repeats each expression's tree.
 	if (valueProbe.preprocessed)
 		pass("probe-values.i", [
-			...valueProbe.values.filter((line) => line !== undefined),
+			...valueProbe.values.filter(
+				(line, index) =>
+					line !== undefined && valueProbe.valueRepresentatives[index] === index,
+			),
 			...valueProbe.encoded,
 		]);
 	else dump(valueProbe.path, false);
 	const valueExpression = (index: number): JsonObject | undefined => {
-		const node = nodes.get(`__mal_macro_value_${index}`);
+		const representative = valueProbe.preprocessed
+			? valueProbe.valueRepresentatives[index]
+			: index;
+		const node = nodes.get(`__mal_macro_value_${representative}`);
 		if (node === undefined || node.isInvalid === true) return undefined;
 		let expression = innerNodes(node)[0];
 		while (expression?.kind === "ConstantExpr" || expression?.kind === "ImplicitCastExpr")
 			expression = innerNodes(expression)[0];
 		return expression?.kind === "ParenExpr" ? expression : undefined;
 	};
-	if (valueProbe.preprocessed)
+	if (valueProbe.preprocessed) {
+		const needed = new Set(
+			candidates.flatMap((_macro, index) =>
+				valueExpression(index) === undefined
+					? [valueProbe.typeRepresentatives[index]]
+					: [],
+			),
+		);
 		pass(
 			"probe-types.i",
-			candidates.flatMap((_macro, index) => {
-				const line = valueProbe.types[index];
-				return line === undefined || valueExpression(index) !== undefined ? [] : [line];
-			}),
+			valueProbe.types.filter((line, index) => line !== undefined && needed.has(index)),
 		);
+	}
 
 	const sizes: Record<string, number> = {};
 	TARGET_PROBES.forEach((name, index) => {
@@ -1348,7 +1402,10 @@ function probe(
 				normal !== neutral ||
 				sourceLocation,
 		});
-		const typeNode = nodes.get(`__mal_macro_type_${index}`);
+		const typeIndex = valueProbe.preprocessed
+			? valueProbe.typeRepresentatives[index]
+			: index;
+		const typeNode = nodes.get(`__mal_macro_type_${typeIndex}`);
 		const typeOf =
 			typeNode === undefined || typeNode.isInvalid === true
 				? undefined
@@ -1360,7 +1417,10 @@ function probe(
 			untyped.push(macro);
 			return;
 		}
-		const valueNode = nodes.get(`__mal_macro_value_${index}`);
+		const valueIndex = valueProbe.preprocessed
+			? valueProbe.valueRepresentatives[index]
+			: index;
+		const valueNode = nodes.get(`__mal_macro_value_${valueIndex}`);
 		const integer = valueNode === undefined ? undefined : constantValue(valueNode);
 		const literal = literalValue(expression);
 		typed.push({
