@@ -440,7 +440,7 @@ jobs:
       (github.event.action == 'synchronize' || github.event.label.name == 'native-compiler-performance'))
     name: Compiler execution (${{ inputs.compiler_program || 'frozen' }}) / ${{ matrix.comparison }}
     runs-on: ubuntu-26.04
-    timeout-minutes: ${{ inputs.memory_policy && 270 || inputs.compiler_program == 'revision' && 230 || 90 }}
+    timeout-minutes: ${{ inputs.memory_policy && 270 || inputs.compiler_program == 'revision' && 260 || 90 }}
     strategy:
       fail-fast: false
       matrix:
@@ -450,7 +450,7 @@ jobs:
       HEAD_SHA: ${{ inputs.candidate || github.event.pull_request.head.sha }}
       COMPARISON: ${{ matrix.comparison }}
       MANUAL_COMPARISON: ${{ github.event_name == 'workflow_dispatch' }}
-      CAPTURE_BUDGET_SECONDS: ${{ inputs.memory_policy && 1800 || 900 }}
+      CAPTURE_BUDGET_SECONDS: ${{ (inputs.memory_policy || inputs.compiler_program == 'revision') && 1800 || 900 }}
       COMPILER_PROGRAM: ${{ inputs.compiler_program || 'frozen' }}
     steps:
       - name: Check out the candidate
@@ -554,6 +554,7 @@ jobs:
           node "$script" capture "$task/candidate-node" --source-only --budget-seconds 120
 
       - name: Capture the baseline native compiler
+        id: baseline-native
         if: steps.baseline.outputs.skip != 'true'
         run: |
           task="$PWD/.cache/native-performance"
@@ -566,6 +567,7 @@ jobs:
           node "$script" capture "$task/baseline" "${program_args[@]}" --budget-seconds "$CAPTURE_BUDGET_SECONDS"
 
       - name: Capture the candidate native compiler
+        id: candidate-native
         if: steps.baseline.outputs.skip != 'true'
         run: |
           program_args=()
@@ -662,26 +664,41 @@ jobs:
               | tee ".cache/native-performance/node-$workload.log"
           done
 
-      - name: Compare full compiler revisions on both hosts
+      - name: Compare full native compiler revisions
         if: >-
           !cancelled() && steps.baseline.outputs.skip != 'true' &&
-          inputs.compiler_program == 'revision' && !inputs.memory_policy
+          inputs.compiler_program == 'revision' && !inputs.memory_policy &&
+          steps.baseline-native.outcome == 'success' && steps.candidate-native.outcome == 'success'
         run: |
           set -o pipefail
-          for host in native node; do
-            budget=5400
-            if [ "$host" = node ]; then budget=2400; fi
-            node scripts/self-compile-experiment.ts compare \
-              .cache/native-performance/baseline .cache/native-performance/candidate \
-              --output ".cache/native-performance/full-$host" --workload full --pairs 3 --host "$host" \
-              --bun "$(command -v bun)" --budget-seconds "$budget" --plan=json \
-              | tee ".cache/native-performance/full-$host-plan.json"
-            node scripts/self-compile-experiment.ts compare \
-              .cache/native-performance/baseline .cache/native-performance/candidate \
-              --output ".cache/native-performance/full-$host" --workload full --pairs 3 --host "$host" \
-              --bun "$(command -v bun)" --budget-seconds "$budget" 2>&1 \
-              | tee ".cache/native-performance/full-$host.log"
-          done
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/baseline .cache/native-performance/candidate \
+            --output .cache/native-performance/full-native --workload full --pairs 3 --host native \
+            --bun "$(command -v bun)" --budget-seconds 5400 --plan=json \
+            | tee .cache/native-performance/full-native-plan.json
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/baseline .cache/native-performance/candidate \
+            --output .cache/native-performance/full-native --workload full --pairs 3 --host native \
+            --bun "$(command -v bun)" --budget-seconds 5400 2>&1 \
+            | tee .cache/native-performance/full-native.log
+
+      - name: Compare full Node compiler revisions
+        if: >-
+          !cancelled() && steps.baseline.outputs.skip != 'true' &&
+          inputs.compiler_program == 'revision' && !inputs.memory_policy &&
+          steps.node-captures.outcome == 'success'
+        run: |
+          set -o pipefail
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/baseline-node .cache/native-performance/candidate-node \
+            --output .cache/native-performance/full-node --workload full --pairs 3 --host node \
+            --bun "$(command -v bun)" --budget-seconds 2400 --plan=json \
+            | tee .cache/native-performance/full-node-plan.json
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/baseline-node .cache/native-performance/candidate-node \
+            --output .cache/native-performance/full-node --workload full --pairs 3 --host node \
+            --bun "$(command -v bun)" --budget-seconds 2400 2>&1 \
+            | tee .cache/native-performance/full-node.log
 
       - name: Compare the compiler nursery cap without tracing
         if: >-
