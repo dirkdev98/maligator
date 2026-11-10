@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { maligatorCacheDirectory } from "../cache-root.ts";
 
-const revision = "3655e7464de3d52643ecddd4b5f9f4f3e7f62398";
+const revision = "225d9c898829cd4e88a38c3605c05eba2d3730b6";
 
 export const TEST262_METADATA = {
 	path: path.join(maligatorCacheDirectory(), "test262-corpora", revision),
