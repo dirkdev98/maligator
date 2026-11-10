@@ -153,6 +153,7 @@ function emitFullCallProbe(
 	arguments_: ReadonlyArray<number> = [1],
 	mode: "guarded" | "direct" = "guarded",
 	render = emitCompiledFunction,
+	strict = true,
 ) {
 	const native = createConservativeNativePlan([
 		{
@@ -183,7 +184,7 @@ function emitFullCallProbe(
 		[],
 		new Map(),
 		false,
-		new Set([1]),
+		new Set(strict ? [1] : []),
 		undefined,
 		undefined,
 		undefined,
@@ -195,6 +196,39 @@ function emitFullCallProbe(
 }
 
 describe("native entry call overrides", () => {
+	it("checks direct completion only inside the ordinary miss", () => {
+		const source = emitFullCallProbe({ result: { kind: "undefined" } }, [1], "direct");
+		const probe = source.indexOf("if (!mal_compiled_1_try(");
+		const end = source.indexOf("\n", probe);
+		expect(probe).toBeGreaterThan(0);
+		expect(source.slice(probe, end)).toContain(") { __direct_value_0 = mal_compiled_1(");
+		expect(source.slice(probe, end)).toContain("if (MAL_THREW())");
+		const result = source.indexOf("r2 = __direct_value_0", end);
+		expect(result).toBeGreaterThan(end);
+		expect(source.slice(end, result)).not.toContain("MAL_THREW()");
+	});
+
+	it.each([
+		["missing", undefined, true],
+		["boxed", { result: { kind: "boxed" } }, true],
+		["sloppy", { result: { kind: "undefined" } }, false],
+	] as const)("checks ordinary completion for a %s fast callee", (_name, abi, strict) => {
+		const source = emitFullCallProbe(abi, [1], "direct", emitCompiledFunction, strict);
+		const call = source.indexOf("MalValue __direct_value_0 = mal_compiled_1(");
+		const result = source.indexOf("r2 = __direct_value_0", call);
+		expect(call).toBeGreaterThan(0);
+		expect(result).toBeGreaterThan(call);
+		expect(source.slice(call, result)).toContain("if (MAL_THREW())");
+	});
+
+	it("leaves the guarded callee realm before checking completion", () => {
+		const source = emitFullCallProbe({ result: { kind: "undefined" } });
+		const probe = source.indexOf("!mal_compiled_1_try(");
+		const leave = source.indexOf("MAL_CALLEE_REALM_LEAVE()", probe);
+		const check = source.indexOf("if (MAL_THREW())", probe);
+		expect(leave).toBeGreaterThan(probe);
+		expect(check).toBeGreaterThan(leave);
+	});
 	it("records undefined-only direct dependencies before admitting a fast callee", () => {
 		for (const abi of [
 			undefined,

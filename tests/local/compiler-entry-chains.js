@@ -13,6 +13,11 @@ class Store {
 		this.#require(index);
 		return this.#values[index].kind;
 	}
+	readWithEffect(index) {
+		log.push("read effect");
+		this.#require(index);
+		return this.#values[index].kind;
+	}
 	retire() {
 		this.#retired = true;
 	}
@@ -134,6 +139,44 @@ for (const receiver of [
 		log.push(Reflect.apply(globalThis.readReady, receiver, [log.push("extra argument")]));
 	} catch (error) {
 		log.push(error.message);
+	}
+}
+const finalizerStore = new Store();
+function finish(index, completion) {
+	try {
+		if (completion === "throw") throw new Error("pending throw");
+		return "pending return";
+	} finally {
+		log.push(finalizerStore.readWithEffect(index));
+	}
+}
+function* suspendFinalizer(index) {
+	try {
+		yield "body";
+	} finally {
+		yield "cleanup";
+		log.push(finalizerStore.readWithEffect(index));
+	}
+}
+for (const index of [0, 4]) {
+	for (const completion of ["return", "throw"]) {
+		try {
+			log.push(finish(index, completion));
+		} catch (error) {
+			log.push(error.name, error.message);
+		}
+		const generator = suspendFinalizer(index);
+		log.push(generator.next());
+		try {
+			log.push(
+				completion === "return"
+					? generator.return("pending return")
+					: generator.throw(new Error("pending throw")),
+			);
+			log.push(generator.next());
+		} catch (error) {
+			log.push(error.name, error.message);
+		}
 	}
 }
 console.log(JSON.stringify(log));

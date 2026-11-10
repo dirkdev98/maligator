@@ -38,7 +38,7 @@ beforeAll(() => {
 
 afterAll(() => rmSync(output, { recursive: true, force: true }));
 
-it("preserves private accessor fallbacks and boxed predicate callbacks under collection", () => {
+it("matches Node for compiler helper chains under collection", () => {
 	expect(
 		pair.programImage.native.functions.flatMap((fn) => fn.storage!.callbackTransports),
 	).toContainEqual(

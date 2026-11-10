@@ -13038,7 +13038,7 @@ class NativeInstructionEmission {
 		readonly argumentsExpression: string;
 		readonly environment: string;
 		readonly ordinary: string;
-		readonly resultKind: "undefined" | undefined;
+		readonly mode: "direct" | "guarded";
 	}): Array<string> {
 		const {
 			target,
@@ -13048,13 +13048,23 @@ class NativeInstructionEmission {
 			argumentsExpression: argsExpr,
 			environment,
 			ordinary,
-			resultKind,
+			mode,
 		} = input;
-		if (target === undefined) return [`MalValue ${value} = ${ordinary};`];
+		const resultKind = mode === "direct" ? "undefined" : undefined;
+		const ordinaryThrowCheck =
+			mode === "direct" ? `if (MAL_THREW()) ${this.onThrow()}` : undefined;
+		if (target === undefined)
+			return [
+				`MalValue ${value} = ${ordinary};`,
+				...(ordinaryThrowCheck === undefined ? [] : [ordinaryThrowCheck]),
+			];
 		this.context.onFastTryLookup?.(target, resultKind);
 		const abi = this.context.fastTryTargets?.get(target);
 		if (abi === undefined || (resultKind !== undefined && abi.result.kind !== resultKind))
-			return [`MalValue ${value} = ${ordinary};`];
+			return [
+				`MalValue ${value} = ${ordinary};`,
+				...(ordinaryThrowCheck === undefined ? [] : [ordinaryThrowCheck]),
+			];
 		const symbol = this.context.relocation.reference(
 			`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}_try`,
 		);
@@ -13087,9 +13097,14 @@ class NativeInstructionEmission {
 			environment,
 			...(abi.result.kind === "boxed" ? [`&${value}`] : []),
 		].join(", ")})`;
+		// Fast success preserves the normal completion of generated calls.
+		const miss =
+			ordinaryThrowCheck === undefined
+				? `${value} = ${ordinary};`
+				: `{ ${value} = ${ordinary}; ${ordinaryThrowCheck} }`;
 		return [
 			`MalValue ${value}${reconstructed === undefined ? "" : ` = ${reconstructed}`};`,
-			`if (${guards.length === 0 ? "" : `${guards.join(" || ")} || `}!${call}) ${value} = ${ordinary};`,
+			`if (${guards.length === 0 ? "" : `${guards.join(" || ")} || `}!${call}) ${miss}`,
 		];
 	}
 
@@ -14171,7 +14186,7 @@ class NativeInstructionEmission {
 						argumentsExpression: argsExpr,
 						environment: `mal_value_to_function_object(${guardedCallee})->creation_env`,
 						ordinary,
-						resultKind: undefined,
+						mode: "guarded",
 					});
 					return [
 						`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${this.context.relocation.functionIndex(target)}) {`,
@@ -14331,9 +14346,8 @@ class NativeInstructionEmission {
 						environment: directEnvironment,
 						ordinary,
 						// Value-producing helpers can have a preferred scalar dispatch.
-						resultKind: "undefined",
+						mode: "direct",
 					}),
-					`if (MAL_THREW()) ${this.onThrow()}`,
 					`r${instruction.dst} = ${callResult(directValue)};`,
 					this.callPoll(),
 				];

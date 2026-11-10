@@ -347,6 +347,9 @@ strict callee and for exact strict calls with an undefined fast result.
 Typed transports keep priority. Root publication and return polling surround the
 probe and its ordinary fallback; a miss enters the callee's full entry after any
 earlier caller effects.
+Generated calls enter with normal completion. A successful fast probe preserves it,
+so exact calls check for a throw only after their ordinary fallback. Guarded calls
+check after restoring the caller's realm. Return polling remains common to both paths.
 Recursive bodies never qualify, since a body becomes available only after
 its callees do. Entries a numeric worker, literal-switch dispatch, or selected
 region already serves, and entries whose operator proofs rule out Numbers, keep
