@@ -124,7 +124,7 @@ static void mal_fetch_default_content_type(
     }
 }
 
-static bool mal_fetch_reason_phrase(MalVm *vm, MalValue value, MalValue *out) {
+static bool mal_fetch_status_text(MalVm *vm, MalValue value, MalValue *out) {
     MalString *string;
     if (!mal_vm_to_string(vm, value, &string)) return false;
     const c16 *units = mal_string_code_units(string);
@@ -134,11 +134,6 @@ static bool mal_fetch_reason_phrase(MalVm *vm, MalValue value, MalValue *out) {
         if (unit > 0xFF) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                 "Response statusText is not a ByteString");
-            return false;
-        }
-        if ((unit < 0x20 && unit != '\t') || unit == 0x7F) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "Response statusText is not a valid reason phrase");
             return false;
         }
     }
@@ -825,14 +820,14 @@ static void mal_response_trace(MalHeapHeader *cell) {
     mal_gc_mark_value(response->body_stream);
 }
 
-static bool mal_fetch_response_headers(MalVm *vm, MalValue init,
+static bool mal_fetch_response_headers(MalVm *vm, const MalHeadersInit *init,
     MalValue *visible_out, MalValue *server_out) {
-    MalValue roots[2] = {mal_value_new_undefined(), init};
+    MalValue roots[1] = {mal_value_new_undefined()};
     MalRootSpan rs;
-    mal_gc_root(&rs, roots, 2);
+    mal_gc_root(&rs, roots, 1);
     // Fill unguarded so the forbidden names Mal.serve still transmits survive until
     // they move to the server-only list; the response guard applies afterwards.
-    MalHeadersObject *visible = mal_headers_from_init(vm, roots[1]);
+    MalHeadersObject *visible = mal_headers_from_converted_init(vm, init);
     roots[0] = mal_value_from_headers_object(visible);
     if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
         mal_gc_unroot(&rs);
@@ -890,6 +885,63 @@ static bool mal_fetch_dictionary_member(
         vm, dict, mal_intrinsic_static_string_key(vm, (const byte *) name), out);
 }
 
+static bool mal_response_read_init(MalVm *vm, MalValue value, i32 *status,
+    MalHeadersInit *headers, MalValue *status_text) {
+    if (mal_value_is_nil(value)) return true;
+    if (!mal_value_is_object(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Response init must be a dictionary");
+        return false;
+    }
+    MalValue roots[2] = {value, mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    bool ok = mal_fetch_dictionary_member(vm, roots[0], "headers", &roots[1])
+        && mal_headers_init_convert(vm, roots[1], headers)
+        && mal_fetch_dictionary_member(vm, roots[0], "status", &roots[1]);
+    if (ok && !mal_value_is_undefined(roots[1])) {
+        u16 converted;
+        ok = mal_fetch_to_uint16(vm, roots[1], &converted);
+        if (ok) *status = converted;
+    }
+    if (ok) {
+        ok = mal_fetch_dictionary_member(vm, roots[0], "statusText", &roots[1]);
+        if (ok && !mal_value_is_undefined(roots[1])) {
+            ok = mal_fetch_status_text(vm, roots[1], status_text);
+        }
+    }
+    mal_gc_unroot(&span);
+    return ok;
+}
+
+static bool mal_response_validate_init(MalVm *vm, i32 status, MalValue status_text) {
+    if (status < 200 || status > 599) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Response status must be between 200 and 599");
+        return false;
+    }
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    MalString *text = mal_value_to_string(status_text);
+    mal_string_iterator_init(&iterator, text, 0, mal_string_length(text));
+    bool valid = true;
+    while (valid && mal_string_iterator_next(&iterator, &segment)) {
+        for (usize i = 0; i < segment.length; i++) {
+            c16 unit = segment.latin1 ? segment.latin1_units[i] : segment.utf16_units[i];
+            if ((unit < 0x20 && unit != '\t') || unit == 0x7F) {
+                valid = false;
+                break;
+            }
+        }
+    }
+    mal_string_iterator_dispose(&iterator);
+    if (!valid) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Response statusText is not a valid reason phrase");
+    }
+    return valid;
+}
+
 static MalValue mal_response_constructor(
     MalVm *vm,
     MalValue this_value,
@@ -913,29 +965,10 @@ static MalValue mal_response_constructor(
     byte *body = nullptr;
     MalResponseObject *response = nullptr;
     const char *content_type = nullptr;
-    if (arg_count >= 2 && mal_value_is_object(args[1])) {
-        MalValue s;
-        if (!mal_fetch_dictionary_member(vm, args[1], "status", &s)) goto response_error;
-        if (!mal_value_is_undefined(s)) {
-            u16 converted;
-            if (!mal_fetch_to_uint16(vm, s, &converted)) goto response_error;
-            status = converted;
-        }
-        MalValue status_text;
-        if (!mal_fetch_dictionary_member(vm, args[1], "statusText", &status_text)) {
-            goto response_error;
-        }
-        if (!mal_value_is_undefined(status_text)
-            && !mal_fetch_reason_phrase(vm, status_text, &roots[2])) {
-            goto response_error;
-        }
-        if (!mal_fetch_dictionary_member(vm, args[1], "headers", &roots[0])) {
-            goto response_error;
-        }
-    }
-    if (status < 200 || status > 599) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-            "Response status must be between 200 and 599");
+    MalHeadersInit headers;
+    mal_headers_init_begin(&headers);
+    if (!mal_response_read_init(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(),
+            &status, &headers, &roots[2])) {
         goto response_error;
     }
 
@@ -1001,6 +1034,7 @@ static MalValue mal_response_constructor(
                 : "text/plain;charset=UTF-8";
         }
     }
+    if (!mal_response_validate_init(vm, status, roots[2])) goto response_error;
     if (has_body && (status == 204 || status == 205 || status == 304)) {
         free(body);
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -1020,7 +1054,7 @@ static MalValue mal_response_constructor(
         response->body_stream = roots[4];
         mal_gc_card(&response->object.header, roots[4]);
     }
-    if (!mal_fetch_response_headers(vm, roots[0], &response->headers, &roots[3])) {
+    if (!mal_fetch_response_headers(vm, &headers, &response->headers, &roots[3])) {
         goto response_error;
     }
     response->server_headers = roots[3];
@@ -1029,11 +1063,13 @@ static MalValue mal_response_constructor(
         vm, mal_value_to_headers_object(response->headers), content_type);
     if (vm->completion.kind != MAL_COMPLETION_NORMAL) goto response_error;
     MalValue result = roots[1];
+    mal_headers_init_end(&headers);
     mal_gc_unroot(&rs);
     return result;
 
 response_error:
     if (response == nullptr) free(body);
+    mal_headers_init_end(&headers);
     mal_gc_unroot(&rs);
     return mal_value_new_undefined();
 }
@@ -2156,105 +2192,71 @@ static void mal_fetch_define_readonly_getter(
     mal_object_define_own(proto, mal_intrinsic_string_key(vm, name), &desc);
 }
 
-/* Read an optional { status, statusText, headers } init into out-params. */
-static bool mal_response_read_init(MalVm *vm, const MalValue *args, i32 argc, i32 *status,
-    MalValue *init_headers, MalValue *status_text) {
-    if (argc >= 2 && mal_value_is_object(args[1])) {
-        MalValue s;
-        if (!mal_vm_get_property(
-                vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "status"), &s)) {
-            return false;
-        }
-        if (!mal_value_is_undefined(s)) {
-            u16 converted;
-            if (!mal_fetch_to_uint16(vm, s, &converted)) return false;
-            *status = converted;
-            if (*status < 200 || *status > 599) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                    "Response status must be between 200 and 599");
-                return false;
-            }
-        }
-        MalValue text;
-        if (!mal_vm_get_property(vm, args[1],
-                mal_intrinsic_string_key(vm, (const byte *) "statusText"), &text)) {
-            return false;
-        }
-        if (!mal_value_is_undefined(text)
-            && !mal_fetch_reason_phrase(vm, text, status_text)) {
-            return false;
-        }
-        if (!mal_vm_get_property(vm, args[1],
-                mal_intrinsic_string_key(vm, (const byte *) "headers"), init_headers)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-/* Response.json(data, init?): a JSON Response (Content-Type defaults to
- * application/json unless the init headers already set it). */
 static MalValue mal_response_static_json(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
     (void) nt;
     (void) callee;
-    MalValue data = argc >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue roots[3] = {
+        argc >= 1 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0)),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    MalHeadersInit headers;
+    mal_headers_init_begin(&headers);
+    byte *body = nullptr;
+    i32 status = 200;
+    if (!mal_response_read_init(vm, argc >= 2 ? args[1] : mal_value_new_undefined(),
+            &status, &headers, &roots[2])) {
+        goto json_error;
+    }
     MalValue json_ns = vm->intrinsics[MAL_INTRINSIC_JSON];
     MalValue stringify;
-    if (!mal_vm_get_property(vm, json_ns, mal_intrinsic_string_key(vm, (const byte *) "stringify"), &stringify)
+    if (!mal_vm_get_property(vm, json_ns,
+            mal_intrinsic_string_key(vm, (const byte *) "stringify"), &stringify)
         || !mal_value_is_callable(stringify)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "JSON.stringify unavailable");
-        return mal_value_new_undefined();
+        goto json_error;
     }
-    MalCompletion c = mal_vm_call_value(vm, stringify, json_ns, &data, 1);
-    if (c.kind == MAL_COMPLETION_THROW) {
-        return mal_value_new_undefined();
-    }
-    if (!mal_value_is_string(c.value)) {
+    MalCompletion completion = mal_vm_call_value(vm, stringify, json_ns, &roots[0], 1);
+    if (completion.kind == MAL_COMPLETION_THROW) goto json_error;
+    if (!mal_value_is_string(completion.value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Response.json: data could not be serialized");
-        return mal_value_new_undefined();
+        goto json_error;
     }
-    MalValue roots[3] = {c.value, mal_value_new_undefined(), mal_value_new_undefined()};
-    MalRootSpan rs;
-    mal_gc_root(&rs, roots, 3);
-    roots[2] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
-    MalString *jstr = mal_value_to_string(roots[0]);
+    roots[0] = completion.value;
     usize body_len;
-    byte *body = mal_fetch_utf8_encode(vm, jstr, &body_len);
-    if (body == nullptr) {
-        mal_gc_unroot(&rs);
-        return mal_value_new_undefined();
-    }
-
-    i32 status = 200;
-    if (!mal_response_read_init(vm, args, argc, &status, &roots[1], &roots[2])) {
-        free(body);
-        mal_gc_unroot(&rs);
-        return mal_value_new_undefined();
-    }
+    body = mal_fetch_utf8_encode(vm, mal_value_to_string(roots[0]), &body_len);
+    if (body == nullptr || !mal_response_validate_init(vm, status, roots[2])) goto json_error;
     if (status == 204 || status == 205 || status == 304) {
-        free(body);
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Response status cannot have a body");
-        mal_gc_unroot(&rs);
-        return mal_value_new_undefined();
+        goto json_error;
     }
-
     MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_RESPONSE_PROTOTYPE]);
-    MalResponseObject *r = mal_response_object_new(&vm->heap, proto, status, body, body_len);
-    roots[0] = mal_value_from_response_object(r);
-    r->status_text = roots[2];
-    if (!mal_fetch_response_headers(vm, roots[1], &r->headers, &r->server_headers)) {
-        mal_gc_unroot(&rs);
-        return mal_value_new_undefined();
+    MalResponseObject *response = mal_response_object_new(&vm->heap, proto, status, body, body_len);
+    body = nullptr;
+    roots[0] = mal_value_from_response_object(response);
+    response->status_text = roots[2];
+    if (!mal_fetch_response_headers(vm, &headers, &response->headers, &roots[1])) {
+        goto json_error;
     }
-    MalHeadersObject *h = mal_value_to_headers_object(r->headers);
-    mal_fetch_default_content_type(vm, h, "application/json");
+    response->server_headers = roots[1];
+    mal_fetch_default_content_type(vm, mal_value_to_headers_object(response->headers), "application/json");
+    if (vm->completion.kind != MAL_COMPLETION_NORMAL) goto json_error;
     MalValue result = roots[0];
-    mal_gc_unroot(&rs);
+    mal_headers_init_end(&headers);
+    mal_gc_unroot(&span);
     return result;
+
+json_error:
+    free(body);
+    mal_headers_init_end(&headers);
+    mal_gc_unroot(&span);
+    return mal_value_new_undefined();
 }
 
 /* Response.redirect(url, status = 302): an empty-body Response with a Location. */

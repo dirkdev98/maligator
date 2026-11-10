@@ -584,11 +584,22 @@ static bool mal_headers_fill_from_sequence(
     return true;
 }
 
-/* A record entry is always a pair, so the converted keys and values are staged
- * flat in a rooted native buffer instead of an array of two-element arrays. Every
- * conversion still completes before the first header is validated or appended.
- * Typical inits fit the stack buffer; malloc/free would cost what the arrays did. */
-#define MAL_HEADERS_RECORD_STACK_PAIRS 8
+void mal_headers_init_begin(MalHeadersInit *init) {
+    init->sequence = mal_value_new_undefined();
+    init->record = init->stack_record;
+    init->record_count = 0;
+    for (usize i = 0; i < countof(init->stack_record); i++) {
+        init->stack_record[i] = mal_value_new_undefined();
+    }
+    mal_gc_root(&init->sequence_span, &init->sequence, 1);
+    mal_gc_root(&init->record_span, init->record, countof(init->stack_record));
+}
+
+void mal_headers_init_end(MalHeadersInit *init) {
+    mal_gc_unroot(&init->record_span);
+    mal_gc_unroot(&init->sequence_span);
+    if (init->record != init->stack_record) free(init->record);
+}
 
 /* An ordinary object whose own properties are all enumerable shaped string values,
  * such as `{ "content-type": "text/plain" }`. Converting strings runs no user code,
@@ -608,9 +619,10 @@ static const MalObject *mal_headers_plain_string_record(MalValue input) {
     return object;
 }
 
-static bool mal_headers_fill_from_record(MalVm *vm, MalHeadersObject *h, MalValue input) {
+static bool mal_headers_convert_record(
+    MalVm *vm, MalValue input, MalHeadersInit *init) {
     MalValue roots[3] = {
-        mal_value_from_headers_object(h),
+        input,
         mal_value_new_undefined(),
         mal_value_new_undefined(),
     };
@@ -629,33 +641,32 @@ static bool mal_headers_fill_from_record(MalVm *vm, MalHeadersObject *h, MalValu
         keys = mal_value_to_array_object(roots[1]);
         key_count = mal_array_object_length(keys);
     }
-    MalValue stack_staged[MAL_HEADERS_RECORD_STACK_PAIRS * 2];
     usize capacity = key_count == 0 ? 1 : (usize) key_count * 2;
-    MalValue *staged = capacity <= MAL_HEADERS_RECORD_STACK_PAIRS * 2
-        ? stack_staged
-        : malloc(capacity * sizeof(MalValue));
-    if (staged == nullptr) {
-        mal_gc_unroot(&roots_span);
-        mal_vm_throw_allocation_error(vm);
-        return false;
+    if (capacity > countof(init->stack_record)) {
+        init->record = malloc(capacity * sizeof(MalValue));
+        if (init->record == nullptr) {
+            init->record = init->stack_record;
+            mal_gc_unroot(&roots_span);
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+        for (usize i = 0; i < capacity; i++) init->record[i] = mal_value_new_undefined();
+        init->record_span.slots = init->record;
+        init->record_span.count = (i32) capacity;
     }
-    for (usize i = 0; i < capacity; i++) staged[i] = mal_value_new_undefined();
-    MalRootSpan staged_span;
-    mal_gc_root(&staged_span, staged, capacity);
 
-    usize staged_count = 0;
     bool ok = true;
     for (u32 i = 0; i < key_count; i++) {
         if (plain != nullptr) {
             const MalShapeProp *prop = &plain->shape->props[i];
-            MalValue *pair = &staged[staged_count * 2];
+            MalValue *pair = &init->record[init->record_count * 2];
             if (!mal_headers_to_byte_string(vm, prop->key, &pair[0]) ||
                 !mal_headers_to_byte_string(
                     vm, mal_object_field_load(plain, prop->slot), &pair[1])) {
                 ok = false;
                 break;
             }
-            staged_count++;
+            init->record_count++;
             continue;
         }
         mal_array_object_dense_get(keys, i, &roots[2]);
@@ -675,43 +686,34 @@ static bool mal_headers_fill_from_record(MalVm *vm, MalHeadersObject *h, MalValu
         }
 
         // Web IDL converts the record key before Get(O, key).
-        MalValue *pair = &staged[staged_count * 2];
+        MalValue *pair = &init->record[init->record_count * 2];
         if (!mal_headers_to_byte_string(vm, roots[2], &pair[0]) ||
             !mal_vm_get_property(vm, input, key, &pair[1]) ||
             !mal_headers_to_byte_string(vm, pair[1], &pair[1])) {
             ok = false;
             break;
         }
-        staged_count++;
+        init->record_count++;
     }
-    for (usize i = 0; ok && i < staged_count; i++) {
-        ok = mal_headers_append_values(vm, h, staged[i * 2], staged[i * 2 + 1]);
-    }
-
-    mal_gc_unroot(&staged_span);
-    if (staged != stack_staged) free(staged);
     mal_gc_unroot(&roots_span);
     return ok;
 }
 
-/* Fill from the HeadersInit sequence/record union. Both arms stage their fully
- * converted ByteStrings before Fetch validates or appends any header. */
-static bool mal_headers_fill_from_init(MalVm *vm, MalHeadersObject *h, MalValue init) {
-    if (!mal_value_is_object(init)) {
+bool mal_headers_init_convert(MalVm *vm, MalValue input, MalHeadersInit *init) {
+    if (mal_value_is_undefined(input)) return true;
+    if (!mal_value_is_object(input)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Headers init must be an object");
         return false;
     }
-    // A plain record has no own symbols and inherits straight from an unmodified
-    // %Object.prototype%, which has no @@iterator, so GetMethod can only find undefined.
-    const MalObject *plain = mal_headers_plain_string_record(init);
+    const MalObject *plain = mal_headers_plain_string_record(input);
     if (plain != nullptr && mal_vm_primitive_methods_intact(vm) &&
         mal_object_prototype(plain) ==
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])) {
-        return mal_headers_fill_from_record(vm, h, init);
+        return mal_headers_convert_record(vm, input, init);
     }
 
     MalValue method;
-    if (!mal_vm_get_property(vm, init,
+    if (!mal_vm_get_property(vm, input,
             mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &method)) {
         return false;
     }
@@ -721,15 +723,41 @@ static bool mal_headers_fill_from_init(MalVm *vm, MalHeadersObject *h, MalValue 
                 "Headers init iterator is not callable");
             return false;
         }
-        MalValue sequence = mal_value_new_undefined();
-        MalRootSpan sequence_span;
-        mal_gc_root(&sequence_span, &sequence, 1);
-        bool ok = mal_headers_convert_sequence(vm, init, method, &sequence)
-            && mal_headers_fill_from_sequence(vm, h, sequence);
-        mal_gc_unroot(&sequence_span);
-        return ok;
+        return mal_headers_convert_sequence(vm, input, method, &init->sequence);
     }
-    return mal_headers_fill_from_record(vm, h, init);
+    return mal_headers_convert_record(vm, input, init);
+}
+
+static bool mal_headers_fill_converted(
+    MalVm *vm, MalHeadersObject *headers, const MalHeadersInit *init) {
+    if (!mal_value_is_undefined(init->sequence)) {
+        return mal_headers_fill_from_sequence(vm, headers, init->sequence);
+    }
+    for (usize i = 0; i < init->record_count; i++) {
+        if (!mal_headers_append_values(vm, headers, init->record[i * 2], init->record[i * 2 + 1])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool mal_headers_fill_from_init(MalVm *vm, MalHeadersObject *headers, MalValue input) {
+    MalHeadersInit init;
+    mal_headers_init_begin(&init);
+    bool ok = mal_headers_init_convert(vm, input, &init)
+        && mal_headers_fill_converted(vm, headers, &init);
+    mal_headers_init_end(&init);
+    return ok;
+}
+
+MalHeadersObject *mal_headers_from_converted_init(MalVm *vm, const MalHeadersInit *init) {
+    MalHeadersObject *headers = mal_headers_create(vm);
+    MalValue root = mal_value_from_headers_object(headers);
+    MalRootSpan span;
+    mal_gc_root(&span, &root, 1);
+    mal_headers_fill_converted(vm, headers, init);
+    mal_gc_unroot(&span);
+    return headers;
 }
 
 /* --- prototype methods --- */

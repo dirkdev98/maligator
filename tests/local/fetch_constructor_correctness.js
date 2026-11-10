@@ -49,6 +49,167 @@ async function run() {
 			throws(RangeError, () => new Response(null, { status: NaN })),
 	);
 
+	for (const [name, create] of [
+		["Response", (init) => new Response(null, init)],
+		["Response.json", (init) => Response.json({}, init)],
+	]) {
+		const order = [];
+		const entries = {
+			"x-snapshot": {
+				toString() {
+					order.push("header value");
+					return "before";
+				},
+			},
+		};
+		const response = create({
+			get headers() {
+				order.push("headers");
+				return entries;
+			},
+			get status() {
+				order.push("status");
+				return {
+					valueOf() {
+						order.push("status value");
+						entries["x-snapshot"] = "after";
+						return 201;
+					},
+				};
+			},
+			get statusText() {
+				order.push("statusText");
+				return {
+					toString() {
+						order.push("status text");
+						return "Created";
+					},
+				};
+			},
+		});
+		check(
+			name + " converts dictionary members in order and snapshots headers",
+			order.join(",") ===
+				"headers,header value,status,status value,statusText,status text" &&
+				response.status === 201 &&
+				response.statusText === "Created" &&
+				response.headers.get("x-snapshot") === "before",
+		);
+		const manyHeaders = {};
+		for (let index = 0; index < 16; index++)
+			manyHeaders[`x-field-${index}`] = `value-${index}`;
+		const collect = globalThis.__mal_collect_garbage;
+		const staged = create({
+			headers: manyHeaders,
+			get status() {
+				if (typeof collect === "function") collect();
+				return 201;
+			},
+		});
+		check(
+			name + " roots a grown header snapshot across status conversion",
+			Object.keys(manyHeaders).every(
+				(key) => staged.headers.get(key) === manyHeaders[key],
+			),
+		);
+		const statusFailure = {};
+		let caughtStatusFailure;
+		try {
+			create({
+				headers: manyHeaders,
+				get status() {
+					if (typeof collect === "function") collect();
+					throw statusFailure;
+				},
+			});
+		} catch (error) {
+			caughtStatusFailure = error;
+		}
+		check(
+			name + " preserves an abrupt status getter after staging headers",
+			caughtStatusFailure === statusFailure,
+		);
+
+		const lateInit = {
+			status: {
+				valueOf() {
+					lateInit.headers = { "x-late": "added" };
+					return 200;
+				},
+			},
+		};
+		check(
+			name + " ignores headers added by status conversion",
+			create(lateInit).headers.get("x-late") === null,
+		);
+
+		const failureOrder = [];
+		check(
+			name + " stops dictionary conversion at an invalid header ByteString",
+			throws(TypeError, () =>
+				create({
+					headers: { "x-value": "\u0100" },
+					get status() {
+						failureOrder.push("status");
+						return 200;
+					},
+				}),
+			) && failureOrder.length === 0,
+		);
+		const validationOrder = [];
+		check(
+			name + " converts init before validating status and header names",
+			throws(RangeError, () =>
+				create({
+					headers: [["bad name", "value"]],
+					status: 0,
+					get statusText() {
+						validationOrder.push("statusText");
+						return "";
+					},
+				}),
+			) && validationOrder.join(",") === "statusText",
+		);
+		check(
+			name + " converts statusText ByteString before validating status",
+			throws(TypeError, () => create({ status: 0, statusText: "\u0100" })),
+		);
+		check(
+			name + " rejects primitive init dictionaries",
+			[true, 1, "init"].every((value) => throws(TypeError, () => create(value))) &&
+				create(null).status === 200 &&
+				create(undefined).status === 200,
+		);
+	}
+
+	const jsonOrder = [];
+	Response.json(
+		{
+			toJSON() {
+				jsonOrder.push("data");
+				return {};
+			},
+		},
+		{
+			get headers() {
+				jsonOrder.push("headers");
+				return {};
+			},
+			get status() {
+				jsonOrder.push("status");
+				return 200;
+			},
+			get statusText() {
+				jsonOrder.push("statusText");
+				return "";
+			},
+		},
+	);
+	check(
+		"Response.json converts init before serializing data",
+		jsonOrder.join(",") === "headers,status,statusText,data",
+	);
+
 	class DerivedResponse extends Response {}
 	const derived = new DerivedResponse("derived", { status: 201 });
 	check(

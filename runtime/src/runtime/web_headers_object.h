@@ -3,6 +3,7 @@
 #include "heap.h"
 #include "heap_string.h"
 #include "object.h"
+#include "gc.h"
 
 typedef struct MalVm MalVm;
 
@@ -67,6 +68,22 @@ MalHeadersObject *mal_headers_from_init(MalVm *vm, MalValue init);
  * including entries supplied by the constructor init. */
 MalHeadersObject *mal_headers_from_init_guarded(
     MalVm *vm, MalValue init, MalHeadersGuard guard);
+
+typedef struct MalHeadersInit {
+    MalValue sequence;
+    MalValue stack_record[16];
+    MalValue *record;
+    usize record_count;
+    MalRootSpan sequence_span;
+    MalRootSpan record_span;
+} MalHeadersInit;
+
+/* Keep converted ByteStrings rooted until Fetch validates the completed init.
+ * Begin/end must surround every conversion, including abrupt conversion. */
+void mal_headers_init_begin(MalHeadersInit *init);
+void mal_headers_init_end(MalHeadersInit *init);
+bool mal_headers_init_convert(MalVm *vm, MalValue input, MalHeadersInit *init);
+MalHeadersObject *mal_headers_from_converted_init(MalVm *vm, const MalHeadersInit *init);
 
 /* Create one owned lowercase string from an already-validated ASCII header name. */
 MalString *mal_headers_new_lowercase_name(
