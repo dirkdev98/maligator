@@ -8,6 +8,7 @@ import type {
 } from "../src/compiler/target/program-image.ts";
 import {
 	directCompiledEntryKey,
+	createNativeFunctionRenderer,
 	emitCompiledFunction,
 } from "../src/compiler/target/render-native-c.ts";
 import type { NativeFastTryAbi } from "../src/compiler/target/render-native-fast-entry.ts";
@@ -148,9 +149,10 @@ function emit(
 }
 
 function emitFullCallProbe(
-	abi: NativeFastTryAbi,
+	abi: NativeFastTryAbi | undefined,
 	arguments_: ReadonlyArray<number> = [1],
 	mode: "guarded" | "direct" = "guarded",
+	render = emitCompiledFunction,
 ) {
 	const native = createConservativeNativePlan([
 		{
@@ -163,7 +165,7 @@ function emitFullCallProbe(
 			),
 		},
 	]).functions[0]!;
-	return emitCompiledFunction(
+	return render(
 		lowerNativeFunctionStorage({
 			...native,
 			instructions: [
@@ -188,11 +190,29 @@ function emitFullCallProbe(
 		undefined,
 		undefined,
 		undefined,
-		new Map([[1, abi]]),
+		abi === undefined ? new Map() : new Map([[1, abi]]),
 	)!.source;
 }
 
 describe("native entry call overrides", () => {
+	it("records undefined-only direct dependencies before admitting a fast callee", () => {
+		for (const abi of [
+			undefined,
+			{ result: { kind: "boxed" } },
+			{ result: { kind: "undefined" } },
+		] as const) {
+			const lookups: Array<"undefined" | undefined> = [];
+			const render = createNativeFunctionRenderer((_caller, _target, kind) =>
+				lookups.push(kind),
+			);
+			const source = emitFullCallProbe(abi, [1], "direct", render);
+			expect(lookups.length).toBeGreaterThan(0);
+			expect(lookups.every((kind) => kind === "undefined")).toBe(true);
+			expect(source.includes("!mal_compiled_1_try(")).toBe(
+				abi?.result.kind === "undefined",
+			);
+		}
+	});
 	it("selects a frameless callee from an exact typed override absent from the canonical plan", () => {
 		const emitted = emit(true, false, "number", "number", {
 			canonicalTarget: false,

@@ -1137,9 +1137,11 @@ function emitNativeFunctions(
 		for (const functionIndex of site.functions)
 			(closureParticipation[functionIndex] ??= []).push(key);
 	const cached: Array<{ key: string; emitted: CompiledFunction | null } | undefined> = [];
-	const fastTryLookups: Array<Set<number> | undefined> = [];
-	const renderFunction = createNativeFunctionRenderer((caller, target) => {
-		(fastTryLookups[caller] ??= new Set()).add(target);
+	const fastTryLookups: Array<Map<number, "all" | "undefined"> | undefined> = [];
+	const renderFunction = createNativeFunctionRenderer((caller, target, resultKind) => {
+		const lookups = (fastTryLookups[caller] ??= new Map());
+		if (resultKind === undefined || !lookups.has(target))
+			lookups.set(target, resultKind ?? "all");
 	});
 	const strictCompiledTargets = new Set(
 		image.runtime.functions.flatMap((fn, index) => (fn.strict ? [index] : [])),
@@ -1239,8 +1241,11 @@ function emitNativeFunctions(
 		for (const closure of closureParticipation[functionIndex] ?? [])
 			key += availability.directClosures.has(closure) ? "1" : "0";
 		key += ":";
-		for (const target of fastTryLookups[functionIndex] ?? []) {
-			key += nativeFastTryAbiKey(availability.fastTryTargets.get(target));
+		for (const [target, requirement] of fastTryLookups[functionIndex] ?? []) {
+			const abi = availability.fastTryTargets.get(target);
+			key += nativeFastTryAbiKey(
+				requirement === "all" || abi?.result.kind === requirement ? abi : undefined,
+			);
 		}
 		return key;
 	};

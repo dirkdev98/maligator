@@ -334,6 +334,9 @@ full-body validation probes of helpers with a separate ordinary return. Callers
 reconstruct that value on success and retain the full entry's return value on a miss.
 Availability and caller cache identities include this result
 ABI because admitting another callee can expand a body's successful return paths.
+Undefined-only full calls ignore ABI changes they cannot admit. When a caller also
+uses an unrestricted fast call to that callee, the unrestricted dependency takes
+priority so changes to its argument and result transport still refresh the caller.
 The same success-only ABI can forward an original positional argument when every
 admitted return reads that unwritten parameter and no successful path falls through.
 Callers retain the already evaluated argument, including `undefined` for an omitted

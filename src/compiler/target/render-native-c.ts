@@ -3501,7 +3501,7 @@ function emitCompiledVariant(
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	fastTryTargets: ReadonlyMap<number, NativeFastTryAbi> = new Map(),
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
-	onFastTryLookup?: (target: number) => void,
+	onFastTryLookup?: (target: number, resultKind?: "undefined") => void,
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -5244,7 +5244,7 @@ export function emitCompiledFunction(
 // The image is immutable during one emission; a fresh renderer rechecks later image mutations.
 // Lookups include missing callees that can block fast admission.
 export function createNativeFunctionRenderer(
-	onFastTryLookup?: (caller: number, target: number) => void,
+	onFastTryLookup?: (caller: number, target: number, resultKind?: "undefined") => void,
 ): typeof emitCompiledFunction {
 	const analyses = new Map<
 		number,
@@ -5309,7 +5309,7 @@ export function createNativeFunctionRenderer(
 			directClosures,
 			onFastTryLookup === undefined
 				? undefined
-				: (target) => onFastTryLookup(index, target),
+				: (target, resultKind) => onFastTryLookup(index, target, resultKind),
 		);
 	};
 }
@@ -5334,7 +5334,7 @@ function renderCompiledFunction(
 	reductionEntries: ReadonlySet<string> = new Set(),
 	fastTryTargets: ReadonlyMap<number, NativeFastTryAbi> = new Map(),
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
-	onFastTryLookup?: (target: number) => void,
+	onFastTryLookup?: (target: number, resultKind?: "undefined") => void,
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -7414,7 +7414,7 @@ function emitBody(
 	elidedPureIps: ReadonlyArray<number> = [],
 	stringComparisons: ReadonlyArray<NativeStringComparisonPlan> = [],
 	fastTryTargets: ReadonlyMap<number, NativeFastTryAbi> = new Map(),
-	onFastTryLookup?: (target: number) => void,
+	onFastTryLookup?: (target: number, resultKind?: "undefined") => void,
 	virtualRestRootCounts: NativeVirtualRestRootCounts = new Map(),
 ): EmittedBody | null {
 	const elided = new Set(elidedPureIps);
@@ -9391,7 +9391,7 @@ interface NativeInstructionContext {
 	readonly directCompiledTargets: ReadonlySet<number>;
 	readonly directCompiledEntries: DirectCompiledEntries;
 	readonly fastTryTargets?: ReadonlyMap<number, NativeFastTryAbi>;
-	readonly onFastTryLookup?: (target: number) => void;
+	readonly onFastTryLookup?: (target: number, resultKind?: "undefined") => void;
 	readonly directResultRepresentation?: VmRegisterRepresentation;
 	readonly directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
 	readonly constantBoolean?: boolean;
@@ -13038,7 +13038,7 @@ class NativeInstructionEmission {
 		readonly argumentsExpression: string;
 		readonly environment: string;
 		readonly ordinary: string;
-		readonly resultKind: NativeFastTryAbi["result"]["kind"] | undefined;
+		readonly resultKind: "undefined" | undefined;
 	}): Array<string> {
 		const {
 			target,
@@ -13051,7 +13051,7 @@ class NativeInstructionEmission {
 			resultKind,
 		} = input;
 		if (target === undefined) return [`MalValue ${value} = ${ordinary};`];
-		this.context.onFastTryLookup?.(target);
+		this.context.onFastTryLookup?.(target, resultKind);
 		const abi = this.context.fastTryTargets?.get(target);
 		if (abi === undefined || (resultKind !== undefined && abi.result.kind !== resultKind))
 			return [`MalValue ${value} = ${ordinary};`];
