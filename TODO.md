@@ -408,6 +408,11 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Fix remaining RegExp @@replace protocol and coercion cases. Prefer shared
       replacement semantics over case-specific branches.
 
+- [ ] Validate RegExp literal Unicode properties independently of the compiler host's
+      Unicode data. Meriyah uses the host RegExp constructor, which rejects Unicode 18
+      script names on Node 26 even though the native backend accepts them. Preserve
+      syntax early errors and self-hosted parsing without per-literal subprocesses.
+
 - [ ] Fix remaining arguments-object legacy caller and parameter-expression behavior.
       Cover strict, sloppy, mapped, and unmapped forms.
       A statically declared sloppy function returning its mapped arguments can

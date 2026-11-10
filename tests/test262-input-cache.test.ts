@@ -25,6 +25,7 @@ import {
 	test262LoadInputIndex,
 	test262LoadInputs,
 } from "../src/test262/cache.ts";
+import type { Test262CorpusComposition } from "../src/test262/corpus-compositions.ts";
 import { test262Checkout, test262PrepareCheckout } from "../src/test262/files.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -66,7 +67,7 @@ function fixture() {
 		path.join(repository, "harness", "assert.js"),
 		"function assert(value) { if (!value) throw Error(); }\n",
 	);
-	git(repository, "init", "--quiet");
+	git(repository, "init", "--quiet", "--object-format=sha1");
 	git(repository, "add", ".");
 	git(
 		repository,
@@ -87,6 +88,100 @@ function fixture() {
 	};
 }
 
+function compositionFixture() {
+	const options = fixture();
+	const generated = path.join(options.directory, "generated");
+	const put = (repository: string, file: string, content: string) => {
+		mkdirSync(path.dirname(path.join(repository, file)), { recursive: true });
+		writeFileSync(path.join(repository, file), content);
+	};
+	const commit = (repository: string) => {
+		git(repository, "add", ".");
+		git(
+			repository,
+			"-c",
+			"user.name=Test",
+			"-c",
+			"user.email=test@localhost",
+			"commit",
+			"--quiet",
+			"-m",
+			"inputs",
+		);
+		return git(repository, "rev-parse", "HEAD");
+	};
+	const targets = ["property-escapes", "unicodeSets"];
+	for (const target of targets) {
+		put(options.repository, `test/${target}/generated/current.js`, "old();\n");
+		put(
+			options.repository,
+			`test/${target}/generated/strings/historical.js`,
+			"historical();\n",
+		);
+		put(options.repository, `test/${target}/handwritten.js`, "handwritten();\n");
+		put(
+			generated,
+			`output/${target}/generated/current.js`,
+			"/*---\nincludes: [assert.js]\n---*/\nupdated();\n",
+		);
+		put(generated, `output/${target}/generated/strings/added.js`, "added();\n");
+		put(generated, `output/${target}/handwritten.js`, "unrelated();\n");
+	}
+	put(generated, "harness/assert.js", "unrelated harness\n");
+	options.revision = commit(options.repository);
+	const original = test262PrepareCheckout(options);
+	git(generated, "init", "--quiet", "--object-format=sha1");
+	const generatedRevision = commit(generated);
+	git(options.repository, "fetch", generated, generatedRevision);
+	const overlays = targets.map((target) => ({
+		source: `output/${target}/generated`,
+		target: `test/${target}/generated`,
+		tree: git(generated, "rev-parse", `HEAD:output/${target}/generated`),
+	}));
+	for (const overlay of overlays)
+		cpSync(
+			path.join(generated, overlay.source),
+			path.join(options.repository, overlay.target),
+			{ recursive: true },
+		);
+	git(options.repository, "add", ".");
+	const tree = git(options.repository, "write-tree");
+	const epoch = 1700000000;
+	const message = "test: composed inputs";
+	const revision = execFileSync(
+		"git",
+		["commit-tree", tree, "-p", options.revision, "-p", generatedRevision],
+		{
+			cwd: options.repository,
+			encoding: "utf8",
+			input: `${message}\n`,
+			env: {
+				...process.env,
+				GIT_AUTHOR_NAME: "Corpus preparation",
+				GIT_AUTHOR_EMAIL: "corpus@example.invalid",
+				GIT_COMMITTER_NAME: "Corpus preparation",
+				GIT_COMMITTER_EMAIL: "corpus@example.invalid",
+				GIT_AUTHOR_DATE: `@${epoch} +0000`,
+				GIT_COMMITTER_DATE: `@${epoch} +0000`,
+			},
+		},
+	).trim();
+	const composition: Test262CorpusComposition = {
+		revision,
+		tree,
+		base: { repository: options.repository, revision: options.revision },
+		generated: { repository: generated, revision: generatedRevision },
+		overlays,
+		epoch,
+		message,
+	};
+	return {
+		options,
+		original,
+		composedOptions: { cacheDirectory: options.cacheDirectory, revision, composition },
+	};
+}
+
 function sourceCheckout(directory: string): string {
 	mkdirSync(path.join(directory, "src/test262"), { recursive: true });
 	for (const file of ["cache.ts", "frontmatter.ts", "types.ts"]) {
@@ -104,6 +199,75 @@ function sourceCheckout(directory: string): string {
 }
 
 describe("shared Test262 inputs", () => {
+	it("prepares reproducible composed inputs without changing historical tests or existing snapshots", () => {
+		const { options, original, composedOptions } = compositionFixture();
+		const corpus = test262PrepareCheckout(composedOptions);
+		const index = test262LoadInputIndex(corpus, options.cacheDirectory);
+		const loaded = test262LoadInputs(corpus.path, index.files);
+		for (const target of ["property-escapes", "unicodeSets"]) {
+			expect(
+				loaded.find((file) => file.path === `test/${target}/generated/current.js`)!
+					.content,
+			).toContain("updated();");
+			expect(
+				loaded.find((file) => file.path === `test/${target}/generated/strings/added.js`)!
+					.content,
+			).toBe("added();\n");
+			expect(
+				loaded.find(
+					(file) => file.path === `test/${target}/generated/strings/historical.js`,
+				)!.content,
+			).toBe("historical();\n");
+			expect(
+				loaded.find((file) => file.path === `test/${target}/handwritten.js`)!.content,
+			).toBe("handwritten();\n");
+			expect(
+				readFileSync(
+					path.join(original.path, `test/${target}/generated/current.js`),
+					"utf8",
+				),
+			).toBe("old();\n");
+		}
+		expect(readFileSync(path.join(corpus.path, "harness/assert.js"), "utf8")).toBe(
+			readFileSync(path.join(original.path, "harness/assert.js"), "utf8"),
+		);
+		expect(test262Checkout(options).tree).toBe(original.tree);
+		expect(git(corpus.path, "status", "--porcelain=v1", "--ignored")).toBe("");
+		expect(corpus.path).not.toBe(original.path);
+		const missing = path.join(options.directory, "unavailable");
+		expect(
+			test262PrepareCheckout({
+				...composedOptions,
+				composition: {
+					...composedOptions.composition,
+					base: { ...composedOptions.composition.base, repository: missing },
+					generated: { ...composedOptions.composition.generated, repository: missing },
+				},
+			}),
+		).toEqual(corpus);
+	});
+
+	it.each(["source tree", "tree", "commit"] as const)(
+		"rejects a composition with the wrong pinned %s before publication",
+		(pin) => {
+			const { options, composedOptions } = compositionFixture();
+			const composition = structuredClone(composedOptions.composition);
+			if (pin === "source tree") composition.overlays[0]!.tree = "0".repeat(40);
+			else if (pin === "tree") composition.tree = "0".repeat(40);
+			else composition.revision = "0".repeat(40);
+			expect(() =>
+				test262PrepareCheckout({
+					...composedOptions,
+					revision: composition.revision,
+					composition,
+				}),
+			).toThrow(/differs/);
+			expect(readdirSync(path.join(options.cacheDirectory, "test262-corpora"))).toEqual([
+				options.revision,
+			]);
+		},
+	);
+
 	it("reuses the same pinned corpus and metadata across source checkouts with fresh results", () => {
 		const options = fixture();
 		const firstSource = sourceCheckout(path.join(options.directory, "first"));

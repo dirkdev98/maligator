@@ -44,6 +44,14 @@ Review changed, added and removed tests before advancing the default pin in
 `npm run test262:update-baseline -- --from-report <report>`. Commit the pin and
 imported baseline together. Candidate selection cannot write a baseline.
 
+When upstream corpus updates leave related generated expectations on older Unicode
+data, `src/test262/corpus-compositions.ts` registers an immutable composition. Preparation
+fetches its pinned Test262 and generator commits into a private Git repository, overlays
+only the declared generated subtrees, and verifies the resulting tree and commit before
+publishing the clean snapshot. Base-only historical tests and the Test262 harness remain
+intact. Select the registered derived commit with the same `--corpus` option; reports and
+caches identify the complete composed tree rather than either upstream parent.
+
 The native harness shares persistent frontend, generated-object, runtime, and
 linked-binary caches. `buildBackendPairFromOneProgramImage` goes further: one
 in-memory optimized image feeds native emission while its interpreted half runs as

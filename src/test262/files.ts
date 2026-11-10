@@ -16,6 +16,8 @@ import {
 import { createCacheLease } from "../cache-management.ts";
 import { maligatorCacheDirectory } from "../cache-root.ts";
 import { TEST262_METADATA } from "./constants.ts";
+import type { Test262CorpusComposition } from "./corpus-compositions.ts";
+import { UNICODE18_CORPUS } from "./corpus-compositions.ts";
 import { test262Log } from "./log.ts";
 
 const CORPUS_PRODUCER = artifactProducer("test262-corpus", 1, "git-checkout");
@@ -31,6 +33,7 @@ interface CorpusOptions {
 	cacheDirectory?: string;
 	repository?: string;
 	revision?: string;
+	composition?: Test262CorpusComposition;
 }
 
 function corpusLocation(options: CorpusOptions) {
@@ -41,19 +44,123 @@ function corpusLocation(options: CorpusOptions) {
 	return { cache, revision, directory: path.join(cache, "test262-corpora", revision) };
 }
 
-function git(directory: string, arguments_: Array<string>): string {
+function git(directory: string, arguments_: Array<string>, input?: string): string {
 	return execFileSync(
 		"git",
 		["-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", ...arguments_],
 		{
 			cwd: directory,
 			encoding: "utf8",
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+			input,
 			maxBuffer: 16 * 1024 * 1024,
 			timeout: 120_000,
 			env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
 		},
 	);
+}
+
+interface TreeEntry {
+	mode: string;
+	type: string;
+	object: string;
+}
+
+function readTree(directory: string, tree?: string): Map<string, TreeEntry> {
+	const entries = new Map<string, TreeEntry>();
+	if (tree === undefined) return entries;
+	for (const record of git(directory, ["ls-tree", "-z", tree]).split("\0")) {
+		if (record === "") continue;
+		const separator = record.indexOf("\t");
+		const [mode, type, object] = record.slice(0, separator).split(" ");
+		entries.set(record.slice(separator + 1), {
+			mode: mode!,
+			type: type!,
+			object: object!,
+		});
+	}
+	return entries;
+}
+
+function writeTree(directory: string, entries: Map<string, TreeEntry>): string {
+	return git(
+		directory,
+		["mktree", "-z"],
+		Array.from(
+			entries,
+			([name, entry]) => `${entry.mode} ${entry.type} ${entry.object}\t${name}\0`,
+		).join(""),
+	).trim();
+}
+
+function mergeTrees(
+	directory: string,
+	base: string | undefined,
+	generated: string,
+): string {
+	const entries = readTree(directory, base);
+	for (const [name, entry] of readTree(directory, generated)) {
+		const previous = entries.get(name);
+		entries.set(name, {
+			...entry,
+			object:
+				previous?.type === "tree" && entry.type === "tree"
+					? mergeTrees(directory, previous.object, entry.object)
+					: entry.object,
+		});
+	}
+	return writeTree(directory, entries);
+}
+
+function overlayTree(
+	directory: string,
+	base: string | undefined,
+	segments: Array<string>,
+	generated: string,
+): string {
+	const [name, ...rest] = segments;
+	if (name === undefined) return mergeTrees(directory, base, generated);
+	const entries = readTree(directory, base);
+	const previous = entries.get(name);
+	if (previous !== undefined && previous.type !== "tree")
+		throw new Error(`Test262 composition target is not a directory: ${name}`);
+	entries.set(name, {
+		mode: "040000",
+		type: "tree",
+		object: overlayTree(directory, previous?.object, rest, generated),
+	});
+	return writeTree(directory, entries);
+}
+
+function prepareComposition(directory: string, composition: Test262CorpusComposition) {
+	for (const source of [composition.base, composition.generated]) {
+		git(directory, ["fetch", "--depth", "1", source.repository, source.revision]);
+		if (
+			git(directory, ["rev-parse", `${source.revision}^{commit}`]).trim() !==
+			source.revision
+		)
+			throw new Error("Test262 composition source is not the pinned commit");
+	}
+	let tree = git(directory, ["rev-parse", `${composition.base.revision}^{tree}`]).trim();
+	for (const overlay of composition.overlays) {
+		const sourceTree = git(directory, [
+			"rev-parse",
+			`${composition.generated.revision}:${overlay.source}`,
+		]).trim();
+		if (sourceTree !== overlay.tree)
+			throw new Error(`Test262 composition source tree differs: ${overlay.source}`);
+		tree = overlayTree(directory, tree, overlay.target.split("/"), sourceTree);
+	}
+	if (tree !== composition.tree)
+		throw new Error("Test262 composed tree differs from its pin");
+	const identity = `Corpus preparation <corpus@example.invalid> ${composition.epoch} +0000`;
+	const commit = git(
+		directory,
+		["hash-object", "-t", "commit", "-w", "--stdin"],
+		`tree ${tree}\nparent ${composition.base.revision}\nparent ${composition.generated.revision}\nauthor ${identity}\ncommitter ${identity}\n\n${composition.message}\n`,
+	).trim();
+	if (commit !== composition.revision)
+		throw new Error("Test262 composed commit differs from its pin");
 }
 
 function inspectCorpus(directory: string, revision: string): Test262Corpus {
@@ -100,6 +207,11 @@ function inspectCorpus(directory: string, revision: string): Test262Corpus {
 /** Publish a pinned corpus once; existing snapshots are only validated, never checked out again. */
 export function test262PrepareCheckout(options: CorpusOptions = {}): Test262Corpus {
 	const { cache, directory, revision } = corpusLocation(options);
+	const composition =
+		options.composition ??
+		(revision === UNICODE18_CORPUS.revision ? UNICODE18_CORPUS : undefined);
+	if (composition !== undefined && composition.revision !== revision)
+		throw new Error("Test262 composition does not match the requested revision");
 	const lease = createCacheLease("test262:prepare", cache);
 	try {
 		return withArtifactActionLock(
@@ -112,11 +224,14 @@ export function test262PrepareCheckout(options: CorpusOptions = {}): Test262Corp
 				mkdirSync(path.dirname(directory), { recursive: true });
 				const temporary = mkdtempSync(path.join(path.dirname(directory), ".prepare-"));
 				try {
-					git(temporary, ["init", "--quiet"]);
-					const repository =
-						options.repository ?? `https://github.com/${TEST262_METADATA.repository}`;
+					git(temporary, ["init", "--quiet", "--object-format=sha1"]);
 					test262Log(`Fetching pinned revision ${revision}...`);
-					git(temporary, ["fetch", "--depth", "1", repository, revision]);
+					if (composition !== undefined) prepareComposition(temporary, composition);
+					else {
+						const repository =
+							options.repository ?? `https://github.com/${TEST262_METADATA.repository}`;
+						git(temporary, ["fetch", "--depth", "1", repository, revision]);
+					}
 					git(temporary, ["checkout", "--detach", "--quiet", revision]);
 					const corpus = inspectCorpus(temporary, revision);
 					renameSync(temporary, directory);
