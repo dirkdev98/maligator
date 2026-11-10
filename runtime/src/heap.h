@@ -644,6 +644,9 @@ void *mal_heap_try_alloc_raw_profiled(MalHeap *heap, usize alloc_size, u8 profil
 /** Cell payload capacity and allocation charge for a request of this size. */
 usize mal_heap_allocation_charge(usize alloc_size);
 
+/** Count separately owned backing bytes toward process pressure and the mutator allocation clock. */
+void mal_heap_charge_external(MalHeap *heap, usize bytes);
+
 /** Actual payload capacity of a live buffer returned by mal_heap_alloc_raw. */
 usize mal_heap_raw_capacity(MalHeap *heap, const void *ptr);
 

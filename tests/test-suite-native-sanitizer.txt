@@ -140,6 +140,7 @@ tests/native/writable-stream.test.ts
 # Untrusted wire, parser, bulk-allocation, numeric, and buffer boundaries.
 tests/native/bigint128-safety.test.ts
 tests/native/fetch-body.test.ts
+tests/native/web-body-pressure.test.ts
 tests/native/fetch-hardening.test.ts
 tests/native/float16.test.ts
 tests/native/global-var-batch.test.ts

@@ -118,7 +118,13 @@ deduplicates identical callbacks and rejects capacity exhaustion. The GC stats
 exit handler is registered once per process.
 
 The process coordinator accounts reserved heap mappings, ordinary and shared
-backing stores, and queued native serialization storage once per allocation. Its
+backing stores, owned Request/Response body bytes, and queued native serialization
+storage once per allocation. Body copies charge independently; stream-backed bodies
+charge only the storage they actually own. Server requests transfer their buffer
+capacity with ownership. Encoded and copied bodies charge their logical byte length,
+which does not claim to measure malloc's reserved capacity. Body adoption also advances
+the mutator's allocation clock and requests a poll at its deadline. Replacement and finalization release
+the process charge without subtracting from that monotonic clock. The coordinator's
 soft budget defaults to 256 MiB and may be changed with
 `MAL_GC_PROCESS_BUDGET_BYTES`. Crossing a pressure threshold requests safepoints
 and wakes every registered owner. The first collection is a major and establishes

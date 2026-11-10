@@ -14,6 +14,7 @@
 #include "builtin_promise.h"
 #include "function_object.h"
 #include "gc.h"
+#include "gc_process.h"
 #include "web_headers_object.h"
 #include "web_blob_object.h"
 #include "web_form_data_object.h"
@@ -800,6 +801,8 @@ MalResponseObject *mal_response_object_new(
     r->server_headers = mal_value_new_undefined();
     r->body = body;
     r->body_len = body_len;
+    r->body_charge = body == nullptr ? 0 : body_len == 0 ? 1 : body_len;
+    mal_heap_charge_external(heap, r->body_charge);
     r->body_stream = mal_value_new_undefined();
     return r;
 }
@@ -810,6 +813,8 @@ static void mal_response_finalize(MalHeapHeader *cell) {
         free(r->body);
         r->body = nullptr;
     }
+    mal_gc_process_release(r->body_charge);
+    r->body_charge = 0;
 }
 
 static void mal_response_trace(MalHeapHeader *cell) {
@@ -2370,6 +2375,7 @@ MalRequestObject *mal_request_object_new(MalHeap *heap, MalObject *prototype) {
     mal_object_init(heap, &r->object, MAL_HEAP_REQUEST_OBJECT, prototype);
     r->body = nullptr;
     r->body_len = 0;
+    r->body_charge = 0;
     r->body_stream = mal_value_new_undefined();
     r->method = mal_value_new_undefined();
     r->url = mal_value_new_undefined();
@@ -2385,12 +2391,22 @@ MalRequestObject *mal_request_object_new(MalHeap *heap, MalObject *prototype) {
     return r;
 }
 
+static void mal_request_body_release(MalRequestObject *request) {
+    free(request->body);
+    request->body = nullptr;
+    request->body_len = 0;
+    mal_gc_process_release(request->body_charge);
+    request->body_charge = 0;
+}
+
+static void mal_request_body_adopted(MalHeap *heap, MalRequestObject *request, usize capacity) {
+    request->body_charge = capacity == 0 ? 1 : capacity;
+    mal_heap_charge_external(heap, request->body_charge);
+}
+
 static void mal_request_finalize(MalHeapHeader *cell) {
     MalRequestObject *r = (MalRequestObject *) cell;
-    if (r->body != nullptr) {
-        free(r->body);
-        r->body = nullptr;
-    }
+    mal_request_body_release(r);
     if (r->source != nullptr) {
         gc_free_raw(mal_gc_current_heap(), r->source);
         r->source = nullptr;
@@ -2698,6 +2714,7 @@ static MalValue mal_request_constructor(
                 memcpy(r->body, src->body, src->body_len);
             }
             r->body_len = src->body_len;
+            mal_request_body_adopted(&vm->heap, r, r->body_len);
         }
     } else if (argc >= 1 && !mal_value_is_undefined(args[0])) {
         MalString *u;
@@ -2743,7 +2760,7 @@ static MalValue mal_request_constructor(
             ? mal_value_to_request_object(args[1]) : nullptr;
         if (body_source != nullptr && body_source->body != nullptr
             && mal_ops_same_value(body_source->body_stream, slots[4])) {
-            free(r->body);
+            mal_request_body_release(r);
             r->body = malloc(body_source->body_len == 0 ? 1 : body_source->body_len);
             if (r->body == nullptr) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
@@ -2754,6 +2771,7 @@ static MalValue mal_request_constructor(
                 memcpy(r->body, body_source->body, body_source->body_len);
             }
             r->body_len = body_source->body_len;
+            mal_request_body_adopted(&vm->heap, r, r->body_len);
         } else {
             if (!duplex_present) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -2771,20 +2789,19 @@ static MalValue mal_request_constructor(
                     "ReadableStream BodyInit is locked or disturbed");
                 goto request_error;
             }
-            free(r->body);
-            r->body = nullptr;
-            r->body_len = 0;
+            mal_request_body_release(r);
             r->body_stream = slots[4];
         }
     } else if (mal_fetch_is_form_data(slots[4])) {
-        free(r->body);
+        mal_request_body_release(r);
         r->body = mal_form_data_serialize(
             vm, mal_fetch_to_form_data(slots[4]), &r->body_len);
         if (r->body == nullptr) goto request_error;
+        mal_request_body_adopted(&vm->heap, r, r->body_len);
         content_type = MAL_FORM_DATA_CONTENT_TYPE;
     } else if (mal_fetch_is_blob(slots[4])) {
         MalBlobObject *blob = mal_fetch_to_blob(slots[4]);
-        free(r->body);
+        mal_request_body_release(r);
         r->body = malloc(blob->length == 0 ? 1 : blob->length);
         if (r->body == nullptr) {
             mal_vm_throw_allocation_error(vm);
@@ -2792,12 +2809,14 @@ static MalValue mal_request_constructor(
         }
         if (blob->length > 0) memcpy(r->body, blob->bytes, blob->length);
         r->body_len = blob->length;
+        mal_request_body_adopted(&vm->heap, r, r->body_len);
         content_type = blob->type_length > 0 ? (const char *) blob->type : nullptr;
     } else if (mal_value_is_string(slots[4])) {
         MalString *bs = mal_value_to_string(slots[4]);
-        free(r->body);
+        mal_request_body_release(r);
         r->body = mal_fetch_utf8_encode(vm, bs, &r->body_len);
         if (r->body == nullptr) goto request_error;
+        mal_request_body_adopted(&vm->heap, r, r->body_len);
         content_type = "text/plain;charset=UTF-8";
     } else {
         const byte *sb;
@@ -2807,7 +2826,7 @@ static MalValue mal_request_constructor(
             mal_fetch_buffer_source(vm, slots[4], &sb, &sl, &sb_owned);
         if (buffer_result == MAL_FETCH_BUFFER_SOURCE_ERROR) goto request_error;
         if (buffer_result == MAL_FETCH_BUFFER_SOURCE_OK) {
-            free(r->body);
+            mal_request_body_release(r);
             r->body = sb_owned != nullptr ? sb_owned : malloc(sl == 0 ? 1 : sl);
             if (r->body == nullptr) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
@@ -2818,13 +2837,15 @@ static MalValue mal_request_constructor(
                 memcpy(r->body, sb, sl);
             }
             r->body_len = sl;
+            mal_request_body_adopted(&vm->heap, r, r->body_len);
         } else if (!mal_value_is_undefined(slots[4])) {
             bool is_search_params = mal_value_is_url_search_params_object(slots[4]);
             MalString *bs;
             if (!mal_vm_to_string(vm, slots[4], &bs)) goto request_error;
-            free(r->body);
+            mal_request_body_release(r);
             r->body = mal_fetch_utf8_encode(vm, bs, &r->body_len);
             if (r->body == nullptr) goto request_error;
+            mal_request_body_adopted(&vm->heap, r, r->body_len);
             content_type = is_search_params
                 ? "application/x-www-form-urlencoded;charset=UTF-8"
                 : "text/plain;charset=UTF-8";
@@ -3015,6 +3036,7 @@ static MalValue mal_request_clone(
         }
         if (source->body_len > 0) memcpy(clone->body, source->body, source->body_len);
         clone->body_len = source->body_len;
+        mal_request_body_adopted(&vm->heap, clone, clone->body_len);
     }
     clone->method = mal_request_method(vm, source);
     clone->url = mal_request_url(vm, source);
@@ -3313,6 +3335,7 @@ static MalValue mal_fetch_make_request(MalVm *vm, MalFetchRequest *req) {
     if (req->body_len > 0) {
         r->body = req->body;
         r->body_len = req->body_len;
+        mal_request_body_adopted(&vm->heap, r, req->body_cap);
         req->body = nullptr;
         req->body_len = 0;
         req->body_cap = 0;

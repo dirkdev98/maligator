@@ -96,6 +96,7 @@ tests/native/wire-loader.test.ts
 tests/native/encoding-aware-text.test.ts
 
 tests/native/encoding-aware-strings.test.ts
+tests/native/web-body-pressure.test.ts
 tests/native/labelled-function-declarations.test.ts
 
 tests/native/text-buffer.test.ts

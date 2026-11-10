@@ -18,6 +18,7 @@ typedef struct MalRequestObject {
     MalObjectStorage object_storage;
     byte *body; // owned bytes; nullptr => no body
     usize body_len;
+    usize body_charge;
     MalValue body_stream; // lazily-created ReadableStream, or undefined
     MalValue method;
     MalValue url;

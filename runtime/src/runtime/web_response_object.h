@@ -21,6 +21,7 @@ typedef struct MalResponseObject {
     MalValue server_headers;
     byte *body;       // owned bytes; nullptr => null body
     usize body_len;
+    usize body_charge;
     MalValue body_stream; // lazily-created ReadableStream, or undefined
 } MalResponseObject;
 

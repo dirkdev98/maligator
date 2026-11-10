@@ -303,11 +303,6 @@ contracts or investigates costs still visible after the string follow-ups.
       lifetime consumers together; require lower allocation and end-to-end cost with
       stable footprint and binary size.
 
-- [ ] Account for owned Request/Response body bytes in collector pressure or managed
-      ownership without double charging transferred/streamed storage. Preserve body
-      lifetime and cancellation; compare stable RSS/footprint, pauses and bare/Express
-      throughput across body sizes.
-
 - [ ] Keep a bounded successful guarded-call continuation native through immediate
       arithmetic or a known call before merging with the boxed fallback. Use current
       method-name and JavaScript objects-loop consumers, re-establishing any historical

@@ -61,6 +61,12 @@ static inline void mal_heap_maybe_trigger_gc(const MalHeap *heap) {
     if (heap->bytes_allocated >= heap->next_gc_at) mal_isolate_request_poll(mal_isolate_locals());
 }
 
+void mal_heap_charge_external(MalHeap *heap, usize bytes) {
+    mal_gc_process_charge(bytes);
+    heap->bytes_allocated += bytes;
+    mal_heap_maybe_trigger_gc(heap);
+}
+
 #define MAL_GC_CHUNK_SIZE (2u * 1024u * 1024u)
 
 typedef enum MalGcBlockKind {
