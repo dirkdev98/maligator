@@ -113,6 +113,7 @@ tests/native/native-function-split.test.ts
 tests/native/native-numeric-workers.test.ts
 tests/native/native-callback-transport.test.ts
 tests/native/compiler-entry-chains.test.ts
+tests/native/error-constructor-roots.test.ts
 tests/native/numeric-reduce-region.test.ts
 tests/native/typed-array-reduce-region.test.ts
 tests/native/typed-array-callback-families.test.ts

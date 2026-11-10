@@ -122,27 +122,38 @@ static bool mal_error_install_cause(MalVm *vm, MalObject *error, MalValue option
  * cause (when present in options) installed.
  */
 static MalValue mal_builtin_error_make(MalVm *vm, MalIntrinsic prototype_slot, const MalValue *args, i32 arg_count) {
+    // Message coercion and cause access can reenter JavaScript and collect.
+    MalValue roots[3] = {
+        mal_value_new_undefined(),
+        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
+        arg_count >= 2 ? args[1] : mal_value_new_undefined(),
+    };
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
     MalObject *error = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[prototype_slot]));
+    roots[0] = mal_value_from_object(error);
     mal_error_mark_error_data(error);
     if (!mal_error_capture_stack(vm, error)) {
-        return mal_value_new_undefined();
+        goto done;
     }
 
-    if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
+    if (!mal_value_is_undefined(roots[1])) {
         MalString *message_string;
-        if (!mal_vm_to_string(vm, args[0], &message_string)) {
-            return mal_value_new_undefined();
+        if (!mal_vm_to_string(vm, roots[1], &message_string)) {
+            goto done;
         }
         mal_intrinsic_define_data(vm, error, "message", mal_value_from_string(message_string), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     }
 
-    if (arg_count >= 2) {
-        if (!mal_error_install_cause(vm, error, args[1])) {
-            return mal_value_new_undefined();
-        }
+    if (!mal_error_install_cause(vm, error, roots[2])) {
+        goto done;
     }
 
-    return mal_value_from_object(error);
+    result = roots[0];
+done:
+    mal_gc_unroot(&root_span);
+    return result;
 }
 
 // Error constructors behave identically when called and when constructed, so
@@ -203,30 +214,43 @@ static MalValue mal_builtin_eval_error_constructor(MalVm *vm, MalValue this_valu
  * order is: ToString(message) -> InstallErrorCause(options) -> IterableToList.
  */
 static MalValue mal_builtin_aggregate_error_make(MalVm *vm, MalValue errors_value, MalValue message_value, MalValue options_value) {
+    MalValue roots[6] = {
+        mal_value_new_undefined(), errors_value, message_value, options_value,
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, countof(roots));
+    MalRootSpan record_span;
+    bool record_rooted = false;
+    MalValue result = mal_value_new_undefined();
     MalObject *error = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_PROTOTYPE]));
+    roots[0] = mal_value_from_object(error);
     mal_error_mark_error_data(error);
     if (!mal_error_capture_stack(vm, error)) {
-        return mal_value_new_undefined();
+        goto done;
     }
 
-    if (!mal_value_is_undefined(message_value)) {
+    if (!mal_value_is_undefined(roots[2])) {
         MalString *message_string;
-        if (!mal_vm_to_string(vm, message_value, &message_string)) {
-            return mal_value_new_undefined();
+        if (!mal_vm_to_string(vm, roots[2], &message_string)) {
+            goto done;
         }
         mal_intrinsic_define_data(vm, error, "message", mal_value_from_string(message_string), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     }
 
-    if (!mal_error_install_cause(vm, error, options_value)) {
-        return mal_value_new_undefined();
+    if (!mal_error_install_cause(vm, error, roots[3])) {
+        goto done;
     }
 
-    // IterableToList(errors) into a fresh array.
     MalArrayObject *list = mal_intrinsic_new_array(vm, 0);
+    roots[4] = mal_value_from_array_object(list);
     MalIteratorRecord record;
-    if (!mal_vm_get_iterator(vm, errors_value, &record)) {
-        return mal_value_new_undefined(); // not iterable: propagate the pending throw
+    if (!mal_vm_get_iterator(vm, roots[1], &record)) {
+        goto done;
     }
+    // Iterator callbacks can collect both the iterator and the accumulated list.
+    mal_gc_root(&record_span, &record.iterator, 2);
+    record_rooted = true;
     usize size_hint;
     if (mal_vm_builtin_iterator_size_hint(&record, &size_hint) &&
         size_hint <= UINT32_MAX) {
@@ -234,20 +258,24 @@ static MalValue mal_builtin_aggregate_error_make(MalVm *vm, MalValue errors_valu
     }
     u32 index = 0;
     while (true) {
-        MalValue item;
         bool done;
-        if (!mal_vm_iterator_step_fast(vm, &record, &item, &done)) {
-            return mal_value_new_undefined();
+        if (!mal_vm_iterator_step_fast(vm, &record, &roots[5], &done)) {
+            goto done;
         }
         if (done) {
             break;
         }
-        mal_error_dense_append(list, index++, item);
+        mal_error_dense_append(list, index++, roots[5]);
     }
 
-    // AggregateError "errors": { writable: true, enumerable: false, configurable: true }.
-    mal_intrinsic_define_data(vm, error, "errors", mal_value_from_array_object(list), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    return mal_value_from_object(error);
+    mal_intrinsic_define_data(vm, error, "errors", roots[4], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    result = roots[0];
+done:
+    if (record_rooted) {
+        mal_gc_unroot(&record_span);
+    }
+    mal_gc_unroot(&root_span);
+    return result;
 }
 
 static MalValue mal_builtin_aggregate_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -279,20 +307,29 @@ static MalValue mal_builtin_suppressed_error_constructor(
     (void) new_target;
     (void) callee;
 
+    MalValue roots[4] = {
+        mal_value_new_undefined(),
+        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
+        arg_count >= 2 ? args[1] : mal_value_new_undefined(),
+        arg_count >= 3 ? args[2] : mal_value_new_undefined(),
+    };
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
     MalObject *error = mal_object_new(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_SUPPRESSED_ERROR_PROTOTYPE])
     );
+    roots[0] = mal_value_from_object(error);
     mal_error_mark_error_data(error);
     if (!mal_error_capture_stack(vm, error)) {
-        return mal_value_new_undefined();
+        goto done;
     }
 
-    MalValue message = arg_count >= 3 ? args[2] : mal_value_new_undefined();
-    if (!mal_value_is_undefined(message)) {
+    if (!mal_value_is_undefined(roots[3])) {
         MalString *message_string;
-        if (!mal_vm_to_string(vm, message, &message_string)) {
-            return mal_value_new_undefined();
+        if (!mal_vm_to_string(vm, roots[3], &message_string)) {
+            goto done;
         }
         mal_intrinsic_define_data(
             vm,
@@ -307,17 +344,20 @@ static MalValue mal_builtin_suppressed_error_constructor(
         vm,
         error,
         "error",
-        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
+        roots[1],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE
     );
     mal_intrinsic_define_data(
         vm,
         error,
         "suppressed",
-        arg_count >= 2 ? args[1] : mal_value_new_undefined(),
+        roots[2],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE
     );
-    return mal_value_from_object(error);
+    result = roots[0];
+done:
+    mal_gc_unroot(&root_span);
+    return result;
 }
 
 MalValue mal_builtin_new_suppressed_error(
