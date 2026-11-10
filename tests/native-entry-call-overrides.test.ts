@@ -10,6 +10,7 @@ import {
 	directCompiledEntryKey,
 	emitCompiledFunction,
 } from "../src/compiler/target/render-native-c.ts";
+import type { NativeFastTryAbi } from "../src/compiler/target/render-native-fast-entry.ts";
 import type { BytecodeFunction } from "../src/compiler/target/runtime-image.ts";
 import { privateRootRegisters } from "./helpers/native-c-source.ts";
 
@@ -146,6 +147,51 @@ function emit(
 	return emitted;
 }
 
+function emitFullCallProbe(
+	abi: NativeFastTryAbi,
+	arguments_: ReadonlyArray<number> = [1],
+	mode: "guarded" | "direct" = "guarded",
+) {
+	const native = createConservativeNativePlan([
+		{
+			...fn,
+			needsArguments: true,
+			instructions: fn.instructions.map((op) =>
+				op.opcode === "CALL"
+					? { ...op, arguments: [...arguments_], argumentCount: arguments_.length }
+					: op,
+			),
+		},
+	]).functions[0]!;
+	return emitCompiledFunction(
+		lowerNativeFunctionStorage({
+			...native,
+			instructions: [
+				mode === "guarded"
+					? { kind: "call", guardedFunctionIndices: [1] }
+					: { kind: "call", directFunctionIndex: 1 },
+				undefined,
+			],
+		}),
+		0,
+		"",
+		false,
+		"static",
+		new Set([1]),
+		[],
+		new Map(),
+		false,
+		new Set([1]),
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		new Map([[1, abi]]),
+	)!.source;
+}
+
 describe("native entry call overrides", () => {
 	it("selects a frameless callee from an exact typed override absent from the canonical plan", () => {
 		const emitted = emit(true, false, "number", "number", {
@@ -174,33 +220,42 @@ describe("native entry call overrides", () => {
 	] as const)(
 		"reconstructs a guarded %s result and retains the ordinary miss result",
 		(_name, result, value) => {
-			const native = createConservativeNativePlan([{ ...fn, needsArguments: true }])
-				.functions[0]!;
-			const source = emitCompiledFunction(
-				lowerNativeFunctionStorage({
-					...native,
-					instructions: [{ kind: "call", guardedFunctionIndices: [1] }, undefined],
-				}),
-				0,
-				"",
-				false,
-				"static",
-				new Set([1]),
-				[],
-				new Map(),
-				false,
-				new Set([1]),
-				undefined,
-				undefined,
-				undefined,
-				undefined,
-				undefined,
-				undefined,
-				new Map([[1, { result }]]),
-			)!.source;
+			const source = emitFullCallProbe({ result });
 			expect(source).toContain(`MalValue __guarded_value_0_1 = ${value};`);
 			expect(source).toMatch(
 				/if \(!mal_compiled_1_try\(vm, [^\n]+creation_env\)\) __guarded_value_0_1 = mal_compiled_1\(/,
+			);
+		},
+	);
+
+	it.each([
+		[
+			"omitted boxed argument",
+			["boxed", "boxed"],
+			[1],
+			"r1, MAL_VALUE_UNDEFINED",
+			undefined,
+		],
+		["integer argument", ["i32"], [1], "mal_value_to_i32(r1)", "!mal_value_is_int32(r1)"],
+		[
+			"omitted integer argument",
+			["i32"],
+			[],
+			"mal_value_to_i32(MAL_VALUE_UNDEFINED)",
+			"!mal_value_is_int32(MAL_VALUE_UNDEFINED)",
+		],
+		["unused extra argument", ["boxed"], [1, 0], "r1", undefined],
+	] as const)(
+		"adapts a guarded %s without changing the miss arguments",
+		(_name, parameters, args, expected, guard) => {
+			const source = emitFullCallProbe({ parameters, result: { kind: "boxed" } }, args);
+			expect(source).toContain(
+				`mal_compiled_1_try(vm, MAL_VALUE_UNDEFINED, ${expected}, mal_value_to_function_object(__guarded_callee_0)->creation_env, &__guarded_value_0_1)`,
+			);
+			if (guard !== undefined)
+				expect(source).toContain(`${guard} || !mal_compiled_1_try(`);
+			expect(source).toContain(
+				`${args.length === 0 ? "nullptr" : `((MalValue[]){ ${args.map((value) => `r${value}`).join(", ")} })`}, ${args.length}, MAL_VALUE_UNDEFINED,`,
 			);
 		},
 	);
@@ -213,6 +268,33 @@ describe("native entry call overrides", () => {
 		expect(source).not.toContain("mal_compiled_1_try(vm,");
 		expect(source).toContain("mal_direct_1_0(vm,");
 	});
+
+	it.each([
+		[["boxed", "boxed"], [1], "r1, MAL_VALUE_UNDEFINED", undefined],
+		[["i32"], [1], "mal_value_to_i32(r1)", "!mal_value_is_int32(r1)"],
+		[
+			["i32"],
+			[],
+			"mal_value_to_i32(MAL_VALUE_UNDEFINED)",
+			"!mal_value_is_int32(MAL_VALUE_UNDEFINED)",
+		],
+	] as const)(
+		"adapts exact validation arguments %j",
+		(parameters, args, expected, guard) => {
+			const source = emitFullCallProbe(
+				{ parameters, result: { kind: "undefined" } },
+				args,
+				"direct",
+			);
+			expect(source).toContain("MalValue __direct_value_0 = MAL_VALUE_UNDEFINED;");
+			expect(source).toContain(
+				`mal_compiled_1_try(vm, MAL_VALUE_UNDEFINED, ${expected}, mal_value_to_function_object(__direct_callee_0)->creation_env)`,
+			);
+			if (guard !== undefined)
+				expect(source).toContain(`${guard} || !mal_compiled_1_try(`);
+			expect(source).toContain("__direct_value_0 = mal_compiled_1(vm,");
+		},
+	);
 
 	it("keeps scalar downstream calls local to the proven entry", () => {
 		const emitted = emit();

@@ -335,6 +335,11 @@ admitted return reads that unwritten parameter and no successful path falls thro
 Callers retain the already evaluated argument, including `undefined` for an omitted
 argument. This describes fast success only; a full fallback can return a different
 value or allocate a copy.
+Full native bodies use the same argument and result ABIs for a single guarded
+strict callee and for exact strict calls with an undefined fast result.
+Typed transports keep priority. Root publication and return polling surround the
+probe and its ordinary fallback; a miss enters the callee's full entry after any
+earlier caller effects.
 Recursive bodies never qualify, since a body becomes available only after
 its callees do. Entries a numeric worker, literal-switch dispatch, or selected
 region already serves, and entries whose operator proofs rule out Numbers, keep

@@ -13030,6 +13030,69 @@ class NativeInstructionEmission {
 		];
 	}
 
+	compiledCallWithFastPath(input: {
+		readonly target: number | undefined;
+		readonly value: string;
+		readonly receiver: string;
+		readonly arguments: ReadonlyArray<number>;
+		readonly argumentsExpression: string;
+		readonly environment: string;
+		readonly ordinary: string;
+		readonly resultKind: NativeFastTryAbi["result"]["kind"] | undefined;
+	}): Array<string> {
+		const {
+			target,
+			value,
+			receiver,
+			arguments: args,
+			argumentsExpression: argsExpr,
+			environment,
+			ordinary,
+			resultKind,
+		} = input;
+		if (target === undefined) return [`MalValue ${value} = ${ordinary};`];
+		this.context.onFastTryLookup?.(target);
+		const abi = this.context.fastTryTargets?.get(target);
+		if (abi === undefined || (resultKind !== undefined && abi.result.kind !== resultKind))
+			return [`MalValue ${value} = ${ordinary};`];
+		const symbol = this.context.relocation.reference(
+			`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}_try`,
+		);
+		const guards: Array<string> = [];
+		const parameters =
+			abi.parameters === undefined
+				? [argsExpr, String(args.length)]
+				: abi.parameters.map((kind, index) => {
+						const argument = args[index];
+						const boxed =
+							argument === undefined
+								? "MAL_VALUE_UNDEFINED"
+								: this.boxedOperand(argument);
+						if (kind === "boxed") return boxed;
+						guards.push(`!mal_value_is_int32(${boxed})`);
+						return `mal_value_to_i32(${boxed})`;
+					});
+		const reconstructed =
+			abi.result.kind === "undefined"
+				? "MAL_VALUE_UNDEFINED"
+				: abi.result.kind === "parameter"
+					? args[abi.result.index] === undefined
+						? "MAL_VALUE_UNDEFINED"
+						: this.boxedOperand(args[abi.result.index]!)
+					: undefined;
+		const call = `${symbol}(${[
+			"vm",
+			receiver,
+			...parameters,
+			environment,
+			...(abi.result.kind === "boxed" ? [`&${value}`] : []),
+		].join(", ")})`;
+		return [
+			`MalValue ${value}${reconstructed === undefined ? "" : ` = ${reconstructed}`};`,
+			`if (${guards.length === 0 ? "" : `${guards.join(" || ")} || `}!${call}) ${value} = ${ordinary};`,
+		];
+	}
+
 	emitCall(
 		instruction: Extract<BytecodeInstruction, { opcode: "CALL" }>,
 	): Array<string> | null {
@@ -14043,11 +14106,6 @@ class NativeInstructionEmission {
 					}),
 				);
 
-		if (
-			callPlan?.guardedFunctionIndices?.length === 1 &&
-			this.context.callTransport === undefined
-		)
-			this.context.onFastTryLookup?.(callPlan.guardedFunctionIndices[0]!);
 		if (callPlan?.guardedFunctionIndices !== undefined) {
 			nativeCallDecision(
 				this.context.profile,
@@ -14100,36 +14158,25 @@ class NativeInstructionEmission {
 						? this.boxedOperand(instruction.thisValue)
 						: `mal_vm_callee_this(vm, &vm->runtime_image->functions[${this.context.relocation.functionIndex(target)}], ${this.boxedOperand(instruction.thisValue)})`;
 					const ordinary = `${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}(vm, ${receiver}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee}, nullptr)`;
-					const tryAbi = this.context.fastTryTargets?.get(target);
-					const trySymbol =
-						strict &&
-						callPlan.guardedFunctionIndices!.length === 1 &&
-						this.context.callTransport === undefined &&
-						tryAbi !== undefined &&
-						tryAbi.parameters === undefined
-							? this.context.relocation.reference(
-									`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}_try`,
-								)
-							: undefined;
-					const reconstructed =
-						tryAbi?.result.kind === "undefined"
-							? "MAL_VALUE_UNDEFINED"
-							: tryAbi?.result.kind === "parameter"
-								? args[tryAbi.result.index] === undefined
-									? "MAL_VALUE_UNDEFINED"
-									: this.boxedOperand(args[tryAbi.result.index]!)
-								: undefined;
-					const invoke =
-						trySymbol === undefined
-							? [`  MalValue ${value} = ${ordinary};`]
-							: [
-									`  MalValue ${value}${reconstructed === undefined ? "" : ` = ${reconstructed}`};`,
-									`  if (!${trySymbol}(vm, ${receiver}, ${argsExpr}, ${args.length}, mal_value_to_function_object(${guardedCallee})->creation_env${tryAbi!.result.kind === "boxed" ? `, &${value}` : ""})) ${value} = ${ordinary};`,
-								];
+					const invoke = this.compiledCallWithFastPath({
+						target:
+							strict &&
+							callPlan.guardedFunctionIndices!.length === 1 &&
+							this.context.callTransport === undefined
+								? target
+								: undefined,
+						value,
+						receiver,
+						arguments: args,
+						argumentsExpression: argsExpr,
+						environment: `mal_value_to_function_object(${guardedCallee})->creation_env`,
+						ordinary,
+						resultKind: undefined,
+					});
 					return [
 						`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${this.context.relocation.functionIndex(target)}) {`,
 						`  MAL_CALLEE_REALM_ENTER(${guardedCallee});`,
-						...invoke,
+						...invoke.map((line) => `  ${line}`),
 						"  MAL_CALLEE_REALM_LEAVE();",
 						`  ${this.throwCheck()}`,
 						`  r${instruction.dst} = ${callResult(value)};`,
@@ -14268,10 +14315,24 @@ class NativeInstructionEmission {
 					"applied",
 				);
 				const directValue = `__direct_value_${this.ip}`;
+				const ordinary = `${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, ${directEnvironment}, ${directCallee}, nullptr)`;
 				return [
 					`MalValue ${directCallee} = ${this.boxedOperand(instruction.callee)};`,
 					...functionDeclaration,
-					`MalValue ${directValue} = ${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, ${directEnvironment}, ${directCallee}, nullptr);`,
+					...this.compiledCallWithFastPath({
+						target:
+							targetIsStrict && this.context.callTransport === undefined
+								? target
+								: undefined,
+						value: directValue,
+						receiver: thisArgument,
+						arguments: args,
+						argumentsExpression: argsExpr,
+						environment: directEnvironment,
+						ordinary,
+						// Value-producing helpers can have a preferred scalar dispatch.
+						resultKind: "undefined",
+					}),
 					`if (MAL_THREW()) ${this.onThrow()}`,
 					`r${instruction.dst} = ${callResult(directValue)};`,
 					this.callPoll(),
