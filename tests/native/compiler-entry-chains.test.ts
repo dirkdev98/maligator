@@ -87,6 +87,22 @@ it("matches Node for compiler helper chains under collection", () => {
 		emitCompiledFunction(readReady, readReady.functionIndex, "", false)?.tryAbi
 			?.parameters,
 	).toEqual([]);
+	expect(
+		emitCompiledFunction(readReady, readReady.functionIndex, "", false)?.tryAbi
+			?.omitEnvironment,
+	).toBe(true);
+	const checkedNumber = pair.programImage.native.functions.find(
+		(fn) =>
+			String.fromCharCode(
+				...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+			) === "checkedNumber",
+	)!;
+	expect(
+		emitCompiledFunction(checkedNumber, checkedNumber.functionIndex, "", false)?.tryAbi,
+	).toMatchObject({
+		parameters: ["boxed", "unused"],
+		omitReceiver: true,
+	});
 	for (const binary of [pair.compiled, pair.interpreted]) {
 		expect(
 			runToStdout(binary, {

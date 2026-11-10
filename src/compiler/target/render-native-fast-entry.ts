@@ -66,7 +66,7 @@ import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
 const MAXIMUM_FAST_ENTRY_INSTRUCTIONS = 64;
 
-export type NativeFastTryParameters = ReadonlyArray<"i32" | "boxed">;
+export type NativeFastTryParameters = ReadonlyArray<"i32" | "boxed" | "unused">;
 
 export type NativeFastTryResult =
 	| { readonly kind: "boxed" }
@@ -79,25 +79,29 @@ const UNDEFINED_FAST_RESULT = { kind: "undefined" } as const;
 export interface NativeFastTryAbi {
 	readonly parameters?: NativeFastTryParameters;
 	readonly result: NativeFastTryResult;
+	readonly omitReceiver?: true;
+	readonly omitEnvironment?: true;
 }
 
 export function nativeFastTryAbiKey(abi: NativeFastTryAbi | undefined): string {
 	if (abi === undefined) return "0";
 	const result =
 		abi.result.kind === "parameter" ? `parameter:${abi.result.index}` : abi.result.kind;
-	return `[${abi.parameters?.join(",") ?? "vector"}:${result}]`;
+	return `[${abi.parameters?.join(",") ?? "vector"}:${result}:${abi.omitReceiver ? 1 : 0}${abi.omitEnvironment ? 1 : 0}]`;
 }
 
 export function nativeFastTryParameterList(abi: NativeFastTryAbi): string {
 	return [
 		"MalVm *vm",
-		"MalValue this_value",
+		...(abi.omitReceiver ? [] : ["MalValue this_value"]),
 		...(abi.parameters === undefined
 			? ["const MalValue *args", "i32 arg_count"]
-			: abi.parameters.map(
-					(kind, index) => `${kind === "i32" ? "i32" : "MalValue"} __fast_p${index}`,
+			: abi.parameters.flatMap((kind, index) =>
+					kind === "unused"
+						? []
+						: [`${kind === "i32" ? "i32" : "MalValue"} __fast_p${index}`],
 				)),
-		"MalEnv *env",
+		...(abi.omitEnvironment ? [] : ["MalEnv *env"]),
 		...(abi.result.kind === "boxed" ? ["MalValue *out"] : []),
 	].join(", ");
 }
@@ -274,7 +278,13 @@ export function renderNativeFastEntry(
 	);
 	const initialized = initializedFastRegisters(graph, accesses, registers);
 	const tryParameters = exported
-		? scalarTryParameters(fn, graph, accesses, rejected)
+		? scalarTryParameters(
+				fn,
+				graph,
+				accesses,
+				rejected,
+				input.prologue.length === 0 ? registers : undefined,
+			)
 		: undefined;
 	const returnedParameter = instructions.find((op) => op.opcode === "RETURN")?.value;
 	const returnsParameter =
@@ -289,6 +299,18 @@ export function renderNativeFastEntry(
 		![...accesses.values()].some((access) => access.writes.includes(returnedParameter));
 	const tryAbi: NativeFastTryAbi = {
 		parameters: tryParameters,
+		omitReceiver:
+			exported &&
+			input.prologue.length === 0 &&
+			!instructions.some((op) => op.opcode === "LOAD_THIS")
+				? true
+				: undefined,
+		omitEnvironment:
+			exported &&
+			input.prologue.length === 0 &&
+			!instructions.some((op) => op.opcode === "LOAD_CAPTURED" || op.opcode === "CALL")
+				? true
+				: undefined,
 		result:
 			exported &&
 			fn.instructions.every(
@@ -463,16 +485,20 @@ export function renderNativeFastEntry(
 	const arguments_ =
 		tryParameters === undefined
 			? ["args", "arg_count"]
-			: tryParameters.map((kind, index) =>
-					kind === "i32"
-						? `mal_value_to_i32(args[${index}])`
-						: `(arg_count > ${index} ? args[${index}] : MAL_VALUE_UNDEFINED)`,
+			: tryParameters.flatMap((kind, index) =>
+					kind === "unused"
+						? []
+						: [
+								kind === "i32"
+									? `mal_value_to_i32(args[${index}])`
+									: `(arg_count > ${index} ? args[${index}] : MAL_VALUE_UNDEFINED)`,
+							],
 				);
 	const call = `${input.trySymbol}(${[
 		"vm",
-		"this_value",
+		...(tryAbi.omitReceiver ? [] : ["this_value"]),
 		...arguments_,
-		"env",
+		...(tryAbi.omitEnvironment ? [] : ["env"]),
 		...(tryAbi.result.kind === "boxed" ? ["&__fast_result"] : []),
 	].join(", ")})`;
 	const resultValue =
@@ -582,13 +608,18 @@ function scalarTryParameters(
 		{ readonly reads: ReadonlyArray<number>; readonly writes: ReadonlyArray<number> }
 	>,
 	rejected: ReadonlySet<number>,
+	registers: ReadonlySet<number> | undefined,
 ): NativeFastTryParameters | undefined {
 	if (fn.parameterCount > 4) return undefined;
 	const parameters = Array.from(
 		{ length: fn.parameterCount },
-		(): "i32" | "boxed" => "boxed",
+		(): NativeFastTryParameters[number] => "boxed",
 	);
 	for (let parameter = 0; parameter < parameters.length; parameter++) {
+		if (registers !== undefined && !registers.has(parameter)) {
+			parameters[parameter] = "unused";
+			continue;
+		}
 		if ([...accesses.values()].some((access) => access.writes.includes(parameter)))
 			continue;
 		// The stricter ABI must not penalize successful paths that bypass the index.
@@ -640,10 +671,13 @@ function fastParameter(
 	directEntry: NativeDirectEntryPlan | undefined,
 	tryParameters?: NativeFastTryParameters,
 ): string {
-	if (tryParameters !== undefined)
+	if (tryParameters !== undefined) {
+		if (tryParameters[index] === "unused")
+			throw new Error("Unused fast argument was initialized");
 		return tryParameters[index] === "i32"
 			? `mal_value_from_i32(__fast_p${index})`
 			: `__fast_p${index}`;
+	}
 	if (directEntry === undefined)
 		return `arg_count > ${index} ? args[${index}] : MAL_VALUE_UNDEFINED`;
 	const representations =
@@ -1329,17 +1363,18 @@ function fastInstruction(
 			const arguments_ =
 				callee.abi.parameters === undefined
 					? [list, String(args.length)]
-					: callee.abi.parameters.map((kind, index) => {
+					: callee.abi.parameters.flatMap((kind, index) => {
+							if (kind === "unused") return [];
 							const boxed = args[index] ?? "MAL_VALUE_UNDEFINED";
-							if (kind === "boxed") return boxed;
+							if (kind === "boxed") return [boxed];
 							const register = op.arguments[index];
 							const scalar =
 								register === undefined || index >= op.argumentCount
 									? undefined
 									: exactInteger(values, register);
-							if (scalar !== undefined) return scalar;
+							if (scalar !== undefined) return [scalar];
 							guards.push(`!mal_value_is_int32(${boxed})`);
-							return `mal_value_to_i32(${boxed})`;
+							return [`mal_value_to_i32(${boxed})`];
 						});
 			const next = input.fn.instructions[ip + 1];
 			const forwardsResult =
@@ -1350,9 +1385,9 @@ function fastInstruction(
 				next.value === op.dst;
 			const call = `${callee.symbol}(${[
 				"vm",
-				receiver,
+				...(callee.abi.omitReceiver ? [] : [receiver]),
 				...arguments_,
-				callee.environment,
+				...(callee.abi.omitEnvironment ? [] : [callee.environment]),
 				...(callee.abi.result.kind === "boxed"
 					? [forwardsResult ? "out" : `&__fast_r${op.dst}`]
 					: []),

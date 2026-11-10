@@ -13072,15 +13072,16 @@ class NativeInstructionEmission {
 		const parameters =
 			abi.parameters === undefined
 				? [argsExpr, String(args.length)]
-				: abi.parameters.map((kind, index) => {
+				: abi.parameters.flatMap((kind, index) => {
+						if (kind === "unused") return [];
 						const argument = args[index];
 						const boxed =
 							argument === undefined
 								? "MAL_VALUE_UNDEFINED"
 								: this.boxedOperand(argument);
-						if (kind === "boxed") return boxed;
+						if (kind === "boxed") return [boxed];
 						guards.push(`!mal_value_is_int32(${boxed})`);
-						return `mal_value_to_i32(${boxed})`;
+						return [`mal_value_to_i32(${boxed})`];
 					});
 		const reconstructed =
 			abi.result.kind === "undefined"
@@ -13092,9 +13093,9 @@ class NativeInstructionEmission {
 					: undefined;
 		const call = `${symbol}(${[
 			"vm",
-			receiver,
+			...(abi.omitReceiver ? [] : [receiver]),
 			...parameters,
-			environment,
+			...(abi.omitEnvironment ? [] : [environment]),
 			...(abi.result.kind === "boxed" ? [`&${value}`] : []),
 		].join(", ")})`;
 		// Fast success preserves the normal completion of generated calls.

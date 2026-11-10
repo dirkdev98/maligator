@@ -326,6 +326,10 @@ an argument vector between fast bodies. The canonical entry still adapts omitted
 arguments to `undefined`; stricter integer parameters retain their admission guards.
 Zero-parameter fast entries omit the argument pointer and count. Their callers still
 evaluate extra arguments before the call.
+Fast entries omit unread formals, receivers and environments. Formal positions remain
+stable for result reconstruction. Entry prologues retain their inputs conservatively,
+and nested calls retain the environment needed by closure scope markers. Ordinary
+fallbacks receive all original inputs. These omissions participate in the ABI key.
 Immediate helper returns forward the caller's result storage, preserving callee
 guards and the effect-free restart path.
 An exported fast body whose admitted returns prove `undefined` reports only

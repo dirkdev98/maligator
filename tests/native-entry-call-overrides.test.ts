@@ -196,6 +196,23 @@ function emitFullCallProbe(
 }
 
 describe("native entry call overrides", () => {
+	it.each(["guarded", "direct"] as const)(
+		"projects unused %s inputs while retaining ordinary fallback arguments",
+		(mode) => {
+			const source = emitFullCallProbe(
+				{
+					parameters: ["boxed", "unused"],
+					result: { kind: "undefined" },
+					omitReceiver: true,
+					omitEnvironment: true,
+				},
+				[1, 0],
+				mode,
+			);
+			expect(source).toContain("mal_compiled_1_try(vm, r1)");
+			expect(source).toContain("((MalValue[]){ r1, r0 }), 2, MAL_VALUE_UNDEFINED,");
+		},
+	);
 	it("checks direct completion only inside the ordinary miss", () => {
 		const source = emitFullCallProbe({ result: { kind: "undefined" } }, [1], "direct");
 		const probe = source.indexOf("if (!mal_compiled_1_try(");

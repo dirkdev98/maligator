@@ -926,12 +926,12 @@ it("passes small boxed entries directly while adapting missing canonical argumen
 		]),
 	)!.join("\n");
 	expect(source).toContain(
-		"bool mal_compiled_0_try(MalVm *vm, MalValue this_value, MalValue __fast_p0, MalValue __fast_p1, MalEnv *env, MalValue *out)",
+		"bool mal_compiled_0_try(MalVm *vm, MalValue __fast_p0, MalValue __fast_p1, MalValue *out)",
 	);
 	expect(source).toContain("__fast_r0 = __fast_p0;");
 	expect(source).toContain("__fast_r1 = __fast_p1;");
 	expect(source).toContain(
-		"mal_compiled_0_try(vm, this_value, (arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED), (arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED), env, &__fast_result)",
+		"mal_compiled_0_try(vm, (arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED), (arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED), &__fast_result)",
 	);
 });
 
@@ -964,8 +964,8 @@ it.each([false, true])(
 			],
 		)!.join("\n");
 		expect(source.includes("MalValue *out")).toBe(!dead);
-		if (dead) expect(source).toContain("env)) return MAL_VALUE_UNDEFINED;");
-		else expect(source).toContain("env, &__fast_result)) return __fast_result;");
+		if (dead) expect(source).toContain(")) return MAL_VALUE_UNDEFINED;");
+		else expect(source).toContain("&__fast_result)) return __fast_result;");
 		expect(source).toContain("return read_full(vm,");
 	},
 );
@@ -1013,9 +1013,7 @@ it.each([false, true])(
 it("reconstructs an unchanged argument including an omitted argument", () => {
 	const source = fastEntry(body([{ opcode: "RETURN", value: 1 }]))!.join("\n");
 	expect(source).not.toContain("MalValue *out");
-	expect(source).toContain(
-		"env)) return (arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED);",
-	);
+	expect(source).toContain(")) return (arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED);");
 });
 
 it.each<[string, ReadonlyArray<BytecodeInstruction>]>([
@@ -1070,6 +1068,10 @@ it("keys every fast ABI component independently of descriptor allocation", () =>
 		undefined,
 		{ result: { kind: "boxed" } },
 		{ parameters: [], result: { kind: "boxed" } },
+		{ parameters: ["unused"], result: { kind: "boxed" } },
+		{ result: { kind: "boxed" }, omitReceiver: true },
+		{ result: { kind: "boxed" }, omitEnvironment: true },
+		{ result: { kind: "boxed" }, omitReceiver: true, omitEnvironment: true },
 		{ result: { kind: "undefined" } },
 		{ result: { kind: "parameter", index: 0 } },
 		{ result: { kind: "parameter", index: 1 } },
@@ -1082,6 +1084,8 @@ it("keys every fast ABI component independently of descriptor allocation", () =>
 		const clone: NativeFastTryAbi = {
 			parameters: abi.parameters === undefined ? undefined : [...abi.parameters],
 			result: { ...abi.result },
+			omitReceiver: abi.omitReceiver,
+			omitEnvironment: abi.omitEnvironment,
 		};
 		expect(nativeFastTryAbiKey(clone)).toBe(nativeFastTryAbiKey(abi));
 	}
@@ -1136,6 +1140,7 @@ function fastEntry(
 	facts: ReadonlyArray<InstructionFacts | undefined> = [],
 	directEntry?: NativeDirectEntryPlan,
 	instructions: Parameters<typeof renderNativeFastEntry>[0]["instructions"] = [],
+	prologue: ReadonlyArray<string> = [],
 ): ReadonlyArray<string> | undefined {
 	return renderNativeFastEntry({
 		controlFlow,
@@ -1179,7 +1184,7 @@ function fastEntry(
 					"callee",
 					"entry_state",
 				],
-		prologue: [],
+		prologue,
 		functionIndex: "0",
 		functionTargetIndex: String,
 		globalIndex: (index) => String(index),
@@ -1858,10 +1863,46 @@ describe("native fast entries", () => {
 			undefined,
 			true,
 		)!.join("\n");
-		expect(source).toContain(
-			"bool mal_compiled_0_try(MalVm *vm, MalValue this_value, MalEnv *env, MalValue *out)",
+		expect(source).toContain("bool mal_compiled_0_try(MalVm *vm, MalValue *out)");
+		expect(source).toContain("mal_compiled_0_try(vm, &__fast_result)");
+	});
+
+	it("omits an unread formal while preserving its original result index", () => {
+		const source = fastEntry(body([{ opcode: "RETURN", value: 1 }]))!.join("\n");
+		expect(source.split("\n")[0]).toContain(
+			"mal_compiled_0_try(MalVm *vm, MalValue __fast_p1)",
 		);
-		expect(source).toContain("mal_compiled_0_try(vm, this_value, env, &__fast_result)");
+		expect(source).toContain(
+			"mal_compiled_0_try(vm, (arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED))",
+		);
+	});
+
+	it.each([
+		["receiver", { opcode: "LOAD_THIS", dst: 2 }, "MalValue this_value"],
+		[
+			"environment",
+			{ opcode: "LOAD_CAPTURED", dst: 2, ownerFunctionIndex: 0, index: 0 },
+			"MalEnv *env",
+		],
+	] as const)("retains an observed %s in the fast ABI", (_name, load, parameter) => {
+		const source = fastEntry(body([load, { opcode: "RETURN", value: 2 }]))!;
+		expect(source[0]).toContain(parameter);
+	});
+
+	it("retains inputs when an opaque entry prologue can observe them", () => {
+		const source = fastEntry(
+			body([{ opcode: "RETURN", value: 1 }]),
+			undefined,
+			true,
+			undefined,
+			[],
+			undefined,
+			[],
+			["(void) this_value; (void) env;"],
+		)!;
+		expect(source[0]).toContain(
+			"MalValue this_value, MalValue __fast_p0, MalValue __fast_p1, MalEnv *env",
+		);
 	});
 
 	it("calls a zero-parameter helper without forwarding evaluated extra arguments", () => {

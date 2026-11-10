@@ -142,6 +142,34 @@ for (const receiver of [
 	}
 }
 const finalizerStore = new Store();
+function checkedNumber(value, label) {
+	"use strict";
+	if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(label);
+	return value;
+}
+globalThis.checkedNumber = checkedNumber;
+for (const fail of [false, true]) {
+	for (const value of [0, -0, 7, -1, 1.5, "7"]) {
+		const label = {
+			toString() {
+				log.push("label coercion");
+				globalThis.__mal_collect_garbage?.();
+				if (fail) throw new Error("label failure");
+				return "invalid number";
+			},
+		};
+		try {
+			const result = Reflect.apply(globalThis.checkedNumber, undefined, [
+				value,
+				label,
+				log.push("extra checked argument"),
+			]);
+			log.push(Object.is(result, value));
+		} catch (error) {
+			log.push(error.name, error.message);
+		}
+	}
+}
 function finish(index, completion) {
 	try {
 		if (completion === "throw") throw new Error("pending throw");
