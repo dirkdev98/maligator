@@ -94,7 +94,7 @@ export function unnamedTagKey(file: string, line: number, column: number): strin
 }
 
 const UNNAMED_TAG =
-	/^(?:[A-Za-z_]\w*::)*\((?:unnamed|anonymous)(?: (?:struct|union|enum))? at (.+):(\d+):(\d+)\)/;
+	/^(?:(?:[A-Za-z_]\w*|\((?:unnamed|anonymous) (?:struct|union|enum)\))::)*\((?:unnamed|anonymous)(?: (?:struct|union|enum))? at (.+):(\d+):(\d+)\)/;
 
 type Token =
 	| { readonly kind: "word"; readonly text: string }

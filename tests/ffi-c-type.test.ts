@@ -70,10 +70,13 @@ describe("C type spellings", () => {
 			name: unnamedTagKey("/usr/include/x (1).h", 3, 9),
 		});
 	});
-	it("resolves Clang's containing-type prefix on anonymous C members", () => {
-		expect(
-			parseCType("struct Envelope::(anonymous at /usr/include/shape.h:5:9)"),
-		).toEqual({
+	it.each([
+		"Envelope::",
+		"Envelope::(anonymous struct)::",
+		"Envelope::(unnamed struct)::",
+		"Envelope::(anonymous union)::Named::(unnamed struct)::",
+	])("resolves anonymous declarations inside %s", (scope) => {
+		expect(parseCType(`struct ${scope}(anonymous at /usr/include/shape.h:5:9)`)).toEqual({
 			kind: "record",
 			tag: "struct",
 			name: unnamedTagKey("/usr/include/shape.h", 5, 9),
