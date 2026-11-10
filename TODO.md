@@ -298,11 +298,6 @@ contracts or investigates costs still visible after the string follow-ups.
       repeated-allocation exposure and fewer executed property definitions with bounded
       planning and handler/fallback controls.
 
-- [ ] Prototype one flat string storage kind with an in-cell medium payload for app-batch
-      keys and short-concat controls. Migrate flat-kind, GC, slicing, Map-key and FFI
-      lifetime consumers together; require lower allocation and end-to-end cost with
-      stable footprint and binary size.
-
 - [ ] Keep a bounded successful guarded-call continuation native through immediate
       arithmetic or a known call before merging with the boxed fallback. Use current
       method-name and JavaScript objects-loop consumers, re-establishing any historical
@@ -348,10 +343,10 @@ contracts or investigates costs still visible after the string follow-ups.
       short/cached-key controls, compile-time constant hashing, collision behavior, memory
       and size.
 
-- [ ] Measure allocations in current residual general RegExp matches on Express and text
-      workloads, then prototype bounded executor-state reuse at the Rust ABI. Preserve
-      exact captures, backtracking, lastIndex and reentry, cap retained state, and require
-      ordinary first-pass/repeated-input gains without broad fast-pattern expansion.
+- [ ] Bound first-pass and changing-subject RegExp executor allocations in Express and
+      text workloads before extending the pinned backend's reusable-state API. Preserve
+      captures, backtracking, lastIndex and reentry, cap retained state, and require
+      ordinary workload gains that repay dependency and retained-memory costs.
 
 - [ ] Use the existing complete mixed-text workload to select one leading construction,
       replacement, JSON or checksum-traversal cost, including rope rebuilding where
