@@ -45,6 +45,7 @@ describe("Test262 runner policy", () => {
 		["--canonical", "--update-baseline", "--variant", "strict"],
 		["--canonical", "--update-baseline", "--manifest", "missing.txt"],
 		["--canonical", "--update-baseline", "--backend", "wire"],
+		["--canonical", "--update-baseline", "--corpus", "a".repeat(40)],
 	])(
 		"rejects ambiguous or partial baseline updates %j before running tests",
 		(...args) => {

@@ -3,7 +3,8 @@ import { summarizeTest262Report } from "../scripts/test262-ci.ts";
 
 function report(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 	return {
-		schemaVersion: 2,
+		schemaVersion: 3,
+		corpus: { revision: "pinned-revision", tree: "pinned-tree" },
 		backend: "compiled",
 		mode: "normal",
 		policy: "complete",

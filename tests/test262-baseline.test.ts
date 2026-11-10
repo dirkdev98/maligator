@@ -4,6 +4,7 @@ import type { Test262Output } from "../src/test262/types.ts";
 
 const corpus = {
 	revision: "pinned-revision",
+	tree: "pinned-tree",
 	paths: new Set(["test/pass.js", "test/fail.js", "test/skip.js"]),
 };
 const previous: Test262Output = {
@@ -18,7 +19,8 @@ const previous: Test262Output = {
 
 function combinedReport(): Record<string, unknown> {
 	return {
-		schemaVersion: 2,
+		schemaVersion: 3,
+		corpus: { revision: corpus.revision, tree: corpus.tree },
 		backend: "compiled",
 		mode: "normal",
 		policy: "complete",
@@ -60,7 +62,7 @@ describe("Test262 baseline report import", () => {
 	});
 
 	it.each([
-		{ schemaVersion: 3, variant: "strict" },
+		{ schemaVersion: 2, variant: "strict" },
 		{ backend: "wire" },
 		{ mode: "gc-stress" },
 		{ policy: "bail" },
@@ -85,6 +87,27 @@ describe("Test262 baseline report import", () => {
 				"head-baseline-digest",
 			),
 		).toThrow("pinned corpus");
+	});
+
+	it("migrates a complete candidate report while preserving the old baseline comparison", () => {
+		const candidate = { ...corpus, revision: "next-revision", tree: "next-tree" };
+		const report = { ...combinedReport(), corpus: candidate };
+		const imported = test262BaselineFromReport(
+			report,
+			candidate,
+			previous,
+			"head-baseline-digest",
+		);
+		expect(imported.sha).toBe(candidate.revision);
+		expect(imported.results).toEqual(combinedReport().results);
+		expect(() =>
+			test262BaselineFromReport(
+				{ ...report, corpus: { ...candidate, tree: "substituted-tree" } },
+				candidate,
+				previous,
+				"head-baseline-digest",
+			),
+		).toThrow("pinned corpus revision and tree");
 	});
 
 	it.each([

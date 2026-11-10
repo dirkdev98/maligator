@@ -25,7 +25,8 @@ function shardReport(
 		)
 		.map(([file]) => file);
 	return {
-		schemaVersion: 2,
+		schemaVersion: 3,
+		corpus: { revision: "pinned-revision", tree: "pinned-tree" },
 		backend: "compiled",
 		mode: "normal",
 		policy: "complete",
@@ -64,7 +65,11 @@ describe("Test262 shard report merge", () => {
 		expect(
 			test262BaselineFromReport(
 				merged,
-				{ revision: "pinned-revision", paths: new Set(Object.keys(previous.results)) },
+				{
+					revision: "pinned-revision",
+					tree: "pinned-tree",
+					paths: new Set(Object.keys(previous.results)),
+				},
 				previous,
 				"head-baseline-digest",
 			).results,
@@ -102,6 +107,20 @@ describe("Test262 shard report merge", () => {
 			[first, { ...second, baseline: { digest: "older-baseline-digest" } }],
 		],
 		["an incomplete shard", [first, { ...second, complete: false }]],
+		[
+			"different corpus revisions",
+			[
+				first,
+				{ ...second, corpus: { revision: "another-revision", tree: "pinned-tree" } },
+			],
+		],
+		[
+			"different corpus trees",
+			[
+				first,
+				{ ...second, corpus: { revision: "pinned-revision", tree: "another-tree" } },
+			],
+		],
 	])("rejects %s", (_name, reports) => {
 		expect(() => mergeTest262ShardReports(reports)).toThrow();
 	});

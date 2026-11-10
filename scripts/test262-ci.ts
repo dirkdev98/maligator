@@ -5,7 +5,8 @@ import { pathToFileURL } from "node:url";
 type Test262Verdict = "FAILED" | "PASSED" | "SKIPPED";
 
 interface CombinedReport {
-	schemaVersion: 2;
+	schemaVersion: 3;
+	corpus: { revision: string; tree: string };
 	backend: "compiled";
 	mode: "normal";
 	policy: "complete";
@@ -37,7 +38,13 @@ function escapeHtml(value: string): string {
 
 function parseCombinedReport(value: unknown): CombinedReport {
 	assert(isRecord(value), "Test262 report must be an object");
-	assert.equal(value.schemaVersion, 2, "Test262 report schema must be 2");
+	assert.equal(value.schemaVersion, 3, "Test262 report schema must be 3");
+	assert(
+		isRecord(value.corpus) &&
+			typeof value.corpus.revision === "string" &&
+			typeof value.corpus.tree === "string",
+		"Test262 report must identify its corpus revision and tree",
+	);
 	assert.equal(value.backend, "compiled", "Test262 report must use the compiled backend");
 	assert.equal(value.mode, "normal", "Test262 report must use normal mode");
 	assert.equal(value.policy, "complete", "Test262 report must use complete policy");
@@ -63,7 +70,8 @@ function parseCombinedReport(value: unknown): CombinedReport {
 		"Test262 baseline commit is invalid",
 	);
 	return {
-		schemaVersion: 2,
+		schemaVersion: 3,
+		corpus: { revision: value.corpus.revision, tree: value.corpus.tree },
 		backend: "compiled",
 		mode: "normal",
 		policy: "complete",
@@ -92,6 +100,7 @@ export function summarizeTest262Report(
 		"",
 		`Latest run: [GitHub Actions](${runUrl})`,
 		`Baseline: \`${escapeHtml(baseline)}\``,
+		`Corpus: \`${escapeHtml(report.corpus.revision)}\``,
 		`Selected: ${report.selectedTests.toLocaleString("en-US")}`,
 		`Passed: ${(report.summary.PASSED ?? 0).toLocaleString("en-US")}`,
 		`Failed: ${(report.summary.FAILED ?? 0).toLocaleString("en-US")}`,

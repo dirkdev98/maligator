@@ -34,6 +34,16 @@ this preparation command when it is absent. A modified snapshot must be restored
 before it can be used. The full Test262 corpus runs on CI after every push to `main`;
 run targeted filters and manifests locally.
 
+To evaluate a corpus update, prepare its immutable commit with
+`npm run test262:prepare -- --corpus <commit>`, then pass the same `--corpus` to a
+filtered runner invocation. The Test262 workflow accepts `corpus_revision` for a
+complete CI comparison against the current HEAD baseline without changing the
+default pin or baseline. Reports identify the tested corpus revision and tree.
+Review changed, added and removed tests before advancing the default pin in
+`src/test262/constants.ts` and importing the complete CI report with
+`npm run test262:update-baseline -- --from-report <report>`. Commit the pin and
+imported baseline together. Candidate selection cannot write a baseline.
+
 The native harness shares persistent frontend, generated-object, runtime, and
 linked-binary caches. `buildBackendPairFromOneProgramImage` goes further: one
 in-memory optimized image feeds native emission while its interpreted half runs as

@@ -7,6 +7,12 @@ on:
     types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      corpus_revision:
+        description: Optional immutable candidate corpus commit; never updates the baseline.
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -45,14 +51,25 @@ jobs:
       - name: Check the runner environment
         run: npm run env:check -- --json
 
+      - name: Prepare a candidate corpus
+        if: github.event_name == 'workflow_dispatch' && inputs.corpus_revision != ''
+        env:
+          CORPUS_REVISION: ${{ inputs.corpus_revision }}
+        run: npm run test262:prepare -- --corpus "$CORPUS_REVISION"
+
       # Both language variants over a quarter of the corpus, so each shard folds them per
       # test exactly as a full run does and the report job can merge the quarters.
       - name: Run the Test262 shard
         env:
           T262_OBJCACHE: "0"
-        run: >-
-          MALIGATOR_WORKERS="$(nproc)" node scripts/test262.ts --canonical --backend compiled
-          --mode normal --shard ${{ matrix.shard }}/4 --check --policy complete
+          CORPUS_REVISION: ${{ inputs.corpus_revision }}
+        run: |
+          corpus_args=()
+          if [ -n "$CORPUS_REVISION" ]; then
+            corpus_args+=(--corpus "$CORPUS_REVISION")
+          fi
+          MALIGATOR_WORKERS="$(nproc)" node scripts/test262.ts --canonical --backend compiled \
+            --mode normal --shard ${{ matrix.shard }}/4 --check --policy complete "${corpus_args[@]}"
 
       - name: Retain the shard report
         if: always()

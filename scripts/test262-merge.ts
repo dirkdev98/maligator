@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 type Verdict = "FAILED" | "PASSED" | "SKIPPED";
 
 interface ShardReport {
+	corpus: { revision: string; tree: string };
 	baseline: { commit?: string; digest: string };
 	shard: { index: number; count: number; selectedTests: number };
 	results: Record<string, Verdict>;
@@ -32,7 +33,7 @@ function strings(value: unknown, name: string): Array<string> {
 function parseShardReport(value: unknown): ShardReport {
 	assert(
 		isRecord(value) &&
-			value.schemaVersion === 2 &&
+			value.schemaVersion === 3 &&
 			value.backend === "compiled" &&
 			value.mode === "normal" &&
 			value.policy === "complete" &&
@@ -46,6 +47,12 @@ function parseShardReport(value: unknown): ShardReport {
 		selectedTests: count(value.shard.selectedTests, "shard selection size"),
 	};
 	assert(isRecord(value.baseline) && typeof value.baseline.digest === "string");
+	assert(
+		isRecord(value.corpus) &&
+			typeof value.corpus.revision === "string" &&
+			typeof value.corpus.tree === "string",
+		"a shard report must identify its corpus revision and tree",
+	);
 	assert(isRecord(value.results), "a shard report must contain per-test results");
 	const results: Record<string, Verdict> = {};
 	for (const [file, verdict] of Object.entries(value.results)) {
@@ -59,6 +66,7 @@ function parseShardReport(value: unknown): ShardReport {
 	assert(isRecord(value.skips), "a shard report must contain skip reasons");
 	assert(isRecord(value.code), "a shard report must contain code totals");
 	return {
+		corpus: { revision: value.corpus.revision, tree: value.corpus.tree },
 		baseline: {
 			...(typeof value.baseline.commit === "string"
 				? { commit: value.baseline.commit }
@@ -93,6 +101,11 @@ export function mergeTest262ShardReports(values: ReadonlyArray<unknown>) {
 	const [first] = reports;
 	const shardCount = first!.shard.count;
 	for (const report of reports) {
+		assert.deepEqual(
+			report.corpus,
+			first!.corpus,
+			"Test262 shards use different corpora",
+		);
 		assert(
 			report.shard.count === shardCount &&
 				report.shard.selectedTests === first!.shard.selectedTests,
@@ -128,8 +141,9 @@ export function mergeTest262ShardReports(values: ReadonlyArray<unknown>) {
 		"Test262 shards do not cover the whole selection",
 	);
 	return {
-		schemaVersion: 2,
+		schemaVersion: 3,
 		backend: "compiled",
+		corpus: first!.corpus,
 		baseline: first!.baseline,
 		mode: "normal",
 		policy: "complete",

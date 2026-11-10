@@ -46,6 +46,7 @@ import { test262BaselineFromReport } from "./test262-baseline.ts";
 interface Test262Arguments {
 	backend?: string;
 	canonical: boolean;
+	corpus?: string;
 	check: boolean;
 	updateBaseline: boolean;
 	fromReport?: string;
@@ -64,6 +65,7 @@ const usage = `usage: node scripts/test262.ts [options]
 
 Options:
   --canonical                  scrub ambient test dimensions
+  --corpus <commit>             compare an immutable candidate corpus without updating
   --backend compiled|interpreted|wire
   --mode normal|gc-stress
   --manifest <file>            include listed paths; repeat to union manifests
@@ -110,6 +112,7 @@ function parseArguments(): Test262Arguments {
 				throw new Error(`${option} requires a value\n${usage}`);
 			}
 			if (option === "--backend") result.backend = value;
+			else if (option === "--corpus") result.corpus = value;
 			else if (option === "--mode") result.mode = value;
 			else if (option === "--manifest") result.manifests.push(value);
 			else if (option === "--exclude-manifest") result.excludeManifests.push(value);
@@ -126,6 +129,9 @@ function parseArguments(): Test262Arguments {
 }
 
 const arguments_ = parseArguments();
+if (arguments_.corpus !== undefined && !/^[0-9a-f]{40}$/.test(arguments_.corpus)) {
+	throw new Error("--corpus requires a full pinned commit");
+}
 if (arguments_.check && arguments_.updateBaseline) {
 	throw new Error("--check and --update-baseline are mutually exclusive");
 }
@@ -135,6 +141,7 @@ if (arguments_.fromReport !== undefined && !arguments_.updateBaseline) {
 if (
 	arguments_.updateBaseline &&
 	(!arguments_.canonical ||
+		arguments_.corpus !== undefined ||
 		arguments_.variant !== undefined ||
 		arguments_.random ||
 		arguments_.shard !== undefined ||
@@ -253,16 +260,17 @@ if (
 test262Log(
 	`Baseline: ${baselineCommit ?? arguments_.baseline} (${baselineIdentity.digest.slice(0, 12)})`,
 );
-if (
-	previousOutput?.sha !== undefined &&
-	previousOutput.sha !== TEST262_METADATA.revision
-) {
-	const message = `Test262 baseline is ${previousOutput.sha}; pinned corpus is ${TEST262_METADATA.revision}`;
-	if (checkMode) throw new Error(message);
-	test262Log(`${message}. A full baseline-update run must replace it.`);
+const corpusRevision = arguments_.corpus ?? TEST262_METADATA.revision;
+if (previousOutput.sha !== corpusRevision) {
+	const message = `Test262 baseline is ${previousOutput.sha}; selected corpus is ${corpusRevision}`;
+	if (checkMode && arguments_.corpus === undefined) throw new Error(message);
+	test262Log(`${message}. Comparing per-test results before migration.`);
 }
 
-const corpus = test262Checkout();
+const corpus = test262Checkout({ revision: corpusRevision });
+TEST262_METADATA.path = corpus.path;
+TEST262_METADATA.revision = corpus.revision;
+const corpusIdentity = { revision: corpus.revision, tree: corpus.tree };
 const inputIndex = test262LoadInputIndex(corpus);
 progress.stagePassed(
 	1,
@@ -276,6 +284,7 @@ if (arguments_.fromReport !== undefined) {
 		JSON.parse(readFileSync(arguments_.fromReport, "utf8")),
 		{
 			revision: corpus.revision,
+			tree: corpus.tree,
 			paths: new Set(inputIndex.files.map((file) => file.path)),
 		},
 		previousOutput,
@@ -418,6 +427,7 @@ async function runWithWorkers(
 						workerData: {
 							nativeBuildInputs: test262NativeBuildInputs(),
 							corpusRoot: corpus.path,
+							corpusRevision: corpus.revision,
 						},
 					});
 
@@ -615,6 +625,7 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 			{
 				schemaVersion: 3,
 				variant,
+				corpus: corpusIdentity,
 				baseline: baselineIdentity,
 				complete: !run.aborted,
 				aborted: run.aborted,
@@ -726,8 +737,9 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 		reportPath,
 		JSON.stringify(
 			{
-				schemaVersion: 2,
+				schemaVersion: 3,
 				backend: requestedBackend,
+				corpus: corpusIdentity,
 				baseline: baselineIdentity,
 				mode: process.env.MAL_GC_STRESS ? "gc-stress" : "normal",
 				policy,

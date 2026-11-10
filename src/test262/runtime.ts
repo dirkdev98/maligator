@@ -223,6 +223,7 @@ async function ensureSharedHarnessObject(
 			buildFingerprint(
 				[...CC_COMPILE_FLAGS, ...CC_LINK_FLAGS],
 				test262Toolchain().fingerprint,
+				TEST262_METADATA.revision,
 			),
 		)
 		.update(`\0${emitMode()}\0shared-harness\0`)
@@ -1072,6 +1073,7 @@ export async function test262RunBatch(
 			buildFingerprint(
 				[...CC_COMPILE_FLAGS, ...CC_LINK_FLAGS],
 				test262Toolchain().fingerprint,
+				TEST262_METADATA.revision,
 			),
 			emitMode(),
 			plans.map(test262SourcePlanCacheInput),

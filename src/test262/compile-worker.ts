@@ -16,9 +16,11 @@ const port = parentPort;
 const inputs = workerData as {
 	nativeBuildInputs: Test262NativeBuildInputs;
 	corpusRoot: string;
+	corpusRevision: string;
 };
 test262SetNativeBuildInputs(inputs.nativeBuildInputs);
 TEST262_METADATA.path = inputs.corpusRoot;
+TEST262_METADATA.revision = inputs.corpusRevision;
 
 type IncomingMessage =
 	| { type: "batch"; inputs: Array<Test262Input>; workerId: number }

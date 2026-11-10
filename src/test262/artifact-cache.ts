@@ -135,8 +135,9 @@ const CACHED_FINGERPRINTS = new Map<string, string>();
 export function buildFingerprint(
 	ccFlags: Array<string>,
 	toolchainFingerprint: string,
+	corpusRevision: string,
 ): string {
-	const inputs = JSON.stringify({ ccFlags, toolchainFingerprint });
+	const inputs = JSON.stringify({ ccFlags, toolchainFingerprint, corpusRevision });
 	const cached = CACHED_FINGERPRINTS.get(inputs);
 	if (cached !== undefined) return cached;
 
@@ -151,6 +152,8 @@ export function buildFingerprint(
 	}
 	hash.update(JSON.stringify(ccFlags));
 	hash.update(toolchainFingerprint);
+	// Imported fixtures can change while their module entry source stays unchanged.
+	hash.update(corpusRevision);
 
 	const fingerprint = hash.digest("hex");
 	CACHED_FINGERPRINTS.set(inputs, fingerprint);

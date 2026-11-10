@@ -9,13 +9,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function test262BaselineFromReport(
 	report: unknown,
-	corpus: { revision: string; paths: ReadonlySet<string> },
+	corpus: { revision: string; tree: string; paths: ReadonlySet<string> },
 	previous: Test262Output,
 	baselineDigest: string,
 ): Test262Output {
 	assert(
 		isRecord(report) &&
-			report.schemaVersion === 2 &&
+			report.schemaVersion === 3 &&
 			report.backend === "compiled" &&
 			report.mode === "normal" &&
 			report.policy === "complete" &&
@@ -23,10 +23,14 @@ export function test262BaselineFromReport(
 		"baseline import requires a complete compiled/normal combined Test262 report",
 	);
 	assert(
-		previous.sha === corpus.revision &&
-			isRecord(report.baseline) &&
-			report.baseline.digest === baselineDigest,
-		"baseline import must compare against the current HEAD baseline and pinned corpus",
+		isRecord(report.baseline) && report.baseline.digest === baselineDigest,
+		"baseline import must compare against the current HEAD baseline",
+	);
+	assert(
+		isRecord(report.corpus) &&
+			report.corpus.revision === corpus.revision &&
+			report.corpus.tree === corpus.tree,
+		"baseline import must match the pinned corpus revision and tree",
 	);
 	assert(isRecord(report.results), "baseline report must contain per-test results");
 	const entries = Object.entries(report.results);
