@@ -122,6 +122,8 @@ jobs:
     name: macOS ARM smoke
     runs-on: macos-15
     timeout-minutes: 30
+    env:
+      CLANG_CRASH_DIAGNOSTICS_DIR: ${{ github.workspace }}/.cache/clang-crash
     permissions:
       contents: read
       # The cache-line save step deletes the snapshot it superseded.
@@ -143,7 +145,9 @@ jobs:
         run: npm run env:check -- --json
 
       - name: Run smoke tests
-        run: npm run test:smoke -- --workers 3
+        run: |
+          mkdir -p "$CLANG_CRASH_DIAGNOSTICS_DIR"
+          npm run test:smoke -- --workers 3
 
       - name: Verify isolate ownership across Worker joins
         run: npm run test:native -- tests/native/isolate-roots.test.ts --maxWorkers=1
@@ -161,6 +165,19 @@ jobs:
             .cache/mal-build/test-suite/runs/*/report.json
             .cache/mal-build/test262*/report-*.json
             .cache/wpt/runs/*/results.json
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7
+
+      - name: Retain Clang crash diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-clang-crash-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/clang-crash/
+            ~/Library/Logs/DiagnosticReports/clang*.crash
+            ~/Library/Logs/DiagnosticReports/clang*.ips
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7
