@@ -3132,16 +3132,6 @@ function indexedLengthLoopCandidates(
 		});
 		const comparison = comparisons.length === 1 ? comparisons[0]!.instruction : undefined;
 		if (comparison === undefined) continue;
-		if (
-			uses.some(({ instruction }) => {
-				if (instruction === comparison) return false;
-				if (fn.instructionKind(instruction) !== "operation") return true;
-				return !["move", "rootUse", "throwIfTdz"].includes(
-					fn.instructionOpcodeName(instruction),
-				);
-			})
-		)
-			continue;
 		const operator = fn.instructionAttributes(comparison).operator;
 		if (
 			fn.instructionKind(comparison) !== "operation" ||

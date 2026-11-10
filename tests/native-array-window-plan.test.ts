@@ -35,6 +35,30 @@ function compile(kind: "presence" | "pair") {
 }
 
 describe("persisted array ownership windows", () => {
+	it("projects presence across the skipped element's carried count", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+				globalThis.pick = function pick(values) {
+					let count = 0;
+					for (let index = 0; index < values.length; index++) {
+						if (index in values) {
+							const value = values[index];
+							if (value) count++;
+						}
+					}
+					return count;
+				};`,
+				"/filter-presence-window.js",
+			),
+		);
+		const plans = image.native.functions.flatMap((fn) => fn.storage!.arrayPresence);
+		expect(plans.length).toBeGreaterThan(0);
+		expect(() =>
+			deserializeCompilerArtifact(serializeCompilerArtifact(image)),
+		).not.toThrow();
+	});
+
 	it.each(["presence", "pair"] as const)(
 		"retains %s admission only when its receiver may be an Object",
 		(kind) => {

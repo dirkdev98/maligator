@@ -4134,11 +4134,44 @@ function selectArrayWindows(
 			for (const [siteIndex, site] of region.sites.entries())
 				for (const [elementIndex, element] of site.elements.entries()) {
 					if (element.kind !== "load" || element.arrayIndexIsUint32 !== true) continue;
-					const loadIp = element.ip,
-						membershipIp = loadIp - 3;
+					const loadIp = element.ip;
+					let membershipIp: number | undefined;
+					for (
+						let candidate = loadIp - 3;
+						candidate >= Math.max(0, loadIp - 8);
+						candidate--
+					) {
+						const membership = fn.instructions[candidate];
+						const branch = fn.instructions[candidate + 1];
+						if (
+							membership?.opcode !== "BINARY" ||
+							membership.operator !== "in" ||
+							branch?.opcode !== "JUMP_IF" ||
+							branch.cond !== membership.dst ||
+							branch.targetIp !== loadIp
+						)
+							continue;
+						let skipIp = candidate + 2;
+						for (let step = 0; step < 8 && skipIp < loadIp; step++) {
+							const skip = fn.instructions[skipIp];
+							if (skip?.opcode === "MOVE") skipIp++;
+							else if (skip?.opcode === "JUMP" && skip.targetIp > skipIp)
+								skipIp = skip.targetIp;
+							else break;
+						}
+						if (
+							skipIp <= loadIp ||
+							fn.instructions
+								.slice(candidate + 2, loadIp)
+								.some((op) => op.opcode !== "MOVE" && op.opcode !== "JUMP")
+						)
+							continue;
+						membershipIp = candidate;
+						break;
+					}
+					if (membershipIp === undefined) continue;
 					const membership = fn.instructions[membershipIp],
 						branch = fn.instructions[membershipIp + 1],
-						skip = fn.instructions[membershipIp + 2],
 						load = fn.instructions[loadIp];
 					if (
 						membership?.opcode !== "BINARY" ||
@@ -4147,8 +4180,6 @@ function selectArrayWindows(
 						branch?.opcode !== "JUMP_IF" ||
 						branch.cond !== membership.dst ||
 						branch.targetIp !== loadIp ||
-						skip?.opcode !== "JUMP" ||
-						skip.targetIp <= loadIp ||
 						load?.opcode !== "LOAD_PROPERTY" ||
 						membership.left !== load.key ||
 						membership.right !== load.object ||

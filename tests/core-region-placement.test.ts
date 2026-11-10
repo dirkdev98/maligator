@@ -417,6 +417,31 @@ describe("late plan migration gates", () => {
 		).toBe(false);
 	});
 
+	it.each([
+		["array allocation", "const observed = new Array(length);", "observed.length"],
+		["arithmetic", "const observed = length + 3;", "observed"],
+		["ordinary call", "const observed = consume(length);", "observed"],
+	] as const)("preserves a snapshotted length used by %s", (_name, setup, result) => {
+		const compilation = optimize(
+			`globalThis.visit = function visit(values, consume) {
+				const length = values.length;
+				${setup}
+				let total = 0;
+				for (let index = 0; index < length; index++) total += values[index];
+				return [total, length, ${result}];
+			};`,
+			"core-indexed-length-consumers.js",
+		);
+		expect(
+			projectCoreSpecializationRecipes(compilation.plan.recipes).some(
+				({ kind }) => kind === "indexed-length-loop",
+			),
+		).toBe(true);
+		expect(() =>
+			deserializeCompilerArtifact(serializeCompilerArtifact(lower(compilation))),
+		).not.toThrow();
+	});
+
 	it("keeps indexed loops with iterator cleanup on the ordinary lowering path", () => {
 		const compilation = optimize(
 			`globalThis.fill = function fill(groups) {
