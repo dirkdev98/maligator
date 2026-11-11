@@ -394,7 +394,45 @@ static int dns_socket(int family, int type) {
     return fd;
 }
 
-/* One UDP attempt: the reply with our id, 0 on timeout, -1 with errno on failure. */
+typedef enum NodeDnsReply {
+    NODE_DNS_REPLY_MATCH,
+    NODE_DNS_REPLY_FOREIGN,
+    NODE_DNS_REPLY_MALFORMED,
+} NodeDnsReply;
+
+#define NODE_DNS_MALFORMED (-2)
+
+/* As c-ares's same_questions: a reply answers this query only with our id, opcode and
+ * single question, its name compared case-insensitively. A reply for another question
+ * may be a stale or forged datagram that only guessed the id. Unlike c-ares, the QR bit
+ * is required too, so a reflected query never counts as its own answer. */
+static NodeDnsReply dns_reply_matches(
+    const u8 *query, int query_length, const u8 *answer, int answer_length) {
+    if (answer_length < 12 || answer[0] != query[0] || answer[1] != query[1]
+        || (answer[2] & 0x80) == 0 || (answer[2] & 0x78) != (query[2] & 0x78)) {
+        return NODE_DNS_REPLY_FOREIGN;
+    }
+    if (answer[4] != 0 || answer[5] != 1 || answer_length < query_length) {
+        return NODE_DNS_REPLY_MALFORMED;
+    }
+    int at = 12;
+    while (query[at] != 0) {
+        u8 length = query[at];
+        if (answer[at] != length) return NODE_DNS_REPLY_FOREIGN;
+        for (int i = 1; i <= length; i++) {
+            if (mal_ascii_to_lower(answer[at + i]) != mal_ascii_to_lower(query[at + i])) {
+                return NODE_DNS_REPLY_FOREIGN;
+            }
+        }
+        at += length + 1;
+    }
+    // The root label, type and class follow the name in both messages.
+    return memcmp(answer + at, query + at, 5) == 0
+        ? NODE_DNS_REPLY_MATCH : NODE_DNS_REPLY_FOREIGN;
+}
+
+/* One UDP attempt: the matching reply's length, 0 on timeout, NODE_DNS_MALFORMED for a
+ * reply that cannot carry our question, or -1 with errno on failure. */
 static int dns_exchange_udp(const struct sockaddr *server, socklen_t length, const u8 *query, int query_length,
     u8 *answer) {
     int fd = dns_socket(server->sa_family, SOCK_DGRAM);
@@ -417,8 +455,13 @@ static int dns_exchange_udp(const struct sockaddr *server, socklen_t length, con
             result = -1;
             break;
         }
-        // Connected UDP only accepts the server's datagrams; a stale id is skipped.
-        if (received >= 12 && answer[0] == query[0] && answer[1] == query[1]) {
+        // Connected UDP only accepts the server's datagrams; a foreign reply is skipped.
+        NodeDnsReply reply = dns_reply_matches(query, query_length, answer, (int) received);
+        if (reply == NODE_DNS_REPLY_MALFORMED) {
+            result = NODE_DNS_MALFORMED;
+            break;
+        }
+        if (reply == NODE_DNS_REPLY_MATCH) {
             result = (int) received;
             break;
         }
@@ -453,7 +496,11 @@ static int dns_exchange_tcp(const struct sockaddr *server, socklen_t length, con
     if (connect(fd, server, length) == 0 && dns_io_all(fd, prefix, 2, true)
         && dns_io_all(fd, (u8 *) query, (usize) query_length, true) && dns_io_all(fd, prefix, 2, false)) {
         usize size = (usize) (prefix[0] << 8 | prefix[1]);
-        if (size >= 12 && dns_io_all(fd, answer, size, false)) result = (int) size;
+        if (size >= 12 && dns_io_all(fd, answer, size, false)) {
+            result = dns_reply_matches(query, query_length, answer, (int) size)
+                    == NODE_DNS_REPLY_MATCH
+                ? (int) size : NODE_DNS_MALFORMED;
+        }
     }
     int saved = errno;
     close(fd);
@@ -485,7 +532,7 @@ static void dns_job_query(NodeDnsJob *job) {
         job->servers[0].length = sizeof *loopback;
         job->server_count = 1;
     }
-    bool refused = false, failed_rcode = false;
+    bool refused = false, failed_rcode = false, malformed = false;
     for (int attempt = 0; attempt < DNS_TRIES; attempt++) {
         bool timed_out = false;
         for (usize i = 0; i < job->server_count; i++) {
@@ -496,7 +543,8 @@ static void dns_job_query(NodeDnsJob *job) {
                 length = dns_exchange_tcp(server, job->servers[i].length, query, query_length, job->answer);
             }
             if (length == 0) timed_out = true;
-            if (length < 0) refused = refused || errno == ECONNREFUSED;
+            if (length == NODE_DNS_MALFORMED) malformed = true;
+            else if (length < 0) refused = refused || errno == ECONNREFUSED;
             if (length <= 0) continue;
             int rcode = job->answer[3] & 0x0F;
             job->answer_length = length;
@@ -507,7 +555,7 @@ static void dns_job_query(NodeDnsJob *job) {
     }
     if (failed_rcode) return;
     job->answer_length = 0;
-    job->query_error = refused ? "ECONNREFUSED" : "ETIMEOUT";
+    job->query_error = refused ? "ECONNREFUSED" : malformed ? "EBADRESP" : "ETIMEOUT";
 }
 
 static void dns_job_run(void *data) {

@@ -318,6 +318,54 @@ check(
 
 server.close();
 
+// A reply must echo the query's id, QR bit and question; a datagram that only guesses
+// the id must not answer it. The resolver keeps waiting for the genuine reply.
+function forged(query, change) {
+	// Forged records differ from the genuine ones, so accepting them is observable.
+	const genuine = ANSWERS[TYPES.MX];
+	ANSWERS[TYPES.MX] = [[...u16(1), ...encodeName("evil.test")]];
+	const reply = respond(query);
+	ANSWERS[TYPES.MX] = genuine;
+	const forgedReply = Buffer.from(reply);
+	if (change === "name") forgedReply[13] ^= 0x01;
+	else if (change === "type") forgedReply[reply.indexOf(0, 12) + 2] ^= 0x01;
+	else if (change === "query") forgedReply[2] &= 0x7f;
+	else forgedReply.writeUInt16BE(0, 4);
+	return forgedReply;
+}
+for (const change of ["name", "type", "query", "count"]) {
+	const spoofer = dgram.createSocket("udp4");
+	let open = true;
+	spoofer.on("message", (message, remote) => {
+		spoofer.send(forged(message, change), remote.port, remote.address);
+		setTimeout(() => {
+			if (open) spoofer.send(respond(message), remote.port, remote.address);
+		}, 20);
+	});
+	await new Promise((resolve) => spoofer.bind(0, "127.0.0.1", resolve));
+	dns.setServers([`127.0.0.1:${spoofer.address().port}`]);
+	// A reply without exactly one question is malformed rather than foreign, as in c-ares.
+	const answer = await dnsPromises
+		.resolveMx("records.test")
+		.then(plain, (error) => error.code);
+	const wanted = change === "count" ? "EBADRESP" : expected.resolveMx;
+	check(answer === wanted, `forged ${change} reply: ${answer}`);
+	open = false;
+	await new Promise((resolve) => spoofer.close(resolve));
+}
+const upper = dgram.createSocket("udp4");
+upper.on("message", (message, remote) => {
+	const reply = respond(message);
+	for (let index = 12; reply[index] !== 0; index++)
+		if (reply[index] >= 0x61 && reply[index] <= 0x7a) reply[index] -= 0x20;
+	upper.send(reply, remote.port, remote.address);
+});
+await new Promise((resolve) => upper.bind(0, "127.0.0.1", resolve));
+dns.setServers([`127.0.0.1:${upper.address().port}`]);
+const upperAnswer = plain(await dnsPromises.resolveMx("records.test"));
+check(upperAnswer === expected.resolveMx, `case-folded question: ${upperAnswer}`);
+await new Promise((resolve) => upper.close(resolve));
+
 // A name holding U+0000 must not resolve as the text before it.
 function nullByteError(run, code, message) {
 	let thrown;

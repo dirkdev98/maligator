@@ -552,13 +552,6 @@ entropy, cancellation, and reactor completions.
       Rustls. Keep TLS cancellation and teardown correct under GC stress and partial
       connection failure.
 
-- [ ] Match DNS replies against the question section (2026-10-20 security audit).
-
-- [ ] Honor configurable incoming HTTP header budgets across the codec and Node
-      adapter, including growth beyond fixed field-size and field-count ceilings.
-      Align `http.maxHeaderSize` (16 KiB) with the codec and answer
-      HPE_HEADER_OVERFLOW with 431, as Node does.
-
 - [ ] Give the https socket facade `destroyed`, so a throwing SNICallback reports true
       in `tlsClientError` listeners.
 
