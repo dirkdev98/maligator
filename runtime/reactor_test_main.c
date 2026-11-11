@@ -221,8 +221,16 @@ static bool reactor_registration_failure(void) {
         .interest = MAL_IO_READ,
         .waker = {.fn = count_wake, .data = &wakes},
     };
+#if defined(__APPLE__) || defined(__FreeBSD__)
+    // kqueue submits registrations with the next wait, so the rejection wakes the op
+    // once and its own I/O call reports the error.
+    bool ok = mal_reactor_add_op(&reactor, &op);
+    mal_reactor_wait(&reactor);
+    ok = ok && wakes == 1 && !op.active && !mal_reactor_has_pending(&reactor);
+#else
     bool ok = !mal_reactor_add_op(&reactor, &op) && !op.active &&
         !mal_reactor_has_pending(&reactor) && wakes == 0;
+#endif
 
     mal_reactor_free(&reactor);
     close(fds[1]);
