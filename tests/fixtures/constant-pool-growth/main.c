@@ -14,6 +14,7 @@ typedef struct {
     MalRuntimeImage image;
     MalFunction functions[4];
     MalInstruction instructions[4][4];
+    u32 bigint_digits[17];
 } LoadedConstants;
 
 static void init_string(MalString *string, const char *text) {
@@ -35,8 +36,11 @@ static bool initialize(LoadedConstants *loaded, i32 strings, i32 bigints,
     init_string(&loaded->image.string_constants[2], "\xe4");
     init_string(&loaded->image.string_constants[3], "z");
     init_string(&loaded->image.string_constants[strings - 1], last);
+    loaded->bigint_digits[0] = (u32) value;
+    loaded->bigint_digits[countof(loaded->bigint_digits) - 1] = 1;
     for (i32 i = 0; i < bigints; i++) loaded->image.bigint_constants[i] = (MalBigInt) {
-        .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_BIGINT), .value = value,
+        .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_BIGINT),
+        .sign = 1, .digit_count = countof(loaded->bigint_digits), .data.digits = loaded->bigint_digits,
     };
     for (i32 f = 0; f < 3; f++) {
         loaded->instructions[f][0] = f == 2
@@ -89,7 +93,7 @@ static bool check_growth(MalVm *vm, LoadedConstants *first, LoadedConstants *sec
     roots[0] = execute(vm, first_function + 1);
     roots[1] = execute(vm, first_function + 2);
     CHECK(mal_value_is_string(roots[0]) && mal_string_equals_ascii(mal_value_to_string(roots[0]), "retained-key"));
-    CHECK(mal_value_is_bigint(roots[1]) && mal_bigint_value(mal_value_to_bigint(roots[1])) == 817);
+    CHECK(mal_value_is_bigint(roots[1]) && mal_bigint_compare(mal_value_to_bigint(roots[1]), &first->image.bigint_constants[0]) == 0);
     roots[2] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
     MalKey key;
     CHECK(mal_vm_to_property_key(vm, roots[0], &key));
@@ -104,9 +108,9 @@ static bool check_growth(MalVm *vm, LoadedConstants *first, LoadedConstants *sec
     roots[4] = execute(vm, second_function + 2);
     mal_gc_collect(vm);
     CHECK(mal_string_equals_ascii(mal_value_to_string(roots[0]), "retained-key"));
-    CHECK(mal_bigint_value(mal_value_to_bigint(roots[1])) == 817);
+    CHECK(mal_bigint_compare(mal_value_to_bigint(roots[1]), &first->image.bigint_constants[0]) == 0);
     CHECK(mal_string_equals_ascii(mal_value_to_string(roots[3]), "new-key"));
-    CHECK(mal_bigint_value(mal_value_to_bigint(roots[4])) == 927);
+    CHECK(mal_bigint_compare(mal_value_to_bigint(roots[4]), &second->image.bigint_constants[0]) == 0);
     CHECK(execute(vm, first_function + 1) == roots[0]);
     CHECK(execute(vm, first_function + 2) == roots[1]);
     MalValue duplicate = execute(vm, second_function);

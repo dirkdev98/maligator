@@ -50,7 +50,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_value_is_string",
 	"mal_value_is_bigint",
 	"mal_value_to_bigint",
-	"mal_bigint_value",
+	"mal_bigint_compare",
 	"mal_string_equals",
 	"mal_string_length",
 	"mal_vm_property_try_load_static",

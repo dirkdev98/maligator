@@ -74,10 +74,7 @@ describe("partial operator input kinds", () => {
 		expect(out.c.source).not.toContain("mal_vm_binary_op(vm, MAL_BIN_LT,");
 	});
 
-	it.each([
-		["(flag?String(left):+left)==+right", "mal_ops_equal("],
-		["BigInt(left)==String(right)", "mal_ops_equal("],
-	] as const)(
+	it.each([["(flag?String(left):+left)==+right", "mal_ops_equal("]] as const)(
 		"uses a value helper for %s after restoring independent effect and operand facts",
 		(expression, helper) => {
 			const out = inspectStaticValueFunction(
@@ -91,6 +88,24 @@ describe("partial operator input kinds", () => {
 			expect(c).not.toContain("mal_vm_binary_op(");
 		},
 	);
+
+	it("retains throwing StringToBigInt comparison after artifact restoration", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(left,right){return BigInt(left)==String(right);}globalThis.compute=compute;",
+			"compute",
+		);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
+		const native = restored.native.functions[out.native.functionIndex]!;
+		const ip = native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "==",
+		);
+		expect(native.facts![ip]!.effectMask! & INSTRUCTION_MAY_THROW).not.toBe(0);
+		expect(native.facts![ip]!.effectMask! & INSTRUCTION_MAY_GC).not.toBe(0);
+		const c = emitCompiledFunction(native, native.functionIndex, "", false)!.source;
+		expect(c).toContain("mal_vm_binary_op(vm, MAL_BIN_EQ,");
+		expect(c).toMatch(/mal_vm_binary_op\(vm, MAL_BIN_EQ,[^\n]*\n\s*if \(MAL_THREW\(\)\)/);
+		expect(c).not.toContain("mal_ops_equal(");
+	});
 
 	it("validates partial knowledge without certifying primitive effects", () => {
 		const masks = [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_STRING];

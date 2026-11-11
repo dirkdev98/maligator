@@ -47,7 +47,7 @@ describe("native operand truthiness", () => {
 		["(input>>>0)+1", "true"],
 		["input>>>0", "!= 0"],
 		['""+input', "mal_string_length"],
-		["1n", "mal_bigint_value"],
+		["1n", "->sign"],
 		["flag?+input:undefined", "mal_value_is_undefined"],
 		["flag?{}:null", "mal_value_is_null"],
 		["flag?null:undefined", "false"],

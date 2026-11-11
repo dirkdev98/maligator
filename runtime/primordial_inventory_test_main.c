@@ -60,7 +60,7 @@ static usize inventory_identity(MalValue value) {
     return inventory_values.count - 1;
 }
 
-static void inventory_value(MalValue value) {
+static void inventory_value(MalVm *vm, MalValue value) {
     if (mal_value_is_object(value) || mal_value_is_symbol(value)) {
         printf("{\"ref\":%zu}", inventory_identity(value));
     } else if (mal_value_is_string(value)) {
@@ -68,8 +68,11 @@ static void inventory_value(MalValue value) {
         inventory_string(mal_value_to_string(value));
         putchar('}');
     } else if (mal_value_is_bigint(value)) {
-        u128 bits = (u128) mal_bigint_value(mal_value_to_bigint(value));
-        printf("{\"bigint\":\"%016" PRIx64 "%016" PRIx64 "\"}", (uint64_t) (bits >> 64), (uint64_t) bits);
+        MalString *decimal = mal_bigint_to_string(&vm->heap, mal_value_to_bigint(value), 10);
+        if (decimal == nullptr) abort();
+        fputs("{\"bigint\":", stdout);
+        inventory_string(decimal);
+        putchar('}');
     } else {
         // Raw primitive bits distinguish -0, NaN and undefined without invoking conversion.
         printf("{\"bits\":\"%016" PRIx64 "\"}", (uint64_t) value);
@@ -101,7 +104,7 @@ static void inventory_node(MalVm *vm, usize id) {
     printf(",\"kind\":\"object\",\"locked\":%s,\"prototype\":",
            object->primordial_locked ? "true" : "false");
     MalObject *prototype = mal_object_get_prototype(object);
-    inventory_value(prototype == nullptr ? mal_value_new_null() : mal_value_from_object(prototype));
+    inventory_value(vm, prototype == nullptr ? mal_value_new_null() : mal_value_from_object(prototype));
     if (mal_value_is_native_function_object(value)) {
         MalNativeFunctionObject *fn = mal_value_to_native_function_object(value);
         usize callback = 0;
@@ -128,10 +131,10 @@ static void inventory_node(MalVm *vm, usize id) {
         inventory_key(keys.keys[i]);
         printf(",\"flags\":%u", (unsigned) desc.flags);
         if (desc.flags & MAL_PROPERTY_ACCESSOR) {
-            fputs(",\"get\":", stdout); inventory_value(desc.getter);
-            fputs(",\"set\":", stdout); inventory_value(desc.setter);
+            fputs(",\"get\":", stdout); inventory_value(vm, desc.getter);
+            fputs(",\"set\":", stdout); inventory_value(vm, desc.setter);
         } else {
-            fputs(",\"value\":", stdout); inventory_value(desc.value);
+            fputs(",\"value\":", stdout); inventory_value(vm, desc.value);
         }
         puts("}");
     }
@@ -143,12 +146,12 @@ static void inventory_snapshot(MalVm *vm, const char *phase) {
     mal_rooted_value_list_init(&inventory_values);
     for (usize i = 0; i < countof(inventory_roots); i++) {
         printf("{\"type\":\"root\",\"name\":\"%s\",\"value\":", inventory_roots[i].name);
-        inventory_value(vm->intrinsics[inventory_roots[i].slot]);
+        inventory_value(vm, vm->intrinsics[inventory_roots[i].slot]);
         puts("}");
     }
     if (!mal_value_is_undefined(inventory_sentinel)) {
         fputs("{\"type\":\"root\",\"name\":\"test:sentinel\",\"value\":", stdout);
-        inventory_value(inventory_sentinel);
+        inventory_value(vm, inventory_sentinel);
         puts("}");
     }
     for (i32 i = 0; i < vm->runtime_image->host_install_count; i++) {
@@ -156,7 +159,7 @@ static void inventory_snapshot(MalVm *vm, const char *phase) {
         for (i32 j = 0; j < install->slot_count; j++) {
             const MalHostInstallSlot *slot = &install->slots[j];
             printf("{\"type\":\"host-root\",\"installer\":%d,\"name\":\"%s\",\"value\":", i, slot->name);
-            inventory_value(vm->globals[slot->slot]);
+            inventory_value(vm, vm->globals[slot->slot]);
             puts("}");
         }
     }
@@ -173,6 +176,20 @@ int main(int argc, char **argv) {
     inventory_sentinel = mal_value_new_undefined();
     MalRootSpan sentinel_root;
     mal_gc_root(&sentinel_root, &inventory_sentinel, 1);
+    if (argc > 1 && strcmp(argv[1], "--check-bigints") == 0) {
+        u32 digits[17] = {123456789};
+        digits[countof(digits) - 1] = 1;
+        for (i32 sign = 1; sign >= -1; sign--) {
+            inventory_sentinel = mal_value_from_bigint(mal_bigint_from_digits(
+                &vm.heap, sign < 0 ? -1 : 1, digits, sign == 0 ? 0 : countof(digits)));
+            if (vm.completion.kind == MAL_COMPLETION_THROW) abort();
+            inventory_value(&vm, inventory_sentinel);
+            putchar('\n');
+        }
+        mal_gc_unroot(&sentinel_root);
+        mal_vm_free(&vm);
+        return 0;
+    }
     if (argc > 1 && strcmp(argv[1], "--check-no-getter") == 0) {
         inventory_sentinel = mal_value_from_object(mal_object_new(&vm.heap, nullptr));
         MalValue getter = mal_value_from_object((MalObject *) mal_native_function_object_new(
