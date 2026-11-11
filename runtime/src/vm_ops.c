@@ -821,6 +821,15 @@ bool mal_vm_is_extensible_object(
     return true;
 }
 
+/** IsTypedArrayFixedLength: a growable shared buffer only ever adds bytes. */
+static bool mal_vm_typed_array_is_fixed_length(const MalTypedArrayObject *array) {
+    if (array->length_tracking) {
+        return false;
+    }
+    const MalArrayBufferObject *buffer = array->buffer;
+    return buffer == nullptr || !buffer->resizable || buffer->shared;
+}
+
 bool mal_vm_prevent_extensions(MalVm *vm, MalValue object_value, bool *prevented_out) {
     if (!mal_value_is_object(object_value)) {
         mal_vm_throw_error(
@@ -833,6 +842,13 @@ bool mal_vm_prevent_extensions(MalVm *vm, MalValue object_value, bool *prevented
     if (mal_value_is_proxy_object(object_value)) {
         ok = mal_proxy_prevent_extensions(
             vm, mal_value_to_proxy_object(object_value), prevented_out);
+    } else if (mal_value_heap_type(object_value) == MAL_HEAP_TYPED_ARRAY_OBJECT &&
+               !mal_vm_typed_array_is_fixed_length(
+                   (MalTypedArrayObject *) mal_value_to_object(object_value))) {
+        // A view whose integer-indexed properties can appear when its buffer
+        // resizes cannot promise a fixed key set, so it refuses to close.
+        ok = true;
+        *prevented_out = false;
     } else {
         // Lazy own properties must exist before the ordinary extensibility gate closes.
         if (mal_vm_script_function_has_prototype(vm, object_value)) {

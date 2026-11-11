@@ -1772,7 +1772,7 @@ static MalValue mal_builtin_object_prevent_extensions(MalVm *vm, MalValue this_v
     }
     if (!success) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Object.preventExtensions on a proxy that returned false");
+            "Object.preventExtensions could not prevent extensions");
     }
     return args[0];
 }
