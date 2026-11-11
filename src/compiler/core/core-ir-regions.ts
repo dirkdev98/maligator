@@ -1144,22 +1144,28 @@ export interface CoreAllocatedStringSplitCursorRegion extends CoreAllocatedRegio
 	readonly exitBlock: number;
 }
 
-/** Structural one-use binary pair after register allocation. */
+/**
+ * Structural chain of one-use binary pairs after register allocation. A wrapping
+ * BigInt chain alone ends at the known call that reads its value modulo 2^64.
+ */
 export interface CoreAllocatedNumericFusionRegion extends CoreAllocatedRegionEnvelope<
 	"numeric-fusion",
-	"binary-pairs-f64" | "binary-pairs-truncating-i32",
+	"binary-pairs-f64" | "binary-pairs-truncating-i32" | "bigint-wrap-u64",
 	"none",
 	readonly [
 		Extract<CompilerInstruction, { type: "binary" }>,
-		Extract<CompilerInstruction, { type: "binary" }>,
+		Extract<CompilerInstruction, { type: "binary" | "callKnown" }>,
 	],
 	"structural"
 > {
 	readonly composition: "overlay";
-	readonly runtimeGuard: "primitive-number-operands" | "int32-operands";
+	readonly runtimeGuard:
+		| "primitive-number-operands"
+		| "int32-operands"
+		| "bigint-operands";
 	readonly pairs: ReadonlyArray<{
 		readonly first: Extract<CompilerInstruction, { type: "binary" }>;
-		readonly finish: Extract<CompilerInstruction, { type: "binary" }>;
+		readonly finish: Extract<CompilerInstruction, { type: "binary" | "callKnown" }>;
 		readonly firstUsePosition: 1 | 2;
 	}>;
 }

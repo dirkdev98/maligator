@@ -685,6 +685,15 @@ function lowerCoreSpecializations(
 			if (loweredAnchor.type !== "binary") {
 				throw new Error(`Core numeric plan ${id} does not lower to binary`);
 			}
+			const recipeRepresentation = coreSpecializationRecipeRepresentationAt(
+				recipeTable,
+				row,
+			);
+			const representation =
+				recipeRepresentation === "binary-pairs-truncating-i32" ||
+				recipeRepresentation === "bigint-wrap-u64"
+					? recipeRepresentation
+					: "binary-pairs-f64";
 			// A chain lowers to consecutive pairs; each finish but the last starts the next.
 			const pairs = claims.slice(1).map((instruction, link) => {
 				const start = claims[link]!;
@@ -706,17 +715,22 @@ function lowerCoreSpecializations(
 						break;
 					}
 				}
+				// Only a wrapping BigInt chain ends at the known call that reads its value; a
+				// call finish has no binary operand position, so the first is recorded.
+				const wrappingFinish =
+					representation === "bigint-wrap-u64" && link + 2 === claims.length;
 				if (
 					first.type !== "binary" ||
-					lowered.type !== "binary" ||
-					(input !== 0 && input !== 1)
+					(lowered.type !== "binary" && lowered.type !== "callKnown") ||
+					(lowered.type === "callKnown") !== wrappingFinish ||
+					(lowered.type === "binary" && input !== 0 && input !== 1)
 				) {
 					throw new Error(`Core numeric plan ${id} has an invalid finish`);
 				}
 				return {
 					first,
 					finish: lowered,
-					firstUsePosition: (input + 1) as 1 | 2,
+					firstUsePosition: (lowered.type === "binary" ? input + 1 : 1) as 1 | 2,
 				};
 			});
 			if (pairs.length === 0) {
@@ -732,17 +746,14 @@ function lowerCoreSpecializations(
 					materialization: "none",
 					admission: admission(row),
 				},
-				representation:
-					coreSpecializationRecipeRepresentationAt(recipeTable, row) ===
-					"binary-pairs-truncating-i32"
-						? "binary-pairs-truncating-i32"
-						: "binary-pairs-f64",
+				representation,
 				composition: "overlay",
 				runtimeGuard:
-					coreSpecializationRecipeRepresentationAt(recipeTable, row) ===
-					"binary-pairs-truncating-i32"
+					representation === "binary-pairs-truncating-i32"
 						? "int32-operands"
-						: "primitive-number-operands",
+						: representation === "bigint-wrap-u64"
+							? "bigint-operands"
+							: "primitive-number-operands",
 				pairs,
 			});
 			continue;

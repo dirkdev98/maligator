@@ -3,6 +3,7 @@ import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
 import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { FactDependency } from "../shared/fact-implication.ts";
 import { factDependencyArraysEqual } from "../shared/fact-implication.ts";
+import { coreBigIntWrapFinish, coreBigIntWrapOperator } from "./core-bigint-wrap.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	coreDirectBuiltinCallbackTarget,
@@ -815,6 +816,7 @@ function verifySpecialization(
 							),
 						),
 					].sort((left, right) => left - right);
+		const wrapping = selection.representation === "bigint-wrap-u64";
 		if (
 			selection.anchors.length !== 1 ||
 			selection.claimedInstructions.length < 2 ||
@@ -822,7 +824,8 @@ function verifySpecialization(
 				selection.claimedInstructions.length !== 2) ||
 			selection.composition !== "overlay" ||
 			(selection.representation !== "binary-pairs-f64" &&
-				selection.representation !== "binary-pairs-truncating-i32") ||
+				selection.representation !== "binary-pairs-truncating-i32" &&
+				!wrapping) ||
 			selection.targetFunctions.length !== 0 ||
 			selection.semanticProtectors.length !== 0
 		) {
@@ -836,13 +839,13 @@ function verifySpecialization(
 		for (let link = 0; link + 1 < selection.claimedInstructions.length; link++) {
 			const first = selection.claimedInstructions[link]!;
 			const finish = selection.claimedInstructions[link + 1]!;
+			const operator = fn.instructionAttributes(first).operator;
 			if (
 				fn.instructionKind(first) !== "operation" ||
 				fn.instructionOpcodeName(first) !== "binary" ||
-				!coreTargetSupportsNumericFusionOperator(
-					fn.instructionAttributes(first).operator,
-					"start",
-				)
+				!(wrapping
+					? coreBigIntWrapOperator(operator)
+					: coreTargetSupportsNumericFusionOperator(operator, "start"))
 			) {
 				fail(`${selection.id} does not anchor a supported generic binary operation`);
 			}
@@ -860,13 +863,19 @@ function verifySpecialization(
 				if (fn.kernel.operandAt(finishOperandStart + index) === result)
 					finishResultUses++;
 			}
+			// Only the last pair of a wrapping chain finishes at its known consumer.
+			const terminal = link + 2 === selection.claimedInstructions.length;
+			const finishOperator = fn.instructionAttributes(finish).operator;
+			const finishSupported =
+				wrapping && terminal
+					? coreBigIntWrapFinish(program, fn, first, finish, result) !== undefined
+					: fn.instructionKind(finish) === "operation" &&
+						fn.instructionOpcodeName(finish) === "binary" &&
+						(wrapping
+							? coreBigIntWrapOperator(finishOperator)
+							: coreTargetSupportsNumericFusionOperator(finishOperator, "finish"));
 			if (
-				fn.instructionKind(finish) !== "operation" ||
-				fn.instructionOpcodeName(finish) !== "binary" ||
-				!coreTargetSupportsNumericFusionOperator(
-					fn.instructionAttributes(finish).operator,
-					"finish",
-				) ||
+				!finishSupported ||
 				finishResultUses !== 1 ||
 				blocks.instructionOrder.get(first)! >= blocks.instructionOrder.get(finish)!
 			) {

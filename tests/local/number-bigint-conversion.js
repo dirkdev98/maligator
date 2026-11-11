@@ -79,11 +79,24 @@ check(Number(wide, extra++) === outputs[6] && extra === 1, "extra arguments eval
 // their typed paths, including their errors.
 function exactConversions() {
 	let state = (1n << 63n) + 17n;
+	let wide = -(1n << 70n) - 3n;
 	const results = [];
 	for (let round = 0; round < 8; round++) {
 		state = BigInt.asUintN(64, state * 6364136223846793005n + BigInt(round & 255));
 		const signed = BigInt.asIntN(64, state);
-		results.push(String(state), String(signed), Number(signed & 65535n), Number(signed));
+		wide = wide * 3n - signed;
+		results.push(
+			String(state),
+			String(signed),
+			Number(signed & 65535n),
+			Number(signed),
+			String(BigInt.asIntN(64, (wide ^ state) - (signed | 255n))),
+			String(BigInt.asUintN(32, wide * state + signed)),
+			String(BigInt.asIntN(13, wide - state * 7n)),
+			Number((wide * 5n) & 9007199254740991n),
+			Number(wide & ((1n << 60n) - 1n)),
+			String(BigInt.asUintN(65, state * state)),
+		);
 		try {
 			results.push(String(BigInt(round + 0.5)));
 		} catch (error) {

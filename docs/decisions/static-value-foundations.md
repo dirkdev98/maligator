@@ -332,6 +332,11 @@ same GC leaf allocation. Constant images own static or arena-backed digits for
 their full lifetime. Wire and cross-isolate formats carry the sign and complete
 limb sequence, rejecting negative zero and leading zero limbs.
 
+A numeric operator over two BigInt operands has an exact BigInt result kind, so
+compiled code calls the BigInt operation directly instead of generic dispatch and
+ToPrimitive. `>>>` keeps the generic path for its TypeError, and `BigInt` of a
+proven Number calls NumberToBigInt directly.
+
 Checked native-width arithmetic promotes to limb operations on overflow. Parsing,
 formatting, equality, hashing and Number comparisons consume the complete value.
 Typed arrays, DataView and Atomics explicitly take the low 64 bits where JavaScript

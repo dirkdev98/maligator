@@ -1,6 +1,7 @@
 # Numeric call results and truncating integer arithmetic
 
-- Scope: Core normal-result facts, scalar selection and native numeric fusion
+- Scope: Core normal-result facts, scalar selection and native numeric fusion,
+  including wrapping BigInt chains
 
 Known Math calls may produce scalar results while retaining their coercing inputs,
 exceptions, argument evaluation and safepoints. Math.imul and Math.clz32 establish
@@ -33,3 +34,22 @@ This transformation leaves loop entry values and tests intact. A loop with an
 unknown seed still preserves that seed on zero iterations and performs coercion
 only when the original body executes. Specializing the remaining boxed recurrence
 would require a separate control-flow proof.
+
+## Wrapping BigInt chains
+
+A chain of BigInt `+`, `-`, `*`, `&`, `|` and `^` operations with exact BigInt
+operands can run modulo 2^64 when its only consumer reads the value modulo 2^64:
+`BigInt.asUintN` or `BigInt.asIntN` with a constant width of at most 64, or `Number`
+of a mask with a non-negative constant below 2^53. Each operation's low 64 bits
+depend only on its operands' low 64 bits in two's complement, so the intermediates
+never allocate. Every link has one use in the same block. At a join only one
+incoming chain links; other operands keep their exact boxed values.
+
+Each node reads its other operand's low 64 bits where it stands, so intervening
+calls and register reuse cannot change the result. Fused intermediates cannot raise
+the resource RangeError an unbounded intermediate could; the consumer receives the
+exact mathematical result. The finish allocates the width result once or converts
+the mask exactly. The `bigint-wrap-u64` certificate and its structural
+`bigint-operands` guard travel through allocation and compiler-artifact
+serialization, with a new compiler-artifact identity. Interpreted arithmetic is
+unchanged.

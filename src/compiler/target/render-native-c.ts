@@ -6840,6 +6840,8 @@ function inheritedStackObjectProtectorGuard(site: StackObjectSite): string {
 interface NativeNumericFusionAction {
 	readonly role: "start" | "finish" | "link";
 	readonly truncating: boolean;
+	/** The chain computes modulo 2^64 for its final width or Number conversion. */
+	readonly wrapping: boolean;
 	readonly id: number;
 	readonly first: Extract<BytecodeInstruction, { opcode: "BINARY" }>;
 }
@@ -7104,9 +7106,10 @@ function analyzeNativeRegionTopology(
 		}
 		const first = fn.instructions[pair.firstIp];
 		const finish = fn.instructions[pair.finishIp];
+		const wrapping = region.representation === "bigint-wrap-u64";
 		if (
 			first?.opcode !== "BINARY" ||
-			finish?.opcode !== "BINARY" ||
+			(finish?.opcode !== "BINARY" && !(wrapping && finish?.opcode === "CALL_KNOWN")) ||
 			action.ip !== (action.role === "start" ? pair.firstIp : pair.finishIp)
 		) {
 			throw new Error("Invalid numeric-fusion region");
@@ -7115,6 +7118,7 @@ function analyzeNativeRegionTopology(
 			id: pair.firstIp,
 			first,
 			truncating: region.representation === "binary-pairs-truncating-i32",
+			wrapping,
 		};
 		numericFusionCandidates.push({
 			instructionIp: action.ip,
@@ -7471,20 +7475,22 @@ function emitBody(
 	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
 	const fusionCandidatesByIp = new Map<number, Array<NativeNumericFusionAction>>();
 	for (const candidate of topology.numericFusionCandidates) {
+		// A wrapping chain is all-or-nothing and never has Number operands.
 		if (
-			nativeInstructions[candidate.action.id]?.kind === "unsigned-arithmetic" ||
-			nativeInstructions[candidate.finishIp]?.kind === "unsigned-arithmetic" ||
-			[candidate.action.id, candidate.finishIp].some((ip) => {
-				const masks = nativeFacts?.[ip]?.inputKindMasks;
-				const instruction = fn.instructions[ip];
-				return (
-					instruction?.opcode === "BINARY" &&
-					masks !== undefined &&
-					masks.some(
-						(mask) => compilerNumberFastPathInputKind(instruction.operator, mask) === 0,
-					)
-				);
-			})
+			!candidate.action.wrapping &&
+			(nativeInstructions[candidate.action.id]?.kind === "unsigned-arithmetic" ||
+				nativeInstructions[candidate.finishIp]?.kind === "unsigned-arithmetic" ||
+				[candidate.action.id, candidate.finishIp].some((ip) => {
+					const masks = nativeFacts?.[ip]?.inputKindMasks;
+					const instruction = fn.instructions[ip];
+					return (
+						instruction?.opcode === "BINARY" &&
+						masks !== undefined &&
+						masks.some(
+							(mask) => compilerNumberFastPathInputKind(instruction.operator, mask) === 0,
+						)
+					);
+				}))
 		)
 			continue;
 		const actions = fusionCandidatesByIp.get(candidate.instructionIp) ?? [];
@@ -8049,6 +8055,10 @@ function emitBody(
 			(fusion.truncating || reps[instruction.dst] === "boxed")
 		) {
 			const id = fusion.id;
+			if (fusion.wrapping) {
+				lines.push(`u64 __nf_${id}_bits = 0;`);
+				continue;
+			}
 			if (fusion.truncating) {
 				lines.push(`i32 __nf_${id}_integer = 0;`);
 			}
@@ -11081,6 +11091,16 @@ class NativeInstructionEmission {
 		);
 		if (rangedComparison !== undefined)
 			return [this.storeBoolean(dst, String(rangedComparison))];
+		const wrap = this.context.numericFusionAction;
+		if (wrap?.wrapping && (wrap.role === "start" || wrap.role === "link")) {
+			// Other operands are read where they stand; only the chain value stays unboxed.
+			const bits = (register: number): string =>
+				wrap.role === "link" && register === wrap.first.dst
+					? `__nf_${wrap.id}_bits`
+					: `mal_bigint_low_u64(mal_value_to_bigint(${this.boxed(register)}))`;
+			this.elideFramePosition();
+			return [`__nf_${wrap.id}_bits = ${bits(left)} ${operator} ${bits(right)};`];
+		}
 		if (
 			BIGINT_ARITHMETIC_OPERATORS.has(operator) &&
 			this.reps[dst] === "boxed" &&
@@ -11930,6 +11950,24 @@ class NativeInstructionEmission {
 	emitKnownCall(
 		instruction: Extract<BytecodeInstruction, { opcode: "CALL_KNOWN" }>,
 	): Array<string> | null {
+		const wrap = this.context.numericFusionAction;
+		if (wrap?.wrapping && wrap.role === "finish") {
+			// Core admits only a constant width of at most 64 or a mask below 2^53.
+			const bits = `__nf_${wrap.id}_bits`;
+			if (instruction.operation === "Number")
+				return [this.storeNumber(instruction.dst, `(f64) ${bits}`), this.callPoll()];
+			const operand = instruction.arguments[0]!;
+			const width =
+				this.nativeNumberOperand(operand) ??
+				`mal_ops_number_as_f64(${this.boxedOperand(operand)})`;
+			const result = `bigint_wrapped_${this.ip}`;
+			return [
+				`MalValue ${result} = mal_value_from_bigint(mal_bigint_from_wrapped(&vm->heap, ${bits}, (u32) ${width}, ${instruction.operation === "BigInt.asIntN"}));`,
+				this.throwCheck(),
+				`r${instruction.dst} = ${this.callValue(instruction.dst, result)};`,
+				this.callPoll(),
+			];
+		}
 		const predicatePlan = this.context.numberPredicate;
 		if (predicatePlan !== undefined) {
 			const input = instruction.arguments[0];

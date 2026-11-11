@@ -801,17 +801,71 @@ export function claimedMaterializationIps(
 
 export type VmNumericFusionRegion = VmRegionEnvelope<
 	"numeric-fusion",
-	"binary-pairs-f64" | "binary-pairs-truncating-i32",
+	"binary-pairs-f64" | "binary-pairs-truncating-i32" | "bigint-wrap-u64",
 	"none"
 > & {
 	readonly composition: "overlay";
-	readonly runtimeGuard: "primitive-number-operands" | "int32-operands";
+	readonly runtimeGuard:
+		| "primitive-number-operands"
+		| "int32-operands"
+		| "bigint-operands";
 	readonly pairs: ReadonlyArray<{
 		readonly firstIp: number;
 		readonly finishIp: number;
 		readonly firstUsePosition: 1 | 2;
 	}>;
 };
+
+/** The operand guard each numeric-fusion representation implies. */
+export const VM_NUMERIC_FUSION_GUARDS: Readonly<
+	Record<VmNumericFusionRegion["representation"], VmNumericFusionRegion["runtimeGuard"]>
+> = {
+	"binary-pairs-f64": "primitive-number-operands",
+	"binary-pairs-truncating-i32": "int32-operands",
+	"bigint-wrap-u64": "bigint-operands",
+};
+
+const VM_BIGINT_WRAP_OPERATORS: ReadonlySet<string> = new Set([
+	"+",
+	"-",
+	"*",
+	"&",
+	"|",
+	"^",
+]);
+
+/**
+ * Whether a wrapping BigInt pair links one-use ring operations, ending at its last
+ * pair only in the `asUintN`/`asIntN` or `Number` call that receives the chain value.
+ */
+export function vmBigIntWrapPairIsValid(
+	first: BytecodeInstruction | undefined,
+	finish: BytecodeInstruction | undefined,
+	firstUsePosition: number,
+	last: boolean,
+): boolean {
+	if (first?.opcode !== "BINARY" || !VM_BIGINT_WRAP_OPERATORS.has(first.operator))
+		return false;
+	if (!last)
+		return (
+			finish?.opcode === "BINARY" &&
+			VM_BIGINT_WRAP_OPERATORS.has(finish.operator) &&
+			(firstUsePosition === 1 ? finish.left : finish.right) === first.dst &&
+			(firstUsePosition === 1 || firstUsePosition === 2)
+		);
+	if (
+		finish?.opcode !== "CALL_KNOWN" ||
+		finish.construct ||
+		finish.argumentMode !== undefined ||
+		firstUsePosition !== 1
+	)
+		return false;
+	return finish.operation === "Number"
+		? finish.arguments[0] === first.dst && first.operator === "&"
+		: (finish.operation === "BigInt.asUintN" || finish.operation === "BigInt.asIntN") &&
+				finish.arguments.length === 2 &&
+				finish.arguments[1] === first.dst;
+}
 
 export type VmIndexedLengthLoopRegion = VmRegionEnvelope<
 	"indexed-length-loop",
@@ -4168,13 +4222,9 @@ function lowerExecutionFunctionToNativePlan(
 				region.license.guard !== "structural" ||
 				region.license.genericTwin !== "retained" ||
 				region.license.materialization !== "none" ||
-				(region.representation !== "binary-pairs-f64" &&
-					region.representation !== "binary-pairs-truncating-i32") ||
+				VM_NUMERIC_FUSION_GUARDS[region.representation] === undefined ||
 				region.composition !== "overlay" ||
-				region.runtimeGuard !==
-					(region.representation === "binary-pairs-f64"
-						? "primitive-number-operands"
-						: "int32-operands") ||
+				region.runtimeGuard !== VM_NUMERIC_FUSION_GUARDS[region.representation] ||
 				region.controlFlow.ordinaryBlocks.length === 0 ||
 				region.controlFlow.exceptionalBlocks.length !== 0 ||
 				anchors.some((ip) => ip === undefined) ||
@@ -4235,9 +4285,22 @@ function lowerExecutionFunctionToNativePlan(
 					(pair, index) =>
 						index === 0 || pair.firstIp === resolvedPairs[index - 1]!.finishIp,
 				);
-			for (const pair of resolvedPairs) {
+			for (const [index, pair] of resolvedPairs.entries()) {
 				const first = instructions[pair.firstIp];
 				const finish = instructions[pair.finishIp];
+				if (region.representation === "bigint-wrap-u64") {
+					if (
+						pair.firstIp >= pair.finishIp ||
+						!vmBigIntWrapPairIsValid(
+							first,
+							finish,
+							pair.firstUsePosition,
+							index === resolvedPairs.length - 1,
+						)
+					)
+						valid = false;
+					continue;
+				}
 				if (
 					first?.opcode !== "BINARY" ||
 					finish?.opcode !== "BINARY" ||

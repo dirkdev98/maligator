@@ -730,6 +730,14 @@ MalBigInt *mal_bigint_shift(MalHeap *heap, const MalBigInt *value, const MalBigI
     return buffer_publish(heap, &buffer, value->sign);
 }
 
+MalBigInt *mal_bigint_from_wrapped(MalHeap *heap, u64 bits, u32 width, bool is_signed) {
+    assert(width >= 1 && width <= 64);
+    u64 mask = width == 64 ? UINT64_MAX : (UINT64_C(1) << width) - 1;
+    u64 twos = bits & mask;
+    bool negative = is_signed && (twos & (UINT64_C(1) << (width - 1))) != 0;
+    return bigint_from_inline(heap, negative ? -1 : 1, negative ? ((u64) 0 - twos) & mask : twos);
+}
+
 MalBigInt *mal_bigint_width(MalHeap *heap, const MalBigInt *value, u64 bits, bool is_signed) {
     if (bits == 0 || value->sign == 0) return mal_bigint_new(heap, 0);
     u32 length = mal_bigint_bit_length(value);
@@ -737,13 +745,7 @@ MalBigInt *mal_bigint_width(MalHeap *heap, const MalBigInt *value, u64 bits, boo
         if (bits > length || (value->sign < 0 && bits == length
                 && !magnitude_low_bits(value, length - 1))) return (MalBigInt *) value;
     } else if (value->sign > 0 && bits >= length) return (MalBigInt *) value;
-    if (bits <= 64) {
-        u64 mask = bits == 64 ? UINT64_MAX : (UINT64_C(1) << bits) - 1;
-        u64 twos = mal_bigint_low_u64(value) & mask;
-        bool negative = is_signed && (twos & (UINT64_C(1) << (bits - 1))) != 0;
-        return bigint_from_inline(heap, negative ? -1 : 1,
-            negative ? ((u64) 0 - twos) & mask : twos);
-    }
+    if (bits <= 64) return mal_bigint_from_wrapped(heap, mal_bigint_low_u64(value), (u32) bits, is_signed);
     if (bits <= 128) {
         u128 magnitude = 0;
         u32 count = value->digit_count < 4 ? value->digit_count : 4;

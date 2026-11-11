@@ -184,6 +184,26 @@ describe("primitive numeric fusion facts", () => {
 		).toThrow(/numeric-fusion/);
 	});
 
+	it("fuses wrapping BigInt chains into their width or masked Number conversion", () => {
+		const out = inspectStaticValueFunction(
+			"function run(count){let state=1n;let sum=0;for(let i=0;i<count;i++){state=BigInt.asUintN(64,state*6364136223846793005n+1442695040888963407n);sum+=Number((state^7n)&65535n);}return sum;}globalThis.run=run;",
+			"run",
+			{ locked: true },
+		);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
+		expect(restored).toEqual(out.image);
+		const wrapping = restored.native.functions[
+			out.native.functionIndex
+		]!.specializations.filter((region) => region.kind === "numeric-fusion").filter(
+			(region) => region.representation === "bigint-wrap-u64",
+		);
+		expect(wrapping.map((region) => region.runtimeGuard)).toEqual([
+			"bigint-operands",
+			"bigint-operands",
+		]);
+		expect(wrapping.map((region) => region.pairs.length).sort()).toEqual([2, 2]);
+	});
+
 	it("keeps a typed entry's valid fusion prefix when a String tail cuts admission", () => {
 		const out = inspectStaticValueFunction(
 			"function compute(left,right,other,tail){return ((left+right)*other)+tail;}globalThis.compute=compute;globalThis.result=compute(globalThis.left,globalThis.right,globalThis.other,':');",

@@ -5,6 +5,7 @@ import {
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import { coreBigIntWrapFinish, coreBigIntWrapNode } from "./core-bigint-wrap.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	coreForeignBorrows,
@@ -1162,7 +1163,10 @@ export interface CoreStringSplitCursorCandidate extends CoreLocalSpecializationC
 
 export type CoreLocalSpecializationCandidate =
 	| (CoreLocalSpecializationCandidateBase<"numeric-fusion"> & {
-			readonly representation: "binary-pairs-f64" | "binary-pairs-truncating-i32";
+			readonly representation:
+				| "binary-pairs-f64"
+				| "binary-pairs-truncating-i32"
+				| "bigint-wrap-u64";
 	  })
 	| CoreStackObjectCandidate
 	| CoreDenseArrayCandidate
@@ -4957,7 +4961,10 @@ function discoverCandidates(
 	const addNumeric = (
 		root: CoreInstructionId,
 		instructions: ReadonlyArray<CoreInstructionId>,
-		representation: "binary-pairs-f64" | "binary-pairs-truncating-i32",
+		representation:
+			| "binary-pairs-f64"
+			| "binary-pairs-truncating-i32"
+			| "bigint-wrap-u64",
 	): void => {
 		const stableInstructions = Object.freeze([...new Set(instructions)]);
 		const key = `numeric-fusion:${functionId}:${root}:${stableInstructions.join(",")}`;
@@ -5183,6 +5190,63 @@ function discoverCandidates(
 		)
 			chain.push(next.user);
 		addNumeric(instruction, chain, "binary-pairs-f64");
+	}
+	// A wrapping BigInt chain links single-use nodes in one block and ends at the
+	// consumer that reads its value modulo 2^64; a chain without one keeps its boxes.
+	const wrapUsers = new Map<CoreInstructionId, CoreInstructionId>();
+	const wrapFinishes = new Set<CoreInstructionId>();
+	const wrapInteriors = new Set<CoreInstructionId>();
+	for (const instruction of numericInstructions) {
+		if (
+			!control.reachable.has(fn.instructionBlock(instruction)) ||
+			!coreBigIntWrapNode(fn, valueKinds(), instruction)
+		)
+			continue;
+		const output = instructionResult(fn, instruction, 0);
+		if (output === undefined || index.controlUses.has(roots.get(output) ?? output))
+			continue;
+		const uses = index.uses.get(roots.get(output) ?? output) ?? [];
+		const user = uses.length === 1 ? uses[0]!.instruction : undefined;
+		if (user === undefined) continue;
+		let matchingOperands = 0;
+		const userOperandCount = instructionOperandCount(fn, user);
+		for (let position = 0; position < userOperandCount; position++) {
+			if (instructionOperand(fn, user, position) === output) matchingOperands++;
+		}
+		const startBlock = index.locationBlocks[instruction]!;
+		if (
+			matchingOperands !== 1 ||
+			!control.reachable.has(fn.instructionBlock(user)) ||
+			startBlock < 0 ||
+			startBlock !== index.locationBlocks[user]! ||
+			index.locationIndices[instruction]! >= index.locationIndices[user]!
+		)
+			continue;
+		// A join keeps one incoming chain, so chains never share a claimed instruction;
+		// another operand node there keeps its exact boxed value.
+		if (wrapInteriors.has(user) || wrapFinishes.has(user)) continue;
+		if (coreBigIntWrapNode(fn, valueKinds(), user)) {
+			wrapInteriors.add(user);
+		} else if (
+			coreBigIntWrapFinish(program, fn, instruction, user, output) !== undefined
+		) {
+			wrapFinishes.add(user);
+		} else continue;
+		wrapUsers.set(instruction, user);
+	}
+	for (const instruction of wrapUsers.keys()) {
+		if (wrapInteriors.has(instruction)) continue;
+		const chain = [instruction];
+		for (
+			let next = wrapUsers.get(instruction);
+			next !== undefined && chain.length < NUMERIC_FUSION_CHAIN_LIMIT;
+			next = wrapUsers.get(next)
+		) {
+			chain.push(next);
+			if (wrapFinishes.has(next)) break;
+		}
+		if (wrapFinishes.has(chain.at(-1)!))
+			addNumeric(instruction, chain, "bigint-wrap-u64");
 	}
 	const values = Object.freeze(candidates);
 	return Object.freeze({

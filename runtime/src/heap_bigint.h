@@ -56,3 +56,5 @@ MalBigInt *mal_bigint_shift(MalHeap *heap, const MalBigInt *value, const MalBigI
 MalBigInt *mal_bigint_negate(MalHeap *heap, const MalBigInt *value);
 MalBigInt *mal_bigint_not(MalHeap *heap, const MalBigInt *value);
 MalBigInt *mal_bigint_width(MalHeap *heap, const MalBigInt *value, u64 bits, bool is_signed);
+/** `BigInt.asUintN`/`asIntN(width, value)` of a value known only modulo 2^64; 1 <= width <= 64. */
+MalBigInt *mal_bigint_from_wrapped(MalHeap *heap, u64 bits, u32 width, bool is_signed);

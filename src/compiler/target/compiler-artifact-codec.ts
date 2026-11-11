@@ -91,10 +91,12 @@ import {
 	validateNativeRecordCalls,
 	validateNativeLiteralSwitches,
 	validateNativeNumericSortCallback,
+	vmBigIntWrapPairIsValid,
 	vmRegionActions,
 	vmRegionActionsAreCurrent,
 	vmGuardIsWorldInvariant,
 	VM_GUARDED_BUILTIN_OPERATIONS,
+	VM_NUMERIC_FUSION_GUARDS,
 } from "./program-image.ts";
 import type {
 	NativeFunctionPlan,
@@ -122,7 +124,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 375;
+export const COMPILER_ARTIFACT_VERSION = 376;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -3068,7 +3070,7 @@ function writeCompilerArtifact(
 					}
 					break;
 				case "numeric-fusion":
-					w.u8(region.runtimeGuard === "primitive-number-operands" ? 1 : 2);
+					w.u8(NUMERIC_FUSION_GUARD_TAGS[region.runtimeGuard]);
 					w.u32(region.pairs.length);
 					for (const pair of region.pairs) {
 						w.i32(pair.firstIp);
@@ -3464,6 +3466,20 @@ function validateRegion(
 	}
 }
 
+const NUMERIC_FUSION_GUARD_TAGS: Readonly<
+	Record<Extract<VmRegion, { kind: "numeric-fusion" }>["runtimeGuard"], number>
+> = { "primitive-number-operands": 1, "int32-operands": 2, "bigint-operands": 3 };
+
+const NUMERIC_FUSION_TAGS: ReadonlyArray<
+	| Pick<Extract<VmRegion, { kind: "numeric-fusion" }>, "representation" | "runtimeGuard">
+	| undefined
+> = [
+	undefined,
+	{ representation: "binary-pairs-f64", runtimeGuard: "primitive-number-operands" },
+	{ representation: "binary-pairs-truncating-i32", runtimeGuard: "int32-operands" },
+	{ representation: "bigint-wrap-u64", runtimeGuard: "bigint-operands" },
+];
+
 function validateNumericFusionRegion(
 	fn: BytecodeFunction,
 	region: Extract<VmRegion, { kind: "numeric-fusion" }>,
@@ -3504,12 +3520,8 @@ function validateNumericFusionRegion(
 		region.license.guard.obligations[0] !== "fallback" ||
 		region.license.genericTwin !== "retained" ||
 		region.license.materialization !== "none" ||
-		(region.representation !== "binary-pairs-f64" &&
-			region.representation !== "binary-pairs-truncating-i32") ||
-		region.runtimeGuard !==
-			(region.representation === "binary-pairs-f64"
-				? "primitive-number-operands"
-				: "int32-operands") ||
+		VM_NUMERIC_FUSION_GUARDS[region.representation] === undefined ||
+		region.runtimeGuard !== VM_NUMERIC_FUSION_GUARDS[region.representation] ||
 		region.pairs.length === 0 ||
 		region.pairs.length > 32 ||
 		(region.representation === "binary-pairs-truncating-i32" &&
@@ -3525,9 +3537,19 @@ function validateNumericFusionRegion(
 		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
 		region.cost.score !== region.pairs.length ||
 		region.cost.metadataOperations !== payloadIps.length ||
-		region.pairs.some((pair) => {
+		region.pairs.some((pair, index) => {
 			const first = fn.instructions[pair.firstIp];
 			const finish = fn.instructions[pair.finishIp];
+			if (region.representation === "bigint-wrap-u64")
+				return (
+					pair.firstIp >= pair.finishIp ||
+					!vmBigIntWrapPairIsValid(
+						first,
+						finish,
+						pair.firstUsePosition,
+						index === region.pairs.length - 1,
+					)
+				);
 			return (
 				first?.opcode !== "BINARY" ||
 				finish?.opcode !== "BINARY" ||
@@ -6402,7 +6424,8 @@ function readCompilerArtifact(
 						}
 						pairs.push({ firstIp, finishIp, firstUsePosition });
 					}
-					if (runtimeGuardTag !== 1 && runtimeGuardTag !== 2) {
+					const fusion = NUMERIC_FUSION_TAGS[runtimeGuardTag];
+					if (fusion === undefined) {
 						throw new RangeError("program-image-codec: invalid numeric-fusion guard");
 					}
 					region = {
@@ -6413,15 +6436,13 @@ function readCompilerArtifact(
 							materialization: "none",
 							admission,
 						},
-						representation:
-							runtimeGuardTag === 1 ? "binary-pairs-f64" : "binary-pairs-truncating-i32",
+						representation: fusion.representation,
 						composition: "overlay",
 						anchors,
 						claimedIps,
 						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
 						cost: { score, metadataOperations },
-						runtimeGuard:
-							runtimeGuardTag === 1 ? "primitive-number-operands" : "int32-operands",
+						runtimeGuard: fusion.runtimeGuard,
 						pairs,
 					};
 				} else if (kindTag === 15) {
