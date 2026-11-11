@@ -310,6 +310,7 @@ MalValue mal_known_native_intl_locale_to_string(MalVm *vm, MalValue receiver, co
 MalValue mal_known_native_intl_locale_get_variants(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_number_format_constructor(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_number_format_get_format(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
+MalValue mal_known_native_intl_number_format_format_to_parts(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_number_format_resolved_options(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_number_format_supported_locales_of(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_plural_rules_constructor(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);

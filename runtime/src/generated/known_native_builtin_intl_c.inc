@@ -413,6 +413,15 @@ MalValue mal_known_native_intl_number_format_get_format(MalVm *vm, MalValue rece
     return mal_value_new_undefined();
 #endif
 }
+MalValue mal_known_native_intl_number_format_format_to_parts(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
+#if (MAL_INTL) && (MAL_INTL_HAS_NUMBER_FORMAT)
+    return intl_number_format_format_to_parts(vm, receiver, args, count, target, callee);
+#else
+    (void) receiver; (void) args; (void) count; (void) target; (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Known native operation is unavailable");
+    return mal_value_new_undefined();
+#endif
+}
 MalValue mal_known_native_intl_number_format_resolved_options(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
 #if (MAL_INTL) && (MAL_INTL_HAS_NUMBER_FORMAT)
     return intl_number_format_resolved_options(vm, receiver, args, count, target, callee);
