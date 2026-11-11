@@ -8908,6 +8908,18 @@ function compileForInStatement(
 			emitTdzHoleInits(program, fn, entryCursor.block, scope.bindings);
 		}
 	}
+	// Annex B: sloppy `for (var x = init in obj)` assigns its initializer, with
+	// NamedEvaluation, before evaluating the object.
+	if (
+		statement.left.type === "VariableDeclaration" &&
+		statement.left.kind === "var" &&
+		statement.left.declarations[0]?.init
+	) {
+		const head = entryCursor.block;
+		compileVariableDeclaration(program, fn, head, statement.left);
+		// The declaration manages its own cursor; re-resolve the tail block.
+		entryCursor.block = fn.blocks.at(-1) === head ? head : fn.blocks.at(-1)!;
+	}
 	const source = compileExpression(program, fn, entryCursor, statement.right);
 	if (source === -1) {
 		return;
