@@ -37761,6 +37761,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.Stats.prototype\",\"__nodeFsBigIntStats\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.Stats.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.Stats.prototype"],
+			"key": "__nodeFsBigIntStats",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.Stats.prototype\",\"isFile\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.Stats.prototype",
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.Stats.prototype"],
