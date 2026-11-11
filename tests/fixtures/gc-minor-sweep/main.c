@@ -749,6 +749,90 @@ static bool recycled_payloads_preserve_survivors_across_storage_kinds(MalHeap *h
     return true;
 }
 
+static bool minor_recycles_empty_cells_for_raw_and_other_classes(MalHeap *heap) {
+    usize per_block = cells_per_block(8192);
+    usize count = per_block * 3;
+    TestCell *cells[16];
+    CHECK(count <= countof(cells));
+    for (usize i = 0; i < count; i++) {
+        cells[i] = new_cell(heap, 8192);
+        cells[i]->owned = mal_heap_alloc_raw(heap, 64);
+        memset((u8 *) cells[i] + sizeof(TestCell), 0x53, 8192 - sizeof(TestCell));
+    }
+    MalGcBlock *first = mal_heap_cell_block(cells[0]);
+    MalGcBlock *second = mal_heap_cell_block(cells[per_block]);
+    MalGcBlock *warm = mal_heap_cell_block(cells[count - 1]);
+    CHECK(first != second && second != warm && first != warm);
+    usize size_class = first->size_class;
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->live_bytes == 0 && mal_heap_usage(heap).managed_owned_bytes == 0);
+    CHECK(mal_heap_usage(heap).raw_owned_bytes == 0);
+    CHECK(mal_heap_usage(heap).recycled_block_bytes == 2 * MAL_GC_BLOCK_SIZE);
+    CHECK(heap->cell_blocks[size_class] == warm && heap->cell_cursors[size_class].bits == 0);
+    CHECK(!warm->on_partial && heap->cell_avail[size_class] == nullptr);
+    MalHeapCellIndex index;
+    mal_heap_cell_index_init(heap, &index);
+    for (usize i = 0; i < count; i++) {
+        CHECK(g_finalized[i + 1] == 1);
+        CHECK(mal_heap_cell_index_find(&index, (uptr) cells[i]) == nullptr);
+    }
+    mal_heap_cell_index_free(&index);
+    TestCell *burst = new_cell(heap, 8192);
+    u32 burst_id = burst->id;
+    CHECK(mal_heap_cell_block(burst) == warm);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(g_finalized[burst_id] == 1 && heap->cell_blocks[size_class] == warm);
+    CHECK(!warm->on_partial && heap->cell_avail[size_class] == nullptr);
+    CHECK(heap->live_bytes == 0 && mal_heap_usage(heap).managed_owned_bytes == 0);
+    CHECK(mal_heap_usage(heap).recycled_block_bytes == 2 * MAL_GC_BLOCK_SIZE);
+    void *raw = mal_heap_alloc_raw(heap, 4096);
+    memset(raw, 0x71, 4096);
+    MalGcBlock *raw_block = mal_heap_cell_block(raw);
+    CHECK(raw_block == first || raw_block == second);
+    TestCell *live = new_cell(heap, 512);
+    u32 live_id = live->id;
+    MalGcBlock *cell_block = mal_heap_cell_block(live);
+    CHECK(cell_block != raw_block && (cell_block == first || cell_block == second));
+    mark_live(live);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    mal_heap_begin_major(heap);
+    mark_live(live);
+    mal_heap_sweep(heap, finalize_cell);
+    CHECK(live_cell(live, live_id));
+    for (usize i = 0; i < 4096; i++) CHECK(((u8 *) raw)[i] == 0x71);
+    for (usize i = 0; i < count; i++) CHECK(g_finalized[i + 1] == 1);
+    CHECK(mal_heap_usage(heap).managed_owned_bytes == mal_heap_allocation_charge(512));
+    gc_free_raw(heap, raw);
+    return true;
+}
+
+static bool minor_recycled_cells_keep_incremental_sweep_provenance(MalHeap *heap) {
+    usize count = cells_per_block(8192) * 3;
+    for (usize i = 0; i < count; i++) new_cell(heap, 8192);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(mal_heap_usage(heap).recycled_block_bytes == 2 * MAL_GC_BLOCK_SIZE);
+    mal_heap_begin_major(heap);
+    mal_heap_sweep_begin(heap);
+    mal_heap_set_black_alloc(heap, true);
+    CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
+    TestCell *a = new_cell(heap, 512);
+    TestCell *b = new_cell(heap, 1024);
+    bool a_visited = mal_heap_cell_block(a)->sweep_epoch == heap->sweep_epoch;
+    bool b_visited = mal_heap_cell_block(b)->sweep_epoch == heap->sweep_epoch;
+    CHECK(a_visited != b_visited);
+    CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
+    mal_heap_set_black_alloc(heap, false);
+    CHECK(mal_heap_usage(heap).recycled_block_bytes == MAL_GC_BLOCK_SIZE);
+    usize expected = mal_heap_allocation_charge(512) + mal_heap_allocation_charge(1024);
+    CHECK(heap->live_bytes == expected && mal_heap_usage(heap).managed_owned_bytes == expected);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->live_bytes == expected);
+    CHECK(live_cell(a, (u32) count + 1) && live_cell(b, (u32) count + 2));
+    for (usize i = 0; i < count; i++) CHECK(g_finalized[i + 1] == 1);
+    return true;
+}
+
 static bool run_check(bool (*check)(MalHeap *)) {
     MalHeap heap;
     mal_heap_init(&heap, 0);
@@ -767,6 +851,8 @@ int main(void) {
     mal_gc_test_precise_stack_roots = true;
     bool (*checks[])(MalHeap *) = {
         cell_index_rejects_unallocated_storage,
+        minor_recycles_empty_cells_for_raw_and_other_classes,
+        minor_recycled_cells_keep_incremental_sweep_provenance,
         major_reclaims_once_and_recycles_blocks,
         recycled_payloads_preserve_survivors_across_storage_kinds,
         minor_preserves_old_cells_and_free_list_members,

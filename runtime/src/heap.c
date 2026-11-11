@@ -1293,7 +1293,27 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         usize survivors = young - dead_count;
         heap->live_bytes += survivors * block->cell_size;
         block->live += (u32) survivors;
-        if (dead_count != 0) mal_gc_cell_block_available(heap, block);
+        bool empty = block->live == 0;
+        for (usize word = 0; empty && word < MAL_GC_BLOCK_WORDS; word++) {
+            empty = (g_class_cell_starts[block->size_class][word] & ~block->free_cells[word]) == 0;
+        }
+        if (empty) {
+            // Available CELL blocks have OLD survivors; only a major can empty
+            // one, and majors detach that list before reclaiming cells.
+            assert(!block->on_partial);
+            usize size_class = block->size_class;
+            // Keep the current block warm to avoid advice and refault churn
+            // during short allocation bursts in this class.
+            if (heap->cell_blocks[size_class] != block) {
+                if (heap->cell_cursors[size_class].block == block) {
+                    assert(heap->cell_cursors[size_class].bits == 0);
+                    heap->cell_cursors[size_class] = (MalHeapCellCursor) {0};
+                }
+                mal_gc_recycle_block(heap, block);
+            }
+        } else if (dead_count != 0) {
+            mal_gc_cell_block_available(heap, block);
+        }
         block = next;
     }
     MalGcLarge *large = heap->young_large;
