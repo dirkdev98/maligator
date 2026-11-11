@@ -16,19 +16,14 @@ static MalHttpCodec *codec_from_parser(llhttp_t *parser) {
     return parser->data;
 }
 
+// The header budget bounds every append except the method name added at the end.
 static bool codec_head_reserve(MalHttpCodec *codec, usize added) {
-    if (codec->head == nullptr || added > MAL_HTTP_CODEC_HEAD_MAX
-        || codec->head->arena_length > MAL_HTTP_CODEC_HEAD_MAX - added) {
-        return false;
-    }
+    if (codec->head == nullptr || codec->head->arena_length > SIZE_MAX - added) return false;
     usize required = codec->head->arena_length + added;
     if (required <= codec->head->arena_capacity) return true;
     usize capacity = codec->head->arena_capacity;
     while (capacity < required) {
-        if (capacity > MAL_HTTP_CODEC_HEAD_MAX / 2) {
-            capacity = MAL_HTTP_CODEC_HEAD_MAX;
-            break;
-        }
+        if (capacity > SIZE_MAX / 2) return false;
         capacity *= 2;
     }
     byte *arena;
@@ -48,14 +43,11 @@ static bool codec_head_reserve(MalHttpCodec *codec, usize added) {
 }
 
 static bool codec_fields_reserve(MalHttpCodecHead *head, usize required) {
-    if (required > MAL_HTTP_CODEC_FIELDS_MAX) return false;
     if (required <= head->field_capacity) return true;
     usize capacity = head->field_capacity;
     while (capacity < required) {
+        if (capacity > SIZE_MAX / 2 / sizeof(MalHttpCodecField)) return false;
         capacity *= 2;
-    }
-    if (capacity > MAL_HTTP_CODEC_FIELDS_MAX) {
-        capacity = MAL_HTTP_CODEC_FIELDS_MAX;
     }
     MalHttpCodecField *fields;
     if (head->fields == head->inline_fields) {
@@ -90,6 +82,17 @@ static int codec_fail(llhttp_t *parser, const char *reason) {
     return HPE_USER;
 }
 
+/* Node's TrackHeader: header bytes accumulate per message and fail once they reach
+ * the budget. Trailers count from a fresh total after the head completes. */
+static int codec_track_header(llhttp_t *parser, usize length) {
+    MalHttpCodec *codec = codec_from_parser(parser);
+    codec->header_bytes = length > SIZE_MAX - codec->header_bytes
+        ? SIZE_MAX : codec->header_bytes + length;
+    if (codec->header_bytes < codec->max_header_size) return 0;
+    codec->header_overflow = true;
+    return codec_fail(parser, "Header overflow");
+}
+
 static int codec_message_begin(llhttp_t *parser) {
     MalHttpCodec *codec = codec_from_parser(parser);
     if (codec->head != nullptr || codec->event_head != nullptr) {
@@ -113,6 +116,7 @@ static int codec_message_begin(llhttp_t *parser) {
     codec->head->content_length = -1;
     codec->skip_header_bytes = false;
     codec->header_name_open = false;
+    codec->header_bytes = 0;
     return 0;
 }
 
@@ -120,6 +124,8 @@ static int codec_url(llhttp_t *parser, const char *at, size_t length) {
     MalHttpCodec *codec = codec_from_parser(parser);
     MalHttpCodecHead *head = codec->head;
     if (head == nullptr) return codec_fail(parser, "HTTP URL without a head");
+    int tracked = codec_track_header(parser, length);
+    if (tracked != 0) return tracked;
     if (head->target_length == 0) head->target_offset = head->arena_length;
     if (!codec_head_append(codec, at, length, nullptr)) {
         return codec_fail(parser, "HTTP head exceeds its limit");
@@ -132,6 +138,8 @@ static int codec_status(llhttp_t *parser, const char *at, size_t length) {
     MalHttpCodec *codec = codec_from_parser(parser);
     MalHttpCodecHead *head = codec->head;
     if (head == nullptr) return codec_fail(parser, "HTTP status without a head");
+    int tracked = codec_track_header(parser, length);
+    if (tracked != 0) return tracked;
     if (head->status_length == 0) head->status_offset = head->arena_length;
     if (!codec_head_append(codec, at, length, nullptr)) {
         return codec_fail(parser, "HTTP head exceeds its limit");
@@ -142,14 +150,17 @@ static int codec_status(llhttp_t *parser, const char *at, size_t length) {
 
 static int codec_header_field(llhttp_t *parser, const char *at, size_t length) {
     MalHttpCodec *codec = codec_from_parser(parser);
+    int tracked = codec_track_header(parser, length);
+    if (tracked != 0) return tracked;
     if (codec->head == nullptr) {
         codec->skip_header_bytes = true;
         return 0;
     }
     MalHttpCodecHead *head = codec->head;
     if (!codec->header_name_open) {
-        if (head->field_count == MAL_HTTP_CODEC_FIELDS_MAX) {
-            return codec_fail(parser, "HTTP field count exceeds its limit");
+        if (head->field_count >= codec->max_header_fields) {
+            codec->header_overflow = true;
+            return codec_fail(parser, "Header overflow");
         }
         if (!codec_fields_reserve(head, head->field_count + 1)) {
             return codec_fail(parser, "HTTP field allocation failed");
@@ -160,10 +171,6 @@ static int codec_header_field(llhttp_t *parser, const char *at, size_t length) {
     }
     codec->header_name_open = true;
     MalHttpCodecField *field = &head->fields[head->field_count - 1];
-    if (length > MAL_HTTP_CODEC_FIELD_MAX
-        || field->name_length > MAL_HTTP_CODEC_FIELD_MAX - length) {
-        return codec_fail(parser, "HTTP field name exceeds its limit");
-    }
     if (!codec_head_append(codec, at, length, nullptr)) {
         return codec_fail(parser, "HTTP head exceeds its limit");
     }
@@ -179,6 +186,8 @@ static int codec_header_field_complete(llhttp_t *parser) {
 
 static int codec_header_value(llhttp_t *parser, const char *at, size_t length) {
     MalHttpCodec *codec = codec_from_parser(parser);
+    int tracked = codec_track_header(parser, length);
+    if (tracked != 0) return tracked;
     if (codec->skip_header_bytes) return 0;
     MalHttpCodecHead *head = codec->head;
     if (head == nullptr || head->field_count == 0) {
@@ -186,10 +195,6 @@ static int codec_header_value(llhttp_t *parser, const char *at, size_t length) {
     }
     MalHttpCodecField *field = &head->fields[head->field_count - 1];
     if (field->value_offset == SIZE_MAX) field->value_offset = head->arena_length;
-    if (length > MAL_HTTP_CODEC_FIELD_MAX
-        || field->value_length > MAL_HTTP_CODEC_FIELD_MAX - length) {
-        return codec_fail(parser, "HTTP field value exceeds its limit");
-    }
     if (!codec_head_append(codec, at, length, nullptr)) {
         return codec_fail(parser, "HTTP head exceeds its limit");
     }
@@ -199,6 +204,7 @@ static int codec_header_value(llhttp_t *parser, const char *at, size_t length) {
 
 static int codec_headers_complete(llhttp_t *parser) {
     MalHttpCodec *codec = codec_from_parser(parser);
+    codec->header_bytes = 0;
     MalHttpCodecHead *head = codec->head;
     if (head == nullptr) return codec_fail(parser, "HTTP headers without a head");
     const char *method = llhttp_method_name((llhttp_method_t) parser->method);
@@ -325,7 +331,17 @@ bool mal_http_codec_init(MalHttpCodec *codec, llhttp_type_t type) {
     codec->settings.on_chunk_header = codec_chunk_header;
     llhttp_init(&codec->parser, type, &codec->settings);
     codec->parser.data = codec;
+    codec->max_header_size = MAL_HTTP_CODEC_DEFAULT_HEADER_SIZE;
+    codec->max_header_fields = SIZE_MAX;
     return true;
+}
+
+void mal_http_codec_set_max_header_fields(MalHttpCodec *codec, usize fields) {
+    codec->max_header_fields = fields;
+}
+
+void mal_http_codec_set_max_header_size(MalHttpCodec *codec, usize bytes) {
+    codec->max_header_size = bytes == 0 ? MAL_HTTP_CODEC_DEFAULT_HEADER_SIZE : bytes;
 }
 
 void mal_http_codec_set_skip_body(MalHttpCodec *codec, bool skip_body) {

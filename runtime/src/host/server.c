@@ -25,6 +25,8 @@
 #define MAL_HTTP_DEFAULT_REQUEST_TIMEOUT_MS 300000u
 #define MAL_HTTP_DEFAULT_KEEP_ALIVE_TIMEOUT_MS 5000u
 #define MAL_HTTP_DEFAULT_MAX_CONNECTIONS 1024u
+// Node's parser defaults to 2000 header entries, a name and a value each.
+#define MAL_HTTP_DEFAULT_MAX_HEADER_FIELDS 1000u
 
 /*
  * Every connection is always inside exactly one armed phase, so no state can park
@@ -55,6 +57,8 @@ struct MalHttpServer {
     i64 request_timeout_ns;
     i64 keep_alive_timeout_ns;
     usize max_connections;
+    usize max_header_size;
+    usize max_header_fields;
     bool closing;
     MalHttpServerCloseCallback close_callback;
     void *close_data;
@@ -728,6 +732,8 @@ static void conn_stream_error(MalHttpConn *c) {
             return;
         }
         if (c->codec.chunk_extensions_overflow) conn_send_error(c, 413, "Payload Too Large");
+        else if (c->codec.header_overflow)
+            conn_send_error(c, 431, "Request Header Fields Too Large");
         else conn_send_error(c, 400, "Bad Request");
     } else {
         conn_close(c);
@@ -1279,6 +1285,8 @@ static void server_accept_cb(void *data) {
             continue;
         }
         c->codec_initialized = true;
+        mal_http_codec_set_max_header_size(&c->codec, server->max_header_size);
+        mal_http_codec_set_max_header_fields(&c->codec, server->max_header_fields);
 #if MAL_NODE
         if (server->tls_config != nullptr
             && (server->tls_hello != nullptr
@@ -1332,6 +1340,7 @@ static MalHttpServer *server_start(
     server->keep_alive_timeout_ns = server_timeout_ns(
         0, MAL_HTTP_DEFAULT_KEEP_ALIVE_TIMEOUT_MS);
     server->max_connections = MAL_HTTP_DEFAULT_MAX_CONNECTIONS;
+    server->max_header_fields = MAL_HTTP_DEFAULT_MAX_HEADER_FIELDS;
     server->accept_op.fd = fd;
     server->accept_op.interest = MAL_IO_READ;
     server->accept_op.waker = (MalWaker) {.fn = server_accept_cb, .data = server};
@@ -1384,6 +1393,9 @@ bool mal_http_server_configure_limits(
         limits->keep_alive_timeout_ms, MAL_HTTP_DEFAULT_KEEP_ALIVE_TIMEOUT_MS);
     server->max_connections = limits->max_connections == 0
         ? MAL_HTTP_DEFAULT_MAX_CONNECTIONS : limits->max_connections;
+    server->max_header_size = limits->max_header_size;
+    server->max_header_fields = limits->max_header_fields == 0
+        ? MAL_HTTP_DEFAULT_MAX_HEADER_FIELDS : limits->max_header_fields;
     return true;
 }
 

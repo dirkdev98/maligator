@@ -114,10 +114,13 @@ Remote names and field ordering must not populate permanent atom or shared shape
   are not exposed by a personality, it must explicitly discard that task; the host
   still parses framing correctly.
 
-The codec fixes limits at 64 KiB per start-line-plus-header block, 16 KiB per field,
-256 fields, and 64 KiB per emitted body buffer. Configurable header budgets remain
-in [the host roadmap](../../TODO.md#active-host-work). The transport streams bodies;
-adapters can impose their own buffering limits.
+Header limits follow Node. The request target or status text, field names and values
+share one byte budget per message, 16 KiB unless `maxHeaderSize` raises it, and
+trailers count against a fresh budget. A server request may also carry at most
+`maxHeadersCount` fields, 1000 by default. Reaching either limit answers 431; a client
+response that reaches the byte budget fails with `HPE_HEADER_OVERFLOW` and keeps its
+first 1000 fields otherwise. Emitted body buffers hold at most 64 KiB. The transport
+streams bodies; adapters can impose their own buffering limits.
 
 Node stream constructors and the HTTP incoming adapter reserve capacity for the
 initial state fields in the state object itself. The public `_readableState` and

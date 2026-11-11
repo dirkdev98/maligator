@@ -27,6 +27,8 @@ typedef enum MalHttpClientFailure {
     MAL_HTTP_CLIENT_FAILURE_CONNECT,
     /* Resolving the host name failed as `resolution` describes. */
     MAL_HTTP_CLIENT_FAILURE_RESOLUTION,
+    /* The response head or trailers reached the request's header budget. */
+    MAL_HTTP_CLIENT_FAILURE_HEADER_OVERFLOW,
 } MalHttpClientFailure;
 
 typedef struct MalHttpClientResult {
@@ -68,7 +70,9 @@ typedef enum MalHttpClientWriteResult {
  * `reused` reports whether the request took an idle keep-alive connection.
  *
  * timeout_ms bounds inactivity across connect, response headers, and every gap
- * between reads; zero selects the built-in default, so no request is unbounded. */
+ * between reads; zero selects the built-in default, so no request is unbounded.
+ * max_header_size bounds response header bytes as Node's maxHeaderSize; zero
+ * selects 16 KiB. */
 bool mal_http_client_start(
     MalHost *host,
     const char *host_name,
@@ -83,6 +87,7 @@ bool mal_http_client_start(
     i64 content_length,
     bool head_request,
     u32 timeout_ms,
+    usize max_header_size,
     MalHostHandle *operation,
     bool *reused);
 

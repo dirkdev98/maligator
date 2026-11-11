@@ -3,14 +3,15 @@
 #include "./defaults.h"
 #include "llhttp.h"
 
-#define MAL_HTTP_CODEC_HEAD_MAX (64 * 1024)
-#define MAL_HTTP_CODEC_FIELD_MAX (16 * 1024)
-#define MAL_HTTP_CODEC_FIELDS_MAX 256
+/* Node's default --max-http-header-size. A head's start-line target or status text,
+ * field names and values share this one byte budget, as in Node, so neither a field
+ * size nor a field count needs a separate ceiling. */
+#define MAL_HTTP_CODEC_DEFAULT_HEADER_SIZE (16 * 1024)
 #define MAL_HTTP_CODEC_BODY_MAX (64 * 1024)
 /*
- * Keep realistic request heads allocation-free without baking the protocol
- * limits into every request allocation. Both buffers spill geometrically up to
- * the hard limits above, so larger proxy/browser requests remain first-class.
+ * Keep realistic request heads allocation-free without baking the budget into every
+ * request allocation. Both buffers spill geometrically within the budget, so larger
+ * proxy/browser requests remain first-class.
  */
 #define MAL_HTTP_CODEC_INLINE_FIELDS 16
 #define MAL_HTTP_CODEC_INLINE_ARENA 1024
@@ -78,10 +79,21 @@ typedef struct MalHttpCodec {
     usize chunk_extensions_length;
     /* The request failed on Node's chunk-extension limit, which Node answers with 413. */
     bool chunk_extensions_overflow;
+    usize max_header_size;
+    usize max_header_fields;
+    usize header_bytes;
+    /* The head or trailers reached the header budget, or the head exceeded its field
+     * count, which Node answers with 431. */
+    bool header_overflow;
 } MalHttpCodec;
 
 bool mal_http_codec_init(MalHttpCodec *codec, llhttp_type_t type);
 void mal_http_codec_set_skip_body(MalHttpCodec *codec, bool skip_body);
+/* Zero selects the default budget. Applies from the next header bytes parsed. */
+void mal_http_codec_set_max_header_size(MalHttpCodec *codec, usize bytes);
+/* Fields a head may carry, as Node's maxHeadersCount; SIZE_MAX, the default, leaves
+ * only the byte budget. */
+void mal_http_codec_set_max_header_fields(MalHttpCodec *codec, usize fields);
 void mal_http_codec_free(MalHttpCodec *codec);
 
 /* Execute at most one bounded input slice. `consumed` is always relative to the

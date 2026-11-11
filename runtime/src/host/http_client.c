@@ -551,7 +551,12 @@ static void client_process_response(MalHttpClient *client) {
         client_consume_read(client, consumed);
         turn += consumed;
         if (result == MAL_HTTP_CODEC_ERROR) {
-            client_fail(client, "Malformed HTTP response");
+            if (client->codec.header_overflow) {
+                client_fail_as(client, "Parse Error: Header overflow",
+                    MAL_HTTP_CLIENT_FAILURE_HEADER_OVERFLOW);
+            } else {
+                client_fail(client, "Malformed HTTP response");
+            }
             return;
         }
         if (result == MAL_HTTP_CODEC_EVENT || consumed > 0) continue;
@@ -892,7 +897,7 @@ bool mal_http_client_start(
     const byte *ca_pem, usize ca_pem_length, const MalTlsClientIdentity *identity,
     bool keep_alive, byte *request_head,
     usize request_head_len, i64 content_length, bool head_request,
-    u32 timeout_ms, MalHostHandle *operation, bool *reused_out) {
+    u32 timeout_ms, usize max_header_size, MalHostHandle *operation, bool *reused_out) {
     if (host == nullptr || host_name == nullptr || request_head == nullptr
         || request_head_len == 0 || content_length < -1 || operation == nullptr
         || reused_out == nullptr || !mal_host_operation_start(&host->tasks, operation)) {
@@ -923,6 +928,7 @@ bool mal_http_client_start(
     client->retained_work = true;
     if (!mal_http_codec_init(&client->codec, HTTP_RESPONSE)) goto fail_client;
     mal_http_codec_set_skip_body(&client->codec, head_request);
+    mal_http_codec_set_max_header_size(&client->codec, max_header_size);
 
     const char *connection = keep_alive ? "keep-alive" : "close";
     char framing[128];

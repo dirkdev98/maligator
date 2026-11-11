@@ -42,6 +42,11 @@ typedef struct MalHttpServerLimits {
     u32 request_timeout_ms;
     u32 keep_alive_timeout_ms;
     usize max_connections;
+    /* Header bytes per message, as Node's maxHeaderSize; zero selects 16 KiB. */
+    usize max_header_size;
+    /* Header pairs per request, as Node's maxHeadersCount; zero selects Node's 1000
+     * and SIZE_MAX leaves only the byte budget. */
+    usize max_header_fields;
 } MalHttpServerLimits;
 
 /* Start listening on host:port (host numeric, null => 0.0.0.0; port 0 => ephemeral)

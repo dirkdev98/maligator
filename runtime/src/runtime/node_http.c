@@ -121,6 +121,12 @@ static const MalNodeHttpStatus http_statuses[] = {
     {511, "Network Authentication Required"},
 };
 
+/* Node's response parser keeps 2000 header entries, a name and a value each, and
+ * drops later pairs without an error. Requests past their limit fail with 431 instead. */
+#define HTTP_CLIENT_MAX_HEADER_PAIRS 1000u
+// A server limit the application left undefined or null, so the engine default applies.
+#define HTTP_LIMIT_UNSET UINT32_MAX
+
 typedef struct MalNodeHttpServerState {
     MalVm *vm;
     MalValue receiver;
@@ -132,6 +138,8 @@ typedef struct MalNodeHttpServerState {
     u32 request_timeout_ms;
     u32 keep_alive_timeout_ms;
     u32 max_connections;
+    u32 max_header_size;
+    u32 max_headers_count;
     bool listening_pending;
     bool closing;
     bool close_ready;
@@ -331,6 +339,7 @@ typedef struct MalNodeHttpClientState {
     u64 next_write_token;
     i64 content_length;
     u32 timeout_ms;
+    u32 max_header_size;
     MalValue destroy_error;
     MalValue response_destroy_error;
     bool has_content_length;
@@ -800,17 +809,18 @@ static void http_queue_request(
     const MalHttpCodecHead *head) {
     (void) vm;
     MalNodeHttpServerState *server = data;
-    if (head->field_count > (SIZE_MAX - (usize) sizeof(MalNodeHttpRequestState))
+    usize header_count = head->field_count;
+    if (header_count > (SIZE_MAX - (usize) sizeof(MalNodeHttpRequestState))
             / (usize) sizeof(MalNodeHttpCopiedHeader)) {
         goto fail;
     }
     usize snapshot_size = (usize) sizeof(MalNodeHttpRequestState)
-        + head->field_count * (usize) sizeof(MalNodeHttpCopiedHeader);
+        + header_count * (usize) sizeof(MalNodeHttpCopiedHeader);
     if (!http_request_snapshot_add_string(&snapshot_size, head->method_length)
         || !http_request_snapshot_add_string(&snapshot_size, head->target_length)) {
         goto fail;
     }
-    for (usize i = 0; i < head->field_count; i++) {
+    for (usize i = 0; i < header_count; i++) {
         const MalHttpCodecField *field = &head->fields[i];
         if (!http_request_snapshot_add_string(&snapshot_size, field->name_length)
             || !http_request_snapshot_add_string(&snapshot_size, field->value_length)) {
@@ -839,15 +849,15 @@ static void http_queue_request(
     state->method_len = head->method_length;
     state->target_len = head->target_length;
     state->minor_version = head->minor_version;
-    state->header_count = head->field_count;
-    char *cursor = (char *) &state->headers[head->field_count];
+    state->header_count = header_count;
+    char *cursor = (char *) &state->headers[header_count];
     state->method = http_request_snapshot_copy(
         &cursor, (const char *) mal_http_codec_head_method(head),
         head->method_length);
     state->target = http_request_snapshot_copy(
         &cursor, (const char *) mal_http_codec_head_target(head),
         head->target_length);
-    for (usize i = 0; i < head->field_count; i++) {
+    for (usize i = 0; i < header_count; i++) {
         const MalHttpCodecField *field = &head->fields[i];
         const char *name = (const char *) mal_http_codec_field_name(head, field);
         const char *value = (const char *) mal_http_codec_field_value(head, field);
@@ -858,7 +868,7 @@ static void http_queue_request(
         state->headers[i].value = http_request_snapshot_copy(
             &cursor, value, field->value_length);
     }
-    MAL_PERF_ADD(http_request_packed_headers, head->field_count);
+    MAL_PERF_ADD(http_request_packed_headers, header_count);
     if (http_requests_tail == nullptr) {
         http_requests = state;
     } else {
@@ -2982,7 +2992,7 @@ static bool http_client_start_request(
             request, request_len,
             content_length,
             state->method_len == 4 && memcmp(state->method, "HEAD", 4) == 0,
-            state->timeout_ms, &state->operation, &reused)) {
+            state->timeout_ms, state->max_header_size, &state->operation, &reused)) {
         free(request);
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                            "Failed to start HTTP request");
@@ -3113,6 +3123,25 @@ static bool http_client_timeout_ms(MalVm *vm, MalValue value, u32 *out) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                            "HTTP request timeout must be an integer from 1 through "
                            "2147483647 milliseconds");
+        return false;
+    }
+    *out = (u32) number;
+    return true;
+}
+
+/* Node's validateInteger(maxHeaderSize, 'maxHeaderSize', 0); zero selects the default. */
+static bool http_max_header_size(MalVm *vm, MalValue value, u32 *out) {
+    if (!mal_ops_is_number(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "The \"maxHeaderSize\" option must be of type number");
+        return false;
+    }
+    f64 number = mal_ops_number_as_f64(value);
+    if (!isfinite(number) || floor(number) != number || number < 0
+        || number > 2147483647.0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "The value of \"maxHeaderSize\" is out of range. It must be an "
+                           "integer from 0 through 2147483647");
         return false;
     }
     *out = (u32) number;
@@ -4194,10 +4223,64 @@ static bool http_incoming_header_add(
     return true;
 }
 
-static bool http_request_headers(
-    MalVm *vm, MalNodeHttpRequestState *state,
+typedef struct MalNodeHttpHeaderName {
+    const char *name;
+    usize length;
+} MalNodeHttpHeaderName;
+
+static u64 http_header_name_hash(const char *name, usize length) {
+    u64 hash = UINT64_C(0xcbf29ce484222325);
+    for (usize i = 0; i < length; i++) {
+        hash ^= mal_ascii_to_lower((u8) name[i]);
+        hash *= UINT64_C(0x100000001b3);
+    }
+    return hash;
+}
+
+/* Maps each header to the first one with its name, case-insensitively. A head can
+ * carry thousands of fields within its byte budget, so the lookup hashes rather than
+ * comparing every pair. */
+static bool http_header_first_occurrences(
+    const MalNodeHttpHeaderName *names, usize count, usize *first) {
+    usize capacity = 16;
+    while (capacity < count * 2) capacity *= 2;
+    usize *slots = malloc(capacity * sizeof(*slots));
+    if (slots == nullptr) return false;
+    for (usize i = 0; i < capacity; i++) slots[i] = SIZE_MAX;
+    for (usize i = 0; i < count; i++) {
+        usize slot = (usize) http_header_name_hash(names[i].name, names[i].length)
+            & (capacity - 1);
+        first[i] = i;
+        while (slots[slot] != SIZE_MAX) {
+            const MalNodeHttpHeaderName *seen = &names[slots[slot]];
+            if (http_header_names_equal_ci(
+                    names[i].name, names[i].length, seen->name, seen->length)) {
+                first[i] = slots[slot];
+                break;
+            }
+            slot = (slot + 1) & (capacity - 1);
+        }
+        if (first[i] == i) slots[slot] = i;
+    }
+    free(slots);
+    return true;
+}
+
+/* Builds Node's `headers` object and `rawHeaders` array; false leaves the caller to
+ * report the failure. Duplicate names share the first occurrence's key, and values
+ * join or replace as Node's addHeaderLine does. */
+static bool http_incoming_headers(
+    MalVm *vm, const MalNodeHttpHeaderName *names,
+    const MalNodeHttpHeaderName *values, usize count,
     MalValue *headers_out, MalValue *raw_headers_out) {
-    if (state->header_count > MAL_HTTP_CODEC_FIELDS_MAX) return false;
+    usize *first = malloc((count == 0 ? 1 : count) * sizeof(*first));
+    MalValue *canonical_names = malloc((count == 0 ? 1 : count) * sizeof(*canonical_names));
+    if (first == nullptr || canonical_names == nullptr
+        || !http_header_first_occurrences(names, count, first)) {
+        free(first);
+        free(canonical_names);
+        return false;
+    }
     MalValue roots[] = {
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
@@ -4205,56 +4288,56 @@ static bool http_request_headers(
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    MalValue canonical_names[MAL_HTTP_CODEC_FIELDS_MAX];
-    for (usize i = 0; i < state->header_count; i++) {
-        canonical_names[i] = mal_value_new_undefined();
-    }
+    for (usize i = 0; i < count; i++) canonical_names[i] = mal_value_new_undefined();
     MalRootSpan canonical_root;
-    mal_gc_root(&canonical_root, canonical_names, (i32) state->header_count);
+    mal_gc_root(&canonical_root, canonical_names, (i32) count);
+    bool ok = true;
     roots[0] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
     (void) mal_object_properties(mal_value_to_object(roots[0]));
     roots[1] = mal_value_from_array_object(
-        mal_intrinsic_new_dense_array(vm, (u32) (state->header_count * 2)));
+        mal_intrinsic_new_dense_array(vm, (u32) (count * 2)));
     MalArrayObject *raw = mal_value_to_array_object(roots[1]);
-    for (usize i = 0; i < state->header_count; i++) {
-        MalNodeHttpCopiedHeader *header = &state->headers[i];
-        usize canonical = i;
-        for (usize j = 0; j < i; j++) {
-            MalNodeHttpCopiedHeader *candidate = &state->headers[j];
-            if (http_header_names_equal_ci(
-                    header->name, header->name_len,
-                    candidate->name, candidate->name_len)) {
-                canonical = j;
-                break;
-            }
-        }
+    for (usize i = 0; i < count; i++) {
+        usize canonical = first[i];
         http_incoming_header_names(
-            vm, header->name, header->name_len,
+            vm, names[i].name, names[i].length,
             canonical == i ? &roots[2] : nullptr, &roots[5]);
         if (canonical != i) roots[2] = canonical_names[canonical];
         canonical_names[i] = roots[2];
-        roots[3] = http_ascii_value(vm, header->value, header->value_len);
-        if (!http_incoming_header_add(
-                vm, roots[0], roots[2], roots[3], &roots[4])) {
-            mal_gc_unroot(&canonical_root);
-            mal_gc_unroot(&root);
-            return false;
+        roots[3] = http_ascii_value(vm, values[i].name, values[i].length);
+        if (!http_incoming_header_add(vm, roots[0], roots[2], roots[3], &roots[4])) {
+            ok = false;
+            break;
         }
         roots[4] = roots[5];
-        mal_array_object_store(
-            raw,
-            mal_key_index((i32) (i * 2)),
-            roots[4]);
-        mal_array_object_store(
-            raw,
-            mal_key_index((i32) (i * 2 + 1)),
-            roots[3]);
+        mal_array_object_store(raw, mal_key_index((i32) (i * 2)), roots[4]);
+        mal_array_object_store(raw, mal_key_index((i32) (i * 2 + 1)), roots[3]);
     }
-    *headers_out = roots[0];
-    *raw_headers_out = roots[1];
+    if (ok) {
+        *headers_out = roots[0];
+        *raw_headers_out = roots[1];
+    }
     mal_gc_unroot(&canonical_root);
     mal_gc_unroot(&root);
-    return true;
+    free(canonical_names);
+    free(first);
+    return ok;
+}
+
+static bool http_request_headers(
+    MalVm *vm, MalNodeHttpRequestState *state,
+    MalValue *headers_out, MalValue *raw_headers_out) {
+    usize count = state->header_count;
+    MalNodeHttpHeaderName *names = malloc((count == 0 ? 1 : count) * 2 * sizeof(*names));
+    if (names == nullptr) return false;
+    for (usize i = 0; i < count; i++) {
+        names[i] = (MalNodeHttpHeaderName) {state->headers[i].name, state->headers[i].name_len};
+        names[count + i] =
+            (MalNodeHttpHeaderName) {state->headers[i].value, state->headers[i].value_len};
+    }
+    bool ok = http_incoming_headers(vm, names, names + count, count, headers_out, raw_headers_out);
+    free(names);
+    return ok;
 }
 
 static void http_request_fail(MalNodeHttpRequestState *state, const char *message) {
@@ -4448,6 +4531,9 @@ static MalValue http_client_failure_error(
     if (failure == MAL_HTTP_CLIENT_FAILURE_TIMEOUT) {
         return http_client_coded_error(vm, result->error, "ETIMEDOUT");
     }
+    if (failure == MAL_HTTP_CLIENT_FAILURE_HEADER_OVERFLOW) {
+        return http_client_coded_error(vm, result->error, "HPE_HEADER_OVERFLOW");
+    }
     if (failure != MAL_HTTP_CLIENT_FAILURE_SOCKET
         && failure != MAL_HTTP_CLIENT_FAILURE_CONNECT
         && failure != MAL_HTTP_CLIENT_FAILURE_RESOLUTION) {
@@ -4497,66 +4583,20 @@ static MalValue http_client_failure_error(
 static bool http_client_response_headers(
     MalVm *vm, const MalHttpCodecHead *head,
     MalValue *headers_out, MalValue *raw_headers_out) {
-    MalValue roots[] = {
-        mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(), mal_value_new_undefined(),
-    };
-    MalRootSpan root;
-    mal_gc_root(&root, roots, countof(roots));
-    MalValue canonical_names[MAL_HTTP_CODEC_FIELDS_MAX];
-    for (usize i = 0; i < head->field_count; i++) {
-        canonical_names[i] = mal_value_new_undefined();
-    }
-    MalRootSpan canonical_root;
-    mal_gc_root(&canonical_root, canonical_names, (i32) head->field_count);
-    roots[0] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
-    (void) mal_object_properties(mal_value_to_object(roots[0]));
-    roots[1] = mal_value_from_array_object(
-        mal_intrinsic_new_dense_array(vm, (u32) (head->field_count * 2)));
-    MalArrayObject *raw = mal_value_to_array_object(roots[1]);
-    for (usize i = 0; i < head->field_count; i++) {
+    usize count = head->field_count < HTTP_CLIENT_MAX_HEADER_PAIRS
+        ? head->field_count : HTTP_CLIENT_MAX_HEADER_PAIRS;
+    MalNodeHttpHeaderName *names = malloc((count == 0 ? 1 : count) * 2 * sizeof(*names));
+    if (names == nullptr) return false;
+    for (usize i = 0; i < count; i++) {
         const MalHttpCodecField *field = &head->fields[i];
-        const char *name = (const char *) mal_http_codec_field_name(head, field);
-        const char *value = (const char *) mal_http_codec_field_value(head, field);
-        usize canonical = i;
-        for (usize j = 0; j < i; j++) {
-            const MalHttpCodecField *candidate = &head->fields[j];
-            if (http_header_names_equal_ci(
-                    name, field->name_length,
-                    (const char *) mal_http_codec_field_name(head, candidate),
-                    candidate->name_length)) {
-                canonical = j;
-                break;
-            }
-        }
-        http_incoming_header_names(
-            vm, name, field->name_length,
-            canonical == i ? &roots[2] : nullptr, &roots[5]);
-        if (canonical != i) roots[2] = canonical_names[canonical];
-        canonical_names[i] = roots[2];
-        roots[3] = http_ascii_value(vm, value, field->value_length);
-        if (!http_incoming_header_add(
-                vm, roots[0], roots[2], roots[3], &roots[4])) {
-            mal_gc_unroot(&canonical_root);
-            mal_gc_unroot(&root);
-            return false;
-        }
-        roots[4] = roots[5];
-        mal_array_object_store(
-            raw,
-            mal_key_index((i32) (i * 2)),
-            roots[4]);
-        mal_array_object_store(
-            raw,
-            mal_key_index((i32) (i * 2 + 1)),
-            roots[3]);
+        names[i] = (MalNodeHttpHeaderName) {
+            (const char *) mal_http_codec_field_name(head, field), field->name_length};
+        names[count + i] = (MalNodeHttpHeaderName) {
+            (const char *) mal_http_codec_field_value(head, field), field->value_length};
     }
-    *headers_out = roots[0];
-    *raw_headers_out = roots[1];
-    mal_gc_unroot(&canonical_root);
-    mal_gc_unroot(&root);
-    return true;
+    bool ok = http_incoming_headers(vm, names, names + count, count, headers_out, raw_headers_out);
+    free(names);
+    return ok;
 }
 
 static void http_client_dispatch_write(
@@ -5123,12 +5163,25 @@ typedef enum MalNodeHttpLimit {
     HTTP_LIMIT_REQUEST_TIMEOUT,
     HTTP_LIMIT_KEEP_ALIVE_TIMEOUT,
     HTTP_LIMIT_MAX_CONNECTIONS,
+    HTTP_LIMIT_MAX_HEADER_SIZE,
+    HTTP_LIMIT_MAX_HEADERS_COUNT,
 } MalNodeHttpLimit;
 
 static const char *const http_limit_names[] = {
     "headersTimeout", "requestTimeout", "keepAliveTimeout", "maxConnections",
+    "maxHeaderSize", "maxHeadersCount",
 };
-static const u32 http_limit_defaults[] = {60000, 300000, 5000, 0};
+static const u32 http_limit_defaults[] = {
+    60000, 300000, 5000, 0, HTTP_LIMIT_UNSET, HTTP_LIMIT_UNSET,
+};
+
+/* Node leaves maxHeaderSize undefined and maxHeadersCount null until an application
+ * sets them; the engine default then applies. */
+static MalValue http_limit_value(MalNodeHttpLimit limit, u32 value) {
+    if (value != HTTP_LIMIT_UNSET) return mal_value_from_f64((f64) value);
+    return limit == HTTP_LIMIT_MAX_HEADERS_COUNT ? mal_value_new_null()
+        : mal_value_new_undefined();
+}
 
 static u32 *http_limit_field(
     MalNodeHttpServerState *state, MalNodeHttpLimit limit) {
@@ -5136,11 +5189,19 @@ static u32 *http_limit_field(
         case HTTP_LIMIT_HEADERS_TIMEOUT: return &state->headers_timeout_ms;
         case HTTP_LIMIT_REQUEST_TIMEOUT: return &state->request_timeout_ms;
         case HTTP_LIMIT_KEEP_ALIVE_TIMEOUT: return &state->keep_alive_timeout_ms;
+        case HTTP_LIMIT_MAX_HEADER_SIZE: return &state->max_header_size;
+        case HTTP_LIMIT_MAX_HEADERS_COUNT: return &state->max_headers_count;
         default: return &state->max_connections;
     }
 }
 
-static bool http_server_limit_value(MalVm *vm, MalValue value, u32 *out) {
+static bool http_server_limit_value(
+    MalVm *vm, MalNodeHttpLimit limit, MalValue value, u32 *out) {
+    if (limit == HTTP_LIMIT_MAX_HEADER_SIZE) return http_max_header_size(vm, value, out);
+    if (limit == HTTP_LIMIT_MAX_HEADERS_COUNT && mal_value_is_null(value)) {
+        *out = HTTP_LIMIT_UNSET;
+        return true;
+    }
     f64 number = mal_ops_is_number(value) ? mal_ops_number_as_f64(value) : (f64) NAN;
     if (!isfinite(number) || floor(number) != number || number < 0
         || number > 2147483647.0) {
@@ -5159,6 +5220,10 @@ static bool http_server_push_limits(MalNodeHttpServerState *state) {
         .request_timeout_ms = state->request_timeout_ms,
         .keep_alive_timeout_ms = state->keep_alive_timeout_ms,
         .max_connections = state->max_connections,
+        .max_header_size = state->max_header_size == HTTP_LIMIT_UNSET ? 0 : state->max_header_size,
+        // Node's maxHeadersCount of zero removes the count limit.
+        .max_header_fields = state->max_headers_count == HTTP_LIMIT_UNSET ? 0
+            : state->max_headers_count == 0 ? SIZE_MAX : state->max_headers_count,
     };
     return mal_http_server_configure_limits(state->native, &limits);
 }
@@ -5168,7 +5233,7 @@ static MalValue http_server_limit_get(
     (void) vm;
     MalNodeHttpServerState *state = http_server_state(receiver);
     if (state == nullptr) return mal_value_new_undefined();
-    return mal_value_from_f64((f64) *http_limit_field(state, limit));
+    return http_limit_value(limit, *http_limit_field(state, limit));
 }
 
 static MalValue http_server_limit_set(
@@ -5181,7 +5246,7 @@ static MalValue http_server_limit_set(
         return mal_value_new_undefined();
     }
     u32 parsed;
-    if (argc < 1 || !http_server_limit_value(vm, args[0], &parsed)) {
+    if (argc < 1 || !http_server_limit_value(vm, limit, args[0], &parsed)) {
         return mal_value_new_undefined();
     }
     u32 *field = http_limit_field(state, limit);
@@ -5217,17 +5282,22 @@ HTTP_SERVER_LIMIT_ACCESSORS(headers_timeout, HTTP_LIMIT_HEADERS_TIMEOUT)
 HTTP_SERVER_LIMIT_ACCESSORS(request_timeout, HTTP_LIMIT_REQUEST_TIMEOUT)
 HTTP_SERVER_LIMIT_ACCESSORS(keep_alive_timeout, HTTP_LIMIT_KEEP_ALIVE_TIMEOUT)
 HTTP_SERVER_LIMIT_ACCESSORS(max_connections, HTTP_LIMIT_MAX_CONNECTIONS)
+HTTP_SERVER_LIMIT_ACCESSORS(max_header_size, HTTP_LIMIT_MAX_HEADER_SIZE)
+HTTP_SERVER_LIMIT_ACCESSORS(max_headers_count, HTTP_LIMIT_MAX_HEADERS_COUNT)
 #undef HTTP_SERVER_LIMIT_ACCESSORS
 
 static void http_server_install_limit_accessors(MalVm *vm, MalValue receiver) {
     static const MalNativeFunctionCallback getters[] = {
         http_server_get_headers_timeout, http_server_get_request_timeout,
         http_server_get_keep_alive_timeout, http_server_get_max_connections,
+        http_server_get_max_header_size, http_server_get_max_headers_count,
     };
     static const MalNativeFunctionCallback setters[] = {
         http_server_set_headers_timeout, http_server_set_request_timeout,
         http_server_set_keep_alive_timeout, http_server_set_max_connections,
+        http_server_set_max_header_size, http_server_set_max_headers_count,
     };
+    static_assert(countof(getters) == countof(http_limit_names));
     for (usize i = 0; i < countof(http_limit_names); i++) {
         mal_intrinsic_define_accessor_n(
             vm, mal_value_to_object(receiver),
@@ -5252,7 +5322,7 @@ static bool http_server_collect_limits(
         }
         u32 parsed = http_limit_defaults[i];
         if (!mal_value_is_undefined(value)
-            && !http_server_limit_value(vm, value, &parsed)) {
+            && !http_server_limit_value(vm, (MalNodeHttpLimit) i, value, &parsed)) {
             return false;
         }
         *http_limit_field(state, (MalNodeHttpLimit) i) = parsed;
@@ -5817,7 +5887,7 @@ static MalValue http_server_constructor(
             return mal_value_new_undefined();
         }
         if (!mal_value_is_undefined(value)
-            && !http_server_limit_value(vm, value, &limits[i])) {
+            && !http_server_limit_value(vm, (MalNodeHttpLimit) i, value, &limits[i])) {
             return mal_value_new_undefined();
         }
     }
@@ -5845,7 +5915,7 @@ static MalValue http_server_constructor(
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         for (usize i = 0; i < countof(http_limit_names); i++) {
             http_define_own(vm, roots[4], http_limit_names[i],
-                            mal_value_from_f64((f64) limits[i]));
+                            http_limit_value((MalNodeHttpLimit) i, limits[i]));
         }
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW
@@ -6115,6 +6185,11 @@ static MalValue http_request_common(
     if (!http_client_option(vm, roots[0], "timeout", &roots[6])) goto fail_state;
     if (!mal_value_is_undefined(roots[6])
         && !http_client_timeout_ms(vm, roots[6], &state->timeout_ms)) {
+        goto fail_state;
+    }
+    if (!http_client_option(vm, roots[0], "maxHeaderSize", &roots[6])) goto fail_state;
+    if (!mal_value_is_undefined(roots[6])
+        && !http_max_header_size(vm, roots[6], &state->max_header_size)) {
         goto fail_state;
     }
     if (!http_client_option(vm, roots[0], "agent", &roots[6])) goto fail_state;

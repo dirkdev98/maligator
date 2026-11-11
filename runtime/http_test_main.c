@@ -441,10 +441,10 @@ int main(void) {
         if (initialized) mal_http_codec_free(&codec);
     }
 
-    // 13. A head past the codec's arena budget is refused, never truncated: a
-    // truncated head would silently drop the framing fields it was cut off at.
+    // 13. A head past the header budget is refused, never truncated: a truncated head
+    // would silently drop the framing fields it was cut off at.
     {
-        usize length = MAL_HTTP_CODEC_HEAD_MAX + 4096;
+        usize length = MAL_HTTP_CODEC_DEFAULT_HEADER_SIZE + 4096;
         char *wire = malloc(length + 1);
         check(wire != nullptr, "oversized head fixture allocates");
         if (wire != nullptr) {
@@ -457,60 +457,81 @@ int main(void) {
             usize consumed = 0;
             MalHttpCodecResult result = mal_http_codec_execute(
                 &codec, (const byte *) wire, length, &consumed);
-            check(result == MAL_HTTP_CODEC_ERROR
-                      || mal_http_codec_event(&codec) != MAL_HTTP_CODEC_EVENT_HEAD,
-                  "oversized head is refused rather than truncated");
+            check(result == MAL_HTTP_CODEC_ERROR && codec.header_overflow,
+                  "oversized head overflows rather than truncating");
             mal_http_codec_free(&codec);
         }
         free(wire);
     }
 
-    // 14. The per-field limits are the same invariant as the arena one, and llhttp
-    // 9.4.3 keeps reporting header bytes after a limit is hit. Truncating instead of
-    // failing would silently drop whichever framing header sits past the cutoff, so
-    // the two ends of the connection could frame the same bytes differently.
+    // 14. Field counts and sizes share the byte budget. llhttp 9.4.3 keeps reporting
+    // header bytes after a limit is hit, so truncating instead of failing would drop
+    // whichever framing header sits past the cutoff and let the two ends of the
+    // connection frame the same bytes differently.
     {
-        usize capacity = 32 * 1024;
+        usize capacity = 96 * 1024;
         char *wire = malloc(capacity);
-        check(wire != nullptr, "field-limit fixture allocates");
+        check(wire != nullptr, "header budget fixture allocates");
         if (wire != nullptr) {
-            usize length = (usize) snprintf(
-                wire, capacity, "POST /pad HTTP/1.1\r\nHost: x\r\n");
-            for (usize i = 0; i <= MAL_HTTP_CODEC_FIELDS_MAX && length < capacity; i++) {
-                int written = snprintf(
-                    wire + length, capacity - length, "X-Pad-%zu: v\r\n", i);
-                if (written <= 0 || (usize) written >= capacity - length) break;
-                length += (usize) written;
-            }
-            int written = snprintf(
-                wire + length, capacity - length,
-                "Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n");
-            length += written > 0 ? (usize) written : 0;
+            usize length = (usize) snprintf(wire, capacity, "POST /pad HTTP/1.1\r\nHost: x\r\n");
+            for (usize i = 0; i < 300; i++)
+                length += (usize) snprintf(wire + length, capacity - length, "X-Pad-%zu: v\r\n", i);
+            length += (usize) snprintf(wire + length, capacity - length, "Content-Length: 0\r\n\r\n");
             MalHttpCodec codec;
             mal_http_codec_init(&codec, HTTP_REQUEST);
             usize consumed = 0;
             MalHttpCodecResult result = mal_http_codec_execute(
                 &codec, (const byte *) wire, length, &consumed);
-            check(result == MAL_HTTP_CODEC_ERROR,
-                  "a framing header past the field-count limit fails the message");
+            MalHttpCodecHead *head = result == MAL_HTTP_CODEC_EVENT
+                ? mal_http_codec_take_head(&codec) : nullptr;
+            check(head != nullptr && head->field_count == 302,
+                  "fields beyond the former count ceiling fit within the budget");
+            mal_http_codec_head_free(head);
             mal_http_codec_free(&codec);
 
-            length = (usize) snprintf(
-                wire, capacity, "POST /pad HTTP/1.1\r\nHost: x\r\nX-Pad: ");
-            usize padding = MAL_HTTP_CODEC_FIELD_MAX + 16;
-            if (length + padding + 32 < capacity) {
-                memset(wire + length, 'v', padding);
-                length += padding;
-                written = snprintf(
-                    wire + length, capacity - length, "\r\nContent-Length: 0\r\n\r\n");
-                length += written > 0 ? (usize) written : 0;
-            }
+            length = (usize) snprintf(wire, capacity, "POST /pad HTTP/1.1\r\nHost: x\r\n");
+            // Only names and values count, so the raw head runs past twice the budget.
+            for (usize i = 0; length < 2 * MAL_HTTP_CODEC_DEFAULT_HEADER_SIZE; i++)
+                length += (usize) snprintf(wire + length, capacity - length, "X-Pad-%zu: v\r\n", i);
+            length += (usize) snprintf(
+                wire + length, capacity - length, "Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n");
             mal_http_codec_init(&codec, HTTP_REQUEST);
             consumed = 0;
-            result = mal_http_codec_execute(
-                &codec, (const byte *) wire, length, &consumed);
-            check(result == MAL_HTTP_CODEC_ERROR,
-                  "an over-long field value fails rather than truncating the head");
+            result = mal_http_codec_execute(&codec, (const byte *) wire, length, &consumed);
+            check(result == MAL_HTTP_CODEC_ERROR && codec.header_overflow,
+                  "a framing header past the budget fails the message");
+            mal_http_codec_free(&codec);
+
+            // Node fails once the tracked bytes reach the budget: the target, names and values.
+            for (usize extra = 0; extra < 2; extra++) {
+                // "/" and "X" are tracked with the value.
+                usize value = MAL_HTTP_CODEC_DEFAULT_HEADER_SIZE - 3 + extra;
+                length = (usize) snprintf(wire, capacity, "GET / HTTP/1.1\r\nX: ");
+                memset(wire + length, 'v', value);
+                length += value;
+                length += (usize) snprintf(wire + length, capacity - length, "\r\n\r\n");
+                mal_http_codec_init(&codec, HTTP_REQUEST);
+                consumed = 0;
+                result = mal_http_codec_execute(&codec, (const byte *) wire, length, &consumed);
+                check(extra == 0 ? result == MAL_HTTP_CODEC_EVENT : codec.header_overflow,
+                      extra == 0 ? "a head one byte under the budget parses"
+                                 : "a head reaching the budget overflows");
+                if (result == MAL_HTTP_CODEC_EVENT) mal_http_codec_head_free(mal_http_codec_take_head(&codec));
+                mal_http_codec_free(&codec);
+            }
+
+            length = (usize) snprintf(wire, capacity, "POST /pad HTTP/1.1\r\nX-Pad: ");
+            memset(wire + length, 'v', 20 * 1024);
+            length += 20 * 1024;
+            length += (usize) snprintf(wire + length, capacity - length, "\r\nContent-Length: 0\r\n\r\n");
+            mal_http_codec_init(&codec, HTTP_REQUEST);
+            mal_http_codec_set_max_header_size(&codec, 64 * 1024);
+            consumed = 0;
+            result = mal_http_codec_execute(&codec, (const byte *) wire, length, &consumed);
+            head = result == MAL_HTTP_CODEC_EVENT ? mal_http_codec_take_head(&codec) : nullptr;
+            check(head != nullptr && head->fields[0].value_length == 20 * 1024,
+                  "a raised budget accepts a field past the default size");
+            mal_http_codec_head_free(head);
             mal_http_codec_free(&codec);
         }
         free(wire);

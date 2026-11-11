@@ -327,3 +327,4 @@ tests/native/ffi-handle-sweep.test.ts
 tests/native/iterator-exhaustion.test.ts
 tests/native/gc-nursery-budget.test.ts
 tests/native/http-header-ownership.test.ts
+tests/native/http-header-budgets.test.ts
