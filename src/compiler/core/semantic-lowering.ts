@@ -3908,8 +3908,8 @@ function tryCompileImportMetaResolveCall(
 
 /**
  * Emit a module's init prologue into `block`: store the uninitialized sentinel
- * into top-level let/const/class slots (their temporal dead zone), then build
- * any `import * as ns` namespace objects.
+ * into top-level let/const/class slots and an expression or class default export
+ * (their temporal dead zone), then build any `import * as ns` namespace objects.
  */
 function emitModulePrologue(
 	program: CoreFrontendContext,
@@ -3917,7 +3917,16 @@ function emitModulePrologue(
 	block: CoreFrontendBlock,
 	file: SemanticFile,
 ) {
-	emitTdzHoleInits(program, fn, block, file.scopes[0]?.bindings ?? []);
+	const defaultBinding = program.moduleDefaultBinding.get(file.path);
+	const hoistedDefault = file.ast.body.some(
+		(statement) =>
+			statement.type === "ExportDefaultDeclaration" &&
+			statement.declaration.type === "FunctionDeclaration",
+	);
+	emitTdzHoleInits(program, fn, block, [
+		...(file.scopes[0]?.bindings ?? []),
+		...(defaultBinding === undefined || hoistedDefault ? [] : [defaultBinding]),
+	]);
 	emitImportMetaInit(program, fn, block, file);
 	for (const namespaceImport of program.namespaceImports.get(file.path) ?? []) {
 		if (namespaceImport.deferred) {
