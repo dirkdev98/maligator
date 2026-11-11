@@ -10957,7 +10957,9 @@ function compileYieldStarExpression(
 		});
 		stepAndContinue(throwMode);
 	}
-	noThrow.emitter.emit({ type: "iteratorClose", registers: [iterator] });
+	// IteratorClose with a normal completion: an error from return(), or a
+	// non-object result, replaces the TypeError below.
+	noThrow.emitter.emit({ type: "iteratorClose", registers: [iterator], normal: true });
 	{
 		const te = nextCoreVariable(fn);
 		noThrow.emitter.emit({
