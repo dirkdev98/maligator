@@ -213,14 +213,16 @@ other capacity fields; process reserve overlaps heap mappings and backing stores
 Neither is resident memory. Survivor bytes are the collector's last accounting
 baseline, including floating garbage, rather than an exact reachability census.
 
-`MAL_GC_NURSERY_MAX_BYTES` optionally bounds the allocation increment after a
-collection, with a 4 MiB minimum. Without it, the increment follows the existing
-live-set policy. It leaves explicit collection disabling and major-cycle debt
-accounting intact. An incremental major's synchronous backstop sits one increment
-past the next nursery deadline, so a cap also brings that backstop closer. A cap
-trades retained block capacity for more frequent collections and collector CPU time;
-on a large compiler heap the saved page reclamation can outweigh that and shorten
-elapsed time. Its effect on pauses, promotion and worker processes depends on the
-workload, and it applies per isolate, so it remains an explicit footprint choice.
+The allocation increment after a collection follows twice the live set, capped at
+256 MiB; `MAL_GC_NURSERY_MAX_BYTES` sets another cap of at least 4 MiB, or 0 for
+none. The cap leaves explicit collection disabling and major-cycle debt accounting
+intact. An incremental major's synchronous backstop sits one increment past the next
+nursery deadline, so a cap also brings that backstop closer. A cap trades retained
+block capacity for more frequent collections and collector CPU time. Native
+self-compile, whose live set reaches about 400 MiB, keeps its CPU and elapsed time
+under the 256 MiB cap while its peak footprint falls by a fifth and its longest minor
+pause by a third; a 64 MiB cap saves more memory for about 4% more time, so tighter
+caps stay an explicit footprint choice. Heaps with a live set under 128 MiB never
+reach the default, and the cap applies per isolate.
 Tracing perturbs execution, so ordinary time and peak RSS comparisons run
 separately from ownership diagnostics.
