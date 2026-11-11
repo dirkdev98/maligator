@@ -818,6 +818,139 @@ test("resolves wildcard package exports", () => {
 	);
 });
 
+function resolvedDependency(entry: string): string {
+	const graph = buildModuleGraph(path.join(root, entry));
+	return path.relative(
+		root,
+		graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath!,
+	);
+}
+
+function writePackage(name: string, manifest: object, files: Record<string, string>) {
+	write(
+		`node_modules/${name}/package.json`,
+		JSON.stringify({ type: "module", ...manifest }),
+	);
+	for (const [file, source] of Object.entries(files))
+		write(`node_modules/${name}/${file}`, source);
+}
+
+test("a null exports target hides the subpaths a broader pattern exposes", () => {
+	writePackage(
+		"hidden",
+		{ exports: { "./*": "./src/*.js", "./internal/*": null } },
+		{ "src/public.js": "export {};\n", "src/internal/secret.js": "export {};\n" },
+	);
+	write("hidden-public.mjs", `import "hidden/public";\n`);
+	write("hidden-internal.mjs", `import "hidden/internal/secret";\n`);
+
+	expect(resolvedDependency("hidden-public.mjs")).toBe(
+		"node_modules/hidden/src/public.js",
+	);
+	expect(() => buildModuleGraph(path.join(root, "hidden-internal.mjs"))).toThrow(
+		/not exported by hidden/,
+	);
+});
+
+test("a matching condition with a null target stops condition matching", () => {
+	writePackage(
+		"no-import",
+		{ exports: { import: null, default: "./index.js" } },
+		{ "index.js": "export {};\n" },
+	);
+	write("no-import.mjs", `import "no-import";\n`);
+
+	expect(() => buildModuleGraph(path.join(root, "no-import.mjs"))).toThrow(
+		/not exported by no-import/,
+	);
+});
+
+test("the most specific exports pattern decides without falling back", () => {
+	writePackage(
+		"specific",
+		{ exports: { "./feature/*": "./generic/*.js", "./feature/fast/*": "./fast/*.js" } },
+		{ "generic/fast/a.js": "export {};\n", "fast/a.js": "export {};\n" },
+	);
+	write("specific.mjs", `import "specific/feature/fast/a";\n`);
+
+	expect(resolvedDependency("specific.mjs")).toBe("node_modules/specific/fast/a.js");
+});
+
+test("rejects exports targets that leave the package", () => {
+	writePackage("escape", { exports: { "./*": "./*/../../outside.js" } }, {});
+	write("escape.mjs", `import "escape/x";\n`);
+
+	expect(() => buildModuleGraph(path.join(root, "escape.mjs"))).toThrow(
+		/invalid package target/,
+	);
+});
+
+test("rejects exports that mix subpaths and conditions", () => {
+	writePackage(
+		"mixed",
+		{ exports: { ".": "./index.js", import: "./index.js" } },
+		{ "index.js": "export {};\n" },
+	);
+	write("mixed.mjs", `import "mixed";\n`);
+
+	expect(() => buildModuleGraph(path.join(root, "mixed.mjs"))).toThrow(/mix subpaths/);
+});
+
+test("an exports fallback array skips invalid targets", () => {
+	writePackage(
+		"fallback",
+		{ exports: { ".": ["../outside.js", "./index.js"] } },
+		{ "index.js": "export {};\n" },
+	);
+	write("fallback.mjs", `import "fallback";\n`);
+
+	expect(resolvedDependency("fallback.mjs")).toBe("node_modules/fallback/index.js");
+});
+
+test("resolves package imports to package files and other packages", () => {
+	writePackage(
+		"imported-dep",
+		{ exports: { "./*": "./lib/*.js" } },
+		{
+			"lib/tool.js": "export {};\n",
+		},
+	);
+	write(
+		"imports-scope/package.json",
+		JSON.stringify({
+			type: "module",
+			imports: { "#config": { import: "./config.js" }, "#dep/*": "imported-dep/*" },
+		}),
+	);
+	write("imports-scope/config.js", "export {};\n");
+	write("imports-scope/local.mjs", `import "#config";\n`);
+	write("imports-scope/external.mjs", `import "#dep/tool";\n`);
+	write("imports-scope/missing.mjs", `import "#absent";\n`);
+
+	expect(resolvedDependency("imports-scope/local.mjs")).toBe("imports-scope/config.js");
+	expect(resolvedDependency("imports-scope/external.mjs")).toBe(
+		"node_modules/imported-dep/lib/tool.js",
+	);
+	expect(() => buildModuleGraph(path.join(root, "imports-scope/missing.mjs"))).toThrow(
+		/package import '#absent' is not defined/,
+	);
+});
+
+test("a package imports its own name through its exports", () => {
+	write(
+		"self-package/package.json",
+		JSON.stringify({
+			name: "self-package",
+			type: "module",
+			exports: { "./util": "./util.js" },
+		}),
+	);
+	write("self-package/util.js", "export {};\n");
+	write("self-package/main.mjs", `import "self-package/util";\n`);
+
+	expect(resolvedDependency("self-package/main.mjs")).toBe("self-package/util.js");
+});
+
 test("resolves supported node:* imports to virtual host modules (no disk read) when surface.node is on", () => {
 	write(
 		"node-host.mjs",

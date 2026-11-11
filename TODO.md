@@ -777,9 +777,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       address selection. Request options refuse unsupported direct overrides;
       globalAgent mutation does not configure the current transport.
 
-- [ ] Complete package.json exports wildcard matching, null targets, validation, and
-      remaining modern Node resolution. Test the general resolver rather than pinned
-      dependency paths.
+- [ ] Decide whether package resolution matches Node's `module-sync` condition, which
+      Node enables alongside `import` and `require` now that `require()` loads ES
+      modules. Test the general resolver rather than pinned dependency paths.
 
 - [ ] Complete observable node:http and node:net behavior beyond Express and
       postgres.js. Add socket APIs, Agent reuse, validation, lifecycle, cancellation,

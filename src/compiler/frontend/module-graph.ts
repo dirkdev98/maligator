@@ -1495,20 +1495,25 @@ function resolveSpecifier(
 	}
 
 	const importerDir = path.dirname(importerPath);
-
-	if (
-		specifier.startsWith("./") ||
-		specifier.startsWith("../") ||
-		path.isAbsolute(specifier)
-	) {
-		const base = path.isAbsolute(specifier)
-			? specifier
-			: path.resolve(importerDir, specifier);
-		const resolved = probePath(base, ctx);
-		return resolved ? { path: resolved } : { error: "no such file or directory" };
+	try {
+		if (
+			specifier.startsWith("./") ||
+			specifier.startsWith("../") ||
+			path.isAbsolute(specifier)
+		) {
+			const base = path.isAbsolute(specifier)
+				? specifier
+				: path.resolve(importerDir, specifier);
+			const resolved = probePath(base, ctx);
+			return resolved ? { path: resolved } : { error: "no such file or directory" };
+		}
+		return specifier.startsWith("#")
+			? resolvePackageImports(specifier, importerDir, ctx)
+			: resolveBareSpecifier(specifier, importerDir, ctx);
+	} catch (error) {
+		if (error instanceof PackageResolutionError) return { error: error.message };
+		throw error;
 	}
-
-	return resolveBareSpecifier(specifier, importerDir, ctx);
 }
 
 /**
@@ -1540,10 +1545,11 @@ function probePath(target: string, ctx: ResolveContext): string | null {
 function loadAsDirectory(dir: string, ctx: ResolveContext): string | null {
 	const pkg = readPackageJson(path.join(dir, "package.json"), ctx);
 
-	if (pkg?.exports !== undefined) {
+	if (pkg?.exports !== undefined && pkg.exports !== null) {
 		// The presence of `exports` encapsulates the package. A missing or invalid
 		// root target must not fall through to legacy `main`/index resolution.
-		return resolveExports(pkg.exports, ".", dir, ctx);
+		const resolved = resolveExports(pkg.exports, ".", dir, ctx);
+		return resolved !== null && isFile(resolved, ctx) ? resolved : null;
 	}
 
 	if (pkg && typeof pkg.main === "string") {
@@ -1563,9 +1569,27 @@ function loadAsDirectory(dir: string, ctx: ResolveContext): string | null {
 	return null;
 }
 
+/** An invalid package configuration, target or specifier, reported as the import's error. */
+class PackageResolutionError extends Error {}
+
 /**
- * Resolve a bare specifier (`pkg` or `pkg/subpath`, scoped or not) by walking
- * `node_modules` upward from the importing directory.
+ * The directory of the package.json that scopes `dir`, if any. A `node_modules`
+ * directory ends the walk, so a dependency never inherits its consumer's scope.
+ */
+function lookupPackageScope(dir: string, ctx: ResolveContext): string | null {
+	for (;;) {
+		if (path.basename(dir) === "node_modules") return null;
+		if (isFile(path.join(dir, "package.json"), ctx)) return dir;
+		const parent = path.dirname(dir);
+		if (parent === dir) return null;
+		dir = parent;
+	}
+}
+
+/**
+ * Resolve a bare specifier (`pkg` or `pkg/subpath`, scoped or not): a package
+ * importing its own name through `exports` first, then `node_modules` upward from the
+ * importing directory.
  */
 function resolveBareSpecifier(
 	specifier: string,
@@ -1574,11 +1598,46 @@ function resolveBareSpecifier(
 ): ResolveResult {
 	const { packageName, subpath } = splitBareSpecifier(specifier);
 
+	const scope = lookupPackageScope(importerDir, ctx);
+	const scopePackage =
+		scope === null ? null : readPackageJson(path.join(scope, "package.json"), ctx);
+	if (
+		scope !== null &&
+		scopePackage?.name === packageName &&
+		scopePackage.exports !== undefined &&
+		scopePackage.exports !== null
+	) {
+		const resolved = resolveExports(
+			scopePackage.exports,
+			subpath === "" ? "." : `./${subpath}`,
+			scope,
+			ctx,
+		);
+		return resolved === null
+			? { error: `'${specifier}' is not exported by ${packageName}` }
+			: checkedFile(resolved, specifier, ctx);
+	}
+
 	let dir = importerDir;
 	for (;;) {
 		const packageDir = path.join(dir, "node_modules", packageName);
 		if (isDirectory(packageDir, ctx)) {
-			const resolved = resolveInPackage(packageDir, subpath, ctx);
+			const pkg = readPackageJson(path.join(packageDir, "package.json"), ctx);
+			if (pkg?.exports !== undefined && pkg.exports !== null) {
+				const resolved = resolveExports(
+					pkg.exports,
+					subpath === "" ? "." : `./${subpath}`,
+					packageDir,
+					ctx,
+				);
+				return resolved === null
+					? { error: `'${specifier}' is not exported by ${packageName}` }
+					: checkedFile(resolved, specifier, ctx);
+			}
+			const resolved =
+				subpath === ""
+					? loadAsDirectory(packageDir, ctx)
+					: probePath(path.resolve(packageDir, subpath), ctx);
 			if (resolved) {
 				return { path: resolved };
 			}
@@ -1591,6 +1650,46 @@ function resolveBareSpecifier(
 		}
 		dir = parent;
 	}
+}
+
+/** A path an `exports` or `imports` target names, which is used without probing. */
+function checkedFile(
+	resolved: string,
+	request: string,
+	ctx: ResolveContext,
+): ResolveResult {
+	return isFile(resolved, ctx)
+		? { path: resolved }
+		: { error: `cannot find module '${resolved}' for '${request}'` };
+}
+
+/**
+ * Resolve a `#` specifier through the `imports` field of the importer's package
+ * scope. A target may name a file in the package or another package.
+ */
+function resolvePackageImports(
+	specifier: string,
+	importerDir: string,
+	ctx: ResolveContext,
+): ResolveResult {
+	if (specifier === "#" || specifier.startsWith("#/"))
+		return { error: `invalid package import specifier '${specifier}'` };
+	const scope = lookupPackageScope(importerDir, ctx);
+	const imports =
+		scope === null
+			? undefined
+			: readPackageJson(path.join(scope, "package.json"), ctx)?.imports;
+	if (scope !== null && isExportsObject(imports)) {
+		const resolved = resolveImportsExports(specifier, imports, scope, true, ctx);
+		if (resolved !== null && resolved !== undefined) {
+			return typeof resolved === "string"
+				? checkedFile(resolved, specifier, ctx)
+				: resolveBareSpecifier(resolved.bare, scope, ctx);
+		}
+	}
+	return {
+		error: `package import '${specifier}' is not defined${scope === null ? "" : ` by ${path.join(scope, "package.json")}`}`,
+	};
 }
 
 /**
@@ -1609,124 +1708,194 @@ function splitBareSpecifier(specifier: string): {
 	};
 }
 
-/**
- * Resolve a (possibly empty) subpath within an already-located package
- * directory.
- */
-function resolveInPackage(
-	packageDir: string,
-	subpath: string,
-	ctx: ResolveContext,
-): string | null {
-	const pkg = readPackageJson(path.join(packageDir, "package.json"), ctx);
+type ExportsField = string | null | Array<ExportsField> | { [key: string]: ExportsField };
 
-	if (subpath === "") {
-		if (pkg?.exports !== undefined) {
-			return resolveExports(pkg.exports, ".", packageDir, ctx);
-		}
-		return loadAsDirectory(packageDir, ctx);
-	}
+type ExportsObject = Readonly<Record<string, ExportsField>>;
 
-	if (pkg?.exports !== undefined) {
-		return resolveExports(pkg.exports, `./${subpath}`, packageDir, ctx);
-	}
-
-	return probePath(path.resolve(packageDir, subpath), ctx);
+function isExportsObject(value: unknown): value is ExportsObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type ExportsField = string | Array<ExportsField> | { [key: string]: ExportsField };
-
 /**
- * Resolve a subpath against a package's `exports` field.
- *
- * Handles string targets, condition objects (matched against
- * EXPORT_CONDITIONS), and flat subpath maps including wildcard patterns.
+ * PACKAGE_EXPORTS_RESOLVE: the file a subpath (`.` or `./name`) of a package with an
+ * `exports` field maps to, or null when the package does not export it.
  */
 function resolveExports(
 	exportsField: ExportsField,
 	subpath: string,
 	packageDir: string,
 	ctx: ResolveContext,
-	patternMatch?: string,
 ): string | null {
-	if (typeof exportsField === "string") {
-		return subpath === "."
-			? resolveExportTarget(exportsField, packageDir, ctx, patternMatch)
-			: null;
+	const keys = isExportsObject(exportsField) ? Object.keys(exportsField) : [];
+	const subpathKeys = keys.filter((key) => key.startsWith("."));
+	if (subpathKeys.length !== 0 && subpathKeys.length !== keys.length)
+		throw new PackageResolutionError(
+			`invalid "exports" in ${path.join(packageDir, "package.json")}: keys mix subpaths and conditions`,
+		);
+	let resolved: string | { bare: string } | null | undefined;
+	if (subpath === ".") {
+		const main = !isExportsObject(exportsField)
+			? exportsField
+			: subpathKeys.length === 0
+				? exportsField
+				: exportsField["."];
+		resolved =
+			main === undefined ? null : resolveTarget(packageDir, main, null, false, ctx);
+	} else if (isExportsObject(exportsField) && subpathKeys.length !== 0) {
+		resolved = resolveImportsExports(subpath, exportsField, packageDir, false, ctx);
 	}
+	return typeof resolved === "string" ? resolved : null;
+}
 
-	if (Array.isArray(exportsField)) {
-		for (const candidate of exportsField) {
-			const resolved = resolveExports(candidate, subpath, packageDir, ctx, patternMatch);
-			if (resolved) {
-				return resolved;
-			}
-		}
-		return null;
-	}
-
-	const keys = Object.keys(exportsField);
-	const isSubpathMap = keys.length > 0 && keys.every((key) => key.startsWith("."));
-
-	if (isSubpathMap) {
-		const target = exportsField[subpath];
-		// Resolve the matched target's conditions/string against the "." root.
-		if (target !== undefined) {
-			return resolveExports(target, ".", packageDir, ctx);
-		}
-
-		const patterns = keys
-			.filter((key) => key.includes("*"))
-			.map((key) => {
-				const star = key.indexOf("*");
-				return { key, prefix: key.slice(0, star), suffix: key.slice(star + 1) };
-			})
-			.filter(
-				({ prefix, suffix }) => subpath.startsWith(prefix) && subpath.endsWith(suffix),
-			)
-			.sort((a, b) => b.prefix.length - a.prefix.length || b.key.length - a.key.length);
-		for (const { key, prefix, suffix } of patterns) {
-			const match = subpath.slice(prefix.length, subpath.length - suffix.length);
-			const resolved = resolveExports(exportsField[key]!, ".", packageDir, ctx, match);
-			if (resolved) {
-				return resolved;
-			}
-		}
-		return null;
-	}
-
-	// A conditions object: object declaration order determines precedence. Skip
-	// unknown conditions, as Node does, rather than imposing our own priority. The
-	// `node` condition is only in ctx.conditions under surface.node.
-	for (const [condition, target] of Object.entries(exportsField)) {
-		if (ctx.conditions.has(condition)) {
-			const resolved = resolveExports(target, subpath, packageDir, ctx, patternMatch);
-			if (resolved) {
-				return resolved;
-			}
-		}
-	}
-
-	return null;
+/** PATTERN_KEY_COMPARE: longer bases first, then longer keys. */
+function comparePatternKeys(left: string, right: string): number {
+	const leftBase = left.indexOf("*") + 1 || left.length;
+	const rightBase = right.indexOf("*") + 1 || right.length;
+	if (leftBase !== rightBase) return rightBase - leftBase;
+	if (!left.includes("*")) return 1;
+	if (!right.includes("*")) return -1;
+	return right.length - left.length;
 }
 
 /**
- * An `exports` target is an exact file reference (no extension probing per the
- * Node spec) and must be relative to the package.
+ * PACKAGE_IMPORTS_EXPORTS_RESOLVE: an exact key, else the most specific single-`*`
+ * pattern. The first matching pattern decides, even when its target is null.
  */
-function resolveExportTarget(
-	target: string,
+function resolveImportsExports(
+	matchKey: string,
+	matchObject: ExportsObject,
 	packageDir: string,
+	isImports: boolean,
 	ctx: ResolveContext,
-	patternMatch?: string,
-): string | null {
-	if (!target.startsWith("./")) {
-		return null;
+): string | { bare: string } | null | undefined {
+	if (Object.hasOwn(matchObject, matchKey) && !matchKey.includes("*"))
+		return resolveTarget(packageDir, matchObject[matchKey]!, null, isImports, ctx);
+	const patterns = Object.keys(matchObject)
+		.filter((key) => {
+			const star = key.indexOf("*");
+			return star !== -1 && star === key.lastIndexOf("*");
+		})
+		.sort(comparePatternKeys);
+	for (const key of patterns) {
+		const star = key.indexOf("*");
+		const base = key.slice(0, star);
+		const trailer = key.slice(star + 1);
+		if (
+			matchKey.startsWith(base) &&
+			matchKey !== base &&
+			(trailer.length === 0 ||
+				(matchKey.endsWith(trailer) && matchKey.length >= key.length))
+		)
+			return resolveTarget(
+				packageDir,
+				matchObject[key]!,
+				matchKey.slice(base.length, matchKey.length - trailer.length),
+				isImports,
+				ctx,
+			);
 	}
-	const substituted =
-		patternMatch === undefined ? target : target.replaceAll("*", patternMatch);
-	const resolved = path.resolve(packageDir, substituted);
-	return isFile(resolved, ctx) ? resolved : null;
+	return null;
+}
+
+/** Path segments a target or pattern match may not contain, after any leading `.`. */
+function hasInvalidSegment(value: string): boolean {
+	return value.split(/[/\\]/).some((segment) => {
+		let decoded = segment;
+		try {
+			decoded = decodeURIComponent(segment);
+		} catch {
+			// An undecodable segment is not one of the reserved names.
+		}
+		return ["", ".", "..", "node_modules"].includes(decoded.toLowerCase());
+	});
+}
+
+/**
+ * PACKAGE_TARGET_RESOLVE: a file path, a bare specifier an `imports` target names, or
+ * null for an explicitly unexported target. Undefined means no condition matched,
+ * which lets an enclosing conditions object or fallback array continue.
+ */
+function resolveTarget(
+	packageDir: string,
+	target: ExportsField,
+	patternMatch: string | null,
+	isImports: boolean,
+	ctx: ResolveContext,
+): string | { bare: string } | null | undefined {
+	if (typeof target === "string") {
+		if (!target.startsWith("./")) {
+			if (
+				!isImports ||
+				target.startsWith("../") ||
+				target.startsWith("/") ||
+				URL.canParse(target)
+			)
+				throw new InvalidPackageTarget(target, packageDir);
+			return {
+				bare: patternMatch === null ? target : target.replaceAll("*", patternMatch),
+			};
+		}
+		if (hasInvalidSegment(target.slice(2)))
+			throw new InvalidPackageTarget(target, packageDir);
+		if (patternMatch === null) return path.resolve(packageDir, target);
+		if (hasInvalidSegment(patternMatch))
+			throw new PackageResolutionError(
+				`invalid subpath '${patternMatch}' for target '${target}' in ${path.join(packageDir, "package.json")}`,
+			);
+		return path.resolve(packageDir, target.replaceAll("*", patternMatch));
+	}
+	if (Array.isArray(target)) {
+		if (target.length === 0) return null;
+		let last: InvalidPackageTarget | null | undefined;
+		for (const candidate of target) {
+			let resolved: string | { bare: string } | null | undefined;
+			try {
+				resolved = resolveTarget(packageDir, candidate, patternMatch, isImports, ctx);
+			} catch (error) {
+				if (!(error instanceof InvalidPackageTarget)) throw error;
+				last = error;
+				continue;
+			}
+			if (resolved === undefined) continue;
+			if (resolved === null) {
+				last = null;
+				continue;
+			}
+			return resolved;
+		}
+		if (last instanceof InvalidPackageTarget) throw last;
+		return last;
+	}
+	if (isExportsObject(target)) {
+		const keys = Object.keys(target);
+		if (keys.some((key) => /^(0|[1-9][0-9]*)$/.test(key)))
+			throw new PackageResolutionError(
+				`invalid package configuration ${path.join(packageDir, "package.json")}: conditions cannot be numeric keys`,
+			);
+		// Declaration order decides; unknown conditions are skipped, as in Node.
+		for (const key of keys) {
+			if (key !== "default" && !ctx.conditions.has(key)) continue;
+			const resolved = resolveTarget(
+				packageDir,
+				target[key]!,
+				patternMatch,
+				isImports,
+				ctx,
+			);
+			if (resolved !== undefined) return resolved;
+		}
+		return undefined;
+	}
+	if (target === null) return null;
+	throw new InvalidPackageTarget(String(target), packageDir);
+}
+
+class InvalidPackageTarget extends PackageResolutionError {
+	constructor(target: string, packageDir: string) {
+		super(
+			`invalid package target '${target}' in ${path.join(packageDir, "package.json")}`,
+		);
+	}
 }
 
 /**
@@ -1838,9 +2007,11 @@ function staticEdges(
 }
 
 interface PackageJson {
+	name?: string;
 	type?: string;
 	main?: string;
 	exports?: ExportsField;
+	imports?: ExportsField;
 }
 
 function readPackageJson(
