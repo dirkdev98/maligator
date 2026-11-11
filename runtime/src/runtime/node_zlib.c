@@ -699,6 +699,11 @@ static MalValue zlib_transform(MalVm *vm, MalValue receiver, const MalValue *arg
 static MalValue zlib_read(MalVm *vm, MalValue receiver, const MalValue *args,
     i32 argc, MalValue nt, MalValue callee) {
     (void) args; (void) argc; (void) nt;
+    // Without a pending chunk the stream stays reading until the next write pushes
+    // output, as a Transform's does; clearing it would pull again on every turn and
+    // starve the producer's own timers and I/O.
+    MalNodeZlibObject *state = zlib_state_from_callee(callee);
+    if (!mal_value_is_callable(state->callback)) return mal_value_new_undefined();
     zlib_stream_pump(vm, zlib_slot(callee, 0), receiver);
     zlib_set(vm, receiver, "_malReading", mal_value_new_boolean(false));
     zlib_set(vm, zlib_get(vm, receiver, "_readableState"), "reading", mal_value_new_boolean(false));

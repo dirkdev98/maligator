@@ -1,4 +1,4 @@
-import { Transform } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import zlib, {
 	constants,
 	createBrotliDecompress,
@@ -152,6 +152,24 @@ async function main() {
 	check(
 		cancelledChunks === 1 && cancelledError === cancellation,
 		"destroy from a pushed chunk preserves error identity and stops pumping",
+	);
+
+	// A source that waits on a timer between blocks leaves the decoder idle; it must
+	// wait for the next write rather than pull on every turn and starve that timer.
+	async function* slowly(bytes) {
+		for (let offset = 0; offset < bytes.length; offset += 16) {
+			await new Promise((resolve) => setTimeout(resolve, 1));
+			yield bytes.subarray(offset, offset + 16);
+		}
+	}
+	const idleSource = Readable.from(slowly(Buffer.from(gzip)));
+	const idleDecoder = createGunzip({ chunkSize: 64, readableHighWaterMark: 256 });
+	idleSource.on("error", (error) => idleDecoder.destroy(error));
+	const idleChunks = [];
+	for await (const chunk of idleSource.pipe(idleDecoder)) idleChunks.push(chunk);
+	check(
+		Buffer.concat(idleChunks).toString() === "alphabeta",
+		"an idle decoder waits for a slow piped source",
 	);
 
 	console.log("RESULT " + passed + "/" + total);
