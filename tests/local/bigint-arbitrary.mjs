@@ -193,6 +193,29 @@ function exactBigIntOperations() {
 	return results;
 }
 output.push(exactBigIntOperations());
+// Limb boundaries, Karatsuba-sized and unbalanced products, self-multiplication and
+// division estimates against all-ones divisors.
+const wideShapes = [];
+for (const bits of [64n, 128n, 2047n, 2048n, 2049n, 4160n, 8256n]) {
+	const ones = (1n << bits) - 1n;
+	const mixed = ones / 3n + (1n << (bits - 1n));
+	for (const [left, right] of [
+		[ones, ones],
+		[mixed, ones],
+		[mixed, (mixed >> 700n) | 1n],
+	]) {
+		const product = left * right;
+		const square = left * left;
+		wideShapes.push(
+			(product % 1000000007n).toString(),
+			(square % 998244353n).toString(36),
+			(product / right - left).toString(),
+			((square + 12345n) % (right + 1n)).toString(16).slice(-24),
+			(-product / (left | 1n)).toString(36).slice(0, 24),
+		);
+	}
+}
+output.push(wideShapes);
 output.push(
 	retained.map((value) =>
 		typeof value === "bigint" ? value.toString() : value.value.toString(),

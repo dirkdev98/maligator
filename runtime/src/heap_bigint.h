@@ -7,24 +7,24 @@ typedef struct MalString MalString;
 
 // The bound permits checked byte sizes on every target, including wasm32.
 #define MAL_BIGINT_MAX_BITS (1u << 30)
-#define MAL_BIGINT_MAX_DIGITS (MAL_BIGINT_MAX_BITS / 32u)
+#define MAL_BIGINT_MAX_DIGITS (MAL_BIGINT_MAX_BITS / 64u)
 
-/** Immutable normalized signed magnitude. Wide dynamic digits trail their GC cell;
- * constant digits belong to the image. Inline limbs beyond digit_count are zero.
- * Zero has no digits and sign zero. */
+/** Immutable normalized signed magnitude in least-significant-first 64-bit limbs.
+ * Wide dynamic limbs trail their GC cell; constant limbs belong to the image. Inline
+ * limbs beyond digit_count are zero. Zero has no limbs and sign zero. */
 typedef struct MalBigInt {
     MalHeapHeader header;
     i32 sign;
     u32 digit_count;
     alignas(16) union {
-        u32 inline_digits[4];
-        const u32 *digits;
+        u64 inline_digits[2];
+        const u64 *digits;
     } data;
 } MalBigInt;
 
 static_assert(sizeof(MalBigInt) == 32);
 
-static inline const u32 *mal_bigint_digits(const MalBigInt *value) {
+static inline const u64 *mal_bigint_digits(const MalBigInt *value) {
     return value->digit_count <= countof(value->data.inline_digits)
         ? value->data.inline_digits : value->data.digits;
 }
@@ -32,7 +32,7 @@ static inline const u32 *mal_bigint_digits(const MalBigInt *value) {
 /** Factories return null with the owning VM's pending allocation or size exception.
  * Managed input storage must remain rooted until publication. */
 MalBigInt *mal_bigint_new(MalHeap *heap, i128 value);
-MalBigInt *mal_bigint_from_digits(MalHeap *heap, i32 sign, const u32 *digits, u32 count);
+MalBigInt *mal_bigint_from_digits(MalHeap *heap, i32 sign, const u64 *digits, u32 count);
 MalBigInt *mal_bigint_from_number(MalHeap *heap, f64 number);
 MalBigInt *mal_bigint_parse(MalHeap *heap, const c16 *units, usize length, bool *valid);
 

@@ -177,7 +177,7 @@ int main(int argc, char **argv) {
     MalRootSpan sentinel_root;
     mal_gc_root(&sentinel_root, &inventory_sentinel, 1);
     if (argc > 1 && strcmp(argv[1], "--check-bigints") == 0) {
-        u32 digits[17] = {123456789};
+        u64 digits[9] = {123456789};
         digits[countof(digits) - 1] = 1;
         for (i32 sign = 1; sign >= -1; sign--) {
             inventory_sentinel = mal_value_from_bigint(mal_bigint_from_digits(

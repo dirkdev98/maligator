@@ -2771,24 +2771,31 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
     def->bigint_constant_count = (i32) bigint_count;
     MalBigInt *bigints = arena_array(L, &r, bigint_count, sizeof(MalBigInt), alignof(MalBigInt));
     def->bigint_constants = bigints;
+    // The wire carries base-2^32 digits; pairs pack into the runtime's 64-bit limbs.
     for (u32 b = 0; r.ok && b < bigint_count; b++) {
         u32 negative = rd_u32(&r);
         u32 count = rd_count(&r, sizeof(u32));
-        if (negative > 1 || count > MAL_BIGINT_MAX_DIGITS || (count == 0 && negative != 0)) {
+        if (negative > 1 || count > 2 * MAL_BIGINT_MAX_DIGITS || (count == 0 && negative != 0)) {
             r.ok = false;
             break;
         }
+        u32 limbs = (count + 1) / 2;
         MalBigInt *bigint = &bigints[b];
         bigint->header.type = MAL_HEAP_BIGINT;
         bigint->header.storage = MAL_HEAP_STORAGE_IMMORTAL;
         bigint->sign = count == 0 ? 0 : negative != 0 ? -1 : 1;
-        bigint->digit_count = count;
+        bigint->digit_count = limbs;
         memset(bigint->data.inline_digits, 0, sizeof bigint->data.inline_digits);
-        u32 *digits = count <= 4 ? bigint->data.inline_digits
-            : arena_array(L, &r, count, sizeof(u32), alignof(u32));
-        if (count > 4) bigint->data.digits = digits;
-        for (u32 i = 0; r.ok && i < count; i++) digits[i] = rd_fixed_u32(&r);
-        if (r.ok && count != 0 && digits[count - 1] == 0) r.ok = false;
+        u64 *digits = limbs <= 2 ? bigint->data.inline_digits
+            : arena_array(L, &r, limbs, sizeof(u64), alignof(u64));
+        if (limbs > 2) bigint->data.digits = digits;
+        u32 top = 0;
+        for (u32 i = 0; r.ok && i < count; i++) {
+            top = rd_fixed_u32(&r);
+            if (i % 2 == 0) digits[i / 2] = top;
+            else digits[i / 2] |= (u64) top << 32;
+        }
+        if (r.ok && count != 0 && top == 0) r.ok = false;
     }
 
     // Packed literal-template u32 stream.

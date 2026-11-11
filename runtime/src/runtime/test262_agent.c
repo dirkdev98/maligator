@@ -61,8 +61,8 @@ static struct {
     bool bigint;
     i32 bigint_sign;
     u32 bigint_count;
-    u32 bigint_small[4];
-    u32 *bigint_digits;
+    u64 bigint_small[2];
+    u64 *bigint_digits;
     f64 number;
     Test262Report *reports;
     Test262Report *reports_tail;
@@ -166,9 +166,9 @@ static bool test262_agent_drain(MalVm *vm) {
     bool bigint = g_test262.bigint;
     u32 bigint_count = g_test262.bigint_count;
     i32 bigint_sign = g_test262.bigint_sign;
-    u32 small_digits[4];
-    usize bytes = (usize) bigint_count * sizeof(u32);
-    u32 *digits = bigint_count <= countof(small_digits) ? small_digits : malloc(bytes);
+    u64 small_digits[2];
+    usize bytes = (usize) bigint_count * sizeof(u64);
+    u64 *digits = bigint_count <= countof(small_digits) ? small_digits : malloc(bytes);
     if (digits != nullptr && bigint_count != 0)
         memcpy(digits, bigint_count <= countof(small_digits) ? g_test262.bigint_small : g_test262.bigint_digits, bytes);
     f64 number = g_test262.number;
@@ -409,9 +409,9 @@ static MalValue mal_test262_agent_broadcast(
     const MalBigInt *big = bigint ? mal_value_to_bigint(value) : nullptr;
     u32 count = bigint ? big->digit_count : 0;
     i32 sign = bigint ? big->sign : 0;
-    u32 small_digits[4];
-    usize bytes = (usize) count * sizeof(u32);
-    u32 *digits = count <= countof(small_digits) ? small_digits : malloc(bytes);
+    u64 small_digits[2];
+    usize bytes = (usize) count * sizeof(u64);
+    u64 *digits = count <= countof(small_digits) ? small_digits : malloc(bytes);
     if (digits == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
@@ -426,7 +426,7 @@ static MalValue mal_test262_agent_broadcast(
     g_test262.bigint = bigint;
     if (g_test262.bigint_count > countof(g_test262.bigint_small)) {
         free(g_test262.bigint_digits);
-        mal_gc_process_release((usize) g_test262.bigint_count * sizeof(u32));
+        mal_gc_process_release((usize) g_test262.bigint_count * sizeof(u64));
     }
     g_test262.bigint_sign = sign;
     g_test262.bigint_count = count;

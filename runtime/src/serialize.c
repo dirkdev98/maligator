@@ -460,7 +460,7 @@ static bool enc_value(SerEncoder *enc, MalValue value) {
         const MalBigInt *big = mal_value_to_bigint(value);
         return enc_u8(enc, SER_BIGINT) && enc_u8(enc, big->sign < 0 ? 1 : 0)
             && enc_u32(enc, big->digit_count)
-            && enc_put(enc, mal_bigint_digits(big), (usize) big->digit_count * sizeof(u32));
+            && enc_put(enc, mal_bigint_digits(big), (usize) big->digit_count * sizeof(u64));
     }
     if (mal_value_is_symbol(value)) {
         return enc_fail(enc, "a Symbol cannot be cloned");
@@ -1004,14 +1004,14 @@ static bool dec_value(SerDecoder *dec, MalValue *out) {
         u32 count;
         if (!dec_get(dec, &negative, 1) || !dec_u32(dec, &count) || negative > 1
             || count > MAL_BIGINT_MAX_DIGITS || (count == 0 && negative != 0)
-            || count > (dec->snap->length - dec->cursor) / sizeof(u32)) return false;
-        u32 small[4];
-        u32 *digits = count <= countof(small) ? small : malloc((usize) count * sizeof(u32));
+            || count > (dec->snap->length - dec->cursor) / sizeof(u64)) return false;
+        u64 small[2];
+        u64 *digits = count <= countof(small) ? small : malloc((usize) count * sizeof(u64));
         if (digits == nullptr) {
             mal_vm_throw_allocation_error(vm);
             return false;
         }
-        bool valid = dec_get(dec, digits, (usize) count * sizeof(u32))
+        bool valid = dec_get(dec, digits, (usize) count * sizeof(u64))
             && (count == 0 || digits[count - 1] != 0);
         MalBigInt *big = valid ? mal_bigint_from_digits(&vm->heap, negative != 0 ? -1 : 1, digits, count) : nullptr;
         if (digits != small) free(digits);

@@ -14,7 +14,7 @@ typedef struct {
     MalRuntimeImage image;
     MalFunction functions[4];
     MalInstruction instructions[4][4];
-    u32 bigint_digits[17];
+    u64 bigint_digits[9];
 } LoadedConstants;
 
 static void init_string(MalString *string, const char *text) {

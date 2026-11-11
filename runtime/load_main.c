@@ -69,9 +69,14 @@ static void dump_loaded_scalars(const MalRuntimeImage *program) {
     }
     for (i32 i = 0; i < program->bigint_constant_count; i++) {
         const MalBigInt *bigint = &program->bigint_constants[i];
-        const u32 *digits = mal_bigint_digits(bigint);
+        const u64 *digits = mal_bigint_digits(bigint);
         printf("bigint[%d] %d", i, bigint->sign);
-        for (u32 digit = 0; digit < bigint->digit_count; digit++) printf(" %08x", digits[digit]);
+        // Prints the wire's base-2^32 digits, which omit a zero high half of the top limb.
+        for (u32 limb = 0; limb < bigint->digit_count; limb++) {
+            printf(" %08x", (u32) digits[limb]);
+            if (limb + 1 < bigint->digit_count || digits[limb] >> 32 != 0)
+                printf(" %08x", (u32) (digits[limb] >> 32));
+        }
         putchar('\n');
     }
     for (i32 i = 0; i < program->literal_template_data_count; i++) {

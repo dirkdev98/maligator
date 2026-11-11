@@ -1,5 +1,5 @@
 import type { IncludedAsset } from "../../assets.ts";
-import { bigintDigits } from "../shared/bigint-digits.ts";
+import { bigintLimbs } from "../shared/bigint-digits.ts";
 import { PROBE_READ_KINDS, probeReadIsNamed } from "../shared/compiler-instruction.ts";
 import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
@@ -3710,18 +3710,16 @@ function emitBigintPool(
 		lines: Array<string> = [];
 	for (let index = 0; index < values.length; index++) {
 		const value = values[index]!,
-			digits = bigintDigits(value);
+			limbs = bigintLimbs(value).map((limb) => `UINT64_C(0x${limb.toString(16)})`);
 		const symbol = `mal_bigint_${index}_digits${suffix}`;
-		if (digits.length > 4)
-			lines.push(
-				`static const u32 ${symbol}[] = { ${digits.map((digit) => `${digit}u`).join(", ")} };`,
-			);
+		if (limbs.length > 2)
+			lines.push(`static const u64 ${symbol}[] = { ${limbs.join(", ")} };`);
 		const payload =
-			digits.length > 4
+			limbs.length > 2
 				? `.digits = ${symbol}`
-				: `.inline_digits = { ${digits.length === 0 ? "0" : digits.map((digit) => `${digit}u`).join(", ")} }`;
+				: `.inline_digits = { ${limbs.length === 0 ? "0" : limbs.join(", ")} }`;
 		rows.push(
-			`    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_BIGINT), .sign = ${value === 0n ? 0 : value < 0n ? -1 : 1}, .digit_count = ${digits.length}, .data = { ${payload} } },`,
+			`    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_BIGINT), .sign = ${value === 0n ? 0 : value < 0n ? -1 : 1}, .digit_count = ${limbs.length}, .data = { ${payload} } },`,
 		);
 	}
 	return [...lines, `${storage}MalBigInt mal_bigints${suffix}[] = {`, ...rows, "};", ""];

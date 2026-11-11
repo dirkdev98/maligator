@@ -326,16 +326,23 @@ conversion and errors even when the width is zero.
 
 ## BigInt storage and boundaries
 
-BigInts are immutable, normalized signed magnitudes with 32-bit limbs. A common
-cell stores its digits inline; wider dynamic values keep trailing digits in the
-same GC leaf allocation. Constant images own static or arena-backed digits for
-their full lifetime. Wire and cross-isolate formats carry the sign and complete
-limb sequence, rejecting negative zero and leading zero limbs.
+BigInts are immutable, normalized signed magnitudes with 64-bit limbs. A common
+cell stores up to two limbs inline; wider dynamic values keep trailing limbs in the
+same GC leaf allocation. Constant images own static or arena-backed limbs for
+their full lifetime. The wire format carries the sign and complete base-2^32 digit
+sequence, which the loader packs into limbs; cross-isolate copies carry the limbs.
+Both reject negative zero and leading zero digits.
 
 A numeric operator over two BigInt operands has an exact BigInt result kind, so
 compiled code calls the BigInt operation directly instead of generic dispatch and
 ToPrimitive. `>>>` keeps the generic path for its TypeError, and `BigInt` of a
 proven Number calls NumberToBigInt directly.
+
+Limb multiplication switches from schoolbook to Karatsuba at 32 limbs and squares
+an operand multiplied by itself with each cross product computed once. Division
+follows Knuth's algorithm D. Its quotient estimates, like conversions between
+radices, divide by a word through a precomputed reciprocal, because 64-bit targets
+such as arm64 have no 128-by-64-bit divide instruction.
 
 Checked native-width arithmetic promotes to limb operations on overflow. Parsing,
 formatting, equality, hashing and Number comparisons consume the complete value.
