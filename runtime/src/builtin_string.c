@@ -2468,6 +2468,17 @@ bool mal_builtin_string_span_repeat(
 static usize mal_builtin_string_edge_whitespace(
     const MalString *string, usize offset, usize length, bool reverse
 ) {
+    // A range in one leaf, which every flat string is, scans its units directly.
+    MalStringSegment flat;
+    if (mal_string_try_get_segment(string, offset, length, &flat)) {
+        usize count = 0;
+        while (count < length) {
+            usize index = reverse ? length - count - 1 : count;
+            if (!mal_ecma_is_string_whitespace(mal_string_segment_code_unit_at(&flat, index))) break;
+            count++;
+        }
+        return count;
+    }
     MalStringIterator iterator;
     if (reverse) mal_string_iterator_init_reverse(&iterator, string, offset, length);
     else mal_string_iterator_init(&iterator, string, offset, length);
