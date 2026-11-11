@@ -379,8 +379,8 @@ export const foldStaticFunctionNames: CoreFunctionPass = {
 };
 
 // A binding proven to hold one immutable primitive feeds it to the operations that
-// read it, so arithmetic and comparisons see a literal. The load and its TDZ check
-// stay: the proof only covers reads the check has already admitted.
+// read it, so arithmetic and comparisons see a literal, BigInt operators included. The
+// load and its TDZ check stay: the proof only covers reads the check has admitted.
 export const foldStaticBindingConstants: CoreFunctionPass = {
 	name: "fold-static-binding-constants",
 	stage: "memory",
@@ -401,6 +401,7 @@ export const foldStaticBindingConstants: CoreFunctionPass = {
 			readonly index: number;
 			readonly opcode: string;
 			readonly attributes: Readonly<Record<string, CoreAttributeValue>>;
+			readonly bigint?: bigint;
 		}> = [];
 		for (const consumer of fn.instructionIds()) {
 			if (rewrites.length >= context.remainingEdits) break;
@@ -438,19 +439,28 @@ export const foldStaticBindingConstants: CoreFunctionPass = {
 									? { opcode: "createUndefined", attributes: {} }
 									: constant.kind === "null"
 										? { opcode: "createNull", attributes: {} }
-										: undefined;
+										: constant.kind === "bigint"
+											? { opcode: "createBigint", attributes: {}, bigint: constant.value }
+											: undefined;
 				if (literal !== undefined) rewrites.push({ consumer, index, ...literal });
 			}
 		}
 		if (rewrites.length === 0) return undefined;
 		const editor = CoreEditor.open(program, fn.id);
-		for (const { consumer, index, opcode, attributes } of rewrites) {
+		for (const { consumer, index, opcode, attributes, bigint } of rewrites) {
+			let bigintIndex =
+				bigint === undefined ? -1 : program.bigintConstants.indexOf(bigint);
+			if (bigint !== undefined && bigintIndex < 0)
+				bigintIndex = editor.appendBigintConstants([bigint]);
 			const literal = editor.insertInstruction(
 				fn.instructionBlock(consumer),
 				consumer,
 				opcode,
 				[],
-				{ attributes, sourcePosition: fn.instructionSourcePosition(consumer) },
+				{
+					attributes: bigint === undefined ? attributes : { bigintIndex },
+					sourcePosition: fn.instructionSourcePosition(consumer),
+				},
 			).outputs[0]!;
 			const start = fn.kernel.instructionOperandStart(consumer);
 			const inputs = Array.from(

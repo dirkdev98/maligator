@@ -67,6 +67,19 @@
 			"controls": []
 		},
 		{
+			"id": "bigint-hash-consumer",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "bigint-arithmetic",
+			"category": "api-builtins",
+			"mechanisms": ["bigint-arithmetic"],
+			"inputShape": "FNV-1a 64 over 32-byte records and a splitmix64 stream, written as BigInt hashing libraries do.",
+			"unit": "hashed records",
+			"sourceSeam": "runtime/src/heap_bigint.c",
+			"fixture": "cases/bigint-hash-consumer.mjs",
+			"controls": ["bigint-64-arithmetic"]
+		},
+		{
 			"id": "bigint-wide-modular-arithmetic",
 			"group": "runtime",
 			"suite": "runtime",

@@ -12288,15 +12288,21 @@ class NativeInstructionEmission {
 				} else if (
 					instruction.operation === "BigInt" &&
 					first !== undefined &&
-					this.operandKind(first) === COMPILER_VALUE_KIND_NUMBER
+					((this.operandKind(first) ?? COMPILER_VALUE_KIND_TOP) &
+						COMPILER_VALUE_KIND_NUMBER) !==
+						0
 				) {
-					// NumberToBigInt owns the RangeError for a fractional or non-finite Number.
-					const exact = this.exactInt32Operand(first);
-					const number =
-						this.nativeNumberOperand(first) ??
-						`mal_ops_number_as_f64(${this.boxedOperand(first)})`;
+					// NumberToBigInt owns the RangeError for a fractional or non-finite Number;
+					// other inputs keep the generic conversion.
+					const proven = this.operandKind(first) === COMPILER_VALUE_KIND_NUMBER;
+					const exact = proven ? this.exactInt32Operand(first) : undefined;
+					const numeric = this.nativeNumberOperand(first);
+					const number = numeric ?? `mal_ops_number_as_f64(${this.boxedOperand(first)})`;
 					const result = `bigint_number_${this.ip}`;
-					guard = "true";
+					guard =
+						proven || numeric !== null
+							? "true"
+							: `mal_ops_is_number(${this.boxedOperand(first)})`;
 					direct = [
 						`MalValue ${result} = mal_value_from_bigint(${exact === undefined ? `mal_bigint_from_number(&vm->heap, ${number})` : `mal_bigint_new(&vm->heap, (i128) ${exact})`});`,
 						this.throwCheck(),
