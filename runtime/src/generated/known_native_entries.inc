@@ -275,6 +275,7 @@ MalValue mal_known_native_intl_date_time_format_constructor(MalVm *vm, MalValue 
 MalValue mal_known_native_intl_date_time_format_get_format(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_date_time_format_range(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_date_time_format_range_to_parts(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
+MalValue mal_known_native_intl_date_time_format_to_parts(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_date_time_format_resolved_options(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_date_time_format_supported_locales_of(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_display_names_constructor(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
