@@ -558,11 +558,6 @@ entropy, cancellation, and reactor completions.
 
 - [ ] Match DNS replies against the question section (2026-10-20 security audit).
 
-- [ ] Stop interning untrusted HTTP header names as VM-lifetime atoms. Incoming names
-      become property keys through `mal_property_atomize_string`, and atoms are
-      permanent roots, so a peer sending distinct names grows the atom table without
-      bound.
-
 - [ ] Honor configurable incoming HTTP header budgets across the codec and Node
       adapter, including growth beyond fixed field-size and field-count ceilings.
       Align `http.maxHeaderSize` (16 KiB) with the codec and answer

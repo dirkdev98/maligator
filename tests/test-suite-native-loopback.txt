@@ -22,3 +22,4 @@ tests/native/server.test.ts
 
 tests/native/upm-fetch-compatibility.test.ts
 tests/native/upm-https-compatibility.test.ts
+tests/native/http-header-ownership.test.ts

@@ -92,6 +92,8 @@ result and cannot address a reused operation slot.
 ### Header and framing contract
 
 The transport header list is not the WinterTC `Headers` object.
+Node incoming-header objects keep normalized names in collectable dictionary storage.
+Remote names and field ordering must not populate permanent atom or shared shape caches.
 
 - For received messages, each field is emitted in wire order with duplicate fields
   separate and the original field-name case preserved. Values exclude surrounding

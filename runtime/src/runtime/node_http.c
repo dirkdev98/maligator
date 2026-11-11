@@ -4132,7 +4132,9 @@ static bool http_incoming_header_add(
     MalValue value, MalValue *scratch) {
     MalObject *object = mal_value_to_object(headers);
     MalKey key;
-    if (!mal_vm_value_to_property_key(vm, lower_name, &key)) {
+    // Untrusted names belong to collectable tables, outside permanent atom and shape caches.
+    assert(mal_object_has_public_overflow(object));
+    if (!mal_vm_to_property_query(vm, lower_name, &key)) {
         return false;
     }
     MalString *name = key.kind == MAL_KEY_STRING
@@ -4206,9 +4208,8 @@ static bool http_request_headers(
     }
     MalRootSpan canonical_root;
     mal_gc_root(&canonical_root, canonical_names, (i32) state->header_count);
-    roots[0] = mal_value_from_object(
-        mal_object_new_reserved(&vm->heap, nullptr, (u8) (state->header_count < MAL_SHAPE_ORDINARY_SLOTS
-            ? state->header_count : MAL_SHAPE_ORDINARY_SLOTS)));
+    roots[0] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    (void) mal_object_properties(mal_value_to_object(roots[0]));
     roots[1] = mal_value_from_array_object(
         mal_intrinsic_new_dense_array(vm, (u32) (state->header_count * 2)));
     MalArrayObject *raw = mal_value_to_array_object(roots[1]);
@@ -4507,6 +4508,7 @@ static bool http_client_response_headers(
     MalRootSpan canonical_root;
     mal_gc_root(&canonical_root, canonical_names, (i32) head->field_count);
     roots[0] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    (void) mal_object_properties(mal_value_to_object(roots[0]));
     roots[1] = mal_value_from_array_object(
         mal_intrinsic_new_dense_array(vm, (u32) (head->field_count * 2)));
     MalArrayObject *raw = mal_value_to_array_object(roots[1]);
