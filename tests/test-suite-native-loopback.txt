@@ -25,3 +25,4 @@ tests/native/upm-https-compatibility.test.ts
 tests/native/http-header-ownership.test.ts
 tests/native/http-header-budgets.test.ts
 tests/native/http-pipelining.test.ts
+tests/native/http-stalled-pipeline.test.ts
