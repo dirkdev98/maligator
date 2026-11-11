@@ -569,12 +569,22 @@ static void mal_posix_fs_copy_stat(const struct stat *st, MalPosixStat *out) {
     out->rdev = (f64) st->st_rdev;
     out->blksize = (f64) st->st_blksize;
     out->blocks = (f64) st->st_blocks;
+    out->ino_bits = (u64) st->st_ino;
 #if defined(__APPLE__)
+    out->atime_ns = (i64) st->st_atimespec.tv_sec * 1000000000 + st->st_atimespec.tv_nsec;
+    out->ctime_ns = (i64) st->st_ctimespec.tv_sec * 1000000000 + st->st_ctimespec.tv_nsec;
+    out->mtime_ns = (i64) st->st_mtimespec.tv_sec * 1000000000 + st->st_mtimespec.tv_nsec;
+    out->birthtime_ns = (i64) st->st_birthtimespec.tv_sec * 1000000000
+        + st->st_birthtimespec.tv_nsec;
     out->atime_ms = (f64) st->st_atimespec.tv_sec * 1000.0 + (f64) st->st_atimespec.tv_nsec / 1.0e6;
     out->ctime_ms = (f64) st->st_ctimespec.tv_sec * 1000.0 + (f64) st->st_ctimespec.tv_nsec / 1.0e6;
     out->mtime_ms = (f64) st->st_mtimespec.tv_sec * 1000.0 + (f64) st->st_mtimespec.tv_nsec / 1.0e6;
     out->birthtime_ms = (f64) st->st_birthtimespec.tv_sec * 1000.0 + (f64) st->st_birthtimespec.tv_nsec / 1.0e6;
 #else
+    out->atime_ns = (i64) st->st_atim.tv_sec * 1000000000 + st->st_atim.tv_nsec;
+    out->ctime_ns = (i64) st->st_ctim.tv_sec * 1000000000 + st->st_ctim.tv_nsec;
+    out->mtime_ns = (i64) st->st_mtim.tv_sec * 1000000000 + st->st_mtim.tv_nsec;
+    out->birthtime_ns = out->ctime_ns;
     out->atime_ms = (f64) st->st_atim.tv_sec * 1000.0 + (f64) st->st_atim.tv_nsec / 1.0e6;
     out->ctime_ms = (f64) st->st_ctim.tv_sec * 1000.0 + (f64) st->st_ctim.tv_nsec / 1.0e6;
     out->mtime_ms = (f64) st->st_mtim.tv_sec * 1000.0 + (f64) st->st_mtim.tv_nsec / 1.0e6;

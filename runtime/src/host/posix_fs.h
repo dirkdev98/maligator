@@ -42,6 +42,13 @@ typedef struct MalPosixStat {
     f64 rdev;
     f64 blksize;
     f64 blocks;
+    // Exact nanoseconds since the epoch and inode number, which Node's BigIntStats
+    // report and doubles cannot hold.
+    i64 atime_ns;
+    i64 ctime_ns;
+    i64 mtime_ns;
+    i64 birthtime_ns;
+    u64 ino_bits;
     u32 mode;
     u32 type;     // MalPosixFileType (follows symlinks, like stat(2))
 } MalPosixStat;

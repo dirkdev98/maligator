@@ -648,11 +648,7 @@ remains a Maligator extension and does not count as global fetch conformance.
       fork IPC support. Validate Linux teardown and platform event ownership, and compare
       exit latency and idle CPU separately from API correctness.
 
-- [ ] fs: return BigIntStats for `{ bigint: true }` from stat, lstat, fstat, their
-      promise and callback forms, FileHandle.stat and watchFile, with integer fields and
-      the nanosecond `atimeNs`/`mtimeNs`/`ctimeNs`/`birthtimeNs`. The host stat carries
-      times as float milliseconds today, so it needs seconds and nanoseconds. upm hashes
-      `mtimeNs` and `ctimeNs` into its install inputs and reads `undefined` instead.
+- [ ] fs: honor watchFile's `bigint` option; its listener still receives number Stats.
 
 - [ ] fs: use FSEvents to reduce file-descriptor use for large macOS watch sets, Linux
       recursive-watch symlink entries (Node reports their events and link-target

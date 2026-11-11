@@ -60,6 +60,8 @@
 // isDirectory predicates can classify `this` without the runtime layer touching
 // any POSIX `S_IF*` bits. Non-enumerable → invisible to Object.keys / JSON / for-in.
 #define NODE_FS_TYPE_KEY "__nodeFsType"
+/* On Stats.prototype: the BigIntStats prototype that `{ bigint: true }` results use. */
+#define NODE_FS_BIGINT_STATS_KEY "__nodeFsBigIntStats"
 
 static const MalPropertyFlags NODE_FS_VISIBLE =
     MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
@@ -312,8 +314,9 @@ static MalValue node_fs_date_getter(MalVm *vm, MalValue self, const char *name) 
             &milliseconds)) {
         return mal_value_new_undefined();
     }
-    f64 value = mal_ops_is_number(milliseconds)
-        ? mal_ops_number_as_f64(milliseconds)
+    f64 value = mal_ops_is_number(milliseconds) ? mal_ops_number_as_f64(milliseconds)
+        : mal_value_is_bigint(milliseconds)
+        ? mal_bigint_to_number(mal_value_to_bigint(milliseconds))
         : NAN;
     MalValue date = mal_value_from_date_object(mal_date_object_new(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DATE_PROTOTYPE]),
@@ -363,9 +366,71 @@ NODE_FS_DATE_ACCESSORS(birthtime)
 
 #undef NODE_FS_DATE_ACCESSORS
 
-/* A Stats object over `proto` carrying Node's numeric metadata. Date properties
- * are lazily materialized by the prototype accessors from their *Ms fields. */
-static MalValue node_fs_make_stats(MalVm *vm, MalObject *proto, const MalPosixStat *st) {
+/* Milliseconds from nanoseconds, rounded toward negative infinity as Node's are. */
+static i64 node_fs_floor_ms(i64 nanoseconds) {
+    i64 milliseconds = nanoseconds / 1000000;
+    return nanoseconds % 1000000 < 0 ? milliseconds - 1 : milliseconds;
+}
+
+/* A BigIntStats object: every field a BigInt, plus nanosecond times. Its prototype
+ * derives from Stats.prototype, which holds it under NODE_FS_BIGINT_STATS_KEY. */
+static MalValue node_fs_make_bigint_stats(
+    MalVm *vm, MalObject *stats_proto, const MalPosixStat *st) {
+    MalValue proto = mal_value_new_undefined();
+    if (!mal_vm_get_property(vm, mal_value_from_object(stats_proto),
+            mal_intrinsic_string_key(vm, (const byte *) NODE_FS_BIGINT_STATS_KEY), &proto)) {
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {
+        mal_value_from_object(mal_object_new(&vm->heap,
+            mal_value_is_object(proto) ? mal_value_to_object(proto) : stats_proto)),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, countof(roots));
+    MalObject *stats = mal_value_to_object(roots[0]);
+    const struct {
+        const char *name;
+        u64 bits;
+        bool is_signed;
+    } fields[] = {
+        {"dev", (u64) (i64) st->dev, true},
+        {"mode", st->mode, false},
+        {"nlink", (u64) st->nlink, false},
+        {"uid", (u64) st->uid, false},
+        {"gid", (u64) st->gid, false},
+        {"rdev", (u64) (i64) st->rdev, true},
+        {"blksize", (u64) st->blksize, false},
+        {"ino", st->ino_bits, false},
+        {"size", (u64) (i64) st->size, true},
+        {"blocks", (u64) st->blocks, false},
+        {"atimeMs", (u64) node_fs_floor_ms(st->atime_ns), true},
+        {"mtimeMs", (u64) node_fs_floor_ms(st->mtime_ns), true},
+        {"ctimeMs", (u64) node_fs_floor_ms(st->ctime_ns), true},
+        {"birthtimeMs", (u64) node_fs_floor_ms(st->birthtime_ns), true},
+        {"atimeNs", (u64) st->atime_ns, true},
+        {"mtimeNs", (u64) st->mtime_ns, true},
+        {"ctimeNs", (u64) st->ctime_ns, true},
+        {"birthtimeNs", (u64) st->birthtime_ns, true},
+    };
+    for (usize i = 0; i < countof(fields); i++) {
+        roots[1] = mal_value_from_bigint(
+            mal_bigint_from_wrapped(&vm->heap, fields[i].bits, 64, fields[i].is_signed));
+        mal_intrinsic_define_data(
+            vm, stats, (const byte *) fields[i].name, roots[1], NODE_FS_VISIBLE);
+    }
+    mal_intrinsic_define_data(vm, stats, (const byte *) NODE_FS_TYPE_KEY,
+        mal_value_from_i32((i32) st->type), MAL_PROPERTY_NONE);
+    mal_gc_unroot(&rs);
+    return roots[0];
+}
+
+/* A Stats object over `proto` carrying Node's numeric metadata, or a BigIntStats one
+ * when `bigint` is set. Date properties are lazily materialized by the prototype
+ * accessors from their *Ms fields. */
+static MalValue node_fs_make_stats(
+    MalVm *vm, MalObject *proto, const MalPosixStat *st, bool bigint) {
+    if (bigint) return node_fs_make_bigint_stats(vm, proto, st);
     MalObject *stats = mal_object_new(&vm->heap, proto);
     MalValue v = mal_value_from_object(stats);
     MalRootSpan rs;
@@ -1442,11 +1507,25 @@ static MalValue node_fs_open_sync(
     return mal_value_from_f64((f64) fd);
 }
 
+/* A stat call's `bigint` option; absent or non-object options select number Stats. */
+static bool node_fs_bigint_option(MalVm *vm, MalValue options, bool *bigint) {
+    *bigint = false;
+    if (!mal_value_is_object(options)) return true;
+    MalValue option;
+    if (!mal_vm_get_property(vm, options,
+            mal_intrinsic_string_key(vm, (const byte *) "bigint"), &option)) {
+        return false;
+    }
+    *bigint = mal_value_is_truthy(option);
+    return true;
+}
+
 static MalValue node_fs_stat_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
     (void) nt;
     bool throw_if_no_entry = true;
+    bool bigint = false;
     if (argc > 1 && mal_value_is_object(args[1])) {
         MalValue option;
         if (!mal_vm_get_property(vm, args[1],
@@ -1454,6 +1533,7 @@ static MalValue node_fs_stat_sync(
             return mal_value_new_undefined();
         }
         throw_if_no_entry = !mal_value_is_boolean(option) || mal_value_is_truthy(option);
+        if (!node_fs_bigint_option(vm, args[1], &bigint)) return mal_value_new_undefined();
     }
     char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
     if (path == nullptr) {
@@ -1469,7 +1549,7 @@ static MalValue node_fs_stat_sync(
         return mal_value_new_undefined();
     }
     free(path);
-    return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &st);
+    return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &st, bigint);
 }
 
 static MalValue node_fs_make_statfs(MalVm *vm, const MalPosixStatFs *statfs) {
@@ -1520,13 +1600,17 @@ static MalValue node_fs_fstat_sync(
     if (!node_fs_fd(vm, argc > 0 ? args[0] : mal_value_new_undefined(), &fd)) {
         return mal_value_new_undefined();
     }
+    bool bigint;
+    if (!node_fs_bigint_option(vm, argc > 1 ? args[1] : mal_value_new_undefined(), &bigint)) {
+        return mal_value_new_undefined();
+    }
     MalPosixStat st;
     int err = mal_posix_fs_fstat(fd, &st);
     if (err != 0) {
         node_fs_throw_errno_with_dest(vm, err, "fstat", nullptr, nullptr);
         return mal_value_new_undefined();
     }
-    return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &st);
+    return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &st, bigint);
 }
 
 static MalValue node_fs_lstat_sync(
@@ -1535,6 +1619,7 @@ static MalValue node_fs_lstat_sync(
     (void) self;
     (void) nt;
     bool throw_if_no_entry = true;
+    bool bigint = false;
     if (argc > 1 && mal_value_is_object(args[1])) {
         MalValue option;
         if (!mal_vm_get_property(vm, args[1],
@@ -1542,6 +1627,7 @@ static MalValue node_fs_lstat_sync(
             return mal_value_new_undefined();
         }
         throw_if_no_entry = !mal_value_is_boolean(option) || mal_value_is_truthy(option);
+        if (!node_fs_bigint_option(vm, args[1], &bigint)) return mal_value_new_undefined();
     }
     char *path = node_fs_path_cstr(
         vm, argc >= 1 ? args[0] : mal_value_new_undefined());
@@ -1556,7 +1642,7 @@ static MalValue node_fs_lstat_sync(
         return mal_value_new_undefined();
     }
     free(path);
-    return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &st);
+    return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &st, bigint);
 }
 
 static bool node_fs_time_value(MalVm *vm, MalValue value, i64 *seconds, i64 *nanoseconds) {
@@ -3401,6 +3487,8 @@ typedef struct NodeFsJob {
     bool recursive;
     bool force;
     bool buffer_result;
+    // LSTAT and FSTAT: report BigIntStats.
+    bool bigint;
     int error;
     const char *syscall;
     NodeFsCp *cp;
@@ -3754,7 +3842,7 @@ static i32 node_fs_job_results(
             return 1;
         case NODE_FS_JOB_LSTAT:
         case NODE_FS_JOB_FSTAT:
-            out[0] = node_fs_make_stats(vm, mal_value_to_object(extra), &job->stat);
+            out[0] = node_fs_make_stats(vm, mal_value_to_object(extra), &job->stat, job->bigint);
             return 1;
         case NODE_FS_JOB_READ: {
             MalBufferSourceSpan span;
@@ -4990,10 +5078,12 @@ static bool node_fs_job_arguments(
             return true;
         case NODE_FS_JOB_LSTAT:
             *callback = optional ? a[1] : a[2];
-            return node_fs_job_path(vm, job, a[0]);
+            return (optional || node_fs_bigint_option(vm, a[1], &job->bigint))
+                && node_fs_job_path(vm, job, a[0]);
         case NODE_FS_JOB_FSTAT:
             *callback = optional ? a[1] : a[2];
-            return node_fs_fd(vm, a[0], &job->fd);
+            return (optional || node_fs_bigint_option(vm, a[1], &job->bigint))
+                && node_fs_fd(vm, a[0], &job->fd);
         case NODE_FS_JOB_REALPATH:
         case NODE_FS_JOB_REALPATH_NATIVE:
             *callback = optional ? a[1] : a[2];
@@ -5832,7 +5922,7 @@ static MalValue node_fs_stats_constructor(
         .ctime_ms = NAN,
         .birthtime_ms = NAN,
     };
-    MalValue result = node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &empty);
+    MalValue result = node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &empty, false);
     if (!mal_value_is_object(result)) return result;
     static const char *undefined_fields[] = {
         "dev", "mode", "nlink", "uid", "gid", "rdev", "blksize", "ino", "size", "blocks",
@@ -5867,7 +5957,8 @@ static MalValue node_fs_stat_task(
     int err = mal_posix_fs_stat(path, &st);
     if (err == 0) {
         roots[2] = node_fs_make_stats(
-            vm, mal_value_to_object(mal_native_function_object_get_slot(task, 2)), &st);
+            vm, mal_value_to_object(mal_native_function_object_get_slot(task, 2)), &st,
+            mal_value_is_truthy(mal_native_function_object_get_slot(task, 3)));
         MalValue callback_args[] = {mal_value_new_null(), roots[2]};
         mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), callback_args, 2);
     } else {
@@ -6021,16 +6112,25 @@ static MalValue node_fs_stat(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
     (void) nt;
-    if (argc < 2 || !mal_value_is_callable(args[1])) {
+    // fs.stat(path[, options], callback): a callable second argument is the callback.
+    bool options_given = argc > 1 && !mal_value_is_callable(args[1]);
+    MalValue callback = options_given ? (argc > 2 ? args[2] : mal_value_new_undefined())
+        : argc > 1 ? args[1] : mal_value_new_undefined();
+    if (!mal_value_is_callable(callback)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             (const byte *) "stat callback must be a function");
+        return mal_value_new_undefined();
+    }
+    bool bigint = false;
+    if (options_given && !node_fs_bigint_option(vm, args[1], &bigint)) {
         return mal_value_new_undefined();
     }
     char *path = node_fs_path_cstr(vm, args[0]);
     if (path == nullptr) return mal_value_new_undefined();
     MalValue slots[] = {
-        args[1], node_fs_string_from_cstr(vm, path),
+        callback, node_fs_string_from_cstr(vm, path),
         mal_value_from_object(node_fs_slot_proto(vm, callee)),
+        mal_value_new_boolean(bigint),
     };
     free(path);
     MalRootSpan root;
@@ -7862,8 +7962,8 @@ static MalValue node_fs_stat_watcher_poll(
     MalRootSpan root;
     mal_gc_root(&root, values, countof(values));
     MalObject *proto = mal_value_to_object(state->stats_proto);
-    values[2] = node_fs_make_stats(vm, proto, &current);
-    values[3] = node_fs_make_stats(vm, proto, &previous);
+    values[2] = node_fs_make_stats(vm, proto, &current, false);
+    values[3] = node_fs_make_stats(vm, proto, &previous, false);
     MalValue emit_args[] = {values[0], values[2], values[3]};
     node_fs_watch_call(vm, values[1], "emit", emit_args, 3);
     mal_gc_unroot(&root);
@@ -8292,6 +8392,15 @@ void mal_host_install_node_fs(
 
     MalObject *stats_proto = mal_object_new(&vm->heap, obj_proto);
     protos[0] = mal_value_from_object(stats_proto);
+    {
+        // Node's BigIntStats shares the Stats methods and date accessors.
+        MalValue bigint_proto = mal_value_from_object(mal_object_new(&vm->heap, stats_proto));
+        MalRootSpan bigint_rs;
+        mal_gc_root(&bigint_rs, &bigint_proto, 1);
+        mal_intrinsic_define_data(vm, stats_proto, (const byte *) NODE_FS_BIGINT_STATS_KEY,
+            bigint_proto, MAL_PROPERTY_NONE);
+        mal_gc_unroot(&bigint_rs);
+    }
     mal_intrinsic_define_method_n(vm, stats_proto, (const byte *) "isFile", 0, node_fs_is_file);
     mal_intrinsic_define_method_n(
         vm, stats_proto, (const byte *) "isDirectory", 0, node_fs_is_directory);
