@@ -1,11 +1,12 @@
 use crate::intl::parse_locale;
 use crate::intl_decimal::{supports_digits, DecimalProvider};
+use crate::intl_unit::{UnitFormat, UnitLocale, UnitSpec};
 use core::fmt;
 use fixed_decimal::{Decimal, RoundingIncrement, Sign, SignedRoundingMode, UnsignedRoundingMode};
 use icu_decimal::provider::{DecimalDigitsV1, DecimalSymbolsV1};
 use icu_provider::prelude::*;
 use std::cell::RefCell;
-use writeable::{PartsWrite, Writeable};
+use writeable::Writeable;
 
 struct NumberProvider {
     decimal: DecimalProvider,
@@ -25,12 +26,20 @@ impl DataProvider<DecimalDigitsV1> for NumberProvider {
     }
 }
 
+struct NumberUnit {
+    identifier: String,
+    width: i32,
+    formatter: UnitFormat,
+    plurals: icu_plurals::PluralRules,
+}
+
 struct NumberPlan {
     formatter: icu_decimal::DecimalFormatter,
     symbols: DataPayload<DecimalSymbolsV1>,
     locale: String,
     numbering: Box<DataMarkerAttributes>,
     style: i32,
+    unit: Option<NumberUnit>,
     min_integer: i32,
     min_fraction: i32,
     max_fraction: i32,
@@ -54,6 +63,12 @@ impl NumberPlan {
             numbering_len: self.numbering.as_str().len(),
             heap_bytes: self.heap_bytes(),
             style: self.style,
+            unit: self
+                .unit
+                .as_ref()
+                .map_or(core::ptr::null(), |unit| unit.identifier.as_ptr()),
+            unit_len: self.unit.as_ref().map_or(0, |unit| unit.identifier.len()),
+            unit_display: self.unit.as_ref().map_or(1, |unit| unit.width),
             min_integer: self.min_integer,
             min_fraction: self.min_fraction,
             max_fraction: self.max_fraction,
@@ -85,7 +100,12 @@ impl NumberPlan {
     }
 
     fn heap_bytes(&self) -> usize {
-        core::mem::size_of::<Self>() + self.locale.capacity() + self.numbering.as_str().len()
+        core::mem::size_of::<Self>()
+            + self.locale.capacity()
+            + self.numbering.as_str().len()
+            + self.unit.as_ref().map_or(0, |unit| {
+                unit.identifier.capacity() + unit.formatter.heap_bytes()
+            })
     }
 
     fn decimal(&self, text: &[u8]) -> Result<Decimal, i32> {
@@ -251,6 +271,9 @@ pub struct MalI18nNumberResolved {
     numbering_len: usize,
     heap_bytes: usize,
     style: i32,
+    unit: *const u8,
+    unit_len: usize,
+    unit_display: i32,
     min_integer: i32,
     min_fraction: i32,
     max_fraction: i32,
@@ -285,6 +308,9 @@ pub unsafe extern "C" fn mal_i18n_number_formatter_new(
     numbering_ptr: *const u8,
     numbering_len: usize,
     style: i32,
+    unit_ptr: *const u8,
+    unit_len: usize,
+    unit_display: i32,
     min_integer: i32,
     min_fraction: i32,
     max_fraction: i32,
@@ -372,12 +398,41 @@ pub unsafe extern "C" fn mal_i18n_number_formatter_new(
         25 => RoundingIncrement::MultiplesOf25,
         _ => return core::ptr::null_mut(),
     };
+    let unit = if style == 3 {
+        let bytes = unsafe { crate::ffi::nullable_slice(unit_ptr, unit_len) };
+        let Ok(identifier) = core::str::from_utf8(bytes) else {
+            return core::ptr::null_mut();
+        };
+        let Some(spec) = UnitSpec::parse(identifier) else {
+            return core::ptr::null_mut();
+        };
+        if !(0..=2).contains(&unit_display) {
+            return core::ptr::null_mut();
+        }
+        let data_locale = UnitLocale::new(&locale);
+        let Ok(plural_locale) = data_locale.locale.parse::<icu_locale::Locale>() else {
+            return core::ptr::null_mut();
+        };
+        let Ok(plurals) = icu_plurals::PluralRules::try_new_cardinal((&plural_locale).into())
+        else {
+            return core::ptr::null_mut();
+        };
+        Some(NumberUnit {
+            identifier: identifier.into(),
+            width: unit_display,
+            formatter: UnitFormat::new(data_locale, spec, unit_display as usize),
+            plurals,
+        })
+    } else {
+        None
+    };
     let plan = Box::new(NumberPlan {
         formatter,
         symbols,
         locale: resolved_locale.to_string(),
         numbering,
         style,
+        unit,
         min_integer,
         min_fraction,
         max_fraction,
@@ -399,105 +454,7 @@ pub unsafe extern "C" fn mal_i18n_number_formatter_new(
     Box::into_raw(plan).cast()
 }
 
-#[repr(C)]
-pub struct MalI18nNumberPart {
-    start: usize,
-    len: usize,
-    kind: i32,
-}
-
-struct Sink<'a> {
-    out: &'a mut [u16],
-    spans: &'a mut [MalI18nNumberPart],
-    track: bool,
-    written: usize,
-    start: usize,
-    count: usize,
-    kind: i32,
-}
-impl Sink<'_> {
-    fn flush(&mut self) {
-        if self.track && self.written > self.start {
-            if let Some(part) = self.spans.get_mut(self.count) {
-                *part = MalI18nNumberPart {
-                    start: self.start,
-                    len: self.written - self.start,
-                    kind: self.kind,
-                };
-            }
-            self.count += 1;
-        }
-        self.start = self.written;
-    }
-    fn tagged(&mut self, kind: i32, write: impl FnOnce(&mut Self) -> fmt::Result) -> fmt::Result {
-        if !self.track || kind == self.kind {
-            return write(self);
-        }
-        self.flush();
-        let previous = self.kind;
-        self.kind = kind;
-        write(self)?;
-        self.flush();
-        self.kind = previous;
-        Ok(())
-    }
-}
-impl fmt::Write for Sink<'_> {
-    fn write_str(&mut self, text: &str) -> fmt::Result {
-        let kind = self.kind;
-        for ch in text.chars() {
-            let bidi = matches!(ch, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
-            let next = if (kind == 5 || kind == 6) && bidi {
-                0
-            } else {
-                kind
-            };
-            if self.track && next != self.kind {
-                self.flush();
-                self.kind = next;
-            }
-            for unit in ch.encode_utf16(&mut [0; 2]) {
-                if self.written >= i32::MAX as usize {
-                    return Err(fmt::Error);
-                }
-                if let Some(slot) = self.out.get_mut(self.written) {
-                    *slot = *unit;
-                }
-                self.written += 1;
-            }
-        }
-        if self.track && self.kind != kind {
-            self.flush();
-            self.kind = kind;
-        }
-        Ok(())
-    }
-}
-impl PartsWrite for Sink<'_> {
-    type SubPartsWrite = Self;
-    fn with_part(
-        &mut self,
-        part: writeable::Part,
-        mut write: impl FnMut(&mut Self) -> fmt::Result,
-    ) -> fmt::Result {
-        let kind = if part == icu_decimal::parts::INTEGER {
-            1
-        } else if part == icu_decimal::parts::GROUP {
-            2
-        } else if part == icu_decimal::parts::DECIMAL {
-            3
-        } else if part == icu_decimal::parts::FRACTION {
-            4
-        } else if part == icu_decimal::parts::MINUS_SIGN {
-            5
-        } else if part == icu_decimal::parts::PLUS_SIGN {
-            6
-        } else {
-            return write(self);
-        };
-        self.tagged(kind, |sink| write(sink))
-    }
-}
+use crate::intl_parts::{MalI18nNumericPart, Sink};
 
 fn radix_decimal(text: &[u8], radix: u32) -> Option<String> {
     let raw = text.get(2..)?;
@@ -540,7 +497,7 @@ pub unsafe extern "C" fn mal_i18n_number_formatter_format(
     radix: u32,
     out: *mut u16,
     out_cap: usize,
-    spans: *mut MalI18nNumberPart,
+    spans: *mut MalI18nNumericPart,
     spans_cap: usize,
     spans_needed: *mut usize,
 ) -> i32 {
@@ -583,8 +540,9 @@ pub unsafe extern "C" fn mal_i18n_number_formatter_format(
         start: 0,
         count: 0,
         kind: 0,
+        unit: -1,
     };
-    let decimal = if kind < 3 {
+    let mut decimal = if kind < 3 {
         match plan.decimal(if kind == 2 { b"-0" } else { token }) {
             Ok(decimal) => Some(decimal),
             Err(special) if special >= 3 => {
@@ -596,38 +554,54 @@ pub unsafe extern "C" fn mal_i18n_number_formatter_format(
     } else {
         None
     };
-    let result = if kind >= 3 {
-        let mut value = Decimal::from(if kind == 5 { -1 } else { 1 });
-        if kind == 3 {
-            value = Decimal::from(0);
-        }
-        value.apply_sign_display(crate::intl::sign_display_from_code(plan.sign_display));
-        let (prefix, suffix, sign_kind) = match value.sign {
-            Sign::Negative => (
-                plan.symbols.get().strings.minus_sign_prefix(),
-                plan.symbols.get().strings.minus_sign_suffix(),
-                5,
-            ),
-            Sign::Positive => (
-                plan.symbols.get().strings.plus_sign_prefix(),
-                plan.symbols.get().strings.plus_sign_suffix(),
-                6,
-            ),
-            _ => ("", "", 0),
-        };
-        use fmt::Write;
-        sink.tagged(sign_kind, |s| s.write_str(prefix))
-            .and_then(|_| {
-                sink.tagged(if kind == 3 { 7 } else { 8 }, |s| {
-                    s.write_str(if kind == 3 { "NaN" } else { "∞" })
+    if let Some(decimal) = &mut decimal {
+        plan.round(decimal);
+    }
+    let numeric = |sink: &mut Sink<'_>| {
+        if kind >= 3 {
+            let mut value = Decimal::from(if kind == 5 { -1 } else { 1 });
+            if kind == 3 {
+                value = Decimal::from(0);
+            }
+            value.apply_sign_display(crate::intl::sign_display_from_code(plan.sign_display));
+            let (prefix, suffix, sign_kind) = match value.sign {
+                Sign::Negative => (
+                    plan.symbols.get().strings.minus_sign_prefix(),
+                    plan.symbols.get().strings.minus_sign_suffix(),
+                    5,
+                ),
+                Sign::Positive => (
+                    plan.symbols.get().strings.plus_sign_prefix(),
+                    plan.symbols.get().strings.plus_sign_suffix(),
+                    6,
+                ),
+                _ => ("", "", 0),
+            };
+            use fmt::Write;
+            sink.tagged(sign_kind, |s| s.write_str(prefix))
+                .and_then(|_| {
+                    sink.tagged(if kind == 3 { 7 } else { 8 }, |s| {
+                        s.write_str(if kind == 3 { "NaN" } else { "∞" })
+                    })
                 })
-            })
-            .and_then(|_| sink.tagged(sign_kind, |s| s.write_str(suffix)))
-    } else {
-        let mut decimal = decimal.unwrap();
-        plan.round(&mut decimal);
-        plan.formatter.format(&decimal).write_to_parts(&mut sink)
+                .and_then(|_| sink.tagged(sign_kind, |s| s.write_str(suffix)))
+        } else {
+            plan.formatter
+                .format(decimal.as_ref().unwrap())
+                .write_to_parts(sink)
+        }
     };
+    let result = if let Some(unit) = &plan.unit {
+        let category = decimal
+            .as_ref()
+            .map_or(icu_plurals::PluralCategory::Other, |decimal| {
+                unit.plurals.category_for(decimal)
+            });
+        unit.formatter.write(category, &mut sink, numeric)
+    } else {
+        numeric(&mut sink)
+    };
+
     if result.is_err() {
         return -1;
     }

@@ -202,6 +202,21 @@ Resolved options are materialized from the native plan on request, so constructi
 does not allocate a private JavaScript metadata object. Text and numeric parts share
 UTF-16 output spans, including supplementary numbering-system digits.
 
+NumberFormat and DurationFormat share generated CLDR unit patterns and a UTF-16 parts
+writer. The generator verifies pinned unit, parent-locale and grammatical inputs before
+emitting deduplicated text and index tables. Published compound patterns take priority;
+other ratios compose the denominator's per pattern or its grammatically derived label.
+Plural forms can encode an amount in the unit word itself. Parts follow pattern boundaries
+without parsing localized output; duration fields retain their singular unit on numeric
+and label parts, while list and clock separators carry no field association.
+
+Regenerate from the pinned upstream `cldr-json` source tree:
+
+```sh
+node scripts/generate-intl-unit-data.ts /path/to/cldr-json \
+  runtime/rust/src/intl_unit_data.rs runtime/src/intl_unit_ids.h
+```
+
 Decimal digits come from checksum-pinned CLDR supplemental numbering-system data.
 `scripts/generate-intl-digit-data.ts` generates the Rust table from
 `numberingSystems.json`. Numeric systems use their published scalar sequences;

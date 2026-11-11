@@ -1,38 +1,22 @@
 use crate::intl_decimal::{supports_digits, DecimalProvider};
 use core::fmt;
 use icu_decimal::input::Decimal;
-use icu_experimental::dimension::provider::units::{
-    categorized_display_names::*, display_names::UnitsDisplayNames,
-};
 use icu_experimental::duration::{provider::*, DurationFormatterPreferences};
-use icu_provider::marker::ErasedMarker;
 use icu_provider::prelude::*;
 use writeable::Writeable;
 
 use crate::intl::parse_locale;
-
-const NAMES: [&str; 10] = [
-    "year",
-    "month",
-    "week",
-    "day",
-    "hour",
-    "minute",
-    "second",
-    "millisecond",
-    "microsecond",
-    "nanosecond",
-];
-type Patterns = DataPayload<ErasedMarker<UnitsDisplayNames<'static>>>;
+use crate::intl_parts::{duration_unit, MalI18nNumericPart, Sink, DURATION_UNITS};
+use crate::intl_unit::{UnitFormat, UnitLocale, UnitSpec};
 
 struct DurationPlan {
-    prefs: DurationFormatterPreferences,
     decimal: icu_decimal::DecimalFormatter,
     digital_decimal: icu_decimal::DecimalFormatter,
     plurals: icu_plurals::PluralRules,
     list: icu_list::ListFormatter,
     digital: DataPayload<UnitsDurationDigitalV1>,
-    patterns: [Option<Patterns>; 10],
+    unit_locale: UnitLocale,
+    patterns: [Option<UnitFormat>; 10],
     styles: [u8; 10],
     displays: [u8; 10],
     fractional_digits: i32,
@@ -42,43 +26,19 @@ struct DurationPlan {
 
 impl DurationPlan {
     fn heap_bytes(&self) -> usize {
-        // Compiled provider payloads borrow static data, including lazy unit patterns.
+        // Lazy unit preparation borrows generated data and adds no owned allocations.
         core::mem::size_of::<Self>() + self.locale.capacity() + self.numbering.as_str().len()
     }
 
-    fn load_pattern(&mut self, unit: usize) -> Result<(), DataError> {
-        if self.patterns[unit].is_some() {
-            return Ok(());
+    fn load_pattern(&mut self, unit: usize) {
+        if self.patterns[unit].is_none() {
+            let spec = UnitSpec::parse(DURATION_UNITS[unit]).unwrap();
+            self.patterns[unit] = Some(UnitFormat::new(
+                self.unit_locale,
+                spec,
+                self.styles[unit] as usize,
+            ));
         }
-        let width = match self.styles[unit] {
-            0 => "long",
-            1 => "short",
-            _ => "narrow",
-        };
-        let attribute = format!("{width}-{}", NAMES[unit]);
-        let locale = UnitsNamesDurationCoreV1::make_locale(self.prefs.locale_preferences);
-        let request = DataRequest {
-            id: DataIdentifierBorrowed::for_marker_attributes_and_locale(
-                DataMarkerAttributes::from_str_or_panic(&attribute),
-                &locale,
-            ),
-            ..Default::default()
-        };
-        macro_rules! load {
-            ($marker:ty) => {
-                <icu_experimental::provider::Baked as DataProvider<$marker>>::load(
-                    &icu_experimental::provider::Baked,
-                    request,
-                )
-                .map(|response| response.payload.cast())
-            };
-        }
-        self.patterns[unit] = Some(
-            load!(UnitsNamesDurationCoreV1)
-                .or_else(|_| load!(UnitsNamesDurationExtendedV1))
-                .or_else(|_| load!(UnitsNamesDurationOutlierV1))?,
-        );
-        Ok(())
     }
 
     fn fraction(&self, units: &[u128; 10], unit: usize) -> Decimal {
@@ -104,7 +64,7 @@ impl DurationPlan {
         decimal
     }
 
-    fn render(&mut self, units: &[u128; 10], negative: bool) -> Result<String, DataError> {
+    fn render(&mut self, units: &[u128; 10], negative: bool, sink: &mut Sink<'_>) -> fmt::Result {
         let mut fields: Vec<(usize, Decimal, bool)> = Vec::with_capacity(10);
         let mut sign_pending = negative;
         let first_numeric = (0..10).find(|&unit| self.styles[unit] == 3 || self.styles[unit] == 4);
@@ -124,7 +84,7 @@ impl DurationPlan {
                         .take_while(|&lower| self.styles[lower] == 5)
                         .any(|lower| units[lower] != 0));
             if combined_nonzero || self.displays[unit] != 0 {
-                self.load_pattern(unit)?;
+                self.load_pattern(unit);
                 if sign_pending {
                     value.set_sign(fixed_decimal::Sign::Negative);
                     sign_pending = false;
@@ -177,11 +137,7 @@ impl DurationPlan {
                 fields: &fields[digital_start..],
             });
         }
-        Ok(self
-            .list
-            .format(values.iter())
-            .write_to_string()
-            .into_owned())
+        self.list.format(values.iter()).write_to_parts(sink)
     }
 }
 
@@ -200,19 +156,21 @@ enum DurationField<'a> {
 impl Writeable for DurationField<'_> {
     fn write_to_parts<W: writeable::PartsWrite + ?Sized>(&self, sink: &mut W) -> fmt::Result {
         match self {
-            Self::Text { plan, unit, value } => plan.patterns[*unit]
-                .as_ref()
-                .unwrap()
-                .get()
-                .get((*value).into(), &plan.plurals)
-                .interpolate((plan.decimal.format(value),))
-                .write_to_parts(sink),
+            Self::Text { plan, unit, value } => sink.with_part(duration_unit(*unit), |sink| {
+                plan.patterns[*unit].as_ref().unwrap().write(
+                    plan.plurals.category_for(*value),
+                    sink,
+                    |sink| plan.decimal.format(value).write_to_parts(sink),
+                )
+            }),
             Self::Digital { plan, fields } => {
-                for (index, (_, value, _)) in fields.iter().enumerate() {
+                for (index, (unit, value, _)) in fields.iter().enumerate() {
                     if index > 0 {
                         sink.write_str(&plan.digital.get().separator)?;
                     }
-                    plan.digital_decimal.format(value).write_to_parts(sink)?;
+                    sink.with_part(duration_unit(*unit), |sink| {
+                        plan.digital_decimal.format(value).write_to_parts(sink)
+                    })?;
                 }
                 Ok(())
             }
@@ -278,7 +236,11 @@ pub unsafe extern "C" fn mal_i18n_duration_new(
     ) else {
         return core::ptr::null_mut();
     };
-    let Ok(plurals) = icu_plurals::PluralRules::try_new_cardinal((&locale).into()) else {
+    let unit_locale = UnitLocale::new(&locale);
+    let Ok(plural_locale) = unit_locale.locale.parse::<icu_locale::Locale>() else {
+        return core::ptr::null_mut();
+    };
+    let Ok(plurals) = icu_plurals::PluralRules::try_new_cardinal((&plural_locale).into()) else {
         return core::ptr::null_mut();
     };
     let list_length = match base_style {
@@ -322,12 +284,12 @@ pub unsafe extern "C" fn mal_i18n_duration_new(
         styles[4] = 4;
     }
     let plan = Box::new(DurationPlan {
-        prefs,
         decimal,
         digital_decimal,
         plurals,
         list,
         digital: digital.payload,
+        unit_locale,
         patterns: core::array::from_fn(|_| None),
         styles,
         displays: unsafe { core::slice::from_raw_parts(displays, 10) }
@@ -412,9 +374,15 @@ fn duration_units(values: &[f64]) -> Option<([u128; 10], bool)> {
 pub unsafe extern "C" fn mal_i18n_duration_format(
     handle: *mut core::ffi::c_void,
     values: *const f64,
-    out: *mut u8,
-    out_cap: i32,
+    out: *mut u16,
+    out_cap: usize,
+    spans: *mut MalI18nNumericPart,
+    spans_cap: usize,
+    spans_needed: *mut usize,
 ) -> i32 {
+    if (out_cap != 0 && out.is_null()) || (spans_cap != 0 && spans.is_null()) || values.is_null() {
+        return -1;
+    }
     let Some(plan) = (unsafe { handle.cast::<DurationPlan>().as_mut() }) else {
         return -1;
     };
@@ -423,10 +391,34 @@ pub unsafe extern "C" fn mal_i18n_duration_format(
     else {
         return -2;
     };
-    match plan.render(&units, negative) {
-        Ok(text) => unsafe { crate::ffi::write_utf8(&text, out, out_cap) },
-        Err(_) => -1,
+    let mut sink = Sink {
+        out: if out_cap == 0 {
+            &mut []
+        } else {
+            unsafe { core::slice::from_raw_parts_mut(out, out_cap) }
+        },
+        spans: if spans_cap == 0 {
+            &mut []
+        } else {
+            unsafe { core::slice::from_raw_parts_mut(spans, spans_cap) }
+        },
+        track: !spans_needed.is_null(),
+        written: 0,
+        start: 0,
+        count: 0,
+        kind: 0,
+        unit: -1,
+    };
+    if plan.render(&units, negative, &mut sink).is_err() {
+        return -1;
     }
+    sink.flush();
+    if !spans_needed.is_null() {
+        unsafe {
+            *spans_needed = sink.count;
+        }
+    }
+    sink.written as i32
 }
 
 #[no_mangle]

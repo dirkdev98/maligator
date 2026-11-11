@@ -8,8 +8,8 @@
 //!   * The C runtime owns ALL JavaScript-spec glue: option-bag parsing, ToXxx
 //!     coercions, and the ECMA-402 / Date / RegExp abstract operations.
 //!   * This crate exposes only flat, pure primitives over the C ABI.
-//!   * Locale tags cross as UTF-8. List elements and literal spans use UTF-16
-//!     to preserve JS code units; other formatted text uses UTF-8 probe/fill.
+//!   * Locale tags cross as UTF-8. Parts-capable formatters use UTF-16 spans
+//!     to preserve JS code units; text-only formatters use UTF-8 probe/fill.
 //!     Regexp patterns/subjects cross as UTF-16 (see src/regexp.rs).
 
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -59,7 +59,7 @@ pub mod crypto_cipher;
 pub mod crypto_pkey;
 
 /// Identifies the flat transport contract shared with `mal_i18n.h`.
-pub const MAL_I18N_ABI_VERSION: u32 = 10;
+pub const MAL_I18N_ABI_VERSION: u32 = 11;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]
@@ -79,6 +79,10 @@ mod intl_relative_time;
 mod intl_duration;
 #[cfg(feature = "intl-number-format")]
 mod intl_number;
+#[cfg(any(feature = "intl-number-format", feature = "intl-duration-format"))]
+mod intl_parts;
+#[cfg(any(feature = "intl-number-format", feature = "intl-duration-format"))]
+mod intl_unit;
 #[cfg(any(feature = "intl-relative-time-format", feature = "intl-duration-format", feature = "intl-number-format"))]
 mod intl_decimal;
 

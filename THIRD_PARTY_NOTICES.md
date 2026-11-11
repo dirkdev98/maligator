@@ -150,9 +150,9 @@ Vendored under `runtime/vendor/sqlite` and compiled into the host runtime.
 has dedicated both files to the public domain:
 https://sqlite.org/copyright.html
 
-## CLDR decimal digits
+## Unicode CLDR
 
-The generated Intl digit tables derive from Unicode CLDR supplemental numbering-system data.
+The generated Intl decimal digits, unit patterns and locale inheritance tables derive from Unicode CLDR.
 
 ```text
 UNICODE LICENSE V3

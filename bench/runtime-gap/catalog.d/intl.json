@@ -382,6 +382,70 @@
 			],
 			"methods": ["Intl.NumberFormat.prototype.resolvedOptions"],
 			"features": ["intl-number-format"]
+		},
+		{
+			"id": "intl-number-unit",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-number-format",
+			"category": "api-builtins",
+			"mechanisms": ["unit-patterns", "numeric-parts", "native-plans"],
+			"inputShape": "Reused English compound-unit formatter over binary-exact fractions.",
+			"unit": "formatted numbers",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_number.rs",
+			"fixture": "cases/intl-number-unit.mjs",
+			"controls": [
+				"intl-number-reuse",
+				"intl-number-unit-construct",
+				"intl-number-unit-parts"
+			],
+			"methods": ["Intl.NumberFormat.prototype.format"],
+			"features": ["intl-number-format"]
+		},
+		{
+			"id": "intl-number-unit-construct",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-number-format",
+			"category": "api-builtins",
+			"mechanisms": ["unit-patterns", "numeric-parts", "native-plans"],
+			"inputShape": "Fresh formatters alternate a direct speed unit and a composed unit; each formats one value.",
+			"unit": "formatted numbers",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_number.rs",
+			"fixture": "cases/intl-number-unit-construct.mjs",
+			"controls": ["intl-number-unit", "intl-number-construct"],
+			"methods": ["Intl.NumberFormat.prototype.format"],
+			"features": ["intl-number-format"]
+		},
+		{
+			"id": "intl-number-unit-parts",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-number-format",
+			"category": "api-builtins",
+			"mechanisms": ["unit-patterns", "numeric-parts", "native-plans"],
+			"inputShape": "Reused compound-unit numeric parts with a type/value checksum; newly supported output.",
+			"unit": "formatted numbers",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_number.rs",
+			"fixture": "cases/intl-number-unit-parts.mjs",
+			"controls": ["intl-number-unit", "intl-number-parts"],
+			"methods": ["Intl.NumberFormat.prototype.formatToParts"],
+			"features": ["intl-number-format"]
+		},
+		{
+			"id": "intl-duration-parts",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-duration-format",
+			"category": "api-builtins",
+			"mechanisms": ["unit-patterns", "numeric-parts", "native-plans"],
+			"inputShape": "Structured duration parts with type/value/unit checksum; the old literal placeholder is not an equivalent baseline.",
+			"unit": "formatted durations",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_duration.rs",
+			"fixture": "cases/intl-duration-parts.mjs",
+			"controls": ["intl-duration-text", "intl-duration-digital"],
+			"methods": ["Intl.DurationFormat.prototype.formatToParts"],
+			"features": ["intl-duration-format"]
 		}
 	]
 }

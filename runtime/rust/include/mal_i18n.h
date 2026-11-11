@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 /* Identifies the flat transport contract shared with lib.rs. */
-#define MAL_I18N_ABI_VERSION 10u
+#define MAL_I18N_ABI_VERSION 11u
 
 /* Status codes for fallible entry points; mapped to JS exceptions by the C side. */
 typedef enum MalI18nStatus {
@@ -92,6 +92,8 @@ void mal_i18n_plural_rules_free(void *handle); /* null-tolerant; ABI v2+ */
 /* Intl.NumberFormat: decimal input preserves its mathematical digits. kind:
  * 0 decimal, 1 radix integer, 2 negative zero, 3 NaN, 4 +Infinity, 5 -Infinity.
  * Parts use UTF-16 offsets; count-only/probe calls use zero capacities.
+ * unit is -1 except for Duration fields, where it follows the duration-record
+ * field order. Unit display long/short/narrow = 0..2.
  * Grouping never/auto/always/min2 = 0..3; sign auto/never/always/exceptZero/negative
  * = 0..4. Rounding halfExpand/ceil/floor/expand/trunc/halfCeil/halfFloor/halfTrunc/
  * halfEven = 0..8. Resolved metadata borrows the plan until free. */
@@ -102,6 +104,9 @@ typedef struct MalI18nNumberResolved {
     size_t numbering_len;
     size_t heap_bytes;
     int32_t style;
+    const uint8_t *unit;
+    size_t unit_len;
+    int32_t unit_display;
     int32_t min_integer;
     int32_t min_fraction;
     int32_t max_fraction;
@@ -114,14 +119,16 @@ typedef struct MalI18nNumberResolved {
     int32_t priority;
     int32_t strip_zero;
 } MalI18nNumberResolved;
-typedef struct MalI18nNumberPart {
+typedef struct MalI18nNumericPart {
     size_t start;
     size_t len;
     int32_t kind;
-} MalI18nNumberPart;
-void *mal_i18n_number_formatter_new(const uint8_t *locale, size_t locale_len, const uint8_t *numbering, size_t numbering_len, int32_t style, int32_t min_integer, int32_t min_fraction, int32_t max_fraction, int32_t min_significant, int32_t max_significant, int32_t grouping, int32_t sign_display, int32_t rounding_mode, int32_t increment, int32_t priority, int32_t strip_zero, MalI18nNumberResolved *resolved);
+    int32_t unit;
+} MalI18nNumericPart;
+int32_t mal_i18n_unit_is_valid(const uint8_t *unit, size_t length);
+void *mal_i18n_number_formatter_new(const uint8_t *locale, size_t locale_len, const uint8_t *numbering, size_t numbering_len, int32_t style, const uint8_t *unit, size_t unit_len, int32_t unit_display, int32_t min_integer, int32_t min_fraction, int32_t max_fraction, int32_t min_significant, int32_t max_significant, int32_t grouping, int32_t sign_display, int32_t rounding_mode, int32_t increment, int32_t priority, int32_t strip_zero, MalI18nNumberResolved *resolved);
 void mal_i18n_number_formatter_resolved(void *handle, MalI18nNumberResolved *resolved);
-int32_t mal_i18n_number_formatter_format(void *handle, const uint8_t *text, size_t length, int32_t kind, uint32_t radix, uint16_t *out, size_t out_cap, MalI18nNumberPart *spans, size_t spans_cap, size_t *spans_needed);
+int32_t mal_i18n_number_formatter_format(void *handle, const uint8_t *text, size_t length, int32_t kind, uint32_t radix, uint16_t *out, size_t out_cap, MalI18nNumericPart *spans, size_t spans_cap, size_t *spans_needed);
 size_t mal_i18n_number_formatter_free(void *handle);
 int32_t mal_i18n_number_format_default_en_us(const uint8_t *text, size_t length, uint8_t *out, int32_t out_cap);
 
@@ -183,8 +190,8 @@ typedef struct MalI18nDurationResolved {
 void *mal_i18n_duration_new(const uint8_t *locale, size_t locale_len, const uint8_t *numbering, size_t numbering_len, int32_t style, int32_t fractional_digits, const uint8_t *styles, const uint8_t *displays, MalI18nDurationResolved *resolved);
 size_t mal_i18n_duration_free(void *handle);
 int32_t mal_i18n_duration_parse(const uint16_t *text, size_t length, double *out);
-/* Returns the full UTF-8 length, -2 for an invalid record, -1 for a data error. */
-int32_t mal_i18n_duration_format(void *handle, const double *units, uint8_t *out, int32_t out_cap);
+/* Returns the full UTF-16 length, -2 for an invalid record, -1 for a rendering error. */
+int32_t mal_i18n_duration_format(void *handle, const double *units, uint16_t *out, size_t out_cap, MalI18nNumericPart *spans, size_t spans_cap, size_t *spans_needed);
 
 /* ---- Intl.RelativeTimeFormat ---- */
 typedef struct MalI18nRelativeResolved {

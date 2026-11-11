@@ -402,12 +402,7 @@ static const char *const SUPPORTED_TIME_ZONES[] = {
     "Asia/Shanghai", "Asia/Tokyo", "Australia/Sydney", "Europe/Amsterdam", "Europe/London",
     "Europe/Paris", "UTC", "America/Chicago", "America/Los_Angeles", "America/New_York",
 };
-static const char *const SUPPORTED_UNITS[] = {
-    "acre", "bit", "byte", "celsius", "centimeter", "day", "degree", "fahrenheit", "gigabyte",
-    "gram", "hectare", "hour", "kilogram", "kilometer", "liter", "megabyte", "meter", "mile",
-    "milliliter", "millimeter", "millisecond", "minute", "month", "ounce", "percent", "petabyte",
-    "pound", "second", "stone", "terabyte", "week", "yard", "year",
-};
+#include "intl_unit_ids.h"
 
 static int intl_compare_cstr(const void *a, const void *b) {
     return strcmp(*(const char *const *) a, *(const char *const *) b);
@@ -447,20 +442,24 @@ static MalValue intl_supported_values_of(MalVm *vm, MalValue this_value, const M
         return mal_value_new_undefined();
     }
 
-    // Copy + sort (the spec mandates a sorted, deduped List).
     const char **sorted = malloc(count * sizeof(char *));
+    if (sorted == nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
     for (usize i = 0; i < count; i++) {
         sorted[i] = values[i];
     }
     qsort(sorted, count, sizeof(char *), intl_compare_cstr);
 
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    MalValue result_value = mal_value_from_array_object(result);
+    MalRootSpan root;
+    mal_gc_root(&root, &result_value, 1);
     (void) mal_array_object_fresh_dense_reserve_exact(result, (u32) count);
     for (usize i = 0; i < count; i++) {
         intl_array_push(vm, result, (u32) i, mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) sorted[i])));
     }
     free(sorted);
-    return mal_value_from_array_object(result);
+    mal_gc_unroot(&root);
+    return result_value;
 }
 
 // ---------------------------------------------------------------------------
@@ -1703,9 +1702,7 @@ static void intl_install_plural_rules(MalVm *vm, MalObject *intl_object) {
 
 #endif // MAL_INTL_HAS_PLURAL_RULES
 
-// ---------------------------------------------------------------------------
-// Intl.NumberFormat supports decimal and percent; currency, unit, and compact remain.
-// ---------------------------------------------------------------------------
+// Exact decimal inputs share rounding and UTF-16 numeric parts across output paths.
 
 static i32 intl_data_int(MalVm *vm, MalValue data, const char *key, i32 fallback) {
     MalValue value;
@@ -1796,7 +1793,7 @@ static MalValue intl_nonfinite_number(MalVm *vm, f64 number, i32 sign_display_co
     return mal_value_from_string(mal_string_new_copy(&vm->heap, units, n));
 }
 
-static MalObject *intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, const char *type, MalValue value);
+static MalValue intl_numeric_result(MalVm *vm, const c16 *units, usize length, const MalI18nNumericPart *spans, usize span_count, bool to_parts, bool with_unit);
 
 typedef struct IntlNumericInput {
     const byte *text;
@@ -1864,7 +1861,7 @@ static bool intl_numeric_input(MalVm *vm, MalValue *value, byte *stack, usize ca
 }
 
 static MalValue intl_number_format_render(MalVm *vm, MalValue owner, MalValue input_value, bool to_parts) {
-    MalValue roots[] = {owner, input_value, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalValue roots[] = {owner, input_value};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalValue result = mal_value_new_undefined();
@@ -1872,9 +1869,9 @@ static MalValue intl_number_format_render(MalVm *vm, MalValue owner, MalValue in
     byte input_stack[128];
     IntlNumericInput input = {0};
     c16 stack[256];
-    MalI18nNumberPart stack_spans[24];
+    MalI18nNumericPart stack_spans[24];
     c16 *units = stack;
-    MalI18nNumberPart *spans = stack_spans;
+    MalI18nNumericPart *spans = stack_spans;
     if (!intl_numeric_input(vm, &roots[1], input_stack, sizeof(input_stack), &input)) goto done;
     usize spans_needed = 0;
     i32 needed = mal_i18n_number_formatter_format(nf->handle, input.text, input.length, input.kind, input.radix, (uint16_t *) units, countof(stack), to_parts ? spans : nullptr, to_parts ? countof(stack_spans) : 0, to_parts ? &spans_needed : nullptr);
@@ -1894,20 +1891,7 @@ static MalValue intl_number_format_render(MalVm *vm, MalValue owner, MalValue in
         usize expected_parts = spans_needed;
         if (mal_i18n_number_formatter_format(nf->handle, input.text, input.length, input.kind, input.radix, (uint16_t *) units, units == stack ? countof(stack) : (usize) needed, to_parts ? spans : nullptr, to_parts ? (spans == stack_spans ? countof(stack_spans) : spans_needed) : 0, to_parts ? &spans_needed : nullptr) != needed || spans_needed != expected_parts) goto format_error;
     }
-    MalString *pool = mal_string_new_copy(&vm->heap, units, (usize) needed);
-    roots[2] = mal_value_from_string(pool);
-    if (!to_parts) { result = roots[2]; goto done; }
-    MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
-    roots[3] = mal_value_from_array_object(parts);
-    (void) mal_array_object_fresh_dense_reserve_exact(parts, (u32) spans_needed);
-    static const char *const TYPES[] = {"literal", "integer", "group", "decimal", "fraction", "minusSign", "plusSign", "nan", "infinity", "percentSign"};
-    u32 index = 0;
-    for (usize i = 0; i < spans_needed; i++) {
-        assert(spans[i].kind >= 0 && spans[i].kind < (i32) countof(TYPES));
-        MalValue text = mal_value_from_string(mal_string_new_slice(&vm->heap, pool, spans[i].start, spans[i].len));
-        intl_parts_push(vm, parts, &index, TYPES[spans[i].kind], text);
-    }
-    result = roots[3];
+    result = intl_numeric_result(vm, units, (usize) needed, spans, spans_needed, to_parts, false);
     goto done;
  allocation_error:
     mal_vm_throw_allocation_error(vm);
@@ -2007,6 +1991,45 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
     i32 style_code = 0;
     for (usize i = 0; i < countof(STYLES); i++) if (intl_string_eq_ascii(style, STYLES[i])) style_code = (i32) i;
     bool percent = style_code == 1;
+    MalString *currency = nullptr;
+    if (!intl_option_string(vm, options, "currency", &currency, &present)) goto done;
+    if (currency == nullptr && style_code == 2) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "currency is required");
+        goto done;
+    }
+    if (currency != nullptr) {
+        bool valid = mal_string_length(currency) == 3;
+        for (usize i = 0; valid && i < 3; i++) {
+            c16 code = mal_string_code_unit_at(currency, i);
+            valid = (code >= 'A' && code <= 'Z') || (code >= 'a' && code <= 'z');
+        }
+        if (!valid) { mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid currency"); goto done; }
+    }
+    static const char *const CURRENCY_DISPLAYS[] = {"code", "symbol", "narrowSymbol", "name"};
+    (void) intl_option_enum(vm, options, "currencyDisplay", CURRENCY_DISPLAYS, countof(CURRENCY_DISPLAYS), "symbol", &ok);
+    if (!ok) goto done;
+    static const char *const CURRENCY_SIGNS[] = {"standard", "accounting"};
+    (void) intl_option_enum(vm, options, "currencySign", CURRENCY_SIGNS, countof(CURRENCY_SIGNS), "standard", &ok);
+    if (!ok) goto done;
+    MalString *unit = nullptr;
+    if (!intl_option_string(vm, options, "unit", &unit, &present)) goto done;
+    byte unit_bytes[64];
+    usize unit_len = 0;
+    if (unit != nullptr) {
+        roots[9] = mal_value_from_string(unit);
+        if (!intl_tag_utf8(unit, unit_bytes, sizeof(unit_bytes), &unit_len) || !mal_i18n_unit_is_valid(unit_bytes, unit_len)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid unit");
+            goto done;
+        }
+    } else if (style_code == 3) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "unit is required");
+        goto done;
+    }
+    static const char *const UNIT_DISPLAYS[] = {"long", "short", "narrow"};
+    MalString *unit_display = intl_option_enum(vm, options, "unitDisplay", UNIT_DISPLAYS, countof(UNIT_DISPLAYS), "short", &ok);
+    if (!ok) goto done;
+    roots[11] = mal_value_from_string(unit_display);
+    i32 unit_width = intl_string_eq_ascii(unit_display, "long") ? 0 : intl_string_eq_ascii(unit_display, "narrow") ? 2 : 1;
     i32 min_integer, min_fraction = 0, max_fraction = 3;
     i32 min_significant = 0, max_significant = 0;
     bool has_significant;
@@ -2049,7 +2072,7 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
     bool ascii = intl_tag_utf8(locale, bytes, locale_len + 1, &locale_len);
     if (numbering != nullptr) ascii = ascii && intl_tag_utf8(numbering, numbering_bytes, numbering_len + 1, &numbering_len);
     MalI18nNumberResolved native = {0};
-    if (ascii) nf->handle = mal_i18n_number_formatter_new(bytes, locale_len, numbering_bytes, numbering_len, style_code, min_integer, min_fraction, max_fraction, min_significant, max_significant, grouping, intl_sign_display_code(sign), rounding_code, increment, priority, strip_zero, &native);
+    if (ascii) nf->handle = mal_i18n_number_formatter_new(bytes, locale_len, numbering_bytes, numbering_len, style_code, unit_bytes, unit_len, unit_width, min_integer, min_fraction, max_fraction, min_significant, max_significant, grouping, intl_sign_display_code(sign), rounding_code, increment, priority, strip_zero, &native);
     if (nf->handle != nullptr) mal_heap_charge_external(&vm->heap, native.heap_bytes);
     if (bytes != stack) free(bytes);
     if (nf->handle == nullptr) { mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not create number formatter"); goto done; }
@@ -2104,7 +2127,7 @@ static MalValue intl_number_format_resolved_options(MalVm *vm, MalValue this_val
     if (!intl_this(vm, this_value, MAL_INTL_NUMBER_FORMAT, &nf, "Intl.NumberFormat.prototype.resolvedOptions called on incompatible receiver")) {
         return mal_value_new_undefined();
     }
-    MalValue roots[15];
+    MalValue roots[17];
     roots[0] = this_value;
     for (usize i = 1; i < countof(roots); i++) roots[i] = mal_value_new_undefined();
     MalRootSpan root;
@@ -2116,30 +2139,36 @@ static MalValue intl_number_format_resolved_options(MalVm *vm, MalValue this_val
     static const char *const ROUNDINGS[] = {"halfExpand", "ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfTrunc", "halfEven"};
     static const char *const PRIORITIES[] = {"auto", "morePrecision", "lessPrecision"};
     static const char *const KEYS[] = {
-        "locale", "numberingSystem", "style", "minimumIntegerDigits", "minimumFractionDigits", "maximumFractionDigits",
+        "locale", "numberingSystem", "style", "unit", "unitDisplay", "minimumIntegerDigits", "minimumFractionDigits", "maximumFractionDigits",
         "minimumSignificantDigits", "maximumSignificantDigits", "useGrouping", "signDisplay", "roundingIncrement",
         "roundingMode", "roundingPriority", "trailingZeroDisplay",
     };
     roots[1] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.locale, native.locale_len));
     roots[2] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.numbering, native.numbering_len));
     roots[3] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) STYLES[native.style]));
-    roots[4] = mal_value_from_i32(native.min_integer);
-    roots[5] = mal_value_from_i32(native.min_fraction);
-    roots[6] = mal_value_from_i32(native.max_fraction);
-    roots[7] = mal_value_from_i32(native.min_significant);
-    roots[8] = mal_value_from_i32(native.max_significant);
-    roots[9] = native.grouping == 0 ? mal_value_new_boolean(false) : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) GROUPINGS[native.grouping]));
-    roots[10] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) INTL_SIGN_DISPLAYS[native.sign_display]));
-    roots[11] = mal_value_from_i32(native.increment);
-    roots[12] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ROUNDINGS[native.rounding_mode]));
-    roots[13] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) PRIORITIES[native.priority]));
-    roots[14] = mal_value_from_string(mal_intrinsic_ascii(vm, native.strip_zero ? "stripIfInteger" : "auto"));
+    if (native.style == 3) {
+        roots[4] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.unit, native.unit_len));
+        static const char *const UNIT_DISPLAYS[] = {"long", "short", "narrow"};
+        roots[5] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) UNIT_DISPLAYS[native.unit_display]));
+    }
+    roots[6] = mal_value_from_i32(native.min_integer);
+    roots[7] = mal_value_from_i32(native.min_fraction);
+    roots[8] = mal_value_from_i32(native.max_fraction);
+    roots[9] = mal_value_from_i32(native.min_significant);
+    roots[10] = mal_value_from_i32(native.max_significant);
+    roots[11] = native.grouping == 0 ? mal_value_new_boolean(false) : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) GROUPINGS[native.grouping]));
+    roots[12] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) INTL_SIGN_DISPLAYS[native.sign_display]));
+    roots[13] = mal_value_from_i32(native.increment);
+    roots[14] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ROUNDINGS[native.rounding_mode]));
+    roots[15] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) PRIORITIES[native.priority]));
+    roots[16] = mal_value_from_string(mal_intrinsic_ascii(vm, native.strip_zero ? "stripIfInteger" : "auto"));
     MalString *keys[countof(KEYS)];
     MalValue values[countof(KEYS)];
     u32 count = 0;
     for (usize i = 0; i < countof(KEYS); i++) {
-        if ((i == 4 || i == 5) && native.max_significant > 0 && native.priority == 0) continue;
-        if ((i == 6 || i == 7) && native.max_significant == 0) continue;
+        if ((i == 3 || i == 4) && native.style != 3) continue;
+        if ((i == 6 || i == 7) && native.max_significant > 0 && native.priority == 0) continue;
+        if ((i == 8 || i == 9) && native.max_significant == 0) continue;
         keys[count] = mal_value_to_string(mal_intrinsic_string_key(vm, KEYS[i]).value);
         values[count++] = roots[i + 1];
     }
@@ -2642,6 +2671,36 @@ static MalObject *intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, 
     mal_gc_unroot(&root);
     return part;
 }
+
+#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DURATION_FORMAT
+static MalValue intl_numeric_result(MalVm *vm, const c16 *units, usize length, const MalI18nNumericPart *spans, usize span_count, bool to_parts, bool with_unit) {
+    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalString *pool = mal_string_new_copy(&vm->heap, units, length);
+    roots[0] = mal_value_from_string(pool);
+    if (!to_parts) { mal_gc_unroot(&root); return roots[0]; }
+    MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
+    roots[1] = mal_value_from_array_object(parts);
+    (void) mal_array_object_fresh_dense_reserve_exact(parts, (u32) span_count);
+    static const char *const TYPES[] = {"literal", "integer", "group", "decimal", "fraction", "minusSign", "plusSign", "nan", "infinity", "percentSign", "unit"};
+    static const char *const UNITS[] = {"year", "month", "week", "day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"};
+    u32 index = 0;
+    for (usize i = 0; i < span_count; i++) {
+        assert(spans[i].kind >= 0 && spans[i].kind < (i32) countof(TYPES));
+        MalValue text = mal_value_from_string(mal_string_new_slice(&vm->heap, pool, spans[i].start, spans[i].len));
+        MalObject *part = intl_parts_push(vm, parts, &index, TYPES[spans[i].kind], text);
+        if (with_unit && spans[i].unit >= 0) {
+            assert(spans[i].unit < (i32) countof(UNITS));
+            intl_resolved_set(vm, part, "unit", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) UNITS[spans[i].unit])));
+        }
+    }
+    MalValue result = roots[1];
+    mal_gc_unroot(&root);
+    return result;
+}
+#endif
+
 #endif
 
 #if MAL_INTL_HAS_LIST_FORMAT
@@ -3952,38 +4011,47 @@ static bool intl_to_duration_record(MalVm *vm, MalValue input, f64 *units) {
 static MalValue intl_duration_format_result(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool to_parts) {
     MalIntlObject *df;
     if (!intl_this(vm, this_value, MAL_INTL_DURATION_FORMAT, &df, "Intl.DurationFormat method called on incompatible receiver")) return mal_value_new_undefined();
-    MalValue roots[] = {this_value, arg_count >= 1 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalValue roots[] = {this_value, arg_count >= 1 ? args[0] : mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalValue result = mal_value_new_undefined();
-    byte stack[512];
-    byte *out = stack;
+    c16 stack[256];
+    MalI18nNumericPart stack_spans[24];
+    c16 *out = stack;
+    MalI18nNumericPart *spans = stack_spans;
     f64 units[10];
     if (!intl_to_duration_record(vm, roots[1], units)) goto done;
-    i32 n = mal_i18n_duration_format(df->handle, units, out, sizeof(stack));
+    usize spans_needed = 0;
+    i32 n = mal_i18n_duration_format(df->handle, units, (uint16_t *) out, countof(stack), to_parts ? spans : nullptr, to_parts ? countof(stack_spans) : 0, to_parts ? &spans_needed : nullptr);
     if (n < 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, n == -2 ? "duration is out of range or has inconsistent signs" : "could not format duration");
         goto done;
     }
-    if (n > (i32) sizeof(stack)) {
-        out = malloc((usize) n);
-        if (out == nullptr) { mal_vm_throw_allocation_error(vm); goto done; }
-        i32 written = mal_i18n_duration_format(df->handle, units, out, n);
-        if (written != n) {
+    if ((usize) n > countof(stack) || spans_needed > countof(stack_spans)) {
+        usize bytes;
+        if ((usize) n > countof(stack)) {
+            if (!mal_checked_size_multiply((usize) n, sizeof(*out), SIZE_MAX, &bytes)) goto allocation_error;
+            out = malloc(bytes);
+            if (out == nullptr) goto allocation_error;
+        }
+        if (spans_needed > countof(stack_spans)) {
+            if (!mal_checked_size_multiply(spans_needed, sizeof(*spans), SIZE_MAX, &bytes)) goto allocation_error;
+            spans = malloc(bytes);
+            if (spans == nullptr) goto allocation_error;
+        }
+        usize expected_parts = spans_needed;
+        if (mal_i18n_duration_format(df->handle, units, (uint16_t *) out, out == stack ? countof(stack) : (usize) n, to_parts ? spans : nullptr, to_parts ? (spans == stack_spans ? countof(stack_spans) : spans_needed) : 0, to_parts ? &spans_needed : nullptr) != n || spans_needed != expected_parts) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format duration");
             goto done;
         }
     }
-    roots[2] = intl_string_from_utf8(vm, out, (usize) n);
-    if (!to_parts) { result = roots[2]; goto done; }
-    MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
-    roots[3] = mal_value_from_array_object(parts);
-    u32 index = 0;
-    // Structured unit labels require annotations from the underlying unit patterns.
-    if (n > 0) intl_parts_push(vm, parts, &index, "literal", roots[2]);
-    result = roots[3];
+    result = intl_numeric_result(vm, out, (usize) n, spans, spans_needed, to_parts, true);
+    goto done;
+ allocation_error:
+    mal_vm_throw_allocation_error(vm);
  done:
     if (out != stack) free(out);
+    if (spans != stack_spans) free(spans);
     mal_gc_unroot(&root);
     return result;
 }

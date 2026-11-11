@@ -37,6 +37,7 @@ tests/native/intl-list-format.test.ts
 tests/native/intl-relative-time.test.ts
 tests/native/intl-duration.test.ts
 tests/native/intl-number.test.ts
+tests/native/intl-unit.test.ts
 tests/native/intl-options.test.ts
 tests/native/ffi-globals.test.ts
 tests/native/ffi-aligned-values.test.ts

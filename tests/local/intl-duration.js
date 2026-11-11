@@ -113,6 +113,24 @@ if (scenario === "protocol") {
 	);
 	equal(order.join(","), "prototype,locales,options");
 	console.log("ok");
+} else if (scenario === "pinned_parts") {
+	const record = { seconds: 1, milliseconds: 234, microseconds: 56, nanoseconds: 7 };
+	const formatter = new Intl.DurationFormat("he", { style: "long" });
+	const parts = formatter.formatToParts(record);
+	equal(parts.map((part) => part.value).join(""), formatter.format(record));
+	equal(
+		JSON.stringify(
+			parts
+				.filter((part) => part.type === "literal" && !Object.hasOwn(part, "unit"))
+				.map((part) => part.value),
+		),
+		JSON.stringify([", ", ", ", ", "]),
+	);
+	equal(
+		JSON.stringify(parts.filter((part) => part.type === "unit").map((part) => part.unit)),
+		JSON.stringify(Object.keys(record).map((key) => key.slice(0, -1))),
+	);
+	console.log("ok");
 } else if (scenario === "bounds") {
 	const formatter = new Intl.DurationFormat("en");
 	for (const field of ["years", "months", "weeks"]) {
@@ -222,10 +240,52 @@ if (scenario === "protocol") {
 			]) {
 				const text = formatter.format(duration);
 				if (options.hoursDisplay === "auto" && duration.years === 1) continue;
-				results.push(text);
+				if (scenario === "parts") {
+					const parts = formatter.formatToParts(duration);
+					equal(parts.map((part) => part.value).join(""), text);
+					results.push(parts);
+				} else results.push(text);
 			}
 		}
 	}
 
+	if (scenario === "parts") {
+		for (const locale of ["ar", "he", "ko"])
+			for (const style of ["long", "short", "narrow", "digital"]) {
+				const formatter = new Intl.DurationFormat(locale, { style });
+				for (const duration of [
+					{ hours: 1 },
+					{ hours: 2 },
+					{ minutes: -2 },
+					{ seconds: 1, milliseconds: 234, microseconds: 56, nanoseconds: 7 },
+				]) {
+					// The pinned CLDR unit-long Hebrew list uses commas. Its data
+					// and field annotations are checked outside Node's older oracle.
+					if (locale === "he" && style === "long" && Object.keys(duration).length > 1)
+						continue;
+					const parts = formatter.formatToParts(duration);
+					equal(parts.map((part) => part.value).join(""), formatter.format(duration));
+					results.push(parts);
+				}
+			}
+		const wide = {
+			years: 4294967295,
+			months: 4294967295,
+			weeks: 4294967295,
+			days: 1e9,
+			hours: 1e10,
+			minutes: 1e12,
+			seconds: 1e14,
+			milliseconds: 1e15,
+			microseconds: 1e15,
+			nanoseconds: 1e15,
+		};
+		for (const locale of ["en", "en-u-nu-mathsans"]) {
+			const formatter = new Intl.DurationFormat(locale, { style: "long" });
+			const parts = formatter.formatToParts(wide);
+			equal(parts.map((part) => part.value).join(""), formatter.format(wide));
+			results.push(parts);
+		}
+	}
 	console.log(JSON.stringify(results));
 }

@@ -144,6 +144,8 @@ intl-number-format = [
 	"icu_decimal/compiled_data",
 	"dep:icu_provider",
 	"dep:fixed_decimal",
+	"dep:icu_plurals",
+	"icu_plurals/compiled_data",
 ]
 intl-date-time-format = [
 	"intl",

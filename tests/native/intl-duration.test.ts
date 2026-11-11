@@ -38,12 +38,21 @@ describe.each(["compiled", "interpreted"] as const)("%s DurationFormat", (backen
 				}).trim(),
 			).toBe("ok");
 	});
-	it.each(["protocol", "text"])(
+	it("preserves pinned unit-list separators and field attribution", () => {
+		for (const gcEnv of gcEnvironments)
+			expect(
+				runToStdout(pair[backend], {
+					env: { DURATION_SCENARIO: "pinned_parts", ...gcEnv },
+				}).trim(),
+			).toBe("ok");
+	});
+	it.each(["protocol", "text", "parts"])(
 		"observes %s through the public formatter",
 		(scenario) => {
 			const env = { DURATION_SCENARIO: scenario, MAL_HOST_GC: "1" };
 			const expected = execFileSync(process.execPath, ["--expose-gc", fixture], {
 				encoding: "utf8",
+				maxBuffer: 8 * 1024 * 1024,
 				env: { ...process.env, ...env },
 			});
 			for (const gcEnv of gcEnvironments)
