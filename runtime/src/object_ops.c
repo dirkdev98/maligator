@@ -155,7 +155,8 @@ bool mal_object_add_private(MalObject *object, MalKey key, MalValue value) {
     if (child == nullptr && mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DEFINE_OWN) >= 0) {
         return false;
     }
-    // PrivateFieldAdd ignores [[Extensible]], so frozen receivers still gain slots.
+    // Extensibility is the caller's check: language-level additions reject a
+    // non-extensible receiver, while internal private names still reach frozen ones.
     if (!mal_value_to_symbol(key.value)->private_table_resident &&
         mal_object_shapes_private(object) && mal_object_can_add_shaped_property(object) &&
         (mal_object_overflow(object) == nullptr ||
