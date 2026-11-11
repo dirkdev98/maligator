@@ -815,9 +815,11 @@ fn datetime_input(
     fields.extended_year = Some(year);
     fields.ordinal_month = Some(u8::try_from(month).ok()?);
     fields.day = Some(u8::try_from(day).ok()?);
-    let date =
-        icu_calendar::Date::try_from_fields(fields, Default::default(), icu_calendar::cal::Iso)
-            .ok()?;
+    let date = icu_calendar::Date::try_new_iso(year, fields.ordinal_month?, fields.day?)
+        .or_else(|_| {
+            icu_calendar::Date::try_from_fields(fields, Default::default(), icu_calendar::cal::Iso)
+        })
+        .ok()?;
     let time = icu_time::Time::try_new(
         u8::try_from(hour).ok()?,
         u8::try_from(minute).ok()?,
@@ -1031,7 +1033,6 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
     }
     unsafe { write_utf8(&text, out, out_cap) }
 }
-
 // ---------------------------------------------------------------------------
 // Intl.ListFormat — icu_list::ListFormatter (and/or/unit, wide/short/narrow).
 // ---------------------------------------------------------------------------

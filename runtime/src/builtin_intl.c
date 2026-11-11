@@ -2439,17 +2439,6 @@ static MalValue intl_date_time_format_constructor(MalVm *vm, MalValue this_value
     MalString *time_zone = mal_string_new_ascii(&vm->heap, tz, (usize) (tz_len <= (i32) sizeof(tz) ? tz_len : (i32) sizeof(tz)));
 
     roots[7] = mal_value_from_string(time_zone);
-    MalObject *resolved = mal_intrinsic_new_object(vm);
-    roots[8] = mal_value_from_object(resolved);
-    intl_resolved_set(vm, resolved, "locale", mal_value_from_string(locale));
-    intl_resolved_set(vm, resolved, "timeZone", mal_value_from_string(time_zone));
-    if (date_style != nullptr) {
-        intl_resolved_set(vm, resolved, "dateStyle", mal_value_from_string(date_style));
-    }
-    if (time_style != nullptr) {
-        intl_resolved_set(vm, resolved, "timeStyle", mal_value_from_string(time_style));
-    }
-
     byte locale_buf[160];
     usize locale_len;
     if (!intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len)) {
@@ -2466,10 +2455,21 @@ static MalValue intl_date_time_format_constructor(MalVm *vm, MalValue this_value
         goto done;
     }
     mal_heap_charge_external(&vm->heap, native.heap_bytes);
-    roots[5] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.calendar, native.calendar_len));
-    intl_resolved_set(vm, resolved, "calendar", roots[5]);
-    roots[6] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.numbering, native.numbering_len));
-    intl_resolved_set(vm, resolved, "numberingSystem", roots[6]);
+    roots[9] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.calendar, native.calendar_len));
+    roots[10] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.numbering, native.numbering_len));
+    static const char *const KEYS[] = {"locale", "calendar", "numberingSystem", "timeZone", "dateStyle", "timeStyle"};
+    static const u8 SLOTS[] = {4, 9, 10, 7, 5, 6};
+    MalString *keys[countof(KEYS)];
+    MalValue values[countof(KEYS)];
+    u32 count = 0;
+    for (usize i = 0; i < countof(KEYS); i++) {
+        if (mal_value_is_undefined(roots[SLOTS[i]])) continue;
+        keys[count] = mal_value_to_string(mal_intrinsic_string_key(vm, KEYS[i]).value);
+        values[count++] = roots[SLOTS[i]];
+    }
+    MalShape *shape = mal_shape_from_string_keys(&vm->heap, keys, count);
+    dtf->data = mal_vm_create_object_shaped(vm, shape, values, count);
+    mal_gc_card(&dtf->object.header, dtf->data);
     result = roots[8];
  done:
     if (option_bytes.allocation != nullptr) free(option_bytes.allocation);
