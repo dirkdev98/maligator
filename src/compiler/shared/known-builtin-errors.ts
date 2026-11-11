@@ -76,7 +76,7 @@ export const knownBuiltinErrors = {
 	},
 	bigintNumber: {
 		error: "RangeError",
-		message: "The number is not a safe integer",
+		message: "The number is not an integer",
 	},
 	bigintValue: {
 		error: "TypeError",

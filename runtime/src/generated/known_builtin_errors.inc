@@ -22,7 +22,7 @@ MAL_KNOWN_BUILTIN_ERROR(numberRadix, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toStr
 MAL_KNOWN_BUILTIN_ERROR(numberFixed, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toFixed() digits argument must be between 0 and 100")
 MAL_KNOWN_BUILTIN_ERROR(numberExponential, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toExponential() argument must be between 0 and 100")
 MAL_KNOWN_BUILTIN_ERROR(numberPrecision, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toPrecision() argument must be between 1 and 100")
-MAL_KNOWN_BUILTIN_ERROR(bigintNumber, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "The number is not a safe integer")
+MAL_KNOWN_BUILTIN_ERROR(bigintNumber, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "The number is not an integer")
 MAL_KNOWN_BUILTIN_ERROR(bigintValue, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert value to a BigInt")
 MAL_KNOWN_BUILTIN_ERROR(bigintString, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Cannot convert string to a BigInt")
 MAL_KNOWN_BUILTIN_ERROR(bigintWidth, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid bit count")
