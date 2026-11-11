@@ -124,6 +124,12 @@ static i32 ee_event_count(MalVm *vm, MalValue receiver) {
 }
 
 static MalValue ee_listener_value(MalObject *events, MalKey event) {
+    // A shaped event name is a data slot; only an overflow table needs the full lookup.
+    if (event.kind == MAL_KEY_STRING) {
+        i32 index = mal_shape_find(events->shape, event, MAL_SHAPE_FIND_GET_OWN);
+        if (index >= 0) return mal_object_field_load(events, events->shape->props[index].slot);
+        if (mal_object_overflow(events) == nullptr) return mal_value_new_undefined();
+    }
     MalPropertyLookup lookup = mal_object_get_own(events, event);
     return lookup.present ? lookup.desc.value : mal_value_new_undefined();
 }
