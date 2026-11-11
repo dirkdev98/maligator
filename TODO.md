@@ -836,22 +836,20 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 ## Generational GC workers
 
-- [ ] Compare the current native GC scheduling policy with one bounded pacing change on
-      native self-compile, app-batch and representative HTTP traffic. Measure total CPU,
-      wall time, peak storage and pause distributions from matched finished binaries; keep
-      mutator-owned sweep unless a measured end-to-end gain pays for ownership complexity.
-      Peak storage follows the major trigger: the free managed cells a completed major
-      leaves are the garbage it reclaimed, which the next cycle reuses before carving
-      blocks, and reusing the fullest partial blocks first left ownership unchanged.
+- [ ] Measure the 256 MiB nursery cap on app-batch and on an HTTP workload whose live
+      set exceeds 128 MiB; native self-compile kept its time, and small HTTP heaps never
+      reach the cap. Peak storage there follows the nursery increment, not major debt:
+      halving the major trigger cost time without lowering the footprint.
 
 - [ ] Validate native worker capacity under live constrained and nested CPU quotas.
       Synthetic v1/v2 mounted-path and visible-ancestor fixtures pass; hidden
       namespace ancestors cannot be inferred. Keep the inline capacity fallback.
-- [ ] Attribute peak committed/deferred storage and long minor, root, remark or finalizer
-      pauses on matched production workloads, including the current skipped-block slice
-      budget. Keep managed survivors, exact liveness and RSS distinct. Bound any change to
-      the measured phase or container, preserving tracing and promotion; require lower
-      tail latency or retained storage without a material total-CPU/throughput regression.
+- [ ] Attribute the remaining long pauses on matched production workloads: on native
+      self-compile with the nursery cap, a 33 ms major slice, a 36 ms minor and an 11 ms
+      remark, including the current skipped-block slice budget. Keep managed survivors,
+      exact liveness and RSS distinct. Bound any change to the measured phase or
+      container, preserving tracing and promotion; require lower tail latency or retained
+      storage without a material total-CPU/throughput regression.
 
 ### Concurrent generational GC experiments
 
