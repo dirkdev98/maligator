@@ -6,7 +6,7 @@ use icu_provider::prelude::*;
 use writeable::Writeable;
 
 use crate::intl::parse_locale;
-use crate::intl_parts::{duration_unit, MalI18nNumericPart, Sink, DURATION_UNITS};
+use crate::intl_parts::{duration_unit, MalI18nFormattedPart, Sink, DURATION_UNITS};
 use crate::intl_unit::{UnitFormat, UnitLocale, UnitSpec};
 
 struct DurationPlan {
@@ -389,7 +389,7 @@ pub unsafe extern "C" fn mal_i18n_duration_format(
     values: *const f64,
     out: *mut u16,
     out_cap: usize,
-    spans: *mut MalI18nNumericPart,
+    spans: *mut MalI18nFormattedPart,
     spans_cap: usize,
     spans_needed: *mut usize,
 ) -> i32 {

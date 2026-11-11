@@ -404,8 +404,9 @@ contracts or investigates costs still visible after the string follow-ups.
 
 - [ ] Finish Intl NumberFormat currency formatting, scientific/engineering/compact
       notation, ranges and localized nonfinite/percent affixes; and DateTimeFormat
-      option/calendar/time-zone selection, parts and interval fields. Keep reusable native
-      plans and measure constructor cost, steady-state formatting and retained memory together.
+      exact style/component selection, calendar/time-zone options, fractional fields and
+      interval parts. Keep reusable native plans and measure constructor cost,
+      steady-state formatting and retained memory together.
 
 - [ ] Generate decimal symbol data for the remaining locale/numbering-system
       combinations. Preserve per-service data selection and

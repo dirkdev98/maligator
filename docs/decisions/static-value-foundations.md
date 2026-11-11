@@ -220,6 +220,12 @@ node scripts/generate-intl-unit-data.ts /path/to/cldr-json \
   runtime/rust/src/intl_unit_data.rs runtime/src/intl_unit_ids.h
 ```
 
+DateTimeFormat writes ICU field annotations into the same UTF-16 span representation.
+Date fields own their nested numeric annotations. Typed provider delegation retains ICU's
+calendar and pattern selection while sharing generated decimal digits. Resolved calendar
+and numbering metadata report the selected data. Field-based ISO construction covers the
+JavaScript date range, and timestamp coercion stays outside output-buffer retries.
+
 Decimal digits come from checksum-pinned CLDR supplemental numbering-system data.
 `scripts/generate-intl-digit-data.ts` generates the Rust table from
 `numberingSystems.json`. Numeric systems use their published scalar sequences;

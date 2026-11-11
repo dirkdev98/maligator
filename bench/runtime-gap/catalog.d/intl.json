@@ -446,6 +446,78 @@
 			"controls": ["intl-duration-text", "intl-duration-digital"],
 			"methods": ["Intl.DurationFormat.prototype.formatToParts"],
 			"features": ["intl-duration-format"]
+		},
+		{
+			"id": "intl-datetime-reuse",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-date-time-format",
+			"category": "api-builtins",
+			"mechanisms": ["datetime-format", "persistent-plans", "field-parts"],
+			"inputShape": "Reused English medium-date formatter over rotating modern timestamps.",
+			"unit": "formatted dates",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/lib.rs",
+			"fixture": "cases/intl-datetime-reuse.mjs",
+			"controls": [
+				"intl-datetime-construct",
+				"intl-datetime-locale",
+				"intl-datetime-parts"
+			],
+			"methods": ["Intl.DateTimeFormat.prototype.format"],
+			"features": ["intl-date-time-format"]
+		},
+		{
+			"id": "intl-datetime-construct",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-date-time-format",
+			"category": "api-builtins",
+			"mechanisms": ["datetime-format", "persistent-plans", "field-parts"],
+			"inputShape": "Fresh medium-date formatter and one complete format per operation.",
+			"unit": "formatted dates",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/lib.rs",
+			"fixture": "cases/intl-datetime-construct.mjs",
+			"controls": ["intl-datetime-reuse", "intl-datetime-locale", "intl-datetime-parts"],
+			"methods": ["Intl.DateTimeFormat.prototype.format"],
+			"features": ["intl-date-time-format"]
+		},
+		{
+			"id": "intl-datetime-locale",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-date-time-format",
+			"category": "api-builtins",
+			"mechanisms": ["datetime-format", "persistent-plans", "field-parts"],
+			"inputShape": "Explicit medium Date locale shortcut exercising its existing cached native plan.",
+			"unit": "formatted dates",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/lib.rs",
+			"fixture": "cases/intl-datetime-locale.mjs",
+			"controls": [
+				"intl-datetime-reuse",
+				"intl-datetime-construct",
+				"intl-datetime-parts"
+			],
+			"methods": ["Date.prototype.toLocaleDateString"],
+			"features": ["intl-date-time-format"]
+		},
+		{
+			"id": "intl-datetime-parts",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-date-time-format",
+			"category": "api-builtins",
+			"mechanisms": ["datetime-format", "persistent-plans", "field-parts"],
+			"inputShape": "Structured medium-date fields with a type/value checksum; newly supported output.",
+			"unit": "formatted dates",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/lib.rs",
+			"fixture": "cases/intl-datetime-parts.mjs",
+			"controls": [
+				"intl-datetime-reuse",
+				"intl-datetime-construct",
+				"intl-datetime-locale"
+			],
+			"methods": ["Intl.DateTimeFormat.prototype.formatToParts"],
+			"features": ["intl-date-time-format"]
 		}
 	]
 }

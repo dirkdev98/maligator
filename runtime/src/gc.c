@@ -2438,9 +2438,7 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
         case MAL_HEAP_INTL_OBJECT: {
             MalIntlObject *intl = (MalIntlObject *) cell;
             if (intl->handle != nullptr) {
-                // Only a build with the service compiled links its free fn (and only
-                // it can create the handle), so gate per-service to keep the link
-                // clean when Collator / PluralRules are dropped (engine.intl.features).
+                // Only selected services can create handles or link their finalizers.
 #if MAL_INTL_HAS_COLLATOR
                 if (intl->kind == MAL_INTL_COLLATOR) {
                     mal_i18n_collator_free(intl->handle);
@@ -2458,7 +2456,7 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
 #endif
 #if MAL_INTL_HAS_DATE_TIME_FORMAT
                 if (intl->kind == MAL_INTL_DATE_TIME_FORMAT) {
-                    mal_i18n_datetime_formatter_free(intl->handle);
+                    mal_gc_process_release(mal_i18n_datetime_formatter_free(intl->handle));
                 }
 #endif
 #if MAL_INTL_HAS_LIST_FORMAT

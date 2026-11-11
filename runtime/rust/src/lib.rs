@@ -59,7 +59,7 @@ pub mod crypto_cipher;
 pub mod crypto_pkey;
 
 /// Identifies the flat transport contract shared with `mal_i18n.h`.
-pub const MAL_I18N_ABI_VERSION: u32 = 11;
+pub const MAL_I18N_ABI_VERSION: u32 = 12;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]
@@ -79,7 +79,9 @@ mod intl_relative_time;
 mod intl_duration;
 #[cfg(feature = "intl-number-format")]
 mod intl_number;
-#[cfg(any(feature = "intl-number-format", feature = "intl-duration-format"))]
+#[cfg(feature = "intl-date-time-format")]
+mod intl_datetime;
+#[cfg(any(feature = "intl-number-format", feature = "intl-duration-format", feature = "intl-date-time-format"))]
 mod intl_parts;
 #[cfg(any(feature = "intl-number-format", feature = "intl-duration-format"))]
 mod intl_unit;
@@ -567,10 +569,6 @@ pub unsafe extern "C" fn mal_i18n_number_format_default_en_us(
     })
 }
 
-// ---------------------------------------------------------------------------
-// Intl.DateTimeFormat — dateStyle / timeStyle over icu_datetime fieldsets.
-// The C side passes pre-resolved civil components (local wall clock).
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "intl-date-time-format")]
 std::thread_local! {
@@ -592,56 +590,246 @@ enum MalDateTimeFormatter {
     Time(icu_datetime::DateTimeFormatter<icu_datetime::fieldsets::T>),
 }
 
+#[cfg(feature = "intl-date-time-format")]
+struct DatePlan {
+    formatter: MalDateTimeFormatter,
+    related: Option<Box<icu_decimal::DecimalFormatter>>,
+}
+#[cfg(feature = "intl-date-time-format")]
+impl DatePlan {
+    fn calendar(&self) -> icu_calendar::Ref<'_, icu_calendar::AnyCalendar> {
+        match &self.formatter {
+            MalDateTimeFormatter::DateTime(formatter) => formatter.calendar(),
+            MalDateTimeFormatter::Date(formatter) => formatter.calendar(),
+            MalDateTimeFormatter::Time(formatter) => formatter.calendar(),
+        }
+    }
+    fn new(
+        locale: &icu_locale::Locale,
+        calendar: &[u8],
+        numbering: &[u8],
+        date_style: i32,
+        time_style: i32,
+    ) -> Option<(Self, Box<icu_provider::DataMarkerAttributes>)> {
+        use icu_calendar::Calendar;
+        use icu_datetime::fieldsets;
+        use icu_datetime::options::{Length, TimePrecision, YearStyle};
+        use icu_datetime::DateTimeFormatter;
+        let to_length = |style: i32| match style {
+            0 | 1 => Length::Long,
+            3 => Length::Short,
+            _ => Length::Medium,
+        };
+        let ymd = |style: i32| {
+            fieldsets::YMD::medium()
+                .with_length(to_length(style))
+                .with_year_style(YearStyle::NoEra)
+        };
+        let precision = |style: i32| {
+            if style == 3 {
+                TimePrecision::Minute
+            } else {
+                TimePrecision::Second
+            }
+        };
+        let t = |style: i32| {
+            fieldsets::T::medium()
+                .with_length(to_length(style))
+                .with_time_precision(precision(style))
+        };
+
+        let mut prefs = icu_datetime::DateTimeFormatterPreferences::from(locale);
+        let option_value = |bytes: &[u8]| {
+            core::str::from_utf8(bytes)
+                .ok()
+                .and_then(|text| icu_locale::extensions::unicode::Value::try_from_str(text).ok())
+        };
+        if !calendar.is_empty() {
+            if let Some(value) = option_value(calendar) {
+                if let Ok(algorithm) = (&value).try_into() {
+                    prefs.calendar_algorithm = Some(algorithm);
+                }
+            }
+        }
+        if !numbering.is_empty() {
+            if let Some(value) = option_value(numbering) {
+                if crate::intl_decimal::supports_digits(&value.to_string()) {
+                    if let Ok(numbering) = (&value).try_into() {
+                        prefs.numbering_system = Some(numbering);
+                    }
+                }
+            }
+        }
+        let provider = crate::intl_datetime::DateProvider::default();
+        let formatter = if date_style >= 0 && time_style >= 0 {
+            let fields = ymd(date_style).with_time(precision(time_style));
+            match DateTimeFormatter::try_new_unstable(&provider, prefs, fields) {
+                Ok(formatter) => MalDateTimeFormatter::DateTime(formatter),
+                Err(_) => return None,
+            }
+        } else if date_style >= 0 {
+            match DateTimeFormatter::try_new_unstable(&provider, prefs, ymd(date_style)) {
+                Ok(formatter) => MalDateTimeFormatter::Date(formatter),
+                Err(_) => return None,
+            }
+        } else if time_style >= 0 {
+            match DateTimeFormatter::try_new_unstable(&provider, prefs, t(time_style)) {
+                Ok(formatter) => MalDateTimeFormatter::Time(formatter),
+                Err(_) => return None,
+            }
+        } else {
+            match DateTimeFormatter::try_new_unstable(&provider, prefs, ymd(2)) {
+                Ok(formatter) => MalDateTimeFormatter::Date(formatter),
+                Err(_) => return None,
+            }
+        };
+        let mut plan = DatePlan {
+            formatter,
+            related: None,
+        };
+        let Some(algorithm) = plan.calendar().calendar_algorithm() else {
+            return None;
+        };
+        let calendar = algorithm.as_str();
+        if date_style >= 0 && matches!(calendar, "chinese" | "dangi") {
+            let mut options = icu_decimal::options::DecimalFormatterOptions::default();
+            options.grouping_strategy = Some(icu_decimal::options::GroupingStrategy::Never);
+            match icu_decimal::DecimalFormatter::try_new_unstable(
+                &provider.decimal,
+                (&prefs).into(),
+                options,
+            ) {
+                Ok(formatter) => plan.related = Some(Box::new(formatter)),
+                Err(_) => return None,
+            }
+        }
+        Some((plan, provider.decimal.numbering_system.into_inner()?))
+    }
+
+    fn formatted(
+        &self,
+        input: &icu_time::DateTime<icu_calendar::cal::Iso>,
+    ) -> Option<(
+        icu_datetime::FormattedDateTime<'_>,
+        Option<fixed_decimal::Decimal>,
+    )> {
+        let converted = self.related.as_ref().map(|_| icu_time::DateTime {
+            date: input.date.to_calendar(self.calendar()),
+            time: input.time,
+        });
+        let related = converted.as_ref().and_then(|value| {
+            value
+                .date
+                .year()
+                .cyclic()
+                .map(|year| fixed_decimal::Decimal::from(year.related_iso))
+        });
+        macro_rules! formatted {
+            ($formatter:expr) => {
+                if let Some(value) = &converted {
+                    $formatter.format_same_calendar(value).ok()?
+                } else {
+                    $formatter.format(input)
+                }
+            };
+        }
+        let formatted = match &self.formatter {
+            MalDateTimeFormatter::DateTime(formatter) => formatted!(formatter),
+            MalDateTimeFormatter::Date(formatter) => formatted!(formatter),
+            MalDateTimeFormatter::Time(formatter) => formatted!(formatter),
+        };
+        Some((formatted, related))
+    }
+    fn heap_bytes(&self) -> usize {
+        core::mem::size_of::<Self>()
+            + if self.related.is_some() {
+                core::mem::size_of::<icu_decimal::DecimalFormatter>()
+            } else {
+                0
+            }
+    }
+}
+
 /// Build the immutable ICU formatter once per Intl.DateTimeFormat instance.
 #[cfg(feature = "intl-date-time-format")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_datetime_formatter_new(
     locale_ptr: *const u8,
     locale_len: usize,
+    calendar_ptr: *const u8,
+    calendar_len: usize,
+    numbering_ptr: *const u8,
+    numbering_len: usize,
     date_style: i32,
     time_style: i32,
+    resolved: *mut crate::intl_datetime::MalI18nDateTimeResolved,
 ) -> *mut core::ffi::c_void {
-    use icu_datetime::fieldsets;
-    use icu_datetime::options::{Length, TimePrecision};
-    use icu_datetime::DateTimeFormatter;
-
+    use icu_calendar::Calendar;
     let Some(locale) = parse_locale(locale_ptr, locale_len) else {
         return core::ptr::null_mut();
     };
-    let to_length = |style: i32| match style {
-        0 | 1 => Length::Long,
-        3 => Length::Short,
-        _ => Length::Medium,
+    let Some((plan, numbering)) = DatePlan::new(
+        &locale,
+        unsafe { nullable_slice(calendar_ptr, calendar_len) },
+        unsafe { nullable_slice(numbering_ptr, numbering_len) },
+        date_style,
+        time_style,
+    ) else {
+        return core::ptr::null_mut();
     };
-    let ymd = |style: i32| fieldsets::YMD::medium().with_length(to_length(style));
-    let t = |style: i32| fieldsets::T::medium().with_length(to_length(style));
-
-    let formatter = if date_style >= 0 && time_style >= 0 {
-        let fields = ymd(date_style).with_time(TimePrecision::Second);
-        match DateTimeFormatter::try_new((&locale).into(), fields) {
-            Ok(formatter) => MalDateTimeFormatter::DateTime(formatter),
-            Err(_) => return core::ptr::null_mut(),
-        }
-    } else if date_style >= 0 {
-        match DateTimeFormatter::try_new((&locale).into(), ymd(date_style)) {
-            Ok(formatter) => MalDateTimeFormatter::Date(formatter),
-            Err(_) => return core::ptr::null_mut(),
-        }
-    } else if time_style >= 0 {
-        match DateTimeFormatter::try_new((&locale).into(), t(time_style)) {
-            Ok(formatter) => MalDateTimeFormatter::Time(formatter),
-            Err(_) => return core::ptr::null_mut(),
-        }
-    } else {
-        match DateTimeFormatter::try_new((&locale).into(), ymd(2)) {
-            Ok(formatter) => MalDateTimeFormatter::Date(formatter),
-            Err(_) => return core::ptr::null_mut(),
-        }
+    let Some(algorithm) = plan.calendar().calendar_algorithm() else {
+        return core::ptr::null_mut();
     };
-    Box::into_raw(Box::new(formatter)) as *mut core::ffi::c_void
+    let calendar = algorithm.as_str();
+    if !resolved.is_null() {
+        let numbering = numbering.as_str().as_bytes();
+        if numbering.len() > 8 {
+            return core::ptr::null_mut();
+        }
+        let mut result = crate::intl_datetime::MalI18nDateTimeResolved {
+            calendar: calendar.as_ptr(),
+            calendar_len: calendar.len(),
+            numbering: [0; 8],
+            numbering_len: numbering.len(),
+            heap_bytes: plan.heap_bytes(),
+        };
+        result.numbering[..numbering.len()].copy_from_slice(numbering);
+        unsafe {
+            *resolved = result;
+        }
+    }
+    Box::into_raw(Box::new(plan)) as *mut core::ffi::c_void
 }
 
-/// Format civil components with a persistent Intl.DateTimeFormat plan.
+// Field construction covers the full JavaScript date range; convenience constructors cap years.
+#[cfg(feature = "intl-date-time-format")]
+fn datetime_input(
+    year: i32,
+    month: i32,
+    day: i32,
+    hour: i32,
+    minute: i32,
+    second: i32,
+) -> Option<icu_time::DateTime<icu_calendar::cal::Iso>> {
+    let mut fields = icu_calendar::types::DateFields::default();
+    fields.extended_year = Some(year);
+    fields.ordinal_month = Some(u8::try_from(month).ok()?);
+    fields.day = Some(u8::try_from(day).ok()?);
+    let date =
+        icu_calendar::Date::try_from_fields(fields, Default::default(), icu_calendar::cal::Iso)
+            .ok()?;
+    let time = icu_time::Time::try_new(
+        u8::try_from(hour).ok()?,
+        u8::try_from(minute).ok()?,
+        u8::try_from(second).ok()?,
+        0,
+    )
+    .ok()?;
+    Some(icu_time::DateTime { date, time })
+}
+
+/// Format local civil fields after the caller applies TimeClip and zone conversion.
+/// Optional field spans index UTF-16 code units in the same output.
 #[cfg(feature = "intl-date-time-format")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_datetime_formatter_format(
@@ -652,35 +840,70 @@ pub unsafe extern "C" fn mal_i18n_datetime_formatter_format(
     hour: i32,
     minute: i32,
     second: i32,
-    out: *mut u8,
-    out_cap: i32,
+    out: *mut u16,
+    out_cap: usize,
+    spans: *mut crate::intl_parts::MalI18nFormattedPart,
+    spans_cap: usize,
+    spans_needed: *mut usize,
 ) -> i32 {
-    let Some(formatter) = (unsafe { (handle as *const MalDateTimeFormatter).as_ref() }) else {
+    use writeable::Writeable;
+    if (out_cap != 0 && out.is_null()) || (spans_cap != 0 && spans.is_null()) {
+        return -1;
+    }
+    let Some(plan) = (unsafe { (handle as *const DatePlan).as_ref() }) else {
         return -1;
     };
-    let Ok(date) = icu_calendar::Date::try_new_iso(year, month as u8, day as u8) else {
+    let Some(input) = datetime_input(year, month, day, hour, minute, second) else {
         return -1;
     };
-    let Ok(time) = icu_time::Time::try_new(hour as u8, minute as u8, second as u8, 0) else {
+    let Some((formatted, related_year)) = plan.formatted(&input) else {
         return -1;
     };
-    let input = icu_time::DateTime { date, time };
-    let text = match formatter {
-        MalDateTimeFormatter::DateTime(formatter) => formatter.format(&input).to_string(),
-        MalDateTimeFormatter::Date(formatter) => formatter.format(&input).to_string(),
-        MalDateTimeFormatter::Time(formatter) => formatter.format(&input).to_string(),
+    let mut sink = crate::intl_datetime::DateWriter {
+        related_year: plan.related.as_deref().zip(related_year.as_ref()),
+        output: crate::intl_parts::Sink {
+            out: if out_cap == 0 {
+                &mut []
+            } else {
+                unsafe { core::slice::from_raw_parts_mut(out, out_cap) }
+            },
+            spans: if spans_cap == 0 {
+                &mut []
+            } else {
+                unsafe { core::slice::from_raw_parts_mut(spans, spans_cap) }
+            },
+            track: !spans_needed.is_null(),
+            written: 0,
+            start: 0,
+            count: 0,
+            kind: 0,
+            unit: -1,
+        },
     };
-    unsafe { write_utf8(&text, out, out_cap) }
+    let result = formatted.write_to_parts(&mut sink);
+    if result.is_err() {
+        return -1;
+    }
+    sink.output.flush();
+    if !spans_needed.is_null() {
+        unsafe {
+            *spans_needed = sink.output.count;
+        }
+    }
+    sink.output.written as i32
 }
 
-/// Free a date-time formatter handle. Null-tolerant for GC finalization.
+/// Release the native plan and return its charged bytes; null releases zero.
 #[cfg(feature = "intl-date-time-format")]
 #[no_mangle]
-pub unsafe extern "C" fn mal_i18n_datetime_formatter_free(handle: *mut core::ffi::c_void) {
+pub unsafe extern "C" fn mal_i18n_datetime_formatter_free(handle: *mut core::ffi::c_void) -> usize {
     if handle.is_null() {
-        return;
+        return 0;
     }
-    drop(unsafe { Box::from_raw(handle as *mut MalDateTimeFormatter) });
+    let plan = unsafe { Box::from_raw(handle as *mut DatePlan) };
+    let bytes = plan.heap_bytes();
+    drop(plan);
+    bytes
 }
 
 /// Format civil date/time components for `locale`. date_style / time_style:
@@ -691,6 +914,10 @@ pub unsafe extern "C" fn mal_i18n_datetime_formatter_free(handle: *mut core::ffi
 pub unsafe extern "C" fn mal_i18n_datetime_format(
     locale_ptr: *const u8,
     locale_len: usize,
+    calendar_ptr: *const u8,
+    calendar_len: usize,
+    numbering_ptr: *const u8,
+    numbering_len: usize,
     year: i32,
     month: i32,
     day: i32,
@@ -703,26 +930,41 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
     out_cap: i32,
 ) -> i32 {
     use icu_datetime::fieldsets;
-    use icu_datetime::options::{Length, TimePrecision};
+    use icu_datetime::options::{Length, TimePrecision, YearStyle};
     use icu_datetime::DateTimeFormatter;
+    use writeable::Writeable;
 
-    let Ok(date) = icu_calendar::Date::try_new_iso(year, month as u8, day as u8) else {
+    let Some(input) = datetime_input(year, month, day, hour, minute, second) else {
         return -1;
     };
-    let Ok(time) = icu_time::Time::try_new(hour as u8, minute as u8, second as u8, 0) else {
-        return -1;
-    };
-    let input = icu_time::DateTime { date, time };
 
     let to_length = |style: i32| match style {
         0 | 1 => Length::Long, // "full" maps to the closest available, "long"
         3 => Length::Short,
         _ => Length::Medium,
     };
-    let ymd = |style: i32| fieldsets::YMD::medium().with_length(to_length(style));
-    let t = |style: i32| fieldsets::T::medium().with_length(to_length(style));
+    let ymd = |style: i32| {
+        fieldsets::YMD::medium()
+            .with_length(to_length(style))
+            .with_year_style(YearStyle::NoEra)
+    };
+    let precision = |style: i32| {
+        if style == 3 {
+            TimePrecision::Minute
+        } else {
+            TimePrecision::Second
+        }
+    };
+    let t = |style: i32| {
+        fieldsets::T::medium()
+            .with_length(to_length(style))
+            .with_time_precision(precision(style))
+    };
 
-    let default_text = if unsafe { nullable_slice(locale_ptr, locale_len) } == b"en-US" {
+    let default_text = if calendar_len == 0
+        && numbering_len == 0
+        && unsafe { nullable_slice(locale_ptr, locale_len) } == b"en-US"
+    {
         match (date_style, time_style) {
             (2, 2) => DEFAULT_EN_US_DATE_TIME_FORMATTER.with(|cache| {
                 cache
@@ -767,30 +1009,26 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
     let Some(locale) = parse_locale(locale_ptr, locale_len) else {
         return -1;
     };
-
-    let text = if date_style >= 0 && time_style >= 0 {
-        // time length follows the date length in this fieldset model.
-        let fs = ymd(date_style).with_time(TimePrecision::Second);
-        match DateTimeFormatter::try_new((&locale).into(), fs) {
-            Ok(f) => f.format(&input).to_string(),
-            Err(_) => return -1,
-        }
-    } else if date_style >= 0 {
-        match DateTimeFormatter::try_new((&locale).into(), ymd(date_style)) {
-            Ok(f) => f.format(&input).to_string(),
-            Err(_) => return -1,
-        }
-    } else if time_style >= 0 {
-        match DateTimeFormatter::try_new((&locale).into(), t(time_style)) {
-            Ok(f) => f.format(&input).to_string(),
-            Err(_) => return -1,
-        }
-    } else {
-        match DateTimeFormatter::try_new((&locale).into(), ymd(2)) {
-            Ok(f) => f.format(&input).to_string(),
-            Err(_) => return -1,
-        }
+    let Some((plan, _)) = DatePlan::new(
+        &locale,
+        unsafe { nullable_slice(calendar_ptr, calendar_len) },
+        unsafe { nullable_slice(numbering_ptr, numbering_len) },
+        date_style,
+        time_style,
+    ) else {
+        return -1;
     };
+    let Some((formatted, related_year)) = plan.formatted(&input) else {
+        return -1;
+    };
+    let mut text = String::new();
+    let mut sink = crate::intl_datetime::DateTextWriter {
+        output: &mut text,
+        related_year: plan.related.as_deref().zip(related_year.as_ref()),
+    };
+    if formatted.write_to_parts(&mut sink).is_err() {
+        return -1;
+    }
     unsafe { write_utf8(&text, out, out_cap) }
 }
 

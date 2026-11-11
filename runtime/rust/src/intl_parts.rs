@@ -25,7 +25,7 @@ pub(super) fn duration_unit(unit: usize) -> writeable::Part {
 }
 
 #[repr(C)]
-pub struct MalI18nNumericPart {
+pub struct MalI18nFormattedPart {
     pub(super) start: usize,
     pub(super) len: usize,
     pub(super) kind: i32,
@@ -34,7 +34,7 @@ pub struct MalI18nNumericPart {
 
 pub(super) struct Sink<'a> {
     pub(super) out: &'a mut [u16],
-    pub(super) spans: &'a mut [MalI18nNumericPart],
+    pub(super) spans: &'a mut [MalI18nFormattedPart],
     pub(super) track: bool,
     pub(super) written: usize,
     pub(super) start: usize,
@@ -46,7 +46,7 @@ impl Sink<'_> {
     pub(super) fn flush(&mut self) {
         if self.track && self.written > self.start {
             if let Some(part) = self.spans.get_mut(self.count) {
-                *part = MalI18nNumericPart {
+                *part = MalI18nFormattedPart {
                     start: self.start,
                     len: self.written - self.start,
                     kind: self.kind,

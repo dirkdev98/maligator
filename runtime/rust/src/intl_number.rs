@@ -456,7 +456,7 @@ pub unsafe extern "C" fn mal_i18n_number_formatter_new(
     Box::into_raw(plan).cast()
 }
 
-use crate::intl_parts::{MalI18nNumericPart, Sink};
+use crate::intl_parts::{MalI18nFormattedPart, Sink};
 
 fn radix_decimal(text: &[u8], radix: u32) -> Option<String> {
     let raw = text.get(2..)?;
@@ -499,7 +499,7 @@ pub unsafe extern "C" fn mal_i18n_number_formatter_format(
     radix: u32,
     out: *mut u16,
     out_cap: usize,
-    spans: *mut MalI18nNumericPart,
+    spans: *mut MalI18nFormattedPart,
     spans_cap: usize,
     spans_needed: *mut usize,
 ) -> i32 {

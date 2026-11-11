@@ -1185,7 +1185,7 @@ static MalValue intl_resolved_copy(MalVm *vm, MalValue template_value, const cha
     return mal_vm_create_object_shaped(vm, shape, values, count);
 }
 
-#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_RELATIVE_TIME_FORMAT
+#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DATE_TIME_FORMAT || MAL_INTL_HAS_RELATIVE_TIME_FORMAT
 /** CoerceOptionsToObject: undefined creates a null-prototype bag; all other
  * non-null values pass through ToObject. */
 static bool intl_coerce_options_to_object(MalVm *vm, MalValue options, MalValue *out) {
@@ -1715,6 +1715,10 @@ static MalString *intl_data_string(MalVm *vm, MalValue data, const char *key) {
     return nullptr;
 }
 
+#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DATE_TIME_FORMAT || MAL_INTL_HAS_DURATION_FORMAT
+static MalValue intl_formatted_result(MalVm *vm, const c16 *units, usize length, const MalI18nFormattedPart *spans, usize span_count, bool to_parts, bool with_unit);
+#endif
+
 #if MAL_INTL_HAS_NUMBER_FORMAT
 /** signDisplay values in FFI-code order (mirrors mal_i18n.h / SignDisplay in lib.rs). */
 static const char *const INTL_SIGN_DISPLAYS[] = {"auto", "never", "always", "exceptZero", "negative"};
@@ -1775,8 +1779,6 @@ static MalValue intl_nonfinite_number(MalVm *vm, f64 number, i32 sign_display_co
     units[n++] = 0x221E; // U+221E INFINITY
     return mal_value_from_string(mal_string_new_copy(&vm->heap, units, n));
 }
-
-static MalValue intl_numeric_result(MalVm *vm, const c16 *units, usize length, const MalI18nNumericPart *spans, usize span_count, bool to_parts, bool with_unit);
 
 typedef struct IntlNumericInput {
     const byte *text;
@@ -1852,9 +1854,9 @@ static MalValue intl_number_format_render(MalVm *vm, MalValue owner, MalValue in
     byte input_stack[128];
     IntlNumericInput input = {0};
     c16 stack[256];
-    MalI18nNumericPart stack_spans[24];
+    MalI18nFormattedPart stack_spans[24];
     c16 *units = stack;
-    MalI18nNumericPart *spans = stack_spans;
+    MalI18nFormattedPart *spans = stack_spans;
     if (!intl_numeric_input(vm, &roots[1], input_stack, sizeof(input_stack), &input)) goto done;
     usize spans_needed = 0;
     i32 needed = mal_i18n_number_formatter_format(nf->handle, input.text, input.length, input.kind, input.radix, (uint16_t *) units, countof(stack), to_parts ? spans : nullptr, to_parts ? countof(stack_spans) : 0, to_parts ? &spans_needed : nullptr);
@@ -1874,7 +1876,7 @@ static MalValue intl_number_format_render(MalVm *vm, MalValue owner, MalValue in
         usize expected_parts = spans_needed;
         if (mal_i18n_number_formatter_format(nf->handle, input.text, input.length, input.kind, input.radix, (uint16_t *) units, units == stack ? countof(stack) : (usize) needed, to_parts ? spans : nullptr, to_parts ? (spans == stack_spans ? countof(stack_spans) : spans_needed) : 0, to_parts ? &spans_needed : nullptr) != needed || spans_needed != expected_parts) goto format_error;
     }
-    result = intl_numeric_result(vm, units, (usize) needed, spans, spans_needed, to_parts, false);
+    result = intl_formatted_result(vm, units, (usize) needed, spans, spans_needed, to_parts, false);
     goto done;
  allocation_error:
     mal_vm_throw_allocation_error(vm);
@@ -2212,11 +2214,62 @@ static void intl_install_number_format(MalVm *vm, MalObject *intl_object) {
 
 #endif // MAL_INTL_HAS_NUMBER_FORMAT
 
-// ---------------------------------------------------------------------------
-// Intl.DateTimeFormat supports dateStyle/timeStyle; component options remain.
-// ---------------------------------------------------------------------------
-
 #if MAL_INTL_HAS_DATE_TIME_FORMAT
+// Output slots must stay rooted while later option getters can collect.
+static bool intl_datetime_locale_options(MalVm *vm, MalValue *options, MalValue *calendar, MalValue *numbering) {
+    if (!intl_coerce_options_to_object(vm, *options, options) || !intl_check_locale_matcher(vm, *options)) return false;
+    static const char *const names[] = {"calendar", "numberingSystem"};
+    MalValue *outputs[] = {calendar, numbering};
+    for (usize i = 0; i < countof(names); i++) {
+        bool present;
+        MalString *value = nullptr;
+        if (!intl_option_string(vm, *options, names[i], &value, &present)) return false;
+        if (present) {
+            *outputs[i] = mal_value_from_string(value);
+            if (!intl_is_valid_unicode_type(value)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid calendar or numberingSystem");
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+typedef struct IntlDateOptionBytes {
+    byte stack[256];
+    byte *allocation;
+    byte *calendar;
+    byte *numbering;
+    usize calendar_len;
+    usize numbering_len;
+} IntlDateOptionBytes;
+
+static bool intl_datetime_option_bytes(MalVm *vm, MalValue calendar_value, MalValue numbering_value, IntlDateOptionBytes *out) {
+    MalString *calendar = mal_value_is_string(calendar_value) ? mal_value_to_string(calendar_value) : nullptr;
+    MalString *numbering = mal_value_is_string(numbering_value) ? mal_value_to_string(numbering_value) : nullptr;
+    out->calendar_len = calendar == nullptr ? 0 : mal_string_length(calendar);
+    out->numbering_len = numbering == nullptr ? 0 : mal_string_length(numbering);
+    usize capacity;
+    if (!mal_checked_size_add(out->calendar_len, out->numbering_len, SIZE_MAX - 2, &capacity)) goto allocation_error;
+    capacity += 2;
+    out->calendar = out->stack;
+    if (capacity > sizeof(out->stack)) {
+        out->allocation = malloc(capacity);
+        if (out->allocation == nullptr) goto allocation_error;
+        out->calendar = out->allocation;
+    }
+    out->numbering = out->calendar + out->calendar_len + 1;
+    if ((calendar != nullptr && !intl_tag_utf8(calendar, out->calendar, out->calendar_len + 1, &out->calendar_len)) ||
+        (numbering != nullptr && !intl_tag_utf8(numbering, out->numbering, out->numbering_len + 1, &out->numbering_len))) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not encode date options");
+        return false;
+    }
+    return true;
+ allocation_error:
+    mal_vm_throw_allocation_error(vm);
+    return false;
+}
+
 /** Map a style string to a code: 0 full, 1 long, 2 medium, 3 short; -1 none; -2 invalid. */
 static i32 intl_date_style_code(const MalString *style) {
     if (style == nullptr) {
@@ -2237,7 +2290,7 @@ static i32 intl_date_style_code(const MalString *style) {
     return -2;
 }
 
-static MalValue intl_datetime_format_epoch(MalVm *vm, MalString *locale, f64 epoch, i32 date_code, i32 time_code) {
+static MalValue intl_datetime_format_epoch(MalVm *vm, MalString *locale, f64 epoch, i32 date_code, i32 time_code, const IntlDateOptionBytes *options) {
     i32 year, month, day, hour, minute, second;
     if (!mal_date_to_local_components(epoch, &year, &month, &day, &hour, &minute, &second)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid time value");
@@ -2248,8 +2301,12 @@ static MalValue intl_datetime_format_epoch(MalVm *vm, MalString *locale, f64 epo
     if (locale != nullptr) {
         intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len);
     }
+    const byte *calendar = options == nullptr ? nullptr : options->calendar;
+    usize calendar_len = options == nullptr ? 0 : options->calendar_len;
+    const byte *numbering = options == nullptr ? nullptr : options->numbering;
+    usize numbering_len = options == nullptr ? 0 : options->numbering_len;
     byte out[256];
-    i32 n = mal_i18n_datetime_format(locale_buf, locale_len, year, month, day, hour, minute, second, date_code, time_code, out, (i32) sizeof(out));
+    i32 n = mal_i18n_datetime_format(locale_buf, locale_len, calendar, calendar_len, numbering, numbering_len, year, month, day, hour, minute, second, date_code, time_code, out, (i32) sizeof(out));
     if (n < 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format date");
         return mal_value_new_undefined();
@@ -2262,7 +2319,7 @@ static MalValue intl_datetime_format_epoch(MalVm *vm, MalString *locale, f64 epo
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
-    if (mal_i18n_datetime_format(locale_buf, locale_len, year, month, day, hour, minute, second, date_code, time_code, big, n) != n) {
+    if (mal_i18n_datetime_format(locale_buf, locale_len, calendar, calendar_len, numbering, numbering_len, year, month, day, hour, minute, second, date_code, time_code, big, n) != n) {
         free(big);
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format date");
         return mal_value_new_undefined();
@@ -2272,35 +2329,64 @@ static MalValue intl_datetime_format_epoch(MalVm *vm, MalString *locale, f64 epo
     return result;
 }
 
-static MalValue intl_datetime_format_epoch_handle(MalVm *vm, void *handle, f64 epoch) {
+static MalValue intl_datetime_format_epoch_handle(MalVm *vm, void *handle, f64 epoch, bool to_parts) {
     i32 year, month, day, hour, minute, second;
     if (!mal_date_to_local_components(epoch, &year, &month, &day, &hour, &minute, &second)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid time value");
         return mal_value_new_undefined();
     }
-    byte out[256];
-    i32 n = mal_i18n_datetime_formatter_format(
-        handle, year, month, day, hour, minute, second, out, (i32) sizeof(out));
-    if (n < 0) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format date");
-        return mal_value_new_undefined();
+    c16 stack[256];
+    MalI18nFormattedPart stack_spans[24];
+    c16 *out = stack;
+    MalI18nFormattedPart *spans = stack_spans;
+    MalValue result = mal_value_new_undefined();
+    usize spans_needed = 0;
+    i32 n = mal_i18n_datetime_formatter_format(handle, year, month, day, hour, minute, second,
+        (uint16_t *) out, countof(stack), to_parts ? spans : nullptr,
+        to_parts ? countof(stack_spans) : 0, to_parts ? &spans_needed : nullptr);
+    if (n < 0) goto format_error;
+    if ((usize) n > countof(stack) || spans_needed > countof(stack_spans)) {
+        usize bytes;
+        if ((usize) n > countof(stack)) {
+            if (!mal_checked_size_multiply((usize) n, sizeof(*out), SIZE_MAX, &bytes)) goto allocation_error;
+            out = malloc(bytes);
+            if (out == nullptr) goto allocation_error;
+        }
+        if (spans_needed > countof(stack_spans)) {
+            if (!mal_checked_size_multiply(spans_needed, sizeof(*spans), SIZE_MAX, &bytes)) goto allocation_error;
+            spans = malloc(bytes);
+            if (spans == nullptr) goto allocation_error;
+        }
+        usize expected_parts = spans_needed;
+        if (mal_i18n_datetime_formatter_format(handle, year, month, day, hour, minute, second,
+                (uint16_t *) out, out == stack ? countof(stack) : (usize) n,
+                to_parts ? spans : nullptr, to_parts ? (spans == stack_spans ? countof(stack_spans) : spans_needed) : 0,
+                to_parts ? &spans_needed : nullptr) != n || spans_needed != expected_parts) goto format_error;
     }
-    if (n <= (i32) sizeof(out)) {
-        return intl_string_from_utf8(vm, out, (usize) n);
-    }
-    byte *big = malloc((usize) n);
-    if (big == nullptr) {
-        mal_vm_throw_allocation_error(vm);
-        return mal_value_new_undefined();
-    }
-    if (mal_i18n_datetime_formatter_format(
-            handle, year, month, day, hour, minute, second, big, n) != n) {
-        free(big);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format date");
-        return mal_value_new_undefined();
-    }
-    MalValue result = intl_string_from_utf8(vm, big, (usize) n);
-    free(big);
+    result = intl_formatted_result(vm, out, (usize) n, spans, spans_needed, to_parts, false);
+    goto done;
+ allocation_error:
+    mal_vm_throw_allocation_error(vm);
+    goto done;
+ format_error:
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format date");
+ done:
+    if (out != stack) free(out);
+    if (spans != stack_spans) free(spans);
+    return result;
+}
+
+static MalValue intl_datetime_format_result(MalVm *vm, MalValue owner, MalValue input, bool to_parts) {
+    MalValue roots[] = {owner, input};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    f64 epoch;
+    if (mal_value_is_undefined(roots[1])) epoch = mal_date_now_ms();
+    else if (!mal_vm_to_number(vm, roots[1], &epoch)) goto done;
+    result = intl_datetime_format_epoch_handle(vm, mal_value_to_intl_object(roots[0])->handle, epoch, to_parts);
+ done:
+    mal_gc_unroot(&root);
     return result;
 }
 
@@ -2310,10 +2396,11 @@ static MalValue intl_date_time_format_constructor(MalVm *vm, MalValue this_value
     MalValue locales = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
 
-    MalValue roots[9] = {locales, options, new_target, mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalValue roots[11] = {locales, options, new_target, mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalValue result = mal_value_new_undefined();
+    IntlDateOptionBytes option_bytes = {0};
     MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_DATE_TIME_FORMAT_PROTOTYPE);
     if (prototype == nullptr) {
         goto done;
@@ -2324,9 +2411,8 @@ static MalValue intl_date_time_format_constructor(MalVm *vm, MalValue this_value
         goto done;
     }
     roots[4] = mal_value_from_string(locale);
-    if (!intl_check_locale_matcher(vm, options)) {
-        goto done;
-    }
+    if (!intl_datetime_locale_options(vm, &roots[1], &roots[9], &roots[10])) goto done;
+    options = roots[1];
     bool present;
     MalString *date_style = nullptr;
     if (!intl_option_string(vm, options, "dateStyle", &date_style, &present)) {
@@ -2356,8 +2442,6 @@ static MalValue intl_date_time_format_constructor(MalVm *vm, MalValue this_value
     MalObject *resolved = mal_intrinsic_new_object(vm);
     roots[8] = mal_value_from_object(resolved);
     intl_resolved_set(vm, resolved, "locale", mal_value_from_string(locale));
-    intl_resolved_set(vm, resolved, "calendar", mal_value_from_string(mal_intrinsic_ascii(vm, "gregory")));
-    intl_resolved_set(vm, resolved, "numberingSystem", mal_value_from_string(mal_intrinsic_ascii(vm, "latn")));
     intl_resolved_set(vm, resolved, "timeZone", mal_value_from_string(time_zone));
     if (date_style != nullptr) {
         intl_resolved_set(vm, resolved, "dateStyle", mal_value_from_string(date_style));
@@ -2365,9 +2449,6 @@ static MalValue intl_date_time_format_constructor(MalVm *vm, MalValue this_value
     if (time_style != nullptr) {
         intl_resolved_set(vm, resolved, "timeStyle", mal_value_from_string(time_style));
     }
-    // Internal codes the format path reads back (not exposed by resolvedOptions).
-    intl_resolved_set(vm, resolved, "dateStyleCode", mal_value_from_i32(date_code));
-    intl_resolved_set(vm, resolved, "timeStyleCode", mal_value_from_i32(time_code));
 
     byte locale_buf[160];
     usize locale_len;
@@ -2375,15 +2456,23 @@ static MalValue intl_date_time_format_constructor(MalVm *vm, MalValue this_value
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not build date formatter");
         goto done;
     }
-    void *handle = mal_i18n_datetime_formatter_new(
-        locale_buf, locale_len, date_code, time_code);
-    if (handle == nullptr) {
+    if (!intl_datetime_option_bytes(vm, roots[9], roots[10], &option_bytes)) goto done;
+    MalIntlObject *dtf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_DATE_TIME_FORMAT, nullptr, roots[8]);
+    roots[8] = mal_value_from_intl_object(dtf);
+    MalI18nDateTimeResolved native = {0};
+    dtf->handle = mal_i18n_datetime_formatter_new(locale_buf, locale_len, option_bytes.calendar, option_bytes.calendar_len, option_bytes.numbering, option_bytes.numbering_len, date_code, time_code, &native);
+    if (dtf->handle == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not build date formatter");
         goto done;
     }
-    MalIntlObject *dtf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_DATE_TIME_FORMAT, handle, mal_value_from_object(resolved));
-    result = mal_value_from_intl_object(dtf);
+    mal_heap_charge_external(&vm->heap, native.heap_bytes);
+    roots[5] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.calendar, native.calendar_len));
+    intl_resolved_set(vm, resolved, "calendar", roots[5]);
+    roots[6] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.numbering, native.numbering_len));
+    intl_resolved_set(vm, resolved, "numberingSystem", roots[6]);
+    result = roots[8];
  done:
+    if (option_bytes.allocation != nullptr) free(option_bytes.allocation);
     mal_gc_unroot(&root);
     return result;
 }
@@ -2391,14 +2480,15 @@ static MalValue intl_date_time_format_constructor(MalVm *vm, MalValue this_value
 static MalValue intl_date_time_format_callback(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue callee) {
     (void) this_value;
     (void) nt;
-    MalIntlObject *dtf = mal_value_to_intl_object(mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0));
-    f64 epoch;
-    if (arg_count < 1 || mal_value_is_undefined(args[0])) {
-        epoch = mal_date_now_ms();
-    } else if (!mal_vm_to_number(vm, args[0], &epoch)) {
-        return mal_value_new_undefined();
-    }
-    return intl_datetime_format_epoch_handle(vm, dtf->handle, epoch);
+    MalValue owner = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    return intl_datetime_format_result(vm, owner, arg_count >= 1 ? args[0] : mal_value_new_undefined(), false);
+}
+
+static MalValue intl_date_time_format_to_parts(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) nt; (void) cl;
+    MalIntlObject *dtf;
+    if (!intl_this(vm, this_value, MAL_INTL_DATE_TIME_FORMAT, &dtf, "Intl.DateTimeFormat.prototype.formatToParts called on incompatible receiver")) return mal_value_new_undefined();
+    return intl_datetime_format_result(vm, this_value, arg_count >= 1 ? args[0] : mal_value_new_undefined(), true);
 }
 
 static MalValue intl_date_time_format_get_format(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
@@ -2436,57 +2526,45 @@ static MalValue intl_date_time_format_resolved_options(MalVm *vm, MalValue this_
     return intl_resolved_copy(vm, dtf->data, keys, countof(keys));
 }
 
-/** A date-range endpoint: ToNumber, then RangeError on a non-finite value. The
- * caller has already rejected undefined endpoints. false on a pending throw. */
-static bool intl_date_range_arg(MalVm *vm, MalValue arg, f64 *out) {
-    if (!mal_vm_to_number(vm, arg, out)) {
-        return false;
-    }
-    if (!isfinite(*out)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid time value");
-        return false;
-    }
-    return true;
-}
-
-/** PartitionDateTimeRangePattern (approximate): format both endpoints and join
- * them. ICU smart interval collapsing remains unsupported; this produces a correct,
- * readable range string and the right argument-validation behavior. */
-static MalValue intl_date_time_format_range_string(MalVm *vm, MalIntlObject *dtf, MalValue start_arg, MalValue end_arg) {
-    if (mal_value_is_undefined(start_arg) || mal_value_is_undefined(end_arg)) {
+// Interval collapsing still needs native range patterns; endpoints format independently.
+static MalValue intl_date_time_format_range_string(MalVm *vm, MalValue owner, MalValue start_arg, MalValue end_arg) {
+    MalValue roots[] = {owner, start_arg, end_arg, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    if (mal_value_is_undefined(roots[1]) || mal_value_is_undefined(roots[2])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "formatRange requires two arguments");
-        return mal_value_new_undefined();
+        goto done;
     }
-    f64 start;
-    f64 end;
-    if (!intl_date_range_arg(vm, start_arg, &start) || !intl_date_range_arg(vm, end_arg, &end)) {
-        return mal_value_new_undefined();
-    }
-    MalValue start_str = intl_datetime_format_epoch_handle(vm, dtf->handle, start);
-    if (!mal_value_is_string(start_str)) {
-        return mal_value_new_undefined();
-    }
-    if (start == end) {
-        return start_str;
-    }
-    MalValue end_str = intl_datetime_format_epoch_handle(vm, dtf->handle, end);
-    if (!mal_value_is_string(end_str)) {
-        return mal_value_new_undefined();
-    }
-    // Join with " – " (spaced en dash), the common interval separator.
-    MalString *a = mal_value_to_string(start_str);
-    MalString *b = mal_value_to_string(end_str);
-    usize an = mal_string_length(a);
-    usize bn = mal_string_length(b);
-    usize total = an + 3 + bn;
-    c16 *buf = malloc(sizeof(c16) * total);
-    memcpy(buf, mal_string_code_units(a), an * sizeof(c16));
-    buf[an] = ' ';
-    buf[an + 1] = 0x2013;
-    buf[an + 2] = ' ';
-    memcpy(buf + an + 3, mal_string_code_units(b), bn * sizeof(c16));
-    MalValue result = mal_value_from_string(mal_string_new_copy(&vm->heap, buf, total));
-    free(buf);
+    f64 start, end;
+    if (!mal_vm_to_number(vm, roots[1], &start) || !mal_vm_to_number(vm, roots[2], &end)) goto done;
+    MalIntlObject *dtf = mal_value_to_intl_object(roots[0]);
+    roots[3] = intl_datetime_format_epoch_handle(vm, dtf->handle, start, false);
+    if (!mal_value_is_string(roots[3])) goto done;
+    if (start == end) { result = roots[3]; goto done; }
+    roots[4] = intl_datetime_format_epoch_handle(vm, dtf->handle, end, false);
+    if (!mal_value_is_string(roots[4])) goto done;
+    MalString *left = mal_value_to_string(roots[3]);
+    MalString *right = mal_value_to_string(roots[4]);
+    usize left_length = mal_string_length(left), right_length = mal_string_length(right);
+    usize total, bytes;
+    if (!mal_checked_size_add(left_length, right_length, SIZE_MAX - 3, &total) ||
+        !mal_checked_size_multiply(total + 3, sizeof(c16), SIZE_MAX, &bytes)) goto allocation_error;
+    total += 3;
+    c16 *buffer = malloc(bytes);
+    if (buffer == nullptr) goto allocation_error;
+    memcpy(buffer, mal_string_code_units(left), left_length * sizeof(c16));
+    buffer[left_length] = ' ';
+    buffer[left_length + 1] = 0x2013;
+    buffer[left_length + 2] = ' ';
+    memcpy(buffer + left_length + 3, mal_string_code_units(right), right_length * sizeof(c16));
+    result = mal_value_from_string(mal_string_new_copy(&vm->heap, buffer, total));
+    free(buffer);
+    goto done;
+ allocation_error:
+    mal_vm_throw_allocation_error(vm);
+ done:
+    mal_gc_unroot(&root);
     return result;
 }
 
@@ -2498,7 +2576,7 @@ static MalValue intl_date_time_format_range(MalVm *vm, MalValue this_value, cons
         return mal_value_new_undefined();
     }
     return intl_date_time_format_range_string(
-        vm, dtf, arg_count >= 1 ? args[0] : mal_value_new_undefined(), arg_count >= 2 ? args[1] : mal_value_new_undefined()
+        vm, this_value, arg_count >= 1 ? args[0] : mal_value_new_undefined(), arg_count >= 2 ? args[1] : mal_value_new_undefined()
     );
 }
 
@@ -2510,20 +2588,26 @@ static MalValue intl_date_time_format_range_to_parts(MalVm *vm, MalValue this_va
         return mal_value_new_undefined();
     }
     MalValue formatted = intl_date_time_format_range_string(
-        vm, dtf, arg_count >= 1 ? args[0] : mal_value_new_undefined(), arg_count >= 2 ? args[1] : mal_value_new_undefined()
+        vm, this_value, arg_count >= 1 ? args[0] : mal_value_new_undefined(), arg_count >= 2 ? args[1] : mal_value_new_undefined()
     );
     if (!mal_value_is_string(formatted)) {
         return mal_value_new_undefined();
     }
-    // Best-effort: a single literal part (exact field decomposition + source
-    // tagging need ICU field positions, which the shim does not yet expose).
+    // Range field/source spans still depend on the native interval plan.
+    MalValue roots[] = {formatted, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
     MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
+    roots[1] = mal_value_from_array_object(parts);
     MalObject *part = mal_intrinsic_new_object(vm);
+    roots[2] = mal_value_from_object(part);
     intl_resolved_set(vm, part, "type", mal_value_from_string(mal_intrinsic_ascii(vm, "literal")));
-    intl_resolved_set(vm, part, "value", formatted);
+    intl_resolved_set(vm, part, "value", roots[0]);
     intl_resolved_set(vm, part, "source", mal_value_from_string(mal_intrinsic_ascii(vm, "shared")));
-    intl_array_push(vm, parts, 0, mal_value_from_object(part));
-    return mal_value_from_array_object(parts);
+    intl_array_push(vm, parts, 0, roots[2]);
+    MalValue result = roots[1];
+    mal_gc_unroot(&root);
+    return result;
 }
 
 static MalValue intl_date_time_format_supported_locales_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
@@ -2550,39 +2634,44 @@ MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue loca
         i32 date_code = which == 2 ? -1 : 2;
         i32 time_code = which == 1 ? -1 : 2;
         return intl_datetime_format_epoch(
-            vm, mal_intrinsic_ascii(vm, "en-US"), time_value, date_code, time_code);
+            vm, mal_intrinsic_ascii(vm, "en-US"), time_value, date_code, time_code, nullptr);
     }
-    MalString *locale = intl_resolve_locale(vm, locales);
-    if (locale == nullptr) {
-        return mal_value_new_undefined();
-    }
+    MalValue roots[] = {locales, options, mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    IntlDateOptionBytes option_bytes = {0};
+    MalString *locale = intl_resolve_locale(vm, roots[0]);
+    if (locale == nullptr) goto done;
+    roots[2] = mal_value_from_string(locale);
+    if (!intl_datetime_locale_options(vm, &roots[1], &roots[3], &roots[4])) goto done;
     bool present;
     MalString *date_style = nullptr;
-    if (!intl_option_string(vm, options, "dateStyle", &date_style, &present)) {
-        return mal_value_new_undefined();
-    }
+    if (!intl_option_string(vm, roots[1], "dateStyle", &date_style, &present)) goto done;
+    if (present) roots[5] = mal_value_from_string(date_style);
     MalString *time_style = nullptr;
-    if (!intl_option_string(vm, options, "timeStyle", &time_style, &present)) {
-        return mal_value_new_undefined();
-    }
+    if (!intl_option_string(vm, roots[1], "timeStyle", &time_style, &present)) goto done;
+    if (present) roots[6] = mal_value_from_string(time_style);
     i32 date_code = intl_date_style_code(date_style);
     i32 time_code = intl_date_style_code(time_style);
     if (date_code == -2 || time_code == -2) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid dateStyle/timeStyle");
-        return mal_value_new_undefined();
+        goto done;
     }
-    // When neither style is given, apply the per-method default.
+    if ((which == 1 && time_code >= 0) || (which == 2 && date_code >= 0)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "date style is incompatible with this method");
+        goto done;
+    }
     if (date_code == -1 && time_code == -1) {
-        if (which == 0) {
-            date_code = 2;
-            time_code = 2;
-        } else if (which == 1) {
-            date_code = 2;
-        } else {
-            time_code = 2;
-        }
+        date_code = which == 2 ? -1 : 2;
+        time_code = which == 1 ? -1 : 2;
     }
-    return intl_datetime_format_epoch(vm, locale, time_value, date_code, time_code);
+    if (!intl_datetime_option_bytes(vm, roots[3], roots[4], &option_bytes)) goto done;
+    result = intl_datetime_format_epoch(vm, locale, time_value, date_code, time_code, &option_bytes);
+ done:
+    if (option_bytes.allocation != nullptr) free(option_bytes.allocation);
+    mal_gc_unroot(&root);
+    return result;
 #else
     (void) locales;
     (void) options;
@@ -2609,6 +2698,7 @@ static void intl_install_date_time_format(MalVm *vm, MalObject *intl_object) {
 
     mal_intrinsic_define_method_n(vm, constructor_object, "supportedLocalesOf", 1, intl_date_time_format_supported_locales_of);
     intl_define_getter(vm, prototype, "format", intl_date_time_format_get_format);
+    mal_intrinsic_define_method_n(vm, prototype, "formatToParts", 1, intl_date_time_format_to_parts);
     mal_intrinsic_define_method_n(vm, prototype, "formatRange", 2, intl_date_time_format_range);
     mal_intrinsic_define_method_n(vm, prototype, "formatRangeToParts", 2, intl_date_time_format_range_to_parts);
     mal_intrinsic_define_method_n(vm, prototype, "resolvedOptions", 0, intl_date_time_format_resolved_options);
@@ -2634,7 +2724,7 @@ static i32 intl_length_code(const MalString *style) {
 }
 #endif
 
-#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_LIST_FORMAT || MAL_INTL_HAS_RELATIVE_TIME_FORMAT || MAL_INTL_HAS_DURATION_FORMAT
+#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DATE_TIME_FORMAT || MAL_INTL_HAS_LIST_FORMAT || MAL_INTL_HAS_RELATIVE_TIME_FORMAT || MAL_INTL_HAS_DURATION_FORMAT
 static MalObject *intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, const char *type, MalValue value) {
     MalValue roots[] = {mal_value_from_array_object(parts), value, mal_value_new_undefined()};
     MalRootSpan root;
@@ -2648,8 +2738,8 @@ static MalObject *intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, 
     return part;
 }
 
-#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DURATION_FORMAT
-static MalValue intl_numeric_result(MalVm *vm, const c16 *units, usize length, const MalI18nNumericPart *spans, usize span_count, bool to_parts, bool with_unit) {
+#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DATE_TIME_FORMAT || MAL_INTL_HAS_DURATION_FORMAT
+static MalValue intl_formatted_result(MalVm *vm, const c16 *units, usize length, const MalI18nFormattedPart *spans, usize span_count, bool to_parts, bool with_unit) {
     MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -2659,7 +2749,7 @@ static MalValue intl_numeric_result(MalVm *vm, const c16 *units, usize length, c
     MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
     roots[1] = mal_value_from_array_object(parts);
     (void) mal_array_object_fresh_dense_reserve_exact(parts, (u32) span_count);
-    static const char *const TYPES[] = {"literal", "integer", "group", "decimal", "fraction", "minusSign", "plusSign", "nan", "infinity", "percentSign", "unit"};
+    static const char *const TYPES[] = {"literal", "integer", "group", "decimal", "fraction", "minusSign", "plusSign", "nan", "infinity", "percentSign", "unit", "era", "year", "relatedYear", "yearName", "month", "day", "weekday", "dayPeriod", "hour", "minute", "second", "timeZoneName", "unknown"};
     static const char *const UNITS[] = {"year", "month", "week", "day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"};
     u32 index = 0;
     for (usize i = 0; i < span_count; i++) {
@@ -3992,9 +4082,9 @@ static MalValue intl_duration_format_result(MalVm *vm, MalValue this_value, cons
     mal_gc_root(&root, roots, countof(roots));
     MalValue result = mal_value_new_undefined();
     c16 stack[256];
-    MalI18nNumericPart stack_spans[24];
+    MalI18nFormattedPart stack_spans[24];
     c16 *out = stack;
-    MalI18nNumericPart *spans = stack_spans;
+    MalI18nFormattedPart *spans = stack_spans;
     f64 units[10];
     if (!intl_to_duration_record(vm, roots[1], units)) goto done;
     usize spans_needed = 0;
@@ -4021,7 +4111,7 @@ static MalValue intl_duration_format_result(MalVm *vm, MalValue this_value, cons
             goto done;
         }
     }
-    result = intl_numeric_result(vm, out, (usize) n, spans, spans_needed, to_parts, true);
+    result = intl_formatted_result(vm, out, (usize) n, spans, spans_needed, to_parts, true);
     goto done;
  allocation_error:
     mal_vm_throw_allocation_error(vm);

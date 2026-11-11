@@ -10,19 +10,21 @@ export function runtimeGapBuildConfig(
 	const relativeTime = features.includes("intl-relative-time-format");
 	const duration = features.includes("intl-duration-format");
 	const number = features.includes("intl-number-format");
+	const datetime = features.includes("intl-date-time-format");
 	return resolveConfig({
 		engine: {
 			eval: false,
 			realms: false,
 			regexp: features.includes("regexp"),
 			intl: {
-				enabled: collator || listFormat || relativeTime || duration || number,
+				enabled: collator || listFormat || relativeTime || duration || number || datetime,
 				features: [
 					...(collator ? (["collator"] as const) : []),
 					...(listFormat ? (["list-format"] as const) : []),
 					...(relativeTime ? (["relative-time-format"] as const) : []),
 					...(duration ? (["duration-format"] as const) : []),
 					...(number ? (["number-format"] as const) : []),
+					...(datetime ? (["date-time-format"] as const) : []),
 				],
 			},
 		},

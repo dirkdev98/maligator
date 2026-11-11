@@ -25,7 +25,8 @@ export type RuntimeGapFeature =
 	| "intl-list-format"
 	| "intl-relative-time-format"
 	| "intl-duration-format"
-	| "intl-number-format";
+	| "intl-number-format"
+	| "intl-date-time-format";
 
 export interface RuntimeGapCaseDescriptor {
 	readonly id: string;
@@ -103,7 +104,8 @@ export function runtimeGapFeatures(value: unknown): ReadonlyArray<RuntimeGapFeat
 				feature !== "intl-list-format" &&
 				feature !== "intl-relative-time-format" &&
 				feature !== "intl-duration-format" &&
-				feature !== "intl-number-format",
+				feature !== "intl-number-format" &&
+				feature !== "intl-date-time-format",
 		) ||
 		new Set(value).size !== value.length
 	) {

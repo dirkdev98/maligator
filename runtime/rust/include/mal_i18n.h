@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 /* Identifies the flat transport contract shared with lib.rs. */
-#define MAL_I18N_ABI_VERSION 11u
+#define MAL_I18N_ABI_VERSION 12u
 
 /* Status codes for fallible entry points; mapped to JS exceptions by the C side. */
 typedef enum MalI18nStatus {
@@ -119,25 +119,34 @@ typedef struct MalI18nNumberResolved {
     int32_t priority;
     int32_t strip_zero;
 } MalI18nNumberResolved;
-typedef struct MalI18nNumericPart {
+/* Spans index UTF-16 code units; unit is -1 outside DurationFormat fields. */
+typedef struct MalI18nFormattedPart {
     size_t start;
     size_t len;
     int32_t kind;
     int32_t unit;
-} MalI18nNumericPart;
+} MalI18nFormattedPart;
 int32_t mal_i18n_unit_is_valid(const uint8_t *unit, size_t length);
 void *mal_i18n_number_formatter_new(const uint8_t *locale, size_t locale_len, const uint8_t *numbering, size_t numbering_len, int32_t style, const uint8_t *unit, size_t unit_len, int32_t unit_display, int32_t min_integer, int32_t min_fraction, int32_t max_fraction, int32_t min_significant, int32_t max_significant, int32_t grouping, int32_t sign_display, int32_t rounding_mode, int32_t increment, int32_t priority, int32_t strip_zero, MalI18nNumberResolved *resolved);
 void mal_i18n_number_formatter_resolved(void *handle, MalI18nNumberResolved *resolved);
-int32_t mal_i18n_number_formatter_format(void *handle, const uint8_t *text, size_t length, int32_t kind, uint32_t radix, uint16_t *out, size_t out_cap, MalI18nNumericPart *spans, size_t spans_cap, size_t *spans_needed);
+int32_t mal_i18n_number_formatter_format(void *handle, const uint8_t *text, size_t length, int32_t kind, uint32_t radix, uint16_t *out, size_t out_cap, MalI18nFormattedPart *spans, size_t spans_cap, size_t *spans_needed);
 size_t mal_i18n_number_formatter_free(void *handle);
 int32_t mal_i18n_number_format_default_en_us(const uint8_t *text, size_t length, uint8_t *out, int32_t out_cap);
 
 /* ---- Intl.DateTimeFormat (dateStyle / timeStyle) ----
  * date_style / time_style: -1 none, 0 full, 1 long, 2 medium, 3 short. */
-int32_t mal_i18n_datetime_format(const uint8_t *locale, size_t locale_len, int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, int32_t date_style, int32_t time_style, uint8_t *out, int32_t out_cap);
-void *mal_i18n_datetime_formatter_new(const uint8_t *locale, size_t locale_len, int32_t date_style, int32_t time_style);
-int32_t mal_i18n_datetime_formatter_format(void *handle, int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, uint8_t *out, int32_t out_cap);
-void mal_i18n_datetime_formatter_free(void *handle);
+int32_t mal_i18n_datetime_format(const uint8_t *locale, size_t locale_len, const uint8_t *calendar, size_t calendar_len, const uint8_t *numbering, size_t numbering_len, int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, int32_t date_style, int32_t time_style, uint8_t *out, int32_t out_cap);
+/* Calendar bytes are static; numbering bytes are copied from the selected provider. */
+typedef struct MalI18nDateTimeResolved {
+    const uint8_t *calendar;
+    size_t calendar_len;
+    uint8_t numbering[8];
+    size_t numbering_len;
+    size_t heap_bytes;
+} MalI18nDateTimeResolved;
+void *mal_i18n_datetime_formatter_new(const uint8_t *locale, size_t locale_len, const uint8_t *calendar, size_t calendar_len, const uint8_t *numbering, size_t numbering_len, int32_t date_style, int32_t time_style, MalI18nDateTimeResolved *resolved);
+int32_t mal_i18n_datetime_formatter_format(void *handle, int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, uint16_t *out, size_t out_cap, MalI18nFormattedPart *spans, size_t spans_cap, size_t *spans_needed);
+size_t mal_i18n_datetime_formatter_free(void *handle);
 
 /* ---- Intl.ListFormat ----
  * A borrowed UTF-16 string (mirrors Rust MalU16Str). */
@@ -191,7 +200,7 @@ void *mal_i18n_duration_new(const uint8_t *locale, size_t locale_len, const uint
 size_t mal_i18n_duration_free(void *handle);
 int32_t mal_i18n_duration_parse(const uint16_t *text, size_t length, double *out);
 /* Returns the full UTF-16 length, -2 for an invalid record, -1 for a rendering error. */
-int32_t mal_i18n_duration_format(void *handle, const double *units, uint16_t *out, size_t out_cap, MalI18nNumericPart *spans, size_t spans_cap, size_t *spans_needed);
+int32_t mal_i18n_duration_format(void *handle, const double *units, uint16_t *out, size_t out_cap, MalI18nFormattedPart *spans, size_t spans_cap, size_t *spans_needed);
 
 /* ---- Intl.RelativeTimeFormat ---- */
 typedef struct MalI18nRelativeResolved {
