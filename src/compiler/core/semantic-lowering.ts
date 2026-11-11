@@ -5580,7 +5580,20 @@ function compileDefaultConstructor(
 
 	if (superBinding) {
 		const location = getOrCreateBindingLocation(program, ctorFn, superBinding);
-		const parent = loadRegisterFromLocation(ctorFn, cursor.block, location);
+		const heritage = loadRegisterFromLocation(ctorFn, cursor.block, location);
+		const classBinding = classContext.classBinding;
+		const current =
+			classBinding === undefined
+				? undefined
+				: loadPrototypeOf(
+						ctorFn,
+						cursor,
+						loadRegisterFromLocation(
+							ctorFn,
+							cursor.block,
+							getOrCreateBindingLocation(program, ctorFn, classBinding),
+						),
+					);
 
 		// `constructor(...args) { super(...args); }`: forward every argument to
 		// the parent's [[Construct]] (with the active new.target) and bind the
@@ -5593,10 +5606,12 @@ function compileDefaultConstructor(
 		});
 
 		const result = nextCoreVariable(ctorFn);
-		cursor.block.emitter.emit({
-			type: "constructSuper",
-			registers: [result, parent, argumentsArray],
-		});
+		emitSuperConstruct(ctorFn, cursor, heritage, current, (parent) =>
+			cursor.block.emitter.emit({
+				type: "constructSuper",
+				registers: [result, parent, argumentsArray],
+			}),
+		);
 	}
 
 	// InitializeInstanceElements: a base default constructor installs at entry;
@@ -15637,7 +15652,21 @@ function compileSuperCall(
 	}
 
 	const location = getOrCreateBindingLocation(program, fn, superBinding);
-	const parent = loadRegisterFromLocation(fn, cursor.block, location);
+	const heritage = loadRegisterFromLocation(fn, cursor.block, location);
+	// GetSuperConstructor reads the active class's prototype before the arguments run.
+	const classBinding = fn.classContext?.classBinding;
+	const current =
+		classBinding === undefined
+			? undefined
+			: loadPrototypeOf(
+					fn,
+					cursor,
+					loadRegisterFromLocation(
+						fn,
+						cursor.block,
+						getOrCreateBindingLocation(program, fn, classBinding),
+					),
+				);
 
 	// super(...) is [[Construct]](parent, args, new.target): the parent builds
 	// `this` (forwarding the derived class's new.target so the instance gets the
@@ -15661,10 +15690,12 @@ function compileSuperCall(
 			type: "move",
 			registers: [destination, currentThis],
 		});
-		emitSourceCall(program, fn, cursor, callExpression, {
-			type: "constructSuperExplicit",
-			registers: [destination, parent, argumentsArray, newTarget, destination],
-		});
+		emitSuperConstruct(fn, cursor, heritage, current, (parent) =>
+			emitSourceCall(program, fn, cursor, callExpression, {
+				type: "constructSuperExplicit",
+				registers: [destination, parent, argumentsArray, newTarget, destination],
+			}),
+		);
 		storeSharedSuperThis(program, fn, cursor, destination);
 
 		if (fn.classContext.instanceInitializerBinding) {
@@ -15685,10 +15716,12 @@ function compileSuperCall(
 		}
 		return destination;
 	}
-	emitSourceCall(program, fn, cursor, callExpression, {
-		type: "constructSuper",
-		registers: [destination, parent, argumentsArray],
-	});
+	emitSuperConstruct(fn, cursor, heritage, current, (parent) =>
+		emitSourceCall(program, fn, cursor, callExpression, {
+			type: "constructSuper",
+			registers: [destination, parent, argumentsArray],
+		}),
+	);
 
 	// super() binds `this`; refresh the lexical-`this` cell (seeded EMPTY at entry)
 	// so a nested arrow capturing `this` observes the bound instance.
@@ -15707,6 +15740,71 @@ function compileSuperCall(
 	}
 
 	return destination;
+}
+
+function loadPrototypeOf(
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	object: number,
+): number {
+	const prototype = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "loadPrototype", registers: [prototype, object] });
+	return prototype;
+}
+
+/*
+ * The super constructor is the heritage captured at class definition until
+ * Object.setPrototypeOf replaces the class's prototype. The edge for an unchanged
+ * prototype keeps the captured operand, which class layouts and call transfer
+ * resolve; the other edge constructs the current prototype, and a non-constructor
+ * there throws the TypeError of SuperCall.
+ */
+function emitSuperConstruct(
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	heritage: number,
+	current: number | undefined,
+	construct: (parent: number) => void,
+): void {
+	if (current === undefined) {
+		construct(heritage);
+		return;
+	}
+	const unchanged = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "binary",
+		registers: [unchanged, current, heritage],
+		operator: "===",
+	});
+	const toCaptured: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [unchanged],
+		blocks: [-1],
+	};
+	const toCurrent: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(toCaptured, toCurrent);
+	const join: Array<Extract<CompilerInstruction, { type: "jump" }>> = [];
+	for (const [entry, parent] of [
+		[toCaptured, heritage],
+		[toCurrent, current],
+	] as const) {
+		const block = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+		entry.blocks[0] = block;
+		cursor.block = fn.blocks[block]!;
+		construct(parent);
+		const done: Extract<CompilerInstruction, { type: "jump" }> = {
+			type: "jump",
+			blocks: [-1],
+		};
+		cursor.block.emitter.emit(done);
+		join.push(done);
+	}
+	const joined = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	for (const done of join) done.blocks[0] = joined;
+	cursor.block = fn.blocks[joined]!;
 }
 
 /**

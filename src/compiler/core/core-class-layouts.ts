@@ -1,7 +1,12 @@
 import { literalTemplateKeys } from "./core-instance-method-hints.ts";
 import { coreDirectCreatedFunction } from "./core-ir-call-targets.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import type {
+	CoreBlockId,
+	CoreFunctionId,
+	CoreInstructionId,
+	CoreValueId,
+} from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 /** An own instance key: a string constant, or a module-private name held in a global slot. */
@@ -313,12 +318,46 @@ function walkConstructor(fn: CoreFunctionStore): ConstructorWalk {
 		const terminator = fn.blockTerminator(block);
 		const kind = fn.instructionKind(terminator);
 		if (kind === "return") return { parentSlot, keys, complete: true };
-		if (kind !== "jump") return { parentSlot, keys, complete: false };
 		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
-		const next = fn.kernel.terminatorEdgeBlock(edgeStart);
-		if (visited.has(next)) return { parentSlot, keys, complete: false };
+		const next =
+			kind === "jump"
+				? fn.kernel.terminatorEdgeBlock(edgeStart)
+				: kind === "branch"
+					? capturedSuperEdge(fn, edgeStart)
+					: undefined;
+		if (next === undefined || visited.has(next))
+			return { parentSlot, keys, complete: false };
 		block = next;
 	}
+}
+
+/*
+ * SuperCall branches on whether the class's prototype is still the heritage captured
+ * at definition. The layout describes that case, so the walk takes the edge whose
+ * construct keeps the captured parent; the other edge's instances miss the layout's
+ * guarded sites.
+ */
+function capturedSuperEdge(
+	fn: CoreFunctionStore,
+	edgeStart: number,
+): CoreBlockId | undefined {
+	const parents = [0, 1].map((edge) => {
+		const block = fn.kernel.terminatorEdgeBlock(edgeStart + edge);
+		for (const instruction of fn.bodyInstructionIds(block)) {
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode !== "constructSuper" && opcode !== "constructSuperExplicit") continue;
+			const parent = operands(fn, instruction)[0];
+			return {
+				block,
+				captured: parent !== undefined && globalSlotOf(fn, parent) !== undefined,
+			};
+		}
+		return undefined;
+	});
+	const [first, second] = parents;
+	if (first === undefined || second === undefined || first.captured === second.captured)
+		return undefined;
+	return first.captured ? first.block : second.block;
 }
 
 function ordinaryDataKeys(program: CoreProgram): Set<number> {

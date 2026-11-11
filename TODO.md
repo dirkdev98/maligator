@@ -121,6 +121,13 @@ Use representative compiled workloads to locate executed dispatch, allocation,
 property and collection costs. Keep field facts bounded and consumer-driven;
 static generated-code size and helper counts do not establish runtime cost.
 
+- [ ] Construct a known parent directly from `super()`. A subclass instance still
+      costs about 58 ns against Node's 6 (5M `new Derived(x)`: 291 vs 29 ms): each call
+      builds an argument array, marshals it as a spread, resolves bound targets and
+      reads `new.target.prototype` on the generic construct path. The edge that keeps
+      the captured heritage can enter the parent's construct body with direct
+      arguments.
+
 - [ ] Test bounded method target sets for one repeated Core-store receiver using existing
       provenance, target caps and incremental summaries. Track relevant property/prototype
       writes and retain open fallbacks. Stop if exactness needs whole-heap flow; require
@@ -439,14 +446,6 @@ contracts or investigates costs still visible after the string follow-ups.
       corridor that entry-pair and dense pair virtualization match, and a done input on
       `ITERATOR_STEP` needs a fifth register in the 20-byte `MalInstruction`. Either
       teach those candidates the guarded shape or tie the done input to the done output.
-
-- [ ] Look up the super constructor when `super()` runs. GetSuperConstructor reads
-      the active function's current prototype, so `Object.setPrototypeOf(C, other)`
-      changes what `super()` constructs; the lowering uses the class heritage
-      captured at definition. Keep a guarded fast path for the unchanged parent.
-      `constructSuper`'s parent operand is also the call-transfer callee and the class
-      layout analysis's parent slot, so a `loadPrototype` of the class binding needs
-      both to resolve it, or a guard that layout walking follows on its expected edge.
 
 - [ ] Parse CreateDynamicFunction parameters and body separately. `new Function("/*", "*/){")`
       compiles because the joined source is valid; the spec parses each part on
@@ -848,7 +847,11 @@ remains a Maligator extension and does not count as global fetch conformance.
       outweighs marking (494 vs 375 ms over 85 minors), led by finalizers freeing RAW
       buffers. Sweep young blocks lazily on reuse or on the GC workers, preserving
       finalizer order and exact live accounting; require lower tail latency without a
-      material total-CPU/throughput regression.
+      material total-CPU/throughput regression. A sample of the shape workload puts the
+      minor sweep at 2.1% of main-thread time against 5.3% for all safepoints, while both
+      GC workers idle. Lazy reuse must first keep finalizers off other cells (a string
+      cursor clears its iterator's owner, so a reused iterator cell would be written)
+      and audit host type finalizers; a worker sweep needs a concurrent RAW free path.
 
 ### Concurrent generational GC experiments
 
