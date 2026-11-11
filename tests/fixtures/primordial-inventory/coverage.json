@@ -77194,6 +77194,19 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"Intl.NumberFormat.prototype\",\"formatToParts\"]",
+			"owner": "Intl.NumberFormat.prototype",
+			"ownerPaths": [
+				"Intl.NumberFormat.prototype",
+				"MAL_INTRINSIC_INTL_NUMBER_FORMAT_PROTOTYPE"
+			],
+			"key": "formatToParts",
+			"kind": "data",
+			"operations": ["Intl.NumberFormat.prototype.formatToParts"],
+			"task": "L-04",
+			"decisions": []
+		},
+		{
 			"id": "[\"Intl.NumberFormat.prototype\",\"resolvedOptions\"]",
 			"owner": "Intl.NumberFormat.prototype",
 			"ownerPaths": [
@@ -77233,6 +77246,26 @@
 			"id": "[\"Intl.NumberFormat.prototype.format<get>\",\"name\"]",
 			"owner": "Intl.NumberFormat.prototype.format<get>",
 			"ownerPaths": ["Intl.NumberFormat.prototype.format<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.NumberFormat.prototype.formatToParts\",\"length\"]",
+			"owner": "Intl.NumberFormat.prototype.formatToParts",
+			"ownerPaths": ["Intl.NumberFormat.prototype.formatToParts"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.NumberFormat.prototype.formatToParts\",\"name\"]",
+			"owner": "Intl.NumberFormat.prototype.formatToParts",
+			"ownerPaths": ["Intl.NumberFormat.prototype.formatToParts"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -185089,6 +185122,26 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Intl.NumberFormat.prototype.format<get>"],
+			"task": "L-04",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.NumberFormat.prototype.formatToParts\",\"<call>\"]",
+			"owner": "Intl.NumberFormat.prototype.formatToParts",
+			"ownerPaths": ["Intl.NumberFormat.prototype.formatToParts"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["Intl.NumberFormat.prototype.formatToParts"],
+			"task": "L-04",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.NumberFormat.prototype.formatToParts\",\"<construct>\"]",
+			"owner": "Intl.NumberFormat.prototype.formatToParts",
+			"ownerPaths": ["Intl.NumberFormat.prototype.formatToParts"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["Intl.NumberFormat.prototype.formatToParts"],
 			"task": "L-04",
 			"decisions": []
 		},
@@ -306424,6 +306477,10 @@
 			"identities": ["Intl.NumberFormat.prototype.format<get>"]
 		},
 		{
+			"id": "Intl.NumberFormat.prototype.formatToParts",
+			"identities": ["Intl.NumberFormat.prototype.formatToParts"]
+		},
+		{
 			"id": "Intl.NumberFormat.prototype.resolvedOptions",
 			"identities": ["Intl.NumberFormat.prototype.resolvedOptions"]
 		},
@@ -314796,8 +314853,8 @@
 			"owner": "Intl.NumberFormat.prototype",
 			"key": "formatToParts",
 			"task": "L-04",
-			"exposures": [],
-			"state": "not-installed-in-full-inventory"
+			"exposures": ["[\"Intl.NumberFormat.prototype\",\"formatToParts\"]"],
+			"state": "reconciled"
 		},
 		{
 			"owner": "Intl.NumberFormat.prototype",
