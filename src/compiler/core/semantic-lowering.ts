@@ -3997,6 +3997,15 @@ export function referencesArguments(node: unknown): boolean {
 			if (parent?.type === "MemberExpression" && key === "property" && !parent.computed) {
 				return;
 			}
+			// A label is not an identifier reference.
+			if (
+				key === "label" &&
+				(parent?.type === "LabeledStatement" ||
+					parent?.type === "BreakStatement" ||
+					parent?.type === "ContinueStatement")
+			) {
+				return;
+			}
 			if (
 				(parent?.type === "Property" ||
 					parent?.type === "MethodDefinition" ||
