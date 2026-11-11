@@ -125,12 +125,10 @@ static generated-code size and helper counts do not establish runtime cost.
       performs. Scalar replacement only materializes at a `return`, so such a record
       is now allocated with its stores intact, and a returned field read stays boxed.
 
-- [ ] Pass `super()` arguments without an array. A subclass instance still costs about
-      50 ns against Node's 6 (5M `new Derived(x)`: 251 vs 29 ms). A plain parent
-      constructor is entered directly with the argument array's elements, but every
-      call still builds that array, and the frontend's fixed-position list does not
-      fuse into an inline literal. A `constructSuper` that takes its arguments as
-      operands would remove the allocation.
+- [ ] Forward a default derived constructor's own arguments to `super()` instead of
+      building a rest array (5M `new Implicit(x)`: 170 vs Node's 26 ms). The spec
+      passes the argument list through, so a forwarding op is also exact; it needs the
+      raw-argument planner lists that `createRestArguments` sits in.
 
 - [ ] Test bounded method target sets for one repeated Core-store receiver using existing
       provenance, target caps and incremental summaries. Track relevant property/prototype

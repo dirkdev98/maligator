@@ -600,6 +600,7 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 				break;
 			case "PRECISE_NUMBER_SUM":
 			case "CONCAT_STRINGS":
+			case "CONSTRUCT_SUPER":
 				single(index, instruction.arguments, instruction.arguments.length);
 				break;
 			case "CONSTRUCT":
@@ -3407,7 +3408,9 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 		case "CONSTRUCT_SPREAD":
 			return `{ .opcode = MAL_OP_CONSTRUCT_SPREAD, .as.construct_spread = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .arguments_array = ${instruction.argumentsArray} } }`;
 		case "CONSTRUCT_SUPER":
-			return `{ .opcode = MAL_OP_CONSTRUCT_SUPER, .as.construct_super = { .dst = ${instruction.dst}, .parent = ${instruction.parent}, .arguments_array = ${instruction.argumentsArray} } }`;
+			return `{ .opcode = MAL_OP_CONSTRUCT_SUPER, .as.construct_super = { .dst = ${instruction.dst}, .parent = ${instruction.parent}, .data_offset = ${sideDataOffset()} } }`;
+		case "CONSTRUCT_SUPER_SPREAD":
+			return `{ .opcode = MAL_OP_CONSTRUCT_SUPER_SPREAD, .as.construct_super_spread = { .dst = ${instruction.dst}, .parent = ${instruction.parent}, .arguments_array = ${instruction.argumentsArray} } }`;
 		case "CONSTRUCT_SUPER_EXPLICIT":
 			return `{ .opcode = MAL_OP_CONSTRUCT_SUPER_EXPLICIT, .as.construct_super_explicit = { .dst = ${instruction.dst}, .parent = ${instruction.parent}, .arguments_array = ${instruction.argumentsArray}, .new_target = ${instruction.newTarget} } }`;
 		case "SET_THIS":

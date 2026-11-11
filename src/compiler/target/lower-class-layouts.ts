@@ -12,6 +12,7 @@ import type { CoreTargetClassLayout, CoreTargetFunctionMap } from "./core-target
 const UNDER_CONSTRUCTION: ReadonlySet<string> = new Set([
 	"createBaseConstructReceiver",
 	"constructSuper",
+	"constructSuperSpread",
 	"constructSuperExplicit",
 	"createObject",
 	"createObjectShaped",

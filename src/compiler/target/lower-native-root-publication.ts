@@ -87,6 +87,7 @@ export function nativeUnobservedCallResultRegisters(
 				case "CALL_REST_ARGUMENTS":
 				case "CONSTRUCT_SPREAD":
 				case "CONSTRUCT_SUPER":
+				case "CONSTRUCT_SUPER_SPREAD":
 				case "CONSTRUCT_SUPER_EXPLICIT":
 					final = true;
 					break;

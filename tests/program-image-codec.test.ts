@@ -1039,6 +1039,7 @@ describe("program-image-codec", () => {
 			"STRING_CONCAT_LENGTH",
 			"CONCAT_STRINGS",
 			"LOAD_DYNAMIC_ARGUMENT",
+			"CONSTRUCT_SUPER",
 		];
 		expect(WIRE_OPCODES.slice(-appended.length)).toEqual(appended);
 	});

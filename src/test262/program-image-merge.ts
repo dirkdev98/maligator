@@ -547,6 +547,7 @@ function cloneInstruction(
 		case "CALL_SPREAD_ITERABLE":
 		case "CONSTRUCT_SPREAD":
 		case "CONSTRUCT_SUPER":
+		case "CONSTRUCT_SUPER_SPREAD":
 		case "CONSTRUCT_SUPER_EXPLICIT":
 		case "SET_THIS":
 		case "BUILTIN_ERROR":

@@ -16351,9 +16351,24 @@ class NativeInstructionEmission {
 					this.throwCheck(),
 				];
 			case "CONSTRUCT_SUPER": {
-				// `super(...args)`: construct the parent, bind the result as this activation's
+				// `super(a, b)`: construct the parent, bind the result as this activation's
 				// (rooted, mutable) `this`, and yield it. Only appears in derived
 				// constructors, so `thisRef` is always the rooted this-slot.
+				const args = instruction.arguments;
+				const argsExpr =
+					args.length === 0
+						? "nullptr"
+						: `((MalValue[]){ ${args.map((register) => this.boxed(register)).join(", ")} })`;
+				const tmp = `construct_super_${this.ip}`;
+				return [
+					`MalCompletion ${tmp} = mal_vm_op_construct_super_arguments(vm, ${this.boxed(instruction.parent)}, ${argsExpr}, ${args.length}, ${nativeBodyReference(this.context.resources, "newTarget")}, ${this.thisRef}, &${this.thisRef});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
+					`r${instruction.dst} = ${this.thisRef};`,
+					this.callPoll(),
+				];
+			}
+			case "CONSTRUCT_SUPER_SPREAD": {
+				// `super(...args)`, the array form of CONSTRUCT_SUPER.
 				const tmp = `construct_super_${this.ip}`;
 				return [
 					`MalCompletion ${tmp} = mal_vm_op_construct_super(vm, ${this.boxed(instruction.parent)}, ${this.boxed(instruction.argumentsArray)}, ${nativeBodyReference(this.context.resources, "newTarget")}, ${this.thisRef}, &${this.thisRef});`,

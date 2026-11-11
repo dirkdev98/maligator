@@ -1081,7 +1081,10 @@ describe("Core local canonicalization", () => {
 			derivedEntry,
 		).map(({ value }) => value);
 		const [beforeThis] = derived.appendInstruction(derivedEntry, "loadThis", []);
-		derived.appendInstruction(derivedEntry, "constructSuper", [parent!, argumentsArray!]);
+		derived.appendInstruction(derivedEntry, "constructSuperSpread", [
+			parent!,
+			argumentsArray!,
+		]);
 		const [afterThis] = derived.appendInstruction(derivedEntry, "loadThis", []);
 		const [thisSame] = derived.appendInstruction(
 			derivedEntry,

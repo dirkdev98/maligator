@@ -296,6 +296,12 @@ function prototypeMembers(definition: ClassDefinition): OwnMembers {
 	return { methods, accessors, methodFunctions };
 }
 
+const SUPER_CONSTRUCTS: ReadonlySet<string> = new Set([
+	"constructSuper",
+	"constructSuperSpread",
+	"constructSuperExplicit",
+]);
+
 interface ConstructorWalk {
 	readonly parentBinding: string | undefined;
 	readonly keys: ReadonlyArray<CoreClassLayoutKey>;
@@ -320,7 +326,7 @@ function walkConstructor(fn: CoreFunctionStore): ConstructorWalk {
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.instructionOpcodeName(instruction);
 			const args = operands(fn, instruction);
-			if (opcode === "constructSuper" || opcode === "constructSuperExplicit") {
+			if (SUPER_CONSTRUCTS.has(opcode)) {
 				parentBinding = args[0] === undefined ? undefined : bindingOf(fn, args[0]);
 				continue;
 			}
@@ -377,7 +383,7 @@ function capturedSuperEdge(
 		const block = fn.kernel.terminatorEdgeBlock(edgeStart + edge);
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode !== "constructSuper" && opcode !== "constructSuperExplicit") continue;
+			if (!SUPER_CONSTRUCTS.has(opcode)) continue;
 			const parent = operands(fn, instruction)[0];
 			return {
 				block,

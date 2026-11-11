@@ -4397,13 +4397,13 @@ void mal_op_construct_spread(MalCallable *callable, const MalInstruction *instru
     mal_vm_construct_dispatch(vm, callee, base, argument_count, dst);
 }
 
-// Shared by the interpreter op and the native backend: `super(...args)`. Constructs
+// Shared by the interpreter ops and the native backend: `super(a, b)`. Constructs
 // the parent with the derived new.target and BindThisValue-binds the result as
 // `this`. `current_this` is the (uninitialized EMPTY) binding; on success *this_out
 // receives the bound `this` (which the caller stores back into its this binding and
 // the dst register). Sets vm->completion and returns it on any throw.
-MalCompletion mal_vm_op_construct_super(
-    MalVm *vm, MalValue parent, MalValue arguments_array, MalValue new_target,
+MalCompletion mal_vm_op_construct_super_arguments(
+    MalVm *vm, MalValue parent, const MalValue *args, i32 arg_count, MalValue new_target,
     MalValue current_this, MalValue *this_out
 ) {
     *this_out = current_this;
@@ -4413,32 +4413,11 @@ MalCompletion mal_vm_op_construct_super(
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Class constructor cannot be invoked without 'new'");
         return vm->completion;
     }
-    MalCompletion completion;
-    MalArrayObject *list = mal_value_is_array_object(arguments_array)
-        ? mal_value_to_array_object(arguments_array) : nullptr;
-    if (mal_value_is_function_object(parent) && list != nullptr &&
-        (list->length == 0 ||
-         (list->elements != nullptr && list->dense_count >= list->length &&
-          !list->dense_maybe_holey))) {
-        // The list is this call's own fresh array, rooted by the caller and
-        // unreachable from the parent, so its dense elements serve as the
-        // argument vector in place.
-        completion = mal_vm_construct_direct_with_target(
-            vm, mal_function_object_function_index(mal_value_to_function_object(parent)),
-            parent, list->elements, (i32) list->length, new_target);
-    } else {
-        // Marshal the super arguments onto the value stack (bounds-checked); the
-        // value stack is fixed-capacity, so the args pointer stays valid across the
-        // construct.
-        i32 base = vm->value_stack_size;
-        i32 argument_count = mal_vm_marshal_spread(vm, arguments_array);
-        if (argument_count < 0) {
-            return vm->completion;
-        }
-        completion = mal_vm_construct_value_with_target(
-            vm, parent, &vm->value_stack[base], argument_count, new_target);
-        vm->value_stack_size = base;
-    }
+    MalCompletion completion = mal_value_is_function_object(parent)
+        ? mal_vm_construct_direct_with_target(
+              vm, mal_function_object_function_index(mal_value_to_function_object(parent)),
+              parent, args, arg_count, new_target)
+        : mal_vm_construct_value_with_target(vm, parent, args, arg_count, new_target);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
         return completion;
@@ -4461,7 +4440,74 @@ MalCompletion mal_vm_op_construct_super(
     return completion;
 }
 
+MalCompletion mal_vm_op_construct_super(
+    MalVm *vm, MalValue parent, MalValue arguments_array, MalValue new_target,
+    MalValue current_this, MalValue *this_out
+) {
+    MalArrayObject *list = mal_value_is_array_object(arguments_array)
+        ? mal_value_to_array_object(arguments_array) : nullptr;
+    if (list != nullptr &&
+        (list->length == 0 ||
+         (list->elements != nullptr && list->dense_count >= list->length &&
+          !list->dense_maybe_holey))) {
+        // The list is this call's own fresh array, rooted by the caller and
+        // unreachable from the parent, so its dense elements serve as the
+        // argument vector in place.
+        return mal_vm_op_construct_super_arguments(
+            vm, parent, list->elements, (i32) list->length, new_target,
+            current_this, this_out);
+    }
+    // Marshal the super arguments onto the value stack (bounds-checked); the
+    // value stack is fixed-capacity, so the args pointer stays valid across the
+    // construct.
+    *this_out = current_this;
+    i32 base = vm->value_stack_size;
+    i32 argument_count = mal_vm_marshal_spread(vm, arguments_array);
+    if (argument_count < 0) {
+        return vm->completion;
+    }
+    MalCompletion completion = mal_vm_op_construct_super_arguments(
+        vm, parent, &vm->value_stack[base], argument_count, new_target,
+        current_this, this_out);
+    vm->value_stack_size = base;
+    return completion;
+}
+
 void mal_op_construct_super(MalCallable *callable, const MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    // Frames may relocate while the parent constructor runs; address the caller
+    // by index for the post-construct writes rather than holding `callable`.
+    i32 caller_frame_index = vm->frame_count - 1;
+    const i32 *data = mal_op_instruction_data(callable, instruction->as.construct_super.data_offset);
+    i32 argument_count = data[0];
+    i32 base = vm->value_stack_size;
+    if (argument_count > vm->value_stack_capacity - base) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+        return;
+    }
+    for (i32 i = 0; i < argument_count; i++) {
+        vm->value_stack[base + i] = callable->registers[data[1 + i]];
+    }
+    vm->value_stack_size = base + argument_count;
+    MalValue bound_this;
+    MalCompletion completion = mal_vm_op_construct_super_arguments(
+        vm,
+        callable->registers[instruction->as.construct_super.parent],
+        &vm->value_stack[base],
+        argument_count,
+        callable->new_target,
+        callable->this_value,
+        &bound_this
+    );
+    vm->value_stack_size = base;
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        return;
+    }
+    vm->frames[caller_frame_index].this_value = bound_this;
+    vm->frames[caller_frame_index].registers[instruction->as.construct_super.dst] = bound_this;
+}
+
+void mal_op_construct_super_spread(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     // Frames may relocate while the parent constructor runs; address the caller
     // by index for the post-construct writes rather than holding `callable`.
@@ -4469,8 +4515,8 @@ void mal_op_construct_super(MalCallable *callable, const MalInstruction *instruc
     MalValue bound_this;
     MalCompletion completion = mal_vm_op_construct_super(
         vm,
-        callable->registers[instruction->as.construct_super.parent],
-        callable->registers[instruction->as.construct_super.arguments_array],
+        callable->registers[instruction->as.construct_super_spread.parent],
+        callable->registers[instruction->as.construct_super_spread.arguments_array],
         callable->new_target,
         callable->this_value,
         &bound_this
@@ -4479,7 +4525,7 @@ void mal_op_construct_super(MalCallable *callable, const MalInstruction *instruc
         return;
     }
     vm->frames[caller_frame_index].this_value = bound_this;
-    vm->frames[caller_frame_index].registers[instruction->as.construct_super.dst] = bound_this;
+    vm->frames[caller_frame_index].registers[instruction->as.construct_super_spread.dst] = bound_this;
 }
 
 void mal_op_construct_super_explicit(MalCallable *callable, const MalInstruction *instruction) {

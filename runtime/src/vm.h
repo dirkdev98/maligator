@@ -798,8 +798,12 @@ typedef struct MalInstruction {
         } construct_spread;
 
         struct {
-            i32 dst, parent, arguments_array;
+            i32 dst, parent, data_offset;
         } construct_super;
+
+        struct {
+            i32 dst, parent, arguments_array;
+        } construct_super_spread;
 
         struct {
             i32 dst, parent, arguments_array, new_target;

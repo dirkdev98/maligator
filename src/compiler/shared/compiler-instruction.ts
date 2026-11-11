@@ -876,6 +876,12 @@ type CompilerOperation =
 	| {
 			type: "constructSuper";
 
+			// [destination, parent, ...arguments]
+			registers: [number, number, ...Array<number>];
+	  }
+	| {
+			type: "constructSuperSpread";
+
 			// [destination, parent, arguments_array]
 			registers: [number, number, number];
 	  }

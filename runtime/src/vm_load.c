@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 91u
+#define WIRE_VERSION 92u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1273,11 +1273,22 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             o->as.construct_spread.callee = rd_i32(r);
             o->as.construct_spread.arguments_array = rd_i32(r);
             return;
-        case WIRE_CONSTRUCT_SUPER:
+        case WIRE_CONSTRUCT_SUPER: {
             o->opcode = MAL_OP_CONSTRUCT_SUPER;
             o->as.construct_super.dst = rd_i32(r);
             o->as.construct_super.parent = rd_i32(r);
-            o->as.construct_super.arguments_array = rd_i32(r);
+            u32 count = rd_count(r, 1);
+            if (!r->ok || !i32_builder_reserve(side_data, r, (usize) count + 1)) return;
+            o->as.construct_super.data_offset = (i32) side_data->count;
+            side_data->data[side_data->count++] = (i32) count;
+            for (u32 i = 0; i < count; i++) side_data->data[side_data->count++] = rd_i32(r);
+            return;
+        }
+        case WIRE_CONSTRUCT_SUPER_SPREAD:
+            o->opcode = MAL_OP_CONSTRUCT_SUPER_SPREAD;
+            o->as.construct_super_spread.dst = rd_i32(r);
+            o->as.construct_super_spread.parent = rd_i32(r);
+            o->as.construct_super_spread.arguments_array = rd_i32(r);
             return;
         case WIRE_CONSTRUCT_SUPER_EXPLICIT:
             o->opcode = MAL_OP_CONSTRUCT_SUPER_EXPLICIT;
@@ -1693,6 +1704,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_CALL_REST_ARGUMENTS, call_rest_arguments);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SPREAD, construct_spread);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER, construct_super);
+        MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER_SPREAD, construct_super_spread);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER_EXPLICIT, construct_super_explicit);
         MAL_WRITES_DST(MAL_OP_CREATE_PRIVATE_NAME, create_private_name);
         MAL_WRITES_DST(MAL_OP_LOAD_UNDECLARED, load_undeclared);

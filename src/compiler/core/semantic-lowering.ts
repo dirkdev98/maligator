@@ -5617,7 +5617,7 @@ function compileDefaultConstructor(
 		const result = nextCoreVariable(ctorFn);
 		emitSuperConstruct(ctorFn, cursor, heritage, current, (parent) =>
 			cursor.block.emitter.emit({
-				type: "constructSuper",
+				type: "constructSuperSpread",
 				registers: [result, parent, argumentsArray],
 			}),
 		);
@@ -15948,16 +15948,23 @@ function compileSuperCall(
 
 	// super(...) is [[Construct]](parent, args, new.target): the parent builds
 	// `this` (forwarding the derived class's new.target so the instance gets the
-	// derived prototype), which the op then binds as the active `this`. The args
-	// are collected into an array (handling spread) for the construct.
-	const argumentsArray = compileSpreadArgumentsArray(
-		program,
-		fn,
-		cursor,
-		callExpression.arguments,
+	// derived prototype), which the op then binds as the active `this`. Spread
+	// arguments, and the explicit form arrows and eval use, collect into an array.
+	const explicit = Boolean(
+		fn.classContext?.superThisStateBinding && fn.classContext.superNewTargetBinding,
 	);
+	const positional =
+		!explicit && !callExpression.arguments.some((arg) => arg.type === "SpreadElement");
+	const args = positional
+		? callExpression.arguments.map((arg) =>
+				compileExpression(program, fn, cursor, arg as ESTree.Expression),
+			)
+		: [];
+	const argumentsArray = positional
+		? -1
+		: compileSpreadArgumentsArray(program, fn, cursor, callExpression.arguments);
 	const destination = nextCoreVariable(fn);
-	if (fn.classContext?.superThisStateBinding && fn.classContext.superNewTargetBinding) {
+	if (explicit && fn.classContext?.superNewTargetBinding) {
 		const newTarget = loadRegisterFromLocation(
 			fn,
 			cursor.block,
@@ -15995,10 +16002,18 @@ function compileSuperCall(
 		return destination;
 	}
 	emitSuperConstruct(fn, cursor, heritage, current, (parent) =>
-		emitSourceCall(program, fn, cursor, callExpression, {
-			type: "constructSuper",
-			registers: [destination, parent, argumentsArray],
-		}),
+		emitSourceCall(
+			program,
+			fn,
+			cursor,
+			callExpression,
+			positional
+				? { type: "constructSuper", registers: [destination, parent, ...args] }
+				: {
+						type: "constructSuperSpread",
+						registers: [destination, parent, argumentsArray],
+					},
+		),
 	);
 
 	// super() binds `this`; refresh the lexical-`this` cell (seeded EMPTY at entry)

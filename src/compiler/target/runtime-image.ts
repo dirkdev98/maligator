@@ -1259,6 +1259,12 @@ export type BytecodeInstruction =
 			opcode: "CONSTRUCT_SUPER";
 			dst: number;
 			parent: number;
+			arguments: Array<number>;
+	  }
+	| {
+			opcode: "CONSTRUCT_SUPER_SPREAD";
+			dst: number;
+			parent: number;
 			argumentsArray: number;
 	  }
 	| {
@@ -2882,6 +2888,7 @@ const RUNTIME_INSTRUCTION_COPY_SCHEMA = {
 	LOAD_PROPERTY_STATIC_SHAPE_CASE: { slots: "copy-list" },
 	CALL_REST_ARGUMENTS: { prefixArguments: "copy-list" },
 	CALL_SPREAD_ITERABLE: { prefixArguments: "copy-list" },
+	CONSTRUCT_SUPER: { arguments: "copy-list" },
 	CREATE_PRIVATE_NAMES: { capturedIndices: "copy-list" },
 	INIT_PRIVATE_FIELDS: { keyRegisters: "copy-list" },
 	COPY_DATA_PROPERTIES: { excluded: "copy-list" },
@@ -4486,6 +4493,13 @@ function lowerInstructionToBytecodeInstruction(
 		case "constructSuper":
 			return {
 				opcode: "CONSTRUCT_SUPER",
+				dst: instruction.registers[0],
+				parent: instruction.registers[1],
+				arguments: instruction.registers.slice(2),
+			};
+		case "constructSuperSpread":
+			return {
+				opcode: "CONSTRUCT_SUPER_SPREAD",
 				dst: instruction.registers[0],
 				parent: instruction.registers[1],
 				argumentsArray: instruction.registers[2],

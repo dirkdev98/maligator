@@ -550,11 +550,14 @@ void mal_op_construct(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_construct_spread(MalCallable *callable, const MalInstruction *instruction);
 
 /**
- * `super(...args)`: [[Construct]] the parent forwarding the derived
- * constructor's new.target, then bind the result as `this`. The parent comes
- * from registers[parent], the arguments from the array in registers[arguments_array].
+ * `super(a, b)`: [[Construct]] the parent forwarding the derived constructor's
+ * new.target, then bind the result as `this`. The parent comes from
+ * registers[parent], the argument registers from the instruction's side data.
  */
 void mal_op_construct_super(MalCallable *callable, const MalInstruction *instruction);
+
+/** `super(...args)`: mal_op_construct_super with the arguments in an array register. */
+void mal_op_construct_super_spread(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_construct_super_explicit(MalCallable *callable, const MalInstruction *instruction);
 
@@ -4399,11 +4402,17 @@ MalValue mal_vm_op_load_super_property(
 );
 
 /**
- * `super(...args)`: construct `parent` with the derived new.target and BindThisValue
+ * `super(a, b)`: construct `parent` with the derived new.target and BindThisValue
  * the result. `current_this` is the (EMPTY) binding; on success *this_out is the
  * bound `this`. Returns the completion (a throw on double-super / no new.target /
- * parent throw).
+ * parent throw). `args` must stay valid and rooted for the whole construct.
  */
+MalCompletion mal_vm_op_construct_super_arguments(
+    MalVm *vm, MalValue parent, const MalValue *args, i32 arg_count, MalValue new_target,
+    MalValue current_this, MalValue *this_out
+);
+
+/** `super(...args)`: mal_vm_op_construct_super_arguments over an argument array. */
 MalCompletion mal_vm_op_construct_super(
     MalVm *vm, MalValue parent, MalValue arguments_array, MalValue new_target,
     MalValue current_this, MalValue *this_out
