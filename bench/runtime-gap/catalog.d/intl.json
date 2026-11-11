@@ -518,6 +518,25 @@
 			],
 			"methods": ["Intl.DateTimeFormat.prototype.formatToParts"],
 			"features": ["intl-date-time-format"]
+		},
+		{
+			"id": "intl-datetime-locale-uncached",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-date-time-format",
+			"category": "api-builtins",
+			"mechanisms": ["datetime-format", "persistent-plans", "field-parts"],
+			"inputShape": "Explicit French medium Date locale formatting through native plan construction.",
+			"unit": "formatted dates",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/lib.rs",
+			"fixture": "cases/intl-datetime-locale-uncached.mjs",
+			"controls": [
+				"intl-datetime-locale",
+				"intl-datetime-construct",
+				"intl-datetime-reuse"
+			],
+			"methods": ["Date.prototype.toLocaleDateString"],
+			"features": ["intl-date-time-format"]
 		}
 	]
 }

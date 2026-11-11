@@ -2305,26 +2305,31 @@ static MalValue intl_datetime_format_epoch(MalVm *vm, MalString *locale, f64 epo
     usize calendar_len = options == nullptr ? 0 : options->calendar_len;
     const byte *numbering = options == nullptr ? nullptr : options->numbering;
     usize numbering_len = options == nullptr ? 0 : options->numbering_len;
-    byte out[256];
-    i32 n = mal_i18n_datetime_format(locale_buf, locale_len, calendar, calendar_len, numbering, numbering_len, year, month, day, hour, minute, second, date_code, time_code, out, (i32) sizeof(out));
+    c16 out[256];
+    i32 n = mal_i18n_datetime_format(locale_buf, locale_len, calendar, calendar_len, numbering, numbering_len, year, month, day, hour, minute, second, date_code, time_code, (uint16_t *) out, countof(out));
     if (n < 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format date");
         return mal_value_new_undefined();
     }
-    if (n <= (i32) sizeof(out)) {
-        return intl_string_from_utf8(vm, out, (usize) n);
+    if ((usize) n <= countof(out)) {
+        return mal_value_from_string(mal_string_new_copy(&vm->heap, out, (usize) n));
     }
-    byte *big = malloc((usize) n);
+    usize bytes;
+    if (!mal_checked_size_multiply((usize) n, sizeof(c16), SIZE_MAX, &bytes)) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    c16 *big = malloc(bytes);
     if (big == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
-    if (mal_i18n_datetime_format(locale_buf, locale_len, calendar, calendar_len, numbering, numbering_len, year, month, day, hour, minute, second, date_code, time_code, big, n) != n) {
+    if (mal_i18n_datetime_format(locale_buf, locale_len, calendar, calendar_len, numbering, numbering_len, year, month, day, hour, minute, second, date_code, time_code, (uint16_t *) big, (usize) n) != n) {
         free(big);
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format date");
         return mal_value_new_undefined();
     }
-    MalValue result = intl_string_from_utf8(vm, big, (usize) n);
+    MalValue result = mal_value_from_string(mal_string_new_copy(&vm->heap, big, (usize) n));
     free(big);
     return result;
 }

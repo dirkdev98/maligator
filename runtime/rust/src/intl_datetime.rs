@@ -150,34 +150,27 @@ impl writeable::PartsWrite for DateWriter<'_> {
     }
 }
 
-pub(super) struct DateTextWriter<'a, W> {
-    pub(super) output: W,
-    pub(super) related_year: Option<(
-        &'a icu_decimal::DecimalFormatter,
-        &'a fixed_decimal::Decimal,
-    )>,
-}
-impl<W: core::fmt::Write> core::fmt::Write for DateTextWriter<'_, W> {
-    fn write_str(&mut self, text: &str) -> core::fmt::Result {
-        self.output.write_str(text)
-    }
-    fn write_char(&mut self, value: char) -> core::fmt::Result {
-        self.output.write_char(value)
-    }
-}
-impl<W: core::fmt::Write> writeable::PartsWrite for DateTextWriter<'_, W> {
-    type SubPartsWrite = Self;
-    fn with_part(
-        &mut self,
-        part: writeable::Part,
-        mut write: impl FnMut(&mut Self) -> core::fmt::Result,
-    ) -> core::fmt::Result {
-        use writeable::Writeable;
-        if part == icu_datetime::parts::RELATED_YEAR {
-            if let Some((formatter, year)) = self.related_year {
-                return formatter.format(year).write_to(&mut self.output);
-            }
-        }
-        write(self)
-    }
+pub(super) fn write(
+    formatted: &impl writeable::Writeable,
+    out: &mut [u16],
+    spans: &mut [crate::intl_parts::MalI18nFormattedPart],
+    track: bool,
+    related_year: Option<(&icu_decimal::DecimalFormatter, &fixed_decimal::Decimal)>,
+) -> Result<(usize, usize), core::fmt::Error> {
+    let mut sink = DateWriter {
+        related_year,
+        output: crate::intl_parts::Sink {
+            out,
+            spans,
+            track,
+            written: 0,
+            start: 0,
+            count: 0,
+            kind: 0,
+            unit: -1,
+        },
+    };
+    formatted.write_to_parts(&mut sink)?;
+    sink.output.flush();
+    Ok((sink.output.written, sink.output.count))
 }

@@ -225,6 +225,7 @@ Date fields own their nested numeric annotations. Typed provider delegation reta
 calendar and pattern selection while sharing generated decimal digits. Resolved calendar
 and numbering metadata report the selected data. Field-based ISO construction covers the
 JavaScript date range, and timestamp coercion stays outside output-buffer retries.
+Date locale methods use the same UTF-16 writer to avoid a temporary UTF-8 conversion.
 
 Decimal digits come from checksum-pinned CLDR supplemental numbering-system data.
 `scripts/generate-intl-digit-data.ts` generates the Rust table from

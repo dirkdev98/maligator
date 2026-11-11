@@ -59,7 +59,7 @@ pub mod crypto_cipher;
 pub mod crypto_pkey;
 
 /// Identifies the flat transport contract shared with `mal_i18n.h`.
-pub const MAL_I18N_ABI_VERSION: u32 = 12;
+pub const MAL_I18N_ABI_VERSION: u32 = 13;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]
@@ -848,7 +848,6 @@ pub unsafe extern "C" fn mal_i18n_datetime_formatter_format(
     spans_cap: usize,
     spans_needed: *mut usize,
 ) -> i32 {
-    use writeable::Writeable;
     if (out_cap != 0 && out.is_null()) || (spans_cap != 0 && spans.is_null()) {
         return -1;
     }
@@ -861,38 +860,29 @@ pub unsafe extern "C" fn mal_i18n_datetime_formatter_format(
     let Some((formatted, related_year)) = plan.formatted(&input) else {
         return -1;
     };
-    let mut sink = crate::intl_datetime::DateWriter {
-        related_year: plan.related.as_deref().zip(related_year.as_ref()),
-        output: crate::intl_parts::Sink {
-            out: if out_cap == 0 {
-                &mut []
-            } else {
-                unsafe { core::slice::from_raw_parts_mut(out, out_cap) }
-            },
-            spans: if spans_cap == 0 {
-                &mut []
-            } else {
-                unsafe { core::slice::from_raw_parts_mut(spans, spans_cap) }
-            },
-            track: !spans_needed.is_null(),
-            written: 0,
-            start: 0,
-            count: 0,
-            kind: 0,
-            unit: -1,
+    let Ok((written, count)) = crate::intl_datetime::write(
+        &formatted,
+        if out_cap == 0 {
+            &mut []
+        } else {
+            unsafe { core::slice::from_raw_parts_mut(out, out_cap) }
         },
-    };
-    let result = formatted.write_to_parts(&mut sink);
-    if result.is_err() {
+        if spans_cap == 0 {
+            &mut []
+        } else {
+            unsafe { core::slice::from_raw_parts_mut(spans, spans_cap) }
+        },
+        !spans_needed.is_null(),
+        plan.related.as_deref().zip(related_year.as_ref()),
+    ) else {
         return -1;
-    }
-    sink.output.flush();
+    };
     if !spans_needed.is_null() {
         unsafe {
-            *spans_needed = sink.output.count;
+            *spans_needed = count;
         }
     }
-    sink.output.written as i32
+    i32::try_from(written).unwrap_or(-1)
 }
 
 /// Release the native plan and return its charged bytes; null releases zero.
@@ -909,7 +899,7 @@ pub unsafe extern "C" fn mal_i18n_datetime_formatter_free(handle: *mut core::ffi
 }
 
 /// Format civil date/time components for `locale`. date_style / time_style:
-/// -1 none, 0 full, 1 long, 2 medium, 3 short. Writes UTF-8 into `out`; returns
+/// -1 none, 0 full, 1 long, 2 medium, 3 short. Writes UTF-16 into `out`; returns
 /// the full length, or -1 on failure.
 #[cfg(feature = "intl-date-time-format")]
 #[no_mangle]
@@ -928,16 +918,23 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
     second: i32,
     date_style: i32,
     time_style: i32,
-    out: *mut u8,
-    out_cap: i32,
+    out: *mut u16,
+    out_cap: usize,
 ) -> i32 {
     use icu_datetime::fieldsets;
     use icu_datetime::options::{Length, TimePrecision, YearStyle};
     use icu_datetime::DateTimeFormatter;
-    use writeable::Writeable;
 
+    if out_cap != 0 && out.is_null() {
+        return -1;
+    }
     let Some(input) = datetime_input(year, month, day, hour, minute, second) else {
         return -1;
+    };
+    let output = if out_cap == 0 {
+        &mut []
+    } else {
+        unsafe { core::slice::from_raw_parts_mut(out, out_cap) }
     };
 
     let to_length = |style: i32| match style {
@@ -963,7 +960,7 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
             .with_time_precision(precision(style))
     };
 
-    let default_text = if calendar_len == 0
+    let default_result = if calendar_len == 0
         && numbering_len == 0
         && unsafe { nullable_slice(locale_ptr, locale_len) } == b"en-US"
     {
@@ -979,7 +976,15 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
                         .ok()
                     })
                     .as_ref()
-                    .map(|formatter| formatter.format(&input).to_string())
+                    .map(|formatter| {
+                        crate::intl_datetime::write(
+                            &formatter.format(&input),
+                            output,
+                            &mut [],
+                            false,
+                            None,
+                        )
+                    })
             }),
             (2, -1) => DEFAULT_EN_US_DATE_FORMATTER.with(|cache| {
                 cache
@@ -988,7 +993,15 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
                         DateTimeFormatter::try_new((&locale).into(), ymd(2)).ok()
                     })
                     .as_ref()
-                    .map(|formatter| formatter.format(&input).to_string())
+                    .map(|formatter| {
+                        crate::intl_datetime::write(
+                            &formatter.format(&input),
+                            output,
+                            &mut [],
+                            false,
+                            None,
+                        )
+                    })
             }),
             (-1, 2) => DEFAULT_EN_US_TIME_FORMATTER.with(|cache| {
                 cache
@@ -997,15 +1010,26 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
                         DateTimeFormatter::try_new((&locale).into(), t(2)).ok()
                     })
                     .as_ref()
-                    .map(|formatter| formatter.format(&input).to_string())
+                    .map(|formatter| {
+                        crate::intl_datetime::write(
+                            &formatter.format(&input),
+                            output,
+                            &mut [],
+                            false,
+                            None,
+                        )
+                    })
             }),
             _ => None,
         }
     } else {
         None
     };
-    if let Some(text) = default_text {
-        return unsafe { write_utf8(&text, out, out_cap) };
+    if let Some(result) = default_result {
+        return result
+            .ok()
+            .and_then(|(written, _)| i32::try_from(written).ok())
+            .unwrap_or(-1);
     }
 
     let Some(locale) = parse_locale(locale_ptr, locale_len) else {
@@ -1023,15 +1047,16 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
     let Some((formatted, related_year)) = plan.formatted(&input) else {
         return -1;
     };
-    let mut text = String::new();
-    let mut sink = crate::intl_datetime::DateTextWriter {
-        output: &mut text,
-        related_year: plan.related.as_deref().zip(related_year.as_ref()),
-    };
-    if formatted.write_to_parts(&mut sink).is_err() {
-        return -1;
-    }
-    unsafe { write_utf8(&text, out, out_cap) }
+    crate::intl_datetime::write(
+        &formatted,
+        output,
+        &mut [],
+        false,
+        plan.related.as_deref().zip(related_year.as_ref()),
+    )
+    .ok()
+    .and_then(|(written, _)| i32::try_from(written).ok())
+    .unwrap_or(-1)
 }
 // ---------------------------------------------------------------------------
 // Intl.ListFormat — icu_list::ListFormatter (and/or/unit, wide/short/narrow).

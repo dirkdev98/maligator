@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 /* Identifies the flat transport contract shared with lib.rs. */
-#define MAL_I18N_ABI_VERSION 12u
+#define MAL_I18N_ABI_VERSION 13u
 
 /* Status codes for fallible entry points; mapped to JS exceptions by the C side. */
 typedef enum MalI18nStatus {
@@ -133,9 +133,9 @@ int32_t mal_i18n_number_formatter_format(void *handle, const uint8_t *text, size
 size_t mal_i18n_number_formatter_free(void *handle);
 int32_t mal_i18n_number_format_default_en_us(const uint8_t *text, size_t length, uint8_t *out, int32_t out_cap);
 
-/* ---- Intl.DateTimeFormat (dateStyle / timeStyle) ----
- * date_style / time_style: -1 none, 0 full, 1 long, 2 medium, 3 short. */
-int32_t mal_i18n_datetime_format(const uint8_t *locale, size_t locale_len, const uint8_t *calendar, size_t calendar_len, const uint8_t *numbering, size_t numbering_len, int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, int32_t date_style, int32_t time_style, uint8_t *out, int32_t out_cap);
+/* Date styles: -1 none, 0 full, 1 long, 2 medium, 3 short.
+ * Formatting returns the full UTF-16 length, including units beyond capacity. */
+int32_t mal_i18n_datetime_format(const uint8_t *locale, size_t locale_len, const uint8_t *calendar, size_t calendar_len, const uint8_t *numbering, size_t numbering_len, int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, int32_t date_style, int32_t time_style, uint16_t *out, size_t out_cap);
 /* Calendar bytes are static; numbering bytes are copied from the selected provider. */
 typedef struct MalI18nDateTimeResolved {
     const uint8_t *calendar;
