@@ -300,6 +300,16 @@ contracts or investigates costs still visible after the string follow-ups.
       fallbacks and 44 dictionary-table lookups, three quarters of them misses.
       `run --profile=compiler` on the benchmark lists the leading sites.
 
+- [ ] Give common builtins on unproven receivers a direct path. Against Node 26 on
+      short header strings: `indexOf` 2.6x, `startsWith` 2.2x, `replace` 2.3x and
+      `includes` 1.8x, which take the primitive-method probe out of line and the generic
+      native call; `startsWith`, `endsWith` and `replace` have unique names and could
+      join the guarded builtin calls like `trim`, while `indexOf` and `includes` need a
+      receiver-kind guard. Also measured: `RegExp#test` 2.4-3x, template literals with
+      numbers 2.6x (each number allocates a string before concatenation), escaping
+      closures capturing a loop variable 2x, `for...in` over small objects 3.5x and
+      `Object.entries` 2x.
+
 - [ ] Bring node:stream and EventEmitter construction closer to Node. A constructed
       Readable still costs about 5x Node and a Writable 3.5x, mostly option reads
       through `mal_vm_get_static` and per-object state allocation; `once` builds a
