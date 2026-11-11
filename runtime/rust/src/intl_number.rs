@@ -599,7 +599,8 @@ pub unsafe extern "C" fn mal_i18n_number_formatter_format(
             .map_or(icu_plurals::PluralCategory::Other, |decimal| {
                 unit.plurals.category_for(decimal)
             });
-        unit.formatter.write(category, &mut sink, numeric)
+        let parts = sink.track;
+        unit.formatter.write(category, &mut sink, parts, numeric)
     } else {
         numeric(&mut sink)
     };

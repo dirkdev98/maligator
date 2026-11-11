@@ -129,6 +129,7 @@ impl DurationPlan {
                 plan: self,
                 unit: *unit,
                 value,
+                parts: sink.track,
             });
         }
         if digital_start < fields.len() {
@@ -137,7 +138,12 @@ impl DurationPlan {
                 fields: &fields[digital_start..],
             });
         }
-        self.list.format(values.iter()).write_to_parts(sink)
+        let formatted = self.list.format(values.iter());
+        if sink.track {
+            formatted.write_to_parts(sink)
+        } else {
+            formatted.write_to(sink)
+        }
     }
 }
 
@@ -146,6 +152,7 @@ enum DurationField<'a> {
         plan: &'a DurationPlan,
         unit: usize,
         value: &'a Decimal,
+        parts: bool,
     },
     Digital {
         plan: &'a DurationPlan,
@@ -156,10 +163,16 @@ enum DurationField<'a> {
 impl Writeable for DurationField<'_> {
     fn write_to_parts<W: writeable::PartsWrite + ?Sized>(&self, sink: &mut W) -> fmt::Result {
         match self {
-            Self::Text { plan, unit, value } => sink.with_part(duration_unit(*unit), |sink| {
+            Self::Text {
+                plan,
+                unit,
+                value,
+                parts,
+            } => sink.with_part(duration_unit(*unit), |sink| {
                 plan.patterns[*unit].as_ref().unwrap().write(
                     plan.plurals.category_for(*value),
                     sink,
+                    *parts,
                     |sink| plan.decimal.format(value).write_to_parts(sink),
                 )
             }),

@@ -208,9 +208,10 @@ NumberFormat and DurationFormat share generated CLDR unit patterns and a UTF-16 
 writer. The generator verifies pinned unit, parent-locale and grammatical inputs before
 emitting deduplicated text and index tables. Published compound patterns take priority;
 other ratios compose the denominator's per pattern or its grammatically derived label.
-Plural forms can encode an amount in the unit word itself. Parts follow pattern boundaries
-without parsing localized output; duration fields retain their singular unit on numeric
-and label parts, while list and clock separators carry no field association.
+Native plans compile placeholder and affix boundaries before rendering. Plural forms can
+encode an amount in the unit word itself. Parts follow pattern boundaries without parsing
+localized output; duration fields retain their singular unit on numeric and label parts,
+while list and clock separators carry no field association.
 
 Regenerate from the pinned upstream `cldr-json` source tree:
 

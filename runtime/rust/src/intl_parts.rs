@@ -75,6 +75,21 @@ impl Sink<'_> {
     }
 }
 impl fmt::Write for Sink<'_> {
+    fn write_char(&mut self, ch: char) -> fmt::Result {
+        if ch.is_ascii() {
+            if self.written >= i32::MAX as usize {
+                return Err(fmt::Error);
+            }
+            if let Some(slot) = self.out.get_mut(self.written) {
+                *slot = ch as u16;
+            }
+            self.written += 1;
+            Ok(())
+        } else {
+            self.write_str(ch.encode_utf8(&mut [0; 4]))
+        }
+    }
+
     fn write_str(&mut self, text: &str) -> fmt::Result {
         if text.is_ascii() {
             let end = self
