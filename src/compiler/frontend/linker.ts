@@ -10,6 +10,8 @@ import {
 	PROCESS_INSTALLER_SYMBOL,
 } from "./host-modules.ts";
 import { staticModuleClosure } from "./module-closure.ts";
+import { moduleDependencyKey, moduleImportType } from "./module-import-type.ts";
+import type { ModuleImportType } from "./module-import-type.ts";
 import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 import { SyntaxDiagnostic } from "./syntax-diagnostic.ts";
 
@@ -182,7 +184,10 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		const map = new Map<string, string>();
 		for (const dependency of record.dependencies) {
 			if (dependency.specifier !== null && dependency.resolvedPath !== null) {
-				map.set(dependency.specifier, dependency.resolvedPath);
+				map.set(
+					moduleDependencyKey(dependency.specifier, dependency.importType),
+					dependency.resolvedPath,
+				);
 			}
 		}
 		specifierToPath.set(path, map);
@@ -192,10 +197,14 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 
 	const resolveDependency = (
 		file: SemanticFile,
-		specifier: string,
+		source: ESTree.Literal,
+		importType: ModuleImportType | undefined,
 		allowCommonJs = false,
 	): string => {
-		const path = specifierToPath.get(file.path)?.get(specifier);
+		const specifier = literalValue(source);
+		const path = specifierToPath
+			.get(file.path)
+			?.get(moduleDependencyKey(specifier, importType));
 		if (!path) {
 			throw new Error(`Linker: '${specifier}' is not a dependency of ${file.path}`);
 		}
@@ -420,7 +429,12 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		for (const statement of file.ast.body) {
 			switch (statement.type) {
 				case "ImportDeclaration": {
-					const module = resolveDependency(file, literalValue(statement.source), true);
+					const module = resolveDependency(
+						file,
+						statement.source,
+						moduleImportType(statement),
+						true,
+					);
 					if (statement.phase === "source") {
 						// Only a host module (such as WebAssembly) has a module source;
 						// GetModuleSource of a source text module throws a SyntaxError.
@@ -485,7 +499,12 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 							}
 						}
 					} else if (statement.source) {
-						const module = resolveDependency(file, literalValue(statement.source), true);
+						const module = resolveDependency(
+							file,
+							statement.source,
+							moduleImportType(statement),
+							true,
+						);
 						const moduleIsCommonJs = goalOf(module) === "cjs";
 						for (const specifier of statement.specifiers) {
 							const localName = specifierName(specifier.local);
@@ -523,7 +542,12 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 					break;
 				}
 				case "ExportAllDeclaration": {
-					const module = resolveDependency(file, literalValue(statement.source), true);
+					const module = resolveDependency(
+						file,
+						statement.source,
+						moduleImportType(statement),
+						true,
+					);
 					if (statement.exported) {
 						// `export * as ns from "mod"` (16.2.3.7): `ns` is a local export
 						// bound to mod's module namespace object. Synthesize a global

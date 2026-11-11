@@ -3848,6 +3848,7 @@ function emitImportMetaResolveFunction(
 		if (
 			dependency.specifier === null ||
 			dependency.resolvedPath === null ||
+			dependency.importType !== undefined ||
 			(dependency.kind !== "import" &&
 				dependency.kind !== "export" &&
 				dependency.kind !== "dynamic")

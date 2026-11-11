@@ -498,17 +498,22 @@ function loadCached(
 }
 
 interface GraphDependencyInputs {
-	readonly sources: ReadonlyArray<{ readonly path: string; readonly source: string }>;
+	readonly sources: ReadonlyArray<{ readonly path: string; readonly source?: string }>;
 	readonly directories: ReadonlyArray<string>;
 }
 
 function graphDependencyInputs(graph: ModuleGraph): GraphDependencyInputs {
-	const sources: Array<{ path: string; source: string }> = [];
+	const sources: Array<{ path: string; source?: string }> = [];
 	const directories: Array<string> = [];
 	for (const record of graph.modules.values()) {
 		if (record.host || (record.virtual && record.sourcePath === undefined)) continue;
 		const file = record.sourcePath ?? record.path;
-		sources.push({ path: file, source: record.source });
+		// A data module's source is generated from its file, so the file is digested as is.
+		sources.push(
+			record.importType === undefined
+				? { path: file, source: record.source }
+				: { path: file },
+		);
 		directories.push(path.dirname(file));
 	}
 	return { sources, directories };

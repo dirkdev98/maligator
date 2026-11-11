@@ -20,6 +20,8 @@ import {
 } from "./host-modules.ts";
 import { isImportMetaResolveCall } from "./import-meta.ts";
 import { staticModuleClosure } from "./module-closure.ts";
+import { moduleImportType } from "./module-import-type.ts";
+import type { ModuleImportType } from "./module-import-type.ts";
 import { parseModule, parseScript } from "./parser.ts";
 import type { SemanticFile } from "./semantic-analysis.ts";
 import { SyntaxDiagnostic } from "./syntax-diagnostic.ts";
@@ -62,6 +64,11 @@ export interface ModuleDependency {
 	specifier: string | null;
 	kind: ModuleDependencyKind;
 	/**
+	 * Set when the import reads its target as data. Module identity includes the type,
+	 * so a file imported as text and as JavaScript yields two modules.
+	 */
+	importType?: ModuleImportType;
+	/**
 	 * Absolute path the specifier resolved to, or null when it could not be
 	 * resolved (a computed dependency or a dynamic import whose literal target
 	 * cannot be found). Unresolved static imports/exports and literal `require()`
@@ -102,6 +109,11 @@ export interface ModuleRecord {
 	host?: HostModuleSpec;
 	/** In-memory source supplied by the embedding toolchain (for example maligator:test). */
 	virtual?: true;
+	/**
+	 * A data module synthesized from `sourcePath`'s bytes. Its `source` is the generated
+	 * module, so build inputs digest the file itself rather than `source`.
+	 */
+	importType?: ModuleImportType;
 	platform?: PlatformModule;
 	/**
 	 * Owned and already evaluated by an earlier image of a relocatable program. The
@@ -802,13 +814,22 @@ export function buildModuleGraph(
 											`Internal module '${dependency.specifier}' is reserved for platform sources`,
 										);
 									}
+									const rejectDataImport = () => {
+										if (dependency.importType === undefined) return;
+										throw new SyntaxDiagnostic(
+											"resolution",
+											`Cannot import '${dependency.specifier}' as ${dependency.importType}: only files hold data modules`,
+										);
+									};
 									// A toolchain module an earlier image owns keeps its specifier identity.
 									if (options.externalModules?.has(aliasedSpecifier)) {
+										rejectDataImport();
 										resolvedThroughExternal = true;
 										return [{ ...dependency, resolvedPath: aliasedSpecifier }];
 									}
 									const toolchainModule = virtualModule(aliasedSpecifier);
 									if (toolchainModule !== undefined) {
+										rejectDataImport();
 										const entryPreludeRequire =
 											dependency.kind === "require" &&
 											dependency.specifier === options.entryPrelude?.specifier;
@@ -841,6 +862,7 @@ export function buildModuleGraph(
 										},
 									);
 									if ("host" in resolved) {
+										rejectDataImport();
 										// A supported `node:*` built-in: identity is its canonical specifier.
 										return [{ ...dependency, resolvedPath: resolved.host.id }];
 									}
@@ -868,6 +890,18 @@ export function buildModuleGraph(
 									}
 
 									const catalogSource = catalogFiles.sources.get(resolved.path);
+									if (dependency.importType !== undefined) {
+										if (catalogSource !== undefined) rejectDataImport();
+										return [
+											{
+												...dependency,
+												resolvedPath: dataModulePath(
+													resolved.path,
+													dependency.importType,
+												),
+											},
+										];
+									}
 									if (catalogSource !== undefined) virtualModule(catalogSource);
 									return [
 										{ ...dependency, resolvedPath: catalogSource ?? resolved.path },
@@ -945,6 +979,23 @@ export function buildModuleGraph(
 		for (const dependency of dependencies) {
 			const resolvedPath = dependency.resolvedPath;
 			if (!resolvedPath || modules.has(resolvedPath)) {
+				continue;
+			}
+			if (dependency.importType !== undefined) {
+				const file = resolvedPath.slice(
+					0,
+					-dataModuleSuffix(dependency.importType).length,
+				);
+				const source = dataModuleSource(readFileSync(file), dependency.importType);
+				modules.set(resolvedPath, {
+					path: resolvedPath,
+					sourcePath: file,
+					importType: dependency.importType,
+					goal: "module",
+					source,
+					parsed: parseWithGoal(source, "module", true),
+					dependencies: [],
+				});
 				continue;
 			}
 			const external = options.externalModules?.get(resolvedPath);
@@ -1147,8 +1198,44 @@ function findNearestPackageType(
 	return goal;
 }
 
+function importTypeField(node: {
+	readonly attributes?: ReadonlyArray<ESTree.ImportAttribute> | null;
+}): { importType?: ModuleImportType } {
+	const importType = moduleImportType(node);
+	return importType === undefined ? {} : { importType };
+}
+
+/*
+ * A data module's identity: the file plus its type. The suffix keeps it apart from
+ * the file's own JavaScript or JSON module in the graph.
+ */
+function dataModuleSuffix(importType: ModuleImportType): string {
+	return `?type=${importType}`;
+}
+
+function dataModulePath(file: string, importType: ModuleImportType): string {
+	return file + dataModuleSuffix(importType);
+}
+
+/*
+ * The generated module behind a data import. Text is the file decoded as UTF-8
+ * without a byte order mark; bytes is a Uint8Array over an immutable ArrayBuffer.
+ */
+function dataModuleSource(bytes: Buffer, importType: ModuleImportType): string {
+	if (importType === "text") {
+		return `export default ${JSON.stringify(new TextDecoder().decode(bytes))};\n`;
+	}
+	const base64 = JSON.stringify(bytes.toString("base64"));
+	return `export default new Uint8Array(Uint8Array.fromBase64(${base64}).buffer.transferToImmutable());\n`;
+}
+
 type ExtractedDependency =
-	| { specifier: string | null; kind: ModuleDependencyKind; catchableMissing?: true }
+	| {
+			specifier: string | null;
+			kind: ModuleDependencyKind;
+			catchableMissing?: true;
+			importType?: ModuleImportType;
+	  }
 	// Asks for a resolution only; nothing is loaded for it.
 	| { specifier: string; kind: "import-meta-resolve" };
 
@@ -1203,16 +1290,25 @@ function extractDependencies(
 				dependencies.push({
 					specifier: literalString(node.source),
 					kind: node.phase === "defer" ? "deferred-import" : "import",
+					...importTypeField(node),
 				});
 				break;
 			case "ExportNamedDeclaration":
 				// Only re-exports carry a source (`export { x } from "y"`).
 				if (node.source) {
-					dependencies.push({ specifier: literalString(node.source), kind: "export" });
+					dependencies.push({
+						specifier: literalString(node.source),
+						kind: "export",
+						...importTypeField(node),
+					});
 				}
 				break;
 			case "ExportAllDeclaration":
-				dependencies.push({ specifier: literalString(node.source), kind: "export" });
+				dependencies.push({
+					specifier: literalString(node.source),
+					kind: "export",
+					...importTypeField(node),
+				});
 				break;
 			case "ImportExpression":
 				dependencies.push({ specifier: literalString(node.source), kind: "dynamic" });

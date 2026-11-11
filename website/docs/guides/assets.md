@@ -43,6 +43,19 @@ The application prints the captured message and HTML. Editing the original file 
 
 [materialize](/api/runtime#mal.assets.materialize) returns an absolute file or directory path. It writes atomically beneath the OS temporary directory by default and reuses completed materializations by content identity. Pass `{ baseDirectory: "/chosen/parent" }` when your host needs another location; ensure that parent is writable.
 
+## Import a file's contents
+
+When the program only needs a file's contents, import them instead. The build embeds the file, so this works without `surface.node`:
+
+```typescript src/index.ts
+import logo from "./logo.png" with { type: "bytes" };
+import message from "./message.txt" with { type: "text" };
+
+console.log(message.trim(), logo.length);
+```
+
+A `text` import is the file decoded as UTF-8, without a byte order mark. A `bytes` import is a `Uint8Array` over an immutable `ArrayBuffer`. Each import of a file with a different type is its own module, so a file can also be imported as code. Editing the file invalidates cached builds, like editing a module.
+
 Treat captured resources as application inputs. Use a separate location for data that must survive rebuilding or replacement. Filesystem assets are supported in native executables and development execution, but cannot be included in portable `--serialize` output.
 
 If a pattern fails, inspect its directory and spelling before widening it. An unknown asset name or a materialization filesystem failure throws synchronously. See [AssetInclusion](/api/build#AssetInclusion) and [materialization options](/api/runtime#MaligatorMaterializeOptions).

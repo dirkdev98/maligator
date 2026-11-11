@@ -352,9 +352,9 @@ contracts or investigates costs still visible after the string follow-ups.
 ## Modules and agents
 
 - [ ] Finish dynamic-import resolution, import attributes and evaluation order across
-      compiled, interpreted and runtime-loading paths. `with { type: "text" }` needs
-      module records keyed by path and type, since one file can load as text and as
-      JavaScript; `import()` from eval code and computed specifiers need runtime
+      compiled, interpreted and runtime-loading paths. Static `text` and `bytes`
+      imports have their own module records; `import(x, { with: { type } })` does not
+      select them yet. `import()` from eval code and computed specifiers need runtime
       loading of targets outside the static graph. Preserve top-level-await sibling
       scheduling and fulfillment/rejection order.
 

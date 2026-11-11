@@ -616,6 +616,42 @@ describe("normal build frontend cache", () => {
 		expect(compile(entrypoint, cacheDirectory).cache).toBe("miss");
 	});
 
+	it("invalidates a build when a text or bytes import's file changes", () => {
+		const root = temporaryDirectory();
+		try {
+			const cacheDirectory = path.join(root, "cache");
+			const entrypoint = path.join(root, "entry.mjs");
+			const text = path.join(root, "message.txt");
+			const bytes = path.join(root, "blob.bin");
+			write(path.join(root, "package.json"), `{"type":"module"}\n`);
+			write(text, "first\n");
+			writeFileSync(bytes, new Uint8Array([0xff, 0x00, 0x80]));
+			write(
+				entrypoint,
+				`import message from "./message.txt" with { type: "text" };
+import blob from "./blob.bin" with { type: "bytes" };
+console.log(message, blob.length);
+`,
+			);
+
+			const first = compile(entrypoint, cacheDirectory);
+			expect(first.cache).toBe("miss");
+			expect(compile(entrypoint, cacheDirectory).cache).toBe("hit");
+
+			write(text, "second\n");
+			const edited = compile(entrypoint, cacheDirectory);
+			expect(edited.cache).toBe("miss");
+			expect(edited.wire).not.toEqual(first.wire);
+			expect(compile(entrypoint, cacheDirectory).cache).toBe("hit");
+
+			writeFileSync(bytes, new Uint8Array([0xff, 0x00, 0x81]));
+			expect(compile(entrypoint, cacheDirectory).cache).toBe("miss");
+			expect(compile(entrypoint, cacheDirectory).cache).toBe("hit");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("exposes explicit watcher invalidation on a retained filesystem session", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

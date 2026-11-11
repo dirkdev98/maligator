@@ -73,7 +73,11 @@ export function captureRootInputs(graph: ModuleGraph): Array<FrontendDependencyI
 	const inputs = new Map<string, FrontendDependencyIdentity>();
 	for (const record of graph.modules.values()) {
 		if (record.host || (record.virtual && record.sourcePath === undefined)) continue;
-		const input = inputIdentity(record.sourcePath ?? record.path, record.source);
+		// A data module's source is generated from its file, so the file is read as is.
+		const input = inputIdentity(
+			record.sourcePath ?? record.path,
+			record.importType === undefined ? record.source : undefined,
+		);
 		inputs.set(input.path, input);
 		let directory = path.dirname(input.path);
 		for (;;) {

@@ -683,6 +683,44 @@ test("loads JSON a CommonJS module requires as a CommonJS module", () => {
 	expect(graph.modules.get(jsonPath)?.parsed.ast.body).toHaveLength(1);
 });
 
+test("links a file imported as text or bytes apart from its JavaScript module", () => {
+	write(
+		"data-import.mjs",
+		`import code from "./data-target.mjs";
+import text from "./data-target.mjs" with { type: "text" };
+import bytes from "./data-target.mjs" with { type: "bytes" };
+export { default as again } from "./data-target.mjs" with { type: "text" };
+globalThis.sink = [code, text, bytes];
+`,
+	);
+	write("data-target.mjs", `export default "code";\n`);
+	const entry = path.join(root, "data-import.mjs");
+	const target = path.join(root, "data-target.mjs");
+
+	const graph = buildModuleGraph(entry);
+	const targets = graph.modules
+		.get(entry)!
+		.dependencies.map((dependency) => dependency.resolvedPath);
+
+	expect(new Set(targets).size).toBe(3);
+	expect(targets.filter((resolved) => resolved === target)).toHaveLength(1);
+	for (const resolved of new Set(targets)) {
+		expect(graph.modules.get(resolved!)?.dependencies).toEqual([]);
+	}
+	expect(() => linkModules(loadEntrypointAndRunSemanticAnalysis(entry))).not.toThrow();
+});
+
+test("rejects a text import of a host module", () => {
+	write(
+		"data-host.mjs",
+		`import text from "node:path" with { type: "text" };\nvoid text;\n`,
+	);
+
+	expect(() =>
+		buildModuleGraph(path.join(root, "data-host.mjs"), { buildConfig: nodeOn }),
+	).toThrow("only files hold data modules");
+});
+
 test("does not treat require() as a dependency in ESM/script modules", () => {
 	const graph = buildModuleGraph(path.join(root, "entry.mjs"));
 	for (const record of graph.modules.values()) {
