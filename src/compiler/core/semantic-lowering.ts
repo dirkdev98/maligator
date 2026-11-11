@@ -10546,12 +10546,16 @@ function compileReturnStatement(
 		return;
 	}
 
-	const returnRegister = compileExpression(
+	let returnRegister = compileExpression(
 		program,
 		fn,
 		cursor,
 		statement.argument ?? { type: "Identifier", name: "undefined" },
 	);
+	// An async generator awaits a returned expression; a bare `return` does not.
+	if (fn.isAsync && fn.isGenerator && statement.argument && returnRegister !== -1) {
+		returnRegister = compileAwaitRegister(program, fn, cursor, returnRegister);
+	}
 
 	emitReturn(program, fn, cursor.block, returnRegister);
 }

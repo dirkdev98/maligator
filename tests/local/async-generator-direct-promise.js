@@ -56,6 +56,16 @@ fulfilled(
 	(result) => result.value === undefined && result.done === true,
 );
 
+// A returned expression is awaited, so a returned promise settles the result.
+async function* returnsPromise() {
+	return Promise.resolve(19);
+}
+fulfilled(
+	"return awaits its operand",
+	returnsPromise().next(),
+	(result) => result.value === 19 && result.done === true,
+);
+
 const returned = basic().return(17);
 ok(
 	"return exact intrinsic Promise",
