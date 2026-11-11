@@ -5609,7 +5609,8 @@ MalCompletion mal_vm_construct_direct_with_target(
         this_value = mal_value_new_empty();
     } else {
         MalObject *prototype;
-        if (!mal_vm_get_prototype_from_constructor(
+        if (!mal_vm_try_fixed_constructor_prototype(vm, new_target, &prototype) &&
+            !mal_vm_get_prototype_from_constructor(
                 vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
 #if MAL_REALMS
             mal_vm_realm_switch_to(vm, saved_realm);

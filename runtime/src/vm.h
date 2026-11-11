@@ -2347,6 +2347,28 @@ bool mal_vm_get_prototype_from_constructor(
 );
 
 /**
+ * The hit path of mal_vm_get_prototype_from_constructor's fixed-prototype cache,
+ * inline for construct sites. Entries only hold constructors, so an identity match
+ * needs no type check; a miss leaves the full lookup to the caller.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_try_fixed_constructor_prototype(
+    const MalVm *vm, MalValue constructor, MalObject **prototype_out
+) {
+    if (!mal_value_is_heap(constructor)) return false;
+    const void *identity = mal_value_to_heap(constructor);
+    const MalHeap *heap = &vm->heap;
+    for (usize i = 0; i < countof(heap->fixed_constructor_prototypes); i++) {
+        if (heap->fixed_constructor_prototypes[i].constructor == identity &&
+            heap->fixed_constructor_prototypes[i].heap_epoch == heap->epoch) {
+            MAL_PERF_COUNT(fixed_constructor_prototype_hits);
+            *prototype_out = heap->fixed_constructor_prototypes[i].prototype;
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * Lift this native builtin's GC suppression once it has made every MalValue it
  * holds live across an allocation reachable from a root (a MalRootSpan, the value
  * stack, or a live managed object). Between begin/end the collector may run — so a

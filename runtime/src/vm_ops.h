@@ -3775,7 +3775,8 @@ static inline __attribute__((always_inline)) MalValue mal_vm_op_create_base_cons
         return mal_vm_create_base_construct_receiver_slow(vm, new_target, capacity);
     }
     MalObject *prototype;
-    if (!mal_vm_get_prototype_from_constructor(
+    if (!mal_vm_try_fixed_constructor_prototype(vm, new_target, &prototype) &&
+        !mal_vm_get_prototype_from_constructor(
             vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
         return MAL_VALUE_UNDEFINED;
     }
