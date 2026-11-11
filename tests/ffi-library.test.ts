@@ -6,16 +6,14 @@ import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config-values.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { prepareLibraries } from "../src/ffi/library.ts";
-import { resolvePathExecutable } from "../src/toolchain.ts";
+import { requireToolchain, toolArguments } from "../src/toolchain.ts";
 
 describe("native library preparation identity", () => {
 	it.each(["static", "shared"] as const)(
 		"invalidates a replaced %s library at the same path",
 		(link) => {
-			const requested = process.env.CC ?? "clang";
-			const compiler = path.isAbsolute(requested)
-				? requested
-				: resolvePathExecutable(requested);
+			const { cc, ar } = requireToolchain({ needsCxx: false }).tools;
+			const compiler = cc.path;
 			const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-library-"));
 			const execute = (tool: string, args: Array<string>) => {
 				const result = spawnSync(tool, args, { encoding: "utf8", timeout: 15_000 });
@@ -42,16 +40,19 @@ describe("native library preparation identity", () => {
 				const replace = (value: number) => {
 					writeFileSync(source, `int linked_value(void) { return ${value}; }\n`);
 					if (link === "static") {
-						execute(compiler, ["-c", source, "-o", object]);
-						execute("ar", ["rcs", library, object]);
+						execute(compiler, toolArguments(cc, ["-c", source, "-o", object]));
+						execute(ar.path, toolArguments(ar, ["rcs", library, object]));
 					} else
-						execute(compiler, [
-							process.platform === "darwin" ? "-dynamiclib" : "-shared",
-							"-fPIC",
-							source,
-							"-o",
-							library,
-						]);
+						execute(
+							compiler,
+							toolArguments(cc, [
+								process.platform === "darwin" ? "-dynamiclib" : "-shared",
+								"-fPIC",
+								source,
+								"-o",
+								library,
+							]),
+						);
 				};
 				const config = resolveBuildConfig({
 					ffi: { linked: { contract: "linked.ffi.ts", link } },
@@ -61,7 +62,7 @@ describe("native library preparation identity", () => {
 					stripTypes: stripCompactTypes,
 					compiler: {
 						path: compiler,
-						version: execute(compiler, ["--version"]).split("\n")[0]!,
+						version: cc.version,
 					},
 					environment: process.env,
 					platform: process.platform,
