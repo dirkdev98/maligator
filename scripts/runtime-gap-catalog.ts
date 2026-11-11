@@ -24,7 +24,8 @@ export type RuntimeGapFeature =
 	| "intl-collator"
 	| "intl-list-format"
 	| "intl-relative-time-format"
-	| "intl-duration-format";
+	| "intl-duration-format"
+	| "intl-number-format";
 
 export interface RuntimeGapCaseDescriptor {
 	readonly id: string;
@@ -101,7 +102,8 @@ export function runtimeGapFeatures(value: unknown): ReadonlyArray<RuntimeGapFeat
 				feature !== "intl-collator" &&
 				feature !== "intl-list-format" &&
 				feature !== "intl-relative-time-format" &&
-				feature !== "intl-duration-format",
+				feature !== "intl-duration-format" &&
+				feature !== "intl-number-format",
 		) ||
 		new Set(value).size !== value.length
 	) {

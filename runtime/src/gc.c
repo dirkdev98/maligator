@@ -2453,7 +2453,7 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
 #endif
 #if MAL_INTL_HAS_NUMBER_FORMAT
                 if (intl->kind == MAL_INTL_NUMBER_FORMAT) {
-                    mal_i18n_number_formatter_free(intl->handle);
+                    mal_gc_process_release(mal_i18n_number_formatter_free(intl->handle));
                 }
 #endif
 #if MAL_INTL_HAS_DATE_TIME_FORMAT

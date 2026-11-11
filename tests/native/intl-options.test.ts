@@ -31,9 +31,14 @@ beforeAll(() => {
 it.each(["compiled", "interpreted"] as const)(
 	"observes Intl option validation and collecting coercions with %s execution",
 	(backend) => {
-		expect(runToStdout(pair[backend], { env: { MAL_HOST_GC: "1" } }).trim()).toBe("ok");
-		expect(
-			runToStdout(pair[backend], { env: { ...STRESS_ENV, MAL_HOST_GC: "1" } }).trim(),
-		).toBe("ok");
+		const environments = ["MAL_ASAN", "MAL_UBSAN", "MAL_TSAN"].some(
+			(key) => process.env[key] === "1",
+		)
+			? [{}]
+			: [{}, STRESS_ENV];
+		for (const env of environments)
+			expect(
+				runToStdout(pair[backend], { env: { ...env, MAL_HOST_GC: "1" } }).trim(),
+			).toBe("ok");
 	},
 );

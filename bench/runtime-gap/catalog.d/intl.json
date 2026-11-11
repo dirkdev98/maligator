@@ -256,6 +256,132 @@
 			],
 			"methods": ["Intl.DurationFormat.prototype.format"],
 			"features": ["intl-duration-format"]
+		},
+		{
+			"id": "intl-number-reuse",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-number-format",
+			"category": "api-builtins",
+			"mechanisms": ["number-format", "decimal-input", "numeric-parts"],
+			"inputShape": "Reused English decimal formatter over binary-exact fractional Numbers.",
+			"unit": "formatted numbers",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_number.rs",
+			"fixture": "cases/intl-number-reuse.mjs",
+			"controls": [
+				"intl-number-strings",
+				"intl-number-construct",
+				"intl-number-locale",
+				"intl-number-parts",
+				"intl-number-resolved"
+			],
+			"methods": ["Intl.NumberFormat.prototype.format"],
+			"features": ["intl-number-format"]
+		},
+		{
+			"id": "intl-number-strings",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-number-format",
+			"category": "api-builtins",
+			"mechanisms": ["number-format", "decimal-input", "numeric-parts"],
+			"inputShape": "Reused English decimal formatter over decimal strings exactly representable as Numbers for the old control.",
+			"unit": "formatted numbers",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_number.rs",
+			"fixture": "cases/intl-number-strings.mjs",
+			"controls": [
+				"intl-number-reuse",
+				"intl-number-construct",
+				"intl-number-locale",
+				"intl-number-parts",
+				"intl-number-resolved"
+			],
+			"methods": ["Intl.NumberFormat.prototype.format"],
+			"features": ["intl-number-format"]
+		},
+		{
+			"id": "intl-number-construct",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-number-format",
+			"category": "api-builtins",
+			"mechanisms": ["number-format", "decimal-input", "numeric-parts"],
+			"inputShape": "Fresh English decimal formatter and one complete format per operation.",
+			"unit": "formatted numbers",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_number.rs",
+			"fixture": "cases/intl-number-construct.mjs",
+			"controls": [
+				"intl-number-reuse",
+				"intl-number-strings",
+				"intl-number-locale",
+				"intl-number-parts",
+				"intl-number-resolved"
+			],
+			"methods": ["Intl.NumberFormat.prototype.format"],
+			"features": ["intl-number-format"]
+		},
+		{
+			"id": "intl-number-locale",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-number-format",
+			"category": "api-builtins",
+			"mechanisms": ["number-format", "decimal-input", "numeric-parts"],
+			"inputShape": "Default Number.prototype.toLocaleString shortcut over binary-exact fractions.",
+			"unit": "formatted numbers",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_number.rs",
+			"fixture": "cases/intl-number-locale.mjs",
+			"controls": [
+				"intl-number-reuse",
+				"intl-number-strings",
+				"intl-number-construct",
+				"intl-number-parts",
+				"intl-number-resolved"
+			],
+			"methods": ["Number.prototype.toLocaleString"],
+			"features": ["intl-number-format"]
+		},
+		{
+			"id": "intl-number-parts",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-number-format",
+			"category": "api-builtins",
+			"mechanisms": ["number-format", "decimal-input", "numeric-parts"],
+			"inputShape": "Reused English decimal numeric parts with type/value checksum; newly supported API.",
+			"unit": "formatted numbers",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_number.rs",
+			"fixture": "cases/intl-number-parts.mjs",
+			"controls": [
+				"intl-number-reuse",
+				"intl-number-strings",
+				"intl-number-construct",
+				"intl-number-locale",
+				"intl-number-resolved"
+			],
+			"methods": ["Intl.NumberFormat.prototype.formatToParts"],
+			"features": ["intl-number-format"]
+		},
+		{
+			"id": "intl-number-resolved",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "intl-number-format",
+			"category": "api-builtins",
+			"mechanisms": ["number-format", "decimal-input", "numeric-parts"],
+			"inputShape": "Fresh resolved option objects from a reused English decimal formatter.",
+			"unit": "resolved option objects",
+			"sourceSeam": "runtime/src/builtin_intl.c and runtime/rust/src/intl_number.rs",
+			"fixture": "cases/intl-number-resolved.mjs",
+			"controls": [
+				"intl-number-reuse",
+				"intl-number-strings",
+				"intl-number-construct",
+				"intl-number-locale",
+				"intl-number-parts"
+			],
+			"methods": ["Intl.NumberFormat.prototype.resolvedOptions"],
+			"features": ["intl-number-format"]
 		}
 	]
 }

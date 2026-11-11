@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 /* Identifies the flat transport contract shared with lib.rs. */
-#define MAL_I18N_ABI_VERSION 9u
+#define MAL_I18N_ABI_VERSION 10u
 
 /* Status codes for fallible entry points; mapped to JS exceptions by the C side. */
 typedef enum MalI18nStatus {
@@ -89,17 +89,41 @@ void *mal_i18n_plural_rules_new(const uint8_t *locale, size_t locale_len, int32_
 int32_t mal_i18n_plural_category(void *handle, double number);
 void mal_i18n_plural_rules_free(void *handle); /* null-tolerant; ABI v2+ */
 
-/* ---- Intl.NumberFormat (decimal + percent) ----
- * min_significant / max_significant carry the significant-digit options; when
- * max_significant > 0 they drive rounding/padding and the fraction args are
- * ignored, otherwise min_fraction / max_fraction apply. sign_display: 0 auto,
- * 1 never, 2 always, 3 exceptZero, 4 negative (ECMA-402 signDisplay values,
- * applied to the rounded value so negative zero and values rounded to zero are
- * handled correctly). */
-void *mal_i18n_number_formatter_new(const uint8_t *locale, size_t locale_len, int32_t percent, int32_t min_integer, int32_t min_fraction, int32_t max_fraction, int32_t min_significant, int32_t max_significant, int32_t grouping, int32_t sign_display);
-int32_t mal_i18n_number_formatter_format(void *handle, double number, uint8_t *out, int32_t out_cap);
-void mal_i18n_number_formatter_free(void *handle);
-int32_t mal_i18n_number_format_default_en_us(double number, uint8_t *out, int32_t out_cap);
+/* Intl.NumberFormat: decimal input preserves its mathematical digits. kind:
+ * 0 decimal, 1 radix integer, 2 negative zero, 3 NaN, 4 +Infinity, 5 -Infinity.
+ * Parts use UTF-16 offsets; count-only/probe calls use zero capacities.
+ * Grouping never/auto/always/min2 = 0..3; sign auto/never/always/exceptZero/negative
+ * = 0..4. Rounding halfExpand/ceil/floor/expand/trunc/halfCeil/halfFloor/halfTrunc/
+ * halfEven = 0..8. Resolved metadata borrows the plan until free. */
+typedef struct MalI18nNumberResolved {
+    const uint8_t *locale;
+    size_t locale_len;
+    const uint8_t *numbering;
+    size_t numbering_len;
+    size_t heap_bytes;
+    int32_t style;
+    int32_t min_integer;
+    int32_t min_fraction;
+    int32_t max_fraction;
+    int32_t min_significant;
+    int32_t max_significant;
+    int32_t grouping;
+    int32_t sign_display;
+    int32_t rounding_mode;
+    int32_t increment;
+    int32_t priority;
+    int32_t strip_zero;
+} MalI18nNumberResolved;
+typedef struct MalI18nNumberPart {
+    size_t start;
+    size_t len;
+    int32_t kind;
+} MalI18nNumberPart;
+void *mal_i18n_number_formatter_new(const uint8_t *locale, size_t locale_len, const uint8_t *numbering, size_t numbering_len, int32_t style, int32_t min_integer, int32_t min_fraction, int32_t max_fraction, int32_t min_significant, int32_t max_significant, int32_t grouping, int32_t sign_display, int32_t rounding_mode, int32_t increment, int32_t priority, int32_t strip_zero, MalI18nNumberResolved *resolved);
+void mal_i18n_number_formatter_resolved(void *handle, MalI18nNumberResolved *resolved);
+int32_t mal_i18n_number_formatter_format(void *handle, const uint8_t *text, size_t length, int32_t kind, uint32_t radix, uint16_t *out, size_t out_cap, MalI18nNumberPart *spans, size_t spans_cap, size_t *spans_needed);
+size_t mal_i18n_number_formatter_free(void *handle);
+int32_t mal_i18n_number_format_default_en_us(const uint8_t *text, size_t length, uint8_t *out, int32_t out_cap);
 
 /* ---- Intl.DateTimeFormat (dateStyle / timeStyle) ----
  * date_style / time_style: -1 none, 0 full, 1 long, 2 medium, 3 short. */

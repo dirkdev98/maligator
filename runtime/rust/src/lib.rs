@@ -59,7 +59,7 @@ pub mod crypto_cipher;
 pub mod crypto_pkey;
 
 /// Identifies the flat transport contract shared with `mal_i18n.h`.
-pub const MAL_I18N_ABI_VERSION: u32 = 9;
+pub const MAL_I18N_ABI_VERSION: u32 = 10;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]
@@ -77,7 +77,9 @@ pub extern "C" fn mal_i18n_abi_version() -> u32 {
 mod intl_relative_time;
 #[cfg(feature = "intl-duration-format")]
 mod intl_duration;
-#[cfg(any(feature = "intl-relative-time-format", feature = "intl-duration-format"))]
+#[cfg(feature = "intl-number-format")]
+mod intl_number;
+#[cfg(any(feature = "intl-relative-time-format", feature = "intl-duration-format", feature = "intl-number-format"))]
 mod intl_decimal;
 
 #[cfg(feature = "intl")]
@@ -497,7 +499,7 @@ fn round_half_expand(decimal: &mut icu_decimal::input::Decimal, position: i16) {
 /// auto, 1 never, 2 always, 3 exceptZero, 4 negative (mirrors ECMA-402's
 /// signDisplay values and fixed_decimal's SignDisplay variant order).
 #[cfg(feature = "intl-number-format")]
-fn sign_display_from_code(code: i32) -> icu_decimal::input::SignDisplay {
+pub(super) fn sign_display_from_code(code: i32) -> icu_decimal::input::SignDisplay {
     use icu_decimal::input::SignDisplay;
     match code {
         1 => SignDisplay::Never,
@@ -531,20 +533,16 @@ fn default_en_us_number_formatter() -> Option<icu_decimal::DecimalFormatter> {
 #[cfg(feature = "intl-number-format")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_number_format_default_en_us(
-    number: f64,
+    text: *const u8,
+    length: usize,
     out: *mut u8,
     out_cap: i32,
 ) -> i32 {
-    use icu_decimal::input::Decimal;
     use icu_decimal::input::SignDisplay;
 
-    if !number.is_finite() {
+    let bytes = unsafe { crate::ffi::nullable_slice(text, length) };
+    let Ok(mut decimal) = fixed_decimal::Decimal::try_from_utf8(bytes) else {
         return -1;
-    }
-    let rendered = format!("{}", number);
-    let mut decimal = match Decimal::try_from_str(&rendered) {
-        Ok(decimal) => decimal,
-        Err(_) => return -1,
     };
     round_half_expand(&mut decimal, -3);
     decimal.pad_end(0);
@@ -563,130 +561,6 @@ pub unsafe extern "C" fn mal_i18n_number_format_default_en_us(
         let text = formatter.format_to_string(&decimal);
         unsafe { write_utf8(&text, out, out_cap) }
     })
-}
-
-#[cfg(feature = "intl-number-format")]
-struct MalNumberFormatter {
-    formatter: icu_decimal::DecimalFormatter,
-    percent: bool,
-    min_integer: i32,
-    min_fraction: i32,
-    max_fraction: i32,
-    min_significant: i32,
-    max_significant: i32,
-    sign_display: i32,
-}
-
-/// Build the immutable ICU formatter and resolved numeric plan once per
-/// Intl.NumberFormat instance. JavaScript option access remains entirely on the
-/// C side and is complete before this pure native constructor is called.
-#[cfg(feature = "intl-number-format")]
-#[no_mangle]
-pub unsafe extern "C" fn mal_i18n_number_formatter_new(
-    locale_ptr: *const u8,
-    locale_len: usize,
-    percent: i32,
-    min_integer: i32,
-    min_fraction: i32,
-    max_fraction: i32,
-    min_significant: i32,
-    max_significant: i32,
-    grouping: i32,
-    sign_display: i32,
-) -> *mut core::ffi::c_void {
-    use icu_decimal::options::{DecimalFormatterOptions, GroupingStrategy};
-    use icu_decimal::DecimalFormatter;
-
-    let Some(locale) = parse_locale(locale_ptr, locale_len) else {
-        return core::ptr::null_mut();
-    };
-    let mut options = DecimalFormatterOptions::default();
-    options.grouping_strategy = Some(if grouping != 0 { GroupingStrategy::Auto } else { GroupingStrategy::Never });
-    let Ok(formatter) = DecimalFormatter::try_new((&locale).into(), options) else {
-        return core::ptr::null_mut();
-    };
-    Box::into_raw(Box::new(MalNumberFormatter {
-        formatter,
-        percent: percent != 0,
-        min_integer,
-        min_fraction,
-        max_fraction,
-        min_significant,
-        max_significant,
-        sign_display,
-    })) as *mut core::ffi::c_void
-}
-
-/// Format with a persistent Intl.NumberFormat plan. The handle owns both the
-/// ICU locale/grouping formatter and the already-resolved digit options, so this
-/// hot path performs no locale parsing, formatter construction, or JS property
-/// lookup. Non-finite values remain C-side because their ECMA-402 sign handling
-/// does not enter ICU's fixed-decimal pipeline.
-#[cfg(feature = "intl-number-format")]
-#[no_mangle]
-pub unsafe extern "C" fn mal_i18n_number_formatter_format(
-    handle: *mut core::ffi::c_void,
-    number: f64,
-    out: *mut u8,
-    out_cap: i32,
-) -> i32 {
-    use icu_decimal::input::Decimal;
-
-    let Some(plan) = (unsafe { (handle as *const MalNumberFormatter).as_ref() }) else {
-        return -1;
-    };
-    if !number.is_finite() {
-        return -1;
-    }
-    let value = if plan.percent { number * 100.0 } else { number };
-
-    // Rust's Display for f64 is the shortest round-trip decimal (never
-    // scientific), which Decimal parses; rounding follows.
-    let rendered = format!("{}", value);
-    let mut decimal = match Decimal::try_from_str(&rendered) {
-        Ok(d) => d,
-        Err(_) => return -1,
-    };
-    if plan.max_significant > 0 {
-        // Significant-digit rounding: keep max_significant digits starting at the
-        // most significant one, then pad the tail out to min_significant.
-        if !decimal.is_zero() {
-            let msd = decimal.nonzero_magnitude_start();
-            round_half_expand(&mut decimal, msd - (plan.max_significant as i16) + 1);
-        }
-        // Drop rounding's trailing zeros, then pad back up to min_significant.
-        decimal.trim_end();
-        let msd = decimal.nonzero_magnitude_start();
-        decimal.pad_end(msd - (plan.min_significant as i16) + 1);
-    } else {
-        // maximumFractionDigits: round at 10^-max_fraction; minimumFractionDigits:
-        // pad the fraction to 10^-min_fraction.
-        round_half_expand(&mut decimal, -(plan.max_fraction as i16));
-        decimal.pad_end(-(plan.min_fraction as i16));
-    }
-    // minimumIntegerDigits: pad the integer part out to 10^(min_integer-1).
-    if plan.min_integer > 1 {
-        decimal.pad_start((plan.min_integer - 1) as i16);
-    }
-    // Applied after rounding so a value that rounds to zero (or -0) is judged
-    // by its final displayed magnitude, per ECMA-402 FormatNumericToString.
-    decimal.apply_sign_display(sign_display_from_code(plan.sign_display));
-
-    let mut text = plan.formatter.format_to_string(&decimal);
-    if plan.percent {
-        text.push('%');
-    }
-    unsafe { write_utf8(&text, out, out_cap) }
-}
-
-/// Free a number-formatter handle. Null-tolerant for GC finalization.
-#[cfg(feature = "intl-number-format")]
-#[no_mangle]
-pub unsafe extern "C" fn mal_i18n_number_formatter_free(handle: *mut core::ffi::c_void) {
-    if handle.is_null() {
-        return;
-    }
-    drop(unsafe { Box::from_raw(handle as *mut MalNumberFormatter) });
 }
 
 // ---------------------------------------------------------------------------

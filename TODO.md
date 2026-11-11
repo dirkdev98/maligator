@@ -402,10 +402,11 @@ contracts or investigates costs still visible after the string follow-ups.
       extensions and observable option coercion. Provider fallback alone does not prove
       that a locale is supported.
 
-- [ ] Finish Intl NumberFormat style, notation, rounding and numeric parts; DateTimeFormat
+- [ ] Finish Intl NumberFormat currency/unit styles, scientific/engineering/compact
+      notation, range formatting and localized nonfinite/percent affixes; DateTimeFormat
       option/calendar/time-zone selection, parts and interval fields; and DurationFormat
-      structured unit and numeric parts. Keep reusable native plans and
-      measure constructor cost, steady-state formatting and retained memory together.
+      structured unit and numeric parts. Keep reusable native plans and measure
+      constructor cost, steady-state formatting and retained memory together.
 
 - [ ] Generate decimal symbol data for the remaining locale/numbering-system
       combinations. Preserve per-service data selection and

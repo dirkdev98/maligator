@@ -138,7 +138,13 @@ intl = ["dep:icu_locale", "icu_locale/compiled_data", "dep:writeable"]
 # DateTimeFormat constructs icu_calendar/icu_time inputs and renders via decimal;
 # RelativeTime/Duration use decimal (+ plurals).
 intl-collator = ["intl", "dep:icu_collator", "icu_collator/compiled_data"]
-intl-number-format = ["intl", "dep:icu_decimal", "icu_decimal/compiled_data"]
+intl-number-format = [
+	"intl",
+	"dep:icu_decimal",
+	"icu_decimal/compiled_data",
+	"dep:icu_provider",
+	"dep:fixed_decimal",
+]
 intl-date-time-format = [
 	"intl",
 	"intl-number-format",

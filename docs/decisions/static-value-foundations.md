@@ -192,6 +192,16 @@ configuration and bundled locale data. Native allocations attach to a rooted own
 before charging the process budget, and finalization releases the same owned bytes.
 Provider fallback does not establish locale availability.
 
+NumberFormat retains exact decimal and radix strings instead of converting them through
+binary floating point. Number inputs use the runtime's JavaScript shortest-decimal
+kernel; BigInt inputs retain the runtime's supported integer width. Standard-notation
+rounding bounds its decimal representation with guard digits and a sticky tail, while
+preserving rounding-grid equality and halfway decisions. This representation belongs
+to NumberFormat; RelativeTimeFormat consumes the exact mathematical binary value.
+Resolved options are materialized from the native plan on request, so construction
+does not allocate a private JavaScript metadata object. Text and numeric parts share
+UTF-16 output spans, including supplementary numbering-system digits.
+
 Decimal digits come from checksum-pinned CLDR supplemental numbering-system data.
 `scripts/generate-intl-digit-data.ts` generates the Rust table from
 `numberingSystems.json`. Numeric systems use their published scalar sequences;

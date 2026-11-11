@@ -50,4 +50,25 @@ if (
 )
 	throw new Error("Collator option order changed");
 
+for (const Constructor of [
+	Intl.Collator,
+	Intl.NumberFormat,
+	Intl.DateTimeFormat,
+	Intl.PluralRules,
+	Intl.ListFormat,
+]) {
+	let reads = 0;
+	const newTarget = new Proxy(Constructor, {
+		get(target, key) {
+			if (key === "prototype") {
+				reads++;
+				collect();
+			}
+			return Reflect.get(target, key);
+		},
+	});
+	Reflect.construct(Constructor, ["en"], newTarget);
+	if (reads !== 1) throw new Error("constructor repeated prototype lookup");
+}
+
 console.log("ok");

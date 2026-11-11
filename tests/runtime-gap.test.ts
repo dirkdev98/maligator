@@ -545,6 +545,7 @@ runRuntimeGapCase("allocation-snapshot", run, verify);
 		["intl-list-format-reuse", false, ["list-format"]],
 		["intl-relative-time-reuse", false, ["relative-time-format"]],
 		["intl-duration-text", false, ["duration-format"]],
+		["intl-number-reuse", false, ["number-format"]],
 	] as const)(
 		"clones %s with runnable work and its required features",
 		(sourceId, regexp, intlFeatures) => {
