@@ -119,6 +119,10 @@ interface Sample {
 	codeUnits: number;
 	phases: Record<string, number>;
 	peakRssBytes?: number;
+	/** User plus system CPU of the compiler process, GC worker threads included. */
+	cpuMs?: number;
+	/** Darwin's peak physical footprint, which excludes pages the GC has released. */
+	peakFootprintBytes?: number;
 	gcMemory?: {
 		samples: number;
 		peakManaged: Record<string, string | number>;
@@ -518,6 +522,21 @@ function compareCapturedCompilers(options: Options): void {
 				: resourceLog.match(/Maximum resident set size \(kbytes\):\s*(\d+)/)?.[1];
 		if (timed && rss === undefined)
 			throw new Error(`${label} resource probe omitted peak RSS`);
+		const seconds = (pattern: RegExp): number | undefined => {
+			const match = pattern.exec(resourceLog)?.[1];
+			return match === undefined ? undefined : Number(match);
+		};
+		const user = seconds(
+			process.platform === "darwin"
+				? /^user\s+([\d.]+)$/m
+				: /User time \(seconds\):\s*([\d.]+)/,
+		);
+		const system = seconds(
+			process.platform === "darwin"
+				? /^sys\s+([\d.]+)$/m
+				: /System time \(seconds\):\s*([\d.]+)/,
+		);
+		const footprint = resourceLog.match(/^\s*(\d+)\s+peak memory footprint\s*$/m)?.[1];
 		let gcMemory: Sample["gcMemory"];
 		if (options.gcMemory && host === "native") {
 			const snapshots = resourceLog
@@ -566,6 +585,10 @@ function compareCapturedCompilers(options: Options): void {
 			...(rss === undefined
 				? {}
 				: { peakRssBytes: Number(rss) * (process.platform === "linux" ? 1024 : 1) }),
+			...(user === undefined || system === undefined
+				? {}
+				: { cpuMs: Math.round((user + system) * 1000) }),
+			...(footprint === undefined ? {} : { peakFootprintBytes: Number(footprint) }),
 		};
 	};
 	const verify = (sample: Sample, expected: Sample | undefined): void => {

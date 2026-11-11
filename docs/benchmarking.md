@@ -457,7 +457,9 @@ reservation. `--gc-memory-interval 256` samples every 256 pauses and each major
 pause ending with an idle collector. This reduces heap walks while retaining
 completed-cycle observations. Snapshot row counts are not collection counts.
 Those traced timings are diagnostic. Keep ordinary elapsed time, peak RSS and
-pause costs separate, and do not sum overlapping reserve categories. The manual
+pause costs separate, and do not sum overlapping reserve categories. Every timed
+sample also records process CPU, which includes GC worker threads, and on macOS
+the peak physical footprint, which excludes pages the collector released. The manual
 Native performance workflow's `memory_policy` input runs both comparisons on the
 full frozen compiler input, alongside its ordinary compiler controls.
 Both Node compiler snapshots use the same source preparation. Native captures use
