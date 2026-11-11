@@ -174,17 +174,22 @@ assert(
 assert("\ud800x".charCodeAt(0) === 55296, "UTF16 code units");
 const max = 170141183460469231731687303715884105727n;
 const min = -170141183460469231731687303715884105728n;
-for (const [op, a, b, kind] of [
-	["+", max, 1n, "unsupported"],
-	["*", min, -1n, "unsupported"],
-	["/", min, -1n, "unsupported"],
-	["%", min, -1n, "value"],
+// Signed 128-bit edges fold exactly; only work beyond the evaluator's budget declines.
+for (const [op, a, b, kind, expected] of [
+	["+", max, 1n, "value", max + 1n],
+	["*", min, -1n, "value", -min],
+	["/", min, -1n, "value", -min],
+	["%", min, -1n, "value", 0n],
 	["/", 1n, 0n, "throw"],
+	["**", 3n, 100000n, "unsupported"],
 ]) {
 	const result = evaluateConstantOperation("bigint.binary:" + op, [
 		{ kind: "bigint", value: a },
 		{ kind: "bigint", value: b },
 	]);
-	assert(result.kind === kind, "bounded evaluator " + op);
+	assert(
+		result.kind === kind && (kind !== "value" || result.value.value === expected),
+		"bounded evaluator " + op,
+	);
 }
 console.log("static value semantic boundaries passed");
