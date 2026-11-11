@@ -73,6 +73,7 @@ static bool mal_module_namespace_ensure_for_key(
         mal_module_namespace_ensure_evaluated(vm, ns);
 }
 static bool mal_vm_key_is_prototype(MalKey key);
+static bool mal_vm_key_is_legacy_function_property(MalKey key);
 
 // Diagnostic counter for the isolate on the current mutator thread.
 static MAL_ISOLATE_LOCAL u64 g_stack_object_materializations = 0;
@@ -700,7 +701,7 @@ bool mal_vm_get_own_property(
     }
 
     if (mal_vm_script_function_has_prototype(vm, object_value) &&
-        mal_vm_key_is_prototype(key) &&
+        (mal_vm_key_is_prototype(key) || mal_vm_key_is_legacy_function_property(key)) &&
         !mal_object_get_own(mal_value_to_object(object_value), key).present) {
         mal_vm_function_prototype(vm, object_value);
         MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(object_value), key);
@@ -5005,6 +5006,23 @@ static bool mal_vm_key_is_prototype(MalKey key) {
     return mal_string_equals_ascii(mal_value_to_string(key.value), "prototype");
 }
 
+static bool mal_vm_key_is_legacy_function_property(MalKey key) {
+    if (key.kind != MAL_KEY_STRING || !mal_value_is_string(key.value)) return false;
+    const MalString *name = mal_value_to_string(key.value);
+    return mal_string_equals_ascii(name, "caller") || mal_string_equals_ascii(name, "arguments");
+}
+
+/*
+ * Sloppy ordinary functions own `arguments` and `caller` as non-writable null data
+ * properties, as V8, SpiderMonkey and JavaScriptCore define them, so reading them
+ * never reaches %Function.prototype%'s %ThrowTypeError% accessors. They appear
+ * with the lazy `prototype`, ahead of it in own-key order.
+ */
+static bool mal_vm_function_has_legacy_properties(const MalFunction *function) {
+    return function->kind == MAL_FUNCTION_KIND_NORMAL && function->has_prototype &&
+        !function->is_class_constructor && !function->strict;
+}
+
 /**
  * Whether a function object is a generator (its definition's kind).
  */
@@ -5039,8 +5057,14 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
     bool is_class_constructor = false;
     if (function_object != nullptr) {
         i32 index = mal_function_object_function_index(function_object);
-        kind = vm->runtime_image->functions[index].kind;
-        is_class_constructor = vm->runtime_image->functions[index].is_class_constructor;
+        const MalFunction *definition = &vm->runtime_image->functions[index];
+        kind = definition->kind;
+        is_class_constructor = definition->is_class_constructor;
+        if (mal_vm_function_has_legacy_properties(definition)) {
+            MalPropertyDesc legacy = mal_intrinsic_data_desc(mal_value_new_null(), MAL_PROPERTY_NONE);
+            mal_object_define_own(function, mal_intrinsic_string_key(vm, (const byte *) "arguments"), &legacy);
+            mal_object_define_own(function, mal_intrinsic_string_key(vm, (const byte *) "caller"), &legacy);
+        }
     }
     bool is_generator_kind = kind == MAL_FUNCTION_KIND_GENERATOR || kind == MAL_FUNCTION_KIND_ASYNC_GENERATOR;
 
@@ -5102,6 +5126,14 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
         // function creation (function_object.c / mal_vm_op_create_function /
         // Function.prototype.bind), so the reflective machinery and delete see
         // them; they are deliberately NOT resolved synthetically here.
+        // The legacy pair materializes with `prototype`; the ordinary Get then finds it.
+        if (mal_value_is_function_object(object_value) &&
+            mal_vm_key_is_legacy_function_property(key) &&
+            mal_vm_script_function_has_prototype(vm, object_value) &&
+            !mal_object_get_own(mal_value_to_object(object_value), key).present) {
+            mal_vm_function_prototype(vm, object_value);
+            return false;
+        }
         if (mal_value_is_function_object(object_value) && mal_vm_key_is_prototype(key)) {
             // A user-defined own `prototype` (a data value or accessor installed
             // via defineProperty/assignment) overrides the synthetic default:

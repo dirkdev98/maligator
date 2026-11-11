@@ -452,16 +452,9 @@ contracts or investigates costs still visible after the string follow-ups.
       its own. Check that the function's parameter list and body close at the
       delimiters the runtime inserts.
 
-- [ ] Give sloppy functions own `caller` and `arguments` properties. V8,
-      SpiderMonkey and JSC define them as non-writable data properties holding
-      null, so reading `f.caller` from sloppy code does not reach the
-      %ThrowTypeError% accessors on %Function.prototype%; 16 legacy
-      `Function/15.3.5.4_2-*gs` tests rely on that. Keep own-key order, descriptors
-      and deletion consistent with the synthetic `prototype` property.
-
-- [ ] Probe HasProperty again when a `with`-provided callee is read. The call path
-      resolves the base and then loads the function with a plain Get, skipping
-      GetBindingValue's second HasProperty that a Proxy with-object observes.
+- [ ] Decide whether a sloppy function's `caller` reports its active caller. Own
+      `caller` and `arguments` hold null; V8 returns the calling sloppy function, which
+      `arguments-object/10.6-13-a-2` and `-3` call through.
 
 ## Engine capabilities
 
