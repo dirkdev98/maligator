@@ -1807,85 +1807,109 @@ static MalValue plain_time_to_string_default(MalVm *vm, MalValue this_value) {
     return temporal_write_to_string(vm, &write);
 }
 
-static bool temporal_to_string_rounding_options(
-    MalVm *vm, MalValue value, ToStringRoundingOptions *options
-) {
-    *options = (ToStringRoundingOptions) {
+static ToStringRoundingOptions temporal_to_string_default_options(void) {
+    return (ToStringRoundingOptions) {
         .precision = {.is_minute = false, .precision = {.is_ok = false}},
         .smallest_unit = {.is_ok = false},
         .rounding_mode = {.ok = RoundingMode_Trunc, .is_ok = true},
     };
+}
+
+// The toString readers below each perform one GetOption with its own value
+// check. Callers interleave their type-specific options in the spec's
+// alphabetical order and call temporal_resolve_to_string_precision only after
+// every option has been read, since unit validation is algorithmic.
+
+// GetTemporalFractionalSecondDigitsOption; "auto" leaves the precision unset.
+static bool temporal_read_fractional_second_digits(
+    MalVm *vm, MalValue options, ToStringRoundingOptions *out
+) {
+    MalValue value;
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, "fractionalSecondDigits"),
+            &value)) {
+        return false;
+    }
+    if (mal_value_is_undefined(value)) return true;
+    if (mal_ops_is_number(value)) {
+        f64 digits;
+        if (!mal_vm_to_number(vm, value, &digits) || !isfinite(digits)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Invalid fractionalSecondDigits option");
+            return false;
+        }
+        digits = floor(digits);
+        if (digits < 0 || digits > 9) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Invalid fractionalSecondDigits option");
+            return false;
+        }
+        out->precision.precision = (OptionU8) {.ok = (u8) digits, .is_ok = true};
+        return true;
+    }
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    if (!mal_string_equals_ascii(string, "auto")) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid fractionalSecondDigits option");
+        return false;
+    }
+    return true;
+}
+
+static bool temporal_read_to_string_rounding_mode(
+    MalVm *vm, MalValue options, ToStringRoundingOptions *out
+) {
+    RoundingMode mode;
+    if (!temporal_get_rounding_mode(vm, options, RoundingMode_Trunc, &mode)) {
+        return false;
+    }
+    out->rounding_mode = (RoundingMode_option) {.ok = mode, .is_ok = true};
+    return true;
+}
+
+// GetTemporalUnitValuedOption(options, "smallestUnit", unset): any unit name
+// or "auto" passes here.
+static bool temporal_read_to_string_smallest_unit(
+    MalVm *vm, MalValue options, ToStringRoundingOptions *out
+) {
+    return temporal_get_optional_unit_option(
+        vm, options, "smallestUnit", true, &out->smallest_unit);
+}
+
+// ValidateTemporalUnitValue(smallestUnit, time), the hour rejection and
+// ToSecondsStringPrecisionRecord, where smallestUnit overrides the digits.
+static bool temporal_resolve_to_string_precision(
+    MalVm *vm, ToStringRoundingOptions *options
+) {
+    if (!options->smallest_unit.is_ok) return true;
+    Unit smallest = options->smallest_unit.ok;
+    if (smallest < Unit_Nanosecond || smallest > Unit_Minute) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid smallestUnit for Temporal string");
+        return false;
+    }
+    options->precision.is_minute = smallest == Unit_Minute;
+    if (!options->precision.is_minute) {
+        u8 digits = smallest == Unit_Second ? 0
+            : smallest == Unit_Millisecond ? 3
+            : smallest == Unit_Microsecond ? 6 : 9;
+        options->precision.precision = (OptionU8) {.ok = digits, .is_ok = true};
+    }
+    return true;
+}
+
+static bool temporal_to_string_rounding_options(
+    MalVm *vm, MalValue value, ToStringRoundingOptions *options
+) {
+    *options = temporal_to_string_default_options();
     bool present;
     if (!temporal_options_object(vm, value, &present)) return false;
     if (!present) return true;
-
-    MalValue digits_value;
-    if (!mal_vm_get_property(
-            vm, value, mal_intrinsic_string_key(vm, "fractionalSecondDigits"),
-            &digits_value)) {
-        return false;
-    }
-    if (!mal_value_is_undefined(digits_value)) {
-        if (mal_ops_is_number(digits_value)) {
-            f64 digits;
-            if (!mal_vm_to_number(vm, digits_value, &digits) || !isfinite(digits)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                                   "Invalid fractionalSecondDigits option");
-                return false;
-            }
-            digits = floor(digits);
-            if (digits < 0 || digits > 9) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                                   "Invalid fractionalSecondDigits option");
-                return false;
-            }
-            options->precision.precision =
-                (OptionU8) {.ok = (u8) digits, .is_ok = true};
-        } else {
-            MalString *digits;
-            if (!mal_vm_to_string(vm, digits_value, &digits)) return false;
-            if (!mal_string_equals_ascii(digits, "auto")) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                                   "Invalid fractionalSecondDigits option");
-                return false;
-            }
-        }
-    }
-
-    RoundingMode mode;
-    if (!temporal_get_rounding_mode(vm, value, RoundingMode_Trunc, &mode)) {
-        return false;
-    }
-    options->rounding_mode = (RoundingMode_option) {.ok = mode, .is_ok = true};
-
-    MalValue smallest_value;
-    if (!mal_vm_get_property(
-            vm, value, mal_intrinsic_string_key(vm, "smallestUnit"),
-            &smallest_value)) {
-        return false;
-    }
-    if (!mal_value_is_undefined(smallest_value)) {
-        MalString *smallest_string;
-        if (!mal_vm_to_string(vm, smallest_value, &smallest_string)) return false;
-        Unit smallest;
-        if (!temporal_unit_from_string(vm, smallest_string, false, &smallest)) {
-            return false;
-        }
-        if (smallest < Unit_Nanosecond || smallest > Unit_Minute) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                               "Invalid smallestUnit for Temporal string");
-            return false;
-        }
-        options->smallest_unit = (Unit_option) {.ok = smallest, .is_ok = true};
-        options->precision.is_minute = smallest == Unit_Minute;
-        if (!options->precision.is_minute) {
-            u8 digits = smallest == Unit_Second ? 0
-                : smallest == Unit_Millisecond ? 3
-                : smallest == Unit_Microsecond ? 6 : 9;
-            options->precision.precision = (OptionU8) {.ok = digits, .is_ok = true};
-        }
-    }
-    return true;
+    return temporal_read_fractional_second_digits(vm, value, options) &&
+        temporal_read_to_string_rounding_mode(vm, value, options) &&
+        temporal_read_to_string_smallest_unit(vm, value, options) &&
+        temporal_resolve_to_string_precision(vm, options);
 }
 
 static MalValue plain_time_to_string(
@@ -2979,20 +3003,28 @@ static MalValue plain_date_time_to_string_impl(
 ) {
     MalTemporalObject *object;
     if (!plain_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
-    ToStringRoundingOptions options = {
-        .precision = {.is_minute = false, .precision = {.is_ok = false}},
-        .smallest_unit = {.is_ok = false},
-        .rounding_mode = {.ok = RoundingMode_Trunc, .is_ok = true},
-    };
+    ToStringRoundingOptions options = temporal_to_string_default_options();
     DisplayCalendar display = DisplayCalendar_Auto;
-    if (read_options &&
-        (!temporal_to_string_rounding_options(vm, options_value, &options) ||
-         !temporal_display_calendar(vm, options_value, &display))) {
+    bool present = false;
+    if (read_options && !temporal_options_object(vm, options_value, &present)) {
+        return mal_value_new_undefined();
+    }
+    if (present &&
+        (!temporal_display_calendar(vm, options_value, &display) ||
+         !temporal_read_fractional_second_digits(vm, options_value, &options) ||
+         !temporal_read_to_string_rounding_mode(vm, options_value, &options) ||
+         !temporal_read_to_string_smallest_unit(vm, options_value, &options) ||
+         !temporal_resolve_to_string_precision(vm, &options))) {
         return mal_value_new_undefined();
     }
     TEMPORAL_WRITE(write, 48);
-    temporal_rs_PlainDateTime_to_ixdtf_string(
-        object->handle, options, display, &write.diplomat);
+    temporal_rs_PlainDateTime_to_ixdtf_string_result result =
+        temporal_rs_PlainDateTime_to_ixdtf_string(
+            object->handle, options, display, &write.diplomat);
+    if (!result.is_ok) {
+        temporal_write_destroy(&write);
+        return temporal_throw(vm, result.err);
+    }
     return temporal_write_to_string(vm, &write);
 }
 
@@ -4198,29 +4230,28 @@ static MalValue instant_to_string_impl(
 ) {
     MalTemporalObject *object;
     if (!instant_this(vm, this_value, &object)) return mal_value_new_undefined();
-    ToStringRoundingOptions options = {
-        .precision = {.is_minute = false, .precision = {.is_ok = false}},
-        .smallest_unit = {.is_ok = false},
-        .rounding_mode = {.ok = RoundingMode_Trunc, .is_ok = true},
-    };
+    ToStringRoundingOptions options = temporal_to_string_default_options();
     TimeZone_option zone = {.is_ok = false};
-    if (read_options) {
-        if (!temporal_to_string_rounding_options(vm, options_value, &options)) {
+    bool present = false;
+    if (read_options && !temporal_options_object(vm, options_value, &present)) {
+        return mal_value_new_undefined();
+    }
+    if (present) {
+        MalValue zone_value;
+        if (!temporal_read_fractional_second_digits(vm, options_value, &options) ||
+            !temporal_read_to_string_rounding_mode(vm, options_value, &options) ||
+            !temporal_read_to_string_smallest_unit(vm, options_value, &options) ||
+            !mal_vm_get_property(
+                vm, options_value, mal_intrinsic_string_key(vm, "timeZone"),
+                &zone_value) ||
+            !temporal_resolve_to_string_precision(vm, &options)) {
             return mal_value_new_undefined();
         }
-        if (!mal_value_is_undefined(options_value)) {
-            MalValue zone_value;
-            if (!mal_vm_get_property(
-                    vm, options_value, mal_intrinsic_string_key(vm, "timeZone"),
-                    &zone_value)) {
+        if (!mal_value_is_undefined(zone_value)) {
+            if (!temporal_time_zone_from_value(vm, zone_value, &zone.ok)) {
                 return mal_value_new_undefined();
             }
-            if (!mal_value_is_undefined(zone_value)) {
-                if (!temporal_time_zone_from_value(vm, zone_value, &zone.ok)) {
-                    return mal_value_new_undefined();
-                }
-                zone.is_ok = true;
-            }
+            zone.is_ok = true;
         }
     }
     TEMPORAL_WRITE(write, 48);
@@ -5033,54 +5064,70 @@ static MalValue zoned_date_time_with_plain_time(
                         : temporal_throw(vm, result.err);
 }
 
+static bool zoned_date_time_display_offset(
+    MalVm *vm, MalValue options, DisplayOffset *offset
+) {
+    MalValue value;
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, "offset"), &value)) {
+        return false;
+    }
+    if (mal_value_is_undefined(value)) return true;
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    if (mal_string_equals_ascii(string, "never")) *offset = DisplayOffset_Never;
+    else if (!mal_string_equals_ascii(string, "auto")) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid Temporal offset display option");
+        return false;
+    }
+    return true;
+}
+
+static bool zoned_date_time_display_time_zone(
+    MalVm *vm, MalValue options, DisplayTimeZone *time_zone
+) {
+    MalValue value;
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, "timeZoneName"), &value)) {
+        return false;
+    }
+    if (mal_value_is_undefined(value)) return true;
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    if (mal_string_equals_ascii(string, "never")) *time_zone = DisplayTimeZone_Never;
+    else if (mal_string_equals_ascii(string, "critical")) {
+        *time_zone = DisplayTimeZone_Critical;
+    } else if (!mal_string_equals_ascii(string, "auto")) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid Temporal timeZoneName option");
+        return false;
+    }
+    return true;
+}
+
 static MalValue zoned_date_time_to_string_impl(
     MalVm *vm, MalValue this_value, MalValue options_value, bool read_options
 ) {
     MalTemporalObject *object;
     if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
-    ToStringRoundingOptions rounding = {
-        .precision = {.is_minute = false, .precision = {.is_ok = false}},
-        .smallest_unit = {.is_ok = false},
-        .rounding_mode = {.ok = RoundingMode_Trunc, .is_ok = true},
-    };
+    ToStringRoundingOptions rounding = temporal_to_string_default_options();
     DisplayCalendar calendar = DisplayCalendar_Auto;
     DisplayOffset offset = DisplayOffset_Auto;
     DisplayTimeZone timezone = DisplayTimeZone_Auto;
-    if (read_options) {
-        if (!temporal_display_calendar(vm, options_value, &calendar) ||
-            !temporal_to_string_rounding_options(vm, options_value, &rounding)) {
-            return mal_value_new_undefined();
-        }
-        if (!mal_value_is_undefined(options_value)) {
-            MalValue value;
-            MalString *string;
-            if (!mal_vm_get_property(
-                    vm, options_value, mal_intrinsic_string_key(vm, "offset"),
-                    &value)) return mal_value_new_undefined();
-            if (!mal_value_is_undefined(value)) {
-                if (!mal_vm_to_string(vm, value, &string)) return mal_value_new_undefined();
-                if (mal_string_equals_ascii(string, "never")) offset = DisplayOffset_Never;
-                else if (!mal_string_equals_ascii(string, "auto")) {
-                    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                                       "Invalid Temporal offset display option");
-                    return mal_value_new_undefined();
-                }
-            }
-            if (!mal_vm_get_property(
-                    vm, options_value, mal_intrinsic_string_key(vm, "timeZoneName"),
-                    &value)) return mal_value_new_undefined();
-            if (!mal_value_is_undefined(value)) {
-                if (!mal_vm_to_string(vm, value, &string)) return mal_value_new_undefined();
-                if (mal_string_equals_ascii(string, "never")) timezone = DisplayTimeZone_Never;
-                else if (mal_string_equals_ascii(string, "critical"))
-                    timezone = DisplayTimeZone_Critical;
-                else if (!mal_string_equals_ascii(string, "auto")) {
-                    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                                       "Invalid Temporal timeZoneName option");
-                    return mal_value_new_undefined();
-                }
-            }
-        }
+    bool present = false;
+    if (read_options && !temporal_options_object(vm, options_value, &present)) {
+        return mal_value_new_undefined();
+    }
+    if (present &&
+        (!temporal_display_calendar(vm, options_value, &calendar) ||
+         !temporal_read_fractional_second_digits(vm, options_value, &rounding) ||
+         !zoned_date_time_display_offset(vm, options_value, &offset) ||
+         !temporal_read_to_string_rounding_mode(vm, options_value, &rounding) ||
+         !temporal_read_to_string_smallest_unit(vm, options_value, &rounding) ||
+         !zoned_date_time_display_time_zone(vm, options_value, &timezone) ||
+         !temporal_resolve_to_string_precision(vm, &rounding))) {
+        return mal_value_new_undefined();
     }
     TEMPORAL_WRITE(write, 80);
     temporal_rs_ZonedDateTime_to_ixdtf_string_result result =
