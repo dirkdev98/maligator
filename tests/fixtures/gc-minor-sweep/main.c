@@ -710,6 +710,45 @@ static bool cell_index_rejects_unallocated_storage(MalHeap *heap) {
     return true;
 }
 
+static bool recycled_payloads_preserve_survivors_across_storage_kinds(MalHeap *heap) {
+    for (u32 round = 0; round < 4; round++) {
+        TestCell *cells[32];
+        u32 ids[countof(cells)];
+        for (usize i = 0; i < countof(cells); i++) {
+            cells[i] = new_cell(heap, 8192);
+            ids[i] = cells[i]->id;
+            memset((u8 *) cells[i] + sizeof(TestCell), (int) round + 1, 8192 - sizeof(TestCell));
+        }
+        mal_heap_begin_major(heap);
+        mark_live(cells[0]);
+        mal_heap_sweep(heap, finalize_cell);
+        CHECK(live_cell(cells[0], ids[0]));
+        for (usize i = 1; i < countof(cells); i++) CHECK(g_finalized[ids[i]] == 1);
+        for (usize i = sizeof(TestCell); i < 8192; i++)
+            CHECK(((u8 *) cells[0])[i] == round + 1);
+
+        void *raw[8];
+        for (usize i = 0; i < countof(raw); i++) {
+            raw[i] = mal_heap_alloc_raw(heap, 8192);
+            memset(raw[i], (int) i + 0x60, 8192);
+        }
+        for (usize i = 0; i < countof(raw); i++) {
+            for (usize j = 0; j < 8192; j++) CHECK(((u8 *) raw[i])[j] == i + 0x60);
+            gc_free_raw(heap, raw[i]);
+        }
+        mal_heap_begin_major(heap);
+        mark_live(cells[0]);
+        mal_heap_sweep(heap, finalize_cell);
+        CHECK(live_cell(cells[0], ids[0]));
+        for (usize i = sizeof(TestCell); i < 8192; i++)
+            CHECK(((u8 *) cells[0])[i] == round + 1);
+    }
+    mal_heap_begin_major(heap);
+    mal_heap_sweep(heap, finalize_cell);
+    for (u32 id = 1; id <= g_next_id; id++) CHECK(g_finalized[id] == 1);
+    return true;
+}
+
 static bool run_check(bool (*check)(MalHeap *)) {
     MalHeap heap;
     mal_heap_init(&heap, 0);
@@ -729,6 +768,7 @@ int main(void) {
     bool (*checks[])(MalHeap *) = {
         cell_index_rejects_unallocated_storage,
         major_reclaims_once_and_recycles_blocks,
+        recycled_payloads_preserve_survivors_across_storage_kinds,
         minor_preserves_old_cells_and_free_list_members,
         minor_reenrolls_reused_cells_in_untouched_blocks,
         minor_reenrolls_a_reclaimed_cell_away_from_the_current_block,

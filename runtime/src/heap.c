@@ -270,6 +270,10 @@ static void mal_gc_raw_partial_unlink(MalHeap *heap, MalGcBlock *block) {
     block->on_partial = 0;
 }
 
+#if !defined(__wasi__)
+static int mal_gc_advise_block_payload(MalGcBlock *block, int advice);
+#endif
+
 static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
     MalGcChunk *chunk = nullptr;
     if (heap->free_blocks == nullptr) {
@@ -290,6 +294,10 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
         heap->free_blocks = recycled->next_free;
         block_base = (u8 *) recycled;
         sweep_epoch = recycled->sweep_epoch;
+#if defined(__APPLE__) && defined(MADV_FREE_REUSABLE) && defined(MADV_FREE_REUSE)
+        // Reused payload is charged as active before any allocator writes reach it.
+        mal_gc_advise_block_payload(recycled, MADV_FREE_REUSE);
+#endif
     } else {
         block_base = (u8 *) chunk->base + chunk->next_block * MAL_GC_BLOCK_SIZE;
         chunk->next_block++;
@@ -1093,32 +1101,32 @@ static usize mal_gc_page_size(void) {
     return cached;
 }
 
-/* "Reclaim these pages" hint: MADV_FREE where available (Darwin/BSD; lazy, no
- * immediate zero) else MADV_DONTNEED (Linux). Either drops RSS; page contents
- * become undefined, fine for a block that is reset and rewritten on reuse. */
 #ifdef MADV_FREE
-#define MAL_GC_MADV_REUSE MADV_FREE
+#define MAL_GC_MADV_DISCARD MADV_FREE
 #else
-#define MAL_GC_MADV_REUSE MADV_DONTNEED
+#define MAL_GC_MADV_DISCARD MADV_DONTNEED
 #endif
-
-/* Return a fully-empty block's cell pages to the OS and push it onto the heap's
- * free-block list: reset to pristine and flagged `recycled` so the sweep skips
- * it until mal_gc_new_block reclaims it. The header lives in the first page and
- * is preserved; whole pages strictly inside the cell region are madvised away. */
-static void mal_gc_recycle_block(MalHeap *heap, MalGcBlock *block) {
-    u8 *block_base = (u8 *) block;
 
 #if !defined(__wasi__)
+static int mal_gc_advise_block_payload(MalGcBlock *block, int advice) {
     usize page = mal_gc_page_size();
-    uptr madv_start =
-        ((uptr) block_base + mal_gc_cell_data_offset() + (page - 1)) & ~(uptr) (page - 1);
-    uptr madv_end = (uptr) block_base + MAL_GC_BLOCK_SIZE;
-    if (madv_end > madv_start) {
-        madvise((void *) madv_start, (usize) (madv_end - madv_start), MAL_GC_MADV_REUSE);
-    }
+    uptr start = ((uptr) block + mal_gc_cell_data_offset() + (page - 1)) & ~(uptr) (page - 1);
+    uptr end = (uptr) block + MAL_GC_BLOCK_SIZE;
+    return end > start ? madvise((void *) start, (usize) (end - start), advice) : 0;
+}
 #endif
-    block->bump = block_base + mal_gc_cell_data_offset();
+
+/* Preserve the header and free-list metadata; only complete payload pages can
+ * become undefined. Darwin's reusable advice also removes idle payload from
+ * physical-footprint accounting, paired with REUSE before the next payload write. */
+static void mal_gc_recycle_block(MalHeap *heap, MalGcBlock *block) {
+#if !defined(__wasi__)
+#if defined(__APPLE__) && defined(MADV_FREE_REUSABLE) && defined(MADV_FREE_REUSE)
+    if (mal_gc_advise_block_payload(block, MADV_FREE_REUSABLE) != 0)
+#endif
+        mal_gc_advise_block_payload(block, MAL_GC_MADV_DISCARD);
+#endif
+    block->bump = (u8 *) block + mal_gc_cell_data_offset();
     block->free_list = nullptr;
     block->recycled = 1;
     block->next_free = heap->free_blocks;

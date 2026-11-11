@@ -53,6 +53,14 @@ alone decides liveness for conservative roots, heap walks and verification.
 Cursors return unused cells before anything reads the bitmaps or changes
 allocation color.
 
+Fully empty blocks retain their header and return complete payload pages to the
+OS. On Darwin, `MADV_FREE_REUSABLE` marks those pages as idle for physical-footprint
+accounting; `MADV_FREE_REUSE` restores active ownership before allocation touches
+them again. Unsupported reusable advice falls back to ordinary discard advice.
+The mappings remain reserved by the runtime, so logical process reservations do
+not fall when payload pages become reusable. This does not reclaim free cells in
+blocks that still contain live objects.
+
 Workers append discoveries to private lists and acknowledge completion under the
 batch mutex. Only after observing every acknowledgement does the mutator reserve
 space for the combined discovery count and copy each list in worker order. The
