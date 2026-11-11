@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ESTree } from "meriyah";
@@ -447,6 +448,37 @@ function shadowsImportedBinding(
 	return false;
 }
 
+// Module URLs a program builds statically, which a worker may start from even when the
+// Worker constructor or the URL reaches it through a value, such as a lazily loaded
+// `process.getBuiltinModule("node:worker_threads")` or a helper returning the URL.
+const MODULE_URL = /\.(?:[cm]?js|[cm]?ts)$/;
+
+function moduleUrlEntry(
+	modules: ReadonlyMap<string, ModuleRecord>,
+	record: ModuleRecord,
+	node: ESTree.NewExpression,
+): string | undefined {
+	const [specifier, baseNode] = node.arguments;
+	if (
+		node.callee.type !== "Identifier" ||
+		node.callee.name !== "URL" ||
+		node.arguments.length !== 2 ||
+		specifier?.type !== "Literal" ||
+		typeof specifier.value !== "string" ||
+		!MODULE_URL.test(specifier.value) ||
+		baseNode === undefined ||
+		baseNode.type === "SpreadElement" ||
+		shadowsImportedBinding(node.callee, parentsFor(record), "URL")
+	)
+		return undefined;
+	const base = staticUrlValue(modules, record, baseNode);
+	if (base !== pathToFileURL(record.sourcePath ?? record.path).href) return undefined;
+	const href = new URL(specifier.value, base).href;
+	return statSync(fileURLToPath(href), { throwIfNoEntry: false })?.isFile()
+		? href
+		: undefined;
+}
+
 export function discoverWorkerEntries(
 	modules: ReadonlyMap<string, ModuleRecord>,
 	sourceRoot: string,
@@ -464,7 +496,11 @@ export function discoverWorkerEntries(
 			false);
 	// Alias and reexport resolution can only recognize entries from these API origins.
 	let hasWorkerOrigin = false;
+	// A program can also reach the Worker constructor without importing it.
+	let mentionsWorkerThreads = false;
 	for (const record of modules.values()) {
+		if (record.host === undefined && record.source.includes("worker_threads"))
+			mentionsWorkerThreads = true;
 		if (
 			suppliesWorkerEntries(record.path) ||
 			record.dependencies.some(
@@ -473,10 +509,9 @@ export function discoverWorkerEntries(
 			)
 		) {
 			hasWorkerOrigin = true;
-			break;
 		}
 	}
-	if (!hasWorkerOrigin) return [];
+	if (!hasWorkerOrigin && !mentionsWorkerThreads) return [];
 	const entries = new Map<string, WorkerEntryDeclaration>();
 	for (const record of modules.values()) {
 		if (record.host !== undefined) continue;
@@ -504,6 +539,18 @@ export function discoverWorkerEntries(
 		}
 		traverseEstree(record.parsed.ast.body, (node) => {
 			if (node.type !== "CallExpression" && node.type !== "NewExpression") return;
+			if (mentionsWorkerThreads && node.type === "NewExpression") {
+				const href = moduleUrlEntry(modules, record, node);
+				if (href !== undefined) {
+					const target = fileURLToPath(href);
+					entries.set(`${record.path}\0${target}`, {
+						importer: record.path,
+						path: target,
+						href,
+					});
+					return;
+				}
+			}
 			const identity = calleeIdentity(modules, record, node.callee);
 			const declaration = node.type === "CallExpression" && isDeclaration(identity);
 			const worker =
