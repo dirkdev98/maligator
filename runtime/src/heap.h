@@ -142,8 +142,8 @@ typedef struct MalHeap {
      * recycled by mal_gc_new_block before carving a fresh block from a chunk.
      * A blank block can serve any size class / kind after re-init. */
     MalGcBlock *free_blocks;
-    /** Nonempty managed blocks with free cells per size class, linked through next_free.
-     * Majors rebuild these lists; minors add survivor blocks that gained free cells. */
+    /** Managed blocks with free cells per size class, linked through next_free.
+     * Majors rebuild these lists; minors add blocks that gained free cells. */
     MalGcBlock *cell_avail[MAL_GC_NUM_SIZE_CLASSES];
     /** Managed blocks allocated into since the last sweep, including cell reuse.
      * Minor collections sweep only this list; old-only blocks need no visit. */
@@ -678,8 +678,8 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize);
 
 /** Reclaim the young cells a minor mark left unmarked. Marking must have reported
  * every young survivor through mal_heap_note_minor_survivor; the sweep reads only
- * cells that need their finalizer. Fully empty noncurrent blocks return to the common
- * pool after unused cursor claims have been retired; the current block stays warm. */
+ * cells that need their finalizer. Empty blocks await a major before page
+ * reclamation. */
 void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize);
 
 /**

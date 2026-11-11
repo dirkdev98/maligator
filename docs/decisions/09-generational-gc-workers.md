@@ -53,13 +53,6 @@ alone decides liveness for conservative roots, heap walks and verification.
 Cursors return unused cells before anything reads the bitmaps or changes
 allocation color.
 
-Minor sweeps return fully empty noncurrent managed blocks to the common pool,
-where a different size class or RAW owner can reuse them. The current block stays
-warm for allocation bursts in its class until reuse or a major collection. This
-reserve is bounded to one block per managed size class. Majors recycle all empty
-managed blocks. Minors inspect only already-enrolled blocks and confirm allocation
-bitmaps are empty after retiring unused cursor claims. A block with old survivors
-remains in its managed class.
 Fully empty blocks retain their header and return complete payload pages to the
 OS. On Darwin, `MADV_FREE_REUSABLE` marks those pages as idle for physical-footprint
 accounting; `MADV_FREE_REUSE` restores active ownership before allocation touches
