@@ -114,6 +114,10 @@ jobs:
         if: success() || failure()
         run: npm run test:rust
 
+      - name: Check third-party notices
+        if: success() || failure()
+        run: npm run generate:third-party-notices -- --check
+
       - name: Run strict Test262 GC coverage
         if: success() || failure()
         run: >-

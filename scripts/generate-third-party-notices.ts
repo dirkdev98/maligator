@@ -1,11 +1,24 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cargoCacheDirectory } from "../src/cache-root.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = path.join(root, "THIRD_PARTY_NOTICES.md");
+const check = process.argv.includes("--check");
+// Repository license texts for crates that publish no license file.
+const crateLicenses = path.join(root, "runtime/vendor/crate-licenses");
+const DERIVED_HEADER = "// Portions derived from ";
 
 interface Derivation {
 	file: string;
@@ -77,9 +90,28 @@ function fence(text: string): string {
 	return ["```text", text, "```"].join("\n");
 }
 
+// A derived file must be listed, so its upstream notice cannot silently go missing.
+function checkDerivedFilesListed(): void {
+	const listed = new Set([...NODE_DERIVED, ...LIBUV_DERIVED].map((entry) => entry.file));
+	const unlisted: Array<string> = [];
+	for (const directory of ["runtime/src", "runtime/rust/src"])
+		for (const entry of readdirSync(path.join(root, directory), {
+			recursive: true,
+			withFileTypes: true,
+		})) {
+			if (!entry.isFile() || !/\.(c|h|rs)$/.test(entry.name)) continue;
+			const file = path.relative(root, path.join(entry.parentPath, entry.name));
+			if (read(file).startsWith(DERIVED_HEADER) && !listed.has(file)) unlisted.push(file);
+		}
+	if (unlisted.length > 0)
+		throw new Error(
+			`derived files missing from scripts/generate-third-party-notices.ts: ${unlisted.join(", ")}`,
+		);
+}
+
 function derivationTable(project: string, entries: Array<Derivation>): string {
 	for (const entry of entries) {
-		const header = `// Portions derived from ${project} ${entry.upstream} (MIT); see THIRD_PARTY_NOTICES.md.`;
+		const header = `${DERIVED_HEADER}${project} ${entry.upstream} (MIT); see THIRD_PARTY_NOTICES.md.`;
 		if (read(entry.file).split("\n", 1)[0] !== header) {
 			throw new Error(`${entry.file} must start with the line: ${header}`);
 		}
@@ -121,7 +153,8 @@ function cargoMetadata(): CargoMetadata {
 	}).trim();
 	const text = execFileSync(
 		cargo,
-		["metadata", "--format-version", "1", "--locked", "--offline", "--all-features"],
+		// Every feature's crates count, so metadata may fetch ones a build never selected.
+		["metadata", "--format-version", "1", "--locked", "--all-features"],
 		{
 			cwd,
 			encoding: "utf8",
@@ -129,6 +162,7 @@ function cargoMetadata(): CargoMetadata {
 			env: {
 				...process.env,
 				PATH: `${path.dirname(cargo)}${path.delimiter}${process.env.PATH ?? ""}`,
+				CARGO_HOME: cargoCacheDirectory(),
 			},
 		},
 	);
@@ -168,6 +202,8 @@ function licenseFiles(pkg: CargoPackage): Array<string> {
 		const declared = path.resolve(directory, pkg.license_file);
 		if (!files.includes(declared)) files.push(declared);
 	}
+	const repository = path.join(crateLicenses, pkg.name, "LICENSE");
+	if (files.length === 0 && existsSync(repository)) files.push(repository);
 	return files.sort();
 }
 
@@ -178,7 +214,7 @@ function rustSection(): string {
 	for (const pkg of crates) {
 		const label = `${pkg.name} ${pkg.version}${pkg.license === null ? "" : ` (${pkg.license})`}`;
 		const files = licenseFiles(pkg);
-		if (files.length === 0) missing.push(label);
+		if (files.length === 0) missing.push(`${pkg.name} ${pkg.version}`);
 		for (const file of files) {
 			const text = readFileSync(file, "utf8").replaceAll("\r\n", "\n").trimEnd();
 			const key = createHash("sha256").update(text).digest("hex");
@@ -200,14 +236,10 @@ function rustSection(): string {
 			(pkg) => `| ${pkg.name} | ${pkg.version} | ${pkg.license ?? "see license file"} |`,
 		),
 	];
-	if (missing.length > 0) {
-		lines.push(
-			"",
-			"These crates publish no license file; their declared license expression applies:",
-			"",
+	if (missing.length > 0)
+		throw new Error(
+			`crates without a license text; add their repository's LICENSE under ${path.relative(root, crateLicenses)}: ${missing.join(", ")}`,
 		);
-		lines.push(...missing.map((label) => `- ${label}`));
-	}
 	for (const entry of [...texts.values()].sort((a, b) =>
 		a.users[0]!.localeCompare(b.users[0]!),
 	)) {
@@ -283,9 +315,28 @@ const document = [
 	"",
 ].join("\n");
 
-writeFileSync(output, document);
-execFileSync(path.join(root, "node_modules/.bin/oxfmt"), [output], {
-	cwd: root,
-	stdio: "ignore",
-});
-console.log(`[third-party-notices] wrote ${path.relative(root, output)}`);
+checkDerivedFilesListed();
+// The committed file is the formatter's output, so a check formats a scratch copy.
+const scratch = mkdtempSync(path.join(tmpdir(), "maligator-notices-"));
+try {
+	const generated = path.join(scratch, "THIRD_PARTY_NOTICES.md");
+	writeFileSync(generated, document);
+	execFileSync(path.join(root, "node_modules/.bin/oxfmt"), [generated], {
+		cwd: root,
+		stdio: "ignore",
+	});
+	const formatted = readFileSync(generated, "utf8");
+	if (check) {
+		if (readFileSync(output, "utf8") !== formatted) {
+			console.error(
+				"[third-party-notices] THIRD_PARTY_NOTICES.md is stale; run npm run generate:third-party-notices",
+			);
+			process.exitCode = 1;
+		} else console.log("[third-party-notices] up to date");
+	} else {
+		writeFileSync(output, formatted);
+		console.log(`[third-party-notices] wrote ${path.relative(root, output)}`);
+	}
+} finally {
+	rmSync(scratch, { recursive: true, force: true });
+}

@@ -397,11 +397,6 @@ provide, and the recipient may choose among the alternatives their license expre
 | zerovec-derive           | 0.11.7                        | Unicode-3.0                                         |
 | zlib-rs                  | 0.6.8                         | Zlib                                                |
 
-These crates publish no license file; their declared license expression applies:
-
-- alloc-stdlib 0.3.0 (BSD-3-Clause)
-- blake2b_simd 1.0.5 (MIT)
-
 ### ada-url 4.0.0 (MIT OR Apache-2.0): LICENSE-APACHE
 
 ```text
@@ -978,6 +973,7 @@ For more information, please refer to <http://unlicense.org/>
 
 Also shipped by:
 
+- alloc-stdlib 0.3.0 (BSD-3-Clause): LICENSE
 - brotli 9.1.1 (BSD-3-Clause AND MIT): LICENSE.BSD-3-Clause
 - brotli-decompressor 6.3.1 (BSD-3-Clause/MIT): LICENSE
 
@@ -1277,6 +1273,32 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+```
+
+### blake2b_simd 1.0.5 (MIT): LICENSE
+
+```text
+MIT License
+
+Copyright (c) 2018 Jack O'Connor
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
 ### block-buffer 0.12.1 (MIT OR Apache-2.0): LICENSE-MIT

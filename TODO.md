@@ -652,10 +652,6 @@ remains a Maligator extension and does not count as global fetch conformance.
       fork IPC support. Validate Linux teardown and platform event ownership, and compare
       exit latency and idle CPU separately from API correctness.
 
-- [ ] Fail CI when THIRD_PARTY_NOTICES.md is stale against Cargo.lock, the vendored
-      sources and the derived-file list, and find license texts for alloc-stdlib and
-      blake2b_simd, which publish none and are listed by SPDX expression only.
-
 - [ ] fs: use FSEvents to reduce file-descriptor use for large macOS watch sets, Linux
       recursive-watch symlink entries (Node reports their events and link-target
       changes as 'rename'), fs.openAsBlob, readdir's

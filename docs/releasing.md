@@ -33,7 +33,10 @@ Every package, release archive and `--artifact` output carries `LICENSE` and
 `THIRD_PARTY_NOTICES.md`, and the embedded runtime sources include the vendored
 license files. Run `npm run generate:third-party-notices` after changing
 `runtime/rust/Cargo.lock`, vendored code, or a runtime file ported from Node.js or
-libuv, and commit the result before cutting a release.
+libuv, and commit the result. Extended CI fails while the committed file is stale,
+while a derived runtime file is missing from the generator's list, and while a linked
+crate has no license text; a crate that publishes none gets its repository's
+`LICENSE` under `runtime/vendor/crate-licenses`.
 
 The `Prepare release packages` GitHub Actions workflow is the preferred packaging
 path. Dispatch it on the exact release commit. It cross-builds each of the four
