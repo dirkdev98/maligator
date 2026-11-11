@@ -25,7 +25,7 @@ themselves commit the project to optimizing every API.
 
 ## Verification workflow
 
-- [ ] Extend runtime-gap coverage for a selected RegExp, Intl, promise or weak-collection
+- [ ] Extend runtime-gap coverage for a selected Intl, promise or weak-collection
       consumer, separating conversion, traversal and checksum cost. Preserve
       input-scaling coverage.
 
@@ -87,15 +87,12 @@ executions, measuring both compiler hosts.
       splitter together only if removing that work pays on both hosts while preserving
       split semantics, build time and size.
 
-- [ ] Separate owner-held value-buffer pressure from survivor bytes that size the nursery
-      without losing ownership or major-cycle accounting. Compare native self-compile,
-      app-batch and Express time, physical footprint and pauses; retain only a bounded
-      policy with stable memory use.
-
-- [ ] Attribute current native self-compile footprint to live objects, partly occupied
-      blocks, promoted garbage and external allocations, then change one owning policy.
-      Require sustained footprint reduction without unacceptable compilation or pause
-      cost; reuse existing page release before adding reclamation machinery.
+- [ ] Attribute memory remaining after completed major collections in native
+      self-compile, app-batch and Express to partly occupied managed blocks and external
+      owners, then change one owning policy. Keep managed survivor bytes separate from
+      owner-held buffer pressure. Require sustained physical-footprint reduction without
+      unacceptable compiler, application or pause cost; reuse existing page release
+      before adding reclamation machinery.
 
 - [ ] Finish remaining legality-affecting renderer selection in explicit native
       plans; capture-owner and String-transform strategies now persist and validate.
@@ -340,10 +337,10 @@ contracts or investigates costs still visible after the string follow-ups.
       filter's geometric growth, write barriers and generic fallback. Compare the measured
       output-store ceiling with compiler work, native build cost and generated size.
 
-- [ ] Bound first-pass and changing-subject RegExp executor allocations in Express and
-      text workloads before extending the pinned backend's reusable-state API. Preserve
-      captures, backtracking, lastIndex and reentry, cap retained state, and require
-      ordinary workload gains that repay dependency and retained-memory costs.
+- [ ] Trace the leading scanning or backtracking cost in `regexp-owned-miss`, keeping
+      named, unnamed, UTF-16 and repeated-subject controls. Preserve captures, lastIndex,
+      reentry and bounded scratch retention. Require representative application exposure
+      and ordinary paired savings before extending the backend further.
 
 - [ ] Use the existing complete mixed-text workload to select one leading construction,
       replacement, JSON or checksum-traversal cost, including rope rebuilding where
