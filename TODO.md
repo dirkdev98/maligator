@@ -842,12 +842,13 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [ ] Validate native worker capacity under live constrained and nested CPU quotas.
       Synthetic v1/v2 mounted-path and visible-ancestor fixtures pass; hidden
       namespace ancestors cannot be inferred. Keep the inline capacity fallback.
-- [ ] Attribute the remaining long pauses on matched production workloads: on native
-      self-compile with the nursery cap, a 33 ms major slice, a 36 ms minor and an 11 ms
-      remark, including the current skipped-block slice budget. Keep managed survivors,
-      exact liveness and RSS distinct. Bound any change to the measured phase or
-      container, preserving tracing and promotion; require lower tail latency or retained
-      storage without a material total-CPU/throughput regression.
+- [ ] Take the minor sweep out of the pause. On native self-compile with the nursery
+      cap, minors sweep about 1.8M young cells each, the longest minor and the longest
+      major slice (whose opening minor dominates it) both reach 35 ms, and sweeping
+      outweighs marking (494 vs 375 ms over 85 minors), led by finalizers freeing RAW
+      buffers. Sweep young blocks lazily on reuse or on the GC workers, preserving
+      finalizer order and exact live accounting; require lower tail latency without a
+      material total-CPU/throughput regression.
 
 ### Concurrent generational GC experiments
 
