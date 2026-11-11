@@ -77,6 +77,108 @@ static bool codec_message_fails(const char *wire) {
     return failed;
 }
 
+/* Everything a request codec reports for one input, folded into a digest: each event
+ * in order with its head metadata, fields and body bytes, then whether and after how
+ * many consumed bytes it failed. */
+typedef struct CodecTrace {
+    u64 digest;
+    usize events;
+    bool failed;
+} CodecTrace;
+
+static u64 trace_mix(u64 digest, const void *data, usize length) {
+    const byte *bytes = data;
+    for (usize i = 0; i < length; i++) digest = (digest ^ bytes[i]) * UINT64_C(0x100000001b3);
+    return digest;
+}
+
+static u64 fuzz_next(u64 *state) {
+    *state += UINT64_C(0x9e3779b97f4a7c15);
+    u64 mixed = (*state ^ (*state >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+    mixed = (mixed ^ (mixed >> 27)) * UINT64_C(0x94d049bb133111eb);
+    return mixed ^ (mixed >> 31);
+}
+
+/* Feed `wire` whole, or in pieces of 1..max_piece bytes drawn from `seed`. */
+static CodecTrace codec_trace(const byte *wire, usize length, u64 seed, usize max_piece) {
+    CodecTrace trace = {.digest = UINT64_C(0xcbf29ce484222325)};
+    MalHttpCodec codec;
+    if (!mal_http_codec_init(&codec, HTTP_REQUEST)) {
+        trace.failed = true;
+        return trace;
+    }
+    usize offset = 0;
+    u64 state = seed;
+    bool resumed_at_end = false;
+    for (usize turn = 0; turn < 4 * length + 64; turn++) {
+        MalHttpCodecEventKind event = mal_http_codec_event(&codec);
+        if (event == MAL_HTTP_CODEC_EVENT_HEAD) {
+            MalHttpCodecHead *head = mal_http_codec_take_head(&codec);
+            if (head == nullptr) {
+                trace.failed = true;
+                break;
+            }
+            i64 framing[] = {head->content_length, head->chunked, head->keep_alive,
+                head->upgrade, head->minor_version, (i64) head->field_count};
+            trace.digest = trace_mix(trace.digest, "H", 1);
+            trace.digest = trace_mix(trace.digest, mal_http_codec_head_method(head), head->method_length);
+            trace.digest = trace_mix(trace.digest, mal_http_codec_head_target(head), head->target_length);
+            trace.digest = trace_mix(trace.digest, framing, sizeof framing);
+            for (usize i = 0; i < head->field_count; i++) {
+                const MalHttpCodecField *field = &head->fields[i];
+                trace.digest = trace_mix(trace.digest, mal_http_codec_field_name(head, field), field->name_length);
+                trace.digest = trace_mix(trace.digest, ":", 1);
+                trace.digest = trace_mix(trace.digest, mal_http_codec_field_value(head, field), field->value_length);
+            }
+            mal_http_codec_head_free(head);
+            trace.events++;
+            continue;
+        }
+        if (event == MAL_HTTP_CODEC_EVENT_BODY) {
+            usize body_length = 0;
+            byte *body = mal_http_codec_take_body(&codec, &body_length);
+            // Body slicing follows the input pieces; only the bytes are invariant.
+            trace.digest = trace_mix(trace.digest, body, body_length);
+            free(body);
+            continue;
+        }
+        if (event == MAL_HTTP_CODEC_EVENT_COMPLETE) {
+            mal_http_codec_clear_event(&codec);
+            trace.digest = trace_mix(trace.digest, "C", 1);
+            trace.events++;
+            continue;
+        }
+        // At the end of input an empty slice still resumes a paused message.
+        bool resume = offset == length;
+        if (resume && resumed_at_end) break;
+        resumed_at_end = resume;
+        usize supplied = length - offset;
+        if (max_piece != 0) {
+            usize piece = 1 + (usize) (fuzz_next(&state) % max_piece);
+            if (piece < supplied) supplied = piece;
+        }
+        usize consumed = 0;
+        MalHttpCodecResult result = mal_http_codec_execute(&codec, wire + offset, supplied, &consumed);
+        if (consumed > supplied) {
+            trace.failed = true;
+            break;
+        }
+        offset += consumed;
+        if (result == MAL_HTTP_CODEC_ERROR) {
+            trace.failed = true;
+            break;
+        }
+        if (consumed == 0 && mal_http_codec_event(&codec) == MAL_HTTP_CODEC_EVENT_NONE) break;
+    }
+    trace.digest = trace_mix(trace.digest, &trace.failed, sizeof trace.failed);
+    mal_http_codec_free(&codec);
+    return trace;
+}
+
+static bool codec_traces_equal(CodecTrace left, CodecTrace right) {
+    return left.digest == right.digest && left.events == right.events && left.failed == right.failed;
+}
+
 /* Parse one head from a complete request head fixture. */
 static MalHttpCodecHead *codec_head_of(MalHttpCodec *codec, const char *wire) {
     if (!mal_http_codec_init(codec, HTTP_REQUEST)) return nullptr;
@@ -535,6 +637,81 @@ int main(void) {
             mal_http_codec_free(&codec);
         }
         free(wire);
+    }
+
+    // 14. Seeded fuzzing: llhttp parses incrementally, so splitting the same bytes
+    // differently must never change what the codec reports. A difference would let
+    // a peer's segmentation change request framing. Mutations of valid pipelined
+    // requests exercise malformed input; the sanitizer lane checks memory safety.
+    {
+        static const char *const corpus[] = {
+            "POST /one HTTP/1.1\r\nHost: example.test\r\nX-Dup: one\r\nX-Dup: two\r\n"
+            "Transfer-Encoding: chunked\r\n\r\n2;ext=1\r\nhe\r\n3\r\nllo\r\n0\r\n"
+            "Trailer: value\r\n\r\nGET /two HTTP/1.1\r\nHost: example.test\r\n\r\n",
+            "PUT /upload?x=1 HTTP/1.1\r\nHost: h\r\nContent-Length: 11\r\n\r\nhello world"
+            "DELETE /item HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n",
+            "GET / HTTP/1.0\r\nConnection: keep-alive\r\nAccept: */*\r\n\r\n"
+            "OPTIONS * HTTP/1.1\r\nHost: h\r\nContent-Length: 0\r\n\r\n",
+            "PATCH /p HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n"
+            "a\r\n0123456789\r\n10\r\n0123456789abcdef\r\n0\r\n\r\n",
+        };
+        const usize corpus_count = sizeof corpus / sizeof corpus[0];
+        u64 seed = UINT64_C(0x5eed);
+        bool fragments_agree = true;
+        for (usize entry = 0; entry < corpus_count; entry++) {
+            const byte *wire = (const byte *) corpus[entry];
+            usize length = strlen(corpus[entry]);
+            CodecTrace whole = codec_trace(wire, length, 0, 0);
+            fragments_agree = fragments_agree && !whole.failed && whole.events >= 2;
+            for (usize round = 0; round < 200; round++) {
+                usize max_piece = 1 + (usize) (fuzz_next(&seed) % 17);
+                fragments_agree = fragments_agree
+                    && codec_traces_equal(whole, codec_trace(wire, length, fuzz_next(&seed), max_piece));
+            }
+        }
+        check(fragments_agree, "fragmenting valid pipelined requests keeps every event");
+
+        static const byte alphabet[] = "\r\n :;\t\0-0aZ%/\x7f\x80\xff";
+        byte mutated[512];
+        bool mutations_agree = true;
+        usize failures = 0;
+        for (usize round = 0; round < 20000 && mutations_agree; round++) {
+            const char *source = corpus[fuzz_next(&seed) % corpus_count];
+            usize length = strlen(source);
+            memcpy(mutated, source, length);
+            usize edits = 1 + (usize) (fuzz_next(&seed) % 4);
+            for (usize edit = 0; edit < edits && length > 1; edit++) {
+                usize at = (usize) (fuzz_next(&seed) % length);
+                byte value = alphabet[fuzz_next(&seed) % (sizeof alphabet - 1)];
+                switch (fuzz_next(&seed) % 3) {
+                    case 0:
+                        mutated[at] = value;
+                        break;
+                    case 1:
+                        if (length < sizeof mutated) {
+                            memmove(mutated + at + 1, mutated + at, length - at);
+                            mutated[at] = value;
+                            length++;
+                        }
+                        break;
+                    default:
+                        memmove(mutated + at, mutated + at + 1, length - at - 1);
+                        length--;
+                        break;
+                }
+            }
+            CodecTrace whole = codec_trace(mutated, length, 0, 0);
+            if (whole.failed) failures++;
+            mutations_agree = codec_traces_equal(
+                whole, codec_trace(mutated, length, fuzz_next(&seed), 1 + (usize) (fuzz_next(&seed) % 9)));
+            if (!mutations_agree) {
+                fprintf(stderr, "httptest: fragmentation changed the parse of mutation %zu: ", round);
+                fwrite(mutated, 1, length, stderr);
+                fputc('\n', stderr);
+            }
+        }
+        check(mutations_agree, "fragmenting mutated requests keeps every event and failure");
+        check(failures > 0, "mutations reach the codec's error paths");
     }
 
     printf("httptest: %d/%d checks\n", g_pass, g_total);

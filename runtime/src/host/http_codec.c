@@ -384,7 +384,13 @@ static MalHttpCodecResult codec_publish_result(
         *consumed = position == nullptr ? length : (usize) (position - (const char *) bytes);
         codec->paused = true;
     } else if (error != HPE_OK) {
-        return MAL_HTTP_CODEC_ERROR;
+        // Body bytes parsed before the error reach the caller first, as they would
+        // have with any shorter read; llhttp keeps its error for the next execute.
+        if (codec->event_body_length == 0) return MAL_HTTP_CODEC_ERROR;
+        const char *position = llhttp_get_error_pos(&codec->parser);
+        *consumed = position == nullptr ? 0 : (usize) (position - (const char *) bytes);
+        codec->event = MAL_HTTP_CODEC_EVENT_BODY;
+        return MAL_HTTP_CODEC_EVENT;
     } else {
         *consumed = length;
     }

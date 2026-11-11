@@ -532,9 +532,10 @@ entropy, cancellation, and reactor completions.
       getaddrinfo, a public one-turn pump, embedder access to the wake source, and
       runtime-owned timer state.
 
-- [ ] Finish H2 hard limits, pipelining, and parser fuzzing around shared llhttp and
-      streaming servers. Cover fragmentation, backpressure, cancellation, malformed
-      input, and cleanup.
+- [ ] Finish H2 coverage of streaming servers under backpressure, cancellation and
+      cleanup: a pipelined follow-up request behind a response stalled on a full
+      socket, and a peer resetting mid-body. Run the codec fragmentation fuzz as a
+      coverage-guided target when the CI toolchain ships libFuzzer.
 
 - [ ] Finish H3 connection pooling and the neutral streaming HTTP/1 client used by
       WinterTC fetch and Node adapters. Keep decompression policy above the host layer.

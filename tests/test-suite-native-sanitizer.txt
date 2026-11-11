@@ -179,6 +179,7 @@ tests/native/wire-loader.test.ts
 
 # Interpreter tables/caches and native or Rust-backed service boundaries.
 tests/native/crypto-drivers.test.ts
+tests/native/drivers.test.ts
 tests/native/crypto-fail-closed.test.ts
 tests/native/interpreter-dense-array.test.ts
 tests/native/interpreter-dispatch-state.test.ts
@@ -328,3 +329,4 @@ tests/native/iterator-exhaustion.test.ts
 tests/native/gc-nursery-budget.test.ts
 tests/native/http-header-ownership.test.ts
 tests/native/http-header-budgets.test.ts
+tests/native/http-pipelining.test.ts

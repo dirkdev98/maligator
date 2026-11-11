@@ -685,10 +685,11 @@ void mal_http_conn_request_release(MalHttpConn *c) {
 }
 
 static void conn_send_error(MalHttpConn *c, int status, const char *reason) {
-    // The error response still has to reach a peer that may never read it.
+    // The error response still has to reach a peer that may never read it. Like
+    // Node's, it carries no body.
     conn_arm_request_timeout(c);
     c->keep_alive = false;
-    mal_http_conn_respond(c, status, reason, nullptr, 0, reason, strlen(reason));
+    mal_http_conn_respond(c, status, reason, nullptr, 0, "", 0);
 }
 
 static void conn_consume_read(MalHttpConn *c, usize consumed) {

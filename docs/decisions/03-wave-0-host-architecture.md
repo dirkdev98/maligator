@@ -158,6 +158,13 @@ Read and write flow control are explicit and bounded:
   and bodies are flow-controlled; the host must not buffer unbounded pipelined
   requests behind an unfinished response. Client pooling permits one in-flight request
   per connection; pipelined client requests need a separate contract.
+- The server parses a follow-up request only after the previous response finishes, so
+  a malformed follow-up gets its bodiless 400 after the earlier responses, and bytes
+  after a `Connection: close` request are never parsed. Node parses eagerly instead
+  and drops the pending response in both cases; RFC 9112 asks for the order kept here.
+- The codec reports the same events however a peer segments its bytes, including
+  the body bytes that precede a parse error. `httptest` checks that with seeded
+  fragmentation of valid and mutated pipelined requests.
 
 ### Completion, error, and cancellation contract
 
