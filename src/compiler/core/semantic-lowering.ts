@@ -6335,11 +6335,7 @@ function compileWithDynamicAssignment(
 	const foundCursor = { block: fn.blocks[foundIndex]! };
 	let foundCurrent: number | undefined;
 	if (assignmentExpression.operator !== "=") {
-		foundCurrent = nextCoreVariable(fn);
-		foundCursor.block.emitter.emit({
-			type: "loadProperty",
-			registers: [foundCurrent, base, key],
-		});
+		foundCurrent = compileWithBindingValue(program, fn, foundCursor, base, key, left);
 	}
 	const foundValue = compileValue(foundCursor, foundCurrent);
 	compileWithBaseStore(program, fn, foundCursor, base, key, left, foundValue);
@@ -6441,6 +6437,76 @@ function compileWithBaseRead(
  * fall back to the static store. A strict nested function can resolve through a
  * `with` environment even though the `with` statement itself is sloppy-only.
  */
+/*
+ * GetBindingValue on a with-object: HasProperty runs again before Get, so a
+ * binding removed since it resolved reads as undefined, or throws a
+ * ReferenceError in strict code.
+ */
+function compileWithBindingValue(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	base: number,
+	key: number,
+	identifier: ESTree.Identifier,
+): number {
+	const result = nextCoreVariable(fn);
+	const present = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "binary",
+		registers: [present, key, base],
+		operator: "in",
+	});
+	const presentJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [present],
+		blocks: [-1],
+	};
+	const absentJump: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(presentJump, absentJump);
+
+	const presentIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	presentJump.blocks[0] = presentIdx;
+	const presentBlock = fn.blocks[presentIdx]!;
+	presentBlock.emitter.emit({ type: "loadProperty", registers: [result, base, key] });
+	const presentDone: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	presentBlock.emitter.emit(presentDone);
+
+	const absentIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	absentJump.blocks[0] = absentIdx;
+	const absentCursor: CoreFrontendCursor = { block: fn.blocks[absentIdx]! };
+	if (isSloppyFunction(fn)) {
+		const undefinedRegister = compileUndefined(fn, absentCursor);
+		absentCursor.block.emitter.emit({
+			type: "move",
+			registers: [result, undefinedRegister],
+		});
+	} else {
+		absentCursor.block.emitter.emit({
+			type: "loadUndeclared",
+			registers: [result],
+			nameStringIndex: getOrCreateStringConstant(program, identifier.name),
+		});
+	}
+	const absentDone: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	absentCursor.block.emitter.emit(absentDone);
+
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	presentDone.blocks[0] = joinIdx;
+	absentDone.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+	return result;
+}
+
 function compileWithBaseStore(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -16164,6 +16230,7 @@ function compileWithDynamicRead(
 		type: "withGet",
 		registers: [result],
 		nameStringIndex: getOrCreateStringConstant(program, identifier.name),
+		...(isSloppyFunction(fn) ? {} : { strict: true as const }),
 	});
 
 	const emptyFlag = nextCoreVariable(fn);
@@ -16236,9 +16303,14 @@ function compileWithDynamicCallee(
 	foundJump.blocks[0] = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[foundJump.blocks[0]]!;
 	const key = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "createString",
+		registers: [key],
+		stringIndex: nameStringIndex,
+	});
+	const value = compileWithBindingValue(program, fn, cursor, base, key, identifier);
 	cursor.block.emitter.emit(
-		{ type: "createString", registers: [key], stringIndex: nameStringIndex },
-		{ type: "loadProperty", registers: [callee, base, key] },
+		{ type: "move", registers: [callee, value] },
 		{ type: "move", registers: [thisRegister, base] },
 	);
 	clearDirectEvalScopeThis(program, fn, cursor, base, thisRegister);
@@ -16345,6 +16417,7 @@ function compileWithDynamicTypeof(
 		type: "withGet",
 		registers: [probe],
 		nameStringIndex: getOrCreateStringConstant(program, identifier.name),
+		...(isSloppyFunction(fn) ? {} : { strict: true as const }),
 	});
 	const emptyFlag = nextCoreVariable(fn);
 	cursor.block.emitter.emit({ type: "isEmpty", registers: [emptyFlag, probe] });

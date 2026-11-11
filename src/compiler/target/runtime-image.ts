@@ -1416,6 +1416,7 @@ export type BytecodeInstruction =
 			opcode: "WITH_GET";
 			dst: number;
 			nameStringIndex: number;
+			strict: boolean;
 	  }
 	| {
 			opcode: "WITH_RESOLVE_BASE";
@@ -4676,6 +4677,7 @@ function lowerInstructionToBytecodeInstruction(
 				opcode: "WITH_GET",
 				dst: instruction.registers[0],
 				nameStringIndex: instruction.nameStringIndex,
+				strict: instruction.strict === true,
 			};
 		case "withResolveBase":
 			return {

@@ -3463,7 +3463,7 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 		case "WITH_EXIT":
 			return `{ .opcode = MAL_OP_WITH_EXIT, .as.with_exit = {} }`;
 		case "WITH_GET":
-			return `{ .opcode = MAL_OP_WITH_GET, .as.with_get = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex} } }`;
+			return `{ .opcode = MAL_OP_WITH_GET, .as.with_get = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex}, .strict = ${instruction.strict ? "true" : "false"} } }`;
 		case "WITH_RESOLVE_BASE":
 			return `{ .opcode = MAL_OP_WITH_RESOLVE_BASE, .as.with_resolve_base = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex} } }`;
 		case "WITH_SET":

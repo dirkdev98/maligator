@@ -4424,7 +4424,7 @@ MalValue mal_vm_op_derived_construct_return(MalVm *vm, MalValue value, MalValue 
  * falls back to the static binding; `with_set` returns whether a binding was found.
  */
 MalEnv *mal_vm_op_with_enter(MalVm *vm, MalEnv *parent, MalValue object);
-MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index);
+MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index, bool strict);
 MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_index);
 bool mal_vm_op_with_set(
     MalVm *vm, MalEnv *env, i32 name_string_index, MalValue value, bool strict);

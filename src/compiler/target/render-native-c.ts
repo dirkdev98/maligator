@@ -16321,7 +16321,7 @@ class NativeInstructionEmission {
 				// (the IR then falls back to the static binding). A getter / @@unscopables
 				// can throw.
 				return [
-					`r${instruction.dst} = mal_vm_op_with_get(vm, env, ${this.context.relocation.stringIndex(instruction.nameStringIndex)});`,
+					`r${instruction.dst} = mal_vm_op_with_get(vm, env, ${this.context.relocation.stringIndex(instruction.nameStringIndex)}, ${instruction.strict ? "true" : "false"});`,
 					this.throwCheck(),
 				];
 			case "WITH_RESOLVE_BASE":

@@ -1719,7 +1719,7 @@ static bool mal_vm_with_has_binding(MalVm *vm, MalValue object, MalKey key) {
     if (mal_vm_get_property(vm, object, unscopables_key, &unscopables) &&
         mal_value_is_object(unscopables)) {
         MalValue blocked;
-        if (mal_vm_get_property(vm, unscopables, key, &blocked) && mal_value_to_boolean(blocked)) {
+        if (mal_vm_get_property(vm, unscopables, key, &blocked) && mal_value_is_truthy(blocked)) {
             return false;
         }
     }
@@ -1760,7 +1760,7 @@ void mal_op_with_exit(MalCallable *callable, const MalInstruction *instruction) 
 // bound value, or the EMPTY sentinel on a miss (the compiled/interpreted fallback
 // then reads the static binding). A getter / @@unscopables probe can throw; callers
 // check the completion.
-MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index) {
+MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index, bool strict) {
     MalValue name = mal_value_from_string(mal_vm_string_constant(vm, name_string_index));
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
@@ -1772,11 +1772,15 @@ MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index) {
             MalValue object = e->slots[0];
             if (mal_vm_with_has_binding(vm, object, key)) {
                 // GetBindingValue probes HasProperty again; a binding that has
-                // vanished since reads as undefined in sloppy code.
+                // vanished since reads as undefined in sloppy code and throws in
+                // strict code.
                 MalValue value = mal_value_new_undefined();
-                if (mal_vm_has_property(vm, object, key) &&
-                    !mal_vm_get_property(vm, object, key, &value)) {
-                    value = mal_value_new_undefined();
+                if (mal_vm_has_property(vm, object, key)) {
+                    if (!mal_vm_get_property(vm, object, key, &value)) {
+                        value = mal_value_new_undefined();
+                    }
+                } else if (strict && vm->completion.kind != MAL_COMPLETION_THROW) {
+                    mal_vm_op_load_undeclared(vm, name_string_index);
                 }
                 return value;
             }
@@ -1788,7 +1792,8 @@ MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index) {
 
 void mal_op_with_get(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.with_get.dst] = mal_vm_op_with_get(
-        callable->vm, callable->env, instruction->as.with_get.name_string_index
+        callable->vm, callable->env, instruction->as.with_get.name_string_index,
+        instruction->as.with_get.strict
     );
 }
 

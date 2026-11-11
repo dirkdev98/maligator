@@ -1104,6 +1104,8 @@ type CompilerOperation =
 			registers: [number];
 
 			nameStringIndex: number;
+			/** Strict code: a binding gone before GetBindingValue throws a ReferenceError. */
+			strict?: true;
 	  }
 	| {
 			// Dynamic `with`-scope reference base: [destination] gets the with-object

@@ -310,6 +310,7 @@ typedef struct MalInstruction {
             // [dst] = with-object value for the name, or the EMPTY sentinel on a
             // miss (so the compiler falls back to the static binding).
             i32 dst, name_string_index;
+            bool strict;
         } with_get;
 
         struct {
