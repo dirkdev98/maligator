@@ -1,6 +1,7 @@
 import { coreClassLayoutKeyId, coreClassLayouts } from "../core/core-class-layouts.ts";
 import type { CoreClassLayout } from "../core/core-class-layouts.ts";
 import type { CoreCompilation } from "../core/core-compilation.ts";
+import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
 import { coreInstructionId } from "../core/core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "../core/core-ir.ts";
 import { coreModulePrivateNames } from "../core/core-private-names.ts";
@@ -22,6 +23,11 @@ const CLASS_LAYOUT_SITE_CANDIDATES = 4;
 
 export interface CoreClassLayoutPlan {
 	readonly layouts: ReadonlyArray<CoreTargetClassLayout>;
+	/**
+	 * Slots a base class constructor reserves for `this`: its largest subclass's
+	 * layout, so instances a subclass constructs keep their fields inline.
+	 */
+	readonly receiverReserves: ReadonlyMap<CoreFunctionId, number>;
 	readonly sites: ReadonlyMap<
 		CoreFunctionId,
 		ReadonlyMap<CoreInstructionId, CompilerClassLayoutSite>
@@ -131,11 +137,23 @@ export function planCoreClassLayouts(
 		});
 	};
 	for (const layout of index.layouts.values()) plan(layout);
+	const receiverReserves = new Map<CoreFunctionId, number>();
+	for (const layout of index.layouts.values()) {
+		if (layout.parent !== undefined) continue;
+		let reserve = 0;
+		for (const member of index.family.get(layout.constructor) ?? [])
+			reserve = Math.max(reserve, index.layouts.get(member)?.keys.length ?? 0);
+		if (reserve > 0)
+			receiverReserves.set(
+				layout.constructor,
+				Math.min(reserve, CORE_MAX_SHAPED_OBJECT_SLOTS),
+			);
+	}
 	const sites = new Map<
 		CoreFunctionId,
 		Map<CoreInstructionId, CompilerClassLayoutSite>
 	>();
-	if (layouts.length === 0) return { layouts, sites };
+	if (layouts.length === 0) return { layouts, sites, receiverReserves };
 	const site = (
 		classes: ReadonlyArray<CoreFunctionId> | undefined,
 		select: (layout: PlannedLayout) => number | undefined,
@@ -211,5 +229,5 @@ export function planCoreClassLayouts(
 		}
 		if (functionSites !== undefined) sites.set(core, functionSites);
 	}
-	return { layouts, sites };
+	return { layouts, sites, receiverReserves };
 }
