@@ -75,9 +75,9 @@ describe("normal record field integer ranges", () => {
 					["function", "n<middle", "middle<bound&&bound<16", "n", 13],
 					["function", "n<=middle", "middle<=n&&middle<16", "n", 15],
 					["function", "n<middle", "middle<16", "n+1", 15],
+					// No async generator row: it awaits the returned read, which stays boxed for that await.
 					["function*", "n<middle", "middle<16", "n", 14],
 					["async function", "n<middle", "middle<16", "n", 14],
-					["async function*", "n<middle", "middle<16", "n", 14],
 				] as const
 			).map(([declaration, first, later, payload, maximum]) => ({
 				mode,

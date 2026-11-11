@@ -121,6 +121,10 @@ Use representative compiled workloads to locate executed dispatch, allocation,
 property and collection costs. Keep field facts bounded and consumer-driven;
 static generated-code size and helper counts do not establish runtime cost.
 
+- [ ] Sink a returned private record to the `await` an async generator's `return expr`
+      performs. Scalar replacement only materializes at a `return`, so such a record
+      is now allocated with its stores intact, and a returned field read stays boxed.
+
 - [ ] Pass `super()` arguments without an array. A subclass instance still costs about
       50 ns against Node's 6 (5M `new Derived(x)`: 251 vs 29 ms). A plain parent
       constructor is entered directly with the argument array's elements, but every

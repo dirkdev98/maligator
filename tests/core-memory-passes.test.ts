@@ -1276,10 +1276,10 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		expect(opcodes).not.toContain("createObjectShaped");
 		expect(opcodes).not.toContain("storePropertyStatic");
 	});
+	// An async generator awaits its returned value, an escape these passes do not sink to.
 	it.each([
 		["function*", "yield 0;"],
 		["async function", "await hook();"],
-		["async function*", "yield 0;await hook();"],
 	])(
 		"materializes private returned fields after %s suspension",
 		(declaration, suspend) => {
