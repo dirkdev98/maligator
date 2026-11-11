@@ -404,6 +404,20 @@ bool mal_builtin_object_define_own_property_parsed(
         !mal_vm_get_own_property(vm, target, key, &present, &current)) {
         return false;
     }
+    if (mal_value_is_module_namespace_object(target) && key.kind == MAL_KEY_SYMBOL) {
+        // OrdinaryDefineOwnProperty on a non-extensible object whose only symbol
+        // property, @@toStringTag, is non-configurable: a descriptor is accepted
+        // only when it changes nothing.
+        bool enumerable = (current.flags & MAL_PROPERTY_ENUMERABLE) != 0;
+        return present &&
+            !(parsed->has_configurable &&
+              (parsed->desc.flags & MAL_PROPERTY_CONFIGURABLE)) &&
+            !(parsed->has_enumerable &&
+              ((parsed->desc.flags & MAL_PROPERTY_ENUMERABLE) != 0) != enumerable) &&
+            !parsed->has_get && !parsed->has_set &&
+            !(parsed->has_writable && (parsed->desc.flags & MAL_PROPERTY_WRITABLE)) &&
+            (!parsed->has_value || mal_ops_same_value(parsed->desc.value, current.value));
+    }
     if (mal_value_is_module_namespace_object(target)) {
         if (!present ||
             (parsed->has_configurable &&

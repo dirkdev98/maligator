@@ -661,6 +661,29 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
     }
     return true;
 }
+/* The export a namespace key names, or -1. An integer-index key names the export
+ * spelled as that integer, such as `export { x as "0" }`. */
+static i32 mal_module_namespace_export_for_key(const MalModuleNamespaceObject *ns, MalKey key) {
+    char digits[11];
+    if (key.kind == MAL_KEY_INDEX) {
+        u32 index = mal_key_index_value(key);
+        usize length = 0;
+        for (u32 rest = index; length == 0 || rest != 0; rest /= 10) length++;
+        digits[length] = '\0';
+        for (usize at = length; at-- > 0; index /= 10) digits[at] = (char) ('0' + index % 10);
+    } else if (key.kind != MAL_KEY_STRING) {
+        return -1;
+    }
+    for (i32 i = 0; i < ns->export_count; i++) {
+        if (key.kind == MAL_KEY_STRING
+                ? mal_string_equals(mal_value_to_string(key.value), ns->exports[i].name)
+                : mal_string_equals_ascii(ns->exports[i].name, digits)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 
 bool mal_vm_get_own_property(
     MalVm *vm, MalValue object_value, MalKey key, bool *present_out,
@@ -703,26 +726,21 @@ bool mal_vm_get_own_property(
             *present_out = true;
             return true;
         }
-        if (key.kind == MAL_KEY_STRING) {
-            MalString *name = mal_value_to_string(key.value);
-            for (i32 i = 0; i < ns->export_count; i++) {
-                if (mal_string_equals(name, ns->exports[i].name)) {
-                    MalValue value = vm->globals[ns->exports[i].slot];
-                    if (mal_value_is_empty(value)) {
-                        mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
-                            "Cannot access module export before initialization");
-                        return false;
-                    }
-                    *desc_out = (MalPropertyDesc) {
-                        .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE,
-                        .value = value,
-                        .getter = mal_value_new_undefined(),
-                        .setter = mal_value_new_undefined(),
-                    };
-                    *present_out = true;
-                    return true;
-                }
+        i32 export_index = mal_module_namespace_export_for_key(ns, key);
+        if (export_index >= 0) {
+            MalValue value = vm->globals[ns->exports[export_index].slot];
+            if (mal_value_is_empty(value)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+                    "Cannot access module export before initialization");
+                return false;
             }
+            *desc_out = (MalPropertyDesc) {
+                .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE,
+                .value = value,
+                .getter = mal_value_new_undefined(),
+                .setter = mal_value_new_undefined(),
+            };
+            *present_out = true;
         }
         return true;
     }
@@ -5068,20 +5086,13 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
             return true;
         }
 
-        // A string export reads its live global slot; an uninitialized binding
-        // (still in its module's TDZ) throws ReferenceError.
-        if (key.kind == MAL_KEY_STRING) {
-            MalString *name = mal_value_to_string(key.value);
-            for (i32 i = 0; i < ns->export_count; i++) {
-                if (mal_string_equals(name, ns->exports[i].name)) {
-                    // Return the live value, which may still be the TDZ sentinel;
-                    // the GET path turns that into a ReferenceError, while
-                    // HasProperty and delete must report the export as present
-                    // without throwing.
-                    *value_out = vm->globals[ns->exports[i].slot];
-                    return true;
-                }
-            }
+        // An export reads its live global slot, which may still be the TDZ
+        // sentinel: the GET path turns that into a ReferenceError, while
+        // HasProperty and delete must report the export as present without throwing.
+        i32 export_index = mal_module_namespace_export_for_key(ns, key);
+        if (export_index >= 0) {
+            *value_out = vm->globals[ns->exports[export_index].slot];
+            return true;
         }
     }
 
@@ -8282,12 +8293,18 @@ static MalValue mal_for_in_collect_keys(MalVm *vm, MalValue source, const MalSha
     }
 
     // A module namespace enumerates its sorted string exports (all enumerable).
+    // Enumeration reads each export's descriptor, so an uninitialized binding throws.
     if (mal_value_is_module_namespace_object(source)) {
         MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(source);
         if (!mal_module_namespace_ensure_evaluated(vm, ns)) {
             return mal_value_from_array_object(result);
         }
         for (i32 i = 0; i < ns->export_count; i++) {
+            if (mal_value_is_empty(vm->globals[ns->exports[i].slot])) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+                    "Cannot access module export before initialization");
+                return mal_value_from_array_object(result);
+            }
             mal_array_object_store(
                 result,
                 mal_key_index(count),
