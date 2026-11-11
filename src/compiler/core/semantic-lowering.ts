@@ -260,7 +260,7 @@ interface CoreFrontendContext {
 	moduleEvaluationContextSlot?: number;
 	moduleEvaluationPlan: ModuleEvaluationPlan;
 	deferredModuleNamespaceSlot: Map<string, number>;
-	/** Functions evaluating an ES module for createRequire's `require(esm)`, by module path. */
+	/** Synchronous ESM evaluation functions shared by static require and createRequire. */
 	requiredEsmThunk: Map<string, number>;
 	moduleNamespaceSlot: Map<string, number>;
 	cjsDynamicNamespaces: Map<
@@ -3412,15 +3412,9 @@ function tryCompileCjsRequireCall(
 			fn.semanticFile.path,
 		);
 	}
-	if (
-		cjsPath === undefined ||
-		(!program.cjsModuleId.has(cjsPath) &&
-			!program.cjsHostSlot.has(cjsPath) &&
-			!program.cjsEsmNamespaceSlot.has(cjsPath))
-	) {
-		return undefined;
-	}
-	return emitCjsModuleExports(program, fn, cursor, cjsPath);
+	return cjsPath === undefined
+		? undefined
+		: emitResolvedRequire(program, fn, cursor, cjsPath);
 }
 
 function emitMissingCjsModuleThrow(
@@ -15322,8 +15316,22 @@ function tryCompileCreateRequireCall(
 			fn.semanticFile.path,
 		);
 	}
-	if (cjsPath === undefined) return undefined;
-	if (program.cjsModuleId.has(cjsPath) || program.cjsHostSlot.has(cjsPath)) {
+	return cjsPath === undefined
+		? undefined
+		: emitResolvedRequire(program, fn, cursor, cjsPath);
+}
+
+function emitResolvedRequire(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	cjsPath: string,
+): number | undefined {
+	if (
+		program.cjsModuleId.has(cjsPath) ||
+		program.cjsHostSlot.has(cjsPath) ||
+		program.cjsEsmNamespaceSlot.has(cjsPath)
+	) {
 		return emitCjsModuleExports(program, fn, cursor, cjsPath);
 	}
 	const thunk = requiredEsmThunk(program, cjsPath);
@@ -15343,7 +15351,7 @@ function tryCompileCreateRequireCall(
 }
 
 /**
- * require(esm) from an ES module: evaluate the target synchronously if it has not run
+ * Synchronous require(esm): evaluate the target if it has not run
  * yet, as Node's require does, and answer its cached namespace. Asynchronous graphs
  * cannot be required synchronously, so they get no thunk.
  */

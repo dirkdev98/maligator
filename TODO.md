@@ -371,13 +371,6 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Implement AbstractModuleSource and source-phase imports. Preserve module identity
       and host loading boundaries across cached and uncached compilation.
 
-- [ ] Lower `require()` of an ES module when the program entry is an ES module. Only
-      `compileCjsProgram` gives required ES modules a namespace slot, so under an ES
-      entry, which includes every dependency island, the call throws
-      `dynamic require is not supported`. Express's `debug` requires `supports-color`
-      this way and swallows the error. Evaluate the required module at its first
-      `require`, as Node does.
-
 - [ ] Let `require` and `import()` cross linked-image boundaries. A build still
       compiles one whole program for them, and `maligator test` one application image.
       The loader already aliases CommonJS registry entries and namespace slots;
