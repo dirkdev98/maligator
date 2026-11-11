@@ -562,29 +562,14 @@ void mal_map_object_set_borrowed(MalMapObject *map, MalValue key, MalValue value
     }
 }
 
-u32 mal_map_object_upsert_canonical(MalMapObject *map, MalValue key, bool *inserted) {
-    MalMapStorage *storage = mal_map_object_storage(map);
-    if (mal_map_should_compact(storage)) mal_map_compact(storage);
-    MalMapKeyDomain key_domain = storage->domain == MAL_MAP_KEYS_GENERIC
-        ? MAL_MAP_KEYS_GENERIC : mal_map_key_domain(key);
-    bool accepts = mal_map_accepts_domain(storage, key_domain);
-    u64 hash = 0;
-    u32 missing_slot = 0;
-    bool known_slot = storage->payload != nullptr && accepts;
-    u32 existing = 0;
-    if (known_slot) {
-        hash = mal_key_hash_value(key);
-        missing_slot = mal_map_find_slot(storage, key, hash);
-        if (mal_hash_slot_live(storage->slots, storage->slot_capacity, missing_slot)) {
-            existing = (u32) storage->slots[missing_slot] + 1;
-        }
-    } else if (accepts) {
-        existing = mal_map_small_find(storage, key);
-    }
-    if (existing != 0) {
-        if (inserted != nullptr) *inserted = false;
-        return existing;
-    }
+/*
+ * Append `key`, absent from the storage, with an undefined value. A known slot is
+ * where the absent key's probe ended, with its hash; growth that rehashes drops it.
+ */
+static u32 mal_map_insert_canonical(
+    MalMapObject *map, MalMapStorage *storage, MalValue key, MalMapKeyDomain key_domain,
+    bool known_slot, u32 missing_slot, u64 hash
+) {
     MalMapKeyDomain domain = mal_map_join_domain(storage->domain, key_domain);
     if (storage->domain == MAL_MAP_KEYS_EMPTY) MAL_PERF_COUNT(map_storage_domain_selections[domain]);
     else if (storage->domain != domain) MAL_PERF_COUNT(map_storage_domain_widenings[domain]);
@@ -631,8 +616,35 @@ u32 mal_map_object_upsert_canonical(MalMapObject *map, MalValue key, bool *inser
     }
     storage->size++;
     mal_gc_card(&map->object.header, key);
-    if (inserted != nullptr) *inserted = true;
     return index + 1;
+}
+
+u32 mal_map_object_upsert_canonical(MalMapObject *map, MalValue key, bool *inserted) {
+    MalMapStorage *storage = mal_map_object_storage(map);
+    if (mal_map_should_compact(storage)) mal_map_compact(storage);
+    MalMapKeyDomain key_domain = storage->domain == MAL_MAP_KEYS_GENERIC
+        ? MAL_MAP_KEYS_GENERIC : mal_map_key_domain(key);
+    bool accepts = mal_map_accepts_domain(storage, key_domain);
+    u64 hash = 0;
+    u32 missing_slot = 0;
+    bool known_slot = storage->payload != nullptr && accepts;
+    u32 existing = 0;
+    if (known_slot) {
+        hash = mal_key_hash_value(key);
+        missing_slot = mal_map_find_slot(storage, key, hash);
+        if (mal_hash_slot_live(storage->slots, storage->slot_capacity, missing_slot)) {
+            existing = (u32) storage->slots[missing_slot] + 1;
+        }
+    } else if (accepts) {
+        existing = mal_map_small_find(storage, key);
+    }
+    if (existing != 0) {
+        if (inserted != nullptr) *inserted = false;
+        return existing;
+    }
+    if (inserted != nullptr) *inserted = true;
+    return mal_map_insert_canonical(
+        map, storage, key, key_domain, known_slot, missing_slot, hash);
 }
 
 void mal_map_object_update_entry(MalMapObject *map, u32 entry, MalValue key, MalValue value) {
@@ -666,7 +678,62 @@ void mal_map_object_update_entry(MalMapObject *map, u32 entry, MalValue key, Mal
     mal_perf_collection_mutation(map, storage->size);
 }
 
-void mal_map_object_set_hinted(MalMapObject *map, MalValue key, MalValue value) {
+/*
+ * set for hashed int32, identity and string keys: one probe either finds the entry or
+ * ends where the key is inserted. Only an equal string held as a different object needs
+ * update_entry's key compaction. False leaves storage that may compact, small storage
+ * and other domains to the general path.
+ */
+static inline __attribute__((always_inline)) bool mal_map_object_set_probed(
+    MalMapObject *map, MalValue key, MalValue value
+) {
+    MalMapStorage *storage = map->entries;
+    if (storage == nullptr || storage->payload == nullptr) return false;
+    MalMapKeyDomain domain = storage->domain;
+    if ((domain != MAL_MAP_KEYS_INT32 && domain != MAL_MAP_KEYS_IDENTITY &&
+         domain != MAL_MAP_KEYS_STRING) ||
+        mal_map_should_compact(storage)) {
+        return false;
+    }
+    i32 int_key = 0;
+    if (!mal_map_query_in_domain(storage, key, &int_key)) return false;
+    u32 entry;
+    MAL_PERF_COUNT(map_get_set_cache_checks);
+    if (storage->entry_hint != 0 && storage->hint_key == key) {
+        MAL_PERF_COUNT(map_get_set_cache_hits);
+        entry = storage->entry_hint;
+    } else {
+        MAL_PERF_COUNT(map_get_set_cache_misses);
+        u64 hash = domain == MAL_MAP_KEYS_STRING ? mal_key_hash_value(key) : mal_key_hash_mix(key);
+        u32 slot = mal_map_probe_in(storage, domain, key, int_key, hash, true);
+        if (mal_hash_slot_live(storage->slots, storage->slot_capacity, slot)) {
+            entry = (u32) storage->slots[slot] + 1;
+        } else {
+            entry = mal_map_insert_canonical(map, storage, key, domain, true, slot, hash);
+            storage = map->entries;
+            *mal_map_value_slot(storage, entry - 1) = value;
+            mal_gc_card(&map->object.header, value);
+            mal_perf_collection_mutation(map, storage->size);
+            mal_map_storage_remember_entry(storage, entry);
+            return true;
+        }
+    }
+    if (domain == MAL_MAP_KEYS_STRING && mal_map_key_at(storage, entry - 1) != key) {
+        mal_map_object_update_entry(map, entry, key, value);
+    } else {
+        MalValue *value_slot = mal_map_value_slot(storage, entry - 1);
+        mal_gc_write_barrier(*value_slot);
+        *value_slot = value;
+        mal_gc_card(&map->object.header, value);
+        mal_perf_collection_mutation(map, storage->size);
+    }
+    mal_map_storage_remember_entry(storage, entry);
+    return true;
+}
+
+static __attribute__((noinline)) void mal_map_object_set_hinted_general(
+    MalMapObject *map, MalValue key, MalValue value
+) {
     u32 entry = mal_map_storage_counted_hint(map->entries, key);
     bool inserted = false;
     if (entry == 0) entry = mal_map_object_upsert_canonical(map, key, &inserted);
@@ -681,6 +748,10 @@ void mal_map_object_set_hinted(MalMapObject *map, MalValue key, MalValue value) 
         mal_map_object_update_entry(map, entry, key, value);
     }
     mal_map_storage_remember_entry(storage, entry);
+}
+
+void mal_map_object_set_hinted(MalMapObject *map, MalValue key, MalValue value) {
+    if (!mal_map_object_set_probed(map, key, value)) mal_map_object_set_hinted_general(map, key, value);
 }
 
 void mal_map_object_set_canonical(MalMapObject *map, MalValue key, MalValue value) {
