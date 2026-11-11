@@ -6754,31 +6754,49 @@ function compileObjectPatternTarget(
 		}
 		consumedKeys.push(key);
 		// KeyedDestructuringAssignmentEvaluation evaluates a non-pattern target
-		// reference before GetV. Preserve the private receiver now, but defer the
-		// brand-checked PrivateSet until after the source getter and initializer.
+		// reference before GetV: a member's object and raw key (PutValue applies
+		// ToPropertyKey later), a with-provided name's base. Preserve the private
+		// receiver now, but defer the brand-checked PrivateSet until after the
+		// source getter and initializer.
+		const target =
+			property.value.type === "AssignmentPattern" ? property.value.left : property.value;
 		const privateTarget = isAssign
 			? privateAssignmentMemberTarget(property.value)
 			: undefined;
 		const privateReference = privateTarget
 			? compilePrivateMemberReference(program, fn, cursor, privateTarget)
 			: undefined;
+		const memberReference =
+			isAssign && !privateReference && target.type === "MemberExpression"
+				? compileMemberObjectAndKey(program, fn, cursor, target)
+				: undefined;
+		const withReference =
+			target.type === "Identifier" &&
+			identifierUsesDynamicEnvironment(program, fn, target)
+				? compileWithReferenceBase(program, fn, cursor, target)
+				: undefined;
 
 		const propertyValue = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
 			type: "loadProperty",
 			registers: [propertyValue, value, key],
 		});
+		if (!privateReference && !memberReference && !withReference) {
+			compilePatternTarget(program, fn, cursor, property.value, propertyValue, isAssign);
+			continue;
+		}
+		const assignedValue =
+			property.value.type === "AssignmentPattern" && property.value.right
+				? compileDefaultedValue(
+						program,
+						fn,
+						cursor,
+						propertyValue,
+						property.value.right,
+						target.type === "Identifier" ? target.name : undefined,
+					)
+				: propertyValue;
 		if (privateReference) {
-			const assignedValue =
-				property.value.type === "AssignmentPattern" && property.value.right
-					? compileDefaultedValue(
-							program,
-							fn,
-							cursor,
-							propertyValue,
-							property.value.right,
-						)
-					: propertyValue;
 			compilePrivateMemberStore(
 				program,
 				fn,
@@ -6787,10 +6805,44 @@ function compileObjectPatternTarget(
 				privateReference.name,
 				assignedValue,
 			);
-		} else {
-			compilePatternTarget(program, fn, cursor, property.value, propertyValue, isAssign);
+		} else if (memberReference) {
+			if (memberReference.object !== -1 && memberReference.key !== -1)
+				compileMemberStore(cursor, memberReference, assignedValue);
+		} else if (withReference && target.type === "Identifier") {
+			compileWithBaseStore(
+				program,
+				fn,
+				cursor,
+				withReference.base,
+				withReference.key,
+				target,
+				assignedValue,
+			);
 		}
 	}
+}
+
+/** ResolveBinding for a name a `with` object may provide, ahead of evaluating its value. */
+function compileWithReferenceBase(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	identifier: ESTree.Identifier,
+): { readonly base: number; readonly key: number } {
+	const nameStringIndex = getOrCreateStringConstant(program, identifier.name);
+	const base = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "withResolveBase",
+		registers: [base],
+		nameStringIndex,
+	});
+	const key = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "createString",
+		registers: [key],
+		stringIndex: nameStringIndex,
+	});
+	return { base, key };
 }
 
 function privateAssignmentMemberTarget(
