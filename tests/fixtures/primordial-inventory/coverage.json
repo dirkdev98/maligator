@@ -75848,6 +75848,19 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"Intl.DateTimeFormat.prototype\",\"formatToParts\"]",
+			"owner": "Intl.DateTimeFormat.prototype",
+			"ownerPaths": [
+				"Intl.DateTimeFormat.prototype",
+				"MAL_INTRINSIC_INTL_DATE_TIME_FORMAT_PROTOTYPE"
+			],
+			"key": "formatToParts",
+			"kind": "data",
+			"operations": ["Intl.DateTimeFormat.prototype.formatToParts"],
+			"task": "L-05",
+			"decisions": []
+		},
+		{
 			"id": "[\"Intl.DateTimeFormat.prototype\",\"formatRange\"]",
 			"owner": "Intl.DateTimeFormat.prototype",
 			"ownerPaths": [
@@ -75953,6 +75966,26 @@
 			"id": "[\"Intl.DateTimeFormat.prototype.formatRangeToParts\",\"name\"]",
 			"owner": "Intl.DateTimeFormat.prototype.formatRangeToParts",
 			"ownerPaths": ["Intl.DateTimeFormat.prototype.formatRangeToParts"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.DateTimeFormat.prototype.formatToParts\",\"length\"]",
+			"owner": "Intl.DateTimeFormat.prototype.formatToParts",
+			"ownerPaths": ["Intl.DateTimeFormat.prototype.formatToParts"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.DateTimeFormat.prototype.formatToParts\",\"name\"]",
+			"owner": "Intl.DateTimeFormat.prototype.formatToParts",
+			"ownerPaths": ["Intl.DateTimeFormat.prototype.formatToParts"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -184382,6 +184415,26 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Intl.DateTimeFormat.prototype.formatRangeToParts"],
+			"task": "L-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.DateTimeFormat.prototype.formatToParts\",\"<call>\"]",
+			"owner": "Intl.DateTimeFormat.prototype.formatToParts",
+			"ownerPaths": ["Intl.DateTimeFormat.prototype.formatToParts"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["Intl.DateTimeFormat.prototype.formatToParts"],
+			"task": "L-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.DateTimeFormat.prototype.formatToParts\",\"<construct>\"]",
+			"owner": "Intl.DateTimeFormat.prototype.formatToParts",
+			"ownerPaths": ["Intl.DateTimeFormat.prototype.formatToParts"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["Intl.DateTimeFormat.prototype.formatToParts"],
 			"task": "L-05",
 			"decisions": []
 		},
@@ -306352,6 +306405,10 @@
 			"identities": ["Intl.DateTimeFormat.prototype.formatRangeToParts"]
 		},
 		{
+			"id": "Intl.DateTimeFormat.prototype.formatToParts",
+			"identities": ["Intl.DateTimeFormat.prototype.formatToParts"]
+		},
+		{
 			"id": "Intl.DateTimeFormat.prototype.resolvedOptions",
 			"identities": ["Intl.DateTimeFormat.prototype.resolvedOptions"]
 		},
@@ -314902,8 +314959,8 @@
 			"owner": "Intl.DateTimeFormat.prototype",
 			"key": "formatToParts",
 			"task": "L-05",
-			"exposures": [],
-			"state": "not-installed-in-full-inventory"
+			"exposures": ["[\"Intl.DateTimeFormat.prototype\",\"formatToParts\"]"],
+			"state": "reconciled"
 		},
 		{
 			"owner": "Intl.DateTimeFormat.prototype",
