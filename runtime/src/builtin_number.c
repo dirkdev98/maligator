@@ -890,16 +890,18 @@ void mal_builtin_number_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_number_prototype_value_of);
 
     // The global function flavors coerce their argument, unlike the statics.
-    MalNativeFunctionObject *global_is_nan = mal_native_function_object_new(
+    MalNativeFunctionObject *global_is_nan = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "isNaN"),
+        1,
         mal_builtin_global_is_nan
     );
-    MalNativeFunctionObject *global_is_finite = mal_native_function_object_new(
+    MalNativeFunctionObject *global_is_finite = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "isFinite"),
+        1,
         mal_builtin_global_is_finite
     );
     vm->intrinsics[MAL_INTRINSIC_IS_NAN] = mal_value_from_native_function_object(global_is_nan);
