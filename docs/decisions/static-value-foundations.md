@@ -199,8 +199,10 @@ rounding bounds its decimal representation with guard digits and a sticky tail, 
 preserving rounding-grid equality and halfway decisions. This representation belongs
 to NumberFormat; RelativeTimeFormat consumes the exact mathematical binary value.
 Resolved options are materialized from the native plan on request, so construction
-does not allocate a private JavaScript metadata object. Text and numeric parts share
-UTF-16 output spans, including supplementary numbering-system digits.
+retains option enums as native codes after their ordered JavaScript coercions. Unit
+state is allocated only for unit formatters. Text and numeric parts share UTF-16
+output spans, including supplementary numbering-system digits; plain formatting skips
+part classification.
 
 NumberFormat and DurationFormat share generated CLDR unit patterns and a UTF-16 parts
 writer. The generator verifies pinned unit, parent-locale and grammatical inputs before

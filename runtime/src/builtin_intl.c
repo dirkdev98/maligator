@@ -989,33 +989,36 @@ static bool intl_option_bool(MalVm *vm, MalValue options, const char *name, bool
     return true;
 }
 
-/**
- * GetOption(options, name, "string", values, fallback): returns the matched
- * value (interned), validating membership in `values` and throwing RangeError
- * otherwise. `fallback` (may be null) is returned when the option is absent.
- * Sets *ok=false on a pending throw.
- */
-static MalString *intl_option_enum(
-    MalVm *vm, MalValue options, const char *name, const char *const *values, usize value_count, const char *fallback, bool *ok
+static i32 intl_option_enum_index(
+    MalVm *vm, MalValue options, const char *name, const char *const *values, usize value_count, i32 fallback, bool *ok
 ) {
     *ok = true;
     bool present;
     MalString *value = nullptr;
     if (!intl_option_string(vm, options, name, &value, &present)) {
         *ok = false;
-        return nullptr;
+        return -1;
     }
     if (!present || value == nullptr) {
-        return fallback != nullptr ? mal_intrinsic_ascii(vm, (const byte *) fallback) : nullptr;
+        return fallback;
     }
     for (usize i = 0; i < value_count; i++) {
         if (intl_string_eq_ascii(value, values[i])) {
-            return mal_intrinsic_ascii(vm, (const byte *) values[i]);
+            return (i32) i;
         }
     }
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid option value");
     *ok = false;
-    return nullptr;
+    return -1;
+}
+
+static MalString *intl_option_enum(
+    MalVm *vm, MalValue options, const char *name, const char *const *values, usize value_count, const char *fallback, bool *ok
+) {
+    i32 index = intl_option_enum_index(vm, options, name, values, value_count, -1, ok);
+    if (!*ok) return nullptr;
+    const char *value = index < 0 ? fallback : values[index];
+    return value == nullptr ? nullptr : mal_intrinsic_ascii(vm, (const byte *) value);
 }
 
 /**
@@ -1071,7 +1074,7 @@ static bool intl_get_options_object(MalVm *vm, MalValue options, MalValue *out) 
 static bool intl_check_locale_matcher(MalVm *vm, MalValue options) {
     static const char *const values[] = {"lookup", "best fit"};
     bool ok;
-    intl_option_enum(vm, options, "localeMatcher", values, countof(values), "best fit", &ok);
+    (void) intl_option_enum_index(vm, options, "localeMatcher", values, countof(values), 1, &ok);
     return ok;
 }
 
@@ -1222,9 +1225,8 @@ static bool intl_number_option(MalVm *vm, MalValue value, i32 minimum, i32 maxim
 // Raw digit values stay rooted until the later option getters and coercions finish.
 static bool intl_number_format_digits(
     MalVm *vm, MalValue options, bool percent, i32 *minimum_integer, i32 *minimum_fraction, i32 *maximum_fraction,
-    i32 *minimum_significant, i32 *maximum_significant, bool *has_significant,
-    MalValue *rounding_out, i32 *rounding_code, i32 *increment,
-    MalValue *priority_out, i32 *priority_code, MalValue *trailing_out, bool *strip_zero
+    i32 *minimum_significant, i32 *maximum_significant,
+    i32 *rounding_code, i32 *increment, i32 *priority_code, bool *strip_zero
 ) {
     MalValue roots[7] = {options, mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
@@ -1245,24 +1247,17 @@ static bool intl_number_format_digits(
     if (!valid_increment) { mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid roundingIncrement"); goto done; }
     static const char *const ROUNDINGS[] = {"halfExpand", "ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfTrunc", "halfEven"};
     bool ok;
-    MalString *rounding = intl_option_enum(vm, options, "roundingMode", ROUNDINGS, countof(ROUNDINGS), "halfExpand", &ok);
+    *rounding_code = intl_option_enum_index(vm, options, "roundingMode", ROUNDINGS, countof(ROUNDINGS), 0, &ok);
     if (!ok) goto done;
-    *rounding_out = mal_value_from_string(rounding);
-    *rounding_code = 0;
-    for (usize i = 0; i < countof(ROUNDINGS); i++) if (intl_string_eq_ascii(rounding, ROUNDINGS[i])) *rounding_code = (i32) i;
     static const char *const PRIORITIES[] = {"auto", "morePrecision", "lessPrecision"};
-    MalString *priority = intl_option_enum(vm, options, "roundingPriority", PRIORITIES, countof(PRIORITIES), "auto", &ok);
+    *priority_code = intl_option_enum_index(vm, options, "roundingPriority", PRIORITIES, countof(PRIORITIES), 0, &ok);
     if (!ok) goto done;
-    *priority_out = mal_value_from_string(priority);
-    *priority_code = intl_string_eq_ascii(priority, "morePrecision") ? 1 : intl_string_eq_ascii(priority, "lessPrecision") ? 2 : 0;
     static const char *const ZEROS[] = {"auto", "stripIfInteger"};
-    MalString *trailing = intl_option_enum(vm, options, "trailingZeroDisplay", ZEROS, countof(ZEROS), "auto", &ok);
+    i32 trailing = intl_option_enum_index(vm, options, "trailingZeroDisplay", ZEROS, countof(ZEROS), 0, &ok);
     if (!ok) goto done;
-    *trailing_out = mal_value_from_string(trailing);
-    *strip_zero = intl_string_eq_ascii(trailing, "stripIfInteger");
+    *strip_zero = trailing == 1;
     bool significant = !mal_value_is_undefined(roots[4]) || !mal_value_is_undefined(roots[5]) || *priority_code != 0;
     bool fraction = !significant || *priority_code != 0;
-    *has_significant = significant;
     if (significant) {
         bool minimum_present, maximum_present;
         if (!intl_number_option(vm, roots[4], 1, 21, minimum_significant, &minimum_present)) goto done;
@@ -1724,18 +1719,6 @@ static MalString *intl_data_string(MalVm *vm, MalValue data, const char *key) {
 /** signDisplay values in FFI-code order (mirrors mal_i18n.h / SignDisplay in lib.rs). */
 static const char *const INTL_SIGN_DISPLAYS[] = {"auto", "never", "always", "exceptZero", "negative"};
 
-/** Maps a resolved signDisplay string to its mal_i18n_number_format code (0..4). */
-static i32 intl_sign_display_code(MalString *sign_display) {
-    if (sign_display != nullptr) {
-        for (usize i = 0; i < countof(INTL_SIGN_DISPLAYS); i++) {
-            if (intl_string_eq_ascii(sign_display, INTL_SIGN_DISPLAYS[i])) {
-                return (i32) i;
-            }
-        }
-    }
-    return 0; // "auto"
-}
-
 typedef enum IntlSignTag { INTL_SIGN_NONE, INTL_SIGN_POSITIVE, INTL_SIGN_NEGATIVE } IntlSignTag;
 
 /**
@@ -1960,7 +1943,7 @@ static MalValue intl_number_format_value(MalVm *vm, MalIntlObject *nf, f64 numbe
 
 static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value; (void) callee;
-    MalValue roots[14] = {arg_count >= 1 ? args[0] : mal_value_new_undefined(), arg_count >= 2 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalValue roots[7] = {arg_count >= 1 ? args[0] : mal_value_new_undefined(), arg_count >= 2 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalValue result = mal_value_new_undefined();
@@ -1985,11 +1968,8 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
     }
     static const char *const STYLES[] = {"decimal", "percent", "currency", "unit"};
     bool ok;
-    MalString *style = intl_option_enum(vm, options, "style", STYLES, countof(STYLES), "decimal", &ok);
+    i32 style_code = intl_option_enum_index(vm, options, "style", STYLES, countof(STYLES), 0, &ok);
     if (!ok) goto done;
-    roots[5] = mal_value_from_string(style);
-    i32 style_code = 0;
-    for (usize i = 0; i < countof(STYLES); i++) if (intl_string_eq_ascii(style, STYLES[i])) style_code = (i32) i;
     bool percent = style_code == 1;
     MalString *currency = nullptr;
     if (!intl_option_string(vm, options, "currency", &currency, &present)) goto done;
@@ -2006,17 +1986,17 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
         if (!valid) { mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid currency"); goto done; }
     }
     static const char *const CURRENCY_DISPLAYS[] = {"code", "symbol", "narrowSymbol", "name"};
-    (void) intl_option_enum(vm, options, "currencyDisplay", CURRENCY_DISPLAYS, countof(CURRENCY_DISPLAYS), "symbol", &ok);
+    (void) intl_option_enum_index(vm, options, "currencyDisplay", CURRENCY_DISPLAYS, countof(CURRENCY_DISPLAYS), 1, &ok);
     if (!ok) goto done;
     static const char *const CURRENCY_SIGNS[] = {"standard", "accounting"};
-    (void) intl_option_enum(vm, options, "currencySign", CURRENCY_SIGNS, countof(CURRENCY_SIGNS), "standard", &ok);
+    (void) intl_option_enum_index(vm, options, "currencySign", CURRENCY_SIGNS, countof(CURRENCY_SIGNS), 0, &ok);
     if (!ok) goto done;
     MalString *unit = nullptr;
     if (!intl_option_string(vm, options, "unit", &unit, &present)) goto done;
     byte unit_bytes[64];
     usize unit_len = 0;
     if (unit != nullptr) {
-        roots[9] = mal_value_from_string(unit);
+        roots[5] = mal_value_from_string(unit);
         if (!intl_tag_utf8(unit, unit_bytes, sizeof(unit_bytes), &unit_len) || !mal_i18n_unit_is_valid(unit_bytes, unit_len)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid unit");
             goto done;
@@ -2026,28 +2006,25 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
         goto done;
     }
     static const char *const UNIT_DISPLAYS[] = {"long", "short", "narrow"};
-    MalString *unit_display = intl_option_enum(vm, options, "unitDisplay", UNIT_DISPLAYS, countof(UNIT_DISPLAYS), "short", &ok);
+    i32 unit_width = intl_option_enum_index(vm, options, "unitDisplay", UNIT_DISPLAYS, countof(UNIT_DISPLAYS), 1, &ok);
     if (!ok) goto done;
-    roots[11] = mal_value_from_string(unit_display);
-    i32 unit_width = intl_string_eq_ascii(unit_display, "long") ? 0 : intl_string_eq_ascii(unit_display, "narrow") ? 2 : 1;
     i32 min_integer, min_fraction = 0, max_fraction = 3;
     i32 min_significant = 0, max_significant = 0;
-    bool has_significant;
     i32 rounding_code = 0, increment = 1, priority = 0;
     bool strip_zero = false;
-    if (!intl_number_format_digits(vm, options, percent, &min_integer, &min_fraction, &max_fraction, &min_significant, &max_significant, &has_significant, &roots[7], &rounding_code, &increment, &roots[12], &priority, &roots[13], &strip_zero)) goto done;
+    if (!intl_number_format_digits(vm, options, percent, &min_integer, &min_fraction, &max_fraction, &min_significant, &max_significant, &rounding_code, &increment, &priority, &strip_zero)) goto done;
     i32 grouping = 1;
-    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "useGrouping"), &roots[8])) goto done;
-    if (mal_value_is_undefined(roots[8])) {
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "useGrouping"), &roots[5])) goto done;
+    if (mal_value_is_undefined(roots[5])) {
         grouping = 1;
-    } else if (mal_value_is_boolean(roots[8]) && mal_value_is_truthy(roots[8])) {
+    } else if (mal_value_is_boolean(roots[5]) && mal_value_is_truthy(roots[5])) {
         grouping = 2;
-    } else if (!mal_value_is_truthy(roots[8])) {
+    } else if (!mal_value_is_truthy(roots[5])) {
         grouping = 0;
     } else {
         MalString *text;
-        if (!mal_vm_to_string(vm, roots[8], &text)) goto done;
-        roots[8] = mal_value_from_string(text);
+        if (!mal_vm_to_string(vm, roots[5], &text)) goto done;
+        roots[5] = mal_value_from_string(text);
         if (intl_string_eq_ascii(text, "always")) { grouping = 2; }
         else if (intl_string_eq_ascii(text, "min2")) { grouping = 3; }
         else if (!intl_string_eq_ascii(text, "auto") && !intl_string_eq_ascii(text, "true") && !intl_string_eq_ascii(text, "false")) {
@@ -2055,11 +2032,10 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
             goto done;
         }
     }
-    MalString *sign = intl_option_enum(vm, options, "signDisplay", INTL_SIGN_DISPLAYS, countof(INTL_SIGN_DISPLAYS), "auto", &ok);
+    i32 sign_code = intl_option_enum_index(vm, options, "signDisplay", INTL_SIGN_DISPLAYS, countof(INTL_SIGN_DISPLAYS), 0, &ok);
     if (!ok) goto done;
-    roots[6] = mal_value_from_string(sign);
     MalIntlObject *nf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_NUMBER_FORMAT, nullptr, mal_value_new_undefined());
-    roots[10] = mal_value_from_intl_object(nf);
+    roots[6] = mal_value_from_intl_object(nf);
     usize locale_len = mal_string_length(locale);
     usize numbering_len = numbering == nullptr ? 0 : mal_string_length(numbering);
     usize bytes_needed;
@@ -2072,11 +2048,11 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
     bool ascii = intl_tag_utf8(locale, bytes, locale_len + 1, &locale_len);
     if (numbering != nullptr) ascii = ascii && intl_tag_utf8(numbering, numbering_bytes, numbering_len + 1, &numbering_len);
     MalI18nNumberResolved native = {0};
-    if (ascii) nf->handle = mal_i18n_number_formatter_new(bytes, locale_len, numbering_bytes, numbering_len, style_code, unit_bytes, unit_len, unit_width, min_integer, min_fraction, max_fraction, min_significant, max_significant, grouping, intl_sign_display_code(sign), rounding_code, increment, priority, strip_zero, &native);
+    if (ascii) nf->handle = mal_i18n_number_formatter_new(bytes, locale_len, numbering_bytes, numbering_len, style_code, unit_bytes, unit_len, unit_width, min_integer, min_fraction, max_fraction, min_significant, max_significant, grouping, sign_code, rounding_code, increment, priority, strip_zero, &native);
     if (nf->handle != nullptr) mal_heap_charge_external(&vm->heap, native.heap_bytes);
     if (bytes != stack) free(bytes);
     if (nf->handle == nullptr) { mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not create number formatter"); goto done; }
-    result = roots[10];
+    result = roots[6];
  done:
     mal_gc_unroot(&root);
     return result;

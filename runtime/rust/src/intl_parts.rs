@@ -76,6 +76,20 @@ impl Sink<'_> {
 }
 impl fmt::Write for Sink<'_> {
     fn write_str(&mut self, text: &str) -> fmt::Result {
+        if text.is_ascii() {
+            let end = self
+                .written
+                .checked_add(text.len())
+                .filter(|&end| end <= i32::MAX as usize)
+                .ok_or(fmt::Error)?;
+            let start = self.written.min(self.out.len());
+            let copied_end = end.min(self.out.len());
+            for (slot, byte) in self.out[start..copied_end].iter_mut().zip(text.bytes()) {
+                *slot = u16::from(byte);
+            }
+            self.written = end;
+            return Ok(());
+        }
         let kind = self.kind;
         for ch in text.chars() {
             let bidi = matches!(ch, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
@@ -112,10 +126,10 @@ impl PartsWrite for Sink<'_> {
         part: writeable::Part,
         mut write: impl FnMut(&mut Self) -> fmt::Result,
     ) -> fmt::Result {
+        if !self.track {
+            return write(self);
+        }
         if part.category == "mal-duration-unit" {
-            if !self.track {
-                return write(self);
-            }
             self.flush();
             let previous = self.unit;
             self.unit = DURATION_UNITS

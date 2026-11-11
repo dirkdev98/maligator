@@ -39,7 +39,7 @@ struct NumberPlan {
     locale: String,
     numbering: Box<DataMarkerAttributes>,
     style: i32,
-    unit: Option<NumberUnit>,
+    unit: Option<Box<NumberUnit>>,
     min_integer: i32,
     min_fraction: i32,
     max_fraction: i32,
@@ -104,7 +104,9 @@ impl NumberPlan {
             + self.locale.capacity()
             + self.numbering.as_str().len()
             + self.unit.as_ref().map_or(0, |unit| {
-                unit.identifier.capacity() + unit.formatter.heap_bytes()
+                core::mem::size_of::<NumberUnit>()
+                    + unit.identifier.capacity()
+                    + unit.formatter.heap_bytes()
             })
     }
 
@@ -417,12 +419,12 @@ pub unsafe extern "C" fn mal_i18n_number_formatter_new(
         else {
             return core::ptr::null_mut();
         };
-        Some(NumberUnit {
+        Some(Box::new(NumberUnit {
             identifier: identifier.into(),
             width: unit_display,
             formatter: UnitFormat::new(data_locale, spec, unit_display as usize),
             plurals,
-        })
+        }))
     } else {
         None
     };
