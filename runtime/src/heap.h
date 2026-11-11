@@ -35,6 +35,8 @@ typedef struct MalGcLarge MalGcLarge;
 /* Cells of this size or smaller are size-classed in blocks; larger -> LOS. */
 #define MAL_GC_LARGE_THRESHOLD (MAL_GC_BLOCK_SIZE / 4u)
 #define MAL_GC_BLOCK_WORDS (MAL_GC_BLOCK_SIZE / MAL_GC_CELL_ALIGN / 64u)
+#define MAL_GC_RECYCLED_WARM 1u
+#define MAL_GC_RECYCLED_RETURNED 2u
 
 /*
  * Block header, stored at the BLOCK_SIZE-aligned block base so a cell's block is one
@@ -48,8 +50,9 @@ typedef struct MalGcLarge MalGcLarge;
 struct MalGcBlock {
     u8 kind;
     u8 on_young;
-    /* On the heap free-block list with its pages returned to the OS; sweeps skip it
-     * until mal_gc_new_block reclaims it. */
+    /* On the heap free-block list: MAL_GC_RECYCLED_WARM keeps its pages until the
+     * next major completion, MAL_GC_RECYCLED_RETURNED has given them to the OS. Sweeps
+     * skip it until mal_gc_new_block reclaims it. */
     u8 recycled;
     /* RAW: on heap->raw_partial[size_class]. CELL: on heap->cell_avail[size_class]. */
     u8 on_partial;

@@ -296,7 +296,9 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
         sweep_epoch = recycled->sweep_epoch;
 #if defined(__APPLE__) && defined(MADV_FREE_REUSABLE) && defined(MADV_FREE_REUSE)
         // Reused payload is charged as active before any allocator writes reach it.
-        mal_gc_advise_block_payload(recycled, MADV_FREE_REUSE);
+        if (recycled->recycled == MAL_GC_RECYCLED_RETURNED) {
+            mal_gc_advise_block_payload(recycled, MADV_FREE_REUSE);
+        }
 #endif
     } else {
         block_base = (u8 *) chunk->base + chunk->next_block * MAL_GC_BLOCK_SIZE;
@@ -1116,21 +1118,34 @@ static int mal_gc_advise_block_payload(MalGcBlock *block, int advice) {
 }
 #endif
 
+/*
+ * Put an empty block on the free list with its pages kept. Blocks empty and refill
+ * many times between majors when short-lived buffers cycle through a size class, and
+ * returning their pages each time cost a pair of syscalls per block;
+ * mal_gc_return_free_block_pages returns the ones still free at major completion.
+ */
+static void mal_gc_recycle_block(MalHeap *heap, MalGcBlock *block) {
+    block->bump = (u8 *) block + mal_gc_cell_data_offset();
+    block->free_list = nullptr;
+    block->recycled = MAL_GC_RECYCLED_WARM;
+    block->next_free = heap->free_blocks;
+    heap->free_blocks = block;
+}
+
 /* Preserve the header and free-list metadata; only complete payload pages can
  * become undefined. Darwin's reusable advice also removes idle payload from
  * physical-footprint accounting, paired with REUSE before the next payload write. */
-static void mal_gc_recycle_block(MalHeap *heap, MalGcBlock *block) {
+static void mal_gc_return_free_block_pages(MalHeap *heap) {
+    for (MalGcBlock *block = heap->free_blocks; block != nullptr; block = block->next_free) {
+        if (block->recycled != MAL_GC_RECYCLED_WARM) continue;
 #if !defined(__wasi__)
 #if defined(__APPLE__) && defined(MADV_FREE_REUSABLE) && defined(MADV_FREE_REUSE)
-    if (mal_gc_advise_block_payload(block, MADV_FREE_REUSABLE) != 0)
+        if (mal_gc_advise_block_payload(block, MADV_FREE_REUSABLE) != 0)
 #endif
-        mal_gc_advise_block_payload(block, MAL_GC_MADV_DISCARD);
+            mal_gc_advise_block_payload(block, MAL_GC_MADV_DISCARD);
 #endif
-    block->bump = (u8 *) block + mal_gc_cell_data_offset();
-    block->free_list = nullptr;
-    block->recycled = 1;
-    block->next_free = heap->free_blocks;
-    heap->free_blocks = block;
+        block->recycled = MAL_GC_RECYCLED_RETURNED;
+    }
 }
 
 static void mal_gc_trim_empty_raw_blocks(MalHeap *heap) {
@@ -1258,6 +1273,7 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
 
     heap->live_bytes = live_bytes;
     mal_gc_trim_empty_raw_blocks(heap);
+    mal_gc_return_free_block_pages(heap);
     mal_gc_rescan_current_blocks(heap);
 }
 
@@ -1387,6 +1403,7 @@ bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_bl
     // Cursor exhausted: the whole heap is swept.
     heap->live_bytes = heap->sweep_live_bytes;
     mal_gc_trim_empty_raw_blocks(heap);
+    mal_gc_return_free_block_pages(heap);
     mal_gc_rescan_current_blocks(heap);
     heap->sweeping = false;
     return true;
