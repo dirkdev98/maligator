@@ -10656,6 +10656,22 @@ function compileVariableDeclaration(
 			continue;
 		}
 
+		// A `var x = init` whose `x` an active `with`-object may provide runs its
+		// initializer as an assignment: ResolveBinding precedes the initializer, so
+		// the store reaches that object even if the initializer deletes the
+		// property. Only the hoisted declaration is unconditionally
+		// function-scoped; a miss stores the hoisted local like the path below.
+		const withReference =
+			init &&
+			decl.id.type === "Identifier" &&
+			identifierUsesDynamicEnvironment(program, fn, decl.id) &&
+			!(
+				isNewDirectEvalVarBinding(program, fn, decl.id) &&
+				program.directEvalPersistentScopeBinding
+			)
+				? compileWithReferenceBase(program, fn, cursor, decl.id)
+				: undefined;
+
 		let source = compileExpression(
 			program,
 			fn,
@@ -10701,31 +10717,16 @@ function compileVariableDeclaration(
 			continue;
 		}
 
-		// A `var x = init` whose `x` is intercepted by an active `with`-object runs
-		// its initializer as an assignment (PutValue), so it must set the with-object
-		// property when one provides `x` — only the hoisted binding declaration is
-		// unconditionally function-scoped, not the initializer store. (`decl.init`
-		// only: a bare `var x;` performs no assignment.) The miss branch stores the
-		// hoisted local like the normal path below.
-		if (
-			decl.init &&
-			decl.id.type === "Identifier" &&
-			identifierUsesDynamicEnvironment(program, fn, decl.id)
-		) {
-			const nameStringIndex = getOrCreateStringConstant(program, binding.name);
-			const base = nextCoreVariable(fn);
-			cursor.block.emitter.emit({
-				type: "withResolveBase",
-				registers: [base],
-				nameStringIndex,
-			});
-			const key = nextCoreVariable(fn);
-			cursor.block.emitter.emit({
-				type: "createString",
-				registers: [key],
-				stringIndex: nameStringIndex,
-			});
-			compileWithBaseStore(program, fn, cursor, base, key, decl.id, source);
+		if (withReference && decl.id.type === "Identifier") {
+			compileWithBaseStore(
+				program,
+				fn,
+				cursor,
+				withReference.base,
+				withReference.key,
+				decl.id,
+				source,
+			);
 			continue;
 		}
 
