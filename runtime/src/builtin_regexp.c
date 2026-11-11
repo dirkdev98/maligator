@@ -8,6 +8,7 @@
 #include "ascii.h"
 #include "array_object.h"
 #include "builtin_iterator.h"
+#include "builtin_object.h"
 #include "checked_size.h"
 #include "ecma_whitespace.h"
 #include "function_object.h"
@@ -2579,6 +2580,18 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
                 goto done;
             }
             pr_roots[2] = mal_value_from_string(replacement_str);
+        } else if (!mal_value_is_undefined(named_captures)) {
+            // A substitution reads named captures through ToObject, whatever the
+            // match position and replacement template.
+            if (mal_value_is_null(named_captures)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Cannot convert undefined or null to object");
+                goto done;
+            }
+            if (!mal_value_is_object(named_captures)) {
+                named_captures = mal_builtin_object_box_primitive(vm, named_captures);
+                pr_roots[1] = named_captures;
+            }
         }
 
         if (position >= next_source_position) {
