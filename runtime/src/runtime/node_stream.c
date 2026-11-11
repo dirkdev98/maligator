@@ -359,6 +359,19 @@ static void stream_init_kind(
     }
 }
 
+/*
+ * Slots stream_init_kind fills on a fresh receiver: the emitter fields, `destroyed`
+ * and the kind, each side's fields, and room for option hooks and the handful of
+ * properties callers such as HTTP requests add. Reserving them up front keeps the
+ * fields in the object's cell instead of growing malloc'd slot storage per add.
+ */
+static u8 stream_receiver_slots(i32 kind) {
+    u8 slots = 5 + 6;
+    if (kind == STREAM_READABLE || kind == STREAM_DUPLEX || kind == STREAM_TRANSFORM) slots += 10;
+    if (kind == STREAM_WRITABLE || kind == STREAM_DUPLEX || kind == STREAM_TRANSFORM) slots += 15;
+    return slots;
+}
+
 static MalValue stream_construct(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee, i32 kind) {
@@ -373,7 +386,8 @@ static MalValue stream_construct(
     MalObject *prototype = mal_value_is_object(prototype_value)
         ? mal_value_to_object(prototype_value)
         : mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-    MalValue instance = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    MalValue instance = mal_value_from_object(
+        mal_object_new_reserved(&vm->heap, prototype, stream_receiver_slots(kind)));
     MalValue roots[] = {instance, options};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
