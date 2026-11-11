@@ -1445,6 +1445,7 @@ fn next_ascii_match(
     re: &Arc<Regex>,
     text: &str,
     start: usize,
+    previous: Option<Match>,
 ) -> Option<Match> {
     let resumable = cache.continuation.as_ref().is_some_and(|continuation| {
         continuation.next_start == start
@@ -1470,7 +1471,7 @@ fn next_ascii_match(
         });
     }
     let continuation = cache.continuation.as_mut().expect("continuation present");
-    let found = continuation.matches.next();
+    let found = continuation.matches.next_reusing(previous);
     match &found {
         // After an empty match the iterator steps past it, which `exec` does not.
         Some(m) if m.end() > m.start() => continuation.next_start = m.end(),
@@ -1510,11 +1511,24 @@ fn find_wide(
     unicode_mode: bool,
     subject: &[u16],
     start: usize,
+    previous: Option<Match>,
 ) -> Option<Match> {
     if unicode_mode {
-        re.find_first_utf16_with_scratch(subject, start, scratch, SCRATCH_LIMIT_PER_ENCODING)
+        re.find_first_utf16_with_scratch(
+            subject,
+            start,
+            scratch,
+            SCRATCH_LIMIT_PER_ENCODING,
+            previous,
+        )
     } else {
-        re.find_first_ucs2_with_scratch(subject, start, scratch, SCRATCH_LIMIT_PER_ENCODING)
+        re.find_first_ucs2_with_scratch(
+            subject,
+            start,
+            scratch,
+            SCRATCH_LIMIT_PER_ENCODING,
+            previous,
+        )
     }
 }
 
@@ -1597,6 +1611,7 @@ unsafe fn exec_general(
         return fast_exec(cp, subj, start, caps_out, caps_cap);
     }
 
+    let previous = cp.last.take();
     let mut execution_flags = 0;
     let found = if cp.ascii_eligible {
         let string_identity = subject_identity as usize;
@@ -1624,7 +1639,14 @@ unsafe fn exec_general(
                 continuation: None,
             });
             execution_flags |= EXEC_CACHE_FILL;
-            find_wide(&cp.re, &mut cp.wide_scratch, cp.unicode_mode, subj, start)
+            find_wide(
+                &cp.re,
+                &mut cp.wide_scratch,
+                cp.unicode_mode,
+                subj,
+                start,
+                previous,
+            )
         } else {
             let cache = cp.subject_cache.as_mut().expect("cache key matched");
             if !cache.classified {
@@ -1647,14 +1669,28 @@ unsafe fn exec_general(
                 // SAFETY: the copy is never modified after classification and the
                 // continuation is the only field the call below updates.
                 let text = unsafe { &*(ascii.as_str() as *const str) };
-                next_ascii_match(cache, &mut cp.ascii_scratch, &cp.re, text, start)
+                next_ascii_match(cache, &mut cp.ascii_scratch, &cp.re, text, start, previous)
             } else {
                 execution_flags |= EXEC_NON_ASCII;
-                find_wide(&cp.re, &mut cp.wide_scratch, cp.unicode_mode, subj, start)
+                find_wide(
+                    &cp.re,
+                    &mut cp.wide_scratch,
+                    cp.unicode_mode,
+                    subj,
+                    start,
+                    previous,
+                )
             }
         }
     } else {
-        find_wide(&cp.re, &mut cp.wide_scratch, cp.unicode_mode, subj, start)
+        find_wide(
+            &cp.re,
+            &mut cp.wide_scratch,
+            cp.unicode_mode,
+            subj,
+            start,
+            previous,
+        )
     };
     if !execution_flags_out.is_null() {
         unsafe { *execution_flags_out = execution_flags };
@@ -1752,6 +1788,7 @@ unsafe fn exec_latin1_general(
         }
     }
 
+    let previous = cp.last.take();
     let string_identity = subject_identity as usize;
     let mut execution_flags = EXEC_LATIN1;
     let cache_hit = cp.subject_cache.as_ref().is_some_and(|cache| {
@@ -1800,7 +1837,7 @@ unsafe fn exec_latin1_general(
         // Eligibility excludes ignore-case, whose ECMAScript canonicalization
         // can map non-ASCII pattern units onto ASCII subject units.
         let text = unsafe { core::str::from_utf8_unchecked(subj) };
-        next_ascii_match(cache, &mut cp.ascii_scratch, &cp.re, text, start)
+        next_ascii_match(cache, &mut cp.ascii_scratch, &cp.re, text, start, previous)
     } else {
         execution_flags |= EXEC_NON_ASCII;
         let wide = cache.wide.get_or_insert_with(Vec::new);
@@ -1809,7 +1846,14 @@ unsafe fn exec_latin1_general(
         if wide.is_empty() {
             wide.extend(subj.iter().map(|unit| u16::from(*unit)));
         }
-        find_wide(&cp.re, &mut cp.wide_scratch, cp.unicode_mode, wide, start)
+        find_wide(
+            &cp.re,
+            &mut cp.wide_scratch,
+            cp.unicode_mode,
+            wide,
+            start,
+            previous,
+        )
     };
     if !execution_flags_out.is_null() {
         unsafe { *execution_flags_out = execution_flags };

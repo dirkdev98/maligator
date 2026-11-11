@@ -41,6 +41,11 @@ for (let round = 0; round < 3; round++) {
 	}
 	if (globalThis.gc) gc();
 }
+for (const text of ["aa", "bb", "ab", "bb", "aa"]) {
+	const match = patterns[3].exec(text);
+	if (match) retained.push(match);
+	output.push([text, match && [match[0], match.groups, match.indices]]);
+}
 const repeated = /(?<token>[a-z]+)\k<token>/dg;
 const long = "ababcddcabab".repeat(40);
 let match;

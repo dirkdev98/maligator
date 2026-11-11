@@ -48,6 +48,9 @@ impl<Producer: MatchProducer> Matches<Producer> {
     pub(crate) fn into_producer(self) -> Producer {
         self.mp
     }
+    pub(crate) fn producer_mut(&mut self) -> &mut Producer {
+        &mut self.mp
+    }
     pub(crate) fn producer(&self) -> &Producer {
         &self.mp
     }

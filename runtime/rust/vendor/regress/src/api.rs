@@ -144,6 +144,12 @@ pub type Matches<'r, 't> = exec::Matches<backends::DefaultExecutor<'r, 't>>;
 pub type AsciiMatches<'r, 't> = exec::Matches<backends::DefaultAsciiExecutor<'r, 't>>;
 
 impl<'r, 't> AsciiMatches<'r, 't> {
+    /// Consume an obsolete owned result as storage for this execution's captures.
+    pub fn next_reusing(&mut self, previous: Option<Match>) -> Option<Match> {
+        self.producer_mut().recycle_match(previous);
+        self.next()
+    }
+
     /// Discard this subject and retain only empty scratch within the caller's byte limit.
     pub fn into_scratch(self, maximum: usize) -> AsciiScratch {
         AsciiScratch::from_bound(self.into_producer().into_scratch(), maximum)
@@ -545,6 +551,7 @@ impl Regex {
         start: usize,
         scratch: &mut WideScratch,
         maximum: usize,
+        previous: Option<Match>,
     ) -> Option<Match> {
         let input = Utf16Input::new(text, self.cr.flags.unicode);
         let mut matches = exec::Matches::new(
@@ -558,6 +565,7 @@ impl Regex {
             ),
             start,
         );
+        matches.producer_mut().recycle_match(previous);
         let found = matches.next();
         *scratch = WideScratch::from_bound(matches.into_producer().into_scratch(), maximum);
         found
@@ -571,6 +579,7 @@ impl Regex {
         start: usize,
         scratch: &mut WideScratch,
         maximum: usize,
+        previous: Option<Match>,
     ) -> Option<Match> {
         let input = Ucs2Input::new(text, self.cr.flags.unicode);
         let mut matches = exec::Matches::new(
@@ -584,6 +593,7 @@ impl Regex {
             ),
             start,
         );
+        matches.producer_mut().recycle_match(previous);
         let found = matches.next();
         *scratch = WideScratch::from_bound(matches.into_producer().into_scratch(), maximum);
         found

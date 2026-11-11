@@ -881,9 +881,11 @@ static int32_t regexp_matcher_exec(
         : mal_regexp_exec(
             re->matcher, (const uint16_t *) subject.utf16_units, length, start, s,
             vm->heap.identity, vm->heap.epoch, caps, caps_cap, &execution_flags);
-    i64 scratch_delta = mal_regexp_scratch_delta(re->matcher);
-    if (scratch_delta > 0) mal_heap_charge_external(&vm->heap, (usize) scratch_delta);
-    else if (scratch_delta < 0) mal_gc_process_release((usize) -scratch_delta);
+    if ((execution_flags & MAL_REGEXP_EXEC_FAST) == 0) {
+        i64 scratch_delta = mal_regexp_scratch_delta(re->matcher);
+        if (scratch_delta > 0) mal_heap_charge_external(&vm->heap, (usize) scratch_delta);
+        else if (scratch_delta < 0) mal_gc_process_release((usize) -scratch_delta);
+    }
     MAL_PERF_COUNT(regexp_exec_calls);
     if ((execution_flags & MAL_REGEXP_EXEC_LATIN1) != 0) MAL_PERF_COUNT(regexp_latin1_exec_calls);
     if ((execution_flags & MAL_REGEXP_EXEC_FAST) != 0) {

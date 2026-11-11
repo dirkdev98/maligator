@@ -1136,15 +1136,26 @@ impl<'a, Input: InputIndexer> MatchAttempter<'a, Input> {
 pub struct BacktrackExecutor<'r, Input: InputIndexer> {
     input: Input,
     matcher: MatchAttempter<'r, Input>,
+    capture_buffer: Vec<Option<Range<usize>>>,
 }
 
 impl<'r, Input: InputIndexer> BacktrackExecutor<'r, Input> {
     pub(crate) fn new(input: Input, matcher: MatchAttempter<'r, Input>) -> Self {
-        Self { input, matcher }
+        Self {
+            input,
+            matcher,
+            capture_buffer: Vec::new(),
+        }
     }
 }
 
 impl<Input: InputIndexer> BacktrackExecutor<'_, Input> {
+    pub(crate) fn recycle_match(&mut self, previous: Option<Match>) {
+        if let Some(previous) = previous {
+            self.capture_buffer = previous.captures;
+            self.capture_buffer.clear();
+        }
+    }
     pub(crate) fn into_scratch(self) -> Scratch<Input::Position> {
         self.matcher.into_scratch()
     }
@@ -1171,8 +1182,7 @@ impl<Input: InputIndexer> BacktrackExecutor<'_, Input> {
     fn successful_match(&mut self, start: Input::Position, end: Input::Position) -> Match {
         // We want to simultaneously map our groups to offsets, and clear the groups.
         // A for loop is the easiest way to do this while satisfying the borrow checker.
-        // TODO: avoid allocating so much.
-        let mut captures = Vec::new();
+        let mut captures = core::mem::take(&mut self.capture_buffer);
         captures.reserve_exact(self.matcher.s.groups.len());
         for gd in self.matcher.s.groups.iter_mut() {
             captures.push(match gd.as_range() {
@@ -1296,6 +1306,7 @@ impl<'r, 't> exec::Executor<'r, 't> for BacktrackExecutor<'r, Utf8Input<'t>> {
         Self {
             input,
             matcher: MatchAttempter::new(re, input.left_end()),
+            capture_buffer: Vec::new(),
         }
     }
 }
@@ -1308,6 +1319,7 @@ impl<'r, 't> exec::Executor<'r, 't> for BacktrackExecutor<'r, AsciiInput<'t>> {
         Self {
             input,
             matcher: MatchAttempter::new(re, input.left_end()),
+            capture_buffer: Vec::new(),
         }
     }
 }

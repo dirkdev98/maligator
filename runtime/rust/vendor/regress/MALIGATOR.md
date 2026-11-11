@@ -35,3 +35,8 @@ immutable subject; discarded iterators return only empty capacity.
 
 Compiled named-group strings are shared with successful matches. Match ranges
 remain independently owned so a later execution cannot mutate an earlier result.
+
+The runtime returns the preceding result's capture-range vector to the next
+execution only after its C consumer has finished. The matcher transfers that
+vector into the new owned result or drops it before returning without a match.
+Previously materialized JavaScript results retain their own strings and indices.
