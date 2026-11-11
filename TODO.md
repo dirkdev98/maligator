@@ -346,15 +346,12 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Modules and agents
 
-- [ ] Finish dynamic-import resolution, import attributes, evaluation order, and error
-      ordering. Cover compiled, interpreted, and runtime-loading paths.
-      `with { type: "text" }` needs module records keyed by path and type, since one
-      file can load as text and as JavaScript, and `import()` from eval code needs
-      runtime loading of targets outside the static graph.
-      Dynamic-import target parse and linking errors must reject the import promise;
-      ambiguous/circular re-exports and duplicate declarations currently fail the
-      enclosing compilation. Preserve top-level-await sibling scheduling and
-      fulfillment/rejection order.
+- [ ] Finish dynamic-import resolution, import attributes and evaluation order across
+      compiled, interpreted and runtime-loading paths. `with { type: "text" }` needs
+      module records keyed by path and type, since one file can load as text and as
+      JavaScript; `import()` from eval code and computed specifiers need runtime
+      loading of targets outside the static graph. Preserve top-level-await sibling
+      scheduling and fulfillment/rejection order.
 
 - [ ] Implement import-defer syntax and semantics. Integrate it with linking,
       evaluation state, cycles, and failure propagation.
