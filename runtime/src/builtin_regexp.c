@@ -3221,8 +3221,15 @@ static MalValue regexp_escape(MalVm *vm, MalValue this_value, const MalValue *ar
             plain_start = 1;
             continue;
         }
-        bool escaped = regexp_is_syntax_char(c) || c == '/' || (c >= 0x09 && c <= 0x0D) ||
-            regexp_is_punctuator_or_space(c);
+        // EncodeForRegExpEscape works on code points: a surrogate pair passes
+        // through whole, while an unpaired surrogate is written as \uXXXX.
+        if (mal_utf16_is_lead_surrogate(c) && i + 1 < n &&
+            mal_utf16_is_trail_surrogate(mal_string_code_unit_at(s, i + 1))) {
+            i++;
+            continue;
+        }
+        bool escaped = mal_utf16_is_surrogate(c) || regexp_is_syntax_char(c) || c == '/' ||
+            (c >= 0x09 && c <= 0x0D) || regexp_is_punctuator_or_space(c);
         if (!escaped) continue;
         if (!regexp_builder_append_range(vm, &builder, s, plain_start, i - plain_start)) goto fail;
         plain_start = i + 1;
