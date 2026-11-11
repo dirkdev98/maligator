@@ -56,7 +56,7 @@ it.each(
 				["primitiveRelation", 8, false, false, false],
 				["mixedRelation", 8, false, false, false],
 				["nullableObjectEqual", 1, false, false, false],
-				["bigintStringEqual", 1, false, true, false],
+				["bigintStringEqual", 1, true, true, false],
 				["symbolLess", 1, true, true, false],
 				["coerciveEqual", 1, true, true, true],
 				["fusedRelation", 1, false, false, false],
@@ -92,7 +92,9 @@ it.each(
 					name === "nullableObjectEqual"
 				) {
 					const c = emitCompiledFunction(fn, fn.functionIndex, "", false)!.source;
-					expect(c.includes("mal_vm_binary_op(")).toBe(mutableResult);
+					expect(c.includes("mal_vm_binary_op(")).toBe(
+						mutableResult || name === "bigintStringEqual",
+					);
 				}
 			}
 			for (const binary of [compiled, interpreted])

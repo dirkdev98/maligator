@@ -13,7 +13,10 @@ const values = [
 	(1n << 1024n) - 1n,
 	(1n << 4096n) + 123456789n,
 ];
-const output = [];
+const output = [
+	[170141183460469231731687303715884105728n].join(),
+	[340282366920938463463374607431768211457n, -(1n << 1024n) + 17n].join("|"),
+];
 const retained = [];
 for (const value of values) {
 	assert.equal(~value, -value - 1n);

@@ -44,6 +44,11 @@ describe("bounded static-array join", () => {
 			'[9007199254740993n, -9007199254740993n].join("/")',
 			"9007199254740993/-9007199254740993",
 		],
+		[
+			"[170141183460469231731687303715884105728n].join()",
+			"170141183460469231731687303715884105728",
+		],
+		[`[${(1n << 1024n) + 17n}n].join()`, ((1n << 1024n) + 17n).toString()],
 		['["a", "b"].join(null)', "anullb"],
 		['["a", "b"].join(false)', "afalseb"],
 		['["a", "b"].join(5n)', "a5b"],
@@ -110,7 +115,7 @@ describe("bounded static-array join", () => {
 		`return [${Array.from({ length: 257 }, () => '"a"').join(",")}].join("");`,
 		`return [${JSON.stringify("a".repeat(4097))}].join("");`,
 		`return ["a", "b"].join(${JSON.stringify("|".repeat(4097))});`,
-		"return [170141183460469231731687303715884105728n].join();",
+		`return [1${"0".repeat(4096)}n].join();`,
 	])("retains target execution outside the proof budget", (body) => {
 		const result = inspect(body);
 		expect(

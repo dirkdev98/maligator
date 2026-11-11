@@ -46,7 +46,7 @@ export function coreStaticArrayJoin(
 	const constant = (description: StaticDescriptionId): ConstantValue | undefined => {
 		const value = program.staticDescriptions.description(description);
 		if (value.kind === "string" && value.codeUnits.length + work > 4096) return undefined;
-		if (value.kind === "bigint" && value.decimal.length > 40) return undefined;
+		if (value.kind === "bigint" && value.decimal.length + work > 4096) return undefined;
 		return analysis.descriptionConstant(description);
 	};
 	const primitive = (input: CoreValueId): ConstantValue | undefined => {
