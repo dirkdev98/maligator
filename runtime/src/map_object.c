@@ -508,6 +508,33 @@ static inline __attribute__((always_inline)) u32 mal_map_storage_find_bits(
     return entry;
 }
 
+/*
+ * Hashed string keys: the hint matches by identity only, since comparing the contents
+ * of a different string on every miss costs more than the probe, which still finds
+ * an equal string held as another object.
+ */
+static inline bool mal_map_storage_finds_string(const MalMapStorage *storage, MalValue key) {
+    return storage != nullptr && storage->payload != nullptr &&
+        storage->domain == MAL_MAP_KEYS_STRING && mal_value_is_string(key);
+}
+
+static inline __attribute__((always_inline)) u32 mal_map_storage_find_string(
+    MalMapStorage *storage, MalValue key
+) {
+    MAL_PERF_COUNT(map_get_set_cache_checks);
+    if (storage->entry_hint != 0 && storage->hint_key == key) {
+        MAL_PERF_COUNT(map_get_set_cache_hits);
+        return storage->entry_hint;
+    }
+    MAL_PERF_COUNT(map_get_set_cache_misses);
+    u32 slot = mal_map_probe_in(
+        storage, MAL_MAP_KEYS_STRING, key, 0, mal_key_hash_value(key), false);
+    if (slot == UINT32_MAX) return 0;
+    u32 entry = (u32) storage->slots[slot] + 1;
+    mal_map_storage_remember_entry(storage, entry);
+    return entry;
+}
+
 static __attribute__((noinline)) u32 mal_map_object_find_hinted_general(
     MalMapObject *map, MalValue key
 ) {
@@ -516,6 +543,7 @@ static __attribute__((noinline)) u32 mal_map_object_find_hinted_general(
 
 u32 mal_map_object_find_hinted(MalMapObject *map, MalValue key) {
     MalMapStorage *storage = map->entries;
+    if (mal_map_storage_finds_string(storage, key)) return mal_map_storage_find_string(storage, key);
     if (!mal_map_storage_finds_bits(storage)) return mal_map_object_find_hinted_general(map, key);
     return mal_map_storage_find_bits(storage, key);
 }
@@ -530,6 +558,10 @@ static __attribute__((noinline)) MalValue mal_map_object_get_hinted_general(
 
 MalValue mal_map_object_get_hinted(MalMapObject *map, MalValue key) {
     MalMapStorage *storage = map->entries;
+    if (mal_map_storage_finds_string(storage, key)) {
+        u32 entry = mal_map_storage_find_string(storage, key);
+        return entry == 0 ? MAL_VALUE_UNDEFINED : mal_map_value_at(storage, entry - 1);
+    }
     if (!mal_map_storage_finds_bits(storage)) return mal_map_object_get_hinted_general(map, key);
     u32 entry = mal_map_storage_find_bits(storage, key);
     return entry == 0 ? MAL_VALUE_UNDEFINED : mal_map_value_at(storage, entry - 1);

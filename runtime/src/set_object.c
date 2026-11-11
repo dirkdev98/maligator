@@ -416,8 +416,17 @@ static __attribute__((noinline)) bool mal_set_storage_has_general(
     return mal_set_storage_has(storage, key);
 }
 
-// Hashed int32 and identity members compare by their bits, so their lookup calls nothing and
-// stays a leaf; small storage and other domains take the general path through a tail call.
+// Out of line so the string probe stays apart from the int32 and identity leaf paths.
+static __attribute__((noinline)) bool mal_set_storage_has_string(
+    const MalSetStorage *storage, MalValue key
+) {
+    return mal_value_is_string(key) &&
+        mal_set_probe_in(
+            storage, MAL_SET_KEYS_STRING, key, 0, mal_key_hash_value(key), false) != UINT32_MAX;
+}
+
+// Hashed int32 and identity members compare by their bits and strings by their cached hash,
+// so their lookup calls little; small storage and other domains take the general path.
 bool mal_set_object_has_canonical(const MalSetObject *set, MalValue key) {
     mal_set_perf_query(key);
     const MalSetStorage *storage = set->entries;
@@ -432,6 +441,8 @@ bool mal_set_object_has_canonical(const MalSetObject *set, MalValue key) {
     } else if (storage->domain == MAL_SET_KEYS_IDENTITY) {
         if (mal_set_key_domain(key) != MAL_SET_KEYS_IDENTITY) return false;
         slot = mal_set_probe_in(storage, MAL_SET_KEYS_IDENTITY, key, 0, mal_key_hash_mix(key), false);
+    } else if (storage->domain == MAL_SET_KEYS_STRING) {
+        return mal_set_storage_has_string(storage, key);
     } else {
         return mal_set_storage_has_general(storage, key);
     }
@@ -514,8 +525,8 @@ static __attribute__((noinline)) void mal_set_object_add_general(MalSetObject *s
     mal_perf_collection_mutation(set, storage->size);
 }
 
-// Adding a present int32 or identity member changes nothing, so finding it is the leaf
-// probe of has; every other add tail-calls the general path.
+// Adding a present int32, identity or string member changes nothing, so finding it is the
+// leaf probe of has; every other add tail-calls the general path.
 void mal_set_object_add_canonical(MalSetObject *set, MalValue key) {
     const MalSetStorage *storage = set->entries;
     if (storage != nullptr && storage->payload != nullptr) {
@@ -530,6 +541,8 @@ void mal_set_object_add_canonical(MalSetObject *set, MalValue key) {
             mal_set_key_domain(key) == MAL_SET_KEYS_IDENTITY) {
             slot = mal_set_probe_in(
                 storage, MAL_SET_KEYS_IDENTITY, key, 0, mal_key_hash_mix(key), false);
+        } else if (storage->domain == MAL_SET_KEYS_STRING) {
+            if (mal_set_storage_has_string(storage, key)) return;
         }
         if (slot != UINT32_MAX) return;
     }
