@@ -54,6 +54,28 @@ static void stream_set(MalVm *vm, MalValue object, const char *name, MalValue va
     mal_object_set(mal_value_to_object(object), stream_static_key(vm, name), value);
 }
 
+/*
+ * Field runs every construction of one stream kind sets back to back. Each cache
+ * serves one fixed name list, indexed by kind where the receiver's prototype differs.
+ */
+static MAL_ISOLATE_LOCAL MalObjectFieldsCache stream_head_fields[STREAM_TRANSFORM + 1];
+static MAL_ISOLATE_LOCAL MalObjectFieldsCache stream_readable_fields[STREAM_TRANSFORM + 1];
+static MAL_ISOLATE_LOCAL MalObjectFieldsCache stream_writable_fields[STREAM_TRANSFORM + 1];
+static MAL_ISOLATE_LOCAL MalObjectFieldsCache stream_readable_state_fields;
+static MAL_ISOLATE_LOCAL MalObjectFieldsCache stream_writable_state_fields;
+
+static void stream_set_fields(
+    MalVm *vm, MalValue object, MalObjectFieldsCache *cache, const char *const *names,
+    const MalValue *values, u32 count) {
+    MalKey keys[16];
+    if (count > countof(keys)) {
+        for (u32 index = 0; index < count; index++) stream_set(vm, object, names[index], values[index]);
+        return;
+    }
+    for (u32 index = 0; index < count; index++) keys[index] = stream_static_key(vm, names[index]);
+    mal_object_set_fields(&vm->heap, mal_value_to_object(object), cache, keys, values, count);
+}
+
 static bool stream_truthy_own(MalVm *vm, MalValue object, const char *name) {
     MalValue value = stream_own(vm, object, name);
     return mal_value_is_boolean(value) && mal_value_to_boolean(value);
@@ -147,13 +169,18 @@ static bool stream_emit(
     return emitted;
 }
 
-static void stream_init_events(MalVm *vm, MalValue receiver) {
+static void stream_init_events(MalVm *vm, MalValue receiver, i32 kind) {
     MalValue events = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
     MalRootSpan root;
     mal_gc_root(&root, &events, 1);
-    stream_set(vm, receiver, "_events", events);
-    stream_set(vm, receiver, "_eventsCount", mal_value_from_i32(0));
-    stream_set(vm, receiver, "_maxListeners", mal_value_new_undefined());
+    static const char *const names[] = {
+        "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
+    };
+    MalValue values[] = {
+        events, mal_value_from_i32(0), mal_value_new_undefined(),
+        mal_value_new_boolean(false), mal_value_from_i32(kind),
+    };
+    stream_set_fields(vm, receiver, &stream_head_fields[kind], names, values, countof(names));
     mal_gc_unroot(&root);
 }
 
@@ -168,7 +195,8 @@ static MalValue stream_option(MalVm *vm, MalValue options, const char *name) {
 static f64 stream_default_high_water_mark(MalVm *vm, bool object_mode);
 
 /* Node's ReadableState/WritableState: a Duplex also takes readableObjectMode/writableObjectMode. */
-static void stream_init_readable(MalVm *vm, MalValue receiver, MalValue options, bool duplex) {
+static void stream_init_readable(MalVm *vm, MalValue receiver, MalValue options, i32 kind) {
+    bool duplex = kind != STREAM_READABLE;
     MalValue roots[] = {
         receiver, options, mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
@@ -201,31 +229,36 @@ static void stream_init_readable(MalVm *vm, MalValue receiver, MalValue options,
         roots[7] = stream_own(vm, roots[4], "encoding");
         if (!mal_value_is_string(roots[7])) roots[7] = roots[6];
     }
-    stream_set(vm, roots[2], "encoding", roots[7]);
-    stream_set(vm, roots[2], "decoder", roots[4]);
-    stream_set(vm, roots[2], "ended", mal_value_new_boolean(false));
-    stream_set(vm, roots[2], "endEmitted", mal_value_new_boolean(false));
-    stream_set(vm, roots[2], "destroyed", mal_value_new_boolean(false));
-    stream_set(vm, roots[2], "objectMode", mal_value_new_boolean(object_mode));
-    stream_set(vm, roots[2], "highWaterMark",
-               mal_value_from_i32((i32) high_water_mark));
-    stream_set(vm, roots[2], "reading", mal_value_new_boolean(false));
-    stream_set(vm, roots[2], "sync", mal_value_new_boolean(true));
-    stream_set(vm, roots[2], "length", mal_value_from_i32(0));
-    stream_set(vm, roots[0], "_readableState", roots[2]);
-    stream_set(vm, roots[0], "_malReadableQueue", roots[3]);
-    stream_set(vm, roots[0], "_malBlockedPipes", roots[5]);
-    stream_set(vm, roots[0], "_malReadableIndex", mal_value_from_i32(0));
-    stream_set(vm, roots[0], "_malFlowing", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "_malPaused", mal_value_new_boolean(true));
-    stream_set(vm, roots[0], "_malReading", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "_malReadScheduled", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "readable", mal_value_new_boolean(true));
-    stream_set(vm, roots[0], "readableEnded", mal_value_new_boolean(false));
+    static const char *const state_names[] = {
+        "encoding", "decoder", "ended", "endEmitted", "destroyed", "objectMode",
+        "highWaterMark", "reading", "sync", "length",
+    };
+    MalValue state_values[] = {
+        roots[7], roots[4], mal_value_new_boolean(false), mal_value_new_boolean(false),
+        mal_value_new_boolean(false), mal_value_new_boolean(object_mode),
+        mal_value_from_i32((i32) high_water_mark), mal_value_new_boolean(false),
+        mal_value_new_boolean(true), mal_value_from_i32(0),
+    };
+    stream_set_fields(vm, roots[2], &stream_readable_state_fields, state_names,
+                      state_values, countof(state_names));
+    static const char *const names[] = {
+        "_readableState", "_malReadableQueue", "_malBlockedPipes", "_malReadableIndex",
+        "_malFlowing", "_malPaused", "_malReading", "_malReadScheduled", "readable",
+        "readableEnded",
+    };
+    MalValue values[] = {
+        roots[2], roots[3], roots[5], mal_value_from_i32(0), mal_value_new_boolean(false),
+        mal_value_new_boolean(true), mal_value_new_boolean(false),
+        mal_value_new_boolean(false), mal_value_new_boolean(true),
+        mal_value_new_boolean(false),
+    };
+    stream_set_fields(vm, roots[0], &stream_readable_fields[kind], names, values,
+                      countof(names));
     mal_gc_unroot(&root);
 }
 
-static void stream_init_writable(MalVm *vm, MalValue receiver, MalValue options, bool duplex) {
+static void stream_init_writable(MalVm *vm, MalValue receiver, MalValue options, i32 kind) {
+    bool duplex = kind != STREAM_WRITABLE;
     MalValue roots[] = {
         receiver, options, mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(),
@@ -252,30 +285,35 @@ static void stream_init_writable(MalVm *vm, MalValue receiver, MalValue options,
     if (high_water_mark > INT32_MAX) {
         high_water_mark = INT32_MAX;
     }
-    stream_set(vm, roots[2], "ended", mal_value_new_boolean(false));
-    stream_set(vm, roots[2], "finished", mal_value_new_boolean(false));
-    stream_set(vm, roots[2], "destroyed", mal_value_new_boolean(false));
-    stream_set(vm, roots[2], "objectMode", mal_value_new_boolean(object_mode));
-    stream_set(vm, roots[2], "decodeStrings",
-               mal_value_new_boolean(should_decode_strings));
-    stream_set(vm, roots[2], "highWaterMark", mal_value_from_i32((i32) high_water_mark));
-    stream_set(vm, roots[2], "length", mal_value_from_i32(0));
-    stream_set(vm, roots[2], "needDrain", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "_writableState", roots[2]);
-    stream_set(vm, roots[0], "_malWriteQueue", roots[3]);
-    stream_set(vm, roots[0], "_malEndCallbacks", roots[4]);
-    stream_set(vm, roots[0], "_malWriteIndex", mal_value_from_i32(0));
-    stream_set(vm, roots[0], "_malWriteBusy", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "_malEnding", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "_malFinalStarted", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "_malFlushStarted", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "_malFinishScheduled", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "_malEndScheduled", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "_malBufferedLength", mal_value_from_i32(0));
-    stream_set(vm, roots[0], "_malNeedDrain", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "writable", mal_value_new_boolean(true));
-    stream_set(vm, roots[0], "writableEnded", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "writableFinished", mal_value_new_boolean(false));
+    static const char *const state_names[] = {
+        "ended", "finished", "destroyed", "objectMode", "decodeStrings", "highWaterMark",
+        "length", "needDrain",
+    };
+    MalValue state_values[] = {
+        mal_value_new_boolean(false), mal_value_new_boolean(false),
+        mal_value_new_boolean(false), mal_value_new_boolean(object_mode),
+        mal_value_new_boolean(should_decode_strings),
+        mal_value_from_i32((i32) high_water_mark), mal_value_from_i32(0),
+        mal_value_new_boolean(false),
+    };
+    stream_set_fields(vm, roots[2], &stream_writable_state_fields, state_names,
+                      state_values, countof(state_names));
+    static const char *const names[] = {
+        "_writableState", "_malWriteQueue", "_malEndCallbacks", "_malWriteIndex",
+        "_malWriteBusy", "_malEnding", "_malFinalStarted", "_malFlushStarted",
+        "_malFinishScheduled", "_malEndScheduled", "_malBufferedLength", "_malNeedDrain",
+        "writable", "writableEnded", "writableFinished",
+    };
+    MalValue values[] = {
+        roots[2], roots[3], roots[4], mal_value_from_i32(0), mal_value_new_boolean(false),
+        mal_value_new_boolean(false), mal_value_new_boolean(false),
+        mal_value_new_boolean(false), mal_value_new_boolean(false),
+        mal_value_new_boolean(false), mal_value_from_i32(0), mal_value_new_boolean(false),
+        mal_value_new_boolean(true), mal_value_new_boolean(false),
+        mal_value_new_boolean(false),
+    };
+    stream_set_fields(vm, roots[0], &stream_writable_fields[kind], names, values,
+                      countof(names));
     mal_gc_unroot(&root);
 }
 
@@ -296,19 +334,17 @@ static void stream_install_option_hook(
 
 static void stream_init_kind(
     MalVm *vm, MalValue receiver, MalValue options, i32 kind) {
-    stream_init_events(vm, receiver);
-    stream_set(vm, receiver, "destroyed", mal_value_new_boolean(false));
-    stream_set(vm, receiver, "_malStreamKind", mal_value_from_i32(kind));
+    stream_init_events(vm, receiver, kind);
     // Node's autoDestroy defaults to true; only the opt-out is recorded.
     MalValue auto_destroy = mal_value_is_object(options) ? stream_option(vm, options, "autoDestroy") : mal_value_new_undefined();
     if (mal_value_is_boolean(auto_destroy) && !mal_value_to_boolean(auto_destroy)) {
         stream_set(vm, receiver, "_malNoAutoDestroy", mal_value_new_boolean(true));
     }
     if (kind == STREAM_READABLE || kind == STREAM_DUPLEX || kind == STREAM_TRANSFORM) {
-        stream_init_readable(vm, receiver, options, kind != STREAM_READABLE);
+        stream_init_readable(vm, receiver, options, kind);
     }
     if (kind == STREAM_WRITABLE || kind == STREAM_DUPLEX || kind == STREAM_TRANSFORM) {
-        stream_init_writable(vm, receiver, options, kind != STREAM_WRITABLE);
+        stream_init_writable(vm, receiver, options, kind);
     }
     if (vm->completion.kind == MAL_COMPLETION_THROW) return;
     if (kind == STREAM_READABLE || kind == STREAM_DUPLEX || kind == STREAM_TRANSFORM) {

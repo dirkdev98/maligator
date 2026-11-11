@@ -1009,6 +1009,55 @@ static void mal_object_record_add(
     };
 }
 
+void mal_object_set_fields(
+    MalHeap *heap, MalObject *object, MalObjectFieldsCache *cache,
+    const MalKey *keys, const MalValue *values, u32 count
+) {
+    const MalShape *start = object->shape;
+    const MalObject *prototype = mal_object_prototype(object);
+    bool cacheable = count > 0 && mal_object_set_is_cacheable(object, keys[0]);
+    if (cacheable && cache->final != nullptr && cache->heap_identity == heap->identity &&
+        cache->start == start && cache->prototype == prototype &&
+        cache->epoch == mal_prototype_chain_epoch) {
+        MalShape *final = cache->final;
+        u32 base = start->inline_count;
+        mal_object_grow_slots(object, base, final->inline_count);
+        for (u32 index = 0; index < count; index++) {
+            mal_object_field_initialize(object, final, base + index, values[index]);
+        }
+        object->shape = final;
+        return;
+    }
+    for (u32 index = 0; index < count; index++) {
+        mal_object_set(object, keys[index], values[index]);
+        cacheable = cacheable && mal_object_set_is_cacheable(object, keys[index]);
+    }
+    // Only a run that appended exactly these keys as default data properties repeats.
+    const MalShape *final = object->shape;
+    if (!cacheable || final->inline_count != start->inline_count + count ||
+        mal_object_prototype(object) != prototype) {
+        return;
+    }
+    for (u32 index = 0; index < count; index++) {
+        const MalShapeProp *prop = &final->props[start->inline_count + index];
+        if (prop->key != keys[index].value || prop->attrs != (u8) MAL_DEFAULT_DATA_FLAGS) return;
+    }
+    for (const MalObject *cursor = prototype; cursor != nullptr;
+         cursor = mal_object_prototype(cursor)) {
+        if (cursor->header.type != MAL_HEAP_OBJECT &&
+            mal_tag_for_heap_type(cursor->header.type) != MAL_VALUE_CALLABLE) {
+            return;
+        }
+    }
+    *cache = (MalObjectFieldsCache) {
+        .heap_identity = heap->identity,
+        .epoch = mal_prototype_chain_epoch,
+        .start = start,
+        .prototype = prototype,
+        .final = (MalShape *) final,
+    };
+}
+
 bool mal_object_add_cached(MalObject *object, MalKey key, MalValue value) {
     if (!mal_object_set_is_cacheable(object, key)) return false;
     const MalObjectSetSite *site = mal_object_set_site(object->shape, key.value);

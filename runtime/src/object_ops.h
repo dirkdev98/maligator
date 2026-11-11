@@ -116,6 +116,29 @@ bool mal_object_delete_own(MalObject *object, MalKey key);
 bool mal_object_set(MalObject *object, MalKey key, MalValue value);
 
 /**
+ * One run of plain data additions mal_object_set_fields made: the shape it started
+ * from, the receiver prototype and chain epoch under which no key reached a setter or
+ * read-only property, and the shape it ended at. Zero-initialize; the owner keeps it
+ * per isolate, since shapes belong to one heap.
+ */
+typedef struct MalObjectFieldsCache {
+    u64 heap_identity;
+    u64 epoch;
+    const MalShape *start;
+    const MalObject *prototype;
+    MalShape *final;
+} MalObjectFieldsCache;
+
+/**
+ * mal_object_set for each key in order. When a previous run from the same shape and
+ * prototype, under the same prototype chain epoch, only added plain data properties,
+ * the receiver takes that run's final shape and values in one step.
+ */
+void mal_object_set_fields(
+    MalHeap *heap, MalObject *object, MalObjectFieldsCache *cache,
+    const MalKey *keys, const MalValue *values, u32 count);
+
+/**
  * Repeat an addition of `key` that mal_object_set or a JavaScript store already made
  * on this shape, proven while the prototype chain epoch holds. The caller rules out
  * locked primordials and the global object.
