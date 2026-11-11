@@ -87,13 +87,6 @@ executions, measuring both compiler hosts.
       splitter together only if removing that work pays on both hosts while preserving
       split semantics, build time and size.
 
-- [ ] Attribute memory remaining after completed major collections in native
-      self-compile, app-batch and Express to partly occupied managed blocks and external
-      owners, then change one owning policy. Keep managed survivor bytes separate from
-      owner-held buffer pressure. Require sustained physical-footprint reduction without
-      unacceptable compiler, application or pause cost; reuse existing page release
-      before adding reclamation machinery.
-
 - [ ] Finish remaining legality-affecting renderer selection in explicit native
       plans; capture-owner and String-transform strategies now persist and validate.
       Exact String comparison and concatenation operand proofs now select direct
@@ -849,6 +842,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       native self-compile, app-batch and representative HTTP traffic. Measure total CPU,
       wall time, peak storage and pause distributions from matched finished binaries; keep
       mutator-owned sweep unless a measured end-to-end gain pays for ownership complexity.
+      Peak storage follows the major trigger: the free managed cells a completed major
+      leaves are the garbage it reclaimed, which the next cycle reuses before carving
+      blocks, and reusing the fullest partial blocks first left ownership unchanged.
 
 - [ ] Validate native worker capacity under live constrained and nested CPU quotas.
       Synthetic v1/v2 mounted-path and visible-ancestor fixtures pass; hidden
