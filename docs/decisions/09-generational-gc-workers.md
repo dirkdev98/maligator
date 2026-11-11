@@ -216,7 +216,11 @@ baseline, including floating garbage, rather than an exact reachability census.
 `MAL_GC_NURSERY_MAX_BYTES` optionally bounds the allocation increment after a
 collection, with a 4 MiB minimum. Without it, the increment follows the existing
 live-set policy. It leaves explicit collection disabling and major-cycle debt
-accounting intact. A fixed cap trades retained block capacity for collection
-frequency and compiler CPU time, so it remains an explicit footprint choice.
+accounting intact. An incremental major's synchronous backstop sits one increment
+past the next nursery deadline, so a cap also brings that backstop closer. A cap
+trades retained block capacity for more frequent collections and collector CPU time;
+on a large compiler heap the saved page reclamation can outweigh that and shorten
+elapsed time. Its effect on pauses, promotion and worker processes depends on the
+workload, and it applies per isolate, so it remains an explicit footprint choice.
 Tracing perturbs execution, so ordinary time and peak RSS comparisons run
 separately from ownership diagnostics.
