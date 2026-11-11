@@ -43,32 +43,39 @@ describe.each(["compiled", "interpreted"] as const)("%s unit formatting", (backe
 				),
 			).toEqual(["ok"]);
 	});
-	it.each(["matrix", "protocol"])(
-		"preserves %s through the public unit formatter",
-		(scenario) => {
-			const env = { UNIT_SCENARIO: scenario, MAL_HOST_GC: "1" };
-			const expected = parseRows(
-				execFileSync(process.execPath, ["--expose-gc", fixture], {
-					encoding: "utf8",
-					env: { ...process.env, ...env },
-					maxBuffer: 8 * 1024 * 1024,
-				}),
-			);
-			for (const gcEnv of gcEnvironments) {
-				const actual = parseRows(
-					runToStdout(pair[backend], { env: { ...env, ...gcEnv } }),
-				);
-				expect(actual).toHaveLength(expected.length);
-				const differences = actual.flatMap((row: unknown, index: number) =>
-					JSON.stringify(row) === JSON.stringify(expected[index])
-						? []
-						: [{ expected: expected[index], actual: row }],
-				);
-				expect(
-					differences.slice(0, 20),
-					`${differences.length} unit-output differences`,
-				).toEqual([]);
-			}
+	it.each([
+		{
+			scenario: "matrix",
+			behavior: "formats the advertised unit set and compound labels",
 		},
-	);
+		{ scenario: "options", behavior: "coerces unit options in order during collection" },
+		{
+			scenario: "coercion",
+			behavior: "coerces input once when numeric output buffers grow",
+		},
+		{ scenario: "resolved", behavior: "returns fresh resolved unit options" },
+		{ scenario: "invalid", behavior: "rejects malformed unit options" },
+	])("$behavior", ({ scenario }) => {
+		const env = { UNIT_SCENARIO: scenario, MAL_HOST_GC: "1" };
+		const expected = parseRows(
+			execFileSync(process.execPath, ["--expose-gc", fixture], {
+				encoding: "utf8",
+				env: { ...process.env, ...env },
+				maxBuffer: 8 * 1024 * 1024,
+			}),
+		);
+		for (const gcEnv of gcEnvironments) {
+			const actual = parseRows(runToStdout(pair[backend], { env: { ...env, ...gcEnv } }));
+			expect(actual).toHaveLength(expected.length);
+			const differences = actual.flatMap((row: unknown, index: number) =>
+				JSON.stringify(row) === JSON.stringify(expected[index])
+					? []
+					: [{ expected: expected[index], actual: row }],
+			);
+			expect(
+				differences.slice(0, 20),
+				`${differences.length} unit-output differences`,
+			).toEqual([]);
+		}
+	});
 });

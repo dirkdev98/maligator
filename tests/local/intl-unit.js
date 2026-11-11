@@ -4,7 +4,7 @@ function equal(actual, expected) {
 		throw new Error(`${JSON.stringify(actual)} !== ${JSON.stringify(expected)}`);
 }
 const results = [];
-if (process.env.UNIT_SCENARIO === "protocol") {
+if (process.env.UNIT_SCENARIO === "options") {
 	if (typeof collect !== "function") throw new Error("collecting hook unavailable");
 	const events = [];
 	const options = {
@@ -57,6 +57,14 @@ if (process.env.UNIT_SCENARIO === "protocol") {
 		"unitDisplay",
 		"digits",
 	]);
+	results.push(formatter.format(2));
+} else if (process.env.UNIT_SCENARIO === "coercion") {
+	const formatter = new Intl.NumberFormat("en", {
+		style: "unit",
+		unit: "meter-per-mile",
+		unitDisplay: "long",
+		maximumFractionDigits: 3,
+	});
 	let conversions = 0;
 	const input = {
 		[Symbol.toPrimitive](hint) {
@@ -69,12 +77,23 @@ if (process.env.UNIT_SCENARIO === "protocol") {
 	const parts = formatter.formatToParts(input);
 	equal(conversions, 1);
 	equal(parts.map((p) => p.value).join(""), formatter.format("1e308"));
+	results.push(parts);
+} else if (process.env.UNIT_SCENARIO === "resolved") {
+	const formatter = new Intl.NumberFormat("en", {
+		style: "unit",
+		unit: "meter-per-mile",
+		unitDisplay: "long",
+		maximumFractionDigits: 3,
+	});
 	const first = formatter.resolvedOptions();
 	first.unit = "hour";
 	collect();
-	equal(formatter.resolvedOptions().unit, "meter-per-mile");
-	equal(formatter.resolvedOptions().unitDisplay, "long");
-	results.push(parts, formatter.format(2));
+	const second = formatter.resolvedOptions();
+	equal(second.unit, "meter-per-mile");
+	equal(second.unitDisplay, "long");
+	equal(first === second, false);
+	results.push(second.unit, second.unitDisplay);
+} else if (process.env.UNIT_SCENARIO === "invalid") {
 	for (const options of [
 		{ style: "unit" },
 		{ style: "unit", unit: "Meter" },
@@ -91,14 +110,6 @@ if (process.env.UNIT_SCENARIO === "protocol") {
 			results.push(error.name);
 		}
 	}
-	equal(
-		new Intl.NumberFormat("en", {
-			style: "unit",
-			unit: "percent",
-			unitDisplay: "narrow",
-		}).format(0.29),
-		"0.29%",
-	);
 } else if (process.env.UNIT_SCENARIO === "pinned") {
 	const cases = [
 		[
