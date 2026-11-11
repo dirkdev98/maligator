@@ -12494,7 +12494,7 @@
 			3,
 			"isFinite",
 			[
-				["length", 0, ["bits", "fff8000000000000"], -1, -1],
+				["length", 0, ["bits", "fff8000000000001"], -1, -1],
 				["name", 0, ["string", "isFinite"], -1, -1]
 			],
 			["MAL_INTRINSIC_IS_FINITE", "globalThis.isFinite"]
@@ -12505,7 +12505,7 @@
 			3,
 			"isNaN",
 			[
-				["length", 0, ["bits", "fff8000000000000"], -1, -1],
+				["length", 0, ["bits", "fff8000000000001"], -1, -1],
 				["name", 0, ["string", "isNaN"], -1, -1]
 			],
 			["MAL_INTRINSIC_IS_NAN", "globalThis.isNaN"]
