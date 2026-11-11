@@ -4364,16 +4364,32 @@ MalCompletion mal_vm_op_construct_super(
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Class constructor cannot be invoked without 'new'");
         return vm->completion;
     }
-    // Marshal the super arguments onto the value stack (bounds-checked); the value
-    // stack is fixed-capacity, so the args pointer stays valid across the construct.
-    i32 base = vm->value_stack_size;
-    i32 argument_count = mal_vm_marshal_spread(vm, arguments_array);
-    if (argument_count < 0) {
-        return vm->completion;
+    MalCompletion completion;
+    MalArrayObject *list = mal_value_is_array_object(arguments_array)
+        ? mal_value_to_array_object(arguments_array) : nullptr;
+    if (mal_value_is_function_object(parent) && list != nullptr &&
+        (list->length == 0 ||
+         (list->elements != nullptr && list->dense_count >= list->length &&
+          !list->dense_maybe_holey))) {
+        // The list is this call's own fresh array, rooted by the caller and
+        // unreachable from the parent, so its dense elements serve as the
+        // argument vector in place.
+        completion = mal_vm_construct_direct_with_target(
+            vm, mal_function_object_function_index(mal_value_to_function_object(parent)),
+            parent, list->elements, (i32) list->length, new_target);
+    } else {
+        // Marshal the super arguments onto the value stack (bounds-checked); the
+        // value stack is fixed-capacity, so the args pointer stays valid across the
+        // construct.
+        i32 base = vm->value_stack_size;
+        i32 argument_count = mal_vm_marshal_spread(vm, arguments_array);
+        if (argument_count < 0) {
+            return vm->completion;
+        }
+        completion = mal_vm_construct_value_with_target(
+            vm, parent, &vm->value_stack[base], argument_count, new_target);
+        vm->value_stack_size = base;
     }
-
-    MalCompletion completion = mal_vm_construct_value_with_target(vm, parent, &vm->value_stack[base], argument_count, new_target);
-    vm->value_stack_size = base;
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
         return completion;

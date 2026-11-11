@@ -5563,12 +5563,13 @@ MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue 
     return mal_vm_construct_value_with_target(vm, callee, args, arg_count, callee);
 }
 
-MalCompletion mal_vm_construct_direct(
+MalCompletion mal_vm_construct_direct_with_target(
     MalVm *vm,
     i32 expected_function_index,
     MalValue callee,
     const MalValue *args,
-    i32 arg_count
+    i32 arg_count,
+    MalValue new_target
 ) {
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return vm->completion;
@@ -5576,18 +5577,18 @@ MalCompletion mal_vm_construct_direct(
     if (!mal_value_is_function_object(callee) ||
         expected_function_index < 0 ||
         expected_function_index >= vm->runtime_image->function_count) {
-        return mal_vm_construct_value(vm, callee, args, arg_count);
+        return mal_vm_construct_value_with_target(vm, callee, args, arg_count, new_target);
     }
 
     MalFunctionObject *function_object = mal_value_to_function_object(callee);
     i32 function_index = mal_function_object_function_index(function_object);
     if (function_index != expected_function_index) {
-        return mal_vm_construct_value(vm, callee, args, arg_count);
+        return mal_vm_construct_value_with_target(vm, callee, args, arg_count, new_target);
     }
 
     const MalFunction *function = &vm->runtime_image->functions[function_index];
     if (function->kind != MAL_FUNCTION_KIND_NORMAL || !function->has_prototype) {
-        return mal_vm_construct_value(vm, callee, args, arg_count);
+        return mal_vm_construct_value_with_target(vm, callee, args, arg_count, new_target);
     }
 
 #if MAL_REALMS
@@ -5601,7 +5602,7 @@ MalCompletion mal_vm_construct_direct(
     } else {
         MalObject *prototype;
         if (!mal_vm_get_prototype_from_constructor(
-                vm, callee, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
+                vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
 #if MAL_REALMS
             mal_vm_realm_switch_to(vm, saved_realm);
 #endif
@@ -5617,9 +5618,9 @@ MalCompletion mal_vm_construct_direct(
         {
             MalCalleeRoots ncr;
             mal_gc_callee_roots_begin(
-                &ncr, this_value, callee, callee, args, arg_count);
+                &ncr, this_value, new_target, callee, args, arg_count);
             MalValue value = function->compiled(
-                vm, this_value, args, arg_count, callee, env, callee, nullptr);
+                vm, this_value, args, arg_count, new_target, env, callee, nullptr);
             mal_gc_callee_roots_end(&ncr);
             // Direct eval may splice a program and reallocate the function table
             // while the compiled constructor runs. The stable index survives; the
@@ -5658,7 +5659,7 @@ MalCompletion mal_vm_construct_direct(
                 vm, function_index, env, this_value, arg_count, -1, -1)) {
             vm->frames[vm->frame_count - 1].is_construct = true;
             vm->frames[vm->frame_count - 1].callee = callee;
-            vm->frames[vm->frame_count - 1].new_target = callee;
+            vm->frames[vm->frame_count - 1].new_target = new_target;
             mal_vm_run_until_frame_count(
                 vm,
                 target_frame_count
@@ -5676,6 +5677,17 @@ MalCompletion mal_vm_construct_direct(
     mal_vm_realm_switch_to(vm, saved_realm);
 #endif
     return completion;
+}
+
+MalCompletion mal_vm_construct_direct(
+    MalVm *vm,
+    i32 expected_function_index,
+    MalValue callee,
+    const MalValue *args,
+    i32 arg_count
+) {
+    return mal_vm_construct_direct_with_target(
+        vm, expected_function_index, callee, args, arg_count, callee);
 }
 
 static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target, MalNativeFunctionCallback exact_callback) {

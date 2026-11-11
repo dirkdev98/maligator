@@ -3077,6 +3077,16 @@ MalCompletion mal_vm_construct_direct(
     i32 arg_count
 );
 
+/** mal_vm_construct_direct with a distinct new.target, as super() constructs its parent. */
+MalCompletion mal_vm_construct_direct_with_target(
+    MalVm *vm,
+    i32 expected_function_index,
+    MalValue callee,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target
+);
+
 /**
  * Return a CommonJS module's `module.exports`, running its wrapper exactly once
  * (lazily, on first require) and caching the result. The compiler resolves each

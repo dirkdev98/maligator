@@ -3,7 +3,12 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { assertExactLines, buildNativeBinary } from "../../src/test-harness.ts";
+import {
+	assertExactLines,
+	buildNativeBinary,
+	runToStdout,
+	STRESS_ENV,
+} from "../../src/test-harness.ts";
 
 const fixture = "tests/local/derived-instance-slots.js";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-derived-instance-slots-"));
@@ -49,4 +54,13 @@ describe("instances a subclass constructs", () => {
 			expect(growth).toBeLessThan(40);
 		},
 	);
+
+	it.each([
+		["compiled", () => compiled],
+		["interpreted", () => interpreted],
+	])("keeps super() arguments alive across collections in %s mode", (_mode, binary) => {
+		assertExactLines(runToStdout(binary(), { env: STRESS_ENV, timeoutMs: 60000 }), [
+			"derived-instance-slots PASS",
+		]);
+	});
 });

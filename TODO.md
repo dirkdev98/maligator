@@ -121,12 +121,12 @@ Use representative compiled workloads to locate executed dispatch, allocation,
 property and collection costs. Keep field facts bounded and consumer-driven;
 static generated-code size and helper counts do not establish runtime cost.
 
-- [ ] Construct a known parent directly from `super()`. A subclass instance still
-      costs about 58 ns against Node's 6 (5M `new Derived(x)`: 291 vs 29 ms): each call
-      builds an argument array, marshals it as a spread, resolves bound targets and
-      reads `new.target.prototype` on the generic construct path. The edge that keeps
-      the captured heritage can enter the parent's construct body with direct
-      arguments.
+- [ ] Pass `super()` arguments without an array. A subclass instance still costs about
+      50 ns against Node's 6 (5M `new Derived(x)`: 251 vs 29 ms). A plain parent
+      constructor is entered directly with the argument array's elements, but every
+      call still builds that array, and the frontend's fixed-position list does not
+      fuse into an inline literal. A `constructSuper` that takes its arguments as
+      operands would remove the allocation.
 
 - [ ] Test bounded method target sets for one repeated Core-store receiver using existing
       provenance, target caps and incremental summaries. Track relevant property/prototype
