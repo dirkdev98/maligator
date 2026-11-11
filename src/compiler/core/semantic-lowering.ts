@@ -11459,6 +11459,79 @@ function compileOptionalChain(
 	return result;
 }
 
+type ChainMemberCallee = ESTree.ChainExpression & {
+	expression: ESTree.MemberExpression & { object: ESTree.Expression };
+};
+
+function isChainMemberCallee(node: ESTree.Node): node is ChainMemberCallee {
+	return (
+		node.type === "ChainExpression" &&
+		node.expression.type === "MemberExpression" &&
+		node.expression.object.type !== "Super"
+	);
+}
+
+/*
+ * `(a?.b)()`: a parenthesized chain that ends in a member access still supplies
+ * its base as `this`. A short-circuited chain leaves both the callee and `this`
+ * undefined, so the call still evaluates its arguments before it throws.
+ */
+function compileChainMemberCallee(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	chain: ChainMemberCallee,
+): { callee: number; thisRegister: number } {
+	const member = chain.expression;
+	retainHostMember(program, fn, member);
+	const shortCircuits: Array<Extract<CompilerInstruction, { type: "jumpIf" }>> = [];
+	const object = compileChainElement(program, fn, cursor, member.object, shortCircuits);
+	if (object === -1) return { callee: -1, thisRegister: -1 };
+	if (member.optional) emitOptionalGuard(fn, cursor, object, shortCircuits);
+	const value =
+		member.property.type === "PrivateIdentifier"
+			? compilePrivateMemberLoad(program, fn, cursor, object, `#${member.property.name}`)
+			: compileMemberLoad(program, fn, cursor, {
+					object,
+					key: member.computed
+						? compileExpression(program, fn, cursor, member.property)
+						: member.property.type === "Identifier"
+							? compileStaticString(program, fn, cursor, member.property.name)
+							: -1,
+					namespaceExport: namespaceMemberExport(program, fn, member),
+				});
+	const callee = nextCoreVariable(fn);
+	const thisRegister = nextCoreVariable(fn);
+	cursor.block.emitter.emit(
+		{ type: "move", registers: [callee, value] },
+		{ type: "move", registers: [thisRegister, object] },
+	);
+	if (shortCircuits.length === 0) return { callee, thisRegister };
+	const done: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(done);
+	const shortIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	const shortCursor: CoreFrontendCursor = { block: fn.blocks[shortIdx]! };
+	const undefinedRegister = compileUndefined(fn, shortCursor);
+	const shortDone: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	shortCursor.block.emitter.emit(
+		{ type: "move", registers: [callee, undefinedRegister] },
+		{ type: "move", registers: [thisRegister, undefinedRegister] },
+		shortDone,
+	);
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	done.blocks[0] = joinIdx;
+	shortDone.blocks[0] = joinIdx;
+	for (const jump of shortCircuits) jump.blocks[0] = shortIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+	return { callee, thisRegister };
+}
+
 /**
  * Insert a short-circuit guard for an optional link: if the base register is
  * null or undefined, jump to the chain's short-circuit block; otherwise
@@ -11604,6 +11677,16 @@ function compileChainElement(
 						namespaceExport: namespaceMemberExport(program, fn, calleeNode),
 					});
 				}
+			}
+		} else if (isChainMemberCallee(calleeNode)) {
+			({ callee, thisRegister } = compileChainMemberCallee(
+				program,
+				fn,
+				cursor,
+				calleeNode,
+			));
+			if (callee === -1) {
+				return -1;
 			}
 		} else {
 			callee = compileChainElement(
@@ -15649,6 +15732,16 @@ function compileCallValue(
 			cursor,
 			calleeNode,
 		));
+	} else if (isChainMemberCallee(calleeNode)) {
+		({ callee, thisRegister } = compileChainMemberCallee(
+			program,
+			fn,
+			cursor,
+			calleeNode,
+		));
+		if (callee === -1) {
+			return -1;
+		}
 	} else {
 		callee = compileExpression(
 			program,
