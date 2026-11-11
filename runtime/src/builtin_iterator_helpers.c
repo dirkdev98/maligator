@@ -668,7 +668,9 @@ static bool mal_ih_advance(
             break;
     }
     if (resumed) vm->exact_script_call = callback.previous;
-    if (!ok && has_callback) self->done = true;
+    // The helper's closure is a generator body: any abrupt completion, including
+    // one from the underlying iterator, completes it.
+    if (!ok) self->done = true;
     if (has_callback) mal_gc_unroot(&helper_span);
     return ok;
 }
