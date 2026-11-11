@@ -10,7 +10,8 @@ typedef struct MalString MalString;
 #define MAL_BIGINT_MAX_DIGITS (MAL_BIGINT_MAX_BITS / 32u)
 
 /** Immutable normalized signed magnitude. Wide dynamic digits trail their GC cell;
- * constant digits belong to the image. Zero has no digits and sign zero. */
+ * constant digits belong to the image. Inline limbs beyond digit_count are zero.
+ * Zero has no digits and sign zero. */
 typedef struct MalBigInt {
     MalHeapHeader header;
     i32 sign;

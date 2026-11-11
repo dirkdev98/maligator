@@ -32,35 +32,16 @@ static i128 signed_bits(u128 bits) {
     return result;
 }
 
-static MalBigInt *bigint_allocate(MalHeap *heap, i32 sign, const u32 *digits, u32 count) {
-    if (count > MAL_BIGINT_MAX_DIGITS) {
-        bigint_size_error(heap);
-        return nullptr;
-    }
-    usize trailing = count > 4 ? (usize) count * sizeof(u32) : 0;
-    MalBigInt *result = mal_heap_try_alloc(heap, sizeof(*result) + trailing, MAL_HEAP_BIGINT);
-    if (result == nullptr) {
-        bigint_oom(heap);
-        return nullptr;
-    }
-    result->sign = count == 0 ? 0 : sign;
-    result->digit_count = count;
-    if (count <= 4) {
-        memset(result->data.inline_digits, 0, sizeof result->data.inline_digits);
-        if (count != 0) memcpy(result->data.inline_digits, digits, count * sizeof(u32));
-    } else {
-        u32 *owned = (u32 *) (result + 1);
-        memcpy(owned, digits, trailing);
-        result->data.digits = owned;
-    }
-    return result;
-}
-
-MalBigInt *mal_bigint_new(MalHeap *heap, i128 value) {
+// Inline magnitudes keep a constant allocation size, including values above
+// signed i128, so publication avoids the wide allocator and a temporary limb copy.
+static inline __attribute__((always_inline)) MalBigInt *bigint_from_inline(
+    MalHeap *heap, i32 sign, u128 magnitude
+) {
     MalVm *owner = nullptr;
     usize cache_index = 0;
-    if (value >= MAL_SMALL_BIGINT_CACHE_MIN &&
-        value < MAL_SMALL_BIGINT_CACHE_MIN + MAL_SMALL_BIGINT_CACHE_CAPACITY) {
+    u32 limit = sign < 0 ? (u32) -MAL_SMALL_BIGINT_CACHE_MIN
+        : MAL_SMALL_BIGINT_CACHE_MIN + MAL_SMALL_BIGINT_CACHE_CAPACITY - 1;
+    if (magnitude <= limit) {
         owner = mal_vm_from_heap(heap);
         if (owner->small_bigint_cache == nullptr) {
             owner->small_bigint_cache = calloc(MAL_SMALL_BIGINT_CACHE_CAPACITY,
@@ -70,17 +51,28 @@ MalBigInt *mal_bigint_new(MalHeap *heap, i128 value) {
                 return nullptr;
             }
         }
-        cache_index = (usize) (value - MAL_SMALL_BIGINT_CACHE_MIN);
+        cache_index = sign < 0 ? (usize) -MAL_SMALL_BIGINT_CACHE_MIN - (usize) magnitude
+            : (usize) -MAL_SMALL_BIGINT_CACHE_MIN + (usize) magnitude;
         MalBigInt *cached = owner->small_bigint_cache[cache_index];
         if (cached != nullptr) return cached;
     }
-    u128 magnitude = value < 0 ? (u128) 0 - (u128) value : (u128) value;
-    u32 digits[4];
-    memcpy(digits, &magnitude, sizeof digits);
-    u32 count = normalized_count(digits, countof(digits));
-    MalBigInt *result = bigint_allocate(heap, value < 0 ? -1 : 1, digits, count);
-    if (result != nullptr && owner != nullptr) owner->small_bigint_cache[cache_index] = result;
+    MalBigInt *result = mal_heap_try_alloc(heap, sizeof(*result), MAL_HEAP_BIGINT);
+    if (result == nullptr) {
+        bigint_oom(heap);
+        return nullptr;
+    }
+    u64 low = (u64) magnitude, high = (u64) (magnitude >> 64);
+    result->sign = magnitude == 0 ? 0 : sign;
+    result->digit_count = high != 0 ? (high >> 32 != 0 ? 4 : 3)
+        : low != 0 ? (low >> 32 != 0 ? 2 : 1) : 0;
+    memcpy(result->data.inline_digits, &magnitude, sizeof magnitude);
+    if (owner != nullptr) owner->small_bigint_cache[cache_index] = result;
     return result;
+}
+
+MalBigInt *mal_bigint_new(MalHeap *heap, i128 value) {
+    return bigint_from_inline(heap, value < 0 ? -1 : 1,
+        value < 0 ? (u128) 0 - (u128) value : (u128) value);
 }
 
 bool mal_bigint_try_i128(const MalBigInt *value, i128 *out) {
@@ -98,11 +90,24 @@ MalBigInt *mal_bigint_from_digits(MalHeap *heap, i32 sign, const u32 *digits, u3
     if (count <= 4) {
         u128 magnitude = 0;
         if (count != 0) memcpy(&magnitude, digits, count * sizeof(u32));
-        u128 maximum = ((u128) 1 << 127) - (sign < 0 ? 0 : 1);
-        if (magnitude <= maximum)
-            return mal_bigint_new(heap, signed_bits(sign < 0 ? (u128) 0 - magnitude : magnitude));
+        return bigint_from_inline(heap, sign, magnitude);
     }
-    return bigint_allocate(heap, sign, digits, count);
+    if (count > MAL_BIGINT_MAX_DIGITS) {
+        bigint_size_error(heap);
+        return nullptr;
+    }
+    usize trailing = (usize) count * sizeof(u32);
+    MalBigInt *result = mal_heap_try_alloc(heap, sizeof(*result) + trailing, MAL_HEAP_BIGINT);
+    if (result == nullptr) {
+        bigint_oom(heap);
+        return nullptr;
+    }
+    result->sign = sign;
+    result->digit_count = count;
+    u32 *owned = (u32 *) (result + 1);
+    memcpy(owned, digits, trailing);
+    result->data.digits = owned;
+    return result;
 }
 
 u32 mal_bigint_bit_length(const MalBigInt *value) {
@@ -112,9 +117,8 @@ u32 mal_bigint_bit_length(const MalBigInt *value) {
 }
 
 u64 mal_bigint_low_u64(const MalBigInt *value) {
-    const u32 *digits = mal_bigint_digits(value);
-    u64 bits = value->digit_count > 0 ? digits[0] : 0;
-    if (value->digit_count > 1) bits |= (u64) digits[1] << 32;
+    u64 bits;
+    memcpy(&bits, mal_bigint_digits(value), sizeof bits);
     return value->sign < 0 ? (u64) 0 - bits : bits;
 }
 
@@ -164,6 +168,7 @@ MalBigInt *mal_bigint_from_number(MalHeap *heap, f64 number) {
             "The number is not an integer");
         return nullptr;
     }
+    if (number >= -0x1p63 && number < 0x1p63) return mal_bigint_new(heap, (i64) number);
     u32 digits[34];
     u32 count = number_magnitude(number, digits);
     return mal_bigint_from_digits(heap, number < 0 ? -1 : 1, digits, count);
@@ -196,15 +201,13 @@ static bool magnitude_low_bits(const MalBigInt *value, u32 count) {
 }
 
 f64 mal_bigint_to_number(const MalBigInt *value) {
-    u32 bits = mal_bigint_bit_length(value);
-    if (bits == 0) return 0;
     if (value->digit_count <= 4) {
-        u128 magnitude = 0;
-        const u32 *digits = mal_bigint_digits(value);
-        for (u32 i = value->digit_count; i != 0; i--) magnitude = (magnitude << 32) | digits[i - 1];
-        f64 result = (f64) magnitude;
+        u128 magnitude;
+        memcpy(&magnitude, value->data.inline_digits, sizeof magnitude);
+        f64 result = value->digit_count <= 2 ? (f64) (u64) magnitude : (f64) magnitude;
         return value->sign < 0 ? -result : result;
     }
+    u32 bits = mal_bigint_bit_length(value);
     if (bits > 1024) return value->sign < 0 ? -INFINITY : INFINITY;
     u32 shift = bits > 53 ? bits - 53 : 0;
     u64 top = 0;
@@ -314,6 +317,26 @@ MalBigInt *mal_bigint_parse(MalHeap *heap, const c16 *units, usize length, bool 
         if (radix != 10) start += 2;
     }
     if (start == end) { *valid = false; return nullptr; }
+    usize small_limit = radix == 10 ? 19 : radix == 16 ? 16 : radix == 8 ? 21 : 64;
+    if (end - start <= small_limit) {
+        u64 magnitude = 0;
+        for (usize i = start; i < end; i++) {
+            i32 digit = digit_value(units[i]);
+            if (digit < 0 || (u32) digit >= radix) { *valid = false; return nullptr; }
+            magnitude = magnitude * radix + (u32) digit;
+        }
+        return bigint_from_inline(heap, sign, magnitude);
+    }
+    usize inline_limit = radix == 10 ? 38 : radix == 16 ? 32 : radix == 8 ? 42 : 128;
+    if (end - start <= inline_limit) {
+        u128 magnitude = 0;
+        for (usize i = start; i < end; i++) {
+            i32 digit = digit_value(units[i]);
+            if (digit < 0 || (u32) digit >= radix) { *valid = false; return nullptr; }
+            magnitude = magnitude * radix + (u32) digit;
+        }
+        return bigint_from_inline(heap, sign, magnitude);
+    }
     for (usize i = start; i < end; i++) {
         i32 digit = digit_value(units[i]);
         if (digit < 0 || (u32) digit >= radix) { *valid = false; return nullptr; }
@@ -366,11 +389,18 @@ static MalBigInt *copy_signed(MalHeap *heap, const MalBigInt *value, i32 sign) {
 }
 
 static MalBigInt *add_signed(MalHeap *heap, const MalBigInt *left, const MalBigInt *right, bool subtract) {
-    i128 a, b, small;
-    if (mal_bigint_try_i128(left, &a) && mal_bigint_try_i128(right, &b)
-        && !(subtract ? __builtin_sub_overflow(a, b, &small) : __builtin_add_overflow(a, b, &small)))
-        return mal_bigint_new(heap, small);
     i32 right_sign = subtract ? -right->sign : right->sign;
+    if (left->digit_count <= 4 && right->digit_count <= 4) {
+        u128 a, b, result;
+        memcpy(&a, left->data.inline_digits, sizeof a);
+        memcpy(&b, right->data.inline_digits, sizeof b);
+        if (left->sign == right_sign) {
+            if (!__builtin_add_overflow(a, b, &result)) return bigint_from_inline(heap, left->sign, result);
+        } else {
+            return a >= b ? bigint_from_inline(heap, left->sign, a - b)
+                : bigint_from_inline(heap, right_sign, b - a);
+        }
+    }
     if (right_sign == 0) return (MalBigInt *) left;
     if (left->sign == 0)
         return right_sign == right->sign ? (MalBigInt *) right : copy_signed(heap, right, right_sign);
@@ -427,9 +457,19 @@ MalBigInt *mal_bigint_negate(MalHeap *heap, const MalBigInt *value) {
 }
 
 MalBigInt *mal_bigint_multiply(MalHeap *heap, const MalBigInt *left, const MalBigInt *right) {
-    i128 a, b, small;
-    if (mal_bigint_try_i128(left, &a) && mal_bigint_try_i128(right, &b)
-        && !__builtin_mul_overflow(a, b, &small)) return mal_bigint_new(heap, small);
+    if (left->digit_count <= 2 && right->digit_count <= 2) {
+        u64 a, b;
+        memcpy(&a, left->data.inline_digits, sizeof a);
+        memcpy(&b, right->data.inline_digits, sizeof b);
+        return bigint_from_inline(heap, left->sign * right->sign, (u128) a * b);
+    }
+    if (left->digit_count <= 4 && right->digit_count <= 4 &&
+        mal_bigint_bit_length(left) + mal_bigint_bit_length(right) <= 128) {
+        u128 a, b;
+        memcpy(&a, left->data.inline_digits, sizeof a);
+        memcpy(&b, right->data.inline_digits, sizeof b);
+        return bigint_from_inline(heap, left->sign * right->sign, a * b);
+    }
     if (left->sign == 0 || right->sign == 0) return mal_bigint_new(heap, 0);
     if ((u64) mal_bigint_bit_length(left) + mal_bigint_bit_length(right) - 1 > MAL_BIGINT_MAX_BITS) {
         bigint_size_error(heap);
@@ -469,10 +509,18 @@ MalBigInt *mal_bigint_divide(MalHeap *heap, const MalBigInt *left, const MalBigI
         mal_vm_throw_error(mal_vm_from_heap(heap), MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Division by zero");
         return nullptr;
     }
-    i128 a, b;
-    if (mal_bigint_try_i128(left, &a) && mal_bigint_try_i128(right, &b)
-        && !((u128) a == ((u128) 1 << 127) && b == -1))
-        return mal_bigint_new(heap, remainder ? a % b : a / b);
+    if (left->digit_count <= 4 && right->digit_count <= 4) {
+        u128 a, b;
+        memcpy(&a, left->data.inline_digits, sizeof a);
+        memcpy(&b, right->data.inline_digits, sizeof b);
+        u128 result;
+        if (left->digit_count <= 2 && right->digit_count <= 2) {
+            result = remainder ? (u64) a % (u64) b : (u64) a / (u64) b;
+        } else {
+            result = remainder ? a % b : a / b;
+        }
+        return bigint_from_inline(heap, remainder ? left->sign : left->sign * right->sign, result);
+    }
     i32 order = compare_magnitude(left, right);
     if (order < 0) return remainder ? (MalBigInt *) left : mal_bigint_new(heap, 0);
     if (order == 0) return mal_bigint_new(heap, remainder ? 0 : left->sign * right->sign);
@@ -587,13 +635,31 @@ static void twos_to_magnitude(BigBuffer *buffer, u32 top_mask) {
 }
 
 MalBigInt *mal_bigint_bitwise(MalHeap *heap, const MalBigInt *left, const MalBigInt *right, char operation) {
+    u32 count = (left->digit_count > right->digit_count ? left->digit_count : right->digit_count) + 1;
+    if (operation == '&' && (left->sign >= 0 || right->sign >= 0)) {
+        if (left->sign >= 0) count = left->digit_count;
+        if (right->sign >= 0 && right->digit_count < count) count = right->digit_count;
+        if (count == 0) return mal_bigint_new(heap, 0);
+        if (count == 1) {
+            u32 a = mal_bigint_digits(left)[0], b = mal_bigint_digits(right)[0];
+            if (left->sign < 0) a = 0u - a;
+            if (right->sign < 0) b = 0u - b;
+            return bigint_from_inline(heap, 1, a & b);
+        }
+        if (count == 2) return bigint_from_inline(heap, 1, mal_bigint_low_u64(left) & mal_bigint_low_u64(right));
+    }
+    if (left->sign >= 0 && right->sign >= 0 && left->digit_count <= 4 && right->digit_count <= 4) {
+        u128 a, b;
+        memcpy(&a, left->data.inline_digits, sizeof a);
+        memcpy(&b, right->data.inline_digits, sizeof b);
+        return bigint_from_inline(heap, 1, operation == '&' ? a & b : operation == '|' ? a | b : a ^ b);
+    }
     i128 a, b;
     if (mal_bigint_try_i128(left, &a) && mal_bigint_try_i128(right, &b)) {
         u128 bits = operation == '&' ? (u128) a & (u128) b
             : operation == '|' ? (u128) a | (u128) b : (u128) a ^ (u128) b;
         return mal_bigint_new(heap, signed_bits(bits));
     }
-    u32 count = (left->digit_count > right->digit_count ? left->digit_count : right->digit_count) + 1;
     BigBuffer buffer;
     buffer_init(&buffer);
     if (!buffer_reserve(heap, &buffer, count)) return nullptr;
@@ -671,6 +737,23 @@ MalBigInt *mal_bigint_width(MalHeap *heap, const MalBigInt *value, u64 bits, boo
         if (bits > length || (value->sign < 0 && bits == length
                 && !magnitude_low_bits(value, length - 1))) return (MalBigInt *) value;
     } else if (value->sign > 0 && bits >= length) return (MalBigInt *) value;
+    if (bits <= 64) {
+        u64 mask = bits == 64 ? UINT64_MAX : (UINT64_C(1) << bits) - 1;
+        u64 twos = mal_bigint_low_u64(value) & mask;
+        bool negative = is_signed && (twos & (UINT64_C(1) << (bits - 1))) != 0;
+        return bigint_from_inline(heap, negative ? -1 : 1,
+            negative ? ((u64) 0 - twos) & mask : twos);
+    }
+    if (bits <= 128) {
+        u128 magnitude = 0;
+        u32 count = value->digit_count < 4 ? value->digit_count : 4;
+        memcpy(&magnitude, mal_bigint_digits(value), count * sizeof(u32));
+        u128 mask = bits == 128 ? ~(u128) 0 : ((u128) 1 << bits) - 1;
+        u128 twos = (value->sign < 0 ? (u128) 0 - magnitude : magnitude) & mask;
+        bool negative = is_signed && (twos & ((u128) 1 << (bits - 1))) != 0;
+        return bigint_from_inline(heap, negative ? -1 : 1,
+            negative ? ((u128) 0 - twos) & mask : twos);
+    }
     if (bits > MAL_BIGINT_MAX_BITS) {
         bigint_size_error(heap);
         return nullptr;
@@ -753,10 +836,15 @@ MalString *mal_bigint_to_string(MalHeap *heap, const MalBigInt *value, i32 radix
     u32 shift = radix == 2 ? 1 : radix == 4 ? 2 : radix == 8 ? 3
         : radix == 16 ? 4 : radix == 32 ? 5 : 0;
     if (value->digit_count <= 4) {
-        u128 magnitude = 0;
-        const u32 *digits = mal_bigint_digits(value);
-        for (u32 i = value->digit_count; i != 0; i--) magnitude = (magnitude << 32) | digits[i - 1];
+        u128 magnitude;
+        memcpy(&magnitude, value->data.inline_digits, sizeof magnitude);
         if (radix == 10) {
+            if (value->digit_count <= 2) {
+                byte *cursor = small;
+                if (value->sign < 0) *cursor++ = '-';
+                cursor = write_decimal_word(cursor, (u64) magnitude, 0);
+                return bigint_ascii(heap, small, (usize) (cursor - small));
+            }
             u64 chunks[3];
             u32 count = 0;
             const u128 base = (u128) UINT64_C(10000000000000000000);
@@ -769,7 +857,12 @@ MalString *mal_bigint_to_string(MalHeap *heap, const MalBigInt *value, i32 radix
         }
         byte *end = small + sizeof small, *cursor = end;
         if (shift != 0) {
-            do { *--cursor = alphabet[(u32) magnitude & ((1u << shift) - 1)]; magnitude >>= shift; } while (magnitude != 0);
+            if (value->digit_count <= 2) {
+                u64 word = (u64) magnitude;
+                do { *--cursor = alphabet[(u32) word & ((1u << shift) - 1)]; word >>= shift; } while (word != 0);
+            } else {
+                do { *--cursor = alphabet[(u32) magnitude & ((1u << shift) - 1)]; magnitude >>= shift; } while (magnitude != 0);
+            }
         } else {
             do { *--cursor = alphabet[magnitude % (u32) radix]; magnitude /= (u32) radix; } while (magnitude != 0);
         }

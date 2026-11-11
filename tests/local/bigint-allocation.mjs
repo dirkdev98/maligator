@@ -33,6 +33,14 @@ for (const mode of [1, 2]) {
 	fails("primitive default sort", () => sortable.sort(), mode);
 	fails("inspect BigInt", () => inspect(wide), mode);
 }
+const inline = opaque(1234567890123456789n);
+const numeric = opaque(123456789);
+fails("inline addition", () => inline + inline, 1);
+fails("inline multiplication", () => inline * inline, 1);
+fails("inline division", () => inline / 7n, 1);
+fails("inline bitwise", () => inline & 0xffffffffffffn, 1);
+fails("inline width conversion", () => BigInt.asUintN(64, wide), 1);
+fails("small Number conversion", () => BigInt(numeric), 1);
 fails("promoting arithmetic", () => wide + wide, 1);
 fails(
 	"StringToBigInt equality",
