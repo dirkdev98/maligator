@@ -334,8 +334,12 @@ contracts or investigates costs still visible after the string follow-ups.
 
 - [ ] Trace the fixed per-exec cost in `regexp-owned-repeat`, where every exec matches
       at `lastIndex`, so executor setup, start dispatch and result construction set the
-      time rather than scanning. Keep named, unnamed, UTF-16 and miss controls. Preserve
-      captures, lastIndex, reentry and bounded scratch retention.
+      time rather than scanning. The `lastIndex` store now hits the store cache; the
+      matcher call (about a fifth of samples) and the named `groups` object (about a
+      sixth: per-exec name atomization and defines) lead. A per-regexp groups shape
+      measured 5% slower, so look at the matcher FFI's name and range calls first. Keep
+      named, unnamed, UTF-16 and miss controls. Preserve captures, lastIndex, reentry and
+      bounded scratch retention.
 
 - [ ] Use the existing complete mixed-text workload to select one leading construction,
       replacement, JSON or checksum-traversal cost, including rope rebuilding where

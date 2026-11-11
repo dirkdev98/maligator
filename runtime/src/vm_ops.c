@@ -7554,6 +7554,38 @@ static bool mal_vm_dictionary_try_overwrite(
     return true;
 }
 
+/*
+ * Shapes never change a property's attributes in place, so a row filled for a
+ * writable data slot stays sound for every object of that shape, whether or not
+ * the slot is enumerable or configurable (RegExp `lastIndex` is neither).
+ */
+static inline bool mal_ic_store_slot_admits(u8 attrs) {
+    return (attrs & (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_INTERNAL_FLAGS)) ==
+        MAL_PROPERTY_WRITABLE;
+}
+
+/*
+ * Receivers whose string-keyed own properties all live in MalObject storage, so
+ * the shaped rows apply unchanged. Arrays (`length`), typed arrays (numeric
+ * strings) and functions (lazy `prototype`) resolve some names elsewhere.
+ */
+static inline bool mal_vm_store_ic_receiver(MalValue value) {
+    if (!mal_value_is_object(value)) return false;
+    switch (mal_value_heap_type(value)) {
+        case MAL_HEAP_OBJECT:
+        case MAL_HEAP_MAP_OBJECT:
+        case MAL_HEAP_SET_OBJECT:
+        case MAL_HEAP_DATE_OBJECT:
+        case MAL_HEAP_REGEXP_OBJECT:
+        case MAL_HEAP_PROMISE_OBJECT:
+        case MAL_HEAP_ARRAY_BUFFER_OBJECT:
+        case MAL_HEAP_DATA_VIEW_OBJECT:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static void mal_vm_op_store_object_property_ic(
     MalVm *vm, MalValue object_value, MalValue key_value, const MalKey *converted_key,
     MalValue value, bool strict, MalInlineCache *ic
@@ -7569,16 +7601,22 @@ static void mal_vm_op_store_object_property_ic(
     if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape &&
         key_value == ic->key) {
         MAL_PERF_COUNT(ic_store_slow_mono_hits);
+        if (mal_object_note_prototype_mutation(object)) {
+            MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+        }
         mal_object_field_store(object, ic->slot, value);
         return;
     }
     // Polymorphic overflow: an alternate shape for the same key. Entries are only
-    // added for default-writable data slots (below), so this overwrite is sound.
+    // added for writable data slots (below), so this overwrite is sound.
     if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key_value == ic->key) {
         for (u8 i = 0; i < ic->poly_count; i++) {
             if (object->shape == ic->poly_shape[i]) {
                 MAL_PERF_COUNT(ic_store_poly_hits);
                 u8 slot = mal_ic_poly_slot(ic, i);
+                if (mal_object_note_prototype_mutation(object)) {
+                    MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+                }
                 mal_object_field_store(object, slot, value);
                 return;
             }
@@ -7593,8 +7631,11 @@ static void mal_vm_op_store_object_property_ic(
             &mal_vm_property_stub_cache(vm)[
                 mal_stub_hash(object->shape, key_value)];
         if (stub->shape == object->shape && stub->key == key_value &&
-            mal_shape_attrs_are_default(stub->attrs)) {
+            mal_ic_store_slot_admits(stub->attrs)) {
             MAL_PERF_COUNT(ic_store_mega_hits);
+            if (mal_object_note_prototype_mutation(object)) {
+                MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+            }
             mal_object_field_store(object, stub->slot, value);
             return;
         }
@@ -7619,9 +7660,8 @@ static void mal_vm_op_store_object_property_ic(
             return;
         }
         i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_STORE_IC);
-        // Cache only a default (writable, enumerable, configurable) data slot;
-        // a store to such a property cannot run a setter or change the shape.
-        if (idx >= 0 && mal_shape_attrs_are_default(object->shape->props[idx].attrs)) {
+        // A store to a writable data slot cannot run a setter or change the shape.
+        if (idx >= 0 && mal_ic_store_slot_admits(object->shape->props[idx].attrs)) {
             MAL_PERF_COUNT(ic_store_shape_hits);
             const MalShapeProp *prop = &object->shape->props[idx];
             // Canonical string atoms share the VM/cache lifetime. Accumulate
@@ -7713,7 +7753,7 @@ void mal_vm_op_store_property_ic(
     }
     if (mal_vm_dictionary_try_overwrite(vm, object_value, key_value, value)) return;
     MAL_PERF_COUNT(ic_store_fallbacks);
-    if (!mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
+    if (!mal_vm_store_ic_receiver(object_value)) {
         MAL_PERF_COUNT(ic_store_other_generic);
         mal_vm_op_store_property(vm, object_value, key_value, value, strict);
         return;
@@ -7737,7 +7777,7 @@ void mal_vm_op_store_property_ic(
         const MalPropertyStubEntry *stub =
             &vm->property_stub[mal_stub_hash(receiver->shape, key_value)];
         if (stub->shape == receiver->shape && stub->key == key_value &&
-            mal_shape_attrs_are_default(stub->attrs)) {
+            mal_ic_store_slot_admits(stub->attrs)) {
             MAL_PERF_COUNT(ic_store_mega_hits);
             // Adopt a key on its second consecutive stub hit, as computed-key loads do,
             // so a site whose key changes once per phase serves it inline again.

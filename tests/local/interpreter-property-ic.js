@@ -472,4 +472,50 @@ for (let i = 0; i < 200; i++) {
 	check(loadStatic(holder).marker === i, "barriered store remains live");
 }
 
+function storeLastIndex(object, value) {
+	object.lastIndex = value;
+}
+
+// RegExp objects keep named properties in ordinary object storage, and
+// `lastIndex` is writable but neither enumerable nor configurable.
+const sticky = /a/y;
+for (let i = 0; i < 200; i++) {
+	storeLastIndex(sticky, i % 4);
+	check(sticky.lastIndex === i % 4, "regexp lastIndex store");
+	check(
+		(sticky.exec("aaaa")?.index ?? -1) === i % 4,
+		"regexp exec follows stored lastIndex",
+	);
+}
+check(Object.keys(sticky).length === 0, "regexp lastIndex stays non-enumerable");
+const frozenRegExp = Object.freeze(/a/g);
+let frozenThrew = false;
+try {
+	storeLastIndex(frozenRegExp, 1);
+} catch (error) {
+	frozenThrew = error instanceof TypeError;
+}
+check(
+	frozenThrew && frozenRegExp.lastIndex === 0,
+	"frozen regexp rejects a warmed store",
+);
+const regexpPrototype = /b/g;
+const regexpChild = Object.create(regexpPrototype);
+for (let i = 0; i < 200; i++) {
+	storeLastIndex(regexpPrototype, i);
+	check(regexpChild.lastIndex === i, "regexp prototype store reaches inheritors");
+}
+
+function storeTag(object, value) {
+	object.tag = value;
+}
+const taggedMap = new Map([[1, 2]]);
+const taggedDate = new Date(0);
+for (let i = 0; i < 200; i++) {
+	storeTag(taggedMap, i);
+	storeTag(taggedDate, -i);
+}
+check(taggedMap.tag === 199 && taggedMap.get(1) === 2, "map named property store");
+check(taggedDate.tag === -199 && taggedDate.getTime() === 0, "date named property store");
+
 console.log("interpreter-property-ic PASS " + checks);
