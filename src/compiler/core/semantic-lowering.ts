@@ -6319,7 +6319,7 @@ function compileWithDynamicAssignment(
 			fn,
 			branch,
 			assignmentExpression.right,
-			left.name,
+			assignmentTargetName(assignmentExpression, left.name),
 		);
 		if (assignmentExpression.operator === "=") return right;
 		const value = nextCoreVariable(fn);
@@ -12102,7 +12102,7 @@ function compileIdentifierAssignment(
 			cursor,
 			assignmentExpression.right,
 			// NamedEvaluation: anonymous right hand sides take the target name.
-			binding.name,
+			assignmentTargetName(assignmentExpression, binding.name),
 		);
 		if (value === -1) {
 			// The right hand side is not supported yet; skip the store instead of
@@ -12143,6 +12143,24 @@ function compileIdentifierAssignment(
  * truthy one, ??= on null or undefined. The expression value is the current
  * value when it short-circuits, otherwise the assigned value.
  */
+/*
+ * NamedEvaluation names an anonymous function only when the target is an
+ * IdentifierRef, which a parenthesized one (`(f) = function () {}`) is not. The
+ * parser drops parentheses, but such an assignment starts before its target.
+ */
+function assignmentTargetName(
+	assignment: ESTree.AssignmentExpression,
+	name: string,
+): string | undefined {
+	const outer = assignment.loc?.start;
+	const inner = assignment.left.loc?.start;
+	return outer === undefined ||
+		inner === undefined ||
+		(outer.line === inner.line && outer.column === inner.column)
+		? name
+		: undefined;
+}
+
 function compileLogicalAssignment(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -12168,7 +12186,7 @@ function compileLogicalAssignment(
 		}
 
 		identifierBinding = binding;
-		nameHint = binding.name;
+		nameHint = assignmentTargetName(assignmentExpression, binding.name);
 		if (identifierUsesDynamicEnvironment(program, fn, left)) {
 			const nameStringIndex = getOrCreateStringConstant(program, left.name);
 			const base = nextCoreVariable(fn);
