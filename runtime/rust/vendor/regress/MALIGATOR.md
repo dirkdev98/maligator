@@ -49,3 +49,11 @@ backend keeps the start anchor for every encoding, so a `^` pattern without the
 predicates: they hold UTF-8 first bytes, and Maligator's byte inputs are ASCII,
 where that byte is the code unit itself. UTF-16 and UCS-2 inputs still try every
 other start position.
+
+# Duplicate named groups
+
+A backreference to a name that several groups share lowers to a concatenation of
+backreferences rather than upstream's alternation. Only one of the groups can have
+matched, and an unmatched group's backreference matches empty, so the
+concatenation matches that group's text. The alternation let an earlier, unmatched
+group's empty match win.
