@@ -29,10 +29,11 @@ themselves commit the project to optimizing every API.
       consumer, separating conversion, traversal and checksum cost. Preserve
       input-scaling coverage.
 
-- [ ] Remove the two BigInt allocations per byte left in the `bigint-hash-consumer`
-      FNV-1a loop: fuse `BigInt(int32)` leaves into wrapping chains, and keep a
-      loop-carried 64-bit result unboxed between iterations instead of boxing it on
-      every back edge.
+- [ ] Keep a loop-carried 64-bit BigInt unboxed between iterations in the
+      `bigint-hash-consumer` FNV-1a loop instead of boxing the wrapped product on every
+      back edge; that box is the loop's one allocation per byte, since `BigInt(byte)`
+      comes from the small-BigInt cache. It needs a 64-bit BigInt representation for
+      phis whose inputs are wrapping results. Wider `BigInt(int32)` leaves still box.
 
 - [ ] Diagnose the macOS node-fs-watch timeout with bounded phase evidence separating
       compilation, event delivery and teardown. Preserve watcher behavior and report an
