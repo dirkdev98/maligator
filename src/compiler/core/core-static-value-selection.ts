@@ -2,6 +2,7 @@ import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
 import type { KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import { MAX_STRING_CODE_UNITS } from "../shared/compiler-instruction.ts";
+import type { ConstantValue } from "../shared/constant-evaluator.ts";
 import { knownOperationCallProves } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { PrimordialValue } from "../shared/primordial-catalog-types.ts";
@@ -15,7 +16,7 @@ import { staticNumberDescription } from "../shared/static-values.ts";
 import type { StaticDescriptionId, StaticMember } from "../shared/static-values.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_STATIC_SELECTION_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
-import { coreTerminatorInput } from "./core-ir-control-flow.ts";
+import { coreTerminatorInput, mapCoreTerminatorEdges } from "./core-ir-control-flow.ts";
 import type { CoreAttributeValue, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
@@ -378,16 +379,53 @@ export const foldStaticFunctionNames: CoreFunctionPass = {
 	},
 };
 
-// A binding proven to hold one immutable primitive feeds it to the operations that
-// read it, so arithmetic and comparisons see a literal, BigInt operators included. The
-// load and its TDZ check stay: the proof only covers reads the check has admitted.
+type StaticBindingLiteral = {
+	readonly opcode: string;
+	readonly attributes: Readonly<Record<string, CoreAttributeValue>>;
+	readonly bigint?: bigint;
+};
+
+function staticBindingLiteral(
+	constant: ConstantValue | undefined,
+): StaticBindingLiteral | undefined {
+	switch (constant?.kind) {
+		case "number":
+			if (!Number.isFinite(constant.value) || Object.is(constant.value, -0))
+				return undefined;
+			return {
+				// `createNumber` carries int32 values; literal lowering uses f64 otherwise.
+				opcode:
+					Number.isInteger(constant.value) &&
+					constant.value >= -2147483648 &&
+					constant.value <= 2147483647
+						? "createNumber"
+						: "createF64",
+				attributes: { value: constant.value },
+			};
+		case "boolean":
+			return { opcode: "createBoolean", attributes: { value: constant.value } };
+		case "undefined":
+			return { opcode: "createUndefined", attributes: {} };
+		case "null":
+			return { opcode: "createNull", attributes: {} };
+		case "bigint":
+			return { opcode: "createBigint", attributes: {}, bigint: constant.value };
+		default:
+			return undefined;
+	}
+}
+
+// A binding proven to hold one immutable primitive feeds it to the operations and
+// block edges that read it, so arithmetic, comparisons and loop-carried values see a
+// literal, BigInt operators included. The load and its TDZ check stay: the proof only
+// covers reads the check has admitted.
 export const foldStaticBindingConstants: CoreFunctionPass = {
 	name: "fold-static-binding-constants",
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["loadGlobal", "loadCaptured"],
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
 	wakesOn: STATIC_VALUE_WAKES,
-	changes: { cfg: false, calls: true, facts: true, representations: false },
+	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
 		const { program, item } = context,
@@ -396,78 +434,76 @@ export const foldStaticBindingConstants: CoreFunctionPass = {
 		const loadCaptured = program.registry.get("loadCaptured")?.id;
 		const throwIfTdz = program.registry.get("throwIfTdz")?.id;
 		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
-		const rewrites: Array<{
-			readonly consumer: CoreInstructionId;
-			readonly index: number;
-			readonly opcode: string;
-			readonly attributes: Readonly<Record<string, CoreAttributeValue>>;
-			readonly bigint?: bigint;
-		}> = [];
-		for (const consumer of fn.instructionIds()) {
-			if (rewrites.length >= context.remainingEdits) break;
-			if (fn.instructionKind(consumer) !== "operation") continue;
-			if (fn.kernel.instructionOpcode(consumer) === throwIfTdz) continue;
-			const start = fn.kernel.instructionOperandStart(consumer);
-			const count = fn.kernel.instructionOperandCount(consumer);
-			for (let index = 0; index < count; index++) {
-				const value = fn.kernel.operandAt(start + index);
-				if (fn.kernel.valueDefinitionKind(value) !== 1) continue;
-				const definition = fn.kernel.instructionOpcode(
-					fn.kernel.valueDefinitionOwner(value) as CoreInstructionId,
-				);
-				if (definition !== loadGlobal && definition !== loadCaptured) continue;
-				const constant = analysis.constant(value, consumer);
-				const literal =
-					constant === undefined
-						? undefined
-						: constant.kind === "number"
-							? Number.isFinite(constant.value) && !Object.is(constant.value, -0)
-								? {
-										// `createNumber` carries int32 values; literal lowering uses f64 otherwise.
-										opcode:
-											Number.isInteger(constant.value) &&
-											constant.value >= -2147483648 &&
-											constant.value <= 2147483647
-												? "createNumber"
-												: "createF64",
-										attributes: { value: constant.value },
-									}
-								: undefined
-							: constant.kind === "boolean"
-								? { opcode: "createBoolean", attributes: { value: constant.value } }
-								: constant.kind === "undefined"
-									? { opcode: "createUndefined", attributes: {} }
-									: constant.kind === "null"
-										? { opcode: "createNull", attributes: {} }
-										: constant.kind === "bigint"
-											? { opcode: "createBigint", attributes: {}, bigint: constant.value }
-											: undefined;
-				if (literal !== undefined) rewrites.push({ consumer, index, ...literal });
+		const rewrites = new Map<CoreInstructionId, Map<CoreValueId, StaticBindingLiteral>>();
+		let edits = 0;
+		const consider = (consumer: CoreInstructionId, value: CoreValueId) => {
+			if (fn.kernel.valueDefinitionKind(value) !== 1) return;
+			const definition = fn.kernel.instructionOpcode(
+				fn.kernel.valueDefinitionOwner(value) as CoreInstructionId,
+			);
+			if (definition !== loadGlobal && definition !== loadCaptured) return;
+			const literal = staticBindingLiteral(analysis.constant(value, consumer));
+			if (literal === undefined) return;
+			let values = rewrites.get(consumer);
+			if (values === undefined) {
+				values = new Map<CoreValueId, StaticBindingLiteral>();
+				rewrites.set(consumer, values);
 			}
+			if (!values.has(value)) edits++;
+			values.set(value, literal);
+		};
+		for (const consumer of fn.instructionIds()) {
+			if (edits >= context.remainingEdits) break;
+			const kind = fn.instructionKind(consumer);
+			if (kind === "operation") {
+				if (fn.kernel.instructionOpcode(consumer) === throwIfTdz) continue;
+				const start = fn.kernel.instructionOperandStart(consumer);
+				const count = fn.kernel.instructionOperandCount(consumer);
+				for (let index = 0; index < count; index++)
+					consider(consumer, fn.kernel.operandAt(start + index));
+			} else
+				mapCoreTerminatorEdges(coreTerminatorInput(fn, consumer), (edge) => {
+					for (const argument of edge.arguments) consider(consumer, argument);
+					return edge;
+				});
 		}
-		if (rewrites.length === 0) return undefined;
+		if (rewrites.size === 0) return undefined;
 		const editor = CoreEditor.open(program, fn.id);
-		for (const { consumer, index, opcode, attributes, bigint } of rewrites) {
-			let bigintIndex =
-				bigint === undefined ? -1 : program.bigintConstants.indexOf(bigint);
-			if (bigint !== undefined && bigintIndex < 0)
-				bigintIndex = editor.appendBigintConstants([bigint]);
-			const literal = editor.insertInstruction(
-				fn.instructionBlock(consumer),
-				consumer,
-				opcode,
-				[],
-				{
+		for (const [consumer, values] of rewrites) {
+			const block = fn.instructionBlock(consumer);
+			const operation = fn.instructionKind(consumer) === "operation";
+			const literals = new Map<CoreValueId, CoreValueId>();
+			for (const [value, { opcode, attributes, bigint }] of values) {
+				let bigintIndex =
+					bigint === undefined ? -1 : program.bigintConstants.indexOf(bigint);
+				if (bigint !== undefined && bigintIndex < 0)
+					bigintIndex = editor.appendBigintConstants([bigint]);
+				const options = {
 					attributes: bigint === undefined ? attributes : { bigintIndex },
 					sourcePosition: fn.instructionSourcePosition(consumer),
-				},
-			).outputs[0]!;
-			const start = fn.kernel.instructionOperandStart(consumer);
-			const inputs = Array.from(
-				{ length: fn.kernel.instructionOperandCount(consumer) },
-				(_, at) => (at === index ? literal : fn.kernel.operandAt(start + at)),
-			);
-			editor.replaceOperands(consumer, inputs);
+				};
+				const literal = operation
+					? editor.insertInstruction(block, consumer, opcode, [], options)
+					: editor.appendInstruction(block, opcode, [], options);
+				literals.set(value, literal.outputs[0]!);
+			}
+			const replace = (value: CoreValueId) => literals.get(value) ?? value;
+			if (operation) {
+				const start = fn.kernel.instructionOperandStart(consumer);
+				editor.replaceOperands(
+					consumer,
+					Array.from({ length: fn.kernel.instructionOperandCount(consumer) }, (_, at) =>
+						replace(fn.kernel.operandAt(start + at)),
+					),
+				);
+			} else
+				editor.replaceTerminator(
+					block,
+					mapCoreTerminatorEdges(coreTerminatorInput(fn, consumer), (edge) => ({
+						...edge,
+						arguments: edge.arguments.map(replace),
+					})),
+				);
 		}
 		return editor.commit();
 	},
