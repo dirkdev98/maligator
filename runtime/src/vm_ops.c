@@ -9347,6 +9347,43 @@ MalValue mal_vm_op_copy_data_properties(
             offset += segment.length;
         }
         mal_string_iterator_dispose(&iterator);
+    } else if (mal_value_is_proxy_object(source)) {
+        // CopyDataProperties through the traps: OwnPropertyKeys, then each
+        // remaining key's GetOwnProperty, and Get only for the enumerable ones.
+        MalValue keys_value;
+        if (!mal_vm_own_property_keys(vm, source, &keys_value)) {
+            ok = false;
+            goto done;
+        }
+        MalRootSpan keys_span;
+        mal_gc_root(&keys_span, &keys_value, 1);
+        MalArrayObject *keys = mal_value_to_array_object(keys_value);
+        for (u32 index = 0; ok && index < mal_array_object_length(keys); index++) {
+            MalValue key_value = mal_value_new_undefined();
+            mal_builtin_array_try_get(vm, keys_value, index, &key_value);
+            MalKey key;
+            if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+                ok = false;
+                break;
+            }
+            bool skip;
+            MAL_COPY_KEY_EXCLUDED(key, skip);
+            if (skip) continue;
+            bool present;
+            MalPropertyDesc desc;
+            if (!mal_vm_get_own_property(vm, source, key, &present, &desc)) {
+                ok = false;
+                break;
+            }
+            if (!present || (desc.flags & MAL_PROPERTY_ENUMERABLE) == 0) continue;
+            MalValue value;
+            if (!mal_vm_get_property(vm, source, key, &value)) {
+                ok = false;
+                break;
+            }
+            mal_object_set(copy, key, value);
+        }
+        mal_gc_unroot(&keys_span);
     } else if (mal_value_is_object(source)) {
         MalPropertyIter iter;
         mal_property_iter_init(&iter, mal_value_to_object(source), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
