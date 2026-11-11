@@ -232,11 +232,12 @@ u64 mal_bigint_hash(const MalBigInt *value) {
     return hash;
 }
 
+// Inline scratch covers products and remainders up to 1024 bits without malloc.
 typedef struct BigBuffer {
     u64 *digits;
     u32 count;
     u32 capacity;
-    u64 small[4];
+    u64 small[16];
 } BigBuffer;
 
 static void buffer_init(BigBuffer *buffer) {
