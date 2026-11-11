@@ -93,6 +93,33 @@ function globalSlotOf(fn: CoreFunctionStore, value: CoreValueId): number | undef
 	return typeof index === "number" ? index : undefined;
 }
 
+/**
+ * The binding a class value was read from: a global slot (`g<slot>`) or a
+ * captured cell (`c<owner function>:<index>`), the forms module, script and
+ * function scopes keep class declarations in.
+ */
+function bindingKey(
+	opcode: string,
+	attributes: Readonly<Record<string, unknown>>,
+): string | undefined {
+	const index = attributes.index;
+	if (typeof index !== "number") return undefined;
+	if (opcode === "loadGlobal" || opcode === "storeGlobal") return `g${index}`;
+	if (opcode !== "loadCaptured" && opcode !== "storeCaptured") return undefined;
+	const owner = attributes.functionIndex;
+	return typeof owner === "number" ? `c${owner}:${index}` : undefined;
+}
+
+function bindingOf(fn: CoreFunctionStore, value: CoreValueId): string | undefined {
+	const definition = definitionOf(fn, value);
+	return definition === undefined
+		? undefined
+		: bindingKey(
+				fn.instructionOpcodeName(definition),
+				fn.instructionAttributes(definition),
+			);
+}
+
 function isThis(fn: CoreFunctionStore, value: CoreValueId): boolean {
 	const definition = definitionOf(fn, value);
 	return definition !== undefined && fn.instructionOpcodeName(definition) === "loadThis";
@@ -113,49 +140,53 @@ interface ClassDefinition {
 	readonly prototype: CoreValueId;
 }
 
-/** Global slots holding exactly one class constructor besides their TDZ marker. */
-function classGlobals(program: CoreProgram): Map<number, CoreFunctionId> {
-	const stores = new Map<number, Array<CoreFunctionId | undefined>>();
-	const aliases = new Map<number, Array<number>>();
+/** Bindings holding exactly one class constructor besides their TDZ marker. */
+function classBindings(program: CoreProgram): Map<string, CoreFunctionId> {
+	const stores = new Map<string, Array<CoreFunctionId | undefined>>();
+	const aliases = new Map<string, Array<string>>();
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
-			if (
-				fn.instructionKind(instruction) !== "operation" ||
-				fn.instructionOpcodeName(instruction) !== "storeGlobal"
-			)
-				continue;
-			const slot = fn.instructionAttributes(instruction).index;
-			if (typeof slot !== "number") continue;
-			const value = operands(fn, instruction)[0]!;
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const binding = bindingKey(
+				fn.instructionOpcodeName(instruction),
+				fn.instructionAttributes(instruction),
+			);
+			if (binding === undefined) continue;
+			const value = operands(fn, instruction)[0];
+			if (value === undefined) continue;
 			const definition = definitionOf(fn, value);
 			const opcode =
 				definition === undefined ? undefined : fn.instructionOpcodeName(definition);
 			if (opcode === "createEmpty") continue;
-			const writes = stores.get(slot) ?? [];
-			const source = globalSlotOf(fn, value);
+			const writes = stores.get(binding) ?? [];
+			const source = bindingOf(fn, value);
 			if (source !== undefined) {
-				const sourced = aliases.get(slot) ?? [];
+				const sourced = aliases.get(binding) ?? [];
 				sourced.push(source);
-				aliases.set(slot, sourced);
+				aliases.set(binding, sourced);
 				writes.push(undefined);
 			} else writes.push(coreDirectCreatedFunction(fn, value));
-			stores.set(slot, writes);
+			stores.set(binding, writes);
 		}
 	}
-	const resolved = new Map<number, CoreFunctionId>();
-	for (const [slot, writes] of stores) {
+	const resolved = new Map<string, CoreFunctionId>();
+	for (const [binding, writes] of stores) {
 		if (writes.length !== 1 || writes[0] === undefined) continue;
 		if (program.function(writes[0]).metadata.isClassConstructor)
-			resolved.set(slot, writes[0]);
+			resolved.set(binding, writes[0]);
 	}
-	// A heritage slot copies a class binding once; follow such copies a few levels.
+	// A heritage binding copies a class binding once; follow such copies a few levels.
 	for (let round = 0; round < 4; round++)
-		for (const [slot, sources] of aliases) {
-			if (resolved.has(slot) || sources.length !== 1 || stores.get(slot)?.length !== 1)
+		for (const [binding, sources] of aliases) {
+			if (
+				resolved.has(binding) ||
+				sources.length !== 1 ||
+				stores.get(binding)?.length !== 1
+			)
 				continue;
 			const target = resolved.get(sources[0]!);
-			if (target !== undefined) resolved.set(slot, target);
+			if (target !== undefined) resolved.set(binding, target);
 		}
 	return resolved;
 }
@@ -266,7 +297,7 @@ function prototypeMembers(definition: ClassDefinition): OwnMembers {
 }
 
 interface ConstructorWalk {
-	readonly parentSlot: number | undefined;
+	readonly parentBinding: string | undefined;
 	readonly keys: ReadonlyArray<CoreClassLayoutKey>;
 	readonly complete: boolean;
 }
@@ -281,7 +312,7 @@ function walkConstructor(fn: CoreFunctionStore): ConstructorWalk {
 		seen.add(id);
 		keys.push(key);
 	};
-	let parentSlot: number | undefined;
+	let parentBinding: string | undefined;
 	const visited = new Set<number>();
 	let block = fn.entry;
 	for (;;) {
@@ -290,34 +321,35 @@ function walkConstructor(fn: CoreFunctionStore): ConstructorWalk {
 			const opcode = fn.instructionOpcodeName(instruction);
 			const args = operands(fn, instruction);
 			if (opcode === "constructSuper" || opcode === "constructSuperExplicit") {
-				parentSlot = args[0] === undefined ? undefined : globalSlotOf(fn, args[0]);
+				parentBinding = args[0] === undefined ? undefined : bindingOf(fn, args[0]);
 				continue;
 			}
 			if (args[0] === undefined || !isThis(fn, args[0])) continue;
 			if (opcode === "definePrivate") {
 				const slot = args[1] === undefined ? undefined : globalSlotOf(fn, args[1]);
-				if (slot === undefined) return { parentSlot, keys, complete: false };
+				if (slot === undefined) return { parentBinding, keys, complete: false };
 				add({ private: true, index: slot });
 			} else if (opcode === "initPrivateFields") {
 				for (const name of args.slice(1)) {
 					const slot = globalSlotOf(fn, name);
-					if (slot === undefined) return { parentSlot, keys, complete: false };
+					if (slot === undefined) return { parentBinding, keys, complete: false };
 					add({ private: true, index: slot });
 				}
 			} else if (opcode === "storePropertyStatic") {
 				const stringIndex = fn.instructionAttributes(instruction).stringIndex;
-				if (typeof stringIndex !== "number") return { parentSlot, keys, complete: false };
+				if (typeof stringIndex !== "number")
+					return { parentBinding, keys, complete: false };
 				add({ private: false, index: stringIndex });
 			} else if (opcode === "defineProperty" || opcode === "storeProperty") {
 				const stringIndex =
 					args[1] === undefined ? undefined : stringIndexOf(fn, args[1]);
-				if (stringIndex === undefined) return { parentSlot, keys, complete: false };
+				if (stringIndex === undefined) return { parentBinding, keys, complete: false };
 				add({ private: false, index: stringIndex });
 			}
 		}
 		const terminator = fn.blockTerminator(block);
 		const kind = fn.instructionKind(terminator);
-		if (kind === "return") return { parentSlot, keys, complete: true };
+		if (kind === "return") return { parentBinding, keys, complete: true };
 		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
 		const next =
 			kind === "jump"
@@ -326,7 +358,7 @@ function walkConstructor(fn: CoreFunctionStore): ConstructorWalk {
 					? capturedSuperEdge(fn, edgeStart)
 					: undefined;
 		if (next === undefined || visited.has(next))
-			return { parentSlot, keys, complete: false };
+			return { parentBinding, keys, complete: false };
 		block = next;
 	}
 }
@@ -349,7 +381,7 @@ function capturedSuperEdge(
 			const parent = operands(fn, instruction)[0];
 			return {
 				block,
-				captured: parent !== undefined && globalSlotOf(fn, parent) !== undefined,
+				captured: parent !== undefined && bindingOf(fn, parent) !== undefined,
 			};
 		}
 		return undefined;
@@ -400,7 +432,7 @@ function ordinaryDataKeys(program: CoreProgram): Set<number> {
 
 export function coreClassLayouts(program: CoreProgram): CoreClassLayoutIndex {
 	const definitions = findClassDefinitions(program);
-	const globals = classGlobals(program);
+	const bindings = classBindings(program);
 	const members = new Map<CoreFunctionId, OwnMembers>();
 	const walks = new Map<CoreFunctionId, ConstructorWalk>();
 	const methodClass = new Map<CoreFunctionId, CoreFunctionId>();
@@ -421,7 +453,9 @@ export function coreClassLayouts(program: CoreProgram): CoreClassLayoutIndex {
 		building.add(constructor);
 		const derived = program.function(constructor).metadata.isDerivedConstructor;
 		const parentConstructor =
-			derived && walk.parentSlot !== undefined ? globals.get(walk.parentSlot) : undefined;
+			derived && walk.parentBinding !== undefined
+				? bindings.get(walk.parentBinding)
+				: undefined;
 		const parent = parentConstructor === undefined ? undefined : build(parentConstructor);
 		building.delete(constructor);
 		// An unresolved heritage leaves the inherited slots and methods unknown.

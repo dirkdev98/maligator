@@ -103,3 +103,21 @@ test("a name that plain objects own as data keeps its guard only where it is cal
 	);
 	expect(sites).toEqual(["LOAD_PROPERTY_STATIC:method"]);
 });
+
+test("classes in a function scope extend their parent's layout and reserve it in the base receiver", () => {
+	const image = compile(`
+		function make(value) {
+			class Base { constructor(x) { this.x = x; } }
+			class Derived extends Base { constructor(x) { super(x); this.y = x + 1; } }
+			return new Derived(value);
+		}
+		globalThis.made = make(1);
+	`);
+	expect(layoutNames(image)).toEqual(expect.arrayContaining([["x"], ["x", "y"]]));
+	const name = (index: number) =>
+		String.fromCharCode(...(image.runtime.stringConstants[index] ?? []));
+	const base = image.native.functions.find(
+		(fn) => name(fn.body.nameStringIndex) === "Base",
+	)!;
+	expect(base.body.constructorSlotReserve).toBe(2);
+});
