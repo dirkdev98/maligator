@@ -24,6 +24,20 @@ await worker.ready;
 const pathResponse = message(worker.port);
 worker.port.postMessage({ filename: "fixtures/child-only.mjs" });
 check((await pathResponse) === "child-only.mjs", "child-only host installer");
+const wide = (1n << 4096n) + 123456789n;
+const bigintsResponse = message(worker.port);
+worker.port.postMessage({
+	positive: wide,
+	negative: -wide,
+	keyed: new Map([[wide, -wide]]),
+});
+const bigints = await bigintsResponse;
+check(
+	bigints.positive === wide &&
+		bigints.negative === -wide &&
+		bigints.keyed.get(wide) === -wide,
+	"owned arbitrary-precision digits across worker isolates",
+);
 const bytes = new Uint8Array([2, 4]);
 const returned = message(worker.port);
 worker.port.postMessage({ bytes }, [bytes.buffer]);

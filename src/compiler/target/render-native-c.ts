@@ -865,7 +865,7 @@ function nativeTruthiness(
 						: `mal_ops_is_number(${value})`;
 		const truth =
 			scalar === COMPILER_VALUE_KIND_BIGINT
-				? `(mal_bigint_value(mal_value_to_bigint(${value})) != 0)`
+				? `(mal_value_to_bigint(${value})->sign != 0)`
 				: scalar === COMPILER_VALUE_KIND_STRING
 					? `(mal_string_length(mal_value_to_string(${value})) != 0)`
 					: scalar === COMPILER_VALUE_KIND_BOOLEAN

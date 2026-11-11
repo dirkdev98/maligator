@@ -392,6 +392,7 @@ MalValue mal_ops_shift_right(MalValue left, MalValue right);
 
 MalValue mal_ops_shift_right_unsigned(MalValue left, MalValue right);
 
+/** Primitive comparisons excluding BigInt/String pairs, which need VM-owned parsing. */
 MalValue mal_ops_less_than(MalValue left, MalValue right);
 
 MalValue mal_ops_less_equal(MalValue left, MalValue right);

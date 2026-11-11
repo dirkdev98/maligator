@@ -1,7 +1,8 @@
+import { BIGINT_MAX_BITS } from "./bigint-digits.ts";
 import type { KnownBuiltinError } from "./known-builtin-errors.ts";
 import { UNICODE_VERSION } from "./unicode-data.ts";
 
-export const CONSTANT_EVALUATOR_CONTRACT = "mal-binary64-utf16-i128-unicode17-v4";
+export const CONSTANT_EVALUATOR_CONTRACT = "mal-binary64-utf16-bigint-v5";
 
 export interface ConstantEvaluationTarget {
 	readonly contract: string;
@@ -51,18 +52,9 @@ export type ConstantEvaluation =
 			readonly work: number;
 	  };
 
-function bigintProductFits(
-	left: bigint,
-	right: bigint,
-	minimum: bigint,
-	maximum: bigint,
-): boolean {
-	return !(
-		(left > 0n && right > 0n && left > maximum / right) ||
-		(left > 0n && right < 0n && right < minimum / left) ||
-		(left < 0n && right > 0n && left < minimum / right) ||
-		(left < 0n && right < 0n && left < maximum / right)
-	);
+function bigintWordCost(value: bigint, bits: number): number | undefined {
+	if (BigInt.asIntN(bits, value) !== value) return undefined;
+	return Math.max(1, Math.ceil((value < 0n ? -value : value).toString(16).length / 8));
 }
 
 export function evaluateConstantOperation(
@@ -80,7 +72,7 @@ export function evaluateConstantOperation(
 		target.numbers !== "binary64-gradual-underflow"
 	)
 		return unsupported("target-contract");
-	if (workLimit < 1) return unsupported("work-limit");
+	if (!Number.isSafeInteger(workLimit) || workLimit < 1) return unsupported("work-limit");
 	work++;
 	const result = (value: ConstantValue): ConstantEvaluation => ({
 		kind: "value",
@@ -212,107 +204,75 @@ export function evaluateConstantOperation(
 	}
 	if (operation === "string.length" && left?.kind === "string")
 		return number(left.value.length);
+	const foldBits = Math.min(BIGINT_MAX_BITS, Math.floor(workLimit) * 32);
+	const spend = (cost: number): boolean => {
+		if (!Number.isSafeInteger(cost) || work + cost > workLimit) return false;
+		work += cost;
+		return true;
+	};
 	if (operation.startsWith("bigint.unary:") && left?.kind === "bigint") {
-		const halfRange = 1n << 126n;
-		const minimum = -halfRange - halfRange,
-			maximum = halfRange - 1n + halfRange;
-		if (left.value < minimum || left.value > maximum)
-			return unsupported("target-contract");
-		switch (operation.slice(13)) {
+		const operator = operation.slice(13);
+		if (operator === "!") return boolean(left.value === 0n);
+		if (operator === "tonumeric") return result(left);
+		const cost = bigintWordCost(left.value, foldBits);
+		if (cost === undefined || !spend(cost)) return unsupported("work-limit");
+		let value: bigint;
+		switch (operator) {
 			case "-":
-				return left.value === minimum
-					? unsupported("target-contract")
-					: result({ kind: "bigint", value: -left.value });
+				value = -left.value;
+				break;
 			case "~":
-				return result({ kind: "bigint", value: ~left.value });
-			case "!":
-				return boolean(left.value === 0n);
-			case "tonumeric":
-				return result(left);
+				value = ~left.value;
+				break;
 			case "increment":
-				return left.value === maximum
-					? unsupported("target-contract")
-					: result({ kind: "bigint", value: left.value + 1n });
+				value = left.value + 1n;
+				break;
 			case "decrement":
-				return left.value === minimum
-					? unsupported("target-contract")
-					: result({ kind: "bigint", value: left.value - 1n });
+				value = left.value - 1n;
+				break;
+			default:
+				return unsupported("uncertified-operation");
 		}
+		return bigintWordCost(value, foldBits) === undefined
+			? unsupported("work-limit")
+			: result({ kind: "bigint", value });
 	}
 	if (
 		operation.startsWith("bigint.binary:") &&
 		left?.kind === "bigint" &&
 		right?.kind === "bigint"
 	) {
-		const halfRange = 1n << 126n;
-		const minimum = -halfRange - halfRange,
-			maximum = halfRange - 1n + halfRange;
+		const operator = operation.slice(14);
 		if (
-			left.value < minimum ||
-			left.value > maximum ||
-			right.value < minimum ||
-			right.value > maximum
+			((operator === "/" || operator === "%") && right.value === 0n) ||
+			(operator === "**" && right.value < 0n)
 		)
-			return unsupported("target-contract");
+			return { kind: "throw", error: "RangeError", stage: "invocation", work };
+		if (operator === "**" && right.value === 0n)
+			return result({ kind: "bigint", value: 1n });
+		const a = bigintWordCost(left.value, foldBits),
+			b = bigintWordCost(right.value, foldBits);
+		if (a === undefined || b === undefined) return unsupported("work-limit");
+		const cost =
+			operator === "*" || operator === "/" || operator === "%" ? a * b : Math.max(a, b);
+		if (!spend(cost)) return unsupported("work-limit");
 		let value: bigint;
-		switch (operation.slice(14)) {
+		switch (operator) {
 			case "+":
-				if (
-					(right.value > 0n && left.value > maximum - right.value) ||
-					(right.value < 0n && left.value < minimum - right.value)
-				)
-					return unsupported("target-contract");
 				value = left.value + right.value;
 				break;
 			case "-":
-				if (
-					(right.value < 0n && left.value > maximum + right.value) ||
-					(right.value > 0n && left.value < minimum + right.value)
-				)
-					return unsupported("target-contract");
 				value = left.value - right.value;
 				break;
 			case "*":
-				if (!bigintProductFits(left.value, right.value, minimum, maximum))
-					return unsupported("target-contract");
 				value = left.value * right.value;
 				break;
-			case "**": {
-				if (right.value < 0n) return unsupported("uncertified-operation");
-				if (right.value === 0n) {
-					value = 1n;
-					break;
-				}
-				if (left.value === 0n || left.value === 1n) {
-					value = left.value;
-					break;
-				}
-				if (left.value === -1n) {
-					value = right.value % 2n === 0n ? 1n : -1n;
-					break;
-				}
-				let base = left.value,
-					exponent = right.value;
-				value = 1n;
-				while (exponent > 0n) {
-					if ((exponent & 1n) !== 0n) {
-						if (work + 1 > workLimit) return unsupported("work-limit");
-						work++;
-						if (!bigintProductFits(value, base, minimum, maximum))
-							return unsupported("target-contract");
-						value *= base;
-					}
-					exponent >>= 1n;
-					// The final square is unused and may overflow even when the result fits.
-					if (exponent === 0n) break;
-					if (work + 1 > workLimit) return unsupported("work-limit");
-					work++;
-					if (!bigintProductFits(base, base, minimum, maximum))
-						return unsupported("target-contract");
-					base *= base;
-				}
+			case "/":
+				value = left.value / right.value;
 				break;
-			}
+			case "%":
+				value = left.value % right.value;
+				break;
 			case "&":
 				value = left.value & right.value;
 				break;
@@ -322,40 +282,54 @@ export function evaluateConstantOperation(
 			case "^":
 				value = left.value ^ right.value;
 				break;
-			case "<<":
-			case ">>": {
-				const shiftLeft = operation.endsWith("<<") !== right.value < 0n;
-				if (right.value <= -128n || right.value >= 128n) {
-					if (shiftLeft && left.value !== 0n) return unsupported("target-contract");
-					value = !shiftLeft && left.value < 0n ? -1n : 0n;
+			case "**": {
+				if (left.value === 0n || left.value === 1n) {
+					value = left.value;
 					break;
 				}
-				const count = right.value < 0n ? -right.value : right.value;
-				if (shiftLeft) {
-					// Only certify shifts that do not depend on the runtime's i128 wrapping.
-					if (left.value < minimum >> count || left.value > maximum >> count)
-						return unsupported("target-contract");
-					value = left.value << count;
-				} else value = left.value >> count;
+				if (left.value === -1n) {
+					value = (right.value & 1n) === 0n ? 1n : -1n;
+					break;
+				}
+				if (right.value > BigInt(foldBits)) return unsupported("work-limit");
+				let base = left.value,
+					exponent = right.value;
+				value = 1n;
+				while (exponent > 0n) {
+					if ((exponent & 1n) !== 0n) {
+						const x = bigintWordCost(value, foldBits),
+							y = bigintWordCost(base, foldBits);
+						if (x === undefined || y === undefined || !spend(x * y))
+							return unsupported("work-limit");
+						value *= base;
+					}
+					exponent >>= 1n;
+					if (exponent === 0n) break;
+					const words = bigintWordCost(base, foldBits);
+					if (words === undefined || !spend(words * words))
+						return unsupported("work-limit");
+					base *= base;
+				}
 				break;
 			}
-			case "/":
-			case "%":
-				if (right.value === 0n)
-					return {
-						kind: "throw",
-						error: "RangeError",
-						stage: "invocation",
-						work,
-					};
-				if (left.value === minimum && right.value === -1n)
-					return operation.endsWith("%")
-						? result({ kind: "bigint", value: 0n })
-						: unsupported("target-contract");
-				value = operation.endsWith("/")
-					? left.value / right.value
-					: left.value % right.value;
+			case "<<":
+			case ">>": {
+				const leftward = (operator === "<<") !== right.value < 0n;
+				const count = right.value < 0n ? -right.value : right.value;
+				if (left.value === 0n) {
+					value = 0n;
+					break;
+				}
+				if (count >= BigInt(foldBits)) {
+					if (leftward) return unsupported("work-limit");
+					value = left.value < 0n ? -1n : 0n;
+					break;
+				}
+				if (leftward && !spend(Math.ceil(Number(count) / 32)))
+					return unsupported("work-limit");
+				value = leftward ? left.value << count : left.value >> count;
 				break;
+			}
 			case "==":
 			case "===":
 				return boolean(left.value === right.value);
@@ -373,9 +347,10 @@ export function evaluateConstantOperation(
 			default:
 				return unsupported("uncertified-operation");
 		}
-		return value < minimum || value > maximum
-			? unsupported("target-contract")
+		return bigintWordCost(value, foldBits) === undefined
+			? unsupported("work-limit")
 			: result({ kind: "bigint", value });
 	}
+
 	return unsupported("uncertified-operation");
 }

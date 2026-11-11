@@ -166,6 +166,8 @@ MalString *mal_string_new_utf16_owned(MalHeap *heap, const c16 *units, usize len
  * Allocate and initialize a string from ASCII bytes.
  */
 MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length);
+/** Fallible ASCII copy; the caller keeps input bytes valid across allocation. */
+MalString *mal_string_try_new_ascii(MalHeap *heap, const byte *bytes, usize length);
 /** Caller proves ASCII without NULs; reuse can grow the owned backing. UTF16 bridging invalidates the span. */
 const u8 *mal_string_prepare_ascii_cstr(MalHeap *heap, MalString *string);
 /** Observe owned flat inputs, retaining their encoding on reuse; allocation failure keeps the temporary usable. */

@@ -287,7 +287,8 @@ static bool mal_ta_span_matches(
         i128 element = span->kind == MAL_TA_BIGINT64
             ? (i128) mal_scalar_i64_from_bits(bits)
             : (i128) (u128) bits;
-        return element == mal_bigint_value(mal_value_to_bigint(target));
+        i128 sought;
+        return mal_bigint_try_i128(mal_value_to_bigint(target), &sought) && element == sought;
     }
     if (!mal_ops_is_number(target)) {
         return false;
@@ -1152,6 +1153,7 @@ static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args
     MalValue ret = mal_value_new_undefined();
     for (u32 i = 0; i < length; i++) {
         MalValue element = mal_typed_array_object_get(vm, array, i);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
         if (mal_value_is_nil(element)) {
             if (!mal_rooted_string_parts_append(&parts, nullptr)) {
                 mal_vm_throw_error(
@@ -1162,6 +1164,7 @@ static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args
             continue;
         }
         MalString *part = mal_ops_to_string(&vm->heap, element);
+        if (part == nullptr) goto done;
         if (!mal_rooted_string_parts_append(&parts, part)) {
             mal_vm_throw_error(
                 vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
@@ -1206,12 +1209,15 @@ static MalValue mal_ta_to_locale_string(MalVm *vm, MalValue this_value, const Ma
             "Invalid string length");
         return mal_value_new_undefined();
     }
+    MalValue roots[] = {this_value, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
     MalRootSpan this_span;
-    mal_gc_root(&this_span, &this_value, 1);
+    mal_gc_root(&this_span, roots, countof(roots));
     mal_gc_native_rooted_begin(vm);
     MalValue ret = mal_value_new_undefined();
     for (u32 i = 0; i < length; i++) {
-        MalValue element = mal_typed_array_object_get(vm, array, i);
+        roots[1] = mal_typed_array_object_get(vm, array, i);
+        MalValue element = roots[1];
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
         if (mal_value_is_nil(element)) {
             if (!mal_rooted_string_parts_append(&parts, nullptr)) {
                 mal_vm_throw_error(
@@ -1221,11 +1227,10 @@ static MalValue mal_ta_to_locale_string(MalVm *vm, MalValue this_value, const Ma
             }
             continue;
         }
-        MalValue method;
-        if (!mal_vm_get_property(vm, element, to_locale_key, &method)) {
+        if (!mal_vm_get_property(vm, element, to_locale_key, &roots[2])) {
             goto done;
         }
-        MalCompletion completion = mal_vm_call_value(vm, method, element, nullptr, 0);
+        MalCompletion completion = mal_vm_call_value(vm, roots[2], element, nullptr, 0);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
             goto done;
@@ -1428,6 +1433,7 @@ static MalValue mal_ta_includes(MalVm *vm, MalValue this_value, const MalValue *
     bool target_nan = mal_value_is_nan(target);
     for (u32 i = from; i < length; i++) {
         MalValue element = mal_typed_array_object_get(vm, array, i);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
         // includes uses SameValueZero, so NaN matches NaN.
         if (mal_value_is_truthy(mal_ops_strict_equal(element, target)) || (target_nan && mal_value_is_nan(element))) {
             return mal_value_new_boolean(true);
@@ -1522,6 +1528,7 @@ static MalValue mal_ta_iterate(MalVm *vm, MalValue this_value, const MalValue *a
         MalValue element = numeric
             ? mal_vm_exact_numeric_typed_array_load(array, i, array->kind, element_size)
             : mal_typed_array_object_get(vm, array, i);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
         MalValue call_args[3] = {element, mal_value_from_i32((i32) i), this_value};
         MalRootSpan call_span;
         mal_gc_root(&call_span, call_args, 3);
@@ -1912,6 +1919,11 @@ MalValue mal_builtin_typed_array_sort(MalVm *vm, MalValue this_value, const MalV
     MalValue *scratch = malloc(sizeof(MalValue) * length);
     for (u32 i = 0; i < length; i++) {
         values[i] = mal_typed_array_object_get(vm, array, i);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            free(scratch);
+            free(values);
+            return mal_value_new_undefined();
+        }
         scratch[i] = mal_value_new_undefined();
     }
 

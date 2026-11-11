@@ -1009,7 +1009,7 @@ static MalValue dns_get(MalVm *vm, MalValue object, const char *name, bool *ok) 
 
 static void dns_throw_one_of(MalVm *vm, const char *name, const char *choices, MalValue value) {
     char received[320];
-    mal_node_describe_received(vm, value, received, sizeof received);
+    if (!mal_node_describe_received(vm, value, received, sizeof received)) return;
     // validateOneOf prints the received value as inspect does, not as a type.
     const char *shown = strncmp(received, "type ", 5) == 0 && strchr(received, '(') != nullptr
         ? strchr(received, '(') + 1 : received;
@@ -1129,7 +1129,7 @@ static MalValue dns_lookup_impl(MalVm *vm, const MalValue *args, i32 argc, bool 
     }
     if (!mal_value_is_truthy(hostname)) {
         char received[320];
-        mal_node_describe_received(vm, hostname, received, sizeof received);
+        if (!mal_node_describe_received(vm, hostname, received, sizeof received)) return mal_value_new_undefined();
         const char *shown = strncmp(received, "type ", 5) == 0 && strchr(received, '(') != nullptr
             ? strchr(received, '(') + 1 : received;
         char message[400];
@@ -1498,7 +1498,10 @@ static MalValue dns_resolve(
     MalValue result = mal_value_new_undefined();
     if (!valid) {
         char received[320];
-        mal_node_describe_received(vm, rooted[0], received, sizeof received);
+        if (!mal_node_describe_received(vm, rooted[0], received, sizeof received)) {
+            mal_gc_unroot(&root);
+            return mal_value_new_undefined();
+        }
         char message[400];
         snprintf(message, sizeof message, "The argument 'rrtype' is invalid. Received %s", received);
         mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_VALUE");

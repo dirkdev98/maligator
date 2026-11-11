@@ -1827,7 +1827,7 @@ static MalValue http_is_valid_header_value(
         MalValue options = args[1];
         if (!mal_value_is_object(options) || mal_value_is_callable(options) || mal_value_is_array_object(options)) {
             char received[320];
-            mal_node_describe_received(vm, options, received, sizeof received);
+            if (!mal_node_describe_received(vm, options, received, sizeof received)) return mal_value_new_undefined();
             char message[400];
             snprintf(message, sizeof message, "The \"options\" argument must be of type object. %s", received);
             mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_TYPE");
@@ -1848,7 +1848,10 @@ static MalValue http_is_valid_header_value(
                 snprintf(shown, sizeof shown, "'%.*s'", text == nullptr ? 0 : (int) length, text == nullptr ? "" : (const char *) text);
                 free(text);
             } else {
-                mal_node_describe_received(vm, validation, shown, sizeof shown);
+                if (!mal_node_describe_received(vm, validation, shown, sizeof shown)) {
+                    mal_gc_unroot(&root);
+                    return mal_value_new_undefined();
+                }
             }
             char message[400];
             snprintf(message, sizeof message,

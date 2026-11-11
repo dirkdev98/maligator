@@ -7,6 +7,7 @@
 # workloads when the owning test already forces collection at the vulnerable edge.
 
 # Allocator, GC roots, suspended work, and re-entrant lifetime.
+tests/native/bigint-allocation.test.ts
 tests/native/ffi-caller-storage.test.ts
 tests/native/ffi-struct-pointers.test.ts
 tests/native/ffi-callback-records.test.ts
@@ -146,6 +147,7 @@ tests/native/writable-stream.test.ts
 
 # Untrusted wire, parser, bulk-allocation, numeric, and buffer boundaries.
 tests/native/bigint128-safety.test.ts
+tests/native/bigint-arbitrary.test.ts
 tests/native/fetch-body.test.ts
 tests/native/web-body-pressure.test.ts
 tests/native/fetch-hardening.test.ts

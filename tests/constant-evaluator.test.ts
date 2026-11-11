@@ -98,38 +98,59 @@ describe("target-certified constant evaluation", () => {
 		).toMatchObject({ kind: "value", value: { kind: "number", value: 3 } });
 	});
 
-	it("checks BigInt limits before arithmetic and returns a residual throw description", () => {
-		const max = (1n << 127n) - 1n;
-		const binary = (operator: string, a: bigint, b: bigint) =>
+	it.each([
+		["carry", "+", (1n << 127n) - 1n, 1n, 1n << 127n],
+		[
+			"wide product",
+			"*",
+			(1n << 127n) - 1n,
+			(1n << 127n) - 1n,
+			((1n << 127n) - 1n) ** 2n,
+		],
+		["minimum division", "/", -(1n << 127n), -1n, 1n << 127n],
+		["minimum remainder", "%", -(1n << 127n), -1n, 0n],
+		["wide power", "**", 2n, 512n, 1n << 512n],
+	] as const)(
+		"folds %s without a native-width limit",
+		(_name, operator, a, b, expected) => {
+			expect(
+				evaluateConstantOperation(`bigint.binary:${operator}`, [
+					{ kind: "bigint", value: a },
+					{ kind: "bigint", value: b },
+				]),
+			).toMatchObject({ kind: "value", value: { kind: "bigint", value: expected } });
+		},
+	);
+
+	it.each([
+		["/", 0n],
+		["%", 0n],
+		["**", -1n],
+	] as const)("returns a residual RangeError for %s domain errors", (operator, right) => {
+		expect(
 			evaluateConstantOperation(`bigint.binary:${operator}`, [
-				{ kind: "bigint", value: a },
-				{ kind: "bigint", value: b },
-			]);
-		expect(binary("+", max, 1n)).toMatchObject({
-			kind: "unsupported",
-			reason: "target-contract",
-		});
-		expect(binary("*", max, max)).toMatchObject({
-			kind: "unsupported",
-			reason: "target-contract",
-		});
-		expect(binary("/", -max - 1n, -1n)).toMatchObject({
-			kind: "unsupported",
-			reason: "target-contract",
-		});
-		expect(binary("%", -max - 1n, -1n)).toMatchObject({
-			kind: "value",
-			value: { kind: "bigint", value: 0n },
-		});
-		expect(binary("/", 2n, 0n)).toMatchObject({
-			kind: "throw",
-			error: "RangeError",
-			stage: "invocation",
-		});
-		expect(binary("*", 123456789n, 987654321n)).toMatchObject({
-			kind: "value",
-			value: { kind: "bigint", value: 121932631112635269n },
-		});
+				{ kind: "bigint", value: 2n },
+				{ kind: "bigint", value: right },
+			]),
+		).toMatchObject({ kind: "throw", error: "RangeError", stage: "invocation" });
+	});
+
+	it("bounds BigInt folding before expensive multiplication and shifts", () => {
+		for (const [operator, a, b] of [
+			["*", 1n << 1000n, 1n << 1000n],
+			["<<", 1n, 1n << 200n],
+		] as const)
+			expect(
+				evaluateConstantOperation(
+					`bigint.binary:${operator}`,
+					[
+						{ kind: "bigint", value: a },
+						{ kind: "bigint", value: b },
+					],
+					PORTABLE_CONSTANT_TARGET,
+					1000,
+				),
+			).toMatchObject({ kind: "unsupported", reason: "work-limit" });
 	});
 
 	it("uses certified folds in Core and leaves uncertified powers at runtime", () => {

@@ -12,10 +12,6 @@ MalValue mal_builtin_bigint_to_string_radix(MalVm *vm, MalValue receiver, i32 ra
  */
 void mal_builtin_bigint_install(MalVm *vm);
 
-/**
- * Abstract ToBigInt: coerce a primitive to a 128-bit BigInt value. Booleans,
- * BigInts, and valid BigInt strings convert; Number/Symbol/undefined/null throw
- * TypeError, and an invalid string throws SyntaxError. Returns false (with a
- * pending throw) on failure. Used by BigInt64Array/BigUint64Array element writes.
- */
-bool mal_bigint_to_bigint(MalVm *vm, MalValue value, i128 *out);
+/** ToBigInt preserves the full primitive. Hold its result in a GC root before
+ * another coercion or allocation; syntax and type failures set a pending throw. */
+bool mal_bigint_to_bigint(MalVm *vm, MalValue value, MalBigInt **out);

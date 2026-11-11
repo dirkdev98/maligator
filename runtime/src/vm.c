@@ -3905,8 +3905,18 @@ static void mal_vm_print_thrown(MalVm *vm, MalValue value, const byte *prefix) {
         vm->completion = saved;
     }
 
-    // ToString keeps the report on a single stream for any thrown value.
-    mal_vm_print_display(stderr, mal_value_from_string(mal_ops_to_string(&vm->heap, value)));
+    MalCompletion saved = vm->completion;
+    MalValue roots[] = {value, saved.value};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalString *string = mal_ops_to_string(&vm->heap, value);
+    if (string != nullptr) {
+        mal_vm_print_display(stderr, mal_value_from_string(string));
+    } else {
+        fprintf(stderr, "<value formatting failed>");
+    }
+    vm->completion = saved;
+    mal_gc_unroot(&span);
     fprintf(stderr, "\n");
 }
 

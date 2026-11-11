@@ -553,7 +553,7 @@ static bool dgram_port(MalVm *vm, MalValue value, bool allow_zero, u16 *out) {
     }
     if (!(number >= (allow_zero ? 0 : 1) && number < 65536) || floor(number) != number) {
         char received[128];
-        mal_node_describe_received(vm, value, received, sizeof(received));
+        if (!mal_node_describe_received(vm, value, received, sizeof(received))) return false;
         char message[192];
         snprintf(message, sizeof(message), "Port should be %s 0 and < 65536. Received %s.", allow_zero ? ">=" : ">",
             received);

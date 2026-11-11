@@ -9,9 +9,12 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "../../src/compiler/pipeline/compile-program.ts";
+import { BIGINT_MAX_BITS } from "../../src/compiler/shared/bigint-digits.ts";
 import { knownBuiltinErrorNames } from "../../src/compiler/shared/known-builtin-errors.ts";
 import {
 	serializeRuntimeImage,
+	deserializeRuntimeImage,
+	Writer,
 	WIRE_OPCODES,
 	WIRE_VERSION,
 } from "../../src/compiler/target/program-image-codec.ts";
@@ -1650,6 +1653,60 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it.each(["sign", "negative-zero", "leading-zero", "missing-limb", "excessive-count"])(
+		"rejects malformed BigInt constant %s in both wire readers",
+		(kind) => {
+			const words = [0x89abcdef, 0x12345678, 0x87654321, 0xfedcba98, 0x10203040];
+			const hex = words
+				.toReversed()
+				.map((word) => word.toString(16).padStart(8, "0"))
+				.join("");
+			const value = BigInt(`0x${hex}`);
+			const valid = serializeRuntimeImage(
+				{
+					...definition,
+					functions: [
+						{
+							...fn,
+							literalShapeCount: 0,
+							instructions: [
+								{ opcode: "CREATE_UNDEFINED", dst: 0 },
+								{ opcode: "RETURN", value: 0 },
+							],
+						},
+					],
+					bigintConstants: [value],
+				},
+				{ debugInfo: false },
+			);
+			const payload = Buffer.alloc(words.length * 4);
+			words.forEach((word, index) => payload.writeUInt32LE(word, index * 4));
+			const offset = uniquePayloadOffset(valid, payload);
+			const prefix = new Writer();
+			prefix.u32(kind === "sign" ? 2 : kind === "negative-zero" ? 1 : 0);
+			prefix.u32(
+				kind === "negative-zero"
+					? 0
+					: kind === "excessive-count"
+						? BIGINT_MAX_BITS / 32 + 1
+						: kind === "missing-limb"
+							? words.length + 1
+							: words.length,
+			);
+			if (kind === "leading-zero") payload.writeUInt32LE(0, payload.length - 4);
+			const malformed = Buffer.concat([
+				valid.subarray(0, offset - 2),
+				prefix.finish(),
+				kind === "negative-zero" ? Buffer.alloc(0) : payload,
+				valid.subarray(offset + payload.length),
+			]);
+			expect(deserializeRuntimeImage(valid).bigintConstants).toEqual([value]);
+			acceptsWire("bigint-valid", valid);
+			expect(() => deserializeRuntimeImage(malformed)).toThrow();
+			rejectsWire(`bigint-${kind}`, malformed);
+		},
+	);
+
 	it("loads unaligned fixed-width little-endian scalar fields", () => {
 		const scalarDefinition: RuntimeImage = {
 			...definition,
@@ -1657,7 +1714,11 @@ describe("wire loader side-data validation", () => {
 			// payloads at deliberately unaligned offsets.
 			globalCount: 128,
 			stringConstants: [[0xd800, 0xabcd]],
-			bigintConstants: [-0x0123456789abcdef0123456789abcdefn],
+			bigintConstants: [
+				-0x0123456789abcdef0123456789abcdefn,
+				(1n << 256n) + 0x89abcdefn,
+				0n,
+			],
 			literalTemplateData: [0x01234567, 0x89abcdef],
 			functions: [
 				{
@@ -1684,7 +1745,9 @@ describe("wire loader side-data validation", () => {
 		expect(result.stdout).toBe(
 			[
 				"string[0] d800 abcd",
-				"bigint[0] fedcba9876543210fedcba9876543211",
+				"bigint[0] -1 89abcdef 01234567 89abcdef 01234567",
+				"bigint[1] 1 89abcdef 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000001",
+				"bigint[2] 0",
 				"literal[0] 01234567",
 				"literal[1] 89abcdef",
 				"f64[0:0] 4019000000000000",

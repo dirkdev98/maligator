@@ -232,6 +232,7 @@ static bool mal_builtin_iterator_array_advance(
             return true;
         }
         MalValue element = mal_typed_array_object_get(vm, array, (u32) index);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
         *value_out = iterator->kind == MAL_ITERATOR_ARRAY_ENTRIES
             ? mal_builtin_iterator_pair(
                 vm, mal_ops_number_value((f64) index), element)

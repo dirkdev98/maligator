@@ -1303,6 +1303,7 @@ static bool util_fmt_typed_entries(UtilCtx *ctx, MalValue value, UtilEntries *en
         usize start;
         util_entry_begin(ctx, entries, &start);
         MalValue element = mal_typed_array_object_get(ctx->vm, array, i);
+        if (ctx->vm->completion.kind == MAL_COMPLETION_THROW) return false;
         if (!util_fmt_primitive(ctx, element, true)) return false;
         util_entry_end(ctx, entries, start);
     }

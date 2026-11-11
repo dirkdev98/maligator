@@ -2081,10 +2081,11 @@ static MalValue mal_buffer_write_number(
         bool is_signed = kind == MAL_BUFFER_NUMBER_BIG_INT;
         bool out_of_range = false;
         if (mal_value_is_bigint(value)) {
-            i128 number = mal_bigint_value(mal_value_to_bigint(value));
-            out_of_range = is_signed
+            i128 number;
+            bool fits = mal_bigint_try_i128(mal_value_to_bigint(value), &number);
+            out_of_range = !fits || (is_signed
                 ? number < -((i128) 1 << 63) || number >= ((i128) 1 << 63)
-                : number < 0 || number >= ((i128) 1 << 64);
+                : number < 0 || number >= ((i128) 1 << 64));
         } else if (mal_ops_is_number(value)) {
             f64 number = mal_ops_number_as_f64(value);
             out_of_range = is_signed
@@ -2105,7 +2106,7 @@ static MalValue mal_buffer_write_number(
                 "Cannot mix BigInt and other types, use explicit conversions");
             return mal_value_new_undefined();
         }
-        bits = (u64) mal_bigint_value(mal_value_to_bigint(value));
+        bits = mal_bigint_low_u64(mal_value_to_bigint(value));
     } else {
         f64 number;
         if (!mal_buffer_to_number(vm, value, &number)) return mal_value_new_undefined();

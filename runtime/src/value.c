@@ -309,7 +309,7 @@ bool mal_value_is_truthy_primitive(MalValue value) {
     }
 
     if (mal_value_is_bigint(value)) {
-        return mal_bigint_value(mal_value_to_bigint(value)) != 0;
+        return mal_value_to_bigint(value)->sign != 0;
     }
 
     // Any object is truthy.
@@ -381,9 +381,18 @@ void mal_value_debug(MalValue value) {
     }
 
     if (mal_value_is_bigint(value)) {
-        i128 magnitude = mal_bigint_value(mal_value_to_bigint(value));
-        bool negative = magnitude < 0;
-        u128 mag = negative ? (~(u128) magnitude + 1) : (u128) magnitude;
+        const MalBigInt *bigint = mal_value_to_bigint(value);
+        const u32 *digits = mal_bigint_digits(bigint);
+        bool negative = bigint->sign < 0;
+        if (bigint->digit_count > 4) {
+            if (negative) printf("-");
+            printf("0x%x", digits[bigint->digit_count - 1]);
+            for (u32 i = bigint->digit_count - 1; i != 0; i--) printf("%08x", digits[i - 1]);
+            printf("n");
+            return;
+        }
+        u128 mag = 0;
+        for (u32 i = bigint->digit_count; i != 0; i--) mag = (mag << 32) | digits[i - 1];
         char buffer[48];
         usize length = 0;
         do {

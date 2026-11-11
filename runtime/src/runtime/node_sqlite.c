@@ -483,8 +483,9 @@ static bool sqlite_value_from_js(
         return true;
     }
     if (mal_value_is_bigint(input)) {
-        i128 integer = mal_bigint_value(mal_value_to_bigint(input));
-        if (integer < INT64_MIN || integer > INT64_MAX) {
+        i128 integer;
+        if (!mal_bigint_try_i128(mal_value_to_bigint(input), &integer)
+            || integer < INT64_MIN || integer > INT64_MAX) {
             mal_vm_throw_error(
                 vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                 (const byte *) "BigInt value is outside SQLite's 64-bit range");

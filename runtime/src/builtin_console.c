@@ -28,9 +28,9 @@
 
 #define CONSOLE_VISIBLE (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 
-static void console_plain_value(MalVm *vm, MalTextBuffer *out, MalValue value, bool quote_strings);
+static bool console_plain_value(MalVm *vm, MalTextBuffer *out, MalValue value, bool quote_strings);
 
-static void console_plain_object(MalVm *vm, MalTextBuffer *out, MalValue value) {
+static bool console_plain_object(MalVm *vm, MalTextBuffer *out, MalValue value) {
     if (mal_value_is_array_object(value)) {
         MalArrayObject *array = mal_value_to_array_object(value);
         u32 length = mal_array_object_length(array);
@@ -39,11 +39,11 @@ static void console_plain_object(MalVm *vm, MalTextBuffer *out, MalValue value) 
             if (index > 0) mal_text_buffer_append_ascii(out, (const byte *) ", ");
             MalPropertyResolution resolution = mal_object_resolve_property(
                 (MalObject *) array, mal_key_index(index));
-            console_plain_value(vm, out,
-                resolution.found ? resolution.desc.value : mal_value_new_undefined(), true);
+            if (!console_plain_value(vm, out,
+                    resolution.found ? resolution.desc.value : mal_value_new_undefined(), true)) return false;
         }
         mal_text_buffer_append_ascii(out, (const byte *) " ]");
-        return;
+        return true;
     }
     if (mal_value_is_callable(value)) {
         MalString *name = mal_vm_callable_name(vm, value);
@@ -54,7 +54,7 @@ static void console_plain_object(MalVm *vm, MalTextBuffer *out, MalValue value) 
             mal_text_buffer_append_ascii(out, (const byte *) "anonymous");
         }
         mal_text_buffer_push(out, ']');
-        return;
+        return true;
     }
     MalPropertyIter iter;
     mal_property_iter_init(&iter, mal_value_to_object(value), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
@@ -68,23 +68,26 @@ static void console_plain_object(MalVm *vm, MalTextBuffer *out, MalValue value) 
         first = false;
         mal_text_buffer_append_string(out, mal_ops_to_string(&vm->heap, key.value));
         mal_text_buffer_append_ascii(out, (const byte *) ": ");
-        console_plain_value(vm, out, desc.value, true);
+        if (!console_plain_value(vm, out, desc.value, true)) return false;
     }
     mal_text_buffer_append_ascii(out, (const byte *) (first ? "}" : " }"));
+    return true;
 }
 
-static void console_plain_value(MalVm *vm, MalTextBuffer *out, MalValue value, bool quote_strings) {
+static bool console_plain_value(MalVm *vm, MalTextBuffer *out, MalValue value, bool quote_strings) {
     if (mal_value_is_string(value)) {
         if (quote_strings) mal_text_buffer_push(out, '"');
         mal_text_buffer_append_string(out, mal_value_to_string(value));
         if (quote_strings) mal_text_buffer_push(out, '"');
-        return;
+        return true;
     }
     if (mal_value_is_object(value)) {
-        console_plain_object(vm, out, value);
-        return;
+        return console_plain_object(vm, out, value);
     }
-    mal_text_buffer_append_string(out, mal_ops_to_string(&vm->heap, value));
+    MalString *string = mal_ops_to_string(&vm->heap, value);
+    if (string == nullptr) return false;
+    mal_text_buffer_append_string(out, string);
+    return true;
 }
 
 // The console whose state and streams the running method uses; methods save and restore it.
@@ -151,6 +154,18 @@ static bool console_colors(MalVm *vm, FILE *stream) {
 }
 #endif
 
+static bool console_buffer_ok(MalVm *vm, MalTextBuffer *buffer) {
+    if (buffer->status == MAL_TEXT_BUFFER_OK) return true;
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        if (buffer->status == MAL_TEXT_BUFFER_ALLOCATION_FAILURE) {
+            mal_vm_throw_allocation_error(vm);
+        } else {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        }
+    }
+    return false;
+}
+
 static bool console_format(MalVm *vm, FILE *stream, MalTextBuffer *out, const MalValue *args, i32 argc) {
 #if MAL_NODE
     if (console_node(vm)) {
@@ -164,7 +179,8 @@ static bool console_format(MalVm *vm, FILE *stream, MalTextBuffer *out, const Ma
     (void) stream;
     for (i32 i = 0; i < argc; i++) {
         if (i > 0) mal_text_buffer_push(out, ' ');
-        console_plain_value(vm, out, args[i], false);
+        if (!console_plain_value(vm, out, args[i], false)) return false;
+        if (!console_buffer_ok(vm, out)) return false;
     }
     return true;
 }
@@ -250,6 +266,10 @@ static void console_emit(MalVm *vm, FILE *stream, MalTextBuffer *line) {
         source = &indented;
     }
     mal_text_buffer_push(source, '\n');
+    if (!console_buffer_ok(vm, source)) {
+        mal_text_buffer_dispose(source);
+        return;
+    }
     MalString *string = mal_text_buffer_finish(&vm->heap, source);
     MalValue instance_stream;
     if (console_instance_stream(vm, stream, &instance_stream)) {

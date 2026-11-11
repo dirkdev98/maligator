@@ -1,6 +1,5 @@
 #include "builtin_bigint.h"
 
-#include "bigint128.h"
 #include "gc.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
@@ -9,45 +8,30 @@
 #include "vm.h"
 #include "vm_ops.h"
 
-/**
- * Dispatch a *primitive* through the type-specific tail of ToBigInt: Boolean →
- * 0n/1n, BigInt → itself, String → StringToBigInt (SyntaxError when
- * unparseable). undefined, null, Number, and Symbol all throw TypeError.
- */
-static bool mal_bigint_primitive_to_bigint(MalVm *vm, MalValue value, i128 *out) {
+static bool mal_bigint_primitive_to_bigint(MalVm *vm, MalValue value, MalBigInt **out) {
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    *out = nullptr;
     if (mal_value_is_bigint(value)) {
-        *out = mal_bigint_value(mal_value_to_bigint(value));
-        return true;
-    }
-
-    if (mal_value_is_boolean(value)) {
-        *out = mal_value_to_boolean(value) ? 1 : 0;
-        return true;
-    }
-
-    if (mal_value_is_string(value)) {
-        bool ok;
+        *out = mal_value_to_bigint(value);
+    } else if (mal_value_is_boolean(value)) {
+        *out = mal_bigint_new(&vm->heap, mal_value_to_boolean(value) ? 1 : 0);
+    } else if (mal_value_is_string(value)) {
+        bool valid;
         MalString *string = mal_value_to_string(value);
-        i128 parsed = mal_bigint128_parse(mal_string_code_units(string), mal_string_length(string), &ok);
-        if (!ok) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Cannot convert string to a BigInt");
-            return false;
-        }
-        *out = parsed;
-        return true;
+        *out = mal_bigint_parse(&vm->heap, mal_string_code_units(string), mal_string_length(string), &valid);
+        if (!valid) mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
+            "Cannot convert string to a BigInt");
+    } else {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert value to a BigInt");
     }
-
-    // Number, Symbol, undefined, and null all fail ToBigInt.
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert value to a BigInt");
-    return false;
+    mal_gc_unroot(&root);
+    return *out != nullptr;
 }
 
-bool mal_bigint_to_bigint(MalVm *vm, MalValue value, i128 *out) {
+bool mal_bigint_to_bigint(MalVm *vm, MalValue value, MalBigInt **out) {
     MalValue primitive;
-    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_NUMBER, &primitive)) {
-        return false;
-    }
-
+    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_NUMBER, &primitive)) return false;
     return mal_bigint_primitive_to_bigint(vm, primitive, out);
 }
 
@@ -62,38 +46,14 @@ static MalValue mal_builtin_bigint_constructor(MalVm *vm, MalValue this_value, c
 
     MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
 
-    // 2. Let prim be ? ToPrimitive(value, number).
     MalValue primitive;
-    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_NUMBER, &primitive)) {
+    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_NUMBER, &primitive))
         return mal_value_new_undefined();
-    }
-
-    // 3. If prim is a Number, return ? NumberToBigInt(prim): an integral Number
-    // becomes the matching BigInt, anything else (NaN, ±Infinity, fractional)
-    // is a RangeError.
-    if (mal_ops_is_number(primitive)) {
-        i128 converted;
-        if (!mal_bigint128_from_number(mal_ops_number_as_f64(primitive), &converted)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "The number is not a safe integer");
-            return mal_value_new_undefined();
-        }
-        return mal_value_from_bigint(mal_bigint_new(&vm->heap, converted));
-    }
-
-    // BigInt primitives are immutable and the abstract conversion returns the
-    // input value unchanged. Retain the existing primitive instead of copying
-    // its 128-bit payload into a fresh managed BigInt cell.
-    if (mal_value_is_bigint(primitive)) {
-        return primitive;
-    }
-
-    // 4. Otherwise, return ? ToBigInt(prim).
-    i128 result;
-    if (!mal_bigint_primitive_to_bigint(vm, primitive, &result)) {
-        return mal_value_new_undefined();
-    }
-
-    return mal_value_from_bigint(mal_bigint_new(&vm->heap, result));
+    if (mal_ops_is_number(primitive))
+        return mal_value_from_bigint(mal_bigint_from_number(&vm->heap, mal_ops_number_as_f64(primitive)));
+    MalBigInt *result;
+    return mal_bigint_primitive_to_bigint(vm, primitive, &result)
+        ? mal_value_from_bigint(result) : mal_value_new_undefined();
 }
 
 /**
@@ -102,16 +62,16 @@ static MalValue mal_builtin_bigint_constructor(MalVm *vm, MalValue this_value, c
  * [[BigIntData]] (e.g. Object(1n), or a sloppy method whose primitive `this` was
  * boxed by OrdinaryCallBindThis). Anything else is a TypeError.
  */
-static bool mal_builtin_bigint_this(MalVm *vm, MalValue this_value, i128 *out) {
+static bool mal_builtin_bigint_this(MalVm *vm, MalValue this_value, MalBigInt **out) {
     if (mal_value_is_bigint(this_value)) {
-        *out = mal_bigint_value(mal_value_to_bigint(this_value));
+        *out = mal_value_to_bigint(this_value);
         return true;
     }
 
     if (mal_value_is_primitive_wrapper(this_value)) {
         MalPrimitiveWrapperObject *wrapper = mal_value_to_primitive_wrapper(this_value);
         if (wrapper->kind == MAL_PRIMITIVE_WRAPPER_BIGINT) {
-            *out = mal_bigint_value(mal_value_to_bigint(wrapper->primitive_data));
+            *out = mal_value_to_bigint(wrapper->primitive_data);
             return true;
         }
     }
@@ -121,26 +81,31 @@ static bool mal_builtin_bigint_this(MalVm *vm, MalValue this_value, i128 *out) {
 }
 
 MalValue mal_builtin_bigint_to_string_radix(MalVm *vm, MalValue receiver, i32 radix) {
-    i128 value;
+    MalBigInt *value;
     if (!mal_builtin_bigint_this(vm, receiver, &value)) return mal_value_new_undefined();
-    return mal_value_from_string(mal_bigint_to_string(&vm->heap, value, radix));
+    MalString *text = mal_bigint_to_string(&vm->heap, value, radix);
+    return text != nullptr ? mal_value_from_string(text) : mal_value_new_undefined();
 }
 
 static MalValue mal_builtin_bigint_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
 
-    i128 value;
+    MalBigInt *value;
     if (!mal_builtin_bigint_this(vm, this_value, &value)) {
         return mal_value_new_undefined();
     }
 
+    MalValue rooted_value = mal_value_from_bigint(value);
+    MalRootSpan root;
+    mal_gc_root(&root, &rooted_value, 1);
     i32 radix = 10;
     if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
         // ToIntegerOrInfinity(radix) starts with ToNumber, which throws a
         // TypeError on a Symbol or BigInt radix (rather than a RangeError).
         f64 requested;
         if (!mal_vm_to_number(vm, args[0], &requested)) {
+            mal_gc_unroot(&root);
             return mal_value_new_undefined();
         }
         // ToIntegerOrInfinity truncates toward zero (NaN → 0) before the range
@@ -148,12 +113,15 @@ static MalValue mal_builtin_bigint_prototype_to_string(MalVm *vm, MalValue this_
         f64 integral = mal_ops_number_to_integer_or_infinity(requested);
         if (integral < 2 || integral > 36) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toString() radix must be between 2 and 36");
+            mal_gc_unroot(&root);
             return mal_value_new_undefined();
         }
         radix = (i32) integral;
     }
 
-    return mal_value_from_string(mal_bigint_to_string(&vm->heap, value, radix));
+    MalString *text = mal_bigint_to_string(&vm->heap, value, radix);
+    mal_gc_unroot(&root);
+    return text != nullptr ? mal_value_from_string(text) : mal_value_new_undefined();
 }
 
 static MalValue mal_builtin_bigint_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -182,15 +150,15 @@ MalValue mal_builtin_bigint_width_number(MalVm *vm, f64 number, MalValue input, 
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid bit count");
         return mal_value_new_undefined();
     }
-    bool primitive = mal_value_is_bigint(input);
-    i128 value;
-    // Even a zero width must perform ToBigInt after validating the index.
+    MalBigInt *value;
+    // Index validation precedes conversion, including for a zero width.
     if (!mal_bigint_to_bigint(vm, input, &value)) return mal_value_new_undefined();
-    i128 result = is_signed
-        ? mal_bigint128_as_int_n(value, (u64) index)
-        : mal_bigint128_as_uint_n(value, (u64) index);
-    if (primitive && result == value) return input;
-    return mal_value_from_bigint(mal_bigint_new(&vm->heap, result));
+    MalValue rooted_value = mal_value_from_bigint(value);
+    MalRootSpan root;
+    mal_gc_root(&root, &rooted_value, 1);
+    MalBigInt *result = mal_bigint_width(&vm->heap, value, (u64) index, is_signed);
+    mal_gc_unroot(&root);
+    return mal_value_from_bigint(result);
 }
 
 static MalValue mal_builtin_bigint_width(MalVm *vm, const MalValue *args, i32 arg_count, bool is_signed) {
@@ -243,7 +211,6 @@ void mal_builtin_bigint_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0, mal_builtin_bigint_prototype_to_string);
     mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_bigint_prototype_value_of);
 
-    // BigInt.prototype[Symbol.toStringTag] = "BigInt"
     MalPropertyDesc tag_desc = mal_intrinsic_data_desc(
         mal_value_from_string(mal_intrinsic_ascii(vm, "BigInt")),
         MAL_PROPERTY_CONFIGURABLE

@@ -26,9 +26,8 @@ themselves commit the project to optimizing every API.
 ## Verification workflow
 
 - [ ] Extend runtime-gap coverage for a selected RegExp, Intl, promise or weak-collection
-      consumer, separating conversion, traversal and checksum cost. Add
-      arbitrary-precision BigInt measurements after its correctness implementation and
-      preserve input-scaling coverage.
+      consumer, separating conversion, traversal and checksum cost. Preserve
+      input-scaling coverage.
 
 - [ ] Diagnose the macOS node-fs-watch timeout with bounded phase evidence separating
       compilation, event delivery and teardown. Preserve watcher behavior and report an
@@ -469,10 +468,6 @@ contracts or investigates costs still visible after the string follow-ups.
       GetBindingValue's second HasProperty that a Proxy with-object observes.
 
 ## Engine capabilities
-
-- [ ] Replace the fixed 128-bit BigInt representation with arbitrary-precision digits.
-      Remove width approximations from arithmetic, parsing, formatting, comparison,
-      typed operations, and serialization.
 
 - [ ] Work Intl from generated failure clusters covering supported values, locale
       options, NumberFormat, DateTimeFormat, and interval collapsing. Keep data

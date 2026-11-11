@@ -95,21 +95,23 @@ bool mal_ffi_number_to_integer(
 }
 
 static bool ffi_bigint(
-    MalVm *vm, MalValue value, const MalFfiSite *site, i128 *out) {
+    MalVm *vm, MalValue value, const MalFfiSite *site, MalBigInt **out) {
     if (!mal_value_is_bigint(value)) {
         return ffi_fail(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, site, "a bigint");
     }
-    *out = mal_bigint_value(mal_value_to_bigint(value));
+    *out = mal_value_to_bigint(value);
     return true;
 }
 
 bool mal_ffi_to_int64(
     MalVm *vm, MalValue value, int32_t bits, const MalFfiSite *site, int64_t *out) {
+    MalBigInt *bigint;
+    if (!ffi_bigint(vm, value, site, &bigint)) return false;
     i128 integer;
-    if (!ffi_bigint(vm, value, site, &integer)) return false;
+    bool fits = mal_bigint_try_i128(bigint, &integer);
     i128 minimum = -((i128) 1 << (bits - 1));
     i128 maximum = ((i128) 1 << (bits - 1)) - 1;
-    if (integer < minimum || integer > maximum) {
+    if (!fits || integer < minimum || integer > maximum) {
         return ffi_failf(
             vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site,
             "a bigint in the signed %d-bit range", bits);
@@ -120,9 +122,11 @@ bool mal_ffi_to_int64(
 
 bool mal_ffi_to_uint64(
     MalVm *vm, MalValue value, int32_t bits, const MalFfiSite *site, uint64_t *out) {
+    MalBigInt *bigint;
+    if (!ffi_bigint(vm, value, site, &bigint)) return false;
     i128 integer;
-    if (!ffi_bigint(vm, value, site, &integer)) return false;
-    if (integer < 0 || integer >= ((i128) 1 << bits)) {
+    bool fits = mal_bigint_try_i128(bigint, &integer);
+    if (!fits || integer < 0 || integer >= ((i128) 1 << bits)) {
         return ffi_failf(
             vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, site,
             "a bigint in the unsigned %d-bit range", bits);

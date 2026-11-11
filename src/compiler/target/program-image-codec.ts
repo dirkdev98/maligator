@@ -1,5 +1,6 @@
 import type { PlatformData } from "../../platform/catalog.ts";
 import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
+import { BIGINT_MAX_BITS, bigintDigits } from "../shared/bigint-digits.ts";
 import {
 	MAX_PRECISE_NUMBER_SUM_INPUTS,
 	MAX_STRING_CODE_UNITS,
@@ -44,7 +45,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 87;
+export const WIRE_VERSION = 88;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -562,13 +563,12 @@ export function writeRuntimeImage(
 		}
 	}
 
-	// BigInts: 128-bit two's-complement, low u64 then high u64 (matches the
-	// runtime's hi/lo split in emitBigintValue).
 	w.u32(def.bigintConstants.length);
-	const mask = (1n << 64n) - 1n;
 	for (const value of def.bigintConstants) {
-		w.u64(value & mask);
-		w.u64((value >> 64n) & mask);
+		const digits = bigintDigits(value);
+		w.u32(value < 0n ? 1 : 0);
+		w.u32(digits.length);
+		for (const digit of digits) w.fixedU32(digit);
 	}
 
 	// Packed static-data literal templates. Tags and operands are all u32 words.
@@ -1447,13 +1447,22 @@ export function readRuntimeImage(
 		stringConstants.push(units);
 	}
 
-	const bigintCount = r.count(16);
+	const bigintCount = r.count(2);
 	const bigintConstants: Array<bigint> = [];
 	for (let b = 0; b < bigintCount; ++b) {
-		const lo = r.u64();
-		const hi = r.u64();
-		const value = (hi << 64n) | lo;
-		bigintConstants.push((hi & (1n << 63n)) === 0n ? value : value - (1n << 128n));
+		const negative = r.u32();
+		const count = r.count(4);
+		if (negative > 1 || count > BIGINT_MAX_BITS / 32 || (count === 0 && negative !== 0))
+			throw new Error("invalid BigInt constant");
+		const digits = Array.from({ length: count }, () => r.fixedU32());
+		if (count !== 0 && digits[count - 1] === 0)
+			throw new Error("unnormalized BigInt constant");
+		const hex = digits
+			.reverse()
+			.map((digit) => digit.toString(16).padStart(8, "0"))
+			.join("");
+		const magnitude = count === 0 ? 0n : BigInt(`0x${hex}`);
+		bigintConstants.push(negative === 0 ? magnitude : -magnitude);
 	}
 
 	const literalTemplateWordCount = r.count(1);

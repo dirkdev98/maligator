@@ -1,33 +1,57 @@
 #pragma once
 
-#include "./defaults.h"
+#include "defaults.h"
 #include "heap.h"
 
 typedef struct MalString MalString;
 
-/**
- * BigInt primitive value.
- *
- * This is a 128-bit-backed stand-in, not arbitrary precision.
- * Values beyond the i128 range wrap. The 128-bit width is deliberate so the
- * full i64 and u64 ranges used by BigInt64Array/BigUint64Array round-trip.
- */
+// The bound permits checked byte sizes on every target, including wasm32.
+#define MAL_BIGINT_MAX_BITS (1u << 30)
+#define MAL_BIGINT_MAX_DIGITS (MAL_BIGINT_MAX_BITS / 32u)
+
+/** Immutable normalized signed magnitude. Wide dynamic digits trail their GC cell;
+ * constant digits belong to the image. Zero has no digits and sign zero. */
 typedef struct MalBigInt {
     MalHeapHeader header;
-    i128 value;
+    i32 sign;
+    u32 digit_count;
+    alignas(16) union {
+        u32 inline_digits[4];
+        const u32 *digits;
+    } data;
 } MalBigInt;
 
-/**
- * Allocate and initialize a new BigInt.
- */
+static_assert(sizeof(MalBigInt) == 32);
+
+static inline const u32 *mal_bigint_digits(const MalBigInt *value) {
+    return value->digit_count <= countof(value->data.inline_digits)
+        ? value->data.inline_digits : value->data.digits;
+}
+
+/** Factories return null with the owning VM's pending allocation or size exception.
+ * Managed input storage must remain rooted until publication. */
 MalBigInt *mal_bigint_new(MalHeap *heap, i128 value);
+MalBigInt *mal_bigint_from_digits(MalHeap *heap, i32 sign, const u32 *digits, u32 count);
+MalBigInt *mal_bigint_from_number(MalHeap *heap, f64 number);
+MalBigInt *mal_bigint_parse(MalHeap *heap, const c16 *units, usize length, bool *valid);
 
-/**
- * Read the backing 128-bit value.
- */
-i128 mal_bigint_value(const MalBigInt *bigint);
+bool mal_bigint_try_i128(const MalBigInt *value, i128 *out);
+u64 mal_bigint_low_u64(const MalBigInt *value);
+f64 mal_bigint_to_number(const MalBigInt *value);
+u32 mal_bigint_bit_length(const MalBigInt *value);
+i32 mal_bigint_compare(const MalBigInt *left, const MalBigInt *right);
+// NaN returns 2; all other results are -1, 0 or 1.
+i32 mal_bigint_compare_number(const MalBigInt *left, f64 right);
+u64 mal_bigint_hash(const MalBigInt *value);
+MalString *mal_bigint_to_string(MalHeap *heap, const MalBigInt *value, i32 radix);
 
-/**
- * Format a BigInt value in the given radix (2..36) as a heap string.
- */
-MalString *mal_bigint_to_string(MalHeap *heap, i128 value, i32 radix);
+MalBigInt *mal_bigint_add(MalHeap *heap, const MalBigInt *left, const MalBigInt *right);
+MalBigInt *mal_bigint_subtract(MalHeap *heap, const MalBigInt *left, const MalBigInt *right);
+MalBigInt *mal_bigint_multiply(MalHeap *heap, const MalBigInt *left, const MalBigInt *right);
+MalBigInt *mal_bigint_divide(MalHeap *heap, const MalBigInt *left, const MalBigInt *right, bool remainder);
+MalBigInt *mal_bigint_power(MalHeap *heap, const MalBigInt *base, const MalBigInt *exponent);
+MalBigInt *mal_bigint_bitwise(MalHeap *heap, const MalBigInt *left, const MalBigInt *right, char operation);
+MalBigInt *mal_bigint_shift(MalHeap *heap, const MalBigInt *value, const MalBigInt *count, bool right);
+MalBigInt *mal_bigint_negate(MalHeap *heap, const MalBigInt *value);
+MalBigInt *mal_bigint_not(MalHeap *heap, const MalBigInt *value);
+MalBigInt *mal_bigint_width(MalHeap *heap, const MalBigInt *value, u64 bits, bool is_signed);

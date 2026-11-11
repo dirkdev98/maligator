@@ -273,16 +273,14 @@ export function evaluateConstantBuiltin(
 	const argument = (index: number) => (index < args.length ? args[index] : absent);
 	if (args.length > workLimit) return unsupported("work-limit");
 	const first = argument(0);
-	const halfRange = 1n << 126n;
-	if (
-		[receiver, ...args].some(
-			(value) =>
-				value?.kind === "bigint" &&
-				(value.value < -halfRange - halfRange ||
-					value.value > halfRange - 1n + halfRange),
-		)
-	)
-		return { kind: "unsupported", reason: "target-contract", work };
+	const bigintBits = Math.min(1 << 30, Math.max(1, Math.floor(workLimit - work)) * 32);
+	for (const value of [receiver, ...args]) {
+		if (value?.kind !== "bigint") continue;
+		if (BigInt.asIntN(bigintBits, value.value) !== value.value)
+			return unsupported("work-limit");
+		work += Math.max(1, Math.ceil(value.value.toString(16).length / 8));
+		if (work > workLimit) return unsupported("work-limit");
+	}
 	const brands = ["Number", "Boolean", "String", "BigInt", "Symbol"] as const;
 	for (const brand of brands) {
 		if (
@@ -415,7 +413,6 @@ export function evaluateConstantBuiltin(
 			return result({ kind: "bigint", value: first.value ? 1n : 0n });
 		if (first.kind === "number") {
 			if (first.value % 1 !== 0) return failure("bigintNumber");
-			if (first.value < -(2 ** 127) || first.value >= 2 ** 127) return unsupported();
 			return result({ kind: "bigint", value: BigInt(first.value) });
 		}
 		if (first.kind !== "string") return failure("bigintValue");
@@ -441,18 +438,12 @@ export function evaluateConstantBuiltin(
 			cursor = 2;
 		}
 		if (cursor === source.length) return failure("bigintString");
-		const half = 1n << 126n,
-			minimum = -half - half,
-			maximum = half - 1n + half,
-			base = BigInt(radix);
+		const base = BigInt(radix);
 		let value = 0n;
 		for (; cursor < source.length; cursor++) {
 			const digit = digitValue(source.charCodeAt(cursor));
 			if (digit < 0 || digit >= radix) return failure("bigintString");
 			const next = BigInt(digit);
-			const limit = negative ? (minimum + next) / base : (maximum - next) / base;
-			if (negative && value < limit) return unsupported();
-			if (!negative && value > limit) return unsupported();
 			value = negative ? value * base - next : value * base + next;
 		}
 		return result({ kind: "bigint", value });
@@ -462,15 +453,10 @@ export function evaluateConstantBuiltin(
 		const radix = first?.kind === "undefined" ? 10 : numeric(first);
 		if (radix === undefined) return unsupported();
 		if (integer(radix) < 2 || integer(radix) > 36) return failure("numberRadix");
-		const base = BigInt(integer(radix));
-		let remaining = receiver.value > 0n ? -receiver.value : receiver.value,
-			output = "";
-		do {
-			output =
-				"0123456789abcdefghijklmnopqrstuvwxyz"[Number(-(remaining % base))] + output;
-			remaining /= base;
-		} while (remaining !== 0n);
-		return string((receiver.value < 0n ? "-" : "") + output);
+		const bits = Math.min(1 << 30, Math.max(1, Math.floor(workLimit - work)) * 6);
+		if (BigInt.asIntN(bits, receiver.value) !== receiver.value)
+			return unsupported("work-limit");
+		return string(receiver.value.toString(integer(radix)));
 	}
 	if (operation === "String") {
 		const value = args.length === 0 ? "" : text(first);

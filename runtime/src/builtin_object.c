@@ -237,10 +237,13 @@ static MalDefineOwnStatus mal_builtin_object_try_define_parsed_impl(
                 if (parse.has_get || parse.has_set ||
                     (parse.has_configurable && (parse.desc.flags & MAL_PROPERTY_CONFIGURABLE)) ||
                     (parse.has_enumerable && !(parse.desc.flags & MAL_PROPERTY_ENUMERABLE)) ||
-                    (parse.has_writable && (parse.desc.flags & MAL_PROPERTY_WRITABLE)) ||
-                    (parse.has_value && !mal_ops_same_value(
-                        parse.desc.value, mal_typed_array_object_get(vm, typed_array, index)))) {
+                    (parse.has_writable && (parse.desc.flags & MAL_PROPERTY_WRITABLE))) {
                     return MAL_DEFINE_OWN_REJECTED;
+                }
+                if (parse.has_value) {
+                    MalValue current = mal_typed_array_object_get(vm, typed_array, index);
+                    if (vm->completion.kind == MAL_COMPLETION_THROW ||
+                        !mal_ops_same_value(parse.desc.value, current)) return MAL_DEFINE_OWN_REJECTED;
                 }
                 return MAL_DEFINE_OWN_APPLIED;
             }

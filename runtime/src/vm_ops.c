@@ -11,7 +11,6 @@
 #include "async_function.h"
 #include "bound_function_object.h"
 #include "checked_size.h"
-#include "bigint128.h"
 #include "builtin_array.h"
 #include "builtin_typed_array.h"
 #include "builtin_async_generator.h"
@@ -141,7 +140,9 @@ MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right) {
     }
     MalValue result;
     if (!mal_ops_add_checked(&vm->heap, left, right, &result)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        }
         return mal_value_new_undefined();
     }
     return result;
@@ -166,11 +167,7 @@ MalValue mal_vm_concat_primitive_strings(MalVm *vm, MalValue left, MalValue righ
         (!mal_value_is_string(left) && !mal_value_is_string(right))) {
         abort();
     }
-    MalString *left_string =
-        mal_value_is_string(left) ? mal_value_to_string(left) : mal_ops_to_string(&vm->heap, left);
-    MalString *right_string =
-        mal_value_is_string(right) ? mal_value_to_string(right) : mal_ops_to_string(&vm->heap, right);
-    return mal_vm_concat_strings_known(vm, left_string, right_string);
+    return mal_vm_add(vm, left, right);
 }
 
 MalValue mal_vm_string_concat_length(
@@ -744,6 +741,7 @@ bool mal_vm_get_own_property(
                 .getter = mal_value_new_undefined(),
                 .setter = mal_value_new_undefined(),
             };
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
             *present_out = true;
         }
         return true;
@@ -4492,52 +4490,20 @@ static MalValue mal_vm_bigint_arith(MalVm *vm, MalBinaryOp op, MalValue left, Ma
         return mal_value_new_undefined();
     }
 
-    i128 a = mal_bigint_value(mal_value_to_bigint(left));
-    i128 b = mal_bigint_value(mal_value_to_bigint(right));
-    i128 result = 0;
-
+    const MalBigInt *a = mal_value_to_bigint(left), *b = mal_value_to_bigint(right);
+    MalBigInt *result;
     switch (op) {
-        case MAL_BIN_ADD:
-            result = mal_bigint128_add(a, b);
-            break;
-        case MAL_BIN_SUB:
-            result = mal_bigint128_subtract(a, b);
-            break;
-        case MAL_BIN_MUL:
-            result = mal_bigint128_multiply(a, b);
-            break;
-        case MAL_BIN_DIV:
-        case MAL_BIN_REM:
-            if (!(op == MAL_BIN_DIV
-                    ? mal_bigint128_divide(a, b, &result)
-                    : mal_bigint128_remainder(a, b, &result))) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Division by zero");
-                return mal_value_new_undefined();
-            }
-            break;
-        case MAL_BIN_POW: {
-            if (b < 0) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Exponent must be non-negative");
-                return mal_value_new_undefined();
-            }
-            result = mal_bigint128_exponentiate(a, b);
-            break;
-        }
-        case MAL_BIN_BIT_AND:
-            result = mal_bigint128_bit_and(a, b);
-            break;
-        case MAL_BIN_BIT_OR:
-            result = mal_bigint128_bit_or(a, b);
-            break;
-        case MAL_BIN_BIT_XOR:
-            result = mal_bigint128_bit_xor(a, b);
-            break;
-        case MAL_BIN_SHL:
-            result = mal_bigint128_shift_left(a, b);
-            break;
-        case MAL_BIN_SHR:
-            result = mal_bigint128_shift_right(a, b);
-            break;
+        case MAL_BIN_ADD: result = mal_bigint_add(&vm->heap, a, b); break;
+        case MAL_BIN_SUB: result = mal_bigint_subtract(&vm->heap, a, b); break;
+        case MAL_BIN_MUL: result = mal_bigint_multiply(&vm->heap, a, b); break;
+        case MAL_BIN_DIV: result = mal_bigint_divide(&vm->heap, a, b, false); break;
+        case MAL_BIN_REM: result = mal_bigint_divide(&vm->heap, a, b, true); break;
+        case MAL_BIN_POW: result = mal_bigint_power(&vm->heap, a, b); break;
+        case MAL_BIN_BIT_AND: result = mal_bigint_bitwise(&vm->heap, a, b, '&'); break;
+        case MAL_BIN_BIT_OR: result = mal_bigint_bitwise(&vm->heap, a, b, '|'); break;
+        case MAL_BIN_BIT_XOR: result = mal_bigint_bitwise(&vm->heap, a, b, '^'); break;
+        case MAL_BIN_SHL: result = mal_bigint_shift(&vm->heap, a, b, false); break;
+        case MAL_BIN_SHR: result = mal_bigint_shift(&vm->heap, a, b, true); break;
         case MAL_BIN_USHR:
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                 "BigInts have no unsigned right shift, use >> instead");
@@ -4546,8 +4512,7 @@ static MalValue mal_vm_bigint_arith(MalVm *vm, MalBinaryOp op, MalValue left, Ma
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Unsupported BigInt operation");
             return mal_value_new_undefined();
     }
-
-    return mal_value_from_bigint(mal_bigint_new(&vm->heap, result));
+    return mal_value_from_bigint(result);
 }
 
 // Whether the operator's operands flow through ToNumeric (ToPrimitive(number)
@@ -4620,6 +4585,22 @@ static MalValue mal_vm_binary_dispatch(MalVm *vm, MalBinaryOp op, MalValue left,
         return mal_vm_bigint_arith(vm, op, left, right);
     }
 
+    bool mixed_bigint_string = (mal_value_is_bigint(left) && mal_value_is_string(right)) ||
+        (mal_value_is_string(left) && mal_value_is_bigint(right));
+    if (mixed_bigint_string && (mal_vm_op_is_relational(op) || op == MAL_BIN_EQ || op == MAL_BIN_NEQ)) {
+        bool bigint_left = mal_value_is_bigint(left), valid;
+        MalString *text = mal_value_to_string(bigint_left ? right : left);
+        MalBigInt *parsed = mal_bigint_parse(&vm->heap,
+            mal_string_code_units(text), mal_string_length(text), &valid);
+        if (!valid) return mal_value_new_boolean(op == MAL_BIN_NEQ);
+        if (parsed == nullptr) return mal_value_new_undefined();
+        i32 order = mal_bigint_compare(mal_value_to_bigint(bigint_left ? left : right), parsed);
+        if (!bigint_left) order = -order;
+        bool answer = op == MAL_BIN_EQ ? order == 0 : op == MAL_BIN_NEQ ? order != 0
+            : op == MAL_BIN_LT ? order < 0 : op == MAL_BIN_LTE ? order <= 0
+            : op == MAL_BIN_GT ? order > 0 : order >= 0;
+        return mal_value_new_boolean(answer);
+    }
     switch (op) {
         case MAL_BIN_ADD:
             return mal_vm_add(vm, left, right);
@@ -4822,6 +4803,22 @@ static const byte *mal_vm_typeof_tag(MalTypeofResult result) {
 // numeric unary ops (`-`/`+`/`~`) run their operand through ToNumeric (so an
 // object's valueOf/toString and a Symbol's TypeError are honored) before the
 // per-type arithmetic.
+static MalValue mal_vm_bigint_unary(MalVm *vm, MalUnaryOp op, MalValue value) {
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    const MalBigInt *operand = mal_value_to_bigint(value);
+    MalBigInt *result;
+    if (op == MAL_UNARY_NEGATE) result = mal_bigint_negate(&vm->heap, operand);
+    else if (op == MAL_UNARY_BIT_NOT) result = mal_bigint_not(&vm->heap, operand);
+    else {
+        MalBigInt unit = {.sign = op == MAL_UNARY_INCREMENT ? 1 : -1,
+            .digit_count = 1, .data.inline_digits = {1}};
+        result = mal_bigint_add(&vm->heap, operand, &unit);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_from_bigint(result);
+}
+
 MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
     // UpdateExpression coercion: ToNumeric keeps a BigInt as a BigInt (unlike
     // unary `+`), running an object's valueOf and throwing on a Symbol exactly
@@ -4835,9 +4832,7 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
     }
     if (op == MAL_UNARY_INCREMENT || op == MAL_UNARY_DECREMENT) {
         if (mal_value_is_bigint(value)) {
-            i128 unit = op == MAL_UNARY_INCREMENT ? (i128) 1 : (i128) -1;
-            return mal_value_from_bigint(mal_bigint_new(&vm->heap,
-                mal_bigint128_add(mal_bigint_value(mal_value_to_bigint(value)), unit)));
+            return mal_vm_bigint_unary(vm, op, value);
         }
         f64 unit = op == MAL_UNARY_INCREMENT ? 1.0 : -1.0;
         return mal_value_from_f64_convert_nan(mal_ops_to_number(value) + unit);
@@ -4858,8 +4853,7 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
             return mal_value_new_boolean(!mal_value_is_truthy(value));
         case MAL_UNARY_NEGATE:
             if (mal_value_is_bigint(value)) {
-                return mal_value_from_bigint(mal_bigint_new(
-                    &vm->heap, mal_bigint128_negate(mal_bigint_value(mal_value_to_bigint(value)))));
+                return mal_vm_bigint_unary(vm, op, value);
             }
             if (mal_value_is_int32(value) && mal_value_to_i32(value) != 0 && mal_value_to_i32(value) != INT32_MIN) {
                 return mal_value_from_i32(-mal_value_to_i32(value));
@@ -4879,8 +4873,7 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
             return mal_ops_number_value(mal_ops_to_number(value));
         case MAL_UNARY_BIT_NOT:
             if (mal_value_is_bigint(value)) {
-                return mal_value_from_bigint(mal_bigint_new(
-                    &vm->heap, mal_bigint128_bit_not(mal_bigint_value(mal_value_to_bigint(value)))));
+                return mal_vm_bigint_unary(vm, op, value);
             }
             return mal_ops_bit_xor(value, mal_value_from_i32(-1));
         case MAL_UNARY_TO_STRING: {
@@ -5036,7 +5029,7 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
         u32 index = mal_key_index_value(key);
         if (index < mal_typed_array_object_length(array)) {
             *value_out = mal_typed_array_object_get(vm, array, index);
-            return true;
+            return vm->completion.kind != MAL_COMPLETION_THROW;
         }
     }
 
@@ -5233,7 +5226,7 @@ bool mal_vm_to_string(MalVm *vm, MalValue value, MalString **out) {
     *out = mal_value_is_boolean(primitive)
         ? mal_intrinsic_hot_ascii(vm, mal_value_to_boolean(primitive) ? MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE)
         : mal_ops_to_string(&vm->heap, primitive);
-    return true;
+    return *out != nullptr;
 }
 
 bool mal_vm_to_numeric(MalVm *vm, MalValue value, MalValue *out) {
@@ -5419,6 +5412,7 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
         *out = synthetic;
         return true;
     }
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
 
     // Integer-indexed exotic [[Get]] owns every canonical numeric key. Invalid
     // and out-of-bounds indices return undefined without consulting the

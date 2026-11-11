@@ -2,7 +2,6 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include "bigint128.h"
 #include "builtin_math.h"
 #include "endian.h"
 #include "heap_bigint.h"
@@ -17,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 87u
+#define WIRE_VERSION 88u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -2768,18 +2767,28 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
         }
     }
 
-    // BigInts: immortal, 128-bit value (low u64 then high u64).
-    u32 bigint_count = rd_count(&r, 16);
+    u32 bigint_count = rd_count(&r, 2);
     def->bigint_constant_count = (i32) bigint_count;
-    MalBigInt *bigints = arena_array(
-        L, &r, bigint_count, sizeof(MalBigInt), alignof(MalBigInt));
+    MalBigInt *bigints = arena_array(L, &r, bigint_count, sizeof(MalBigInt), alignof(MalBigInt));
     def->bigint_constants = bigints;
     for (u32 b = 0; r.ok && b < bigint_count; b++) {
-        u64 lo = rd_u64(&r);
-        u64 hi = rd_u64(&r);
-        bigints[b].header.type = MAL_HEAP_BIGINT;
-        bigints[b].header.storage = MAL_HEAP_STORAGE_IMMORTAL;
-        bigints[b].value = mal_bigint128_from_bits(((u128) hi << 64) | (u128) lo);
+        u32 negative = rd_u32(&r);
+        u32 count = rd_count(&r, sizeof(u32));
+        if (negative > 1 || count > MAL_BIGINT_MAX_DIGITS || (count == 0 && negative != 0)) {
+            r.ok = false;
+            break;
+        }
+        MalBigInt *bigint = &bigints[b];
+        bigint->header.type = MAL_HEAP_BIGINT;
+        bigint->header.storage = MAL_HEAP_STORAGE_IMMORTAL;
+        bigint->sign = count == 0 ? 0 : negative != 0 ? -1 : 1;
+        bigint->digit_count = count;
+        memset(bigint->data.inline_digits, 0, sizeof bigint->data.inline_digits);
+        u32 *digits = count <= 4 ? bigint->data.inline_digits
+            : arena_array(L, &r, count, sizeof(u32), alignof(u32));
+        if (count > 4) bigint->data.digits = digits;
+        for (u32 i = 0; r.ok && i < count; i++) digits[i] = rd_fixed_u32(&r);
+        if (r.ok && count != 0 && digits[count - 1] == 0) r.ok = false;
     }
 
     // Packed literal-template u32 stream.

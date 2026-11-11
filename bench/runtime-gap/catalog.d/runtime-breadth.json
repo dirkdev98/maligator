@@ -80,6 +80,45 @@
 			"controls": []
 		},
 		{
+			"id": "bigint-256-arithmetic",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "bigint-arithmetic",
+			"category": "api-builtins",
+			"mechanisms": ["bigint-arithmetic"],
+			"inputShape": "256-bit repeated squaring and modular reduction with full-width products.",
+			"unit": "square-reduce rounds",
+			"sourceSeam": "runtime/src/heap_bigint.c",
+			"fixture": "cases/bigint-256-arithmetic.mjs",
+			"controls": ["bigint-wide-modular-arithmetic"]
+		},
+		{
+			"id": "bigint-4096-arithmetic",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "bigint-arithmetic",
+			"category": "api-builtins",
+			"mechanisms": ["bigint-arithmetic"],
+			"inputShape": "4096-bit repeated squaring and modular reduction with full-width products.",
+			"unit": "square-reduce rounds",
+			"sourceSeam": "runtime/src/heap_bigint.c",
+			"fixture": "cases/bigint-4096-arithmetic.mjs",
+			"controls": ["bigint-wide-modular-arithmetic"]
+		},
+		{
+			"id": "bigint-wide-text",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "bigint-text",
+			"category": "api-builtins",
+			"mechanisms": ["bigint-parsing", "bigint-formatting"],
+			"inputShape": "1024-bit values formatted and parsed in decimal and hexadecimal with complete value parity.",
+			"unit": "format-parse rounds",
+			"sourceSeam": "runtime/src/heap_bigint.c",
+			"fixture": "cases/bigint-wide-text.mjs",
+			"controls": ["primordial-bigint-word-format"]
+		},
+		{
 			"id": "proxy-property-get",
 			"group": "runtime",
 			"suite": "runtime",

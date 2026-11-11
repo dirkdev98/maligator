@@ -114,7 +114,9 @@ static bool mal_builtin_string_is_flat_value(MalValue value) {
 }
 
 static bool mal_builtin_string_throw_length(MalVm *vm) {
-    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+    }
     return false;
 }
 

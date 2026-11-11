@@ -2384,7 +2384,8 @@ export function corePrimitiveEffectRefinement(
 			(NUMERIC_UNARY_OPERATORS.has(operator) && numericPrimitive) ||
 			(stringPrimitive && masks[0] === COMPILER_VALUE_KIND_STRING);
 		mayThrow =
-			coercion && !(operator === "tostring" ? stringPrimitive : numericPrimitive);
+			(coercion && !(operator === "tostring" ? stringPrimitive : numericPrimitive)) ||
+			(operator === "tostring" && (masks[0]! & COMPILER_VALUE_KIND_BIGINT) !== 0);
 	} else if (opcode === "binary" && masks.length === 2 && typeof operator === "string") {
 		const left = masks[0]!,
 			right = masks[1]!;
@@ -2398,7 +2399,7 @@ export function corePrimitiveEffectRefinement(
 			nonReentrantComparison &&
 			!equality &&
 			((left | right) & COMPILER_VALUE_KIND_SYMBOL) !== 0;
-		// BigInt comparison with String may materialize UTF-16 parsing storage.
+		// StringToBigInt owns parsing storage and can fail even without user coercion.
 		const comparisonMaterializes =
 			((left & COMPILER_VALUE_KIND_STRING) !== 0 &&
 				(right & COMPILER_VALUE_KIND_BIGINT) !== 0) ||
@@ -2426,7 +2427,8 @@ export function corePrimitiveEffectRefinement(
 				(NUMERIC_BINARY_OPERATORS.has(operator) ||
 					compilerOperatorFixedResultKind(opcode, operator) ===
 						COMPILER_VALUE_KIND_BOOLEAN));
-		mayThrow = stringConcatenation || comparisonThrows;
+		mayThrow =
+			stringConcatenation || comparisonThrows || (!strict && comparisonMaterializes);
 	}
 	if (!primitive) return undefined;
 	const baseline = fn.registry.byId(fn.instructionOpcode(instruction)).effects;

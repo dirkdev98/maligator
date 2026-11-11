@@ -269,11 +269,11 @@ bool mal_typed_array_coerce_element_bits(
     MalVm *vm, MalTypedArrayKind kind, MalValue value, u64 *out) {
     u64 bits = 0;
     if (mal_typed_array_is_bigint(kind)) {
-        i128 big;
+        MalBigInt *big;
         if (!mal_bigint_to_bigint(vm, value, &big)) {
             return false;
         }
-        bits = (u64) (u128) big;
+        bits = mal_bigint_low_u64(big);
     } else if (mal_value_is_int32(value) && kind <= MAL_TA_UINT32) {
         i32 integer = mal_value_to_i32(value);
         if (kind == MAL_TA_UINT8_CLAMPED) {

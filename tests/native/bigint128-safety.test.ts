@@ -5,11 +5,11 @@ import {
 	runToStdout,
 } from "../../src/test-harness.ts";
 
-describe("fixed-width BigInt safety", () => {
+describe("BigInt promotion at native-width boundaries", () => {
 	it.each([
 		["compiled", true],
 		["interpreted", false],
-	])("defines bigint128 boundaries in %s mode", (_name, compiled) => {
+	])("preserves exact native-width boundary values in %s mode", (_name, compiled) => {
 		const binary = buildNativeBinary({
 			fixture: "tests/local/bigint128-safety.js",
 			name: `bigint128-safety-${compiled ? "compiled" : "interpreted"}`,

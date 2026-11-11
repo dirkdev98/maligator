@@ -3821,8 +3821,13 @@ MalValue mal_builtin_temporal_instant_from_epoch_milliseconds(
 }
 
 static Instant *instant_from_bigint(MalVm *vm, MalValue value) {
+    MalBigInt *bigint;
+    if (!mal_bigint_to_bigint(vm, value, &bigint)) return nullptr;
     i128 nanoseconds;
-    if (!mal_bigint_to_bigint(vm, value, &nanoseconds)) return nullptr;
+    if (!mal_bigint_try_i128(bigint, &nanoseconds)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "epoch nanoseconds are outside the supported range");
+        return nullptr;
+    }
     temporal_rs_Instant_try_new_result result =
         temporal_rs_Instant_try_new(temporal_i128_to_nanoseconds(nanoseconds));
     if (!result.is_ok) {
@@ -4454,9 +4459,14 @@ static MalValue zoned_date_time_constructor(
     if (mal_value_is_undefined(new_target)) {
         return temporal_throw_type(vm, "Temporal.ZonedDateTime must be called with new");
     }
-    i128 nanoseconds;
+    MalBigInt *bigint;
     if (!mal_bigint_to_bigint(
-            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &nanoseconds)) {
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &bigint)) {
+        return mal_value_new_undefined();
+    }
+    i128 nanoseconds;
+    if (!mal_bigint_try_i128(bigint, &nanoseconds)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "epoch nanoseconds are outside the supported range");
         return mal_value_new_undefined();
     }
     TimeZone zone;

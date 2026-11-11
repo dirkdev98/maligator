@@ -421,9 +421,17 @@ static i32 deep_typed_arrays(DeepCtx *ctx, MalValue a, MalValue b) {
         if (length_a < length_b) return DEEP_FALSE;
         for (u32 i = 0, j = 0; j < length_b; i++) {
             if (i == length_a) return DEEP_FALSE;
-            MalValue x = mal_typed_array_object_get(ctx->vm, array_a, i);
-            MalValue y = mal_typed_array_object_get(ctx->vm, array_b, j);
-            if (mal_ops_same_value(x, y)) j++;
+            MalValue values[] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+            MalRootSpan span;
+            mal_gc_root(&span, values, countof(values));
+            values[0] = mal_typed_array_object_get(ctx->vm, array_a, i);
+            if (ctx->vm->completion.kind != MAL_COMPLETION_THROW) {
+                values[1] = mal_typed_array_object_get(ctx->vm, array_b, j);
+            }
+            bool equal = mal_ops_same_value(values[0], values[1]);
+            mal_gc_unroot(&span);
+            if (ctx->vm->completion.kind == MAL_COMPLETION_THROW) return DEEP_THROW;
+            if (equal) j++;
         }
         return DEEP_TRUE;
     }
@@ -682,7 +690,9 @@ static i32 deep_equal(DeepCtx *ctx, MalValue a, MalValue b) {
         if (!deep_is_object(a)) {
             if (deep_is_object(b)) return DEEP_FALSE;
             if (mal_value_is_object(a) || mal_value_is_object(b)) return DEEP_FALSE;
-            if (mal_value_is_truthy(mal_ops_equal(a, b))) return DEEP_TRUE;
+            MalValue equal = mal_vm_binary_op(ctx->vm, MAL_BIN_EQ, a, b);
+            if (ctx->vm->completion.kind == MAL_COMPLETION_THROW) return DEEP_THROW;
+            if (mal_value_is_truthy(equal)) return DEEP_TRUE;
             return deep_number_is_nan(a) && deep_number_is_nan(b) ? DEEP_TRUE : DEEP_FALSE;
         }
         if (!deep_is_object(b)) return DEEP_FALSE;

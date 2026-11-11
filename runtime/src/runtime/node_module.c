@@ -262,14 +262,16 @@ encode:;
     out[at] = '\0';
 }
 
-void mal_node_describe_received(MalVm *vm, MalValue value, char *out, usize capacity) {
+bool mal_node_describe_received(MalVm *vm, MalValue value, char *out, usize capacity) {
     char text[256];
     if (mal_value_is_null(value)) {
         snprintf(out, capacity, "null");
     } else if (mal_value_is_undefined(value)) {
         snprintf(out, capacity, "undefined");
     } else if (mal_value_is_bigint(value)) {
-        mal_node_copy_utf8(mal_ops_to_string(&vm->heap, value), text, sizeof text);
+        MalString *string = mal_ops_to_string(&vm->heap, value);
+        if (string == nullptr) return false;
+        mal_node_copy_utf8(string, text, sizeof text);
         snprintf(out, capacity, "type bigint (%sn)", text);
     } else if (mal_ops_is_number(value)) {
         mal_node_number_text(vm, mal_ops_number_as_f64(value), text, sizeof text);
@@ -300,15 +302,17 @@ void mal_node_describe_received(MalVm *vm, MalValue value, char *out, usize capa
             && mal_node_get_ascii(vm, constructor, "name", &name)) {
             MalString *string = mal_value_is_string(name) ? mal_value_to_string(name)
                 : mal_ops_to_string(&vm->heap, name);
+            if (string == nullptr) return false;
             mal_node_copy_utf8(string, text, sizeof text);
             snprintf(out, capacity, "an instance of %s", text);
         } else {
             snprintf(out, capacity, "[Object: null prototype] {}");
         }
     }
+    return vm->completion.kind != MAL_COMPLETION_THROW;
 }
 
-static void mal_node_describe_range_received(MalVm *vm, MalValue value, char *out, usize capacity) {
+static bool mal_node_describe_range_received(MalVm *vm, MalValue value, char *out, usize capacity) {
     char text[256];
     if (mal_ops_is_number(value)) {
         f64 number = mal_ops_number_as_f64(value);
@@ -319,10 +323,13 @@ static void mal_node_describe_range_received(MalVm *vm, MalValue value, char *ou
             snprintf(out, capacity, "%s", text);
         }
     } else if (mal_value_is_bigint(value)) {
-        mal_node_copy_utf8(mal_ops_to_string(&vm->heap, value), text, sizeof text);
-        i128 number = mal_bigint_value(mal_value_to_bigint(value));
+        MalString *string = mal_ops_to_string(&vm->heap, value);
+        if (string == nullptr) return false;
+        mal_node_copy_utf8(string, text, sizeof text);
+        i128 number;
+        bool fits = mal_bigint_try_i128(mal_value_to_bigint(value), &number);
         char grouped[300];
-        if (number > ((i128) 1 << 32) || number < -((i128) 1 << 32)) {
+        if (!fits || number > ((i128) 1 << 32) || number < -((i128) 1 << 32)) {
             mal_node_numerical_separator(text, grouped, sizeof grouped);
         } else {
             snprintf(grouped, sizeof grouped, "%s", text);
@@ -331,14 +338,15 @@ static void mal_node_describe_range_received(MalVm *vm, MalValue value, char *ou
     } else if (mal_value_is_string(value)) {
         mal_node_quote_string(vm, mal_value_to_string(value), false, out, capacity);
     } else {
-        mal_node_describe_received(vm, value, out, capacity);
+        return mal_node_describe_received(vm, value, out, capacity);
     }
+    return vm->completion.kind != MAL_COMPLETION_THROW;
 }
 
 void mal_node_throw_invalid_arg_type(
     MalVm *vm, const char *name, const char *expected, MalValue actual) {
     char received[320];
-    mal_node_describe_received(vm, actual, received, sizeof received);
+    if (!mal_node_describe_received(vm, actual, received, sizeof received)) return;
     char message[640];
     usize name_length = strlen(name);
     if (name_length >= 9 && strcmp(name + name_length - 9, " argument") == 0) {
@@ -352,7 +360,7 @@ void mal_node_throw_invalid_arg_type(
 
 void mal_node_throw_out_of_range(MalVm *vm, const char *name, const char *range, MalValue actual) {
     char received[320];
-    mal_node_describe_range_received(vm, actual, received, sizeof received);
+    if (!mal_node_describe_range_received(vm, actual, received, sizeof received)) return;
     char message[640];
     snprintf(message, sizeof message,
         "The value of \"%s\" is out of range. It must be %s. Received %s", name, range, received);

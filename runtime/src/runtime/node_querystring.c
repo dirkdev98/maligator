@@ -444,11 +444,13 @@ static MalValue qs_unescape_buffer(
 static MalValue qs_stringifiable(MalVm *vm, MalValue value) {
     if (mal_value_is_string(value)) return value;
     if (mal_value_is_boolean(value) || mal_value_is_bigint(value)) {
-        return mal_value_from_string(mal_ops_to_string(&vm->heap, value));
+        MalString *string = mal_ops_to_string(&vm->heap, value);
+        return string == nullptr ? mal_value_new_undefined() : mal_value_from_string(string);
     }
     if (mal_ops_is_number(value)
         && isfinite(mal_ops_number_as_f64(value))) {
-        return mal_value_from_string(mal_ops_to_string(&vm->heap, value));
+        MalString *string = mal_ops_to_string(&vm->heap, value);
+        return string == nullptr ? mal_value_new_undefined() : mal_value_from_string(string);
     }
     return qs_empty_string(vm);
 }
@@ -483,10 +485,15 @@ static bool qs_append_pair(
     MalValue encoded_key, MalValue value, MalValue encoder
 ) {
     MalValue roots[] = {
-        encoded_key, qs_stringifiable(vm, value), mal_value_new_undefined(),
+        encoded_key, value, mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
+    roots[1] = qs_stringifiable(vm, roots[1]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&root);
+        return false;
+    }
     roots[2] = qs_encode_component(vm, roots[1], encoder);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         mal_gc_unroot(&root);

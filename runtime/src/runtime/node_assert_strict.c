@@ -583,7 +583,8 @@ ASSERT_FN(assert_equal) {
     if (!assert_require_two(vm, argc)) return mal_value_new_undefined();
     bool nan = mal_ops_is_number(args[0]) && mal_ops_is_number(args[1])
         && isnan(mal_ops_number_as_f64(args[0])) && isnan(mal_ops_number_as_f64(args[1]));
-    if (nan || mal_value_is_truthy(mal_ops_equal(args[0], args[1]))) return mal_value_new_undefined();
+    MalValue equal = nan ? mal_value_new_boolean(true) : mal_vm_binary_op(vm, MAL_BIN_EQ, args[0], args[1]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW || mal_value_is_truthy(equal)) return mal_value_new_undefined();
     return assert_fail_with(vm, args[0], args[1], "==", ASSERT_ARG(2));
 }
 
@@ -592,7 +593,8 @@ ASSERT_FN(assert_not_equal) {
     if (!assert_require_two(vm, argc)) return mal_value_new_undefined();
     bool nan = mal_ops_is_number(args[0]) && mal_ops_is_number(args[1])
         && isnan(mal_ops_number_as_f64(args[0])) && isnan(mal_ops_number_as_f64(args[1]));
-    if (!nan && !mal_value_is_truthy(mal_ops_equal(args[0], args[1]))) return mal_value_new_undefined();
+    MalValue equal = nan ? mal_value_new_boolean(true) : mal_vm_binary_op(vm, MAL_BIN_EQ, args[0], args[1]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW || !mal_value_is_truthy(equal)) return mal_value_new_undefined();
     return assert_fail_with(vm, args[0], args[1], "!=", ASSERT_ARG(2));
 }
 

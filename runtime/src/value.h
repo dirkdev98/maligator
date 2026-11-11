@@ -625,7 +625,7 @@ static inline MalValue mal_value_from_symbol(MalSymbol *symbol) {
 static inline MalValue mal_value_from_bigint(MalBigInt *bigint) {
     // Hardcode the BIGINT class (see mal_value_from_string): baked bigint
     // constants fold to an immediate.
-    return MAL_VALUE_BIGINT | ((uptr) bigint & MAKS_PTR);
+    return bigint == nullptr ? MAL_VALUE_UNDEFINED : MAL_VALUE_BIGINT | ((uptr) bigint & MAKS_PTR);
 }
 
 /**

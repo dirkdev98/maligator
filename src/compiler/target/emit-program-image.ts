@@ -1,4 +1,5 @@
 import type { IncludedAsset } from "../../assets.ts";
+import { bigintDigits } from "../shared/bigint-digits.ts";
 import { PROBE_READ_KINDS, probeReadIsNamed } from "../shared/compiler-instruction.ts";
 import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
@@ -1504,18 +1505,13 @@ function emitProgramImageParts(
 		lines.push("};", "");
 	}
 
-	if (runtime.bigintConstants.length > 0) {
-		// Immortal bigint constants with their 128-bit value baked at compile time.
-		lines.push(
-			`${splitCompiledFunctions ? "" : "static "}MalBigInt mal_bigints${suffix}[] = {`,
-		);
-		for (const value of runtime.bigintConstants) {
-			lines.push(
-				`    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_BIGINT), .value = ${emitBigintValue(value)} },`,
-			);
-		}
-		lines.push("};", "");
-	}
+	lines.push(
+		...emitBigintPool(
+			runtime.bigintConstants,
+			suffix,
+			splitCompiledFunctions ? "" : "static ",
+		),
+	);
 
 	// Native-backend functions. Emitted before the MalFunction table (which
 	// references their symbols) and after the constant pools (which they may
@@ -2981,15 +2977,7 @@ function emitBatchUnits(
 
 		const sharedPrefix = d === 0 ? sharedFunctionCount : 0;
 		const storage = sharedPrefix > 0 ? "" : "static ";
-		if (runtime.bigintConstants.length > 0) {
-			lines.push(`${storage}MalBigInt mal_bigints${suffix}[] = {`);
-			for (const value of runtime.bigintConstants) {
-				lines.push(
-					`    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_BIGINT), .value = ${emitBigintValue(value)} },`,
-				);
-			}
-			lines.push("};", "");
-		}
+		lines.push(...emitBigintPool(runtime.bigintConstants, suffix, storage));
 
 		// The batch path strips debug info, so compiled bodies emit no pos writes.
 		// It uses the same fixed-point entry selection as product emit-C; otherwise
@@ -3712,23 +3700,31 @@ export function emitTypeofResult(
 	}
 }
 
-/**
- * Emit a non-negative bigint literal value as a C i128 initializer. The value is
- * built in `unsigned __int128` (well-defined wrapping) then cast to i128, which
- * preserves the two's-complement bit pattern and matches the runtime parser's
- * wrap-at-128-bits behavior. BigInt literals are always non-negative (unary `-`
- * is a separate operation).
- */
-function emitBigintValue(value: bigint): string {
-	const mask = (1n << 64n) - 1n;
-	const lo = value & mask;
-	const hi = (value >> 64n) & mask;
-
-	if (hi === 0n) {
-		return `(i128) ${lo}ULL`;
+function emitBigintPool(
+	values: ReadonlyArray<bigint>,
+	suffix: string,
+	storage: string,
+): Array<string> {
+	if (values.length === 0) return [];
+	const rows: Array<string> = [],
+		lines: Array<string> = [];
+	for (let index = 0; index < values.length; index++) {
+		const value = values[index]!,
+			digits = bigintDigits(value);
+		const symbol = `mal_bigint_${index}_digits${suffix}`;
+		if (digits.length > 4)
+			lines.push(
+				`static const u32 ${symbol}[] = { ${digits.map((digit) => `${digit}u`).join(", ")} };`,
+			);
+		const payload =
+			digits.length > 4
+				? `.digits = ${symbol}`
+				: `.inline_digits = { ${digits.length === 0 ? "0" : digits.map((digit) => `${digit}u`).join(", ")} }`;
+		rows.push(
+			`    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_BIGINT), .sign = ${value === 0n ? 0 : value < 0n ? -1 : 1}, .digit_count = ${digits.length}, .data = { ${payload} } },`,
+		);
 	}
-
-	return `(i128) (((unsigned __int128) ${hi}ULL << 64) | (unsigned __int128) ${lo}ULL)`;
+	return [...lines, `${storage}MalBigInt mal_bigints${suffix}[] = {`, ...rows, "};", ""];
 }
 
 function emitCreateF64(dst: number, value: number): string {

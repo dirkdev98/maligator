@@ -14,6 +14,7 @@ import { stripCompactTypes } from "../compiler/frontend/compact-type-strip.ts";
 import { traverseEstree } from "../compiler/frontend/estree-traversal.ts";
 import type { ModuleGraph } from "../compiler/frontend/module-graph.ts";
 import { parseModule } from "../compiler/frontend/parser.ts";
+import { bigintDigits } from "../compiler/shared/bigint-digits.ts";
 import {
 	compilerProgramFactsFromConfig,
 	withProgramClosure,
@@ -137,11 +138,17 @@ function formatRuntimeImage(image: RuntimeImage): string {
 			`      units ${units.map((unit) => unit.toString(16).padStart(4, "0")).join(" ") || "(empty)"}`,
 		);
 	}
-	lines.push("", "bigintConstants · signed 128-bit values (low u64, high u64)");
-	const mask = (1n << 64n) - 1n;
+	lines.push(
+		"",
+		"bigintConstants · signed magnitude, least-significant u32 digits first",
+	);
 	for (const [index, value] of image.bigintConstants.entries()) {
 		lines.push(
-			`  [${index}] ${value}n · lo 0x${(value & mask).toString(16).padStart(16, "0")} · hi 0x${((value >> 64n) & mask).toString(16).padStart(16, "0")}`,
+			`  [${index}] ${value}n · digits ${
+				bigintDigits(value)
+					.map((digit) => `0x${digit.toString(16).padStart(8, "0")}`)
+					.join(" ") || "(zero)"
+			}`,
 		);
 	}
 	if (image.bigintConstants.length === 0) lines.push("  (empty)");

@@ -3,7 +3,6 @@
 #include <math.h>
 
 #include "array_buffer_object.h"
-#include "bigint128.h"
 #include "shared_memory.h"
 #include "builtin_bigint.h"
 #include "heap_bigint.h"
@@ -147,7 +146,7 @@ static MalValue atomics_rmw(MalVm *vm, const MalValue *args, i32 arg_count, MalS
     MalValue value = arg_count >= 3 ? args[2] : mal_value_new_undefined();
 
     if (mal_typed_array_is_bigint(array->kind)) {
-        i128 operand;
+        MalBigInt *operand;
         if (!mal_bigint_to_bigint(vm, value, &operand)) {
             return mal_value_new_undefined();
         }
@@ -161,7 +160,7 @@ static MalValue atomics_rmw(MalVm *vm, const MalValue *args, i32 arg_count, MalS
         // Modular 64-bit arithmetic on raw bits equals the BigInt op truncated
         // to the element width, so the native RMW is exact.
         u64 old_bits = mal_shared_atomic_rmw(
-            atomics_element_address(&span, index), 8, op, (u64) (u128) operand);
+            atomics_element_address(&span, index), 8, op, mal_bigint_low_u64(operand));
         i128 old = array->kind == MAL_TA_BIGINT64
             ? (i128) mal_scalar_i64_from_bits(old_bits)
             : (i128) (u128) old_bits;
@@ -273,15 +272,13 @@ static MalValue mal_atomics_store(MalVm *vm, MalValue this_value, const MalValue
     }
     MalValue value = arg_count >= 3 ? args[2] : mal_value_new_undefined();
 
-    // Atomics.store returns the coerced value (NOT the truncated stored bits).
+    // The return retains the full coerced integer even when the store narrows it.
     if (mal_typed_array_is_bigint(array->kind)) {
-        i128 big;
+        MalBigInt *big;
         if (!mal_bigint_to_bigint(vm, value, &big)) {
             return mal_value_new_undefined();
         }
-        MalValue coerced = mal_value_is_bigint(value)
-            ? value
-            : mal_value_from_bigint(mal_bigint_new(&vm->heap, big));
+        MalValue coerced = mal_value_from_bigint(big);
         if (!atomics_revalidate(vm, array, index)) {
             return mal_value_new_undefined();
         }
@@ -289,7 +286,7 @@ static MalValue mal_atomics_store(MalVm *vm, MalValue this_value, const MalValue
         if (!mal_typed_array_object_span(array, &span)) {
             return mal_value_new_undefined();
         }
-        mal_shared_atomic_store(atomics_element_address(&span, index), 8, (u64) (u128) big);
+        mal_shared_atomic_store(atomics_element_address(&span, index), 8, mal_bigint_low_u64(big));
         return coerced;
     }
 
@@ -326,11 +323,12 @@ static MalValue mal_atomics_compare_exchange(MalVm *vm, MalValue this_value, con
     MalValue replacement = arg_count >= 4 ? args[3] : mal_value_new_undefined();
 
     if (mal_typed_array_is_bigint(array->kind)) {
-        i128 expected_big;
+        MalBigInt *expected_big;
         if (!mal_bigint_to_bigint(vm, expected, &expected_big)) {
             return mal_value_new_undefined();
         }
-        i128 replacement_big;
+        u64 expected_bits = mal_bigint_low_u64(expected_big);
+        MalBigInt *replacement_big;
         if (!mal_bigint_to_bigint(vm, replacement, &replacement_big)) {
             return mal_value_new_undefined();
         }
@@ -343,7 +341,7 @@ static MalValue mal_atomics_compare_exchange(MalVm *vm, MalValue this_value, con
         }
         u64 old_bits = mal_shared_atomic_compare_exchange(
             atomics_element_address(&span, index), 8,
-            (u64) (u128) expected_big, (u64) (u128) replacement_big);
+            expected_bits, mal_bigint_low_u64(replacement_big));
         i128 old = array->kind == MAL_TA_BIGINT64
             ? (i128) mal_scalar_i64_from_bits(old_bits)
             : (i128) (u128) old_bits;
@@ -482,11 +480,11 @@ static bool atomics_wait_operands(
     MalVm *vm, MalTypedArrayObject *array, const MalValue *args, i32 arg_count, u64 *out_expected) {
     MalValue value = arg_count >= 3 ? args[2] : mal_value_new_undefined();
     if (mal_typed_array_is_bigint(array->kind)) {
-        i128 big;
+        MalBigInt *big;
         if (!mal_bigint_to_bigint(vm, value, &big)) {
             return false;
         }
-        *out_expected = (u64) (u128) big;
+        *out_expected = mal_bigint_low_u64(big);
         return true;
     }
     f64 number;

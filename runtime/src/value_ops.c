@@ -1,11 +1,11 @@
 #include "value.h"
 #include "value_ops.h"
 
+#include <assert.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "bigint128.h"
 #include "ecma_whitespace.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
@@ -68,9 +68,6 @@ u32 mal_ops_number_to_uint32(f64 number) {
     return (u32) mal_ops_number_to_uint_width(number, 32);
 }
 
-static i128 mal_ops_bigint_of(MalValue value) {
-    return mal_bigint_value(mal_value_to_bigint(value));
-}
 
 // mal_ops_is_number lives in value_ops.h (static inline) so both the
 // interpreter and the native-C backend share one definition.
@@ -340,7 +337,7 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
     }
 
     if (mal_value_is_bigint(value)) {
-        return mal_bigint_to_string(heap, mal_ops_bigint_of(value), 10);
+        return mal_bigint_to_string(heap, mal_value_to_bigint(value), 10);
     }
 
     if (mal_value_is_f64(value)) {
@@ -379,7 +376,7 @@ f64 mal_ops_to_number(MalValue value) {
     // operators rely on the numeric value; arithmetic/unary-plus paths that must
     // throw intercept BigInt before reaching here.
     if (mal_value_is_bigint(value)) {
-        return (f64) mal_ops_bigint_of(value);
+        return mal_bigint_to_number(mal_value_to_bigint(value));
     }
 
     if (mal_value_is_null(value)) {
@@ -453,24 +450,30 @@ bool mal_ops_add_string_int32(
 bool mal_ops_add_checked(MalHeap *heap, MalValue left, MalValue right, MalValue *out) {
     if (mal_ops_try_add_string_int32(heap, left, right, out)) return true;
     if (mal_value_is_string(left) || mal_value_is_string(right)) {
+        MalValue roots[] = {left, right};
+        MalRootSpan span;
+        mal_gc_root(&span, roots, countof(roots));
+        bool ok = false;
         MalString *left_string = mal_ops_to_string(heap, left);
+        if (left_string == nullptr) goto done;
+        roots[0] = mal_value_from_string(left_string);
         MalString *right_string = mal_ops_to_string(heap, right);
-        usize left_length = mal_string_length(left_string);
-        usize right_length = mal_string_length(right_string);
-        if (left_length == 0) {
-            *out = mal_value_from_string(right_string);
-            return true;
-        }
-        if (right_length == 0) {
-            *out = mal_value_from_string(left_string);
-            return true;
-        }
+        if (right_string == nullptr) goto done;
+        roots[1] = mal_value_from_string(right_string);
         MalString *result;
-        if (!mal_string_append_checked(heap, left_string, right_string, &result)) {
-            return false;
+        if (left_string->length == 0) {
+            result = right_string;
+            ok = true;
+        } else if (right_string->length == 0) {
+            result = left_string;
+            ok = true;
+        } else {
+            ok = mal_string_append_checked(heap, left_string, right_string, &result);
         }
-        *out = mal_value_from_string(result);
-        return true;
+        if (ok) *out = mal_value_from_string(result);
+    done:
+        mal_gc_unroot(&span);
+        return ok;
     }
 
     if (mal_value_is_int32(left) && mal_value_is_int32(right)) {
@@ -501,27 +504,14 @@ static bool mal_ops_equal_bool(MalValue left, MalValue right) {
         return mal_ops_to_f64(left) == mal_ops_to_f64(mal_ops_string_to_number(right));
     }
 
-    // BigInt loose equality across types compares mathematical values: against a
-    // Number (NaN/Infinity never match), and against a String parsed as a BigInt
-    // (a string that is not a valid BigInt never matches).
     if (mal_value_is_bigint(left) && mal_ops_is_number(right)) {
-        return (f64) mal_ops_bigint_of(left) == mal_ops_to_f64(right);
+        return mal_bigint_compare_number(mal_value_to_bigint(left), mal_ops_to_f64(right)) == 0;
     }
     if (mal_ops_is_number(left) && mal_value_is_bigint(right)) {
-        return mal_ops_to_f64(left) == (f64) mal_ops_bigint_of(right);
+        return mal_bigint_compare_number(mal_value_to_bigint(right), mal_ops_to_f64(left)) == 0;
     }
-    if (mal_value_is_bigint(left) && mal_value_is_string(right)) {
-        bool ok;
-        MalString *string = mal_value_to_string(right);
-        i128 parsed = mal_bigint128_parse(mal_string_code_units(string), mal_string_length(string), &ok);
-        return ok && mal_ops_bigint_of(left) == parsed;
-    }
-    if (mal_value_is_string(left) && mal_value_is_bigint(right)) {
-        bool ok;
-        MalString *string = mal_value_to_string(left);
-        i128 parsed = mal_bigint128_parse(mal_string_code_units(string), mal_string_length(string), &ok);
-        return ok && parsed == mal_ops_bigint_of(right);
-    }
+    assert(!((mal_value_is_bigint(left) && mal_value_is_string(right)) ||
+        (mal_value_is_string(left) && mal_value_is_bigint(right))));
 
     if (mal_value_is_boolean(left)) {
         return mal_ops_equal_bool(mal_value_from_i32(mal_value_to_boolean(left) ? 1 : 0), right);
@@ -535,56 +525,33 @@ static bool mal_ops_equal_bool(MalValue left, MalValue right) {
 }
 
 static bool mal_ops_relational_bool(MalValue left, MalValue right, i32 comparison) {
+    i32 order;
     if (mal_value_is_string(left) && mal_value_is_string(right)) {
-        i32 string_comparison = mal_string_compare(mal_value_to_string(left), mal_value_to_string(right));
-        switch (comparison) {
-            case 0:
-                return string_comparison < 0;
-            case 1:
-                return string_comparison <= 0;
-            case 2:
-                return string_comparison > 0;
-            case 3:
-                return string_comparison >= 0;
+        order = mal_string_compare(mal_value_to_string(left), mal_value_to_string(right));
+    } else if (mal_value_is_bigint(left) || mal_value_is_bigint(right)) {
+        if (mal_value_is_bigint(left) && mal_value_is_bigint(right))
+            order = mal_bigint_compare(mal_value_to_bigint(left), mal_value_to_bigint(right));
+        else {
+            assert(!mal_value_is_string(left) && !mal_value_is_string(right));
+            bool bigint_left = mal_value_is_bigint(left);
+            order = mal_bigint_compare_number(
+                mal_value_to_bigint(bigint_left ? left : right),
+                mal_ops_to_number(bigint_left ? right : left));
+            if (order == 2) return false;
+            if (!bigint_left) order = -order;
         }
+    } else {
+        f64 a = mal_ops_to_number(left), b = mal_ops_to_number(right);
+        if (isnan(a) || isnan(b)) return false;
+        order = a < b ? -1 : a > b ? 1 : 0;
     }
-
-    // BigInt vs BigInt compares exact 128-bit values; mixed BigInt/Number falls
-    // through to the f64 path below (to_number returns a BigInt's numeric value).
-    if (mal_value_is_bigint(left) && mal_value_is_bigint(right)) {
-        i128 l = mal_ops_bigint_of(left);
-        i128 r = mal_ops_bigint_of(right);
-        switch (comparison) {
-            case 0:
-                return l < r;
-            case 1:
-                return l <= r;
-            case 2:
-                return l > r;
-            case 3:
-                return l >= r;
-        }
-    }
-
-    f64 left_number = mal_ops_to_number(left);
-    f64 right_number = mal_ops_to_number(right);
-
-    if (isnan(left_number) || isnan(right_number)) {
-        return false;
-    }
-
     switch (comparison) {
-        case 0:
-            return left_number < right_number;
-        case 1:
-            return left_number <= right_number;
-        case 2:
-            return left_number > right_number;
-        case 3:
-            return left_number >= right_number;
+        case 0: return order < 0;
+        case 1: return order <= 0;
+        case 2: return order > 0;
+        case 3: return order >= 0;
+        default: abort();
     }
-
-    return false;
 }
 
 bool mal_ops_strict_equal_heap_contents(MalValue left, MalValue right) {
@@ -592,7 +559,7 @@ bool mal_ops_strict_equal_heap_contents(MalValue left, MalValue right) {
         return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
     }
     return mal_value_is_bigint(left) && mal_value_is_bigint(right) &&
-        mal_bigint_value(mal_value_to_bigint(left)) == mal_bigint_value(mal_value_to_bigint(right));
+        mal_bigint_compare(mal_value_to_bigint(left), mal_value_to_bigint(right)) == 0;
 }
 
 bool mal_ops_strict_equal_distinct(MalValue left, MalValue right) {

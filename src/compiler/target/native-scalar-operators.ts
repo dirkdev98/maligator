@@ -150,7 +150,7 @@ export function nativeEqualityExpression(
 		leftKind === COMPILER_VALUE_KIND_BIGINT ||
 		rightKind === COMPILER_VALUE_KIND_BIGINT
 	) {
-		const equal = `mal_bigint_value(mal_value_to_bigint(${left})) == mal_bigint_value(mal_value_to_bigint(${right}))`;
+		const equal = `mal_bigint_compare(mal_value_to_bigint(${left}), mal_value_to_bigint(${right})) == 0`;
 		const guard =
 			leftKind !== COMPILER_VALUE_KIND_BIGINT
 				? `mal_value_is_bigint(${left})`

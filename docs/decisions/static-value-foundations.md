@@ -134,9 +134,9 @@ Runtime archive and generated-object cache identities include generated `.inc`
 tables alongside source/header inputs, so a registry edit cannot reuse stale
 dispatch or intrinsic definitions.
 
-Constant evaluation uses the `mal-binary64-utf16-i128-unicode17-v4` target contract.
+Constant evaluation uses the `mal-binary64-utf16-bigint-v5` target contract.
 Portable folds cover certified binary64 arithmetic, exact number formatting, UTF-16
-code units, and the runtime's bounded 128-bit BigInt semantics. Work and output bounds
+code units, and exact BigInt arithmetic. Limb work and output bounds
 leave expensive operations at runtime. A required runtime exception is never reported
 as a compiler error. General transcendental functions, time zones, and locale services
 require their own target certificates.
@@ -194,7 +194,7 @@ Provider fallback does not establish locale availability.
 
 NumberFormat retains exact decimal and radix strings instead of converting them through
 binary floating point. Number inputs use the runtime's JavaScript shortest-decimal
-kernel; BigInt inputs retain the runtime's supported integer width. Standard-notation
+kernel; BigInt inputs retain every decimal digit. Standard-notation
 rounding bounds its decimal representation with guard digits and a sticky tail, while
 preserving rounding-grid equality and halfway decisions. This representation belongs
 to NumberFormat; RelativeTimeFormat consumes the exact mathematical binary value.
@@ -313,17 +313,37 @@ Constant numeric unary results reuse those same certified facts, allowing their 
 argument work to disappear after a builtin folds. Protected immutable global data
 bindings resolve to catalog references under the locked-world proof; mutable reads
 retain lookup. Neither rule suppresses unknown coercions or failed conversions.
-Signed 128-bit BigInt constants support exact increment, decrement, same-type
-comparisons, bitwise operations, powers and bounded shifts. Powers use checked
-squaring within the work budget; negative exponents and overflowing products retain
-runtime evaluation. Zero exponents and bases zero or plus/minus one avoid expansion.
-Negative shift counts reverse direction; large right shifts produce the sign
-extension without a large host shift. Updates and left shifts outside the target
-range and mixed numeric operands retain their runtime operations.
+BigInt constants use exact signed-magnitude arithmetic. Folding charges limb work
+before multiplication, division, powers and expanding shifts, and leaves expensive
+operations at runtime. Negative exponents and division by zero retain their runtime
+RangeError. Zero exponents and bases zero or plus/minus one avoid expansion. Negative
+shift counts reverse direction; large right shifts produce sign extension without
+a large host shift. Mixed numeric operands retain their runtime operations.
 Zero-width `BigInt.asIntN` and `BigInt.asUintN` calls can discard narrowing when
 the value is a proved primitive BigInt or Boolean and the shared evaluator certifies
 the width conversion. Value producers remain; other value kinds keep their
 conversion and errors even when the width is zero.
+
+## BigInt storage and boundaries
+
+BigInts are immutable, normalized signed magnitudes with 32-bit limbs. A common
+cell stores its digits inline; wider dynamic values keep trailing digits in the
+same GC leaf allocation. Constant images own static or arena-backed digits for
+their full lifetime. Wire and cross-isolate formats carry the sign and complete
+limb sequence, rejecting negative zero and leading zero limbs.
+
+Checked native-width arithmetic promotes to limb operations on overflow. Parsing,
+formatting, equality, hashing and Number comparisons consume the complete value.
+Typed arrays, DataView and Atomics explicitly take the low 64 bits where JavaScript
+requires modulo conversion. Buffer, FFI, SQLite and Temporal check their destination
+range before narrowing. Serialization copies digits into the receiving owner and
+never transports a GC pointer.
+
+A resource ceiling bounds expanding results before allocation. Allocation failures
+throw the preallocated allocation error; callers stop before callbacks, output or
+partial stores. Formatting roots its input and releases temporary native storage
+on every failure path. StringToBigInt comparisons and BigInt formatting therefore
+retain throwing and collection effects in Core.
 
 ## Instruction facts through native lowering
 
@@ -675,8 +695,8 @@ under SameValueZero, including NaN and holes read as undefined; index searches
 return original positions. Boolean, null, undefined and certified string offsets
 use the shared primitive conversion. BigInt offsets retain the runtime's ToNumber
 rejection.
-BigInt comparisons fold only within the signed 128-bit literal range; larger
-descriptions retain runtime comparison after the target's literal wrapping.
+BigInt comparisons fold exactly within the limb-work budget; larger descriptions
+retain runtime comparison.
 Short index searches with dynamic elements use strict comparisons and bounded
 numeric index selection. They retain original positions and choose the first match
 in the requested direction; holes are skipped only after inherited absence is proved.

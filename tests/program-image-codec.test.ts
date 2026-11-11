@@ -354,7 +354,7 @@ const definition: ProgramImage = testProgramImage({
 		[0x66, 0x6f, 0x6f], // "foo"
 		[0xd83d, 0xde00], // astral pair
 	],
-	bigintConstants: [42n, -((1n << 100n) + 7n)],
+	bigintConstants: [42n, -((1n << 521n) + 7n), 0n, (1n << 4096n) - 1n],
 	literalTemplateData: [8, 2, 5, 1, 4, 0, 0x80000000],
 	precompiledLiteralShapes: [],
 	globalCount: 6,
@@ -2414,7 +2414,7 @@ describe("program-image-codec", () => {
 	it("preserves astral code units and signed >64-bit bigints", () => {
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(definition));
 		expect(restored.runtime.stringConstants[2]).toEqual([0xd83d, 0xde00]);
-		expect(restored.runtime.bigintConstants[1]).toBe(-((1n << 100n) + 7n));
+		expect(restored.runtime.bigintConstants[1]).toBe(-((1n << 521n) + 7n));
 	});
 
 	it("uses canonical u32 LEB128 at count boundaries", () => {

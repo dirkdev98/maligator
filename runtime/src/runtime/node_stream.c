@@ -3153,7 +3153,7 @@ static MalValue pl_outer_abort(MalVm *vm, MalValue self, const MalValue *args, i
 
 static void pl_throw_return_value(MalVm *vm, const char *input, const char *name, MalValue value) {
     char received[256];
-    mal_node_describe_received(vm, value, received, sizeof received);
+    if (!mal_node_describe_received(vm, value, received, sizeof received)) return;
     char message[512];
     snprintf(message, sizeof message, "Expected %s to be returned from the \"%s\" function but got %s.", input, name,
         received);
@@ -4755,7 +4755,7 @@ static void stream_compose_invalid(MalVm *vm, i32 index, MalValue value, const c
     char name[32];
     snprintf(name, sizeof name, "streams[%d]", index);
     char received[256];
-    mal_node_describe_received(vm, value, received, sizeof received);
+    if (!mal_node_describe_received(vm, value, received, sizeof received)) return;
     char message[400];
     snprintf(message, sizeof message, "The argument '%s' %s. Received %s", name, reason, received);
     mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_VALUE");

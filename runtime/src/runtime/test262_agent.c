@@ -5,6 +5,7 @@
 #include "builtin_atomics.h"
 #include "builtin_eval.h"
 #include "gc.h"
+#include "gc_process.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "host.h"
@@ -58,7 +59,10 @@ static struct {
     u64 generation;
     MalSharedMemory *memory;
     bool bigint;
-    i128 bigint_value;
+    i32 bigint_sign;
+    u32 bigint_count;
+    u32 bigint_small[4];
+    u32 *bigint_digits;
     f64 number;
     Test262Report *reports;
     Test262Report *reports_tail;
@@ -160,11 +164,23 @@ static bool test262_agent_drain(MalVm *vm) {
     MalSharedMemory *memory = g_test262.memory;
     mal_shared_memory_retain(memory);
     bool bigint = g_test262.bigint;
-    i128 bigint_value = g_test262.bigint_value;
+    u32 bigint_count = g_test262.bigint_count;
+    i32 bigint_sign = g_test262.bigint_sign;
+    u32 small_digits[4];
+    usize bytes = (usize) bigint_count * sizeof(u32);
+    u32 *digits = bigint_count <= countof(small_digits) ? small_digits : malloc(bytes);
+    if (digits != nullptr && bigint_count != 0)
+        memcpy(digits, bigint_count <= countof(small_digits) ? g_test262.bigint_small : g_test262.bigint_digits, bytes);
     f64 number = g_test262.number;
     pthread_cond_broadcast(&g_test262.changed);
     pthread_mutex_unlock(&g_test262.lock);
 
+    if (digits == nullptr) {
+        mal_shared_memory_release(memory);
+        mal_vm_throw_allocation_error(vm);
+        return true;
+    }
+    if (digits != small_digits) mal_heap_charge_external(&vm->heap, bytes);
     MalValue values[] = {g_receiver, mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, values, countof(values));
@@ -176,11 +192,16 @@ static bool test262_agent_drain(MalVm *vm) {
     } else {
         values[1] = mal_value_from_array_buffer_object(buffer);
         values[2] = bigint
-            ? mal_value_from_bigint(mal_bigint_new(&vm->heap, bigint_value))
+            ? mal_value_from_bigint(mal_bigint_from_digits(&vm->heap, bigint_sign, digits, bigint_count))
             : mal_ops_number_value(number);
-        mal_vm_call_value(vm, values[0], mal_value_new_undefined(), &values[1], 2);
+        if (vm->completion.kind != MAL_COMPLETION_THROW)
+            mal_vm_call_value(vm, values[0], mal_value_new_undefined(), &values[1], 2);
     }
     mal_gc_unroot(&root);
+    if (digits != small_digits) {
+        free(digits);
+        mal_gc_process_release(bytes);
+    }
     return true;
 }
 
@@ -385,13 +406,33 @@ static MalValue mal_test262_agent_broadcast(
     if (!bigint && !mal_value_is_undefined(value) && !mal_vm_to_number(vm, value, &number)) {
         return mal_value_new_undefined();
     }
+    const MalBigInt *big = bigint ? mal_value_to_bigint(value) : nullptr;
+    u32 count = bigint ? big->digit_count : 0;
+    i32 sign = bigint ? big->sign : 0;
+    u32 small_digits[4];
+    usize bytes = (usize) count * sizeof(u32);
+    u32 *digits = count <= countof(small_digits) ? small_digits : malloc(bytes);
+    if (digits == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    if (count != 0) memcpy(digits, mal_bigint_digits(big), bytes);
+    if (digits != small_digits) mal_heap_charge_external(&vm->heap, bytes);
     MalSharedMemory *memory = mal_value_to_array_buffer_object(args[0])->shared_memory;
     mal_shared_memory_retain(memory);
     pthread_mutex_lock(&g_test262.lock);
     if (g_test262.memory != nullptr) mal_shared_memory_release(g_test262.memory);
     g_test262.memory = memory;
     g_test262.bigint = bigint;
-    g_test262.bigint_value = bigint ? mal_bigint_value(mal_value_to_bigint(value)) : 0;
+    if (g_test262.bigint_count > countof(g_test262.bigint_small)) {
+        free(g_test262.bigint_digits);
+        mal_gc_process_release((usize) g_test262.bigint_count * sizeof(u32));
+    }
+    g_test262.bigint_sign = sign;
+    g_test262.bigint_count = count;
+    g_test262.bigint_digits = digits != small_digits ? digits : nullptr;
+    if (count <= countof(small_digits) && count != 0)
+        memcpy(g_test262.bigint_small, small_digits, bytes);
     g_test262.number = number;
     g_test262.generation++;
     for (Test262Agent *agent = g_test262.agents; agent != nullptr; agent = agent->next) {

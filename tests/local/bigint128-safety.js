@@ -17,23 +17,35 @@ const MAX = BigInt("170141183460469231731687303715884105727");
 
 check("minimum parses", MIN.toString() === "-170141183460469231731687303715884105728");
 check("maximum parses", MAX.toString() === "170141183460469231731687303715884105727");
-check("addition wraps", MAX + 1n === MIN);
-check("subtraction wraps", MIN - 1n === MAX);
-check("multiplication wraps", MAX * 2n === -2n);
-check("minimum negation wraps", -MIN === MIN);
-check("bitwise tails use fixed bits", ~MIN === MAX && (MIN | 1n) === MIN + 1n);
+check("addition promotes", MAX + 1n === -MIN);
+check("subtraction promotes", MIN - 1n === -MAX - 2n);
+check(
+	"multiplication promotes",
+	(MAX * 2n).toString() === "340282366920938463463374607431768211454",
+);
+check(
+	"minimum negation promotes",
+	(-MIN).toString() === "170141183460469231731687303715884105728",
+);
+check("bitwise tails use sign extension", ~MIN === MAX && (MIN | 1n) === MIN + 1n);
 
-check("left shift reaches sign bit", 1n << 127n === MIN);
-check("left shift at width clears", 1n << 128n === 0n);
-check("left shift beyond width clears", MAX << 1000n === 0n);
+check("left shift preserves positive sign", 1n << 127n === -MIN);
+check(
+	"left shift crosses native width",
+	(1n << 128n).toString() === "340282366920938463463374607431768211456",
+);
+check("left shift retains high digits", (MAX << 1000n) >> 1000n === MAX);
 check("negative left count shifts right", 8n << -1n === 4n && -8n << -1n === -4n);
 check("minimum left count is safe", 1n << MIN === 0n && -1n << MIN === -1n);
 check("right shift sign fills", MIN >> 127n === -1n && -1n >> 128n === -1n);
 check("right shift at width clears positive", MAX >> 128n === 0n);
-check("negative right count shifts left", 1n >> -127n === MIN);
-check("minimum right count is safe", 1n >> MIN === 0n);
+check("negative right count shifts left", 1n >> -127n === -MIN);
+check(
+	"oversized left shift rejects before allocation",
+	throws(RangeError, () => 1n >> MIN),
+);
 
-check("minimum division wraps", MIN / -1n === MIN);
+check("minimum division promotes", MIN / -1n === -MIN);
 check("minimum remainder is zero", MIN % -1n === 0n);
 check("ordinary division truncates", -7n / 3n === -2n && -7n % 3n === -1n);
 check(
@@ -41,40 +53,64 @@ check(
 	throws(RangeError, () => 1n / 0n),
 );
 
-check("power reaches sign bit", 2n ** 127n === MIN);
-check("power wraps at width", 2n ** 128n === 0n);
-check("power multiplication wraps", MAX ** 2n === 1n);
+check("power remains positive", 2n ** 127n === -MIN);
+check(
+	"power crosses native width",
+	(2n ** 128n).toString() === "340282366920938463463374607431768211456",
+);
+check("power retains product digits", MAX ** 2n === (1n << 254n) - (1n << 128n) + 1n);
 check(
 	"negative power throws",
 	throws(RangeError, () => 2n ** -1n),
 );
 
-check("huge decimal literal wraps", 340282366920938463463374607431768211456n === 0n);
-check("huge hex literal wraps", 0x100000000000000000000000000000000n === 0n);
 check(
-	"huge decimal string wraps",
-	BigInt("340282366920938463463374607431768211457") === 1n,
+	"wide decimal literal",
+	340282366920938463463374607431768211456n.toString() ===
+		"340282366920938463463374607431768211456",
 );
 check(
-	"huge negative string wraps",
-	BigInt("-340282366920938463463374607431768211457") === -1n,
+	"wide hex literal",
+	0x100000000000000000000000000000000n.toString(16) ===
+		"100000000000000000000000000000000",
 );
 check(
-	"many-digit string wraps",
+	"wide decimal string",
+	BigInt("340282366920938463463374607431768211457").toString() ===
+		"340282366920938463463374607431768211457",
+);
+check(
+	"wide negative string",
+	BigInt("-340282366920938463463374607431768211457").toString() ===
+		"-340282366920938463463374607431768211457",
+);
+check(
+	"many-digit string",
 	BigInt(
 		"100000000000000000000000000000000000000000000000000000000000000000000000000000000",
-	) === 132435522674567342041261840258306146304n,
+	).toString() ===
+		"100000000000000000000000000000000000000000000000000000000000000000000000000000000",
 );
-check("prefixed string wraps", BigInt("0x100000000000000000000000000000001") === 1n);
+check(
+	"prefixed wide string",
+	BigInt("0x100000000000000000000000000000001").toString(16) ===
+		"100000000000000000000000000000001",
+);
 check(
 	"invalid parse still throws",
 	throws(SyntaxError, () => BigInt("0x")),
 );
 
-check("Number positive boundary wraps", BigInt(2 ** 127) === MIN);
+check("Number positive boundary", BigInt(2 ** 127) === -MIN);
 check("Number negative boundary", BigInt(-(2 ** 127)) === MIN);
-check("Number modulus wraps", BigInt(2 ** 128) === 0n);
-check("huge integral Number wraps", BigInt(1.7976931348623157e308) === 0n);
+check(
+	"Number crosses native width",
+	BigInt(2 ** 128).toString() === "340282366920938463463374607431768211456",
+);
+check(
+	"maximum finite Number converts exactly",
+	BigInt(1.7976931348623157e308) === (1n << 1024n) - (1n << 971n),
+);
 check(
 	"ordinary integral Number is exact",
 	BigInt(100000000000000000000) === 100000000000000000000n,
@@ -88,7 +124,7 @@ check(
 	throws(RangeError, () => BigInt(Infinity)),
 );
 
-check("asUintN approximation at width", BigInt.asUintN(128, MIN) === MIN);
+check("asUintN retains the unsigned native width", BigInt.asUintN(128, MIN) === -MIN);
 check(
 	"asIntN sign extends",
 	BigInt.asIntN(127, (1n << 126n) + 1n) === -(1n << 126n) + 1n,

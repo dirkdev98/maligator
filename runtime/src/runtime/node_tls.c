@@ -394,7 +394,7 @@ static MalValue node_tls_get_ca_certificates(
             system = false;
         } else {
             char received[320];
-            mal_node_describe_received(vm, type, received, sizeof received);
+            if (!mal_node_describe_received(vm, type, received, sizeof received)) return mal_value_new_undefined();
             const char *shown = strncmp(received, "type ", 5) == 0 && strchr(received, '(') != nullptr
                 ? strchr(received, '(') + 1 : received;
             char message[512];

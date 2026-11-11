@@ -3505,3 +3505,36 @@ describe("inherited wrapper valueOf", () => {
 		expect(result.core.some((op) => op.opcode === "construct")).toBe(true);
 	});
 });
+
+describe("wide BigInt builtin constants", () => {
+	it("preserves complete values through builtin conversion and bounds compiler work", () => {
+		const value = (1n << 521n) + 123n;
+		for (const radix of [2, 10, 16, 36]) {
+			expect(
+				evaluateConstantBuiltin("BigInt.prototype.toString", { kind: "bigint", value }, [
+					{ kind: "number", value: radix },
+				]),
+			).toMatchObject({
+				kind: "value",
+				value: { kind: "string", value: value.toString(radix) },
+			});
+		}
+		expect(
+			evaluateConstantBuiltin("BigInt", undefined, [
+				{ kind: "string", value: value.toString() },
+			]),
+		).toMatchObject({
+			kind: "value",
+			value: { kind: "bigint", value },
+		});
+		expect(
+			evaluateConstantBuiltin(
+				"BigInt.prototype.toString",
+				{ kind: "bigint", value },
+				[],
+				undefined,
+				4,
+			),
+		).toMatchObject({ kind: "unsupported", reason: "work-limit" });
+	});
+});

@@ -448,11 +448,11 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
     // after ToIndex(byteOffset) but before the detached and bounds checks.
     u64 bits = 0;
     if (type == DV_BIGINT64 || type == DV_BIGUINT64) {
-        i128 big;
+        MalBigInt *big;
         if (!mal_bigint_to_bigint(vm, value, &big)) {
             return mal_value_new_undefined();
         }
-        bits = (u64) (u128) big;
+        bits = mal_bigint_low_u64(big);
     } else if (mal_value_is_int32(value) && type <= DV_UINT32) {
         // All integer DataView setters retain the low width bits; the sized
         // store below performs the 8/16-bit narrowing without f64/fmod work.

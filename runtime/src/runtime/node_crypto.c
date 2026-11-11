@@ -327,24 +327,27 @@ static void crypto_copy_string(const MalString *string, char *out, usize capacit
 }
 
 /* Node renders `${value}` for numbers, i.e. Number::toString. */
-static void crypto_number_text(MalVm *vm, MalValue value, char *out, usize capacity) {
-    crypto_copy_string(mal_ops_to_string(&vm->heap, value), out, capacity);
+static bool crypto_number_text(MalVm *vm, MalValue value, char *out, usize capacity) {
+    MalString *string = mal_ops_to_string(&vm->heap, value);
+    if (string == nullptr) return false;
+    crypto_copy_string(string, out, capacity);
+    return true;
 }
 
 /* ERR_OUT_OF_RANGE groups an integer received value in threes, but only above
  * 2^32 (`281_474_976_710_656`, yet a plain `2147483648`). */
-static void crypto_received_number(MalVm *vm, MalValue value, char *out, usize capacity) {
+static bool crypto_received_number(MalVm *vm, MalValue value, char *out, usize capacity) {
     char plain[128];
-    crypto_number_text(vm, value, plain, sizeof(plain));
+    if (!crypto_number_text(vm, value, plain, sizeof(plain))) return false;
     if (!mal_ops_is_number(value)) {
         snprintf(out, capacity, "%s", plain);
-        return;
+        return true;
     }
     f64 raw = mal_ops_number_as_f64(value);
     if (!isfinite(raw) || trunc(raw) != raw
         || (raw <= 4294967296.0 && raw >= -4294967296.0)) {
         snprintf(out, capacity, "%s", plain);
-        return;
+        return true;
     }
     // Group the digits (not the sign) in threes from the right.
     usize start = plain[0] == '-' ? 1 : 0;
@@ -356,6 +359,7 @@ static void crypto_received_number(MalVm *vm, MalValue value, char *out, usize c
         out[written++] = plain[start + i];
     }
     out[written] = '\0';
+    return true;
 }
 
 static bool crypto_constructor_name(MalVm *vm, MalValue value, char *out, usize capacity) {
@@ -385,14 +389,14 @@ static bool crypto_constructor_name(MalVm *vm, MalValue value, char *out, usize 
  * nullish values print bare, objects print their constructor, and every other
  * primitive prints `type <typeof> (<inspected>)` with the inspected form
  * truncated at 25 characters. */
-static void crypto_received(MalVm *vm, MalValue value, char *out, usize capacity) {
+static bool crypto_received(MalVm *vm, MalValue value, char *out, usize capacity) {
     if (mal_value_is_null(value)) {
         snprintf(out, capacity, "null");
-        return;
+        return true;
     }
     if (mal_value_is_undefined(value)) {
         snprintf(out, capacity, "undefined");
-        return;
+        return true;
     }
     if (mal_value_is_callable(value)) {
         char name[128] = {0};
@@ -404,7 +408,7 @@ static void crypto_received(MalVm *vm, MalValue value, char *out, usize capacity
             && mal_string_length(mal_value_to_string(function_name)) > 0) {
             crypto_copy_string(mal_value_to_string(function_name), name, sizeof(name));
             snprintf(out, capacity, "function %s", name);
-            return;
+            return true;
         }
         vm->completion.kind = MAL_COMPLETION_NORMAL;
     }
@@ -415,7 +419,7 @@ static void crypto_received(MalVm *vm, MalValue value, char *out, usize capacity
         } else {
             snprintf(out, capacity, "[Object: null prototype] {}");
         }
-        return;
+        return true;
     }
     char inspected[64] = {0};
     const char *type_name = "object";
@@ -434,25 +438,28 @@ static void crypto_received(MalVm *vm, MalValue value, char *out, usize capacity
     } else if (mal_value_is_bigint(value)) {
         type_name = "bigint";
         char text[48] = {0};
-        crypto_copy_string(mal_ops_to_string(&vm->heap, value), text, sizeof(text));
+        MalString *string = mal_ops_to_string(&vm->heap, value);
+        if (string == nullptr) return false;
+        crypto_copy_string(string, text, sizeof(text));
         snprintf(inspected, sizeof(inspected), "%sn", text);
     } else {
         type_name = "number";
-        crypto_number_text(vm, value, inspected, sizeof(inspected));
+        if (!crypto_number_text(vm, value, inspected, sizeof(inspected))) return false;
     }
     if (strlen(inspected) > 25) {
         inspected[25] = '\0';
         snprintf(out, capacity, "type %s (%s...)", type_name, inspected);
-        return;
+        return true;
     }
     snprintf(out, capacity, "type %s (%s)", type_name, inspected);
+    return true;
 }
 
 /* ERR_INVALID_ARG_TYPE for a positional argument. */
 static void crypto_throw_arg_type(
     MalVm *vm, const char *name, const char *expected, MalValue actual) {
     char received[CRYPTO_MESSAGE_CAPACITY / 2];
-    crypto_received(vm, actual, received, sizeof(received));
+    if (!crypto_received(vm, actual, received, sizeof(received))) return;
     char message[CRYPTO_MESSAGE_CAPACITY];
     snprintf(message, sizeof(message), "The \"%s\" argument must be %s. Received %s",
         name, expected, received);
@@ -463,7 +470,7 @@ static void crypto_throw_arg_type(
 static void crypto_throw_property_type(
     MalVm *vm, const char *name, const char *expected, MalValue actual) {
     char received[CRYPTO_MESSAGE_CAPACITY / 2];
-    crypto_received(vm, actual, received, sizeof(received));
+    if (!crypto_received(vm, actual, received, sizeof(received))) return;
     char message[CRYPTO_MESSAGE_CAPACITY];
     snprintf(message, sizeof(message), "The \"%s\" property must be %s. Received %s",
         name, expected, received);
@@ -473,7 +480,7 @@ static void crypto_throw_property_type(
 static void crypto_throw_out_of_range(
     MalVm *vm, const char *name, const char *range, MalValue actual) {
     char received[CRYPTO_MESSAGE_CAPACITY / 2];
-    crypto_received_number(vm, actual, received, sizeof(received));
+    if (!crypto_received_number(vm, actual, received, sizeof(received))) return;
     char message[CRYPTO_MESSAGE_CAPACITY];
     snprintf(message, sizeof(message),
         "The value of \"%s\" is out of range. It must be %s. Received %s",
@@ -3251,7 +3258,7 @@ static MalValue mal_node_crypto_key_object_constructor(
     (void) receiver; (void) new_target; (void) callee;
     MalValue type = argc > 0 ? args[0] : mal_value_new_undefined();
     char received[CRYPTO_MESSAGE_CAPACITY / 2];
-    crypto_received(vm, type, received, sizeof(received));
+    if (!crypto_received(vm, type, received, sizeof(received))) return mal_value_new_undefined();
     char message[CRYPTO_MESSAGE_CAPACITY];
     snprintf(message, sizeof(message), "The argument 'type' is invalid. Received %s", received);
     // Only createSecretKey mints keys: Node's constructor needs an internal handle.
@@ -4039,7 +4046,7 @@ static MalValue crypto_cipher_create(MalVm *vm, const MalValue *args, i32 argc, 
                 && (spec->kind == 10 || crypto_gcm_tag_length_valid((u32) number));
             if (!valid) {
                 char text[64];
-                crypto_number_text(vm, requested, text, sizeof(text));
+                if (!crypto_number_text(vm, requested, text, sizeof(text))) return undefined;
                 char message[CRYPTO_MESSAGE_CAPACITY];
                 snprintf(message, sizeof(message), "Invalid authentication tag length: %s", text);
                 crypto_throw_coded(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_CRYPTO_INVALID_AUTH_TAG");
@@ -4683,8 +4690,10 @@ static MalValue mal_node_crypto_pkey_details(
             u64 value = 0;
             for (usize i = 0; i < length; i++) value = (value << 8) | exponent[i];
             roots[1] = mal_value_from_bigint(mal_bigint_new(&vm->heap, (i128) value));
-            mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "publicExponent", roots[1],
-                flags);
+            if (vm->completion.kind != MAL_COMPLETION_THROW) {
+                mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "publicExponent", roots[1],
+                    flags);
+            }
         }
     } else if (kind != MAL_PKEY_ED25519) {
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "namedCurve",

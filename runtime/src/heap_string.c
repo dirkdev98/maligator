@@ -262,13 +262,16 @@ static MalTinyStringCacheResult mal_string_tiny_cache_get_or_create(
 }
 
 static MalTinyStringCacheResult mal_string_tiny_cache_get_latin1(
-    MalHeap *heap, const u8 *units, usize length
+    MalHeap *heap, const u8 *units, usize length, bool fallible
 ) {
     if (length > MAL_STRING_INLINE_CODE_UNITS) abort();
     MalString ***cache_slot = mal_string_tiny_cache_slot(heap);
     if (*cache_slot == nullptr) {
         *cache_slot = calloc(MAL_TINY_STRING_CACHE_CAPACITY, sizeof(**cache_slot));
-        if (*cache_slot == nullptr) abort();
+        if (*cache_slot == nullptr) {
+            if (fallible) return (MalTinyStringCacheResult) {0};
+            abort();
+        }
     }
     usize index = mal_string_tiny_cache_index_latin1(units, length);
     MalString *cached = (*cache_slot)[index];
@@ -317,7 +320,10 @@ static MalTinyStringCacheResult mal_string_tiny_cache_get_latin1(
     }
     MAL_PERF_COUNT(string_tiny_cache_misses);
     if (cached != nullptr) MAL_PERF_COUNT(string_tiny_cache_replacements);
-    MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
+    MalString *string = fallible
+        ? mal_heap_try_alloc(heap, sizeof(MalString), MAL_HEAP_STRING)
+        : mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
+    if (string == nullptr) return (MalTinyStringCacheResult) {0};
     mal_string_init_flat(string, MAL_STRING_STORAGE_INLINE, true, length);
     mal_string_copy_inline_latin1(string->inline_latin1_units, units, length);
     MAL_PERF_COUNT(string_inline_allocations);
@@ -1287,7 +1293,7 @@ static MalString *mal_string_new_latin1(
     mal_string_require_valid_length(length);
     MalString *string;
     if (length <= MAL_STRING_INLINE_CODE_UNITS) {
-        MalTinyStringCacheResult result = mal_string_tiny_cache_get_latin1(heap, units, length);
+        MalTinyStringCacheResult result = mal_string_tiny_cache_get_latin1(heap, units, length, false);
         if (owned) gc_free_raw(heap, (void *) units);
         if (result.hit) return result.string;
         string = result.string;
@@ -1369,6 +1375,42 @@ MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize leng
         return mal_string_new_latin1_owned(heap, compact, length);
     }
     return mal_string_new_utf16_owned(heap, code_units, length);
+}
+
+MalString *mal_string_try_new_ascii(MalHeap *heap, const byte *bytes, usize length) {
+    if (length > MAL_STRING_MAX_CODE_UNITS) return nullptr;
+    MalString *string;
+    if (length <= MAL_STRING_INLINE_CODE_UNITS) {
+        MalTinyStringCacheResult cached = mal_string_tiny_cache_get_latin1(
+            heap, (const u8 *) bytes, length, true);
+        if (cached.hit || cached.string == nullptr) return cached.string;
+        string = cached.string;
+    } else {
+        u8 *copy = nullptr;
+        if (length > MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
+            copy = mal_heap_try_alloc_raw_profiled(heap, length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+            if (copy == nullptr) return nullptr;
+            memcpy(copy, bytes, length);
+        }
+        string = mal_heap_try_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
+        if (string == nullptr) {
+            gc_free_raw(heap, copy);
+            return nullptr;
+        }
+        if (copy != nullptr) {
+            mal_string_init_flat(string, MAL_STRING_STORAGE_OWNED, true, length);
+            string->latin1_units = copy;
+        } else {
+            mal_string_init_flat(string, MAL_STRING_STORAGE_INLINE, true, length);
+            mal_string_copy_inline_latin1(string->inline_latin1_units, (const u8 *) bytes, length);
+            MAL_PERF_COUNT(string_inline_allocations);
+            MAL_PERF_ADD(string_inline_code_units, length);
+        }
+    }
+    mal_perf_string_allocation(length);
+    MAL_PERF_COUNT(string_ascii_allocations);
+    MAL_PERF_ADD(string_ascii_code_units, length);
+    return string;
 }
 
 MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length) {

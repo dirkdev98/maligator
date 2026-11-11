@@ -4200,12 +4200,13 @@ static MalBuiltinArraySorted mal_builtin_array_sorted_elements(MalVm *vm, MalVal
         mal_gc_root(
             &default_keys_span, default_keys, (i32) sorted.defined_count);
         for (u32 index = 0; index < sorted.defined_count; index++) {
-            default_keys[index] = mal_value_from_string(
-                mal_ops_to_string(&vm->heap, sorted.values[index]));
+            MalString *key = mal_ops_to_string(&vm->heap, sorted.values[index]);
+            if (key == nullptr) break;
+            default_keys[index] = mal_value_from_string(key);
         }
     }
 
-    bool sort_ok = mal_builtin_array_sort_values(
+    bool sort_ok = vm->completion.kind != MAL_COMPLETION_THROW && mal_builtin_array_sort_values(
         vm, sorted.values, sorted.defined_count, comparator, default_keys);
     if (default_keys != nullptr) {
         mal_gc_unroot(&default_keys_span);

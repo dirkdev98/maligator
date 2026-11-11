@@ -1,7 +1,6 @@
 #include "vm.h"
 #include "perf_stats.h"
 #include "vm_load.h"
-#include "bigint128.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,9 +68,11 @@ static void dump_loaded_scalars(const MalRuntimeImage *program) {
         putchar('\n');
     }
     for (i32 i = 0; i < program->bigint_constant_count; i++) {
-        u128 bits = mal_bigint128_bits(mal_bigint_value(&program->bigint_constants[i]));
-        printf("bigint[%d] %016llx%016llx\n", i,
-               (unsigned long long) (bits >> 64), (unsigned long long) bits);
+        const MalBigInt *bigint = &program->bigint_constants[i];
+        const u32 *digits = mal_bigint_digits(bigint);
+        printf("bigint[%d] %d", i, bigint->sign);
+        for (u32 digit = 0; digit < bigint->digit_count; digit++) printf(" %08x", digits[digit]);
+        putchar('\n');
     }
     for (i32 i = 0; i < program->literal_template_data_count; i++) {
         printf("literal[%d] %08x\n", i, program->literal_template_data[i]);

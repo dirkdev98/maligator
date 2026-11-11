@@ -132,8 +132,7 @@ static inline bool mal_key_value_equals(MalValue left, MalValue right) {
         return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
     }
     if (mal_value_is_bigint(left) && mal_value_is_bigint(right)) {
-        return mal_bigint_value(mal_value_to_bigint(left)) ==
-            mal_bigint_value(mal_value_to_bigint(right));
+        return mal_bigint_compare(mal_value_to_bigint(left), mal_value_to_bigint(right)) == 0;
     }
     MAL_PERF_COUNT(key_non_string_misses);
     return false;
@@ -151,10 +150,7 @@ static inline u64 mal_key_hash_value(MalValue value) {
         return mal_key_hash_mix(mal_string_hash(mal_value_to_string(value)));
     }
     if (mal_value_is_bigint(value)) {
-        u128 bits = (u128) mal_bigint_value(mal_value_to_bigint(value));
-        u64 low = (u64) bits;
-        u64 high = (u64) (bits >> 64);
-        return mal_key_hash_mix(low ^ mal_key_hash_mix(high ^ 0x9e3779b97f4a7c15ull));
+        return mal_key_hash_mix(mal_bigint_hash(mal_value_to_bigint(value)));
     }
 
     return mal_key_hash_mix(value);
